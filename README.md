@@ -36,8 +36,8 @@ Proprietary or third-party; fetch them yourself and put them in the repository r
 | File | Source | sha256 |
 |---|---|---|
 | `update-kindle-donut_puffin-NS65741_user_8138_0013222529668.bin` | stock Fire OS 6574.1 for `donut_puffin`, from FTVDB | `ac22b78cf94c2ebacfa90447b770b803d9f72f35858d5218975d97fea95a0245` |
-| `kamakiri-donut-v1.0.0.zip` | bootloader unlock + TWRP, attachment of the XDA thread for kamakiri-donut | `4d2bb52eaf661f6616aa4268584d44cf9155c1328c34bfcba01a6558f942b738` |
-| `boot-root.zip` | root adb + permissive `su` SELinux domain, same XDA thread | `de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0` |
+| `kamakiri-donut-v1.0.0.zip` | bootloader unlock + TWRP, attachment of the [XDA thread for kamakiri-donut](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/) | `4d2bb52eaf661f6616aa4268584d44cf9155c1328c34bfcba01a6558f942b738` |
+| `boot-root.zip` | root adb + permissive `su` SELinux domain, [same XDA thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/) | `de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0` |
 | `toolchain/android-ndk-r21e/` | <https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip> | — |
 
 Derived from those, also ignored: `kamakiri/` and `boot-root/` (the unpacked zips; `install-system.sh` uses
@@ -66,7 +66,7 @@ make host       # PC build + qemu build for tests (needs libopus on the PC)
 ## Install on a device
 
 1. Get USB access to the Echo and unlock it with kamakiri-donut; flash the stock OTA to both slots and `boot-root.zip`
-   (steps are in the XDA thread). Do **not** register the device with the Alexa app.
+   (steps are in the [XDA thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/)). Do **not** register the device with the Alexa app.
 2. `scripts/probe.sh` — checks that the device libraries match the analysed firmware.
    Want a wake word other than "Alexa"? Do [that](#another-wake-word-echo-computer-amazon-ziggy) now: it is the one
    step that needs the Echo online and registered, and it is easiest before anything is locked down.
