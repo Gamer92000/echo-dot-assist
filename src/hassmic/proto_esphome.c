@@ -28,7 +28,7 @@
 enum {
     HELLO_REQ = 1, HELLO_RESP, CONNECT_REQ, CONNECT_RESP, DISCONNECT_REQ, DISCONNECT_RESP, PING_REQ, PING_RESP,
     DEVICE_INFO_REQ, DEVICE_INFO_RESP, LIST_ENTITIES_REQ, LIST_ENTITIES_DONE = 19, SUBSCRIBE_STATES = 20,
-    LIST_SWITCH = 17, SWITCH_STATE = 26, SWITCH_COMMAND = 33, LIST_NUMBER = 49, NUMBER_STATE, NUMBER_COMMAND,
+    LIST_SWITCH = 17, LIST_TEXT_SENSOR = 18, SWITCH_STATE = 26, TEXT_SENSOR_STATE = 27, SWITCH_COMMAND = 33, LIST_NUMBER = 49, NUMBER_STATE, NUMBER_COMMAND,
     LIST_SELECT = 52, SELECT_STATE, SELECT_COMMAND,
     LIST_MEDIA_PLAYER = 63, MEDIA_PLAYER_STATE, MEDIA_PLAYER_COMMAND,
     SUBSCRIBE_VA = 89, VA_REQUEST, VA_RESPONSE, VA_EVENT, VA_AUDIO = 106, VA_TIMER_EVENT = 115,
@@ -37,7 +37,7 @@ enum {
 enum { EV_ERROR = 0, EV_RUN_START, EV_RUN_END, EV_STT_START, EV_STT_END, EV_INTENT_START, EV_INTENT_END, EV_TTS_START,
        EV_TTS_END, EV_WAKE_START, EV_WAKE_END, EV_VAD_START, EV_VAD_END, EV_TTS_STREAM_START = 98, EV_TTS_STREAM_END = 99, EV_INTENT_PROGRESS = 100 };
 enum { FEAT_VOICE = 1, FEAT_SPEAKER = 2, FEAT_API_AUDIO = 4, FEAT_TIMERS = 8, FEAT_ANNOUNCE = 16, FEAT_START_CONVERSATION = 32 };
-enum { KEY_NOISE = 2, KEY_GAIN, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND };
+enum { KEY_NOISE = 2, KEY_GAIN, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SENDSPIN_TOKEN };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -170,6 +170,18 @@ static void send_setting(int key)       /* lock held */
     }
 }
 
+/* The Sendspin pairing token, so that it can be copied from Home Assistant into Music Assistant.  It is a secret of
+ * sorts (whoever has it can pair a server with this player), so the entity is diagnostic and disabled by default:
+ * Home Assistant only records it once the user enables it. */
+static void send_token_state(void)      /* lock held */
+{
+    PB(b, 256); char tok[160];
+    if (!core_sendspin_port) return;
+    sendspin_pairing_token(tok, sizeof tok);
+    pb_fixed32(&b, 1, KEY_SENDSPIN_TOKEN); pb_str(&b, 2, tok);
+    send_msg(TEXT_SENSOR_STATE, &b);
+}
+
 static void send_setting_entities(void)
 {
     { PB(b, 256); pb_str(&b, 1, "noise_suppression_level"); pb_fixed32(&b, 2, KEY_NOISE); pb_str(&b, 3, "Noise suppression level");
@@ -179,6 +191,8 @@ static void send_setting_entities(void)
     { PB(b, 256); pb_str(&b, 1, "mic_volume_multiplier"); pb_fixed32(&b, 2, KEY_MULT); pb_str(&b, 3, "Mic volume multiplier"); pb_str(&b, 5, "mdi:volume-vibrate");
       pb_float(&b, 6, 0.1f); pb_float(&b, 7, 10); pb_float(&b, 8, 0.1f); pb_uint(&b, 10, 1); pb_uint(&b, 12, 1); send_msg(LIST_NUMBER, &b); }
     { PB(b, 128); pb_str(&b, 1, "mute"); pb_fixed32(&b, 2, KEY_MUTE); pb_str(&b, 3, "Mute"); pb_str(&b, 5, "mdi:microphone-off"); send_msg(LIST_SWITCH, &b); }
+    if (core_sendspin_port) { PB(b, 192); pb_str(&b, 1, "sendspin_pairing_token"); pb_fixed32(&b, 2, KEY_SENDSPIN_TOKEN); pb_str(&b, 3, "Sendspin pairing token");
+      pb_str(&b, 5, "mdi:key-link"); pb_uint(&b, 6, 1); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
     { PB(b, 128); pb_str(&b, 1, "wake_sound"); pb_fixed32(&b, 2, KEY_WAKE_SOUND); pb_str(&b, 3, "Wake sound"); pb_str(&b, 5, "mdi:bell-ring");
       pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
 }
@@ -523,7 +537,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case PING_REQ:         send_msg(PING_RESP, NULL); break;
     case DEVICE_INFO_REQ:  send_device_info(); break;
     case LIST_ENTITIES_REQ: send_entities(); break;
-    case SUBSCRIBE_STATES: send_mp_state(); for (int k = KEY_NOISE; k <= KEY_WAKE_SOUND; k++) send_setting(k); break;
+    case SUBSCRIBE_STATES: send_mp_state(); for (int k = KEY_NOISE; k <= KEY_WAKE_SOUND; k++) send_setting(k); send_token_state(); break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
     case SUBSCRIBE_VA: {
         int sub = 0;

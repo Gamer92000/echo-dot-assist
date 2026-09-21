@@ -3,7 +3,7 @@
 `aioesphomeapi` client (the library Home Assistant itself uses), so framing and protobuf layout are checked by the real parser."""
 import asyncio, io, math, os, signal, struct, subprocess, sys, tempfile, threading, wave
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from aioesphomeapi import SelectInfo, NumberInfo, SwitchInfo, SelectState, NumberState, SwitchState
+from aioesphomeapi import SelectInfo, NumberInfo, SwitchInfo, SelectState, NumberState, SwitchState, TextSensorInfo, TextSensorState
 from aioesphomeapi import APIClient, MediaPlayerInfo, MediaPlayerEntityState, VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -41,7 +41,7 @@ check.failed = False
 async def main():
     play = tempfile.mktemp(suffix=".raw")
     settings = tempfile.mktemp(suffix=".settings")
-    env = dict(os.environ, HASSMIC_SETTINGS=settings, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=play)
+    env = dict(os.environ, HASSMIC_STATE=tempfile.mkdtemp(), HASSMIC_SETTINGS=settings, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=play)
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-L"], env=env)
     httpd = HTTPServer(("127.0.0.1", HTTP_PORT), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -62,11 +62,16 @@ async def main():
         check(isinstance(by.get("noise_suppression_level"), SelectInfo) and list(by["noise_suppression_level"].options) == ["Off", "Low", "Medium", "High", "Max"]
               and isinstance(by.get("auto_gain"), NumberInfo) and by["auto_gain"].max_value == 31 and isinstance(by.get("mic_volume_multiplier"), NumberInfo)
               and isinstance(by.get("mute"), SwitchInfo) and isinstance(by.get("wake_sound"), SwitchInfo), "settings entities listed")
+        tok = by.get("sendspin_pairing_token")
+        check(isinstance(tok, TextSensorInfo) and tok.disabled_by_default and int(tok.entity_category) == 2, "Sendspin pairing token entity: diagnostic, disabled by default")
         cli.select_command(by["noise_suppression_level"].key, "High"); cli.number_command(by["auto_gain"].key, 15)
         cli.number_command(by["mic_volume_multiplier"].key, 2.5)
         await asyncio.sleep(0.5)
         check(any(isinstance(x, SelectState) and x.state == "High" for x in states) and any(isinstance(x, NumberState) and x.state == 15 for x in states),
               "setting commands reflected in state")
+        want = subprocess.run([f"{ROOT}/build/hassmic-host", "-T"], env=env, capture_output=True, text=True).stdout.strip()
+        got = [x.state for x in states if isinstance(x, TextSensorState)]
+        check(got == [want] and want.startswith("SP:0") and len(want) > 100, f"token state equals `hassmic -T`: {want[:16]}…")
         check(open(settings).read().split()[:3] == ["3", "15", "2.50"], f"settings persisted: {open(settings).read().strip()!r}")
         cfg = await cli.get_voice_assistant_configuration(5)
         check(list(cfg.active_wake_words) == ["alexa"], f"wake word configuration: {list(cfg.active_wake_words)}")
