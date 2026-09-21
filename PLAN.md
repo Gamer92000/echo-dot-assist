@@ -197,7 +197,7 @@ Run in this order. Each step says what it proves.
       (so nothing was ever published, also not for Wyoming). `magiskpolicy` cannot parse a rule for a type with a hyphen →
       `boot.sh`/`run.sh` stop the init service and start avahi themselves in the `su` domain. Verified: answers queries from the PC.
       Host name is `linux.local` (system host name is `localhost`); HA connects by IP and follows the MAC in the TXT record
-- [~] Push updates over Wi-Fi (`scripts/ota-push.sh <host>`), so TWRP is needed once per device only.
+- [x] Push updates over Wi-Fi (`scripts/ota-push.sh <host>`), so TWRP is needed once per device only.
       `/system/hassmic/boot.sh` is now a stable bootstrap: runs `/data/local/hassmic/ota/current/main.sh` (root-owned, installed from a
       signed bundle) or the factory `main.sh`; an update that fails to start 3 times is skipped (`ota/tries`, reset after hassmic
       ran 60 s). Bundles: `src/tools/otatool.c` (pack + EdDSA sign on the PC with `secrets/update.key`; verify + unpack on the Echo as
@@ -207,7 +207,10 @@ Run in this order. Each step says what it proves.
       garbage. **On the device 2026-09-21:** bootstrap installed, two real pushes over Wi-Fi (`OK 0.3.0+…`, services back in ~10 s,
       previous version kept). The first push found two bugs, both fixed: unpacked directory was 0700 (root umask 077) so the
       daemon's user could not start hassmic, and the fallback did not cover a daemon crash loop (now: self-check as `puffin`
-      before switching, and five quick exits → factory copy at once). Missing: rollback test with a deliberately broken bundle
+      before switching, and five quick exits → factory copy at once). Rollback tested with two signed, deliberately broken bundles:
+      one that cannot run → refused at install, current version untouched, hassmic never stopped; one that passes the self-check
+      and then exits → factory copy running again 26 s later, push port open, HA + MA reconnected; then the real version was
+      pushed again over Wi-Fi
 - [x] ESPHome API serves up to 4 clients at once (one thread each): replies to the asker, entity states to every state subscriber,
       voice assistant traffic to its one subscriber (first come, first served, like ESPHome firmware). Test with two `aioesphomeapi` clients
 - [x] Log: `boot.log` rotated by `boot.sh` at 1 MB (copy + truncate, because several long-lived processes append to it; one old
