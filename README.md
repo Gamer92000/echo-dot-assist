@@ -1,4 +1,4 @@
-# hassechodot
+# echo-dot-assist
 
 > # ⚠️ DISCLAIMER: EVERYTHING IN THIS REPOSITORY IS VIBECODED ⚠️
 >
