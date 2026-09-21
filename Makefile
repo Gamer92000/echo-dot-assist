@@ -40,7 +40,17 @@ build/hassmic-qemu: $(HASSMIC) src/hassmic/audio_file.c src/hassmic/wake_pryon.c
 
 host: build/hassmic-host build/hassmic-qemu
 
+# Building blocks of the Sendspin client, checked against reference implementations (aiohttp, python noiseprotocol).
+UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/noise.c src/third_party/monocypher.c
+unit:
+	@mkdir -p build
+	cc -O2 -Wall -Isrc/hassmic -Isrc/include tests/unit/hash_test.c $(UNIT) -lpthread -o build/hash_test && build/hash_test
+	cc -O2 -Wall -Isrc/hassmic -Isrc/include -include stdlib.h tests/unit/ws_test.c $(UNIT) -lpthread -o build/ws_test
+	cc -O2 -Wall -Isrc/hassmic -Isrc/include tests/unit/noise_test.c $(UNIT) -lpthread -o build/noise_test
+	.venv/bin/python tests/unit/ws_ref.py build/ws_test
+	.venv/bin/python tests/unit/noise_ref.py build/noise_test
+
 clean:
 	rm -rf build
 
-.PHONY: all host clean
+.PHONY: all host unit clean
