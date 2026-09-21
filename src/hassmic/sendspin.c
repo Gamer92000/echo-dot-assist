@@ -37,7 +37,10 @@
 
 static int port; static const char *state_dir = "/data/local/hassmic/state";
 static uint8_t id_priv[32], id_pub[32]; static char client_id[48];
-static long long output_latency_us = 60000;     /* mixer + DAC + amp after our write; HASSMIC_OUTPUT_LATENCY_MS, measure on device */
+/* Mixer + DAC + amp after our write.  Measured with src/tools/latency.c on the device: 83..88 ms from write to the click
+ * arriving in micRaw, which includes the capture path (32 ms blocks, stamped on delivery).  Taking ~15 ms for that leaves
+ * ~70 ms; the rest is trimmed by ear with the server's static delay.  Override: HASSMIC_OUTPUT_LATENCY_MS. */
+static long long output_latency_us = 70000;
 
 static long long raw_us(void)
 {

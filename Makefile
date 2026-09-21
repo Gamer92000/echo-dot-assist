@@ -5,13 +5,17 @@ STOCK   := $(CURDIR)/firmware/rootfs/system/lib
 CFLAGS  := -O2 -Wall -Wextra -fPIE -Isrc/include
 LDFLAGS := -pie -fuse-ld=lld -Wl,--allow-shlib-undefined -Wl,--unresolved-symbols=ignore-in-shared-libs
 
-BIN := build/mixcap build/mixplay build/pryon_test build/hassmic build/runas
+BIN := build/mixcap build/mixplay build/pryon_test build/hassmic build/runas build/latency
 
 all: $(BIN)
 
 build/mixcap build/mixplay: build/%: src/tools/%.c src/include/mixer_api.h src/include/netio.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) $(STOCK)/libmixerAPI.so
+
+build/latency: src/tools/latency.c src/include/mixer_api.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) -lm $(STOCK)/libmixerAPI.so
 
 build/runas: src/tools/runas.c
 	@mkdir -p build
