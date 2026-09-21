@@ -175,8 +175,14 @@ Run in this order. Each step says what it proves.
       admitted it unpaired without an extra step, music plays; sync err ≈ +0.3 ms vs schedule, clock ±0.27 ms over Wi-Fi, 2 MB buffer
       full, 30 frames nudged in the first minute, hassmic 8 % CPU. Output latency measured with `src/tools/latency.c` (clicks in
       the Music stream found in `micRaw`, which can be captured beside hassmic): 83–88 ms incl. capture path → default 70 ms.
-      Missing: listening test against another synced player (trim with MA's static delay), controller role
-      for the buttons, pairing (`pairing_psk` token flow; PIN methods need CPace), multi-server arbitration, re-handshake
+      Controller role: action button pauses the group while music plays and resumes it (within 30 min), otherwise it wakes the
+      assistant; local volume changes are reported. Pairing: `pairing_psk` token flow (`hassmic -T` or the boot log prints the
+      token; fresh long-term PSK, stored only after `server/pair-finalize`, up to 8 records), in-band re-handshake (prologue =
+      previous handshake hash, hello again), `server/unpair`. Servers: one thread per connection, arbitration at the first
+      activate (playback > pairing > idle; idle tie only for the last-playback server), loser gets `another_server` /
+      `concurrent_attempt`. `tests/fake_ma_sendspin.py`: 17/17 against aiosendspin 9.1.1.
+      Not implemented: PIN pairing (CPace: SHA-512 + Elligator2) → refused with `pair/abort method_not_supported`; FLAC/Opus;
+      metadata/artwork roles (no display). Missing: install, listening test against another synced player (trim with MA's static delay)
 - [x] mDNS: init's `avahi-daemon` runs in SELinux domain `avahi-daemon`, which is denied read on `/data/misc/avahi/services`
       (so nothing was ever published, also not for Wyoming). `magiskpolicy` cannot parse a rule for a type with a hyphen →
       `boot.sh`/`run.sh` stop the init service and start avahi themselves in the `su` domain. Verified: answers queries from the PC.

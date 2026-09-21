@@ -2,9 +2,11 @@
 """Plays Music Assistant's side of Sendspin against build/hassmic-host with the reference server library
 (aiosendspin 9.1.1, the version in Music Assistant 2.10.4): dials the player, approves it unpaired, streams a sine,
 sends a volume command, and checks what reaches the player's audio backend."""
-import asyncio, logging, math, os, struct, subprocess, sys, tempfile
+import asyncio, logging, math, os, signal, struct, subprocess, sys, tempfile
 import numpy as np
-from aiosendspin.noise import Identity, InMemoryServerPairingStore
+from aiosendspin.noise import Identity, InMemoryServerPairingStore, decode_token
+from aiosendspin.noise.pairing import PairingAttempt
+from aiosendspin.models.types import PairMethod, MediaCommand
 from aiosendspin.server import SendspinServer, AudioFormat, ClientAddedEvent
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -41,10 +43,13 @@ async def main():
         await server.trust_unpaired(cid)
         await asyncio.sleep(3.5)
         player = client.role("player@v1")
-        check(player is not None, "player role active after approval")
+        check(player is not None and client.role("controller@v1") is not None, "player and controller roles active after approval")
         check((player.required_lead_time_ms, player.min_buffer_ms, player.static_delay_ms) == (300, 300, 0), f"initial client/state received: lead {player.required_lead_time_ms}, buffer {player.min_buffer_ms}, delay {player.static_delay_ms}")
 
         fmt = AudioFormat(sample_rate=48000, bit_depth=16, channels=2)
+        ctl_events = []
+        client.group.add_event_listener(lambda g, e: ctl_events.append(type(e).__name__))
+        client.group.group_role("controller").set_supported_commands([MediaCommand.PLAY, MediaCommand.PAUSE, MediaCommand.NEXT])
         stream = client.group.start_stream()
         n, phase = 4800, 0
         for i in range(40):                                # 4 s of 440 Hz
@@ -54,7 +59,9 @@ async def main():
             await stream.commit_audio()
             await stream.sleep_to_limit_buffer(1_000_000)
             if i == 15: player.set_volume(30)
+            if i == 25: proc.send_signal(signal.SIGUSR2)      # action button while music plays
         await asyncio.sleep(2.5)
+        check("ControllerPauseEvent" in ctl_events, f"action button during playback sends controller pause: {ctl_events}")
         check(player.volume == 30, f"volume command applied and echoed in client/state: {player.volume}")
         await client.group.stop()
         await asyncio.sleep(0.5)
@@ -71,6 +78,35 @@ async def main():
             check(jumps[2000:-2000].max() < 0.3, f"tone is continuous (max phase step error {jumps[2000:-2000].max():.3f} rad)")
         lead = nz[0] / 48000 if len(nz) else -1
         check(0 <= lead < 2.0, f"silence padded before the scheduled start: {lead:.3f} s")
+
+        # ---- pairing with the token, re-handshake to the long-term key, reconnect paired, unpair
+        token = subprocess.run([f"{ROOT}/build/hassmic-host", "-T"], env=env, capture_output=True, text=True).stdout.strip()
+        tok = decode_token(token)
+        check(token.startswith("SP:0") and tok.client_id == cid, f"pairing token decodes to this player: {token[:14]}…")
+        await server.initiate_pairing(cid, PairingAttempt(method=PairMethod.PAIRING_PSK, pairing_psk=tok.pairing_psk))
+        await asyncio.sleep(1.5)
+        recs = await server.pairing_store.list_records()
+        sec = server.get_client(cid).connection_security
+        check(len(recs) == 1 and os.path.getsize(os.path.join(state, "sendspin.records")) > 0, "pairing finalised: record on both sides")
+        check("long" in str(sec.psk_category).lower(), f"session re-handshaken to the long-term key: {sec.psk_category}")
+        await asyncio.sleep(3.5)
+        check(server.get_client(cid).role("player@v1") is not None, "player role active on the paired session")
+
+        # a second server dials while the first one is idle: it never played here, so it is turned away
+        other = SendspinServer(loop, Identity.generate(), "intruder", pairing_store=InMemoryServerPairingStore())
+        got = asyncio.Queue(); other.add_event_listener(lambda _s, ev: got.put_nowait(type(ev).__name__))
+        await other.start_server(port=16956, discover_clients=False)
+        other.connect_to_client(f"ws://127.0.0.1:{PORT}/sendspin", retry_initial_connection=False, retry_indefinitely=False)
+        await asyncio.sleep(3)
+        oc = other.get_client(cid)
+        check(oc is None or not oc.is_connected,
+              "idle second server is turned away (concurrent_attempt)")
+        check(server.get_client(cid).is_connected, "first server keeps its connection")
+        await other.close()
+
+        await server.unpair(cid)
+        await asyncio.sleep(1.5)
+        check(os.path.getsize(os.path.join(state, "sendspin.records")) == 0, "server/unpair deletes the record on the player")
     finally:
         proc.terminate(); await server.close()
     print("FAILED" if check.failed else "all good")

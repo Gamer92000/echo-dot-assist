@@ -6,6 +6,7 @@
  *
  *   hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m pryon.manifest] [-b input-device] [-L] [-E] [-V] [-S]
  *     -z port  Sendspin player port (default 28928, 0 = off)
+ *     -T       print the Sendspin pairing token (paste it into Music Assistant to pair) and exit
  *     -L no LED ring   -E no earcon on wake   -V leave the volume buttons alone   -S print the avahi service file and exit
  *
  * Default ports 26053 (ESPHome) and 16700 (Wyoming): the stock firewall only admits inbound TCP 16384-32767.
@@ -44,7 +45,7 @@ pthread_mutex_t core_lock = PTHREAD_MUTEX_INITIALIZER;
 static int connected, satellite_running;
 static enum state state;
 static time_t state_since;
-static atomic_int streaming, trigger_pending, quit;
+static atomic_int streaming, trigger_pending, button_pending, quit;
 static atomic_int flush_playback, earcon_pending, alarm_on;   /* barge-in: drop queued TTS; wake sound requested */
 static int soft_mute;                               /* under lock: mute switch from Home Assistant */
 static int barge_in;                                /* under lock: start a new pipeline once the old one has ended */
@@ -279,7 +280,8 @@ static void *earcon_thread(void *arg)
     return NULL;
 }
 
-static void on_action(void) { atomic_store(&trigger_pending, 1); }
+/* While music plays the action button pauses it (and resumes it again); otherwise it wakes the assistant. */
+static void on_action(void) { if (!core_sendspin_port || !sendspin_button()) atomic_store(&trigger_pending, 1); }
 
 static void on_mute(int muted)          /* hardware latch changed (button) */
 {
@@ -330,6 +332,7 @@ void core_set_volume(int v)
     atomic_store(&vol_clear_at, mono_ms() + 2500);
     fprintf(stderr, "volume: %d\n", volume);
     if (connected && proto->volume_changed) proto->volume_changed(volume);
+    if (core_sendspin_port) sendspin_volume_changed(volume);
 }
 
 static void on_volume(int dir)
@@ -363,6 +366,7 @@ static void *capture_thread(void *arg)
     while (!atomic_load(&quit)) {
         const void *pcm; int n = cap_read(&pcm);
         if (n < 0) { fprintf(stderr, "capture: fatal\n"); atomic_store(&quit, 1); break; }
+        if (atomic_exchange(&button_pending, 0)) on_action();      /* SIGUSR2: action button, for tests on the PC */
         if (atomic_exchange(&trigger_pending, 0)) trigger();
         if (n == 0) continue;
 
@@ -384,11 +388,12 @@ static void *capture_thread(void *arg)
 }
 
 static void on_usr1(int s) { (void)s; atomic_store(&trigger_pending, 1); }
+static void on_usr2(int s) { (void)s; atomic_store(&button_pending, 1); }
 
 int main(int argc, char **argv)
 {
     const char *manifest = DEFAULT_MANIFEST, *input = "/dev/input/event3"; int port = 0, print_mdns = 0, o;
-    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:LEVS")) != -1) switch (o) {
+    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:LEVST")) != -1) switch (o) {
         case 'P': proto = !strcmp(optarg, "wyoming") ? &proto_wyoming : &proto_esphome; break;
         case 'p': port = atoi(optarg); break;
         case 'n': core_name = optarg; break;
@@ -400,11 +405,12 @@ int main(int argc, char **argv)
         case 'E': use_earcon = 0; break;
         case 'V': use_volume = 0; break;
         case 'S': print_mdns = 1; break;
+        case 'T': { char tok[160]; sendspin_init(); sendspin_pairing_token(tok, sizeof tok); puts(tok); return 0; }
         default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-L] [-E] [-V] [-S]\n"); return 2;
     }
     core_port = port ? port : proto->port;
     if (print_mdns) { proto->print_mdns(); return 0; }
-    signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1);
+    signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2);
     if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
 
     if (cap_open() < 0) { fprintf(stderr, "cannot open capture (is PuffinApp still running?)\n"); return 1; }
