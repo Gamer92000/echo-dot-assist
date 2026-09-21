@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 static FILE *cap, *play;
@@ -54,3 +55,35 @@ void play_earcon(const short *pcm, size_t samples, unsigned rate)
     (void)pcm;
     fprintf(stderr, "earcon: %zu samples @ %u Hz\n", samples, rate);
 }
+
+/* Music stream on the PC: a file, written at real-time speed through a modelled 200 ms device buffer. */
+static FILE *music; static unsigned music_bps; static long long music_t0, music_written;
+static long long raw_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC_RAW, &ts); return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000; }
+
+int music_open(unsigned rate, unsigned channels)
+{
+    const char *p = getenv("HASSMIC_MUSIC");
+    music = fopen(p ? p : "/tmp/hassmic_music.raw", "ab");
+    music_bps = rate * channels * 2; music_t0 = 0; music_written = 0;
+    return music ? 0 : -1;
+}
+
+long long music_queued_us(void)
+{
+    if (!music || !music_t0) return 0;
+    long long q = music_written * 1000000 / music_bps - (raw_us() - music_t0);
+    if (q < 0) { music_t0 = 0; music_written = 0; q = 0; }
+    return q;
+}
+
+int music_write(const void *data, size_t len)
+{
+    if (!music) return -1;
+    music_queued_us();
+    if (!music_t0) music_t0 = raw_us();
+    fwrite(data, 1, len, music); fflush(music); music_written += len;
+    while (music_queued_us() > 200000) usleep(2000);
+    return 0;
+}
+
+void music_close(void) { if (music) fclose(music); music = NULL; }

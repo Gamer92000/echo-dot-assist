@@ -19,6 +19,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include "core.h"
+#include "sendspin.h"
 #include "netio.h"
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_NO_SIMD                 /* plain C: same code on the PC and on the armv7 build */
@@ -118,14 +119,15 @@ static const char *mac(void)
 
 static void print_mdns(void)
 {
-    char m[24]; size_t j = 0;
+    char m[24], ss[512] = ""; size_t j = 0;
+    if (core_sendspin_port) sendspin_mdns(core_sendspin_port, ss, sizeof ss);
     for (const char *c = mac(); *c; c++) if (*c != ':') m[j++] = tolower((unsigned char)*c);
     m[j] = 0;
     printf("<?xml version=\"1.0\" standalone='no'?>\n<!DOCTYPE service-group SYSTEM \"avahi-service.dtd\">\n"
            "<service-group>\n  <name>%s</name>\n  <service><type>_esphomelib._tcp</type><port>%d</port>\n"
            "    <txt-record>mac=%s</txt-record><txt-record>friendly_name=%s</txt-record><txt-record>version=2025.5.0</txt-record>\n"
-           "    <txt-record>platform=hassmic</txt-record><txt-record>network=wifi</txt-record>\n  </service>\n</service-group>\n",
-           node_name(), core_port, m, core_name);
+           "    <txt-record>platform=hassmic</txt-record><txt-record>network=wifi</txt-record>\n  </service>\n%s</service-group>\n",
+           node_name(), core_port, m, core_name, ss);
 }
 
 /* ---------------------------------------------------------------- settings entities

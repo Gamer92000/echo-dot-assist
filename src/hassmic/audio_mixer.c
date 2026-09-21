@@ -2,6 +2,7 @@
 #include "audio.h"
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include "mixer_api.h"
 
 static MixerHandle cap, play;
@@ -59,6 +60,57 @@ void play_close(int drain)
     if (drain) MixerDrain(play); else MixerFlush(play);
     MixerClose(play);
     play = NULL;
+}
+
+/* Music stream.  The mixer's buffer fill is not exposed in a documented way, so the queue is modelled: bytes written
+ * minus bytes that real time has consumed since the stream started draining (it drains at exactly the sample rate, and
+ * MixerGetBufPlay blocks once its ring is full, which keeps the model honest). */
+static MixerHandle music; static unsigned music_bps; static long long music_t0, music_written;
+
+static long long raw_us(void)
+{
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+    return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
+
+int music_open(unsigned rate, unsigned channels)
+{
+    music = MixerOpenPlay(rate, channels, 16, MIXER_PLAY_MUSIC);
+    music_bps = rate * channels * 2; music_t0 = 0; music_written = 0;
+    return music ? 0 : -1;
+}
+
+long long music_queued_us(void)
+{
+    if (!music || !music_t0) return 0;
+    long long q = music_written * 1000000 / music_bps - (raw_us() - music_t0);
+    if (q < 0) { music_t0 = 0; music_written = 0; q = 0; }      /* ran dry: the model restarts with the next write */
+    return q;
+}
+
+int music_write(const void *data, size_t len)
+{
+    const char *p = data;
+    if (!music) return -1;
+    music_queued_us();
+    if (!music_t0) music_t0 = raw_us();
+    while (len) {
+        int status = 0; unsigned capb = 0;
+        char *buf = MixerGetBufPlay(music, &status, &capb);
+        if (!buf) return -1;
+        unsigned n = len < capb ? len : capb;
+        memcpy(buf, p, n);
+        MixerReleaseBufPlay(music, n);
+        p += n; len -= n; music_written += n;
+    }
+    return 0;
+}
+
+void music_close(void)
+{
+    if (!music) return;
+    MixerFlush(music); MixerClose(music);
+    music = NULL;
 }
 
 void play_earcon(const short *pcm, size_t samples, unsigned rate)

@@ -5,7 +5,8 @@ Echo Dot 3rd gen (2018, `donut`, MT8516) as a Home Assistant voice satellite.
 Amazon's audio front end stays (`mixer` + `libasp`: echo cancellation, beamforming, mic calibration, speaker path) and so does
 the stock "Alexa" wake word engine (`libpryon`). The Alexa client (`PuffinApp`) is replaced by `hassmic`, a small daemon that
 speaks the ESPHome native API to Home Assistant (voice pipeline, announcements, timers, media player, settings entities;
-Wyoming is still available with `-P wyoming`). The device never talks to Amazon: egress is locked to local addresses.
+Wyoming is still available with `-P wyoming`). It is also a Sendspin player for synchronised multiroom audio from
+Music Assistant. The device never talks to Amazon: egress is locked to local addresses.
 
 Status and open items: [PLAN.md](PLAN.md). Reverse-engineering notes: [docs/](docs/).
 
@@ -24,7 +25,8 @@ Status and open items: [PLAN.md](PLAN.md). Reverse-engineering notes: [docs/](do
 | `scripts/device/` | run on the Echo: `alexa-off.sh`, `alexa-on.sh`, `lockdown.sh`, `wifi-join.sh`, `run.sh` |
 | `scripts/system/` | boot integration: `hassmic.rc`, `boot.sh`, `sepolicy.rules` |
 | `tools/` | OTA payload dumper, Thumb disassembly helpers, `qrun.sh` (device binaries under qemu-arm) |
-| `tests/` | `fake_ha_esphome.py` (reference `aioesphomeapi` client) and `fake_ha.py` (Wyoming) against a host or qemu build |
+| `docs/sendspin-digest.md` | what Music Assistant's Sendspin library really speaks, and where it differs from the spec |
+| `tests/` | `fake_ma_sendspin.py` (reference `aiosendspin` server), `fake_ha_esphome.py` (reference `aioesphomeapi` client) and `fake_ha.py` (Wyoming) against a host or qemu build |
 
 ## External files (not in this repository)
 

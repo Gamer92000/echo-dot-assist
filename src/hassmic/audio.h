@@ -15,6 +15,13 @@ int  play_open(unsigned rate, unsigned channels);
 int  play_write(const void *data, size_t len);      /* blocks at playback speed */
 void play_close(int drain);
 
+/* Second, independent playback stream for music (Sendspin); mixes with the voice stream.  One at a time.
+ * music_write blocks while the device buffer is full; music_queued_us is how much written audio has not played yet. */
+int       music_open(unsigned rate, unsigned channels);
+int       music_write(const void *data, size_t len);
+long long music_queued_us(void);
+void      music_close(void);
+
 /* Short UI sound on its own stream; mixes with whatever else plays.  Blocks for the length of the sound. */
 void play_earcon(const short *pcm, size_t samples, unsigned rate);
 #endif
