@@ -1,5 +1,18 @@
 # hassechodot
 
+> # ⚠️ DISCLAIMER: EVERYTHING IN THIS REPOSITORY IS VIBECODED ⚠️
+>
+> **All of it: the code, the scripts, the reverse-engineering notes, the plan and this README were written by an AI
+> (Claude) in conversation with the author, not by hand.** It was tried on exactly one device. Nobody has reviewed or
+> audited it.
+>
+> That includes the parts that can hurt: the bootloader-unlock workflow, the scripts that write to the system partition and
+> patch the SELinux policy, the firewall rules that are supposed to keep the device away from Amazon and from firmware
+> updates, and the signed push-update mechanism. Any of them can be wrong in ways that brick your Echo, leave it
+> talking to the internet when you think it is not, or open it up on your network.
+>
+> **Read what you run. No warranty, no support, your risk.**
+
 Echo Dot 3rd gen (2018, `donut`, MT8516) as a Home Assistant voice satellite.
 
 Amazon's audio front end stays (`mixer` + `libasp`: echo cancellation, beamforming, mic calibration, speaker path) and so does
