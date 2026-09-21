@@ -7,6 +7,7 @@
 #   NAME="Echo Dot"             optional
 #   PROTO=esphome               optional: esphome (default, port 26053) or wyoming (port 16700)
 #   ARGS=""                     optional extra hassmic arguments
+umask 022                                   # init gives us 077; what we create must be readable by the daemon's user
 D=${HASSMIC_DIR:-/system/hassmic}
 SYS=${HASSMIC_SYS:-/system/hassmic}
 OTA=/data/local/hassmic/ota
@@ -57,7 +58,8 @@ ota_watch() {
         rm -f $IN/request $IN/result
         new=$OTA/v$(cut -d. -f1 /proc/uptime)-$$
         if [ ! -f $SYS/update.pub ]; then echo "FAILED no update key on this device (install-system.sh puts it there)" > $IN/result.tmp
-        elif ver=$($SYS/otatool install $SYS/update.pub $IN/bundle $IN/bundle.sig $new 2>&1) && [ -f $new/main.sh ] && [ -x $new/hassmic ]; then
+        elif ver=$($SYS/otatool install $SYS/update.pub $IN/bundle $IN/bundle.sig $new 2>&1) && chmod 755 $new && [ -f $new/main.sh ] &&
+             $new/runas puffin shell $new/hassmic -T > /dev/null 2>&1; then     # the daemon's user can really run it
             old=$(readlink $OTA/current)
             ln -sfn $new $OTA/current                   # toybox: replaces the link itself (checked on the device); no mv -T there
             echo 0 > $OTA/tries
@@ -85,6 +87,8 @@ firewall)
     ota_watch >> $LOG 2>&1
     ;;
 satellite)
+    # The installer that unpacked us may have been an older one running with umask 077: make sure the daemon's user gets in.
+    [ "$D" != "$SYS" ] && chmod 755 $D
     {
         rotate_log
         echo "== satellite start, uptime $(cut -d. -f1 /proc/uptime)s, $(cat $D/VERSION 2>/dev/null || echo factory) from $D"
@@ -104,11 +108,21 @@ satellite)
     avahi-daemon --no-drop-root > /dev/null 2>&1 &
     # The bootstrap counted this start as an attempt; a minute of hassmic running counts as success.
     (sleep 60; pidof hassmic > /dev/null && echo 0 > $OTA/tries) &
+    fast=0
     while :; do
+        t0=$(cut -d. -f1 /proc/uptime)
         # AIPC refuses uid 0, so run as the stock Alexa client's user.
         $D/runas puffin aipc,audio,system,inet,shell,dbus,ace_group,ace_kvstore,input \
             $BIN -P ${PROTO:-esphome} -n "${NAME:-Echo Dot}" $ARGS >> $LOG 2>&1
         echo "hassmic exited rc=$?, restart in 3 s" >> $LOG
+        # An update whose daemon does not stay up is worse than no update: with hassmic down there is no push port either.
+        # Five exits within 20 s each -> back to the factory copy right now, without waiting for three reboots.
+        if [ $(( $(cut -d. -f1 /proc/uptime) - t0 )) -lt 20 ]; then fast=$((fast + 1)); else fast=0; fi
+        if [ $fast -ge 5 ] && [ "$D" != "$SYS" ]; then
+            echo "== update $(cat $D/VERSION 2>/dev/null) keeps exiting: running the factory copy" >> $LOG
+            echo 3 > $OTA/tries
+            exec sh $SYS/boot.sh satellite
+        fi
         # PUFFIN_START may have been set again meanwhile (ledcontroller restart)
         sh $D/alexa-off.sh > /dev/null 2>&1; quiet
         sleep 3

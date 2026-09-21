@@ -5,6 +5,7 @@
 #   /data/local/hassmic/ota/current  installed by a signed push update (scripts/ota-push.sh), root-owned
 # The update is used when it is there, unless it failed to come up three times in a row: then the factory copy runs again.
 # Config: /data/local/hassmic/hassmic.conf.  No config = do nothing = stock behaviour.
+umask 022
 SYS=/system/hassmic
 BASE=/data/local/hassmic
 OTA=$BASE/ota

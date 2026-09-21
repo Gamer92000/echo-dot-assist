@@ -99,6 +99,7 @@ static int verify_install(const char *pubpath, const char *bundle, const char *s
     if (sscanf(p, "version %63[^\n]\n", version) != 1) { fprintf(stderr, "otatool: no version\n"); return 1; }
     p = memchr(p, '\n', end - p) + 1;
     if (dest && mkdir(dest, 0755)) { fprintf(stderr, "otatool: %s: %s\n", dest, strerror(errno)); return 1; }
+    if (dest) chmod(dest, 0755);                        /* root's umask on the device is 077; the daemon's user must get in */
     for (;;) {
         char name[80], path[512]; unsigned mode; size_t size; int used = 0;
         if (end - p >= 4 && !memcmp(p, "end\n", 4)) break;
