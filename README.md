@@ -13,97 +13,203 @@
 >
 > **Read what you run. No warranty, no support, your risk.**
 
-Echo Dot 3rd gen (2018, `donut`, MT8516) as a Home Assistant voice satellite.
+Turns an **Amazon Echo Dot 3rd gen (2018)** into a **Home Assistant voice satellite** that never talks to Amazon.
 
-Amazon's audio front end stays (`mixer` + `libasp`: echo cancellation, beamforming, mic calibration, speaker path) and so does
-the stock "Alexa" wake word engine (`libpryon`). The Alexa client (`PuffinApp`) is replaced by `hassmic`, a small daemon that
-speaks the ESPHome native API to Home Assistant (voice pipeline, announcements, timers, media player, settings entities;
-Wyoming is still available with `-P wyoming`). It is also a Sendspin player for synchronised multiroom audio from
-Music Assistant. The device never talks to Amazon: egress is locked to local addresses.
+You say the wake word, the Echo streams what you say to your Home Assistant, Assist answers through the Echo's speaker.
+The good part of the Echo is kept: Amazon's own microphone processing (echo cancellation, beamforming over the mic array,
+per-device mic calibration) and Amazon's own wake word engine stay in place, so it hears you across the room and over its
+own music like it did before. Only the Alexa client is replaced, by a small daemon called `hassmic`.
 
-Status and open items: [PLAN.md](PLAN.md). Reverse-engineering notes: [docs/](docs/).
+**Only for the 2018 Echo Dot 3 (`donut`, model D9N29T). Not the 2019–2020 refresh with the clock or the different board
+(`crumpet`, C78MP8).** The unlock can brick the device. It needs the case opened and wires on test pads.
 
-**Only for the 2018 Echo Dot 3 (`donut`, D9N29T). Not the 2019–2020 refresh (`crumpet`, C78MP8).** Unlocking can brick the device.
+## What you get
 
-## Layout
+- **Voice assistant** in Home Assistant through the ESPHome integration: found automatically, no YAML, no ESPHome add-on.
+  Wake word runs on the Echo ("Alexa" out of the box; "Echo", "Computer", "Amazon", "Ziggy" with
+  [one extra step](#another-wake-word-echo-computer-amazon-ziggy)). Replies start while the text-to-speech is still being
+  generated. Say the wake word, or press the action button, while it talks and it stops and listens again.
+- **Announcements and media player**: `assist_satellite.announce`, TTS and `media_player.play_media` play on the Echo.
+- **Timers** ("set a timer for ten minutes"): rings on the Echo until you press the button, say the wake word, or 60 s pass.
+- **Multiroom music** as a Sendspin player for Music Assistant, in sync with other players; the voice assistant ducks it.
+- **The buttons work**: action = talk without the wake word / pause and resume music / stop an alarm; volume up and down in
+  10 % steps; the mic-off button is the hardware mute it always was (red ring, reported to Home Assistant).
+- **LED ring** shows listening, thinking, speaking, errors and mute. Silent and dark at boot.
+- **Settings in Home Assistant**: noise suppression level, auto gain, mic volume multiplier, wake sound on/off, mute switch.
+- **No cloud**: the Alexa client, the updater and the telemetry services are stopped at every boot, and a firewall on the
+  Echo drops everything that is not going to a local address. Put it on a network without internet as a second layer.
+- **Updates over Wi-Fi** once installed: one command on the PC, signed, with automatic fallback if an update does not start.
+- **Reversible**: one file to delete for stock behaviour, an uninstaller, or reflash stock from the recovery.
 
-| Path | What |
-|---|---|
-| `src/hassmic/` | the satellite daemon: core (capture, Pryon wake word, playback, LEDs, buttons) + `proto_esphome.c`, `proto_wyoming.c` |
-| `src/tools/` | `mixcap`, `mixplay`, `pryon_test`, `runas` (drops root: AIPC refuses uid 0, the image has no `su`), `curlspy` (LD_PRELOAD shim that logs a stock daemon's libcurl requests) |
-| `src/third_party/monocypher.[ch]` | X25519, ChaCha20-Poly1305 for the Sendspin Noise handshake; BSD-2-Clause OR CC0, <https://monocypher.org>, 4.0.2 |
-| `src/third_party/dr_flac.h` | FLAC decoder for Sendspin; public domain or MIT-0, <https://github.com/mackron/dr_libs> |
-| `src/third_party/minimp3.h` | MP3 decoder, public domain (CC0), <https://github.com/lieff/minimp3> |
-| `src/include/` | C headers for the reversed `libmixerAPI.so` and `libpryon.so` |
-| `scripts/` | PC side: `deploy.sh`, `probe.sh`, `capture-test.sh`, `wifi-join.sh`, `install-system.sh` |
-| `scripts/device/` | run on the Echo: `alexa-off.sh`, `alexa-on.sh`, `lockdown.sh`, `wifi-join.sh`, `run.sh`, `davs-spy.sh` |
-| `scripts/system/` | boot integration: `hassmic.rc`, `boot.sh` (stable bootstrap), `main.sh` (updatable), `sepolicy.rules` |
-| `tools/` | OTA payload dumper, Thumb disassembly helpers, `qrun.sh` (device binaries under qemu-arm), `davs-fetch.py` (wake-word models from Amazon) |
-| `docs/sendspin-digest.md` | what Music Assistant's Sendspin library really speaks, and where it differs from the spec |
-| `tests/` | `fake_ma_sendspin.py` (reference `aiosendspin` server), `fake_ha_esphome.py` (reference `aioesphomeapi` client) and `fake_ha.py` (Wyoming) against a host or qemu build |
+Wyoming instead of ESPHome is available too (`-P wyoming`, port 16700).
 
-## External files (not in this repository)
+Security, plainly: the ESPHome connection is unencrypted and has no key, like an ESPHome device without `api: encryption`.
+Anyone on the Echo's network can connect to it. Push updates are the exception: they must be signed with your key.
 
-Proprietary or third-party; fetch them yourself and put them in the repository root. All are git-ignored.
+## What you need
+
+- The right Echo Dot (see above) and a way to reach its **hidden USB port**: there is no socket, the data lines are on
+  test pads inside. The [XDA thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/) links the guides for that. This is the hard part; everything after it is typing.
+- A **Linux PC** with `adb`, `fastboot`, `python3`, `make`, `unzip`, `debugfs` (e2fsprogs), `sqlite3`; about 5 GB of disk
+  (most of it the Android NDK).
+- **Home Assistant** with an Assist pipeline that works (speech-to-text, conversation agent, text-to-speech). Test it with
+  another satellite or the app first. Optional: Music Assistant for multiroom audio (tested with 2.10.4).
+- Wi-Fi the Echo can use to reach Home Assistant. WPA2 passphrase networks; no captive portals, no enterprise logins.
+- These files, which are not in this repository (proprietary or third-party). Put them in the repository root:
 
 | File | Source | sha256 |
 |---|---|---|
 | `update-kindle-donut_puffin-NS65741_user_8138_0013222529668.bin` | stock Fire OS 6574.1 for `donut_puffin`, from FTVDB | `ac22b78cf94c2ebacfa90447b770b803d9f72f35858d5218975d97fea95a0245` |
 | `kamakiri-donut-v1.0.0.zip` | bootloader unlock + TWRP, attachment of the [XDA thread for kamakiri-donut](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/) | `4d2bb52eaf661f6616aa4268584d44cf9155c1328c34bfcba01a6558f942b738` |
 | `boot-root.zip` | root adb + permissive `su` SELinux domain, [same XDA thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/) | `de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0` |
-| `toolchain/android-ndk-r21e/` | <https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip> | — |
+| `toolchain/android-ndk-r21e/` | unpack <https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip> into `toolchain/` | — |
 
-Derived from those, also ignored: `kamakiri/` and `boot-root/` (the unpacked zips; `install-system.sh` uses
-`boot-root/patch/magiskpolicy32`), `firmware/` (unpacked OTA), `re/` (disassembly), `build/`, `device-logs/`.
+Use exactly this firmware version. Everything here was worked out against its binaries, and `scripts/probe.sh` checks for it.
 
-`firmware/` is needed to build, because the tools link against the stock libraries in `firmware/rootfs/system/lib`.
-Steps as used here (intermediate files were not kept, adjust paths if your OTA unpacks differently):
+## Install
+
+Plan an evening. Steps 1–2 are the risky ones and are not this project's work: read the [XDA thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/) in full first, it
+is the authority for them. **Never let the Echo go online with Amazon on the way** (it would update itself, and an update
+can close the hole the unlock uses): do not set it up with the Alexa app, except in the guarded way described under
+[Another wake word](#another-wake-word-echo-computer-amazon-ziggy).
+
+### 1. Unlock the Echo, flash the stock firmware, root it
+
+Short version of the thread, as used here:
+
+```sh
+sudo cp scripts/51-echo-unlock.rules /etc/udev/rules.d/ && sudo udevadm control --reload    # USB access without sudo; keeps ModemManager off the bootrom
+unzip kamakiri-donut-v1.0.0.zip -d kamakiri && cd kamakiri
+./bootrom-step.sh          # start it, THEN plug the Echo into the PC while holding the action (dot) button
+./fastboot-step.sh         # when the ring shows a rotating rainbow; ends in TWRP (white ring)
+cd ..
+```
+
+Then the firmware into both slots (the Echo has A/B slots), and root:
+
+```sh
+F=update-kindle-donut_puffin-NS65741_user_8138_0013222529668.bin
+adb shell twrp wipe cache; adb shell twrp wipe data
+adb push $F /sdcard/update.zip
+adb shell twrp install /sdcard/update.zip
+adb shell 's=$(bcbtool get_active); case $s in a) bcbtool set_active b;; b) bcbtool set_active a;; esac'
+adb reboot recovery        # wait for the white ring
+adb shell twrp install /sdcard/update.zip
+adb push boot-root.zip /sdcard/ && adb shell twrp install /sdcard/boot-root.zip
+adb reboot
+```
+
+The Echo now boots stock Fire OS, unregistered, without Wi-Fi, talking about setup with an orange ring, and `adb shell` is a
+root shell. If adb does not show up after a reboot, pull the power and plug it in again.
+Later you get back into TWRP with `adb reboot recovery`, or by holding Volume Up while plugging in the power.
+
+### 2. Unpack the firmware and build
+
+The tools link against Amazon's libraries, so the firmware has to be unpacked on the PC (no root needed):
 
 ```sh
 unzip update-kindle-*.bin payload.bin -d firmware/
-python3 tools/payload_dump.py firmware/payload.bin firmware/images     # system.img, boot.img, ...
-debugfs -R "rdump / firmware/rootfs" firmware/images/system.img        # no root needed
+python3 tools/payload_dump.py firmware/payload.bin firmware/images
+debugfs -R "rdump / firmware/rootfs" firmware/images/system.img
+unzip boot-root.zip -d boot-root          # the installer uses boot-root/patch/magiskpolicy32
+make                                      # ARM binaries into build/
+scripts/probe.sh                          # must not list any DIFFERENT library
 ```
 
-Secrets live in `secrets/` (ignored): `secrets/wifi.conf` (line 1 SSID, line 2 passphrase), `secrets/update.key` (signs push updates).
+If `probe.sh` reports a different library, your Echo runs another firmware than the one analysed: stop and redo step 1.
 
-## Build
+### 3. Optional: another wake word
+
+If you want "Echo" or "Computer" instead of "Alexa", [get the model now](#another-wake-word-echo-computer-amazon-ziggy).
+It is the only thing that needs the Echo online with Amazon, and it is easiest before anything else is set up. It can
+also be done later.
+
+### 4. Lock it down, then join Wi-Fi
+
+In this order. The lock goes on before the Echo has ever seen your network:
 
 ```sh
-make            # ARM binaries into build/ (NDK r21e, API 24, armv7, lld)
-make host       # PC build + qemu build for tests (needs libopus on the PC)
-.venv/bin/python tests/fake_ha_esphome.py        # needs: pip install aioesphomeapi
-.venv/bin/python tests/fake_ha.py [--qemu]        # Wyoming; needs: pip install wyoming
+scripts/deploy.sh                                        # pushes the binaries and scripts to /data/local/hassmic
+adb shell sh /data/local/hassmic/lockdown.sh             # firewall: local addresses only; stops Alexa, updater, telemetry
+mkdir -p secrets && printf '%s\n%s\n' 'My SSID' 'my passphrase' > secrets/wifi.conf      # git-ignored
+scripts/wifi-join.sh                                     # refuses to run without the lock; prints the IP address
 ```
 
-## Install on a device
+"Local" means the private ranges, link-local and multicast, so Home Assistant may be in another local subnet or VLAN.
+The Wi-Fi profile survives reboots, this lock does not (yet): **do not reboot the Echo before step 6**, or block its
+internet access at the router, which is a good idea anyway.
+Give the Echo a fixed address in your router (DHCP reservation).
 
-1. Get USB access to the Echo and unlock it with kamakiri-donut; flash the stock OTA to both slots and `boot-root.zip`
-   (steps are in the [XDA thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/)). Do **not** register the device with the Alexa app.
-2. `scripts/probe.sh` — checks that the device libraries match the analysed firmware.
-   Want a wake word other than "Alexa"? Do [that](#another-wake-word-echo-computer-amazon-ziggy) now: it is the one
-   step that needs the Echo online and registered, and it is easiest before anything is locked down.
-3. `scripts/deploy.sh`, then on the device `lockdown.sh` **before** the first Wi-Fi join, then `scripts/wifi-join.sh`.
-   The lock allows local addresses only (private ranges, link-local, multicast), so Home Assistant may sit in any local subnet.
-   Put the Echo on a network without internet access as a second layer.
-4. Try it: `adb shell /data/local/hassmic/run.sh`. Home Assistant discovers an ESPHome device (or add it by IP, port 26053,
-   no encryption key). With `-P wyoming`: Wyoming integration, port 16700.
-5. Make it permanent: `scripts/install-system.sh "<name>"`. Goes through TWRP, adds `/system/hassmic/`,
-   `/system/etc/init/hassmic.rc` and three allow rules to `/sepolicy` (stock copy kept as `/sepolicy.pre-hassmic`).
+### 5. Try it
 
-6. From then on update over Wi-Fi: `scripts/ota-push.sh <echo-ip>` builds, signs with `secrets/update.key` (created by the
-   installer; back it up) and pushes. The Echo installs only what verifies against the public key on its system partition,
-   and falls back to the factory copy if an update does not start.
+```sh
+adb shell sh /data/local/hassmic/run.sh          # foreground; Ctrl-C stops it
+```
 
-Undo: delete `/data/local/hassmic/hassmic.conf` (boot script then does nothing), or `scripts/install-system.sh --uninstall`,
-or reflash from TWRP (hold Volume Up while powering on).
+Home Assistant shows a discovered ESPHome device "Echo Dot" under Settings → Devices & services (or add it by hand:
+ESPHome, the Echo's IP, port 26053, no encryption key). Pick the Assist pipeline for it in the device's settings, say
+"Alexa", ask something. If Home Assistant does not find it and cannot connect: it must be able to open TCP 26053 on the
+Echo, and the Echo must be able to reach Home Assistant's port 8123 (for media and announcements).
+
+### 6. Make it permanent
+
+```sh
+scripts/install-system.sh "Kitchen Echo"         # the name Home Assistant will show
+```
+
+This patches the SELinux policy under the running system, reboots into TWRP, writes `/system/hassmic/`, an init file and
+the policy into the active slot, and reboots. It refuses to write if anything does not match what it expects, and keeps the
+old policy as `/sepolicy.pre-hassmic`. From now on the Echo boots silent and dark, locks itself down, and is a satellite
+about a minute after power-up. If Home Assistant still has the device from step 5 under another name, remove it and
+add the new one.
+
+The installer creates `secrets/update.key`. **Back it up**: it signs your updates. The USB wires can come off now.
+
+### 7. Optional: Music Assistant
+
+Music Assistant finds the Echo by itself (Sendspin player, TCP 28928 on the Echo). It asks for a pairing token: enable the
+diagnostic entity "Sendspin pairing token" of the device in Home Assistant and copy it, or read it from
+`/data/local/hassmic/boot.log`.
+
+## Living with it
+
+**Updating.** `git pull`, then `scripts/ota-push.sh <echo-ip>` (it remembers the address). Builds, signs, pushes over
+Wi-Fi to TCP 28929; the Echo installs only what verifies against your key, restarts the daemon, and goes back to the
+installed copy by itself if the new one does not stay up.
+
+**Configuration** is one file on the Echo, `/data/local/hassmic/hassmic.conf`, read at boot (edit over adb, reboot):
+
+```sh
+NAME="Kitchen Echo"         # device name in Home Assistant
+PROTO=esphome               # or wyoming
+ARGS=""                     # extra options for hassmic, see below
+#MODE=stock-online          # temporary: stock Alexa with internet but without updates, see "Another wake word"
+```
+
+Options for `ARGS`: `-m <pryon.manifest>` another wake word model · `-w remote` wake word detection in Home Assistant
+(openWakeWord) instead of on the Echo · `-E` no sound on wake · `-L` leave the LED ring alone · `-V` leave the volume
+buttons alone · `-z 0` no Sendspin player · `-p <port>` another port (the Echo's own firewall only admits inbound TCP
+16384–32767).
+
+**When it does not react.** Most likely it has no connection to Home Assistant: then wake word and button do nothing, and
+it does not tell you (known gap). Look at `adb shell tail -30 /data/local/hassmic/boot.log`: `wake: ALEXA type=2` means
+it heard you, `client connected` / `voice assistant: subscribed` means Home Assistant is there. No such lines after the
+last `client disconnected`: check the network (`adb shell ifconfig wlan0`, can Home Assistant reach that address?).
+Keep exactly one Wi-Fi profile on the Echo; with two it roamed and kept the wrong address here.
+Open issues and everything that was measured: [PLAN.md](PLAN.md).
+
+**Going back.**
+- For a moment: `adb shell rm /data/local/hassmic/hassmic.conf` and reboot. The boot script then does nothing and the Echo
+  is a stock, unregistered Echo (which will update itself if it gets internet).
+- Properly: `scripts/install-system.sh --uninstall` removes the files from the system partition and restores the policy.
+- Completely: reflash the stock firmware from TWRP as in step 1.
 
 ## Another wake word (Echo, Computer, Amazon, Ziggy)
 
 The firmware ships only the "Alexa" model. The others are Pryon model sets that a registered Echo downloads from Amazon
 (DAVS) on demand, per language. The stock engine loads them as they are, so `hassmic -m <pryon.manifest>` is all it takes.
-Getting one needs an access token of a registered device, which means going online with Amazon once. Best done right after
-step 2 of the install, before the lockdown; on an installed device use `MODE=stock-online` instead (below).
+Getting one needs an access token of a registered device, which means going online with Amazon once. Best done as step 3
+of the install, before the lockdown; on an installed device use `MODE=stock-online` instead (below).
 
 **The danger is a firmware update**: an Echo that is online pulls one, and that can cost root and the unlock. `otad` and
 `ace_otad` run as user `ace_otad`, `update_engine` is started by them on demand, so cutting off that one user is enough:
@@ -136,7 +242,7 @@ every reboot before doing anything else, or keep the Echo's internet blocked at 
    kept the lease of the wrong one. The registration left in `map.db` is dead once the account forgot the device and
    sits behind the egress lock anyway; to clear it, empty the table on the PC and push the file back
    (`sqlite3 map.db "delete from deviceData; vacuum;"`, owner `ace_maplite:ace_maplite`, mode 660, reboot).
-   Then carry on with step 3 of the install.
+   Then carry on with step 4 of the install.
 5. Install the model and point hassmic at it:
    ```sh
    adb shell mkdir -p /data/local/hassmic/models
@@ -155,3 +261,29 @@ What the request looks like, if you want it without the tool: `GET https://api.a
 + URL-quoted base64 of `{"artifactType":"wakeword","artifactKey":"echo","filters":{"engineCompatibilityIdList":[…],"locale":["de-DE"],"modelClass":["B"]}}`,
 header `Authorization: Bearer <access_token>`. The answer is JSON with a signed CloudFront `downloadUrl` (`.tar.gz`) that
 expires within minutes. Found by preloading `src/tools/curlspy.c` into the stock downloader: `scripts/device/davs-spy.sh`.
+
+## For developers
+
+How it works: Amazon's `mixer` daemon owns the audio hardware and runs the whole front end (`libasp`); `hassmic` takes the
+place of `PuffinApp` as its client through the reversed C API of `libmixerAPI.so`, feeds the 16 kHz post-AEC stream to
+the stock `libpryon.so`, and speaks the ESPHome native API. Notes: [docs/](docs/), progress and measurements: [PLAN.md](PLAN.md).
+
+| Path | What |
+|---|---|
+| `src/hassmic/` | the daemon: core (capture, wake word, playback, LEDs, buttons), `proto_esphome.c`, `proto_wyoming.c`, `sendspin.c`, push updates |
+| `src/tools/` | `mixcap`, `mixplay`, `pryon_test`, `latency`, `otatool`, `runas` (AIPC refuses uid 0, the image has no `su`), `curlspy` |
+| `src/include/` | C headers for the reversed `libmixerAPI.so` and `libpryon.so` |
+| `src/third_party/` | monocypher 4.0.2 (BSD-2-Clause OR CC0), `dr_flac.h` (public domain or MIT-0), `minimp3.h` (CC0) |
+| `scripts/` | PC side: `deploy.sh`, `probe.sh`, `capture-test.sh`, `wifi-join.sh`, `install-system.sh`, `ota-push.sh` |
+| `scripts/device/`, `scripts/system/` | run on the Echo; boot integration (`hassmic.rc`, `boot.sh` bootstrap, `main.sh` updatable part, `sepolicy.rules`) |
+| `tools/` | OTA payload dumper, Thumb disassembly helpers, `qrun.sh` (device binaries under qemu-arm), `davs-fetch.py` |
+| `tests/` | reference implementations as counterpart: `fake_ha_esphome.py` (aioesphomeapi), `fake_ma_sendspin.py` (aiosendspin), `fake_ha.py` (Wyoming) |
+
+```sh
+make host                                         # PC build + qemu build for the tests (needs libopus)
+.venv/bin/python tests/fake_ha_esphome.py         # pip install aioesphomeapi
+.venv/bin/python tests/fake_ha.py [--qemu]        # pip install wyoming
+```
+
+Git-ignored because proprietary, derived or secret: `firmware/`, `re/`, `kamakiri/`, `boot-root/`, `toolchain/`, `build/`,
+`device-logs/`, `secrets/` (`wifi.conf`, `update.key`).
