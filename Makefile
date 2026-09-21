@@ -36,6 +36,11 @@ build/runas: src/tools/runas.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) $< -o $@ -pie -fuse-ld=lld
 
+# not part of "all": LD_PRELOAD shim to see a stock daemon's libcurl requests (see the file)
+build/libcurlspy.so: src/tools/curlspy.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) -fPIC -shared $< -o $@ -fuse-ld=lld -ldl
+
 build/pryon_test: src/tools/pryon_test.c src/include/pryon_api.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) $(STOCK)/libpryon.so

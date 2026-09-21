@@ -17,15 +17,15 @@ Status and open items: [PLAN.md](PLAN.md). Reverse-engineering notes: [docs/](do
 | Path | What |
 |---|---|
 | `src/hassmic/` | the satellite daemon: core (capture, Pryon wake word, playback, LEDs, buttons) + `proto_esphome.c`, `proto_wyoming.c` |
-| `src/tools/` | `mixcap`, `mixplay`, `pryon_test`, `runas` (drops root: AIPC refuses uid 0, the image has no `su`) |
+| `src/tools/` | `mixcap`, `mixplay`, `pryon_test`, `runas` (drops root: AIPC refuses uid 0, the image has no `su`), `curlspy` (LD_PRELOAD shim that logs a stock daemon's libcurl requests) |
 | `src/third_party/monocypher.[ch]` | X25519, ChaCha20-Poly1305 for the Sendspin Noise handshake; BSD-2-Clause OR CC0, <https://monocypher.org>, 4.0.2 |
 | `src/third_party/dr_flac.h` | FLAC decoder for Sendspin; public domain or MIT-0, <https://github.com/mackron/dr_libs> |
 | `src/third_party/minimp3.h` | MP3 decoder, public domain (CC0), <https://github.com/lieff/minimp3> |
 | `src/include/` | C headers for the reversed `libmixerAPI.so` and `libpryon.so` |
 | `scripts/` | PC side: `deploy.sh`, `probe.sh`, `capture-test.sh`, `wifi-join.sh`, `install-system.sh` |
-| `scripts/device/` | run on the Echo: `alexa-off.sh`, `alexa-on.sh`, `lockdown.sh`, `wifi-join.sh`, `run.sh` |
+| `scripts/device/` | run on the Echo: `alexa-off.sh`, `alexa-on.sh`, `lockdown.sh`, `wifi-join.sh`, `run.sh`, `davs-spy.sh` |
 | `scripts/system/` | boot integration: `hassmic.rc`, `boot.sh` (stable bootstrap), `main.sh` (updatable), `sepolicy.rules` |
-| `tools/` | OTA payload dumper, Thumb disassembly helpers, `qrun.sh` (device binaries under qemu-arm) |
+| `tools/` | OTA payload dumper, Thumb disassembly helpers, `qrun.sh` (device binaries under qemu-arm), `davs-fetch.py` (wake-word models from Amazon) |
 | `docs/sendspin-digest.md` | what Music Assistant's Sendspin library really speaks, and where it differs from the spec |
 | `tests/` | `fake_ma_sendspin.py` (reference `aiosendspin` server), `fake_ha_esphome.py` (reference `aioesphomeapi` client) and `fake_ha.py` (Wyoming) against a host or qemu build |
 
@@ -68,6 +68,8 @@ make host       # PC build + qemu build for tests (needs libopus on the PC)
 1. Get USB access to the Echo and unlock it with kamakiri-donut; flash the stock OTA to both slots and `boot-root.zip`
    (steps are in the XDA thread). Do **not** register the device with the Alexa app.
 2. `scripts/probe.sh` — checks that the device libraries match the analysed firmware.
+   Want a wake word other than "Alexa"? Do [that](#another-wake-word-echo-computer-amazon-ziggy) now: it is the one
+   step that needs the Echo online and registered, and it is easiest before anything is locked down.
 3. `scripts/deploy.sh`, then on the device `lockdown.sh` **before** the first Wi-Fi join, then `scripts/wifi-join.sh`.
    The lock allows local addresses only (private ranges, link-local, multicast), so Home Assistant may sit in any local subnet.
    Put the Echo on a network without internet access as a second layer.
@@ -82,3 +84,61 @@ make host       # PC build + qemu build for tests (needs libopus on the PC)
 
 Undo: delete `/data/local/hassmic/hassmic.conf` (boot script then does nothing), or `scripts/install-system.sh --uninstall`,
 or reflash from TWRP (hold Volume Up while powering on).
+
+## Another wake word (Echo, Computer, Amazon, Ziggy)
+
+The firmware ships only the "Alexa" model. The others are Pryon model sets that a registered Echo downloads from Amazon
+(DAVS) on demand, per language. The stock engine loads them as they are, so `hassmic -m <pryon.manifest>` is all it takes.
+Getting one needs an access token of a registered device, which means going online with Amazon once. Best done right after
+step 2 of the install, before the lockdown; on an installed device use `MODE=stock-online` instead (below).
+
+**The danger is a firmware update**: an Echo that is online pulls one, and that can cost root and the unlock. `otad` and
+`ace_otad` run as user `ace_otad`, `update_engine` is started by them on demand, so cutting off that one user is enough:
+
+```sh
+adb push scripts/device/lockdown.sh /data/local/tmp/
+adb shell "sh /data/local/tmp/lockdown.sh ota-only watch > /data/local/tmp/otaguard.log 2>&1 &"
+adb shell iptables -S hassmic_out        # must show: -m owner --uid-owner <n> -j DROP
+```
+
+That guard is gone after a reboot, while the saved Wi-Fi profile is not: until the token is on the PC, start it again after
+every reboot before doing anything else, or keep the Echo's internet blocked at the router while it boots.
+
+1. Set the Echo up with the Alexa app as usual (Wi-Fi with internet, Amazon account). The app ends on an "updating" screen
+   and the ring keeps spinning for a while: that is the update check that gets no answer. Nothing is being installed.
+2. Pull the registration, which holds the token (valid for an hour after the device fetched it; the device renews it while
+   online), and fetch what you want. Language is a parameter: no need to change wake word or language in the app.
+   ```sh
+   adb pull /data/ace/kvstorage/map.db device-logs/map.db
+   tools/davs-fetch.py device-logs/map.db echo de-DE          # -> device-logs/models/echo-de-DE/unpacked/
+   ```
+   Keys seen to work: `alexa echo computer amazon ziggy`. `device-logs/` is git-ignored: the models are Amazon's, and
+   `map.db` is your account's device credential.
+3. Check it on the PC with the stock engine: copy `unpacked/` somewhere below `firmware/rootfs/`, then
+   `tools/qrun.sh build/pryon_test -m /<path below rootfs>/pryon.manifest testdata/echo_espeak_de.raw` has to print
+   `RESULT ... keyword=ECHO type=2`. (de-DE sets load; the larger en-US set did not under qemu, not looked into.)
+4. Remove the device from your Amazon account in the app. On the Echo, drop the Wi-Fi profile the app added if it is not
+   the network the satellite is meant to live in: `wpa_cli -i wlan0 -p /data/misc/wifi/sockets list_networks`, then
+   `remove_network <id>` and `save_config`. Two saved profiles are not harmless: the Echo roamed between them here and
+   kept the lease of the wrong one. The registration left in `map.db` is dead once the account forgot the device and
+   sits behind the egress lock anyway; to clear it, empty the table on the PC and push the file back
+   (`sqlite3 map.db "delete from deviceData; vacuum;"`, owner `ace_maplite:ace_maplite`, mode 660, reboot).
+   Then carry on with step 3 of the install.
+5. Install the model and point hassmic at it:
+   ```sh
+   adb shell mkdir -p /data/local/hassmic/models
+   adb push device-logs/models/echo-de-DE/unpacked /data/local/hassmic/models/echo-de
+   adb shell chmod -R a+rX /data/local/hassmic/models
+   ```
+   For a trial run: `run.sh -m /data/local/hassmic/models/echo-de/pryon.manifest`. Installed: put
+   `ARGS="-m /data/local/hassmic/models/echo-de/pryon.manifest"` into `/data/local/hassmic/hassmic.conf` and reboot.
+
+**On a device that is already installed**: add `MODE=stock-online` to `/data/local/hassmic/hassmic.conf` and reboot. hassmic
+stays off, stock Alexa runs with internet, and the same update guard is applied at every boot, so this variant survives
+reboots (it is the one that was used end to end here). Let the Echo reach the internet at the router for the duration,
+follow steps 1–5, then remove the `MODE` line again. hassmic is down in this mode, so there is no push port: use adb.
+
+What the request looks like, if you want it without the tool: `GET https://api.amazonalexa.com/v2/deviceArtifacts/?artifactFilter=`
++ URL-quoted base64 of `{"artifactType":"wakeword","artifactKey":"echo","filters":{"engineCompatibilityIdList":[…],"locale":["de-DE"],"modelClass":["B"]}}`,
+header `Authorization: Bearer <access_token>`. The answer is JSON with a signed CloudFront `downloadUrl` (`.tar.gz`) that
+expires within minutes. Found by preloading `src/tools/curlspy.c` into the stock downloader: `scripts/device/davs-spy.sh`.

@@ -7,6 +7,8 @@
 #   NAME="Echo Dot"             optional
 #   PROTO=esphome               optional: esphome (default, port 26053) or wyoming (port 16700)
 #   ARGS=""                     optional extra hassmic arguments
+#   MODE=stock-online           optional: stock Alexa with internet, e.g. to let it fetch a wake-word model.  hassmic stays
+#                               off, nothing is stopped or blocked except firmware updates (lockdown.sh ota-only)
 umask 022                                   # init gives us 077; what we create must be readable by the daemon's user
 D=${HASSMIC_DIR:-/system/hassmic}
 SYS=${HASSMIC_SYS:-/system/hassmic}
@@ -81,6 +83,13 @@ ota_watch() {
         fi
     done
 }
+
+if [ "$MODE" = stock-online ]; then
+    # hassmic is off on purpose: that must not count as an update that failed to come up.
+    [ "$1" = firewall ] || { echo 0 > $OTA/tries; exit 0; }
+    { rotate_log; echo "== stock-online, uptime $(cut -d. -f1 /proc/uptime)s: Alexa runs, updaters cut off"; } >> $LOG 2>&1
+    exec sh $D/lockdown.sh ota-only watch >> $LOG 2>&1
+fi
 
 case "$1" in
 firewall)

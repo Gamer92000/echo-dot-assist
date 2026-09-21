@@ -111,9 +111,24 @@ Run in this order. Each step says what it proves.
       "continue conversation", which HA sets for every reply ending in a question. Fixed (cut is now keyed on `flush_playback`), test
       added that fails on the old core. Installed; user: "perfect now" (log: wake → barge-in → listening during a reply)
 - [ ] Wake-word accuracy at distance and with music playing
-- [ ] Wake word "Echo": firmware ships only `ALEXA` (+`STOP`) in `words.shrunk.txt`. Stock gets other keywords from DAVS (cloud) into
+- [~] Wake word "Echo": firmware ships only `ALEXA` (+`STOP`) in `words.shrunk.txt`. Stock gets other keywords from DAVS (cloud) into
       `/data/.../speech/wakeword_models/davs/resources/`. Options: pull an ECHO model set from another source, or non-Pryon engine
       (microWakeWord on device / openWakeWord on HA via `-w remote`)
+      - [x] DAVS route, done 2026-09-21: `MODE=stock-online` in `hassmic.conf` (`main.sh` + `lockdown.sh ota-only watch`) = stock
+            Alexa with internet, hassmic off, only the updaters cut off (`otad` + `ace_otad` share uid `ace_otad` → owner-match DROP;
+            `update_engine` kept stopped). Verified on the device through registration and OOBE: nothing downloaded, slot and
+            build unchanged. The app sits on "updating" for a while (day-0 OTA check that never answers); harmless
+      - [x] Real request seen with `src/tools/curlspy.c` (LD_PRELOAD in `assetmgrd`, `scripts/device/davs-spy.sh`):
+            `GET https://api.amazonalexa.com/v2/deviceArtifacts/?artifactFilter=<quoted base64 JSON>` + `Authorization: Bearer`;
+            answer = JSON with a signed CloudFront `downloadUrl` (expires in minutes). The `/v3/segments/` strings in
+            `libacsdkDavsClient.so` are not what this build uses (404). `tools/davs-fetch.py <map.db> <key> [locale]` does the same
+            from the PC: fetched echo/computer/alexa/amazon/ziggy de-DE and echo/computer en-US into `device-logs/models/`
+      - [x] `echo-de-DE` (1.4 MB, `ECHO` + `STOP`) with stock `libpryon.so` under qemu: 2/2 espeak "Echo" accepted (type=2).
+            Installed in `/data/local/hassmic/models/echo-de`, `ARGS="-m …/pryon.manifest"`; hassmic starts with it
+      - [ ] **(device)** spoken "Echo" live through hassmic. `echo-en-US` (5 MB, NTT fusion) does not load under qemu
+            ("insufficient permissions" on `ntt.cfg.json`, file is readable): not looked into
+      - The spied `assetmgrd` must run in its own SELinux domain (`runcon u:r:assetmgrd:s0`, shim labelled `system_file`, log in
+        `/data/davs`): from the `su` domain its AIPC service is unreachable and the Alexa app shows the device as unavailable
 - [x] Latency wake → STT start; TTS playback glitch-free — replies start before TTS_START with streaming TTS; user verdict fine
 
 ## Phase 5 — Make it permanent **(device)**
