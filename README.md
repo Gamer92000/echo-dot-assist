@@ -287,3 +287,12 @@ make host                                         # PC build + qemu build for th
 
 Git-ignored because proprietary, derived or secret: `firmware/`, `re/`, `kamakiri/`, `boot-root/`, `toolchain/`, `build/`,
 `device-logs/`, `secrets/` (`wifi.conf`, `update.key`).
+
+## Licence
+
+[MIT](LICENSE), for everything written here. The files in `src/third_party/` keep their own licences, stated in each file:
+monocypher (BSD-2-Clause OR CC0-1.0), `dr_flac.h` (public domain or MIT-0), `minimp3.h` (CC0-1.0).
+
+Nothing of Amazon's is in this repository and nothing of it is covered by this licence: firmware, libraries and wake-word
+models come from your own device and stay Amazon's. Not affiliated with or endorsed by Amazon, Home Assistant or
+Music Assistant; "Alexa" and "Echo" are Amazon's trademarks.
