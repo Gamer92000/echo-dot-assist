@@ -23,7 +23,7 @@ def wav_bytes(rate, seconds):
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        body = wav_bytes(48000, 0.5)
+        body = wav_bytes(48000, 3.0 if "s=3" in self.path else 0.5)
         if self.path.endswith(".mp3"):                  # what Home Assistant sends for a TTS announcement before any pipeline ran
             body = subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-ar", "24000",
                                    "-ac", "1", "-f", "mp3", "-"], capture_output=True, check=True).stdout
@@ -106,6 +106,22 @@ async def main():
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
         await asyncio.sleep(2.0)
         check(os.path.getsize(play) == 48000 and finished == [True], f"reply fetched from the TTS_END url and reported: {os.path.getsize(play)} bytes, finished={finished}")
+
+        # A reply that asks a follow-up question (continue_conversation) must still be interruptible by the wake word:
+        # the reply is cut and the new pipeline starts at once, not after the full second of audio.
+        before = os.path.getsize(play); finished.clear(); started.clear()
+        proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "which light"})
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_INTENT_END, {"conversation_id": "x", "continue_conversation": "1"})
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_END, {"url": f"http://127.0.0.1:{HTTP_PORT}/long.wav?s=3"})
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
+        await asyncio.sleep(0.6); started.clear()
+        t0 = asyncio.get_running_loop().time(); proc.send_signal(signal.SIGUSR1)       # "Alexa" while it talks
+        await asyncio.wait_for(started.wait(), 5); dt = asyncio.get_running_loop().time() - t0
+        played = (os.path.getsize(play) - before) / 96000
+        check(dt < 1.0 and played < 2.0, f"wake word interrupts a continue-conversation reply: new pipeline after {dt:.2f} s, {played:.2f} s of 3 s played")
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "x", "message": "end of test pipeline"})
+        await asyncio.sleep(0.5)
 
         # streaming TTS: URL arrives with RUN_START, playback may begin at INTENT_PROGRESS, long before TTS_END
         before = os.path.getsize(play); finished.clear(); started.clear()

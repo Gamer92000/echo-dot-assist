@@ -48,7 +48,8 @@ static time_t state_since;
 static atomic_int streaming, trigger_pending, button_pending, quit;
 static atomic_int flush_playback, earcon_pending, alarm_on;   /* barge-in: drop queued TTS; wake sound requested */
 static int soft_mute;                               /* under lock: mute switch from Home Assistant */
-static int barge_in;                                /* under lock: start a new pipeline once the old one has ended */
+static int barge_in;                                /* under lock: start a new pipeline once the current one has ended
+                                                      * (wake word during a reply, or the server asked to continue the conversation) */
 
 /* ---------------------------------------------------------------- LED ring */
 
@@ -157,7 +158,8 @@ static void trigger(void)
     } else if (state == IDLE) {
         atomic_store(&earcon_pending, 1);
         pipeline_start();
-    } else if (state == SPEAKING && !barge_in) {
+    } else if (state == SPEAKING && !atomic_load(&flush_playback)) {       /* not already being cut.  barge_in alone does not
+                                                                             * say that: continue-conversation sets it too */
         fprintf(stderr, "barge-in\n");
         barge_in = 1;
         atomic_store(&flush_playback, 1);   /* playback thread drops TTS up to audio-stop, then we restart */
