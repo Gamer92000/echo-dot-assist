@@ -2,8 +2,9 @@
  * ESPHome native API, plaintext, server side: Home Assistant's esphome integration connects to us and sees a voice
  * assistant device with a media player.  Message numbers and fields follow esphome/components/api/api.proto.
  *
- *   voice pipeline   VoiceAssistantRequest -> mic audio as VoiceAssistantAudio -> events -> TTS as VoiceAssistantAudio
- *                    (feature flags SPEAKER|API_AUDIO: Home Assistant converts TTS to 16 kHz mono and streams it to us)
+ *   voice pipeline   VoiceAssistantRequest -> mic audio as VoiceAssistantAudio (API_AUDIO) -> events.  The reply is fetched
+ *                    over http like an announcement: without the SPEAKER flag Home Assistant renders TTS in the media
+ *                    player's announcement format (48 kHz) instead of streaming 16 kHz over the API connection.
  *   announcements    VoiceAssistantAnnounceRequest with http URLs; Home Assistant transcodes to the WAV format the media
  *                    player entity advertises, we stream it.  Same path for media_player.play_media.
  *   timers           finished timer rings (core_alarm)
@@ -33,14 +34,15 @@ enum {
     VA_ANNOUNCE = 119, VA_ANNOUNCE_FINISHED, VA_CONFIG_REQ, VA_CONFIG_RESP, VA_SET_CONFIG,
 };
 enum { EV_ERROR = 0, EV_RUN_START, EV_RUN_END, EV_STT_START, EV_STT_END, EV_INTENT_START, EV_INTENT_END, EV_TTS_START,
-       EV_TTS_END, EV_WAKE_START, EV_WAKE_END, EV_VAD_START, EV_VAD_END, EV_TTS_STREAM_START = 98, EV_TTS_STREAM_END = 99 };
+       EV_TTS_END, EV_WAKE_START, EV_WAKE_END, EV_VAD_START, EV_VAD_END, EV_TTS_STREAM_START = 98, EV_TTS_STREAM_END = 99, EV_INTENT_PROGRESS = 100 };
 enum { FEAT_VOICE = 1, FEAT_SPEAKER = 2, FEAT_API_AUDIO = 4, FEAT_TIMERS = 8, FEAT_ANNOUNCE = 16, FEAT_START_CONVERSATION = 32 };
 enum { KEY_NOISE = 2, KEY_GAIN, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
 static int client = -1;
-static int tts_expected;                /* lock held: TTS_END seen, audio stream will follow RUN_END */
+static int tts_expected;                /* lock held: the reply is being fetched or played; RUN_END must not end the pipeline */
+static char tts_url[1024];              /* lock held: reply URL of the running pipeline (known from RUN_START with streaming TTS) */
 static int announcing, media_playing;   /* lock held */
 static atomic_int media_busy;
 
@@ -337,7 +339,7 @@ static void *media_thread(void *arg)
 }
 
 /* lock held.  url0 = optional chime, url1 = the media */
-static void media_start(const char *url0, const char *url1, int announce, int start_conversation)
+static void media_start(const char *url0, const char *url1, int announce, int start_conversation, int is_reply)
 {
     struct media_job *job = calloc(1, sizeof *job); pthread_t t;
     if (!job) return;
@@ -346,7 +348,7 @@ static void media_start(const char *url0, const char *url1, int announce, int st
         if (announce) { PB(b, 8); pb_uint(&b, 1, 0); send_msg(VA_ANNOUNCE_FINISHED, &b); }
         free(job); return;
     }
-    if (core_state() == LISTENING || core_state() == THINKING) core_pipeline_finish();
+    if (!is_reply && (core_state() == LISTENING || core_state() == THINKING)) core_pipeline_finish();
     snprintf(job->url[0], sizeof job->url[0], "%s", url0); snprintf(job->url[1], sizeof job->url[1], "%s", url1);
     job->announce = announce; job->start_conversation = start_conversation;
     announcing = announce; media_playing = 1; send_mp_state();
@@ -359,7 +361,7 @@ static void media_start(const char *url0, const char *url1, int announce, int st
 static void start(void)
 {
     PB(b, 96);
-    tts_expected = 0;
+    tts_expected = 0; tts_url[0] = 0;
     pb_uint(&b, 1, 1);                                  /* start */
     pb_uint(&b, 3, core_local_wake ? 1 : 3);            /* flags: USE_VAD, plus USE_WAKE_WORD when detection is remote */
     { PB(as, 24); pb_uint(&as, 1, noise_level); pb_uint(&as, 2, auto_gain); pb_float(&as, 3, vol_mult);
@@ -399,7 +401,7 @@ static void mute_changed(int muted) { (void)muted; send_setting(KEY_MUTE); setti
 
 static void on_event(const unsigned char *p, const unsigned char *end)
 {
-    struct pbf f, g; unsigned type = 0; char key[48], val[512], text[512] = ""; int cont = 0;
+    struct pbf f, g; unsigned type = 0; char key[48], val[1024], text[512] = ""; int cont = 0, stream_now = 0;
     while (pb_next(&p, end, &f)) {
         if (f.field == 1) type = f.v;
         else if (f.field == 2 && f.wire == 2) {
@@ -407,6 +409,8 @@ static void on_event(const unsigned char *p, const unsigned char *end)
             while (pb_next(&q, f.data + f.len, &g)) { if (g.field == 1 && g.data) pbf_str(&g, key, sizeof key); else if (g.field == 2 && g.data) pbf_str(&g, val, sizeof val); }
             if (!strcmp(key, "text") || !strcmp(key, "message") || !strcmp(key, "code")) snprintf(text + strlen(text), sizeof text - strlen(text), "%s ", val);
             if (!strcmp(key, "continue_conversation") && !strcmp(val, "1")) cont = 1;
+            if (!strcmp(key, "tts_start_streaming") && !strcmp(val, "1")) stream_now = 1;
+            if (!strcmp(key, "url")) snprintf(tts_url, sizeof tts_url, "%s", val);
         }
     }
     switch (type) {
@@ -415,9 +419,11 @@ static void on_event(const unsigned char *p, const unsigned char *end)
     case EV_STT_END:    fprintf(stderr, "transcript: %s\n", text); core_mic_off(); if (core_state() == LISTENING) core_set_state(THINKING); break;
     case EV_INTENT_END: if (cont) core_restart_after(); break;
     case EV_TTS_START:  fprintf(stderr, "reply: %s\n", text); break;
-    case EV_TTS_END:    tts_expected = 1; break;
-    case EV_TTS_STREAM_START: core_tts_begin(16000, 1); break;
-    case EV_TTS_STREAM_END:   core_tts_end(); break;
+    case EV_INTENT_PROGRESS: if (!stream_now) break;    /* streaming TTS: the URL from RUN_START can be fetched already */
+        /* fall through */
+    case EV_TTS_END:
+        if (!tts_expected && tts_url[0]) { tts_expected = 1; core_mic_off(); media_start("", tts_url, 1, 0, 1); }
+        break;
     case EV_RUN_END:    if (!tts_expected && core_state() != SPEAKING) core_pipeline_finish(); break;
     case EV_ERROR:      fprintf(stderr, "pipeline error: %s\n", text); tts_expected = 0; core_error(); break;
     }
@@ -443,7 +449,7 @@ static void on_announce(const unsigned char *p, const unsigned char *end)
         else if (f.field == 3 && f.data) pbf_str(&f, pre, sizeof pre);
         else if (f.field == 4) conv = f.v != 0;
     }
-    media_start(pre, media, 1, conv);
+    media_start(pre, media, 1, conv, 0);
 }
 
 static void on_mp_command(const unsigned char *p, const unsigned char *end)
@@ -460,7 +466,7 @@ static void on_mp_command(const unsigned char *p, const unsigned char *end)
     }
     if (has_vol) core_set_volume((int)(vol * 100 + 0.5f));
     if (has_cmd && cmd == MP_CMD_STOP && media_playing) core_tts_flush();
-    if (has_url && url[0]) media_start("", url, 0, 0);
+    if (has_url && url[0]) media_start("", url, 0, 0, 0);
     if (has_cmd && !has_url) send_mp_state();
 }
 
@@ -470,7 +476,7 @@ static void send_device_info(void)
     pb_str(&b, 2, node_name()); pb_str(&b, 3, mac()); pb_str(&b, 4, "2025.5.0"); pb_str(&b, 5, __DATE__ " " __TIME__);
     pb_str(&b, 6, "Echo Dot 3 (donut)"); pb_str(&b, 8, "hassmic.echo-dot-3"); pb_str(&b, 9, VERSION);
     pb_str(&b, 12, "Amazon"); pb_str(&b, 13, core_name);
-    pb_uint(&b, 17, FEAT_VOICE | FEAT_SPEAKER | FEAT_API_AUDIO | FEAT_TIMERS | FEAT_ANNOUNCE | FEAT_START_CONVERSATION);
+    pb_uint(&b, 17, FEAT_VOICE | FEAT_API_AUDIO | FEAT_TIMERS | FEAT_ANNOUNCE | FEAT_START_CONVERSATION);      /* no SPEAKER: see top */
     send_msg(DEVICE_INFO_RESP, &b);
 }
 

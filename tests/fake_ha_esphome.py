@@ -51,7 +51,7 @@ async def main():
         await cli.connect(login=True)
         info = await cli.device_info()
         check(info.name == "echo-dot" and info.friendly_name == "Echo Dot", f"device info: {info.name!r} / {info.friendly_name!r}")
-        check(info.voice_assistant_feature_flags == 63, f"voice assistant feature flags = {info.voice_assistant_feature_flags}")
+        check(info.voice_assistant_feature_flags == 61, f"voice assistant feature flags = {info.voice_assistant_feature_flags}")
         entities, _ = await cli.list_entities_services()
         mp = [e for e in entities if isinstance(e, MediaPlayerInfo)]
         check(len(mp) == 1 and len(mp[0].supported_formats) == 2 and mp[0].supported_formats[1].sample_rate == 48000,
@@ -76,7 +76,10 @@ async def main():
             handle_start.args = (flags, phrase); handle_start.audio = (settings.noise_suppression_level, settings.auto_gain, round(settings.volume_multiplier, 2)); started.set(); return 0           # 0 = audio over the API connection
         async def handle_stop(abort): stopped.append(abort)
         async def handle_audio(data, *_): mic.extend(data)
-        cli.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio)
+        finished = []
+        async def handle_finished(msg): finished.append(msg.success)
+        cli.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio,
+                                      handle_announcement_finished=handle_finished)
         await asyncio.sleep(0.3)
 
         proc.send_signal(signal.SIGUSR1)                                           # "wake word"
@@ -94,15 +97,24 @@ async def main():
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "turn on the light"})
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_INTENT_END, {"conversation_id": "x", "continue_conversation": "0"})
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_START, {"text": "Done"})
-        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_END, {"url": "http://x/tts.wav"})
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_END, {"url": f"http://127.0.0.1:{HTTP_PORT}/reply.wav"})
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
-        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_STREAM_START, None)
-        pcm = tone(16000, 1.0)
-        for i in range(0, len(pcm), 1024):
-            cli.send_voice_assistant_audio(pcm[i:i + 1024]); await asyncio.sleep(0.028)
-        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_STREAM_END, None)
+        await asyncio.sleep(2.0)
+        check(os.path.getsize(play) == 48000 and finished == [True], f"reply fetched from the TTS_END url and reported: {os.path.getsize(play)} bytes, finished={finished}")
+
+        # streaming TTS: URL arrives with RUN_START, playback may begin at INTENT_PROGRESS, long before TTS_END
+        before = os.path.getsize(play); finished.clear(); started.clear()
+        proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, {"url": f"http://127.0.0.1:{HTTP_PORT}/stream.wav"})
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "tell me a story"})
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_INTENT_PROGRESS, {"tts_start_streaming": "1"})
+        await asyncio.sleep(0.4)
+        early = os.path.getsize(play) - before
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_END, {"url": f"http://127.0.0.1:{HTTP_PORT}/stream.wav"})
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
         await asyncio.sleep(1.5)
-        check(os.path.getsize(play) == len(pcm), f"TTS played: {os.path.getsize(play)} of {len(pcm)} bytes")
+        check(early > 0 and os.path.getsize(play) - before == 48000 and finished == [True],
+              f"streaming reply starts at INTENT_PROGRESS and plays once: early={early}, total={os.path.getsize(play) - before}, finished={finished}")
 
         before = os.path.getsize(play)
         res = await cli.send_voice_assistant_announcement_await_response(f"http://127.0.0.1:{HTTP_PORT}/a.wav", 15, "hello",
