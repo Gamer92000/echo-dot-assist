@@ -19,6 +19,9 @@
 #include <unistd.h>
 #include "core.h"
 #include "netio.h"
+#define MINIMP3_IMPLEMENTATION
+#define MINIMP3_NO_SIMD                 /* plain C: same code on the PC and on the armv7 build */
+#include "../third_party/minimp3.h"
 
 enum {
     HELLO_REQ = 1, HELLO_RESP, CONNECT_REQ, CONNECT_RESP, DISCONNECT_REQ, DISCONNECT_RESP, PING_REQ, PING_RESP,
@@ -206,36 +209,53 @@ static void send_mp_state(void)         /* lock held */
     send_msg(MEDIA_PLAYER_STATE, &b);
 }
 
-static int http_get(const char *url)    /* returns a socket positioned at the body, or -1 */
+static int http_get_host(const char *host, const char *port, const char *path)
 {
-    char host[256], port[8] = "80", req[1400], line[1024]; const char *p = url, *path; struct addrinfo hints = { 0 }, *ai;
-    if (strncmp(p, "http://", 7)) { fprintf(stderr, "media: only http:// is supported: %s\n", url); return -1; }
-    p += 7; path = strchr(p, '/');
-    snprintf(host, sizeof host, "%.*s", (int)(path ? path - p : (long)strlen(p)), p);
-    char *colon = strrchr(host, ':'); if (colon) { *colon = 0; snprintf(port, sizeof port, "%s", colon + 1); }
+    char req[1400], line[1024]; struct addrinfo hints = { 0 }, *ai;
     hints.ai_socktype = SOCK_STREAM;
     if (getaddrinfo(host, port, &hints, &ai)) { fprintf(stderr, "media: cannot resolve %s\n", host); return -1; }
     int fd = socket(ai->ai_family, SOCK_STREAM, 0);
-    struct timeval tv = { 10, 0 };
+    struct timeval tv = { 4, 0 };                       /* connect() obeys the send timeout */
     if (fd >= 0) { setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv); setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv); }
-    if (fd < 0 || connect(fd, ai->ai_addr, ai->ai_addrlen)) { perror("media: connect"); if (fd >= 0) close(fd); freeaddrinfo(ai); return -1; }
+    if (fd < 0 || connect(fd, ai->ai_addr, ai->ai_addrlen)) {
+        fprintf(stderr, "media: cannot connect to %s:%s (not a local address? see lockdown.sh)\n", host, port);
+        if (fd >= 0) close(fd);
+        freeaddrinfo(ai); return -1;
+    }
     freeaddrinfo(ai);
+    tv.tv_sec = 15; setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);     /* TTS may still be rendering */
     /* HTTP/1.0: no chunked transfer encoding, the body ends with the connection */
-    int n = snprintf(req, sizeof req, "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: hassmic/" VERSION "\r\n\r\n", path ? path : "/", host);
+    int n = snprintf(req, sizeof req, "GET %s HTTP/1.0\r\nHost: %s:%s\r\nUser-Agent: hassmic/" VERSION "\r\n\r\n", path, host, port);
     if (write_all(fd, req, n) < 0) { close(fd); return -1; }
     for (int first = 1;; first = 0) {                   /* header lines, byte by byte: they are short */
         size_t i = 0; char c;
         while (i < sizeof line - 1 && read(fd, &c, 1) == 1 && c != '\n') line[i++] = c;
         line[i] = 0;
-        if (first && !strstr(line, " 200")) { fprintf(stderr, "media: %s -> %s\n", url, line); close(fd); return -1; }
+        if (first && !strstr(line, " 200")) { fprintf(stderr, "media: http://%s:%s%s -> %s\n", host, port, path, line); close(fd); return -1; }
         if (i <= 1) return fd;                          /* "\r": end of headers */
     }
 }
 
-static int play_wav(int fd)
+static int http_get(const char *url)    /* returns a socket positioned at the body, or -1 */
 {
-    unsigned char h[12], ck[8], fmt[16]; unsigned rate = 0, ch = 0, bits = 0; static unsigned char buf[8192];
-    if (read_full(fd, h, 12) != 12 || memcmp(h, "RIFF", 4) || memcmp(h + 8, "WAVE", 4)) { fprintf(stderr, "media: not a WAV file\n"); return -1; }
+    char host[256], port[8] = "80"; const char *p = url, *path;
+    if (strncmp(p, "http://", 7)) { fprintf(stderr, "media: only http:// is supported: %s\n", url); return -1; }
+    p += 7; path = strchr(p, '/');
+    snprintf(host, sizeof host, "%.*s", (int)(path ? path - p : (long)strlen(p)), p);
+    char *colon = strrchr(host, ':'); if (colon) { *colon = 0; snprintf(port, sizeof port, "%s", colon + 1); }
+    return http_get_host(host, port, path ? path : "/");
+}
+
+static void feed(const void *pcm, size_t len)       /* queue with back pressure */
+{
+    core_tts_data(pcm, len);
+    while (core_tts_queued() > 256 * 1024 && !core_tts_flushing()) usleep(50000);
+}
+
+static int play_wav(int fd, const unsigned char *head, size_t have)
+{
+    unsigned char ck[8], fmt[16]; unsigned rate = 0, ch = 0, bits = 0; static unsigned char buf[8192];
+    (void)head; (void)have;                             /* the 12 byte RIFF/WAVE header, already consumed */
     for (;;) {
         if (read_full(fd, ck, 8) != 8) return -1;
         uint32_t len; memcpy(&len, ck + 4, 4);
@@ -252,11 +272,46 @@ static int play_wav(int fd)
     size_t odd = 0;
     for (ssize_t r; !core_tts_flushing() && (r = read(fd, buf + odd, sizeof buf - odd)) > 0; ) {
         size_t n = odd + r, use = n & ~(size_t)(2 * ch - 1);        /* whole frames only */
-        core_tts_data(buf, use);
+        feed(buf, use);
         odd = n - use; memmove(buf, buf + use, odd);
-        while (core_tts_queued() > 256 * 1024 && !core_tts_flushing()) usleep(50000);
     }
     return 0;
+}
+
+/* Home Assistant sends TTS announcements as they come from the TTS engine, usually MP3 (it only asks for WAV once a
+ * voice pipeline has run), so that has to play too. */
+static int play_mp3(int fd, const unsigned char *head, size_t have)
+{
+    static unsigned char in[32768]; static mp3d_sample_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME];
+    static mp3dec_t dec; mp3dec_frame_info_t info; size_t n = have; int began = 0, eof = 0;
+    memcpy(in, head, have);
+    mp3dec_init(&dec);
+    while (!core_tts_flushing()) {
+        while (!eof && n < sizeof in) { ssize_t r = read(fd, in + n, sizeof in - n); if (r <= 0) eof = 1; else n += r; }
+        if (!n) break;
+        int samples = mp3dec_decode_frame(&dec, in, n, pcm, &info);
+        if (!info.frame_bytes) { if (eof) break; n = 0; continue; }     /* no sync in the whole buffer */
+        if (samples > 0) {
+            if (!began) {
+                fprintf(stderr, "media: MP3 %d Hz x%d\n", info.hz, info.channels);
+                pthread_mutex_lock(&core_lock); core_tts_begin(info.hz, info.channels); pthread_mutex_unlock(&core_lock);
+                began = 1;
+            }
+            feed(pcm, (size_t)samples * info.channels * 2);
+        }
+        n -= info.frame_bytes; memmove(in, in + info.frame_bytes, n);
+    }
+    if (!began) fprintf(stderr, "media: no MP3 audio found\n");
+    return began ? 0 : -1;
+}
+
+static int play_url(int fd)
+{
+    unsigned char h[12];
+    if (read_full(fd, h, 12) != 12) { fprintf(stderr, "media: empty response\n"); return -1; }
+    if (!memcmp(h, "RIFF", 4) && !memcmp(h + 8, "WAVE", 4)) return play_wav(fd, h, 12);
+    if (!memcmp(h, "fLaC", 4) || !memcmp(h, "OggS", 4)) { fprintf(stderr, "media: FLAC/Ogg is not supported, only WAV and MP3\n"); return -1; }
+    return play_mp3(fd, h, 12);
 }
 
 static void *media_thread(void *arg)
@@ -266,7 +321,7 @@ static void *media_thread(void *arg)
         if (!job->url[i][0] || core_tts_flushing()) continue;
         int fd = http_get(job->url[i]);
         if (fd < 0) continue;
-        if (play_wav(fd) == 0) { began = 1; if (i == 1) ok = 1; }
+        if (play_url(fd) == 0) { began = 1; if (i == 1) ok = 1; }
         close(fd);
     }
     pthread_mutex_lock(&core_lock);

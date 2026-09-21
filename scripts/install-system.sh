@@ -4,7 +4,7 @@
 # Touches: /system/hassmic/ (new), /system/etc/init/hassmic.rc (new), /sepolicy (3 allow rules added; old copy kept as
 # /sepolicy.pre-hassmic), /data/local/hassmic/hassmic.conf (new).
 # Undo: scripts/install-system.sh --uninstall, or delete /data/local/hassmic/hassmic.conf (boot.sh then does nothing).
-#   install-system.sh <lan-cidr> [name]      e.g. install-system.sh 192.168.100.0/22 "Echo Dot"
+#   install-system.sh [name]                 e.g. install-system.sh "Echo Dot"
 #   install-system.sh --uninstall
 set -e
 cd "$(dirname "$0")/.."
@@ -12,7 +12,7 @@ MNT=/mnt/hm_system
 t() { adb shell "$@"; }
 
 if [ "$1" != --uninstall ]; then
-    LAN=${1:?usage: install-system.sh <lan-cidr> [name] | --uninstall}; NAME=${2:-Echo Dot}
+    NAME=${1:-Echo Dot}
     make -s all
     # Backup of the policy as boot-root left it, and the config boot.sh reads.  Both need the running OS.
     if [ "$(adb get-state 2>/dev/null)" = device ]; then
@@ -20,7 +20,7 @@ if [ "$1" != --uninstall ]; then
         # Base = the policy as boot-root left it.  On a re-install /sepolicy is already patched; the untouched copy is kept beside it.
         BASEF=/sepolicy; t "[ -f /sepolicy.pre-hassmic ]" && BASEF=/sepolicy.pre-hassmic
         adb pull $BASEF device-logs/backup/sepolicy.boot-root >/dev/null
-        printf 'LAN=%s\nNAME="%s"\nARGS=""\n' "$LAN" "$NAME" > build/hassmic.conf
+        printf 'NAME="%s"\nARGS=""\n' "$NAME" > build/hassmic.conf
         t "mkdir -p /data/local/hassmic"; adb push build/hassmic.conf /data/local/hassmic/hassmic.conf >/dev/null
         t "rm -f /data/local/hassmic/hassmic"      # boot.sh prefers a binary here (scripts/deploy.sh test builds); the fresh install wins
         # Patch the policy here, not in TWRP: magiskpolicy is dynamically linked and aborts in the recovery environment.

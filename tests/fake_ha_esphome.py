@@ -24,6 +24,9 @@ def wav_bytes(rate, seconds):
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         body = wav_bytes(48000, 0.5)
+        if self.path.endswith(".mp3"):                  # what Home Assistant sends for a TTS announcement before any pipeline ran
+            body = subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-ar", "24000",
+                                   "-ac", "1", "-f", "mp3", "-"], capture_output=True, check=True).stdout
         self.send_response(200); self.send_header("Content-Type", "audio/wav"); self.end_headers()   # no length: like a transcoding proxy
         self.wfile.write(body)
     def log_message(self, *a): pass
@@ -107,6 +110,11 @@ async def main():
         check(res.success, "announcement finished with success")
         check(os.path.getsize(play) - before == 2 * 48000, f"chime + announcement played: {os.path.getsize(play) - before} bytes")
         check(any(isinstance(s, MediaPlayerEntityState) and int(s.state) == 2 for s in states), "media player reported PLAYING")
+
+        before = os.path.getsize(play)
+        res = await cli.send_voice_assistant_announcement_await_response(f"http://127.0.0.1:{HTTP_PORT}/tts.mp3", 15, "mp3")
+        got = os.path.getsize(play) - before
+        check(res.success and 44000 <= got <= 52000, f"MP3 announcement decoded and played: {got} bytes (1 s at 24 kHz = 48000)")
 
         res = await cli.send_voice_assistant_announcement_await_response("http://127.0.0.1:1/none.wav", 15, "x")
         check(not res.success, "unreachable announcement URL reports failure")
