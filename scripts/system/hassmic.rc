@@ -1,0 +1,25 @@
+# Home Assistant satellite instead of Alexa.  Installed by scripts/install-system.sh into /system/etc/init/.
+# Both services do nothing unless /data/local/hassmic/hassmic.conf exists, so deleting that file gives stock behaviour back.
+# seclabel su: boot-root makes that domain permissive; install-system.sh adds the init -> su transition to /sepolicy.
+
+service hassmic_fw /system/bin/sh /system/hassmic/boot.sh firewall
+    class main
+    user root
+    seclabel u:r:su:s0
+    disabled
+    oneshot
+
+service hassmic /system/bin/sh /system/hassmic/boot.sh satellite
+    class main
+    user root
+    seclabel u:r:su:s0
+    disabled
+    oneshot
+
+on boot
+    start hassmic_fw
+
+# Same trigger the stock rc files use to start PuffinApp, puffinmrmd, dacd, smarthomed (ledcontroller sets PUFFIN_START).
+# /system/etc/init is parsed after /init.*.rc, so this runs after those starts and boot.sh stops them again.
+on property:com.amazon.puffin.PUFFIN_START=1 && property:audio_mixer.init=true
+    start hassmic

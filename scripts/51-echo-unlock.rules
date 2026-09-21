@@ -1,0 +1,6 @@
+# USB access for the Echo Dot 3 unlock without running the exploit scripts as root.
+# MediaTek bootrom (0e8d:0003) and preloader (0e8d:2000) are not covered by android-udev; Amazon fastboot/adb partly is.
+SUBSYSTEM=="usb", ATTR{idVendor}=="0e8d", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1949", MODE="0660", TAG+="uaccess"
+# Keep ModemManager from probing the bootrom's serial port.
+ATTRS{idVendor}=="0e8d", ENV{ID_MM_DEVICE_IGNORE}="1"

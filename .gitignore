@@ -1,0 +1,19 @@
+# Amazon proprietary firmware and anything derived from it
+firmware/
+re/
+*.bin
+device-logs/
+# local tooling and build output
+toolchain/
+build/
+.venv/
+testdata/*.wav
+kamakiri/
+boot-root/
+*.zip
+*.core
+secrets/
+# copy of a third-party forum post
+xda_post.md
+__pycache__/
+*.pyc
