@@ -67,8 +67,10 @@ ota_watch() {
             echo "== update $ver installed, restarting"
             echo "OK $ver" > $IN/result.tmp
         else
-            echo "== update rejected: $ver"; rm -rf $new
-            echo "FAILED $(echo "$ver" | tail -1)" > $IN/result.tmp
+            # otatool prints the version on success, so a version here means: unpacked fine, but it is not a runnable payload
+            case "$ver" in *" "*|"") why=$(echo "$ver" | tail -1);; *) why="version $ver does not run as the daemon's user (self-check failed), not installed";; esac
+            echo "== update rejected: $why"; rm -rf $new
+            echo "FAILED $why" > $IN/result.tmp
         fi
         rm -f $IN/bundle $IN/bundle.sig
         chown puffin $IN/result.tmp; mv $IN/result.tmp $IN/result
