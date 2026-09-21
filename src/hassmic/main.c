@@ -10,6 +10,9 @@
  * Default ports 26053 (ESPHome) and 16700 (Wyoming): the stock firewall only admits inbound TCP 16384-32767.
  */
 #include <math.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/socket.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -420,6 +423,12 @@ int main(int argc, char **argv)
     while (!atomic_load(&quit)) {
         int c = net_accept(ls);
         if (c < 0) break;
+        /* A link that went away must not hold the single client slot (or core_lock, in a blocked write) for ever:
+         * writes give up after 5 s, keepalive notices a dead peer within ~25 s.  Both make serve() return. */
+        { struct timeval tv = { 5, 0 }; int on = 1, idle = 10, intvl = 5, cnt = 3;
+          setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv); setsockopt(c, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
+          setsockopt(c, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof idle); setsockopt(c, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof intvl);
+          setsockopt(c, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof cnt); }
         proto->serve(c);
         close(c);
     }

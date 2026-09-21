@@ -16,6 +16,24 @@ LOG=/data/local/hassmic/boot.log
 # LEDs (ledctrl) and earcons itself, so it goes.  Stopped before "class_start main" it never starts (SVC_DISABLED).
 quiet() { stop uxeventd; for s in oobed_on_boot oobed_on_press oobed_on_no_nw; do stop $s; done; }
 
+# Amazon's wifisvc runs HTTP connectivity tests against AWS hosts.  Behind the egress lock they always fail, and it then
+# tears the Wi-Fi link down and rebuilds it (seen: ~100 s after boot, link gone for 193 s, and again later).  It is only needed
+# to bring the link up: wpa_supplicant (saved profile, reconnects by itself) and dhcpcd keep it up.  So stop it once there is
+# an address, and let it run again only if the address stays away for a minute.
+netwatch() {
+    miss=0
+    while :; do
+        if ifconfig wlan0 2>/dev/null | grep -q "inet addr"; then
+            miss=0
+            [ "$(getprop init.svc.wifisvc)" = running ] && { sleep 5; stop wifisvc; echo "netwatch: link up, wifisvc stopped"; }
+        else
+            miss=$((miss + 1))
+            [ $miss -ge 6 ] && [ "$(getprop init.svc.wifisvc)" != running ] && { start wifisvc; echo "netwatch: no address for 60 s, wifisvc started"; miss=0; }
+        fi
+        sleep 10
+    done
+}
+
 case "$1" in
 firewall)
     quiet
@@ -30,6 +48,7 @@ satellite)
     # A binary in /data wins over the installed one: lets a new build be tried without a trip through TWRP.
     BIN=$D/hassmic; [ -x /data/local/hassmic/hassmic ] && BIN=/data/local/hassmic/hassmic
     mkdir -p /data/local/hassmic/state && chown puffin /data/local/hassmic/state    # settings changed from Home Assistant (runs as puffin)
+    netwatch >> $LOG 2>&1 &
     # mDNS through the stock avahi-daemon: hassmic prints the service file for its protocol, name and MAC address.
     mkdir -p /data/misc/avahi/services
     $BIN -P ${PROTO:-esphome} -n "${NAME:-Echo Dot}" $ARGS -S > /data/misc/avahi/services/hassmic.service 2>> $LOG
