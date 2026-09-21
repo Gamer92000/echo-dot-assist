@@ -324,16 +324,29 @@ static int read_volume(void)
     return v;
 }
 
-int core_volume(void) { if (volume < 0) volume = read_volume(); return volume; }
+/* The mixer keeps one volume per stream type.  MainVolume is what the stock volume keys move and covers the Music and Earcon
+ * streams; the TTS stream, which carries the assistant's replies, follows TTSVolume alone.  One knob for the user: both. */
+static void set_prop_volume(const char *prop, int v)
+{
+    char val[8];
+    snprintf(val, sizeof val, "%d", v);
+    run("/system/bin/audio_manager_set_prop", prop, val);
+}
+
+int core_volume(void)
+{
+    if (volume < 0) { volume = read_volume(); set_prop_volume("TTSVolume", volume); }      /* whatever it was left at: in line now */
+    return volume;
+}
 
 void core_set_volume(int v)
 {
-    char val[8], pat[24]; int step;
+    char pat[24]; int step;
     volume = v < 0 ? 0 : v > 100 ? 100 : v;
     step = volume * 30 / 100 ? volume * 30 / 100 : 1;
-    snprintf(val, sizeof val, "%d", volume);
     snprintf(pat, sizeof pat, "volume_step-%02d", step);
-    run("/system/bin/audio_manager_set_prop", "MainVolume", val);
+    set_prop_volume("MainVolume", volume);
+    set_prop_volume("TTSVolume", volume);
     if (vol_pat[0] && strcmp(vol_pat, pat)) led("-u", vol_pat);
     led("-s", pat);
     strcpy(vol_pat, pat);

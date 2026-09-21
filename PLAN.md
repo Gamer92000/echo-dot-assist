@@ -129,6 +129,9 @@ Run in this order. Each step says what it proves.
             ("insufficient permissions" on `ntt.cfg.json`, file is readable): not looked into
       - The spied `assetmgrd` must run in its own SELinux domain (`runcon u:r:assetmgrd:s0`, shim labelled `system_file`, log in
         `/data/davs`): from the `su` domain its AIPC service is unreachable and the Alexa app shows the device as unavailable
+- [x] Assistant replies ignored the volume: the mixer keeps one volume per stream type, the `TTS` stream follows `TTSVolume`, and
+      only `MainVolume` was ever set. `core_set_volume()` now sets both, and `TTSVolume` is synced once at start. Pushed
+      2026-09-22, user: works. Untouched: `AlarmVolume`, `NotificationVolume`, `SystemVolume`
 - [x] Latency wake → STT start; TTS playback glitch-free — replies start before TTS_START with streaming TTS; user verdict fine
 
 ## Phase 5 — Make it permanent **(device)**
