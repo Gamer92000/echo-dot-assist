@@ -20,9 +20,18 @@ quiet() { stop uxeventd; for s in oobed_on_boot oobed_on_press oobed_on_no_nw; d
 # tears the Wi-Fi link down and rebuilds it (seen: ~100 s after boot, link gone for 193 s, and again later).  It is only needed
 # to bring the link up: wpa_supplicant (saved profile, reconnects by itself) and dhcpcd keep it up.  So stop it once there is
 # an address, and let it run again only if the address stays away for a minute.
+# boot.log is appended to by several long-lived processes (hassmic, the firewall watcher, this loop), all through ">>",
+# i.e. O_APPEND.  So it is rotated by copy + truncate: their next write simply lands at the new end.  One old copy is kept.
+LOG_MAX=1048576
+rotate_log() {
+    [ "$(wc -c < $LOG 2>/dev/null || echo 0)" -gt $LOG_MAX ] || return 0
+    cp $LOG $LOG.1 && : > $LOG && echo "== log rotated, previous part in $LOG.1"
+}
+
 netwatch() {
     miss=0
     while :; do
+        rotate_log
         if ifconfig wlan0 2>/dev/null | grep -q "inet addr"; then
             miss=0
             [ "$(getprop init.svc.wifisvc)" = running ] && { sleep 5; stop wifisvc; echo "netwatch: link up, wifisvc stopped"; }
@@ -41,6 +50,7 @@ firewall)
     ;;
 satellite)
     {
+        rotate_log
         echo "== satellite start, uptime $(cut -d. -f1 /proc/uptime)s"
         sh $D/lockdown.sh > /dev/null     # stops the cloud daemons that were not up yet at "on boot"
         sh $D/alexa-off.sh; quiet

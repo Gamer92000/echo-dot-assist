@@ -11,6 +11,7 @@
  *
  * Default ports 26053 (ESPHome) and 16700 (Wyoming): the stock firewall only admits inbound TCP 16384-32767.
  */
+#include <fcntl.h>
 #include <math.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -57,6 +58,8 @@ static void run(const char *path, const char *a1, const char *a2)
 {
     char *argv[] = { (char *)path, (char *)a1, (char *)a2, NULL };
     if (fork() == 0) {                  /* bionic API 24 has no posix_spawn; SIGCHLD is ignored: no zombie */
+        int nul = open("/dev/null", O_WRONLY);          /* ledctrl and audio_manager_set_prop chat on stdout: two log lines */
+        if (nul >= 0) dup2(nul, 1);                     /* per LED change otherwise.  Errors (stderr) still reach the log */
         execv(path, argv);
         _exit(127);
     }
