@@ -25,9 +25,9 @@ Legend: `[x]` done, `[~]` partly done (note says what is missing), `[ ]` open. *
 - [x] `libmixerAPI.so` prototypes: open/get/release/drain/flush/pause/resume/close/getters, record and playback
 - [x] `libmixerAPI.so` client registration (`DataTrans` ring + descriptor file in `/data/mixer_streams/`)
 - [x] C header `src/include/mixer_api.h`
-- [~] `mixer` single-client logic and mic gating. Known: log string proves eviction of the previous `micAsr` client;
+- [x] `mixer` single-client logic and mic gating. Known: log string proves eviction of the previous `micAsr` client; — on device: `AllowMic` is 1 without PuffinApp, `micRaw` can be captured beside `micAsr`
       mic mute comes from LIPC `com.doppler.buttond/muteState`. Missing: default of `AllowMic` without PuffinApp → check on device
-- [ ] `mixer` playback stream types: ducking and volume group of `TTS` vs `Earcon` vs `Music` → easier to observe on device
+- [~] `mixer` playback stream types: ducking and volume group of `TTS` vs `Earcon` vs `Music` → easier to observe on device — seen on device: `TTS`, `Earcon` and `Music` streams mix; hassmic ducks music itself. Mixer-side ducking rules still unknown
 - [x] `libpryon.so` prototypes, structs, call sequence (`docs/re-pryon.md`)
 - [x] C header `src/include/pryon_api.h`; result fields and `detectionType` values verified by running the library
 - [x] LED ring: `ledctrl` CLI, pattern names, state mapping
@@ -73,7 +73,7 @@ dozen daemons phone home within seconds.
       Do not stop the supplicant: the same `wpa_supplicant` process runs `wlan0`
 - [x] **(router)** Echo is on the user's no-internet IoT VLAN — covers the boot window before `lockdown.sh` runs
 - [ ] **(device)** Verify: `tcpdump`/router log over one full reboot shows zero non-LAN packets
-- [ ] **(device)** Persistent: rules in `/system/bin/debug_firewall.sh` (stock `firewall.sh` runs it after its own flush) plus init service for `lockdown.sh watch`
+- [x] **(device)** Persistent: rules in `/system/bin/debug_firewall.sh` (stock `firewall.sh` runs it after its own flush) plus init service for `lockdown.sh watch` — solved differently: init service `hassmic_fw` runs `lockdown.sh watch` from `on boot`
 - [ ] Clock: no NTP once locked down. Wyoming needs none; point `sntp` at the router later if wanted
 
 ## Phase 3 — First contact **(device)**
@@ -82,9 +82,9 @@ Run in this order. Each step says what it proves.
 
 - [x] `scripts/probe.sh` — libs identical to analysed firmware (2026-09-21) — records stock state; flags if device libs differ from analysed firmware
 - [x] Confirm SELinux state: `getenforce` = Enforcing, but adb shell runs in permissive `u:r:su:s0`; children keep that context
-- [ ] `logcat` while saying "Alexa" on stock — baseline for mixer log lines
+- [x] `logcat` while saying "Alexa" on stock — baseline for mixer log lines — obsolete: stock Alexa never ran registered; our own detector is verified instead
 - [x] `scripts/deploy.sh`, then `adb shell /data/local/hassmic/alexa-off.sh` — `mixer` stays up
-- [ ] Wait 10 min: no reboot, no service restarts
+- [x] Wait 10 min: no reboot, no service restarts — device ran for hours across the session without reboots; `wifisvc` link resets found and fixed (Phase 5)
 - [x] `scripts/capture-test.sh 10` — 16 kHz mono confirmed by data rate (32 kB/s); `AllowMic` = 1 without PuffinApp.
       **AIPC refuses uid 0** → all mixer clients run through `runas puffin aipc,audio,...` (`src/tools/runas.c`; no `su` on device).
       `MixerGetRate/NumCh/SampleSizeBits` return -1 on record handles. Still open: listen to the WAV
@@ -104,14 +104,14 @@ Run in this order. Each step says what it proves.
 - [x] `run.sh` runs detached on device (log `/data/local/hassmic/hassmic.log`), listening on 16700, PC can connect. mDNS not seen from
       the PC. Added in HA by IP `192.168.100.147`, port 16700.
       **2026-09-21: end-to-end works** — "Alexa" → HA pipeline → TTS reply on the Echo, user verdict "works perfectly"
-- [ ] LED ring states look right: listening / thinking / talking / idle / error / muted / volume
-- [ ] Buttons: `getevent -l /dev/input/event3` works beside `acebuttond`; volume keys not handled twice
+- [x] LED ring states look right: listening / thinking / talking / idle / error / muted / volume — confirmed by the user during the ESPHome tests (listening / thinking / talking / mute / volume / timer)
+- [x] Buttons: `getevent -l /dev/input/event3` works beside `acebuttond`; volume keys not handled twice — volume, action and mute buttons verified; mute comes from `/dev/input/event1`
 - [ ] Barge-in works acoustically (depends on AEC quality during TTS)
 - [ ] Wake-word accuracy at distance and with music playing
 - [ ] Wake word "Echo": firmware ships only `ALEXA` (+`STOP`) in `words.shrunk.txt`. Stock gets other keywords from DAVS (cloud) into
       `/data/.../speech/wakeword_models/davs/resources/`. Options: pull an ECHO model set from another source, or non-Pryon engine
       (microWakeWord on device / openWakeWord on HA via `-w remote`)
-- [ ] Latency wake → STT start; TTS playback glitch-free
+- [x] Latency wake → STT start; TTS playback glitch-free — replies start before TTS_START with streaming TTS; user verdict fine
 
 ## Phase 5 — Make it permanent **(device)**
 
@@ -133,7 +133,7 @@ Run in this order. Each step says what it proves.
 - [~] Disable OTA: `otad`, `ace_otad`, `update_engine` stopped at every boot by `alexa-off.sh`/`lockdown.sh`, egress firewall + no-internet
       VLAN block the hosts. Not removed from the image
 - [x] Wi-Fi provisioning without the Alexa app: `scripts/wifi-join.sh`, profile persists in `wpa_supplicant.conf`, rejoins after reboot
-- [~] ESPHome native API (`src/hassmic/proto_esphome.c`, default; Wyoming stays as `-P wyoming`): voice pipeline with TTS over the API
+- [x] ESPHome native API (`src/hassmic/proto_esphome.c`, default; Wyoming stays as `-P wyoming`): voice pipeline with TTS over the API
       connection (16 kHz), announcements + `play_media` as WAV over HTTP (HA transcodes to the advertised 48 kHz mono), timers
       (alarm until button / wake word / 60 s), volume both ways, wake-word config, generated mDNS file (`hassmic -S`).
       Port **26053** (stock firewall admits inbound TCP 16384–32767 only). `tests/fake_ha_esphome.py` against `aioesphomeapi`:
@@ -160,11 +160,11 @@ Run in this order. Each step says what it proves.
       60 s without one. hassmic: 5 s send timeout + TCP keepalive on the client socket, so a dead link no longer blocks `core_lock`
       and the single client slot. Installed 2026-09-21: `netwatch: link up, wifisvc stopped` at boot, link stable through the
       user's tests. Missing: long-run observation (hours)
-- [~] Reply quality: SPEAKER flag dropped (feature flags 61). HA then renders TTS in the media player's announcement format (48 kHz
+- [x] Reply quality: SPEAKER flag dropped (feature flags 61). HA then renders TTS in the media player's announcement format (48 kHz
       mono WAV) and sends the URL (RUN_START with streaming TTS, TTS_END otherwise); hassmic fetches it like an announcement, starts
       at INTENT_PROGRESS `tts_start_streaming=1` when offered, and reports VoiceAssistantAnnounceFinished. Before: 16 kHz over the
       API connection. Test 22/22. Installed; with real HA 2026-09-21: reply arrives as `tts_proxy/….wav`, 48 kHz, playback starts before
-      TTS_START (streaming), follow-up question re-opens the mic (continue conversation). Missing: user's verdict on the sound
+      TTS_START (streaming), follow-up question re-opens the mic (continue conversation). User verdict: fine
 - [~] Sendspin player (`src/hassmic/sendspin.c`, port 28928, mDNS `_sendspin._tcp`, `-z 0` disables): dialect of aiosendspin 9.1.1 = Music
       Assistant 2.10.4, which differs from the published spec in 22 places (`docs/sendspin-digest.md` §0). WebSocket (`ws.c`), Noise
       KKpsk2 responder (`noise.c`, Monocypher), Sentinel PSK + unpaired access (operator approves in MA), player@v1 PCM 48k stereo,
