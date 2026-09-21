@@ -148,6 +148,35 @@ async def main():
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "x", "message": "end of test pipeline"})
         await asyncio.sleep(0.5)
 
+        # "Stop" (SIGHUP here), the second keyword of the wake word model: ends what makes noise, never starts a pipeline.
+        started.clear(); proc.send_signal(signal.SIGHUP); await asyncio.sleep(0.6)
+        check(not started.is_set(), '"stop" out of silence starts nothing')
+
+        async def reply_3s():               # a 3 s reply that would listen again afterwards
+            proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+            cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "which light"})
+            cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_INTENT_END, {"conversation_id": "x", "continue_conversation": "1"})
+            cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_END, {"url": f"http://127.0.0.1:{HTTP_PORT}/long.wav?s=3"})
+            cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
+            await asyncio.sleep(0.6); started.clear()
+
+        before = os.path.getsize(play); started.clear(); await reply_3s()
+        proc.send_signal(signal.SIGHUP); await asyncio.sleep(1.5)
+        played = (os.path.getsize(play) - before) / 96000
+        check(not started.is_set() and played < 2.0, f'"stop" cuts a reply and nothing listens afterwards: {played:.2f} s of 3 s played')
+
+        before = os.path.getsize(play); started.clear(); await reply_3s()
+        proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)    # "<wake word>, stop": wake word cuts and listens,
+        stopped.clear(); started.clear(); proc.send_signal(signal.SIGHUP); await asyncio.sleep(0.8)  # "stop" drops that pipeline
+        played = (os.path.getsize(play) - before) / 96000
+        check(stopped and not started.is_set() and played < 2.0, f'"<wake word>, stop" during a reply: pipeline dropped, {played:.2f} s of 3 s played (stops {stopped}, restarted {started.is_set()})')
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "stt-no-text-recognized", "message": "dropped"})
+        await asyncio.sleep(0.4)
+        started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+        check(True, "wake word works again after a dropped pipeline")
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "x", "message": "end of test pipeline"})
+        await asyncio.sleep(0.5)
+
         # streaming TTS: URL arrives with RUN_START, playback may begin at INTENT_PROGRESS, long before TTS_END
         before = os.path.getsize(play); finished.clear(); started.clear()
         proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)

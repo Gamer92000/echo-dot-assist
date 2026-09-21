@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #include <unistd.h>
 #include "audio.h"
@@ -49,7 +50,7 @@ pthread_mutex_t core_lock = PTHREAD_MUTEX_INITIALIZER;
 static int connected, satellite_running;
 static enum state state;
 static time_t state_since;
-static atomic_int streaming, trigger_pending, button_pending, quit;
+static atomic_int streaming, trigger_pending, button_pending, stop_pending, quit;
 static atomic_int flush_playback, earcon_pending, alarm_on;   /* barge-in: drop queued TTS; wake sound requested */
 static int soft_mute;                               /* under lock: mute switch from Home Assistant */
 static int barge_in;                                /* under lock: start a new pipeline once the current one has ended
@@ -93,8 +94,14 @@ void core_set_state(enum state s)
     state = s; state_since = time(NULL);
 }
 
+static long long mono_ms(void);
+static long long wake_cut_ms;    /* when the wake word last cut a reply or an alarm: a "stop" right behind it belongs to that */
+static long long last_wake_ms;   /* Amazon's models know "stop" only in the ~2 s after the wake word (op.cfg.json: awake state) */
+static int quiet_abort;
+
 static void pipeline_start(void)
 {
+    quiet_abort = 0;
     proto->start();
     atomic_store(&streaming, 1);
     if (core_local_wake) core_set_state(LISTENING);
@@ -132,7 +139,7 @@ void core_pipeline_finish(void)
 {
     if (atomic_exchange(&streaming, 0) && connected && proto->stop) proto->stop();
     core_set_state(IDLE);
-    wake_reset();
+    if (mono_ms() - last_wake_ms > 3000) wake_reset();      /* a reset puts the engine back to sleep: "<wake word>, stop" would lose its "stop" */
     if (!connected) barge_in = 0;
     if ((barge_in || !core_local_wake) && satellite_running && connected) {
         if (barge_in) atomic_store(&earcon_pending, 1);
@@ -151,6 +158,7 @@ void core_link(int up, int ready)
 
 void core_error(void)
 {
+    if (quiet_abort) { quiet_abort = 0; return; }      /* Home Assistant's complaint about a pipeline "stop" ended: not news */
     if (state != SPEAKING) { led("-s", "anim_start_error_short"); core_pipeline_finish(); }
 }
 
@@ -159,6 +167,7 @@ static void trigger(void)
     pthread_mutex_lock(&core_lock);
     if (atomic_load(&alarm_on)) {
         core_alarm(0);
+        wake_cut_ms = mono_ms();
     } else if (!connected || !satellite_running || core_muted()) {
         /* nothing to talk to, or privacy latch on */
     } else if (state == IDLE) {
@@ -167,13 +176,44 @@ static void trigger(void)
     } else if (state == SPEAKING && !atomic_load(&flush_playback)) {       /* not already being cut.  barge_in alone does not
                                                                              * say that: continue-conversation sets it too */
         fprintf(stderr, "barge-in\n");
+        wake_cut_ms = mono_ms();
         barge_in = 1;
         atomic_store(&flush_playback, 1);   /* playback thread drops TTS up to audio-stop, then we restart */
     }
     pthread_mutex_unlock(&core_lock);
 }
 
-static void on_wake(const char *keyword) { (void)keyword; if (core_local_wake) trigger(); }
+/* "Stop", the second keyword of Amazon's wake word models.  The engine reports it only right behind the wake word
+ * ("<wake word>, stop"; on its own it is never detected, also not with a changed op.cfg.json: tried).
+ * It ends what is making noise and never starts anything:
+ * a ringing alarm, a reply being spoken (also one that would listen again afterwards).  Said as "<wake word>, stop", the wake
+ * word has already cut the reply and opened a new pipeline by the time "stop" is recognised: that pipeline is dropped again.
+ * Only then: "<wake word>, stop the music" out of silence is a command for Home Assistant, not for us. */
+static void stop_word(void)
+{
+    pthread_mutex_lock(&core_lock);
+    if (atomic_load(&alarm_on)) {
+        core_alarm(0);
+    } else if (state == SPEAKING) {
+        fprintf(stderr, "stop: reply cut\n");
+        barge_in = 0;
+        atomic_store(&earcon_pending, 0);
+        atomic_store(&flush_playback, 1);
+    } else if (state == LISTENING && mono_ms() - wake_cut_ms < 4000) {
+        fprintf(stderr, "stop: pipeline dropped\n");
+        atomic_store(&earcon_pending, 0);
+        barge_in = 0;
+        core_pipeline_finish();
+        quiet_abort = 1;
+    }
+    pthread_mutex_unlock(&core_lock);
+}
+
+static void on_wake(const char *keyword)
+{
+    if (!core_local_wake) return;
+    if (!strcasecmp(keyword, "STOP")) stop_word(); else { last_wake_ms = mono_ms(); trigger(); }
+}
 
 /* ---------------------------------------------------------------- playback queue */
 
@@ -389,6 +429,7 @@ static void *capture_thread(void *arg)
         if (n < 0) { fprintf(stderr, "capture: fatal\n"); atomic_store(&quit, 1); break; }
         if (atomic_exchange(&button_pending, 0)) on_action();      /* SIGUSR2: action button, for tests on the PC */
         if (atomic_exchange(&trigger_pending, 0)) trigger();
+        if (atomic_exchange(&stop_pending, 0)) stop_word();        /* SIGHUP: the "stop" keyword, for tests on the PC */
         if (n == 0) continue;
 
         if (core_local_wake) wake_feed(pcm, n / 2);
@@ -412,6 +453,7 @@ static void *serve_thread(void *arg) { int c = (int)(long)arg; proto->serve(c); 
 
 static void on_usr1(int s) { (void)s; atomic_store(&trigger_pending, 1); }
 static void on_usr2(int s) { (void)s; atomic_store(&button_pending, 1); }
+static void on_hup(int s) { (void)s; atomic_store(&stop_pending, 1); }
 
 int main(int argc, char **argv)
 {
@@ -434,7 +476,7 @@ int main(int argc, char **argv)
     }
     core_port = port ? port : proto->port;
     if (print_mdns) { proto->print_mdns(); return 0; }
-    signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2);
+    signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup);
     if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
 
     if (cap_open() < 0) { fprintf(stderr, "cannot open capture (is PuffinApp still running?)\n"); return 1; }

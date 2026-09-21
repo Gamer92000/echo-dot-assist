@@ -29,6 +29,8 @@ own music like it did before. Only the Alexa client is replaced, by a small daem
   Wake word runs on the Echo ("Alexa" out of the box; "Echo", "Computer", "Amazon", "Ziggy" with
   [one extra step](#another-wake-word-echo-computer-amazon-ziggy)). Replies start while the text-to-speech is still being
   generated. Say the wake word, or press the action button, while it talks and it stops and listens again.
+  **"Echo, stop"** (wake word and "stop" in one breath) silences a reply or a ringing timer without listening again.
+  "Stop" on its own does nothing: Amazon's models only hear it in the two seconds after the wake word.
 - **Announcements and media player**: `assist_satellite.announce`, TTS and `media_player.play_media` play on the Echo.
 - **Timers** ("set a timer for ten minutes"): rings on the Echo until you press the button, say the wake word, or 60 s pass.
 - **Multiroom music** as a Sendspin player for Music Assistant, in sync with other players; the voice assistant ducks it.
@@ -190,6 +192,11 @@ Options for `ARGS`: `-m <pryon.manifest>` another wake word model · `-w remote`
 (openWakeWord) instead of on the Echo · `-E` no sound on wake · `-L` leave the LED ring alone · `-V` leave the volume
 buttons alone · `-z 0` no Sendspin player · `-p <port>` another port (the Echo's own firewall only admits inbound TCP
 16384–32767).
+
+**Stopping it.** While it talks or a timer rings: the wake word alone cuts it and listens for a new command; "<wake word>,
+stop" cuts it and stays quiet; the action button does the same as the wake word. Say "stop" right behind the wake word,
+the way the English word sounds. Out of silence, "<wake word>, stop …" is an ordinary sentence for Home Assistant
+("Echo, stop the music in the kitchen").
 
 **When it does not react.** Most likely it has no connection to Home Assistant: then wake word and button do nothing, and
 it does not tell you (known gap). Look at `adb shell tail -30 /data/local/hassmic/boot.log`: `wake: ALEXA type=2` means
