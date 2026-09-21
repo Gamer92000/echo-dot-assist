@@ -133,5 +133,19 @@ Run in this order. Each step says what it proves.
 - [~] Disable OTA: `otad`, `ace_otad`, `update_engine` stopped at every boot by `alexa-off.sh`/`lockdown.sh`, egress firewall + no-internet
       VLAN block the hosts. Not removed from the image
 - [x] Wi-Fi provisioning without the Alexa app: `scripts/wifi-join.sh`, profile persists in `wpa_supplicant.conf`, rejoins after reboot
-- [ ] ESPHome native API subset instead of Wyoming (timers, announcements, media player)
+- [~] ESPHome native API (`src/hassmic/proto_esphome.c`, default; Wyoming stays as `-P wyoming`): voice pipeline with TTS over the API
+      connection (16 kHz), announcements + `play_media` as WAV over HTTP (HA transcodes to the advertised 48 kHz mono), timers
+      (alarm until button / wake word / 60 s), volume both ways, wake-word config, generated mDNS file (`hassmic -S`).
+      Port **26053** (stock firewall admits inbound TCP 16384–32767 only). `tests/fake_ha_esphome.py` against `aioesphomeapi`:
+      20/20. With real HA (2026-09-21): discovery, voice pipeline, settings entities, mute confirmed by the user.
+      Settings entities (HA applies them to the mic stream, values travel in each request, saved in `/data/local/hassmic/state/settings`):
+      noise suppression level, auto gain, mic volume multiplier, wake sound; mute switch.
+      Mute: button = hardware latch, reported by the `gpio-privacy` input device (`/dev/input/event1`, not the keypad); software can
+      set the latch (`enable` <- 1) but not clear it (write 0 rejected while set, second 1 does not toggle; DT has one output, one
+      input) → HA switch = soft mute, shows latch OR soft, button unmute clears both.
+      Missing: announcement / timer / play_media with real HA (needs an http URL inside the LAN CIDR), permanent install
+- [x] mDNS: init's `avahi-daemon` runs in SELinux domain `avahi-daemon`, which is denied read on `/data/misc/avahi/services`
+      (so nothing was ever published, also not for Wyoming). `magiskpolicy` cannot parse a rule for a type with a hyphen →
+      `boot.sh`/`run.sh` stop the init service and start avahi themselves in the `su` domain. Verified: answers queries from the PC.
+      Host name is `linux.local` (system host name is `localhost`); HA connects by IP and follows the MAC in the TXT record
 - [ ] Revert procedure tested

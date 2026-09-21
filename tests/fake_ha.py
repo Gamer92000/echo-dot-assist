@@ -32,9 +32,9 @@ async def main():
     qemu = "--qemu" in sys.argv          # ARM build + stock Pryon model under qemu-arm; wake word comes from the audio file
     if qemu:
         env["HASSMIC_CAP"] = f"{ROOT}/testdata/alexa_espeak.raw"
-        cmd = [f"{ROOT}/tools/qrun.sh", "-t", "120", f"{ROOT}/build/hassmic-qemu"]
+        cmd = [f"{ROOT}/tools/qrun.sh", "-t", "120", f"{ROOT}/build/hassmic-qemu", "-P", "wyoming"]
     else:
-        cmd = [f"{ROOT}/build/hassmic-host"]
+        cmd = [f"{ROOT}/build/hassmic-host", "-P", "wyoming"]
     proc = subprocess.Popen(cmd + ["-p", str(PORT), "-n", "Test Dot"], env=env, start_new_session=True)
     try:
         await asyncio.sleep(6 if qemu else 0.3)

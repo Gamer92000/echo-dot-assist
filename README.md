@@ -4,7 +4,8 @@ Echo Dot 3rd gen (2018, `donut`, MT8516) as a Home Assistant voice satellite.
 
 Amazon's audio front end stays (`mixer` + `libasp`: echo cancellation, beamforming, mic calibration, speaker path) and so does
 the stock "Alexa" wake word engine (`libpryon`). The Alexa client (`PuffinApp`) is replaced by `hassmic`, a small daemon that
-speaks the Wyoming satellite protocol to Home Assistant. The device never talks to Amazon: egress is locked to the LAN.
+speaks the ESPHome native API to Home Assistant (voice pipeline, announcements, timers, media player, settings entities;
+Wyoming is still available with `-P wyoming`). The device never talks to Amazon: egress is locked to the LAN.
 
 Status and open items: [PLAN.md](PLAN.md). Reverse-engineering notes: [docs/](docs/).
 
@@ -14,14 +15,14 @@ Status and open items: [PLAN.md](PLAN.md). Reverse-engineering notes: [docs/](do
 
 | Path | What |
 |---|---|
-| `src/hassmic/` | the satellite daemon: capture, Pryon wake word, Wyoming server, playback, LEDs, buttons |
+| `src/hassmic/` | the satellite daemon: core (capture, Pryon wake word, playback, LEDs, buttons) + `proto_esphome.c`, `proto_wyoming.c` |
 | `src/tools/` | `mixcap`, `mixplay`, `pryon_test`, `runas` (drops root: AIPC refuses uid 0, the image has no `su`) |
 | `src/include/` | C headers for the reversed `libmixerAPI.so` and `libpryon.so` |
 | `scripts/` | PC side: `deploy.sh`, `probe.sh`, `capture-test.sh`, `wifi-join.sh`, `install-system.sh` |
 | `scripts/device/` | run on the Echo: `alexa-off.sh`, `alexa-on.sh`, `lockdown.sh`, `wifi-join.sh`, `run.sh` |
 | `scripts/system/` | boot integration: `hassmic.rc`, `boot.sh`, `sepolicy.rules` |
 | `tools/` | OTA payload dumper, Thumb disassembly helpers, `qrun.sh` (device binaries under qemu-arm) |
-| `tests/fake_ha.py` | plays Home Assistant's side of the protocol against a host or qemu build |
+| `tests/` | `fake_ha_esphome.py` (reference `aioesphomeapi` client) and `fake_ha.py` (Wyoming) against a host or qemu build |
 
 ## External files (not in this repository)
 
@@ -53,7 +54,8 @@ Secrets live in `secrets/` (ignored): `secrets/wifi.conf`, line 1 SSID, line 2 p
 ```sh
 make            # ARM binaries into build/ (NDK r21e, API 24, armv7, lld)
 make host       # PC build + qemu build for tests
-.venv/bin/python tests/fake_ha.py [--qemu]
+.venv/bin/python tests/fake_ha_esphome.py        # needs: pip install aioesphomeapi
+.venv/bin/python tests/fake_ha.py [--qemu]        # Wyoming; needs: pip install wyoming
 ```
 
 ## Install on a device
@@ -63,7 +65,8 @@ make host       # PC build + qemu build for tests
 2. `scripts/probe.sh` — checks that the device libraries match the analysed firmware.
 3. `scripts/deploy.sh`, then on the device `lockdown.sh <lan-cidr>` **before** the first Wi-Fi join, then `scripts/wifi-join.sh`.
    Put the Echo on a network without internet access as a second layer.
-4. Try it: `adb shell /data/local/hassmic/run.sh`, add the Wyoming integration in Home Assistant (device IP, port 16700).
+4. Try it: `adb shell /data/local/hassmic/run.sh`. Home Assistant discovers an ESPHome device (or add it by IP, port 26053,
+   no encryption key). With `-P wyoming`: Wyoming integration, port 16700.
 5. Make it permanent: `scripts/install-system.sh <lan-cidr> "<name>"`. Goes through TWRP, adds `/system/hassmic/`,
    `/system/etc/init/hassmic.rc` and three allow rules to `/sepolicy` (stock copy kept as `/sepolicy.pre-hassmic`).
 

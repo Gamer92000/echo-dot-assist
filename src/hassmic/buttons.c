@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #define PRIVACY_STATE "/sys/devices/platform/gpio-privacy/state"
+#define PRIVACY_INPUT "/dev/input/event1"          /* input device of the gpio-privacy driver */
 #define SHORT_PRESS_MS 1000            /* longer holds belong to acebuttond: 5 s setup mode, 21 s factory reset */
 
 static struct button_handler handler;
@@ -51,11 +52,30 @@ static void *reader(void *arg)
     return NULL;
 }
 
+/* The mute button is not on the keypad: it toggles a hardware latch, and the gpio-privacy driver reports the latch through
+ * its own input device.  Whatever event arrives there, the truth is the sysfs state. */
+static void *privacy_reader(void *arg)
+{
+    struct input_event ev; int pfd = (int)(long)arg, last = buttons_muted();
+    while (read(pfd, &ev, sizeof ev) == sizeof ev) {
+        if (ev.type == EV_SYN) continue;
+        usleep(50000);
+        int now = buttons_muted();
+        if (now != last && handler.mute_changed) handler.mute_changed(now);
+        last = now;
+    }
+    fprintf(stderr, "buttons: privacy reader stopped\n");
+    return NULL;
+}
+
 int buttons_start(const char *device, const struct button_handler *h)
 {
-    pthread_t t;
+    pthread_t t; int pfd;
     fd = open(device, O_RDONLY);
     if (fd < 0) return -1;
     handler = *h;
+    pfd = open(PRIVACY_INPUT, O_RDONLY);
+    if (pfd < 0) fprintf(stderr, "buttons: %s not available, mute button changes go unnoticed\n", PRIVACY_INPUT);
+    else if (pthread_create(&t, NULL, privacy_reader, (void *)(long)pfd)) close(pfd);
     return pthread_create(&t, NULL, reader, NULL) ? -1 : 0;
 }

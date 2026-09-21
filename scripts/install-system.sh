@@ -71,9 +71,9 @@ echo "sepolicy patched"
 t "rm -rf $MNT/system/hassmic; mkdir -p $MNT/system/hassmic"
 adb push build/hassmic build/runas build/mixcap build/mixplay build/pryon_test \
          scripts/system/boot.sh scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh \
-         scripts/device/hassmic.service $MNT/system/hassmic/ >/dev/null
+         $MNT/system/hassmic/ >/dev/null
 adb push scripts/system/hassmic.rc $MNT/system/etc/init/hassmic.rc >/dev/null
-t "chown -R 0:2000 $MNT/system/hassmic; chmod 755 $MNT/system/hassmic $MNT/system/hassmic/*; chmod 644 $MNT/system/hassmic/hassmic.service
+t "chown -R 0:2000 $MNT/system/hassmic; chmod 755 $MNT/system/hassmic $MNT/system/hassmic/*
    chown 0:0 $MNT/system/etc/init/hassmic.rc; chmod 644 $MNT/system/etc/init/hassmic.rc
    chcon -R u:object_r:system_file:s0 $MNT/system/hassmic $MNT/system/etc/init/hassmic.rc $MNT/sepolicy.pre-hassmic
    ls -lZ $MNT/system/hassmic $MNT/system/etc/init/hassmic.rc $MNT/sepolicy $MNT/system/etc/init/fosflags.rc
