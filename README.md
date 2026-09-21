@@ -19,6 +19,7 @@ Status and open items: [PLAN.md](PLAN.md). Reverse-engineering notes: [docs/](do
 | `src/hassmic/` | the satellite daemon: core (capture, Pryon wake word, playback, LEDs, buttons) + `proto_esphome.c`, `proto_wyoming.c` |
 | `src/tools/` | `mixcap`, `mixplay`, `pryon_test`, `runas` (drops root: AIPC refuses uid 0, the image has no `su`) |
 | `src/third_party/monocypher.[ch]` | X25519, ChaCha20-Poly1305 for the Sendspin Noise handshake; BSD-2-Clause OR CC0, <https://monocypher.org>, 4.0.2 |
+| `src/third_party/dr_flac.h` | FLAC decoder for Sendspin; public domain or MIT-0, <https://github.com/mackron/dr_libs> |
 | `src/third_party/minimp3.h` | MP3 decoder, public domain (CC0), <https://github.com/lieff/minimp3> |
 | `src/include/` | C headers for the reversed `libmixerAPI.so` and `libpryon.so` |
 | `scripts/` | PC side: `deploy.sh`, `probe.sh`, `capture-test.sh`, `wifi-join.sh`, `install-system.sh` |
@@ -57,7 +58,7 @@ Secrets live in `secrets/` (ignored): `secrets/wifi.conf`, line 1 SSID, line 2 p
 
 ```sh
 make            # ARM binaries into build/ (NDK r21e, API 24, armv7, lld)
-make host       # PC build + qemu build for tests
+make host       # PC build + qemu build for tests (needs libopus on the PC)
 .venv/bin/python tests/fake_ha_esphome.py        # needs: pip install aioesphomeapi
 .venv/bin/python tests/fake_ha.py [--qemu]        # Wyoming; needs: pip install wyoming
 ```

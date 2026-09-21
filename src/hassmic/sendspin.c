@@ -4,7 +4,8 @@
  *
  *   transport   the server finds us by mDNS (_sendspin._tcp) and dials our WebSocket; text frames carry the cleartext init
  *               exchange and the Noise KKpsk2 handshake (we are the responder), binary frames the encrypted session
- *   roles       player@v1: PCM 48 kHz stereo only, so the server resamples and no decoder is needed
+ *   roles       player@v1: 48 kHz stereo as FLAC (dr_flac), Opus (the firmware's own libopus) or PCM, in that order of
+ *               preference (HASSMIC_SENDSPIN_CODECS changes it); the server resamples to it
  *   roles       controller@v1: the action button pauses / resumes the group
  *   trust       unpaired access under the published Sentinel PSK (the operator approves the device in Music Assistant),
  *               or paired: the operator pastes our pairing token, we hand over a fresh long-term PSK ("pairing_psk" flow),
@@ -31,6 +32,16 @@
 #include "netio.h"
 #include "noise.h"
 #include "ws.h"
+#define DR_FLAC_IMPLEMENTATION
+#define DR_FLAC_NO_STDIO
+#define DR_FLAC_NO_OGG
+#include "../third_party/dr_flac.h"
+
+/* libopus: linked from the stock firmware on the device, from the system on the PC.  Only these three calls are used. */
+typedef struct OpusDecoder OpusDecoder;
+OpusDecoder *opus_decoder_create(int32_t Fs, int channels, int *error);
+int opus_decode(OpusDecoder *st, const unsigned char *data, int32_t len, int16_t *pcm, int frame_size, int decode_fec);
+void opus_decoder_destroy(OpusDecoder *st);
 
 #define RATE 48000
 #define CHANNELS 2
@@ -199,6 +210,64 @@ static void save_delay(void)
 {
     char path[256]; snprintf(path, sizeof path, "%s/sendspin.delay", state_dir);
     FILE *f = fopen(path, "w"); if (f) { fprintf(f, "%d\n", atomic_load(&static_delay_ms)); fclose(f); }
+}
+
+/* ---------------------------------------------------------------- decoders (receive thread of the admitted connection) */
+
+enum { CODEC_PCM, CODEC_FLAC, CODEC_OPUS };
+static int codec; static OpusDecoder *opus; static drflac *flac;
+static struct { const uint8_t *p; size_t len, pos; } flac_in;       /* what dr_flac may read right now: the header, then one chunk */
+
+static size_t flac_read(void *u, void *out, size_t n)
+{
+    (void)u;
+    if (n > flac_in.len - flac_in.pos) n = flac_in.len - flac_in.pos;
+    memcpy(out, flac_in.p + flac_in.pos, n); flac_in.pos += n;
+    return n;
+}
+static drflac_bool32 flac_seek(void *u, int off, drflac_seek_origin o)
+{
+    (void)u;
+    if (o != DRFLAC_SEEK_CUR || off < 0 || (size_t)off > flac_in.len - flac_in.pos) return DRFLAC_FALSE;
+    flac_in.pos += off; return DRFLAC_TRUE;
+}
+static drflac_bool32 flac_tell(void *u, drflac_int64 *c) { (void)u; *c = (drflac_int64)flac_in.pos; return DRFLAC_TRUE; }
+
+static void decoders_close(void)
+{
+    if (opus) { opus_decoder_destroy(opus); opus = NULL; }
+    if (flac) { drflac_close(flac); flac = NULL; }
+}
+
+static int decoder_open(const char *name, const uint8_t *header, size_t hlen)
+{
+    int err = 0;
+    decoders_close();
+    if (!strcmp(name, "pcm")) { codec = CODEC_PCM; return 0; }
+    if (!strcmp(name, "opus")) { codec = CODEC_OPUS; opus = opus_decoder_create(RATE, CHANNELS, &err); return opus ? 0 : -1; }
+    if (!strcmp(name, "flac")) {                        /* header = "fLaC" + STREAMINFO block */
+        codec = CODEC_FLAC; flac_in.p = header; flac_in.len = hlen; flac_in.pos = 0;
+        flac = drflac_open(flac_read, flac_seek, flac_tell, NULL, NULL);
+        return flac && flac->channels == CHANNELS && flac->sampleRate == RATE ? 0 : -1;
+    }
+    return -1;
+}
+
+/* One chunk in, PCM out (whole FLAC frames / one Opus packet per chunk).  Returns bytes, 0 if nothing came out. */
+static size_t decode_chunk(const uint8_t *in, size_t len, const uint8_t **out)
+{
+    static int16_t pcm[RATE / 5 * CHANNELS];            /* up to 200 ms */
+    if (codec == CODEC_PCM) { *out = in; return len; }
+    *out = (const uint8_t *)pcm;
+    if (codec == CODEC_OPUS) {
+        int n = opus ? opus_decode(opus, in, (int32_t)len, pcm, 5760, 0) : -1;
+        return n > 0 ? (size_t)n * FRAME : 0;
+    }
+    if (!flac) return 0;
+    size_t frames = 0, cap = sizeof pcm / sizeof pcm[0] / CHANNELS;
+    flac_in.p = in; flac_in.len = len; flac_in.pos = 0;
+    for (drflac_uint64 n; frames < cap && (n = drflac_read_pcm_frames_s16(flac, cap - frames, pcm + frames * CHANNELS)) > 0; ) frames += n;
+    return frames * FRAME;
 }
 
 /* ---------------------------------------------------------------- keys, pairing records, token */
@@ -420,6 +489,21 @@ static int arbitrate(struct session *s)
 
 static int rehandshake(struct session *s, const char *j);
 
+/* supported_formats in order of preference: the server takes the first one it can encode */
+static const char *formats_json(void)
+{
+    static char out[512]; const char *pref = getenv("HASSMIC_SENDSPIN_CODECS"); size_t o = 0;
+    if (!pref || !*pref) pref = "flac,opus,pcm";
+    out[0] = 0;
+    for (const char *p = pref; *p; ) {
+        size_t n = strcspn(p, ",");
+        if ((n == 4 && !strncmp(p, "flac", 4)) || (n == 4 && !strncmp(p, "opus", 4)) || (n == 3 && !strncmp(p, "pcm", 3)))
+            o += snprintf(out + o, sizeof out - o, "%s{\"codec\":\"%.*s\",\"channels\":%d,\"sample_rate\":%d,\"bit_depth\":16}", o ? "," : "", (int)n, p, CHANNELS, RATE);
+        p += n; if (*p == ',') p++;
+    }
+    return out;
+}
+
 static void on_json(struct session *s, char *j, long long t_recv)
 {
     char type[48] = "", sec[512], str[64]; long long a, b, c;
@@ -433,10 +517,10 @@ static void on_json(struct session *s, char *j, long long t_recv)
         js_str(j, "name", str, sizeof str); fprintf(stderr, "sendspin: server \"%s\"\n", str);
         send_json(s, "{\"type\":\"client/hello\",\"payload\":{\"name\":\"%s\",\"device_info\":{\"product_name\":\"Echo Dot 3 (hassmic)\","
                      "\"manufacturer\":\"Amazon\",\"software_version\":\"" VERSION "\"},\"supported_roles\":[\"player@v1\",\"controller@v1\"],"
-                     "\"player@v1_support\":{\"supported_formats\":[{\"codec\":\"pcm\",\"channels\":%d,\"sample_rate\":%d,\"bit_depth\":16}],"
+                     "\"player@v1_support\":{\"supported_formats\":[%s],"
                      "\"buffer_capacity\":%u,\"supported_commands\":[\"volume\",\"mute\"]},"
                      "\"supported_pair_methods\":[{\"method\":\"pairing_psk\",\"locations\":[\"device\"]}],\"unpaired_access\":{\"enabled\":true}}}",
-                  core_name, CHANNELS, RATE, BUFFER_CAPACITY);
+                  core_name, formats_json(), BUFFER_CAPACITY);
     } else if (!strcmp(type, "server/activate")) {
         int first = !s->activated, playback = 0, pairing = 0;
         if (js_section(j, "activities", sec, sizeof sec)) { playback = strstr(sec, "playback") != NULL; pairing = strstr(sec, "pairing") != NULL; }
@@ -491,9 +575,13 @@ static void on_json(struct session *s, char *j, long long t_recv)
         if (js_section(j, "controller", sec, sizeof sec)) js_section(sec, "supported_commands", s->ctl_commands, sizeof s->ctl_commands);
     } else if (!strcmp(type, "stream/start")) {
         if (!js_section(j, "player", sec, sizeof sec)) return;
+        static char hdr64[1024]; static uint8_t hdr[768]; long hl = 0;
         js_str(sec, "codec", str, sizeof str); js_i64(sec, "sample_rate", &a); js_i64(sec, "channels", &b); js_i64(sec, "bit_depth", &c);
-        if (strcmp(str, "pcm") || a != RATE || b != CHANNELS || c != 16) { fprintf(stderr, "sendspin: unexpected format %s %lld/%lld/%lld, ignoring stream\n", str, a, b, c); return; }
-        fprintf(stderr, "sendspin: stream start\n");
+        if (js_str(sec, "codec_header", hdr64, sizeof hdr64)) hl = b64_decode(hdr64, strlen(hdr64), hdr, sizeof hdr);
+        if (a != RATE || b != CHANNELS || (strcmp(str, "opus") && c != 16) || decoder_open(str, hdr, hl < 0 ? 0 : (size_t)hl)) {
+            fprintf(stderr, "sendspin: cannot play %s %lld Hz x%lld %lld bit, ignoring the stream\n", str, a, b, c); return;
+        }
+        fprintf(stderr, "sendspin: stream start (%s)\n", str);
         if (!atomic_load(&stream_on)) q_flush();
         atomic_store(&stream_on, 1);
         send_json(s, "{\"type\":\"client/time\",\"payload\":{\"client_transmitted\":%lld}}", raw_us());
@@ -578,7 +666,8 @@ static void *serve(void *arg)
         if (plain[0] == 0) { plain[pl] = 0; on_json(s, (char *)plain + 1, t_recv); }
         else if (plain[0] == 4 && pl > 9 && s->admitted) {              /* audio: int64 big-endian server time, then PCM */
             long long ts = 0; for (int i = 0; i < 8; i++) ts = ts << 8 | plain[1 + i];
-            q_push(ts, plain + 9, pl - 9);
+            const uint8_t *pcm; size_t n2 = atomic_load(&stream_on) ? decode_chunk(plain + 9, pl - 9, &pcm) : 0;
+            if (n2) q_push(ts, pcm, n2);
         }
     }
     s->closing = 1;

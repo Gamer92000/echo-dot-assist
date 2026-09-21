@@ -22,7 +22,8 @@ check.failed = False
 async def main():
     if "-v" in sys.argv: logging.basicConfig(level=logging.DEBUG)
     state = tempfile.mkdtemp(); music = os.path.join(state, "music.raw")
-    env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_MUSIC=music, HASSMIC_SETTINGS=os.path.join(state, "settings"), HASSMIC_OUTPUT_LATENCY_MS="0")
+    want = os.environ.get("CODEC", "flac")         # CODEC=flac|opus|pcm: what the player lists first
+    env = dict(os.environ, HASSMIC_SENDSPIN_CODECS=want, HASSMIC_STATE=state, HASSMIC_MUSIC=music, HASSMIC_SETTINGS=os.path.join(state, "settings"), HASSMIC_OUTPUT_LATENCY_MS="0")
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-p", "16959", "-z", str(PORT), "-L"], env=env)
     await asyncio.sleep(0.5)
     loop = asyncio.get_running_loop()
@@ -61,6 +62,7 @@ async def main():
             if i == 15: player.set_volume(30)
             if i == 25: proc.send_signal(signal.SIGUSR2)      # action button while music plays
         await asyncio.sleep(2.5)
+        fmt_used = player.get_audio_format() if hasattr(player, "get_audio_format") else None
         check("ControllerPauseEvent" in ctl_events, f"action button during playback sends controller pause: {ctl_events}")
         check(player.volume == 30, f"volume command applied and echoed in client/state: {player.volume}")
         await client.group.stop()
@@ -70,7 +72,7 @@ async def main():
         nz = np.flatnonzero(np.abs(pcm) > 100)
         tone = pcm[nz[0]:nz[-1] + 1] if len(nz) else pcm[:0]
         dur = len(tone) / 48000
-        check(3.9 <= dur <= 4.05, f"played {dur:.3f} s of tone (sent 4.000 s)")
+        check(3.9 <= dur <= 4.05, f"played {dur:.3f} s of tone (sent 4.000 s) as {want}")
         # continuity: a dropped or repeated frame shows as a phase jump of the 440 Hz sine
         if len(tone) > 48000:
             ph = np.unwrap(np.angle(np.fft.ifft(np.fft.fft(tone) * (np.fft.fftfreq(len(tone)) > 0) * 2)))     # analytic signal
