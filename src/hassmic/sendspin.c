@@ -47,6 +47,7 @@ void opus_decoder_destroy(OpusDecoder *st);
 #define CHANNELS 2
 #define FRAME (2 * CHANNELS)
 #define BUFFER_CAPACITY (2u << 20)      /* bytes of PCM the server may have in flight: ~10.9 s */
+#define QUEUE_MAX (8u << 20)            /* decoded PCM we hold: the server's 30 s horizon plus margin */
 #define LEAD_MS 300                     /* required_lead_time_ms and min_buffer_ms we report */
 #define MIXER_TARGET_US 120000          /* keep about this much queued in the mixer: reacts fast to stop / duck / volume */
 #define SNAP_US 20000                   /* beyond this error: one-shot resync instead of frame nudging */
@@ -136,7 +137,13 @@ static void q_push(long long ts, const uint8_t *pcm, size_t len)
     if (!len || !atomic_load(&stream_on) || !(c = malloc(sizeof *c + len))) return;
     c->next = NULL; c->ts = ts; c->len = len; memcpy(c->pcm, pcm, len);
     pthread_mutex_lock(&q_lock);
-    if (q_bytes + len > BUFFER_CAPACITY + (1u << 20)) { pthread_mutex_unlock(&q_lock); free(c); return; }   /* server over-ran its budget */
+    /* The server budgets BUFFER_CAPACITY in *compressed* bytes and at most 30 s ahead; this queue holds decoded PCM, so
+     * it is sized for the horizon (30 s = 5.5 MB), not for the byte budget.  Dropping here means a gap: say so. */
+    if (q_bytes + len > QUEUE_MAX) {
+        static long long last; pthread_mutex_unlock(&q_lock); free(c);
+        if (raw_us() - last > 5000000) { last = raw_us(); fprintf(stderr, "sendspin: queue full (%u MB), dropping audio\n", QUEUE_MAX >> 20); }
+        return;
+    }
     if (q_tail) q_tail->next = c; else q_head = c;
     q_tail = c; q_bytes += len;
     pthread_cond_signal(&q_cond);
