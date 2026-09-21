@@ -107,6 +107,31 @@ async def main():
         await asyncio.sleep(2.0)
         check(os.path.getsize(play) == 48000 and finished == [True], f"reply fetched from the TTS_END url and reported: {os.path.getsize(play)} bytes, finished={finished}")
 
+        # A second client beside "Home Assistant": gets answers, sees and causes state changes, cannot take the voice assistant.
+        cli2 = APIClient("127.0.0.1", PORT, None)
+        await asyncio.wait_for(cli2.connect(login=True), 5)
+        info2 = await asyncio.wait_for(cli2.device_info(), 5)
+        ent2, _ = await cli2.list_entities_services()
+        check(info2.name == "echo-dot" and len(ent2) == len(entities), "second client is served while the first stays connected")
+        states2 = []; cli2.subscribe_states(states2.append)
+        started2 = asyncio.Event()
+        async def start2(*a): started2.set(); return 0
+        async def stop2(*a): pass
+        cli2.subscribe_voice_assistant(handle_start=start2, handle_stop=stop2)
+        await asyncio.sleep(0.3); n1 = len(states)
+        cli2.number_command(by["auto_gain"].key, 7)
+        await asyncio.sleep(0.5)
+        check(any(isinstance(x, NumberState) and x.state == 7 for x in states[n1:]) and any(isinstance(x, NumberState) and x.state == 7 for x in states2),
+              "a change made by one client reaches both")
+        started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+        check(not started2.is_set(), "the voice assistant stays with the first subscriber")
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "x", "message": "end of test pipeline"})
+        await cli2.disconnect(); await asyncio.sleep(0.5)
+        started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+        check(True, "first client unaffected when the second one leaves")
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "x", "message": "end of test pipeline"})
+        await asyncio.sleep(0.5)
+
         # A reply that asks a follow-up question (continue_conversation) must still be interruptible by the wake word:
         # the reply is cut and the new pipeline starts at once, not after the full second of audio.
         before = os.path.getsize(play); finished.clear(); started.clear()

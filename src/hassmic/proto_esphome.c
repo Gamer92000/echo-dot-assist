@@ -41,7 +41,13 @@ enum { KEY_NOISE = 2, KEY_GAIN, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SENDSPIN
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
-static int client = -1;
+/* Several API clients at a time, like ESPHome firmware: Home Assistant plus e.g. a debugging client.  Replies go to the
+ * client that asked, state changes to every client that subscribed to states, voice assistant traffic to the one
+ * client that subscribed to the voice assistant (first come, first served - also like the firmware). */
+#define MAX_CLIENTS 4
+static struct { int fd, states; } clients[MAX_CLIENTS] = { { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 } };     /* lock held */
+static int va_fd = -1;                  /* lock held: voice assistant subscriber */
+static __thread int reply_fd = -1;      /* the client whose request this thread is handling */
 static int tts_expected;                /* lock held: the reply is being fetched or played; RUN_END must not end the pipeline */
 static char tts_url[1024];              /* lock held: reply URL of the running pipeline (known from RUN_START with streaming TTS) */
 static int announcing, media_playing;   /* lock held */
@@ -88,12 +94,19 @@ static void pbf_str(const struct pbf *f, char *out, size_t outsz)
 }
 
 /* lock held */
-static void send_msg(unsigned type, const struct pb *b)
+static void send_to(int fd, unsigned type, const struct pb *b)
 {
     unsigned char h[12]; struct pb hb = { h, 0, sizeof h };
-    if (client < 0) return;
+    if (fd < 0) return;
     pb_raw(&hb, "", 1); pb_varint(&hb, b ? b->n : 0); pb_varint(&hb, type);
-    if (write_all(client, h, hb.n) < 0 || (b && b->n && write_all(client, b->p, b->n) < 0)) shutdown(client, SHUT_RDWR);
+    if (write_all(fd, h, hb.n) < 0 || (b && b->n && write_all(fd, b->p, b->n) < 0)) shutdown(fd, SHUT_RDWR);  /* its reader cleans up */
+}
+
+static void send_msg(unsigned type, const struct pb *b) { send_to(reply_fd, type, b); }          /* answer to a request */
+static void send_va(unsigned type, const struct pb *b) { send_to(va_fd, type, b); }              /* voice assistant traffic */
+static void send_state(unsigned type, const struct pb *b)                                        /* entity state: all subscribers */
+{
+    for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].states) send_to(clients[i].fd, type, b);
 }
 
 #define PB(name, size) unsigned char name##_buf[size]; struct pb name = { name##_buf, 0, size }
@@ -162,11 +175,11 @@ static void send_setting(int key)       /* lock held */
     PB(b, 48);
     pb_fixed32(&b, 1, key);
     switch (key) {
-    case KEY_NOISE: pb_str(&b, 2, noise_names[noise_level]); send_msg(SELECT_STATE, &b); break;
-    case KEY_GAIN:  pb_float(&b, 2, auto_gain); send_msg(NUMBER_STATE, &b); break;
-    case KEY_MULT:  pb_float(&b, 2, vol_mult); send_msg(NUMBER_STATE, &b); break;
-    case KEY_MUTE:  pb_uint(&b, 2, core_muted()); send_msg(SWITCH_STATE, &b); break;
-    case KEY_WAKE_SOUND: pb_uint(&b, 2, core_wake_sound(-1)); send_msg(SWITCH_STATE, &b); break;
+    case KEY_NOISE: pb_str(&b, 2, noise_names[noise_level]); send_state(SELECT_STATE, &b); break;
+    case KEY_GAIN:  pb_float(&b, 2, auto_gain); send_state(NUMBER_STATE, &b); break;
+    case KEY_MULT:  pb_float(&b, 2, vol_mult); send_state(NUMBER_STATE, &b); break;
+    case KEY_MUTE:  pb_uint(&b, 2, core_muted()); send_state(SWITCH_STATE, &b); break;
+    case KEY_WAKE_SOUND: pb_uint(&b, 2, core_wake_sound(-1)); send_state(SWITCH_STATE, &b); break;
     }
 }
 
@@ -179,7 +192,7 @@ static void send_token_state(void)      /* lock held */
     if (!core_sendspin_port) return;
     sendspin_pairing_token(tok, sizeof tok);
     pb_fixed32(&b, 1, KEY_SENDSPIN_TOKEN); pb_str(&b, 2, tok);
-    send_msg(TEXT_SENSOR_STATE, &b);
+    send_state(TEXT_SENSOR_STATE, &b);
 }
 
 static void send_setting_entities(void)
@@ -224,7 +237,7 @@ static void send_mp_state(void)         /* lock held */
 {
     PB(b, 32);
     pb_fixed32(&b, 1, MP_KEY); pb_uint(&b, 2, media_playing ? MP_PLAYING : MP_IDLE); pb_float(&b, 3, core_volume() / 100.0f);
-    send_msg(MEDIA_PLAYER_STATE, &b);
+    send_state(MEDIA_PLAYER_STATE, &b);
 }
 
 static int http_get_host(const char *host, const char *port, const char *path)
@@ -345,7 +358,7 @@ static void *media_thread(void *arg)
     pthread_mutex_lock(&core_lock);
     if (job->announce) {
         if (job->start_conversation && ok) core_restart_after();
-        if (!began) { PB(b, 8); pb_uint(&b, 1, 0); send_msg(VA_ANNOUNCE_FINISHED, &b); announcing = 0; }
+        if (!began) { PB(b, 8); pb_uint(&b, 1, 0); send_va(VA_ANNOUNCE_FINISHED, &b); announcing = 0; }
     }
     if (!began) { media_playing = 0; send_mp_state(); core_pipeline_finish(); atomic_store(&media_busy, 0); }
     pthread_mutex_unlock(&core_lock);
@@ -361,7 +374,7 @@ static void media_start(const char *url0, const char *url1, int announce, int st
     if (!job) return;
     if (atomic_exchange(&media_busy, 1)) {              /* one at a time: refuse, the running one finishes first */
         fprintf(stderr, "media: busy, dropped %s\n", url1);
-        if (announce) { PB(b, 8); pb_uint(&b, 1, 0); send_msg(VA_ANNOUNCE_FINISHED, &b); }
+        if (announce) { PB(b, 8); pb_uint(&b, 1, 0); send_va(VA_ANNOUNCE_FINISHED, &b); }
         free(job); return;
     }
     if (!is_reply && (core_state() == LISTENING || core_state() == THINKING)) core_pipeline_finish();
@@ -383,7 +396,7 @@ static void start(void)
     { PB(as, 24); pb_uint(&as, 1, noise_level); pb_uint(&as, 2, auto_gain); pb_float(&as, 3, vol_mult);
       pb_varint(&b, 4 << 3 | 2); pb_varint(&b, as.n); pb_raw(&b, as.p, as.n); }
     if (core_local_wake) pb_str(&b, 5, "Alexa");
-    send_msg(VA_REQUEST, &b);
+    send_va(VA_REQUEST, &b);
 }
 
 static void audio(const void *pcm, size_t len)
@@ -392,19 +405,19 @@ static void audio(const void *pcm, size_t len)
     for (size_t off = 0; off < len; off += 4096) {
         struct pb b = { buf, 0, sizeof buf };
         pb_bytes(&b, 1, (const char *)pcm + off, len - off < 4096 ? len - off : 4096);
-        send_msg(VA_AUDIO, &b);
+        send_va(VA_AUDIO, &b);
     }
 }
 
 static void stop(void)
 {
-    PB(a, 8); pb_uint(&a, 2, 1); send_msg(VA_AUDIO, &a);        /* end of audio */
-    send_msg(VA_REQUEST, NULL);                                 /* start = false */
+    PB(a, 8); pb_uint(&a, 2, 1); send_va(VA_AUDIO, &a);        /* end of audio */
+    send_va(VA_REQUEST, NULL);                                 /* start = false */
 }
 
 static void played(void)
 {
-    if (announcing) { PB(b, 8); pb_uint(&b, 1, 1); send_msg(VA_ANNOUNCE_FINISHED, &b); announcing = 0; }
+    if (announcing) { PB(b, 8); pb_uint(&b, 1, 1); send_va(VA_ANNOUNCE_FINISHED, &b); announcing = 0; }
     if (media_playing) { media_playing = 0; send_mp_state(); }
     atomic_store(&media_busy, 0);
     tts_expected = 0;
@@ -537,12 +550,18 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case PING_REQ:         send_msg(PING_RESP, NULL); break;
     case DEVICE_INFO_REQ:  send_device_info(); break;
     case LIST_ENTITIES_REQ: send_entities(); break;
-    case SUBSCRIBE_STATES: send_mp_state(); for (int k = KEY_NOISE; k <= KEY_WAKE_SOUND; k++) send_setting(k); send_token_state(); break;
+    case SUBSCRIBE_STATES:
+        for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd == reply_fd) clients[i].states = 1;
+        send_mp_state(); for (int k = KEY_NOISE; k <= KEY_WAKE_SOUND; k++) send_setting(k); send_token_state(); break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
     case SUBSCRIBE_VA: {
         int sub = 0;
         while (pb_next(&p, end, &f)) if (f.field == 1) sub = f.v != 0;
+        if (sub && va_fd >= 0 && va_fd != reply_fd) { fprintf(stderr, "voice assistant: a second client tried to subscribe, ignored\n"); break; }
+        if (!sub && va_fd != reply_fd) break;
         fprintf(stderr, "voice assistant: %s\n", sub ? "subscribed" : "unsubscribed");
+        va_fd = sub ? reply_fd : -1;
+        if (!sub) tts_expected = 0;
         core_link(1, sub);
     } break;
     case VA_RESPONSE:
@@ -568,27 +587,34 @@ static int read_varint(int fd, uint32_t *out)
 
 static void serve(int fd)
 {
-    unsigned char *buf = malloc(1 << 20), pre; uint32_t len, type;
+    unsigned char *buf = malloc(1 << 16), pre; uint32_t len, type, cap = 1 << 16; int slot = -1, n = 0;
     if (!buf) return;
     pthread_mutex_lock(&core_lock);
     { static int loaded; if (!loaded) { loaded = 1; settings_load(); } }
-    client = fd; core_link(1, 0);
+    for (int i = 0; i < MAX_CLIENTS; i++) { if (clients[i].fd < 0 && slot < 0) slot = i; n += clients[i].fd >= 0; }
+    if (slot >= 0) { clients[slot].fd = fd; clients[slot].states = 0; if (!n) core_link(1, 0); }
     pthread_mutex_unlock(&core_lock);
-    fprintf(stderr, "client connected\n");
+    if (slot < 0) { fprintf(stderr, "client refused: %d connections already\n", MAX_CLIENTS); free(buf); return; }
+    fprintf(stderr, "client connected (%d)\n", n + 1);
+    reply_fd = fd;
 
     for (;;) {
         if (read_full(fd, &pre, 1) != 1) break;
         if (pre != 0) { fprintf(stderr, "client wants encryption (preamble %u): remove the key in Home Assistant\n", pre); break; }
         if (read_varint(fd, &len) || read_varint(fd, &type) || len > (1 << 20)) break;
+        if (len > cap) { unsigned char *nb = realloc(buf, len); if (!nb) break; buf = nb; cap = len; }
         if (len && read_full(fd, buf, len) != (ssize_t)len) break;
         if (!handle(type, buf, len)) break;
     }
 
     pthread_mutex_lock(&core_lock);
-    client = -1; tts_expected = 0; core_link(0, 0);
+    clients[slot].fd = -1; clients[slot].states = 0; n = 0;
+    for (int i = 0; i < MAX_CLIENTS; i++) n += clients[i].fd >= 0;
+    if (va_fd == fd) { va_fd = -1; tts_expected = 0; core_link(n > 0, 0); }      /* the voice assistant's client left: pipelines end */
+    else if (!n) core_link(0, 0);
     pthread_mutex_unlock(&core_lock);
     free(buf);
-    fprintf(stderr, "client disconnected\n");
+    fprintf(stderr, "client disconnected (%d left)\n", n);
 }
 
-const struct proto proto_esphome = { "esphome", 26053, serve, start, audio, stop, played, volume_changed, mute_changed, print_mdns };
+const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, played, volume_changed, mute_changed, print_mdns };

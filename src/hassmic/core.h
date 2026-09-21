@@ -11,6 +11,7 @@ enum state { IDLE, LISTENING, THINKING, SPEAKING };
 struct proto {
     const char *id;
     int port;                                   /* default; the stock firewall admits inbound TCP 16384-32767 only */
+    int threaded;                               /* serve() may run for several clients at once, one thread each */
     void (*serve)(int fd);                      /* one client until it disconnects; no lock held */
     /* all below: core_lock held */
     void (*start)(void);                        /* ask the server to run a pipeline; mic audio follows */

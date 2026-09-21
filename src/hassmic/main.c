@@ -392,6 +392,8 @@ static void *capture_thread(void *arg)
     return NULL;
 }
 
+static void *serve_thread(void *arg) { int c = (int)(long)arg; proto->serve(c); close(c); return NULL; }
+
 static void on_usr1(int s) { (void)s; atomic_store(&trigger_pending, 1); }
 static void on_usr2(int s) { (void)s; atomic_store(&button_pending, 1); }
 
@@ -439,14 +441,16 @@ int main(int argc, char **argv)
     while (!atomic_load(&quit)) {
         int c = net_accept(ls);
         if (c < 0) break;
-        /* A link that went away must not hold the single client slot (or core_lock, in a blocked write) for ever:
+        /* A link that went away must not hold a client slot (or core_lock, in a blocked write) for ever:
          * writes give up after 5 s, keepalive notices a dead peer within ~25 s.  Both make serve() return. */
         { struct timeval tv = { 5, 0 }; int on = 1, idle = 10, intvl = 5, cnt = 3;
           setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv); setsockopt(c, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
           setsockopt(c, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof idle); setsockopt(c, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof intvl);
           setsockopt(c, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof cnt); }
-        proto->serve(c);
-        close(c);
+        if (proto->threaded) {
+            pthread_t t;
+            if (pthread_create(&t, NULL, serve_thread, (void *)(long)c)) close(c); else pthread_detach(t);
+        } else { proto->serve(c); close(c); }
     }
     cap_close();
     if (core_local_wake) wake_close();
