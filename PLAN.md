@@ -197,6 +197,14 @@ Run in this order. Each step says what it proves.
       (so nothing was ever published, also not for Wyoming). `magiskpolicy` cannot parse a rule for a type with a hyphen →
       `boot.sh`/`run.sh` stop the init service and start avahi themselves in the `su` domain. Verified: answers queries from the PC.
       Host name is `linux.local` (system host name is `localhost`); HA connects by IP and follows the MAC in the TXT record
+- [~] Push updates over Wi-Fi (`scripts/ota-push.sh <host>`), so TWRP is needed once per device only.
+      `/system/hassmic/boot.sh` is now a stable bootstrap: runs `/data/local/hassmic/ota/current/main.sh` (root-owned, installed from a
+      signed bundle) or the factory `main.sh`; an update that fails to start 3 times is skipped (`ota/tries`, reset after hassmic
+      ran 60 s). Bundles: `src/tools/otatool.c` (pack + EdDSA sign on the PC with `secrets/update.key`; verify + unpack on the Echo as
+      root with `/system/hassmic/update.pub`). hassmic (puffin) only receives on port 28929, pre-checks the signature and leaves a
+      request; `ota_watch` in the firewall service re-verifies, installs, restarts the satellite service and re-execs itself.
+      `/data/local/hassmic` is now root 755 (was 777), `state/` puffin 700. `tests/ota_push_test.sh`: good / foreign key / tampered /
+      garbage. Missing: one TWRP install of the bootstrap, then a real push; rollback test on the device
 - [x] ESPHome API serves up to 4 clients at once (one thread each): replies to the asker, entity states to every state subscriber,
       voice assistant traffic to its one subscriber (first come, first served, like ESPHome firmware). Test with two `aioesphomeapi` clients
 - [x] Log: `boot.log` rotated by `boot.sh` at 1 MB (copy + truncate, because several long-lived processes append to it; one old

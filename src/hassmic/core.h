@@ -4,7 +4,10 @@
 #include <pthread.h>
 #include <stddef.h>
 
-#define VERSION "0.2.0"
+#define VERSION "0.3.0"
+#ifndef BUILD
+#define BUILD "dev"            /* the Makefile passes git describe */
+#endif
 
 enum state { IDLE, LISTENING, THINKING, SPEAKING };
 

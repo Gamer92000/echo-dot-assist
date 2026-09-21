@@ -24,7 +24,7 @@ Status and open items: [PLAN.md](PLAN.md). Reverse-engineering notes: [docs/](do
 | `src/include/` | C headers for the reversed `libmixerAPI.so` and `libpryon.so` |
 | `scripts/` | PC side: `deploy.sh`, `probe.sh`, `capture-test.sh`, `wifi-join.sh`, `install-system.sh` |
 | `scripts/device/` | run on the Echo: `alexa-off.sh`, `alexa-on.sh`, `lockdown.sh`, `wifi-join.sh`, `run.sh` |
-| `scripts/system/` | boot integration: `hassmic.rc`, `boot.sh`, `sepolicy.rules` |
+| `scripts/system/` | boot integration: `hassmic.rc`, `boot.sh` (stable bootstrap), `main.sh` (updatable), `sepolicy.rules` |
 | `tools/` | OTA payload dumper, Thumb disassembly helpers, `qrun.sh` (device binaries under qemu-arm) |
 | `docs/sendspin-digest.md` | what Music Assistant's Sendspin library really speaks, and where it differs from the spec |
 | `tests/` | `fake_ma_sendspin.py` (reference `aiosendspin` server), `fake_ha_esphome.py` (reference `aioesphomeapi` client) and `fake_ha.py` (Wyoming) against a host or qemu build |
@@ -52,7 +52,7 @@ python3 tools/payload_dump.py firmware/payload.bin firmware/images     # system.
 debugfs -R "rdump / firmware/rootfs" firmware/images/system.img        # no root needed
 ```
 
-Secrets live in `secrets/` (ignored): `secrets/wifi.conf`, line 1 SSID, line 2 passphrase.
+Secrets live in `secrets/` (ignored): `secrets/wifi.conf` (line 1 SSID, line 2 passphrase), `secrets/update.key` (signs push updates).
 
 ## Build
 
@@ -75,6 +75,10 @@ make host       # PC build + qemu build for tests (needs libopus on the PC)
    no encryption key). With `-P wyoming`: Wyoming integration, port 16700.
 5. Make it permanent: `scripts/install-system.sh "<name>"`. Goes through TWRP, adds `/system/hassmic/`,
    `/system/etc/init/hassmic.rc` and three allow rules to `/sepolicy` (stock copy kept as `/sepolicy.pre-hassmic`).
+
+6. From then on update over Wi-Fi: `scripts/ota-push.sh <echo-ip>` builds, signs with `secrets/update.key` (created by the
+   installer; back it up) and pushes. The Echo installs only what verifies against the public key on its system partition,
+   and falls back to the factory copy if an update does not start.
 
 Undo: delete `/data/local/hassmic/hassmic.conf` (boot script then does nothing), or `scripts/install-system.sh --uninstall`,
 or reflash from TWRP (hold Volume Up while powering on).

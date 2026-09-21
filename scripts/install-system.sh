@@ -3,6 +3,8 @@
 # Needs: boot-root already flashed (permissive su domain), device reachable over adb.
 # Touches: /system/hassmic/ (new), /system/etc/init/hassmic.rc (new), /sepolicy (3 allow rules added; old copy kept as
 # /sepolicy.pre-hassmic), /data/local/hassmic/hassmic.conf (new).
+# Later versions go over Wi-Fi with scripts/ota-push.sh; this script is only needed once per device (and again if
+# secrets/update.key is lost, or the bootstrap / verification tool themselves change).
 # Undo: scripts/install-system.sh --uninstall, or delete /data/local/hassmic/hassmic.conf (boot.sh then does nothing).
 #   install-system.sh [name]                 e.g. install-system.sh "Echo Dot"
 #   install-system.sh --uninstall
@@ -13,7 +15,10 @@ t() { adb shell "$@"; }
 
 if [ "$1" != --uninstall ]; then
     NAME=${1:-Echo Dot}
-    make -s all
+    make -s all build/otatool-host
+    # Signing key for push updates.  The public half goes onto the read-only system partition and is what the device trusts.
+    mkdir -p secrets
+    [ -f secrets/update.key ] || { build/otatool-host keygen secrets/update.key secrets/update.pub; echo "new update signing key: secrets/update.key (keep it, back it up)"; }
     # Backup of the policy as boot-root left it, and the config boot.sh reads.  Both need the running OS.
     if [ "$(adb get-state 2>/dev/null)" = device ]; then
         mkdir -p device-logs/backup
@@ -22,7 +27,7 @@ if [ "$1" != --uninstall ]; then
         adb pull $BASEF device-logs/backup/sepolicy.boot-root >/dev/null
         printf 'NAME="%s"\nARGS=""\n' "$NAME" > build/hassmic.conf
         t "mkdir -p /data/local/hassmic"; adb push build/hassmic.conf /data/local/hassmic/hassmic.conf >/dev/null
-        t "rm -f /data/local/hassmic/hassmic"      # boot.sh prefers a binary here (scripts/deploy.sh test builds); the fresh install wins
+        t "rm -rf /data/local/hassmic/ota; rm -f /data/local/hassmic/hassmic"      # boot.sh prefers a binary here (scripts/deploy.sh test builds); the fresh install wins
         # Patch the policy here, not in TWRP: magiskpolicy is dynamically linked and aborts in the recovery environment.
         adb push boot-root/patch/magiskpolicy32 /data/local/tmp/mp >/dev/null
         adb push scripts/system/sepolicy.rules /data/local/tmp/ >/dev/null
@@ -49,6 +54,7 @@ echo "system_$SLOT mounted"
 if [ "$1" = --uninstall ]; then
     t "[ -f $MNT/sepolicy.pre-hassmic ] && cat $MNT/sepolicy.pre-hassmic > $MNT/sepolicy && rm $MNT/sepolicy.pre-hassmic
        rm -rf $MNT/system/hassmic $MNT/system/etc/init/hassmic.rc; sync; umount $MNT"
+    echo "note: pushed updates in /data/local/hassmic/ota are no longer started; remove them with adb once the OS is up"
     echo "removed; rebooting"; adb reboot; exit 0
 fi
 
@@ -70,10 +76,10 @@ echo "sepolicy patched"
 
 t "rm -rf $MNT/system/hassmic; mkdir -p $MNT/system/hassmic"
 adb push build/hassmic build/runas build/mixcap build/mixplay build/pryon_test \
-         scripts/system/boot.sh scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh \
+         build/otatool secrets/update.pub scripts/system/boot.sh scripts/system/main.sh scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh \
          $MNT/system/hassmic/ >/dev/null
 adb push scripts/system/hassmic.rc $MNT/system/etc/init/hassmic.rc >/dev/null
-t "chown -R 0:2000 $MNT/system/hassmic; chmod 755 $MNT/system/hassmic $MNT/system/hassmic/*
+t "chown -R 0:2000 $MNT/system/hassmic; chmod 755 $MNT/system/hassmic $MNT/system/hassmic/*; chmod 644 $MNT/system/hassmic/update.pub
    chown 0:0 $MNT/system/etc/init/hassmic.rc; chmod 644 $MNT/system/etc/init/hassmic.rc
    chcon -R u:object_r:system_file:s0 $MNT/system/hassmic $MNT/system/etc/init/hassmic.rc $MNT/sepolicy.pre-hassmic
    ls -lZ $MNT/system/hassmic $MNT/system/etc/init/hassmic.rc $MNT/sepolicy $MNT/system/etc/init/fosflags.rc

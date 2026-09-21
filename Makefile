@@ -2,10 +2,11 @@
 NDK     ?= $(CURDIR)/toolchain/android-ndk-r21e
 CC      := $(NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang
 STOCK   := $(CURDIR)/firmware/rootfs/system/lib
-CFLAGS  := -O2 -Wall -Wextra -fPIE -Isrc/include
+BUILD   := $(shell git describe --always --dirty 2>/dev/null || echo nogit)
+CFLAGS  := -O2 -Wall -Wextra -fPIE -Isrc/include -DBUILD='"$(BUILD)"'
 LDFLAGS := -pie -fuse-ld=lld -Wl,--allow-shlib-undefined -Wl,--unresolved-symbols=ignore-in-shared-libs
 
-BIN := build/mixcap build/mixplay build/pryon_test build/hassmic build/runas build/latency
+BIN := build/mixcap build/mixplay build/pryon_test build/hassmic build/runas build/latency build/otatool
 
 all: $(BIN)
 
@@ -17,6 +18,15 @@ build/latency: src/tools/latency.c src/include/mixer_api.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) -lm $(STOCK)/libmixerAPI.so
 
+# update bundles: the same source verifies + unpacks on the Echo and packs + signs on the PC
+build/otatool: src/tools/otatool.c src/third_party/monocypher.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) $^ -o $@ -pie -fuse-ld=lld
+
+build/otatool-host: src/tools/otatool.c src/third_party/monocypher.c
+	@mkdir -p build
+	cc -O2 -Wall $^ -o $@
+
 build/runas: src/tools/runas.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) $< -o $@ -pie -fuse-ld=lld
@@ -26,7 +36,7 @@ build/pryon_test: src/tools/pryon_test.c src/include/pryon_api.h
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) $(STOCK)/libpryon.so
 
 HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c \
-           src/hassmic/sendspin.c src/hassmic/ws.c src/hassmic/noise.c src/hassmic/hash.c src/third_party/monocypher.c
+           src/hassmic/sendspin.c src/hassmic/ota.c src/hassmic/ws.c src/hassmic/noise.c src/hassmic/hash.c src/third_party/monocypher.c
 HASSMIC_H := $(wildcard src/hassmic/*.h src/include/*.h)
 
 build/hassmic: $(HASSMIC) src/hassmic/audio_mixer.c src/hassmic/wake_pryon.c $(HASSMIC_H)
@@ -36,14 +46,14 @@ build/hassmic: $(HASSMIC) src/hassmic/audio_mixer.c src/hassmic/wake_pryon.c $(H
 # PC build for protocol tests: file audio backend, no wake word (SIGUSR1 triggers).
 build/hassmic-host: $(HASSMIC) src/hassmic/audio_file.c src/hassmic/wake_none.c $(HASSMIC_H)
 	@mkdir -p build
-	cc -O2 -Wall -Wextra -Isrc/include -Isrc/hassmic $(filter %.c,$^) -o $@ -lpthread -lm -lopus
+	cc -O2 -Wall -Wextra -DBUILD='"$(BUILD)"' -Isrc/include -Isrc/hassmic $(filter %.c,$^) -o $@ -lpthread -lm -lopus
 
 # ARM build with file audio but the real wake word, for running under qemu-arm (tools/qrun.sh).
 build/hassmic-qemu: $(HASSMIC) src/hassmic/audio_file.c src/hassmic/wake_pryon.c $(HASSMIC_H)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Isrc/hassmic $(filter %.c,$^) -o $@ $(LDFLAGS) -lm $(STOCK)/libpryon.so $(STOCK)/libopus.so
 
-host: build/hassmic-host build/hassmic-qemu
+host: build/hassmic-host build/hassmic-qemu build/otatool-host
 
 # Building blocks of the Sendspin client, checked against reference implementations (aiohttp, python noiseprotocol).
 UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/noise.c src/third_party/monocypher.c

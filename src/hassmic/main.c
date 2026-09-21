@@ -5,6 +5,7 @@
  * runs the stock "Alexa" wake word locally, and speaks the ESPHome native API or Wyoming to Home Assistant.
  *
  *   hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m pryon.manifest] [-b input-device] [-L] [-E] [-V] [-S]
+ *     -o port  push update port (default 28929, 0 = off; see scripts/ota-push.sh)
  *     -z port  Sendspin player port (default 28928, 0 = off)
  *     -T       print the Sendspin pairing token (paste it into Music Assistant to pair) and exit
  *     -L no LED ring   -E no earcon on wake   -V leave the volume buttons alone   -S print the avahi service file and exit
@@ -29,6 +30,7 @@
 #include "netio.h"
 #include "wake.h"
 #include "core.h"
+#include "ota.h"
 #include "sendspin.h"
 
 #define DEFAULT_MANIFEST "/system/local/models/keyword/en-US/ALEXA/pryon.manifest"
@@ -38,6 +40,7 @@
 static const char *const state_names[] = { "idle", "listening", "thinking", "speaking" };
 
 const char *core_name = "Echo Dot";
+static int ota_port = 28929;                        /* 0 = no push updates */
 int core_local_wake = 1, core_port, core_sendspin_port = 28928;       /* 0 = Sendspin off */
 static const struct proto *proto = &proto_esphome;
 static int use_led = 1, use_earcon = 1, use_volume = 1;
@@ -400,7 +403,7 @@ static void on_usr2(int s) { (void)s; atomic_store(&button_pending, 1); }
 int main(int argc, char **argv)
 {
     const char *manifest = DEFAULT_MANIFEST, *input = "/dev/input/event3"; int port = 0, print_mdns = 0, o;
-    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:LEVST")) != -1) switch (o) {
+    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:LEVST")) != -1) switch (o) {
         case 'P': proto = !strcmp(optarg, "wyoming") ? &proto_wyoming : &proto_esphome; break;
         case 'p': port = atoi(optarg); break;
         case 'n': core_name = optarg; break;
@@ -408,6 +411,7 @@ int main(int argc, char **argv)
         case 'm': manifest = optarg; break;
         case 'b': input = optarg; break;
         case 'z': core_sendspin_port = atoi(optarg); break;
+        case 'o': ota_port = atoi(optarg); break;
         case 'L': use_led = 0; break;
         case 'E': use_earcon = 0; break;
         case 'V': use_volume = 0; break;
@@ -434,10 +438,11 @@ int main(int argc, char **argv)
     else if (buttons_muted()) on_mute(1);
 
     if (core_sendspin_port) sendspin_start(core_sendspin_port);
+    if (ota_port) ota_start(ota_port);
 
     int ls = net_listen(core_port);
     if (ls < 0) { perror("listen"); return 1; }
-    fprintf(stderr, "hassmic " VERSION " %s on %d, wake=%s\n", proto->id, core_port, core_local_wake ? "local" : "remote");
+    fprintf(stderr, "hassmic " VERSION " (" BUILD ") %s on %d, wake=%s\n", proto->id, core_port, core_local_wake ? "local" : "remote");
     while (!atomic_load(&quit)) {
         int c = net_accept(ls);
         if (c < 0) break;
