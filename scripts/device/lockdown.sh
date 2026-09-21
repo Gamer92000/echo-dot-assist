@@ -8,27 +8,27 @@
 LAN=${1:?usage: lockdown.sh <lan-cidr> [watch]}
 
 apply() {
-    iptables -N hassmic_out 2>/dev/null
-    iptables -F hassmic_out
-    iptables -A hassmic_out -o lo -j RETURN
-    iptables -A hassmic_out -d $LAN -j RETURN
-    iptables -A hassmic_out -d 224.0.0.0/4 -j RETURN          # mDNS
-    iptables -A hassmic_out -d 255.255.255.255 -j RETURN      # DHCP
-    iptables -A hassmic_out -j DROP
-    while iptables -D OUTPUT -j hassmic_out 2>/dev/null; do :; done
-    iptables -I OUTPUT 1 -j hassmic_out
+    iptables -w -N hassmic_out 2>/dev/null
+    iptables -w -F hassmic_out
+    iptables -w -A hassmic_out -o lo -j RETURN
+    iptables -w -A hassmic_out -d $LAN -j RETURN
+    iptables -w -A hassmic_out -d 224.0.0.0/4 -j RETURN          # mDNS
+    iptables -w -A hassmic_out -d 255.255.255.255 -j RETURN      # DHCP
+    iptables -w -A hassmic_out -j DROP
+    while iptables -w -D OUTPUT -j hassmic_out 2>/dev/null; do :; done
+    iptables -w -I OUTPUT 1 -j hassmic_out
     # IPv6: link-local only
-    ip6tables -N hassmic_out 2>/dev/null
-    ip6tables -F hassmic_out
-    ip6tables -A hassmic_out -o lo -j RETURN
-    ip6tables -A hassmic_out -d fe80::/10 -j RETURN
-    ip6tables -A hassmic_out -d ff02::/16 -j RETURN
-    ip6tables -A hassmic_out -j DROP
-    while ip6tables -D OUTPUT -j hassmic_out 2>/dev/null; do :; done
-    ip6tables -I OUTPUT 1 -j hassmic_out
+    ip6tables -w -N hassmic_out 2>/dev/null
+    ip6tables -w -F hassmic_out
+    ip6tables -w -A hassmic_out -o lo -j RETURN
+    ip6tables -w -A hassmic_out -d fe80::/10 -j RETURN
+    ip6tables -w -A hassmic_out -d ff02::/16 -j RETURN
+    ip6tables -w -A hassmic_out -j DROP
+    while ip6tables -w -D OUTPUT -j hassmic_out 2>/dev/null; do :; done
+    ip6tables -w -I OUTPUT 1 -j hassmic_out
 }
 
-first() { iptables -S OUTPUT 2>/dev/null | grep -m1 '^-A' | grep -q hassmic_out; }
+first() { iptables -w -S OUTPUT 2>/dev/null | grep -m1 '^-A' | grep -q hassmic_out; }
 
 apply
 # Everything that phones home.  mixer, shmd, ledcontroller, acebuttond, netmgrd, wifisvc stay.
@@ -36,6 +36,6 @@ for s in puffin puffinmrmd dacd smarthomed otad ace_otad update_engine assetmgrd
          minerva_service usagestat_protod aceusagestatd trackerd provisionerd adepd sntpd UdssCampSvc fmonitor \
          perfmonitord ace_messaging ahe shs; do stop $s 2>/dev/null; done
 setprop com.amazon.puffin.PUFFIN_START 0
-echo "egress limited to $LAN"; iptables -S hassmic_out
+echo "egress limited to $LAN"; iptables -w -S hassmic_out
 
 [ "$2" = watch ] && while sleep 5; do first || { apply; echo "lockdown re-applied"; }; done

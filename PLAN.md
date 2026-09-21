@@ -143,7 +143,9 @@ Run in this order. Each step says what it proves.
       Mute: button = hardware latch, reported by the `gpio-privacy` input device (`/dev/input/event1`, not the keypad); software can
       set the latch (`enable` <- 1) but not clear it (write 0 rejected while set, second 1 does not toggle; DT has one output, one
       input) → HA switch = soft mute, shows latch OR soft, button unmute clears both.
-      Missing: announcement / timer / play_media with real HA (needs an http URL inside the LAN CIDR), permanent install
+      **Installed permanently 2026-09-21**, verified after reboot: ESPHome on 26053 from `/system/hassmic`, own avahi in `su` domain answers
+      mDNS queries, HA reconnected, settings file read, no test binary left in `/data`.
+      Missing: announcement / timer / play_media with real HA (needs an http URL inside the LAN CIDR)
 - [x] mDNS: init's `avahi-daemon` runs in SELinux domain `avahi-daemon`, which is denied read on `/data/misc/avahi/services`
       (so nothing was ever published, also not for Wyoming). `magiskpolicy` cannot parse a rule for a type with a hyphen →
       `boot.sh`/`run.sh` stop the init service and start avahi themselves in the `su` domain. Verified: answers queries from the PC.
