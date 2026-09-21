@@ -6,6 +6,11 @@ BUILD   := $(shell git describe --always --dirty 2>/dev/null || echo nogit)
 CFLAGS  := -O2 -Wall -Wextra -fPIE -Isrc/include -DBUILD='"$(BUILD)"'
 LDFLAGS := -pie -fuse-ld=lld -Wl,--allow-shlib-undefined -Wl,--unresolved-symbols=ignore-in-shared-libs
 
+# The build id is compiled in; make must notice when it changes (a new commit), not only when sources change.
+build/.build-id: FORCE
+	@mkdir -p build; echo '$(BUILD)' | cmp -s - $@ || echo '$(BUILD)' > $@
+FORCE:
+
 BIN := build/mixcap build/mixplay build/pryon_test build/hassmic build/runas build/latency build/otatool
 
 all: $(BIN)
@@ -37,7 +42,7 @@ build/pryon_test: src/tools/pryon_test.c src/include/pryon_api.h
 
 HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c \
            src/hassmic/sendspin.c src/hassmic/ota.c src/hassmic/ws.c src/hassmic/noise.c src/hassmic/hash.c src/third_party/monocypher.c
-HASSMIC_H := $(wildcard src/hassmic/*.h src/include/*.h)
+HASSMIC_H := $(wildcard src/hassmic/*.h src/include/*.h) build/.build-id
 
 build/hassmic: $(HASSMIC) src/hassmic/audio_mixer.c src/hassmic/wake_pryon.c $(HASSMIC_H)
 	@mkdir -p build
@@ -68,4 +73,4 @@ unit:
 clean:
 	rm -rf build
 
-.PHONY: all host unit clean
+.PHONY: all host unit clean FORCE

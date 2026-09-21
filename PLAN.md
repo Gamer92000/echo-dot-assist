@@ -204,7 +204,10 @@ Run in this order. Each step says what it proves.
       root with `/system/hassmic/update.pub`). hassmic (puffin) only receives on port 28929, pre-checks the signature and leaves a
       request; `ota_watch` in the firewall service re-verifies, installs, restarts the satellite service and re-execs itself.
       `/data/local/hassmic` is now root 755 (was 777), `state/` puffin 700. `tests/ota_push_test.sh`: good / foreign key / tampered /
-      garbage. Missing: one TWRP install of the bootstrap, then a real push; rollback test on the device
+      garbage. **On the device 2026-09-21:** bootstrap installed, two real pushes over Wi-Fi (`OK 0.3.0+…`, services back in ~10 s,
+      previous version kept). The first push found two bugs, both fixed: unpacked directory was 0700 (root umask 077) so the
+      daemon's user could not start hassmic, and the fallback did not cover a daemon crash loop (now: self-check as `puffin`
+      before switching, and five quick exits → factory copy at once). Missing: rollback test with a deliberately broken bundle
 - [x] ESPHome API serves up to 4 clients at once (one thread each): replies to the asker, entity states to every state subscriber,
       voice assistant traffic to its one subscriber (first come, first served, like ESPHome firmware). Test with two `aioesphomeapi` clients
 - [x] Log: `boot.log` rotated by `boot.sh` at 1 MB (copy + truncate, because several long-lived processes append to it; one old
