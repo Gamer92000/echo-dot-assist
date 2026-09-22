@@ -376,15 +376,18 @@ static long long mono_ms(void)
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-static int read_volume(void)
+static int read_prop_volume(const char *prop, int fallback)
 {
-    char line[128]; int v = 40, x;
-    FILE *f = popen("/system/bin/audio_manager_get_prop MainVolume 2>/dev/null", "r");
+    char cmd[96], line[128]; int v = fallback, x;
+    snprintf(cmd, sizeof cmd, "/system/bin/audio_manager_get_prop %s 2>/dev/null", prop);
+    FILE *f = popen(cmd, "r");
     if (!f) return v;
     while (fgets(line, sizeof line, f)) if (sscanf(line, "%d", &x) == 1 && x >= 0 && x <= 100) v = x;
     pclose(f);
     return v;
 }
+
+static int read_volume(void) { return read_prop_volume("MainVolume", 40); }
 
 /* The mixer keeps one volume per stream type.  MainVolume is what the stock volume keys move and covers the Music and Earcon
  * streams; the TTS stream, which carries the assistant's replies, follows TTSVolume alone.  One knob for the user: both. */
@@ -418,6 +421,31 @@ void core_set_volume(int v)
     if (core_sendspin_port) sendspin_volume_changed(volume);
 }
 
+/* Anything may move MainVolume behind our back (audio_manager_set_prop, a stock daemon, the stock keys when -V), and
+ * TTSVolume does not follow by itself: replies would then play at the old volume.  Poll both every 2 s: a changed
+ * MainVolume is the user's wish and is adopted (Home Assistant and Music Assistant are told, no LED), a strayed TTSVolume
+ * is pulled back in line. */
+static void volume_sync(void)
+{
+    int main_v, tts_v;
+    pthread_mutex_lock(&core_lock);
+    int cur = core_volume();
+    pthread_mutex_unlock(&core_lock);
+    main_v = read_prop_volume("MainVolume", cur);
+    tts_v = read_prop_volume("TTSVolume", cur);
+    pthread_mutex_lock(&core_lock);
+    if (volume == cur) {                                            /* nobody set it meanwhile */
+        if (main_v != cur) {
+            volume = main_v;
+            fprintf(stderr, "volume: %d (changed outside)\n", volume);
+            if (connected && proto->volume_changed) proto->volume_changed(volume);
+            if (core_sendspin_port) sendspin_volume_changed(volume);
+        }
+        if (tts_v != volume) set_prop_volume("TTSVolume", volume);
+    }
+    pthread_mutex_unlock(&core_lock);
+}
+
 static void on_volume(int dir)
 {
     if (!use_volume) return;
@@ -428,8 +456,10 @@ static void on_volume(int dir)
 
 static void *volume_led_thread(void *arg)
 {
+    int tick = 0;
     (void)arg;
     while (!atomic_load(&quit)) {
+        if (++tick % 10 == 0) volume_sync();
         long long at = atomic_load(&vol_clear_at);
         if (at && mono_ms() >= at) {
             pthread_mutex_lock(&core_lock);

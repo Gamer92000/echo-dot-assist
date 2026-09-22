@@ -101,7 +101,11 @@ Run in this order. Each step says what it proves.
       Open: reproducible low-frequency thumps (80–120 Hz, ~100 ms, up to clipping) in `micAsr` at playback start, ~3–4 s in, and
       ~1.5 s after playback ends. A `Silent` keep-alive stream does not change them → not HAL/amp standby. Need to know if the
       thump is audible from the speaker (acoustic) or only in the capture (AEC/reference glitch). Retest with speech-like TTS audio.
-      User listened (2026-09-21): **no audible thump** → capture-side only (AEC/reference path or our ring-buffer read). Check `micRaw` next
+      User listened (2026-09-21): **no audible thump** → capture-side only (AEC/reference path or our ring-buffer read). Check `micRaw` next.
+      2026-09-22 attempt over Wi-Fi: `micRaw` is 16 kHz mono like `micAsr` and can be read beside hassmic, but the Echo hung on an
+      external speaker through the 3.5 mm jack (internal speaker silent, mic peak 330 at volume 80): no thump can show, not decided.
+      Also seen: `mixcap` right after killing the `micAsr` client gets no data on either stream (`status=110`, getters -1 on
+      `micRaw`); the mixer stops the mic path when its client dies, unlike after a clean start. Retry with the internal speaker
 - [x] `pryon_test` on device: canned file Accept (type=2) at 1.39 s; live `mixcap | pryon_test` 6/6 spoken "Alexa" accepted, no near-misses
 - [ ] `alexa-on.sh` restores Alexa without reboot
 
@@ -139,7 +143,9 @@ Run in this order. Each step says what it proves.
         `/data/davs`): from the `su` domain its AIPC service is unreachable and the Alexa app shows the device as unavailable
 - [x] Assistant replies ignored the volume: the mixer keeps one volume per stream type, the `TTS` stream follows `TTSVolume`, and
       only `MainVolume` was ever set. `core_set_volume()` now sets both, and `TTSVolume` is synced once at start. Pushed
-      2026-09-22, user: works. Untouched: `AlarmVolume`, `NotificationVolume`, `SystemVolume`
+      2026-09-22, user: works. Untouched: `AlarmVolume`, `NotificationVolume`, `SystemVolume`.
+      Then found `MainVolume` 80 / `TTSVolume` 50 on the device (moved from outside): hassmic now polls both every 2 s, adopts an
+      outside `MainVolume` change (reported to HA and MA) and pulls `TTSVolume` back in line. Verified 2026-09-22 over adb
 - [x] "Stop": Amazon's models report `STOP` only in the `awake` state of `op.cfg.json` (175 frames after the wake word; same in
       the firmware's ALEXA model and the DAVS sets), so it is "<wake word>, stop". hassmic treated every keyword as the wake
       word and reset the engine (= back to `sleep`) when a reply was cut: "stop" was lost, or opened a prompt after an alarm.
