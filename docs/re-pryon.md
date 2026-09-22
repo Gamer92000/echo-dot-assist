@@ -1,6 +1,7 @@
 # libpryon.so — wake word API notes
 
-Firmware NS65741, `firmware/rootfs/system/lib/libpryon.so` (19.8 MB, Thumb-2). Static analysis only; nothing here has been executed.
+Firmware NS65741, `firmware/rootfs/system/lib/libpryon.so` (19.8 MB, Thumb-2). Static analysis, then confirmed by running the
+library under qemu-arm (`tools/qrun.sh`, `build/pryon_test`) and on the device inside hassmic; anything not confirmed says so.
 Header: [`src/include/pryon_api.h`](../src/include/pryon_api.h).
 
 Tools used: `tools/fn.sh` (dump one function from an `.asm`), `tools/fnstrings.py` (resolve pc-relative strings in an address range), `tools/pcstr.py`.
@@ -75,11 +76,17 @@ PuffinApp normally prefers newer models downloaded to `/data/.../speech/wakeword
 - Imports `dlopen`, `getenv`, `__system_property_get`, `socket`/`connect`, `sched_setaffinity`. Names seen for `dlopen`: `libtvm_modelops*.so`, `libffi3.so` — not needed for the ONNX model. Which env vars and properties are read was not traced.
 - libpryon uses `libc++_shared` (NDK `std::__ndk1`) while the rest of the system uses platform `libc++`. A plain C caller avoids any conflict.
 
-## Open questions
+## Open questions, and what running it showed
 
-1. `detectionType` values: which is accept, which is near miss. Test tool should print every callback.
-2. Begin/end order of the two sample indices.
-3. Preferred chunk size. `wwm::PryonDecoder::frameSize()` exists but was not read; 10 ms (160 samples) matches the front-end shift and is a safe start.
-4. Whether `PryonModelSet_New` verifies `checksum.txt` against the files (strings mention `wwModelChecksum`, `gRootChecksum`). Relevant only if the model directory is modified.
-5. Whether anything in libpryon misbehaves without Amazon system properties or under `qemu-arm`.
-6. `PryonDecoder_BacklogWait` timeout unit.
+1. `detectionType`: 2 = Accept, 0 = NearMiss (the library's own KWS log line names them: `classifier_score=…,active_threshold=…,
+   detection_type=Accept`). 1 and 3 never observed; `libAmazonKWD` also acts on 3.
+2. `beginSampleIndex` (+0x08) < `endSampleIndex` (+0x40), both in the pushed-sample index space; a spoken "Echo" spans ~0.55 s.
+3. Chunk size: anything works. `pryon_test` pushes 800 samples (50 ms), hassmic pushes whatever `MixerGetBufRec` returns. The decoder
+   queues internally and drops audio once the backlog passes ~7 s (`max_audio_backlog.backlog_reset_threshold_msec = 2000` in the
+   printed config is the reset threshold).
+4. `checksum.txt`: not tested; the DAVS model sets are installed unmodified and load. Still unknown whether an edited `kw.cfg.json`
+   would be refused.
+5. Runs under `qemu-arm` without any Amazon properties (only bionic complains about `ANDROID_DATA`/`ANDROID_ROOT` for tzdata). One
+   unexplained refusal of `echo-en-US` ("insufficient permissions" on `ntt.cfg.json`) on 2026-09-21 did not come back.
+6. `PryonDecoder_BacklogWait` timeout unit: still unknown. Stock passes -1; it returns before the queue is drained, so hassmic does
+   not rely on it.

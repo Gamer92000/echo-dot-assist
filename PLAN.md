@@ -27,7 +27,8 @@ Legend: `[x]` done, `[~]` partly done (note says what is missing), `[ ]` open. *
 - [x] C header `src/include/mixer_api.h`
 - [x] `mixer` single-client logic and mic gating. Known: log string proves eviction of the previous `micAsr` client; — on device: `AllowMic` is 1 without PuffinApp, `micRaw` can be captured beside `micAsr`
       mic mute comes from LIPC `com.doppler.buttond/muteState`. `AllowMic` is 1 by default without PuffinApp (Phase 3)
-- [~] `mixer` playback stream types: ducking and volume group of `TTS` vs `Earcon` vs `Music` → easier to observe on device — seen on device: `TTS`, `Earcon` and `Music` streams mix; hassmic ducks music itself. Mixer-side ducking rules still unknown
+- [x] `mixer` playback stream types: `TTS`, `Earcon` and `Music` streams mix; volume per stream type (`MainVolume` for Music and Earcon,
+      `TTSVolume` for TTS). hassmic ducks music itself, so the mixer's own ducking rules were never needed and stay unread
 - [x] `libpryon.so` prototypes, structs, call sequence (`docs/re-pryon.md`)
 - [x] C header `src/include/pryon_api.h`; result fields and `detectionType` values verified by running the library
 - [x] LED ring: `ledctrl` CLI, pattern names, state mapping
@@ -81,7 +82,8 @@ dozen daemons phone home within seconds.
       posting to `api.amazon.com`, plus DHCP hands out 8.8.8.8 as second DNS. Not covered: the boot window before `lockdown.sh`
       (router-side only)
 - [x] **(device)** Persistent: rules in `/system/bin/debug_firewall.sh` (stock `firewall.sh` runs it after its own flush) plus init service for `lockdown.sh watch` — solved differently: init service `hassmic_fw` runs `lockdown.sh watch` from `on boot`
-- [ ] Clock: no NTP once locked down. Wyoming needs none; point `sntp` at the router later if wanted
+- [ ] Clock: no NTP once locked down. Nothing in hassmic needs wall-clock time (timers are Home Assistant's, hassmic only rings;
+      the log carries no timestamps). Only if timestamps in `boot.log` are ever wanted: point `sntp` at the router
 
 ## Phase 3 — First contact **(device)**
 
@@ -117,7 +119,8 @@ Run in this order. Each step says what it proves.
 
 ## Phase 4 — End-to-end PoC **(device)**
 
-- [ ] `scripts/poc-host.sh <ip>` with HA-side wake word (isolates audio path from our daemon)
+- [x] `scripts/poc-host.sh <ip>` with HA-side wake word: superseded, the local wake word worked end to end before this was
+      needed. Script kept for isolating the audio path from the daemon if that ever comes up
 - [x] `run.sh` runs detached on device (log `/data/local/hassmic/hassmic.log`), listening on 16700, PC can connect. mDNS not seen from
       the PC. Added in HA by IP `192.168.100.147`, port 16700.
       **2026-09-21: end-to-end works** — "Alexa" → HA pipeline → TTS reply on the Echo, user verdict "works perfectly"
@@ -127,7 +130,8 @@ Run in this order. Each step says what it proves.
       reply), so neither the mixer nor the AEC is in the way. It was ignored because `barge_in` doubled as "already being cut" and as
       "continue conversation", which HA sets for every reply ending in a question. Fixed (cut is now keyed on `flush_playback`), test
       added that fails on the old core. Installed; user: "perfect now" (log: wake → barge-in → listening during a reply)
-- [ ] Wake-word accuracy at distance and with music playing
+- [ ] Wake-word accuracy at distance and with music playing: ten tries from across the room, count `wake:` lines in `boot.log`,
+      once in silence, once with Music Assistant playing (threshold hints are in place, see "Stop" below)
 - [~] Wake word "Echo": firmware ships only `ALEXA` (+`STOP`) in `words.shrunk.txt`. Stock gets other keywords from DAVS (cloud) into
       `/data/.../speech/wakeword_models/davs/resources/`. Options: pull an ECHO model set from another source, or non-Pryon engine
       (microWakeWord on device / openWakeWord on HA via `-w remote`)
@@ -142,7 +146,8 @@ Run in this order. Each step says what it proves.
             from the PC: fetched echo/computer/alexa/amazon/ziggy de-DE and echo/computer en-US into `device-logs/models/`
       - [x] `echo-de-DE` (1.4 MB, `ECHO` + `STOP`) with stock `libpryon.so` under qemu: 2/2 espeak "Echo" accepted (type=2).
             Installed in `/data/local/hassmic/models/echo-de`, `ARGS="-m …/pryon.manifest"`; hassmic starts with it
-      - [ ] **(device)** spoken "Echo" live through hassmic. `echo-en-US` (5 MB, NTT fusion) loads under qemu after all (2026-09-22,
+      - [x] **(device)** spoken "Echo" live through hassmic with `echo-de-DE`: in daily use since 2026-09-21 ("echo stop works")
+      - [ ] **(device)** `echo-en-US` (5 MB, NTT fusion) live. Loads under qemu after all (2026-09-22,
             the earlier "insufficient permissions" on `ntt.cfg.json` did not come back) but gives only a type=0 near miss on espeak
             "Echo" where `echo-de-DE` accepts; the NTT fusion models want a real voice, test on the device
       - The spied `assetmgrd` must run in its own SELinux domain (`runcon u:r:assetmgrd:s0`, shim labelled `system_file`, log in
@@ -182,8 +187,9 @@ Run in this order. Each step says what it proves.
       start value hardcoded, key repeat counted. Now 10 % steps, start value read via `audio_manager_get_prop`, previous pattern
       unset, cleared after 2.5 s. Installed; user verdict: fine. Installer made idempotent for re-installs (patches from
       `/sepolicy.pre-hassmic`, skips the policy write when the installed md5 already matches)
-- [~] Disable OTA: `otad`, `ace_otad`, `update_engine` stopped at every boot by `alexa-off.sh`/`lockdown.sh`, egress firewall + no-internet
-      VLAN block the hosts. Not removed from the image
+- [x] Disable OTA: `otad`, `ace_otad`, `update_engine` stopped at every boot by `alexa-off.sh`/`lockdown.sh`, egress firewall + no-internet
+      VLAN block the hosts. Not removed from the image, by design: the uninstaller must be able to give the stock device back,
+      and three layers (stopped, owner-match DROP, no-internet VLAN) are enough
 - [x] Wi-Fi provisioning without the Alexa app: `scripts/wifi-join.sh`, profile persists in `wpa_supplicant.conf`, rejoins after reboot
 - [x] ESPHome native API (`src/hassmic/proto_esphome.c`, default; Wyoming stays as `-P wyoming`): voice pipeline with TTS over the API
       connection (16 kHz), announcements + `play_media` as WAV over HTTP (HA transcodes to the advertised 48 kHz mono), timers
@@ -242,7 +248,8 @@ Run in this order. Each step says what it proves.
       The pairing token is also an ESPHome text sensor ("Sendspin pairing token", diagnostic, disabled by default) so it can be copied
       from Home Assistant.
       Not implemented: PIN pairing (CPace: SHA-512 + Elligator2) → refused with `pair/abort method_not_supported`;
-      metadata/artwork roles (no display). Missing: install, listening test against another synced player (trim with MA's static delay)
+      metadata/artwork roles (no display). Installed and in daily use. Missing: listening test against another synced player in the
+      same room (trim with MA's static delay)
 - [x] mDNS: init's `avahi-daemon` runs in SELinux domain `avahi-daemon`, which is denied read on `/data/misc/avahi/services`
       (so nothing was ever published, also not for Wyoming). `magiskpolicy` cannot parse a rule for a type with a hyphen →
       `boot.sh`/`run.sh` stop the init service and start avahi themselves in the `su` domain. Verified: answers queries from the PC.
