@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include "mixer_api.h"
 
 static MixerHandle cap, play;
@@ -115,18 +116,34 @@ void music_close(void)
 
 void play_earcon(const short *pcm, size_t samples, unsigned rate)
 {
-    MixerHandle h = MixerOpenPlay(rate, 1, 16, MIXER_PLAY_EARCON);
-    const char *p = (const char *)pcm; size_t len = samples * 2;
-    if (!h) return;
-    while (len) {
-        int status = 0; unsigned capb = 0;
-        char *buf = MixerGetBufPlay(h, &status, &capb);
-        if (!buf) break;
-        unsigned n = len < capb ? len : capb;
-        memcpy(buf, p, n);
-        MixerReleaseBufPlay(h, n);
-        p += n; len -= n;
+    /* MixerDrain returns at once, it does not wait for the queue.  Closing right after it unlinks the ring while the mixer's
+     * discovery thread (inotify on /data/mixer_streams) may not have opened it yet: the mixer then logs shmOpenFailed and the
+     * sound is lost (seen on ~40 % of button sounds).  So wait for the mixer to start consuming, then for the queue to run
+     * out, and only then close.  A stream the mixer never picks up is closed and opened again. */
+    long duration_ms = (long)(samples * 1000ULL / (rate ? rate : 48000));
+    for (int attempt = 0; attempt < 4; attempt++) {
+        MixerHandle h = NULL; const char *p = (const char *)pcm; size_t len = samples * 2; int tries; long t = 0;
+        for (tries = 0; tries < 25 && !(h = MixerOpenPlay(rate, 1, 16, MIXER_PLAY_EARCON)); tries++) usleep(20000);
+        if (!h) { fprintf(stderr, "earcon: MixerOpenPlay failed\n"); return; }
+        while (len) {
+            int status = 0; unsigned capb = 0;
+            char *buf = MixerGetBufPlay(h, &status, &capb);
+            if (!buf) { fprintf(stderr, "earcon: MixerGetBufPlay failed, status %d\n", status); MixerClose(h); return; }
+            unsigned n = len < capb ? len : capb;
+            memcpy(buf, p, n);
+            MixerReleaseBufPlay(h, n);
+            p += n; len -= n;
+        }
+        unsigned q0 = MixerGetNumBytes(h);
+        while (t < 400 && MixerGetNumBytes(h) >= q0) { usleep(20000); t += 20; }
+        if (MixerGetNumBytes(h) >= q0) {
+            fprintf(stderr, "earcon: the mixer did not pick up the stream, opening again\n");
+            MixerClose(h); usleep(50000);
+            continue;
+        }
+        while (t < duration_ms + 1000 && MixerGetNumBytes(h) > 0) { usleep(20000); t += 20; }
+        MixerClose(h);
+        return;
     }
-    MixerDrain(h);
-    MixerClose(h);
+    fprintf(stderr, "earcon: giving up\n");
 }

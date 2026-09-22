@@ -55,7 +55,7 @@ void *MixerGetBufPlay(MixerHandle h, int *status, unsigned *blockBytes);
 void *MixerGetBufPlayTimed(MixerHandle h, int *status, unsigned *blockBytes, unsigned long long timestamp);
 int   MixerReleaseBufPlay(MixerHandle h, unsigned bytesWritten);   /* clamped to block size */
 
-int MixerDrain(MixerHandle h);
+int MixerDrain(MixerHandle h);      /* returns at once (observed on the device): it does not wait for the queue; poll MixerGetNumBytes instead */
 int MixerFlush(MixerHandle h);
 int MixerPause(MixerHandle h);
 int MixerResume(MixerHandle h);

@@ -58,6 +58,17 @@ Legend: `[x]` done, `[~]` partly done (note says what is missing), `[ ]` open. *
       for the action button, `state_volume_adjust_tone` for the volume keys, `state_privacy_mode_on/off` for mute; the blip stays
       the fallback where a file is missing (PC build). Only `ui_endpointing` (end of listening) is left out: the image has it as
       Ogg Vorbis only and there is no decoder for that on board
+      User: ~30 % of button sounds silent. Cause: `MixerDrain` returns at once, so the stream was closed milliseconds after it
+      was opened; the mixer learns of a stream by inotify on `/data/mixer_streams/` and opens the shared ring a moment later,
+      by then unlinked (`Mixer_DataTrans:InitFailed:reason=shmOpenFailed,errno=2`, 4 of 10 opens in a burst). `play_earcon`
+      now waits until the mixer starts consuming the ring (`MixerGetNumBytes` falls), then until it is empty, and reopens a
+      stream the mixer never picked up. 70 sounds in bursts of ten: every ring opened by the mixer (checked per stream in
+      the `ShmService` log, the mixer's own lines get dropped by logd for chattiness), no retry needed. Streams that live
+      seconds (TTS, music) never hit this; the mixer also plays out what is queued after a close
+- [~] Mic after a hassmic (re)start: the mixer delivers nothing on the new `micAsr` client for ~15 s (`InCapture-GetReadBuff:
+      retcode=110` every 1.5 s from 21:46:22 to :36 after the 21:46:17 open), then data flows. Same picture when `mixcap` opened
+      right after hassmic was stopped and gave up after 17 s. So each push update means ~20 s without wake word; harmless,
+      cause unknown (HAL standby?)
 - [x] mDNS: `scripts/device/hassmic.service` for the stock `avahi-daemon` (`/data/misc/avahi/services/`)
 - [x] `scripts/device/run.sh`: Alexa off, mDNS on, daemon in foreground
 
