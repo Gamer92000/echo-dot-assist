@@ -53,6 +53,7 @@ static time_t state_since;
 static atomic_int streaming, trigger_pending, button_pending, stop_pending, quit;
 static atomic_int flush_playback, earcon_pending, alarm_on;   /* barge-in: drop queued TTS; wake sound requested */
 static atomic_int tts_on, music_on;                 /* something plays: the wake word model lowers its threshold then */
+static atomic_int dump_toggle;                      /* SIGTTIN: start / stop writing the processed mic stream to a file */
 static int soft_mute;                               /* under lock: mute switch from Home Assistant */
 static int barge_in;                                /* under lock: start a new pipeline once the current one has ended
                                                       * (wake word during a reply, or the server asked to continue the conversation) */
@@ -475,6 +476,7 @@ static void *volume_led_thread(void *arg)
 
 static void *capture_thread(void *arg)
 {
+    FILE *dump = NULL;
     (void)arg;
     while (!atomic_load(&quit)) {
         const void *pcm; int n = cap_read(&pcm);
@@ -483,6 +485,19 @@ static void *capture_thread(void *arg)
         if (atomic_exchange(&trigger_pending, 0)) trigger();
         if (atomic_exchange(&stop_pending, 0)) stop_word();        /* SIGHUP: the "stop" keyword, for tests on the PC */
         if (n == 0) continue;
+
+        /* What the wake word hears (post-AEC micAsr), for listening on the PC.  The mixer feeds the mic only to its one
+         * micAsr client, so this is the only way to record it while hassmic runs: kill -TTIN <pid> starts, again stops. */
+        if (atomic_exchange(&dump_toggle, 0)) {
+            if (dump) { fprintf(stderr, "capture dump: off, %ld bytes\n", ftell(dump)); fclose(dump); dump = NULL; }
+            else {
+                char path[256]; const char *dir = getenv("HASSMIC_STATE");
+                snprintf(path, sizeof path, "%s/capture.raw", dir ? dir : "/data/local/hassmic/state");
+                dump = fopen(path, "wb");
+                fprintf(stderr, "capture dump: %s %s (16 kHz mono s16le)\n", dump ? "on" : "cannot write", path);
+            }
+        }
+        if (dump) fwrite(pcm, 1, n, dump);
 
         if (core_local_wake) wake_feed(pcm, n / 2);
         if (atomic_load(&streaming)) {
@@ -506,6 +521,7 @@ static void *serve_thread(void *arg) { int c = (int)(long)arg; proto->serve(c); 
 static void on_usr1(int s) { (void)s; atomic_store(&trigger_pending, 1); }
 static void on_usr2(int s) { (void)s; atomic_store(&button_pending, 1); }
 static void on_hup(int s) { (void)s; atomic_store(&stop_pending, 1); }
+static void on_ttin(int s) { (void)s; atomic_store(&dump_toggle, 1); }
 
 int main(int argc, char **argv)
 {
@@ -528,7 +544,7 @@ int main(int argc, char **argv)
     }
     core_port = port ? port : proto->port;
     if (print_mdns) { proto->print_mdns(); return 0; }
-    signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup);
+    signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin);
     if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
 
     if (cap_open() < 0) { fprintf(stderr, "cannot open capture (is PuffinApp still running?)\n"); return 1; }

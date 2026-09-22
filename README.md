@@ -289,6 +289,10 @@ the stock `libpryon.so`, and speaks the ESPHome native API. Notes: [docs/](docs/
 | `tools/` | OTA payload dumper, Thumb disassembly helpers, `qrun.sh` (device binaries under qemu-arm), `davs-fetch.py` |
 | `tests/` | reference implementations as counterpart: `fake_ha_esphome.py` (aioesphomeapi), `fake_ma_sendspin.py` (aiosendspin), `fake_ha.py` (Wyoming) |
 
+What the wake word hears: `kill -TTIN $(pidof hassmic)` on the Echo starts writing the processed mic stream to
+`/data/local/hassmic/state/capture.raw` (16 kHz mono s16le), the same signal again stops it. `mixcap` cannot read that
+stream while hassmic runs: the mixer feeds it to one client only.
+
 ```sh
 make host                                         # PC build + qemu build for the tests (needs libopus)
 .venv/bin/python tests/fake_ha_esphome.py         # pip install aioesphomeapi

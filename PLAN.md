@@ -97,7 +97,7 @@ Run in this order. Each step says what it proves.
       `MixerGetRate/NumCh/SampleSizeBits` return -1 on record handles. Still open: listen to the WAV
 - [x] `mixplay` test tone: audible at `MainVolume` 50 (scale 0–100; 7 was too quiet to notice). `audio_manager_set_prop MainVolume N` works as root.
       Volume buttons are dead once the Alexa stack is stopped → `hassmic` must handle them (do not pass `-V`)
-- [~] AEC test (pink noise + tones at `MainVolume` 50, room quiet): residual converges from −41 dB to −65 dB (noise floor) in ~10 s. Good.
+- [x] AEC test (pink noise + tones at `MainVolume` 50, room quiet): residual converges from −41 dB to −65 dB (noise floor) in ~10 s. Good.
       Open: reproducible low-frequency thumps (80–120 Hz, ~100 ms, up to clipping) in `micAsr` at playback start, ~3–4 s in, and
       ~1.5 s after playback ends. A `Silent` keep-alive stream does not change them → not HAL/amp standby. Need to know if the
       thump is audible from the speaker (acoustic) or only in the capture (AEC/reference glitch). Retest with speech-like TTS audio.
@@ -105,7 +105,13 @@ Run in this order. Each step says what it proves.
       2026-09-22 attempt over Wi-Fi: `micRaw` is 16 kHz mono like `micAsr` and can be read beside hassmic, but the Echo hung on an
       external speaker through the 3.5 mm jack (internal speaker silent, mic peak 330 at volume 80): no thump can show, not decided.
       Also seen: `mixcap` right after killing the `micAsr` client gets no data on either stream (`status=110`, getters -1 on
-      `micRaw`); the mixer stops the mic path when its client dies, unlike after a clean start. Retry with the internal speaker
+      `micRaw`); the mixer stops the mic path when its client dies, unlike after a clean start. Retry with the internal speaker.
+      **Resolved 2026-09-22** (internal speaker, volume 50, 440 Hz tone + espeak sentence): recorded from inside hassmic
+      (`kill -TTIN <pid>` toggles a dump of the post-AEC stream to `state/capture.raw`, the only way to read `micAsr` while it runs)
+      with `micRaw` beside it. No burst at playback start, end, or after; the AEC takes the tone below the noise floor (rms 255 raw
+      → 9), speech leaves residual peaks of rms ~140 for a second. Five control dumps at rest: flat. The old thumps came from
+      `mixcap` captures that had just opened: a freshly opened record stream starts with zeros and one garbage block (seen again
+      in `micRaw`, first 100 ms clipping), not from the AEC
 - [x] `pryon_test` on device: canned file Accept (type=2) at 1.39 s; live `mixcap | pryon_test` 6/6 spoken "Alexa" accepted, no near-misses
 - [ ] `alexa-on.sh` restores Alexa without reboot
 
