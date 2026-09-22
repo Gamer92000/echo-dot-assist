@@ -54,6 +54,7 @@ static atomic_int streaming, trigger_pending, button_pending, stop_pending, quit
 static atomic_int flush_playback, earcon_pending, alarm_on;   /* barge-in: drop queued TTS; wake sound requested */
 static atomic_int tts_on, music_on;                 /* something plays: the wake word model lowers its threshold then */
 static atomic_int dump_toggle;                      /* SIGTTIN: start / stop writing the processed mic stream to a file */
+static atomic_int mute_sound_pending;               /* 1 = play the "mics off" sound, 2 = the "mics on" sound */
 static int soft_mute;                               /* under lock: mute switch from Home Assistant */
 static int barge_in;                                /* under lock: start a new pipeline once the current one has ended
                                                       * (wake word during a reply, or the server asked to continue the conversation) */
@@ -125,10 +126,11 @@ int core_wake_sound(int set) { if (set >= 0) use_earcon = set; return use_earcon
 
 int core_muted(void) { return soft_mute || buttons_muted(); }
 
-static void mute_update(int was)        /* lock held: ring + Home Assistant follow the effective state */
+static void mute_update(int was, int sound)   /* lock held: ring, sound + Home Assistant follow the effective state */
 {
     int now = core_muted();
     if (now == was) return;
+    if (sound && use_earcon) atomic_store(&mute_sound_pending, now ? 1 : 2);
     if (now) { if (state == LISTENING) core_pipeline_finish(); led("-s", "mics-off_on"); }
     else { led("-u", "mics-off_on"); led("-s", "mics-off_end"); }
     if (connected && proto->mute_changed) proto->mute_changed(now);
@@ -140,7 +142,7 @@ int core_soft_mute(int set)
         int was = core_muted();
         soft_mute = set;
         fprintf(stderr, "soft mute: %d%s\n", set, !set && buttons_muted() ? " (hardware latch still on: only the button releases it)" : "");
-        mute_update(was);
+        mute_update(was, satellite_running);            /* quiet when the saved setting is restored at start */
         if (!set && buttons_muted() && connected && proto->mute_changed) proto->mute_changed(1);   /* switch bounces back */
     }
     return soft_mute;
@@ -330,10 +332,38 @@ void core_music(int on)
     playback_hint();
 }
 
+/* Amazon's own mute sounds, left on the system image by the stock firmware: 48 kHz stereo s16 WAV, played as mono. */
+#define EARCON_DIR "/system/local/share/earcon/base"
+static short *load_wav_mono(const char *path, size_t *samples, unsigned *rate)
+{
+    unsigned char h[8]; unsigned ch = 0, bits = 0; short *out = NULL; FILE *f = fopen(path, "rb");
+    *samples = 0;
+    if (!f) return NULL;
+    if (fread(h, 1, 8, f) != 8 || memcmp(h, "RIFF", 4) || fread(h, 1, 4, f) != 4 || memcmp(h, "WAVE", 4)) { fclose(f); return NULL; }
+    while (fread(h, 1, 8, f) == 8) {                /* chunks */
+        uint32_t len = h[4] | h[5] << 8 | h[6] << 16 | (uint32_t)h[7] << 24;
+        if (!memcmp(h, "fmt ", 4) && len >= 16) {
+            unsigned char fmt[16]; if (fread(fmt, 1, 16, f) != 16) break;
+            ch = fmt[2] | fmt[3] << 8; *rate = fmt[4] | fmt[5] << 8 | fmt[6] << 16 | (unsigned)fmt[7] << 24; bits = fmt[14] | fmt[15] << 8;
+            fseek(f, len - 16 + (len & 1), SEEK_CUR);
+        } else if (!memcmp(h, "data", 4) && ch && bits == 16) {
+            size_t frames = len / (2 * ch); short *raw = malloc(len); out = malloc(frames * sizeof *out);
+            if (raw && out && fread(raw, 1, len, f) == len) {
+                for (size_t i = 0; i < frames; i++) { int s = 0; for (unsigned c = 0; c < ch; c++) s += raw[i * ch + c]; out[i] = (short)(s / (int)ch); }
+                *samples = frames;
+            } else { free(out); out = NULL; }
+            free(raw); break;
+        } else fseek(f, len + (len & 1), SEEK_CUR);
+    }
+    fclose(f);
+    return out;
+}
+
 static void *earcon_thread(void *arg)
 {
     enum { RATE = 48000, N = RATE * 12 / 100 };
     static short tone[N];
+    short *mute_snd[2] = { NULL, NULL }; size_t mute_n[2] = { 0, 0 }; unsigned mute_rate[2] = { 0, 0 }; int loaded = 0;
     (void)arg;
     for (int i = 0; i < N; i++) {           /* 120 ms rising two-tone blip with 10 ms fades */
         double f = i < N / 2 ? 880.0 : 1320.0, env = fmin(1.0, fmin(i, N - i) / (RATE * 0.01));
@@ -341,6 +371,16 @@ static void *earcon_thread(void *arg)
     }
     for (long long alarm_end = 0;;) {
         if (atomic_exchange(&earcon_pending, 0) && use_earcon) play_earcon(tone, N, RATE);
+        int ms = atomic_exchange(&mute_sound_pending, 0);
+        if (ms) {
+            if (!loaded) {
+                loaded = 1;
+                mute_snd[0] = load_wav_mono(EARCON_DIR "/state_privacy_mode_on.wav", &mute_n[0], &mute_rate[0]);
+                mute_snd[1] = load_wav_mono(EARCON_DIR "/state_privacy_mode_off.wav", &mute_n[1], &mute_rate[1]);
+                if (!mute_snd[0] || !mute_snd[1]) fprintf(stderr, "mute sounds: not found in " EARCON_DIR "\n");
+            }
+            if (mute_snd[ms - 1]) { fprintf(stderr, "mute sound: %s\n", ms == 1 ? "off" : "on"); play_earcon(mute_snd[ms - 1], mute_n[ms - 1], mute_rate[ms - 1]); }
+        }
         if (atomic_load(&alarm_on)) {                   /* timer finished: triple blip every 1.2 s, at most a minute */
             if (!alarm_end) alarm_end = mono_ms() + 60000;
             if (mono_ms() > alarm_end) core_alarm(0);
@@ -361,7 +401,7 @@ static void on_mute(int muted)          /* hardware latch changed (button) */
     pthread_mutex_lock(&core_lock);
     int was = last || soft_mute; last = muted;
     if (!muted && soft_mute) { soft_mute = 0; fprintf(stderr, "soft mute: 0 (released with the button)\n"); }
-    mute_update(was);
+    mute_update(was, 1);
     pthread_mutex_unlock(&core_lock);
 }
 

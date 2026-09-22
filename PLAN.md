@@ -274,6 +274,10 @@ Run in this order. Each step says what it proves.
       sensor entities, diagnostic and disabled by default, pushed every 30 s to state subscribers. Other zones on the SoC:
       `skin_virtual`, `case_virtual`, `wifi_temp`, `therm0..3_s`; load average sits around 6 with hassmic at ~8 % CPU (Amazon's
       daemons make the rest)
+- [x] Mute sounds: the ESPHome satellites play theirs from the device firmware, Home Assistant sends nothing for it, and hassmic
+      only set the red ring. Now Amazon's own `state_privacy_mode_on/off.wav` (48 kHz stereo, on the system image under
+      `/system/local/share/earcon/base/`) play on the `Earcon` stream when the effective mute changes: hardware button always,
+      HA switch once the satellite runs (not when the saved setting is restored at start). The "Wake sound" switch silences them too
 - [x] Log: `boot.log` rotated by `boot.sh` at 1 MB (copy + truncate, because several long-lived processes append to it; one old
       part kept as `boot.log.1`); `ledctrl` / `audio_manager_set_prop` stdout no longer logged (two lines per LED change before)
 - [x] Revert procedure tested 2026-09-21: `install-system.sh --uninstall` leaves no trace on `/system` (`/sepolicy` md5 back to the pre-hassmic
