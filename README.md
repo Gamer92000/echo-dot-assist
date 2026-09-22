@@ -203,6 +203,8 @@ it does not tell you (known gap). Look at `adb shell tail -30 /data/local/hassmi
 it heard you, `client connected` / `voice assistant: subscribed` means Home Assistant is there. No such lines after the
 last `client disconnected`: check the network (`adb shell ifconfig wlan0`, can Home Assistant reach that address?).
 Keep exactly one Wi-Fi profile on the Echo; with two it roamed and kept the wrong address here.
+`adb` also works over Wi-Fi: `adb connect <echo-ip>:5555` from a machine that can reach the Echo's network (stock firmware
+turns that on, same key as over USB), so the cable is only needed for TWRP.
 Open issues and everything that was measured: [PLAN.md](PLAN.md).
 
 **Going back.**

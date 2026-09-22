@@ -7,7 +7,7 @@ Firmware analysed: `donut_puffin` NS65741 / Fire OS 6574.1. Findings: [docs/FIND
 [docs/re-pryon.md](docs/re-pryon.md), [docs/re-platform.md](docs/re-platform.md).
 
 Legend: `[x]` done, `[~]` partly done (note says what is missing), `[ ]` open. **(device)** = needs the physical Echo.
-"Done" in phases 0–2 means done on the PC. Device unlocked + rooted 2026-09-21 (kamakiri-donut, boot-root), still in OOBE, no Wi-Fi.
+"Done" in phases 0–2 means done on the PC. Device unlocked + rooted 2026-09-21 (kamakiri-donut, boot-root); satellite installed and in daily use since, reachable over Wi-Fi (adb, push updates).
 
 ## Phase 0 — Workspace (no device)
 
@@ -26,7 +26,7 @@ Legend: `[x]` done, `[~]` partly done (note says what is missing), `[ ]` open. *
 - [x] `libmixerAPI.so` client registration (`DataTrans` ring + descriptor file in `/data/mixer_streams/`)
 - [x] C header `src/include/mixer_api.h`
 - [x] `mixer` single-client logic and mic gating. Known: log string proves eviction of the previous `micAsr` client; — on device: `AllowMic` is 1 without PuffinApp, `micRaw` can be captured beside `micAsr`
-      mic mute comes from LIPC `com.doppler.buttond/muteState`. Missing: default of `AllowMic` without PuffinApp → check on device
+      mic mute comes from LIPC `com.doppler.buttond/muteState`. `AllowMic` is 1 by default without PuffinApp (Phase 3)
 - [~] `mixer` playback stream types: ducking and volume group of `TTS` vs `Earcon` vs `Music` → easier to observe on device — seen on device: `TTS`, `Earcon` and `Music` streams mix; hassmic ducks music itself. Mixer-side ducking rules still unknown
 - [x] `libpryon.so` prototypes, structs, call sequence (`docs/re-pryon.md`)
 - [x] C header `src/include/pryon_api.h`; result fields and `detectionType` values verified by running the library
@@ -69,10 +69,17 @@ dozen daemons phone home within seconds.
 - [x] **(device)** Never-registered device, USB/ADB only → `lockdown.sh` → `scripts/wifi-join.sh`: joined IoT SSID (no-internet VLAN),
       192.168.100.147/22, lock tightened to `192.168.100.0/22`, `ping 1.1.1.1` fails, `lockdown.sh ... watch` running.
       Stock INPUT drops ICMP (PC ping fails) but TCP 16700 is reachable from the PC (VLAN if `enp5s0.2`).
+      adb works over Wi-Fi too: stock init sets `service.adb.tcp.port 5555` and stock `firewall.sh` opens the port (same key
+      authentication as over USB), so `adb connect <ip>:5555` from a PC on the Echo's VLAN is the root shell. Verified 2026-09-22;
+      USB is only needed for TWRP.
       Wi-Fi Direct group `p2p-p2p0-0` (left by `oobed`) removed with `wpa_cli -i p2p0 p2p_group_remove`; now in `alexa-off.sh`.
       Do not stop the supplicant: the same `wpa_supplicant` process runs `wlan0`
 - [x] **(router)** Echo is on the user's no-internet IoT VLAN — covers the boot window before `lockdown.sh` runs
-- [ ] **(device)** Verify: `tcpdump`/router log over one full reboot shows zero non-LAN packets
+- [~] **(device)** Verify: `tcpdump`/router log over one full reboot shows zero non-LAN packets. No `tcpdump` on the image (`NFLOG`
+      target exists if packet-level proof is wanted). 2026-09-22 after 16 h uptime: `hassmic_out` counters 93 packets / 5.6 kB dropped
+      IPv4, 0 IPv6 (the Echo has no global IPv6 address), 80k packets to 192.168.0.0/16 passed. logcat names the source: `tokend`
+      posting to `api.amazon.com`, plus DHCP hands out 8.8.8.8 as second DNS. Not covered: the boot window before `lockdown.sh`
+      (router-side only)
 - [x] **(device)** Persistent: rules in `/system/bin/debug_firewall.sh` (stock `firewall.sh` runs it after its own flush) plus init service for `lockdown.sh watch` — solved differently: init service `hassmic_fw` runs `lockdown.sh watch` from `on boot`
 - [ ] Clock: no NTP once locked down. Wyoming needs none; point `sntp` at the router later if wanted
 
@@ -125,8 +132,9 @@ Run in this order. Each step says what it proves.
             from the PC: fetched echo/computer/alexa/amazon/ziggy de-DE and echo/computer en-US into `device-logs/models/`
       - [x] `echo-de-DE` (1.4 MB, `ECHO` + `STOP`) with stock `libpryon.so` under qemu: 2/2 espeak "Echo" accepted (type=2).
             Installed in `/data/local/hassmic/models/echo-de`, `ARGS="-m …/pryon.manifest"`; hassmic starts with it
-      - [ ] **(device)** spoken "Echo" live through hassmic. `echo-en-US` (5 MB, NTT fusion) does not load under qemu
-            ("insufficient permissions" on `ntt.cfg.json`, file is readable): not looked into
+      - [ ] **(device)** spoken "Echo" live through hassmic. `echo-en-US` (5 MB, NTT fusion) loads under qemu after all (2026-09-22,
+            the earlier "insufficient permissions" on `ntt.cfg.json` did not come back) but gives only a type=0 near miss on espeak
+            "Echo" where `echo-de-DE` accepts; the NTT fusion models want a real voice, test on the device
       - The spied `assetmgrd` must run in its own SELinux domain (`runcon u:r:assetmgrd:s0`, shim labelled `system_file`, log in
         `/data/davs`): from the `su` domain its AIPC service is unreachable and the Alexa app shows the device as unavailable
 - [x] Assistant replies ignored the volume: the mixer keeps one volume per stream type, the `TTS` stream follows `TTSVolume`, and
@@ -139,7 +147,8 @@ Run in this order. Each step says what it proves.
       the wake word opened up to 4 s before (HA's "nothing heard" for it stays quiet); no engine reset for 3 s after the wake
       word. 4 cases in `tests/fake_ha_esphome.py` (SIGHUP = "stop"). Pushed 2026-09-22, user: "echo stop works".
       Open: bare "stop" with a changed `op.cfg.json` (loads; synthetic test inconclusive, not tried with a voice); the models
-      lower the wake word threshold through client properties `AlarmState` / `AudioPlayerState` / `audio_playback`, not set yet
+      lower the wake word threshold through client properties `AlarmState` / `AudioPlayerState` / `audio_playback`, not set yet.
+      The `pryon WARN ... Invalid bitmask frame indices` line in `boot.log` is one per wake word in every version since 0.0.2: harmless
 - [x] Latency wake → STT start; TTS playback glitch-free — replies start before TTS_START with streaming TTS; user verdict fine
 
 ## Phase 5 — Make it permanent **(device)**
@@ -182,13 +191,14 @@ Run in this order. Each step says what it proves.
       chime as 48 kHz WAV through HA's proxy, then TTS as 24 kHz MP3 from `192.168.0.3`. `play_media` from Music Assistant verified 2026-09-21 (MA serves `…:8097/flow/….wav`; first failed because the router only let the
       IoT VLAN reach HA on 8123 — fixed by the user on the network side, not in hassmic). Timer with real HA verified ("Stell einen Timer für 10 Sekunden": started → finished → alarm ringing → wake word
       silences it). 
-- [~] Wi-Fi drops: Amazon's `wifisvc` runs HTTP connectivity tests against AWS hosts (`AceNetSvc_HttpTest ... unreachable`); behind the
+- [x] Wi-Fi drops: Amazon's `wifisvc` runs HTTP connectivity tests against AWS hosts (`AceNetSvc_HttpTest ... unreachable`); behind the
       egress lock they fail and it rebuilds the link (seen ~100 s after boot, link down 193 s; explains earlier stray
       "client disconnected/connected" pairs). Verified live: with `wifisvc` stopped, `wpa_supplicant` + `dhcpcd` keep the link and
       survive a forced disconnect/reconnect. `boot.sh` `netwatch`: stop `wifisvc` once there is an address, start it again only after
       60 s without one. hassmic: 5 s send timeout + TCP keepalive on the client socket, so a dead link no longer blocks `core_lock`
       and the single client slot. Installed 2026-09-21: `netwatch: link up, wifisvc stopped` at boot, link stable through the
-      user's tests. Missing: long-run observation (hours)
+      user's tests. Long run 2026-09-22: 13 boots in `boot.log`, `wifisvc` stopped at each, never started again by `netwatch`,
+      link up 16 h without a gap
 - [x] Reply quality: SPEAKER flag dropped (feature flags 61). HA then renders TTS in the media player's announcement format (48 kHz
       mono WAV) and sends the URL (RUN_START with streaming TTS, TTS_END otherwise); hassmic fetches it like an announcement, starts
       at INTENT_PROGRESS `tts_start_streaming=1` when offered, and reports VoiceAssistantAnnounceFinished. Before: 16 kHz over the
