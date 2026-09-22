@@ -149,7 +149,7 @@ Run in this order. Each step says what it proves.
       Open: bare "stop" with a changed `op.cfg.json` (loads; synthetic test inconclusive, not tried with a voice); the models
       lower the wake word threshold through client properties `AlarmState` / `AudioPlayerState` / `audio_playback`: set since
       2026-09-22 (`PryonDecoder_PushClientEvents`, reversed in `docs/re-pryon.md`; verified under qemu: ECHO threshold 0.751 → 0.452
-      with `AlarmState`; `pryon_test -p name=value`). hassmic: alarm ringing, Sendspin stream, reply playing. Not measured on the device.
+      with `AlarmState`; `pryon_test -p name=value`). hassmic: alarm ringing, Sendspin stream, reply playing. Pushed 2026-09-22, user: works nicely
       The `pryon WARN ... Invalid bitmask frame indices` line in `boot.log` is one per wake word in every version since 0.0.2: harmless
 - [x] Latency wake → STT start; TTS playback glitch-free — replies start before TTS_START with streaming TTS; user verdict fine
 
