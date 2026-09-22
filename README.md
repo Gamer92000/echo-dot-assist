@@ -209,7 +209,7 @@ last `client disconnected`: check the network (`adb shell ifconfig wlan0`, can H
 Keep exactly one Wi-Fi profile on the Echo; with two it roamed and kept the wrong address here.
 `adb` also works over Wi-Fi: `adb connect <echo-ip>:5555` from a machine that can reach the Echo's network (stock firmware
 turns that on, same key as over USB), so the cable is only needed for TWRP.
-Open issues and everything that was measured: [PLAN.md](PLAN.md).
+What changed when: [CHANGELOG.md](CHANGELOG.md). Open issues and everything that was measured: [PLAN.md](PLAN.md).
 
 **Going back.**
 - For a moment: `adb shell rm /data/local/hassmic/hassmic.conf` and reboot. The boot script then does nothing and the Echo
@@ -279,7 +279,8 @@ expires within minutes. Found by preloading `src/tools/curlspy.c` into the stock
 
 How it works: Amazon's `mixer` daemon owns the audio hardware and runs the whole front end (`libasp`); `hassmic` takes the
 place of `PuffinApp` as its client through the reversed C API of `libmixerAPI.so`, feeds the 16 kHz post-AEC stream to
-the stock `libpryon.so`, and speaks the ESPHome native API. Notes: [docs/](docs/), progress and measurements: [PLAN.md](PLAN.md).
+the stock `libpryon.so`, and speaks the ESPHome native API. Notes: [docs/](docs/), progress and measurements: [PLAN.md](PLAN.md),
+user-visible changes by date: [CHANGELOG.md](CHANGELOG.md).
 
 | Path | What |
 |---|---|
