@@ -39,7 +39,8 @@ own music like it did before. Only the Alexa client is replaced, by a small daem
   10 % steps; the mic-off button is the hardware mute it always was (red ring, Alexa's own mute sounds, reported to Home Assistant).
 - **LED ring** shows listening, thinking, speaking, errors and mute. Silent and dark at boot.
 - **Settings in Home Assistant**: noise suppression level, auto gain, mic volume multiplier, mute switch, and a "Wake sound"
-  switch that covers all local sounds (wake blip, mute on/off).
+  switch that covers all local sounds. Those are Alexa's originals from the firmware: wake word, action button, volume keys,
+  mute on and off.
   Diagnostics, off by default: SoC temperature and CPU usage.
 - **No cloud**: the Alexa client, the updater and the telemetry services are stopped at every boot, and a firewall on the
   Echo drops everything that is not going to a local address. Put it on a network without internet as a second layer.

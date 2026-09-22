@@ -33,28 +33,30 @@
 #include "core.h"
 #include "ota.h"
 #include "sendspin.h"
+#include "sounds.h"
 
 #define DEFAULT_MANIFEST "/system/local/models/keyword/en-US/ALEXA/pryon.manifest"
 #define PIPELINE_TIMEOUT 30         /* seconds in LISTENING or THINKING before giving up */
 #define TTS_RATE         22050      /* assumed when audio-start carries no rate */
 
 static const char *const state_names[] = { "idle", "listening", "thinking", "speaking" };
+static int use_led = 1, use_earcon = 1, use_volume = 1;
+static atomic_int sounds_pending;
+static void sound_request(enum sound s) { if (use_earcon) atomic_fetch_or(&sounds_pending, 1 << s); }     /* played by the earcon thread */
 
 const char *core_name = "Echo Dot";
 static int ota_port = 28929;                        /* 0 = no push updates */
 int core_local_wake = 1, core_port, core_sendspin_port = 28928;       /* 0 = Sendspin off */
 static const struct proto *proto = &proto_esphome;
-static int use_led = 1, use_earcon = 1, use_volume = 1;
 
 pthread_mutex_t core_lock = PTHREAD_MUTEX_INITIALIZER;
 static int connected, satellite_running;
 static enum state state;
 static time_t state_since;
 static atomic_int streaming, trigger_pending, button_pending, stop_pending, quit;
-static atomic_int flush_playback, earcon_pending, alarm_on;   /* barge-in: drop queued TTS; wake sound requested */
+static atomic_int flush_playback, alarm_on;   /* barge-in: drop queued TTS; UI sounds requested (bit per enum sound) */
 static atomic_int tts_on, music_on;                 /* something plays: the wake word model lowers its threshold then */
 static atomic_int dump_toggle;                      /* SIGTTIN: start / stop writing the processed mic stream to a file */
-static atomic_int mute_sound_pending;               /* 1 = play the "mics off" sound, 2 = the "mics on" sound */
 static int soft_mute;                               /* under lock: mute switch from Home Assistant */
 static int barge_in;                                /* under lock: start a new pipeline once the current one has ended
                                                       * (wake word during a reply, or the server asked to continue the conversation) */
@@ -130,7 +132,7 @@ static void mute_update(int was, int sound)   /* lock held: ring, sound + Home A
 {
     int now = core_muted();
     if (now == was) return;
-    if (sound && use_earcon) atomic_store(&mute_sound_pending, now ? 1 : 2);
+    if (sound) sound_request(now ? SND_MICS_OFF : SND_MICS_ON);
     if (now) { if (state == LISTENING) core_pipeline_finish(); led("-s", "mics-off_on"); }
     else { led("-u", "mics-off_on"); led("-s", "mics-off_end"); }
     if (connected && proto->mute_changed) proto->mute_changed(now);
@@ -158,7 +160,7 @@ void core_pipeline_finish(void)
     if (mono_ms() - last_wake_ms > 3000) wake_reset();      /* a reset puts the engine back to sleep: "<wake word>, stop" would lose its "stop" */
     if (!connected) barge_in = 0;
     if ((barge_in || !core_local_wake) && satellite_running && connected) {
-        if (barge_in) atomic_store(&earcon_pending, 1);
+        if (barge_in) sound_request(SND_WAKE);
         barge_in = 0;
         pipeline_start();
     }
@@ -178,7 +180,7 @@ void core_error(void)
     if (state != SPEAKING) { led("-s", "anim_start_error_short"); core_pipeline_finish(); }
 }
 
-static void trigger(void)
+static void trigger(int touch)          /* touch: the action button rather than the wake word */
 {
     pthread_mutex_lock(&core_lock);
     if (atomic_load(&alarm_on)) {
@@ -187,7 +189,7 @@ static void trigger(void)
     } else if (!connected || !satellite_running || core_muted()) {
         /* nothing to talk to, or privacy latch on */
     } else if (state == IDLE) {
-        atomic_store(&earcon_pending, 1);
+        sound_request(touch ? SND_TOUCH : SND_WAKE);
         pipeline_start();
     } else if (state == SPEAKING && !atomic_load(&flush_playback)) {       /* not already being cut.  barge_in alone does not
                                                                              * say that: continue-conversation sets it too */
@@ -213,11 +215,11 @@ static void stop_word(void)
     } else if (state == SPEAKING) {
         fprintf(stderr, "stop: reply cut\n");
         barge_in = 0;
-        atomic_store(&earcon_pending, 0);
+        atomic_fetch_and(&sounds_pending, ~(1 << SND_WAKE | 1 << SND_TOUCH));
         atomic_store(&flush_playback, 1);
     } else if (state == LISTENING && mono_ms() - wake_cut_ms < 4000) {
         fprintf(stderr, "stop: pipeline dropped\n");
-        atomic_store(&earcon_pending, 0);
+        atomic_fetch_and(&sounds_pending, ~(1 << SND_WAKE | 1 << SND_TOUCH));
         barge_in = 0;
         core_pipeline_finish();
         quiet_abort = 1;
@@ -228,7 +230,7 @@ static void stop_word(void)
 static void on_wake(const char *keyword)
 {
     if (!core_local_wake) return;
-    if (!strcasecmp(keyword, "STOP")) stop_word(); else { last_wake_ms = mono_ms(); trigger(); }
+    if (!strcasecmp(keyword, "STOP")) stop_word(); else { last_wake_ms = mono_ms(); trigger(0); }
 }
 
 /* ---------------------------------------------------------------- playback queue */
@@ -332,54 +334,23 @@ void core_music(int on)
     playback_hint();
 }
 
-/* Amazon's own mute sounds, left on the system image by the stock firmware: 48 kHz stereo s16 WAV, played as mono. */
-#define EARCON_DIR "/system/local/share/earcon/base"
-static short *load_wav_mono(const char *path, size_t *samples, unsigned *rate)
-{
-    unsigned char h[8]; unsigned ch = 0, bits = 0; short *out = NULL; FILE *f = fopen(path, "rb");
-    *samples = 0;
-    if (!f) return NULL;
-    if (fread(h, 1, 8, f) != 8 || memcmp(h, "RIFF", 4) || fread(h, 1, 4, f) != 4 || memcmp(h, "WAVE", 4)) { fclose(f); return NULL; }
-    while (fread(h, 1, 8, f) == 8) {                /* chunks */
-        uint32_t len = h[4] | h[5] << 8 | h[6] << 16 | (uint32_t)h[7] << 24;
-        if (!memcmp(h, "fmt ", 4) && len >= 16) {
-            unsigned char fmt[16]; if (fread(fmt, 1, 16, f) != 16) break;
-            ch = fmt[2] | fmt[3] << 8; *rate = fmt[4] | fmt[5] << 8 | fmt[6] << 16 | (unsigned)fmt[7] << 24; bits = fmt[14] | fmt[15] << 8;
-            fseek(f, len - 16 + (len & 1), SEEK_CUR);
-        } else if (!memcmp(h, "data", 4) && ch && bits == 16) {
-            size_t frames = len / (2 * ch); short *raw = malloc(len); out = malloc(frames * sizeof *out);
-            if (raw && out && fread(raw, 1, len, f) == len) {
-                for (size_t i = 0; i < frames; i++) { int s = 0; for (unsigned c = 0; c < ch; c++) s += raw[i * ch + c]; out[i] = (short)(s / (int)ch); }
-                *samples = frames;
-            } else { free(out); out = NULL; }
-            free(raw); break;
-        } else fseek(f, len + (len & 1), SEEK_CUR);
-    }
-    fclose(f);
-    return out;
-}
-
 static void *earcon_thread(void *arg)
 {
     enum { RATE = 48000, N = RATE * 12 / 100 };
     static short tone[N];
-    short *mute_snd[2] = { NULL, NULL }; size_t mute_n[2] = { 0, 0 }; unsigned mute_rate[2] = { 0, 0 }; int loaded = 0;
+    static const char *const snd_names[SND_COUNT] = { "wake", "touch", "mics off", "mics on", "volume" };
     (void)arg;
     for (int i = 0; i < N; i++) {           /* 120 ms rising two-tone blip with 10 ms fades */
         double f = i < N / 2 ? 880.0 : 1320.0, env = fmin(1.0, fmin(i, N - i) / (RATE * 0.01));
         tone[i] = (short)(6000 * env * sin(2 * M_PI * f * i / RATE));
     }
     for (long long alarm_end = 0;;) {
-        if (atomic_exchange(&earcon_pending, 0) && use_earcon) play_earcon(tone, N, RATE);
-        int ms = atomic_exchange(&mute_sound_pending, 0);
-        if (ms) {
-            if (!loaded) {
-                loaded = 1;
-                mute_snd[0] = load_wav_mono(EARCON_DIR "/state_privacy_mode_on.wav", &mute_n[0], &mute_rate[0]);
-                mute_snd[1] = load_wav_mono(EARCON_DIR "/state_privacy_mode_off.wav", &mute_n[1], &mute_rate[1]);
-                if (!mute_snd[0] || !mute_snd[1]) fprintf(stderr, "mute sounds: not found in " EARCON_DIR "\n");
-            }
-            if (mute_snd[ms - 1]) { fprintf(stderr, "mute sound: %s\n", ms == 1 ? "off" : "on"); play_earcon(mute_snd[ms - 1], mute_n[ms - 1], mute_rate[ms - 1]); }
+        /* Amazon's own sounds where the image has them; the generated blip stands in for the wake and touch sounds otherwise */
+        for (int p = atomic_exchange(&sounds_pending, 0), s = 0; p && s < SND_COUNT; s++) {
+            const short *pcm; size_t n; unsigned rate;
+            if (!(p & 1 << s)) continue;
+            if (sound_get((enum sound)s, &pcm, &n, &rate)) { fprintf(stderr, "sound: %s\n", snd_names[s]); play_earcon(pcm, n, rate); }
+            else if (s == SND_WAKE || s == SND_TOUCH) play_earcon(tone, N, RATE);
         }
         if (atomic_load(&alarm_on)) {                   /* timer finished: triple blip every 1.2 s, at most a minute */
             if (!alarm_end) alarm_end = mono_ms() + 60000;
@@ -392,7 +363,7 @@ static void *earcon_thread(void *arg)
 }
 
 /* While music plays the action button pauses it (and resumes it again); otherwise it wakes the assistant. */
-static void on_action(void) { if (!core_sendspin_port || !sendspin_button()) atomic_store(&trigger_pending, 1); }
+static void on_action(void) { if (!core_sendspin_port || !sendspin_button()) atomic_store(&trigger_pending, 2); }   /* 2: touch */
 
 static void on_mute(int muted)          /* hardware latch changed (button) */
 {
@@ -492,6 +463,7 @@ static void on_volume(int dir)
     if (!use_volume) return;
     pthread_mutex_lock(&core_lock);
     core_set_volume((core_volume() + 5) / 10 * 10 + dir * 10);
+    sound_request(SND_VOLUME);
     pthread_mutex_unlock(&core_lock);
 }
 
@@ -522,7 +494,7 @@ static void *capture_thread(void *arg)
         const void *pcm; int n = cap_read(&pcm);
         if (n < 0) { fprintf(stderr, "capture: fatal\n"); atomic_store(&quit, 1); break; }
         if (atomic_exchange(&button_pending, 0)) on_action();      /* SIGUSR2: action button, for tests on the PC */
-        if (atomic_exchange(&trigger_pending, 0)) trigger();
+        { int t = atomic_exchange(&trigger_pending, 0); if (t) trigger(t == 2); }
         if (atomic_exchange(&stop_pending, 0)) stop_word();        /* SIGHUP: the "stop" keyword, for tests on the PC */
         if (n == 0) continue;
 

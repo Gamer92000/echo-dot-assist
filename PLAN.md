@@ -53,7 +53,11 @@ Legend: `[x]` done, `[~]` partly done (note says what is missing), `[ ]` open. *
 - [x] Action button = manual trigger; mic-mute latch blocks triggers and drives the LED (`src/hassmic/buttons.c`)
 - [x] Volume buttons → `MainVolume` + LED volume step (switch off with `-V` if a stock daemon already does it)
 - [x] Barge-in: wake word or button while speaking cuts TTS and opens a new pipeline (tested: 0.10 s on PC)
-- [x] Wake earcon: generated blip on the `Earcon` stream (no stock sound files needed; `-E` disables)
+- [x] Wake earcon: generated blip on the `Earcon` stream (`-E` disables). Since 2026-09-23 Amazon's own sounds from the system image
+      (`src/hassmic/sounds.c`: WAV, or MP3 through minimp3, mixed to mono): `ui_wakesound` for the wake word, `ui_wakesound_touch`
+      for the action button, `state_volume_adjust_tone` for the volume keys, `state_privacy_mode_on/off` for mute; the blip stays
+      the fallback where a file is missing (PC build). Only `ui_endpointing` (end of listening) is left out: the image has it as
+      Ogg Vorbis only and there is no decoder for that on board
 - [x] mDNS: `scripts/device/hassmic.service` for the stock `avahi-daemon` (`/data/misc/avahi/services/`)
 - [x] `scripts/device/run.sh`: Alexa off, mDNS on, daemon in foreground
 
