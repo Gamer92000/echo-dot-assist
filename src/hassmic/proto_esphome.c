@@ -13,6 +13,7 @@
 #include <netdb.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,7 +29,7 @@
 enum {
     HELLO_REQ = 1, HELLO_RESP, CONNECT_REQ, CONNECT_RESP, DISCONNECT_REQ, DISCONNECT_RESP, PING_REQ, PING_RESP,
     DEVICE_INFO_REQ, DEVICE_INFO_RESP, LIST_ENTITIES_REQ, LIST_ENTITIES_DONE = 19, SUBSCRIBE_STATES = 20,
-    LIST_SWITCH = 17, LIST_TEXT_SENSOR = 18, SWITCH_STATE = 26, TEXT_SENSOR_STATE = 27, SWITCH_COMMAND = 33, LIST_NUMBER = 49, NUMBER_STATE, NUMBER_COMMAND,
+    LIST_SENSOR = 16, LIST_SWITCH = 17, LIST_TEXT_SENSOR = 18, SENSOR_STATE = 25, SWITCH_STATE = 26, TEXT_SENSOR_STATE = 27, SWITCH_COMMAND = 33, LIST_NUMBER = 49, NUMBER_STATE, NUMBER_COMMAND,
     LIST_SELECT = 52, SELECT_STATE, SELECT_COMMAND,
     LIST_MEDIA_PLAYER = 63, MEDIA_PLAYER_STATE, MEDIA_PLAYER_COMMAND,
     SUBSCRIBE_VA = 89, VA_REQUEST, VA_RESPONSE, VA_EVENT, VA_AUDIO = 106, VA_TIMER_EVENT = 115,
@@ -37,7 +38,7 @@ enum {
 enum { EV_ERROR = 0, EV_RUN_START, EV_RUN_END, EV_STT_START, EV_STT_END, EV_INTENT_START, EV_INTENT_END, EV_TTS_START,
        EV_TTS_END, EV_WAKE_START, EV_WAKE_END, EV_VAD_START, EV_VAD_END, EV_TTS_STREAM_START = 98, EV_TTS_STREAM_END = 99, EV_INTENT_PROGRESS = 100 };
 enum { FEAT_VOICE = 1, FEAT_SPEAKER = 2, FEAT_API_AUDIO = 4, FEAT_TIMERS = 8, FEAT_ANNOUNCE = 16, FEAT_START_CONVERSATION = 32 };
-enum { KEY_NOISE = 2, KEY_GAIN, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SENDSPIN_TOKEN };
+enum { KEY_NOISE = 2, KEY_GAIN, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SENDSPIN_TOKEN, KEY_SOC_TEMP, KEY_CPU_USAGE };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -195,6 +196,74 @@ static void send_token_state(void)      /* lock held */
     send_state(TEXT_SENSOR_STATE, &b);
 }
 
+/* ---------------------------------------------------------------- diagnostics
+ * SoC temperature (thermal zone "mtktscpu") and CPU usage, as sensors that are diagnostic and disabled by default: Home
+ * Assistant records them only once the user switches them on.  Pushed every 30 s to whoever subscribed to states. */
+
+static float read_soc_temp(void)
+{
+    char path[80], type[32]; float t = NAN;
+    for (int z = 0; z < 16; z++) {
+        snprintf(path, sizeof path, "/sys/class/thermal/thermal_zone%d/type", z);
+        FILE *f = fopen(path, "r"); if (!f) break;
+        int ok = fscanf(f, "%31s", type) == 1; fclose(f);
+        if (!ok || strcmp(type, "mtktscpu")) continue;
+        snprintf(path, sizeof path, "/sys/class/thermal/thermal_zone%d/temp", z);
+        if ((f = fopen(path, "r"))) { int mc; if (fscanf(f, "%d", &mc) == 1) t = mc / 1000.0f; fclose(f); }
+        break;
+    }
+    return t;
+}
+
+static float cpu_usage(void)             /* percent busy since the previous call; NAN the first time */
+{
+    static unsigned long long last_busy, last_total;
+    unsigned long long v[8] = { 0 }, total = 0, busy; float pct = NAN;
+    FILE *f = fopen("/proc/stat", "r"); if (!f) return NAN;
+    int n = fscanf(f, "cpu %llu %llu %llu %llu %llu %llu %llu %llu", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7]);
+    fclose(f);
+    if (n < 4) return NAN;
+    for (int i = 0; i < 8; i++) total += v[i];
+    busy = total - v[3] - v[4];                                 /* idle, iowait */
+    if (last_total && total > last_total) pct = 100.0f * (float)(busy - last_busy) / (float)(total - last_total);
+    last_busy = busy; last_total = total;
+    return pct;
+}
+
+static void send_sensor(int key, float v)   /* lock held */
+{
+    PB(b, 32);
+    if (isnan(v)) return;
+    pb_fixed32(&b, 1, key); pb_float(&b, 2, v);
+    send_state(SENSOR_STATE, &b);
+}
+
+static void send_diag_states(void) { send_sensor(KEY_SOC_TEMP, read_soc_temp()); send_sensor(KEY_CPU_USAGE, cpu_usage()); }
+
+static void *diag_thread(void *arg)
+{
+    (void)arg;
+    cpu_usage();
+    for (;;) {
+        sleep(30);
+        pthread_mutex_lock(&core_lock);
+        int any = 0;
+        for (int i = 0; i < MAX_CLIENTS; i++) any |= clients[i].fd >= 0 && clients[i].states;
+        if (any) send_diag_states();
+        pthread_mutex_unlock(&core_lock);
+    }
+    return NULL;
+}
+
+static void send_diag_entities(void)
+{
+    { PB(b, 192); pb_str(&b, 1, "soc_temperature"); pb_fixed32(&b, 2, KEY_SOC_TEMP); pb_str(&b, 3, "SoC temperature");
+      pb_str(&b, 5, "mdi:thermometer"); pb_str(&b, 6, "\xc2\xb0" "C"); pb_uint(&b, 7, 1); pb_str(&b, 9, "temperature"); pb_uint(&b, 10, 1);
+      pb_uint(&b, 12, 1); pb_uint(&b, 13, 2); send_msg(LIST_SENSOR, &b); }
+    { PB(b, 192); pb_str(&b, 1, "cpu_usage"); pb_fixed32(&b, 2, KEY_CPU_USAGE); pb_str(&b, 3, "CPU usage");
+      pb_str(&b, 5, "mdi:chip"); pb_str(&b, 6, "%"); pb_uint(&b, 10, 1); pb_uint(&b, 12, 1); pb_uint(&b, 13, 2); send_msg(LIST_SENSOR, &b); }
+}
+
 static void send_setting_entities(void)
 {
     { PB(b, 256); pb_str(&b, 1, "noise_suppression_level"); pb_fixed32(&b, 2, KEY_NOISE); pb_str(&b, 3, "Noise suppression level");
@@ -208,6 +277,7 @@ static void send_setting_entities(void)
       pb_str(&b, 5, "mdi:key-link"); pb_uint(&b, 6, 1); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
     { PB(b, 128); pb_str(&b, 1, "wake_sound"); pb_fixed32(&b, 2, KEY_WAKE_SOUND); pb_str(&b, 3, "Wake sound"); pb_str(&b, 5, "mdi:bell-ring");
       pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
+    send_diag_entities();
 }
 
 static void on_setting(unsigned type, const unsigned char *p, const unsigned char *end)
@@ -552,7 +622,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case LIST_ENTITIES_REQ: send_entities(); break;
     case SUBSCRIBE_STATES:
         for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd == reply_fd) clients[i].states = 1;
-        send_mp_state(); for (int k = KEY_NOISE; k <= KEY_WAKE_SOUND; k++) send_setting(k); send_token_state(); break;
+        send_mp_state(); for (int k = KEY_NOISE; k <= KEY_WAKE_SOUND; k++) send_setting(k); send_token_state(); send_diag_states(); break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
     case SUBSCRIBE_VA: {
         int sub = 0;
@@ -590,7 +660,7 @@ static void serve(int fd)
     unsigned char *buf = malloc(1 << 16), pre; uint32_t len, type, cap = 1 << 16; int slot = -1, n = 0;
     if (!buf) return;
     pthread_mutex_lock(&core_lock);
-    { static int loaded; if (!loaded) { loaded = 1; settings_load(); } }
+    { static int loaded; if (!loaded) { loaded = 1; settings_load(); pthread_t t; pthread_create(&t, NULL, diag_thread, NULL); pthread_detach(t); } }
     for (int i = 0; i < MAX_CLIENTS; i++) { if (clients[i].fd < 0 && slot < 0) slot = i; n += clients[i].fd >= 0; }
     if (slot >= 0) { clients[slot].fd = fd; clients[slot].states = 0; if (!n) core_link(1, 0); }
     pthread_mutex_unlock(&core_lock);

@@ -270,6 +270,10 @@ Run in this order. Each step says what it proves.
       pushed again over Wi-Fi
 - [x] ESPHome API serves up to 4 clients at once (one thread each): replies to the asker, entity states to every state subscriber,
       voice assistant traffic to its one subscriber (first come, first served, like ESPHome firmware). Test with two `aioesphomeapi` clients
+- [x] Diagnostics in Home Assistant: SoC temperature (thermal zone `mtktscpu`, 44 °C idle) and CPU usage (`/proc/stat` delta) as
+      sensor entities, diagnostic and disabled by default, pushed every 30 s to state subscribers. Other zones on the SoC:
+      `skin_virtual`, `case_virtual`, `wifi_temp`, `therm0..3_s`; load average sits around 6 with hassmic at ~8 % CPU (Amazon's
+      daemons make the rest)
 - [x] Log: `boot.log` rotated by `boot.sh` at 1 MB (copy + truncate, because several long-lived processes append to it; one old
       part kept as `boot.log.1`); `ledctrl` / `audio_manager_set_prop` stdout no longer logged (two lines per LED change before)
 - [x] Revert procedure tested 2026-09-21: `install-system.sh --uninstall` leaves no trace on `/system` (`/sepolicy` md5 back to the pre-hassmic

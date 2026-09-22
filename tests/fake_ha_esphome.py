@@ -3,7 +3,7 @@
 `aioesphomeapi` client (the library Home Assistant itself uses), so framing and protobuf layout are checked by the real parser."""
 import asyncio, io, math, os, signal, struct, subprocess, sys, tempfile, threading, wave
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from aioesphomeapi import SelectInfo, NumberInfo, SwitchInfo, SelectState, NumberState, SwitchState, TextSensorInfo, TextSensorState
+from aioesphomeapi import SelectInfo, NumberInfo, SwitchInfo, SelectState, NumberState, SwitchState, TextSensorInfo, TextSensorState, SensorInfo
 from aioesphomeapi import APIClient, MediaPlayerInfo, MediaPlayerEntityState, VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -64,6 +64,10 @@ async def main():
               and isinstance(by.get("mute"), SwitchInfo) and isinstance(by.get("wake_sound"), SwitchInfo), "settings entities listed")
         tok = by.get("sendspin_pairing_token")
         check(isinstance(tok, TextSensorInfo) and tok.disabled_by_default and int(tok.entity_category) == 2, "Sendspin pairing token entity: diagnostic, disabled by default")
+        temp, cpu = by.get("soc_temperature"), by.get("cpu_usage")
+        check(isinstance(temp, SensorInfo) and temp.disabled_by_default and int(temp.entity_category) == 2 and temp.device_class == "temperature"
+              and temp.unit_of_measurement == "\u00b0C" and isinstance(cpu, SensorInfo) and cpu.disabled_by_default and cpu.unit_of_measurement == "%"
+              and int(cpu.state_class) == 1, "diagnostic sensors: SoC temperature and CPU usage, disabled by default")
         cli.select_command(by["noise_suppression_level"].key, "High"); cli.number_command(by["auto_gain"].key, 15)
         cli.number_command(by["mic_volume_multiplier"].key, 2.5)
         await asyncio.sleep(0.5)
