@@ -9,5 +9,6 @@ typedef void (*wake_cb)(const char *keyword);
 int  wake_open(const char *manifest, wake_cb cb);
 void wake_feed(const int16_t *samples, size_t count);
 void wake_reset(void);                 /* audio discontinuity */
+void wake_property(const char *name, int value);   /* engine hint, e.g. "AlarmState" 1: the model lowers its threshold */
 void wake_close(void);
 #endif

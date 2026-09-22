@@ -26,6 +26,24 @@ Disassembly: `re/libpryon_api.asm` (0x600c00–0x605200, the exported C wrappers
 
 `libAmazonKWD.so` (the older AVS-SDK-style detector) uses `PryonDecoder_PushAudioEvent(decoderId, PryonAudioEvent*)` instead. That event is a typed/JSON object (`samples`, `samples_with_annotation`, `wakeword_indices`, `cms_json`, `lookahead_metadata_blob`, `utterance_boundary` — strings at `0x6bc5ba…`). Not needed; `PushAudioEventSamples` is simpler. It also calls `PryonDecoder_BacklogWait(decoderId, -1)` (`0xafaa`).
 
+## Client properties (threshold hints)
+
+`kw.cfg.json` of every keyword model carries `classification-thresholds.overrides`: a lower `accept-threshold` that applies while a
+named client property `equals` 1. Stock ALEXA: 0.923, 0.834 with `AlarmState`, 0.864 with `AudioPlayerState` or `audio_playback`.
+`echo-de-DE` (DAVS): 0.751 / 0.452 / 0.703. `echo-en-US`: 0.769 / 0.691 / 0.769 (notify 0.2, which is the `active_threshold` its
+log line shows for a near miss). The NTT fusion models (`echo-en-US`) additionally keep "playback thresholds" per DVAD
+stage and know `AudioPlaybackState`, `MediaPlayerState`, `EarconPlayerState`, `TtsPlayerState`, `WorkoutMode`, `SVMode`,
+`AutomotiveMode` (default JSON in libpryon, all -1).
+
+Setter: `PryonDecoder_PushClientEvents(decoderId, events, count)`. Stock caller `wwm::PryonDecoder::pushClientProperty(name, long long)`
+(`libWakeWordManager.so` `0x50690`) builds on the stack `{name.c_str(), <pad>, value /* int64 at +8 */}` and an event `{1, &property}`,
+and calls with count 1. Inner `0x6c0b50` (libpryon): loops `count` times over 8-byte events, `bne` to the error path unless the first
+word is 1, rejects a null or empty name, reads the int64 at property+8, stores name → value in the decoder's property map and
+stamps the batch with the decoder's own sample index (`ldrexd` at decoder+0x40), so no index is passed. Verified under qemu
+2026-09-22 with `pryon_test -p AlarmState=1`: return 0, the KWS log line switches from `active_threshold=0.751` to `0.452`.
+hassmic sets `AlarmState` while a timer rings, `AudioPlayerState` while a Sendspin stream runs, `audio_playback` for either or a
+reply being spoken, and pushes them again after every `PryonDecoder_SessionEnd`.
+
 ## Result struct
 
 Fields read by `wwm::PryonDecoder::setKeywordDetectionInfo` (`0x50c10`) and `kwd::PryonKeyWordDetector::resultsCallback` (`0x9c20`):

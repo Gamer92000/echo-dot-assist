@@ -52,6 +52,7 @@ static enum state state;
 static time_t state_since;
 static atomic_int streaming, trigger_pending, button_pending, stop_pending, quit;
 static atomic_int flush_playback, earcon_pending, alarm_on;   /* barge-in: drop queued TTS; wake sound requested */
+static atomic_int tts_on, music_on;                 /* something plays: the wake word model lowers its threshold then */
 static int soft_mute;                               /* under lock: mute switch from Home Assistant */
 static int barge_in;                                /* under lock: start a new pipeline once the current one has ended
                                                       * (wake word during a reply, or the server asked to continue the conversation) */
@@ -95,6 +96,18 @@ void core_set_state(enum state s)
 }
 
 static long long mono_ms(void);
+
+/* Amazon's keyword models accept the wake word at a lower score while the device itself makes noise (kw.cfg.json:
+ * "AlarmState" 1 cuts the ECHO threshold from 0.75 to 0.45, "AudioPlayerState" / "audio_playback" 1 to 0.70), because
+ * that is when the user shouts over it and a false accept costs little. */
+static void playback_hint(void)
+{
+    int alarm = atomic_load(&alarm_on), music = atomic_load(&music_on), tts = atomic_load(&tts_on);
+    wake_property("AlarmState", alarm);
+    wake_property("AudioPlayerState", music);
+    wake_property("audio_playback", alarm || music || tts);
+}
+
 static long long wake_cut_ms;    /* when the wake word last cut a reply or an alarm: a "stop" right behind it belongs to that */
 static long long last_wake_ms;   /* Amazon's models know "stop" only in the ~2 s after the wake word (op.cfg.json: awake state) */
 static int quiet_abort;
@@ -259,6 +272,7 @@ static void *playback_thread(void *arg)
         case Q_START:
             if (open) play_close(1);        /* e.g. announcement chime followed by the message */
             open = play_open(it->rate, it->ch) == 0;
+            if (open) { atomic_store(&tts_on, 1); playback_hint(); }
             if (!open) fprintf(stderr, "play: open %u Hz x%u failed\n", it->rate, it->ch);
             break;
         case Q_DATA:
@@ -266,6 +280,7 @@ static void *playback_thread(void *arg)
             break;
         case Q_STOP:
             if (open) { play_close(1); open = 0; }
+            atomic_store(&tts_on, 0); playback_hint();
             atomic_store(&flush_playback, 0);
             pthread_mutex_lock(&core_lock);
             if (proto->played) proto->played();      /* also without a client: modules reset their state here */
@@ -305,6 +320,13 @@ void core_alarm(int on)
     if (atomic_exchange(&alarm_on, on) == on) return;
     fprintf(stderr, "alarm: %s\n", on ? "ringing" : "off");
     led(on ? "-s" : "-u", "active_timer");
+    playback_hint();
+}
+
+void core_music(int on)
+{
+    if (atomic_exchange(&music_on, on) == on) return;
+    playback_hint();
 }
 
 static void *earcon_thread(void *arg)

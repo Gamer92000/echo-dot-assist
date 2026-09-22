@@ -91,6 +91,25 @@ int PryonDecoder_PushAudioEventSamples(const char *decoderId,
 /* Marks a discontinuity in the audio (stock: wwm::PryonDecoder::endContiguousAudio). */
 int PryonDecoder_SessionEnd(const char *decoderId);
 
+/* Client properties: the model's kw.cfg.json lowers the accept threshold while one of them equals 1
+ * ("AlarmState", "AudioPlayerState", "audio_playback"; the NTT fusion models also read "AudioPlaybackState",
+ * "MediaPlayerState", "EarconPlayerState", "TtsPlayerState").  Stock: wwm::PryonDecoder::pushClientProperty(name, value)
+ * builds one event {1, &property} on the stack and calls this with count 1.  The library (0x6c0b50) walks `count`
+ * events of 8 bytes, requires the first word to be 1 and the name non-empty, reads the value as int64 at +8 of the
+ * property, and stamps the events with the decoder's current sample index itself.  Values persist until pushed again. */
+typedef struct PryonClientProperty {
+    const char *name;
+    uint32_t    _pad;
+    int64_t     value;              /* +0x08 */
+} PryonClientProperty;
+
+typedef struct PryonClientEvent {
+    uint32_t                   one;      /* must be 1 (property count or a version: only 1 is accepted) */
+    const PryonClientProperty *property;
+} PryonClientEvent;
+
+int PryonDecoder_PushClientEvents(const char *decoderId, const PryonClientEvent *events, uint32_t count);
+
 /* Stock caller passes -1. Observed to return before the queue is drained, so do not rely on it:
  * push at real-time rate instead. The decoder drops audio once its backlog passes ~7 s. */
 int PryonDecoder_BacklogWait(const char *decoderId, int32_t timeout);

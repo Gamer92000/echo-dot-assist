@@ -119,6 +119,7 @@ static pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t q_cond = PTHREAD_COND_INITIALIZER;
 static struct chunk *q_head, *q_tail; static size_t q_bytes;
 static atomic_int stream_on, player_muted, snap_next;
+static void stream_set(int on) { atomic_store(&stream_on, on); core_music(on); }
 static atomic_int static_delay_ms;
 
 static void q_flush(void)
@@ -486,7 +487,7 @@ static int arbitrate(struct session *s)
     else win = s->rank >= cur->rank;
     if (win) {
         if (cur && cur != s) { fprintf(stderr, "sendspin: another server takes over\n"); cur->admitted = 0; goodbye(cur, "another_server"); }
-        if (cur != s) { atomic_store(&stream_on, 0); q_flush(); tf_reset(); }
+        if (cur != s) { stream_set(0); q_flush(); tf_reset(); }
         admitted = s; s->admitted = 1;
     }
     pthread_mutex_unlock(&adm_lock);
@@ -542,7 +543,7 @@ static void on_json(struct session *s, char *j, long long t_recv)
         if (js_section(j, "active_roles", sec, sizeof sec)) {                                   /* sticky when omitted */
             int on = strstr(sec, "player@v1") != NULL;
             if (on && !s->player_active) { s->activated_at = raw_us(); s->state_sent = 0; fprintf(stderr, "sendspin: player role active (%s)\n", s->psk_cat == PSK_LONGTERM ? "paired" : "unpaired"); }
-            if (!on && s->player_active) { atomic_store(&stream_on, 0); q_flush(); }
+            if (!on && s->player_active) { stream_set(0); q_flush(); }
             if (!on && !pairing && first) fprintf(stderr, "sendspin: connected, no role yet: approve the device in Music Assistant\n");
             s->player_active = on;
             s->controller_active = strstr(sec, "controller@v1") != NULL;
@@ -590,12 +591,12 @@ static void on_json(struct session *s, char *j, long long t_recv)
         }
         fprintf(stderr, "sendspin: stream start (%s)\n", str);
         if (!atomic_load(&stream_on)) q_flush();
-        atomic_store(&stream_on, 1);
+        stream_set(1);
         send_json(s, "{\"type\":\"client/time\",\"payload\":{\"client_transmitted\":%lld}}", raw_us());
     } else if (!strcmp(type, "stream/clear")) {
         if (!js_section(j, "roles", sec, sizeof sec) || strstr(sec, "player")) q_flush();
     } else if (!strcmp(type, "stream/end")) {
-        if (!js_section(j, "roles", sec, sizeof sec) || strstr(sec, "player")) { atomic_store(&stream_on, 0); q_flush(); fprintf(stderr, "sendspin: stream end\n"); }
+        if (!js_section(j, "roles", sec, sizeof sec) || strstr(sec, "player")) { stream_set(0); q_flush(); fprintf(stderr, "sendspin: stream end\n"); }
     } else if (!strcmp(type, "group/update")) {
         if (js_str(j, "playback_state", str, sizeof str)) { s->group_playing = !strcmp(str, "playing"); fprintf(stderr, "sendspin: group %s\n", str); }
     }
@@ -680,7 +681,7 @@ static void *serve(void *arg)
     s->closing = 1;
     pthread_join(tt, NULL);
     pthread_mutex_lock(&adm_lock);
-    if (admitted == s) { admitted = NULL; atomic_store(&stream_on, 0); q_flush(); }
+    if (admitted == s) { admitted = NULL; stream_set(0); q_flush(); }
     pthread_mutex_unlock(&adm_lock);
     ws_close(&s->ws); pthread_mutex_destroy(&s->send_lock);
     fprintf(stderr, "sendspin: session closed\n");

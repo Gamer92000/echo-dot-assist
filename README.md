@@ -31,6 +31,7 @@ own music like it did before. Only the Alexa client is replaced, by a small daem
   generated. Say the wake word, or press the action button, while it talks and it stops and listens again.
   **"Echo, stop"** (wake word and "stop" in one breath) silences a reply or a ringing timer without listening again.
   "Stop" on its own does nothing: Amazon's models only hear it in the two seconds after the wake word.
+  While a timer rings, music or a reply plays, the wake word is accepted more readily, as Amazon's models are tuned to do.
 - **Announcements and media player**: `assist_satellite.announce`, TTS and `media_player.play_media` play on the Echo.
 - **Timers** ("set a timer for ten minutes"): rings on the Echo until you press the button, say the wake word, or 60 s pass.
 - **Multiroom music** as a Sendspin player for Music Assistant, in sync with other players; the voice assistant ducks it.

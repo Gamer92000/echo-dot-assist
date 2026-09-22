@@ -1,7 +1,9 @@
 /*
  * pryon_test - run Amazon's stock wake-word model over a raw 16 kHz mono s16le file (or stdin).
  *
- *   pryon_test [-m manifest] [-c chunk_samples] [-x speed] [file.raw|file.wav]
+ *   pryon_test [-m manifest] [-c chunk_samples] [-x speed] [-p name=value ...] [file.raw|file.wav]
+ *
+ * -p pushes a client property before the audio (e.g. -p AlarmState=1): the model then uses its lower accept threshold.
  *
  * Audio is pushed at real-time speed times -x (default 1): the decoder drops audio when its backlog exceeds ~7 s.
  *
@@ -35,11 +37,19 @@ static void on_result(const char *decoderId, PryonEnumeratedResult *r)
 int main(int argc, char **argv)
 {
     const char *manifest = DEFAULT_MANIFEST; unsigned chunk = 800; double speed = 1; int o, rc;
-    while ((o = getopt(argc, argv, "m:c:x:")) != -1) switch (o) {
+    PryonClientProperty props[8]; PryonClientEvent events[8]; unsigned nprops = 0;
+    while ((o = getopt(argc, argv, "m:c:x:p:")) != -1) switch (o) {
         case 'm': manifest = optarg; break;
         case 'c': chunk = atoi(optarg); break;
         case 'x': speed = atof(optarg); break;
-        default: fprintf(stderr, "usage: pryon_test [-m manifest] [-c chunk_samples] [file]\n"); return 2;
+        case 'p': {
+            char *eq = strchr(optarg, '=');
+            if (!eq || nprops == sizeof props / sizeof *props) { fprintf(stderr, "-p name=value\n"); return 2; }
+            *eq = 0; props[nprops].name = optarg; props[nprops].value = atoll(eq + 1);
+            events[nprops].one = 1; events[nprops].property = &props[nprops]; nprops++;
+            break;
+        }
+        default: fprintf(stderr, "usage: pryon_test [-m manifest] [-c chunk_samples] [-x speed] [-p name=value] [file]\n"); return 2;
     }
     FILE *in = optind < argc ? fopen(argv[optind], "rb") : stdin;
     if (!in) { perror("open"); return 1; }
@@ -58,6 +68,11 @@ int main(int argc, char **argv)
             fmt.encoding, fmt.sampleRate, fmt.bitsPerSample, fmt.numChannels, fmt.channelTypes[0]);
     if ((rc = PryonDecoder_NewSpotterAudioDecoder("dec", "ms", "pryon", fmt, "{}"))) {
         fprintf(stderr, "PryonDecoder_NewSpotterAudioDecoder -> %d\n", rc); return 1;
+    }
+    if (nprops) {
+        rc = PryonDecoder_PushClientEvents("dec", events, nprops);
+        fprintf(stderr, "PryonDecoder_PushClientEvents(%u) -> %d\n", nprops, rc);
+        if (rc) return 1;
     }
 
     int16_t *buf = malloc(chunk * sizeof *buf); uint64_t idx = 0; size_t n;
