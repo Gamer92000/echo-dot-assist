@@ -15,7 +15,10 @@
  *                    player entity advertises, we stream it.  Same path for media_player.play_media.
  *   timers           finished timer rings (core_alarm)
  *   bluetooth proxy  LE scanning with raw advertisements, GATT connections to up to 3 devices at a time, pairing (ble.c)
- *   bluetooth speaker  a switch opens the pairing window (a2dp.c)
+ *   bluetooth speaker  a switch opens the pairing window (a2dp.c).  A phone connecting is announced by asking Home
+ *                    Assistant to run assist_satellite.announce on us (HomeassistantActionRequest, what an ESPHome YAML
+ *                    `homeassistant.action` sends).  Home Assistant only runs it with "Allow the device to perform Home
+ *                    Assistant actions" ticked in the device's options; otherwise it raises a repair saying so.
  */
 #include <ctype.h>
 #include <errno.h>
@@ -30,6 +33,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 #include "a2dp.h"
 #include "ble.h"
@@ -46,6 +50,7 @@
 enum {
     HELLO_REQ = 1, HELLO_RESP, CONNECT_REQ, CONNECT_RESP, DISCONNECT_REQ, DISCONNECT_RESP, PING_REQ, PING_RESP,
     DEVICE_INFO_REQ, DEVICE_INFO_RESP, LIST_ENTITIES_REQ, LIST_ENTITIES_DONE = 19, SUBSCRIBE_STATES = 20,
+    SUBSCRIBE_HA_ACTIONS = 34, HA_ACTION,
     LIST_SENSOR = 16, LIST_SWITCH = 17, LIST_TEXT_SENSOR = 18, SENSOR_STATE = 25, SWITCH_STATE = 26, TEXT_SENSOR_STATE = 27, SWITCH_COMMAND = 33, LIST_NUMBER = 49, NUMBER_STATE, NUMBER_COMMAND,
     LIST_SELECT = 52, SELECT_STATE, SELECT_COMMAND,
     LIST_MEDIA_PLAYER = 63, MEDIA_PLAYER_STATE, MEDIA_PLAYER_COMMAND,
@@ -65,7 +70,8 @@ enum { BLE_REQ_CONNECT = 0, BLE_REQ_DISCONNECT, BLE_REQ_PAIR, BLE_REQ_UNPAIR, BL
 enum { EV_ERROR = 0, EV_RUN_START, EV_RUN_END, EV_STT_START, EV_STT_END, EV_INTENT_START, EV_INTENT_END, EV_TTS_START,
        EV_TTS_END, EV_WAKE_START, EV_WAKE_END, EV_VAD_START, EV_VAD_END, EV_TTS_STREAM_START = 98, EV_TTS_STREAM_END = 99, EV_INTENT_PROGRESS = 100 };
 enum { FEAT_VOICE = 1, FEAT_SPEAKER = 2, FEAT_API_AUDIO = 4, FEAT_TIMERS = 8, FEAT_ANNOUNCE = 16, FEAT_START_CONVERSATION = 32 };
-enum { KEY_NOISE = 2, KEY_GAIN, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SENDSPIN_TOKEN, KEY_SOC_TEMP, KEY_CPU_USAGE, KEY_BT_PAIRING };
+enum { KEY_NOISE = 2, KEY_GAIN, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SENDSPIN_TOKEN, KEY_SOC_TEMP, KEY_CPU_USAGE, KEY_BT_PAIRING,
+       KEY_BT_ANNOUNCE };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -73,13 +79,15 @@ enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3
  * client that asked, state changes to every client that subscribed to states, voice assistant traffic to the one
  * client that subscribed to the voice assistant (first come, first served - also like the firmware). */
 #define MAX_CLIENTS 4
-/* lock held.  enc: Noise frames (tx is used under the lock, rx by the client's reader only); keyed: with the device key */
-static struct { int fd, states, enc, keyed, ble, ble_free, ble_user; struct noise_cs tx, rx; } clients[MAX_CLIENTS] = { { .fd = -1 }, { .fd = -1 }, { .fd = -1 }, { .fd = -1 } };
+/* lock held.  enc: Noise frames (tx is used under the lock, rx by the client's reader only); keyed: with the device key;
+ * actions: runs Home Assistant actions for us */
+static struct { int fd, states, enc, keyed, ble, ble_free, ble_user, actions; struct noise_cs tx, rx; } clients[MAX_CLIENTS] = { { .fd = -1 }, { .fd = -1 }, { .fd = -1 }, { .fd = -1 } };
 static int va_fd = -1;                  /* lock held: voice assistant subscriber */
 static __thread int reply_fd = -1;      /* the client whose request this thread is handling */
 static int tts_expected;                /* lock held: the reply is being fetched or played; RUN_END must not end the pipeline */
 static char tts_url[1024];              /* lock held: reply URL of the running pipeline (known from RUN_START with streaming TTS) */
 static int announcing, media_playing;   /* lock held */
+static void announce_done(void);
 static atomic_int media_busy;
 
 /* ---------------------------------------------------------------- protobuf */
@@ -273,11 +281,11 @@ static const char *settings_path(void) { const char *p = getenv("HASSMIC_SETTING
 
 static void settings_load(void)
 {
-    int n, g, m, w; float v; FILE *f = fopen(settings_path(), "r");
+    int n, g, m, w, a = 1; float v; FILE *f = fopen(settings_path(), "r");
     if (!f) return;
-    if (fscanf(f, "%d %d %f %d %d", &n, &g, &v, &m, &w) == 5) {
+    if (fscanf(f, "%d %d %f %d %d %d", &n, &g, &v, &m, &w, &a) >= 5) {      /* files from before Bluetooth announcements: 5 */
         noise_level = n < 0 ? 0 : n > 4 ? 4 : n; auto_gain = g < 0 ? 0 : g > 31 ? 31 : g; vol_mult = v < 0.1f ? 0.1f : v > 10 ? 10 : v;
-        core_soft_mute(m != 0); core_wake_sound(w != 0);
+        core_soft_mute(m != 0); core_wake_sound(w != 0); core_bt_announce(a != 0);
     }
     fclose(f);
 }
@@ -286,7 +294,7 @@ static void settings_save(void)
 {
     FILE *f = fopen(settings_path(), "w");
     if (!f) { fprintf(stderr, "settings: cannot write %s\n", settings_path()); return; }
-    fprintf(f, "%d %d %.2f %d %d\n", noise_level, auto_gain, vol_mult, core_soft_mute(-1), core_wake_sound(-1));
+    fprintf(f, "%d %d %.2f %d %d %d\n", noise_level, auto_gain, vol_mult, core_soft_mute(-1), core_wake_sound(-1), core_bt_announce(-1));
     fclose(f);
 }
 
@@ -301,6 +309,7 @@ static void send_setting(int key)       /* lock held */
     case KEY_MUTE:  pb_uint(&b, 2, core_muted()); send_state(SWITCH_STATE, &b); break;
     case KEY_WAKE_SOUND: pb_uint(&b, 2, core_wake_sound(-1)); send_state(SWITCH_STATE, &b); break;
     case KEY_BT_PAIRING: if (ble_present()) { pb_uint(&b, 2, a2dp_pairing()); send_state(SWITCH_STATE, &b); } break;
+    case KEY_BT_ANNOUNCE: if (ble_present()) { pb_uint(&b, 2, core_bt_announce(-1)); send_state(SWITCH_STATE, &b); } break;
     }
 }
 
@@ -399,6 +408,8 @@ static void send_setting_entities(void)
       pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
     if (ble_present()) { PB(b, 128); pb_str(&b, 1, "bluetooth_pairing"); pb_fixed32(&b, 2, KEY_BT_PAIRING); pb_str(&b, 3, "Bluetooth pairing");
       pb_str(&b, 5, "mdi:bluetooth-connect"); send_msg(LIST_SWITCH, &b); }
+    if (ble_present()) { PB(b, 128); pb_str(&b, 1, "bluetooth_announcements"); pb_fixed32(&b, 2, KEY_BT_ANNOUNCE); pb_str(&b, 3, "Bluetooth announcements");
+      pb_str(&b, 5, "mdi:bluetooth-audio"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
     send_diag_entities();
 }
 
@@ -416,9 +427,11 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     else if (type == NUMBER_COMMAND && key == KEY_MULT) vol_mult = num < 0.1f ? 0.1f : num > 10 ? 10 : num;
     else if (type == SWITCH_COMMAND && key == KEY_MUTE) { core_soft_mute(on); settings_save(); send_setting(KEY_MUTE); return; }
     else if (type == SWITCH_COMMAND && key == KEY_WAKE_SOUND) core_wake_sound(on);
+    else if (type == SWITCH_COMMAND && key == KEY_BT_ANNOUNCE) core_bt_announce(on);
     else if (type == SWITCH_COMMAND && key == KEY_BT_PAIRING) { a2dp_pair(on); return; }     /* its state follows through bt_changed */
     else return;
-    fprintf(stderr, "settings: noise=%s gain=%d mult=%.1f mute=%d wake_sound=%d\n", noise_names[noise_level], auto_gain, vol_mult, core_soft_mute(-1), core_wake_sound(-1));
+    fprintf(stderr, "settings: noise=%s gain=%d mult=%.1f mute=%d wake_sound=%d bt_announce=%d\n", noise_names[noise_level], auto_gain, vol_mult,
+            core_soft_mute(-1), core_wake_sound(-1), core_bt_announce(-1));
     settings_save(); send_setting(key);
 }
 
@@ -547,7 +560,7 @@ static void *media_thread(void *arg)
     pthread_mutex_lock(&core_lock);
     if (job->announce) {
         if (job->start_conversation && ok) core_restart_after();
-        if (!began) { PB(b, 8); pb_uint(&b, 1, 0); send_va(VA_ANNOUNCE_FINISHED, &b); announcing = 0; }
+        if (!began) { PB(b, 8); pb_uint(&b, 1, 0); send_va(VA_ANNOUNCE_FINISHED, &b); announcing = 0; announce_done(); }
     }
     if (!began) { media_playing = 0; send_mp_state(); core_pipeline_finish(); atomic_store(&media_busy, 0); }
     pthread_mutex_unlock(&core_lock);
@@ -738,6 +751,67 @@ static const struct ble_handler ble_handler = {
 
 /* ---------------------------------------------------------------- core callbacks (lock held) */
 
+static void pb_map(struct pb *b, int f, const char *k, const char *v)      /* HomeassistantServiceMap */
+{
+    PB(e, 400); pb_str(&e, 1, k); pb_str(&e, 2, v);
+    pb_bytes(b, f, e.p, e.n);
+}
+
+/* The satellite entity is ours by MAC: Home Assistant keys the device on it, entity ids can be renamed.  The name
+ * the phone chose goes in plain data, never into the template.
+ * Home Assistant refuses an announcement while the satellite still plays one (SatelliteBusyError: a phone
+ * reconnecting during "Disconnected from ..."), and still for a moment after our "finished", until its announce call
+ * has unwound.  So one request at a time, latest wins: the next goes 1 s after the previous announcement ended, or
+ * 15 s after its request if none came (Home Assistant dropped it), and not at all once 30 s old. */
+static char bt_next[160];               /* lock held: waiting to be asked */
+static long long bt_next_ms, bt_asked_ms, bt_free_ms;   /* lock held: queued at; last request out, no end yet (0: none); not before */
+
+static long long now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
+
+static void bt_ask(const char *msg)
+{
+    PB(b, 1024); char tpl[400], m[24]; size_t j = 0; int n = 0;
+    for (const char *c = mac(); *c && j < sizeof m - 1; c++) m[j++] = tolower((unsigned char)*c);
+    m[j] = 0;
+    snprintf(tpl, sizeof tpl, "{%% for e in integration_entities('esphome') if e.startswith('assist_satellite.') and "
+             "('mac', '%s') in (device_attr(e, 'connections') or []) %%}{{ e }}{%% endfor %%}", m);
+    pb_str(&b, 1, "assist_satellite.announce");
+    pb_map(&b, 2, "message", msg);
+    pb_map(&b, 3, "entity_id", tpl);
+    pb_map(&b, 3, "preannounce", "{{ false }}");    /* the chime already played here.  Plain data arrives as strings, and
+                                                       the announce schema takes a real bool only: a template renders one */
+    for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].actions) { send_to(clients[i].fd, HA_ACTION, &b); n++; }
+    if (n) bt_asked_ms = now_ms();
+    fprintf(stderr, "bluetooth: \"%s\" %s\n", msg, n ? "asked of Home Assistant" : "not spoken: no client takes actions");
+}
+
+static void bt_try(void)                /* lock held */
+{
+    long long now = now_ms();
+    if (!bt_next[0] || announcing || now < bt_free_ms || (bt_asked_ms && now - bt_asked_ms < 15000)) return;
+    if (now - bt_next_ms < 30000) bt_ask(bt_next);
+    bt_next[0] = 0;
+}
+
+static void *bt_thread(void *arg)
+{
+    (void)arg;
+    for (;;) { usleep(200000); pthread_mutex_lock(&core_lock); bt_try(); pthread_mutex_unlock(&core_lock); }
+    return NULL;
+}
+
+static void bt_device(const char *name, int on)
+{
+    static int started;
+    if (!started) { pthread_t t; started = !pthread_create(&t, NULL, bt_thread, NULL); if (started) pthread_detach(t); }
+    snprintf(bt_next, sizeof bt_next, "%s %s", on ? "Connected to" : "Disconnected from", *name ? name : "a Bluetooth device");
+    bt_next_ms = now_ms();
+    bt_try();
+    if (bt_next[0]) fprintf(stderr, "bluetooth: \"%s\" waits for the announcement before\n", bt_next);
+}
+
+static void announce_done(void) { bt_asked_ms = 0; bt_free_ms = now_ms() + 1000; }
+
 static void start(void)
 {
     PB(b, 96);
@@ -768,7 +842,7 @@ static void stop(void)
 
 static void played(void)
 {
-    if (announcing) { PB(b, 8); pb_uint(&b, 1, 1); send_va(VA_ANNOUNCE_FINISHED, &b); announcing = 0; }
+    if (announcing) { PB(b, 8); pb_uint(&b, 1, 1); send_va(VA_ANNOUNCE_FINISHED, &b); announcing = 0; announce_done(); }
     if (media_playing) { media_playing = 0; send_mp_state(); }
     atomic_store(&media_busy, 0);
     tts_expected = 0;
@@ -913,8 +987,9 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case LIST_ENTITIES_REQ: send_entities(); break;
     case SUBSCRIBE_STATES:
         for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd == reply_fd) clients[i].states = 1;
-        send_mp_state(); for (int k = KEY_NOISE; k <= KEY_WAKE_SOUND; k++) send_setting(k); send_setting(KEY_BT_PAIRING); send_token_state(); send_diag_states(); break;
+        send_mp_state(); for (int k = KEY_NOISE; k <= KEY_WAKE_SOUND; k++) send_setting(k); send_setting(KEY_BT_PAIRING); send_setting(KEY_BT_ANNOUNCE); send_token_state(); send_diag_states(); break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
+    case SUBSCRIBE_HA_ACTIONS: if (c >= 0) clients[c].actions = 1; break;
     case SUBSCRIBE_VA: {
         int sub = 0;
         while (pb_next(&p, end, &f)) if (f.field == 1) sub = f.v != 0;
@@ -1019,7 +1094,7 @@ static void serve(int fd)
     { static int loaded; if (!loaded) { loaded = 1; settings_load(); key_load(); pthread_t t; pthread_create(&t, NULL, diag_thread, NULL); pthread_detach(t);
                                        ble_start(&ble_handler); a2dp_start(bt_changed); } }
     for (int i = 0; i < MAX_CLIENTS; i++) { if (clients[i].fd < 0 && slot < 0) slot = i; n += clients[i].fd >= 0; }
-    if (slot >= 0) { clients[slot].fd = fd; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = 0; if (!n) core_link(1, 0); }
+    if (slot >= 0) { clients[slot].fd = fd; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = 0; if (!n) core_link(1, 0); }
     int keyed = have_key;
     pthread_mutex_unlock(&core_lock);
     if (slot < 0) { fprintf(stderr, "client refused: %d connections already\n", MAX_CLIENTS); free(buf); free(pt); return; }
@@ -1058,7 +1133,7 @@ static void serve(int fd)
 done:
 
     pthread_mutex_lock(&core_lock);
-    clients[slot].fd = -1; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = 0; n = 0;
+    clients[slot].fd = -1; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = 0; n = 0;
     ble_update();
     if (!ble_subscribers()) {                           /* nobody left to use them */
         int users = 0; uint64_t a[BLE_MAX_CONN];
@@ -1074,4 +1149,4 @@ done:
     fprintf(stderr, "client disconnected (%d left)\n", n);
 }
 
-const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, played, volume_changed, mute_changed, print_mdns };
+const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, played, volume_changed, mute_changed, print_mdns, bt_device };

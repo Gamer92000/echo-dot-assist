@@ -24,6 +24,7 @@ struct proto {
     void (*volume_changed)(int percent);        /* may be NULL */
     void (*mute_changed)(int muted);            /* may be NULL: effective mute (hardware latch or soft mute) changed */
     void (*print_mdns)(void);                   /* avahi service file on stdout */
+    void (*bt_device)(const char *name, int on); /* may be NULL: announce a Bluetooth speaker connection (name may be "") */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
@@ -45,6 +46,7 @@ void core_error(void);
 int  core_soft_mute(int set);                    /* set: 0/1, or -1 to only read */
 int  core_muted(void);                           /* effective */
 int  core_wake_sound(int set);                   /* same convention */
+int  core_bt_announce(int set);                  /* same: chime and "Connected to <name>" when a phone connects */
 int  core_volume(void);
 void core_set_volume(int percent);
 
@@ -58,4 +60,5 @@ size_t core_tts_queued(void);                               /* bytes not yet pla
 void   core_alarm(int on);                                  /* timer finished: ring until button, wake word or 60 s */
 enum { MUSIC_SENDSPIN = 1, MUSIC_BLUETOOTH = 2 };
 void   core_music(int source, int on);                      /* a music stream runs: the wake word threshold follows */
+void   core_bt_device(const char *name, int on);            /* a Bluetooth speaker source connected / went (not the lock) */
 #endif

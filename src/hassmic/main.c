@@ -41,9 +41,10 @@
 #define TTS_RATE         22050      /* assumed when audio-start carries no rate */
 
 static const char *const state_names[] = { "idle", "listening", "thinking", "speaking" };
-static int use_led = 1, use_earcon = 1, use_volume = 1;
+static int use_led = 1, use_earcon = 1, use_volume = 1, use_bt_announce = 1;
 static atomic_int sounds_pending;
-static void sound_request(enum sound s) { if (use_earcon) atomic_fetch_or(&sounds_pending, 1 << s); }     /* played by the earcon thread */
+static void sound_queue(enum sound s) { atomic_fetch_or(&sounds_pending, 1 << s); }                          /* played by the earcon thread */
+static void sound_request(enum sound s) { if (use_earcon) sound_queue(s); }
 
 const char *core_name = "Echo Dot";
 static int ota_port = 28929;                        /* 0 = no push updates */
@@ -132,6 +133,20 @@ static void pipeline_start(void)
 }
 
 int core_wake_sound(int set) { if (set >= 0) use_earcon = set; return use_earcon; }
+
+int core_bt_announce(int set) { if (set >= 0) use_bt_announce = set; return use_bt_announce; }
+
+/* Stock Alexa played its Bluetooth chime and said "Now connected to <name>".  The chime is on the image; there is no TTS
+ * engine on it, so the words come from Home Assistant (the protocol asks it) and only while it is connected. */
+void core_bt_device(const char *name, int on)
+{
+    pthread_mutex_lock(&core_lock);
+    if (use_bt_announce) {
+        sound_queue(on ? SND_BT_ON : SND_BT_OFF);
+        if (connected && proto->bt_device) proto->bt_device(name, on);
+    }
+    pthread_mutex_unlock(&core_lock);
+}
 
 int core_muted(void) { return soft_mute || buttons_muted(); }
 
@@ -353,7 +368,8 @@ static void *earcon_thread(void *arg)
 {
     enum { RATE = 48000, N = RATE * 12 / 100 };
     static short tone[N];
-    static const char *const snd_names[SND_COUNT] = { "wake", "touch", "mics off", "mics on", "volume" };
+    static const char *const snd_names[SND_COUNT] = { "wake", "touch", "mics off", "mics on", "volume", "bluetooth connected",
+                                                                "bluetooth disconnected" };
     (void)arg;
     for (int i = 0; i < N; i++) {           /* 120 ms rising two-tone blip with 10 ms fades */
         double f = i < N / 2 ? 880.0 : 1320.0, env = fmin(1.0, fmin(i, N - i) / (RATE * 0.01));

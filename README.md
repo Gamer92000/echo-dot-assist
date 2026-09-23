@@ -55,7 +55,7 @@ Details:
 - **Bluetooth**: the proxy works like an ESPHome `bluetooth_proxy` with `active: true`, up to 3 connections, "Just Works"
   pairing only. While a phone plays, the proxy stops scanning: the radio cannot do both without the music stuttering.
 - **Settings in Home Assistant**: noise suppression level, auto gain, mic volume multiplier, mute switch, "Wake sound"
-  switch (covers all local sounds), "Bluetooth pairing" switch. Diagnostics, off by default: SoC temperature, CPU usage.
+  switch (covers all local sounds), "Bluetooth pairing" switch, "Bluetooth announcements" switch. Diagnostics, off by default: SoC temperature, CPU usage.
 - **No cloud**: Alexa client, updater and telemetry are stopped at every boot; a firewall drops everything that is not
   going to a local address. Only hassmic itself may go further, to fetch replies and music from where Home Assistant or
   Music Assistant point it. See [Security](#security).
@@ -241,6 +241,11 @@ diagnostic entity "Sendspin pairing token" in Home Assistant, or read it from `/
 Turn on the "Bluetooth pairing" switch in Home Assistant, then pick the Echo in the phone's Bluetooth settings within two
 minutes. Paired devices reconnect by themselves whenever you choose the Echo; unknown ones are refused while the switch
 is off.
+
+Like stock Alexa the Echo announces connections: a chime and "Connected to <name>" / "Disconnected from <name>". The
+words are spoken by Home Assistant, which only does that after you tick "Allow the device to perform Home Assistant
+actions" in the Echo's ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure). The
+"Bluetooth announcements" switch turns chime and words off.
 
 ### Updating
 

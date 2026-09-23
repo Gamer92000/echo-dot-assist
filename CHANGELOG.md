@@ -4,6 +4,12 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-09-24
 
+- **"Connected to <phone>" like Alexa.** When a phone or computer connects to the Echo as a Bluetooth speaker, the Echo
+  plays Amazon's Bluetooth chime and says "Connected to" and the device's name; on disconnect the other chime and
+  "Disconnected from …". The words come from Home Assistant's text-to-speech, so Home Assistant has to let the Echo
+  ask for it: Settings → Devices & services → ESPHome → the Echo → Configure → tick "Allow the device to perform Home
+  Assistant actions" (until then only the chime plays, and Home Assistant shows a repair about it). The new
+  "Bluetooth announcements" switch turns both chime and words off.
 - **Bluetooth speaker again.** Phones and computers can play to the Echo over Bluetooth, beside the Bluetooth proxy.
   To pair, turn on the new "Bluetooth pairing" switch in Home Assistant and pick the Echo on the phone within two
   minutes; afterwards the phone connects by itself whenever you choose the Echo. Music from the phone is ducked while

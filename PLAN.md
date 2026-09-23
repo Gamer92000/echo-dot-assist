@@ -410,6 +410,22 @@ Run in this order. Each step says what it proves.
       error x 2e-5/ms: 4 min at 149-154 ms buffer, no dry-out, 0 dropped at the phone, the Pixel measured -261..-1072 ppm.
       The minute log line carries buffer level, clock estimate, peak level, longest packet gap and dry-outs.
       First aptX HD attempts failed because Opus was offered; the Opus loop took aptX HD with it
+- [x] Bluetooth connect announcements (2026-09-24, heard on the device with the Pixel): stock Alexa chimed and said "Now
+      connected to <name>". Chime: `state_bluetooth_connected.mp3` / `_disconnected.mp3` from the earcon directory. Name:
+      HCI Remote Name Request on every ACL connection. Announced once the link has opened AVDTP signalling and the name is
+      in (success or failure); "Disconnected from" when an announced link goes. No TTS engine on the image (no pico/svox/
+      flite libraries), so the words are Home Assistant's: HomeassistantActionRequest (34/35) `assist_satellite.announce`,
+      `preannounce: {{ false }}` (plain data arrives as strings, the schema rejects "false"), entity found by a template over our Wi-Fi MAC in the device registry's connections (entity ids
+      can be renamed); the phone's name travels as plain data, never through the template. Needs HA's "Allow the device to
+      perform Home Assistant actions". Checked on the PC: aioesphomeapi decodes the request (name with quotes and braces
+      intact), the template renders to the satellite in a Jinja sandbox with mocked registry functions. Switch "Bluetooth
+      announcements" (config), 6th field in `state/settings` (5-field files load with it on). On the device: a Pixel
+      "disconnecting" in its settings closes AVDTP + AVRCP but keeps the ACL link, so the announcement follows AVDTP. HA
+      resolved the template to `assist_satellite.echo_dot_assist_satellite`; connect and disconnect both spoken. A reconnect
+      during "Disconnected from" got SatelliteBusyError from HA: requests now go one at a time, latest wins: 1 s after
+      the previous announcement ended (HA still refuses in the instant after our "finished", its announce call has not
+      unwound yet), or 15 s after a request that never played; dropped after 30 s. Checked on air by toggling the
+      Pixel's connection quickly: first sentence, then the one for the latest state
 - [x] Revert procedure tested 2026-09-21: `install-system.sh --uninstall` leaves no trace on `/system` (`/sepolicy` md5 back to the pre-hassmic
       value, stock Alexa + `uxeventd` + `otad` run again, no egress lock: only the VLAN protects then); reinstall brings everything back, and
       `/data/local/hassmic/state` (Sendspin identity, pairing record, settings) survives both. `alexa-on.sh` (no reboot) still untested

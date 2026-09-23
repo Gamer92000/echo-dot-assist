@@ -12,7 +12,7 @@
 #endif
 #define DIR SOUND_DIR
 static const char *const names[SND_COUNT] = { "ui_wakesound", "ui_wakesound_touch", "state_privacy_mode_on", "state_privacy_mode_off",
-                                              "state_volume_adjust_tone" };
+                                              "state_volume_adjust_tone", "state_bluetooth_connected", "state_bluetooth_disconnected" };
 static struct { short *pcm; size_t n; unsigned rate; int tried; } cache[SND_COUNT];
 
 static short *to_mono(const short *in, size_t frames, unsigned ch)

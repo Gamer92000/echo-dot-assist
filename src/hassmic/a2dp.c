@@ -48,11 +48,11 @@
 #define CHUNK_MS 10
 
 enum { H4_CMD = 1, H4_ACL = 2 };
-enum { EV_CONN_COMPLETE = 0x03, EV_CONN_REQUEST, EV_DISCONNECT, EV_AUTH_COMPLETE, EV_ENC_CHANGE = 0x08, EV_PIN_REQUEST = 0x16,
+enum { EV_CONN_COMPLETE = 0x03, EV_CONN_REQUEST, EV_DISCONNECT, EV_AUTH_COMPLETE, EV_REMOTE_NAME = 0x07, EV_ENC_CHANGE, EV_PIN_REQUEST = 0x16,
        EV_LINK_KEY_REQUEST, EV_LINK_KEY_NOTIFY, EV_KEY_REFRESH = 0x30, EV_IO_CAP_REQUEST, EV_IO_CAP_RESPONSE, EV_USER_CONFIRM,
        EV_SSP_COMPLETE = 0x36 };
 enum { OP_DISCONNECT = 0x0406, OP_ACCEPT = 0x0409, OP_REJECT, OP_LINK_KEY_REPLY, OP_LINK_KEY_NEG, OP_PIN_REPLY, OP_PIN_NEG,
-       OP_AUTH = 0x0411, OP_ENCRYPT = 0x0413, OP_IO_CAP_REPLY = 0x042b, OP_CONFIRM_REPLY, OP_CONFIRM_NEG, OP_IO_CAP_NEG = 0x0434,
+       OP_AUTH = 0x0411, OP_ENCRYPT = 0x0413, OP_REMOTE_NAME = 0x0419, OP_IO_CAP_REPLY = 0x042b, OP_CONFIRM_REPLY, OP_CONFIRM_NEG, OP_IO_CAP_NEG = 0x0434,
        OP_LINK_POLICY = 0x080f, OP_LOCAL_NAME = 0x0c13, OP_SCAN_ENABLE = 0x0c1a, OP_CLASS = 0x0c24, OP_INQUIRY_MODE = 0x0c45,
        OP_EIR = 0x0c52, OP_SSP_MODE = 0x0c56, OP_READ_BUFFER = 0x1005 };
 enum { PSM_SDP = 0x0001, PSM_AVCTP = 0x0017, PSM_AVDTP = 0x0019 };
@@ -156,6 +156,7 @@ static struct link {
     long long avctp_at;                         /* when we open AVRCP ourselves if the device has not (0: done / not due) */
     int avctp, av_label, vol_label, vol_pct;    /* AVRCP: our CID, 0 = none; next transaction label of ours; label of the
                                                    device's volume notification (-1: none registered), the volume it knows */
+    char name[80]; int named, told;             /* the device's name (Remote Name Request), asked yet; connect announced */
 } links[MAX_LINKS];
 
 static unsigned acl_len = 27, acl_num = 1; static int credits;
@@ -923,19 +924,33 @@ static void avrcp_upkeep(void)
     }
 }
 
+/* "Connected to <name>" like stock Alexa, once the device has opened AVDTP (a speaker connection, not just an ACL link)
+ * and its name is in.  Phones ask for AVDTP a second or two after connecting; the name takes some 100 ms.  A Pixel
+ * "disconnecting" in its Bluetooth settings closes AVDTP and AVRCP but keeps the ACL link up: the announcement follows
+ * AVDTP (chan_closed), not the link. */
+static void maybe_tell(struct link *l)
+{
+    if (l->told || !l->av_sig || !l->named) return;
+    l->told = 1;
+    core_bt_device(l->name, 1);
+}
+
 static void chan_opened(struct link *l, struct chan *c)
 {
     if (c->psm == PSM_AVCTP && !l->avctp) { l->avctp = c->lcid; l->vol_label = -1; atomic_fetch_add(&avrcp_links, 1);
                                             fprintf(stderr, "a2dp: %012llx: remote control\n", (unsigned long long)l->addr); }
     if (c->psm != PSM_AVDTP) return;
-    if (!l->av_sig) { l->av_sig = c->lcid; if (!l->avctp) l->avctp_at = ms() + 2000; return; }
+    if (!l->av_sig) { l->av_sig = c->lcid; if (!l->avctp) l->avctp_at = ms() + 2000; maybe_tell(l); return; }
     if (av.l == l && av.state == ST_OPEN && !av.media) av.media = c->lcid;
 }
 
 static void chan_closed(struct link *l, struct chan *c)
 {
     if (c->lcid == l->avctp) { l->avctp = 0; atomic_fetch_sub(&avrcp_links, 1); }
-    if (c->lcid == l->av_sig) { l->av_sig = 0; if (av.l == l) av_reset(); }
+    if (c->lcid == l->av_sig) {
+        l->av_sig = 0; if (av.l == l) av_reset();
+        if (l->told) { l->told = 0; core_bt_device(l->name, 0); }  /* phones drop the profile, not always the link */
+    }
     else if (av.l == l && c->lcid == av.media) { av.media = 0; if (av.state >= ST_OPEN) { av.state = ST_CONFIGURED; set_streaming(0); } }
 }
 
@@ -1016,6 +1031,7 @@ int a2dp_event(const unsigned char *e, size_t n)
             l = &links[i]; memset(l, 0, sizeof *l);
             l->used = 1; l->handle = u16(q + 1) & 0x0fff; l->addr = addr_of(q + 3); l->enc = q[10];
             fprintf(stderr, "a2dp: %012llx connected\n", (unsigned long long)l->addr);
+            { unsigned char r[4] = { 0x01, 0, 0, 0 }; later_addr(OP_REMOTE_NAME, q + 3, r, 4); }   /* page scan R1, clock offset unknown */
             return 1;
         }
         { unsigned char d[3]; put16(d, u16(q + 1)); d[2] = 0x14; later(OP_DISCONNECT, d, 3); }  /* no room after all */
@@ -1025,6 +1041,21 @@ int a2dp_event(const unsigned char *e, size_t n)
         fprintf(stderr, "a2dp: %012llx disconnected (0x%02x)\n", (unsigned long long)l->addr, q[3]);
         link_gone(l);
         return 1;
+    case EV_REMOTE_NAME: {                                  /* status, address, name (UTF-8, NUL padded to 248) */
+        if (qn < 7) return 1;
+        uint64_t a = addr_of(q + 1); l = NULL;
+        for (int i = 0; i < MAX_LINKS; i++) if (links[i].used && links[i].addr == a) l = &links[i];
+        if (!l) return 0;                                   /* not ours (ble.c never asks, but let it see) */
+        size_t nl = 0, max = qn - 7 < sizeof l->name - 1 ? qn - 7 : sizeof l->name - 1;
+        if (!q[0]) while (nl < max && q[7 + nl]) nl++;
+        if (nl == max && 7 + nl < qn) while (nl && (q[7 + nl] & 0xc0) == 0x80) nl--;      /* cut: not inside a UTF-8 character */
+        memcpy(l->name, q + 7, nl); l->name[nl] = 0;
+        for (size_t i = 0; i < nl; i++) if ((unsigned char)l->name[i] < 0x20) l->name[i] = ' ';
+        if (q[0]) fprintf(stderr, "a2dp: %012llx: no name (0x%02x)\n", (unsigned long long)a, q[0]);
+        else fprintf(stderr, "a2dp: %012llx is \"%s\"\n", (unsigned long long)a, l->name);
+        l->named = 1;
+        maybe_tell(l);
+        return 1; }
     case EV_LINK_KEY_REQUEST: {
         if (qn < 6) return 1;
         struct key *k = key_for(addr_of(q));
