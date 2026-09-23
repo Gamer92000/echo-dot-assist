@@ -1,3 +1,6 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE                     /* getresgid on glibc */
+#endif
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
@@ -9,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/fsuid.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -121,6 +125,18 @@ unsigned mdns_resolve4(const char *host)
 
 /* ---------------------------------------------------------------- TCP */
 
+/* A socket owned by the real group, if runas -r gave us one: the egress lock lets that group reach any address, while
+ * the effective group stays what the mixer wants.  The filesystem group is per thread and switched back at once. */
+static int net_socket(int family)
+{
+    gid_t r, e, s; int fd;
+    if (getresgid(&r, &e, &s) || r == e) return socket(family, SOCK_STREAM, 0);
+    setfsgid(r);
+    fd = socket(family, SOCK_STREAM, 0);
+    setfsgid(e);
+    return fd;
+}
+
 int net_connect(const char *host, const char *port, int timeout_s)
 {
     struct addrinfo hints = { 0 }, *ai = NULL, local = { 0 }, *list = NULL; struct sockaddr_in sin = { 0 };
@@ -141,7 +157,7 @@ int net_connect(const char *host, const char *port, int timeout_s)
     int fd = -1;
     for (struct addrinfo *p = list; p && fd < 0; p = p->ai_next) {
         struct timeval tv = { timeout_s, 0 };           /* connect() obeys the send timeout */
-        if ((fd = socket(p->ai_family, SOCK_STREAM, 0)) < 0) continue;
+        if ((fd = net_socket(p->ai_family)) < 0) continue;
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv); setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
         if (connect(fd, p->ai_addr, p->ai_addrlen)) { close(fd); fd = -1; }
     }

@@ -131,8 +131,10 @@ satellite)
     fast=0
     while :; do
         t0=$(cut -d. -f1 /proc/uptime)
-        # AIPC refuses uid 0, so run as the stock Alexa client's user.
-        $D/runas puffin aipc,audio,system,inet,shell,dbus,ace_group,ace_kvstore,input \
+        # AIPC refuses uid 0, so run as the stock Alexa client's user.  Real group 3990, which no stock process has: hassmic
+        # creates its outgoing sockets under it and lockdown.sh lets that reach any address, so replies and music play from
+        # wherever Home Assistant points.  Not the effective group: the mixer only records for group aipc.
+        $D/runas -r 3990 puffin aipc,audio,system,inet,shell,dbus,ace_group,ace_kvstore,input \
             $BIN -P ${PROTO:-esphome} -n "${NAME:-Echo Dot}" $ARGS >> $LOG 2>&1
         echo "hassmic exited rc=$?, restart in 3 s" >> $LOG
         # An update whose daemon does not stay up is worse than no update: with hassmic down there is no push port either.

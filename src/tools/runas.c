@@ -1,6 +1,10 @@
-// runas USER GROUP[,GROUP...] CMD [ARGS...]
+// runas [-r GROUP] USER GROUP[,GROUP...] CMD [ARGS...]
 // Drop from the root adb shell to a service user.  The stock image has no su, and AIPC (used by
 // libmixerAPI) refuses uid 0: "Root user is not allowed to use AIPC".
+// -r: real group id.  The first GROUP stays the effective group (the mixer only records for a client
+// whose effective group is aipc); the process may switch its filesystem group to the real one with
+// setfsgid(), which is what the firewall's owner match sees on sockets it creates then.  The real
+// group because exec resets the saved one to the effective one.
 #include <grp.h>
 #include <pwd.h>
 #include <stdio.h>
@@ -19,13 +23,17 @@ static int gid_of(const char *s, gid_t *out)
 
 int main(int argc, char **argv)
 {
-    gid_t gids[32];
+    gid_t gids[32], real = (gid_t)-1;
     int n = 0;
     struct passwd *pw;
     char *tok;
 
+    if (argc > 2 && !strcmp(argv[1], "-r")) {
+        if (gid_of(argv[2], &real)) { fprintf(stderr, "runas: unknown group %s\n", argv[2]); return 1; }
+        argv += 2; argc -= 2;
+    }
     if (argc < 4) {
-        fprintf(stderr, "usage: %s USER GROUP[,GROUP...] CMD [ARGS...]\n", argv[0]);
+        fprintf(stderr, "usage: runas [-r GROUP] USER GROUP[,GROUP...] CMD [ARGS...]\n");
         return 2;
     }
     pw = getpwnam(argv[1]);
@@ -35,7 +43,9 @@ int main(int argc, char **argv)
         if (gid_of(tok, &gids[n])) { fprintf(stderr, "runas: unknown group %s\n", tok); return 1; }
         n++;
     }
-    if (setgroups(n, gids) || setgid(gids[0]) || setuid(pw->pw_uid)) { perror("runas"); return 1; }
+    if (setgroups(n, gids) || setresgid(real == (gid_t)-1 ? gids[0] : real, gids[0], gids[0]) || setuid(pw->pw_uid)) {
+        perror("runas"); return 1;
+    }
 
     execvp(argv[3], argv + 3);
     perror(argv[3]);

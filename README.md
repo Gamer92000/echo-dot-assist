@@ -43,8 +43,9 @@ own music like it did before. Only the Alexa client is replaced, by a small daem
   mute on and off.
   Diagnostics, off by default: SoC temperature and CPU usage.
 - **No cloud**: the Alexa client, the updater and the telemetry services are stopped at every boot, and a firewall on the
-  Echo drops everything that is not going to a local address (plus DNS to the servers your network hands out). Put it on a
-  network without internet as a second layer.
+  Echo drops everything that is not going to a local address (plus DNS to the servers your network hands out). The one
+  exception is hassmic itself, which fetches replies and music wherever Home Assistant or Music Assistant point it. Put
+  the Echo on a network without internet as a second layer.
 - **Updates over Wi-Fi** once installed: one command on the PC, signed, with automatic fallback if an update does not start.
 - **Reversible**: one file to delete for stock behaviour, an uninstaller, or reflash stock from the recovery.
 
@@ -207,13 +208,11 @@ reset, or something else set a key first): `adb shell rm /data/local/hassmic/sta
 reboot), then delete the device in Home Assistant and add it again.
 
 **No sound from replies or music?** The Echo fetches every reply, announcement and `play_media` from the URL Home
-Assistant or Music Assistant gives it, and may only connect to local addresses. Home Assistant builds that URL from its
-internal URL (Settings → System → Network), or from its own LAN IP when none is set. An IP works, and so does a `.local`
-name (the Echo asks by mDNS). A domain works only if it resolves to the LAN address for the Echo: split DNS, or a public
-record that points to the private IP; one that resolves to your public IP is dropped. A Tailscale address (100.64.0.0/10)
-or a global IPv6 address is not local either. Music Assistant hands out its "published IP" (streamserver settings), which
-has to be a LAN address; its Sendspin connection comes from the Music Assistant host itself. `boot.log` names the host
-it could not resolve or reach (`net: cannot ...`).
+Assistant or Music Assistant gives it. Home Assistant builds that URL from its internal URL (Settings → System →
+Network), or from its own LAN IP when none is set. Any address works, local or not (hassmic is exempt from the egress
+lock), and so does a `.local` name (the Echo asks by mDNS). What has to hold: the Echo can resolve the name (its DNS
+servers come from DHCP) and route to the address. On a network without internet, that means a URL that points into
+your network. `boot.log` names the host it could not resolve or reach (`net: cannot ...`).
 
 **Stopping it.** While it talks or a timer rings: the wake word alone cuts it and listens for a new command; "<wake word>,
 stop" cuts it and stays quiet; the action button does the same as the wake word. Say "stop" right behind the wake word,

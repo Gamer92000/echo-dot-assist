@@ -63,10 +63,15 @@ static int barge_in;                                /* under lock: start a new p
 
 /* ---------------------------------------------------------------- LED ring */
 
+/* In a child before exec: plain group aipc.  The real group 3990 that runas -r gives us is only for hassmic's own sockets
+ * (net.c); a shell would make it the effective group, and AIPC and the mixer refuse that. */
+static void child_ids(void) { gid_t e = getegid(); setregid(e, e); }
+
 static void run(const char *path, const char *a1, const char *a2)
 {
     char *argv[] = { (char *)path, (char *)a1, (char *)a2, NULL };
     if (fork() == 0) {                  /* bionic API 24 has no posix_spawn; SIGCHLD is ignored: no zombie */
+        child_ids();
         int nul = open("/dev/null", O_WRONLY);          /* ledctrl and audio_manager_set_prop chat on stdout: two log lines */
         if (nul >= 0) dup2(nul, 1);                     /* per LED change otherwise.  Errors (stderr) still reach the log */
         execv(path, argv);
@@ -390,12 +395,20 @@ static long long mono_ms(void)
 
 static int read_prop_volume(const char *prop, int fallback)
 {
-    char cmd[96], line[128]; int v = fallback, x;
-    snprintf(cmd, sizeof cmd, "/system/bin/audio_manager_get_prop %s 2>/dev/null", prop);
-    FILE *f = popen(cmd, "r");
-    if (!f) return v;
+    char line[128]; int v = fallback, x, p[2]; FILE *f;
+    if (pipe(p)) return v;
+    if (fork() == 0) {                  /* not popen: its shell would undo child_ids() */
+        child_ids();
+        int nul = open("/dev/null", O_WRONLY);
+        dup2(p[1], 1); if (nul >= 0) dup2(nul, 2);
+        close(p[0]); close(p[1]);
+        execl("/system/bin/audio_manager_get_prop", "audio_manager_get_prop", prop, (char *)NULL);
+        _exit(127);
+    }
+    close(p[1]);
+    if (!(f = fdopen(p[0], "r"))) { close(p[0]); return v; }
     while (fgets(line, sizeof line, f)) if (sscanf(line, "%d", &x) == 1 && x >= 0 && x <= 100) v = x;
-    pclose(f);
+    fclose(f);                          /* SIGCHLD is ignored: nothing to wait for */
     return v;
 }
 

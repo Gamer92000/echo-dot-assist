@@ -12,6 +12,11 @@
 #                        stock Alexa with internet, firmware updates still impossible (MODE=stock-online in hassmic.conf):
 #                        no egress lock, nothing stopped except the updaters.  otad and ace_otad both run as user ace_otad
 #                        and lose all network access; update_engine (root, started on demand) is kept stopped.
+# hassmic itself may connect anywhere: it creates its outgoing sockets with filesystem group NET_GID (runas -r in main.sh
+# and run.sh, setfsgid in net.c; the owner match checks that group) and only fetches what Home
+# Assistant (encrypted, paired connection) or Music Assistant send it.  That can be a public host name, a Tailscale address
+# or a global IPv6 address when that is how Home Assistant is reached.  The lock is about Amazon's daemons; none of them
+# has that group.
 # DNS (port 53) is also allowed to the resolvers the network handed out, whatever their address: DHCP often names a public
 # one next to the router (8.8.8.8), and a name that resolves publicly to a LAN address then still works.  Queries already
 # leave through a local resolver anyway, so this opens nothing new.
@@ -19,6 +24,7 @@
 # well if "never" has to be strict.
 LOCAL4="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 224.0.0.0/4 255.255.255.255"
 LOCAL6="fe80::/10 fc00::/7 ff02::/16"
+NET_GID=3990
 
 # DNS servers from DHCP (dhcp.<iface>.dnsN) and the system's own (net.dnsN), one per line, sorted
 resolvers() { getprop | sed -nE 's/^\[(dhcp\.[^.]+|net)\.dns[0-9]+\]: \[([^]]+)\]$/\2/p' | sort -u; }
@@ -31,6 +37,7 @@ apply() {
     for d in $LOCAL4; do iptables -w -A hassmic_out -d $d -j RETURN; done
     for d in $DNS; do case $d in *:*) continue;; esac
         for p in udp tcp; do iptables -w -A hassmic_out -d $d -p $p --dport 53 -j RETURN; done; done
+    iptables -w -A hassmic_out -m owner --gid-owner $NET_GID -j RETURN || echo "!! hassmic limited to local addresses (iptables)"
     iptables -w -A hassmic_out -j DROP
     while iptables -w -D OUTPUT -j hassmic_out 2>/dev/null; do :; done
     iptables -w -I OUTPUT 1 -j hassmic_out
@@ -40,6 +47,7 @@ apply() {
     for d in $LOCAL6; do ip6tables -w -A hassmic_out -d $d -j RETURN; done
     for d in $DNS; do case $d in *:*) ;; *) continue;; esac
         for p in udp tcp; do ip6tables -w -A hassmic_out -d $d -p $p --dport 53 -j RETURN; done; done
+    ip6tables -w -A hassmic_out -m owner --gid-owner $NET_GID -j RETURN || echo "!! hassmic limited to local addresses (ip6tables)"
     ip6tables -w -A hassmic_out -j DROP
     while ip6tables -w -D OUTPUT -j hassmic_out 2>/dev/null; do :; done
     ip6tables -w -I OUTPUT 1 -j hassmic_out

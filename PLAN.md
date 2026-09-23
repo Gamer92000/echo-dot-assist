@@ -230,6 +230,14 @@ Run in this order. Each step says what it proves.
       by exec without stopping the old one), and the satellite's one-shot `lockdown.sh` rebuilt the chain concurrently with the
       watcher (duplicate rules seen). Now `main.sh firewall` kills earlier watchers first and the satellite runs
       `lockdown.sh services` (daemons only). Verified after three pushes: one watcher, clean chain.
+      Egress for hassmic (2026-09-23): `lockdown.sh` RETURNs `-m owner --gid-owner 3990` in both tables before the DROP; the owner
+      match checks the socket's fsgid. First try, 3990 as primary group: playback fine, but the mixer refused recording
+      (`InCapture-GetReadBuff:retcode=110`, wake word deaf for ~50 min). Saved group does not survive exec. What works:
+      `runas -r 3990` = real group 3990, effective aipc; `net_connect` switches the thread's fsgid to the real group around
+      `socket()`. Children get plain aipc first (`child_ids()`: mksh would make the real group effective, which AIPC refuses), so
+      the volume read is fork/exec instead of popen. On the device: no retcode=110, capture has audio, wake word ECHO/STOP accepted,
+      volume reads right; `net_connect` to a public IP hits DROP without `-r`, the gid rule with it. Note `micAsr rate=-1` in the
+      log says nothing: it also shows on working starts. DNS still needs the resolver rule (netd resolves, not hassmic).
       **Installed permanently 2026-09-21**, verified after reboot: ESPHome on 26053 from `/system/hassmic`, own avahi in `su` domain answers
       mDNS queries, HA reconnected, settings file read, no test binary left in `/data`.
       First real announcement (2026-09-21) failed twice over: HA's media URL host (`192.168.0.3`, main LAN) was outside the

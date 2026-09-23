@@ -4,6 +4,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-09-23
 
+- **Replies and music from wherever Home Assistant points.** hassmic may now connect to any address, not only local
+  ones, so a Home Assistant reached by a public domain, a Tailscale address or IPv6 works too. Amazon's own services
+  stay locked to the local network. Safe now that only the paired Home Assistant can tell the Echo what to fetch.
 - **Encrypted connection to Home Assistant.** The ESPHome connection now uses the same encryption as ESPHome devices.
   Home Assistant creates the key by itself when the Echo is added, and from then on only Home Assistant can connect.
   Already added? Home Assistant sets the key on its next connection, nothing to do. See "Encryption key" in the README
