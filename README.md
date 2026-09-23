@@ -212,7 +212,8 @@ Assistant or Music Assistant gives it. Home Assistant builds that URL from its i
 Network), or from its own LAN IP when none is set. Any address works, local or not (hassmic is exempt from the egress
 lock), and so does a `.local` name (the Echo asks by mDNS). What has to hold: the Echo can resolve the name (its DNS
 servers come from DHCP) and route to the address. On a network without internet, that means a URL that points into
-your network. `boot.log` names the host it could not resolve or reach (`net: cannot ...`).
+your network. `boot.log` names the host it could not resolve or reach (`net: cannot ...`). If not even the button sounds play, check
+the volume first; a global mute left over from stock Alexa is cleared by hassmic by itself within 2 s of starting.
 
 **Stopping it.** While it talks or a timer rings: the wake word alone cuts it and listens for a new command; "<wake word>,
 stop" cuts it and stays quiet; the action button does the same as the wake word. Say "stop" right behind the wake word,

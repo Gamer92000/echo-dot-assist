@@ -449,10 +449,14 @@ void core_set_volume(int v)
 /* Anything may move MainVolume behind our back (audio_manager_set_prop, a stock daemon, the stock keys when -V), and
  * TTSVolume does not follow by itself: replies would then play at the old volume.  Poll both every 2 s: a changed
  * MainVolume is the user's wish and is adopted (Home Assistant and Music Assistant are told, no LED), a strayed TTSVolume
- * is pulled back in line. */
+ * is pulled back in line.
+ * The mixer's global Mute silences every stream whatever the volumes say, and it persists across reboots: stock Alexa
+ * ("Alexa, mute") can leave it set, and then nothing plays.  Nothing of ours uses it (the mic button is a hardware latch,
+ * a player mute from Music Assistant is ours in software), so a set Mute is cleared. */
 static void volume_sync(void)
 {
     int main_v, tts_v;
+    if (read_prop_volume("Mute", 0) != 0) { fprintf(stderr, "speaker: global Mute was set, clearing it\n"); set_prop_volume("Mute", 0); }
     pthread_mutex_lock(&core_lock);
     int cur = core_volume();
     pthread_mutex_unlock(&core_lock);

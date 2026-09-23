@@ -4,6 +4,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-09-23
 
+- **No more silent speaker after Alexa's mute.** Amazon's mixer has a global mute that silences every sound whatever the
+  volume, and it survives reboots, so an Echo muted under stock Alexa stayed silent under hassmic: no replies, no music,
+  no sounds. hassmic now clears it when it finds it set.
 - **Replies and music from wherever Home Assistant points.** hassmic may now connect to any address, not only local
   ones, so a Home Assistant reached by a public domain, a Tailscale address or IPv6 works too. Amazon's own services
   stay locked to the local network. Safe now that only the paired Home Assistant can tell the Echo what to fetch.
