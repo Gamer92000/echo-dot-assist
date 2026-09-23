@@ -38,6 +38,12 @@ own music like it did before. Only the Alexa client is replaced, by a small daem
 - **The buttons work**: action = talk without the wake word / pause and resume music / stop an alarm; volume up and down in
   10 % steps; the mic-off button is the hardware mute it always was (red ring, Alexa's own mute sounds, reported to Home Assistant).
 - **LED ring** shows listening, thinking, speaking, errors and mute. Silent and dark at boot.
+- **Bluetooth proxy**: the Echo's Bluetooth radio becomes a Bluetooth adapter for Home Assistant, like an ESPHome
+  `bluetooth_proxy` with `active: true`. BLE sensors, trackers and beacons nearby show up in Home Assistant's
+  Bluetooth integrations, and integrations that connect to a device (up to 3 at a time) can do that through the Echo.
+  Pairing works like on an ESP32 proxy: "Just Works" only (no PIN entry), keys kept on the Echo in
+  `/data/local/hassmic/state/ble_bonds`. The Echo is no longer a Bluetooth speaker; it could not pair without Alexa
+  anyway.
 - **Settings in Home Assistant**: noise suppression level, auto gain, mic volume multiplier, mute switch, and a "Wake sound"
   switch that covers all local sounds. Those are Alexa's originals from the firmware: wake word, action button, volume keys,
   mute on and off.
@@ -303,7 +309,7 @@ user-visible changes by date: [CHANGELOG.md](CHANGELOG.md).
 | Path | What |
 |---|---|
 | `src/hassmic/` | the daemon: core (capture, wake word, playback, LEDs, buttons), `proto_esphome.c`, `proto_wyoming.c`, `sendspin.c`, push updates |
-| `src/tools/` | `mixcap`, `mixplay`, `pryon_test`, `latency`, `otatool`, `runas` (AIPC refuses uid 0, the image has no `su`), `curlspy` |
+| `src/tools/` | `mixcap`, `mixplay`, `pryon_test`, `latency`, `otatool`, `runas` (AIPC refuses uid 0, the image has no `su`), `curlspy`, `hciscan` (raw HCI on `/dev/stpbt`) |
 | `src/include/` | C headers for the reversed `libmixerAPI.so` and `libpryon.so` |
 | `src/third_party/` | monocypher 4.0.2 (BSD-2-Clause OR CC0), `dr_flac.h` (public domain or MIT-0), `minimp3.h` (CC0) |
 | `scripts/` | PC side: `deploy.sh`, `probe.sh`, `capture-test.sh`, `wifi-join.sh`, `install-system.sh`, `ota-push.sh` |

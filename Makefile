@@ -36,6 +36,11 @@ build/runas: src/tools/runas.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) $< -o $@ -pie -fuse-ld=lld
 
+# not part of "all": raw HCI probe on the Bluetooth controller (stop btmanagerd first, see the file)
+build/hciscan: src/tools/hciscan.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) $< -o $@ -pie -fuse-ld=lld
+
 # not part of "all": LD_PRELOAD shim to see a stock daemon's libcurl requests (see the file)
 build/libcurlspy.so: src/tools/curlspy.c
 	@mkdir -p build
@@ -46,7 +51,7 @@ build/pryon_test: src/tools/pryon_test.c src/include/pryon_api.h
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) $(STOCK)/libpryon.so
 
 HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c \
-           src/hassmic/sendspin.c src/hassmic/ota.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c \
+           src/hassmic/sendspin.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/ota.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c \
            src/third_party/monocypher.c
 HASSMIC_H := $(wildcard src/hassmic/*.h src/include/*.h) build/.build-id
 
@@ -73,6 +78,7 @@ unit:
 	cc -O2 -Wall -Isrc/hassmic -Isrc/include tests/unit/hash_test.c $(UNIT) -lpthread -o build/hash_test && build/hash_test
 	cc -O2 -Wall -D_GNU_SOURCE -Isrc/hassmic -Isrc/include -include stdlib.h tests/unit/ws_test.c $(UNIT) -lpthread -o build/ws_test
 	cc -O2 -Wall -Isrc/hassmic -Isrc/include tests/unit/noise_test.c $(UNIT) -lpthread -o build/noise_test
+	cc -O2 -Wall -Isrc/hassmic tests/unit/ble_crypto_test.c src/hassmic/ble_crypto.c -o build/ble_crypto_test && build/ble_crypto_test
 	.venv/bin/python tests/unit/ws_ref.py build/ws_test
 	.venv/bin/python tests/unit/noise_ref.py build/noise_test
 

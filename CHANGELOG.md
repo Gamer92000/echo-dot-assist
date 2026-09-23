@@ -2,6 +2,16 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-09-24
+
+- **Bluetooth proxy for Home Assistant.** The Echo now scans for Bluetooth LE devices and passes what it hears to Home
+  Assistant, like an ESPHome Bluetooth proxy. After updating, Home Assistant picks it up by itself: the Echo appears
+  under Settings → Devices & services → Bluetooth, and BLE sensors, trackers and beacons in range show up.
+  Integrations that have to connect to a device can do so through the Echo too, up to 3 devices at a time, and pair
+  with it where the device allows pairing without a PIN (like ESPHome's proxies). Paired devices are remembered across
+  restarts. Amazon's Bluetooth service is stopped for this, so the Echo no longer works as a Bluetooth speaker (without
+  Alexa nothing could pair with it anyway).
+
 ## 2026-09-23
 
 - **No more silent speaker after Alexa's mute.** Amazon's mixer has a global mute that silences every sound whatever the

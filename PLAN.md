@@ -317,6 +317,37 @@ Run in this order. Each step says what it proves.
       HA switch once the satellite runs (not when the saved setting is restored at start). The "Wake sound" switch silences them too
 - [x] Log: `boot.log` rotated by `boot.sh` at 1 MB (copy + truncate, because several long-lived processes append to it; one old
       part kept as `boot.log.1`); `ledctrl` / `audio_manager_set_prop` stdout no longer logged (two lines per LED change before)
+- [x] Bluetooth proxy (2026-09-24, `src/hassmic/ble.c`): no kernel Bluetooth stack (no BlueZ, no HCI sockets); the MT8516's combo
+      chip is `/dev/stpbt` (MediaTek WMT, H4 framing, `bluetooth:net_bt_stack 0660`), driven by Amazon's `btmanagerd`
+      (`ro.btstack=blueangel`, started on `audio_mixer.init=true`). The node opens a second time beside `btmanagerd` without
+      complaint, so both would lose events: `alexa-off.sh` stops it and hassmic waits for `init.svc.btmanagerd` to leave
+      `running`. Controller: HCI 4.2 (version 8), address = `/proc/idme/bt_mac_addr`. hassmic resets it, scans while an API
+      client is subscribed and forwards raw advertisements (feature flags 97 = passive scan, raw advertisements, scanner
+      state and mode; HA sets passive mode itself). Measured (10 MB adb pull over Wi-Fi during active scanning): no scan
+      4.3 MB/s, 30 ms window / 320 ms 3.8, 80/160 3.1, continuous 0.6–1.6; advertisements received were about the same
+      (~240/s), so ESPHome's Wi-Fi default 30/320 it is. ~2700 advertisements from 29 devices in 15 s. A daemon killed while
+      scanning leaves the chip scanning: startup drains for at most 300 ms, resets, resyncs the H4 stream.
+      Connections (same day): GATT client in `ble.c`, feature flags 103 (+ active connections, remote caching: HA caches
+      the database and writes CCCDs itself), 3 slots, scanning paused while a connection is set up. Controller: LE ACL
+      32 x 251 bytes. Checked with aioesphomeapi against two SteamVR base stations (MTU 23: discovery of 6 services in
+      1.3 s, 64-byte value by Read Blob, both connected at once, CCCD write + read back) and a BlueZ peripheral on the PC
+      (MTU 517, 500-byte write + read back, 505-byte notification reassembled from 251-byte ACL packets, indications,
+      write without response); an absent address fails after 20 s with error 8. Not exercised: prepared writes (needs a
+      device with a small MTU and a >20-byte write). Not done: connection parameter requests from HA.
+      `BTSinkPlayer` still runs idle
+- [x] Bluetooth pairing (2026-09-24, `ble.c` + `ble_crypto.c`): SMP initiator, Just Works, feature flags 111 (+ PAIRING).
+      AES-128 / AES-CMAC / f4 f5 f6 c1 s1 ah in software, checked against FIPS-197, RFC 4493 and the spec's sample data
+      (`make unit`). LE Secure Connections with the controller's P-256 (supported commands octet 34 bits 1-2: present).
+      **Controller quirk:** MediaTek returns its P-256 public key and the DHKey most significant octet first, and wants
+      the peer key that way too (spec: least significant first). Found because only the byte-reversed key was on the
+      curve and BlueZ refused ours with "unspecified"; converted at the HCI boundary. Bonds in `state/ble_bonds` (0600);
+      IRK kept to recognise devices behind private addresses. On reconnect the link is encrypted with the bond, but only
+      once the device has sent its first packet: Start Encryption straight after the connection complete killed the link
+      (0x3e). A bonded BlueZ peripheral refuses our MTU request until encrypted (asked again afterwards) and runs its own
+      exchange first, then refuses ours (its value is kept). Checked against a BlueZ peripheral with an encrypt-read
+      characteristic: insufficient encryption -> pair (LE SC) -> read ok -> 8/8 reconnects read with the stored bond ->
+      unpair; bonds cleaned up on both sides. Not exercised on air: legacy pairing (BlueZ on the PC always takes Secure
+      Connections; `btmgmt sc off` needs root), key sizes below 16
 - [x] Revert procedure tested 2026-09-21: `install-system.sh --uninstall` leaves no trace on `/system` (`/sepolicy` md5 back to the pre-hassmic
       value, stock Alexa + `uxeventd` + `otad` run again, no egress lock: only the VLAN protects then); reinstall brings everything back, and
       `/data/local/hassmic/state` (Sendspin identity, pairing record, settings) survives both. `alexa-on.sh` (no reboot) still untested

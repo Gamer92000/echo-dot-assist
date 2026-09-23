@@ -14,6 +14,7 @@
  *   announcements    VoiceAssistantAnnounceRequest with http URLs; Home Assistant transcodes to the WAV format the media
  *                    player entity advertises, we stream it.  Same path for media_player.play_media.
  *   timers           finished timer rings (core_alarm)
+ *   bluetooth proxy  LE scanning with raw advertisements, GATT connections to up to 3 devices at a time, pairing (ble.c)
  */
 #include <ctype.h>
 #include <errno.h>
@@ -29,6 +30,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include "ble.h"
 #include "core.h"
 #include "hash.h"
 #include "noise.h"
@@ -47,7 +49,17 @@ enum {
     LIST_MEDIA_PLAYER = 63, MEDIA_PLAYER_STATE, MEDIA_PLAYER_COMMAND,
     SUBSCRIBE_VA = 89, VA_REQUEST, VA_RESPONSE, VA_EVENT, VA_AUDIO = 106, VA_TIMER_EVENT = 115,
     VA_ANNOUNCE = 119, VA_ANNOUNCE_FINISHED, VA_CONFIG_REQ, VA_CONFIG_RESP, VA_SET_CONFIG, SET_KEY_REQ = 124, SET_KEY_RESP,
+    BLE_SUBSCRIBE = 66, BLE_DEVICE_REQ = 68, BLE_CONNECTION, BLE_SERVICES_REQ, BLE_SERVICES, BLE_SERVICES_DONE, BLE_READ_REQ,
+    BLE_READ, BLE_WRITE_REQ, BLE_READ_DESC_REQ, BLE_WRITE_DESC_REQ, BLE_NOTIFY_REQ, BLE_NOTIFY_DATA, BLE_CONN_FREE_REQ,
+    BLE_CONN_FREE, BLE_GATT_ERROR, BLE_WRITTEN, BLE_NOTIFY, BLE_PAIRED, BLE_UNPAIRED, BLE_UNSUBSCRIBE, BLE_CACHE_CLEARED,
+    BLE_RAW_ADV = 93, BLE_SCANNER_STATE = 126, BLE_SCANNER_SET_MODE = 127,
 };
+/* Proxy features: passive scan, active connections, remote caching (Home Assistant keeps the GATT database and writes the
+ * notification descriptors itself), pairing, raw advertisements, scanner state and mode.  Not: cache clearing (there is
+ * no cache on the Echo), connection parameters.  Scanner state: idle / running; mode: passive / active.
+ * Device requests: connect (0, and the v3 variants 4 and 5, all the same here), disconnect, pair, unpair, clear cache. */
+enum { BLE_FEATURES = 1 | 2 | 4 | 8 | 32 | 64, BLE_IDLE = 0, BLE_RUNNING = 2, BLE_PASSIVE = 0, BLE_ACTIVE = 1 };
+enum { BLE_REQ_CONNECT = 0, BLE_REQ_DISCONNECT, BLE_REQ_PAIR, BLE_REQ_UNPAIR, BLE_REQ_CLEAR_CACHE = 6 };
 enum { EV_ERROR = 0, EV_RUN_START, EV_RUN_END, EV_STT_START, EV_STT_END, EV_INTENT_START, EV_INTENT_END, EV_TTS_START,
        EV_TTS_END, EV_WAKE_START, EV_WAKE_END, EV_VAD_START, EV_VAD_END, EV_TTS_STREAM_START = 98, EV_TTS_STREAM_END = 99, EV_INTENT_PROGRESS = 100 };
 enum { FEAT_VOICE = 1, FEAT_SPEAKER = 2, FEAT_API_AUDIO = 4, FEAT_TIMERS = 8, FEAT_ANNOUNCE = 16, FEAT_START_CONVERSATION = 32 };
@@ -60,7 +72,7 @@ enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3
  * client that subscribed to the voice assistant (first come, first served - also like the firmware). */
 #define MAX_CLIENTS 4
 /* lock held.  enc: Noise frames (tx is used under the lock, rx by the client's reader only); keyed: with the device key */
-static struct { int fd, states, enc, keyed; struct noise_cs tx, rx; } clients[MAX_CLIENTS] = { { .fd = -1 }, { .fd = -1 }, { .fd = -1 }, { .fd = -1 } };
+static struct { int fd, states, enc, keyed, ble, ble_free, ble_user; struct noise_cs tx, rx; } clients[MAX_CLIENTS] = { { .fd = -1 }, { .fd = -1 }, { .fd = -1 }, { .fd = -1 } };
 static int va_fd = -1;                  /* lock held: voice assistant subscriber */
 static __thread int reply_fd = -1;      /* the client whose request this thread is handling */
 static int tts_expected;                /* lock held: the reply is being fetched or played; RUN_END must not end the pipeline */
@@ -77,6 +89,7 @@ static void pb_varint(struct pb *b, uint64_t v) { unsigned char c; do { c = v & 
 static void pb_uint(struct pb *b, int f, uint64_t v) { if (v) { pb_varint(b, f << 3); pb_varint(b, v); } }
 static void pb_bytes(struct pb *b, int f, const void *d, size_t n) { if (n) { pb_varint(b, f << 3 | 2); pb_varint(b, n); pb_raw(b, d, n); } }
 static void pb_str(struct pb *b, int f, const char *s) { pb_bytes(b, f, s, strlen(s)); }
+static void pb_sint(struct pb *b, int f, int32_t v) { pb_uint(b, f, (uint32_t)v << 1 ^ (uint32_t)(v >> 31)); }   /* zigzag */
 static void pb_fixed32(struct pb *b, int f, uint32_t v) { pb_varint(b, f << 3 | 5); pb_raw(b, &v, 4); }      /* little endian host */
 static void pb_float(struct pb *b, int f, float v) { uint32_t u; memcpy(&u, &v, 4); pb_fixed32(b, f, u); }
 
@@ -555,6 +568,165 @@ static void media_start(const char *url0, const char *url1, int announce, int st
     pthread_create(&t, NULL, media_thread, job); pthread_detach(t);
 }
 
+/* ---------------------------------------------------------------- bluetooth proxy
+ * Home Assistant subscribes to raw advertisements and parses them itself.  The radio scans only while someone is
+ * subscribed.  Active scanning (scan requests, so names from scan responses) is the default, like ESPHome's; Home
+ * Assistant can switch the mode (not kept across restarts, it sets it again).
+ * Connections: Home Assistant asks for a free slot (connections free), connects, fetches the services once and caches
+ * them, then reads, writes, subscribes and pairs.  Answers go to every client that uses the proxy (subscribed, or sent a
+ * request).  When the last one leaves,
+ * its connections are closed, as ESPHome does. */
+
+static int ble_mode = BLE_ACTIVE;       /* lock held */
+
+static int ble_subscribers(void)        /* lock held */
+{
+    int n = 0;
+    for (int i = 0; i < MAX_CLIENTS; i++) n += clients[i].fd >= 0 && clients[i].ble;
+    return n;
+}
+
+static void ble_update(void) { ble_scan(ble_subscribers() > 0, ble_mode == BLE_ACTIVE); }      /* lock held */
+
+static void send_ble(unsigned type, const struct pb *b)                                        /* lock held */
+{
+    for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].ble) send_to(clients[i].fd, type, b);
+}
+
+static void send_scanner_state(void)    /* lock held */
+{
+    PB(b, 16);
+    pb_uint(&b, 1, ble_scanning() ? BLE_RUNNING : BLE_IDLE); pb_uint(&b, 2, ble_mode); pb_uint(&b, 3, ble_mode);
+    send_ble(BLE_SCANNER_STATE, &b);
+}
+
+static void ble_changed(void) { pthread_mutex_lock(&core_lock); send_scanner_state(); pthread_mutex_unlock(&core_lock); }
+
+static void send_gatt(unsigned type, const struct pb *b)                                      /* lock held */
+{
+    for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && (clients[i].ble || clients[i].ble_free || clients[i].ble_user)) send_to(clients[i].fd, type, b);
+}
+
+static void send_slots(int to_asker)    /* lock held */
+{
+    PB(b, 64); uint64_t a[BLE_MAX_CONN]; int n = ble_connections(a);
+    pb_uint(&b, 1, BLE_MAX_CONN - n); pb_uint(&b, 2, BLE_MAX_CONN);
+    if (n) { PB(al, 40); for (int i = 0; i < n; i++) pb_varint(&al, a[i]); pb_bytes(&b, 3, al.p, al.n); }    /* packed */
+    if (to_asker) { send_msg(BLE_CONN_FREE, &b); return; }
+    for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].ble_free) send_to(clients[i].fd, BLE_CONN_FREE, &b);
+}
+
+static void ble_slots(void) { pthread_mutex_lock(&core_lock); send_slots(0); pthread_mutex_unlock(&core_lock); }
+
+static void ble_connection(uint64_t addr, int connected, unsigned mtu, int error)
+{
+    PB(b, 32);
+    pb_uint(&b, 1, addr); pb_uint(&b, 2, connected); pb_uint(&b, 3, mtu); pb_uint(&b, 4, error);
+    pthread_mutex_lock(&core_lock); send_gatt(BLE_CONNECTION, &b); pthread_mutex_unlock(&core_lock);
+}
+
+static void pb_uuid(struct pb *b, int f, const uint64_t u[2])  /* repeated uint64, packed */
+{
+    PB(v, 20); pb_varint(&v, u[0]); pb_varint(&v, u[1]); pb_bytes(b, f, v.p, v.n);
+}
+
+/* one message per service, like ESPHome: a big database would not fit into one */
+static void ble_db(uint64_t addr, const struct ble_db *db)
+{
+    static unsigned char buf[8000], sb[7900], cb[1200], db_[64];
+    pthread_mutex_lock(&core_lock);
+    for (int s = 0; s < db->nsvc; s++) {
+        const struct ble_svc *sv = &db->svc[s]; struct pb m = { buf, 0, sizeof buf }, sm = { sb, 0, sizeof sb };
+        pb_uuid(&sm, 1, sv->uuid); pb_uint(&sm, 2, sv->start);
+        for (int c = sv->first; c < sv->first + sv->n; c++) {
+            const struct ble_chr *ch = &db->chr[c]; struct pb cm = { cb, 0, sizeof cb };
+            pb_uuid(&cm, 1, ch->uuid); pb_uint(&cm, 2, ch->handle); pb_uint(&cm, 3, ch->props);
+            for (int d = ch->first; d < ch->first + ch->n; d++) {
+                struct pb dm = { db_, 0, sizeof db_ };
+                pb_uuid(&dm, 1, db->dsc[d].uuid); pb_uint(&dm, 2, db->dsc[d].handle);
+                pb_bytes(&cm, 4, dm.p, dm.n);
+            }
+            pb_bytes(&sm, 3, cm.p, cm.n);
+        }
+        if (sm.n >= sm.cap - 64) fprintf(stderr, "bluetooth: service %d of %012llx too big, truncated\n", s, (unsigned long long)addr);
+        pb_uint(&m, 1, addr); pb_bytes(&m, 2, sm.p, sm.n);
+        send_gatt(BLE_SERVICES, &m);
+    }
+    { PB(b, 16); pb_uint(&b, 1, addr); send_gatt(BLE_SERVICES_DONE, &b); }
+    pthread_mutex_unlock(&core_lock);
+}
+
+static void ble_data(unsigned type, uint64_t addr, unsigned handle, const void *data, size_t len, int with_data)
+{
+    PB(b, 600);
+    pb_uint(&b, 1, addr); pb_uint(&b, 2, handle); if (with_data) pb_bytes(&b, 3, data, len);
+    pthread_mutex_lock(&core_lock); send_gatt(type, &b); pthread_mutex_unlock(&core_lock);
+}
+
+static void ble_read_cb(uint64_t a, unsigned h, const void *d, size_t n) { ble_data(BLE_READ, a, h, d, n, 1); }
+static void ble_notify_cb(uint64_t a, unsigned h, const void *d, size_t n) { ble_data(BLE_NOTIFY_DATA, a, h, d, n, 1); }
+static void ble_written_cb(uint64_t a, unsigned h) { ble_data(BLE_WRITTEN, a, h, NULL, 0, 0); }
+static void ble_error_cb(uint64_t addr, unsigned handle, int error)
+{
+    PB(b, 32);
+    pb_uint(&b, 1, addr); pb_uint(&b, 2, handle); pb_uint(&b, 3, error);
+    pthread_mutex_lock(&core_lock); send_gatt(BLE_GATT_ERROR, &b); pthread_mutex_unlock(&core_lock);
+}
+
+static void on_ble_request(unsigned type, const unsigned char *p, const unsigned char *end)   /* lock held */
+{
+    struct pbf f; uint64_t addr = 0; unsigned kind = 0, handle = 0, addr_type = 0, flag = 0; const unsigned char *data = NULL; size_t len = 0;
+    while (pb_next(&p, end, &f)) switch (f.field) {
+        case 1: addr = f.v; break;
+        case 2: if (type == BLE_DEVICE_REQ) kind = f.v; else handle = f.v; break;
+        case 3: if (type == BLE_WRITE_DESC_REQ && f.data) { data = f.data; len = f.len; } else flag = f.v != 0; break;
+        case 4: if (type == BLE_DEVICE_REQ) addr_type = f.v; else if (f.data) { data = f.data; len = f.len; } break;
+    }
+    switch (type) {
+    case BLE_DEVICE_REQ:
+        if (kind == BLE_REQ_DISCONNECT) ble_disconnect(addr);
+        else if (kind == BLE_REQ_PAIR) ble_pair(addr);
+        else if (kind == BLE_REQ_UNPAIR) ble_unpair(addr);
+        else if (kind == BLE_REQ_CLEAR_CACHE) { PB(b, 24); pb_uint(&b, 1, addr); pb_uint(&b, 2, 1); send_msg(BLE_CACHE_CLEARED, &b); }
+        else ble_connect(addr, addr_type);
+        break;
+    case BLE_SERVICES_REQ:   ble_services(addr); break;
+    case BLE_READ_REQ: case BLE_READ_DESC_REQ: ble_read(addr, handle); break;
+    case BLE_WRITE_REQ:      ble_write(addr, handle, data, len, flag); break;
+    case BLE_WRITE_DESC_REQ: ble_write(addr, handle, data, len, 1); break;
+    case BLE_NOTIFY_REQ: { PB(b, 24); pb_uint(&b, 1, addr); pb_uint(&b, 2, handle); send_msg(BLE_NOTIFY, &b); } break;     /* see BLE_FEATURES */
+    }
+}
+
+
+static void ble_adverts(const struct ble_adv *a, int n)
+{
+    PB(b, BLE_BATCH * 64); PB(one, 64);
+    for (int i = 0; i < n; i++) {
+        one.n = 0;
+        pb_uint(&one, 1, a[i].addr); pb_sint(&one, 2, a[i].rssi); pb_uint(&one, 3, a[i].addr_type); pb_bytes(&one, 4, a[i].data, a[i].len);
+        pb_bytes(&b, 1, one.p, one.n);
+    }
+    pthread_mutex_lock(&core_lock);
+    send_ble(BLE_RAW_ADV, &b);
+    pthread_mutex_unlock(&core_lock);
+}
+
+static void ble_pair_result(unsigned type, uint64_t addr, int ok, int error)
+{
+    PB(b, 32);
+    pb_uint(&b, 1, addr); pb_uint(&b, 2, ok); pb_uint(&b, 3, error);
+    pthread_mutex_lock(&core_lock); send_gatt(type, &b); pthread_mutex_unlock(&core_lock);
+}
+static void ble_paired_cb(uint64_t a, int ok, int e) { ble_pair_result(BLE_PAIRED, a, ok, e); }
+static void ble_unpaired_cb(uint64_t a, int ok, int e) { ble_pair_result(BLE_UNPAIRED, a, ok, e); }
+
+static const struct ble_handler ble_handler = {
+    .adverts = ble_adverts, .scan_changed = ble_changed, .slots_changed = ble_slots, .connection = ble_connection, .services = ble_db,
+    .read = ble_read_cb, .written = ble_written_cb, .notify = ble_notify_cb, .error = ble_error_cb,
+    .paired = ble_paired_cb, .unpaired = ble_unpaired_cb,
+};
+
 /* ---------------------------------------------------------------- core callbacks (lock held) */
 
 static void start(void)
@@ -675,6 +847,7 @@ static void send_device_info(void)
     pb_str(&b, 2, node_name()); pb_str(&b, 3, mac()); pb_str(&b, 4, "2025.5.0"); pb_str(&b, 5, __DATE__ " " __TIME__);
     pb_str(&b, 6, "Echo Dot 3 (donut)"); pb_str(&b, 8, "hassmic.echo-dot-3"); pb_str(&b, 9, VERSION);
     pb_str(&b, 12, "Amazon"); pb_str(&b, 13, core_name);
+    if (ble_present()) { pb_uint(&b, 11, 5); pb_uint(&b, 15, BLE_FEATURES); pb_str(&b, 18, ble_mac()); }    /* 11: legacy "active connections" */
     pb_uint(&b, 17, FEAT_VOICE | FEAT_API_AUDIO | FEAT_TIMERS | FEAT_ANNOUNCE | FEAT_START_CONVERSATION);      /* no SPEAKER: see top */
     pb_uint(&b, 19, 1);                                 /* api_encryption_supported */
     pb_uint(&b, 26, !have_key);                         /* api_encryption_provisionable: Home Assistant sets the key */
@@ -752,6 +925,21 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case VA_CONFIG_REQ:    send_va_config(); break;
     case VA_SET_CONFIG:    break;                                               /* one wake word, nothing to choose */
     case MEDIA_PLAYER_COMMAND: on_mp_command(p, end); break;
+    case BLE_SUBSCRIBE: case BLE_UNSUBSCRIBE:
+        if (c < 0 || !ble_present()) break;
+        clients[c].ble = type == BLE_SUBSCRIBE;         /* flags ignored: raw advertisements are all we send */
+        ble_update(); if (type == BLE_SUBSCRIBE) send_scanner_state();
+        break;
+    case BLE_SCANNER_SET_MODE:
+        ble_mode = BLE_PASSIVE;                         /* the zero value: an empty message */
+        while (pb_next(&p, end, &f)) if (f.field == 1 && f.v == BLE_ACTIVE) ble_mode = BLE_ACTIVE;
+        ble_update(); send_scanner_state();
+        break;
+    case BLE_CONN_FREE_REQ: if (c >= 0 && ble_present()) { clients[c].ble_free = 1; send_slots(1); } break;
+    case BLE_DEVICE_REQ: case BLE_SERVICES_REQ: case BLE_READ_REQ: case BLE_READ_DESC_REQ: case BLE_WRITE_REQ:
+    case BLE_WRITE_DESC_REQ: case BLE_NOTIFY_REQ:
+        if (ble_present() && c >= 0) { clients[c].ble_user = 1; on_ble_request(type, p, end); }
+        break;
     case SET_KEY_REQ: {
         /* Without a key: from an encrypted (zero-PSK) connection only, so the key never crosses the network readable.
          * With one: only from a connection that has it (Home Assistant rotating or clearing it). */
@@ -819,9 +1007,10 @@ static void serve(int fd)
     unsigned char *buf = malloc(1 << 16), *pt = malloc(1 << 16), pre; uint32_t len, type, cap = 1 << 16; int slot = -1, n = 0, enc = 0;
     if (!buf || !pt) { free(buf); free(pt); return; }
     pthread_mutex_lock(&core_lock);
-    { static int loaded; if (!loaded) { loaded = 1; settings_load(); key_load(); pthread_t t; pthread_create(&t, NULL, diag_thread, NULL); pthread_detach(t); } }
+    { static int loaded; if (!loaded) { loaded = 1; settings_load(); key_load(); pthread_t t; pthread_create(&t, NULL, diag_thread, NULL); pthread_detach(t);
+                                       ble_start(&ble_handler); } }
     for (int i = 0; i < MAX_CLIENTS; i++) { if (clients[i].fd < 0 && slot < 0) slot = i; n += clients[i].fd >= 0; }
-    if (slot >= 0) { clients[slot].fd = fd; clients[slot].states = clients[slot].enc = clients[slot].keyed = 0; if (!n) core_link(1, 0); }
+    if (slot >= 0) { clients[slot].fd = fd; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = 0; if (!n) core_link(1, 0); }
     int keyed = have_key;
     pthread_mutex_unlock(&core_lock);
     if (slot < 0) { fprintf(stderr, "client refused: %d connections already\n", MAX_CLIENTS); free(buf); free(pt); return; }
@@ -860,7 +1049,13 @@ static void serve(int fd)
 done:
 
     pthread_mutex_lock(&core_lock);
-    clients[slot].fd = -1; clients[slot].states = clients[slot].enc = clients[slot].keyed = 0; n = 0;
+    clients[slot].fd = -1; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = 0; n = 0;
+    ble_update();
+    if (!ble_subscribers()) {                           /* nobody left to use them */
+        int users = 0; uint64_t a[BLE_MAX_CONN];
+        for (int i = 0; i < MAX_CLIENTS; i++) users += clients[i].fd >= 0 && (clients[i].ble_free || clients[i].ble_user);
+        if (!users) for (int i = 0, k = ble_connections(a); i < k; i++) ble_disconnect(a[i]);
+    }
     memset(&clients[slot].tx, 0, sizeof clients[slot].tx); memset(&clients[slot].rx, 0, sizeof clients[slot].rx);
     for (int i = 0; i < MAX_CLIENTS; i++) n += clients[i].fd >= 0;
     if (va_fd == fd) { va_fd = -1; tts_expected = 0; core_link(n > 0, 0); }      /* the voice assistant's client left: pipelines end */

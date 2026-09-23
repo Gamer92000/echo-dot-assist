@@ -3,6 +3,9 @@
 # ledcontroller sets PUFFIN_START=1 after the boot animation, which starts these four services.
 setprop com.amazon.puffin.PUFFIN_START 0
 for s in puffin puffinmrmd dacd smarthomed otad ace_otad update_engine; do stop $s; done
+# Amazon's Bluetooth stack (speaker mode, pairing through the Alexa app).  hassmic drives the radio itself for Home
+# Assistant's Bluetooth proxy, and /dev/stpbt does not keep a second user out: it has to go.
+stop btmanagerd
 # Setup mode (unregistered device): oobed advertises for the Alexa app and keeps the orange setup animation on the ring.
 for s in oobed_on_boot oobed_on_press oobed_on_no_nw; do stop $s; done
 # uxeventd starts the orange `setup-mode` spinner; `ledctrl -c` does not clear it and `-g` does not list it. Unset by name.
