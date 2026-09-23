@@ -84,6 +84,15 @@ ota_watch() {
     done
 }
 
+# A push update runs "firewall" again (exec, same PID) while the previous firewall watcher is still looping: stop it first,
+# or every update adds one and old and new rules take turns.  Matched by command line, which also catches the ones that
+# earlier versions left behind.
+if [ "$1" = firewall ]; then
+    for p in /proc/[0-9]*; do
+        case "$(tr '\0' ' ' 2>/dev/null < $p/cmdline)" in *lockdown.sh*watch*) kill ${p#/proc/} 2>/dev/null;; esac
+    done
+fi
+
 if [ "$MODE" = stock-online ]; then
     # hassmic is off on purpose: that must not count as an update that failed to come up.
     [ "$1" = firewall ] || { echo 0 > $OTA/tries; exit 0; }
@@ -103,7 +112,7 @@ satellite)
     {
         rotate_log
         echo "== satellite start, uptime $(cut -d. -f1 /proc/uptime)s, $(cat $D/VERSION 2>/dev/null || echo factory) from $D"
-        sh $D/lockdown.sh > /dev/null     # stops the cloud daemons that were not up yet at "on boot"
+        sh $D/lockdown.sh services        # stops the cloud daemons that were not up yet at "on boot"; the firewall is the watcher's
         sh $D/alexa-off.sh; quiet
     } >> $LOG 2>&1
     # A binary in /data wins over the installed one: lets a new build be tried without a trip through TWRP.

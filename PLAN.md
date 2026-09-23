@@ -219,6 +219,17 @@ Run in this order. Each step says what it proves.
       Mute: button = hardware latch, reported by the `gpio-privacy` input device (`/dev/input/event1`, not the keypad); software can
       set the latch (`enable` <- 1) but not clear it (write 0 rejected while set, second 1 does not toggle; DT has one output, one
       input) → HA switch = soft mute, shows latch OR soft, button unmute clears both.
+      Encryption (2026-09-23): Noise_NNpsk0 like ESPHome, key provisioned by HA itself (DeviceInfo 19 supported + 26 provisionable,
+      `NoiseEncryptionSetKeyRequest` 124 over a zero-PSK Noise connection, HA core `esphome/manager.py`
+      `_handle_dynamic_encryption_key`), stored in `state/api_key` (600), empty key clears. Plaintext and zero-PSK refused once a key
+      is set; a plaintext connection from before is closed on its next request. mDNS TXT `api_encryption_supported=` / `api_encryption=`,
+      service file rewritten by hassmic (dir is 777, avahi republishes on change, both checked on the device). `fake_ha_esphome.py`:
+      17 more checks with aioesphomeapi 46.4.1 (the version HA pins). Real HA (2026-09-23, pushed): plaintext -> zero-PSK -> key set ->
+      old plaintext connection closed -> two plaintext retries refused -> encrypted, voice assistant subscribed; mDNS shows api_encryption.
+      Found on the way: every push update left one more `lockdown.sh watch` running (18 on the device; `main.sh firewall` re-runs
+      by exec without stopping the old one), and the satellite's one-shot `lockdown.sh` rebuilt the chain concurrently with the
+      watcher (duplicate rules seen). Now `main.sh firewall` kills earlier watchers first and the satellite runs
+      `lockdown.sh services` (daemons only). Verified after three pushes: one watcher, clean chain.
       **Installed permanently 2026-09-21**, verified after reboot: ESPHome on 26053 from `/system/hassmic`, own avahi in `su` domain answers
       mDNS queries, HA reconnected, settings file read, no test binary left in `/data`.
       First real announcement (2026-09-21) failed twice over: HA's media URL host (`192.168.0.3`, main LAN) was outside the

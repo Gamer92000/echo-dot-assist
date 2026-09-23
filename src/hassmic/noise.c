@@ -1,10 +1,15 @@
-/* Noise_KKpsk2_25519_ChaChaPoly_SHA256, responder side (Sendspin: the server initiates), per the Noise spec rev 34.
+/* Noise handshakes, responder side, per the Noise spec rev 34.
  *
+ * Noise_KKpsk2_25519_ChaChaPoly_SHA256 (Sendspin: the server initiates)
  *   -> s          pre-message: initiator static
  *   <- s          pre-message: responder static
  *   ...
  *   -> e, es, ss
  *   <- e, ee, se, psk
+ *
+ * Noise_NNpsk0_25519_ChaChaPoly_SHA256 (ESPHome native API: Home Assistant initiates)
+ *   -> psk, e
+ *   <- e, ee
  *
  * PSK handshakes also MixKey() every ephemeral public key.  X25519 and ChaCha20-Poly1305 come from Monocypher. */
 #include "noise.h"
@@ -13,7 +18,7 @@
 #include "hash.h"
 #include "ws.h"
 
-static const char PROTOCOL[] = "Noise_KKpsk2_25519_ChaChaPoly_SHA256";
+static const char PROTOCOL[] = "Noise_KKpsk2_25519_ChaChaPoly_SHA256", NN_PROTOCOL[] = "Noise_NNpsk0_25519_ChaChaPoly_SHA256";
 
 static void mix_hash(struct noise_hs *s, const void *data, size_t len)
 {
@@ -71,6 +76,18 @@ static int aead_decrypt(const uint8_t k[32], uint64_t n, const void *ad, size_t 
     return rc;
 }
 
+/* Split(): the initiator sends with k1.  Ends the handshake: its secrets are wiped. */
+static void split(struct noise_hs *s, struct noise_cs *send, struct noise_cs *recv)
+{
+    uint8_t k1[32], k2[32];
+    hkdf(s->ck, NULL, 0, k1, k2, NULL);
+    memcpy(recv->k, k1, 32); recv->n = 0;
+    memcpy(send->k, k2, 32); send->n = 0;
+    memcpy(s->hash_out, s->h, 32);                                          /* handshake hash: channel binding for pairing */
+    crypto_wipe(k1, 32); crypto_wipe(k2, 32);
+    crypto_wipe(s->e_priv, 32); crypto_wipe(s->k, 32); crypto_wipe(s->ck, 32);
+}
+
 void noise_keypair(uint8_t priv[32], uint8_t pub[32])
 {
     ws_random(priv, 32);
@@ -106,7 +123,7 @@ long noise_kk_read_msg1(struct noise_hs *s, const uint8_t *msg, size_t len, uint
 size_t noise_kk_write_msg2(struct noise_hs *s, const uint8_t psk[32], const void *payload, size_t plen, uint8_t *out,
                            struct noise_cs *send, struct noise_cs *recv)
 {
-    uint8_t dh[32], k1[32], k2[32];
+    uint8_t dh[32];
     if (!s->e_set) noise_keypair(s->e_priv, s->e_pub);                      /* tests inject a fixed ephemeral */
     memcpy(out, s->e_pub, 32);
     mix_hash(s, s->e_pub, 32); mix_key(s, s->e_pub, 32);                    /* e (psk mode) */
@@ -116,12 +133,41 @@ size_t noise_kk_write_msg2(struct noise_hs *s, const uint8_t psk[32], const void
     aead_encrypt(s->k, s->n++, s->h, 32, payload, plen, out + 32);
     mix_hash(s, out + 32, plen + NOISE_TAG);
 
-    hkdf(s->ck, NULL, 0, k1, k2, NULL);                                     /* Split(): initiator sends with k1 */
-    memcpy(recv->k, k1, 32); recv->n = 0;
-    memcpy(send->k, k2, 32); send->n = 0;
-    memcpy(s->hash_out, s->h, 32);                                          /* handshake hash: channel binding for pairing */
-    crypto_wipe(dh, sizeof dh); crypto_wipe(k1, 32); crypto_wipe(k2, 32);
-    crypto_wipe(s->e_priv, 32); crypto_wipe(s->k, 32); crypto_wipe(s->ck, 32);
+    split(s, send, recv);
+    crypto_wipe(dh, sizeof dh);
+    return 32 + plen + NOISE_TAG;
+}
+
+void noise_nn_responder_init(struct noise_hs *s, const void *prologue, size_t plen)
+{
+    memset(s, 0, sizeof *s);
+    sha256(NN_PROTOCOL, sizeof NN_PROTOCOL - 1, s->h);
+    memcpy(s->ck, s->h, 32);
+    mix_hash(s, prologue, plen);
+}
+
+long noise_nn_read_msg1(struct noise_hs *s, const uint8_t psk[32], const uint8_t *msg, size_t len, uint8_t *payload)
+{
+    if (len < 32 + NOISE_TAG) return -1;
+    mix_key_and_hash(s, psk, 32);                                           /* psk0 */
+    memcpy(s->re, msg, 32);
+    mix_hash(s, s->re, 32); mix_key(s, s->re, 32);                          /* e (psk mode) */
+    if (aead_decrypt(s->k, s->n++, s->h, 32, msg + 32, len - 32, payload)) return -1;
+    mix_hash(s, msg + 32, len - 32);
+    return (long)(len - 32 - NOISE_TAG);
+}
+
+size_t noise_nn_write_msg2(struct noise_hs *s, const void *payload, size_t plen, uint8_t *out, struct noise_cs *send, struct noise_cs *recv)
+{
+    uint8_t dh[32];
+    if (!s->e_set) noise_keypair(s->e_priv, s->e_pub);
+    memcpy(out, s->e_pub, 32);
+    mix_hash(s, s->e_pub, 32); mix_key(s, s->e_pub, 32);                    /* e (psk mode) */
+    crypto_x25519(dh, s->e_priv, s->re); mix_key(s, dh, 32);                /* ee */
+    aead_encrypt(s->k, s->n++, s->h, 32, payload, plen, out + 32);
+    mix_hash(s, out + 32, plen + NOISE_TAG);
+    split(s, send, recv);
+    crypto_wipe(dh, sizeof dh);
     return 32 + plen + NOISE_TAG;
 }
 

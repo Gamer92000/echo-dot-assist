@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Plays Home Assistant's side of the ESPHome native API against build/hassmic-host, using the reference
 `aioesphomeapi` client (the library Home Assistant itself uses), so framing and protobuf layout are checked by the real parser."""
-import asyncio, io, math, os, signal, struct, subprocess, sys, tempfile, threading, wave
+import asyncio, base64, io, math, os, signal, struct, subprocess, sys, tempfile, threading, wave
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from aioesphomeapi import SelectInfo, NumberInfo, SwitchInfo, SelectState, NumberState, SwitchState, TextSensorInfo, TextSensorState, SensorInfo
 from aioesphomeapi import APIClient, MediaPlayerInfo, MediaPlayerEntityState, VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm
+from aioesphomeapi import ZERO_NOISE_PSK
+from aioesphomeapi.core import InvalidEncryptionKeyAPIError, RequiresEncryptionAPIError
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT, HTTP_PORT = 16953, 16954
@@ -41,7 +43,11 @@ check.failed = False
 async def main():
     play = tempfile.mktemp(suffix=".raw")
     settings = tempfile.mktemp(suffix=".settings")
-    env = dict(os.environ, HASSMIC_STATE=tempfile.mkdtemp(), HASSMIC_SETTINGS=settings, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=play)
+    state = tempfile.mkdtemp(); mdns = os.path.join(state, "hassmic.service")
+    env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_SETTINGS=settings, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=play,
+               HASSMIC_MDNS_FILE=mdns)
+    with open(mdns, "w") as f:                          # what main.sh does at boot
+        subprocess.run([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-S"], env=env, stdout=f, check=True)
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-L"], env=env)
     httpd = HTTPServer(("127.0.0.1", HTTP_PORT), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -230,7 +236,56 @@ async def main():
         await asyncio.sleep(0.5)
         started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
         check(True, "new pipeline after an error")
-        await cli.disconnect()
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await asyncio.sleep(0.3)
+
+        # Encryption, in the order Home Assistant runs it: plaintext connection, DeviceInfo says "supported, provisionable",
+        # key sent over a zero-PSK Noise connection, then only that key gets in.
+        info = await cli.device_info()
+        check(info.api_encryption_supported and info.api_encryption_provisionable, "device info: encryption supported and provisionable")
+        check("api_encryption_supported=Noise_NNpsk0" in open(mdns).read() and "api_encryption=" not in open(mdns).read(), "mDNS without a key: api_encryption_supported only")
+        key = base64.b64encode(os.urandom(32))
+        check(await asyncio.wait_for(cli.noise_encryption_set_key(key), 5) is False, "key refused over plaintext")
+        try:
+            bad = APIClient("127.0.0.1", PORT, None, noise_psk=base64.b64encode(os.urandom(32)).decode()); await asyncio.wait_for(bad.connect(), 5); ok = False
+        except InvalidEncryptionKeyAPIError as e: ok = e.received_name == "echo-dot"
+        check(ok, "a random key before provisioning: invalid key, server hello names the device")
+        prov = APIClient("127.0.0.1", PORT, None, noise_psk=ZERO_NOISE_PSK)
+        await asyncio.wait_for(prov.connect(), 5)
+        check(await asyncio.wait_for(prov.noise_encryption_set_key(key), 5) is True, "key accepted over the zero-PSK connection")
+        await prov.disconnect()
+        check(open(os.path.join(state, "api_key")).read().strip() == key.decode() and oct(os.stat(os.path.join(state, "api_key")).st_mode & 0o777) == "0o600",
+              "key stored in state/api_key, mode 600")
+        check("api_encryption=Noise_NNpsk0" in open(mdns).read(), "mDNS service file rewritten: api_encryption")
+        try: await asyncio.wait_for(cli.device_info(), 3); ok = False
+        except Exception: ok = True
+        check(ok, "the plaintext connection from before is closed on its next request")
+        for psk, err, what in ((None, RequiresEncryptionAPIError, "plaintext"), (ZERO_NOISE_PSK, InvalidEncryptionKeyAPIError, "zero PSK")):
+            try: c = APIClient("127.0.0.1", PORT, None, noise_psk=psk); await asyncio.wait_for(c.connect(), 5); ok = False
+            except err: ok = True
+            check(ok, f"with a key: {what} connection refused ({err.__name__})")
+
+        enc = APIClient("127.0.0.1", PORT, None, noise_psk=key.decode())
+        await asyncio.wait_for(enc.connect(login=True), 5)
+        info = await enc.device_info()
+        check(info.name == "echo-dot" and info.api_encryption_supported and not info.api_encryption_provisionable, "encrypted: device info, no longer provisionable")
+        ent3, _ = await enc.list_entities_services()
+        check(len(ent3) == len(entities), "encrypted: entities listed")
+        started.clear(); mic.clear()
+        enc.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio, handle_announcement_finished=handle_finished)
+        await asyncio.sleep(0.3); proc.send_signal(signal.SIGUSR1)
+        await asyncio.wait_for(started.wait(), 5); await asyncio.sleep(1.0)
+        check(len(mic) > 16000, f"encrypted: mic audio streamed: {len(mic)} bytes in 1 s")
+        enc.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await asyncio.sleep(0.3)
+        before = os.path.getsize(play)
+        res = await enc.send_voice_assistant_announcement_await_response(f"http://127.0.0.1:{HTTP_PORT}/a.wav", 15, "x")
+        check(res.success and os.path.getsize(play) - before == 48000, "encrypted: announcement played")
+        check(await asyncio.wait_for(enc.noise_encryption_set_key(b""), 5) is True and not os.path.exists(os.path.join(state, "api_key")),
+              "empty key from the keyed connection clears it (Home Assistant deleting the device)")
+        check("api_encryption_supported=" in open(mdns).read(), "mDNS back to api_encryption_supported")
+        await enc.disconnect()
+        c = APIClient("127.0.0.1", PORT, None); await asyncio.wait_for(c.connect(login=True), 5)
+        check((await c.device_info()).api_encryption_provisionable, "plaintext accepted again, provisionable again")
+        await c.disconnect()
     finally:
         proc.terminate(); httpd.shutdown()
         for f in (play, settings):

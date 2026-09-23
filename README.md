@@ -43,14 +43,17 @@ own music like it did before. Only the Alexa client is replaced, by a small daem
   mute on and off.
   Diagnostics, off by default: SoC temperature and CPU usage.
 - **No cloud**: the Alexa client, the updater and the telemetry services are stopped at every boot, and a firewall on the
-  Echo drops everything that is not going to a local address. Put it on a network without internet as a second layer.
+  Echo drops everything that is not going to a local address (plus DNS to the servers your network hands out). Put it on a
+  network without internet as a second layer.
 - **Updates over Wi-Fi** once installed: one command on the PC, signed, with automatic fallback if an update does not start.
 - **Reversible**: one file to delete for stock behaviour, an uninstaller, or reflash stock from the recovery.
 
 Wyoming instead of ESPHome is available too (`-P wyoming`, port 16700).
 
-Security, plainly: the ESPHome connection is unencrypted and has no key, like an ESPHome device without `api: encryption`.
-Anyone on the Echo's network can connect to it. Push updates are the exception: they must be signed with your key.
+Security, plainly: the ESPHome connection is encrypted like an ESPHome device with `api: encryption` but no key in its
+YAML. Home Assistant generates the key when you add the Echo and sets it over an encrypted connection; from then on only
+Home Assistant gets in. Until that moment anyone on the network could connect, or set a key first (then Home Assistant
+cannot connect and the key has to be reset, see "Encryption key" below). Push updates must be signed with your key.
 
 ## What you need
 
@@ -153,7 +156,8 @@ adb shell sh /data/local/hassmic/run.sh          # foreground; Ctrl-C stops it
 ```
 
 Home Assistant shows a discovered ESPHome device "Echo Dot" under Settings → Devices & services (or add it by hand:
-ESPHome, the Echo's IP, port 26053, no encryption key). Pick the Assist pipeline for it in the device's settings, say
+ESPHome, the Echo's IP, port 26053, leave the encryption key empty). Home Assistant then sets an encryption key on the
+Echo by itself. Pick the Assist pipeline for it in the device's settings, say
 "Alexa", ask something. If Home Assistant does not find it and cannot connect: it must be able to open TCP 26053 on the
 Echo, and the Echo must be able to reach Home Assistant's port 8123 (for media and announcements).
 
@@ -196,6 +200,20 @@ Options for `ARGS`: `-m <pryon.manifest>` another wake word model · `-w remote`
 (openWakeWord) instead of on the Echo · `-E` no sound on wake · `-L` leave the LED ring alone · `-V` leave the volume
 buttons alone · `-z 0` no Sendspin player · `-p <port>` another port (the Echo's own firewall only admits inbound TCP
 16384–32767).
+
+**Encryption key.** Home Assistant sets it when the device is added and clears it when the device is deleted there.
+The Echo keeps it in `/data/local/hassmic/state/api_key`. If Home Assistant says the key is invalid (the Echo was
+reset, or something else set a key first): `adb shell rm /data/local/hassmic/state/api_key`, restart hassmic (or
+reboot), then delete the device in Home Assistant and add it again.
+
+**No sound from replies or music?** The Echo fetches every reply, announcement and `play_media` from the URL Home
+Assistant or Music Assistant gives it, and may only connect to local addresses. Home Assistant builds that URL from its
+internal URL (Settings → System → Network), or from its own LAN IP when none is set. An IP works, and so does a `.local`
+name (the Echo asks by mDNS). A domain works only if it resolves to the LAN address for the Echo: split DNS, or a public
+record that points to the private IP; one that resolves to your public IP is dropped. A Tailscale address (100.64.0.0/10)
+or a global IPv6 address is not local either. Music Assistant hands out its "published IP" (streamserver settings), which
+has to be a LAN address; its Sendspin connection comes from the Music Assistant host itself. `boot.log` names the host
+it could not resolve or reach (`net: cannot ...`).
 
 **Stopping it.** While it talks or a timer rings: the wake word alone cuts it and listens for a new command; "<wake word>,
 stop" cuts it and stays quiet; the action button does the same as the wake word. Say "stop" right behind the wake word,

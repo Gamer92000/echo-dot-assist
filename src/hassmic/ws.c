@@ -7,8 +7,10 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include "hash.h"
+#include "net.h"
 #include "netio.h"
 
 #define WS_GUID "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -77,21 +79,18 @@ int ws_accept(struct ws *w, int fd, char *path, size_t pathsz)
 
 int ws_connect(struct ws *w, const char *host, int port, const char *path)
 {
-    char ports[8], req[512], h[4096], key[32], want[64], got[64]; uint8_t nonce[16]; struct addrinfo hints = { 0 }, *ai;
+    char ports[8], req[512], h[4096], key[32], want[64], got[64]; uint8_t nonce[16];
     snprintf(ports, sizeof ports, "%d", port);
-    hints.ai_socktype = SOCK_STREAM;
-    if (getaddrinfo(host, ports, &hints, &ai)) return -1;
-    int fd = socket(ai->ai_family, SOCK_STREAM, 0);
-    struct timeval tv = { 5, 0 };
-    if (fd >= 0) setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
-    if (fd < 0 || connect(fd, ai->ai_addr, ai->ai_addrlen)) { if (fd >= 0) close(fd); freeaddrinfo(ai); return -1; }
-    freeaddrinfo(ai);
+    int fd = net_connect(host, ports, 5);
+    if (fd < 0) return -1;
     ws_random(nonce, sizeof nonce); b64_encode(nonce, 16, key, 0, 1);
     int n = snprintf(req, sizeof req, "GET %s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                      "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n", path, host, port, key);
     accept_key(key, want);
     if (write_all(fd, req, n) < 0 || read_headers(fd, h, sizeof h) || !strstr(h, " 101") ||
         !header(h, "Sec-WebSocket-Accept", got, sizeof got) || strcmp(got, want)) { close(fd); return -1; }
+    struct timeval none = { 0, 0 };                     /* an idle connection is fine once it is up */
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &none, sizeof none);
     ws_init(w, fd, 1);
     return 0;
 }

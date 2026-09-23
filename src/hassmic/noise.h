@@ -1,4 +1,4 @@
-/* Noise_KKpsk2_25519_ChaChaPoly_SHA256, responder side, plus the transport cipher states.  See noise.c. */
+/* Noise_KKpsk2 and Noise_NNpsk0 (25519, ChaChaPoly, SHA256), responder side, plus the transport cipher states.  See noise.c. */
 #ifndef NOISE_H
 #define NOISE_H
 #include <stddef.h>
@@ -21,6 +21,11 @@ long   noise_kk_read_msg1(struct noise_hs *s, const uint8_t *msg, size_t len, ui
 /* out needs 32 + plen + 16 bytes.  The PSK may be chosen after message 1 was read (its payload names it). */
 size_t noise_kk_write_msg2(struct noise_hs *s, const uint8_t psk[32], const void *payload, size_t plen, uint8_t *out,
                            struct noise_cs *send, struct noise_cs *recv);
+void   noise_nn_responder_init(struct noise_hs *s, const void *prologue, size_t plen);
+/* payload needs room for len - 48 bytes.  Returns the payload length, -1 if the message does not authenticate (wrong PSK). */
+long   noise_nn_read_msg1(struct noise_hs *s, const uint8_t psk[32], const uint8_t *msg, size_t len, uint8_t *payload);
+/* out needs 32 + plen + 16 bytes */
+size_t noise_nn_write_msg2(struct noise_hs *s, const void *payload, size_t plen, uint8_t *out, struct noise_cs *send, struct noise_cs *recv);
 size_t noise_encrypt(struct noise_cs *c, const void *pt, size_t len, uint8_t *out);         /* out: len + 16 */
 long   noise_decrypt(struct noise_cs *c, const uint8_t *ct, size_t len, uint8_t *out);      /* -1 = forged / out of order */
 #endif

@@ -1,6 +1,12 @@
 /*
- * ESPHome native API, plaintext, server side: Home Assistant's esphome integration connects to us and sees a voice
- * assistant device with a media player.  Message numbers and fields follow esphome/components/api/api.proto.
+ * ESPHome native API, server side: Home Assistant's esphome integration connects to us and sees a voice assistant device
+ * with a media player.  Message numbers and fields follow esphome/components/api/api.proto.
+ *
+ *   encryption       Noise like ESPHome's `api: encryption:` without a key in the YAML.  The device starts without a key;
+ *                    Home Assistant generates one and sets it (NoiseEncryptionSetKeyRequest over a Noise connection with
+ *                    the all-zero PSK, so it cannot be sniffed), then connects with it.  From then on only that key gets
+ *                    in.  Deleting the device in Home Assistant sends an empty key, which starts over; so does deleting
+ *                    state/api_key.
  *
  *   voice pipeline   VoiceAssistantRequest -> mic audio as VoiceAssistantAudio (API_AUDIO) -> events.  The reply is fetched
  *                    over http like an announcement: without the SPEAKER flag Home Assistant renders TTS in the media
@@ -10,6 +16,8 @@
  *   timers           finished timer rings (core_alarm)
  */
 #include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -18,9 +26,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include "core.h"
+#include "hash.h"
+#include "noise.h"
 #include "sendspin.h"
+#include "net.h"
 #include "netio.h"
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_NO_SIMD                 /* plain C: same code on the PC and on the armv7 build */
@@ -33,7 +46,7 @@ enum {
     LIST_SELECT = 52, SELECT_STATE, SELECT_COMMAND,
     LIST_MEDIA_PLAYER = 63, MEDIA_PLAYER_STATE, MEDIA_PLAYER_COMMAND,
     SUBSCRIBE_VA = 89, VA_REQUEST, VA_RESPONSE, VA_EVENT, VA_AUDIO = 106, VA_TIMER_EVENT = 115,
-    VA_ANNOUNCE = 119, VA_ANNOUNCE_FINISHED, VA_CONFIG_REQ, VA_CONFIG_RESP, VA_SET_CONFIG,
+    VA_ANNOUNCE = 119, VA_ANNOUNCE_FINISHED, VA_CONFIG_REQ, VA_CONFIG_RESP, VA_SET_CONFIG, SET_KEY_REQ = 124, SET_KEY_RESP,
 };
 enum { EV_ERROR = 0, EV_RUN_START, EV_RUN_END, EV_STT_START, EV_STT_END, EV_INTENT_START, EV_INTENT_END, EV_TTS_START,
        EV_TTS_END, EV_WAKE_START, EV_WAKE_END, EV_VAD_START, EV_VAD_END, EV_TTS_STREAM_START = 98, EV_TTS_STREAM_END = 99, EV_INTENT_PROGRESS = 100 };
@@ -46,7 +59,8 @@ enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3
  * client that asked, state changes to every client that subscribed to states, voice assistant traffic to the one
  * client that subscribed to the voice assistant (first come, first served - also like the firmware). */
 #define MAX_CLIENTS 4
-static struct { int fd, states; } clients[MAX_CLIENTS] = { { -1, 0 }, { -1, 0 }, { -1, 0 }, { -1, 0 } };     /* lock held */
+/* lock held.  enc: Noise frames (tx is used under the lock, rx by the client's reader only); keyed: with the device key */
+static struct { int fd, states, enc, keyed; struct noise_cs tx, rx; } clients[MAX_CLIENTS] = { { .fd = -1 }, { .fd = -1 }, { .fd = -1 }, { .fd = -1 } };
 static int va_fd = -1;                  /* lock held: voice assistant subscriber */
 static __thread int reply_fd = -1;      /* the client whose request this thread is handling */
 static int tts_expected;                /* lock held: the reply is being fetched or played; RUN_END must not end the pipeline */
@@ -94,13 +108,35 @@ static void pbf_str(const struct pbf *f, char *out, size_t outsz)
     memcpy(out, f->data, n); out[n] = 0;
 }
 
+static int client_of(int fd)            /* lock held */
+{
+    for (int i = 0; i < MAX_CLIENTS; i++) if (fd >= 0 && clients[i].fd == fd) return i;
+    return -1;
+}
+
+/* Noise frame: 0x01, big-endian length, then a handshake message or ciphertext */
+static int write_frame(int fd, const void *data, size_t len)
+{
+    unsigned char h[3] = { 1, len >> 8, len & 0xff };
+    return len > 0xffff || write_all(fd, h, 3) < 0 || (len && write_all(fd, data, len) < 0) ? -1 : 0;
+}
+
 /* lock held */
 static void send_to(int fd, unsigned type, const struct pb *b)
 {
-    unsigned char h[12]; struct pb hb = { h, 0, sizeof h };
+    unsigned char h[12]; struct pb hb = { h, 0, sizeof h }; size_t n = b ? b->n : 0; int c = client_of(fd), rc;
     if (fd < 0) return;
-    pb_raw(&hb, "", 1); pb_varint(&hb, b ? b->n : 0); pb_varint(&hb, type);
-    if (write_all(fd, h, hb.n) < 0 || (b && b->n && write_all(fd, b->p, b->n) < 0)) shutdown(fd, SHUT_RDWR);  /* its reader cleans up */
+    if (c >= 0 && clients[c].enc) {                     /* inside: big-endian type and length, then the message */
+        static unsigned char pt[4 + 8192], ct[sizeof pt + NOISE_TAG];
+        if (4 + n > sizeof pt) { fprintf(stderr, "esphome: message %u too long (%zu)\n", type, n); return; }
+        pt[0] = type >> 8; pt[1] = type; pt[2] = n >> 8; pt[3] = n;
+        if (n) memcpy(pt + 4, b->p, n);
+        rc = write_frame(fd, ct, noise_encrypt(&clients[c].tx, pt, 4 + n, ct));
+    } else {
+        pb_raw(&hb, "", 1); pb_varint(&hb, n); pb_varint(&hb, type);
+        rc = write_all(fd, h, hb.n) < 0 || (n && write_all(fd, b->p, n) < 0) ? -1 : 0;
+    }
+    if (rc < 0) shutdown(fd, SHUT_RDWR);                /* its reader cleans up */
 }
 
 static void send_msg(unsigned type, const struct pb *b) { send_to(reply_fd, type, b); }          /* answer to a request */
@@ -131,17 +167,85 @@ static const char *mac(void)
     return m;
 }
 
-static void print_mdns(void)
+static const char *mac_plain(void)      /* "aabbccddeeff": mDNS and the Noise server hello */
 {
-    char m[24], ss[512] = ""; size_t j = 0;
-    if (core_sendspin_port) sendspin_mdns(core_sendspin_port, ss, sizeof ss);
-    for (const char *c = mac(); *c; c++) if (*c != ':') m[j++] = tolower((unsigned char)*c);
+    static char m[24]; size_t j = 0;
+    for (const char *c = mac(); *c && j < sizeof m - 1; c++) if (*c != ':') m[j++] = tolower((unsigned char)*c);
     m[j] = 0;
-    printf("<?xml version=\"1.0\" standalone='no'?>\n<!DOCTYPE service-group SYSTEM \"avahi-service.dtd\">\n"
-           "<service-group>\n  <name>%s</name>\n  <service><type>_esphomelib._tcp</type><port>%d</port>\n"
-           "    <txt-record>mac=%s</txt-record><txt-record>friendly_name=%s</txt-record><txt-record>version=2025.5.0</txt-record>\n"
-           "    <txt-record>platform=hassmic</txt-record><txt-record>network=wifi</txt-record>\n  </service>\n%s</service-group>\n",
-           node_name(), core_port, m, core_name, ss);
+    return m;
+}
+
+/* ---------------------------------------------------------------- encryption key (see top) */
+
+#define NOISE_NAME "Noise_NNpsk0_25519_ChaChaPoly_SHA256"
+static uint8_t api_key[32]; static int have_key;        /* lock held */
+
+static const char *key_path(void)
+{
+    static char p[256]; const char *d = getenv("HASSMIC_STATE");
+    snprintf(p, sizeof p, "%s/api_key", d ? d : "/data/local/hassmic/state");
+    return p;
+}
+
+static void key_load(void)
+{
+    char t[128] = ""; FILE *f = fopen(key_path(), "r");
+    have_key = 0;
+    if (!f) return;
+    if (fgets(t, sizeof t, f) && b64_decode(t, strcspn(t, "\r\n"), api_key, sizeof api_key) == 32) have_key = 1;
+    else fprintf(stderr, "encryption: %s is not a key, ignored\n", key_path());
+    fclose(f);
+}
+
+static void print_mdns_to(FILE *f)
+{
+    char ss[512] = "";
+    if (core_sendspin_port) sendspin_mdns(core_sendspin_port, ss, sizeof ss);
+    fprintf(f, "<?xml version=\"1.0\" standalone='no'?>\n<!DOCTYPE service-group SYSTEM \"avahi-service.dtd\">\n"
+            "<service-group>\n  <name>%s</name>\n  <service><type>_esphomelib._tcp</type><port>%d</port>\n"
+            "    <txt-record>mac=%s</txt-record><txt-record>friendly_name=%s</txt-record><txt-record>version=2025.5.0</txt-record>\n"
+            "    <txt-record>platform=hassmic</txt-record><txt-record>network=wifi</txt-record>\n"
+            /* with a key Home Assistant asks for it when the device is added; without, it adds the device and sets one */
+            "    <txt-record>%s=" NOISE_NAME "</txt-record>\n  </service>\n%s</service-group>\n",
+            node_name(), core_port, mac_plain(), core_name, have_key ? "api_encryption" : "api_encryption_supported", ss);
+}
+
+static void print_mdns(void) { key_load(); print_mdns_to(stdout); }
+
+/* The service file main.sh wrote at boot names the encryption state: rewrite it when that changes (avahi notices). */
+static void mdns_refresh(void)
+{
+    const char *path = getenv("HASSMIC_MDNS_FILE"); char tmp[300]; FILE *f;
+    if (!path) path = "/data/misc/avahi/services/hassmic.service";
+    if (access(path, F_OK)) return;
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    if (!(f = fopen(tmp, "w"))) { fprintf(stderr, "encryption: cannot update %s\n", path); return; }
+    print_mdns_to(f);
+    if (fclose(f) || rename(tmp, path)) { fprintf(stderr, "encryption: cannot update %s\n", path); unlink(tmp); return; }
+    chmod(path, 0644);
+}
+
+/* lock held.  k: base64 as Home Assistant sends it; empty clears.  Returns 1 on success. */
+static int key_set(const unsigned char *k, size_t len)
+{
+    uint8_t raw[32]; char tmp[300]; FILE *f;
+    if (!len) {
+        if (unlink(key_path()) && errno != ENOENT) { fprintf(stderr, "encryption: cannot remove %s\n", key_path()); return 0; }
+        memset(api_key, 0, sizeof api_key); have_key = 0; fprintf(stderr, "encryption: key cleared, plaintext connections accepted again\n");
+        mdns_refresh(); return 1;
+    }
+    char t[64]; if (len >= sizeof t) return 0;
+    memcpy(t, k, len); t[len] = 0;
+    if (b64_decode(t, len, raw, sizeof raw) != 32) { fprintf(stderr, "encryption: rejected a key that is not 32 bytes\n"); return 0; }
+    snprintf(tmp, sizeof tmp, "%s.tmp", key_path());
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0 || !(f = fdopen(fd, "w"))) { if (fd >= 0) close(fd); fprintf(stderr, "encryption: cannot write %s\n", tmp); return 0; }
+    fprintf(f, "%s\n", t);
+    if (fclose(f) || rename(tmp, key_path())) { unlink(tmp); fprintf(stderr, "encryption: cannot write %s\n", key_path()); return 0; }
+    memcpy(api_key, raw, 32); have_key = 1;
+    fprintf(stderr, "encryption: key set, only encrypted connections with it from now on\n");
+    mdns_refresh();
+    return 1;
 }
 
 /* ---------------------------------------------------------------- settings entities
@@ -312,21 +416,14 @@ static void send_mp_state(void)         /* lock held */
 
 static int http_get_host(const char *host, const char *port, const char *path)
 {
-    char req[1400], line[1024]; struct addrinfo hints = { 0 }, *ai;
-    hints.ai_socktype = SOCK_STREAM;
-    if (getaddrinfo(host, port, &hints, &ai)) { fprintf(stderr, "media: cannot resolve %s\n", host); return -1; }
-    int fd = socket(ai->ai_family, SOCK_STREAM, 0);
-    struct timeval tv = { 4, 0 };                       /* connect() obeys the send timeout */
-    if (fd >= 0) { setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv); setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv); }
-    if (fd < 0 || connect(fd, ai->ai_addr, ai->ai_addrlen)) {
-        fprintf(stderr, "media: cannot connect to %s:%s (not a local address? see lockdown.sh)\n", host, port);
-        if (fd >= 0) close(fd);
-        freeaddrinfo(ai); return -1;
-    }
-    freeaddrinfo(ai);
-    tv.tv_sec = 15; setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);     /* TTS may still be rendering */
+    char req[1400], line[1024]; int v6 = strchr(host, ':') != NULL;
+    int fd = net_connect(host, port, 4);
+    if (fd < 0) return -1;
+    struct timeval tv = { 15, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);     /* TTS may still be rendering */
     /* HTTP/1.0: no chunked transfer encoding, the body ends with the connection */
-    int n = snprintf(req, sizeof req, "GET %s HTTP/1.0\r\nHost: %s:%s\r\nUser-Agent: hassmic/" VERSION "\r\n\r\n", path, host, port);
+    int n = snprintf(req, sizeof req, "GET %s HTTP/1.0\r\nHost: %s%s%s:%s\r\nUser-Agent: hassmic/" VERSION "\r\n\r\n",
+                     path, v6 ? "[" : "", host, v6 ? "]" : "", port);
     if (write_all(fd, req, n) < 0) { close(fd); return -1; }
     for (int first = 1;; first = 0) {                   /* header lines, byte by byte: they are short */
         size_t i = 0; char c;
@@ -343,7 +440,10 @@ static int http_get(const char *url)    /* returns a socket positioned at the bo
     if (strncmp(p, "http://", 7)) { fprintf(stderr, "media: only http:// is supported: %s\n", url); return -1; }
     p += 7; path = strchr(p, '/');
     snprintf(host, sizeof host, "%.*s", (int)(path ? path - p : (long)strlen(p)), p);
-    char *colon = strrchr(host, ':'); if (colon) { *colon = 0; snprintf(port, sizeof port, "%s", colon + 1); }
+    char *colon = strrchr(host, ':'), *close_br = strrchr(host, ']');
+    if (colon && close_br > colon) colon = NULL;                            /* "[fe80::1]": the colons are the address */
+    if (colon) { *colon = 0; snprintf(port, sizeof port, "%s", colon + 1); }
+    if (host[0] == '[' && (close_br = strchr(host, ']'))) { *close_br = 0; memmove(host, host + 1, strlen(host)); }
     return http_get_host(host, port, path ? path : "/");
 }
 
@@ -576,6 +676,8 @@ static void send_device_info(void)
     pb_str(&b, 6, "Echo Dot 3 (donut)"); pb_str(&b, 8, "hassmic.echo-dot-3"); pb_str(&b, 9, VERSION);
     pb_str(&b, 12, "Amazon"); pb_str(&b, 13, core_name);
     pb_uint(&b, 17, FEAT_VOICE | FEAT_API_AUDIO | FEAT_TIMERS | FEAT_ANNOUNCE | FEAT_START_CONVERSATION);      /* no SPEAKER: see top */
+    pb_uint(&b, 19, 1);                                 /* api_encryption_supported */
+    pb_uint(&b, 26, !have_key);                         /* api_encryption_provisionable: Home Assistant sets the key */
     send_msg(DEVICE_INFO_RESP, &b);
 }
 
@@ -613,6 +715,13 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         return 1;
     }
     pthread_mutex_lock(&core_lock);
+    int c = client_of(reply_fd);
+    if (have_key && c >= 0 && !clients[c].keyed && type != DISCONNECT_REQ) {
+        /* got in before the key was set (the one that set it has had its answer): the key counts from here on */
+        fprintf(stderr, "encryption: closing a connection without the key\n");
+        pthread_mutex_unlock(&core_lock);
+        return 0;
+    }
     switch (type) {
     case HELLO_REQ: { PB(b, 128); pb_uint(&b, 1, 1); pb_uint(&b, 2, 10); pb_str(&b, 3, "hassmic " VERSION); pb_str(&b, 4, node_name()); send_msg(HELLO_RESP, &b); } break;
     case CONNECT_REQ:      send_msg(CONNECT_RESP, NULL); break;                 /* no password */
@@ -643,6 +752,15 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case VA_CONFIG_REQ:    send_va_config(); break;
     case VA_SET_CONFIG:    break;                                               /* one wake word, nothing to choose */
     case MEDIA_PLAYER_COMMAND: on_mp_command(p, end); break;
+    case SET_KEY_REQ: {
+        /* Without a key: from an encrypted (zero-PSK) connection only, so the key never crosses the network readable.
+         * With one: only from a connection that has it (Home Assistant rotating or clearing it). */
+        const unsigned char *k = NULL; size_t kl = 0; int ok = 0;
+        while (pb_next(&p, end, &f)) if (f.field == 1 && f.data) { k = f.data; kl = f.len; }
+        if (c >= 0 && (have_key ? clients[c].keyed : clients[c].enc)) { ok = key_set(k, kl); if (ok && have_key) clients[c].keyed = 1; }
+        else fprintf(stderr, "encryption: key change refused (%s connection)\n", have_key ? "unkeyed" : "plaintext");
+        PB(b, 8); pb_uint(&b, 1, ok); send_msg(SET_KEY_RESP, &b);
+    } break;
     }
     pthread_mutex_unlock(&core_lock);
     return keep;
@@ -655,35 +773,100 @@ static int read_varint(int fd, uint32_t *out)
     return -1;
 }
 
+/* Body of a Noise frame whose 0x01 has been read.  buf holds 64 KiB, the most a frame can carry.  -1 on error. */
+static long read_frame(int fd, unsigned char *buf)
+{
+    unsigned char h[2];
+    if (read_full(fd, h, 2) != 2) return -1;
+    size_t len = (size_t)h[0] << 8 | h[1];
+    return len && read_full(fd, buf, len) != (ssize_t)len ? -1 : (long)len;
+}
+
+/* Client hello (ignored), handshake message 1, our server hello and message 2.  With a key only that key gets through;
+ * without one only the all-zero PSK, which is what Home Assistant uses to set the key.  0 = encrypted from here on. */
+static int noise_handshake(int fd, int slot, unsigned char *buf)
+{
+    static const uint8_t zero[32]; uint8_t psk[32], payload[64], out[32 + NOISE_TAG + 1]; unsigned char pre;
+    struct noise_hs hs; struct noise_cs tx, rx; char hello[160]; int keyed; long n;
+    if (read_frame(fd, buf) < 0 || read_full(fd, &pre, 1) != 1 || pre != 1 || (n = read_frame(fd, buf)) < 1 || buf[0] != 0) return -1;
+    pthread_mutex_lock(&core_lock);
+    keyed = have_key; memcpy(psk, have_key ? api_key : zero, 32);
+    pthread_mutex_unlock(&core_lock);
+    size_t hl = 1 + snprintf(hello + 1, sizeof hello - 1, "%s%c%s", node_name(), 0, mac_plain()) + 1;
+    hello[0] = 1;                                       /* chosen protocol: Noise */
+    if (write_frame(fd, hello, hl) < 0) return -1;
+    noise_nn_responder_init(&hs, "NoiseAPIInit\0\0", 14);
+    if (n - 1 > 32 + NOISE_TAG + (long)sizeof payload || noise_nn_read_msg1(&hs, psk, buf + 1, n - 1, payload) < 0) {
+        static const char fail[] = "\x01Handshake MAC failure";           /* what the client turns into "invalid key" */
+        write_frame(fd, fail, sizeof fail - 1);
+        fprintf(stderr, "encryption: handshake with the wrong key (%s)\n", keyed ? "not the device key" : "no key set yet, expected the zero PSK");
+        memset(psk, 0, sizeof psk);
+        return -1;
+    }
+    memset(psk, 0, sizeof psk);
+    out[0] = 0;                                         /* handshake OK */
+    size_t ml = noise_nn_write_msg2(&hs, NULL, 0, out + 1, &tx, &rx);
+    pthread_mutex_lock(&core_lock);
+    clients[slot].tx = tx; clients[slot].rx = rx; clients[slot].enc = 1; clients[slot].keyed = keyed;
+    int rc = write_frame(fd, out, ml + 1);              /* under the lock: no state may overtake it */
+    pthread_mutex_unlock(&core_lock);
+    memset(&tx, 0, sizeof tx); memset(&rx, 0, sizeof rx);
+    return rc;
+}
+
 static void serve(int fd)
 {
-    unsigned char *buf = malloc(1 << 16), pre; uint32_t len, type, cap = 1 << 16; int slot = -1, n = 0;
-    if (!buf) return;
+    unsigned char *buf = malloc(1 << 16), *pt = malloc(1 << 16), pre; uint32_t len, type, cap = 1 << 16; int slot = -1, n = 0, enc = 0;
+    if (!buf || !pt) { free(buf); free(pt); return; }
     pthread_mutex_lock(&core_lock);
-    { static int loaded; if (!loaded) { loaded = 1; settings_load(); pthread_t t; pthread_create(&t, NULL, diag_thread, NULL); pthread_detach(t); } }
+    { static int loaded; if (!loaded) { loaded = 1; settings_load(); key_load(); pthread_t t; pthread_create(&t, NULL, diag_thread, NULL); pthread_detach(t); } }
     for (int i = 0; i < MAX_CLIENTS; i++) { if (clients[i].fd < 0 && slot < 0) slot = i; n += clients[i].fd >= 0; }
-    if (slot >= 0) { clients[slot].fd = fd; clients[slot].states = 0; if (!n) core_link(1, 0); }
+    if (slot >= 0) { clients[slot].fd = fd; clients[slot].states = clients[slot].enc = clients[slot].keyed = 0; if (!n) core_link(1, 0); }
+    int keyed = have_key;
     pthread_mutex_unlock(&core_lock);
-    if (slot < 0) { fprintf(stderr, "client refused: %d connections already\n", MAX_CLIENTS); free(buf); return; }
-    fprintf(stderr, "client connected (%d)\n", n + 1);
+    if (slot < 0) { fprintf(stderr, "client refused: %d connections already\n", MAX_CLIENTS); free(buf); free(pt); return; }
     reply_fd = fd;
 
-    for (;;) {
-        if (read_full(fd, &pre, 1) != 1) break;
-        if (pre != 0) { fprintf(stderr, "client wants encryption (preamble %u): remove the key in Home Assistant\n", pre); break; }
-        if (read_varint(fd, &len) || read_varint(fd, &type) || len > (1 << 20)) break;
-        if (len > cap) { unsigned char *nb = realloc(buf, len); if (!nb) break; buf = nb; cap = len; }
-        if (len && read_full(fd, buf, len) != (ssize_t)len) break;
-        if (!handle(type, buf, len)) break;
+    if (read_full(fd, &pre, 1) != 1) goto done;
+    if (pre == 1) {
+        if (noise_handshake(fd, slot, buf)) goto done;
+        enc = 1;
+    } else if (keyed) {                                 /* the client sees 0x01 and reports "requires encryption" */
+        fprintf(stderr, "encryption: plaintext connection refused, the device has a key\n");
+        write_frame(fd, "", 0);
+        goto done;
+    }
+    fprintf(stderr, "client connected (%d, %s)\n", n + 1, enc ? (keyed ? "encrypted" : "zero-PSK, to set the key") : "plaintext");
+
+    for (int first = 1;; first = 0) {
+        const unsigned char *msg = buf;
+        if (enc) {
+            long fl, pl;
+            if (read_full(fd, &pre, 1) != 1 || pre != 1 || (fl = read_frame(fd, buf)) < 0) break;
+            if ((pl = noise_decrypt(&clients[slot].rx, buf, fl, pt)) < 4) { fprintf(stderr, "encryption: bad frame, closing\n"); break; }
+            type = pt[0] << 8 | pt[1]; len = pt[2] << 8 | pt[3];
+            if (len != (uint32_t)pl - 4) break;
+            msg = pt + 4;
+        } else {
+            if (!first && read_full(fd, &pre, 1) != 1) break;
+            if (pre != 0) break;
+            if (read_varint(fd, &len) || read_varint(fd, &type) || len > (1 << 20)) break;
+            if (len > cap) { unsigned char *nb = realloc(buf, len); if (!nb) break; buf = nb; cap = len; msg = buf; }
+            if (len && read_full(fd, buf, len) != (ssize_t)len) break;
+        }
+        if (!handle(type, msg, len)) break;
     }
 
+done:
+
     pthread_mutex_lock(&core_lock);
-    clients[slot].fd = -1; clients[slot].states = 0; n = 0;
+    clients[slot].fd = -1; clients[slot].states = clients[slot].enc = clients[slot].keyed = 0; n = 0;
+    memset(&clients[slot].tx, 0, sizeof clients[slot].tx); memset(&clients[slot].rx, 0, sizeof clients[slot].rx);
     for (int i = 0; i < MAX_CLIENTS; i++) n += clients[i].fd >= 0;
     if (va_fd == fd) { va_fd = -1; tts_expected = 0; core_link(n > 0, 0); }      /* the voice assistant's client left: pipelines end */
     else if (!n) core_link(0, 0);
     pthread_mutex_unlock(&core_lock);
-    free(buf);
+    free(buf); free(pt);
     fprintf(stderr, "client disconnected (%d left)\n", n);
 }
 

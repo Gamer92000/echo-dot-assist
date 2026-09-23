@@ -4,6 +4,15 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-09-23
 
+- **Encrypted connection to Home Assistant.** The ESPHome connection now uses the same encryption as ESPHome devices.
+  Home Assistant creates the key by itself when the Echo is added, and from then on only Home Assistant can connect.
+  Already added? Home Assistant sets the key on its next connection, nothing to do. See "Encryption key" in the README
+  if it ever needs a reset.
+- **Replies and music from a Home Assistant with a host name.** The Echo now finds `.local` names (like
+  `homeassistant.local`) by mDNS, may ask the DNS servers the network hands out even when one is public (8.8.8.8 from
+  DHCP used to be dropped), and tries every address a name resolves to instead of giving up after the first. Before, an
+  internal URL with a name instead of an IP could leave the Echo silent at any volume. What still has to hold is in the
+  README under "No sound from replies or music?".
 - **No more 20 s of deafness after a restart or update.** Amazon's mixer waits for its performance monitor before it opens
   the mic, and the lockdown used to stop that daemon. It now keeps running, so the wake word listens again right after
   hassmic starts.

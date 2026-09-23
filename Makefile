@@ -46,7 +46,7 @@ build/pryon_test: src/tools/pryon_test.c src/include/pryon_api.h
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) $(STOCK)/libpryon.so
 
 HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c \
-           src/hassmic/sendspin.c src/hassmic/ota.c src/hassmic/ws.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c \
+           src/hassmic/sendspin.c src/hassmic/ota.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c \
            src/third_party/monocypher.c
 HASSMIC_H := $(wildcard src/hassmic/*.h src/include/*.h) build/.build-id
 
@@ -67,7 +67,7 @@ build/hassmic-qemu: $(HASSMIC) src/hassmic/audio_file.c src/hassmic/wake_pryon.c
 host: build/hassmic-host build/hassmic-qemu build/otatool-host
 
 # Building blocks of the Sendspin client, checked against reference implementations (aiohttp, python noiseprotocol).
-UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/noise.c src/third_party/monocypher.c
+UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/third_party/monocypher.c
 unit:
 	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic -Isrc/include tests/unit/hash_test.c $(UNIT) -lpthread -o build/hash_test && build/hash_test
