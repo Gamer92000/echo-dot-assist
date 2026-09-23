@@ -65,10 +65,13 @@ Legend: `[x]` done, `[~]` partly done (note says what is missing), `[ ]` open. *
       stream the mixer never picked up. 70 sounds in bursts of ten: every ring opened by the mixer (checked per stream in
       the `ShmService` log, the mixer's own lines get dropped by logd for chattiness), no retry needed. Streams that live
       seconds (TTS, music) never hit this; the mixer also plays out what is queued after a close
-- [~] Mic after a hassmic (re)start: the mixer delivers nothing on the new `micAsr` client for ~15 s (`InCapture-GetReadBuff:
+- [x] Mic after a hassmic (re)start: the mixer delivers nothing on the new `micAsr` client for ~15 s (`InCapture-GetReadBuff:
       retcode=110` every 1.5 s from 21:46:22 to :36 after the 21:46:17 open), then data flows. Same picture when `mixcap` opened
-      right after hassmic was stopped and gave up after 17 s. So each push update means ~20 s without wake word; harmless,
-      cause unknown (HAL standby?)
+      right after hassmic was stopped and gave up after 17 s. So each push update means ~20 s without wake word.
+      **Cause (2026-09-23):** after `AddNewStream` for a record stream the mixer's `AlgoMetadataDecoder` connects over AIPC to
+      `perfmonitord` (`/dev/aipc/182`, CPU usage for its corrupted-frame metric) and only opens the HAL record stream after
+      `pollConnect: epoll_wait timeout with timeout_ms: 20000`. `lockdown.sh` stopped `perfmonitord` as a cloud daemon. With
+      it running the mic opens 2 ms after the stream is added. `lockdown.sh` leaves it running now (~0.1 % CPU)
 - [x] mDNS: `scripts/device/hassmic.service` for the stock `avahi-daemon` (`/data/misc/avahi/services/`)
 - [x] `scripts/device/run.sh`: Alexa off, mDNS on, daemon in foreground
 

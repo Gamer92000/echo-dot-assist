@@ -4,6 +4,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-09-23
 
+- **No more 20 s of deafness after a restart or update.** Amazon's mixer waits for its performance monitor before it opens
+  the mic, and the lockdown used to stop that daemon. It now keeps running, so the wake word listens again right after
+  hassmic starts.
 - **Alexa's original sounds** for the wake word, the action button, the volume keys and the mic-off button (mics off / mics
   on), taken from the stock firmware on the device. The generated blip is gone. The "Wake sound" switch in Home Assistant
   silences all of them.

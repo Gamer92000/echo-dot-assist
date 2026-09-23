@@ -57,9 +57,11 @@ fi
 
 apply
 # Everything that phones home.  mixer, shmd, ledcontroller, acebuttond, netmgrd, wifisvc stay.
+# perfmonitord stays too: every new micAsr stream makes the mixer connect to it over AIPC and wait up to 20 s for it
+# before opening the mic, so without it each hassmic (re)start was 20 s deaf.  Anything it sends out is dropped by the egress lock.
 for s in puffin puffinmrmd dacd smarthomed otad ace_otad update_engine assetmgrd gadgetsd logmgr ace_metricd \
          minerva_service usagestat_protod aceusagestatd trackerd provisionerd adepd sntpd UdssCampSvc fmonitor \
-         perfmonitord ace_messaging ahe shs; do stop $s 2>/dev/null; done
+         ace_messaging ahe shs; do stop $s 2>/dev/null; done
 setprop com.amazon.puffin.PUFFIN_START 0
 echo "egress limited to local addresses"; iptables -w -S hassmic_out
 
