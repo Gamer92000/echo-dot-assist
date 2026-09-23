@@ -63,10 +63,11 @@ void play_close(int drain)
     play = NULL;
 }
 
-/* Music stream.  The mixer's buffer fill is not exposed in a documented way, so the queue is modelled: bytes written
- * minus bytes that real time has consumed since the stream started draining (it drains at exactly the sample rate, and
- * MixerGetBufPlay blocks once its ring is full, which keeps the model honest). */
-static MixerHandle music; static unsigned music_bps; static long long music_t0, music_written;
+/* Music streams (Sendspin, Bluetooth speaker).  The mixer's buffer fill is not exposed in a documented way, so the queue
+ * is modelled: bytes written minus bytes that real time has consumed since the stream started draining (it drains at
+ * exactly the sample rate, and MixerGetBufPlay blocks once its ring is full, which keeps the model honest). */
+struct stream { MixerHandle h; unsigned bps; long long t0, written; };
+static struct stream music, bt;
 
 static long long raw_us(void)
 {
@@ -74,45 +75,54 @@ static long long raw_us(void)
     return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
 }
 
-int music_open(unsigned rate, unsigned channels)
+static int s_open(struct stream *s, unsigned rate, unsigned channels)
 {
-    music = MixerOpenPlay(rate, channels, 16, MIXER_PLAY_MUSIC);
-    music_bps = rate * channels * 2; music_t0 = 0; music_written = 0;
-    return music ? 0 : -1;
+    s->h = MixerOpenPlay(rate, channels, 16, MIXER_PLAY_MUSIC);
+    s->bps = rate * channels * 2; s->t0 = 0; s->written = 0;
+    return s->h ? 0 : -1;
 }
 
-long long music_queued_us(void)
+static long long s_queued_us(struct stream *s)
 {
-    if (!music || !music_t0) return 0;
-    long long q = music_written * 1000000 / music_bps - (raw_us() - music_t0);
-    if (q < 0) { music_t0 = 0; music_written = 0; q = 0; }      /* ran dry: the model restarts with the next write */
+    if (!s->h || !s->t0) return 0;
+    long long q = s->written * 1000000 / s->bps - (raw_us() - s->t0);
+    if (q < 0) { s->t0 = 0; s->written = 0; q = 0; }            /* ran dry: the model restarts with the next write */
     return q;
 }
 
-int music_write(const void *data, size_t len)
+static int s_write(struct stream *s, const void *data, size_t len)
 {
     const char *p = data;
-    if (!music) return -1;
-    music_queued_us();
-    if (!music_t0) music_t0 = raw_us();
+    if (!s->h) return -1;
+    s_queued_us(s);
+    if (!s->t0) s->t0 = raw_us();
     while (len) {
         int status = 0; unsigned capb = 0;
-        char *buf = MixerGetBufPlay(music, &status, &capb);
+        char *buf = MixerGetBufPlay(s->h, &status, &capb);
         if (!buf) return -1;
         unsigned n = len < capb ? len : capb;
         memcpy(buf, p, n);
-        MixerReleaseBufPlay(music, n);
-        p += n; len -= n; music_written += n;
+        MixerReleaseBufPlay(s->h, n);
+        p += n; len -= n; s->written += n;
     }
     return 0;
 }
 
-void music_close(void)
+static void s_close(struct stream *s)
 {
-    if (!music) return;
-    MixerFlush(music); MixerClose(music);
-    music = NULL;
+    if (!s->h) return;
+    MixerFlush(s->h); MixerClose(s->h);
+    s->h = NULL;
 }
+
+int       music_open(unsigned rate, unsigned channels) { return s_open(&music, rate, channels); }
+long long music_queued_us(void) { return s_queued_us(&music); }
+int       music_write(const void *data, size_t len) { return s_write(&music, data, len); }
+void      music_close(void) { s_close(&music); }
+int       bt_open(unsigned rate, unsigned channels) { return s_open(&bt, rate, channels); }
+long long bt_queued_us(void) { return s_queued_us(&bt); }
+int       bt_write(const void *data, size_t len) { return s_write(&bt, data, len); }
+void      bt_close(void) { s_close(&bt); }
 
 void play_earcon(const short *pcm, size_t samples, unsigned rate)
 {

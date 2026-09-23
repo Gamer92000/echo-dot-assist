@@ -42,8 +42,18 @@ own music like it did before. Only the Alexa client is replaced, by a small daem
   `bluetooth_proxy` with `active: true`. BLE sensors, trackers and beacons nearby show up in Home Assistant's
   Bluetooth integrations, and integrations that connect to a device (up to 3 at a time) can do that through the Echo.
   Pairing works like on an ESP32 proxy: "Just Works" only (no PIN entry), keys kept on the Echo in
-  `/data/local/hassmic/state/ble_bonds`. The Echo is no longer a Bluetooth speaker; it could not pair without Alexa
-  anyway.
+  `/data/local/hassmic/state/ble_bonds`.
+- **Bluetooth speaker**: turn on the "Bluetooth pairing" switch in Home Assistant, then pick the Echo in your phone's
+  Bluetooth settings within two minutes (like "Alexa, pair"). Paired phones and computers connect again by themselves
+  whenever you choose the Echo on them; unknown devices are turned away while the switch is off. Codecs: SBC, AAC
+  (Apple devices' choice; decoded by the firmware's own FFmpeg), aptX and aptX HD; stock Alexa only had SBC. Delay
+  reporting so video stays in sync; the voice assistant ducks it like music. The phone's volume slider is the Echo's
+  volume and follows the Echo's buttons; the action button pauses and resumes the phone. While a phone plays, the
+  Bluetooth proxy stops scanning: the radio cannot do both without the music stuttering. Keys in
+  `/data/local/hassmic/state/bt_keys`.
+- **One music source at a time**: the newest wins. A phone that starts playing over Bluetooth pauses Music Assistant
+  (the whole Sendspin group: the Echo cannot tell whether other rooms are in it), and Music Assistant starting on the
+  Echo pauses the phone. Nothing resumes by itself.
 - **Settings in Home Assistant**: noise suppression level, auto gain, mic volume multiplier, mute switch, and a "Wake sound"
   switch that covers all local sounds. Those are Alexa's originals from the firmware: wake word, action button, volume keys,
   mute on and off.
@@ -311,7 +321,7 @@ user-visible changes by date: [CHANGELOG.md](CHANGELOG.md).
 | `src/hassmic/` | the daemon: core (capture, wake word, playback, LEDs, buttons), `proto_esphome.c`, `proto_wyoming.c`, `sendspin.c`, push updates |
 | `src/tools/` | `mixcap`, `mixplay`, `pryon_test`, `latency`, `otatool`, `runas` (AIPC refuses uid 0, the image has no `su`), `curlspy`, `hciscan` (raw HCI on `/dev/stpbt`) |
 | `src/include/` | C headers for the reversed `libmixerAPI.so` and `libpryon.so` |
-| `src/third_party/` | monocypher 4.0.2 (BSD-2-Clause OR CC0), `dr_flac.h` (public domain or MIT-0), `minimp3.h` (CC0) |
+| `src/third_party/` | monocypher 4.0.2 (BSD-2-Clause OR CC0), `dr_flac.h` (public domain or MIT-0), `minimp3.h` (CC0), libfreeaptx 0.2.2 (LGPL-2.1-or-later) |
 | `scripts/` | PC side: `deploy.sh`, `probe.sh`, `capture-test.sh`, `wifi-join.sh`, `install-system.sh`, `ota-push.sh` |
 | `scripts/device/`, `scripts/system/` | run on the Echo; boot integration (`hassmic.rc`, `boot.sh` bootstrap, `main.sh` updatable part, `sepolicy.rules`) |
 | `tools/` | OTA payload dumper, Thumb disassembly helpers, `qrun.sh` (device binaries under qemu-arm), `davs-fetch.py` |
@@ -333,7 +343,8 @@ Git-ignored because proprietary, derived or secret: `firmware/`, `re/`, `kamakir
 ## Licence
 
 [MIT](LICENSE), for everything written here. The files in `src/third_party/` keep their own licences, stated in each file:
-monocypher (BSD-2-Clause OR CC0-1.0), `dr_flac.h` (public domain or MIT-0), `minimp3.h` (CC0-1.0).
+monocypher (BSD-2-Clause OR CC0-1.0), `dr_flac.h` (public domain or MIT-0), `minimp3.h` (CC0-1.0), `freeaptx.c`/`.h`
+(LGPL-2.1-or-later; hassmic links it statically, and everything needed to rebuild and relink it is in this repository).
 
 Nothing of Amazon's is in this repository and nothing of it is covered by this licence: firmware, libraries and wake-word
 models come from your own device and stay Amazon's. Not affiliated with or endorsed by Amazon, Home Assistant or

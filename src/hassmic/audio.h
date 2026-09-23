@@ -22,6 +22,12 @@ int       music_write(const void *data, size_t len);
 long long music_queued_us(void);
 void      music_close(void);
 
+/* Bluetooth speaker stream: like the music stream, beside it */
+int       bt_open(unsigned rate, unsigned channels);
+int       bt_write(const void *data, size_t len);
+long long bt_queued_us(void);
+void      bt_close(void);
+
 /* Short UI sound on its own stream; mixes with whatever else plays.  Blocks for the length of the sound. */
 void play_earcon(const short *pcm, size_t samples, unsigned rate);
 #endif

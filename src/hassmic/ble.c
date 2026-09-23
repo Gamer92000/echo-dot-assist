@@ -2,8 +2,9 @@
  * Bluetooth LE straight on the controller.  The Echo has no kernel Bluetooth stack (no BlueZ, no HCI sockets): MediaTek's
  * WMT driver exposes the combo chip's HCI as /dev/stpbt, H4 framing (packet type byte, then the HCI packet), and Amazon's
  * btmanagerd (Bluetooth speaker mode, pairing through the Alexa app) drives it from user space.  Without Alexa nothing can
- * pair any more, so hassmic takes the radio over: alexa-off.sh stops btmanagerd.  The device node does not refuse a
- * second opener, so this waits until btmanagerd is really gone; two users would steal each other's events.
+ * pair with that any more, so hassmic takes the radio over (the speaker is a2dp.c now): alexa-off.sh stops btmanagerd.
+ * The device node does not refuse a second opener, so this waits until btmanagerd is really gone; two users would steal
+ * each other's events.
  *
  * Scanning: 30 ms every 320 ms, ESPHome's default for proxies on Wi-Fi.  The chip shares its antenna with Wi-Fi, and on
  * the Echo continuous scanning cut Wi-Fi throughput from 4.3 to about 1 MB/s, 30/320 to 3.8 MB/s.  The number of
@@ -24,6 +25,9 @@
  * the device gave us, its IRK to recognise it behind a private address) go to state/ble_bonds; on every later
  * connection the link is encrypted with them before GATT traffic starts.  Our own keys are never distributed: we only
  * ever connect, the device never needs to recognise or encrypt towards us.
+ *
+ * BR/EDR (the Bluetooth speaker) shares this thread and the controller: a2dp.c gets the events and ACL packets that
+ * are not LE's, its own share of the controller's buffers, and sends its commands from upkeep() (hci.h).
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -40,6 +44,7 @@
 #endif
 #include "ble.h"
 #include "ble_crypto.h"
+#include "hci.h"
 
 #define DEV "/dev/stpbt"
 #define SCAN_INTERVAL 512                       /* 320 ms, units of 0.625 ms */
@@ -146,6 +151,8 @@ static void set_slot(struct conn *c, uint64_t addr)
     pthread_mutex_lock(&qlock); slot_addr[c - conns] = addr; pthread_mutex_unlock(&qlock);
     if (H->slots_changed) H->slots_changed();
 }
+
+static const struct ble_handler no_handler;
 
 static struct conn *by_addr(uint64_t a) { for (int i = 0; i < BLE_MAX_CONN; i++) if (conns[i].state != C_FREE && conns[i].addr == a) return &conns[i]; return NULL; }
 static struct conn *by_handle(int h) { for (int i = 0; i < BLE_MAX_CONN; i++) if (conns[i].state >= C_MTU && conns[i].handle == h) return &conns[i]; return NULL; }
@@ -695,7 +702,8 @@ static void acl_rx(const unsigned char *p, size_t n)     /* p: after the H4 type
 {
     if (n < 4) return;
     struct conn *c = by_handle(u16(p) & 0x0fff); unsigned pb = p[1] >> 4 & 3; size_t len = u16(p + 2);
-    if (!c || len > n - 4) return;
+    if (!c) { a2dp_acl(p, n); return; }
+    if (len > n - 4) return;
     p += 4;
     if (pb != 1) {                                          /* first fragment (not "continuing"): L2CAP header inside */
         if (len < 4) return;
@@ -760,7 +768,7 @@ static void conn_complete(const unsigned char *q, size_t n)
 static void event(const unsigned char *p, size_t n)            /* p: event code, length, parameters */
 {
     const unsigned char *q = p + 2; struct conn *c;
-    if (n < 2) return;
+    if (n < 2 || a2dp_event(p, n)) return;
     n -= 2;
     switch (p[0]) {
     case EV_CMD_COMPLETE:
@@ -781,6 +789,7 @@ static void event(const unsigned char *p, size_t n)            /* p: event code,
     case EV_NUM_COMPLETED:
         for (unsigned i = 0; n >= 1 && i < q[0] && 1 + 4 * i + 4 <= n; i++) {
             unsigned k = u16(q + 3 + 4 * i);
+            if (a2dp_completed(u16(q + 1 + 4 * i) & 0x0fff, k)) continue;      /* BR/EDR buffers: counted apart */
             credits += k; if (credits > (int)acl_num) credits = acl_num;
             if ((c = by_handle(u16(q + 1 + 4 * i) & 0x0fff))) { c->unacked -= k; if (c->unacked < 0) c->unacked = 0; }
         }
@@ -827,7 +836,8 @@ static int pump(int ms)
  * Events arriving meanwhile are handled as usual. */
 static int cmd(unsigned op, const void *par, unsigned n)
 {
-    unsigned char b[4 + 72] = { H4_CMD, op & 0xff, op >> 8, n };
+    unsigned char b[4 + 255] = { H4_CMD, op & 0xff, op >> 8, n };
+    if (n > 255) return -1;
     if (n) memcpy(b + 4, par, n);
     cc_op = -1;
     if (write(fd, b, 4 + n) != (ssize_t)(4 + n)) return -1;
@@ -879,7 +889,7 @@ static int setup(void)
     }
     fprintf(stderr, "bluetooth: controller ready, %s, ACL %u x %u, pairing: %s\n", bdaddr, acl_num, acl_len,
             have_sc ? "LE Secure Connections or legacy" : "legacy only");
-    return 0;
+    return a2dp_setup();
 }
 
 static int apply(int on, int active)
@@ -951,6 +961,7 @@ static int handle_request(struct req *r)
 /* Connection upkeep that needs HCI commands (never sent from inside event handling) and timeouts.  -1: controller gone. */
 static int upkeep(void)
 {
+    if (a2dp_upkeep() < 0) return -1;
     for (int i = 0; i < BLE_MAX_CONN; i++) {
         struct conn *c = &conns[i]; unsigned char p[64];
         if (c->state == C_FREE) continue;
@@ -1031,6 +1042,7 @@ static void drop_all(void)                                  /* controller lost: 
     }
     for (struct frag *f = fhead, *n; f; f = n) { n = f->next; free(f); }
     fhead = NULL; ftail = &fhead;
+    a2dp_lost();
 }
 
 static void *thread(void *arg)
@@ -1054,7 +1066,7 @@ static void *thread(void *arg)
             while (r) { struct req *n = r->next; if (!bad && handle_request(r) < 0) bad = 1; free(r); r = n; }
             if (bad || upkeep() < 0) break;
             /* scanning pauses while a connection is being set up */
-            int won = atomic_load(&want_on) && !in_state(C_WAIT) && !in_state(C_CONNECTING), wac = atomic_load(&want_active);
+            int won = atomic_load(&want_on) && !in_state(C_WAIT) && !in_state(C_CONNECTING) && !a2dp_streaming(), wac = atomic_load(&want_active);
             if (won != on || (on && wac != active)) {
                 if (apply(won, wac) < 0) break;
                 if (won != on || wac != active)
@@ -1063,7 +1075,7 @@ static void *thread(void *arg)
                 if (H->scan_changed) H->scan_changed();
             }
             if (!on && connect_next() < 0) break;
-            int busy = 0;
+            int busy = a2dp_busy();
             for (int i = 0; i < BLE_MAX_CONN; i++) busy |= conns[i].state != C_FREE;
             struct pollfd p[2] = { { fd, POLLIN, 0 }, { wake[0], POLLIN, 0 } };
             if (poll(p, 2, busy ? 500 : nbatch ? 100 : -1) < 0 && errno != EINTR) break;
@@ -1106,12 +1118,19 @@ void ble_write(uint64_t addr, unsigned handle, const void *data, size_t len, int
     request(R_WRITE, addr, 0, handle, data, len, response);
 }
 
+/* hci.h: for a2dp.c on this thread */
+int hci_cmd(unsigned op, const void *par, unsigned n) { return cmd(op, par, n); }
+const unsigned char *hci_ret(void) { return cc_ret; }
+int hci_write(const void *b, size_t n) { return write(fd, b, n) == (ssize_t)n ? 0 : -1; }
+void hci_poke(void) { poke(); }
+
 void ble_start(const struct ble_handler *h)
 {
-    pthread_t t;
-    if (!ble_present() || pipe(wake)) return;
+    static int started; pthread_t t;
+    H = h ? h : &no_handler;
+    if (started || !ble_present() || pipe(wake)) return;
+    started = 1;
     fcntl(wake[1], F_SETFL, O_NONBLOCK);
-    H = h;
     read_bdaddr();
     for (int i = 0; i < 6 && bdaddr[0]; i++) own_addr[5 - i] = strtoul(bdaddr + 3 * i, NULL, 16);
     bonds_load();

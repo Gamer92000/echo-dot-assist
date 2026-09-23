@@ -348,6 +348,68 @@ Run in this order. Each step says what it proves.
       characteristic: insufficient encryption -> pair (LE SC) -> read ok -> 8/8 reconnects read with the stored bond ->
       unpair; bonds cleaned up on both sides. Not exercised on air: legacy pairing (BlueZ on the PC always takes Secure
       Connections; `btmgmt sc off` needs root), key sizes below 16
+- [x] Bluetooth speaker (2026-09-24, `a2dp.c` + `sbc.c`): A2DP sink on BR/EDR beside the LE proxy, same controller thread
+      (`hci.h`: a2dp.c gets the non-LE events and ACL links, sends its commands from `upkeep()`). BR/EDR buffers apart
+      from LE: 8 x 1021 (READ_BUFFER). Class 0x240414, EIR with name + AudioSink UUID, SSP NoInputNoOutput / PIN 0000,
+      both only inside the pairing window (HA switch "Bluetooth pairing", 120 s, closes after one pairing); page scan
+      only once a key exists. SDP: one A2DP sink 1.3 record. AVDTP: one SBC SEP, 44.1/48 kHz, bitpool 2..53, delay
+      reporting (reports 280 ms). SBC decoder written from the spec (float synthesis); checked against libsbc's `sbcdec`
+      in every mode sbcenc offers (`tests/unit/sbc_ref.sh`, part of `make unit`): ~80 dB, <= 9 LSB apart, which is
+      libsbc's own fixed-point rounding. Checked on air with BlueZ/PipeWire on the PC: pair, 48 kHz joint stereo
+      bitpool 53, 3 min without an underrun with LE scanning on, reconnect with the stored key, pairing off; music
+      heard by the user. **micRaw is no proof of playback**: a 6000-amplitude mixer tone at volume 60 moves its rms
+      from ~6 to ~20 only; the early "+22 dB in micRaw" checks passed on a sink PipeWire had at 25 % (-36 dB). The
+      minute log line now carries the peak level written to the mixer instead. Jitter buffer 150 ms (settles at ~130 ms, first minute
+      nudged ~3700 frames, then none), mixer 60 ms. hassmic 6 % CPU while streaming. Not done: refusing an unknown device on air (no second source at hand), phones (only BlueZ)
+- [x] Bluetooth speaker codecs (2026-09-24, `a2dp_codecs.c`): stock `bluetooth.default.so` (Fluoride) is SBC only
+      (`A2D_BldSbcInfo` / `A2D_ParsSbcInfo`, nothing else). One AVDTP endpoint per codec now, the source picks:
+      SBC; AAC (MPEG-2/4 LC, 44.1/48 kHz, VBR <= 320 kbit/s) through the firmware's `libavcodec.so`, FFmpeg 4
+      (`avcodec_version` 58, `aac_latm` built in; dlopen, AVFrame/AVPacket offsets of FFmpeg 4 on 32-bit ARM, packet
+      layout checked at start), payload = LATM with in-band config, LOAS header put in front for FFmpeg; aptX (raw, no
+      RTP) and aptX HD (RTP) through vendored libfreeaptx 0.2.2; Google's A2DP Opus (vendor 0xe0/0x0001, RTP + frame
+      count byte) through the firmware's libopus. Formats as PipeWire's `spa/plugins/bluez5` codecs send them.
+      `make unit`: aptX / aptX HD / Opus glue with encoded 1 kHz tones (level +-0.02 dB). On air with PipeWire on the
+      PC, each codec in turn (profiles a2dp-sink-sbc / -sbc_xq / -aac / -aptx / aptX HD / -opus_g): 880 Hz at
+      amplitude 10000 reaches the mixer at peak 10064 / 10097 / 10257 / 11626 / 10995 / 10969, user heard them; hassmic
+      6-15 % CPU whatever the codec (AAC 6-12 %). Switching the codec makes PipeWire drop and recreate the sink:
+      players fall back to the default sink.
+      Jitter buffer now primed with the mixer's share too (150 + 60 ms): before, the mixer took 60 ms at once and the
+      drift control duplicated ~3000+ frames per start; now +11 frames in 3 min of AAC. Not done: aptX LL, LDAC
+      (no decoder; would also crowd Wi-Fi), HE-AAC
+- [x] AVRCP + one music source at a time (2026-09-24, `a2dp.c`, `main.c` `core_music`): SDP records AVRCP 1.5 target
+      (category 2) and controller over AVCTP 1.4; target answers UNIT/SUBUNIT INFO, GetCapabilities (company, events:
+      volume changed only), RegisterNotification(volume) with INTERIM / CHANGED, SetAbsoluteVolume (0..127 <-> 0..100 %,
+      no CHANGED back for the device's own change); controller sends PLAY / PAUSE pass-through (press + release).
+      BlueZ opened AVCTP on one connect out of three: we open it ourselves 2 s after AVDTP signalling when the device
+      has not (outgoing L2CAP connection, only for AVCTP). Checked with BlueZ/PipeWire: volume Echo -> PC (30 % shows as
+      30 %) and PC -> Echo while streaming (50 %, 60 %); PipeWire sends nothing while the sink is idle; transport
+      Volume 57 -> Echo 45 %. Action button while streaming: pause accepted, second press play accepted (a device may
+      stream silence after pausing, so the second press resumes). Whether a phone's player really pauses: not seen
+      (no phone; the PC has no MPRIS bridge). Arbitration in `core_music`: Bluetooth start -> `sendspin_pause()`
+      (controller command to the group; a Sendspin client cannot see the group's members, MA sets no group name, a
+      leader's group ID does not change when others join, so "only when alone" is impossible); Sendspin start ->
+      AVRCP pause, or without AVRCP the Bluetooth audio is dropped until Sendspin stops or the device starts again.
+      Sendspin <-> Bluetooth: checked by the user with Music Assistant and a Pixel, both directions work
+- [x] Bluetooth speaker on a real phone (2026-09-24, Pixel 10 Pro XL, Android 17; its logcat over adb):
+      **Opus not offered**: Android uses A2DP Opus only as its low-latency codec (`btif_av_source_set_low_latency_codec`:
+      Opus priority highest when a stream starts with `is_low_latency=true`, -1 otherwise). The Pixel alternated both on
+      every stream start (`StartRequest: is_low_latency=true/false`; the audio HAL lists LOW_LATENCY and FREE, the
+      output then recommends FREE only): SET_CONFIGURATION Opus, OPEN, START, CLOSE before a single packet, then aptX HD
+      the same way, forever, silence. Not the Echo's doing as far as its log shows; the decoder is fine (PipeWire's
+      opus_g plays). Endpoint kept in `a2dp_codecs.c`, not offered (`never`). Untested idea: the Echo reports 280 ms
+      of delay, maybe Android gives up low latency because of that.
+      **Volume dropouts**: SetAbsoluteVolume ran `core_set_volume` on the controller thread (forks audio_manager_set_prop
+      and ledctrl, takes core_lock): every slider move stalled the ACL reader, the jitter buffer ran dry. Now a
+      volume thread applies it (latest wins), and the volume is read once at start instead of under core_lock.
+      **Stutter with aptX HD (576 kbit/s)**: the Pixel's own counters (`dumpsys bluetooth_manager`, TxQueue) showed
+      packets dropped at the phone (140, up to 28 in a row) while LE scanning ran. A/B over 3 min each, same stream:
+      scanning paused 0 dropped / 1 dry-out, passive scanning 28 dropped / 3 dry-outs. LE scanning now pauses while
+      A2DP streams (`a2dp_streaming()` in ble.c's scan decision; HA sees the scanner idle meanwhile).
+      **Drift**: dropping / repeating single frames against the buffer level ran continuously after refill bursts
+      (-6600 frames/min, heard as roughness). Now linear resampling at a ratio = slow drift estimate (+-1 %) + level
+      error x 2e-5/ms: 4 min at 149-154 ms buffer, no dry-out, 0 dropped at the phone, the Pixel measured -261..-1072 ppm.
+      The minute log line carries buffer level, clock estimate, peak level, longest packet gap and dry-outs.
+      First aptX HD attempts failed because Opus was offered; the Opus loop took aptX HD with it
 - [x] Revert procedure tested 2026-09-21: `install-system.sh --uninstall` leaves no trace on `/system` (`/sepolicy` md5 back to the pre-hassmic
       value, stock Alexa + `uxeventd` + `otad` run again, no egress lock: only the VLAN protects then); reinstall brings everything back, and
       `/data/local/hassmic/state` (Sendspin identity, pairing record, settings) survives both. `alexa-on.sh` (no reboot) still untested

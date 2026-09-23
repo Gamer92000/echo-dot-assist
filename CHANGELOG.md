@@ -4,6 +4,18 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-09-24
 
+- **Bluetooth speaker again.** Phones and computers can play to the Echo over Bluetooth, beside the Bluetooth proxy.
+  To pair, turn on the new "Bluetooth pairing" switch in Home Assistant and pick the Echo on the phone within two
+  minutes; afterwards the phone connects by itself whenever you choose the Echo. Music from the phone is ducked while
+  you talk to the assistant, and the wake word listens through it like through other music.
+  Codecs: SBC like stock Alexa, and in addition AAC (what iPhones, iPads and Macs use), aptX and aptX HD. While a
+  phone plays, the Echo stops scanning for Home Assistant's Bluetooth devices: the radio cannot do both without the
+  music stuttering.
+  The phone's volume slider moves the Echo's volume and the other way round, and the action button pauses and resumes
+  the phone.
+- **One music source at a time.** When a phone starts playing over Bluetooth, Music Assistant pauses (the whole group
+  the Echo is in); when Music Assistant starts playing on the Echo, the phone pauses. Verified with Music Assistant and
+  a Pixel.
 - **Bluetooth proxy for Home Assistant.** The Echo now scans for Bluetooth LE devices and passes what it hears to Home
   Assistant, like an ESPHome Bluetooth proxy. After updating, Home Assistant picks it up by itself: the Echo appears
   under Settings → Devices & services → Bluetooth, and BLE sensors, trackers and beacons in range show up.

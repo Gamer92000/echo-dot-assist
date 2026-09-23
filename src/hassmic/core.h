@@ -56,5 +56,6 @@ int    core_tts_flushing(void);                             /* barge-in: drop au
 void   core_tts_flush(void);
 size_t core_tts_queued(void);                               /* bytes not yet played: for back pressure */
 void   core_alarm(int on);                                  /* timer finished: ring until button, wake word or 60 s */
-void   core_music(int on);                                  /* Sendspin stream running: the wake word threshold follows */
+enum { MUSIC_SENDSPIN = 1, MUSIC_BLUETOOTH = 2 };
+void   core_music(int source, int on);                      /* a music stream runs: the wake word threshold follows */
 #endif

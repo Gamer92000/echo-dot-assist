@@ -27,6 +27,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "audio.h"
+#include "a2dp.h"
 #include "buttons.h"
 #include "netio.h"
 #include "wake.h"
@@ -55,7 +56,8 @@ static enum state state;
 static time_t state_since;
 static atomic_int streaming, trigger_pending, button_pending, stop_pending, quit;
 static atomic_int flush_playback, alarm_on;   /* barge-in: drop queued TTS; UI sounds requested (bit per enum sound) */
-static atomic_int tts_on, music_on;                 /* something plays: the wake word model lowers its threshold then */
+static atomic_int tts_on, music_on;                 /* something plays: the wake word model lowers its threshold then.
+                                                    * music_on: MUSIC_* bits */
 static atomic_int dump_toggle;                      /* SIGTTIN: start / stop writing the processed mic stream to a file */
 static int soft_mute;                               /* under lock: mute switch from Home Assistant */
 static int barge_in;                                /* under lock: start a new pipeline once the current one has ended
@@ -111,7 +113,7 @@ static long long mono_ms(void);
  * that is when the user shouts over it and a false accept costs little. */
 static void playback_hint(void)
 {
-    int alarm = atomic_load(&alarm_on), music = atomic_load(&music_on), tts = atomic_load(&tts_on);
+    int alarm = atomic_load(&alarm_on), music = atomic_load(&music_on) != 0, tts = atomic_load(&tts_on);
     wake_property("AlarmState", alarm);
     wake_property("AudioPlayerState", music);
     wake_property("audio_playback", alarm || music || tts);
@@ -333,10 +335,18 @@ void core_alarm(int on)
     playback_hint();
 }
 
-void core_music(int on)
+/* The newest music source wins: a Bluetooth device that starts pauses the Sendspin group (the controller role; the
+ * whole group, since a player cannot tell whether it has the group to itself), a Sendspin stream that starts pauses the
+ * Bluetooth device (AVRCP; without it the device only goes unheard until Sendspin stops).  No automatic resume. */
+void core_music(int source, int on)
 {
-    if (atomic_exchange(&music_on, on) == on) return;
-    playback_hint();
+    int was = on ? atomic_fetch_or(&music_on, source) : atomic_fetch_and(&music_on, ~source);
+    if (on && !(was & source)) {
+        if (source == MUSIC_BLUETOOTH && was & MUSIC_SENDSPIN && core_sendspin_port) sendspin_pause();
+        if (source == MUSIC_SENDSPIN && was & MUSIC_BLUETOOTH) a2dp_pause();
+    }
+    if (!on && source == MUSIC_SENDSPIN && was & MUSIC_SENDSPIN) a2dp_unyield();
+    if (!was != !atomic_load(&music_on)) playback_hint();
 }
 
 static void *earcon_thread(void *arg)
@@ -368,7 +378,12 @@ static void *earcon_thread(void *arg)
 }
 
 /* While music plays the action button pauses it (and resumes it again); otherwise it wakes the assistant. */
-static void on_action(void) { if (!core_sendspin_port || !sendspin_button()) atomic_store(&trigger_pending, 2); }   /* 2: touch */
+/* Action button: pause what plays (Bluetooth device first, then Sendspin), or resume what the button paused, else talk */
+static void on_action(void)
+{
+    if (a2dp_button(0) || (core_sendspin_port && sendspin_button()) || a2dp_button(1)) return;
+    atomic_store(&trigger_pending, 2);                  /* 2: touch */
+}
 
 static void on_mute(int muted)          /* hardware latch changed (button) */
 {
@@ -444,6 +459,7 @@ void core_set_volume(int v)
     fprintf(stderr, "volume: %d\n", volume);
     if (connected && proto->volume_changed) proto->volume_changed(volume);
     if (core_sendspin_port) sendspin_volume_changed(volume);
+    a2dp_volume_changed(volume);
 }
 
 /* Anything may move MainVolume behind our back (audio_manager_set_prop, a stock daemon, the stock keys when -V), and
@@ -469,6 +485,7 @@ static void volume_sync(void)
             fprintf(stderr, "volume: %d (changed outside)\n", volume);
             if (connected && proto->volume_changed) proto->volume_changed(volume);
             if (core_sendspin_port) sendspin_volume_changed(volume);
+            a2dp_volume_changed(volume);
         }
         if (tts_v != volume) set_prop_volume("TTSVolume", volume);
     }
@@ -590,6 +607,7 @@ int main(int argc, char **argv)
     else if (buttons_muted()) on_mute(1);
 
     if (core_sendspin_port) sendspin_start(core_sendspin_port);
+    a2dp_start(NULL);
     if (ota_port) ota_start(ota_port);
 
     int ls = net_listen(core_port);

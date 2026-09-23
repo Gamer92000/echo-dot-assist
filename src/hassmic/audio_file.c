@@ -56,34 +56,44 @@ void play_earcon(const short *pcm, size_t samples, unsigned rate)
     fprintf(stderr, "earcon: %zu samples @ %u Hz\n", samples, rate);
 }
 
-/* Music stream on the PC: a file, written at real-time speed through a modelled 200 ms device buffer. */
-static FILE *music; static unsigned music_bps; static long long music_t0, music_written;
+/* Music streams on the PC: files, written at real-time speed through a modelled 200 ms device buffer. */
+struct stream { FILE *f; unsigned bps; long long t0, written; };
+static struct stream music, bt;
 static long long raw_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC_RAW, &ts); return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000; }
 
-int music_open(unsigned rate, unsigned channels)
+static int s_open(struct stream *s, const char *env, const char *def, unsigned rate, unsigned channels)
 {
-    const char *p = getenv("HASSMIC_MUSIC");
-    music = fopen(p ? p : "/tmp/hassmic_music.raw", "ab");
-    music_bps = rate * channels * 2; music_t0 = 0; music_written = 0;
-    return music ? 0 : -1;
+    const char *p = getenv(env);
+    s->f = fopen(p ? p : def, "ab");
+    s->bps = rate * channels * 2; s->t0 = 0; s->written = 0;
+    return s->f ? 0 : -1;
 }
 
-long long music_queued_us(void)
+static long long s_queued_us(struct stream *s)
 {
-    if (!music || !music_t0) return 0;
-    long long q = music_written * 1000000 / music_bps - (raw_us() - music_t0);
-    if (q < 0) { music_t0 = 0; music_written = 0; q = 0; }
+    if (!s->f || !s->t0) return 0;
+    long long q = s->written * 1000000 / s->bps - (raw_us() - s->t0);
+    if (q < 0) { s->t0 = 0; s->written = 0; q = 0; }
     return q;
 }
 
-int music_write(const void *data, size_t len)
+static int s_write(struct stream *s, const void *data, size_t len)
 {
-    if (!music) return -1;
-    music_queued_us();
-    if (!music_t0) music_t0 = raw_us();
-    fwrite(data, 1, len, music); fflush(music); music_written += len;
-    while (music_queued_us() > 200000) usleep(2000);
+    if (!s->f) return -1;
+    s_queued_us(s);
+    if (!s->t0) s->t0 = raw_us();
+    fwrite(data, 1, len, s->f); fflush(s->f); s->written += len;
+    while (s_queued_us(s) > 200000) usleep(2000);
     return 0;
 }
 
-void music_close(void) { if (music) fclose(music); music = NULL; }
+static void s_close(struct stream *s) { if (s->f) fclose(s->f); s->f = NULL; }
+
+int       music_open(unsigned rate, unsigned channels) { return s_open(&music, "HASSMIC_MUSIC", "/tmp/hassmic_music.raw", rate, channels); }
+long long music_queued_us(void) { return s_queued_us(&music); }
+int       music_write(const void *data, size_t len) { return s_write(&music, data, len); }
+void      music_close(void) { s_close(&music); }
+int       bt_open(unsigned rate, unsigned channels) { return s_open(&bt, "HASSMIC_BT", "/tmp/hassmic_bt.raw", rate, channels); }
+long long bt_queued_us(void) { return s_queued_us(&bt); }
+int       bt_write(const void *data, size_t len) { return s_write(&bt, data, len); }
+void      bt_close(void) { s_close(&bt); }

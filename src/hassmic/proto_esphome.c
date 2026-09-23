@@ -15,6 +15,7 @@
  *                    player entity advertises, we stream it.  Same path for media_player.play_media.
  *   timers           finished timer rings (core_alarm)
  *   bluetooth proxy  LE scanning with raw advertisements, GATT connections to up to 3 devices at a time, pairing (ble.c)
+ *   bluetooth speaker  a switch opens the pairing window (a2dp.c)
  */
 #include <ctype.h>
 #include <errno.h>
@@ -30,6 +31,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include "a2dp.h"
 #include "ble.h"
 #include "core.h"
 #include "hash.h"
@@ -63,7 +65,7 @@ enum { BLE_REQ_CONNECT = 0, BLE_REQ_DISCONNECT, BLE_REQ_PAIR, BLE_REQ_UNPAIR, BL
 enum { EV_ERROR = 0, EV_RUN_START, EV_RUN_END, EV_STT_START, EV_STT_END, EV_INTENT_START, EV_INTENT_END, EV_TTS_START,
        EV_TTS_END, EV_WAKE_START, EV_WAKE_END, EV_VAD_START, EV_VAD_END, EV_TTS_STREAM_START = 98, EV_TTS_STREAM_END = 99, EV_INTENT_PROGRESS = 100 };
 enum { FEAT_VOICE = 1, FEAT_SPEAKER = 2, FEAT_API_AUDIO = 4, FEAT_TIMERS = 8, FEAT_ANNOUNCE = 16, FEAT_START_CONVERSATION = 32 };
-enum { KEY_NOISE = 2, KEY_GAIN, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SENDSPIN_TOKEN, KEY_SOC_TEMP, KEY_CPU_USAGE };
+enum { KEY_NOISE = 2, KEY_GAIN, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SENDSPIN_TOKEN, KEY_SOC_TEMP, KEY_CPU_USAGE, KEY_BT_PAIRING };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -298,6 +300,7 @@ static void send_setting(int key)       /* lock held */
     case KEY_MULT:  pb_float(&b, 2, vol_mult); send_state(NUMBER_STATE, &b); break;
     case KEY_MUTE:  pb_uint(&b, 2, core_muted()); send_state(SWITCH_STATE, &b); break;
     case KEY_WAKE_SOUND: pb_uint(&b, 2, core_wake_sound(-1)); send_state(SWITCH_STATE, &b); break;
+    case KEY_BT_PAIRING: if (ble_present()) { pb_uint(&b, 2, a2dp_pairing()); send_state(SWITCH_STATE, &b); } break;
     }
 }
 
@@ -394,6 +397,8 @@ static void send_setting_entities(void)
       pb_str(&b, 5, "mdi:key-link"); pb_uint(&b, 6, 1); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
     { PB(b, 128); pb_str(&b, 1, "wake_sound"); pb_fixed32(&b, 2, KEY_WAKE_SOUND); pb_str(&b, 3, "Wake sound"); pb_str(&b, 5, "mdi:bell-ring");
       pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
+    if (ble_present()) { PB(b, 128); pb_str(&b, 1, "bluetooth_pairing"); pb_fixed32(&b, 2, KEY_BT_PAIRING); pb_str(&b, 3, "Bluetooth pairing");
+      pb_str(&b, 5, "mdi:bluetooth-connect"); send_msg(LIST_SWITCH, &b); }
     send_diag_entities();
 }
 
@@ -411,6 +416,7 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     else if (type == NUMBER_COMMAND && key == KEY_MULT) vol_mult = num < 0.1f ? 0.1f : num > 10 ? 10 : num;
     else if (type == SWITCH_COMMAND && key == KEY_MUTE) { core_soft_mute(on); settings_save(); send_setting(KEY_MUTE); return; }
     else if (type == SWITCH_COMMAND && key == KEY_WAKE_SOUND) core_wake_sound(on);
+    else if (type == SWITCH_COMMAND && key == KEY_BT_PAIRING) { a2dp_pair(on); return; }     /* its state follows through bt_changed */
     else return;
     fprintf(stderr, "settings: noise=%s gain=%d mult=%.1f mute=%d wake_sound=%d\n", noise_names[noise_level], auto_gain, vol_mult, core_soft_mute(-1), core_wake_sound(-1));
     settings_save(); send_setting(key);
@@ -721,6 +727,9 @@ static void ble_pair_result(unsigned type, uint64_t addr, int ok, int error)
 static void ble_paired_cb(uint64_t a, int ok, int e) { ble_pair_result(BLE_PAIRED, a, ok, e); }
 static void ble_unpaired_cb(uint64_t a, int ok, int e) { ble_pair_result(BLE_UNPAIRED, a, ok, e); }
 
+/* Bluetooth speaker: the pairing window opened, ran out or ended with a paired device */
+static void bt_changed(void) { pthread_mutex_lock(&core_lock); send_setting(KEY_BT_PAIRING); pthread_mutex_unlock(&core_lock); }
+
 static const struct ble_handler ble_handler = {
     .adverts = ble_adverts, .scan_changed = ble_changed, .slots_changed = ble_slots, .connection = ble_connection, .services = ble_db,
     .read = ble_read_cb, .written = ble_written_cb, .notify = ble_notify_cb, .error = ble_error_cb,
@@ -904,7 +913,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case LIST_ENTITIES_REQ: send_entities(); break;
     case SUBSCRIBE_STATES:
         for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd == reply_fd) clients[i].states = 1;
-        send_mp_state(); for (int k = KEY_NOISE; k <= KEY_WAKE_SOUND; k++) send_setting(k); send_token_state(); send_diag_states(); break;
+        send_mp_state(); for (int k = KEY_NOISE; k <= KEY_WAKE_SOUND; k++) send_setting(k); send_setting(KEY_BT_PAIRING); send_token_state(); send_diag_states(); break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
     case SUBSCRIBE_VA: {
         int sub = 0;
@@ -1008,7 +1017,7 @@ static void serve(int fd)
     if (!buf || !pt) { free(buf); free(pt); return; }
     pthread_mutex_lock(&core_lock);
     { static int loaded; if (!loaded) { loaded = 1; settings_load(); key_load(); pthread_t t; pthread_create(&t, NULL, diag_thread, NULL); pthread_detach(t);
-                                       ble_start(&ble_handler); } }
+                                       ble_start(&ble_handler); a2dp_start(bt_changed); } }
     for (int i = 0; i < MAX_CLIENTS; i++) { if (clients[i].fd < 0 && slot < 0) slot = i; n += clients[i].fd >= 0; }
     if (slot >= 0) { clients[slot].fd = fd; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = 0; if (!n) core_link(1, 0); }
     int keyed = have_key;

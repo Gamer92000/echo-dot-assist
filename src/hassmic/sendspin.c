@@ -119,7 +119,7 @@ static pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t q_cond = PTHREAD_COND_INITIALIZER;
 static struct chunk *q_head, *q_tail; static size_t q_bytes;
 static atomic_int stream_on, player_muted, snap_next;
-static void stream_set(int on) { atomic_store(&stream_on, on); core_music(on); }
+static void stream_set(int on) { atomic_store(&stream_on, on); core_music(MUSIC_SENDSPIN, on); }
 static atomic_int static_delay_ms;
 
 static void q_flush(void)
@@ -730,6 +730,20 @@ int sendspin_button(void)
     pthread_mutex_unlock(&adm_lock);
     if (used) fprintf(stderr, "sendspin: button -> %s\n", paused_by_button_at ? "pause" : "play");
     return used;
+}
+
+void sendspin_pause(void)
+{
+    int sent = 0;
+    pthread_mutex_lock(&adm_lock);
+    struct session *s = admitted;
+    if (s && s->controller_active && s->group_playing && atomic_load(&stream_on)) {
+        const char *cmd = strstr(s->ctl_commands, "\"pause\"") ? "pause" : strstr(s->ctl_commands, "\"stop\"") ? "stop" : NULL;
+        if (cmd) { send_json(s, "{\"type\":\"client/command\",\"payload\":{\"controller\":{\"command\":\"%s\"}}}", cmd); sent = 1; }
+        paused_by_button_at = 0;                        /* the button does not resume what another source paused */
+    }
+    pthread_mutex_unlock(&adm_lock);
+    if (sent) fprintf(stderr, "sendspin: paused, Bluetooth took over\n");
 }
 
 static void load_identity(void)
