@@ -58,7 +58,7 @@ Details:
   pairing only. While a phone plays, the proxy stops scanning: the radio cannot do both without the music stuttering.
 - **Settings in Home Assistant**: noise suppression level, auto gain, mic volume multiplier, mute switch, "Do not disturb"
   switch (drops announcements, purple pulse when switched on), "Wake sound" switch (covers all local sounds),
-  "Bluetooth pairing" switch, "Bluetooth announcements" switch, equalizer (bass, mid, treble, −6 to +6 dB, Amazon's own,
+  "Bluetooth pairing" switch, "Bluetooth announcements" switch and their language, equalizer (bass, mid, treble, −6 to +6 dB, Amazon's own,
   applied to everything the Echo plays). Diagnostics, off by default: SoC temperature, CPU usage.
 - **No cloud**: Alexa client, updater and telemetry are stopped at every boot; a firewall drops everything that is not
   going to a local address. Only hassmic itself may go further, to fetch replies and music from where Home Assistant or
@@ -249,7 +249,10 @@ is off.
 Like stock Alexa the Echo announces connections: a chime and "Connected to <name>" / "Disconnected from <name>". The
 words are spoken by Home Assistant, which only does that after you tick "Allow the device to perform Home Assistant
 actions" in the Echo's ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure). The
-"Bluetooth announcements" switch turns chime and words off.
+"Bluetooth announcements" switch turns chime and words off. The words are English until you pick another language in
+"Bluetooth announcement language" (Deutsch, Français, Español, Italiano, Português, Nederlands, Svenska, Dansk, Norsk,
+Suomi, Polski): set it to the language of the Echo's assistant in Home Assistant, whose voice speaks them. Home
+Assistant does not tell the Echo which language its assistant uses, so this cannot follow it by itself.
 
 ### Updating
 

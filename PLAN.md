@@ -426,6 +426,17 @@ Run in this order. Each step says what it proves.
       the previous announcement ended (HA still refuses in the instant after our "finished", its announce call has not
       unwound yet), or 15 s after a request that never played; dropped after 30 s. Checked on air by toggling the
       Pixel's connection quickly: first sentence, then the one for the latest state
+- [x] Bluetooth announcement language (2026-09-24): the words were English whatever the satellite's pipeline speaks.
+      Following the pipeline's language automatically is not possible: HA's esphome assist_satellite sends no language
+      in any pipeline event (STT_END text, INTENT_END conversation id/speech, TTS_END url only), TTS URLs are random
+      tokens (`/api/tts_proxy/<token_urlsafe(16)>.<ext>`), the pipeline select's state is the pipeline name only,
+      `assist_pipeline` registers no actions (websocket only, needs a user token) and templates cannot read pipeline
+      settings or `hass.config.language` (checked in HA `dev` source). So a select "Bluetooth announcement language"
+      (config, only with Bluetooth), 12 languages shown by native name, whole sentences per language (cases and
+      articles differ between "connected to" and "disconnected from", and for an unnamed device). 8th field in
+      `state/settings` as the language code, so the list can grow; older files load as English. Host test covers
+      persistence (the select only exists with a Bluetooth controller). On the device: select listed in HA, switched de / es,
+      Pixel connect and disconnect spoken as "Verbunden mit" / "Getrennt von" and "Conectado a" / "Desconectado de"
 - [x] Do not disturb (2026-09-24): the Alexa app's "Do Not Disturb" (shown as "Focus mode" in the Alexa app we saw) pulsed
       the ring purple once. Switch "Do not disturb" (no entity category: a main control like Mute), 7th field in
       `state/settings` (older files load with it off). While on, VoiceAssistantAnnounceRequest is answered with

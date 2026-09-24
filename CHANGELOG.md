@@ -4,6 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-09-24
 
+- **Bluetooth announcements in your language.** "Connected to …" and "Disconnected from …" can now be said in German,
+  French, Spanish, Italian, Portuguese, Dutch, Swedish, Danish, Norwegian, Finnish or Polish instead of English: pick
+  it in the new "Bluetooth announcement language" setting in Home Assistant, to match the language of the Echo's
+  assistant. It cannot follow the assistant by itself because Home Assistant does not tell the Echo which language
+  that is. The choice survives restarts.
 - **Equalizer, like the Alexa app's.** Three new sliders in Home Assistant: "Equalizer bass", "Equalizer mid" and
   "Equalizer treble", each from −6 to +6 dB. They use Amazon's own equalizer inside the Echo, so they shape everything
   it plays: replies, music from Music Assistant or a phone, and sounds, on the built-in speaker and on the 3.5 mm

@@ -229,6 +229,7 @@ async def main():
         cli.switch_command(dnd.key, True); await asyncio.sleep(0.3)
         check(any(isinstance(s, SwitchState) and s.key == dnd.key and s.state for s in states)
               and open(settings).read().split()[6:7] == ["1"], f"do not disturb on and persisted: {open(settings).read().strip()!r}")
+        check(open(settings).read().split()[7:8] == ["en"], f"Bluetooth announcement language persisted as its code: {open(settings).read().strip()!r}")
         before = os.path.getsize(play)
         res = await cli.send_voice_assistant_announcement_await_response(f"http://127.0.0.1:{HTTP_PORT}/a.wav", 15, "x")
         check(not res.success and os.path.getsize(play) == before, "do not disturb drops announcements")

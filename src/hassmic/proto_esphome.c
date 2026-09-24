@@ -72,7 +72,7 @@ enum { EV_ERROR = 0, EV_RUN_START, EV_RUN_END, EV_STT_START, EV_STT_END, EV_INTE
        EV_TTS_END, EV_WAKE_START, EV_WAKE_END, EV_VAD_START, EV_VAD_END, EV_TTS_STREAM_START = 98, EV_TTS_STREAM_END = 99, EV_INTENT_PROGRESS = 100 };
 enum { FEAT_VOICE = 1, FEAT_SPEAKER = 2, FEAT_API_AUDIO = 4, FEAT_TIMERS = 8, FEAT_ANNOUNCE = 16, FEAT_START_CONVERSATION = 32 };
 enum { KEY_NOISE = 2, KEY_GAIN, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SENDSPIN_TOKEN, KEY_SOC_TEMP, KEY_CPU_USAGE, KEY_BT_PAIRING,
-       KEY_BT_ANNOUNCE, KEY_DND, KEY_EQ_BASS, KEY_EQ_MID, KEY_EQ_TREBLE };
+       KEY_BT_ANNOUNCE, KEY_DND, KEY_EQ_BASS, KEY_EQ_MID, KEY_EQ_TREBLE, KEY_BT_LANG };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -278,15 +278,38 @@ static int key_set(const unsigned char *k, size_t len)
 
 static const char *const noise_names[] = { "Off", "Low", "Medium", "High", "Max" };
 static int noise_level, auto_gain; static float vol_mult = 1.0f;
+/* The words of the Bluetooth announcements.  Home Assistant speaks them with the satellite's pipeline voice, but tells
+ * neither us nor a template that pipeline's language (not in any ESPHome event, not on the pipeline select, no action
+ * returns it), so the user picks the language here to match.  Four whole sentences each rather than one "a device" to
+ * slot in: articles and cases differ between "connected to" and "disconnected from" in most of these languages. */
+static const struct bt_lang { const char *code, *name, *on, *off, *on_any, *off_any; } bt_langs[] = {
+    { "en", "English", "Connected to %s", "Disconnected from %s", "Connected to a Bluetooth device", "Disconnected from a Bluetooth device" },
+    { "de", "Deutsch", "Verbunden mit %s", "Getrennt von %s", "Verbunden mit einem Bluetooth-Gerät", "Getrennt von einem Bluetooth-Gerät" },
+    { "fr", "Français", "Connecté à %s", "Déconnecté de %s", "Connecté à un appareil Bluetooth", "Déconnecté d'un appareil Bluetooth" },
+    { "es", "Español", "Conectado a %s", "Desconectado de %s", "Conectado a un dispositivo Bluetooth", "Desconectado de un dispositivo Bluetooth" },
+    { "it", "Italiano", "Connesso a %s", "Disconnesso da %s", "Connesso a un dispositivo Bluetooth", "Disconnesso da un dispositivo Bluetooth" },
+    { "pt", "Português", "Conectado a %s", "Desconectado de %s", "Conectado a um dispositivo Bluetooth", "Desconectado de um dispositivo Bluetooth" },
+    { "nl", "Nederlands", "Verbonden met %s", "Verbinding met %s verbroken", "Verbonden met een Bluetooth-apparaat", "Verbinding met een Bluetooth-apparaat verbroken" },
+    { "sv", "Svenska", "Ansluten till %s", "Frånkopplad från %s", "Ansluten till en Bluetooth-enhet", "Frånkopplad från en Bluetooth-enhet" },
+    { "da", "Dansk", "Forbundet til %s", "Afbrudt fra %s", "Forbundet til en Bluetooth-enhed", "Afbrudt fra en Bluetooth-enhed" },
+    { "nb", "Norsk", "Koblet til %s", "Koblet fra %s", "Koblet til en Bluetooth-enhet", "Koblet fra en Bluetooth-enhet" },
+    { "fi", "Suomi", "Yhdistetty laitteeseen %s", "Yhteys laitteeseen %s katkaistu", "Yhdistetty Bluetooth-laitteeseen", "Yhteys Bluetooth-laitteeseen katkaistu" },
+    { "pl", "Polski", "Połączono z %s", "Rozłączono z %s", "Połączono z urządzeniem Bluetooth", "Rozłączono z urządzeniem Bluetooth" },
+};
+#define BT_LANGS (int)(sizeof bt_langs / sizeof bt_langs[0])
+static int bt_lang;                     /* lock held: index into bt_langs */
+
 static const char *settings_path(void) { const char *p = getenv("HASSMIC_SETTINGS"); return p ? p : "/data/local/hassmic/state/settings"; }
 
 static void settings_load(void)
 {
-    int n, g, m, w, a = 1, d = 0; float v; FILE *f = fopen(settings_path(), "r");
+    int n, g, m, w, a = 1, d = 0; float v; char l[8] = ""; FILE *f = fopen(settings_path(), "r");
     if (!f) return;
-    if (fscanf(f, "%d %d %f %d %d %d %d", &n, &g, &v, &m, &w, &a, &d) >= 5) {  /* older files: 5 (before Bluetooth announcements), 6 (before do not disturb) */
+    /* older files: 5 fields (before Bluetooth announcements), 6 (before do not disturb), 7 (before their language) */
+    if (fscanf(f, "%d %d %f %d %d %d %d %7s", &n, &g, &v, &m, &w, &a, &d, l) >= 5) {
         noise_level = n < 0 ? 0 : n > 4 ? 4 : n; auto_gain = g < 0 ? 0 : g > 31 ? 31 : g; vol_mult = v < 0.1f ? 0.1f : v > 10 ? 10 : v;
         core_soft_mute(m != 0); core_wake_sound(w != 0); core_bt_announce(a != 0); core_dnd(d != 0);
+        for (int i = 0; i < BT_LANGS; i++) if (!strcmp(l, bt_langs[i].code)) bt_lang = i;     /* the code, not the index: the list may grow */
     }
     fclose(f);
 }
@@ -295,7 +318,8 @@ static void settings_save(void)
 {
     FILE *f = fopen(settings_path(), "w");
     if (!f) { fprintf(stderr, "settings: cannot write %s\n", settings_path()); return; }
-    fprintf(f, "%d %d %.2f %d %d %d %d\n", noise_level, auto_gain, vol_mult, core_soft_mute(-1), core_wake_sound(-1), core_bt_announce(-1), core_dnd(-1));
+    fprintf(f, "%d %d %.2f %d %d %d %d %s\n", noise_level, auto_gain, vol_mult, core_soft_mute(-1), core_wake_sound(-1), core_bt_announce(-1), core_dnd(-1),
+            bt_langs[bt_lang].code);
     fclose(f);
 }
 
@@ -312,6 +336,7 @@ static void send_setting(int key)       /* lock held */
     case KEY_BT_PAIRING: if (ble_present()) { pb_uint(&b, 2, a2dp_pairing()); send_state(SWITCH_STATE, &b); } break;
     case KEY_BT_ANNOUNCE: if (ble_present()) { pb_uint(&b, 2, core_bt_announce(-1)); send_state(SWITCH_STATE, &b); } break;
     case KEY_DND:   pb_uint(&b, 2, core_dnd(-1)); send_state(SWITCH_STATE, &b); break;
+    case KEY_BT_LANG: if (ble_present()) { pb_str(&b, 2, bt_langs[bt_lang].name); send_state(SELECT_STATE, &b); } break;
     case KEY_EQ_BASS: case KEY_EQ_MID: case KEY_EQ_TREBLE: pb_float(&b, 2, core_eq(key - KEY_EQ_BASS)); send_state(NUMBER_STATE, &b); break;
     }
 }
@@ -421,6 +446,10 @@ static void send_setting_entities(void)
       pb_str(&b, 5, "mdi:bluetooth-connect"); send_msg(LIST_SWITCH, &b); }
     if (ble_present()) { PB(b, 128); pb_str(&b, 1, "bluetooth_announcements"); pb_fixed32(&b, 2, KEY_BT_ANNOUNCE); pb_str(&b, 3, "Bluetooth announcements");
       pb_str(&b, 5, "mdi:bluetooth-audio"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
+    if (ble_present()) { PB(b, 512); pb_str(&b, 1, "bluetooth_announcement_language"); pb_fixed32(&b, 2, KEY_BT_LANG);
+      pb_str(&b, 3, "Bluetooth announcement language"); pb_str(&b, 5, "mdi:translate");
+      for (int i = 0; i < BT_LANGS; i++) pb_str(&b, 6, bt_langs[i].name);
+      pb_uint(&b, 8, 1); send_msg(LIST_SELECT, &b); }
     send_diag_entities();
 }
 
@@ -434,6 +463,7 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
         else if (f.field == 2 && f.data) pbf_str(&f, opt, sizeof opt);
     }
     if (type == SELECT_COMMAND && key == KEY_NOISE) { for (int i = 0; i < 5; i++) if (!strcmp(opt, noise_names[i])) noise_level = i; }
+    else if (type == SELECT_COMMAND && key == KEY_BT_LANG) { for (int i = 0; i < BT_LANGS; i++) if (!strcmp(opt, bt_langs[i].name)) bt_lang = i; }
     else if (type == NUMBER_COMMAND && key == KEY_GAIN) auto_gain = num < 0 ? 0 : num > 31 ? 31 : (int)(num + 0.5f);
     else if (type == NUMBER_COMMAND && key == KEY_MULT) vol_mult = num < 0.1f ? 0.1f : num > 10 ? 10 : num;
     else if (type == SWITCH_COMMAND && key == KEY_MUTE) { core_soft_mute(on); settings_save(); send_setting(KEY_MUTE); return; }
@@ -445,8 +475,8 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
         core_set_eq(key - KEY_EQ_BASS, (int)lroundf(num)); send_setting(key); return;
     }
     else return;
-    fprintf(stderr, "settings: noise=%s gain=%d mult=%.1f mute=%d wake_sound=%d bt_announce=%d dnd=%d\n", noise_names[noise_level], auto_gain, vol_mult,
-            core_soft_mute(-1), core_wake_sound(-1), core_bt_announce(-1), core_dnd(-1));
+    fprintf(stderr, "settings: noise=%s gain=%d mult=%.1f mute=%d wake_sound=%d bt_announce=%d dnd=%d bt_lang=%s\n", noise_names[noise_level], auto_gain,
+            vol_mult, core_soft_mute(-1), core_wake_sound(-1), core_bt_announce(-1), core_dnd(-1), bt_langs[bt_lang].code);
     settings_save(); send_setting(key);
 }
 
@@ -819,7 +849,9 @@ static void bt_device(const char *name, int on)
 {
     static int started;
     if (!started) { pthread_t t; started = !pthread_create(&t, NULL, bt_thread, NULL); if (started) pthread_detach(t); }
-    snprintf(bt_next, sizeof bt_next, "%s %s", on ? "Connected to" : "Disconnected from", *name ? name : "a Bluetooth device");
+    const struct bt_lang *l = &bt_langs[bt_lang];
+    if (*name) snprintf(bt_next, sizeof bt_next, on ? l->on : l->off, name);
+    else snprintf(bt_next, sizeof bt_next, "%s", on ? l->on_any : l->off_any);
     bt_next_ms = now_ms();
     bt_try();
     if (bt_next[0]) fprintf(stderr, "bluetooth: \"%s\" waits for the announcement before\n", bt_next);
@@ -1006,6 +1038,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case SUBSCRIBE_STATES:
         for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd == reply_fd) clients[i].states = 1;
         send_mp_state(); for (int k = KEY_NOISE; k <= KEY_WAKE_SOUND; k++) send_setting(k); send_setting(KEY_BT_PAIRING); send_setting(KEY_BT_ANNOUNCE); send_setting(KEY_DND);
+        send_setting(KEY_BT_LANG);
         for (int k = KEY_EQ_BASS; k <= KEY_EQ_TREBLE; k++) send_setting(k);
         send_token_state(); send_diag_states(); break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
