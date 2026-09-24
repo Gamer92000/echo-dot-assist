@@ -216,6 +216,18 @@ async def main():
         res = await cli.send_voice_assistant_announcement_await_response("http://127.0.0.1:1/none.wav", 15, "x")
         check(not res.success, "unreachable announcement URL reports failure")
 
+        dnd = by.get("do_not_disturb")
+        check(isinstance(dnd, SwitchInfo), "do not disturb switch listed")
+        cli.switch_command(dnd.key, True); await asyncio.sleep(0.3)
+        check(any(isinstance(s, SwitchState) and s.key == dnd.key and s.state for s in states)
+              and open(settings).read().split()[6:7] == ["1"], f"do not disturb on and persisted: {open(settings).read().strip()!r}")
+        before = os.path.getsize(play)
+        res = await cli.send_voice_assistant_announcement_await_response(f"http://127.0.0.1:{HTTP_PORT}/a.wav", 15, "x")
+        check(not res.success and os.path.getsize(play) == before, "do not disturb drops announcements")
+        cli.switch_command(dnd.key, False); await asyncio.sleep(0.3)
+        res = await cli.send_voice_assistant_announcement_await_response(f"http://127.0.0.1:{HTTP_PORT}/a.wav", 15, "x")
+        check(res.success and os.path.getsize(play) - before == 48000, "announcements play again once it is off")
+
         cli.media_player_command(mp[0].key, volume=0.3)
         await asyncio.sleep(0.5)
         check(any(isinstance(s, MediaPlayerEntityState) and abs(s.volume - 0.3) < 0.01 for s in states), "volume command reflected in state")

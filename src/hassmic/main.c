@@ -61,6 +61,7 @@ static atomic_int tts_on, music_on;                 /* something plays: the wake
                                                     * music_on: MUSIC_* bits */
 static atomic_int dump_toggle;                      /* SIGTTIN: start / stop writing the processed mic stream to a file */
 static int soft_mute;                               /* under lock: mute switch from Home Assistant */
+static int dnd;                                     /* under lock: do not disturb */
 static int barge_in;                                /* under lock: start a new pipeline once the current one has ended
                                                       * (wake word during a reply, or the server asked to continue the conversation) */
 
@@ -146,6 +147,20 @@ void core_bt_device(const char *name, int on)
         if (connected && proto->bt_device) proto->bt_device(name, on);
     }
     pthread_mutex_unlock(&core_lock);
+}
+
+/* Do not disturb, like stock: announcements from Home Assistant are dropped, while the wake word, replies, timers, music
+ * and Bluetooth connection messages carry on.  Switching it on shows Amazon's single purple pulse (do_not_disturb: 2 s
+ * fade in and out, layer 2, nothing after its `loop` marker); switching it off shows nothing. */
+static atomic_llong dnd_clear_at;
+int core_dnd(int set)
+{
+    if (set >= 0 && set != dnd) {
+        dnd = set;
+        fprintf(stderr, "do not disturb: %d\n", set);
+        if (set && satellite_running) { led("-s", "do_not_disturb"); atomic_store(&dnd_clear_at, mono_ms() + 2500); }   /* quiet when restored at start */
+    }
+    return dnd;
 }
 
 int core_muted(void) { return soft_mute || buttons_muted(); }
@@ -528,6 +543,10 @@ static void *volume_led_thread(void *arg)
             pthread_mutex_lock(&core_lock);
             if (atomic_load(&vol_clear_at) == at) { led("-u", vol_pat); vol_pat[0] = 0; atomic_store(&vol_clear_at, 0); }
             pthread_mutex_unlock(&core_lock);
+        }
+        at = atomic_load(&dnd_clear_at);                /* played out; unset it like the volume steps, so the next pulse starts clean */
+        if (at && mono_ms() >= at && atomic_compare_exchange_strong(&dnd_clear_at, &at, 0)) {
+            pthread_mutex_lock(&core_lock); led("-u", "do_not_disturb"); pthread_mutex_unlock(&core_lock);
         }
         usleep(200000);
     }

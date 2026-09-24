@@ -426,6 +426,15 @@ Run in this order. Each step says what it proves.
       the previous announcement ended (HA still refuses in the instant after our "finished", its announce call has not
       unwound yet), or 15 s after a request that never played; dropped after 30 s. Checked on air by toggling the
       Pixel's connection quickly: first sentence, then the one for the latest state
+- [x] Do not disturb (2026-09-24): the Alexa app's "Do Not Disturb" (shown as "Focus mode" in the Alexa app we saw) pulsed
+      the ring purple once. Switch "Do not disturb" (no entity category: a main control like Mute), 7th field in
+      `state/settings` (older files load with it off). While on, VoiceAssistantAnnounceRequest is answered with
+      AnnounceFinished success=false and nothing is fetched, except while our own Bluetooth request is out
+      (`bt_asked_ms`). Replies, `play_media`, timers and music are left alone. LED: stock `do_not_disturb.animation`
+      (layer 2 in `layer_config_common.json`, purple 0x0A0014 → 0x5200A5 → off over about 2 s, nothing after its `loop`
+      marker), set when switched on while a client is connected, unset 2.5 s later. No DND earcon on the image
+      (`uxeventd` names `do-not-disturb-enable-earcon`, no file in `earcon/base`). Host test covers switch, persistence,
+      the dropped announcement and playback after switching off. On the device (2026-09-24): pulse seen, announcement dropped
 - [x] Revert procedure tested 2026-09-21: `install-system.sh --uninstall` leaves no trace on `/system` (`/sepolicy` md5 back to the pre-hassmic
       value, stock Alexa + `uxeventd` + `otad` run again, no egress lock: only the VLAN protects then); reinstall brings everything back, and
       `/data/local/hassmic/state` (Sendspin identity, pairing record, settings) survives both. `alexa-on.sh` (no reboot) still untested

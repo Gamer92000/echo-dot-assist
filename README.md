@@ -36,6 +36,7 @@ The unlock needs the case opened and wires on test pads, and can brick the devic
 | Bluetooth proxy for Home Assistant            | ❌                      | ✅ scanning, connections, pairing            | ❌                       |
 | Buttons, LED ring, hardware mute              | ✅                      | ✅                                           | ✅                       |
 | Mute state and audio settings in HA           | ❌                      | ✅                                           | ❌                       |
+| Do not disturb                                | ✅ (Alexa app)          | ✅ switch in HA                              | ❌                       |
 | Encrypted link to Home Assistant              | –                       | ✅ key set by Home Assistant                 | ❌ plain TCP             |
 | Talks to Amazon                               | always                  | never (firewalled)                           | never (firewalled)       |
 | Updates                                       | automatic, from Amazon  | signed, pushed from your PC                  | signed, pushed from your PC |
@@ -54,8 +55,9 @@ Details:
   group), Music Assistant starting on the Echo pauses the phone. The voice assistant ducks both.
 - **Bluetooth**: the proxy works like an ESPHome `bluetooth_proxy` with `active: true`, up to 3 connections, "Just Works"
   pairing only. While a phone plays, the proxy stops scanning: the radio cannot do both without the music stuttering.
-- **Settings in Home Assistant**: noise suppression level, auto gain, mic volume multiplier, mute switch, "Wake sound"
-  switch (covers all local sounds), "Bluetooth pairing" switch, "Bluetooth announcements" switch. Diagnostics, off by default: SoC temperature, CPU usage.
+- **Settings in Home Assistant**: noise suppression level, auto gain, mic volume multiplier, mute switch, "Do not disturb"
+  switch (drops announcements, purple pulse when switched on), "Wake sound" switch (covers all local sounds),
+  "Bluetooth pairing" switch, "Bluetooth announcements" switch. Diagnostics, off by default: SoC temperature, CPU usage.
 - **No cloud**: Alexa client, updater and telemetry are stopped at every boot; a firewall drops everything that is not
   going to a local address. Only hassmic itself may go further, to fetch replies and music from where Home Assistant or
   Music Assistant point it. See [Security](#security).

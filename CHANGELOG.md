@@ -4,6 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-09-24
 
+- **Do not disturb, like Alexa's.** A new "Do not disturb" switch in Home Assistant. While it is on, announcements
+  (`assist_satellite.announce`, "ask a question") are not played. Everything you start yourself still works: the wake
+  word, replies, timers, music and the Bluetooth "Connected to …" message. Turning it on shows Alexa's single purple
+  pulse on the ring. The setting survives restarts. For a schedule, use a Home Assistant automation, and you can switch
+  it by voice if the switch is exposed to Assist.
 - **"Connected to <phone>" like Alexa.** When a phone or computer connects to the Echo as a Bluetooth speaker, the Echo
   plays Amazon's Bluetooth chime and says "Connected to" and the device's name; on disconnect the other chime and
   "Disconnected from …". The words come from Home Assistant's text-to-speech, so Home Assistant has to let the Echo

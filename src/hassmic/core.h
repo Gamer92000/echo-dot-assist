@@ -47,6 +47,7 @@ int  core_soft_mute(int set);                    /* set: 0/1, or -1 to only read
 int  core_muted(void);                           /* effective */
 int  core_wake_sound(int set);                   /* same convention */
 int  core_bt_announce(int set);                  /* same: chime and "Connected to <name>" when a phone connects */
+int  core_dnd(int set);                          /* same: do not disturb, announcements are dropped (the protocol checks) */
 int  core_volume(void);
 void core_set_volume(int percent);
 

@@ -14,6 +14,7 @@
  *   announcements    VoiceAssistantAnnounceRequest with http URLs; Home Assistant transcodes to the WAV format the media
  *                    player entity advertises, we stream it.  Same path for media_player.play_media.
  *   timers           finished timer rings (core_alarm)
+ *   do not disturb   a switch; announcements are dropped while it is on
  *   bluetooth proxy  LE scanning with raw advertisements, GATT connections to up to 3 devices at a time, pairing (ble.c)
  *   bluetooth speaker  a switch opens the pairing window (a2dp.c).  A phone connecting is announced by asking Home
  *                    Assistant to run assist_satellite.announce on us (HomeassistantActionRequest, what an ESPHome YAML
@@ -71,7 +72,7 @@ enum { EV_ERROR = 0, EV_RUN_START, EV_RUN_END, EV_STT_START, EV_STT_END, EV_INTE
        EV_TTS_END, EV_WAKE_START, EV_WAKE_END, EV_VAD_START, EV_VAD_END, EV_TTS_STREAM_START = 98, EV_TTS_STREAM_END = 99, EV_INTENT_PROGRESS = 100 };
 enum { FEAT_VOICE = 1, FEAT_SPEAKER = 2, FEAT_API_AUDIO = 4, FEAT_TIMERS = 8, FEAT_ANNOUNCE = 16, FEAT_START_CONVERSATION = 32 };
 enum { KEY_NOISE = 2, KEY_GAIN, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SENDSPIN_TOKEN, KEY_SOC_TEMP, KEY_CPU_USAGE, KEY_BT_PAIRING,
-       KEY_BT_ANNOUNCE };
+       KEY_BT_ANNOUNCE, KEY_DND };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -281,11 +282,11 @@ static const char *settings_path(void) { const char *p = getenv("HASSMIC_SETTING
 
 static void settings_load(void)
 {
-    int n, g, m, w, a = 1; float v; FILE *f = fopen(settings_path(), "r");
+    int n, g, m, w, a = 1, d = 0; float v; FILE *f = fopen(settings_path(), "r");
     if (!f) return;
-    if (fscanf(f, "%d %d %f %d %d %d", &n, &g, &v, &m, &w, &a) >= 5) {      /* files from before Bluetooth announcements: 5 */
+    if (fscanf(f, "%d %d %f %d %d %d %d", &n, &g, &v, &m, &w, &a, &d) >= 5) {  /* older files: 5 (before Bluetooth announcements), 6 (before do not disturb) */
         noise_level = n < 0 ? 0 : n > 4 ? 4 : n; auto_gain = g < 0 ? 0 : g > 31 ? 31 : g; vol_mult = v < 0.1f ? 0.1f : v > 10 ? 10 : v;
-        core_soft_mute(m != 0); core_wake_sound(w != 0); core_bt_announce(a != 0);
+        core_soft_mute(m != 0); core_wake_sound(w != 0); core_bt_announce(a != 0); core_dnd(d != 0);
     }
     fclose(f);
 }
@@ -294,7 +295,7 @@ static void settings_save(void)
 {
     FILE *f = fopen(settings_path(), "w");
     if (!f) { fprintf(stderr, "settings: cannot write %s\n", settings_path()); return; }
-    fprintf(f, "%d %d %.2f %d %d %d\n", noise_level, auto_gain, vol_mult, core_soft_mute(-1), core_wake_sound(-1), core_bt_announce(-1));
+    fprintf(f, "%d %d %.2f %d %d %d %d\n", noise_level, auto_gain, vol_mult, core_soft_mute(-1), core_wake_sound(-1), core_bt_announce(-1), core_dnd(-1));
     fclose(f);
 }
 
@@ -310,6 +311,7 @@ static void send_setting(int key)       /* lock held */
     case KEY_WAKE_SOUND: pb_uint(&b, 2, core_wake_sound(-1)); send_state(SWITCH_STATE, &b); break;
     case KEY_BT_PAIRING: if (ble_present()) { pb_uint(&b, 2, a2dp_pairing()); send_state(SWITCH_STATE, &b); } break;
     case KEY_BT_ANNOUNCE: if (ble_present()) { pb_uint(&b, 2, core_bt_announce(-1)); send_state(SWITCH_STATE, &b); } break;
+    case KEY_DND:   pb_uint(&b, 2, core_dnd(-1)); send_state(SWITCH_STATE, &b); break;
     }
 }
 
@@ -402,6 +404,8 @@ static void send_setting_entities(void)
     { PB(b, 256); pb_str(&b, 1, "mic_volume_multiplier"); pb_fixed32(&b, 2, KEY_MULT); pb_str(&b, 3, "Mic volume multiplier"); pb_str(&b, 5, "mdi:volume-vibrate");
       pb_float(&b, 6, 0.1f); pb_float(&b, 7, 10); pb_float(&b, 8, 0.1f); pb_uint(&b, 10, 1); pb_uint(&b, 12, 1); send_msg(LIST_NUMBER, &b); }
     { PB(b, 128); pb_str(&b, 1, "mute"); pb_fixed32(&b, 2, KEY_MUTE); pb_str(&b, 3, "Mute"); pb_str(&b, 5, "mdi:microphone-off"); send_msg(LIST_SWITCH, &b); }
+    { PB(b, 128); pb_str(&b, 1, "do_not_disturb"); pb_fixed32(&b, 2, KEY_DND); pb_str(&b, 3, "Do not disturb"); pb_str(&b, 5, "mdi:minus-circle");
+      send_msg(LIST_SWITCH, &b); }
     if (core_sendspin_port) { PB(b, 192); pb_str(&b, 1, "sendspin_pairing_token"); pb_fixed32(&b, 2, KEY_SENDSPIN_TOKEN); pb_str(&b, 3, "Sendspin pairing token");
       pb_str(&b, 5, "mdi:key-link"); pb_uint(&b, 6, 1); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
     { PB(b, 128); pb_str(&b, 1, "wake_sound"); pb_fixed32(&b, 2, KEY_WAKE_SOUND); pb_str(&b, 3, "Wake sound"); pb_str(&b, 5, "mdi:bell-ring");
@@ -428,10 +432,11 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     else if (type == SWITCH_COMMAND && key == KEY_MUTE) { core_soft_mute(on); settings_save(); send_setting(KEY_MUTE); return; }
     else if (type == SWITCH_COMMAND && key == KEY_WAKE_SOUND) core_wake_sound(on);
     else if (type == SWITCH_COMMAND && key == KEY_BT_ANNOUNCE) core_bt_announce(on);
+    else if (type == SWITCH_COMMAND && key == KEY_DND) core_dnd(on);
     else if (type == SWITCH_COMMAND && key == KEY_BT_PAIRING) { a2dp_pair(on); return; }     /* its state follows through bt_changed */
     else return;
-    fprintf(stderr, "settings: noise=%s gain=%d mult=%.1f mute=%d wake_sound=%d bt_announce=%d\n", noise_names[noise_level], auto_gain, vol_mult,
-            core_soft_mute(-1), core_wake_sound(-1), core_bt_announce(-1));
+    fprintf(stderr, "settings: noise=%s gain=%d mult=%.1f mute=%d wake_sound=%d bt_announce=%d dnd=%d\n", noise_names[noise_level], auto_gain, vol_mult,
+            core_soft_mute(-1), core_wake_sound(-1), core_bt_announce(-1), core_dnd(-1));
     settings_save(); send_setting(key);
 }
 
@@ -903,6 +908,9 @@ static void on_announce(const unsigned char *p, const unsigned char *end)
         else if (f.field == 3 && f.data) pbf_str(&f, pre, sizeof pre);
         else if (f.field == 4) conv = f.v != 0;
     }
+    /* Do not disturb drops announcements (reported as not played), but not the one we asked for ourselves: a Bluetooth
+     * connection message answers something the user just did, as stock's does. */
+    if (core_dnd(-1) && !bt_asked_ms) { fprintf(stderr, "media: do not disturb, dropped announcement %s\n", media); PB(b, 8); pb_uint(&b, 1, 0); send_va(VA_ANNOUNCE_FINISHED, &b); return; }
     media_start(pre, media, 1, conv, 0);
 }
 
@@ -987,7 +995,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case LIST_ENTITIES_REQ: send_entities(); break;
     case SUBSCRIBE_STATES:
         for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd == reply_fd) clients[i].states = 1;
-        send_mp_state(); for (int k = KEY_NOISE; k <= KEY_WAKE_SOUND; k++) send_setting(k); send_setting(KEY_BT_PAIRING); send_setting(KEY_BT_ANNOUNCE); send_token_state(); send_diag_states(); break;
+        send_mp_state(); for (int k = KEY_NOISE; k <= KEY_WAKE_SOUND; k++) send_setting(k); send_setting(KEY_BT_PAIRING); send_setting(KEY_BT_ANNOUNCE); send_setting(KEY_DND); send_token_state(); send_diag_states(); break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
     case SUBSCRIBE_HA_ACTIONS: if (c >= 0) clients[c].actions = 1; break;
     case SUBSCRIBE_VA: {
