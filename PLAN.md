@@ -435,6 +435,17 @@ Run in this order. Each step says what it proves.
       marker), set when switched on while a client is connected, unset 2.5 s later. No DND earcon on the image
       (`uxeventd` names `do-not-disturb-enable-earcon`, no file in `earcon/base`). Host test covers switch, persistence,
       the dropped announcement and playback after switching off. On the device (2026-09-24): pulse seen, announcement dropped
+- [x] Equalizer (2026-09-24): stock path found in the firmware: the Alexa app's bands go PuffinApp (`EqualizerLipcHandler` in
+      `libReggaeDevice.so`) → LIPC `com.doppler.lasp` string property `LASP_CMD_SET_USER_EQ_INFO` → `mixer`'s `libasp` user EQ
+      (`ASP/UserEq`, `AUDIOALG: setUserEq`). JSON `{"bands":[{"name":"BASS","level":N},{"name":"MIDRANGE",...},{"name":"TREBLE",...}]}`,
+      whole dB steps clamped to -6..+6 by the mixer (12 → 6); also `LASP_CMD_ADJUST_USER_EQ_INFO` (`levelDelta`, `levelDirection`),
+      `LASP_CMD_RESET_USER_EQ`, read back with `LASP_CMD_GET_USER_EQ_INFO`. Kept by the mixer in `/data/misc/audio/audioCtrl.cfg`
+      (not the `userEq.cfg` named in `libasp`). Works with PuffinApp stopped and as `puffin` with hassmic's groups: hassmic runs
+      `lipc-set-prop` like `audio_manager_set_prop`, reads the bands once at first use and caches them. Three number entities
+      "Equalizer bass / mid / treble" (named so they sort together: HA lists a device's controls alphabetically and
+      has no custom groups; sliders, dB, no entity category), ESPHome only. Listening test with pink noise on the device, 3.5 mm
+      line-out to external speakers: +6/-6 and -6/+6 audible on both the Music and the TTS stream. Set from an API client on the
+      device: mixer reads back the values. Not done: survives a reboot (only by the file), the stock `equalizer-change` ring animation
 - [x] Revert procedure tested 2026-09-21: `install-system.sh --uninstall` leaves no trace on `/system` (`/sepolicy` md5 back to the pre-hassmic
       value, stock Alexa + `uxeventd` + `otad` run again, no egress lock: only the VLAN protects then); reinstall brings everything back, and
       `/data/local/hassmic/state` (Sendspin identity, pairing record, settings) survives both. `alexa-on.sh` (no reboot) still untested

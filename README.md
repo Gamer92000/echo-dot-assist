@@ -37,6 +37,7 @@ The unlock needs the case opened and wires on test pads, and can brick the devic
 | Buttons, LED ring, hardware mute              | ✅                      | ✅                                           | ✅                       |
 | Mute state and audio settings in HA           | ❌                      | ✅                                           | ❌                       |
 | Do not disturb                                | ✅ (Alexa app)          | ✅ switch in HA                              | ❌                       |
+| Equalizer (bass, mid, treble)                 | ✅ (Alexa app)          | ✅ sliders in HA                             | ❌                       |
 | Encrypted link to Home Assistant              | –                       | ✅ key set by Home Assistant                 | ❌ plain TCP             |
 | Talks to Amazon                               | always                  | never (firewalled)                           | never (firewalled)       |
 | Updates                                       | automatic, from Amazon  | signed, pushed from your PC                  | signed, pushed from your PC |
@@ -57,7 +58,8 @@ Details:
   pairing only. While a phone plays, the proxy stops scanning: the radio cannot do both without the music stuttering.
 - **Settings in Home Assistant**: noise suppression level, auto gain, mic volume multiplier, mute switch, "Do not disturb"
   switch (drops announcements, purple pulse when switched on), "Wake sound" switch (covers all local sounds),
-  "Bluetooth pairing" switch, "Bluetooth announcements" switch. Diagnostics, off by default: SoC temperature, CPU usage.
+  "Bluetooth pairing" switch, "Bluetooth announcements" switch, equalizer (bass, mid, treble, −6 to +6 dB, Amazon's own,
+  applied to everything the Echo plays). Diagnostics, off by default: SoC temperature, CPU usage.
 - **No cloud**: Alexa client, updater and telemetry are stopped at every boot; a firewall drops everything that is not
   going to a local address. Only hassmic itself may go further, to fetch replies and music from where Home Assistant or
   Music Assistant point it. See [Security](#security).

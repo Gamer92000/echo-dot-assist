@@ -102,6 +102,15 @@ lipc-send-event com.amazon.puffin set_animation -s active-talking
   `com.doppler.mixerpb`, `com.doppler.mixerrec`.
 - CLI: `system/bin/audio_manager_set_prop` / `audio_manager_get_prop` → `liborpheusaudiomanager.so` → LIPC
   `com.doppler.audiod` (`LipcSetIntProperty`, `LipcGetIntProperty`, `LipcSetStringProperty`). No PuffinApp involved.
+- User EQ (the Alexa app's bass/mid/treble) is on a third `mixer` source, **`com.doppler.lasp`** (`libasp`), also without
+  PuffinApp (verified 2026-09-24):
+  ```sh
+  lipc-get-prop -s com.doppler.lasp LASP_CMD_GET_USER_EQ_INFO
+  lipc-set-prop -s com.doppler.lasp LASP_CMD_SET_USER_EQ_INFO '{"bands":[{"name":"BASS","level":4},{"name":"MIDRANGE","level":0},{"name":"TREBLE","level":-2}]}'
+  lipc-set-prop -s com.doppler.lasp LASP_CMD_ADJUST_USER_EQ_INFO '{"bands":[{"name":"TREBLE","levelDelta":3,"levelDirection":"DOWN"}]}'
+  ```
+  Levels are whole dB, clamped to -6..+6; the mixer stores them in `/data/misc/audio/audioCtrl.cfg`. `lipc-probe -v
+  com.doppler.lasp` lists the other `LASP_CMD_*` properties (ultrasound, crossover, volume curve, debug info).
 - Properties and ranges, from the tools' help text:
 
 | Property | Values |

@@ -50,6 +50,8 @@ int  core_bt_announce(int set);                  /* same: chime and "Connected t
 int  core_dnd(int set);                          /* same: do not disturb, announcements are dropped (the protocol checks) */
 int  core_volume(void);
 void core_set_volume(int percent);
+int  core_eq(int band);                          /* speaker equalizer, 0 bass / 1 mid / 2 treble: -6..+6 dB */
+void core_set_eq(int band, int db);              /* the mixer keeps it across reboots */
 
 /* no lock needed */
 void   core_tts_begin(unsigned rate, unsigned channels);   /* lock held for this one: switches to SPEAKING */

@@ -4,6 +4,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-09-24
 
+- **Equalizer, like the Alexa app's.** Three new sliders in Home Assistant: "Equalizer bass", "Equalizer mid" and
+  "Equalizer treble", each from −6 to +6 dB. They use Amazon's own equalizer inside the Echo, so they shape everything
+  it plays: replies, music from Music Assistant or a phone, and sounds, on the built-in speaker and on the 3.5 mm
+  output alike. The Echo keeps the setting itself, so it stays after a restart.
 - **Do not disturb, like Alexa's.** A new "Do not disturb" switch in Home Assistant. While it is on, announcements
   (`assist_satellite.announce`, "ask a question") are not played. Everything you start yourself still works: the wake
   word, replies, timers, music and the Bluetooth "Connected to …" message. Turning it on shows Alexa's single purple

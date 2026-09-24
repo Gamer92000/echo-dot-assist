@@ -12,6 +12,7 @@
  *
  * Default ports 26053 (ESPHome) and 16700 (Wyoming): the stock firewall only admits inbound TCP 16384-32767.
  */
+#include <errno.h>
 #include <fcntl.h>
 #include <math.h>
 #include <netinet/in.h>
@@ -71,16 +72,41 @@ static int barge_in;                                /* under lock: start a new p
  * (net.c); a shell would make it the effective group, and AIPC and the mixer refuse that. */
 static void child_ids(void) { gid_t e = getegid(); setregid(e, e); }
 
-static void run(const char *path, const char *a1, const char *a2)
+static void run_argv(char *const argv[])
 {
-    char *argv[] = { (char *)path, (char *)a1, (char *)a2, NULL };
     if (fork() == 0) {                  /* bionic API 24 has no posix_spawn; SIGCHLD is ignored: no zombie */
         child_ids();
         int nul = open("/dev/null", O_WRONLY);          /* ledctrl and audio_manager_set_prop chat on stdout: two log lines */
         if (nul >= 0) dup2(nul, 1);                     /* per LED change otherwise.  Errors (stderr) still reach the log */
-        execv(path, argv);
+        execv(argv[0], argv);
         _exit(127);
     }
+}
+
+static void run(const char *path, const char *a1, const char *a2)
+{
+    char *argv[] = { (char *)path, (char *)a1, (char *)a2, NULL };
+    run_argv(argv);
+}
+
+/* Its stdout into buf (NUL-terminated, cut at n - 1); empty when it cannot run (PC build) */
+static void run_output(char *const argv[], char *buf, size_t n)
+{
+    int p[2]; size_t len = 0; ssize_t r;
+    buf[0] = 0;
+    if (pipe(p)) return;
+    if (fork() == 0) {                  /* not popen: its shell would undo child_ids() */
+        child_ids();
+        int nul = open("/dev/null", O_WRONLY);
+        dup2(p[1], 1); if (nul >= 0) dup2(nul, 2);
+        close(p[0]); close(p[1]);
+        execv(argv[0], argv);
+        _exit(127);
+    }
+    close(p[1]);
+    while (len + 1 < n && ((r = read(p[0], buf + len, n - 1 - len)) > 0 || (r < 0 && errno == EINTR))) if (r > 0) len += (size_t)r;
+    buf[len] = 0;
+    close(p[0]);                        /* SIGCHLD is ignored: nothing to wait for */
 }
 
 static void led(const char *op, const char *pattern)
@@ -441,20 +467,11 @@ static long long mono_ms(void)
 
 static int read_prop_volume(const char *prop, int fallback)
 {
-    char line[128]; int v = fallback, x, p[2]; FILE *f;
-    if (pipe(p)) return v;
-    if (fork() == 0) {                  /* not popen: its shell would undo child_ids() */
-        child_ids();
-        int nul = open("/dev/null", O_WRONLY);
-        dup2(p[1], 1); if (nul >= 0) dup2(nul, 2);
-        close(p[0]); close(p[1]);
-        execl("/system/bin/audio_manager_get_prop", "audio_manager_get_prop", prop, (char *)NULL);
-        _exit(127);
-    }
-    close(p[1]);
-    if (!(f = fdopen(p[0], "r"))) { close(p[0]); return v; }
-    while (fgets(line, sizeof line, f)) if (sscanf(line, "%d", &x) == 1 && x >= 0 && x <= 100) v = x;
-    fclose(f);                          /* SIGCHLD is ignored: nothing to wait for */
+    char out[1024], *line, *save; int v = fallback, x;
+    char *argv[] = { "/system/bin/audio_manager_get_prop", (char *)prop, NULL };
+    run_output(argv, out, sizeof out);
+    for (line = strtok_r(out, "\n", &save); line; line = strtok_r(NULL, "\n", &save))
+        if (sscanf(line, "%d", &x) == 1 && x >= 0 && x <= 100) v = x;
     return v;
 }
 
@@ -491,6 +508,40 @@ void core_set_volume(int v)
     if (connected && proto->volume_changed) proto->volume_changed(volume);
     if (core_sendspin_port) sendspin_volume_changed(volume);
     a2dp_volume_changed(volume);
+}
+
+/* Speaker equalizer: the mixer's own user EQ (libasp "ASP/UserEq"), which stock set from the Alexa app through PuffinApp.
+ * LIPC com.doppler.lasp takes the three bands as JSON, clamps each to -6..+6 (dB steps), applies them to everything the
+ * mixer plays (music, replies and sounds alike, on the 3.5 mm jack too) and keeps them across reboots in
+ * /data/misc/audio/audioCtrl.cfg.  So no state file of ours: read from the mixer once, then cached. */
+static const char *const eq_names[3] = { "BASS", "MIDRANGE", "TREBLE" };
+static int eq[3], eq_read;
+
+int core_eq(int band)
+{
+    if (!eq_read) {
+        char out[256], key[32], *s; int x;
+        char *argv[] = { "/system/bin/lipc-get-prop", "-s", "com.doppler.lasp", "LASP_CMD_GET_USER_EQ_INFO", NULL };
+        run_output(argv, out, sizeof out);          /* {"bands":[{"name":"BASS","level":0},{"name":"MIDRANGE",... */
+        for (int i = 0; i < 3; i++) {
+            snprintf(key, sizeof key, "\"%s\",\"level\":", eq_names[i]);
+            if ((s = strstr(out, key)) && sscanf(s + strlen(key), "%d", &x) == 1) eq[i] = x < -6 ? -6 : x > 6 ? 6 : x;
+        }
+        eq_read = 1;
+    }
+    return eq[band];
+}
+
+void core_set_eq(int band, int db)
+{
+    char json[160];
+    core_eq(band);                                  /* the other two bands as the mixer has them */
+    eq[band] = db < -6 ? -6 : db > 6 ? 6 : db;
+    snprintf(json, sizeof json, "{\"bands\":[{\"name\":\"%s\",\"level\":%d},{\"name\":\"%s\",\"level\":%d},{\"name\":\"%s\",\"level\":%d}]}",
+             eq_names[0], eq[0], eq_names[1], eq[1], eq_names[2], eq[2]);
+    char *argv[] = { "/system/bin/lipc-set-prop", "-s", "com.doppler.lasp", "LASP_CMD_SET_USER_EQ_INFO", json, NULL };
+    run_argv(argv);
+    fprintf(stderr, "equalizer: bass %d, mid %d, treble %d\n", eq[0], eq[1], eq[2]);
 }
 
 /* Anything may move MainVolume behind our back (audio_manager_set_prop, a stock daemon, the stock keys when -V), and

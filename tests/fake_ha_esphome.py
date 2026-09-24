@@ -74,6 +74,14 @@ async def main():
         check(isinstance(temp, SensorInfo) and temp.disabled_by_default and int(temp.entity_category) == 2 and temp.device_class == "temperature"
               and temp.unit_of_measurement == "\u00b0C" and isinstance(cpu, SensorInfo) and cpu.disabled_by_default and cpu.unit_of_measurement == "%"
               and int(cpu.state_class) == 1, "diagnostic sensors: SoC temperature and CPU usage, disabled by default")
+        eqs = [by.get(k) for k in ("equalizer_bass", "equalizer_mid", "equalizer_treble")]
+        await asyncio.sleep(0.3)
+        check(all(isinstance(e, NumberInfo) and e.min_value == -6 and e.max_value == 6 and e.step == 1 and e.unit_of_measurement == "dB" for e in eqs)
+              and any(isinstance(x, NumberState) and x.key == eqs[0].key and x.state == 0 for x in states), "equalizer entities listed, flat on PC")
+        cli.number_command(eqs[0].key, 4); cli.number_command(eqs[2].key, -9)
+        await asyncio.sleep(0.5)
+        check(any(isinstance(x, NumberState) and x.key == eqs[0].key and x.state == 4 for x in states)
+              and any(isinstance(x, NumberState) and x.key == eqs[2].key and x.state == -6 for x in states), "equalizer commands reflected, clamped to -6..+6")
         cli.select_command(by["noise_suppression_level"].key, "High"); cli.number_command(by["auto_gain"].key, 15)
         cli.number_command(by["mic_volume_multiplier"].key, 2.5)
         await asyncio.sleep(0.5)
