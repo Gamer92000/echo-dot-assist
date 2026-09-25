@@ -457,6 +457,11 @@ Run in this order. Each step says what it proves.
       has no custom groups; sliders, dB, no entity category), ESPHome only. Listening test with pink noise on the device, 3.5 mm
       line-out to external speakers: +6/-6 and -6/+6 audible on both the Music and the TTS stream. Set from an API client on the
       device: mixer reads back the values. Not done: survives a reboot (only by the file), the stock `equalizer-change` ring animation
+- [~] micAsr stall (2026-09-25, installed Echo): after hours, every MixerGetBufRec returned NULL, logcat
+      `Mixer_DataTrans:InCapture-GetReadBuff:reason=EmptyQueueHungUp` for our stream (plus Minerva metric errors: logd at
+      23 % CPU), wake word and capture dump dead, buttons fine; restarting hassmic fixed it (mixer itself untouched,
+      started before hassmic). Now 3 empty reads in a row (up to 1.5 s each) reopen the stream. Not seen again yet: the
+      fix is untested against the real fault
 - [x] Revert procedure tested 2026-09-21: `install-system.sh --uninstall` leaves no trace on `/system` (`/sepolicy` md5 back to the pre-hassmic
       value, stock Alexa + `uxeventd` + `otad` run again, no egress lock: only the VLAN protects then); reinstall brings everything back, and
       `/data/local/hassmic/state` (Sendspin identity, pairing record, settings) survives both. `alexa-on.sh` (no reboot) still untested

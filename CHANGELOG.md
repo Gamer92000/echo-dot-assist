@@ -2,6 +2,12 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-09-25
+
+- **The microphone comes back by itself.** An Echo could stop hearing anything after hours of running (the wake word
+  did nothing, the buttons still worked) until hassmic was restarted. It now notices within a few seconds and
+  reconnects the microphone.
+
 ## 2026-09-24
 
 - **Bluetooth announcements in your language.** "Connected to …" and "Disconnected from …" can now be said in German,

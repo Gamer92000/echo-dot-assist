@@ -17,13 +17,29 @@ int cap_open(void)
     return 0;
 }
 
+/* The micAsr stream never pauses while it is healthy (a block every few ms, silence included).  Seen 2026-09-25 on the
+ * installed Echo: hassmic sat for hours on a stream the mixer had given up on ("InCapture-GetReadBuff:
+ * reason=EmptyQueueHungUp" in logcat, every read NULL, wake word and capture dump dead, buttons still fine); a restart of
+ * hassmic alone brought it back.  So after STALL_READS empty reads in a row (up to 1.5 s each) the stream is reopened. */
+#define STALL_READS 3
+
 int cap_read(const void **data)
 {
+    static int empty;
     int status = 0; unsigned n = 0;
     if (cap_held) { MixerReleaseBufRec(cap); cap_held = 0; }
-    void *p = MixerGetBufRec(cap, &status, &n);
-    if (!p) return 0;
-    cap_held = 1; *data = p;
+    void *p = cap ? MixerGetBufRec(cap, &status, &n) : NULL;
+    if (!p) {
+        if (++empty >= STALL_READS) {
+            fprintf(stderr, "audio: micAsr delivers nothing (status %d), reopening\n", status);
+            if (cap) MixerClose(cap);
+            cap = NULL;
+            if (cap_open() < 0) { fprintf(stderr, "audio: micAsr reopen failed, trying again\n"); sleep(1); }
+            empty = 0;
+        }
+        return 0;
+    }
+    empty = 0; cap_held = 1; *data = p;
     return n;
 }
 
