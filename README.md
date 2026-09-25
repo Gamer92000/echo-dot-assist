@@ -108,14 +108,19 @@ Flash the firmware into both A/B slots, then root:
 F=update-kindle-donut_puffin-NS65741_user_8138_0013222529668.bin
 adb shell twrp wipe cache; adb shell twrp wipe data
 adb push $F /sdcard/update.zip
-adb shell twrp install /sdcard/update.zip
-adb shell 's=$(bcbtool get_active); case $s in a) bcbtool set_active b;; b) bcbtool set_active a;; esac'
-adb reboot recovery        # wait for the white ring
-adb shell twrp install /sdcard/update.zip
-adb push boot-root.zip /sdcard/ && adb shell twrp install /sdcard/boot-root.zip
+adb shell twrp install /sdcard/update.zip      # "Flashing A/B zip to inactive slot: B" (or A); it becomes the active slot
+adb reboot recovery        # wait for the white ring; TWRP now runs from the slot just flashed
+adb shell twrp install /sdcard/update.zip      # must name the OTHER slot this time
+adb reboot recovery
+adb push boot-root.zip /sdcard/ && adb shell twrp install /sdcard/boot-root.zip   # patches both slots
 adb reboot
 ```
 
+TWRP switches the active slot itself after an install (checked 2026-09-25: `bcbtool get_active` said `b` right after
+flashing B). Do not switch it back by hand, or the second install lands in the same slot again and the other one keeps
+Amazon's newer firmware. `kamakiri`'s `bootrom-step.sh` asks for Enter after the handshake: run it in a terminal, not in
+the background. With a second Echo on adb (Wi-Fi), point every command and script at the new one:
+`export ANDROID_SERIAL=<serial from adb devices>`.
 Result: stock Fire OS, unregistered, no Wi-Fi, orange ring, and `adb shell` is root. If adb does not show up after a
 reboot, replug the power. Back to TWRP: `adb reboot recovery`, or hold Volume Up while plugging in.
 
