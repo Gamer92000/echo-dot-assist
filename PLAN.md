@@ -457,6 +457,11 @@ Run in this order. Each step says what it proves.
       has no custom groups; sliders, dB, no entity category), ESPHome only. Listening test with pink noise on the device, 3.5 mm
       line-out to external speakers: +6/-6 and -6/+6 audible on both the Music and the TTS stream. Set from an API client on the
       device: mixer reads back the values. Not done: survives a reboot (only by the file), the stock `equalizer-change` ring animation
+- [x] Wake word select (2026-09-25): VoiceAssistantConfigurationResponse had "alexa" hard-coded since the ESPHome API
+      went in (and VA_SET_CONFIG was ignored), so HA never showed the model `-m` loaded; the request phrase was "Alexa"
+      too. Now: stock ALEXA + every `<models>/<keyword>-<lang>/pryon.manifest` offered (name from the folder), HA's pick in
+      `state/wake_word`, loaded live in the capture thread (`wake_close` + `wake_open`; under qemu with the stock library
+      and echo-de: ECHO detected right after the switch, sample index continuous), phrase = the active name.
 - [~] micAsr stall (2026-09-25, installed Echo): after hours, every MixerGetBufRec returned NULL, logcat
       `Mixer_DataTrans:InCapture-GetReadBuff:reason=EmptyQueueHungUp` for our stream (plus Minerva metric errors: logd at
       23 % CPU), wake word and capture dump dead, buttons fine; restarting hassmic fixed it (mixer itself untouched,

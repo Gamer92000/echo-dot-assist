@@ -867,7 +867,7 @@ static void start(void)
     pb_uint(&b, 3, core_local_wake ? 1 : 3);            /* flags: USE_VAD, plus USE_WAKE_WORD when detection is remote */
     { PB(as, 24); pb_uint(&as, 1, noise_level); pb_uint(&as, 2, auto_gain); pb_float(&as, 3, vol_mult);
       pb_varint(&b, 4 << 3 | 2); pb_varint(&b, as.n); pb_raw(&b, as.p, as.n); }
-    if (core_local_wake) pb_str(&b, 5, "Alexa");
+    if (core_local_wake) { const struct core_wake_word *w; if (core_wake_words(&w)) pb_str(&b, 5, w[core_wake_word(-1)].name); }  /* HA's duplicate check keys on it */
     send_va(VA_REQUEST, &b);
 }
 
@@ -1001,15 +1001,31 @@ static void send_entities(void)
     send_msg(LIST_ENTITIES_DONE, NULL);
 }
 
+/* Every installed model (core.h); Home Assistant shows them in the satellite's wake word select, one active at a time */
 static void send_va_config(void)
 {
-    PB(b, 128); PB(w, 64);
+    PB(b, 3072);
     if (core_local_wake) {
-        pb_str(&w, 1, "alexa"); pb_str(&w, 2, "Alexa"); pb_str(&w, 3, "en");
-        pb_varint(&b, 1 << 3 | 2); pb_varint(&b, w.n); pb_raw(&b, w.p, w.n);
-        pb_str(&b, 2, "alexa"); pb_uint(&b, 3, 1);
+        const struct core_wake_word *w; int n = core_wake_words(&w);
+        for (int i = 0; i < n; i++) {
+            PB(e, 192); pb_str(&e, 1, w[i].id); pb_str(&e, 2, w[i].name); pb_str(&e, 3, w[i].lang);
+            pb_varint(&b, 1 << 3 | 2); pb_varint(&b, e.n); pb_raw(&b, e.p, e.n);
+        }
+        if (n) pb_str(&b, 2, w[core_wake_word(-1)].id);
+        pb_uint(&b, 3, 1);
     }
     send_msg(VA_CONFIG_RESP, &b);
+}
+
+static void on_va_set_config(const unsigned char *p, const unsigned char *end)
+{
+    struct pbf f; char id[64]; const struct core_wake_word *w; int n = core_wake_words(&w);
+    while (pb_next(&p, end, &f)) {
+        if (f.field != 1 || !f.data) continue;
+        pbf_str(&f, id, sizeof id);
+        for (int i = 0; i < n; i++) if (!strcmp(w[i].id, id)) { core_wake_word(i); return; }
+        fprintf(stderr, "wake word: Home Assistant picked unknown \"%s\", ignored\n", id);
+    }
 }
 
 /* returns 0 to close the connection */
@@ -1060,7 +1076,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case VA_TIMER_EVENT:   on_timer(p, end); break;
     case VA_ANNOUNCE:      on_announce(p, end); break;
     case VA_CONFIG_REQ:    send_va_config(); break;
-    case VA_SET_CONFIG:    break;                                               /* one wake word, nothing to choose */
+    case VA_SET_CONFIG:    if (core_local_wake) on_va_set_config(p, end); break;
     case MEDIA_PLAYER_COMMAND: on_mp_command(p, end); break;
     case BLE_SUBSCRIBE: case BLE_UNSUBSCRIBE:
         if (c < 0 || !ble_present()) break;

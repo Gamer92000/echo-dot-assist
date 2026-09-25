@@ -12,6 +12,8 @@
  *
  * Default ports 26053 (ESPHome) and 16700 (Wyoming): the stock firewall only admits inbound TCP 16384-32767.
  */
+#include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
@@ -145,6 +147,85 @@ static void playback_hint(void)
     wake_property("AlarmState", alarm);
     wake_property("AudioPlayerState", music);
     wake_property("audio_playback", alarm || music || tts);
+}
+
+/* ---------------------------------------------------------------- wake word models
+ * The firmware only has "Alexa"; other keywords are model sets fetched from Amazon once (README, "Another wake word")
+ * and kept in <models>/<keyword>-<language>/pryon.manifest.  All are offered to Home Assistant, which shows them in the
+ * satellite's wake word select; its pick is kept in state/wake_word and loaded live by the capture thread.  -m names
+ * the model to use until Home Assistant has picked one (before 2026-09-25 it was the only way, and Home Assistant was
+ * told "Alexa" whatever -m said). */
+#define MAX_WAKE_WORDS 16
+static struct core_wake_word wake_words[MAX_WAKE_WORDS];
+static int n_wake_words, wake_active;               /* under core_lock once running */
+static atomic_int wake_switch;                      /* capture thread: load wake_words[wake_active] */
+
+static const char *models_dir(void) { const char *e = getenv("HASSMIC_MODELS"); return e ? e : "/data/local/hassmic/models"; }
+static const char *wake_word_path(void)
+{
+    static char p[256]; const char *d = getenv("HASSMIC_STATE");
+    snprintf(p, sizeof p, "%s/wake_word", d ? d : "/data/local/hassmic/state");
+    return p;
+}
+
+/* id "echo-de" -> name "Echo", language "de"; "hey_disney-en-US" -> "Hey Disney", "en" */
+static int wake_word_add(const char *id, const char *manifest)
+{
+    for (int i = 0; i < n_wake_words; i++) if (!strcmp(wake_words[i].manifest, manifest)) return i;
+    if (n_wake_words == MAX_WAKE_WORDS) return -1;
+    struct core_wake_word *w = &wake_words[n_wake_words];
+    const char *dash = strchr(id, '-');
+    int k = dash ? (int)(dash - id) : (int)strlen(id);
+    snprintf(w->id, sizeof w->id, "%s", id); snprintf(w->manifest, sizeof w->manifest, "%s", manifest);
+    snprintf(w->name, sizeof w->name, "%.*s", k, id);
+    for (char *c = w->name; *c; c++) {
+        if (*c == '_') *c = ' ';
+        *c = (char)(c == w->name || c[-1] == ' ' ? toupper((unsigned char)*c) : tolower((unsigned char)*c));
+    }
+    snprintf(w->lang, sizeof w->lang, "%s", dash ? dash + 1 : "en");
+    w->lang[strcspn(w->lang, "-_")] = 0;
+    return n_wake_words++;
+}
+
+static void wake_words_scan(const char *m_arg)
+{
+    char path[512], saved[64] = ""; DIR *d; struct dirent *e; FILE *f; int def = 0;
+    wake_word_add("alexa", DEFAULT_MANIFEST);        /* the firmware's own: always there */
+    if ((d = opendir(models_dir()))) {
+        while ((e = readdir(d))) {
+            if (e->d_name[0] == '.') continue;
+            snprintf(path, sizeof path, "%s/%s/pryon.manifest", models_dir(), e->d_name);
+            if (!access(path, R_OK)) wake_word_add(e->d_name, path);
+        }
+        closedir(d);
+    }
+    if (m_arg) {                                    /* named after its directory, like the ones found above */
+        char dir[256], *slash; snprintf(dir, sizeof dir, "%s", m_arg);
+        if ((slash = strrchr(dir, '/'))) *slash = 0;
+        slash = strrchr(dir, '/');
+        int i = wake_word_add(slash ? slash + 1 : dir, m_arg);
+        if (i >= 0) def = i;
+    }
+    wake_active = def;
+    if ((f = fopen(wake_word_path(), "r"))) {
+        if (fscanf(f, "%63s", saved) == 1) for (int i = 0; i < n_wake_words; i++) if (!strcmp(wake_words[i].id, saved)) wake_active = i;
+        fclose(f);
+    }
+    for (int i = 0; i < n_wake_words; i++)
+        fprintf(stderr, "wake word: %s \"%s\" (%s)%s\n", wake_words[i].id, wake_words[i].name, wake_words[i].lang, i == wake_active ? ", active" : "");
+}
+
+int core_wake_words(const struct core_wake_word **list) { *list = wake_words; return n_wake_words; }
+
+int core_wake_word(int set)
+{
+    if (set >= 0 && set < n_wake_words && set != wake_active) {
+        FILE *f = fopen(wake_word_path(), "w");
+        wake_active = set;
+        if (f) { fprintf(f, "%s\n", wake_words[set].id); fclose(f); } else fprintf(stderr, "wake word: cannot write %s\n", wake_word_path());
+        atomic_store(&wake_switch, 1);
+    }
+    return wake_active;
 }
 
 static long long wake_cut_ms;    /* when the wake word last cut a reply or an alarm: a "stop" right behind it belongs to that */
@@ -631,6 +712,12 @@ static void *capture_thread(void *arg)
         }
         if (dump) fwrite(pcm, 1, n, dump);
 
+        if (core_local_wake && atomic_exchange(&wake_switch, 0)) {        /* Home Assistant picked another wake word */
+            pthread_mutex_lock(&core_lock); struct core_wake_word w = wake_words[wake_active]; pthread_mutex_unlock(&core_lock);
+            wake_close();
+            if (wake_open(w.manifest, on_wake) == 0) fprintf(stderr, "wake word: now \"%s\"\n", w.name);
+            else { fprintf(stderr, "wake word: cannot load %s, back to Alexa\n", w.manifest); wake_open(wake_words[0].manifest, on_wake); }
+        }
         if (core_local_wake) wake_feed(pcm, n / 2);
         if (atomic_load(&streaming)) {
             pthread_mutex_lock(&core_lock);
@@ -657,7 +744,7 @@ static void on_ttin(int s) { (void)s; atomic_store(&dump_toggle, 1); }
 
 int main(int argc, char **argv)
 {
-    const char *manifest = DEFAULT_MANIFEST, *input = "/dev/input/event3"; int port = 0, print_mdns = 0, o;
+    const char *manifest = NULL, *input = "/dev/input/event3"; int port = 0, print_mdns = 0, o;
     while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:LEVST")) != -1) switch (o) {
         case 'P': proto = !strcmp(optarg, "wyoming") ? &proto_wyoming : &proto_esphome; break;
         case 'p': port = atoi(optarg); break;
@@ -680,7 +767,14 @@ int main(int argc, char **argv)
     if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
 
     if (cap_open() < 0) { fprintf(stderr, "cannot open capture (is PuffinApp still running?)\n"); return 1; }
-    if (core_local_wake && wake_open(manifest, on_wake) < 0) { fprintf(stderr, "cannot load wake word model %s\n", manifest); return 1; }
+    if (core_local_wake) {
+        wake_words_scan(manifest);
+        const char *m = wake_words[wake_active].manifest;
+        if (wake_open(m, on_wake) < 0 && (wake_active == 0 || (fprintf(stderr, "cannot load wake word model %s, trying Alexa\n", m), wake_active = 0,
+                                                                  wake_open(wake_words[0].manifest, on_wake) < 0))) {
+            fprintf(stderr, "cannot load wake word model %s\n", wake_words[wake_active].manifest); return 1;
+        }
+    }
 
     pthread_t cap_t, play_t, ear_t;
     pthread_create(&cap_t, NULL, capture_thread, NULL);

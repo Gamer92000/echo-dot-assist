@@ -4,6 +4,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-09-25
 
+- **Pick the wake word in Home Assistant.** The Echo's wake word select now lists every wake word installed on it (the
+  stock "Alexa" plus any you fetched, such as "Echo"), and switching takes effect at once and survives restarts. Until
+  now Home Assistant was only ever shown "Alexa", even when the Echo actually listened for "Echo".
 - **The microphone comes back by itself.** An Echo could stop hearing anything after hours of running (the wake word
   did nothing, the buttons still worked) until hassmic was restarted. It now notices within a few seconds and
   reconnects the microphone.

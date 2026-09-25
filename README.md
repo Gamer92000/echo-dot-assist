@@ -188,8 +188,9 @@ or block the Echo's internet at the router while it boots, until the token is on
    adb push device-logs/models/echo-de-DE/unpacked /data/local/hassmic/models/echo-de
    adb shell chmod -R a+rX /data/local/hassmic/models
    ```
-   Trial run: `run.sh -m /data/local/hassmic/models/echo-de/pryon.manifest`. Installed: set
-   `ARGS="-m /data/local/hassmic/models/echo-de/pryon.manifest"` in `hassmic.conf` and reboot.
+   Restart hassmic (or reboot). Home Assistant then offers every installed model in the Echo's wake word select
+   ("Alexa" plus "Echo" here, named after the folder: `<keyword>-<language>`); pick one, it switches at once and stays.
+   `-m <manifest>` in `ARGS` only sets which one to start with until you pick one in Home Assistant.
 
 **On an installed Echo**: add `MODE=stock-online` to `/data/local/hassmic/hassmic.conf` and reboot. hassmic stays off,
 stock Alexa runs with internet, and the update guard is applied at every boot (this is the variant used end to end
@@ -282,7 +283,7 @@ ARGS=""                     # extra options, below
 
 | `ARGS` option | Effect |
 |---|---|
-| `-m <pryon.manifest>` | another wake word model |
+| `-m <pryon.manifest>` | wake word model to start with, until one is picked in Home Assistant |
 | `-w remote` | wake word detection in Home Assistant (openWakeWord) instead of on the Echo |
 | `-E` | no sound on wake |
 | `-L` | leave the LED ring alone |

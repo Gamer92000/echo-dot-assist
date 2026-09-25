@@ -50,6 +50,11 @@ int  core_bt_announce(int set);                  /* same: chime and "Connected t
 int  core_dnd(int set);                          /* same: do not disturb, announcements are dropped (the protocol checks) */
 int  core_volume(void);
 void core_set_volume(int percent);
+/* Wake word models: the stock "Alexa" plus model sets in the models directory (README, "Another wake word").  The list
+ * is fixed after start; Home Assistant picks the active one. */
+struct core_wake_word { char id[64], name[64], lang[16], manifest[256]; };
+int  core_wake_words(const struct core_wake_word **list);  /* count */
+int  core_wake_word(int set);                    /* index of the active one; set >= 0 switches to it and keeps it, -1 reads */
 int  core_eq(int band);                          /* speaker equalizer, 0 bass / 1 mid / 2 treble: -6..+6 dB */
 void core_set_eq(int band, int db);              /* the mixer keeps it across reboots */
 

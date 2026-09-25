@@ -45,7 +45,9 @@ async def main():
     settings = tempfile.mktemp(suffix=".settings")
     state = tempfile.mkdtemp(); mdns = os.path.join(state, "hassmic.service")
     env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_SETTINGS=settings, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=play,
-               HASSMIC_MDNS_FILE=mdns)
+               HASSMIC_MDNS_FILE=mdns, HASSMIC_MODELS=os.path.join(state, "models"))
+    for m in ("echo-de", "computer-en-US"):             # installed wake word models (the PC build loads none of them)
+        os.makedirs(os.path.join(state, "models", m)); open(os.path.join(state, "models", m, "pryon.manifest"), "w").close()
     with open(mdns, "w") as f:                          # what main.sh does at boot
         subprocess.run([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-S"], env=env, stdout=f, check=True)
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-L"], env=env)
@@ -92,7 +94,9 @@ async def main():
         check(got == [want] and want.startswith("SP:0") and len(want) > 100, f"token state equals `hassmic -T`: {want[:16]}…")
         check(open(settings).read().split()[:3] == ["3", "15", "2.50"], f"settings persisted: {open(settings).read().strip()!r}")
         cfg = await cli.get_voice_assistant_configuration(5)
-        check(list(cfg.active_wake_words) == ["alexa"], f"wake word configuration: {list(cfg.active_wake_words)}")
+        avail = sorted((w.id, w.wake_word, list(w.trained_languages)) for w in cfg.available_wake_words)
+        check(avail == [("alexa", "Alexa", ["en"]), ("computer-en-US", "Computer", ["en"]), ("echo-de", "Echo", ["de"])]
+              and list(cfg.active_wake_words) == ["alexa"] and cfg.max_active_wake_words == 1, f"wake words: all installed ones offered, Alexa active: {avail}")
 
         started = asyncio.Event(); mic = bytearray(); stopped = []
         async def handle_start(conv_id, flags, settings, phrase):
@@ -124,6 +128,17 @@ async def main():
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
         await asyncio.sleep(2.0)
         check(os.path.getsize(play) == 48000 and finished == [True], f"reply fetched from the TTS_END url and reported: {os.path.getsize(play)} bytes, finished={finished}")
+
+        # another wake word, picked in Home Assistant: kept, and named in the pipeline request (HA's duplicate check keys on it)
+        await cli.set_voice_assistant_configuration(["echo-de"]); await asyncio.sleep(0.5)
+        cfg = await cli.get_voice_assistant_configuration(5)
+        saved = open(os.path.join(state, "wake_word")).read().strip()
+        check(list(cfg.active_wake_words) == ["echo-de"] and saved == "echo-de", f"wake word switched from Home Assistant and kept: {list(cfg.active_wake_words)}, {saved}")
+        started.clear(); proc.send_signal(signal.SIGUSR1)
+        await asyncio.wait_for(started.wait(), 5)
+        check(handle_start.args == (1, "Echo"), f"pipeline request names the new wake word: {handle_start.args}")
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await asyncio.sleep(0.5)
+        await cli.set_voice_assistant_configuration(["alexa"]); await asyncio.sleep(0.3)
 
         # A second client beside "Home Assistant": gets answers, sees and causes state changes, cannot take the voice assistant.
         cli2 = APIClient("127.0.0.1", PORT, None)
