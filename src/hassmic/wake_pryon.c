@@ -33,8 +33,9 @@ static void on_log(int level, const char *tag, const char *msg)
 static void on_result(const char *decoderId, PryonEnumeratedResult *r)
 {
     (void)decoderId;
-    fprintf(stderr, "wake: %s type=%d\n", r->keyword ? r->keyword : "?", r->detectionType);
-    if (r->detectionType == PRYON_DETECTION_TYPE_ACCEPT && r->keyword) callback(r->keyword);
+    fprintf(stderr, "wake: %s type=%d samples %llu-%llu (fed %llu)\n", r->keyword ? r->keyword : "?", r->detectionType,
+            (unsigned long long)r->beginSampleIndex, (unsigned long long)r->endSampleIndex, (unsigned long long)sample_index);
+    if (r->detectionType == PRYON_DETECTION_TYPE_ACCEPT && r->keyword) callback(r->keyword, r->beginSampleIndex, r->endSampleIndex);
 }
 
 int wake_open(const char *manifest, wake_cb cb)

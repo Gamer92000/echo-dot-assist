@@ -6,6 +6,7 @@
  *
  *   hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m pryon.manifest] [-b input-device] [-L] [-E] [-V] [-S]
  *     -o port  push update port (default 28929, 0 = off; see scripts/ota-push.sh)
+ *     -a port  wake word arbitration between Echos, UDP (default 28930, 0 = off; see arb.c)
  *     -z port  Sendspin player port (default 28928, 0 = off)
  *     -T       print the Sendspin pairing token (paste it into Music Assistant to pair) and exit
  *     -L no LED ring   -E no earcon on wake   -V leave the volume buttons alone   -S print the avahi service file and exit
@@ -31,6 +32,7 @@
 #include <unistd.h>
 #include "audio.h"
 #include "a2dp.h"
+#include "arb.h"
 #include "buttons.h"
 #include "netio.h"
 #include "wake.h"
@@ -50,7 +52,17 @@ static void sound_queue(enum sound s) { atomic_fetch_or(&sounds_pending, 1 << s)
 static void sound_request(enum sound s) { if (use_earcon) sound_queue(s); }
 
 const char *core_name = "Echo Dot";
+
+const char *core_node_name(void)
+{
+    static char n[64]; size_t j = 0;
+    for (const char *s = core_name; *s && j < sizeof n - 1; s++)
+        n[j++] = isalnum((unsigned char)*s) ? (char)tolower((unsigned char)*s) : '-';
+    n[j] = 0;
+    return n;
+}
 static int ota_port = 28929;                        /* 0 = no push updates */
+static int arb_port = 28930;                        /* 0 = no wake word arbitration */
 int core_local_wake = 1, core_port, core_sendspin_port = 28928;       /* 0 = Sendspin off */
 static const struct proto *proto = &proto_esphome;
 
@@ -371,11 +383,101 @@ static void stop_word(void)
     pthread_mutex_unlock(&core_lock);
 }
 
-static void on_wake(const char *keyword)
+/* ---------------------------------------------------------------- wake word arbitration (arb.c)
+ * With other Echos in the arbitration network, a detection is scored and only acted on once the others' claims are in:
+ * WINDOW_MS later, in the capture thread.  Until then nothing shows (no sound, no ring), so the Echos that lose stay
+ * quiet.  The audio of the window is not lost: the winner sends it from the ring buffer ahead of the live stream. */
+
+#define RING_SAMPLES (CAP_RATE * 4)
+static int16_t ring[RING_SAMPLES];                  /* what the wake word engine was fed, by its sample index */
+static uint64_t ring_n;                             /* capture thread: samples fed so far */
+static atomic_int det_pending;                      /* a detection for the capture thread; det_begin/end under core_lock */
+static uint64_t det_begin, det_end;
+static long long arb_due;                           /* capture thread: a round runs, decide then */
+static uint64_t arb_from;                           /* capture thread: first sample after the detection */
+
+static void ring_put(const int16_t *s, size_t n)
+{
+    for (size_t i = 0; i < n; i++) ring[(ring_n + i) % RING_SAMPLES] = s[i];
+    ring_n += n;
+}
+
+static double ring_power(uint64_t a, uint64_t b)    /* mean square over samples [a, b), as far as the ring still has them */
+{
+    double sum = 0; uint64_t n = 0;
+    if (ring_n > RING_SAMPLES && a < ring_n - RING_SAMPLES) a = ring_n - RING_SAMPLES;
+    if (b > ring_n) b = ring_n;
+    for (uint64_t i = a; i < b; i++, n++) { double v = ring[i % RING_SAMPLES]; sum += v * v; }
+    return n ? sum / n : 0;
+}
+
+/* Signal to noise of the wake word in dB x 100: the keyword against the half second before it (ending 100 ms ahead, so
+ * that an early "begin" does not count the word as noise).  On the processed stream after beamforming, AEC and gain
+ * control, the absolute level says less than how far the voice stands out of the room: the Echo the talker is close to
+ * and facing hears it clearest.  HASSMIC_TEST_SCORE stands in for it on the PC, where SIGUSR1 plays the detection. */
+static int wake_score(uint64_t begin, uint64_t end, int simulated)
+{
+    const char *t = getenv("HASSMIC_TEST_SCORE");
+    if (simulated && t) return atoi(t);
+    uint64_t gap = CAP_RATE / 10, len = CAP_RATE / 2;
+    uint64_t ne = begin > gap ? begin - gap : 0, nb = ne > len ? ne - len : 0;
+    double w = ring_power(begin, end), n = ring_power(nb, ne), fs = 32768.0 * 32768.0;
+    fprintf(stderr, "wake: level %.1f dBFS over noise %.1f dBFS\n", 10 * log10((w + 1) / fs), 10 * log10((n + 1) / fs));
+    return (int)lround(1000 * log10((w + 1) / (n + 1)));
+}
+
+static void stream_ring(uint64_t from)              /* lock held */
+{
+    while (from < ring_n) {
+        uint64_t at = from % RING_SAMPLES, n = ring_n - from;
+        if (n > RING_SAMPLES - at) n = RING_SAMPLES - at;
+        proto->audio(ring + at, n * 2);
+        from += n;
+    }
+}
+
+static void answer(uint64_t from)                   /* capture thread: act on the wake word; audio after it from the ring */
+{
+    int was = atomic_load(&streaming);
+    trigger(0);
+    pthread_mutex_lock(&core_lock);
+    if (from && !was && atomic_load(&streaming) && connected) stream_ring(from);
+    pthread_mutex_unlock(&core_lock);
+}
+
+static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* capture thread */
+{
+    if (!arb_running()) { trigger(0); return; }
+    if (arb_due) return;                            /* the same wake word once more while its round runs */
+    pthread_mutex_lock(&core_lock);
+    int alarm = atomic_load(&alarm_on), can = alarm || (connected && satellite_running && !core_muted()), prio = alarm || state != IDLE ? 2 : 0;
+    pthread_mutex_unlock(&core_lock);
+    if (!can) { trigger(0); return; }               /* could not answer: a claim would only silence the Echos that can */
+    pthread_mutex_lock(&core_lock); char kw[64]; snprintf(kw, sizeof kw, "%s", wake_words[wake_active].name); pthread_mutex_unlock(&core_lock);
+    long long due = arb_claim(kw, wake_score(begin, end, simulated), prio);
+    if (!due) { trigger(0); return; }
+    arb_due = due; arb_from = ring_n;
+}
+
+static void on_wake(const char *keyword, uint64_t begin, uint64_t end)
 {
     if (!core_local_wake) return;
-    if (!strcasecmp(keyword, "STOP")) stop_word(); else { last_wake_ms = mono_ms(); trigger(0); }
+    if (!strcasecmp(keyword, "STOP")) { stop_word(); return; }
+    last_wake_ms = mono_ms();
+    if (!arb_running()) { trigger(0); return; }
+    pthread_mutex_lock(&core_lock); det_begin = begin; det_end = end; pthread_mutex_unlock(&core_lock);
+    atomic_store(&det_pending, 1);                  /* the ring is the capture thread's */
 }
+
+static int arb_send_key(const char *node, const char *network, const char *key)
+{
+    pthread_mutex_lock(&core_lock);
+    int r = connected && proto->arb_send ? proto->arb_send(node, network, key) : -1;
+    pthread_mutex_unlock(&core_lock);
+    return r;
+}
+
+static void arb_notify(void) { pthread_mutex_lock(&core_lock); if (proto->arb_changed) proto->arb_changed(); pthread_mutex_unlock(&core_lock); }
 
 /* ---------------------------------------------------------------- playback queue */
 
@@ -695,7 +797,8 @@ static void *capture_thread(void *arg)
         const void *pcm; int n = cap_read(&pcm);
         if (n < 0) { fprintf(stderr, "capture: fatal\n"); atomic_store(&quit, 1); break; }
         if (atomic_exchange(&button_pending, 0)) on_action();      /* SIGUSR2: action button, for tests on the PC */
-        { int t = atomic_exchange(&trigger_pending, 0); if (t) trigger(t == 2); }
+        { int t = atomic_exchange(&trigger_pending, 0);               /* 1: SIGUSR1 plays a wake word of the last 0.6 s */
+          if (t == 2) trigger(1); else if (t == 1) wake_heard(ring_n > CAP_RATE * 6 / 10 ? ring_n - CAP_RATE * 6 / 10 : 0, ring_n, 1); }
         if (atomic_exchange(&stop_pending, 0)) stop_word();        /* SIGHUP: the "stop" keyword, for tests on the PC */
         if (n == 0) continue;
 
@@ -718,12 +821,17 @@ static void *capture_thread(void *arg)
             if (wake_open(w.manifest, on_wake) == 0) fprintf(stderr, "wake word: now \"%s\"\n", w.name);
             else { fprintf(stderr, "wake word: cannot load %s, back to Alexa\n", w.manifest); wake_open(wake_words[0].manifest, on_wake); }
         }
-        if (core_local_wake) wake_feed(pcm, n / 2);
+        if (core_local_wake) { ring_put(pcm, n / 2); wake_feed(pcm, n / 2); }
         if (atomic_load(&streaming)) {
             pthread_mutex_lock(&core_lock);
             if (atomic_load(&streaming) && connected) proto->audio(pcm, n);
             pthread_mutex_unlock(&core_lock);
         }
+        if (atomic_exchange(&det_pending, 0)) {
+            pthread_mutex_lock(&core_lock); uint64_t b = det_begin, e = det_end; pthread_mutex_unlock(&core_lock);
+            wake_heard(b, e, 0);
+        }
+        if (arb_due && mono_ms() >= arb_due) { arb_due = 0; if (arb_decide()) answer(arb_from); }    /* after this block went out live */
 
         pthread_mutex_lock(&core_lock);
         if (core_local_wake && (state == LISTENING || state == THINKING) && time(NULL) - state_since > PIPELINE_TIMEOUT) {
@@ -745,7 +853,7 @@ static void on_ttin(int s) { (void)s; atomic_store(&dump_toggle, 1); }
 int main(int argc, char **argv)
 {
     const char *manifest = NULL, *input = "/dev/input/event3"; int port = 0, print_mdns = 0, o;
-    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:LEVST")) != -1) switch (o) {
+    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:a:LEVST")) != -1) switch (o) {
         case 'P': proto = !strcmp(optarg, "wyoming") ? &proto_wyoming : &proto_esphome; break;
         case 'p': port = atoi(optarg); break;
         case 'n': core_name = optarg; break;
@@ -754,12 +862,13 @@ int main(int argc, char **argv)
         case 'b': input = optarg; break;
         case 'z': core_sendspin_port = atoi(optarg); break;
         case 'o': ota_port = atoi(optarg); break;
+        case 'a': arb_port = atoi(optarg); break;
         case 'L': use_led = 0; break;
         case 'E': use_earcon = 0; break;
         case 'V': use_volume = 0; break;
         case 'S': print_mdns = 1; break;
         case 'T': { char tok[160]; sendspin_init(); sendspin_pairing_token(tok, sizeof tok); puts(tok); return 0; }
-        default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-L] [-E] [-V] [-S]\n"); return 2;
+        default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-z port] [-o port] [-a port] [-L] [-E] [-V] [-S]\n"); return 2;
     }
     core_port = port ? port : proto->port;
     if (print_mdns) { proto->print_mdns(); return 0; }
@@ -775,6 +884,8 @@ int main(int argc, char **argv)
             fprintf(stderr, "cannot load wake word model %s\n", wake_words[wake_active].manifest); return 1;
         }
     }
+    static const struct arb_hooks arb_hooks = { arb_send_key, arb_notify };
+    if (arb_port && core_local_wake && proto->arb_send && arb_start(arb_port, core_node_name(), &arb_hooks)) fprintf(stderr, "arbitration: not available\n");
 
     pthread_t cap_t, play_t, ear_t;
     pthread_create(&cap_t, NULL, capture_thread, NULL);

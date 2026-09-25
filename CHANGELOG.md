@@ -4,12 +4,23 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-09-25
 
+- **Only one Echo answers, like Alexa.** With several Echos in earshot, only the one that heard "Alexa" most clearly
+  answers; the others stay silent and dark. The Echos agree on it among themselves on your network in 0.2 s. An Echo
+  you are already talking to, or that is ringing, keeps the wake word. With one Echo nothing changes and nothing waits.
+  The Echos find each other by themselves (new "Join arbitration network" switch, on by default), and the shared key
+  is handed from one to the next through your Home Assistant, so another device on the network cannot join or silence
+  them. For that, each Echo needs "Allow the device to perform Home Assistant actions" ticked in its ESPHome options
+  (Settings → Devices & services → ESPHome → the Echo → Configure), the same option the Bluetooth announcements use;
+  Home Assistant shows a repair until it is. Renaming the Echo or its entities in Home Assistant does not matter. Each
+  Echo needs its own `NAME` in `hassmic.conf`. Also on UDP port 28930.
 - **Pick the wake word in Home Assistant.** The Echo's wake word select now lists every wake word installed on it (the
   stock "Alexa" plus any you fetched, such as "Echo"), and switching takes effect at once and survives restarts. Until
   now Home Assistant was only ever shown "Alexa", even when the Echo actually listened for "Echo".
 - **The microphone comes back by itself.** An Echo could stop hearing anything after hours of running (the wake word
   did nothing, the buttons still worked) until hassmic was restarted. It now notices within a few seconds and
   reconnects the microphone.
+- **No red flash on the second satellite.** When another voice satellite reports the wake word first, Home Assistant
+  lets only that one answer. The Echo that came second used to show the error light; now it just goes quiet.
 
 ## 2026-09-24
 

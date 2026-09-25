@@ -45,7 +45,8 @@ async def main():
     settings = tempfile.mktemp(suffix=".settings")
     state = tempfile.mkdtemp(); mdns = os.path.join(state, "hassmic.service")
     env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_SETTINGS=settings, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=play,
-               HASSMIC_MDNS_FILE=mdns, HASSMIC_MODELS=os.path.join(state, "models"))
+               HASSMIC_MDNS_FILE=mdns, HASSMIC_ARB_ADDR="127.255.255.255",      # arbitration beacons stay on this PC
+               HASSMIC_MODELS=os.path.join(state, "models"))
     for m in ("echo-de", "computer-en-US"):             # installed wake word models (the PC build loads none of them)
         os.makedirs(os.path.join(state, "models", m)); open(os.path.join(state, "models", m, "pryon.manifest"), "w").close()
     with open(mdns, "w") as f:                          # what main.sh does at boot
@@ -90,8 +91,15 @@ async def main():
         check(any(isinstance(x, SelectState) and x.state == "High" for x in states) and any(isinstance(x, NumberState) and x.state == 15 for x in states),
               "setting commands reflected in state")
         want = subprocess.run([f"{ROOT}/build/hassmic-host", "-T"], env=env, capture_output=True, text=True).stdout.strip()
-        got = [x.state for x in states if isinstance(x, TextSensorState)]
+        got = [x.state for x in states if isinstance(x, TextSensorState) and x.key == tok.key]
         check(got == [want] and want.startswith("SP:0") and len(want) > 100, f"token state equals `hassmic -T`: {want[:16]}…")
+        ajoin, apeers = by.get("join_arbitration_network"), by.get("arbitration_peers")
+        check("arbitration_id" not in by and isinstance(ajoin, SwitchInfo) and int(ajoin.entity_category) == 1
+              and any(isinstance(x, SwitchState) and x.key == ajoin.key and x.state for x in states) and isinstance(apeers, SensorInfo),
+              "\"Join arbitration network\" switch on by default, peers sensor, no ID entity")
+        svcs = (await cli.list_entities_services())[1]
+        check([(v.name, [(x.name, int(x.type)) for x in v.args]) for v in svcs] == [("arbitration_key", [("network", 3), ("key", 3)])],
+              "action \"arbitration_key\" (network, key: strings) for other Echos to hand over their network")
         check(open(settings).read().split()[:3] == ["3", "15", "2.50"], f"settings persisted: {open(settings).read().strip()!r}")
         cfg = await cli.get_voice_assistant_configuration(5)
         avail = sorted((w.id, w.wake_word, list(w.trained_languages)) for w in cfg.available_wake_words)

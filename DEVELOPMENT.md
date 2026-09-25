@@ -19,7 +19,7 @@ No `hassmic.conf` = stock behaviour.
 
 | Path | What |
 |---|---|
-| `src/hassmic/` | the daemon: core (capture, wake word, playback, LEDs, buttons), `proto_esphome.c`, `proto_wyoming.c`, `sendspin.c`, `a2dp.c`, `ble.c`, push updates |
+| `src/hassmic/` | the daemon: core (capture, wake word, playback, LEDs, buttons), `proto_esphome.c`, `proto_wyoming.c`, `arb.c` (wake word arbitration between Echos), `sendspin.c`, `a2dp.c`, `ble.c`, push updates |
 | `src/tools/` | `mixcap`, `mixplay`, `pryon_test`, `latency`, `otatool`, `runas` (AIPC refuses uid 0, the image has no `su`), `curlspy`, `hciscan` (raw HCI on `/dev/stpbt`) |
 | `src/include/` | C headers for the reversed `libmixerAPI.so` and `libpryon.so` |
 | `src/third_party/` | monocypher 4.0.2, `dr_flac.h`, `minimp3.h`, libfreeaptx 0.2.2 (own licences, see README) |
@@ -38,6 +38,7 @@ make                                              # ARM binaries into build/
 make host                                         # PC build + qemu build for the tests (needs libopus)
 make unit                                         # C unit tests
 .venv/bin/python tests/fake_ha_esphome.py         # ESPHome native API, as Home Assistant (aioesphomeapi)
+.venv/bin/python tests/fake_ha_arbitration.py     # two Echos + Home Assistant + an unknown device: wake word arbitration
 .venv/bin/python tests/fake_ha.py [--qemu]        # Wyoming (wyoming)
 .venv/bin/python tests/fake_ma_sendspin.py        # Sendspin, as Music Assistant (aiosendspin)
 tests/ota_push_test.sh                            # signed push-update path end to end

@@ -28,6 +28,7 @@ The unlock needs the case opened and wires on test pads, and can brick the devic
 | Wake word on the device                       | ✅                      | ✅ "Alexa"; "Echo", "Computer", … [optional](#3-optional-another-wake-word) | ✅ same      |
 | Wake word in Home Assistant instead           | ❌                      | ✅ (`-w remote`)                             | ✅ (`-w remote`)         |
 | Interrupt a reply ("Alexa" / "Alexa, stop")   | ✅                      | ✅                                           | ✅                       |
+| Several Echos hear it, only the nearest answers | ✅ (Amazon cloud)      | ✅ between these Echos, on the LAN           | ❌                       |
 | Timers                                        | ✅                      | ✅                                           | ❌                       |
 | Announcements, follow-up questions            | ✅                      | ✅                                           | ❌                       |
 | Media player entity (TTS, `play_media`)       | ❌                      | ✅                                           | ❌                       |
@@ -49,6 +50,15 @@ Details:
   Amazon's models only hear it in the two seconds after it; out of silence, "Alexa, stop the music" goes to Home
   Assistant as a normal command. While a timer rings or something plays, the wake word is
   accepted more readily, as Amazon's models are tuned to do.
+- **Several Echos**: like stock, only the Echo that heard the wake word best answers (among Echos listening for the same
+  word: one on "Echo" and one on "Alexa" each answer their own); the others stay silent (no
+  sound, no light). The Echos settle it among themselves on the local network in 0.2 s, by how clearly the word stood
+  out of the room's noise; an Echo that is in a conversation or ringing keeps the next wake word. With only one Echo
+  there is no delay. They find each other by themselves ("Join arbitration network", on by default); the shared key
+  travels through your Home Assistant, so nobody else on the network can join or silence them. For that, tick "Allow
+  the device to perform Home Assistant actions" in each Echo's ESPHome options (Home Assistant shows a repair until
+  then); give every Echo its own `NAME`. Other satellites (ESP32 and so on) are not part of it; Home Assistant itself then lets the first one
+  that reports the wake word answer, and the Echo that is second now just goes quiet instead of flashing an error.
 - **Buttons**: action = talk without the wake word / pause and resume music / stop an alarm; volume in 10 % steps;
   mic-off is the hardware mute it always was (red ring, Alexa's own sounds). The LED ring shows listening, thinking,
   speaking, errors and mute. Silent and dark at boot.
@@ -58,7 +68,7 @@ Details:
   pairing only. While a phone plays, the proxy stops scanning: the radio cannot do both without the music stuttering.
 - **Settings in Home Assistant**: noise suppression level, auto gain, mic volume multiplier, mute switch, "Do not disturb"
   switch (drops announcements, purple pulse when switched on), "Wake sound" switch (covers all local sounds),
-  "Bluetooth pairing" switch, "Bluetooth announcements" switch and their language, equalizer (bass, mid, treble, −6 to +6 dB, Amazon's own,
+  "Bluetooth pairing" switch, "Bluetooth announcements" switch and their language, "Join arbitration network" switch, equalizer (bass, mid, treble, −6 to +6 dB, Amazon's own,
   applied to everything the Echo plays). Diagnostics, off by default: SoC temperature, CPU usage.
 - **No cloud**: Alexa client, updater and telemetry are stopped at every boot; a firewall drops everything that is not
   going to a local address. Only hassmic itself may go further, to fetch replies and music from where Home Assistant or
@@ -121,6 +131,7 @@ flashing B). Do not switch it back by hand, or the second install lands in the s
 Amazon's newer firmware. `kamakiri`'s `bootrom-step.sh` asks for Enter after the handshake: run it in a terminal, not in
 the background. With a second Echo on adb (Wi-Fi), point every command and script at the new one:
 `export ANDROID_SERIAL=<serial from adb devices>`.
+
 Result: stock Fire OS, unregistered, no Wi-Fi, orange ring, and `adb shell` is root. If adb does not show up after a
 reboot, replug the power. Back to TWRP: `adb reboot recovery`, or hold Volume Up while plugging in.
 
@@ -289,6 +300,7 @@ ARGS=""                     # extra options, below
 | `-L` | leave the LED ring alone |
 | `-V` | leave the volume buttons alone |
 | `-z 0` | no Sendspin player |
+| `-a 0` | no arbitration with other Echos (UDP 28930) |
 | `-p <port>` | another port (the firewall only admits inbound TCP 16384–32767) |
 
 adb also works over Wi-Fi: `adb connect <echo-ip>:5555`. The cable is only needed for TWRP.
@@ -331,7 +343,14 @@ Open issues and measurements: [PLAN.md](PLAN.md).
 - **Egress**: Amazon's daemons may only reach local addresses (plus DNS to the servers DHCP hands out); `otad` and
   `ace_otad` never get out. hassmic itself may reach any address. Put the Echo on a network without internet as a second
   layer.
-- **Inbound**: TCP 16384–32767 only (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 updates).
+- **Inbound**: TCP 16384–32767 only (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 updates), UDP 16384–32767
+  (28930 arbitration between Echos).
+- **Arbitration between Echos**: an Echo takes the network key only from Home Assistant, over its encrypted API link,
+  as a call of its own action `esphome.<node>_arbitration_key`; a member hands it over by asking Home Assistant to run
+  that action, which needs "Allow the device to perform Home Assistant actions". So only devices you adopted into Home
+  Assistant and allowed to act take part; the key travels encrypted to the receiving Echo, so it is not readable in
+  Home Assistant's traces or logbook. Rounds are authenticated with the key and cannot be replayed. The keys are in
+  `state/arb_key` and `state/arbitration`.
 - **Updates**: only bundles signed with your `secrets/update.key` are installed.
 - **Bluetooth**: keys in `state/ble_bonds` (proxy) and `state/bt_keys` (speaker), both under `/data/local/hassmic/`.
 

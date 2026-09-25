@@ -25,11 +25,16 @@ struct proto {
     void (*mute_changed)(int muted);            /* may be NULL: effective mute (hardware latch or soft mute) changed */
     void (*print_mdns)(void);                   /* avahi service file on stdout */
     void (*bt_device)(const char *name, int on); /* may be NULL: announce a Bluetooth speaker connection (name may be "") */
+    /* may be NULL (then no wake word arbitration): have Home Assistant run "esphome.<node>_arbitration_key" (arb.h).
+     * -1: no client runs actions for us */
+    int  (*arb_send)(const char *node, const char *network, const char *key);
+    void (*arb_changed)(void);                  /* may be NULL: arbitration membership or peers changed */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
 extern pthread_mutex_t core_lock;               /* guards state, the client socket (writes) and everything marked "lock held" */
 extern const char *core_name;
+const char *core_node_name(void);               /* "Echo Dot" -> "echo-dot": the ESPHome device (host) name */
 extern int core_local_wake, core_port, core_sendspin_port;
 
 /* lock held */

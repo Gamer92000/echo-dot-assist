@@ -32,6 +32,7 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 
 ```sh
 .venv/bin/python tests/fake_ha_esphome.py     # ESPHome native API, as Home Assistant
+.venv/bin/python tests/fake_ha_arbitration.py # two Echos under one fake HA: wake word arbitration, join security
 .venv/bin/python tests/fake_ha.py [--qemu]    # Wyoming; --qemu uses the ARM build + stock Pryon model under qemu-arm
 .venv/bin/python tests/fake_ma_sendspin.py    # Sendspin, as Music Assistant
 tests/ota_push_test.sh                        # signed push-update path end to end
@@ -69,6 +70,10 @@ There is no single-test selector: run one unit test by building/running its line
   earcon streams mixed by the mixer); `audio_file.c` for PC builds. Swapped at link time in the Makefile.
 - **Wake word (`wake.h`)**: `wake_pryon.c` (stock `libpryon.so`, headers in `src/include/pryon_api.h`) or `wake_none.c`
   (host build). Also link-time swap.
+- **Wake word arbitration (`arb.c`, `arb.h`)**: when several Echos hear the wake word, only the best one answers
+  (stock's ESP, done on the LAN). UDP broadcast on 28930, shared network key; a member hands it to a newcomer only
+  through Home Assistant, as the newcomer's own ESPHome action `esphome.<node>_arbitration_key` (encrypted to its
+  X25519 key). ESPHome only; needs "Allow the device to perform Home Assistant actions".
 - **Music**: `sendspin.c` (Music Assistant Sendspin player over `ws.c`/`noise.c`/`net.c`/`hash.c`, decodes via
   `dr_flac`/`minimp3`/libopus). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
   loaded with dlopen, aptX/aptX HD via `freeaptx`) with AVRCP. Only one music source plays at a time (newest wins).
@@ -86,8 +91,9 @@ of push updates) and `main.sh satellite` (stops Alexa/updater/telemetry, keeps h
 stock behaviour. `scripts/device/` holds on-device helpers (`lockdown.sh` firewall, `alexa-off/on.sh`, `wifi-join.sh`).
 
 Firewall invariant: Amazon's daemons may only reach local addresses; hassmic itself may reach any address (it fetches
-TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get out. Inbound TCP is only admitted on
-16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 OTA) must stay in that range.
+TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get out. Inbound TCP and UDP are only admitted on
+16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 OTA, UDP 28930 arbitration)
+must stay in that range.
 
 `tools/` is PC-side reverse-engineering and firmware tooling (`payload_dump.py`, Thumb disassembly helpers,
 `davs-fetch.py` for extra wake word models).

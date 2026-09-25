@@ -15,6 +15,9 @@
  *                    player entity advertises, we stream it.  Same path for media_player.play_media.
  *   timers           finished timer rings (core_alarm)
  *   do not disturb   a switch; announcements are dropped while it is on
+ *   arbitration      "Join arbitration network" switch and "Arbitration peers"; the action "arbitration_key" (Home
+ *                    Assistant names it esphome.<node>_arbitration_key) through which other Echos hand over their
+ *                    network key, and the HomeassistantActionRequest with which this one hands over its own (arb.c)
  *   bluetooth proxy  LE scanning with raw advertisements, GATT connections to up to 3 devices at a time, pairing (ble.c)
  *   bluetooth speaker  a switch opens the pairing window (a2dp.c).  A phone connecting is announced by asking Home
  *                    Assistant to run assist_satellite.announce on us (HomeassistantActionRequest, what an ESPHome YAML
@@ -37,6 +40,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "a2dp.h"
+#include "arb.h"
 #include "ble.h"
 #include "core.h"
 #include "hash.h"
@@ -51,7 +55,7 @@
 enum {
     HELLO_REQ = 1, HELLO_RESP, CONNECT_REQ, CONNECT_RESP, DISCONNECT_REQ, DISCONNECT_RESP, PING_REQ, PING_RESP,
     DEVICE_INFO_REQ, DEVICE_INFO_RESP, LIST_ENTITIES_REQ, LIST_ENTITIES_DONE = 19, SUBSCRIBE_STATES = 20,
-    SUBSCRIBE_HA_ACTIONS = 34, HA_ACTION,
+    SUBSCRIBE_HA_ACTIONS = 34, HA_ACTION, LIST_SERVICE = 41, EXECUTE_SERVICE,
     LIST_SENSOR = 16, LIST_SWITCH = 17, LIST_TEXT_SENSOR = 18, SENSOR_STATE = 25, SWITCH_STATE = 26, TEXT_SENSOR_STATE = 27, SWITCH_COMMAND = 33, LIST_NUMBER = 49, NUMBER_STATE, NUMBER_COMMAND,
     LIST_SELECT = 52, SELECT_STATE, SELECT_COMMAND,
     LIST_MEDIA_PLAYER = 63, MEDIA_PLAYER_STATE, MEDIA_PLAYER_COMMAND,
@@ -72,7 +76,7 @@ enum { EV_ERROR = 0, EV_RUN_START, EV_RUN_END, EV_STT_START, EV_STT_END, EV_INTE
        EV_TTS_END, EV_WAKE_START, EV_WAKE_END, EV_VAD_START, EV_VAD_END, EV_TTS_STREAM_START = 98, EV_TTS_STREAM_END = 99, EV_INTENT_PROGRESS = 100 };
 enum { FEAT_VOICE = 1, FEAT_SPEAKER = 2, FEAT_API_AUDIO = 4, FEAT_TIMERS = 8, FEAT_ANNOUNCE = 16, FEAT_START_CONVERSATION = 32 };
 enum { KEY_NOISE = 2, KEY_GAIN, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SENDSPIN_TOKEN, KEY_SOC_TEMP, KEY_CPU_USAGE, KEY_BT_PAIRING,
-       KEY_BT_ANNOUNCE, KEY_DND, KEY_EQ_BASS, KEY_EQ_MID, KEY_EQ_TREBLE, KEY_BT_LANG };
+       KEY_BT_ANNOUNCE, KEY_DND, KEY_EQ_BASS, KEY_EQ_MID, KEY_EQ_TREBLE, KEY_BT_LANG, KEY_ARB_JOIN, KEY_ARB_PEERS, KEY_ARB_SERVICE };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -174,14 +178,7 @@ static void send_state(unsigned type, const struct pb *b)                       
 
 /* ---------------------------------------------------------------- identity */
 
-static const char *node_name(void)      /* "Echo Dot" -> "echo-dot": ESPHome device names are host names */
-{
-    static char n[64]; size_t j = 0;
-    for (const char *s = core_name; *s && j < sizeof n - 1; s++)
-        n[j++] = isalnum((unsigned char)*s) ? tolower((unsigned char)*s) : '-';
-    n[j] = 0;
-    return n;
-}
+static const char *node_name(void) { return core_node_name(); }     /* ESPHome device names are host names */
 
 static const char *mac(void)
 {
@@ -338,6 +335,8 @@ static void send_setting(int key)       /* lock held */
     case KEY_DND:   pb_uint(&b, 2, core_dnd(-1)); send_state(SWITCH_STATE, &b); break;
     case KEY_BT_LANG: if (ble_present()) { pb_str(&b, 2, bt_langs[bt_lang].name); send_state(SELECT_STATE, &b); } break;
     case KEY_EQ_BASS: case KEY_EQ_MID: case KEY_EQ_TREBLE: pb_float(&b, 2, core_eq(key - KEY_EQ_BASS)); send_state(NUMBER_STATE, &b); break;
+    case KEY_ARB_JOIN: if (arb_running()) { pb_uint(&b, 2, arb_join(-1)); send_state(SWITCH_STATE, &b); } break;
+    case KEY_ARB_PEERS: if (arb_running()) { pb_float(&b, 2, arb_peers()); send_state(SENSOR_STATE, &b); } break;
     }
 }
 
@@ -450,6 +449,18 @@ static void send_setting_entities(void)
       pb_str(&b, 3, "Bluetooth announcement language"); pb_str(&b, 5, "mdi:translate");
       for (int i = 0; i < BT_LANGS; i++) pb_str(&b, 6, bt_langs[i].name);
       pb_uint(&b, 8, 1); send_msg(LIST_SELECT, &b); }
+    if (arb_running()) {
+        { PB(b, 160); pb_str(&b, 1, "join_arbitration_network"); pb_fixed32(&b, 2, KEY_ARB_JOIN); pb_str(&b, 3, "Join arbitration network");
+          pb_str(&b, 5, "mdi:account-group"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
+        /* the action other Echos hand their network key through: Home Assistant registers it as
+         * esphome.<node>_arbitration_key, after the node name we report, whatever the device is called there */
+        { PB(b, 256); PB(a, 48); pb_str(&b, 1, "arbitration_key"); pb_fixed32(&b, 2, KEY_ARB_SERVICE);
+          pb_str(&a, 1, "network"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
+          a.n = 0; pb_str(&a, 1, "key"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
+          pb_str(&b, 5, "Used by other Echos (wake word arbitration), not by people"); send_msg(LIST_SERVICE, &b); }
+        { PB(b, 128); pb_str(&b, 1, "arbitration_peers"); pb_fixed32(&b, 2, KEY_ARB_PEERS); pb_str(&b, 3, "Arbitration peers");
+          pb_str(&b, 5, "mdi:access-point-network"); pb_uint(&b, 13, 2); send_msg(LIST_SENSOR, &b); }
+    }
     send_diag_entities();
 }
 
@@ -471,6 +482,7 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     else if (type == SWITCH_COMMAND && key == KEY_BT_ANNOUNCE) core_bt_announce(on);
     else if (type == SWITCH_COMMAND && key == KEY_DND) core_dnd(on);
     else if (type == SWITCH_COMMAND && key == KEY_BT_PAIRING) { a2dp_pair(on); return; }     /* its state follows through bt_changed */
+    else if (type == SWITCH_COMMAND && key == KEY_ARB_JOIN && arb_running()) { arb_join(on); send_setting(key); return; }   /* arb.c keeps it */
     else if (type == NUMBER_COMMAND && key >= KEY_EQ_BASS && key <= KEY_EQ_TREBLE) {           /* the mixer keeps it, not our file */
         core_set_eq(key - KEY_EQ_BASS, (int)lroundf(num)); send_setting(key); return;
     }
@@ -902,13 +914,14 @@ static void mute_changed(int muted) { (void)muted; send_setting(KEY_MUTE); setti
 
 static void on_event(const unsigned char *p, const unsigned char *end)
 {
-    struct pbf f, g; unsigned type = 0; char key[48], val[1024], text[512] = ""; int cont = 0, stream_now = 0;
+    struct pbf f, g; unsigned type = 0; char key[48], val[1024], text[512] = "", code[48] = ""; int cont = 0, stream_now = 0;
     while (pb_next(&p, end, &f)) {
         if (f.field == 1) type = f.v;
         else if (f.field == 2 && f.wire == 2) {
             const unsigned char *q = f.data; key[0] = val[0] = 0;
             while (pb_next(&q, f.data + f.len, &g)) { if (g.field == 1 && g.data) pbf_str(&g, key, sizeof key); else if (g.field == 2 && g.data) pbf_str(&g, val, sizeof val); }
             if (!strcmp(key, "text") || !strcmp(key, "message") || !strcmp(key, "code")) snprintf(text + strlen(text), sizeof text - strlen(text), "%s ", val);
+            if (!strcmp(key, "code")) snprintf(code, sizeof code, "%s", val);
             if (!strcmp(key, "continue_conversation") && !strcmp(val, "1")) cont = 1;
             if (!strcmp(key, "tts_start_streaming") && !strcmp(val, "1")) stream_now = 1;
             if (!strcmp(key, "url")) snprintf(tts_url, sizeof tts_url, "%s", val);
@@ -926,7 +939,12 @@ static void on_event(const unsigned char *p, const unsigned char *end)
         if (!tts_expected && tts_url[0]) { tts_expected = 1; core_mic_off(); media_start("", tts_url, 1, 0, 1); }
         break;
     case EV_RUN_END:    if (!tts_expected && core_state() != SPEAKING) core_pipeline_finish(); break;
-    case EV_ERROR:      fprintf(stderr, "pipeline error: %s\n", text); tts_expected = 0; core_error(); break;
+    case EV_ERROR:
+        tts_expected = 0;
+        /* Another satellite reported the same wake word first (Home Assistant takes the first per phrase in 2 s): not
+         * this Echo's turn, and nothing went wrong, so no error ring */
+        if (!strcmp(code, "duplicate_wake_up_detected")) { fprintf(stderr, "pipeline: another satellite answers\n"); core_pipeline_finish(); break; }
+        fprintf(stderr, "pipeline error: %s\n", text); core_error(); break;
     }
 }
 
@@ -1056,9 +1074,26 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         send_mp_state(); for (int k = KEY_NOISE; k <= KEY_WAKE_SOUND; k++) send_setting(k); send_setting(KEY_BT_PAIRING); send_setting(KEY_BT_ANNOUNCE); send_setting(KEY_DND);
         send_setting(KEY_BT_LANG);
         for (int k = KEY_EQ_BASS; k <= KEY_EQ_TREBLE; k++) send_setting(k);
+        for (int k = KEY_ARB_JOIN; k <= KEY_ARB_PEERS; k++) send_setting(k);
         send_token_state(); send_diag_states(); break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
     case SUBSCRIBE_HA_ACTIONS: if (c >= 0) clients[c].actions = 1; break;
+    case EXECUTE_SERVICE: {
+        /* only from Home Assistant itself: a client holding the device key (without one, anyone on the network could
+         * connect and hand this Echo a network) */
+        unsigned key = 0; int argn = 0; char args[2][256] = { "", "" }; struct pbf g;
+        while (pb_next(&p, end, &f)) {
+            if (f.field == 1) key = (unsigned)f.v;
+            else if (f.field == 2 && f.data && argn < 2) {
+                const unsigned char *q = f.data;
+                while (pb_next(&q, f.data + f.len, &g)) if (g.field == 4 && g.data) pbf_str(&g, args[argn], sizeof args[argn]);
+                argn++;
+            }
+        }
+        if (key != KEY_ARB_SERVICE || !arb_running()) break;
+        if (c < 0 || !clients[c].keyed) { fprintf(stderr, "arbitration: key refused, it did not come over the keyed connection\n"); break; }
+        arb_key(args[0], args[1]);
+    } break;
     case SUBSCRIBE_VA: {
         int sub = 0;
         while (pb_next(&p, end, &f)) if (f.field == 1) sub = f.v != 0;
@@ -1218,4 +1253,19 @@ done:
     fprintf(stderr, "client disconnected (%d left)\n", n);
 }
 
-const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, played, volume_changed, mute_changed, print_mdns, bt_device };
+/* lock held: another Echo's "arbitration_key" action, run by Home Assistant (needs "Allow the device to perform Home
+ * Assistant actions" on this one, or Home Assistant raises a repair instead) */
+static int arb_send(const char *node, const char *network, const char *key)
+{
+    PB(b, 512); char svc[96]; int n = 0;
+    snprintf(svc, sizeof svc, "esphome.%s_arbitration_key", node);
+    for (char *c = svc; *c; c++) if (*c == '-') *c = '_';
+    pb_str(&b, 1, svc); pb_map(&b, 2, "network", network); pb_map(&b, 2, "key", key);
+    for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].actions) { send_to(clients[i].fd, HA_ACTION, &b); n++; }
+    return n ? 0 : -1;
+}
+
+static void arb_changed(void) { for (int k = KEY_ARB_JOIN; k <= KEY_ARB_PEERS; k++) send_setting(k); }
+
+const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, played, volume_changed, mute_changed, print_mdns, bt_device,
+                                     arb_send, arb_changed };

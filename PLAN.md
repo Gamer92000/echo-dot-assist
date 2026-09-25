@@ -457,11 +457,39 @@ Run in this order. Each step says what it proves.
       has no custom groups; sliders, dB, no entity category), ESPHome only. Listening test with pink noise on the device, 3.5 mm
       line-out to external speakers: +6/-6 and -6/+6 audible on both the Music and the TTS stream. Set from an API client on the
       device: mixer reads back the values. Not done: survives a reboot (only by the file), the stock `equalizer-change` ring animation
+- [~] Wake word arbitration between Echos (2026-09-25), stock's ESP ("Echo Spatial Perception", decided in Amazon's cloud)
+      on the LAN, `arb.c`. Home Assistant alone only has first-come: `assist_pipeline/run.py` `accept_wake_word` drops a
+      second wake-up with the same phrase within `WAKE_WORD_COOLDOWN` = 2 s (we send `wake_word_phrase` "Alexa") with error
+      `duplicate_wake_up_detected`; that error is now a quiet finish, not the error ring. Round: score = SNR of the keyword
+      (Pryon `beginSampleIndex`..`endSampleIndex`, same index space as `wake_feed`) against 0.5 s ending 0.1 s before it, on
+      a 4 s ring of the micAsr stream; claim broadcast twice, decision 200 ms later, lookback 1 s, prio 2 while not idle or
+      ringing, winner broadcasts "answers" for late detections; the window's audio is streamed from the ring. No peers: no
+      wait. Network: shared key, MAC + counter (reserved in blocks of 4096 in `state/arbitration`). Joining, first way
+      (entity lookup: HA showed each Echo's public key on an "Arbitration ID" text sensor, peers read it with
+      SubscribeHomeAssistantStateResponse `once`) dropped the same day: HA derives entity ids from the device name the
+      user gave it (the installed Echo's was `sensor.julian_echo_dot_arbitration_id`), and a diagnostic entity can be
+      disabled. Now: a member hands K to an Echo outside its network (or in a younger one) as a HomeassistantActionRequest
+      for `esphome.<node>_arbitration_key`, the receiver's own user action (ListEntitiesServicesResponse; HA names it
+      `build_service_name`: `device_info.name` with `-`→`_`, i.e. the node name the Echo reports, not the HA device name),
+      which HA delivers as ExecuteServiceRequest over the receiver's keyed link only (accepted only from a client with
+      the device key). Sender needs "Allow the device to perform Home Assistant actions" (else HA's
+      `service_calls_not_allowed` repair; checked in HA `dev`). K sealed with XChaCha20-Poly1305 under BLAKE2b(X25519(sender,
+      receiver's beacon key), both keys, network id), so HA's traces and logbook never hold it readable. No
+      network after 5 s: create; two networks merge into the lower id. UDP 28930 broadcast (stock `firewall.sh` admits UDP
+      16384-32767 inbound). Under qemu with the stock model and `testdata/alexa_espeak.raw`: detection 2400 samples (150 ms)
+      after `end`, keyword -22 dBFS, score 68 dB after silence, 2 dB right behind other speech.
+      Host test (`tests/fake_ha_arbitration.py`, fake HA routing actions as its esphome manager does; 3/3 runs): merge
+      through HA, K not readable in what HA carried, better score answers alone, prio, different keywords both answer,
+      duplicate error quiet, forged beacons (unknown name, a real Echo's name with another key, fake older network) and a
+      forged claim change nothing, leave wipes the key, create after 5 s, no key without the actions option, join once allowed.
+      Not done: on the device with two Echos (score separation at distance, whether the micAsr stream's gain control
+      flattens it, claim delay over Wi-Fi with power save)
 - [x] Wake word select (2026-09-25): VoiceAssistantConfigurationResponse had "alexa" hard-coded since the ESPHome API
       went in (and VA_SET_CONFIG was ignored), so HA never showed the model `-m` loaded; the request phrase was "Alexa"
       too. Now: stock ALEXA + every `<models>/<keyword>-<lang>/pryon.manifest` offered (name from the folder), HA's pick in
       `state/wake_word`, loaded live in the capture thread (`wake_close` + `wake_open`; under qemu with the stock library
       and echo-de: ECHO detected right after the switch, sample index continuous), phrase = the active name.
+      Arbitration compares only claims with the same keyword (BLAKE2b of the lower-case name in the claim).
 - [~] micAsr stall (2026-09-25, installed Echo): after hours, every MixerGetBufRec returned NULL, logcat
       `Mixer_DataTrans:InCapture-GetReadBuff:reason=EmptyQueueHungUp` for our stream (plus Minerva metric errors: logd at
       23 % CPU), wake word and capture dump dead, buttons fine; restarting hassmic fixed it (mixer itself untouched,

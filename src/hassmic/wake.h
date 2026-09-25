@@ -4,7 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-typedef void (*wake_cb)(const char *keyword);
+/* begin, end: where the keyword lies, counted in samples passed to wake_feed() since wake_open() */
+typedef void (*wake_cb)(const char *keyword, uint64_t begin, uint64_t end);
 
 int  wake_open(const char *manifest, wake_cb cb);
 void wake_feed(const int16_t *samples, size_t count);
