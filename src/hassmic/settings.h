@@ -25,6 +25,7 @@ extern const char *const denoise_names[4];      /* "Off", "Low", "Medium", "High
 
 void settings_load(void);               /* state/config, or the older state/settings once; then applied.  Once only */
 void settings_save(void);
+void settings_preset(void);             /* state/preset (scripts/setup.sh --preset): applied once at start, then .applied */
 int  settings_mic_level(void);
 int  settings_on(const char *name);     /* a bool setting's value; 0 if this Echo has no such setting */
 const struct bt_lang *settings_bt_lang(void);

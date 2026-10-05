@@ -1358,7 +1358,7 @@ int main(int argc, char **argv)
     if (core_sendspin_port) sendspin_start(core_sendspin_port);
     if (use_bt) a2dp_start(NULL);
     if (ota_port) ota_start(ota_port);
-    pthread_mutex_lock(&core_lock); settings_load(); pthread_mutex_unlock(&core_lock);    /* whatever the protocol */
+    pthread_mutex_lock(&core_lock); settings_load(); settings_preset(); pthread_mutex_unlock(&core_lock);    /* whatever the protocol */
     static const struct web_hooks web_hooks = { web_attention, web_approved };
     if (web_port && web_start(web_port, &web_hooks)) fprintf(stderr, "web: not available\n");
 

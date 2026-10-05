@@ -510,7 +510,10 @@ Run in this order. Each step says what it proves.
       handoff entity), Echos card (heard ones + added by address, `host:port` too; a login each with its own button,
       settings that differ, copy one or all). Checked in jsdom with two host builds (log in to B from A's page, 1
       setting differs, copied, B's state/config has it; arbitration card shows B in a second network) and in
-      fake_ha_arbitration / fake_web (status JSON, CORS preflight). (4) `scripts/setup.sh` presets from an export. Not done: on the device (the ring
+      fake_ha_arbitration / fake_web (status JSON, CORS preflight). (4) done: presets: `scripts/setup.sh --preset <export>` or asked
+      at the install step, checked as name=value lines, pushed to `state/preset` (daemon user's, 600), hassmic
+      restarted; it applies the file once at start like an import (unknown lines logged) and keeps it as
+      `preset.applied`; fake_web checks it, `setup.sh --dry-run --preset` walks it. Not done: on the device (the ring
       animation, the press)
 - [~] Wake word arbitration between Echos (2026-09-25), stock's ESP ("Echo Spatial Perception", decided in Amazon's cloud)
       on the LAN, `arb.c`. Home Assistant alone only has first-come: `assist_pipeline/run.py` `accept_wake_word` drops a

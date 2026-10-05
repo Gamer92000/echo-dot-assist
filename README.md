@@ -207,6 +207,7 @@ The guided way, for every supported model:
 
 ```sh
 scripts/setup.sh              # picks the Echo on adb, or asks which one; then runs every step
+scripts/setup.sh --preset hassmic-settings.conf   # the same, starting with the settings exported from another Echo
 ```
 
 A terminal screen with a progress bar and the list of steps. It runs everything on its own and only stops when you
@@ -276,7 +277,8 @@ Echos in it, and those outside it with the reason (no key yet, a second network 
 Echo this one hears (and any you add by address); log in to each once with its own action button, and the page shows
 which settings differ from this Echo's and copies them over, to one or to all. "Export" saves the settings as
 `hassmic-settings.conf` (name=value lines, without the Echo's name, keys and pairings); "Import" applies such a file,
-to this Echo or another. Works with Wyoming too.
+to this Echo or another, or as a preset for the next install (`scripts/setup.sh --preset <file>`; without it the
+install step asks). Works with Wyoming too.
 
 ### hassmic.conf
 

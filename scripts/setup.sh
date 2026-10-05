@@ -2,9 +2,11 @@
 # Guided installation.  Picks the Echo model, then runs that model's steps (devices/<codename>/setup.sh) one after the
 # other and only stops where the user has to do something.  Progress is kept in build/<codename>/setup.done, so it can
 # be stopped at any point (Ctrl-C) and started again where it left off; command output goes to build/<codename>/setup.log.
-#   scripts/setup.sh [codename] [--dry-run] [--restart]
+#   scripts/setup.sh [codename] [--dry-run] [--restart] [--preset FILE]
 #     --dry-run   go through all steps and show the commands, run none of them (file checks still happen)
 #     --restart   forget the progress, e.g. for the next Echo of the same model
+#     --preset F  settings to start with: an export from another Echo's settings page (hassmic-settings.conf);
+#                 without it, the install step asks (Enter for none)
 # Only the Echo on USB is worked on, whatever else is on adb over Wi-Fi.  Keep the cable in to the end: the installed
 # Echo closes adb over Wi-Fi at its first boot.
 # The written instructions are the same steps: devices/<codename>/README.md.
@@ -14,11 +16,14 @@ cd "$(dirname "$0")/.."
 . scripts/lib/artifacts.sh
 . scripts/lib/build.sh
 
-DRY= RESTART=
-for a in "$@"; do
+DRY= RESTART= PRESET=
+while [ $# -gt 0 ]; do
+    a=$1; shift
     case $a in
     --dry-run) DRY=1;;
     --restart) RESTART=1;;
+    --preset) PRESET=$1; shift; [ -f "$PRESET" ] || die "--preset: no file $PRESET";;
+    --preset=*) PRESET=${a#--preset=}; [ -f "$PRESET" ] || die "--preset: no file $PRESET";;
     -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     -*) die "unknown option $a (--help)";;
     *) DEVICE=$a;;

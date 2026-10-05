@@ -31,6 +31,7 @@ async def ha_connect():
 async def main():
     state = tempfile.mkdtemp()
     with open(os.path.join(state, "settings"), "w") as f: f.write("2 -22 1 0 0 1 0 de 2 1 -1 1 0 5 0\n")   # the file before names
+    with open(os.path.join(state, "preset"), "w") as f: f.write("# from another Echo's page\ndo_not_disturb=on\nno_such_thing=1\n")   # scripts/setup.sh --preset
     env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(state, "play.raw"),
                HASSMIC_MDNS_FILE=os.path.join(state, "none"), HASSMIC_ARB_ADDR="127.255.255.255", HASSMIC_MODELS=os.path.join(state, "models"),
                HASSMIC_FAKE_WHISPER="1", HASSMIC_ADB_OPEN=os.path.join(state, "adb-open.root"))
@@ -45,6 +46,9 @@ async def main():
         check(c0.get("noise_reduction") == "medium" and c0.get("mic_level") == "-22" and c0.get("sound_detection") == "on",
               f"the settings file from before names moved to state/config: {c0}")
 
+        check(c0.get("do_not_disturb") == "on" and os.path.exists(os.path.join(state, "preset.applied")) and not os.path.exists(os.path.join(state, "preset"))
+              and "preset applied, 1 setting; not taken:" in open(log).read() and "no_such_thing" in open(log).read(),
+              "a preset (setup.sh --preset): applied once at start, the unknown line reported, the file kept as preset.applied")
         st, h, body = rq("GET", "/")
         check(st == 200 and h.get("Content-Encoding") == "gzip" and b"hassmic settings" in gzip.decompress(body), "the page, gzip'd")
         st, h, body = rq("GET", "/crypto.js")

@@ -255,6 +255,23 @@ void settings_load(void)
     core_mic_level(mic_level);
 }
 
+/* A preset (an export from another Echo's settings page) that scripts/setup.sh left in state/preset: applied once, at
+ * start, as an import would be, then kept as state/preset.applied */
+void settings_preset(void)
+{
+    char p[300], done[310], err[2048]; FILE *f; long n; char *t;
+    path(p, sizeof p, "preset"); snprintf(done, sizeof done, "%s.applied", p);
+    if (!(f = fopen(p, "r"))) return;
+    fseek(f, 0, SEEK_END); n = ftell(f); rewind(f);
+    if (n < 0 || n > 65536 || !(t = calloc(1, (size_t)n + 1))) { fclose(f); fprintf(stderr, "settings: preset %s unreadable, ignored\n", p); return; }
+    if (fread(t, 1, (size_t)n, f) != (size_t)n) n = 0;
+    fclose(f);
+    int k = settings_apply_text(t, err, sizeof err);
+    fprintf(stderr, "settings: preset applied, %d setting%s%s%s", k, k == 1 ? "" : "s", err[0] ? "; not taken:\n" : "\n", err);
+    free(t);
+    if (rename(p, done)) remove(p);                     /* once only, whatever happened */
+}
+
 int settings_mic_level(void) { return mic_level; }
 int settings_on(const char *name) { const struct setting *s = settings_find(name); return s && s->type == S_BOOL && settings_get(s); }
 const struct bt_lang *settings_bt_lang(void) { return &bt_langs[bt_lang]; }

@@ -15,6 +15,8 @@ What changed for people using the Echo, newest first. Details and measurements a
 - **The settings page shows the wake word arbitration network**: which Echos are in it, which are not and why (no key
   yet, or a second network beside this one), with what to do about it. It also lists the other Echos it hears: log in
   to each once, and it tells which settings differ from this Echo's and copies them over, to one Echo or to all.
+- **Set up the next Echo with the settings of the last one**: `scripts/setup.sh --preset hassmic-settings.conf` (a
+  file exported on the settings page), or give the file when the install step asks. The Echo starts with them.
 
 - **A settings page on every Echo**, at `http://<echo-ip>:28931/`. Log in once per browser with a press of the Echo's
   action button. It shows every setting, warns about what does not work and why (no Home Assistant link, models

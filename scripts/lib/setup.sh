@@ -376,13 +376,31 @@ wait_adb() {
 # ashell CMD: adb shell, output without the carriage returns
 ashell() { adb shell "$@" | tr -d '\r'; }
 
+# preset_ok FILE: an export of the settings page (name=value lines, # comments), nothing else
+preset_ok() { ! grep -v -e '^[[:space:]]*$' -e '^#' "$1" | grep -qv '^[a-z_][a-z0-9_]*=[^[:cntrl:]]*$'; }
+
+# push_preset FILE: hand it to hassmic (state/preset, its own user's), which applies it once when it starts; restart
+# it (main.sh starts it again)
+PRESET_ON_ECHO=/data/local/hassmic/state/preset
+push_preset() {
+    adb push "$1" $PRESET_ON_ECHO && adb shell "chown $DAEMON_USER $PRESET_ON_ECHO; chmod 600 $PRESET_ON_ECHO; kill \$(pidof hassmic)"
+}
+
 # install_satellite: the last step of every model.  Asks the name, installs (scripts/install-system.sh), waits until the
-# installed satellite runs.  Name and address go to $OUT/setup.env for the final screen.  There is no trial run before
+# installed satellite runs.  Settings to start with (--preset, or asked): an export of another Echo's settings page.  Name and address go to $OUT/setup.env for the final screen.  There is no trial run before
 # it: run.sh does not read hassmic.conf, so a trial announced itself under the default name, and Home Assistant kept that
 # device next to the installed one.
 install_satellite() {
     local name ip tok
     prompt name "Name for this Echo in Home Assistant" "$DEFAULT_NAME"
+    if [ -z "$PRESET" ]; then
+        prompt PRESET "Settings to start with: a file exported on another Echo's settings page (Enter for none)" ""
+        PRESET=${PRESET/#\~/$HOME}
+    fi
+    while [ -n "$PRESET" ] && ! { [ -f "$PRESET" ] && preset_ok "$PRESET"; }; do
+        warn "$PRESET: not a settings export (name=value lines)"
+        prompt PRESET "Settings file (Enter for none)" ""
+    done
     wait_adb device || return 1
     task "Installing (the Echo reboots)" scripts/install-system.sh "$name" || return 1
     [ -n "$DRY" ] || sleep 10
@@ -391,6 +409,15 @@ install_satellite() {
     waitfor "Waiting for the satellite to start|Satellite started" '[ -n "$(ashell pidof hassmic)" ]' "" 60 180 &&
         task "Checking it stays up" sh -c 'sleep 10; adb shell pidof hassmic | grep -q .' ||
         { [ -n "$DRY" ] || { info "end of its log:"; ashell tail -8 /data/local/hassmic/boot.log | sed 's/^/    /'; }; return 1; }
+    if [ -n "$PRESET" ]; then
+        if task "Handing over the settings from $(basename "$PRESET")" push_preset "$PRESET" &&
+           waitfor "Waiting for the satellite to take them|Settings taken" \
+               '[ -n "$(ashell pidof hassmic)" ] && [ -n "$(ashell ls $PRESET_ON_ECHO.applied 2>/dev/null)" ]' "" 30 90; then
+            [ -n "$DRY" ] || info "$(ashell "grep 'settings: preset applied' /data/local/hassmic/boot.log" | tail -1)"
+        else
+            warn "the settings were not taken; set them on the settings page"
+        fi
+    fi
     [ -n "$DRY" ] && return 0
     ip=$(ashell ifconfig $WLAN | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p')     # toybox ifconfig; no ip on the Echo
     # hassmic logs its Sendspin pairing token at every start
@@ -407,11 +434,9 @@ done_screen() {
         "Settings → Devices & services → discovered ESPHome \"$SAT_NAME\" → Add" \
         "${DIM}(not listed? Add ESPHome by hand: ${SAT_IP:-its IP}, port 26053, no encryption key)$N" \
         "Then pick an Assist pipeline (and the wake word) in its settings."
-    # wake word arbitration hands its network key over as an ESPHome action: without the permission a second Echo
-    # never joins, and both answer
-    tell "Allow it to perform Home Assistant actions" \
-        "ESPHome → \"$SAT_NAME\" → Configure → \"Allow the device to perform Home Assistant actions\"" \
-        "${DIM}With several Echos, only the one that heard the wake word best answers; this is how they agree.$N"
+    tell "Its settings page" \
+        "http://${SAT_IP:-<its IP>}:28931/ (log in with a press of the action button)" \
+        "${DIM}Features, settings Home Assistant does not show, the other Echos; export the settings for the next Echo.$N"
     [ -n "$SAT_TOKEN" ] && tell "Music Assistant (optional)" \
         "It finds the Echo by itself; to play on it, pair it with this token:" \
         "$B$SAT_TOKEN$N" \

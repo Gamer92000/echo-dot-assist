@@ -166,7 +166,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   Requests signed (BLAKE2b-128 keyed with K over method, path, counter, body; K from X25519), counter per browser.
   Never send secrets: it is plain HTTP. Arbitration card from `arb_status_json` (members with name and IP from their
   signed beacons, others: in no network / younger / older); other Echos' pages are called cross-origin (CORS `*`,
-  the signature counts), each approved once with its own button; "make like this Echo" posts this one's export. `web/crypto.js` (X25519, BLAKE2b; no `crypto.subtle` on plain HTTP) is checked
+  the signature counts), each approved once with its own button; "make like this Echo" posts this one's export.
+  Presets: `scripts/setup.sh --preset <export>` (or asked in `install_satellite`) pushes it to `state/preset`; hassmic
+  applies it once at start (`settings_preset`, as an import) and renames it `preset.applied`. `web/crypto.js` (X25519, BLAKE2b; no `crypto.subtle` on plain HTTP) is checked
   against Python by `tests/unit/web_crypto_test.py` (in `make unit`, needs node).
 - **adb over Wi-Fi** (`adbwifi.c`): the settings page only writes a request for root's firewall watcher, as `ota.c` does
   for updates; opening needs an approved browser plus a press of the action button (`web.c`), or (`ota.c`, `HMOTA-ADB1`) a challenge signed with the update key.
