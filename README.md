@@ -72,7 +72,7 @@ Details:
   word: one on "Echo" and one on "Alexa" each answer their own); the others stay silent (no
   sound, no light). The Echos settle it among themselves on the local network in 0.2 s, by how clearly the word stood
   out of the room's noise; an Echo that is in a conversation or ringing keeps the next wake word. With only one Echo
-  there is no delay. They find each other by themselves ("Join arbitration network", on by default); the shared key
+  there is no delay. They find each other by themselves ("Wake word arbitration" on the [settings page](#settings-page), on by default); the shared key
   travels through your Home Assistant, so nobody else on the network can join or silence them. Nothing to set up: each
   Echo shows a key on its diagnostic entity "Arbitration handoff" (leave it enabled), and the Echos read each other's
   through Home Assistant. That works while the Echo's entities in Home Assistant carry the name of its `NAME` (so not if
@@ -89,7 +89,8 @@ Details:
 - **Music**: one source at a time, the newest wins. A phone starting over Bluetooth pauses Music Assistant (the whole
   group), Music Assistant starting on the Echo pauses the phone. The voice assistant ducks both.
 - **Playing on a Bluetooth speaker**<a id="bluetooth-speaker-output"></a>: everything the Echo plays (replies, timers,
-  its sounds, music) can come out of a Bluetooth speaker instead of its own, as with stock. Put the speaker in pairing
+  its sounds, music) can come out of a Bluetooth speaker instead of its own, as with stock. Switch on "Play on a
+  Bluetooth speaker" on the [settings page](#settings-page) (its entities then appear in Home Assistant), put the speaker in pairing
   mode near the Echo and switch on "Bluetooth speaker search": within a minute the Echo pairs with the strongest one it
   hears (speakers, headphones, and PCs that offer to play audio) and plays on it. You cannot pick one from a list: Home
   Assistant reads an ESPHome select's choices only when it connects, so keep only the speaker you want in pairing mode.
@@ -107,20 +108,24 @@ Details:
   - SBC only (every speaker has it), one speaker at a time. ESPHome only for setting it up.
 - **Bluetooth**: the proxy works like an ESPHome `bluetooth_proxy` with `active: true`, up to 3 connections, "Just Works"
   pairing only. While a phone plays, the proxy stops scanning: the radio cannot do both without the music stuttering.
-- **Settings in Home Assistant**: "Mic level" (how loud speech reaches the voice assistant, -35 to -15 dBFS, default
+- **In Home Assistant, always**: mute switch, "Do not disturb" switch (drops announcements, purple pulse when switched
+  on), "Wake sound" switch (covers all local sounds), equalizer (bass, mid, treble, −6 to +6 dB, Amazon's own, applied
+  to everything the Echo plays), "LED auto brightness" switch and "LED brightness" slider (the ring dims with the room as
+  on a stock Echo, Amazon's own logic, on by default; setting a level holds it there and switches the automatic off),
+  "Illuminance" (the Echo's light sensor in lux, as Amazon reads it, for automations), the firmware update entity, and
+  the "Sendspin pairing token" (diagnostic, disabled by default).
+- **Features**, switched on the [settings page](#settings-page): while one is on, its entities are in Home Assistant;
+  off, they are gone (Home Assistant reconnects for a moment when one is switched). Wake word arbitration (on by
+  default: "Arbitration peers"), sound detection ("Sound"), whisper detection ("Last request whispered"), Wi-Fi motion
+  (motion sensor, sensitivity), Bluetooth audio from phones ("Bluetooth pairing" switch, blue chaser on the ring while it
+  is on), playing on a Bluetooth speaker ("Bluetooth speaker search", "Play on Bluetooth speaker", "Bluetooth speaker"
+  state and "Bluetooth speaker delay", see [Playing on a Bluetooth speaker](#bluetooth-speaker-output)).
+- **On the settings page only**: "Mic level" (how loud speech reaches the voice assistant, -35 to -15 dBFS, default
   -26; the Echo adjusts its gain to it), "Noise reduction" (off by default; low, medium, high: RNNoise on what the voice
-  assistant gets takes the background down by up to 6, 9 or 12 dB), mute switch, "Do not disturb"
-  switch (drops announcements, purple pulse when switched on), "Wake sound" switch (covers all local sounds),
-  "Bluetooth pairing" switch (blue chaser on the ring while it is on), "Bluetooth announcements" switch and their language,
-  "Bluetooth speaker search" and "Play on Bluetooth speaker" switches, "Bluetooth speaker" state and "Bluetooth speaker
-  delay" (see [Playing on a Bluetooth speaker](#bluetooth-speaker-output)), "Join arbitration network" switch, "Music Assistant without pairing" switch (off by default:
-  only Sendspin servers paired with the token may play), equalizer (bass, mid, treble, −6 to +6 dB, Amazon's own,
-  applied to everything the Echo plays), "Debug access (adb over Wi-Fi)" switch (see [Configuration](#configuration)).
-  "LED auto brightness" switch and "LED brightness" slider: the ring dims with the room as on a stock Echo (Amazon's
-  own logic, on by default); setting a level holds it there and switches the automatic off. "Illuminance": the Echo's
-  light sensor in lux, as Amazon reads it, for automations.
-  Diagnostics, off by default: SoC temperature, CPU usage.
-- **Sound detection** (optional, off by default)<a id="sound-detection"></a>: the "Sound detection" switch runs Amazon's
+  assistant gets takes the background down by up to 6, 9 or 12 dB), Bluetooth announcements and their language, online
+  updates channel, "Music Assistant without pairing" (off by default: only Sendspin servers paired with the token may
+  play), debug access (adb over Wi-Fi), SoC temperature and CPU usage.
+- **Sound detection** (optional, off by default)<a id="sound-detection"></a>: "Sound detection" on the settings page runs Amazon's
   own Alexa Guard model on the Echo, beside the wake word, and the "Sound" event entity reports what it heard:
   `smoke_or_co_alarm`, `glass_break`, `dog_bark`, `baby_cry`, `snoring`, `cough`, `water`, `beeping_appliance`. Use it
   in automations ("When Sound fires with smoke_or_co_alarm"). Please read before relying on it:
@@ -145,7 +150,7 @@ Details:
   answer the same way. It uses Amazon's own whisper detector on the Echo, with a model that only Amazon hands out:
   install it from a PC with `scripts/artifacts.sh` ("Other artifacts" → "Whisper detection"). It needs the Echo
   registered to an Amazon account for a few minutes (the script walks you through it and undoes it), as for other
-  wake words. Over Wi-Fi, first turn on the Echo's "Debug access (adb over Wi-Fi)" switch in Home Assistant, then run
+  wake words. Over Wi-Fi, first open debug access on the Echo's [settings page](#settings-page), then run
   `scripts/artifacts.sh <echo-ip>`. The model stays through updates; without it there is no sensor.
   - The sensor is set when you stop speaking, before speech to text has finished, so the agent's prompt template can
     read it. For example, in the LLM conversation agent's instructions (the entity id has your Echo's name in it):
@@ -162,8 +167,8 @@ Details:
     pipeline took for a command is scored.
   - It all happens on the Echo, during your request only. ESPHome only, not with Wyoming. Background:
     [docs/re-whisper.md](docs/re-whisper.md).
-- **Wi-Fi motion** (**experimental**, off by default)<a id="wifi-motion"></a>: "Wi-Fi motion detection (experimental)"
-  turns the Echo into a motion sensor without any extra hardware. Someone walking between the Echo and your Wi-Fi router
+- **Wi-Fi motion** (**experimental**, off by default)<a id="wifi-motion"></a>: "Wi-Fi motion (experimental)" on the
+  settings page turns the Echo into a motion sensor without any extra hardware. Someone walking between the Echo and your Wi-Fi router
   changes how strongly the Echo receives the router, and "Wi-Fi motion (experimental)" (a motion binary sensor) goes on
   while that happens and off 30 s after it stops, like a PIR sensor. "Wi-Fi motion sensitivity (experimental)", 1 to 10
   (default 5), sets how much change counts. It is a first version, tried in one flat for a few minutes and one night,
@@ -225,7 +230,8 @@ on it, `PREBUILT=0` to always build.
 
 ### From Home Assistant (online updates)
 
-Off by default. Pick a channel in the Echo's "Online updates" select:
+Off by default. Pick a channel in "Online updates" on the Echo's [settings page](#settings-page); the firmware
+update entity in Home Assistant then shows what is new and installs it:
 
 - `release`: releases only (built from the `release` branch);
 - `beta`: every build of `main`, plus every release;
@@ -296,9 +302,8 @@ ARGS=""                     # extra options, below
 **adb over Wi-Fi is closed.** adb on an unlocked Echo is a root shell that asks for no key, so an open port 5555
 would give it to everyone on the network. Over USB adb always works. Over Wi-Fi:
 
-- turn on **Debug access (adb over Wi-Fi)** in Home Assistant (the Echo's device page, Configuration), then
-  `adb connect <echo-ip>:5555`. It closes by itself after 30 minutes, when you turn the switch off, and at every
-  reboot. The switch only works once Home Assistant has set the encryption key (it does so when you add the Echo).
+- open **Debug access** on the Echo's [settings page](#settings-page) and press the action button to confirm, then
+  `adb connect <echo-ip>:5555`. It closes by itself after 30 minutes, when you close it there, and at every reboot.
 - or run `scripts/adb-wifi.sh <echo-ip>` on the PC you installed from: the same 30 minutes, proven with the key that
   signs your updates (`secrets/update.key`) instead of Home Assistant. This is the way in when Home Assistant cannot
   be: the Echo is not adopted yet, has lost its key, runs `PROTO=wyoming`, or Home Assistant is down. It needs hassmic
@@ -311,7 +316,7 @@ lost, only USB is left.
 
 ## Troubleshooting
 
-Log: `adb shell tail -30 /data/local/hassmic/boot.log` (over USB, or over Wi-Fi after the "Debug access" switch or
+Log: `adb shell tail -30 /data/local/hassmic/boot.log` (over USB, or over Wi-Fi after opening debug access on the settings page or
 `scripts/adb-wifi.sh <echo-ip>`).
 
 **Wake word and button do nothing.** Most likely no connection to Home Assistant; the Echo does not signal that (known
@@ -356,8 +361,8 @@ Open issues and measurements: [PLAN.md](PLAN.md).
   that Echo share (X25519), with a counter against replays. Someone who can change traffic on your network (not only
   read it) could change the page itself, as with any plain HTTP page.
 - **adb**: a root shell without authentication (the unlock turns adbd's key check off). Over Wi-Fi it is closed: adbd
-  runs without its network listener and the firewall drops port 5555. Opened only by the "Debug access" switch (30
-  minutes; taken only over the encrypted connection with Home Assistant's key), by `scripts/adb-wifi.sh` (30 minutes;
+  runs without its network listener and the firewall drops port 5555. Opened only from the settings page (30
+  minutes; an approved browser, and a press of the action button for this one request), by `scripts/adb-wifi.sh` (30 minutes;
   a fresh challenge signed with your update key, so a recorded exchange does not work twice) or by `ADB_WIFI=1` in
   `hassmic.conf`; while it is open, anyone on the network has root. USB always works: physical access is root access anyway.
   Without `hassmic.conf` (stock behaviour, or before the install) it is open, as stock leaves it.
@@ -371,7 +376,7 @@ Open issues and measurements: [PLAN.md](PLAN.md).
   traces or logbook. Rounds are authenticated with the key and cannot be replayed. The keys are in
   `state/arb_key` and `state/arbitration`.
 - **Updates**: only bundles signed with your `secrets/update.key` (pushed from your PC) or with the project's release key
-  (`keys/release.pub`; downloaded by hassmic itself, only once "Online updates" is switched on) are installed. Root
+  (`keys/release.pub`; downloaded by hassmic itself, only once a channel is picked under "Online updates") are installed. Root
   checks the signature with the tool and keys from the system partition or the installed copy before anything is
   unpacked. Your key also opens adb over Wi-Fi; the release key does not.
 - **Bluetooth**: keys in `state/ble_bonds` (proxy) and `state/bt_keys` (speaker), both under `/data/local/hassmic/`.

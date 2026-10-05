@@ -39,7 +39,7 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ha.py [--qemu]    # Wyoming; --qemu uses the ARM build + stock Pryon model under qemu-arm
 .venv/bin/python tests/fake_ma_sendspin.py    # Sendspin, as Music Assistant
 .venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step
-.venv/bin/python tests/fake_ha_update.py      # online updates: HA select + update entity, fake GitHub, root's installer
+.venv/bin/python tests/fake_ha_update.py      # online updates: page channel + HA update entity, fake GitHub, root's installer
 tests/ota_push_test.sh                        # signed push-update path end to end
 tests/otatool_test.sh                         # scripts/otatool.py against the C otatool: same keys, signatures, bundles
 ```
@@ -61,7 +61,7 @@ There is no single-test selector: run one unit test by building/running its line
 ## Device workflow
 
 - adb shell is root, without authentication. Over Wi-Fi it is closed on an installed Echo (`lockdown.sh` `adb_gate`):
-  opened for 30 min by the HA switch "Debug access (adb over Wi-Fi)" (hassmic writes `state/adb-request`, the firewall
+  opened for 30 min from the settings page (an approved browser plus a press of the action button; hassmic writes `state/adb-request`, the firewall
   watcher opens it and marks it with `/data/local/hassmic/adb-open`), by `scripts/adb-wifi.sh [host]` (signs a challenge
   on the push port with `secrets/update.key`; no HA needed), or kept open by `ADB_WIFI=1` in `hassmic.conf`. Then
   `adb connect <echo-ip>:5555`. USB always works.
@@ -114,7 +114,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Core (`main.c`, `core.h`)**: state machine `IDLE/LISTENING/THINKING/SPEAKING`, pipeline timeout, TTS queue with
   barge-in flush, alarms (timers), mute (hardware latch that software can set but never clear, plus a soft mute from HA),
   volume, LED ring, earcons, wake word threshold hints. The front end is told when a command is spoken (`listening()`:
-  without it its cancellers remove the talker after 1.5 s). `micdenoise.c` (RNNoise, HA select off/low/medium/high, off by default) then
+  without it its cancellers remove the talker after 1.5 s). `micdenoise.c` (RNNoise, settings page off/low/medium/high, off by default) then
   `micgain.c`: AGC on the mic audio sent to the pipeline (the stock
   micAsr level is ~30 dB below what STT expects, and HA ignores the ESPHome audio settings); the wake word gets it raw. `core_lock` guards state and client socket writes; `core.h`
   documents per function whether the lock is held.
@@ -155,22 +155,26 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   exportable or not), used by `proto_esphome.c`, the settings page and exports. Its own ones persist in `state/config`
   (`name=value`; the positional `state/settings` of older versions is read once and moved); arbitration, Sendspin and
   the equalizer stay where their module keeps them. Loaded in `main()` whatever the protocol. Changes from elsewhere
-  reach HA through `proto->settings_changed`.
+  reach HA through `proto->settings_changed`. Features (`feature` in the table: arbitration, sound, whisper, Wi-Fi
+  motion, Bluetooth audio, Bluetooth speaker): their entities are listed only while on (`proto_esphome.c` `listed()`,
+  which also gates states); switching one closes the HA links (`proto->entities_changed`), HA re-lists on reconnect and
+  deletes what is gone (registry included). HA always has: media player, mute, DND, wake sound, LEDs, EQ, firmware,
+  Sendspin token (a secret: never on the page). The rest is page-only; diagnostics too (`diag.c`).
 - **Settings page** (`web.c`, `web/`): HTTP on 28931 (`-W`), files of `web/` gzip'd into the binary by `tools/embed.py`
   (`build/web_assets.c`). Login: the browser's X25519 key waits for the action button (`web_approve()` first in
   `on_action`; ring `authenticated_setup_mode`), approved keys in `state/web_clients`, Echo key `state/web_key`.
   Requests signed (BLAKE2b-128 keyed with K over method, path, counter, body; K from X25519), counter per browser.
   Never send secrets: it is plain HTTP. `web/crypto.js` (X25519, BLAKE2b; no `crypto.subtle` on plain HTTP) is checked
   against Python by `tests/unit/web_crypto_test.py` (in `make unit`, needs node).
-- **adb over Wi-Fi** (`adbwifi.c`): the HA switch only writes a request for root's firewall watcher, as `ota.c` does
-  for updates; opening needs the keyed ESPHome connection, or (`ota.c`, `HMOTA-ADB1`) a challenge signed with the update key.
+- **adb over Wi-Fi** (`adbwifi.c`): the settings page only writes a request for root's firewall watcher, as `ota.c` does
+  for updates; opening needs an approved browser plus a press of the action button (`web.c`), or (`ota.c`, `HMOTA-ADB1`) a challenge signed with the update key.
 - **Wi-Fi motion** (`wifimotion.c`, experimental, off by default): polls the RCPI of the frames from the AP at 10 Hz, scatter
   over 2 s = motion binary sensor. A kernel module of ours (no kprobes on any model) words it like MediaTek's `RX_STAT` in
   `/proc/<module>`: biscuit/radar (gen2 driver, built in, no frame levels) `src/kmod/hassmic_rcpi.c` inline-hooks
   `nicRxProcessDataPacket`; donut (gen4m `wlan_mt76x8_sdio.ko`, arm64 kernel) `src/kmod/hassmic_rcpi4m.c` turns its
   `bl nicRxFillRFB` into a call to a wrapper. Each reading also has a `KIND` (donut: rate from the RX vector; gen2:
-  broadcast or not), and `wm_kind_norm` compares it with its kind's own level: APs send each rate at its own power. device.conf `KMOD`, loaded by `main.sh` only once the switch is on (settings
-  field 13) and the link is up, never unloaded. Built by `make` per device.mk `KVER`/`KARCH`/`KCROSS` against
+  broadcast or not), and `wm_kind_norm` compares it with its kind's own level: APs send each rate at its own power. device.conf `KMOD`, loaded by `main.sh` only once the feature is on
+  (`wifi_motion=on` in `state/config`) and the link is up, never unloaded. Built by `make` per device.mk `KVER`/`KARCH`/`KCROSS` against
   `toolchain/linux-<KVER>` + `devices/<codename>/kconfig` (biscuit/radar: IKCONFIG of `boot.img`, `KCONFIG`; donut: a
   fragment on arm64 defconfig, `KFRAG`), with AOSP
   `arm-eabi-4.8` / `aarch64-linux-android-4.9`. Without the module donut falls back to `iwpriv wlan0 driver RX_STAT` (last
@@ -183,7 +187,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   from the release CI published of HEAD (tag `v<commit time>[-beta]` pointing at HEAD, clean tree; bundle verified
   against `keys/release.pub`, marked `build/<codename>/PREBUILT`) where there is no NDK, or with `PREBUILT=1`;
   `PREBUILT=0` always builds. `scripts/probe.sh` compares with `devices/<codename>/probe.md5`, not the unpacked firmware.
-- **Online updates** (`update.c`): HA select "Online updates" (off default / beta / release, settings field 15) and an
+- **Online updates** (`update.c`): "Online updates" on the settings page (off default / beta / release, `state/config`) and an
   ESPHome update entity; checks GitHub's releases API, downloads `hassmic-<board.codename>.bundle` through the firmware's
   libcurl (dlopen; sockets via `net_socket` so the egress lock lets them out), hands it to root through `ota_handoff`.
   Root (`main.sh` ota_watch) accepts the owner's `update.pub` or the release key (`release.pub` of the running copy, else

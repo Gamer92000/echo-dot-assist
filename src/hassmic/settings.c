@@ -1,5 +1,6 @@
 #include "settings.h"
 #include "core.h"
+#include "a2dp.h"
 #include "arb.h"
 #include "ble.h"
 #include "micgain.h"
@@ -32,40 +33,48 @@ const int bt_lang_count = (int)(sizeof bt_langs / sizeof bt_langs[0]);
 static const char *bt_lang_codes[sizeof bt_langs / sizeof bt_langs[0]];
 
 static int mic_level = MICGAIN_LEVEL, bt_lang;
+static int bt_audio = 1, bt_speaker, whisper = 1;      /* features kept here; bt_speaker's default: settings_load */
 
 static const char *state_dir(void) { const char *e = getenv("HASSMIC_STATE"); return e ? e : "/data/local/hassmic/state"; }
 static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "%s/%s", state_dir(), file); }
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { MIC_LEVEL, DENOISE, WAKE_SOUND, MUTE, DND, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, SOUND, WIFI_MOTION, WIFI_SENS,
-          UPDATES, ARB, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, NSET };
+enum id { MIC_LEVEL, DENOISE, WAKE_SOUND, MUTE, DND, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, SOUND, WHISPER, WIFI_MOTION,
+          WIFI_SENS, BT_AUDIO, BT_SPEAKER, UPDATES, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, NSET };
 
+/* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
+ * listed()); everything else here is on the settings page only, except what Home Assistant always shows (wake sound,
+ * mute, do not disturb, LEDs, equalizer). */
 static const struct setting table[NSET] = {
-    [MIC_LEVEL]   = { "mic_level", "Mic level", "Voice", "dBFS", S_INT, MICGAIN_LEVEL_MIN, MICGAIN_LEVEL_MAX, 1 },
-    [DENOISE]     = { "noise_reduction", "Noise reduction", "Voice", NULL, S_CHOICE, 0, 0, 1 },
-    [WAKE_SOUND]  = { "wake_sound", "Wake sound", "Voice", NULL, S_BOOL, 0, 1, 1 },
-    [MUTE]        = { "mute", "Mute", "Voice", NULL, S_BOOL, 0, 1, 0 },               /* what the Echo is doing right now */
-    [DND]         = { "do_not_disturb", "Do not disturb", "Voice", NULL, S_BOOL, 0, 1, 0 },
-    [BT_ANNOUNCE] = { "bluetooth_announcements", "Bluetooth announcements", "Bluetooth", NULL, S_BOOL, 0, 1, 1 },
-    [BT_LANG]     = { "bluetooth_announcement_language", "Announcement language", "Bluetooth", NULL, S_CHOICE, 0, 0, 1 },
-    [LED_AUTO]    = { "led_auto_brightness", "LED auto brightness", "Lights", NULL, S_BOOL, 0, 1, 1 },
-    [LED_LEVEL]   = { "led_brightness", "LED brightness", "Lights", "%", S_INT, 0, 100, 1 },
-    [SOUND]       = { "sound_detection", "Sound detection", "Features", NULL, S_BOOL, 0, 1, 1 },
-    [WIFI_MOTION] = { "wifi_motion", "Wi-Fi motion (experimental)", "Features", NULL, S_BOOL, 0, 1, 1 },
-    [WIFI_SENS]   = { "wifi_motion_sensitivity", "Wi-Fi motion sensitivity", "Features", NULL, S_INT, WIFIMOTION_SENS_MIN, WIFIMOTION_SENS_MAX, 1 },
-    [UPDATES]     = { "online_updates", "Online updates", "System", NULL, S_CHOICE, 0, 0, 1 },
-    [ARB]         = { "arbitration", "Wake word arbitration", "Features", NULL, S_BOOL, 0, 1, 1 },
-    [SS_UNPAIRED] = { "sendspin_unpaired", "Music Assistant without pairing", "Music", NULL, S_BOOL, 0, 1, 1 },
-    [EQ_BASS]     = { "equalizer_bass", "Equalizer bass", "Sound", "dB", S_INT, -6, 6, 1 },
-    [EQ_MID]      = { "equalizer_mid", "Equalizer mid", "Sound", "dB", S_INT, -6, 6, 1 },
-    [EQ_TREBLE]   = { "equalizer_treble", "Equalizer treble", "Sound", "dB", S_INT, -6, 6, 1 },
+    [MIC_LEVEL]   = { "mic_level", "Mic level", "Voice", "dBFS", S_INT, MICGAIN_LEVEL_MIN, MICGAIN_LEVEL_MAX, 1, 0 },
+    [DENOISE]     = { "noise_reduction", "Noise reduction", "Voice", NULL, S_CHOICE, 0, 0, 1, 0 },
+    [WAKE_SOUND]  = { "wake_sound", "Wake sound", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    [MUTE]        = { "mute", "Mute", "Voice", NULL, S_BOOL, 0, 1, 0, 0 },            /* what the Echo is doing right now */
+    [DND]         = { "do_not_disturb", "Do not disturb", "Voice", NULL, S_BOOL, 0, 1, 0, 0 },
+    [BT_ANNOUNCE] = { "bluetooth_announcements", "Bluetooth announcements", "Bluetooth", NULL, S_BOOL, 0, 1, 1, 0 },
+    [BT_LANG]     = { "bluetooth_announcement_language", "Announcement language", "Bluetooth", NULL, S_CHOICE, 0, 0, 1, 0 },
+    [LED_AUTO]    = { "led_auto_brightness", "LED auto brightness", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
+    [LED_LEVEL]   = { "led_brightness", "LED brightness", "Lights", "%", S_INT, 0, 100, 1, 0 },
+    [ARB]         = { "arbitration", "Wake word arbitration with other Echos", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
+    [SOUND]       = { "sound_detection", "Sound detection", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
+    [WHISPER]     = { "whisper_detection", "Whisper detection", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
+    [WIFI_MOTION] = { "wifi_motion", "Wi-Fi motion (experimental)", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
+    [WIFI_SENS]   = { "wifi_motion_sensitivity", "Wi-Fi motion sensitivity", "Features", NULL, S_INT, WIFIMOTION_SENS_MIN, WIFIMOTION_SENS_MAX, 1, 0 },
+    [BT_AUDIO]    = { "bluetooth_audio", "Bluetooth audio from phones", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
+    [BT_SPEAKER]  = { "bluetooth_speaker", "Play on a Bluetooth speaker", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
+    [UPDATES]     = { "online_updates", "Online updates", "System", NULL, S_CHOICE, 0, 0, 1, 0 },
+    [SS_UNPAIRED] = { "sendspin_unpaired", "Music Assistant without pairing", "Music", NULL, S_BOOL, 0, 1, 1, 0 },
+    [EQ_BASS]     = { "equalizer_bass", "Equalizer bass", "Sound", "dB", S_INT, -6, 6, 1, 0 },
+    [EQ_MID]      = { "equalizer_mid", "Equalizer mid", "Sound", "dB", S_INT, -6, 6, 1, 0 },
+    [EQ_TREBLE]   = { "equalizer_treble", "Equalizer treble", "Sound", "dB", S_INT, -6, 6, 1, 0 },
 };
 
 static int present(enum id i)
 {
     switch (i) {
-    case BT_ANNOUNCE: case BT_LANG: return ble_present();
+    case BT_ANNOUNCE: case BT_LANG: case BT_AUDIO: case BT_SPEAKER: return ble_present();
+    case WHISPER: return core_whisper_model();
     case LED_AUTO: return core_lux() == core_lux();               /* a light sensor: not NAN */
     case WIFI_MOTION: case WIFI_SENS: return wifimotion_present();
     case ARB: return arb_running();
@@ -116,6 +125,9 @@ int settings_get(const struct setting *s)
     case ARB: return arb_join(-1);
     case SS_UNPAIRED: return sendspin_unpaired(-1);
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: return core_eq((int)(s - table) - EQ_BASS);
+    case BT_AUDIO: return bt_audio;
+    case BT_SPEAKER: return bt_speaker;
+    case WHISPER: return whisper;
     default: return 0;
     }
 }
@@ -140,6 +152,9 @@ static void put(enum id i, int v)
     case ARB: arb_join(v); break;                               /* arb.c keeps it */
     case SS_UNPAIRED: sendspin_unpaired(v); break;              /* sendspin.c keeps it */
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: core_set_eq(i - EQ_BASS, v); break;     /* the mixer keeps it */
+    case BT_AUDIO: bt_audio = v; if (!v) a2dp_pair(0); break;                        /* paired phones still connect */
+    case BT_SPEAKER: bt_speaker = v; if (!v && a2dp_out_enabled()) a2dp_out_enable(0); break;   /* back on the Echo */
+    case WHISPER: whisper = v; core_whisper_enable(v); break;
     default: break;
     }
 }
@@ -219,6 +234,8 @@ void settings_load(void)
     loaded = 1;
     path(p, sizeof p, "config");
     if (!(f = fopen(p, "r"))) {
+        /* an Echo from before features: what it showed in Home Assistant stays (the speaker if one played) */
+        bt_speaker = ble_present() && a2dp_out_enabled();
         if (load_old()) { settings_save(); fprintf(stderr, "settings: moved to %s\n", p); }
         core_mic_level(mic_level);
         return;
@@ -239,6 +256,7 @@ void settings_load(void)
 }
 
 int settings_mic_level(void) { return mic_level; }
+int settings_on(const char *name) { const struct setting *s = settings_find(name); return s && s->type == S_BOOL && settings_get(s); }
 const struct bt_lang *settings_bt_lang(void) { return &bt_langs[bt_lang]; }
 int settings_bt_lang_index(int set) { if (set >= 0 && set < bt_lang_count) bt_lang = set; return bt_lang; }
 
@@ -249,9 +267,11 @@ int settings_set(const char *name, const char *value, char *err, size_t errsz)
     const struct setting *s = settings_find(name); int v;
     if (!s) { snprintf(err, errsz, "%s: no such setting on this Echo", name); return -1; }
     if (parse(s, value, &v)) { snprintf(err, errsz, "%s: \"%s\" is not a value it takes", name, value); return -1; }
+    int was = settings_get(s);
     put((enum id)(s - table), v);
     if (ours((enum id)(s - table))) settings_save();
     core_settings_changed();
+    if (s->feature && was != v) core_entities_changed();          /* Home Assistant reads the list again */
     return 0;
 }
 

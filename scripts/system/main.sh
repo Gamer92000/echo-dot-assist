@@ -11,7 +11,7 @@
 #   MODE=stock-online           optional: stock Alexa with internet, e.g. to let it fetch a wake-word model.  hassmic stays
 #                               off, nothing is stopped or blocked except firmware updates (lockdown.sh ota-only)
 #   ADB_WIFI=1                  optional: leave adb over Wi-Fi open (root shell for the whole network, no password; read
-#                               by lockdown.sh).  Without it: closed, opened for 30 min by a switch in Home Assistant
+#                               by lockdown.sh).  Without it: closed, opened for 30 min from the settings page (action button)
 umask 022                                   # init gives us 077; what we create must be readable by the daemon's user
 D=${HASSMIC_DIR:-/system/hassmic}
 SYS=${HASSMIC_SYS:-/system/hassmic}
@@ -67,15 +67,19 @@ fwcheck() {
 }
 
 # Wi-Fi motion (device.conf KMOD): our kernel module hooks the Wi-Fi driver's receive path for the level of every frame
-# from the access point (src/kmod/).  Loaded only once Wi-Fi motion is switched on (field 13 of hassmic's settings
-# file; hassmic waits for /proc/<module> meanwhile), so while it is off - the default - no kernel code is touched; and
+# from the access point (src/kmod/).  Loaded only once Wi-Fi motion is switched on (wifi_motion=on in hassmic's
+# state/config; field 13 of the state/settings of older versions; hassmic waits for /proc/<module> meanwhile), so while it is off - the default - no kernel code is touched; and
 # only with the link up, so that a driver that is a module itself (donut's) is there to be hooked.  It cannot be
 # unloaded: it stays until the next reboot.  A failed load is not tried again until then.
 kmod() {
     [ -n "$KMOD" ] && [ -f $D/$KMOD ] || return 0
     grep -q "^${KMOD%.ko} " /proc/modules && return 0
-    set -- $(cat /data/local/hassmic/state/settings 2>/dev/null)
-    [ "${13}" = 1 ] || return 0
+    if [ -f /data/local/hassmic/state/config ]; then
+        grep -qx 'wifi_motion=on' /data/local/hassmic/state/config || return 0
+    else
+        set -- $(cat /data/local/hassmic/state/settings 2>/dev/null)
+        [ "${13}" = 1 ] || return 0
+    fi
     if out=$(insmod $D/$KMOD $KMOD_ARGS 2>&1); then echo "kmod: $KMOD loaded (Wi-Fi motion switched on)"
     else echo "kmod: $KMOD not loaded, not tried again until reboot: $out"; KMOD=; fi
 }

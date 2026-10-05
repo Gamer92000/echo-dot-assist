@@ -10,7 +10,9 @@ from aioesphomeapi.model import Event
 from aioesphomeapi.core import InvalidEncryptionKeyAPIError, RequiresEncryptionAPIError
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PORT, HTTP_PORT = 16953, 16954
+sys.path.insert(0, os.path.join(ROOT, "tests"))
+from webclient import Browser
+PORT, HTTP_PORT, WEB = 16953, 16954, 16955
 
 
 def tone(rate, seconds, freq=440):
@@ -67,11 +69,14 @@ async def main():
         os.makedirs(os.path.join(state, "models", m)); open(os.path.join(state, "models", m, "pryon.manifest"), "w").close()
     with open(mdns, "w") as f:                          # what main.sh does at boot
         subprocess.run([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-S"], env=env, stdout=f, check=True)
-    proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-L"], env=env)
+    proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-L", "-W", str(WEB)], env=env)
     httpd = ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     await asyncio.sleep(0.5)
     try:
+        page = Browser(WEB)                                 # the settings page: what is no longer in Home Assistant
+        check(page.login_with_button(proc), "settings page: logged in with the action button")
+        pv = lambda name: next((x["value"] for x in page.state()["settings"] if x["name"] == name), None)
         cli = APIClient("127.0.0.1", PORT, None)
         await cli.connect(login=True)
         info = await cli.device_info()
@@ -84,21 +89,18 @@ async def main():
         states = []
         cli.subscribe_states(states.append)
         by = {e.object_id: e for e in entities}
-        check("noise_suppression_level" not in by
-              and "auto_gain" not in by and "mic_volume_multiplier" not in by
-              and isinstance(by.get("mic_level"), NumberInfo) and (by["mic_level"].min_value, by["mic_level"].max_value) == (-35, -15)
-              and isinstance(by.get("mute"), SwitchInfo) and isinstance(by.get("wake_sound"), SwitchInfo)
-              and isinstance(by.get("noise_reduction"), SelectInfo) and list(by["noise_reduction"].options) == ["Off", "Low", "Medium", "High"],
-              "settings entities listed")
+        check("noise_suppression_level" not in by and "auto_gain" not in by and "mic_volume_multiplier" not in by
+              and "mic_level" not in by and "noise_reduction" not in by
+              and isinstance(by.get("mute"), SwitchInfo) and isinstance(by.get("wake_sound"), SwitchInfo), "settings entities listed: the lean set")
+        ps = {x["name"]: x for x in page.state()["settings"]}
+        check((ps["mic_level"]["min"], ps["mic_level"]["max"]) == (-35, -15) and ps["noise_reduction"]["choices"] == ["off", "low", "medium", "high"],
+              "mic level and noise reduction on the settings page")
         tok = by.get("sendspin_pairing_token")
         check(isinstance(tok, TextSensorInfo) and tok.disabled_by_default and int(tok.entity_category) == 2, "Sendspin pairing token entity: diagnostic, disabled by default")
-        temp, cpu = by.get("soc_temperature"), by.get("cpu_usage")
-        check(isinstance(temp, SensorInfo) and temp.disabled_by_default and int(temp.entity_category) == 2 and temp.device_class == "temperature"
-              and temp.unit_of_measurement == "\u00b0C" and isinstance(cpu, SensorInfo) and cpu.disabled_by_default and cpu.unit_of_measurement == "%"
-              and int(cpu.state_class) == 1, "diagnostic sensors: SoC temperature and CPU usage, disabled by default")
+        check("soc_temperature" not in by and "cpu_usage" not in by and page.state()["diag"]["cpu"] is not None,
+              "diagnostics on the settings page, not in Home Assistant")
         await asyncio.sleep(0.3)
-        level0 = [x.state for x in states if isinstance(x, NumberState) and x.key == by["mic_level"].key]
-        check(level0 == [-26], f"mic level at its default after a settings file from before it: {level0}")
+        check(pv("mic_level") == -26, f"mic level at its default after a settings file from before it: {pv('mic_level')}")
         eqs = [by.get(k) for k in ("equalizer_bass", "equalizer_mid", "equalizer_treble")]
         await asyncio.sleep(0.3)
         check(all(isinstance(e, NumberInfo) and e.min_value == -6 and e.max_value == 6 and e.step == 1 and e.unit_of_measurement == "dB" for e in eqs)
@@ -107,7 +109,7 @@ async def main():
         await asyncio.sleep(0.5)
         check(any(isinstance(x, NumberState) and x.key == eqs[0].key and x.state == 4 for x in states)
               and any(isinstance(x, NumberState) and x.key == eqs[2].key and x.state == -6 for x in states), "equalizer commands reflected, clamped to -6..+6")
-        check(any(isinstance(x, SelectState) and x.key == by["noise_reduction"].key and x.state == "Off" for x in states), "noise reduction off by default")
+        check(pv("noise_reduction") == 0, "noise reduction off by default")
         lux, lauto, lbright = by.get("illuminance"), by.get("led_auto_brightness"), by.get("led_brightness")
         check(isinstance(lux, SensorInfo) and lux.device_class == "illuminance" and lux.unit_of_measurement == "lx" and int(lux.state_class) == 1
               and isinstance(lauto, SwitchInfo) and isinstance(lbright, NumberInfo) and (lbright.min_value, lbright.max_value) == (0, 100),
@@ -116,17 +118,17 @@ async def main():
         check(last(lux.key, SensorState) == 67 and last(lauto.key, SwitchState) is True and last(lbright.key, NumberState) == 80,
               f"illuminance from the sensor file, auto brightness on as in stock: {last(lux.key, SensorState)} lx, "
               f"auto {last(lauto.key, SwitchState)}, level {last(lbright.key, NumberState)}")
-        cli.number_command(by["mic_level"].key, -20)
-        await asyncio.sleep(0.5)
-        check(any(isinstance(x, NumberState) and x.key == by["mic_level"].key and x.state == -20 for x in states),
-              "setting commands reflected in state")
+        page.set(mic_level=-20)
+        cli.switch_command(by["wake_sound"].key, False); await asyncio.sleep(0.5)
+        check(pv("mic_level") == -20 and any(isinstance(x, SwitchState) and x.key == by["wake_sound"].key and x.state is False for x in states),
+              "setting commands reflected in state (page and Home Assistant)")
+        cli.switch_command(by["wake_sound"].key, True); await asyncio.sleep(0.3)
         want = subprocess.run([f"{ROOT}/build/hassmic-host", "-T"], env=env, capture_output=True, text=True).stdout.strip()
         got = [x.state for x in states if isinstance(x, TextSensorState) and x.key == tok.key]
         check(got == [want] and want.startswith("SP:0") and len(want) > 100, f"token state equals `hassmic -T`: {want[:16]}…")
-        ajoin, apeers = by.get("join_arbitration_network"), by.get("arbitration_peers")
-        check("arbitration_id" not in by and isinstance(ajoin, SwitchInfo) and int(ajoin.entity_category) == 1
-              and any(isinstance(x, SwitchState) and x.key == ajoin.key and x.state for x in states) and isinstance(apeers, SensorInfo),
-              "\"Join arbitration network\" switch on by default, peers sensor, no ID entity")
+        apeers = by.get("arbitration_peers")
+        check("arbitration_id" not in by and "join_arbitration_network" not in by and pv("arbitration") == 1 and isinstance(apeers, SensorInfo),
+              "arbitration on by default (the page), peers sensor, no ID entity, no join switch")
         svcs = (await cli.list_entities_services())[1]
         check([(v.name, [(x.name, int(x.type)) for x in v.args]) for v in svcs] == [("arbitration_key", [("network", 3), ("key", 3)])],
               "action \"arbitration_key\" (network, key: strings) for other Echos to hand over their network")
@@ -196,10 +198,11 @@ async def main():
         async def stop2(*a): pass
         cli2.subscribe_voice_assistant(handle_start=start2, handle_stop=stop2)
         await asyncio.sleep(0.3); n1 = len(states)
-        cli2.number_command(by["mic_level"].key, -30)
+        cli2.switch_command(by["wake_sound"].key, False)
         await asyncio.sleep(0.5)
-        check(any(isinstance(x, NumberState) and x.state == -30 for x in states[n1:]) and any(isinstance(x, NumberState) and x.state == -30 for x in states2),
-              "a change made by one client reaches both")
+        ws = lambda sts: any(isinstance(x, SwitchState) and x.key == by["wake_sound"].key and x.state is False for x in sts)
+        check(ws(states[n1:]) and ws(states2), "a change made by one client reaches both")
+        cli2.switch_command(by["wake_sound"].key, True); await asyncio.sleep(0.3)
         started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
         check(not started2.is_set(), "the voice assistant stays with the first subscriber")
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "x", "message": "end of test pipeline"})
@@ -305,12 +308,8 @@ async def main():
         check(not started.is_set(), "mute switch blocks triggers")
         cli.switch_command(by["mute"].key, False); await asyncio.sleep(0.3)
 
-        # Debug access: no key set yet, so this connection could be anyone's.  It must not open adb.
-        adb = by.get("debug_access_adb"); adb_req = os.path.join(state, "adb-request")
-        def adb_state(sts): return [x.state for x in sts if isinstance(x, SwitchState) and x.key == adb.key][-1:]
-        check(isinstance(adb, SwitchInfo) and int(adb.entity_category) == 1 and adb_state(states) == [False], "debug access (adb over Wi-Fi) switch listed, off")
-        cli.switch_command(adb.key, True); await asyncio.sleep(0.5)
-        check(not os.path.exists(adb_req) and adb_state(states) == [False], "debug access refused without the key: nothing asked, still off")
+        # Debug access: on the settings page only, with a press of its own (tests/fake_web.py)
+        check("debug_access_adb" not in by, "no debug access switch in Home Assistant")
 
         cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t1", "tea", 60, 0, False)
         await asyncio.sleep(0.5)
@@ -363,7 +362,7 @@ async def main():
         await asyncio.wait_for(started.wait(), 5); await asyncio.sleep(1.0)
         check(len(mic) > 16000, f"encrypted: mic audio streamed: {len(mic)} bytes in 1 s")
         enc.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await asyncio.sleep(0.3)
-        enc.select_command(by["noise_reduction"].key, "Medium"); await asyncio.sleep(0.3)
+        page.set(noise_reduction="medium"); await asyncio.sleep(0.3)
         check(conf().get("noise_reduction") == "medium", f"noise reduction set to medium and persisted: {conf()}")
         started.clear(); mic.clear(); proc.send_signal(signal.SIGUSR1)
         await asyncio.wait_for(started.wait(), 5); await asyncio.sleep(1.0)
@@ -371,22 +370,11 @@ async def main():
         check(len(mic) > 16000 and len(mic) % 320 == 0 and 8000 < peak <= 29100,
               f"with noise reduction: mic audio streamed in whole 10 ms frames at speech level: {len(mic)} bytes in 1 s, peak {peak}")
         enc.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await asyncio.sleep(0.3)
-        enc.select_command(by["noise_reduction"].key, "Off"); await asyncio.sleep(0.3)
+        page.set(noise_reduction="off"); await asyncio.sleep(0.3)
         before = os.path.getsize(play)
         res = await enc.send_voice_assistant_announcement_await_response(f"http://127.0.0.1:{HTTP_PORT}/a.wav", 15, "x")
         check(res.success and os.path.getsize(play) - before == 48000, "encrypted: announcement played")
 
-        # Debug access over the keyed connection.  This test is the root side (lockdown.sh): it takes the request and
-        # answers with adb-open for as long as the port is open.
-        st2 = []; enc.subscribe_states(st2.append); await asyncio.sleep(0.3)
-        enc.switch_command(adb.key, True); await asyncio.sleep(0.5)
-        check(os.path.exists(adb_req) and open(adb_req).read() == "1\n" and adb_state(st2) == [True], "debug access with the key: request written, switch on")
-        open(env["HASSMIC_ADB_OPEN"], "w").close(); os.unlink(adb_req); await asyncio.sleep(3)
-        check(adb_state(st2) == [True], "stays on once the firewall service has opened it")
-        os.unlink(env["HASSMIC_ADB_OPEN"]); await asyncio.sleep(3)
-        check(adb_state(st2) == [False], "switch goes off when the window has run out")
-        enc.switch_command(adb.key, True); await asyncio.sleep(19)
-        check(adb_state(st2) == [False] and not os.path.exists(adb_req), "no answer within 15 s: request withdrawn, switch off again")
         check(await asyncio.wait_for(enc.noise_encryption_set_key(b""), 5) is True and not os.path.exists(os.path.join(state, "api_key")),
               "empty key from the keyed connection clears it (Home Assistant deleting the device)")
         check("api_encryption_supported=" in open(mdns).read(), "mDNS back to api_encryption_supported")
@@ -408,18 +396,23 @@ async def main():
         c.switch_command(lauto.key, True)
         await asyncio.sleep(0.5)
         check(last3(lauto.key, SwitchState) is True and conf().get("led_auto_brightness") == "on", "auto brightness switched on again")
-        # sound detection: off by default, one event entity; on, it reports what the detector hears (here sound_none.c's
-        # dog, once per ~10 s window of the capture), kept in the settings file
-        sw, ev = by.get("sound_detection"), by.get("sound")
-        check(isinstance(sw, SwitchInfo) and int(sw.entity_category) == 1 and isinstance(ev, EventInfo)
+        # A feature switched on the page closes the link; Home Assistant comes back and lists entities again
+        async def relist(old):
+            try: await old.disconnect()
+            except Exception: pass
+            await asyncio.sleep(0.5)
+            n = APIClient("127.0.0.1", PORT, None); await asyncio.wait_for(n.connect(login=True), 5)
+            e, _ = await n.list_entities_services(); sts = []; n.subscribe_states(sts.append); await asyncio.sleep(0.3)
+            return n, {x.object_id: x for x in e}, sts
+        # sound detection: off by default, no entity; on, one event entity reporting what the detector hears (here
+        # sound_none.c's dog, once per ~10 s window of the capture), kept in the settings file
+        check("sound" not in by and "sound_detection" not in by and pv("sound_detection") == 0, "sound detection off by default: no entity in Home Assistant")
+        page.set(sound_detection="on")
+        c, cby, st3 = await relist(c)
+        ev = cby.get("sound")
+        check(isinstance(ev, EventInfo)
               and list(ev.event_types) == ["smoke_or_co_alarm", "glass_break", "dog_bark", "baby_cry", "snoring", "cough", "water", "beeping_appliance"]
-              and last3(sw.key, SwitchState) is False, f"sound detection switch (off) and event entity listed: {list(ev.event_types) if ev else None}")
-        await asyncio.sleep(11)
-        check(not [x for x in st3 if isinstance(x, Event)], "no sound event while sound detection is off")
-        c.switch_command(sw.key, True)
-        await asyncio.sleep(0.5)
-        check(last3(sw.key, SwitchState) is True and conf().get("sound_detection") == "on",
-              f"sound detection switched on and kept in the settings file: {conf()}")
+              and conf().get("sound_detection") == "on", f"sound detection switched on on the page: the event entity, kept in the settings file: {conf()}")
         for _ in range(26):
             if [x for x in st3 if isinstance(x, Event)]: break
             await asyncio.sleep(0.5)
@@ -440,22 +433,23 @@ async def main():
             if len([x for x in st3 if isinstance(x, Event)]) > n0: break
             await asyncio.sleep(0.5)
         check(len([x for x in st3 if isinstance(x, Event)]) > n0, "sound events again once the Echo has been quiet for a window")
-        c.switch_command(sw.key, False)
-        await asyncio.sleep(0.5)
-        check(last3(sw.key, SwitchState) is False and conf().get("sound_detection") == "off", "sound detection switched off again")
+        unsub()
+        page.set(sound_detection="off")
+        c, cby, st3 = await relist(c)
+        check("sound" not in cby and conf().get("sound_detection") == "off", "sound detection switched off again: the entity gone")
         # Wi-Fi motion (experimental): off by default, the sensor unknown while off; on, a still level is no motion, a
         # wobbling one is, and it clears after the hold (3 s in the PC build, 30 s on the Echo)
-        wsw, wbs, wsn = by.get("wifi_motion_detection"), by.get("wifi_motion"), by.get("wifi_motion_sensitivity")
-        wstate = lambda: ([x for x in st3 if isinstance(x, BinarySensorState) and x.key == wbs.key] or [None])[-1]
-        check(isinstance(wsw, SwitchInfo) and "experimental" in wsw.name and int(wsw.entity_category) == 1
-              and isinstance(wbs, BinarySensorInfo) and wbs.device_class == "motion" and "experimental" in wbs.name
+        check("wifi_motion" not in cby and "wifi_motion_detection" not in cby and pv("wifi_motion") == 0 and pv("wifi_motion_sensitivity") == 5,
+              "Wi-Fi motion off by default (sensitivity 5): no entity in Home Assistant")
+        page.set(wifi_motion="on")
+        c, cby, st3 = await relist(c)
+        wbs, wsn = cby.get("wifi_motion"), cby.get("wifi_motion_sensitivity")
+        check(isinstance(wbs, BinarySensorInfo) and wbs.device_class == "motion" and "experimental" in wbs.name
               and isinstance(wsn, NumberInfo) and (wsn.min_value, wsn.max_value) == (1, 10) and int(wsn.entity_category) == 1,
-              "Wi-Fi motion entities listed, named experimental")
-        check(last3(wsw.key, SwitchState) is False and last3(wsn.key, NumberState) == 5 and wstate() and wstate().missing_state,
-              "Wi-Fi motion off by default, sensitivity 5, the sensor unknown")
-        c.switch_command(wsw.key, True)
+              "Wi-Fi motion on: its entities listed, named experimental")
+        wstate = lambda: ([x for x in st3 if isinstance(x, BinarySensorState) and x.key == wbs.key] or [None])[-1]
         await asyncio.sleep(3)
-        check(last3(wsw.key, SwitchState) is True and wstate() and not wstate().missing_state and wstate().state is False
+        check(wstate() and not wstate().missing_state and wstate().state is False
               and conf().get("wifi_motion") == "on" and conf().get("wifi_motion_sensitivity") == "5",
               f"switched on: a steady level is no motion, kept in the settings file: {conf()}")
         for _ in range(60):                                 # someone walking through the path: 6 s
@@ -468,11 +462,10 @@ async def main():
         c.number_command(wsn.key, 8)
         await asyncio.sleep(0.5)
         check(last3(wsn.key, NumberState) == 8 and conf().get("wifi_motion_sensitivity") == "8", "sensitivity set and kept")
-        c.switch_command(wsw.key, False)
-        await asyncio.sleep(1)
-        check(last3(wsw.key, SwitchState) is False and wstate().missing_state and conf().get("wifi_motion") == "off",
-              "switched off again: the sensor unknown")
-        unsub()                                             # the real assistant again, with mic and replies
+        page.set(wifi_motion="off")
+        c, cby, st3 = await relist(c)
+        check("wifi_motion" not in cby and conf().get("wifi_motion") == "off", "switched off again: the entities gone")
+        # the real assistant again, with mic and replies
         c.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio,
                                     handle_announcement_finished=handle_finished)
         await asyncio.sleep(0.3)

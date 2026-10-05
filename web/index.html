@@ -65,6 +65,12 @@ pre { white-space: pre-wrap; font-size: 13px; }
     <section id="warnings"></section>
     <div id="groups"></div>
     <section class="card">
+      <h2>Debug access</h2>
+      <p class="sub">adb over Wi-Fi: a root shell for anyone on the network while open. Opening takes a press of the
+         action button, even for an approved browser.</p>
+      <div class="row"><label id="adb"></label><div class="ctl"><button id="adbopen">Open</button><button id="adbclose">Close</button></div></div>
+    </section>
+    <section class="card">
       <h2>Settings file</h2>
       <p class="sub">Everything except what belongs to this one Echo (its name, keys, pairings), as name=value lines:
          for other Echos, or as a preset for <code>scripts/setup.sh</code>.</p>

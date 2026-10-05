@@ -432,6 +432,10 @@ static atomic_int whisper_eou;              /* core_mic_off: the end of speech c
 static atomic_int whisper_last = -2;        /* core_whispered */
 
 int core_whispered(void) { return atomic_load(&whisper_last); }
+static int whisper_model;
+static atomic_int whisper_enabled = 1;               /* the settings page's "Whisper detection" */
+int  core_whisper_model(void) { return whisper_model; }
+void core_whisper_enable(int on) { atomic_store(&whisper_enabled, on != 0); }
 
 static void on_whisper(int whispered, int confidence, int threshold)    /* detector thread */
 {
@@ -748,6 +752,7 @@ static void arb_notify(void) { pthread_mutex_lock(&core_lock); if (proto->arb_ch
 
 void core_settings_changed(void) { if (connected && proto->settings_changed) proto->settings_changed(); }
 int  core_ha_linked(void) { return connected; }
+void core_entities_changed(void) { if (connected && proto->entities_changed) proto->entities_changed(); }
 
 /* The settings page's login waits for the action button: the ring says so (an animation all models have) */
 static void web_attention(int on) { led(on ? "-s" : "-u", "authenticated_setup_mode"); }
@@ -763,7 +768,13 @@ static int arb_request(const char *entity)
 
 /* Arbitration pairing (Volume up + Volume down): a tap when it starts, the Bluetooth sounds for joined or not */
 static void arb_paired(int result) { sound_queue(result == 1 ? SND_TOUCH : result == 2 ? SND_BT_ON : SND_BT_OFF); }
-static void on_pair(void) { if (arb_pair() < 0) fprintf(stderr, "arbitration: not running, no pairing\n"); }
+static void on_pair(void)
+{
+    char e[80];
+    /* the gesture says "join": through the settings, so Home Assistant gets the arbitration entities too */
+    pthread_mutex_lock(&core_lock); if (arb_running() && !arb_join(-1)) settings_set("arbitration", "on", e, sizeof e); pthread_mutex_unlock(&core_lock);
+    if (arb_pair() < 0) fprintf(stderr, "arbitration: not running, no pairing\n");
+}
 
 /* ---------------------------------------------------------------- playback queue */
 
@@ -1253,7 +1264,7 @@ static void *capture_thread(void *arg)
         if (sound_running) sound_feed(pcm, n / 2);
         if (atomic_load(&whisper_last) != -2) {     /* a model: what streams to the pipeline is one request */
             int s = atomic_load(&streaming);
-            if (s && !whisper_on) {             /* the position lines it up with the capture dump's */
+            if (s && !whisper_on && atomic_load(&whisper_enabled)) {             /* the position lines it up with the capture dump's */
                 atomic_store(&whisper_eou, 0); whisper_begin(); whisper_on = 1;
                 fprintf(stderr, "whisper: request from capture sample %ld\n", atomic_load(&cap_bytes) / 2 - n / 2);
             }
@@ -1329,7 +1340,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "cannot load wake word model %s\n", wake_words[wake_active].manifest); return 1;
         }
     }
-    if (whisper_open(on_whisper) == 0) atomic_store(&whisper_last, -1);
+    if (whisper_open(on_whisper) == 0) { atomic_store(&whisper_last, -1); whisper_model = 1; }
     else fprintf(stderr, "whisper: no model, no whisper detection (scripts/artifacts.sh installs it)\n");
     static const struct arb_hooks arb_hooks = { arb_send_key, arb_notify, arb_request, arb_paired };
     if (arb_port && core_local_wake && proto->arb_send && arb_start(arb_port, core_node_name(), &arb_hooks)) fprintf(stderr, "arbitration: not available\n");

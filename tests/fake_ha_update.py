@@ -8,7 +8,9 @@ from aioesphomeapi import APIClient, SelectInfo, SelectState, ZERO_NOISE_PSK
 from aioesphomeapi.model import UpdateInfo, UpdateState, UpdateCommand
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PORT, GH_PORT = 16963, 16964
+sys.path.insert(0, os.path.join(ROOT, "tests"))
+from webclient import Browser
+PORT, GH_PORT, WEB = 16963, 16964, 16965
 OTATOOL = f"{ROOT}/build/otatool-host"              # the Echo's, for root's installer
 PCTOOL = [sys.executable, f"{ROOT}/scripts/otatool.py"]    # the PC's, as CI signs releases
 fails = 0
@@ -97,27 +99,32 @@ async def main():
                HASSMIC_MODELS=os.path.join(state, "models"), HASSMIC_ADB_OPEN=os.path.join(state, "adb-open.root"),
                HASSMIC_RELEASE_PUB=pub, HASSMIC_UPDATE_API=f"http://127.0.0.1:{GH_PORT}/repos/o/r",
                HASSMIC_UPDATE_DOWNLOAD=f"http://127.0.0.1:{GH_PORT}/dl")
-    start = lambda: subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-L"], env=env,
+    start = lambda: subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-L", "-W", str(WEB)], env=env,
                                      stderr=open(os.path.join(tmp, "log"), "a"))
     proc = start(); await asyncio.sleep(0.5)
     try:
         cli = APIClient("127.0.0.1", PORT, None); await cli.connect(login=True)
         ents, _ = await cli.list_entities_services(); by = {e.object_id: e for e in ents}
-        sel, upd = by.get("online_updates"), by.get("firmware")
-        check(isinstance(sel, SelectInfo) and sel.options == ["off", "beta", "release"] and int(sel.entity_category) == 1, f"select 'Online updates': {sel and sel.options}")
+        upd = by.get("firmware")
+        page = Browser(WEB)                             # the channel is picked on the settings page
+        check(page.login_with_button(proc), "settings page: logged in with the action button")
+        chan = lambda: next((x["choices"][x["value"]] for x in page.state()["settings"] if x["name"] == "online_updates"), None)
+        pick = lambda c: page.set(online_updates=c)
+        opts = next((x["choices"] for x in page.state()["settings"] if x["name"] == "online_updates"), None)
+        check("online_updates" not in by and opts == ["off", "beta", "release"], f"'Online updates' on the settings page, not in Home Assistant: {opts}")
         check(isinstance(upd, UpdateInfo) and upd.device_class == "firmware", "update entity, device class firmware")
         states = []; cli.subscribe_states(states.append)
         last = lambda cls, key: ([s for s in states if isinstance(s, cls) and s.key == key] or [None])[-1]
         await wait_for(lambda: last(UpdateState, upd.key))
         u = last(UpdateState, upd.key)
-        check(last(SelectState, sel.key).state == "off", "off by default")
+        check(chan() == "off", "off by default")
         check(u and re.fullmatch(r"20\d\d\.\d\d\.\d\d\.\d{6}\+\w+(-dirty)?", u.current_version) and u.latest_version == u.current_version and not u.in_progress,
               f"while off: latest = current = {u and u.current_version}, nothing to install")
 
-        # unkeyed: anybody on the LAN; must not pick where this Echo's software comes from, nor install
-        cli.select_command(sel.key, "beta"); cli.update_command(upd.key, UpdateCommand.INSTALL); await asyncio.sleep(1)
-        check(last(SelectState, sel.key).state == "off" and not GitHub.hits and not last(UpdateState, upd.key).in_progress,
-              "channel change and install without the key refused, nothing fetched")
+        # anybody on the LAN: must not pick where this Echo's software comes from (a browser not approved), nor install (unkeyed)
+        Browser(WEB).set(online_updates="beta"); cli.update_command(upd.key, UpdateCommand.INSTALL); await asyncio.sleep(1)
+        check(chan() == "off" and not GitHub.hits and not last(UpdateState, upd.key).in_progress,
+              "channel change from a browser not approved and install without the key refused, nothing fetched")
 
         key = base64.b64encode(os.urandom(32))
         prov = APIClient("127.0.0.1", PORT, None, noise_psk=ZERO_NOISE_PSK); await prov.connect()
@@ -125,7 +132,7 @@ async def main():
         enc = APIClient("127.0.0.1", PORT, None, noise_psk=key.decode()); await enc.connect(login=True)
         states.clear(); enc.subscribe_states(states.append); await asyncio.sleep(0.3)
 
-        enc.select_command(sel.key, "beta")
+        pick("beta")
         check(await wait_for(lambda: last(UpdateState, upd.key) and last(UpdateState, upd.key).latest_version == "2099.01.02.120000"),
               "beta: newest of all, the beta; its version without the tag's -beta")
         u = last(UpdateState, upd.key)
@@ -135,16 +142,16 @@ async def main():
         check("/repos/o/r/releases?per_page=10" in GitHub.hits, "beta looks through the list, which GitHub starts with the release")
         check("online_updates=beta" in open(os.path.join(state, "config")).read(), "channel saved (state/config)")
 
-        enc.select_command(sel.key, "release")
+        pick("release")
         check(await wait_for(lambda: last(UpdateState, upd.key).latest_version == "2099.01.01.093000"), "release: the newest that is not a prerelease")
         # a release newer than every beta is the newest on beta too
         GitHub.releases.insert(0, release("v2099.01.05.000000", False, "newer release"))
-        enc.select_command(sel.key, "beta")
+        pick("beta")
         check(await wait_for(lambda: last(UpdateState, upd.key).latest_version == "2099.01.05.000000"), "beta: a release newer than the betas")
         GitHub.releases.pop(0)
 
         # install from beta; this script's installer stands in for root
-        enc.select_command(sel.key, "beta"); await wait_for(lambda: last(UpdateState, upd.key).latest_version == "2099.01.02.120000")
+        pick("beta"); await wait_for(lambda: last(UpdateState, upd.key).latest_version == "2099.01.02.120000")
         states.clear()
         enc.update_command(upd.key, UpdateCommand.INSTALL)
         check(await wait_for(lambda: "installed" in (last(UpdateState, upd.key) or UpdateState()).release_summary, 15),
@@ -165,18 +172,18 @@ async def main():
 
         # no release yet: a clear word, not an error code
         GitHub.releases = [r for r in GitHub.releases if r["prerelease"]]
-        enc.select_command(sel.key, "release")
+        pick("release")
         check(await wait_for(lambda: "no release published yet" in last(UpdateState, upd.key).release_summary), "release channel, nothing released: said so")
 
-        enc.select_command(sel.key, "off"); await asyncio.sleep(0.5)
+        pick("off"); await asyncio.sleep(0.5)
         check("online_updates=off" in open(os.path.join(state, "config")).read(), "off again, saved")
 
         # the saved channel survives a restart
-        enc.select_command(sel.key, "release"); await asyncio.sleep(0.5); await enc.disconnect()
+        pick("release"); await asyncio.sleep(0.5); await enc.disconnect()
         proc.terminate(); proc.wait(); proc = start(); await asyncio.sleep(0.5)
         enc = APIClient("127.0.0.1", PORT, None, noise_psk=key.decode()); await enc.connect(login=True)
         states.clear(); enc.subscribe_states(states.append)
-        check(await wait_for(lambda: last(SelectState, sel.key) and last(SelectState, sel.key).state == "release"), "channel restored after a restart")
+        check(await wait_for(lambda: chan() == "release"), "channel restored after a restart")
         await enc.disconnect()                          # cli: closed by the device once the key was set
     finally:
         stop.set(); proc.terminate(); proc.wait(); gh.shutdown()

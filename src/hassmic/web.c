@@ -11,6 +11,7 @@
  *   keyed BLAKE2b-128 of "METHOD\nPATH\nCTR\nBODY" with K = BLAKE2b-256 keyed with X25519(echo key, browser key) over
  *   "hassmic web 1" + echo key + browser key.  A sniffer has neither secret key; a recorded request does not count
  *   twice (the counter is written to disk for every request that changes something).
+ *   adb over Wi-Fi (a root shell for the network) takes a press of its own: POST /api/adb "on" waits like a login.
  *   Limits: someone who can change traffic (not only read it) can change the page itself, as with any plain HTTP
  *   page; and the Echo's public key comes from GET /api/hello unsigned.
  *
@@ -18,7 +19,9 @@
  */
 #include "web.h"
 #include "core.h"
+#include "adbwifi.h"
 #include "board.h"
+#include "diag.h"
 #include "hash.h"
 #include "netio.h"
 #include "settings.h"
@@ -27,6 +30,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -51,7 +55,9 @@ static pthread_mutex_t lk = PTHREAD_MUTEX_INITIALIZER;  /* everything below; nev
 static uint8_t sk[32], pk[32];
 static struct client { uint8_t pub[32]; unsigned long long ctr; char label[64]; } clients[MAX_CLIENTS];
 static int nclients;
-static struct { uint8_t pub[32]; char label[64]; long long at; int state; } login;      /* state: 0 none, 1 waits, 2 approved, 3 refused */
+/* what waits for the button: a login, or adb for an approved browser.  state: 0 none, 1 waits, 2 approved, 3 refused */
+enum { W_LOGIN = 1, W_ADB };
+static struct { uint8_t pub[32]; char label[64]; long long at; int state, kind; } login;
 static atomic_int nconn;
 
 static long long now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
@@ -127,7 +133,7 @@ static int session_key(uint8_t k[32], const uint8_t pub[32])
 static void login_expire(long long now)     /* lk held */
 {
     if (login.state == 1 && now - login.at > LOGIN_MS) {
-        login.state = 3; fprintf(stderr, "web: login ran out without the button\n");
+        login.state = 3; fprintf(stderr, "web: %s ran out without the button\n", login.kind == W_ADB ? "adb request" : "login");
         if (hooks->attention) hooks->attention(0);
         if (hooks->approved) hooks->approved(0);
     }
@@ -138,7 +144,12 @@ int web_approve(void)
     int r = 0;
     pthread_mutex_lock(&lk);
     login_expire(now_ms());
-    if (login.state == 1) {
+    if (login.state == 1 && login.kind == W_ADB) {
+        login.state = 2; r = 2;
+        fprintf(stderr, "web: adb over Wi-Fi approved with the button\n");
+        if (hooks->attention) hooks->attention(0);
+        if (hooks->approved) hooks->approved(1);
+    } else if (login.state == 1) {
         if (nclients == MAX_CLIENTS) { memmove(clients, clients + 1, sizeof clients[0] * (MAX_CLIENTS - 1)); nclients--; }   /* the oldest goes */
         struct client *k = &clients[nclients++];
         memcpy(k->pub, login.pub, 32); k->ctr = 0; snprintf(k->label, sizeof k->label, "%s", login.label);
@@ -147,6 +158,26 @@ int web_approve(void)
         fprintf(stderr, "web: login approved (%s)\n", login.label);
         if (hooks->attention) hooks->attention(0);
         if (hooks->approved) hooks->approved(1);
+    }
+    pthread_mutex_unlock(&lk);
+    if (r == 2) { adbwifi_ask(1); r = 1; }              /* root's firewall watcher opens it for 30 min */
+    return r;
+}
+
+/* adb for an approved browser: "waiting" (for the button), "busy" (something else waits), or what it is now */
+static const char *adb_ask(const uint8_t pub[32], int on)
+{
+    const char *r; long long now = now_ms();
+    if (!on) { adbwifi_ask(0); return "closed"; }
+    pthread_mutex_lock(&lk);
+    login_expire(now);
+    if (login.state == 1 && login.kind == W_ADB && !memcmp(login.pub, pub, 32)) r = "waiting";
+    else if (login.state == 1) r = "busy";
+    else {
+        memcpy(login.pub, pub, 32); snprintf(login.label, sizeof login.label, "adb"); login.at = now; login.state = 1; login.kind = W_ADB;
+        r = "waiting";
+        fprintf(stderr, "web: adb over Wi-Fi waits for the action button\n");
+        if (hooks->attention) hooks->attention(1);
     }
     pthread_mutex_unlock(&lk);
     return r;
@@ -159,14 +190,14 @@ static const char *login_ask(const uint8_t pub[32], const char *label)
     pthread_mutex_lock(&lk);
     login_expire(now);
     if (client_of(pub)) r = "approved";
-    else if (login.state && !memcmp(login.pub, pub, 32)) r = login.state == 1 ? "waiting" : login.state == 2 ? "approved" : "refused";
+    else if (login.state && login.kind == W_LOGIN && !memcmp(login.pub, pub, 32)) r = login.state == 1 ? "waiting" : login.state == 2 ? "approved" : "refused";
     else if (login.state == 1) {                /* two at once: neither */
         login.state = 3; r = "refused";
         fprintf(stderr, "web: two logins at once, both refused\n");
         if (hooks->attention) hooks->attention(0);
         if (hooks->approved) hooks->approved(0);
     } else {
-        memcpy(login.pub, pub, 32); snprintf(login.label, sizeof login.label, "%s", label); login.at = now; login.state = 1;
+        memcpy(login.pub, pub, 32); snprintf(login.label, sizeof login.label, "%s", label); login.at = now; login.state = 1; login.kind = W_LOGIN;
         r = "waiting";
         fprintf(stderr, "web: login waits for the action button (%s)\n", label);
         if (hooks->attention) hooks->attention(1);
@@ -288,9 +319,9 @@ static void state_json(int fd, const uint8_t me[32])
     n += (size_t)snprintf(o + n, cap - n, ",\"ha\":%s,\"settings\":[", core_ha_linked() ? "true" : "false");
     for (int i = 0, k = settings_count(); i < k && n < cap - 600; i++) {
         const struct setting *s = settings_at(i); const char *const *names; int nc = settings_choices(s, &names);
-        n += (size_t)snprintf(o + n, cap - n, "%s{\"name\":\"%s\",\"label\":\"%s\",\"group\":\"%s\",\"type\":\"%s\",\"value\":%d,\"min\":%d,\"max\":%d,\"export\":%s,\"unit\":\"%s\",\"choices\":[",
+        n += (size_t)snprintf(o + n, cap - n, "%s{\"name\":\"%s\",\"label\":\"%s\",\"group\":\"%s\",\"type\":\"%s\",\"value\":%d,\"min\":%d,\"max\":%d,\"export\":%s,\"feature\":%s,\"unit\":\"%s\",\"choices\":[",
                               i ? "," : "", s->name, s->label, s->group, s->type == S_BOOL ? "bool" : s->type == S_INT ? "int" : "choice",
-                              settings_get(s), s->min, s->max, s->export_ ? "true" : "false", s->unit ? s->unit : "");
+                              settings_get(s), s->min, s->max, s->export_ ? "true" : "false", s->feature ? "true" : "false", s->unit ? s->unit : "");
         for (int c = 0; c < nc && n < cap - 200; c++) { jesc(v, sizeof v, names[c]); n += (size_t)snprintf(o + n, cap - n, "%s\"%s\"", c ? "," : "", v); }
         n += (size_t)snprintf(o + n, cap - n, "]}");
     }
@@ -303,7 +334,13 @@ static void state_json(int fd, const uint8_t me[32])
     { const struct core_wake_word *l; if (core_local_wake && core_wake_words(&l) <= 1)
         n += (size_t)snprintf(o + n, cap - n, "%s\"Wake words: only Alexa, Amazon's others are not installed (scripts/artifacts.sh)\"", w++ ? "," : ""); }
     pthread_mutex_unlock(&core_lock);
-    n += (size_t)snprintf(o + n, cap - n, "],\"clients\":[");
+    float t = diag_soc_temp(), cpu = diag_cpu();
+    pthread_mutex_lock(&lk); int adb_wait = login.state == 1 && login.kind == W_ADB; pthread_mutex_unlock(&lk);
+    n += (size_t)snprintf(o + n, cap - n, "],\"adb\":{\"open\":%s,\"waiting\":%s},\"diag\":{\"soc_temp\":", adbwifi_open() ? "true" : "false", adb_wait ? "true" : "false");
+    n += isnan(t) ? (size_t)snprintf(o + n, cap - n, "null") : (size_t)snprintf(o + n, cap - n, "%.1f", t);
+    n += (size_t)snprintf(o + n, cap - n, ",\"cpu\":");
+    n += isnan(cpu) ? (size_t)snprintf(o + n, cap - n, "null") : (size_t)snprintf(o + n, cap - n, "%.0f", cpu);
+    n += (size_t)snprintf(o + n, cap - n, "},\"clients\":[");
     pthread_mutex_lock(&lk);
     for (int i = 0; i < nclients && n < cap - 300; i++) {
         char h[65]; hex(h, clients[i].pub, 32); jesc(v, sizeof v, clients[i].label);
@@ -360,6 +397,12 @@ static void handle(int fd)
         jesc(ej, sizeof ej, err);
         snprintf(o, sizeof o, "{\"applied\":%d,\"errors\":\"%s\"}", applied, ej);
         fprintf(stderr, "web: %d setting%s changed%s%s", applied, applied == 1 ? "" : "s", err[0] ? ", refused: " : "\n", err);
+        respond_json(fd, 200, o);
+    }
+    else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/adb")) {
+        char o[64];
+        if (!signed_ok(&r, 1) || unhex(pub, r.pub, 32)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
+        snprintf(o, sizeof o, "{\"adb\":\"%s\"}", adb_ask(pub, !strncmp(r.body, "on", 2)));
         respond_json(fd, 200, o);
     }
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/revoke")) {

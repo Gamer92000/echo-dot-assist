@@ -12,6 +12,7 @@ struct setting {
     enum stype type;
     int min, max;                       /* S_INT */
     int export_;                        /* goes into an export: not tied to this one Echo (its name, keys, pairings) */
+    int feature;                        /* its entities are in Home Assistant only while it is on */
 };
 
 /* The Bluetooth announcement words.  Home Assistant speaks them with the satellite's pipeline voice, but tells neither us
@@ -25,6 +26,7 @@ extern const char *const denoise_names[4];      /* "Off", "Low", "Medium", "High
 void settings_load(void);               /* state/config, or the older state/settings once; then applied.  Once only */
 void settings_save(void);
 int  settings_mic_level(void);
+int  settings_on(const char *name);     /* a bool setting's value; 0 if this Echo has no such setting */
 const struct bt_lang *settings_bt_lang(void);
 int  settings_bt_lang_index(int set);   /* -1 reads */
 

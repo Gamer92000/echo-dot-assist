@@ -3,7 +3,7 @@
 #   [DEVICE=<codename>] scripts/bundle.sh KEY VERSION       -> build/<codename>/hassmic.bundle and hassmic.bundle.sig
 # Needs that model's binaries in build/<codename>/ first: `make all`, or a release's (scripts/lib/build.sh).
 # keys/release.pub rides along: the key of the project's releases, which the Echo then accepts for the updates hassmic
-# downloads itself, once they are switched on in Home Assistant (scripts/system/main.sh).
+# downloads itself, once a channel is picked on the settings page (scripts/system/main.sh).
 set -e
 cd "$(dirname "$0")/.."
 . scripts/lib/device.sh; device_load

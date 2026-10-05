@@ -238,19 +238,20 @@ Music Assistant finds the Echo by itself (Sendspin player, TCP 28928); to play o
 The token is shown at the end of `scripts/setup.sh`, in the diagnostic entity "Sendspin pairing token" in Home
 Assistant (disabled by default), and in `/data/local/hassmic/boot.log`. Pairing authenticates the connection: unpaired,
 it is encrypted under a key everyone knows, so any machine on the LAN could play or sit in between. To allow unpaired
-servers anyway, switch on "Music Assistant without pairing" in Home Assistant.
+servers anyway, switch on "Music Assistant without pairing" on the Echo's settings page (`http://<echo-ip>:28931/`).
 
 ### 7. Optional: Bluetooth speaker
 
-Turn on the "Bluetooth pairing" switch in Home Assistant, then pick the Echo in the phone's Bluetooth settings within two
+"Bluetooth audio from phones" is on by default on the Echo's settings page; with it on, Home Assistant has a
+"Bluetooth pairing" switch. Turn it on, then pick the Echo in the phone's Bluetooth settings within two
 minutes. Paired devices reconnect by themselves whenever you choose the Echo; unknown ones are refused while the switch
 is off.
 
 Like stock Alexa the Echo announces connections: a chime and "Connected to <name>" / "Disconnected from <name>". The
 words are spoken by Home Assistant, which only does that after you tick "Allow the device to perform Home Assistant
 actions" in the Echo's ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure). The
-"Bluetooth announcements" switch turns chime and words off. The words are English until you pick another language in
-"Bluetooth announcement language" (Deutsch, Français, Español, Italiano, Português, Nederlands, Svenska, Dansk, Norsk,
+"Bluetooth announcements" setting on the settings page turns chime and words off. The words are English until you pick
+another language there (Deutsch, Français, Español, Italiano, Português, Nederlands, Svenska, Dansk, Norsk,
 Suomi, Polski): set it to the language of the Echo's assistant in Home Assistant, whose voice speaks them. Home
 Assistant does not tell the Echo which language its assistant uses, so this cannot follow it by itself.
 

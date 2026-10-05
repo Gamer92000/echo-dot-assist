@@ -415,7 +415,7 @@ done_screen() {
     [ -n "$SAT_TOKEN" ] && tell "Music Assistant (optional)" \
         "It finds the Echo by itself; to play on it, pair it with this token:" \
         "$B$SAT_TOKEN$N" \
-        "${DIM}Or switch on \"Music Assistant without pairing\" in Home Assistant (any server on the LAN may then play).$N"
+        "${DIM}Or switch on \"Music Assistant without pairing\" on the settings page (any server on the LAN may then play).$N"
     warn "Back up secrets/update.key: it signs your updates."
     local l; for l; do info "$l"; done
     printf '\n'

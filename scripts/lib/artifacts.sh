@@ -9,7 +9,7 @@
 # Amazon account once: it runs stock Alexa with the updaters cut off (MODE=stock-online) until then, and everything is
 # undone afterwards (registration, the Wi-Fi the Alexa app added, the mode).  Stopped halfway, a new run finds the Echo
 # in stock-online mode and goes on there.
-# Over Wi-Fi the Echo's adb has to be open (scripts/adb-wifi.sh, or "Debug access" in Home Assistant).  The two reboots of
+# Over Wi-Fi the Echo's adb has to be open (scripts/adb-wifi.sh, or debug access on the settings page).  The two reboots of
 # the Amazon way would close it, so for that way it is kept open with ADB_WIFI=1 in hassmic.conf, marked as ours, until
 # the end.
 
@@ -363,7 +363,7 @@ _artifacts_run() {
     [ ${#names[@]} -gt 0 ] && ok "installed: ${names[*]}"
     [ ${#FAILED[@]} -gt 0 ] && fail "not done: ${FAILED[*]}"
     local ww=0 wh= ae=; for id in "${INSTALLED[@]}"; do if is_whisper $id; then wh=1; elif is_aed $id; then ae=1; else ww=1; fi; done
-    [ -n "$ae" ] && tell "Sound detection takes the new model" "whenever it is on: the \"Sound detection\" switch in Home Assistant."
+    [ -n "$ae" ] && tell "Sound detection takes the new model" "whenever it is on: \"Sound detection\" on the settings page (http://<echo-ip>:28931/)."
     [ $ww = 1 ] && tell "Pick it in Home Assistant" "Settings → Devices & services → this Echo → Wake word"
     for id in "${WANT[@]}"; do            # ticked, not installed: said plainly, as nothing below mentions it then
         is_whisper $id && [ -z "$wh" ] && fail "whisper detection is not installed: see $LOG"

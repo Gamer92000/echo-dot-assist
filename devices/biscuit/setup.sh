@@ -28,7 +28,7 @@ install|Install
 wakeword|Wake word, whisper and sound detection models
 "
 NOTES=(
-    "adb over Wi-Fi is closed: scripts/adb-wifi.sh <echo-ip> (or \"Debug access\" in Home Assistant) opens it for 30 min."
+    "adb over Wi-Fi is closed: scripts/adb-wifi.sh <echo-ip> (or debug access on the settings page, http://<echo-ip>:28931/) opens it for 30 min."
     "Updates: git pull, then scripts/ota-push.sh <echo-ip>."
     "More wake words, whisper or sound detection models later: scripts/artifacts.sh <echo-ip>"
     "Music Assistant, Bluetooth speaker: $DDIR/README.md"

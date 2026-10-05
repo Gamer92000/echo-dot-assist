@@ -4,6 +4,15 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-06
 
+- **Home Assistant shows less, the settings page the rest.** Home Assistant keeps what you use day to day: mute, do
+  not disturb, wake sound, the LEDs, the equalizer, the media player and firmware updates. Features are switched on
+  the settings page, and while one is on its entities are in Home Assistant: wake word arbitration, sound detection,
+  whisper detection, Wi-Fi motion, Bluetooth audio from phones, playing on a Bluetooth speaker. Switched off, their
+  entities are removed from Home Assistant (it reconnects for a moment). Mic level, noise reduction, Bluetooth
+  announcements, the online updates channel, "Music Assistant without pairing", debug access and SoC temperature / CPU
+  usage are on the settings page only. After this update, entities that moved are gone from Home Assistant; the
+  settings themselves are kept. Opening debug access takes a press of the action button.
+
 - **A settings page on every Echo**, at `http://<echo-ip>:28931/`. Log in once per browser with a press of the Echo's
   action button. It shows every setting, warns about what does not work and why (no Home Assistant link, models
   missing), and exports the settings to a file you can import on other Echos. The settings file on the Echo is now

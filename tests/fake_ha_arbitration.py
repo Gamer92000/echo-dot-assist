@@ -6,12 +6,14 @@ device's request for a state (no permission needed), and runs an action a device
 Home Assistant actions") that names another device's own action (esphome.<node>_arbitration_key) on that device.
 Three ways in: the handoff entities (no permission), the action, and the volume-key pairing (SIGWINCH, no HA).
 Everything goes out as loopback broadcast (HASSMIC_ARB_ADDR): nothing of it reaches the LAN."""
-import asyncio, base64, os, re, signal, socket, struct, subprocess, tempfile, time
+import asyncio, base64, os, re, signal, socket, struct, subprocess, sys, tempfile, time
 from aioesphomeapi import APIClient, VoiceAssistantEventType as Ev
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tests"))
+from webclient import Browser
 ARB, BCAST = 28990, "127.255.255.255"
 
 
@@ -24,6 +26,7 @@ check.failed = False
 class Echo:
     def __init__(self, name, port, score, suffix=""):
         self.name, self.port, self.state, self.suffix = name, port, tempfile.mkdtemp(), suffix
+        self.web = port + 10                                # the settings page
         self.node = re.sub(r"[^a-z0-9]", "-", name.lower())
         self.log = os.path.join(self.state, "log")
         self.api_key = base64.b64encode(os.urandom(32)).decode()
@@ -38,13 +41,13 @@ class Echo:
 
     def start(self):
         self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.port), "-n", self.name, "-L",
-                                      "-z", "0", "-o", "0", "-a", str(ARB)], env=self.env, stderr=open(self.log, "w"))
+                                      "-z", "0", "-o", "0", "-a", str(ARB), "-W", str(self.web)], env=self.env, stderr=open(self.log, "w"))
 
     def text(self): return open(self.log).read()
     def net(self):
         try: return re.search(r"^net (\S+ \S+)$", open(os.path.join(self.state, "arbitration")).read(), re.M).group(1)
         except (OSError, AttributeError): return None
-    def st(self, oid): return self.states.get(self.by[oid].key)
+    def st(self, oid): return self.states.get(self.by[oid].key) if oid in self.by else None
     def wake(self): self.proc.send_signal(signal.SIGUSR1)
     def pair(self): self.proc.send_signal(signal.SIGWINCH)          # Volume up + Volume down held
     def entity(self, suffix=None):              # HA's entity id; suffix: HA's for an id another device held first
@@ -53,7 +56,15 @@ class Echo:
         try: return base64.b64decode(self.st("arbitration_handoff").split()[1])
         except (AttributeError, IndexError): return None
 
+    async def join(self, on):
+        """arbitration on or off on the settings page; Home Assistant is sent away and lists the entities again"""
+        self.page.set(arbitration="on" if on else "off")
+        try: await self.cli.disconnect()
+        except Exception: pass
+        await asyncio.sleep(0.5); await self.connect(self.ha)
+
     async def connect(self, ha):
+        self.ha, self.states = ha, {}
         self.cli = APIClient("127.0.0.1", self.port, None, noise_psk=self.api_key)
         await self.cli.connect(login=True)
         ents, self.services = await self.cli.list_entities_services()
@@ -107,6 +118,7 @@ async def main():
             f.write(f"join 1\nctr 0\nnet {net:016x} {base64.b64encode(os.urandom(32)).decode()}\n")
     a.start(); b.start()
     await asyncio.sleep(0.5)
+    for e in (a, b): e.page = Browser(e.web); check(e.page.login_with_button(e.proc), f"{e.name}: settings page logged in with the action button")
     try:
         await a.connect(ha); await b.connect(ha)
         check([s.name for s in a.services] == ["arbitration_key"] and [x.name for x in a.services[0].args] == ["network", "key"]
@@ -195,23 +207,23 @@ async def main():
         check(ok, "plaintext connection to an Echo with a device key: refused")
 
         # leave: the key is gone, the Echo answers on its own again
-        a.cli.switch_command(a.by["join_arbitration_network"].key, False)
-        await until(lambda: a.st("join_arbitration_network") is False, 3)
-        check(a.net() is None and "left network" in a.text() and a.st("arbitration_peers") == 0, "join switched off: network key wiped")
+        await a.join(False)
+        check(a.net() is None and "left network" in a.text() and "arbitration_peers" not in a.by and "arbitration_handoff" not in a.by,
+              "arbitration off on the page: network key wiped, its entities gone from Home Assistant")
         na, nb = len(a.starts), len(b.starts)
         a.wake(); b.wake(); await asyncio.sleep(1.5)
         check(len(a.starts) == na + 1 and len(b.starts) == nb + 1, "outside the network: both answer (Home Assistant's check is left)")
         a.end_pipeline(); b.end_pipeline(); await asyncio.sleep(0.5)
 
         # nobody else in a network: the first to join starts one, the next one gets its key
-        b.cli.switch_command(b.by["join_arbitration_network"].key, False)
+        await b.join(False)
         await until(lambda: b.net() is None, 3)
-        a.cli.switch_command(a.by["join_arbitration_network"].key, True); t0 = time.monotonic()
+        await a.join(True); t0 = time.monotonic()
         ok = await until(lambda: a.net(), 10)
         check(ok and "no other Echo found, started network" in a.text() and time.monotonic() - t0 > 4, f"alone: started a network after {time.monotonic() - t0:.1f} s")
         # no handoff entity to read (disabled, or the device renamed in HA) and no permission: no key, HA raises its repair
         a.allowed = False; ha.states_on = False; refused = len(ha.refused)
-        b.cli.switch_command(b.by["join_arbitration_network"].key, True)
+        await b.join(True)
         await asyncio.sleep(24)
         check(len(ha.refused) > refused and b.net() is None, "no handoff entity and no \"perform actions\": no key (HA raises its repair)")
 
@@ -224,8 +236,8 @@ async def main():
         await asyncio.sleep(2)                          # the member's last two copies of its "give" (they would let b back in)
 
         # two Echos asking at once: the network goes to neither
-        b.cli.switch_command(b.by["join_arbitration_network"].key, False); await until(lambda: b.net() is None, 3)
-        b.cli.switch_command(b.by["join_arbitration_network"].key, True)
+        await b.join(False); await until(lambda: b.net() is None, 3)
+        await b.join(True)
         send(b"HMA1\x05" + xp + struct.pack("<Q", 0) + node("evil"))
         b.pair(); await asyncio.sleep(1.5); a.pair(); await asyncio.sleep(4)
         check(b.net() != a.net() and "pairing refused: 2 Echos asked at once" in a.text(), "a second Echo asking: pairing refused")
@@ -236,16 +248,16 @@ async def main():
 
         # handoff entity back: in without permission
         ha.states_on = True
-        b.cli.switch_command(b.by["join_arbitration_network"].key, False); await until(lambda: b.net() is None, 3)
-        b.cli.switch_command(b.by["join_arbitration_network"].key, True)
+        await b.join(False); await until(lambda: b.net() is None, 3)
+        await b.join(True)
         ok = await until(lambda: b.net() == a.net(), 20)
         check(ok and "offered by echo-kitchen" in b.text(), "handoff entity readable again: joined without permission")
         await until(lambda: a.st("arbitration_peers") == 1 and b.st("arbitration_peers") == 1, 35)
 
         # permission and no handoff entity (an Echo of an older version): the action
         ha.states_on = False; a.allowed = True; calls = len(ha.calls)
-        b.cli.switch_command(b.by["join_arbitration_network"].key, False); await until(lambda: b.net() is None, 3)
-        b.cli.switch_command(b.by["join_arbitration_network"].key, True)
+        await b.join(False); await until(lambda: b.net() is None, 3)
+        await b.join(True)
         ok = await until(lambda: b.net() == a.net() and a.st("arbitration_peers") == 1 and b.st("arbitration_peers") == 1, 40)
         check(ok and any(c[1] == "esphome.echo_living_room_arbitration_key" for c in ha.calls[calls:]), "allowed: the next one joined through the action")
     finally:

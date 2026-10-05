@@ -118,7 +118,9 @@ function control(s) {
 }
 
 function render() {
-  $('ha').innerHTML = `<span class="dot ${state.ha ? 'ok' : 'bad'}"></span>Home Assistant ${state.ha ? 'connected' : 'not connected'}`;
+  const d = state.diag, diag = [d.soc_temp !== null ? `SoC ${d.soc_temp} °C` : '', d.cpu !== null ? `CPU ${d.cpu} %` : ''].filter(Boolean).join(' · ');
+  $('ha').innerHTML = `<span class="dot ${state.ha ? 'ok' : 'bad'}"></span>Home Assistant ${state.ha ? 'connected' : 'not connected'}` +
+    (diag ? `<br>${diag}` : '');
   const w = $('warnings'); w.innerHTML = '';
   for (const text of state.warnings) { const d = document.createElement('div'); d.className = 'warn'; d.textContent = text; w.append(d); }
 
@@ -128,6 +130,11 @@ function render() {
   for (const [g, list] of by) {
     const card = document.createElement('section'); card.className = 'card';
     const h = document.createElement('h2'); h.textContent = g; card.append(h);
+    if (g === 'Features') {
+      const p = document.createElement('p'); p.className = 'sub';
+      p.textContent = 'A feature that is on has its entities in Home Assistant; off, they are gone. Switching one makes Home Assistant reconnect for a moment.';
+      card.append(p);
+    }
     for (const s of list) {
       const row = document.createElement('div'); row.className = 'row';
       const l = document.createElement('label'); l.textContent = s.label; l.htmlFor = 's-' + s.name;
@@ -135,6 +142,10 @@ function render() {
     }
     groups.append(card);
   }
+
+  const a = $('adb');
+  a.textContent = state.adb.waiting ? 'Waiting for the action button…' : state.adb.open ? 'Open: anyone on the network has a root shell (closes by itself after 30 min)' : 'Closed';
+  $('adbopen').disabled = state.adb.open || state.adb.waiting; $('adbclose').disabled = !state.adb.open;
 
   const c = $('clients'); c.innerHTML = '';
   for (const k of state.clients) {
@@ -149,6 +160,20 @@ function render() {
     row.append(l, b); c.append(row);
   }
 }
+
+$('adbopen').onclick = async () => {
+  try {
+    const r = await (await echo.call('POST', '/api/adb', 'on')).json();
+    if (r.adb === 'busy') { toast('A login waits for the button first'); return; }
+    toast('Press the action button on the Echo');
+    for (let i = 0; i < 65; i++) {
+      await new Promise((res) => setTimeout(res, 1000));
+      await load();
+      if (!state.adb.waiting) break;
+    }
+  } catch (e) { toast('Error: ' + e.message); }
+};
+$('adbclose').onclick = async () => { await echo.call('POST', '/api/adb', 'off'); await load(); };
 
 $('export').onclick = async () => {
   try {

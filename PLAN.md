@@ -496,9 +496,16 @@ Run in this order. Each step says what it proves.
       has X25519 (after TweetNaCl) and BLAKE2b (BigInt), 20 + 262 cases equal to Python's. Settings by name
       (`settings.c`, `state/config`, old positional file moved once; loaded at start for Wyoming too). Phases: (1) done:
       page, login, status warnings, settings, export/import, revoke; host test `fake_web.py` (23 checks) and the real
-      page in jsdom against the host build (login, set, no errors). (2) features: off = no entities in HA, on = their
-      entities (lean core: media player, mute, DND, wake sound, LEDs, EQ, firmware stay; the rest page-only), HA
-      re-reads entities on reconnect. (3) arbitration view (members, failed joins, parallel networks), several Echos
+      page in jsdom against the host build (login, set, no errors). (2) done: features (arbitration, sound, whisper,
+      Wi-Fi motion, Bluetooth audio, Bluetooth speaker): their entities only while on (`listed()` gates list and
+      states); a switch closes the HA links, HA re-lists on reconnect and deletes what is gone from the registry
+      (`entity.py` `async_static_info_updated` -> `entry_data.async_remove_entities`, checked in HA dev). Lean core
+      (user's pick): media player, mute, DND, wake sound, LEDs + illuminance, EQ, firmware, Sendspin token (a secret,
+      never on the page). Page-only: mic level, noise reduction, BT announcements + language, update channel, adb (a
+      press of its own), Sendspin unpaired, diagnostics (`diag.c`). Bluetooth speaker defaults to on where a speaker
+      played before (first `state/config`); the volume-key pairing switches arbitration on through the settings.
+      `main.sh` reads `wifi_motion=on` from `state/config` for the module (it read field 13 of the old file). Tests
+      reworked onto `tests/webclient.py`: fake_web 35, fake_ha_esphome 97, fake_ha_update 21, fake_ha_arbitration 31. (3) arbitration view (members, failed joins, parallel networks), several Echos
       from one page, apply to all. (4) `scripts/setup.sh` presets from an export. Not done: on the device (the ring
       animation, the press)
 - [~] Wake word arbitration between Echos (2026-09-25), stock's ESP ("Echo Spatial Perception", decided in Amazon's cloud)

@@ -302,8 +302,10 @@ static int key_set(const unsigned char *k, size_t len)
 
 static int have_light;                  /* a light sensor answered at start: illuminance and auto brightness are listed */
 
+static int listed(int key);
 static void send_setting(int key)       /* lock held */
 {
+    if (!listed(key)) return;
     PB(b, 48);
     pb_fixed32(&b, 1, key);
     switch (key) {
@@ -353,7 +355,7 @@ static void send_setting(int key)       /* lock held */
 static void send_handoff_state(void)    /* lock held */
 {
     PB(b, 320); char s[280];
-    if (!arb_running()) return;
+    if (!listed(KEY_ARB_HANDOFF)) return;
     arb_handoff(s, sizeof s);
     pb_fixed32(&b, 1, KEY_ARB_HANDOFF); pb_str(&b, 2, s);
     send_state(TEXT_SENSOR_STATE, &b);
@@ -368,63 +370,12 @@ static void send_token_state(void)      /* lock held */
     send_state(TEXT_SENSOR_STATE, &b);
 }
 
-/* ---------------------------------------------------------------- diagnostics
- * SoC temperature (thermal zone board.thermal_type) and CPU usage, as sensors that are diagnostic and disabled by default: Home
- * Assistant records them only once the user switches them on.  Pushed every 30 s to whoever subscribed to states. */
-
-static float read_soc_temp(void)
-{
-    char path[80], type[32]; float t = NAN;
-    for (int z = 0; z < 16; z++) {
-        snprintf(path, sizeof path, "/sys/class/thermal/thermal_zone%d/type", z);
-        FILE *f = fopen(path, "r"); if (!f) break;
-        int ok = fscanf(f, "%31s", type) == 1; fclose(f);
-        if (!ok || strcmp(type, board.thermal_type)) continue;
-        snprintf(path, sizeof path, "/sys/class/thermal/thermal_zone%d/temp", z);
-        if ((f = fopen(path, "r"))) { int mc; if (fscanf(f, "%d", &mc) == 1) t = mc / 1000.0f; fclose(f); }
-        break;
-    }
-    return t;
-}
-
-static float cpu_usage(void)             /* percent busy since the previous call; NAN the first time */
-{
-    static unsigned long long last_busy, last_total;
-    unsigned long long v[8] = { 0 }, total = 0, busy; float pct = NAN;
-    FILE *f = fopen("/proc/stat", "r"); if (!f) return NAN;
-    int n = fscanf(f, "cpu %llu %llu %llu %llu %llu %llu %llu %llu", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7]);
-    fclose(f);
-    if (n < 4) return NAN;
-    for (int i = 0; i < 8; i++) total += v[i];
-    busy = total - v[3] - v[4];                                 /* idle, iowait */
-    if (last_total && total > last_total) pct = 100.0f * (float)(busy - last_busy) / (float)(total - last_total);
-    last_busy = busy; last_total = total;
-    return pct;
-}
-
 static void send_sensor(int key, float v)   /* lock held */
 {
     PB(b, 32);
     if (isnan(v)) return;
     pb_fixed32(&b, 1, key); pb_float(&b, 2, v);
     send_state(SENSOR_STATE, &b);
-}
-
-static void send_diag_states(void) { send_sensor(KEY_SOC_TEMP, read_soc_temp()); send_sensor(KEY_CPU_USAGE, cpu_usage()); }
-
-static void *diag_thread(void *arg)
-{
-    (void)arg;
-    cpu_usage();
-    for (;;) {
-        sleep(30);
-        pthread_mutex_lock(&core_lock);
-        int any = 0;
-        for (int i = 0; i < MAX_CLIENTS; i++) any |= clients[i].fd >= 0 && clients[i].states;
-        if (any) send_diag_states();
-        pthread_mutex_unlock(&core_lock);
-    }
-    return NULL;
 }
 
 /* ---------------------------------------------------------------- light sensor and LED brightness
@@ -475,20 +426,29 @@ static void send_light_entities(void)
       pb_str(&b, 11, "%"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
 }
 
-static void send_diag_entities(void)
+/* What Home Assistant lists.  Always: media player, mute, do not disturb, wake sound, LEDs, equalizer, firmware, the
+ * Sendspin token (a secret: never on the plain-HTTP settings page).  A feature's entities only while it is on
+ * (settings.c, switched on the settings page; switching one has Home Assistant read the list again).  Everything else
+ * is on the settings page only.  States go out only for what is listed. */
+static int listed(int key)
 {
-    { PB(b, 192); pb_str(&b, 1, "soc_temperature"); pb_fixed32(&b, 2, KEY_SOC_TEMP); pb_str(&b, 3, "SoC temperature");
-      pb_str(&b, 5, "mdi:thermometer"); pb_str(&b, 6, "\xc2\xb0" "C"); pb_uint(&b, 7, 1); pb_str(&b, 9, "temperature"); pb_uint(&b, 10, 1);
-      pb_uint(&b, 12, 1); pb_uint(&b, 13, 2); send_msg(LIST_SENSOR, &b); }
-    { PB(b, 192); pb_str(&b, 1, "cpu_usage"); pb_fixed32(&b, 2, KEY_CPU_USAGE); pb_str(&b, 3, "CPU usage");
-      pb_str(&b, 5, "mdi:chip"); pb_str(&b, 6, "%"); pb_uint(&b, 10, 1); pb_uint(&b, 12, 1); pb_uint(&b, 13, 2); send_msg(LIST_SENSOR, &b); }
+    switch (key) {
+    case KEY_MIC_LEVEL: case KEY_DENOISE: case KEY_BT_ANNOUNCE: case KEY_BT_LANG: case KEY_ADB_WIFI: case KEY_ARB_JOIN: case KEY_SS_UNPAIRED:
+    case KEY_SOUND_DETECTION: case KEY_WIFI_MOTION_ON: case KEY_UPDATE_CHANNEL: case KEY_SOC_TEMP: case KEY_CPU_USAGE: return 0;
+    case KEY_SENDSPIN_TOKEN: return core_sendspin_port != 0;
+    case KEY_SOUND: return settings_on("sound_detection");
+    case KEY_BT_PAIRING: return ble_present() && settings_on("bluetooth_audio");
+    case KEY_BT_OUT_SEARCH: case KEY_BT_OUT: case KEY_BT_OUT_STATUS: case KEY_BT_OUT_DELAY: return ble_present() && settings_on("bluetooth_speaker");
+    case KEY_ARB_PEERS: case KEY_ARB_SERVICE: case KEY_ARB_HANDOFF: return arb_running() && settings_on("arbitration");
+    case KEY_WHISPERED: return core_whisper_model() && settings_on("whisper_detection");
+    case KEY_WIFI_MOTION: case KEY_WIFI_MOTION_SENS: return wifimotion_present() && settings_on("wifi_motion");
+    case KEY_LUX: case KEY_LED_AUTO: return have_light;
+    default: return 1;
+    }
 }
 
 static void send_setting_entities(void)
 {
-    { PB(b, 256); pb_str(&b, 1, "mic_level"); pb_fixed32(&b, 2, KEY_MIC_LEVEL); pb_str(&b, 3, "Mic level"); pb_str(&b, 5, "mdi:microphone-plus");
-      pb_float(&b, 6, MICGAIN_LEVEL_MIN); pb_float(&b, 7, MICGAIN_LEVEL_MAX); pb_float(&b, 8, 1); pb_uint(&b, 10, 1); pb_str(&b, 11, "dBFS");
-      pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
     static const char *const eq_ids[] = { "equalizer_bass", "equalizer_mid", "equalizer_treble" };
     static const char *const eq_labels[] = { "Equalizer bass", "Equalizer mid", "Equalizer treble" };   /* sort together in HA */
     for (int i = 0; i < 3; i++) {       /* like the Alexa app's sliders */
@@ -498,27 +458,19 @@ static void send_setting_entities(void)
     { PB(b, 128); pb_str(&b, 1, "mute"); pb_fixed32(&b, 2, KEY_MUTE); pb_str(&b, 3, "Mute"); pb_str(&b, 5, "mdi:microphone-off"); send_msg(LIST_SWITCH, &b); }
     { PB(b, 128); pb_str(&b, 1, "do_not_disturb"); pb_fixed32(&b, 2, KEY_DND); pb_str(&b, 3, "Do not disturb"); pb_str(&b, 5, "mdi:minus-circle");
       send_msg(LIST_SWITCH, &b); }
-    if (core_sendspin_port) { PB(b, 192); pb_str(&b, 1, "sendspin_pairing_token"); pb_fixed32(&b, 2, KEY_SENDSPIN_TOKEN); pb_str(&b, 3, "Sendspin pairing token");
+    if (listed(KEY_SENDSPIN_TOKEN)) { PB(b, 192); pb_str(&b, 1, "sendspin_pairing_token"); pb_fixed32(&b, 2, KEY_SENDSPIN_TOKEN); pb_str(&b, 3, "Sendspin pairing token");
       pb_str(&b, 5, "mdi:key-link"); pb_uint(&b, 6, 1); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
-    /* off (the default): only servers paired with the token above play; on: any Music Assistant on the LAN, unpaired */
-    if (core_sendspin_port) { PB(b, 192); pb_str(&b, 1, "sendspin_unpaired_access"); pb_fixed32(&b, 2, KEY_SS_UNPAIRED);
-      pb_str(&b, 3, "Music Assistant without pairing"); pb_str(&b, 5, "mdi:lock-open-variant"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
-    { PB(b, 128); pb_str(&b, 1, "noise_reduction"); pb_fixed32(&b, 2, KEY_DENOISE); pb_str(&b, 3, "Noise reduction"); pb_str(&b, 5, "mdi:waveform");
-      for (int i = 0; i < 4; i++) pb_str(&b, 6, denoise_names[i]);
-      pb_uint(&b, 8, 1); send_msg(LIST_SELECT, &b); }
     { PB(b, 128); pb_str(&b, 1, "wake_sound"); pb_fixed32(&b, 2, KEY_WAKE_SOUND); pb_str(&b, 3, "Wake sound"); pb_str(&b, 5, "mdi:bell-ring");
       pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
-    /* Sound detection (sound.h): the switch (off by default: a second decoder on the mic stream), and one event entity
-     * whose event type names the sound; Home Assistant keeps each with its time, automations trigger on the type. */
-    { PB(b, 128); pb_str(&b, 1, "sound_detection"); pb_fixed32(&b, 2, KEY_SOUND_DETECTION); pb_str(&b, 3, "Sound detection");
-      pb_str(&b, 5, "mdi:ear-hearing"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
-    { PB(b, 384); pb_str(&b, 1, "sound"); pb_fixed32(&b, 2, KEY_SOUND); pb_str(&b, 3, "Sound"); pb_str(&b, 5, "mdi:waveform");
+    /* Sound detection (sound.h): one event entity whose event type names the sound; Home Assistant keeps each with its
+     * time, automations trigger on the type. */
+    if (listed(KEY_SOUND)) { PB(b, 384); pb_str(&b, 1, "sound"); pb_fixed32(&b, 2, KEY_SOUND); pb_str(&b, 3, "Sound"); pb_str(&b, 5, "mdi:waveform");
       for (int i = 0; i < core_sound_nevents; i++) pb_str(&b, 9, core_sound_events[i]);
       send_msg(LIST_EVENT, &b); }
-    if (ble_present()) { PB(b, 128); pb_str(&b, 1, "bluetooth_pairing"); pb_fixed32(&b, 2, KEY_BT_PAIRING); pb_str(&b, 3, "Bluetooth pairing");
+    if (listed(KEY_BT_PAIRING)) { PB(b, 128); pb_str(&b, 1, "bluetooth_pairing"); pb_fixed32(&b, 2, KEY_BT_PAIRING); pb_str(&b, 3, "Bluetooth pairing");
       pb_str(&b, 5, "mdi:bluetooth-connect"); send_msg(LIST_SWITCH, &b); }
     /* playing to a Bluetooth speaker: the search pairs the nearest one in pairing mode and switches playing on it on */
-    if (ble_present()) {
+    if (listed(KEY_BT_OUT)) {
         { PB(b, 160); pb_str(&b, 1, "bluetooth_speaker_search"); pb_fixed32(&b, 2, KEY_BT_OUT_SEARCH); pb_str(&b, 3, "Bluetooth speaker search");
           pb_str(&b, 5, "mdi:speaker-wireless"); send_msg(LIST_SWITCH, &b); }
         { PB(b, 160); pb_str(&b, 1, "play_on_bluetooth_speaker"); pb_fixed32(&b, 2, KEY_BT_OUT); pb_str(&b, 3, "Play on Bluetooth speaker");
@@ -530,18 +482,7 @@ static void send_setting_entities(void)
           pb_str(&b, 5, "mdi:timer-sand"); pb_float(&b, 6, 0); pb_float(&b, 7, 1000); pb_float(&b, 8, 10); pb_uint(&b, 10, 1);
           pb_str(&b, 11, "ms"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
     }
-    if (ble_present()) { PB(b, 128); pb_str(&b, 1, "bluetooth_announcements"); pb_fixed32(&b, 2, KEY_BT_ANNOUNCE); pb_str(&b, 3, "Bluetooth announcements");
-      pb_str(&b, 5, "mdi:bluetooth-audio"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
-    if (ble_present()) { PB(b, 512); pb_str(&b, 1, "bluetooth_announcement_language"); pb_fixed32(&b, 2, KEY_BT_LANG);
-      pb_str(&b, 3, "Bluetooth announcement language"); pb_str(&b, 5, "mdi:translate");
-      for (int i = 0; i < bt_lang_count; i++) pb_str(&b, 6, bt_langs[i].name);
-      pb_uint(&b, 8, 1); send_msg(LIST_SELECT, &b); }
-    /* a root shell without a password for the whole network while it is on: closes by itself after 30 min (lockdown.sh) */
-    { PB(b, 160); pb_str(&b, 1, "debug_access_adb"); pb_fixed32(&b, 2, KEY_ADB_WIFI); pb_str(&b, 3, "Debug access (adb over Wi-Fi)");
-      pb_str(&b, 5, "mdi:console-network"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
-    if (arb_running()) {
-        { PB(b, 160); pb_str(&b, 1, "join_arbitration_network"); pb_fixed32(&b, 2, KEY_ARB_JOIN); pb_str(&b, 3, "Join arbitration network");
-          pb_str(&b, 5, "mdi:account-group"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
+    if (listed(KEY_ARB_PEERS)) {
         /* the action other Echos hand their network key through: Home Assistant registers it as
          * esphome.<node>_arbitration_key, after the node name we report, whatever the device is called there */
         { PB(b, 256); PB(a, 48); pb_str(&b, 1, "arbitration_key"); pb_fixed32(&b, 2, KEY_ARB_SERVICE);
@@ -557,12 +498,10 @@ static void send_setting_entities(void)
     }
     /* Whisper detection (whisper.h): "{{ is_state('binary_sensor.<node>_last_request_whispered', 'on') }}" in the
      * conversation agent's prompt template, to have it answer in whispered speech tags */
-    if (core_whispered() != -2) { PB(b, 192); pb_str(&b, 1, "last_request_whispered"); pb_fixed32(&b, 2, KEY_WHISPERED);
+    if (listed(KEY_WHISPERED)) { PB(b, 192); pb_str(&b, 1, "last_request_whispered"); pb_fixed32(&b, 2, KEY_WHISPERED);
         pb_str(&b, 3, "Last request whispered"); pb_str(&b, 8, "mdi:account-voice"); send_msg(LIST_BINARY_SENSOR, &b); }
-    /* Wi-Fi motion (wifimotion.c): experimental, and the names say so; the switch is off by default */
-    if (wifimotion_present()) {
-        { PB(b, 192); pb_str(&b, 1, "wifi_motion_detection"); pb_fixed32(&b, 2, KEY_WIFI_MOTION_ON);
-          pb_str(&b, 3, "Wi-Fi motion detection (experimental)"); pb_str(&b, 5, "mdi:wifi-alert"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
+    /* Wi-Fi motion (wifimotion.c): experimental, and the names say so */
+    if (listed(KEY_WIFI_MOTION)) {
         { PB(b, 192); pb_str(&b, 1, "wifi_motion"); pb_fixed32(&b, 2, KEY_WIFI_MOTION); pb_str(&b, 3, "Wi-Fi motion (experimental)");
           pb_str(&b, 5, "motion"); send_msg(LIST_BINARY_SENSOR, &b); }
         { PB(b, 192); pb_str(&b, 1, "wifi_motion_sensitivity"); pb_fixed32(&b, 2, KEY_WIFI_MOTION_SENS);
@@ -570,14 +509,10 @@ static void send_setting_entities(void)
           pb_float(&b, 6, WIFIMOTION_SENS_MIN); pb_float(&b, 7, WIFIMOTION_SENS_MAX); pb_float(&b, 8, 1); pb_uint(&b, 10, 1); pb_uint(&b, 12, 2);
           send_msg(LIST_NUMBER, &b); }
     }
-    /* online updates (update.c): off unless chosen here; the entity says what is new on the channel and installs it */
-    { PB(b, 192); pb_str(&b, 1, "online_updates"); pb_fixed32(&b, 2, KEY_UPDATE_CHANNEL); pb_str(&b, 3, "Online updates");
-      pb_str(&b, 5, "mdi:cloud-download"); for (int i = 0; i < 3; i++) pb_str(&b, 6, update_channels[i]);
-      pb_uint(&b, 8, 1); send_msg(LIST_SELECT, &b); }
+    /* online updates (update.c): the channel is picked on the settings page; the entity says what is new and installs it */
     { PB(b, 128); pb_str(&b, 1, "firmware"); pb_fixed32(&b, 2, KEY_UPDATE); pb_str(&b, 3, "Firmware");
       pb_uint(&b, 7, 1); pb_str(&b, 8, "firmware"); send_msg(LIST_UPDATE, &b); }
     send_light_entities();
-    send_diag_entities();
 }
 
 static void on_setting(unsigned type, const unsigned char *p, const unsigned char *end)
@@ -1265,6 +1200,14 @@ static void send_all_settings(void)
 
 static void settings_changed(void) { send_all_settings(); }      /* lock held: a setting changed (web page, settings.c) */
 
+/* lock held: a feature went on or off.  ESPHome has no message for a changed entity list: Home Assistant reads it at
+ * each connect, and removes what is no longer there (registry included).  So the links close; it comes back in seconds. */
+static void entities_changed(void)
+{
+    for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0) shutdown(clients[i].fd, SHUT_RDWR);
+    fprintf(stderr, "entities changed: links closed, Home Assistant lists them again\n");
+}
+
 static int handle(unsigned type, const unsigned char *p, size_t len)
 {
     const unsigned char *end = p + len; struct pbf f; int keep = 1;
@@ -1289,7 +1232,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case LIST_ENTITIES_REQ: send_entities(); break;
     case SUBSCRIBE_STATES:
         for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd == reply_fd) clients[i].states = 1;
-        send_mp_state(); send_all_settings(); send_token_state(); send_handoff_state(); send_diag_states(); break;
+        send_mp_state(); send_all_settings(); send_token_state(); send_handoff_state(); break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
     case UPDATE_COMMAND: {
         unsigned key = 0, cmd = 0;
@@ -1430,7 +1373,7 @@ static void serve(int fd)
     if (!buf || !pt) { free(buf); free(pt); return; }
     pthread_mutex_lock(&core_lock);
     { static int loaded; if (!loaded) { loaded = 1; have_light = !isnan(core_lux()); settings_load(); key_load();
-                                       pthread_t t; pthread_create(&t, NULL, diag_thread, NULL); pthread_detach(t);
+                                       pthread_t t;
                                        pthread_create(&t, NULL, light_thread, NULL); pthread_detach(t);
                                        adbwifi_start(adb_changed); wifimotion_start(wifi_changed); update_start(update_changed);
                                        if (core_bluetooth(-1)) { ble_start(&ble_handler); a2dp_start(bt_changed); } } }
@@ -1515,11 +1458,12 @@ static int arb_request(const char *entity)
 
 static void sound(const char *event)    /* lock held */
 {
-    PB(b, 64); pb_fixed32(&b, 1, KEY_SOUND); pb_str(&b, 2, event); send_state(EVENT, &b);
+    PB(b, 64); pb_fixed32(&b, 1, KEY_SOUND); pb_str(&b, 2, event);
+    if (listed(KEY_SOUND)) send_state(EVENT, &b);
     fprintf(stderr, "sound: %s\n", event);
 }
 
 static void whispered(int on) { (void)on; send_setting(KEY_WHISPERED); }   /* lock held */
 
 const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, cancel, played, volume_changed, mute_changed, print_mdns, bt_device,
-                                     arb_send, arb_changed, sound, whispered, arb_request, settings_changed };
+                                     arb_send, arb_changed, sound, whispered, arb_request, settings_changed, entities_changed };
