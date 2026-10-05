@@ -39,6 +39,7 @@ struct proto {
     void (*sound)(const char *event);           /* may be NULL: sound detection heard one of core_sound_events */
     void (*whispered)(int on);                  /* may be NULL: the request just ended was whispered or not (core_whispered) */
     int  (*arb_request)(const char *entity);    /* may be NULL: ask Home Assistant once for an entity's state (arb.h) */
+    void (*settings_changed)(void);             /* may be NULL: a setting changed elsewhere (web page): show them all again */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
@@ -52,6 +53,8 @@ enum state core_state(void);
 void core_set_state(enum state s);
 void core_link(int connected, int ready);       /* client connection / server wants pipelines.  (0,0) ends a running pipeline */
 void core_mic_off(void);                        /* server has heard enough */
+int  core_ha_linked(void);                     /* lock held: a client (Home Assistant) is connected */
+void core_settings_changed(void);             /* lock held: settings.c changed one; the protocol shows it */
 void core_mic_level(int dbfs);                  /* speech level the pipeline gets: micgain.h */
 int  core_mic_denoise(int set);                 /* noise reduction on what the pipeline gets (micdenoise.h): 0 off .. 3 high, -1 reads */
 void core_pipeline_finish(void);

@@ -260,6 +260,17 @@ included: the version it falls back to from then on is always the last one that 
 
 ## Configuration
 
+### Settings page
+
+Every Echo serves a settings page at `http://<echo-ip>:28931/`. On first use, press "Ask the Echo", then the action
+button (the dot) within a minute: the ring shows that a login waits, and the press approves this browser on this
+Echo from then on. The page shows what does not work and why (Home Assistant not connected, wake word or whisper
+models missing), every setting, and the browsers approved (revoke there). "Export" saves the settings as
+`hassmic-settings.conf` (name=value lines, without the Echo's name, keys and pairings); "Import" applies such a file,
+to this Echo or another. Works with Wyoming too.
+
+### hassmic.conf
+
 One file on the Echo, `/data/local/hassmic/hassmic.conf`, read at boot (edit over adb, reboot):
 
 ```sh
@@ -272,6 +283,7 @@ ARGS=""                     # extra options, below
 
 | `ARGS` option | Effect |
 |---|---|
+| `-W 0` | no settings page (port 28931) |
 | `-m <pryon.manifest>` | wake word model to start with, until one is picked in Home Assistant |
 | `-w remote` | wake word detection in Home Assistant (openWakeWord) instead of on the Echo |
 | `-E` | no sound on wake |
@@ -336,8 +348,13 @@ Open issues and measurements: [PLAN.md](PLAN.md).
 - **Egress**: Amazon's daemons may only reach local addresses (plus DNS to the servers DHCP hands out); `otad` and
   `ace_otad` never get out. hassmic itself may reach any address. Put the Echo on a network without internet as a second
   layer.
-- **Inbound**: TCP 16384–32767 only (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 updates), UDP 16384–32767
-  (28930 arbitration between Echos).
+- **Inbound**: TCP 16384–32767 only (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 updates, 28931 settings
+  page), UDP 16384–32767 (28930 arbitration between Echos).
+- **Settings page**: plain HTTP (an Echo has no certificate a browser takes), so it never shows a secret (API key,
+  Sendspin token, network keys). A browser gets in only by a press of the Echo's action button while its login waits;
+  two browsers asking at once are both refused. Every request after that is signed with a key only that browser and
+  that Echo share (X25519), with a counter against replays. Someone who can change traffic on your network (not only
+  read it) could change the page itself, as with any plain HTTP page.
 - **adb**: a root shell without authentication (the unlock turns adbd's key check off). Over Wi-Fi it is closed: adbd
   runs without its network listener and the firewall drops port 5555. Opened only by the "Debug access" switch (30
   minutes; taken only over the encrypted connection with Home Assistant's key), by `scripts/adb-wifi.sh` (30 minutes;

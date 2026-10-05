@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hassmic settings</title>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --fg: #1d232b; --muted: #5d6874; --line: #e1e5ea; --accent: #1f6feb;
+  --warn-bg: #fff6e0; --warn-fg: #7a5200; --ok: #1a7f37; --bad: #c62828;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111418; --card: #1b2026; --fg: #e6e9ed; --muted: #98a2ad; --line: #2c333b; --accent: #4c8dff;
+          --warn-bg: #3a2e12; --warn-fg: #f2cc7a; --ok: #3fb950; --bad: #ff6b6b; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 16px; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 15px; margin: 0 0 8px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.sub { color: var(--muted); font-size: 13px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); }
+.row:first-of-type { border-top: 0; }
+.row label { flex: 1; }
+.row .ctl { display: flex; align-items: center; gap: 8px; }
+.warn { background: var(--warn-bg); color: var(--warn-fg); border-radius: 8px; padding: 8px 12px; margin: 6px 0; }
+button, select, input[type=number] { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px; }
+button { cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+input[type=range] { width: 160px; }
+input[type=number] { width: 72px; }
+.switch { position: relative; width: 42px; height: 24px; flex: none; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch span { position: absolute; inset: 0; background: var(--line); border-radius: 12px; transition: .15s; cursor: pointer; }
+.switch span::after { content: ""; position: absolute; left: 3px; top: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: .15s; }
+.switch input:checked + span { background: var(--accent); }
+.switch input:checked + span::after { transform: translateX(18px); }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.ok { background: var(--ok); } .bad { background: var(--bad); }
+#toast { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: calc(100% - 32px); }
+#toast.show { opacity: 1; }
+.hidden { display: none !important; }
+pre { white-space: pre-wrap; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1 id="name">Echo</h1><div class="sub" id="ident"></div></div>
+    <div class="sub" id="ha"></div>
+  </header>
+
+  <section class="card hidden" id="login">
+    <h2>Log in</h2>
+    <p>This browser is not approved on this Echo yet. Ask, then press the <b>action button</b> (the dot) on the Echo
+       within a minute; its ring shows that a login waits.</p>
+    <div class="actions"><button class="primary" id="ask">Ask the Echo</button></div>
+    <p class="sub" id="loginmsg"></p>
+  </section>
+
+  <div id="app" class="hidden">
+    <section id="warnings"></section>
+    <div id="groups"></div>
+    <section class="card">
+      <h2>Settings file</h2>
+      <p class="sub">Everything except what belongs to this one Echo (its name, keys, pairings), as name=value lines:
+         for other Echos, or as a preset for <code>scripts/setup.sh</code>.</p>
+      <div class="actions">
+        <button id="export">Export</button>
+        <label class="sub"><button id="importbtn">Import…</button><input type="file" id="import" accept=".conf,.txt,text/plain" class="hidden"></label>
+      </div>
+      <pre class="sub" id="importmsg"></pre>
+    </section>
+    <section class="card">
+      <h2>Approved browsers</h2>
+      <div id="clients"></div>
+    </section>
+  </div>
+</main>
+<div id="toast"></div>
+<script src="/crypto.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

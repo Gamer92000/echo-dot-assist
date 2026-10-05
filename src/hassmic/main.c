@@ -47,6 +47,8 @@
 #include "sounds.h"
 #include "sound.h"
 #include "whisper.h"
+#include "settings.h"
+#include "web.h"
 #include "board.h"
 
 #define PIPELINE_TIMEOUT 30         /* seconds in LISTENING or THINKING before giving up */
@@ -92,6 +94,7 @@ const char *core_node_name(void)
 }
 static int ota_port = 28929;                        /* 0 = no push updates */
 static int arb_port = 28930;                        /* 0 = no wake word arbitration */
+static int web_port = 28931;                        /* 0 = no settings page */
 int core_local_wake = 1, core_port, core_sendspin_port = 28928;       /* 0 = Sendspin off */
 static const struct proto *proto = &proto_esphome;
 
@@ -743,6 +746,13 @@ static int arb_send_key(const char *node, const char *network, const char *key)
 
 static void arb_notify(void) { pthread_mutex_lock(&core_lock); if (proto->arb_changed) proto->arb_changed(); pthread_mutex_unlock(&core_lock); }
 
+void core_settings_changed(void) { if (connected && proto->settings_changed) proto->settings_changed(); }
+int  core_ha_linked(void) { return connected; }
+
+/* The settings page's login waits for the action button: the ring says so (an animation all models have) */
+static void web_attention(int on) { led(on ? "-s" : "-u", "authenticated_setup_mode"); }
+static void web_approved(int ok) { sound_queue(ok ? SND_BT_ON : SND_BT_OFF); }
+
 static int arb_request(const char *entity)
 {
     pthread_mutex_lock(&core_lock);
@@ -901,6 +911,7 @@ static void *earcon_thread(void *arg)
  * what the button paused; else talk */
 static void on_action(void)
 {
+    if (web_approve()) return;                          /* a login of the settings page waited for this press */
     pthread_mutex_lock(&core_lock);
     int busy = state == LISTENING || state == THINKING;
     pthread_mutex_unlock(&core_lock);
@@ -1283,7 +1294,7 @@ int main(int argc, char **argv)
     const char *manifest = NULL, *input = board.keypad; int port = 0, print_mdns = 0, o;
     core_name = board.default_name;
     micgain_init(&mic_gain, MICGAIN_LEVEL);            /* until the protocol has its saved settings (Wyoming: always) */
-    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:a:LEVSTB")) != -1) switch (o) {
+    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:a:W:LEVSTB")) != -1) switch (o) {
         case 'P': proto = !strcmp(optarg, "wyoming") ? &proto_wyoming : &proto_esphome; break;
         case 'p': port = atoi(optarg); break;
         case 'n': core_name = optarg; break;
@@ -1293,13 +1304,14 @@ int main(int argc, char **argv)
         case 'z': core_sendspin_port = atoi(optarg); break;
         case 'o': ota_port = atoi(optarg); break;
         case 'a': arb_port = atoi(optarg); break;
+        case 'W': web_port = atoi(optarg); break;
         case 'L': use_led = 0; break;
         case 'E': use_earcon = 0; break;
         case 'V': use_volume = 0; break;
         case 'S': print_mdns = 1; break;
         case 'B': use_bt = 0; break;
         case 'T': { char tok[160]; sendspin_init(); sendspin_pairing_token(tok, sizeof tok); puts(tok); return 0; }
-        default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-z port] [-o port] [-a port] [-L] [-E] [-V] [-S]\n"); return 2;
+        default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-z port] [-o port] [-a port] [-W port] [-L] [-E] [-V] [-S]\n"); return 2;
     }
     core_port = port ? port : proto->port;
     if (print_mdns) { proto->print_mdns(); return 0; }
@@ -1335,6 +1347,9 @@ int main(int argc, char **argv)
     if (core_sendspin_port) sendspin_start(core_sendspin_port);
     if (use_bt) a2dp_start(NULL);
     if (ota_port) ota_start(ota_port);
+    pthread_mutex_lock(&core_lock); settings_load(); pthread_mutex_unlock(&core_lock);    /* whatever the protocol */
+    static const struct web_hooks web_hooks = { web_attention, web_approved };
+    if (web_port && web_start(web_port, &web_hooks)) fprintf(stderr, "web: not available\n");
 
     int ls = net_listen(core_port);
     if (ls < 0) { perror("listen"); return 1; }

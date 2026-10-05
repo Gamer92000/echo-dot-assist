@@ -133,7 +133,7 @@ async def main():
               and len(u.release_summary) <= 255 and u.release_summary.endswith("...") and u.title == "hassmic",
               f"release page, notes unescaped and cut to {len(u.release_summary)} characters")
         check("/repos/o/r/releases?per_page=10" in GitHub.hits, "beta looks through the list, which GitHub starts with the release")
-        check(open(env["HASSMIC_SETTINGS"]).read().split()[14] == "1", "channel saved (settings field 15)")
+        check("online_updates=beta" in open(os.path.join(state, "config")).read(), "channel saved (state/config)")
 
         enc.select_command(sel.key, "release")
         check(await wait_for(lambda: last(UpdateState, upd.key).latest_version == "2099.01.01.093000"), "release: the newest that is not a prerelease")
@@ -169,7 +169,7 @@ async def main():
         check(await wait_for(lambda: "no release published yet" in last(UpdateState, upd.key).release_summary), "release channel, nothing released: said so")
 
         enc.select_command(sel.key, "off"); await asyncio.sleep(0.5)
-        check(open(env["HASSMIC_SETTINGS"]).read().split()[14] == "0", "off again, saved")
+        check("online_updates=off" in open(os.path.join(state, "config")).read(), "off again, saved")
 
         # the saved channel survives a restart
         enc.select_command(sel.key, "release"); await asyncio.sleep(0.5); await enc.disconnect()

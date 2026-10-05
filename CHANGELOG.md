@@ -2,6 +2,13 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-06
+
+- **A settings page on every Echo**, at `http://<echo-ip>:28931/`. Log in once per browser with a press of the Echo's
+  action button. It shows every setting, warns about what does not work and why (no Home Assistant link, models
+  missing), and exports the settings to a file you can import on other Echos. The settings file on the Echo is now
+  `state/config` with one `name=value` per line; the old one is moved over by itself.
+
 ## 2026-10-05
 
 - **Several Echos settle the wake word among themselves without "Allow the device to perform Home Assistant

@@ -487,6 +487,20 @@ Run in this order. Each step says what it proves.
       has no custom groups; sliders, dB, no entity category), ESPHome only. Listening test with pink noise on the device, 3.5 mm
       line-out to external speakers: +6/-6 and -6/+6 audible on both the Music and the TTS stream. Set from an API client on the
       device: mixer reads back the values. Not done: survives a reboot (only by the file), the stock `equalizer-change` ring animation
+- [~] Settings page (2026-10-06, asked: fewer entities in HA, features still there, no CLI, simple and secure). Served
+      by hassmic on TCP 28931 (inside the firewall's range), files of `web/` gzip'd into the binary. Login by approval:
+      the browser's X25519 key waits up to 60 s for a press of the action button (ring `authenticated_setup_mode`, on
+      all three models), a second browser asking meanwhile refuses both; approved keys in `state/web_clients`. Requests
+      signed (BLAKE2b-128 keyed with K = BLAKE2b(X25519) over method, path, counter, body); counter per browser, on disk
+      for writes. Plain HTTP, so no secrets in answers. `crypto.subtle` is missing on plain-HTTP pages: `web/crypto.js`
+      has X25519 (after TweetNaCl) and BLAKE2b (BigInt), 20 + 262 cases equal to Python's. Settings by name
+      (`settings.c`, `state/config`, old positional file moved once; loaded at start for Wyoming too). Phases: (1) done:
+      page, login, status warnings, settings, export/import, revoke; host test `fake_web.py` (23 checks) and the real
+      page in jsdom against the host build (login, set, no errors). (2) features: off = no entities in HA, on = their
+      entities (lean core: media player, mute, DND, wake sound, LEDs, EQ, firmware stay; the rest page-only), HA
+      re-reads entities on reconnect. (3) arbitration view (members, failed joins, parallel networks), several Echos
+      from one page, apply to all. (4) `scripts/setup.sh` presets from an export. Not done: on the device (the ring
+      animation, the press)
 - [~] Wake word arbitration between Echos (2026-09-25), stock's ESP ("Echo Spatial Perception", decided in Amazon's cloud)
       on the LAN, `arb.c`. Home Assistant alone only has first-come: `assist_pipeline/run.py` `accept_wake_word` drops a
       second wake-up with the same phrase within `WAKE_WORD_COOLDOWN` = 2 s (we send `wake_word_phrase` "Alexa") with error

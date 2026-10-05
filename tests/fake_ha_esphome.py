@@ -57,6 +57,9 @@ async def main():
                HASSMIC_FAKE_SOUND="dogBark",                                    # every ~10 s window "hears" a dog (sound_none.c)
                HASSMIC_FAKE_WHISPER="1",                                        # a model, and every request whispered (whisper_none.c)
                HASSMIC_FAKE_WIFI=os.path.join(state, "rx_stat"))                # what the Wi-Fi driver answers RX_STAT (wifimotion.c)
+    def conf():                                      # state/config: name=value lines (settings.c)
+        try: return dict(l.strip().split("=", 1) for l in open(os.path.join(state, "config")) if "=" in l and not l.startswith("#"))
+        except OSError: return {}
     rx_stat = lambda rcpi: open(env["HASSMIC_FAKE_WIFI"], "w").write(f"RX Stat:\nRX SNR (dB)          = 32\nRCPI RX0             = {rcpi}\n")
     rx_stat(112)
     with open(env["HASSMIC_LUX"], "w") as f: f.write("67\n")
@@ -127,7 +130,7 @@ async def main():
         svcs = (await cli.list_entities_services())[1]
         check([(v.name, [(x.name, int(x.type)) for x in v.args]) for v in svcs] == [("arbitration_key", [("network", 3), ("key", 3)])],
               "action \"arbitration_key\" (network, key: strings) for other Echos to hand over their network")
-        check(open(settings).read().split()[:2] == ["0", "-20"] and open(settings).read().split()[8:9] == ["2"], f"settings persisted: {open(settings).read().strip()!r}")
+        check(conf().get("noise_reduction") == "off" and conf().get("mic_level") == "-20", f"settings persisted: {conf()}")
         cfg = await cli.get_voice_assistant_configuration(5)
         avail = sorted((w.id, w.wake_word, list(w.trained_languages)) for w in cfg.available_wake_words)
         check(avail == [("alexa", "Alexa", ["en"]), ("computer-en-US", "Computer", ["en"]), ("echo-de", "Echo", ["de"])]
@@ -284,8 +287,8 @@ async def main():
         check(isinstance(dnd, SwitchInfo), "do not disturb switch listed")
         cli.switch_command(dnd.key, True); await asyncio.sleep(0.3)
         check(any(isinstance(s, SwitchState) and s.key == dnd.key and s.state for s in states)
-              and open(settings).read().split()[6:7] == ["1"], f"do not disturb on and persisted: {open(settings).read().strip()!r}")
-        check(open(settings).read().split()[7:8] == ["en"], f"Bluetooth announcement language persisted as its code: {open(settings).read().strip()!r}")
+              and conf().get("do_not_disturb") == "on", f"do not disturb on and persisted: {conf()}")
+        check(conf().get("bluetooth_announcement_language", "en") == "en", f"Bluetooth announcement language persisted as its code: {conf()}")
         before = os.path.getsize(play)
         res = await cli.send_voice_assistant_announcement_await_response(f"http://127.0.0.1:{HTTP_PORT}/a.wav", 15, "x")
         check(not res.success and os.path.getsize(play) == before, "do not disturb drops announcements")
@@ -361,7 +364,7 @@ async def main():
         check(len(mic) > 16000, f"encrypted: mic audio streamed: {len(mic)} bytes in 1 s")
         enc.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await asyncio.sleep(0.3)
         enc.select_command(by["noise_reduction"].key, "Medium"); await asyncio.sleep(0.3)
-        check(open(settings).read().split()[:1] == ["2"], f"noise reduction set to medium and persisted: {open(settings).read().strip()!r}")
+        check(conf().get("noise_reduction") == "medium", f"noise reduction set to medium and persisted: {conf()}")
         started.clear(); mic.clear(); proc.send_signal(signal.SIGUSR1)
         await asyncio.wait_for(started.wait(), 5); await asyncio.sleep(1.0)
         peak = max(abs(v) for v in struct.unpack(f"<{len(mic) // 2}h", mic[:len(mic) // 2 * 2])) if mic else 0
@@ -401,10 +404,10 @@ async def main():
         c.number_command(lbright.key, 30)
         await asyncio.sleep(0.5)
         check(last3(lbright.key, NumberState) == 30 and last3(lauto.key, SwitchState) is False, "a fixed LED level switches auto brightness off")
-        check(open(settings).read().split()[9:11] == ["0", "30"], f"LED brightness kept in the settings file: {open(settings).read().strip()!r}")
+        check(conf().get("led_auto_brightness") == "off" and conf().get("led_brightness") == "30", f"LED brightness kept in the settings file: {conf()}")
         c.switch_command(lauto.key, True)
         await asyncio.sleep(0.5)
-        check(last3(lauto.key, SwitchState) is True and open(settings).read().split()[9] == "1", "auto brightness switched on again")
+        check(last3(lauto.key, SwitchState) is True and conf().get("led_auto_brightness") == "on", "auto brightness switched on again")
         # sound detection: off by default, one event entity; on, it reports what the detector hears (here sound_none.c's
         # dog, once per ~10 s window of the capture), kept in the settings file
         sw, ev = by.get("sound_detection"), by.get("sound")
@@ -415,8 +418,8 @@ async def main():
         check(not [x for x in st3 if isinstance(x, Event)], "no sound event while sound detection is off")
         c.switch_command(sw.key, True)
         await asyncio.sleep(0.5)
-        check(last3(sw.key, SwitchState) is True and open(settings).read().split()[11:12] == ["1"],
-              f"sound detection switched on and kept in the settings file: {open(settings).read().strip()!r}")
+        check(last3(sw.key, SwitchState) is True and conf().get("sound_detection") == "on",
+              f"sound detection switched on and kept in the settings file: {conf()}")
         for _ in range(26):
             if [x for x in st3 if isinstance(x, Event)]: break
             await asyncio.sleep(0.5)
@@ -439,7 +442,7 @@ async def main():
         check(len([x for x in st3 if isinstance(x, Event)]) > n0, "sound events again once the Echo has been quiet for a window")
         c.switch_command(sw.key, False)
         await asyncio.sleep(0.5)
-        check(last3(sw.key, SwitchState) is False and open(settings).read().split()[11:12] == ["0"], "sound detection switched off again")
+        check(last3(sw.key, SwitchState) is False and conf().get("sound_detection") == "off", "sound detection switched off again")
         # Wi-Fi motion (experimental): off by default, the sensor unknown while off; on, a still level is no motion, a
         # wobbling one is, and it clears after the hold (3 s in the PC build, 30 s on the Echo)
         wsw, wbs, wsn = by.get("wifi_motion_detection"), by.get("wifi_motion"), by.get("wifi_motion_sensitivity")
@@ -453,8 +456,8 @@ async def main():
         c.switch_command(wsw.key, True)
         await asyncio.sleep(3)
         check(last3(wsw.key, SwitchState) is True and wstate() and not wstate().missing_state and wstate().state is False
-              and open(settings).read().split()[12:14] == ["1", "5"],
-              f"switched on: a steady level is no motion, kept in the settings file: {open(settings).read().strip()!r}")
+              and conf().get("wifi_motion") == "on" and conf().get("wifi_motion_sensitivity") == "5",
+              f"switched on: a steady level is no motion, kept in the settings file: {conf()}")
         for _ in range(60):                                 # someone walking through the path: 6 s
             rx_stat(random.randint(106, 118)); await asyncio.sleep(0.1)
             if wstate().state: break
@@ -464,10 +467,10 @@ async def main():
         check(wstate().state is False, "motion clears after the hold")
         c.number_command(wsn.key, 8)
         await asyncio.sleep(0.5)
-        check(last3(wsn.key, NumberState) == 8 and open(settings).read().split()[13] == "8", "sensitivity set and kept")
+        check(last3(wsn.key, NumberState) == 8 and conf().get("wifi_motion_sensitivity") == "8", "sensitivity set and kept")
         c.switch_command(wsw.key, False)
         await asyncio.sleep(1)
-        check(last3(wsw.key, SwitchState) is False and wstate().missing_state and open(settings).read().split()[12] == "0",
+        check(last3(wsw.key, SwitchState) is False and wstate().missing_state and conf().get("wifi_motion") == "off",
               "switched off again: the sensor unknown")
         unsub()                                             # the real assistant again, with mic and replies
         c.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio,
