@@ -12,6 +12,9 @@ What changed for people using the Echo, newest first. Details and measurements a
   announcements, the online updates channel, "Music Assistant without pairing", debug access and SoC temperature / CPU
   usage are on the settings page only. After this update, entities that moved are gone from Home Assistant; the
   settings themselves are kept. Opening debug access takes a press of the action button.
+- **The settings page shows the wake word arbitration network**: which Echos are in it, which are not and why (no key
+  yet, or a second network beside this one), with what to do about it. It also lists the other Echos it hears: log in
+  to each once, and it tells which settings differ from this Echo's and copies them over, to one Echo or to all.
 
 - **A settings page on every Echo**, at `http://<echo-ip>:28931/`. Log in once per browser with a press of the Echo's
   action button. It shows every setting, warns about what does not work and why (no Home Assistant link, models

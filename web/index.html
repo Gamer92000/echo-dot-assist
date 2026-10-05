@@ -43,6 +43,9 @@ input[type=number] { width: 72px; }
 #toast { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: calc(100% - 32px); }
 #toast.show { opacity: 1; }
 .hidden { display: none !important; }
+.tag { display: inline-block; font-size: 12px; padding: 1px 7px; border-radius: 10px; background: var(--line); color: var(--muted); margin-left: 6px; }
+.tag.warn2 { background: var(--warn-bg); color: var(--warn-fg); }
+ul.plain { margin: 4px 0 8px; padding-left: 18px; }
 pre { white-space: pre-wrap; font-size: 13px; }
 </style>
 </head>
@@ -64,6 +67,21 @@ pre { white-space: pre-wrap; font-size: 13px; }
   <div id="app" class="hidden">
     <section id="warnings"></section>
     <div id="groups"></div>
+    <section class="card hidden" id="arbcard">
+      <h2>Wake word arbitration</h2>
+      <div id="arb"></div>
+    </section>
+    <section class="card">
+      <h2>Echos</h2>
+      <p class="sub">Every Echo this one hears, plus those you add. Log in to each once (its action button); then this page
+         shows which settings differ from this Echo's and copies them over: for one that missed a change, or a new one.</p>
+      <div id="devices"></div>
+      <div class="actions" style="margin-top:8px">
+        <button id="applyall">Make all like this Echo</button>
+        <input id="addip" placeholder="IP address" style="font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:7px;background:var(--card);color:var(--fg);width:150px">
+        <button id="add">Add</button>
+      </div>
+    </section>
     <section class="card">
       <h2>Debug access</h2>
       <p class="sub">adb over Wi-Fi: a root shell for anyone on the network while open. Opening takes a press of the

@@ -271,7 +271,10 @@ included: the version it falls back to from then on is always the last one that 
 Every Echo serves a settings page at `http://<echo-ip>:28931/`. On first use, press "Ask the Echo", then the action
 button (the dot) within a minute: the ring shows that a login waits, and the press approves this browser on this
 Echo from then on. The page shows what does not work and why (Home Assistant not connected, wake word or whisper
-models missing), every setting, and the browsers approved (revoke there). "Export" saves the settings as
+models missing), every setting, and the browsers approved (revoke there). Wake word arbitration: the network, the
+Echos in it, and those outside it with the reason (no key yet, a second network beside it) and what to do. Echos: every
+Echo this one hears (and any you add by address); log in to each once with its own action button, and the page shows
+which settings differ from this Echo's and copies them over, to one or to all. "Export" saves the settings as
 `hassmic-settings.conf` (name=value lines, without the Echo's name, keys and pairings); "Import" applies such a file,
 to this Echo or another. Works with Wyoming too.
 

@@ -20,6 +20,7 @@
 #include "web.h"
 #include "core.h"
 #include "adbwifi.h"
+#include "arb.h"
 #include "board.h"
 #include "diag.h"
 #include "hash.h"
@@ -340,7 +341,9 @@ static void state_json(int fd, const uint8_t me[32])
     n += isnan(t) ? (size_t)snprintf(o + n, cap - n, "null") : (size_t)snprintf(o + n, cap - n, "%.1f", t);
     n += (size_t)snprintf(o + n, cap - n, ",\"cpu\":");
     n += isnan(cpu) ? (size_t)snprintf(o + n, cap - n, "null") : (size_t)snprintf(o + n, cap - n, "%.0f", cpu);
-    n += (size_t)snprintf(o + n, cap - n, "},\"clients\":[");
+    n += (size_t)snprintf(o + n, cap - n, "},\"arbitration\":");
+    if (arb_running()) n += arb_status_json(o + n, cap - n); else n += (size_t)snprintf(o + n, cap - n, "null");
+    n += (size_t)snprintf(o + n, cap - n, ",\"clients\":[");
     pthread_mutex_lock(&lk);
     for (int i = 0; i < nclients && n < cap - 300; i++) {
         char h[65]; hex(h, clients[i].pub, 32); jesc(v, sizeof v, clients[i].label);

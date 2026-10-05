@@ -25,6 +25,9 @@ void arb_key(const char *network, const char *key);
 void arb_ha_state(const char *entity, const char *state);
 /* The text of our "Arbitration handoff" entity: our public key, and a sealed network key while we offer one */
 void arb_handoff(char *out, size_t cap);
+/* For the settings page: our network, the members (name, IP), the Echos outside it and why ("none": in no network,
+ * "younger": in a younger one, should join ours, "older": we should join theirs), as JSON.  Any lock may be held. */
+size_t arb_status_json(char *out, size_t cap);
 int  arb_pair(void);                            /* the pairing gesture: 2 min in which an Echo nearby may join; -1 not running */
 
 /* The wake word was heard with this score (signal to noise, dB x 100); prio 2 = this Echo is in a conversation or

@@ -83,6 +83,7 @@ async function load() {
   state = await (await echo.call('GET', '/api/state')).json();
   render();
   $('app').classList.remove('hidden');
+  if (!load.devices) { load.devices = true; refreshDevices().catch(() => {}); }
 }
 
 async function set(name, value) {
@@ -143,6 +144,8 @@ function render() {
     groups.append(card);
   }
 
+  renderArb();
+
   const a = $('adb');
   a.textContent = state.adb.waiting ? 'Waiting for the action button…' : state.adb.open ? 'Open: anyone on the network has a root shell (closes by itself after 30 min)' : 'Closed';
   $('adbopen').disabled = state.adb.open || state.adb.waiting; $('adbclose').disabled = !state.adb.open;
@@ -160,6 +163,135 @@ function render() {
     row.append(l, b); c.append(row);
   }
 }
+
+// ---------------------------------------------------------------- arbitration
+
+const escape = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const pageOf = (ip) => `http://${ip}:${location.port || 80}/`;
+
+function renderArb() {
+  const a = state.arbitration, card = $('arbcard');
+  if (!a) { card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  let h = '';
+  if (!a.joining) h += '<p>Off: this Echo answers every wake word it hears, whatever other Echos do.</p>';
+  else h += `<p>${a.network ? `Network <code>${a.network}</code>` : 'Looking for a network'}${a.pairing ? '<span class="tag warn2">pairing</span>' : ''}</p>`;
+  if (a.joining && state.ha && !a.handoff_entity)
+    h += '<div class="warn">Home Assistant does not show this Echo\'s "Arbitration handoff" entity under the name it expects (renamed in Home Assistant, or the entity disabled). Other Echos can then hand it their network only through "Allow the device to perform Home Assistant actions", or the volume keys: hold Volume up and Volume down 2 s on this Echo, then on one in the network.</div>';
+  if (a.members.length) {
+    h += '<div class="sub">In the network with it:</div><ul class="plain">';
+    for (const m of a.members) h += `<li>${escape(m.node)} ${m.ip ? `<a href="${pageOf(m.ip)}">${m.ip}</a>` : ''}</li>`;
+    h += '</ul>';
+  } else if (a.joining && a.network) h += '<p class="sub">No other Echo in its network right now.</p>';
+  const why = {
+    none: (o) => `in no network${o.for_s > 60 ? ` for ${Math.round(o.for_s / 60)} min: it did not get the key` : ' yet'}`,
+    younger: () => 'in another network (younger): it should join this one',
+    older: () => 'in another network (older): this Echo should join it',
+  };
+  const others = a.others || [];
+  if (others.length) {
+    h += '<div class="sub">Echos outside it:</div><ul class="plain">';
+    for (const o of others) {
+      const stuck = o.state === 'none' ? o.for_s > 60 : true;
+      h += `<li>${escape(o.node)} ${o.ip ? `<a href="${pageOf(o.ip)}">${o.ip}</a>` : ''}: ${why[o.state](o)}` +
+           `${o.network ? ` <code>${o.network}</code>` : ''}${stuck ? '<span class="tag warn2">not joined</span>' : ''}</li>`;
+    }
+    h += '</ul>';
+    const nets = new Set(others.filter((o) => o.network).map((o) => o.network));
+    if (nets.size) h += `<div class="warn">${nets.size === 1 ? 'A second network' : nets.size + ' other networks'} beside this one: the Echos in it do not settle wake words with these. They merge by themselves when Home Assistant can carry the key; otherwise pair them with the volume keys (new Echo first, then one in this network).</div>`;
+  }
+  $('arb').innerHTML = h;
+}
+
+// ---------------------------------------------------------------- other Echos
+
+const others = new Map();                // base URL -> { echo, hello, logged, diff, error }
+async function exportOf(e) { return (await (await e.call('GET', '/api/export')).text()); }
+const parse = (text) => new Map(text.split('\n').filter((l) => l.includes('=') && !l.startsWith('#')).map((l) => l.split('=', 2)));
+
+async function refreshDevices() {
+  const ips = new Set(store('hm.extra') || []);
+  const a = state.arbitration;
+  if (a) for (const m of [...a.members, ...(a.others || [])]) if (m.ip) ips.add(m.ip);
+  const mine = parse(await exportOf(echo));
+  for (const ip of ips) {
+    const base = ip.includes(':') ? `http://${ip}` : `http://${ip}:${location.port || 80}`;     // host:port when added so
+    if (base === location.origin) continue;
+    let d = others.get(base);
+    try {
+      if (!d) {
+        const hello = await (await fetch(base + '/api/hello')).json();
+        if (hello.pub === echo.hello.pub) continue;            // this one, under another address
+        d = { echo: new Echo(base, hello) }; others.set(base, d);
+      }
+      try {
+        const theirs = parse(await exportOf(d.echo));
+        d.logged = true; d.diff = [...mine].filter(([k, v]) => theirs.has(k) && theirs.get(k) !== v).map(([k]) => k);
+      } catch (e) { d.logged = false; if (e.message !== 'login') throw e; }
+      d.error = null;
+    } catch (e) { if (d) d.error = 'not reachable'; else others.set(base, { error: 'not reachable', ip }); }
+  }
+  renderDevices();
+}
+
+function renderDevices() {
+  const box = $('devices'); box.innerHTML = '';
+  const self = document.createElement('div'); self.className = 'row';
+  self.innerHTML = `<label>${escape(echo.hello.name)} <span class="tag">this Echo</span></label>`;
+  box.append(self);
+  for (const [base, d] of others) {
+    const row = document.createElement('div'); row.className = 'row';
+    const l = document.createElement('label');
+    const name = d.echo ? d.echo.hello.name : d.ip;
+    l.innerHTML = `<a href="${base}/">${escape(name)}</a> <span class="sub">${escape(base.replace('http://', ''))}</span>` +
+      (d.error ? `<span class="tag warn2">${d.error}</span>` : !d.logged ? '<span class="tag">not logged in</span>'
+        : d.diff.length ? `<span class="tag warn2" title="${escape(d.diff.join(', '))}">${d.diff.length} setting${d.diff.length > 1 ? 's' : ''} differ</span>`
+        : '<span class="tag">same settings</span>');
+    const ctl = document.createElement('div'); ctl.className = 'ctl';
+    if (d.echo && !d.logged) {
+      const b = document.createElement('button'); b.textContent = 'Log in';
+      b.onclick = () => loginOther(d, b); ctl.append(b);
+    } else if (d.echo && d.diff.length) {
+      const b = document.createElement('button'); b.textContent = 'Make like this Echo';
+      b.onclick = () => applyTo([d]); ctl.append(b);
+    }
+    row.append(l, ctl); box.append(row);
+  }
+}
+
+async function loginOther(d, b) {
+  b.disabled = true; toast(`Press the action button on ${d.echo.hello.name}`);
+  for (let i = 0; i < 70; i++) {
+    const s = await d.echo.login();
+    if (s === 'approved') { await refreshDevices(); toast(`Logged in to ${d.echo.hello.name}`); return; }
+    if (s === 'refused') break;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  b.disabled = false; toast(`${d.echo.hello.name}: not approved`);
+}
+
+async function applyTo(list) {
+  const text = await exportOf(echo);
+  const notes = [];
+  for (const d of list) {
+    try {
+      const r = await (await d.echo.call('POST', '/api/set', text)).json();
+      // what that model has not got (Bluetooth, Wi-Fi motion) is no error worth showing
+      const errs = r.errors.split('\n').filter((x) => x && !x.includes('no such setting'));
+      if (errs.length) notes.push(`${d.echo.hello.name}: ${errs.join('; ')}`);
+    } catch (e) { notes.push(`${d.echo.hello.name}: ${e.message === 'login' ? 'not logged in' : e.message}`); }
+  }
+  toast(notes.length ? notes.join(' · ') : 'Copied');
+  await refreshDevices();
+}
+
+$('applyall').onclick = () => applyTo([...others.values()].filter((d) => d.echo && d.logged && d.diff.length));
+$('add').onclick = () => {
+  const ip = $('addip').value.trim();
+  if (!/^[0-9a-zA-Z.:-]+$/.test(ip)) { toast('Not an address'); return; }
+  const l = new Set(store('hm.extra') || []); l.add(ip); store('hm.extra', [...l]); $('addip').value = '';
+  refreshDevices();
+};
 
 $('adbopen').onclick = async () => {
   try {

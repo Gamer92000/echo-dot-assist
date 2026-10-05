@@ -505,8 +505,12 @@ Run in this order. Each step says what it proves.
       press of its own), Sendspin unpaired, diagnostics (`diag.c`). Bluetooth speaker defaults to on where a speaker
       played before (first `state/config`); the volume-key pairing switches arbitration on through the settings.
       `main.sh` reads `wifi_motion=on` from `state/config` for the module (it read field 13 of the old file). Tests
-      reworked onto `tests/webclient.py`: fake_web 35, fake_ha_esphome 97, fake_ha_update 21, fake_ha_arbitration 31. (3) arbitration view (members, failed joins, parallel networks), several Echos
-      from one page, apply to all. (4) `scripts/setup.sh` presets from an export. Not done: on the device (the ring
+      reworked onto `tests/webclient.py`: fake_web 35, fake_ha_esphome 97, fake_ha_update 21, fake_ha_arbitration 31. (3) done: arbitration card (`arb_status_json`: network, members with name + IP from
+      signed beacons via `recvfrom`, others as none / younger / older with how long; warning when HA does not show our
+      handoff entity), Echos card (heard ones + added by address, `host:port` too; a login each with its own button,
+      settings that differ, copy one or all). Checked in jsdom with two host builds (log in to B from A's page, 1
+      setting differs, copied, B's state/config has it; arbitration card shows B in a second network) and in
+      fake_ha_arbitration / fake_web (status JSON, CORS preflight). (4) `scripts/setup.sh` presets from an export. Not done: on the device (the ring
       animation, the press)
 - [~] Wake word arbitration between Echos (2026-09-25), stock's ESP ("Echo Spatial Perception", decided in Amazon's cloud)
       on the LAN, `arb.c`. Home Assistant alone only has first-come: `assist_pipeline/run.py` `accept_wake_word` drops a

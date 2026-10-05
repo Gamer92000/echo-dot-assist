@@ -164,7 +164,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (`build/web_assets.c`). Login: the browser's X25519 key waits for the action button (`web_approve()` first in
   `on_action`; ring `authenticated_setup_mode`), approved keys in `state/web_clients`, Echo key `state/web_key`.
   Requests signed (BLAKE2b-128 keyed with K over method, path, counter, body; K from X25519), counter per browser.
-  Never send secrets: it is plain HTTP. `web/crypto.js` (X25519, BLAKE2b; no `crypto.subtle` on plain HTTP) is checked
+  Never send secrets: it is plain HTTP. Arbitration card from `arb_status_json` (members with name and IP from their
+  signed beacons, others: in no network / younger / older); other Echos' pages are called cross-origin (CORS `*`,
+  the signature counts), each approved once with its own button; "make like this Echo" posts this one's export. `web/crypto.js` (X25519, BLAKE2b; no `crypto.subtle` on plain HTTP) is checked
   against Python by `tests/unit/web_crypto_test.py` (in `make unit`, needs node).
 - **adb over Wi-Fi** (`adbwifi.c`): the settings page only writes a request for root's firewall watcher, as `ota.c` does
   for updates; opening needs an approved browser plus a press of the action button (`web.c`), or (`ota.c`, `HMOTA-ADB1`) a challenge signed with the update key.

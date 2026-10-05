@@ -141,6 +141,9 @@ async def main():
               "the network key is not readable in the offer Home Assistant showed")
         await until(lambda: len(b.st("arbitration_handoff").split()) == 2, 5)
         check(len(b.st("arbitration_handoff").split()) == 2, "offer taken down once the other Echo is in")
+        arb = a.page.state()["arbitration"]
+        check(arb["network"] == "0000000000000002" and [(m["node"], m["ip"]) for m in arb["members"]] == [("echo-living-room", "127.0.0.1")]
+              and arb["handoff_entity"] == a.entity() and not arb["others"], f"settings page: the network, its member with its address, the handoff entity: {arb}")
         a.allowed = b.allowed = True
 
         # both hear it, the one that heard it better answers, the other stays quiet
@@ -226,6 +229,8 @@ async def main():
         await b.join(True)
         await asyncio.sleep(24)
         check(len(ha.refused) > refused and b.net() is None, "no handoff entity and no \"perform actions\": no key (HA raises its repair)")
+        o = [x for x in a.page.state()["arbitration"]["others"] if x["node"] == "echo-living-room"]
+        check(o and o[0]["state"] in ("none", "younger") and not o[0]["key_confirmed"], f"settings page: the Echo left outside, and why: {o}")
 
         # the volume keys on both: the member hands its network to the one Echo that asked
         b.pair(); await asyncio.sleep(1.5); a.pair()

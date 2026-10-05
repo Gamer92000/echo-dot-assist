@@ -51,6 +51,10 @@ async def main():
         check(st == 200 and b"blake2b" in gzip.decompress(body), "its scripts")
         b = Browser(WEB)
         check(b.hello["name"] == "Echo Web" and len(b.hello["pub"]) == 64, f"hello: {b.hello['name']}, {b.hello['model']}")
+        st, h, _ = rq("OPTIONS", "/api/set", headers={"Origin": "http://192.0.2.1:28931", "Access-Control-Request-Method": "POST",
+                                                     "Access-Control-Request-Headers": "x-hm-pub,x-hm-ctr,x-hm-mac"})
+        check(st == 204 and h.get("Access-Control-Allow-Origin") == "*" and "X-HM-Mac" in h.get("Access-Control-Allow-Headers", ""),
+              "CORS preflight: another Echo's page may call this one (the signature is what counts)")
 
         check(b.call("GET", "/api/state")[0] == 401, "not logged in: no state")
         check(b.login() == "waiting" and b.login() == "waiting", "login waits for the button")

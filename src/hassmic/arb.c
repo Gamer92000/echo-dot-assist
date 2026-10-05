@@ -117,11 +117,12 @@ static long long join_since, beacon_at, answer_at;
 static int reported_peers = -1;
 static atomic_int notify;
 
-static struct peer { uint8_t id[8]; uint64_t ctr; long long seen; } peers[NPEER];
+static struct peer { uint8_t id[8]; uint64_t ctr; long long seen; char node[NLEN]; uint32_t ip; } peers[NPEER];   /* node, ip: from its beacons */
 static struct claim { uint8_t id[8], kw[8]; int score, prio, won; long long at; } claims[NCLAIM];
 static unsigned claim_next;
 static struct cand {                                    /* Echos outside our network */
     uint8_t pub[32]; char node[NLEN], ent[ELEN]; uint64_t net; int attested, offers;  /* HA shows pub on ent; offers made there */
+    uint32_t ip;                                        /* where its beacons come from (network byte order), for the settings page */
     long long seen, first, pushed, polled;
 } cands[NPEER];
 static struct push { char node[NLEN], net[20], key[160]; } pushes[NPEER];     /* for Home Assistant, sent outside the lock */
@@ -442,7 +443,7 @@ static int valid_entity(const char *s)
 
 static void poll_entity(const char *e) { if (npoll < (int)(sizeof polls / sizeof polls[0])) snprintf(polls[npoll++], ELEN, "%s", e); }
 
-static void on_packet(const uint8_t *p, size_t n, long long now)
+static void on_packet(const uint8_t *p, size_t n, long long now, uint32_t ip)
 {
     struct rd r = { p, p + n, 0 }; const uint8_t *m = take(&r, 5);
     if (!join || !m || memcmp(m, "HMA1", 4)) return;
@@ -464,11 +465,14 @@ static void on_packet(const uint8_t *p, size_t n, long long now)
             }
             /* one we did not count yet (it just joined, or we did): answer, or it would not count us until our next beacon.
              * Not rate limited: only a holder of K gets here, once per member */
-            if (fresh(pub, c, now) && !known) beacon();
+            int f = fresh(pub, c, now);
+            if (f) { struct peer *pp = peer(pub); snprintf(pp->node, NLEN, "%s", nd); pp->ip = ip; }
+            if (f && !known) beacon();
             return;
         }
         struct cand *c = cand(pub);
         if (!c->first) c->first = now;
+        c->ip = ip;
         snprintf(c->node, NLEN, "%s", nd); c->net = net; c->seen = now;
         if (in_net && !net && !ago(answer_at, now, 1000)) { answer_at = now; beacon(); }       /* someone looking: here we are */
         push(c, now);
@@ -518,8 +522,9 @@ static void *loop(void *arg)
     (void)arg;
     for (;;) {
         if (poll(&pf, 1, 100) > 0) {
-            ssize_t n = recv(sock, buf, sizeof buf, 0);
-            if (n > 0) { pthread_mutex_lock(&lk); on_packet(buf, (size_t)n, now_ms()); pthread_mutex_unlock(&lk); }
+            struct sockaddr_in from; socklen_t fl = sizeof from;
+            ssize_t n = recvfrom(sock, buf, sizeof buf, 0, (struct sockaddr *)&from, &fl);
+            if (n > 0) { pthread_mutex_lock(&lk); on_packet(buf, (size_t)n, now_ms(), from.sin_addr.s_addr); pthread_mutex_unlock(&lk); }
         }
         struct push q[NPEER]; int nq; long long now = now_ms();
         pthread_mutex_lock(&lk);
@@ -758,6 +763,43 @@ int arb_join(int set)
     int r = join;
     pthread_mutex_unlock(&lk);
     return r;
+}
+
+static size_t jstr(char *o, size_t cap, const char *s)          /* node names and entity ids: [a-z0-9_.-] only */
+{
+    size_t n = 0;
+    for (; *s && n + 1 < cap; s++) if (isalnum((unsigned char)*s) || *s == '-' || *s == '_' || *s == '.') o[n++] = *s;
+    o[n] = 0;
+    return n;
+}
+
+size_t arb_status_json(char *o, size_t cap)
+{
+    size_t n = 0; long long now = now_ms(); char t[ELEN], ip[INET_ADDRSTRLEN]; int k = 0;
+#define J(...) do { if (n < cap) n += (size_t)snprintf(o + n, cap - n, __VA_ARGS__); } while (0)
+    pthread_mutex_lock(&lk);
+    jstr(t, sizeof t, self_ent);
+    J("{\"running\":%s,\"joining\":%s,\"node\":\"%s\",", running ? "true" : "false", join ? "true" : "false", node);
+    if (in_net) J("\"network\":\"%016llx\",", (unsigned long long)net_id); else J("\"network\":null,");
+    J("\"handoff_entity\":%s%s%s,\"pairing\":%s,\"members\":[", t[0] ? "\"" : "", t[0] ? t : "null", t[0] ? "\"" : "",
+      pair_until && now < pair_until ? "true" : "false");
+    for (int i = 0; i < NPEER; i++) if (ago(peers[i].seen, now, PEER_TTL_MS)) {
+        struct in_addr a = { peers[i].ip }; inet_ntop(AF_INET, &a, ip, sizeof ip); jstr(t, sizeof t, peers[i].node);
+        J("%s{\"node\":\"%s\",\"ip\":\"%s\",\"seen_s\":%lld}", k++ ? "," : "", t, peers[i].ip ? ip : "", (now - peers[i].seen) / 1000);
+    }
+    J("],\"others\":["); k = 0;
+    for (int i = 0; i < NPEER; i++) if (ago(cands[i].seen, now, PEER_TTL_MS)) {
+        struct cand *c = &cands[i]; const char *st;
+        struct in_addr a = { c->ip }; inet_ntop(AF_INET, &a, ip, sizeof ip); jstr(t, sizeof t, c->node);
+        st = !c->net ? "none" : in_net && c->net > net_id ? "younger" : "older";      /* none: not in a network (yet) */
+        J("%s{\"node\":\"%s\",\"ip\":\"%s\",\"network\":", k++ ? "," : "", t, c->ip ? ip : "");
+        if (c->net) J("\"%016llx\"", (unsigned long long)c->net); else J("null");
+        J(",\"state\":\"%s\",\"for_s\":%lld,\"key_confirmed\":%s}", st, (now - c->first) / 1000, c->attested ? "true" : "false");
+    }
+    J("]}");
+    pthread_mutex_unlock(&lk);
+#undef J
+    return n < cap ? n : cap - 1;
 }
 
 int arb_running(void) { return running; }
