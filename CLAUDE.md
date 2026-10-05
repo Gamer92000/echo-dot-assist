@@ -35,7 +35,7 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 
 ```sh
 .venv/bin/python tests/fake_ha_esphome.py     # ESPHome native API, as Home Assistant
-.venv/bin/python tests/fake_ha_arbitration.py # two Echos under one fake HA: wake word arbitration, join security
+.venv/bin/python tests/fake_ha_arbitration.py # two Echos under one fake HA: wake word arbitration, join paths and security
 .venv/bin/python tests/fake_ha.py [--qemu]    # Wyoming; --qemu uses the ARM build + stock Pryon model under qemu-arm
 .venv/bin/python tests/fake_ma_sendspin.py    # Sendspin, as Music Assistant
 .venv/bin/python tests/fake_ha_update.py      # online updates: HA select + update entity, fake GitHub, root's installer
@@ -135,8 +135,12 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (host build). Also link-time swap.
 - **Wake word arbitration (`arb.c`, `arb.h`)**: when several Echos hear the wake word, only the best one answers
   (stock's ESP, done on the LAN; the score is the front end's own wake word energy ratio, as stock reads it). UDP broadcast on 28930, shared network key; a member hands it to a newcomer only
-  through Home Assistant, as the newcomer's own ESPHome action `esphome.<node>_arbitration_key` (encrypted to its
-  X25519 key). ESPHome only; needs "Allow the device to perform Home Assistant actions".
+  through Home Assistant (sealed to its X25519 key): on the member's diagnostic text sensor "Arbitration handoff", once
+  HA shows the newcomer's key on the entity id it broadcasts (an Echo finds its own id by asking HA for
+  `sensor.<node>_arbitration_handoff`, `_2`, `_3`, further while the last one is another device's, up to the subnet's host count; state
+  requests need no permission), else as the newcomer's own
+  ESPHome action `esphome.<node>_arbitration_key` (needs "Allow the device to perform Home Assistant actions"). Without
+  HA: Volume up + Volume down held 2 s on both (`T_PAIR`/`T_GIVE`, exactly one requester). ESPHome only.
 - **Music**: `sendspin.c` (Music Assistant Sendspin player over `ws.c`/`noise.c`/`net.c`/`hash.c`, decodes via
   `dr_flac`/`minimp3`/libopus). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
   loaded with dlopen, aptX/aptX HD via `freeaptx`) with AVRCP. Only one music source plays at a time (newest wins).

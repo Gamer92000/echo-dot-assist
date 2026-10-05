@@ -69,7 +69,7 @@
 enum {
     HELLO_REQ = 1, HELLO_RESP, CONNECT_REQ, CONNECT_RESP, DISCONNECT_REQ, DISCONNECT_RESP, PING_REQ, PING_RESP,
     DEVICE_INFO_REQ, DEVICE_INFO_RESP, LIST_ENTITIES_REQ, LIST_ENTITIES_DONE = 19, SUBSCRIBE_STATES = 20,
-    SUBSCRIBE_HA_ACTIONS = 34, HA_ACTION, LIST_SERVICE = 41, EXECUTE_SERVICE,
+    SUBSCRIBE_HA_ACTIONS = 34, HA_ACTION, SUBSCRIBE_HA_STATES = 38, HA_STATE_SUB, HA_STATE, LIST_SERVICE = 41, EXECUTE_SERVICE,
     LIST_BINARY_SENSOR = 12, LIST_SENSOR = 16, LIST_SWITCH = 17, LIST_TEXT_SENSOR = 18, SENSOR_STATE = 25, SWITCH_STATE = 26, BINARY_SENSOR_STATE = 21, TEXT_SENSOR_STATE = 27, SWITCH_COMMAND = 33, LIST_NUMBER = 49, NUMBER_STATE, NUMBER_COMMAND,
     LIST_SELECT = 52, SELECT_STATE, SELECT_COMMAND,
     LIST_MEDIA_PLAYER = 63, MEDIA_PLAYER_STATE, MEDIA_PLAYER_COMMAND,
@@ -96,7 +96,7 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_BT_ANNOUNCE, KEY_DND, KEY_EQ_BASS, KEY_EQ_MID, KEY_EQ_TREBLE, KEY_BT_LANG, KEY_ARB_JOIN, KEY_ARB_PEERS, KEY_ARB_SERVICE,
        KEY_SS_UNPAIRED, KEY_DENOISE, KEY_ADB_WIFI, KEY_LUX, KEY_LED_AUTO, KEY_LED_BRIGHTNESS, KEY_SOUND_DETECTION, KEY_SOUND,
        KEY_BT_OUT_SEARCH, KEY_BT_OUT, KEY_BT_OUT_STATUS, KEY_BT_OUT_DELAY, KEY_WIFI_MOTION_ON, KEY_WIFI_MOTION, KEY_WIFI_MOTION_SENS,
-       KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED };
+       KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -106,7 +106,7 @@ enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3
 #define MAX_CLIENTS 4
 /* lock held.  enc: Noise frames (tx is used under the lock, rx by the client's reader only); keyed: with the device key;
  * actions: runs Home Assistant actions for us */
-static struct { int fd, states, enc, keyed, ble, ble_free, ble_user, actions; struct noise_cs tx, rx; } clients[MAX_CLIENTS] = { { .fd = -1 }, { .fd = -1 }, { .fd = -1 }, { .fd = -1 } };
+static struct { int fd, states, enc, keyed, ble, ble_free, ble_user, actions, ha_states; struct noise_cs tx, rx; } clients[MAX_CLIENTS] = { { .fd = -1 }, { .fd = -1 }, { .fd = -1 }, { .fd = -1 } };
 static int va_fd = -1;                  /* lock held: voice assistant subscriber */
 static __thread int reply_fd = -1;      /* the client whose request this thread is handling */
 static int cancelled;                   /* lock held: the user cancelled the run; its events are dropped.  2: a new run
@@ -404,6 +404,15 @@ static void send_setting(int key)       /* lock held */
 /* The Sendspin pairing token, so that it can be copied from Home Assistant into Music Assistant.  It is a secret of
  * sorts (whoever has it can pair a server with this player), so the entity is diagnostic and disabled by default:
  * Home Assistant only records it once the user enables it. */
+static void send_handoff_state(void)    /* lock held */
+{
+    PB(b, 320); char s[280];
+    if (!arb_running()) return;
+    arb_handoff(s, sizeof s);
+    pb_fixed32(&b, 1, KEY_ARB_HANDOFF); pb_str(&b, 2, s);
+    send_state(TEXT_SENSOR_STATE, &b);
+}
+
 static void send_token_state(void)      /* lock held */
 {
     PB(b, 256); char tok[160];
@@ -595,6 +604,10 @@ static void send_setting_entities(void)
           pb_str(&b, 5, "Used by other Echos (wake word arbitration), not by people"); send_msg(LIST_SERVICE, &b); }
         { PB(b, 128); pb_str(&b, 1, "arbitration_peers"); pb_fixed32(&b, 2, KEY_ARB_PEERS); pb_str(&b, 3, "Arbitration peers");
           pb_str(&b, 5, "mdi:access-point-network"); pb_uint(&b, 13, 2); send_msg(LIST_SENSOR, &b); }
+        /* our public key, and a sealed network key while we offer one: other Echos read it through Home Assistant
+         * (arb.c), which lets devices read states without "perform actions".  Diagnostic, and must stay enabled */
+        { PB(b, 192); pb_str(&b, 1, "arbitration_handoff"); pb_fixed32(&b, 2, KEY_ARB_HANDOFF); pb_str(&b, 3, "Arbitration handoff");
+          pb_str(&b, 5, "mdi:handshake"); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
     }
     /* Whisper detection (whisper.h): "{{ is_state('binary_sensor.<node>_last_request_whispered', 'on') }}" in the
      * conversation agent's prompt template, to have it answer in whispered speech tags */
@@ -1322,7 +1335,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         send_setting(KEY_BT_OUT_SEARCH); send_setting(KEY_BT_OUT); send_setting(KEY_BT_OUT_STATUS); send_setting(KEY_BT_OUT_DELAY);
         for (int k = KEY_WIFI_MOTION_ON; k <= KEY_WIFI_MOTION_SENS; k++) send_setting(k);
         send_setting(KEY_UPDATE_CHANNEL); send_setting(KEY_UPDATE); send_setting(KEY_WHISPERED);
-        send_token_state(); send_light_states(); send_diag_states(); break;
+        send_token_state(); send_handoff_state(); send_light_states(); send_diag_states(); break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
     case UPDATE_COMMAND: {
         unsigned key = 0, cmd = 0;
@@ -1333,6 +1346,18 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         else if (cmd == UPDATE_CMD_INSTALL) fprintf(stderr, "update: install refused, the request did not come over the keyed connection\n");
     } break;
     case SUBSCRIBE_HA_ACTIONS: if (c >= 0) clients[c].actions = 1; break;
+    case SUBSCRIBE_HA_STATES: if (c >= 0) clients[c].ha_states = 1; break;
+    case HA_STATE: {
+        /* a state we asked for (arb_request): only from Home Assistant itself, the client holding the device key */
+        char ent[128] = "", st[300] = "", attr[64] = "";
+        while (pb_next(&p, end, &f)) if (f.data) {
+            if (f.field == 1) pbf_str(&f, ent, sizeof ent);
+            else if (f.field == 2) pbf_str(&f, st, sizeof st);
+            else if (f.field == 3) pbf_str(&f, attr, sizeof attr);
+        }
+        if (attr[0] || !arb_running() || c < 0 || !clients[c].keyed) break;
+        arb_ha_state(ent, st);
+    } break;
     case EXECUTE_SERVICE: {
         /* only from Home Assistant itself: a client holding the device key (without one, anyone on the network could
          * connect and hand this Echo a network) */
@@ -1456,7 +1481,7 @@ static void serve(int fd)
                                        adbwifi_start(adb_changed); wifimotion_start(wifi_changed); update_start(update_changed);
                                        if (core_bluetooth(-1)) { ble_start(&ble_handler); a2dp_start(bt_changed); } } }
     for (int i = 0; i < MAX_CLIENTS; i++) { if (clients[i].fd < 0 && slot < 0) slot = i; n += clients[i].fd >= 0; }
-    if (slot >= 0) { clients[slot].fd = fd; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = 0; if (!n) core_link(1, 0); }
+    if (slot >= 0) { clients[slot].fd = fd; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = clients[slot].ha_states = 0; if (!n) core_link(1, 0); }
     int keyed = have_key;
     pthread_mutex_unlock(&core_lock);
     if (slot < 0) { fprintf(stderr, "client refused: %d connections already\n", MAX_CLIENTS); free(buf); free(pt); return; }
@@ -1495,7 +1520,7 @@ static void serve(int fd)
 done:
 
     pthread_mutex_lock(&core_lock);
-    clients[slot].fd = -1; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = 0; n = 0;
+    clients[slot].fd = -1; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = clients[slot].ha_states = 0; n = 0;
     ble_update();
     if (!ble_subscribers()) {                           /* nobody left to use them */
         int users = 0; uint64_t a[BLE_MAX_CONN];
@@ -1523,7 +1548,16 @@ static int arb_send(const char *node, const char *network, const char *key)
     return n ? 0 : -1;
 }
 
-static void arb_changed(void) { for (int k = KEY_ARB_JOIN; k <= KEY_ARB_PEERS; k++) send_setting(k); }
+static void arb_changed(void) { for (int k = KEY_ARB_JOIN; k <= KEY_ARB_PEERS; k++) send_setting(k); send_handoff_state(); }
+
+/* lock held: ask Home Assistant once for an entity's state (needs no permission: HA answers any device) */
+static int arb_request(const char *entity)
+{
+    PB(b, 160); int n = 0;
+    pb_str(&b, 1, entity); pb_uint(&b, 3, 1);           /* once: no lasting subscription to pile up in HA */
+    for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].ha_states && clients[i].keyed) { send_to(clients[i].fd, HA_STATE_SUB, &b); n++; }
+    return n ? 0 : -1;
+}
 
 static void sound(const char *event)    /* lock held */
 {
@@ -1534,4 +1568,4 @@ static void sound(const char *event)    /* lock held */
 static void whispered(int on) { (void)on; send_setting(KEY_WHISPERED); }   /* lock held */
 
 const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, cancel, played, volume_changed, mute_changed, print_mdns, bt_device,
-                                     arb_send, arb_changed, sound, whispered };
+                                     arb_send, arb_changed, sound, whispered, arb_request };

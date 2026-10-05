@@ -512,6 +512,30 @@ Run in this order. Each step says what it proves.
       through HA, K not readable in what HA carried, better score answers alone, prio, different keywords both answer,
       duplicate error quiet, forged beacons (unknown name, a real Echo's name with another key, fake older network) and a
       forged claim change nothing, leave wipes the key, create after 5 s, no key without the actions option, join once allowed.
+      Joining without the actions option (2026-10-05): HA gates only action calls; devices fire `esphome.*` events and
+      request any entity's state without it (`components/esphome/manager.py` dev: `async_on_service_call` is_event
+      branch, `async_on_state_subscription`/`async_on_state_request` unchecked). The entity lookup of 09-25 comes back
+      without the guessing: every Echo shows "HMA1 <pub>" on the diagnostic text sensor "Arbitration handoff", asks HA
+      (SubscribeHomeAssistantStateResponse `once`: no tracker piles up in HA, and no "old_state None" gap for new
+      entities) for `sensor.<node>_arbitration_handoff`, `_2`, `_3` (and one further each time HA answers for the last
+      with anything but its key: another device of that name, "unavailable" if it is off; asking only the next one, so
+      linear; at most as many as hosts in the subnet: no more Echos of a name can share a broadcast group) until one shows
+      its own key, and broadcasts that id
+      (`T_ENTITY`, ignored by older Echos). A member asks HA for a newcomer's named entity every 3 s and offers K
+      ("<net> <to> <sealed K>", 224 chars, HA's limit 255) on its own entity only once HA shows the beacon key there; the
+      newcomer polls members' entities and takes an offer addressed to it. No confirmed entity after 20 s: the action as
+      before (so owners without the option see no repair when the entities work). Third way without HA: Volume up +
+      Volume down held 2 s (stock gives the combo no meaning; acebuttond owns the 5 s/21 s action holds) = 2 min
+      pairing: `T_PAIR` every 1 s, a member hands `T_GIVE` (3 copies, 500 ms apart) 2 s after its press if exactly one
+      Echo outside its network asked since 2 min before, and none of an older network is pairing (it gives instead); two =
+      refused; taking a key any way ends the window (found by the test: a newcomer that joined through the entity
+      mid-window then handed K to a forged request it had recorded). An offer not taken by the next push (30 s) goes
+      through the action too. Limit: a LAN attacker who keeps asking gets the key of an Echo pressed while alone in its
+      own network. Tap on start, BT connected/disconnected sound for the result. Host test: merge through the entities with actions refused (K not in the states HA saw, offer taken
+      down after), a forged `T_ENTITY` naming a real Echo's entity gets no offer, the action after 20 s with neither,
+      pairing joins, a second requester refuses it, a forged give does not open, entities back = join without permission,
+      action path still joins. Not done: on the device (whether HA really names the entity `sensor.<node>_…` on a fresh
+      adoption; the combo under acebuttond; the sounds)
       Not done: on the device with two Echos (score separation at distance, whether the micAsr stream's gain control
       flattens it, claim delay over Wi-Fi with power save)
 - [x] Wake word select (2026-09-25): VoiceAssistantConfigurationResponse had "alexa" hard-coded since the ESPHome API

@@ -99,7 +99,7 @@ pthread_mutex_t core_lock = PTHREAD_MUTEX_INITIALIZER;
 static int connected, satellite_running;
 static enum state state;
 static time_t state_since;
-static atomic_int streaming, trigger_pending, button_pending, stop_pending, quit;
+static atomic_int streaming, trigger_pending, button_pending, pair_pending, stop_pending, quit;
 static atomic_int flush_playback, alarm_on;   /* barge-in: drop queued TTS; UI sounds requested (bit per enum sound) */
 static atomic_int tts_on, music_on;                 /* something plays: the wake word model lowers its threshold then.
                                                     * music_on: MUSIC_* bits */
@@ -743,6 +743,18 @@ static int arb_send_key(const char *node, const char *network, const char *key)
 
 static void arb_notify(void) { pthread_mutex_lock(&core_lock); if (proto->arb_changed) proto->arb_changed(); pthread_mutex_unlock(&core_lock); }
 
+static int arb_request(const char *entity)
+{
+    pthread_mutex_lock(&core_lock);
+    int r = connected && proto->arb_request ? proto->arb_request(entity) : -1;
+    pthread_mutex_unlock(&core_lock);
+    return r;
+}
+
+/* Arbitration pairing (Volume up + Volume down): a tap when it starts, the Bluetooth sounds for joined or not */
+static void arb_paired(int result) { sound_queue(result == 1 ? SND_TOUCH : result == 2 ? SND_BT_ON : SND_BT_OFF); }
+static void on_pair(void) { if (arb_pair() < 0) fprintf(stderr, "arbitration: not running, no pairing\n"); }
+
 /* ---------------------------------------------------------------- playback queue */
 
 struct item { struct item *next; int kind; unsigned rate, ch; size_t len; unsigned char data[]; };
@@ -1192,6 +1204,7 @@ static void *capture_thread(void *arg)
         const void *pcm; int n = cap_read(&pcm);
         if (n < 0) { fprintf(stderr, "capture: fatal\n"); atomic_store(&quit, 1); break; }
         if (atomic_exchange(&button_pending, 0)) on_action();      /* SIGUSR2: action button, for tests on the PC */
+        if (atomic_exchange(&pair_pending, 0)) on_pair();          /* SIGWINCH: both volume keys held, for tests on the PC */
         { int t = atomic_exchange(&trigger_pending, 0);               /* 1: SIGUSR1 plays a wake word of the last 0.6 s */
           if (t == 2) trigger(1); else if (t == 1) wake_heard(ring_n > CAP_RATE * 6 / 10 ? ring_n - CAP_RATE * 6 / 10 : 0, ring_n, 1); }
         if (atomic_exchange(&stop_pending, 0)) stop_word();        /* SIGHUP: the "stop" keyword, for tests on the PC */
@@ -1263,6 +1276,7 @@ static void on_usr1(int s) { (void)s; atomic_store(&trigger_pending, 1); }
 static void on_usr2(int s) { (void)s; atomic_store(&button_pending, 1); }
 static void on_hup(int s) { (void)s; atomic_store(&stop_pending, 1); }
 static void on_ttin(int s) { (void)s; atomic_store(&dump_toggle, 1); }
+static void on_winch(int s) { (void)s; atomic_store(&pair_pending, 1); }
 
 int main(int argc, char **argv)
 {
@@ -1289,7 +1303,7 @@ int main(int argc, char **argv)
     }
     core_port = port ? port : proto->port;
     if (print_mdns) { proto->print_mdns(); return 0; }
-    signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin);
+    signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin); signal(SIGWINCH, on_winch);
     if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
     led("-u", "scone-setup");           /* a restart inside the pairing window: the window is gone, its chaser would loop on */
 
@@ -1305,7 +1319,7 @@ int main(int argc, char **argv)
     }
     if (whisper_open(on_whisper) == 0) atomic_store(&whisper_last, -1);
     else fprintf(stderr, "whisper: no model, no whisper detection (scripts/artifacts.sh installs it)\n");
-    static const struct arb_hooks arb_hooks = { arb_send_key, arb_notify };
+    static const struct arb_hooks arb_hooks = { arb_send_key, arb_notify, arb_request, arb_paired };
     if (arb_port && core_local_wake && proto->arb_send && arb_start(arb_port, core_node_name(), &arb_hooks)) fprintf(stderr, "arbitration: not available\n");
 
     pthread_t cap_t, play_t, ear_t;
@@ -1314,7 +1328,7 @@ int main(int argc, char **argv)
     pthread_create(&ear_t, NULL, earcon_thread, NULL);
     { pthread_t vol_t; pthread_create(&vol_t, NULL, volume_led_thread, NULL); pthread_detach(vol_t); }
 
-    static const struct button_handler buttons = { on_action, on_mute, on_volume };
+    static const struct button_handler buttons = { on_action, on_mute, on_volume, on_pair };
     if (buttons_start(input, &buttons) < 0) fprintf(stderr, "buttons: %s not available\n", input);
     else if (buttons_muted()) on_mute(1);
 

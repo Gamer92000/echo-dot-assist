@@ -4,6 +4,13 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-05
 
+- **Several Echos settle the wake word among themselves without "Allow the device to perform Home Assistant
+  actions".** Each Echo now shows a key on a diagnostic entity, "Arbitration handoff", and the Echos hand each other the
+  network key through those entities: nothing to tick, no repair in Home Assistant. Keep that entity enabled. It
+  works as long as the Echo's entities carry the name of its `NAME`; if you renamed the Echo in Home Assistant, the
+  old way (the permission) still works, and so does a new one without Home Assistant: hold Volume up and Volume down
+  together for 2 s on the new Echo, then on one that is already in.
+
 - **Whisper detection: one download, the one that exists.** Amazon has a single whisper model for every language
   and hands it out only when asked for American English, so `scripts/artifacts.sh` now asks for just that, whatever
   language is picked. Before, it asked for the picked language first and took the English one as a fallback.

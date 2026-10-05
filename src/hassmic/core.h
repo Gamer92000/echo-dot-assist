@@ -38,6 +38,7 @@ struct proto {
     void (*arb_changed)(void);                  /* may be NULL: arbitration membership or peers changed */
     void (*sound)(const char *event);           /* may be NULL: sound detection heard one of core_sound_events */
     void (*whispered)(int on);                  /* may be NULL: the request just ended was whispered or not (core_whispered) */
+    int  (*arb_request)(const char *entity);    /* may be NULL: ask Home Assistant once for an entity's state (arb.h) */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 

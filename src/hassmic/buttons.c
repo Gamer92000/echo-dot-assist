@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #define SHORT_PRESS_MS 1000            /* longer holds belong to acebuttond: 5 s setup mode, 21 s factory reset */
+#define COMBO_MS       2000            /* both volume keys: stock gives that no meaning (acebuttond's are action holds) */
 
 static struct button_handler handler;
 static int muted_state;                /* latch: what was last reported; no latch: the software toggle */
@@ -68,7 +69,7 @@ static long long now_ms(void)
 static void *reader(void *arg)
 {
     int rfd = (int)(long)arg;
-    struct input_event ev; long long action_down = 0;
+    struct input_event ev; long long action_down = 0, up_down = 0, dn_down = 0; int combo_done = 0;
     while (read(rfd, &ev, sizeof ev) == sizeof ev) {
         if (ev.type != EV_KEY) continue;
         switch (ev.code) {
@@ -89,9 +90,16 @@ static void *reader(void *arg)
             }
             break;
         case KEY_VOLUMEUP:
-        case KEY_VOLUMEDOWN:
+        case KEY_VOLUMEDOWN: {
+            long long *down = ev.code == KEY_VOLUMEUP ? &up_down : &dn_down;
             if (ev.value == 1 && handler.volume)       /* press only; key repeat (2) would run away */ handler.volume(ev.code == KEY_VOLUMEUP ? 1 : -1);
-            break;
+            if (ev.value == 1) *down = now_ms();
+            else if (ev.value == 0) { *down = 0; combo_done = 0; }
+            /* both held: the repeats of the later one (every 150 ms) tell us when 2 s have passed; the two presses
+             * changed the volume by one step each way */
+            long long later = up_down > dn_down ? up_down : dn_down;
+            if (up_down && dn_down && !combo_done && now_ms() - later >= COMBO_MS && handler.pair) { combo_done = 1; handler.pair(); }
+        } break;
         }
     }
     fprintf(stderr, "buttons: reader stopped\n");

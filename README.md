@@ -73,13 +73,17 @@ Details:
   sound, no light). The Echos settle it among themselves on the local network in 0.2 s, by how clearly the word stood
   out of the room's noise; an Echo that is in a conversation or ringing keeps the next wake word. With only one Echo
   there is no delay. They find each other by themselves ("Join arbitration network", on by default); the shared key
-  travels through your Home Assistant, so nobody else on the network can join or silence them. For that, tick "Allow
-  the device to perform Home Assistant actions" in each Echo's ESPHome options (Home Assistant shows a repair until
-  then); give every Echo its own `NAME`. Other satellites (ESP32 and so on) are not part of it; Home Assistant itself then lets the first one
+  travels through your Home Assistant, so nobody else on the network can join or silence them. Nothing to set up: each
+  Echo shows a key on its diagnostic entity "Arbitration handoff" (leave it enabled), and the Echos read each other's
+  through Home Assistant. That works while the Echo's entities in Home Assistant carry the name of its `NAME` (so not if
+  you renamed the device there). Otherwise either tick "Allow the device to perform Home Assistant actions" in each
+  Echo's ESPHome options, or pair two Echos with the buttons: hold Volume up and Volume down together for 2 s on the new
+  Echo, then on one already in (a tap sounds; the Bluetooth "connected" sound when it worked, "disconnected" when it
+  did not within 2 min). Give every Echo its own `NAME`. Other satellites (ESP32 and so on) are not part of it; Home Assistant itself then lets the first one
   that reports the wake word answer, and the Echo that is second now just goes quiet instead of flashing an error.
 - **Buttons**: action = talk without the wake word / pause and resume music / stop an alarm / cancel a request while
   Home Assistant is still listening or thinking (as on a Voice PE; the wake word then cancels it too and listens
-  again; ESPHome only); volume in 10 % steps;
+  again; ESPHome only); volume in 10 % steps; both volume buttons held for 2 s = pair for arbitration (see above);
   mic-off is the hardware mute it always was (red ring, Alexa's own sounds). The LED ring shows listening, thinking,
   speaking, errors and mute. Silent and dark at boot.
 - **Music**: one source at a time, the newest wins. A phone starting over Bluetooth pauses Music Assistant (the whole
@@ -341,10 +345,13 @@ Open issues and measurements: [PLAN.md](PLAN.md).
   `hassmic.conf`; while it is open, anyone on the network has root. USB always works: physical access is root access anyway.
   Without `hassmic.conf` (stock behaviour, or before the install) it is open, as stock leaves it.
 - **Arbitration between Echos**: an Echo takes the network key only from Home Assistant, over its encrypted API link,
-  as a call of its own action `esphome.<node>_arbitration_key`; a member hands it over by asking Home Assistant to run
-  that action, which needs "Allow the device to perform Home Assistant actions". So only devices you adopted into Home
-  Assistant and allowed to act take part; the key travels encrypted to the receiving Echo, so it is not readable in
-  Home Assistant's traces or logbook. Rounds are authenticated with the key and cannot be replayed. The keys are in
+  or from the button pairing. Through Home Assistant: a member offers the key on its "Arbitration handoff" entity only
+  to an Echo whose key Home Assistant shows on that Echo's own entity (so only devices you adopted), or, where it finds
+  none, asks Home Assistant to run the newcomer's own action `esphome.<node>_arbitration_key` (needs "Allow the device
+  to perform Home Assistant actions"). Button pairing: a member hands the key only if exactly one Echo asked, from 2 min
+  before its own buttons were held; someone on the network who asks as well only makes it fail, and the newcomer's
+  buttons go first. The key travels encrypted to the receiving Echo, so it is not readable in Home Assistant's states,
+  traces or logbook. Rounds are authenticated with the key and cannot be replayed. The keys are in
   `state/arb_key` and `state/arbitration`.
 - **Updates**: only bundles signed with your `secrets/update.key` (pushed from your PC) or with the project's release key
   (`keys/release.pub`; downloaded by hassmic itself, only once "Online updates" is switched on) are installed. Root

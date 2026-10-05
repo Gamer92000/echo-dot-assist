@@ -6,6 +6,7 @@ struct button_handler {
     void (*action)(void);               /* short press of the action button */
     void (*mute_changed)(int muted);    /* hardware privacy latch changed */
     void (*volume)(int direction);      /* +1 / -1, also on key repeat */
+    void (*pair)(void);                 /* may be NULL: Volume up and Volume down held together for 2 s */
 };
 
 /* Starts a reader thread.  Returns -1 if the input device cannot be opened (PC build: always). */
