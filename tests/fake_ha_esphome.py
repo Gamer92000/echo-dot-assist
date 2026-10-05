@@ -82,6 +82,7 @@ async def main():
         info = await cli.device_info()
         check(info.name == "echo-dot" and info.friendly_name == "Echo Dot", f"device info: {info.name!r} / {info.friendly_name!r}")
         check(info.voice_assistant_feature_flags == 61, f"voice assistant feature flags = {info.voice_assistant_feature_flags}")
+        check(info.webserver_port == WEB, f"device info: settings page port {info.webserver_port} (Home Assistant's \"Visit\" link)")
         entities, _ = await cli.list_entities_services()
         mp = [e for e in entities if isinstance(e, MediaPlayerInfo)]
         check(len(mp) == 1 and len(mp[0].supported_formats) == 2 and mp[0].supported_formats[1].sample_rate == 48000,
@@ -126,6 +127,10 @@ async def main():
         want = subprocess.run([f"{ROOT}/build/hassmic-host", "-T"], env=env, capture_output=True, text=True).stdout.strip()
         got = [x.state for x in states if isinstance(x, TextSensorState) and x.key == tok.key]
         check(got == [want] and want.startswith("SP:0") and len(want) > 100, f"token state equals `hassmic -T`: {want[:16]}…")
+        wu = by.get("web_ui_address")
+        check("ip_address" not in by and isinstance(wu, TextSensorInfo) and not wu.disabled_by_default and int(wu.entity_category) == 2
+              and [x.state for x in states if isinstance(x, TextSensorState) and x.key == wu.key] == [f"http://127.0.0.1:{WEB}"],
+              "Web UI address entity: diagnostic, enabled, the settings page at the address Home Assistant connected to")
         apeers = by.get("arbitration_peers")
         check("arbitration_id" not in by and "join_arbitration_network" not in by and pv("arbitration") == 1 and isinstance(apeers, SensorInfo),
               "arbitration on by default (the page), peers sensor, no ID entity, no join switch")

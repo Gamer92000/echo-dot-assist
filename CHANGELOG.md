@@ -18,6 +18,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 - **Set up the next Echo with the settings of the last one**: `scripts/setup.sh --preset hassmic-settings.conf` (a
   file exported on the settings page), or give the file when the install step asks. The Echo starts with them.
 
+- **Find the settings page from Home Assistant**: "Visit" on the Echo's device page opens it, and a new diagnostic
+  entity "Web UI address" shows its address (`http://<echo-ip>:28931`).
+
 - **A settings page on every Echo**, at `http://<echo-ip>:28931/`. Log in once per browser with a press of the Echo's
   action button. It shows every setting, warns about what does not work and why (no Home Assistant link, models
   missing), and exports the settings to a file you can import on other Echos. The settings file on the Echo is now

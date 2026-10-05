@@ -47,7 +47,7 @@ extern const struct proto proto_wyoming, proto_esphome;
 extern pthread_mutex_t core_lock;               /* guards state, the client socket (writes) and everything marked "lock held" */
 extern const char *core_name;
 const char *core_node_name(void);               /* "Echo Dot" -> "echo-dot": the ESPHome device (host) name */
-extern int core_local_wake, core_port, core_sendspin_port;
+extern int core_local_wake, core_port, core_sendspin_port, core_web_port;
 
 /* lock held */
 enum state core_state(void);

@@ -159,7 +159,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   motion, Bluetooth audio, Bluetooth speaker): their entities are listed only while on (`proto_esphome.c` `listed()`,
   which also gates states); switching one closes the HA links (`proto->entities_changed`), HA re-lists on reconnect and
   deletes what is gone (registry included). HA always has: media player, mute, DND, wake sound, LEDs, EQ, firmware,
-  Sendspin token (a secret: never on the page). The rest is page-only; diagnostics too (`diag.c`).
+  Web UI address, Sendspin token (a secret: never on the page). The rest is page-only; diagnostics too (`diag.c`).
 - **Settings page** (`web.c`, `web/`): HTTP on 28931 (`-W`), files of `web/` gzip'd into the binary by `tools/embed.py`
   (`build/web_assets.c`). Login: the browser's X25519 key waits for the action button (`web_approve()` first in
   `on_action`; ring `authenticated_setup_mode`), approved keys in `state/web_clients`, Echo key `state/web_key`.

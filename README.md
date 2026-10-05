@@ -112,8 +112,9 @@ Details:
   on), "Wake sound" switch (covers all local sounds), equalizer (bass, mid, treble, −6 to +6 dB, Amazon's own, applied
   to everything the Echo plays), "LED auto brightness" switch and "LED brightness" slider (the ring dims with the room as
   on a stock Echo, Amazon's own logic, on by default; setting a level holds it there and switches the automatic off),
-  "Illuminance" (the Echo's light sensor in lux, as Amazon reads it, for automations), the firmware update entity, and
-  the "Sendspin pairing token" (diagnostic, disabled by default).
+  "Illuminance" (the Echo's light sensor in lux, as Amazon reads it, for automations), the firmware update entity,
+  "Web UI address" (diagnostic: the settings page's address) and the "Sendspin pairing token" (diagnostic, disabled
+  by default).
 - **Features**, switched on the [settings page](#settings-page): while one is on, its entities are in Home Assistant;
   off, they are gone (Home Assistant reconnects for a moment when one is switched). Wake word arbitration (on by
   default: "Arbitration peers"), sound detection ("Sound"), whisper detection ("Last request whispered"), Wi-Fi motion
@@ -269,7 +270,8 @@ included: the version it falls back to from then on is always the last one that 
 
 ### Settings page
 
-Every Echo serves a settings page at `http://<echo-ip>:28931/`. On first use, press "Ask the Echo", then the action
+Every Echo serves a settings page at `http://<echo-ip>:28931/`; "Visit" on the device's page in Home Assistant opens
+it, and its diagnostic entity "Web UI address" shows the address. On first use, press "Ask the Echo", then the action
 button (the dot) within a minute: the ring shows that a login waits, and the press approves this browser on this
 Echo from then on. The page shows what does not work and why (Home Assistant not connected, wake word or whisper
 models missing), every setting, and the browsers approved (revoke there). Wake word arbitration: the network, the

@@ -48,6 +48,7 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+#include <arpa/inet.h>
 #include "a2dp.h"
 #include "adbwifi.h"
 #include "arb.h"
@@ -97,7 +98,7 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_BT_ANNOUNCE, KEY_DND, KEY_EQ_BASS, KEY_EQ_MID, KEY_EQ_TREBLE, KEY_BT_LANG, KEY_ARB_JOIN, KEY_ARB_PEERS, KEY_ARB_SERVICE,
        KEY_SS_UNPAIRED, KEY_DENOISE, KEY_ADB_WIFI, KEY_LUX, KEY_LED_AUTO, KEY_LED_BRIGHTNESS, KEY_SOUND_DETECTION, KEY_SOUND,
        KEY_BT_OUT_SEARCH, KEY_BT_OUT, KEY_BT_OUT_STATUS, KEY_BT_OUT_DELAY, KEY_WIFI_MOTION_ON, KEY_WIFI_MOTION, KEY_WIFI_MOTION_SENS,
-       KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF };
+       KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF, KEY_WEB_URL };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -370,6 +371,20 @@ static void send_token_state(void)      /* lock held */
     send_state(TEXT_SENSOR_STATE, &b);
 }
 
+/* The settings page as this client reached us (http://<address>:28931): diagnostic, enabled, so the address is on the
+ * device page without a click.  The address is the one the subscriber connected to, sent to it only: a debugging
+ * client over adb forward would otherwise show Home Assistant 127.0.0.1.  A new address drops every link, so the
+ * state at subscribe stays true. */
+static void send_web_state(void)        /* lock held */
+{
+    PB(b, 64); struct sockaddr_in a; socklen_t n = sizeof a; char s[INET_ADDRSTRLEN], url[48];
+    if (!core_web_port) return;
+    if (getsockname(reply_fd, (struct sockaddr *)&a, &n) || a.sin_family != AF_INET || !inet_ntop(AF_INET, &a.sin_addr, s, sizeof s)) return;
+    snprintf(url, sizeof url, "http://%s:%d", s, core_web_port);
+    pb_fixed32(&b, 1, KEY_WEB_URL); pb_str(&b, 2, url);
+    send_msg(TEXT_SENSOR_STATE, &b);
+}
+
 static void send_sensor(int key, float v)   /* lock held */
 {
     PB(b, 32);
@@ -509,6 +524,8 @@ static void send_setting_entities(void)
           pb_float(&b, 6, WIFIMOTION_SENS_MIN); pb_float(&b, 7, WIFIMOTION_SENS_MAX); pb_float(&b, 8, 1); pb_uint(&b, 10, 1); pb_uint(&b, 12, 2);
           send_msg(LIST_NUMBER, &b); }
     }
+    if (core_web_port) { PB(b, 128); pb_str(&b, 1, "web_ui_address"); pb_fixed32(&b, 2, KEY_WEB_URL); pb_str(&b, 3, "Web UI address");
+      pb_str(&b, 5, "mdi:web"); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
     /* online updates (update.c): the channel is picked on the settings page; the entity says what is new and installs it */
     { PB(b, 128); pb_str(&b, 1, "firmware"); pb_fixed32(&b, 2, KEY_UPDATE); pb_str(&b, 3, "Firmware");
       pb_uint(&b, 7, 1); pb_str(&b, 8, "firmware"); send_msg(LIST_UPDATE, &b); }
@@ -1135,6 +1152,7 @@ static void send_device_info(void)
     pb_str(&b, 2, node_name()); pb_str(&b, 3, mac()); pb_str(&b, 4, "2025.5.0"); pb_str(&b, 5, BUILD_TIME);
     pb_str(&b, 6, board.model); pb_str(&b, 8, board.project); pb_str(&b, 9, VERSION);
     pb_str(&b, 12, "Amazon"); pb_str(&b, 13, core_name);
+    if (core_web_port) pb_uint(&b, 10, core_web_port); /* webserver_port: HA links the device page to http://<host>:<it> */
     if (ble_present()) { pb_uint(&b, 11, 5); pb_uint(&b, 15, BLE_FEATURES); pb_str(&b, 18, ble_mac()); }    /* 11: legacy "active connections" */
     pb_uint(&b, 17, FEAT_VOICE | FEAT_API_AUDIO | FEAT_TIMERS | FEAT_ANNOUNCE | FEAT_START_CONVERSATION);      /* no SPEAKER: see top */
     pb_uint(&b, 19, 1);                                 /* api_encryption_supported */
@@ -1232,7 +1250,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case LIST_ENTITIES_REQ: send_entities(); break;
     case SUBSCRIBE_STATES:
         for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd == reply_fd) clients[i].states = 1;
-        send_mp_state(); send_all_settings(); send_token_state(); send_handoff_state(); break;
+        send_mp_state(); send_all_settings(); send_token_state(); send_handoff_state(); send_web_state(); break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
     case UPDATE_COMMAND: {
         unsigned key = 0, cmd = 0;

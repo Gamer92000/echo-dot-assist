@@ -94,7 +94,7 @@ const char *core_node_name(void)
 }
 static int ota_port = 28929;                        /* 0 = no push updates */
 static int arb_port = 28930;                        /* 0 = no wake word arbitration */
-static int web_port = 28931;                        /* 0 = no settings page */
+int core_web_port = 28931;                           /* 0 = no settings page */
 int core_local_wake = 1, core_port, core_sendspin_port = 28928;       /* 0 = Sendspin off */
 static const struct proto *proto = &proto_esphome;
 
@@ -1315,7 +1315,7 @@ int main(int argc, char **argv)
         case 'z': core_sendspin_port = atoi(optarg); break;
         case 'o': ota_port = atoi(optarg); break;
         case 'a': arb_port = atoi(optarg); break;
-        case 'W': web_port = atoi(optarg); break;
+        case 'W': core_web_port = atoi(optarg); break;
         case 'L': use_led = 0; break;
         case 'E': use_earcon = 0; break;
         case 'V': use_volume = 0; break;
@@ -1360,7 +1360,7 @@ int main(int argc, char **argv)
     if (ota_port) ota_start(ota_port);
     pthread_mutex_lock(&core_lock); settings_load(); settings_preset(); pthread_mutex_unlock(&core_lock);    /* whatever the protocol */
     static const struct web_hooks web_hooks = { web_attention, web_approved };
-    if (web_port && web_start(web_port, &web_hooks)) fprintf(stderr, "web: not available\n");
+    if (core_web_port && web_start(core_web_port, &web_hooks)) { fprintf(stderr, "web: not available\n"); core_web_port = 0; }
 
     int ls = net_listen(core_port);
     if (ls < 0) { perror("listen"); return 1; }
