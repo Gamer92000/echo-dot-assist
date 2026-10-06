@@ -762,6 +762,12 @@ Run in this order. Each step says what it proves.
       arrived -17..+59 ms from the own detection, so not the 200 ms window: both copies, sent in the same ms, were lost
       together. Now claim and "answers" go out at 0/30/80 ms (`COPY_MS`, loop woken by a pipe so they leave on time;
       kiosk copies too). fake_ha_arbitration: copies at 0/31/81 ms.
+- [x] Stale `-m` after the wake word migration (2026-10-06, donut kept going back to Alexa): `artifact-install.sh
+      migrate` renamed `models/echo-de` to `echo-de-DE` and moved `state/wake_word`, but hassmic.conf kept
+      `ARGS="-m .../models/echo-de/pryon.manifest"`; `wake_words_scan` added the -m path unchecked, so HA's select had two
+      "Echo (de)", the user's pick landed on the dead one (`state/wake_word` = echo-de) and every start logged "cannot
+      load ... trying Alexa". Now `wake_word_find`: an id matches itself, else the one set `<id>-<region>` (unique); -m
+      only added when readable; a failed live switch sets the active one back to Alexa. On donut: `echo-de-DE` active.
 - [x] Firewall service stuck at boot on the Echo 2 (2026-09-30, found when a push update got "the installer did not
       answer"): `main.sh firewall` scanned /proc/*/cmdline with `tr` for old lockdown watchers; a process (pid 209)
       exited between the open and the read, and radar's toybox `tr` (Fire OS 6572) then spun on the read error for ever

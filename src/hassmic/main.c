@@ -333,6 +333,19 @@ static int wake_word_add(const char *id, const char *manifest)
     return n_wake_words++;
 }
 
+/* An id as -m or state/wake_word name it: itself, else the one set it was renamed to.  artifact-install.sh migrate gives
+ * sets installed by hand under the short name the region (models/echo-de -> echo-de-DE) and moves state/wake_word
+ * along, but hassmic.conf's -m kept the old path (2026-10-06, donut: "-m .../models/echo-de/pryon.manifest" became a
+ * second "Echo" in HA's select that loads nothing; picked there, the Echo fell back to Alexa at every start).  -1: none */
+static int wake_word_find(const char *id)
+{
+    int hit = -1; size_t n = strlen(id);
+    for (int i = 0; i < n_wake_words; i++) if (!strcmp(wake_words[i].id, id)) return i;
+    for (int i = 0; i < n_wake_words; i++)
+        if (!strncmp(wake_words[i].id, id, n) && wake_words[i].id[n] == '-') { if (hit >= 0) return -1; hit = i; }   /* only if unique */
+    return hit;
+}
+
 static void wake_words_scan(const char *m_arg)
 {
     char path[512], saved[64] = ""; DIR *d; struct dirent *e; FILE *f; int def = 0;
@@ -349,12 +362,14 @@ static void wake_words_scan(const char *m_arg)
         char dir[256], *slash; snprintf(dir, sizeof dir, "%s", m_arg);
         if ((slash = strrchr(dir, '/'))) *slash = 0;
         slash = strrchr(dir, '/');
-        int i = wake_word_add(slash ? slash + 1 : dir, m_arg);
+        const char *id = slash ? slash + 1 : dir;
+        int i = !access(m_arg, R_OK) ? wake_word_add(id, m_arg) : wake_word_find(id);
         if (i >= 0) def = i;
+        else fprintf(stderr, "wake word: -m %s: no such model, Alexa until Home Assistant picks one\n", m_arg);
     }
     wake_active = def;
     if ((f = fopen(wake_word_path(), "r"))) {
-        if (fscanf(f, "%63s", saved) == 1) for (int i = 0; i < n_wake_words; i++) if (!strcmp(wake_words[i].id, saved)) wake_active = i;
+        if (fscanf(f, "%63s", saved) == 1) { int i = wake_word_find(saved); if (i >= 0) wake_active = i; }
         fclose(f);
     }
     for (int i = 0; i < n_wake_words; i++)
@@ -1401,7 +1416,10 @@ static void *capture_thread(void *arg)
             pthread_mutex_lock(&core_lock); struct core_wake_word w = wake_words[wake_active]; pthread_mutex_unlock(&core_lock);
             wake_close();
             if (wake_open(w.manifest, on_wake) == 0) fprintf(stderr, "wake word: now \"%s\"\n", w.name);
-            else { fprintf(stderr, "wake word: cannot load %s, back to Alexa\n", w.manifest); wake_open(wake_words[0].manifest, on_wake); }
+            else {      /* and say so: Home Assistant's select asks again on reconnect, and must not show the one that failed */
+                fprintf(stderr, "wake word: cannot load %s, back to Alexa\n", w.manifest); wake_open(wake_words[0].manifest, on_wake);
+                pthread_mutex_lock(&core_lock); wake_active = 0; pthread_mutex_unlock(&core_lock);
+            }
         }
         if (core_local_wake) { ring_put(pcm, n / 2); wake_feed(pcm, n / 2); }
         if (atomic_load(&sound_want) != sound_running) {           /* Home Assistant switched sound detection */

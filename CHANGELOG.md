@@ -14,6 +14,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 - **Fewer wake words answered by the wrong Echo.** An Echo could miss another's report of how well it heard the wake
   word, answer itself, and have Home Assistant turn the better one away. The reports now go out three times, spread
   over 80 ms, instead of twice at the same moment.
+- **An Echo set to another wake word no longer falls back to "Alexa" at every start.** Wake word sets installed by
+  hand were renamed to their full name (`echo-de` to `echo-de-DE`), but `-m` in `hassmic.conf` still named the old
+  folder: Home Assistant then offered "Echo" twice, and the one that no longer existed loaded nothing. The old name
+  now finds the renamed set, and a missing `-m` model is no longer offered.
 - **No false warning about the key on the settings page.** The Echos section warned that the "Arbitration handoff"
   entity was missing even when the Echo had its key. It now warns only when an Echo has waited over a minute for one.
 
