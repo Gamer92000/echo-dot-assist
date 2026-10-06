@@ -2,6 +2,21 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-07
+
+- **Echos hand each other the arbitration key through Home Assistant again, whatever the devices are called there.**
+  Home Assistant now puts the room (and more) into entity ids, so the Echos could no longer find each other's
+  "Arbitration handoff" entity and needed "Allow the device to perform Home Assistant actions" or the volume keys.
+  Each Echo now reports a tag named after its key as scanned, and an Echo hands the key only to one whose tag Home
+  Assistant confirms: nothing to set up, no permission needed. Home Assistant's Tags list shows one "Tag hassmic_…" per
+  Echo. The "Arbitration handoff" entity is gone. Echos on older versions still join through the action or the
+  volume keys.
+- **Fewer wake words answered by the wrong Echo.** An Echo could miss another's report of how well it heard the wake
+  word, answer itself, and have Home Assistant turn the better one away. The reports now go out three times, spread
+  over 80 ms, instead of twice at the same moment.
+- **No false warning about the key on the settings page.** The Echos section warned that the "Arbitration handoff"
+  entity was missing even when the Echo had its key. It now warns only when an Echo has waited over a minute for one.
+
 ## 2026-10-06
 
 - **Identify.** Which Echo is which: "Identify" (at the top of the settings page, beside each logged-in Echo in the

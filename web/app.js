@@ -557,19 +557,21 @@ function renderNetwork() {
   const stuck = out.filter((o) => o.state === 'none' && o.for_s > 60);
   const nets = new Set(out.filter((o) => o.network).map((o) => o.network));
   const warn = (text) => netWarn.append(h('div', { class: 'callout' }, icon('warn'), h('p', {}, text)));
-  if (state.ha && !a.handoff_entity)
-    warn('Home Assistant does not show this Echo\'s "Arbitration handoff" entity under the name it expects: it was renamed or disabled there. Other Echos then cannot hand it the key that way. Enable it again, tick "Allow the device to perform Home Assistant actions" in its ESPHome options, or pair with the volume keys.');
+  // Same 60 s as the hint arb.c logs: the tags take a read, a scan and a read again, the action 30 s
+  const waiting = out.filter((o) => o.network && o.state === 'older' && o.for_s > 60).map((o) => o.node);
+  if (state.ha && waiting.length)
+    warn(`This Echo has not got the key from ${nameList(waiting)} for over a minute. Home Assistant has not confirmed the Echos' tags: its Tags integration (part of the default configuration) may be off, or one of them is not adopted there. Tick "Allow the device to perform Home Assistant actions" in ${waiting.length > 1 ? 'their' : 'its'} ESPHome options, or pair with the volume keys.`);
   if (nets.size) warn(`${nets.size === 1 ? 'A second network' : nets.size + ' other networks'} beside this one: its Echos do not settle wake words with these. They merge by themselves when Home Assistant can carry the key; if they do not, pair them with the volume keys.`);
   const myMode = a.arbitrates ? a.mode || 'hassmic' : null;       // older Echos say nothing: they are in ours
   const odd = a.members.filter((m) => myMode && m.arbitrates && (m.mode || 'hassmic') !== myMode).map((m) => m.node);
   if (odd.length) warn(`${nameList(odd)} ${odd.length > 1 ? 'use' : 'uses'} the other arbitration mode (${myMode === 'kiosk' ? 'Echo network' : 'Kiosk Satellite'}): this Echo and ${odd.length > 1 ? 'they' : 'it'} do not settle wake words with each other, and both may answer. Set the same mode on every Echo.`);
-  if (stuck.length) warn(`${nameList(stuck.map((o) => o.node))} ${stuck.length > 1 ? 'have' : 'has'} not got the key for over a minute. Usually Home Assistant does not show ${stuck.length > 1 ? 'their' : 'its'} "Arbitration handoff" entity (renamed or disabled device). Pair with the volume keys instead.`);
+  if (stuck.length) warn(`${nameList(stuck.map((o) => o.node))} ${stuck.length > 1 ? 'have' : 'has'} not got the key for over a minute. Usually Home Assistant has not confirmed ${stuck.length > 1 ? 'their' : 'its'} tag: its Tags integration (part of the default configuration) is off, or ${stuck.length > 1 ? 'they are' : 'it is'} not adopted there. Pair with the volume keys instead.`);
   const more = h('details', { class: 'more', open: renderNetwork.open, ontoggle: () => { renderNetwork.open = more.open; } });
   netWarn.append(more);
   more.append(h('summary', {}, 'How Echos get the key'),
     h('ul', {},
-      h('li', {}, 'Through Home Assistant, by themselves: each Echo shows its public key on its diagnostic entity "Arbitration handoff", and the Echos read each other\'s there. Keep that entity enabled and do not rename the device in Home Assistant.'),
-      h('li', {}, 'Or, if the device was renamed: tick "Allow the device to perform Home Assistant actions" in each Echo\'s ESPHome options.'),
+      h('li', {}, 'Through Home Assistant, by themselves: each Echo reports a tag named after its key as scanned (Settings › Tags lists one "Tag hassmic_…" per Echo), and an Echo hands the key only to one whose tag Home Assistant confirms. Nothing to set up; it needs the Tags integration, part of the default configuration.'),
+      h('li', {}, 'Or, without tags: tick "Allow the device to perform Home Assistant actions" in each Echo\'s ESPHome options.'),
       h('li', {}, 'Without Home Assistant: hold Volume up and Volume down together for 2 s on the new Echo, then on one already in. A tap sounds; the Bluetooth "connected" sound when it worked.')));
 }
 
@@ -1218,7 +1220,6 @@ function nameCard() {
       h('p', {}, h('b', {}, 'Changing the node name has costs:')),
       h('ul', {},
         h('li', {}, 'Home Assistant keeps the device (it knows it by its MAC address) and takes the new name, but its entity ids keep the old one (', h('code', {}, `sensor.${curNode.replace(/-/g, '_')}_…`), ') unless you rename them there.'),
-        h('li', {}, 'Wake word arbitration looks for this Echo\'s "Arbitration handoff" entity under the new name (', h('code', {}, `sensor.${want.replace(/-/g, '_')}_arbitration_handoff`), '). Until the entity ids match, the Echos cannot hand each other the network key through Home Assistant; the volume keys still can. The key this Echo has stays.'),
         h('li', {}, 'Its Home Assistant action becomes ', h('code', {}, `esphome.${want.replace(/-/g, '_')}_arbitration_key`), '.'),
         h('li', {}, 'The host name becomes ', h('code', {}, `${want}.local`), ': bookmarks or anything else that reaches the Echo by name need the new one. By IP address nothing changes.')),
       h('label', { class: 'ren-sure' }, sure, ' Change the node name anyway')));

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Wake word arbitration between two Echos (build/hassmic-host x2) under one Home Assistant, plus a device on the network
 that Home Assistant does not know.  The fake Home Assistant does what the real one does with ESPHome devices: it
-connects with each device's API key, keeps their entity states under sensor.<device name>_<entity name>, answers any
-device's request for a state (no permission needed), and runs an action a device asks for ("Allow the device to perform
-Home Assistant actions") that names another device's own action (esphome.<node>_arbitration_key) on that device.
-Three ways in: the handoff entities (no permission), the action, and the volume-key pairing (SIGWINCH, no HA).
+connects with each device's API key, fires a device's events whatever its permission (esphome.tag_scanned: the tag
+integration keeps tag.<tag id>, state the last scan's time), answers any device's request for a state (no permission
+needed), and runs an action a device asks for ("Allow the device to perform Home Assistant actions") that names another
+device's own action (esphome.<node>_arbitration_key) on that device.
+Three ways in: the tags (no permission), the action, and the volume-key pairing (SIGWINCH, no HA).
 Then Kiosk Satellite mode: their JSON claims on their port, against each other and a fake kiosk.
 Everything goes out as loopback broadcast (HASSMIC_ARB_ADDR): nothing of it reaches the LAN."""
-import asyncio, base64, json, os, re, signal, socket, struct, subprocess, sys, tempfile, time
+import asyncio, base64, datetime, json, os, re, signal, socket, struct, subprocess, sys, tempfile, time
 from aioesphomeapi import APIClient, VoiceAssistantEventType as Ev
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
@@ -25,8 +26,8 @@ check.failed = False
 
 
 class Echo:
-    def __init__(self, name, port, score, suffix=""):
-        self.name, self.port, self.state, self.suffix = name, port, tempfile.mkdtemp(), suffix
+    def __init__(self, name, port, score):
+        self.name, self.port, self.state = name, port, tempfile.mkdtemp()
         self.web = port + 10                                # the settings page
         self.node = re.sub(r"[^a-z0-9]", "-", name.lower())
         self.log = os.path.join(self.state, "log")
@@ -51,11 +52,10 @@ class Echo:
     def st(self, oid): return self.states.get(self.by[oid].key) if oid in self.by else None
     def wake(self): self.proc.send_signal(signal.SIGUSR1)
     def pair(self): self.proc.send_signal(signal.SIGWINCH)          # Volume up + Volume down held
-    def entity(self, suffix=None):              # HA's entity id; suffix: HA's for an id another device held first
-        return "sensor." + re.sub(r"[^a-z0-9]+", "_", self.name.lower()) + "_arbitration_handoff" + (self.suffix if suffix is None else suffix)
-    def pub(self):
-        try: return base64.b64decode(self.st("arbitration_handoff").split()[1])
-        except (AttributeError, IndexError): return None
+    def pub(self):                              # the arbitration identity's public key, from its private one
+        sk = base64.b64decode(open(os.path.join(self.state, "arb_key")).read().strip())
+        return X25519PrivateKey.from_private_bytes(sk).public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    def tag(self): return "hassmic_" + self.pub().hex()
 
     async def arbitrate(self, on):
         """arbitration on or off on the settings page; Home Assistant is sent away and lists the entities again"""
@@ -94,15 +94,18 @@ class Echo:
 class HA:
     """Home Assistant's esphome manager: device actions run only with the option ticked (otherwise a repair), and
     esphome.<device_info.name with '_'>_<service> is each device's own action."""
-    def __init__(self, echos, others=None): self.echos, self.calls, self.refused, self.states_on, self.asked, self.others = echos, [], [], True, [], others or {}
+    def __init__(self, echos): self.echos, self.calls, self.refused, self.tags_on, self.asked, self.tags, self.scans = echos, [], [], True, [], {}, []
     def state(self, asker, entity, attribute):
         """async_on_state_request: the current state, nothing for an entity that has none (missing, or disabled)"""
         self.asked.append((asker.name, entity))
-        if entity in self.others: asker.cli.send_home_assistant_state(entity, attribute, self.others[entity])
-        for e in self.echos:
-            st = e.st("arbitration_handoff") if hasattr(e, "by") else None
-            if self.states_on and entity == e.entity() and st: asker.cli.send_home_assistant_state(entity, attribute, st)
+        tag = entity[4:] if entity.startswith("tag.") else None
+        if self.tags_on and tag in self.tags: asker.cli.send_home_assistant_state(entity, attribute, self.tags[tag])
     def action(self, sender, call):
+        if call.is_event:                               # before the permission check, as in HA's esphome manager
+            if call.service == "esphome.tag_scanned" and self.tags_on:
+                self.scans.append((sender.name, call.data["tag_id"]))
+                self.tags[call.data["tag_id"]] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds")
+            return
         if not sender.allowed: self.refused.append(sender.name); return
         self.calls.append((sender.name, call.service, dict(call.data)))
         for e in self.echos:
@@ -119,10 +122,8 @@ async def until(cond, secs):
 
 
 async def main():
-    a, b = Echo("Echo Kitchen", 16961, 500, "_4"), Echo("Echo Living Room", 16962, 900)
-    # other devices named "Echo Kitchen" in HA hold the first three ids: one online, one off, one more online
-    other = lambda: "HMA1 " + base64.b64encode(os.urandom(32)).decode()
-    ha = HA([a, b], {a.entity(""): other(), a.entity("_2"): "unavailable", a.entity("_3"): other()})
+    a, b = Echo("Echo Kitchen", 16961, 500), Echo("Echo Living Room", 16962, 900)
+    ha = HA([a, b])
     # each already in a network of its own (as two Echos that started at the same moment would be): they merge
     for e, net in ((a, 5), (b, 2)):
         with open(os.path.join(e.state, "arbitration"), "w") as f:
@@ -134,27 +135,21 @@ async def main():
         await a.connect(ha); await b.connect(ha)
         check([s.name for s in a.services] == ["arbitration_key"] and [x.name for x in a.services[0].args] == ["network", "key"]
               and "arbitration_id" not in a.by, "the Echo offers its \"arbitration_key\" action, and no ID entity")
-        check(a.by["arbitration_handoff"].entity_category == 2, "\"Arbitration handoff\": a diagnostic entity")
-        a.allowed = b.allowed = False                   # neither may run actions: the handoff entities alone
-        seen = []
-        b.cli.subscribe_states(lambda s: s.key == b.by["arbitration_handoff"].key and seen.append(getattr(s, "state", None)))
+        check("arbitration_handoff" not in a.by, "no \"Arbitration handoff\" entity any more")
+        a.allowed = b.allowed = False                   # neither may run actions: the tags alone
         ok = await until(lambda: a.st("arbitration_peers") == 1 and b.st("arbitration_peers") == 1, 40)
         check(ok and a.net() == b.net() and a.net().startswith("0000000000000002"), f"two networks merged into the older one: {a.net() and a.net()[:16]}")
-        check(f"Home Assistant shows our key on {a.entity()}" in a.text() and f"Home Assistant shows our key on {b.entity()}" in b.text(),
-              "each Echo found its own handoff entity through Home Assistant")
-        check(not any(n == a.name and e.endswith("_handoff_5") for n, e in ha.asked),
-              f"three ids held by other devices: found its own at {a.entity()}, and asked no further")
-        check(f"Home Assistant shows echo-kitchen's key on {a.entity()}" in b.text()
-              and "moved to the older network 0000000000000002 (key offered by echo-living-room)" in a.text() and not ha.calls and not ha.refused,
-              "the key went through Home Assistant on the member's handoff entity, without any action")
-        key_b64 = re.search(r"^net \S+ (\S+)$", open(os.path.join(a.state, "arbitration")).read(), re.M).group(1)
-        check(any(len(x.split()) == 5 for x in seen) and not any(key_b64 in x for x in seen),
-              "the network key is not readable in the offer Home Assistant showed")
-        await until(lambda: len(b.st("arbitration_handoff").split()) == 2, 5)
-        check(len(b.st("arbitration_handoff").split()) == 2, "offer taken down once the other Echo is in")
+        check({t for _, t in ha.scans} == {a.tag(), b.tag()} and all(t == {a.name: a, b.name: b}[n].tag() for n, t in ha.scans),
+              "each Echo scanned its own tag: hassmic_<its public key>")
+        check("Home Assistant confirms echo-kitchen's key" in b.text() and "Home Assistant confirms echo-living-room's key" in a.text(),
+              "each Echo had Home Assistant confirm the other's key: its tag scanned after the first read")
+        check("moved to the older network 0000000000000002 (key from echo-living-room, confirmed by Home Assistant)" in a.text()
+              and not ha.calls and not ha.refused, "the key went on the LAN, sealed, after Home Assistant confirmed both: without any action")
         arb = a.page.state()["arbitration"]
         check(arb["network"] == "0000000000000002" and [(m["node"], m["ip"]) for m in arb["members"]] == [("echo-living-room", "127.0.0.1")]
-              and arb["handoff_entity"] == a.entity() and not arb["others"], f"settings page: the network, its member with its address, the handoff entity: {arb}")
+              and arb["tag"] == "tag." + a.tag() and not arb["others"], f"settings page: the network, its member with its address, the tag: {arb}")
+        n = len(ha.scans); await asyncio.sleep(12)
+        check(len(ha.scans) == n, f"both in one network: no more scans ({len(ha.scans) - n} since)")
         a.allowed = b.allowed = True
 
         # logged in on one Echo: in on the other one too, through their network, without its button
@@ -176,9 +171,23 @@ async def main():
         check(zb.through(z, nonce=n) == "approved" and zb.through(z, nonce=n) == "refused", "a nonce counts once")
 
         # both hear it, the one that heard it better answers, the other stays quiet
+        sn = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)                 # listens in on the claims
+        sn.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); sn.bind(("", ARB)); sn.setblocking(False)
         await asyncio.sleep(1)
+        while True:
+            try: sn.recv(512)
+            except BlockingIOError: break
         a.wake(); b.wake(); t0 = time.monotonic()
-        await asyncio.sleep(2)
+        got = []
+        while time.monotonic() - t0 < 2:
+            try: p = sn.recv(512); got.append((time.monotonic(), p))
+            except BlockingIOError: await asyncio.sleep(0.005)
+        sn.close()
+        same = {}
+        for t, p in got:
+            if p[4] == 4: same.setdefault(p, []).append(round((t - min(x for x, q in got if q == p)) * 1000))
+        check(len(same) == 3 and all(len(v) == 3 and 20 <= v[1] <= 60 and 65 <= v[2] <= 120 for v in same.values()),
+              f"two claims and one \"answers\", each three times, spread over 80 ms (ms after the first): {sorted(same.values())}")
         check(len(b.starts) == 1 and not a.starts, f"both heard it: the better one (900 over 500) answers alone: {len(a.starts)} / {len(b.starts)}")
         check(b.starts and b.starts[0] - t0 < 1.0, f"answer after {b.starts[0] - t0 if b.starts else -1:.2f} s")
         check("another Echo answers" in a.text() and "earcon" not in a.text(), "the other one: no sound")
@@ -303,13 +312,15 @@ async def main():
         xp2 = X25519PrivateKey.generate().public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
         send(b"HMA1\x01" + xp2 + struct.pack("<Q", 0) + node(b.node))                     # ...or naming a real Echo, with its own key
         send(b"HMA1\x01" + xp + struct.pack("<Q", 1) + node("evil") + struct.pack("<Q", 1) + os.urandom(16))   # "an older network"
-        ent = lambda e: b"HMA1\x02" + xp + bytes([len(e)]) + e.encode()
-        send(b"HMA1\x01" + xp + struct.pack("<Q", 0) + node("evil")); send(ent(a.entity()))   # "my entity is that real Echo's"
+        la, lb = len(a.text()), len(b.text())
+        ha.tags["hassmic_" + xp.hex()] = "2026-01-01T00:00:00.000+00:00"      # its tag, scanned once long ago (removed from HA since)
+        send(b"HMA1\x06" + a.pub() + struct.pack("<Q", 1) + xp + os.urandom(72))    # "here is the older network's key"
         await asyncio.sleep(4)
-        offers = [c for c in (a.st("arbitration_handoff"), b.st("arbitration_handoff")) if len(c.split()) > 2]
-        check((b.name, a.entity()) in ha.asked and not offers and "shows evil's key" not in b.text(),
-              "a forged entity id (a real Echo's): Home Assistant shows another key there, so no offer")
-        await asyncio.sleep(22)                         # no entity confirmed: the action, after ATTEST_WAIT_MS
+        check((b.name, "tag.hassmic_" + xp.hex()) in ha.asked and "confirms evil" not in a.text()[la:] + b.text()[lb:]
+              and "on the LAN" not in a.text()[la:] + b.text()[lb:] and "confirmed by Home Assistant" not in a.text()[la:],
+              "a forger with a tag that never changes (a device since removed from HA): not confirmed, nothing handed")
+        send(b"HMA1\x01" + xp + struct.pack("<Q", 0) + node("evil"))
+        await asyncio.sleep(28)                         # nothing confirmed: the action, after ATTEST_WAIT_MS
         sent = {c[1] for c in ha.calls[calls:]}
         check(sent and sent <= {"esphome.evil_arbitration_key", f"esphome.{b.node.replace('-', '_')}_arbitration_key"},
               f"unknown device: the key only ever goes to a device Home Assistant adopted under that name: {sorted(sent)}")
@@ -329,9 +340,8 @@ async def main():
         # arbitration off: no rounds, but still in the network (the settings pages find each other through it)
         net = a.net()
         await a.arbitrate(False)
-        check(a.net() == net and "arbitration_peers" not in a.by and "arbitration_handoff" in a.by and a.services
-              and a.page.state()["arbitration"]["arbitrates"] is False,
-              "arbitration off on the page: network key kept, handoff entity and action still listed, peers sensor gone")
+        check(a.net() == net and "arbitration_peers" not in a.by and a.services and a.page.state()["arbitration"]["arbitrates"] is False,
+              "arbitration off on the page: network key kept, action still listed, peers sensor gone")
         ok = await until(lambda: b.st("arbitration_peers") == 0, 5)
         check(ok and [m["arbitrates"] for m in b.page.state()["arbitration"]["members"]] == [False],
               "the other Echo learns it from the next beacon, sent at once: still a member, no longer counted for rounds")
@@ -349,13 +359,13 @@ async def main():
         await a.reset(); t0 = time.monotonic()
         ok = await until(lambda: a.net(), 10)
         check(ok and "no other Echo found, started network" in a.text() and time.monotonic() - t0 > 4, f"alone: started a network after {time.monotonic() - t0:.1f} s")
-        # no handoff entity to read (disabled, or the device renamed in HA) and no permission: no key, HA raises its repair
-        a.allowed = False; ha.states_on = False; refused = len(ha.refused)
+        # no tag integration in HA and no permission: no key, HA raises its repair
+        a.allowed = False; ha.tags_on = False; ha.tags.clear(); refused = len(ha.refused)
         b.start(); await asyncio.sleep(0.5); await b.connect(ha)
         w = Browser(a.web); w.login_with_button(a.proc)
         check(w.at(b.web).through(w) == "refused", "an Echo outside the network: nobody vouches it in (the button it is)")
-        await asyncio.sleep(24)
-        check(len(ha.refused) > refused and b.net() is None, "no handoff entity and no \"perform actions\": no key (HA raises its repair)")
+        await asyncio.sleep(34)
+        check(len(ha.refused) > refused and b.net() is None, "no tags and no \"perform actions\": no key (HA raises its repair)")
         o = [x for x in a.page.state()["arbitration"]["others"] if x["node"] == "echo-living-room"]
         check(o and o[0]["state"] in ("none", "younger") and not o[0]["key_confirmed"], f"settings page: the Echo left outside, and why: {o}")
 
@@ -377,17 +387,17 @@ async def main():
         await asyncio.sleep(0.5)
         check(b.net() != a.net() and "key from pairing does not open with ours, ignored" in b.text(), "a forged network handed over: ignored")
 
-        # handoff entity back: in without permission
-        ha.states_on = True
+        # tags back: in without permission
+        ha.tags_on = True
         await b.reset()
-        ok = await until(lambda: b.net() == a.net(), 20)
-        check(ok and "offered by echo-kitchen" in b.text(), "handoff entity readable again: joined without permission")
+        ok = await until(lambda: b.net() == a.net(), 40)
+        check(ok and "(key from echo-kitchen, confirmed by Home Assistant)" in b.text(), "tags again: joined without permission")
         await until(lambda: a.st("arbitration_peers") == 1 and b.st("arbitration_peers") == 1, 35)
 
-        # permission and no handoff entity (an Echo of an older version): the action
-        ha.states_on = False; a.allowed = True; calls = len(ha.calls)
+        # permission and no tags (HA without the tag integration): the action
+        ha.tags_on = False; ha.tags.clear(); a.allowed = True; calls = len(ha.calls)
         await b.reset()
-        ok = await until(lambda: b.net() == a.net() and a.st("arbitration_peers") == 1 and b.st("arbitration_peers") == 1, 40)
+        ok = await until(lambda: b.net() == a.net() and a.st("arbitration_peers") == 1 and b.st("arbitration_peers") == 1, 60)
         check(ok and any(c[1] == "esphome.echo_living_room_arbitration_key" for c in ha.calls[calls:]), "allowed: the next one joined through the action")
     finally:
         for e in (a, b): e.proc.terminate()

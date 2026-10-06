@@ -94,7 +94,8 @@ enum { BLE_REQ_CONNECT = 0, BLE_REQ_DISCONNECT, BLE_REQ_PAIR, BLE_REQ_UNPAIR, BL
 enum { EV_ERROR = 0, EV_RUN_START, EV_RUN_END, EV_STT_START, EV_STT_END, EV_INTENT_START, EV_INTENT_END, EV_TTS_START,
        EV_TTS_END, EV_WAKE_START, EV_WAKE_END, EV_VAD_START, EV_VAD_END, EV_TTS_STREAM_START = 98, EV_TTS_STREAM_END = 99, EV_INTENT_PROGRESS = 100 };
 enum { FEAT_VOICE = 1, FEAT_SPEAKER = 2, FEAT_API_AUDIO = 4, FEAT_TIMERS = 8, FEAT_ANNOUNCE = 16, FEAT_START_CONVERSATION = 32 };
-/* KEY_NOISE and KEY_MULT: retired entities (noise suppression, mic volume multiplier), kept so the others keep their keys */
+/* KEY_NOISE, KEY_MULT and KEY_ARB_HANDOFF: retired entities (noise suppression, mic volume multiplier, arbitration
+ * handoff), kept so the others keep their keys */
 enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SENDSPIN_TOKEN, KEY_SOC_TEMP, KEY_CPU_USAGE, KEY_BT_PAIRING,
        KEY_BT_ANNOUNCE, KEY_DND, KEY_EQ_BASS, KEY_EQ_MID, KEY_EQ_TREBLE, KEY_BT_LANG, KEY_ARB_JOIN, KEY_ARB_PEERS, KEY_ARB_SERVICE,
        KEY_SS_UNPAIRED, KEY_DENOISE, KEY_ADB_WIFI, KEY_LUX, KEY_LED_AUTO, KEY_LED_BRIGHTNESS, KEY_SOUND_DETECTION, KEY_SOUND,
@@ -354,15 +355,6 @@ static void send_setting(int key)       /* lock held */
 /* The Sendspin pairing token, so that it can be copied from Home Assistant into Music Assistant.  It is a secret of
  * sorts (whoever has it can pair a server with this player), so the entity is diagnostic and disabled by default:
  * Home Assistant only records it once the user enables it. */
-static void send_handoff_state(void)    /* lock held */
-{
-    PB(b, 320); char s[280];
-    if (!listed(KEY_ARB_HANDOFF)) return;
-    arb_handoff(s, sizeof s);
-    pb_fixed32(&b, 1, KEY_ARB_HANDOFF); pb_str(&b, 2, s);
-    send_state(TEXT_SENSOR_STATE, &b);
-}
-
 static void send_token_state(void)      /* lock held */
 {
     PB(b, 256); char tok[160];
@@ -456,7 +448,7 @@ static int listed(int key)
     case KEY_BT_PAIRING: return ble_present() && settings_on("bluetooth_audio");
     case KEY_BT_OUT_SEARCH: case KEY_BT_OUT: case KEY_BT_OUT_STATUS: case KEY_BT_OUT_DELAY: return ble_present() && settings_on("bluetooth_speaker");
     case KEY_ARB_PEERS: return arb_running() && settings_on("arbitration");
-    case KEY_ARB_SERVICE: case KEY_ARB_HANDOFF: return arb_running();       /* the network, which runs either way */
+    case KEY_ARB_SERVICE: return arb_running();     /* the network, which runs either way */
     case KEY_WHISPERED: return core_whisper_model() && settings_on("whisper_detection");
     case KEY_WIFI_MOTION: case KEY_WIFI_MOTION_SENS: return wifimotion_present() && settings_on("wifi_motion");
     case KEY_LUX: case KEY_LED_AUTO: return have_light;
@@ -499,18 +491,13 @@ static void send_setting_entities(void)
           pb_str(&b, 5, "mdi:timer-sand"); pb_float(&b, 6, 0); pb_float(&b, 7, 1000); pb_float(&b, 8, 10); pb_uint(&b, 10, 1);
           pb_str(&b, 11, "ms"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
     }
-    if (listed(KEY_ARB_HANDOFF)) {
+    if (listed(KEY_ARB_SERVICE)) {
         /* the action other Echos hand their network key through: Home Assistant registers it as
          * esphome.<node>_arbitration_key, after the node name we report, whatever the device is called there */
         { PB(b, 256); PB(a, 48); pb_str(&b, 1, "arbitration_key"); pb_fixed32(&b, 2, KEY_ARB_SERVICE);
           pb_str(&a, 1, "network"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
           a.n = 0; pb_str(&a, 1, "key"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
           pb_str(&b, 5, "Used by other Echos (wake word arbitration), not by people"); send_msg(LIST_SERVICE, &b); }
-        /* our public key, and a sealed network key while we offer one: other Echos read it through Home Assistant
-         * (arb.c), which lets devices read states without "perform actions".  Diagnostic, and must stay enabled.
-         * Listed with arbitration off too: the network runs either way (the settings pages find each other by it) */
-        { PB(b, 192); pb_str(&b, 1, "arbitration_handoff"); pb_fixed32(&b, 2, KEY_ARB_HANDOFF); pb_str(&b, 3, "Arbitration handoff");
-          pb_str(&b, 5, "mdi:handshake"); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
     }
     if (listed(KEY_ARB_PEERS)) {
         { PB(b, 128); pb_str(&b, 1, "arbitration_peers"); pb_fixed32(&b, 2, KEY_ARB_PEERS); pb_str(&b, 3, "Arbitration peers");
@@ -1275,7 +1262,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case LIST_ENTITIES_REQ: send_entities(); break;
     case SUBSCRIBE_STATES:
         for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd == reply_fd) clients[i].states = 1;
-        send_mp_state(); send_all_settings(); send_token_state(); send_handoff_state(); send_web_state();
+        send_mp_state(); send_all_settings(); send_token_state(); send_web_state();
         ask_time(c, 1); break;
     case GET_TIME_RESP: {
         uint32_t epoch = 0;
@@ -1495,7 +1482,17 @@ static int arb_send(const char *node, const char *network, const char *key)
     return n ? 0 : -1;
 }
 
-static void arb_changed(void) { for (int k = KEY_ARB_JOIN; k <= KEY_ARB_PEERS; k++) send_setting(k); send_handoff_state(); }
+static void arb_changed(void) { for (int k = KEY_ARB_JOIN; k <= KEY_ARB_PEERS; k++) send_setting(k); }
+
+/* lock held: our arbitration tag as scanned (arb.c).  An event, which HA fires for any device it adopted, "perform
+ * actions" or not (esphome manager: is_event before the permission check); only to Home Assistant itself */
+static int arb_scan(const char *tag_id)
+{
+    PB(b, 160); int n = 0;
+    pb_str(&b, 1, "esphome.tag_scanned"); pb_map(&b, 2, "tag_id", tag_id); pb_uint(&b, 5, 1);
+    for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].actions && clients[i].keyed) { send_to(clients[i].fd, HA_ACTION, &b); n++; }
+    return n ? 0 : -1;
+}
 
 /* lock held: ask Home Assistant once for an entity's state (needs no permission: HA answers any device) */
 static int arb_request(const char *entity)
@@ -1516,4 +1513,4 @@ static void sound(const char *event)    /* lock held */
 static void whispered(int on) { (void)on; send_setting(KEY_WHISPERED); }   /* lock held */
 
 const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, cancel, played, volume_changed, mute_changed, print_mdns, bt_device,
-                                     arb_send, arb_changed, sound, whispered, arb_request, settings_changed, entities_changed };
+                                     arb_send, arb_changed, sound, whispered, arb_request, settings_changed, entities_changed, arb_scan };

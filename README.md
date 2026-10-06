@@ -75,11 +75,12 @@ Details:
   there is no delay. They find each other by themselves; "Wake word arbitration" on the [settings page](#settings-page) (on by
   default) says whether an Echo takes part: switched off, it answers every wake word itself but stays in the Echos'
   network, so the settings pages still find it. The shared key
-  travels through your Home Assistant, so nobody else on the network can join or silence them. Nothing to set up: each
-  Echo shows a key on its diagnostic entity "Arbitration handoff" (leave it enabled), and the Echos read each other's
-  through Home Assistant. That works while the Echo's entities in Home Assistant carry the name of its `NAME` (so not if
-  you renamed the device there). Otherwise either tick "Allow the device to perform Home Assistant actions" in each
-  Echo's ESPHome options, or pair two Echos with the buttons: hold Volume up and Volume down together for 2 s on the new
+  is vouched for by your Home Assistant, so nobody else on the network can join or silence them. Nothing to set up:
+  each Echo reports a tag named after its key as scanned (Settings › Tags lists one "Tag hassmic_…" per Echo), and an
+  Echo hands the key, encrypted, only to one whose tag Home Assistant confirms. This needs Home Assistant's Tags
+  integration (part of the default configuration); names, rooms and renames in Home Assistant do not matter. Without
+  it either tick "Allow the device to perform Home Assistant actions" in each Echo's ESPHome options, or pair two Echos
+  with the buttons: hold Volume up and Volume down together for 2 s on the new
   Echo, then on one already in (a tap sounds; the Bluetooth "connected" sound when it worked, "disconnected" when it
   did not within 2 min). Give every Echo its own `NAME`. Other satellites (ESP32 and so on) are not part of it; Home Assistant itself then lets the first one
   that reports the wake word answer, and the Echo that is second now just goes quiet instead of flashing an error.
@@ -414,10 +415,12 @@ Open issues and measurements: [PLAN.md](PLAN.md).
   a fresh challenge signed with your update key, so a recorded exchange does not work twice) or by `ADB_WIFI=1` in
   `hassmic.conf`; while it is open, anyone on the network has root. USB always works: physical access is root access anyway.
   Without `hassmic.conf` (stock behaviour, or before the install) it is open, as stock leaves it.
-- **Arbitration between Echos**: an Echo takes the network key only from Home Assistant, over its encrypted API link,
-  or from the button pairing. Through Home Assistant: a member offers the key on its "Arbitration handoff" entity only
-  to an Echo whose key Home Assistant shows on that Echo's own entity (so only devices you adopted), or, where it finds
-  none, asks Home Assistant to run the newcomer's own action `esphome.<node>_arbitration_key` (needs "Allow the device
+- **Arbitration between Echos**: an Echo takes the network key only from an Echo Home Assistant vouches for, from
+  Home Assistant over its encrypted API link, or from the button pairing. Vouched for: each Echo reports the tag
+  `hassmic_<its public key>` as scanned, and the key goes on the network, encrypted to the receiver, only between two
+  Echos that each saw Home Assistant record a new scan of the other's tag (so only devices you adopted, and only while
+  they are; a user of your Home Assistant could scan such a tag too, from the companion app). Where that fails, a
+  member asks Home Assistant to run the newcomer's own action `esphome.<node>_arbitration_key` (needs "Allow the device
   to perform Home Assistant actions"). Button pairing: a member hands the key only if exactly one Echo asked, from 2 min
   before its own buttons were held; someone on the network who asks as well only makes it fail, and the newcomer's
   buttons go first. The key travels encrypted to the receiving Echo, so it is not readable in Home Assistant's states,

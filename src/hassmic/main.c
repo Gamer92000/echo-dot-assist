@@ -908,6 +908,14 @@ static int arb_request(const char *entity)
     return r;
 }
 
+static int arb_scan(const char *tag_id)
+{
+    pthread_mutex_lock(&core_lock);
+    int r = connected && proto->arb_scan ? proto->arb_scan(tag_id) : -1;
+    pthread_mutex_unlock(&core_lock);
+    return r;
+}
+
 /* Arbitration pairing (Volume up + Volume down): a tap when it starts, the Bluetooth sounds for joined or not */
 static void arb_paired(int result) { sound_queue(result == 1 ? SND_TOUCH : result == 2 ? SND_BT_ON : SND_BT_OFF); }
 static void on_pair(void)
@@ -1494,7 +1502,7 @@ int main(int argc, char **argv)
     }
     if (whisper_open(on_whisper) == 0) { atomic_store(&whisper_last, -1); whisper_model = 1; }
     else fprintf(stderr, "whisper: no model, no whisper detection (scripts/artifacts.sh installs it)\n");
-    static const struct arb_hooks arb_hooks = { arb_send_key, arb_notify, arb_request, arb_paired };
+    static const struct arb_hooks arb_hooks = { arb_send_key, arb_notify, arb_request, arb_paired, arb_scan };
     if (arb_port && core_local_wake && proto->arb_send && arb_start(arb_port, core_node_name(), &arb_hooks)) fprintf(stderr, "arbitration: not available\n");
 
     pthread_t cap_t, play_t, ear_t;

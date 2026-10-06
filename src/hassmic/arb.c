@@ -21,15 +21,17 @@
  * beacon, so they do not count it either.
  *
  * Who gets K, three ways; the first two go through Home Assistant, so the trust is the owner's: what they adopted.
- *   Handoff entity: every Echo shows its public key on a diagnostic text sensor, "Arbitration handoff".  HA does not
- *   tell a device its entity ids (they follow the device name in HA, which the user may have changed), so the Echo
- *   asks HA for the likely ones (sensor.<node>_arbitration_handoff, _2, _3, and further as long as HA answers for
- *   the last: another device holds it, up to as many as the subnet has hosts; once-requests, which need no
- *   permission) and the one showing its own key is its own; from then on it broadcasts that id (T_ENTITY).  A member asks HA for
- *   the entity a newcomer named, and only if HA shows the newcomer's beacon key there does it put K on its own entity,
- *   sealed to that key; the newcomer reads it there.  A forged beacon (or T_ENTITY) gets no offer: HA would have to
- *   show the forger's key on an adopted device's entity.  Without permission to act, and nothing to configure.
- *   Action: with no confirmed entity after ATTEST_WAIT_MS (older Echo, entity disabled, renamed device), the member
+ *   Tag: HA names entities after area, device and (since 2026.9) parent device, in an order users can configure, and
+ *   never tells a device its entity ids, so no Echo can know where HA shows anything of another.  Tags are the
+ *   exception: an ESPHome device may report one as scanned without "perform actions" (HA fires events, tag_scanned
+ *   included, for any adopted device), and HA keeps it as tag.<tag id>, with no area or device in the id.  So every
+ *   Echo that needs one (outside a network, or an Echo outside ours in sight) scans "hassmic_<its public key, hex>"
+ *   every SCAN_MS, and an Echo reads another's tag (once-requests, which need no permission either): HA shows the last
+ *   scan's time, and once that changed after our first read, a device HA adopted presented that key since (a stale tag
+ *   of an Echo since removed from HA never changes).  Both sides check: a member hands K (T_GIVE, sealed to the
+ *   newcomer's key) only to an Echo whose tag HA confirmed, and the newcomer takes it only from an Echo whose tag HA
+ *   confirmed, so a forger can neither get K nor push a network of its own.  No clock needed, nothing to configure.
+ *   Action: with no tag confirmed after ATTEST_WAIT_MS (HA without the tag integration, an older Echo), the member
  *   has HA run the newcomer's own action, "esphome.<its node name>_arbitration_key", which HA delivers only over the
  *   encrypted API link of the device it adopted under that node name; the receiving Echo takes it only from a client
  *   holding the device's API key.  Needs "Allow the device to perform Home Assistant actions" on the member (HA raises
@@ -43,22 +45,22 @@
  * K travels sealed to the receiver's public key from its beacon (X25519, BLAKE2b, XChaCha20-Poly1305), so neither HA's
  * states, traces nor logbook hold it readable.  The node name is the ESPHome device name the Echo reports itself (from
  * NAME in hassmic.conf), not the name given to it in HA.  Two Echos with the same NAME collide there.
- *   Limits: any HA admin (or, for the action, any allowed ESPHome device) can hand an Echo a key.  An Echo that leaves
+ *   Limits: any HA user (a tag scanned in the companion app) or adopted ESPHome device can vouch for a key, and for the
+ *   action any allowed ESPHome device can hand an Echo one.  An Echo that leaves
  *   wipes K; K is not rotated when an Echo is removed.  Counters are only remembered in memory: right after a restart,
  *   one recorded packet per member can be replayed once (at worst one wake word lost).  The goal is that nobody on the
  *   network who is not in Home Assistant (and has not pressed the buttons) can silence an Echo or listen in on the rounds.
  *
  * UDP broadcast on one port (default 28930; the stock firewall admits inbound UDP 16384-32767), so everything reaches
- * every Echo in the subnet.  Wi-Fi drops broadcasts now and then (no retries on the air): claims go out twice, the
- * counter drops the copy.
+ * every Echo in the subnet.  Wi-Fi drops broadcasts now and then (no retries on the air): claims go out three times,
+ * spread over 80 ms (COPY_MS), the counter drops the copies.
  *
  *   beacon  "HMA1" 1  pub[32] net[8] nlen node [ctr[8] tag[16], in a network]
  *   claim   "HMA1" 4  net[8] id[8] ctr[8] kw[8] score[4] prio won tag[16]
- *   entity  "HMA1" 2  pub[32] elen entity       (unauthenticated: only names where HA shows pub)
  *   pair    "HMA1" 5  pub[32] net[8] nlen node
- *   give    "HMA1" 6  to[32] net[8] key[104]
+ *   give    "HMA1" 6  to[32] net[8] key[104]     (taken while pairing, or from an Echo whose tag HA confirmed)
  *   key (the action's "key" argument, base64)  sender pub[32] nonce[24] mac[16] enc(K)[32], "network": the id in hex
- *   handoff entity  "HMA1 <pub base64>[ <network hex> <to: first 8 bytes of its key, hex> <key base64>]"
+ *   tag id  "hassmic_<pub, 64 hex>"; HA's entity tag.hassmic_<pub hex>, state the last scan's time
  * Little endian; id: first 8 bytes of the public key; kw: BLAKE2b of the keyword in lower case; tag: keyed BLAKE2b with
  * a key derived from K.
  *
@@ -85,8 +87,6 @@
 #include <errno.h>
 #include <math.h>
 #include <fcntl.h>
-#include <ifaddrs.h>
-#include <net/if.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
@@ -103,6 +103,11 @@
 #include "../third_party/monocypher.h"
 
 #define WINDOW_MS    200        /* wait for the others' claims; Wi-Fi broadcast on a quiet LAN arrives within a few ms */
+/* A claim and an "answers" go out three times, these ms after the first: Wi-Fi broadcasts have no retries, and two copies
+ * sent in the same ms were lost together (2026-10-06, biscuit missed radar's claim in 2 of 3 rounds while donut got it;
+ * it got radar's "answers" 200 ms later).  The last copy still reaches a member whose detection came 60 ms before ours
+ * (the spread seen, -17..+59 ms) before its decision.  Copies carry the same counter: receivers drop all but the first */
+static const int COPY_MS[] = { 30, 80 };
 #define LOOKBACK_MS  1000       /* claims this much older than our own detection still count: the engines report late by different amounts */
 #define BEACON_MS    30000
 #define LONER_MS     10000      /* beacon interval outside a network; members answer such a beacon at once */
@@ -110,20 +115,24 @@
 #define DISCOVER_MS  5000       /* no member heard in this time: start a network */
 #define PUSH_MS      30000      /* hand our key to the same Echo at most this often */
 #define CTR_BLOCK    4096
-#define POLL_MS      3000       /* ask Home Assistant again for a peer's handoff entity */
-#define SELF_POLL_MS 3000       /* ...and for the ids ours may have, until one shows our key; every minute after 20 tries */
-#define ATTEST_WAIT_MS 20000    /* no entity confirmed for a newcomer by then: hand K through its action instead.  The
-                                 * chain takes three polls once HA is linked; the action would raise a repair in HA for
-                                 * every owner who did not allow it */
+#define POLL_MS      3000       /* ask Home Assistant again for an Echo's tag, until it confirms the key */
+#define SCAN_MS      10000      /* scan our tag this often while another Echo may be waiting for it to change... */
+#define SCAN_N       12         /* ...this many times in a row, then every SCAN_SLOW_MS (an Echo HA never confirms, a
+                                 * forger's beacons: no endless stream of scans in HA's logbook) */
+#define SCAN_SLOW_MS 300000
+#define GIVE_MS      5000       /* hand K on the LAN to an Echo HA confirmed this often, until it is in */
+#define ATTEST_WAIT_MS 30000    /* no tag confirmed for a newcomer by then: hand K through its action instead.  A tag
+                                 * takes a read, a scan (within SCAN_MS) and a read again; the action would raise a
+                                 * repair in HA for every owner who did not allow it */
 #define PAIR_MS      120000     /* the pairing gesture's window, and how far back a member looks for requests */
 #define PAIR_SETTLE_MS 2000     /* a member waits this long after its press for a second requester */
 #define NPEER  16
 #define NCLAIM 16
 #define NLEN   64
-#define ELEN   96               /* "sensor." + a slug of the HA device name + "_arbitration_handoff_2" */
+#define TLEN   80               /* "tag.hassmic_" + 64 hex */
 #define BLOB   (32 + 24 + 16 + 32)
 
-enum { T_BEACON = 1, T_ENTITY = 2, T_CLAIM = 4, T_PAIR = 5, T_GIVE = 6 };
+enum { T_BEACON = 1, T_CLAIM = 4, T_PAIR = 5, T_GIVE = 6 };    /* 2 was the handoff entity's id (older Echos), ignored */
 enum { F_QUIET = 1, F_KIOSK = 2 };                      /* the beacon's flags byte */
 
 #define KIOSK_PORT    2330      /* Kiosk Satellite's, fixed (HASSMIC_KIOSK_PORT: tests) */
@@ -149,17 +158,19 @@ static struct peer { uint8_t id[8]; uint64_t ctr; long long seen; char node[NLEN
 static struct claim { uint8_t id[8], kw[8]; int score, prio, won; long long at; } claims[NCLAIM];
 static unsigned claim_next;
 static struct cand {                                    /* Echos outside our network */
-    uint8_t pub[32]; char node[NLEN], ent[ELEN]; uint64_t net; int attested, offers;  /* HA shows pub on ent; offers made there */
+    uint8_t pub[32]; char node[NLEN]; uint64_t net;
+    int attested;                                       /* HA showed a scan of its tag after our first read */
+    char tag0[48];                                      /* its tag's state at our first read ("": no answer yet) */
     uint32_t ip;                                        /* where its beacons come from (network byte order), for the settings page */
-    long long seen, first, pushed, polled;
+    long long seen, first, pushed, gave, polled;        /* pushed: through the action; gave: on the LAN */
 } cands[NPEER];
 static struct push { char node[NLEN], net[20], key[160]; } pushes[NPEER];     /* for Home Assistant, sent outside the lock */
 static int npush;
-static char polls[NPEER + 4][ELEN];              /* entities to ask Home Assistant for, outside the lock */
+static char polls[NPEER][TLEN];                  /* tags to ask Home Assistant for, outside the lock */
 static int npoll;
-static char self_ent[ELEN], offer[200];                 /* our handoff entity once HA showed our key there; what we offer on it */
-static long long self_polled;
-static int self_polls, self_n = 3, self_next = -1;     /* ids of ours to try: 3, or one past the last taken; one to ask now */
+static char self_tag[TLEN - 4];                         /* our tag id, "hassmic_<pub hex>" */
+static long long scan_at;
+static int scans, scan_due;                             /* scans in a row while someone may wait; one to send outside the lock */
 static struct preq { uint8_t pub[32]; char node[NLEN]; uint64_t net; long long seen; } preqs[NPEER];   /* pair requests heard */
 static long long pair_at, pair_until, pair_sent, give_at;
 static int pair_gave, give_left;
@@ -178,6 +189,8 @@ static long long kheard;                                /* the last claim from a
 static long long klogged;                               /* claims are logged once a second at most, the rest counted: */
 static int kunlogged;                                   /* anyone on the LAN can send them, and boot.log is on flash */
 static struct { char p[KIOSK_PHRASE]; int e; } kround;
+static struct { uint8_t p[256]; size_t n; long long at; int left; } copies[2];    /* claims and "answers": copies still due */
+static int wake_fd[2] = { -1, -1 };                     /* a byte wakes the loop: copies are due before its next poll ends */
 static char kpkt[300];
 static size_t kpkt_n;
 static int kcopies;                                     /* copies of our claim still to send, the next at kcopy_at */
@@ -271,6 +284,15 @@ static void send_pkt(const struct pkt *b)
     last_err = errno;
 }
 
+/* Send now, and have the loop send the same packet again COPY_MS later (lk held) */
+static void send_spread(const struct pkt *b, long long now)
+{
+    int i = !copies[0].left ? 0 : !copies[1].left ? 1 : copies[0].at > copies[1].at;   /* a free slot, else the older one */
+    send_pkt(b);
+    memcpy(copies[i].p, b->p, b->n); copies[i].n = b->n; copies[i].at = now; copies[i].left = 2;
+    if (wake_fd[1] >= 0) { char c = 1; if (write(wake_fd[1], &c, 1) < 0) {} }
+}
+
 struct rd { const uint8_t *p, *end; int bad; };
 static const uint8_t *take(struct rd *r, size_t n)
 {
@@ -351,17 +373,12 @@ static void beacon(void)
         tag(&b);
     }
     send_pkt(&b);
-    if (self_ent[0]) {                                  /* where Home Assistant shows our key: peers need not guess */
-        uint8_t e = (uint8_t)strlen(self_ent);
-        head(&b, T_ENTITY); put(&b, pk, 32); put(&b, &e, 1); put(&b, self_ent, e); send_pkt(&b);
-    }
 }
 
 static void adopt(const uint8_t k[32], uint64_t id, const char *how, const char *from)
 {
     memcpy(net_key, k, 32); net_id = id; in_net = 1; derive();
     memset(peers, 0, sizeof peers); memset(claims, 0, sizeof claims);
-    offer[0] = 0;                                       /* sealed under the old network */
     save();
     fprintf(stderr, "arbitration: %s network %016llx%s%s%s\n", how, (unsigned long long)id, from ? " (key " : "", from ? from : "", from ? ")" : "");
     beacon_at = 0; atomic_store(&notify, 1);
@@ -422,76 +439,39 @@ static int take_key(uint64_t id, const uint8_t blob[BLOB], const char *from)
 
 static void hex8(char out[17], const uint8_t *id) { for (int i = 0; i < 8; i++) snprintf(out + 2 * i, 3, "%02x", id[i]); }
 
-/* Hand K to an Echo outside our network, or in a younger one: on our handoff entity if Home Assistant showed its key on
- * the entity it named, else (after ATTEST_WAIT_MS) through its action.  An offer it has not taken by the next push (it
- * reads every 3 s, so HA no longer shows it our entity) goes out through the action as well */
+/* Hand K to an Echo outside our network, or in a younger one: on the LAN once HA confirmed its tag (it takes it once HA
+ * confirmed ours), else (after ATTEST_WAIT_MS) through its action */
 static void push(struct cand *c, long long now)
 {
-    uint8_t blob[BLOB]; char k64[160], to[17];
-    if (!in_net || (c->net && c->net <= net_id) || ago(c->pushed, now, PUSH_MS)) return;
-    if (!c->attested && (!c->node[0] || now - c->first < ATTEST_WAIT_MS || npush == NPEER)) return;
+    uint8_t blob[BLOB]; char k64[160];
+    if (!in_net || (c->net && c->net <= net_id)) return;
+    if (c->attested) {
+        struct pkt b;
+        if (ago(c->gave, now, GIVE_MS) || seal(blob, c->pub)) return;
+        if (!c->gave) fprintf(stderr, "arbitration: handing network %016llx to %s on the LAN\n", (unsigned long long)net_id, c->node);
+        c->gave = now;
+        head(&b, T_GIVE); put(&b, c->pub, 32); put64(&b, net_id); put(&b, blob, BLOB);
+        send_pkt(&b); send_pkt(&b);                     /* Wi-Fi drops broadcasts */
+        crypto_wipe(&b, sizeof b); crypto_wipe(blob, sizeof blob);
+        return;
+    }
+    if (ago(c->pushed, now, PUSH_MS) || !c->node[0] || now - c->first < ATTEST_WAIT_MS || npush == NPEER) return;
     if (seal(blob, c->pub)) return;
     c->pushed = now;
     b64_encode(blob, sizeof blob, k64, 0, 1);
-    if (c->attested) {
-        hex8(to, c->pub);
-        snprintf(offer, sizeof offer, "%016llx %s %s", (unsigned long long)net_id, to, k64);
-        fprintf(stderr, "arbitration: offering network %016llx to %s on our handoff entity\n", (unsigned long long)net_id, c->node);
-        atomic_store(&notify, 1);
-    }
-    if ((!c->attested || c->offers++) && c->node[0] && npush < NPEER) {
-        struct push *q = &pushes[npush++];
-        snprintf(q->node, NLEN, "%s", c->node); snprintf(q->net, sizeof q->net, "%016llx", (unsigned long long)net_id);
-        snprintf(q->key, sizeof q->key, "%s", k64);
-    }
-    crypto_wipe(k64, sizeof k64);
+    struct push *q = &pushes[npush++];
+    snprintf(q->node, NLEN, "%s", c->node); snprintf(q->net, sizeof q->net, "%016llx", (unsigned long long)net_id);
+    snprintf(q->key, sizeof q->key, "%s", k64);
+    crypto_wipe(k64, sizeof k64); crypto_wipe(blob, sizeof blob);
 }
 
-/* sensor.<node>_arbitration_handoff with '-' as '_', as HA names it while the device keeps the name we report; i > 0:
- * HA's suffix for a second entity of that id */
-static void self_candidate(char out[ELEN], int i)
+static void tag_entity(char out[TLEN], const uint8_t pub[32])
 {
-    int n = snprintf(out, ELEN, "sensor.%s_arbitration_handoff", node);
-    if (i) snprintf(out + n, ELEN - (size_t)n, "_%d", i + 1);
-    for (char *c = out; *c; c++) if (*c == '-') *c = '_';
+    memcpy(out, "tag.hassmic_", 12);
+    for (int i = 0; i < 32; i++) snprintf(out + 12 + 2 * i, 3, "%02x", pub[i]);
 }
 
-/* i for one of our candidate ids, else -1 */
-static int self_index(const char *entity)
-{
-    char base[ELEN]; size_t n; int i;
-    self_candidate(base, 0); n = strlen(base);
-    if (strncmp(entity, base, n)) return -1;
-    if (!entity[n]) return 0;
-    if (entity[n] != '_' || !isdigit((unsigned char)entity[n + 1]) || entity[n + 1] == '0') return -1;
-    for (const char *c = entity + n + 1; *c; c++) if (!isdigit((unsigned char)*c)) return -1;
-    i = atoi(entity + n + 1);
-    return i >= 2 && i < 1 << 24 ? i - 1 : -1;
-}
-
-/* Hosts in our IPv4 subnet (the first interface up that is not loopback): 254 for a /24 */
-static int subnet_hosts(void)
-{
-    struct ifaddrs *ifs, *a; int n = 254;
-    if (getifaddrs(&ifs)) return n;
-    for (a = ifs; a; a = a->ifa_next)
-        if (a->ifa_addr && a->ifa_netmask && a->ifa_addr->sa_family == AF_INET && (a->ifa_flags & IFF_UP) && !(a->ifa_flags & IFF_LOOPBACK)) {
-            uint32_t m = ntohl(((struct sockaddr_in *)a->ifa_netmask)->sin_addr.s_addr);
-            n = ~m > 2 ? (~m > 1u << 24 ? 1 << 24 : (int)(~m - 1)) : 1;
-            break;
-        }
-    freeifaddrs(ifs);
-    return n;
-}
-
-static int valid_entity(const char *s)
-{
-    if (strncmp(s, "sensor.", 7) || !s[7]) return 0;
-    for (s += 7; *s; s++) if (!(islower((unsigned char)*s) || isdigit((unsigned char)*s) || *s == '_')) return 0;
-    return 1;
-}
-
-static void poll_entity(const char *e) { if (npoll < (int)(sizeof polls / sizeof polls[0])) snprintf(polls[npoll++], ELEN, "%s", e); }
+static void poll_tag(const uint8_t pub[32]) { if (npoll < NPEER) tag_entity(polls[npoll++], pub); }
 
 static void on_packet(const uint8_t *p, size_t n, long long now, uint32_t ip)
 {
@@ -509,10 +489,6 @@ static void on_packet(const uint8_t *p, size_t n, long long now, uint32_t ip)
                 known |= !memcmp(peers[i].id, pub, 8) && ago(peers[i].seen, now, PEER_TTL_MS);
                 if (cands[i].seen && !memcmp(cands[i].pub, pub, 32)) cands[i].seen = 0;    /* in our network now: nothing more to hand it */
             }
-            if (offer[0]) {                             /* the one we offered K to has it: take the offer down */
-                char to[17]; hex8(to, pub);
-                if (!strncmp(offer + 17, to, 16)) { offer[0] = 0; atomic_store(&notify, 1); }
-            }
             /* one we did not count yet (it just joined, or we did): answer, or it would not count us until our next beacon.
              * Not rate limited: only a holder of K gets here, once per member */
             int f = fresh(pub, c, now);
@@ -521,20 +497,14 @@ static void on_packet(const uint8_t *p, size_t n, long long now, uint32_t ip)
             return;
         }
         struct cand *c = cand(pub);
-        if (!c->first) c->first = now;
+        /* someone new may wait for our tag: the fast rate again, at most once per slow period (anyone on the LAN can
+         * make up new keys, and each scan is a logbook entry in HA) */
+        static long long sped;
+        if (!c->first) { c->first = now; if (!ago(sped, now, SCAN_SLOW_MS)) { sped = now; scans = 0; } }
         c->ip = ip;
         snprintf(c->node, NLEN, "%s", nd); c->net = net; c->seen = now;
         if (in_net && !net && !ago(answer_at, now, 1000)) { answer_at = now; beacon(); }       /* someone looking: here we are */
         push(c, now);
-    } break;
-    case T_ENTITY: {                                    /* only for an Echo we know from its beacon; checked with HA before use */
-        const uint8_t *pub = take(&r, 32), *l = take(&r, 1), *q; char e[ELEN];
-        if (r.bad || *l >= ELEN || !(q = take(&r, *l))) return;
-        memcpy(e, q, *l); e[*l] = 0;
-        if (!valid_entity(e)) return;
-        for (int i = 0; i < NPEER; i++) if (cands[i].seen && !memcmp(cands[i].pub, pub, 32) && strcmp(cands[i].ent, e)) {
-            snprintf(cands[i].ent, ELEN, "%s", e); cands[i].attested = 0; cands[i].polled = 0;
-        }
     } break;
     case T_PAIR: {
         const uint8_t *pub = take(&r, 32); uint64_t net = get64(&r); char nd[NLEN];
@@ -550,8 +520,18 @@ static void on_packet(const uint8_t *p, size_t n, long long now, uint32_t ip)
     } break;
     case T_GIVE: {      /* a recorded one replayed in a later pairing can only put us back into the network we were handed */
         const uint8_t *to = take(&r, 32); uint64_t net = get64(&r); const uint8_t *blob = take(&r, BLOB);
-        if (r.bad || r.p != r.end || memcmp(to, pk, 32) || !pair_until || now >= pair_until) return;
-        take_key(net, blob, "from pairing");
+        if (r.bad || r.p != r.end || memcmp(to, pk, 32)) return;
+        if (pair_until && now < pair_until) { take_key(net, blob, "from pairing"); return; }
+        /* outside pairing only from an Echo HA confirmed, for the network it beacons */
+        for (int i = 0; i < NPEER; i++) {
+            struct cand *c = &cands[i];
+            if (!c->seen || !c->attested || c->net != net || memcmp(c->pub, blob, 32)) continue;
+            if (!in_net || net < net_id) {
+                char from[NLEN + 40]; snprintf(from, sizeof from, "from %s, confirmed by Home Assistant", c->node);
+                take_key(net, blob, from);
+            }
+            break;
+        }
     } break;
     case T_CLAIM: {
         uint64_t net = get64(&r); const uint8_t *id = take(&r, 8); uint64_t c = get64(&r); const uint8_t *kw = take(&r, 8), *s = take(&r, 4), *pw = take(&r, 2);
@@ -736,6 +716,7 @@ static long long kiosk_claim(const char *keyword, int score, long long now)
     if (l < 0 || (size_t)l >= sizeof kpkt) return 0;
     kpkt_n = (size_t)l;
     kiosk_send(); kcopies = 2; kcopy_at = now + KIOSK_GAP_MS;
+    if (wake_fd[1] >= 0) { char c = 1; if (write(wake_fd[1], &c, 1) < 0) {} }    /* the loop may sit in a 100 ms poll */
     return now + kwindow;
 }
 
@@ -753,18 +734,24 @@ static int kiosk_decide(void)
     return win;
 }
 
+static long long copy_at(int i) { return copies[i].at + COPY_MS[2 - copies[i].left]; }     /* lk held, left > 0 */
+
 static void *loop(void *arg)
 {
-    uint8_t buf[512]; struct pollfd pf[2] = { { sock, POLLIN, 0 }, { -1, POLLIN, 0 } };
+    uint8_t buf[512]; struct pollfd pf[3] = { { sock, POLLIN, 0 }, { -1, POLLIN, 0 }, { wake_fd[0], POLLIN, 0 } };
     (void)arg;
     for (;;) {
-        int wait = 100;
+        long long due = now_ms() + 100;
+        int wait;
         pthread_mutex_lock(&lk);
         kiosk_sync(now_ms());
         pf[1].fd = ksock;                               /* -1: poll leaves it out */
-        if (kcopies) { long long d = kcopy_at - now_ms(); wait = d < 0 ? 0 : d < wait ? (int)d : wait; }
+        if (kcopies && kcopy_at < due) due = kcopy_at;
+        for (int i = 0; i < 2; i++) if (copies[i].left && copy_at(i) < due) due = copy_at(i);
         pthread_mutex_unlock(&lk);
-        if (poll(pf, 2, wait) > 0) {
+        wait = due - now_ms() < 0 ? 0 : (int)(due - now_ms());
+        if (poll(pf, 3, wait) > 0) {
+            if (pf[2].revents & POLLIN) { char c[16]; if (read(wake_fd[0], c, sizeof c) < 0) {} }    /* only to plan again */
             struct sockaddr_in from; socklen_t fl = sizeof from; ssize_t n;
             if ((pf[0].revents & POLLIN) && (n = recvfrom(sock, buf, sizeof buf, 0, (struct sockaddr *)&from, &fl)) > 0) {
                 pthread_mutex_lock(&lk); on_packet(buf, (size_t)n, now_ms(), from.sin_addr.s_addr); pthread_mutex_unlock(&lk);
@@ -777,6 +764,9 @@ static void *loop(void *arg)
         struct push q[NPEER]; int nq; long long now = now_ms();
         pthread_mutex_lock(&lk);
         if (kcopies && now >= kcopy_at) { kiosk_send(); kcopy_at += KIOSK_GAP_MS; kcopies--; }      /* Wi-Fi drops broadcasts */
+        for (int i = 0; i < 2; i++) if (copies[i].left && now >= copy_at(i)) {
+            struct pkt b; memcpy(b.p, copies[i].p, copies[i].n); b.n = copies[i].n; send_pkt(&b); copies[i].left--;
+        }
         {
             if (!in_net) {
                 int members = 0;
@@ -786,28 +776,23 @@ static void *loop(void *arg)
                 if (members && now - started > 60000 && !ago(hinted, now, 600000)) {
                     hinted = now;
                     for (int i = 0; i < NPEER; i++) if (cands[i].net && ago(cands[i].seen, now, PEER_TTL_MS))
-                        fprintf(stderr, "arbitration: %s has not handed us its network yet: Home Assistant shows %s, and %s may not perform "
+                        fprintf(stderr, "arbitration: %s has not handed us its network yet: Home Assistant %s, and %s may not perform "
                                 "Home Assistant actions; hold Volume up and Volume down on both Echos to pair them\n", cands[i].node,
-                                self_ent[0] ? "our handoff entity but not its own" : "no handoff entity under the name we expect", cands[i].node);
+                                cands[i].attested ? "confirmed its tag, maybe not ours" : "has not confirmed its tag (no tag integration?)", cands[i].node);
                 }
             }
             for (int i = 0; i < NPEER; i++) if (ago(cands[i].seen, now, PEER_TTL_MS)) push(&cands[i], now);
             if (!ago(beacon_at, now, in_net ? BEACON_MS : LONER_MS)) { beacon_at = now; beacon(); }
-            /* Home Assistant: the ids our handoff entity may have, until one shows our key; the entities newcomers named
-             * (we may hand them K once HA shows their key there) and those of older networks (they may offer us theirs) */
-            /* every id between the first three and the last one tried is another device's (we only go one further when
-             * HA answers for the last), so a round asks the first three and the last; a taken one, the next at once */
-            if (!self_ent[0] && !ago(self_polled, now, self_polls < 20 ? SELF_POLL_MS : 60000)) {
-                char e[ELEN]; self_polled = now; self_polls++; self_next = -1;
-                for (int i = 0; i < 3; i++) { self_candidate(e, i); poll_entity(e); }
-                if (self_n > 3) { self_candidate(e, self_n - 1); poll_entity(e); }
-            } else if (!self_ent[0] && self_next >= 0) {
-                char e[ELEN]; self_candidate(e, self_next); poll_entity(e); self_next = -1;
-            }
+            /* Home Assistant: our tag scanned while another Echo may wait for it (we are outside a network, or one is
+             * outside ours: it gives or takes); the tags of those not confirmed yet */
+            int need = !in_net;
+            for (int i = 0; i < NPEER; i++) need |= ago(cands[i].seen, now, PEER_TTL_MS);
+            if (!need) scans = 0;
+            else if (!ago(scan_at, now, scans < SCAN_N ? SCAN_MS : SCAN_SLOW_MS)) { scan_at = now; scans++; scan_due = 1; }
             for (int i = 0; i < NPEER; i++) {
                 struct cand *c = &cands[i];
-                int give = in_net && (!c->net || c->net > net_id) && !c->attested, get = !in_net || (c->net && c->net < net_id);
-                if (c->ent[0] && ago(c->seen, now, PEER_TTL_MS) && (give || get) && !ago(c->polled, now, POLL_MS)) { c->polled = now; poll_entity(c->ent); }
+                int give = in_net && (!c->net || c->net > net_id), get = c->net && (!in_net || c->net < net_id);
+                if (!c->attested && ago(c->seen, now, PEER_TTL_MS) && (give || get) && !ago(c->polled, now, POLL_MS)) { c->polled = now; poll_tag(c->pub); }
             }
         }
         if (pair_until && now >= pair_until) {
@@ -850,7 +835,8 @@ static void *loop(void *arg)
             if (!--give_left) { crypto_wipe(give_pkt, sizeof give_pkt); pair_until = 0; atomic_store(&pair_event, 2); }
         }
         nq = npush; memcpy(q, pushes, sizeof q[0] * (size_t)nq); npush = 0;
-        char pq[NPEER + 4][ELEN]; int npq = npoll; memcpy(pq, polls, sizeof pq[0] * (size_t)npq); npoll = 0;
+        char pq[NPEER][TLEN]; int npq = npoll; memcpy(pq, polls, sizeof pq[0] * (size_t)npq); npoll = 0;
+        int sd = scan_due; scan_due = 0;
         int np = count_peers(now);
         if (np != reported_peers) { reported_peers = np; atomic_store(&notify, 1); }
         pthread_mutex_unlock(&lk);
@@ -860,6 +846,7 @@ static void *loop(void *arg)
         }
         crypto_wipe(q, sizeof q);
         for (int i = 0; i < npq; i++) if (hooks->request) hooks->request(pq[i]);
+        if (sd && hooks->scan) hooks->scan(self_tag);
         int pe = atomic_exchange(&pair_event, 0);
         if (pe && hooks->paired) hooks->paired(pe);
         if (atomic_exchange(&notify, 0) && hooks->changed) hooks->changed();
@@ -881,62 +868,23 @@ void arb_key(const char *network, const char *key)
     pthread_mutex_unlock(&lk);
 }
 
-/* "HMA1 <pub>[ <net> <to> <key>]": 0 if it parses; *has_offer: the second part is there */
-static int parse_handoff(const char *s, uint8_t pub[32], uint64_t *net, uint8_t to[8], uint8_t blob[BLOB], int *has_offer)
-{
-    char p64[64], n[20], t[20], k64[200]; uint8_t tmp[BLOB + 4]; int f;
-    *has_offer = 0;
-    if (strncmp(s, "HMA1 ", 5)) return -1;
-    f = sscanf(s + 5, "%63s %19s %19s %199s", p64, n, t, k64);
-    if (f < 1 || b64_decode(p64, strlen(p64), tmp, sizeof tmp) != 32) return -1;
-    memcpy(pub, tmp, 32);
-    if (f < 4) return f == 1 ? 0 : -1;
-    char *end; *net = strtoull(n, &end, 16);
-    if (*end || strlen(n) != 16 || strlen(t) != 16 || b64_decode(k64, strlen(k64), tmp, sizeof tmp) != BLOB) return -1;
-    for (int i = 0; i < 8; i++) { unsigned v; if (sscanf(t + 2 * i, "%2x", &v) != 1) return -1; to[i] = (uint8_t)v; }
-    memcpy(blob, tmp, BLOB); *has_offer = 1;
-    return 0;
-}
-
 void arb_ha_state(const char *entity, const char *state)
 {
-    uint8_t pub[32], to[8], blob[BLOB]; uint64_t net = 0; int has_offer, ok;
-    ok = !parse_handoff(state, pub, &net, to, blob, &has_offer);           /* not: "unavailable", "unknown", an older Echo */
+    char t[TLEN];
+    /* "unknown" (made by hand, never scanned) and "unavailable" are no scans; HA sends nothing for a missing entity */
+    if (!*state || !strcmp(state, "unknown") || !strcmp(state, "unavailable")) return;
     pthread_mutex_lock(&lk);
-    int i = running && !self_ent[0] ? self_index(entity) : -1;
-    if (i >= 0 && ok && !memcmp(pub, pk, 32)) {
-        snprintf(self_ent, ELEN, "%s", entity); beacon_at = 0;
-        fprintf(stderr, "arbitration: Home Assistant shows our key on %s\n", entity);
-    } else if (i >= 0 && i + 2 > self_n && i + 1 < subnet_hosts()) {
-        /* another device's entity holds that id (any state at all, "unavailable" from one that is off): HA gave ours
-         * a higher suffix.  No more Echos of that name than hosts in the subnet can be in one group (broadcast) */
-        self_n = i + 2; self_next = i + 1;
-    }
-    if (!ok) { pthread_mutex_unlock(&lk); return; }
     for (int i = 0; running && i < NPEER; i++) {
         struct cand *c = &cands[i];
-        if (!c->seen || strcmp(c->ent, entity)) continue;
-        if (memcmp(pub, c->pub, 32)) {                  /* the name it gave is someone else's entity (or a forger's) */
-            if (c->attested) fprintf(stderr, "arbitration: %s no longer shows %s's key\n", entity, c->node);
-            c->attested = 0; continue;
-        }
-        if (!c->attested) { c->attested = 1; c->pushed = 0; fprintf(stderr, "arbitration: Home Assistant shows %s's key on %s\n", c->node, entity); }
-        if (has_offer && !memcmp(to, pk, 8) && !memcmp(blob, pub, 32)) {
-            char from[NLEN + 40]; snprintf(from, sizeof from, "offered by %s", c->node);
-            take_key(net, blob, from);
+        if (!c->seen || c->attested) continue;
+        tag_entity(t, c->pub);
+        if (strcmp(t, entity)) continue;
+        if (!c->tag0[0]) snprintf(c->tag0, sizeof c->tag0, "%s", state);
+        else if (strncmp(c->tag0, state, sizeof c->tag0 - 1)) {
+            c->attested = 1; c->pushed = 0;
+            fprintf(stderr, "arbitration: Home Assistant confirms %s's key (its tag was scanned at %s)\n", c->node, state);
         }
     }
-    pthread_mutex_unlock(&lk);
-    crypto_wipe(blob, sizeof blob);
-}
-
-void arb_handoff(char *out, size_t cap)
-{
-    char p64[48];
-    b64_encode(pk, 32, p64, 0, 1);
-    pthread_mutex_lock(&lk);
-    if (!running) snprintf(out, cap, "%s", "");
-    else snprintf(out, cap, "HMA1 %s%s%s", p64, offer[0] ? " " : "", offer);
     pthread_mutex_unlock(&lk);
 }
 
@@ -972,7 +920,7 @@ long long arb_claim(const char *keyword, int score, int prio)
         why = due ? " (Kiosk Satellite mode)" : !arbitrate ? ", arbitration off" : ", kiosk port not open";
     } else if (running && arbitrate && in_net && count_peers(now)) {
         round_.score = score; round_.prio = prio;
-        claim_pkt(&b, score, prio, 0); send_pkt(&b); send_pkt(&b);
+        claim_pkt(&b, score, prio, 0); send_spread(&b, now);
         due = now + WINDOW_MS; why = "";
     } else why = !arbitrate ? ", arbitration off" : ", no other Echo to ask";
     pthread_mutex_unlock(&lk);
@@ -996,7 +944,7 @@ int arb_decide(void)
         if (k->won || k->prio > round_.prio || (k->prio == round_.prio && (k->score > round_.score
                                                                           || (k->score == round_.score && memcmp(k->id, pk, 8) > 0)))) win = 0;
     }
-    if (win && in_net) { claim_pkt(&b, round_.score, round_.prio, 1); send_pkt(&b); send_pkt(&b); }
+    if (win && in_net) { claim_pkt(&b, round_.score, round_.prio, 1); send_spread(&b, now_ms()); }
     pthread_mutex_unlock(&lk);
     fprintf(stderr, "arbitration: %s\n", win ? "this Echo answers" : "another Echo answers");
     return win;
@@ -1050,7 +998,7 @@ int arb_window(int set)
     return r;
 }
 
-static size_t jstr(char *o, size_t cap, const char *s)          /* node names and entity ids: [a-z0-9_.-] only */
+static size_t jstr(char *o, size_t cap, const char *s)          /* node names: [a-z0-9_.-] only */
 {
     size_t n = 0;
     for (; *s && n + 1 < cap; s++) if (isalnum((unsigned char)*s) || *s == '-' || *s == '_' || *s == '.') o[n++] = *s;
@@ -1060,16 +1008,14 @@ static size_t jstr(char *o, size_t cap, const char *s)          /* node names an
 
 size_t arb_status_json(char *o, size_t cap)
 {
-    size_t n = 0; long long now = now_ms(); char t[ELEN], ip[INET_ADDRSTRLEN]; int k = 0;
+    size_t n = 0; long long now = now_ms(); char t[NLEN], ip[INET_ADDRSTRLEN]; int k = 0;
 #define J(...) do { if (n < cap) n += (size_t)snprintf(o + n, cap - n, __VA_ARGS__); } while (0)
     pthread_mutex_lock(&lk);
-    jstr(t, sizeof t, self_ent);
     J("{\"running\":%s,\"arbitrates\":%s,\"node\":\"%s\",\"mode\":\"%s\",\"kiosk_port\":%s,", running ? "true" : "false",
       arbitrate ? "true" : "false", node, mode == ARB_KIOSK ? "kiosk" : "hassmic", ksock >= 0 ? "true" : "false");
     if (kheard) J("\"kiosk_heard_s\":%lld,", (now - kheard) / 1000); else J("\"kiosk_heard_s\":null,");
     if (in_net) J("\"network\":\"%016llx\",", (unsigned long long)net_id); else J("\"network\":null,");
-    J("\"handoff_entity\":%s%s%s,\"pairing\":%s,\"members\":[", t[0] ? "\"" : "", t[0] ? t : "null", t[0] ? "\"" : "",
-      pair_until && now < pair_until ? "true" : "false");
+    J("\"tag\":\"tag.%s\",\"pairing\":%s,\"members\":[", self_tag, pair_until && now < pair_until ? "true" : "false");
     for (int i = 0; i < NPEER; i++) if (ago(peers[i].seen, now, PEER_TTL_MS)) {
         struct in_addr a = { peers[i].ip }; inet_ntop(AF_INET, &a, ip, sizeof ip); jstr(t, sizeof t, peers[i].node);
         /* quiet with the kiosk flag: it takes part, the kiosk way */
@@ -1124,6 +1070,8 @@ int arb_start(int port, const char *nd, const struct arb_hooks *h)
     snprintf(node, sizeof node, "%s", nd); hooks = h;
     if (identity()) return -1;
     hex8(kid, pk);
+    memcpy(self_tag, "hassmic_", 8);
+    for (int i = 0; i < 32; i++) snprintf(self_tag + 8 + 2 * i, 3, "%02x", pk[i]);
     load();
     ctr = ctr_saved; ctr_saved += CTR_BLOCK; save();
     if ((sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0)) < 0) { perror("arbitration: socket"); return -1; }
@@ -1132,6 +1080,8 @@ int arb_start(int port, const char *nd, const struct arb_hooks *h)
     memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port); a.sin_addr.s_addr = htonl(INADDR_ANY);
     if (bind(sock, (struct sockaddr *)&a, sizeof a)) { perror("arbitration: bind"); close(sock); sock = -1; return -1; }
     dest = a; dest.sin_addr.s_addr = addr ? inet_addr(addr) : htonl(INADDR_BROADCAST);
+    if (pipe(wake_fd) == 0) for (int i = 0; i < 2; i++) { fcntl(wake_fd[i], F_SETFL, O_NONBLOCK); fcntl(wake_fd[i], F_SETFD, FD_CLOEXEC); }
+    else wake_fd[0] = wake_fd[1] = -1;                  /* copies then go out within the loop's 100 ms */
     started = now_ms(); running = 1;
     if (pthread_create(&t, NULL, loop, NULL)) { running = 0; return -1; }
     pthread_detach(t);

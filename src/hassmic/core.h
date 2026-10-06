@@ -41,6 +41,7 @@ struct proto {
     int  (*arb_request)(const char *entity);    /* may be NULL: ask Home Assistant once for an entity's state (arb.h) */
     void (*settings_changed)(void);             /* may be NULL: a setting changed elsewhere (web page): show them all again */
     void (*entities_changed)(void);             /* may be NULL: a feature went on or off: have the client list entities again */
+    int  (*arb_scan)(const char *tag_id);       /* may be NULL: report a tag as scanned to Home Assistant (arb.h) */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 

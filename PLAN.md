@@ -734,6 +734,34 @@ Run in this order. Each step says what it proves.
       on donut/biscuit/radar) + `state_setup_discovery_beacon` (all three). Page header, per Echo in the list, HA button
       (`LIST_BUTTON` 61 / `BUTTON_COMMAND` 62, device class identify, diagnostic). fake_web: page, unsigned, HA button.
       Not seen on a device yet.
+- [x] Arbitration key handoff through HA tags (2026-10-07, issue #8: three Echos on the latest beta, all with the
+      settings page's "handoff entity under another name" warning). HA 2026.9 names entities from area + parent device +
+      device + entity name (`helpers/entity_registry.py` `_async_get_full_entity_name`, default parts AREA,
+      PARENT_DEVICE, DEVICE, ENTITY, user-configurable in the registry's `entity_id_parts`; #179996, #183610): the
+      issue's ids were `kitchen_echo_dot_kitchen_arbitration_handoff`, so `sensor.<node>_arbitration_handoff` never
+      matches once a device has an area, and they had joined through the action. Nothing HA sends a device names an
+      entity id (ESPHome API checked: state responses answer an id the device names; templates render in events and
+      actions, but only actions answer, with permission). Sub-devices without an area would dodge the area, not the
+      parent-device part. Tags do: `tag.async_scan_tag` makes `tag.<slug(tag_id)>` (`object_id_base=tag_id`, no device,
+      no area), state = last scan (ISO, ms), and the esphome manager fires `esphome.tag_scanned` in its is_event branch,
+      before the permission check. So: tag `hassmic_<pub hex>` scanned every 10 s (12 times, then every 5 min; back to
+      fast at most once per 5 min on a new key, as anyone can make keys up) while an Echo outside a network is in sight
+      or we are outside one; the other side polls `tag.hassmic_<pub>` every 3 s and confirms the key once the state
+      differs from its first read (a stale tag of a removed device never changes; no clock needed); a confirmed member
+      sends `T_GIVE` every 5 s, a newcomer takes one outside pairing only from a confirmed Echo for the network it
+      beacons. Action after 30 s unconfirmed (was 20). The "Arbitration handoff" entity, `T_ENTITY` and the id search
+      are gone (key 38 kept free); older Echos meet new ones through the action. Merge in the host test ~20 s.
+      fake_ha_arbitration (fake tag integration): merge without actions, scans stop once in one network, a forger with a
+      stale tag and a forged `T_GIVE` gets nothing, no tags = action, tags again = in without permission. Not tried
+      against a real HA yet. On the three Echos (2026-10-06 23:11, network key removed on all, restarted together):
+      radar started a network after 5 s, all three tags scanned at 23:11:28, both others confirmed and joined by
+      23:11:31 (23 s in all), no action, no pairing; so HA 2026.9 names the tag entity `tag.hassmic_<pub hex>` as expected.
+- [x] Claim copies spread (2026-10-06): after the rejoin, a wake word heard by radar (score 5836) and biscuit (2187)
+      was answered by biscuit and HA turned radar away as a duplicate. biscuit's log has no claim from radar in 2 of 3
+      rounds (donut got it, 28 ms after biscuit's), only radar's "answers" 188/279 ms later; claims seen elsewhere
+      arrived -17..+59 ms from the own detection, so not the 200 ms window: both copies, sent in the same ms, were lost
+      together. Now claim and "answers" go out at 0/30/80 ms (`COPY_MS`, loop woken by a pipe so they leave on time;
+      kiosk copies too). fake_ha_arbitration: copies at 0/31/81 ms.
 - [x] Firewall service stuck at boot on the Echo 2 (2026-09-30, found when a push update got "the installer did not
       answer"): `main.sh firewall` scanned /proc/*/cmdline with `tr` for old lockdown watchers; a process (pid 209)
       exited between the open and the read, and radar's toybox `tr` (Fire OS 6572) then spun on the read error for ever

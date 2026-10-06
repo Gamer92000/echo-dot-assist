@@ -142,14 +142,15 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Wake word (`wake.h`)**: `wake_pryon.c` (stock `libpryon.so`, headers in `src/include/pryon_api.h`) or `wake_none.c`
   (host build). Also link-time swap.
 - **Wake word arbitration (`arb.c`, `arb.h`)**: when several Echos hear the wake word, only the best one answers
-  (stock's ESP, done on the LAN; the score is the front end's own wake word energy ratio, as stock reads it). UDP broadcast on 28930, shared network key; a member hands it to a newcomer only
-  through Home Assistant (sealed to its X25519 key): on the member's diagnostic text sensor "Arbitration handoff", once
-  HA shows the newcomer's key on the entity id it broadcasts (an Echo finds its own id by asking HA for
-  `sensor.<node>_arbitration_handoff`, `_2`, `_3`, further while the last one is another device's, up to the subnet's host count; state
-  requests need no permission), else as the newcomer's own
-  ESPHome action `esphome.<node>_arbitration_key` (needs "Allow the device to perform Home Assistant actions"). Without
-  HA: Volume up + Volume down held 2 s on both (`T_PAIR`/`T_GIVE`, exactly one requester). ESPHome only.
-  The network (beacons, key handoff, pairing; handoff entity and action) always runs: the settings pages find each other
+  (stock's ESP, done on the LAN; the score is the front end's own wake word energy ratio, as stock reads it). UDP broadcast on 28930, shared network key; a member hands it to a newcomer (sealed to its X25519 key) only
+  when Home Assistant vouches for both: each Echo that may be waited for reports the tag `hassmic_<pub hex>` as scanned
+  (event `esphome.tag_scanned`: HA fires device events without "perform actions"; `tag.<id>` has no area or device in
+  it, unlike every entity id, which HA builds from area, parent device, device and entity name), the other reads
+  `tag.hassmic_<pub hex>` (state requests need no permission either) and trusts the key once the scan time changed
+  after its first read; then `T_GIVE` on the LAN, taken outside pairing only from a confirmed Echo. Else, after 30 s,
+  the newcomer's own ESPHome action `esphome.<node>_arbitration_key` (needs "Allow the device to perform Home Assistant
+  actions"). Without HA: Volume up + Volume down held 2 s on both (`T_PAIR`/`T_GIVE`, exactly one requester). ESPHome only.
+  The network (beacons, key handoff, pairing; tags and action) always runs: the settings pages find each other
   through it. The `arbitration` setting (`arb_arbitrate`) only gates rounds; off, the beacon carries a flags byte after
   the counter and members leave that Echo out of rounds (older builds reject the longer beacon, same effect).
   `arbitration_mode` (`arb_mode`, in `state/config`): `hassmic` (default, the above) or `kiosk`: Kiosk Satellite's
