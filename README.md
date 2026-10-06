@@ -115,7 +115,8 @@ Details:
     Bluetooth absolute volume (most do) the Echo sends the sound at full level and the speaker turns it down, which
     sounds best; with one that does not, the Echo turns it down itself, as stock does.
   - **Music Assistant**: a Bluetooth speaker plays late, by its buffer. "Bluetooth speaker delay" (default 250 ms) is
-    what the Echo allows for, so that it stays in time with other players; set it by ear for your speaker.
+    what the Echo allows for, so that it stays in time with other players; set it by ear for your speaker, in Home
+    Assistant or on the settings page (in the "Play on a Bluetooth speaker" card).
   - The Echo still listens for the wake word while the sound comes from the speaker. How well it hears through loud
     music played elsewhere in the room has not been measured yet.
   - SBC only (every speaker has it), one speaker at a time. ESPHome only for setting it up.
@@ -304,12 +305,23 @@ to this Echo or another, or as a preset for the next install (`scripts/setup.sh 
 install step asks). Every setting says on the page what it does, and each feature which entities it adds to Home
 Assistant; sound detection also which model it uses, and why it switched off if its model did not load. Works with Wyoming too.
 
+"Identify" (top of the page, and beside each logged-in Echo in the Echos list) shows which Echo is which: a rainbow on
+the ring for 10 s and the sound a stock Echo makes in setup. Home Assistant has the same as the "Identify" button.
+
+"Name" (System) renames the Echo. By default only the name people see changes: in Home Assistant (unless you renamed
+the device there), on Bluetooth, in Music Assistant and on these pages. The node name (ESPHome device name, host name
+`<node>.local`, the base of entity ids) stays what `NAME` in `hassmic.conf` made it, so nothing in Home Assistant
+breaks. Ticking "Also change the node name" changes that too, after the page has listed what it costs: Home Assistant
+keeps the device but its entity ids keep the old name, and wake word arbitration then cannot hand the network key over
+through Home Assistant until they match (rename them there; the volume keys still work); the host name changes.
+The satellite restarts once. The names are kept in `state/name` and `state/node` and win over `NAME`.
+
 ### hassmic.conf
 
 One file on the Echo, `/data/local/hassmic/hassmic.conf`, read at boot (edit over adb, reboot):
 
 ```sh
-NAME="Kitchen Echo"         # device name in Home Assistant
+NAME="Kitchen Echo"         # device name in Home Assistant (a rename on the settings page wins over it)
 PROTO=esphome               # or wyoming (port 16700)
 ARGS=""                     # extra options, below
 #MODE=stock-online          # temporary: stock Alexa online without updates, see the model's install page

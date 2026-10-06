@@ -643,6 +643,20 @@ static void handle(int fd)
         fprintf(stderr, "web: %d setting%s changed%s%s", applied, applied == 1 ? "" : "s", err[0] ? ", refused: " : "\n", err);
         respond_sjson(fd, &r, 200, o);
     }
+    else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/name")) {
+        /* body: "<0|1> <name>": 1 changes the node name too (the page has said what that costs) */
+        char err[200], ej[260], o[300]; int node = r.body[0] == '1';
+        if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
+        if ((r.body[0] != '0' && r.body[0] != '1') || r.body[1] != ' ') { respond_json(fd, 400, "{\"error\":\"bad request\"}"); free(r.body); return; }
+        r.body[2 + strcspn(r.body + 2, "\r\n")] = 0;
+        if (core_rename(r.body + 2, node, err, sizeof err)) { jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej); respond_sjson(fd, &r, 400, o); }
+        else respond_sjson(fd, &r, 200, "{\"renamed\":true}");
+    }
+    else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/identify")) {
+        if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
+        core_identify();
+        respond_sjson(fd, &r, 200, "{\"identify\":true}");
+    }
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/adb")) {
         char o[64];
         if (!signed_ok(&r, 1) || unhex(pub, r.pub, 32)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }

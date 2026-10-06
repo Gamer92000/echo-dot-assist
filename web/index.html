@@ -51,6 +51,8 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 h1 { font-size: 19px; line-height: 1.2; margin: 0; font-weight: 650; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .ident { color: var(--muted); font-size: 12.5px; margin-top: 2px; overflow-wrap: anywhere; }
 .pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.top-r { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: flex-end; }
+.echo-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 550; padding: 4px 10px; border-radius: 999px;
         background: var(--surface); border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
 .pill .d { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
@@ -316,6 +318,9 @@ button.link:hover:not(:disabled) { background: none; text-decoration: underline;
 .field label { font-size: 13px; font-weight: 600; }
 .field select { min-width: 220px; }
 .field .help { margin: 0; }
+.field input[type=text] { width: min(100%, 320px); }
+.ren-node, .ren-sure { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; font-size: 13.5px; }
+.ren-sure { font-weight: 600; margin-top: 8px; }
 .davs-code { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; }
 .davs-code .code { font: 650 32px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .22em; padding: 16px 14px 16px 22px;
                    border-radius: 12px; background: var(--surface-2); border: 1px solid var(--line-2); user-select: all; }
@@ -434,7 +439,7 @@ footer { color: var(--faint); font-size: 12.5px; padding-top: 8px; border-top: 1
   <header class="top">
     <div class="wrap top-in">
       <div class="who"><div class="puck" aria-hidden="true"></div><div><h1 id="name">Echo</h1><div class="ident" id="ident"></div></div></div>
-      <div class="pills" id="pills"></div>
+      <div class="top-r"><div class="pills" id="pills"></div><button class="small" id="identify" title="Rainbow on the ring for 10 s and a sound: which Echo is this">Identify</button></div>
     </div>
   </header>
   <div class="wrap layout">

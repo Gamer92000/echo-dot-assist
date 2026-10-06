@@ -169,6 +169,44 @@ async def main():
         check(r["applied"] == len(keys) and not r["errors"] and cfg().get("mic_level") == "-30" and cfg().get("noise_reduction") == "medium",
               f"import: all {r['applied']} back")
 
+        # rename (main.c core_rename): state/name, state/node only when asked, then root's restart (state/restart)
+        sf = lambda f: os.path.join(state, f)
+        mdns = lambda: subprocess.run([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-n", "Echo Web", "-S"], env=env,
+                                      capture_output=True, text=True).stdout
+        st, _, body = b.call("POST", "/api/name", "0 Bad <name>".encode())
+        check(st == 400 and "error" in json.loads(body) and not os.path.exists(sf("name")) and not os.path.exists(sf("restart")),
+              "rename: a name with markup refused, nothing written")
+        check(b.call("POST", "/api/name", b"0  leading space")[0] == 400, "rename: leading space refused")
+        st, _, body = b.call("POST", "/api/name", "0 Küche Echo".encode())
+        check(st == 200 and open(sf("name"), encoding="utf-8").read() == "Küche Echo\n" and not os.path.exists(sf("node"))
+              and os.path.exists(sf("restart")), "rename, display name only: state/name, no state/node, restart asked")
+        m = mdns()
+        check("<name>echo-web</name>" in m and "friendly_name=Küche Echo" in m, "the next start: new friendly name, node name kept")
+        os.remove(sf("restart"))
+        st, _, body = b.call("POST", "/api/name", "1 Küche Echo".encode())
+        m = mdns()
+        check(st == 200 and open(sf("node")).read() == "kueche-echo\n" and "<name>kueche-echo</name>" in m,
+              "rename with the node name: state/node, and the next start reports it")
+        os.remove(sf("node")); os.remove(sf("name"))
+        with open(sf("secret"), "w") as f: f.write("Not To Show\n")
+        os.symlink(sf("secret"), sf("name"))
+        check("Not To Show" not in mdns() and "friendly_name=Echo Web" in mdns(), "state/name as a link: not followed (-S runs as root)")
+        os.remove(sf("name")); os.remove(sf("restart"))
+
+        # identify (main.c core_identify): from the page, and Home Assistant's button
+        check(rq("POST", "/api/identify")[0] == 401, "identify: unsigned refused")
+        st, _, body = b.call("POST", "/api/identify")
+        await asyncio.sleep(0.3)
+        check(st == 200 and json.loads(body).get("identify") is True and open(log).read().count("identify: rainbow") == 1, "identify from the page")
+        ha2, by2, _ = await ha_connect()
+        btn = by2.get("identify")
+        check(btn is not None and btn.device_class == "identify" and int(btn.entity_category) == 2, "Home Assistant: an Identify button (diagnostic)")
+        if btn is not None:
+            ha2.button_command(btn.key); await asyncio.sleep(0.4)
+            check(open(log).read().count("identify: rainbow") == 2, "pressed in Home Assistant: identifies")
+        try: await ha2.disconnect()
+        except Exception: pass
+
         # two at once
         y, z = Browser(WEB), Browser(WEB)
         check(y.login() == "waiting" and z.login() == "refused" and y.login() == "refused", "two browsers asking at once: both refused")

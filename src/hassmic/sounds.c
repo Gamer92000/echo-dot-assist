@@ -9,7 +9,8 @@
 #include "../third_party/minimp3.h"
 
 static const char *const names[SND_COUNT] = { "ui_wakesound", "ui_wakesound_touch", "state_privacy_mode_on", "state_privacy_mode_off",
-                                              "state_volume_adjust_tone", "state_bluetooth_connected", "state_bluetooth_disconnected" };
+                                              "state_volume_adjust_tone", "state_bluetooth_connected", "state_bluetooth_disconnected",
+                                              "state_setup_discovery_beacon" };     /* stock's "here I am" while in setup */
 static struct { short *pcm; size_t n; unsigned rate; int tried; } cache[SND_COUNT];
 
 static short *to_mono(const short *in, size_t frames, unsigned ch)

@@ -44,7 +44,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 /* ---------------------------------------------------------------- the table */
 
 enum id { MIC_LEVEL, DENOISE, WAKE_SOUND, MUTE, DND, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, ARB_MODE, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WIFI_MOTION,
-          WIFI_SENS, BT_AUDIO, BT_SPEAKER, UPDATES, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, NSET };
+          WIFI_SENS, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, UPDATES, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
  * listed()); everything else here is on the settings page only, except what Home Assistant always shows (wake sound,
@@ -70,6 +70,9 @@ static const struct setting table[NSET] = {
     [WIFI_SENS]   = { "wifi_motion_sensitivity", "Wi-Fi motion sensitivity", "Features", NULL, S_INT, WIFIMOTION_SENS_MIN, WIFIMOTION_SENS_MAX, 1, 0 },
     [BT_AUDIO]    = { "bluetooth_audio", "Bluetooth audio from phones", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [BT_SPEAKER]  = { "bluetooth_speaker", "Play on a Bluetooth speaker", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
+    /* what the speaker adds to the Echo's latency, for Sendspin's sync: a2dp.c keeps it (state/bt_speaker), per speaker
+     * and Echo, so not exported */
+    [BT_OUT_DELAY] = { "bluetooth_speaker_delay", "Bluetooth speaker delay", "Features", "ms", S_INT, 0, 1000, 0, 0 },
     [UPDATES]     = { "online_updates", "Online updates", "System", NULL, S_CHOICE, 0, 0, 1, 0 },
     [SS_UNPAIRED] = { "sendspin_unpaired", "Music Assistant without pairing", "Music", NULL, S_BOOL, 0, 1, 1, 0 },
     [EQ_BASS]     = { "equalizer_bass", "Equalizer bass", "Sound", "dB", S_INT, -6, 6, 1, 0 },
@@ -80,7 +83,7 @@ static const struct setting table[NSET] = {
 static int present(enum id i)
 {
     switch (i) {
-    case BT_ANNOUNCE: case BT_LANG: case BT_AUDIO: case BT_SPEAKER: return ble_present();
+    case BT_ANNOUNCE: case BT_LANG: case BT_AUDIO: case BT_SPEAKER: case BT_OUT_DELAY: return ble_present();
     case WHISPER: return core_whisper_model();
     case SOUND: return sound_model() != SOUND_NONE;               /* the firmware has one on every model so far */
     case LED_AUTO: return core_lux() == core_lux();               /* a light sensor: not NAN */
@@ -139,6 +142,7 @@ int settings_get(const struct setting *s)
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: return core_eq((int)(s - table) - EQ_BASS);
     case BT_AUDIO: return bt_audio;
     case BT_SPEAKER: return bt_speaker;
+    case BT_OUT_DELAY: return a2dp_out_delay(-1);
     case WHISPER: return whisper;
     default: return 0;
     }
@@ -170,6 +174,7 @@ static void put(enum id i, int v)
     case BT_AUDIO: bt_audio = v; if (!v) a2dp_pair(0); break;                        /* paired phones still connect */
     case BT_SPEAKER: bt_speaker = v; if (!v && a2dp_out_enabled()) a2dp_out_enable(0); break;   /* back on the Echo */
     case WHISPER: whisper = v; core_whisper_enable(v); break;
+    case BT_OUT_DELAY: a2dp_out_delay(v); break;                    /* a2dp.c saves it */
     default: break;
     }
 }
@@ -207,7 +212,7 @@ static size_t format(const struct setting *s, char *out, size_t cap)
 /* ---------------------------------------------------------------- file */
 
 /* What state/config holds: the settings no other module keeps */
-static int ours(enum id i) { return i != ARB && i != SS_UNPAIRED && i != EQ_BASS && i != EQ_MID && i != EQ_TREBLE; }
+static int ours(enum id i) { return i != ARB && i != SS_UNPAIRED && i != EQ_BASS && i != EQ_MID && i != EQ_TREBLE && i != BT_OUT_DELAY; }
 
 void settings_save(void)
 {

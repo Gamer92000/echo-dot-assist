@@ -173,7 +173,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   motion, Bluetooth audio, Bluetooth speaker): their entities are listed only while on (`proto_esphome.c` `listed()`,
   which also gates states); switching one closes the HA links (`proto->entities_changed`), HA re-lists on reconnect and
   deletes what is gone (registry included). HA always has: media player, mute, DND, wake sound, LEDs, EQ, firmware,
-  Web UI address, Sendspin token (a secret: never on the page). The rest is page-only; diagnostics too (`diag.c`).
+  Web UI address, Sendspin token (a secret: never on the page), Identify. The rest is page-only; diagnostics too (`diag.c`).
 - **Settings page** (`web.c`, `web/`): HTTP on 28931 (`-W`), files of `web/` gzip'd into the binary by `tools/embed.py`
   (`build/web_assets.c`). Login: the browser's X25519 key waits for the action button (`web_approve()` first in
   `on_action`; ring `authenticated_setup_mode`), approved keys in `state/web_clients`, Echo key `state/web_key`.
@@ -189,6 +189,13 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `web/app.js` `HELP`, keyed by setting name: a new setting gets an entry there. Echos section from `arb_status_json`
   (members with name, IP and whether they arbitrate from their signed beacons, others: in no network / younger / older); other Echos' pages are called cross-origin (CORS `*`,
   the signature counts), each approved once with its own button; "make like this Echo" posts this one's export.
+  Rename ("Name" card, `POST /api/name` "<0|1> <name>"): `main.c` `core_rename` writes `state/name` (display) and, with 1,
+  `state/node`; `core_node_name()` derives from `-n` (hassmic.conf `NAME`), not the display name, unless `state/node` is
+  set; then `state/restart`, which root's `ota_watch` turns into `stop hassmic; start hassmic`. `read_own` opens them
+  without following links and never root-owned (root runs `hassmic -S`). `nodeOf` in `web/app.js` mirrors `node_of`.
+  Identify (`POST /api/identify`, HA button `identify`, device class identify): `core_identify` sets `zzz_rainbow`
+  (same file on every model) for 10 s, cleared by `volume_led_thread`, and queues `SND_IDENTIFY` (stock's
+  `state_setup_discovery_beacon`) past the wake sound setting.
   Presets: `scripts/setup.sh --preset <export>` (or asked in `install_satellite`) pushes it to `state/preset`; hassmic
   applies it once at start (`settings_preset`, as an import) and renames it `preset.applied`. `web/crypto.js` (X25519, BLAKE2b; no `crypto.subtle` on plain HTTP) is checked
   against Python by `tests/unit/web_crypto_test.py` (in `make unit`, needs node). The Echos section copies chosen

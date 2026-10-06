@@ -724,6 +724,16 @@ Run in this order. Each step says what it proves.
       Sendspin pairing token blanked (signed is not encrypted: a sniffer reads the answer); filter, older part, download.
       Kiosk claims logged once a second at most (unauthenticated, and `boot.log` is on flash: /data, mmcblk0p16 ext4).
       fake_web: both parts, token blanked, 401/404; fake_ha_arbitration: 200 claims at once give 1-3 lines
+- [x] Rename on the settings page (2026-10-06): display name (`state/name`) and, confirmed, the node name (`state/node`);
+      node stays derived from `NAME` otherwise. HA's ESPHome manager (dev, 2026-10) keeps the entry on a new name with
+      the same MAC and just stores it; entity ids stay, so arbitration's `sensor.<node>_arbitration_handoff` lookup misses
+      after a node rename until they are renamed in HA. Restart via `state/restart` -> root `stop/start hassmic`. Not
+      tried on a device yet. fake_web: refused names, both kinds, link not followed by `-S`. Bluetooth speaker delay
+      also a page setting (`bluetooth_speaker_delay`, not exported).
+- [x] Identify (2026-10-06, a user's idea: which Echo is which on a full desk): `zzz_rainbow` for 10 s (a loop, identical
+      on donut/biscuit/radar) + `state_setup_discovery_beacon` (all three). Page header, per Echo in the list, HA button
+      (`LIST_BUTTON` 61 / `BUTTON_COMMAND` 62, device class identify, diagnostic). fake_web: page, unsigned, HA button.
+      Not seen on a device yet.
 - [x] Firewall service stuck at boot on the Echo 2 (2026-09-30, found when a push update got "the installer did not
       answer"): `main.sh firewall` scanned /proc/*/cmdline with `tr` for old lockdown watchers; a process (pid 209)
       exited between the open and the read, and radar's toybox `tr` (Fire OS 6572) then spun on the read error for ever

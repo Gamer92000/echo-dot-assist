@@ -106,6 +106,7 @@ const ICONS = {
   ext: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   minus: '<path d="M6 12h12"/>',
+  pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
 };
 const icon = (n) => h('span', { html: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`, style: 'display:inline-flex' });
@@ -192,6 +193,7 @@ const HELP = {
   wifi_motion: { icon: 'wifi', tag: 'Experimental', ha: ['Wi-Fi motion', 'Wi-Fi motion sensitivity'], help: 'A motion sensor without extra hardware: someone walking between the Echo and your Wi-Fi router changes how the Echo receives the router. It shows motion, not presence, sees best along that path, and other Wi-Fi traffic can set it off.' },
   wifi_motion_sensitivity: { parent: 'wifi_motion', help: 'How much the signal has to change to count as motion. Higher catches more, with more false alarms.' },
   bluetooth_audio: { icon: 'phone', ha: ['Bluetooth pairing'], help: 'Phones can pair with the Echo and play music on it (SBC, AAC, aptX). Start pairing with the "Bluetooth pairing" switch in Home Assistant; the ring shows a blue chaser meanwhile. Phones paired before still connect while this is off.' },
+  bluetooth_speaker_delay: { parent: 'bluetooth_speaker', step: 10, help: 'How much later the speaker plays than the Echo would, so Music Assistant keeps it in step with your other players. Raise it if this speaker lags behind them, lower it if it runs ahead. Each speaker differs; the Echo keeps one value.' },
   bluetooth_speaker: { icon: 'box', ha: ['Bluetooth speaker search', 'Play on Bluetooth speaker', 'Bluetooth speaker', 'Bluetooth speaker delay'], help: 'Plays everything (replies, timers, music) on a Bluetooth speaker instead of the Echo\'s own. Put the speaker in pairing mode near the Echo and switch on "Bluetooth speaker search" in Home Assistant: the Echo pairs with the strongest one it hears.' },
 };
 const CHOICE_NAMES = {
@@ -217,10 +219,14 @@ async function start() {
   const hello = await (await fetch('/api/hello')).json();
   echo = new Echo('', hello);
   renderThrough(hello.members || []);
-  $('name').textContent = hello.name; $('lname').textContent = hello.name;
-  $('ident').textContent = `${hello.model} · ${hello.node} · ${hello.version}`;
-  document.title = `${hello.name} · settings`;
+  showName(hello);
   try { await load(); } catch (e) { if (e.message === 'login') showLogin(); else toast('Error: ' + e.message); }
+}
+
+function showName(d) {
+  $('name').textContent = d.name; $('lname').textContent = d.name;
+  $('ident').textContent = `${d.model} · ${d.node} · ${d.version}`;
+  document.title = `${d.name} · settings`;
 }
 
 function showLogin() { $('login').classList.remove('hidden'); $('app').classList.add('hidden'); }
@@ -294,13 +300,25 @@ $('ask').onclick = async () => {
   done('No button press came. Try again.', true);
 };
 
+// Identify (main.c core_identify): rainbow ring for 10 s and stock's setup sound, on this Echo or another logged-in one
+async function identify(e, name) {
+  try { await e.call('POST', '/api/identify'); toast(`${name}: rainbow on the ring for 10 seconds`); } catch (err) { toast(`${name}: ${errText(err)}`); }
+}
+$('identify').onclick = () => identify(echo, echo.hello.name);
+
 // ---------------------------------------------------------------- state
 
 async function load() {
   state = await (await echo.call('GET', '/api/state')).json();
+  // updated meanwhile (online update, push): this page is the old version's, its header the old number
+  if (state.device.version !== echo.hello.version) { location.reload(); return; }
+  if (state.device.name !== echo.hello.name || state.device.node !== echo.hello.node) {      // renamed (hassmic.conf NAME)
+    echo.hello.name = state.device.name; echo.hello.node = state.device.node; showName(echo.hello);
+  }
   render();
   $('app').classList.remove('hidden');
   if (load.started && unseen()) refreshDevices().catch(() => {});        // a new Echo in the beacons: show it now, not next round
+  else if (load.started && !devRun) refreshMine().catch(() => {});       // a setting changed here or from HA: copy offers the new value
   if (!load.started) {
     load.started = true;
     answerVouch();
@@ -546,11 +564,13 @@ function renderNetwork() {
   const odd = a.members.filter((m) => myMode && m.arbitrates && (m.mode || 'hassmic') !== myMode).map((m) => m.node);
   if (odd.length) warn(`${nameList(odd)} ${odd.length > 1 ? 'use' : 'uses'} the other arbitration mode (${myMode === 'kiosk' ? 'Echo network' : 'Kiosk Satellite'}): this Echo and ${odd.length > 1 ? 'they' : 'it'} do not settle wake words with each other, and both may answer. Set the same mode on every Echo.`);
   if (stuck.length) warn(`${nameList(stuck.map((o) => o.node))} ${stuck.length > 1 ? 'have' : 'has'} not got the key for over a minute. Usually Home Assistant does not show ${stuck.length > 1 ? 'their' : 'its'} "Arbitration handoff" entity (renamed or disabled device). Pair with the volume keys instead.`);
-  netWarn.append(h('details', { class: 'more' }, h('summary', {}, 'How Echos get the key'),
+  const more = h('details', { class: 'more', open: renderNetwork.open, ontoggle: () => { renderNetwork.open = more.open; } });
+  netWarn.append(more);
+  more.append(h('summary', {}, 'How Echos get the key'),
     h('ul', {},
       h('li', {}, 'Through Home Assistant, by themselves: each Echo shows its public key on its diagnostic entity "Arbitration handoff", and the Echos read each other\'s there. Keep that entity enabled and do not rename the device in Home Assistant.'),
       h('li', {}, 'Or, if the device was renamed: tick "Allow the device to perform Home Assistant actions" in each Echo\'s ESPHome options.'),
-      h('li', {}, 'Without Home Assistant: hold Volume up and Volume down together for 2 s on the new Echo, then on one already in. A tap sounds; the Bluetooth "connected" sound when it worked.'))));
+      h('li', {}, 'Without Home Assistant: hold Volume up and Volume down together for 2 s on the new Echo, then on one already in. A tap sounds; the Bluetooth "connected" sound when it worked.')));
 }
 
 async function exportOf(e) { return (await e.call('GET', '/api/export')).text(); }
@@ -604,7 +624,7 @@ async function probe(base) {
     d.error = null;
     const read = async () => {
       d.values = parse(await exportOf(d.echo)); d.logged = true;
-      d.diff = [...mine].filter(([k, v]) => d.values.has(k) && d.values.get(k) !== v).map(([k]) => k);
+      rediff(d);
       try { d.arts = (await d.echo.call('GET', '/api/artifacts')).json(); } catch (e) { d.arts = null; }
     };
     try { await read(); } catch (e) {
@@ -619,6 +639,17 @@ async function probe(base) {
     }
   } catch (e) { d.error = 'Not reachable'; }
   finally { d.looking = false; }
+}
+
+const rediff = (d) => { d.diff = [...mine].filter(([k, v]) => d.values.has(k) && d.values.get(k) !== v).map(([k]) => k); };
+
+// This Echo's values only, between rounds: the other Echos are read every 30 s, but what is copied is what this one has now
+async function refreshMine() {
+  const now = parse(await exportOf(echo));
+  if (devRun || (now.size === mine.size && [...now].every(([k, v]) => mine.get(k) === v))) return;
+  mine = now;
+  for (const d of others.values()) if (d.values) rediff(d);
+  renderDevices();
 }
 
 function arbOf(ip) {
@@ -639,15 +670,16 @@ function netBadge(r) {
 const ready = () => [...others.values()].filter((d) => d.echo && d.logged && !d.error);
 const shortAddr = (base) => base.replace('http://', '').replace(`:${location.port || 80}`, '');
 
-function renderDevices() {
-  if (!devBox) return;
+function renderDevices() { if (devBox) keepFocus(devBox, drawDevices); }
+function drawDevices() {
   scanMark.classList.toggle('hidden', !devRun);
   devBox.innerHTML = '';
   const a = state.arbitration;
   devBox.append(h('div', { class: 'echo me' }, h('span', { class: 'mini-puck on' }),
     h('div', { class: 'echo-body' }, h('div', { class: 'echo-name' }, echo.hello.name), h('div', { class: 'echo-addr' }, location.host),
       h('div', { class: 'echo-meta' }, h('span', { class: 'badge acc' }, 'This Echo'), a && !a.arbitrates ? h('span', { class: 'badge' }, 'Arbitration off')
-        : a && a.mode === 'kiosk' ? h('span', { class: 'badge' }, 'Kiosk Satellite mode') : null))));
+        : a && a.mode === 'kiosk' ? h('span', { class: 'badge' }, 'Kiosk Satellite mode') : null),
+      h('div', { class: 'echo-acts' }, idButton(echo, echo.hello.name)))));
   for (const [base, d] of others) {
     const r = arbOf(d.ip), name = d.echo ? d.echo.hello.name : d.ip;
     const meta = [];
@@ -659,7 +691,8 @@ function renderDevices() {
     meta.push(netBadge(r));
     if (r && r.member && r.arbitrates === false) meta.push(h('span', { class: 'badge', title: 'It answers every wake word itself' }, 'Arbitration off'));
     else if (r && r.member && r.mode === 'kiosk') meta.push(h('span', { class: 'badge', title: 'It settles wake words the Kiosk Satellite way' }, 'Kiosk Satellite mode'));
-    const login = d.echo && !d.logged && !d.error ? h('button', { class: 'small primary', onclick: (e) => loginOther(d, e.currentTarget) }, icon('key'), 'Log in') : null;
+    const login = d.echo && d.logged && !d.error ? h('div', { class: 'echo-acts' }, idButton(d.echo, name))
+      : d.echo && !d.logged && !d.error ? h('button', { class: 'small primary', disabled: !!d.asking, onclick: () => loginOther(d) }, icon('key'), d.asking ? 'Press its button…' : 'Log in') : null;
     devBox.append(h('div', { class: 'echo' }, h('span', { class: 'mini-puck' + (r && r.member ? ' on' : '') }),
       h('div', { class: 'echo-body' }, h('div', { class: 'echo-name' }, name), h('div', { class: 'echo-addr' }, shortAddr(base)),
         h('div', { class: 'echo-meta' }, meta), login),
@@ -668,23 +701,40 @@ function renderDevices() {
   renderSync(); renderDavs(); renderModels();
 }
 
-async function loginOther(d, b) {
-  b.disabled = true; b.lastChild.textContent = 'Press its button…';
+// The list is redrawn every 15 s and on every answer: the wait is kept on d, so a redraw neither resets the button nor
+// lets a second click start a second wait
+const idButton = (e, name) => h('button', { class: 'small', 'data-k': 'id ' + e.base, title: `Rainbow on ${name}'s ring for 10 s and a sound`,
+  onclick: () => identify(e, name) }, icon('sparkle'), 'Identify');
+
+async function loginOther(d) {
+  d.asking = true; renderDevices();
   toast(`Press the action button on ${d.echo.hello.name}`);
-  for (let i = 0; i < 70; i++) {
-    let s;
-    try { s = await d.echo.login(); } catch (e) { break; }
-    if (s === 'approved') { await refreshDevices(); toast(`Logged in to ${d.echo.hello.name}`); return; }
-    if (s === 'refused') break;
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-  b.disabled = false; b.lastChild.textContent = 'Log in'; toast(`${d.echo.hello.name}: not approved`);
+  try {
+    for (let i = 0; i < 70; i++) {
+      let s;
+      try { s = await d.echo.login(); } catch (e) { break; }
+      if (s === 'approved') { d.asking = false; await refreshDevices(); toast(`Logged in to ${d.echo.hello.name}`); return; }
+      if (s === 'refused') break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    toast(`${d.echo.hello.name}: not approved`);
+  } finally { d.asking = false; renderDevices(); }
+}
+
+// The cards below are redrawn whole (every 15 s, on every answer of another Echo, on a tick that changes what is listed):
+// what had the keyboard focus gets it back, found by its data-k, or keyboard users start over at the top each time
+function keepFocus(box, draw) {
+  const a = document.activeElement, k = a && box.contains(a) ? a.dataset.k : null;
+  draw();
+  if (!k) return;
+  const e = [...box.querySelectorAll('[data-k]')].find((x) => x.dataset.k === k);
+  if (e && !e.disabled) e.focus();
 }
 
 // Echos to pick as targets, as toggle chips
 function chips(list) {
   return h('div', { class: 'chips', role: 'group' }, list.map((x) => h('button', { type: 'button', class: 'chip' + (x.on ? ' on' : ''), 'aria-pressed': String(x.on),
-    disabled: x.disabled, onclick: x.toggle }, h('span', { class: 'tick' }, icon('check')), x.name, x.note ? h('span', { class: 'chip-n ' + (x.cls || '') }, x.note) : null)));
+    disabled: x.disabled, 'data-k': x.k, onclick: x.toggle }, h('span', { class: 'tick' }, icon('check')), x.name, x.note ? h('span', { class: 'chip-n ' + (x.cls || '') }, x.note) : null)));
 }
 
 // ---------------------------------------------------------------- copy settings: which ones, to which Echos
@@ -704,12 +754,12 @@ function pretty(name, raw) {
   return fmt(s, +raw);
 }
 
-function checkbox(on, onchange, labelText) {
-  const i = h('input', { type: 'checkbox', checked: on, 'aria-label': labelText }); i.onchange = () => onchange(i.checked); return i;
+function checkbox(on, onchange, labelText, k) {
+  const i = h('input', { type: 'checkbox', checked: on, 'aria-label': labelText, 'data-k': k }); i.onchange = () => onchange(i.checked); return i;
 }
 
-function renderSync() {
-  if (!syncBox) return;
+function renderSync() { if (syncBox) keepFocus(syncBox, drawSync); }
+function drawSync() {
   syncBox.innerHTML = '';
   const targets = ready(), names = [...mine.keys()];
   syncBox.append(cardHead('Copy settings', `From ${echo.hello.name} to your other Echos. Only what differs is listed; a setting an Echo does not have (no Bluetooth, no Wi-Fi motion) is left out there.`, 'sliders'));
@@ -723,7 +773,7 @@ function renderSync() {
   const sel = targets.filter(toOn);
   const waiting = [...others.values()].filter((d) => d.echo && !d.logged && !d.error).length;
   syncBox.append(h('div', { class: 'pickbar' }, h('span', { class: 'pick-l' }, 'Copy to'),
-    chips(targets.map((d) => ({ name: d.echo.hello.name, on: toOn(d), disabled: syncing,
+    chips(targets.map((d) => ({ name: d.echo.hello.name, on: toOn(d), disabled: syncing, k: 'to ' + d.echo.base,
       note: d.diff.length ? String(d.diff.length) : 'same', cls: d.diff.length ? 'warn' : 'ok',
       toggle: () => { pick.to.set(d.echo.base, !toOn(d)); renderSync(); } }))),
     waiting ? h('span', { class: 'pick-hint' }, `${plural(waiting, 'more Echo')} after logging in`) : null));
@@ -749,7 +799,7 @@ function renderSync() {
         if (v === to) return h('div', { class: 'ch-line same' }, who, icon('check'), 'already ', pretty(n, v));
         return h('div', { class: 'ch-line' }, who, h('span', { class: 'old' }, pretty(n, v)), icon('arrow'), h('span', { class: 'new' }, pretty(n, to)));
       });
-      const cb = checkbox(rowOn(n), (on) => { pick.rows.set(n, on); row.classList.toggle('on', on); row.classList.toggle('off', !on); foot(); }, s ? s.label : n);
+      const cb = checkbox(rowOn(n), (on) => { pick.rows.set(n, on); row.classList.toggle('on', on); row.classList.toggle('off', !on); foot(); }, s ? s.label : n, 'row ' + n);
       cb.disabled = syncing;
       const row = h('label', { class: 'change ' + (rowOn(n) ? 'on' : 'off') }, cb, h('div', { class: 'ch-name' }, s ? label(s) : n), h('div', { class: 'ch-to' }, lines));
       rows.push(row); list.append(row);
@@ -760,13 +810,13 @@ function renderSync() {
   const footBox = h('div', { class: 'card-foot sync-foot' });
   const foot = () => {
     const chosen = listed.filter(rowOn), changes = chosen.reduce((k, n) => k + sel.filter((d) => differs(n, d)).length, 0);
-    const go = h('button', { class: 'primary', disabled: syncing || !chosen.length, onclick: () => copySettings(chosen, sel) },
+    const go = h('button', { class: 'primary', 'data-k': 'go', disabled: syncing || !chosen.length, onclick: () => copySettings(chosen, sel) },
       syncing ? [h('span', { class: 'spin' }), 'Copying…'] : `Copy to ${sel.length === 1 ? sel[0].echo.hello.name : plural(sel.length, 'Echo')}`);
     footBox.replaceChildren(
       h('div', { class: 'count grow' }, h('b', {}, plural(chosen.length, 'setting')), ` of ${listed.length}`, changes !== chosen.length ? `, ${plural(changes, 'change')}` : '',
         same ? ` · ${same} already match` : '', ' ',
-        h('button', { class: 'link', disabled: syncing, onclick: () => { listed.forEach((n) => pick.rows.set(n, true)); renderSync(); } }, 'All'),
-        h('button', { class: 'link', disabled: syncing, onclick: () => { listed.forEach((n) => pick.rows.set(n, false)); renderSync(); } }, 'None')),
+        h('button', { class: 'link', disabled: syncing, 'data-k': 'all', onclick: () => { listed.forEach((n) => pick.rows.set(n, true)); renderSync(); } }, 'All'),
+        h('button', { class: 'link', disabled: syncing, 'data-k': 'none', onclick: () => { listed.forEach((n) => pick.rows.set(n, false)); renderSync(); } }, 'None')),
       go);
   };
   foot();
@@ -833,8 +883,8 @@ const callout = (kind, ...kids) => h('div', { class: 'callout ' + kind }, icon(k
 const stepper = (cur) => h('ol', { class: 'stepper' }, ['Sign in', 'Enter the code', 'Pick and download'].map((t, i) =>
   h('li', { class: i + 1 < cur ? 'done' : i + 1 === cur ? 'cur' : '' }, h('span', { class: 'st-l' }, t))));
 
-function renderDavs(force) {
-  if (!davsBox) return;
+function renderDavs(force) { if (davsBox) keepFocus(davsBox, () => drawDavs(force)); }
+function drawDavs(force) {
   // rebuilt only when something shown changed: a poll that finds all as it was leaves an open drop-down alone
   const key = JSON.stringify([davs && { ...davs, left_s: 0 }, dv, [...dv.ticks], myArts && myArts.artifacts.map((a) => a.id)]);
   if (!force && key === davsKey) return;
@@ -926,7 +976,7 @@ function davsPicker(body) {
   const last = davsLast();
   if (last) body.append(last);
   else if (davs.error && !job) body.append(callout('bad', h('p', {}, davs.error)));
-  const lang = h('select', { id: 'davs-lang', disabled: !!job, onchange: () => { dv.locale = lang.value; store('hm.davsLocale', lang.value); renderDavs(); } },
+  const lang = h('select', { id: 'davs-lang', 'data-k': 'lang', disabled: !!job, onchange: () => { dv.locale = lang.value; store('hm.davsLocale', lang.value); renderDavs(); } },
     LOCALES.map((l) => h('option', { value: l, selected: l === davsLoc() }, l)));
   davsBox.append(h('div', { class: 'pickbar' }, h('label', { class: 'pick-l', for: 'davs-lang' }, 'Language'), lang,
     h('span', { class: 'pick-hint' }, 'Which wake words exist depends on it')));
@@ -936,7 +986,7 @@ function davsPicker(body) {
   for (const c of davsCatalog()) {
     if (c.group !== group) { group = c.group; list.append(h('div', { class: 'grp' }, group)); }
     const it = job && job.items.find((x) => x.id === c.id), on = !!dv.ticks.get(c.id);
-    const cb = checkbox(on, (v) => { dv.ticks.set(c.id, v); dv.last = null; renderDavs(); }, c.name);
+    const cb = checkbox(on, (v) => { dv.ticks.set(c.id, v); dv.last = null; renderDavs(); }, c.name, 'art ' + c.id);
     cb.disabled = !!job;
     let st = has(c.id) ? h('span', { class: 'badge ok' }, icon('check'), 'Installed') : null;
     if (it) st = it.status === 'run' ? [h('span', { class: 'spin' }), it.pct ? `${it.pct} %` : 'Asking Amazon…']
@@ -1027,8 +1077,8 @@ function artLabel(a) {
 }
 const mb = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 
-function renderModels() {
-  if (!modelBox) return;
+function renderModels() { if (modelBox) keepFocus(modelBox, drawModels); }
+function drawModels() {
   modelBox.innerHTML = '';
   modelBox.append(cardHead('Copy models', 'Amazon\'s extra models from scripts/artifacts.sh (more wake words, whisper detection, the newer sound detection model), Echo to Echo instead of running the script on each. A wake word set is tried on the receiving Echo first; each Echo that gets something restarts its satellite once, for a few seconds.', 'box'));
   if (!myArts) { modelBox.append(empty('warn', 'This Echo cannot list its models.')); return; }
@@ -1042,7 +1092,7 @@ function renderModels() {
   const needs = (x, id) => { const s = source(id), t = theirs(x, id); return x !== s && (!t || t.digest !== theirs(s, id).digest); };
   const ids = [...all.keys()].sort((p, q) => artLabel(all.get(p)).localeCompare(artLabel(all.get(q))));
   if (echos.length > 1) modelBox.append(h('div', { class: 'pickbar' }, h('span', { class: 'pick-l' }, 'Install on'),
-    chips(echos.map((x) => ({ name: x.name + (x.key ? '' : ' (this one)'), on: xOn(x), disabled: !!copying,
+    chips(echos.map((x) => ({ name: x.name + (x.key ? '' : ' (this one)'), on: xOn(x), disabled: !!copying, k: 'to ' + x.key,
       toggle: () => { mpick.to.set(x.key, !xOn(x)); renderModels(); } })))));
   else modelBox.append(h('div', { class: 'pickbar' }, h('span', { class: 'pick-hint' }, 'Log in to another Echo above to copy these to it.')));
   const list = h('div', { class: 'changes' });
@@ -1056,7 +1106,7 @@ function renderModels() {
       return h('div', { class: 'ch-line' + (t ? ' warn' : '') }, who, icon('arrow'), h('span', { class: 'new' }, t ? 'replace its other version' : 'install'));
     });
     const idle = !wanted.length;
-    const cb = checkbox(!idle && mOn(id), (on) => { mpick.rows.set(id, on); renderModels(); }, artLabel(a));
+    const cb = checkbox(!idle && mOn(id), (on) => { mpick.rows.set(id, on); renderModels(); }, artLabel(a), 'art ' + id);
     cb.disabled = idle || !!copying;
     list.append(h('label', { class: 'change ' + (idle ? 'idle off' : mOn(id) ? 'on' : 'off') }, cb,
       h('div', { class: 'ch-name' }, artLabel(a), h('div', { class: 'ch-sub' }, mb(theirs(src, id).size))), h('div', { class: 'ch-to' }, lines)));
@@ -1065,7 +1115,7 @@ function renderModels() {
   const jobs = [];
   for (const id of ids.filter(mOn)) for (const x of echos) if (xOn(x) && needs(x, id)) jobs.push({ id, to: x, from: source(id), art: theirs(source(id), id) });
   const bytes = jobs.reduce((n, j) => n + j.art.size, 0);
-  const go = h('button', { class: 'primary', disabled: !!copying || !jobs.length, onclick: () => copyModels(jobs) },
+  const go = h('button', { class: 'primary', 'data-k': 'go', disabled: !!copying || !jobs.length, onclick: () => copyModels(jobs) },
     copying ? [h('span', { class: 'spin' }), 'Copying…'] : jobs.length ? `Copy ${plural(jobs.length, 'model')} (${mb(bytes)})` : 'Copy');
   modelBox.append(h('div', { class: 'card-foot sync-foot' },
     copying ? h('div', { class: 'busy' }, copying.text) : null,
@@ -1125,9 +1175,83 @@ async function copyModels(jobs) {
 
 // ---------------------------------------------------------------- System: settings file, debug access, browsers
 
-let adbBox, clientsBox, importMsg;
+let adbBox, clientsBox, importMsg, nameCtl;
+
+// The node name a name makes, as main.c node_of: ASCII letters and digits lower-cased, Latin-1 letters spelled out the
+// German way ("Küchen Echo" -> "kuechen-echo"), anything else one dash between words
+const LATIN1 = ['a', 'a', 'a', 'a', 'ae', 'a', 'ae', 'c', 'e', 'e', 'e', 'e', 'i', 'i', 'i', 'i',
+  'd', 'n', 'o', 'o', 'o', 'o', 'oe', null, 'o', 'u', 'u', 'u', 'ue', 'y', 'th', 'ss'];
+function nodeOf(name) {
+  const b = enc.encode(name); let n = '', dash = false;
+  for (let i = 0; i < b.length; i++) {
+    const c = b[i]; let add = null;
+    if ((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)) add = String.fromCharCode(c).toLowerCase();
+    else if (c === 0xC3 && i + 1 < b.length) { const d = b[++i]; add = d === 0xBF ? 'y' : d === 0xB7 ? null : d >= 0x80 && d <= 0xBF ? LATIN1[(d - 0x80) & 0x1F] : null; }
+    else while (i + 1 < b.length && (b[i + 1] & 0xC0) === 0x80) i++;
+    if (!add) { dash = n.length > 0; continue; }
+    if (dash && n.length < 63) n += '-';
+    dash = false;
+    n = (n + add).slice(0, 63);
+  }
+  return n || 'echo';
+}
+// what main.c name_ok takes: it goes unescaped into the avahi service file
+const nameProblem = (t) => !t ? 'Give it a name.' : enc.encode(t).length > 48 ? 'At most 48 characters.'
+  : /[\x00-\x1f\x7f<>&"'\\]/.test(t) ? 'Without < > & " \' or \\.' : null;
+
+// Rename: the display name alone, or the node name with it (what that costs is spelled out, and ticked off, first)
+function nameCard() {
+  const input = h('input', { type: 'text', id: 'ren-name', maxlength: '48', autocomplete: 'off' });
+  const node = h('input', { type: 'checkbox', id: 'ren-node' }), sure = h('input', { type: 'checkbox', id: 'ren-sure' });
+  const msg = h('p', { class: 'help' }), costs = h('div'), go = h('button', { class: 'primary' }, 'Rename');
+  const c = { input, dirty: false, busy: false };
+  const paint = () => {
+    const cur = echo.hello.name, curNode = echo.hello.node, t = input.value.trim(), want = nodeOf(t), bad = nameProblem(t);
+    const a = state.arbitration, taken = node.checked && want !== curNode && a && [...a.members, ...(a.others || [])].find((m) => m.node === want);
+    if (!c.dirty && document.activeElement !== input) input.value = cur;
+    msg.replaceChildren(...(bad && t !== cur ? [h('span', { class: 'f-bad' }, bad)]
+      : taken ? [h('span', { class: 'f-bad' }, `${taken.node} is another Echo's node name already: Home Assistant would mix the two up. Pick another name.`)]
+      : node.checked ? ['Node name: ', h('code', {}, curNode), want === curNode ? ' (stays)' : [' ', icon('arrow'), ' ', h('code', {}, want)]]
+      : ['Node name stays ', h('code', {}, curNode), '.']));
+    costs.replaceChildren();
+    if (node.checked && want !== curNode && !bad) costs.append(callout('warn',
+      h('p', {}, h('b', {}, 'Changing the node name has costs:')),
+      h('ul', {},
+        h('li', {}, 'Home Assistant keeps the device (it knows it by its MAC address) and takes the new name, but its entity ids keep the old one (', h('code', {}, `sensor.${curNode.replace(/-/g, '_')}_…`), ') unless you rename them there.'),
+        h('li', {}, 'Wake word arbitration looks for this Echo\'s "Arbitration handoff" entity under the new name (', h('code', {}, `sensor.${want.replace(/-/g, '_')}_arbitration_handoff`), '). Until the entity ids match, the Echos cannot hand each other the network key through Home Assistant; the volume keys still can. The key this Echo has stays.'),
+        h('li', {}, 'Its Home Assistant action becomes ', h('code', {}, `esphome.${want.replace(/-/g, '_')}_arbitration_key`), '.'),
+        h('li', {}, 'The host name becomes ', h('code', {}, `${want}.local`), ': bookmarks or anything else that reaches the Echo by name need the new one. By IP address nothing changes.')),
+      h('label', { class: 'ren-sure' }, sure, ' Change the node name anyway')));
+    const changes = t !== cur || (node.checked && want !== curNode);
+    go.disabled = c.busy || !!bad || !!taken || !changes || (node.checked && want !== curNode && !sure.checked);
+    go.replaceChildren(...(c.busy ? [h('span', { class: 'spin' }), 'Restarting…'] : ['Rename']));
+  };
+  input.oninput = () => { c.dirty = true; paint(); };
+  node.onchange = () => { sure.checked = false; paint(); };
+  sure.onchange = paint;
+  go.onclick = async () => {
+    const t = input.value.trim(), withNode = node.checked && nodeOf(t) !== echo.hello.node;
+    c.busy = true; paint();
+    try {
+      await echo.call('POST', '/api/name', `${withNode ? 1 : 0} ${t}`);
+      toast('Renamed: the satellite restarts for a few seconds');
+      await waitBack(echo);
+      location.reload();
+    } catch (e) { toast(errText(e)); c.busy = false; paint(); }
+  };
+  c.paint = paint;
+  nameCtl = c;
+  return h('div', { class: 'card' },
+    cardHead('Name', 'What this Echo is called: in Home Assistant (unless you renamed the device there; yours stays), on Bluetooth, in Music Assistant and on these pages. The Alexa app keeps the name it got when this Echo signed in to Amazon. The satellite restarts once, for a few seconds.', 'pen'),
+    h('div', { class: 'card-body' },
+      h('div', { class: 'field' }, h('label', { for: 'ren-name' }, 'Name'), input, msg),
+      h('label', { class: 'ren-node' }, node, ' Also change the node name (ESPHome device name, host name, entity ids of new entities)'),
+      costs),
+    h('div', { class: 'card-foot' }, h('span', { class: 'grow' }), go));
+}
 
 function buildSystem(el) {
+  el.append(nameCard());
   const file = h('input', { type: 'file', accept: '.conf,.txt,text/plain', class: 'hidden' });
   importMsg = h('pre', { class: 'help import-msg' });
   file.onchange = async () => {
@@ -1159,6 +1283,7 @@ function buildSystem(el) {
 
 function renderSystem() {
   if (!adbBox) return;
+  if (nameCtl) nameCtl.paint();
   const s = state.adb; adbBox.innerHTML = '';
   const status = s.waiting ? h('span', { class: 'badge acc' }, 'Waiting for the action button…')
     : s.open ? h('span', { class: 'badge bad' }, 'Open: closes by itself after 30 min') : h('span', { class: 'badge' }, 'Closed');

@@ -31,6 +31,7 @@
 #include <strings.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #ifdef __ANDROID__
 #include <sys/system_properties.h>
 #endif
@@ -63,7 +64,9 @@ static atomic_int sounds_pending;
 static void sound_queue(enum sound s) { atomic_fetch_or(&sounds_pending, 1 << s); }                          /* played by the earcon thread */
 static void sound_request(enum sound s) { if (use_earcon) sound_queue(s); }
 
-const char *core_name;                  /* -n, else board.default_name */
+const char *core_name;                  /* state/name (settings page), else -n, else board.default_name */
+static const char *install_name;        /* -n (hassmic.conf NAME), else board.default_name: the node name's source */
+static char node_set[64];               /* state/node: a node name chosen on the settings page, else none */
 
 /* The name is UTF-8.  Latin-1 letters (U+00C0..U+00FF, lead byte 0xC3) are spelled out, the German way for the umlauts
  * ("Küchen Echo" -> "kuechen-echo"); anything else that is not a letter or digit separates words.  Each byte of "ü"
@@ -78,22 +81,105 @@ static const char *latin1_ascii(unsigned char c)        /* second byte after 0xC
     return c >= 0x80 && c <= 0xBF ? t[(c - 0x80) & 0x1F] : NULL;
 }
 
-const char *core_node_name(void)
+static void node_of(const char *name, char n[64])
 {
-    static char n[64]; size_t j = 0; int dash = 0;
-    for (const unsigned char *s = (const unsigned char *)core_name; *s; s++) {
+    size_t j = 0; int dash = 0;
+    for (const unsigned char *s = (const unsigned char *)name; *s; s++) {
         const char *add = NULL; char one[2] = { 0, 0 };
         if (isalnum(*s)) { one[0] = (char)tolower(*s); add = one; }
         else if (*s == 0xC3 && s[1]) add = latin1_ascii(*++s);
         else while ((s[1] & 0xC0) == 0x80) s++;          /* other UTF-8 characters: skip their continuation bytes */
         if (!add) { dash = j > 0; continue; }            /* separators collapse to one dash, none at the start */
-        if (dash && j < sizeof n - 1) n[j++] = '-';
+        if (dash && j < 63) n[j++] = '-';
         dash = 0;
-        for (; *add && j < sizeof n - 1; add++) n[j++] = *add;
+        for (; *add && j < 63; add++) n[j++] = *add;
     }
     n[j] = 0;
-    if (!j) snprintf(n, sizeof n, "echo");              /* a name with no Latin letter at all ("日本") */
+    if (!j) snprintf(n, 64, "echo");                    /* a name with no Latin letter at all ("日本") */
+}
+
+/* From the install name, not the display name: renaming on the settings page leaves the node (ESPHome device name, host
+ * name, Home Assistant's entity ids and the arbitration handoff entity found by them) alone unless asked to change it */
+const char *core_node_name(void)
+{
+    static char n[64];
+    if (node_set[0]) return node_set;
+    node_of(install_name ? install_name : core_name, n);
     return n;
+}
+
+/* ---------------------------------------------------------------- the name, as renamed on the settings page */
+
+static void state_file(char *out, size_t cap, const char *file)
+{
+    const char *d = getenv("HASSMIC_STATE");
+    snprintf(out, cap, "%s/%s", d ? d : "/data/local/hassmic/state", file);
+}
+
+/* One line of a file the daemon wrote.  main.sh also runs hassmic -S as root (the avahi service file), so never through a
+ * link, nor a root-owned file: root would print what the daemon's user cannot read. */
+static int read_own(const char *file, char *out, size_t cap)
+{
+    char p[300]; struct stat st; ssize_t n; int fd;
+    state_file(p, sizeof p, file);
+    if ((fd = open(p, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)) < 0) return -1;
+    if (fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_nlink != 1 || (geteuid() == 0 && st.st_uid == 0) || st.st_size >= (off_t)cap) { close(fd); return -1; }
+    n = read(fd, out, cap - 1); close(fd);
+    if (n <= 0) return -1;
+    out[n] = 0; out[strcspn(out, "\r\n")] = 0;
+    return out[0] ? 0 : -1;
+}
+
+/* Printable, and nothing that needs escaping where the name goes unescaped (the avahi service file's XML, JSON, the
+ * Alexa app's registration): a name, not markup */
+static int name_ok(const char *s)
+{
+    size_t n = strlen(s);
+    if (!n || n > 48 || s[0] == ' ' || s[n - 1] == ' ') return 0;
+    for (const unsigned char *c = (const unsigned char *)s; *c; c++) if (*c < 0x20 || *c == 0x7F || strchr("<>&\"'\\", *c)) return 0;
+    return 1;
+}
+
+static int valid_node(const char *s)
+{
+    if (!*s || strlen(s) > 63) return 0;
+    for (; *s; s++) if (!islower((unsigned char)*s) && !isdigit((unsigned char)*s) && *s != '-') return 0;
+    return 1;
+}
+
+static void names_load(void)
+{
+    static char name[64];
+    install_name = core_name;
+    if (!read_own("name", name, sizeof name) && name_ok(name)) core_name = name;
+    char n[80];
+    if (!read_own("node", n, sizeof n) && valid_node(n)) snprintf(node_set, sizeof node_set, "%s", n);
+}
+
+static int write_state(const char *file, const char *text)
+{
+    char p[300], tmp[310]; FILE *f;
+    state_file(p, sizeof p, file); snprintf(tmp, sizeof tmp, "%s.tmp", p);
+    if (!(f = fopen(tmp, "w"))) return -1;
+    fputs(text, f);
+    if (fclose(f) || rename(tmp, p)) { unlink(tmp); return -1; }
+    return 0;
+}
+
+const char *core_node_of(const char *name) { static char n[64]; node_of(name, n); return n; }
+
+int core_rename(const char *name, int node, char *err, size_t errsz)
+{
+    char line[80];
+    if (!name_ok(name)) { snprintf(err, errsz, "a name of 1 to 48 characters, without < > & \" ' \\ and not starting or ending with a space"); return -1; }
+    snprintf(line, sizeof line, "%s\n", name);
+    if (write_state("name", line)) { snprintf(err, errsz, "cannot write the name"); return -1; }
+    if (node) { snprintf(line, sizeof line, "%s\n", core_node_of(name)); if (write_state("node", line)) { snprintf(err, errsz, "cannot write the node name"); return -1; } }
+    /* everything the name is in was built at start (mDNS, Home Assistant's device, Bluetooth, Music Assistant): root's
+     * watcher restarts the satellite, as after a model install (main.sh) */
+    if (write_state("restart", "rename\n")) { snprintf(err, errsz, "cannot ask for the restart"); return -1; }
+    fprintf(stderr, "web: renamed to \"%s\"%s%s, restart asked\n", name, node ? ", node " : "", node ? core_node_of(name) : "");
+    return 0;
 }
 static int ota_port = 28929;                        /* 0 = no push updates */
 static int arb_port = 28930;                        /* 0 = no wake word arbitration */
@@ -365,6 +451,18 @@ void core_bt_pairing(int on)
  * and Bluetooth connection messages carry on.  Switching it on shows Amazon's single purple pulse (do_not_disturb: 2 s
  * fade in and out, layer 2, nothing after its `loop` marker); switching it off shows nothing. */
 static atomic_llong dnd_clear_at;
+
+/* Identify (settings page, Home Assistant's button): which of several Echos is this one.  Amazon's rainbow (zzz_rainbow,
+ * a loop, the same file on donut, biscuit and radar) for IDENTIFY_MS and stock's setup beacon sound, whatever the wake
+ * sound setting says: it was asked for.  Again while it runs: longer, and the sound once more.  Lock held or not. */
+#define IDENTIFY_MS 10000
+static atomic_llong identify_until;
+void core_identify(void)
+{
+    if (!atomic_exchange(&identify_until, mono_ms() + IDENTIFY_MS)) led("-s", "zzz_rainbow");
+    sound_queue(SND_IDENTIFY);
+    fprintf(stderr, "identify: rainbow for %d s\n", IDENTIFY_MS / 1000);
+}
 int core_dnd(int set)
 {
     if (set >= 0 && set != dnd) {
@@ -933,7 +1031,7 @@ static void *earcon_thread(void *arg)
     enum { RATE = 48000, N = RATE * 12 / 100 };
     static short tone[N];
     static const char *const snd_names[SND_COUNT] = { "wake", "touch", "mics off", "mics on", "volume", "bluetooth connected",
-                                                                "bluetooth disconnected" };
+                                                                "bluetooth disconnected", "identify" };
     (void)arg;
     for (int i = 0; i < N; i++) {           /* 120 ms rising two-tone blip with 10 ms fades */
         double f = i < N / 2 ? 880.0 : 1320.0, env = fmin(1.0, fmin(i, N - i) / (RATE * 0.01));
@@ -946,7 +1044,7 @@ static void *earcon_thread(void *arg)
             if (!(p & 1 << s)) continue;
             atomic_store(&earcon_sounding, 1);
             if (sound_get((enum sound)s, &pcm, &n, &rate)) { fprintf(stderr, "sound: %s\n", snd_names[s]); play_earcon(pcm, n, rate); }
-            else if (s == SND_WAKE || s == SND_TOUCH) play_earcon(tone, N, RATE);
+            else if (s == SND_WAKE || s == SND_TOUCH || s == SND_IDENTIFY) play_earcon(tone, N, RATE);
             atomic_store(&earcon_heard_until, mono_ms() + 250);         /* speaker to mic stream: 85 ms, and the room's tail */
             atomic_store(&earcon_sounding, 0);
         }
@@ -1234,6 +1332,8 @@ static void *volume_led_thread(void *arg)
         if (at && mono_ms() >= at && atomic_compare_exchange_strong(&dnd_clear_at, &at, 0)) {
             pthread_mutex_lock(&core_lock); led("-u", "do_not_disturb"); pthread_mutex_unlock(&core_lock);
         }
+        at = atomic_load(&identify_until);
+        if (at && mono_ms() >= at && atomic_compare_exchange_strong(&identify_until, &at, 0)) led("-u", "zzz_rainbow");
         usleep(200000);
     }
     return NULL;
@@ -1375,6 +1475,7 @@ int main(int argc, char **argv)
         default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-z port] [-o port] [-a port] [-W port] [-L] [-E] [-V] [-S]\n"); return 2;
     }
     core_port = port ? port : proto->port;
+    names_load();
     if (print_mdns) { proto->print_mdns(); return 0; }
     clock_log_start();                              /* before any thread: it forks */
     signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin); signal(SIGWINCH, on_winch);

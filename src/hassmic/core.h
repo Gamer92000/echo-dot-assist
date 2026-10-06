@@ -47,6 +47,11 @@ extern const struct proto proto_wyoming, proto_esphome;
 extern pthread_mutex_t core_lock;               /* guards state, the client socket (writes) and everything marked "lock held" */
 extern const char *core_name;
 const char *core_node_name(void);               /* "Echo Dot" -> "echo-dot": the ESPHome device (host) name */
+const char *core_node_of(const char *name);      /* the node name a name makes: "Küchen Echo" -> "kuechen-echo" */
+/* The settings page's rename: state/name, with node also state/node; then root restarts the satellite (state/restart).
+ * 0 ok, -1 with err (the name is refused, or a file cannot be written) */
+int  core_rename(const char *name, int node, char *err, size_t errsz);
+void core_identify(void);                       /* rainbow ring for 10 s and a sound: which Echo is this */
 extern int core_local_wake, core_port, core_sendspin_port, core_web_port;
 
 /* lock held */

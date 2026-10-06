@@ -4,6 +4,21 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-06
 
+- **Identify.** Which Echo is which: "Identify" (at the top of the settings page, beside each logged-in Echo in the
+  Echos list, and as a button in Home Assistant) turns the ring into a rainbow for 10 seconds and plays the sound a stock
+  Echo makes in setup. Pressing it again makes it last longer.
+- **Rename an Echo on the settings page** ("Name", in System). Only the name you see changes, unless you also tick
+  "Also change the node name"; the page then lists what that costs in Home Assistant and for wake word arbitration and
+  asks you to confirm. The satellite restarts once for a few seconds.
+- **"Bluetooth speaker delay" on the settings page**, in the "Play on a Bluetooth speaker" card, next to Home
+  Assistant's number.
+- **"Copy settings" follows changes right away.** A setting changed on this Echo (on the page or from Home
+  Assistant) used to be offered with its old value until the next look at the other Echos; the list now shows the
+  current value within seconds.
+- **The settings page keeps up with the Echo.** After an update it reloads itself instead of showing the old version;
+  "Log in" on another Echo stays at "Press its button…" while it waits (it used to turn back after a few seconds and
+  could start a second wait); "How Echos get the key" no longer folds itself shut while you read it; a renamed Echo
+  shows its new name; in the copy and download lists the keyboard focus stays where it was when the list refreshes.
 - **The Echo knows the time again.** Behind the firewall nothing set its clock any more (the Echo Dot 2 was 23 hours
   behind); it now takes the time from Home Assistant, over the encrypted link, when it connects and every 6 hours.
 - **Times in the log.** Every line of the log says when it was written; the settings page shows the times in your time

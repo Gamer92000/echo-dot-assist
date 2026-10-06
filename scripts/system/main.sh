@@ -183,6 +183,13 @@ ota_watch() {
             else say "== artifacts not installed: $(echo $out)"
             fi
         fi
+        # renamed on the settings page (main.c core_rename): the name is in what the satellite builds at start, mDNS and
+        # avahi's host name included
+        if [ -f /data/local/hassmic/state/restart ]; then
+            rm -f /data/local/hassmic/state/restart
+            say "== renamed on the settings page, restarting hassmic"
+            stop hassmic; start hassmic
+        fi
         [ -f $IN/request ] || continue
         rm -f $IN/request $IN/result
         new=$OTA/v$(cut -d. -f1 /proc/uptime)-$$
