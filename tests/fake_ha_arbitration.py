@@ -205,6 +205,8 @@ async def main():
         a.end_pipeline(); b.end_pipeline(); await asyncio.sleep(0.5)
         await a.cli.set_voice_assistant_configuration(["alexa"]); await asyncio.sleep(0.5)
 
+        check(re.search(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}Z arbitration: ", a.text(), re.M), "log lines stamped with the time (UTC) once the clock is known")
+
         # Kiosk Satellite mode: their claims on their port, loudness only, a kiosk takes part
         kio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         kio.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); kio.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)

@@ -36,7 +36,8 @@ async def main():
                HASSMIC_MDNS_FILE=os.path.join(state, "none"), HASSMIC_ARB_ADDR="127.255.255.255", HASSMIC_MODELS=os.path.join(state, "models"),
                HASSMIC_FAKE_WHISPER="1", HASSMIC_ADB_OPEN=os.path.join(state, "adb-open.root"),
                HASSMIC_FAKE_SOUND_MODEL=os.path.join(state, "aed-model"),           # which sound model there is (sound_none.c)
-               HASSMIC_LOG=os.path.join(state, "log"))                              # boot.log, for the page's viewer
+               HASSMIC_LOG=os.path.join(state, "log"),                              # boot.log, for the page's viewer
+               HASSMIC_CLOCK_SYNCED="0")                                            # stamps: seconds since boot (clock.c)
     log = os.path.join(state, "log")
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Web", "-L", "-z", "0", "-o", "0",
                              "-a", "16973", "-W", str(WEB)], env=env, stderr=open(log, "w"))
@@ -69,6 +70,7 @@ async def main():
         # the log viewer: signed, the Sendspin pairing token blanked (the page is plain HTTP)
         with open(log + ".1", "w") as f: f.write("== log rotated\nsendspin: pairing token SP:0ABCDEF234567\n")
         st, _, l0 = b.call("GET", "/api/log/0"); st1, _, l1 = b.call("GET", "/api/log/1")
+        check(re.search(rb"^boot\+\d+\.\d{3} web: login approved", l0, re.M), "log lines stamped: seconds since boot while the clock is not set")
         check(st == 200 and st1 == 200 and b"login approved" in l0 and b"SP:0ABC" not in l1 and re.search(rb"pairing token SP:0\*{12}\n", l1),
               "the log and its older part, signed, with the pairing token blanked")
         check(Browser(WEB).call("GET", "/api/log/0")[0] == 401 and b.call("GET", "/api/log/2")[0] == 404, "not logged in: no log; only parts 0 and 1")

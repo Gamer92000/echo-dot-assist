@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Plays Home Assistant's side of the ESPHome native API against build/hassmic-host, using the reference
 `aioesphomeapi` client (the library Home Assistant itself uses), so framing and protobuf layout are checked by the real parser."""
-import asyncio, base64, io, math, os, random, signal, struct, subprocess, sys, tempfile, threading, time, wave
+import asyncio, base64, io, math, os, random, re, signal, struct, subprocess, sys, tempfile, threading, time, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from aioesphomeapi import SelectInfo, SelectState, NumberInfo, SwitchInfo, NumberState, SwitchState, TextSensorInfo, TextSensorState, SensorInfo, SensorState
 from aioesphomeapi import APIClient, MediaPlayerInfo, MediaPlayerEntityState, VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm
@@ -58,7 +58,8 @@ async def main():
                HASSMIC_LUX=os.path.join(state, "calibrated_lux"),              # the light sensor's sysfs file
                HASSMIC_FAKE_SOUND="dogBark",                                    # every ~10 s window "hears" a dog (sound_none.c)
                HASSMIC_FAKE_WHISPER="1",                                        # a model, and every request whispered (whisper_none.c)
-               HASSMIC_FAKE_WIFI=os.path.join(state, "rx_stat"))                # what the Wi-Fi driver answers RX_STAT (wifimotion.c)
+               HASSMIC_FAKE_WIFI=os.path.join(state, "rx_stat"),                # what the Wi-Fi driver answers RX_STAT (wifimotion.c)
+               HASSMIC_CLOCK_SYNCED="0")                                        # an Echo whose clock nobody set (clock.c)
     def conf():                                      # state/config: name=value lines (settings.c)
         try: return dict(l.strip().split("=", 1) for l in open(os.path.join(state, "config")) if "=" in l and not l.startswith("#"))
         except OSError: return {}
@@ -361,6 +362,18 @@ async def main():
         check(info.name == "echo-dot" and info.api_encryption_supported and not info.api_encryption_provisionable, "encrypted: device info, no longer provisionable")
         ent3, _ = await enc.list_entities_services()
         check(len(ent3) == len(entities), "encrypted: entities listed")
+        # the time: asked of Home Assistant over the keyed link only (aioesphomeapi answers it), handed to root
+        clock = os.path.join(state, "clock")
+        check(not os.path.exists(clock), "no time taken from the plaintext connection before the key")
+        enc.subscribe_states(lambda s: None)
+        for _ in range(30):
+            if os.path.exists(clock): break
+            await asyncio.sleep(0.1)
+        try: t, at = open(clock).read().split(); t = int(t)
+        except (OSError, ValueError): t, at = 0, ""
+        boot = time.clock_gettime(time.CLOCK_BOOTTIME)
+        check(abs(t - time.time()) <= 2 and re.fullmatch(r"\d+\.\d\d", at) and 0 <= boot - float(at) < 5,
+              f"keyed link: Home Assistant's time in state/clock for root, with the boot clock as /proc/uptime words it: {t} {at}")
         started.clear(); mic.clear()
         enc.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio, handle_announcement_finished=handle_finished)
         await asyncio.sleep(0.3); proc.send_signal(signal.SIGUSR1)

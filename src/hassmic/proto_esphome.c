@@ -60,6 +60,7 @@
 #include "hash.h"
 #include "noise.h"
 #include "sendspin.h"
+#include "clock.h"
 #include "update.h"
 #include "wifimotion.h"
 #include "net.h"
@@ -71,7 +72,7 @@
 enum {
     HELLO_REQ = 1, HELLO_RESP, CONNECT_REQ, CONNECT_RESP, DISCONNECT_REQ, DISCONNECT_RESP, PING_REQ, PING_RESP,
     DEVICE_INFO_REQ, DEVICE_INFO_RESP, LIST_ENTITIES_REQ, LIST_ENTITIES_DONE = 19, SUBSCRIBE_STATES = 20,
-    SUBSCRIBE_HA_ACTIONS = 34, HA_ACTION, SUBSCRIBE_HA_STATES = 38, HA_STATE_SUB, HA_STATE, LIST_SERVICE = 41, EXECUTE_SERVICE,
+    SUBSCRIBE_HA_ACTIONS = 34, HA_ACTION, GET_TIME_REQ = 36, GET_TIME_RESP, SUBSCRIBE_HA_STATES = 38, HA_STATE_SUB, HA_STATE, LIST_SERVICE = 41, EXECUTE_SERVICE,
     LIST_BINARY_SENSOR = 12, LIST_SENSOR = 16, LIST_SWITCH = 17, LIST_TEXT_SENSOR = 18, SENSOR_STATE = 25, SWITCH_STATE = 26, BINARY_SENSOR_STATE = 21, TEXT_SENSOR_STATE = 27, SWITCH_COMMAND = 33, LIST_NUMBER = 49, NUMBER_STATE, NUMBER_COMMAND,
     LIST_SELECT = 52, SELECT_STATE, SELECT_COMMAND,
     LIST_MEDIA_PLAYER = 63, MEDIA_PLAYER_STATE, MEDIA_PLAYER_COMMAND,
@@ -1230,6 +1231,23 @@ static void entities_changed(void)
     fprintf(stderr, "entities changed: links closed, Home Assistant lists them again\n");
 }
 
+/* lock held.  The time, from Home Assistant (clock.c): asked on each link with the device key once it subscribes, and
+ * again on its pings every 6 h (it pings every 20 s or so).  Only that link: the clock decides which certificates
+ * curl takes, so nobody else on the network may move it */
+#define TIME_ASK_MS (6LL * 3600 * 1000)
+static long long time_asked;
+static void ask_time(int c, int force)
+{
+    static int told;
+    if (c < 0 || !clients[c].keyed) {
+        if (!have_key && !told++) fprintf(stderr, "clock: not asking Home Assistant for the time: it has not given this Echo an encryption key\n");
+        return;
+    }
+    if (!force && time_asked && now_ms() - time_asked < TIME_ASK_MS) return;
+    time_asked = now_ms();
+    send_msg(GET_TIME_REQ, NULL);
+}
+
 static int handle(unsigned type, const unsigned char *p, size_t len)
 {
     const unsigned char *end = p + len; struct pbf f; int keep = 1;
@@ -1249,12 +1267,18 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case HELLO_REQ: { PB(b, 128); pb_uint(&b, 1, 1); pb_uint(&b, 2, 10); pb_str(&b, 3, "hassmic " VERSION); pb_str(&b, 4, node_name()); send_msg(HELLO_RESP, &b); } break;
     case CONNECT_REQ:      send_msg(CONNECT_RESP, NULL); break;                 /* no password */
     case DISCONNECT_REQ:   send_msg(DISCONNECT_RESP, NULL); keep = 0; break;
-    case PING_REQ:         send_msg(PING_RESP, NULL); break;
+    case PING_REQ:         send_msg(PING_RESP, NULL); ask_time(c, 0); break;
     case DEVICE_INFO_REQ:  send_device_info(); break;
     case LIST_ENTITIES_REQ: send_entities(); break;
     case SUBSCRIBE_STATES:
         for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd == reply_fd) clients[i].states = 1;
-        send_mp_state(); send_all_settings(); send_token_state(); send_handoff_state(); send_web_state(); break;
+        send_mp_state(); send_all_settings(); send_token_state(); send_handoff_state(); send_web_state();
+        ask_time(c, 1); break;
+    case GET_TIME_RESP: {
+        uint32_t epoch = 0;
+        while (pb_next(&p, end, &f)) if (f.field == 1 && f.wire == 5) epoch = (uint32_t)f.v;
+        if (c >= 0 && clients[c].keyed && epoch) clock_from_ha(epoch);
+    } break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
     case UPDATE_COMMAND: {
         unsigned key = 0, cmd = 0;

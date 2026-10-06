@@ -18,11 +18,18 @@ SYS=${HASSMIC_SYS:-/system/hassmic}
 OTA=/data/local/hassmic/ota
 CONF=/data/local/hassmic/hassmic.conf
 LOG=/data/local/hassmic/boot.log
+# Every line of the log starts with when it was written (src/hassmic/clock.c says why): UTC once the clock was set from
+# Home Assistant since boot (property hassmic.clock.synced, set below), else seconds since boot.  hassmic stamps its own
+# lines; say for single lines from here, stamped for what a long-running piece writes.  Not for what goes on a pipe
+# hassmic reads (factory(), results).
+stamp() { if [ "$(getprop hassmic.clock.synced)" = 1 ]; then date -u '+%Y-%m-%d %H:%M:%SZ'; else read -r u _ < /proc/uptime; echo "boot+$u"; fi; }
+say() { echo "$(stamp) $*"; }
+stamped() { while IFS= read -r l; do echo "$(stamp) $l"; done; }
 [ -f $CONF ] || exit 0
 # Without the model's facts the satellite cannot start, but the firewall needs none of them: it must go up regardless.
 if [ ! -f $D/device.conf ]; then
-    echo "== $D/device.conf missing: no satellite" >> $LOG
-    [ "$1" = firewall ] && exec sh $D/lockdown.sh watch >> $LOG 2>&1
+    say "== $D/device.conf missing: no satellite" >> $LOG
+    [ "$1" = firewall ] && sh $D/lockdown.sh watch 2>&1 | stamped >> $LOG
     exit 1
 fi
 . $D/device.conf
@@ -84,10 +91,38 @@ kmod() {
     else echo "kmod: $KMOD not loaded, not tried again until reboot: $out"; KMOD=; fi
 }
 
+# The time from Home Assistant (src/hassmic/clock.c): hassmic, which may not set the clock, leaves "<epoch> <its
+# CLOCK_BOOTTIME when that was the time>" in state/clock, the latter as /proc/uptime words it (that clock).  What has
+# passed since is added, the clock set, and the RTC, so that the next boot starts close.  hassmic takes the time only from
+# Home Assistant's keyed link; here only a time from 2026 on counts, and only a fresh one (a file from before a reboot
+# speaks of another boot's clock).  mksh's numbers end at 2^31 on these Echos (2038 for the time, 248 days of uptime
+# in centiseconds): so seconds and centiseconds apart, and nothing larger is formed.
+CLOCK=/data/local/hassmic/state/clock
+clock_set() {
+    [ -f $CLOCK ] && [ ! -L $CLOCK ] || return 0
+    local t= at= up now was d a first ds
+    read -r t at < $CLOCK; rm -f $CLOCK
+    read -r up _ < /proc/uptime
+    case "$t" in ''|*[!0-9]*) t=x;; esac
+    case "$at" in [0-9]*.[0-9][0-9]) case "${at%.*}${at#*.}" in *[!0-9]*) t=x;; esac;; *) t=x;; esac
+    [ "$t" = x ] && { echo "clock: state/clock not understood, ignored"; return; }
+    if [ ${#t} -ne 10 ] || [ $t -lt 1767225600 ]; then echo "clock: $t is not a time of ours, ignored"; return; fi
+    ds=$(( ${up%.*} - ${at%.*} ))                   # whole seconds since hassmic had the time
+    if [ ${#at} -gt 12 ] || [ $ds -lt 0 ] || [ $ds -gt 600 ]; then echo "clock: Home Assistant's time is stale, ignored"; return; fi
+    now=$(( t + (ds * 100 + 1${up#*.} - 1${at#*.} + 50) / 100 )) was=$(date +%s)     # 1xx: centiseconds without octal
+    if ! date -u @$now > /dev/null 2>&1 || [ $(( $(date +%s) - now )) -gt 2 ]; then echo "clock: could not be set"; return; fi
+    hwclock -w -u 2>/dev/null
+    first=; [ "$(getprop hassmic.clock.synced)" = 1 ] || first=1
+    setprop hassmic.clock.synced 1
+    d=$((now - was)); a=behind; [ $d -lt 0 ] && { d=$((-d)); a=ahead; }
+    echo "clock: set from Home Assistant, $d s $a${first:+ (times in this log are UTC from here on, seconds since boot before)}"
+}
+
 netwatch() {
     miss=0
     while :; do
         rotate_log
+        clock_set
         fwcheck
         if ifconfig $WLAN 2>/dev/null | grep -q "inet addr"; then
             miss=0
@@ -111,7 +146,7 @@ netwatch() {
 # Assistant, update.c).  The release key of the copy that runs wins over the factory copy's: both are root's, written
 # from bundles that verified, and so a new release key can come with an update signed by the old one.
 release_pub() { for k in $D/release.pub $SYS/release.pub; do [ -s $k ] && { echo $k; return; }; done; }
-rejected() { echo "== update rejected: $1"; rm -rf $new; echo "FAILED $1" > $IN/result.tmp; }
+rejected() { say "== update rejected: $1"; rm -rf $new; echo "FAILED $1" > $IN/result.tmp; }
 # The installed update passed its self test (hassmic left state/ota/healthy: started, wake word engine loaded, a second
 # of microphone audio; main.c): it becomes the factory copy on the system partition, bootstrap included, so the Echo
 # falls back to the last version that worked.  Only if it is the update installed now and the hassmic running is its
@@ -124,8 +159,8 @@ factory() {
     if [ -z "$cur" ] || [ "$have" != "$want" ]; then echo "FAILED $want is not the installed update (that is ${have:-none}); nothing written"
     elif [ -z "$running" ]; then echo "FAILED $want is installed but not what runs now (fell back to the factory copy?); nothing written"
     elif cmp -s $cur/VERSION $SYS/VERSION; then echo "OK $want is the factory copy already"
-    elif out=$(sh $cur/sysinstall.sh factory $cur 2>&1); then echo "$out" >&2; echo "OK $want is now the factory copy"
-    else echo "$out" >&2; echo "FAILED $(echo "$out" | tail -1)"
+    elif out=$(sh $cur/sysinstall.sh factory $cur 2>&1); then echo "$out" | stamped >&2; echo "OK $want is now the factory copy"
+    else echo "$out" | stamped >&2; echo "FAILED $(echo "$out" | tail -1)"
     fi
 }
 ota_watch() {
@@ -136,16 +171,16 @@ ota_watch() {
             cur=$(readlink $OTA/current)
             # every start says so; only an update that is not the factory copy yet has anything to do
             if [ -n "$cur" ] && [ -f $cur/VERSION ] && ! cmp -s $cur/VERSION $SYS/VERSION; then
-                echo "== factory copy: $(factory "$(cat $cur/VERSION)")"      # its stderr: the log
+                say "== factory copy: $(factory "$(cat $cur/VERSION)")"       # its stderr: the log
             fi
         fi
         # artifacts another Echo's page copied here (src/hassmic/artifacts.c): into the models folders, which are root's
         if [ -f /data/local/hassmic/state/artifacts/request ]; then
             if out=$(DAEMON_USER=$DAEMON_USER READ_AS="$D/runas $DAEMON_USER $DAEMON_GROUPS" \
                      sh $D/artifact-install.sh /data/local/hassmic/state /data/local/hassmic 2>&1); then
-                echo "== artifacts installed, restarting hassmic: $(echo $out)"
+                say "== artifacts installed, restarting hassmic: $(echo $out)"
                 stop hassmic; start hassmic
-            else echo "== artifacts not installed: $(echo $out)"
+            else say "== artifacts not installed: $(echo $out)"
             fi
         fi
         [ -f $IN/request ] || continue
@@ -172,7 +207,7 @@ ota_watch() {
             ln -sfn $new $OTA/current                   # toybox: replaces the link itself (checked on the device); no mv -T there
             echo 0 > $OTA/tries
             for d in $OTA/v*; do [ "$d" = "$new" ] || [ "$d" = "$old" ] || rm -rf "$d"; done        # keep the previous one
-            echo "== update $ver installed (signed with ${key##*/}), restarting"
+            say "== update $ver installed (signed with ${key##*/}), restarting"
             echo "OK $ver" > $IN/result.tmp
         fi
         rm -f $IN/bundle $IN/bundle.sig
@@ -200,15 +235,16 @@ fi
 if [ "$MODE" = stock-online ]; then
     # hassmic is off on purpose: that must not count as an update that failed to come up.
     [ "$1" = firewall ] || { echo 0 > $OTA/tries; exit 0; }
-    { rotate_log; echo "== stock-online, uptime $(cut -d. -f1 /proc/uptime)s: Alexa runs, updaters cut off"; } >> $LOG 2>&1
-    exec sh $D/lockdown.sh ota-only watch >> $LOG 2>&1
+    { rotate_log; echo "== stock-online, uptime $(cut -d. -f1 /proc/uptime)s: Alexa runs, updaters cut off"; } 2>&1 | stamped >> $LOG
+    sh $D/lockdown.sh ota-only watch 2>&1 | stamped >> $LOG
+    exit 0
 fi
 
 case "$1" in
 firewall)
     quiet
-    sh $D/lockdown.sh watch >> $LOG 2>&1 &
-    ota_watch >> $LOG 2>&1
+    sh $D/lockdown.sh watch 2>&1 | stamped >> $LOG &
+    ota_watch >> $LOG 2>&1                              # execs on an update: no pipe around it, its lines say when
     ;;
 satellite)
     # The installer that unpacked us may have been an older one running with umask 077: make sure the daemon's user gets in.
@@ -220,14 +256,14 @@ satellite)
         # wake word sets under a short name (echo-de) from installs by hand: the name scripts/artifacts.sh gives them
         [ -f $D/artifact-install.sh ] && sh $D/artifact-install.sh migrate /data/local/hassmic/state /data/local/hassmic
         sh $D/alexa-off.sh; quiet
-    } >> $LOG 2>&1
+    } 2>&1 | stamped >> $LOG
     # A binary in /data wins over the installed one: lets a new build be tried without a trip through TWRP.
     BIN=$D/hassmic; [ -x /data/local/hassmic/hassmic ] && BIN=/data/local/hassmic/hassmic
     # hassmic offers Wi-Fi motion where the module can be loaded (wifimotion.c), the loop below loads it when needed
     [ -n "$KMOD" ] && [ -f $D/$KMOD ] && export HASSMIC_WIFI_KMOD=/proc/${KMOD%.ko}
     # online updates: hassmic checks downloads against the key root will check them against (ota.c)
     export HASSMIC_RELEASE_PUB=$(release_pub)
-    netwatch >> $LOG 2>&1 &
+    netwatch 2>&1 | stamped >> $LOG &
     # mDNS through the stock avahi-daemon: hassmic prints the service file for its protocol, name and MAC address.
     # The MAC in it is how Home Assistant tells devices apart.  On radar wlan0 appears only later in the boot, hassmic
     # printed its placeholder MAC, and Home Assistant offered the adopted Echo as a new device.  So wait for Wi-Fi
@@ -254,7 +290,7 @@ satellite)
         fi
         stop avahi-daemon; pkill avahi-daemon; sleep 1
         avahi-daemon -f $conf --no-drop-root > /dev/null 2>&1 &
-    ) >> $LOG 2>&1 &
+    ) 2>&1 | stamped >> $LOG &
     # The bootstrap counted this start as an attempt; a minute of hassmic running counts as success.
     (sleep 60; pidof hassmic > /dev/null && echo 0 > $OTA/tries) &
     fast=0
@@ -265,12 +301,12 @@ satellite)
         # play from wherever Home Assistant points.  Not the effective group: the mixer only records for group aipc.
         $D/runas -r 3990 $DAEMON_USER $DAEMON_GROUPS \
             $BIN -P ${PROTO:-esphome} -n "$NAME" $ARGS >> $LOG 2>&1
-        echo "hassmic exited rc=$?, restart in 3 s" >> $LOG
+        say "hassmic exited rc=$?, restart in 3 s" >> $LOG
         # An update whose daemon does not stay up is worse than no update: with hassmic down there is no push port either.
         # Five exits within 20 s each -> back to the factory copy right now, without waiting for three reboots.
         if [ $(( $(cut -d. -f1 /proc/uptime) - t0 )) -lt 20 ]; then fast=$((fast + 1)); else fast=0; fi
         if [ $fast -ge 5 ] && [ "$D" != "$SYS" ]; then
-            echo "== update $(cat $D/VERSION 2>/dev/null) keeps exiting: running the factory copy" >> $LOG
+            say "== update $(cat $D/VERSION 2>/dev/null) keeps exiting: running the factory copy" >> $LOG
             echo 3 > $OTA/tries
             exec sh $SYS/boot.sh satellite
         fi

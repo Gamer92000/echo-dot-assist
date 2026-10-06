@@ -52,6 +52,7 @@
 #include "settings.h"
 #include "web.h"
 #include "board.h"
+#include "clock.h"
 
 #define PIPELINE_TIMEOUT 30         /* seconds in LISTENING or THINKING before giving up */
 #define TTS_RATE         22050      /* assumed when audio-start carries no rate */
@@ -1375,6 +1376,7 @@ int main(int argc, char **argv)
     }
     core_port = port ? port : proto->port;
     if (print_mdns) { proto->print_mdns(); return 0; }
+    clock_log_start();                              /* before any thread: it forks */
     signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin); signal(SIGWINCH, on_winch);
     if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
     led("-u", "scone-setup");           /* a restart inside the pairing window: the window is gone, its chaser would loop on */

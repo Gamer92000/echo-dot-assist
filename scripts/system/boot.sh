@@ -20,7 +20,9 @@ D=$SYS
 if [ -f $OTA/current/main.sh ]; then
     tries=$(cat $OTA/tries 2>/dev/null); tries=${tries:-0}
     if [ "$tries" -ge 3 ]; then
-        [ "$1" = satellite ] && echo "== update $(cat $OTA/current/VERSION 2>/dev/null) failed to start $tries times: running the factory copy" >> $BASE/boot.log
+        # when, as main.sh stamps its lines: UTC once the clock was set from Home Assistant, else seconds since boot
+        if [ "$(getprop hassmic.clock.synced)" = 1 ]; then at=$(date -u '+%Y-%m-%d %H:%M:%SZ'); else read -r at _ < /proc/uptime; at=boot+$at; fi
+        [ "$1" = satellite ] && echo "$at == update $(cat $OTA/current/VERSION 2>/dev/null) failed to start $tries times: running the factory copy" >> $BASE/boot.log
     else
         D=$OTA/current
         [ "$1" = satellite ] && echo $((tries + 1)) > $OTA/tries       # main.sh resets it once hassmic has run for a minute

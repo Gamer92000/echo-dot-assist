@@ -1179,6 +1179,21 @@ function renderSystem() {
 
 // ---------------------------------------------------------------- the log (boot.log: hassmic, the firewall, updates)
 
+// Each line starts with when (clock.c): "2026-10-06 15:18:02.417Z" (UTC, shown here in the browser's zone) once the
+// Echo has the time from Home Assistant, "boot+29935.512" (seconds since boot) before.  Lines of older versions have none.
+const LOG_UTC = /^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)(\.\d{3})?Z /, LOG_BOOT = /^boot\+\d+(\.\d+)? /;
+const pad2 = (n) => String(n).padStart(2, '0');
+function logLine(l) {
+  let ts = '', rest = l; const m = LOG_UTC.exec(l);
+  if (m) {
+    const d = new Date(Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
+    ts = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}${m[7] || ''}`;
+    rest = l.slice(m[0].length);
+  } else { const b = LOG_BOOT.exec(l); if (b) { ts = b[0].trim(); rest = l.slice(b[0].length); } }
+  const cls = /^!!|\b(error|failed|cannot|refused)\b/i.test(rest) ? 'bad' : /^==/.test(rest) ? 'mark' : null;
+  return h('span', { class: cls }, ts ? h('span', { class: 'ts', title: m ? l.slice(0, m[0].length - 1) + ' (UTC)' : 'Seconds since the Echo started: it did not have the time from Home Assistant yet' }, ts + ' ') : null, rest + '\n');
+}
+
 // Loaded on demand only: up to 2 MB, and the Echo reads it from flash.  Part 1 is the rotated older part (main.sh keeps one)
 function logCard() {
   const parts = [null, null];           // [boot.log, boot.log.1] as text once fetched
@@ -1195,13 +1210,12 @@ function logCard() {
     if (all[all.length - 1] === '') all.pop();
     const lines = q ? all.filter((l) => l.toLowerCase().includes(q)) : all;
     const end = toEnd || pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;    // stay at the end if there already
-    pre.replaceChildren(...lines.map((l) => h('span', {
-      class: /^!!|\b(error|failed|cannot|refused)\b/i.test(l) ? 'bad' : /^==/.test(l) ? 'mark' : null }, l + '\n')));
+    pre.replaceChildren(...lines.map(logLine));
     if (end) pre.scrollTop = pre.scrollHeight;
     pre.classList.toggle('hidden', !lines.length);
     if (!all.length) { info.textContent = 'The log is empty.'; return; }
     info.textContent = (q ? `${lines.length} of ${all.length} lines` : `${all.length} lines`)
-      + (parts[1] === '' ? '' : older.checked ? ', older part included' : '') + '. Secrets (the Sendspin pairing token) are blanked.';
+      + (parts[1] === '' ? '' : older.checked ? ', older part included' : '') + '. Times in this browser\'s time zone; "boot+" is seconds since the Echo started, before it had the time from Home Assistant. Secrets (the Sendspin pairing token) are blanked.';
   };
   const fetchPart = async (i) => { parts[i] = (await echo.call('GET', `/api/log/${i}`)).text(); };
   show.onclick = async () => {

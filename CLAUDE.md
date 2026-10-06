@@ -79,7 +79,9 @@ There is no single-test selector: run one unit test by building/running its line
 - `scripts/install-system.sh`: writes `/system/hassmic/`, init rc and patched SELinux policy from the running OS
   (`sysinstall.sh install`; `otatool remount rw` since toybox cannot: `/dev/root` does not exist). `--twrp` the old way.
   `--uninstall` reverts.
-- Logs: `/data/local/hassmic/boot.log`. Config: `/data/local/hassmic/hassmic.conf` (`NAME`, `PROTO`, `ARGS`, `MODE`,
+- Logs: `/data/local/hassmic/boot.log`, each line stamped (`clock.c`: UTC once the clock came from HA, else `boot+<s>`;
+  hassmic's own through its reader process `hassmic-log`, which `pidof hassmic` lists too; scripts through `say`/`stamped`
+  in `main.sh`). The Echo's mksh is 32-bit and has no awk. Config: `/data/local/hassmic/hassmic.conf` (`NAME`, `PROTO`, `ARGS`, `MODE`,
   `ADB_WIFI`; root-owned, 644: root sources it).
   State (API key, BLE bonds, BT keys, Sendspin, settings): `/data/local/hassmic/state/`.
 - `kill -TTIN $(pidof hassmic)` toggles recording of the processed mic stream to `state/capture.raw`. `mixcap` cannot
@@ -210,6 +212,12 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `artifact-install.sh migrate` (main.sh, every satellite start): wake word folders under the short name (`echo-de`,
   from installs by hand) renamed to artifacts.sh's (`echo-de-DE`) where the language has one region; `state/wake_word`
   follows.
+- **Clock and log stamps** (`clock.c`): `proto_esphome.c` asks HA for the time (GetTimeRequest) on keyed links (on
+  subscribe, then every 6 h on pings); `clock_from_ha` leaves `<epoch> <boottime s.cs>` in `state/clock`, root's
+  `main.sh` `clock_set` (netwatch) sets clock + RTC and `hassmic.clock.synced`. `clock_log_start()` (first in `main()`
+  after options) turns stderr/stdout into a pipe to a double-forked reader that stamps lines and drops known Amazon
+  noise; it ignores hassmic's signals and ends at EOF. Never make it hassmic's direct child (Amazon's DHA module waits
+  for all children). Host: `HASSMIC_CLOCK_SYNCED=0` plays an unset clock.
 - **adb over Wi-Fi** (`adbwifi.c`): the settings page only writes a request for root's firewall watcher, as `ota.c` does
   for updates; opening needs an approved browser plus a press of the action button (`web.c`), or (`ota.c`, `HMOTA-ADB1`) a challenge signed with the update key.
 - **Wi-Fi motion** (`wifimotion.c`, experimental, off by default): polls the RCPI of the frames from the AP at 10 Hz, scatter

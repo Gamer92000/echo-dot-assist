@@ -4,6 +4,12 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-06
 
+- **The Echo knows the time again.** Behind the firewall nothing set its clock any more (the Echo Dot 2 was 23 hours
+  behind); it now takes the time from Home Assistant, over the encrypted link, when it connects and every 6 hours.
+- **Times in the log.** Every line of the log says when it was written; the settings page shows the times in your time
+  zone. Until the Echo has the time from Home Assistant they count seconds since it started.
+- **Less noise in the log**: the four times three "Could not open /dev/block/mmcblk0boot1! Can't read the idme." lines
+  at every start (harmless: Amazon's own sign-in code trying a way it is not allowed) no longer show.
 - **The log on the settings page.** "Log" in the System section shows what the Echo wrote (hassmic, the firewall,
   updates), with a filter, the older part, and a download for bug reports — no adb needed any more. The Sendspin
   pairing token is blanked in it; the rest travels unencrypted, like the whole page.

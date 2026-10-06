@@ -347,7 +347,10 @@ lost, only USB is left.
 
 Log: "Log" in the System section of the [settings page](#settings-page) shows `boot.log` (filter, the older rotated
 part, download for a bug report; the Sendspin pairing token is blanked, but the rest travels unencrypted, like the
-whole page). Or `adb shell tail -30 /data/local/hassmic/boot.log` (over USB, or over Wi-Fi after opening debug access
+whole page). Every line starts with when it was written: UTC (the page shows your time zone) once the Echo has the time
+from Home Assistant, `boot+<seconds>` since it started before that. The Echo's clock: nothing set it behind the
+firewall (stock asked Amazon), so it drifted by up to a day; hassmic now asks Home Assistant over its encrypted link
+when it connects and every 6 hours, and sets the clock and the Echo's hardware clock from that. Or `adb shell tail -30 /data/local/hassmic/boot.log` (over USB, or over Wi-Fi after opening debug access
 on the settings page or `scripts/adb-wifi.sh <echo-ip>`). Claims from Kiosk Satellite devices are logged once a second
 at most, with a count of the rest: anyone on the network can send them, and the log is on flash.
 

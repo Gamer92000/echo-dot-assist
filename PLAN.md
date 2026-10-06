@@ -708,6 +708,18 @@ Run in this order. Each step says what it proves.
       (fake kiosk socket): wire format, loudest wins, kiosk louder silences both, other phrase and malformed claims
       ignored, no priority, offset flips the winner, back to own mode. Not done: a device test next to a real kiosk (calibrate the +30 dB lift,
       claim delay over Wi-Fi), the firewall rule on the Echo
+- [x] Clock from Home Assistant, times in the log (2026-10-06). Found: nothing sets the clock behind the egress lock,
+      the Dot 2 was 83082 s behind. hassmic asks Home Assistant (ESPHome GetTimeRequest 36, aioesphomeapi answers it
+      itself) on each keyed link once it subscribes and every 6 h on its pings; `clock.c` hands "<epoch> <boot clock as
+      /proc/uptime>" to root (state/clock); `main.sh` netwatch adds the time since, `date -u @`, `hwclock -w -u`, setprop
+      `hassmic.clock.synced`. Log: hassmic's stderr/stdout through a pipe to a reader process ("hassmic-log",
+      double-forked: Amazon's DHA module `wait()`s for its idme child and with SIGCHLD ignored that waited for the reader,
+      hassmic never opened its ports - seen on the Dot 2, fixed before commit), stamps "2026-10-06 15:41:29.417Z" or
+      "boot+31027.076"; drops the idme tool's 3-line error (4x per signing) and the DHA module's setgroups warning.
+      Scripts: `say` / `stamped` in main.sh, boot.sh's one line. mksh is 32-bit: all shell numbers stay below 2^31.
+      Dot 2: clock set 83082 s, RTC follows, stamps UTC from then on, viewer shows local time. Tests: fake_ha_esphome
+      (state/clock only from the keyed link), fake_web (boot+ stamps), fake_ha_arbitration (UTC stamps); clock_set's
+      branches run under the Echo's mksh with stubs
 - [x] Log viewer on the settings page (2026-10-06): `GET /api/log/0|1`, signed, tail of 2 MB of `boot.log` / `.1`,
       Sendspin pairing token blanked (signed is not encrypted: a sniffer reads the answer); filter, older part, download.
       Kiosk claims logged once a second at most (unauthenticated, and `boot.log` is on flash: /data, mmcblk0p16 ext4).
