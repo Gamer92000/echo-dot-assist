@@ -7,8 +7,10 @@
  *   wake:<name>  a wake word model set, models/<name>/ (Home Assistant offers each in the wake word select)
  *   sound        Amazon's newer sound detection model, aed/ (sound_pryon.c takes it over the firmware's)
  *   whisper      the whisper detection model, whisper/ (whisper_pryon.c)
- * Each is a flat folder of files.  Its digest: BLAKE2b-256 over, file by file in name order, "name\0size\0" and the
- * content; the same folder on two Echos has the same digest.  Kept per folder until a file's size or time changes:
+ * Each is a folder of files, with at most one level of folders inside: Amazon's whisper model keeps its networks in
+ * whisper_components/, some wake word sets (alexa-de-DE) theirs in BDPGeneratedFiles/.  A file's name is then its path,
+ * "sub/file", each part a name as good_name() takes it.  The digest: BLAKE2b-256 over, file by file in name order,
+ * "name\0size\0" and the content; the same folder on two Echos has the same digest.  Kept per folder until a file's size or time changes:
  * hashing a 24 MB set takes seconds on these CPUs.
  *
  * Writing: begin (the files, their sizes, the digest; enough free space for the copy and root's copy of it), pieces into
@@ -16,7 +18,7 @@
  * a wake word set must also load in this Echo's own engine, pryon_test, as scripts/artifacts.sh checks: the Echo 2's
  * older engine cannot load every set), then install: state/artifacts/request names what is ready, and root's watcher
  * (main.sh) runs artifact-install.sh, which reads the files as the daemon's user (so nothing staged here can point root
- * at a file of its own), copies them into a fresh root-owned folder, swaps it in and restarts hassmic: the wake word list
+ * at a file of its own), copies them (and their one level of folders) into a fresh root-owned folder, swaps it in and restarts hassmic: the wake word list
  * and the whisper model are read at start.  The models folders are root's (adb wrote them), hence the detour.
  */
 #include "artifacts.h"
@@ -58,6 +60,16 @@ static int good_name(const char *s)
     return 1;
 }
 
+/* a file of a set: "file" or "sub/file", both parts good names (so no "..", nothing hidden, no deeper) */
+static int good_path(const char *s)
+{
+    char a[64]; const char *slash = strchr(s, '/');
+    if (!slash) return good_name(s);
+    if (slash - s > 63 || strchr(slash + 1, '/')) return 0;
+    memcpy(a, s, (size_t)(slash - s)); a[slash - s] = 0;
+    return good_name(a) && good_name(slash + 1);
+}
+
 /* id -> the folder it lives in, the folder it is staged in (state/artifacts/<stage>), and its kind; -1 if not an id */
 static int resolve(const char *id, char *dir, size_t dcap, char *stage, size_t scap, const char **kind)
 {
@@ -71,21 +83,38 @@ static int resolve(const char *id, char *dir, size_t dcap, char *stage, size_t s
     return 0;
 }
 
-struct file { char name[64]; long size; long long mtime; };
+struct file { char name[128]; long size; long long mtime; };   /* name: "sub/file" at most 63 + 1 + 63 */
 static int cmp_file(const void *a, const void *b) { return strcmp(((const struct file *)a)->name, ((const struct file *)b)->name); }
 
-/* the regular files of a folder, sorted; -1 if it is not there, or holds something else (a folder, a link, a bad name) */
-static int list_dir(const char *dir, struct file *f, int max, int strict)
+/* the regular files of DIR/SUB (SUB "" for DIR itself) into f[n..max), named with SUB in front; those of its folders,
+ * one level down, too.  The new count, or -1 when STRICT and something else is there (a link, a folder deeper down, a
+ * bad or hidden name).  Not strict, those are left out. */
+static int list_into(const char *dir, const char *sub, struct file *f, int n, int max, int strict)
 {
-    DIR *d = opendir(dir); struct dirent *e; int n = 0; char p[512]; struct stat st;
-    if (!d) return -1;
+    char p[512], name[128]; struct stat st; struct dirent *e; DIR *d;
+    snprintf(p, sizeof p, "%s%s%s", dir, *sub ? "/" : "", sub);
+    if (!(d = opendir(p))) return *sub ? (strict ? -1 : n) : -1;
     while ((e = readdir(d))) {
-        if (e->d_name[0] == '.') { if (strict && strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) { n = -1; break; } continue; }
-        snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
-        if (lstat(p, &st) || !S_ISREG(st.st_mode) || !good_name(e->d_name) || n == max) { if (strict) { n = -1; break; } continue; }
-        snprintf(f[n].name, sizeof f[n].name, "%.63s", e->d_name); f[n].size = (long)st.st_size; f[n].mtime = (long long)st.st_mtime; n++;
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        snprintf(name, sizeof name, "%s%s%.63s", sub, *sub ? "/" : "", e->d_name);
+        snprintf(p, sizeof p, "%s/%s", dir, name);
+        int ok = good_name(e->d_name) && !lstat(p, &st);
+        if (ok && S_ISDIR(st.st_mode) && !*sub) {             /* one level of folders, no more */
+            int k = list_into(dir, e->d_name, f, n, max, strict);
+            if (k < 0) { n = -1; break; }
+            n = k; continue;
+        }
+        if (!ok || !S_ISREG(st.st_mode) || n == max) { if (strict) { n = -1; break; } continue; }
+        snprintf(f[n].name, sizeof f[n].name, "%s", name); f[n].size = (long)st.st_size; f[n].mtime = (long long)st.st_mtime; n++;
     }
     closedir(d);
+    return n;
+}
+
+/* the files of a set's folder, sorted; -1 if it is not there, or (STRICT) holds something else */
+static int list_dir(const char *dir, struct file *f, int max, int strict)
+{
+    int n = list_into(dir, "", f, 0, max, strict);
     if (n > 0) qsort(f, (size_t)n, sizeof *f, cmp_file);
     return n;
 }
@@ -183,9 +212,9 @@ size_t art_list_json(char *o, size_t cap)
 
 int art_read(const char *id, const char *file, long off, long len, void **data, size_t *got, char *err, size_t errsz)
 {
-    char dir[300], stage[300], p[400]; const char *kind; int fd; struct stat st;
+    char dir[300], stage[300], p[460]; const char *kind; int fd; struct stat st;
     *data = NULL; *got = 0;
-    if (resolve(id, dir, sizeof dir, stage, sizeof stage, &kind) || !good_name(file)) { snprintf(err, errsz, "no such artifact"); return -1; }
+    if (resolve(id, dir, sizeof dir, stage, sizeof stage, &kind) || !good_path(file)) { snprintf(err, errsz, "no such artifact"); return -1; }
     if (off < 0 || len <= 0 || len > ART_CHUNK_MAX) { snprintf(err, errsz, "bad range"); return -1; }
     snprintf(p, sizeof p, "%s/%s", dir, file);
     if ((fd = open(p, O_RDONLY | O_NOFOLLOW)) < 0 || fstat(fd, &st) || !S_ISREG(st.st_mode)) {
@@ -207,20 +236,25 @@ int art_read(const char *id, const char *file, long off, long len, void **data, 
 /* state/artifacts/<stage>.expect: "<digest hex>\n<file> <size>\n..." */
 static int read_expect(const char *stage, char dh[65], struct file *f, int max)
 {
-    char p[320], line[128]; FILE *x; int n = 0;
+    char p[320], line[192]; FILE *x; int n = 0;
     snprintf(p, sizeof p, "%s.expect", stage);
     if (!(x = fopen(p, "r"))) return -1;
     if (!fgets(line, sizeof line, x) || sscanf(line, "%64s", dh) != 1) { fclose(x); return -1; }
-    while (n < max && fgets(line, sizeof line, x)) if (sscanf(line, "%63s %ld", f[n].name, &f[n].size) == 2) n++;
+    while (n < max && fgets(line, sizeof line, x)) if (sscanf(line, "%127s %ld", f[n].name, &f[n].size) == 2) n++;
     fclose(x);
     return n;
 }
 
-static void rm_tree(const char *dir)         /* a staged folder: flat */
+static void rm_tree(const char *dir)         /* a staged folder: files, and folders of files one level down */
 {
-    DIR *d = opendir(dir); struct dirent *e; char p[400];
+    DIR *d = opendir(dir); struct dirent *e; char p[400]; struct stat st;
     if (d) {
-        while ((e = readdir(d))) if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) { snprintf(p, sizeof p, "%s/%s", dir, e->d_name); unlink(p); }
+        while ((e = readdir(d))) {
+            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+            snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+            if (!lstat(p, &st) && S_ISDIR(st.st_mode)) rm_tree(p);
+            else unlink(p);
+        }
         closedir(d);
     }
     rmdir(dir);
@@ -236,19 +270,19 @@ static void unstage(const char *stage)        /* lk held */
 
 int art_begin(const char *spec, char *err, size_t errsz)
 {
-    char id[80], dh[80], dir[300], stage[300], p[320], line[160]; const char *kind; struct file f[MAX_FILES]; int n = 0, k;
+    char id[80], dh[80], dir[300], stage[300], p[320], line[192]; const char *kind; struct file f[MAX_FILES]; int n = 0, k;
     long total = 0; const char *s = spec; FILE *x;
     if (sscanf(s, "%79s %79s%n", id, dh, &k) != 2 || strlen(dh) != 64 || resolve(id, dir, sizeof dir, stage, sizeof stage, &kind)) {
         snprintf(err, errsz, "not an artifact"); return -1;
     }
     for (s += k; *s; ) {
-        size_t l = strcspn(s, "\n"); char name[80]; long size;
+        size_t l = strcspn(s, "\n"); char name[160]; long size;
         snprintf(line, sizeof line, "%.*s", (int)(l < sizeof line - 1 ? l : sizeof line - 1), s);
         s += l + (s[l] == '\n');
         if (!line[0]) continue;
-        if (sscanf(line, "%79s %ld", name, &size) != 2 || !good_name(name) || size < 0 || n == MAX_FILES) { snprintf(err, errsz, "bad file list"); return -1; }
+        if (sscanf(line, "%159s %ld", name, &size) != 2 || !good_path(name) || size < 0 || n == MAX_FILES) { snprintf(err, errsz, "bad file list"); return -1; }
         for (int i = 0; i < n; i++) if (!strcmp(f[i].name, name)) { snprintf(err, errsz, "a file twice"); return -1; }
-        snprintf(f[n].name, sizeof f[n].name, "%.63s", name); f[n].size = size; total += size; n++;
+        snprintf(f[n].name, sizeof f[n].name, "%.127s", name); f[n].size = size; total += size; n++;   /* good_path: <= 127 */
     }
     if (!n || total > MAX_TOTAL) { snprintf(err, errsz, n ? "too big" : "no files"); return -1; }
     pthread_mutex_lock(&lk);
@@ -267,7 +301,12 @@ int art_begin(const char *spec, char *err, size_t errsz)
     for (int i = 0; i < n; i++) fprintf(x, "%s %ld\n", f[i].name, f[i].size);
     fclose(x);
     for (int i = 0; i < n; i++) {               /* every file there from the start: an empty one gets no piece */
-        char fp[400]; snprintf(fp, sizeof fp, "%s/%.63s", stage, f[i].name);
+        char fp[460]; const char *slash = strchr(f[i].name, '/');
+        if (slash) {                            /* its folder first (good_path: one level, a good name) */
+            snprintf(fp, sizeof fp, "%.300s/%.*s", stage, (int)(slash - f[i].name), f[i].name);
+            mkdir(fp, 0755);
+        }
+        snprintf(fp, sizeof fp, "%.300s/%.127s", stage, f[i].name);
         int fd = open(fp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
         if (fd >= 0) close(fd);
     }
@@ -278,8 +317,8 @@ int art_begin(const char *spec, char *err, size_t errsz)
 
 int art_chunk(const char *id, const char *file, long off, const void *data, size_t len, char *err, size_t errsz)
 {
-    char dir[300], stage[300], p[400], dh[65]; const char *kind; struct file f[MAX_FILES]; int n, fd, i;
-    if (resolve(id, dir, sizeof dir, stage, sizeof stage, &kind) || !good_name(file)) { snprintf(err, errsz, "not an artifact"); return -1; }
+    char dir[300], stage[300], p[460], dh[65]; const char *kind; struct file f[MAX_FILES]; int n, fd, i;
+    if (resolve(id, dir, sizeof dir, stage, sizeof stage, &kind) || !good_path(file)) { snprintf(err, errsz, "not an artifact"); return -1; }
     pthread_mutex_lock(&lk);
     n = read_expect(stage, dh, f, MAX_FILES);
     pthread_mutex_unlock(&lk);
@@ -322,6 +361,58 @@ static int try_load(const char *manifest)
     if (pid > 0) { unsigned char r; if (read(pfd[0], &r, 1) == 1) code = r; }
     close(pfd[0]);
     return code;
+}
+
+/* where a copy of ID is staged (a download unpacks straight into it, then art_staged lists it) */
+int art_stage_dir(const char *id, char *dir, size_t cap)
+{
+    char model[300]; const char *kind;
+    return resolve(id, model, sizeof model, dir, cap, &kind);
+}
+
+int art_room(long long need, char *err, size_t errsz)
+{
+    long fr = free_bytes();
+    if (fr < 0 || need + MARGIN <= fr) return 0;
+    snprintf(err, errsz, "not enough space on this Echo: %ld MB free, %lld MB needed", fr >> 20, (need + MARGIN) >> 20);
+    return -1;
+}
+
+/* whatever is staged for ID goes: the folder and its side files (a download starts clean) */
+void art_unstage(const char *id)
+{
+    char model[300], stage[300]; const char *kind;
+    if (resolve(id, model, sizeof model, stage, sizeof stage, &kind)) return;
+    pthread_mutex_lock(&lk);
+    unstage(stage);
+    pthread_mutex_unlock(&lk);
+}
+
+/* A download unpacked straight into the staging folder (davs.c): write what art_commit will check against, from the
+ * files as they arrived: the list, the digest.  A link, a folder in a folder or a strange name is refused here already. */
+int art_staged(const char *id, char *err, size_t errsz)
+{
+    char dir[300], stage[300], p[320], dh[65]; const char *kind; struct file f[MAX_FILES]; uint8_t d[32]; int n;
+    FILE *x;
+    if (resolve(id, dir, sizeof dir, stage, sizeof stage, &kind)) { snprintf(err, errsz, "not an artifact"); return -1; }
+    pthread_mutex_lock(&lk);
+    n = list_dir(stage, f, MAX_FILES, 1);
+    if (n <= 0 || digest(stage, f, n, d)) {
+        int stray = n < 0;
+        unstage(stage);
+        pthread_mutex_unlock(&lk);
+        snprintf(err, errsz, stray ? "the download holds a link, folders in folders or a file this Echo cannot keep"
+                                   : "cannot read what arrived");
+        return -1;
+    }
+    hex(dh, d, 32);
+    snprintf(p, sizeof p, "%s.expect", stage);
+    if (!(x = fopen(p, "w"))) { pthread_mutex_unlock(&lk); snprintf(err, errsz, "cannot write %s", p); return -1; }
+    fprintf(x, "%s\n", dh);
+    for (int i = 0; i < n; i++) fprintf(x, "%s %ld\n", f[i].name, f[i].size);
+    fclose(x);
+    pthread_mutex_unlock(&lk);
+    return 0;
 }
 
 int art_commit(const char *id, char *err, size_t errsz)

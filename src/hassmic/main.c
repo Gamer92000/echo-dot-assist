@@ -37,6 +37,7 @@
 #include "a2dp.h"
 #include "arb.h"
 #include "buttons.h"
+#include "davs.h"
 #include "micdenoise.h"
 #include "micgain.h"
 #include "netio.h"
@@ -1367,6 +1368,7 @@ int main(int argc, char **argv)
     if (use_bt) a2dp_start(NULL);
     if (ota_port) ota_start(ota_port);
     pthread_mutex_lock(&core_lock); settings_load(); settings_preset(); pthread_mutex_unlock(&core_lock);    /* whatever the protocol */
+    davs_start();                                             /* Amazon login for artifact downloads (settings page) */
     static const struct web_hooks web_hooks = { web_attention, web_approved };
     if (core_web_port && web_start(core_web_port, &web_hooks)) { fprintf(stderr, "web: not available\n"); core_web_port = 0; }
 

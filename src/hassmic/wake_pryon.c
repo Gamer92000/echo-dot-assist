@@ -122,3 +122,5 @@ void wake_close(void)
     PryonDecoder_Delete(DECODER);
     PryonModelSet_Delete(MODEL_SET);
 }
+
+const char *wake_attributes(void) { return PryonApi_GetAttributes(); }

@@ -11,7 +11,7 @@ through the reverse-engineered C API of `libmixerAPI.so` and speaks the ESPHome 
 
 Docs: `README.md` (user-facing usage; install instructions per model in `devices/<codename>/README.md`, guided by
 `scripts/setup.sh`), `DEVELOPMENT.md` (architecture, layout, tests, contributing), `PLAN.md` (phases, open issues, every measurement), `CHANGELOG.md`
-(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-a2dp-source.md`,
+(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-a2dp-source.md`, `re-davs-login.md`,
 `sendspin-digest.md`).
 
 ## Build and test
@@ -40,6 +40,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ma_sendspin.py    # Sendspin, as Music Assistant
 .venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step
 .venv/bin/python tests/fake_web_artifacts.py  # models copied Echo to Echo through the page, root's installer, after a restart
+.venv/bin/python tests/fake_web_davs.py       # models downloaded from a fake Amazon: login by code pair with the device
+                                             # attestation token, DAVS, unpack, staging, install, deregister
 .venv/bin/python tests/fake_ha_update.py      # online updates: page channel + HA update entity, fake GitHub, root's installer
 tests/ota_push_test.sh                        # signed push-update path end to end
 tests/otatool_test.sh                         # scripts/otatool.py against the C otatool: same keys, signatures, bundles
@@ -184,7 +186,16 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   applies it once at start (`settings_preset`, as an import) and renames it `preset.applied`. `web/crypto.js` (X25519, BLAKE2b; no `crypto.subtle` on plain HTTP) is checked
   against Python by `tests/unit/web_crypto_test.py` (in `make unit`, needs node). The Echos section copies chosen
   settings to chosen Echos (a matrix of exports), and models.
-- **Artifacts** (`artifacts.c`): Amazon's models (`wake:<name>` = `models/<name>/`, `sound` = `aed/`, `whisper`) listed
+- **Amazon downloads** (`davs.c` + `dha.c`): the settings page's "Download from Amazon".  `dha.c` builds the device
+  attestation token `/auth/register` needs (drvV1 JWT signed by Amazon's keymaster through `libacehal_dha.so`,
+  dlopen'd, needs group drmrpc; exactly what `libace_map.so` builds on biscuit and radar — donut's MAP makes a drvV3
+  certificate token instead, not reversed, so there the page refuses the login).  `davs.c` does the code pair login
+  (the code on the page, register polled with the token, tokens in `state/davs` 0600, never sent to the page), asks
+  DAVS with the engine's own compatibility ids (`wake_attributes`), downloads and unpacks the artifact tar.gz (libz),
+  and stages it through artifacts.c.  Works against the real Amazon (biscuit, amazon.de, 2026-10-06; what it answers in
+  docs/re-davs-login.md); the page offers every Amazon site with Alexa (davs.c's list), any of the account's region works.
+- **Artifacts** (`artifacts.c`): Amazon's models (`wake:<name>` = `models/<name>/`, `sound` = `aed/`, `whisper`): files
+  plus one level of folders (`whisper_components/`, `BDPGeneratedFiles/`; a file's name is then `sub/file`), listed
   with a digest (BLAKE2b-256 over name, size, content per file), read and written in pieces (`ART_CHUNK_MAX`) over
   signed requests, so the page copies them Echo to Echo. Staged in `state/artifacts/<stage>/`; commit checks sizes,
   digest and, for wake word sets, `pryon_test` (next to the binary, `HASSMIC_PRYON_TEST`); install writes
@@ -222,7 +233,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   the system partition). Channel change and install only over the keyed connection.
 - `src/include/`: headers for the reversed Amazon libraries (`mixer_api.h`, `pryon_api.h`, `aipc_api.h`) and `netio.h`.
 - `src/tools/`: standalone device tools (`mixcap`, `mixplay`, `pryon_test`, `aed_test`, `latency`, `runas` — AIPC refuses uid 0 and
-  the image has no `su`; `curlspy`, `hciscan`, `a2dpprobe` not in `all`).
+  the image has no `su`; `curlspy`, `hciscan`, `a2dpprobe`, `dha_test` not in `all`).
 
 Boot integration (`scripts/system/`, rc in `devices/<codename>/`): `hassmic.rc` (init) starts `boot.sh` (fixed, on /system), which picks the factory
 copy or a verified update and runs `main.sh` (updatable): `main.sh firewall` (egress lock re-asserted in a loop, root side

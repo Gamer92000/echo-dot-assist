@@ -4,9 +4,21 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-06
 
+- **Amazon's models download on the Echo itself.** The settings page's new "Download from Amazon" signs the Echo in
+  to your Amazon account with a code you enter on your Amazon site (any site with Alexa: amazon.com, .co.uk, .de, .co.jp
+  and the others), then fetches extra wake words, whisper detection and the newer sound detection model straight from
+  Amazon — no stock mode, no Alexa app, no PC (`scripts/artifacts.sh` still works). It goes step by step (site, code,
+  what to download), shows each download's progress and outcome, and marks what the Echo already has. The sign-in
+  stays until you sign out (the Echo then leaves your account again), and what lands on one Echo can be copied to the
+  others on the same page. Not on the Echo Dot 3: its newer device attestation to Amazon is not reversed, so it says
+  so and takes the copies instead.
+- **Models with folders inside** (whisper detection, the German "Alexa" set) download, copy between Echos and install
+  whole now.
 - **A new settings page.** Every setting now says what it does and when to change it, each feature which entities it
   adds to Home Assistant, and the page works on a phone. The Echos section shows the network, the other Echos and
-  whether their settings match, in one list.
+  whether their settings match, in one list. The list keeps itself up to date: a new Echo shows up within 15 s, each
+  as soon as it answers (one switched off no longer holds the others back), with "Checking…" while it asks them, and
+  an Echo that was unreachable comes back by itself once it is on again.
 - **Log in once for all your Echos.** Echos in the same network (the one wake word arbitration uses, which runs on
   every Echo) trust each other: a browser logged in on one is let in on the others without pressing their buttons.
   The page of the Echo you are logged in to does it by itself; opening another Echo's page directly, its login offers

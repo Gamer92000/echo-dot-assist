@@ -22,6 +22,9 @@
  *   adb over Wi-Fi (a root shell for the network) takes a press of its own: POST /api/adb "on" waits like a login.
  *   Artifacts (artifacts.c): listed, read and written in pieces over signed requests, so a page logged in to two Echos
  *   copies models from one to the other; root installs them.
+ *   Amazon itself (davs.c): POST /api/davs/login starts a code pair login (the code on the page, GET /api/davs tells
+ *   where it stands), /api/davs/fetch downloads an artifact; installing is the artifacts install.  The tokens of the
+ *   registration never reach the page — plain HTTP.
  *   Limits: someone who can change traffic (not only read it) can change the page itself, as with any plain HTTP
  *   page; and the Echo's public key comes from GET /api/hello unsigned.
  *
@@ -33,6 +36,7 @@
 #include "arb.h"
 #include "artifacts.h"
 #include "board.h"
+#include "davs.h"
 #include "diag.h"
 #include "sound.h"
 #include "hash.h"
@@ -428,9 +432,21 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
  * /api/artifact/install                    POST  root installs what is ready; hassmic restarts
  * All signed; reads and pieces do not write the counter to disk (a replayed piece lands in a staged copy whose digest
  * then fails) */
+/* a file name out of the path: "sub/file" travels as "sub%2Ffile" (the page's encodeURIComponent), so the one escape
+ * is undone; artifacts.c checks the name */
+static void unslash(char *s)
+{
+    char *w = s;
+    for (; *s; s++) {
+        if (s[0] == '%' && s[1] == '2' && (s[2] == 'F' || s[2] == 'f')) { *w++ = '/'; s += 2; }
+        else *w++ = *s;
+    }
+    *w = 0;
+}
+
 static void artifact_api(int fd, struct req *r)
 {
-    char err[200], o[300], ej[260], id[80] = "", file[80] = ""; long a = 0, b = 0; int rc = -1, write = strcmp(r->method, "GET");
+    char err[200], o[300], ej[260], id[80] = "", file[160] = ""; long a = 0, b = 0; int rc = -1, write = strcmp(r->method, "GET");
     int piece = !strncmp(r->path, "/api/artifact/read/", 19) || !strncmp(r->path, "/api/artifact/chunk/", 20);
     if (!signed_ok(r, write && !piece)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
     err[0] = 0;
@@ -440,14 +456,52 @@ static void artifact_api(int fd, struct req *r)
         size_t n = art_list_json(t, cap);
         respond_s(fd, r, 200, "application/json", NULL, t, n); free(t); return;
     }
-    if (!write && sscanf(r->path, "/api/artifact/read/%79[^/]/%79[^/]/%ld/%ld", id, file, &a, &b) == 4) {
+    if (!write && sscanf(r->path, "/api/artifact/read/%79[^/]/%159[^/]/%ld/%ld", id, file, &a, &b) == 4) {
         void *data; size_t n;
+        unslash(file);
         if (!art_read(id, file, a, b, &data, &n, err, sizeof err)) { respond_s(fd, r, 200, "application/octet-stream", NULL, data, n); free(data); return; }
     }
     else if (write && !strcmp(r->path, "/api/artifact/begin")) rc = art_begin(r->body, err, sizeof err);
-    else if (write && sscanf(r->path, "/api/artifact/chunk/%79[^/]/%79[^/]/%ld", id, file, &a) == 3) rc = art_chunk(id, file, a, r->body, r->blen, err, sizeof err);
+    else if (write && sscanf(r->path, "/api/artifact/chunk/%79[^/]/%159[^/]/%ld", id, file, &a) == 3) { unslash(file); rc = art_chunk(id, file, a, r->body, r->blen, err, sizeof err); }
     else if (write && sscanf(r->path, "/api/artifact/commit/%79[^/]", id) == 1) rc = art_commit(id, err, sizeof err);
     else if (write && !strcmp(r->path, "/api/artifact/install")) rc = art_install(err, sizeof err);
+    else snprintf(err, sizeof err, "not found");
+    if (!rc) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
+    jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
+    respond_sjson(fd, r, 400, o);
+}
+
+/* /api/davs                       GET   where the Amazon login stands, and the code while one waits (davs.c)
+ * /api/davs/login                 POST  an Amazon site ("de", "co.uk", ...): start a login (the code shows in the status)
+ * /api/davs/cancel                POST  stop a login that waits for its code
+ * /api/davs/logout                POST  deregister from the account, forget the tokens
+ * /api/davs/fetch                 POST  "echo de-DE" / "aed de-DE" / "whisper": download, check, stage; install as for
+ *                                      a copy (POST /api/artifact/install).  All signed; tokens never in an answer. */
+static void davs_api(int fd, struct req *r)
+{
+    char o[1024], ej[256], err[200] = "";             /* o: the status with its error, name and artifact at full length */
+    int write = !strcmp(r->method, "POST"), rc = 0;
+    if (!signed_ok(r, write)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    if (!write && !strcmp(r->path, "/api/davs"))
+    {
+        size_t n = davs_status_json(o, sizeof o);
+        respond_s(fd, r, 200, "application/json", NULL, o, n);
+        return;
+    }
+    if (write && !strcmp(r->path, "/api/davs/login"))
+    {
+        char dom[8] = "";
+        sscanf(r->body, "%7s", dom);
+        rc = davs_login(dom, err, sizeof err);
+    }
+    else if (write && !strcmp(r->path, "/api/davs/logout")) rc = davs_logout(err, sizeof err);
+    else if (write && !strcmp(r->path, "/api/davs/cancel")) rc = davs_cancel(err, sizeof err);
+    else if (write && !strcmp(r->path, "/api/davs/fetch"))
+    {
+        char key[32] = "", loc[8] = "";
+        if (sscanf(r->body, "%31s %7s", key, loc) == 2) rc = davs_fetch(key, loc, err, sizeof err);
+        else { snprintf(err, sizeof err, "what shall this Echo download?"); rc = -1; }
+    }
     else snprintf(err, sizeof err, "not found");
     if (!rc) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
     jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
@@ -569,6 +623,7 @@ static void handle(int fd)
         respond_sjson(fd, &r, 200, found ? "{\"revoked\":true}" : "{\"revoked\":false}");
     }
     else if (!strncmp(r.path, "/api/artifact", 13)) artifact_api(fd, &r);
+    else if (!strncmp(r.path, "/api/davs", 9)) davs_api(fd, &r);
     else respond_json(fd, 404, "{\"error\":\"not found\"}");
     free(r.body);
 }

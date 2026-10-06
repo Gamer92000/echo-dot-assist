@@ -187,6 +187,37 @@ Run in this order. Each step says what it proves.
             engines, `echo-de-DE` detects espeak "Echo" (type=2) on all three. radar's engine lists `wakeword_ecids` up
             to 35 (donut, biscuit: 37) and throws on the NTT sets under qemu: `davs-fetch.py --ecids` asks with the
             Echo's own list, which `scripts/wakeword.sh` reads from `pryon_test`'s attributes line
+      - [x] DAVS token without stock Alexa, for downloads from the settings page (2026-10-06, `docs/re-davs-login.md`,
+            probe `tools/davs-login.py`): the Echo's own code pair login gets as far as the code entry on amazon.de/code,
+            then `/auth/register` answers `InvalidDevice` (the missing piece is the device attestation token).
+            **Built since** (2026-10-06, same day): `dha.c` builds that token exactly as MAP does (biscuit and radar,
+            verified against libace_map.so instruction by instruction; donut registers with a drvV3/ES256 certificate
+            token instead, field 0x203, not reversed: the Dot 3 page says it cannot download and points at copying
+            models; the key's TEE session needs group `drmrpc`, now in biscuit's and radar's `DAEMON_GROUPS`) and
+            `davs.c` does the whole login from the page (code shown with the link, register polled with the token,
+            tokens in `state/davs` 0600 never sent to the page, refresh, deregister with a fresh token, the registration
+            kept on its own Amazon when a login on another one fails or is cancelled), asks DAVS with this engine's own
+            ecids (`wake_attributes`), downloads the tar.gz (streamed to disk, capped as artifacts.c, free space checked
+            as it arrives), unpacks it (PAX headers and directory entries skipped, unpacked size and free space checked;
+            one level of folders kept), and stages it through artifacts.c's checks incl. pryon_test and root's installer.
+            artifacts.c, the page's Echo-to-Echo copies and `artifact-install.sh` keep one level of folders too (files
+            named `sub/file`; links and deeper folders refused, root still reads as the daemon's user). Page card
+            "Download from Amazon" (Echos section) in three steps: the Amazon site (every one with Alexa, by region,
+            guessed from the browser language), the code (countdown, cancel), the picker (wake words of a language,
+            whisper, sound detection; what is installed, each download's progress and outcome, kept over the reload
+            after installing). Tests: `tests/unit/dha_jwt_test.c` (byte for byte), `tests/fake_web_davs.py` (47 checks
+            against a fake Amazon: token shape, session header, ecids, region, whisper's own request, every file of each
+            set installed byte for byte, folders, a deeper one refused, other sites, cancel, a revoked token at logout,
+            an Echo that cannot attest), `tests/fake_web_artifacts.py` (a whisper set with its folder copied Echo to
+            Echo; root refusing a link in a folder and a folder in a folder); the card checked in headless Chromium.
+            **Against the real Amazon (2026-10-06, biscuit, amazon.de): works.** Register answers `401 Unauthorized`
+            until the code is entered, then the tokens; no device secret needed (none sent); Amazon names the device
+            after the account whatever `device_name` says; the Echo's clock was a day behind and the token's `dat`
+            passed; deregister answered 200. Downloaded and installed: computer, amazon, ziggy (de-DE) and the sound
+            detection model. alexa-de-DE (`BDPGeneratedFiles/`) and whisper (`whisper_components/`) were refused for
+            their folders, hence the folder support. Found on the way: `untar` never skipped a file's padding, so every
+            set arrived as its first file only (the fake's pryon_test passed it; the real one would have refused).
+            Not done: the folder sets from the real Amazon, sites other than .de, the Alexa app login route
       - The spied `assetmgrd` must run in its own SELinux domain (`runcon u:r:assetmgrd:s0`, shim labelled `system_file`, log in
         `/data/davs`): from the `su` domain its AIPC service is unreachable and the Alexa app shows the device as unavailable
 - [x] Assistant replies ignored the volume: the mixer keeps one volume per stream type, the `TTS` stream follows `TTSVolume`, and

@@ -5,6 +5,7 @@ written in pieces over signed requests with signed answers, checked on arrival (
 loads it: pryon_test, faked here), then installed by root's scripts/device/artifact-install.sh, which this test runs
 as root would, and found after a restart."""
 import hashlib, json, os, shutil, signal, stat, subprocess, sys, tempfile, time
+from urllib.parse import quote
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webclient import Browser
 
@@ -42,6 +43,7 @@ class Echo:
     def model(self, rel, files):
         d = os.path.join(self.data, rel); os.makedirs(d, exist_ok=True)
         for n, b in files.items():
+            os.makedirs(os.path.dirname(os.path.join(d, n)), exist_ok=True)       # "sub/file": one level of folders
             with open(os.path.join(d, n), "wb") as f: f.write(b)
 
 
@@ -65,10 +67,10 @@ def copy(src, dst, art, tamper=False):
     for f in art["files"]:
         for off in range(0, f["size"], CHUNK):
             n = min(CHUNK, f["size"] - off)
-            st, _, piece = src.call("GET", f"/api/artifact/read/{art['id']}/{f['name']}/{off}/{n}")
+            st, _, piece = src.call("GET", f"/api/artifact/read/{art['id']}/{quote(f['name'], safe='')}/{off}/{n}")
             assert st == 200 and len(piece) == n, (st, len(piece))
             if tamper and off == 0: piece = bytes([piece[0] ^ 1]) + piece[1:]
-            st, _, data = dst.call("POST", f"/api/artifact/chunk/{art['id']}/{f['name']}/{off}", piece)
+            st, _, data = dst.call("POST", f"/api/artifact/chunk/{art['id']}/{quote(f['name'], safe='')}/{off}", piece)
             if st != 200: return st, json.loads(data)
     st, _, data = dst.call("POST", f"/api/artifact/commit/{art['id']}")
     return st, json.loads(data)
@@ -85,7 +87,8 @@ def main():
     wake = {"pryon.manifest": b"manifest\n", "int16_streaming.onnx": os.urandom(CHUNK * 3 + 1234), "kw.cfg.json": b"{}"}
     broken = {"pryon.manifest": b"BROKEN\n", "x.bin": os.urandom(1000)}
     aed = {"pryon.manifest": b"aed\n", "AED.json": b"{}", "model.mlp": os.urandom(50000)}
-    whisper = {"pryon_whisper.manifest": b"w\n", "HCLG.fst": os.urandom(300000)}
+    whisper = {"pryon_whisper.manifest": b"w\n", "HCLG.fst": os.urandom(300000),
+               "whisper_components/model.v8.0.mlp": os.urandom(CHUNK + 10), "whisper_components/dnn_vad.mlp": os.urandom(2000)}
     a.model("models/echo-de-DE", wake); a.model("models/ziggy-de-DE", broken); a.model("aed", aed); a.model("whisper", whisper)
     a.model("models/.try-x", {"pryon.manifest": b"half\n"})            # scripts/artifacts.sh testing one: not listed
     a.start(); b.start()
@@ -95,8 +98,9 @@ def main():
         la = arts(pa)
         by = {x["id"]: x for x in la["artifacts"]}
         check(set(by) == {"wake:echo-de-DE", "wake:ziggy-de-DE", "sound", "whisper"}, f"listed: the sets, sound and whisper models, no .try-: {sorted(by)}")
-        check(by["wake:echo-de-DE"]["digest"] == digest(wake) and by["sound"]["digest"] == digest(aed) and by["whisper"]["size"] == sum(map(len, whisper.values())),
-              "digests as artifacts.c defines them, sizes")
+        check(by["wake:echo-de-DE"]["digest"] == digest(wake) and by["sound"]["digest"] == digest(aed) and by["whisper"]["size"] == sum(map(len, whisper.values()))
+              and by["whisper"]["digest"] == digest(whisper),
+              "digests as artifacts.c defines them (files in a folder by their path), sizes")
         check(arts(pb)["artifacts"] == [] and la["free"] > 0, "the target has none; free space reported")
         st = __import__("webclient").req(a.web, "GET", "/api/artifacts")[0]
         check(st == 401, "unsigned: refused")
@@ -122,18 +126,29 @@ def main():
         check(st == 400 and b"past the end" in data, "a piece past the end of its file: refused")
         st, _, data = pb.call("POST", "/api/artifact/commit/whisper")
         check(st == 400 and b"incomplete" in data, "commit with a file not whole: refused")
-        check(sorted(arts(pb)["staged"]) == ["sound", "wake.echo-de-DE"], f"ready to install: {arts(pb)['staged']}")
+        st, r = copy(pa, pb, by["whisper"])
+        check(st == 200, f"the whisper model with its folder copied: {r}")
+        st, _, data = pb.call("POST", "/api/artifact/begin", b"wake:echo-en-US " + b"0" * 64 + b"\na/b/x 10\n")
+        check(st == 400, f"a file in a folder in a folder: refused: {data}")
+        check(sorted(arts(pb)["staged"]) == ["sound", "wake.echo-de-DE", "whisper"], f"ready to install: {arts(pb)['staged']}")
 
         # install: hassmic names them for root; root's installer puts them in place
         st, _, _ = pb.call("POST", "/api/artifact/install")
         req = open(os.path.join(b.state, "artifacts", "request")).read().split()
-        check(st == 200 and sorted(req) == ["sound", "wake:echo-de-DE"], f"handed to root: {req}")
+        check(st == 200 and sorted(req) == ["sound", "wake:echo-de-DE", "whisper"], f"handed to root: {req}")
         r = root_install(b)
         dst = os.path.join(b.data, "models", "echo-de-DE")
         check(r.returncode == 0 and "OK wake:echo-de-DE" in r.stdout and "OK sound" in r.stdout
               and all(open(os.path.join(dst, n), "rb").read() == c for n, c in wake.items())
               and stat.S_IMODE(os.stat(dst).st_mode) == 0o755 and not os.path.exists(os.path.join(b.state, "artifacts", "wake.echo-de-DE")),
               f"root installed them (folder 755, staged copy gone): {r.stdout.strip()!r}")
+        wd = os.path.join(b.data, "whisper")
+        check("OK whisper" in r.stdout and all(open(os.path.join(wd, n), "rb").read() == c for n, c in whisper.items())
+              and stat.S_IMODE(os.stat(os.path.join(wd, "whisper_components")).st_mode) == 0o755
+              and stat.S_IMODE(os.stat(os.path.join(wd, "whisper_components", "dnn_vad.mlp")).st_mode) == 0o644,
+              "and the whisper model with its folder (755, files 644)")
+        check(arts(pb)["artifacts"] and {x["id"]: x for x in arts(pb)["artifacts"]}["whisper"]["digest"] == by["whisper"]["digest"],
+              "the target now lists the same whisper model")
         check("OK wake:echo-de-DE" in arts(pb)["result"], "the result shows on the page")
 
         # root reads what is staged as the daemon: a link there is refused, never followed
@@ -144,6 +159,15 @@ def main():
         r = root_install(b)
         check(r.returncode != 0 and "FAILED wake:evil: pryon.manifest is not a plain file" in r.stdout and "FAILED wake:../../x: bad name" in r.stdout
               and not os.path.exists(os.path.join(b.data, "models", "evil")), f"a staged link and a bad id: refused by root: {r.stdout.strip()!r}")
+        # the same one level down, and a folder deeper than that
+        for name, make in (("evil2", lambda s: (os.makedirs(os.path.join(s, "sub")), os.symlink("/etc/hostname", os.path.join(s, "sub", "x")))),
+                           ("deep", lambda s: (os.makedirs(os.path.join(s, "a", "b")), open(os.path.join(s, "a", "b", "x"), "w").close()))):
+            stage = os.path.join(b.state, "artifacts", "wake." + name)
+            make(stage); open(os.path.join(stage, "pryon.manifest"), "w").close(); open(stage + ".ready", "w").close()
+            with open(os.path.join(b.state, "artifacts", "request"), "w") as f: f.write(f"wake:{name}\n")
+            r = root_install(b)
+            check(r.returncode != 0 and f"FAILED wake:{name}:" in r.stdout and not os.path.exists(os.path.join(b.data, "models", name)),
+                  f"{'a link in a folder' if name == 'evil2' else 'a folder in a folder'}: refused by root: {r.stdout.strip()!r}")
 
         # wake word sets installed by hand under the short name get the long one at the next start (main.sh, as root)
         b.model("models/echo-de", wake)                     # the same set as echo-de-DE: goes

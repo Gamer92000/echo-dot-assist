@@ -268,12 +268,14 @@ async function load() {
   state = await (await echo.call('GET', '/api/state')).json();
   render();
   $('app').classList.remove('hidden');
+  if (load.started && unseen()) refreshDevices().catch(() => {});        // a new Echo in the beacons: show it now, not next round
   if (!load.started) {
     load.started = true;
     answerVouch();
     refreshDevices().catch(() => {});
+    getDavs().then(() => { renderDavs(); davsPoll(); }).catch(() => {});
     setInterval(() => { if (!document.hidden) load().catch(() => {}); }, 15000);
-    setInterval(() => { if (!document.hidden) refreshDevices().catch(() => {}); }, 60000);
+    setInterval(() => { if (!document.hidden) refreshDevices().catch(() => {}); }, 30000);
   }
 }
 
@@ -455,22 +457,24 @@ function buildEchos(el, arbSetting) {
   netHead = h('div', { class: 'net-line' });
   netWarn = h('div', { class: 'net-warn' });
   devBox = h('div', { class: 'echos' });
+  scanMark = h('span', { class: 'scan hidden', title: 'Asking your Echos' }, h('span', { class: 'spin' }), 'Checking…');
   const input = h('input', { type: 'text', placeholder: 'IP address', 'aria-label': 'IP address of another Echo' });
   const add = () => {
     const ip = input.value.trim();
     if (!/^[0-9a-zA-Z.:-]+$/.test(ip)) { toast('That is not an address'); return; }
     const l = new Set(store('hm.extra') || []); l.add(ip); store('hm.extra', [...l]); input.value = '';
-    toast('Looking for it…'); refreshDevices();
+    toast('Looking for it…'); refreshDevices().catch(() => {});
   };
   input.onkeydown = (e) => { if (e.key === 'Enter') add(); };
   el.append(h('div', { class: 'card' },
-    h('div', { class: 'card-head' }, h('div', { class: 'grow' }, h('h3', {}, 'Your Echos'), netHead)),
+    h('div', { class: 'card-head' }, h('div', { class: 'grow' }, h('h3', {}, 'Your Echos'), netHead), scanMark),
     netWarn, devBox,
     h('div', { class: 'card-foot' }, h('span', { class: 'help grow add-help' }, 'One missing? Echos on another subnet do not show up by themselves.'),
       input, h('button', { onclick: add }, icon('plus'), 'Add'))));
   syncBox = h('div', { class: 'card' });
+  davsBox = h('div', { class: 'card' });
   modelBox = h('div', { class: 'card' });
-  el.append(syncBox, modelBox);
+  el.append(syncBox, davsBox, modelBox);
 }
 
 function renderNetwork() {
@@ -499,43 +503,70 @@ function renderNetwork() {
 
 async function exportOf(e) { return (await e.call('GET', '/api/export')).text(); }
 const parse = (text) => new Map(text.split('\n').filter((l) => l.includes('=') && !l.startsWith('#')).map((l) => { const i = l.indexOf('='); return [l.slice(0, i), l.slice(i + 1)]; }));
-let mine = new Map(), myArts = null;
+let mine = new Map(), myArts = null, scanMark = null, devRun = null, devNext = null;
+const selfAt = new Set();                // this Echo's own other addresses
+const within = (ms) => { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; };
 
-async function refreshDevices() {
+// Addresses to look at: the ones added by hand, and every Echo this one hears beacons from
+function knownIps() {
   const ips = new Set(store('hm.extra') || []);
   const a = state.arbitration;
   if (a) for (const m of [...a.members, ...(a.others || [])]) if (m.ip) ips.add(m.ip);
+  return ips;
+}
+const unseen = () => [...knownIps()].some((ip) => { const b = baseOf(ip); return b !== location.origin && !selfAt.has(b) && !others.has(b); });
+
+// One round at a time; a call during a round gets one more after it, so what a login or a copy changed shows
+function refreshDevices() {
+  if (devRun) return devNext || (devNext = devRun.catch(() => {}).then(() => { devNext = null; return refreshDevices(); }));
+  devRun = scanDevices().finally(() => { devRun = null; renderDevices(); });
+  renderDevices();
+  return devRun;
+}
+
+// All Echos at once, each shown as soon as it answers: one at a time, a single dead address held the whole list back
+async function scanDevices() {
   mine = parse(await exportOf(echo));
   try { myArts = (await echo.call('GET', '/api/artifacts')).json(); } catch (e) { myArts = null; }
+  const ips = knownIps(), jobs = [];
+  for (const [base, d] of others) if (!ips.has(d.ip)) others.delete(base);     // moved, or added by hand and removed
   for (const ip of ips) {
     const base = baseOf(ip);
-    if (base === location.origin) continue;
-    let d = others.get(base);
-    try {
-      if (!d) {
-        const hello = await (await fetch(base + '/api/hello')).json();
-        if (hello.pub === echo.hello.pub) continue;            // this one, under another address
-        d = { echo: new Echo(base, hello), ip }; others.set(base, d);
-      }
-      d.error = null;
-      const read = async () => {
-        d.values = parse(await exportOf(d.echo)); d.logged = true;
-        d.diff = [...mine].filter(([k, v]) => d.values.has(k) && d.values.get(k) !== v).map(([k]) => k);
-        try { d.arts = (await d.echo.call('GET', '/api/artifacts')).json(); } catch (e) { d.arts = null; }
-      };
-      try { await read(); } catch (e) {
-        d.logged = false;
-        if (e.message === 'old') d.error = 'Older hassmic: update it';
-        else if (e.message !== 'login') throw e;
-        // a member of this Echo's network: this Echo vouches for us there, no button needed (tried once per page)
-        else if ((arbOf(ip) || {}).member && !d.vouchTried) {
-          d.vouchTried = true;
-          if (await d.echo.through(echo).catch(() => 'refused') === 'approved') await read().catch(() => {});
-        }
-      }
-    } catch (e) { if (d) d.error = 'Not reachable'; else others.set(base, { error: 'Not reachable', ip }); }
+    if (base === location.origin || selfAt.has(base)) continue;
+    if (!others.has(base)) others.set(base, { ip });
+    jobs.push(probe(base).finally(renderDevices));
   }
   renderDevices();
+  await Promise.all(jobs);
+}
+
+async function probe(base) {
+  const d = others.get(base);
+  d.looking = true;
+  try {
+    if (!d.echo) {                       // also after a miss: an Echo that was off or rebooting comes back by itself
+      const hello = await (await fetch(base + '/api/hello', { signal: within(5000) })).json();
+      if (hello.pub === echo.hello.pub) { others.delete(base); selfAt.add(base); return; }
+      d.echo = new Echo(base, hello);
+    }
+    d.error = null;
+    const read = async () => {
+      d.values = parse(await exportOf(d.echo)); d.logged = true;
+      d.diff = [...mine].filter(([k, v]) => d.values.has(k) && d.values.get(k) !== v).map(([k]) => k);
+      try { d.arts = (await d.echo.call('GET', '/api/artifacts')).json(); } catch (e) { d.arts = null; }
+    };
+    try { await read(); } catch (e) {
+      d.logged = false;
+      if (e.message === 'old') d.error = 'Older hassmic: update it';
+      else if (e.message !== 'login') throw e;
+      // a member of this Echo's network: this Echo vouches for us there, no button needed (tried once per page)
+      else if ((arbOf(d.ip) || {}).member && !d.vouchTried) {
+        d.vouchTried = true;
+        if (await d.echo.through(echo).catch(() => 'refused') === 'approved') await read().catch(() => {});
+      }
+    }
+  } catch (e) { d.error = 'Not reachable'; }
+  finally { d.looking = false; }
 }
 
 function arbOf(ip) {
@@ -558,15 +589,17 @@ const shortAddr = (base) => base.replace('http://', '').replace(`:${location.por
 
 function renderDevices() {
   if (!devBox) return;
+  scanMark.classList.toggle('hidden', !devRun);
   devBox.innerHTML = '';
   const a = state.arbitration;
   devBox.append(h('div', { class: 'echo me' }, h('span', { class: 'mini-puck on' }),
     h('div', { class: 'echo-body' }, h('div', { class: 'echo-name' }, echo.hello.name), h('div', { class: 'echo-addr' }, location.host),
       h('div', { class: 'echo-meta' }, h('span', { class: 'badge acc' }, 'This Echo'), a && !a.arbitrates ? h('span', { class: 'badge' }, 'Arbitration off') : null))));
   for (const [base, d] of others) {
-    const r = arbOf(d.ip || shortAddr(base)), name = d.echo ? d.echo.hello.name : d.ip;
+    const r = arbOf(d.ip), name = d.echo ? d.echo.hello.name : d.ip;
     const meta = [];
-    if (d.error) meta.push(h('span', { class: 'badge bad' }, d.error));
+    if (!d.echo && d.looking) meta.push(h('span', { class: 'badge' }, h('span', { class: 'spin' }), 'Looking…'));
+    else if (d.error) meta.push(h('span', { class: 'badge bad' }, d.error));
     else if (!d.logged) meta.push(h('span', { class: 'badge' }, 'Not logged in'));
     else if (d.diff.length) meta.push(h('span', { class: 'badge warn' }, `${plural(d.diff.length, 'setting')} differ${d.diff.length === 1 ? 's' : ''}`));
     else meta.push(h('span', { class: 'badge ok' }, icon('check'), 'Same settings'));
@@ -578,7 +611,7 @@ function renderDevices() {
         h('div', { class: 'echo-meta' }, meta), login),
       h('a', { class: 'echo-go', href: base + '/', title: `${name}: its settings page`, 'aria-label': `Open the settings page of ${name}` }, icon('ext'))));
   }
-  renderSync(); renderModels();
+  renderSync(); renderDavs(); renderModels();
 }
 
 async function loginOther(d, b) {
@@ -703,6 +736,228 @@ async function copySettings(names, list) {
   await refreshDevices();
 }
 
+// ---------------------------------------------------------------- download Amazon's models on this Echo
+
+// What Amazon hands out (scripts/lib/artifacts.sh's lists): wake words per language, whisper (one model, whatever the
+// language), and the newer sound detection model (kept by region, not language).
+const WW_KEYS = ['alexa', 'echo', 'computer', 'amazon', 'ziggy'];
+const LOCALES = ['de-DE', 'en-US', 'en-GB', 'fr-FR', 'it-IT', 'es-ES', 'ja-JP', 'pt-BR', 'en-CA', 'fr-CA', 'en-AU', 'en-IN', 'es-MX'];
+const WW_NAMES = { alexa: 'Alexa', echo: 'Echo', computer: 'Computer', amazon: 'Amazon', ziggy: 'Ziggy' };
+// The Amazon sites with Alexa (davs.c has the same list).  An account lives in one region; any site of it takes the code.
+const AMAZON_SITES = [
+  ['North and South America', ['com', 'ca', 'com.mx', 'com.br']],
+  ['Europe', ['co.uk', 'de', 'fr', 'it', 'es']],
+  ['Asia and Pacific', ['co.jp', 'com.au', 'in']],
+];
+const SITE_OF = { 'en-GB': 'co.uk', 'en-IE': 'co.uk', 'en-CA': 'ca', 'fr-CA': 'ca', 'es-MX': 'com.mx', 'pt-BR': 'com.br', 'en-AU': 'com.au',
+  'en-IN': 'in', de: 'de', fr: 'fr', it: 'it', es: 'es', pt: 'es', ja: 'co.jp' };
+const defaultSite = () => { const l = navigator.language || ''; return store('hm.amazon') || SITE_OF[l] || SITE_OF[l.split('-')[0]] || 'com'; };
+const davsLoc = () => dv.locale || store('hm.davsLocale') || LOCALES.find((l) => l === (navigator.language || '').replace('_', '-')) || 'de-DE';
+
+let davsBox, davs = null, davsT = null, davsKey = '', davsUntil = 0, davsTotal = 0, davsClock = null;
+// the user's picks, a run in progress (one row per pick), and the outcome of the last one (kept over the reload that
+// follows an install, in sessionStorage)
+const dv = { locale: null, ticks: new Map(), job: null, last: null };
+try { dv.last = JSON.parse(sessionStorage.getItem('hm.davsResult')); sessionStorage.removeItem('hm.davsResult'); } catch (e) { /* none */ }
+
+async function getDavs() {
+  try { davs = await (await echo.call('GET', '/api/davs')).json(); } catch (e) { davs = null; }
+  if (davs && davs.state === 'waiting') { davsUntil = Date.now() + davs.left_s * 1000; davsTotal = Math.max(davsTotal, davs.left_s); }
+  else davsTotal = 0;
+  return davs;
+}
+
+function davsCatalog() {
+  const loc = davsLoc();
+  return [
+    ...WW_KEYS.map((k) => ({ key: k, locale: loc, id: `wake:${k}-${loc}`, group: 'Wake words', name: `${WW_NAMES[k]} (${loc})` })),
+    { key: 'whisper', locale: 'en-US', id: 'whisper', group: 'Models', name: 'Whisper detection', note: 'Tells Home Assistant when a request was whispered' },
+    { key: 'aed', locale: loc, id: 'sound', group: 'Models', name: 'Sound detection, newer model', note: 'Replaces the one in the firmware' },
+  ];
+}
+const callout = (kind, ...kids) => h('div', { class: 'callout ' + kind }, icon(kind === 'ok' ? 'check' : kind === 'info' ? 'info' : 'warn'), h('div', { class: 'grow' }, ...kids));
+const stepper = (cur) => h('ol', { class: 'stepper' }, ['Sign in', 'Enter the code', 'Pick and download'].map((t, i) =>
+  h('li', { class: i + 1 < cur ? 'done' : i + 1 === cur ? 'cur' : '' }, h('span', { class: 'st-l' }, t))));
+
+function renderDavs(force) {
+  if (!davsBox) return;
+  // rebuilt only when something shown changed: a poll that finds all as it was leaves an open drop-down alone
+  const key = JSON.stringify([davs && { ...davs, left_s: 0 }, dv, [...dv.ticks], myArts && myArts.artifacts.map((a) => a.id)]);
+  if (!force && key === davsKey) return;
+  davsKey = key;
+  davsBox.innerHTML = '';
+  davsBox.append(cardHead('Download from Amazon', 'More wake words and Amazon\'s newer models, straight from Amazon onto this Echo. Once here, they can be copied to your other Echos below.', 'ext'));
+  if (!davs) { davsBox.append(empty('warn', 'This Echo did not say where its Amazon sign-in stands: it may be restarting.')); return; }
+  const body = h('div', { class: 'card-body' });
+  davsBox.append(body);
+  if (!davs.dha) {
+    body.append(callout('info', h('p', {}, 'This model cannot sign in to Amazon itself: the Echo Dot 3 proves who it is in a way not worked out yet. Download on another Echo and copy the models here, or use scripts/artifacts.sh.')));
+    return;
+  }
+  if (davs.state === 'none') davsSignIn(body);
+  else if (davs.state === 'waiting') davsCode(body);
+  else davsPicker(body);
+  davsTick();
+}
+
+function davsSignIn(body) {
+  const site = h('select', { id: 'davs-site' }, AMAZON_SITES.map(([region, list]) => h('optgroup', { label: region },
+    list.map((s) => h('option', { value: s, selected: s === defaultSite() }, `amazon.${s}`)))));
+  site.onchange = () => store('hm.amazon', site.value);
+  const go = h('button', { class: 'primary', onclick: async () => {
+    go.disabled = true;
+    try { await echo.call('POST', '/api/davs/login', site.value); } catch (e) { toast(errText(e)); }
+    await getDavs(); renderDavs(true); davsPoll();
+  } }, icon('key'), 'Get a sign-in code');
+  body.append(...[stepper(1),
+    davs.error ? callout('bad', h('p', {}, davs.error)) : null,
+    h('div', { class: 'field' }, h('label', { for: 'davs-site' }, 'Your Amazon'), site,
+      h('p', { class: 'help' }, 'The site you shop on. Any site in your account\'s region works.'))].filter(Boolean));
+  davsBox.append(h('div', { class: 'card-foot' },
+    h('span', { class: 'help grow' }, 'This Echo then shows up in your Alexa app, as Echos do, until you sign it out here.'), go));
+}
+
+function davsCode(body) {
+  const site = davs.url.replace(/^https:\/\/www\./, '').replace(/\/code$/, '');
+  const cancel = h('button', { onclick: async () => {
+    cancel.disabled = true;
+    try { await echo.call('POST', '/api/davs/cancel'); } catch (e) { toast(errText(e)); }
+    await getDavs(); renderDavs(true);
+  } }, 'Cancel');
+  const code = davs.code;   // none yet: the Echo is still asking Amazon for one
+  body.append(stepper(2),
+    h('div', { class: 'davs-code' + (code ? '' : ' pending') },
+      h('div', { class: 'code', title: 'The code to enter on Amazon' }, code || '······'),
+      h('div', { class: 'davs-code-r' },
+        h('p', {}, 'Enter this code on ', h('b', {}, `${site}/code`), ', signed in to your Amazon account. This page carries on by itself.'),
+        h('div', { class: 'btns' }, code ? h('a', { class: 'btn primary', href: davs.url, target: '_blank', rel: 'noopener' }, `Open ${site}/code`, icon('ext')) : null, cancel))),
+    h('div', { class: 'davs-wait' }, h('span', { class: 'spin' }), code ? 'Waiting for the code' : 'Getting a code from Amazon…', h('span', { class: 'grow' }),
+      code ? [h('span', { class: 'davs-left' }), ' left'] : null),
+    h('div', { class: 'progress thin' }, h('div', { class: 'davs-bar' })));
+}
+
+// the countdown, in place: a rebuild every second would be the flicker this card used to have
+function davsTick() {
+  const el = davsBox && davsBox.querySelector('.davs-left');
+  if (!el) return;
+  const s = Math.max(0, Math.round((davsUntil - Date.now()) / 1000));
+  el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  const bar = davsBox.querySelector('.davs-bar');
+  if (bar) bar.style.width = `${davsTotal ? (100 * s) / davsTotal : 0}%`;
+}
+
+function davsLast() {
+  const r = dv.last;
+  if (!r) return null;
+  // what root's installer said (artifacts.c "result"): "OK <id> FAILED <id>: why ..."
+  const rootBad = r.installed ? ((myArts && myArts.result) || '').split(/ (?=OK |FAILED )/).filter((l) => l.startsWith('FAILED ')).map((l) => l.slice(7)) : [];
+  const bad = [...r.bad.map(([n, why]) => `${n}: ${why}`), ...rootBad, ...(r.install ? [`Installing: ${r.install}`] : [])];
+  const dismiss = h('button', { class: 'link', onclick: () => { dv.last = null; renderDavs(); } }, 'Dismiss');
+  return callout(bad.length ? (r.ok.length ? 'warn' : 'bad') : 'ok',
+    r.ok.length ? h('p', {}, `${r.installed ? 'Installed' : 'Downloaded'}: ${nameList(r.ok)}.`) : null,
+    bad.length ? h('p', {}, r.ok.length ? 'Not this time:' : 'Nothing arrived:') : null,
+    bad.length ? h('ul', {}, bad.map((b) => h('li', {}, b))) : null, dismiss);
+}
+
+function davsPicker(body) {
+  const job = dv.job, has = (id) => !!(myArts && myArts.artifacts.some((a) => a.id === id));
+  const out = h('button', { class: 'small', disabled: !!job, onclick: async () => {
+    if (!confirm('Sign this Echo out of Amazon? It leaves your Alexa app; downloading again needs a new code.')) return;
+    try { await echo.call('POST', '/api/davs/logout'); } catch (e) { toast(errText(e)); }
+    await getDavs(); renderDavs(true);
+  } }, 'Sign out');
+  body.append(h('div', { class: 'davs-acct' }, h('span', { class: 'ic' }, icon('check')),
+    h('div', { class: 'grow' }, h('b', {}, davs.device || 'Signed in'),
+      h('div', { class: 'help' }, `Signed in to amazon.${davs.domain}; the Alexa app lists this Echo under that name.`)), out));
+  const last = davsLast();
+  if (last) body.append(last);
+  else if (davs.error && !job) body.append(callout('bad', h('p', {}, davs.error)));
+  const lang = h('select', { id: 'davs-lang', disabled: !!job, onchange: () => { dv.locale = lang.value; store('hm.davsLocale', lang.value); renderDavs(); } },
+    LOCALES.map((l) => h('option', { value: l, selected: l === davsLoc() }, l)));
+  davsBox.append(h('div', { class: 'pickbar' }, h('label', { class: 'pick-l', for: 'davs-lang' }, 'Language'), lang,
+    h('span', { class: 'pick-hint' }, 'Which wake words exist depends on it')));
+
+  const list = h('div', { class: 'changes' });
+  let group = '';
+  for (const c of davsCatalog()) {
+    if (c.group !== group) { group = c.group; list.append(h('div', { class: 'grp' }, group)); }
+    const it = job && job.items.find((x) => x.id === c.id), on = !!dv.ticks.get(c.id);
+    const cb = checkbox(on, (v) => { dv.ticks.set(c.id, v); dv.last = null; renderDavs(); }, c.name);
+    cb.disabled = !!job;
+    let st = has(c.id) ? h('span', { class: 'badge ok' }, icon('check'), 'Installed') : null;
+    if (it) st = it.status === 'run' ? [h('span', { class: 'spin' }), it.pct ? `${it.pct} %` : 'Asking Amazon…']
+      : it.status === 'ok' ? h('span', { class: 'badge ok' }, icon('check'), 'Downloaded')
+      : it.status === 'bad' ? h('span', { class: 'badge bad' }, 'Failed') : h('span', { class: 'davs-none' }, 'Waiting');
+    list.append(h('label', { class: `change davs-row ${on ? 'on' : 'off'}${job ? ' idle' : ''}` }, cb,
+      h('div', { class: 'ch-name' }, c.name, c.note ? h('div', { class: 'ch-sub' }, c.note) : null,
+        it && it.why ? h('div', { class: 'ch-sub bad' }, it.why) : null),
+      h('div', { class: 'davs-st' }, st)));
+  }
+  davsBox.append(list);
+
+  const n = davsCatalog().filter((c) => dv.ticks.get(c.id)).length;
+  const now = job && job.items.find((x) => x.status === 'run'), elsewhere = !job && davs.state === 'busy';   // another browser's run
+  davsBox.append(h('div', { class: 'card-foot sync-foot' },
+    h('div', { class: 'count grow' }, job ? (job.phase === 'install' ? 'Installing: the satellite restarts for a few seconds…' : `Downloading ${now ? now.name : ''}…`)
+      : elsewhere ? `Another browser is downloading ${davs.busy} (${davs.progress} %)`
+      : n ? [h('b', {}, plural(n, 'download')), ', then the satellite restarts once to install them'] : 'Tick what to download'),
+    h('button', { class: 'primary', disabled: !!job || elsewhere || !n, onclick: downloadAmazon },
+      job ? [h('span', { class: 'spin' }), job.phase === 'install' ? 'Installing…' : 'Downloading…'] : 'Download and install')));
+}
+
+async function downloadAmazon() {
+  const picks = davsCatalog().filter((c) => dv.ticks.get(c.id));
+  if (!picks.length) return;
+  dv.last = null;
+  dv.job = { phase: 'download', items: picks.map((c) => ({ id: c.id, name: c.name, status: 'wait', pct: 0, why: '' })) };
+  renderDavs();
+  try {
+    for (const [i, p] of picks.entries()) {
+      const it = dv.job.items[i];
+      it.status = 'run'; renderDavs();
+      try { await echo.call('POST', '/api/davs/fetch', `${p.key} ${p.locale}`); }
+      catch (e) { it.status = 'bad'; it.why = errText(e).replace(/^Error: /, ''); renderDavs(); continue; }
+      for (let missed = 0; ;) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const st = await getDavs();
+        if (!st) {   // one lost answer (Wi-Fi) is no end; a minute of them is
+          if (++missed < 60) continue;
+          it.status = 'bad'; it.why = 'this Echo stopped answering'; break;
+        }
+        missed = 0;
+        if (st.state === 'busy') { it.pct = st.progress || 0; renderDavs(); continue; }
+        if (st.done) it.status = 'ok';            // each pick's own end: "done" only tells of the last one
+        else { it.status = 'bad'; it.why = st.error || 'it did not arrive'; }
+        break;
+      }
+      renderDavs();
+    }
+    const items = dv.job.items, ok = items.filter((x) => x.status === 'ok');
+    const result = { ok: ok.map((x) => x.name), bad: items.filter((x) => x.status === 'bad').map((x) => [x.name, x.why]), installed: false };
+    if (!ok.length) { dv.last = result; return; }
+    dv.job.phase = 'install'; renderDavs();
+    try { await echo.call('POST', '/api/artifact/install'); await waitBack(echo); }
+    catch (e) { result.install = errText(e).replace(/^Error: /, ''); dv.last = result; return; }
+    result.installed = true;
+    dv.ticks.clear();
+    // the satellite restarted with the new models: the page starts over (wake word lists), and shows the outcome then
+    try { sessionStorage.setItem('hm.davsResult', JSON.stringify(result)); } catch (e) { dv.last = result; return; }
+    location.reload();
+  } finally {
+    dv.job = null; renderDavs();
+  }
+}
+
+function davsPoll() {
+  clearTimeout(davsT);
+  if (!davsClock) davsClock = setInterval(davsTick, 1000);
+  const quick = davs && (davs.state === 'waiting' || davs.state === 'busy');
+  davsT = setTimeout(async () => {
+    if (!document.hidden && !dv.job) { await getDavs(); renderDavs(); }   // a run polls by itself
+    davsPoll();
+  }, quick ? 2000 : 15000);
+}
+
 // ---------------------------------------------------------------- copy models (Amazon's artifacts) between Echos
 
 const CHUNK = 192 * 1024;
@@ -726,7 +981,7 @@ function renderModels() {
   const echos = [{ name: echo.hello.name, key: '', e: echo, arts: myArts }, ...ready().filter((d) => d.arts).map((d) => ({ name: d.echo.hello.name, key: d.echo.base, e: d.echo, arts: d.arts }))];
   const all = new Map();
   for (const x of echos) for (const a of x.arts.artifacts) if (!all.has(a.id)) all.set(a.id, a);
-  if (!all.size) { modelBox.append(empty('box', 'None of these Echos has any of Amazon\'s extra models yet: run scripts/artifacts.sh for one, then copy from it here.')); return; }
+  if (!all.size) { modelBox.append(empty('box', 'None of these Echos has any of Amazon\'s extra models yet: download them above, or run scripts/artifacts.sh, then copy from here.')); return; }
   // where each model comes from: this Echo if it has it, else the first that does
   const source = (id) => echos.find((x) => x.arts.artifacts.some((a) => a.id === id));
   const theirs = (x, id) => x.arts.artifacts.find((a) => a.id === id);
@@ -774,9 +1029,9 @@ async function transfer(job, done0, total) {
   for (const f of art.files) {
     for (let off = 0; off < f.size; off += CHUNK) {
       const len = Math.min(CHUNK, f.size - off);
-      const r = await from.e.call('GET', `/api/artifact/read/${art.id}/${f.name}/${off}/${len}`);
+      const r = await from.e.call('GET', `/api/artifact/read/${art.id}/${encodeURIComponent(f.name)}/${off}/${len}`);
       if (r.bytes.length !== len) throw new Error(`${from.name} sent less of ${f.name} than asked`);
-      await to.e.call('POST', `/api/artifact/chunk/${art.id}/${f.name}/${off}`, r.bytes);
+      await to.e.call('POST', `/api/artifact/chunk/${art.id}/${encodeURIComponent(f.name)}/${off}`, r.bytes);
       done += len;
       copying = { text: `${artLabel(art)}: ${from.name} → ${to.name}, ${mb(done)} of ${mb(art.size)}`, done: done0 + done, total };
       renderModels();

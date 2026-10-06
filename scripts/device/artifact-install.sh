@@ -46,6 +46,26 @@ ok=0
 say() { echo "$1" >> $A/result.tmp; }
 good() { case $1 in ""|[!A-Za-z0-9]*|*[!A-Za-z0-9._-]*) return 1;; esac; [ ${#1} -le 63 ]; }
 
+# the staged folder $1 into root's $2: plain files, and (when $3 is 1) folders of plain files one level down, as
+# artifacts.c stages them (whisper_components/, BDPGeneratedFiles/).  A link, a deeper folder or a bad name: 1, $why says.
+# Directories are made here, root's; files are read as the daemon's user, so a link swapped in meanwhile gains nothing.
+copy_in() {
+    for f in $1/* $1/.[!.]* $1/..?*; do
+        [ -e "$f" ] || [ -L "$f" ] || continue                  # the patterns that matched nothing
+        b=${f##*/}
+        if ! good "$b" || [ -L "$f" ]; then why="$b is not a plain file"; return 1; fi
+        if [ -d "$f" ] && [ "$3" = 1 ]; then
+            mkdir "$2/$b" && chmod 755 "$2/$b" || { why="cannot write $2/$b"; return 1; }
+            copy_in "$f" "$2/$b" 0 || return 1
+        elif [ -f "$f" ]; then
+            $READ_AS cat "$f" > "$2/$b" || { why="cannot copy $b (space?)"; return 1; }
+            chmod 644 "$2/$b"
+            n=$((n + 1))
+        else why="$b is not a plain file"; return 1
+        fi
+    done
+}
+
 install_one() {
     id=$1
     case $id in
@@ -58,15 +78,9 @@ install_one() {
     [ -f $stage.ready ] && [ -d $stage ] && [ ! -L $stage ] || { say "FAILED $id: not staged"; return; }
     rm -rf $tmp; mkdir $tmp || { say "FAILED $id: cannot write $tmp"; return; }
     n=0
-    for f in $stage/* $stage/.[!.]* $stage/..?*; do
-        [ -e "$f" ] || [ -L "$f" ] || continue                  # the patterns that matched nothing
-        b=${f##*/}
-        if ! good "$b" || [ -L "$f" ] || [ ! -f "$f" ]; then rm -rf $tmp; say "FAILED $id: $b is not a plain file"; return; fi
-        $READ_AS cat "$f" > "$tmp/$b" || { rm -rf $tmp; say "FAILED $id: cannot copy $b (space?)"; return; }
-        n=$((n + 1))
-    done
+    copy_in $stage $tmp 1 || { rm -rf $tmp; say "FAILED $id: $why"; return; }
     [ $n -gt 0 ] || { rm -rf $tmp; say "FAILED $id: empty"; return; }
-    chmod 755 $tmp; chmod 644 $tmp/*
+    chmod 755 $tmp
     old=${tmp%/*}/.old-${dest##*/}
     rm -rf $old
     [ -e $dest ] && mv $dest $old

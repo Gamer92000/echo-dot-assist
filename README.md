@@ -282,8 +282,10 @@ Echo this one hears (and any you add by address). Echos in one network trust eac
 is let in on the others without their buttons; an Echo's own login page offers "Log in through <another Echo>" for
 the same. Debug access still takes a press of that Echo's own button. Then "Copy settings"
 shows every setting of this Echo beside the others' (differences marked): tick the settings and the Echos to copy them
-to. "Copy models" does the same for Amazon's models that `scripts/artifacts.sh` installs (wake words, whisper detection,
-the newer sound detection model), between any of your Echos: run the script for one Echo, copy from it to the rest.
+to. "Download from Amazon" fetches those models on the Echo itself (wake words, whisper detection, the newer sound
+detection model): sign in with a code you enter on your Amazon site, tick what you want. On the Echo Dot 3 this is
+not built (its newer attestation to Amazon is not reversed); there, or without an Amazon login, "Copy models" moves
+the models between any of your Echos: run the script or download on one, copy from it to the rest.
 A wake word set is tried on the receiving Echo's own engine first, and each Echo that got something restarts its
 satellite once. "Export" saves the settings as
 `hassmic-settings.conf` (name=value lines, without the Echo's name, keys and pairings); "Import" applies such a file,
