@@ -83,6 +83,17 @@ Details:
   Echo, then on one already in (a tap sounds; the Bluetooth "connected" sound when it worked, "disconnected" when it
   did not within 2 min). Give every Echo its own `NAME`. Other satellites (ESP32 and so on) are not part of it; Home Assistant itself then lets the first one
   that reports the wake word answer, and the Echo that is second now just goes quiet instead of flashing an error.
+- **Echos together with Kiosk Satellite tablets**: "Arbitration mode" on the settings page switches an Echo from that
+  protocol to [Kiosk Satellite](https://kiosksatellite.com/docs/voice-satellite/#wake-word-arbitration)'s, so that Echos
+  and tablets listening for the same wake word ("Alexa") answer once between them: the device that heard it loudest
+  over its room answers, after a wait of the "Kiosk Satellite window" (400 ms, as on the tablets). It costs what that
+  protocol does not have: anyone on the network can claim every wake word and keep the Echo silent, an Echo in a
+  conversation gets no preference, every wake word waits the window even when no other device is around, a claim lost
+  on Wi-Fi leaves two devices answering (Home Assistant then lets the first through), and the firewall admits UDP 2330
+  while the mode is on. The page shows both side by side, with what each gives and what it costs. Use the same mode on every Echo: one in each mode do not settle
+  wake words with each other (the page warns). The Echo's loudness is not yet calibrated against a tablet's mic:
+  "Kiosk Satellite loudness offset" (-20 to +20 dB) shifts it by hand — raise it if a tablet answers when you spoke to
+  the Echo, lower it the other way round; keep it the same on every Echo.
 - **Buttons**: action = talk without the wake word / pause and resume music / stop an alarm / cancel a request while
   Home Assistant is still listening or thinking (as on a Voice PE; the wake word then cancels it too and listens
   again; ESPHome only); volume in 10 % steps; both volume buttons held for 2 s = pair for arbitration (see above);
@@ -372,7 +383,8 @@ Open issues and measurements: [PLAN.md](PLAN.md).
   `ace_otad` never get out. hassmic itself may reach any address. Put the Echo on a network without internet as a second
   layer.
 - **Inbound**: TCP 16384–32767 only (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 updates, 28931 settings
-  page), UDP 16384–32767 (28930 arbitration between Echos).
+  page), UDP 16384–32767 (28930 arbitration between Echos), and UDP 2330 only while arbitration is in Kiosk Satellite
+  mode (their port, fixed).
 - **Settings page**: plain HTTP (an Echo has no certificate a browser takes), so it never shows a secret (API key,
   Sendspin token, network keys). A browser gets in only by a press of the Echo's action button while its login waits;
   two browsers asking at once are both refused. Every request after that is signed with a key only that browser and
@@ -392,7 +404,8 @@ Open issues and measurements: [PLAN.md](PLAN.md).
   before its own buttons were held; someone on the network who asks as well only makes it fail, and the newcomer's
   buttons go first. The key travels encrypted to the receiving Echo, so it is not readable in Home Assistant's states,
   traces or logbook. Rounds are authenticated with the key and cannot be replayed. The keys are in
-  `state/arb_key` and `state/arbitration`.
+  `state/arb_key` and `state/arbitration`. Not so in Kiosk Satellite mode: its claims carry no key (it has none), so
+  any device on the network can silence the Echo while that mode is on.
 - **Updates**: only bundles signed with your `secrets/update.key` (pushed from your PC) or with the project's release key
   (`keys/release.pub`; downloaded by hassmic itself, only once a channel is picked under "Online updates") are installed. Root
   checks the signature with the tool and keys from the system partition or the installed copy before anything is

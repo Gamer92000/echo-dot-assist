@@ -695,6 +695,19 @@ Run in this order. Each step says what it proves.
       (`{"voiceEnergy":10690,"ambientEnergy":66408,..}`, 150 ms); fake_ha_arbitration passes (its scores are given).
       Not done: a spoken wake word on the Echo (the log then shows both scores), two Echos, biscuit and radar (their
       libasp unread: the fallback applies if the property is missing)
+- [~] Arbitration with Kiosk Satellite (asked 2026-10-05; analysis in `docs/kiosk-arbitration.md`): theirs is UDP
+      broadcast on 2330, plain JSON claims (phrase, dB over the noise floor), ±400 ms window, no authentication, no
+      priority, no "answers" message. Done 2026-10-06 as a second mode rather than a bridge: setting
+      `arbitration_mode` (`hassmic` default / `kiosk`), page-only, the page compares the two. Kiosk mode speaks only
+      their protocol, as they designed it (three copies at 0/15/30 ms, ±window, highest e, lower id on a tie; no
+      priority, always waits), window `arbitration_window` 100-500 ms (400). Score: their formula on micAsr's last 3 s,
+      frames lifted +30 dB first (micAsr runs ~30 dB under speech level, which would sit on their -75 dBFS floor clamp),
+      plus the owner's `arbitration_offset` (-20..20 dB, default 0) added to e on the wire, to even out by ear.
+      Beacons flag the mode (1 quiet + 2 kiosk), so own-mode Echos do not wait and the page warns of mixed modes.
+      Firewall: `lockdown.sh` admits UDP 2330 while `state/config` has `arbitration_mode=kiosk`. fake_ha_arbitration
+      (fake kiosk socket): wire format, loudest wins, kiosk louder silences both, other phrase and malformed claims
+      ignored, no priority, offset flips the winner, back to own mode. Not done: a device test next to a real kiosk (calibrate the +30 dB lift,
+      claim delay over Wi-Fi), the firewall rule on the Echo
 - [x] Firewall service stuck at boot on the Echo 2 (2026-09-30, found when a push update got "the installer did not
       answer"): `main.sh firewall` scanned /proc/*/cmdline with `tr` for old lockdown watchers; a process (pid 209)
       exited between the open and the read, and radar's toybox `tr` (Fire OS 6572) then spun on the read error for ever

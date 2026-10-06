@@ -61,11 +61,29 @@
  *   handoff entity  "HMA1 <pub base64>[ <network hex> <to: first 8 bytes of its key, hex> <key base64>]"
  * Little endian; id: first 8 bytes of the public key; kw: BLAKE2b of the keyword in lower case; tag: keyed BLAKE2b with
  * a key derived from K.
+ *
+ * Kiosk Satellite mode (the "arbitration_mode" setting; docs/kiosk-arbitration.md): rounds the way Kiosk Satellite
+ * (2026.10.1) settles them, so that Echos and kiosks listening for the same phrase answer once between them.  Written
+ * from the description of its wire format, no code of theirs (CC BY-NC-ND).  As they designed it, and nothing more:
+ *   claim  {"ks":"wake","v":1,"id":"<16 hex>","n":<random 0..2^30>,"p":"<phrase>","e":<dB, 0.1>}  UDP broadcast to
+ *          port 2330, three copies at 0, 15 and 30 ms; id:n tells copies apart.  p: the wake word in lower case,
+ *          whitespace collapsed ("alexa", "hey jarvis"); e: main.c's kiosk_score, their loudness over the noise floor.
+ *   round  wait the window (setting, 100-500 ms, 400 as theirs), then every claim for our phrase that arrived within
+ *          +-window of ours competes: the highest e answers, an exact tie goes to the lower id.
+ * So: no key (anyone on the LAN can claim and silence this Echo), no priority for an Echo in a conversation or
+ * ringing, no "answers" message (a claim Wi-Fi drops leaves both answering; Home Assistant's 2 s cooldown then lets the
+ * first one through), and a wait of the window on every wake word, as nothing tells whether anyone else listens.  Our
+ * id is the hex of our public key's first 8 bytes: stable across restarts.  The Echo network runs on as before (keys,
+ * beacons, the settings pages); our beacons say "no rounds" (flag 1), so Echos in our own mode do not wait for claims
+ * we never send, and "kiosk mode" (flag 2, with arbitration on), so the pages can show who is in which.  2330 lies
+ * outside the firewall's inbound 16384-32767: lockdown.sh admits it while state/config says arbitration_mode=kiosk.
+ * The socket is the loop's own: opened and closed there as the mode changes, so no other thread ever polls a closed one.
  */
 #include "arb.h"
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
+#include <math.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
 #include <net/if.h>
@@ -106,6 +124,12 @@
 #define BLOB   (32 + 24 + 16 + 32)
 
 enum { T_BEACON = 1, T_ENTITY = 2, T_CLAIM = 4, T_PAIR = 5, T_GIVE = 6 };
+enum { F_QUIET = 1, F_KIOSK = 2 };                      /* the beacon's flags byte */
+
+#define KIOSK_PORT    2330      /* Kiosk Satellite's, fixed (HASSMIC_KIOSK_PORT: tests) */
+#define KIOSK_KEEP_MS 2000      /* their claims kept this long: copies within it are the same claim */
+#define KIOSK_GAP_MS  15        /* between the three copies */
+#define KIOSK_PHRASE  64
 
 static pthread_mutex_t lk = PTHREAD_MUTEX_INITIALIZER; /* everything below; taken after core_lock, never before it */
 static int sock = -1, running, arbitrate = 1;    /* arbitrate: take part in rounds (the network runs regardless) */
@@ -121,7 +145,7 @@ static long long started, beacon_at, answer_at;
 static int reported_peers = -1;
 static atomic_int notify;
 
-static struct peer { uint8_t id[8]; uint64_t ctr; long long seen; char node[NLEN]; uint32_t ip; int quiet; } peers[NPEER];   /* node, ip, quiet (no rounds): from its beacons */
+static struct peer { uint8_t id[8]; uint64_t ctr; long long seen; char node[NLEN]; uint32_t ip; int quiet, kiosk; } peers[NPEER];   /* node, ip, quiet (no rounds), kiosk: from its beacons */
 static struct claim { uint8_t id[8], kw[8]; int score, prio, won; long long at; } claims[NCLAIM];
 static unsigned claim_next;
 static struct cand {                                    /* Echos outside our network */
@@ -141,7 +165,21 @@ static long long pair_at, pair_until, pair_sent, give_at;
 static int pair_gave, give_left;
 static atomic_int pair_event;
 static uint8_t give_pkt[5 + 32 + 8 + BLOB];
-static struct { uint8_t kw[8]; int score, prio; long long at; } round_;
+static struct { uint8_t kw[8]; int score, prio, kiosk; long long at; } round_;
+
+/* Kiosk Satellite mode.  kround.e and kclaims[].e: dB x 10, as on the wire */
+static int mode = ARB_HASSMIC, kwindow = 400, koffset;     /* koffset: dB */
+static int ksock = -1;                                  /* the loop's: opened and closed there only */
+static long long kfailed;
+static char kid[17];
+static struct kclaim { char id[65], p[KIOSK_PHRASE]; long long n, at; int e; } kclaims[NCLAIM];
+static unsigned kclaim_next;
+static long long kheard;                                /* the last claim from another device, for the settings page */
+static struct { char p[KIOSK_PHRASE]; int e; } kround;
+static char kpkt[300];
+static size_t kpkt_n;
+static int kcopies;                                     /* copies of our claim still to send, the next at kcopy_at */
+static long long kcopy_at;
 
 static long long now_ms(void)
 {
@@ -304,7 +342,12 @@ static void beacon(void)
 {
     struct pkt b; uint8_t l = (uint8_t)strlen(node);
     head(&b, T_BEACON); put(&b, pk, 32); put64(&b, in_net ? net_id : 0); put(&b, &l, 1); put(&b, node, l);
-    if (in_net) { uint8_t quiet = 1; put64(&b, next_ctr()); if (!arbitrate) put(&b, &quiet, 1); tag(&b); }
+    if (in_net) {
+        /* kiosk: takes part, the other way (an Echo with arbitration off is just quiet, whatever its mode) */
+        uint8_t f = (uint8_t)((!arbitrate || mode == ARB_KIOSK ? F_QUIET : 0) | (arbitrate && mode == ARB_KIOSK ? F_KIOSK : 0));
+        put64(&b, next_ctr()); if (f) put(&b, &f, 1);
+        tag(&b);
+    }
     send_pkt(&b);
     if (self_ent[0]) {                                  /* where Home Assistant shows our key: peers need not guess */
         uint8_t e = (uint8_t)strlen(self_ent);
@@ -458,7 +501,7 @@ static void on_packet(const uint8_t *p, size_t n, long long now, uint32_t ip)
         get_node(&r, nd);
         if (r.bad || !memcmp(pub, pk, 32)) return;
         if (in_net && net == net_id) {                  /* a member */
-            uint64_t c = get64(&r); int known = 0, quiet = r.end - r.p == 17 && (r.p[0] & 1);    /* flags: 1 = no rounds */
+            uint64_t c = get64(&r); int known = 0, flags = r.end - r.p == 17 ? r.p[0] : 0;
             if (r.bad || (r.end - r.p != 16 && r.end - r.p != 17) || !tag_ok(p, n)) return;
             for (int i = 0; i < NPEER; i++) {
                 known |= !memcmp(peers[i].id, pub, 8) && ago(peers[i].seen, now, PEER_TTL_MS);
@@ -471,7 +514,7 @@ static void on_packet(const uint8_t *p, size_t n, long long now, uint32_t ip)
             /* one we did not count yet (it just joined, or we did): answer, or it would not count us until our next beacon.
              * Not rate limited: only a holder of K gets here, once per member */
             int f = fresh(pub, c, now);
-            if (f) { struct peer *pp = peer(pub); snprintf(pp->node, NLEN, "%s", nd); pp->ip = ip; pp->quiet = quiet; }
+            if (f) { struct peer *pp = peer(pub); snprintf(pp->node, NLEN, "%s", nd); pp->ip = ip; pp->quiet = flags & F_QUIET; pp->kiosk = !!(flags & F_KIOSK); }
             if (f && !known) beacon();
             return;
         }
@@ -521,18 +564,213 @@ static void on_packet(const uint8_t *p, size_t n, long long now, uint32_t ip)
     }
 }
 
+/* ---------------------------------------------------------------- Kiosk Satellite mode (lk held) */
+
+/* Their phrase: lower case, whitespace trimmed and collapsed */
+static void kiosk_phrase(char out[KIOSK_PHRASE], const char *s)
+{
+    size_t n = 0; int gap = 0;
+    for (; *s; s++) {
+        if (isspace((unsigned char)*s)) { gap = n > 0; continue; }
+        if (gap && n + 1 < KIOSK_PHRASE) out[n++] = ' ';
+        gap = 0;
+        if (n + 1 < KIOSK_PHRASE) out[n++] = (char)tolower((unsigned char)*s);
+    }
+    out[n] = 0;
+}
+
+static const char *jws(const char *p) { while (isspace((unsigned char)*p)) p++; return p; }
+
+/* A JSON string, p just past its opening quote, into out (UTF-8): past the closing quote, NULL if malformed or too long */
+static const char *jstring(const char *p, char *out, size_t cap)
+{
+    size_t n = 0;
+    while (*p != '"') {
+        unsigned c = (unsigned char)*p++; int u = 0;
+        if (c < 0x20) return NULL;                      /* the end of the datagram among them */
+        if (c == '\\') {
+            switch (c = (unsigned char)*p++) {
+            case '"': case '\\': case '/': break;
+            case 'b': c = '\b'; break;
+            case 'f': c = '\f'; break;
+            case 'n': c = '\n'; break;
+            case 'r': c = '\r'; break;
+            case 't': c = '\t'; break;
+            case 'u':
+                c = 0;
+                for (int i = 0; i < 4; i++, p++) {
+                    if (!isxdigit((unsigned char)*p)) return NULL;
+                    c = c << 4 | (unsigned)(isdigit((unsigned char)*p) ? *p - '0' : (tolower((unsigned char)*p) - 'a' + 10));
+                }
+                u = 1; break;
+            default: return NULL;
+            }
+        }
+        uint8_t b[3]; size_t k = 1;                     /* \u escapes as UTF-8; surrogate pairs stay apart (no phrase of ours has them) */
+        if (!u || c < 0x80) b[0] = (uint8_t)c;
+        else if (c < 0x800) { b[0] = (uint8_t)(0xc0 | c >> 6); b[1] = (uint8_t)(0x80 | (c & 0x3f)); k = 2; }
+        else { b[0] = (uint8_t)(0xe0 | c >> 12); b[1] = (uint8_t)(0x80 | (c >> 6 & 0x3f)); b[2] = (uint8_t)(0x80 | (c & 0x3f)); k = 3; }
+        if (n + k >= cap) return NULL;
+        memcpy(out + n, b, k); n += k;
+    }
+    out[n] = 0;
+    return p + 1;
+}
+
+/* A claim, checked as their receivers check it: ks "wake", v 1 (integers), id a string of at most 64, n an integer, p a
+ * string, e a finite number.  Other keys with plain values are passed over (a later version may add some); objects and
+ * arrays are not theirs, so the datagram is.  t: a NUL-terminated datagram.  0 ok */
+static int kiosk_parse(const char *t, struct kclaim *k)
+{
+    char key[16], ks[8] = "", p[KIOSK_PHRASE * 2]; int have = 0; double e = 0;
+    enum { KS = 1, V = 2, ID = 4, N = 8, P = 16, E = 32 };
+    const char *q = jws(t);
+    if (*q++ != '{') return -1;
+    for (q = jws(q); *q != '}'; ) {
+        if (*q++ != '"' || !(q = jstring(q, key, sizeof key))) return -1;
+        q = jws(q);
+        if (*q++ != ':') return -1;
+        q = jws(q);
+        int bit = !strcmp(key, "ks") ? KS : !strcmp(key, "v") ? V : !strcmp(key, "id") ? ID : !strcmp(key, "n") ? N
+                : !strcmp(key, "p") ? P : !strcmp(key, "e") ? E : 0;
+        if (have & bit) return -1;
+        have |= bit;
+        if (*q == '"') {
+            char skip[KIOSK_PHRASE * 2];
+            char *dst = bit == KS ? ks : bit == ID ? k->id : bit == P ? p : skip;
+            size_t cap = bit == KS ? sizeof ks : bit == ID ? sizeof k->id : bit == P ? sizeof p : sizeof skip;
+            if ((bit & (V | N | E)) || !(q = jstring(q + 1, dst, cap))) return -1;
+        } else {
+            char *end; double d = strtod(q, &end); int whole = 1;
+            if (end == q) {                             /* true, false, null: only under keys of no interest */
+                size_t l = !strncmp(q, "true", 4) || !strncmp(q, "null", 4) ? 4 : !strncmp(q, "false", 5) ? 5 : 0;
+                if (!l || bit) return -1;
+                q += l;
+            } else {
+                if (bit & (KS | ID | P)) return -1;
+                for (const char *c = q; c < end; c++) whole &= *c != '.' && *c != 'e' && *c != 'E';
+                if ((bit & (V | N)) && (!whole || fabs(d) > 9e15)) return -1;
+                if (bit == V && d != 1) return -1;
+                if (bit == N) k->n = (long long)d;
+                if (bit == E) e = d;
+                q = end;
+            }
+        }
+        q = jws(q);
+        if (*q == ',') q = jws(q + 1);
+        else if (*q != '}') return -1;
+    }
+    if (have != (KS | V | ID | N | P | E) || strcmp(ks, "wake") || !k->id[0] || !isfinite(e) || fabs(e) > 1e6) return -1;
+    kiosk_phrase(k->p, p);
+    k->e = (int)lround(e * 10);
+    return 0;
+}
+
+static void kiosk_packet(const char *t, long long now)
+{
+    struct kclaim c;
+    memset(&c, 0, sizeof c);
+    if (kiosk_parse(t, &c) || !strcmp(c.id, kid)) return;     /* our own broadcast comes back */
+    for (int i = 0; i < NCLAIM; i++)
+        if (ago(kclaims[i].at, now, KIOSK_KEEP_MS) && kclaims[i].n == c.n && !strcmp(kclaims[i].id, c.id)) return;   /* a copy */
+    c.at = now; kheard = now;
+    kclaims[kclaim_next++ % NCLAIM] = c;
+    fprintf(stderr, "arbitration: kiosk claim from %.16s: \"%s\", %.1f dB\n", c.id, c.p, c.e / 10.0);
+}
+
+static void kiosk_send(void)
+{
+    static int last_err;
+    if (ksock < 0) return;
+    struct sockaddr_in to = dest; const char *pe = getenv("HASSMIC_KIOSK_PORT");
+    to.sin_port = htons((uint16_t)(pe ? atoi(pe) : KIOSK_PORT));
+    if (sendto(ksock, kpkt, kpkt_n, 0, (const struct sockaddr *)&to, sizeof to) >= 0) { last_err = 0; return; }
+    if (errno != last_err) fprintf(stderr, "arbitration: kiosk send: %s\n", strerror(errno));
+    last_err = errno;
+}
+
+/* The loop's: the socket open while this Echo settles rounds the kiosk way, closed otherwise */
+static void kiosk_sync(long long now)
+{
+    int want = running && arbitrate && mode == ARB_KIOSK, on = 1; const char *pe = getenv("HASSMIC_KIOSK_PORT");
+    struct sockaddr_in a;
+    if (!want && ksock >= 0) { close(ksock); ksock = -1; kcopies = 0; fprintf(stderr, "arbitration: kiosk port closed\n"); }
+    if (!want || ksock >= 0 || ago(kfailed, now, 10000)) return;
+    memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_port = htons((uint16_t)(pe ? atoi(pe) : KIOSK_PORT)); a.sin_addr.s_addr = htonl(INADDR_ANY);
+    if ((ksock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0)) < 0
+        || setsockopt(ksock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof on) || setsockopt(ksock, SOL_SOCKET, SO_BROADCAST, &on, sizeof on)
+        || bind(ksock, (struct sockaddr *)&a, sizeof a)) {
+        if (!kfailed) fprintf(stderr, "arbitration: kiosk port %d: %s; answering every wake word until it opens\n", ntohs(a.sin_port), strerror(errno));
+        if (ksock >= 0) close(ksock);
+        ksock = -1; kfailed = now; return;
+    }
+    kfailed = 0;
+    fprintf(stderr, "arbitration: Kiosk Satellite mode, port %d, window %d ms, offset %+d dB, id %s\n", ntohs(a.sin_port), kwindow, koffset, kid);
+}
+
+/* Our claim, first copy now (the loop sends the other two): the time to decide, 0 if there is no round */
+static long long kiosk_claim(const char *keyword, int score, long long now)
+{
+    char ph[KIOSK_PHRASE], esc[KIOSK_PHRASE * 6]; size_t n = 0; uint32_t r;
+    kiosk_phrase(ph, keyword);
+    if (!running || !arbitrate || ksock < 0 || !ph[0]) return 0;
+    for (const char *c = ph; *c && n + 7 < sizeof esc; c++) {
+        if (*c == '"' || *c == '\\') { esc[n++] = '\\'; esc[n++] = *c; }
+        else if ((unsigned char)*c < 0x20) n += (size_t)snprintf(esc + n, sizeof esc - n, "\\u%04x", *c);
+        else esc[n++] = *c;
+    }
+    esc[n] = 0;
+    ws_random(&r, sizeof r);
+    snprintf(kround.p, sizeof kround.p, "%s", ph);
+    /* the owner's offset: main.c's lift is a guess, so how an Echo's loudness compares with a tablet's is set by ear.
+     * Rounded as sent: both sides compare the numbers on the wire */
+    kround.e = (int)lround(score / 10.0) + koffset * 10;
+    int l = snprintf(kpkt, sizeof kpkt, "{\"ks\":\"wake\",\"v\":1,\"id\":\"%s\",\"n\":%u,\"p\":\"%s\",\"e\":%s%d.%d}", kid, r & 0x3fffffff, esc,
+                     kround.e < 0 ? "-" : "", abs(kround.e) / 10, abs(kround.e) % 10);
+    if (l < 0 || (size_t)l >= sizeof kpkt) return 0;
+    kpkt_n = (size_t)l;
+    kiosk_send(); kcopies = 2; kcopy_at = now + KIOSK_GAP_MS;
+    return now + kwindow;
+}
+
+static int kiosk_decide(void)
+{
+    int win = 1;
+    for (int i = 0; i < NCLAIM; i++) {
+        struct kclaim *k = &kclaims[i];
+        if (!k->at || llabs(k->at - round_.at) > kwindow || strcmp(k->p, kround.p)) continue;
+        if (k->e > kround.e || (k->e == kround.e && strcmp(k->id, kid) < 0)) {
+            if (win) fprintf(stderr, "arbitration: %.16s heard it better (%.1f dB against our %.1f)\n", k->id, k->e / 10.0, kround.e / 10.0);
+            win = 0;
+        }
+    }
+    return win;
+}
+
 static void *loop(void *arg)
 {
-    uint8_t buf[512]; struct pollfd pf = { sock, POLLIN, 0 };
+    uint8_t buf[512]; struct pollfd pf[2] = { { sock, POLLIN, 0 }, { -1, POLLIN, 0 } };
     (void)arg;
     for (;;) {
-        if (poll(&pf, 1, 100) > 0) {
-            struct sockaddr_in from; socklen_t fl = sizeof from;
-            ssize_t n = recvfrom(sock, buf, sizeof buf, 0, (struct sockaddr *)&from, &fl);
-            if (n > 0) { pthread_mutex_lock(&lk); on_packet(buf, (size_t)n, now_ms(), from.sin_addr.s_addr); pthread_mutex_unlock(&lk); }
+        int wait = 100;
+        pthread_mutex_lock(&lk);
+        kiosk_sync(now_ms());
+        pf[1].fd = ksock;                               /* -1: poll leaves it out */
+        if (kcopies) { long long d = kcopy_at - now_ms(); wait = d < 0 ? 0 : d < wait ? (int)d : wait; }
+        pthread_mutex_unlock(&lk);
+        if (poll(pf, 2, wait) > 0) {
+            struct sockaddr_in from; socklen_t fl = sizeof from; ssize_t n;
+            if ((pf[0].revents & POLLIN) && (n = recvfrom(sock, buf, sizeof buf, 0, (struct sockaddr *)&from, &fl)) > 0) {
+                pthread_mutex_lock(&lk); on_packet(buf, (size_t)n, now_ms(), from.sin_addr.s_addr); pthread_mutex_unlock(&lk);
+            }
+            if ((pf[1].revents & POLLIN) && (n = recv(pf[1].fd, buf, sizeof buf - 1, 0)) > 0) {
+                buf[n] = 0;
+                pthread_mutex_lock(&lk); kiosk_packet((const char *)buf, now_ms()); pthread_mutex_unlock(&lk);
+            }
         }
         struct push q[NPEER]; int nq; long long now = now_ms();
         pthread_mutex_lock(&lk);
+        if (kcopies && now >= kcopy_at) { kiosk_send(); kcopy_at += KIOSK_GAP_MS; kcopies--; }      /* Wi-Fi drops broadcasts */
         {
             if (!in_net) {
                 int members = 0;
@@ -719,15 +957,20 @@ long long arb_claim(const char *keyword, int score, int prio)
 {
     long long now = now_ms(), due = 0; struct pkt b; uint8_t low[64]; size_t n = 0;
     for (; keyword[n] && n < sizeof low; n++) low[n] = (uint8_t)tolower((unsigned char)keyword[n]);
+    const char *why;
     pthread_mutex_lock(&lk);
     crypto_blake2b(round_.kw, 8, low, n);
-    if (running && arbitrate && in_net && count_peers(now)) {
-        round_.score = score; round_.prio = prio; round_.at = now;
+    round_.kiosk = mode == ARB_KIOSK; round_.at = now;
+    if (round_.kiosk) {
+        due = kiosk_claim(keyword, score, now);
+        why = due ? " (Kiosk Satellite mode)" : !arbitrate ? ", arbitration off" : ", kiosk port not open";
+    } else if (running && arbitrate && in_net && count_peers(now)) {
+        round_.score = score; round_.prio = prio;
         claim_pkt(&b, score, prio, 0); send_pkt(&b); send_pkt(&b);
-        due = now + WINDOW_MS;
-    }
+        due = now + WINDOW_MS; why = "";
+    } else why = !arbitrate ? ", arbitration off" : ", no other Echo to ask";
     pthread_mutex_unlock(&lk);
-    fprintf(stderr, "arbitration: heard it, score %d%s%s\n", score, prio ? " (in a conversation)" : "", due ? "" : !arbitrate ? ", arbitration off" : ", no other Echo to ask");
+    fprintf(stderr, "arbitration: heard it, score %d%s%s\n", score, prio && !round_.kiosk ? " (in a conversation)" : "", why);
     return due;
 }
 
@@ -735,6 +978,12 @@ int arb_decide(void)
 {
     int win = 1; struct pkt b;
     pthread_mutex_lock(&lk);
+    if (round_.kiosk) {
+        win = kiosk_decide();
+        pthread_mutex_unlock(&lk);
+        fprintf(stderr, "arbitration: %s\n", win ? "this Echo answers" : "another device answers");
+        return win;
+    }
     for (int i = 0; i < NCLAIM; i++) {
         struct claim *k = &claims[i];
         if (!k->at || k->at < round_.at - LOOKBACK_MS || memcmp(k->kw, round_.kw, 8)) continue;     /* another round, another keyword */
@@ -762,6 +1011,39 @@ int arb_arbitrate(int set)
     return r;
 }
 
+int arb_mode(int set)
+{
+    pthread_mutex_lock(&lk);
+    if ((set == ARB_HASSMIC || set == ARB_KIOSK) && set != mode) {
+        mode = set;
+        if (running) fprintf(stderr, "arbitration: %s\n", mode == ARB_KIOSK ? "Kiosk Satellite mode: loudness only, with kiosks too"
+                                                                           : "our own mode: between the Echos of the network");
+        memset(claims, 0, sizeof claims); memset(kclaims, 0, sizeof kclaims);
+        beacon_at = 0; atomic_store(&notify, 1);        /* the members learn it now, not in 30 s */
+    }
+    int r = mode;
+    pthread_mutex_unlock(&lk);
+    return r;
+}
+
+int arb_offset(int set)
+{
+    pthread_mutex_lock(&lk);
+    if (set >= -20 && set <= 20) koffset = set;
+    int r = koffset;
+    pthread_mutex_unlock(&lk);
+    return r;
+}
+
+int arb_window(int set)
+{
+    pthread_mutex_lock(&lk);
+    if (set >= 100 && set <= 500) kwindow = set;
+    int r = kwindow;
+    pthread_mutex_unlock(&lk);
+    return r;
+}
+
 static size_t jstr(char *o, size_t cap, const char *s)          /* node names and entity ids: [a-z0-9_.-] only */
 {
     size_t n = 0;
@@ -776,14 +1058,17 @@ size_t arb_status_json(char *o, size_t cap)
 #define J(...) do { if (n < cap) n += (size_t)snprintf(o + n, cap - n, __VA_ARGS__); } while (0)
     pthread_mutex_lock(&lk);
     jstr(t, sizeof t, self_ent);
-    J("{\"running\":%s,\"arbitrates\":%s,\"node\":\"%s\",", running ? "true" : "false", arbitrate ? "true" : "false", node);
+    J("{\"running\":%s,\"arbitrates\":%s,\"node\":\"%s\",\"mode\":\"%s\",\"kiosk_port\":%s,", running ? "true" : "false",
+      arbitrate ? "true" : "false", node, mode == ARB_KIOSK ? "kiosk" : "hassmic", ksock >= 0 ? "true" : "false");
+    if (kheard) J("\"kiosk_heard_s\":%lld,", (now - kheard) / 1000); else J("\"kiosk_heard_s\":null,");
     if (in_net) J("\"network\":\"%016llx\",", (unsigned long long)net_id); else J("\"network\":null,");
     J("\"handoff_entity\":%s%s%s,\"pairing\":%s,\"members\":[", t[0] ? "\"" : "", t[0] ? t : "null", t[0] ? "\"" : "",
       pair_until && now < pair_until ? "true" : "false");
     for (int i = 0; i < NPEER; i++) if (ago(peers[i].seen, now, PEER_TTL_MS)) {
         struct in_addr a = { peers[i].ip }; inet_ntop(AF_INET, &a, ip, sizeof ip); jstr(t, sizeof t, peers[i].node);
-        J("%s{\"node\":\"%s\",\"ip\":\"%s\",\"seen_s\":%lld,\"arbitrates\":%s}", k++ ? "," : "", t, peers[i].ip ? ip : "",
-          (now - peers[i].seen) / 1000, peers[i].quiet ? "false" : "true");
+        /* quiet with the kiosk flag: it takes part, the kiosk way */
+        J("%s{\"node\":\"%s\",\"ip\":\"%s\",\"seen_s\":%lld,\"arbitrates\":%s,\"mode\":\"%s\"}", k++ ? "," : "", t, peers[i].ip ? ip : "",
+          (now - peers[i].seen) / 1000, peers[i].quiet && !peers[i].kiosk ? "false" : "true", peers[i].kiosk ? "kiosk" : "hassmic");
     }
     J("],\"others\":["); k = 0;
     for (int i = 0; i < NPEER; i++) if (ago(cands[i].seen, now, PEER_TTL_MS)) {
@@ -832,6 +1117,7 @@ int arb_start(int port, const char *nd, const struct arb_hooks *h)
     pthread_t t;
     snprintf(node, sizeof node, "%s", nd); hooks = h;
     if (identity()) return -1;
+    hex8(kid, pk);
     load();
     ctr = ctr_saved; ctr_saved += CTR_BLOCK; save();
     if ((sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0)) < 0) { perror("arbitration: socket"); return -1; }

@@ -17,6 +17,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <math.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -655,6 +656,42 @@ static int wake_score(uint64_t begin, uint64_t end, int simulated)
     return afe;
 }
 
+/* Kiosk Satellite's measure of a wake word, for arb.c's Kiosk Satellite mode (docs/kiosk-arbitration.md, "Score"): of the
+ * last 3 s the wake word engine heard, in 20 ms frames of dBFS, the mean of the 10 loudest frames of the last 1.5 s
+ * (the wake word) over the frame at the 20th percentile of all 3 s (the room), that floor never under -75 dBFS; dB x 100.
+ * Loudness, nothing else: the Echo the talker is closest to and facing wins, as with the front end's energies.
+ * micAsr runs about 30 dB under the level speech-to-text expects (micgain.c): a quiet room's floor would sit on their
+ * -75 dBFS clamp and shorten our margin against a kiosk's, whose Android mic runs at speech level.  So the frames are
+ * lifted by KIOSK_LIFT_DB first, which leaves a floor above the clamp untouched and the margin a plain signal to noise.
+ * A guess from that 30 dB: not yet measured next to a kiosk.  INT_MIN: less than 3 s heard (a kiosk then answers
+ * without a claim).  HASSMIC_TEST_SCORE stands in for it on the PC, as for wake_score. */
+#define KIOSK_LIFT_DB 30
+
+static int cmp_desc(const void *a, const void *b) { double x = *(const double *)a, y = *(const double *)b; return (x < y) - (x > y); }
+
+static int kiosk_score(uint64_t end, int simulated)
+{
+    enum { FRAME = CAP_RATE / 50, NF = 150, RECENT = 75, LOUD = 10 };
+    const char *t = getenv("HASSMIC_TEST_SCORE");
+    double db[NF], s[NF], speech = 0, floor_;
+    if (simulated && t) return atoi(t);
+    if (end > ring_n) end = ring_n;
+    if (end < (uint64_t)FRAME * NF || ring_n - end + (uint64_t)FRAME * NF > RING_SAMPLES) return INT_MIN;
+    for (int i = 0; i < NF; i++) {
+        uint64_t a = end - (uint64_t)(NF - i) * FRAME;
+        db[i] = 10 * log10(ring_power(a, a + FRAME) / (32768.0 * 32768.0) + 1e-10) + KIOSK_LIFT_DB;
+    }
+    memcpy(s, db + NF - RECENT, sizeof s[0] * RECENT);
+    qsort(s, RECENT, sizeof s[0], cmp_desc);
+    for (int i = 0; i < LOUD; i++) speech += s[i] / LOUD;
+    memcpy(s, db, sizeof s);
+    qsort(s, NF, sizeof s[0], cmp_desc);
+    floor_ = s[NF - 1 - NF / 5];                        /* sorted loudest first: a fifth of the frames are quieter */
+    if (floor_ < -75) floor_ = -75;
+    fprintf(stderr, "wake: kiosk score: wake word %.1f dBFS over room %.1f dBFS (both +%d dB)\n", speech, floor_, KIOSK_LIFT_DB);
+    return (int)lround((speech - floor_) * 100);
+}
+
 /* lock held.  Mic audio to the pipeline: noise reduction if switched on, then brought to speech level.  at: the ring's
  * index of the first sample (0: not from the ring).
  * - The wake word just before it sets the gain to start with (from up to 3 s back), and RNNoise first hears the second
@@ -726,7 +763,10 @@ static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* captu
     pthread_mutex_unlock(&core_lock);
     if (!can) { trigger(0); return; }               /* could not answer: a claim would only silence the Echos that can */
     pthread_mutex_lock(&core_lock); char kw[64]; snprintf(kw, sizeof kw, "%s", wake_words[wake_active].name); pthread_mutex_unlock(&core_lock);
-    long long due = arb_claim(kw, wake_score(begin, end, simulated), prio);
+    /* Kiosk Satellite mode: their loudness, not the front end's energies (whose 150 ms only the window would pay for) */
+    int score = arb_mode(-1) == ARB_KIOSK ? kiosk_score(end, simulated) : wake_score(begin, end, simulated);
+    if (score == INT_MIN) { fprintf(stderr, "arbitration: less than 3 s heard, answers without a claim\n"); trigger(0); return; }
+    long long due = arb_claim(kw, score, prio);
     if (!due) { trigger(0); if (!atomic_load(&streaming)) afe_done(); return; }
     arb_due = due; arb_from = ring_n;
 }

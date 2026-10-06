@@ -188,7 +188,8 @@ expires within minutes. Found by preloading `src/tools/curlspy.c` into the stock
 - Feature commits update [CHANGELOG.md](CHANGELOG.md) (user-facing, dated, plain language), [PLAN.md](PLAN.md) (status,
   measurements) and the README when behaviour visible to users changes.
 - Code comments explain *why*, with device facts and measurements.
-- Every listening port must stay in TCP 16384–32767: the Echo's firewall admits nothing else inbound.
+- Every listening port must stay in TCP/UDP 16384–32767: the Echo's firewall admits nothing else inbound. The one
+  exception is Kiosk Satellite's fixed UDP 2330, admitted by `lockdown.sh` only while `arbitration_mode=kiosk`.
 - Proprietary, derived or secret material stays out of git (git-ignored): `firmware/` (per model: stock
   image, unpacked rootfs, unlock zips, `re/` disassembly), `toolchain/`, `build/`, `device-logs/`, `secrets/` (`wifi.conf`, `update.key`, `release.key`), `*.bin`, `*.zip`.
 - Third-party code in `src/third_party/` keeps its own licence.

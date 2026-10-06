@@ -4,6 +4,14 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-06
 
+- **Echos and Kiosk Satellite tablets answer once between them.** Wake word arbitration has a second mode, "Kiosk
+  Satellite", next to the Echos' own (still the default): with it an Echo settles wake words the way Kiosk Satellite
+  does, with its tablets and with other Echos in that mode — the device that heard the wake word loudest answers. The
+  settings page shows the two side by side with what each gives and what it costs; in short, Kiosk Satellite's has no
+  protection (anyone on the network can keep the Echo silent), no preference for the Echo you are talking to, and a
+  wait of 400 ms (adjustable, as on the tablets) on every wake word. The firewall opens UDP 2330 only while that mode
+  is on. Set the same mode on every Echo; the page warns when they differ. A loudness offset (±20 dB) evens the Echo
+  out against your tablets' microphones by ear.
 - **Amazon's models download on the Echo itself.** The settings page's new "Download from Amazon" signs the Echo in
   to your Amazon account with a code you enter on your Amazon site (any site with Alexa: amazon.com, .co.uk, .de, .co.jp
   and the others), then fetches extra wake words, whisper detection and the newer sound detection model straight from

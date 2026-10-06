@@ -105,6 +105,7 @@ const ICONS = {
   arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   ext: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  minus: '<path d="M6 12h12"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
 };
 const icon = (n) => h('span', { html: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`, style: 'display:inline-flex' });
@@ -149,7 +150,36 @@ const HELP = {
   sendspin_unpaired: { help: 'Lets any Music Assistant server on the network play here without pairing. Off: only a server given this Echo\'s "Sendspin pairing token" (a diagnostic entity in Home Assistant) may play.' },
   online_updates: { help: 'Where new versions come from. Release: tested releases only. Beta: every new build, plus releases. Off: nothing is fetched. The Echo\'s "Firmware" entity in Home Assistant then shows what is new and installs it; every update is signature-checked, and the Echo falls back by itself if a new version does not stay up.' },
 
-  arbitration: { icon: 'net', ha: ['Arbitration peers'], help: 'When several Echos hear the wake word, only the one that heard you best answers; the others stay silent and dark. They settle it on your network within 0.2 s, and an Echo in a conversation or ringing keeps the next wake word. Only Echos listening for the same wake word compete. Off: this Echo answers every wake word it hears.' },
+  arbitration: { icon: 'net', ha: ['Arbitration peers'], help: 'When several Echos hear the wake word, only the one that heard you best answers; the others stay silent and dark. Only devices listening for the same wake word compete. Off: this Echo answers every wake word it hears.',
+    status: () => {
+      const a = state.arbitration; if (!a || !a.arbitrates || a.mode !== 'kiosk') return null;
+      if (!a.kiosk_port) return h('p', { class: 'f-bad' }, icon('warn'), h('span', {}, 'Port 2330 could not be opened, so this Echo answers every wake word. The Echo\'s log (boot.log) says why.'));
+      return h('p', { class: 'f-model' }, a.kiosk_heard_s == null ? 'No claim from another Kiosk Satellite device heard yet.'
+        : `Last claim from another Kiosk Satellite device: ${a.kiosk_heard_s < 90 ? a.kiosk_heard_s + ' s' : Math.round(a.kiosk_heard_s / 60) + ' min'} ago.`);
+    } },
+  arbitration_mode: { parent: 'arbitration', help: 'How the Echos agree on who answers. Use the same on every Echo: Echos in one mode do not settle wake words with Echos in the other.',
+    modes: {
+      hassmic: { title: 'Echo network', tag: 'Default', sub: 'hassmic\'s own protocol, between your Echos',
+        pros: ['Only your Echos take part: claims are signed with the network\'s key, so nothing else on the network can silence an Echo',
+          'The Echo you are talking to, or one that is ringing, keeps the next wake word',
+          'Scores with the wake word energies of Amazon\'s own audio front end, as stock Echos did',
+          'Decided within 0.2 s, and with no other Echo around there is no wait at all',
+          'The winner says it answers, so an Echo that heard the wake word late stays quiet too'],
+        cons: ['Only Echos running hassmic: tablets and other satellites are left to Home Assistant, where the first device to wake up wins'] },
+      kiosk: { title: 'Kiosk Satellite', sub: 'Kiosk Satellite\'s protocol: tablets and Echos together',
+        pros: ['Settles wake words with Kiosk Satellite tablets too, when they listen for the same wake word (\u201cAlexa\u201d), and with Echos in this mode',
+          'Simple: the device that heard the wake word loudest over its room answers'],
+        cons: ['No protection: any device on your network can claim every wake word and keep this Echo silent',
+          'No preference for the device you are talking to: a louder one can take the next wake word in the middle of a conversation',
+          'Every wake word waits the full window (below), even with no other device around',
+          'A claim lost on Wi-Fi means two devices answer; Home Assistant then lets only the first through',
+          'Opens UDP port 2330 in the Echo\'s firewall, outside the range it otherwise allows',
+          'The Echo\'s loudness is not yet calibrated against a tablet\'s microphone: an offset (below) evens it out by ear'] },
+    } },
+  arbitration_offset: { parent: 'arbitration', when: () => settingValue('arbitration_mode') === 'kiosk',
+    help: 'Evens out the Echo\'s loudness against your tablets\' microphones, which hear differently. If a tablet answers when you spoke to the Echo, raise it; if the Echo answers when you faced a tablet, lower it. Only counts against devices in Kiosk Satellite mode with a different offset: set the same on every Echo. Default 0 dB.' },
+  arbitration_window: { parent: 'arbitration', step: 50, when: () => settingValue('arbitration_mode') === 'kiosk',
+    help: 'How long the Echo waits for other devices\' claims before it answers, as Kiosk Satellite\'s own setting. Longer catches devices that report late, at the cost of a slower answer. Use the same as on your tablets; Kiosk Satellite\'s default is 400 ms.' },
   sound_detection: { icon: 'wave', ha: ['Sound (event)'], help: 'Amazon\'s Alexa Guard model listens for smoke and CO alarms, breaking glass, barking, a crying baby, snoring, coughing, running water and beeping appliances, and Home Assistant gets each as a "Sound" event for automations.',
     note: 'Less reliable than on a stock Echo, which double-checks every hit in Amazon\'s cloud. Treat events as hints, never as a replacement for a smoke detector.',
     status: () => {
@@ -165,11 +195,13 @@ const HELP = {
   bluetooth_speaker: { icon: 'box', ha: ['Bluetooth speaker search', 'Play on Bluetooth speaker', 'Bluetooth speaker', 'Bluetooth speaker delay'], help: 'Plays everything (replies, timers, music) on a Bluetooth speaker instead of the Echo\'s own. Put the speaker in pairing mode near the Echo and switch on "Bluetooth speaker search" in Home Assistant: the Echo pairs with the strongest one it hears.' },
 };
 const CHOICE_NAMES = {
+  arbitration_mode: { hassmic: 'Echo network', kiosk: 'Kiosk Satellite' },
   noise_reduction: { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' },
   online_updates: { off: 'Off', beta: 'Beta', release: 'Release' },
   bluetooth_announcement_language: { en: 'English', de: 'Deutsch', fr: 'Français', es: 'Español', it: 'Italiano', pt: 'Português', nl: 'Nederlands',
     sv: 'Svenska', da: 'Dansk', nb: 'Norsk', fi: 'Suomi', pl: 'Polski' },
 };
+const settingValue = (name) => { const s = state.settings.find((x) => x.name === name); return s ? (s.type === 'choice' ? s.choices[s.value] : s.value) : undefined; };
 const label = (s) => { const t = s.label.replace(/ \(experimental\)$/, '').replace(/^Equalizer /, '').replace(' with other Echos', ''); return t[0].toUpperCase() + t.slice(1); };
 const fmt = (s, v) => {
   if (s.unit === 'dB') return `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v)} dB`;
@@ -312,13 +344,26 @@ function control(s) {
     return { el: h('label', { class: 'switch' }, i, h('span')), update: (x) => { i.checked = !!x.value; } };
   }
   if (s.type === 'int') {
-    const r = h('input', { type: 'range', id, min: String(s.min), max: String(s.max), step: '1' });
+    const r = h('input', { type: 'range', id, min: String(s.min), max: String(s.max), step: String((HELP[s.name] || {}).step || 1) });
     const out = h('output', { for: id });
     const paint = () => { r.style.setProperty('--p', `${((r.value - s.min) * 100) / (s.max - s.min)}%`); out.textContent = fmt(s, +r.value); };
     r.oninput = paint; r.onchange = () => set(s.name, r.value);
     return { el: h('div', { class: 'slider' }, r, out), update: (x) => { if (!r.matches(':active')) { r.value = x.value; paint(); } } };     // not while dragging
   }
-  const names = CHOICE_NAMES[s.name] || {};
+  const names = CHOICE_NAMES[s.name] || {}, modes = (HELP[s.name] || {}).modes;
+  if (modes) {                          // choices worth weighing: a card each, with what it gives and what it costs
+    const cards = s.choices.map((c) => {
+      const m = modes[c], pick = () => set(s.name, c);
+      return h('div', { class: 'mode', role: 'radio', tabindex: '0', 'aria-checked': 'false', onclick: pick,
+        onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } } },
+        h('div', { class: 'mode-head' }, h('span', { class: 'radio' }), h('b', {}, m.title), m.tag ? h('span', { class: 'badge' }, m.tag) : null),
+        h('p', { class: 'mode-sub' }, m.sub),
+        h('ul', { class: 'pc' }, m.pros.map((t) => h('li', { class: 'pro' }, icon('plus'), h('span', {}, t))),
+          m.cons.map((t) => h('li', { class: 'con' }, icon('minus'), h('span', {}, t)))));
+    });
+    return { el: h('div', { class: 'modes', role: 'radiogroup', 'aria-label': s.label }, cards),
+             update: (x) => cards.forEach((b, i) => { b.classList.toggle('on', i === x.value); b.setAttribute('aria-checked', String(i === x.value)); }) };
+  }
   if (s.choices.length <= 4) {
     const btns = s.choices.map((c) => h('button', { type: 'button', onclick: () => set(s.name, c) }, names[c] || c));
     return { el: h('div', { class: 'seg', role: 'group', 'aria-label': s.label }, btns),
@@ -332,7 +377,7 @@ function haBadge() { return h('span', { class: 'badge ha', title: 'Also in Home 
 
 function settingRow(s) {
   const info = HELP[s.name] || {}, c = control(s), saved = h('span', { class: 'saved' }, 'Saved');
-  const wide = s.type === 'int', stack = s.type === 'choice';      // stack: control under the text on a phone
+  const wide = s.type === 'int' || !!info.modes, stack = s.type === 'choice';      // stack: control under the text on a phone
   const row = h('div', { class: 'row' + (wide ? ' wide' : '') + (stack ? ' stack' : '') },
     h('div', {},
       h('label', { class: 'row-label', for: 's-' + s.name }, label(s), info.ha === true ? haBadge() : null, saved),
@@ -355,7 +400,8 @@ function featureCard(s, children) {
     kids,
     info.ha ? h('div', { class: 'f-ha' }, icon('ha'), h('span', {}, 'In Home Assistant while on: ', info.ha.map((n, i) => [i ? ', ' : '', h('b', {}, n)]))) : null);
   controls.set(s.name, { saved, root: card, update: (x) => {
-    c.update(x); card.classList.toggle('on', !!x.value); kids.forEach((k) => k.classList.toggle('hidden', !x.value));
+    c.update(x); card.classList.toggle('on', !!x.value);
+    kids.forEach((k, i) => { const w = (HELP[children[i].name] || {}).when; k.classList.toggle('hidden', !x.value || !!(w && !w())); });
     if (info.status) status.replaceChildren(...[info.status()].filter(Boolean));
   } });
   return card;
@@ -453,7 +499,10 @@ function empty(ic, text, ok) { return h('div', { class: 'empty' + (ok ? ' ok' : 
 
 function buildEchos(el, arbSetting) {
   el.append(h('p', { class: 'intro' }, 'Your Echos find each other on the local network and share a key, so nothing else on the network can join them or silence them. This always runs: it is also how this page finds your other Echos to copy settings and models to.'));
-  if (arbSetting) { const c = featureCard(arbSetting, []); c.classList.add('solo'); el.append(c); }
+  if (arbSetting) {
+    const c = featureCard(arbSetting, state.settings.filter((k) => (HELP[k.name] || {}).parent === 'arbitration'));
+    c.classList.add('solo'); el.append(c);
+  }
   netHead = h('div', { class: 'net-line' });
   netWarn = h('div', { class: 'net-warn' });
   devBox = h('div', { class: 'echos' });
@@ -493,6 +542,9 @@ function renderNetwork() {
   if (state.ha && !a.handoff_entity)
     warn('Home Assistant does not show this Echo\'s "Arbitration handoff" entity under the name it expects: it was renamed or disabled there. Other Echos then cannot hand it the key that way. Enable it again, tick "Allow the device to perform Home Assistant actions" in its ESPHome options, or pair with the volume keys.');
   if (nets.size) warn(`${nets.size === 1 ? 'A second network' : nets.size + ' other networks'} beside this one: its Echos do not settle wake words with these. They merge by themselves when Home Assistant can carry the key; if they do not, pair them with the volume keys.`);
+  const myMode = a.arbitrates ? a.mode || 'hassmic' : null;       // older Echos say nothing: they are in ours
+  const odd = a.members.filter((m) => myMode && m.arbitrates && (m.mode || 'hassmic') !== myMode).map((m) => m.node);
+  if (odd.length) warn(`${nameList(odd)} ${odd.length > 1 ? 'use' : 'uses'} the other arbitration mode (${myMode === 'kiosk' ? 'Echo network' : 'Kiosk Satellite'}): this Echo and ${odd.length > 1 ? 'they' : 'it'} do not settle wake words with each other, and both may answer. Set the same mode on every Echo.`);
   if (stuck.length) warn(`${nameList(stuck.map((o) => o.node))} ${stuck.length > 1 ? 'have' : 'has'} not got the key for over a minute. Usually Home Assistant does not show ${stuck.length > 1 ? 'their' : 'its'} "Arbitration handoff" entity (renamed or disabled device). Pair with the volume keys instead.`);
   netWarn.append(h('details', { class: 'more' }, h('summary', {}, 'How Echos get the key'),
     h('ul', {},
@@ -594,7 +646,8 @@ function renderDevices() {
   const a = state.arbitration;
   devBox.append(h('div', { class: 'echo me' }, h('span', { class: 'mini-puck on' }),
     h('div', { class: 'echo-body' }, h('div', { class: 'echo-name' }, echo.hello.name), h('div', { class: 'echo-addr' }, location.host),
-      h('div', { class: 'echo-meta' }, h('span', { class: 'badge acc' }, 'This Echo'), a && !a.arbitrates ? h('span', { class: 'badge' }, 'Arbitration off') : null))));
+      h('div', { class: 'echo-meta' }, h('span', { class: 'badge acc' }, 'This Echo'), a && !a.arbitrates ? h('span', { class: 'badge' }, 'Arbitration off')
+        : a && a.mode === 'kiosk' ? h('span', { class: 'badge' }, 'Kiosk Satellite mode') : null))));
   for (const [base, d] of others) {
     const r = arbOf(d.ip), name = d.echo ? d.echo.hello.name : d.ip;
     const meta = [];
@@ -605,6 +658,7 @@ function renderDevices() {
     else meta.push(h('span', { class: 'badge ok' }, icon('check'), 'Same settings'));
     meta.push(netBadge(r));
     if (r && r.member && r.arbitrates === false) meta.push(h('span', { class: 'badge', title: 'It answers every wake word itself' }, 'Arbitration off'));
+    else if (r && r.member && r.mode === 'kiosk') meta.push(h('span', { class: 'badge', title: 'It settles wake words the Kiosk Satellite way' }, 'Kiosk Satellite mode'));
     const login = d.echo && !d.logged && !d.error ? h('button', { class: 'small primary', onclick: (e) => loginOther(d, e.currentTarget) }, icon('key'), 'Log in') : null;
     devBox.append(h('div', { class: 'echo' }, h('span', { class: 'mini-puck' + (r && r.member ? ' on' : '') }),
       h('div', { class: 'echo-body' }, h('div', { class: 'echo-name' }, name), h('div', { class: 'echo-addr' }, shortAddr(base)),

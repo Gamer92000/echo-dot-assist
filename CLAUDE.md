@@ -150,6 +150,10 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   The network (beacons, key handoff, pairing; handoff entity and action) always runs: the settings pages find each other
   through it. The `arbitration` setting (`arb_arbitrate`) only gates rounds; off, the beacon carries a flags byte after
   the counter and members leave that Echo out of rounds (older builds reject the longer beacon, same effect).
+  `arbitration_mode` (`arb_mode`, in `state/config`): `hassmic` (default, the above) or `kiosk`: Kiosk Satellite's
+  protocol reimplemented from `docs/kiosk-arbitration.md` (JSON claims on UDP 2330, three copies, loudness only from
+  `main.c` `kiosk_score` + `arbitration_offset` dB, `arbitration_window` ±ms, no key, no priority, always waits); the beacon flags it (1 quiet +
+  2 kiosk). The socket belongs to arb's loop thread. Page: two cards with pros and cons (`HELP.arbitration_mode.modes`).
 - **Music**: `sendspin.c` (Music Assistant Sendspin player over `ws.c`/`noise.c`/`net.c`/`hash.c`, decodes via
   `dr_flac`/`minimp3`/libopus). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
   loaded with dlopen, aptX/aptX HD via `freeaptx`) with AVRCP. Only one music source plays at a time (newest wins).
@@ -247,7 +251,8 @@ stock behaviour. `scripts/device/` holds on-device helpers (`lockdown.sh` firewa
 Firewall invariant: Amazon's daemons may only reach local addresses; hassmic itself may reach any address (it fetches
 TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get out. Inbound TCP and UDP are only admitted on
 16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 OTA, 28931 settings page, UDP 28930 arbitration)
-must stay in that range. A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`
+must stay in that range. Only exception: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
+`state/config` says `arbitration_mode=kiosk` (`kiosk_state`). A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`
 prints it.
 
 `tools/` is PC-side reverse-engineering and firmware tooling (`payload_dump.py`, Thumb disassembly helpers,

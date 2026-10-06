@@ -39,6 +39,12 @@ if [ -f "$CONF" ]; then . "$CONF"; else echo "!! $CONF missing: services not sto
 WLAN=${WLAN:-wlan0}
 NL='
 '
+# Kiosk Satellite's wake word arbitration (hassmic's "arbitration_mode" setting, arb.c) broadcasts its claims to UDP
+# 2330, a port it fixes and that lies outside the 16384-32767 every port of ours is in: admitted only while hassmic's
+# state/config says arbitration_mode=kiosk, and taken out again when it does not.  hassmic reads nothing there but
+# those claims.  Not in stock-online mode: no hassmic runs then.
+KIOSK_IN="INPUT -i $WLAN -p udp -m udp --dport 2330 -j ACCEPT"
+kiosk_state() { KIOSK=; [ -z "$OTA_ONLY" ] && grep -qx 'arbitration_mode=kiosk' /data/local/hassmic/state/config 2>/dev/null && KIOSK=1; }
 
 HAVE6=; command -v ip6tables > /dev/null && HAVE6=1
 v6off() { for f in /proc/sys/net/ipv6/conf/*/disable_ipv6; do echo 1 > $f || echo "!! IPv6 NOT OFF ($f): take the Echo offline"; done; }
@@ -79,6 +85,7 @@ keep() {
         echo "-A INPUT -i $WLAN -p udp -m udp --dport 5353 -j ACCEPT"      # mDNS: how Home Assistant finds the Echo
         echo "-A INPUT -p icmp -m state --state RELATED,ESTABLISHED -j ACCEPT"
         if [ -n "$ADB" ]; then echo "-A $ADB_IN"; fi                       # only while adb over Wi-Fi is open (adb_gate)
+        if [ -n "$KIOSK" ]; then echo "-A $KIOSK_IN"; fi                   # only in Kiosk Satellite mode (kiosk_state)
     else
         echo "-A INPUT -p icmpv6 -j ACCEPT"                                # neighbour discovery: no IPv6 without it
         echo "-A INPUT -i $WLAN -p udp -m udp --dport 546 -j ACCEPT"       # DHCPv6
@@ -157,6 +164,7 @@ load_once() {
         echo "-I OUTPUT 1 -j hassmic_out"
         missing $1 "$all"
         [ -n "$ADB" ] || echo "$all" | while read -r r; do [ "$r" = "-A $ADB_IN" ] && echo "-D $ADB_IN"; done
+        [ -n "$KIOSK" ] || echo "$all" | while read -r r; do [ "$r" = "-A $KIOSK_IN" ] && echo "-D $KIOSK_IN"; done
         echo COMMIT
     )
     echo "$in" | $1-restore -w --noflush
@@ -177,20 +185,22 @@ load_each() {
     $1 -w -I OUTPUT 1 -j hassmic_out
     missing $1 "$($1 -w -S)" | while read -r r; do $1 -w $r || echo "!! rule not loaded ($1): $r"; done
     [ -n "$ADB" ] || while $1 -w -D $ADB_IN 2>/dev/null; do :; done
+    [ -n "$KIOSK" ] || while $1 -w -D $KIOSK_IN 2>/dev/null; do :; done
     $1 -w -P INPUT DROP
 }
 load() { load_once $1 2>/dev/null || load_once $1 || { echo "!! $1-restore failed twice: loading rule by rule"; load_each $1; }; }
 apply() {
-    DNS=$(resolvers)
+    DNS=$(resolvers); kiosk_state
     load iptables
     if [ -n "$HAVE6" ]; then load ip6tables; else v6off; fi
 }
 
 # What is wrong with the rules, in words, and false; nothing and true when all is as it has to be.  Three listings per
 # table and hardly another process (this runs every 5 s): every rule of the chain and their order, the jump to it
-# first in OUTPUT, INPUT policy DROP, each of stock's rules we need, the adb port not admitted unless it is open; without
-# ip6tables, IPv6 off on every interface.
+# first in OUTPUT, INPUT policy DROP, each of stock's rules we need, the adb port not admitted unless it is open, nor
+# Kiosk Satellite's unless in that mode; without ip6tables, IPv6 off on every interface.
 wrong() {
+    kiosk_state
     for t in iptables ${HAVE6:+ip6tables}; do
         [ "$($t -w -S hassmic_out 2>/dev/null)" = "-N hassmic_out$NL$(rules $t)" ] || { echo "$t: hassmic_out is not as loaded"; return 1; }
         o=$($t -w -S OUTPUT 2>/dev/null)                   # policy line, then its rules (cutting them out of the whole
@@ -199,6 +209,7 @@ wrong() {
         case "$NL$all" in *"$NL-P INPUT DROP$NL"*) ;; *) echo "$t: INPUT policy is not DROP"; return 1;; esac
         m=$(missing $t "$all"); [ -z "$m" ] || { echo "$t: missing:" $m; return 1; }
         [ -n "$ADB" ] || case "$NL$all$NL" in *"$NL-A $ADB_IN$NL"*) echo "$t: port 5555 (adb) admitted"; return 1;; esac
+        [ -n "$KIOSK" ] || case "$NL$all$NL" in *"$NL-A $KIOSK_IN$NL"*) echo "$t: port 2330 (Kiosk Satellite) admitted"; return 1;; esac
     done
     [ -n "$HAVE6" ] || for f in /proc/sys/net/ipv6/conf/*/disable_ipv6; do
         v=; { read v < $f; } 2>/dev/null; [ "$v" = 1 ] || { echo "IPv6 is on (${f%/*})"; return 1; }

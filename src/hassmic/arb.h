@@ -20,6 +20,14 @@ int  arb_running(void);
 int  arb_arbitrate(int set);                    /* take part in rounds (the "arbitration" setting): 0/1, -1 only reads.  The
                                                  * network (keys, beacons: the settings pages' list of Echos) runs either way */
 int  arb_peers(void);                           /* other members heard from lately that take part in rounds */
+/* How rounds are settled (the "arbitration_mode" setting, kept in state/config by settings.c, read by lockdown.sh):
+ * ARB_HASSMIC our own protocol between the Echos of the network; ARB_KIOSK Kiosk Satellite's (UDP 2330, loudness only),
+ * with kiosks and with Echos in that mode.  -1 only reads.  Any lock may be held. */
+enum { ARB_HASSMIC, ARB_KIOSK };
+int  arb_mode(int set);
+int  arb_window(int set);                       /* ARB_KIOSK's window in ms (100-500, as Kiosk Satellite's); -1 only reads */
+/* ARB_KIOSK: dB added to our claims' loudness (-20..20), the owner's calibration against kiosks; INT_MIN only reads */
+int  arb_offset(int set);
 /* Home Assistant ran our "arbitration_key" action: a member hands us its network.  Any lock may be held. */
 void arb_key(const char *network, const char *key);
 /* Home Assistant's answer to hooks->request: the state of that entity.  Any lock may be held. */
@@ -37,7 +45,8 @@ int  arb_pair(void);                            /* the pairing gesture: 2 min in
 
 /* The wake word was heard with this score (signal to noise, dB x 100); prio 2 = this Echo is in a conversation or
  * ringing and owns the next wake word.  Only Echos that heard the same keyword compete ("Echo" in German and in
- * English is the same one).  Returns the monotonic ms at which to call arb_decide(), or 0: nobody else to ask, answer now. */
+ * English is the same one).  Returns the monotonic ms at which to call arb_decide(), or 0: nobody else to ask, answer now.
+ * ARB_KIOSK: score is Kiosk Satellite's (main.c kiosk_score), prio is ignored, and there is always a round. */
 long long arb_claim(const char *keyword, int score, int prio);
 int       arb_decide(void);                     /* 1: this Echo answers */
 #endif

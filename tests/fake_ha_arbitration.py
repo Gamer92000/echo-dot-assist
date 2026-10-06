@@ -5,6 +5,7 @@ connects with each device's API key, keeps their entity states under sensor.<dev
 device's request for a state (no permission needed), and runs an action a device asks for ("Allow the device to perform
 Home Assistant actions") that names another device's own action (esphome.<node>_arbitration_key) on that device.
 Three ways in: the handoff entities (no permission), the action, and the volume-key pairing (SIGWINCH, no HA).
+Then Kiosk Satellite mode: their JSON claims on their port, against each other and a fake kiosk.
 Everything goes out as loopback broadcast (HASSMIC_ARB_ADDR): nothing of it reaches the LAN."""
 import asyncio, base64, json, os, re, signal, socket, struct, subprocess, sys, tempfile, time
 from aioesphomeapi import APIClient, VoiceAssistantEventType as Ev
@@ -14,7 +15,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 from webclient import Browser, req
-ARB, BCAST = 28990, "127.255.255.255"
+ARB, KIOSK, BCAST = 28990, 28991, "127.255.255.255"          # KIOSK: stands in for Kiosk Satellite's 2330
 
 
 def check(cond, what):
@@ -33,7 +34,7 @@ class Echo:
         with open(os.path.join(self.state, "api_key"), "w") as f: f.write(self.api_key + "\n")     # as Home Assistant provisioned it
         self.env = dict(os.environ, HASSMIC_STATE=self.state, HASSMIC_SETTINGS=os.path.join(self.state, "settings"),
                         HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(self.state, "play.raw"),
-                        HASSMIC_MDNS_FILE=os.path.join(self.state, "none"), HASSMIC_ARB_ADDR=BCAST, HASSMIC_TEST_SCORE=str(score),
+                        HASSMIC_MDNS_FILE=os.path.join(self.state, "none"), HASSMIC_ARB_ADDR=BCAST, HASSMIC_KIOSK_PORT=str(KIOSK), HASSMIC_TEST_SCORE=str(score),
                         HASSMIC_MODELS=os.path.join(self.state, "models"))
         os.makedirs(os.path.join(self.state, "models", "echo-de"))
         open(os.path.join(self.state, "models", "echo-de", "pryon.manifest"), "w").close()
@@ -203,6 +204,85 @@ async def main():
         check(len(a.starts) == na + 1 and len(b.starts) == nb + 1, "\"Echo\" on one, \"Alexa\" on the other: no arbitration between them")
         a.end_pipeline(); b.end_pipeline(); await asyncio.sleep(0.5)
         await a.cli.set_voice_assistant_configuration(["alexa"]); await asyncio.sleep(0.5)
+
+        # Kiosk Satellite mode: their claims on their port, loudness only, a kiosk takes part
+        kio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        kio.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); kio.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        kio.bind(("", KIOSK)); kio.setblocking(False)
+        def heard():
+            out = []
+            while True:
+                try: out.append(kio.recv(1024))
+                except BlockingIOError: return out
+        def kiosk(e, p="alexa", kid="00k10sk", **extra):
+            d = dict(ks="wake", v=1, id=kid, n=int.from_bytes(os.urandom(4), "little") & 0x3fffffff, p=p, e=e); d.update(extra)
+            for _ in range(3): kio.sendto(json.dumps(d).encode(), (BCAST, KIOSK))
+        for e in (a, b): e.page.set(arbitration_mode="kiosk")
+        ok = await until(lambda: all(e.page.state()["arbitration"]["kiosk_port"] for e in (a, b)), 3)
+        arb = a.page.state()["arbitration"]
+        check(ok and arb["mode"] == "kiosk" and [m["mode"] for m in arb["members"]] == ["kiosk"]
+              and "arbitration_mode=kiosk" in open(os.path.join(a.state, "config")).read().split(),
+              "Kiosk Satellite mode on both: port open, the other Echo's beacon says so, in state/config for the firewall")
+        await asyncio.sleep(0.5); heard()
+        na, nb = len(a.starts), len(b.starts)
+        a.wake(); b.wake(); t0 = time.monotonic()
+        await asyncio.sleep(2)
+        check(len(b.starts) == nb + 1 and len(a.starts) == na, f"the louder one (9 dB over 5) answers alone: {len(a.starts) - na} / {len(b.starts) - nb}")
+        check(b.starts and 0.38 < b.starts[-1] - t0 < 1.0, f"after the 400 ms window: {b.starts[-1] - t0 if b.starts else -1:.2f} s")
+        claims = [json.loads(x) for x in heard()]
+        by = {}
+        for c in claims: by.setdefault(c["id"], []).append(c)
+        es = sorted(c[0]["e"] for c in by.values())
+        check(len(by) == 2 and all(len(l) == 3 and len({c["n"] for c in l}) == 1 for l in by.values()) and es == [5.0, 9.0]
+              and all(set(c) == {"ks", "v", "id", "n", "p", "e"} and c["ks"] == "wake" and c["v"] == 1 and c["p"] == "alexa"
+                      and re.fullmatch(r"[0-9a-f]{16}", c["id"]) and 0 <= c["n"] < 1 << 30 for c in claims),
+              f"their wire format: three copies each, phrase \"alexa\", e in dB: {claims[:2]}")
+        b.end_pipeline(); await asyncio.sleep(0.5)
+
+        na, nb = len(a.starts), len(b.starts)
+        a.wake(); b.wake(); kiosk(95.0)
+        await asyncio.sleep(1.5)
+        check(len(a.starts) == na and len(b.starts) == nb and "kiosk claim from 00k10sk: \"alexa\", 95.0 dB" in b.text(),
+              "a kiosk that heard it louder: both Echos stay quiet")
+        b.wake(); kiosk(99.0, p="Hey  Jarvis")
+        await asyncio.sleep(1.5)
+        check(len(b.starts) == nb + 1, "a kiosk claiming another phrase: no competition")
+        b.end_pipeline(); await asyncio.sleep(0.5)
+        nb = len(b.starts)
+        b.wake()
+        for bad in (dict(e="99"), dict(e=99, v=2), dict(e=99, ks="sleep"), dict(e=99, kid="x" * 65), dict(e=99, n=1.5), dict(e=99, extra={"x": 1})):
+            kid = bad.pop("kid", "00bad"); e = bad.pop("e"); kiosk(e, kid=kid, **bad)
+        kio.sendto(b'{"ks":"wake","v":1,"id":"00bad","p":"alexa","e":99}', (BCAST, KIOSK))      # no n
+        await asyncio.sleep(1.5)
+        check(len(b.starts) == nb + 1 and "00bad" not in b.text(), "malformed claims (wrong types, version, kind, long id, missing field): ignored")
+        b.end_pipeline(); await asyncio.sleep(0.5)
+
+        # no preference for the Echo in a conversation: the louder one takes the next wake word
+        na, nb = len(a.starts), len(b.starts)
+        a.wake(); await until(lambda: len(a.starts) == na + 1, 3)
+        a.wake(); b.wake(); await asyncio.sleep(1.5)
+        check(len(a.starts) == na + 1 and len(b.starts) == nb + 1, "in a conversation: no priority, the louder Echo answers")
+        a.end_pipeline(); b.end_pipeline(); await asyncio.sleep(0.5)
+        check(a.page.state()["arbitration"]["kiosk_heard_s"] is not None, "settings page: a kiosk's claim was heard")
+
+        # the owner's loudness offset: 9 dB - 6 = 3 dB on the wire, under the other Echo's 5
+        b.page.set(arbitration_offset=-6); heard()
+        na, nb = len(a.starts), len(b.starts)
+        a.wake(); b.wake(); await asyncio.sleep(1.5)
+        es = sorted({json.loads(x)["e"] for x in heard()})
+        check(len(a.starts) == na + 1 and len(b.starts) == nb and es == [3.0, 5.0], f"offset -6 dB on the louder Echo: the other one answers, claims {es}")
+        a.end_pipeline(); b.page.set(arbitration_offset=0); await asyncio.sleep(0.5)
+
+        for e in (a, b): e.page.set(arbitration_mode="hassmic")
+        ok = await until(lambda: not any(e.page.state()["arbitration"]["kiosk_port"] for e in (a, b)), 3)
+        check(ok and "arbitration_mode=hassmic" in open(os.path.join(a.state, "config")).read().split() and "kiosk port closed" in a.text(),
+              "back to our own mode: the kiosk port closed")
+        await until(lambda: [m["mode"] for m in a.page.state()["arbitration"]["members"]] == ["hassmic"], 3)
+        na, nb = len(a.starts), len(b.starts)
+        a.wake(); b.wake(); kiosk(99.0); await asyncio.sleep(1.5)
+        check(len(b.starts) == nb + 1 and len(a.starts) == na, "our own mode again: kiosk claims no longer count, the Echos settle it")
+        b.end_pipeline(); await asyncio.sleep(0.5)
+        kio.close()
 
         # a device Home Assistant does not know
         x = X25519PrivateKey.generate(); xp = x.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)

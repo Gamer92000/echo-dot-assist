@@ -9,12 +9,14 @@
 #include "update.h"
 #include "wifimotion.h"
 #include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 const char *const denoise_names[4] = { "Off", "Low", "Medium", "High" };
 static const char *const denoise_values[4] = { "off", "low", "medium", "high" };
+static const char *const arb_modes[2] = { "hassmic", "kiosk" };            /* ARB_HASSMIC, ARB_KIOSK */
 
 const struct bt_lang bt_langs[] = {
     { "en", "English", "Connected to %s", "Disconnected from %s", "Connected to a Bluetooth device", "Disconnected from a Bluetooth device" },
@@ -41,7 +43,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { MIC_LEVEL, DENOISE, WAKE_SOUND, MUTE, DND, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, SOUND, WHISPER, WIFI_MOTION,
+enum id { MIC_LEVEL, DENOISE, WAKE_SOUND, MUTE, DND, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, ARB_MODE, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WIFI_MOTION,
           WIFI_SENS, BT_AUDIO, BT_SPEAKER, UPDATES, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
@@ -58,6 +60,10 @@ static const struct setting table[NSET] = {
     [LED_AUTO]    = { "led_auto_brightness", "LED auto brightness", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
     [LED_LEVEL]   = { "led_brightness", "LED brightness", "Lights", "%", S_INT, 0, 100, 1, 0 },
     [ARB]         = { "arbitration", "Wake word arbitration with other Echos", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
+    /* arb.c keeps them in memory, state/config on disk: lockdown.sh admits Kiosk Satellite's port by it */
+    [ARB_MODE]    = { "arbitration_mode", "Arbitration mode", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
+    [ARB_WINDOW]  = { "arbitration_window", "Kiosk Satellite window", "Features", "ms", S_INT, 100, 500, 1, 0 },
+    [ARB_OFFSET]  = { "arbitration_offset", "Kiosk Satellite loudness offset", "Features", "dB", S_INT, -20, 20, 1, 0 },
     [SOUND]       = { "sound_detection", "Sound detection", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [WHISPER]     = { "whisper_detection", "Whisper detection", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [WIFI_MOTION] = { "wifi_motion", "Wi-Fi motion (experimental)", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
@@ -79,7 +85,7 @@ static int present(enum id i)
     case SOUND: return sound_model() != SOUND_NONE;               /* the firmware has one on every model so far */
     case LED_AUTO: return core_lux() == core_lux();               /* a light sensor: not NAN */
     case WIFI_MOTION: case WIFI_SENS: return wifimotion_present();
-    case ARB: return arb_running();
+    case ARB: case ARB_MODE: case ARB_WINDOW: case ARB_OFFSET: return arb_running();
     case SS_UNPAIRED: return core_sendspin_port != 0;
     default: return 1;
     }
@@ -104,6 +110,7 @@ int settings_choices(const struct setting *s, const char *const **names)
         for (int i = 0; i < bt_lang_count; i++) bt_lang_codes[i] = bt_langs[i].code;
         *names = bt_lang_codes; return bt_lang_count;
     case UPDATES: *names = update_channels; return 3;
+    case ARB_MODE: *names = arb_modes; return 2;
     default: *names = NULL; return 0;
     }
 }
@@ -125,6 +132,9 @@ int settings_get(const struct setting *s)
     case WIFI_SENS: return wifimotion_sensitivity(-1);
     case UPDATES: return update_channel(-1);
     case ARB: return arb_arbitrate(-1);
+    case ARB_MODE: return arb_mode(-1);
+    case ARB_WINDOW: return arb_window(-1);
+    case ARB_OFFSET: return arb_offset(INT_MIN);
     case SS_UNPAIRED: return sendspin_unpaired(-1);
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: return core_eq((int)(s - table) - EQ_BASS);
     case BT_AUDIO: return bt_audio;
@@ -152,6 +162,9 @@ static void put(enum id i, int v)
     case WIFI_SENS: wifimotion_sensitivity(v); break;
     case UPDATES: update_channel(v); break;
     case ARB: arb_arbitrate(v); break;                          /* arb.c keeps it */
+    case ARB_MODE: arb_mode(v); break;
+    case ARB_WINDOW: arb_window(v); break;
+    case ARB_OFFSET: arb_offset(v); break;
     case SS_UNPAIRED: sendspin_unpaired(v); break;              /* sendspin.c keeps it */
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: core_set_eq(i - EQ_BASS, v); break;     /* the mixer keeps it */
     case BT_AUDIO: bt_audio = v; if (!v) a2dp_pair(0); break;                        /* paired phones still connect */
