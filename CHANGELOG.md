@@ -4,6 +4,34 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-06
 
+- **A new settings page.** Every setting now says what it does and when to change it, each feature which entities it
+  adds to Home Assistant, and the page works on a phone. The Echos section shows the network, the other Echos and
+  whether their settings match, in one list.
+- **Log in once for all your Echos.** Echos in the same network (the one wake word arbitration uses, which runs on
+  every Echo) trust each other: a browser logged in on one is let in on the others without pressing their buttons.
+  The page of the Echo you are logged in to does it by itself; opening another Echo's page directly, its login offers
+  "Log in through <Echo>", which you confirm on the Echo you are logged in to. Debug access still takes a press of
+  that Echo's own button.
+- **Wake words installed by hand under a short name get the full one** (`echo-de` becomes `echo-de-DE`, as
+  `scripts/artifacts.sh` names them) when the Echo starts after this update, so the same wake word has one name on
+  every Echo and the settings page sees it as the same. The chosen wake word stays chosen. Only for languages Amazon
+  has in one region (German, Italian, Japanese, Portuguese); English, French and Spanish ones keep their name.
+- **Choose what to copy between Echos.** The settings page shows this Echo's settings beside every other Echo's you are
+  logged in to, with the differences marked; tick the settings and the Echos to copy them to.
+- **Copy Amazon's models from one Echo to the others** on the settings page: extra wake words, whisper detection and
+  the newer sound detection model. Run `scripts/artifacts.sh` for one Echo, then copy from it here; no PC needed for
+  the rest. Each wake word set is first tried on the receiving Echo, and every Echo that got something restarts its
+  satellite once. The page now also checks every answer an Echo sends, so nothing on the network can change what
+  travels between them; an Echo on an older version needs updating before the page can work with it.
+- **Sound detection says which model it uses**, Amazon's newer one or the firmware's, and when it cannot start (the
+  model does not load) it now switches itself off properly: the settings page shows why, and Home Assistant no longer
+  lists a "Sound" entity that would never fire.
+- **Echos stay in their network with arbitration off.** "Wake word arbitration" now only decides whether an Echo
+  takes part: switched off, it answers every wake word itself, and the other Echos stop waiting for it. It keeps the
+  network key and its "Arbitration handoff" entity, so the settings pages still find it and settings can be copied
+  to it. Echos switched off before this update keep arbitration off and join the network again. The volume-key
+  pairing no longer switches arbitration on.
+
 - **Home Assistant shows less, the settings page the rest.** Home Assistant keeps what you use day to day: mute, do
   not disturb, wake sound, the LEDs, the equalizer, the media player and firmware updates. Features are switched on
   the settings page, and while one is on its entities are in Home Assistant: wake word arbitration, sound detection,

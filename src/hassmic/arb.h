@@ -17,8 +17,9 @@ struct arb_hooks {
 
 int  arb_start(int port, const char *node, const struct arb_hooks *h);           /* node: our ESPHome node name; 0 = running */
 int  arb_running(void);
-int  arb_join(int set);                         /* "Join arbitration network": 0/1, or -1 to only read */
-int  arb_peers(void);                           /* other members heard from lately */
+int  arb_arbitrate(int set);                    /* take part in rounds (the "arbitration" setting): 0/1, -1 only reads.  The
+                                                 * network (keys, beacons: the settings pages' list of Echos) runs either way */
+int  arb_peers(void);                           /* other members heard from lately that take part in rounds */
 /* Home Assistant ran our "arbitration_key" action: a member hands us its network.  Any lock may be held. */
 void arb_key(const char *network, const char *key);
 /* Home Assistant's answer to hooks->request: the state of that entity.  Any lock may be held. */
@@ -28,6 +29,10 @@ void arb_handoff(char *out, size_t cap);
 /* For the settings page: our network, the members (name, IP), the Echos outside it and why ("none": in no network,
  * "younger": in a younger one, should join ours, "older": we should join theirs), as JSON.  Any lock may be held. */
 size_t arb_status_json(char *out, size_t cap);
+/* For the settings pages (web.c vouchers): a key every member of our network derives from K, nobody else.  -1: in no
+ * network.  And the members heard from lately, as JSON [{"node","ip"}] (unauthenticated: beacons say as much).  Any lock. */
+int  arb_web_key(unsigned char out[32]);
+size_t arb_members_json(char *out, size_t cap);
 int  arb_pair(void);                            /* the pairing gesture: 2 min in which an Echo nearby may join; -1 not running */
 
 /* The wake word was heard with this score (signal to noise, dB x 100); prio 2 = this Echo is in a conversation or

@@ -5,6 +5,7 @@
 #include "ble.h"
 #include "micgain.h"
 #include "sendspin.h"
+#include "sound.h"
 #include "update.h"
 #include "wifimotion.h"
 #include <ctype.h>
@@ -75,6 +76,7 @@ static int present(enum id i)
     switch (i) {
     case BT_ANNOUNCE: case BT_LANG: case BT_AUDIO: case BT_SPEAKER: return ble_present();
     case WHISPER: return core_whisper_model();
+    case SOUND: return sound_model() != SOUND_NONE;               /* the firmware has one on every model so far */
     case LED_AUTO: return core_lux() == core_lux();               /* a light sensor: not NAN */
     case WIFI_MOTION: case WIFI_SENS: return wifimotion_present();
     case ARB: return arb_running();
@@ -122,7 +124,7 @@ int settings_get(const struct setting *s)
     case WIFI_MOTION: return wifimotion_enable(-1);
     case WIFI_SENS: return wifimotion_sensitivity(-1);
     case UPDATES: return update_channel(-1);
-    case ARB: return arb_join(-1);
+    case ARB: return arb_arbitrate(-1);
     case SS_UNPAIRED: return sendspin_unpaired(-1);
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: return core_eq((int)(s - table) - EQ_BASS);
     case BT_AUDIO: return bt_audio;
@@ -149,7 +151,7 @@ static void put(enum id i, int v)
     case WIFI_MOTION: wifimotion_enable(v); break;
     case WIFI_SENS: wifimotion_sensitivity(v); break;
     case UPDATES: update_channel(v); break;
-    case ARB: arb_join(v); break;                               /* arb.c keeps it */
+    case ARB: arb_arbitrate(v); break;                          /* arb.c keeps it */
     case SS_UNPAIRED: sendspin_unpaired(v); break;              /* sendspin.c keeps it */
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: core_set_eq(i - EQ_BASS, v); break;     /* the mixer keeps it */
     case BT_AUDIO: bt_audio = v; if (!v) a2dp_pair(0); break;                        /* paired phones still connect */

@@ -34,7 +34,8 @@ async def main():
     with open(os.path.join(state, "preset"), "w") as f: f.write("# from another Echo's page\ndo_not_disturb=on\nno_such_thing=1\n")   # scripts/setup.sh --preset
     env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(state, "play.raw"),
                HASSMIC_MDNS_FILE=os.path.join(state, "none"), HASSMIC_ARB_ADDR="127.255.255.255", HASSMIC_MODELS=os.path.join(state, "models"),
-               HASSMIC_FAKE_WHISPER="1", HASSMIC_ADB_OPEN=os.path.join(state, "adb-open.root"))
+               HASSMIC_FAKE_WHISPER="1", HASSMIC_ADB_OPEN=os.path.join(state, "adb-open.root"),
+               HASSMIC_FAKE_SOUND_MODEL=os.path.join(state, "aed-model"))            # which sound model there is (sound_none.c)
     log = os.path.join(state, "log")
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Web", "-L", "-z", "0", "-o", "0",
                              "-a", "16973", "-W", str(WEB)], env=env, stderr=open(log, "w"))
@@ -50,7 +51,7 @@ async def main():
               and "preset applied, 1 setting; not taken:" in open(log).read() and "no_such_thing" in open(log).read(),
               "a preset (setup.sh --preset): applied once at start, the unknown line reported, the file kept as preset.applied")
         st, h, body = rq("GET", "/")
-        check(st == 200 and h.get("Content-Encoding") == "gzip" and b"hassmic settings" in gzip.decompress(body), "the page, gzip'd")
+        check(st == 200 and h.get("Content-Encoding") == "gzip" and b"<title>Echo settings</title>" in gzip.decompress(body), "the page, gzip'd")
         st, h, body = rq("GET", "/crypto.js")
         check(st == 200 and b"blake2b" in gzip.decompress(body), "its scripts")
         b = Browser(WEB)
@@ -103,6 +104,30 @@ async def main():
         log_n = len(open(log).read())
         b.set(sound_detection="on"); await asyncio.sleep(0.5)
         check("links closed" not in open(log).read()[log_n:], "the same value again: Home Assistant left alone")
+
+        # sound detection's model: which one the page names, and a start that fails because it does not load
+        mf = os.path.join(state, "aed-model")
+        check(b.state()["sound"] == {"model": "firmware", "failed": False}, f"sound model: the firmware's: {b.state()['sound']}")
+        open(mf, "w").write("newer\n")
+        check(b.state()["sound"]["model"] == "newer", "Amazon's newer model installed: the page names it")
+        open(mf, "w").write("broken\n")
+        b.set(sound_detection="off"); await asyncio.sleep(0.5); b.set(sound_detection="on"); await asyncio.sleep(1.5)
+        st = b.state(); on = next(x["value"] for x in st["settings"] if x["name"] == "sound_detection")
+        check(st["sound"]["failed"] and on == 0 and cfg().get("sound_detection") == "off" and any("could not start" in w for w in st["warnings"])
+              and "model did not load), switched off" in open(log).read(),
+              "the model does not load: switched off (page, settings file), and the page says why")
+        try: await ha.disconnect()
+        except Exception: pass
+        ha, by, states = await ha_connect()
+        check("sound" not in by, "...and Home Assistant no longer lists \"Sound\"")
+        open(mf, "w").write("firmware\n")
+        b.set(sound_detection="on"); await asyncio.sleep(1.5)
+        st = b.state()
+        check(not st["sound"]["failed"] and not any("could not start" in w for w in st["warnings"]) and cfg().get("sound_detection") == "on",
+              "it loads again: on, the warning gone")
+        try: await ha.disconnect()
+        except Exception: pass
+        ha, by, states = await ha_connect()
 
         # signatures
         body = b"wake_sound=on\n"; hd = b.headers("POST", "/api/set", body)

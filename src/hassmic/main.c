@@ -392,6 +392,8 @@ const char *const core_sound_events[] = { "smoke_or_co_alarm", "glass_break", "d
 const int core_sound_nevents = sizeof core_sound_events / sizeof core_sound_events[0];
 #define SOUND_WINDOW_MS 11000               /* a scoring window (9.98 s) and the decoder's lag behind it */
 static atomic_int sound_want;               /* the switch; the capture thread opens and closes the decoder to match */
+static atomic_int sound_failed;             /* the last start failed (the model did not load): the settings page says so */
+int core_sound_failed(void) { return atomic_load(&sound_failed); }
 
 int core_sound(int set)
 {
@@ -770,9 +772,7 @@ static int arb_request(const char *entity)
 static void arb_paired(int result) { sound_queue(result == 1 ? SND_TOUCH : result == 2 ? SND_BT_ON : SND_BT_OFF); }
 static void on_pair(void)
 {
-    char e[80];
-    /* the gesture says "join": through the settings, so Home Assistant gets the arbitration entities too */
-    pthread_mutex_lock(&core_lock); if (arb_running() && !arb_join(-1)) settings_set("arbitration", "on", e, sizeof e); pthread_mutex_unlock(&core_lock);
+    /* the network only: whether this Echo then takes part in rounds stays the "arbitration" setting's */
     if (arb_pair() < 0) fprintf(stderr, "arbitration: not running, no pairing\n");
 }
 
@@ -1257,8 +1257,16 @@ static void *capture_thread(void *arg)
         if (atomic_load(&sound_want) != sound_running) {           /* Home Assistant switched sound detection */
             if (!sound_running) {
                 const char *types[SOUND_MAP]; for (int i = 0; i < SOUND_MAP; i++) types[i] = sound_map[i].amazon;
-                if (sound_open(types, SOUND_MAP, on_sound) == 0) sound_running = 1;
-                else { fprintf(stderr, "sound detection: cannot start\n"); atomic_store(&sound_want, 0); }
+                if (sound_open(types, SOUND_MAP, on_sound) == 0) { sound_running = 1; atomic_store(&sound_failed, 0); }
+                else {
+                    /* off through the settings: the file, Home Assistant's list ("Sound" goes) and the page agree */
+                    char e[80];
+                    fprintf(stderr, "sound detection: cannot start (model did not load), switched off\n");
+                    pthread_mutex_lock(&core_lock);             /* with the switch, so the page sees both or neither */
+                    atomic_store(&sound_failed, 1);
+                    if (settings_set("sound_detection", "off", e, sizeof e)) atomic_store(&sound_want, 0);
+                    pthread_mutex_unlock(&core_lock);
+                }
             } else { sound_close(); sound_running = 0; }
         }
         if (sound_running) sound_feed(pcm, n / 2);

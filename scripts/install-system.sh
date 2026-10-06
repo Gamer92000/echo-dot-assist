@@ -57,7 +57,7 @@ fi
 # What goes into /system/hassmic, whichever way it gets there.  The tools and the Wi-Fi motion module are optional (no
 # kernel toolchain, no .ko): `|| true`, since an assignment takes the substitution's status and set -e would end here.
 FILES="$OUT/hassmic $OUT/runas $(ls $OUT/mixcap $OUT/mixplay $OUT/pryon_test $OUT/*.ko 2>/dev/null || true) $OUT/otatool secrets/update.pub keys/release.pub $DDIR/device.conf
-       scripts/system/boot.sh scripts/system/main.sh scripts/system/sysinstall.sh scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh"
+       scripts/system/boot.sh scripts/system/main.sh scripts/system/sysinstall.sh scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh scripts/device/artifact-install.sh"
 
 if [ -z "$TWRP" ]; then
     t "rm -rf $STAGE; mkdir -p $STAGE"

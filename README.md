@@ -72,7 +72,9 @@ Details:
   word: one on "Echo" and one on "Alexa" each answer their own); the others stay silent (no
   sound, no light). The Echos settle it among themselves on the local network in 0.2 s, by how clearly the word stood
   out of the room's noise; an Echo that is in a conversation or ringing keeps the next wake word. With only one Echo
-  there is no delay. They find each other by themselves ("Wake word arbitration" on the [settings page](#settings-page), on by default); the shared key
+  there is no delay. They find each other by themselves; "Wake word arbitration" on the [settings page](#settings-page) (on by
+  default) says whether an Echo takes part: switched off, it answers every wake word itself but stays in the Echos'
+  network, so the settings pages still find it. The shared key
   travels through your Home Assistant, so nobody else on the network can join or silence them. Nothing to set up: each
   Echo shows a key on its diagnostic entity "Arbitration handoff" (leave it enabled), and the Echos read each other's
   through Home Assistant. That works while the Echo's entities in Home Assistant carry the name of its `NAME` (so not if
@@ -276,11 +278,18 @@ button (the dot) within a minute: the ring shows that a login waits, and the pre
 Echo from then on. The page shows what does not work and why (Home Assistant not connected, wake word or whisper
 models missing), every setting, and the browsers approved (revoke there). Wake word arbitration: the network, the
 Echos in it, and those outside it with the reason (no key yet, a second network beside it) and what to do. Echos: every
-Echo this one hears (and any you add by address); log in to each once with its own action button, and the page shows
-which settings differ from this Echo's and copies them over, to one or to all. "Export" saves the settings as
+Echo this one hears (and any you add by address). Echos in one network trust each other, so a browser logged in on one
+is let in on the others without their buttons; an Echo's own login page offers "Log in through <another Echo>" for
+the same. Debug access still takes a press of that Echo's own button. Then "Copy settings"
+shows every setting of this Echo beside the others' (differences marked): tick the settings and the Echos to copy them
+to. "Copy models" does the same for Amazon's models that `scripts/artifacts.sh` installs (wake words, whisper detection,
+the newer sound detection model), between any of your Echos: run the script for one Echo, copy from it to the rest.
+A wake word set is tried on the receiving Echo's own engine first, and each Echo that got something restarts its
+satellite once. "Export" saves the settings as
 `hassmic-settings.conf` (name=value lines, without the Echo's name, keys and pairings); "Import" applies such a file,
 to this Echo or another, or as a preset for the next install (`scripts/setup.sh --preset <file>`; without it the
-install step asks). Works with Wyoming too.
+install step asks). Every setting says on the page what it does, and each feature which entities it adds to Home
+Assistant; sound detection also which model it uses, and why it switched off if its model did not load. Works with Wyoming too.
 
 ### hassmic.conf
 

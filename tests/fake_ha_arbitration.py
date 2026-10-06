@@ -6,14 +6,14 @@ device's request for a state (no permission needed), and runs an action a device
 Home Assistant actions") that names another device's own action (esphome.<node>_arbitration_key) on that device.
 Three ways in: the handoff entities (no permission), the action, and the volume-key pairing (SIGWINCH, no HA).
 Everything goes out as loopback broadcast (HASSMIC_ARB_ADDR): nothing of it reaches the LAN."""
-import asyncio, base64, os, re, signal, socket, struct, subprocess, sys, tempfile, time
+import asyncio, base64, json, os, re, signal, socket, struct, subprocess, sys, tempfile, time
 from aioesphomeapi import APIClient, VoiceAssistantEventType as Ev
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
-from webclient import Browser
+from webclient import Browser, req
 ARB, BCAST = 28990, "127.255.255.255"
 
 
@@ -41,7 +41,7 @@ class Echo:
 
     def start(self):
         self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.port), "-n", self.name, "-L",
-                                      "-z", "0", "-o", "0", "-a", str(ARB), "-W", str(self.web)], env=self.env, stderr=open(self.log, "w"))
+                                      "-z", "0", "-o", "0", "-a", str(ARB), "-W", str(self.web)], env=self.env, stderr=open(self.log, "a"))
 
     def text(self): return open(self.log).read()
     def net(self):
@@ -56,12 +56,22 @@ class Echo:
         try: return base64.b64decode(self.st("arbitration_handoff").split()[1])
         except (AttributeError, IndexError): return None
 
-    async def join(self, on):
+    async def arbitrate(self, on):
         """arbitration on or off on the settings page; Home Assistant is sent away and lists the entities again"""
         self.page.set(arbitration="on" if on else "off")
         try: await self.cli.disconnect()
         except Exception: pass
         await asyncio.sleep(0.5); await self.connect(self.ha)
+
+    async def reset(self, start=True):
+        """a newcomer: restarted without its network key (the network itself cannot be left any more)"""
+        try: await self.cli.disconnect()
+        except Exception: pass
+        self.proc.terminate(); self.proc.wait(); self.states = {}
+        p = os.path.join(self.state, "arbitration")
+        keep = [l for l in open(p) if not l.startswith("net ")]
+        open(p, "w").writelines(keep)
+        if start: self.start(); await asyncio.sleep(0.5); await self.connect(self.ha)
 
     async def connect(self, ha):
         self.ha, self.states = ha, {}
@@ -146,6 +156,24 @@ async def main():
               and arb["handoff_entity"] == a.entity() and not arb["others"], f"settings page: the network, its member with its address, the handoff entity: {arb}")
         a.allowed = b.allowed = True
 
+        # logged in on one Echo: in on the other one too, through their network, without its button
+        x = Browser(a.web); check(x.login_with_button(a.proc), "a new browser, approved on the kitchen Echo only")
+        xb = x.at(b.web)
+        check(xb.state() is None and xb.through(x) == "approved" and xb.state() is not None,
+              "through the network: let in on the living room Echo, no button pressed there")
+        check(any("via Echo Kitchen" in k["label"] for k in xb.state()["clients"]), "listed there as approved through the kitchen Echo")
+        y = Browser(a.web); yb = y.at(b.web)                   # never approved anywhere
+        check(yb.through(y) == "not logged in" and yb.state() is None, "a browser approved nowhere gets no voucher")
+        n = json.loads(req(b.web, "POST", "/api/vouch/nonce", xb.pub.hex().encode())[2])["nonce"]
+        z = Browser(a.web); z.login_with_button(a.proc); zb = z.at(b.web)
+        check(zb.through(z, voucher="00" * 16) == "refused" and zb.state() is None, "a made-up voucher: refused")
+        st, _, data = x.call("POST", "/api/vouch/issue", f"{a.page.hello['pub']} {zb.pub.hex()} {n}".encode())
+        body = f"{zb.pub.hex()} {n} {json.loads(data)['voucher']} {json.loads(data)['via'].encode().hex()} z".encode()
+        check(json.loads(req(b.web, "POST", "/api/vouch/login", body)[2])["login"] == "refused" and zb.state() is None,
+              "a voucher made out for another Echo, or for a nonce handed to another browser: refused")
+        n = json.loads(req(b.web, "POST", "/api/vouch/nonce", zb.pub.hex().encode())[2])["nonce"]
+        check(zb.through(z, nonce=n) == "approved" and zb.through(z, nonce=n) == "refused", "a nonce counts once")
+
         # both hear it, the one that heard it better answers, the other stays quiet
         await asyncio.sleep(1)
         a.wake(); b.wake(); t0 = time.monotonic()
@@ -209,24 +237,34 @@ async def main():
         except Exception: ok = True
         check(ok, "plaintext connection to an Echo with a device key: refused")
 
-        # leave: the key is gone, the Echo answers on its own again
-        await a.join(False)
-        check(a.net() is None and "left network" in a.text() and "arbitration_peers" not in a.by and "arbitration_handoff" not in a.by,
-              "arbitration off on the page: network key wiped, its entities gone from Home Assistant")
-        na, nb = len(a.starts), len(b.starts)
+        # arbitration off: no rounds, but still in the network (the settings pages find each other through it)
+        net = a.net()
+        await a.arbitrate(False)
+        check(a.net() == net and "arbitration_peers" not in a.by and "arbitration_handoff" in a.by and a.services
+              and a.page.state()["arbitration"]["arbitrates"] is False,
+              "arbitration off on the page: network key kept, handoff entity and action still listed, peers sensor gone")
+        ok = await until(lambda: b.st("arbitration_peers") == 0, 5)
+        check(ok and [m["arbitrates"] for m in b.page.state()["arbitration"]["members"]] == [False],
+              "the other Echo learns it from the next beacon, sent at once: still a member, no longer counted for rounds")
+        na, nb, asked = len(a.starts), len(b.starts), b.text().count("no other Echo to ask")
         a.wake(); b.wake(); await asyncio.sleep(1.5)
-        check(len(a.starts) == na + 1 and len(b.starts) == nb + 1, "outside the network: both answer (Home Assistant's check is left)")
+        check(len(a.starts) == na + 1 and len(b.starts) == nb + 1 and "arbitration off" in a.text() and b.text().count("no other Echo to ask") > asked,
+              "both answer, and neither waits for a round (Home Assistant's check is left)")
         a.end_pipeline(); b.end_pipeline(); await asyncio.sleep(0.5)
+        await a.arbitrate(True)
+        ok = await until(lambda: b.st("arbitration_peers") == 1, 5)
+        check(ok and "takes part in rounds again" in a.text(), "arbitration on again: counted at once")
 
-        # nobody else in a network: the first to join starts one, the next one gets its key
-        await b.join(False)
-        await until(lambda: b.net() is None, 3)
-        await a.join(True); t0 = time.monotonic()
+        # nobody else in a network: the first Echo starts one, the next one gets its key
+        await b.reset(start=False)
+        await a.reset(); t0 = time.monotonic()
         ok = await until(lambda: a.net(), 10)
         check(ok and "no other Echo found, started network" in a.text() and time.monotonic() - t0 > 4, f"alone: started a network after {time.monotonic() - t0:.1f} s")
         # no handoff entity to read (disabled, or the device renamed in HA) and no permission: no key, HA raises its repair
         a.allowed = False; ha.states_on = False; refused = len(ha.refused)
-        await b.join(True)
+        b.start(); await asyncio.sleep(0.5); await b.connect(ha)
+        w = Browser(a.web); w.login_with_button(a.proc)
+        check(w.at(b.web).through(w) == "refused", "an Echo outside the network: nobody vouches it in (the button it is)")
         await asyncio.sleep(24)
         check(len(ha.refused) > refused and b.net() is None, "no handoff entity and no \"perform actions\": no key (HA raises its repair)")
         o = [x for x in a.page.state()["arbitration"]["others"] if x["node"] == "echo-living-room"]
@@ -241,8 +279,7 @@ async def main():
         await asyncio.sleep(2)                          # the member's last two copies of its "give" (they would let b back in)
 
         # two Echos asking at once: the network goes to neither
-        await b.join(False); await until(lambda: b.net() is None, 3)
-        await b.join(True)
+        await b.reset()
         send(b"HMA1\x05" + xp + struct.pack("<Q", 0) + node("evil"))
         b.pair(); await asyncio.sleep(1.5); a.pair(); await asyncio.sleep(4)
         check(b.net() != a.net() and "pairing refused: 2 Echos asked at once" in a.text(), "a second Echo asking: pairing refused")
@@ -253,16 +290,14 @@ async def main():
 
         # handoff entity back: in without permission
         ha.states_on = True
-        await b.join(False); await until(lambda: b.net() is None, 3)
-        await b.join(True)
+        await b.reset()
         ok = await until(lambda: b.net() == a.net(), 20)
         check(ok and "offered by echo-kitchen" in b.text(), "handoff entity readable again: joined without permission")
         await until(lambda: a.st("arbitration_peers") == 1 and b.st("arbitration_peers") == 1, 35)
 
         # permission and no handoff entity (an Echo of an older version): the action
         ha.states_on = False; a.allowed = True; calls = len(ha.calls)
-        await b.join(False); await until(lambda: b.net() is None, 3)
-        await b.join(True)
+        await b.reset()
         ok = await until(lambda: b.net() == a.net() and a.st("arbitration_peers") == 1 and b.st("arbitration_peers") == 1, 40)
         check(ok and any(c[1] == "esphome.echo_living_room_arbitration_key" for c in ha.calls[calls:]), "allowed: the next one joined through the action")
     finally:

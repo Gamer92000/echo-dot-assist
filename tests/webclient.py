@@ -6,22 +6,35 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 
 def req(port, method, path, body=b"", headers=None):
-    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=15)
     c.request(method, path, body=body, headers=headers or {})
     r = c.getresponse(); data = r.read(); c.close()
     return r.status, dict(r.getheaders()), data
 
 
 class Browser:
-    def __init__(self, port):
+    def __init__(self, port, sk=None):
         self.port = port
         self.hello = json.loads(req(port, "GET", "/api/hello")[2])
-        self.sk = X25519PrivateKey.generate()
+        self.sk = sk or X25519PrivateKey.generate()
         self.pub = self.sk.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
         dev = bytes.fromhex(self.hello["pub"])
         shared = self.sk.exchange(X25519PublicKey.from_public_bytes(dev))
         self.k = hashlib.blake2b(b"hassmic web 1" + dev + self.pub, key=shared, digest_size=32).digest()
         self.ctr = int(time.time() * 1e6)
+
+    def at(self, port):
+        """the same browser key towards another Echo (a page calling it cross-origin)"""
+        return Browser(port, self.sk)
+
+    def through(self, via, label="test browser", nonce=None, voucher=None):
+        """log in here through another Echo of the network this browser is approved on (web.c vouchers): 'approved' or not"""
+        nonce = nonce or json.loads(req(self.port, "POST", "/api/vouch/nonce", self.pub.hex().encode())[2])["nonce"]
+        st, _, data = via.call("POST", "/api/vouch/issue", f"{self.hello['pub']} {self.pub.hex()} {nonce}".encode())
+        if st != 200: return json.loads(data).get("error")
+        v = json.loads(data)
+        body = f"{self.pub.hex()} {nonce} {voucher or v['voucher']} {v['via'].encode().hex()} {label}".encode()
+        return json.loads(req(self.port, "POST", "/api/vouch/login", body)[2])["login"]
 
     def login(self, label="test browser"):
         return json.loads(req(self.port, "POST", "/api/login", f"{self.pub.hex()} {label}".encode())[2])["login"]
@@ -40,7 +53,13 @@ class Browser:
         return {"X-HM-Pub": self.pub.hex(), "X-HM-Ctr": str(ctr), "X-HM-Mac": mac}
 
     def call(self, method, path, body=b"", **kw):
-        return req(self.port, method, path, body, self.headers(method, path, body, **kw))
+        """a signed request; the answer to one that passed must be signed with the same key over our counter (web.c)"""
+        hd = self.headers(method, path, body, **kw)
+        st, h, data = req(self.port, method, path, body, hd)
+        if st != 401 and "key" not in kw and "ctr" not in kw:
+            want = hashlib.blake2b(f"RESP\n{hd['X-HM-Ctr']}\n".encode() + data, key=self.k, digest_size=16).hexdigest()
+            if h.get("X-HM-Mac") != want: raise AssertionError(f"answer to {method} {path} ({st}) is not signed right")
+        return st, h, data
 
     def set(self, **values):
         """set("mic_level=-20") style through keyword arguments: set(mic_level=-20, wifi_motion="on")"""

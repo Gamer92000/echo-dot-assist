@@ -319,7 +319,7 @@ static void send_setting(int key)       /* lock held */
     case KEY_DENOISE: pb_str(&b, 2, denoise_names[core_mic_denoise(-1)]); send_state(SELECT_STATE, &b); break;
     case KEY_BT_LANG: if (ble_present()) { pb_str(&b, 2, settings_bt_lang()->name); send_state(SELECT_STATE, &b); } break;
     case KEY_EQ_BASS: case KEY_EQ_MID: case KEY_EQ_TREBLE: pb_float(&b, 2, core_eq(key - KEY_EQ_BASS)); send_state(NUMBER_STATE, &b); break;
-    case KEY_ARB_JOIN: if (arb_running()) { pb_uint(&b, 2, arb_join(-1)); send_state(SWITCH_STATE, &b); } break;
+    case KEY_ARB_JOIN: if (arb_running()) { pb_uint(&b, 2, arb_arbitrate(-1)); send_state(SWITCH_STATE, &b); } break;
     case KEY_ARB_PEERS: if (arb_running()) { pb_float(&b, 2, arb_peers()); send_state(SENSOR_STATE, &b); } break;
     case KEY_SS_UNPAIRED: if (core_sendspin_port) { pb_uint(&b, 2, sendspin_unpaired(-1)); send_state(SWITCH_STATE, &b); } break;
     case KEY_ADB_WIFI: pb_uint(&b, 2, adbwifi_open()); send_state(SWITCH_STATE, &b); break;
@@ -454,7 +454,8 @@ static int listed(int key)
     case KEY_SOUND: return settings_on("sound_detection");
     case KEY_BT_PAIRING: return ble_present() && settings_on("bluetooth_audio");
     case KEY_BT_OUT_SEARCH: case KEY_BT_OUT: case KEY_BT_OUT_STATUS: case KEY_BT_OUT_DELAY: return ble_present() && settings_on("bluetooth_speaker");
-    case KEY_ARB_PEERS: case KEY_ARB_SERVICE: case KEY_ARB_HANDOFF: return arb_running() && settings_on("arbitration");
+    case KEY_ARB_PEERS: return arb_running() && settings_on("arbitration");
+    case KEY_ARB_SERVICE: case KEY_ARB_HANDOFF: return arb_running();       /* the network, which runs either way */
     case KEY_WHISPERED: return core_whisper_model() && settings_on("whisper_detection");
     case KEY_WIFI_MOTION: case KEY_WIFI_MOTION_SENS: return wifimotion_present() && settings_on("wifi_motion");
     case KEY_LUX: case KEY_LED_AUTO: return have_light;
@@ -497,19 +498,22 @@ static void send_setting_entities(void)
           pb_str(&b, 5, "mdi:timer-sand"); pb_float(&b, 6, 0); pb_float(&b, 7, 1000); pb_float(&b, 8, 10); pb_uint(&b, 10, 1);
           pb_str(&b, 11, "ms"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
     }
-    if (listed(KEY_ARB_PEERS)) {
+    if (listed(KEY_ARB_HANDOFF)) {
         /* the action other Echos hand their network key through: Home Assistant registers it as
          * esphome.<node>_arbitration_key, after the node name we report, whatever the device is called there */
         { PB(b, 256); PB(a, 48); pb_str(&b, 1, "arbitration_key"); pb_fixed32(&b, 2, KEY_ARB_SERVICE);
           pb_str(&a, 1, "network"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
           a.n = 0; pb_str(&a, 1, "key"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
           pb_str(&b, 5, "Used by other Echos (wake word arbitration), not by people"); send_msg(LIST_SERVICE, &b); }
-        { PB(b, 128); pb_str(&b, 1, "arbitration_peers"); pb_fixed32(&b, 2, KEY_ARB_PEERS); pb_str(&b, 3, "Arbitration peers");
-          pb_str(&b, 5, "mdi:access-point-network"); pb_uint(&b, 13, 2); send_msg(LIST_SENSOR, &b); }
         /* our public key, and a sealed network key while we offer one: other Echos read it through Home Assistant
-         * (arb.c), which lets devices read states without "perform actions".  Diagnostic, and must stay enabled */
+         * (arb.c), which lets devices read states without "perform actions".  Diagnostic, and must stay enabled.
+         * Listed with arbitration off too: the network runs either way (the settings pages find each other by it) */
         { PB(b, 192); pb_str(&b, 1, "arbitration_handoff"); pb_fixed32(&b, 2, KEY_ARB_HANDOFF); pb_str(&b, 3, "Arbitration handoff");
           pb_str(&b, 5, "mdi:handshake"); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
+    }
+    if (listed(KEY_ARB_PEERS)) {
+        { PB(b, 128); pb_str(&b, 1, "arbitration_peers"); pb_fixed32(&b, 2, KEY_ARB_PEERS); pb_str(&b, 3, "Arbitration peers");
+          pb_str(&b, 5, "mdi:access-point-network"); pb_uint(&b, 13, 2); send_msg(LIST_SENSOR, &b); }
     }
     /* Whisper detection (whisper.h): "{{ is_state('binary_sensor.<node>_last_request_whispered', 'on') }}" in the
      * conversation agent's prompt template, to have it answer in whispered speech tags */
@@ -555,7 +559,7 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     else if (type == SWITCH_COMMAND && key == KEY_BT_OUT_SEARCH && ble_present()) { a2dp_out_search(on); return; }   /* a2dp.c keeps them */
     else if (type == SWITCH_COMMAND && key == KEY_BT_OUT && ble_present()) { a2dp_out_enable(on); send_setting(key); return; }
     else if (type == NUMBER_COMMAND && key == KEY_BT_OUT_DELAY && ble_present()) { a2dp_out_delay(num < 0 ? 0 : (int)lroundf(num)); send_setting(key); return; }
-    else if (type == SWITCH_COMMAND && key == KEY_ARB_JOIN && arb_running()) { arb_join(on); send_setting(key); return; }   /* arb.c keeps it */
+    else if (type == SWITCH_COMMAND && key == KEY_ARB_JOIN && arb_running()) { arb_arbitrate(on); send_setting(key); return; }   /* arb.c keeps it */
     else if (type == SWITCH_COMMAND && key == KEY_SS_UNPAIRED && core_sendspin_port) { sendspin_unpaired(on); send_setting(key); return; }  /* sendspin.c keeps it */
     else if (type == SWITCH_COMMAND && key == KEY_ADB_WIFI) {
         /* Before Home Assistant has set the key anyone on the network gets a connection: that must not be a way to

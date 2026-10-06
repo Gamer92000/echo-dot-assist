@@ -139,6 +139,15 @@ ota_watch() {
                 echo "== factory copy: $(factory "$(cat $cur/VERSION)")"      # its stderr: the log
             fi
         fi
+        # artifacts another Echo's page copied here (src/hassmic/artifacts.c): into the models folders, which are root's
+        if [ -f /data/local/hassmic/state/artifacts/request ]; then
+            if out=$(DAEMON_USER=$DAEMON_USER READ_AS="$D/runas $DAEMON_USER $DAEMON_GROUPS" \
+                     sh $D/artifact-install.sh /data/local/hassmic/state /data/local/hassmic 2>&1); then
+                echo "== artifacts installed, restarting hassmic: $(echo $out)"
+                stop hassmic; start hassmic
+            else echo "== artifacts not installed: $(echo $out)"
+            fi
+        fi
         [ -f $IN/request ] || continue
         rm -f $IN/request $IN/result
         new=$OTA/v$(cut -d. -f1 /proc/uptime)-$$
@@ -208,6 +217,8 @@ satellite)
         rotate_log
         echo "== satellite start, uptime $(cut -d. -f1 /proc/uptime)s, $(cat $D/VERSION 2>/dev/null || echo factory) from $D"
         sh $D/lockdown.sh services        # stops the cloud daemons that were not up yet at "on boot"; the firewall is the watcher's
+        # wake word sets under a short name (echo-de) from installs by hand: the name scripts/artifacts.sh gives them
+        [ -f $D/artifact-install.sh ] && sh $D/artifact-install.sh migrate /data/local/hassmic/state /data/local/hassmic
         sh $D/alexa-off.sh; quiet
     } >> $LOG 2>&1
     # A binary in /data wins over the installed one: lets a new build be tried without a trip through TWRP.

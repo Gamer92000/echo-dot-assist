@@ -19,7 +19,7 @@
 
 static sound_cb callback;
 static const char *types[MAX_TYPES];
-static int ntypes, opened;
+static int ntypes, opened, newer_failed;       /* newer_failed: the installed one did not load once; it will not now */
 static uint64_t sample_index;
 
 static const char *installed(void)
@@ -65,7 +65,7 @@ int sound_open(const char *const *t, int n, sound_cb cb)
     PryonApi_SetAcousticEventDetectionResultCallback(on_result);
     const char *m = installed();
     if (access(m, R_OK) || PryonModelSet_New(MODEL_SET, m, "")) {
-        if (!access(m, R_OK)) fprintf(stderr, "sound: cannot load %s, taking the firmware's\n", m);
+        if (!access(m, R_OK)) { fprintf(stderr, "sound: cannot load %s, taking the firmware's\n", m); newer_failed = 1; }
         m = MODEL;
         if (PryonModelSet_New(MODEL_SET, m, "")) { fprintf(stderr, "sound: cannot load %s\n", m); return -1; }
     }
@@ -84,6 +84,12 @@ int sound_open(const char *const *t, int n, sound_cb cb)
     sample_index = 0; opened = 1;
     fprintf(stderr, "sound detection: on (%s)\n", m);
     return 0;
+}
+
+enum sound_model sound_model(void)
+{
+    if (!newer_failed && !access(installed(), R_OK)) return SOUND_NEWER;
+    return access(MODEL, R_OK) ? SOUND_NONE : SOUND_FIRMWARE;
 }
 
 void sound_feed(const int16_t *samples, size_t count)

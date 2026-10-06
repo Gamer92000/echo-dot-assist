@@ -12,9 +12,13 @@
  * does not answer as well.  With no other member heard from lately there is no round and no delay.
  *
  * Network: the members share a key K; claims and beacons carry a MAC with it and a counter against replays (reserved in
- * blocks in the state file, so it keeps rising across restarts).  "Join arbitration network" (on by default) looks for
- * members first; with none after DISCOVER_MS the Echo makes up K and a random network id itself.  Two networks that
- * formed at the same time merge: the lower id wins.
+ * blocks in the state file, so it keeps rising across restarts).  Every Echo is in one, always: it looks for members
+ * first; with none after DISCOVER_MS it makes up K and a random network id itself.  Two networks that formed at the
+ * same time merge: the lower id wins.  The network is also how the settings pages find each other (members' signed
+ * beacons give name and address), so it does not depend on the "arbitration" setting, which only says whether this
+ * Echo takes part in rounds.  One that does not says so in its beacons (a flags byte after the counter) and the others
+ * leave it out: they do not wait for its claims, it answers every wake word itself.  Older Echos reject that longer
+ * beacon, so they do not count it either.
  *
  * Who gets K, three ways; the first two go through Home Assistant, so the trust is the owner's: what they adopted.
  *   Handoff entity: every Echo shows its public key on a diagnostic text sensor, "Arbitration handoff".  HA does not
@@ -104,7 +108,7 @@
 enum { T_BEACON = 1, T_ENTITY = 2, T_CLAIM = 4, T_PAIR = 5, T_GIVE = 6 };
 
 static pthread_mutex_t lk = PTHREAD_MUTEX_INITIALIZER; /* everything below; taken after core_lock, never before it */
-static int sock = -1, running, join = 1;
+static int sock = -1, running, arbitrate = 1;    /* arbitrate: take part in rounds (the network runs regardless) */
 static struct sockaddr_in dest;
 static const struct arb_hooks *hooks;
 static char node[NLEN];
@@ -113,11 +117,11 @@ static int in_net;
 static uint64_t net_id;
 static uint8_t net_key[32], mac_key[32];
 static uint64_t ctr, ctr_saved;
-static long long join_since, beacon_at, answer_at;
+static long long started, beacon_at, answer_at;
 static int reported_peers = -1;
 static atomic_int notify;
 
-static struct peer { uint8_t id[8]; uint64_t ctr; long long seen; char node[NLEN]; uint32_t ip; } peers[NPEER];   /* node, ip: from its beacons */
+static struct peer { uint8_t id[8]; uint64_t ctr; long long seen; char node[NLEN]; uint32_t ip; int quiet; } peers[NPEER];   /* node, ip, quiet (no rounds): from its beacons */
 static struct claim { uint8_t id[8], kw[8]; int score, prio, won; long long at; } claims[NCLAIM];
 static unsigned claim_next;
 static struct cand {                                    /* Echos outside our network */
@@ -159,7 +163,7 @@ static void save(void)
         if (fd >= 0) close(fd);
         fprintf(stderr, "arbitration: cannot write %s\n", tmp); return;
     }
-    fprintf(f, "join %d\nctr %llu\n", join, (unsigned long long)ctr_saved);
+    fprintf(f, "arbitrate %d\nctr %llu\n", arbitrate, (unsigned long long)ctr_saved);
     if (in_net) { b64_encode(net_key, 32, k64, 0, 1); fprintf(f, "net %016llx %s\n", (unsigned long long)net_id, k64); crypto_wipe(k64, sizeof k64); }
     if (fclose(f) || rename(tmp, path)) { unlink(tmp); fprintf(stderr, "arbitration: cannot write %s\n", path); }
 }
@@ -172,7 +176,8 @@ static void load(void)
     snprintf(path, sizeof path, "%s/arbitration", state_dir());
     if (!(f = fopen(path, "r"))) return;
     while (fgets(line, sizeof line, f)) {
-        if (sscanf(line, "join %d", &j) == 1) join = j != 0;
+        /* "join 0": the switch of older versions, which also left the network; now only the rounds stay off */
+        if (sscanf(line, "arbitrate %d", &j) == 1 || sscanf(line, "join %d", &j) == 1) arbitrate = j != 0;
         else if (sscanf(line, "ctr %llu", &v) == 1) ctr_saved = v;
         else if (sscanf(line, "net %llx %63s", &v, k64) == 2 && v && b64_decode(k64, strlen(k64), net_key, 32) == 32) { net_id = v; in_net = 1; derive(); }
     }
@@ -275,10 +280,10 @@ static int fresh(const uint8_t id[8], uint64_t c, long long now)
     return 1;
 }
 
-static int count_peers(long long now)
+static int count_peers(long long now)            /* members we settle wake words with */
 {
     int n = 0;
-    for (int i = 0; i < NPEER; i++) n += ago(peers[i].seen, now, PEER_TTL_MS);
+    for (int i = 0; i < NPEER; i++) n += ago(peers[i].seen, now, PEER_TTL_MS) && !peers[i].quiet;
     return n;
 }
 
@@ -299,7 +304,7 @@ static void beacon(void)
 {
     struct pkt b; uint8_t l = (uint8_t)strlen(node);
     head(&b, T_BEACON); put(&b, pk, 32); put64(&b, in_net ? net_id : 0); put(&b, &l, 1); put(&b, node, l);
-    if (in_net) { put64(&b, next_ctr()); tag(&b); }
+    if (in_net) { uint8_t quiet = 1; put64(&b, next_ctr()); if (!arbitrate) put(&b, &quiet, 1); tag(&b); }
     send_pkt(&b);
     if (self_ent[0]) {                                  /* where Home Assistant shows our key: peers need not guess */
         uint8_t e = (uint8_t)strlen(self_ent);
@@ -354,7 +359,7 @@ static int seal(uint8_t blob[BLOB], const uint8_t to[32])
 static int take_key(uint64_t id, const uint8_t blob[BLOB], const char *from)
 {
     uint8_t k[32], wrap[32]; int ok = 0;
-    if (!running || !join) fprintf(stderr, "arbitration: key %s ignored (not joining)\n", from);
+    if (!running) fprintf(stderr, "arbitration: key %s ignored (not running)\n", from);
     else if (in_net && id >= net_id)
         fprintf(stderr, "arbitration: key for network %016llx ignored (%s)\n", (unsigned long long)id, id == net_id ? "already in it" : "ours is older");
     else if (!memcmp(blob, pk, 32) || wrap_key(wrap, blob, blob, pk, id)
@@ -446,15 +451,15 @@ static void poll_entity(const char *e) { if (npoll < (int)(sizeof polls / sizeof
 static void on_packet(const uint8_t *p, size_t n, long long now, uint32_t ip)
 {
     struct rd r = { p, p + n, 0 }; const uint8_t *m = take(&r, 5);
-    if (!join || !m || memcmp(m, "HMA1", 4)) return;
+    if (!m || memcmp(m, "HMA1", 4)) return;
     switch (m[4]) {
     case T_BEACON: {
         const uint8_t *pub = take(&r, 32); uint64_t net = get64(&r); char nd[NLEN];
         get_node(&r, nd);
         if (r.bad || !memcmp(pub, pk, 32)) return;
         if (in_net && net == net_id) {                  /* a member */
-            uint64_t c = get64(&r); int known = 0;
-            if (r.bad || r.end - r.p != 16 || !tag_ok(p, n)) return;
+            uint64_t c = get64(&r); int known = 0, quiet = r.end - r.p == 17 && (r.p[0] & 1);    /* flags: 1 = no rounds */
+            if (r.bad || (r.end - r.p != 16 && r.end - r.p != 17) || !tag_ok(p, n)) return;
             for (int i = 0; i < NPEER; i++) {
                 known |= !memcmp(peers[i].id, pub, 8) && ago(peers[i].seen, now, PEER_TTL_MS);
                 if (cands[i].seen && !memcmp(cands[i].pub, pub, 32)) cands[i].seen = 0;    /* in our network now: nothing more to hand it */
@@ -466,7 +471,7 @@ static void on_packet(const uint8_t *p, size_t n, long long now, uint32_t ip)
             /* one we did not count yet (it just joined, or we did): answer, or it would not count us until our next beacon.
              * Not rate limited: only a holder of K gets here, once per member */
             int f = fresh(pub, c, now);
-            if (f) { struct peer *pp = peer(pub); snprintf(pp->node, NLEN, "%s", nd); pp->ip = ip; }
+            if (f) { struct peer *pp = peer(pub); snprintf(pp->node, NLEN, "%s", nd); pp->ip = ip; pp->quiet = quiet; }
             if (f && !known) beacon();
             return;
         }
@@ -528,13 +533,13 @@ static void *loop(void *arg)
         }
         struct push q[NPEER]; int nq; long long now = now_ms();
         pthread_mutex_lock(&lk);
-        if (join) {
+        {
             if (!in_net) {
                 int members = 0;
                 for (int i = 0; i < NPEER; i++) members |= cands[i].net && ago(cands[i].seen, now, PEER_TTL_MS);
-                if (!members && now - join_since > DISCOVER_MS) create();
+                if (!members && now - started > DISCOVER_MS) create();
                 static long long hinted;
-                if (members && now - join_since > 60000 && !ago(hinted, now, 600000)) {
+                if (members && now - started > 60000 && !ago(hinted, now, 600000)) {
                     hinted = now;
                     for (int i = 0; i < NPEER; i++) if (cands[i].net && ago(cands[i].seen, now, PEER_TTL_MS))
                         fprintf(stderr, "arbitration: %s has not handed us its network yet: Home Assistant shows %s, and %s may not perform "
@@ -565,7 +570,7 @@ static void *loop(void *arg)
             pair_until = 0;
             if (!pair_gave) { fprintf(stderr, "arbitration: pairing ended, no Echo to pair with\n"); atomic_store(&pair_event, -1); }
         }
-        if (pair_until && join) {
+        if (pair_until) {
             if (!ago(pair_sent, now, 1000)) {
                 struct pkt b; uint8_t l = (uint8_t)strlen(node);
                 pair_sent = now; head(&b, T_PAIR); put(&b, pk, 32); put64(&b, in_net ? net_id : 0); put(&b, &l, 1); put(&b, node, l); send_pkt(&b);
@@ -654,7 +659,7 @@ void arb_ha_state(const char *entity, const char *state)
     uint8_t pub[32], to[8], blob[BLOB]; uint64_t net = 0; int has_offer, ok;
     ok = !parse_handoff(state, pub, &net, to, blob, &has_offer);           /* not: "unavailable", "unknown", an older Echo */
     pthread_mutex_lock(&lk);
-    int i = running && join && !self_ent[0] ? self_index(entity) : -1;
+    int i = running && !self_ent[0] ? self_index(entity) : -1;
     if (i >= 0 && ok && !memcmp(pub, pk, 32)) {
         snprintf(self_ent, ELEN, "%s", entity); beacon_at = 0;
         fprintf(stderr, "arbitration: Home Assistant shows our key on %s\n", entity);
@@ -664,7 +669,7 @@ void arb_ha_state(const char *entity, const char *state)
         self_n = i + 2; self_next = i + 1;
     }
     if (!ok) { pthread_mutex_unlock(&lk); return; }
-    for (int i = 0; running && join && i < NPEER; i++) {
+    for (int i = 0; running && i < NPEER; i++) {
         struct cand *c = &cands[i];
         if (!c->seen || strcmp(c->ent, entity)) continue;
         if (memcmp(pub, c->pub, 32)) {                  /* the name it gave is someone else's entity (or a forger's) */
@@ -696,9 +701,6 @@ int arb_pair(void)
     long long now = now_ms();
     pthread_mutex_lock(&lk);
     if (!running) { pthread_mutex_unlock(&lk); return -1; }
-    if (!join) {                                        /* the gesture says "join": as the switch does */
-        join = 1; memset(cands, 0, sizeof cands); join_since = now; beacon_at = 0; save(); atomic_store(&notify, 1);
-    }
     pair_at = now; pair_until = now + PAIR_MS; pair_sent = 0; pair_gave = 0;
     fprintf(stderr, "arbitration: pairing for %d s (%s)\n", PAIR_MS / 1000, in_net ? "a member: hands its network to the one Echo that asks"
                                                                                     : "looking for a member to take a network from");
@@ -719,13 +721,13 @@ long long arb_claim(const char *keyword, int score, int prio)
     for (; keyword[n] && n < sizeof low; n++) low[n] = (uint8_t)tolower((unsigned char)keyword[n]);
     pthread_mutex_lock(&lk);
     crypto_blake2b(round_.kw, 8, low, n);
-    if (running && join && in_net && count_peers(now)) {
+    if (running && arbitrate && in_net && count_peers(now)) {
         round_.score = score; round_.prio = prio; round_.at = now;
         claim_pkt(&b, score, prio, 0); send_pkt(&b); send_pkt(&b);
         due = now + WINDOW_MS;
     }
     pthread_mutex_unlock(&lk);
-    fprintf(stderr, "arbitration: heard it, score %d%s%s\n", score, prio ? " (in a conversation)" : "", due ? "" : ", no other Echo to ask");
+    fprintf(stderr, "arbitration: heard it, score %d%s%s\n", score, prio ? " (in a conversation)" : "", due ? "" : !arbitrate ? ", arbitration off" : ", no other Echo to ask");
     return due;
 }
 
@@ -745,22 +747,17 @@ int arb_decide(void)
     return win;
 }
 
-int arb_join(int set)
+int arb_arbitrate(int set)
 {
     pthread_mutex_lock(&lk);
-    if (set >= 0 && set != join) {
-        join = set;
-        if (!join) {
-            if (in_net) fprintf(stderr, "arbitration: left network %016llx\n", (unsigned long long)net_id);
-            in_net = 0; net_id = 0; crypto_wipe(net_key, sizeof net_key); crypto_wipe(mac_key, sizeof mac_key);
-            memset(peers, 0, sizeof peers); memset(claims, 0, sizeof claims);
-        } else {                                    /* start over: earlier refusals and waits no longer apply */
-            memset(cands, 0, sizeof cands); join_since = now_ms(); beacon_at = 0;
-            fprintf(stderr, "arbitration: looking for a network\n");
-        }
+    if (set >= 0 && set != arbitrate) {
+        arbitrate = set;
+        fprintf(stderr, "arbitration: %s\n", arbitrate ? "takes part in rounds again" : "off: answers every wake word, stays in the network");
+        memset(claims, 0, sizeof claims);
+        beacon_at = 0;                              /* the members learn it now, not in 30 s */
         save(); atomic_store(&notify, 1);
     }
-    int r = join;
+    int r = arbitrate;
     pthread_mutex_unlock(&lk);
     return r;
 }
@@ -779,13 +776,14 @@ size_t arb_status_json(char *o, size_t cap)
 #define J(...) do { if (n < cap) n += (size_t)snprintf(o + n, cap - n, __VA_ARGS__); } while (0)
     pthread_mutex_lock(&lk);
     jstr(t, sizeof t, self_ent);
-    J("{\"running\":%s,\"joining\":%s,\"node\":\"%s\",", running ? "true" : "false", join ? "true" : "false", node);
+    J("{\"running\":%s,\"arbitrates\":%s,\"node\":\"%s\",", running ? "true" : "false", arbitrate ? "true" : "false", node);
     if (in_net) J("\"network\":\"%016llx\",", (unsigned long long)net_id); else J("\"network\":null,");
     J("\"handoff_entity\":%s%s%s,\"pairing\":%s,\"members\":[", t[0] ? "\"" : "", t[0] ? t : "null", t[0] ? "\"" : "",
       pair_until && now < pair_until ? "true" : "false");
     for (int i = 0; i < NPEER; i++) if (ago(peers[i].seen, now, PEER_TTL_MS)) {
         struct in_addr a = { peers[i].ip }; inet_ntop(AF_INET, &a, ip, sizeof ip); jstr(t, sizeof t, peers[i].node);
-        J("%s{\"node\":\"%s\",\"ip\":\"%s\",\"seen_s\":%lld}", k++ ? "," : "", t, peers[i].ip ? ip : "", (now - peers[i].seen) / 1000);
+        J("%s{\"node\":\"%s\",\"ip\":\"%s\",\"seen_s\":%lld,\"arbitrates\":%s}", k++ ? "," : "", t, peers[i].ip ? ip : "",
+          (now - peers[i].seen) / 1000, peers[i].quiet ? "false" : "true");
     }
     J("],\"others\":["); k = 0;
     for (int i = 0; i < NPEER; i++) if (ago(cands[i].seen, now, PEER_TTL_MS)) {
@@ -799,6 +797,29 @@ size_t arb_status_json(char *o, size_t cap)
     J("]}");
     pthread_mutex_unlock(&lk);
 #undef J
+    return n < cap ? n : cap - 1;
+}
+
+int arb_web_key(unsigned char out[32])
+{
+    int r = -1;
+    pthread_mutex_lock(&lk);
+    if (running && in_net) { crypto_blake2b_keyed(out, 32, net_key, 32, (const uint8_t *)"hassmic web voucher 1", 21); r = 0; }
+    pthread_mutex_unlock(&lk);
+    return r;
+}
+
+size_t arb_members_json(char *o, size_t cap)
+{
+    size_t n = 0; long long now = now_ms(); char t[NLEN], ip[INET_ADDRSTRLEN]; int k = 0;
+    pthread_mutex_lock(&lk);
+    n += (size_t)snprintf(o + n, cap - n, "[");
+    for (int i = 0; running && in_net && i < NPEER && n < cap; i++) if (ago(peers[i].seen, now, PEER_TTL_MS) && peers[i].ip) {
+        struct in_addr a = { peers[i].ip }; inet_ntop(AF_INET, &a, ip, sizeof ip); jstr(t, sizeof t, peers[i].node);
+        n += (size_t)snprintf(o + n, cap - n, "%s{\"node\":\"%s\",\"ip\":\"%s\"}", k++ ? "," : "", t, ip);
+    }
+    if (n < cap) n += (size_t)snprintf(o + n, cap - n, "]");
+    pthread_mutex_unlock(&lk);
     return n < cap ? n : cap - 1;
 }
 
@@ -819,9 +840,10 @@ int arb_start(int port, const char *nd, const struct arb_hooks *h)
     memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port); a.sin_addr.s_addr = htonl(INADDR_ANY);
     if (bind(sock, (struct sockaddr *)&a, sizeof a)) { perror("arbitration: bind"); close(sock); sock = -1; return -1; }
     dest = a; dest.sin_addr.s_addr = addr ? inet_addr(addr) : htonl(INADDR_BROADCAST);
-    join_since = now_ms(); running = 1;
+    started = now_ms(); running = 1;
     if (pthread_create(&t, NULL, loop, NULL)) { running = 0; return -1; }
     pthread_detach(t);
-    fprintf(stderr, "arbitration: port %d as %s, %s\n", port, node, !join ? "not joining" : in_net ? "member of a network" : "looking for a network");
+    fprintf(stderr, "arbitration: port %d as %s, %s%s\n", port, node, in_net ? "member of a network" : "looking for a network",
+            arbitrate ? "" : ", arbitration off");
     return 0;
 }

@@ -11,7 +11,17 @@
  *   keyed BLAKE2b-128 of "METHOD\nPATH\nCTR\nBODY" with K = BLAKE2b-256 keyed with X25519(echo key, browser key) over
  *   "hassmic web 1" + echo key + browser key.  A sniffer has neither secret key; a recorded request does not count
  *   twice (the counter is written to disk for every request that changes something).
+ *   Answers: what answers a signed request carries X-HM-Mac as well, keyed BLAKE2b-128 of "RESP\nCTR\nBODY" with the
+ *   same K, so the page knows an export or an artifact it carries from one Echo to another is what that Echo sent.
+ *   Through another Echo: Echos in one arbitration network trust each other (they share its key K), so a browser
+ *   approved on one is let in on the others without their buttons.  The target hands out a nonce for the browser's key
+ *   (POST /api/vouch/nonce); the Echo the browser is approved on, asked with a signed request, MACs "hassmic voucher 1",
+ *   the target's web key, the browser's key, the nonce and its own name with a key every member derives from K
+ *   (arb_web_key); the target checks that with its own copy, uses the nonce up, and approves the browser.  Outside the
+ *   network it is the button again.  adb still takes the button of that very Echo.
  *   adb over Wi-Fi (a root shell for the network) takes a press of its own: POST /api/adb "on" waits like a login.
+ *   Artifacts (artifacts.c): listed, read and written in pieces over signed requests, so a page logged in to two Echos
+ *   copies models from one to the other; root installs them.
  *   Limits: someone who can change traffic (not only read it) can change the page itself, as with any plain HTTP
  *   page; and the Echo's public key comes from GET /api/hello unsigned.
  *
@@ -21,8 +31,10 @@
 #include "core.h"
 #include "adbwifi.h"
 #include "arb.h"
+#include "artifacts.h"
 #include "board.h"
 #include "diag.h"
+#include "sound.h"
 #include "hash.h"
 #include "netio.h"
 #include "settings.h"
@@ -47,7 +59,7 @@ extern const struct web_asset web_assets[];            /* build/web_assets.c (to
 extern const int web_nassets;
 
 #define MAX_CONN    8
-#define MAX_CLIENTS 16
+#define MAX_CLIENTS 32               /* a browser has a key per Echo page it opened, and each Echo may know all of them */
 #define MAX_BODY    16384
 #define LOGIN_MS    60000           /* a login waits this long for the button */
 
@@ -60,6 +72,9 @@ static int nclients;
 enum { W_LOGIN = 1, W_ADB };
 static struct { uint8_t pub[32]; char label[64]; long long at; int state, kind; } login;
 static atomic_int nconn;
+#define NONCE_MS 120000
+static struct { uint8_t pub[32], nonce[16]; long long at; } nonces[8];      /* handed out for a login through another Echo */
+static unsigned nonce_next;
 
 static long long now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
 static const char *state_dir(void) { const char *e = getenv("HASSMIC_STATE"); return e ? e : "/data/local/hassmic/state"; }
@@ -131,6 +146,30 @@ static int session_key(uint8_t k[32], const uint8_t pub[32])
 
 /* ---------------------------------------------------------------- login */
 
+static void add_client(const uint8_t pub[32], const char *label)     /* lk held */
+{
+    struct client *k = client_of(pub);
+    if (!k) {
+        if (nclients == MAX_CLIENTS) { memmove(clients, clients + 1, sizeof clients[0] * (MAX_CLIENTS - 1)); nclients--; }   /* the oldest goes */
+        k = &clients[nclients++]; memcpy(k->pub, pub, 32); k->ctr = 0;
+    }
+    snprintf(k->label, sizeof k->label, "%s", label);
+    save_clients();
+}
+
+/* The voucher another Echo of our network gives for a browser: keyed with arb_web_key over what it binds */
+static int voucher(uint8_t out[16], const uint8_t target[32], const uint8_t browser[32], const uint8_t nonce[16], const char *via)
+{
+    uint8_t k[32]; crypto_blake2b_ctx ctx;
+    if (arb_web_key(k)) return -1;
+    crypto_blake2b_keyed_init(&ctx, 16, k, 32);
+    crypto_blake2b_update(&ctx, (const uint8_t *)"hassmic voucher 1", 17);
+    crypto_blake2b_update(&ctx, target, 32); crypto_blake2b_update(&ctx, browser, 32); crypto_blake2b_update(&ctx, nonce, 16);
+    crypto_blake2b_update(&ctx, (const uint8_t *)via, strlen(via));
+    crypto_blake2b_final(&ctx, out); crypto_wipe(k, sizeof k);
+    return 0;
+}
+
 static void login_expire(long long now)     /* lk held */
 {
     if (login.state == 1 && now - login.at > LOGIN_MS) {
@@ -151,10 +190,7 @@ int web_approve(void)
         if (hooks->attention) hooks->attention(0);
         if (hooks->approved) hooks->approved(1);
     } else if (login.state == 1) {
-        if (nclients == MAX_CLIENTS) { memmove(clients, clients + 1, sizeof clients[0] * (MAX_CLIENTS - 1)); nclients--; }   /* the oldest goes */
-        struct client *k = &clients[nclients++];
-        memcpy(k->pub, login.pub, 32); k->ctr = 0; snprintf(k->label, sizeof k->label, "%s", login.label);
-        save_clients();
+        add_client(login.pub, login.label);
         login.state = 2; r = 1;
         fprintf(stderr, "web: login approved (%s)\n", login.label);
         if (hooks->attention) hooks->attention(0);
@@ -220,7 +256,7 @@ static int send_all(int fd, const void *p, size_t n)
 
 static void respond(int fd, int code, const char *type, const char *extra, const void *body, size_t len)
 {
-    char h[512];
+    char h[1024];
     const char *msg = code == 200 ? "OK" : code == 204 ? "No Content" : code == 400 ? "Bad Request" : code == 401 ? "Unauthorized"
                     : code == 404 ? "Not Found" : code == 413 ? "Payload Too Large" : code == 503 ? "Service Unavailable" : "Error";
     int n = snprintf(h, sizeof h, "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\nConnection: close\r\nCache-Control: no-store\r\n"
@@ -231,6 +267,24 @@ static void respond(int fd, int code, const char *type, const char *extra, const
 }
 
 static void respond_json(int fd, int code, const char *json) { respond(fd, code, "application/json", NULL, json, strlen(json)); }
+
+/* The answer to a signed request (r passed signed_ok), signed in turn with the browser's K over its counter */
+static void respond_s(int fd, const struct req *r, int code, const char *type, const char *extra, const void *body, size_t len)
+{
+    uint8_t pub[32], k[32], mac[16]; char x[600], h[33]; crypto_blake2b_ctx ctx; int bad;
+    if (unhex(pub, r->pub, 32)) { respond(fd, code, type, extra, body, len); return; }
+    pthread_mutex_lock(&lk); bad = session_key(k, pub); pthread_mutex_unlock(&lk);
+    if (bad) { respond(fd, code, type, extra, body, len); return; }
+    crypto_blake2b_keyed_init(&ctx, 16, k, 32);
+    crypto_blake2b_update(&ctx, (const uint8_t *)"RESP\n", 5);
+    crypto_blake2b_update(&ctx, (const uint8_t *)r->ctr, strlen(r->ctr)); crypto_blake2b_update(&ctx, (const uint8_t *)"\n", 1);
+    if (len) crypto_blake2b_update(&ctx, body, len);
+    crypto_blake2b_final(&ctx, mac); crypto_wipe(k, sizeof k);
+    hex(h, mac, 16);
+    snprintf(x, sizeof x, "X-HM-Mac: %s\r\nAccess-Control-Expose-Headers: X-HM-Mac\r\n%s", h, extra ? extra : "");
+    respond(fd, code, type, x, body, len);
+}
+static void respond_sjson(int fd, const struct req *r, int code, const char *json) { respond_s(fd, r, code, "application/json", NULL, json, strlen(json)); }
 
 /* JSON string body (no quotes) */
 static size_t jesc(char *out, size_t cap, const char *s)
@@ -269,7 +323,8 @@ static int read_request(int fd, struct req *r)
         else if (!strcasecmp(line, "X-HM-Ctr")) snprintf(r->ctr, sizeof r->ctr, "%s", v);
         else if (!strcasecmp(line, "X-HM-Mac")) snprintf(r->mac, sizeof r->mac, "%s", v);
     }
-    if (cl < 0 || cl > MAX_BODY) return -2;
+    /* a piece of an artifact is the one big body: everything else is a few lines */
+    if (cl < 0 || cl > (strncmp(r->path, "/api/artifact/chunk/", 20) ? MAX_BODY : ART_CHUNK_MAX)) return -2;
     if (!(r->body = malloc((size_t)cl + 1))) return -1;
     size_t have = n - hl < (size_t)cl ? n - hl : (size_t)cl;
     memcpy(r->body, hdr + hl, have);
@@ -301,21 +356,25 @@ static int signed_ok(const struct req *r, int persist)
 
 /* ---------------------------------------------------------------- API */
 
-static size_t hello_json(char *o, size_t cap)
+/* members: the Echos of our network (for the login page's "through another Echo"; what beacons say anyway) */
+static size_t hello_json(char *o, size_t cap, int members)
 {
-    char p[65], name[160], node[160];
+    char p[65], name[160], node[160]; size_t n;
     hex(p, pk, 32); jesc(name, sizeof name, core_name); jesc(node, sizeof node, core_node_name());
-    return (size_t)snprintf(o, cap, "{\"name\":\"%s\",\"node\":\"%s\",\"model\":\"%s\",\"codename\":\"%s\",\"version\":\"%s\",\"pub\":\"%s\"}",
-                            name, node, board.model, board.codename, VERSION, p);
+    n = (size_t)snprintf(o, cap, "{\"name\":\"%s\",\"node\":\"%s\",\"model\":\"%s\",\"codename\":\"%s\",\"version\":\"%s\",\"pub\":\"%s\"",
+                         name, node, board.model, board.codename, VERSION, p);
+    if (members && n < cap) { n += (size_t)snprintf(o + n, cap - n, ",\"members\":"); if (n < cap) n += arb_members_json(o + n, cap - n); }
+    if (n < cap) n += (size_t)snprintf(o + n, cap - n, "}");
+    return n < cap ? n : cap - 1;
 }
 
 /* lock order: core_lock first (settings), lk only inside the helpers above */
-static void state_json(int fd, const uint8_t me[32])
+static void state_json(int fd, const struct req *r, const uint8_t me[32])
 {
     size_t cap = 32768, n = 0; char *o = malloc(cap), v[300];
     if (!o) { respond_json(fd, 503, "{}"); return; }
     n += (size_t)snprintf(o + n, cap - n, "{\"device\":");
-    n += hello_json(o + n, cap - n);
+    n += hello_json(o + n, cap - n, 0);
     pthread_mutex_lock(&core_lock);
     n += (size_t)snprintf(o + n, cap - n, ",\"ha\":%s,\"settings\":[", core_ha_linked() ? "true" : "false");
     for (int i = 0, k = settings_count(); i < k && n < cap - 600; i++) {
@@ -332,6 +391,10 @@ static void state_json(int fd, const uint8_t me[32])
     if (!core_ha_linked()) n += (size_t)snprintf(o + n, cap - n, "%s\"Home Assistant is not connected\"", w++ ? "," : "");
     if (core_local_wake && core_whispered() == -2)
         n += (size_t)snprintf(o + n, cap - n, "%s\"Whisper detection: no model on this Echo (scripts/artifacts.sh installs it)\"", w++ ? "," : "");
+    if (core_local_wake && sound_model() == SOUND_NONE)
+        n += (size_t)snprintf(o + n, cap - n, "%s\"Sound detection: no model on this Echo (neither the firmware's nor one from scripts/artifacts.sh)\"", w++ ? "," : "");
+    if (core_sound_failed())
+        n += (size_t)snprintf(o + n, cap - n, "%s\"Sound detection could not start: its model did not load, so it was switched off (boot.log says why)\"", w++ ? "," : "");
     { const struct core_wake_word *l; if (core_local_wake && core_wake_words(&l) <= 1)
         n += (size_t)snprintf(o + n, cap - n, "%s\"Wake words: only Alexa, Amazon's others are not installed (scripts/artifacts.sh)\"", w++ ? "," : ""); }
     pthread_mutex_unlock(&core_lock);
@@ -341,6 +404,8 @@ static void state_json(int fd, const uint8_t me[32])
     n += isnan(t) ? (size_t)snprintf(o + n, cap - n, "null") : (size_t)snprintf(o + n, cap - n, "%.1f", t);
     n += (size_t)snprintf(o + n, cap - n, ",\"cpu\":");
     n += isnan(cpu) ? (size_t)snprintf(o + n, cap - n, "null") : (size_t)snprintf(o + n, cap - n, "%.0f", cpu);
+    { static const char *const models[] = { "none", "firmware", "newer" };
+      n += (size_t)snprintf(o + n, cap - n, "},\"sound\":{\"model\":\"%s\",\"failed\":%s", models[sound_model()], core_sound_failed() ? "true" : "false"); }
     n += (size_t)snprintf(o + n, cap - n, "},\"arbitration\":");
     if (arb_running()) n += arb_status_json(o + n, cap - n); else n += (size_t)snprintf(o + n, cap - n, "null");
     n += (size_t)snprintf(o + n, cap - n, ",\"clients\":[");
@@ -351,8 +416,88 @@ static void state_json(int fd, const uint8_t me[32])
     }
     pthread_mutex_unlock(&lk);
     n += (size_t)snprintf(o + n, cap - n, "]}");
-    respond(fd, 200, "application/json", NULL, o, n < cap ? n : cap);
+    respond_s(fd, r, 200, "application/json", NULL, o, n < cap ? n : cap);
     free(o);
+}
+
+/* /api/artifacts                          GET   the list (artifacts.c)
+ * /api/artifact/read/<id>/<file>/<off>/<len>  GET   a piece
+ * /api/artifact/begin                      POST  "<id> <digest>\n<file> <size>\n..."
+ * /api/artifact/chunk/<id>/<file>/<off>    POST  a piece (the body, raw)
+ * /api/artifact/commit/<id>                POST
+ * /api/artifact/install                    POST  root installs what is ready; hassmic restarts
+ * All signed; reads and pieces do not write the counter to disk (a replayed piece lands in a staged copy whose digest
+ * then fails) */
+static void artifact_api(int fd, struct req *r)
+{
+    char err[200], o[300], ej[260], id[80] = "", file[80] = ""; long a = 0, b = 0; int rc = -1, write = strcmp(r->method, "GET");
+    int piece = !strncmp(r->path, "/api/artifact/read/", 19) || !strncmp(r->path, "/api/artifact/chunk/", 20);
+    if (!signed_ok(r, write && !piece)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    err[0] = 0;
+    if (!write && !strcmp(r->path, "/api/artifacts")) {
+        size_t cap = 65536; char *t = malloc(cap);
+        if (!t) { respond_sjson(fd, r, 503, "{\"error\":\"no memory\"}"); return; }
+        size_t n = art_list_json(t, cap);
+        respond_s(fd, r, 200, "application/json", NULL, t, n); free(t); return;
+    }
+    if (!write && sscanf(r->path, "/api/artifact/read/%79[^/]/%79[^/]/%ld/%ld", id, file, &a, &b) == 4) {
+        void *data; size_t n;
+        if (!art_read(id, file, a, b, &data, &n, err, sizeof err)) { respond_s(fd, r, 200, "application/octet-stream", NULL, data, n); free(data); return; }
+    }
+    else if (write && !strcmp(r->path, "/api/artifact/begin")) rc = art_begin(r->body, err, sizeof err);
+    else if (write && sscanf(r->path, "/api/artifact/chunk/%79[^/]/%79[^/]/%ld", id, file, &a) == 3) rc = art_chunk(id, file, a, r->body, r->blen, err, sizeof err);
+    else if (write && sscanf(r->path, "/api/artifact/commit/%79[^/]", id) == 1) rc = art_commit(id, err, sizeof err);
+    else if (write && !strcmp(r->path, "/api/artifact/install")) rc = art_install(err, sizeof err);
+    else snprintf(err, sizeof err, "not found");
+    if (!rc) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
+    jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
+    respond_sjson(fd, r, 400, o);
+}
+
+/* /api/vouch/nonce   "<browser key>"                                    -> {"nonce"}       unsigned
+ * /api/vouch/issue   "<target's web key> <browser key> <nonce>"         -> {"voucher","via"}  signed: by a browser approved here
+ * /api/vouch/login   "<browser key> <nonce> <voucher> <via, hex> <label>" -> {"login"}       unsigned: the voucher is what counts */
+static void vouch_api(int fd, struct req *r)
+{
+    char a[80] = "", b[80] = "", c[80] = "", d[200] = "", o[400], vh[33], nh[33]; int k = 0;
+    uint8_t pub[32], tgt[32], nonce[16], v[16], want[16];
+    if (!strcmp(r->path, "/api/vouch/nonce")) {
+        if (sscanf(r->body, "%79s", a) != 1 || unhex(pub, a, 32)) { respond_json(fd, 400, "{\"error\":\"key\"}"); return; }
+        pthread_mutex_lock(&lk);
+        unsigned i = nonce_next++ % 8;
+        memcpy(nonces[i].pub, pub, 32); ws_random(nonces[i].nonce, 16); nonces[i].at = now_ms(); hex(nh, nonces[i].nonce, 16);
+        pthread_mutex_unlock(&lk);
+        snprintf(o, sizeof o, "{\"nonce\":\"%s\"}", nh); respond_json(fd, 200, o);
+    } else if (!strcmp(r->path, "/api/vouch/issue")) {
+        char via[160];
+        if (!signed_ok(r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+        if (sscanf(r->body, "%79s %79s %79s", a, b, c) != 3 || unhex(tgt, a, 32) || unhex(pub, b, 32) || unhex(nonce, c, 16)) {
+            respond_sjson(fd, r, 400, "{\"error\":\"bad request\"}"); return;
+        }
+        snprintf(via, sizeof via, "%s", core_name);
+        if (voucher(v, tgt, pub, nonce, via)) { respond_sjson(fd, r, 400, "{\"error\":\"this Echo is in no network\"}"); return; }
+        char vj[200]; jesc(vj, sizeof vj, via); hex(vh, v, 16);
+        snprintf(o, sizeof o, "{\"voucher\":\"%s\",\"via\":\"%s\"}", vh, vj);
+        fprintf(stderr, "web: vouched for a browser on another Echo\n");
+        respond_sjson(fd, r, 200, o);
+    } else if (!strcmp(r->path, "/api/vouch/login")) {
+        char via[100] = "", label[64] = "browser"; uint8_t vb[100]; size_t vl;
+        if (sscanf(r->body, "%79s %79s %79s %199s %n", a, b, c, d, &k) < 4 || unhex(pub, a, 32) || unhex(nonce, b, 16) || unhex(v, c, 16)
+            || (vl = strlen(d) / 2) >= sizeof via || unhex(vb, d, vl)) { respond_json(fd, 400, "{\"error\":\"bad request\"}"); return; }
+        memcpy(via, vb, vl); via[vl] = 0;
+        if (k) { snprintf(label, sizeof label, "%s", r->body + k); for (char *x = label; *x; x++) if ((unsigned char)*x < 0x20) *x = ' '; }
+        int ok = 0; long long now = now_ms();
+        pthread_mutex_lock(&lk);
+        for (int i = 0; i < 8; i++) {
+            if (!nonces[i].at || now - nonces[i].at > NONCE_MS || memcmp(nonces[i].pub, pub, 32) || crypto_verify16(nonces[i].nonce, nonce)) continue;
+            nonces[i].at = 0;                                   /* once */
+            ok = !voucher(want, pk, pub, nonce, via) && !crypto_verify16(want, v);
+        }
+        if (ok) { char l[64]; snprintf(l, sizeof l, "%.30s via %.28s", label, via); add_client(pub, l); }
+        pthread_mutex_unlock(&lk);
+        fprintf(stderr, "web: login through %s %s\n", via, ok ? "approved" : "refused");
+        respond_json(fd, 200, ok ? "{\"login\":\"approved\"}" : "{\"login\":\"refused\"}");
+    } else respond_json(fd, 404, "{\"error\":\"not found\"}");
 }
 
 static void handle(int fd)
@@ -371,7 +516,8 @@ static void handle(int fd)
         }
         if (!found) respond_json(fd, 404, "{\"error\":\"not found\"}");
     }
-    else if (!strcmp(r.path, "/api/hello")) { char o[600]; hello_json(o, sizeof o); respond_json(fd, 200, o); }
+    else if (!strcmp(r.path, "/api/hello")) { char o[2400]; hello_json(o, sizeof o, 1); respond_json(fd, 200, o); }
+    else if (!strncmp(r.path, "/api/vouch/", 11) && !strcmp(r.method, "POST")) vouch_api(fd, &r);
     else if (!strcmp(r.path, "/api/login") && !strcmp(r.method, "POST")) {
         /* body: "<browser key hex> <label>" */
         char h[80] = "", label[64] = "browser", o[64]; int k = 0;
@@ -382,7 +528,7 @@ static void handle(int fd)
     }
     else if (!strcmp(r.method, "GET") && !strcmp(r.path, "/api/state")) {
         if (!signed_ok(&r, 0) || unhex(pub, r.pub, 32)) respond_json(fd, 401, "{\"error\":\"not logged in\"}");
-        else state_json(fd, pub);
+        else state_json(fd, &r, pub);
     }
     else if (!strcmp(r.method, "GET") && !strcmp(r.path, "/api/export")) {
         char t[4096], head[200]; size_t n;
@@ -390,7 +536,7 @@ static void handle(int fd)
         n = (size_t)snprintf(t, sizeof t, "# hassmic settings, exported from %s (%s %s)\n# not in it: the Echo's name, keys, pairings\n", core_name, board.model, VERSION);
         pthread_mutex_lock(&core_lock); n += settings_text(t + n, sizeof t - n, 1); pthread_mutex_unlock(&core_lock);
         snprintf(head, sizeof head, "Content-Disposition: attachment; filename=\"hassmic-settings.conf\"\r\n");
-        respond(fd, 200, "text/plain; charset=utf-8", head, t, n);
+        respond_s(fd, &r, 200, "text/plain; charset=utf-8", head, t, n);
     }
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/set")) {
         /* body: "name=value" lines, one setting or a whole export */
@@ -400,13 +546,13 @@ static void handle(int fd)
         jesc(ej, sizeof ej, err);
         snprintf(o, sizeof o, "{\"applied\":%d,\"errors\":\"%s\"}", applied, ej);
         fprintf(stderr, "web: %d setting%s changed%s%s", applied, applied == 1 ? "" : "s", err[0] ? ", refused: " : "\n", err);
-        respond_json(fd, 200, o);
+        respond_sjson(fd, &r, 200, o);
     }
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/adb")) {
         char o[64];
         if (!signed_ok(&r, 1) || unhex(pub, r.pub, 32)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
         snprintf(o, sizeof o, "{\"adb\":\"%s\"}", adb_ask(pub, !strncmp(r.body, "on", 2)));
-        respond_json(fd, 200, o);
+        respond_sjson(fd, &r, 200, o);
     }
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/revoke")) {
         uint8_t who[32]; int found = 0;
@@ -420,8 +566,9 @@ static void handle(int fd)
         if (found) save_clients();
         pthread_mutex_unlock(&lk);
         fprintf(stderr, "web: a browser's login %s\n", found ? "revoked" : "to revoke not found");
-        respond_json(fd, 200, found ? "{\"revoked\":true}" : "{\"revoked\":false}");
+        respond_sjson(fd, &r, 200, found ? "{\"revoked\":true}" : "{\"revoked\":false}");
     }
+    else if (!strncmp(r.path, "/api/artifact", 13)) artifact_api(fd, &r);
     else respond_json(fd, 404, "{\"error\":\"not found\"}");
     free(r.body);
 }

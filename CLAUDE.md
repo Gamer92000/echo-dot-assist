@@ -39,6 +39,7 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ha.py [--qemu]    # Wyoming; --qemu uses the ARM build + stock Pryon model under qemu-arm
 .venv/bin/python tests/fake_ma_sendspin.py    # Sendspin, as Music Assistant
 .venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step
+.venv/bin/python tests/fake_web_artifacts.py  # models copied Echo to Echo through the page, root's installer, after a restart
 .venv/bin/python tests/fake_ha_update.py      # online updates: page channel + HA update entity, fake GitHub, root's installer
 tests/ota_push_test.sh                        # signed push-update path end to end
 tests/otatool_test.sh                         # scripts/otatool.py against the C otatool: same keys, signatures, bundles
@@ -126,7 +127,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Sound detection (`sound.h`)**: `sound_pryon.c` (Alexa Guard's model on `libpryon.so`: the firmware's, or Amazon's newest
   from `/data/local/hassmic/aed` (`scripts/artifacts.sh`); a second decoder, off unless HA's
   switch is on; ESPHome event entity "Sound"; windows with own playback dropped; `docs/re-aed.md`) or `sound_none.c`
-  (host build, `HASSMIC_FAKE_SOUND`). Picked in the Makefile from the wake word backend.
+  (host build, `HASSMIC_FAKE_SOUND`; `HASSMIC_FAKE_SOUND_MODEL` names the model, `broken` fails to load). `sound_model()`
+  says which model it takes, for the page; a start that fails switches the setting off via `settings_set` and sets
+  `core_sound_failed()` (page warning). Picked in the Makefile from the wake word backend.
 - **Whisper detection (`whisper.h`)**: `whisper_pryon.c` (libpryon `WhisperApi_*`, one detector per request fed from the
   start of streaming, end of utterance on HA's VAD end (`core_mic_off`), result into the ESPHome binary sensor "Last
   request whispered" before STT ends, for the agent's prompt template; `docs/re-whisper.md`) or `whisper_none.c` (host
@@ -142,6 +145,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   requests need no permission), else as the newcomer's own
   ESPHome action `esphome.<node>_arbitration_key` (needs "Allow the device to perform Home Assistant actions"). Without
   HA: Volume up + Volume down held 2 s on both (`T_PAIR`/`T_GIVE`, exactly one requester). ESPHome only.
+  The network (beacons, key handoff, pairing; handoff entity and action) always runs: the settings pages find each other
+  through it. The `arbitration` setting (`arb_arbitrate`) only gates rounds; off, the beacon carries a flags byte after
+  the counter and members leave that Echo out of rounds (older builds reject the longer beacon, same effect).
 - **Music**: `sendspin.c` (Music Assistant Sendspin player over `ws.c`/`noise.c`/`net.c`/`hash.c`, decodes via
   `dr_flac`/`minimp3`/libopus). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
   loaded with dlopen, aptX/aptX HD via `freeaptx`) with AVRCP. Only one music source plays at a time (newest wins).
@@ -163,13 +169,31 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Settings page** (`web.c`, `web/`): HTTP on 28931 (`-W`), files of `web/` gzip'd into the binary by `tools/embed.py`
   (`build/web_assets.c`). Login: the browser's X25519 key waits for the action button (`web_approve()` first in
   `on_action`; ring `authenticated_setup_mode`), approved keys in `state/web_clients`, Echo key `state/web_key`.
-  Requests signed (BLAKE2b-128 keyed with K over method, path, counter, body; K from X25519), counter per browser.
-  Never send secrets: it is plain HTTP. Arbitration card from `arb_status_json` (members with name and IP from their
-  signed beacons, others: in no network / younger / older); other Echos' pages are called cross-origin (CORS `*`,
+  Requests signed (BLAKE2b-128 keyed with K over method, path, counter, body; K from X25519), counter per browser; the
+  answers too (`respond_s`: X-HM-Mac over "RESP\n" + counter + body), and the page refuses an unsigned one ('old').
+  Vouchers: members of one arbitration network let in a browser approved on another member (`/api/vouch/nonce`, `issue`
+  (signed, at the Echo it is approved on), `login`; MAC with `arb_web_key`, a key derived from K, over target key,
+  browser key, one-time nonce and the voucher's name). The page does it by itself for members; a login page opens
+  the other Echo's page (`#vouch=`), which asks, checks the asker is a member with that key, and postMessages it back.
+  adb still needs that Echo's own button.
+  Never send secrets: it is plain HTTP. The page's words (what each setting does, what a feature adds to HA) live in
+  `web/app.js` `HELP`, keyed by setting name: a new setting gets an entry there. Echos section from `arb_status_json`
+  (members with name, IP and whether they arbitrate from their signed beacons, others: in no network / younger / older); other Echos' pages are called cross-origin (CORS `*`,
   the signature counts), each approved once with its own button; "make like this Echo" posts this one's export.
   Presets: `scripts/setup.sh --preset <export>` (or asked in `install_satellite`) pushes it to `state/preset`; hassmic
   applies it once at start (`settings_preset`, as an import) and renames it `preset.applied`. `web/crypto.js` (X25519, BLAKE2b; no `crypto.subtle` on plain HTTP) is checked
-  against Python by `tests/unit/web_crypto_test.py` (in `make unit`, needs node).
+  against Python by `tests/unit/web_crypto_test.py` (in `make unit`, needs node). The Echos section copies chosen
+  settings to chosen Echos (a matrix of exports), and models.
+- **Artifacts** (`artifacts.c`): Amazon's models (`wake:<name>` = `models/<name>/`, `sound` = `aed/`, `whisper`) listed
+  with a digest (BLAKE2b-256 over name, size, content per file), read and written in pieces (`ART_CHUNK_MAX`) over
+  signed requests, so the page copies them Echo to Echo. Staged in `state/artifacts/<stage>/`; commit checks sizes,
+  digest and, for wake word sets, `pryon_test` (next to the binary, `HASSMIC_PRYON_TEST`); install writes
+  `state/artifacts/request`. The model folders are root's: `main.sh`'s watcher runs `scripts/device/artifact-install.sh`,
+  which reads the staged files as the daemon's user (runas: no link can point root at its files), swaps a fresh
+  root-owned folder in and restarts hassmic (the wake word list and the whisper model are read at start).
+  `artifact-install.sh migrate` (main.sh, every satellite start): wake word folders under the short name (`echo-de`,
+  from installs by hand) renamed to artifacts.sh's (`echo-de-DE`) where the language has one region; `state/wake_word`
+  follows.
 - **adb over Wi-Fi** (`adbwifi.c`): the settings page only writes a request for root's firewall watcher, as `ota.c` does
   for updates; opening needs an approved browser plus a press of the action button (`web.c`), or (`ota.c`, `HMOTA-ADB1`) a challenge signed with the update key.
 - **Wi-Fi motion** (`wifimotion.c`, experimental, off by default): polls the RCPI of the frames from the AP at 10 Hz, scatter
