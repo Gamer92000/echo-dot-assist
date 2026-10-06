@@ -4,6 +4,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-06
 
+- **The log on the settings page.** "Log" in the System section shows what the Echo wrote (hassmic, the firewall,
+  updates), with a filter, the older part, and a download for bug reports — no adb needed any more. The Sendspin
+  pairing token is blanked in it; the rest travels unencrypted, like the whole page.
+- **Kiosk Satellite claims no longer flood the log**: once a second at most, with a count of the rest.
 - **Echos and Kiosk Satellite tablets answer once between them.** Wake word arbitration has a second mode, "Kiosk
   Satellite", next to the Echos' own (still the default): with it an Echo settles wake words the way Kiosk Satellite
   does, with its tablets and with other Echos in that mode — the device that heard the wake word loudest answers. The

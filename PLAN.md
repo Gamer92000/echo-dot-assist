@@ -708,6 +708,10 @@ Run in this order. Each step says what it proves.
       (fake kiosk socket): wire format, loudest wins, kiosk louder silences both, other phrase and malformed claims
       ignored, no priority, offset flips the winner, back to own mode. Not done: a device test next to a real kiosk (calibrate the +30 dB lift,
       claim delay over Wi-Fi), the firewall rule on the Echo
+- [x] Log viewer on the settings page (2026-10-06): `GET /api/log/0|1`, signed, tail of 2 MB of `boot.log` / `.1`,
+      Sendspin pairing token blanked (signed is not encrypted: a sniffer reads the answer); filter, older part, download.
+      Kiosk claims logged once a second at most (unauthenticated, and `boot.log` is on flash: /data, mmcblk0p16 ext4).
+      fake_web: both parts, token blanked, 401/404; fake_ha_arbitration: 200 claims at once give 1-3 lines
 - [x] Firewall service stuck at boot on the Echo 2 (2026-09-30, found when a push update got "the installer did not
       answer"): `main.sh firewall` scanned /proc/*/cmdline with `tr` for old lockdown watchers; a process (pid 209)
       exited between the open and the read, and radar's toybox `tr` (Fire OS 6572) then spun on the read error for ever

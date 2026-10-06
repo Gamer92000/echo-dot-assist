@@ -4,7 +4,7 @@ X25519 and BLAKE2b from Python's libraries, not web/crypto.js), plus Home Assist
 Echo.  Login by the action button (SIGUSR2), signed reads and writes, replays and forged signatures, two logins at once,
 export and import, the settings file from before names, features (entities in Home Assistant only while on), adb with
 a press of its own, revoking."""
-import asyncio, gzip, json, os, signal, subprocess, sys, tempfile
+import asyncio, gzip, json, os, re, signal, subprocess, sys, tempfile
 from aioesphomeapi import APIClient
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webclient import Browser, req
@@ -35,7 +35,8 @@ async def main():
     env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(state, "play.raw"),
                HASSMIC_MDNS_FILE=os.path.join(state, "none"), HASSMIC_ARB_ADDR="127.255.255.255", HASSMIC_MODELS=os.path.join(state, "models"),
                HASSMIC_FAKE_WHISPER="1", HASSMIC_ADB_OPEN=os.path.join(state, "adb-open.root"),
-               HASSMIC_FAKE_SOUND_MODEL=os.path.join(state, "aed-model"))            # which sound model there is (sound_none.c)
+               HASSMIC_FAKE_SOUND_MODEL=os.path.join(state, "aed-model"),           # which sound model there is (sound_none.c)
+               HASSMIC_LOG=os.path.join(state, "log"))                              # boot.log, for the page's viewer
     log = os.path.join(state, "log")
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Web", "-L", "-z", "0", "-o", "0",
                              "-a", "16973", "-W", str(WEB)], env=env, stderr=open(log, "w"))
@@ -65,6 +66,12 @@ async def main():
         check(b.login() == "waiting" and b.login() == "waiting", "login waits for the button")
         proc.send_signal(signal.SIGUSR2); await asyncio.sleep(0.5)                     # the action button
         check(b.login() == "approved" and "login approved" in open(log).read(), "the action button approved it")
+        # the log viewer: signed, the Sendspin pairing token blanked (the page is plain HTTP)
+        with open(log + ".1", "w") as f: f.write("== log rotated\nsendspin: pairing token SP:0ABCDEF234567\n")
+        st, _, l0 = b.call("GET", "/api/log/0"); st1, _, l1 = b.call("GET", "/api/log/1")
+        check(st == 200 and st1 == 200 and b"login approved" in l0 and b"SP:0ABC" not in l1 and re.search(rb"pairing token SP:0\*{12}\n", l1),
+              "the log and its older part, signed, with the pairing token blanked")
+        check(Browser(WEB).call("GET", "/api/log/0")[0] == 401 and b.call("GET", "/api/log/2")[0] == 404, "not logged in: no log; only parts 0 and 1")
         s = b.state() or {}
         names = {x["name"]: x for x in s.get("settings", [])}
         check(names.get("mic_level", {}).get("value") == -22 and names["noise_reduction"]["choices"][names["noise_reduction"]["value"]] == "medium",

@@ -257,6 +257,13 @@ async def main():
         check(len(b.starts) == nb + 1 and "00bad" not in b.text(), "malformed claims (wrong types, version, kind, long id, missing field): ignored")
         b.end_pipeline(); await asyncio.sleep(0.5)
 
+        # a flood of claims (anyone on the LAN can send them): one log line a second, the rest counted
+        before = b.text().count("kiosk claim from 00flood")
+        for i in range(200): kiosk(1.0, kid=f"00flood{i}")
+        await asyncio.sleep(1.2); kiosk(1.0, kid="00flood-last"); await asyncio.sleep(0.3)
+        lines = b.text().count("kiosk claim from 00flood") - before
+        check(1 <= lines <= 3 and "more since the last one logged" in b.text(), f"200 claims at once: {lines} log lines, the rest counted")
+
         # no preference for the Echo in a conversation: the louder one takes the next wake word
         na, nb = len(a.starts), len(b.starts)
         a.wake(); await until(lambda: len(a.starts) == na + 1, 3)

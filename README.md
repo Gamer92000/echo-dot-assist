@@ -345,8 +345,11 @@ lost, only USB is left.
 
 ## Troubleshooting
 
-Log: `adb shell tail -30 /data/local/hassmic/boot.log` (over USB, or over Wi-Fi after opening debug access on the settings page or
-`scripts/adb-wifi.sh <echo-ip>`).
+Log: "Log" in the System section of the [settings page](#settings-page) shows `boot.log` (filter, the older rotated
+part, download for a bug report; the Sendspin pairing token is blanked, but the rest travels unencrypted, like the
+whole page). Or `adb shell tail -30 /data/local/hassmic/boot.log` (over USB, or over Wi-Fi after opening debug access
+on the settings page or `scripts/adb-wifi.sh <echo-ip>`). Claims from Kiosk Satellite devices are logged once a second
+at most, with a count of the rest: anyone on the network can send them, and the log is on flash.
 
 **Wake word and button do nothing.** Most likely no connection to Home Assistant; the Echo does not signal that (known
 gap). In the log, `wake: ALEXA type=2` means it heard you, `client connected` / `voice assistant: subscribed` means Home

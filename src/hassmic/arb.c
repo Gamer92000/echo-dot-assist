@@ -175,6 +175,8 @@ static char kid[17];
 static struct kclaim { char id[65], p[KIOSK_PHRASE]; long long n, at; int e; } kclaims[NCLAIM];
 static unsigned kclaim_next;
 static long long kheard;                                /* the last claim from another device, for the settings page */
+static long long klogged;                               /* claims are logged once a second at most, the rest counted: */
+static int kunlogged;                                   /* anyone on the LAN can send them, and boot.log is on flash */
 static struct { char p[KIOSK_PHRASE]; int e; } kround;
 static char kpkt[300];
 static size_t kpkt_n;
@@ -675,7 +677,11 @@ static void kiosk_packet(const char *t, long long now)
         if (ago(kclaims[i].at, now, KIOSK_KEEP_MS) && kclaims[i].n == c.n && !strcmp(kclaims[i].id, c.id)) return;   /* a copy */
     c.at = now; kheard = now;
     kclaims[kclaim_next++ % NCLAIM] = c;
-    fprintf(stderr, "arbitration: kiosk claim from %.16s: \"%s\", %.1f dB\n", c.id, c.p, c.e / 10.0);
+    if (ago(klogged, now, 1000)) { kunlogged++; return; }
+    fprintf(stderr, "arbitration: kiosk claim from %.16s: \"%s\", %.1f dB", c.id, c.p, c.e / 10.0);
+    if (kunlogged) fprintf(stderr, " (%d more since the last one logged)", kunlogged);
+    fprintf(stderr, "\n");
+    klogged = now; kunlogged = 0;
 }
 
 static void kiosk_send(void)

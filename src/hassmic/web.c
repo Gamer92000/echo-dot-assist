@@ -25,6 +25,10 @@
  *   Amazon itself (davs.c): POST /api/davs/login starts a code pair login (the code on the page, GET /api/davs tells
  *   where it stands), /api/davs/fetch downloads an artifact; installing is the artifacts install.  The tokens of the
  *   registration never reach the page — plain HTTP.
+ *   The log: GET /api/log/0 (boot.log) and /1 (its rotated part), signed, for the page's viewer.  What it says is
+ *   plain on the network then, like the rest of the page: names, addresses, when the Echo was spoken to.  Secrets do
+ *   not go out: the one hassmic logs, the Sendspin pairing token (scripts/lib/setup.sh reads it there over adb), is
+ *   blanked on the way.
  *   Limits: someone who can change traffic (not only read it) can change the page itself, as with any plain HTTP
  *   page; and the Echo's public key comes from GET /api/hello unsigned.
  *
@@ -554,6 +558,43 @@ static void vouch_api(int fd, struct req *r)
     } else respond_json(fd, 404, "{\"error\":\"not found\"}");
 }
 
+/* ---------------------------------------------------------------- the log */
+
+#define LOG_SEND_MAX (2 << 20)      /* main.sh rotates at 1 MB, checked every 10 s: the tail of this much is plenty */
+
+static const char *log_path(void) { const char *e = getenv("HASSMIC_LOG"); return e ? e : "/data/local/hassmic/boot.log"; }
+
+/* The Sendspin pairing token ("SP:0" and base32, sendspin_pairing_token) blanked in place: it lets a server pair */
+static void log_redact(char *t, size_t n)
+{
+    for (size_t i = 0; i + 4 <= n; i++) {
+        if (memcmp(t + i, "SP:0", 4)) continue;
+        size_t j = i + 4;
+        while (j < n && (isupper((unsigned char)t[j]) || isdigit((unsigned char)t[j]))) t[j++] = '*';
+        i = j;
+    }
+}
+
+static void log_api(int fd, struct req *r)
+{
+    char path[300]; int part; FILE *f; long size, from; char *t; size_t n;
+    if (!signed_ok(r, 0)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    if (sscanf(r->path, "/api/log/%d", &part) != 1 || part < 0 || part > 1) { respond_sjson(fd, r, 404, "{\"error\":\"not found\"}"); return; }
+    snprintf(path, sizeof path, part ? "%s.1" : "%s", log_path());
+    if (!(f = fopen(path, "r"))) { respond_s(fd, r, 200, "text/plain; charset=utf-8", NULL, "", 0); return; }    /* no rotated part yet */
+    fseek(f, 0, SEEK_END); size = ftell(f);
+    from = size > LOG_SEND_MAX ? size - LOG_SEND_MAX : 0;
+    if (size < 0 || !(t = malloc((size_t)(size - from) + 1))) { fclose(f); respond_sjson(fd, r, 503, "{\"error\":\"no memory\"}"); return; }
+    fseek(f, from, SEEK_SET);
+    n = fread(t, 1, (size_t)(size - from), f);         /* others append meanwhile: what was there when we looked */
+    fclose(f);
+    size_t skip = 0;
+    if (from) { char *nl = memchr(t, '\n', n); skip = nl ? (size_t)(nl - t) + 1 : 0; }       /* whole lines only */
+    log_redact(t + skip, n - skip);
+    respond_s(fd, r, 200, "text/plain; charset=utf-8", NULL, t + skip, n - skip);
+    free(t);
+}
+
 static void handle(int fd)
 {
     struct req r; int e; uint8_t pub[32];
@@ -624,6 +665,7 @@ static void handle(int fd)
     }
     else if (!strncmp(r.path, "/api/artifact", 13)) artifact_api(fd, &r);
     else if (!strncmp(r.path, "/api/davs", 9)) davs_api(fd, &r);
+    else if (!strcmp(r.method, "GET") && !strncmp(r.path, "/api/log/", 9)) log_api(fd, &r);
     else respond_json(fd, 404, "{\"error\":\"not found\"}");
     free(r.body);
 }

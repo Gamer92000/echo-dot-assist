@@ -1149,6 +1149,8 @@ function buildSystem(el) {
     cardHead('Debug access', 'Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.', 'term'),
     h('div', { class: 'card-body' }, adbBox)));
 
+  el.append(logCard());
+
   clientsBox = h('div');
   el.append(h('div', { class: 'card' },
     cardHead('Approved browsers', 'Browsers that may change settings on this Echo. Revoke one you no longer use.', 'key'),
@@ -1173,6 +1175,58 @@ function renderSystem() {
     };
     clientsBox.append(h('div', { class: 'row' }, h('div', { class: 'row-label' }, k.label, k.me ? h('span', { class: 'badge acc' }, 'This browser') : null), h('div', { class: 'ctl' }, b)));
   }
+}
+
+// ---------------------------------------------------------------- the log (boot.log: hassmic, the firewall, updates)
+
+// Loaded on demand only: up to 2 MB, and the Echo reads it from flash.  Part 1 is the rotated older part (main.sh keeps one)
+function logCard() {
+  const parts = [null, null];           // [boot.log, boot.log.1] as text once fetched
+  const pre = h('pre', { class: 'log hidden', tabindex: '0', 'aria-label': 'Log' });
+  const filter = h('input', { type: 'search', placeholder: 'Filter', 'aria-label': 'Show only lines with this text', class: 'hidden' });
+  const older = h('input', { type: 'checkbox' });
+  const olderBox = h('label', { class: 'log-older hidden' }, older, 'With the older part');
+  const info = h('p', { class: 'help log-info' });
+  const show = h('button', { class: 'primary' }, 'Show log');
+  const save = h('button', { class: 'hidden' }, 'Download');
+  const text = () => (older.checked && parts[1] ? parts[1] : '') + (parts[0] || '');
+  const paint = (toEnd) => {
+    const q = filter.value.trim().toLowerCase(), all = text().split('\n');
+    if (all[all.length - 1] === '') all.pop();
+    const lines = q ? all.filter((l) => l.toLowerCase().includes(q)) : all;
+    const end = toEnd || pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;    // stay at the end if there already
+    pre.replaceChildren(...lines.map((l) => h('span', {
+      class: /^!!|\b(error|failed|cannot|refused)\b/i.test(l) ? 'bad' : /^==/.test(l) ? 'mark' : null }, l + '\n')));
+    if (end) pre.scrollTop = pre.scrollHeight;
+    pre.classList.toggle('hidden', !lines.length);
+    if (!all.length) { info.textContent = 'The log is empty.'; return; }
+    info.textContent = (q ? `${lines.length} of ${all.length} lines` : `${all.length} lines`)
+      + (parts[1] === '' ? '' : older.checked ? ', older part included' : '') + '. Secrets (the Sendspin pairing token) are blanked.';
+  };
+  const fetchPart = async (i) => { parts[i] = (await echo.call('GET', `/api/log/${i}`)).text(); };
+  show.onclick = async () => {
+    show.disabled = true;
+    try {
+      await fetchPart(0);
+      if (older.checked || parts[1] === null) await fetchPart(1);
+      [pre, filter, save].forEach((x) => x.classList.remove('hidden'));
+      olderBox.classList.toggle('hidden', !parts[1]);
+      show.textContent = 'Refresh';
+      paint(true);
+    } catch (e) { toast(errText(e)); }
+    show.disabled = false;
+  };
+  filter.oninput = () => paint(true);
+  older.onchange = () => paint(false);
+  save.onclick = () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text()], { type: 'text/plain' }));
+    a.download = `hassmic-${echo.hello.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-boot.log`; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+  return h('div', { class: 'card' },
+    cardHead('Log', 'What hassmic, the firewall and updates wrote, newest at the bottom: the first place to look when something does not work, and what to attach to a bug report. It travels unencrypted, like everything on this page, so someone watching your network can read it: names, addresses and when the Echo was spoken to.', 'file'),
+    h('div', { class: 'card-body' }, h('div', { class: 'btns' }, show, save, filter, olderBox), info, pre));
 }
 
 async function adbOpen() {

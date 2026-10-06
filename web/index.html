@@ -126,7 +126,7 @@ button.primary:hover:not(:disabled), .btn.primary:hover { background: color-mix(
 button.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, var(--line-2)); }
 button.small { padding: 4px 10px; font-size: 13px; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-input[type=text] { font: inherit; font-size: 14px; color: var(--fg); background: var(--surface); border: 1px solid var(--line-2); border-radius: 9px;
+input[type=text], input[type=search] { font: inherit; font-size: 14px; color: var(--fg); background: var(--surface); border: 1px solid var(--line-2); border-radius: 9px;
                    padding: 7px 12px; min-width: 0; }
 select { font: inherit; font-size: 14px; color: var(--fg); background: var(--surface); border: 1px solid var(--line-2); border-radius: 9px; padding: 7px 10px; }
 
@@ -366,6 +366,14 @@ details.more li { margin: 4px 0; }
 .btns .grow { flex: 1; }
 .import-msg { white-space: pre-wrap; margin: 10px 0 0; font: inherit; font-size: 13.5px; }
 .import-msg:empty { display: none; }
+.log { margin: 10px 0 0; max-height: 60vh; overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+       background: var(--surface-2); font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap;
+       overflow-wrap: anywhere; color: var(--fg); }
+.log .bad { color: var(--bad); }
+.log .mark { color: var(--accent); font-weight: 600; }
+.log-older { display: inline-flex; gap: 6px; align-items: center; font-size: 13.5px; color: var(--muted); }
+.log-info:empty { display: none; }
+.btns input[type=search] { flex: 1; min-width: 140px; }
 .clients { border-top: 1px solid var(--line); }
 
 /* ---------------------------------------------------------------- login */

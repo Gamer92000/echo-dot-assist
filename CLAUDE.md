@@ -182,7 +182,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   browser key, one-time nonce and the voucher's name). The page does it by itself for members; a login page opens
   the other Echo's page (`#vouch=`), which asks, checks the asker is a member with that key, and postMessages it back.
   adb still needs that Echo's own button.
-  Never send secrets: it is plain HTTP. The page's words (what each setting does, what a feature adds to HA) live in
+  Never send secrets: it is plain HTTP.  Log viewer: `GET /api/log/0|1` (signed) sends `boot.log` / `.1` (`HASSMIC_LOG`,
+  tail of 2 MB), with the Sendspin pairing token blanked (`log_redact`; `setup.sh` greps it from the log over adb). The page's words (what each setting does, what a feature adds to HA) live in
   `web/app.js` `HELP`, keyed by setting name: a new setting gets an entry there. Echos section from `arb_status_json`
   (members with name, IP and whether they arbitrate from their signed beacons, others: in no network / younger / older); other Echos' pages are called cross-origin (CORS `*`,
   the signature counts), each approved once with its own button; "make like this Echo" posts this one's export.
