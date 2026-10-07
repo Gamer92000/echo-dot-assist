@@ -1485,7 +1485,9 @@ Run in this order. Each step says what it proves.
       pipeline, one player per stream; `make DEVICE=checkers` and `STUBS=1` byte-identical, `mkstubs.sh`). Shared:
       SYSLIBS (NDK libraries beside the stock ones), `ble.c` takes a model without a stock Bluetooth service.
       Unlock: amonet-checkers v2.0.1 (XDA; fastboot exploit over micro-USB, or the bootrom through TP30 on 2019
-      units), ends in TWRP. Next: an install method (no A/B, dm-verity, policy in boot.img), then: recording rights as system uid, a binder client for the listening
+      units), ends in TWRP; its lk/tz are 8149's own. The thread's root `boot-root.img` is 6570's kernel and ramdisk
+      (adb root, insecure props): mixed with 8149's /system, untried. Next: a root boot.img from 8149's (same
+      changes, policy for our services) and an install method (no A/B, dm-verity), then: recording rights as system uid, a binder client for the listening
       mode and arbitration energies (`lipc-set-prop` is not on this firmware), volume through Android's stream
       volumes, `pm disable` of the Alexa apps, the firewall on netd's chains (update app's uid), Wi-Fi switch through
       WifiService, a login without the action button, earcons extracted from the APKs, an ARM32 `hassmic_rcpi4m`.

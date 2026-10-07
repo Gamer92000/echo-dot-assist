@@ -22,9 +22,19 @@ release as donut's; sha256 `f96fcfa1240f809711fcf855ce7742762437e4f3754615315363
 
 ## Unlock (public: amonet-checkers)
 
-`amonet-checkers-v2.0.1.zip`, from the XDA thread for the Echo Show 5 1st gen (2019, H23K37 only: the Echo Show 8
-`crown` and the Echo Show 5 2nd gen `cronos` have threads of their own). It ends with an unlocked bootloader and TWRP.
-The zip goes into `firmware/checkers/` (not in git); its checksum is to be pinned here once it is.
+XDA thread with the full instructions (R0rt1z2): [UNLOCK][ROOT][TWRP][UNBRICK] Amazon Echo Show 5 1st gen (2019)
+(checkers) <https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-5-1st-gen-2019-checkers.4762900/#post-90318137>.
+H23K37 only: the Echo Show 8 `crown` and the Echo Show 5 2nd gen `cronos` have threads of their own. It ends with an
+unlocked bootloader and TWRP (written to `recovery` and `swdl`). These files go into `firmware/checkers/` (not in git):
+
+| File | Source | sha256 |
+|---|---|---|
+| `amonet-checkers-v2.0.1.zip` | the XDA thread | `770324a8ed5ab922c0383f8ba072d70fc0190cc2c879f12f67b8d6cfa3ad30ee` |
+| `update-kindle-checkers-NS65741_user_8149_0013222532484.bin` | Amazon | `f96fcfa1240f809711fcf855ce7742762437e4f37546153153635c096773cfa3` |
+| `boot-root.zip` | the XDA thread (one `boot-root.img`, see "Root" below) | `b2474113a1f3a4a8de6728ff72774761051945641e1a5ffa78ee25c2b19a809e` |
+
+The post names no firmware version. The pinned one fits: the `lk.bin` and `tz.img` inside amonet-checkers v2.0.1 are
+byte-identical to those of 8149 (only its `preloader.img` differs).
 
 - **Option 1, a working Echo:** no opening. `./fastbrick.sh` (Linux) or `fastbrick.bat`; with the Echo on its power
   supply, hold all three buttons until "=> FASTBOOT mode..." shows, then connect micro-USB. Type `YES`, follow the
@@ -41,7 +51,31 @@ Mute + Volume down (USB connected) = preloader USB download for MTKClient (shows
 **Never write lk, preloader, tee1/tee2 (tz) or any other bootloader partition**, not even from the USB download mode:
 most units have no bootrom way back, a brick there is permanent. An install for this model may touch `system` and
 `boot` only. Stock updates only through TWRP (the `.bin` renamed to `.zip`); flashing the amonet zip in TWRP updates
-the unlock. Which firmware versions the exploit takes is not said in the post: check the thread before pinning.
+the unlock.
+
+## Root
+
+The thread's way: in hacked fastboot (Volume down, or Mute, while booting; or from TWRP) `fastboot oem flags 61` (FOS
+flags: adb on, adb authentication off), `fastboot flash boot boot-root.img`, `fastboot reboot`. adb is then a root
+shell, and `adb remount` makes `/system` writable.
+
+**`boot-root.img` is not built from the pinned firmware.** Against the 8149 `boot.img` (both with MediaTek's 512-byte
+headers on kernel and ramdisk):
+
+- its kernel and ramdisk come from **NS6570 / 6086** (`ro.bootimage.build.fingerprint`, `selinux_version`; kernel
+  `4.9.77-g1f91447-dirty`, 2025-09-23, where 8149's is `4.9.77-ga3ad36a2995d-dirty`, 2026-09-28);
+- `default.prop`: `ro.secure=0`, `ro.adb.secure=0`, `ro.debuggable=1`, `persist.sys.usb.config=mtp,adb`;
+- `init.fosflags.sh` cut down to setting adb on, without authentication;
+- `sepolicy`, `file_contexts.bin`, `seapp_contexts`, `service_contexts`, `init` and `sbin/*` differ (6570's or
+  patched: not separated yet); `init.whad_cc.rc` lacks 8149's `net_raw` group; `fstab.mt8163` is the same (`/system`
+  `wait,verify`).
+
+So it runs 6570's kernel and policy under 8149's `/system`. The modules on `/system/lib/modules` say only
+`vermagic=4.9.77` and the kernel has no MODVERSIONS, so they load; whether 8149's Wi-Fi and Bluetooth drivers work
+against 6570's kernel, and whether 6570's policy covers 8149's services, is not known. A bad boot is recoverable:
+hacked fastboot stays, and 8149's `boot.img` flashes back. For hassmic's install the better way is the donut way:
+the same changes applied to 8149's own `boot.img` (properties, `init.fosflags.sh`, the policy patched for our
+services), so kernel, ramdisk and `/system` stay one build.
 
 ## Files here
 
@@ -53,8 +87,9 @@ the unlock. Which firmware versions the exploit takes is not said in the post: c
 | `kconfig` | the kernel's IKCONFIG (4.9.77, ARM) |
 | `probe.md5`, `stubs/` | from the pinned firmware |
 
-Missing: an install method (TWRP, no A/B slots, dm-verity on `system`, the policy in `boot.img`'s ramdisk), and with it
-`hassmic.rc`, `sepolicy.rules`, `setup.sh` and a place in CI's build matrix.
+Missing: an install method (TWRP or hacked fastboot, no A/B slots, dm-verity on `system`, the policy in `boot.img`'s
+ramdisk: a root `boot.img` built from 8149's, above), and with it `hassmic.rc`, `sepolicy.rules`, `setup.sh` and a place
+in CI's build matrix.
 
 ## Unpack the firmware
 
