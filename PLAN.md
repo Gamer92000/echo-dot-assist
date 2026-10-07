@@ -2379,3 +2379,16 @@ Run in this order. Each step says what it proves.
       state/volume.music is read at start only while state/config says separate_volumes=on (`settings_peek`, now the
       last line of a name as loading takes it), else deleted: a hand edit or an older build after a fallback left it
       behind and the volume came back from it.
+- [ ] Echo Show 5 1st gen (`checkers`, 2026-10-07, firmware only; `docs/re-checkers.md`). Same Fire OS 6574.1 as donut,
+      but a full Android device: no `mixer`, the front end (libasp) inside the audio HAL, Alexa as apps. Checked:
+      `libpryon.so`/`libopus.so`/`libz.so` byte-identical to donut's; donut's `pryon_test` under qemu detects ALEXA on
+      checkers' `en-US/ALEXA` (newer model layout) and `world/ALEXA`; the binder service `audiosignalprocessor` takes
+      donut's LASP command numbers (`SET_LISTENING_MODE` 0x92, `REQUEST_ARBITRATION_JSON` 0x17). Built:
+      `devices/checkers/` and `audio_android.c` (OpenSL ES: VOICE_RECOGNITION capture, which the HAL routes into the ASR
+      pipeline, one player per stream; `make DEVICE=checkers` and `STUBS=1` byte-identical, `mkstubs.sh`). Shared:
+      SYSLIBS (NDK libraries beside the stock ones), `ble.c` takes a model without a stock Bluetooth service.
+      Blocked on: an unlock (none known). Then: recording rights as system uid, a binder client for the listening
+      mode and arbitration energies (`lipc-set-prop` is not on this firmware), volume through Android's stream
+      volumes, `pm disable` of the Alexa apps, the firewall on netd's chains (update app's uid), Wi-Fi switch through
+      WifiService, a login without the action button, earcons extracted from the APKs, an ARM32 `hassmic_rcpi4m`.
+
