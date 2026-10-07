@@ -142,22 +142,62 @@ Libraries in checkers' load at 0x1000–0x4000 above their file offset (libasp +
 
 ## What a port needs
 
-1. **Unlock and install.** amonet-checkers v2.0.1 unlocks and leaves TWRP (`devices/checkers/README.md`); the
-   thread's `boot-root.img` is built from NS6570, not 8149. Install written, untried on a device
-   (`scripts/install-boot.sh`, `devices/checkers/README.md` "Install"): 8149's own `boot.img` with root adb, `verify`
-   out of the fstab and the policy patched (`sepolicy.rules`; without the adb rules adbd dies at its setcon to `su`),
-   flashed in hacked fastboot; then the files onto `/system` as on donut. Only `boot` and `system` are written.
-2. **Audio:** `src/hassmic/audio_android.c` (OpenSL ES, written, untried): capture VOICE_RECOGNITION 16 kHz mono,
-   one player per stream. Open: whether system uid gets the recording, the ASR pipeline's level, latency. Then a binder
-   client for `SET_LISTENING_MODE` / `REQUEST_ARBITRATION_JSON` in place of `lipc-set-prop`, and volume (the Dots set
-   it in the mixer through LIPC; here Android's stream volumes).
-3. **Stopping Alexa:** done in `alexa-off.sh` (`pm disable`, undone by `alexa-on.sh` and by `boot.sh` without
-   `hassmic.conf`); `hassmic.rc` starts the satellite at `sys.boot_completed=1`.
-4. **Firewall:** `lockdown.sh` as on the Dots: `hassmic_out` first in OUTPUT (ahead of netd's chains), INPUT policy
-   DROP, `keep` plus `FW_KEEP` (DHCP answers; there is no stock `firewall.sh` to admit them). Every app's uid is
-   outside group 3990, the updater app's included. Security-relevant: the invariant (Amazon's daemons only reach
-   local addresses, updates never get out) has to be checked on the device, netd's own changes to OUTPUT included.
-5. **Wi-Fi switch:** through Android's WifiService (`wifi.sh` assumes a free wpa_supplicant).
-6. **Settings page login and adb:** no action button; a volume key combination or the touchscreen instead.
-7. **Earcons** extracted at install; **screen**: left to stock at first.
-8. Optional: Bluetooth proxy and A2DP once Android's stack is off; Wi-Fi motion needs an ARM32 `hassmic_rcpi4m`.
+The one list of what is done and what is open for checkers; `devices/checkers/README.md` and PLAN.md point here.
+[x] done (on the PC only, unless it says otherwise), [ ] open. Nothing has run on an Echo Show yet.
+
+**Unlock, install, boot**
+- [x] Unlock: amonet-checkers v2.0.1 (public; its lk/tz are 8149's own). Root: 8149's own `boot.img` with root adb,
+  `verify` out of the fstab, the policy patched (`sepolicy.rules`; the XDA `boot-root.img` is NS6570's).
+- [x] Installer: `scripts/install-boot.sh` (`INSTALL=boot`), boot then system partition only; `hassmic.rc` (firewall
+  `on boot`, satellite at `sys.boot_completed`). PC half checked end to end, device half untried.
+- [ ] First run on a device: the boot image boots, adb is root in `su`, `otatool remount` gets `/system` writable,
+  init starts both services from `/system/etc/init`.
+- [ ] Guided setup (`devices/checkers/setup.sh`): needs the Wi-Fi join below first.
+- [ ] CI: checkers in the build matrix of `.github/workflows/build.yml` (left out while nobody can install a bundle).
+
+**Audio**
+- [x] `audio_android.c` (OpenSL ES): VOICE_RECOGNITION capture, one player per stream, mixed by AudioFlinger.
+- [x] Recording rights read from the firmware (`libserviceutility.so` `recordingAllowed`): root records; any other uid
+  needs a package, system has "android" (`DAEMON_USER=system`).
+- [ ] On the device: the recording really opens as system; only one capture at a time (Android 7 hands the input to
+  the newest AudioRecord, so nothing of Alexa's may still record); the ASR pipeline's level for `micgain.c`; latency;
+  whether our playback really is the echo canceller's reference (inferred from the HAL, not measured).
+- [ ] The front end's listening mode and wake word energies: `main.c` calls `lipc-set-prop` / `lipc-get-prop`
+  (`LASP_CMD_SET_LISTENING_MODE`, `LASP_CMD_REQUEST_ARBITRATION_JSON`, `SET_WAKEWORD_METADATA`), which this firmware
+  does not have. Needs a small binder client for `audiosignalprocessor`, transaction 3 (above: 0x92, 0x17).
+  Without it the cancellers adapt to the talker after ~1.5 s (as on donut before `listening()`), and arbitration
+  falls back to the own SNR score.
+- [ ] Volume: `set_prop_volume` runs `audio_manager_set_prop` (the Dots' mixer); here Android's stream volumes
+  (`AudioManager`/`media volume`, or per-player gain in `audio_android.c`).
+- [ ] Equalizer: `LASP_CMD_GET/SET_USER_EQ_INFO` through LIPC, absent here (the binder `command` may take it).
+- [ ] No micRaw (`startCapture` refused on ship builds): `scripts/mic-compare.sh` cannot work.
+- [ ] Bluetooth speaker stream (`bt_open` returns -1): Android's stack would route an AudioTrack to a speaker itself.
+
+**Alexa, firewall, network**
+- [x] Alexa off: `alexa-off.sh` disables `ALEXA_PACKAGES`, `SETUP_PACKAGES`, `UPDATE_PACKAGES` with `pm`, undone by
+  `alexa-on.sh` and by `boot.sh` without `hassmic.conf`; checked against a fake `pm`.
+- [ ] On the device: which of those packages the screen needs (`com.amazon.bishop` is in the list; the launcher is
+  `com.amazon.paladin`, left alone); what the screen shows with Alexa off.
+- [x] Firewall: `lockdown.sh` as on the Dots, plus `FW_KEEP` (DHCP answers; no stock `firewall.sh`); the updater's uid
+  from `packages.list` for stock-online.
+- [ ] On the device, security-relevant: the invariant (Amazon's daemons only local addresses, the updater never out)
+  holds with netd running, netd's own changes to OUTPUT and INPUT included; DHCP renewals and mDNS pass.
+- [ ] Wi-Fi join at install (`scripts/wifi-join.sh` drives wpa_supplicant; here Android's WifiService owns it), and
+  the settings page's "Switch network" (`wifi.sh`, same reason). Untried idea for now: Android's Wi-Fi settings on
+  the screen (`am start -a android.settings.WIFI_SETTINGS`).
+
+**Buttons, lights, sounds**
+- [ ] No action button: the settings page's login (`web_approve()` in `on_action`) and opening adb over Wi-Fi from the
+  page both wait for one. A volume key combination or the touchscreen instead.
+- [ ] `board.c` values from the running device: keypad event number (`getevent -il`), the privacy driver's input
+  device (its "mute" key is KEY_POWER, 0x74, not KEY_MUTE: `buttons.c` would miss it, the once-a-second read of
+  `amazon-gating/state` still catches it), light sensor path.
+- [ ] No LED ring and no `ledctrl` (`main.c` then leaves LEDs off): listening/thinking/volume/identify feedback
+  would go on the screen; nothing does that yet.
+- [ ] Earcons: none in the firmware's file system; the sounds are in SpeechInteractionManager and KnightSystemUI
+  (`res/raw/...`): extract and convert into `/data/local/hassmic/earcon/` (`board.c` `earcon_dir`) at install.
+
+**Other features**
+- [ ] Amazon downloads (`dha.c`): no `libacehal_dha.so`; the key is behind the `fireos-dha` binder service.
+- [ ] Bluetooth proxy and A2DP (`-B` in `DEFAULT_ARGS` for now): only with Android's Bluetooth stack off.
+- [ ] Wi-Fi motion: the gen4m driver is 32-bit here; `hassmic_rcpi4m` rewrites an arm64 `bl`, needs an ARM variant.

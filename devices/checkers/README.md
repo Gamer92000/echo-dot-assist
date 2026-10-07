@@ -142,8 +142,7 @@ amonet's TWRP leaves lk, preloader and tee alone).
 | `kconfig` | the kernel's IKCONFIG (4.9.77, ARM) |
 | `probe.md5`, `stubs/` | from the pinned firmware |
 
-Missing: a run on a device; `setup.sh` (the guided setup needs a Wi-Fi join through Android); a place in CI's build
-matrix; the settings page's Wi-Fi switch (`wifi.sh` drives wpa_supplicant; here WifiService owns it).
+What is done and what is open, item by item: [docs/re-checkers.md, "What a port needs"](../../docs/re-checkers.md#what-a-port-needs).
 
 ## Unpack the firmware
 
