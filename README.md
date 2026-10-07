@@ -343,9 +343,9 @@ the ring for 10 s and the sound a stock Echo makes in setup. Home Assistant has 
 the device there), on Bluetooth, in Music Assistant and on these pages. The node name (ESPHome device name, host name
 `<node>.local`, the base of entity ids) stays what `NAME` in `hassmic.conf` made it, so nothing in Home Assistant
 breaks. Ticking "Also change the node name" changes that too, after the page has listed what it costs: Home Assistant
-keeps the device but its entity ids keep the old name, and wake word arbitration then cannot hand the network key over
-through Home Assistant until they match (rename them there; the volume keys still work); the host name changes.
-The satellite restarts once. The names are kept in `state/name` and `state/node` and win over `NAME`.
+keeps the device but its entity ids keep the old name until you rename them there, and the host name changes. Wake
+word arbitration does not mind: Echos know each other by their keys (the tags), and the fallback action's new name is
+picked up by the other Echos by themselves. The satellite restarts once. The names are kept in `state/name` and `state/node` and win over `NAME`.
 
 "Wi-Fi" (System) shows the network the Echo is on, and "Switch network…" moves it to another: pick one of the networks
 it sees, or type a name (a hidden network). The password can go in before or after you pick; leave it empty for an open

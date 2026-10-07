@@ -4,6 +4,15 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-07
 
+- **The settings page is tidier and about a third shorter.** The wake word engines and the arbitration modes are small
+  cards to pick from; below them, one click opens a table that compares them question by question (how well it hears,
+  which wake words, "<wake word>, stop", several Echos, ...), the current choice highlighted. "System" is two cards of
+  short rows (name, Wi-Fi, updates; settings file, log, debug access); renaming and the log open in a dialog, the log
+  as big as the window. "Download from Amazon" moved to the "Wake word" section. An Echo alone on the network no
+  longer shows two empty copy cards, only a note that other Echos show up by themselves. Fixed: the menu marked the
+  wrong section while scrolling, the "Name" card said "Give it a name." although it had one, ticking "Also change the
+  node name" showed "[object HTMLSpanElement]" instead of the new node name, and on phones an invisible "Saved" pushed
+  help texts a line down.
 - **"Copy models" lists only what there is to copy.** A model every Echo listed already has, in the same version, is
   left out; a line says how many, and with nothing left to copy the card says so.
 - **The wake word can be left to Home Assistant from the settings page.** "Wake word" has a third choice, Home
