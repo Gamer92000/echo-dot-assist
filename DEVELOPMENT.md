@@ -121,6 +121,12 @@ updates install (`src/hassmic/update.c`):
 - a push to `release` publishes `v<version>` (the `release` channel);
 - pull requests build and test only.
 
+A beta is published only when it brings the Echos something: each bundle goes out with a content ID
+(`hassmic-<codename>.content-id`, from `scripts/content-id.sh`: the bundle as it would be with the version left out,
+hashed; builds repeat byte for byte, so a commit that changes only CI, tests or the docs gives the same IDs), and when every
+model's ID equals the newest release's, `main` publishes nothing. Its commits then show in the next beta's notes. A push
+to `release` always publishes.
+
 The version is the commit's time in UTC, `2026.10.02.091530` (`make version`): nothing to bump. Home Assistant
 compares these as calendar versions, so newer is newer across both channels, and a commit published as beta and then
 as release has the same version: an Echo running that beta is not offered the release of it. A commit that is

@@ -2,6 +2,7 @@
 #   push to main     prerelease  v<version>-beta  (the "beta" channel)
 #   push to release  release     v<version>       (the "release" channel)
 #   pull request     build and test only
+# A beta is skipped when no model's bundle holds anything new (scripts/content-id.sh): CI, test and doc changes.
 # The version is the commit's time in UTC, 2026.10.02.091530 (make version): nothing to bump, and a commit published
 # as beta and later as release has the same version, so an Echo on beta is not offered the same build again.
 # The firmware is not public: device binaries link against stand-ins for the stock libraries (make STUBS=1,
@@ -139,10 +140,14 @@ jobs:
           for v in build/otatool-host "python3 scripts/otatool.py"; do
               $v verify secrets/throwaway.pub build/${{ matrix.device }}/hassmic.bundle build/${{ matrix.device }}/hassmic.bundle.sig
           done
+      # what the bundle holds apart from its version: the release job publishes a beta only when it changed
+      - name: Content ID
+        run: DEVICE=${{ matrix.device }} scripts/content-id.sh STUBS=1 > build/${{ matrix.device }}/content-id
       - uses: actions/upload-artifact@v4
         with:
           name: build-${{ matrix.device }}
           path: |
+            build/${{ matrix.device }}/content-id
             build/${{ matrix.device }}/hassmic
             build/${{ matrix.device }}/runas
             build/${{ matrix.device }}/otatool
@@ -232,10 +237,31 @@ jobs:
                       { echo "::error::$d: bundle does not verify against keys/release.pub ($v): secret and public key differ, or the two otatools do"; rm -f secrets/release.key; exit 1; }
               done
               cp build/$d/hassmic.bundle dist/hassmic-$d.bundle; cp build/$d/hassmic.bundle.sig dist/hassmic-$d.bundle.sig
+              cp build/$d/content-id dist/hassmic-$d.content-id
           done
           rm -f secrets/release.key
-          [ "$(ls dist | wc -l)" = $(( 2 * $(ls -d build/build-* | wc -l) )) ] || { echo "::error::a bundle is missing"; ls -l dist; exit 1; }
+          [ "$(ls dist | wc -l)" = $(( 3 * $(ls -d build/build-* | wc -l) )) ] || { echo "::error::a bundle is missing"; ls -l dist; exit 1; }
           ls -l dist
+      # A beta only when the Echos get something new: a commit that changes only CI, tests or the docs builds bundles
+      # with the content IDs of the newest release (beta or not), and a beta of it would only make every Echo on the
+      # beta channel download the same software again.  A push to release always publishes.
+      - name: Anything new
+        id: new
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          new=true
+          prev=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // empty' 2>/dev/null || true)
+          if [ "$PRERELEASE" = true ] && [ -n "$prev" ] && gh release download "$prev" -p 'hassmic-*.content-id' -D prev 2>/dev/null; then
+              same=true
+              for f in dist/*.content-id; do cmp -s "$f" "prev/${f#dist/}" || same=false; done
+              [ "$(ls prev | wc -l)" = "$(ls dist/*.content-id | wc -l)" ] || same=false        # a model added or dropped
+              if [ $same = true ]; then new=false; echo "::notice::same content as $prev: no beta published"; fi
+          fi
+          echo "newest release: ${prev:-none}, publish: $new"
+          echo "new=$new" >> "$GITHUB_OUTPUT"
       - name: Notes
         env:
           TAG: ${{ needs.version.outputs.tag }}
@@ -253,7 +279,7 @@ jobs:
           } > notes.md
           cat notes.md; ls -l dist
       - name: Publish
-        if: ${{ !env.ACT }}
+        if: ${{ !env.ACT && steps.new.outputs.new == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
@@ -267,4 +293,7 @@ jobs:
         env:
           TAG: ${{ needs.version.outputs.tag }}
           PRERELEASE: ${{ needs.version.outputs.prerelease }}
-        run: echo "would create release $TAG (prerelease=$PRERELEASE) at $GITHUB_SHA with $(ls dist | tr '\n' ' ')"
+          NEW: ${{ steps.new.outputs.new }}
+        run: |
+          if [ "$NEW" = true ]; then echo "would create release $TAG (prerelease=$PRERELEASE) at $GITHUB_SHA with $(ls dist | tr '\n' ' ')"
+          else echo "would publish nothing: same content as the newest release"; fi

@@ -54,7 +54,8 @@ tests/otatool_test.sh                         # scripts/otatool.py against the C
 
 `.venv` from `uv sync` (`pyproject.toml` + `uv.lock`; change a version, then `uv lock`). CI (`.github/workflows/build.yml`, DEVELOPMENT.md "CI and releases"): every model with
 `STUBS=1`, PC tests, then a push to `main` publishes `v<version>-beta` (prerelease), a push to `release` publishes
-`v<version>`; version = commit time in UTC, `2026.10.02.091530` (`make version`; local builds add `+<commit id>`, CI
+`v<version>` (a beta only when some model's `scripts/content-id.sh` differs from the newest release's: no betas for CI or doc
+changes); version = commit time in UTC, `2026.10.02.091530` (`make version`; local builds add `+<commit id>`, CI
 passes `RELEASE=1` for the bare one), bundles `hassmic-<codename>.bundle(.sig)`
 signed in the `release` job only (secret `RELEASE_SIGNING_KEY` of the GitHub environment `release`, main/release only;
 build jobs sign with a throwaway key) with the release key (base64 of `secrets/release.key`; public half `keys/release.pub`,
