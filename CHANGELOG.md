@@ -77,8 +77,7 @@ What changed for people using the Echo, newest first. Details and measurements a
   page. The Echo forgets its settings, name, Home Assistant's key, approved browsers, Bluetooth pairings and its Wi-Fi
   networks, and starts the setup above again. The install itself, Amazon's extra models and `hassmic.conf` stay.
 - **Groundwork for the Echo Show 5 (1st gen).** Its firmware is worked out and hassmic builds for it, but it cannot
-  be installed yet: there is no known way to unlock it. Details in [devices/checkers](devices/checkers/README.md).
-
+  be installed yet: the unlock exists (amonet-checkers), the installation for this model is still to be written. Details in [devices/checkers](devices/checkers/README.md).
 - **The settings page is tidier and about a third shorter.** The wake word engines and the arbitration modes are small
   cards to pick from; below them, one click opens a table that compares them question by question (how well it hears,
   which wake words, "<wake word>, stop", several Echos, ...), the current choice highlighted. "System" is two cards of

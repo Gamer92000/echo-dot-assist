@@ -137,7 +137,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `wyoming.c`. Selected with `-P`. The core calls `start/audio/stop/played/...` on the active proto with lock held.
 - **Audio backend (`audio.h`)**: `audio_mixer.c` on device (mixer C API: capture, voice/TTS, music, Bluetooth and
   earcon streams mixed by the mixer); `audio_android.c` where there is no mixer (checkers, Echo Show 5: OpenSL ES over
-  AudioRecord/AudioTrack, the front end inside the audio HAL; untried, no unlock known; device.mk `SYSLIBS` links
+  AudioRecord/AudioTrack, the front end inside the audio HAL; untried on a device; device.mk `SYSLIBS` links
   `-lOpenSLES`); `audio_file.c` for PC builds. Swapped at link time in the Makefile.
 - **Sound detection (`sound.h`)**: `sound_pryon.c` (Alexa Guard's model on `libpryon.so`: the firmware's, or Amazon's newest
   from `/data/local/hassmic/aed` (`scripts/artifacts.sh`); a second decoder, off unless HA's

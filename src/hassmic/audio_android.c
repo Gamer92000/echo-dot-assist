@@ -6,7 +6,7 @@
  * AudioFlinger mixes them.  OpenSL ES is the NDK's stable C API over AudioRecord/AudioTrack (libwilhelm): no C++ ABI of
  * the firmware's libmedia to match.
  *
- * Not tried on a real Echo Show yet (no unlock known).  What has to hold there, in order:
+ * Not tried on a real Echo Show yet.  What has to hold there, in order:
  *  - recording rights: AudioFlinger's recordingAllowed() looks up a package for the uid when OpenSL ES gives none; uid 0
  *    has none and is refused, so hassmic must run as system (1000; package "android") or another uid with packages;
  *  - one capture at a time: Android 7 lets a newer AudioRecord take the input from a HOTWORD one, so amazon.speech.sim

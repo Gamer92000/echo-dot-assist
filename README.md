@@ -26,7 +26,7 @@ as an ESPHome device, with no YAML and no add-on.
 | ✅ | Echo 2nd gen (2017)          | XC56PY | [`radar`](devices/radar/README.md)       | open the case, solder USB to the amplifier board |
 | ❌ | Echo Dot 3rd gen (2019–2020) | C78MP8 | `crumpet`                                | the Dot 3 unlock does not work on it             |
 | ❌ | Echo Dot 3rd gen with clock  | 36EBT3 | `doebrite`                               | thought to be `crumpet` hardware                 |
-| ❌ | Echo Show 5 1st gen (2019)   | H23K37 | [`checkers`](devices/checkers/README.md) | no unlock known                                  |
+| ❌ | Echo Show 5 1st gen (2019)   | H23K37 | [`checkers`](devices/checkers/README.md) | micro-USB, no soldering; install not written yet |
 
 Each model needs exactly the firmware its page names (`donut`: Fire OS 6574.1 only). Another model? What is known and
 how to add one: [`devices/`](devices/README.md).

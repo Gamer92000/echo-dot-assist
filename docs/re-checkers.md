@@ -1,6 +1,7 @@
 # Echo Show 5 1st gen (`checkers`): what the firmware says
 
-Worked out from the firmware only, 2026-10-07; nobody has run hassmic on an Echo Show yet, and no unlock is known.
+Worked out from the firmware only, 2026-10-07; nobody has run hassmic on an Echo Show yet. The unlock is public
+(amonet-checkers, `devices/checkers/README.md`).
 Firmware: `update-kindle-checkers-NS65741_user_8149_0013222532484.bin` (sha256 `f96fcfa1…73cfa3`), Fire OS 6574.1
 (NS65741/8149), the same release as donut's. Model H23K37, `ro.product.model=AEOCH`, `ro.product.device=checkers`.
 
@@ -138,7 +139,9 @@ Libraries in checkers' load at 0x1000–0x4000 above their file offset (libasp +
 
 ## What a port needs
 
-1. **Unlock and root.** Nothing known. Everything else waits for it.
+1. **Unlock and install.** amonet-checkers v2.0.1 unlocks and leaves TWRP (`devices/checkers/README.md`). Open: an
+   install method for a system without A/B slots under dm-verity, with the policy in `boot.img`'s ramdisk, that never
+   touches lk, preloader or tee (the post: a brick there is permanent on most units).
 2. **Audio:** `src/hassmic/audio_android.c` (OpenSL ES, written, untried): capture VOICE_RECOGNITION 16 kHz mono,
    one player per stream. Open: whether system uid gets the recording, the ASR pipeline's level, latency. Then a binder
    client for `SET_LISTENING_MODE` / `REQUEST_ARBITRATION_JSON` in place of `lipc-set-prop`, and volume (the Dots set
