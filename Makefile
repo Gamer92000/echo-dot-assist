@@ -185,9 +185,11 @@ build/web_assets.c: tools/embed.py $(foreach w,$(WEB),$(firstword $(subst :, ,$(
 	@mkdir -p build
 	python3 tools/embed.py $@ $(WEB)
 
+# SYSLIBS (device.mk): NDK system libraries a backend needs beside the stock ones (-lOpenSLES on checkers): they come
+# with the NDK, so no stubs are needed for them.
 $(OUT)/hassmic: $(HASSMIC) $(BOARD) $(AUDIO) $(WAKE) $(SOUND) $(WHISPER) $(HASSMIC_H) $(addprefix $(STOCK)/,$(LIBS))
 	@mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -Isrc/hassmic $(filter %.c,$^) -o $@ $(LDFLAGS) -lm -ldl $(addprefix $(STOCK)/,$(LIBS))
+	$(CC) $(CFLAGS) -Isrc/hassmic $(filter %.c,$^) -o $@ $(LDFLAGS) -lm -ldl $(SYSLIBS) $(addprefix $(STOCK)/,$(LIBS))
 
 # PC build for protocol tests: file audio backend, no wake word (SIGUSR1 triggers), fake sound and whisper detection, identity of $(DEVICE).
 build/hassmic-host: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c src/hassmic/wake_none.c src/hassmic/sound_none.c src/hassmic/whisper_none.c $(HASSMIC_H) build/.device

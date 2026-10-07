@@ -1147,6 +1147,7 @@ static int stock_bt_running(void)
 {
 #ifdef __ANDROID__
     char p[PROP_NAME_MAX], v[PROP_VALUE_MAX] = "";
+    if (!board.bt_service) return 0;                /* no init service owns it (checkers: Android's Bluetooth app) */
     snprintf(p, sizeof p, "init.svc.%s", board.bt_service);
     __system_property_get(p, v);
     return !strcmp(v, "running");

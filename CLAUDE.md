@@ -12,7 +12,7 @@ through the reverse-engineered C API of `libmixerAPI.so` and speaks the ESPHome 
 Docs: `README.md` (short user-facing overview with figures; every feature in detail in `docs/GUIDE.md`, security model in
 `docs/SECURITY.md`; figures are CeTZ sources in `docs/img/src/`, rendered light+dark by `tools/figures.sh`; install instructions per model in `devices/<codename>/README.md`, guided by
 `scripts/setup.sh`), `DEVELOPMENT.md` (architecture, layout, tests, contributing), `PLAN.md` (phases, open issues, every measurement), `CHANGELOG.md`
-(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-a2dp-source.md`, `re-davs-login.md`,
+(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-a2dp-source.md`, `re-davs-login.md`, `re-checkers.md`,
 `sendspin-digest.md`).
 
 ## Build and test
@@ -136,7 +136,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   by HA, voice assistant, media player, timers, settings entities, Bluetooth proxy messages) and `proto_wyoming.c` +
   `wyoming.c`. Selected with `-P`. The core calls `start/audio/stop/played/...` on the active proto with lock held.
 - **Audio backend (`audio.h`)**: `audio_mixer.c` on device (mixer C API: capture, voice/TTS, music, Bluetooth and
-  earcon streams mixed by the mixer); `audio_file.c` for PC builds. Swapped at link time in the Makefile.
+  earcon streams mixed by the mixer); `audio_android.c` where there is no mixer (checkers, Echo Show 5: OpenSL ES over
+  AudioRecord/AudioTrack, the front end inside the audio HAL; untried, no unlock known; device.mk `SYSLIBS` links
+  `-lOpenSLES`); `audio_file.c` for PC builds. Swapped at link time in the Makefile.
 - **Sound detection (`sound.h`)**: `sound_pryon.c` (Alexa Guard's model on `libpryon.so`: the firmware's, or Amazon's newest
   from `/data/local/hassmic/aed` (`scripts/artifacts.sh`); a second decoder, off unless HA's
   switch is on; ESPHome event entity "Sound"; windows with own playback dropped; `docs/re-aed.md`) or `sound_none.c`

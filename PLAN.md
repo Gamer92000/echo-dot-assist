@@ -1373,7 +1373,7 @@ Run in this order. Each step says what it proves.
       Echo, an Echo with Pryon and one with microWakeWord in one arbitration network; the remote path with a real
       openWakeWord on the Dot 2.  Not done: ESPHome's "stop" model
       as a second model while a timer rings or a reply plays (as Voice PE does); openWakeWord/ONNX.
-- [~] Setup from a phone (OOBE) and factory reset (2026-10-07, asked: found over Bluetooth by the HA app, Wi-Fi, the
+ [~] Setup from a phone (OOBE) and factory reset (2026-10-07, asked: found over Bluetooth by the HA app, Wi-Fi, the
       node name if possible; rainbow while not set up (then stock's orange setup-mode spinner, asked the same day); "not set up" = after the install or a reset until HA took it on;
       no button press while not set up; reset wipes all of hassmic plus Wi-Fi, by the action button held 10 s, HA, the
       page). Improv Wi-Fi over BLE (spec of improv-wifi.com, packets as py-improv-ble-client 2.0.1, HA's improv_ble):
@@ -1473,3 +1473,19 @@ Run in this order. Each step says what it proves.
       Open (device): a talker at the called Echo (does speech open the gate fast
       enough, is the ARA with listening mode toggled fine), the wake word in VoIP mode, call LED animations' look,
       the blueprint in a real HA.
+- [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): Wi-Fi setup without a PC (stock: `oobed`, 5 s action button; ESPHome's
+      way would be Improv over BLE, ble.c has the controller); offline alarm clock and reminders (HA has timers only).
+      Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, Drop In/calling (`commsd`), stereo pairs.
+- [ ] Echo Show 5 1st gen (`checkers`, 2026-10-07, firmware only; `docs/re-checkers.md`). Same Fire OS 6574.1 as donut,
+      but a full Android device: no `mixer`, the front end (libasp) inside the audio HAL, Alexa as apps. Checked:
+      `libpryon.so`/`libopus.so`/`libz.so` byte-identical to donut's; donut's `pryon_test` under qemu detects ALEXA on
+      checkers' `en-US/ALEXA` (newer model layout) and `world/ALEXA`; the binder service `audiosignalprocessor` takes
+      donut's LASP command numbers (`SET_LISTENING_MODE` 0x92, `REQUEST_ARBITRATION_JSON` 0x17). Built:
+      `devices/checkers/` and `audio_android.c` (OpenSL ES: VOICE_RECOGNITION capture, which the HAL routes into the ASR
+      pipeline, one player per stream; `make DEVICE=checkers` and `STUBS=1` byte-identical, `mkstubs.sh`). Shared:
+      SYSLIBS (NDK libraries beside the stock ones), `ble.c` takes a model without a stock Bluetooth service.
+      Blocked on: an unlock (none known). Then: recording rights as system uid, a binder client for the listening
+      mode and arbitration energies (`lipc-set-prop` is not on this firmware), volume through Android's stream
+      volumes, `pm disable` of the Alexa apps, the firewall on netd's chains (update app's uid), Wi-Fi switch through
+      WifiService, a login without the action button, earcons extracted from the APKs, an ARM32 `hassmic_rcpi4m`.
+

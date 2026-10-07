@@ -17,10 +17,11 @@ BIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
 T=$(mktemp -d); trap 'rm -rf $T' EXIT
 BINS="hassmic mixcap mixplay latency pryon_test aed_test whisper_test"
 
-# Undefined in our binaries, not from the NDK's own libc/libm/libdl: what the stock libraries must provide.  Includes the
-# EABI helpers (__aeabi_idiv ...) that the stock libraries export: the linker takes them from there before libgcc.
+# Undefined in our binaries, not from the NDK's own libc/libm/libdl/libOpenSLES (device.mk SYSLIBS): what the stock
+# libraries must provide.  Includes the EABI helpers (__aeabi_idiv ...) that the stock libraries export: the linker takes
+# them from there before libgcc.
 SYSLIB=$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/arm-linux-androideabi/24
-$BIN/llvm-nm -D --defined-only $SYSLIB/libc.so $SYSLIB/libm.so $SYSLIB/libdl.so 2>/dev/null | awk 'NF == 3 { print $3 }' | sort -u > $T/ndk
+$BIN/llvm-nm -D --defined-only $SYSLIB/libc.so $SYSLIB/libm.so $SYSLIB/libdl.so $SYSLIB/libOpenSLES.so 2>/dev/null | awk 'NF == 3 { print $3 }' | sort -u > $T/ndk
 for d in $DEVS; do
     make -s DEVICE=$d all > /dev/null
     for b in $BINS; do [ -f build/$d/$b ] && $BIN/llvm-nm -D --undefined-only build/$d/$b | awk '{ print $2 }'; done |
