@@ -1508,7 +1508,5 @@ Run in this order. Each step says what it proves.
       libserviceutility.so recordingAllowed lets uid 0 through after RECORD_AUDIO and looks up a package for any other
       uid (system: "android"). `tools/sdat2img.py` (reproduces the system image, md5-checked); `mkbootroot.py --extract`,
       `--cpio`. PC-checked: the boot image build end to end with adb stubbed out (a biscuit was on adb here: the model
-      guard refused it), otatool_test.sh, fake_ha_esphome.py. Not done: a run on the device; a guided setup.sh and a
-      Wi-Fi join through WifiService; the settings page's Wi-Fi switch there; a binder client for the listening mode and
-      arbitration energies (`lipc-set-prop` is not on this firmware); volume through Android's stream volumes; a login
-      without the action button; earcons from the APKs; an ARM32 `hassmic_rcpi4m`.
+      guard refused it), otatool_test.sh, fake_ha_esphome.py. Open items, one list: docs/re-checkers.md
+      "What a port needs".
