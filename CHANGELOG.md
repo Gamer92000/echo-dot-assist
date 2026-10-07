@@ -4,6 +4,13 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-07
 
+- **Switch the Echo to another Wi-Fi network from its settings page.** "Wi-Fi" in the System section shows the
+  network the Echo is on; "Switch network…" lists the networks it sees, or takes a name you type (for a hidden one).
+  You can type the password before or after you pick the network. The Echo keeps the new network only once it is on it
+  with an address and the router answers; otherwise it goes back to the old one within a minute or two, and the page
+  says why (wrong password, not found, no address). Once the new network works, the Echo forgets the old ones. It will most likely get a new IP address: look it up afterwards
+  under "Web UI address" on the Echo's device page in Home Assistant. The password travels encrypted, and the Echo
+  stores only the key derived from it. WPA2 and open networks; WPA3-only networks are shown but cannot be joined.
 - **The guided setup takes an Echo that is rooted already** (issue #10). If the Echo on USB has root adb and the
   firmware this project needs, `scripts/setup.sh` offers to keep it as it is: it skips the unlock, the firmware and the
   root steps (which would have wiped it), and asks only for `boot-root.zip`, plus the firmware when it has to build.

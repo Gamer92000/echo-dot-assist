@@ -319,6 +319,15 @@ keeps the device but its entity ids keep the old name, and wake word arbitration
 through Home Assistant until they match (rename them there; the volume keys still work); the host name changes.
 The satellite restarts once. The names are kept in `state/name` and `state/node` and win over `NAME`.
 
+"Wi-Fi" (System) shows the network the Echo is on, and "Switch network…" moves it to another: pick one of the networks
+it sees, or type a name (a hidden network). The password can go in before or after you pick; leave it empty for an open
+network. The Echo tries the new network without saving it, and keeps it only once it is on it with an address and the
+router answers; otherwise it goes back to the network it was on within a minute or two, and the page says why. Once
+the new network works, the Echo forgets the networks it knew before. Expect a new IP address: afterwards find it as "Web UI address" on the
+Echo's device page in Home Assistant (which finds the Echo again by itself within a few minutes if it can reach that
+network), and approve
+the browser there once more with the action button. WPA2 (password) and open networks only.
+
 ### hassmic.conf
 
 One file on the Echo, `/data/local/hassmic/hassmic.conf`, read at boot (edit over adb, reboot):
@@ -409,7 +418,8 @@ Open issues and measurements: [PLAN.md](PLAN.md).
 - **Settings page**: plain HTTP (an Echo has no certificate a browser takes), so it never shows a secret (API key,
   Sendspin token, network keys). A browser gets in only by a press of the Echo's action button while its login waits;
   two browsers asking at once are both refused. Every request after that is signed with a key only that browser and
-  that Echo share (X25519), with a counter against replays. Someone who can change traffic on your network (not only
+  that Echo share (X25519), with a counter against replays. The one secret the page sends, a Wi-Fi password, is
+  encrypted with that key; the Echo keeps only the network key derived from it, as `wpa_supplicant.conf` does. Someone who can change traffic on your network (not only
   read it) could change the page itself, as with any plain HTTP page.
 - **adb**: a root shell without authentication (the unlock turns adbd's key check off). Over Wi-Fi it is closed: adbd
   runs without its network listener and the firewall drops port 5555. Opened only from the settings page (30

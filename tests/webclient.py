@@ -52,8 +52,22 @@ class Browser:
         mac = hashlib.blake2b(f"{method}\n{path}\n{ctr}\n".encode() + body, key=key or self.k, digest_size=16).hexdigest()
         return {"X-HM-Pub": self.pub.hex(), "X-HM-Ctr": str(ctr), "X-HM-Mac": mac}
 
+    def seal(self, ctr, data):
+        """web.c unseal's other half: XOR with BLAKE2b blocks keyed from K, over the request's counter"""
+        ek = hashlib.blake2b(b"hassmic seal 1", key=self.k, digest_size=32).digest()
+        ks = b"".join(hashlib.blake2b(f"{ctr}\n".encode() + bytes([i]), key=ek, digest_size=64).digest() for i in range((len(data) + 63) // 64))
+        return bytes(a ^ b for a, b in zip(data, ks))
+
     def call(self, method, path, body=b"", **kw):
-        """a signed request; the answer to one that passed must be signed with the same key over our counter (web.c)"""
+        """a signed request; the answer to one that passed must be signed with the same key over our counter (web.c).
+        body may be a function of the counter (what it seals is bound to that request)"""
+        if callable(body):
+            self.ctr += 1; c = self.ctr; body = body(c)
+            hd = self.headers(method, path, body, ctr=c)
+            st, h, data = req(self.port, method, path, body, hd)
+            want = hashlib.blake2b(f"RESP\n{c}\n".encode() + data, key=self.k, digest_size=16).hexdigest()
+            if st != 401 and h.get("X-HM-Mac") != want: raise AssertionError(f"answer to {method} {path} ({st}) is not signed right")
+            return st, h, data
         hd = self.headers(method, path, body, **kw)
         st, h, data = req(self.port, method, path, body, hd)
         if st != 401 and "key" not in kw and "ctr" not in kw:

@@ -123,9 +123,24 @@ const hmcrypto = (() => {
     return out;
   }
 
+  // What the page seals for one Echo (a Wi-Fi password; web.c unseal): XOR with a key stream, block i (64 bytes) =
+  // BLAKE2b-512 keyed with EK over the request's counter, "\n" and the byte i, EK = BLAKE2b-256 keyed with K over
+  // "hassmic seal 1".  A counter serves one request only, so no stream twice; the request's MAC covers what is sealed.
+  function seal(k, ctr, data) {
+    const te = new TextEncoder(), ek = blake2b(32, k, te.encode('hassmic seal 1')), c = te.encode(`${ctr}\n`);
+    const out = new Uint8Array(data.length), msg = new Uint8Array(c.length + 1);
+    msg.set(c);
+    for (let i = 0; i * 64 < data.length; i++) {
+      msg[c.length] = i;
+      const ks = blake2b(64, ek, msg);
+      for (let j = 0; j < 64 && i * 64 + j < data.length; j++) out[i * 64 + j] = data[i * 64 + j] ^ ks[j];
+    }
+    return out;
+  }
+
   const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
   const unhex = (s) => new Uint8Array(s.match(/../g).map((x) => parseInt(x, 16)));
-  return { x25519, x25519Public, blake2b, hex, unhex };
+  return { x25519, x25519Public, blake2b, seal, hex, unhex };
 })();
 
 if (typeof module !== 'undefined') module.exports = hmcrypto;

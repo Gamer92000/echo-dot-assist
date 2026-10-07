@@ -734,6 +734,41 @@ Run in this order. Each step says what it proves.
       on donut/biscuit/radar) + `state_setup_discovery_beacon` (all three). Page header, per Echo in the list, HA button
       (`LIST_BUTTON` 61 / `BUTTON_COMMAND` 62, device class identify, diagnostic). fake_web: page, unsigned, HA button.
       Not seen on a device yet.
+- [~] Wi-Fi switch on the settings page (2026-10-07, asked: scan plus a name typed by hand, password before or after
+      picking, back to the old network if the new one fails, warn about the new address). hassmic (puffin) may not talk
+      to wpa_supplicant: `state/wifi-request` for root (`main.sh` ota_watch, every 2 s) -> `scripts/device/wifi.sh` in the
+      background, answers in root's `/data/local/hassmic/wifi/` (status, scan, result, lock/). The password: sealed by
+      the page with K (BLAKE2b key stream over the request counter, `web.c` unseal, `crypto.js` seal, padded to 64 bytes);
+      `wifi.c` turns it into the PSK (PBKDF2-HMAC-SHA1, 4096) and only that goes to root (0600 request, removed on read)
+      and into `wpa_supplicant.conf`. Switch: add + select in wpa_supplicant only; kept once `wpa_state=COMPLETED` on
+      it (30 s), an address and the router answers ARP (`/proc/net/arp` flags 0x2 after one ping; 30 s); then every
+      other saved network goes (asked: no fallback to an old network once the new one works; P2P groups, disabled=2,
+      stay), `save_config`. Else removed, the old network selected and the others enabled again (select_network
+      disabled them), nothing ever saved. Why it failed from the furthest `wpa_state`: never
+      associating = not found, 4-way handshake = password. netwatch: no wifisvc while `lock/` exists. WPA2-PSK and
+      open only (SAE-only, WEP, EAP, OWE shown, not offered). `tests/fake_web_wifi.py`: real wifi.sh against
+      `tests/fake_wifi_tools.py` (wpa_cli, ifconfig, getprop, ping...): escapes, merge, PBKDF2, wrong key, out of reach,
+      no DHCP, silent router, replacement, open, save failure, replay, busy, interrupted, junk requests.
+      Dot 2 (biscuit), 2026-10-07, over USB: wpa_cli as parsed (`get_network` prints no newline; key_mgmt of Amazon's
+      entry "WPA-PSK WPA-PSK-SHA256"), toybox `ifconfig`/`ping -W`/`sed [[:space:]]`, no `ip`, no `head -c`; mksh's `echo`
+      eats backslashes (`\x41` -> A), hence printf for SSIDs. Scan 5.3 s. Unknown SSID: notfound, back 4 s after the 30 s;
+      wrong PSK on a real SSID: wrongkey (4-way handshake seen), back 6 s after; `wpa_supplicant.conf` md5 unchanged
+      both times. Found there: back() let its own reconnect overwrite why (reported noassoc); fixed, fake now settles
+      through ASSOCIATING. dhcpcd: init's `dhcpcd wlan0 -AdLK` (6.8.2), `-K` = no link events: 15 s on a missing network
+      and back left address, router ARP entry (0x2) and `dhcp.wlan0.*` untouched, so the address-only check would have
+      passed on another network with the old lease. Now `setprop dhcp.wlan0.result hassmic` + `dhcpcd -n wlan0` and only
+      a lease its hook (`95-configured`) writes counts; same network: RENEW in 1 s, switch in 5 s. Other subnet
+      (192.168.100.0/22 -> DasImhof'scheTortenstueck 192.168.0.0/23): 17.8 s; there dhcpcd did see the drop (EXPIRE,
+      CARRIER, a moment of IPv4LL) and REBIND gave 192.168.1.242, router 192.168.0.1; lockdown re-applied with the new
+      resolvers by itself; Music Assistant back at once, Home Assistant after 3 min (zeroconf: mDNS announced the new
+      address, checked from the PC). Whole chain through the page API with the biscuit build in /data and a root loop
+      for main.sh's part: sealed wrong password -> wrongkey; the real one -> PBKDF2 on ARM right (switched); back from
+      the new address with a fresh login, page lost the Echo (as meant), USB: ok on the old network. Also found: the
+      page showed the old network while on the new (status written only on link up): netwatch now writes it on every
+      change of address. And `wpa_cli reconfigure` (cleanup) took wlan0's socket in /data/misc/wifi/sockets away until
+      wpa_supplicant restarts; wifi.sh then talks to the global one (`-g@android:wpa_wlan0 IFNAME=wlan0`, Android's
+      way), checked on the Dot 2 with a scan and a failed switch. Not on a device: main.sh's dispatch and netwatch
+      parts (an update brings them), the page in a real browser against the Echo.
 - [x] Arbitration key handoff through HA tags (2026-10-07, issue #8: three Echos on the latest beta, all with the
       settings page's "handoff entity under another name" warning). HA 2026.9 names entities from area + parent device +
       device + entity name (`helpers/entity_registry.py` `_async_get_full_entity_name`, default parts AREA,

@@ -25,6 +25,9 @@
  *   Amazon itself (davs.c): POST /api/davs/login starts a code pair login (the code on the page, GET /api/davs tells
  *   where it stands), /api/davs/fetch downloads an artifact; installing is the artifacts install.  The tokens of the
  *   registration never reach the page — plain HTTP.
+ *   Wi-Fi (wifi.c): GET /api/wifi, POST /api/wifi/scan and /api/wifi/join, signed; root scans and switches.  The one
+ *   secret that comes from the page, the network's password, travels sealed (unseal below), and only the PSK made from
+ *   it goes on to root.
  *   The log: GET /api/log/0 (boot.log) and /1 (its rotated part), signed, for the page's viewer.  What it says is
  *   plain on the network then, like the rest of the page: names, addresses, when the Echo was spoken to.  Secrets do
  *   not go out: the one hassmic logs, the Sendspin pairing token (scripts/lib/setup.sh reads it there over adb), is
@@ -46,6 +49,7 @@
 #include "hash.h"
 #include "netio.h"
 #include "settings.h"
+#include "wifi.h"
 #include "ws.h"
 #include "../third_party/monocypher.h"
 #include <ctype.h>
@@ -92,6 +96,12 @@ static int unhex(uint8_t *out, const char *s, size_t n)
 {
     for (size_t i = 0; i < n; i++) { unsigned v; if (!isxdigit((unsigned char)s[2 * i]) || !isxdigit((unsigned char)s[2 * i + 1]) || sscanf(s + 2 * i, "%2x", &v) != 1) return -1; out[i] = (uint8_t)v; }
     return s[2 * n] ? -1 : 0;
+}
+/* hex of any even length up to CAP bytes: the byte count, or -1 */
+static int unhex_any(uint8_t *out, size_t cap, const char *s)
+{
+    size_t n = strlen(s);
+    return n % 2 || n / 2 > cap || unhex(out, s, n / 2) ? -1 : (int)(n / 2);
 }
 
 /* ---------------------------------------------------------------- keys and approved browsers (lk held) */
@@ -266,7 +276,7 @@ static void respond(int fd, int code, const char *type, const char *extra, const
 {
     char h[1024];
     const char *msg = code == 200 ? "OK" : code == 204 ? "No Content" : code == 400 ? "Bad Request" : code == 401 ? "Unauthorized"
-                    : code == 404 ? "Not Found" : code == 413 ? "Payload Too Large" : code == 503 ? "Service Unavailable" : "Error";
+                    : code == 404 ? "Not Found" : code == 409 ? "Conflict" : code == 413 ? "Payload Too Large" : code == 503 ? "Service Unavailable" : "Error";
     int n = snprintf(h, sizeof h, "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\nConnection: close\r\nCache-Control: no-store\r\n"
                      "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: X-HM-Pub, X-HM-Ctr, X-HM-Mac, Content-Type\r\n"
                      "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Private-Network: true\r\n%s\r\n",
@@ -416,6 +426,7 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
       n += (size_t)snprintf(o + n, cap - n, "},\"sound\":{\"model\":\"%s\",\"failed\":%s", models[sound_model()], core_sound_failed() ? "true" : "false"); }
     n += (size_t)snprintf(o + n, cap - n, "},\"arbitration\":");
     if (arb_running()) n += arb_status_json(o + n, cap - n); else n += (size_t)snprintf(o + n, cap - n, "null");
+    n += (size_t)snprintf(o + n, cap - n, ",\"wifi\":"); n += wifi_current_json(o + n, cap - n);
     n += (size_t)snprintf(o + n, cap - n, ",\"clients\":[");
     pthread_mutex_lock(&lk);
     for (int i = 0; i < nclients && n < cap - 300; i++) {
@@ -558,6 +569,66 @@ static void vouch_api(int fd, struct req *r)
     } else respond_json(fd, 404, "{\"error\":\"not found\"}");
 }
 
+/* ---------------------------------------------------------------- Wi-Fi */
+
+/* What the page seals for this Echo alone (a Wi-Fi password: the page is plain HTTP).  XOR with a key stream: block i
+ * (64 bytes) = BLAKE2b-512 keyed with EK over the request's counter, "\n" and the byte i, EK = BLAKE2b-256 keyed with K
+ * over "hassmic seal 1".  The counter is new with every request of a browser (signed_ok refuses an old one), so no
+ * stream serves twice; the request's MAC covers the sealed bytes.  web/crypto.js seal does the other half. */
+static int unseal(const struct req *r, const uint8_t *in, size_t n, uint8_t *out)
+{
+    uint8_t pub[32], k[32], ek[32], ks[64]; crypto_blake2b_ctx ctx; int bad;
+    if (n > 64 * 4 || unhex(pub, r->pub, 32)) return -1;
+    pthread_mutex_lock(&lk); bad = session_key(k, pub); pthread_mutex_unlock(&lk);
+    if (bad) return -1;
+    crypto_blake2b_keyed(ek, 32, k, 32, (const uint8_t *)"hassmic seal 1", 14);
+    for (size_t i = 0; i * 64 < n; i++) {
+        uint8_t blk = (uint8_t)i;
+        crypto_blake2b_keyed_init(&ctx, 64, ek, 32);
+        crypto_blake2b_update(&ctx, (const uint8_t *)r->ctr, strlen(r->ctr)); crypto_blake2b_update(&ctx, (const uint8_t *)"\n", 1);
+        crypto_blake2b_update(&ctx, &blk, 1);
+        crypto_blake2b_final(&ctx, ks);
+        for (size_t j = 0; j < 64 && i * 64 + j < n; j++) out[i * 64 + j] = in[i * 64 + j] ^ ks[j];
+    }
+    crypto_wipe(k, sizeof k); crypto_wipe(ek, sizeof ek); crypto_wipe(ks, sizeof ks);
+    return 0;
+}
+
+/* /api/wifi        GET   the network now, the last scan, the last switch (wifi.c)
+ * /api/wifi/scan   POST  root scans                                              -> {"id"}
+ * /api/wifi/join   POST  "<ssid hex> <password sealed, hex | ->": root switches,  -> {"id"}
+ *                        and goes back to the network it was on if the Echo does not get on the new one
+ * All signed; 409 while root is busy switching or a request waits. */
+static void wifi_api(int fd, struct req *r)
+{
+    char err[200], ej[260], o[300]; unsigned id = 0; int write = !strcmp(r->method, "POST"), busy = 0, rc = -1;
+    if (!signed_ok(r, write)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    err[0] = 0;
+    if (!write && !strcmp(r->path, "/api/wifi")) {
+        size_t cap = 16384; char *t = malloc(cap);
+        if (!t) { respond_sjson(fd, r, 503, "{\"error\":\"no memory\"}"); return; }
+        size_t n = wifi_status_json(t, cap);
+        respond_s(fd, r, 200, "application/json", NULL, t, n); free(t); return;
+    }
+    if (write && !strcmp(r->path, "/api/wifi/scan")) rc = wifi_scan(&id, &busy, err, sizeof err);
+    else if (write && !strcmp(r->path, "/api/wifi/join")) {
+        char sh[80] = "", ph[600] = ""; uint8_t ssid[40], sealed[256], pass[257]; int sl, pl = 0;
+        if (sscanf(r->body, "%79s %599s", sh, ph) != 2 || (sl = unhex_any(ssid, sizeof ssid, sh)) < 0
+            || (strcmp(ph, "-") && ((pl = unhex_any(sealed, sizeof sealed, ph)) < 0 || unseal(r, sealed, (size_t)pl, pass))))
+            snprintf(err, sizeof err, "bad request");
+        else {
+            if (!strcmp(ph, "-")) pl = 0;
+            pass[pl] = 0;                               /* the page pads with zeros: a password has none */
+            rc = wifi_join(ssid, (size_t)sl, (const char *)pass, &id, &busy, err, sizeof err);
+        }
+        crypto_wipe(pass, sizeof pass); crypto_wipe(sealed, sizeof sealed);
+    }
+    else snprintf(err, sizeof err, "not found");
+    if (!rc) { snprintf(o, sizeof o, "{\"id\":%u}", id); respond_sjson(fd, r, 200, o); return; }
+    jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
+    respond_sjson(fd, r, busy ? 409 : 400, o);
+}
+
 /* ---------------------------------------------------------------- the log */
 
 #define LOG_SEND_MAX (2 << 20)      /* main.sh rotates at 1 MB, checked every 10 s: the tail of this much is plenty */
@@ -679,6 +750,7 @@ static void handle(int fd)
     }
     else if (!strncmp(r.path, "/api/artifact", 13)) artifact_api(fd, &r);
     else if (!strncmp(r.path, "/api/davs", 9)) davs_api(fd, &r);
+    else if (!strncmp(r.path, "/api/wifi", 9)) wifi_api(fd, &r);
     else if (!strcmp(r.method, "GET") && !strncmp(r.path, "/api/log/", 9)) log_api(fd, &r);
     else respond_json(fd, 404, "{\"error\":\"not found\"}");
     free(r.body);

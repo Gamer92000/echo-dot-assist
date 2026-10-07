@@ -40,6 +40,7 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ma_sendspin.py    # Sendspin, as Music Assistant
 .venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step
 .venv/bin/python tests/fake_web_artifacts.py  # models copied Echo to Echo through the page, root's installer, after a restart
+.venv/bin/python tests/fake_web_wifi.py       # Wi-Fi switch: sealed password, PSK, root's wifi.sh against a fake wpa_cli
 .venv/bin/python tests/fake_web_davs.py       # models downloaded from a fake Amazon: login by code pair with the device
                                              # attestation token, DAVS, unpack, staging, install, deregister
 .venv/bin/python tests/fake_ha_update.py      # online updates: page channel + HA update entity, fake GitHub, root's installer
@@ -226,6 +227,14 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   after options) turns stderr/stdout into a pipe to a double-forked reader that stamps lines and drops known Amazon
   noise; it ignores hassmic's signals and ends at EOF. Never make it hassmic's direct child (Amazon's DHA module waits
   for all children). Host: `HASSMIC_CLOCK_SYNCED=0` plays an unset clock.
+- **Wi-Fi switch** (`wifi.c`): the settings page's "Switch network…". `state/wifi-request` ("scan <id>" / "join <id> <ssid
+  hex> <psk hex|->") for root (`main.sh` ota_watch) -> `scripts/device/wifi.sh` in the background; answers in root's
+  `/data/local/hassmic/wifi/` (`status`, `scan`, `result`, `lock/`; the id ties answer to request). The password comes
+  sealed with K (`web.c` unseal, `crypto.js` seal) and only its PSK (PBKDF2) leaves hassmic. wifi.sh saves nothing
+  until the Echo is on the new network with a fresh lease (dhcpcd runs with `-K` and ignores network changes: wifi.sh
+  marks `dhcp.<if>.result`, runs `dhcpcd -n`, waits for the hook to write it) and its router answers ARP; else it
+  removes it and selects the old one. Talks to wpa_supplicant's global socket when the interface's is gone. netwatch
+  leaves wifisvc alone while `lock/` exists and runs `wifi.sh status` on every address change; `clean` at the firewall start.
 - **adb over Wi-Fi** (`adbwifi.c`): the settings page only writes a request for root's firewall watcher, as `ota.c` does
   for updates; opening needs an approved browser plus a press of the action button (`web.c`), or (`ota.c`, `HMOTA-ADB1`) a challenge signed with the update key.
 - **Wi-Fi motion** (`wifimotion.c`, experimental, off by default): polls the RCPI of the frames from the AP at 10 Hz, scatter
@@ -263,7 +272,7 @@ of push updates) and `main.sh satellite` (stops Alexa/updater/telemetry, keeps h
 policy DROP, and the stock rules the satellite needs (`keep` in `lockdown.sh`; stock `firewall.sh` can lose any of its
 rules at boot); wrong twice in a row, it loads the rules itself and restarts that service; loading is one
 `iptables-restore -w --noflush` call, rule by rule only as fallback). No `hassmic.conf` =
-stock behaviour. `scripts/device/` holds on-device helpers (`lockdown.sh` firewall, `alexa-off/on.sh`, `wifi-join.sh`).
+stock behaviour. `scripts/device/` holds on-device helpers (`lockdown.sh` firewall, `alexa-off/on.sh`, `wifi-join.sh`, `wifi.sh`).
 
 Firewall invariant: Amazon's daemons may only reach local addresses; hassmic itself may reach any address (it fetches
 TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get out. Inbound TCP and UDP are only admitted on

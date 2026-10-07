@@ -4,7 +4,7 @@
 // X-HM-Mac too, over "RESP\nCTR\nBODY": what the page carries from one Echo to another (settings, models) is what it sent.
 'use strict';
 
-const { x25519, x25519Public, blake2b, hex, unhex } = hmcrypto;
+const { x25519, x25519Public, blake2b, seal, hex, unhex } = hmcrypto;
 const enc = new TextEncoder(), dec = new TextDecoder();
 const cat = (a, b) => { const o = new Uint8Array(a.length + b.length); o.set(a); o.set(b, a.length); return o; };
 const $ = (id) => document.getElementById(id);
@@ -34,10 +34,12 @@ class Echo {
     store(key, c);
     return c;
   }
-  // body: text or bytes.  Returns { bytes, text(), json() } once the answer's signature checks out.  Errors: 'login'
-  // (not approved here), 'old' (an Echo whose answers are not signed yet: update it), 'forged', or the Echo's own words.
+  // body: text or bytes, or a function of the counter that returns them (what it seals is bound to this request).
+  // Returns { bytes, text(), json() } once the answer's signature checks out.  Errors: 'login' (not approved here), 'old'
+  // (an Echo whose answers are not signed yet: update it), 'forged', or the Echo's own words.
   async call(method, path, body = '') {
-    const ctr = String(this.nextCtr()), b = typeof body === 'string' ? enc.encode(body) : body;
+    const ctr = String(this.nextCtr()), raw = typeof body === 'function' ? body(ctr) : body;
+    const b = typeof raw === 'string' ? enc.encode(raw) : raw;
     const mac = blake2b(16, this.k, cat(enc.encode(`${method}\n${path}\n${ctr}\n`), b));
     const r = await fetch(this.base + path, { method, body: method === 'POST' ? b : undefined,
       headers: { 'X-HM-Pub': hex(me.pub), 'X-HM-Ctr': ctr, 'X-HM-Mac': hex(mac) } });
@@ -108,6 +110,10 @@ const ICONS = {
   minus: '<path d="M6 12h12"/>',
   pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  refresh: '<path d="M20 12a8 8 0 0 1-14.2 5"/><path d="M4 12a8 8 0 0 1 14.2-5"/><path d="M18.5 3v4h-4M5.5 21v-4h4"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
 };
 const icon = (n) => h('span', { html: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`, style: 'display:inline-flex' });
 
@@ -1177,7 +1183,7 @@ async function copyModels(jobs) {
 
 // ---------------------------------------------------------------- System: settings file, debug access, browsers
 
-let adbBox, clientsBox, importMsg, nameCtl;
+let adbBox, clientsBox, importMsg, nameCtl, wifiCtl;
 
 // The node name a name makes, as main.c node_of: ASCII letters and digits lower-cased, Latin-1 letters spelled out the
 // German way ("Küchen Echo" -> "kuechen-echo"), anything else one dash between words
@@ -1251,8 +1257,240 @@ function nameCard() {
     h('div', { class: 'card-foot' }, h('span', { class: 'grow' }), go));
 }
 
+// ---------------------------------------------------------------- Wi-Fi (wifi.c; root's scripts/device/wifi.sh scans and switches)
+
+// Why a switch did not work, from wifi.sh's word for how far the Echo got
+const WIFI_WHY = {
+  notfound: (n) => `The Echo could not find ${n}: out of reach, or the name is not exactly right (capitals count).`,
+  noassoc: (n) => `${n} did not let the Echo in. Routers that take only WPA3, or only devices they know, refuse it.`,
+  wrongkey: () => 'The password was not accepted.',
+  noaddress: (n) => `The Echo got on ${n}, but no address from it (no answer from its DHCP server).`,
+  nogateway: (n) => `The Echo got an address on ${n}, but the router there did not answer.`,
+  bad: () => 'The Echo\'s Wi-Fi did not take the new network\'s settings.',
+};
+// what the Echo cannot join (its wpa_supplicant takes WPA2 with a password, or open networks)
+const WIFI_NO = { sae: 'WPA3 only: the Echo cannot join it', wep: 'WEP: too old for the Echo', eap: 'Enterprise login: not supported', owe: 'Enhanced Open: not supported' };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// signal strength as the Wi-Fi fan: the dot and up to three arcs
+const wifiSig = (dbm) => {
+  const n = dbm >= -55 ? 4 : dbm >= -65 ? 3 : dbm >= -75 ? 2 : 1, on = (i) => (i <= n ? 'on' : 'off');
+  return h('span', { class: 'wsig', title: `${dbm} dBm`, role: 'img', 'aria-label': `Signal ${n} of 4`,
+    html: `<svg viewBox="0 0 24 24" aria-hidden="true"><path class="${on(4)}" d="M2.5 9.5a13.5 13.5 0 0 1 19 0"/><path class="${on(3)}" d="M5.6 12.8a9 9 0 0 1 12.8 0"/>`
+      + `<path class="${on(2)}" d="M8.7 16.1a4.6 4.6 0 0 1 6.6 0"/><circle class="on" cx="12" cy="19.2" r="1.3"/></svg>` });
+};
+// as wifi.c takes it: 8 to 63 printable ASCII characters, or the PSK as 64 hex digits; empty for an open network
+const wifiPassProblem = (p) => !p || /^[0-9a-fA-F]{64}$/.test(p) ? null
+  : !/^[\x20-\x7e]*$/.test(p) ? 'A Wi-Fi password has only the characters of an English keyboard.'
+  : p.length < 8 || p.length > 63 ? 'A Wi-Fi password has 8 to 63 characters.' : null;
+
+function wifiCard() {
+  const now = h('div', { class: 'wifi-now' });
+  wifiCtl = { paint: () => {
+    const w = state.wifi;
+    now.replaceChildren(h('span', { class: 'ic' }, icon('wifi')),
+      h('div', { class: 'grow' }, w ? h('b', {}, w.ssid) : h('span', { class: 'help' }, 'Not known yet: it shows once the Echo has looked for networks.'),
+        h('div', { class: 'help' }, `Address ${(w && w.ip) || location.hostname}`)));
+  } };
+  return h('div', { class: 'card' },
+    cardHead('Wi-Fi', 'The network this Echo is on. A switch tries the new network first and keeps it only once the Echo is on it; if the Echo does not get on it within about a minute, it goes back to this one by itself.', 'wifi'),
+    h('div', { class: 'card-body' }, now),
+    h('div', { class: 'card-foot' }, h('span', { class: 'grow' }), h('button', { class: 'primary', onclick: wifiDialog }, 'Switch network')));
+}
+
+// The dialog: the password first if you like, then a network from the scan or one typed by hand, a last look at what
+// the switch costs (most likely a new address), then the switch, followed from here as long as the Echo answers here.
+function wifiDialog() {
+  const d = { w: null, scanning: false, scanErr: '', busy: false, closed: false, net: null };
+  const title = h('h2', { id: 'wifi-title' }), body = h('div', { class: 'modal-body' }), foot = h('div', { class: 'modal-foot' });
+  const dock = h('div', { class: 'modal-dock' });     // below what scrolls: the password, in reach however long the list
+  const close = h('button', { type: 'button', class: 'icon-btn', title: 'Close', 'aria-label': 'Close', onclick: () => dlg.close() }, icon('x'));
+  const dlg = h('dialog', { class: 'modal', 'aria-labelledby': 'wifi-title' }, h('div', { class: 'modal-head' }, title, close), body, dock, foot);
+  dlg.oncancel = (e) => { if (d.busy) e.preventDefault(); };          // Escape: not while a switch runs
+  dlg.onclose = () => { d.closed = true; dlg.remove(); load().catch(() => {}); };
+
+  const pass = h('input', { type: 'password', id: 'wifi-pass', autocomplete: 'off', spellcheck: 'false', maxlength: '64' });
+  const eye = h('button', { type: 'button', class: 'icon-btn', title: 'Show the password', 'aria-label': 'Show the password', 'aria-pressed': 'false' }, icon('eye'));
+  eye.onclick = () => { const show = pass.type === 'password'; pass.type = show ? 'text' : 'password'; eye.setAttribute('aria-pressed', String(show)); };
+  const passMsg = h('p', { class: 'help' });
+  const passField = h('div', { class: 'field wifi-pass' }, h('label', { for: 'wifi-pass' }, 'Password'), h('div', { class: 'pass-wrap' }, pass, eye), passMsg);
+  const list = h('div', { class: 'net-list', role: 'list' }), scanInfo = h('span', { class: 'net-count' });
+  const rescan = h('button', { type: 'button', class: 'icon-btn', title: 'Scan again', 'aria-label': 'Scan again', onclick: () => scan() }, icon('refresh'));
+  const manual = h('input', { type: 'text', id: 'wifi-ssid', maxlength: '32', autocomplete: 'off', spellcheck: 'false', placeholder: 'Network name', 'aria-label': 'Network name' });
+  const manualGo = h('button', { type: 'button', class: 'primary' }, 'Next');
+  const newAddress = (n) => callout('info', h('p', {}, h('b', {}, 'The Echo will most likely get a new IP address'), ` on ${n || 'the other network'}, and this page cannot follow it there. `,
+    'Find the new address in Home Assistant afterwards: on the Echo\'s device page, under ', h('b', {}, 'Web UI address'), '. ',
+    'At the new address this browser needs the action button once more.'));
+  let repaint = () => {};
+  pass.oninput = () => repaint();
+  manual.oninput = () => { manualGo.disabled = !manual.value || enc.encode(manual.value).length > 32; };
+  manual.onkeydown = (e) => { if (e.key === 'Enter' && !manualGo.disabled) manualGo.click(); };
+  manualGo.onclick = () => confirmView({ ssid: manual.value, hex: hex(enc.encode(manual.value)), sec: null });
+  manualGo.disabled = true;
+
+  function paintList() {
+    const w = d.w, here = w && w.current && w.current.hex, nets = (w && w.scan && w.scan.networks) || [];
+    const rows = nets.map((n) => {
+      const no = WIFI_NO[n.sec], cur = n.hex === here;
+      return h('button', { type: 'button', role: 'listitem', class: 'net-row' + (cur ? ' here' : '') + (no ? ' no' : ''), disabled: !!no || cur,
+        onclick: () => confirmView(n) },
+        wifiSig(n.signal),
+        h('span', { class: 'grow' }, h('span', { class: 'net-name' }, n.ssid),
+          h('span', { class: 'net-sub' }, no || `${n.band === 'both' ? '2.4 and 5' : n.band} GHz${n.sec === 'open' ? ' · open' : ''}`)),
+        cur ? h('span', { class: 'net-end ok' }, icon('check'), 'Connected') : n.sec === 'psk' ? h('span', { class: 'net-end', title: 'Needs a password' }, icon('lock')) : null);
+    });
+    if (!nets.length) rows.push(h('div', { class: 'net-empty' }, d.scanning ? [h('span', { class: 'spin' }), 'Looking for networks…'] : d.scanErr ? '' : 'No networks seen.'));
+    // a network that is hidden, or out of reach right now: typed by hand
+    rows.push(d.other ? h('div', { class: 'net-row net-form' }, manual, manualGo)
+      : h('button', { type: 'button', class: 'net-row net-other', onclick: () => { d.other = true; paintList(); manual.focus(); } },
+        h('span', { class: 'wsig' }, icon('plus')), h('span', { class: 'grow' }, h('span', { class: 'net-name' }, 'Other network…'),
+          h('span', { class: 'net-sub' }, 'Hidden, or not in reach right now'))));
+    list.replaceChildren(...rows);
+    scanInfo.replaceChildren(d.scanErr ? h('span', { class: 'f-bad' }, d.scanErr) : nets.length ? String(nets.length) : '');
+    rescan.disabled = d.scanning; rescan.classList.toggle('spinning', d.scanning);
+  }
+
+  async function scan() {
+    if (d.scanning) return;
+    d.scanning = true; d.scanErr = ''; paintList();
+    try {
+      let id = null;
+      for (let i = 0; id === null; i++) {          // 409: a request waits, or a switch runs: wait for it
+        try { id = (await echo.call('POST', '/api/wifi/scan')).json().id; } catch (e) { if (!/switching|not taken/.test(e.message) || i >= 15) throw e; await sleep(2000); }
+      }
+      for (let i = 0; i < 20 && !d.closed; i++) {
+        await sleep(1500);
+        d.w = (await echo.call('GET', '/api/wifi')).json();
+        if (d.w.pending && d.w.pending.stale) throw new Error('The Echo\'s system side did not take the request: is it installed with this version (scripts/install-system.sh, or an update)?');
+        if (d.w.scan && d.w.scan.id === id) break;
+        if (i === 19) throw new Error('No scan came back');
+      }
+    } catch (e) { d.scanErr = e.message.startsWith('The Echo') || e.message === 'No scan came back' ? e.message : errText(e); }
+    d.scanning = false;
+    if (!d.closed) paintList();
+  }
+
+  // only what is wrong with the password, nothing while it is fine
+  const passCheck = () => { const bad = wifiPassProblem(pass.value); passMsg.textContent = bad || ''; passMsg.classList.toggle('f-bad', !!bad); };
+
+  function pickView() {
+    d.net = null; repaint = passCheck;
+    title.textContent = 'Switch Wi-Fi network';
+    body.replaceChildren(
+      h('div', { class: 'net-head' }, h('span', { class: 'net-label' }, 'Networks', scanInfo), rescan),
+      list);
+    dock.replaceChildren(passField);
+    foot.replaceChildren(h('button', { type: 'button', onclick: () => dlg.close() }, 'Cancel'));
+    repaint(); paintList();
+  }
+
+  function confirmView(net) {
+    d.net = net;
+    const open = net.sec === 'open', go = h('button', { type: 'button', class: 'primary', onclick: () => run(net) }, 'Switch now');
+    repaint = () => {
+      const bad = wifiPassProblem(pass.value), need = net.sec === 'psk' && !pass.value;
+      passMsg.textContent = bad || (need ? 'This network needs its password.' : !pass.value && !net.sec ? 'Without a password the Echo joins it as an open network.' : '');
+      passMsg.classList.toggle('f-bad', !!(bad || need));
+      go.disabled = !!(bad || need);
+    };
+    title.textContent = `Switch to ${net.ssid}?`;
+    dock.replaceChildren();
+    body.replaceChildren(
+      newAddress(net.ssid),
+      open ? null : passField,
+      h('p', { class: 'help' }, 'If the Echo does not get on it within about a minute, it goes back to the network it is on now, and this page tells you why. Once it works, the Echo forgets the networks it knew before.'));
+    foot.replaceChildren(h('button', { type: 'button', onclick: pickView }, 'Back'), go);
+    repaint();
+    if (!open && !pass.value) pass.focus();
+  }
+
+  const step = h('div', { class: 'wifi-step' });
+  function workView(net) {
+    title.textContent = `Switching to ${net.ssid}`;
+    close.classList.add('hidden'); dock.replaceChildren();
+    body.replaceChildren(step, newAddress(net.ssid));
+    foot.replaceChildren(h('span', { class: 'help' }, 'Keep this open: it shows what happened if the Echo comes back here.'));
+  }
+  const setStep = (text) => step.replaceChildren(h('span', { class: 'spin' }), h('span', {}, text));
+
+  function doneView(kind, net, r) {
+    d.busy = false; close.classList.remove('hidden');
+    const again = h('button', { type: 'button', onclick: () => { pickView(); scan(); } }, 'Try again');
+    const done = h('button', { type: 'button', class: 'primary', onclick: () => dlg.close() }, 'Close');
+    if (kind === 'ok') {
+      const moved = r.ip && r.ip !== location.hostname, url = `http://${r.ip}${location.port ? ':' + location.port : ''}/`;
+      title.textContent = `On ${r.ssid || net.ssid}`;
+      body.replaceChildren(callout('ok', h('p', {}, `The Echo is on ${r.ssid || net.ssid} now, at ${r.ip || 'a new address'}.`),
+        moved ? h('p', {}, h('a', { href: url }, 'Open its settings page there'), ' (the action button approves this browser there once more).') : null,
+        r.saved ? null : h('p', {}, 'It could not save the network, though: after a restart it goes back to the one before.')),
+        h('p', { class: 'help' }, 'Home Assistant finds it again on its own when it can reach that network; otherwise enter the new address in the ESPHome integration.'));
+      foot.replaceChildren(done);
+    } else if (kind === 'failed') {
+      title.textContent = `Not switched to ${net.ssid}`;
+      const why = (WIFI_WHY[r.reason] || (() => 'It did not work.'))(r.ssid || net.ssid);
+      body.replaceChildren(callout('bad', h('p', {}, why),
+        h('p', {}, r.state === 'interrupted' ? 'The switch was cut short (did the Echo restart?). It is on its saved network.'
+          : r.back ? `The Echo is back on ${r.back}.` : 'The Echo is on no network right now; a restart brings it back on its saved one.')));
+      foot.replaceChildren(again, done);
+    } else if (kind === 'lost') {
+      title.textContent = `Most likely on ${net.ssid}`;
+      body.replaceChildren(callout('info', h('p', {}, `The Echo has not come back to this address, so it is most likely on ${net.ssid} now, with a new address. `,
+        'Find it in Home Assistant: on the Echo\'s device page, under ', h('b', {}, 'Web UI address'), '. ',
+        'If Home Assistant cannot reach that network, it shows the Echo as unavailable: enter the new address in the ESPHome integration.')),
+        h('p', { class: 'help' }, 'If it could not get on the network, it would have come back here within two minutes.'));
+      foot.replaceChildren(done);
+    } else {
+      title.textContent = 'Not switched';
+      body.replaceChildren(callout('bad', h('p', {}, r)));
+      foot.replaceChildren(again, done);
+    }
+  }
+
+  async function run(net) {
+    const p = net.sec === 'open' ? '' : pass.value;
+    d.busy = true; workView(net); setStep('Asking the Echo…');
+    let id;
+    for (let i = 0; !id; i++) {                     // 409: a scan still runs or waits (picked while it looked): wait for it
+      try {
+        id = (await echo.call('POST', '/api/wifi/join', (ctr) => {
+          if (!p) return `${net.hex} -`;
+          const b = new Uint8Array(64); b.set(enc.encode(p));        // padded: the length of the password stays inside
+          return `${net.hex} ${hex(seal(echo.k, ctr, b))}`;
+        })).json().id;
+      } catch (e) {
+        if (!/not taken/.test(e.message) || i >= 15 || d.closed) { doneView('error', net, errText(e).replace(/^Error: /, '')); return; }
+        setStep('Waiting for the scan to finish…');
+        await sleep(2000);
+      }
+    }
+    setStep(`Waiting for the Echo to start…`);
+    // wifi.sh decides within a minute and needs up to 45 s more to get back: an Echo that does not answer here after
+    // that is on the new network
+    const t0 = Date.now();
+    while (Date.now() - t0 < 150000 && !d.closed) {
+      await sleep(2000);
+      let w;
+      try { w = (await echo.call('GET', '/api/wifi')).json(); } catch (e) {
+        if (e.message === 'login' || e.message === 'forged') { doneView('error', net, errText(e)); return; }
+        setStep(`Joining ${net.ssid}… The Echo does not answer here any more: that is expected once it is on the new network. If it cannot get on it, it comes back here.`);
+        continue;
+      }
+      const r = w.result && w.result.id === id ? w.result : null;
+      if (w.pending && w.pending.stale) { doneView('error', net, 'The Echo\'s system side did not take the request: is it installed with this version (scripts/install-system.sh, or an update)?'); return; }
+      if (r && r.state !== 'switching') { doneView(r.state === 'ok' ? 'ok' : 'failed', net, r); return; }
+      if (r) setStep(`Joining ${net.ssid}…`);
+    }
+    if (!d.closed) doneView('lost', net);
+  }
+
+  document.body.append(dlg);
+  dlg.showModal();
+  pickView();
+  echo.call('GET', '/api/wifi').then((r) => { d.w = r.json(); paintList(); }).catch(() => {}).finally(() => scan());
+}
+
 function buildSystem(el) {
   el.append(nameCard());
+  if (state.wifi !== undefined) el.append(wifiCard());
   const file = h('input', { type: 'file', accept: '.conf,.txt,text/plain', class: 'hidden' });
   importMsg = h('pre', { class: 'help import-msg' });
   file.onchange = async () => {
@@ -1285,6 +1523,7 @@ function buildSystem(el) {
 function renderSystem() {
   if (!adbBox) return;
   if (nameCtl) nameCtl.paint();
+  if (wifiCtl) wifiCtl.paint();
   const s = state.adb; adbBox.innerHTML = '';
   const status = s.waiting ? h('span', { class: 'badge acc' }, 'Waiting for the action button…')
     : s.open ? h('span', { class: 'badge bad' }, 'Open: closes by itself after 30 min') : h('span', { class: 'badge' }, 'Closed');

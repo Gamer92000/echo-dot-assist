@@ -98,6 +98,7 @@ kmod() {
 # speaks of another boot's clock).  mksh's numbers end at 2^31 on these Echos (2038 for the time, 248 days of uptime
 # in centiseconds): so seconds and centiseconds apart, and nothing larger is formed.
 CLOCK=/data/local/hassmic/state/clock
+WIFI=/data/local/hassmic/wifi                   # scripts/device/wifi.sh's answers and lock
 clock_set() {
     [ -f $CLOCK ] && [ ! -L $CLOCK ] || return 0
     local t= at= up now was d a first ds
@@ -118,18 +119,24 @@ clock_set() {
     echo "clock: set from Home Assistant, $d s $a${first:+ (times in this log are UTC from here on, seconds since boot before)}"
 }
 
+# While the settings page switches networks (wifi.sh holds its lock), the link is that script's business: no wifisvc.
+# Whenever the address changes, wifi.sh writes down which network the Echo is on, for the page: wpa_supplicant can also
+# move to another saved network by itself when the one it is on goes away.
 netwatch() {
-    miss=0
+    miss=0 addr=
     while :; do
         rotate_log
         clock_set
         fwcheck
-        if ifconfig $WLAN 2>/dev/null | grep -q "inet addr"; then
+        if a=$(ifconfig $WLAN 2>/dev/null | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p'); [ -n "$a" ]; then
             miss=0
+            [ "$a" = "$addr" ] || { addr=$a; [ -f $D/wifi.sh ] && sh $D/wifi.sh status; }
             kmod
-            [ "$(getprop init.svc.$WIFI_SERVICE)" = running ] && { sleep 5; stop $WIFI_SERVICE; echo "netwatch: link up, $WIFI_SERVICE stopped"; }
+            [ "$(getprop init.svc.$WIFI_SERVICE)" = running ] && [ ! -d $WIFI/lock ] && { sleep 5; stop $WIFI_SERVICE; echo "netwatch: link up, $WIFI_SERVICE stopped"; }
+        elif [ -d $WIFI/lock ]; then
+            miss=0 addr=
         else
-            miss=$((miss + 1))
+            miss=$((miss + 1)) addr=
             [ $miss -ge 6 ] && [ "$(getprop init.svc.$WIFI_SERVICE)" != running ] && { start $WIFI_SERVICE; echo "netwatch: no address for 60 s, $WIFI_SERVICE started"; miss=0; }
         fi
         sleep 10
@@ -182,6 +189,11 @@ ota_watch() {
                 stop hassmic; start hassmic
             else say "== artifacts not installed: $(echo $out)"
             fi
+        fi
+        # Wi-Fi from the settings page (src/hassmic/wifi.c): a scan, or a switch to another network, which takes up to two
+        # minutes; so in the background, one at a time (wifi.sh's lock), and a request waits while one runs
+        if [ -f /data/local/hassmic/state/wifi-request ] && [ ! -d $WIFI/lock ] && [ -f $D/wifi.sh ]; then
+            sh $D/wifi.sh take 2>&1 | stamped &           # takes the lock first thing, long before the next look
         fi
         # renamed on the settings page (main.c core_rename): the name is in what the satellite builds at start, mDNS and
         # avahi's host name included
@@ -250,6 +262,7 @@ fi
 case "$1" in
 firewall)
     quiet
+    [ -f $D/wifi.sh ] && sh $D/wifi.sh clean           # a Wi-Fi request from before this start is nobody's
     sh $D/lockdown.sh watch 2>&1 | stamped >> $LOG &
     ota_watch >> $LOG 2>&1                              # execs on an update: no pipe around it, its lines say when
     ;;

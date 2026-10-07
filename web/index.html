@@ -128,7 +128,7 @@ button.primary:hover:not(:disabled), .btn.primary:hover { background: color-mix(
 button.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, var(--line-2)); }
 button.small { padding: 4px 10px; font-size: 13px; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-input[type=text], input[type=search] { font: inherit; font-size: 14px; color: var(--fg); background: var(--surface); border: 1px solid var(--line-2); border-radius: 9px;
+input[type=text], input[type=search], input[type=password] { font: inherit; font-size: 14px; color: var(--fg); background: var(--surface); border: 1px solid var(--line-2); border-radius: 9px;
                    padding: 7px 12px; min-width: 0; }
 select { font: inherit; font-size: 14px; color: var(--fg); background: var(--surface); border: 1px solid var(--line-2); border-radius: 9px; padding: 7px 10px; }
 
@@ -381,6 +381,74 @@ details.more li { margin: 4px 0; }
 .log-info:empty { display: none; }
 .btns input[type=search] { flex: 1; min-width: 140px; }
 .clients { border-top: 1px solid var(--line); }
+
+/* ---------------------------------------------------------------- dialogs (Wi-Fi) */
+dialog.modal { width: min(520px, calc(100% - 32px)); max-height: min(720px, calc(100% - 32px)); padding: 0; border: 1px solid var(--line);
+               border-radius: 20px; background: var(--surface); color: var(--fg); box-shadow: 0 24px 64px rgba(0, 0, 0, .28); flex-direction: column; }
+dialog.modal[open] { display: flex; animation: pop .16s ease-out; }
+@keyframes pop { from { opacity: 0; transform: translateY(6px) scale(.985); } }
+dialog.modal::backdrop { background: rgba(8, 12, 16, .55); backdrop-filter: blur(3px); }
+.modal-head { display: flex; align-items: center; gap: 12px; padding: 18px 16px 10px 22px; }
+.modal-head h2 { flex: 1; min-width: 0; font-size: 17px; overflow-wrap: anywhere; }
+.modal-body { padding: 4px 22px 20px; overflow-y: auto; overscroll-behavior: contain; }
+/* a slim pill, no arrows: Chromium and Safari draw it from these (scrollbar-width there would bring the arrows back),
+   Firefox takes the standard properties */
+.modal-body::-webkit-scrollbar { width: 14px; }
+.modal-body::-webkit-scrollbar-track, .modal-body::-webkit-scrollbar-corner { background: transparent; }
+.modal-body::-webkit-scrollbar-button { display: none; height: 0; }
+.modal-body::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 14px; border: 5px solid transparent; background-clip: padding-box; min-height: 40px; }
+.modal-body::-webkit-scrollbar-thumb:hover { background-color: var(--faint); }
+@supports not selector(::-webkit-scrollbar) { .modal-body { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; } }
+.modal-body > .help { margin-top: 12px; }
+.modal-dock { padding: 14px 22px 16px; border-top: 1px solid var(--line); }
+.modal-dock:empty { display: none; }
+.modal-dock .wifi-pass { margin-top: 0; }
+.modal-foot { display: flex; gap: 8px; justify-content: flex-end; align-items: center; flex-wrap: wrap; padding: 12px 22px; border-top: 1px solid var(--line);
+              background: var(--surface-2); border-radius: 0 0 20px 20px; }
+.modal-foot .help { margin: 0; flex: 1; }
+button.icon-btn { padding: 7px; border-color: transparent; background: none; color: var(--muted); border-radius: 9px; }
+button.icon-btn:hover:not(:disabled) { background: var(--surface-2); color: var(--fg); }
+button.icon-btn[aria-pressed="true"] { color: var(--accent); }
+button.icon-btn.spinning svg { animation: rot 1s linear infinite; }
+button.icon-btn.spinning:disabled { opacity: 1; }
+.net-head { display: flex; align-items: center; justify-content: space-between; margin: 0 -6px 6px 0; }
+.net-label { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.net-count { font-weight: 550; letter-spacing: 0; text-transform: none; color: var(--faint); }
+.net-count .f-bad { text-transform: none; letter-spacing: 0; }
+.net-list { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--surface); }
+.net-row { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 56px; padding: 9px 14px; margin: 0; border: 0; border-radius: 0;
+           border-top: 1px solid var(--line); background: none; text-align: left; white-space: normal; font-weight: 400; }
+.net-row:first-child { border-top: 0; }
+button.net-row:hover:not(:disabled) { background: var(--surface-2); }
+.net-row:disabled { opacity: 1; cursor: default; }
+.net-row.no .net-name, .net-row.no .wsig { opacity: .45; }
+.net-row.here { background: color-mix(in srgb, var(--ok) 7%, transparent); }
+.net-row .grow { flex: 1; min-width: 0; }
+.net-name { display: block; font-weight: 560; overflow-wrap: anywhere; }
+.net-sub { display: block; font-size: 12.5px; color: var(--muted); }
+.net-end { display: inline-flex; align-items: center; gap: 4px; color: var(--faint); font-size: 12.5px; flex: none; }
+.net-end svg.i { width: 16px; height: 16px; }
+.net-end.ok { color: var(--ok); font-weight: 600; }
+.net-other .net-name, .net-other .wsig { color: var(--accent); }
+.net-form { gap: 8px; }
+.net-form input { flex: 1; }
+.net-empty { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 22px 14px; color: var(--muted); font-size: 14px; }
+.wsig { width: 24px; height: 24px; display: inline-grid; place-items: center; flex: none; color: var(--accent); }
+.wsig svg { width: 24px; height: 24px; fill: none; stroke-width: 2; stroke-linecap: round; }
+.wsig path.on { stroke: currentColor; } .wsig path.off { stroke: var(--line-2); }
+.wsig circle { fill: currentColor; stroke: none; }
+.wifi-pass { margin-top: 18px; justify-items: stretch; }
+.pass-wrap { position: relative; }
+.field .pass-wrap input { width: 100%; padding-right: 44px; }   /* both types: revealed it is type=text, which .field narrows */
+.pass-wrap .icon-btn { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); padding: 6px; }
+.wifi-pass .help:empty { display: none; }
+.field .help.f-bad { color: var(--bad); }
+.wifi-step { display: flex; gap: 10px; align-items: flex-start; color: var(--muted); padding: 4px 0 14px; font-size: 14px; }
+.wifi-step .spin { margin-top: 3px; }
+.wifi-now { display: flex; gap: 12px; align-items: center; }
+.wifi-now .ic { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); flex: none; }
+.wifi-now .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.wifi-now .help { margin: 0; }
 
 /* ---------------------------------------------------------------- login */
 .login { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; }
