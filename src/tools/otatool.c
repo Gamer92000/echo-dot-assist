@@ -106,10 +106,13 @@ static int verify_install(const char *pubpath, const char *bundle, const char *s
     for (;;) {
         char name[80], path[512]; unsigned mode; size_t size; int used = 0;
         if (end - p >= 4 && !memcmp(p, "end\n", 4)) break;
-        if (sscanf(p, "file %79s %o %zu\n%n", name, &mode, &size, &used) != 3 || !used || !name_ok(name) || size > (size_t)(end - p - used)) {
+        /* %n before the newline, not after: a "\n" in the format skips every whitespace byte, so a file starting with
+         * one (a space, tab, newline) lost those bytes and the rest no longer parsed (2 % of otatool_test.sh's random blobs) */
+        if (sscanf(p, "file %79s %o %zu%n", name, &mode, &size, &used) != 3 || !used || end - p <= used || p[used] != '\n' ||
+            !name_ok(name) || size > (size_t)(end - p - used - 1)) {
             fprintf(stderr, "otatool: malformed bundle\n"); return 1;
         }
-        p += used;
+        p += used + 1;
         if (dest) { snprintf(path, sizeof path, "%s/%s", dest, name); if (spit(path, p, size, mode & 0755)) return 1; }
         p += size;
     }
