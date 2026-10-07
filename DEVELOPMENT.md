@@ -178,6 +178,17 @@ act push --secret-file /tmp/act.secrets --artifact-server-path /tmp/act-artifact
 
 Without a payload act takes the branch checked out; `-e` with `{"ref": "refs/heads/release"}` plays a push to `release`.
 
+What act 0.2.89 gets wrong (2026-10):
+- Its artifact server refuses `upload-artifact@v7` (`unknown field "mime_type"`, nektos/act#6114). Until a release has
+  the fix, build act from nektos/act#6115 (`git fetch origin pull/6115/head`, `go build`).
+- `--concurrent-jobs 1` does not hold for the legs of the build matrix: on a fresh volume the three unpack the NDK over
+  each other. Fill it first with one run per model (`--matrix device:donut`, ...); the release job takes one artifact as
+  well as three.
+- Under rootless podman (`DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock`, `--container-daemon-socket -`)
+  copying actions into `/var/run/act` fails (`path escapes from parent`: the image's `/var/run` is a link to `/run`).
+  An image on top of `catthehacker/ubuntu:act-latest` with `RUN rm /var/run && mkdir /var/run && for f in /run/*; do
+  ln -s "$f" /var/run/; done`, given with `-P ubuntu-latest=<image> --pull=false`, works.
+
 ## Debugging on the device
 
 - Log: `/data/local/hassmic/boot.log`. State (API key, Bluetooth keys, Sendspin, settings): `/data/local/hassmic/state/`.

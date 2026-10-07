@@ -39,7 +39,7 @@ jobs:
       prerelease: ${{ steps.v.outputs.prerelease }}
       publish: ${{ steps.v.outputs.publish }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0                # earlier tags
       - id: v
@@ -76,7 +76,7 @@ jobs:
             ksrc: linux-3.18.19
             kcc: arm-eabi-4.8
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0                # git describe, compiled in
 
@@ -85,7 +85,7 @@ jobs:
       - name: NDK cache
         if: ${{ !env.ACT }}
         id: ndk
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: toolchain/android-ndk-r21e
           key: ndk-r21e
@@ -110,7 +110,7 @@ jobs:
       - name: Kernel cache
         if: matrix.ksrc && !env.ACT
         id: kernel
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             toolchain/${{ matrix.ksrc }}
@@ -142,12 +142,14 @@ jobs:
           done
       # what the bundle holds apart from its version: the release job publishes a beta only when it changed
       - name: Content ID
-        run: DEVICE=${{ matrix.device }} scripts/content-id.sh STUBS=1 > build/${{ matrix.device }}/content-id
-      - uses: actions/upload-artifact@v4
+        run: DEVICE=${{ matrix.device }} scripts/content-id.sh STUBS=1 > build/${{ matrix.device }}.content-id
+      # beside build/<device>/, not in it: the artifact's root is then build/ and it holds <device>/ itself, which the
+      # release job needs (download-artifact puts a lone artifact's files straight into its path, without its name)
+      - uses: actions/upload-artifact@v7
         with:
           name: build-${{ matrix.device }}
           path: |
-            build/${{ matrix.device }}/content-id
+            build/${{ matrix.device }}.content-id
             build/${{ matrix.device }}/hassmic
             build/${{ matrix.device }}/runas
             build/${{ matrix.device }}/otatool
@@ -162,7 +164,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30                 # apt has hung for over 20 minutes: fail instead of waiting out the 6 h default
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       # uv fetches Python and installs the wheels in parallel.  No cache: setup-uv prunes downloaded wheels from it in
@@ -211,13 +213,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: build
           pattern: build-*
+          merge-multiple: true          # each holds <device>/ and <device>.content-id: build/ as the build jobs left it
       - name: Sign
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
@@ -227,9 +230,8 @@ jobs:
           make -s build/otatool-host
           mkdir -p secrets dist
           (umask 077; echo "$RELEASE_SIGNING_KEY" | base64 -d > secrets/release.key)
-          for a in build/build-*; do
-              d=${a#build/build-}
-              mkdir -p build/$d; cp -r $a/. build/$d/       # the artifacts as the build left them (otatool pack sets modes)
+          for c in build/*.content-id; do
+              d=${c#build/}; d=${d%.content-id}
               DEVICE=$d scripts/bundle.sh secrets/release.key "$VERSION"
               # signed by the PC's otatool (Python): what the Echo's (C) checks must pass too, or nothing is published
               for v in build/otatool-host "python3 scripts/otatool.py"; do
@@ -237,10 +239,10 @@ jobs:
                       { echo "::error::$d: bundle does not verify against keys/release.pub ($v): secret and public key differ, or the two otatools do"; rm -f secrets/release.key; exit 1; }
               done
               cp build/$d/hassmic.bundle dist/hassmic-$d.bundle; cp build/$d/hassmic.bundle.sig dist/hassmic-$d.bundle.sig
-              cp build/$d/content-id dist/hassmic-$d.content-id
+              cp $c dist/hassmic-$d.content-id
           done
           rm -f secrets/release.key
-          [ "$(ls dist | wc -l)" = $(( 3 * $(ls -d build/build-* | wc -l) )) ] || { echo "::error::a bundle is missing"; ls -l dist; exit 1; }
+          [ "$(ls dist | wc -l)" = $(( 3 * $(ls build/*.content-id | wc -l) )) ] || { echo "::error::a bundle is missing"; ls -l dist; exit 1; }
           ls -l dist
       # A beta only when the Echos get something new: a commit that changes only CI, tests or the docs builds bundles
       # with the content IDs of the newest release (beta or not), and a beta of it would only make every Echo on the
