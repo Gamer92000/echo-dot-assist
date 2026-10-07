@@ -162,7 +162,7 @@ jobs:
           fetch-depth: 0
       # uv fetches Python and installs the wheels in parallel.  No cache: setup-uv prunes downloaded wheels from it in
       # CI anyway, since PyPI is as fast as restoring them.
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0       # no major-version tags (v10) exist: the full version
         with:
           python-version: '3.13'
       # No ffmpeg (hundreds of packages; the one MP3 a test needs is testdata/sine440_24k.mp3), no recommends, and no
