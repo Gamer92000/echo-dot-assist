@@ -1490,9 +1490,25 @@ Run in this order. Each step says what it proves.
       (`scripts/mkbootroot.py`, the XDA ramdisk edits only; PC-checked — the stock image reassembles byte for byte
       but for the header ID, which lk does not check, the XDA image boots with a foreign one; Amazon's kernel-signing
       cert page after the stock image copied over; 8149's ramdisk is a bare gzip stream, only the kernel carries
-      MTK's 512-byte header — untried on a device). Next: an install method (no A/B, dm-verity, the policy in
-      `boot.img`'s ramdisk patched for our services), then: recording rights as system uid, a binder client for the listening
-      mode and arbitration energies (`lipc-set-prop` is not on this firmware), volume through Android's stream
-      volumes, `pm disable` of the Alexa apps, the firewall on netd's chains (update app's uid), Wi-Fi switch through
-      WifiService, a login without the action button, earcons extracted from the APKs, an ARM32 `hassmic_rcpi4m`.
-
+      MTK's 512-byte header — untried on a device).
+      That image alone would leave adb dead (2026-10-07): with ro.secure=0 adbd setcon()s to its --root_seclabel
+      u:r:su:s0 (init.usb.rc) and AOSP 7 adbd LOG(FATAL)s when refused; 8149's policy has `permissive su` but no
+      `adbd su process dyntransition` (magiskpolicy --print-rules of both under qemu: 13903 rules; the XDA 6570 policy
+      has `permissive adbd` and `permissive untrusted_app`). Install written (INSTALL=boot, `scripts/install-boot.sh`,
+      install-system.sh hands over): boot image = 8149's + `--sepolicy` (stock policy + `sepolicy.rules`: donut
+      boot-root's adb rules and our init->su rules, applied by donut's magiskpolicy32 under qemu-arm; the diff against
+      stock is exactly those 13 rules) + `--no-verity` (`verify` out of fstab.mt8163); reproducible, sha256 5518117....
+      Flashed in hacked fastboot after checking the system build (incremental 0013222532484) from TWRP or the OS; the
+      boot partition compared first (md5: no sha256sum in toybox). Then sysinstall.sh as on donut; `otatool remount`
+      clears BLKROSET when the kernel refuses (/system is its own block device here). `hassmic.rc`: firewall `on boot`,
+      satellite at sys.boot_completed. `alexa-off.sh` disables ALEXA/SETUP/UPDATE_PACKAGES with pm (only what is not
+      disabled; noted in alexa-disabled, which alexa-on.sh and, without hassmic.conf, boot.sh undo; stock-online keeps
+      the updater off: `keep-updates`); checked against a fake pm. `lockdown.sh`: `FW_KEEP` (DHCP answers: no stock
+      firewall.sh), the updater's uid from packages.list for ota-only. Recording rights settled from the firmware:
+      libserviceutility.so recordingAllowed lets uid 0 through after RECORD_AUDIO and looks up a package for any other
+      uid (system: "android"). `tools/sdat2img.py` (reproduces the system image, md5-checked); `mkbootroot.py --extract`,
+      `--cpio`. PC-checked: the boot image build end to end with adb stubbed out (a biscuit was on adb here: the model
+      guard refused it), otatool_test.sh, fake_ha_esphome.py. Not done: a run on the device; a guided setup.sh and a
+      Wi-Fi join through WifiService; the settings page's Wi-Fi switch there; a binder client for the listening mode and
+      arbitration energies (`lipc-set-prop` is not on this firmware); volume through Android's stream volumes; a login
+      without the action button; earcons from the APKs; an ARM32 `hassmic_rcpi4m`.

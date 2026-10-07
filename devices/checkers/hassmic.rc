@@ -1,0 +1,26 @@
+# Home Assistant satellite instead of Alexa.  Installed by scripts/install-system.sh into /system/etc/init/ (INSTALL=boot:
+# init reads that folder at mount_all, after /init.*.rc).  Both services do nothing unless /data/local/hassmic/hassmic.conf
+# exists; without it boot.sh also turns Alexa's apps back on if alexa-off.sh had turned them off.
+# seclabel su: permissive in checkers' stock policy; the boot image's policy lets init into it (sepolicy.rules).
+
+service hassmic_fw /system/bin/sh /system/hassmic/boot.sh firewall
+    class main
+    user root
+    seclabel u:r:su:s0
+    disabled
+    oneshot
+
+service hassmic /system/bin/sh /system/hassmic/boot.sh satellite
+    class main
+    user root
+    seclabel u:r:su:s0
+    disabled
+    oneshot
+
+on boot
+    start hassmic_fw
+
+# Alexa on checkers is Android apps, started by the framework: no init trigger to follow as on the Dots.  alexa-off.sh
+# disables them with pm, which needs the package manager up; boot_completed is when it is.
+on property:sys.boot_completed=1
+    start hassmic

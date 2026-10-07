@@ -12,10 +12,13 @@ Unlike the Dots, the update is a block OTA without `payload.bin`: `system.new.da
 
 ```sh
 unzip firmware/checkers/update-kindle-*.bin -d firmware/checkers/
-# system.new.dat -> images/system.img: replay the "new" ranges of system.transfer.list (sdat2img)
-mkdir -p firmware/checkers/rootfs/system
+mkdir -p firmware/checkers/images firmware/checkers/rootfs/system && mv firmware/checkers/boot.img firmware/checkers/images/
+# system.new.dat -> images/system.img: replays the "new" ranges of system.transfer.list
+python3 tools/sdat2img.py firmware/checkers/system.transfer.list firmware/checkers/system.new.dat firmware/checkers/images/system.img
 debugfs -R "rdump / firmware/checkers/rootfs/system" firmware/checkers/images/system.img
-# boot.img (Android header v0, page 2048): the ramdisk (gzip cpio) unpacks into firmware/checkers/rootfs/
+# boot.img (Android header v0, page 2048, MTK header on the kernel): the ramdisk (gzip cpio) into firmware/checkers/rootfs/
+python3 scripts/mkbootroot.py --cpio firmware/checkers/images/boot.img firmware/checkers/ramdisk.cpio
+(cd firmware/checkers/rootfs && cpio -id < ../ramdisk.cpio)
 ```
 
 The kernel (`boot.img`, 4.9.77, 32-bit ARM) carries its config: `devices/checkers/kconfig`. Five device trees are
@@ -140,17 +143,20 @@ Libraries in checkers' load at 0x1000–0x4000 above their file offset (libasp +
 ## What a port needs
 
 1. **Unlock and install.** amonet-checkers v2.0.1 unlocks and leaves TWRP (`devices/checkers/README.md`); the
-   thread's `boot-root.img` is built from NS6570, not 8149 — `scripts/mkbootroot.py` builds the same changes into
-   8149's own `boot.img` (exact on the PC, untried on a device). Open: an install method for a system without A/B
-   slots under dm-verity, with the policy in `boot.img`'s ramdisk patched for our services, that never touches lk,
-   preloader or tee (the post: a brick there is permanent on most units).
+   thread's `boot-root.img` is built from NS6570, not 8149. Install written, untried on a device
+   (`scripts/install-boot.sh`, `devices/checkers/README.md` "Install"): 8149's own `boot.img` with root adb, `verify`
+   out of the fstab and the policy patched (`sepolicy.rules`; without the adb rules adbd dies at its setcon to `su`),
+   flashed in hacked fastboot; then the files onto `/system` as on donut. Only `boot` and `system` are written.
 2. **Audio:** `src/hassmic/audio_android.c` (OpenSL ES, written, untried): capture VOICE_RECOGNITION 16 kHz mono,
    one player per stream. Open: whether system uid gets the recording, the ASR pipeline's level, latency. Then a binder
    client for `SET_LISTENING_MODE` / `REQUEST_ARBITRATION_JSON` in place of `lipc-set-prop`, and volume (the Dots set
    it in the mixer through LIPC; here Android's stream volumes).
-3. **Stopping Alexa:** `pm disable` of the packages above; `hassmic.rc` on `sys.boot_completed=1`.
-4. **Firewall:** `lockdown.sh` against netd's chains, the update app's uid cut off. Security-relevant: the invariant
-   (Amazon's daemons only reach local addresses, updates never get out) has to be proven again here.
+3. **Stopping Alexa:** done in `alexa-off.sh` (`pm disable`, undone by `alexa-on.sh` and by `boot.sh` without
+   `hassmic.conf`); `hassmic.rc` starts the satellite at `sys.boot_completed=1`.
+4. **Firewall:** `lockdown.sh` as on the Dots: `hassmic_out` first in OUTPUT (ahead of netd's chains), INPUT policy
+   DROP, `keep` plus `FW_KEEP` (DHCP answers; there is no stock `firewall.sh` to admit them). Every app's uid is
+   outside group 3990, the updater app's included. Security-relevant: the invariant (Amazon's daemons only reach
+   local addresses, updates never get out) has to be checked on the device, netd's own changes to OUTPUT included.
 5. **Wi-Fi switch:** through Android's WifiService (`wifi.sh` assumes a free wpa_supplicant).
 6. **Settings page login and adb:** no action button; a volume key combination or the touchscreen instead.
 7. **Earcons** extracted at install; **screen**: left to stock at first.

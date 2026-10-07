@@ -77,7 +77,11 @@ What changed for people using the Echo, newest first. Details and measurements a
   page. The Echo forgets its settings, name, Home Assistant's key, approved browsers, Bluetooth pairings and its Wi-Fi
   networks, and starts the setup above again. The install itself, Amazon's extra models and `hassmic.conf` stay.
 - **Groundwork for the Echo Show 5 (1st gen).** Its firmware is worked out and hassmic builds for it, but it cannot
-  be installed yet: the unlock exists (amonet-checkers), the installation for this model is still to be written. Details in [devices/checkers](devices/checkers/README.md).
+  be installed yet: the unlock exists (amonet-checkers), the installation for this model is still to be written.
+- **Echo Show 5 (1st gen): an installer, not tried on a device yet.** `scripts/install-system.sh` builds a root boot
+  image from the firmware's own, flashes it in amonet's fastboot and installs hassmic as on the Dots; Alexa's apps are
+  switched off and come back when hassmic's config is removed. Details and risks:
+  [devices/checkers](devices/checkers/README.md). Details in [devices/checkers](devices/checkers/README.md).
 - **The settings page is tidier and about a third shorter.** The wake word engines and the arbitration modes are small
   cards to pick from; below them, one click opens a table that compares them question by question (how well it hears,
   which wake words, "<wake word>, stop", several Echos, ...), the current choice highlighted. "System" is two cards of

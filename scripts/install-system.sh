@@ -17,6 +17,7 @@ set -e
 cd "$(dirname "$0")/.."
 . scripts/lib/device.sh; device_load adb
 . scripts/lib/build.sh
+[ "$INSTALL" = boot ] && exec sh scripts/install-boot.sh "$@"         # checkers: no A/B, the policy in boot.img
 [ "$INSTALL" = twrp-ab ] || die "$DEVICE installs with INSTALL=$INSTALL, which this script does not do ($DDIR/README.md)"
 MNT=/mnt/hm_system
 STAGE=/data/local/tmp/hm-install

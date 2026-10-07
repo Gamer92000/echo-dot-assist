@@ -131,13 +131,14 @@ netwatch() {
             miss=0
             [ "$a" = "$addr" ] || { addr=$a; [ -f $D/wifi.sh ] && sh $D/wifi.sh status; }
             kmod
-            [ "$(getprop init.svc.$WIFI_SERVICE)" = running ] && [ ! -d $WIFI/lock ] && { sleep 5; stop $WIFI_SERVICE; echo "netwatch: link up, $WIFI_SERVICE stopped"; }
+            [ -n "$WIFI_SERVICE" ] && [ "$(getprop init.svc.$WIFI_SERVICE)" = running ] && [ ! -d $WIFI/lock ] && { sleep 5; stop $WIFI_SERVICE; echo "netwatch: link up, $WIFI_SERVICE stopped"; }
         elif [ -d $WIFI/lock ]; then
             miss=0 addr=
         else
             miss=$((miss + 1)) addr=
             # No saved network (a reset, a new install): nothing for wifisvc to bring up; the phone's setup (Improv) does
-            [ $miss -ge 6 ] && [ "$(getprop init.svc.$WIFI_SERVICE)" != running ] && [ "$(sh $D/wifi.sh saved 2>/dev/null)" != 0 ] &&
+            # (checkers has no WIFI_SERVICE of its own: Android's WifiService brings its networks up)
+            [ $miss -ge 6 ] && [ -n "$WIFI_SERVICE" ] && [ "$(getprop init.svc.$WIFI_SERVICE)" != running ] && [ "$(sh $D/wifi.sh saved 2>/dev/null)" != 0 ] &&
                 { start $WIFI_SERVICE; echo "netwatch: no address for 60 s, $WIFI_SERVICE started"; miss=0; }
         fi
         sleep 10
@@ -272,8 +273,9 @@ if [ "$1" = firewall ]; then
 fi
 
 if [ "$MODE" = stock-online ]; then
-    # hassmic is off on purpose: that must not count as an update that failed to come up.
-    [ "$1" = firewall ] || { echo 0 > $OTA/tries; exit 0; }
+    # hassmic is off on purpose: that must not count as an update that failed to come up.  Alexa's apps that
+    # alexa-off.sh disabled (checkers) come back, all but the updater.
+    [ "$1" = firewall ] || { echo 0 > $OTA/tries; [ -s /data/local/hassmic/alexa-disabled ] && sh $D/alexa-on.sh keep-updates 2>&1 | stamped >> $LOG; exit 0; }
     { rotate_log; echo "== stock-online, uptime $(cut -d. -f1 /proc/uptime)s: Alexa runs, updaters cut off"; } 2>&1 | stamped >> $LOG
     sh $D/lockdown.sh ota-only watch 2>&1 | stamped >> $LOG
     exit 0

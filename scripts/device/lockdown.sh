@@ -52,13 +52,21 @@ v6off() { for f in /proc/sys/net/ipv6/conf/*/disable_ipv6; do echo 1 > $f || ech
 # DNS servers from DHCP (dhcp.<iface>.dnsN) and the system's own (net.dnsN), one per line, sorted
 resolvers() { getprop | sed -nE 's/^\[(dhcp\.[^.]+|net)\.dns[0-9]+\]: \[([^]]+)\]$/\2/p' | sort -u; }
 
+# The updaters' user as a number: UPDATE_UID (a user of the image, Dots), else the uid Android gave the updater app
+# (UPDATE_PACKAGES, checkers: packages.list, "<name> <uid> ...").  Nothing if neither is there: no rule then, and on
+# checkers the updater stays disabled in stock-online (alexa-on.sh keep-updates).
+update_uid() {
+    if [ -n "$UPDATE_UID" ]; then id -u "$UPDATE_UID"; return; fi
+    for p in $UPDATE_PACKAGES; do sed -n "s/^$p \([0-9][0-9]*\) .*/\1/p" /data/system/packages.list 2>/dev/null; done | head -1
+}
+
 # The chain as it has to be, for $1 = iptables or ip6tables: one rule per line, worded as "iptables -S" prints it (a
 # length on every address, "-m udp" after "-p udp", the updaters' user as a number), because the check compares that
 # text.  The chain is loaded from this list and checked against it.
 rules() {
     if [ $1 = iptables ]; then loc=$LOCAL4; else loc=$LOCAL6; fi
     echo "-A hassmic_out -o lo -j RETURN"
-    if [ -n "$OTA_ONLY" ]; then echo "-A hassmic_out -m owner --uid-owner $(id -u "$UPDATE_UID") -j DROP"; return; fi
+    if [ -n "$OTA_ONLY" ]; then u=$(update_uid); [ -n "$u" ] && echo "-A hassmic_out -m owner --uid-owner $u -j DROP"; return; fi
     for d in $loc; do echo "-A hassmic_out -d $d -j RETURN"; done
     for d in $DNS; do
         case $d in *:*) [ $1 = iptables ] && continue; d=$d/128;; *) [ $1 = iptables ] || continue; d=$d/32;; esac
@@ -85,6 +93,9 @@ keep() {
         echo "-A INPUT -i $WLAN -p udp -m udp --dport 5353 -j ACCEPT"      # mDNS: how Home Assistant finds the Echo
         echo "-A INPUT -p icmp -m state --state RELATED,ESTABLISHED -j ACCEPT"
         if [ -n "$ADB" ]; then echo "-A $ADB_IN"; fi                       # only while adb over Wi-Fi is open (adb_gate)
+        # what this model's stock lacks (device.conf FW_KEEP, rules separated by ";"): checkers has no firewall.sh, and
+        # nothing else admits the DHCP server's answers once INPUT drops (they come to a broadcast, not as a reply)
+        [ -z "$FW_KEEP" ] || echo "$FW_KEEP" | tr ';' '\n' | while read -r r; do [ -n "$r" ] && echo "-A $r"; done
         if [ -n "$KIOSK" ]; then echo "-A $KIOSK_IN"; fi                   # only in Kiosk Satellite mode (kiosk_state)
     else
         echo "-A INPUT -p icmpv6 -j ACCEPT"                                # neighbour discovery: no IPv6 without it
