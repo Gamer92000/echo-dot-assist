@@ -140,9 +140,10 @@ Libraries in checkers' load at 0x1000–0x4000 above their file offset (libasp +
 ## What a port needs
 
 1. **Unlock and install.** amonet-checkers v2.0.1 unlocks and leaves TWRP (`devices/checkers/README.md`); the
-   thread's `boot-root.img` is built from NS6570, not 8149 (same README, "Root"). Open: a root `boot.img` from 8149's, an
-   install method for a system without A/B slots under dm-verity, with the policy in `boot.img`'s ramdisk, that never
-   touches lk, preloader or tee (the post: a brick there is permanent on most units).
+   thread's `boot-root.img` is built from NS6570, not 8149 — `scripts/mkbootroot.py` builds the same changes into
+   8149's own `boot.img` (exact on the PC, untried on a device). Open: an install method for a system without A/B
+   slots under dm-verity, with the policy in `boot.img`'s ramdisk patched for our services, that never touches lk,
+   preloader or tee (the post: a brick there is permanent on most units).
 2. **Audio:** `src/hassmic/audio_android.c` (OpenSL ES, written, untried): capture VOICE_RECOGNITION 16 kHz mono,
    one player per stream. Open: whether system uid gets the recording, the ASR pipeline's level, latency. Then a binder
    client for `SET_LISTENING_MODE` / `REQUEST_ARBITRATION_JSON` in place of `lipc-set-prop`, and volume (the Dots set

@@ -59,8 +59,8 @@ The thread's way: in hacked fastboot (Volume down, or Mute, while booting; or fr
 flags: adb on, adb authentication off), `fastboot flash boot boot-root.img`, `fastboot reboot`. adb is then a root
 shell, and `adb remount` makes `/system` writable.
 
-**`boot-root.img` is not built from the pinned firmware.** Against the 8149 `boot.img` (both with MediaTek's 512-byte
-headers on kernel and ramdisk):
+**`boot-root.img` is not built from the pinned firmware.** Against the 8149 `boot.img` (the kernel with MediaTek's
+512-byte header in both; 8149's ramdisk a bare gzip stream, the XDA image's with a `ROOTFS` header too):
 
 - its kernel and ramdisk come from **NS6570 / 6086** (`ro.bootimage.build.fingerprint`, `selinux_version`; kernel
   `4.9.77-g1f91447-dirty`, 2025-09-23, where 8149's is `4.9.77-ga3ad36a2995d-dirty`, 2026-09-28);
@@ -73,9 +73,22 @@ headers on kernel and ramdisk):
 So it runs 6570's kernel and policy under 8149's `/system`. The modules on `/system/lib/modules` say only
 `vermagic=4.9.77` and the kernel has no MODVERSIONS, so they load; whether 8149's Wi-Fi and Bluetooth drivers work
 against 6570's kernel, and whether 6570's policy covers 8149's services, is not known. A bad boot is recoverable:
-hacked fastboot stays, and 8149's `boot.img` flashes back. For hassmic's install the better way is the donut way:
-the same changes applied to 8149's own `boot.img` (properties, `init.fosflags.sh`, the policy patched for our
-services), so kernel, ramdisk and `/system` stay one build.
+hacked fastboot stays, and 8149's `boot.img` flashes back.
+
+The better way, built: the same changes applied to 8149's own `boot.img`, so kernel, ramdisk and `/system` stay one
+build.
+
+```sh
+python3 scripts/mkbootroot.py --check firmware/checkers/images/boot.img  # rebuilds it exact but for the header ID
+python3 scripts/mkbootroot.py firmware/checkers/images/boot.img firmware/checkers/boot-root-8149.img
+```
+
+`boot-root-8149.img`: the five properties above and `init.fosflags.sh` (byte for byte the XDA file) replaced inside
+8149's ramdisk, every other ramdisk entry and the kernel untouched, Amazon's kernel-signing certificate (a page
+trailing the stock image) carried over; the header ID is AOSP mkbootimg's formula, which lk does not check (the XDA
+image boots with a foreign one too). sha256 `afca0a33e1bede3e9e9d749820bea4f67f11ac8db77e1636075478e86f8c7c89`,
+8140800 bytes. Flashed the same way (`fastboot flash boot`); not tried on a device. Still open with the install: the
+policy in `boot.img`'s ramdisk patched for our services (from 8149's `/sepolicy`, as on donut).
 
 ## Files here
 
@@ -88,8 +101,8 @@ services), so kernel, ramdisk and `/system` stay one build.
 | `probe.md5`, `stubs/` | from the pinned firmware |
 
 Missing: an install method (TWRP or hacked fastboot, no A/B slots, dm-verity on `system`, the policy in `boot.img`'s
-ramdisk: a root `boot.img` built from 8149's, above), and with it `hassmic.rc`, `sepolicy.rules`, `setup.sh` and a place
-in CI's build matrix.
+ramdisk patched for our services), and with it `hassmic.rc`, `sepolicy.rules`, `setup.sh` and a place in CI's build
+matrix.
 
 ## Unpack the firmware
 
