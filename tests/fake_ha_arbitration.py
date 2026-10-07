@@ -398,7 +398,9 @@ async def main():
         ha.tags_on = False; ha.tags.clear(); a.allowed = True; calls = len(ha.calls)
         await b.reset()
         ok = await until(lambda: b.net() == a.net() and a.st("arbitration_peers") == 1 and b.st("arbitration_peers") == 1, 60)
-        check(ok and any(c[1] == "esphome.echo_living_room_arbitration_key" for c in ha.calls[calls:]), "allowed: the next one joined through the action")
+        check(ok and any(c[1] == "esphome.echo_living_room_arbitration_key" for c in ha.calls[calls:]),
+              f"allowed: the next one joined through the action ({[c[1] for c in ha.calls[calls:]]}, same network {b.net() == a.net()}, "
+              f"peers {a.st('arbitration_peers')}/{b.st('arbitration_peers')})")
     finally:
         for e in (a, b): e.proc.terminate()
         for e in (a, b): e.proc.wait()

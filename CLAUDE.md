@@ -143,7 +143,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Wake word (`wake.h`)**: `wake_pryon.c` (stock `libpryon.so`, headers in `src/include/pryon_api.h`) or `wake_none.c`
   (host build). Also link-time swap.
 - **Wake word arbitration (`arb.c`, `arb.h`)**: when several Echos hear the wake word, only the best one answers
-  (stock's ESP, done on the LAN; the score is the front end's own wake word energy ratio, as stock reads it). UDP broadcast on 28930, shared network key; a member hands it to a newcomer (sealed to its X25519 key) only
+  (stock's ESP, done on the LAN; the score is the front end's own wake word energy ratio, as stock reads it). UDP broadcast on 28930 (beacons at random 20-40 s, a member counts for 5 min: broadcasts get lost; for 40 s after a start or join the beacons carry F_HELLO and every member answers at once; a newcomer asks every 1.2 s for its first 5 s), shared network key; a member hands it to a newcomer (sealed to its X25519 key) only
   when Home Assistant vouches for both: each Echo that may be waited for reports the tag `hassmic_<pub hex>` as scanned
   (event `esphome.tag_scanned`: HA fires device events without "perform actions"; `tag.<id>` has no area or device in
   it, unlike every entity id, which HA builds from area, parent device, device and entity name), the other reads
@@ -166,7 +166,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   HAL's abstract sockets, AIPC service uuid 0 via `libace_aipc.so`; `docs/re-a2dp-source.md`) and SBC-encodes
   (`sbc.c`). While on the speaker the core has a volume of its own (`core_speaker`).
 - **Bluetooth**: `ble.c`/`ble_crypto.c` talk raw HCI (`hci.h`) to the controller for the HA Bluetooth proxy (scan, GATT,
-  Just Works pairing); Amazon's `btmanagerd` is stopped. A2DP shares the controller; scanning pauses while a phone plays.
+  Just Works pairing); Amazon's `btmanagerd` is stopped. A2DP shares the controller; scanning pauses while a phone plays,
+  and for 1 s from a wake word round (`ble_quiet` in `main.c` `wake_heard`): the scan's share of the antenna costs
+  10-30 % of Wi-Fi broadcasts (unicast is retried), i.e. the other Echos' claims.
 - **Settings** (`settings.c`, `settings.h`): one table of the satellite's settings by name (type, range, group,
   exportable or not), used by `proto_esphome.c`, the settings page and exports. Its own ones persist in `state/config`
   (`name=value`; the positional `state/settings` of older versions is read once and moved); arbitration, Sendspin and

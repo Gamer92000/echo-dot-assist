@@ -109,9 +109,19 @@
  * (the spread seen, -17..+59 ms) before its decision.  Copies carry the same counter: receivers drop all but the first */
 static const int COPY_MS[] = { 30, 80 };
 #define LOOKBACK_MS  1000       /* claims this much older than our own detection still count: the engines report late by different amounts */
-#define BEACON_MS    30000
+/* Beacons are broadcasts too, and an Echo misses 10-30 % of those (ble.c: the BLE scan's share of the antenna, plus what
+ * Wi-Fi loses anyway).  At a fixed 30 s one Echo's beacons fell into the gaps two times in three, at both others, for
+ * as long as we watched: it was out of their networks (their rounds, the settings page's list) for 15 s every 90 s
+ * (2026-10-07, while a wired PC got every one).  A random interval keeps a sender from staying in such a phase, and a
+ * member counts until it has been silent for 5 min, about ten beacons: an Echo that is really gone (unplugged) stays
+ * in the list that long, and the others wait for its claim (WINDOW_MS) in that time */
+#define BEACON_MIN_MS 20000
+#define BEACON_MAX_MS 40000
 #define LONER_MS     10000      /* beacon interval outside a network; members answer such a beacon at once */
-#define PEER_TTL_MS  75000      /* a member missing two beacons in a row no longer counts */
+/* ...but at most one a second (answer_at), and broadcasts get lost: in its first DISCOVER_MS an Echo outside a network
+ * asks every LOOK_MS, or one missed answer had it start a network of its own beside the existing one */
+#define LOOK_MS      1200
+#define PEER_TTL_MS  300000     /* a member not heard of for this long no longer counts */
 #define DISCOVER_MS  5000       /* no member heard in this time: start a network */
 #define PUSH_MS      30000      /* hand our key to the same Echo at most this often */
 #define CTR_BLOCK    4096
@@ -133,7 +143,10 @@ static const int COPY_MS[] = { 30, 80 };
 #define BLOB   (32 + 24 + 16 + 32)
 
 enum { T_BEACON = 1, T_CLAIM = 4, T_PAIR = 5, T_GIVE = 6 };    /* 2 was the handoff entity's id (older Echos), ignored */
-enum { F_QUIET = 1, F_KIOSK = 2 };                      /* the beacon's flags byte */
+/* the beacon's flags byte.  F_HELLO: sent in the first beacons after a start or a join, when the sender counts nobody
+ * yet; every member answers at once.  Without it a restarted Echo, which the others still count for minutes
+ * (PEER_TTL_MS), would see none of them until their next beacon, up to BEACON_MAX_MS later.  Older builds ignore it */
+enum { F_QUIET = 1, F_KIOSK = 2, F_HELLO = 4 };
 
 #define KIOSK_PORT    2330      /* Kiosk Satellite's, fixed (HASSMIC_KIOSK_PORT: tests) */
 #define KIOSK_KEEP_MS 2000      /* their claims kept this long: copies within it are the same claim */
@@ -150,7 +163,7 @@ static int in_net;
 static uint64_t net_id;
 static uint8_t net_key[32], mac_key[32];
 static uint64_t ctr, ctr_saved;
-static long long started, beacon_at, answer_at;
+static long long started, beacon_at, answer_at, beacon_gap = BEACON_MIN_MS, hello_until;
 static int reported_peers = -1;
 static atomic_int notify;
 
@@ -362,13 +375,14 @@ static struct cand *cand(const uint8_t pub[32])
 
 /* ---------------------------------------------------------------- network */
 
-static void beacon(void)
+static void beacon(int answer)                          /* answer: to another's beacon, never F_HELLO (two would answer for ever) */
 {
     struct pkt b; uint8_t l = (uint8_t)strlen(node);
     head(&b, T_BEACON); put(&b, pk, 32); put64(&b, in_net ? net_id : 0); put(&b, &l, 1); put(&b, node, l);
     if (in_net) {
         /* kiosk: takes part, the other way (an Echo with arbitration off is just quiet, whatever its mode) */
-        uint8_t f = (uint8_t)((!arbitrate || mode == ARB_KIOSK ? F_QUIET : 0) | (arbitrate && mode == ARB_KIOSK ? F_KIOSK : 0));
+        uint8_t f = (uint8_t)((!arbitrate || mode == ARB_KIOSK ? F_QUIET : 0) | (arbitrate && mode == ARB_KIOSK ? F_KIOSK : 0)
+                              | (!answer && now_ms() < hello_until ? F_HELLO : 0));
         put64(&b, next_ctr()); if (f) put(&b, &f, 1);
         tag(&b);
     }
@@ -381,7 +395,7 @@ static void adopt(const uint8_t k[32], uint64_t id, const char *how, const char 
     memset(peers, 0, sizeof peers); memset(claims, 0, sizeof claims);
     save();
     fprintf(stderr, "arbitration: %s network %016llx%s%s%s\n", how, (unsigned long long)id, from ? " (key " : "", from ? from : "", from ? ")" : "");
-    beacon_at = 0; atomic_store(&notify, 1);
+    beacon_at = 0; hello_until = now_ms() + BEACON_MAX_MS; atomic_store(&notify, 1);
 }
 
 static void create(void)
@@ -489,11 +503,12 @@ static void on_packet(const uint8_t *p, size_t n, long long now, uint32_t ip)
                 known |= !memcmp(peers[i].id, pub, 8) && ago(peers[i].seen, now, PEER_TTL_MS);
                 if (cands[i].seen && !memcmp(cands[i].pub, pub, 32)) cands[i].seen = 0;    /* in our network now: nothing more to hand it */
             }
-            /* one we did not count yet (it just joined, or we did): answer, or it would not count us until our next beacon.
-             * Not rate limited: only a holder of K gets here, once per member */
+            /* one we did not count yet (it just joined, or we did), or one that just started and counts nobody (F_HELLO):
+             * answer, or it would not count us until our next beacon.  Not rate limited: only a holder of K gets here, once
+             * per fresh counter */
             int f = fresh(pub, c, now);
             if (f) { struct peer *pp = peer(pub); snprintf(pp->node, NLEN, "%s", nd); pp->ip = ip; pp->quiet = flags & F_QUIET; pp->kiosk = !!(flags & F_KIOSK); }
-            if (f && !known) beacon();
+            if (f && (!known || (flags & F_HELLO))) beacon(1);
             return;
         }
         struct cand *c = cand(pub);
@@ -503,7 +518,7 @@ static void on_packet(const uint8_t *p, size_t n, long long now, uint32_t ip)
         if (!c->first) { c->first = now; if (!ago(sped, now, SCAN_SLOW_MS)) { sped = now; scans = 0; } }
         c->ip = ip;
         snprintf(c->node, NLEN, "%s", nd); c->net = net; c->seen = now;
-        if (in_net && !net && !ago(answer_at, now, 1000)) { answer_at = now; beacon(); }       /* someone looking: here we are */
+        if (in_net && !net && !ago(answer_at, now, 1000)) { answer_at = now; beacon(1); }       /* someone looking: here we are */
         push(c, now);
     } break;
     case T_PAIR: {
@@ -782,7 +797,10 @@ static void *loop(void *arg)
                 }
             }
             for (int i = 0; i < NPEER; i++) if (ago(cands[i].seen, now, PEER_TTL_MS)) push(&cands[i], now);
-            if (!ago(beacon_at, now, in_net ? BEACON_MS : LONER_MS)) { beacon_at = now; beacon(); }
+            if (!ago(beacon_at, now, in_net ? beacon_gap : now - started < DISCOVER_MS ? LOOK_MS : LONER_MS)) {
+                uint32_t r; ws_random(&r, sizeof r);
+                beacon_at = now; beacon_gap = BEACON_MIN_MS + r % (BEACON_MAX_MS - BEACON_MIN_MS); beacon(0);
+            }
             /* Home Assistant: our tag scanned while another Echo may wait for it (we are outside a network, or one is
              * outside ours: it gives or takes); the tags of those not confirmed yet */
             int need = !in_net;
@@ -1082,7 +1100,7 @@ int arb_start(int port, const char *nd, const struct arb_hooks *h)
     dest = a; dest.sin_addr.s_addr = addr ? inet_addr(addr) : htonl(INADDR_BROADCAST);
     if (pipe(wake_fd) == 0) for (int i = 0; i < 2; i++) { fcntl(wake_fd[i], F_SETFL, O_NONBLOCK); fcntl(wake_fd[i], F_SETFD, FD_CLOEXEC); }
     else wake_fd[0] = wake_fd[1] = -1;                  /* copies then go out within the loop's 100 ms */
-    started = now_ms(); running = 1;
+    started = now_ms(); hello_until = started + BEACON_MAX_MS; running = 1;
     if (pthread_create(&t, NULL, loop, NULL)) { running = 0; return -1; }
     pthread_detach(t);
     fprintf(stderr, "arbitration: port %d as %s, %s%s\n", port, node, in_net ? "member of a network" : "looking for a network",

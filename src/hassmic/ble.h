@@ -42,6 +42,7 @@ int  ble_connections(uint64_t *addrs);  /* slots in use (connecting or connected
 
 /* Requests: queued for the controller thread, never block.  Each is answered through the handler. */
 void ble_scan(int on, int active);      /* wanted state */
+void ble_quiet(int ms);                 /* no scanning for the next ms (longer pauses win): Wi-Fi broadcasts get through */
 void ble_connect(uint64_t addr, unsigned addr_type);   /* -> connection(1, mtu) once the MTU is agreed, or (0, error) */
 void ble_disconnect(uint64_t addr);     /* -> connection(0, 0) */
 void ble_services(uint64_t addr);       /* -> services(), or error(addr, 0, e) */

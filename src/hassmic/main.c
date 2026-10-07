@@ -38,6 +38,7 @@
 #include "audio.h"
 #include "a2dp.h"
 #include "arb.h"
+#include "ble.h"
 #include "buttons.h"
 #include "davs.h"
 #include "micdenoise.h"
@@ -880,6 +881,10 @@ static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* captu
     /* Kiosk Satellite mode: their loudness, not the front end's energies (whose 150 ms only the window would pay for) */
     int score = arb_mode(-1) == ARB_KIOSK ? kiosk_score(end, simulated) : wake_score(begin, end, simulated);
     if (score == INT_MIN) { fprintf(stderr, "arbitration: less than 3 s heard, answers without a claim\n"); trigger(0); return; }
+    /* The other Echos' claims are Wi-Fi broadcasts, and the BLE scan's share of the antenna loses them (ble.c): no
+     * scanning while this round listens.  1 s covers the window (Kiosk Satellite's up to 500 ms), the claims of Echos
+     * that heard it a little later, and the winner's "answers" */
+    ble_quiet(1000);
     long long due = arb_claim(kw, score, prio);
     if (!due) { trigger(0); if (!atomic_load(&streaming)) afe_done(); return; }
     arb_due = due; arb_from = ring_n;

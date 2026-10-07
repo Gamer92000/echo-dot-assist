@@ -769,6 +769,30 @@ Run in this order. Each step says what it proves.
       wpa_supplicant restarts; wifi.sh then talks to the global one (`-g@android:wpa_wlan0 IFNAME=wlan0`, Android's
       way), checked on the Dot 2 with a scan and a failed switch. Not on a device: main.sh's dispatch and netwatch
       parts (an update brings them), the page in a real browser against the Echo.
+- [x] Echos dropping out of each other's network (2026-10-07, seen on the settings page: the Echo Dot missing from
+      the Echos list for seconds, then back). Watched from all three for 5 min: the Echo Dot heard both others' beacons
+      every 30 s (max age 29 s), both others heard its beacons only every 90 s (max age 72/74 s, PEER_TTL_MS 75 s: out
+      for ~15 s each cycle, out of rounds too). A wired PC on the VLAN got all of its beacons. Counting rule on the
+      Dot 2 (iptables, no target): the lost ones never reached its kernel. From the wired PC, broadcast vs unicast to
+      the Dot 2, 60 each: 44/60, 51/60, 48/60 vs 60/60 every time; on the other AP 54/60. Not power save (driver log:
+      PS mode CAM since boot; DTIM skip 0; autosleep off, no suspend). The PC's own Wi-Fi card on the same APs, at
+      -71 dBm against the Echo's -61, from a spare address (raw frames out of the wired card): 113/120 broadcast,
+      120/120 unicast. hassmic stopped: 59/60. Cause: the BLE scan (30 ms per 320 ms, ble.c) has the shared antenna;
+      APs never repeat broadcasts. Unicast to every peer was tried and dropped (traffic grows with the square of the
+      Echos, claims' copies multiplied). Instead: ble_quiet(1000) when a round starts (main.c wake_heard), so an Echo
+      that heard the wake word hears the others' claims: 40 broadcasts in 0.8 s, 4 times each, 136/160 scanning vs
+      158/160 in the pause. Beacons every random 20-40 s (no sender stuck in a bad phase), PEER_TTL_MS 150 s (about four
+      missed in a row); Dot 2 with it, 5 min: never dropped the Echo Dot (longest gap 59 s). Then 5 min (about ten
+      missed, asked): an unplugged Echo stays listed and waited for that long. With that, a restarted Echo (same
+      identity) is still counted by the others, so they did not answer its first beacon and its own list stayed empty
+      until their next one (up to 40 s; also what was seen first on the page after a push; fake_ha_arbitration's
+      action step flaky past its 60 s). F_HELLO (flags bit 4): its beacons for 40 s after a start or a join; members
+      answer at once; answers never carry it (two hellos would answer each other for ever); older builds ignore it.
+      Still flaky 1 in 3 after that: a newcomer restarted 1.1 s after the last one got no answer (members answer
+      newcomers once a second at most), sent its next beacon only after LONER_MS 10 s, and started a network of its
+      own at DISCOVER_MS 5 s, which the member then joined. A lost broadcast does the same. Now a newcomer asks every
+      LOOK_MS 1.2 s during its first DISCOVER_MS. The other two still on
+      the fixed 30 s / 75 s until updated.
 - [x] Arbitration key handoff through HA tags (2026-10-07, issue #8: three Echos on the latest beta, all with the
       settings page's "handoff entity under another name" warning). HA 2026.9 names entities from area + parent device +
       device + entity name (`helpers/entity_registry.py` `_async_get_full_entity_name`, default parts AREA,

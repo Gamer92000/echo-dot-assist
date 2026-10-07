@@ -4,6 +4,12 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-07
 
+- **Echos no longer drop out of each other's network every minute or so.** Each Echo's Bluetooth scanning (for Home
+  Assistant's Bluetooth proxy) shares the antenna with Wi-Fi, and messages broadcast while it scans are lost: 10 to 30
+  out of every 100. One Echo's announcements kept arriving only every third time, so it vanished from the Echos list
+  and from wake word arbitration for about 15 seconds every minute and a half. Echos now announce themselves at random
+  intervals and count each other as gone only after five minutes without one, and an Echo that heard the wake
+  word pauses its Bluetooth scan for a second, so the other Echos' claims reach it. Update every Echo.
 - **Switch the Echo to another Wi-Fi network from its settings page.** "Wi-Fi" in the System section shows the
   network the Echo is on; "Switch network…" lists the networks it sees, or takes a name you type (for a hidden one).
   You can type the password before or after you pick the network. The Echo keeps the new network only once it is on it

@@ -9,6 +9,10 @@
  * Scanning: 30 ms every 320 ms, ESPHome's default for proxies on Wi-Fi.  The chip shares its antenna with Wi-Fi, and on
  * the Echo continuous scanning cut Wi-Fi throughput from 4.3 to about 1 MB/s, 30/320 to 3.8 MB/s.  The number of
  * advertisements received was the same for both.  Duplicate filtering is off: Home Assistant wants every RSSI.
+ * What Wi-Fi brings while the scan has the antenna is lost unless the access point sends it again, and it never does
+ * for broadcasts: from a wired PC, 42-54 of 60 broadcasts reached the Dot 2 with hassmic running, 59 of 60 with it
+ * stopped, unicasts 60 of 60 either way (2026-10-07; a laptop's Wi-Fi on the same access points lost 7 of 120).  The
+ * other Echos' wake word claims are broadcasts, so a round pauses the scan (ble_quiet) while it listens for them.
  *
  * Connections: a small GATT client, what ESPHome's proxy does with ESP-IDF's stack.  One thread owns the controller;
  * requests from the API threads are queued and answered through callbacks.  Per connection: ACL with L2CAP fragmentation
@@ -73,6 +77,7 @@ enum { HCI_E_UNKNOWN_CONN = 0x02, HCI_E_TIMEOUT = 0x08, HCI_E_LIMIT = 0x09, HCI_
 static int fd = -1, wake[2] = { -1, -1 };
 static const struct ble_handler *H;
 static atomic_int want_on, want_active, scanning;
+static atomic_llong quiet_until;                /* CLOCK_MONOTONIC ms: no scanning before then (ble_quiet) */
 static char bdaddr[18];                         /* set once, before anything reads it */
 
 static unsigned char in[2048]; static size_t have;             /* H4 stream: reads may split or join packets */
@@ -86,6 +91,7 @@ static long ms_since(const struct timespec *t)
     return (now.tv_sec - t->tv_sec) * 1000 + (now.tv_nsec - t->tv_nsec) / 1000000;
 }
 static void now(struct timespec *t) { clock_gettime(CLOCK_MONOTONIC, t); }
+static long long mono_ms(void) { struct timespec t; now(&t); return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
 static unsigned u16(const unsigned char *p) { return p[0] | p[1] << 8; }
 static void put16(unsigned char *p, unsigned v) { p[0] = v; p[1] = v >> 8; }
 
@@ -1068,27 +1074,33 @@ static void *thread(void *arg)
         have = 0; nbatch = 0;
         if (setup() < 0) { fprintf(stderr, "bluetooth: controller does not answer\n"); close(fd); fd = -1; continue; }
         said = 0;
-        int on = 0, active = 0;
+        int on = 0, active = 0, was_quiet = 0;
         for (;;) {
             struct req *r;
             pthread_mutex_lock(&qlock); r = qhead; qhead = NULL; qtail = &qhead; pthread_mutex_unlock(&qlock);
             int bad = 0;
             while (r) { struct req *n = r->next; if (!bad && handle_request(r) < 0) bad = 1; free(r); r = n; }
             if (bad || upkeep() < 0) break;
-            /* scanning pauses while a connection is being set up */
-            int won = atomic_load(&want_on) && !in_state(C_WAIT) && !in_state(C_CONNECTING) && !a2dp_streaming(), wac = atomic_load(&want_active);
+            /* scanning pauses while a connection is being set up, and while a wake word round listens (ble_quiet): that pause
+             * is neither logged nor reported, it is over within a second */
+            long long qleft = atomic_load(&quiet_until) - mono_ms();
+            int quiet = qleft > 0, brief = quiet || was_quiet;
+            int won = atomic_load(&want_on) && !quiet && !in_state(C_WAIT) && !in_state(C_CONNECTING) && !a2dp_streaming(), wac = atomic_load(&want_active);
+            was_quiet = quiet;
             if (won != on || (on && wac != active)) {
                 if (apply(won, wac) < 0) break;
-                if (won != on || wac != active)
+                if ((won != on || wac != active) && !brief)
                     fprintf(stderr, "bluetooth: %s\n", atomic_load(&scanning) ? (wac ? "scanning (active)" : "scanning (passive)") : "scan off");
                 on = won; active = wac;
-                if (H->scan_changed) H->scan_changed();
+                if (H->scan_changed && !brief) H->scan_changed();
             }
             if (!on && connect_next() < 0) break;
             int busy = a2dp_busy();
             for (int i = 0; i < BLE_MAX_CONN; i++) busy |= conns[i].state != C_FREE;
             struct pollfd p[2] = { { fd, POLLIN, 0 }, { wake[0], POLLIN, 0 } };
-            if (poll(p, 2, busy ? 500 : nbatch ? 100 : -1) < 0 && errno != EINTR) break;
+            int wait = busy ? 500 : nbatch ? 100 : -1;
+            if (quiet && (wait < 0 || qleft < wait)) wait = (int)qleft + 1;          /* back to scanning when the pause ends */
+            if (poll(p, 2, wait) < 0 && errno != EINTR) break;
             if (p[1].revents & POLLIN) { char c[16]; if (read(wake[0], c, sizeof c) < 0) break; }
             if (pump(0) < 0) break;
         }
@@ -1116,6 +1128,12 @@ int ble_connections(uint64_t *addrs)
 }
 
 void ble_scan(int on, int active) { atomic_store(&want_active, active != 0); atomic_store(&want_on, on != 0); poke(); }
+void ble_quiet(int ms)
+{
+    long long until = mono_ms() + ms;
+    if (until > atomic_load(&quiet_until)) atomic_store(&quiet_until, until);
+    poke();
+}
 void ble_connect(uint64_t addr, unsigned addr_type) { request(R_CONNECT, addr, addr_type, 0, NULL, 0, 0); }
 void ble_disconnect(uint64_t addr) { request(R_DISCONNECT, addr, 0, 0, NULL, 0, 0); }
 void ble_services(uint64_t addr) { request(R_SERVICES, addr, 0, 0, NULL, 0, 0); }
