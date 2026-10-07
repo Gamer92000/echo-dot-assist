@@ -12,7 +12,7 @@ and refuse a mismatch.
 | Echo 2nd gen (2017) | [`radar`](radar/README.md) | `radar_puffin` (OTA metadata) | in preparation: builds, Pryon verified under qemu against its own ALEXA model; unlock files staged; on-device values to check |
 | Echo Dot 3rd gen refresh (2019–2020), C78MP8 | `crumpet` | `crumpet`? (OTA metadata; fastboot says `CRUMPET`) | not started: `kamakiri-donut` does not apply |
 | Echo Dot 3rd gen with clock, 36EBT3 | `doebrite` | ? | not started; thought to be `crumpet` hardware plus the clock display |
-| Echo Show 5 1st gen (2019), H23K37 | [`checkers`](checkers/README.md) | `checkers` | builds; worked out from the firmware (same 6574.1 as donut, full Android, no mixer: OpenSL ES backend); no unlock known |
+| Echo Show 5 1st gen (2019), H23K37 | [`checkers`](checkers/README.md) | `checkers` | builds; worked out from the firmware (same 6574.1 as donut, full Android, no mixer: OpenSL ES backend); unlock public (amonet-checkers, TWRP), install not written yet |
 
 ## What a model directory holds
 
