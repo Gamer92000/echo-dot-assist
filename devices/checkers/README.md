@@ -1,8 +1,9 @@
 # Echo Show 5 1st gen, 2019 (`checkers`)
 
-**Not installable: no unlock or root method is known.** What is here builds (`make DEVICE=checkers`, also with
-`STUBS=1`) and is worked out from the firmware only; nothing has run on an Echo Show. Findings and what a port still
-needs: [docs/re-checkers.md](../../docs/re-checkers.md). Porting guide: [devices/README.md](../README.md).
+**Not installable yet.** The unlock is public (below), but the installation for this model is still to be written.
+What is here builds (`make DEVICE=checkers`, also with `STUBS=1`) and is worked out from the firmware only; nothing has
+run on an Echo Show. Findings and what a port still needs: [docs/re-checkers.md](../../docs/re-checkers.md). Porting
+guide: [devices/README.md](../README.md).
 
 Model H23K37 (`ro.product.model` AEOCH). MediaTek MT8163, 5.5" touchscreen, 2 microphones, camera with a shutter.
 
@@ -19,6 +20,29 @@ release as donut's; sha256 `f96fcfa1240f809711fcf855ce7742762437e4f3754615315363
   is Android's stack. `scripts/system/` and `scripts/device/` do not handle that yet.
 - No action button, no LED ring; a screen.
 
+## Unlock (public: amonet-checkers)
+
+`amonet-checkers-v2.0.1.zip`, from the XDA thread for the Echo Show 5 1st gen (2019, H23K37 only: the Echo Show 8
+`crown` and the Echo Show 5 2nd gen `cronos` have threads of their own). It ends with an unlocked bootloader and TWRP.
+The zip goes into `firmware/checkers/` (not in git); its checksum is to be pinned here once it is.
+
+- **Option 1, a working Echo:** no opening. `./fastbrick.sh` (Linux) or `fastbrick.bat`; with the Echo on its power
+  supply, hold all three buttons until "=> FASTBOOT mode..." shows, then connect micro-USB. Type `YES`, follow the
+  screen. **After the 10 s grace period nothing may interrupt it** (up to 5 min): an interruption bricks it for good.
+- **Option 2, a bricked Echo made in 2019:** open it (power and USB flex stay connected), `sudo ./bootrom-step.sh`, plug
+  in micro-USB while shorting test point TP30 to ground, until the script says otherwise; then `sudo
+  ./fastboot-step.sh`. Newer revisions have the bootrom's USB download disabled, so this most likely fails on them.
+  ModemManager must be stopped.
+
+Afterwards, with the volume keys held while power is connected: Volume down = hacked fastboot, Volume up = TWRP,
+Mute + Volume down (USB connected) = preloader USB download for MTKClient (shows as "MT8163 Preloader", maker
+"PWNED", connecting and disconnecting). `boot-recovery.sh` / `boot-fastboot.sh` from the zip do the same over USB.
+
+**Never write lk, preloader, tee1/tee2 (tz) or any other bootloader partition**, not even from the USB download mode:
+most units have no bootrom way back, a brick there is permanent. An install for this model may touch `system` and
+`boot` only. Stock updates only through TWRP (the `.bin` renamed to `.zip`); flashing the amonet zip in TWRP updates
+the unlock. Which firmware versions the exploit takes is not said in the post: check the thread before pinning.
+
 ## Files here
 
 | File | State |
@@ -29,8 +53,8 @@ release as donut's; sha256 `f96fcfa1240f809711fcf855ce7742762437e4f3754615315363
 | `kconfig` | the kernel's IKCONFIG (4.9.77, ARM) |
 | `probe.md5`, `stubs/` | from the pinned firmware |
 
-Missing until there is a way in: `hassmic.rc`, `sepolicy.rules`, `setup.sh`, an install method, a place in CI's build
-matrix.
+Missing: an install method (TWRP, no A/B slots, dm-verity on `system`, the policy in `boot.img`'s ramdisk), and with it
+`hassmic.rc`, `sepolicy.rules`, `setup.sh` and a place in CI's build matrix.
 
 ## Unpack the firmware
 
