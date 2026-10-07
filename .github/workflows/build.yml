@@ -184,6 +184,8 @@ jobs:
         run: .venv/bin/python tests/fake_web_artifacts.py
       - name: Wi-Fi switch from the settings page
         run: .venv/bin/python tests/fake_web_wifi.py
+      - name: microWakeWord, models from the settings page
+        run: .venv/bin/python tests/fake_web_mww.py
 
   release:
     needs: [version, build, test]

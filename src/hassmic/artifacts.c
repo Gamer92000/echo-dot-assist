@@ -7,6 +7,7 @@
  *   wake:<name>  a wake word model set, models/<name>/ (Home Assistant offers each in the wake word select)
  *   sound        Amazon's newer sound detection model, aed/ (sound_pryon.c takes it over the firmware's)
  *   whisper      the whisper detection model, whisper/ (whisper_pryon.c)
+ *   mww:<id>     a microWakeWord model, state/mww/<id>/ (mww_store.c): not Amazon's, but copied the same way
  * Each is a folder of files, with at most one level of folders inside: Amazon's whisper model keeps its networks in
  * whisper_components/, some wake word sets (alexa-de-DE) theirs in BDPGeneratedFiles/.  A file's name is then its path,
  * "sub/file", each part a name as good_name() takes it.  The digest: BLAKE2b-256 over, file by file in name order,
@@ -20,8 +21,10 @@
  * (main.sh) runs artifact-install.sh, which reads the files as the daemon's user (so nothing staged here can point root
  * at a file of its own), copies them (and their one level of folders) into a fresh root-owned folder, swaps it in and restarts hassmic: the wake word list
  * and the whisper model are read at start.  The models folders are root's (adb wrote them), hence the detour.
+ * microWakeWord's models are hassmic's own: commit checks that one loads in our interpreter and puts it in place itself.
  */
 #include "artifacts.h"
+#include "mww.h"
 #include "../third_party/monocypher.h"
 #include <ctype.h>
 #include <dirent.h>
@@ -77,6 +80,8 @@ static int resolve(const char *id, char *dir, size_t dcap, char *stage, size_t s
         snprintf(dir, dcap, "%s/%s", models_dir(), id + 5); snprintf(stage, scap, "%s/artifacts/wake.%s", state_dir(), id + 5); *kind = "wake";
     } else if (!strcmp(id, "sound")) {
         snprintf(dir, dcap, "%s", env_or("HASSMIC_AED", "/data/local/hassmic/aed")); snprintf(stage, scap, "%s/artifacts/sound", state_dir()); *kind = "sound";
+    } else if (!strncmp(id, "mww:", 4) && mww_good_id(id + 4)) {
+        snprintf(dir, dcap, "%s/%s", mww_dir(), id + 4); snprintf(stage, scap, "%s/artifacts/mww.%s", state_dir(), id + 4); *kind = "mww";
     } else if (!strcmp(id, "whisper")) {
         snprintf(dir, dcap, "%s", env_or("HASSMIC_WHISPER", "/data/local/hassmic/whisper")); snprintf(stage, scap, "%s/artifacts/whisper", state_dir()); *kind = "whisper";
     } else return -1;
@@ -161,7 +166,10 @@ static size_t one_json(char *o, size_t cap, const char *id, int first)
     char dir[300], stage[300], dh[65]; const char *kind; struct file f[MAX_FILES]; uint8_t d[32]; size_t n = 0; long total = 0;
     int k, manifest = 0;
     if (resolve(id, dir, sizeof dir, stage, sizeof stage, &kind) || (k = list_dir(dir, f, MAX_FILES, 0)) <= 0) return 0;
-    for (int i = 0; i < k; i++) { total += f[i].size; manifest |= !strcmp(f[i].name, "pryon.manifest") || !strcmp(f[i].name, "pryon_whisper.manifest"); }
+    for (int i = 0; i < k; i++) {
+        total += f[i].size;
+        manifest |= !strcmp(f[i].name, "pryon.manifest") || !strcmp(f[i].name, "pryon_whisper.manifest") || (!strcmp(kind, "mww") && !strcmp(f[i].name, "manifest.json"));
+    }
     if (!manifest || cached_digest(dir, f, k, d)) return 0;
     hex(dh, d, 32);
     J("%s{\"id\":\"%s\",\"kind\":\"%s\",\"name\":\"%s\",\"size\":%ld,\"digest\":\"%s\",\"files\":[", first ? "" : ",", id, kind,
@@ -192,6 +200,14 @@ size_t art_list_json(char *o, size_t cap)
         closedir(d);
     }
     for (int i = 0; i < 2; i++) { size_t k = one_json(o + n, cap - n, i ? "whisper" : "sound", first); n += k; if (k) first = 0; }
+    if ((d = opendir(mww_dir()))) {
+        while ((e = readdir(d))) {
+            if (!mww_good_id(e->d_name)) continue;                 /* .new-* / .old-*: one being swapped in */
+            snprintf(id, sizeof id, "mww:%.63s", e->d_name);
+            size_t k = one_json(o + n, cap - n, id, first); n += k; if (k) first = 0;
+        }
+        closedir(d);
+    }
     J("],\"free\":%ld,\"staged\":[", free_bytes());
     snprintf(p, sizeof p, "%s/artifacts", state_dir()); first = 1;
     if ((d = opendir(p))) {
@@ -443,6 +459,13 @@ int art_commit(const char *id, char *err, size_t errsz)
             snprintf(err, errsz, "this Echo's wake word engine cannot load it"); fprintf(stderr, "artifacts: %s does not load here, dropped\n", id); return -1;
         }
         if (r < 0) fprintf(stderr, "artifacts: no pryon_test here, %s installed untried\n", id);
+    }
+    if (!strcmp(kind, "mww")) {                             /* ours: no root, no restart; in place now or not at all */
+        pthread_mutex_unlock(&lk);                          /* it takes core_lock to list the wake words anew */
+        int r = mww_install_dir(stage, id + 4, err, errsz);
+        if (r) fprintf(stderr, "artifacts: %s refused: %s\n", id, err);
+        pthread_mutex_lock(&lk); unstage(stage); pthread_mutex_unlock(&lk);
+        return r;
     }
     snprintf(p, sizeof p, "%s.ready", stage);
     int fd = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0644); if (fd >= 0) close(fd);

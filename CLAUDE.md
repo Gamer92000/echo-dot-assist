@@ -41,6 +41,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step
 .venv/bin/python tests/fake_web_artifacts.py  # models copied Echo to Echo through the page, root's installer, after a restart
 .venv/bin/python tests/fake_web_wifi.py       # Wi-Fi switch: sealed password, PSK, root's wifi.sh against a fake wpa_cli
+.venv/bin/python tests/fake_web_mww.py        # microWakeWord: models added/edited/deleted from the page, engine switch,
+                                             # real detections on testdata/alexa_espeak.raw, copy as an artifact
 .venv/bin/python tests/fake_web_davs.py       # models downloaded from a fake Amazon: login by code pair with the device
                                              # attestation token, DAVS, unpack, staging, install, deregister
 .venv/bin/python tests/fake_ha_update.py      # online updates: page channel + HA update entity, fake GitHub, root's installer
@@ -141,7 +143,25 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   build, `HASSMIC_FAKE_WHISPER`). Model from DAVS only, installed by `scripts/artifacts.sh` into
   `/data/local/hassmic/whisper` (not `models/`: it carries a stray `pryon.manifest`); without it, no sensor.
 - **Wake word (`wake.h`)**: `wake_pryon.c` (stock `libpryon.so`, headers in `src/include/pryon_api.h`) or `wake_none.c`
-  (host build). Also link-time swap.
+  (host build) as the vendor engine, link-time swap; microWakeWord (below) on every build, picked at run time.
+- **microWakeWord (`wake.c`, `wake_mww.c`, `mww_features.c`, `mww_model.c`, `mww_store.c`, `mww.h`)**: second wake word
+  engine, off by default (setting `wake_engine` amazon/microwakeword, page section "Wake word"; detects much worse than
+  Pryon, the page says what it costs).  `wake.c` dispatches by model: a `.json` manifest = microWakeWord, else the vendor
+  engine (`wake_vendor`: `wake_pryon.c` / `wake_none.c`); `wake_fed()` is the sample clock across engines.
+  `mww_features.c` = TFLite Micro's microfrontend, bit-exact with pymicro-features (tables via double functions:
+  bionic's log1pf differs); `mww_model.c` = int8 TFLite interpreter for the 13 ops microWakeWord's streaming models use
+  (resource variables, CALL_ONCE), TFLite reference arithmetic, logistic as float LUT; untrusted input (page uploads):
+  every flatbuffer offset checked, quantization validated, accumulators bounded (MAX_DOT/MAX_BIAS); fuzzed with
+  ASan/UBSan.  Models in `state/mww/<id>/{manifest.json,model.tflite}` (hassmic's own, no root), added/edited/deleted
+  via `/api/mww/*` (web.c), copied as artifacts `mww:<id>` (artifacts.c commits them itself).  Wake word list
+  (`main.c` `wake_words_scan`) is per engine and rescanned live (`core_wake_engine`, `core_wake_models_changed`; HA
+  re-reads it after the link is closed); pick in `state/mww_word`.  No gain on the input (PCAN normalises; measured).
+  Lost with it: "stop" keyword, Pryon's threshold hints, front end ESP scores (`wake_afe_times` 0: own SNR score).
+  Third value `homeassistant` = `-w remote` from the page: decided at start (`main()` peeks `state/config`), so
+  `core_wake_engine` saves and writes `state/restart` (root's `main.sh` restarts, as for a rename); `-w remote` in ARGS
+  wins (`core_wake_refused`).  Remote: EV_WAKE_END -> `core_remote_wake` (sound, ring, `listening(1)` until mic off).
+  `tests/unit/mww_ref.py` (in `make unit`) checks features and every inference against pymicro-features and TFLite
+  BUILTIN_REF on all of pymicro-wakeword's models.
 - **Wake word arbitration (`arb.c`, `arb.h`)**: when several Echos hear the wake word, only the best one answers
   (stock's ESP, done on the LAN; the score is the front end's own wake word energy ratio, as stock reads it). UDP broadcast on 28930 (beacons at random 20-40 s, a member counts for 5 min: broadcasts get lost; for 40 s after a start or join the beacons carry F_HELLO and every member answers at once; a newcomer asks every 1.2 s for its first 5 s), shared network key; a member hands it to a newcomer (sealed to its X25519 key) only
   when Home Assistant vouches for both: each Echo that may be waited for reports the tag `hassmic_<pub hex>` as scanned
@@ -195,7 +215,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   the signature counts), each approved once with its own button; "make like this Echo" posts this one's export.
   Rename ("Name" card, `POST /api/name` "<0|1> <name>"): `main.c` `core_rename` writes `state/name` (display) and, with 1,
   `state/node`; `core_node_name()` derives from `-n` (hassmic.conf `NAME`), not the display name, unless `state/node` is
-  set; then `state/restart`, which root's `ota_watch` turns into `stop hassmic; start hassmic`. `read_own` opens them
+  set; then `state/restart` (its text says why: rename, wake word engine), which root's `ota_watch` turns into
+  `stop hassmic; start hassmic`. `read_own` opens them
   without following links and never root-owned (root runs `hassmic -S`). `nodeOf` in `web/app.js` mirrors `node_of`.
   Identify (`POST /api/identify`, HA button `identify`, device class identify): `core_identify` sets `zzz_rainbow`
   (same file on every model) for 10 s, cleared by `volume_led_thread`, and queues `SND_IDENTIFY` (stock's

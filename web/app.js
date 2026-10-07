@@ -113,11 +113,48 @@ const ICONS = {
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   refresh: '<path d="M20 12a8 8 0 0 1-14.2 5"/><path d="M4 12a8 8 0 0 1 14.2-5"/><path d="M18.5 3v4h-4M5.5 21v-4h4"/>',
+  ear: '<path d="M6.5 9a5.5 5.5 0 0 1 11 0c0 3.2-3.5 4.3-3.5 7.5a3 3 0 0 1-5.6 1.5"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.2-1 1.8-1.6 2.4"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+  down: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+  up: '<path d="M12 20V9M7 14l5-5 5 5M5 4h14"/>',
   eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
 };
 const icon = (n) => h('span', { html: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`, style: 'display:inline-flex' });
 
 function browserLabel() { return (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || 'browser'; }
+
+// In place of the browser's confirm() and prompt(): the page's own dialog.  title, body (nodes or text), ok (the button
+// that goes ahead), danger (it deletes or cuts something off), input (a text field: { label, value, max }), check (a
+// value from the field: an error text, or null).  Resolves to true (or the field's text) when gone ahead, null otherwise.
+function ask({ title, body = [], ok = 'OK', danger = false, input = null, check = null }) {
+  return new Promise((done) => {
+    let result = null;
+    const field = input ? h('input', { type: 'text', id: 'ask-field', value: input.value || '', maxlength: String(input.max || 200), autocomplete: 'off' }) : null;
+    const msg = h('p', { class: 'help ask-msg' });
+    if (field) field.oninput = () => { msg.textContent = ''; };
+    const go = h('button', { type: 'submit', class: danger ? 'danger' : 'primary' }, ok);
+    const cancel = h('button', { type: 'button', onclick: () => dlg.close() }, 'Cancel');
+    const close = h('button', { type: 'button', class: 'icon-btn', title: 'Close', 'aria-label': 'Close', onclick: () => dlg.close() }, icon('x'));
+    const form = h('form', { method: 'dialog', class: 'ask-form' },
+      h('div', { class: 'modal-body' }, ...[].concat(body).map((b) => typeof b === 'string' ? h('p', {}, b) : b),
+        field ? h('div', { class: 'field ask-field' }, h('label', { for: 'ask-field' }, input.label), field, msg) : null),
+      h('div', { class: 'modal-foot' }, cancel, go));
+    const dlg = h('dialog', { class: 'modal ask', 'aria-labelledby': 'ask-title' }, h('div', { class: 'modal-head' }, h('h2', { id: 'ask-title' }, title), close), form);
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      if (field) {
+        const v = field.value.trim(), bad = check ? check(v) : (v ? null : 'Type something first.');
+        if (bad) { msg.textContent = bad; field.focus(); return; }
+        result = v;
+      } else result = true;
+      dlg.close();
+    };
+    dlg.onclose = () => { dlg.remove(); done(result); };
+    document.body.append(dlg);
+    dlg.showModal();
+    if (field) { field.focus(); field.select(); } else cancel.focus();      // the safe button first: Enter does not go ahead by accident
+  });
+}
 
 function toast(text) {
   const t = $('toast'); t.textContent = text; t.classList.add('show');
@@ -132,6 +169,7 @@ const errText = (e) => e.message === 'login' ? 'Not logged in any more: reload t
 // Page sections, in this order.  Settings come from the Echo (settings.c) with their group; the words are here.
 const SECTIONS = [
   { id: 'Voice', icon: 'mic', intro: 'How the Echo hears you, and how it sounds when it does.' },
+  { id: 'Wake word', icon: 'ear', intro: 'Which engine listens for the wake word. Home Assistant picks the wake word itself, from the engine\'s list (the satellite\'s "Wake word" select).' },
   { id: 'Sound', icon: 'speaker', intro: 'Amazon\'s own equalizer, applied to everything the Echo plays: replies, timers, music, Bluetooth.' },
   { id: 'Lights', icon: 'sun', intro: 'The light ring. It shows listening, thinking, speaking, errors and mute whatever you set here.' },
   { id: 'Features', icon: 'sparkle', intro: 'Optional extras. While a feature is on, its entities are in Home Assistant; switched off, they are removed there. Home Assistant reconnects for a moment when you switch one.' },
@@ -163,6 +201,39 @@ const HELP = {
       if (!a.kiosk_port) return h('p', { class: 'f-bad' }, icon('warn'), h('span', {}, 'Port 2330 could not be opened, so this Echo answers every wake word. The Echo\'s log (boot.log) says why.'));
       return h('p', { class: 'f-model' }, a.kiosk_heard_s == null ? 'No claim from another Kiosk Satellite device heard yet.'
         : `Last claim from another Kiosk Satellite device: ${a.kiosk_heard_s < 90 ? a.kiosk_heard_s + ' s' : Math.round(a.kiosk_heard_s / 60) + ' min'} ago.`);
+    } },
+  wake_engine: { help: 'Amazon\'s engine is the one the Echo was built around. microWakeWord, the engine of ESPHome\'s voice satellites, takes wake words anyone can train, at the cost of hearing them much less reliably. Home Assistant: the Echo streams its microphone and your Home Assistant listens, with openWakeWord for instance.',
+    // the warning, a first model, or Home Assistant's side of it, before the switch; from or to Home Assistant the satellite restarts
+    before: (c) => c === 'microwakeword' ? mwwSwitchDialog() : c === 'homeassistant' ? haSwitchDialog() : true,
+    after: async (c, was) => { if (c === 'homeassistant' || was === 'homeassistant') await restarted(); },
+    modes: {
+      amazon: { title: 'Amazon\'s engine', tag: 'Default', sub: 'Pryon, with Amazon\'s models: what a stock Echo runs',
+        pros: ['Hears the wake word best: Amazon trained its models on vast amounts of real speech, for this very microphone array and its audio front end',
+          'Few false wakes from TV and conversation',
+          'Listens harder while the Echo itself plays music, rings or speaks, so you can talk over it',
+          '\u201c<wake word>, stop\u201d ends a ringing timer or a reply',
+          'Wake word arbitration scores with the energies of Amazon\'s own audio front end, as stock Echos did',
+          'Amazon\'s other wake words (Echo, Computer, Amazon, Ziggy) in many languages, from Amazon on this page'],
+        cons: ['Amazon\'s wake words only: no new ones'] },
+      homeassistant: { title: 'Home Assistant', sub: 'The Echo streams its microphone, your Home Assistant listens (openWakeWord, for instance)',
+        pros: ['Any wake word your Home Assistant knows, openWakeWord models of your own included, on your server\'s hardware rather than the Echo\'s',
+          'The same wake words as your other satellites, set up in one place',
+          'Sound detection keeps working'],
+        cons: ['The microphone streams to Home Assistant all the time, about 256 kbit/s on your network',
+          'Expect it to hear the wake word less reliably than Amazon\'s engine: openWakeWord\'s models, like microWakeWord\'s, are trained mostly on synthetic speech',
+          'Nothing hears the wake word while Home Assistant or the network is down',
+          'No wake word arbitration between Echos: Home Assistant lets the first satellite that heard it answer',
+          'No \u201c<wake word>, stop\u201d, no extra sensitivity while the Echo plays music, rings or speaks',
+          'Needs setting up in Home Assistant (shown when you pick it); switching restarts the satellite for a few seconds'] },
+      microwakeword: { title: 'microWakeWord', tag: 'Experimental', sub: 'The open engine of ESPHome\'s voice satellites, with the models you add below',
+        pros: ['Any wake word someone trained a model for: \u201cOkay Nabu\u201d, \u201cHey Jarvis\u201d, \u201cHey Mycroft\u201d, or your own from microWakeWord\'s training notebook',
+          'The same model files ESPHome devices (Home Assistant Voice PE) use',
+          'Sound detection and whisper detection keep working: they do not depend on the wake word engine'],
+        cons: ['Detects significantly worse: expect more missed wake words, above all from across the room or over music, and more false wakes. Its small models were trained mostly on synthetic speech, never with this Echo\'s microphones and audio front end',
+          'No \u201c<wake word>, stop\u201d: a ringing timer or a reply stops with the action button or Home Assistant only',
+          'No extra sensitivity while the Echo plays music, rings or speaks: talking over it works less often',
+          'Wake word arbitration loses the front end\'s energies and scores from the audio level instead: with several Echos, the one that answers is a rougher guess',
+          'Amazon\'s wake words, also those downloaded from Amazon, are not offered while it is on (the \u201cAlexa\u201d of microWakeWord is a model of its own)'] },
     } },
   arbitration_mode: { parent: 'arbitration', help: 'How the Echos agree on who answers. Use the same on every Echo: Echos in one mode do not settle wake words with Echos in the other.',
     modes: {
@@ -203,12 +274,14 @@ const HELP = {
   bluetooth_speaker: { icon: 'box', ha: ['Bluetooth speaker search', 'Play on Bluetooth speaker', 'Bluetooth speaker', 'Bluetooth speaker delay'], help: 'Plays everything (replies, timers, music) on a Bluetooth speaker instead of the Echo\'s own. Put the speaker in pairing mode near the Echo and switch on "Bluetooth speaker search" in Home Assistant: the Echo pairs with the strongest one it hears.' },
 };
 const CHOICE_NAMES = {
+  wake_engine: { amazon: 'Amazon', microwakeword: 'microWakeWord', homeassistant: 'Home Assistant' },
   arbitration_mode: { hassmic: 'Echo network', kiosk: 'Kiosk Satellite' },
   noise_reduction: { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' },
   online_updates: { off: 'Off', beta: 'Beta', release: 'Release' },
   bluetooth_announcement_language: { en: 'English', de: 'Deutsch', fr: 'Français', es: 'Español', it: 'Italiano', pt: 'Português', nl: 'Nederlands',
     sv: 'Svenska', da: 'Dansk', nb: 'Norsk', fi: 'Suomi', pl: 'Polski' },
 };
+const settingValueIndex = (name) => { const s = state.settings.find((x) => x.name === name); return s ? s.value : -1; };
 const settingValue = (name) => { const s = state.settings.find((x) => x.name === name); return s ? (s.type === 'choice' ? s.choices[s.value] : s.value) : undefined; };
 const label = (s) => { const t = s.label.replace(/ \(experimental\)$/, '').replace(/^Equalizer /, '').replace(' with other Echos', ''); return t[0].toUpperCase() + t.slice(1); };
 const fmt = (s, v) => {
@@ -323,6 +396,7 @@ async function load() {
   }
   render();
   $('app').classList.remove('hidden');
+  if (mwwBox) getMww().catch(() => {});                                  // the engine and its models, as Home Assistant may have picked
   if (load.started && unseen()) refreshDevices().catch(() => {});        // a new Echo in the beacons: show it now, not next round
   else if (load.started && !devRun) refreshMine().catch(() => {});       // a setting changed here or from HA: copy offers the new value
   if (!load.started) {
@@ -377,15 +451,21 @@ function control(s) {
   const names = CHOICE_NAMES[s.name] || {}, modes = (HELP[s.name] || {}).modes;
   if (modes) {                          // choices worth weighing: a card each, with what it gives and what it costs
     const cards = s.choices.map((c) => {
-      const m = modes[c], pick = () => set(s.name, c);
+      const { before, after } = HELP[s.name] || {}, m = modes[c];          // a dialog of the page's own before a choice counts
+      const pick = async () => {
+        const was = s.choices[settingValueIndex(s.name)];
+        if (was === c || (before && !(await before(c)))) return;
+        await set(s.name, c);
+        if (after && settingValue(s.name) === c) await after(c, was);
+      };
       return h('div', { class: 'mode', role: 'radio', tabindex: '0', 'aria-checked': 'false', onclick: pick,
         onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } } },
         h('div', { class: 'mode-head' }, h('span', { class: 'radio' }), h('b', {}, m.title), m.tag ? h('span', { class: 'badge' }, m.tag) : null),
         h('p', { class: 'mode-sub' }, m.sub),
-        h('ul', { class: 'pc' }, m.pros.map((t) => h('li', { class: 'pro' }, icon('plus'), h('span', {}, t))),
-          m.cons.map((t) => h('li', { class: 'con' }, icon('minus'), h('span', {}, t)))));
+        h('div', { class: 'pc-cols' }, h('ul', { class: 'pc' }, m.pros.map((t) => h('li', { class: 'pro' }, icon('plus'), h('span', {}, t)))),
+          h('ul', { class: 'pc' }, m.cons.map((t) => h('li', { class: 'con' }, icon('minus'), h('span', {}, t))))));
     });
-    return { el: h('div', { class: 'modes', role: 'radiogroup', 'aria-label': s.label }, cards),
+    return { el: h('div', { class: 'modes' + (cards.length > 2 ? ' modes-3' : ''), role: 'radiogroup', 'aria-label': s.label }, cards),
              update: (x) => cards.forEach((b, i) => { b.classList.toggle('on', i === x.value); b.setAttribute('aria-checked', String(i === x.value)); }) };
   }
   if (s.choices.length <= 4) {
@@ -460,6 +540,9 @@ function build() {
         h('div', { class: 'card-foot eq-foot' }, h('span', { class: 'help' }, haBadge(), ' also as number entities'),
           h('button', { class: 'small', onclick: async () => { for (const s of eq) await set(s.name, 0); } }, 'Flat'))));
       if (rest.length) el.append(h('div', { class: 'card' }, rest.map(settingRow)));
+    } else if (sec.id === 'Wake word') {
+      el.append(h('div', { class: 'card' }, list.map(settingRow)));
+      buildWake(el);
     } else if (sec.id === 'Echos') {
       buildEchos(el, state.settings.find((s) => s.name === 'arbitration'));
     } else if (sec.id === 'System') {
@@ -477,7 +560,7 @@ function render() {
   const sig = state.settings.map((s) => s.name).join() + '|' + !!state.arbitration;
   if (sig !== built) { built = sig; build(); }
   for (const s of state.settings) { const c = controls.get(s.name); if (c) c.update(s); }
-  renderTop(); renderAttention(); renderNetwork(); renderDevices(); renderSystem();
+  renderTop(); renderAttention(); renderNetwork(); renderDevices(); renderSystem(); renderWake();
 }
 
 function renderTop() {
@@ -504,6 +587,259 @@ function watchNav() {
   }, { rootMargin: '-80px 0px -65% 0px' });
   document.querySelectorAll('.section').forEach((s) => o.observe(s));
   watchNav.o = o;
+}
+
+// ---------------------------------------------------------------- Wake word: microWakeWord's models (mww_store.c)
+
+// ESPHome's collection (github.com/esphome/micro-wake-word-models): the browser fetches them and hands them to the Echo
+const MWW_REPO = 'https://raw.githubusercontent.com/esphome/micro-wake-word-models/main/models/v2/';
+const MWW_OFFICIAL = [['okay_nabu', 'Okay Nabu'], ['hey_jarvis', 'Hey Jarvis'], ['hey_mycroft', 'Hey Mycroft'], ['alexa', 'Alexa'],
+  ['hey_home_assistant', 'Hey Home Assistant', 'experiments/'], ['okay_computer', 'Okay Computer', 'experiments/']];
+let mwwBox, mwwWarn, mww = null, mwwBusy = '';
+const mwwOpen = new Set();                      // models whose "Tune" is open: still open after the next refresh
+const mwwId = (file) => file.replace(/\.(tflite|json)$/i, '').toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^[^a-z0-9]+/, '').slice(0, 40);
+
+async function getMww() { mww = (await echo.call('GET', '/api/mww')).json(); renderWake(); }
+
+function buildWake(el) {
+  mwwWarn = h('div');
+  mwwBox = h('div', { class: 'card' });
+  el.append(mwwWarn, mwwBox);
+}
+
+async function mwwAdd(id, model, manifest) {
+  const j = manifest ? enc.encode(manifest) : new Uint8Array(0);
+  await echo.call('POST', `/api/mww/add/${id}`, cat(cat(enc.encode(`${j.length}\n`), j), model));
+}
+
+async function mwwDo(what, fn) {
+  mwwBusy = what; renderWake();
+  try { await fn(); } catch (e) { toast(errText(e)); }
+  mwwBusy = ''; await getMww().catch(() => {}); await load().catch(() => {});
+}
+
+// files picked: a .tflite each, with the .json of the same name if there is one
+// files picked: a .tflite each, with the .json of the same name if there is one.  Map id -> { tflite, json }; throws
+// when a manifest came without its model
+function mwwGroups(list) {
+  const groups = new Map();
+  for (const f of list) { const id = mwwId(f.name), g = groups.get(id) || {}; g[/\.json$/i.test(f.name) ? 'json' : 'tflite'] = f; groups.set(id, g); }
+  const bad = [...groups].filter(([id, g]) => !g.tflite || !id).map(([id, g]) => (g.json || {}).name || id);
+  if (bad.length) throw new Error(`No .tflite for ${bad.join(', ')}: pick the model file together with its manifest`);
+  if (!groups.size) throw new Error('Pick a .tflite file');
+  return groups;
+}
+
+// adds them; the ids that came without a manifest (microWakeWord's defaults then)
+async function mwwUpload(groups) {
+  for (const [id, g] of groups) await mwwAdd(id, new Uint8Array(await g.tflite.arrayBuffer()), g.json ? await g.json.text() : null);
+  return [...groups].filter(([, g]) => !g.json).map(([id]) => id);
+}
+
+// one of ESPHome's: the browser fetches it from GitHub, the Echo gets it from here
+async function mwwFetch(id, name, dir) {
+  const get = async (ext) => { const r = await fetch(MWW_REPO + (dir || '') + id + ext); if (!r.ok) throw new Error(`GitHub: ${r.status}`); return r; };
+  let json, model;
+  try { json = await (await get('.json')).text(); model = new Uint8Array(await (await get('.tflite')).arrayBuffer()); }
+  catch (e) { throw new Error(`Cannot fetch ${name} from GitHub (this browser needs the internet): ${e.message}`); }
+  await mwwAdd(id, model, json);
+}
+
+async function mwwFiles(list) {
+  let groups;
+  try { groups = mwwGroups(list); } catch (e) { toast(e.message); return; }
+  const have = new Set(((mww || {}).models || []).map((m) => m.id)), again = [...groups.keys()].filter((id) => have.has(id));
+  if (again.length && !(await ask({ title: `Replace ${nameList(again)}?`, ok: 'Replace', body: `This Echo has ${again.length > 1 ? 'these models' : 'this model'} already. The file${again.length > 1 ? 's' : ''} you picked take${again.length > 1 ? '' : 's'} ${again.length > 1 ? 'their' : 'its'} place, with ${again.length > 1 ? 'their' : 'its'} own name and threshold.` }))) return;
+  mwwDo('Adding…', async () => {
+    const lone = await mwwUpload(groups);
+    toast(lone.length ? `Added. ${nameList(lone)} came without a manifest (.json): threshold and name are microWakeWord's defaults, change them below.` : 'Added');
+  });
+}
+
+function mwwOfficial(id, name, dir) {
+  mwwDo(`Fetching ${name} from GitHub…`, async () => { await mwwFetch(id, name, dir); toast(`${name} added`); });
+}
+
+const mwwLosses = () => [callout('warn', h('p', {}, h('b', {}, 'It hears the wake word significantly worse than Amazon\'s engine. '),
+    'Expect more missed wake words, above all from across the room or over music, and more false wakes from TV and conversation.')),
+  h('p', { class: 'ask-sub' }, 'While it is on, you also lose:'),
+  h('ul', { class: 'pc' }, ['\u201c<wake word>, stop\u201d to end a ringing timer or a reply',
+    'The extra sensitivity while the Echo plays music, rings or speaks',
+    'Amazon\'s wake words, also those downloaded from Amazon',
+    'The audio front end\'s scores in wake word arbitration: with several Echos, the one that answers is a rougher guess']
+    .map((t) => h('li', { class: 'con' }, icon('minus'), h('span', {}, t)))),
+  h('p', { class: 'help' }, 'Sound detection and whisper detection keep working. You can switch back at any time.'
+    + (settingValue('wake_engine') === 'homeassistant' ? ' Leaving Home Assistant\'s wake word restarts the satellite for a few seconds.' : ''))];
+
+// What Home Assistant needs before it hears the wake word in the Echo's stream (its docs, 2026-10: add-ons are "Apps")
+const haSteps = () => h('ol', { class: 'ha-steps' },
+  h('li', {}, h('b', {}, 'A wake word engine in Home Assistant. '), 'Settings \u203a Apps (Add-ons on older versions) \u203a ', h('b', {}, 'openWakeWord'),
+    ' \u203a Install, then Start. Settings \u203a Devices & services then shows it as discovered: Configure, Submit. Home Assistant in a container? Run ',
+    h('code', {}, 'wyoming-openwakeword'), ' beside it and add it with the Wyoming Protocol integration (port 10400).'),
+  h('li', {}, h('b', {}, 'Your own wake words (optional). '), 'Put the ', h('code', {}, '.tflite'), ' file into ', h('code', {}, '/share/openwakeword'),
+    ' (with the Samba app, for instance). The app takes ', h('code', {}, '.tflite'), ' only: an ', h('code', {}, '.onnx'),
+    ' model, as EchoMuse\'s Forge makes them, has to be converted to ', h('code', {}, '.tflite'), ' first.'),
+  h('li', {}, h('b', {}, 'The assistant. '), 'Settings \u203a Voice assistants: open the assistant this Echo uses, then \u22ee (top right) \u203a ',
+    h('b', {}, 'Add streaming wake word'), '. Under \u201cStreaming wake word engine\u201d pick openwakeword and the wake word, then Update.'),
+  h('li', {}, h('b', {}, 'This Echo. '), 'On its device page (Settings \u203a Devices & services \u203a ESPHome), pick that assistant as its ', h('b', {}, 'Assistant'), '.'));
+
+// the satellite restarts (the wake word moved to or from Home Assistant): this page's Echo answers again within seconds
+async function restarted() {
+  toast('The satellite restarts, back in a few seconds\u2026');
+  await waitBack(echo);
+  await load().catch(() => {});
+}
+
+function haSwitchDialog() {
+  const fromMww = settingValue('wake_engine') === 'microwakeword';
+  return ask({ title: 'Let Home Assistant listen?', ok: 'Stream to Home Assistant',
+    body: [callout('info', h('p', {}, h('b', {}, 'The Echo stops listening for the wake word itself and streams its microphone to Home Assistant all the time. '),
+        'Home Assistant needs a wake word engine for that; without one nothing hears the wake word. Set it up there, before or after switching:')),
+      haSteps(),
+      h('p', { class: 'ask-sub' }, 'Compared with Amazon\'s engine, you lose:'),
+      h('ul', { class: 'pc' }, ['Likely some reliability: openWakeWord\'s models are trained mostly on synthetic speech',
+        'Wake word arbitration between Echos: Home Assistant lets the first satellite that heard it answer',
+        '\u201c<wake word>, stop\u201d, and the extra sensitivity while the Echo plays music, rings or speaks',
+        'The wake word while Home Assistant or the network is down']
+        .map((t) => h('li', { class: 'con' }, icon('minus'), h('span', {}, t)))),
+      h('p', { class: 'help' }, 'The satellite restarts for a few seconds.' + (fromMww ? ' microWakeWord\'s models stay on the Echo for when you switch back.' : ''))] });
+}
+
+// Before the engine becomes microWakeWord: what it costs, and, on an Echo without a model yet, the wake word to start
+// with (one of ESPHome's, or files of your own), added before the switch: the Echo refuses microWakeWord without one.
+// Resolves true once the switch may go ahead.
+async function mwwSwitchDialog() {
+  try { await getMww(); } catch (e) { toast(errText(e)); return false; }
+  const need = !mww.models.length;
+  return new Promise((done) => {
+    let ok = false, busy = false, choice = null;
+    const msg = h('p', { class: 'help ask-msg', role: 'alert' });
+    const go = h('button', { type: 'submit', class: 'primary', disabled: need }, 'Switch to microWakeWord');
+    const cancel = h('button', { type: 'button', onclick: () => dlg.close() }, 'Cancel');
+    const close = h('button', { type: 'button', class: 'icon-btn', title: 'Close', 'aria-label': 'Close', onclick: () => dlg.close() }, icon('x'));
+    const file = h('input', { type: 'file', accept: '.tflite,.json', multiple: true, class: 'hidden' });
+    const fileName = h('span', { class: 'mww-pick-sub' }, 'A .tflite with its .json manifest');
+    const opts = [...MWW_OFFICIAL.map(([id, name, dir]) => ({ key: id, name, sub: dir ? 'experiment' : 'from ESPHome\'s collection', id, dir })),
+      { key: 'files', name: 'Files of your own…', sub: null }];
+    const rows = opts.map((o) => {
+      const row = h('label', { class: 'mww-pick' }, h('input', { type: 'radio', name: 'mww-first', value: o.key }),
+        h('span', { class: 'mww-pick-t' }, o.name, o.sub ? h('span', { class: 'mww-pick-sub' + (o.sub === 'experiment' ? ' warn' : '') }, o.sub) : fileName));
+      if (o.key === 'files') row.firstChild.onclick = () => file.click();      // also when it is ticked already: other files
+      row.firstChild.onchange = () => {
+        msg.textContent = '';
+        if (o.key === 'files') { if (!(choice && choice.key === 'files')) { choice = null; go.disabled = true; } return; }
+        choice = o; go.disabled = false;
+      };
+      return row;
+    });
+    file.onchange = () => {
+      msg.textContent = '';
+      try { const g = mwwGroups([...file.files]); choice = { key: 'files', groups: g }; fileName.textContent = [...g.keys()].join(', '); go.disabled = false; }
+      catch (e) { choice = null; go.disabled = true; msg.textContent = e.message; }
+    };
+    const pickBox = need ? [h('p', { class: 'ask-sub' }, 'This Echo has no microWakeWord model yet. Pick the wake word to start with:'),
+      h('div', { class: 'mww-picks', role: 'radiogroup' }, rows), file,
+      h('p', { class: 'help' }, 'ESPHome\'s models come from GitHub through this browser. More, and settings per model, under \u201cmicroWakeWord models\u201d once it is on.')] : [];
+    const form = h('form', { method: 'dialog', class: 'ask-form' }, h('div', { class: 'modal-body' }, ...mwwLosses(), ...pickBox, msg), h('div', { class: 'modal-foot' }, cancel, go));
+    const dlg = h('dialog', { class: 'modal ask', 'aria-labelledby': 'mww-sw-title' }, h('div', { class: 'modal-head' }, h('h2', { id: 'mww-sw-title' }, 'Switch to microWakeWord?'), close), form);
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      if (busy) return;
+      if (need) {
+        if (!choice) { msg.textContent = 'Pick a wake word first.'; return; }
+        busy = true; go.disabled = cancel.disabled = true; rows.forEach((r) => { r.firstChild.disabled = true; });
+        go.replaceChildren(h('span', { class: 'spin' }), choice.key === 'files' ? 'Adding the model…' : `Fetching ${choice.name}…`);
+        try {
+          if (choice.key === 'files') { const lone = await mwwUpload(choice.groups); if (lone.length) toast(`${nameList(lone)} came without a manifest: microWakeWord's default threshold, change it under \u201cTune\u201d`); }
+          else await mwwFetch(choice.id, choice.name, choice.dir);
+        } catch (err) {
+          busy = false; go.disabled = cancel.disabled = false; rows.forEach((r) => { r.firstChild.disabled = false; });
+          go.textContent = 'Switch to microWakeWord'; msg.textContent = errText(err); return;
+        }
+      }
+      ok = true; dlg.close();
+    };
+    dlg.oncancel = (e) => { if (busy) e.preventDefault(); };            // Escape: not while a model is on its way
+    dlg.onclose = () => { dlg.remove(); done(ok); };
+    document.body.append(dlg);
+    dlg.showModal(); cancel.focus();
+  });
+}
+
+async function mwwSave(m) {
+  try {
+    const [man, model] = await Promise.all([echo.call('GET', `/api/mww/file/${m.id}/manifest.json`), echo.call('GET', `/api/mww/file/${m.id}/model.tflite`)]);
+    const j = man.json(); j.model = `${m.id}.tflite`;               // as ESPHome expects them: side by side, named alike
+    for (const [name, data, type] of [[`${m.id}.json`, JSON.stringify(j, null, 2), 'application/json'], [`${m.id}.tflite`, model.bytes, 'application/octet-stream']]) {
+      const a = h('a', { href: URL.createObjectURL(new Blob([data], { type })), download: name });
+      document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    }
+  } catch (e) { toast(errText(e)); }
+}
+
+function mwwTune(m) {
+  const row = (label, min, max, step, value, show, key, help) => {
+    const r = h('input', { type: 'range', min: String(min), max: String(max), step: String(step), value: String(value), 'aria-label': label });
+    const out = h('output', {}, show(value));
+    const paint = () => { r.style.setProperty('--p', `${((r.value - min) * 100) / (max - min)}%`); out.textContent = show(+r.value); };
+    r.oninput = paint; r.onchange = () => mwwDo('Saving…', () => echo.call('POST', `/api/mww/edit/${m.id}`, `${key}=${r.value}\n`)); paint();
+    return h('div', { class: 'mww-tune' }, h('div', { class: 'row-label' }, label), h('p', { class: 'help' }, help), h('div', { class: 'slider' }, r, out));
+  };
+  const d = h('details', { class: 'mww-more', ontoggle: () => { if (d.open) mwwOpen.add(m.id); else mwwOpen.delete(m.id); } }, h('summary', {}, 'Tune'),
+    row('Threshold', 0.5, 0.99, 0.01, m.cutoff, (v) => v.toFixed(2), 'cutoff',
+      'How sure the model must be. Lower: it hears you more often, and wakes by mistake more often. The model\'s author set it for a Voice PE; on the Echo try 0.05 lower if it misses you.'),
+    row('Window', 1, 20, 1, m.window, (v) => `${v * 30} ms`, 'window',
+      'How long it must stay that sure. Longer: fewer false wakes from short sounds, slower to answer.'));
+  d.open = mwwOpen.has(m.id);
+  return d;
+}
+
+function renderWake() {
+  if (!mwwBox) return;
+  const eng = settingValue('wake_engine'), on = eng === 'microwakeword', ms = (mww || {}).models || [];
+  mwwWarn.replaceChildren(...(on ? [callout('warn', h('p', {}, h('b', {}, 'microWakeWord is listening for the wake word. '),
+    'It detects significantly worse than Amazon\'s engine, and \u201c<wake word>, stop\u201d, the extra sensitivity while the Echo plays and the front end\'s arbitration scores are off. Switch back above at any time.'))]
+    : eng === 'homeassistant' ? [h('div', { class: 'card' }, cardHead('Home Assistant listens', 'The Echo streams its microphone to Home Assistant, which listens for the wake word. What it needs there:', 'ha'),
+      h('div', { class: 'card-body' }, haSteps()))] : []));
+  mwwBox.classList.toggle('hidden', !on);                     // the models are microWakeWord's business: shown while it is on
+  if (!on) return;
+  if (mwwBox.contains(document.activeElement) && document.activeElement.type === 'range') return;     // not under a dragging thumb
+  const file = h('input', { type: 'file', accept: '.tflite,.json', multiple: true, class: 'hidden', onchange: () => { mwwFiles([...file.files]); file.value = ''; } });
+  const head = cardHead('microWakeWord models', ['Wake word models for microWakeWord: a ', h('code', {}, '.tflite'), ' file with its ', h('code', {}, '.json'),
+    ' manifest, as ESPHome uses them. Home Assistant\'s wake word select offers them; pick one there or with \u201cUse\u201d. ',
+    'The Echos section copies them to your other Echos.'], 'ear');
+  const rows = ms.map((m) => {
+    const active = on && mww.active === m.id, busy = !!mwwBusy;
+    const rename = async () => {
+      const n = await ask({ title: `Rename ${m.name}`, ok: 'Rename', body: 'The name Home Assistant shows in the satellite\'s wake word select and in the pipeline\'s runs. Echos in wake word arbitration only compete for wake words of the same name.',
+        input: { label: 'Name', value: m.name, max: 63 }, check: (v) => !v ? 'Give it a name.' : enc.encode(v).length > 63 ? 'At most 63 bytes.' : null });
+      if (n && n !== m.name) mwwDo('Saving…', () => echo.call('POST', `/api/mww/edit/${m.id}`, `name=${n}\n`));
+    };
+    const del = async () => {
+      const last = on && ms.length === 1;
+      if (await ask({ title: `Delete ${m.name}?`, ok: 'Delete', danger: true,
+        body: last ? [callout('info', h('p', {}, 'It is the only model, so the Echo goes back to Amazon\'s engine.'))] : 'It goes from this Echo; other Echos keep their copy.' }))
+        mwwDo('Deleting…', () => echo.call('POST', `/api/mww/delete/${m.id}`));
+    };
+    const meta = [m.langs ? m.langs.split(',').join(', ') : null, m.author || null, mb(m.size), `threshold ${m.cutoff.toFixed(2)}`].filter(Boolean).join(' · ');
+    return h('div', { class: 'row mww-row' },
+      h('div', {}, h('div', { class: 'row-label' }, m.name, active ? h('span', { class: 'badge ok' }, icon('check'), 'Listening for it') : null, h('code', { class: 'mww-id' }, m.id)),
+        h('p', { class: 'help' }, meta), mwwTune(m)),
+      h('div', { class: 'ctl btns' },
+        on && !active ? h('button', { class: 'small', disabled: busy, onclick: () => mwwDo('Switching…', () => echo.call('POST', `/api/mww/use/${m.id}`)) }, 'Use') : null,
+        h('button', { class: 'small', disabled: busy, title: 'Rename', onclick: rename }, icon('pen'), 'Rename'),
+        h('button', { class: 'small', disabled: busy, title: 'Save the .tflite and .json', onclick: () => mwwSave(m) }, icon('down')),
+        h('button', { class: 'small danger', disabled: busy, title: 'Delete', onclick: del }, icon('trash'))));
+  });
+  const have = new Set(ms.map((m) => m.id));
+  const official = h('div', { class: 'chips' }, MWW_OFFICIAL.map(([id, name, dir]) => h('button', { type: 'button', class: 'chip' + (have.has(id) ? ' on' : ''),
+    disabled: have.has(id) || !!mwwBusy || ms.length >= 16, onclick: () => mwwOfficial(id, name, dir) }, h('span', { class: 'tick' }, icon(have.has(id) ? 'check' : 'plus')), name,
+    dir ? h('span', { class: 'chip-n warn' }, 'experiment') : null)));
+  mwwBox.replaceChildren(head,
+    ms.length ? h('div', { class: 'clients' }, rows) : empty('ear', 'No microWakeWord model on this Echo yet. Add one from ESPHome\'s collection or from your files.'),
+    h('div', { class: 'card-body mww-add' }, h('p', { class: 'help' }, 'Add from ESPHome\'s collection on GitHub (your browser downloads them for the Echo):'), official),
+    h('div', { class: 'card-foot' }, mwwBusy ? h('div', { class: 'busy grow' }, h('span', { class: 'spin' }), mwwBusy) : h('span', { class: 'help grow' }, `${ms.length} of 16 models`),
+      h('button', { disabled: !!mwwBusy || ms.length >= 16, onclick: () => file.click() }, icon('up'), 'Add from files…'), file));
 }
 
 // ---------------------------------------------------------------- Echos: the network, arbitration, settings sync
@@ -974,7 +1310,7 @@ function davsLast() {
 function davsPicker(body) {
   const job = dv.job, has = (id) => !!(myArts && myArts.artifacts.some((a) => a.id === id));
   const out = h('button', { class: 'small', disabled: !!job, onclick: async () => {
-    if (!confirm('Sign this Echo out of Amazon? It leaves your Alexa app; downloading again needs a new code.')) return;
+    if (!(await ask({ title: 'Sign out of Amazon?', ok: 'Sign out', danger: true, body: 'This Echo leaves your Alexa app; downloading again needs a new code.' }))) return;
     try { await echo.call('POST', '/api/davs/logout'); } catch (e) { toast(errText(e)); }
     await getDavs(); renderDavs(true);
   } }, 'Sign out');
@@ -1078,6 +1414,7 @@ const mOn = (id) => ticked(mpick.rows, id, false), xOn = (x) => ticked(mpick.to,
 let copying = null;                             // { text, done, total } while models travel
 
 function artLabel(a) {
+  if (a.kind === 'mww') return `microWakeWord model ${a.name}`;
   if (a.kind === 'sound') return 'Sound detection, newer model';
   if (a.kind === 'whisper') return 'Whisper detection';
   const [w, ...loc] = a.name.split('-');
@@ -1088,17 +1425,24 @@ const mb = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(
 function renderModels() { if (modelBox) keepFocus(modelBox, drawModels); }
 function drawModels() {
   modelBox.innerHTML = '';
-  modelBox.append(cardHead('Copy models', 'Amazon\'s extra models from scripts/artifacts.sh (more wake words, whisper detection, the newer sound detection model), Echo to Echo instead of running the script on each. A wake word set is tried on the receiving Echo first; each Echo that gets something restarts its satellite once, for a few seconds.', 'box'));
+  modelBox.append(cardHead('Copy models', 'Amazon\'s extra models from scripts/artifacts.sh (more wake words, whisper detection, the newer sound detection model) and microWakeWord\'s models, Echo to Echo instead of adding them on each. A model is tried on the receiving Echo first; each Echo that gets one of Amazon\'s restarts its satellite once, for a few seconds.', 'box'));
   if (!myArts) { modelBox.append(empty('warn', 'This Echo cannot list its models.')); return; }
   const echos = [{ name: echo.hello.name, key: '', e: echo, arts: myArts }, ...ready().filter((d) => d.arts).map((d) => ({ name: d.echo.hello.name, key: d.echo.base, e: d.echo, arts: d.arts }))];
   const all = new Map();
   for (const x of echos) for (const a of x.arts.artifacts) if (!all.has(a.id)) all.set(a.id, a);
-  if (!all.size) { modelBox.append(empty('box', 'None of these Echos has any of Amazon\'s extra models yet: download them above, or run scripts/artifacts.sh, then copy from here.')); return; }
+  if (!all.size) { modelBox.append(empty('box', 'None of these Echos has any of Amazon\'s extra models or a microWakeWord model yet: download or add them first, then copy from here.')); return; }
   // where each model comes from: this Echo if it has it, else the first that does
   const source = (id) => echos.find((x) => x.arts.artifacts.some((a) => a.id === id));
   const theirs = (x, id) => x.arts.artifacts.find((a) => a.id === id);
   const needs = (x, id) => { const s = source(id), t = theirs(x, id); return x !== s && (!t || t.digest !== theirs(s, id).digest); };
-  const ids = [...all.keys()].sort((p, q) => artLabel(all.get(p)).localeCompare(artLabel(all.get(q))));
+  // a model every Echo listed has already, the same version everywhere, has nothing to copy: left out
+  const ids = [...all.keys()].filter((id) => echos.some((x) => needs(x, id))).sort((p, q) => artLabel(all.get(p)).localeCompare(artLabel(all.get(q))));
+  const everywhere = all.size - ids.length;
+  if (!ids.length) {
+    modelBox.append(empty('check', echos.length > 1 ? `Every Echo here has all ${plural(all.size, 'model')}, the same version: nothing to copy.`
+      : `This Echo's ${plural(all.size, 'model')}: log in to another Echo above to copy them to it.`, echos.length > 1));
+    return;
+  }
   if (echos.length > 1) modelBox.append(h('div', { class: 'pickbar' }, h('span', { class: 'pick-l' }, 'Install on'),
     chips(echos.map((x) => ({ name: x.name + (x.key ? '' : ' (this one)'), on: xOn(x), disabled: !!copying, k: 'to ' + x.key,
       toggle: () => { mpick.to.set(x.key, !xOn(x)); renderModels(); } })))));
@@ -1120,6 +1464,7 @@ function drawModels() {
       h('div', { class: 'ch-name' }, artLabel(a), h('div', { class: 'ch-sub' }, mb(theirs(src, id).size))), h('div', { class: 'ch-to' }, lines)));
   }
   modelBox.append(list);
+  if (everywhere) list.append(h('p', { class: 'help copy-same' }, `${plural(everywhere, 'more model')} ${everywhere === 1 ? 'is' : 'are'} on every Echo here already, the same version.`));
   const jobs = [];
   for (const id of ids.filter(mOn)) for (const x of echos) if (xOn(x) && needs(x, id)) jobs.push({ id, to: x, from: source(id), art: theirs(source(id), id) });
   const bytes = jobs.reduce((n, j) => n + j.art.size, 0);
@@ -1162,11 +1507,11 @@ async function waitBack(e) {             // an Echo restarting its satellite: it
 }
 
 async function copyModels(jobs) {
-  const total = jobs.reduce((n, j) => n + j.art.size, 0), notes = [], got = new Map();
-  let done = 0;
+  const total = jobs.reduce((n, j) => n + j.art.size, 0), notes = [], got = new Map();   // got: Echos that install and restart
+  let done = 0, installed = 0;                                                            // microWakeWord's: in place at commit
   copying = { text: 'Starting…', done: 0, total }; renderModels();
   for (const j of jobs) {
-    try { await transfer(j, done, total); got.set(j.to.key, j.to); }
+    try { await transfer(j, done, total); if (j.art.kind !== 'mww') got.set(j.to.key, j.to); else installed++; }
     catch (e) { notes.push(`${artLabel(j.art)} → ${j.to.name}: ${errText(e).replace(/^Error: /, '')}`); }
     done += j.art.size;
   }
@@ -1176,8 +1521,9 @@ async function copyModels(jobs) {
     catch (e) { notes.push(`${x.name}: ${errText(e).replace(/^Error: /, '')}`); }
   }
   copying = null; mpick.rows.clear();
-  toast(notes.length ? notes.join(' · ') : `Copied and installed on ${got.size} Echo${got.size === 1 ? '' : 's'}`);
+  toast(notes.length ? notes.join(' · ') : `Copied and installed: ${plural(installed + jobs.filter((j) => j.art.kind !== 'mww').length, 'model')}`);
   if (got.has('')) { setTimeout(() => location.reload(), 500); return; }       // this Echo restarted: start the page over
+  if (mwwBox) getMww().catch(() => {});
   await refreshDevices();
 }
 
@@ -1534,7 +1880,8 @@ function renderSystem() {
   for (const k of state.clients) {
     const b = h('button', { class: 'small' + (k.me ? '' : ' danger') }, k.me ? 'Log out' : 'Revoke');
     b.onclick = async () => {
-      if (!confirm(k.me ? 'Log this browser out of this Echo? You will need the action button to log in again.' : `Revoke "${k.label}"? It will need the action button to log in again.`)) return;
+      if (!(await ask(k.me ? { title: 'Log out?', ok: 'Log out', danger: true, body: 'This browser leaves this Echo. Logging in again needs the action button.' }
+        : { title: `Revoke ${k.label}?`, ok: 'Revoke', danger: true, body: 'That browser can no longer change settings here. Logging in again needs the action button.' }))) return;
       try { await echo.call('POST', '/api/revoke', k.pub); } catch (e) { toast(errText(e)); return; }
       if (k.me) showLogin(); else load();
     };

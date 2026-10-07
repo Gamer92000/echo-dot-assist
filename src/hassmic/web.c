@@ -22,6 +22,8 @@
  *   adb over Wi-Fi (a root shell for the network) takes a press of its own: POST /api/adb "on" waits like a login.
  *   Artifacts (artifacts.c): listed, read and written in pieces over signed requests, so a page logged in to two Echos
  *   copies models from one to the other; root installs them.
+ *   microWakeWord's models (mww_store.c): listed, added (uploaded whole, checked by loading them), renamed, tuned,
+ *   deleted and picked over signed requests; they are hassmic's own, nothing waits for root.
  *   Amazon itself (davs.c): POST /api/davs/login starts a code pair login (the code on the page, GET /api/davs tells
  *   where it stands), /api/davs/fetch downloads an artifact; installing is the artifacts install.  The tokens of the
  *   registration never reach the page — plain HTTP.
@@ -47,6 +49,7 @@
 #include "diag.h"
 #include "sound.h"
 #include "hash.h"
+#include "mww.h"
 #include "netio.h"
 #include "settings.h"
 #include "wifi.h"
@@ -341,8 +344,8 @@ static int read_request(int fd, struct req *r)
         else if (!strcasecmp(line, "X-HM-Ctr")) snprintf(r->ctr, sizeof r->ctr, "%s", v);
         else if (!strcasecmp(line, "X-HM-Mac")) snprintf(r->mac, sizeof r->mac, "%s", v);
     }
-    /* a piece of an artifact is the one big body: everything else is a few lines */
-    if (cl < 0 || cl > (strncmp(r->path, "/api/artifact/chunk/", 20) ? MAX_BODY : ART_CHUNK_MAX)) return -2;
+    /* a piece of an artifact and a microWakeWord model are the big bodies: everything else is a few lines */
+    if (cl < 0 || cl > (!strncmp(r->path, "/api/artifact/chunk/", 20) ? ART_CHUNK_MAX : !strncmp(r->path, "/api/mww/add/", 13) ? MWW_MODEL_MAX + 16384 : MAX_BODY)) return -2;
     if (!(r->body = malloc((size_t)cl + 1))) return -1;
     size_t have = n - hl < (size_t)cl ? n - hl : (size_t)cl;
     memcpy(r->body, hdr + hl, have);
@@ -413,7 +416,7 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
         n += (size_t)snprintf(o + n, cap - n, "%s\"Sound detection: no model on this Echo (neither the firmware's nor one from scripts/artifacts.sh)\"", w++ ? "," : "");
     if (core_sound_failed())
         n += (size_t)snprintf(o + n, cap - n, "%s\"Sound detection could not start: its model did not load, so it was switched off (boot.log says why)\"", w++ ? "," : "");
-    { const struct core_wake_word *l; if (core_local_wake && core_wake_words(&l) <= 1)
+    { const struct core_wake_word *l; if (core_local_wake && core_wake_engine(-1) == WAKE_AMAZON && core_wake_words(&l) <= 1)
         n += (size_t)snprintf(o + n, cap - n, "%s\"Wake words: only Alexa, Amazon's others are not installed (scripts/artifacts.sh)\"", w++ ? "," : ""); }
     pthread_mutex_unlock(&core_lock);
     float t = diag_soc_temp(), cpu = diag_cpu();
@@ -480,6 +483,76 @@ static void artifact_api(int fd, struct req *r)
     else if (write && sscanf(r->path, "/api/artifact/chunk/%79[^/]/%159[^/]/%ld", id, file, &a) == 3) { unslash(file); rc = art_chunk(id, file, a, r->body, r->blen, err, sizeof err); }
     else if (write && sscanf(r->path, "/api/artifact/commit/%79[^/]", id) == 1) rc = art_commit(id, err, sizeof err);
     else if (write && !strcmp(r->path, "/api/artifact/install")) rc = art_install(err, sizeof err);
+    else snprintf(err, sizeof err, "not found");
+    if (!rc) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
+    jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
+    respond_sjson(fd, r, 400, o);
+}
+
+/* /api/mww                              GET   {"engine","active","models":[...]}: microWakeWord's models (mww_store.c)
+ * /api/mww/add/<id>                     POST  "<manifest length>\n<manifest JSON><model.tflite>": a new model, or a new
+ *                                             version of <id> (length 0: no manifest, defaults)
+ * /api/mww/edit/<id>                    POST  "name=..", "cutoff=0.85", "window=5" lines
+ * /api/mww/delete/<id>                  POST
+ * /api/mww/use/<id>                     POST  the active wake word (with microWakeWord on)
+ * /api/mww/file/<id>/<manifest.json|model.tflite>  GET  the file, to save it
+ * All signed. */
+static void mww_api(int fd, struct req *r)
+{
+    char err[200] = "", o[300], ej[260], id[64] = "", file[24] = ""; int rc = -1, write = !strcmp(r->method, "POST");
+    if (!signed_ok(r, write)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    if (!write && !strcmp(r->path, "/api/mww")) {
+        size_t cap = 16384, n = 0; char *t = malloc(cap);
+        if (!t) { respond_sjson(fd, r, 503, "{\"error\":\"no memory\"}"); return; }
+        pthread_mutex_lock(&core_lock);
+        const struct core_wake_word *w; int k = core_wake_words(&w), mww = core_wake_engine(-1) == WAKE_MWW;
+        int eng = core_wake_engine(-1);
+        n += (size_t)snprintf(t + n, cap - n, "{\"engine\":\"%s\",\"active\":", eng == WAKE_HA ? "homeassistant" : mww ? "microwakeword" : "amazon");
+        if (mww && k) { jesc(ej, sizeof ej, w[core_wake_word(-1)].id); n += (size_t)snprintf(t + n, cap - n, "\"%s\"", ej); }
+        else n += (size_t)snprintf(t + n, cap - n, "null");
+        pthread_mutex_unlock(&core_lock);
+        n += (size_t)snprintf(t + n, cap - n, ",\"max\":%d,\"models\":", MWW_MODEL_MAX);
+        n += mww_list_json(t + n, cap - n - 2);
+        n += (size_t)snprintf(t + n, cap - n, "}");
+        respond_s(fd, r, 200, "application/json", NULL, t, n); free(t); return;
+    }
+    if (!write && sscanf(r->path, "/api/mww/file/%63[^/]/%23s", id, file) == 2) {
+        char p[400], *data; long len; FILE *f;
+        if (!mww_good_id(id) || (strcmp(file, "manifest.json") && strcmp(file, "model.tflite"))) snprintf(err, sizeof err, "no such file");
+        else {
+            snprintf(p, sizeof p, "%s/%s/%s", mww_dir(), id, file);
+            if (!(f = fopen(p, "rb"))) snprintf(err, sizeof err, "no such model");
+            else {
+                fseek(f, 0, SEEK_END); len = ftell(f); rewind(f);
+                data = len >= 0 && len <= MWW_MODEL_MAX ? malloc((size_t)len + 1) : NULL;
+                if (data && fread(data, 1, (size_t)len, f) == (size_t)len) {
+                    fclose(f);
+                    respond_s(fd, r, 200, file[0] == 'm' && file[1] == 'a' ? "application/json" : "application/octet-stream", NULL, data, (size_t)len);
+                    free(data); return;
+                }
+                fclose(f); free(data); snprintf(err, sizeof err, "cannot read it");
+            }
+        }
+    }
+    else if (write && sscanf(r->path, "/api/mww/add/%63s", id) == 1) {
+        char *nl = memchr(r->body, '\n', r->blen < 16 ? r->blen : 16), *end; long jl = nl ? strtol(r->body, &end, 10) : -1;
+        if (!nl || end != nl || jl < 0 || (size_t)jl > r->blen - (size_t)(nl + 1 - r->body)) snprintf(err, sizeof err, "bad request");
+        else {
+            const char *j = nl + 1; size_t ml = r->blen - (size_t)(nl + 1 - r->body) - (size_t)jl;
+            rc = mww_add(id, j, (size_t)jl, j + jl, ml, err, sizeof err);
+        }
+    }
+    else if (write && sscanf(r->path, "/api/mww/edit/%63s", id) == 1) rc = mww_edit(id, r->body, err, sizeof err);
+    else if (write && sscanf(r->path, "/api/mww/delete/%63s", id) == 1) rc = mww_delete(id, err, sizeof err);
+    else if (write && sscanf(r->path, "/api/mww/use/%63s", id) == 1) {
+        pthread_mutex_lock(&core_lock);
+        const struct core_wake_word *w; int k = core_wake_words(&w), i;
+        for (i = 0; i < k && strcmp(w[i].id, id); i++) ;
+        if (core_wake_engine(-1) != WAKE_MWW) snprintf(err, sizeof err, "switch the wake word engine to microWakeWord first");
+        else if (i == k) snprintf(err, sizeof err, "no such model");
+        else { core_wake_word(i); core_entities_changed(); rc = 0; }  /* Home Assistant's select reads the pick on reconnect */
+        pthread_mutex_unlock(&core_lock);
+    }
     else snprintf(err, sizeof err, "not found");
     if (!rc) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
     jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
@@ -750,6 +823,7 @@ static void handle(int fd)
     }
     else if (!strncmp(r.path, "/api/artifact", 13)) artifact_api(fd, &r);
     else if (!strncmp(r.path, "/api/davs", 9)) davs_api(fd, &r);
+    else if (!strncmp(r.path, "/api/mww", 8)) mww_api(fd, &r);
     else if (!strncmp(r.path, "/api/wifi", 9)) wifi_api(fd, &r);
     else if (!strcmp(r.method, "GET") && !strncmp(r.path, "/api/log/", 9)) log_api(fd, &r);
     else respond_json(fd, 404, "{\"error\":\"not found\"}");

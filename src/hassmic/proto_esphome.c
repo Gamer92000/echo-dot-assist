@@ -1077,6 +1077,7 @@ static void on_event(const unsigned char *p, const unsigned char *end)
     if (cancelled == 1 || (cancelled == 2 && type != EV_RUN_START && type != EV_ERROR)) return;
     if (type == EV_RUN_START || type == EV_ERROR) cancelled = 0;
     switch (type) {
+    case EV_WAKE_END:   core_remote_wake(); break;          /* the wake word was heard in Home Assistant (-w remote) */
     case EV_STT_START:  core_set_state(LISTENING); break;
     case EV_VAD_END:    core_mic_off(); if (core_state() == LISTENING) core_set_state(THINKING); break;
     case EV_STT_END:    fprintf(stderr, "transcript: %s\n", text); core_mic_off(); if (core_state() == LISTENING) core_set_state(THINKING); break;

@@ -38,8 +38,8 @@ Models not in the table: what is known and how to add one is in [`devices/`](dev
 |-----------------------------------------------|-------------------------|----------------------------------------------|--------------------------|
 | Voice assistant                               | Alexa (Amazon cloud)    | Home Assistant Assist                        | Home Assistant Assist    |
 | Amazon's mic processing (AEC, beamforming)    | ✅                      | ✅                                           | ✅                       |
-| Wake word on the device                       | ✅                      | ✅ "Alexa"; "Echo", "Computer", … with `scripts/artifacts.sh` ([details](devices/donut/README.md#3-optional-another-wake-word)) | ✅ same      |
-| Wake word in Home Assistant instead           | ❌                      | ✅ (`-w remote`)                             | ✅ (`-w remote`)         |
+| Wake word on the device                       | ✅                      | ✅ "Alexa"; "Echo", "Computer", … with `scripts/artifacts.sh` ([details](devices/donut/README.md#3-optional-another-wake-word)); **experimental**: any microWakeWord model ("Okay Nabu", "Hey Jarvis", your own), detecting much worse ([details](#microwakeword)) | ✅ same      |
+| Wake word in Home Assistant instead           | ❌                      | ✅ settings page, or `-w remote` ([details](#wake-word-in-home-assistant)) | ✅ (`-w remote`)         |
 | Interrupt a reply ("Alexa" / "Alexa, stop")   | ✅                      | ✅                                           | ✅                       |
 | Several Echos hear it, only the nearest answers | ✅ (Amazon cloud)      | ✅ between these Echos, on the LAN           | ❌                       |
 | Timers                                        | ✅                      | ✅                                           | ❌                       |
@@ -68,6 +68,33 @@ Details:
   Amazon's models only hear it in the two seconds after it; out of silence, "Alexa, stop the music" goes to Home
   Assistant as a normal command. While a timer rings or something plays, the wake word is
   accepted more readily, as Amazon's models are tuned to do.
+- **microWakeWord**<a id="microwakeword"></a> (experimental, off by default): instead of Amazon's engine, the Echo can
+  listen with [microWakeWord](https://github.com/kahrendt/microWakeWord), the engine of ESPHome's voice satellites
+  (Home Assistant Voice PE), for any wake word someone trained a model for. **It detects significantly worse than
+  Amazon's engine**: expect more missed wake words, above all from across the room or over music, and more false wakes;
+  its small models were trained mostly on synthetic speech and never with the Echo's microphones. While it is on you
+  also lose "<wake word>, stop", the extra sensitivity while the Echo plays music, rings or speaks, Amazon's wake words
+  (also those downloaded from Amazon), and the audio front end's energies in wake word arbitration (the Echos then
+  score by the audio level, a rougher guess). Sound and whisper detection keep working. Switch it under "Wake word" on
+  the [settings page](#settings-page): a dialog lists these costs and, on an Echo without a model yet, asks for the
+  wake word to start with (one of ESPHome's, fetched from GitHub by your browser, or your own `.tflite` with its
+  `.json` manifest) before it switches. While microWakeWord is on, the same section manages the models: add more of
+  ESPHome's (Okay Nabu, Hey Jarvis, Hey Mycroft, Alexa, and the experimental ones) or your own, rename them, tune their
+  threshold, save them, delete them; "Copy models" in the Echos section copies
+  them to your other Echos. Home Assistant's wake word select then offers these models. The models are ESPHome's own
+  files (`.tflite`, TensorFlow Lite, not ONNX); the Echo runs them with its own interpreter, which gives the same
+  results as TensorFlow Lite. Switching back to Amazon's engine, or deleting the last model, restores everything.
+- **Wake word in Home Assistant**<a id="wake-word-in-home-assistant"></a>: the third choice under "Wake word" on the
+  settings page (or `-w remote` in `ARGS`, which then decides and the page cannot change it). The Echo stops listening
+  itself and streams its microphone to Home Assistant all the time (about 256 kbit/s), whose wake word engine listens:
+  openWakeWord, with your own models too. The page's dialog walks through Home Assistant's side: the openWakeWord app
+  (or `wyoming-openwakeword` beside a Home Assistant container), custom `.tflite` models in `/share/openwakeword` (the
+  app takes `.tflite` only: an `.onnx`, as EchoMuse's Forge makes them, needs converting first), "Add streaming wake
+  word" on the assistant, and that assistant on the Echo's device page. When Home Assistant hears the wake word the
+  Echo answers as on its own: the sound, the ring, and Amazon's front end held on the talker until the command ends.
+  It costs: no wake word arbitration between Echos (Home Assistant lets the first satellite answer), no "<wake word>,
+  stop" or extra sensitivity while the Echo plays, nothing while Home Assistant is down, and likely some reliability.
+  Switching to or from it restarts the satellite for a few seconds.
 - **Several Echos**: like stock, only the Echo that heard the wake word best answers (among Echos listening for the same
   word: one on "Echo" and one on "Alexa" each answer their own); the others stay silent (no
   sound, no light). The Echos settle it among themselves on the local network in 0.2 s, by how clearly the word stood
@@ -291,7 +318,8 @@ Every Echo serves a settings page at `http://<echo-ip>:28931/`; "Visit" on the d
 it, and its diagnostic entity "Web UI address" shows the address. On first use, press "Ask the Echo", then the action
 button (the dot) within a minute: the ring shows that a login waits, and the press approves this browser on this
 Echo from then on. The page shows what does not work and why (Home Assistant not connected, wake word or whisper
-models missing), every setting, and the browsers approved (revoke there). Wake word arbitration: the network, the
+models missing), every setting, and the browsers approved (revoke there). "Wake word" picks the engine (Amazon's, or
+the experimental [microWakeWord](#microwakeword) with what each gives and costs) and manages microWakeWord's models. Wake word arbitration: the network, the
 Echos in it, and those outside it with the reason (no key yet, a second network beside it) and what to do. Echos: every
 Echo this one hears (and any you add by address). Echos in one network trust each other, so a browser logged in on one
 is let in on the others without their buttons; an Echo's own login page offers "Log in through <another Echo>" for
@@ -344,7 +372,7 @@ ARGS=""                     # extra options, below
 |---|---|
 | `-W 0` | no settings page (port 28931) |
 | `-m <pryon.manifest>` | wake word model to start with, until one is picked in Home Assistant |
-| `-w remote` | wake word detection in Home Assistant (openWakeWord) instead of on the Echo |
+| `-w remote` | wake word detection in Home Assistant (openWakeWord) instead of on the Echo; the settings page's "Wake word" does the same without it, and cannot change it while it is set |
 | `-E` | no sound on wake |
 | `-L` | leave the LED ring alone |
 | `-V` | leave the volume buttons alone |

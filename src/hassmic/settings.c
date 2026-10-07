@@ -17,6 +17,7 @@
 const char *const denoise_names[4] = { "Off", "Low", "Medium", "High" };
 static const char *const denoise_values[4] = { "off", "low", "medium", "high" };
 static const char *const arb_modes[2] = { "hassmic", "kiosk" };            /* ARB_HASSMIC, ARB_KIOSK */
+static const char *const wake_engines[3] = { "amazon", "microwakeword", "homeassistant" };  /* WAKE_AMAZON, WAKE_MWW, WAKE_HA */
 
 const struct bt_lang bt_langs[] = {
     { "en", "English", "Connected to %s", "Disconnected from %s", "Connected to a Bluetooth device", "Disconnected from a Bluetooth device" },
@@ -43,13 +44,15 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { MIC_LEVEL, DENOISE, WAKE_SOUND, MUTE, DND, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, ARB_MODE, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WIFI_MOTION,
+enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, MUTE, DND, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, ARB_MODE, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WIFI_MOTION,
           WIFI_SENS, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, UPDATES, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
  * listed()); everything else here is on the settings page only, except what Home Assistant always shows (wake sound,
  * mute, do not disturb, LEDs, equalizer). */
 static const struct setting table[NSET] = {
+    /* main.c keeps it; microWakeWord's models are in state/mww (mww_store.c), not in an export */
+    [WAKE_ENGINE] = { "wake_engine", "Wake word engine", "Wake word", NULL, S_CHOICE, 0, 0, 1, 0 },
     [MIC_LEVEL]   = { "mic_level", "Mic level", "Voice", "dBFS", S_INT, MICGAIN_LEVEL_MIN, MICGAIN_LEVEL_MAX, 1, 0 },
     [DENOISE]     = { "noise_reduction", "Noise reduction", "Voice", NULL, S_CHOICE, 0, 0, 1, 0 },
     [WAKE_SOUND]  = { "wake_sound", "Wake sound", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
@@ -114,6 +117,7 @@ int settings_choices(const struct setting *s, const char *const **names)
         *names = bt_lang_codes; return bt_lang_count;
     case UPDATES: *names = update_channels; return 3;
     case ARB_MODE: *names = arb_modes; return 2;
+    case WAKE_ENGINE: *names = wake_engines; return 3;
     default: *names = NULL; return 0;
     }
 }
@@ -121,6 +125,7 @@ int settings_choices(const struct setting *s, const char *const **names)
 int settings_get(const struct setting *s)
 {
     switch (s - table) {
+    case WAKE_ENGINE: return core_wake_engine(-1);
     case MIC_LEVEL: return mic_level;
     case DENOISE: return core_mic_denoise(-1);
     case WAKE_SOUND: return core_wake_sound(-1);
@@ -152,6 +157,7 @@ int settings_get(const struct setting *s)
 static void put(enum id i, int v)
 {
     switch (i) {
+    case WAKE_ENGINE: core_wake_engine(v); break;
     case MIC_LEVEL: mic_level = v; core_mic_level(v); break;
     case DENOISE: core_mic_denoise(v); break;
     case WAKE_SOUND: core_wake_sound(v); break;
@@ -292,6 +298,17 @@ void settings_preset(void)
     if (rename(p, done)) remove(p);                     /* once only, whatever happened */
 }
 
+int settings_peek(const char *name, char *out, size_t cap)
+{
+    char p[300], line[160]; FILE *f; size_t k = strlen(name); int r = -1;
+    path(p, sizeof p, "config");
+    if (!(f = fopen(p, "r"))) return -1;
+    while (r && fgets(line, sizeof line, f))
+        if (!strncmp(line, name, k) && line[k] == '=') { line[strcspn(line, "\r\n")] = 0; snprintf(out, cap, "%s", line + k + 1); r = 0; }
+    fclose(f);
+    return r;
+}
+
 int settings_mic_level(void) { return mic_level; }
 int settings_on(const char *name) { const struct setting *s = settings_find(name); return s && s->type == S_BOOL && settings_get(s); }
 const struct bt_lang *settings_bt_lang(void) { return &bt_langs[bt_lang]; }
@@ -306,6 +323,7 @@ int settings_set(const char *name, const char *value, char *err, size_t errsz)
     if (parse(s, value, &v)) { snprintf(err, errsz, "%s: \"%s\" is not a value it takes", name, value); return -1; }
     int was = settings_get(s);
     put((enum id)(s - table), v);
+    if (s - table == WAKE_ENGINE && settings_get(s) != v) { snprintf(err, errsz, "%s: %s", name, core_wake_refused()); return -1; }
     if (ours((enum id)(s - table))) settings_save();
     core_settings_changed();
     if (s->feature && was != v) core_entities_changed();          /* Home Assistant reads the list again */

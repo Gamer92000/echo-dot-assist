@@ -86,11 +86,20 @@ enum { SPEAKER_NONE, SPEAKER_MIXER, SPEAKER_ABSOLUTE };
 void core_speaker(int mode, int pct);            /* not the lock: playing on the Echo's speaker, a Bluetooth speaker with a
                                                     volume of its own through the mixer, or one with absolute volume (pct:
                                                     its own; the mixer at full scale).  The Echo's own volume comes back */
-/* Wake word models: the stock "Alexa" plus model sets in the models directory (README, "Another wake word").  The list
- * is fixed after start; Home Assistant picks the active one. */
+/* Wake word models: with Amazon's engine the stock "Alexa" plus model sets in the models directory (README, "Another wake
+ * word"), with microWakeWord its models (mww.h).  Listed anew when the engine or the models change; Home Assistant
+ * picks the active one. */
 struct core_wake_word { char id[64], name[64], lang[16], manifest[256]; };
 int  core_wake_words(const struct core_wake_word **list);  /* count */
 int  core_wake_word(int set);                    /* index of the active one; set >= 0 switches to it and keeps it, -1 reads */
+/* The engine (lock held): Amazon's (the model's own), microWakeWord (models in state/mww, mww.h), or Home Assistant's
+ * (the mic streams, it listens: needs a restart either way, asked for here); the wake word list is the engine's.  -1
+ * reads; microWakeWord without a model, or a change while hassmic.conf says -w remote, is refused (the engine stays) */
+enum { WAKE_AMAZON, WAKE_MWW, WAKE_HA };       /* WAKE_HA: Home Assistant listens in the stream (-w remote) */
+int  core_wake_engine(int set);
+const char *core_wake_refused(void);             /* lock held: why the last core_wake_engine(set) did not take */
+void core_remote_wake(void);                     /* lock held: Home Assistant heard the wake word (WAKE_HA) */
+void core_wake_models_changed(void);         /* not the lock: a model was added, changed or deleted (mww_store.c) */
 int  core_eq(int band);                          /* speaker equalizer, 0 bass / 1 mid / 2 treble: -6..+6 dB */
 void core_set_eq(int band, int db);              /* the mixer keeps it across reboots */
 int  core_led_auto(int set);                     /* LED ring follows the light sensor (stock's own engine, the default); -1 reads */

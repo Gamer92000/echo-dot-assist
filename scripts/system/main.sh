@@ -195,11 +195,12 @@ ota_watch() {
         if [ -f /data/local/hassmic/state/wifi-request ] && [ ! -d $WIFI/lock ] && [ -f $D/wifi.sh ]; then
             sh $D/wifi.sh take 2>&1 | stamped &           # takes the lock first thing, long before the next look
         fi
-        # renamed on the settings page (main.c core_rename): the name is in what the satellite builds at start, mDNS and
-        # avahi's host name included
+        # asked for on the settings page: a rename (main.c core_rename; the name is in what the satellite builds at start,
+        # mDNS and avahi's host name included) or the wake word moving to or from Home Assistant (core_wake_engine)
         if [ -f /data/local/hassmic/state/restart ]; then
+            why=$(head -c 40 /data/local/hassmic/state/restart | tr -cd 'a-z ')
             rm -f /data/local/hassmic/state/restart
-            say "== renamed on the settings page, restarting hassmic"
+            say "== ${why:-restart} asked for on the settings page, restarting hassmic"
             stop hassmic; start hassmic
         fi
         [ -f $IN/request ] || continue

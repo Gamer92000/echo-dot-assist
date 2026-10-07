@@ -45,6 +45,7 @@
 #include "micgain.h"
 #include "netio.h"
 #include "wake.h"
+#include "mww.h"
 #include "core.h"
 #include "ota.h"
 #include "sendspin.h"
@@ -297,21 +298,27 @@ static void playback_hint(void)
 }
 
 /* ---------------------------------------------------------------- wake word models
- * The firmware only has "Alexa"; other keywords are model sets fetched from Amazon once (README, "Another wake word")
- * and kept in <models>/<keyword>-<language>/pryon.manifest.  All are offered to Home Assistant, which shows them in the
- * satellite's wake word select; its pick is kept in state/wake_word and loaded live by the capture thread.  -m names
- * the model to use until Home Assistant has picked one (before 2026-09-25 it was the only way, and Home Assistant was
- * told "Alexa" whatever -m said). */
+ * Amazon's engine: the firmware only has "Alexa"; other keywords are model sets fetched from Amazon once (README,
+ * "Another wake word") and kept in <models>/<keyword>-<language>/pryon.manifest.  microWakeWord (the settings page's
+ * wake word engine, off by default): the models in state/mww (mww.h).  The engine's are offered to Home Assistant, which
+ * shows them in the satellite's wake word select; its pick is kept in state/wake_word (state/mww_word for microWakeWord)
+ * and loaded live by the capture thread.  -m names the Amazon model to use until Home Assistant has picked one (before
+ * 2026-09-25 it was the only way, and Home Assistant was told "Alexa" whatever -m said). */
 #define MAX_WAKE_WORDS 16
 static struct core_wake_word wake_words[MAX_WAKE_WORDS];
 static int n_wake_words, wake_active;               /* under core_lock once running */
+static int wake_engine;                             /* WAKE_AMAZON / WAKE_MWW, under core_lock once running */
+static const char *wake_m_arg;                      /* -m */
+static int wake_cmdline_remote;                     /* -w remote: hassmic.conf decides, not the settings page */
+static int wake_next = -1;                          /* asked for, takes effect with the restart */
+static const char *wake_refused = "";
 static atomic_int wake_switch;                      /* capture thread: load wake_words[wake_active] */
 
 static const char *models_dir(void) { const char *e = getenv("HASSMIC_MODELS"); return e ? e : "/data/local/hassmic/models"; }
 static const char *wake_word_path(void)
 {
     static char p[256]; const char *d = getenv("HASSMIC_STATE");
-    snprintf(p, sizeof p, "%s/wake_word", d ? d : "/data/local/hassmic/state");
+    snprintf(p, sizeof p, "%s/%s", d ? d : "/data/local/hassmic/state", wake_engine == WAKE_MWW ? "mww_word" : "wake_word");
     return p;
 }
 
@@ -347,11 +354,32 @@ static int wake_word_find(const char *id)
     return hit;
 }
 
-static void wake_words_scan(const char *m_arg)
+/* microWakeWord's models: named by their manifests */
+static void mww_words_scan(void)
 {
-    char path[512], saved[64] = ""; DIR *d; struct dirent *e; FILE *f; int def = 0;
-    wake_word_add(board.wake_id, board.wake_manifest);      /* the firmware's own: always there */
-    if ((d = opendir(models_dir()))) {
+    static struct mww_info l[MWW_MODELS_MAX]; char path[512];
+    for (int i = 0, k = mww_list(l, MWW_MODELS_MAX); i < k && n_wake_words < MAX_WAKE_WORDS; i++) {
+        struct core_wake_word *w = &wake_words[n_wake_words++];
+        mww_paths(l[i].id, path, NULL, sizeof path);
+        snprintf(w->id, sizeof w->id, "%.47s", l[i].id); snprintf(w->name, sizeof w->name, "%.63s", l[i].name);
+        snprintf(w->manifest, sizeof w->manifest, "%.255s", path);
+        const char *lang = l[i].langs[0] ? l[i].langs : "en";               /* Home Assistant's select wants one */
+        snprintf(w->lang, sizeof w->lang, "%.*s", (int)strcspn(lang, ","), lang);
+    }
+}
+
+/* lock held once running: the engine's wake words, the saved pick active (else -m's, else the first) */
+static void wake_words_scan(void)
+{
+    char path[512], saved[64] = ""; DIR *d; struct dirent *e; FILE *f; int def = 0; const char *m_arg = wake_m_arg;
+    n_wake_words = 0;
+    if (wake_engine == WAKE_MWW) {
+        mww_words_scan();
+        if (!n_wake_words) { fprintf(stderr, "wake word: no microWakeWord model, back to Amazon's engine\n"); wake_engine = WAKE_AMAZON; }
+        else m_arg = NULL;
+    }
+    if (wake_engine == WAKE_AMAZON) wake_word_add(board.wake_id, board.wake_manifest);      /* the firmware's own: always there */
+    if (wake_engine == WAKE_AMAZON && (d = opendir(models_dir()))) {
         while ((e = readdir(d))) {
             if (e->d_name[0] == '.') continue;
             snprintf(path, sizeof path, "%s/%s/pryon.manifest", models_dir(), e->d_name);
@@ -374,10 +402,65 @@ static void wake_words_scan(const char *m_arg)
         fclose(f);
     }
     for (int i = 0; i < n_wake_words; i++)
-        fprintf(stderr, "wake word: %s \"%s\" (%s)%s\n", wake_words[i].id, wake_words[i].name, wake_words[i].lang, i == wake_active ? ", active" : "");
+        fprintf(stderr, "wake word: %s \"%s\" (%s%s)%s\n", wake_words[i].id, wake_words[i].name, wake_words[i].lang,
+                wake_engine == WAKE_MWW ? ", microWakeWord" : "", i == wake_active ? ", active" : "");
 }
 
 int core_wake_words(const struct core_wake_word **list) { *list = wake_words; return n_wake_words; }
+const char *core_wake_refused(void) { return wake_refused; }
+
+/* lock held.  The list is new: Home Assistant reads it on its next connection, so the link is closed (as when a
+ * feature's entities change) */
+static void wake_list_changed(void)
+{
+    atomic_store(&wake_switch, 1);
+    core_entities_changed();
+}
+
+/* The wake word in Home Assistant (WAKE_HA) or here is decided at start (arbitration, the protocol's flags, what HA
+ * lists all follow it): switching between the two writes the setting and has root restart the satellite, as a rename
+ * does (state/restart, main.sh); until then the setting reads what was asked for. */
+int core_wake_engine(int set)
+{
+    static struct mww_info one;
+    int cur = wake_next >= 0 ? wake_next : core_local_wake ? wake_engine : WAKE_HA;
+    if (set < 0 || set == cur) return cur;
+    wake_refused = "";
+    if (wake_cmdline_remote) {
+        wake_refused = "hassmic.conf starts the satellite with -w remote: take that out of ARGS first";
+        fprintf(stderr, "wake word: %s\n", wake_refused); return cur;
+    }
+    if (set == WAKE_MWW && !mww_list(&one, 1)) {
+        wake_refused = "no microWakeWord model on this Echo yet: add one first";
+        fprintf(stderr, "wake word: no microWakeWord model yet, the engine stays\n"); return cur;
+    }
+    if (set == WAKE_HA || !core_local_wake || wake_next >= 0) {     /* (a restart already asked for: another one) */
+        wake_next = set;
+        settings_save();                                    /* before root can act on the restart */
+        if (write_state("restart", "wake word engine\n")) { wake_next = -1; settings_save(); wake_refused = "cannot ask for the restart"; return cur; }
+        fprintf(stderr, "wake word: engine %s from the next start, restart asked\n", set == WAKE_HA ? "Home Assistant's" : set == WAKE_MWW ? "microWakeWord" : "Amazon's");
+        return set;
+    }
+    wake_engine = set == WAKE_MWW ? WAKE_MWW : WAKE_AMAZON;
+    fprintf(stderr, "wake word: engine now %s\n", wake_engine == WAKE_MWW ? "microWakeWord" : "Amazon's");
+    wake_words_scan();
+    wake_list_changed();
+    return wake_engine;
+}
+
+void core_wake_models_changed(void)
+{
+    pthread_mutex_lock(&core_lock);
+    if (wake_engine == WAKE_MWW) {
+        char active[64]; snprintf(active, sizeof active, "%s", n_wake_words ? wake_words[wake_active].id : "");
+        wake_words_scan();
+        if (wake_engine != WAKE_MWW) settings_save();       /* the last one went: Amazon's again, also after a restart */
+        else if (strcmp(active, wake_words[wake_active].id)) fprintf(stderr, "wake word: %s gone, now %s\n", active, wake_words[wake_active].id);
+        wake_list_changed();                                 /* also when only the active one's cutoff changed: reloaded */
+        core_settings_changed();
+    }
+    pthread_mutex_unlock(&core_lock);
+}
 
 int core_wake_word(int set)
 {
@@ -411,12 +494,12 @@ static void afe_done(void)                          /* any thread: no command fo
  * Stock PuffinApp sets the flag by reading LASP_CMD_REQUEST_ARBITRATION_JSON and clears it with
  * LASP_CMD_NOTIFY_ASR_STREAM_STOPPED; those also start and stop the front end's diagnostics with their metrics, so this
  * uses the plain switch.  No timeout in the front end, and the mixer keeps the state: cleared at start in case hassmic
- * died while listening.  Not with the wake word at the server (-w remote): the mic streams all the time then, and the
- * cancellers would never adapt. */
+ * died while listening.  With the wake word at the server (-w remote) the mic streams all the time, and the cancellers
+ * must keep adapting while nobody talks: set only from Home Assistant's "wake word heard" (core_remote_wake) to the end
+ * of the command, as stock does around its own wake word. */
 static void listening(int on)
 {
     static int is = -1;
-    if (!core_local_wake) on = 0;
     if (on == is) return;
     is = on;
     char *argv[] = { "/system/bin/lipc-set-prop", "-i", "com.doppler.lasp", "LASP_CMD_SET_LISTENING_MODE", on ? "1" : "0", NULL };
@@ -429,8 +512,18 @@ static void pipeline_start(void)
     mic_fresh = 1;
     proto->start();
     atomic_store(&streaming, 1);
-    listening(1);
+    listening(core_local_wake);
     if (core_local_wake) core_set_state(LISTENING);
+}
+
+/* lock held.  Home Assistant heard the wake word in the stream (-w remote, wake word engine "homeassistant"): what the
+ * Echo does on a wake word of its own, the sound, the ring and the front end's utterance state */
+void core_remote_wake(void)
+{
+    if (core_local_wake || !atomic_load(&streaming)) return;
+    sound_request(SND_WAKE);
+    listening(1);
+    core_set_state(LISTENING);
 }
 
 int core_wake_sound(int set) { if (set >= 0) use_earcon = set; return use_earcon; }
@@ -1386,6 +1479,30 @@ static void *selftest_thread(void *arg)
     return NULL;
 }
 
+/* Capture thread: the active wake word in place of the one loaded.  One that does not load: Amazon's first ("Alexa"),
+ * and the list says so (Home Assistant's select asks again on reconnect, and must not show the one that failed); a
+ * microWakeWord model that does not load switches the engine back to Amazon's, setting included */
+static void wake_load(void)
+{
+    char e[160];
+    pthread_mutex_lock(&core_lock); struct core_wake_word w = wake_words[wake_active]; pthread_mutex_unlock(&core_lock);
+    wake_close();
+    if (wake_open(w.manifest, on_wake) == 0) { fprintf(stderr, "wake word: now \"%s\"\n", w.name); return; }
+    /* a model replaced from the page is swapped in by two renames (mww_store.c): once more before giving it up */
+    if (wake_is_mww(w.manifest)) { usleep(300000); if (wake_open(w.manifest, on_wake) == 0) { fprintf(stderr, "wake word: now \"%s\"\n", w.name); return; } }
+    pthread_mutex_lock(&core_lock);
+    if (wake_engine == WAKE_MWW) {          /* lists anew and raises wake_switch: the next round loads Amazon's pick */
+        fprintf(stderr, "wake word: cannot load %s, back to Amazon's engine\n", w.manifest);
+        settings_set("wake_engine", "amazon", e, sizeof e);
+        pthread_mutex_unlock(&core_lock);
+        return;
+    }
+    fprintf(stderr, "wake word: cannot load %s, back to Alexa\n", w.manifest);
+    wake_active = 0; struct core_wake_word first = wake_words[0];
+    pthread_mutex_unlock(&core_lock);
+    wake_open(first.manifest, on_wake);
+}
+
 static void *capture_thread(void *arg)
 {
     FILE *dump = NULL;
@@ -1417,15 +1534,7 @@ static void *capture_thread(void *arg)
         }
         if (dump) fwrite(pcm, 1, n, dump);
 
-        if (core_local_wake && atomic_exchange(&wake_switch, 0)) {        /* Home Assistant picked another wake word */
-            pthread_mutex_lock(&core_lock); struct core_wake_word w = wake_words[wake_active]; pthread_mutex_unlock(&core_lock);
-            wake_close();
-            if (wake_open(w.manifest, on_wake) == 0) fprintf(stderr, "wake word: now \"%s\"\n", w.name);
-            else {      /* and say so: Home Assistant's select asks again on reconnect, and must not show the one that failed */
-                fprintf(stderr, "wake word: cannot load %s, back to Alexa\n", w.manifest); wake_open(wake_words[0].manifest, on_wake);
-                pthread_mutex_lock(&core_lock); wake_active = 0; pthread_mutex_unlock(&core_lock);
-            }
-        }
+        if (core_local_wake && atomic_exchange(&wake_switch, 0)) wake_load();     /* another wake word, engine or model */
         if (core_local_wake) { ring_put(pcm, n / 2); wake_feed(pcm, n / 2); }
         if (atomic_load(&sound_want) != sound_running) {           /* Home Assistant switched sound detection */
             if (!sound_running) {
@@ -1490,7 +1599,7 @@ int main(int argc, char **argv)
         case 'P': proto = !strcmp(optarg, "wyoming") ? &proto_wyoming : &proto_esphome; break;
         case 'p': port = atoi(optarg); break;
         case 'n': core_name = optarg; break;
-        case 'w': core_local_wake = strcmp(optarg, "remote") != 0; break;
+        case 'w': core_local_wake = strcmp(optarg, "remote") != 0; wake_cmdline_remote = !core_local_wake; break;
         case 'm': manifest = optarg; break;
         case 'b': input = optarg; break;
         case 'z': core_sendspin_port = atoi(optarg); break;
@@ -1507,6 +1616,8 @@ int main(int argc, char **argv)
     }
     core_port = port ? port : proto->port;
     names_load();
+    { char eng[24];                                 /* the settings page's "Home Assistant" engine: as -w remote */
+      if (core_local_wake && !settings_peek("wake_engine", eng, sizeof eng) && !strcmp(eng, "homeassistant")) core_local_wake = 0; }
     if (print_mdns) { proto->print_mdns(); return 0; }
     clock_log_start();                              /* before any thread: it forks */
     signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin); signal(SIGWINCH, on_winch);
@@ -1516,10 +1627,18 @@ int main(int argc, char **argv)
     if (cap_open() < 0) { fprintf(stderr, "cannot open capture (is PuffinApp still running?)\n"); return 1; }
     pthread_mutex_lock(&core_lock); listening(0); pthread_mutex_unlock(&core_lock);
     if (core_local_wake) {
-        wake_words_scan(manifest);
-        const char *m = wake_words[wake_active].manifest;
-        if (wake_open(m, on_wake) < 0 && (wake_active == 0 || (fprintf(stderr, "cannot load wake word model %s, trying Alexa\n", m), wake_active = 0,
-                                                                  wake_open(wake_words[0].manifest, on_wake) < 0))) {
+        char eng[24];                               /* the engine before the rest of the settings: no Amazon model loaded in vain */
+        wake_m_arg = manifest;
+        if (!settings_peek("wake_engine", eng, sizeof eng) && !strcmp(eng, "microwakeword")) wake_engine = WAKE_MWW;
+        wake_words_scan();
+        int ok = wake_open(wake_words[wake_active].manifest, on_wake) == 0;
+        if (!ok && wake_engine == WAKE_MWW) {       /* settings_load() switches back to it, and wake_load() off for good */
+            fprintf(stderr, "cannot load microWakeWord model %s, Amazon's engine\n", wake_words[wake_active].manifest);
+            wake_engine = WAKE_AMAZON; wake_words_scan();
+            ok = wake_open(wake_words[wake_active].manifest, on_wake) == 0;
+        }
+        if (!ok && (wake_active == 0 || (fprintf(stderr, "cannot load wake word model %s, trying Alexa\n", wake_words[wake_active].manifest), wake_active = 0,
+                                         wake_open(wake_words[0].manifest, on_wake) < 0))) {
             fprintf(stderr, "cannot load wake word model %s\n", wake_words[wake_active].manifest); return 1;
         }
     }

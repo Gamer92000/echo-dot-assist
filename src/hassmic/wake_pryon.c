@@ -63,7 +63,7 @@ static void read_metadata(const unsigned char *m, size_t n)
     atomic_store(&afe_known, 1);
 }
 
-int wake_afe_times(long *start, long *end)
+static int pryon_afe_times(long *start, long *end)
 {
     if (!atomic_load(&afe_known)) return 0;
     *start = afe_start; *end = afe_end;
@@ -79,10 +79,10 @@ static void on_result(const char *decoderId, PryonEnumeratedResult *r)
     if (r->detectionType == PRYON_DETECTION_TYPE_ACCEPT && r->keyword) callback(r->keyword, r->beginSampleIndex, r->endSampleIndex);
 }
 
-int wake_open(const char *manifest, wake_cb cb)
+static int pryon_open(const char *manifest, wake_cb cb)
 {
     PryonMultichannelAudioFormat fmt;
-    callback = cb;
+    callback = cb; sample_index = wake_fed();
     PryonApi_SetLoggingCallback(on_log);
     PryonApi_SetEnumeratedResultCallback(on_result);
     if (PryonModelSet_New(MODEL_SET, manifest, "")) return -1;
@@ -95,19 +95,19 @@ int wake_open(const char *manifest, wake_cb cb)
     return 0;
 }
 
-void wake_feed(const int16_t *samples, size_t count)
+static void pryon_feed(const int16_t *samples, size_t count)
 {
     PryonDecoder_PushAudioEventSamples(DECODER, sample_index, samples, count);
     sample_index += count;
 }
 
-void wake_reset(void)
+static void pryon_reset(void)
 {
     PryonDecoder_SessionEnd(DECODER);
     pthread_mutex_lock(&props_lock); push_props(); pthread_mutex_unlock(&props_lock);
 }
 
-void wake_property(const char *name, int value)
+static void pryon_property(const char *name, int value)
 {
     unsigned i;
     pthread_mutex_lock(&props_lock);
@@ -117,10 +117,14 @@ void wake_property(const char *name, int value)
     pthread_mutex_unlock(&props_lock);
 }
 
-void wake_close(void)
+static void pryon_close(void)
 {
+    pthread_mutex_lock(&props_lock); opened = 0; pthread_mutex_unlock(&props_lock);     /* no hints to a decoder that is gone */
+    atomic_store(&afe_known, 0);
     PryonDecoder_Delete(DECODER);
     PryonModelSet_Delete(MODEL_SET);
 }
 
 const char *wake_attributes(void) { return PryonApi_GetAttributes(); }
+
+const struct wake_engine wake_vendor = { pryon_open, pryon_feed, pryon_reset, pryon_property, pryon_close, pryon_afe_times };

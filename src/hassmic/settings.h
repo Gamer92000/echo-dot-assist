@@ -26,6 +26,8 @@ extern const char *const denoise_names[4];      /* "Off", "Low", "Medium", "High
 void settings_load(void);               /* state/config, or the older state/settings once; then applied.  Once only */
 void settings_save(void);
 void settings_preset(void);             /* state/preset (scripts/setup.sh --preset): applied once at start, then .applied */
+/* one value as state/config has it, before settings_load (main.c: the wake word engine); no lock needed.  0, -1: none */
+int  settings_peek(const char *name, char *out, size_t cap);
 int  settings_mic_level(void);
 int  settings_on(const char *name);     /* a bool setting's value; 0 if this Echo has no such setting */
 const struct bt_lang *settings_bt_lang(void);

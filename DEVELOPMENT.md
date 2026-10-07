@@ -7,8 +7,9 @@ changes by date: [CHANGELOG.md](CHANGELOG.md). Reverse-engineering notes: [docs/
 
 Amazon's `mixer` daemon owns the audio hardware and runs the whole front end (`libasp`: AEC, beamforming, mic
 calibration). `hassmic` takes the place of the Alexa client `PuffinApp` as the mixer's client through the reversed C API
-of `libmixerAPI.so`, feeds the 16 kHz post-AEC stream to the stock `libpryon.so` wake word engine, and speaks the ESPHome
-native API (default) or Wyoming to Home Assistant.
+of `libmixerAPI.so`, feeds the 16 kHz post-AEC stream to the stock `libpryon.so` wake word engine (or, picked on the
+settings page, to microWakeWord: TFLite Micro's audio front end and an int8 TFLite interpreter of our own, `mww_*.c`),
+and speaks the ESPHome native API (default) or Wyoming to Home Assistant.
 
 Boot integration (`scripts/system/`): `hassmic.rc` (init) starts `boot.sh` (fixed, on `/system`), which picks the factory
 copy or a verified push update and runs `main.sh` (updatable): `main.sh firewall` keeps the egress lock in place and is
@@ -28,7 +29,7 @@ rules. `DEVICE` picks one (default `donut`). The adb scripts check it against th
 | Path | What |
 |---|---|
 | `devices/` | one directory per Echo model (`donut`, `biscuit`, `radar`): `device.mk`, `board.c`, `device.conf`, `hassmic.rc`, `sepolicy.rules`, `setup.sh`, install instructions |
-| `src/hassmic/` | the daemon: core (capture, wake word, playback, LEDs, buttons), `sound_pryon.c` (optional sound detection, `docs/re-aed.md`), `whisper_pryon.c` (whisper detection with Amazon's model, `docs/re-whisper.md`), `proto_esphome.c`, `proto_wyoming.c`, `arb.c` (wake word arbitration between Echos), `settings.c` (settings by name, `state/config`), `web.c` (the settings page; its files in `web/`), `artifacts.c` (models copied between Echos by the page), `davs.c` (models downloaded from Amazon by the page, with `dha.c` for the device attestation its login needs, `docs/re-davs-login.md`), `micdenoise.c` (RNNoise on the mic audio sent to the pipeline), `micgain.c` (gain of the mic audio sent to the pipeline), `sendspin.c`, `a2dp.c` (Bluetooth speaker both ways), `btout.c` (playing on a Bluetooth speaker: the mixer's A2DP route, `docs/re-a2dp-source.md`), `ble.c`, push updates (`ota.c`), online updates (`update.c`), `adbwifi.c` (the debug access switch), `wifimotion.c` (experimental motion sensor from the Wi-Fi driver's receive level) |
+| `src/hassmic/` | the daemon: core (capture, wake word, playback, LEDs, buttons), `sound_pryon.c` (optional sound detection, `docs/re-aed.md`), `whisper_pryon.c` (whisper detection with Amazon's model, `docs/re-whisper.md`), `proto_esphome.c`, `proto_wyoming.c`, `arb.c` (wake word arbitration between Echos), `settings.c` (settings by name, `state/config`), `web.c` (the settings page; its files in `web/`), `artifacts.c` (models copied between Echos by the page), `davs.c` (models downloaded from Amazon by the page, with `dha.c` for the device attestation its login needs, `docs/re-davs-login.md`), `micdenoise.c` (RNNoise on the mic audio sent to the pipeline), `micgain.c` (gain of the mic audio sent to the pipeline), `sendspin.c`, `a2dp.c` (Bluetooth speaker both ways), `btout.c` (playing on a Bluetooth speaker: the mixer's A2DP route, `docs/re-a2dp-source.md`), `ble.c`, push updates (`ota.c`), online updates (`update.c`), `adbwifi.c` (the debug access switch), `wifimotion.c` (experimental motion sensor from the Wi-Fi driver's receive level), `wake.c` (picks the wake word engine by the model: `wake_pryon.c`, or `wake_mww.c` = microWakeWord with `mww_features.c` (its audio front end), `mww_model.c` (its int8 .tflite models) and `mww_store.c` (its models in `state/mww`, managed by the page)) |
 | `src/kmod/` | kernel modules for Wi-Fi motion, hooking the Wi-Fi driver's receive path: `hassmic_rcpi.c` (biscuit, radar), `hassmic_rcpi4m.c` (donut); built by `make` when the model's kernel sources and compiler are in `toolchain/`, see below |
 | `src/tools/` | `mixcap`, `mixplay`, `pryon_test`, `aed_test` (stock sound detector, `docs/re-aed.md`), `whisper_test` (whisper detector, `docs/re-whisper.md`), `latency`, `otatool`, `runas` (AIPC refuses uid 0, the image has no `su`), `curlspy`, `hciscan` (raw HCI on `/dev/stpbt`), `a2dpprobe` (stands in for the Bluetooth stack on the mixer's A2DP output) |
 | `src/include/` | C headers for the reversed `libmixerAPI.so` and `libpryon.so` |
@@ -50,12 +51,13 @@ Device binaries need the NDK and the unpacked firmware in `firmware/<codename>/`
 make [DEVICE=donut]                               # ARM binaries into build/donut/
 make DEVICE=donut STUBS=1                         # the same, without the firmware: stand-ins for its libraries
 make host                                         # PC build (build/hassmic-host) + qemu build for the tests (needs libopus)
-make unit                                         # C unit tests
+make unit                                         # C unit tests; microWakeWord against pymicro-features and TFLite (mww_ref.py)
 .venv/bin/python tests/fake_ha_esphome.py         # ESPHome native API, as Home Assistant (aioesphomeapi)
 .venv/bin/python tests/fake_ha_arbitration.py     # two Echos + Home Assistant + an unknown device: wake word arbitration
 .venv/bin/python tests/fake_web.py                # the settings page: login by the action button, signed requests, export/import
 .venv/bin/python tests/fake_web_artifacts.py      # models copied from one Echo to another through the page, root's installer
 .venv/bin/python tests/fake_web_wifi.py           # Wi-Fi switch: the sealed password, its PSK, root's wifi.sh against a fake wpa_cli
+.venv/bin/python tests/fake_web_mww.py            # microWakeWord: models from the page, the engine switch, real detections on the PC
 .venv/bin/python tests/fake_web_davs.py           # models downloaded from a fake Amazon on the Echo itself: the code pair
                                                  # login with the device attestation token, the download, staging, deregister
 .venv/bin/python tests/fake_ha.py [--qemu]        # Wyoming (wyoming)

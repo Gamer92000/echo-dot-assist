@@ -4,6 +4,26 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-07
 
+- **"Copy models" lists only what there is to copy.** A model every Echo listed already has, in the same version, is
+  left out; a line says how many, and with nothing left to copy the card says so.
+- **The wake word can be left to Home Assistant from the settings page.** "Wake word" has a third choice, Home
+  Assistant: the Echo streams its microphone and your Home Assistant listens, with openWakeWord and your own wake words
+  if you like. A dialog shows what to set up there (the openWakeWord app, your models, "Add streaming wake word" on
+  the assistant) and what it costs (a constant stream, no arbitration between Echos, nothing while Home Assistant is
+  down). When Home Assistant hears the wake word, the Echo now plays its wake sound and keeps the talker's voice
+  clean to the end of the command, as with its own wake word; before, with `-w remote`, it did neither. Switching
+  restarts the satellite for a few seconds.
+- **Experimental: other wake words with microWakeWord.** The settings page has a new "Wake word" section: besides
+  Amazon's engine (still the default) the Echo can listen with microWakeWord, the wake word engine of ESPHome's voice
+  satellites, for "Okay Nabu", "Hey Jarvis", "Hey Mycroft" or any wake word someone trained a model for. Be aware that
+  **it detects wake words significantly worse** than Amazon's engine (more missed, more false wakes), and that while it
+  is on "<wake word>, stop", the extra sensitivity while the Echo plays music, Amazon's wake words and the front end's
+  scores in wake word arbitration are gone; the page lists all of it before you switch. Sound and whisper detection
+  keep working. When you pick microWakeWord, the page's dialog lists what you lose and, if the Echo has no model yet,
+  asks which wake word to start with (one of ESPHome's or your own `.tflite` and `.json` files) before it switches.
+  While it is on, the same section manages the models: add more, rename them, tune their threshold, download and
+  delete them; "Copy models" puts them on your other Echos.
+  Home Assistant's wake word select offers them while microWakeWord is on.
 - **Echos no longer drop out of each other's network every minute or so.** Each Echo's Bluetooth scanning (for Home
   Assistant's Bluetooth proxy) shares the antenna with Wi-Fi, and messages broadcast while it scans are lost: 10 to 30
   out of every 100. One Echo's announcements kept arriving only every third time, so it vanished from the Echos list

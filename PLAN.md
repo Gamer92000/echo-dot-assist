@@ -1295,6 +1295,54 @@ Run in this order. Each step says what it proves.
       Monocypher's, BLAKE2b): same keys and byte-identical signatures as the C one (tests/otatool_test.sh, 9 checks), the
       real release bundle verifies, one flipped byte does not; ota_push_test and fake_ha_update pass with it.
       probe.sh: devices/<codename>/probe.md5 from the pinned firmware (all three firmwares' sha256 match their pins).
+- [~] microWakeWord as a second wake word engine (2026-10-07, user request: a switch on the page, Amazon's engine the
+      default, what is lost said plainly, the models managed on the page).  No TensorFlow on the Echo: `mww_features.c`
+      ports TFLite Micro's microfrontend with microWakeWord's settings (30/10 ms, 40 channels 125-7500 Hz, noise
+      reduction 10/0.025/0.06/0.05, PCAN 0.95/80/21, log shift 6) including kissfft's 16 bit fixed point FFT;
+      `mww_model.c` is an int8 interpreter for exactly the ops microWakeWord's streaming models use (all 9 models of
+      esphome/micro-wake-word-models v2 + experiments, and pymicro-wakeword's 4: CONV_2D, DEPTHWISE_CONV_2D,
+      FULLY_CONNECTED, LOGISTIC, QUANTIZE, CONCATENATION, STRIDED_SLICE, SPLIT_V, RESHAPE, VAR_HANDLE, READ_VARIABLE,
+      ASSIGN_VARIABLE, CALL_ONCE); anything else is refused at upload.  The user asked for "ONNX" models: microWakeWord's
+      are .tflite (ONNX is openWakeWord's, a different and much heavier engine), so .tflite + .json it is.
+      Measured on the PC: features bit-identical to pymicro-features 2.0.2 (what microWakeWord trains with) on synthetic
+      audio, espeak phrases and three micAsr captures (3580 windows), and 13094 windows of cap-first against TFLM's own
+      sources; every inference of the 13 models within 1/256 of TFLite 2.3 (ai-edge-litert) with BUILTIN_REF kernels,
+      variables carried along (`tests/unit/mww_ref.py`, in `make unit`).  First port differed: kissfft's real-FFT
+      twiddles use the complex half's length; TFLM's current tables are single precision (cosf, log1pf, powf).
+      The armv7 build under qemu (bionic) gave 2 filterbank weights one step off: bionic's log1pf is not correctly
+      rounded; now from double functions rounded to float: tables, features (13094 windows) and probabilities (4364
+      inferences) identical ARM vs PC.  Level: espeak "Alexa"/"Okay Nabu"/"Hey Mycroft" at -20..-62 dBFS keyword rms over a
+      -67 dBFS white floor, window means 229-255 of 255 with 0, +12 or +24 dB gain alike (PCAN): micAsr goes in as is.
+      testdata/alexa_espeak.raw: alexa model fires twice per loop (window mean 255), okay_nabu stays under 10.
+      CPU on the PC: 0.05 ms per 30 ms of audio (okay_nabu).  Untrusted files (page uploads, copies from other Echos):
+      flatbuffer offsets bounds-checked, zero points and scales validated, accumulators bounded (kernel <= 32768
+      products, bias <= 2^30); fuzzed 120k mutated models (22k of them loaded and ran) and 300k mutated manifests under
+      ASan + UBSan, clean after fixing what the first run found (an int32 overflow from a huge zero point).
+      Engine switch live (`core_wake_engine`): the list is per engine, Home Assistant's link is closed so it reads the
+      new one (`fake_web_mww.py`, 32 checks: uploads with and without manifest, refusals, switch refused without a model,
+      rename/threshold/window, the page's and Home Assistant's pick, download, copy as artifact `mww:<id>`, a copy that
+      does not load, deletes down to none = back to Amazon's engine and saved, a restart loads microWakeWord directly).
+      Page (headless Chromium): engine cards with pros and cons; picking microWakeWord opens the page's own dialog (no
+      browser popups anywhere on the page now) naming the losses and, without a model, the wake word to start with
+      (ESPHome's from GitHub, or files: a lone manifest refused in the dialog), added before the switch; the models card
+      only while microWakeWord is on; files paired .tflite/.json, rename, tune, use, delete (the last one: Amazon's again).
+      Lost with it, on the page: "<wake word>, stop" (Pryon's second keyword), Pryon's threshold hints while playing,
+      Amazon's wake words, the front end's ESP energies in arbitration (`wake_afe_times` 0: the own SNR score; Echos on
+      different engines with the same wake word name still compete, on different scores).
+      Third engine, "homeassistant" (user request: openWakeWord stays in Home Assistant, the Echo only streams; asked
+      after a user's EchoMuse Forge model, an openWakeWord .onnx classifier, which HA's openWakeWord app does not load:
+      .tflite only per its README and HA's docs): the existing -w remote, now from the page.  Decided at start
+      (arbitration, the protocol's flags): switching writes state/config, then state/restart for root's watcher
+      (main.sh, as a rename); main() reads it before anything else.  -w remote in ARGS wins and the page cannot change
+      it.  New with it: EV_WAKE_END (Home Assistant heard it) -> wake sound, ring, and the front end's listening mode
+      until the command ends (before, -w remote never set it, so a command longer than ~1.5 s faded under the
+      cancellers, 2026-09-30 captures).  fake_web_mww.py +9 checks (restart asked, wake=remote after it, no wake words
+      offered, the stream at once with USE_WAKE_WORD, the event answered, back again, -w remote refuses).  The page's
+      dialog and guide follow HA's docs of 2026-10 (add-ons are "Apps"); not checked against a live HA here.
+      Open (device): detection rate against Pryon at the same distances, false wakes per day (TV, music), CPU on the
+      Echo, an Echo with Pryon and one with microWakeWord in one arbitration network; the remote path with a real
+      openWakeWord on the Dot 2.  Not done: ESPHome's "stop" model
+      as a second model while a timer rings or a reply plays (as Voice PE does); openWakeWord/ONNX.
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): Wi-Fi setup without a PC (stock: `oobed`, 5 s action button; ESPHome's
       way would be Improv over BLE, ble.c has the controller); offline alarm clock and reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, Drop In/calling (`commsd`), stereo pairs.
