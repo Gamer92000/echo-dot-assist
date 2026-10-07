@@ -26,6 +26,8 @@ TWRP=; [ "$1" = --twrp ] && { TWRP=1; shift; }
 
 if [ "$1" != --uninstall ]; then
     NAME=${1:-$DEFAULT_NAME}
+    # before anything is touched: without it the policy patch below fails with no word of why (issue #10)
+    [ -f $SEPOLICY_TOOL ] || die "no $SEPOLICY_TOOL: unzip $FW/boot-root.zip -d $FW/boot-root ($DDIR/README.md)"
     [ "$(adb get-state 2>/dev/null)" = device ] && device_check_firmware
     build_binaries                      # built here or this commit's release build (PREBUILT, scripts/lib/build.sh)
     # Signing key for push updates.  The public half goes onto the read-only system partition and is what the device trusts.
@@ -41,8 +43,8 @@ if [ "$1" != --uninstall ]; then
         t "mkdir -p /data/local/hassmic"; adb push $OUT/hassmic.conf /data/local/hassmic/hassmic.conf >/dev/null
         t "rm -rf /data/local/hassmic/ota; rm -f /data/local/hassmic/hassmic"      # boot.sh prefers a binary here (scripts/deploy.sh test builds); the fresh install wins
         # Patch the policy here, not in TWRP: magiskpolicy is dynamically linked and aborts in the recovery environment.
-        adb push $SEPOLICY_TOOL /data/local/tmp/mp >/dev/null
-        adb push $DDIR/sepolicy.rules /data/local/tmp/ >/dev/null
+        adb push $SEPOLICY_TOOL /data/local/tmp/mp >/dev/null && adb push $DDIR/sepolicy.rules /data/local/tmp/ >/dev/null ||
+            die "could not copy $SEPOLICY_TOOL and $DDIR/sepolicy.rules to the Echo, nothing changed"
         t "cd /data/local/tmp; chmod 755 mp; rm -f sepolicy.new
            ./mp --load $BASEF --apply sepolicy.rules --save sepolicy.new >/dev/null 2>&1
            [ -s sepolicy.new ] && ./mp --load sepolicy.new --print-rules 2>/dev/null | grep -q '^allow init su process'" ||

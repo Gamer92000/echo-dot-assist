@@ -24,7 +24,7 @@ and refuse a mismatch.
 | `hassmic.rc` | `install-system.sh` → `/system/etc/init/` | init services, and the trigger that starts the satellite once the audio stack is up |
 | `sepolicy.rules` | `install-system.sh` | allow rules added to the stock policy so init can start the scripts |
 | `README.md` | people | what is known about the model, and its install instructions (requirements, downloads, unlock, root, install) |
-| `setup.sh` | `scripts/setup.sh` | the same install steps for the guided setup: `STEPS` (id and title per line) and one `step_<id>` function each, built from the helpers in `scripts/lib/setup.sh` |
+| `setup.sh` | `scripts/setup.sh` | the same install steps for the guided setup: `STEPS` (id and title per line) and one `step_<id>` function each, built from the helpers in `scripts/lib/setup.sh`; `ROOTED_SKIP`: the steps an Echo rooted already has behind it (`rooted_already` in the steps) |
 
 A model without `setup.sh` is listed by the guided setup as not supported yet; a model without `device.mk` does not
 build.

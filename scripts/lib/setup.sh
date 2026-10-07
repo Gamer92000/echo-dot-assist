@@ -318,6 +318,21 @@ build_mode() {
 }
 build_mode_set() { BUILD_MODE=$1; if [ "$1" = prebuilt ]; then export PREBUILT=1; else export PREBUILT=0; fi; }
 
+# bootroot_unpack: boot-root's magiskpolicy, which install-system.sh patches the policy with (device.conf SEPOLICY_TOOL).
+# Checked by that file, not the folder: an unzip that broke off (WSL) left the folder, the retry passed, and the install
+# stopped a step later over the missing tool (issue #10).
+bootroot_unpack() {
+    [ -z "$DRY" ] && [ -f $SEPOLICY_TOOL ] && return 0
+    [ -n "$DRY" ] || rm -rf $FW/boot-root
+    task "Unpacking boot-root" sh -c "unzip -q -o $FW/$BOOTROOT -d $FW/boot-root && [ -f $SEPOLICY_TOOL ]" && return 0
+    [ -f $SEPOLICY_TOOL ] || fail "no $SEPOLICY_TOOL after unpacking $FW/$BOOTROOT"
+    rm -rf $FW/boot-root; return 1
+}
+
+# rooted_already: the user said at the start that the Echo on USB is unlocked and rooted already (setup.sh marks the
+# model's ROOTED_SKIP steps done and leaves "rooted" in the progress file): no unlock tool, no firmware to flash
+rooted_already() { [[ " $DONE_IDS " == *" rooted "* ]]; }
+
 # kernel_tools: what Wi-Fi motion's kernel module is built with (make kernel-tools: the model's kernel sources and the
 # compiler Amazon used), so that the build has it as CI's does.  Without them `make` quietly leaves the module out, and
 # the install once stopped over the missing file (issue #5).

@@ -25,6 +25,7 @@ network|Lock down, join Wi-Fi
 install|Install
 wakeword|Wake word, whisper and sound detection models
 "
+ROOTED_SKIP="udev usb unlock flash root"     # done on an Echo that is rooted already (scripts/setup.sh asks)
 NOTES=(
     "The USB wires can come off. adb over Wi-Fi is closed: scripts/adb-wifi.sh <echo-ip> (or debug access on the settings page, http://<echo-ip>:28931/) opens it for 30 min."
     "Updates: git pull, then scripts/ota-push.sh <echo-ip>."
@@ -37,15 +38,20 @@ slot() { ashell bcbtool get_active | tr -d " \n"; }
 step_tools() {
     command -v curl > /dev/null || need_tools curl || return 1
     build_mode
-    if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb fastboot python3 pyusb unzip sqlite3 curl sha256sum || return 1; return 0; fi
-    need_tools adb fastboot python3 pyusb make cc unzip debugfs sqlite3 curl sha256sum bc xz || return 1
+    local unlock="fastboot python3 pyusb"
+    rooted_already && unlock=python3
+    if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip sqlite3 curl sha256sum || return 1; return 0; fi
+    need_tools adb $unlock make cc unzip debugfs sqlite3 curl sha256sum bc xz || return 1
     [ "$(df -Pk . | awk 'NR == 2 { print $4 }')" -gt 5000000 ] || warn "less than 5 GB free here; the NDK and firmware need about that"
 }
 
 step_files() {
-    need_files $FW/$FIRMWARE_FILE $FIRMWARE_SHA256 "Fire OS $FIRMWARE_ID: $FTVDB" \
-               $FW/$KAMAKIRI $KAMAKIRI_SHA256 "attachment in $XDA" \
-               $FW/$BOOTROOT $BOOTROOT_SHA256 "attachment in $XDA" || return 1
+    local need=()
+    # a rooted Echo needs the firmware only to build against, and the unlock tool not at all
+    rooted_already && { [ "$BUILD_MODE" = prebuilt ] || [ -d $FW/rootfs/system/lib ]; } ||
+        need+=($FW/$FIRMWARE_FILE $FIRMWARE_SHA256 "Fire OS $FIRMWARE_ID: $FTVDB")
+    rooted_already || need+=($FW/$KAMAKIRI $KAMAKIRI_SHA256 "attachment in $XDA")
+    need_files "${need[@]}" $FW/$BOOTROOT $BOOTROOT_SHA256 "attachment in $XDA" || return 1
     [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
     if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
         mkdir -p toolchain
@@ -143,7 +149,7 @@ step_build() {
             python3 tools/payload_dump.py $FW/payload.bin $FW/images && mkdir -p $FW/rootfs &&
             debugfs -R 'rdump / $FW/rootfs' $FW/images/system.img && [ -d $FW/rootfs/system/lib ]" || return 1
     fi
-    [ -d $FW/boot-root ] || task "Unpacking boot-root" unzip -q $FW/$BOOTROOT -d $FW/boot-root || return 1
+    bootroot_unpack || return 1
     if [ "$BUILD_MODE" = prebuilt ]; then task "Downloading the release build of this commit" build_binaries || return 1
     else task "Building" build_binaries || return 1; fi
     wait_adb device || return 1
@@ -172,6 +178,7 @@ step_network() {
 }
 
 step_install() {
+    bootroot_unpack || return 1        # again: the build step may have been skipped
     install_satellite
 }
 

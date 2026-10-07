@@ -4,6 +4,14 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-07
 
+- **The guided setup takes an Echo that is rooted already** (issue #10). If the Echo on USB has root adb and the
+  firmware this project needs, `scripts/setup.sh` offers to keep it as it is: it skips the unlock, the firmware and the
+  root steps (which would have wiped it), and asks only for `boot-root.zip`, plus the firmware when it has to build.
+  `--from <step>` skips to any step by hand.
+- **A broken unpack of boot-root no longer slips through.** If unzipping `boot-root.zip` broke off, a retry of the
+  build step passed anyway, and the install failed later with only "sepolicy patch failed". The setup now checks for
+  the tool it needs from it, unpacks it again in the install step if it is missing, and the installer says what is
+  missing before it touches the Echo.
 - **Echos hand each other the arbitration key through Home Assistant again, whatever the devices are called there.**
   Home Assistant now puts the room (and more) into entity ids, so the Echos could no longer find each other's
   "Arbitration handoff" entity and needed "Allow the device to perform Home Assistant actions" or the volume keys.

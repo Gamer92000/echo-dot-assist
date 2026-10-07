@@ -233,7 +233,9 @@ cable, hold a button, type a name or the Wi-Fi password. Its last step offers an
 for a typed `yes`, as it wipes the Echo. Command output goes to `build/<codename>/setup.log`; when something fails it
 shows the end of it and offers to try again. Ctrl-C stops it at any point and the next run picks up where it left off;
 `--dry-run` walks all steps and shows the commands without running any, `--restart` starts over for the next Echo of
-the same model. The model's page has the same steps written out.
+the same model, `--from <step>` counts the steps before it as done (e.g. `--from build`). An Echo that is rooted already
+and runs the right firmware is offered a shortcut at the start: no unlock, no wipe, no firmware download, on to the
+build and install. The model's page has the same steps written out.
 
 **Nothing to compile** on a commit that GitHub has a build of: every commit on `main` and `release` once CI has
 published it (a few minutes after the push). The setup then offers that build, the one online updates install too, and
