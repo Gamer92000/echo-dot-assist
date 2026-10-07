@@ -2,7 +2,10 @@
 """mkbootroot: a rooted boot.img from the device's own stock one, in the standard library only.
 
   mkbootroot.py --check BOOT.img            prove the rebuild: stock image in, the same out but for the ID
-  mkbootroot.py BOOT.img OUT.img            build the rooted image
+  mkbootroot.py BOOT.img OUT.img [--sepolicy FILE] [--no-verity]
+                                            build the rooted image
+  mkbootroot.py --extract BOOT.img NAME OUT a file of the ramdisk (e.g. sepolicy, to patch it)
+  mkbootroot.py --cpio BOOT.img OUT         the whole ramdisk, uncompressed (cpio -id < OUT unpacks it)
 
 The XDA boot-root.imgs are built from some other build's boot.img (checkers': NS6570/6086, to
 run against 8149's /system), so this applies their ramdisk changes to the stock image of the
@@ -25,6 +28,13 @@ In the ramdisk:
   persist.sys.usb.config=mtp,adb  (the XDA image's changes)
 - init.fosflags.sh: adb on, authentication off, nothing else (the XDA image's file, byte for
   byte: it ends without a newline)
+- with --sepolicy FILE: sepolicy replaced by FILE (the stock one patched: with ro.secure=0 adbd
+  switches itself to its --root_seclabel u:r:su:s0 and dies when the policy refuses, and
+  checkers' stock policy has su permissive but no way for adbd into it; devices/checkers/
+  sepolicy.rules)
+- with --no-verity: "verify" taken out of the fs_mgr flags in every fstab.* that has it, so
+  /system mounts without dm-verity and can be written (hassmic's install).  Once it has been
+  written, only a boot image without verify may boot it: the stock one finds the hashes wrong.
 """
 import hashlib, struct, sys, zlib
 
@@ -105,20 +115,50 @@ def gunzip_mem(data):
     return out
 
 
-def edit_cpio(cpio):
-    """Replace the two files inside the stream; every other byte of an entry stays."""
+def default_prop(data):
+    for old, new in PROPS:
+        assert data.count(old + b"\n") == 1, old + b" not exactly once in default.prop"
+        data = data.replace(old + b"\n", new + b"\n")
+    return data
+
+
+def no_verity(data):
+    """fstab: drop "verify" from the last column (fs_mgr flags) of each entry that has it; None if none has."""
+    lines, n = data.split(b"\n"), 0
+    for i, l in enumerate(lines):
+        f = l.split()
+        if len(f) < 5 or l.lstrip().startswith(b"#"):
+            continue
+        flags = f[-1].split(b",")
+        if b"verify" not in flags and not any(x.startswith(b"verify=") for x in flags):
+            continue
+        new = b",".join(x for x in flags if x != b"verify" and not x.startswith(b"verify=")) or b"defaults"
+        lines[i] = l[:l.rindex(f[-1])] + new
+        n += 1
+    return b"\n".join(lines) if n else None
+
+
+def edits(sepolicy=None, verity=True):
+    """name -> function(data) -> new data, or None to leave that one as it is"""
+    e = {b"default.prop": default_prop, b"init.fosflags.sh": lambda d: FOSFLAGS}
+    if sepolicy is not None:
+        e[b"sepolicy"] = lambda d: sepolicy
+    if not verity:
+        e[b"fstab.*"] = no_verity
+    return e
+
+
+def edit_cpio(cpio, edit):
+    """Replace the files of EDIT inside the stream; every other byte of an entry stays."""
     out, off, done = [], 0, set()
 
     def edited(name, data):
-        if name == b"default.prop":
-            for old, new in PROPS:
-                assert data.count(old + b"\n") == 1, old + b" not exactly once in default.prop"
-                data = data.replace(old + b"\n", new + b"\n")
-        elif name == b"init.fosflags.sh":
-            data = FOSFLAGS
-        else:
+        key = b"fstab.*" if name.startswith(b"fstab.") and b"fstab.*" in edit else name
+        if key not in edit:
             return None
-        done.add(name)
+        data = edit[key](data)
+        if data is not None:
+            done.add(key)
         return data
 
     while True:
@@ -140,7 +180,7 @@ def edit_cpio(cpio):
         else:
             out.append(cpio[off:data_off + size + (-size % 4)])
         off = data_off + size + (-size % 4)
-    missing = {b"default.prop", b"init.fosflags.sh"} - done
+    missing = set(edit) - done
     assert not missing, "not in the ramdisk: %s" % b", ".join(sorted(missing)).decode()
     return b"".join(out)
 
@@ -160,17 +200,40 @@ def entries(cpio):
         off = data_off + size + (-size % 4)
 
 
-def compare(stock, new, label):
+def compare(stock, new, label, edit):
     a, b = entries(stock), entries(new)
     assert [e[0] for e in a] == [e[0] for e in b], label + ": the file list changed"
     for (na, ha, da), (nb, hb, db) in zip(a, b):
         assert na == nb and hb == ha, label + ": " + na.decode() + "'s metadata changed"
         if da != db:
-            assert na in (b"default.prop", b"init.fosflags.sh"), label + ": " + na.decode() + " changed"
+            assert na in edit or (na.startswith(b"fstab.") and b"fstab.*" in edit), \
+                label + ": " + na.decode() + " changed"
             print("  " + na.decode() + " changed (%d -> %d bytes)" % (len(da), len(db)))
 
 
 def main(argv):
+    if argv[:1] == ["--cpio"]:
+        if len(argv) != 3:
+            sys.exit(__doc__)
+        open(argv[2], "wb").write(Boot(open(argv[1], "rb").read()).cpio())
+        return
+    if argv[:1] == ["--extract"]:
+        if len(argv) != 4:
+            sys.exit(__doc__)
+        for name, _, data in entries(Boot(open(argv[1], "rb").read()).cpio()):
+            if name == argv[2].encode():
+                open(argv[3], "wb").write(data)
+                return
+        sys.exit("%s: no %s in the ramdisk" % (argv[1], argv[2]))
+    sepolicy, verity = None, True
+    while "--sepolicy" in argv:
+        i = argv.index("--sepolicy")
+        assert i + 1 < len(argv), "--sepolicy needs a file"
+        sepolicy = open(argv[i + 1], "rb").read()
+        del argv[i:i + 2]
+    if "--no-verity" in argv:
+        argv.remove("--no-verity")
+        verity = False
     check = argv[:1] == ["--check"]
     argv = argv[1:] if check else argv
     if len(argv) != (1 if check else 2):
@@ -189,9 +252,10 @@ def main(argv):
         print("check: %d of %d bytes differ, all inside the ID" % (len(diff), len(stock)))
         return
 
-    cpio = edit_cpio(boot.cpio())
+    edit = edits(sepolicy, verity)
+    cpio = edit_cpio(boot.cpio(), edit)
     out = boot.assemble(gzip_mem(cpio))
-    compare(boot.cpio(), Boot(out).cpio(), "the built image")
+    compare(boot.cpio(), Boot(out).cpio(), "the built image", edit)
     open(argv[1], "wb").write(out)
     print("%s: %d bytes, ramdisk blob %d -> %d\n  sha256 %s" %
           (argv[1], len(out), boot.rsz, Boot(out).rsz, hashlib.sha256(out).hexdigest()))

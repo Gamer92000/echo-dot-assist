@@ -4,7 +4,7 @@ D=/data/local/hassmic
 . $D/device.conf || exit 1
 sh $D/alexa-off.sh >/dev/null
 mkdir -p $D/state && chown $DAEMON_USER $D/state    # settings changed from Home Assistant (runs as DAEMON_USER)
-stop $UX_SERVICE
+[ -n "$UX_SERVICE" ] && stop $UX_SERVICE
 mkdir -p /data/misc/avahi/services && $D/hassmic "$@" -S > /data/misc/avahi/services/hassmic.service
 # init's avahi may not read that directory (SELinux); run our own from this shell's permissive domain
 stop avahi-daemon; pkill avahi-daemon; sleep 1; avahi-daemon --no-drop-root > /dev/null 2>&1 &

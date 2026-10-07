@@ -7,8 +7,9 @@
  * the firmware's libmedia to match.
  *
  * Not tried on a real Echo Show yet.  What has to hold there, in order:
- *  - recording rights: AudioFlinger's recordingAllowed() looks up a package for the uid when OpenSL ES gives none; uid 0
- *    has none and is refused, so hassmic must run as system (1000; package "android") or another uid with packages;
+ *  - recording rights: recordingAllowed() (libserviceutility.so) wants RECORD_AUDIO, then lets uid 0 through and, as
+ *    OpenSL ES names no package, looks up one for any other uid to note the app op against: hassmic runs as system
+ *    (1000, package "android"; device.conf DAEMON_USER);
  *  - one capture at a time: Android 7 lets a newer AudioRecord take the input from a HOTWORD one, so amazon.speech.sim
  *    (which records 1999 and 2999 itself) must be disabled first;
  *  - the preset: VOICE_RECOGNITION is the closest OpenSL ES has to stock's HOTWORD source, both pick the ASR pipeline

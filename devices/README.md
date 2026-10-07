@@ -12,7 +12,7 @@ and refuse a mismatch.
 | Echo 2nd gen (2017) | [`radar`](radar/README.md) | `radar_puffin` (OTA metadata) | in preparation: builds, Pryon verified under qemu against its own ALEXA model; unlock files staged; on-device values to check |
 | Echo Dot 3rd gen refresh (2019–2020), C78MP8 | `crumpet` | `crumpet`? (OTA metadata; fastboot says `CRUMPET`) | not started: `kamakiri-donut` does not apply |
 | Echo Dot 3rd gen with clock, 36EBT3 | `doebrite` | ? | not started; thought to be `crumpet` hardware plus the clock display |
-| Echo Show 5 1st gen (2019), H23K37 | [`checkers`](checkers/README.md) | `checkers` | builds; worked out from the firmware (same 6574.1 as donut, full Android, no mixer: OpenSL ES backend); unlock public (amonet-checkers, TWRP), install not written yet |
+| Echo Show 5 1st gen (2019), H23K37 | [`checkers`](checkers/README.md) | `checkers` | builds; worked out from the firmware (same 6574.1 as donut, full Android, no mixer: OpenSL ES backend); unlock public (amonet-checkers, TWRP); install written (`INSTALL=boot`), untried on a device |
 
 ## What a model directory holds
 
@@ -76,8 +76,9 @@ Rough order. Each step is safe to stop at.
      new `audio_*.c` or `wake_*.c` behind `audio.h` / `wake.h` and name it here.
    - `hassmic.rc`: the property trigger that starts the stock Alexa client on this model.
    - `sepolicy.rules`: depends on how root was obtained.
-   - `INSTALL` in `device.conf`: `twrp-ab` is `scripts/install-system.sh`. A model that installs another way gets its
-     own method there, or its own script.
+   - `INSTALL` in `device.conf`: `twrp-ab` is `scripts/install-system.sh`; `boot` (policy in `boot.img`'s ramdisk, no
+     A/B: checkers) is `scripts/install-boot.sh`, which install-system.sh hands over to. A model that installs another
+     way gets its own method there, or its own script.
 4. **Try it without installing**: `scripts/probe.sh`, `scripts/deploy.sh`, `adb shell sh /data/local/hassmic/run.sh`.
    Both pick the model from the Echo on adb.
 5. **Install**, and write the steps down twice: by hand in the model's `README.md` (Install section), and as

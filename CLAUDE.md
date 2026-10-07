@@ -117,7 +117,9 @@ One unit test: `make unit-<name>` (`UNIT_TESTS` in the Makefile).
   (`sysinstall.sh leds`, ledcontroller restarted); `install-system.sh --uninstall` puts stock's layer config back.
 - `scripts/install-system.sh`: writes `/system/hassmic/`, init rc and patched SELinux policy from the running OS
   (`sysinstall.sh install`; `otatool remount rw` since toybox cannot: `/dev/root` does not exist). `--twrp` the old way.
-  `--uninstall` reverts.
+  `--uninstall` reverts.  `INSTALL=boot` (checkers: no A/B, policy in boot.img) hands over to `scripts/install-boot.sh`:
+  the firmware's own boot.img + root adb, `verify` out of fstab and the policy patched (`scripts/mkbootroot.py`,
+  `sepolicy.rules` via magiskpolicy under qemu), flashed in amonet's hacked fastboot, then the same `sysinstall.sh`.
 - Logs: `/data/local/hassmic/boot.log`, each line stamped (`clock.c`: UTC once the clock came from HA, else `boot+<s>`;
   hassmic's own through its reader process `hassmic-log`, which `pidof hassmic` lists too; scripts through `say`/`stamped`
   in `main.sh`). The Echo's mksh is 32-bit and has no awk. Config: `/data/local/hassmic/hassmic.conf` (`PROTO`, `ARGS`, `MODE`,
