@@ -52,7 +52,7 @@ tests/ota_push_test.sh                        # signed push-update path end to e
 tests/otatool_test.sh                         # scripts/otatool.py against the C otatool: same keys, signatures, bundles
 ```
 
-`.venv` from `tests/requirements.txt`. CI (`.github/workflows/build.yml`, DEVELOPMENT.md "CI and releases"): every model with
+`.venv` from `uv sync` (`pyproject.toml` + `uv.lock`; change a version, then `uv lock`). CI (`.github/workflows/build.yml`, DEVELOPMENT.md "CI and releases"): every model with
 `STUBS=1`, PC tests, then a push to `main` publishes `v<version>-beta` (prerelease), a push to `release` publishes
 `v<version>`; version = commit time in UTC, `2026.10.02.091530` (`make version`; local builds add `+<commit id>`, CI
 passes `RELEASE=1` for the bare one), bundles `hassmic-<codename>.bundle(.sig)`

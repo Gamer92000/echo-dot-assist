@@ -6,6 +6,6 @@
 set -e
 IP=${1:?usage: poc-host.sh <echo-ip>}
 cd "$(dirname "$0")/.."
-[ -x .venv/bin/wyoming-satellite ] || .venv/bin/pip -q install wyoming-satellite
-exec .venv/bin/python -m wyoming_satellite --name "Echo Dot PoC" --uri tcp://0.0.0.0:10700 \
+# beside the tests' locked .venv, not in it (uv sync would remove it again)
+exec uv run --with wyoming-satellite python -m wyoming_satellite --name "Echo Dot PoC" --uri tcp://0.0.0.0:10700 \
     --mic-command "nc $IP 16701" --snd-command "nc $IP 16702" --snd-command-rate 22050 --debug

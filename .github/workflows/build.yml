@@ -100,7 +100,7 @@ jobs:
 
       - name: Kernel build tools
         if: matrix.ksrc
-        run: command -v bc > /dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq bc > /dev/null; }     # timeconst.h
+        run: command -v bc > /dev/null || { sudo apt-get update && sudo apt-get install -y bc; }     # timeconst.h
       # keyed on the download command itself: the URLs and checksums make kernel-tools uses
       - name: Kernel pins
         if: matrix.ksrc
@@ -155,19 +155,28 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30                 # apt has hung for over 20 minutes: fail instead of waiting out the 6 h default
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      # uv fetches Python and installs the wheels in parallel.  No cache: setup-uv prunes downloaded wheels from it in
+      # CI anyway, since PyPI is as fast as restoring them.
+      - uses: astral-sh/setup-uv@v10
         with:
           python-version: '3.13'
+      # No ffmpeg (hundreds of packages; the one MP3 a test needs is testdata/sine440_24k.mp3), no recommends, and no
+      # man-db trigger, which rebuilds the whole man database after an install.  This step took 1 to 10 minutes before.
       - name: Packages
+        timeout-minutes: 8
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libopus-dev libcurl4 netcat-openbsd ffmpeg sbc-tools > /dev/null
-          python -m venv .venv
-          .venv/bin/pip install -q -r tests/requirements.txt
+          echo 'man-db man-db/auto-update boolean false' | sudo debconf-set-selections
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libopus-dev libcurl4 netcat-openbsd sbc-tools
+      - name: Python packages
+        timeout-minutes: 5
+        run: uv sync --locked           # .venv exactly as uv.lock says; fails if pyproject.toml changed without uv lock
       - name: Build
         run: make build/hassmic-host build/otatool-host
       - name: Unit tests

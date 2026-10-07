@@ -45,7 +45,8 @@ rules. `DEVICE` picks one (default `donut`). The adb scripts check it against th
 
 Device binaries need the NDK and the unpacked firmware in `firmware/<codename>/` (the model's install page, steps 1–2, e.g. `devices/donut/README.md`), or
 `STUBS=1` instead of the firmware (below). Without the NDK only the host targets build. The test references:
-`python -m venv .venv && .venv/bin/pip install -r tests/requirements.txt`.
+`uv sync` ([uv](https://docs.astral.sh/uv/)) makes `.venv` from `uv.lock`, every package pinned; to change one, edit
+`pyproject.toml`, run `uv lock` and commit both.
 
 ```sh
 make [DEVICE=donut]                               # ARM binaries into build/donut/
