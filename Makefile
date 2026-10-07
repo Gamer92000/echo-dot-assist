@@ -155,7 +155,7 @@ $(OUT)/dha_test: src/tools/dha_test.c
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $< -o $@ -pie -fuse-ld=lld -ldl
 
-$(OUT)/pryon_test: src/tools/pryon_test.c src/include/pryon_api.h $(STOCK)/libpryon.so
+$(OUT)/pryon_test: src/tools/pryon_test.c src/include/pryon_api.h $(STOCK)/libpryon.so $(STOCK)/libz.so
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) $(STOCK)/libpryon.so $(STOCK)/libz.so
 
