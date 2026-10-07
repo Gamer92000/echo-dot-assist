@@ -401,13 +401,12 @@ push_preset() {
     adb push "$1" $PRESET_ON_ECHO && adb shell "chown $DAEMON_USER $PRESET_ON_ECHO; chmod 600 $PRESET_ON_ECHO; kill \$(pidof hassmic)"
 }
 
-# install_satellite: the last step of every model.  Asks the name, installs (scripts/install-system.sh), waits until the
-# installed satellite runs.  Settings to start with (--preset, or asked): an export of another Echo's settings page.  Name and address go to $OUT/setup.env for the final screen.  There is no trial run before
+# install_satellite: the last step of every model.  Installs (scripts/install-system.sh), waits until the installed
+# satellite runs; the Echo names itself (model and MAC address, read from its log), people name it in Home Assistant.  Settings to start with (--preset, or asked): an export of another Echo's settings page.  Name and address go to $OUT/setup.env for the final screen.  There is no trial run before
 # it: run.sh does not read hassmic.conf, so a trial announced itself under the default name, and Home Assistant kept that
 # device next to the installed one.
 install_satellite() {
     local name ip tok
-    prompt name "Name for this Echo in Home Assistant" "$DEFAULT_NAME"
     if [ -z "$PRESET" ]; then
         prompt PRESET "Settings to start with: a file exported on another Echo's settings page (Enter for none)" ""
         PRESET=${PRESET/#\~/$HOME}
@@ -417,7 +416,7 @@ install_satellite() {
         prompt PRESET "Settings file (Enter for none)" ""
     done
     wait_adb device || return 1
-    task "Installing (the Echo reboots)" scripts/install-system.sh "$name" || return 1
+    task "Installing (the Echo reboots)" scripts/install-system.sh || return 1
     [ -n "$DRY" ] || sleep 10
     wait_adb device || return 1
     # main.sh restarts a hassmic that dies, so it has to be seen twice, 10 s apart, to not be a crash loop
@@ -434,6 +433,7 @@ install_satellite() {
         fi
     fi
     [ -n "$DRY" ] && return 0
+    name=$(ashell "grep -o 'name: .* (node' /data/local/hassmic/boot.log" | tail -1 | sed 's/^name: //; s/ (node$//')
     ip=$(ashell ifconfig $WLAN | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p')     # toybox ifconfig; no ip on the Echo
     # hassmic logs its Sendspin pairing token at every start
     tok=$(ashell "grep -o 'SP:0[A-Z0-9]*' /data/local/hassmic/boot.log" | tail -1)
@@ -442,11 +442,11 @@ install_satellite() {
 
 # done_screen [line]...: the end: what to do in Home Assistant, then the model's own notes
 done_screen() {
-    local SAT_NAME=$DEFAULT_NAME SAT_IP= SAT_TOKEN=
+    local SAT_NAME="$MODEL_NAME" SAT_IP= SAT_TOKEN=
     [ -f $OUT/setup.env ] && . $OUT/setup.env
     printf '  %s%s"%s" is running%s%s\n' "$GRN$B" "✓ " "$SAT_NAME" "${SAT_IP:+ at $SAT_IP}" "$N"
     tell "Add it in Home Assistant" \
-        "Settings → Devices & services → discovered ESPHome \"$SAT_NAME\" → Add" \
+        "Settings → Devices & services → discovered ESPHome \"$SAT_NAME\" → Add, and give it its name there" \
         "${DIM}(not listed? Add ESPHome by hand: ${SAT_IP:-its IP}, port 26053, no encryption key)$N" \
         "Then pick an Assist pipeline (and the wake word) in its settings."
     tell "Its settings page" \

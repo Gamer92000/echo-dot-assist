@@ -58,6 +58,8 @@ Models not in the table: what is known and how to add one is in [`devices/`](dev
 | Whisper detection                             | ✅ answers in a whisper | sensor for the conversation agent's prompt ([details](#whisper)) | ❌ |
 | Motion sensor                                 | ❌                      | **experimental**, off by default: from the Wi-Fi signal ([details](#wifi-motion)) | ❌ |
 | Encrypted link to Home Assistant              | –                       | ✅ key set by Home Assistant                 | ❌ plain TCP             |
+| Wi-Fi setup from a phone                      | ✅ (Alexa app)          | ✅ Home Assistant app, Improv over Bluetooth ([details](#setting-up-from-a-phone)) | ✅ same |
+| Factory reset                                 | ✅ (button hold)        | ✅ action button 10 s, HA button, settings page ([details](#factory-reset)) | ✅ button, settings page |
 | Talks to Amazon                               | always                  | never (firewalled)                           | never (firewalled)       |
 | Updates                                       | automatic, from Amazon  | signed: pushed from your PC, or online from Home Assistant (off by default) | signed, pushed from your PC |
 
@@ -109,7 +111,7 @@ Details:
   it either tick "Allow the device to perform Home Assistant actions" in each Echo's ESPHome options, or pair two Echos
   with the buttons: hold Volume up and Volume down together for 2 s on the new
   Echo, then on one already in (a tap sounds; the Bluetooth "connected" sound when it worked, "disconnected" when it
-  did not within 2 min). Give every Echo its own `NAME`. Other satellites (ESP32 and so on) are not part of it; Home Assistant itself then lets the first one
+  did not within 2 min). Other satellites (ESP32 and so on) are not part of it; Home Assistant itself then lets the first one
   that reports the wake word answer, and the Echo that is second now just goes quiet instead of flashing an error.
 - **Echos together with Kiosk Satellite tablets**: "Arbitration mode" on the settings page switches an Echo from that
   protocol to [Kiosk Satellite](https://kiosksatellite.com/docs/voice-satellite/#wake-word-arbitration)'s, so that Echos
@@ -255,7 +257,7 @@ scripts/setup.sh --preset hassmic-settings.conf   # the same, starting with the 
 
 A terminal screen with a progress bar and the list of steps. It runs everything on its own and only stops when you
 have to do something: download a file into `~/Downloads` (it picks it up from there and checks it), solder or plug a
-cable, hold a button, type a name or the Wi-Fi password. Its last step offers another wake word ("Echo",
+cable, hold a button, type the Wi-Fi password (the Echo names itself; you name it in Home Assistant). Its last step offers another wake word ("Echo",
 "Computer", …; see `scripts/artifacts.sh`), or keeps "Alexa". It offers to install missing tools. Before it starts it asks
 for a typed `yes`, as it wipes the Echo. Command output goes to `build/<codename>/setup.log`; when something fails it
 shows the end of it and offers to try again. Ctrl-C stops it at any point and the next run picks up where it left off;
@@ -339,13 +341,10 @@ Assistant; sound detection also which model it uses, and why it switched off if 
 "Identify" (top of the page, and beside each logged-in Echo in the Echos list) shows which Echo is which: a rainbow on
 the ring for 10 s and the sound a stock Echo makes in setup. Home Assistant has the same as the "Identify" button.
 
-"Name" (System) renames the Echo. By default only the name people see changes: in Home Assistant (unless you renamed
-the device there), on Bluetooth, in Music Assistant and on these pages. The node name (ESPHome device name, host name
-`<node>.local`, the base of entity ids) stays what `NAME` in `hassmic.conf` made it, so nothing in Home Assistant
-breaks. Ticking "Also change the node name" changes that too, after the page has listed what it costs: Home Assistant
-keeps the device but its entity ids keep the old name until you rename them there, and the host name changes. Wake
-word arbitration does not mind: Echos know each other by their keys (the tags), and the fallback action's new name is
-picked up by the other Echos by themselves. The satellite restarts once. The names are kept in `state/name` and `state/node` and win over `NAME`.
+The Echo names itself after its model and the end of its Wi-Fi MAC address, as the Voice PE does: "Echo Dot 3 5695c4",
+node name (ESPHome device name, host name `<node>.local`, the base of entity ids) `echo-dot-3-5695c4`. Models: Echo Dot 3,
+Echo Dot 2, Echo 2. That name never changes, not even with a reset, and is not set anywhere on the Echo: you name the
+Echo in Home Assistant, when you add it or later on its device page. "Name" (System) on the settings page shows it.
 
 "Wi-Fi" (System) shows the network the Echo is on, and "Switch network…" moves it to another: pick one of the networks
 it sees, or type a name (a hidden network). The password can go in before or after you pick; leave it empty for an open
@@ -361,7 +360,6 @@ the browser there once more with the action button. WPA2 (password) and open net
 One file on the Echo, `/data/local/hassmic/hassmic.conf`, read at boot (edit over adb, reboot):
 
 ```sh
-NAME="Kitchen Echo"         # device name in Home Assistant (a rename on the settings page wins over it)
 PROTO=esphome               # or wyoming (port 16700)
 ARGS=""                     # extra options, below
 #MODE=stock-online          # temporary: stock Alexa online without updates, see the model's install page
@@ -394,6 +392,40 @@ would give it to everyone on the network. Over USB adb always works. Over Wi-Fi:
 
 Nothing else opens it; `boot.log` says when it opens and closes. If hassmic itself does not run, or the update key is
 lost, only USB is left.
+
+### Setting up from a phone
+
+An Echo that is not set up yet (just installed, or after a [factory reset](#factory-reset)) shows the orange setup spinner on its
+ring (as a stock Echo waiting for the Alexa app) until Home Assistant has added it. While it has no network it can be found over Bluetooth, as Improv Wi-Fi, the way
+ESPHome devices and the Voice PE are set up:
+
+1. In the Home Assistant app: Settings → Devices & services → Add device; the Echo shows up by its name. (Home
+   Assistant itself finds it too when one of its Bluetooth adapters or proxies is in range: "Improv via BLE" under
+   Discovered.)
+2. Pick your Wi-Fi network and type its password. The Echo tries it; a wrong password is reported back and nothing is
+   saved. WPA2 (password) and open networks only, as with the settings page's Wi-Fi switch.
+3. Once it is on the network, Home Assistant discovers it as an ESPHome device: add it there. Then the spinner stops.
+
+A new Echo starts advertising after 20 s without a network, and stops once it is on one. An Echo installed with
+`scripts/setup.sh` is on your Wi-Fi already (the setup joins it, the optional last step downloads from Amazon through
+it), so it goes straight to Home Assistant; the phone is for a reset, a new network, or an install by hand without Wi-Fi. An Echo that is set up and has
+had no network for 10 minutes (new router, moved) advertises as well, but it takes a network only after you press its
+action button (the ring shows that a phone waits; the press is good for a minute). The Echo keeps its own name (model
+and MAC address); give it yours in Home Assistant when you add it.
+
+Be aware: Improv sends the Wi-Fi password over Bluetooth unencrypted. That is the protocol, the same for every Improv
+device. Not with `-B` (Bluetooth off) in `ARGS`.
+
+### Factory reset
+
+Hold the action button for 10 seconds: at 5 seconds the ring warns (let go and nothing happens), at 10 the Echo
+resets. Or press "Factory reset" in Home Assistant (a configuration button on the device page), or "Factory reset…"
+under System on the settings page. The Echo forgets everything in `/data/local/hassmic/state/` (settings, name, Home
+Assistant's key, approved browsers, Bluetooth pairings, Sendspin, microWakeWord models) and every saved Wi-Fi network,
+then starts as after the install: the orange spinner, [setup from a phone](#setting-up-from-a-phone). Delete the device in Home
+Assistant and add it again afterwards. What stays: the install itself, `hassmic.conf`, Amazon's extra models
+(`scripts/artifacts.sh`). Do not keep holding past 20 seconds: Amazon's own button handler still runs and has its own
+factory reset at 21 s.
 
 ## Troubleshooting
 
@@ -472,6 +504,11 @@ Open issues and measurements: [PLAN.md](PLAN.md).
   checks the signature with the tool and keys from the system partition or the installed copy before anything is
   unpacked. Your key also opens adb over Wi-Fi; the release key does not.
 - **Bluetooth**: keys in `state/ble_bonds` (proxy) and `state/bt_keys` (speaker), both under `/data/local/hassmic/`.
+- **Setup from a phone (Improv)**: offered only without a network: to anyone in Bluetooth range on an Echo that is not
+  set up (nothing to lose there), only after a press of the action button on one that is. The Wi-Fi password crosses
+  Bluetooth unencrypted, as with every Improv device; the Echo keeps only the network key derived from it.
+- **Factory reset**: from Home Assistant only over its encrypted link (once it set a key), from the settings page only
+  from an approved browser, else by holding the button.
 
 ## Development
 

@@ -11,7 +11,7 @@
 # Later versions go over Wi-Fi with scripts/ota-push.sh (each also renews the factory copy and the bootstrap once it passed its self test); this
 # script is only needed once per device, and again if secrets/update.key is lost or the SELinux policy has to change.
 # Undo: scripts/install-system.sh --uninstall, or delete /data/local/hassmic/hassmic.conf (boot.sh then does nothing).
-#   install-system.sh [--twrp] [name]        e.g. install-system.sh "Kitchen"; default DEFAULT_NAME of the model
+#   install-system.sh [--twrp]               the Echo names itself (model and MAC address); name it in Home Assistant
 #   install-system.sh [--twrp] --uninstall
 set -e
 cd "$(dirname "$0")/.."
@@ -25,7 +25,6 @@ TWRP=; [ "$1" = --twrp ] && { TWRP=1; shift; }
 [ "$(adb get-state 2>/dev/null)" = device ] || TWRP=1
 
 if [ "$1" != --uninstall ]; then
-    NAME=${1:-$DEFAULT_NAME}
     # before anything is touched: without it the policy patch below fails with no word of why (issue #10)
     [ -f $SEPOLICY_TOOL ] || die "no $SEPOLICY_TOOL: unzip $FW/boot-root.zip -d $FW/boot-root ($DDIR/README.md)"
     [ "$(adb get-state 2>/dev/null)" = device ] && device_check_firmware
@@ -39,7 +38,7 @@ if [ "$1" != --uninstall ]; then
         # Base = the policy as boot-root left it.  On a re-install /sepolicy is already patched; the untouched copy is kept beside it.
         BASEF=/sepolicy; t "[ -f /sepolicy.pre-hassmic ]" && BASEF=/sepolicy.pre-hassmic
         adb pull $BASEF device-logs/backup/sepolicy.boot-root >/dev/null
-        printf 'NAME="%s"\nARGS="%s"\n' "$NAME" "$DEFAULT_ARGS" > $OUT/hassmic.conf
+        printf 'ARGS="%s"\n' "$DEFAULT_ARGS" > $OUT/hassmic.conf
         t "mkdir -p /data/local/hassmic"; adb push $OUT/hassmic.conf /data/local/hassmic/hassmic.conf >/dev/null
         t "rm -rf /data/local/hassmic/ota; rm -f /data/local/hassmic/hassmic"      # boot.sh prefers a binary here (scripts/deploy.sh test builds); the fresh install wins
         # Patch the policy here, not in TWRP: magiskpolicy is dynamically linked and aborts in the recovery environment.

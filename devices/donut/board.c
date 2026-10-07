@@ -5,7 +5,7 @@ const struct board board = {
     .model = "Echo Dot 3 (donut)",
     .project = "hassmic.echo-dot-3",
     .product = "Echo Dot 3 (hassmic)",
-    .default_name = "Echo Dot",
+    .default_name = "Echo Dot 3",
     .codename = "donut",
 
     .keypad = "/dev/input/event3",                                  /* gpio-keys: action, volume */

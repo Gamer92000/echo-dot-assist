@@ -371,8 +371,6 @@ button.link:hover:not(:disabled) { background: none; text-decoration: underline;
 .field select { min-width: 220px; }
 .field .help { margin: 0; }
 .field input[type=text] { width: min(100%, 320px); }
-.ren-node, .ren-sure { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; font-size: 13.5px; }
-.ren-sure { font-weight: 600; margin-top: 8px; }
 .davs-code { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; }
 .davs-code .code { font: 650 32px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .22em; padding: 16px 14px 16px 22px;
                    border-radius: 12px; background: var(--surface-2); border: 1px solid var(--line-2); user-select: all; }
@@ -473,16 +471,7 @@ dialog.modal::backdrop { background: rgba(8, 12, 16, .55); backdrop-filter: blur
 .modal-foot { display: flex; gap: 8px; justify-content: flex-end; align-items: center; flex-wrap: wrap; padding: 12px 22px; border-top: 1px solid var(--line);
               background: var(--surface-2); border-radius: 0 0 20px 20px; }
 .modal-foot .help { margin: 0; flex: 1; }
-dialog.ask, dialog.ren { width: min(480px, calc(100% - 32px)); }
-.ren .modal-body > .help { margin-top: 14px; }
-.ren-box { margin-top: 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
-.ren-box-t { font-size: 13px; font-weight: 600; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.ren-box > .help, .ren-about .help { margin-top: 6px; }
-.ren-box .help:empty { display: none; }
-.ren .ren-node { margin-top: 12px; font-weight: 560; }
-.ren-node:has(input:disabled) { color: var(--muted); font-weight: 400; }
-.ren .field input[type=text] { width: 100%; }
-.ren .callout { margin: 12px 0 0; }
+dialog.ask { width: min(480px, calc(100% - 32px)); }
 /* the log: as big as the window allows, the lines scroll, tools and foot stay */
 dialog.logs { width: min(1100px, calc(100% - 32px)); height: min(880px, calc(100% - 32px)); }
 .logs .modal-head .icon-btn:first-of-type { margin-right: -6px; }

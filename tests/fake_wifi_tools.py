@@ -155,8 +155,8 @@ def main():
             elif k.startswith("init.svc."): out = "stopped"
         elif tool == "setprop":
             if args[0].startswith("dhcp.wlan0."): w["props"][args[0][len("dhcp.wlan0."):]] = args[1]
-        elif tool == "dhcpcd":                      # -n: ask again; a lease only from a network that has DHCP
-            n, air = connected(w)
+        elif tool == "dhcpcd" or (tool == "start" and args[:1] == ["dhcpcd-wlan0"]):   # -n: ask again, or init's service
+            n, air = connected(w)                   # starting: a lease only from a network that has DHCP
             if n and air.get("dhcp", True):
                 w["props"].update(result="ok", reason="RENEW" if w["lease"]["ip"] == air["ip"] else "BOUND", ipaddress="", gateway="")
                 w["lease"] = {"ip": air["ip"], "gw": air["gw"]}
@@ -167,7 +167,7 @@ def main():
                 arp[air["gw"]] = f"{air['gw']:<16} 0x1         0x2         aa:bb:cc:dd:ee:ff     *        wlan0"; rc = 0
             with open(w["arp_file"], "w") as a:
                 a.write("IP address       HW type     Flags       HW address            Mask     Device\n" + "".join(l + "\n" for l in arp.values()))
-        # stop, start: nothing to say
+        # stop, start (other services): nothing to say
         f.seek(0); f.truncate(); json.dump(w, f)
     if out: print(out)
     sys.exit(rc)

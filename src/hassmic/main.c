@@ -39,6 +39,7 @@
 #include "a2dp.h"
 #include "arb.h"
 #include "ble.h"
+#include "improv.h"
 #include "buttons.h"
 #include "davs.h"
 #include "micdenoise.h"
@@ -66,9 +67,7 @@ static atomic_int sounds_pending;
 static void sound_queue(enum sound s) { atomic_fetch_or(&sounds_pending, 1 << s); }                          /* played by the earcon thread */
 static void sound_request(enum sound s) { if (use_earcon) sound_queue(s); }
 
-const char *core_name;                  /* state/name (settings page), else -n, else board.default_name */
-static const char *install_name;        /* -n (hassmic.conf NAME), else board.default_name: the node name's source */
-static char node_set[64];               /* state/node: a node name chosen on the settings page, else none */
+const char *core_name;                  /* name_make(), or -n (the PC) */
 
 /* The name is UTF-8.  Latin-1 letters (U+00C0..U+00FF, lead byte 0xC3) are spelled out, the German way for the umlauts
  * ("Küchen Echo" -> "kuechen-echo"); anything else that is not a letter or digit separates words.  Each byte of "ü"
@@ -100,62 +99,44 @@ static void node_of(const char *name, char n[64])
     if (!j) snprintf(n, 64, "echo");                    /* a name with no Latin letter at all ("日本") */
 }
 
-/* From the install name, not the display name: renaming on the settings page leaves the node (ESPHome device name, host
- * name, Home Assistant's entity ids and the arbitration handoff entity found by them) alone unless asked to change it */
 const char *core_node_name(void)
 {
     static char n[64];
-    if (node_set[0]) return node_set;
-    node_of(install_name ? install_name : core_name, n);
+    if (!n[0]) node_of(core_name, n);
     return n;
 }
 
-/* ---------------------------------------------------------------- the name, as renamed on the settings page */
+/* ---------------------------------------------------------------- the name */
+
+/* One name, made at start and kept nowhere: the model's (board.default_name: "Echo Dot 3") and the last three bytes of
+ * the Wi-Fi MAC address, as ESPHome's name_add_mac_suffix and the Voice PE do ("Echo Dot 2 5695c4", node
+ * "echo-dot-2-5695c4"): two Echos of a model never share it, and a reset never changes it.  What people call it is
+ * Home Assistant's business (the name given when adding the device), not the Echo's.  -n sets another: for the PC,
+ * which has no Echo's MAC address.  radar brings wlan0 up late in the boot: the address is waited for. */
+static void name_make(void)
+{
+    static char name[64];
+    char mac[24] = "";
+    for (int i = 0; i < 120; i++) {
+        FILE *f = fopen("/sys/class/net/wlan0/address", "r");
+        if (f) { if (fscanf(f, "%23s", mac) != 1) mac[0] = 0; fclose(f); }
+        if (strlen(mac) == 17 && strcmp(mac, "00:00:00:00:00:00")) break;
+        mac[0] = 0;
+#ifndef __ANDROID__
+        break;                                          /* the PC: no Echo's address to wait for */
+#endif
+        if (!i) fprintf(stderr, "name: waiting for the Wi-Fi MAC address\n");
+        sleep(1);
+    }
+    if (mac[0]) snprintf(name, sizeof name, "%s %.2s%.2s%.2s", board.default_name, mac + 9, mac + 12, mac + 15);
+    else snprintf(name, sizeof name, "%s", board.default_name);
+    core_name = name;
+}
 
 static void state_file(char *out, size_t cap, const char *file)
 {
     const char *d = getenv("HASSMIC_STATE");
     snprintf(out, cap, "%s/%s", d ? d : "/data/local/hassmic/state", file);
-}
-
-/* One line of a file the daemon wrote.  main.sh also runs hassmic -S as root (the avahi service file), so never through a
- * link, nor a root-owned file: root would print what the daemon's user cannot read. */
-static int read_own(const char *file, char *out, size_t cap)
-{
-    char p[300]; struct stat st; ssize_t n; int fd;
-    state_file(p, sizeof p, file);
-    if ((fd = open(p, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)) < 0) return -1;
-    if (fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_nlink != 1 || (geteuid() == 0 && st.st_uid == 0) || st.st_size >= (off_t)cap) { close(fd); return -1; }
-    n = read(fd, out, cap - 1); close(fd);
-    if (n <= 0) return -1;
-    out[n] = 0; out[strcspn(out, "\r\n")] = 0;
-    return out[0] ? 0 : -1;
-}
-
-/* Printable, and nothing that needs escaping where the name goes unescaped (the avahi service file's XML, JSON, the
- * Alexa app's registration): a name, not markup */
-static int name_ok(const char *s)
-{
-    size_t n = strlen(s);
-    if (!n || n > 48 || s[0] == ' ' || s[n - 1] == ' ') return 0;
-    for (const unsigned char *c = (const unsigned char *)s; *c; c++) if (*c < 0x20 || *c == 0x7F || strchr("<>&\"'\\", *c)) return 0;
-    return 1;
-}
-
-static int valid_node(const char *s)
-{
-    if (!*s || strlen(s) > 63) return 0;
-    for (; *s; s++) if (!islower((unsigned char)*s) && !isdigit((unsigned char)*s) && *s != '-') return 0;
-    return 1;
-}
-
-static void names_load(void)
-{
-    static char name[64];
-    install_name = core_name;
-    if (!read_own("name", name, sizeof name) && name_ok(name)) core_name = name;
-    char n[80];
-    if (!read_own("node", n, sizeof n) && valid_node(n)) snprintf(node_set, sizeof node_set, "%s", n);
 }
 
 static int write_state(const char *file, const char *text)
@@ -168,20 +149,43 @@ static int write_state(const char *file, const char *text)
     return 0;
 }
 
-const char *core_node_of(const char *name) { static char n[64]; node_of(name, n); return n; }
+/* ---------------------------------------------------------------- setup (OOBE) and reset */
 
-int core_rename(const char *name, int node, char *err, size_t errsz)
+/* From an install or a reset until Home Assistant took the Echo on: stock's setup spinner (setup-mode: orange, what
+ * uxconfig.json shows for oobe-setup-mode-on and state-boot-up-oobe, on every model), and Improv advertises while there is no
+ * network (improv.c).  "Took it on" = its voice assistant subscribed (core_link ready): Home Assistant does that once the
+ * device is added, not while its discovery merely looks.  An Echo that has Home Assistant's encryption key was added
+ * before this existed. */
+static void led(const char *op, const char *pattern);
+static atomic_int oobe;
+int core_oobe(void) { return atomic_load(&oobe); }
+
+static void oobe_load(void)
 {
-    char line[80];
-    if (!name_ok(name)) { snprintf(err, errsz, "a name of 1 to 48 characters, without < > & \" ' \\ and not starting or ending with a space"); return -1; }
-    snprintf(line, sizeof line, "%s\n", name);
-    if (write_state("name", line)) { snprintf(err, errsz, "cannot write the name"); return -1; }
-    if (node) { snprintf(line, sizeof line, "%s\n", core_node_of(name)); if (write_state("node", line)) { snprintf(err, errsz, "cannot write the node name"); return -1; } }
-    /* everything the name is in was built at start (mDNS, Home Assistant's device, Bluetooth, Music Assistant): root's
-     * watcher restarts the satellite, as after a model install (main.sh) */
-    if (write_state("restart", "rename\n")) { snprintf(err, errsz, "cannot ask for the restart"); return -1; }
-    fprintf(stderr, "web: renamed to \"%s\"%s%s, restart asked\n", name, node ? ", node " : "", node ? core_node_of(name) : "");
-    return 0;
+    char p[300];
+    state_file(p, sizeof p, "adopted");
+    if (!access(p, F_OK)) return;
+    state_file(p, sizeof p, "api_key");
+    if (!access(p, F_OK)) { write_state("adopted", "key\n"); return; }
+    atomic_store(&oobe, 1);
+}
+
+static void adopted(void)
+{
+    if (!atomic_load(&oobe)) return;
+    if (write_state("adopted", "ha\n")) { fprintf(stderr, "setup: cannot write state/adopted\n"); return; }
+    atomic_store(&oobe, 0);
+    led("-u", "setup-mode");
+    fprintf(stderr, "setup: Home Assistant took this Echo on, setup done\n");
+}
+
+void core_reset(const char *why)
+{
+    char line[48];
+    snprintf(line, sizeof line, "%s\n", why);
+    if (write_state("reset", line)) { fprintf(stderr, "reset: cannot ask root for it\n"); return; }
+    led("-s", "factory-reset");
+    fprintf(stderr, "reset (%s): root forgets the settings and Wi-Fi networks, then the setup starts again\n", why);
 }
 static int ota_port = 28929;                        /* 0 = no push updates */
 static int arb_port = 28930;                        /* 0 = no wake word arbitration */
@@ -722,6 +726,7 @@ void core_link(int up, int ready)
 {
     int was = satellite_running;
     connected = up; satellite_running = up && ready;
+    if (satellite_running) adopted();
     if (!satellite_running) core_pipeline_finish();
     else if (!was && !core_local_wake && state == IDLE) pipeline_start();
 }
@@ -1012,6 +1017,7 @@ void core_entities_changed(void) { if (connected && proto->entities_changed) pro
 /* The settings page's login waits for the action button: the ring says so (an animation all models have) */
 static void web_attention(int on) { led(on ? "-s" : "-u", "authenticated_setup_mode"); }
 static void web_approved(int ok) { sound_queue(ok ? SND_BT_ON : SND_BT_OFF); }
+static void improv_authorized(void) { sound_queue(SND_BT_ON); }      /* a phone's setup may go ahead: as a login */
 
 static int arb_request(const char *entity)
 {
@@ -1184,11 +1190,22 @@ static void *earcon_thread(void *arg)
 static void on_action(void)
 {
     if (web_approve()) return;                          /* a login of the settings page waited for this press */
+    if (improv_authorize()) return;                     /* a phone setting up the network did */
     pthread_mutex_lock(&core_lock);
     int busy = state == LISTENING || state == THINKING;
     pthread_mutex_unlock(&core_lock);
     if (!busy && (a2dp_button(0) || (core_sendspin_port && sendspin_button()) || a2dp_button(1))) return;
     atomic_store(&trigger_pending, 2);                  /* 2: touch */
+}
+
+/* Action button held: at 5 s the ring warns, at 10 s everything is forgotten (core_reset).  acebuttond still sees the
+ * button: its 5 s hold starts Amazon's setup, whose services are stopped (nothing happens, checked: PLAN.md), and its
+ * 21 s hold is Amazon's factory reset, which the reset here comes long before. */
+static void on_hold(int stage)
+{
+    if (stage == 1) { led("-s", "factory-reset"); fprintf(stderr, "action button held 5 s: reset at 10 s\n"); }
+    else if (stage == 0) { led("-u", "factory-reset"); fprintf(stderr, "action button let go: no reset\n"); }
+    else core_reset("action button held 10 s");
 }
 
 static void on_mute(int muted)          /* hardware latch changed (button) */
@@ -1593,7 +1610,6 @@ static void on_winch(int s) { (void)s; atomic_store(&pair_pending, 1); }
 int main(int argc, char **argv)
 {
     const char *manifest = NULL, *input = board.keypad; int port = 0, print_mdns = 0, o;
-    core_name = board.default_name;
     micgain_init(&mic_gain, MICGAIN_LEVEL);            /* until the protocol has its saved settings (Wyoming: always) */
     while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:a:W:LEVSTB")) != -1) switch (o) {
         case 'P': proto = !strcmp(optarg, "wyoming") ? &proto_wyoming : &proto_esphome; break;
@@ -1615,7 +1631,11 @@ int main(int argc, char **argv)
         default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-z port] [-o port] [-a port] [-W port] [-L] [-E] [-V] [-S]\n"); return 2;
     }
     core_port = port ? port : proto->port;
-    names_load();
+    if (!core_name) name_make();
+    if (!print_mdns) { char p[300];                 /* names set on the settings page or by NAME before there was one name */
+      state_file(p, sizeof p, "name"); if (!unlink(p)) fprintf(stderr, "name: the one set before is gone, this Echo is \"%s\" now\n", core_name);
+      state_file(p, sizeof p, "node"); unlink(p); }
+    if (!print_mdns) fprintf(stderr, "name: %s (node %s)\n", core_name, core_node_name());
     { char eng[24];                                 /* the settings page's "Home Assistant" engine: as -w remote */
       if (core_local_wake && !settings_peek("wake_engine", eng, sizeof eng) && !strcmp(eng, "homeassistant")) core_local_wake = 0; }
     if (print_mdns) { proto->print_mdns(); return 0; }
@@ -1623,6 +1643,10 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin); signal(SIGWINCH, on_winch);
     if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
     led("-u", "scone-setup");           /* a restart inside the pairing window: the window is gone, its chaser would loop on */
+    led("-u", "factory-reset");         /* a reset asked for before this start is done (main.sh) */
+    oobe_load();
+    if (atomic_load(&oobe)) { led("-s", "setup-mode"); fprintf(stderr, "setup: not set up yet (no Home Assistant), the ring shows the setup spinner until it is\n"); }
+    else led("-u", "setup-mode");
 
     if (cap_open() < 0) { fprintf(stderr, "cannot open capture (is PuffinApp still running?)\n"); return 1; }
     pthread_mutex_lock(&core_lock); listening(0); pthread_mutex_unlock(&core_lock);
@@ -1653,12 +1677,14 @@ int main(int argc, char **argv)
     pthread_create(&ear_t, NULL, earcon_thread, NULL);
     { pthread_t vol_t; pthread_create(&vol_t, NULL, volume_led_thread, NULL); pthread_detach(vol_t); }
 
-    static const struct button_handler buttons = { on_action, on_mute, on_volume, on_pair };
+    static const struct button_handler buttons = { on_action, on_mute, on_volume, on_pair, on_hold };
     if (buttons_start(input, &buttons) < 0) fprintf(stderr, "buttons: %s not available\n", input);
     else if (buttons_muted()) on_mute(1);
 
     if (core_sendspin_port) sendspin_start(core_sendspin_port);
     if (use_bt) a2dp_start(NULL);
+    static const struct improv_hooks improv_hooks = { web_attention, improv_authorized };
+    if (use_bt) improv_start(&improv_hooks);                 /* setup over Bluetooth, when there is no network (improv.c) */
     if (ota_port) ota_start(ota_port);
     pthread_mutex_lock(&core_lock); settings_load(); settings_preset(); pthread_mutex_unlock(&core_lock);    /* whatever the protocol */
     davs_start();                                             /* Amazon login for artifact downloads (settings page) */

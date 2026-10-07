@@ -1577,109 +1577,19 @@ async function copyModels(jobs) {
 
 let adbBox, clientsBox, importMsg, nameCtl, wifiCtl;
 
-// The node name a name makes, as main.c node_of: ASCII letters and digits lower-cased, Latin-1 letters spelled out the
-// German way ("Küchen Echo" -> "kuechen-echo"), anything else one dash between words
-const LATIN1 = ['a', 'a', 'a', 'a', 'ae', 'a', 'ae', 'c', 'e', 'e', 'e', 'e', 'i', 'i', 'i', 'i',
-  'd', 'n', 'o', 'o', 'o', 'o', 'oe', null, 'o', 'u', 'u', 'u', 'ue', 'y', 'th', 'ss'];
-function nodeOf(name) {
-  const b = enc.encode(name); let n = '', dash = false;
-  for (let i = 0; i < b.length; i++) {
-    const c = b[i]; let add = null;
-    if ((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)) add = String.fromCharCode(c).toLowerCase();
-    else if (c === 0xC3 && i + 1 < b.length) { const d = b[++i]; add = d === 0xBF ? 'y' : d === 0xB7 ? null : d >= 0x80 && d <= 0xBF ? LATIN1[(d - 0x80) & 0x1F] : null; }
-    else while (i + 1 < b.length && (b[i + 1] & 0xC0) === 0x80) i++;
-    if (!add) { dash = n.length > 0; continue; }
-    if (dash && n.length < 63) n += '-';
-    dash = false;
-    n = (n + add).slice(0, 63);
-  }
-  return n || 'echo';
-}
-// what main.c name_ok takes: it goes unescaped into the avahi service file
-const nameProblem = (t) => !t ? 'Give it a name.' : enc.encode(t).length > 48 ? 'At most 48 characters.'
-  : /[\x00-\x1f\x7f<>&"'\\]/.test(t) ? 'Without < > & " \' or \\.' : null;
-
-// Rename: the display name alone, or the node name with it (what that costs is spelled out, and ticked off, first).
-// The row shows the name; the form is a dialog of its own.
+// The name: the model and the end of its MAC address (main.c name_make), never set here.  What people call it is the name
+// given in Home Assistant when the Echo was added.
 function nameRow() {
   const now = h('div', { class: 'row-val' });
   nameCtl = { paint: () => {
     now.replaceChildren(echo.hello.name, ' ', h('code', { title: 'Node name: ESPHome device name, host name' }, echo.hello.node));
-    if (nameCtl.dialog) nameCtl.dialog();
   } };
-  return infoRow('Name', 'What this Echo is called: in Home Assistant (unless you renamed the device there; yours stays), on Bluetooth, in Music Assistant and on these pages.',
-    h('button', { onclick: renameDialog }, icon('pen'), 'Rename…'), null, now);
-}
-
-function renameDialog() {
-  const input = h('input', { type: 'text', id: 'ren-name', maxlength: '48', autocomplete: 'off', value: echo.hello.name });
-  const node = h('input', { type: 'checkbox', id: 'ren-node' }), sure = h('input', { type: 'checkbox', id: 'ren-sure' });
-  const msg = h('p', { class: 'help' }), costs = h('div'), go = h('button', { type: 'submit', class: 'primary' }, 'Rename');
-  const nodeNow = h('code'), nodeAbout = h('div', { class: 'ren-about' }), nodeTo = h('span'), nodeMsg = h('p', { class: 'help' });
-  const m = modal('Rename this Echo', 'ren');
-  let busy = false;
-  // The node name, and why it stays unless asked: what it is, what refers to the Echo by it, when changing it pays off.
-  // The costs in detail, and a second tick, follow once it is ticked.
-  const paint = () => {
-    const cur = echo.hello.name, curNode = echo.hello.node, t = input.value.trim(), want = nodeOf(t), bad = nameProblem(t);
-    const a = state.arbitration, taken = node.checked && want !== curNode && a && [...a.members, ...(a.others || [])].find((x) => x.node === want);
-    msg.replaceChildren(...(bad && t !== cur ? [h('span', { class: 'f-bad' }, bad)]
-      : ['Shown in Home Assistant (unless you renamed the device there: yours stays), on Bluetooth, in Music Assistant and on these pages.']));
-    nodeNow.textContent = curNode;
-    nodeAbout.replaceChildren(h('p', { class: 'help' }, 'The Echo\'s technical name, made from the name it was installed with: its ESPHome device name, its host name ',
-      h('code', {}, `${curNode}.local`), ' and the start of its entity ids in Home Assistant, ', h('code', {}, `sensor.${curNode.replace(/-/g, '_')}_…`), '.'),
-      h('p', { class: 'help' }, 'Renaming leaves it alone, so everything that refers to the Echo by it keeps working; Home Assistant shows the new name either way. Change it too only when the old one would mislead, such as a ',
-      h('code', {}, 'kitchen-echo'), ' that now stands in the bedroom.'));
-    const same = !bad && want === curNode;
-    node.disabled = busy || !!bad || same;
-    if (same) node.checked = false;
-    nodeTo.replaceChildren(...(bad || !t || (same && t === cur) ? ['Also change the node name']
-      : same ? ['The new name makes the same node name: it stays ', h('code', {}, curNode)]
-      : ['Also change the node name to ', h('code', {}, want)]));
-    nodeMsg.replaceChildren(...(taken ? [h('span', { class: 'f-bad' }, `${taken.node} is another Echo's node name already: Home Assistant would mix the two up. Pick another name.`)] : []));
-    costs.replaceChildren();
-    if (node.checked && want !== curNode && !bad) costs.append(callout('warn',
-      h('p', {}, h('b', {}, 'What changing it does:')),
-      h('ul', {},
-        h('li', {}, 'Home Assistant keeps the device (it knows it by its MAC address) and the entity ids it has, so your automations keep working; entities added later start with ', h('code', {}, `${want.replace(/-/g, '_')}_`), '. Rename the old ones there if you want them to match.'),
-        h('li', {}, 'The host name becomes ', h('code', {}, `${want}.local`), ': bookmarks or anything else that reaches the Echo by name need the new one. By IP address nothing changes.')),
-      h('label', { class: 'ren-sure' }, sure, ' Change the node name anyway')));
-    const changes = t !== cur || (node.checked && want !== curNode);
-    go.disabled = busy || !!bad || !!taken || !changes || (node.checked && want !== curNode && !sure.checked);
-    go.replaceChildren(...(busy ? [h('span', { class: 'spin' }), 'Restarting…'] : ['Rename']));
-  };
-  input.oninput = paint;
-  node.onchange = () => { sure.checked = false; paint(); };
-  sure.onchange = paint;
-  const submit = async (e) => {
-    e.preventDefault();
-    if (go.disabled) return;
-    const t = input.value.trim(), withNode = node.checked && nodeOf(t) !== echo.hello.node;
-    busy = true; paint();
-    try {
-      await echo.call('POST', '/api/name', `${withNode ? 1 : 0} ${t}`);
-      toast('Renamed: the satellite restarts for a few seconds');
-      await waitBack(echo);
-      location.reload();
-    } catch (err) { toast(errText(err)); busy = false; paint(); }
-  };
-  m.dlg.oncancel = (e) => { if (busy) e.preventDefault(); };          // Escape: not while it restarts
-  m.onclose = () => { nameCtl.dialog = null; };
-  nameCtl.dialog = paint;                                            // the Echo's names as they come in
-  m.body.append(h('form', { id: 'ren-form', onsubmit: submit },
-    h('div', { class: 'field ask-field' }, h('label', { for: 'ren-name' }, 'Name'), input, msg),
-    h('div', { class: 'ren-box' }, h('div', { class: 'ren-box-t' }, 'Node name ', nodeNow), nodeAbout,
-      h('label', { class: 'ren-node' }, node, nodeTo), nodeMsg, costs)),
-    h('p', { class: 'help' }, 'The Alexa app keeps the name it got when this Echo signed in to Amazon. The satellite restarts once, for a few seconds.'));
-  go.setAttribute('form', 'ren-form');
-  m.foot.append(h('button', { type: 'button', onclick: () => m.dlg.close() }, 'Cancel'), go);
-  paint();
-  m.show();
-  input.focus(); input.select();
+  return infoRow('Name', 'Made from the model and the end of its MAC address, so no two Echos share it and a reset keeps it. Name it in Home Assistant: on the device\'s page there (the pencil), which is where everything else picks names up from.',
+    null, null, now);
 }
 
 // A dialog of the page's own, as the Wi-Fi one: title, a body that scrolls, a foot for its buttons.  cls names it for
-// its size (ren, logs).  onclose: when it is gone.
+// its size (logs).  onclose: when it is gone.
 function modal(title, cls) {
   const t = h('h2', { id: 'm-title-' + cls }, title), body = h('div', { class: 'modal-body' }), foot = h('div', { class: 'modal-foot' });
   const m = { body, foot, onclose: null };
@@ -1944,12 +1854,23 @@ function buildSystem(el, list) {
     infoRow('Settings file', ['All settings except what belongs to this one Echo (its name, keys, pairings), as a text file. Import it on another Echo, keep it as a backup, or give it to ', h('code', {}, 'scripts/setup.sh --preset'), ' so the next Echo you install starts with these settings.'],
       [h('button', { onclick: exportFile }, icon('down'), 'Export'), h('button', { onclick: () => file.click() }, icon('up'), 'Import…'), file], h('div', { class: 'row-x' }, importMsg)),
     logRow(),
-    infoRow('Debug access', 'Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.', adbBox)));
+    infoRow('Debug access', 'Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.', adbBox),
+    infoRow('Factory reset', 'Forgets everything this Echo was told: settings, name, Home Assistant\'s key, approved browsers, Bluetooth pairings, and its Wi-Fi networks. It then waits to be set up again, like after the install: the Home Assistant app finds it over Bluetooth. The same as holding the action button for 10 seconds.',
+      h('button', { class: 'danger', onclick: factoryReset }, 'Factory reset…'))));
 
   clientsBox = h('div');
   el.append(h('div', { class: 'card' },
     infoRow('Approved browsers', 'Browsers that may change settings on this Echo. Revoke one you no longer use.', null),
     h('div', { class: 'clients' }, clientsBox)));
+}
+
+// Factory reset (main.c core_reset): root wipes state/ and the Wi-Fi networks, the Echo leaves the network
+async function factoryReset() {
+  if (!await ask({ title: 'Factory reset?', ok: 'Reset', danger: true, body: [
+    `${echo.hello.name} forgets its settings, its name, Home Assistant's key, the browsers approved here, its Bluetooth pairings and its Wi-Fi networks, and leaves the network.`,
+    'Then it waits with the orange setup spinner on the ring: set it up again with the Home Assistant app (Settings, Devices, Add device), which finds it over Bluetooth. Home Assistant has to add it again too.'] })) return;
+  try { await echo.call('POST', '/api/reset', 'reset'); toast(`${echo.hello.name} is resetting and leaves the network: set it up again with the Home Assistant app`); }
+  catch (e) { toast(errText(e)); }
 }
 
 function renderSystem() {

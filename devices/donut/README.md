@@ -212,7 +212,7 @@ scripts/wifi-join.sh                                     # refuses to run withou
 ### 5. Install it, adopt it in Home Assistant
 
 ```sh
-scripts/install-system.sh "Kitchen Echo"         # the name Home Assistant will show
+scripts/install-system.sh                        # the Echo names itself ("Echo Dot 3 5695c4"); name it in Home Assistant
 ```
 
 Patches the SELinux policy, writes `/system/hassmic/`, an init file and the policy into the active slot while the Echo runs

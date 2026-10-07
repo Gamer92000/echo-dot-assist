@@ -19,8 +19,13 @@
  * and the controller's flow control, ATT with one request on the air at a time (ATT's own rule), service discovery on
  * request, long reads (Read Blob), long writes (prepared writes), notifications and indications.  Home Assistant writes
  * the notification descriptors itself (with REMOTE_CACHING it does).  What the device asks of us: the MTU exchange and
- * connection parameter updates are granted; our own GATT server is empty.  Scanning pauses while a connection is being
- * set up, as ESPHome does.
+ * connection parameter updates are granted; our GATT server is empty towards these devices.  Scanning pauses while a
+ * connection is being set up, as ESPHome does.
+ *
+ * The peripheral role, for setting the Echo up from a phone (improv.c): legacy connectable advertising, and one link a
+ * phone opens to us (conns[SRV], outside the proxy's slots), on which a small GATT server answers: Generic Access and the
+ * one service ble_serve() gave, its characteristics read, written (long writes too) and notified.  No pairing on that
+ * link: Improv has none, and a phone that asks is told so.
  *
  * Pairing (SMP, we are always the initiator): Just Works like an ESP32 proxy, which has no display or keyboard either.
  * LE Secure Connections when the controller does the P-256 part (LE Read Local P-256 Public Key, LE Generate DHKey),
@@ -63,7 +68,7 @@ enum { H4_CMD = 1, H4_ACL = 2, H4_EVT = 4 };
 enum { EV_DISCONNECT = 0x05, EV_ENC_CHANGE = 0x08, EV_ENC_REFRESH = 0x30, EV_CMD_COMPLETE = 0x0e, EV_CMD_STATUS = 0x0f, EV_NUM_COMPLETED = 0x13, EV_LE_META = 0x3e };
 enum { LE_CONN_COMPLETE = 0x01, LE_ADV_REPORT = 0x02, LE_LTK_REQUEST = 0x05, LE_PK_COMPLETE = 0x08, LE_DHKEY_COMPLETE = 0x09 };
 enum { OP_DISCONNECT = 0x0406, OP_EVENT_MASK = 0x0c01, OP_RESET = 0x0c03, OP_READ_LOCAL_CMDS = 0x1002, OP_READ_BUFFER = 0x1005, OP_LE_EVENT_MASK = 0x2001,
-       OP_LE_READ_BUFFER = 0x2002, OP_LE_SCAN_PARAMS = 0x200b, OP_LE_SCAN_ENABLE = 0x200c, OP_LE_CONNECT = 0x200d,
+       OP_LE_READ_BUFFER = 0x2002, OP_LE_ADV_PARAMS = 0x2006, OP_LE_ADV_DATA = 0x2008, OP_LE_SCAN_RSP = 0x2009, OP_LE_ADV_ENABLE = 0x200a, OP_LE_SCAN_PARAMS = 0x200b, OP_LE_SCAN_ENABLE = 0x200c, OP_LE_CONNECT = 0x200d,
        OP_LE_CONNECT_CANCEL = 0x200e, OP_LE_CONN_UPDATE = 0x2013, OP_LE_START_ENC = 0x2019, OP_LE_LTK_NEG = 0x201b,
        OP_LE_READ_PK = 0x2025, OP_LE_DHKEY = 0x2026 };
 enum { CID_ATT = 4, CID_SIG = 5, CID_SMP = 6 };
@@ -71,7 +76,10 @@ enum { ATT_ERROR = 0x01, ATT_MTU_REQ, ATT_MTU_RSP, ATT_FIND_INFO_REQ, ATT_FIND_I
        ATT_READ_TYPE_RSP, ATT_READ_REQ, ATT_READ_RSP, ATT_READ_BLOB_REQ, ATT_READ_BLOB_RSP, ATT_READ_GROUP_REQ = 0x10,
        ATT_READ_GROUP_RSP, ATT_WRITE_REQ, ATT_WRITE_RSP, ATT_PREP_WRITE_REQ = 0x16, ATT_PREP_WRITE_RSP, ATT_EXEC_WRITE_REQ,
        ATT_EXEC_WRITE_RSP, ATT_NOTIFY = 0x1b, ATT_INDICATE = 0x1d, ATT_CONFIRM = 0x1e, ATT_WRITE_CMD = 0x52 };
-enum { ATT_E_NOT_SUPPORTED = 0x06, ATT_E_NOT_LONG = 0x0b, ATT_E_NOT_FOUND = 0x0a, GATT_E_FAILED = 0x85 };
+enum { ATT_E_INVALID_HANDLE = 0x01, ATT_E_READ_NOT_PERMITTED, ATT_E_WRITE_NOT_PERMITTED, ATT_E_INVALID_PDU, ATT_E_NOT_SUPPORTED = 0x06,
+       ATT_E_INVALID_OFFSET, ATT_E_PREP_QUEUE_FULL = 0x09, ATT_E_NOT_FOUND = 0x0a, ATT_E_NOT_LONG = 0x0b, ATT_E_INVALID_LEN = 0x0d,
+       ATT_E_UNSUPPORTED_GROUP = 0x10, GATT_E_FAILED = 0x85 };
+enum { ATT_FIND_TYPE_REQ = 0x06, ATT_FIND_TYPE_RSP };
 enum { HCI_E_UNKNOWN_CONN = 0x02, HCI_E_TIMEOUT = 0x08, HCI_E_LIMIT = 0x09, HCI_E_USER_ENDED = 0x13 };
 
 static int fd = -1, wake[2] = { -1, -1 };
@@ -146,7 +154,10 @@ static struct conn {
     unsigned char rx[4 + ATT_MTU + 64]; size_t rxlen, rxwant;  /* L2CAP reassembly */
     unsigned char upd_par[8];                   /* LE Connection Update wanted by the device */
     int unacked;                                /* ACL packets sent, not yet reported complete */
-} conns[BLE_MAX_CONN];
+    int srv;                                    /* conns[SRV]: a phone's link to our GATT server */
+} conns[BLE_MAX_CONN + 1];
+#define SRV BLE_MAX_CONN                        /* the peripheral link's place, after the proxy's slots */
+#define NCONN (BLE_MAX_CONN + 1)
 
 static unsigned acl_len = 27, acl_num = 1; static int credits;
 struct frag { struct frag *next; int handle; size_t len; unsigned char b[]; };
@@ -154,6 +165,7 @@ static struct frag *fhead, **ftail = &fhead;
 
 static void set_slot(struct conn *c, uint64_t addr)
 {
+    if (c - conns >= BLE_MAX_CONN) return;
     pthread_mutex_lock(&qlock); slot_addr[c - conns] = addr; pthread_mutex_unlock(&qlock);
     if (H->slots_changed) H->slots_changed();
 }
@@ -161,7 +173,7 @@ static void set_slot(struct conn *c, uint64_t addr)
 static const struct ble_handler no_handler;
 
 static struct conn *by_addr(uint64_t a) { for (int i = 0; i < BLE_MAX_CONN; i++) if (conns[i].state != C_FREE && conns[i].addr == a) return &conns[i]; return NULL; }
-static struct conn *by_handle(int h) { for (int i = 0; i < BLE_MAX_CONN; i++) if (conns[i].state >= C_MTU && conns[i].handle == h) return &conns[i]; return NULL; }
+static struct conn *by_handle(int h) { for (int i = 0; i < NCONN; i++) if (conns[i].state >= C_MTU && conns[i].handle == h) return &conns[i]; return NULL; }
 static struct conn *in_state(int s) { for (int i = 0; i < BLE_MAX_CONN; i++) if (conns[i].state == s) return &conns[i]; return NULL; }
 
 static void acl_flush(void)
@@ -197,6 +209,7 @@ static void l2cap_send(struct conn *c, unsigned cid, const void *pdu, size_t n)
 }
 
 static void att_send(struct conn *c, const void *pdu, size_t n) { l2cap_send(c, CID_ATT, pdu, n); }
+static int cmd(unsigned op, const void *par, unsigned n);
 
 static struct conn *dh_owner;                   /* the one DHKey computation the controller does at a time */
 
@@ -435,6 +448,256 @@ static void sig_rx(struct conn *c, const unsigned char *p, size_t n)
         r[0] = 0x01; r[1] = p[1]; put16(r + 2, 2); put16(r + 4, 0);
         l2cap_send(c, CID_SIG, r, 6);
     }
+}
+
+/* ---------------------------------------------------------------- GATT server (the peripheral link) */
+
+/* The attribute table, built by ble_serve(): handle = index + 1.  Generic Access first (device name, appearance: what a
+ * phone shows and iOS reads), then the server's service, each characteristic as declaration, value and, when it
+ * notifies, its Client Characteristic Configuration descriptor. */
+enum { A_SVC, A_CHR, A_VAL, A_CCCD };
+#define GAP_NAME (-1)
+#define GAP_LOOK (-2)
+#define GAP_SVC  (-3)
+struct attr { int kind, chr; };                 /* chr: the server's characteristic, or one of GAP_* */
+static const struct ble_server *S;
+static struct attr attrs[8 + 3 * BLE_SRV_CHR]; static unsigned nattr, svc_start;
+static unsigned cccd_on;                        /* controller thread: bit per characteristic, the phone subscribed */
+static atomic_uint notify_due;                  /* bit per characteristic: changed since last sent (ble_server_notify) */
+static atomic_int drop_srv;                     /* ble_server_drop() */
+static struct { unsigned char b[512]; size_t n; unsigned handle; } prep;     /* prepared writes: one value, as they come */
+
+static void attr_add(int kind, int chr) { attrs[nattr].kind = kind; attrs[nattr].chr = chr; nattr++; }
+
+/* the attribute's type; its length (2 or 16) */
+static size_t attr_type(unsigned h, unsigned char *t)
+{
+    const struct attr *a = &attrs[h - 1]; unsigned u = 0;
+    switch (a->kind) {
+    case A_SVC: u = 0x2800; break;
+    case A_CHR: u = 0x2803; break;
+    case A_CCCD: u = 0x2902; break;
+    case A_VAL:
+        if (a->chr == GAP_NAME) u = 0x2a00;
+        else if (a->chr == GAP_LOOK) u = 0x2a01;
+        else { memcpy(t, S->chr[a->chr].uuid, 16); return 16; }
+    }
+    put16(t, u);
+    return 2;
+}
+
+static unsigned attr_props(const struct attr *a) { return a->chr < 0 ? BLE_PROP_READ : S->chr[a->chr].props; }
+
+/* its value, at most cap bytes */
+static size_t attr_value(unsigned h, unsigned char *v, size_t cap)
+{
+    const struct attr *a = &attrs[h - 1]; unsigned char t[24]; size_t n = 0;
+    switch (a->kind) {
+    case A_SVC:
+        if (a->chr == GAP_SVC) { put16(t, 0x1800); n = 2; } else { memcpy(t, S->uuid, 16); n = 16; }
+        break;
+    case A_CHR:                                 /* properties, value handle, value type */
+        t[0] = attr_props(&attrs[h]); put16(t + 1, h + 1); n = 3 + attr_type(h + 1, t + 3);
+        break;
+    case A_CCCD: put16(t, cccd_on >> a->chr & 1); n = 2; break;
+    case A_VAL:
+        if (a->chr == GAP_LOOK) { put16(t, 0x0840); n = 2; break; }       /* appearance: generic speaker */
+        return S->read(a->chr == GAP_NAME ? -1 : a->chr, v, cap);
+    }
+    if (n > cap) n = cap;
+    memcpy(v, t, n);
+    return n;
+}
+
+static unsigned svc_end(unsigned h) { return h < svc_start ? svc_start - 1 : nattr; }    /* h: a service declaration */
+
+static void att_err(struct conn *c, unsigned op, unsigned h, unsigned e)
+{
+    unsigned char r[5] = { ATT_ERROR, (unsigned char)op }; put16(r + 2, h); r[4] = e;
+    att_send(c, r, 5);
+}
+
+/* the handle range of a find or read-by request: 0 if it is valid, else answered with the error */
+static int range(struct conn *c, const unsigned char *p, size_t n, size_t min, unsigned *s, unsigned *e)
+{
+    if (n < min) { att_err(c, p[0], 0, ATT_E_INVALID_PDU); return -1; }
+    *s = u16(p + 1); *e = u16(p + 3);
+    if (!*s || *s > *e) { att_err(c, p[0], *s, ATT_E_INVALID_HANDLE); return -1; }
+    if (*s > nattr) { att_err(c, p[0], *s, ATT_E_NOT_FOUND); return -1; }
+    if (*e > nattr) *e = nattr;
+    return 0;
+}
+
+static void write_value(struct conn *c, const struct attr *a, const unsigned char *v, size_t n)
+{
+    (void)c;
+    if (a->kind == A_CCCD) { if (n >= 1 && v[0] & 1) cccd_on |= 1u << a->chr; else cccd_on &= ~(1u << a->chr); }
+    else S->write(a->chr, v, n);
+}
+
+/* 0 if the attribute takes a write of this kind, else the ATT error */
+static int writable(unsigned h, int cmd)
+{
+    if (!h || h > nattr) return ATT_E_INVALID_HANDLE;
+    const struct attr *a = &attrs[h - 1];
+    if (a->kind == A_CCCD) return 0;
+    if (a->kind != A_VAL || a->chr < 0) return ATT_E_WRITE_NOT_PERMITTED;
+    return attr_props(a) & (cmd ? BLE_PROP_WRITE_NR | BLE_PROP_WRITE : BLE_PROP_WRITE) ? 0 : ATT_E_WRITE_NOT_PERMITTED;
+}
+
+static void gatts_rx(struct conn *c, const unsigned char *p, size_t n)
+{
+    unsigned char r[ATT_MTU], t[16], v[512]; size_t mx = c->mtu, o = 0, tl, vl, w = 0; unsigned s, e, h; int err;
+    if (!n || !S) return;
+    switch (p[0]) {
+    case ATT_MTU_REQ:
+        if (n >= 3) { unsigned m = u16(p + 1); c->mtu = m < 23 ? 23 : m < ATT_MTU ? m : ATT_MTU; }
+        r[0] = ATT_MTU_RSP; put16(r + 1, ATT_MTU); att_send(c, r, 3);
+        return;
+    case ATT_FIND_INFO_REQ:                     /* handle and type of each attribute: one type length per answer */
+        if (range(c, p, n, 5, &s, &e)) return;
+        r[0] = ATT_FIND_INFO_RSP; o = 2;
+        for (h = s; h <= e; h++) {
+            tl = attr_type(h, t);
+            if ((o > 2 && tl != w) || o + 2 + tl > mx) break;
+            w = tl; put16(r + o, h); memcpy(r + o + 2, t, tl); o += 2 + tl;
+        }
+        r[1] = w == 2 ? 1 : 2;
+        att_send(c, r, o);
+        return;
+    case ATT_FIND_TYPE_REQ:                     /* services by UUID: found handle, group end */
+        if (range(c, p, n, 7, &s, &e)) return;
+        r[0] = ATT_FIND_TYPE_RSP; o = 1;
+        if (u16(p + 5) == 0x2800)
+            for (h = s; h <= e && o + 4 <= mx; h++)
+                if (attrs[h - 1].kind == A_SVC && (vl = attr_value(h, v, sizeof v)) == n - 7 && !memcmp(v, p + 7, vl)) {
+                    put16(r + o, h); put16(r + o + 2, svc_end(h)); o += 4;
+                }
+        if (o == 1) att_err(c, p[0], s, ATT_E_NOT_FOUND); else att_send(c, r, o);
+        return;
+    case ATT_READ_TYPE_REQ:                     /* characteristic declarations, or values by type */
+    case ATT_READ_GROUP_REQ:                    /* services */
+        if (range(c, p, n, 7, &s, &e)) return;
+        if (n != 7 && n != 21) { att_err(c, p[0], s, ATT_E_INVALID_PDU); return; }
+        if (p[0] == ATT_READ_GROUP_REQ && (n != 7 || u16(p + 5) != 0x2800)) { att_err(c, p[0], s, ATT_E_UNSUPPORTED_GROUP); return; }
+        r[0] = p[0] + 1; o = 2;
+        for (h = s; h <= e; h++) {
+            if ((tl = attr_type(h, t)) != n - 5 || memcmp(t, p + 5, tl)) continue;
+            if (attrs[h - 1].kind == A_VAL && !(attr_props(&attrs[h - 1]) & BLE_PROP_READ)) {
+                if (o == 2) { att_err(c, p[0], h, ATT_E_READ_NOT_PERMITTED); return; }
+                break;
+            }
+            size_t hd = p[0] == ATT_READ_GROUP_REQ ? 4 : 2, room = mx - o - hd;
+            vl = attr_value(h, v, sizeof v);
+            if (vl > 253 - hd) vl = 253 - hd;
+            if (o == 2) { if (vl > room) vl = room; w = hd + vl; r[1] = (unsigned char)w; }     /* the first sets the length */
+            else if (hd + vl != w || o + w > mx) break;
+            put16(r + o, h); if (hd == 4) put16(r + o + 2, svc_end(h));
+            memcpy(r + o + hd, v, vl); o += w;
+            if (h < e && p[0] == ATT_READ_GROUP_REQ) h = svc_end(h);        /* on to the next service */
+        }
+        if (o == 2) att_err(c, p[0], s, ATT_E_NOT_FOUND); else att_send(c, r, o);
+        return;
+    case ATT_READ_REQ: case ATT_READ_BLOB_REQ: {
+        size_t off = p[0] == ATT_READ_BLOB_REQ && n >= 5 ? u16(p + 3) : 0;
+        if (n < (p[0] == ATT_READ_REQ ? 3u : 5u)) { att_err(c, p[0], 0, ATT_E_INVALID_PDU); return; }
+        h = u16(p + 1);
+        if (!h || h > nattr) { att_err(c, p[0], h, ATT_E_INVALID_HANDLE); return; }
+        if (attrs[h - 1].kind == A_VAL && !(attr_props(&attrs[h - 1]) & BLE_PROP_READ)) { att_err(c, p[0], h, ATT_E_READ_NOT_PERMITTED); return; }
+        vl = attr_value(h, v, sizeof v);
+        if (off > vl) { att_err(c, p[0], h, ATT_E_INVALID_OFFSET); return; }
+        vl -= off; if (vl > mx - 1) vl = mx - 1;
+        r[0] = p[0] + 1; memcpy(r + 1, v + off, vl);
+        att_send(c, r, 1 + vl);
+        return; }
+    case ATT_WRITE_REQ: case ATT_WRITE_CMD:
+        if (n < 3) { if (p[0] == ATT_WRITE_REQ) att_err(c, p[0], 0, ATT_E_INVALID_PDU); return; }
+        h = u16(p + 1);
+        if ((err = writable(h, p[0] == ATT_WRITE_CMD))) { if (p[0] == ATT_WRITE_REQ) att_err(c, p[0], h, err); return; }
+        if (p[0] == ATT_WRITE_REQ) { r[0] = ATT_WRITE_RSP; att_send(c, r, 1); }     /* answered first: notifications follow it */
+        write_value(c, &attrs[h - 1], p + 3, n - 3);
+        return;
+    case ATT_PREP_WRITE_REQ: {                  /* a long write: pieces queued, delivered whole on execute */
+        if (n < 5) { att_err(c, p[0], 0, ATT_E_INVALID_PDU); return; }
+        h = u16(p + 1); size_t off = u16(p + 3);
+        if ((err = writable(h, 0))) { att_err(c, p[0], h, err); return; }
+        if ((prep.n && prep.handle != h) || off + n - 5 > sizeof prep.b) { att_err(c, p[0], h, ATT_E_PREP_QUEUE_FULL); return; }
+        prep.handle = h; memcpy(prep.b + off, p + 5, n - 5);
+        if (off + n - 5 > prep.n) prep.n = off + n - 5;
+        memcpy(r, p, n); r[0] = ATT_PREP_WRITE_RSP;
+        att_send(c, r, n);
+        return; }
+    case ATT_EXEC_WRITE_REQ:
+        r[0] = ATT_EXEC_WRITE_RSP; att_send(c, r, 1);
+        if (n >= 2 && p[1] == 1 && prep.handle) write_value(c, &attrs[prep.handle - 1], prep.b, prep.n);
+        prep.n = 0; prep.handle = 0;
+        return;
+    }
+    if (!(p[0] & 1) && p[0] != ATT_CONFIRM && !(p[0] & 0x40)) att_err(c, p[0], n >= 3 ? u16(p + 1) : 0, ATT_E_NOT_SUPPORTED);
+}
+
+/* what changed and is subscribed to, as notifications (controller thread) */
+static void gatts_notify(struct conn *c)
+{
+    unsigned due = atomic_exchange(&notify_due, 0) & cccd_on;
+    for (unsigned h = 1; due && h <= nattr; h++) {
+        const struct attr *a = &attrs[h - 1];
+        if (a->kind != A_VAL || a->chr < 0 || !(due & 1u << a->chr)) continue;
+        unsigned char r[ATT_MTU];
+        r[0] = ATT_NOTIFY; put16(r + 1, h);
+        size_t vl = S->read(a->chr, r + 3, c->mtu - 3);
+        att_send(c, r, 3 + vl);
+        due &= ~(1u << a->chr);
+    }
+}
+
+/* the phone's link is gone: its state with it */
+static void srv_gone(struct conn *c)
+{
+    free_conn(c);
+    cccd_on = 0; prep.n = 0; prep.handle = 0; atomic_store(&notify_due, 0);
+    if (S && S->connection) S->connection(0);
+}
+
+/* ---------------------------------------------------------------- advertising */
+
+static pthread_mutex_t adv_lock = PTHREAD_MUTEX_INITIALIZER;
+static unsigned char adv_data[31], rsp_data[31]; static size_t adv_n, rsp_n;    /* adv_lock */
+static atomic_int adv_gen;                      /* bumped by every ble_advertise() */
+static int adv_applied = -1, advertising;       /* controller thread: the generation the controller has; it advertises */
+static struct timespec adv_failed;              /* when the controller last refused: not again for 5 s */
+
+/* Advertising as asked, while no phone is connected (the controller stops when one connects).  -1: controller gone */
+static int adv_upkeep(void)
+{
+    int g = atomic_load(&adv_gen), want, st;
+    unsigned char a[32] = { 0 }, r[32] = { 0 };
+    pthread_mutex_lock(&adv_lock);
+    want = adv_n > 0 && conns[SRV].state == C_FREE;
+    a[0] = (unsigned char)adv_n; memcpy(a + 1, adv_data, adv_n); r[0] = (unsigned char)rsp_n; memcpy(r + 1, rsp_data, rsp_n);
+    pthread_mutex_unlock(&adv_lock);
+    if (g == adv_applied && want == advertising) return 0;
+    if (want && !advertising && adv_failed.tv_sec && ms_since(&adv_failed) < 5000) return 0;
+    if (advertising) {
+        unsigned char off = 0;
+        if (cmd(OP_LE_ADV_ENABLE, &off, 1) < 0) return -1;
+        advertising = 0;
+    }
+    adv_applied = g;
+    if (!want) return 0;
+    /* ADV_IND every 100..150 ms on all three channels, public address, no filter: what ESPHome's Improv does */
+    unsigned char par[15] = { 0xa0, 0, 0xf0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0 }, on = 1;
+    if ((st = cmd(OP_LE_ADV_PARAMS, par, 15)) == 0 && (st = cmd(OP_LE_ADV_DATA, a, 32)) == 0 &&
+        (st = cmd(OP_LE_SCAN_RSP, r, 32)) == 0) st = cmd(OP_LE_ADV_ENABLE, &on, 1);
+    if (st < 0) return -1;
+    if (st) {
+        if (!adv_failed.tv_sec) fprintf(stderr, "bluetooth: advertising refused, HCI status 0x%02x (command %04x); again every 5 s\n", st, cc_op);
+        now(&adv_failed);
+        return 0;
+    }
+    if (adv_failed.tv_sec) fprintf(stderr, "bluetooth: advertising\n");
+    adv_failed.tv_sec = 0; advertising = 1;
+    return 0;
 }
 
 /* ---------------------------------------------------------------- bonds and pairing */
@@ -720,6 +983,12 @@ static void acl_rx(const unsigned char *p, size_t n)     /* p: after the H4 type
     if (c->rxlen < c->rxwant) return;
     c->rxwant = 0; c->heard = 1;
     unsigned cid = u16(c->rx + 2); size_t l = u16(c->rx);
+    if (c->srv) {
+        if (cid == CID_ATT) gatts_rx(c, c->rx + 4, l);
+        else if (cid == CID_SIG) sig_rx(c, c->rx + 4, l);
+        else if (cid == CID_SMP && l >= 1 && c->rx[4] == 0x01) { unsigned char f[2] = { 0x05, 0x05 }; smp_send(c, f, 2); }  /* Pairing Not Supported */
+        return;
+    }
     if (cid == CID_ATT) att_rx(c, c->rx + 4, l);
     else if (cid == CID_SIG) sig_rx(c, c->rx + 4, l);
     else if (cid == CID_SMP) smp_rx(c, c->rx + 4, l);
@@ -755,6 +1024,21 @@ static void adv_report(const unsigned char *p, size_t n)
 static void conn_complete(const unsigned char *q, size_t n)
 {
     struct conn *c = in_state(C_CONNECTING);
+    if (n >= 18 && !q[0] && q[3] == 1) {                    /* role peripheral: a phone connected to our advertising */
+        advertising = 0;                                    /* the controller stopped it */
+        c = &conns[SRV];
+        if (c->state != C_FREE || !S) {                     /* cannot be: one advertising, one link */
+            unsigned char d[3]; put16(d, u16(q + 1) & 0x0fff); d[2] = HCI_E_USER_ENDED;
+            hci_write((unsigned char[]){ H4_CMD, OP_DISCONNECT & 0xff, OP_DISCONNECT >> 8, 3, d[0], d[1], d[2] }, 7);
+            return;
+        }
+        memset(c, 0, sizeof *c);
+        c->srv = 1; c->state = C_UP; c->handle = u16(q + 1) & 0x0fff; c->mtu = 23; c->addr_type = q[4]; now(&c->t);
+        for (int b = 5; b >= 0; b--) c->addr = c->addr << 8 | q[5 + b];
+        fprintf(stderr, "bluetooth: %012llx connected to us\n", (unsigned long long)c->addr);
+        if (S->connection) S->connection(1);
+        return;
+    }
     if (!c || n < 18) return;
     if (q[0]) {                                             /* failed or cancelled */
         int err = c->cancel == 1 ? 0 : c->cancel == 2 ? HCI_E_TIMEOUT : q[0];
@@ -785,6 +1069,7 @@ static void event(const unsigned char *p, size_t n)            /* p: event code,
         if (n >= 4 && !q[0] && (c = by_handle(u16(q + 1) & 0x0fff))) {
             int err = c->state == C_CLOSING ? 0 : q[3]; uint64_t a = c->addr;
             fprintf(stderr, "bluetooth: %012llx disconnected (0x%02x)\n", (unsigned long long)a, q[3]);
+            if (c->srv) { srv_gone(c); break; }
             free_conn(c);
             if (H->connection) H->connection(a, 0, 0, err);
         }
@@ -854,6 +1139,9 @@ static int cmd(unsigned op, const void *par, unsigned n)
 }
 
 /* ---------------------------------------------------------------- controller thread */
+
+/* HASSMIC_BT_DEV: another controller, for tests (tests/fake_improv.py plays one on a pseudo terminal) */
+static const char *bt_dev(void) { const char *e = getenv("HASSMIC_BT_DEV"); return e && *e ? e : board.bt_dev; }
 
 static int stock_bt_running(void)
 {
@@ -978,7 +1266,12 @@ static int handle_request(struct req *r)
 static int upkeep(void)
 {
     if (a2dp_upkeep() < 0) return -1;
-    for (int i = 0; i < BLE_MAX_CONN; i++) {
+    if (conns[SRV].state == C_UP) {
+        if (atomic_exchange(&drop_srv, 0)) conns[SRV].close_now = 1;
+        gatts_notify(&conns[SRV]);
+    } else atomic_store(&drop_srv, 0);
+    if (adv_upkeep() < 0) return -1;
+    for (int i = 0; i < NCONN; i++) {
         struct conn *c = &conns[i]; unsigned char p[64];
         if (c->state == C_FREE) continue;
         if (c->need_dhkey && !dh_owner && c->state >= C_MTU) {         /* one at a time: the result names no connection */
@@ -1021,6 +1314,7 @@ static int upkeep(void)
             if (cmd(OP_DISCONNECT, p, 3) < 0) return -1;
         }
         if (c->state == C_CLOSING && ms_since(&c->t) > 5000) {    /* never confirmed: forget it */
+            if (c->srv) { srv_gone(c); continue; }
             uint64_t a = c->addr; free_conn(c);
             if (H->connection) H->connection(a, 0, 0, 0);
         }
@@ -1052,6 +1346,8 @@ static int connect_next(void)                               /* scanning is off w
 
 static void drop_all(void)                                  /* controller lost: every connection with it */
 {
+    if (conns[SRV].state != C_FREE) srv_gone(&conns[SRV]);
+    advertising = 0; adv_applied = -1;                      /* a new controller knows nothing of it */
     for (int i = 0; i < BLE_MAX_CONN; i++) if (conns[i].state != C_FREE) {
         uint64_t a = conns[i].addr; free_conn(&conns[i]);
         if (H->connection) H->connection(a, 0, 0, HCI_E_TIMEOUT);
@@ -1066,7 +1362,7 @@ static void *thread(void *arg)
     (void)arg;
     for (int said = 0;; sleep(5)) {
         if (stock_bt_running()) { if (!said++) fprintf(stderr, "bluetooth: waiting for %s to stop\n", board.bt_service); continue; }
-        if ((fd = open(board.bt_dev, O_RDWR | O_NOCTTY | O_CLOEXEC)) < 0) { if (!said++) fprintf(stderr, "bluetooth: %s: %s\n", board.bt_dev, strerror(errno)); continue; }
+        if ((fd = open(bt_dev(), O_RDWR | O_NOCTTY | O_CLOEXEC)) < 0) { if (!said++) fprintf(stderr, "bluetooth: %s: %s\n", bt_dev(), strerror(errno)); continue; }
         /* Left unread by the previous user.  A hassmic that was killed while scanning leaves the chip scanning, so this
          * does not run dry: stop after a moment, the reset stops the flow and pump() finds the packet boundaries again. */
         struct timespec t0; now(&t0);
@@ -1096,7 +1392,8 @@ static void *thread(void *arg)
             }
             if (!on && connect_next() < 0) break;
             int busy = a2dp_busy();
-            for (int i = 0; i < BLE_MAX_CONN; i++) busy |= conns[i].state != C_FREE;
+            for (int i = 0; i < NCONN; i++) busy |= conns[i].state != C_FREE;
+            busy |= adv_failed.tv_sec != 0;                 /* advertising refused: asked again in a while */
             struct pollfd p[2] = { { fd, POLLIN, 0 }, { wake[0], POLLIN, 0 } };
             int wait = busy ? 500 : nbatch ? 100 : -1;
             if (quiet && (wait < 0 || qleft < wait)) wait = (int)qleft + 1;          /* back to scanning when the pause ends */
@@ -1114,7 +1411,7 @@ static void *thread(void *arg)
 
 /* ---------------------------------------------------------------- API */
 
-int ble_present(void) { return access(board.bt_dev, F_OK) == 0; }
+int ble_present(void) { return access(bt_dev(), F_OK) == 0; }
 const char *ble_mac(void) { return bdaddr; }
 int ble_scanning(void) { return atomic_load(&scanning); }
 
@@ -1145,6 +1442,34 @@ void ble_write(uint64_t addr, unsigned handle, const void *data, size_t len, int
     if (len > 512) len = 512;                               /* the most an attribute holds */
     request(R_WRITE, addr, 0, handle, data, len, response);
 }
+
+void ble_serve(const struct ble_server *s)
+{
+    if (S || !s || s->nchr > BLE_SRV_CHR) return;
+    attr_add(A_SVC, GAP_SVC); attr_add(A_CHR, GAP_NAME); attr_add(A_VAL, GAP_NAME); attr_add(A_CHR, GAP_LOOK); attr_add(A_VAL, GAP_LOOK);
+    svc_start = nattr + 1;
+    attr_add(A_SVC, 0);
+    for (int i = 0; i < s->nchr; i++) {
+        attr_add(A_CHR, i); attr_add(A_VAL, i);
+        if (s->chr[i].props & BLE_PROP_NOTIFY) attr_add(A_CCCD, i);
+    }
+    S = s;                                                  /* last: the controller thread looks at it */
+}
+
+void ble_advertise(const void *adv, size_t n, const void *rsp, size_t m)
+{
+    if (n > 31) n = 31;
+    if (m > 31) m = 31;
+    pthread_mutex_lock(&adv_lock);
+    adv_n = n; if (n) memcpy(adv_data, adv, n);
+    rsp_n = m; if (m) memcpy(rsp_data, rsp, m);
+    pthread_mutex_unlock(&adv_lock);
+    atomic_fetch_add(&adv_gen, 1);
+    poke();
+}
+
+void ble_server_notify(int chr) { if (chr >= 0 && chr < BLE_SRV_CHR) { atomic_fetch_or(&notify_due, 1u << chr); poke(); } }
+void ble_server_drop(void) { atomic_store(&drop_srv, 1); poke(); }
 
 /* hci.h: for a2dp.c on this thread */
 int hci_cmd(unsigned op, const void *par, unsigned n) { return cmd(op, par, n); }

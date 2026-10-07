@@ -2,7 +2,7 @@
 """Plays Music Assistant's side of Sendspin against build/hassmic-host with the reference server library
 (aiosendspin 9.1.1, the version in Music Assistant 2.10.4): dials the player, approves it unpaired, streams a sine,
 sends a volume command, and checks what reaches the player's audio backend."""
-import asyncio, logging, math, os, signal, struct, subprocess, sys, tempfile
+import re, asyncio, logging, math, os, signal, struct, subprocess, sys, tempfile
 import numpy as np
 from aiosendspin.noise import Identity, InMemoryServerPairingStore, decode_token
 from aiosendspin.noise.pairing import PairingAttempt
@@ -38,7 +38,7 @@ async def main():
         server.connect_to_client(f"ws://127.0.0.1:{PORT}/sendspin", retry_initial_connection=True, retry_indefinitely=True)
         cid = await asyncio.wait_for(added.get(), 15)
         client = server.get_client(cid)
-        check(client.info.name == "Echo Dot" and "player@v1" in client.info.supported_roles, f"hello over the encrypted session: {client.info.name!r} {client.info.supported_roles}")
+        check(re.fullmatch(r"Echo Dot 3( [0-9a-f]{6})?", client.info.name or "") and "player@v1" in client.info.supported_roles, f"hello over the encrypted session: {client.info.name!r} {client.info.supported_roles}")
         check(open(os.path.join(state, "sendspin.key"), "rb").read().__len__() == 32, "identity key persisted")
         client.add_event_listener(lambda c, e: events.append(type(e).__name__))
         check(client.role("player@v1") is None, "no role before the operator approves the unpaired device")

@@ -1343,6 +1343,41 @@ Run in this order. Each step says what it proves.
       Echo, an Echo with Pryon and one with microWakeWord in one arbitration network; the remote path with a real
       openWakeWord on the Dot 2.  Not done: ESPHome's "stop" model
       as a second model while a timer rings or a reply plays (as Voice PE does); openWakeWord/ONNX.
-- [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): Wi-Fi setup without a PC (stock: `oobed`, 5 s action button; ESPHome's
-      way would be Improv over BLE, ble.c has the controller); offline alarm clock and reminders (HA has timers only).
+- [~] Setup from a phone (OOBE) and factory reset (2026-10-07, asked: found over Bluetooth by the HA app, Wi-Fi, the
+      node name if possible; rainbow while not set up (then stock's orange setup-mode spinner, asked the same day); "not set up" = after the install or a reset until HA took it on;
+      no button press while not set up; reset wipes all of hassmic plus Wi-Fi, by the action button held 10 s, HA, the
+      page). Improv Wi-Fi over BLE (spec of improv-wifi.com, packets as py-improv-ble-client 2.0.1, HA's improv_ble):
+      `ble.c` got the peripheral role: legacy ADV_IND 100-150 ms (flags, the 128-bit service, service data 4677 =
+      state + capabilities 0x0f: 31 bytes exactly; the name in the scan response), one link a phone opens (conns[SRV],
+      outside the proxy's three slots), a GATT server (Generic Access + Improv; MTU, Find Information, Find By Type
+      Value, Read By Type / Group Type, Read / Blob, Write / Command, prepared writes, notifications), SMP pairing
+      refused (not supported). `improv.c`: advertises when not set up (`core_oobe`) and 20 s offline (authorized), or
+      set up and 600 s offline (authorization required, the action button gives 60 s); "provisioned" 60 s after, then
+      off. RPCs: Wi-Fi (through `wifi.c`/root's `wifi.sh`, as the page's switch; error 3 on its failure), identify,
+      device info, scan (one result, WPA2/open only, as many as fit 255 bytes); host name = node, device name =
+      display name: dropped again the same day (asked: one name, never stored, given in HA only; see the name item).
+      Adopted = HA's voice assistant subscribed
+      (`core_link` ready) -> `state/adopted`; existing installs with `state/api_key` count as adopted. Ring:
+      `setup-mode` (stock's orange OOBE spinner) while not set up; `authenticated_setup_mode` while a phone waits for the button; `factory-reset`
+      from 5 s of holding and while root resets (all three on donut, biscuit, radar). Reset: `state/reset` -> root
+      (`main.sh` ota_watch): stop hassmic, `wifi.sh forget` (every network but P2P groups, save_config), state/ emptied,
+      avahi's service file removed, start hassmic. netwatch no longer starts wifisvc with no network saved. wifi.sh's
+      lease on an Echo that never had one (no `dhcp.wlan0.*`): `start dhcpcd-wlan0` (wifi-join.sh's fallback), not
+      `dhcpcd -n` (would start a daemon outside init). `tests/fake_improv.py`: a controller on a pty (H4: commands,
+      LE Connection Complete as peripheral, ACL with credits), a phone's GATT client, py-improv-ble-client's packets,
+      real wifi.sh on the fake tools, aioesphomeapi for adoption and the reset button, the keypad as a FIFO for the
+      holds.  Open (device): the MT7668 advertising beside scanning/A2DP; a real phone (HA app on Android and iOS);
+      whether wifisvc or Amazon's own Wi-Fi store brings forgotten networks back after a reset; init's
+      `dhcpcd-wlan0` on a fresh Echo; acebuttond's 5 s hold (Amazon's setup mode; its services are stopped) doing
+      nothing visible; a Wi-Fi password with non-ASCII characters (refused, as on the page).
+- [x] One name (2026-10-07, asked after the first reset on the Dot 2 kept "Echo Dot 2" from hassmic.conf: no name in
+      several places, a reset resets, the name comes from Home Assistant's adoption; default by model). HA's API has no
+      message that gives a device a name, so as the Voice PE: `name_make` = model (board.default_name: Echo Dot 3 /
+      Echo Dot 2 / Echo 2) + the Wi-Fi MAC's last 3 bytes, waited for (radar brings wlan0 up late), stored nowhere.
+      Gone: hassmic.conf `NAME` (ignored, main.sh no longer passes `-n`), install-system.sh's and setup.sh's name,
+      device.conf `DEFAULT_NAME`, `state/name`/`state/node` (deleted at start), the page's rename (`/api/name`) and
+      Improv's host name/device name commands (capabilities 0x07). `-n` stays for the PC. Existing Echos change node
+      name on update (asked: no migration); HA keys on the MAC. fake_web: old files ignored and the model's name.
+- [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
+      reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, Drop In/calling (`commsd`), stereo pairs.

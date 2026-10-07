@@ -2,12 +2,15 @@
 #include "board.h"
 #include <fcntl.h>
 #include <linux/input.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
 
-#define SHORT_PRESS_MS 1000            /* longer holds belong to acebuttond: 5 s setup mode, 21 s factory reset */
+#define SHORT_PRESS_MS 1000            /* acebuttond sees the holds too: 5 s its setup mode, 21 s its factory reset */
+#define HOLD_WARN_MS   5000            /* action button held: the ring warns ... */
+#define HOLD_RESET_MS 10000            /* ... and then hassmic's reset (core_reset), long before acebuttond's 21 s */
 #define COMBO_MS       2000            /* both volume keys: stock gives that no meaning (acebuttond's are action holds) */
 
 static struct button_handler handler;
@@ -69,13 +72,26 @@ static long long now_ms(void)
 static void *reader(void *arg)
 {
     int rfd = (int)(long)arg;
-    struct input_event ev; long long action_down = 0, up_down = 0, dn_down = 0; int combo_done = 0;
-    while (read(rfd, &ev, sizeof ev) == sizeof ev) {
+    struct input_event ev; long long action_down = 0, up_down = 0, dn_down = 0; int combo_done = 0, held = 0;
+    for (;;) {
+        /* while the action button is down, wake for its hold stages: the key repeats only as long as acebuttond's
+         * configuration says, not something to count on */
+        if (action_down && handler.hold && held < 2) {
+            long long t = now_ms() - action_down, due = (held ? HOLD_RESET_MS : HOLD_WARN_MS) - t;
+            struct pollfd p = { rfd, POLLIN, 0 };
+            if (due > 0 && poll(&p, 1, (int)due) == 0) continue;            /* woke for the stage: looked at below */
+            if (due <= 0) { held++; handler.hold(held); continue; }
+        }
+        if (read(rfd, &ev, sizeof ev) != sizeof ev) break;
         if (ev.type != EV_KEY) continue;
         switch (ev.code) {
         case KEY_HELP:
-            if (ev.value == 1) action_down = now_ms();
-            else if (ev.value == 0 && action_down && now_ms() - action_down < SHORT_PRESS_MS && handler.action) handler.action();
+            if (ev.value == 1) { action_down = now_ms(); held = 0; }
+            else if (ev.value == 0) {
+                if (action_down && now_ms() - action_down < SHORT_PRESS_MS && handler.action) handler.action();
+                if (held == 1 && handler.hold) handler.hold(0);
+                action_down = 0; held = 0;
+            }
             break;
         case KEY_MUTE:
             if (ev.value == 0 && handler.mute_changed) {

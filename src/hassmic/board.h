@@ -11,7 +11,7 @@ struct board {
     const char *model;              /* ESPHome device info "model", Wyoming description */
     const char *project;            /* ESPHome "project_name" */
     const char *product;            /* Sendspin "product_name" */
-    const char *default_name;       /* friendly name when -n is not given */
+    const char *default_name;       /* the model as people call it ("Echo Dot 3"); the name adds the MAC's end (main.c) */
     const char *codename;           /* devices/<codename>: names this model's bundle in a release (online updates) */
 
     /* inputs */

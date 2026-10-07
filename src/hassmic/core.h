@@ -46,13 +46,15 @@ struct proto {
 extern const struct proto proto_wyoming, proto_esphome;
 
 extern pthread_mutex_t core_lock;               /* guards state, the client socket (writes) and everything marked "lock held" */
-extern const char *core_name;
-const char *core_node_name(void);               /* "Echo Dot" -> "echo-dot": the ESPHome device (host) name */
-const char *core_node_of(const char *name);      /* the node name a name makes: "Küchen Echo" -> "kuechen-echo" */
-/* The settings page's rename: state/name, with node also state/node; then root restarts the satellite (state/restart).
- * 0 ok, -1 with err (the name is refused, or a file cannot be written) */
-int  core_rename(const char *name, int node, char *err, size_t errsz);
+extern const char *core_name;                   /* "Echo Dot 2 5695c4": the model and the MAC's end (main.c name_make) */
+const char *core_node_name(void);               /* "echo-dot-2-5695c4": the ESPHome device (host) name */
 void core_identify(void);                       /* rainbow ring for 10 s and a sound: which Echo is this */
+/* Setup (OOBE): 1 from an install or a reset until Home Assistant took the Echo on (its voice assistant subscribed:
+ * state/adopted); the ring shows stock's setup spinner meanwhile.  Any thread */
+int  core_oobe(void);
+/* Forget everything: root wipes state/ and the saved Wi-Fi networks and restarts the satellite, which then starts
+ * the setup again (state/reset, main.sh).  why: for the log.  Any thread */
+void core_reset(const char *why);
 extern int core_local_wake, core_port, core_sendspin_port, core_web_port;
 
 /* lock held */

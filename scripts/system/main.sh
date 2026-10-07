@@ -5,7 +5,7 @@
 #   main.sh satellite   Alexa off, then keep hassmic running, and check that the firewall service keeps its rules right
 # Model: device.conf next to this script (devices/<codename>/device.conf: service names, the daemon's user).
 # Config: /data/local/hassmic/hassmic.conf (shell syntax).  No config = do nothing = stock behaviour.
-#   NAME="Echo Dot"             optional, default DEFAULT_NAME from device.conf
+#   (NAME= of older installs is ignored: hassmic names itself after the model and its MAC address)
 #   PROTO=esphome               optional: esphome (default, port 26053) or wyoming (port 16700)
 #   ARGS=""                     optional extra hassmic arguments
 #   MODE=stock-online           optional: stock Alexa with internet, e.g. to let it fetch a wake-word model.  hassmic stays
@@ -37,7 +37,6 @@ fi
 # writable for everyone (seen on two of three Echos), and hassmic faces the network.
 chown root:root $CONF; chmod 644 $CONF
 . $CONF
-NAME=${NAME:-$DEFAULT_NAME}
 
 # uxeventd plays the "ready for setup" voice prompts and the orange setup spinner on an unregistered device.  hassmic drives
 # LEDs (ledctrl) and earcons itself, so it goes.  Stopped before "class_start main" it never starts (SVC_DISABLED).
@@ -137,7 +136,9 @@ netwatch() {
             miss=0 addr=
         else
             miss=$((miss + 1)) addr=
-            [ $miss -ge 6 ] && [ "$(getprop init.svc.$WIFI_SERVICE)" != running ] && { start $WIFI_SERVICE; echo "netwatch: no address for 60 s, $WIFI_SERVICE started"; miss=0; }
+            # No saved network (a reset, a new install): nothing for wifisvc to bring up; the phone's setup (Improv) does
+            [ $miss -ge 6 ] && [ "$(getprop init.svc.$WIFI_SERVICE)" != running ] && [ "$(sh $D/wifi.sh saved 2>/dev/null)" != 0 ] &&
+                { start $WIFI_SERVICE; echo "netwatch: no address for 60 s, $WIFI_SERVICE started"; miss=0; }
         fi
         sleep 10
     done
@@ -194,6 +195,24 @@ ota_watch() {
         # minutes; so in the background, one at a time (wifi.sh's lock), and a request waits while one runs
         if [ -f /data/local/hassmic/state/wifi-request ] && [ ! -d $WIFI/lock ] && [ -f $D/wifi.sh ]; then
             sh $D/wifi.sh take 2>&1 | stamped &           # takes the lock first thing, long before the next look
+        fi
+        # Factory reset (main.c core_reset: the action button held 10 s, Home Assistant's button, the settings page):
+        # everything of hassmic's goes (state/: settings, names, Home Assistant's key, approved browsers, Bluetooth
+        # bonds, Sendspin, microWakeWord models) and every saved Wi-Fi network; the installed system, Amazon's models in
+        # models/ aed/ whisper/ and hassmic.conf stay.  The satellite starts again from scratch: the setup (OOBE).
+        if [ -f /data/local/hassmic/state/reset ] && [ ! -L /data/local/hassmic/state/reset ]; then
+            why=$(head -c 40 /data/local/hassmic/state/reset | tr -cd 'a-zA-Z0-9 ')
+            say "== factory reset (${why:-asked for}): forgetting settings and Wi-Fi networks"
+            stop hassmic
+            sleep 1
+            while [ -d $WIFI/lock ] && [ -n "$(cat $WIFI/lock/pid 2>/dev/null)" ] && kill -0 "$(cat $WIFI/lock/pid)" 2>/dev/null; do sleep 1; done   # a switch running ends first
+            [ -f $D/wifi.sh ] && sh $D/wifi.sh forget 2>&1 | stamped
+            st=/data/local/hassmic/state
+            for f in $st/* $st/.[!.]*; do [ -e "$f" ] || [ -L "$f" ] && rm -rf "$f"; done
+            rm -f /data/misc/avahi/services/hassmic.service
+            start hassmic
+            say "== factory reset done, the satellite starts again"
+            continue
         fi
         # asked for on the settings page: a rename (main.c core_rename; the name is in what the satellite builds at start,
         # mDNS and avahi's host name included) or the wake word moving to or from Home Assistant (core_wake_engine)
@@ -296,7 +315,7 @@ satellite)
         i=0
         while [ $i -lt 120 ] && ! grep -q '[1-9a-f]' /sys/class/net/$WLAN/address 2>/dev/null; do sleep 1; i=$((i + 1)); done
         [ $i -gt 0 ] && echo "mDNS: waited ${i}s for the $WLAN address"
-        $BIN -P ${PROTO:-esphome} -n "$NAME" $ARGS -S > /data/misc/avahi/services/hassmic.service
+        $BIN -P ${PROTO:-esphome} $ARGS -S > /data/misc/avahi/services/hassmic.service
         chown $DAEMON_USER /data/misc/avahi/services/hassmic.service; chmod 644 /data/misc/avahi/services/hassmic.service
         # The init-started avahi runs in its own SELinux domain, which may not read /data/misc/avahi/services (avc denied),
         # and magiskpolicy cannot parse a rule for a type with a hyphen ("avahi-daemon").  So run it from here, in our domain.
@@ -321,7 +340,7 @@ satellite)
         # has: hassmic creates its outgoing sockets under it and lockdown.sh lets that reach any address, so replies and music
         # play from wherever Home Assistant points.  Not the effective group: the mixer only records for group aipc.
         $D/runas -r 3990 $DAEMON_USER $DAEMON_GROUPS \
-            $BIN -P ${PROTO:-esphome} -n "$NAME" $ARGS >> $LOG 2>&1
+            $BIN -P ${PROTO:-esphome} $ARGS >> $LOG 2>&1
         say "hassmic exited rc=$?, restart in 3 s" >> $LOG
         # An update whose daemon does not stay up is worse than no update: with hassmic down there is no push port either.
         # Five exits within 20 s each -> back to the factory copy right now, without waiting for three reboots.

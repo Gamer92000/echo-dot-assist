@@ -5,6 +5,8 @@
 #   wifi.sh status [STATE OUT]   what wpa_supplicant says now (main.sh netwatch, when the link comes up)
 #   wifi.sh clean [STATE OUT]    at the firewall service's start: a request from before is nobody's, a lock of a run
 #                                that is gone is nobody's either
+#   wifi.sh forget [STATE OUT]   a factory reset (main.sh): every saved network goes, the Echo leaves the one it is on
+#   wifi.sh saved                prints how many networks are saved (netwatch: none = nothing for wifisvc to bring up)
 # Answers go to OUT (/data/local/hassmic/wifi: root's, the daemon only reads): status, scan, result; lock/ while a run
 # works.  wifi.c says what is in them.
 # A switch changes nothing on disk until it worked: the new network is added and selected in wpa_supplicant only, and
@@ -58,7 +60,17 @@ scan() {
 # dhcpcd is told to rebind (dhcpcd -n: it asks for its address again; another network's server refuses that, or it
 # gives up after 5 s, and dhcpcd asks afresh), and a lease counts only once its hook (95-configured) has written
 # dhcp.<if>.result again.  On the same network: RENEW within a second (Dot 2).
-lease() { [ -n "$PROPS" ] || return 0; renewed=1; setprop dhcp.$WLAN.result hassmic; dhcpcd -n $WLAN > /dev/null 2>&1; }
+# An Echo that has had no network since boot (new, or after a factory reset: the phone's setup, improv.c) has no dhcpcd
+# running and no properties of it: init's service (dhcpcd-<if>, what wifi-join.sh falls back to) starts it then, and its
+# hook writes the properties from then on.  Not "dhcpcd -n" for that: with no daemon there it starts one outside init.
+lease() {
+    if [ -z "$PROPS" ]; then
+        command -v dhcpcd > /dev/null && [ -n "$(getprop init.svc.dhcpcd-$WLAN)" ] || return 0
+        PROPS=1
+    fi
+    renewed=1; setprop dhcp.$WLAN.result hassmic
+    if [ "$(getprop init.svc.dhcpcd-$WLAN)" = running ]; then dhcpcd -n $WLAN > /dev/null 2>&1; else start dhcpcd-$WLAN; fi
+}
 # On the network for real: a fresh lease (above) on the interface, and its router answers ARP on this link.  ARP rather
 # than the ping's answer: a router may drop pings, never ARP.  Without dhcpcd's properties: the interface's address.
 online() {
@@ -150,6 +162,16 @@ mkdir -p $O
 case "$CMD" in
 status) status;;
 clean) rm -f $S/wifi-request; alive || rm -rf $O/lock;;
+saved) W list_networks | grep -c '^[0-9]';;
+forget)
+    # Not wpa_supplicant's P2P groups (disabled=2), as in join.  Saved at once: the reset is meant to survive a reboot.
+    # Removing the network it is on ends that link; no "disconnect", which would keep it off until told to reconnect.
+    for i in $(W list_networks | sed -n 's/^\([0-9][0-9]*\)[[:space:]].*/\1/p'); do
+        [ "$(val get_network $i disabled)" = 2 ] || W remove_network $i > /dev/null
+    done
+    ok save_config && say "every saved network forgotten" || say "!! networks removed, but wpa_supplicant.conf could not be written: a reboot brings them back"
+    rm -f $O/scan $O/result
+    status;;
 take)
     R=$S/wifi-request
     [ -f $R ] && [ ! -L $R ] || exit 0
@@ -163,6 +185,6 @@ take)
         else say "join request not understood, dropped"; fi;;
     *) say "request \"$what\" not understood, dropped";;
     esac;;
-*) echo "usage: wifi.sh take|status|clean [STATE OUT]"; exit 2;;
+*) echo "usage: wifi.sh take|status|clean|forget [STATE OUT] | saved"; exit 2;;
 esac
 exit 0

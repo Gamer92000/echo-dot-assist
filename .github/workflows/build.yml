@@ -186,6 +186,8 @@ jobs:
         run: .venv/bin/python tests/fake_web_wifi.py
       - name: microWakeWord, models from the settings page
         run: .venv/bin/python tests/fake_web_mww.py
+      - name: Setup from a phone (Improv over Bluetooth), factory reset
+        run: .venv/bin/python tests/fake_improv.py
 
   release:
     needs: [version, build, test]

@@ -248,7 +248,6 @@ static size_t current(char *o, size_t cap, int full)
 
 size_t wifi_current_json(char *out, size_t cap) { size_t n = current(out, cap, 0); return n < cap ? n : cap - 1; }
 
-struct net { uint8_t ssid[32]; size_t n; int signal, b24, b5; const char *sec; };
 
 /* what the network asks of a client, from wpa_supplicant's flags: [WPA2-PSK-CCMP][ESS], [RSN-SAE-CCMP], [WEP], ... */
 static const char *security(const char *fl)
@@ -261,31 +260,55 @@ static const char *security(const char *fl)
     return "open";
 }
 
-static size_t scan_json(char *o, size_t cap)
+/* The last scan's networks, one per name (the strongest access point speaks for it), strongest first: their number,
+ * -1 if there is no scan.  *sid: the scan's id */
+static int scan_read(struct wifi_net *nets, int max, unsigned *sid)
 {
-    char line[400]; unsigned sid = 0; size_t k = 0, n; struct net *nets; FILE *f = out_open("scan");
-    if (!f) return (size_t)snprintf(o, cap, "null");
-    if (!(nets = calloc(MAX_NETS, sizeof *nets))) { fclose(f); return (size_t)snprintf(o, cap, "null"); }
+    char line[400]; int k = 0; FILE *f = out_open("scan");
+    *sid = 0;
+    if (!f) return -1;
     while (fgets(line, sizeof line, f)) {
         char *fld[5], *s = line; int i;
         line[strcspn(line, "\r\n")] = 0;
-        if (sscanf(line, "id %u", &sid) == 1) continue;
+        if (sscanf(line, "id %u", sid) == 1) continue;
         for (i = 0; i < 5 && s; i++) { fld[i] = s; s = i < 4 ? strchr(s, '\t') : NULL; if (s) *s++ = 0; }
         if (i < 5) continue;
-        struct net x = { .signal = atoi(fld[2]), .sec = security(fld[3]) };
+        struct wifi_net x = { .signal = atoi(fld[2]), .sec = security(fld[3]) };
         int freq = atoi(fld[1]);
         x.n = wpa_unescape(x.ssid, sizeof x.ssid, fld[4]);
         if (!x.n || !x.ssid[0]) continue;                /* hidden: no name to show (typed by hand instead) */
-        size_t j;
+        int j;
         for (j = 0; j < k && (nets[j].n != x.n || memcmp(nets[j].ssid, x.ssid, x.n)); j++) ;
-        if (j == k) { if (k == MAX_NETS) continue; nets[k++] = x; }
+        if (j == k) { if (k == max) continue; nets[k++] = x; }
         else if (x.signal > nets[j].signal) { nets[j].signal = x.signal; nets[j].sec = x.sec; }     /* the strongest access point speaks */
         if (freq >= 4900) nets[j].b5 = 1; else nets[j].b24 = 1;
     }
     fclose(f);
-    for (size_t a = 1; a < k; a++) for (size_t b = a; b > 0 && nets[b].signal > nets[b - 1].signal; b--) { struct net t = nets[b]; nets[b] = nets[b - 1]; nets[b - 1] = t; }
+    for (int a = 1; a < k; a++) for (int b = a; b > 0 && nets[b].signal > nets[b - 1].signal; b--) { struct wifi_net t = nets[b]; nets[b] = nets[b - 1]; nets[b - 1] = t; }
+    return k;
+}
+
+int wifi_seen(const uint8_t *ssid, size_t n)
+{
+    unsigned sid; struct wifi_net *nets = calloc(MAX_NETS, sizeof *nets); int k, seen = 0;
+    if (!nets || (k = scan_read(nets, MAX_NETS, &sid)) < 0) { free(nets); return -1; }
+    for (int i = 0; i < k && !seen; i++) seen = nets[i].n == n && !memcmp(nets[i].ssid, ssid, n);
+    free(nets);
+    return seen;
+}
+
+int wifi_scan_result(unsigned id, struct wifi_net *nets, int max)
+{
+    unsigned sid; int k = scan_read(nets, max, &sid);
+    return k < 0 || sid != id ? -1 : k;
+}
+
+static size_t scan_json(char *o, size_t cap)
+{
+    unsigned sid; size_t n; struct wifi_net *nets = calloc(MAX_NETS, sizeof *nets); int k;
+    if (!nets || (k = scan_read(nets, MAX_NETS, &sid)) < 0) { free(nets); return (size_t)snprintf(o, cap, "null"); }
     n = (size_t)snprintf(o, cap, "{\"id\":%u,\"networks\":[", sid);
-    for (size_t j = 0; j < k && n + 300 < cap; j++) {
+    for (int j = 0; j < k && n + 300 < cap; j++) {
         char e[140], h[65];
         jesc(e, sizeof e, nets[j].ssid, nets[j].n); hexs(h, nets[j].ssid, nets[j].n);
         n += (size_t)snprintf(o + n, cap - n, "%s{\"ssid\":\"%s\",\"hex\":\"%s\",\"signal\":%d,\"band\":\"%s\",\"sec\":\"%s\"}", j ? "," : "", e, h,
@@ -293,6 +316,22 @@ static size_t scan_json(char *o, size_t cap)
     }
     free(nets);
     return n + (size_t)snprintf(o + n, cap - n, "]}");
+}
+
+int wifi_join_result(unsigned id, char *ip, size_t cap, char *why, size_t wcap)
+{
+    struct result r;
+    if (read_result(&r) || r.id != id) {                /* not taken yet, or root's watcher is not there */
+        char kind[8]; unsigned pid; int waiting;
+        pthread_mutex_lock(&mu); waiting = pending(kind, &pid) && pid == id && mono() - asked_at <= ANSWER_SECS + 5; pthread_mutex_unlock(&mu);
+        if (waiting || out_exists("lock")) return 0;    /* waits, or taken: wifi.sh writes "switching" first thing */
+        snprintf(why, wcap, "unanswered");
+        return -1;
+    }
+    if (!strcmp(r.state, "switching")) return 0;
+    if (!strcmp(r.state, "ok")) { snprintf(ip, cap, "%s", r.ip); return 1; }
+    snprintf(why, wcap, "%s", r.why[0] ? r.why : r.state);
+    return -1;
 }
 
 size_t wifi_status_json(char *o, size_t cap)

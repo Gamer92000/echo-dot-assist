@@ -4,6 +4,26 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-07
 
+- **An Echo names itself after its model, and you name it in Home Assistant.** Every Echo is now called after its
+  model and the end of its Wi-Fi MAC address, like the Voice PE: "Echo Dot 3 5695c4", "Echo Dot 2 …", "Echo 2 …"
+  (host name `echo-dot-3-5695c4.local`). The name is no longer asked for at the install, set in `hassmic.conf` or
+  changed on the settings page; give the Echo the name you want in Home Assistant, when you add it or on its device
+  page. **On updating**, an Echo installed with a name of its own changes to this one: Home Assistant keeps the
+  device and its entities (it knows the Echo by its MAC address), shows the name you gave it there, and keeps the old
+  entity ids; the host name changes. Music Assistant and Bluetooth show the new name.
+- **Set an Echo up from your phone, over Bluetooth.** A freshly installed Echo, or one reset, waits with the orange setup
+  spinner on its ring, as a stock Echo does. The Home Assistant app finds it (Settings, Devices & services, Add device), or Home Assistant itself when one
+  of its Bluetooth adapters or proxies is near: pick your Wi-Fi network, type its password, and the Echo joins it; Home
+  Assistant then discovers it as usual. The spinner stays until Home Assistant has added the Echo. This is Improv Wi-Fi,
+  the same way ESPHome devices and the Voice PE are set up. An Echo that is already set up but has had no network for
+  10 minutes (new router, moved house) offers the same, but only after a press of its action button, so nobody nearby
+  can move it onto their own network. Be aware
+  that the Wi-Fi password travels unencrypted over Bluetooth, as with every Improv device.
+- **Factory reset.** Hold the action button for 10 seconds (at 5 seconds the ring warns; let go then and nothing
+  happens), press "Factory reset" in Home Assistant (a configuration button), or use "Factory reset…" on the settings
+  page. The Echo forgets its settings, name, Home Assistant's key, approved browsers, Bluetooth pairings and its Wi-Fi
+  networks, and starts the setup above again. The install itself, Amazon's extra models and `hassmic.conf` stay.
+
 - **The settings page is tidier and about a third shorter.** The wake word engines and the arbitration modes are small
   cards to pick from; below them, one click opens a table that compares them question by question (how well it hears,
   which wake words, "<wake word>, stop", several Echos, ...), the current choice highlighted. "System" is two cards of

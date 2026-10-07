@@ -7,7 +7,7 @@ const struct board board = {
     .model = "Echo 2 (radar)",
     .project = "hassmic.echo-2",
     .product = "Echo 2 (hassmic)",
-    .default_name = "Echo",
+    .default_name = "Echo 2",
     .codename = "radar",
 
     /* mtk-kpd: action (•) = KEY_HELP, mic mute = KEY_MUTE (and a volume key); "keys": volume ± (donut's event3 does

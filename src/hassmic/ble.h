@@ -1,5 +1,6 @@
 /* Bluetooth LE on the Echo's MediaTek combo chip: raw HCI over /dev/stpbt, for Home Assistant's Bluetooth proxy.
- * Scanning, GATT client connections to up to BLE_MAX_CONN devices, pairing (Just Works) with bonds kept on the Echo. */
+ * Scanning, GATT client connections to up to BLE_MAX_CONN devices, pairing (Just Works) with bonds kept on the Echo.
+ * And advertising with a small GATT server of our own, for setting the Echo up from a phone (improv.c). */
 #ifndef BLE_H
 #define BLE_H
 #include <stddef.h>
@@ -51,4 +52,24 @@ void ble_pair(uint64_t addr);          /* connected device: Just Works pairing +
 void ble_unpair(uint64_t addr);        /* forget the bond, drop the link -> unpaired() */
 void ble_write(uint64_t addr, unsigned handle, const void *data, size_t len, int response);   /* -> written() / error();
                                                                                                    nothing without response */
+
+/* The other role: a peripheral that a phone connects to (Improv, improv.c).  One GATT service with up to
+ * BLE_SRV_CHR characteristics beside Generic Access, one such link at a time, apart from the client slots above. */
+#define BLE_SRV_CHR 8
+enum { BLE_PROP_READ = 0x02, BLE_PROP_WRITE_NR = 0x04, BLE_PROP_WRITE = 0x08, BLE_PROP_NOTIFY = 0x10 };
+struct ble_server {
+    uint8_t uuid[16];                                   /* the service; UUIDs least significant octet first, as on the air */
+    int nchr;
+    struct { uint8_t uuid[16]; unsigned props; } chr[BLE_SRV_CHR];
+    /* controller thread.  read: the value of characteristic chr (-1: the Generic Access device name), at most cap bytes */
+    size_t (*read)(int chr, uint8_t *out, size_t cap);
+    void (*write)(int chr, const uint8_t *data, size_t len);   /* a whole value: long writes arrive once executed */
+    void (*connection)(int up);
+};
+void ble_serve(const struct ble_server *s);              /* once, before advertising */
+/* Any thread.  Legacy connectable advertising with this data (n = 0: none) and scan response; it pauses while the
+ * phone is connected and resumes after */
+void ble_advertise(const void *adv, size_t n, const void *rsp, size_t m);
+void ble_server_notify(int chr);                         /* any thread: the value changed, notify it if subscribed */
+void ble_server_drop(void);                              /* any thread: end the peripheral link */
 #endif

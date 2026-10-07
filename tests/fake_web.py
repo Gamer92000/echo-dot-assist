@@ -169,29 +169,16 @@ async def main():
         check(r["applied"] == len(keys) and not r["errors"] and cfg().get("mic_level") == "-30" and cfg().get("noise_reduction") == "medium",
               f"import: all {r['applied']} back")
 
-        # rename (main.c core_rename): state/name, state/node only when asked, then root's restart (state/restart)
+        # the name (main.c name_make): the model and the MAC's end, set nowhere; names of before are not taken
         sf = lambda f: os.path.join(state, f)
-        mdns = lambda: subprocess.run([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-n", "Echo Web", "-S"], env=env,
-                                      capture_output=True, text=True).stdout
-        st, _, body = b.call("POST", "/api/name", "0 Bad <name>".encode())
-        check(st == 400 and "error" in json.loads(body) and not os.path.exists(sf("name")) and not os.path.exists(sf("restart")),
-              "rename: a name with markup refused, nothing written")
-        check(b.call("POST", "/api/name", b"0  leading space")[0] == 400, "rename: leading space refused")
-        st, _, body = b.call("POST", "/api/name", "0 Küche Echo".encode())
-        check(st == 200 and open(sf("name"), encoding="utf-8").read() == "Küche Echo\n" and not os.path.exists(sf("node"))
-              and os.path.exists(sf("restart")), "rename, display name only: state/name, no state/node, restart asked")
+        mdns = lambda *a: subprocess.run([f"{ROOT}/build/hassmic-host", "-P", "esphome", *a, "-S"], env=env, capture_output=True, text=True).stdout
+        check(req(WEB, "POST", "/api/name", b"0 Kitchen")[0] == 404 and not os.path.exists(sf("name")), "no rename on the page any more")
+        with open(sf("name"), "w") as f: f.write("Old Name\n")
+        with open(sf("node"), "w") as f: f.write("old-node\n")
         m = mdns()
-        check("<name>echo-web</name>" in m and "friendly_name=Küche Echo" in m, "the next start: new friendly name, node name kept")
-        os.remove(sf("restart"))
-        st, _, body = b.call("POST", "/api/name", "1 Küche Echo".encode())
-        m = mdns()
-        check(st == 200 and open(sf("node")).read() == "kueche-echo\n" and "<name>kueche-echo</name>" in m,
-              "rename with the node name: state/node, and the next start reports it")
-        os.remove(sf("node")); os.remove(sf("name"))
-        with open(sf("secret"), "w") as f: f.write("Not To Show\n")
-        os.symlink(sf("secret"), sf("name"))
-        check("Not To Show" not in mdns() and "friendly_name=Echo Web" in mdns(), "state/name as a link: not followed (-S runs as root)")
-        os.remove(sf("name")); os.remove(sf("restart"))
+        check("Old Name" not in m and "old-node" not in m and re.search(r"friendly_name=Echo Dot 3( [0-9a-f]{6})?<", m)
+              and re.search(r"<name>echo-dot-3(-[0-9a-f]{6})?</name>", m), "without -n: the model's name (and the MAC's end), not the old one")
+        os.remove(sf("name")); os.remove(sf("node"))
 
         # identify (main.c core_identify): from the page, and Home Assistant's button
         check(rq("POST", "/api/identify")[0] == 401, "identify: unsigned refused")

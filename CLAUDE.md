@@ -46,6 +46,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_web_davs.py       # models downloaded from a fake Amazon: login by code pair with the device
                                              # attestation token, DAVS, unpack, staging, install, deregister
 .venv/bin/python tests/fake_ha_update.py      # online updates: page channel + HA update entity, fake GitHub, root's installer
+.venv/bin/python tests/fake_improv.py         # setup from a phone: Improv over BLE against a fake controller on a pty
+                                             # (HASSMIC_BT_DEV), root's wifi.sh, adoption, factory reset (HA, button hold)
 tests/ota_push_test.sh                        # signed push-update path end to end
 tests/otatool_test.sh                         # scripts/otatool.py against the C otatool: same keys, signatures, bundles
 ```
@@ -84,7 +86,7 @@ There is no single-test selector: run one unit test by building/running its line
   `--uninstall` reverts.
 - Logs: `/data/local/hassmic/boot.log`, each line stamped (`clock.c`: UTC once the clock came from HA, else `boot+<s>`;
   hassmic's own through its reader process `hassmic-log`, which `pidof hassmic` lists too; scripts through `say`/`stamped`
-  in `main.sh`). The Echo's mksh is 32-bit and has no awk. Config: `/data/local/hassmic/hassmic.conf` (`NAME`, `PROTO`, `ARGS`, `MODE`,
+  in `main.sh`). The Echo's mksh is 32-bit and has no awk. Config: `/data/local/hassmic/hassmic.conf` (`PROTO`, `ARGS`, `MODE`,
   `ADB_WIFI`; root-owned, 644: root sources it).
   State (API key, BLE bonds, BT keys, Sendspin, settings): `/data/local/hassmic/state/`.
 - `kill -TTIN $(pidof hassmic)` toggles recording of the processed mic stream to `state/capture.raw`. `mixcap` cannot
@@ -158,7 +160,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   re-reads it after the link is closed); pick in `state/mww_word`.  No gain on the input (PCAN normalises; measured).
   Lost with it: "stop" keyword, Pryon's threshold hints, front end ESP scores (`wake_afe_times` 0: own SNR score).
   Third value `homeassistant` = `-w remote` from the page: decided at start (`main()` peeks `state/config`), so
-  `core_wake_engine` saves and writes `state/restart` (root's `main.sh` restarts, as for a rename); `-w remote` in ARGS
+  `core_wake_engine` saves and writes `state/restart` (root's `main.sh` restarts); `-w remote` in ARGS
   wins (`core_wake_refused`).  Remote: EV_WAKE_END -> `core_remote_wake` (sound, ring, `listening(1)` until mic off).
   `tests/unit/mww_ref.py` (in `make unit`) checks features and every inference against pymicro-features and TFLite
   BUILTIN_REF on all of pymicro-wakeword's models.
@@ -213,11 +215,11 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `web/app.js` `HELP`, keyed by setting name: a new setting gets an entry there. Echos section from `arb_status_json`
   (members with name, IP and whether they arbitrate from their signed beacons, others: in no network / younger / older); other Echos' pages are called cross-origin (CORS `*`,
   the signature counts), each approved once with its own button; "make like this Echo" posts this one's export.
-  Rename ("Name" card, `POST /api/name` "<0|1> <name>"): `main.c` `core_rename` writes `state/name` (display) and, with 1,
-  `state/node`; `core_node_name()` derives from `-n` (hassmic.conf `NAME`), not the display name, unless `state/node` is
-  set; then `state/restart` (its text says why: rename, wake word engine), which root's `ota_watch` turns into
-  `stop hassmic; start hassmic`. `read_own` opens them
-  without following links and never root-owned (root runs `hassmic -S`). `nodeOf` in `web/app.js` mirrors `node_of`.
+  Name: one, made at start and stored nowhere (`main.c` `name_make`): `board.default_name` (the model: "Echo Dot 3")
+  plus the Wi-Fi MAC's last 3 bytes ("Echo Dot 3 5695c4", node `echo-dot-3-5695c4`), as ESPHome's name_add_mac_suffix;
+  people name the Echo in Home Assistant.  No rename anywhere (page "Name" row only shows it); `-n` only for the PC
+  (no MAC).  Old `state/name`/`state/node` are deleted at start, hassmic.conf `NAME` is ignored.  `state/restart`
+  (its text says why: wake word engine), which root's `ota_watch` turns into `stop hassmic; start hassmic`.
   Identify (`POST /api/identify`, HA button `identify`, device class identify): `core_identify` sets `zzz_rainbow`
   (same file on every model) for 10 s, cleared by `volume_led_thread`, and queues `SND_IDENTIFY` (stock's
   `state_setup_discovery_beacon`) past the wake sound setting.
@@ -258,6 +260,16 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   marks `dhcp.<if>.result`, runs `dhcpcd -n`, waits for the hook to write it) and its router answers ARP; else it
   removes it and selects the old one. Talks to wpa_supplicant's global socket when the interface's is gone. netwatch
   leaves wifisvc alone while `lock/` exists and runs `wifi.sh status` on every address change; `clean` at the firewall start.
+- **Setup (OOBE) and factory reset** (`improv.c`, `main.c`): not set up = from an install or a reset until Home
+  Assistant's voice assistant subscribed (`core_link` ready -> `state/adopted`; an existing `state/api_key` counts);
+  stock's orange `setup-mode` spinner meanwhile (`core_oobe`).  `improv.c` = Improv Wi-Fi over BLE on `ble.c`'s peripheral role (advertising +
+  a GATT server on one link, `conns[SRV]` beside the proxy's slots; `ble_serve`/`ble_advertise`/`ble_server_notify`):
+  advertises when not set up and offline 20 s (authorized), or set up and offline 10 min (the action button authorizes,
+  `improv_authorize` in `on_action`); Wi-Fi through `wifi.c` -> root's `wifi.sh` like the page's switch; no host name
+  or device name commands (the Echo names itself).  `HASSMIC_IMPROV_TIMES`, `HASSMIC_FAKE_ONLINE`
+  for tests.  Reset (`core_reset`: action held 10 s via `buttons.c` hold stages, HA button `factory_reset`, page
+  `POST /api/reset` "reset") writes `state/reset`; root's `main.sh` ota_watch stops hassmic, `wifi.sh forget`, empties
+  state/, starts it.
 - **adb over Wi-Fi** (`adbwifi.c`): the settings page only writes a request for root's firewall watcher, as `ota.c` does
   for updates; opening needs an approved browser plus a press of the action button (`web.c`), or (`ota.c`, `HMOTA-ADB1`) a challenge signed with the update key.
 - **Wi-Fi motion** (`wifimotion.c`, experimental, off by default): polls the RCPI of the frames from the AP at 10 Hz, scatter

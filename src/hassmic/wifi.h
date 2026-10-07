@@ -12,6 +12,15 @@ int    wifi_scan(unsigned *id, int *busy, char *err, size_t errsz);
 /* Ask root to switch to SSID (1..32 bytes) with PASS: "" for an open network, 8..63 printable characters, or the PSK as
  * 64 hex digits.  The PSK is derived here (PBKDF2), so the password itself goes nowhere.  As wifi_scan otherwise */
 int    wifi_join(const uint8_t *ssid, size_t n, const char *pass, unsigned *id, int *busy, char *err, size_t errsz);
+/* For Improv (improv.c), which waits for the answers itself: */
+struct wifi_net { uint8_t ssid[32]; size_t n; int signal, b24, b5; const char *sec; };     /* sec: open psk sae eap wep owe */
+/* the networks of scan ID, strongest first, one per name; -1 while that scan has not answered */
+int    wifi_scan_result(unsigned id, struct wifi_net *nets, int max);
+/* 1 if the last scan (any) saw a network of that name, 0 if not, -1 if there is no scan */
+int    wifi_seen(const uint8_t *ssid, size_t n);
+/* switch ID: 0 under way, 1 on the network (IP its address), -1 failed (WHY: wifi.sh's reason, "unanswered" if root
+ * never took the request) */
+int    wifi_join_result(unsigned id, char *ip, size_t cap, char *why, size_t wcap);
 /* {"current":{"ssid","state","ip"}|null,"busy","pending":{"kind","id","stale"}|null,"scan":{"id","networks":[...]}|null,
  *  "result":{"id","state","ssid","hex","ip","saved","reason","back"}|null}: see wifi.c */
 size_t wifi_status_json(char *out, size_t cap);
