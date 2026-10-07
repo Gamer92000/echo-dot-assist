@@ -9,7 +9,8 @@ Turns Amazon Echos into Home Assistant voice satellites. Supported so far: Echo 
 (`libpryon.so`) stay; the Alexa client `PuffinApp` is replaced by `hassmic`, a C daemon that is a client of the mixer
 through the reverse-engineered C API of `libmixerAPI.so` and speaks the ESPHome native API (default) or Wyoming.
 
-Docs: `README.md` (user-facing usage; install instructions per model in `devices/<codename>/README.md`, guided by
+Docs: `README.md` (short user-facing overview with figures; every feature in detail in `docs/GUIDE.md`, security model in
+`docs/SECURITY.md`; figures are CeTZ sources in `docs/img/src/`, rendered light+dark by `tools/figures.sh`; install instructions per model in `devices/<codename>/README.md`, guided by
 `scripts/setup.sh`), `DEVELOPMENT.md` (architecture, layout, tests, contributing), `PLAN.md` (phases, open issues, every measurement), `CHANGELOG.md`
 (user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-a2dp-source.md`, `re-davs-login.md`,
 `sendspin-digest.md`).
@@ -322,8 +323,9 @@ prints it.
 
 ## Conventions
 
-- Feature commits update `CHANGELOG.md` (user-facing, dated, plain language), `PLAN.md` (status, measurements) and the
-  README when behaviour visible to users changes.
+- Feature commits update `CHANGELOG.md` (user-facing, dated, plain language), `PLAN.md` (status, measurements) and
+  `docs/GUIDE.md` when behaviour visible to users changes. Keep the README short: a row in its table or a figure, the
+  detail in the guide.
 - Code comments explain *why* with device facts and measurements; match that style and density.
 - Proprietary/derived/secret material is git-ignored and must stay out of git: `firmware/` (per model:
   stock image, unpacked rootfs, unlock zips, `re/` disassembly), `toolchain/`, `build/`, `device-logs/`, `secrets/`, `*.bin`, `*.zip`.

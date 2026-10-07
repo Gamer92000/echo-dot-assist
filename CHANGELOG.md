@@ -222,7 +222,7 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 - **Whisper detection.** Whisper to the Echo, and Home Assistant knows: the binary sensor "Last request whispered" is
   on when your last request was whispered. Use it in your conversation agent's instructions to have the answer
-  whispered as well, as a stock Echo does ([how](README.md#whisper)). It is Amazon's own detector, run on the Echo
+  whispered as well, as a stock Echo does ([how](docs/GUIDE.md#whisper-detection)). It is Amazon's own detector, run on the Echo
   with a model that only Amazon hands out: the guided setup's last step offers it next to the wake words, and
   `scripts/artifacts.sh` ("Other artifacts") adds it to an Echo set up before. ESPHome only.
 - **Newest sound detection model.** `scripts/artifacts.sh` and the guided setup can install Amazon's newest sound

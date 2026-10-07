@@ -128,7 +128,7 @@ scripts/artifacts.sh <echo-ip>
 Its menu has a list of ticks per kind, everything new ticked: "Wake words" (the ones already in `device-logs/models/`,
 as Amazon's sets are the same for every Echo: fetch once, copy to every Echo, and the ones Amazon has in the chosen
 language) and "Other artifacts", installed on the Echo as well: whisper detection (Home Assistant's "Last request
-whispered", [README](../../README.md#whisper)), and Amazon's newest sound detection model in place of the
+whispered", [guide](../../docs/GUIDE.md#whisper-detection)), and Amazon's newest sound detection model in place of the
 firmware's (not ticked: so far it scores the same, `docs/re-aed.md`). The guided setup's last step offers the same. Untick what
 you do not want; "Go on" shows what it will do and asks once. It tries each wake word on the Echo's own engine before installing it,
 and restarts hassmic. For downloads it walks through the Amazon route below by itself, once for all of them: stock
@@ -229,8 +229,8 @@ Home Assistant must reach TCP 26053 on the Echo; the Echo must reach Home Assist
 `/data/local/hassmic/boot.log`.
 
 **Back up `secrets/update.key`**, created by the installer: it signs your updates, and it is how you get adb over Wi-Fi
-without Home Assistant (`scripts/adb-wifi.sh <echo-ip>`: 30 minutes; adb over Wi-Fi is closed otherwise, see the
-README's Configuration). The USB wires can come off now.
+without Home Assistant (`scripts/adb-wifi.sh <echo-ip>`: 30 minutes; adb over Wi-Fi is closed otherwise, see
+[adb over Wi-Fi](../../docs/GUIDE.md#adb-over-wi-fi)). The USB wires can come off now.
 
 ### 6. Optional: Music Assistant
 

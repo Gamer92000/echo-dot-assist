@@ -37,6 +37,7 @@ rules. `DEVICE` picks one (default `donut`). The adb scripts check it against th
 | `scripts/` | PC side: `setup.sh` (guided install), `artifacts.sh` (Amazon artifacts for an installed Echo: more wake words, the whisper detection model, the newest sound detection model), `deploy.sh`, `probe.sh`, `capture-test.sh`, `mic-compare.sh` (micRaw against micAsr on a running Echo), `wifi-join.sh`, `install-system.sh`, `ota-push.sh`, `bundle.sh` (packs and signs an update; also CI's), `otatool.py` (bundles on the PC: keys, signing, checking, pushing; the Echo's own is `src/tools/otatool.c`), `adb-wifi.sh` (adb over Wi-Fi with the update key); `lib/device.sh` picks the model, `lib/build.sh` builds the Echo's binaries or takes the commit's release build, `lib/setup.sh` has the guided setup's helpers, `lib/wakeword.sh` the wake word installer |
 | `scripts/device/`, `scripts/system/` | run on the Echo, reading the model's `device.conf` next to them; boot integration (`boot.sh`, `main.sh`) |
 | `tools/` | `mkstubs.sh` (stand-ins for the stock libraries, for building without the firmware), OTA payload dumper, Thumb disassembly helpers, `qrun.sh` (device binaries under qemu-arm), `davs-fetch.py` |
+| `docs/` | user guide (`GUIDE.md`), security model (`SECURITY.md`), reverse-engineering notes; `img/src/*.typ` are the README figures (Typst + CeTZ), `tools/figures.sh` renders them to `img/*-light.svg` / `*-dark.svg` |
 | `tests/` | protocol tests against the reference implementations |
 | `keys/` | `release.pub`: the key online updates are signed with (CI and releases, below) |
 | `.github/workflows/` | `build.yml`: builds, tests, betas and releases |
@@ -198,7 +199,8 @@ expires within minutes. Found by preloading `src/tools/curlspy.c` into the stock
 - No model `#ifdef`s in shared code: a new difference becomes a `struct board` field, a `device.conf` variable or a
   backend (see [devices/README.md](devices/README.md)).
 - Feature commits update [CHANGELOG.md](CHANGELOG.md) (user-facing, dated, plain language), [PLAN.md](PLAN.md) (status,
-  measurements) and the README when behaviour visible to users changes.
+  measurements) and [docs/GUIDE.md](docs/GUIDE.md) when behaviour visible to users changes. The README stays short:
+  a row in its table or a figure (`tools/figures.sh` after editing `docs/img/src/`), the detail in the guide.
 - Code comments explain *why*, with device facts and measurements.
 - Every listening port must stay in TCP/UDP 16384–32767: the Echo's firewall admits nothing else inbound. The one
   exception is Kiosk Satellite's fixed UDP 2330, admitted by `lockdown.sh` only while `arbitration_mode=kiosk`.
