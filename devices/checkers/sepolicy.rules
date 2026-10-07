@@ -1,0 +1,18 @@
+# Applied with magiskpolicy to the sepolicy in 8149's own boot.img ramdisk (scripts/install-system.sh, INSTALL=boot):
+# checkers has no /sepolicy on its system partition.  Stock already has su as a permissive domain, but nothing may enter it.
+# Root adb (the rules of donut's boot-root): with ro.secure=0 adbd switches itself to its --root_seclabel u:r:su:s0
+# (init.usb.rc) and dies when that is refused.
+permissive adbd
+allow adbd adbd process setcurrent
+allow adbd su process { transition dyntransition }
+allow su su process setcurrent
+allow domain su binder { call transfer }
+allow domain su fd use
+allow domain su process sigchld
+allow domain su fifo_file { read write getattr ioctl append lock map open }
+allow domain su file { read write getattr ioctl append lock map open }
+allow domain su unix_stream_socket { connectto read write getattr ioctl shutdown }
+# hassmic's services (hassmic.rc: seclabel u:r:su:s0), as on donut
+allow init su process { transition siginh rlimitinh noatsecure }
+allow su shell_exec file { read getattr map execute entrypoint open }
+allow su system_file file { read getattr map execute entrypoint open }

@@ -23,6 +23,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <linux/fs.h>
+#include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -179,6 +181,22 @@ static int challenge(const char *host, const char *port, const char *secret, con
  * needs neither for a remount, only the mount point: found here by walking up from PATH to where the device changes
  * (system-as-root on the supported Echos, so "/" for /system/hassmic).  Writable once remounted because boot-root
  * turned dm-verity off: dm-0 "system" maps the whole active slot, ro=0, ro.boot.veritymode=disabled (all three models). */
+/* A separate /system (checkers: no system-as-root, no A/B) is a plain block device once the boot image leaves verify out
+ * of its fstab, and the kernel refuses a writable remount while that device is marked read-only: clear the mark, as
+ * AOSP's adb remount does.  Returns 1 if it was cleared. */
+static int blk_writable(const char *dir)
+{
+    char line[1024], dev[512], mnt[512]; FILE *f = fopen("/proc/self/mounts", "r"); int done = 0;
+    if (!f) return 0;
+    while (!done && fgets(line, sizeof line, f))
+        if (sscanf(line, "%511s %511s", dev, mnt) == 2 && !strcmp(mnt, dir) && !strncmp(dev, "/dev/block/", 11)) {
+            int fd = open(dev, O_RDONLY | O_CLOEXEC), off = 0;
+            if (fd >= 0) { done = !ioctl(fd, BLKROSET, &off); close(fd); }
+        }
+    fclose(f);
+    return done;
+}
+
 static int remount(const char *how, const char *path)
 {
     char dir[512], up[512]; struct stat st, pst; int ro = !strcmp(how, "ro");
@@ -190,9 +208,10 @@ static int remount(const char *how, const char *path)
         if (stat(up, &pst) || pst.st_dev != st.st_dev) break;
         memcpy(dir, up, sizeof dir);
     }
-    if (mount(NULL, dir, NULL, MS_REMOUNT | (ro ? MS_RDONLY : 0), NULL)) {
-        fprintf(stderr, "otatool: remount %s %s: %s\n", how, dir, strerror(errno)); return 1;
-    }
+    int r = mount(NULL, dir, NULL, MS_REMOUNT | (ro ? MS_RDONLY : 0), NULL);
+    if (r && !ro && (errno == EACCES || errno == EROFS) && blk_writable(dir))
+        r = mount(NULL, dir, NULL, MS_REMOUNT, NULL);
+    if (r) { fprintf(stderr, "otatool: remount %s %s: %s\n", how, dir, strerror(errno)); return 1; }
     printf("%s\n", dir);
     return 0;
 }
