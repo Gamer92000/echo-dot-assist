@@ -11,7 +11,7 @@
  *      Once the code is entered Amazon answers with bearer tokens.
  *   3. GET api.amazonalexa.com/v2/deviceArtifacts/?artifactFilter=<quoted base64 of the request JSON> (the request
  *      assetmgrd makes; tools/davs-fetch.py) with the bearer token -> a signed CloudFront URL; the artifact is a
- *      gzipped tar of a model folder (one level of folders inside at most: whisper, alexa-de-DE).
+ *      gzipped tar of a model folder (two levels of folders inside at most: the en-US sets' nttfusionconfig/ntt_conv/).
  *   4. Unpacked into state/artifacts/<staging folder>, checked and readied like a copy from another Echo (artifacts.c);
  *      root installs it (the page's install), which restarts hassmic.
  *
@@ -742,7 +742,8 @@ static void quote_b64(const char *b64, char *out, size_t cap)
 }
 
 /* the model folder travels as a gzipped tar; unpack it into STAGE as artifacts.c keeps model folders: files, and
- * folders of files one level down (whisper's whisper_components/, alexa-de-DE's BDPGeneratedFiles/).  The sound
+ * folders of files two levels down at most (whisper's whisper_components/, alexa-de-DE's BDPGeneratedFiles/, every
+ * en-US set's nttfusionconfig/ntt_conv/; 2026-10-08, GitHub issue 14: refused while one level was the limit).  The sound
  * detection model is the one thing inside under "AED/".  PAX headers ('x': the tars carry Apple xattrs) and directory
  * entries are skipped (a file's folder is made when the file comes); anything deeper is refused. */
 struct gunzip { z_stream z; FILE *f; unsigned char in[65536]; int eof; };
@@ -815,24 +816,25 @@ static int untar(const char *tgz, const char *stage, int aed, char *err, size_t 
                 if (strncmp(fn, "AED/", 4)) { snprintf(err, errsz, "the sound detection archive holds \"%.100s\"", fn); goto bad; }
                 fn += 4;
             }
-            const char *base = strchr(fn, '/') ? strchr(fn, '/') + 1 : fn;
+            const char *base = strrchr(fn, '/') ? strrchr(fn, '/') + 1 : fn;
             if (base[0] == '.' && (strncmp(base, "._", 2) == 0 || !strcmp(base, ".DS_Store")))
                 fn = "";                                      /* AppleDouble crumbs of the Mac that packed it */
             if (*fn)
             {
-                /* "file" or "sub/file": each part a name artifacts.c keeps (alphanumeric first, at most 63) */
-                int ok = 1, part = 0, slashes = 0;
+                /* "file", "sub/file" or "sub/sub/file": each part a name artifacts.c keeps (alphanumeric first, at
+                 * most 63), 127 in all */
+                int ok = strlen(fn) <= 127, part = 0, slashes = 0;
                 for (const char *c = fn; ok && *c; c++)
                 {
-                    if (*c == '/') { ok = part > 0 && ++slashes == 1; part = 0; continue; }
+                    if (*c == '/') { ok = part > 0 && ++slashes <= 2; part = 0; continue; }
                     if (part == 0 && !isalnum((unsigned char)*c)) ok = 0;
                     else if (!isalnum((unsigned char)*c) && *c != '.' && *c != '_' && *c != '-') ok = 0;
                     else if (++part > 63) ok = 0;
                 }
                 if (!ok || !part) { snprintf(err, errsz, "the archive holds \"%.100s\", a file this Echo cannot keep", fn); goto bad; }
-                if (slashes)                                  /* its folder first; there already for its second file */
+                for (const char *c = fn; (c = strchr(c, '/')); c++)   /* its folders first; there already for a second file */
                 {
-                    snprintf(sub, sizeof sub, "%.200s/%.*s", stage, (int)(base - 1 - fn), fn);
+                    snprintf(sub, sizeof sub, "%.200s/%.*s", stage, (int)(c - fn), fn);
                     if (mkdir(sub, 0755) && errno != EEXIST) { snprintf(err, errsz, "cannot write %.200s", sub); goto bad; }
                 }
                 if ((unsigned long long)written + size > MAX_TARB) { snprintf(err, errsz, "the archive unpacks to more than %ld MB", MAX_TARB >> 20); goto bad; }

@@ -52,7 +52,9 @@ Three engines, picked under "Wake word" on the [settings page](#settings-page):
 
 "Alexa" comes with the firmware. Others ("Echo", "Computer", …) only Amazon hands out: "Download from Amazon" on the
 settings page (not on the Echo Dot 3), `scripts/artifacts.sh` from the PC (it registers the Echo to an Amazon account
-for a few minutes and undoes it), or "Copy models" from another Echo. Pick one in Home Assistant's wake word select.
+for a few minutes and undoes it), or "Copy models" from another Echo. Pick one in Home Assistant's wake word select. The same word in two languages
+shows with its language and region ("Computer (de-DE)", "Computer (en-US)"). Only the word picked wakes the Echo:
+Amazon's English (US) "Computer", "Amazon" and "Ziggy" are one model that also knows the others and "Hey Disney".
 
 ### microWakeWord
 

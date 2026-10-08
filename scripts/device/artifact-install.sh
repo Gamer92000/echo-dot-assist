@@ -17,6 +17,16 @@
 # files do not say which, so those stay as they are.  A long name already there: the short one goes if it holds the
 # same files, else both stay.
 umask 022
+# folders $1 and $2 hold the same files, folders down included (toybox here has no diff -r)
+same_tree() {
+    for f in $1/* $2/*; do
+        b=${f##*/}
+        if [ -d "$1/$b" ] || [ -d "$2/$b" ]; then
+            [ -d "$1/$b" ] && [ -d "$2/$b" ] && same_tree "$1/$b" "$2/$b" || return 1
+        else cmp -s "$1/$b" "$2/$b" || return 1
+        fi
+    done
+}
 if [ "$1" = migrate ]; then
     STATE=$2 M=$3/models W=$2/wake_word
     for d in $M/*-de $M/*-it $M/*-ja $M/*-pt; do
@@ -24,9 +34,7 @@ if [ "$1" = migrate ]; then
         case ${d##*-} in de) r=DE;; it) r=IT;; ja) r=JP;; pt) r=BR;; esac
         old=${d##*/} new=${d##*/}-$r
         if [ -e $M/$new ]; then
-            same=1
-            for f in $d/* $M/$new/*; do cmp -s "$d/${f##*/}" "$M/$new/${f##*/}" || same=; done
-            if [ -n "$same" ]; then rm -rf "$d"; echo "models: $old removed, the same set is there as $new"
+            if same_tree "$d" "$M/$new"; then rm -rf "$d"; echo "models: $old removed, the same set is there as $new"
             else echo "models: $old and $new differ, both kept"; continue
             fi
         elif mv "$d" "$M/$new"; then echo "models: $old renamed $new"
@@ -46,17 +54,17 @@ ok=0
 say() { echo "$1" >> $A/result.tmp; }
 good() { case $1 in ""|[!A-Za-z0-9]*|*[!A-Za-z0-9._-]*) return 1;; esac; [ ${#1} -le 63 ]; }
 
-# the staged folder $1 into root's $2: plain files, and (when $3 is 1) folders of plain files one level down, as
-# artifacts.c stages them (whisper_components/, BDPGeneratedFiles/).  A link, a deeper folder or a bad name: 1, $why says.
+# the staged folder $1 into root's $2: plain files, and folders of them $3 levels down, as artifacts.c stages them
+# (whisper_components/, BDPGeneratedFiles/, nttfusionconfig/ntt_conv/).  A link, a deeper folder or a bad name: 1, $why says.
 # Directories are made here, root's; files are read as the daemon's user, so a link swapped in meanwhile gains nothing.
 copy_in() {
     for f in $1/* $1/.[!.]* $1/..?*; do
         [ -e "$f" ] || [ -L "$f" ] || continue                  # the patterns that matched nothing
         b=${f##*/}
         if ! good "$b" || [ -L "$f" ]; then why="$b is not a plain file"; return 1; fi
-        if [ -d "$f" ] && [ "$3" = 1 ]; then
+        if [ -d "$f" ] && [ "$3" -gt 0 ]; then
             mkdir "$2/$b" && chmod 755 "$2/$b" || { why="cannot write $2/$b"; return 1; }
-            copy_in "$f" "$2/$b" 0 || return 1
+            copy_in "$f" "$2/$b" $(($3 - 1)) || return 1
         elif [ -f "$f" ]; then
             $READ_AS cat "$f" > "$2/$b" || { why="cannot copy $b (space?)"; return 1; }
             chmod 644 "$2/$b"
@@ -78,7 +86,7 @@ install_one() {
     [ -f $stage.ready ] && [ -d $stage ] && [ ! -L $stage ] || { say "FAILED $id: not staged"; return; }
     rm -rf $tmp; mkdir $tmp || { say "FAILED $id: cannot write $tmp"; return; }
     n=0
-    copy_in $stage $tmp 1 || { rm -rf $tmp; say "FAILED $id: $why"; return; }
+    copy_in $stage $tmp 2 || { rm -rf $tmp; say "FAILED $id: $why"; return; }
     [ $n -gt 0 ] || { rm -rf $tmp; say "FAILED $id: empty"; return; }
     chmod 755 $tmp
     old=${tmp%/*}/.old-${dest##*/}

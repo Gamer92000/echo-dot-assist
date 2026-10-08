@@ -472,7 +472,7 @@ static void artifact_api(int fd, struct req *r)
     if (!signed_ok(r, write && !piece)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
     err[0] = 0;
     if (!write && !strcmp(r->path, "/api/artifacts")) {
-        size_t cap = 65536; char *t = malloc(cap);
+        size_t cap = 262144; char *t = malloc(cap);           /* en-US wake word sets list ~4.5 KB each (69 files) */
         if (!t) { respond_sjson(fd, r, 503, "{\"error\":\"no memory\"}"); return; }
         size_t n = art_list_json(t, cap);
         respond_s(fd, r, 200, "application/json", NULL, t, n); free(t); return;

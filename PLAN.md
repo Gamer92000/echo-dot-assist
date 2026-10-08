@@ -187,6 +187,13 @@ Run in this order. Each step says what it proves.
             engines, `echo-de-DE` detects espeak "Echo" (type=2) on all three. radar's engine lists `wakeword_ecids` up
             to 35 (donut, biscuit: 37) and throws on the NTT sets under qemu: `davs-fetch.py --ecids` asks with the
             Echo's own list, which `scripts/wakeword.sh` reads from `pryon_test`'s attributes line
+      - [x] One keyword per pick (2026-10-08, GitHub issue 14): DAVS's en-US computer/amazon/ziggy is one multi-keyword
+            set (`words.shrunk.txt` AMAZON COMPUTER HEY_DISNEY STOP ZIGGY; `op.cfg.json` lets each wake from sleep, no
+            switch in the set), so with "Computer" picked "Amazon" and "Ziggy" woke the Echo too (reproduced on biscuit;
+            espeak-free, a real voice). `main.c` `wake_open_word`: the keyword is the set id up to the language, applied
+            only if a `words.shrunk.txt` of the set (top or one folder down) lists it; `on_wake` drops others but STOP.
+            Also HA's ESPHome select keys options by name: of `computer-de-DE` and `computer-en-US` ("Computer" both) it
+            showed one and picked the later; a name two sets share now carries the id's region.
       - [x] DAVS token without stock Alexa, for downloads from the settings page (2026-10-06, `docs/re-davs-login.md`,
             probe `tools/davs-login.py`): the Echo's own code pair login gets as far as the code entry on amazon.de/code,
             then `/auth/register` answers `InvalidDevice` (the missing piece is the device attestation token).
@@ -199,9 +206,13 @@ Run in this order. Each step says what it proves.
             kept on its own Amazon when a login on another one fails or is cancelled), asks DAVS with this engine's own
             ecids (`wake_attributes`), downloads the tar.gz (streamed to disk, capped as artifacts.c, free space checked
             as it arrives), unpacks it (PAX headers and directory entries skipped, unpacked size and free space checked;
-            one level of folders kept), and stages it through artifacts.c's checks incl. pryon_test and root's installer.
-            artifacts.c, the page's Echo-to-Echo copies and `artifact-install.sh` keep one level of folders too (files
-            named `sub/file`; links and deeper folders refused, root still reads as the daemon's user). Page card
+            two levels of folders kept), and stages it through artifacts.c's checks incl. pryon_test and root's installer.
+            artifacts.c, the page's Echo-to-Echo copies and `artifact-install.sh` keep two levels of folders too (files
+            named `sub/file`, `sub/sub/file`, 127 characters, 128 files; links and deeper folders refused, root still
+            reads as the daemon's user). Two levels and 128 files since 2026-10-08 (GitHub issue 14): every en-US set
+            (alexa, echo, computer, amazon, ziggy) and alexa-de-DE carry `nttfusionconfig/ntt_conv/` etc. and 67-69
+            files; with one level and 64 the page refused each ("a file this Echo cannot keep"). The PC path
+            (`davs-fetch.py`, adb push) never had a limit. Page card
             "Download from Amazon" (Echos section) in three steps: the Amazon site (every one with Alexa, by region,
             guessed from the browser language), the code (countdown, cancel), the picker (wake words of a language,
             whisper, sound detection; what is installed, each download's progress and outcome, kept over the reload
@@ -209,7 +220,7 @@ Run in this order. Each step says what it proves.
             against a fake Amazon: token shape, session header, ecids, region, whisper's own request, every file of each
             set installed byte for byte, folders, a deeper one refused, other sites, cancel, a revoked token at logout,
             an Echo that cannot attest), `tests/fake_web_artifacts.py` (a whisper set with its folder copied Echo to
-            Echo; root refusing a link in a folder and a folder in a folder); the card checked in headless Chromium.
+            Echo, a set two folders deep with 69 files copied and installed; root refusing a link in a folder and three levels); the card checked in headless Chromium.
             **Against the real Amazon (2026-10-06, biscuit, amazon.de): works.** Register answers `401 Unauthorized`
             until the code is entered, then the tokens; no device secret needed (none sent); Amazon names the device
             after the account whatever `device_name` says; the Echo's clock was a day behind and the token's `dat`

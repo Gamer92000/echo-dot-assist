@@ -43,7 +43,7 @@ class Echo:
     def model(self, rel, files):
         d = os.path.join(self.data, rel); os.makedirs(d, exist_ok=True)
         for n, b in files.items():
-            os.makedirs(os.path.dirname(os.path.join(d, n)), exist_ok=True)       # "sub/file": one level of folders
+            os.makedirs(os.path.dirname(os.path.join(d, n)), exist_ok=True)       # "sub/file", "sub/sub/file"
             with open(os.path.join(d, n), "wb") as f: f.write(b)
 
 
@@ -85,6 +85,8 @@ def root_install(e, read_as=""):
 def main():
     a, b = Echo("Echo Source", 17001), Echo("Echo Target", 17002)
     wake = {"pryon.manifest": b"manifest\n", "int16_streaming.onnx": os.urandom(CHUNK * 3 + 1234), "kw.cfg.json": b"{}"}
+    # as Amazon's en-US sets are (issue 14): folders two levels deep, more than 64 files
+    wake.update({f"nttfusionconfig/ntt_conv/c{i}.cfg.json": b"{}" for i in range(66)})
     broken = {"pryon.manifest": b"BROKEN\n", "x.bin": os.urandom(1000)}
     aed = {"pryon.manifest": b"aed\n", "AED.json": b"{}", "model.mlp": os.urandom(50000)}
     whisper = {"pryon_whisper.manifest": b"w\n", "HCLG.fst": os.urandom(300000),
@@ -128,8 +130,8 @@ def main():
         check(st == 400 and b"incomplete" in data, "commit with a file not whole: refused")
         st, r = copy(pa, pb, by["whisper"])
         check(st == 200, f"the whisper model with its folder copied: {r}")
-        st, _, data = pb.call("POST", "/api/artifact/begin", b"wake:echo-en-US " + b"0" * 64 + b"\na/b/x 10\n")
-        check(st == 400, f"a file in a folder in a folder: refused: {data}")
+        st, _, data = pb.call("POST", "/api/artifact/begin", b"wake:echo-en-US " + b"0" * 64 + b"\na/b/c/x 10\n")
+        check(st == 400, f"a file three folders down: refused: {data}")
         check(sorted(arts(pb)["staged"]) == ["sound", "wake.echo-de-DE", "whisper"], f"ready to install: {arts(pb)['staged']}")
 
         # install: hassmic names them for root; root's installer puts them in place
@@ -159,15 +161,15 @@ def main():
         r = root_install(b)
         check(r.returncode != 0 and "FAILED wake:evil: pryon.manifest is not a plain file" in r.stdout and "FAILED wake:../../x: bad name" in r.stdout
               and not os.path.exists(os.path.join(b.data, "models", "evil")), f"a staged link and a bad id: refused by root: {r.stdout.strip()!r}")
-        # the same one level down, and a folder deeper than that
+        # the same one level down, and folders deeper than two
         for name, make in (("evil2", lambda s: (os.makedirs(os.path.join(s, "sub")), os.symlink("/etc/hostname", os.path.join(s, "sub", "x")))),
-                           ("deep", lambda s: (os.makedirs(os.path.join(s, "a", "b")), open(os.path.join(s, "a", "b", "x"), "w").close()))):
+                           ("deep", lambda s: (os.makedirs(os.path.join(s, "a", "b", "c")), open(os.path.join(s, "a", "b", "c", "x"), "w").close()))):
             stage = os.path.join(b.state, "artifacts", "wake." + name)
             make(stage); open(os.path.join(stage, "pryon.manifest"), "w").close(); open(stage + ".ready", "w").close()
             with open(os.path.join(b.state, "artifacts", "request"), "w") as f: f.write(f"wake:{name}\n")
             r = root_install(b)
             check(r.returncode != 0 and f"FAILED wake:{name}:" in r.stdout and not os.path.exists(os.path.join(b.data, "models", name)),
-                  f"{'a link in a folder' if name == 'evil2' else 'a folder in a folder'}: refused by root: {r.stdout.strip()!r}")
+                  f"{'a link in a folder' if name == 'evil2' else 'three folders down'}: refused by root: {r.stdout.strip()!r}")
 
         # wake word sets installed by hand under the short name get the long one at the next start (main.sh, as root)
         b.model("models/echo-de", wake)                     # the same set as echo-de-DE: goes

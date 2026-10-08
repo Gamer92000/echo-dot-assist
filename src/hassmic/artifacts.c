@@ -8,9 +8,10 @@
  *   sound        Amazon's newer sound detection model, aed/ (sound_pryon.c takes it over the firmware's)
  *   whisper      the whisper detection model, whisper/ (whisper_pryon.c)
  *   mww:<id>     a microWakeWord model, state/mww/<id>/ (mww_store.c): not Amazon's, but copied the same way
- * Each is a folder of files, with at most one level of folders inside: Amazon's whisper model keeps its networks in
- * whisper_components/, some wake word sets (alexa-de-DE) theirs in BDPGeneratedFiles/.  A file's name is then its path,
- * "sub/file", each part a name as good_name() takes it.  The digest: BLAKE2b-256 over, file by file in name order,
+ * Each is a folder of files, with at most two levels of folders inside: Amazon's whisper model keeps its networks in
+ * whisper_components/, some wake word sets (alexa-de-DE) theirs in BDPGeneratedFiles/, and the newer ones (alexa-de-DE,
+ * every en-US set, 2026-10) configs in nttfusionconfig/ntt_conv/.  A file's name is then its path, "sub/file" or
+ * "sub/sub/file", each part a name as good_name() takes it, 127 characters in all.  The digest: BLAKE2b-256 over, file by file in name order,
  * "name\0size\0" and the content; the same folder on two Echos has the same digest.  Kept per folder until a file's size or time changes:
  * hashing a 24 MB set takes seconds on these CPUs.
  *
@@ -19,7 +20,7 @@
  * a wake word set must also load in this Echo's own engine, pryon_test, as scripts/artifacts.sh checks: the Echo 2's
  * older engine cannot load every set), then install: state/artifacts/request names what is ready, and root's watcher
  * (main.sh) runs artifact-install.sh, which reads the files as the daemon's user (so nothing staged here can point root
- * at a file of its own), copies them (and their one level of folders) into a fresh root-owned folder, swaps it in and restarts hassmic: the wake word list
+ * at a file of its own), copies them (and their folders) into a fresh root-owned folder, swaps it in and restarts hassmic: the wake word list
  * and the whisper model are read at start.  The models folders are root's (adb wrote them), hence the detour.
  * microWakeWord's models are hassmic's own: commit checks that one loads in our interpreter and puts it in place itself.
  */
@@ -42,7 +43,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define MAX_FILES 64
+#define MAX_FILES 128                   /* en-US sets have 69 (2026-10) */
+#define MAX_DEPTH 2                     /* levels of folders in a set */
+#define MAX_NAME  127                   /* a file's path in its set */
 #define MAX_TOTAL (96L << 20)           /* the biggest set so far is 24 MB (ziggy-de-DE) */
 #define MARGIN    (8L << 20)            /* left free on /data after root's copy */
 #define NCACHE    32
@@ -63,15 +66,20 @@ static int good_name(const char *s)
     return 1;
 }
 
-/* a file of a set: "file" or "sub/file", both parts good names (so no "..", nothing hidden, no deeper) */
+/* a file of a set: "file", "sub/file" or "sub/sub/file", every part a good name (so no "..", nothing hidden, no deeper) */
 static int good_path(const char *s)
 {
-    char a[64]; const char *slash = strchr(s, '/');
-    if (!slash) return good_name(s);
-    if (slash - s > 63 || strchr(slash + 1, '/')) return 0;
-    memcpy(a, s, (size_t)(slash - s)); a[slash - s] = 0;
-    return good_name(a) && good_name(slash + 1);
+    char a[64]; const char *slash; int depth = 0;
+    if (strlen(s) > MAX_NAME) return 0;
+    for (; (slash = strchr(s, '/')); s = slash + 1) {
+        if (slash - s > 63 || ++depth > MAX_DEPTH) return 0;
+        memcpy(a, s, (size_t)(slash - s)); a[slash - s] = 0;
+        if (!good_name(a)) return 0;
+    }
+    return good_name(s);
 }
+
+static int depth_of(const char *sub) { int d = *sub != 0; for (; *sub; sub++) d += *sub == '/'; return d; }
 
 /* id -> the folder it lives in, the folder it is staged in (state/artifacts/<stage>), and its kind; -1 if not an id */
 static int resolve(const char *id, char *dir, size_t dcap, char *stage, size_t scap, const char **kind)
@@ -88,24 +96,24 @@ static int resolve(const char *id, char *dir, size_t dcap, char *stage, size_t s
     return 0;
 }
 
-struct file { char name[128]; long size; long long mtime; };   /* name: "sub/file" at most 63 + 1 + 63 */
+struct file { char name[MAX_NAME + 1]; long size; long long mtime; };
 static int cmp_file(const void *a, const void *b) { return strcmp(((const struct file *)a)->name, ((const struct file *)b)->name); }
 
 /* the regular files of DIR/SUB (SUB "" for DIR itself) into f[n..max), named with SUB in front; those of its folders,
- * one level down, too.  The new count, or -1 when STRICT and something else is there (a link, a folder deeper down, a
- * bad or hidden name).  Not strict, those are left out. */
+ * MAX_DEPTH levels down, too.  The new count, or -1 when STRICT and something else is there (a link, a folder deeper
+ * down, a bad or hidden name, a path too long).  Not strict, those are left out. */
 static int list_into(const char *dir, const char *sub, struct file *f, int n, int max, int strict)
 {
-    char p[512], name[128]; struct stat st; struct dirent *e; DIR *d;
+    char p[512], name[MAX_NAME + 2]; struct stat st; struct dirent *e; DIR *d;
     snprintf(p, sizeof p, "%s%s%s", dir, *sub ? "/" : "", sub);
     if (!(d = opendir(p))) return *sub ? (strict ? -1 : n) : -1;
     while ((e = readdir(d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
         snprintf(name, sizeof name, "%s%s%.63s", sub, *sub ? "/" : "", e->d_name);
         snprintf(p, sizeof p, "%s/%s", dir, name);
-        int ok = good_name(e->d_name) && !lstat(p, &st);
-        if (ok && S_ISDIR(st.st_mode) && !*sub) {             /* one level of folders, no more */
-            int k = list_into(dir, e->d_name, f, n, max, strict);
+        int ok = good_name(e->d_name) && strlen(name) <= MAX_NAME && !lstat(p, &st);
+        if (ok && S_ISDIR(st.st_mode) && depth_of(sub) < MAX_DEPTH) {       /* MAX_DEPTH levels of folders, no more */
+            int k = list_into(dir, name, f, n, max, strict);
             if (k < 0) { n = -1; break; }
             n = k; continue;
         }
@@ -261,7 +269,7 @@ static int read_expect(const char *stage, char dh[65], struct file *f, int max)
     return n;
 }
 
-static void rm_tree(const char *dir)         /* a staged folder: files, and folders of files one level down */
+static void rm_tree(const char *dir)         /* a staged folder: files, and folders of files */
 {
     DIR *d = opendir(dir); struct dirent *e; char p[400]; struct stat st;
     if (d) {
@@ -298,7 +306,7 @@ int art_begin(const char *spec, char *err, size_t errsz)
         if (!line[0]) continue;
         if (sscanf(line, "%159s %ld", name, &size) != 2 || !good_path(name) || size < 0 || n == MAX_FILES) { snprintf(err, errsz, "bad file list"); return -1; }
         for (int i = 0; i < n; i++) if (!strcmp(f[i].name, name)) { snprintf(err, errsz, "a file twice"); return -1; }
-        snprintf(f[n].name, sizeof f[n].name, "%.127s", name); f[n].size = size; total += size; n++;   /* good_path: <= 127 */
+        snprintf(f[n].name, sizeof f[n].name, "%.127s", name); f[n].size = size; total += size; n++;   /* good_path: <= MAX_NAME */
     }
     if (!n || total > MAX_TOTAL) { snprintf(err, errsz, n ? "too big" : "no files"); return -1; }
     pthread_mutex_lock(&lk);
@@ -317,8 +325,8 @@ int art_begin(const char *spec, char *err, size_t errsz)
     for (int i = 0; i < n; i++) fprintf(x, "%s %ld\n", f[i].name, f[i].size);
     fclose(x);
     for (int i = 0; i < n; i++) {               /* every file there from the start: an empty one gets no piece */
-        char fp[460]; const char *slash = strchr(f[i].name, '/');
-        if (slash) {                            /* its folder first (good_path: one level, a good name) */
+        char fp[460]; const char *slash;
+        for (slash = f[i].name; (slash = strchr(slash, '/')); slash++) {    /* its folders first (good_path: good names) */
             snprintf(fp, sizeof fp, "%.300s/%.*s", stage, (int)(slash - f[i].name), f[i].name);
             mkdir(fp, 0755);
         }
@@ -405,7 +413,7 @@ void art_unstage(const char *id)
 }
 
 /* A download unpacked straight into the staging folder (davs.c): write what art_commit will check against, from the
- * files as they arrived: the list, the digest.  A link, a folder in a folder or a strange name is refused here already. */
+ * files as they arrived: the list, the digest.  A link, folders deeper than two or a strange name is refused here already. */
 int art_staged(const char *id, char *err, size_t errsz)
 {
     char dir[300], stage[300], p[320], dh[65]; const char *kind; struct file f[MAX_FILES]; uint8_t d[32]; int n;
@@ -417,7 +425,7 @@ int art_staged(const char *id, char *err, size_t errsz)
         int stray = n < 0;
         unstage(stage);
         pthread_mutex_unlock(&lk);
-        snprintf(err, errsz, stray ? "the download holds a link, folders in folders or a file this Echo cannot keep"
+        snprintf(err, errsz, stray ? "the download holds a link, folders too deep or a file this Echo cannot keep"
                                    : "cannot read what arrived");
         return -1;
     }

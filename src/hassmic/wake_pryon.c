@@ -31,10 +31,14 @@ static void push_props(void)
 /* Not logged: the two warnings about the audio fingerprint in the result's metadata ("Bitmask frame indices ..",
  * "Invalid bitmask frame indices (currentFrameIdx < wwEndFrameIdx) .."): its extractor is a few 10 ms frames behind the
  * keyword's end when the result is built.  158 of 235 accepted wake words on the Dot 3 came with one of them, each
- * accepted as usual; nothing here uses the fingerprint (Alexa's cloud did). */
+ * accepted as usual; nothing here uses the fingerprint (Alexa's cloud did).  Nor "WindowAverageTracker request for
+ * average is before existing history": the NTT fusion sets (every en-US one, alexa-de-DE) ask their window averages
+ * for the second before the model was loaded, ~390 lines in the first second after each load (biscuit, 2026-10-08),
+ * none after. */
 static void on_log(int level, const char *tag, const char *msg)
 {
-    if (level > 3 || (msg && strstr(msg, "itmask frame indices (currentFrameIdx < wwEndFrameIdx)"))) return;
+    if (level > 3 || (msg && (strstr(msg, "itmask frame indices (currentFrameIdx < wwEndFrameIdx)")
+                              || strstr(msg, "WindowAverageTracker request for average is before existing history")))) return;
     fprintf(stderr, "pryon %s: %s\n", tag ? tag : "", msg ? msg : "");
 }
 

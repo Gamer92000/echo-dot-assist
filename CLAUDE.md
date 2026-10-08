@@ -249,7 +249,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   and stages it through artifacts.c.  Works against the real Amazon (biscuit, amazon.de, 2026-10-06; what it answers in
   docs/re-davs-login.md); the page offers every Amazon site with Alexa (davs.c's list), any of the account's region works.
 - **Artifacts** (`artifacts.c`): Amazon's models (`wake:<name>` = `models/<name>/`, `sound` = `aed/`, `whisper`): files
-  plus one level of folders (`whisper_components/`, `BDPGeneratedFiles/`; a file's name is then `sub/file`), listed
+  plus two levels of folders (`whisper_components/`, `BDPGeneratedFiles/`, `nttfusionconfig/ntt_conv/`; a file's name is then its path), listed
   with a digest (BLAKE2b-256 over name, size, content per file), read and written in pieces (`ART_CHUNK_MAX`) over
   signed requests, so the page copies them Echo to Echo. Staged in `state/artifacts/<stage>/`; commit checks sizes,
   digest and, for wake word sets, `pryon_test` (next to the binary, `HASSMIC_PRYON_TEST`); install writes

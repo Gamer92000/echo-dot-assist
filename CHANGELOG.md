@@ -4,6 +4,13 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-08
 
+- **Only the wake word you picked wakes the Echo.** Amazon's English (US) "Computer", "Amazon" and "Ziggy" are one
+  model that knows all three (and "Hey Disney"): with "Computer" picked, "Amazon" and "Ziggy" woke the Echo too.
+- **The same wake word in two languages shows twice in Home Assistant**, as "Computer (de-DE)" and "Computer (en-US)".
+  Home Assistant listed it once before and always picked the same one of the two.
+- **"Download from Amazon" takes the English (US) wake words, and German "Alexa".** Amazon now packs these sets in
+  deeper folders and with more files than the Echo accepted, so the settings page refused each one ("a file this Echo
+  cannot keep"). Copying such a set from one Echo to another on the settings page works now too.
 - **Drop In between Echos.** One Echo calls another of yours and both hear each other, as Alexa's Drop In did. Start it
   from Home Assistant (the new action `drop_in` with the other Echo's name), by voice with the new "Echo Drop In"
   blueprint ("drop in kitchen", "verbinde mit der Küche"; English, German, French, Spanish, Italian and Dutch,

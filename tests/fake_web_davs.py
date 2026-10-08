@@ -3,7 +3,7 @@
 with the fake attestation HAL of tests/unit (a fixed RSA key) and faked engine attributes.  The login by code pair
 (the code on the page, /auth/register polled with the attestation token in it until the code is "entered", the
 tokens on disk 0600 and never in an answer), the DAVS request with the Echo's own engine ids, the tar.gz download
-(PAX headers and a directory entry skipped, the sound detection model under AED/, sets with one level of folders as
+(PAX headers and a directory entry skipped, the sound detection model under AED/, sets with two levels of folders as
 whisper and alexa-de-DE have them; deeper refused), the staging checks of artifacts.c,
 root's installer, and the deregister (a revoked token refreshed first, so the Echo does not stay on the account).
 A login on another Amazon that is cancelled leaves the registration where it was; a site that is none is refused.  Also an Echo whose attestation does not answer (donut, the PC build): it
@@ -78,10 +78,13 @@ class Amazon:
                                   ("._crumb", 0, b"junk"), ("whisper_components/", b"5", b""),
                                   ("whisper_components/model.v8.0.mlp", 0, os.urandom(30000)),
                                   ("whisper_components/._model.v8.0.mlp", 0, b"junk")]),
+            # alexa-de-DE and every en-US set: two levels of folders (issue 14), more than 64 files
             "alexa": tar_bytes([("BDPGeneratedFiles/", b"5", b""), ("BDPGeneratedFiles/kw.cfg.json", 0, b"{}"),
-                                ("BDPGeneratedFiles/words.txt", 0, os.urandom(4000)), ("pryon.manifest", 0, b"m\n")]),
-            # nothing Amazon sends, but what the Echo must not unpack: a folder in a folder
-            "computer": tar_bytes([("pryon.manifest", 0, b"m\n"), ("model.bin", 0, os.urandom(2000)), ("a/b/deep.bin", 0, b"x")]),
+                                ("BDPGeneratedFiles/words.txt", 0, os.urandom(4000)), ("pryon.manifest", 0, b"m\n"),
+                                ("nttfusionconfig/ntt_conv/", b"5", b""), ("nttfusionconfig/ntt_conv/._afe_ued.cfg.json", 0, b"junk")]
+                               + [(f"nttfusionconfig/ntt_conv/c{i}.cfg.json", 0, b"{}") for i in range(66)]),
+            # nothing Amazon sends, but what the Echo must not unpack: three levels of folders
+            "computer": tar_bytes([("pryon.manifest", 0, b"m\n"), ("model.bin", 0, os.urandom(2000)), ("a/b/c/deep.bin", 0, b"x")]),
         }
 
 
@@ -288,7 +291,7 @@ def main():
         d = wait_state("registered", b, seen)
         staged = json.loads(b.call("GET", "/api/artifacts")[2])["staged"]
         check(d["error"] and "cannot keep" in d["error"] and "wake.echo-de-DE" in staged and "wake.computer-de-DE" not in staged,
-              f"a folder in a folder: refused, the others untouched ({d['error'][:70]})")
+              f"three levels of folders: refused, the others untouched ({d['error'][:70]})")
         st, _, body = b.call("POST", "/api/davs/fetch", b"echo deDE")
         check(st == 400, "a locale that is none: refused")
 
@@ -307,7 +310,8 @@ def main():
             top = os.path.join(e.data, d_)
             return sorted(os.path.relpath(os.path.join(r, f), top) for r, _, fs in os.walk(top) for f in fs)
         for d_, want_files in (("models/echo-de-DE", ["int16_streaming.onnx", "kw.cfg.json", LONG_NAME, "pryon.manifest"]),
-                               ("models/alexa-de-DE", ["BDPGeneratedFiles/kw.cfg.json", "BDPGeneratedFiles/words.txt", "pryon.manifest"]),
+                               ("models/alexa-de-DE", ["BDPGeneratedFiles/kw.cfg.json", "BDPGeneratedFiles/words.txt", "pryon.manifest"]
+                                + [f"nttfusionconfig/ntt_conv/c{i}.cfg.json" for i in range(66)]),
                                ("aed", ["AED.json", "model.mlp", "pryon.manifest"]),
                                ("whisper", ["HCLG.fst", "pryon_whisper.manifest", "whisper_components/model.v8.0.mlp"])):
             got = tree(d_)

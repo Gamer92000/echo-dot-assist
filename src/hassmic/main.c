@@ -410,6 +410,17 @@ static void wake_words_scan(void)
         if (i >= 0) def = i;
         else fprintf(stderr, "wake word: -m %s: no such model, Alexa until Home Assistant picks one\n", m_arg);
     }
+    /* Home Assistant's wake word select keys its options by name: of two "Computer" (de-DE and en-US) it showed one, and
+     * picking it got the one listed last.  A name two sets share gets the set's language and region ("Computer
+     * (en-US)"); the firmware's "Alexa" keeps its plain name */
+    char shared[MAX_WAKE_WORDS] = { 0 };
+    for (int i = 0; wake_engine == WAKE_AMAZON && i < n_wake_words; i++)
+        for (int j = 0; j < n_wake_words; j++) if (j != i && !strcmp(wake_words[i].name, wake_words[j].name)) shared[i] = 1;
+    for (int i = 0; i < n_wake_words; i++) {
+        const char *dash = strchr(wake_words[i].id, '-');
+        size_t k = strlen(wake_words[i].name);
+        if (shared[i] && dash) snprintf(wake_words[i].name + k, sizeof wake_words[i].name - k, " (%.20s)", dash + 1);
+    }
     wake_active = def;
     if ((f = fopen(wake_word_path(), "r"))) {
         if (fscanf(f, "%63s", saved) == 1) { int i = wake_word_find(saved); if (i >= 0) wake_active = i; }
@@ -1062,9 +1073,51 @@ static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* captu
     arb_due = due; arb_from = ring_n;
 }
 
+/* The keyword the loaded model answers to (capture thread).  Amazon's en-US sets for "Computer", "Amazon" and "Ziggy"
+ * are one model (words.shrunk.txt: AMAZON COMPUTER HEY_DISNEY STOP ZIGGY, every one of them wakes from sleep in its
+ * op.cfg.json, nothing in the set switches one off): with "Computer" picked, "Amazon" and "Ziggy" woke the Echo too
+ * (GitHub issue 14).  Stock's client picks the one it wants out of the results; so do we.  The keyword is the set's
+ * id up to the language ("computer-en-US" -> COMPUTER, the firmware's "alexa" -> ALEXA), but only if the set lists it:
+ * a set installed by hand under another name answers to everything it knows, as before.  "" = no filter. */
+static char wake_keyword[64];
+static void on_wake(const char *keyword, uint64_t begin, uint64_t end);
+
+static int words_list(const char *path, const char *kw)    /* words.shrunk.txt: "<word> <index>" per line */
+{
+    char line[96], w[64]; FILE *f = fopen(path, "r"); int hit = 0;
+    if (!f) return 0;
+    while (!hit && fgets(line, sizeof line, f)) hit = sscanf(line, "%63s", w) == 1 && !strcasecmp(w, kw);
+    fclose(f);
+    return hit;
+}
+
+static int wake_open_word(const struct core_wake_word *w)
+{
+    char dir[256], p[560], kw[64], *slash; DIR *d; struct dirent *e; int hit = 0;
+    snprintf(kw, sizeof kw, "%.*s", (int)strcspn(w->id, "-"), w->id);
+    snprintf(dir, sizeof dir, "%s", w->manifest);
+    if ((slash = strrchr(dir, '/'))) *slash = 0;
+    if (!wake_is_mww(w->manifest)) {
+        snprintf(p, sizeof p, "%s/words.shrunk.txt", dir); hit = words_list(p, kw);
+        if (!hit && (d = opendir(dir))) {                  /* the newer sets keep it in BDPGeneratedFiles/ */
+            while (!hit && (e = readdir(d))) {
+                if (e->d_name[0] == '.') continue;
+                snprintf(p, sizeof p, "%s/%s/words.shrunk.txt", dir, e->d_name); hit = words_list(p, kw);
+            }
+            closedir(d);
+        }
+    }
+    snprintf(wake_keyword, sizeof wake_keyword, "%s", hit ? kw : "");
+    return wake_open(w->manifest, on_wake);
+}
+
 static void on_wake(const char *keyword, uint64_t begin, uint64_t end)
 {
     if (!core_local_wake) return;
+    if (wake_keyword[0] && strcasecmp(keyword, wake_keyword) && strcasecmp(keyword, "STOP")) {
+        fprintf(stderr, "wake: %s is not the wake word picked (%s), ignored\n", keyword, wake_keyword);
+        return;
+    }
     /* In a Drop In the other side's voice plays here, and what the echo canceller leaves of its "Alexa" (meant for the
      * Echo over there) can be enough for ours.  While it talks, the wake word is left to that Echo */
     if (atomic_load(&dropin_live) && dropin_far_talking()) { fprintf(stderr, "wake: %s while the other side of the Drop In talks, ignored\n", keyword); return; }
@@ -1692,9 +1745,9 @@ static void wake_load(void)
     char e[160];
     pthread_mutex_lock(&core_lock); struct core_wake_word w = wake_words[wake_active]; pthread_mutex_unlock(&core_lock);
     wake_close();
-    if (wake_open(w.manifest, on_wake) == 0) { fprintf(stderr, "wake word: now \"%s\"\n", w.name); return; }
+    if (wake_open_word(&w) == 0) { fprintf(stderr, "wake word: now \"%s\"\n", w.name); return; }
     /* a model replaced from the page is swapped in by two renames (mww_store.c): once more before giving it up */
-    if (wake_is_mww(w.manifest)) { usleep(300000); if (wake_open(w.manifest, on_wake) == 0) { fprintf(stderr, "wake word: now \"%s\"\n", w.name); return; } }
+    if (wake_is_mww(w.manifest)) { usleep(300000); if (wake_open_word(&w) == 0) { fprintf(stderr, "wake word: now \"%s\"\n", w.name); return; } }
     pthread_mutex_lock(&core_lock);
     if (wake_engine == WAKE_MWW) {          /* lists anew and raises wake_switch: the next round loads Amazon's pick */
         fprintf(stderr, "wake word: cannot load %s, back to Amazon's engine\n", w.manifest);
@@ -1705,7 +1758,7 @@ static void wake_load(void)
     fprintf(stderr, "wake word: cannot load %s, back to Alexa\n", w.manifest);
     wake_active = 0; struct core_wake_word first = wake_words[0];
     pthread_mutex_unlock(&core_lock);
-    wake_open(first.manifest, on_wake);
+    wake_open_word(&first);
 }
 
 static void *capture_thread(void *arg)
@@ -1851,14 +1904,14 @@ int main(int argc, char **argv)
         wake_m_arg = manifest;
         if (!settings_peek("wake_engine", eng, sizeof eng) && !strcmp(eng, "microwakeword")) wake_engine = WAKE_MWW;
         wake_words_scan();
-        int ok = wake_open(wake_words[wake_active].manifest, on_wake) == 0;
+        int ok = wake_open_word(&wake_words[wake_active]) == 0;
         if (!ok && wake_engine == WAKE_MWW) {       /* settings_load() switches back to it, and wake_load() off for good */
             fprintf(stderr, "cannot load microWakeWord model %s, Amazon's engine\n", wake_words[wake_active].manifest);
             wake_engine = WAKE_AMAZON; wake_words_scan();
-            ok = wake_open(wake_words[wake_active].manifest, on_wake) == 0;
+            ok = wake_open_word(&wake_words[wake_active]) == 0;
         }
         if (!ok && (wake_active == 0 || (fprintf(stderr, "cannot load wake word model %s, trying Alexa\n", wake_words[wake_active].manifest), wake_active = 0,
-                                         wake_open(wake_words[0].manifest, on_wake) < 0))) {
+                                         wake_open_word(&wake_words[0]) < 0))) {
             fprintf(stderr, "cannot load wake word model %s\n", wake_words[wake_active].manifest); return 1;
         }
     }

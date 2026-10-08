@@ -106,7 +106,7 @@ async def main():
     rx_stat = lambda rcpi: open(env["HASSMIC_FAKE_WIFI"], "w").write(f"RX Stat:\nRX SNR (dB)          = 32\nRCPI RX0             = {rcpi}\n")
     rx_stat(112)
     with open(env["HASSMIC_LUX"], "w") as f: f.write("67\n")
-    for m in ("echo-de", "computer-en-US"):             # installed wake word models (the PC build loads none of them)
+    for m in ("echo-de", "computer-en-US", "computer-de-DE", "alexa-en-US"):   # installed wake word models (the PC build loads none of them)
         os.makedirs(os.path.join(state, "models", m)); open(os.path.join(state, "models", m, "pryon.manifest"), "w").close()
     with open(mdns, "w") as f:                          # what main.sh does at boot
         subprocess.run([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-S"], env=env, stdout=f, check=True)
@@ -183,8 +183,10 @@ async def main():
         check(conf().get("noise_reduction") == "off" and conf().get("mic_level") == "-20", f"settings persisted: {conf()}")
         cfg = await cli.get_voice_assistant_configuration(5)
         avail = sorted((w.id, w.wake_word, list(w.trained_languages)) for w in cfg.available_wake_words)
-        check(avail == [("alexa", "Alexa", ["en"]), ("computer-en-US", "Computer", ["en"]), ("echo-de", "Echo", ["de"])]
-              and list(cfg.active_wake_words) == ["alexa"] and cfg.max_active_wake_words == 1, f"wake words: all installed ones offered, Alexa active: {avail}")
+        check(avail == [("alexa", "Alexa", ["en"]), ("alexa-en-US", "Alexa (en-US)", ["en"]), ("computer-de-DE", "Computer (de-DE)", ["de"]),
+                        ("computer-en-US", "Computer (en-US)", ["en"]), ("echo-de", "Echo", ["de"])]
+              and list(cfg.active_wake_words) == ["alexa"] and cfg.max_active_wake_words == 1,
+              f"wake words: all installed ones offered, a name two share with its region (HA's select keys on names), Alexa active: {avail}")
 
         started = asyncio.Event(); mic = bytearray(); stopped = []
         async def handle_start(conv_id, flags, settings, phrase):
