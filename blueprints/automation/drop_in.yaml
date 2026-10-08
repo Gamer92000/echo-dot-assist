@@ -1,0 +1,108 @@
+blueprint:
+  name: Echo Drop In by voice
+  description: >-
+    "Drop in kitchen", "Verbinde mit der Küche", "Connecte-moi avec la cuisine"… on an Echo running hassmic calls the
+    Echo in that area (or the one whose name contains the word), as Alexa's Drop In did. The Echo you spoke to makes
+    the call; end it with its action button, "<wake word>, stop" or "hang up" / "auflegen" / "raccroche" / "cuelga" /
+    "riattacca" on either Echo. Drop In must be on in both Echos' settings pages (Features), and both must be in the
+    same Echo network (the Echos section there). Sentences come for English, German, French, Spanish, Italian and
+    Dutch; the reply is in the language of the voice assistant you spoke to (English where there is none below).
+  domain: automation
+  source_url: https://github.com/Gamer92000/echo-dot-assist/blob/main/blueprints/automation/drop_in.yaml
+  input:
+    sentences:
+      name: Sentences
+      description: >-
+        What to say, in any language: Home Assistant matches them whatever language the assistant speaks. {room} is
+        the area (or a word of the Echo's name) to drop in on. Plain "call …" verbs are left out on purpose: they
+        would catch requests meant for phone calls.
+      default:
+        # English
+        - "drop in [on|at|in|to] [the] {room}"
+        - "connect [me] (to|with) [the] {room}"
+        # German
+        - "drop in [bei|im|in der|in] {room}"
+        - "(verbinde|verbinden) [mich] mit [dem|der|den] {room}"
+        # French
+        - "(connecte-moi|connecte moi|connecter) (à|a|avec) [la|le|les] {room}"
+        # Spanish
+        - "(conéctame|conectame|conecta) con [la|el|los|las] {room}"
+        # Italian
+        - "(collegami|connettimi|collega) con [la|il|lo] {room}"
+        # Dutch
+        - "(verbind|verbindt) [me|mij] met [de|het] {room}"
+      selector:
+        text:
+          multiple: true
+    replies:
+      name: Replies
+      description: >-
+        Per language (the first part of the assistant's language: "de" for "de-CH" too): what is said while the call
+        starts, and when there is no Echo there. {room} is replaced by the area or Echo found, or by what you said.
+      default:
+        en: ["Calling {room}", "There is no Echo in {room}"]
+        de: ["Ich verbinde mit {room}", "Ich finde kein Echo für {room}"]
+        fr: ["J'appelle {room}", "Je ne trouve pas d'Echo pour {room}"]
+        es: ["Llamando a {room}", "No encuentro ningún Echo en {room}"]
+        it: ["Chiamo {room}", "Non trovo nessun Echo per {room}"]
+        nl: ["Ik verbind met {room}", "Ik vind geen Echo voor {room}"]
+      selector:
+        object:
+
+triggers:
+  - trigger: conversation
+    command: !input sentences
+
+variables:
+  replies: !input replies
+  lang: "{{ (trigger.user_input.language | default('en') or 'en') | lower | regex_replace('[-_].*$', '') }}"
+  words: "{{ replies[lang] if lang in replies else replies['en'] }}"
+  room: "{{ trigger.slots.room | default('') | trim }}"
+  source: "{{ trigger.device_id | default('') }}"
+  # hassmic Echos: ESPHome devices made by Amazon that list a Drop In sensor (Drop In switched on)
+  echos: >-
+    {% set ns = namespace(l=[]) %}
+    {% for d in integration_entities('esphome') | map('device_id') | reject('none') | unique %}
+      {% if device_attr(d, 'manufacturer') == 'Amazon'
+            and device_entities(d) | select('match', 'sensor\..*_drop_in$') | list | count > 0 %}
+        {% set ns.l = ns.l + [d] %}
+      {% endif %}
+    {% endfor %}
+    {{ ns.l }}
+  target: >-
+    {% set r = room | lower %}
+    {% set ns = namespace(hit='') %}
+    {% for d in echos if d != source and not ns.hit %}
+      {% if (area_name(d) or '') | lower == r %}{% set ns.hit = d %}{% endif %}
+    {% endfor %}
+    {% for d in echos if d != source and not ns.hit %}
+      {% set n = (device_attr(d, 'name_by_user') or device_attr(d, 'name') or '') | lower %}
+      {% if r and r in n %}{% set ns.hit = d %}{% endif %}
+    {% endfor %}
+    {{ ns.hit }}
+  # what the reply calls it: the area as Home Assistant spells it, else the Echo's name, else what was said
+  said: >-
+    {% if target %}{{ area_name(target) or device_attr(target, 'name_by_user') or device_attr(target, 'name') }}{% else %}{{ room }}{% endif %}
+  # an Echo's ESPHome action is named after its node, which hassmic makes from the name it reported (main.c node_of):
+  # German umlauts spelled out, everything else as Home Assistant's slugify does it
+  source_action: >-
+    {% set n = (device_attr(source, 'name') or '') | lower | replace('ä', 'ae') | replace('ö', 'oe') | replace('ü', 'ue')
+               | replace('ß', 'ss') | replace('æ', 'ae') %}
+    esphome.{{ n | slugify }}_drop_in
+
+conditions:
+  - condition: template
+    value_template: "{{ source in echos }}"
+
+actions:
+  - if:
+      - condition: template
+        value_template: "{{ target != '' }}"
+    then:
+      - action: "{{ source_action }}"
+        data:
+          target: "{{ device_attr(target, 'name') }}"
+      - set_conversation_response: "{{ words[0] | replace('{room}', said) }}"
+    else:
+      - set_conversation_response: "{{ words[1] | replace('{room}', said) }}"
+mode: parallel

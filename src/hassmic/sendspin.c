@@ -761,7 +761,7 @@ void sendspin_pause(void)
         paused_by_button_at = 0;                        /* the button does not resume what another source paused */
     }
     pthread_mutex_unlock(&adm_lock);
-    if (sent) fprintf(stderr, "sendspin: paused, Bluetooth took over\n");
+    if (sent) fprintf(stderr, "sendspin: paused, another source took over\n");
 }
 
 static void load_identity(void)

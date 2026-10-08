@@ -178,8 +178,8 @@ async def main():
         check("arbitration_id" not in by and "join_arbitration_network" not in by and pv("arbitration") == 1 and isinstance(apeers, SensorInfo),
               "arbitration on by default (the page), peers sensor, no ID entity, no join switch")
         svcs = (await cli.list_entities_services())[1]
-        check([(v.name, [(x.name, int(x.type)) for x in v.args]) for v in svcs] == [("arbitration_key", [("network", 3), ("key", 3)])],
-              "action \"arbitration_key\" (network, key: strings) for other Echos to hand over their network")
+        check(sorted((v.name, [(x.name, int(x.type)) for x in v.args]) for v in svcs) == [("arbitration_key", [("network", 3), ("key", 3)]), ("drop_in", [("target", 3)])],
+              "actions \"arbitration_key\" (network, key: strings) for other Echos to hand over their network, \"drop_in\" (target: string)")
         check(conf().get("noise_reduction") == "off" and conf().get("mic_level") == "-20", f"settings persisted: {conf()}")
         cfg = await cli.get_voice_assistant_configuration(5)
         avail = sorted((w.id, w.wake_word, list(w.trained_languages)) for w in cfg.available_wake_words)

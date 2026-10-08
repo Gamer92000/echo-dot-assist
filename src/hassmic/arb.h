@@ -16,6 +16,9 @@ struct arb_hooks {
     /* Report this tag as scanned to Home Assistant (the event esphome.tag_scanned, which needs no permission).  -1: no
      * link to Home Assistant.  Called from arb's thread, never with its lock held. */
     int  (*scan)(const char *tag_id);
+    /* A member's message for us (arb_tell), checked: K's MAC, a fresh counter.  from: its id (the first 8 bytes of its
+     * public key), node and IP as its beacons say.  May be NULL.  Called from arb's thread, never with its lock held. */
+    void (*message)(const unsigned char from[8], const char *node, unsigned ip, const unsigned char *p, size_t n);
 };
 
 int  arb_start(int port, const char *node, const struct arb_hooks *h);           /* node: our ESPHome node name; 0 = running */
@@ -42,7 +45,16 @@ size_t arb_status_json(char *out, size_t cap);
  * network.  And the members heard from lately, as JSON [{"node","ip"}] (unauthenticated: beacons say as much).  Any lock. */
 int  arb_web_key(unsigned char out[32]);
 size_t arb_members_json(char *out, size_t cap);
-int  arb_pair(void);                            /* the pairing gesture: 2 min in which an Echo nearby may join; -1 not running */
+int  arb_pair(void);
+/* Drop In (dropin.c) rides on the network.  A member by its node name: its id and IP (network byte order) from its
+ * signed beacons; -1 if none counts.  arb_tell: a message for that member alone (n <= ARB_MSG_MAX), broadcast like
+ * everything else here, under K's MAC and our counter; -1 outside a network.  arb_derive: a key every member derives
+ * from K for that purpose, nobody else; -1 outside a network.  arb_self: our own id.  Any lock but arb's. */
+#define ARB_MSG_MAX 160
+int  arb_member(const char *node, unsigned char id[8], unsigned *ip);
+int  arb_tell(const unsigned char to[8], const void *p, size_t n);
+int  arb_derive(const char *label, unsigned char out[32]);
+void arb_self(unsigned char id[8]);                            /* the pairing gesture: 2 min in which an Echo nearby may join; -1 not running */
 
 /* The wake word was heard with this score (signal to noise, dB x 100); prio 2 = this Echo is in a conversation or
  * ringing and owns the next wake word.  Only Echos that heard the same keyword compete ("Echo" in German and in

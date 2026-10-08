@@ -133,8 +133,9 @@ async def main():
     for e in (a, b): e.page = Browser(e.web); check(e.page.login_with_button(e.proc), f"{e.name}: settings page logged in with the action button")
     try:
         await a.connect(ha); await b.connect(ha)
-        check([s.name for s in a.services] == ["arbitration_key"] and [x.name for x in a.services[0].args] == ["network", "key"]
-              and "arbitration_id" not in a.by, "the Echo offers its \"arbitration_key\" action, and no ID entity")
+        ak = next((s for s in a.services if s.name == "arbitration_key"), None)
+        check(ak is not None and [x.name for x in ak.args] == ["network", "key"] and "arbitration_id" not in a.by,
+              "the Echo offers its \"arbitration_key\" action, and no ID entity")
         check("arbitration_handoff" not in a.by, "no \"Arbitration handoff\" entity any more")
         a.allowed = b.allowed = False                   # neither may run actions: the tags alone
         ok = await until(lambda: a.st("arbitration_peers") == 1 and b.st("arbitration_peers") == 1, 40)

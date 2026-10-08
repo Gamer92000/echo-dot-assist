@@ -2,6 +2,7 @@
 #include "core.h"
 #include "a2dp.h"
 #include "arb.h"
+#include "dropin.h"
 #include "ble.h"
 #include "micgain.h"
 #include "sendspin.h"
@@ -18,6 +19,7 @@ const char *const denoise_names[4] = { "Off", "Low", "Medium", "High" };
 static const char *const denoise_values[4] = { "off", "low", "medium", "high" };
 static const char *const arb_modes[2] = { "hassmic", "kiosk" };            /* ARB_HASSMIC, ARB_KIOSK */
 static const char *const wake_engines[3] = { "amazon", "microwakeword", "homeassistant" };  /* WAKE_AMAZON, WAKE_MWW, WAKE_HA */
+static const char *const dropin_answers[2] = { "auto", "ask" };          /* dropin_ask() 0, 1 */
 
 const struct bt_lang bt_langs[] = {
     { "en", "English", "Connected to %s", "Disconnected from %s", "Connected to a Bluetooth device", "Disconnected from a Bluetooth device" },
@@ -45,7 +47,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 /* ---------------------------------------------------------------- the table */
 
 enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, MUTE, DND, TIMER_RING, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, ARB_MODE, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WIFI_MOTION,
-          WIFI_SENS, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, UPDATES, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, NSET };
+          WIFI_SENS, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, DROPIN, DROPIN_ANSWER, UPDATES, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
  * listed()); everything else here is on the settings page only, except what Home Assistant always shows (wake sound,
@@ -77,6 +79,9 @@ static const struct setting table[NSET] = {
     /* what the speaker adds to the Echo's latency, for Sendspin's sync: a2dp.c keeps it (state/bt_speaker), per speaker
      * and Echo, so not exported */
     [BT_OUT_DELAY] = { "bluetooth_speaker_delay", "Bluetooth speaker delay", "Features", "ms", S_INT, 0, 1000, 0, 0 },
+    /* dropin.c keeps them in memory, state/config on disk */
+    [DROPIN]      = { "drop_in", "Drop In", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
+    [DROPIN_ANSWER] = { "drop_in_answer", "Drop In answers", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
     [UPDATES]     = { "online_updates", "Online updates", "System", NULL, S_CHOICE, 0, 0, 1, 0 },
     [SS_UNPAIRED] = { "sendspin_unpaired", "Music Assistant without pairing", "Music", NULL, S_BOOL, 0, 1, 1, 0 },
     [EQ_BASS]     = { "equalizer_bass", "Equalizer bass", "Sound", "dB", S_INT, -6, 6, 1, 0 },
@@ -93,6 +98,7 @@ static int present(enum id i)
     case LED_AUTO: return core_lux() == core_lux();               /* a light sensor: not NAN */
     case WIFI_MOTION: case WIFI_SENS: return wifimotion_present();
     case ARB: case ARB_MODE: case ARB_WINDOW: case ARB_OFFSET: return arb_running();
+    case DROPIN: case DROPIN_ANSWER: return dropin_running();
     case SS_UNPAIRED: return core_sendspin_port != 0;
     default: return 1;
     }
@@ -119,6 +125,7 @@ int settings_choices(const struct setting *s, const char *const **names)
     case UPDATES: *names = update_channels; return 3;
     case ARB_MODE: *names = arb_modes; return 2;
     case WAKE_ENGINE: *names = wake_engines; return 3;
+    case DROPIN_ANSWER: *names = dropin_answers; return 2;
     default: *names = NULL; return 0;
     }
 }
@@ -151,6 +158,8 @@ int settings_get(const struct setting *s)
     case BT_SPEAKER: return bt_speaker;
     case BT_OUT_DELAY: return a2dp_out_delay(-1);
     case WHISPER: return whisper;
+    case DROPIN: return dropin_enable(-1);
+    case DROPIN_ANSWER: return dropin_ask(-1);
     default: return 0;
     }
 }
@@ -184,6 +193,8 @@ static void put(enum id i, int v)
     case BT_SPEAKER: bt_speaker = v; if (!v && a2dp_out_enabled()) a2dp_out_enable(0); break;   /* back on the Echo */
     case WHISPER: whisper = v; core_whisper_enable(v); break;
     case BT_OUT_DELAY: a2dp_out_delay(v); break;                    /* a2dp.c saves it */
+    case DROPIN: dropin_enable(v); break;
+    case DROPIN_ANSWER: dropin_ask(v); break;
     default: break;
     }
 }

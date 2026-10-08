@@ -7,6 +7,7 @@
  *   hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m pryon.manifest] [-b input-device] [-L] [-E] [-V] [-S]
  *     -o port  push update port (default 28929, 0 = off; see scripts/ota-push.sh)
  *     -a port  wake word arbitration between Echos, UDP (default 28930, 0 = off; see arb.c)
+ *     -i port  Drop In audio between Echos, UDP (default 28932, 0 = off; needs -a; see dropin.c)
  *     -z port  Sendspin player port (default 28928, 0 = off)
  *     -T       print the Sendspin pairing token (paste it into Music Assistant to pair) and exit
  *     -L no LED ring   -E no earcon on wake   -V leave the volume buttons alone   -S print the avahi service file and exit
@@ -42,6 +43,7 @@
 #include "improv.h"
 #include "buttons.h"
 #include "davs.h"
+#include "dropin.h"
 #include "micdenoise.h"
 #include "micgain.h"
 #include "netio.h"
@@ -98,6 +100,8 @@ static void node_of(const char *name, char n[64])
     n[j] = 0;
     if (!j) snprintf(n, 64, "echo");                    /* a name with no Latin letter at all ("日本") */
 }
+
+void core_node_of(const char *name, char n[64]) { node_of(name, n); }
 
 const char *core_node_name(void)
 {
@@ -189,6 +193,7 @@ void core_reset(const char *why)
 }
 static int ota_port = 28929;                        /* 0 = no push updates */
 static int arb_port = 28930;                        /* 0 = no wake word arbitration */
+static int dropin_port = 28932;                     /* 0 = no Drop In (needs the arbitration network) */
 int core_web_port = 28931;                           /* 0 = no settings page */
 int core_local_wake = 1, core_port, core_sendspin_port = 28928;       /* 0 = Sendspin off */
 static const struct proto *proto = &proto_esphome;
@@ -506,14 +511,17 @@ static void afe_done(void)                          /* any thread: no command fo
  * died while listening.  With the wake word at the server (-w remote) the mic streams all the time, and the cancellers
  * must keep adapting while nobody talks: set only from Home Assistant's "wake word heard" (core_remote_wake) to the end
  * of the command, as stock does around its own wake word. */
-static void listening(int on)
+static int listen_pipe, listen_call;                /* lock held: a command is spoken; a Drop In runs (core_dropin) */
+static void listening_apply(void)
 {
     static int is = -1;
+    int on = listen_pipe || listen_call;
     if (on == is) return;
     is = on;
     char *argv[] = { "/system/bin/lipc-set-prop", "-i", "com.doppler.lasp", "LASP_CMD_SET_LISTENING_MODE", on ? "1" : "0", NULL };
     run_argv(argv);
 }
+static void listening(int on) { listen_pipe = on; listening_apply(); }
 
 static void pipeline_start(void)
 {
@@ -592,6 +600,63 @@ int core_dnd(int set)
 }
 
 int core_muted(void) { return soft_mute || buttons_muted(); }
+
+/* ---------------------------------------------------------------- Drop In (dropin.c)
+ * As stock shows a call: the ring's call animations (layer 2, under listening and replies; every model has them) and the
+ * comms sounds of the image, whatever the wake sound setting says (a call that opens the microphone is never silent).
+ * The front end's listening mode follows who talks (core_dropin_listen). */
+static atomic_int dropin_ring = -1;                 /* the earcon thread loops this ringtone (SND_RING_*), -1: none */
+static atomic_llong dropin_ring_at;                 /* ... from then on (mono_ms) */
+static atomic_int dropin_live;
+static int dropin_was;                              /* lock held */
+static const char *const dropin_led[4] = { NULL, "call_outbound_ringing", "call_incoming", "call_connected" };
+
+void core_dropin(int st, const char *peer, int outgoing)
+{
+    pthread_mutex_lock(&core_lock);
+    int was = dropin_was;
+    dropin_was = st;
+    if (st != was) {
+        fprintf(stderr, "drop in: %s%s%s\n", dropin_states[st], peer[0] ? " " : "", peer);
+        if (dropin_led[was]) led("-u", dropin_led[was]);
+        if (dropin_led[st]) led("-s", dropin_led[st]);
+        else if (was == DROPIN_LIVE) led("-s", "call_connected_end");
+        /* the caller's ringtone only after a second: an Echo that connects at once (answer: auto) is in before that */
+        atomic_store(&dropin_ring_at, mono_ms() + (st == DROPIN_CALLING ? 1000 : 0));
+        atomic_store(&dropin_ring, st == DROPIN_RINGING ? SND_RING_IN : st == DROPIN_CALLING ? SND_RING_OUT : -1);
+        if (st == DROPIN_LIVE) sound_queue(outgoing || was == DROPIN_RINGING ? SND_CALL_ON : SND_DROPIN);
+        else if (st == DROPIN_IDLE) sound_queue(SND_CALL_OFF);
+        atomic_store(&dropin_live, st == DROPIN_LIVE);
+        if (st != DROPIN_LIVE) { listen_call = 0; listening_apply(); }       /* dropin.c turns it on while this side talks */
+        if (connected && proto->dropin_changed) proto->dropin_changed();
+    }
+    pthread_mutex_unlock(&core_lock);
+    /* A call is the newest source, as Alexa's paused what played: music's leftovers in micAsr would open the gate and go
+     * to the other side.  No resume afterwards, as between the music sources; a phone without remote control was only
+     * made silent and is heard again.  Outside core_lock: sendspin takes its own lock */
+    if (st == DROPIN_LIVE && was != DROPIN_LIVE) { if (core_sendspin_port) sendspin_pause(); a2dp_pause(); }
+    if (st == DROPIN_IDLE && was == DROPIN_LIVE) a2dp_unyield();
+}
+
+/* Listening mode in a call, from dropin.c's capture side (not the lock).  On for the whole call, as for a command, the
+ * echo canceller never adapted to the Voip path: it stops adapting in that mode, and what it left of the far end in
+ * micAsr was -46..-62 dBFS; off, -63..-69, the room's floor about -70 (2026-10-08, biscuit, the same speech at the same
+ * volume).  Off for the whole call, a talker would be taken for interference after 1.5 s.  So on only while this side
+ * talks (dropin.c: its level over the room's and over the echo it can expect, with a hangover) */
+void core_dropin_listen(int on)
+{
+    pthread_mutex_lock(&core_lock);
+    if (on != listen_call && (!on || atomic_load(&dropin_live))) { listen_call = on; listening_apply(); }
+    pthread_mutex_unlock(&core_lock);
+}
+
+/* Any lock or none (dropin_call runs under core_lock from Home Assistant): plain reads of flags */
+const char *core_dropin_refusal(int incoming)
+{
+    if (buttons_muted() || soft_mute) return "the microphones are off";
+    if (incoming && dnd) return "do not disturb is on";
+    return NULL;
+}
 
 /* ---------------------------------------------------------------- sound detection
  * The stock detector (sound.h, docs/re-aed.md), off unless Home Assistant switches it on: then a second decoder runs on
@@ -790,6 +855,7 @@ static void trigger(int touch)          /* touch: the action button rather than 
  * Only then: "<wake word>, stop the music" out of silence is a command for Home Assistant, not for us. */
 static void stop_word(void)
 {
+    if (dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE) dropin_hangup("stop");     /* and the pipeline its wake word opened */
     pthread_mutex_lock(&core_lock);
     if (atomic_load(&alarm_on)) core_alarm_stop("stop");        /* and the pipeline its wake word opened, below */
     if (state == SPEAKING) {
@@ -999,6 +1065,9 @@ static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* captu
 static void on_wake(const char *keyword, uint64_t begin, uint64_t end)
 {
     if (!core_local_wake) return;
+    /* In a Drop In the other side's voice plays here, and what the echo canceller leaves of its "Alexa" (meant for the
+     * Echo over there) can be enough for ours.  While it talks, the wake word is left to that Echo */
+    if (atomic_load(&dropin_live) && dropin_far_talking()) { fprintf(stderr, "wake: %s while the other side of the Drop In talks, ignored\n", keyword); return; }
     if (!strcasecmp(keyword, "STOP")) { stop_word(); return; }
     last_wake_ms = mono_ms();
     { float db = 10 * log10f((ring_power(begin, end) + 1) / (32768.0f * 32768.0f));     /* the talker's level, for the gain */
@@ -1204,11 +1273,26 @@ void core_alarm_stop(const char *why)
 int core_transcript(const char *text)
 {
     static const char *const stops[] = { "stop", "stopp", "stoppen", "stoppa", "halt", "arrête", "arrete", "basta", "para", "pare" };
+    /* a Drop In ends on these (and on the stops): Home Assistant has no intent for it, and the run is cancelled */
+    static const char *const hangups[] = { "hangup", "endcall", "endthecall", "enddropin", "auflegen", "legauf", "beenden", "anrufbeenden",
+                                           "dropinbeenden", "gesprächbeenden", "raccroche", "raccrocher", "cuelga", "colgar",
+                                           "riattacca", "riaggancia", "ophangen", "hangop", "legop" };     /* the blueprint's languages */
     char w[32]; size_t n = 0;
-    if (!atomic_load(&alarm_on)) return 0;
     for (const char *p = text; *p && n < sizeof w - 1; p++)        /* lower case, without spaces and punctuation */
         if (!strchr(" \t.,!?¡¿\"'", *p)) w[n++] = (char)tolower((unsigned char)*p);
     w[n] = 0;
+    if (dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE) {
+        int hit = 0;
+        for (size_t i = 0; i < sizeof stops / sizeof stops[0]; i++) hit |= !strcmp(w, stops[i]);
+        for (size_t i = 0; i < sizeof hangups / sizeof hangups[0]; i++) hit |= !strcmp(w, hangups[i]);
+        if (hit) {
+            dropin_hangup("said hang up");
+            if (connected && proto->cancel) { barge_in = 0; atomic_store(&streaming, 0); proto->cancel(); quiet_abort = 1; }
+            core_pipeline_finish();
+            return 1;
+        }
+    }
+    if (!atomic_load(&alarm_on)) return 0;
     for (size_t i = 0; i < sizeof stops / sizeof stops[0]; i++) if (!strcmp(w, stops[i])) {
         core_alarm_stop("said stop");
         if (connected && proto->cancel) { barge_in = 0; atomic_store(&streaming, 0); proto->cancel(); quiet_abort = 1; }
@@ -1246,12 +1330,16 @@ void core_music(int source, int on)
     if (!was != !atomic_load(&music_on)) playback_hint();
 }
 
+static int ring_sound;
+static int ring_go(void) { return atomic_load(&dropin_ring) == ring_sound && !atomic_load(&sounds_pending); }
+
 static void *earcon_thread(void *arg)
 {
     enum { RATE = 48000, N = RATE * 12 / 100 };
     static short tone[N];
     static const char *const snd_names[SND_COUNT] = { "wake", "touch", "mics off", "mics on", "volume", "bluetooth connected",
-                                                                "bluetooth disconnected", "identify" };
+                                                                "bluetooth disconnected", "identify", "drop in", "call connected",
+                                                                "call ended", "incoming call", "outgoing call" };
     (void)arg;
     for (int i = 0; i < N; i++) {           /* 120 ms rising two-tone blip with 10 ms fades */
         double f = i < N / 2 ? 880.0 : 1320.0, env = fmin(1.0, fmin(i, N - i) / (RATE * 0.01));
@@ -1268,6 +1356,9 @@ static void *earcon_thread(void *arg)
             atomic_store(&earcon_heard_until, mono_ms() + 250);         /* speaker to mic stream: 85 ms, and the room's tail */
             atomic_store(&earcon_sounding, 0);
         }
+        { int r = atomic_load(&dropin_ring); const short *pcm; size_t n; unsigned rate;     /* a Drop In rings: cut off when answered */
+          if (r >= 0 && mono_ms() >= atomic_load(&dropin_ring_at) && sound_get((enum sound)r, &pcm, &n, &rate)) {
+              ring_sound = r; play_earcon_while(pcm, n, rate, ring_go); usleep(300000); continue; } }
         if (atomic_load(&alarm_on)) {                   /* timer finished: triple blip every 1.2 s, until the ring time */
             if (mono_ms() > atomic_load(&alarm_until)) {
                 pthread_mutex_lock(&core_lock);
@@ -1287,6 +1378,7 @@ static void on_action(void)
 {
     if (web_approve()) return;                          /* a login of the settings page waited for this press */
     if (improv_authorize()) return;                     /* a phone setting up the network did */
+    if (dropin_running() && dropin_button()) return;    /* a Drop In rang (answered) or ran (ended) */
     pthread_mutex_lock(&core_lock);
     int busy = state == LISTENING || state == THINKING;
     pthread_mutex_unlock(&core_lock);
@@ -1674,6 +1766,13 @@ static void *capture_thread(void *arg)
             if (whisper_on && s) whisper_feed(pcm, n / 2);
             if (whisper_on && !s) { whisper_end(atomic_exchange(&whisper_eou, 0)); whisper_on = 0; }
         }
+        if (atomic_load(&dropin_live)) {               /* a Drop In: the call gets the mic as the pipeline does; muted, silence */
+            static int16_t zeros[1024];
+            int own = atomic_load(&earcon_sounding) || atomic_load(&sounds_pending) || mono_ms() < atomic_load(&earcon_heard_until)
+                      || atomic_load(&tts_on);       /* our own sounds and replies: not for the other side */
+            if (!core_muted()) dropin_mic(pcm, n / 2, own);
+            else for (size_t k = n / 2; k; ) { size_t m = k < 1024 ? k : 1024; dropin_mic(zeros, m, 0); k -= m; }
+        }
         if (atomic_load(&streaming)) {
             pthread_mutex_lock(&core_lock);
             if (atomic_load(&streaming) && connected) send_mic(pcm, n / 2, core_local_wake ? ring_n - n / 2 : 0);
@@ -1707,7 +1806,7 @@ int main(int argc, char **argv)
 {
     const char *manifest = NULL, *input = board.keypad; int port = 0, print_mdns = 0, o;
     micgain_init(&mic_gain, MICGAIN_LEVEL);            /* until the protocol has its saved settings (Wyoming: always) */
-    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:a:W:LEVSTB")) != -1) switch (o) {
+    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:a:i:W:LEVSTB")) != -1) switch (o) {
         case 'P': proto = !strcmp(optarg, "wyoming") ? &proto_wyoming : &proto_esphome; break;
         case 'p': port = atoi(optarg); break;
         case 'n': core_name = optarg; break;
@@ -1717,6 +1816,7 @@ int main(int argc, char **argv)
         case 'z': core_sendspin_port = atoi(optarg); break;
         case 'o': ota_port = atoi(optarg); break;
         case 'a': arb_port = atoi(optarg); break;
+        case 'i': dropin_port = atoi(optarg); break;
         case 'W': core_web_port = atoi(optarg); break;
         case 'L': use_led = 0; break;
         case 'E': use_earcon = 0; break;
@@ -1724,7 +1824,7 @@ int main(int argc, char **argv)
         case 'S': print_mdns = 1; break;
         case 'B': use_bt = 0; break;
         case 'T': { char tok[160]; sendspin_init(); sendspin_pairing_token(tok, sizeof tok); puts(tok); return 0; }
-        default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-z port] [-o port] [-a port] [-W port] [-L] [-E] [-V] [-S]\n"); return 2;
+        default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-z port] [-o port] [-a port] [-i port] [-W port] [-L] [-E] [-V] [-S]\n"); return 2;
     }
     core_port = port ? port : proto->port;
     if (!core_name) name_make();
@@ -1764,8 +1864,9 @@ int main(int argc, char **argv)
     }
     if (whisper_open(on_whisper) == 0) { atomic_store(&whisper_last, -1); whisper_model = 1; }
     else fprintf(stderr, "whisper: no model, no whisper detection (scripts/artifacts.sh installs it)\n");
-    static const struct arb_hooks arb_hooks = { arb_send_key, arb_notify, arb_request, arb_paired, arb_scan };
+    static const struct arb_hooks arb_hooks = { arb_send_key, arb_notify, arb_request, arb_paired, arb_scan, dropin_message };
     if (arb_port && core_local_wake && proto->arb_send && arb_start(arb_port, core_node_name(), &arb_hooks)) fprintf(stderr, "arbitration: not available\n");
+    if (dropin_port && arb_running() && dropin_start(dropin_port)) fprintf(stderr, "drop in: not available\n");
 
     pthread_t cap_t, play_t, ear_t;
     pthread_create(&cap_t, NULL, capture_thread, NULL);

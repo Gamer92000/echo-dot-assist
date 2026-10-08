@@ -43,6 +43,7 @@
 #include "core.h"
 #include "adbwifi.h"
 #include "arb.h"
+#include "dropin.h"
 #include "artifacts.h"
 #include "board.h"
 #include "davs.h"
@@ -429,6 +430,8 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
       n += (size_t)snprintf(o + n, cap - n, "},\"sound\":{\"model\":\"%s\",\"failed\":%s", models[sound_model()], core_sound_failed() ? "true" : "false"); }
     n += (size_t)snprintf(o + n, cap - n, "},\"arbitration\":");
     if (arb_running()) n += arb_status_json(o + n, cap - n); else n += (size_t)snprintf(o + n, cap - n, "null");
+    if (dropin_running()) { char peer[64]; int st = dropin_status(peer, sizeof peer);
+        n += (size_t)snprintf(o + n, cap - n, ",\"dropin\":{\"state\":\"%s\",\"peer\":\"%s\"}", dropin_states[st], peer); }   /* peer: a node, [a-z0-9-] */
     n += (size_t)snprintf(o + n, cap - n, ",\"wifi\":"); n += wifi_current_json(o + n, cap - n);
     n += (size_t)snprintf(o + n, cap - n, ",\"clients\":[");
     pthread_mutex_lock(&lk);
@@ -791,6 +794,16 @@ static void handle(int fd)
         if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
         core_identify();
         respond_sjson(fd, &r, 200, "{\"identify\":true}");
+    }
+    else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/dropin")) {       /* body: the node to drop in on, or "end" */
+        char e[120], t[64], o[200], ej[160];
+        if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
+        snprintf(t, sizeof t, "%.*s", (int)(r.blen < sizeof t - 1 ? r.blen : sizeof t - 1), r.body ? r.body : "");
+        t[strcspn(t, "\r\n")] = 0;
+        if (!dropin_running()) respond_sjson(fd, &r, 409, "{\"error\":\"Drop In is not running on this Echo\"}");
+        else if (!strcmp(t, "end")) { dropin_hangup("settings page"); respond_sjson(fd, &r, 200, "{\"dropin\":\"ended\"}"); }
+        else if (dropin_call(t, e, sizeof e)) { jesc(ej, sizeof ej, e); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej); respond_sjson(fd, &r, 409, o); }
+        else respond_sjson(fd, &r, 200, "{\"dropin\":\"calling\"}");
     }
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/reset")) {       /* body "reset": not by a stray request */
         if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }

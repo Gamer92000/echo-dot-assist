@@ -56,9 +56,16 @@ void play_earcon(const short *pcm, size_t samples, unsigned rate)
     fprintf(stderr, "earcon: %zu samples @ %u Hz\n", samples, rate);
 }
 
+void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go)(void))
+{
+    (void)pcm;
+    fprintf(stderr, "earcon: %zu samples @ %u Hz, until stopped\n", samples, rate);
+    for (long ms = 0; ms < (long)(samples * 1000ULL / (rate ? rate : 48000)) && go(); ms += 20) usleep(20000);
+}
+
 /* Music streams on the PC: files, written at real-time speed through a modelled 200 ms device buffer. */
 struct stream { FILE *f; unsigned bps; long long t0, written; };
-static struct stream music, bt;
+static struct stream music, bt, voip;
 static long long raw_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC_RAW, &ts); return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000; }
 
 static int s_open(struct stream *s, const char *env, const char *def, unsigned rate, unsigned channels)
@@ -97,3 +104,7 @@ int       bt_open(unsigned rate, unsigned channels) { return s_open(&bt, "HASSMI
 long long bt_queued_us(void) { return s_queued_us(&bt); }
 int       bt_write(const void *data, size_t len) { return s_write(&bt, data, len); }
 void      bt_close(void) { s_close(&bt); }
+int       voip_open(unsigned rate, unsigned channels) { return s_open(&voip, "HASSMIC_VOIP", "/tmp/hassmic_voip.raw", rate, channels); }
+long long voip_queued_us(void) { return s_queued_us(&voip); }
+int       voip_write(const void *data, size_t len) { return s_write(&voip, data, len); }
+void      voip_close(void) { s_close(&voip); }

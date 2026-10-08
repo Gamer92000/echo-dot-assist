@@ -59,6 +59,7 @@
  *   claim   "HMA1" 4  net[8] id[8] ctr[8] kw[8] score[4] prio won tag[16]
  *   pair    "HMA1" 5  pub[32] net[8] nlen node
  *   give    "HMA1" 6  to[32] net[8] key[104]     (taken while pairing, or from an Echo whose tag HA confirmed)
+ *   message "HMA1" 7  net[8] from[8] to[8] ctr[8] len payload[len] tag[16]     (Drop In's calls: dropin.c)
  *   key (the action's "key" argument, base64)  sender pub[32] nonce[24] mac[16] enc(K)[32], "network": the id in hex
  *   tag id  "hassmic_<pub, 64 hex>"; HA's entity tag.hassmic_<pub hex>, state the last scan's time
  * Little endian; id: first 8 bytes of the public key; kw: BLAKE2b of the keyword in lower case; tag: keyed BLAKE2b with
@@ -142,7 +143,7 @@ static const int COPY_MS[] = { 30, 80 };
 #define TLEN   80               /* "tag.hassmic_" + 64 hex */
 #define BLOB   (32 + 24 + 16 + 32)
 
-enum { T_BEACON = 1, T_CLAIM = 4, T_PAIR = 5, T_GIVE = 6 };    /* 2 was the handoff entity's id (older Echos), ignored */
+enum { T_BEACON = 1, T_CLAIM = 4, T_PAIR = 5, T_GIVE = 6, T_MSG = 7 };   /* older builds pass over a type they do not know */    /* 2 was the handoff entity's id (older Echos), ignored */
 /* the beacon's flags byte.  F_HELLO: sent in the first beacons after a start or a join, when the sender counts nobody
  * yet; every member answers at once.  Without it a restarted Echo, which the others still count for minutes
  * (PEER_TTL_MS), would see none of them until their next beacon, up to BEACON_MAX_MS later.  Older builds ignore it */
@@ -203,6 +204,8 @@ static long long klogged;                               /* claims are logged onc
 static int kunlogged;                                   /* anyone on the LAN can send them, and boot.log is on flash */
 static struct { char p[KIOSK_PHRASE]; int e; } kround;
 static struct { uint8_t p[256]; size_t n; long long at; int left; } copies[2];    /* claims and "answers": copies still due */
+static struct msg { uint8_t from[8], p[ARB_MSG_MAX]; size_t n; char node[NLEN]; uint32_t ip; } msgs[8];   /* for hooks->message, */
+static int nmsg;                                        /* handed over outside the lock */
 static int wake_fd[2] = { -1, -1 };                     /* a byte wakes the loop: copies are due before its next poll ends */
 static char kpkt[300];
 static size_t kpkt_n;
@@ -548,6 +551,15 @@ static void on_packet(const uint8_t *p, size_t n, long long now, uint32_t ip)
             break;
         }
     } break;
+    case T_MSG: {
+        uint64_t net = get64(&r); const uint8_t *from = take(&r, 8), *to = take(&r, 8); uint64_t c = get64(&r);
+        const uint8_t *l = take(&r, 1), *q = l ? take(&r, *l) : NULL;
+        if (r.bad || r.end - r.p != 16 || !in_net || net != net_id || memcmp(to, pk, 8) || !memcmp(from, pk, 8) || *l > ARB_MSG_MAX
+            || !tag_ok(p, n) || !fresh(from, c, now) || nmsg == (int)(sizeof msgs / sizeof msgs[0])) return;
+        struct msg *m = &msgs[nmsg++]; struct peer *pp = peer(from);
+        memcpy(m->from, from, 8); memcpy(m->p, q, *l); m->n = *l;
+        snprintf(m->node, NLEN, "%s", pp->node); m->ip = ip;       /* where it came from: its beacons may still be on the way */
+    } break;
     case T_CLAIM: {
         uint64_t net = get64(&r); const uint8_t *id = take(&r, 8); uint64_t c = get64(&r); const uint8_t *kw = take(&r, 8), *s = take(&r, 4), *pw = take(&r, 2);
         if (r.bad || r.end - r.p != 16 || !in_net || net != net_id || !memcmp(id, pk, 8) || !tag_ok(p, n) || !fresh(id, c, now)) return;
@@ -857,6 +869,7 @@ static void *loop(void *arg)
         int sd = scan_due; scan_due = 0;
         int np = count_peers(now);
         if (np != reported_peers) { reported_peers = np; atomic_store(&notify, 1); }
+        struct msg mq[sizeof msgs / sizeof msgs[0]]; int nm = nmsg; memcpy(mq, msgs, sizeof mq[0] * (size_t)nm); nmsg = 0;
         pthread_mutex_unlock(&lk);
         for (int i = 0; i < nq; i++) {
             int r = hooks->send_key(q[i].node, q[i].net, q[i].key);
@@ -867,6 +880,8 @@ static void *loop(void *arg)
         if (sd && hooks->scan) hooks->scan(self_tag);
         int pe = atomic_exchange(&pair_event, 0);
         if (pe && hooks->paired) hooks->paired(pe);
+        for (int i = 0; i < nm; i++) if (hooks->message) hooks->message(mq[i].from, mq[i].node, mq[i].ip, mq[i].p, mq[i].n);
+        crypto_wipe(mq, sizeof mq);
         if (atomic_exchange(&notify, 0) && hooks->changed) hooks->changed();
     }
     return NULL;
@@ -1077,6 +1092,42 @@ size_t arb_members_json(char *o, size_t cap)
     pthread_mutex_unlock(&lk);
     return n < cap ? n : cap - 1;
 }
+
+int arb_member(const char *nd, unsigned char id[8], unsigned *ip)
+{
+    int r = -1; long long now = now_ms();
+    pthread_mutex_lock(&lk);
+    for (int i = 0; running && in_net && i < NPEER; i++)
+        if (ago(peers[i].seen, now, PEER_TTL_MS) && peers[i].ip && !strcmp(peers[i].node, nd)) { memcpy(id, peers[i].id, 8); *ip = peers[i].ip; r = 0; break; }
+    pthread_mutex_unlock(&lk);
+    return r;
+}
+
+/* Broadcast like the rest: the member's address may have changed since its last beacon, and a copy to everyone costs
+ * nothing on a LAN.  The caller repeats what must arrive (Wi-Fi drops broadcasts) */
+int arb_tell(const unsigned char to[8], const void *p, size_t n)
+{
+    struct pkt b; uint8_t l = (uint8_t)n;
+    if (n > ARB_MSG_MAX) return -1;
+    pthread_mutex_lock(&lk);
+    if (!running || !in_net) { pthread_mutex_unlock(&lk); return -1; }
+    head(&b, T_MSG); put64(&b, net_id); put(&b, pk, 8); put(&b, to, 8); put64(&b, next_ctr()); put(&b, &l, 1); put(&b, p, n); tag(&b);
+    send_pkt(&b);
+    pthread_mutex_unlock(&lk);
+    crypto_wipe(&b, sizeof b);
+    return 0;
+}
+
+int arb_derive(const char *label, unsigned char out[32])
+{
+    int r = -1;
+    pthread_mutex_lock(&lk);
+    if (running && in_net) { crypto_blake2b_keyed(out, 32, net_key, 32, (const uint8_t *)label, strlen(label)); r = 0; }
+    pthread_mutex_unlock(&lk);
+    return r;
+}
+
+void arb_self(unsigned char id[8]) { memcpy(id, pk, 8); }
 
 int arb_running(void) { return running; }
 int arb_peers(void) { pthread_mutex_lock(&lk); int n = running ? count_peers(now_ms()) : 0; pthread_mutex_unlock(&lk); return n; }

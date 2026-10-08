@@ -43,12 +43,14 @@ struct proto {
     void (*entities_changed)(void);             /* may be NULL: a feature went on or off: have the client list entities again */
     int  (*arb_scan)(const char *tag_id);       /* may be NULL: report a tag as scanned to Home Assistant (arb.h) */
     void (*timers_changed)(void);               /* may be NULL: a timer started or stopped ringing (core_timers_ringing) */
+    void (*dropin_changed)(void);               /* may be NULL: a Drop In started, connected or ended (dropin_status) */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
 extern pthread_mutex_t core_lock;               /* guards state, the client socket (writes) and everything marked "lock held" */
 extern const char *core_name;                   /* "Echo Dot 2 5695c4": the model and the MAC's end (main.c name_make) */
 const char *core_node_name(void);               /* "echo-dot-2-5695c4": the ESPHome device (host) name */
+void core_node_of(const char *name, char node[64]);  /* any Echo's node from its name ("Echo Dot 2 5695c4"); a node stays */
 void core_identify(void);                       /* rainbow ring for 10 s and a sound: which Echo is this */
 /* Setup (OOBE): 1 from an install or a reset until Home Assistant took the Echo on (its voice assistant subscribed:
  * state/adopted); the ring shows stock's setup spinner meanwhile.  Any thread */
@@ -135,6 +137,12 @@ enum { MUSIC_SENDSPIN = 1, MUSIC_BLUETOOTH = 2 };
 void   core_music(int source, int on);                      /* a music stream runs: the wake word threshold follows */
 void   core_bt_device(const char *name, int on);            /* a Bluetooth speaker source connected / went (not the lock) */
 void   core_bt_pairing(int on);                             /* the Bluetooth speaker's pairing window opened / closed (not the lock) */
+/* Drop In (dropin.c), not the lock.  core_dropin: the call's state changed (DROPIN_*; peer: the other Echo's node;
+ * outgoing: this Echo called): ring, sounds, the front end's listening mode, Home Assistant.  core_dropin_refusal: why
+ * a call cannot run right now (muted; incoming: do not disturb too), NULL if it can */
+void   core_dropin(int state, const char *peer, int outgoing);
+void   core_dropin_listen(int on);                          /* the front end's listening mode: this side of a call talks */
+const char *core_dropin_refusal(int incoming);
 void   core_run(char *const argv[], char *out, size_t n);   /* runs a stock tool the way the core does, until it closes its
                                                                stdout, which lands in out (any thread, not the lock) */
 #endif

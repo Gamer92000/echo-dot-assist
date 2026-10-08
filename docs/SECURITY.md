@@ -9,7 +9,7 @@ What protects an Echo running hassmic, and where that ends. Nobody has audited a
 |---|---|
 | **Out** | Amazon's daemons: local addresses only, plus DNS to the servers DHCP hands out. `otad` and `ace_otad` (firmware updates): never. hassmic itself: anywhere, to fetch replies and music from where Home Assistant or Music Assistant point it. |
 | **In, TCP** | 16384–32767 only: 26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 updates, 28931 settings page |
-| **In, UDP** | 16384–32767 only (28930: arbitration between Echos), and 2330 only while arbitration is in Kiosk Satellite mode (their fixed port) |
+| **In, UDP** | 16384–32767 only (28930: arbitration between Echos, 28932: Drop In audio), and 2330 only while arbitration is in Kiosk Satellite mode (their fixed port) |
 
 Put the Echo on a network without internet as a second layer.
 
@@ -44,6 +44,15 @@ approved browser plus a press of the action button for that one request, a fresh
 
 While it is open, anyone on the network has root. USB always works: physical access is root access anyway. Without
 `hassmic.conf` (stock behaviour, or before the install) it is open, as stock leaves it.
+
+## Drop In
+
+A call opens the called Echo's microphone, at once by default. Only a member of the Echo network can ask for one (the
+calls travel signed with the network's key), Home Assistant only over its encrypted link, the settings page only from
+an approved browser. Each call gets its own key from a fresh key exchange between the two Echos, so a recording stays
+closed even to someone who gets the network key later. The audio goes straight between the two Echos and nowhere else.
+Do not disturb and the microphone switches refuse calls; "Drop In answers: after the action button" makes every call
+wait for a press on the Echo called; "Drop In" off stops calls both ways.
 
 ## Arbitration between Echos
 

@@ -122,6 +122,37 @@ The Echo's loudness is not yet calibrated against a tablet's microphone: "Kiosk 
 keep it the same on every Echo. The log notes Kiosk claims once a second at most: anyone on the network can send
 them, and the log is on flash.
 
+## Drop In
+
+Talk between two Echos, as with Alexa's Drop In. The Echos must be in the same Echo network (above: the settings
+pages list them under Echos) and have "Drop In" on (Features, on by default).
+
+- **From Home Assistant**: the action `esphome.<echo>_drop_in` with `target:` the other Echo's name as it first
+  appeared in Home Assistant ("Echo Dot 3 5695c4") or its node name. Each Echo also has "Drop In" (idle, calling,
+  ringing, connected), "Drop In with" (the other Echo) and an "End Drop In" button.
+- **By voice**: import the blueprint [`blueprints/automation/drop_in.yaml`](../blueprints/automation/drop_in.yaml)
+  (Settings › Automations › Blueprints › Import, with the file's GitHub address). "Drop in kitchen" or "Verbinde mit
+  Küche" then calls the Echo in the area of that name, or one whose name contains the word, from the Echo you spoke to.
+  Sentences come for English, German, French, Spanish, Italian and Dutch ("drop in …" in every one); the reply is
+  in the language of the voice assistant you spoke to. Sentences and replies are inputs of the blueprint.
+- **From the settings page**: the Drop In button on another Echo's card under Echos.
+
+The Echo called plays Alexa's Drop In chime and connects at once. With "Drop In answers: after the action button" it
+rings for 30 s instead and only its action button connects. The ring shows Alexa's call animations meanwhile. To end a
+call: the action button, "<wake word>, stop", "<wake word>, hang up" (or "auflegen", "raccroche", "cuelga",
+"riattacca", "ophangen") on either Echo, or "End Drop In".
+Music on the Echo pauses when a call connects (it does not resume by itself). The volume buttons work during a call; the wake word too, but not while the other side talks (its "Alexa" for its own
+Echo would wake this one).
+
+Calls are refused with do not disturb on, with the microphones off, or with another call running; the caller's log and
+Home Assistant say why. The sound goes straight between the two Echos (UDP 28932, Opus, encrypted): no cloud, no Home
+Assistant in between.
+
+**Echo.** The Echo puts Amazon's audio front end into its call mode, whose echo canceller works on the other side's
+voice. What it leaves would still come back to the other Echo, so an Echo sends its room only while someone there
+talks; while the other side talks it is turned down 25 dB. Two people talking at the same time work only if the
+one here is clearly louder than the echo of the other: as on a speakerphone, take turns.
+
 ## Buttons and light ring
 
 Beyond the README's two figures:
@@ -369,7 +400,8 @@ ARGS=""                     # extra options, below
 | `-L` | leave the LED ring alone |
 | `-V` | leave the volume buttons alone |
 | `-z 0` | no Sendspin player |
-| `-a 0` | no arbitration with other Echos (UDP 28930) |
+| `-a 0` | no arbitration with other Echos (UDP 28930), and so no Drop In |
+| `-i 0` | no Drop In (UDP 28932) |
 | `-B` | no Bluetooth |
 | `-p <port>` | another port (the firewall only admits inbound TCP 16384–32767) |
 
@@ -398,6 +430,7 @@ for 30 minutes:
 | Buttons, light ring, hardware mute | ✅ | ✅ |
 | Music Assistant (Sendspin) | ✅ | ✅ |
 | Only the nearest Echo answers | ✅ | ❌ |
+| Drop In between Echos | ✅ | ❌ |
 | Timers, announcements, follow-ups, media player | ✅ | ❌ |
 | Settings and sensors as entities | ✅ | ❌ |
 | Bluetooth from phones | ✅ pairing from Home Assistant | phones paired already |

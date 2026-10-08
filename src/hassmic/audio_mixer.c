@@ -83,7 +83,7 @@ void play_close(int drain)
  * is modelled: bytes written minus bytes that real time has consumed since the stream started draining (it drains at
  * exactly the sample rate, and MixerGetBufPlay blocks once its ring is full, which keeps the model honest). */
 struct stream { MixerHandle h; unsigned bps; long long t0, written; };
-static struct stream music, bt;
+static struct stream music, bt, voip;
 
 static long long raw_us(void)
 {
@@ -91,9 +91,9 @@ static long long raw_us(void)
     return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
 }
 
-static int s_open(struct stream *s, unsigned rate, unsigned channels)
+static int s_open(struct stream *s, unsigned rate, unsigned channels, const char *type)
 {
-    s->h = MixerOpenPlay(rate, channels, 16, MIXER_PLAY_MUSIC);
+    s->h = MixerOpenPlay(rate, channels, 16, type);
     s->bps = rate * channels * 2; s->t0 = 0; s->written = 0;
     return s->h ? 0 : -1;
 }
@@ -131,16 +131,23 @@ static void s_close(struct stream *s)
     s->h = NULL;
 }
 
-int       music_open(unsigned rate, unsigned channels) { return s_open(&music, rate, channels); }
+int       music_open(unsigned rate, unsigned channels) { return s_open(&music, rate, channels, MIXER_PLAY_MUSIC); }
 long long music_queued_us(void) { return s_queued_us(&music); }
 int       music_write(const void *data, size_t len) { return s_write(&music, data, len); }
 void      music_close(void) { s_close(&music); }
-int       bt_open(unsigned rate, unsigned channels) { return s_open(&bt, rate, channels); }
+int       bt_open(unsigned rate, unsigned channels) { return s_open(&bt, rate, channels, MIXER_PLAY_MUSIC); }
 long long bt_queued_us(void) { return s_queued_us(&bt); }
 int       bt_write(const void *data, size_t len) { return s_write(&bt, data, len); }
 void      bt_close(void) { s_close(&bt); }
+int       voip_open(unsigned rate, unsigned channels) { return s_open(&voip, rate, channels, MIXER_PLAY_VOIP); }
+long long voip_queued_us(void) { return s_queued_us(&voip); }
+int       voip_write(const void *data, size_t len) { return s_write(&voip, data, len); }
+void      voip_close(void) { s_close(&voip); }
 
-void play_earcon(const short *pcm, size_t samples, unsigned rate)
+static int always(void) { return 1; }
+void play_earcon(const short *pcm, size_t samples, unsigned rate) { play_earcon_while(pcm, samples, rate, always); }
+
+void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go)(void))
 {
     /* MixerDrain returns at once, it does not wait for the queue.  Closing right after it unlinks the ring while the mixer's
      * discovery thread (inotify on /data/mixer_streams) may not have opened it yet: the mixer then logs shmOpenFailed and the
@@ -153,6 +160,7 @@ void play_earcon(const short *pcm, size_t samples, unsigned rate)
         if (!h) { fprintf(stderr, "earcon: MixerOpenPlay failed\n"); return; }
         while (len) {
             int status = 0; unsigned capb = 0;
+            if (!go()) { MixerFlush(h); MixerClose(h); return; }
             char *buf = MixerGetBufPlay(h, &status, &capb);
             if (!buf) { fprintf(stderr, "earcon: MixerGetBufPlay failed, status %d\n", status); MixerClose(h); return; }
             unsigned n = len < capb ? len : capb;
@@ -167,7 +175,8 @@ void play_earcon(const short *pcm, size_t samples, unsigned rate)
             MixerClose(h); usleep(50000);
             continue;
         }
-        while (t < duration_ms + 1000 && MixerGetNumBytes(h) > 0) { usleep(20000); t += 20; }
+        while (t < duration_ms + 1000 && MixerGetNumBytes(h) > 0 && go()) { usleep(20000); t += 20; }
+        if (!go()) MixerFlush(h);
         MixerClose(h);
         return;
     }

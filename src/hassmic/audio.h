@@ -28,6 +28,17 @@ int       bt_write(const void *data, size_t len);
 long long bt_queued_us(void);
 void      bt_close(void);
 
+/* Drop In (dropin.c): the mixer's "Voip" stream.  Opening one puts Amazon's front end into its call mode (libasp "VoIP
+ * mode 1": the canceller tuned for calls, noise dependent volume), which takes 10 dB more of the far end out of micAsr
+ * than the TTS stream gets (2026-10-08, biscuit: the same speech at -48 dBFS in micRaw left -60..-66 dBFS in micAsr on
+ * Voip, -45..-58 on TTS, over a -72 floor).  Like the music stream otherwise; voip_queued_us is what has not played. */
+int       voip_open(unsigned rate, unsigned channels);
+int       voip_write(const void *data, size_t len);
+long long voip_queued_us(void);
+void      voip_close(void);
+
 /* Short UI sound on its own stream; mixes with whatever else plays.  Blocks for the length of the sound. */
 void play_earcon(const short *pcm, size_t samples, unsigned rate);
+/* The same, cut off (flushed) as soon as go() returns 0: ringtones, 4 to 6 s long, that stop when the call is answered */
+void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go)(void));
 #endif

@@ -39,6 +39,7 @@ how to add one: [`devices/`](devices/README.md).
 | Wake words                              | Alexa, Echo, Computer, …       | the same, or [any microWakeWord or openWakeWord model](docs/GUIDE.md#wake-word) |
 | Only the nearest Echo answers           | ✅ decided in the cloud        | ✅ decided on your network                            |
 | Timers, announcements, follow-ups       | ✅                             | ✅                                                    |
+| Drop In between Echos                   | ✅ through Amazon              | ✅ [on your network](docs/GUIDE.md#drop-in)           |
 | Multiroom music                         | Amazon speaker groups          | [Music Assistant](docs/GUIDE.md#music) (Sendspin)     |
 | Bluetooth speaker for your phone        | SBC                            | SBC, AAC, aptX, aptX HD                               |
 | Plays on a Bluetooth speaker            | ✅                             | ✅                                                    |

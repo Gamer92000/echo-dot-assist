@@ -37,6 +37,7 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 ```sh
 .venv/bin/python tests/fake_ha_esphome.py     # ESPHome native API, as Home Assistant
 .venv/bin/python tests/fake_ha_arbitration.py # two Echos under one fake HA: wake word arbitration, join paths and security
+.venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer
 .venv/bin/python tests/fake_ha.py [--qemu]    # Wyoming; --qemu uses the ARM build + stock Pryon model under qemu-arm
 .venv/bin/python tests/fake_ma_sendspin.py    # Sendspin, as Music Assistant
 .venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step
@@ -189,6 +190,16 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   + `btout.c`, which stands in for btmanagerd towards the mixer's own A2DP route (LIPC `A2DPSourceConnect`, the A2DP
   HAL's abstract sockets, AIPC service uuid 0 via `libace_aipc.so`; `docs/re-a2dp-source.md`) and SBC-encodes
   (`sbc.c`). While on the speaker the core has a volume of its own (`core_speaker`).
+- **Drop In** (`dropin.c`, `dropin.h`): calls between two Echos of the arbitration network. Signalling as signed
+  `T_MSG` on arb's socket (`arb_tell`, `hooks->message`; invite/ringing/accept/refuse/bye), audio Opus 16 kHz 20 ms over
+  unicast UDP 28932 (`-i`), per-call key from ephemeral X25519 + `arb_derive`. Playback on the mixer's `Voip` stream
+  (front end's call mode); mic = micAsr through the pipeline's gain, then a gate (open only while this side talks,
+  echo estimate peak-held against the far end's level held after it stops), listening mode only while this side
+  talks (`core_dropin_listen`). Core side in `main.c` (`core_dropin`: call LED animations, comms sounds, ringtones via
+  `play_earcon_while`; action button answers/ends, "stop"/"hang up"/"auflegen" end; wake word ignored while the far end
+  talks). Notifications to the core go through dropin's loop thread: `dropin_call` runs under `core_lock` (ESPHome
+  handler). HA: action `drop_in`, "Drop In", "Drop In with", "End Drop In"; settings `drop_in`, `drop_in_answer`;
+  page `POST /api/dropin`. Voice: `blueprints/automation/drop_in.yaml`.
 - **Bluetooth**: `ble.c`/`ble_crypto.c` talk raw HCI (`hci.h`) to the controller for the HA Bluetooth proxy (scan, GATT,
   Just Works pairing); Amazon's `btmanagerd` is stopped. A2DP shares the controller; scanning pauses while a phone plays,
   and for 1 s from a wake word round (`ble_quiet` in `main.c` `wake_heard`): the scan's share of the antenna costs
@@ -198,7 +209,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (`name=value`; the positional `state/settings` of older versions is read once and moved); arbitration, Sendspin and
   the equalizer stay where their module keeps them. Loaded in `main()` whatever the protocol. Changes from elsewhere
   reach HA through `proto->settings_changed`. Features (`feature` in the table: arbitration, sound, whisper, Wi-Fi
-  motion, Bluetooth audio, Bluetooth speaker): their entities are listed only while on (`proto_esphome.c` `listed()`,
+  motion, Bluetooth audio, Bluetooth speaker, Drop In): their entities are listed only while on (`proto_esphome.c` `listed()`,
   which also gates states); switching one closes the HA links (`proto->entities_changed`), HA re-lists on reconnect and
   deletes what is gone (registry included). HA always has: media player, mute, DND, wake sound, LEDs, EQ, firmware,
   Web UI address, Sendspin token (a secret: never on the page), Identify. The rest is page-only; diagnostics too (`diag.c`).
@@ -314,7 +325,7 @@ stock behaviour. `scripts/device/` holds on-device helpers (`lockdown.sh` firewa
 Firewall invariant: Amazon's daemons may only reach local addresses; hassmic itself may reach any address (it fetches
 TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get out. Inbound TCP and UDP are only admitted on
 16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 OTA, 28931 settings page, UDP 28930 arbitration)
-must stay in that range. Only exception: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
+must stay in that range (UDP 28932 Drop In too). Only exception: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
 `state/config` says `arbitration_mode=kiosk` (`kiosk_state`). A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`
 prints it.
 

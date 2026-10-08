@@ -85,6 +85,7 @@ function h(tag, props, ...kids) {
 
 const ICONS = {
   mic: '<path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+  talk: '<path d="M3 5h12v8H8l-5 4z"/><path d="M15 9h6v8l-4-3h-6v-1"/>',
   speaker: '<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   sparkle: '<path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8z"/><path d="M19 15l.8 2.2 2.2.8-2.2.8L19 21l-.8-2.2-2.2-.8 2.2-.8z"/>',
@@ -290,6 +291,9 @@ const HELP = {
   wifi_motion_sensitivity: { parent: 'wifi_motion', help: 'How much the signal has to change to count as motion. Higher catches more, with more false alarms.' },
   bluetooth_audio: { icon: 'phone', ha: ['Bluetooth pairing'], help: 'Phones can pair with the Echo and play music on it (SBC, AAC, aptX). Start pairing with the "Bluetooth pairing" switch in Home Assistant; the ring shows a blue chaser meanwhile. Phones paired before still connect while this is off.' },
   bluetooth_speaker_delay: { parent: 'bluetooth_speaker', step: 10, help: 'How much later the speaker plays than the Echo would, so Music Assistant keeps it in step with your other players. Raise it if this speaker lags behind them, lower it if it runs ahead. Each speaker differs; the Echo keeps one value.' },
+  drop_in: { icon: 'talk', ha: ['Drop In', 'Drop In with', 'End Drop In', 'the action drop_in'], help: 'Talk between two Echos, as Alexa\'s Drop In: one Echo calls another of your Echos (the ones listed under Echos below), and both hear each other. Start it from Home Assistant (the action drop_in, or by voice with the "Drop In" blueprint: "drop in kitchen") or with the Drop In button of an Echo below. End it with the action button, "<wake word>, stop" or "hang up", on either Echo. Off: this Echo neither calls nor can be called.',
+    note: 'An Echo that is called opens its microphone at once, unless it is set to answer with the button below. Only your own Echos can call it (the Echo network\'s key), never with do not disturb on or the microphones off. The ring shows green while a call runs.' },
+  drop_in_answer: { parent: 'drop_in', help: 'At once: a call connects straight away, with a chime, as Alexa\'s Drop In does. After the action button: the Echo rings for 30 s, and only a press of its action button connects; nobody can listen into a room where nobody is.' },
   bluetooth_speaker: { icon: 'box', ha: ['Bluetooth speaker search', 'Play on Bluetooth speaker', 'Bluetooth speaker', 'Bluetooth speaker delay'], help: 'Plays everything (replies, timers, music) on a Bluetooth speaker instead of the Echo\'s own. Put the speaker in pairing mode near the Echo and switch on "Bluetooth speaker search" in Home Assistant: the Echo pairs with the strongest one it hears.' },
 };
 const CHOICE_NAMES = {
@@ -297,6 +301,7 @@ const CHOICE_NAMES = {
   arbitration_mode: { hassmic: 'Echo network', kiosk: 'Kiosk Satellite' },
   noise_reduction: { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' },
   online_updates: { off: 'Off', beta: 'Beta', release: 'Release' },
+  drop_in_answer: { auto: 'At once', ask: 'After the action button' },
   bluetooth_announcement_language: { en: 'English', de: 'Deutsch', fr: 'Français', es: 'Español', it: 'Italiano', pt: 'Português', nl: 'Nederlands',
     sv: 'Svenska', da: 'Dansk', nb: 'Norsk', fi: 'Suomi', pl: 'Polski' },
 };
@@ -1066,7 +1071,8 @@ function drawDevices() {
   devBox.append(h('div', { class: 'echo me' }, h('span', { class: 'mini-puck on' }),
     h('div', { class: 'echo-body' }, h('div', { class: 'echo-name' }, echo.hello.name), h('div', { class: 'echo-addr' }, location.host),
       h('div', { class: 'echo-meta' }, h('span', { class: 'badge acc' }, 'This Echo'), a && !a.arbitrates ? h('span', { class: 'badge' }, 'Arbitration off')
-        : a && a.mode === 'kiosk' ? h('span', { class: 'badge' }, 'Kiosk Satellite mode') : null),
+        : a && a.mode === 'kiosk' ? h('span', { class: 'badge' }, 'Kiosk Satellite mode') : null,
+        state.dropin && state.dropin.state !== 'idle' ? h('span', { class: 'badge ok' }, icon('talk'), `Drop In ${DROPIN_WORDS[state.dropin.state]} ${state.dropin.peer}`) : null),
       h('div', { class: 'echo-acts' }, idButton(echo, echo.hello.name)))));
   for (const [base, d] of others) {
     const r = arbOf(d.ip), name = d.echo ? d.echo.hello.name : d.ip;
@@ -1083,7 +1089,7 @@ function drawDevices() {
       : d.echo && !d.logged && !d.error ? h('button', { class: 'small primary', disabled: !!d.asking, onclick: () => loginOther(d) }, icon('key'), d.asking ? 'Press its button…' : 'Log in') : null;
     devBox.append(h('div', { class: 'echo' }, h('span', { class: 'mini-puck' + (r && r.member ? ' on' : '') }),
       h('div', { class: 'echo-body' }, h('div', { class: 'echo-name' }, name), h('div', { class: 'echo-addr' }, shortAddr(base)),
-        h('div', { class: 'echo-meta' }, meta), login),
+        h('div', { class: 'echo-meta' }, meta), login, dropButton(r, name)),
       h('a', { class: 'echo-go', href: base + '/', title: `${name}: its settings page`, 'aria-label': `Open the settings page of ${name}` }, icon('ext'))));
   }
   if (!others.size) devBox.append(h('div', { class: 'echo ghost' }, h('span', { class: 'mini-puck' }),
@@ -1091,6 +1097,22 @@ function drawDevices() {
       h('div', { class: 'help' }, 'Echos running hassmic on the same network show up here by themselves within a minute. Then this section copies settings and models to them.'))));
   syncBox.classList.toggle('hidden', !others.size); modelBox.classList.toggle('hidden', !others.size);
   renderSync(); renderDavs(); renderModels();
+}
+
+// Drop In (dropin.c) on a member of the network: from this Echo, which needs no login on the other one
+const DROPIN_WORDS = { calling: 'calling', ringing: 'ringing from', connected: 'with' };
+function dropButton(r, name) {
+  const dr = state.dropin;
+  if (!dr || !r || !r.member || !settingValue('drop_in')) return null;
+  const mine = dr.state !== 'idle' && dr.peer === r.node, busy = dr.state !== 'idle' && !mine;
+  return h('div', { class: 'echo-acts' }, h('button', { class: 'small' + (mine ? '' : ' primary'), 'data-k': 'drop ' + r.node, disabled: busy,
+    title: mine ? `End the Drop In with ${name}` : busy ? 'This Echo is in another Drop In' : `Talk to ${name}: it connects at once, or rings until its action button`,
+    onclick: () => dropIn(mine ? 'end' : r.node, name) }, icon('talk'), mine ? (dr.state === 'connected' ? 'End Drop In' : 'Cancel') : 'Drop In'));
+}
+async function dropIn(what, name) {
+  try { await echo.call('POST', '/api/dropin', what); toast(what === 'end' ? `Drop In with ${name} ended` : `Dropping in on ${name}…`); }
+  catch (e) { toast(`Drop In: ${errText(e)}`); }
+  for (let i = 0; i < 6; i++) { await new Promise((ok) => setTimeout(ok, 500)); await load().catch(() => {}); renderDevices(); if (!state.dropin || state.dropin.state !== 'calling') break; }
 }
 
 // The list is redrawn every 15 s and on every answer: the wait is kept on d, so a redraw neither resets the button nor

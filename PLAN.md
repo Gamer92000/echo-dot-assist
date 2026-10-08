@@ -1408,4 +1408,38 @@ Run in this order. Each step says what it proves.
       HA, and an automation on "still on after 50 s".
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
-      Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, Drop In/calling (`commsd`), stereo pairs.
+      Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
+- [x] Drop In between Echos (2026-10-08, asked by a user with ten Echos who used Alexa's as an intercom). `dropin.c`:
+      calls signed on the arbitration network (new arb type `T_MSG`, `arb_tell`, broadcast like the rest, repeated:
+      invite every 250 ms until answered), audio unicast UDP 28932 (`-i`), Opus 16 kHz 20 ms 24 kbit/s inband FEC (stock
+      libopus has the encoder on donut, biscuit, radar; 4 symbols more in `stubs/libopus.syms`), XChaCha20-Poly1305
+      under a per-call key (X25519 of ephemeral keys, BLAKE2b keyed with `arb_derive("hassmic drop in 1")`). HA: action
+      `drop_in(target)` (keyed link only), text sensors "Drop In"/"Drop In with", button "End Drop In", listed while
+      the setting `drop_in` is on; `drop_in_answer` auto/ask; page `POST /api/dropin` and a button per member.
+      Blueprint `blueprints/automation/drop_in.yaml` (conversation trigger, area or name, the source's action named by
+      the same slug as `node_of`; templates checked with jinja2 stand-ins, not yet in a real HA).
+      Device (biscuit, PC host as the other end on the LAN, `HASSMIC_ARB_ADDR=192.168.103.255`):
+      - Playback stream: `Voip` exists in the mixer (`PLAYBACK_MODE_VOIP`) and switches libasp to "VoIP mode 1" (call
+        tuning, NDVC, normalisation off; logcat). Same speech, volume 50, micRaw -48: residual in micAsr -60..-66 dBFS
+        on Voip against -45..-58 on TTS (floor -72). Voip follows MainVolume (+9 dB from 30 to 60). micHfp is the bare
+        mic (floor -46), not a call Tx stream.
+      - Connect 4 ms after the invite (auto). Jitter: micAsr comes in 50 ms blocks, frames leave in bursts of 2-3; a
+        3-frame prebuffer started level with the bursts and stayed a frame ahead: 639 of 802 frames came after their
+        turn. Now 4 frames from the oldest and an underrun conceals without moving on: 0 of 805 missing, 9 waits at the
+        start, longest gap 63-68 ms.
+      - Listening mode on for the whole call froze the canceller before it knew the Voip path: residual -46..-62 in
+        micAsr; off for the whole call -63..-69. Now only while this side talks (`core_dropin_listen`, 1.5 s hangover).
+      - Echo back to the caller, natural speech (OmniVoice, German, 1.5 s pauses), 20 s: first try (80th percentile duck
+        before the gain) sent -47..-55 back; the gain undid the duck (+24 dB at micAsr level), the echo estimate let the
+        far end's onsets through, the room went out at -48 in its pauses (gain on the floor), and an echo tail 14 dB
+        over the room 0.3-1 s after each sentence opened the gate. Now: gain first, then a gate (open only while this
+        side talks, -25 dB else, own sounds -40), echo estimate peak-held 2 dB/s, far level held falling 20 dB/s,
+        3 frames of double talk to pass: gate never opened by the echo, -64 dBFS mean back against -26 for speech.
+        `HASSMIC_DROPIN_TRACE=<file>` writes the gate's inputs per frame.
+      fake_ha_dropin: auto and ask, button / stop / "Auflegen" / HA / page, refusals (DND, off, outside the network, no
+      such name), a vanished peer ends the call after 5 s.
+      Echo to Echo (same day, all three on the build): biscuit -> donut from the page, connected 8 ms after the invite,
+      10 s, 509 frames played on each side, 0 missing, longest gap 44-48 ms.
+      Open (device): a talker at the called Echo (does speech open the gate fast
+      enough, is the ARA with listening mode toggled fine), the wake word in VoIP mode, call LED animations' look,
+      the blueprint in a real HA.

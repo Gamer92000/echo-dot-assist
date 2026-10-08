@@ -4,6 +4,17 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-08
 
+- **Drop In between Echos.** One Echo calls another of yours and both hear each other, as Alexa's Drop In did. Start it
+  from Home Assistant (the new action `drop_in` with the other Echo's name), by voice with the new "Echo Drop In"
+  blueprint ("drop in kitchen", "verbinde mit der Küche"; English, German, French, Spanish, Italian and Dutch,
+  replies in your assistant's language), or with the Drop In button of an Echo on the settings page. The
+  Echo called chimes and connects at once, or, set to answer with the button, rings until someone presses it. End it
+  with the action button, "Alexa, stop" or "hang up" / "auflegen", on either Echo, or with "End Drop In" in Home
+  Assistant. The ring shows Alexa's call animations, you hear Alexa's call sounds, and music pauses. Only Echos of your own Echo
+  network can call; do not disturb or the microphones off refuse a call. "Drop In" on the settings page (on by
+  default) switches it off; Home Assistant then shows none of it. The sound goes straight between the two Echos,
+  encrypted. The Echo's own echo canceller runs in its call mode; on top of it the Echo sends its room only while
+  someone there talks, so the other side does not hear itself back.
 - **Home Assistant sees a ringing timer.** "Timer ringing" is on while a finished timer rings and goes off when someone
   stops it or it rings out; "Ringing timers" (diagnostic) names them, or gives the length of a timer without a name
   ("5 min"). An automation can now announce a timer on every Echo, or send a phone alert, when nobody stopped it
