@@ -191,7 +191,7 @@ def main():
         lb = {x["id"]: x for x in arts(pb)["artifacts"]}
         check(lb.get("wake:echo-de-DE", {}).get("digest") == by["wake:echo-de-DE"]["digest"] and lb.get("sound", {}).get("digest") == by["sound"]["digest"]
               and "wake:alexa-de-DE" in lb and "wake:echo-de" not in lb, "after the restart: the same sets on the target, under the long names")
-        check("wake word: alexa-de-DE \"Alexa\" (de), active" in open(b.log).read(), "the migrated wake word is the active one")
+        check("wake word: alexa-de-DE \"Alexa (de-DE)\" (de), active" in open(b.log).read(), "the migrated wake word is the active one")
     finally:
         for e in (a, b):
             try: e.stop()
