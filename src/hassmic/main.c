@@ -199,6 +199,7 @@ static enum state state;
 static time_t state_since;
 static atomic_int streaming, trigger_pending, button_pending, pair_pending, stop_pending, quit;
 static atomic_int flush_playback, alarm_on;   /* barge-in: drop queued TTS; UI sounds requested (bit per enum sound) */
+static atomic_int busy;                             /* state != IDLE, for threads without the lock (the ring pauses) */
 static atomic_int tts_on, music_on;                 /* something plays: the wake word model lowers its threshold then.
                                                     * music_on: MUSIC_* bits */
 static atomic_int dump_toggle;                      /* SIGTTIN: start / stop writing the processed mic stream to a file */
@@ -281,8 +282,12 @@ void core_set_state(enum state s)
 {
     if (s == state) return;
     fprintf(stderr, "state: %s -> %s\n", state_names[state], state_names[s]);
+    /* a ringing timer goes to the background (an announcement, a conversation Home Assistant starts): stock flashes
+     * "ready-timer-short" once on FOCUS_ENTERED_BACKGROUND, then the pipeline's own patterns cover "ready-timer" */
+    if (state == IDLE && atomic_load(&alarm_on)) led("-s", "ready-timer-short");
     led_for(state, s);
     state = s; state_since = time(NULL);
+    atomic_store(&busy, s != IDLE);
 }
 
 static long long mono_ms(void);
@@ -740,8 +745,11 @@ void core_error(void)
 static void trigger(int touch)          /* touch: the action button rather than the wake word */
 {
     pthread_mutex_lock(&core_lock);
-    if (atomic_load(&alarm_on)) {
-        core_alarm(0);
+    /* A ringing timer stops only when told to: the button, "<wake word>, stop" (stop_word, core_transcript), Home
+     * Assistant's media stop.  The wake word alone puts it in the background, as on a stock Echo: the ring pauses while
+     * the pipeline runs ("Alexa, how long is left on the pasta timer" while another rings) and goes on after it */
+    if (touch && atomic_load(&alarm_on)) {
+        core_alarm_stop("button");
         wake_cut_ms = mono_ms();
     } else if ((state == THINKING || (touch && state == LISTENING)) && connected && proto->cancel) {
         /* As the center button of a Voice PE: a misheard command is stopped before its tool calls run, not only its
@@ -761,6 +769,7 @@ static void trigger(int touch)          /* touch: the action button rather than 
     } else if (!connected || !satellite_running || core_muted()) {
         /* nothing to talk to, or privacy latch on */
     } else if (state == IDLE) {
+        if (atomic_load(&alarm_on)) wake_cut_ms = mono_ms();    /* its "stop" drops this pipeline again */
         sound_request(touch ? SND_TOUCH : SND_WAKE);
         pipeline_start();
     } else if (state == SPEAKING && !atomic_load(&flush_playback)) {       /* not already being cut.  barge_in alone does not
@@ -782,9 +791,8 @@ static void trigger(int touch)          /* touch: the action button rather than 
 static void stop_word(void)
 {
     pthread_mutex_lock(&core_lock);
-    if (atomic_load(&alarm_on)) {
-        core_alarm(0);
-    } else if (state == SPEAKING) {
+    if (atomic_load(&alarm_on)) core_alarm_stop("stop");        /* and the pipeline its wake word opened, below */
+    if (state == SPEAKING) {
         fprintf(stderr, "stop: reply cut\n");
         barge_in = 0;
         atomic_fetch_and(&sounds_pending, ~(1 << SND_WAKE | 1 << SND_TOUCH));
@@ -964,7 +972,7 @@ static void answer(uint64_t from)                   /* capture thread: act on th
     pthread_mutex_lock(&core_lock);
     if (from && !was && atomic_load(&streaming) && connected) stream_ring(from);
     pthread_mutex_unlock(&core_lock);
-    if (!atomic_load(&streaming)) afe_done();          /* it stopped an alarm, or cut a reply: the pipeline's end follows */
+    if (!atomic_load(&streaming)) afe_done();          /* it stopped a ring, or cut a reply: the pipeline's end follows */
 }
 
 static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* capture thread */
@@ -1131,12 +1139,97 @@ size_t core_tts_queued(void)
 
 static long long mono_ms(void);
 
-void core_alarm(int on)
+/* Finished timers ring until the button, the wake word, "stop", the media player's stop or the ring time (setting
+ * timer_ring, 0 = until stopped).  Home Assistant keeps several timers per satellite and forgets each as it finishes
+ * (intent/timers.py pops it before the finished event), so a cancel never names a ringing one: it is for a timer that
+ * still runs, and must not silence the others.  One ring for all of them; each new one gives the ring its full time
+ * again; one press stops them all (the Echo cannot ask which).  Home Assistant sees "Timer ringing" and their names. */
+#define RINGING_MAX 4
+static struct { char id[40], name[64]; } ringing[RINGING_MAX];  /* lock held: in the order they finished */
+static int nringing, timer_ring_s = 60;                         /* lock held */
+static atomic_llong alarm_until;                                /* mono_ms the ring ends; LLONG_MAX: until stopped */
+
+static void alarm_set(int on)          /* lock held */
 {
     if (atomic_exchange(&alarm_on, on) == on) return;
-    fprintf(stderr, "alarm: %s\n", on ? "ringing" : "off");
-    led(on ? "-s" : "-u", "active_timer");
+    /* Stock's own (PuffinApp UXEventArbitrator::onAlertStateChange): "ready-timer" for timers and reminders from the
+     * alert's start until it stops, layer 3, so listening and replies show over it and it comes back after them.
+     * "active_timer" has a file but no entry in layer_config_common.json on any model: ledcontroller refuses it
+     * ("not in map"), and the ring stayed dark */
+    led(on ? "-s" : "-u", "ready-timer");
     playback_hint();
+}
+
+void core_timer_finished(const char *id, const char *name, unsigned total)
+{
+    int i = 0; unsigned h = total / 3600, m = total % 3600 / 60;
+    while (i < nringing && strcmp(ringing[i].id, id)) i++;
+    if (i == RINGING_MAX) { memmove(ringing, ringing + 1, sizeof ringing[0] * --i); nringing = i; }    /* the oldest goes */
+    if (i == nringing) nringing++;
+    snprintf(ringing[i].id, sizeof ringing[i].id, "%s", id);
+    /* "set a timer for 5 minutes" has no name: its length stands in, so the sensor is never blank while it rings */
+    if (name[0]) snprintf(ringing[i].name, sizeof ringing[i].name, "%s", name);
+    else if (total % 60 || !total) snprintf(ringing[i].name, sizeof ringing[i].name, "%u s", total);
+    else if (h && m) snprintf(ringing[i].name, sizeof ringing[i].name, "%u h %u min", h, m);
+    else if (h) snprintf(ringing[i].name, sizeof ringing[i].name, "%u h", h);
+    else snprintf(ringing[i].name, sizeof ringing[i].name, "%u min", m);
+    atomic_store(&alarm_until, timer_ring_s ? mono_ms() + timer_ring_s * 1000LL : LLONG_MAX);
+    fprintf(stderr, "alarm: %s rings (%d ringing)\n", ringing[i].name, nringing);
+    alarm_set(1);
+    if (connected && proto->timers_changed) proto->timers_changed();
+}
+
+void core_timer_cancelled(const char *id)
+{
+    for (int i = 0; i < nringing; i++) if (!strcmp(ringing[i].id, id)) {
+        memmove(ringing + i, ringing + i + 1, sizeof ringing[0] * (size_t)(nringing - i - 1));
+        if (!--nringing) alarm_set(0);
+        if (connected && proto->timers_changed) proto->timers_changed();
+        return;
+    }
+}
+
+void core_alarm_stop(const char *why)
+{
+    if (!atomic_load(&alarm_on)) return;
+    fprintf(stderr, "alarm: off (%s)\n", why);
+    nringing = 0;
+    alarm_set(0);
+    if (connected && proto->timers_changed) proto->timers_changed();
+}
+
+/* "<wake word>, stop" with an engine that has no "stop" keyword (microWakeWord, Home Assistant's): the transcript is the
+ * word alone.  Home Assistant has nothing to stop a ringing satellite timer with (it forgot the timer when it
+ * finished), so the run is cancelled here, as the button does, before Home Assistant answers it */
+int core_transcript(const char *text)
+{
+    static const char *const stops[] = { "stop", "stopp", "stoppen", "stoppa", "halt", "arrête", "arrete", "basta", "para", "pare" };
+    char w[32]; size_t n = 0;
+    if (!atomic_load(&alarm_on)) return 0;
+    for (const char *p = text; *p && n < sizeof w - 1; p++)        /* lower case, without spaces and punctuation */
+        if (!strchr(" \t.,!?¡¿\"'", *p)) w[n++] = (char)tolower((unsigned char)*p);
+    w[n] = 0;
+    for (size_t i = 0; i < sizeof stops / sizeof stops[0]; i++) if (!strcmp(w, stops[i])) {
+        core_alarm_stop("said stop");
+        if (connected && proto->cancel) { barge_in = 0; atomic_store(&streaming, 0); proto->cancel(); quiet_abort = 1; }
+        core_pipeline_finish();
+        return 1;
+    }
+    return 0;
+}
+
+int core_timers_ringing(char *names, size_t cap)
+{
+    size_t n = 0;
+    if (cap) names[0] = 0;
+    for (int i = 0; i < nringing && n < cap; i++) n += (size_t)snprintf(names + n, cap - n, "%s%s", i ? ", " : "", ringing[i].name);
+    return nringing;
+}
+
+int core_timer_ring(int set)
+{
+    if (set >= 0) timer_ring_s = set;
+    return timer_ring_s;
 }
 
 /* The newest music source wins: a Bluetooth device that starts pauses the Sendspin group (the controller role; the
@@ -1164,7 +1257,7 @@ static void *earcon_thread(void *arg)
         double f = i < N / 2 ? 880.0 : 1320.0, env = fmin(1.0, fmin(i, N - i) / (RATE * 0.01));
         tone[i] = (short)(6000 * env * sin(2 * M_PI * f * i / RATE));
     }
-    for (long long alarm_end = 0;;) {
+    for (;;) {
         /* Amazon's own sounds where the image has them; the generated blip stands in for the wake and touch sounds otherwise */
         for (int p = atomic_exchange(&sounds_pending, 0), s = 0; p && s < SND_COUNT; s++) {
             const short *pcm; size_t n; unsigned rate;
@@ -1175,11 +1268,14 @@ static void *earcon_thread(void *arg)
             atomic_store(&earcon_heard_until, mono_ms() + 250);         /* speaker to mic stream: 85 ms, and the room's tail */
             atomic_store(&earcon_sounding, 0);
         }
-        if (atomic_load(&alarm_on)) {                   /* timer finished: triple blip every 1.2 s, at most a minute */
-            if (!alarm_end) alarm_end = mono_ms() + 60000;
-            if (mono_ms() > alarm_end) core_alarm(0);
-            else { for (int k = 0; k < 3; k++) play_earcon(tone, N, RATE); usleep(800000); }
-        } else alarm_end = 0;
+        if (atomic_load(&alarm_on)) {                   /* timer finished: triple blip every 1.2 s, until the ring time */
+            if (mono_ms() > atomic_load(&alarm_until)) {
+                pthread_mutex_lock(&core_lock);
+                if (mono_ms() > atomic_load(&alarm_until)) core_alarm_stop("rang out");     /* not a timer that just came */
+                pthread_mutex_unlock(&core_lock);
+            } else if (!atomic_load(&busy)) { for (int k = 0; k < 3; k++) play_earcon(tone, N, RATE); usleep(800000); }
+            /* in the background while a pipeline runs: speech to text must hear the user, not the ring */
+        }
         usleep(20000);
     }
     return NULL;

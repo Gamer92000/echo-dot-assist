@@ -78,6 +78,18 @@ lipc-send-event com.amazon.puffin set_animation -s active-talking
 - Recommendation: use `ledctrl` for LEDs and play earcons ourselves through `MixerOpenPlay(..., "Earcon")`.
   `uxeventd` expects PuffinApp for audio focus and is not needed.
 
+### Timer and alarm patterns (disassembly of donut's PuffinApp, 2026-10-08)
+
+- `ledcontroller` only plays patterns listed in `layer_config_common.json` ("Animation %s not in map. Check entry in
+  layer_config file(s)"); a file in `led-resources/` is not enough. `active_timer`, `ready_timer`, `active_alarm`,
+  `ready_alarm` and `micsoff-ready-*` have files but no entry, on donut, biscuit and radar alike.
+- PuffinApp's `UXEventArbitrator::onAlertStateChange` (0x25cfc0) picks the event from the AVS alert (type at +0xc:
+  0 ALARM -> `ready-alarm*`, 1 TIMER and 2 REMINDER -> `ready-timer*`; state at +0x10) and pushes it with
+  `pushUXEventLockedToQueue` (0x25797c; 1 start, 2 stop):
+  STARTED, FOCUS_ENTERED_FOREGROUND: start `ready-timer` (looping, layer 3: listening and replies show over it);
+  FOCUS_ENTERED_BACKGROUND: start `ready-timer-short` (one shot, layer 4); READY, STOPPED, SNOOZED, COMPLETED,
+  PAST_DUE, ERROR: stop `ready-timer`; DELETED, SCHEDULED_FOR_LATER: nothing.
+
 ### Verified on device (2026-09-21, unregistered device in setup mode)
 
 - `ledctrl -s active-thinking` shows and loops until `ledctrl -u active-thinking`. Works as root, no PuffinApp needed.

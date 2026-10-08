@@ -1378,6 +1378,34 @@ Run in this order. Each step says what it proves.
       device.conf `DEFAULT_NAME`, `state/name`/`state/node` (deleted at start), the page's rename (`/api/name`) and
       Improv's host name/device name commands (capabilities 0x07). `-n` stays for the PC. Existing Echos change node
       name on update (asked: no migration); HA keys on the MAC. fake_web: old files ignored and the model's name.
+- [~] Timers in Home Assistant (2026-10-08, GitHub issue #12: a ringing state that clears on dismissal or timeout,
+      the timer's name, a configurable ring time). HA keeps several timers per satellite and pops each from its list
+      before it sends "finished" (`intent/timers.py` `_timer_finished`), so a "cancelled" never names a ringing timer;
+      the old code stopped the ring on any cancel, and a second "finished" during a ring was dropped (`alarm_on` already
+      1, the 60 s not restarted). Now `main.c` keeps up to 4 ringing timers by HA's timer id (field 2), one ring for all,
+      the ring time restarted by each, stopped all at once by button / wake word / "stop" / media player STOP (the only
+      way from HA) / ring time (`timer_ring`, 0-600 s, 0 = until stopped, default 60, page-only, exported).
+      ESPHome: binary sensor "Timer ringing" (`timer_ringing`, always listed), text sensor "Ringing timers" (diagnostic,
+      names in order or the length of an unnamed timer: "5 min", "1 h 30 min", "90 s"), names sent before the ring's
+      on. fake_ha_esphome: two at once, a cancel of another timer, button, media stop, ring out at 1 s.
+      LED (reported the same day: dark while ringing, also on the wake word): hassmic started `active_timer`, which has
+      a file in `led-resources/` but no entry in `layer_config_common.json` on donut, biscuit or radar, and
+      ledcontroller refuses those ("Animation %s not in map"); every other pattern hassmic uses is in the map on all
+      three. Stock (PuffinApp `UXEventArbitrator::onAlertStateChange` at 0x25cfc0, AVS alert type at +0xc, state at
+      +0x10): ALARM -> `ready-alarm*`, TIMER and REMINDER -> `ready-timer*`; STARTED / FOCUS_ENTERED_FOREGROUND start
+      `ready-timer` (looping, layer 3), FOCUS_ENTERED_BACKGROUND starts `ready-timer-short` (one shot, layer 4),
+      READY / STOPPED / SNOOZED / COMPLETED / PAST_DUE / ERROR stop `ready-timer`. Now the same: `ready-timer` with
+      the ring, `ready-timer-short` when the state leaves IDLE during one.
+      Stopping (asked the same day: explicit stop only): the wake word alone no longer stops a ring; it starts a
+      pipeline as usual, with the ring in the background (blips paused while state != IDLE: STT must hear the user;
+      stock attenuates instead), and `wake_cut_ms` set so the Pryon "stop" right behind it drops that pipeline too.
+      Stops: action button, "stop" keyword, media player STOP, ring time, and `core_transcript` (STT_END text alone
+      "stop"/"stopp"/"stoppen"/"stoppa"/"halt"/"arrête"/"basta"/"para"/"pare", punctuation dropped) for engines
+      without the keyword: the run is cancelled as by the button (HA forgot the timer when it finished, so no intent of its
+      can stop the ring; what it would answer to "stop" is not checked). Arbitration unchanged: a ringing Echo still claims with priority 2,
+      so the "stop" goes to the one that rings. Open (device): both seen, with and without
+      the mic latch (`micsoff-ready-timer` is not in the map either; layer 3 is above `mics-off_on`'s 1), with real
+      HA, and an automation on "still on after 50 s".
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, Drop In/calling (`commsd`), stereo pairs.

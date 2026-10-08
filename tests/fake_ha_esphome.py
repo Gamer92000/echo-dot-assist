@@ -4,7 +4,7 @@
 import asyncio, base64, io, math, os, random, re, signal, struct, subprocess, sys, tempfile, threading, time, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from aioesphomeapi import SelectInfo, SelectState, NumberInfo, SwitchInfo, NumberState, SwitchState, TextSensorInfo, TextSensorState, SensorInfo, SensorState
-from aioesphomeapi import APIClient, MediaPlayerInfo, MediaPlayerEntityState, VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm
+from aioesphomeapi import APIClient, MediaPlayerInfo, MediaPlayerEntityState, MediaPlayerCommand, VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm
 from aioesphomeapi import ZERO_NOISE_PSK, EventInfo, BinarySensorInfo, BinarySensorState
 from aioesphomeapi.model import Event
 from aioesphomeapi.core import InvalidEncryptionKeyAPIError, RequiresEncryptionAPIError
@@ -359,11 +359,67 @@ async def main():
         # Debug access: on the settings page only, with a press of its own (tests/fake_web.py)
         check("debug_access_adb" not in by, "no debug access switch in Home Assistant")
 
+        # Timers: "Timer ringing" + "Ringing timers" (names) for automations; several at once; a cancel is for another one
+        ring, names = by.get("timer_ringing"), by.get("ringing_timers")
+        check(isinstance(ring, BinarySensorInfo) and isinstance(names, TextSensorInfo) and int(names.entity_category) == 2
+              and last(ring.key, BinarySensorState) is False and last(names.key, TextSensorState) == "",
+              "timer entities listed (names: diagnostic), not ringing")
+        ringing = lambda: (last(ring.key, BinarySensorState), last(names.key, TextSensorState))
         cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t1", "tea", 60, 0, False)
-        await sync(cli)
-        proc.send_signal(signal.SIGUSR1)                                           # button press silences the alarm, no pipeline
-        started.clear(); await asyncio.sleep(0.5)
-        check(not started.is_set(), "trigger during alarm only stops the alarm")
+        await until(lambda: ringing() == (True, "tea"))
+        n = len(states)
+        cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t2", "", 300, 0, False)
+        await until(lambda: ringing() == (True, "tea, 5 min"))
+        check(ringing() == (True, "tea, 5 min") and not any(isinstance(s, BinarySensorState) and s.key == ring.key and not s.state for s in states[n:]),
+              f"a second timer joins the ring, named by its length: {ringing()}")
+        cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_CANCELLED, "t3", "eggs", 360, 200, False)
+        await sync(cli); await asyncio.sleep(0.3)
+        check(ringing() == (True, "tea, 5 min"), f"cancelling a timer that still runs leaves the ring alone: {ringing()}")
+        # Only an explicit stop ends a ring.  The wake word alone puts it in the background: a pipeline as usual
+        started.clear(); stopped.clear(); proc.send_signal(signal.SIGUSR1)       # "wake word"
+        await asyncio.wait_for(started.wait(), 5); await asyncio.sleep(0.3)
+        check(ringing() == (True, "tea, 5 min"), f"the wake word alone does not stop a ring, it listens: {ringing()}")
+        proc.send_signal(signal.SIGHUP)                                            # its "stop": the ring and that pipeline end
+        await until(lambda: ringing() == (False, "") and stopped)
+        check(ringing() == (False, "") and stopped, f'"<wake word>, stop" stops every timer at once and drops its pipeline: {ringing()}, stops {stopped}')
+
+        cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t6", "eggs", 360, 0, False)
+        await until(lambda: ringing() == (True, "eggs"))
+        started.clear(); proc.send_signal(signal.SIGUSR2)                          # the action button: stops it, no pipeline
+        await until(lambda: ringing() == (False, "")); await asyncio.sleep(0.5)
+        check(not started.is_set() and ringing() == (False, ""), f"the button only stops a ring: {ringing()}")
+
+        # an engine without the "stop" keyword (microWakeWord): the transcript "Stop." stops it and cancels the run
+        cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t7", "tea", 60, 0, False)
+        await until(lambda: ringing() == (True, "tea"))
+        started.clear(); stopped.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "what time is it"})
+        await sync(cli); await asyncio.sleep(0.3)
+        check(ringing() == (True, "tea") and not stopped, f"another question during a ring leaves it ringing: {ringing()}, stops {stopped}")
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+        started.clear(); stopped.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "Stop."})
+        await until(lambda: ringing() == (False, "") and stopped)
+        check(ringing() == (False, "") and stopped == [True], f'transcript "Stop." stops the ring and cancels the run: {ringing()}, stops {stopped}')
+        started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)     # the next run counts again
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+
+        cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t4", "pasta", 600, 0, False)
+        await until(lambda: ringing() == (True, "pasta"))
+        cli.media_player_command(mp[0].key, command=MediaPlayerCommand.STOP)
+        await until(lambda: ringing() == (False, ""))
+        check(ringing() == (False, ""), f"the media player's stop stops a ring from Home Assistant: {ringing()}")
+
+        page.set(timer_ring=1)
+        check(conf().get("timer_ring") == "1", f"ring time saved: {conf().get('timer_ring')}")
+        cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t5", "", 90, 0, False)
+        await until(lambda: ringing() == (True, "90 s"))
+        t0 = time.monotonic(); await until(lambda: ringing() == (False, ""), 5)
+        check(ringing() == (False, "") and time.monotonic() - t0 < 3, f"rings out after the ring time: {time.monotonic() - t0:.1f} s")
+        page.set(timer_ring=60)
 
         proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "stt-no-text-recognized", "message": "nothing heard"})

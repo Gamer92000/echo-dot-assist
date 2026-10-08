@@ -2,6 +2,25 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-08
+
+- **Home Assistant sees a ringing timer.** "Timer ringing" is on while a finished timer rings and goes off when someone
+  stops it or it rings out; "Ringing timers" (diagnostic) names them, or gives the length of a timer without a name
+  ("5 min"). An automation can now announce a timer on every Echo, or send a phone alert, when nobody stopped it
+  within a minute. The media player's stop in Home Assistant stops the ring too.
+- **The ring lights up while a timer rings**, with the Echo's own cyan timer animation, as on a stock Echo; it went
+  dark before (the Echo was asked for an animation its light controller does not know). It goes off when the timer
+  is stopped. Listening and replies show over it, and it comes back after them.
+- **A ringing timer only stops when you say so**: "Alexa, stop", the action button, or the media player's stop in Home
+  Assistant. The wake word alone no longer stops it: as on a stock Echo, the ring pauses while you talk ("Alexa, how
+  long is left on the pasta timer?") and goes on afterwards. With microWakeWord or Home Assistant's wake word, which
+  have no "stop" of their own, saying "stop" after the wake word does it.
+- **How long a timer rings is a setting**: "Timers ring for" on the settings page, 10 s to 10 minutes or until stopped
+  (default 1 minute, as before).
+- **Several timers at once ring properly.** A second timer that finishes while one rings gives the ring its full time
+  again, and one stop ends them all. Cancelling a timer that is
+  still running no longer silences one that is ringing.
+
 ## 2026-10-07
 
 - **An Echo names itself after its model, and you name it in Home Assistant.** Every Echo is now called after its

@@ -16,6 +16,25 @@ Replies start while text to speech is still being generated.
 - **"Alexa, stop"** interrupts a reply, but only right behind the wake word: Amazon's models only listen for "stop" in
   the two seconds after it. Out of silence, "Alexa, stop the music" goes to Home Assistant as a normal command.
 - While a timer rings or something plays, the wake word is accepted more readily, as Amazon's models are tuned to do.
+- A finished timer rings for a minute ("Timers ring for" on the [settings page](#settings-page): 10 s to 10 min, or
+  until stopped), with the cyan timer animation on the ring. Only an explicit stop ends it: "<wake word>, stop", the
+  action button, or the media player's stop in Home Assistant. The wake word alone pauses the ring while you talk, and
+  it goes on afterwards. With microWakeWord or Home Assistant's wake word (no "stop" keyword) the transcript does it:
+  "stop" alone (also stopp, halt, arrête, basta, para) ends the ring and the run, before Home Assistant answers.
+  Several timers can ring at once: each new one gives the ring its full time again, and one stop ends them all.
+  Home Assistant's "Timer ringing" is on just as long, so an automation can tell when nobody heard it:
+
+  ```yaml
+  triggers:
+    - trigger: state
+      entity_id: binary_sensor.kitchen_echo_timer_ringing
+      to: "on"
+      for: "00:00:50"     # ring time 1 min: still on after 50 s = nobody is there
+  actions:
+    - action: notify.mobile_app_phone
+      data:
+        message: "Timer {{ states('sensor.kitchen_echo_ringing_timers') }} is ringing in the kitchen"
+  ```
 
 ## Wake word
 
@@ -165,6 +184,7 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 | Equalizer | bass, mid, treble, −6 to +6 dB, Amazon's own, on everything the Echo plays |
 | LED auto brightness, LED brightness | a level holds the ring there and switches the automatic off |
 | Illuminance | the Echo's light sensor in lux, for automations |
+| Timer ringing, Ringing timers | on while a finished timer rings; their names (diagnostic), see [Voice](#voice) |
 | Firmware | update entity, see [Updating](../README.md#updating) |
 | Identify, Factory reset | buttons |
 | Web UI address | diagnostic: the settings page's address |
@@ -187,6 +207,7 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 - "Mic level": how loud speech reaches the voice assistant, −35 to −15 dBFS (default −26); the Echo adjusts its gain.
 - "Noise reduction": off by default; low, medium, high take the background down by up to 6, 9 or 12 dB (RNNoise, on
   what the voice assistant gets).
+- "Timers ring for": 1 minute by default, 10 s to 10 min, or until stopped.
 - Bluetooth announcements and their language, the online updates channel, debug access (adb over Wi-Fi), SoC
   temperature and CPU usage.
 - "Music Assistant without pairing": off by default, so only Sendspin servers paired with the token may play.

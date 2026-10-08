@@ -13,7 +13,8 @@
  *                    player's announcement format (48 kHz) instead of streaming 16 kHz over the API connection.
  *   announcements    VoiceAssistantAnnounceRequest with http URLs; Home Assistant transcodes to the WAV format the media
  *                    player entity advertises, we stream it.  Same path for media_player.play_media.
- *   timers           finished timer rings (core_alarm)
+ *   timers           finished timers ring (core_timer_finished); "Timer ringing" and "Ringing timers" (their names)
+ *                    say so until stopped or rung out, for automations; the media player's stop stops them too
  *   do not disturb   a switch; announcements are dropped while it is on
  *   arbitration      "Join arbitration network" switch and "Arbitration peers"; the action "arbitration_key" (Home
  *                    Assistant names it esphome.<node>_arbitration_key) through which other Echos hand over their
@@ -100,7 +101,8 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_BT_ANNOUNCE, KEY_DND, KEY_EQ_BASS, KEY_EQ_MID, KEY_EQ_TREBLE, KEY_BT_LANG, KEY_ARB_JOIN, KEY_ARB_PEERS, KEY_ARB_SERVICE,
        KEY_SS_UNPAIRED, KEY_DENOISE, KEY_ADB_WIFI, KEY_LUX, KEY_LED_AUTO, KEY_LED_BRIGHTNESS, KEY_SOUND_DETECTION, KEY_SOUND,
        KEY_BT_OUT_SEARCH, KEY_BT_OUT, KEY_BT_OUT_STATUS, KEY_BT_OUT_DELAY, KEY_WIFI_MOTION_ON, KEY_WIFI_MOTION, KEY_WIFI_MOTION_SENS,
-       KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF, KEY_WEB_URL, KEY_IDENTIFY, KEY_RESET };
+       KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF, KEY_WEB_URL, KEY_IDENTIFY, KEY_RESET,
+       KEY_TIMER_RINGING, KEY_TIMER_NAMES };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -334,6 +336,9 @@ static void send_setting(int key)       /* lock held */
     case KEY_WIFI_MOTION:               /* unknown while switched off */
         if (wifimotion_present()) { int m = wifimotion_motion(); pb_uint(&b, 2, m > 0); pb_uint(&b, 3, m < 0); send_state(BINARY_SENSOR_STATE, &b); }
         break;
+    case KEY_TIMER_RINGING: pb_uint(&b, 2, core_timers_ringing(NULL, 0) > 0); send_state(BINARY_SENSOR_STATE, &b); break;
+    case KEY_TIMER_NAMES: { PB(t, 320); char names[288]; core_timers_ringing(names, sizeof names);
+        pb_fixed32(&t, 1, key); pb_str(&t, 2, names); send_state(TEXT_SENSOR_STATE, &t); } break;
     case KEY_LED_AUTO: if (have_light) { pb_uint(&b, 2, core_led_auto(-1)); send_state(SWITCH_STATE, &b); } break;
     case KEY_LED_BRIGHTNESS: { int v = core_led_brightness(-1); if (v >= 0) { pb_float(&b, 2, v); send_state(NUMBER_STATE, &b); } } break;
     case KEY_BT_OUT_SEARCH: if (ble_present()) { pb_uint(&b, 2, a2dp_out_searching()); send_state(SWITCH_STATE, &b); } break;
@@ -516,6 +521,13 @@ static void send_setting_entities(void)
           pb_float(&b, 6, WIFIMOTION_SENS_MIN); pb_float(&b, 7, WIFIMOTION_SENS_MAX); pb_float(&b, 8, 1); pb_uint(&b, 10, 1); pb_uint(&b, 12, 2);
           send_msg(LIST_NUMBER, &b); }
     }
+    /* Timers: "binary_sensor.<node>_timer_ringing" still on a minute after it came on = nobody heard it, for an
+     * automation that announces it elsewhere.  The names (or the length of a timer without one) are a diagnostic beside
+     * it, set before the ring goes on so a trigger on it can read them */
+    { PB(b, 128); pb_str(&b, 1, "timer_ringing"); pb_fixed32(&b, 2, KEY_TIMER_RINGING); pb_str(&b, 3, "Timer ringing");
+      pb_str(&b, 8, "mdi:timer-alert"); send_msg(LIST_BINARY_SENSOR, &b); }
+    { PB(b, 128); pb_str(&b, 1, "ringing_timers"); pb_fixed32(&b, 2, KEY_TIMER_NAMES); pb_str(&b, 3, "Ringing timers");
+      pb_str(&b, 5, "mdi:timer-outline"); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
     if (core_web_port) { PB(b, 128); pb_str(&b, 1, "web_ui_address"); pb_fixed32(&b, 2, KEY_WEB_URL); pb_str(&b, 3, "Web UI address");
       pb_str(&b, 5, "mdi:web"); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
     /* online updates (update.c): the channel is picked on the settings page; the entity says what is new and installs it */
@@ -1084,7 +1096,9 @@ static void on_event(const unsigned char *p, const unsigned char *end)
     case EV_WAKE_END:   core_remote_wake(); break;          /* the wake word was heard in Home Assistant (-w remote) */
     case EV_STT_START:  core_set_state(LISTENING); break;
     case EV_VAD_END:    core_mic_off(); if (core_state() == LISTENING) core_set_state(THINKING); break;
-    case EV_STT_END:    fprintf(stderr, "transcript: %s\n", text); core_mic_off(); if (core_state() == LISTENING) core_set_state(THINKING); break;
+    case EV_STT_END:    fprintf(stderr, "transcript: %s\n", text);
+        if (core_transcript(text)) break;                   /* "stop" to a ringing timer: the run is cancelled */
+        core_mic_off(); if (core_state() == LISTENING) core_set_state(THINKING); break;
     case EV_INTENT_END: if (cont) core_restart_after(); break;
     case EV_TTS_START:  fprintf(stderr, "reply: %s\n", text); break;
     case EV_INTENT_PROGRESS: if (!stream_now) break;    /* streaming TTS: the URL from RUN_START can be fetched already */
@@ -1104,13 +1118,14 @@ static void on_event(const unsigned char *p, const unsigned char *end)
 
 static void on_timer(const unsigned char *p, const unsigned char *end)
 {
-    struct pbf f; unsigned type = 0, total = 0; char tname[64] = "";
+    struct pbf f; unsigned type = 0, total = 0; char tname[64] = "", id[40] = "";
     while (pb_next(&p, end, &f)) {
-        if (f.field == 1) type = f.v; else if (f.field == 3 && f.data) pbf_str(&f, tname, sizeof tname); else if (f.field == 4) total = f.v;
+        if (f.field == 1) type = f.v; else if (f.field == 2 && f.data) pbf_str(&f, id, sizeof id);
+        else if (f.field == 3 && f.data) pbf_str(&f, tname, sizeof tname); else if (f.field == 4) total = f.v;
     }
     static const char *const names[] = { "started", "updated", "cancelled", "finished" };
     fprintf(stderr, "timer %s: %s (%u s)\n", type < 4 ? names[type] : "?", tname, total);
-    if (type == 3) core_alarm(1); else if (type == 2) core_alarm(0);
+    if (type == 3) core_timer_finished(id, tname, total); else if (type == 2) core_timer_cancelled(id);
 }
 
 static void on_announce(const unsigned char *p, const unsigned char *end)
@@ -1142,6 +1157,7 @@ static void on_mp_command(const unsigned char *p, const unsigned char *end)
     }
     if (has_vol) core_set_volume((int)(vol * 100 + 0.5f));
     if (has_cmd && cmd == MP_CMD_STOP && media_playing) core_tts_flush();
+    if (has_cmd && cmd == MP_CMD_STOP) core_alarm_stop("media player stop");     /* the one way to stop a ring from afar */
     if (has_url && url[0]) media_start("", url, 0, 0, 0);
     if (has_cmd && !has_url) send_mp_state();
 }
@@ -1213,6 +1229,7 @@ static void send_all_settings(void)
         send_setting(KEY_BT_OUT_SEARCH); send_setting(KEY_BT_OUT); send_setting(KEY_BT_OUT_STATUS); send_setting(KEY_BT_OUT_DELAY);
         for (int k = KEY_WIFI_MOTION_ON; k <= KEY_WIFI_MOTION_SENS; k++) send_setting(k);
         send_setting(KEY_UPDATE_CHANNEL); send_setting(KEY_UPDATE); send_setting(KEY_WHISPERED);
+        send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING);
         send_light_states();
 }
 
@@ -1518,6 +1535,8 @@ static void sound(const char *event)    /* lock held */
 }
 
 static void whispered(int on) { (void)on; send_setting(KEY_WHISPERED); }   /* lock held */
+static void timers_changed(void) { send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING); }   /* lock held: names first */
 
 const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, cancel, played, volume_changed, mute_changed, print_mdns, bt_device,
-                                     arb_send, arb_changed, sound, whispered, arb_request, settings_changed, entities_changed, arb_scan };
+                                     arb_send, arb_changed, sound, whispered, arb_request, settings_changed, entities_changed, arb_scan,
+                                     timers_changed };
