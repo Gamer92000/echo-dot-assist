@@ -187,6 +187,10 @@ input[type=range]::-moz-range-thumb { width: 20px; height: 20px; border-radius: 
 .f-ha svg.i { width: 14px; height: 14px; margin-top: 2px; }
 .f-ha b { color: var(--muted); font-weight: 560; }
 .feature .row.f-child { padding: 12px 0 0; margin-top: 4px; border-top: 1px solid var(--line); }
+/* a card is half the page wide: a choice beside its text squeezed the text into a column a word wide */
+.feature .row.f-child.stack { grid-template-columns: 1fr; gap: 10px; }
+.feature .row.f-child.stack .ctl { justify-content: flex-start; }
+.f-child .help { font-size: 13px; }
 .f-child .row-label { font-size: 14px; }
 .f-note { font-size: 12.5px; color: var(--warn); }
 /* choices worth weighing: small cards to pick from, their pros and cons folded away below */

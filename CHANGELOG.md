@@ -4,6 +4,8 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-08
 
+- **Settings page: a feature's own choices sit under their text**, as "Drop In answers" does. Beside it, in a card half
+  the page wide, the text shrank to a column one word wide.
 - **Only the wake word you picked wakes the Echo.** Amazon's English (US) "Computer", "Amazon" and "Ziggy" are one
   model that knows all three (and "Hey Disney"): with "Computer" picked, "Amazon" and "Ziggy" woke the Echo too.
 - **The same wake word in two languages shows twice in Home Assistant**, as "Computer (de-DE)" and "Computer (en-US)".
