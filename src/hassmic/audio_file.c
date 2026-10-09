@@ -217,3 +217,8 @@ void vol_write(enum vol which, int v)
     if (fake_mixer(which, file, sizeof file)) { FILE *f = fopen(file, "w"); if (f) { fprintf(f, "%d\n", v); fclose(f); } return; }
     vols[which] = v;
 }
+
+/* No front end on the PC */
+void afe_listening(int on) { (void)on; }
+void afe_stream_stopped(void) {}
+int  afe_arbitration(long ts, long te, char *json, size_t n) { (void)ts; (void)te; if (n) json[0] = 0; return 0; }
