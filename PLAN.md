@@ -1508,5 +1508,9 @@ Run in this order. Each step says what it proves.
       libserviceutility.so recordingAllowed lets uid 0 through after RECORD_AUDIO and looks up a package for any other
       uid (system: "android"). `tools/sdat2img.py` (reproduces the system image, md5-checked); `mkbootroot.py --extract`,
       `--cpio`. PC-checked: the boot image build end to end with adb stubbed out (a biscuit was on adb here: the model
-      guard refused it), otatool_test.sh, fake_ha_esphome.py. Open items, one list: docs/re-checkers.md
-      "What a port needs".
+      guard refused it), otatool_test.sh, fake_ha_esphome.py.  Wi-Fi without the touchscreen (2026-10-10):
+      `scripts/device/wifictl.dex` (tools/mkwifictl.py; reflection-only, wpa_cli-shaped answers) puts a
+      WifiConfiguration in through the IWifiManager binder as root — wifi.sh's switch and wifi-join.sh's setup join
+      both use it, checked end to end against a fake framework (fake_web_wifi.py, both worlds), and the firmware's
+      own dexdump validates the dex.  `devices/checkers/setup.sh`: every step walks in a dry run.  Open items, one
+      list: docs/re-checkers.md "What a port needs".

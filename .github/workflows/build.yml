@@ -62,7 +62,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        device: [donut, biscuit, radar]
+        device: [donut, biscuit, radar, checkers]
         include:
           # where Wi-Fi motion's kernel module is built from, for the cache; what is downloaded is pinned in device.mk or
           # the Makefile (make kernel-tools)

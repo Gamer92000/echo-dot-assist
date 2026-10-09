@@ -2,6 +2,17 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-10
+
+- **The Echo Show 5 joins Wi-Fi without its touchscreen, and has a guided setup.** Joining goes through Android's
+  own WifiService, from root's shell: `scripts/device/wifictl.dex`, assembled by `tools/mkwifictl.py` from nothing
+  but that file, makes the same `WifiConfiguration` call stock's own setup apps make. The guided setup
+  (`scripts/setup.sh checkers`) runs amonet's unlock, flashes the rooted boot image, locks the egress down and joins
+  Wi-Fi before the Echo ever talks to Amazon, and installs — the steps it walks in a dry run, nothing of it tried on
+  a real Show yet. The settings page's network switch works the same way (checked end to end against a fake
+  WifiService in `tests/fake_web_wifi.py`), and checkers is back in CI's build matrix. Details:
+  [devices/checkers](devices/checkers/README.md).
+
 ## 2026-10-09
 
 - **The guided setup no longer downloads models.** Its last step, which put the Echo online as a stock Alexa and
@@ -81,7 +92,7 @@ What changed for people using the Echo, newest first. Details and measurements a
 - **Echo Show 5 (1st gen): an installer, not tried on a device yet.** `scripts/install-system.sh` builds a root boot
   image from the firmware's own, flashes it in amonet's fastboot and installs hassmic as on the Dots; Alexa's apps are
   switched off and come back when hassmic's config is removed. Details and risks:
-  [devices/checkers](devices/checkers/README.md). Details in [devices/checkers](devices/checkers/README.md).
+  [devices/checkers](devices/checkers/README.md).
 - **The settings page is tidier and about a third shorter.** The wake word engines and the arbitration modes are small
   cards to pick from; below them, one click opens a table that compares them question by question (how well it hears,
   which wake words, "<wake word>, stop", several Echos, ...), the current choice highlighted. "System" is two cards of
