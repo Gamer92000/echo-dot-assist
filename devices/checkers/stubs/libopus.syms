@@ -1,3 +1,5 @@
+T opus_encoder_create
+T opus_encoder_ctl
 T opus_decoder_create
 T _end
 T __aeabi_idiv0
@@ -7,7 +9,9 @@ T opus_decode
 T __aeabi_ldivmod
 T __bss_start
 T __aeabi_ldiv0
+T opus_encoder_destroy
 T __gnu_uldivmod_helper
 T __aeabi_idivmod
 T opus_decoder_destroy
+T opus_encode
 T main
