@@ -133,8 +133,69 @@ def wpa(w, args):
     return "UNKNOWN COMMAND"
 
 
+def wifictl(w, args):
+    """scripts/device/wifictl.dex, as WifiService would answer: the framework world of a model with
+    INSTALL=boot (checkers).  Its calls land in the same world the wpa_cli fake serves; the shapes it prints
+    are wpa_cli's (that is what wifi.sh expects), with WifiService's habits: adding a network with a name
+    already there replaces it, the framework saves every change at once (the world is the store), it hands
+    out an address with the network it connects to (no dhcpcd), and WifiInfo quotes the name."""
+    verb = args[0] if args else ""
+    if verb == "wifi-on": return "OK"
+    if verb == "name": return bytes.fromhex(args[1]).decode() if len(args) > 1 else ""
+    if verb == "scan": return "OK"
+    if verb in ("status", "list_networks", "scan_results"):
+        if verb == "status":
+            st = associate(w)
+            n, air = connected(w)
+            if st == "COMPLETED" and air and air.get("gw") and air["gw"] not in ("", "0"):
+                gwhex = "".join("%02X" % int(x) for x in reversed(air["gw"].split(".")))
+                with open(w["route_file"], "w") as r:          # the default route, as /proc/net/route has it
+                    r.write("Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n"
+                            f"wlan0\t00000000\t{gwhex}\t0003\t0\t0\t0\t00000000\t0\t0\t0\n")
+            if st != "COMPLETED": return "wpa_state=%s\nid=-1" % st
+            lines = ["wpa_state=COMPLETED", "id=%d" % n["id"], 'ssid="%s"' % esc(bytes.fromhex(n["ssid"]))]
+            if air.get("dhcp", True) and air["ip"] not in ("", "0"):
+                lines.append("ip_address=%s" % air["ip"])
+            return "\n".join(lines)
+        return wpa(w, args)
+    if verb == "add":
+        ssid = value(args[1])
+        for n in w["networks"]:
+            if n.get("ssid") == ssid.hex(): break             # the same name replaces, not a second entry
+        else:
+            i = w["next_id"]; w["next_id"] += 1
+            n = {"id": i, "disabled": 0, "priority": 0, "ssid": ssid.hex()}
+            w["networks"].append(n)
+        n["scan_ssid"] = 1                                      # wifictl sets hiddenSSID: found when not broadcast
+        if args[2] == "-": n.pop("psk", None); n["key_mgmt"] = "NONE"
+        else: n["psk"] = args[2]; n["key_mgmt"] = "WPA-PSK"
+        w["saved"] = json.loads(json.dumps(w["networks"])); return str(n["id"])
+    if verb == "select":
+        if not next((n for n in w["networks"] if str(n["id"]) == args[1]), None): return "FAIL"
+        for n in w["networks"]:
+            if n["disabled"] != 2: n["disabled"] = 0 if str(n["id"]) == args[1] else 1
+        w["current"] = None; w["target"] = int(args[1]); w["settle"] = 2; w["saved"] = json.loads(json.dumps(w["networks"])); return "OK"
+    if verb == "enable":
+        n = next((n for n in w["networks"] if str(n["id"]) == args[1]), None)
+        if not n: return "FAIL"
+        n["disabled"] = 0
+        if len(args) > 2 and args[2] == "only":
+            for o in w["networks"]:
+                if o["disabled"] != 2 and o is not n: o["disabled"] = 1
+        w["saved"] = json.loads(json.dumps(w["networks"])); return "OK"
+    if verb == "remove":
+        n = next((n for n in w["networks"] if str(n["id"]) == args[1]), None)
+        if not n: return "FAIL"
+        w["networks"].remove(n)
+        if w.get("current") == n["id"] or w.get("target") == n["id"]: w["current"] = w["target"] = None
+        w["saved"] = json.loads(json.dumps(w["networks"])); return "OK"
+    if verb == "reassociate": w["current"] = w["target"] = None; return "OK"
+    return "FAIL"
+
+
 def main():
     tool = os.path.basename(sys.argv[0]); args = sys.argv[1:]
+    if tool == "app_process": args = args[2:]                 # app_process / Wifictl <verb> ...
     with open(WORLD, "r+") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         w = json.load(f); out = ""; rc = 0
@@ -143,8 +204,13 @@ def main():
             while args and (args[0] in ("-i", "-p") or args[0].startswith("-g") or args[0].startswith("IFNAME=")):
                 args = args[2:] if args[0] in ("-i", "-p") else args[1:]     # the interface's socket, or the global one
             out = wpa(w, args)
+        elif tool == "app_process":
+            out = wifictl(w, args)
         elif tool == "ifconfig":                    # the lease's address, whatever network the Echo is on now
             ip = w["lease"]["ip"]
+            if os.environ.get("INSTALL") == "boot":
+                n, air = connected(w)               # Android's DHCP: the address comes with its network
+                ip = air["ip"] if n and air and air.get("dhcp", True) and air["ip"] not in ("", "0") else ""
             out = "wlan0     Link encap:Ethernet  HWaddr 02:00:00:00:00:01"
             if ip: out += f"\n          inet addr:{ip}  Bcast:{ip.rsplit('.', 1)[0]}.255  Mask:255.255.255.0"
         elif tool == "getprop":

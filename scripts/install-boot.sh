@@ -37,7 +37,7 @@ boot_image() {
     [ -f $SEPOLICY_TOOL ] && [ "$(sha $SEPOLICY_TOOL)" = "$SEPOLICY_TOOL_SHA256" ] ||
         die "no $SEPOLICY_TOOL (or not the pinned one): patch/magiskpolicy32 of donut's boot-root.zip ($DDIR/README.md)"
     [ -e $FW/rootfs/system/bin/linker ] || die "$FW/rootfs not unpacked: qemu runs magiskpolicy against its linker ($DDIR/README.md)"
-    command -v qemu-arm > /dev/null || die "no qemu-arm (qemu user mode)"
+    { command -v qemu-arm > /dev/null || [ -x toolchain/qemu-arm ]; } || die "no qemu-arm (qemu user mode; devices/checkers/setup.sh puts one in toolchain/)"
     python3 scripts/mkbootroot.py --extract $OUT/boot.stock.img sepolicy $OUT/sepolicy.stock
     rm -f $OUT/sepolicy.hassmic
     chmod 755 $SEPOLICY_TOOL
@@ -130,7 +130,7 @@ printf 'NAME="%s"\nARGS="%s"\n' "$NAME" "$DEFAULT_ARGS" > $OUT/hassmic.conf
 t "mkdir -p /data/local/hassmic"; adb push $OUT/hassmic.conf /data/local/hassmic/hassmic.conf > /dev/null
 t "rm -rf /data/local/hassmic/ota; rm -f /data/local/hassmic/hassmic"      # boot.sh prefers those; the fresh install wins
 FILES="$OUT/hassmic $OUT/runas $(ls $OUT/pryon_test $OUT/*.ko 2>/dev/null || true) $OUT/otatool secrets/update.pub keys/release.pub $DDIR/device.conf
-       scripts/system/boot.sh scripts/system/main.sh scripts/system/sysinstall.sh scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh scripts/device/artifact-install.sh scripts/device/wifi.sh"
+       scripts/system/boot.sh scripts/system/main.sh scripts/system/sysinstall.sh scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh scripts/device/artifact-install.sh scripts/device/wifi.sh scripts/device/wifictl.dex"
 t "rm -rf $STAGE; mkdir -p $STAGE"
 adb push $FILES $DDIR/hassmic.rc $STAGE/ > /dev/null
 t "chmod 755 $STAGE/otatool; sh $STAGE/sysinstall.sh install $STAGE && touch $STAGE/ok"
