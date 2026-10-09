@@ -1309,7 +1309,7 @@ function drawDavs(force) {
   const body = h('div', { class: 'card-body' });
   davsBox.append(body);
   if (!davs.dha) {
-    body.append(callout('info', h('p', {}, 'This model cannot sign in to Amazon itself: the Echo Dot 3 proves who it is in a way not worked out yet. Download on another Echo and copy the models here, or use scripts/artifacts.sh.')));
+    body.append(callout('info', h('p', {}, 'This Echo cannot sign in to Amazon itself: its attestation key would not answer. Download on another Echo and copy the models here, or use scripts/artifacts.sh.')));
     return;
   }
   if (davs.state === 'none') davsSignIn(body);

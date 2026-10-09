@@ -6,4 +6,18 @@ static const unsigned char dha_mac[32] = {160,161,162,163,164,165,166,167,168,16
 static const char dha_cpuid[] = "1234567890123456\0";   /* the NUL counted */
 static const char dha_dsn[] = "G000TEST00000000\0";
 static const char dha_dt[] = "A3S5BH2HU6VAYF";
-/* a signature the fake HAL makes over any input: byte i of it is input[i %% 32] ^ 0xA5 */
+
+/* the drvV3 side (donut): an EC public key where dha.c looks for an RSA modulus, and the certificate as
+ * field 0x203 -- a PEM with CRLF line breaks, so the test pins the strip MAP does.  Neither is a real
+ * certificate; nothing ever parses the body, the token only carries its text. */
+static const unsigned char dha_ec_spki[91] = {48,89,48,19,6,7,42,134,72,206,61,2,1,6,8,42,134,72,206,61,3,1,7,3,66,0,4,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64};
+static const char dha_cert_pem[] =
+    "-----BEGIN CERTIFICATE-----\r\n"
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAQIDBAUGBwgJ\r\n"
+    "CgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywt\r\n"
+    "Li8wMTIzNDU2Nzg5Ojs8PT4/QEFtYXpvbiBkaGF2MiB0ZXN0\r\n"
+    "IGNlcnRpZmljYXRlIHBhZGRpbmcgQEFCQ0RFRkdISUpLTE1O\r\n"
+    "T1BRUlNUVVZXWFlaW1xdXl8=\r\n"
+    "-----END CERTIFICATE-----\r\n";
+/* a signature the fake HAL makes over any input: byte i of it is input[i %% 32] ^ 0xA5 (drvV1), or the input
+ * and the input reversed as R and S, DER-encoded as an ECDSA signature (drvV3) */

@@ -2,6 +2,14 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-09
+
+- **"Download from Amazon" works on the Echo Dot 3.** Its newer way of proving to Amazon who it is — a certificate
+  its hardware key had Amazon sign — is worked out now, so the Dot 3 itself signs in on the settings page and
+  downloads wake words, whisper detection and the newer sound detection model, like the other Echos always could.
+  Built from Amazon's own firmware code and tested against a stand-in Amazon; if the real Amazon should refuse the
+  Dot 3's sign-in, the page says so, and copying models from another Echo or `scripts/artifacts.sh` still work.
+
 ## 2026-10-08
 
 - **Settings page: a feature's own choices sit under their text**, as "Drop In answers" does. Beside it, in a card half

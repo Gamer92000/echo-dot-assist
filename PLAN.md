@@ -198,9 +198,8 @@ Run in this order. Each step says what it proves.
             probe `tools/davs-login.py`): the Echo's own code pair login gets as far as the code entry on amazon.de/code,
             then `/auth/register` answers `InvalidDevice` (the missing piece is the device attestation token).
             **Built since** (2026-10-06, same day): `dha.c` builds that token exactly as MAP does (biscuit and radar,
-            verified against libace_map.so instruction by instruction; donut registers with a drvV3/ES256 certificate
-            token instead, field 0x203, not reversed: the Dot 3 page says it cannot download and points at copying
-            models; the key's TEE session needs group `drmrpc`, now in biscuit's and radar's `DAEMON_GROUPS`) and
+            verified against libace_map.so instruction by instruction; the key's TEE session needs group `drmrpc`, now
+            in every model's `DAEMON_GROUPS`) and
             `davs.c` does the whole login from the page (code shown with the link, register polled with the token,
             tokens in `state/davs` 0600 never sent to the page, refresh, deregister with a fresh token, the registration
             kept on its own Amazon when a login on another one fails or is cancelled), asks DAVS with this engine's own
@@ -216,10 +215,10 @@ Run in this order. Each step says what it proves.
             "Download from Amazon" (Echos section) in three steps: the Amazon site (every one with Alexa, by region,
             guessed from the browser language), the code (countdown, cancel), the picker (wake words of a language,
             whisper, sound detection; what is installed, each download's progress and outcome, kept over the reload
-            after installing). Tests: `tests/unit/dha_jwt_test.c` (byte for byte), `tests/fake_web_davs.py` (47 checks
+            after installing). Tests: `tests/unit/dha_jwt_test.c` (byte for byte), `tests/fake_web_davs.py` (53 checks
             against a fake Amazon: token shape, session header, ecids, region, whisper's own request, every file of each
             set installed byte for byte, folders, a deeper one refused, other sites, cancel, a revoked token at logout,
-            an Echo that cannot attest), `tests/fake_web_artifacts.py` (a whisper set with its folder copied Echo to
+            an Echo that cannot attest, the Dot 3's drvV3 login and download), `tests/fake_web_artifacts.py` (a whisper set with its folder copied Echo to
             Echo, a set two folders deep with 69 files copied and installed; root refusing a link in a folder and three levels); the card checked in headless Chromium.
             **Against the real Amazon (2026-10-06, biscuit, amazon.de): works.** Register answers `401 Unauthorized`
             until the code is entered, then the tokens; no device secret needed (none sent); Amazon names the device
@@ -229,6 +228,22 @@ Run in this order. Each step says what it proves.
             their folders, hence the folder support. Found on the way: `untar` never skipped a file's padding, so every
             set arrived as its first file only (the fake's pryon_test passed it; the real one would have refused).
             Not done: the folder sets from the real Amazon, sites other than .de, the Alexa app login route
+            **donut's drvV3 attestation reversed and built (2026-10-09):** the Dot 3 proves itself with the dhav2
+            certificate its EC key in the TEE had Amazon sign (`/persist/dha_certificate.pem`, HAL field 0x203):
+            `dha.c jwt_v3` builds the header `{"typ":"drvV3","alg":"ES256","x5c":["<the PEM's body, CR and LF
+            dropped>"]}` and a payload with a cpuid literal of donut's MAP (`dfae219fe47947c7`) and no "cust" part,
+            signed like drvV1 but over the DER ECDSA the HAL answers, split into 32-byte R and S (the JWS raw form;
+            the token carries the certificate, ~1.9 kB). The HAL's public key tells the shapes apart: an RSA modulus
+            parses on biscuit and radar, donut's EC SubjectPublicKeyInfo does not — biscuit's and radar's HALs hold a
+            dhav2 certificate file too (same NS65741 family), unused by their MAPs, so the certificate alone cannot
+            tell them apart. The TEE (`/dev/trustzone`, 0660 system:drmrpc = gid 1026 on the device) and the
+            certificate file (`/persist/dha_certificate.pem`, 0660 keystore:keystore = 1017) need two more groups →
+            `drmrpc,keystore` in donut's `DAEMON_GROUPS`, as puffinmrmd's list has them (without keystore the HAL
+            answers field 0x203 with -1, measured). Checked on a real Dot 3 with `dha_test` as puffin plus those
+            groups: the EC SPKI, the CRLF PEM at 0x203 (682 bytes, cut at the END marker), a 71-byte DER signature.
+            Tests as drvV1's (both shapes byte for byte) plus a third Echo in `tests/fake_web_davs.py`
+            that logs in and downloads with the drvV3 token. **The sign-in against the real Amazon is still
+            untried**: `docs/re-davs-login.md` has the analysis if it refuses.
       - The spied `assetmgrd` must run in its own SELinux domain (`runcon u:r:assetmgrd:s0`, shim labelled `system_file`, log in
         `/data/davs`): from the `su` domain its AIPC service is unreachable and the Alexa app shows the device as unavailable
 - [x] Assistant replies ignored the volume: the mixer keeps one volume per stream type, the `TTS` stream follows `TTSVolume`, and

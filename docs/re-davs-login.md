@@ -12,6 +12,11 @@ download, staging) with `src/hassmic/dha.c` for the device attestation token who
 firmware builds was verified against `libace_map.so` of biscuit and radar instruction by instruction (see dha.c); the
 whole flow runs against a fake Amazon in `tests/fake_web_davs.py`.
 
+**donut followed (2026-10-09): its drvV3 attestation reversed.** The Echo Dot 3 proves itself with a certificate its
+EC key in the TEE had Amazon sign; dha.c builds that token too now, and the "Download from Amazon" page works on it.
+Details at the attestation section below. Against the real Amazon the drvV3 path is not yet tried (no device at hand);
+the drvV1 path is (below).
+
 **Against the real Amazon (2026-10-06, Echo Dot 2, amazon.de): it works.** The attestation token is what was missing;
 the device secret is not needed (hassmic as `puffin` cannot read idme `mac_sec`, and none was sent). What the device
 run showed:
@@ -83,11 +88,36 @@ matched by dha.c (`tests/unit/dha_jwt_test.c` pins it byte for byte against the 
   (Amazon's keymaster in the TEE; the private key never leaves it). The session needs group `drmrpc`: as `puffin`
   without it, "Failed to open DHA session: Non-specific cause". biscuit's and radar's `DAEMON_GROUPS` (`device.conf`)
   carry it, as the stock puffin service does.
-- **donut builds none of this.** Its `map_registration_create_dha_jwt` makes a `drvV3`/`ES256` token around a
-  certificate from HAL field 0x203 (`"x5c":["<cert>"]`, PEM markers and `strstr` in the code; payload
-  `_registration_create_dhav2_payload` without the "cust" part), signed the same way. Not reversed: the Echo Dot 3
-  cannot log in to Amazon itself (davs.c says so on the page); download on an older Echo and copy the models, or
-  `scripts/artifacts.sh`.
+- **donut builds a drvV3 token instead** (`_registration_create_jwt_internal`, inlined; reversed 2026-10-09, read out
+  of `firmware/donut/rootfs/system/lib/libace_map.so` instruction by instruction like the rest, dha.c `jwt_v3` and
+  `tests/unit/dha_jwt_test.c` pin it byte for byte):
+  - header `{"typ":"drvV3","alg":"ES256","x5c":["<the certificate's PEM body>"]}` — the certificate is HAL field
+    0x203 (`aceDhaHal_getField`), `/persist/dha_certificate.pem`: what the Echo's dhav2 provisioning had Amazon sign
+    over its EC key in the TEE. MAP `strstr`s the BEGIN marker (skipping its 27 bytes) and the END marker and copies
+    what stands between, CR and LF dropped — the base64 body as one line. (The HAL wrapper `libacehal_dha.so` itself
+    cuts the value at the END marker first; the body is what carries, so the token runs ~1.9 kB against drvV1's ~0.7.)
+  - payload `{"dev":{"dt":<device type>,"cpuid":"dfae219fe47947c7","dsn":<serial>,"typ":"v1"},"dat":<date>}` — no
+    "cust" part, and the cpuid is a literal of donut's MAP (`.rodata` 0x161f9), the same for every Echo Dot 3. dt and
+    dsn come from the registration info (the register payload's own `device_type` at struct offset 64, `device_serial`
+    at 60 — settled by the shared `{"code_data":...,"device_serial":"%s","device_type":"%s"}` format), not from HAL
+    fields.
+  - signature: SHA-256 of `b64url(header) "." b64url(payload)`, `aceDhaHal_signData` over the digest — but donut's
+    HAL is the dhav2 one (`/system/lib/hw/amzn_dha.mt8167.so`): an EC key behind an OpenSSL ENGINE method whose
+    private half lives in the TEE (`UREE_TeeServiceCall`). The session opens `/dev/trustzone` (0660 system:drmrpc,
+    gid 1026 on the device) and reads the certificate from `/persist/dha_certificate.pem` (0660 keystore:keystore,
+    gid 1017) — hence `drmrpc` *and* `keystore` in donut's `DAEMON_GROUPS`, as puffinmrmd's group list has them
+    (the HAL cannot add groups itself once hassmic runs as puffin; without keystore, field 0x203 answers -1,
+    measured). The HAL answers in DER, which MAP splits into R and S (`mbedtls_asn1_get_tag` 0x30, two
+    `mbedtls_asn1_get_mpi`) and writes left-padded into 32 bytes each — the JWS raw form — before the final b64url.
+    All of this checked on a real Dot 3 with `src/tools/dha_test.c` as puffin plus those groups: the EC SPKI, the
+    CRLF PEM at 0x203 (682 bytes, cut at the END marker as the wrapper does), a 71-byte DER signature.
+  - how dha.c tells the shapes apart: the HAL's public key. An RSA keymaster modulus (biscuit, radar) means drvV1;
+    donut's EC SubjectPublicKeyInfo fails that parse, and nothing but the EC key can sign a drvV3 token anyway.
+    biscuit's and radar's HALs *have* the dhav2 functions and certificate file too (same NS65741 family), so the
+    certificate's presence would not tell them apart — their MAPs just never ask for it.
+  - **The token itself now runs on a real Dot 3** (2026-10-09): the Echo builds it at start (its log no longer says
+    "no device attestation"). **The sign-in against the real Amazon is the part still untried** — if Amazon refuses,
+    that is where to look.
 
 ## Endpoints, for reference
 

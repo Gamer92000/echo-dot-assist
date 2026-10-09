@@ -119,7 +119,9 @@ If `probe.sh` reports a different library, the Echo runs another firmware: stop 
 
 ### 3. Optional: another wake word
 
-Want "Echo" or "Computer" instead of "Alexa"? Once the Echo is installed:
+Want "Echo" or "Computer" instead of "Alexa"? The Echo's settings page has "Download from Amazon" (a code to enter on
+Amazon's site, then the wake words of any language, whisper detection, the newer sound detection model). From the PC
+instead — the same sets for every Echo, so one download serves them all:
 
 ```sh
 scripts/artifacts.sh <echo-ip>

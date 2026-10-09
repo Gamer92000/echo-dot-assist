@@ -15,10 +15,9 @@
  *   4. Unpacked into state/artifacts/<staging folder>, checked and readied like a copy from another Echo (artifacts.c);
  *      root installs it (the page's install), which restarts hassmic.
  *
- * The attestation works on biscuit and radar (dha.c); donut's MAP builds a drvV3 token around a certificate instead
- * (not reversed), so there the page says this Echo cannot download itself and points at copying models from another
- * Echo.  Tokens are the account's device credentials: state/davs, mode 600, never in an answer to the page (it is
- * plain HTTP).
+ * The attestation is dha.c's: an RSA-signed drvV1 token on biscuit and radar, a drvV3 one around the Echo's
+ * certificate on donut (Echo Dot 3).  Tokens are the account's device credentials: state/davs, mode 600, never in
+ * an answer to the page (it is plain HTTP).
  *
  * The registration stays until "log out" deregisters it, so the next download needs no code; it shows in the Alexa app
  * as a device under this satellite's name.  Deregistering a *stock* Echo factory-resets it; as a satellite nothing of
@@ -363,7 +362,7 @@ static void idme_read(const char *name, char *out, size_t cap)
 
 static void identity_read(void)
 {
-    char probe[2048], err[160];
+    char probe[4096], err[160];                                 /* a drvV3 token carries the certificate */
     idme_read("serial", idme_serial, sizeof idme_serial);
     idme_read("device_type_id", idme_type, sizeof idme_type);
     idme_read("mac_addr", idme_mac, sizeof idme_mac);
@@ -516,7 +515,7 @@ static void login_run(unsigned mine, const char *dom)
         pthread_mutex_unlock(&lk);
         if (abort) return;                                    /* a newer command takes over */
 
-        char jwt[2048], jerr[160];
+        char jwt[4096], jerr[160];                              /* drvV3: the certificate rides in it */
         if (dha_jwt(idme_type, time(NULL), jwt, sizeof jwt, jerr, sizeof jerr))
         {
             pthread_mutex_lock(&lk);

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Amazon's artifacts downloaded on the Echo itself (src/hassmic/davs.c), against a fake Amazon: one build/hassmic-host
-with the fake attestation HAL of tests/unit (a fixed RSA key) and faked engine attributes.  The login by code pair
-(the code on the page, /auth/register polled with the attestation token in it until the code is "entered", the
-tokens on disk 0600 and never in an answer), the DAVS request with the Echo's own engine ids, the tar.gz download
-(PAX headers and a directory entry skipped, the sound detection model under AED/, sets with two levels of folders as
-whisper and alexa-de-DE have them; deeper refused), the staging checks of artifacts.c,
+with the fake attestation HAL of tests/unit (a fixed RSA key, or donut's EC key with its certificate) and faked engine
+attributes.  The login by code pair (the code on the page, /auth/register polled with the attestation token in it until
+the code is "entered", the tokens on disk 0600 and never in an answer), the DAVS request with the Echo's own engine ids,
+the tar.gz download (PAX headers and a directory entry skipped, the sound detection model under AED/, sets with two
+levels of folders as whisper and alexa-de-DE have them; deeper refused), the staging checks of artifacts.c,
 root's installer, and the deregister (a revoked token refreshed first, so the Echo does not stay on the account).
-A login on another Amazon that is cancelled leaves the registration where it was; a site that is none is refused.  Also an Echo whose attestation does not answer (donut, the PC build): it
-says so and refuses to log in."""
-import base64, gzip, io, json, os, subprocess, sys, tarfile, tempfile, threading, time
+A login on another Amazon that is cancelled leaves the registration where it was; a site that is none is refused.  The
+Echo Dot 3 does it all with its drvV3 token (the certificate in x5c, the fixed cpuid, no "cust"); also an Echo whose
+attestation does not answer at all (the PC build): it says so and refuses to log in."""
+import base64, gzip, io, json, os, re, subprocess, sys, tarfile, tempfile, threading, time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -16,6 +17,7 @@ from webclient import Browser
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 17040
+V3_SN = "G000TEST00000001"            # the drvV3 Echo's serial, what tells its registers apart
 
 
 def check(cond, what):
@@ -27,12 +29,15 @@ check.failed = False
 # ---------------------------------------------------------------- the fake Amazon
 
 def c_array(text, name):
-    import re
     m = re.search(rf"{name}\[\d*\] = {{([0-9,]+)}}", text)
     return bytes(int(x) for x in m.group(1).split(","))
 KEYH = open(f"{ROOT}/tests/unit/dha_hal_key.h").read()
 MOD = c_array(KEYH, "static const unsigned char dha_mod")
 MAC = c_array(KEYH, "static const unsigned char dha_mac")
+PEM = "".join(s.replace("\\r", "\r").replace("\\n", "\n")
+              for s in re.findall(r'"([^"]*)"', re.search(r"dha_cert_pem\[\] =\s*((?:\s*\"[^\"]*\")+)", KEYH).group(1)))
+# what donut's MAP puts in x5c: the PEM's body, markers and line breaks gone
+PEM_BODY = "".join(l for l in PEM.splitlines() if not l.startswith("-----"))
 b64u = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=").decode()
 LONG_NAME = "n" * 58 + ".bin"
 
@@ -106,7 +111,8 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(n) or b"{}")
         if self.path == "/auth/create/codepair":
-            check(body["code_data"]["device_type"] == "A3S5BH2HU6VAYF" and body["code_data"]["device_serial"] == "G000TEST00000000",
+            check(body["code_data"]["device_type"] == "A3S5BH2HU6VAYF"
+                  and body["code_data"]["device_serial"] in ("G000TEST00000000", V3_SN),
                   f"the code pair asked for with this Echo's serial and type: {body['code_data']}")
             self.reply(200, {"public_code": "D4Y7LK", "private_code": "36-char-private-code-xxxxxxxxxx",
                              "secureSessionToken": "sst-1", "polling_interval_in_seconds": 1, "expires_in": AMZ.code_expires})
@@ -121,11 +127,16 @@ class Handler(BaseHTTPRequestHandler):
             if ok:
                 head = json.loads(base64.urlsafe_b64decode(parts[0] + "==="))
                 pay = json.loads(base64.urlsafe_b64decode(parts[1] + "==="))
-                ok = (head["typ"] == "drvV1" and head["alg"] == "PS256" and head["jwk"]["n"] == b64u(MOD)
-                      and head["jwk"]["mac"] == b64u(MAC) and pay["dev"]["dt"] == "A3S5BH2HU6VAYF"
-                      and pay["dev"]["dsn"] == "G000TEST00000000" and pay["cust"]["typ"] == "v1"
-                      and body["registration_data"]["device_type"] == "A3S5BH2HU6VAYF")
-            check(ok, f"every register carries a drvV1 attestation token of this Echo's key: {tok[:40]}…")
+                if body["registration_data"]["device_serial"] == V3_SN:
+                    ok = (head["typ"] == "drvV3" and head["alg"] == "ES256" and head["x5c"] == [PEM_BODY]
+                          and pay["dev"]["dt"] == "A3S5BH2HU6VAYF" and pay["dev"]["cpuid"] == "dfae219fe47947c7"
+                          and pay["dev"]["dsn"] == V3_SN and "cust" not in pay and len(parts[2]) == 86)
+                else:
+                    ok = (head["typ"] == "drvV1" and head["alg"] == "PS256" and head["jwk"]["n"] == b64u(MOD)
+                          and head["jwk"]["mac"] == b64u(MAC) and pay["dev"]["dt"] == "A3S5BH2HU6VAYF"
+                          and pay["dev"]["dsn"] == "G000TEST00000000" and pay["cust"]["typ"] == "v1"
+                          and body["registration_data"]["device_type"] == "A3S5BH2HU6VAYF")
+            check(ok, f"every register carries the attestation token of this Echo's key: {tok[:40]}…")
             if not ok:
                 self.reply(400, {"response": {"error": {"code": "InvalidDevice", "message": "The device information is invalid."}}})
             elif not AMZ.entered:     # what the real Amazon answers until the code is entered (2026-10-06)
@@ -180,12 +191,13 @@ def start_amazon():
 # ---------------------------------------------------------------- the Echo
 
 class Echo:
-    def __init__(self, name, port, with_dha=True):
+    def __init__(self, name, port, with_dha=True, v3=False):
         self.name, self.web, self.api = name, port, port + 100
         self.data = tempfile.mkdtemp()
         self.state = os.path.join(self.data, "state"); os.makedirs(self.state)
         self.idme = os.path.join(self.data, "idme"); os.makedirs(self.idme)
-        for f, v in ("serial", "G000TEST00000000\0"), ("device_type_id", "A3S5BH2HU6VAYF \0"), ("mac_addr", "011122334455\0"):
+        for f, v in ("serial", (V3_SN if v3 else "G000TEST00000000") + "\0"), \
+                    ("device_type_id", "A3S5BH2HU6VAYF \0"), ("mac_addr", "011122334455\0"):
             open(os.path.join(self.idme, f), "w").write(v)
         fake = os.path.join(self.data, "pryon_test")
         with open(fake, "w") as f: f.write('#!/bin/sh\nexit 3\n')          # every set loads
@@ -199,6 +211,9 @@ class Echo:
                         HASSMIC_FAKE_WAKE_ATTRS='{"wakeword_ecids":[1,2,3],"aed_ecids":[7]}')
         if with_dha:
             self.env["HASSMIC_DHA_HAL"] = f"{ROOT}/build/dha_hal_fake.so"
+            if v3:
+                self.env["DHA_FAKE_V3"] = "1"                              # donut's HAL: the EC key and its certificate
+                self.env["DHA_FAKE_DSN"] = V3_SN                           # its own serial, as a real HAL has it
 
     def start(self):
         self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.api), "-n", self.name, "-L",
@@ -353,7 +368,7 @@ def main():
         try: e.stop()
         except Exception: pass
 
-    # an Echo whose attestation does not answer (donut's key builds a token Amazon takes differently, the PC has none)
+    # an Echo whose attestation does not answer at all (the PC build: no HAL)
     e2 = Echo("Echo NoDha", 17052, with_dha=False)
     e2.start()
     try:
@@ -365,6 +380,29 @@ def main():
         check(st == 400 and b"cannot prove" in body, f"and refuses to log in: {json.loads(body).get('error')}")
     finally:
         try: e2.stop()
+        except Exception: pass
+
+    # the Echo Dot 3 (donut): the same page with its drvV3 attestation -- the certificate in x5c
+    AMZ.entered = True
+    e3 = Echo("Echo Dot 3", 17053, v3=True)
+    e3.start()
+    try:
+        b3 = Browser(e3.web)
+        b3.login_with_button(e3.proc)
+        seen3 = []
+        d = davs_of(b3, seen3)
+        check(d and d["dha"] is True and d["state"] == "none", f"the Echo Dot 3 attests itself: {d and d['dha']}")
+        st, _, _ = b3.call("POST", "/api/davs/login", b"de")
+        d = wait_state("registered", b3, seen3)
+        check(st == 200 and d and d["state"] == "registered" and not d["error"],
+              f"donut logs in with its drvV3 token ({d and d['state']}, {d and d['error']!r})")
+        st, _, _ = b3.call("POST", "/api/davs/fetch", b"echo de-DE")
+        d = wait_state("registered", b3, seen3)
+        check(d and d["done"] == "wake:echo-de-DE" and not d["error"],
+              f"and downloads like the others ({d and d['done']}, {d and d['error']!r})")
+        check(os.path.exists(os.path.join(e3.state, "davs")), "its tokens on disk too")
+    finally:
+        try: e3.stop()
         except Exception: pass
 
     if check.failed:

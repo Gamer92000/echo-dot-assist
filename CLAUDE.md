@@ -241,13 +241,15 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   against Python by `tests/unit/web_crypto_test.py` (in `make unit`, needs node). The Echos section copies chosen
   settings to chosen Echos (a matrix of exports), and models.
 - **Amazon downloads** (`davs.c` + `dha.c`): the settings page's "Download from Amazon".  `dha.c` builds the device
-  attestation token `/auth/register` needs (drvV1 JWT signed by Amazon's keymaster through `libacehal_dha.so`,
-  dlopen'd, needs group drmrpc; exactly what `libace_map.so` builds on biscuit and radar — donut's MAP makes a drvV3
-  certificate token instead, not reversed, so there the page refuses the login).  `davs.c` does the code pair login
-  (the code on the page, register polled with the token, tokens in `state/davs` 0600, never sent to the page), asks
-  DAVS with the engine's own compatibility ids (`wake_attributes`), downloads and unpacks the artifact tar.gz (libz),
-  and stages it through artifacts.c.  Works against the real Amazon (biscuit, amazon.de, 2026-10-06; what it answers in
-  docs/re-davs-login.md); the page offers every Amazon site with Alexa (davs.c's list), any of the account's region works.
+  attestation token `/auth/register` needs, in the two shapes Amazon's MAPs make: a drvV1 JWT (biscuit, radar; RSA
+  keymaster through `libacehal_dha.so`, dlopen'd, needs group drmrpc) or donut's drvV3 token around the dhav2
+  certificate (field 0x203 of the same HAL; EC key in the TEE — `/dev/trustzone` is system:drmrpc and the cert file
+  keystore:keystore, hence drmrpc,keystore in donut's DAEMON_GROUPS), whichever the HAL's key parses as.  `davs.c` does the code pair login (the code on the
+  page, register polled with the token, tokens in `state/davs` 0600, never sent to the page), asks DAVS with the
+  engine's own compatibility ids (`wake_attributes`), downloads and unpacks the artifact tar.gz (libz), and stages it
+  through artifacts.c.  Works against the real Amazon (biscuit, amazon.de, 2026-10-06; what it answers in
+  docs/re-davs-login.md, which also has the drvV3 analysis); donut's drvV3 path is verified against the fake Amazon
+  only so far.  The page offers every Amazon site with Alexa (davs.c's list), any of the account's region works.
 - **Artifacts** (`artifacts.c`): Amazon's models (`wake:<name>` = `models/<name>/`, `sound` = `aed/`, `whisper`): files
   plus two levels of folders (`whisper_components/`, `BDPGeneratedFiles/`, `nttfusionconfig/ntt_conv/`; a file's name is then its path), listed
   with a digest (BLAKE2b-256 over name, size, content per file), read and written in pieces (`ART_CHUNK_MAX`) over

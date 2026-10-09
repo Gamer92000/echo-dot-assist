@@ -51,7 +51,7 @@ Three engines, picked under "Wake word" on the [settings page](#settings-page):
 ### Amazon's wake words
 
 "Alexa" comes with the firmware. Others ("Echo", "Computer", …) only Amazon hands out: "Download from Amazon" on the
-settings page (not on the Echo Dot 3), `scripts/artifacts.sh` from the PC (it registers the Echo to an Amazon account
+settings page, `scripts/artifacts.sh` from the PC (it registers the Echo to an Amazon account
 for a few minutes and undoes it), or "Copy models" from another Echo. Pick one in Home Assistant's wake word select. The same word in two languages
 shows with its language and region ("Computer (de-DE)", "Computer (en-US)"). Only the word picked wakes the Echo:
 Amazon's English (US) "Computer", "Amazon" and "Ziggy" are one model that also knows the others and "Hey Disney".
@@ -330,8 +330,8 @@ the reason and what to do.
 - **Copy models**: wake words, microWakeWord models, whisper and sound detection models, Echo to Echo. A wake word set
   is tried on the receiving Echo's engine first; each Echo that got something restarts its satellite once.
 - **Download from Amazon**: wake words, whisper detection, the newer sound detection model, fetched on the Echo itself.
-  Sign in with a code you enter on your Amazon site, tick what you want. Not on the Echo Dot 3 (its newer attestation
-  to Amazon is not reversed): download on another Echo, or with `scripts/artifacts.sh`, and copy.
+  Sign in with a code you enter on your Amazon site, tick what you want. If an Echo's attestation key ever refuses,
+  download on another Echo, or with `scripts/artifacts.sh`, and copy.
 
 **Export / Import**: `hassmic-settings.conf` (name=value lines, without name, keys and pairings). Import applies it to
 this Echo or another, or use it as a preset for the next install (`scripts/setup.sh --preset <file>`).

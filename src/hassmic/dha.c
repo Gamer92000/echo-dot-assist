@@ -1,16 +1,31 @@
 /*
  * Device attestation (DHA): the token an Echo signs with its own key so that Amazon's /auth/register takes the Echo's
  * device type.  Without it the registration answers 400 InvalidDevice even once the code was entered (Echo Dot 2,
- * 2026-10-06; docs/re-davs-login.md).  What MAP builds (libace_map.so map_registration_create_dha_jwt, biscuit and
- * radar NS65741), byte for byte:
+ * 2026-10-06; docs/re-davs-login.md).  Two shapes, and the HAL's key says which one this Echo's MAP builds: an RSA
+ * keymaster key means drvV1 (biscuit, radar), the EC dhav2 key means drvV3 around a certificate (donut).
+ *
+ * What MAP builds (libace_map.so map_registration_create_dha_jwt, biscuit and radar NS65741), byte for byte:
  *   header   {"typ":"drvV1","alg":"PS256","jwk":{"kty":"RSA","e":"65537","n":"<modulus>","mac":"<field 0x204>"}}
  *            (e as written, in decimal; n the 256-byte modulus; both base64url without padding, as all parts)
  *   payload  {"dev":{"dt":"<device type>","cpuid":"<field 1>","dsn":"<field 0x101>","typ":"v1"},
  *            "dat":"%Y-%m-%dT%H:%MZ","cust":{"typ":"v1"}}
  *   token    b64url(header) "." b64url(payload) "." b64url(RSASSA-PSS over SHA-256 of the first two, salt 32)
+ *
+ * donut's MAP (donut_puffin NS65741, read the same way) builds a drvV3 token instead, around the attestation
+ * certificate the Echo fetched from Amazon when it was provisioned (/persist/dha_certificate.pem, HAL field 0x203):
+ *   header   {"typ":"drvV3","alg":"ES256","x5c":["<the PEM's body, CR and LF dropped>"]}
+ *   payload  {"dev":{"dt":"<device type>","cpuid":"dfae219fe47947c7","dsn":"<field 0x101>","typ":"v1"},
+ *            "dat":"%Y-%m-%dT%H:%MZ"}   (no "cust"; the cpuid a literal of donut's MAP, every Echo Dot 3 the same)
+ *   token    b64url(header) "." b64url(payload) "." b64url(R || S, each left-padded to 32 bytes big-endian)
+ *            from the DER ECDSA signature the HAL returns over SHA-256 of the first two parts (MAP splits it with
+ *            mbedtls_asn1_get_mpi; the JWS raw form).  The certificate rides in the token, so it runs ~1.9 kB.
+ *
  * The key is Amazon's keymaster in the TEE (libacehal_dha.so -> /system/lib/hw/amzn_dha.<soc>.so -> /dev/trustzone);
  * the private half never leaves it, the HAL signs a hash we give it.  Its session needs group drmrpc: as puffin
  * without it, "Failed to open DHA session: Non-specific cause" (root, system, keystore, puffin+drmrpc all work).
+ * donut's TEE and certificate sit behind two more groups its DAEMON_GROUPS carry (as puffinmrmd's do):
+ * drmrpc (1026) for /dev/trustzone, keystore (1017) for /persist/dha_certificate.pem (0660 keystore:keystore;
+ * without it the HAL answers field 0x203 with an error, measured on a Dot 3).
  * MAP dates the token with local time and an appended Z; the Echos run on GMT.  The date is the caller's, not the
  * clock's: an Echo whose clock never synced (biscuit on 2026-10-06 said a day earlier) would sign a stale one.
  * Loaded with dlopen: donut, biscuit and radar each have their own HAL build, and the PC build has none.
@@ -28,6 +43,7 @@ enum
 {
     F_CPUID = 1,
     F_DSN = 0x101,
+    F_CERT = 0x203,
     F_MAC = 0x204
 };
 
@@ -144,13 +160,63 @@ static int modulus(const uint8_t *k, size_t klen, const uint8_t **n, size_t *nle
 }
 
 /* MAP b64url-encodes the header piecewise, each piece cut to a multiple of 3 bytes with the rest carried over, which
- * comes out as one unpadded encode of the whole string (map_base64_url_encode: A-Za-z0-9-_, never '=').  What it signs
- * is SHA-256 over b64url(header) "." b64url(payload) (_registration_sign_token), the HAL does the PSS itself.
- * donut's MAP builds none of this: it makes a drvV3/ES256 token around a certificate from HAL field 0x203 (payload
- * without "cust"), not reversed.  There dha_jwt fails, and davs.c says this Echo cannot log in to Amazon.
+ * comes out as one unpadded encode of the whole string (map_base64_url_encode: A-Za-z0-9-_, never '='; donut's is the
+ * same).  What it signs is SHA-256 over b64url(header) "." b64url(payload) (_registration_sign_token), the HAL does
+ * the PSS (or, on donut, the ECDSA) itself.
  */
 
-int dha_jwt(const char *dt, time_t when, char *out, size_t cap, char *err, size_t errsz)
+/* the needle MAP's strstr uses, and how far it skips: the body is what stands between the markers */
+#define PEM_BEGIN "-----BEGIN CERTIFICATE-----"        /* 27 characters */
+#define PEM_BEGIN_LEN 27
+#define PEM_END "-----END CERTIFICATE-----"
+
+static const uint8_t *findb(const uint8_t *hay, size_t n, const char *needle)
+{
+    size_t l = strlen(needle);
+    if (n < l)
+        return NULL;
+    for (size_t i = 0; i <= n - l; i++)
+        if (!memcmp(hay + i, needle, l))
+            return hay + i;
+    return NULL;
+}
+
+/* MAP splits the DER signature the HAL returns into its two INTEGERs (mbedtls_asn1_get_mpi) and writes each
+ * left-padded big-endian into 32 bytes: the JWS raw form R || S. */
+static int der_rs(const uint8_t *sig, size_t n, uint8_t rs[64])
+{
+    size_t len;
+    const uint8_t *p = sig, *end = sig + n, *q;
+    if (der(&p, end, 0x30, &len) || p + len != end)             /* one SEQUENCE over the whole thing */
+        return -1;
+    end = p + len;
+    for (int i = 0; i < 2; i++)
+    {
+        if (der(&p, end, 0x02, &len) || !len || len > 33)
+            return -1;
+        q = p;
+        p += len;
+        if (len == 33)                                          /* DER's sign byte: R and S stay below 2^256 */
+        {
+            if (*q)
+                return -1;
+            q++;
+            len--;
+        }
+        while (len > 1 && !*q)                                  /* what mbedtls_mpi_size would not count */
+        {
+            q++;
+            len--;
+        }
+        if (len > 32)
+            return -1;
+        memset(rs + 32 * i, 0, 32 - len);
+        memcpy(rs + 32 * i + (32 - len), q, len);
+    }
+    return p == end ? 0 : -1;
+}
+
+static int jwt_v1(const char *dt, time_t when, char *out, size_t cap, char *err, size_t errsz)
 {
     static const char head[] = "{\"typ\":\"drvV1\",\"alg\":\"PS256\",\"jwk\":{\"kty\":\"RSA\",\"e\":\"65537\",\"n\":\"";
     static const char mid[] = "\",\"mac\":\"";
@@ -165,13 +231,6 @@ int dha_jwt(const char *dt, time_t when, char *out, size_t cap, char *err, size_
     const uint8_t *mod;
     size_t modlen;
     uint8_t hash[32];
-    static int opened;
-
-    if (load(err, errsz))
-        return -1;
-    if (!opened && hal.open())
-        return say(err, errsz, "the attestation key would not open (hassmic needs the drmrpc group)");
-    opened = 1;                     /* one session for the process; the PC build has none and fails at load() */
 
     if (hal.pubkey(&pub, &publen) || !pub || modulus(pub, publen, &mod, &modlen) || modlen != 256
         || hal.field(F_MAC, &mac, &maclen) || !mac || !maclen || maclen > 74        /* MAP's b64 of it holds 100 bytes */
@@ -210,6 +269,83 @@ int dha_jwt(const char *dt, time_t when, char *out, size_t cap, char *err, size_
 bad:
     free(pub); free(mac); free(sig);
     return say(err, errsz, "the attestation key did not answer as MAP expects it");
+}
+
+static int jwt_v3(const char *dt, time_t when, char *out, size_t cap, char *err, size_t errsz)
+{
+    static const char head[] = "{\"typ\":\"drvV3\",\"alg\":\"ES256\",\"x5c\":[\"";
+    static const char tail[] = "\"]}";
+    static const char pfmt[] = "{\"dev\":{\"dt\":\"%s\",\"cpuid\":\"dfae219fe47947c7\",\"dsn\":\"%s\",\"typ\":\"v1\"},"
+                               "\"dat\":\"%s\"}";
+    char dsn[96] = "", date[32], p[300];
+    uint8_t *cert = NULL, *sig = NULL, rs[64], hash[32];
+    char *h = NULL, *hb = NULL, *pb = NULL;
+    uint32_t certlen = 0, siglen = 0;
+    const uint8_t *b, *e;
+    struct tm tm;
+    size_t hl, bl = 0, pl, n;
+
+    if (hal.field(F_CERT, &cert, &certlen) || !cert || certlen > 8192
+        || !(b = findb(cert, certlen, PEM_BEGIN)) || !(e = findb(cert, certlen, PEM_END)) || e < b + PEM_BEGIN_LEN
+        || text_field(F_DSN, dsn, sizeof dsn)
+        || !localtime_r(&when, &tm) || !strftime(date, sizeof date, "%Y-%m-%dT%H:%MZ", &tm))
+        goto bad;
+    b += PEM_BEGIN_LEN;
+    if (!(h = malloc(strlen(head) + certlen + strlen(tail) + 1)))
+        goto bad;
+    hl = (size_t)snprintf(h, strlen(head) + certlen + strlen(tail) + 1, "%s", head);
+    for (const uint8_t *q = b; q < e; q++)           /* the body between the markers, CR and LF dropped (MAP's loop) */
+        if (*q != '\r' && *q != '\n')
+            h[hl + bl++] = (char)*q;
+    hl += (size_t)snprintf(h + hl + bl, strlen(tail) + 1, "%s", tail) + bl;
+    pl = (size_t)snprintf(p, sizeof p, pfmt, dt, dsn, date);
+    hb = malloc(4 * ((hl + 2) / 3) + 1);
+    pb = malloc(4 * ((pl + 2) / 3) + 1);
+    if (!hb || !pb)
+        goto bad;
+    b64_encode(h, hl, hb, 1, 0);
+    b64_encode(p, pl, pb, 1, 0);
+
+    n = strlen(hb) + 1 + strlen(pb);                 /* the signing input, as in drvV1 */
+    if (n + 1 + (64 + 2) / 3 * 4 + 1 > cap)          /* the raw R || S, 64 bytes, plus its dot */
+    {
+        free(cert); free(h); free(hb); free(pb);
+        return say(err, errsz, "token longer than the caller's buffer");
+    }
+    snprintf(out, cap, "%s.%s", hb, pb);
+    sha256(out, n, hash);
+    if (hal.sign(hash, sizeof hash, &sig, &siglen) || !sig || siglen > 72 || der_rs(sig, siglen, rs))
+        goto bad;
+    out[n] = '.';
+    b64_encode(rs, sizeof rs, out + n + 1, 1, 0);
+    free(cert); free(sig); free(h); free(hb); free(pb);
+    return 0;
+bad:
+    free(cert); free(sig); free(h); free(hb); free(pb);
+    return say(err, errsz, "the attestation key did not answer as MAP expects it");
+}
+
+int dha_jwt(const char *dt, time_t when, char *out, size_t cap, char *err, size_t errsz)
+{
+    static int opened;
+    uint8_t *pub = NULL;
+    uint32_t publen = 0;
+    const uint8_t *mod;
+    size_t modlen;
+    int v1;
+    if (load(err, errsz))
+        return -1;
+    if (!opened && hal.open())
+        return say(err, errsz, "the attestation key would not open (hassmic needs the drmrpc group)");
+    opened = 1;                     /* one session for the process; the PC build has none and fails at load() */
+
+    /* which token this Echo's MAP builds, asked of the key: the RSA keymaster of biscuit and radar (a 256-byte
+     * modulus to parse) makes drvV1; the EC dhav2 key of donut makes drvV3 (biscuit's and radar's HALs have the
+     * certificate too, so its presence would not tell them apart -- their MAPs do not use it) */
+    v1 = !hal.pubkey(&pub, &publen) && pub && !modulus(pub, publen, &mod, &modlen) && modlen == 256;
+    free(pub);
+    return v1 ? jwt_v1(dt, when, out, cap, err, errsz)
+              : jwt_v3(dt, when, out, cap, err, errsz);
 }
 
 int dha_serial(char *out, size_t cap)
