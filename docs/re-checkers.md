@@ -184,11 +184,19 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
 - [ ] On the device, security-relevant: the invariant (Amazon's daemons only local addresses, the updater never out)
   holds with netd running, netd's own changes to OUTPUT and INPUT included; DHCP renewals and mDNS pass.
 - [x] Wi-Fi join at install and the settings page's "Switch network": through WifiService, with
-  `scripts/device/wifictl.dex` (`tools/mkwifictl.py`, checked by `tests/fake_web_wifi.py` against a fake
-  framework). What stock's own setup apps do (a WifiConfiguration through the IWifiManager binder), from root as
-  `CLASSPATH=…/wifictl.dex app_process / Wifictl …`; reflection only, so the dex is free of android.* type
-  references. On a device still open: whether it really connects and gets its address (the fake framework says so),
-  and the screen (`am start -a android.settings.WIFI_SETTINGS`) stays the fallback.
+  `scripts/device/wifictl.dex` (`tools/mkwifictl.py`). What stock's own setup apps do (a WifiConfiguration through
+  the IWifiManager binder), from root as `CLASSPATH=…/wifictl.dex app_process / Wifictl …`; reflection only, so
+  the dex is free of android.* type references. Checked on the PC, since qemu-user cannot run the firmware's ART
+  (dalvikvm32 dies in its start-up): `mkwifictl.py --check` runs a type-flow check over every method, the subset of
+  ART's method verifier the dex uses; `--framework=firmware/checkers/rootfs` resolves every class, method and field
+  it names, and every call its reflection makes, in the dex files of 8149's `boot*.oat` (KeyMgmt.WPA_PSK's value
+  too); `tests/unit/wifictl_run.py` interprets the dex against a fake WifiService, verb by verb; and
+  `tests/fake_web_wifi.py` drives wifi.sh against a fake framework. dexdump alone checks structure only: the first
+  dex passed it with wrong opcodes, parameters read from the wrong registers and `java/lang/List`, and would not have
+  loaded. WifiService keeps one network per name and security, so an add of a saved name changes that entry in
+  place: wifi.sh reads the stored keys first (`wifictl keys`, getPrivilegedConfiguredNetworks) and puts the old one
+  back when the switch fails. On a device still open: whether it really connects and gets its address, and the
+  screen (`am start -a android.settings.WIFI_SETTINGS`) stays the fallback.
 
 **Buttons, lights, sounds**
 - [ ] No action button: the settings page's login (`web_approve()` in `on_action`) and opening adb over Wi-Fi from the

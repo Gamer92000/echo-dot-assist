@@ -223,6 +223,8 @@ unit:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_crypto_test.py; else echo "web crypto: node missing, skipped"; fi
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/mww_test.c src/hassmic/mww_features.c src/hassmic/mww_model.c -lm -o build/mww_test
 	.venv/bin/python tests/unit/mww_ref.py build/mww_test
+	.venv/bin/python tools/mkwifictl.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)
+	.venv/bin/python tests/unit/wifictl_run.py
 
 # what the daemon reports, and what bundles are called (ota-push.sh, CI)
 version:

@@ -38,6 +38,7 @@ A() { [ -f $WIFICTL ] || { echo "wifi: no $WIFICTL" >&2; return 1; }
       CLASSPATH=$WIFICTL app_process / Wifictl "$@"; }
 Q() { if android; then A "$@"; else W "$@"; fi; }
 aok() { [ "$(A "$@" | tail -n 1)" = OK ]; }
+TAB=$(printf '\t')
 aval() { A "$@" | tail -n 1; }
 # how long to wait: for the scan, to get on the new network, for an address and the router behind it, to get back
 SCAN_SECS=${WIFI_SCAN_SECS:-5} JOIN_SECS=${WIFI_JOIN_SECS:-30} ADDR_SECS=${WIFI_ADDR_SECS:-30} BACK_SECS=${WIFI_BACK_SECS:-45}
@@ -178,13 +179,16 @@ join() {
 # so the Dots' "nothing on disk until it worked" has no equivalent; what stays is the try-out.  The new network
 # goes in and is switched to; only when it comes up with an address of its own do the networks saved before go,
 # and on any failure the new one is removed and the old ones enabled again, so a reboot lands on the old ones
-# either way.  Android runs its DHCP itself once its connect lands (there is no dhcpcd): the address on the
-# interface is the lease.  The gateway, to tell a silent router from none at all, comes from /proc/net/route
+# either way.  WifiService keeps one network per name and security: an add of a name saved already changes that
+# entry in place, password included (the same network typed again, a mistyped password), so the keys are read
+# first (wifictl keys: the framework hands root the stored ones) and that entry gets its own back, not removed.
+# Android runs its DHCP itself once its connect lands (there is no dhcpcd): the address on the interface is the
+# lease.  The gateway, to tell a silent router from none at all, comes from /proc/net/route
 # (hex, little-endian; no awk on the Echo), pinged once to fill the ARP cache as the Dots' online() does.
 agateway() {
     g=$(sed -n "s/^$WLAN[[:space:]]\{1,\}00000000[[:space:]]\{1,\}\([0-9A-Fa-f]\{8\}\).*/\1/p" $ROUTE 2>/dev/null)
     [ -n "$g" ] || return 0
-    gw=$(printf '%d.%d.%d.%d' $((0x${g:6:2})) $((0x${g:4:2})) $((0x${g:2:2})) $((0x${g:0:2})))
+    gw=$(printf '%d.%d.%d.%d' $((16#${g:6:2})) $((16#${g:4:2})) $((16#${g:2:2})) $((16#${g:0:2})))
     ping -c 1 -W 1 $gw > /dev/null 2>&1
     grep "^$gw " $ARP 2>/dev/null | grep -q " 0x[26] .* $WLAN\$"
 }
@@ -195,7 +199,11 @@ aonline() {
 }
 aback() {
     failed=$why
-    [ -n "$n" ] && A remove $n > /dev/null
+    if [ -z "$n" ]; then :
+    elif [ -z "$replaced" ]; then A remove $n > /dev/null
+    elif [ -z "$oldkey" ] || [ "$oldkey" = "*" ]; then say "!! $name was saved before, and its old password could not be read: it keeps the new one"
+    elif [ "$oldkey" != - ] && [ "$(aval add $ssid "$oldkey")" != "$n" ]; then say "!! $name was saved before, and its old password could not be put back"
+    fi
     for i in $on; do [ "$i" = "$old" ] || aok enable $i keep; done
     was=
     if [ -n "$old" ] && aok enable $old keep && connected $BACK_SECS $old; then
@@ -210,9 +218,12 @@ ajoin() {
     cur=$(A status)
     old= ; [ "$(field "$cur" wpa_state)" = COMPLETED ] && old=$(field "$cur" id)
     on=$(A list_networks | sed -n 's/^\([0-9][0-9]*\)[[:space:]].*/\1/p')
+    keys=$(A keys)                                      # never printed: what goes back if the add replaces one
     n=$(aval add $ssid $psk); case $n in ''|*[!0-9]*) n=;; esac
     why=notfound
     if [ -z "$n" ]; then why=bad; say "!! WifiService did not add the network"; printf '%s\n' "$id failed $ssid $why $(field "$cur" ssid)" | put result; return; fi
+    replaced= oldkey=
+    case " $(echo $on) " in *" $n "*) replaced=1; oldkey=$(printf '%s\n' "$keys" | sed -n "s/^$n$TAB//p");; esac
     name=$(aval name $ssid)
     say "switching to $name, from $(field "$cur" ssid | sed 's/^"//;s/"$//'); nothing forgotten until it works"
     aok select $n || { why=bad; aback; return; }

@@ -32,7 +32,7 @@ unlocked bootloader and TWRP (written to `recovery` and `swdl`). These files go 
 | `amonet-checkers-v2.0.1.zip` | the XDA thread | `770324a8ed5ab922c0383f8ba072d70fc0190cc2c879f12f67b8d6cfa3ad30ee` |
 | `update-kindle-checkers-NS65741_user_8149_0013222532484.bin` | Amazon | `f96fcfa1240f809711fcf855ce7742762437e4f37546153153635c096773cfa3` |
 | `boot-root.zip` | the XDA thread (one `boot-root.img`, see "Root" below; not used by the install) | `b2474113a1f3a4a8de6728ff72774761051945641e1a5ffa78ee25c2b19a809e` |
-| `magiskpolicy32` | `patch/magiskpolicy32` of donut's `boot-root.zip` ([its README](../donut/README.md)); the guided setup unpacks it, a copy under `firmware/donut/` serves | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
+| `magiskpolicy32` | `patch/magiskpolicy32` of donut's `boot-root.zip` ([its README](../donut/README.md)); the guided setup takes it from `firmware/donut/boot-root.zip` (where donut's setup keeps it, and where it asks for it) | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
 
 The post names no firmware version. The pinned one fits: the `lk.bin` and `tz.img` inside amonet-checkers v2.0.1 are
 byte-identical to those of 8149 (only its `preloader.img` differs).
@@ -104,7 +104,7 @@ lock and the Wi-Fi join, the install.  Wi-Fi joins through Android's WifiService
 (`tools/mkwifictl.py`), called as `CLASSPATH=…/wifictl.dex app_process / Wifictl <verb>`: the same
 `android.net.wifi.WifiConfiguration` stock's own setup apps put in, from root, no touchscreen and no Alexa app.  It
 downloads the qemu-arm it needs into `toolchain/` when the PC has none, and takes `magiskpolicy32` out of donut's
-`boot-root.zip` on its own.  The steps written out follow, for doing them one by one
+`boot-root.zip` (`firmware/donut/`) on its own.  The steps written out follow, for doing them one by one
 (`scripts/install-boot.sh`, from `scripts/install-system.sh`):
 
 1. **Boot image, on the PC.** `boot.img` out of the firmware `.bin` (checked against `BOOT_SHA256`), its `sepolicy`
@@ -129,8 +129,8 @@ DEVICE=checkers scripts/install-system.sh "Kitchen"
 ```
 
 `DEVICE=checkers` is needed while it is in TWRP: there the model is not asked from the Echo. Wi-Fi:
-`scripts/wifi-join.sh` joins through WifiService on this model (wifictl.dex above; SSID and passphrase go in as
-hex, so nothing of either passes a shell).  Should that fail on a device, the screen is the way around: `adb shell
+`scripts/wifi-join.sh` joins through WifiService on this model (wifictl.dex above; the SSID goes in as hex and the
+passphrase as its PSK, made on the PC, so nothing of either passes a shell).  Should that fail on a device, the screen is the way around: `adb shell
 am start -a android.settings.WIFI_SETTINGS` once installed (the egress lock is up from `on boot`) — not tried
 either.  Do not join before the install: Fire OS would reach Amazon.  The settings page's network switch
 (`scripts/device/wifi.sh`) uses the same wifictl calls.

@@ -1511,6 +1511,11 @@ Run in this order. Each step says what it proves.
       guard refused it), otatool_test.sh, fake_ha_esphome.py.  Wi-Fi without the touchscreen (2026-10-10):
       `scripts/device/wifictl.dex` (tools/mkwifictl.py; reflection-only, wpa_cli-shaped answers) puts a
       WifiConfiguration in through the IWifiManager binder as root — wifi.sh's switch and wifi-join.sh's setup join
-      both use it, checked end to end against a fake framework (fake_web_wifi.py, both worlds), and the firmware's
-      own dexdump validates the dex.  `devices/checkers/setup.sh`: every step walks in a dry run.  Open items, one
+      both use it, checked end to end against a fake framework (fake_web_wifi.py, both worlds).  The first dex passed
+      the firmware's dexdump but would not have loaded (dexdump checks structure, not types: int aget/sget opcodes,
+      parameters read from the low registers, lit8 opcodes off by 8, java/lang/List and java/lang/io/PrintStream,
+      Class.forName("int"), KeyMgmt bit 0 = NONE, the page's PSK quoted as a passphrase).  Now: a type-flow check of
+      every method in mkwifictl.py, `--framework` against 8149's boot*.oat dex files (every reference and reflected
+      call, KeyMgmt.WPA_PSK = 1), tests/unit/wifictl_run.py interpreting the dex against a fake WifiService (make
+      unit); qemu-user cannot run the firmware's ART (dalvikvm32 dies in its start-up), so a device is the rest.  `devices/checkers/setup.sh`: every step walks in a dry run.  Open items, one
       list: docs/re-checkers.md "What a port needs".

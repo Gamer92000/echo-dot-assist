@@ -10,7 +10,9 @@ What changed for people using the Echo, newest first. Details and measurements a
   (`scripts/setup.sh checkers`) runs amonet's unlock, flashes the rooted boot image, locks the egress down and joins
   Wi-Fi before the Echo ever talks to Amazon, and installs — the steps it walks in a dry run, nothing of it tried on
   a real Show yet. The settings page's network switch works the same way (checked end to end against a fake
-  WifiService in `tests/fake_web_wifi.py`), and checkers is back in CI's build matrix. Details:
+  WifiService in `tests/fake_web_wifi.py`; the dex itself is type-checked, checked against the firmware's own
+  framework and run in an interpreter on the PC); a mistyped password for a network the Echo knows puts its old one
+  back. Updates carry the dex too, and checkers is back in CI's build matrix. Details:
   [devices/checkers](devices/checkers/README.md).
 
 ## 2026-10-09

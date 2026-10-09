@@ -158,6 +158,8 @@ def wifictl(w, args):
                 lines.append("ip_address=%s" % air["ip"])
             return "\n".join(lines)
         return wpa(w, args)
+    if verb == "keys":                                          # getPrivilegedConfiguredNetworks: the stored keys
+        return "\n".join("%d\t%s" % (n["id"], n.get("psk") or "-") for n in w["networks"])
     if verb == "add":
         ssid = value(args[1])
         for n in w["networks"]:
