@@ -2,18 +2,20 @@
 # Wi-Fi for the settings page (src/hassmic/wifi.c), as root: hassmic may not talk to wpa_supplicant and faces the
 # network, so it only leaves a request in its state/, which main.sh's watcher hands to this script.
 #   wifi.sh take [STATE OUT]     the request state/wifi-request: "scan <id>" or "join <id> <ssid hex> <psk hex|->"
-#   wifi.sh status [STATE OUT]   what wpa_supplicant says now (main.sh netwatch, when the link comes up)
+#   wifi.sh status [STATE OUT]   what the Wi-Fi says now (main.sh netwatch, when the link comes up)
 #   wifi.sh clean [STATE OUT]    at the firewall service's start: a request from before is nobody's, a lock of a run
 #                                that is gone is nobody's either
 #   wifi.sh forget [STATE OUT]   a factory reset (main.sh): every saved network goes, the Echo leaves the one it is on
 #   wifi.sh saved                prints how many networks are saved (netwatch: none = nothing for wifisvc to bring up)
 # Answers go to OUT (/data/local/hassmic/wifi: root's, the daemon only reads): status, scan, result; lock/ while a run
 # works.  wifi.c says what is in them.
-# A switch changes nothing on disk until it worked: the new network is added and selected in wpa_supplicant only, and
-# wpa_supplicant.conf is written once the Echo is on it with an address and its router answers.  Otherwise the new
-# network goes again and the Echo goes back to the one it was on; a reboot in between finds the old configuration too.
-# Once it works, the networks saved before are forgotten: the Echo is on the new one only, and does not wander back to
-# an old one (its key stays nowhere either).  Until then they stay, for the way back.
+# Two worlds, one script: the Dots' wpa_supplicant and checkers' WifiService (the block at ROUTE below says which
+# is which).  A switch changes nothing that stays until it worked: on the Dots the new network is added and selected
+# in wpa_supplicant only, and wpa_supplicant.conf is written once the Echo is on it with an address and its router
+# answers; on checkers the framework saves as it goes, so the try-out ends with the new network removed and the old
+# ones enabled again instead.  Either way the Echo goes back to the one it was on, and a reboot in between finds the
+# old networks too.  Once it works, the networks saved before are forgotten: the Echo is on the new one only, and
+# does not wander back to an old one (its key stays nowhere either).  Until then they stay, for the way back.
 umask 022
 NL='
 '
@@ -23,6 +25,20 @@ CONF="${0%/*}/device.conf"
 WLAN=${WLAN:-wlan0}
 WPA_SOCKETS=${WPA_SOCKETS:-/data/misc/wifi/sockets}
 ARP=${WIFI_ARP:-/proc/net/arp}
+ROUTE=${WIFI_ROUTE:-/proc/net/route}
+# Two worlds: the Dots' wpa_supplicant (W below) and, on a model with INSTALL=boot (checkers), Android's
+# framework, which owns the networks: no dhcpcd exists (DHCP runs when WifiService provisions a network it
+# knows) and it re-syncs wpa_supplicant from its own WifiConfigStore on every start, so wpa_supplicant cannot
+# be driven directly.  There everything goes through wifictl.dex next to this script (tools/mkwifictl.py):
+# the same WifiService binder calls stock's own setup apps make, from root, with wpa_cli's output shape.  Q is
+# whichever client this model's world has.
+android() { [ "$INSTALL" = boot ]; }
+WIFICTL="${0%/*}/wifictl.dex"
+A() { [ -f $WIFICTL ] || { echo "wifi: no $WIFICTL" >&2; return 1; }
+      CLASSPATH=$WIFICTL app_process / Wifictl "$@"; }
+Q() { if android; then A "$@"; else W "$@"; fi; }
+aok() { [ "$(A "$@" | tail -n 1)" = OK ]; }
+aval() { A "$@" | tail -n 1; }
 # how long to wait: for the scan, to get on the new network, for an address and the router behind it, to get back
 SCAN_SECS=${WIFI_SCAN_SECS:-5} JOIN_SECS=${WIFI_JOIN_SECS:-30} ADDR_SECS=${WIFI_ADDR_SECS:-30} BACK_SECS=${WIFI_BACK_SECS:-45}
 
@@ -36,7 +52,7 @@ put() { cat > $O/$1.$$ && chmod 644 $O/$1.$$ && mv $O/$1.$$ $O/$1; }       # wha
 hex() { case $1 in ''|*[!0-9a-f]*) return 1;; esac; [ ${#1} -le $2 ] && [ $(( ${#1} % 2 )) = 0 ]; }
 field() { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }
 
-status() { W status | grep -E '^(wpa_state|id|ssid|ip_address|freq)=' | put status; }
+status() { Q status | sed 's/^ssid="\(.*\)"$/ssid=\1/' | grep -E '^(wpa_state|id|ssid|ip_address|freq)=' | put status; }    # WifiInfo quotes the name
 
 # One run at a time.  The lock names its process and the boot, so that one left by a run that died is known as such.
 boot_id() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }
@@ -48,9 +64,9 @@ lock() {
 }
 
 scan() {
-    W scan > /dev/null                                  # FAIL-BUSY if one runs already: its results are as good
+    Q scan > /dev/null                                  # FAIL-BUSY if one runs already: its results are as good
     sleep $SCAN_SECS
-    { echo "id $id"; W scan_results | grep '^[0-9a-f][0-9a-f]:'; } | put scan
+    { echo "id $id"; Q scan_results | grep '^[0-9a-f][0-9a-f]:'; } | put scan
     status
 }
 
@@ -92,7 +108,7 @@ connected() {
     t=0
     while [ $t -lt $1 ]; do
         sleep 1; t=$((t + 1))
-        st=$(W status)
+        st=$(Q status)
         case "$NL$st$NL" in *"${NL}wpa_state=COMPLETED$NL"*) [ "$(field "$st" id)" = "$2" ] && return 0;; esac
         case "$st" in
             *wpa_state=4WAY_HANDSHAKE*|*wpa_state=GROUP_HANDSHAKE*) why=wrongkey;;
@@ -158,18 +174,80 @@ join() {
     echo "$id ok $ssid $ip $saved" | put result
 }
 
+# --- checkers: the switch through WifiService.  The framework saves every change at once (its WifiConfigStore),
+# so the Dots' "nothing on disk until it worked" has no equivalent; what stays is the try-out.  The new network
+# goes in and is switched to; only when it comes up with an address of its own do the networks saved before go,
+# and on any failure the new one is removed and the old ones enabled again, so a reboot lands on the old ones
+# either way.  Android runs its DHCP itself once its connect lands (there is no dhcpcd): the address on the
+# interface is the lease.  The gateway, to tell a silent router from none at all, comes from /proc/net/route
+# (hex, little-endian; no awk on the Echo), pinged once to fill the ARP cache as the Dots' online() does.
+agateway() {
+    g=$(sed -n "s/^$WLAN[[:space:]]\{1,\}00000000[[:space:]]\{1,\}\([0-9A-Fa-f]\{8\}\).*/\1/p" $ROUTE 2>/dev/null)
+    [ -n "$g" ] || return 0
+    gw=$(printf '%d.%d.%d.%d' $((0x${g:6:2})) $((0x${g:4:2})) $((0x${g:2:2})) $((0x${g:0:2})))
+    ping -c 1 -W 1 $gw > /dev/null 2>&1
+    grep "^$gw " $ARP 2>/dev/null | grep -q " 0x[26] .* $WLAN\$"
+}
+aonline() {
+    ip=$(ifconfig $WLAN 2>/dev/null | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p')
+    [ -n "$ip" ] || return 1
+    agateway
+}
+aback() {
+    failed=$why
+    [ -n "$n" ] && A remove $n > /dev/null
+    for i in $on; do [ "$i" = "$old" ] || aok enable $i keep; done
+    was=
+    if [ -n "$old" ] && aok enable $old keep && connected $BACK_SECS $old; then
+        was=$(field "$st" ssid | sed 's/^"//;s/"$//')       # WifiInfo quotes the name; wpa_cli does not
+        say "back on $was"
+    else say "!! not back on the previous network either: it is still saved, a reboot rejoins it"; fi
+    status
+    printf '%s\n' "$id failed $ssid $failed $was" | put result
+}
+ajoin() {
+    echo "$id switching $ssid" | put result
+    cur=$(A status)
+    old= ; [ "$(field "$cur" wpa_state)" = COMPLETED ] && old=$(field "$cur" id)
+    on=$(A list_networks | sed -n 's/^\([0-9][0-9]*\)[[:space:]].*/\1/p')
+    n=$(aval add $ssid $psk); case $n in ''|*[!0-9]*) n=;; esac
+    why=notfound
+    if [ -z "$n" ]; then why=bad; say "!! WifiService did not add the network"; printf '%s\n' "$id failed $ssid $why $(field "$cur" ssid)" | put result; return; fi
+    name=$(aval name $ssid)
+    say "switching to $name, from $(field "$cur" ssid | sed 's/^"//;s/"$//'); nothing forgotten until it works"
+    aok select $n || { why=bad; aback; return; }
+    if ! connected $JOIN_SECS $n; then say "not on $name after $JOIN_SECS s ($why), going back"; aback; return; fi
+    why=noaddress t=0
+    while [ $t -lt $ADDR_SECS ]; do
+        aonline && break
+        [ -n "$ip" ] && why=nogateway
+        sleep 1; t=$((t + 1))
+    done
+    if [ $t -ge $ADDR_SECS ]; then say "on $name, but $([ $why = noaddress ] && echo "no address" || echo "the router at ${gw:-?} did not answer") after $ADDR_SECS s, going back"; aback; return; fi
+    for i in $on; do [ "$i" = "$n" ] || A remove $i > /dev/null; done      # it worked: the ones before go
+    say "switched to $name, address $ip"
+    status
+    echo "$id ok $ssid $ip 1" | put result
+}
+
 mkdir -p $O
 case "$CMD" in
 status) status;;
 clean) rm -f $S/wifi-request; alive || rm -rf $O/lock;;
-saved) W list_networks | grep -c '^[0-9]';;
+saved) Q list_networks | grep -c '^[0-9]' ;;
 forget)
-    # Not wpa_supplicant's P2P groups (disabled=2), as in join.  Saved at once: the reset is meant to survive a reboot.
-    # Removing the network it is on ends that link; no "disconnect", which would keep it off until told to reconnect.
-    for i in $(W list_networks | sed -n 's/^\([0-9][0-9]*\)[[:space:]].*/\1/p'); do
-        [ "$(val get_network $i disabled)" = 2 ] || W remove_network $i > /dev/null
-    done
-    ok save_config && say "every saved network forgotten" || say "!! networks removed, but wpa_supplicant.conf could not be written: a reboot brings them back"
+    if android; then
+        # WifiService: every configured network goes, saved at once; the link it was on ends with its network
+        for i in $(A list_networks | sed -n 's/^\([0-9][0-9]*\)[[:space:]].*/\1/p'); do A remove $i > /dev/null; done
+        say "every saved network forgotten"
+    else
+        # Not wpa_supplicant's P2P groups (disabled=2), as in join.  Saved at once: the reset is meant to survive a reboot.
+        # Removing the network it is on ends that link; no "disconnect", which would keep it off until told to reconnect.
+        for i in $(W list_networks | sed -n 's/^\([0-9][0-9]*\)[[:space:]].*/\1/p'); do
+            [ "$(val get_network $i disabled)" = 2 ] || W remove_network $i > /dev/null
+        done
+        ok save_config && say "every saved network forgotten" || say "!! networks removed, but wpa_supplicant.conf could not be written: a reboot brings them back"
+    fi
     rm -f $O/scan $O/result
     status;;
 take)
@@ -181,7 +259,8 @@ take)
     case $what in
     scan) scan;;
     join)
-        if hex "$ssid" 64 && { [ "$psk" = - ] || { hex "$psk" 64 && [ ${#psk} = 64 ]; }; }; then join
+        if hex "$ssid" 64 && { [ "$psk" = - ] || { hex "$psk" 64 && [ ${#psk} = 64 ]; }; }; then
+            if android; then ajoin; else join; fi
         else say "join request not understood, dropped"; fi;;
     *) say "request \"$what\" not understood, dropped";;
     esac;;
