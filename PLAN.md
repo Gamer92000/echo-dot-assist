@@ -242,8 +242,11 @@ Run in this order. Each step says what it proves.
             answers field 0x203 with -1, measured). Checked on a real Dot 3 with `dha_test` as puffin plus those
             groups: the EC SPKI, the CRLF PEM at 0x203 (682 bytes, cut at the END marker), a 71-byte DER signature.
             Tests as drvV1's (both shapes byte for byte) plus a third Echo in `tests/fake_web_davs.py`
-            that logs in and downloads with the drvV3 token. **The sign-in against the real Amazon is still
-            untried**: `docs/re-davs-login.md` has the analysis if it refuses.
+            that logs in and downloads with the drvV3 token. **Against the real Amazon (2026-10-09, amazon.de): it
+            works** — register 401 until the code, then the tokens and the account's name ("Julians Echo Dot");
+            alexa/echo/computer/amazon it-IT arrived whole (the two-level folder sets on real data) and root
+            installed them, ziggy it-IT answered 404 (none for that language), the registration survived the
+            restart of the install.
       - The spied `assetmgrd` must run in its own SELinux domain (`runcon u:r:assetmgrd:s0`, shim labelled `system_file`, log in
         `/data/davs`): from the `su` domain its AIPC service is unreachable and the Alexa app shows the device as unavailable
 - [x] Assistant replies ignored the volume: the mixer keeps one volume per stream type, the `TTS` stream follows `TTSVolume`, and

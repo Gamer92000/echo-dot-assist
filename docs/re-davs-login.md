@@ -12,10 +12,9 @@ download, staging) with `src/hassmic/dha.c` for the device attestation token who
 firmware builds was verified against `libace_map.so` of biscuit and radar instruction by instruction (see dha.c); the
 whole flow runs against a fake Amazon in `tests/fake_web_davs.py`.
 
-**donut followed (2026-10-09): its drvV3 attestation reversed.** The Echo Dot 3 proves itself with a certificate its
-EC key in the TEE had Amazon sign; dha.c builds that token too now, and the "Download from Amazon" page works on it.
-Details at the attestation section below. Against the real Amazon the drvV3 path is not yet tried (no device at hand);
-the drvV1 path is (below).
+**donut followed (2026-10-09): its drvV3 attestation reversed, and against the real Amazon it works.** The Echo Dot
+3 proves itself with a certificate its EC key in the TEE had Amazon sign; dha.c builds that token too now, and the
+"Download from Amazon" page works on it. Details at the attestation section below.
 
 **Against the real Amazon (2026-10-06, Echo Dot 2, amazon.de): it works.** The attestation token is what was missing;
 the device secret is not needed (hassmic as `puffin` cannot read idme `mac_sec`, and none was sent). What the device
@@ -115,9 +114,12 @@ matched by dha.c (`tests/unit/dha_jwt_test.c` pins it byte for byte against the 
     donut's EC SubjectPublicKeyInfo fails that parse, and nothing but the EC key can sign a drvV3 token anyway.
     biscuit's and radar's HALs *have* the dhav2 functions and certificate file too (same NS65741 family), so the
     certificate's presence would not tell them apart — their MAPs just never ask for it.
-  - **The token itself now runs on a real Dot 3** (2026-10-09): the Echo builds it at start (its log no longer says
-    "no device attestation"). **The sign-in against the real Amazon is the part still untried** — if Amazon refuses,
-    that is where to look.
+  - **Against the real Amazon (2026-10-09, Echo Dot 3, amazon.de): it works**, exactly as biscuit's drvV1 did:
+    register answers 401 Unauthorized until the code is entered, then the tokens; Amazon named the device after the
+    account ("Julians Echo Dot") whatever `device_name` says. DAVS handed out the alexa, echo, computer and amazon
+    it-IT sets (each "arrived whole" — the two-level folder sets on real data) and answered 404 for ziggy it-IT,
+    which it does not have; root's installer put them into `models/`, and the registration survived the restart
+    that installing them caused.
 
 ## Endpoints, for reference
 

@@ -247,9 +247,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   keystore:keystore, hence drmrpc,keystore in donut's DAEMON_GROUPS), whichever the HAL's key parses as.  `davs.c` does the code pair login (the code on the
   page, register polled with the token, tokens in `state/davs` 0600, never sent to the page), asks DAVS with the
   engine's own compatibility ids (`wake_attributes`), downloads and unpacks the artifact tar.gz (libz), and stages it
-  through artifacts.c.  Works against the real Amazon (biscuit, amazon.de, 2026-10-06; what it answers in
-  docs/re-davs-login.md, which also has the drvV3 analysis); donut's drvV3 path is verified against the fake Amazon
-  only so far.  The page offers every Amazon site with Alexa (davs.c's list), any of the account's region works.
+  through artifacts.c.  Works against the real Amazon (biscuit 2026-10-06, donut with its drvV3 token 2026-10-09,
+  both amazon.de; what it answers in docs/re-davs-login.md, which also has the drvV3 analysis).  The page offers
+  every Amazon site with Alexa (davs.c's list), any of the account's region works.
 - **Artifacts** (`artifacts.c`): Amazon's models (`wake:<name>` = `models/<name>/`, `sound` = `aed/`, `whisper`): files
   plus two levels of folders (`whisper_components/`, `BDPGeneratedFiles/`, `nttfusionconfig/ntt_conv/`; a file's name is then its path), listed
   with a digest (BLAKE2b-256 over name, size, content per file), read and written in pieces (`ART_CHUNK_MAX`) over
