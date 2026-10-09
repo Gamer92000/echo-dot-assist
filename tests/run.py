@@ -31,6 +31,7 @@ TESTS = [
     ("sendspin", [PY, "tests/fake_ma_sendspin.py"]),
     ("sendspin-9", [PY, "tests/fake_ma_sendspin.py", "--legacy"]),
     ("wifi", [PY, "tests/fake_web_wifi.py"]),
+    ("wifi-join", [PY, "tests/fake_wifi_join.py"]),
     ("volumes", [PY, "tests/fake_ha_volumes.py"]),
     ("improv", [PY, "tests/fake_improv.py"]),
     ("dropin", [PY, "tests/fake_ha_dropin.py"]),
