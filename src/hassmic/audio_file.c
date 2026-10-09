@@ -118,3 +118,5 @@ void vol_write(enum vol which, int v) { vols[which] = v; }
 void afe_listening(int on) { (void)on; }
 void afe_stream_stopped(void) {}
 int  afe_arbitration(long ts, long te, char *json, size_t n) { (void)ts; (void)te; if (n) json[0] = 0; return 0; }
+int  afe_eq_get(char *json, size_t n) { if (n) json[0] = 0; return 0; }
+void afe_eq_set(const char *json) { (void)json; }

@@ -1556,9 +1556,8 @@ static int eq[3], eq_read;
 int core_eq(int band)
 {
     if (!eq_read) {
-        char out[256], key[32], *s; int x;
-        char *argv[] = { "/system/bin/lipc-get-prop", "-s", "com.doppler.lasp", "LASP_CMD_GET_USER_EQ_INFO", NULL };
-        run_output(argv, out, sizeof out);          /* {"bands":[{"name":"BASS","level":0},{"name":"MIDRANGE",... */
+        char out[1024] = "", key[32], *s; int x;
+        afe_eq_get(out, sizeof out);                /* {"bands":[{"name":"BASS","level":0},{"name":"MIDRANGE",... */
         for (int i = 0; i < 3; i++) {
             snprintf(key, sizeof key, "\"%s\",\"level\":", eq_names[i]);
             if ((s = strstr(out, key)) && sscanf(s + strlen(key), "%d", &x) == 1) eq[i] = x < -6 ? -6 : x > 6 ? 6 : x;
@@ -1575,8 +1574,7 @@ void core_set_eq(int band, int db)
     eq[band] = db < -6 ? -6 : db > 6 ? 6 : db;
     snprintf(json, sizeof json, "{\"bands\":[{\"name\":\"%s\",\"level\":%d},{\"name\":\"%s\",\"level\":%d},{\"name\":\"%s\",\"level\":%d}]}",
              eq_names[0], eq[0], eq_names[1], eq[1], eq_names[2], eq[2]);
-    char *argv[] = { "/system/bin/lipc-set-prop", "-s", "com.doppler.lasp", "LASP_CMD_SET_USER_EQ_INFO", json, NULL };
-    run_argv(argv);
+    afe_eq_set(json);
     fprintf(stderr, "equalizer: bass %d, mid %d, treble %d\n", eq[0], eq[1], eq[2]);
 }
 

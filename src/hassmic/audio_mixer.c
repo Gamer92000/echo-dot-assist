@@ -229,3 +229,16 @@ int afe_arbitration(long ts, long te, char *json, size_t n)
     core_run(argv, json, n);
     return json[0] != 0;
 }
+
+int afe_eq_get(char *json, size_t n)
+{
+    char *argv[] = { "/system/bin/lipc-get-prop", "-s", "com.doppler.lasp", "LASP_CMD_GET_USER_EQ_INFO", NULL };
+    core_run(argv, json, n);
+    return json[0] != 0;
+}
+
+void afe_eq_set(const char *json)
+{
+    char *argv[] = { "/system/bin/lipc-set-prop", "-s", "com.doppler.lasp", "LASP_CMD_SET_USER_EQ_INFO", (char *)json, NULL };
+    core_spawn(argv);
+}

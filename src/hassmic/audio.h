@@ -53,6 +53,9 @@ void vol_write(enum vol which, int v);
 void afe_listening(int on);
 int  afe_arbitration(long ts, long te, char *json, size_t n);
 void afe_stream_stopped(void);
+/* Its user equalizer, {"bands":[{"name":"BASS","level":n},..]} both ways (main.c core_eq): get = 1 when json got one */
+int  afe_eq_get(char *json, size_t n);
+void afe_eq_set(const char *json);
 
 /* Short UI sound on its own stream; mixes with whatever else plays.  Blocks for the length of the sound. */
 void play_earcon(const short *pcm, size_t samples, unsigned rate);
