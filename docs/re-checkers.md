@@ -222,8 +222,11 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   screen (`am start -a android.settings.WIFI_SETTINGS`) stays the fallback.
 
 **Buttons, lights, sounds**
-- [ ] No action button: the settings page's login (`web_approve()` in `on_action`) and opening adb over Wi-Fi from the
-  page both wait for one. A volume key combination or the touchscreen instead.
+- [x] No action button: both volume keys pressed together (within 400 ms) and let go within a second are its press
+  (`board.action_combo`, `buttons.c`; held 2 s they still pair for arbitration): the page's login, adb, Improv's
+  authorization, answering a Drop In. Each press also moves the volume a step, one up and one down. The page words its
+  texts for it (`hello.action`, `act()` in `web/app.js`); no reset by holding (the page's or Home Assistant's
+  button). `tests/unit/buttons_test.c` (make unit).
 - [x] Input devices by name, not event number (`board.c` `name:gpio-keys`, `name:amazon-gating`; `buttons.c` looks
   them up with EVIOCGNAME): the kernel's five DTBs give gpio-keys no label (so the platform name) and the gating
   driver its own input device, "mute" = KEY_POWER (0x74), on which `privacy_reader` reads the latch at any event.

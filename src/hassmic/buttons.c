@@ -18,6 +18,7 @@ static int HOLD_WARN_MS = 5000;        /* action button held: the ring warns ...
 static int HOLD_RESET_MS = 10000;      /* ... and then hassmic's reset (core_reset), long before acebuttond's 21 s.
                                         * HASSMIC_HOLD_TIMES="<warn ms> <reset ms>": tests (tests/fake_improv.py) */
 #define COMBO_MS       2000            /* both volume keys: stock gives that no meaning (acebuttond's are action holds) */
+#define CHORD_MS        400            /* board.action_combo: the two presses this close count as one */
 
 static struct button_handler handler;
 static int muted_state;                /* latch: what was last reported; no latch: the software toggle */
@@ -135,6 +136,11 @@ static void *reader(void *arg)
                 vol_down[k] = now; vol_told[k] = 0;
                 if (vol_down[!k]) vol_told[0] = vol_told[1] = 1;            /* both down: a pair, not presses */
             } else if (ev.value == 0) {
+                /* board.action_combo: the first of the two let go, both pressed together and short of the pairing
+                 * hold: the action button's press.  A pair, so no volume step and no event of its own */
+                long long a = vol_down[0], b = vol_down[1];
+                if (board.action_combo && a && b && !combo_done && llabs(a - b) <= CHORD_MS &&
+                    now - (a > b ? a : b) < SHORT_PRESS_MS && handler.action) handler.action();
                 if (vol_down[k] && !vol_told[k]) {
                     int held = now - vol_down[k] >= SHORT_PRESS_MS;     /* the hold's deadline had not run yet */
                     if (!held && handler.volume) handler.volume(k ? -1 : 1);
