@@ -47,7 +47,7 @@ XDA thread with the full instructions: [UNLOCK][ROOT][TWRP][UNBRICK] Amazon Echo
 
 The unlock is **one script**: unzip the package, run `./fastbrick.sh` (Linux), put the Echo into fastboot mode —
 unplug its power, reconnect while holding the **action button** (the one with the circle) until the ring shows a
-**green LED** — and type `YES` when the script asks. It runs the whole exploit (about a minute, the ring shows
+**green LED** (an Echo unlocked before shows a rainbow) — and type `YES` when the script asks. It runs the whole exploit (about a minute, the ring shows
 progress) and reboots the Echo into TWRP (white LED). **Do not interrupt it after the 10-second grace period — that
 can brick the device.** `amonet-biscuit` **v2.0.0 writes newer bootloaders and boots Fire OS 6** — the stream the
 pinned firmware belongs to (Fire OS 5 versions do not boot from v2.0.0 on). Flash `boot-root.zip` after every stock

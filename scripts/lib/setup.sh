@@ -133,11 +133,13 @@ ask() {
         case ${a:-$d} in [yY]*) return 0;; [nN]*) return 1;; esac
     done
 }
-# prompt VAR "question" [default] [-s]: -s hides the input.  A dry run takes the default.
+# prompt VAR "question" [default] [-s]: -s hides the input.  A dry run takes the default.  The question gets a colon
+# unless it ends in one or a "?": without it "Wi-Fi name (…)" did not read as a question to answer (forum, 2026-10-09)
 prompt() {
-    local _answer                     # a name no caller uses: printf -v would set this local instead of the caller's VAR
+    local _answer _q=$2               # a name no caller uses: printf -v would set this local instead of the caller's VAR
     [ -n "$DRY" ] && { printf -v "$1" '%s' "$3"; return 0; }
-    printf '  %s?%s %s%s ' "$CYN" "$N" "$2" "${3:+ $DIM[$3]$N}"
+    [[ $_q == *[:?] ]] || _q="$_q:"
+    printf '  %s?%s %s%s ' "$CYN" "$N" "$_q" "${3:+ $DIM[$3]$N}"
     if [ "$4" = -s ]; then read -r -s _answer < /dev/tty || exit 1; echo; else read -r _answer < /dev/tty || exit 1; fi
     printf -v "$1" '%s' "${_answer:-$3}"
 }
@@ -384,7 +386,8 @@ wait_adb() {
     pick_serial
     case $1 in
     recovery) waitfor "Waiting for TWRP (white ring)|TWRP is up" "adb_is recovery" "Nothing yet? Unplug the Echo's power and plug it back in.";;
-    *) waitfor "Waiting for the Echo to boot|Echo is up" "adb_is device" "Nothing yet? Unplug the Echo's power and plug it back in.";;
+    # an unlocked Echo shows fastboot as a rainbow, not the green of a stock one: people looking for green missed it
+    *) waitfor "Waiting for the Echo to boot|Echo is up" "adb_is device" "Nothing yet? Unplug the Echo's power and plug it back in. Rainbow ring? That is fastboot on an unlocked Echo: fastboot reboot.";;
     esac
 }
 
