@@ -43,6 +43,7 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step
 .venv/bin/python tests/fake_web_artifacts.py  # models copied Echo to Echo through the page, root's installer, after a restart
 .venv/bin/python tests/fake_web_wifi.py       # Wi-Fi switch: sealed password, PSK, root's wifi.sh against a fake wpa_cli
+.venv/bin/python tests/fake_wifi_join.py      # checkers' setup join (wifi-join.sh) through a fake adb and WifiService
 .venv/bin/python tests/fake_web_mww.py        # microWakeWord: models added/edited/deleted from the page, engine switch,
                                              # real detections on testdata/alexa_espeak.raw, copy as an artifact
 .venv/bin/python tests/fake_web_davs.py       # models downloaded from a fake Amazon: login by code pair with the device

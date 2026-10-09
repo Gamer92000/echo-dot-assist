@@ -61,6 +61,7 @@ make unit                                         # C unit tests; microWakeWord 
 .venv/bin/python tests/fake_web.py                # the settings page: login by the action button, signed requests, export/import
 .venv/bin/python tests/fake_web_artifacts.py      # models copied from one Echo to another through the page, root's installer
 .venv/bin/python tests/fake_web_wifi.py           # Wi-Fi switch: the sealed password, its PSK, root's wifi.sh against a fake wpa_cli
+.venv/bin/python tests/fake_wifi_join.py          # checkers' setup join (wifi-join.sh) through a fake adb and WifiService
 .venv/bin/python tests/fake_web_mww.py            # microWakeWord: models from the page, the engine switch, real detections on the PC
 .venv/bin/python tests/fake_web_davs.py           # models downloaded from a fake Amazon on the Echo itself: the code pair
                                                  # login with the device attestation token, the download, staging, deregister

@@ -4,7 +4,7 @@
 # scripts/device/wifictl.dex — the framework owns the networks there, and it runs DHCP itself once its connect lands.
 cd "$(dirname "$0")/.."
 . scripts/lib/device.sh; device_load adb
-F=secrets/wifi.conf; [ -f $F ] || { echo "create $F: line 1 SSID, line 2 passphrase"; exit 1; }
+F=${WIFI_CONF:-secrets/wifi.conf}; [ -f $F ] || { echo "create $F: line 1 SSID, line 2 passphrase"; exit 1; }
 D=/data/local/hassmic
 
 if [ "$INSTALL" = boot ]; then
@@ -26,18 +26,18 @@ print(hashlib.pbkdf2_hmac("sha1", p.encode(), s.encode(), 4096, 32).hex())') || 
     while :; do
         out=$(W add "$(hex "$ssid")" $psk); n=$(printf '%s\n' "$out" | tail -1)
         case $n in ''|*[!0-9]*) ;; *) break;; esac
-        [ $t -ge 30 ] && { echo "WifiService did not add the network:"; printf '%s\n' "$out"; exit 1; }
+        [ $t -ge ${WIFI_ADD_SECS:-30} ] && { echo "WifiService did not add the network:"; printf '%s\n' "$out"; exit 1; }
         sleep 2; t=$((t + 2))
     done
     [ "$(W select "$n" | tail -1)" = OK ] || { echo "WifiService did not switch to network $n"; W status; exit 1; }
     echo "joining $ssid ..."
-    t=0 ip=
-    while [ $t -lt 60 ]; do
+    t=0 ip= secs=${WIFI_JOIN_SECS:-60}
+    while [ $t -lt $secs ]; do
         ip=$(adb shell ifconfig $WLAN | tr -d '\r' | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p')
         [ -n "$ip" ] && break
         sleep 2; t=$((t + 2))
     done
-    [ -n "$ip" ] || { echo "no address after 60 s"; W status; exit 1; }
+    [ -n "$ip" ] || { echo "no address after $secs s"; W status; exit 1; }
     W status | grep -E '^(wpa_state|ssid|ip_address)='
     exit 0
 fi
