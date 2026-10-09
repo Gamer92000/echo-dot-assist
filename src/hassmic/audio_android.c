@@ -18,6 +18,7 @@
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
 #include <errno.h>
+#include <stdint.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -389,4 +390,32 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
     }
     while (s_queued_us(&earcon) > 0 && go()) usleep(20000);
     s_close(&earcon, go() ? 1 : 0);
+}
+
+/* --- the front end: libasp inside the audio HAL, its binder service "audiosignalprocessor" (docs/re-checkers.md).
+ * Command numbers are the ASP ones donut's LIPC names map to (libgenericaspclient.so; aspclient.odex has 146 and 23 by
+ * name): SET_LISTENING_MODE 146 (int32), SET_WAKEWORD_METADATA 114 (the JSON; libasp refuses 0 or over 4095 bytes),
+ * REQUEST_ARBITRATION_JSON 23 (int32 256 in, 256 bytes out), NOTIFY_ASR_STREAM_STOPPED 14 (int32).  Through the
+ * firmware's own service tool (afe_parcel.c): no binder library of ours. */
+#include "afe_parcel.h"
+#include "core.h"
+
+static void afe_send(int cmd, const void *in, size_t len)
+{
+    struct afe_call c;
+    if (afe_call_build(&c, cmd, in, len, 4) == 0) core_spawn(c.argv);
+}
+
+void afe_listening(int on) { int32_t v = on ? 1 : 0; afe_send(146, &v, sizeof v); }
+void afe_stream_stopped(void) { int32_t v = 1; afe_send(14, &v, sizeof v); }
+
+int afe_arbitration(long ts, long te, char *json, size_t n)
+{
+    char meta[96], out[2048]; struct afe_call c; int32_t size = 256;
+    snprintf(meta, sizeof meta, "{\"timestamp_before_ww_start\":%ld,\"timestamp_before_ww_end\":%ld}", ts, te);
+    if (afe_call_build(&c, 114, meta, strlen(meta), 4)) return 0;
+    core_run(c.argv, out, sizeof out);                  /* the times first: the JSON's energies are measured on them */
+    if (afe_call_build(&c, 23, &size, sizeof size, 256)) return 0;
+    core_run(c.argv, out, sizeof out);
+    return afe_call_reply(out, (unsigned char *)json, n) > 0;
 }
