@@ -8,8 +8,11 @@ UNTESTED=1                                 # nothing here has run on an Echo Sho
 XDA=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-5-1st-gen-2019-checkers.4762900/
 AMONET=amonet-checkers-v2.0.1.zip
 AMONET_SHA256=770324a8ed5ab922c0383f8ba072d70fc0190cc2c879f12f67b8d6cfa3ad30ee
-BOOTROOT=boot-root.zip                      # donut's: its patch/magiskpolicy32 is the policy tool (device.conf)
+# donut's boot-root.zip: its patch/magiskpolicy32 is the policy tool (device.conf).  Where donut's setup keeps it (a PC
+# that set up a Dot has it), not in firmware/checkers: boot-root.zip there is checkers' own XDA image (README.md)
+BOOTROOT=firmware/donut/boot-root.zip
 BOOTROOT_SHA256=de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0
+DONUT_XDA=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/
 QEMU=toolchain/qemu-arm                     # magiskpolicy runs under it, against the unpacked firmware
 QEMU_URL=https://github.com/multiarch/qemu-user-static/releases/download/v7.2.0-1/qemu-arm-static
 QEMU_SHA256=9f07762a3cd0f8a199cb5471a92402a4765f8e2fcb7fe91a87ee75da9616a806
@@ -35,16 +38,25 @@ NOTES=(
     "No Bluetooth and no Music Assistant pairing on this model yet: Android's stack owns the controller ($DDIR/README.md)."
 )
 
-# the policy tool: donut's boot-root holds it, checkers' install wants it at firmware/checkers/magiskpolicy32
+sha() { sha256sum < "$1" | cut -c1-64; }
+policy_tool() { [ -f $SEPOLICY_TOOL ] && [ "$(sha $SEPOLICY_TOOL)" = "$SEPOLICY_TOOL_SHA256" ]; }
+# the policy tool, out of donut's boot-root (the files step brought it)
 magiskpolicy() {
-    [ -f $SEPOLICY_TOOL ] && [ "$(sha256sum < $SEPOLICY_TOOL | cut -c1-64)" = "$SEPOLICY_TOOL_SHA256" ] && return 0
-    # a donut set up on this PC already has the zip (the same one); else the files step put it in firmware/checkers
-    [ -f $FW/$BOOTROOT ] || { [ -f firmware/donut/$BOOTROOT ] && [ "$(sha256sum < firmware/donut/$BOOTROOT | cut -c1-64)" = "$BOOTROOT_SHA256" ] &&
-        cp firmware/donut/$BOOTROOT $FW/$BOOTROOT; }
-    [ -f $FW/boot-root/patch/magiskpolicy32 ] || task "Unpacking boot-root" \
-        sh -c "unzip -q -o $FW/$BOOTROOT -d $FW/boot-root && [ -f $FW/boot-root/patch/magiskpolicy32 ]" || return 1
-    task "Taking magiskpolicy from it" sh -c "cp $FW/boot-root/patch/magiskpolicy32 $SEPOLICY_TOOL &&
-        [ \"\$(sha256sum < $SEPOLICY_TOOL | cut -c1-64)\" = $SEPOLICY_TOOL_SHA256 ]" || return 1
+    policy_tool && return 0
+    task "Taking magiskpolicy out of donut's boot-root" sh -c "mkdir -p ${SEPOLICY_TOOL%/*} &&
+        unzip -p $BOOTROOT patch/magiskpolicy32 > $SEPOLICY_TOOL &&
+        [ \"\$(sha256sum < $SEPOLICY_TOOL | cut -c1-64)\" = $SEPOLICY_TOOL_SHA256 ]" || { rm -f $SEPOLICY_TOOL; return 1; }
+}
+# The firmware unpacked, whatever the build mode: the build links against its libraries, and every boot image is
+# made from it (install-boot.sh: qemu runs the policy tool against its linker), at the root step as at the install.
+# debugfs exits 0 whatever happens and rdump does not create its target (issue #4): the result is checked by hand.
+rootfs() {
+    [ -e $FW/rootfs/system/bin/linker ] && return 0
+    task "Unpacking the firmware" sh -c "unzip -o -q $FW/$FIRMWARE_FILE system.new.dat system.transfer.list -d $FW &&
+        mkdir -p $FW/images $FW/rootfs/system &&
+        python3 tools/sdat2img.py $FW/system.transfer.list $FW/system.new.dat $FW/images/system.img &&
+        rm -f $FW/system.new.dat $FW/system.transfer.list &&
+        debugfs -R 'rdump / $FW/rootfs/system' $FW/images/system.img && [ -e $FW/rootfs/system/bin/linker ]"
 }
 
 step_tools() {
@@ -52,33 +64,29 @@ step_tools() {
     build_mode
     local unlock="fastboot python3"
     rooted_already && unlock=python3
-    if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip sqlite3 curl sha256sum || return 1; return 0; fi
+    if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip debugfs sqlite3 curl sha256sum || return 1; return 0; fi
     need_tools adb $unlock unzip make cc debugfs sqlite3 curl sha256sum bc xz || return 1
     [ "$(df -Pk . | awk 'NR == 2 { print $4 }')" -gt 5000000 ] || warn "less than 5 GB free here; the NDK and firmware need about that"
 }
 
 step_files() {
     local need=()
-    # a rooted Echo needs the firmware only to build against, and the unlock tool not at all
-    rooted_already && { [ "$BUILD_MODE" = prebuilt ] || [ -d $FW/rootfs/system/lib ]; } ||
-        need+=($FW/$FIRMWARE_FILE $FIRMWARE_SHA256 "Fire OS $FIRMWARE_ID, from Amazon: the link is in $DDIR/README.md")
+    # the firmware, rooted Echo or not, built here or not: the boot image is made from its boot.img and policy
+    need+=($FW/$FIRMWARE_FILE $FIRMWARE_SHA256 "Fire OS $FIRMWARE_ID, from Amazon: the link is in $DDIR/README.md")
     rooted_already || need+=($FW/$AMONET $AMONET_SHA256 "attachment in $XDA")
-    # donut's boot-root (the policy tool inside is the one device.conf pins); a copy under firmware/donut serves too
-    if ! { [ -f $FW/$BOOTROOT ] || { [ -f firmware/donut/$BOOTROOT ] && [ "$(sha256sum < firmware/donut/$BOOTROOT | cut -c1-64)" = "$BOOTROOT_SHA256" ]; }; }; then
-        need+=($FW/$BOOTROOT $BOOTROOT_SHA256 "attachment in donut's XDA thread (its magiskpolicy patches the policy)")
-    fi
-    [ ${#need[@]} = 0 ] || need_files "${need[@]}" || return 1
-    [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
-    if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
-        mkdir -p toolchain
-        TASK_NOTE="du -h toolchain/ndk.zip | cut -f1" task "Downloading Android NDK r21e (1 GB)" curl -fsSL -o toolchain/ndk.zip $NDK_URL &&
-            task "Unpacking the NDK" unzip -q -o toolchain/ndk.zip -d toolchain && rm -f toolchain/ndk.zip || return 1
-    fi
+    policy_tool || need+=($BOOTROOT $BOOTROOT_SHA256 "boot-root.zip, attachment in $DONUT_XDA (the Echo Dot 3's, for its magiskpolicy; not checkers' own)")
+    need_files "${need[@]}" || return 1
     # the policy is patched on the PC, under qemu against the unpacked firmware; a system qemu-arm is fine too
     if ! command -v qemu-arm > /dev/null && [ ! -x $QEMU ]; then
         mkdir -p toolchain
         task "Downloading qemu-arm (runs the policy tool on the PC)" sh -c "curl -fsSL -o $QEMU $QEMU_URL &&
             [ \"\$(sha256sum < $QEMU | cut -c1-64)\" = $QEMU_SHA256 ] && chmod 755 $QEMU" || { rm -f $QEMU; return 1; }
+    fi
+    [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
+    if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
+        mkdir -p toolchain
+        TASK_NOTE="du -h toolchain/ndk.zip | cut -f1" task "Downloading Android NDK r21e (1 GB)" curl -fsSL -o toolchain/ndk.zip $NDK_URL &&
+            task "Unpacking the NDK" unzip -q -o toolchain/ndk.zip -d toolchain && rm -f toolchain/ndk.zip || return 1
     fi
 }
 
@@ -113,7 +121,7 @@ step_unlock() {
 
 step_root() {
     [ -z "$DRY" ] && adb_is device && [ "$(ashell id -u)" = 0 ] && { ok "root adb already"; return 0; }
-    magiskpolicy || return 1
+    rootfs && magiskpolicy || return 1
     wait_adb recovery || return 1
     # the rooted boot image from the firmware's own (root adb, no verify, the policy patched for our services);
     # flashed in amonet's hacked fastboot, then the Echo boots Fire OS with root adb
@@ -124,14 +132,7 @@ step_root() {
 }
 
 step_build() {
-    # the firmware's libraries are only needed to link against; INSTALL=boot also reads the system image on the
-    # PC (qemu runs the policy tool against its linker).  rdump does not create its target (issue #4).
-    if [ "$BUILD_MODE" != prebuilt ] && [ ! -d $FW/rootfs/system/lib ]; then
-        task "Unpacking the firmware" sh -c "unzip -o -q $FW/$FIRMWARE_FILE boot.img system.new.dat system.transfer_list -d $FW &&
-            mkdir -p $FW/images $FW/rootfs/system && mv $FW/boot.img $FW/images/ &&
-            python3 tools/sdat2img.py $FW/system.transfer.list $FW/system.new.dat $FW/images/system.img &&
-            debugfs -R 'rdump / $FW/rootfs/system' $FW/images/system.img && [ -d $FW/rootfs/system/lib ]" || return 1
-    fi
+    rootfs || return 1                  # the libraries to link against (the root step unpacked it already, as a rule)
     if [ "$BUILD_MODE" = prebuilt ]; then task "Downloading the release build of this commit" build_binaries || return 1
     else task "Building" build_binaries || return 1; fi
     wait_adb device || return 1
@@ -160,7 +161,7 @@ step_network() {
 }
 
 step_install() {
-    magiskpolicy || return 1        # again: the build step may have been skipped
+    rootfs && magiskpolicy || return 1        # again: the steps before may have been skipped
     install_satellite
 }
 

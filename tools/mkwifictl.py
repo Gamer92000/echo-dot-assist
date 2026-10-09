@@ -17,9 +17,12 @@ WorkSource)V.  Output is shaped like wpa_cli's, so scripts/device/wifi.sh can se
 
     status                          wpa_state=, id=, ssid=, ip_address=, freq=     (wpa_cli status)
     list_networks                   the configured networks, wpa_cli list_networks's shape
+    keys                            id, a tab, the stored preSharedKey as it is (- for none), per network:
+                                    root reads it to put a key back that an add of the same name replaced
     scan_results                    bssid / frequency / signal level / flags / ssid
     scan                            OK when the framework took it (wpa_cli scan)
-    add <ssid hex> <psk hex|->      addOrUpdateNetwork, prints the network id
+    add <ssid hex> <psk|->          addOrUpdateNetwork, prints the network id; psk = the WPA PSK itself
+                                    (64 hex digits, as wifi.c derives it), - = open
     enable <id> <only|keep>         enableNetwork(id, disableOthers)
     select <id>                     enableNetwork(id, true) and reconnect()
     remove <id>                     removeNetwork(id)
@@ -37,6 +40,7 @@ The Java source it stands for:
             String v = a[0];
             if (v.equals("status")) status(w);
             else if (v.equals("list_networks")) list(w);
+            else if (v.equals("keys")) keys(w);
             else if (v.equals("scan_results")) scanres(w);
             else if (v.equals("scan")) startscan(w);
             else if (v.equals("add")) add(w, a);
@@ -45,6 +49,7 @@ The Java source it stands for:
             else if (v.equals("remove")) remove(w, a);
             else if (v.equals("reassociate")) reassociate(w);
             else if (v.equals("wifi-on")) wifion(w);
+            else if (v.equals("name")) name(a);
             else { System.err.println("wifictl: unknown " + v); System.exit(2); }
         }
         static Object wifi() {
@@ -52,14 +57,21 @@ The Java source it stands for:
             return b == null ? null
                 : sinv("android.net.wifi.IWifiManager$Stub", "asInterface", "android.os.IBinder", b);
         }
+        static Class cls(String n) {             // Class.forName knows no primitive types
+            if (n.equals("int")) return Integer.TYPE;
+            if (n.equals("boolean")) return Boolean.TYPE;
+            return Class.forName(n);
+        }
         static Object inv(Object o, String n, String[] ps, Object[] as) {   // an instance method, by name
             Class[] cs = new Class[ps.length];
-            for (int i = 0; i < ps.length; i++) cs[i] = Class.forName(ps[i]);
-            return o.getClass().getMethod(n, cs).invoke(o, as);
+            for (int i = 0; i < ps.length; i++) cs[i] = cls(ps[i]);
+            java.lang.reflect.Method m = o.getClass().getMethod(n, cs);
+            m.setAccessible(true);                // the binder proxy class is private
+            return m.invoke(o, as);
         }
         static Object sinv(String c, String n, String p, Object a) {        // a static one, one argument
             Class k = Class.forName(c);
-            Class[] cs = { Class.forName(p) };
+            Class[] cs = { cls(p) };
             Object[] as = { a };
             return k.getMethod(n, cs).invoke(null, as);
         }
@@ -104,16 +116,22 @@ The Java source it stands for:
         static void list(Object w) {
             p("network id / ssid / bssid / flags");
             for (Object c : (java.util.List) os(w, "getConfiguredNetworks")) {
-                int st = ((Integer) fget(c, "status")).intValue();          // 1 on it, 2 disabled
-                Object fl = st == 1 ? "[CURRENT]" : st == 2 ? "[DISABLED]" : "";
+                int st = ((Integer) fget(c, "status")).intValue();          // Status: 0 on it, 1 disabled, 2 enabled
+                Object fl = st == 0 ? "[CURRENT]" : st == 1 ? "[DISABLED]" : "";
                 p(cat(cat(cat(cat(fget(c, "networkId"), "\\t"), fget(c, "SSID")), "\\tany\\t"), fl));
+            }
+        }
+        static void keys(Object w) {
+            for (Object c : (java.util.List) os(w, "getPrivilegedConfiguredNetworks")) {
+                Object k = fget(c, "preSharedKey");
+                p(cat(cat(fget(c, "networkId"), "\\t"), k == null ? "-" : k));
             }
         }
         static void scanres(Object w) {
             p("bssid / frequency / signal level / flags / ssid");
             for (Object r : (java.util.List) w1(w, "getScanResults", "java.lang.String", null)) {
-                Object s = fget(r, "BSSID");
-                s = cat(s, "\\t"); s = cat(s, fget(r, "frequency")); s = cat(s, "\\t");
+                Object s = "";
+                s = cat(s, fget(r, "BSSID")); s = cat(s, "\\t"); s = cat(s, fget(r, "frequency")); s = cat(s, "\\t");
                 s = cat(s, fget(r, "level")); s = cat(s, "\\t");
                 s = cat(s, fget(r, "capabilities")); s = cat(s, "\\t"); s = cat(s, fget(r, "SSID"));
                 p(s);
@@ -128,8 +146,8 @@ The Java source it stands for:
             fset(c, "hiddenSSID", Boolean.TRUE);       // found even when the name is not broadcast
             fset(c, "SSID", cat(cat("\\"", hex2s(a[1])), "\\""));
             if (!a[2].equals("-")) {
-                fset(c, "preSharedKey", cat(cat("\\"", hex2s(a[2])), "\\""));
-                ((java.util.BitSet) fget(c, "allowedKeyManagement")).set(0);  // WPA_PSK
+                fset(c, "preSharedKey", a[2]);         // the PSK itself: 64 hex digits, unquoted
+                ((java.util.BitSet) fget(c, "allowedKeyManagement")).set(1);  // KeyMgmt.WPA_PSK
             }
             ps(w1(w, "addOrUpdateNetwork", "android.net.wifi.WifiConfiguration", c));
         }
@@ -153,15 +171,22 @@ The Java source it stands for:
             Object r = w2(w, "setWifiEnabled", "java.lang.String", "boolean", null, Boolean.TRUE);
             p(Boolean.TRUE.equals(r) ? "OK" : "FAIL");
         }
+        static void name(String[] a) { p(hex2s(a[1])); }
     }
 
 python3 tools/mkwifictl.py            rebuild scripts/device/wifictl.dex
 python3 tools/mkwifictl.py --check    only re-read and check the one in the tree
+    --framework=firmware/checkers/rootfs   also against the firmware's boot class path (make unit does it
+                                           when the firmware is unpacked)
 
 What the writer guarantees (ART's DexFileVerifier on the Echo is strict): id tables sorted as the format wants
-(strings by content, the rest by their indices), one class LWifictl; with 27 static methods and no fields, no
+(strings by content, the rest by their indices), one class LWifictl; with 29 static methods and no fields, no
 debug info, no tries.  read() parses the result back, checks checksum and signature, walks the map, decodes
-every instruction and follows every branch target, before the file is written out."""
+every instruction and runs a type-flow check over every method (verify(): what ART's method verifier would
+refuse of this subset), before the file is written out.  --framework resolves every class, method and field
+the dex names, and every one its reflection asks for (REFLECTED), in the firmware's own boot*.oat.  What the
+code computes is tests/unit/wifictl_run.py's: it interprets the dex against a fake WifiService (make unit).
+qemu-user cannot run the firmware's ART, so none of this has run on an Echo."""
 import hashlib
 import struct
 import sys
@@ -171,12 +196,22 @@ import zlib
 class Code:
     """One static method's instructions: 16-bit units, labels patched at the end.  Only what Wifictl needs:
     no *-wide, no try/catch, no registers above 15 where a format asks for nibbles.  assemble() leaves the
-    instruction list alone, so it can run twice: once to collect the ids, once to resolve them."""
+    instruction list alone, so it can run twice: once to collect the ids, once to resolve them.
+    Registers are written as the methods below name them, parameters first (v0 = the first parameter); Dalvik
+    puts the ins in the last registers of the frame, so every operand goes through _r(): logical v -> physical
+    (v - ins) mod nregs."""
     def __init__(self, nregs, ins):
         self.nregs, self.ins = nregs, ins
         self.units, self.labels, self.branches, self.outs = [], {}, [], 0
 
+    def _r(self, v, bits=8):
+        assert 0 <= v < self.nregs, f"v{v} outside a frame of {self.nregs}"
+        r = (v - self.ins) % self.nregs
+        assert r < (1 << bits), f"v{v} (physical v{r}) does not fit {bits} bits"
+        return r
+
     def label(self, name):
+        assert name not in self.labels, name
         self.labels[name] = len(self.units)
 
     def _branch(self, units, name):                         # the offset goes into the last unit
@@ -184,81 +219,84 @@ class Code:
         self.branches.append((len(self.units) - 1, name))
 
     def const_string(self, v, s):                           # 21c
-        self.units += [(v << 8) | 0x1a, ("str", s)]
+        self.units += [(self._r(v) << 8) | 0x1a, ("str", s)]
 
     def const_4(self, v, n):                                # 11n, signed 4-bit literal
-        assert -8 <= n <= 7 and v < 16
-        self.units += [((n & 0xf) << 12) | (v << 8) | 0x12]
+        assert -8 <= n <= 7
+        self.units += [((n & 0xf) << 12) | (self._r(v, 4) << 8) | 0x12]
 
     def const_16(self, v, n):                               # 21s
-        self.units += [(v << 8) | 0x13, n & 0xffff]
+        self.units += [(self._r(v) << 8) | 0x13, n & 0xffff]
 
     def move(self, a, b, obj=False):                        # 12x
-        assert a < 16 and b < 16
-        self.units += [((b & 0xf) << 12) | (a << 8) | (0x07 if obj else 0x01)]
+        self.units += [(self._r(b, 4) << 12) | (self._r(a, 4) << 8) | (0x07 if obj else 0x01)]
 
     def move_result(self, v, obj=False):                    # 11x
-        self.units += [(v << 8) | (0x0c if obj else 0x0a)]
+        self.units += [(self._r(v) << 8) | (0x0c if obj else 0x0a)]
 
     def check_cast(self, v, t):                             # 21c
-        self.units += [(v << 8) | 0x1f, ("type", t)]
+        self.units += [(self._r(v) << 8) | 0x1f, ("type", t)]
 
     def new_instance(self, v, t):                           # 21c
-        self.units += [(v << 8) | 0x22, ("type", t)]
+        self.units += [(self._r(v) << 8) | 0x22, ("type", t)]
 
     def new_array(self, a, b, t):                           # 22c: a = new t[b]
-        assert a < 16 and b < 16
-        self.units += [((b & 0xf) << 12) | (a << 8) | 0x23, ("type", t)]
+        self.units += [(self._r(b, 4) << 12) | (self._r(a, 4) << 8) | 0x23, ("type", t)]
 
     def array_length(self, a, b):                           # 12x
-        assert a < 16 and b < 16
-        self.units += [((b & 0xf) << 12) | (a << 8) | 0x21]
+        self.units += [(self._r(b, 4) << 12) | (self._r(a, 4) << 8) | 0x21]
 
-    def aget(self, a, b, c, op):                            # 23x: a = b[c]
-        self.units += [(a << 8) | op, (c << 8) | b]
+    def aget(self, a, b, c, op):                            # 23x: a = b[c], c a register
+        self.units += [(self._r(a) << 8) | op, (self._r(c) << 8) | self._r(b)]
+
+    def aget_at(self, a, b, k):                             # a = b[k], k a literal (a holds it first)
+        self.const_4(a, k)
+        self.aget(a, b, a, AGET_OBJ)
 
     def aput(self, a, b, c, op):                            # 23x: b[c] = a
-        self.units += [(a << 8) | op, (c << 8) | b]
+        self.units += [(self._r(a) << 8) | op, (self._r(c) << 8) | self._r(b)]
 
     def goto_(self, name):                                  # 20t: goto/16
         self._branch([0x0029, 0], name)
 
-    def if2(self, op, a, b, name):                          # 22t
-        assert a < 16 and b < 16
-        self._branch([((b & 0xf) << 12) | ((a & 0xf) << 8) | op, 0], name)
+    def if2(self, op, a, b, name):                          # 22t: if-eq .. if-le
+        assert 0x32 <= op <= 0x37
+        self._branch([(self._r(b, 4) << 12) | (self._r(a, 4) << 8) | op, 0], name)
 
-    def ifz(self, op, a, name):                             # 21t
-        self._branch([(a << 8) | op, 0], name)
+    def ifz(self, op, a, name):                             # 21t: if-eqz .. if-lez
+        assert 0x38 <= op <= 0x3d
+        self._branch([(self._r(a) << 8) | op, 0], name)
 
     def invoke(self, op, m, regs):                          # 35c: 0-4 argument registers
         assert 0 <= len(regs) <= 4
         self.outs = max(self.outs, len(regs))
-        c, d, e, f = (list(regs) + [0] * 4)[:4]
+        c, d, e, f = ([self._r(r, 4) for r in regs] + [0] * 4)[:4]
         self.units += [(len(regs) << 12) | op, ("method", m), c | (d << 4) | (e << 8) | (f << 12)]
 
     def invoke_range(self, op, m, first, n):                # 3rc: n consecutive registers from first
         self.outs = max(self.outs, n)
-        self.units += [(n << 8) | op, ("method", m), first]
+        r = [self._r(first + i, 16) for i in range(n)]
+        assert r == list(range(r[0], r[0] + n)), "a range must not wrap past the parameters"
+        self.units += [(n << 8) | op, ("method", m), r[0]]
 
-    def sget(self, v, f):                                   # 21c
-        self.units += [(v << 8) | 0x60, ("field", f)]
+    def sget_obj(self, v, f):                               # 21c: sget-object
+        self.units += [(self._r(v) << 8) | 0x62, ("field", f)]
 
     def binop(self, op, a, b, c):                           # 23x: a = b <op> c
-        self.units += [(a << 8) | op, (c << 8) | b]
+        self.units += [(self._r(a) << 8) | op, (self._r(c) << 8) | self._r(b)]
 
-    def binop_lit8(self, op, a, b, n):                      # 22b: a = b <op> n
+    def binop_lit8(self, op, a, b, n):                      # 22b: a = b <op> n; AA|op, CC|BB (literal high)
         assert -128 <= n <= 127
-        self.units += [(a << 8) | op, (b << 8) | (n & 0xff)]
+        self.units += [(self._r(a) << 8) | op, ((n & 0xff) << 8) | self._r(b)]
 
     def int_to_byte(self, a, b):                            # 12x
-        assert a < 16 and b < 16
-        self.units += [((b & 0xf) << 12) | (a << 8) | 0x8e]
+        self.units += [(self._r(b, 4) << 12) | (self._r(a, 4) << 8) | 0x8d]
 
     def ret_void(self):
         self.units += [0x0e]
 
     def ret(self, v, obj):                                  # 11x
-        self.units += [(v << 8) | (0x11 if obj else 0x0f)]
+        self.units += [(self._r(v) << 8) | (0x11 if obj else 0x0f)]
 
     def assemble(self, tables):
         units = list(self.units)
@@ -270,18 +308,19 @@ class Code:
             b"".join(struct.pack("<H", u if isinstance(u, int) else tables.index(u)) for u in units)
 
 
-AGET_OBJ, APUT_OBJ, APUT_BYTE = 0x44, 0x4d, 0x4f
+AGET_OBJ, APUT_OBJ, APUT_BYTE = 0x46, 0x4d, 0x4f
 VIRT, DIRECT, STATIC, IFACE, STATIC_RANGE = 0x6e, 0x70, 0x71, 0x72, 0x77
 ADD, AND, OR, SHL = 0x90, 0x95, 0x96, 0x98
-ADD8, OR8, SHL8, USHR8 = 0xe0, 0xe6, 0xe8, 0xea
-IFNE, IFGE, IFLT, IFEQZ, IFNEZ = 0x33, 0x35, 0x34, 0x38, 0x39
+ADD8, OR8, SHL8, USHR8 = 0xd8, 0xde, 0xe0, 0xe2
+IFNE, IFGE, IFLT, IFEQZ, IFNEZ, IFGTZ = 0x33, 0x35, 0x34, 0x38, 0x39, 0x3c
+KEY_WPA_PSK = 1                                              # WifiConfiguration.KeyMgmt.WPA_PSK (--framework checks it)
 
 J = "Ljava/lang/"
 SB, STR = J + "StringBuilder;", J + "String;"
 CLS, OBJ, MTH, FLD = J + "Class;", J + "Object;", J + "reflect/Method;", J + "reflect/Field;"
-ITR, LST, BST = J + "Iterator;", J + "List;", J + "BitSet;"
+ITR, LST, BST = "Ljava/util/Iterator;", "Ljava/util/List;", "Ljava/util/BitSet;"
 INTG, BOOL, SYS = J + "Integer;", J + "Boolean;", J + "System;"
-PSTRM = J + "io/PrintStream;"
+PSTRM = "Ljava/io/PrintStream;"
 CLSARR, STRARR, OBJARR = "[Ljava/lang/Class;", "[Ljava/lang/String;", "[Ljava/lang/Object;"
 BYTES = "[B"
 ME = "LWifictl;"
@@ -310,6 +349,7 @@ METHODS = {
     "obj.tostr":  (OBJ, "toString", ((), STR)),
     "obj.eq":     (OBJ, "equals", ((OBJ,), "Z")),
     "m.invoke":   (MTH, "invoke", ((OBJ, OBJARR), OBJ)),
+    "m.setacc":   (MTH, "setAccessible", (("Z",), "V")),
     "f.get":      (FLD, "get", ((OBJ,), OBJ)),
     "f.set":      (FLD, "set", ((OBJ, OBJ), "V")),
     "it.has":     (ITR, "hasNext", ((), "Z")),
@@ -322,11 +362,14 @@ FIELDS = {
     "sys.out": (SYS, "out", PSTRM),
     "sys.err": (SYS, "err", PSTRM),
     "bool.T":  (BOOL, "TRUE", BOOL),
+    "int.TYPE": (INTG, "TYPE", CLS),
+    "bool.TYPE": (BOOL, "TYPE", CLS),
 }
 # the class's own methods: (name, params, return)
 SELF = [
     ("main",  (STRARR,), "V"),
     ("wifi",  (), OBJ),
+    ("cls",   (STR,), CLS),
     ("inv",   (OBJ, STR, STRARR, OBJARR), OBJ),
     ("sinv",  (STR, STR, STR, OBJ), OBJ),
     ("w1",    (OBJ, STR, STR, OBJ), OBJ),
@@ -344,6 +387,7 @@ SELF = [
     ("hex2s", (STR,), STR),
     ("status", (OBJ,), "V"),
     ("list",  (OBJ,), "V"),
+    ("keys",  (OBJ,), "V"),
     ("scanres", (OBJ,), "V"),
     ("startscan", (OBJ,), "V"),
     ("add",   (OBJ, STRARR), "V"),
@@ -458,30 +502,31 @@ def emit():
         # a=0 t=1 w=2 x=3 r=4
         c = Code(5, 1)
         c.array_length(1, 0)
-        c.ifz(IFGE, 1, "args")
+        c.ifz(IFGTZ, 1, "args")
         c.const_string(3, "wifictl: no verb")
-        c.sget(4, "sys.err"); c.invoke(VIRT, "println", [4, 3])
+        c.sget_obj(4, "sys.err"); c.invoke(VIRT, "println", [4, 3])
         c.const_4(3, 2); c.invoke(STATIC, "sys.exit", [3]); c.ret_void()
         c.label("args")
         c.invoke(STATIC, "wifi", []); c.move_result(2, True)
         c.ifz(IFNEZ, 2, "svc")
         c.const_string(3, "wifictl: no wifi service")
-        c.sget(4, "sys.err"); c.invoke(VIRT, "println", [4, 3])
+        c.sget_obj(4, "sys.err"); c.invoke(VIRT, "println", [4, 3])
         c.const_4(3, 2); c.invoke(STATIC, "sys.exit", [3]); c.ret_void()
         c.label("svc")
-        c.aget(3, 0, 0, AGET_OBJ)                             # v = a[0]
+        c.aget_at(3, 0, 0)                                    # v = a[0]
         for verb, name in [("status", "status"), ("list_networks", "list"), ("scan_results", "scanres"),
-                           ("scan", "startscan"), ("add", "add"), ("enable", "enable"),
+                           ("keys", "keys"), ("scan", "startscan"), ("add", "add"), ("enable", "enable"),
                            ("select", "select"), ("remove", "remove"), ("reassociate", "reassociate"),
                            ("wifi-on", "wifion"), ("name", "name")]:
             c.const_string(1, verb)
             c.invoke(VIRT, "str.eq", [3, 1]); c.move_result(1)
             c.ifz(IFEQZ, 1, verb)
-            c.invoke(STATIC, name, [2]); c.ret_void()
+            ps = SELF_BY_NAME[name][0]                        # (w), (w, a) or (a)
+            c.invoke(STATIC, name, [{OBJ: 2, STRARR: 0}[t] for t in ps]); c.ret_void()
             c.label(verb)
         c.const_string(1, "wifictl: unknown ")
         c.invoke(STATIC, "cat", [1, 3]); c.move_result(1, True)
-        c.sget(4, "sys.err"); c.invoke(VIRT, "println", [4, 1])
+        c.sget_obj(4, "sys.err"); c.invoke(VIRT, "println", [4, 1])
         c.const_4(1, 2); c.invoke(STATIC, "sys.exit", [1])
         c.ret_void()
         m.append(("main", c))
@@ -504,23 +549,38 @@ def emit():
         c.ret(0, True)
         m.append(("wifi", c))
 
+    def cls():
+        # n=0 t=1
+        c = Code(2, 1)
+        c.const_string(1, "int"); c.invoke(VIRT, "str.eq", [0, 1]); c.move_result(1)
+        c.ifz(IFEQZ, 1, "z")
+        c.sget_obj(1, "int.TYPE"); c.ret(1, True)
+        c.label("z")
+        c.const_string(1, "boolean"); c.invoke(VIRT, "str.eq", [0, 1]); c.move_result(1)
+        c.ifz(IFEQZ, 1, "l")
+        c.sget_obj(1, "bool.TYPE"); c.ret(1, True)
+        c.label("l")
+        c.invoke(STATIC, "cls.forName", [0]); c.move_result(1, True)
+        c.ret(1, True)
+        m.append(("cls", c))
+
     def inv():
         # o=0 n=1 ps=2 as=3 cs=4 m=5 i=6 len=7 r=8
         c = Code(9, 4)
         c.array_length(7, 2)
-        c.const_4(6, 1)
-        c.new_array(4, 6, CLSARR)
+        c.new_array(4, 7, CLSARR)
         c.const_4(6, 0)
         c.label("loop")
         c.if2(IFGE, 6, 7, "done")
         c.aget(8, 2, 6, AGET_OBJ)
-        c.invoke(STATIC, "cls.forName", [8]); c.move_result(8, True)
+        c.invoke(STATIC, "cls", [8]); c.move_result(8, True)
         c.aput(8, 4, 6, APUT_OBJ)
         c.binop_lit8(ADD8, 6, 6, 1)
         c.goto_("loop")
         c.label("done")
         c.invoke(VIRT, "obj.getcls", [0]); c.move_result(7, True)
         c.invoke(VIRT, "cls.getm", [7, 1, 4]); c.move_result(5, True)
+        c.const_4(7, 1); c.invoke(VIRT, "m.setacc", [5, 7])   # the binder proxy class is private
         c.invoke(VIRT, "m.invoke", [5, 0, 3]); c.move_result(7, True)
         c.ret(7, True)
         m.append(("inv", c))
@@ -529,7 +589,7 @@ def emit():
         # c=0 n=1 p=2 a=3 k=4 cs=5 as=6 m=7 z=8
         c = Code(9, 4)
         c.invoke(STATIC, "cls.forName", [0]); c.move_result(4, True)
-        c.invoke(STATIC, "cls.forName", [2]); c.move_result(7, True)
+        c.invoke(STATIC, "cls", [2]); c.move_result(7, True)
         c.const_4(8, 1); c.new_array(5, 8, CLSARR); c.const_4(8, 0); c.aput(7, 5, 8, APUT_OBJ)
         c.const_4(8, 1); c.new_array(6, 8, OBJARR); c.const_4(8, 0); c.aput(3, 6, 8, APUT_OBJ)
         c.invoke(VIRT, "cls.getm", [4, 1, 5]); c.move_result(7, True)
@@ -607,7 +667,7 @@ def emit():
     def p(err=False):
         # s=0 out=1
         c = Code(2, 1)
-        c.sget(1, "sys.err" if err else "sys.out")
+        c.sget_obj(1, "sys.err" if err else "sys.out")
         c.invoke(VIRT, "println", [1, 0])
         c.ret_void()
         m.append(("e" if err else "p", c))
@@ -616,7 +676,7 @@ def emit():
         # o=0 out=1 s=2
         c = Code(3, 1)
         c.invoke(STATIC, "str.valueO", [0]); c.move_result(2, True)
-        c.sget(1, "sys.out")
+        c.sget_obj(1, "sys.out")
         c.invoke(VIRT, "println", [1, 2])
         c.ret_void()
         m.append(("ps", c))
@@ -642,19 +702,19 @@ def emit():
         c = Code(8, 1)
         c.invoke(VIRT, "str.length", [0]); c.move_result(1)
         c.binop_lit8(USHR8, 1, 1, 1)
-        c.const_4(6, 1); c.new_array(2, 6, BYTES)
+        c.new_array(2, 1, BYTES)
         c.const_4(3, 0)
         c.label("loop")
         c.if2(IFGE, 3, 1, "done")
         # the high digit: d(s.charAt(2i))
-        c.binop_lit8(ADD8, 6, 3, 3)
+        c.binop(ADD, 6, 3, 3)
         c.invoke(VIRT, "str.charat", [0, 6]); c.move_result(4)
         c.binop_lit8(ADD8, 5, 4, -48)
         c.const_16(6, 10); c.if2(IFLT, 5, 6, "h")
         c.binop_lit8(OR8, 5, 4, 32); c.binop_lit8(ADD8, 5, 5, -87)
         c.label("h")
         # the low digit: d(s.charAt(2i+1))
-        c.binop_lit8(ADD8, 6, 3, 3); c.binop_lit8(ADD8, 6, 6, 1)
+        c.binop(ADD, 6, 3, 3); c.binop_lit8(ADD8, 6, 6, 1)
         c.invoke(VIRT, "str.charat", [0, 6]); c.move_result(4)
         c.binop_lit8(ADD8, 7, 4, -48)
         c.const_16(6, 10); c.if2(IFLT, 7, 6, "l")
@@ -729,10 +789,10 @@ def emit():
         c.label("ssid")
         c.const_string(6, "status"); c.invoke(STATIC, "fget", [3, 6]); c.move_result(6, True)
         c.check_cast(6, INTG); c.invoke(VIRT, "int.intval", [6]); c.move_result(7)
-        c.const_4(6, 1); c.if2(IFNE, 7, 6, "d")
+        c.ifz(IFNEZ, 7, "d")
         c.const_string(6, "[CURRENT]"); c.goto_("f")
         c.label("d")
-        c.const_4(6, 2); c.if2(IFNE, 7, 6, "e")
+        c.const_4(6, 1); c.if2(IFNE, 7, 6, "e")
         c.const_string(6, "[DISABLED]"); c.goto_("f")
         c.label("e")
         c.const_string(6, "")
@@ -749,6 +809,30 @@ def emit():
         c.ret_void()
         m.append(("list", c))
 
+    def keys():
+        # w=0 nets=1 it=2 c=3 id=4 k=5 t=6
+        c = Code(7, 1)
+        c.const_string(2, "getPrivilegedConfiguredNetworks"); c.invoke(STATIC, "os", [0, 2]); c.move_result(1, True)
+        c.check_cast(1, LST)
+        c.invoke(IFACE, "list.iter", [1]); c.move_result(2, True)
+        c.label("loop")
+        c.invoke(IFACE, "it.has", [2]); c.move_result(6)
+        c.ifz(IFEQZ, 6, "done")
+        c.invoke(IFACE, "it.next", [2]); c.move_result(3, True)
+        c.const_string(4, "networkId"); c.invoke(STATIC, "fget", [3, 4]); c.move_result(4, True)
+        c.const_string(5, "preSharedKey"); c.invoke(STATIC, "fget", [3, 5]); c.move_result(5, True)
+        c.ifz(IFNEZ, 5, "k")
+        c.const_string(5, "-")
+        c.label("k")
+        c.const_string(6, "\t")
+        c.invoke(STATIC, "cat", [4, 6]); c.move_result(4, True)
+        c.invoke(STATIC, "cat", [4, 5]); c.move_result(4, True)
+        c.invoke(STATIC, "p", [4])
+        c.goto_("loop")
+        c.label("done")
+        c.ret_void()
+        m.append(("keys", c))
+
     def scanres():
         # w=0 rs=1 it=2 r=3 s=4 t=5 u=6
         c = Code(7, 1)
@@ -763,6 +847,7 @@ def emit():
         c.invoke(IFACE, "it.has", [2]); c.move_result(5)
         c.ifz(IFEQZ, 5, "done")
         c.invoke(IFACE, "it.next", [2]); c.move_result(3, True)
+        c.const_string(4, "")
         for f in ("BSSID", "frequency", "level", "capabilities", "SSID"):
             c.const_string(5, f); c.invoke(STATIC, "fget", [3, 5]); c.move_result(6, True)
             c.invoke(STATIC, "cat", [4, 6]); c.move_result(4, True)
@@ -776,13 +861,14 @@ def emit():
         m.append(("scanres", c))
 
     def startscan():
-        # w=0 n=1 p1=2 p2=3 a1=4 a2=5
-        c = Code(6, 1)
-        c.const_string(1, "startScan")
-        c.const_string(2, "android.net.wifi.ScanSettings")
-        c.const_string(3, "android.os.WorkSource")
-        c.const_4(4, 0); c.const_4(5, 0)
-        c.invoke_range(STATIC_RANGE, "w2", 0, 6)
+        # w=0, w2's arguments 1..6 (w copied: a range may not wrap past the parameter)
+        c = Code(7, 1)
+        c.move(1, 0, True)
+        c.const_string(2, "startScan")
+        c.const_string(3, "android.net.wifi.ScanSettings")
+        c.const_string(4, "android.os.WorkSource")
+        c.const_4(5, 0); c.const_4(6, 0)
+        c.invoke_range(STATIC_RANGE, "w2", 1, 6)
         c.const_string(1, "OK"); c.invoke(STATIC, "p", [1])
         c.ret_void()
         m.append(("startscan", c))
@@ -793,26 +879,22 @@ def emit():
         c.const_string(2, "android.net.wifi.WifiConfiguration")
         c.invoke(STATIC, "cls.forName", [2]); c.move_result(2, True)
         c.invoke(VIRT, "cls.newi", [2]); c.move_result(2, True)
-        c.const_string(3, "hiddenSSID"); c.sget(4, "bool.T")
+        c.const_string(3, "hiddenSSID"); c.sget_obj(4, "bool.T")
         c.invoke(STATIC, "fset", [2, 3, 4])
-        c.aget(3, 1, 1, AGET_OBJ)
+        c.aget_at(3, 1, 1)
         c.invoke(STATIC, "hex2s", [3]); c.move_result(3, True)
         c.const_string(4, chr(34))
         c.invoke(STATIC, "cat", [4, 3]); c.move_result(3, True)
         c.invoke(STATIC, "cat", [3, 4]); c.move_result(3, True)
         c.const_string(4, "SSID"); c.invoke(STATIC, "fset", [2, 4, 3])
-        c.aget(3, 1, 2, AGET_OBJ)
+        c.aget_at(3, 1, 2)
         c.const_string(4, "-"); c.invoke(VIRT, "str.eq", [3, 4]); c.move_result(4)
         c.ifz(IFNEZ, 4, "skip")
-        c.invoke(STATIC, "hex2s", [3]); c.move_result(3, True)
-        c.const_string(4, chr(34))
-        c.invoke(STATIC, "cat", [4, 3]); c.move_result(3, True)
-        c.invoke(STATIC, "cat", [3, 4]); c.move_result(3, True)
         c.const_string(4, "preSharedKey"); c.invoke(STATIC, "fset", [2, 4, 3])
         c.const_string(3, "allowedKeyManagement")
         c.invoke(STATIC, "fget", [2, 3]); c.move_result(3, True)
         c.check_cast(3, BST)
-        c.const_4(4, 0); c.invoke(VIRT, "bits.set", [3, 4])
+        c.const_4(4, KEY_WPA_PSK); c.invoke(VIRT, "bits.set", [3, 4])
         c.label("skip")
         c.const_string(3, "addOrUpdateNetwork")
         c.const_string(4, "android.net.wifi.WifiConfiguration")
@@ -822,7 +904,7 @@ def emit():
         m.append(("add", c))
 
     def okfail(c, r, t):
-        c.sget(t, "bool.T")
+        c.sget_obj(t, "bool.T")
         c.invoke(VIRT, "obj.eq", [t, r]); c.move_result(t)
         c.ifz(IFEQZ, t, "fail")
         c.const_string(t, "OK"); c.invoke(STATIC, "p", [t]); c.ret_void()
@@ -833,10 +915,10 @@ def emit():
     def enable():
         # w=0 a=1 id=2 box=3 r=4 t=5 w2 args 6..11
         c = Code(12, 2)
-        c.aget(2, 1, 1, AGET_OBJ)
+        c.aget_at(2, 1, 1)
         c.invoke(STATIC, "int.parse", [2]); c.move_result(2)
         c.invoke(STATIC, "int.value", [2]); c.move_result(3, True)
-        c.aget(4, 1, 2, AGET_OBJ)
+        c.aget_at(4, 1, 2)
         c.const_string(5, "only"); c.invoke(VIRT, "str.eq", [4, 5]); c.move_result(5)
         c.invoke(STATIC, "bool.value", [5]); c.move_result(4, True)
         c.move(6, 0, True); c.const_string(7, "enableNetwork")
@@ -849,12 +931,12 @@ def emit():
     def select():
         # w=0 a=1 id=2 box=3 r=4 t=5 w2 args 6..11
         c = Code(12, 2)
-        c.aget(2, 1, 1, AGET_OBJ)
+        c.aget_at(2, 1, 1)
         c.invoke(STATIC, "int.parse", [2]); c.move_result(2)
         c.invoke(STATIC, "int.value", [2]); c.move_result(3, True)
         c.move(6, 0, True); c.const_string(7, "enableNetwork")
         c.const_string(8, "int"); c.const_string(9, "boolean")
-        c.move(10, 3, True); c.sget(11, "bool.T")
+        c.move(10, 3, True); c.sget_obj(11, "bool.T")
         c.invoke_range(STATIC_RANGE, "w2", 6, 6); c.move_result(4, True)
         c.const_string(5, "reconnect"); c.invoke(STATIC, "os", [0, 5])
         okfail(c, 4, 5)
@@ -863,7 +945,7 @@ def emit():
     def remove():
         # w=0 a=1 box=2 r=3 t=4
         c = Code(5, 2)
-        c.aget(2, 1, 1, AGET_OBJ)
+        c.aget_at(2, 1, 1)
         c.invoke(STATIC, "int.parse", [2]); c.move_result(2)
         c.invoke(STATIC, "int.value", [2]); c.move_result(2, True)
         c.const_string(3, "removeNetwork"); c.const_string(4, "int")
@@ -882,25 +964,26 @@ def emit():
     def name():
         # a=0 s=1
         c = Code(2, 1)
-        c.aget(1, 0, 1, AGET_OBJ)                             # hex in, text out (for the shell's say lines)
+        c.aget_at(1, 0, 1)                             # hex in, text out (for the shell's say lines)
         c.invoke(STATIC, "hex2s", [1]); c.move_result(1, True)
         c.invoke(STATIC, "p", [1])
         c.ret_void()
         m.append(("name", c))
 
     def wifion():
-        # w=0 n=1 p1=2 p2=3 a1=4 a2=5
-        c = Code(6, 1)
-        c.const_string(1, "setWifiEnabled")
-        c.const_string(2, "java.lang.String")
-        c.const_string(3, "boolean")
-        c.const_4(4, 0); c.sget(5, "bool.T")
-        c.invoke_range(STATIC_RANGE, "w2", 0, 6); c.move_result(1, True)
+        # w=0, w2's arguments 1..6 (as startscan)
+        c = Code(7, 1)
+        c.move(1, 0, True)
+        c.const_string(2, "setWifiEnabled")
+        c.const_string(3, "java.lang.String")
+        c.const_string(4, "boolean")
+        c.const_4(5, 0); c.sget_obj(6, "bool.T")
+        c.invoke_range(STATIC_RANGE, "w2", 1, 6); c.move_result(1, True)
         okfail(c, 1, 2)
         m.append(("wifion", c))
 
-    for f in (main, wifi, inv, sinv, w1, w2, iz, os, fget, fset, cat, p, ps, ip, unhex, hex2s,
-              status, list, scanres, startscan, add, enable, select, remove, reassociate, wifion, name):
+    for f in (main, wifi, cls, inv, sinv, w1, w2, iz, os, fget, fset, cat, p, ps, ip, unhex, hex2s,
+              status, list, keys, scanres, startscan, add, enable, select, remove, reassociate, wifion, name):
         f()
     p(err=True)
     assert {n for n, _ in m} == {n for n, _, _ in SELF}, \
@@ -1006,20 +1089,225 @@ def build(codes):
 
 
 # ---------------------------------------------------------------- checking the result
-SIZES = {}                                                     # opcode -> 16-bit units
-for op in (0x01, 0x07, 0x0a, 0x0c, 0x0e, 0x0f, 0x11, 0x12, 0x21, 0x8e):
-    SIZES[op] = 1
-for op in list(range(0x13, 0x1e)) + [0x1f, 0x22, 0x23, 0x29] + list(range(0x32, 0x3e)) + \
-        list(range(0x44, 0x52)) + [0x60] + list(range(0x90, 0xb0)) + list(range(0xd0, 0xd8)) + \
-        list(range(0xe0, 0xeb)):
-    if op not in SIZES:
-        SIZES[op] = 2
-for op in range(0x6e, 0x79):
-    SIZES[op] = 3
+# Every opcode the writer emits: format, and what the verifier below makes of it.  Anything else is refused.
+OPS = {0x01: "12x", 0x07: "12x", 0x0a: "11x", 0x0c: "11x", 0x0e: "10x", 0x0f: "11x", 0x11: "11x",
+       0x12: "11n", 0x13: "21s", 0x1a: "21c", 0x1f: "21c", 0x21: "12x", 0x22: "21c", 0x23: "22c",
+       0x29: "20t", 0x46: "23x", 0x4d: "23x", 0x4f: "23x", 0x62: "21c", 0x77: "3rc", 0x8d: "12x"}
+OPS.update({op: "22t" for op in range(0x32, 0x38)})
+OPS.update({op: "21t" for op in range(0x38, 0x3e)})
+OPS.update({op: "35c" for op in (0x6e, 0x70, 0x71, 0x72)})
+OPS.update({op: "23x" for op in range(0x90, 0x9b)})        # add-int .. ushr-int
+OPS.update({op: "22b" for op in range(0xd8, 0xe3)})        # add-int/lit8 .. ushr-int/lit8
+UNITS = {"10x": 1, "11n": 1, "11x": 1, "12x": 1, "20t": 2, "21c": 2, "21s": 2, "21t": 2, "22b": 2, "22c": 2,
+         "22t": 2, "23x": 2, "35c": 3, "3rc": 3}
+PRIM = "ZBSCI"
+
+
+def decode(units, at):
+    """one instruction at unit index at: (op, fmt, operands); operands as the format has them"""
+    w = units[at]
+    op, hi = w & 0xff, w >> 8
+    assert op in OPS, f"opcode {op:#x} at {at}"
+    f = OPS[op]
+    assert at + UNITS[f] <= len(units), f"{op:#x} at {at} runs past the end"
+    x = units[at + 1] if UNITS[f] > 1 else 0
+    if f == "10x": return op, f, ()
+    if f == "11n": return op, f, (hi & 0xf, ((hi >> 4) ^ 8) - 8)
+    if f == "11x": return op, f, (hi,)
+    if f == "12x": return op, f, (hi & 0xf, hi >> 4)
+    if f == "20t": return op, f, ((x ^ 0x8000) - 0x8000,)
+    if f in ("21c", "21s"): return op, f, (hi, x if f == "21c" else (x ^ 0x8000) - 0x8000)
+    if f == "21t": return op, f, (hi, (x ^ 0x8000) - 0x8000)
+    if f == "22b": return op, f, (hi, x & 0xff, ((x >> 8) ^ 0x80) - 0x80)
+    if f == "22c": return op, f, (hi & 0xf, hi >> 4, x)
+    if f == "22t": return op, f, (hi & 0xf, hi >> 4, (x ^ 0x8000) - 0x8000)
+    if f == "23x": return op, f, (hi, x & 0xff, x >> 8)
+    y = units[at + 2]
+    if f == "35c":
+        n = hi >> 4
+        assert n <= 4, "no fifth register is written"
+        return op, f, (x, [(y >> (4 * i)) & 0xf for i in range(n)])
+    return op, f, (x, list(range(y, y + hi)))                 # 3rc
+
+
+def verify(name, units, nregs, ins, outs, params, ret, ids):
+    """Type flow over one method, as ART's verifier does it for the subset written here: every register read
+    holds a value of the right kind on every path (int, a reference of a known type, null, or a new-instance
+    not yet constructed), parameters arrive in the last ins registers, invokes match their prototypes,
+    move-result follows an invoke that returns something, arrays are arrays of the right kind."""
+    strs, types, protos, fields, methods = ids
+    where = f"{name}:"
+    assert ins == len(params), f"{where} ins {ins} for {len(params)} parameters"
+    starts, at = set(), 0
+    while at < len(units):
+        starts.add(at)
+        at += UNITS[decode(units, at)[1]]
+    obj = "Ljava/lang/Object;"
+
+    def merge(a, b):
+        if a == b: return a
+        if "U" in (a, b): return "U"
+        if {a, b} == {"0", "I"}: return "I"
+        if a == "0" and b[0] == "R": return b
+        if b == "0" and a[0] == "R": return a
+        if a[0] == "R" and b[0] == "R": return ("R", obj)
+        return "X"                                           # conflict: unusable
+
+    def is_int(t): return t in ("I", "0")
+    def is_ref(t): return t == "0" or t[0] == "R"
+    def kind(desc): return "I" if desc in PRIM else ("R", desc)
+
+    entry = ["U"] * nregs
+    for i, d in enumerate(params):
+        assert d != "J" and d != "D", "no wide values"
+        entry[nregs - ins + i] = kind(d)
+    state = {0: (entry, None)}
+    work = [0]
+    while work:
+        at = work.pop()
+        regs, pending = state[at]
+        regs = list(regs)
+        op, f, o = decode(units, at)
+        here = f"{where}{at:04x} op {op:#04x}"
+
+        def get(r):
+            assert r < nregs, f"{here}: v{r} outside the frame of {nregs}"
+            t = regs[r]
+            assert t not in ("U", "X"), f"{here}: v{r} read before it holds a value on every path"
+            return t
+
+        def need_int(r): assert is_int(get(r)), f"{here}: v{r} is {regs[r]}, not an int"
+        def need_ref(r):
+            t = get(r)
+            assert is_ref(t), f"{here}: v{r} is {t}, not a reference"
+            return t
+
+        def put(r, t):
+            assert r < nregs, f"{here}: v{r} outside the frame"
+            regs[r] = t
+
+        nxt, branch, result = [at + UNITS[f]], None, None
+        if op in (0x01, 0x07):
+            (need_ref if op == 0x07 else need_int)(o[1])
+            assert get(o[1])[0] != "N", f"{here}: an unconstructed object copied"
+            put(o[0], regs[o[1]])
+        elif op in (0x0a, 0x0c):
+            assert pending is not None and pending != "V", f"{here}: move-result without an invoke that returns"
+            assert (pending in PRIM) == (op == 0x0a), f"{here}: move-result kind for a {pending}"
+            put(o[0], kind(pending))
+        elif op == 0x0e:
+            assert ret == "V", f"{here}: return-void from a method returning {ret}"
+            nxt = []
+        elif op in (0x0f, 0x11):
+            assert ret != "V" and (ret in PRIM) == (op == 0x0f), f"{here}: return kind for {ret}"
+            (need_int if op == 0x0f else need_ref)(o[0])
+            nxt = []
+        elif op in (0x12, 0x13):
+            put(o[0], "0" if o[1] == 0 else "I")
+        elif op == 0x1a:
+            assert o[1] < len(strs)
+            put(o[0], ("R", "Ljava/lang/String;"))
+        elif op == 0x1f:
+            need_ref(o[0])
+            put(o[0], ("R", types[o[1]]))
+        elif op == 0x21:
+            t = need_ref(o[1])
+            assert t != "0" and t[1][0] == "[", f"{here}: array-length of {t}"
+            put(o[0], "I")
+        elif op == 0x22:
+            t = types[o[1]]
+            assert t[0] == "L", f"{here}: new-instance of {t}"
+            put(o[0], ("N", t, at))
+        elif op == 0x23:
+            need_int(o[1])
+            assert types[o[2]][0] == "[", f"{here}: new-array of {types[o[2]]}"
+            put(o[0], ("R", types[o[2]]))
+        elif op == 0x29:
+            nxt, branch = [], o[0]
+        elif 0x32 <= op <= 0x37:
+            a, b_ = get(o[0]), get(o[1])
+            ok = (is_int(a) and is_int(b_)) or (op in (0x32, 0x33) and is_ref(a) and is_ref(b_))
+            assert ok, f"{here}: compares {a} with {b_}"
+            branch = o[2]
+        elif 0x38 <= op <= 0x3d:
+            t = get(o[0])
+            assert is_int(t) or (op in (0x38, 0x39) and is_ref(t)), f"{here}: tests {t}"
+            branch = o[1]
+        elif op in (0x46, 0x4d, 0x4f):
+            v, arr, idx = o
+            need_int(idx)
+            t = need_ref(arr)
+            assert t != "0", f"{here}: array access on null"
+            comp = t[1][1:]
+            assert t[1][0] == "[", f"{here}: v{arr} is {t[1]}, not an array"
+            if op == 0x46:
+                assert comp[0] in "L[", f"{here}: aget-object from {t[1]}"
+                put(v, ("R", comp))
+            elif op == 0x4d:
+                assert comp[0] in "L[", f"{here}: aput-object into {t[1]}"
+                need_ref(v)
+            else:
+                assert comp in "BZ", f"{here}: aput-byte into {t[1]}"
+                need_int(v)
+        elif op == 0x62:
+            fc, ft, fn = fields[o[1]]
+            assert ft[0] in "L[", f"{here}: sget-object of a {ft} field"
+            put(o[0], ("R", ft))
+        elif f in ("35c", "3rc"):
+            mi, rs = o
+            mc, (mret, mps), mn = methods[mi]
+            static = op in (0x71, 0x77)
+            assert len(rs) == len(mps) + (0 if static else 1), \
+                f"{here}: {mn} takes {len(mps)} arguments{'' if static else ' and this'}, given {len(rs)}"
+            assert len(rs) <= outs, f"{here}: outs {outs} < {len(rs)}"
+            if mn == "<init>":
+                assert op == 0x70, f"{here}: <init> not by invoke-direct"
+            args = rs
+            if not static:
+                t = get(rs[0])
+                if mn == "<init>":
+                    assert t[0] == "N" and t[1] == mc, f"{here}: <init> of {mc} on {t}"
+                    made = t
+                else:
+                    assert t[0] == "R", f"{here}: {mn} called on {t}"
+                args = rs[1:]
+            for r, d in zip(args, mps):
+                t = get(r)
+                if d in PRIM:
+                    assert is_int(t), f"{here}: {mn} wants {d}, v{r} is {t}"
+                else:
+                    assert is_ref(t), f"{here}: {mn} wants {d}, v{r} is {t}"
+                    if t != "0" and d != obj:
+                        assert (t[1][0] == "[") == (d[0] == "["), f"{here}: {mn} wants {d}, v{r} is {t[1]}"
+                        if d[0] == "[": assert t[1] == d, f"{here}: {mn} wants {d}, v{r} is {t[1]}"
+            if mn == "<init>":
+                regs = [("R", mc) if x == made else x for x in regs]
+            result = mret
+        elif f == "23x":
+            need_int(o[1]); need_int(o[2]); put(o[0], "I")
+        elif f == "22b" or op == 0x8d:
+            need_int(o[1]); put(o[0], "I")
+        else:
+            raise AssertionError(f"{here}: not handled")
+        if branch is not None:
+            assert branch != 0, f"{here}: branch to itself"
+            nxt.append(at + branch)
+        for n in nxt:
+            assert n in starts, f"{here}: falls or jumps to {n:#x}, not an instruction"
+            if n in state:
+                old = state[n][0]
+                merged = [merge(x, y) for x, y in zip(old, regs)]
+                assert state[n][1] is None and result is None or n == at + UNITS[f], f"{here}: result across a jump"
+                if merged != old or state[n][1] != result:
+                    state[n] = (merged, result); work.append(n)
+            else:
+                state[n] = (regs, result); work.append(n)
+    return len(state)
 
 
 def read(data):
-    """parse the dex back and walk it; raises on anything ART would refuse"""
+    """parse the dex back and walk it; raises on anything ART would refuse.  Returns the ids (strings, types,
+    protos, fields, methods) and, per method id, the invoke opcodes used on it, for check_framework()."""
     assert data[:8] == b"dex\n035\0", data[:8]
     (file_size, hs, endian, _, _, map_off, ns, so, nt, to, np, po, nf, fo, nm, mo, ncd, cdo,
      data_size, data_off) = struct.unpack("<20I", data[32:112])
@@ -1046,6 +1334,15 @@ def read(data):
     assert strs == sorted(strs)
     tids = [u32(to + 4 * i) for i in range(nt)]
     assert tids == sorted(tids)
+    types = [strs[t] for t in tids]
+    protos = []
+    for i in range(np):
+        _, rt, tl = struct.unpack("<III", data[po + 12 * i:po + 12 * i + 12])
+        ps = [types[u16(tl + 4 + 2 * k)] for k in range(u32(tl))] if tl else []
+        protos.append((types[rt], ps))
+    fields = [(types[u16(fo + 8 * i)], types[u16(fo + 8 * i + 2)], strs[u32(fo + 8 * i + 4)]) for i in range(nf)]
+    methods = [(types[u16(mo + 8 * i)], protos[u16(mo + 8 * i + 2)], strs[u32(mo + 8 * i + 4)]) for i in range(nm)]
+    ids = (strs, types, protos, fields, methods)
     # class data: the method list, code offsets
     def uleb_at(o):
         r = s = 0
@@ -1056,36 +1353,215 @@ def read(data):
                 return r, o
             s += 7
     cd_off = u32(cdo + 24)                                   # the class_def's class_data_off
-    sf, iff, dm, vm = 0, 0, 0, 0
     o = cd_off
     sf, o = uleb_at(o); iff, o = uleb_at(o); dm, o = uleb_at(o); vm, o = uleb_at(o)
     assert (sf, iff, vm) == (0, 0, 0) and dm == len(SELF)
-    prev = 0
+    me = types[u32(cdo)]
+    uses = {}
+    idx = 0
     for _ in range(dm):
-        d, o = uleb_at(o); a, o = uleb_at(o); co, o = uleb_at(o)
+        d, o = uleb_at(o); acc, o = uleb_at(o); co, o = uleb_at(o)
+        idx += d
+        mc, (mret, mps), mn = methods[idx]
+        assert mc == me and acc & 0x0008, f"{mn}: not a static method of {me}"
         assert co >= where[0x2001][1] and co < len(data)
         regs, insz, outsz, tries, dbg, isz = struct.unpack("<HHHHII", data[co:co + 16])
         assert tries == 0 and dbg == 0 and insz <= regs and regs <= 16 and outsz <= 6
-        i = co + 16
-        end = i + 2 * isz
-        while i < end:
-            op = u16(i) & 0xff
-            assert op in SIZES, hex(op)
-            u = SIZES[op]
-            if op == 0x29 or 0x32 <= op <= 0x3d:             # a branch: its target must stay inside
-                off = struct.unpack("<h", data[i + 2:i + 4])[0]
-                assert 0 <= (i - co - 16) // 2 + off < isz
-            i += 2 * u
-        assert i == end
-        prev += d
-    return len(data)
+        units = [u16(co + 16 + 2 * k) for k in range(isz)]
+        verify(mn, units, regs, insz, outsz, mps, mret, ids)
+        at = 0
+        while at < len(units):
+            op, f, ops_ = decode(units, at)
+            if f in ("35c", "3rc"):
+                uses.setdefault(ops_[0], set()).add(op)
+            at += UNITS[f]
+    for mi, ops_ in uses.items():                             # one class of ours: static calls only to it
+        if methods[mi][0] == me:
+            assert ops_ <= {0x71, 0x77}, f"{methods[mi][2]}: called with {ops_}"
+    return ids, uses
+
+
+# ---------------------------------------------------------------- against the firmware's own framework
+# What the reflection calls ask the framework for, by name (class, method or field, parameter or field types,
+# static): checked against the boot class path of the firmware, so a signature typed wrong shows up on the PC.
+REFLECTED = [
+    ("Landroid/os/ServiceManager;", "getService", ["Ljava/lang/String;"], True),
+    ("Landroid/net/wifi/IWifiManager$Stub;", "asInterface", ["Landroid/os/IBinder;"], True),
+    ("Landroid/net/wifi/IWifiManager;", "getConnectionInfo", [], False),
+    ("Landroid/net/wifi/IWifiManager;", "getConfiguredNetworks", [], False),
+    ("Landroid/net/wifi/IWifiManager;", "getPrivilegedConfiguredNetworks", [], False),
+    ("Landroid/net/wifi/IWifiManager;", "getScanResults", ["Ljava/lang/String;"], False),
+    ("Landroid/net/wifi/IWifiManager;", "startScan", ["Landroid/net/wifi/ScanSettings;", "Landroid/os/WorkSource;"], False),
+    ("Landroid/net/wifi/IWifiManager;", "addOrUpdateNetwork", ["Landroid/net/wifi/WifiConfiguration;"], False),
+    ("Landroid/net/wifi/IWifiManager;", "enableNetwork", ["I", "Z"], False),
+    ("Landroid/net/wifi/IWifiManager;", "removeNetwork", ["I"], False),
+    ("Landroid/net/wifi/IWifiManager;", "reconnect", [], False),
+    ("Landroid/net/wifi/IWifiManager;", "setWifiEnabled", ["Ljava/lang/String;", "Z"], False),
+    ("Landroid/net/wifi/WifiInfo;", "getSupplicantState", [], False),
+    ("Landroid/net/wifi/WifiInfo;", "getNetworkId", [], False),
+    ("Landroid/net/wifi/WifiInfo;", "getSSID", [], False),
+    ("Landroid/net/wifi/WifiInfo;", "getIpAddress", [], False),
+    ("Landroid/net/wifi/WifiInfo;", "getFrequency", [], False),
+]
+REFLECTED_FIELDS = [
+    ("Landroid/net/wifi/WifiConfiguration;", "hiddenSSID", "Z"),
+    ("Landroid/net/wifi/WifiConfiguration;", "SSID", "Ljava/lang/String;"),
+    ("Landroid/net/wifi/WifiConfiguration;", "preSharedKey", "Ljava/lang/String;"),
+    ("Landroid/net/wifi/WifiConfiguration;", "allowedKeyManagement", "Ljava/util/BitSet;"),
+    ("Landroid/net/wifi/WifiConfiguration;", "status", "I"),
+    ("Landroid/net/wifi/WifiConfiguration;", "networkId", "I"),
+    ("Landroid/net/wifi/ScanResult;", "BSSID", "Ljava/lang/String;"),
+    ("Landroid/net/wifi/ScanResult;", "SSID", "Ljava/lang/String;"),
+    ("Landroid/net/wifi/ScanResult;", "frequency", "I"),
+    ("Landroid/net/wifi/ScanResult;", "level", "I"),
+    ("Landroid/net/wifi/ScanResult;", "capabilities", "Ljava/lang/String;"),
+]
+
+
+def boot_classes(rootfs):
+    """every class of the boot class path: the dex files inside /system/framework/<arch>/boot*.oat (Android 7
+    keeps them there whole).  descriptor -> (access, super, interfaces, {(name, params): access},
+    {name: (type, access, initial int value or None)})"""
+    import glob
+    import re
+    out = {}
+    oats = sorted(glob.glob(f"{rootfs}/system/framework/*/boot*.oat"))
+    assert oats, f"no boot*.oat under {rootfs}/system/framework"
+    for path in oats:
+        blob = open(path, "rb").read()
+        for m in re.finditer(rb"dex\n03[5-9]\0", blob):
+            base = m.start()
+            size = struct.unpack("<I", blob[base + 32:base + 36])[0]
+            d = blob[base:base + size]
+            if len(d) != size or struct.unpack("<I", d[36:40])[0] != 112:
+                continue
+            u16 = lambda o: struct.unpack("<H", d[o:o + 2])[0]
+            u32 = lambda o: struct.unpack("<I", d[o:o + 4])[0]
+            (ns, so, nt, to, np, po, nf, fo, nm, mo, ncd, cdo) = struct.unpack("<12I", d[56:104])
+
+            def uleb_at(o):
+                r = s = 0
+                while True:
+                    b = d[o]; o += 1
+                    r |= (b & 0x7f) << s
+                    if b < 0x80:
+                        return r, o
+                    s += 7
+
+            def string(i):
+                o = u32(so + 4 * i)
+                _, o = uleb_at(o)
+                return d[o:d.index(b"\0", o)].decode("utf-8", "replace")
+            ty = lambda i: string(u32(to + 4 * i))
+
+            def params(p):
+                tl = u32(po + 12 * p + 8)
+                return tuple(ty(u16(tl + 4 + 2 * k)) for k in range(u32(tl))) if tl else ()
+            for c in range(ncd):
+                cls, acc, sup, ifo, _, _, cdata, sv = struct.unpack("<8I", d[cdo + 32 * c:cdo + 32 * c + 32])
+                desc = ty(cls)
+                ifs = [ty(u16(ifo + 4 + 2 * k)) for k in range(u32(ifo))] if ifo else []
+                meths, flds = {}, {}
+                if cdata:
+                    o = cdata
+                    sf, o = uleb_at(o); iff, o = uleb_at(o); dm, o = uleb_at(o); vm, o = uleb_at(o)
+                    vals = []                                # the static fields' initial values, ints only
+                    if sv:
+                        nv, v = uleb_at(sv)
+                        for _ in range(nv):
+                            t = d[v]; v += 1
+                            n = 0 if (t & 0x1f) in (0x1e, 0x1f) else (t >> 5) + 1
+                            vals.append(int.from_bytes(d[v:v + n], "little", signed=True) if (t & 0x1f) == 4 else None)
+                            v += n
+                    idx = 0
+                    for k in range(sf + iff):
+                        if k == sf: idx = 0
+                        dd, o = uleb_at(o); fa, o = uleb_at(o); idx += dd
+                        flds[string(u32(fo + 8 * idx + 4))] = (ty(u16(fo + 8 * idx + 2)), fa,
+                                                                 vals[k] if k < min(sf, len(vals)) else None)
+                    idx = 0
+                    for k in range(dm + vm):
+                        if k == dm: idx = 0
+                        dd, o = uleb_at(o); ma, o = uleb_at(o); _, o = uleb_at(o); idx += dd
+                        meths[(string(u32(mo + 8 * idx + 4)), params(u16(mo + 8 * idx + 2)))] = ma
+                out.setdefault(desc, (acc, ty(sup) if sup != 0xFFFFFFFF else None, ifs, meths, flds))
+    return out
+
+
+def check_framework(ids, uses, rootfs):
+    """every class, method and field the dex names, and every one its reflection asks for, exists on the
+    firmware's boot class path, with the invoke kind that fits it (static, interface, virtual, direct)"""
+    strs, types, protos, fields, methods = ids
+    bc = boot_classes(rootfs)
+    me = "LWifictl;"
+
+    def supers(c):                                           # the class, its superclasses, all interfaces
+        seen, todo = [], [c]
+        while todo:
+            x = todo.pop(0)
+            if x is None or x in seen or x not in bc:
+                continue
+            seen.append(x)
+            todo += [bc[x][1]] + bc[x][2]
+        return seen
+
+    def method(c, n, ps):
+        for x in supers(c):
+            if (n, tuple(ps)) in bc[x][3]:
+                return x, bc[x][3][(n, tuple(ps))]
+        return None, None
+
+    def field(c, n):
+        for x in supers(c):
+            if n in bc[x][4]:
+                return bc[x][4][n]
+        return None
+
+    bad = []
+    for t in types:
+        e = t.lstrip("[")
+        if e[0] == "L" and e != me and e not in bc:
+            bad.append(f"type {t}: not on the boot class path")
+    for mi, (mc, (mret, mps), mn) in enumerate(methods):
+        if mc == me:
+            continue
+        x, acc = method(mc, mn, mps)
+        if x is None:
+            bad.append(f"{mc}.{mn}({''.join(mps)}): no such method"); continue
+        for op in uses.get(mi, ()):
+            static = bool(acc & 0x0008)
+            iface = bool(bc[mc][0] & 0x0200)
+            want = {0x71: static, 0x77: static, 0x72: not static and iface, 0x6e: not static and not iface,
+                    0x70: mn == "<init>" or bool(acc & 0x0002)}[op]
+            if not want:
+                bad.append(f"{mc}.{mn}: invoke {op:#x} does not fit (static {static}, interface {iface})")
+    for fc, ft, fn in fields:
+        got = field(fc, fn)
+        if got is None or got[0] != ft or not got[1] & 0x0008:
+            bad.append(f"{fc}.{fn}: no static field of type {ft}")
+    for c, n, ps, static in REFLECTED:
+        x, acc = method(c, n, ps)
+        if x is None or bool(acc & 0x0008) != static:
+            bad.append(f"reflection: {c}.{n}({''.join(ps)}) {'static ' if static else ''}not found")
+    for c, n, t in REFLECTED_FIELDS:
+        got = field(c, n)
+        if got is None or got[0] != t:
+            bad.append(f"reflection: field {c}.{n} of type {t} not found")
+    got = field("Landroid/net/wifi/WifiConfiguration$KeyMgmt;", "WPA_PSK")
+    if got is None or got[2] != KEY_WPA_PSK:
+        bad.append(f"WifiConfiguration.KeyMgmt.WPA_PSK is {got and got[2]}, the dex sets bit {KEY_WPA_PSK}")
+    assert not bad, "\n".join(bad)
+    return len(bc)
 
 
 def main():
     codes = emit()
     blob = build(codes)
-    read(blob)                                                 # nothing leaves before it parses back
+    ids, uses = read(blob)                                     # nothing leaves before it parses back
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    fw = [a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--framework=")]
+    if fw:
+        print(f"framework: {check_framework(ids, uses, fw[0])} boot classes, every reference found")
     default = __file__.replace("tools/mkwifictl.py", "scripts/device/wifictl.dex")
     if "--check" in sys.argv:
         have = open(args[0] if args else default, "rb").read()

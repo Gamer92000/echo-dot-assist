@@ -176,6 +176,16 @@ def main(android=False):
         check(len(k) == 1 and k[0]["psk"] == "f" * 64 and json.loads(b.call("GET", "/api/wifi")[2])["result"]["state"] == "ok",
               "the PSK as 64 hex digits taken as it is; the network's older entry replaced")
 
+        # ---- the network it is on, its password typed wrong: back on it with the password it had (WifiService
+        # changes an entry of the same name in place: its old key goes back in)
+        st, r = join(KITCHEN, "kitchen typo"); root_run(); wd = W()
+        res = json.loads(b.call("GET", "/api/wifi")[2])["result"]
+        k = [n for n in wd["saved"] if n["ssid"] == H(KITCHEN)]
+        check(res["state"] == "failed" and res["reason"] == "wrongkey" and res["back"] == KITCHEN
+              and len(k) == 1 and k[0]["psk"] == "f" * 64 and wd["current"] == k[0]["id"],
+              "the same network, a wrong password: back on it, its saved password the one from before")
+        check(not any("f" * 64 in o for o in rootlog), "the stored key in no log")
+
         # ---- an open network with an odd name
         st, r = join(EXOTIC, None); root_run(); wd = W()
         e = next((n for n in wd["saved"] if n["ssid"] == H(EXOTIC)), {})

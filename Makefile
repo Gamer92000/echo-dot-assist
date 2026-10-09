@@ -268,6 +268,8 @@ unit-mww:
 	.venv/bin/python tests/unit/mww_ref.py build/mww_test
 unit-blueprint_dropin:
 	.venv/bin/python tests/blueprint_dropin.py
+	.venv/bin/python tools/mkwifictl.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)
+	.venv/bin/python tests/unit/wifictl_run.py
 
 # what the daemon reports, and what bundles are called (ota-push.sh, CI)
 version:
