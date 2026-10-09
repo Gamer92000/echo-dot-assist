@@ -419,3 +419,16 @@ int afe_arbitration(long ts, long te, char *json, size_t n)
     core_run(c.argv, out, sizeof out);
     return afe_call_reply(out, (unsigned char *)json, n) > 0;
 }
+
+/* The user equalizer: SET_USER_EQ_INFO 21 and GET_USER_EQ_INFO 29 (donut's LIPC names paired with them; this libasp has
+ * the UserEq code and its JSON).  Payloads as LIPC's strings: the JSON in for a set; for a get the getter convention of
+ * REQUEST_ARBITRATION_JSON (an int32 reply size in, the JSON out), which is inferred, not traced to UserEq's handler. */
+int afe_eq_get(char *json, size_t n)
+{
+    char out[8192]; struct afe_call c; int32_t size = 512;     /* the JSON is ~110 bytes; 512 dumps to ~2.3 kB */
+    if (afe_call_build(&c, 29, &size, sizeof size, size)) return 0;
+    core_run(c.argv, out, sizeof out);
+    return afe_call_reply(out, (unsigned char *)json, n) > 0;
+}
+
+void afe_eq_set(const char *json) { afe_send(21, json, strlen(json)); }

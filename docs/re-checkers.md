@@ -185,7 +185,11 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   does not turn its volume too, and shows no volume panel. On the device: the levels, and that nothing else (the
   screen's settings) moves Android's stream volumes afterwards; the camera shutter's EV_SW on the same keypad no
   longer reaches Android either.
-- [ ] Equalizer: `LASP_CMD_GET/SET_USER_EQ_INFO` through LIPC, absent here (the binder `command` may take it).
+- [~] Equalizer: `afe_eq_get`/`afe_eq_set` (audio.h), here `command` 29 / 21 (donut's LIPC `GET/SET_USER_EQ_INFO`;
+  `ADJUST` 28, `RESET` 30). This libasp has the UserEq code and its JSON (`convertUserEqJSONToVector`, BASS/MIDRANGE/
+  TREBLE), reached through a vtable, so its handler was not traced: the payloads are LIPC's strings (the JSON in for
+  a set) and, for the get, REQUEST_ARBITRATION_JSON's convention (an int32 reply size in). On the device: whether
+  the get answers in that form.
 - [ ] No micRaw (`startCapture` refused on ship builds): `scripts/mic-compare.sh` cannot work.
 - [ ] Bluetooth speaker stream (`bt_open` returns -1): Android's stack would route an AudioTrack to a speaker itself.
 
