@@ -298,6 +298,10 @@ satellite)
         # wake word sets under a short name (echo-de) from installs by hand: the name scripts/artifacts.sh gives them
         [ -f $D/artifact-install.sh ] && sh $D/artifact-install.sh migrate /data/local/hassmic/state /data/local/hassmic
         sh $D/alexa-off.sh; quiet
+        # Android's own stream volumes at full (wifictl.dex through IAudioService): hassmic's gain per player is the
+        # volume (audio_android.c), the framework's may not take more off.  It is up: these models start the
+        # satellite at sys.boot_completed.
+        [ "$INSTALL" = boot ] && [ -f $D/wifictl.dex ] && CLASSPATH=$D/wifictl.dex app_process / Wifictl volume-max
     } 2>&1 | stamped >> $LOG
     # A binary in /data wins over the installed one: lets a new build be tried without a trip through TWRP.
     BIN=$D/hassmic; [ -x /data/local/hassmic/hassmic ] && BIN=/data/local/hassmic/hassmic

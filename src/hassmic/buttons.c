@@ -5,6 +5,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -136,13 +137,22 @@ static void *privacy_reader(void *arg)
     return NULL;
 }
 
+/* board.grab_keys: the keys are ours alone.  A grab is the input device's, so it ends with our process. */
+static void grab(int fd, const char *dev)
+{
+    if (board.grab_keys && ioctl(fd, EVIOCGRAB, 1) < 0) perror("buttons: EVIOCGRAB");
+    else if (board.grab_keys) fprintf(stderr, "buttons: %s grabbed: its keys reach nothing else\n", dev);
+}
+
 int buttons_start(const char *device, const struct button_handler *h)
 {
     pthread_t t; int pfd, f2;
     handler = *h;
     int f1 = open(device, O_RDONLY);
     if (f1 < 0) return -1;
+    grab(f1, device);
     if (board.keypad2 && (f2 = open(board.keypad2, O_RDONLY)) >= 0) {   /* keys split over two nodes (biscuit) */
+        grab(f2, board.keypad2);
         if (pthread_create(&t, NULL, reader, (void *)(long)f2)) close(f2);
         else pthread_detach(t);
     } else if (board.keypad2) {

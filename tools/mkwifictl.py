@@ -29,12 +29,16 @@ WorkSource)V.  Output is shaped like wpa_cli's, so scripts/device/wifi.sh can se
     reassociate                     reconnect()
     wifi-on                         setWifiEnabled(null, true)
     name <hex>                      the decoded text, for the shell's messages
+    volume-max                      the voice call, system and music streams at their maximum, through
+                                    IAudioService (no Wi-Fi needed): hassmic's own gain per player is the
+                                    volume, Android's may not take more off (main.sh, every satellite start)
 
 The Java source it stands for:
 
     public class Wifictl {
         public static void main(String[] a) {
             if (a.length < 1) { System.err.println("wifictl: no verb"); System.exit(2); }
+            if (a[0].equals("volume-max")) { volmax(); return; }
             Object w = wifi();
             if (w == null) { System.err.println("wifictl: no wifi service"); System.exit(2); }
             String v = a[0];
@@ -172,6 +176,17 @@ The Java source it stands for:
             p(Boolean.TRUE.equals(r) ? "OK" : "FAIL");
         }
         static void name(String[] a) { p(hex2s(a[1])); }
+        static void volmax() {                    // as root: AppOps knows uid 0 as package "root"
+            Object b = sinv("android.os.ServiceManager", "getService", "java.lang.String", "audio");
+            Object s = sinv("android.media.IAudioService$Stub", "asInterface", "android.os.IBinder", b);
+            for (int k : new int[]{ 0, 1, 3 }) {     // STREAM_VOICE_CALL (Drop In), STREAM_SYSTEM (sounds), STREAM_MUSIC
+                Object max = w1(s, "getStreamMaxVolume", "int", Integer.valueOf(k));
+                inv(s, "setStreamVolume", new String[]{ "int", "int", "int", "java.lang.String" },
+                    new Object[]{ Integer.valueOf(k), max, Integer.valueOf(0), "root" });
+                p(cat(cat(Integer.valueOf(k), "="), max));
+            }
+            p("OK");
+        }
     }
 
 python3 tools/mkwifictl.py            rebuild scripts/device/wifictl.dex
@@ -180,7 +195,7 @@ python3 tools/mkwifictl.py --check    only re-read and check the one in the tree
                                            when the firmware is unpacked)
 
 What the writer guarantees (ART's DexFileVerifier on the Echo is strict): id tables sorted as the format wants
-(strings by content, the rest by their indices), one class LWifictl; with 29 static methods and no fields, no
+(strings by content, the rest by their indices), one class LWifictl; with 30 static methods and no fields, no
 debug info, no tries.  read() parses the result back, checks checksum and signature, walks the map, decodes
 every instruction and runs a type-flow check over every method (verify(): what ART's method verifier would
 refuse of this subset), before the file is written out.  --framework resolves every class, method and field
@@ -397,6 +412,7 @@ SELF = [
     ("reassociate", (OBJ,), "V"),
     ("wifion", (OBJ,), "V"),
     ("name", (STRARR,), "V"),
+    ("volmax", (), "V"),
 ]
 SELF_BY_NAME = {n: (ps, r) for n, ps, r in SELF}
 
@@ -507,6 +523,11 @@ def emit():
         c.sget_obj(4, "sys.err"); c.invoke(VIRT, "println", [4, 3])
         c.const_4(3, 2); c.invoke(STATIC, "sys.exit", [3]); c.ret_void()
         c.label("args")
+        c.aget_at(3, 0, 0)
+        c.const_string(1, "volume-max"); c.invoke(VIRT, "str.eq", [3, 1]); c.move_result(1)
+        c.ifz(IFEQZ, 1, "wifi")
+        c.invoke(STATIC, "volmax", []); c.ret_void()
+        c.label("wifi")
         c.invoke(STATIC, "wifi", []); c.move_result(2, True)
         c.ifz(IFNEZ, 2, "svc")
         c.const_string(3, "wifictl: no wifi service")
@@ -970,6 +991,36 @@ def emit():
         c.ret_void()
         m.append(("name", c))
 
+    def volmax():
+        # s=0 k=1 kk=2 n=3 t=4 max=5 i=6 ps=7 x=8 as=9
+        c = Code(10, 0)
+        c.const_string(0, "android.os.ServiceManager"); c.const_string(1, "getService")
+        c.const_string(2, "java.lang.String"); c.const_string(3, "audio")
+        c.invoke(STATIC, "sinv", [0, 1, 2, 3]); c.move_result(3, True)
+        c.const_string(0, "android.media.IAudioService$Stub"); c.const_string(1, "asInterface")
+        c.const_string(2, "android.os.IBinder")
+        c.invoke(STATIC, "sinv", [0, 1, 2, 3]); c.move_result(0, True)
+        for k in (0, 1, 3):                                  # STREAM_VOICE_CALL, STREAM_SYSTEM, STREAM_MUSIC
+            c.const_4(1, k); c.invoke(STATIC, "int.value", [1]); c.move_result(2, True)
+            c.const_string(3, "getStreamMaxVolume"); c.const_string(4, "int")
+            c.invoke(STATIC, "w1", [0, 3, 4, 2]); c.move_result(5, True)
+            c.const_4(6, 4); c.new_array(7, 6, STRARR); c.new_array(9, 6, OBJARR)
+            for i, t in enumerate(("int", "int", "int", "java.lang.String")):
+                c.const_4(6, i); c.const_string(8, t); c.aput(8, 7, 6, APUT_OBJ)
+            c.const_4(6, 0); c.aput(2, 9, 6, APUT_OBJ)
+            c.const_4(6, 1); c.aput(5, 9, 6, APUT_OBJ)
+            c.const_4(8, 0); c.invoke(STATIC, "int.value", [8]); c.move_result(8, True)
+            c.const_4(6, 2); c.aput(8, 9, 6, APUT_OBJ)
+            c.const_string(8, "root"); c.const_4(6, 3); c.aput(8, 9, 6, APUT_OBJ)
+            c.const_string(3, "setStreamVolume")
+            c.invoke(STATIC, "inv", [0, 3, 7, 9])
+            c.const_string(3, "="); c.invoke(STATIC, "cat", [2, 3]); c.move_result(3, True)
+            c.invoke(STATIC, "cat", [3, 5]); c.move_result(3, True)
+            c.invoke(STATIC, "p", [3])
+        c.const_string(1, "OK"); c.invoke(STATIC, "p", [1])
+        c.ret_void()
+        m.append(("volmax", c))
+
     def wifion():
         # w=0, w2's arguments 1..6 (as startscan)
         c = Code(7, 1)
@@ -983,7 +1034,7 @@ def emit():
         m.append(("wifion", c))
 
     for f in (main, wifi, cls, inv, sinv, w1, w2, iz, os, fget, fset, cat, p, ps, ip, unhex, hex2s,
-              status, list, keys, scanres, startscan, add, enable, select, remove, reassociate, wifion, name):
+              status, list, keys, scanres, startscan, add, enable, select, remove, reassociate, wifion, name, volmax):
         f()
     p(err=True)
     assert {n for n, _ in m} == {n for n, _, _ in SELF}, \
@@ -1397,6 +1448,9 @@ REFLECTED = [
     ("Landroid/net/wifi/IWifiManager;", "removeNetwork", ["I"], False),
     ("Landroid/net/wifi/IWifiManager;", "reconnect", [], False),
     ("Landroid/net/wifi/IWifiManager;", "setWifiEnabled", ["Ljava/lang/String;", "Z"], False),
+    ("Landroid/media/IAudioService$Stub;", "asInterface", ["Landroid/os/IBinder;"], True),
+    ("Landroid/media/IAudioService;", "getStreamMaxVolume", ["I"], False),
+    ("Landroid/media/IAudioService;", "setStreamVolume", ["I", "I", "I", "Ljava/lang/String;"], False),
     ("Landroid/net/wifi/WifiInfo;", "getSupplicantState", [], False),
     ("Landroid/net/wifi/WifiInfo;", "getNetworkId", [], False),
     ("Landroid/net/wifi/WifiInfo;", "getSSID", [], False),

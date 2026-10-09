@@ -37,6 +37,7 @@ const struct board board = {
     /* gpio-keys: volume up/down only, and from the EVT boards on the camera shutter (EV_SW 9).  No action button.
      * verify: event numbers with getevent -il */
     .keypad = "/dev/input/event2",
+    .grab_keys = 1,                                                 /* else PhoneWindowManager turns its stream volume too */
     .privacy_state = "/sys/devices/platform/amazon-gating/state",   /* chowned to system by /init.project.rc */
     .privacy_input = NULL,                                          /* verify: the amazon-gating driver's input device */
     .privacy_latch = 1,

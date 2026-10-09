@@ -182,3 +182,25 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
     }
     fprintf(stderr, "earcon: giving up\n");
 }
+
+/* Volumes: the mixer's own per stream type, set and read through the stock tools (it keeps them across reboots) */
+#include "core.h"
+static const char *const vol_props[] = { "MainVolume", "TTSVolume", "Mute" };
+
+int vol_read(enum vol which, int fallback)
+{
+    char out[1024], *line, *save; int v = fallback, x;
+    char *argv[] = { "/system/bin/audio_manager_get_prop", (char *)vol_props[which], NULL };
+    core_run(argv, out, sizeof out);
+    for (line = strtok_r(out, "\n", &save); line; line = strtok_r(NULL, "\n", &save))
+        if (sscanf(line, "%d", &x) == 1 && x >= 0 && x <= 100) v = x;
+    return v;
+}
+
+void vol_write(enum vol which, int v)
+{
+    char val[8];
+    snprintf(val, sizeof val, "%d", v);
+    char *argv[] = { "/system/bin/audio_manager_set_prop", (char *)vol_props[which], val, NULL };
+    core_spawn(argv);
+}

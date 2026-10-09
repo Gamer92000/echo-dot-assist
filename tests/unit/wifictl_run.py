@@ -116,9 +116,24 @@ class Wifi:
     def setWifiEnabled(self, pkg, on): self.enabled = on; self.calls.append(("wifi", pkg, on)); return True
 
 
+class Audio:
+    """IAudioService's proxy: stream maxima as 8149's AudioService has them by default"""
+    JAVA = "android.media.IAudioService$Stub$Proxy"
+    SIGS = {(n, tuple(ps)) for c, n, ps, static in mk.REFLECTED if c == "Landroid/media/IAudioService;"}
+
+    def __init__(self):
+        self.max = {0: 5, 1: 7, 2: 7, 3: 15, 4: 7, 5: 7}
+        self.vol = {k: 2 for k in self.max}
+        self.calls = []
+
+    def getStreamMaxVolume(self, k): return self.max[k]
+    def setStreamVolume(self, k, i, flags, pkg):
+        self.calls.append((k, i, flags, pkg)); self.vol[k] = min(i, self.max[k])
+
+
 class JavaEnv:
-    def __init__(self, wifi):
-        self.wifi, self.out, self.err = wifi, [], []
+    def __init__(self, wifi, audio=None):
+        self.wifi, self.audio, self.out, self.err = wifi, audio or Audio(), [], []
         self.classes = {c.JAVA: c for c in (Config, Info, Scan, Wifi)}
 
     def jstr(self, o):                                         # String.valueOf / StringBuilder.append(Object)
@@ -131,10 +146,11 @@ class JavaEnv:
 
     def jclass(self, o):
         if isinstance(o, str): return JClass("java.lang.String")
+        if isinstance(o, Audio): return JClass(Audio.JAVA, Audio)
         return JClass(type(o).JAVA, type(o))
 
     def for_name(self, n):
-        if n in ("android.os.ServiceManager", "android.net.wifi.IWifiManager$Stub", "java.lang.String",
+        if n in ("android.os.ServiceManager", "android.net.wifi.IWifiManager$Stub", "android.media.IAudioService$Stub", "java.lang.String",
                  "android.os.IBinder", "android.net.wifi.ScanSettings", "android.os.WorkSource"):
             return JClass(n)
         if n in self.classes: return JClass(n, self.classes[n])
@@ -142,9 +158,10 @@ class JavaEnv:
 
     def get_method(self, cls, name, params):
         ps = tuple({"int": "I", "boolean": "Z"}.get(p.name, "L" + p.name.replace(".", "/") + ";") for p in params)
-        if cls.name == Wifi.JAVA:
-            assert (name, ps) in Wifi.SIGS, f"IWifiManager.{name}{ps}: not in REFLECTED"
-        elif cls.name in ("android.os.ServiceManager", "android.net.wifi.IWifiManager$Stub"):
+        if cls.name in (Wifi.JAVA, Audio.JAVA):
+            sigs = Wifi.SIGS if cls.name == Wifi.JAVA else Audio.SIGS
+            assert (name, ps) in sigs, f"{cls.name}.{name}{ps}: not in REFLECTED"
+        elif cls.name in ("android.os.ServiceManager", "android.net.wifi.IWifiManager$Stub", "android.media.IAudioService$Stub"):
             assert any(c == "L" + cls.name.replace(".", "/") + ";" and n == name and tuple(p) == ps
                        for c, n, p, st in mk.REFLECTED), f"{cls.name}.{name}{ps}"
         else:
@@ -153,9 +170,11 @@ class JavaEnv:
 
     def invoke(self, m, obj, args):
         if m.cls.name == "android.os.ServiceManager":
-            assert args == ["wifi"]; return "binder:wifi"
+            assert args in (["wifi"], ["audio"]); return "binder:" + args[0]
         if m.cls.name == "android.net.wifi.IWifiManager$Stub":
             assert args == ["binder:wifi"]; return self.wifi
+        if m.cls.name == "android.media.IAudioService$Stub":
+            assert args == ["binder:audio"]; return self.audio
         args = [None if p[0] == "L" and a == 0 and not isinstance(a, bool) else a      # const/4 0 is null too
                 for p, a in zip(m.params, args)]
         for p, a in zip(m.params, args):                      # unboxed as Method.invoke does
@@ -366,6 +385,11 @@ def main():
     check(out == ["OK"] and [n.networkId for n in w.nets] == [1], "remove")
     out, _, _ = run(w, "remove", "0")
     check(out == ["FAIL"], "remove of no such network: FAIL")
+    au = Audio()
+    env = JavaEnv(Wifi(), au)
+    dex.run(env, "main", [["volume-max"]])
+    check(env.out == ["0=5", "1=7", "3=15", "OK"] and au.calls == [(0, 5, 0, "root"), (1, 7, 0, "root"), (3, 15, 0, "root")],
+          "volume-max: voice call, system and music at their maximum, as \"root\" (no Wi-Fi asked)")
     out, _, _ = run(w, "reassociate")
     check(out == ["OK"] and w.calls[-1] == "reconnect", "reassociate: reconnect")
     if fails:

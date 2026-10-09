@@ -37,6 +37,14 @@ int       voip_write(const void *data, size_t len);
 long long voip_queued_us(void);
 void      voip_close(void);
 
+/* Volume, 0..100.  VOL_MAIN: music, sounds and calls (what the keys move); VOL_TTS: the assistant's replies; VOL_MUTE:
+ * a global mute the backend keeps (1 = set; nothing of ours sets it, main.c clears it).  vol_read gives fallback when
+ * the backend cannot tell.  The Dots: the mixer's MainVolume, TTSVolume and Mute (audio_manager_*_prop, kept by the
+ * mixer across reboots); Android: a gain on each player, kept in state/volume; the PC: in memory. */
+enum vol { VOL_MAIN, VOL_TTS, VOL_MUTE };
+int  vol_read(enum vol which, int fallback);
+void vol_write(enum vol which, int v);
+
 /* Short UI sound on its own stream; mixes with whatever else plays.  Blocks for the length of the sound. */
 void play_earcon(const short *pcm, size_t samples, unsigned rate);
 /* The same, cut off (flushed) as soon as go() returns 0: ringtones, 4 to 6 s long, that stop when the call is answered */

@@ -108,3 +108,8 @@ int       voip_open(unsigned rate, unsigned channels) { return s_open(&voip, "HA
 long long voip_queued_us(void) { return s_queued_us(&voip); }
 int       voip_write(const void *data, size_t len) { return s_write(&voip, data, len); }
 void      voip_close(void) { s_close(&voip); }
+
+/* Volumes: in memory; unset = what the caller expects (as a mixer that cannot be asked) */
+static int vols[3] = { -1, -1, -1 };
+int  vol_read(enum vol which, int fallback) { return vols[which] < 0 ? fallback : vols[which]; }
+void vol_write(enum vol which, int v) { vols[which] = v; }

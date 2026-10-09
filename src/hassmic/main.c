@@ -247,6 +247,7 @@ static void run(const char *path, const char *a1, const char *a2)
 /* Its stdout into buf (NUL-terminated, cut at n - 1); empty when it cannot run (PC build) */
 static void run_output(char *const argv[], char *buf, size_t n);
 void core_run(char *const argv[], char *out, size_t n) { run_output(argv, out, n); }
+void core_spawn(char *const argv[]) { run_argv(argv); }
 static void run_output(char *const argv[], char *buf, size_t n)
 {
     int p[2]; size_t len = 0; ssize_t r;
@@ -1472,26 +1473,11 @@ static long long mono_ms(void)
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-static int read_prop_volume(const char *prop, int fallback)
-{
-    char out[1024], *line, *save; int v = fallback, x;
-    char *argv[] = { "/system/bin/audio_manager_get_prop", (char *)prop, NULL };
-    run_output(argv, out, sizeof out);
-    for (line = strtok_r(out, "\n", &save); line; line = strtok_r(NULL, "\n", &save))
-        if (sscanf(line, "%d", &x) == 1 && x >= 0 && x <= 100) v = x;
-    return v;
-}
+static int read_volume(void) { return vol_read(VOL_MAIN, 40); }
 
-static int read_volume(void) { return read_prop_volume("MainVolume", 40); }
-
-/* The mixer keeps one volume per stream type.  MainVolume is what the stock volume keys move and covers the Music and Earcon
- * streams; the TTS stream, which carries the assistant's replies, follows TTSVolume alone.  One knob for the user: both. */
-static void set_prop_volume(const char *prop, int v)
-{
-    char val[8];
-    snprintf(val, sizeof val, "%d", v);
-    run("/system/bin/audio_manager_set_prop", prop, val);
-}
+/* The backend keeps one volume per kind of stream (audio.h).  VOL_MAIN is what the stock volume keys move and covers
+ * music and sounds; the assistant's replies follow VOL_TTS alone.  One knob for the user: both. */
+static void set_both(int v) { vol_write(VOL_MAIN, v); vol_write(VOL_TTS, v); }
 
 /* Playing to a Bluetooth speaker (a2dp.c, btout.c) it has a volume of its own: what the buttons and Home Assistant move
  * meanwhile, starting from the speaker's when it tells (AVRCP absolute volume); the Echo's own comes back afterwards.
@@ -1514,12 +1500,12 @@ int core_volume(void)
     if (volume < 0) {                        /* whatever it was left at: in line now */
         FILE *f = fopen(own_volume_path(), "r"); int v;
         if (f && fscanf(f, "%d", &v) == 1 && v >= 0 && v <= 100) {
-            volume = v; set_prop_volume("MainVolume", volume);
+            volume = v; vol_write(VOL_MAIN, volume);
             fprintf(stderr, "volume: %d (the Echo's own, set aside for a Bluetooth speaker)\n", volume);
         } else volume = read_volume();
         if (f) fclose(f);
         unlink(own_volume_path());
-        set_prop_volume("TTSVolume", volume);
+        vol_write(VOL_TTS, volume);
     }
     return volume;
 }
@@ -1537,7 +1523,7 @@ void core_speaker(int mode, int pct)
     else if (mode == SPEAKER_ABSOLUTE) volume = pct < 0 ? 0 : pct > 100 ? 100 : pct;
     speaker_mode = mode;
     int mix = mode == SPEAKER_ABSOLUTE ? 100 : volume;
-    set_prop_volume("MainVolume", mix); set_prop_volume("TTSVolume", mix);
+    set_both(mix);
     if (mode == SPEAKER_NONE) unlink(own_volume_path());
     fprintf(stderr, "volume: %d, mixer at %d (%s)\n", volume, mix, mode == SPEAKER_NONE ? "the Echo's speaker" :
             mode == SPEAKER_ABSOLUTE ? "a Bluetooth speaker sets the volume" : "a Bluetooth speaker, the mixer sets the volume");
@@ -1555,7 +1541,7 @@ void core_set_volume(int v)
     volume = v < 0 ? 0 : v > 100 ? 100 : v;
     step = volume * board.volume_steps / 100 ? volume * board.volume_steps / 100 : 1;
     snprintf(pat, sizeof pat, "volume_step-%02d", step);
-    if (speaker_mode != SPEAKER_ABSOLUTE) { set_prop_volume("MainVolume", volume); set_prop_volume("TTSVolume", volume); }
+    if (speaker_mode != SPEAKER_ABSOLUTE) set_both(volume);
     if (vol_pat[0] && strcmp(vol_pat, pat)) led("-u", vol_pat);
     led("-s", pat);
     strcpy(vol_pat, pat);
@@ -1664,15 +1650,15 @@ float core_lux(void)
 static void volume_sync(void)
 {
     int main_v, tts_v;
-    if (read_prop_volume("Mute", 0) != 0) { fprintf(stderr, "speaker: global Mute was set, clearing it\n"); set_prop_volume("Mute", 0); }
+    if (vol_read(VOL_MUTE, 0) != 0) { fprintf(stderr, "speaker: global Mute was set, clearing it\n"); vol_write(VOL_MUTE, 0); }
     pthread_mutex_lock(&core_lock);
     int cur = core_volume();
     pthread_mutex_unlock(&core_lock);
-    main_v = read_prop_volume("MainVolume", cur);
-    tts_v = read_prop_volume("TTSVolume", cur);
+    main_v = vol_read(VOL_MAIN, cur);
+    tts_v = vol_read(VOL_TTS, cur);
     pthread_mutex_lock(&core_lock);
     if (speaker_mode == SPEAKER_ABSOLUTE) {                         /* 100 is ours: only a stray TTSVolume to mend */
-        if (main_v == 100 && tts_v != 100) set_prop_volume("TTSVolume", 100);
+        if (main_v == 100 && tts_v != 100) vol_write(VOL_TTS, 100);
     } else if (volume == cur) {                                     /* nobody set it meanwhile */
         if (main_v != cur) {
             volume = main_v;
@@ -1681,7 +1667,7 @@ static void volume_sync(void)
             if (core_sendspin_port) sendspin_volume_changed(volume);
             a2dp_volume_changed(volume);
         }
-        if (tts_v != volume) set_prop_volume("TTSVolume", volume);
+        if (tts_v != volume) vol_write(VOL_TTS, volume);
     }
     pthread_mutex_unlock(&core_lock);
 }
