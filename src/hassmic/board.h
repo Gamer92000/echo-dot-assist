@@ -31,6 +31,9 @@ struct board {
     const char *wake_id;            /* id of the firmware's own wake word model */
     const char *wake_manifest;
     const char *earcon_dir;         /* with trailing slash */
+    /* where the firmware has no earcon folder: stock's sound name -> an entry of a stock app (APK) holding it, stored
+     * uncompressed (sounds.c reads it out of the zip).  earcon_dir wins; {NULL}-terminated, or NULL for none */
+    const struct board_sound { const char *name, *zip, *entry; } *earcon_zip;
     const char *thermal_type;       /* thermal zone reported as SoC temperature */
     const char *light_sensor[3];    /* files the stock light sensor HAL reads lux from, first that opens; {NULL}: none */
     int volume_steps;               /* volume_step-NN animations of ledcontroller */
