@@ -135,6 +135,34 @@ static int der(const uint8_t **p, const uint8_t *end, int tag, size_t *len)
     return 0;
 }
 
+/* what kind of key a SubjectPublicKeyInfo holds, by its AlgorithmIdentifier: rsaEncryption (biscuit and radar, read
+ * from biscuit's HAL 2026-10-09) or id-ecPublicKey on P-256 (donut; ES256 is P-256 by definition, and MAP's 32-byte
+ * R and S assume it) */
+enum { KEY_OTHER, KEY_RSA, KEY_P256 };
+static int key_kind(const uint8_t *k, size_t klen)
+{
+    static const uint8_t rsa[] = {0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01};        /* 1.2.840.113549.1.1.1 */
+    static const uint8_t ec[] = {0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01};                    /* 1.2.840.10045.2.1 */
+    static const uint8_t p256[] = {0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07};            /* 1.2.840.10045.3.1.7 */
+    const uint8_t *p = k, *end = k + klen, *oid;
+    size_t len;
+    if (der(&p, end, 0x30, &len))
+        return KEY_OTHER; /* SubjectPublicKeyInfo */
+    end = p + len;
+    if (der(&p, end, 0x30, &len))
+        return KEY_OTHER; /* AlgorithmIdentifier */
+    end = p + len;
+    if (der(&p, end, 0x06, &len))
+        return KEY_OTHER; /* algorithm */
+    oid = p;
+    p += len;
+    if (len == sizeof rsa && !memcmp(oid, rsa, len))
+        return KEY_RSA;
+    if (len != sizeof ec || memcmp(oid, ec, len) || der(&p, end, 0x06, &len))
+        return KEY_OTHER; /* parameters: the named curve */
+    return len == sizeof p256 && !memcmp(p, p256, len) ? KEY_P256 : KEY_OTHER;
+}
+
 /* the RSA modulus of a SubjectPublicKeyInfo, without the sign byte */
 static int modulus(const uint8_t *k, size_t klen, const uint8_t **n, size_t *nlen)
 {
@@ -283,21 +311,29 @@ static int jwt_v3(const char *dt, time_t when, char *out, size_t cap, char *err,
     uint32_t certlen = 0, siglen = 0;
     const uint8_t *b, *e;
     struct tm tm;
-    size_t hl, bl = 0, pl, n;
+    size_t hl, pl, n;
 
-    if (hal.field(F_CERT, &cert, &certlen) || !cert || certlen > 8192
-        || !(b = findb(cert, certlen, PEM_BEGIN)) || !(e = findb(cert, certlen, PEM_END)) || e < b + PEM_BEGIN_LEN
-        || text_field(F_DSN, dsn, sizeof dsn)
+    if (hal.field(F_CERT, &cert, &certlen) || !cert)          /* the file is keystore's: the group it needs */
+        return say(err, errsz, "no attestation certificate (hassmic needs the keystore group)");
+    if (certlen > 8192 || !(b = findb(cert, certlen, PEM_BEGIN)) || !(e = findb(cert, certlen, PEM_END))
+        || e < b + PEM_BEGIN_LEN)
+    {
+        free(cert);
+        return say(err, errsz, "the attestation certificate is no PEM certificate");
+    }
+    if (text_field(F_DSN, dsn, sizeof dsn)
         || !localtime_r(&when, &tm) || !strftime(date, sizeof date, "%Y-%m-%dT%H:%MZ", &tm))
         goto bad;
     b += PEM_BEGIN_LEN;
     if (!(h = malloc(strlen(head) + certlen + strlen(tail) + 1)))
         goto bad;
-    hl = (size_t)snprintf(h, strlen(head) + certlen + strlen(tail) + 1, "%s", head);
+    memcpy(h, head, strlen(head));
+    hl = strlen(head);
     for (const uint8_t *q = b; q < e; q++)           /* the body between the markers, CR and LF dropped (MAP's loop) */
         if (*q != '\r' && *q != '\n')
-            h[hl + bl++] = (char)*q;
-    hl += (size_t)snprintf(h + hl + bl, strlen(tail) + 1, "%s", tail) + bl;
+            h[hl++] = (char)*q;
+    memcpy(h + hl, tail, sizeof tail);               /* the NUL too */
+    hl += strlen(tail);
     pl = (size_t)snprintf(p, sizeof p, pfmt, dt, dsn, date);
     hb = malloc(4 * ((hl + 2) / 3) + 1);
     pb = malloc(4 * ((pl + 2) / 3) + 1);
@@ -330,22 +366,26 @@ int dha_jwt(const char *dt, time_t when, char *out, size_t cap, char *err, size_
     static int opened;
     uint8_t *pub = NULL;
     uint32_t publen = 0;
-    const uint8_t *mod;
-    size_t modlen;
-    int v1;
+    int kind;
     if (load(err, errsz))
         return -1;
     if (!opened && hal.open())
         return say(err, errsz, "the attestation key would not open (hassmic needs the drmrpc group)");
     opened = 1;                     /* one session for the process; the PC build has none and fails at load() */
 
-    /* which token this Echo's MAP builds, asked of the key: the RSA keymaster of biscuit and radar (a 256-byte
-     * modulus to parse) makes drvV1; the EC dhav2 key of donut makes drvV3 (biscuit's and radar's HALs have the
-     * certificate too, so its presence would not tell them apart -- their MAPs do not use it) */
-    v1 = !hal.pubkey(&pub, &publen) && pub && !modulus(pub, publen, &mod, &modlen) && modlen == 256;
+    /* which token this Echo's MAP builds, asked of the key: the RSA keymaster of biscuit and radar makes drvV1, the
+     * EC dhav2 key of donut drvV3 (biscuit's and radar's HALs have the certificate too, so its presence would not tell
+     * them apart -- their MAPs do not use it).  Anything else is a model nobody has read the MAP of: refused by name,
+     * not tried as one of the two */
+    if (hal.pubkey(&pub, &publen) || !pub)
+        return say(err, errsz, "the attestation key gave no public key");
+    kind = key_kind(pub, publen);
     free(pub);
-    return v1 ? jwt_v1(dt, when, out, cap, err, errsz)
-              : jwt_v3(dt, when, out, cap, err, errsz);
+    if (kind == KEY_RSA)
+        return jwt_v1(dt, when, out, cap, err, errsz);
+    if (kind == KEY_P256)
+        return jwt_v3(dt, when, out, cap, err, errsz);
+    return say(err, errsz, "the attestation key is neither MAP's RSA key (drvV1) nor its P-256 key (drvV3)");
 }
 
 int dha_serial(char *out, size_t cap)

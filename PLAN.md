@@ -233,8 +233,9 @@ Run in this order. Each step says what it proves.
             `dha.c jwt_v3` builds the header `{"typ":"drvV3","alg":"ES256","x5c":["<the PEM's body, CR and LF
             dropped>"]}` and a payload with a cpuid literal of donut's MAP (`dfae219fe47947c7`) and no "cust" part,
             signed like drvV1 but over the DER ECDSA the HAL answers, split into 32-byte R and S (the JWS raw form;
-            the token carries the certificate, ~1.9 kB). The HAL's public key tells the shapes apart: an RSA modulus
-            parses on biscuit and radar, donut's EC SubjectPublicKeyInfo does not — biscuit's and radar's HALs hold a
+            the token carries the certificate, ~1.9 kB). The HAL's public key tells the shapes apart by its algorithm
+            OID: rsaEncryption on biscuit and radar (read off biscuit's HAL 2026-10-09), id-ecPublicKey on P-256 on
+            donut; any other key is refused by name rather than tried as drvV3 — biscuit's and radar's HALs hold a
             dhav2 certificate file too (same NS65741 family), unused by their MAPs, so the certificate alone cannot
             tell them apart. The TEE (`/dev/trustzone`, 0660 system:drmrpc = gid 1026 on the device) and the
             certificate file (`/persist/dha_certificate.pem`, 0660 keystore:keystore = 1017) need two more groups →

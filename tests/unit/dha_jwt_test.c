@@ -130,5 +130,15 @@ int main(int argc, char **argv)
     check(!strcmp(got, again3), "the same moment signs the same token");
 
     check(dha_jwt(dha_dt, when, got, 64, err, sizeof err) == -1, "a caller's buffer too small: refused, not overrun");
+
+    /* the refusals say why: a key of neither shape is not tried as one of them, a missing certificate names the group */
+    setenv("DHA_FAKE_CURVE", "1", 1);
+    check(dha_jwt(dha_dt, when, got, sizeof got, err, sizeof err) == -1 && strstr(err, "neither"),
+          "an EC key on another curve: refused as no known shape");
+    unsetenv("DHA_FAKE_CURVE");
+    setenv("DHA_FAKE_NOCERT", "1", 1);
+    check(dha_jwt(dha_dt, when, got, sizeof got, err, sizeof err) == -1 && strstr(err, "keystore"),
+          "no certificate: the keystore group named");
+    unsetenv("DHA_FAKE_NOCERT");
     return fails ? 1 : 0;
 }

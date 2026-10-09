@@ -92,6 +92,14 @@ release key besides the maintainer's. Only Home Assistant's encrypted link may s
   (nothing to lose there), only after a press of the action button on one that is. The Wi-Fi password crosses
   Bluetooth unencrypted, as with every Improv device; the Echo keeps only the network key derived from it.
 
+## Amazon downloads
+
+The settings page's "Download from Amazon" registers the Echo to your Amazon account. Its tokens stay on the Echo
+(`state/davs`, readable by hassmic only) and never reach the page. To be let in, the Echo signs with its attestation
+key, which lives in the Echo's secure hardware: hassmic can ask it for a signature but never read it. For that the
+daemon carries the group that opens the secure hardware (`drmrpc`), on the Echo Dot 3 also the one of its certificate
+file (`keystore`). "Sign out" on the page removes the registration again.
+
 ## Factory reset
 
 From Home Assistant only over its encrypted link (once it set a key), from the settings page only from an approved
