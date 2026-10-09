@@ -124,7 +124,9 @@ Libraries in checkers' load at 0x1000–0x4000 above their file offset (libasp +
 - Earcons: no `/system/local/share/earcon`. Wake sound inside SpeechInteractionManager (`res/-E.ogg` =
   `raw/ban_ui_wakesound`, Vorbis; `res/7E.mp3` = `ful_ui_wakesound_hybrid`; names obfuscated, mapped through
   `resources.arsc`); privacy and volume sounds in KnightSystemUI (`res/raw/kni_controls_privacy_mode_{on,off}.mp3`,
-  `kni_controls_volume_adjust.mp3`). No Bluetooth or discovery sounds.
+  `kni_controls_volume_adjust.mp3`); Bluetooth in KnightSettings (`kni_system_bluetooth_bt_{connected,disconnected}.mp3`),
+  the comms sounds in `com.amazon.comms.multimodaltachyonarm` (`ful_comms_*.mp3`, the five Drop In uses). Every one
+  stored uncompressed in its APK. No discovery (setup beacon) sound.
 - DHA: no `libacehal_dha.so`; the attestation key is behind the `fireos-dha` binder service (`libdha-aidl.so`), so
   `dha.c` (Amazon downloads) needs another way in.
 
@@ -210,8 +212,11 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   `amazon-gating/state` still catches it), light sensor path.
 - [ ] No LED ring and no `ledctrl` (`main.c` then leaves LEDs off): listening/thinking/volume/identify feedback
   would go on the screen; nothing does that yet.
-- [ ] Earcons: none in the firmware's file system; the sounds are in SpeechInteractionManager and KnightSystemUI
-  (`res/raw/...`): extract and convert into `/data/local/hassmic/earcon/` (`board.c` `earcon_dir`) at install.
+- [x] Earcons: none in the firmware's file system; `sounds.c` reads them straight out of the stock apps
+  (`board.c` `earcon_zip`: 12 of the 13 sounds, every one stored uncompressed, as aapt keeps audio), nothing copied;
+  `/data/local/hassmic/earcon/` (`earcon_dir`) wins for own sounds. All decode from the unpacked firmware
+  (`make unit`, `tests/unit/sounds_test.c`); the setup beacon (Identify) stays the built-in tone. On the device:
+  the APKs readable by the daemon's user (0644, and `su` is permissive), and how they sound.
 
 **Other features**
 - [ ] Amazon downloads (`dha.c`): no `libacehal_dha.so`; the key is behind the `fireos-dha` binder service.

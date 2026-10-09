@@ -1517,5 +1517,9 @@ Run in this order. Each step says what it proves.
       Class.forName("int"), KeyMgmt bit 0 = NONE, the page's PSK quoted as a passphrase).  Now: a type-flow check of
       every method in mkwifictl.py, `--framework` against 8149's boot*.oat dex files (every reference and reflected
       call, KeyMgmt.WPA_PSK = 1), tests/unit/wifictl_run.py interpreting the dex against a fake WifiService (make
-      unit); qemu-user cannot run the firmware's ART (dalvikvm32 dies in its start-up), so a device is the rest.  `devices/checkers/setup.sh`: every step walks in a dry run.  Open items, one
-      list: docs/re-checkers.md "What a port needs".
+      unit); qemu-user cannot run the firmware's ART (dalvikvm32 dies in its start-up), so a device is the rest.
+      `devices/checkers/setup.sh`: every step walks in a dry run.  Earcons (2026-10-10): sounds.c reads stock's
+      sounds straight out of the apps (`board.earcon_zip`; aapt stores audio uncompressed), 12 of 13 found
+      (SpeechInteractionManager's shrunk names mapped through its resources.arsc), all decoding at 48 kHz from the
+      unpacked firmware in make unit; no setup beacon anywhere.  Open items, one list: docs/re-checkers.md "What a
+      port needs".
