@@ -268,6 +268,9 @@ unit-mww:
 	.venv/bin/python tests/unit/mww_ref.py build/mww_test
 unit-blueprint_dropin:
 	.venv/bin/python tests/blueprint_dropin.py
+	python3 tests/unit/sounds_zip.py build/sounds_dir build/sounds_test.zip
+	cc -O2 -Wall -Wextra -DSYNTH -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c -o build/sounds_test && build/sounds_test synth build/sounds_dir build/sounds_test.zip
+	if [ -d firmware/checkers/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c devices/checkers/board.c -o build/sounds_checkers && HASSMIC_EARCON_ROOT=firmware/checkers/rootfs build/sounds_checkers; else echo "sounds: firmware/checkers not unpacked, its apps' sounds skipped"; fi
 	.venv/bin/python tools/mkwifictl.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)
 	.venv/bin/python tests/unit/wifictl_run.py
 
