@@ -195,7 +195,11 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   dex passed it with wrong opcodes, parameters read from the wrong registers and `java/lang/List`, and would not have
   loaded. WifiService keeps one network per name and security, so an add of a saved name changes that entry in
   place: wifi.sh reads the stored keys first (`wifictl keys`, getPrivilegedConfiguredNetworks) and puts the old one
-  back when the switch fails. On a device still open: whether it really connects and gets its address, and the
+  back when the switch fails. `setWifiEnabled(null, true)` from root: 8149's `WifiServiceImpl` uses the caller's
+  package name only for the permission-review consent dialog (`startConsentUi`), and review is off
+  (`Build.PERMISSIONS_REVIEW_REQUIRED` unset, framework-res `config_permissionReviewRequired` false); otherwise it
+  checks CHANGE_WIFI_STATE, which uid 0 has. The setup's join (`scripts/wifi-join.sh`) runs against a fake adb and
+  the same fake framework in `tests/fake_wifi_join.py`. On a device still open: whether it really connects and gets its address, and the
   screen (`am start -a android.settings.WIFI_SETTINGS`) stays the fallback.
 
 **Buttons, lights, sounds**

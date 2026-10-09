@@ -160,6 +160,8 @@ def wifictl(w, args):
         return wpa(w, args)
     if verb == "keys":                                          # getPrivilegedConfiguredNetworks: the stored keys
         return "\n".join("%d\t%s" % (n["id"], n.get("psk") or "-") for n in w["networks"])
+    if verb == "add" and w.get("radio_off", 0) > 0:             # the radio still coming up: no network added
+        w["radio_off"] -= 1; return "-1"
     if verb == "add":
         ssid = value(args[1])
         for n in w["networks"]:
