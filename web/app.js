@@ -319,11 +319,22 @@ const fmt = (s, v) => {
 
 let echo, state;
 
+// The Echo Show has no action button: both volume keys pressed together stand in for it (hello.action, board.c
+// action_combo).  act() words a text for the Echo it is about: this one by default, another one's hello where named.
+function act(s, d = echo && echo.hello) {
+  if (!d || d.action !== 'volume_keys') return s;
+  return s.replace(/its own action button/g, 'both its own volume keys together')
+    .replace(/its action button/g, 'both its volume keys together')
+    .replace(/the action button/g, 'both volume keys together')
+    .replace(/action button/g, 'volume keys pressed together');
+}
+
 async function start() {
   const hello = await (await fetch('/api/hello')).json();
   echo = new Echo('', hello);
   renderThrough(hello.members || []);
   showName(hello);
+  if (hello.action === 'volume_keys') $('actline').innerHTML = 'Within a minute, press <b>both volume keys together</b> on the Echo, briefly (held 2 s they pair it with other Echos instead).';
   try { await load(); } catch (e) { if (e.message === 'login') showLogin(); else toast('Error: ' + e.message); }
 }
 
@@ -391,7 +402,7 @@ async function answerVouch() {
 
 $('ask').onclick = async () => {
   const msg = $('loginmsg'), art = $('art'), b = $('ask');
-  msg.className = 'login-msg'; msg.textContent = 'Waiting… press the action button on the Echo now.';
+  msg.className = 'login-msg'; msg.textContent = act('Waiting… press the action button on the Echo now.');
   art.classList.add('wait'); b.disabled = true;
   const done = (text, bad) => { art.classList.remove('wait'); b.disabled = false; msg.textContent = text; if (bad) msg.classList.add('bad'); };
   for (let i = 0; i < 70; i++) {
@@ -527,7 +538,7 @@ function settingRow(s) {
   const row = h('div', { class: 'row' + (wide ? ' wide' : '') + (stack ? ' stack' : '') },
     h('div', {},
       h('label', { class: 'row-label', for: 's-' + s.name }, label(s), info.ha === true ? haBadge() : null, saved),
-      info.help ? h('p', { class: 'help' }, info.help) : null),
+      info.help ? h('p', { class: 'help' }, act(info.help)) : null),
     h('div', { class: 'ctl' }, c.el));
   controls.set(s.name, { update: c.update, saved, root: row });
   return row;
@@ -540,7 +551,7 @@ function featureCard(s, children) {
   const card = h('article', { class: 'feature' },
     h('div', { class: 'f-head' }, h('span', { class: 'f-icon' }, icon(info.icon || 'sparkle')),
       h('label', { class: 'f-title', for: 's-' + s.name }, label(s), info.tag ? h('span', { class: 'badge warn' }, info.tag) : null, saved), c.el),
-    info.help ? h('p', { class: 'f-help' }, info.help) : null,
+    info.help ? h('p', { class: 'f-help' }, act(info.help)) : null,
     info.note ? h('p', { class: 'f-note' }, info.note) : null,
     status,
     kids,
@@ -1122,7 +1133,7 @@ const idButton = (e, name) => h('button', { class: 'small', 'data-k': 'id ' + e.
 
 async function loginOther(d) {
   d.asking = true; renderDevices();
-  toast(`Press the action button on ${d.echo.hello.name}`);
+  toast(act(`Press the action button on ${d.echo.hello.name}`, d.echo.hello));
   try {
     for (let i = 0; i < 70; i++) {
       let s;
@@ -1878,8 +1889,8 @@ function buildSystem(el, list) {
     infoRow('Settings file', ['All settings except what belongs to this one Echo (its name, keys, pairings), as a text file. Import it on another Echo, keep it as a backup, or give it to ', h('code', {}, 'scripts/setup.sh --preset'), ' so the next Echo you install starts with these settings.'],
       [h('button', { onclick: exportFile }, icon('down'), 'Export'), h('button', { onclick: () => file.click() }, icon('up'), 'Import…'), file], h('div', { class: 'row-x' }, importMsg)),
     logRow(),
-    infoRow('Debug access', 'Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.', adbBox),
-    infoRow('Factory reset', 'Forgets everything this Echo was told: settings, name, Home Assistant\'s key, approved browsers, Bluetooth pairings, and its Wi-Fi networks. It then waits to be set up again, like after the install: the Home Assistant app finds it over Bluetooth. The same as holding the action button for 10 seconds.',
+    infoRow('Debug access', act('Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.'), adbBox),
+    infoRow('Factory reset', ('Forgets everything this Echo was told: settings, name, Home Assistant\'s key, approved browsers, Bluetooth pairings, and its Wi-Fi networks. It then waits to be set up again, like after the install: the Home Assistant app finds it over Bluetooth. The same as holding the action button for 10 seconds.'.replace(echo.hello.action === 'volume_keys' ? / The same as holding.*$/ : /^$/, '')),
       h('button', { class: 'danger', onclick: factoryReset }, 'Factory reset…'))));
 
   clientsBox = h('div');
@@ -1902,7 +1913,7 @@ function renderSystem() {
   if (nameCtl) nameCtl.paint();
   if (wifiCtl) wifiCtl.paint();
   const s = state.adb;
-  const status = s.waiting ? h('span', { class: 'badge acc' }, 'Waiting for the action button…')
+  const status = s.waiting ? h('span', { class: 'badge acc' }, act('Waiting for the action button…'))
     : s.open ? h('span', { class: 'badge bad' }, 'Open: closes by itself after 30 min') : h('span', { class: 'badge' }, 'Closed');
   adbBox.replaceChildren(status,
     s.open ? h('button', { onclick: adbClose }, 'Close now') : h('button', { class: 'danger', disabled: s.waiting, onclick: adbOpen }, icon('term'), 'Open'));
@@ -1999,7 +2010,7 @@ async function adbOpen() {
   try {
     const r = await (await echo.call('POST', '/api/adb', 'on')).json();
     if (r.adb === 'busy') { toast('A login is waiting for the button first'); return; }
-    toast('Press the action button on the Echo');
+    toast(act('Press the action button on the Echo'));
     for (let i = 0; i < 65; i++) {
       await new Promise((res) => setTimeout(res, 1000));
       await load();

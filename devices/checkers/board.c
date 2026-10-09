@@ -38,6 +38,7 @@ const struct board board = {
      * name: the event numbers depend on the probe order (the kernel's DTBs: gpio-keys has no label, so the input device
      * takes the platform device's name; MediaTek's matrix keypad is "mtk-kpd", nothing on it here) */
     .keypad = "name:gpio-keys",
+    .action_combo = 1,                                              /* the settings page's login, adb, Improv */
     .grab_keys = 1,                                                 /* else PhoneWindowManager turns its stream volume too */
     .privacy_state = "/sys/devices/platform/amazon-gating/state",   /* chowned to system by /init.project.rc */
     /* the gating driver's own input device: "mute", KEY_POWER (0x74, DTB); any event there means a latch read

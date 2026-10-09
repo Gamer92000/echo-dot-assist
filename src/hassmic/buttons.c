@@ -16,6 +16,7 @@
 #define HOLD_WARN_MS   5000            /* action button held: the ring warns ... */
 #define HOLD_RESET_MS 10000            /* ... and then hassmic's reset (core_reset), long before acebuttond's 21 s */
 #define COMBO_MS       2000            /* both volume keys: stock gives that no meaning (acebuttond's are action holds) */
+#define CHORD_MS        400            /* board.action_combo: the two presses this close count as one */
 
 static struct button_handler handler;
 static int muted_state;                /* latch: what was last reported; no latch: the software toggle */
@@ -114,7 +115,14 @@ static void *reader(void *arg)
             long long *down = ev.code == KEY_VOLUMEUP ? &up_down : &dn_down;
             if (ev.value == 1 && handler.volume)       /* press only; key repeat (2) would run away */ handler.volume(ev.code == KEY_VOLUMEUP ? 1 : -1);
             if (ev.value == 1) *down = now_ms();
-            else if (ev.value == 0) { *down = 0; combo_done = 0; }
+            else if (ev.value == 0) {
+                /* board.action_combo: the first of the two let go, both pressed together and short of the pairing
+                 * hold: the action button's press.  Each press moved the volume a step, one up and one down. */
+                long long a = up_down, b = dn_down, t = now_ms();
+                if (board.action_combo && a && b && !combo_done && llabs(a - b) <= CHORD_MS &&
+                    t - (a > b ? a : b) < SHORT_PRESS_MS && handler.action) handler.action();
+                *down = 0; combo_done = 0;
+            }
             /* both held: the repeats of the later one (every 150 ms) tell us when 2 s have passed; the two presses
              * changed the volume by one step each way */
             long long later = up_down > dn_down ? up_down : dn_down;

@@ -385,6 +385,8 @@ static size_t hello_json(char *o, size_t cap, int members)
     hex(p, pk, 32); jesc(name, sizeof name, core_name); jesc(node, sizeof node, core_node_name());
     n = (size_t)snprintf(o, cap, "{\"name\":\"%s\",\"node\":\"%s\",\"model\":\"%s\",\"codename\":\"%s\",\"version\":\"%s\",\"pub\":\"%s\"",
                          name, node, board.model, board.codename, VERSION, p);
+    /* no action button (board.action_combo): the page names what stands in for it */
+    if (board.action_combo && n < cap) n += (size_t)snprintf(o + n, cap - n, ",\"action\":\"volume_keys\"");
     if (members && n < cap) { n += (size_t)snprintf(o + n, cap - n, ",\"members\":"); if (n < cap) n += arb_members_json(o + n, cap - n); }
     if (n < cap) n += (size_t)snprintf(o + n, cap - n, "}");
     return n < cap ? n : cap - 1;

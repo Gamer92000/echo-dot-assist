@@ -223,6 +223,7 @@ unit:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_crypto_test.py; else echo "web crypto: node missing, skipped"; fi
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/mww_test.c src/hassmic/mww_features.c src/hassmic/mww_model.c -lm -o build/mww_test
 	.venv/bin/python tests/unit/mww_ref.py build/mww_test
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/buttons_test.c src/hassmic/buttons.c -lpthread -o build/buttons_test && build/buttons_test build/buttons_test.fifo
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/afe_parcel_test.c src/hassmic/afe_parcel.c -o build/afe_parcel_test && build/afe_parcel_test
 	python3 tests/unit/sounds_zip.py build/sounds_dir build/sounds_test.zip
 	cc -O2 -Wall -Wextra -DSYNTH -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c -o build/sounds_test && build/sounds_test synth build/sounds_dir build/sounds_test.zip
