@@ -161,15 +161,83 @@ void cap_close(void)
 #define PLAY_NBUF 8
 struct pstream {
     SLObjectItf obj; SLPlayItf play; SLAndroidSimpleBufferQueueItf q;
+    SLVolumeItf vol;                            /* the volume as a gain on this player (vol_write), NULL if refused */
+    enum vol kind;
     pthread_mutex_t lock; pthread_cond_t cond;
     unsigned bps, slot, busy, next;             /* bytes per second, slot size, slots with the player, next free slot */
     long long written;                          /* bytes since open */
     char *buf;
 };
-static struct pstream voice = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER },
+static struct pstream voice = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER, .kind = VOL_TTS },
                       music = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER },
                       earcon = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER },
                       voip = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER };
+
+/* --- volume: a gain on each player, as the Dots' mixer applies its own per stream type.  Android's stream volumes are
+ * set to their maximum once per start (main.sh: wifictl.dex volume-max), so this is all that takes level off.  The
+ * curve: 0 silent, then 0.4 dB per step down from 100 (50 = -20 dB, 1 = -39.6 dB; how it sounds on the Show's
+ * speaker is for the device to tell).  Kept in state/volume ("main tts"): no mixer here to remember it across a restart. */
+static pthread_mutex_t vol_lock = PTHREAD_MUTEX_INITIALIZER;
+static int vols[2] = { -1, -1 }, vols_loaded;
+
+static const char *vol_path(void)
+{
+    static char p[256]; const char *d = getenv("HASSMIC_STATE");
+    snprintf(p, sizeof p, "%s/volume", d ? d : "/data/local/hassmic/state");
+    return p;
+}
+
+static void vol_load(void)                      /* under vol_lock */
+{
+    if (vols_loaded) return;
+    vols_loaded = 1;
+    FILE *f = fopen(vol_path(), "r"); int m, t;
+    if (f && fscanf(f, "%d %d", &m, &t) == 2 && m >= 0 && m <= 100 && t >= 0 && t <= 100) { vols[VOL_MAIN] = m; vols[VOL_TTS] = t; }
+    if (f) fclose(f);
+}
+
+static SLmillibel vol_mb(int pct) { return pct <= 0 ? SL_MILLIBEL_MIN : (SLmillibel)((pct - 100) * 40); }
+
+static void vol_apply(struct pstream *s)
+{
+    pthread_mutex_lock(&vol_lock);
+    vol_load();
+    if (s->obj && !s->vol && (*s->obj)->GetInterface(s->obj, SL_IID_VOLUME, &s->vol) != SL_RESULT_SUCCESS) s->vol = NULL;
+    int v = vols[s->kind];
+    if (s->vol && v >= 0) (*s->vol)->SetVolumeLevel(s->vol, vol_mb(v));
+    pthread_mutex_unlock(&vol_lock);
+}
+
+int vol_read(enum vol which, int fallback)
+{
+    if (which == VOL_MUTE) return 0;            /* no global mute of ours here */
+    pthread_mutex_lock(&vol_lock);
+    vol_load();
+    int v = vols[which];
+    pthread_mutex_unlock(&vol_lock);
+    return v < 0 ? fallback : v;
+}
+
+void vol_write(enum vol which, int v)
+{
+    if (which == VOL_MUTE) return;
+    v = v < 0 ? 0 : v > 100 ? 100 : v;
+    pthread_mutex_lock(&vol_lock);
+    vol_load();
+    int changed = vols[which] != v;
+    vols[which] = v;
+    if (changed) {
+        char tmp[270]; FILE *f;
+        snprintf(tmp, sizeof tmp, "%s.new", vol_path());
+        if ((f = fopen(tmp, "w"))) {
+            fprintf(f, "%d %d\n", vols[VOL_MAIN] < 0 ? v : vols[VOL_MAIN], vols[VOL_TTS] < 0 ? v : vols[VOL_TTS]);
+            if (fclose(f) == 0) rename(tmp, vol_path()); else unlink(tmp);
+        }
+    }
+    pthread_mutex_unlock(&vol_lock);
+    struct pstream *all[] = { &voice, &music, &earcon, &voip };
+    for (int i = 0; i < 4; i++) if (all[i]->kind == which) vol_apply(all[i]);
+}
 
 static void play_cb(SLAndroidSimpleBufferQueueItf q, void *ctx)
 {
@@ -181,6 +249,7 @@ static void play_cb(SLAndroidSimpleBufferQueueItf q, void *ctx)
 }
 
 static void s_close(struct pstream *s, int drain);
+static void vol_apply(struct pstream *s);
 
 static int s_open(struct pstream *s, unsigned rate, unsigned channels, SLint32 stream_type)
 {
@@ -193,9 +262,9 @@ static int s_open(struct pstream *s, unsigned rate, unsigned channels, SLint32 s
     SLDataSource src = { &loc, &fmt };
     SLDataLocator_OutputMix out = { SL_DATALOCATOR_OUTPUTMIX, mix_obj };
     SLDataSink sink = { &out, NULL };
-    const SLInterfaceID ids[] = { SL_IID_ANDROIDSIMPLEBUFFERQUEUE, SL_IID_ANDROIDCONFIGURATION };
-    const SLboolean req[] = { SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE };
-    if ((*engine)->CreateAudioPlayer(engine, &s->obj, &src, &sink, 2, ids, req) != SL_RESULT_SUCCESS) {
+    const SLInterfaceID ids[] = { SL_IID_ANDROIDSIMPLEBUFFERQUEUE, SL_IID_ANDROIDCONFIGURATION, SL_IID_VOLUME };
+    const SLboolean req[] = { SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE, SL_BOOLEAN_FALSE };
+    if ((*engine)->CreateAudioPlayer(engine, &s->obj, &src, &sink, 3, ids, req) != SL_RESULT_SUCCESS) {
         fprintf(stderr, "audio: CreateAudioPlayer failed (%u Hz, %u ch)\n", rate, channels);
         s->obj = NULL;
         return -1;
@@ -216,6 +285,7 @@ static int s_open(struct pstream *s, unsigned rate, unsigned channels, SLint32 s
     s->buf = malloc((size_t)s->slot * PLAY_NBUF);
     if (!s->buf) { (*s->obj)->Destroy(s->obj); s->obj = NULL; return -1; }
     s->busy = s->next = 0; s->written = 0;
+    vol_apply(s);                               /* before the first sample: no burst at full scale */
     (*s->play)->SetPlayState(s->play, SL_PLAYSTATE_PLAYING);
     return 0;
 }
@@ -270,8 +340,10 @@ static void s_close(struct pstream *s, int drain)
     }
     (*s->play)->SetPlayState(s->play, SL_PLAYSTATE_STOPPED);
     (*s->q)->Clear(s->q);
+    pthread_mutex_lock(&vol_lock);              /* vol_write may be setting its level right now */
     (*s->obj)->Destroy(s->obj);
-    s->obj = NULL; s->play = NULL; s->q = NULL;
+    s->obj = NULL; s->play = NULL; s->q = NULL; s->vol = NULL;
+    pthread_mutex_unlock(&vol_lock);
     free(s->buf); s->buf = NULL;
     s->busy = 0;
 }

@@ -262,15 +262,10 @@ static void run_argv(char *const argv[])
     }
 }
 
-static void run(const char *path, const char *a1, const char *a2)
-{
-    char *argv[] = { (char *)path, (char *)a1, (char *)a2, NULL };
-    run_argv(argv);
-}
-
 /* Its stdout into buf (NUL-terminated, cut at n - 1); empty when it cannot run (PC build) */
 static void run_output(char *const argv[], char *buf, size_t n);
 void core_run(char *const argv[], char *out, size_t n) { run_output(argv, out, n); }
+void core_spawn(char *const argv[]) { run_argv(argv); }
 static void run_output(char *const argv[], char *buf, size_t n)
 {
     int p[2]; size_t len = 0; ssize_t r;
@@ -1812,44 +1807,13 @@ static long long mono_ms(void)
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-/* PC tests: the mixer's volumes as files in HASSMIC_FAKE_MIXER (one per property), there being no audio_manager */
-static const char *fake_mixer(const char *prop, char *file, size_t n)
-{
-    const char *d = getenv("HASSMIC_FAKE_MIXER");
-    if (!d) return NULL;
-    snprintf(file, n, "%s/%s", d, prop);
-    return file;
-}
+static int read_volume(void) { return vol_read(VOL_MAIN, 40); }
 
-static int read_prop_volume(const char *prop, int fallback)
-{
-    char out[1024], *line, *save; int v = fallback, x;
-    char *argv[] = { "/system/bin/audio_manager_get_prop", (char *)prop, NULL };
-    if (fake_mixer(prop, out, sizeof out)) {
-        FILE *f = fopen(out, "r");
-        if (f) { if (fscanf(f, "%d", &x) == 1 && x >= 0 && x <= 100) v = x; fclose(f); }
-        return v;
-    }
-    run_output(argv, out, sizeof out);
-    for (line = strtok_r(out, "\n", &save); line; line = strtok_r(NULL, "\n", &save))
-        if (sscanf(line, "%d", &x) == 1 && x >= 0 && x <= 100) v = x;
-    return v;
-}
-
-static int read_volume(void) { return read_prop_volume("MainVolume", 40); }
-
-/* The mixer keeps one volume per stream type.  MainVolume is what the stock volume keys move and covers the Music and Earcon
- * streams; the TTS stream, which carries the assistant's replies, follows TTSVolume alone.  One knob for the user: both,
- * the loudest of the four while the volumes are separate (mix_target, mix_apply). */
-static void set_prop_volume(const char *prop, int v)
-{
-    char val[8], file[300];
-    if (fake_mixer(prop, file, sizeof file)) { FILE *f = fopen(file, "w"); if (f) { fprintf(f, "%d\n", v); fclose(f); } return; }
-    snprintf(val, sizeof val, "%d", v);
-    run("/system/bin/audio_manager_set_prop", prop, val);
-}
-
-/* Separate volumes (setting separate_volumes, issue #32): off, one volume for everything, as stock.  On, four of
+/* The backend keeps one volume per kind of stream (audio.h).  VOL_MAIN is what the stock volume keys move and covers
+ * music and sounds; the assistant's replies follow VOL_TTS alone.  One knob for the user: both, the loudest of the
+ * four while the volumes are separate (mix_target, mix_apply).
+ *
+ * Separate volumes (setting separate_volumes, issue #32): off, one volume for everything, as stock.  On, four of
  * their own, 0..100 each: music (`volume`: what the media player, Sendspin and the keys show), the assistant's replies
  * and announcements, our sounds (wake, buttons, Bluetooth, Drop In's chimes), timers and Drop In calls (the far end).  What the Echo does with a
  * volume (Echo Dot 2, docs/re-platform.md): the mixer has MainVolume for the Music, Earcon and Voip streams, TTSVolume
@@ -1917,8 +1881,8 @@ static float mix_gain(int v)
 static void mix_apply(void)                  /* lock held: the mixer's volumes and our gains, as they should be now */
 {
     int v = mix_target();
-    if (v != main_written) { set_prop_volume("MainVolume", v); main_written = v; }
-    if (v != tts_written) { set_prop_volume("TTSVolume", v); tts_written = v; }
+    if (v != main_written) { vol_write(VOL_MAIN, v); main_written = v; }
+    if (v != tts_written) { vol_write(VOL_TTS, v); tts_written = v; }
     static int spk_was = -1;
     int spk = speaker_mode == SPEAKER_ABSOLUTE ? loudest() : -1;
     if (spk >= 0 && spk != spk_was) fprintf(stderr, "volume: the speaker at %d\n", spk);
@@ -2218,12 +2182,12 @@ float core_lux(void)
 static void volume_sync(void)
 {
     int main_v, tts_v;
-    if (read_prop_volume("Mute", 0) != 0) { fprintf(stderr, "speaker: global Mute was set, clearing it\n"); set_prop_volume("Mute", 0); }
+    if (vol_read(VOL_MUTE, 0) != 0) { fprintf(stderr, "speaker: global Mute was set, clearing it\n"); vol_write(VOL_MUTE, 0); }
     pthread_mutex_lock(&core_lock);
     int cur = core_volume(), want = mix_target();
     pthread_mutex_unlock(&core_lock);
-    main_v = read_prop_volume("MainVolume", want);
-    tts_v = read_prop_volume("TTSVolume", want);
+    main_v = vol_read(VOL_MAIN, want);
+    tts_v = vol_read(VOL_TTS, want);
     pthread_mutex_lock(&core_lock);
     if (speaker_mode == SPEAKER_ABSOLUTE) {                         /* 100 is ours: only a stray TTSVolume to mend */
         if (main_v == 100 && tts_v != 100) { tts_written = -1; mix_apply(); }

@@ -474,6 +474,10 @@ satellite)
         [ -f $D/artifact-install.sh ] && sh $D/artifact-install.sh migrate /data/local/hassmic/state /data/local/hassmic
         leds                              # before alexa-off.sh: a ledcontroller that started again may want Alexa back
         sh $D/alexa-off.sh; quiet
+        # Android's own stream volumes at full (wifictl.dex through IAudioService): hassmic's gain per player is the
+        # volume (audio_android.c), the framework's may not take more off.  It is up: these models start the
+        # satellite at sys.boot_completed.
+        [ "$INSTALL" = boot ] && [ -f $D/wifictl.dex ] && CLASSPATH=$D/wifictl.dex app_process / Wifictl volume-max
     } 2>&1 | stamped >> $LOG
     # hassmic offers Wi-Fi motion where the module can be loaded (wifimotion.c), the loop below loads it when needed
     [ -n "$KMOD" ] && [ -f $D/$KMOD ] && export HASSMIC_WIFI_KMOD=/proc/${KMOD%.ko}

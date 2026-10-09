@@ -186,3 +186,34 @@ int       voip_open(unsigned rate, unsigned channels) { return s_open(&voip, "HA
 long long voip_queued_us(void) { return s_queued_us(&voip); }
 int       voip_write(const void *data, size_t len) { return s_write(&voip, data, len); }
 void      voip_close(void) { s_close(&voip); }
+
+/* Volumes: in memory; unset = what the caller expects (as a mixer that cannot be asked).  Tests: the mixer's volumes
+ * as files in HASSMIC_FAKE_MIXER instead, one per property as audio_mixer.c names them */
+static int vols[3] = { -1, -1, -1 };
+static const char *const vol_props[] = { "MainVolume", "TTSVolume", "Mute" };
+
+static const char *fake_mixer(enum vol which, char *file, size_t n)
+{
+    const char *d = getenv("HASSMIC_FAKE_MIXER");
+    if (!d) return NULL;
+    snprintf(file, n, "%s/%s", d, vol_props[which]);
+    return file;
+}
+
+int vol_read(enum vol which, int fallback)
+{
+    char file[300]; int v = fallback, x;
+    if (fake_mixer(which, file, sizeof file)) {
+        FILE *f = fopen(file, "r");
+        if (f) { if (fscanf(f, "%d", &x) == 1 && x >= 0 && x <= 100) v = x; fclose(f); }
+        return v;
+    }
+    return vols[which] < 0 ? fallback : vols[which];
+}
+
+void vol_write(enum vol which, int v)
+{
+    char file[300];
+    if (fake_mixer(which, file, sizeof file)) { FILE *f = fopen(file, "w"); if (f) { fprintf(f, "%d\n", v); fclose(f); } return; }
+    vols[which] = v;
+}

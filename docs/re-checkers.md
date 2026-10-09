@@ -170,8 +170,14 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   does not have. Needs a small binder client for `audiosignalprocessor`, transaction 3 (above: 0x92, 0x17).
   Without it the cancellers adapt to the talker after ~1.5 s (as on donut before `listening()`), and arbitration
   falls back to the own SNR score.
-- [ ] Volume: `set_prop_volume` runs `audio_manager_set_prop` (the Dots' mixer); here Android's stream volumes
-  (`AudioManager`/`media volume`, or per-player gain in `audio_android.c`).
+- [x] Volume: behind `audio.h` now (`vol_read`/`vol_write`: the mixer's props on the Dots). Here a gain on each
+  OpenSL ES player (`SLVolumeItf`, 0.4 dB per step, 0 silent), kept in `state/volume`; Android's own stream volumes
+  (voice call, system, music) go to their maximum at every satellite start (`main.sh`: `wifictl.dex volume-max`,
+  IAudioService.setStreamVolume as package "root", which 8149's AudioService notes with AppOps for uid 0; no
+  `media volume` in Android 7.1's media_cmd). The keypad is grabbed (`board.grab_keys`, EVIOCGRAB) so the framework
+  does not turn its volume too, and shows no volume panel. On the device: the levels, and that nothing else (the
+  screen's settings) moves Android's stream volumes afterwards; the camera shutter's EV_SW on the same keypad no
+  longer reaches Android either.
 - [ ] Equalizer: `LASP_CMD_GET/SET_USER_EQ_INFO` through LIPC, absent here (the binder `command` may take it).
 - [ ] No micRaw (`startCapture` refused on ship builds): `scripts/mic-compare.sh` cannot work.
 - [ ] Bluetooth speaker stream (`bt_open` returns -1): Android's stack would route an AudioTrack to a speaker itself.
