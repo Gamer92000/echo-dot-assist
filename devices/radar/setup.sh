@@ -27,13 +27,12 @@ root|Root
 build|Build
 network|Lock down, join Wi-Fi
 install|Install
-wakeword|Wake word, whisper and sound detection models
 "
 ROOTED_SKIP="udev usb unlock flash root"     # done on an Echo that is rooted already (scripts/setup.sh asks)
 NOTES=(
     "adb over Wi-Fi is closed: scripts/adb-wifi.sh <echo-ip> (or debug access on the settings page, http://<echo-ip>:28931/) opens it for 30 min."
     "Updates: git pull, then scripts/ota-push.sh <echo-ip>."
-    "More wake words, whisper or sound detection models later: scripts/artifacts.sh <echo-ip>"
+    "More wake words, whisper or sound detection models: the settings page, http://<echo-ip>:28931/ → \"Download from Amazon\"."
     "Music Assistant, Bluetooth speaker: $DDIR/README.md"
 )
 
@@ -177,8 +176,4 @@ step_network() {
 step_install() {
     bootroot_unpack || return 1        # again: the build step may have been skipped
     install_satellite
-}
-
-step_wakeword() {
-    artifacts_run setup
 }

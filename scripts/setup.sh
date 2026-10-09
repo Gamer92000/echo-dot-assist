@@ -6,7 +6,7 @@
 #     --dry-run   go through all steps and show the commands, run none of them (file checks still happen)
 #     --restart   forget the progress, e.g. for the next Echo of the same model
 #     --from S    count every step before S as done, e.g. --from build (tools files udev usb unlock flash root build
-#                 network install wakeword)
+#                 network install)
 #     --preset F  settings to start with: an export from another Echo's settings page (hassmic-settings.conf);
 #                 without it, the install step asks (Enter for none)
 # Only the Echo on USB is worked on, whatever else is on adb over Wi-Fi.  Keep the cable in to the end: the installed
@@ -15,7 +15,6 @@
 cd "$(dirname "$0")/.."
 . scripts/lib/device.sh
 . scripts/lib/setup.sh
-. scripts/lib/artifacts.sh
 . scripts/lib/build.sh
 
 DRY= RESTART= PRESET= FROM= ROOTED_NOTE=

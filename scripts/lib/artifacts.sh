@@ -1,4 +1,4 @@
-# Amazon's artifacts for an installed Echo, shared by scripts/artifacts.sh and the last step of scripts/setup.sh.  bash;
+# Amazon's artifacts for an installed Echo, the logic of scripts/artifacts.sh.  bash;
 # sourced from the repository root after scripts/lib/device.sh and scripts/lib/setup.sh.
 # Two kinds, both from Amazon's DAVS (Device Artifact Vending Service) and the same for every Echo: wake word model sets, installed on the Echo (Home
 # Assistant then offers each in the Echo's wake word select), and other models, installed on the Echo as well: whisper
@@ -8,7 +8,8 @@
 # The user ticks everything wanted first (a menu with a checklist per kind); then one run does it all.  Downloading needs the Echo registered to an
 # Amazon account once: it runs stock Alexa with the updaters cut off (MODE=stock-online) until then, and everything is
 # undone afterwards (registration, the Wi-Fi the Alexa app added, the mode).  Stopped halfway, a new run finds the Echo
-# in stock-online mode and goes on there.
+# in stock-online mode and goes on there.  The way meant for people is the settings page's "Download from Amazon" (every
+# model signs in there itself, no Alexa app); this stays for models already on the PC and as a fallback.
 # Over Wi-Fi the Echo's adb has to be open (scripts/adb-wifi.sh, or debug access on the settings page).  The two reboots of
 # the Amazon way would close it, so for that way it is kept open with ADB_WIFI=1 in hassmic.conf, marked as ours, until
 # the end.
@@ -21,15 +22,9 @@ ADB_OURS_OLD="ADB_WIFI=1 # wakeword.sh"   # the marker before the rename; an Ech
 WW_KEYS=(echo computer amazon ziggy alexa)
 LOCALES=(de-DE en-US en-GB fr-FR it-IT es-ES ja-JP pt-BR en-CA fr-CA en-AU en-IN es-MX)
 
-# m_stage ID: on its own, a screen per step of M_PLAN; inside the setup (M_SETUP set) only a line
+# m_stage ID: a screen per step of M_PLAN
 m_stage() {
     local i list=() cur=0
-    if [ -n "$M_SETUP" ]; then
-        for ((i = 0; i < ${#M_PLAN[@]}; i += 2)); do
-            [ "${M_PLAN[i]}" = "$1" ] && [ "$1" != connect ] && [ "$1" != choose ] && printf '\n  %s%s%s\n' "$B" "${M_PLAN[i+1]}" "$N"
-        done
-        return 0
-    fi
     DONE_IDS=
     for ((i = 0; i < ${#M_PLAN[@]}; i += 2)); do
         list+=("${M_PLAN[i]}|${M_PLAN[i+1]}"); [ "${M_PLAN[i]}" = "$1" ] && cur=${#list[@]}
@@ -163,12 +158,10 @@ fetch_model() {
     task "Downloading $(label $id)" python3 tools/davs-fetch.py ${ecids:+--ecids $ecids} $TMP/map.db $key $loc $MODELS
 }
 
-# artifacts_run [setup]: the whole thing; with "setup" as a step of scripts/setup.sh (the Echo on adb is the one just
-# installed, and the wake word stays "Alexa" unless something is ticked)
+# artifacts_run: the whole thing
 artifacts_run() {
     local r
-    M_SETUP=$1 M_PLAN=(connect "Connect" choose "Choose") INSTALLED=() FETCHED=() FAILED=()
-    if [ -n "$DRY" ]; then info "offers the wake words and whisper detection in $MODELS/ and Amazon's; the dry run keeps \"Alexa\" and adds nothing"; return 0; fi
+    M_PLAN=(connect "Connect" choose "Choose") INSTALLED=() FETCHED=() FAILED=()
     TMP=$(mktemp -d)                  # map.db is the account's device credential: never kept on the PC
     _artifacts_run; r=$?
     rm -rf "$TMP"
@@ -178,25 +171,21 @@ artifacts_run() {
 _artifacts_run() {
     # --- connect
     m_stage connect
-    if [ -z "$M_SETUP" ]; then
-        # the same Echo on USB too: USB it is, as over Wi-Fi it is out of reach while stock waits in setup mode.  The
-        # same = the Wi-Fi one's serial, or (Wi-Fi unreachable) the USB one is halfway through a run (stock-online)
-        local usb=$(adb -d get-serialno 2>/dev/null) wifi
-        if [[ $ANDROID_SERIAL == *:* ]] && [ -n "$usb" ] && [ "$usb" != unknown ]; then
-            wifi=$(timeout 5 adb get-serialno 2>/dev/null)
-            if [ "$wifi" = "$usb" ] || { [ -z "$wifi" ] &&
-                adb -s "$usb" shell "grep -q '^MODE=stock-online' $D/hassmic.conf" 2>/dev/null; }; then
-                export ANDROID_SERIAL=$usb; info "this Echo is on USB too: using USB ($usb)"
-            fi
+    # the same Echo on USB too: USB it is, as over Wi-Fi it is out of reach while stock waits in setup mode.  The
+    # same = the Wi-Fi one's serial, or (Wi-Fi unreachable) the USB one is halfway through a run (stock-online)
+    local usb=$(adb -d get-serialno 2>/dev/null) wifi
+    if [[ $ANDROID_SERIAL == *:* ]] && [ -n "$usb" ] && [ "$usb" != unknown ]; then
+        wifi=$(timeout 5 adb get-serialno 2>/dev/null)
+        if [ "$wifi" = "$usb" ] || { [ -z "$wifi" ] &&
+            adb -s "$usb" shell "grep -q '^MODE=stock-online' $D/hassmic.conf" 2>/dev/null; }; then
+            export ANDROID_SERIAL=$usb; info "this Echo is on USB too: using USB ($usb)"
         fi
-        pick_serial
-        waitfor "Waiting for the Echo on adb|Echo on adb" "adb_is device" \
-            "Nothing? Connect it by USB, or open adb over Wi-Fi (scripts/adb-wifi.sh <echo-ip>) and give its address: scripts/artifacts.sh <echo-ip>. Orange ring? A run stopped halfway left it a stock Echo waiting for the Alexa app: set it up there (Devices → + → Add device → Amazon Echo), then scripts/artifacts.sh <its address> goes on." 15 || return 1
-        device_load adb
-        MODEL_NAME="Artifacts · $MODEL_NAME"
-    else
-        wait_adb device || return 1
     fi
+    pick_serial
+    waitfor "Waiting for the Echo on adb|Echo on adb" "adb_is device" \
+        "Nothing? Connect it by USB, or open adb over Wi-Fi (scripts/adb-wifi.sh <echo-ip>) and give its address: scripts/artifacts.sh <echo-ip>. Orange ring? A run stopped halfway left it a stock Echo waiting for the Alexa app: set it up there (Devices → + → Add device → Amazon Echo), then scripts/artifacts.sh <its address> goes on." 15 || return 1
+    device_load adb
+    MODEL_NAME="Artifacts · $MODEL_NAME"
     [ "$(ashell id -u)" = 0 ] || { fail "adb shell is not root: is this Echo set up with scripts/setup.sh?"; return 1; }
     [ -n "$(ashell "ls $D/hassmic.conf 2>/dev/null")" ] ||
         { fail "no hassmic installed on this Echo: scripts/setup.sh first"; return 1; }
@@ -215,7 +204,7 @@ _artifacts_run() {
     HAVE=" $(ashell "ls $D/models 2>/dev/null" | tr '\n' ' ') "
     HAVE_WHISPER=$(ashell "ls $D/whisper/pryon_whisper.manifest 2>/dev/null")
     HAVE_AED=$(ashell "ls $D/aed/pryon.manifest 2>/dev/null")
-    [ -n "$M_SETUP" ] || ok "$MODEL_NAME${ANDROID_SERIAL:+, $ANDROID_SERIAL}"
+    ok "$MODEL_NAME${ANDROID_SERIAL:+, $ANDROID_SERIAL}"
     [ -n "$ONLINE" ] && warn "This Echo is in stock-online mode from an earlier run: going on with that."
 
     # --- choose: a main menu with a checklist per kind; the language decides which Amazon artifacts are new
@@ -248,7 +237,7 @@ _artifacts_run() {
         WANT+=("${OT_IDS[i]}"); is_aed ${OT_IDS[i]} || [ ! -d $MODELS/${OT_IDS[i]}/unpacked ] && AMAZON+=("${OT_IDS[i]}")
     done
     if [ ${#WANT[@]} = 0 ] && [ -z "$ONLINE" ]; then
-        [ -n "$M_SETUP" ] && ok "wake word: Alexa" || info "nothing ticked"
+        info "nothing ticked"
         return 0
     fi
 
@@ -268,6 +257,7 @@ _artifacts_run() {
     done
     [ -n "$ONLINE" ] && say "  · finish the earlier run: back to satellite, then you deregister it"
     [ -n "$need_amazon" ] && info "Downloading needs this Echo registered to your Amazon account for a few minutes (Alexa app); it is undone at the end."
+    [ -n "$need_amazon" ] && warn "The settings page downloads the same without the Alexa app: http://<echo-ip>:28931/ → \"Download from Amazon\"."
     ask "Go on?" y || return 0
 
     if [ -n "$need_amazon" ]; then

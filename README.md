@@ -98,7 +98,7 @@ scripts/setup.sh
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/install-dark.svg">
-  <img alt="The setup's steps: on your PC (tools, downloads, USB access), into the Echo (USB cable, unlock, stock firmware, root; this wipes it and is skipped on a rooted Echo), build (or GitHub's build), onto your network (lock down and join Wi-Fi, install, optional wake words). Then add it in Home Assistant." src="docs/img/install-light.svg">
+  <img alt="The setup's steps: on your PC (tools, downloads, USB access), into the Echo (USB cable, unlock, stock firmware, root; this wipes it and is skipped on a rooted Echo), build (or GitHub's build), onto your network (lock down and join Wi-Fi, install). Then add it in Home Assistant." src="docs/img/install-light.svg">
 </picture>
 
 One guided run for every supported model. It does everything itself and stops only when you have to act: download a

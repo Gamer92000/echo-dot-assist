@@ -84,7 +84,7 @@ Rough order. Each step is safe to stop at.
    `task` (spinner, output into the log), waits through `waitfor`/`wait_adb`; what only the user can do (soldering,
    button presses) is a short `todo` or `tell`, never a paragraph. A step first checks whether its result is there
    already. Mark a model not tried on a real Echo with `UNTESTED=1`. End with
-   `install` (`install_satellite`) and `wakeword` (`artifacts_run setup`). Try it with `scripts/setup.sh <codename> --dry-run`.
+   `install` (`install_satellite`); models come later from the settings page. Try it with `scripts/setup.sh <codename> --dry-run`.
 6. `tools/mkstubs.sh <codename>` for the stub lists, and the codename in the build matrix of
    `.github/workflows/build.yml`: CI builds and publishes the model's bundle from then on.
 7. Add the model to the table above, to the root `README.md` and to `CHANGELOG.md`.

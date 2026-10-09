@@ -120,8 +120,9 @@ If `probe.sh` reports a different library, the Echo runs another firmware: stop 
 ### 3. Optional: another wake word
 
 Want "Echo" or "Computer" instead of "Alexa"? The Echo's settings page has "Download from Amazon" (a code to enter on
-Amazon's site, then the wake words of any language, whisper detection, the newer sound detection model). From the PC
-instead — the same sets for every Echo, so one download serves them all:
+Amazon's site, then the wake words of any language, whisper detection, the newer sound detection model). That is the
+way meant; the guided setup no longer downloads anything. The old way from the PC still works as a fallback (it
+warns first), and installs models already in `device-logs/models/`:
 
 ```sh
 scripts/artifacts.sh <echo-ip>
@@ -131,7 +132,7 @@ Its menu has a list of ticks per kind, everything new ticked: "Wake words" (the 
 as Amazon's sets are the same for every Echo: fetch once, copy to every Echo, and the ones Amazon has in the chosen
 language) and "Other artifacts", installed on the Echo as well: whisper detection (Home Assistant's "Last request
 whispered", [guide](../../docs/GUIDE.md#whisper-detection)), and Amazon's newest sound detection model in place of the
-firmware's (not ticked: so far it scores the same, `docs/re-aed.md`). The guided setup's last step offers the same. Untick what
+firmware's (not ticked: so far it scores the same, `docs/re-aed.md`). Untick what
 you do not want; "Go on" shows what it will do and asks once. It tries each wake word on the Echo's own engine before installing it,
 and restarts hassmic. For downloads it walks through the Amazon route below by itself, once for all of them: stock
 mode with the update block, you register the Echo in the Alexa app, it downloads the models (asking for what this

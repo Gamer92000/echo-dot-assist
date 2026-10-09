@@ -96,7 +96,8 @@ There is no single-test selector: run one unit test by building/running its line
   capture while hassmic runs: the mixer feeds the mic stream to one client only.
 - `scripts/mic-compare.sh [-l] [secs]` records micRaw beside that dump and prints speech against noise for both
   (`tools/mic-compare.py`): what the front end does to a sentence. `-l` sets listening mode for the recording.
-- `scripts/artifacts.sh [echo-ip]` (logic in `scripts/lib/artifacts.sh`, also the last step of `setup.sh`): Amazon's DAVS
+- `scripts/artifacts.sh [echo-ip]` (logic in `scripts/lib/artifacts.sh`; no longer a step of `setup.sh`, and it opens with a
+  warning that the page's "Download from Amazon" is the way meant now; a fallback): Amazon's DAVS
   artifacts, picked in a menu with a checklist per kind (new ones ticked): wake words, installed from `device-logs/models/`
   after loading each with the Echo's `pryon_test`, and other artifacts (the sound detection model), kept on the PC for tests.
   Downloads come from Amazon in one go (stock-online + Alexa app registration, undone afterwards).

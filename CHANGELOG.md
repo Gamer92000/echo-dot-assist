@@ -4,6 +4,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-09
 
+- **The guided setup no longer downloads models.** Its last step, which put the Echo online as a stock Alexa and
+  had you register it in the Alexa app, is gone: "Download from Amazon" on the settings page does it on every Echo
+  now, without the app and without the risk of a factory reset from deregistering too early. `scripts/artifacts.sh`
+  still works, as a fallback, and says so with a warning first.
 - **"Download from Amazon" works on the Echo Dot 3.** Its newer way of proving to Amazon who it is — a certificate
   its hardware key had Amazon sign — is worked out now, so the Dot 3 itself signs in on the settings page and
   downloads wake words, whisper detection and the newer sound detection model, like the other Echos always could.
