@@ -204,3 +204,28 @@ void vol_write(enum vol which, int v)
     char *argv[] = { "/system/bin/audio_manager_set_prop", (char *)vol_props[which], val, NULL };
     core_spawn(argv);
 }
+
+/* The front end: LIPC properties of com.doppler.lasp, through the stock tools (FINDINGS.md "Listening mode") */
+void afe_listening(int on)
+{
+    char *argv[] = { "/system/bin/lipc-set-prop", "-i", "com.doppler.lasp", "LASP_CMD_SET_LISTENING_MODE", on ? "1" : "0", NULL };
+    core_spawn(argv);
+}
+
+void afe_stream_stopped(void)
+{
+    char *argv[] = { "/system/bin/lipc-set-prop", "-i", "com.doppler.lasp", "LASP_CMD_NOTIFY_ASR_STREAM_STOPPED", "1", NULL };
+    core_spawn(argv);
+}
+
+/* both tools in one shell: 150 ms on the device */
+int afe_arbitration(long ts, long te, char *json, size_t n)
+{
+    char cmd[400];
+    snprintf(cmd, sizeof cmd, "/system/bin/lipc-set-prop -s com.doppler.lasp LASP_CMD_SET_WAKEWORD_METADATA "
+             "'{\"timestamp_before_ww_start\":%ld,\"timestamp_before_ww_end\":%ld}' && "
+             "/system/bin/lipc-get-prop -s com.doppler.lasp LASP_CMD_REQUEST_ARBITRATION_JSON", ts, te);
+    char *argv[] = { "/system/bin/sh", "-c", cmd, NULL };
+    core_run(argv, json, n);
+    return json[0] != 0;
+}

@@ -4,7 +4,7 @@
 # libpryon.so, libopus.so and libz.so are byte-identical to donut's.
 TARGET  := armv7a-linux-androideabi24
 # Backends (src/hassmic/audio.h, wake.h) and the stock libraries they link against, from $(STOCK).
-AUDIO   := src/hassmic/audio_android.c
+AUDIO   := src/hassmic/audio_android.c src/hassmic/afe_parcel.c
 WAKE    := src/hassmic/wake_pryon.c
 LIBS    := libpryon.so libopus.so libz.so
 # NDK system libraries the backend needs (not stock: no stubs for them)

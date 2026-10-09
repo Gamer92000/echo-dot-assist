@@ -508,8 +508,7 @@ static atomic_int afe_asked;                        /* the front end was asked f
 static void afe_done(void)                          /* any thread: no command follows, or it is over */
 {
     if (!atomic_exchange(&afe_asked, 0)) return;
-    char *argv[] = { "/system/bin/lipc-set-prop", "-i", "com.doppler.lasp", "LASP_CMD_NOTIFY_ASR_STREAM_STOPPED", "1", NULL };
-    run_argv(argv);
+    afe_stream_stopped();
 }
 
 /* lock held.  Tells Amazon's front end that a command is being spoken, as stock does after the wake word.  While its
@@ -530,8 +529,7 @@ static void listening_apply(void)
     int on = listen_pipe || listen_call;
     if (on == is) return;
     is = on;
-    char *argv[] = { "/system/bin/lipc-set-prop", "-i", "com.doppler.lasp", "LASP_CMD_SET_LISTENING_MODE", on ? "1" : "0", NULL };
-    run_argv(argv);
+    afe_listening(on);
 }
 static void listening(int on) { listen_pipe = on; listening_apply(); }
 
@@ -926,13 +924,9 @@ static double ring_power(uint64_t a, uint64_t b)    /* mean square over samples 
  * starts its diagnostics (FINDINGS.md "Listening mode"): afe_done() ends both.  0: not available. */
 static int afe_score(int *score)                    /* capture thread */
 {
-    long ts, te; char cmd[400], buf[512]; const char *v, *a;
+    long ts, te; char buf[512]; const char *v, *a;
     if (!wake_afe_times(&ts, &te)) return 0;
-    snprintf(cmd, sizeof cmd, "/system/bin/lipc-set-prop -s com.doppler.lasp LASP_CMD_SET_WAKEWORD_METADATA "
-             "'{\"timestamp_before_ww_start\":%ld,\"timestamp_before_ww_end\":%ld}' && "
-             "/system/bin/lipc-get-prop -s com.doppler.lasp LASP_CMD_REQUEST_ARBITRATION_JSON", ts, te);
-    char *argv[] = { "/system/bin/sh", "-c", cmd, NULL };
-    run_output(argv, buf, sizeof buf);
+    if (!afe_arbitration(ts, te, buf, sizeof buf)) return 0;
     if (!(v = strstr(buf, "\"voiceEnergy\":")) || !(a = strstr(buf, "\"ambientEnergy\":"))) return 0;
     atomic_store(&afe_asked, 1);
     double voice = atof(strchr(v, ':') + 1), ambient = atof(strchr(a, ':') + 1);

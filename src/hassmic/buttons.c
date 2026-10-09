@@ -1,10 +1,13 @@
 #include "buttons.h"
 #include "board.h"
+#include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
@@ -137,6 +140,26 @@ static void *privacy_reader(void *arg)
     return NULL;
 }
 
+/* An input device by path, or "name:<its name>" (EVIOCGNAME) where the event number depends on the probe order: the
+ * first /dev/input/eventN of that name (HASSMIC_INPUT_DIR for tests). */
+static int open_input(const char *spec)
+{
+    if (strncmp(spec, "name:", 5)) return open(spec, O_RDONLY);
+    const char *dir = getenv("HASSMIC_INPUT_DIR");
+    for (int i = 0; i < 32; i++) {
+        char path[160], name[128] = ""; int fd;
+        snprintf(path, sizeof path, "%s/event%d", dir ? dir : "/dev/input", i);
+        if ((fd = open(path, O_RDONLY)) < 0) continue;
+        if (ioctl(fd, EVIOCGNAME(sizeof name - 1), name) >= 0 && !strcmp(name, spec + 5)) {
+            fprintf(stderr, "buttons: %s is %s\n", spec + 5, path);
+            return fd;
+        }
+        close(fd);
+    }
+    errno = ENOENT;
+    return -1;
+}
+
 /* board.grab_keys: the keys are ours alone.  A grab is the input device's, so it ends with our process. */
 static void grab(int fd, const char *dev)
 {
@@ -148,10 +171,10 @@ int buttons_start(const char *device, const struct button_handler *h)
 {
     pthread_t t; int pfd, f2;
     handler = *h;
-    int f1 = open(device, O_RDONLY);
+    int f1 = open_input(device);
     if (f1 < 0) return -1;
     grab(f1, device);
-    if (board.keypad2 && (f2 = open(board.keypad2, O_RDONLY)) >= 0) {   /* keys split over two nodes (biscuit) */
+    if (board.keypad2 && (f2 = open_input(board.keypad2)) >= 0) {   /* keys split over two nodes (biscuit) */
         grab(f2, board.keypad2);
         if (pthread_create(&t, NULL, reader, (void *)(long)f2)) close(f2);
         else pthread_detach(t);
@@ -165,7 +188,7 @@ int buttons_start(const char *device, const struct button_handler *h)
         fprintf(stderr, "buttons: %s not readable, counting presses of the mute key instead\n", board.privacy_state);
     }
     if (!board.privacy_input) pfd = -1;
-    else if ((pfd = open(board.privacy_input, O_RDONLY)) < 0) fprintf(stderr, "buttons: %s not available, mute button changes go unnoticed\n", board.privacy_input);
+    else if ((pfd = open_input(board.privacy_input)) < 0) fprintf(stderr, "buttons: %s not available, mute button changes go unnoticed\n", board.privacy_input);
     else if (pthread_create(&t, NULL, privacy_reader, (void *)(long)pfd)) close(pfd);
     else pthread_detach(t);
     if (pthread_create(&t, NULL, reader, (void *)(long)f1)) return -1;

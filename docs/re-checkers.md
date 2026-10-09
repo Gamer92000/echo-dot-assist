@@ -77,7 +77,13 @@ The command numbers are donut's LASP ones (`com.amazon.asp.AudioSignalProcessor`
 - `SET_LISTENING_MODE` = 0x92, one int32: AFE vtable +0xc4/+0xc8 (utterance start/end) in libasp, as on donut
   (`main.c` `listening()`). Stock sends it at stream start and end (`NotifyAudioStreamStateCommand`).
 - `REQUEST_ARBITRATION_JSON` = 0x17, in int32 256, out 256 bytes of JSON (voiced and ambient energy): the ESP score.
-- Also `NOTIFY_PLAYBACK_STATUS` 0, `NOTIFY_TTS_STATUS` 1, `NOTIFY_MIC_MUTED` 4, `SET_WAKEWORD_METADATA`.
+- Also `NOTIFY_PLAYBACK_STATUS` 0, `NOTIFY_TTS_STATUS` 1, `NOTIFY_MIC_MUTED` 4 (aspclient's constants).
+- `NOTIFY_ASR_STREAM_STOPPED` = 14 and `SET_WAKEWORD_METADATA` = 114: not in aspclient; donut's
+  `libgenericaspclient.so` pairs each LIPC name with its ASP number (`ldr` name, `movs r2, #n`; checked on 23 and
+  149, which aspclient names), and checkers' libasp has the same cases: its command switch (`tbh` tables at
+  0x2608e/0x2613c/0x261e4/0x26292) sends 14 to the "Stop AFE Diag and report metrics" code and 114 to the one that
+  refuses an input of 0 or over 4095 bytes with "Invalid ASP_CMD_SET_WAKEWORD_METADATA data/size". `command` checks
+  no caller (only capture and injection log "Caller has permission").
 
 `IAudioEventListener.onEvent(int what, byte[])` (transaction 1): BEAM_DIRECTION 1, BEAM_INDEX 3,
 ACTIVE_INPUT_SOURCE 5, SOUND_SOURCE_LOCALIZATION 12/15, PIPELINE_STATUS 19.
@@ -165,11 +171,12 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
 - [ ] On the device: the recording really opens as system; only one capture at a time (Android 7 hands the input to
   the newest AudioRecord, so nothing of Alexa's may still record); the ASR pipeline's level for `micgain.c`; latency;
   whether our playback really is the echo canceller's reference (inferred from the HAL, not measured).
-- [ ] The front end's listening mode and wake word energies: `main.c` calls `lipc-set-prop` / `lipc-get-prop`
-  (`LASP_CMD_SET_LISTENING_MODE`, `LASP_CMD_REQUEST_ARBITRATION_JSON`, `SET_WAKEWORD_METADATA`), which this firmware
-  does not have. Needs a small binder client for `audiosignalprocessor`, transaction 3 (above: 0x92, 0x17).
-  Without it the cancellers adapt to the talker after ~1.5 s (as on donut before `listening()`), and arbitration
-  falls back to the own SNR score.
+- [x] The front end's listening mode and wake word energies: behind `audio.h` now (`afe_listening`,
+  `afe_arbitration`, `afe_stream_stopped`; LIPC on the Dots). Here transaction 3 of `audiosignalprocessor` through
+  the firmware's own `/system/bin/service call` (`afe_parcel.c`: the parcel as `i32` words, the reply read back out
+  of Android 7's Parcel/HexDump print, whose format strings are in this libbinder): 146, 114 + 23, 14 as above.
+  `tests/unit/afe_parcel_test.c` (make unit). On the device: that the reply looks as printed here, the JSON's
+  energies, and the time two `service` runs take inside the arbitration window (the Dots' LIPC pair: 150 ms).
 - [x] Volume: behind `audio.h` now (`vol_read`/`vol_write`: the mixer's props on the Dots). Here a gain on each
   OpenSL ES player (`SLVolumeItf`, 0.4 dB per step, 0 silent), kept in `state/volume`; Android's own stream volumes
   (voice call, system, music) go to their maximum at every satellite start (`main.sh`: `wifictl.dex volume-max`,
@@ -213,9 +220,11 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
 **Buttons, lights, sounds**
 - [ ] No action button: the settings page's login (`web_approve()` in `on_action`) and opening adb over Wi-Fi from the
   page both wait for one. A volume key combination or the touchscreen instead.
-- [ ] `board.c` values from the running device: keypad event number (`getevent -il`), the privacy driver's input
-  device (its "mute" key is KEY_POWER, 0x74, not KEY_MUTE: `buttons.c` would miss it, the once-a-second read of
-  `amazon-gating/state` still catches it), light sensor path.
+- [x] Input devices by name, not event number (`board.c` `name:gpio-keys`, `name:amazon-gating`; `buttons.c` looks
+  them up with EVIOCGNAME): the kernel's five DTBs give gpio-keys no label (so the platform name) and the gating
+  driver its own input device, "mute" = KEY_POWER (0x74), on which `privacy_reader` reads the latch at any event.
+  `amazon-gating` is the only name the kernel has for that device: confirm with `getevent -il`.
+- [ ] Light sensor: STK3x1x behind MediaTek's sensor hub, no lux file (`light_sensor` empty).
 - [ ] No LED ring and no `ledctrl` (`main.c` then leaves LEDs off): listening/thinking/volume/identify feedback
   would go on the screen; nothing does that yet.
 - [x] Earcons: none in the firmware's file system; `sounds.c` reads them straight out of the stock apps

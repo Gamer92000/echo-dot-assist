@@ -113,3 +113,8 @@ void      voip_close(void) { s_close(&voip); }
 static int vols[3] = { -1, -1, -1 };
 int  vol_read(enum vol which, int fallback) { return vols[which] < 0 ? fallback : vols[which]; }
 void vol_write(enum vol which, int v) { vols[which] = v; }
+
+/* No front end on the PC */
+void afe_listening(int on) { (void)on; }
+void afe_stream_stopped(void) {}
+int  afe_arbitration(long ts, long te, char *json, size_t n) { (void)ts; (void)te; if (n) json[0] = 0; return 0; }

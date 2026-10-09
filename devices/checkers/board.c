@@ -34,12 +34,16 @@ const struct board board = {
     .default_name = "Echo Show",
     .codename = "checkers",
 
-    /* gpio-keys: volume up/down only, and from the EVT boards on the camera shutter (EV_SW 9).  No action button.
-     * verify: event numbers with getevent -il */
-    .keypad = "/dev/input/event2",
+    /* gpio-keys: volume up/down only, and from the EVT boards on the camera shutter (EV_SW 9).  No action button.  By
+     * name: the event numbers depend on the probe order (the kernel's DTBs: gpio-keys has no label, so the input device
+     * takes the platform device's name; MediaTek's matrix keypad is "mtk-kpd", nothing on it here) */
+    .keypad = "name:gpio-keys",
     .grab_keys = 1,                                                 /* else PhoneWindowManager turns its stream volume too */
     .privacy_state = "/sys/devices/platform/amazon-gating/state",   /* chowned to system by /init.project.rc */
-    .privacy_input = NULL,                                          /* verify: the amazon-gating driver's input device */
+    /* the gating driver's own input device: "mute", KEY_POWER (0x74, DTB); any event there means a latch read
+     * (buttons.c privacy_reader), the once-a-second read of the state catches it otherwise.  Its name: the only one the
+     * kernel has for it (verify: getevent -il) */
+    .privacy_input = "name:amazon-gating",
     .privacy_latch = 1,
 
     .bt_dev = "/dev/stpbt",                                         /* MT7668 combo, btmtksdio.ko */
