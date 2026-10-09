@@ -152,8 +152,9 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   `on boot`, satellite at `sys.boot_completed`). PC half checked end to end, device half untried.
 - [ ] First run on a device: the boot image boots, adb is root in `su`, `otatool remount` gets `/system` writable,
   init starts both services from `/system/etc/init`.
-- [ ] Guided setup (`devices/checkers/setup.sh`): needs the Wi-Fi join below first.
-- [ ] CI: checkers in the build matrix of `.github/workflows/build.yml` (left out while nobody can install a bundle).
+- [x] Guided setup (`devices/checkers/setup.sh`): every step written, dry-run walks them all; the first run on a
+      device is the try-out (UNTESTED=1 until then).
+- [x] CI: checkers in the build matrix of `.github/workflows/build.yml` (its bundle installs now, on paper).
 
 **Audio**
 - [x] `audio_android.c` (OpenSL ES): VOICE_RECOGNITION capture, one player per stream, mixed by AudioFlinger.
@@ -182,9 +183,12 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   from `packages.list` for stock-online.
 - [ ] On the device, security-relevant: the invariant (Amazon's daemons only local addresses, the updater never out)
   holds with netd running, netd's own changes to OUTPUT and INPUT included; DHCP renewals and mDNS pass.
-- [ ] Wi-Fi join at install (`scripts/wifi-join.sh` drives wpa_supplicant; here Android's WifiService owns it), and
-  the settings page's "Switch network" (`wifi.sh`, same reason). Untried idea for now: Android's Wi-Fi settings on
-  the screen (`am start -a android.settings.WIFI_SETTINGS`).
+- [x] Wi-Fi join at install and the settings page's "Switch network": through WifiService, with
+  `scripts/device/wifictl.dex` (`tools/mkwifictl.py`, checked by `tests/fake_web_wifi.py` against a fake
+  framework). What stock's own setup apps do (a WifiConfiguration through the IWifiManager binder), from root as
+  `CLASSPATH=…/wifictl.dex app_process / Wifictl …`; reflection only, so the dex is free of android.* type
+  references. On a device still open: whether it really connects and gets its address (the fake framework says so),
+  and the screen (`am start -a android.settings.WIFI_SETTINGS`) stays the fallback.
 
 **Buttons, lights, sounds**
 - [ ] No action button: the settings page's login (`web_approve()` in `on_action`) and opening adb over Wi-Fi from the
