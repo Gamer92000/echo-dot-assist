@@ -168,7 +168,8 @@ struct pstream {
 };
 static struct pstream voice = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER },
                       music = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER },
-                      earcon = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER };
+                      earcon = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER },
+                      voip = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER };
 
 static void play_cb(SLAndroidSimpleBufferQueueItf q, void *ctx)
 {
@@ -292,10 +293,20 @@ int       bt_write(const void *data, size_t len) { (void)data; (void)len; return
 long long bt_queued_us(void) { return 0; }
 void      bt_close(void) {}
 
-/* System stream: its own volume in Android, as stock's UI sounds */
-void play_earcon(const short *pcm, size_t samples, unsigned rate)
+/* Drop In's call audio: the voice stream, its own volume and routing in Android */
+int       voip_open(unsigned rate, unsigned channels) { return s_open(&voip, rate, channels, SL_ANDROID_STREAM_VOICE); }
+long long voip_queued_us(void) { return s_queued_us(&voip); }
+int       voip_write(const void *data, size_t len) { return s_write(&voip, data, len); }
+void      voip_close(void) { s_close(&voip, 0); }
+
+/* System stream: its own volume in Android, as stock's UI sounds.  go() says how long the sound is wanted: a
+ * ringing timer ends when someone stops it, so what is left of the queue is dropped then, not drained. */
+static int always(void) { return 1; }
+void play_earcon(const short *pcm, size_t samples, unsigned rate) { play_earcon_while(pcm, samples, rate, always); }
+void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go)(void))
 {
     if (s_open(&earcon, rate, 1, SL_ANDROID_STREAM_SYSTEM) < 0) { fprintf(stderr, "earcon: no player\n"); return; }
     s_write(&earcon, pcm, samples * 2);
-    s_close(&earcon, 1);
+    while (s_queued_us(&earcon) > 0 && go()) usleep(20000);
+    s_close(&earcon, go() ? 1 : 0);
 }
