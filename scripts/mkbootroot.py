@@ -2,7 +2,7 @@
 """mkbootroot: a rooted boot.img from the device's own stock one, in the standard library only.
 
   mkbootroot.py --check BOOT.img            prove the rebuild: stock image in, the same out but for the ID
-  mkbootroot.py BOOT.img OUT.img [--sepolicy FILE] [--no-verity]
+  mkbootroot.py BOOT.img OUT.img [--sepolicy FILE] [--adbd FILE] [--no-verity]
                                             build the rooted image
   mkbootroot.py --extract BOOT.img NAME OUT a file of the ramdisk (e.g. sepolicy, to patch it)
   mkbootroot.py --cpio BOOT.img OUT         the whole ramdisk, uncompressed (cpio -id < OUT unpacks it)
@@ -10,9 +10,10 @@
 The XDA boot-root.imgs are built from some other build's boot.img (checkers': NS6570/6086, to
 run against 8149's /system), so this applies their ramdisk changes to the stock image of the
 firmware actually installed: kernel, sepolicy and every other ramdisk file stay that build's.
-adb is then a root shell without authentication.  The certificate page: Amazon's kernel-signing
-cert rides after the last page of the stock image and is copied over, kernel unchanged (the XDA
-image drops it and boots too, so an unlocked lk does not look at either).
+adb is then a root shell without authentication.  The certificate page after the last page of
+the stock image is left out: Amazon's kernel-signing cert, which names the stock image's sha256
+in its subject alt name (URI:sha256://...), so it can only be wrong for ours; lk has
+amzn_image_verify.  The XDA image has none and boots.
 
 Boot image: Android header v0, page as the header says; kernel and (if there) ramdisk blobs
 carry MediaTek's 512-byte header, whose size field counts the payload without it (the Android
@@ -32,6 +33,10 @@ In the ramdisk:
   switches itself to its --root_seclabel u:r:su:s0 and dies when the policy refuses, and
   checkers' stock policy has su permissive but no way for adbd into it; devices/checkers/
   sepolicy.rules)
+- with --adbd FILE: sbin/adbd replaced by FILE.  8149's own adbd is a user build (no ro.secure
+  in it: "adbd cannot run as root in production builds"), which drops to shell whatever
+  ro.secure, service.adb.root or the FOS flags say (all three tried on a checkers, 2026-10-10);
+  the XDA image's adbd (CyanogenMod's, static) goes by ro.secure, and with it adb is root in su
 - with --no-verity: "verify" taken out of the fs_mgr flags in every fstab.* that has it, so
   /system mounts without dm-verity and can be written (hassmic's install).  Once it has been
   written, only a boot image without verify may boot it: the stock one finds the hashes wrong.
@@ -138,11 +143,13 @@ def no_verity(data):
     return b"\n".join(lines) if n else None
 
 
-def edits(sepolicy=None, verity=True):
+def edits(sepolicy=None, verity=True, adbd=None):
     """name -> function(data) -> new data, or None to leave that one as it is"""
     e = {b"default.prop": default_prop, b"init.fosflags.sh": lambda d: FOSFLAGS}
     if sepolicy is not None:
         e[b"sepolicy"] = lambda d: sepolicy
+    if adbd is not None:
+        e[b"sbin/adbd"] = lambda d: adbd
     if not verity:
         e[b"fstab.*"] = no_verity
     return e
@@ -226,6 +233,12 @@ def main(argv):
                 return
         sys.exit("%s: no %s in the ramdisk" % (argv[1], argv[2]))
     sepolicy, verity = None, True
+    adbd = None
+    while "--adbd" in argv:
+        i = argv.index("--adbd")
+        assert i + 1 < len(argv), "--adbd needs a file"
+        adbd = open(argv[i + 1], "rb").read()
+        del argv[i:i + 2]
     while "--sepolicy" in argv:
         i = argv.index("--sepolicy")
         assert i + 1 < len(argv), "--sepolicy needs a file"
@@ -252,8 +265,9 @@ def main(argv):
         print("check: %d of %d bytes differ, all inside the ID" % (len(diff), len(stock)))
         return
 
-    edit = edits(sepolicy, verity)
+    edit = edits(sepolicy, verity, adbd)
     cpio = edit_cpio(boot.cpio(), edit)
+    boot.trailing = b""  # the stock image's certificate: its sha256 is not ours
     out = boot.assemble(gzip_mem(cpio))
     compare(boot.cpio(), Boot(out).cpio(), "the built image", edit)
     open(argv[1], "wb").write(out)
