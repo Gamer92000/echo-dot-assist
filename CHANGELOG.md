@@ -4,6 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-10
 
+- **Bluetooth on the Echo 2.** It installed with Bluetooth off, untried, yet Home Assistant still showed the
+  Bluetooth switches: "Bluetooth pairing" turned itself off again at once. Bluetooth is now on for new installs (a
+  phone pairs and plays, aptX HD included). On an Echo 2 installed before, take `-B` out of `ARGS` in
+  `/data/local/hassmic/hassmic.conf`. Wherever Bluetooth is off with `-B`, Home Assistant and the settings page no
+  longer show its switches.
 - Guided setup, Echo 2 and Echo Dot 2: the firmware now goes into both slots. The setup switched the slot back by
   hand after the first install, so the second one landed in the same slot and the other kept whatever ran before.
   Unpacking the firmware no longer stops with "Dangerous symbolic link path" on newer 7-Zip: it uses `debugfs`, as

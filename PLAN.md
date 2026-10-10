@@ -467,6 +467,12 @@ Run in this order. Each step says what it proves.
       Jitter buffer now primed with the mixer's share too (150 + 60 ms): before, the mixer took 60 ms at once and the
       drift control duplicated ~3000+ frames per start; now +11 frames in 3 min of AAC. Not done: aptX LL, LDAC
       (no decoder; would also crowd Wi-Fi), HE-AAC
+- [x] Bluetooth on the Echo 2 (radar, 2026-10-10): it installed with `-B` ("until tried"), and HA still listed the
+      Bluetooth entities, since `ble_present()` only checked for `/dev/stpbt`: the "Bluetooth pairing" switch fell back
+      off at once, no thread took the request. `ble_present()` is now false under `-B`, and radar installs without it.
+      Tried on the kitchen Echo: controller ready (4C:EF:C0:8E:D2:3F, ACL 4 x 1021, pairing: legacy only, the LE 4.0
+      fallback as on biscuit), a Pixel 10 Pro XL paired (key type 4) and picked aptX HD with delay reporting, AVRCP up,
+      the "connected" announcement spoken, 48 kHz stream 7 s: longest packet gap 35 ms, ran dry 0 times.
 - [x] AVRCP + one music source at a time (2026-09-24, `a2dp.c`, `main.c` `core_music`): SDP records AVRCP 1.5 target
       (category 2) and controller over AVCTP 1.4; target answers UNIT/SUBUNIT INFO, GetCapabilities (company, events:
       volume changed only), RegisterNotification(volume) with INTERIM / CHANGED, SetAbsoluteVolume (0..127 <-> 0..100 %,

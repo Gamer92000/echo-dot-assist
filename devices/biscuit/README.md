@@ -69,7 +69,8 @@ firmware flash: it gives root adb, as on donut.
   ring and Home Assistant watched over a press with the build that reads it.
 - A spoken wake word and a spoken command with the current build (a simulated wake word runs the pipeline through Home
   Assistant; the microphone stream is alive and hears the Echo's own wake sound).
-- A2DP with a phone and BLE pairing not tried yet (the controller comes up; see the table).
+- A2DP with a phone and BLE pairing not tried on biscuit yet (the controller comes up; see the table). A phone paired
+  and played on the Echo 2 (radar), same MT8163 combo, 2026-10-10.
 
 `INSTALL=twrp-ab` and the policy patch (`magiskpolicy32` from donut's boot-root zip) worked unchanged on the first biscuit (2026-09-28):
 `scripts/install-system.sh` wrote `system_a`, the Echo booted into the satellite.

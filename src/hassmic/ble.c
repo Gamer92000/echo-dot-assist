@@ -53,6 +53,7 @@
 #endif
 #include "ble.h"
 #include "board.h"
+#include "core.h"
 #include "ble_crypto.h"
 #include "hci.h"
 
@@ -1411,7 +1412,9 @@ static void *thread(void *arg)
 
 /* ---------------------------------------------------------------- API */
 
-int ble_present(void) { return access(bt_dev(), F_OK) == 0; }
+/* -B leaves the radio to the stock stack: then nothing of ours may show (radar installs with -B; its "Bluetooth pairing"
+ * switch was listed and fell back off at once, as no thread ever took the request) */
+int ble_present(void) { return core_bluetooth(-1) && access(bt_dev(), F_OK) == 0; }
 const char *ble_mac(void) { return bdaddr; }
 int ble_scanning(void) { return atomic_load(&scanning); }
 

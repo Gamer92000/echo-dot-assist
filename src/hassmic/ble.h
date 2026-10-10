@@ -34,7 +34,7 @@ struct ble_handler {
     void (*unpaired)(uint64_t addr, int ok, int error);
 };
 
-int  ble_present(void);                 /* the radio exists (PC build: no) */
+int  ble_present(void);                 /* the radio exists and is ours (not -B; PC build: no) */
 void ble_start(const struct ble_handler *h);    /* controller thread; takes the radio once btmanagerd has stopped.
                                                    Again to set the handler (NULL: none yet) */
 const char *ble_mac(void);              /* "AA:BB:CC:DD:EE:FF", "" if unknown */
