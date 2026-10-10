@@ -31,7 +31,7 @@ unlocked bootloader and TWRP (written to `recovery` and `swdl`). These files go 
 |---|---|---|
 | `amonet-checkers-v2.0.1.zip` | the XDA thread | `770324a8ed5ab922c0383f8ba072d70fc0190cc2c879f12f67b8d6cfa3ad30ee` |
 | `update-kindle-checkers-NS65741_user_8149_0013222532484.bin` | Amazon | `f96fcfa1240f809711fcf855ce7742762437e4f37546153153635c096773cfa3` |
-| `boot-root.zip` | the XDA thread (one `boot-root.img`, see "Root" below; not used by the install) | `b2474113a1f3a4a8de6728ff72774761051945641e1a5ffa78ee25c2b19a809e` |
+| `boot-root.zip` | the XDA thread (one `boot-root.img`, see "Root" below); the install takes only its `sbin/adbd` (`ADBD` in `device.conf`, sha256 `108ba403…`) | `b2474113a1f3a4a8de6728ff72774761051945641e1a5ffa78ee25c2b19a809e` |
 | `magiskpolicy32` | `patch/magiskpolicy32` of donut's `boot-root.zip` ([its README](../donut/README.md)); the guided setup takes it from `firmware/donut/boot-root.zip` (where donut's setup keeps it, and where it asks for it) | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
 
 The post names no firmware version. The pinned one fits: the `lk.bin` and `tz.img` inside amonet-checkers v2.0.1 are
@@ -51,7 +51,11 @@ Mute + Volume down (USB connected) = preloader USB download for MTKClient (shows
 
 **Never write lk, preloader, tee1/tee2 (tz) or any other bootloader partition**, not even from the USB download mode:
 most units have no bootrom way back, a brick there is permanent. An install for this model may touch `system` and
-`boot` only. Stock updates only through TWRP (the `.bin` renamed to `.zip`); flashing the amonet zip in TWRP updates
+`boot` only. Stock updates only through TWRP: TWRP lists only `.zip`, and the `.bin` is one (`adb push
+firmware/checkers/update-kindle-*.bin /sdcard/update.zip`, check the size, 1372825620 for 8149, then `adb shell twrp
+install /sdcard/update.zip`; or `adb sideload` it, no rename). A copy cut short (seen over MTP) makes TWRP report the
+zip corrupt. Its updater-script also writes lk, tee1/tee2, the preloader and MBR; amonet's TWRP renames `by-name/lk`
+and the others to `*_real` at start, so those writes miss; flashing the amonet zip in TWRP updates
 the unlock.
 
 ## Root
@@ -83,6 +87,11 @@ permissive domain but no rule that lets adbd into it; the XDA image gets past th
 (and `untrusted_app`: any installed app) permissive. So 8149's image also needs its policy patched
 (`sepolicy.rules`: donut boot-root's rules for adb, our services' rules; not `untrusted_app`).
 
+**Nor is 8149's own `adbd`** (first device, 2026-10-10): it is a user build (no `ro.secure` in it; `adb root` answers
+"restarting adbd as root" and it comes back as shell), so `ro.secure=0`, `service.adb.root=1` and `fastboot oem flags
+61` all leave adb a shell in `u:r:shell:s0`. The XDA image's `sbin/adbd` (CyanogenMod's, static) goes by `ro.secure`;
+with it in 8149's ramdisk adb is root in `u:r:su:s0` (`mkbootroot.py --adbd`).
+
 ```sh
 python3 scripts/mkbootroot.py --check firmware/checkers/images/boot.img  # rebuilds it exact but for the header ID
 python3 scripts/mkbootroot.py firmware/checkers/images/boot.img firmware/checkers/boot-root-8149.img
@@ -90,10 +99,11 @@ python3 scripts/mkbootroot.py firmware/checkers/images/boot.img firmware/checker
 
 `boot-root-8149.img`: the five properties above and `init.fosflags.sh` (byte for byte the XDA file) replaced inside
 8149's ramdisk, every other ramdisk entry and the kernel untouched, Amazon's kernel-signing certificate (a page
-trailing the stock image) carried over; the header ID is AOSP mkbootimg's formula, which lk does not check (the XDA
-image boots with a foreign one too). sha256 `afca0a33e1bede3e9e9d749820bea4f67f11ac8db77e1636075478e86f8c7c89`.
-**Do not flash it:** its stock policy leaves adb dead (above). What the install flashes is the same plus the patched
-policy and `verify` out of the fstab: `scripts/install-boot.sh --boot-only` builds and flashes just that (root adb, for
+trailing the stock image) left out: it names the stock image's sha256 (`URI:sha256://…` in its subject alt name), and
+the XDA image has none either. The header ID is AOSP mkbootimg's formula, which lk does not check (the XDA image boots
+with a foreign one too). sha256 `e787a08ed7d39471ae4228659879939cb7e5225e82dbdd5e5d47e4dbf2c6a9a7` (with classic zlib;
+zlib-ng deflates the same ramdisk differently). **Do not flash it:** its stock policy and adbd leave adb dead or a
+shell (above). What the install flashes is the same plus the patched policy, the XDA adbd and `verify` out of the fstab: `scripts/install-boot.sh --boot-only` builds and flashes just that (root adb, for
 trying things with `scripts/deploy.sh` before installing).
 
 ## Install
@@ -104,16 +114,24 @@ lock and the Wi-Fi join, the install.  Wi-Fi joins through Android's WifiService
 (`tools/mkwifictl.py`), called as `CLASSPATH=…/wifictl.dex app_process / Wifictl <verb>`: the same
 `android.net.wifi.WifiConfiguration` stock's own setup apps put in, from root, no touchscreen and no Alexa app.  It
 downloads the qemu-arm it needs into `toolchain/` when the PC has none, and takes `magiskpolicy32` out of donut's
-`boot-root.zip` (`firmware/donut/`) on its own.  The steps written out follow, for doing them one by one
+`boot-root.zip` (`firmware/donut/`) and `adbd` out of checkers' own `boot-root.zip` on its own (the browser saves the
+second as `boot-root (1).zip`; the setup takes either).  The steps written out follow, for doing them one by one
 (`scripts/install-boot.sh`, from `scripts/install-system.sh`):
 
 1. **Boot image, on the PC.** `boot.img` out of the firmware `.bin` (checked against `BOOT_SHA256`), its `sepolicy`
    patched with `sepolicy.rules` by magiskpolicy under qemu-arm (the Echo has no root yet; `tools/qrun.sh` against
-   `firmware/checkers/rootfs`), and `scripts/mkbootroot.py --sepolicy … --no-verity`: root adb, `verify` out of
-   `fstab.mt8163`. Reproducible: sha256 `551811776d92aa0e851b677077b5d86b1826f6161bb32c76acd97798af9fa7e2`.
+   `firmware/checkers/rootfs`), and `scripts/mkbootroot.py --sepolicy … --adbd firmware/checkers/adbd --no-verity`:
+   root adb, `verify` out of `fstab.mt8163`. Reproducible: sha256
+   `a1772cbe8d6fcd95657f6a85eae24c8be4a1a7aa066ce5eb6b07f264e1b717f5` with classic zlib (zlib-ng packs the same
+   ramdisk tighter: then its cpio, `mkbootroot.py --cpio`, has sha256 `561f392cc213186ce9e9657551b752157230886537453c24c1e2b4b23ae05417`).
+   This image boots with root adb in `su` (first device, 2026-10-10).
 2. **Flash it.** The Echo's system build is checked first (`ro.build.version.incremental` 0013222532484, from TWRP or
    the booted OS), then `adb reboot bootloader` to amonet's hacked fastboot (or: Volume down while connecting power),
-   `fastboot flash boot`, `fastboot reboot`. Only `boot`. Skipped when the partition holds that image already.
+   `fastboot flash boot`, `fastboot continue`. Only `boot`. Skipped when the partition holds that image already.
+   Not `fastboot reboot`: `adb reboot bootloader` sets the RTC's boot-to-fastboot flag and kaeru 2.0.0 does not clear
+   it (`fastboot getvar boot-reason`: RTC), so every warm reboot lands in fastboot again; `continue` boots `boot`
+   straight from fastboot, and pulling the power clears the flag. `fastboot oem logcat` prints the preloader's and
+   lk's log.
 3. **Files, from the running OS.** Root adb in the `su` domain checked; then as on donut: `/system/hassmic/`,
    `/system/etc/init/hassmic.rc` (`sysinstall.sh`; `/system` is a plain block device without verify, `otatool
    remount` clears its read-only flag if the kernel set it), `hassmic.conf`, reboot.
@@ -125,6 +143,8 @@ Alexa's apps with `pm` (`ALEXA_PACKAGES`, `SETUP_PACKAGES`, `UPDATE_PACKAGES`), 
 ```sh
 # amonet done, the Echo in TWRP (Volume up while connecting power) on USB
 unzip -j firmware/donut/boot-root.zip patch/magiskpolicy32 -d firmware/checkers/
+unzip -p firmware/checkers/boot-root.zip boot-root.img > firmware/checkers/boot-root.img
+python3 scripts/mkbootroot.py --extract firmware/checkers/boot-root.img sbin/adbd firmware/checkers/adbd
 DEVICE=checkers scripts/install-system.sh "Kitchen"
 ```
 
