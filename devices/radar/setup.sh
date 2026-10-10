@@ -44,7 +44,7 @@ step_tools() {
     local unlock="fastboot python3 pyusb"
     rooted_already && unlock=python3
     if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip sqlite3 curl sha256sum || return 1; return 0; fi
-    need_tools adb $unlock make cc unzip 7z sqlite3 curl sha256sum bc xz || return 1
+    need_tools adb $unlock make cc unzip debugfs sqlite3 curl sha256sum bc xz || return 1
     [ "$(df -Pk . | awk 'NR == 2 { print $4 }')" -gt 5000000 ] || warn "less than 5 GB free here; the NDK and firmware need about that"
 }
 
@@ -109,20 +109,26 @@ step_unlock() {
 }
 
 step_flash() {
-    local s0 s1
+    local s0 s1 s2
     wait_adb recovery || return 1
     task "Wiping cache and data" adb shell 'twrp wipe cache && twrp wipe data' || return 1
     task "Copying the firmware to the Echo" adb push $FW/$FIRMWARE_FILE /sdcard/update.zip || return 1
     [ -n "$DRY" ] || s0=$(slot)
     task "Flashing the first slot" adb shell twrp install /sdcard/update.zip || return 1
-    # the thread's own step: switch back to the unused slot, so the second install lands there and the FIRST slot ends
-    # up active again (checked 2026-09-28 on biscuit)
-    task "Switching slots" adb shell 's=$(bcbtool get_active); case $s in a) bcbtool set_active b;; b) bcbtool set_active a;; *) echo "unexpected: $s"; exit 1;; esac' || return 1
-    [ -n "$DRY" ] || { s1=$(slot); [ "$s1" = "$s0" ] || { fail "slot switch did not take (active: $s1, before: $s0)"; return 1; }; }
+    # TWRP makes the slot it flashed the active one (radar setup log 2026-10-10: get_active said b right after flashing
+    # B, and switching back to a by hand put the second install into B again).  Switch only if it did not.
+    if [ -z "$DRY" ]; then
+        s1=$(slot)
+        if [ "$s1" = "$s0" ]; then
+            task "Switching slots" adb shell 'case $(bcbtool get_active) in a) bcbtool set_active b;; b) bcbtool set_active a;; *) exit 1;; esac' || return 1
+            s1=$(slot); [ "$s1" != "$s0" ] || { fail "slot switch did not take (active: $s1)"; return 1; }
+        fi
+    fi
     task "Restarting TWRP" adb reboot recovery || return 1
     [ -n "$DRY" ] || sleep 5
     wait_adb recovery || return 1
-    task "Flashing the second slot" adb shell twrp install /sdcard/update.zip
+    task "Flashing the second slot" adb shell twrp install /sdcard/update.zip || return 1
+    [ -n "$DRY" ] || { s2=$(slot); [ "$s2" != "$s1" ] || { fail "the second install went into slot $s1 again"; return 1; }; }
 }
 
 step_root() {
@@ -143,7 +149,8 @@ step_build() {
     # the firmware's libraries are only needed to link against
     if [ "$BUILD_MODE" != prebuilt ] && [ ! -d $FW/rootfs/system/lib ]; then
         task "Unpacking the firmware" sh -c "unzip -o -q $FW/$FIRMWARE_FILE payload.bin -d $FW &&
-            python3 tools/payload_dump.py $FW/payload.bin $FW/images && 7z x -o$FW/rootfs -y $FW/images/system.img" || return 1
+            python3 tools/payload_dump.py $FW/payload.bin $FW/images && mkdir -p $FW/rootfs &&
+            debugfs -R 'rdump / $FW/rootfs' $FW/images/system.img && [ -d $FW/rootfs/system/lib ]" || return 1
     fi
     bootroot_unpack || return 1
     if [ "$BUILD_MODE" = prebuilt ]; then task "Downloading the release build of this commit" build_binaries || return 1

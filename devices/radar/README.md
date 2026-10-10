@@ -54,7 +54,8 @@ The Echo takes its power from its own adapter, which the unlock also needs: fast
 One script, as on `biscuit`: unzip the package, run `./fastbrick.sh`, put the Echo into fastboot mode (power adapter
 out, plug it back in while holding the action button •, until the ring shows a **green** LED; an Echo unlocked before shows a rainbow), type `YES` when asked,
 do not interrupt after the 10-second grace period, and it ends in TWRP (white LED). Then, as the thread says: wipe, flash
-the firmware, switch the active slot with `bcbtool` so the second install lands in the other slot, flash again, and
+the firmware, `adb reboot recovery` (TWRP makes the slot it flashed active, so the second install lands in the other
+one; do not switch back with `bcbtool`, or it goes into the same slot again), flash again, and
 install `boot-root.zip` for root adb. `scripts/setup.sh radar` does all of that.
 
 ## Getting the newest firmware (FTVDB lags; radar's listing stops at 6572)

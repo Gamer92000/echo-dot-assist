@@ -2,6 +2,13 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-10
+
+- Guided setup, Echo 2 and Echo Dot 2: the firmware now goes into both slots. The setup switched the slot back by
+  hand after the first install, so the second one landed in the same slot and the other kept whatever ran before.
+  Unpacking the firmware no longer stops with "Dangerous symbolic link path" on newer 7-Zip: it uses `debugfs`, as
+  the Echo Dot 3 always did.
+
 ## 2026-10-09
 
 - **The guided setup no longer downloads models.** Its last step, which put the Echo online as a stock Alexa and
