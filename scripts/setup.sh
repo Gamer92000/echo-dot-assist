@@ -16,8 +16,9 @@ cd "$(dirname "$0")/.."
 . scripts/lib/device.sh
 . scripts/lib/setup.sh
 . scripts/lib/build.sh
-# make splits paths at spaces (seen: a copy unpacked as "echo-dot-assist-checkers (1)", the build then wanted "(1)/firmware/...")
-case $PWD in *[[:space:]]*) die "this folder's path has a space in it, which the build cannot handle: $PWD
+# make splits paths at spaces (seen: a copy unpacked as "echo-dot-assist-checkers (1)", the build then wanted
+# "(1)/firmware/..."); pwd -P, as make's CURDIR: a link without spaces to such a folder does not help
+case $(pwd -P) in *[[:space:]]*) die "this folder's path has a space in it, which the build cannot handle: $(pwd -P)
   move it (with firmware/, secrets/ and build/: the progress is kept) to a path without spaces and run it from there";; esac
 
 DRY= RESTART= PRESET= FROM= ROOTED_NOTE=
