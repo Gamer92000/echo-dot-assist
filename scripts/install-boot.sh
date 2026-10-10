@@ -76,6 +76,8 @@ wait_for() {   # wait_for SECONDS CONDITION...
 in_fastboot() { [ -n "$(fastboot devices 2>/dev/null)" ]; }
 booted() { [ "$(state)" = device ] && [ "$(t getprop sys.boot_completed)" = 1 ]; }
 
+# flash_boot [--boot-only]: IMG into the boot partition through hacked fastboot and booted; --boot-only skips the flash
+# (the partition holds IMG, the Echo sits in TWRP).  Always through fastboot continue, never a plain reboot: see there
 flash_boot() {
     st=$(state)
     case "$st" in
@@ -94,7 +96,7 @@ flash_boot() {
     prod=$(fastboot getvar product 2>&1 | sed -n 's/^product: *//p' | tr 'A-Z' 'a-z')
     [ -z "$prod" ] || [ "$prod" = "$PRODUCT" ] || die "fastboot reports product '$prod', not $PRODUCT: nothing flashed"
     # the boot partition and nothing else
-    fastboot flash boot $IMG
+    [ "$1" = --boot-only ] || fastboot flash boot $IMG
     # not "fastboot reboot": adb reboot bootloader leaves the RTC's boot-to-fastboot flag set and kaeru 2.0.0 does not
     # clear it (getvar boot-reason: RTC), so every warm reboot lands in fastboot again; continue boots boot from here
     fastboot continue
@@ -122,7 +124,9 @@ fi
 
 boot_image
 [ "$1" = --boot-only ] && BOOT_ONLY=1 && shift
-if boot_is_ours; then echo "boot partition holds this boot image already"
+if boot_is_ours; then
+    echo "boot partition holds this boot image already"
+    [ "$(state)" = recovery ] && flash_boot --boot-only      # in TWRP: boot it
 else flash_boot; fi
 wait_for 600 booted || die "the Echo is not booted with adb"
 [ "$(t id -u)" = 0 ] && [ "$(t cat /proc/self/attr/current | tr -d '\0')" = u:r:su:s0 ] ||
@@ -148,3 +152,8 @@ t "[ -f $STAGE/ok ]" || { t "rm -rf $STAGE"; die "system partition not written (
 t "rm -rf $STAGE; ls -lZ /system/hassmic /system/etc/init/hassmic.rc"
 echo "install done on the running $DEVICE; rebooting"
 adb reboot
+# the RTC's fastboot flag may still be set from the flash (kaeru leaves it): then this reboot stops in fastboot too
+if wait_for 90 in_fastboot; then
+    echo "in fastboot: booting on with fastboot continue"
+    fastboot continue
+fi
