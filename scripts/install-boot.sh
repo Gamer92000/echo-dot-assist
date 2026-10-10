@@ -2,10 +2,10 @@
 # Install hassmic on a model with INSTALL=boot in devices/<codename>/device.conf (checkers, Echo Show 5 1st gen): no A/B
 # slots, /system under dm-verity, the SELinux policy inside boot.img's ramdisk.  scripts/install-system.sh hands over to
 # this one.  Two parts:
-#   1. boot: the firmware's own boot.img (from FIRMWARE_FILE, checked against BOOT_SHA256) with root adb, without "verify"
-#      in its fstab, and with its policy patched by sepolicy.rules (magiskpolicy under qemu-arm: the Echo has no root
-#      yet), built by scripts/mkbootroot.py and flashed in amonet's hacked fastboot.  Skipped when the boot partition
-#      holds that image already.
+#   1. boot: the firmware's own boot.img (from FIRMWARE_FILE, checked against BOOT_SHA256) with root adb (and ADBD: the
+#      stock adbd never stays root), without "verify" in its fstab, and with its policy patched by sepolicy.rules
+#      (magiskpolicy under qemu-arm: the Echo has no root yet), built by scripts/mkbootroot.py and flashed in amonet's
+#      hacked fastboot.  Skipped when the boot partition holds that image already.
 #   2. system: /system/hassmic/ and /system/etc/init/hassmic.rc from the running OS (scripts/system/sysinstall.sh), and
 #      /data/local/hassmic/hassmic.conf, as on donut.
 # Writes the boot partition and the system partition, nothing else: never lk, preloader, tee or anything of the
@@ -36,6 +36,8 @@ boot_image() {
     [ "$(sha $OUT/boot.stock.img)" = "$BOOT_SHA256" ] || die "boot.img in $FIRMWARE_FILE is not the one this was built for"
     [ -f $SEPOLICY_TOOL ] && [ "$(sha $SEPOLICY_TOOL)" = "$SEPOLICY_TOOL_SHA256" ] ||
         die "no $SEPOLICY_TOOL (or not the pinned one): patch/magiskpolicy32 of donut's boot-root.zip ($DDIR/README.md)"
+    [ -f $ADBD ] && [ "$(sha $ADBD)" = "$ADBD_SHA256" ] ||
+        die "no $ADBD (or not the pinned one): sbin/adbd of boot-root.img in checkers' own boot-root.zip ($DDIR/README.md)"
     [ -e $FW/rootfs/system/bin/linker ] || die "$FW/rootfs not unpacked: qemu runs magiskpolicy against its linker ($DDIR/README.md)"
     { command -v qemu-arm > /dev/null || [ -x toolchain/qemu-arm ]; } || die "no qemu-arm (qemu user mode; devices/checkers/setup.sh puts one in toolchain/)"
     python3 scripts/mkbootroot.py --extract $OUT/boot.stock.img sepolicy $OUT/sepolicy.stock
@@ -47,7 +49,7 @@ boot_image() {
     DEVICE=$DEVICE tools/qrun.sh -t 120 $SEPOLICY_TOOL --load $OUT/sepolicy.hassmic --print-rules > $OUT/sepolicy.rules.txt 2>/dev/null || true
     grep -qx 'permissive adbd' $OUT/sepolicy.rules.txt && grep -q '^allow init su process' $OUT/sepolicy.rules.txt ||
         die "the patched policy lacks its rules ($OUT/sepolicy.rules.txt)"
-    python3 scripts/mkbootroot.py $OUT/boot.stock.img $IMG --sepolicy $OUT/sepolicy.hassmic --no-verity > /dev/null
+    python3 scripts/mkbootroot.py $OUT/boot.stock.img $IMG --sepolicy $OUT/sepolicy.hassmic --adbd $ADBD --no-verity > /dev/null
     echo "boot image: $IMG ($(sha $IMG | cut -c1-16)...)"
 }
 
@@ -78,7 +80,9 @@ flash_boot() {
     st=$(state)
     case "$st" in
     device|recovery) b=$(system_build)
-        [ "$b" = "$FIRMWARE_BUILD" ] || die "the Echo's system is build '${b:-unknown}', the boot image is $FIRMWARE_BUILD's: flash $FIRMWARE_FILE in TWRP first ($DDIR/README.md)";;
+        [ "$b" = "$FIRMWARE_BUILD" ] || die "the Echo's system is build '${b:-unknown}', the boot image is $FIRMWARE_BUILD's: flash $FIRMWARE_FILE in TWRP first:
+  adb push $FW/$FIRMWARE_FILE /sdcard/update.zip     # TWRP lists only .zip; check the size on the Echo after
+  adb shell twrp install /sdcard/update.zip           # ($DDIR/README.md)";;
     *) die "no Echo on adb: boot it into TWRP (Volume up while connecting power) and run this again";;
     esac
     echo "to hacked fastboot ..."
@@ -91,10 +95,16 @@ flash_boot() {
     [ -z "$prod" ] || [ "$prod" = "$PRODUCT" ] || die "fastboot reports product '$prod', not $PRODUCT: nothing flashed"
     # the boot partition and nothing else
     fastboot flash boot $IMG
-    fastboot reboot
+    # not "fastboot reboot": adb reboot bootloader leaves the RTC's boot-to-fastboot flag set and kaeru 2.0.0 does not
+    # clear it (getvar boot-reason: RTC), so every warm reboot lands in fastboot again; continue boots boot from here
+    fastboot continue
     echo "booting (the first boot after a new boot image takes a few minutes) ..."
-    wait_for 600 booted || die "the Echo did not come up with adb.  Hacked fastboot (Volume down while connecting power), then
-  fastboot flash boot $OUT/boot.stock.img     # stock, as long as nothing was written to /system yet"
+    if ! wait_for 120 booted; then
+        in_fastboot && echo "still in fastboot: unplug the Echo's power, wait 5 s and plug it in again (no buttons; USB stays connected)"
+        wait_for 480 booted || die "the Echo did not come up with adb.  Hacked fastboot (Volume down while connecting power), then
+  fastboot flash boot $OUT/boot.stock.img     # stock, as long as nothing was written to /system yet
+  fastboot continue"
+    fi
 }
 
 if [ "$1" = --uninstall ]; then
@@ -116,7 +126,7 @@ if boot_is_ours; then echo "boot partition holds this boot image already"
 else flash_boot; fi
 wait_for 600 booted || die "the Echo is not booted with adb"
 [ "$(t id -u)" = 0 ] && [ "$(t cat /proc/self/attr/current | tr -d '\0')" = u:r:su:s0 ] ||
-    die "adb is not a root shell in the su domain ($(t id); $(t cat /proc/self/attr/current))"
+    die "adb is not a root shell in the su domain ($(t id); $(t cat /proc/self/attr/current | tr -d "\\0"))"
 echo "root adb: ok"
 [ -n "$BOOT_ONLY" ] && exit 0
 

@@ -158,8 +158,32 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   `verify` out of the fstab, the policy patched (`sepolicy.rules`; the XDA `boot-root.img` is NS6570's).
 - [x] Installer: `scripts/install-boot.sh` (`INSTALL=boot`), boot then system partition only; `hassmic.rc` (firewall
   `on boot`, satellite at `sys.boot_completed`). PC half checked end to end, device half untried.
-- [ ] First run on a device: the boot image boots, adb is root in `su`, `otatool remount` gets `/system` writable,
-  init starts both services from `/system/etc/init`.
+- [ ] First run on a device: `otatool remount` gets `/system` writable, init starts both services from
+  `/system/etc/init` (the boot image and root adb: below).
+- [x] Root boot image on a device (a tester's, 2026-10-10): boots, adb root in `u:r:su:s0`. Found on the way:
+  - 8149's `sbin/adbd` is a user build (no `ro.secure` string, "adbd cannot run as root in production builds"):
+    it drops to shell whatever `ro.secure`, `service.adb.root` or `fastboot oem flags 61` say (all three tried).
+    Fixed: the XDA image's `sbin/adbd` (CyanogenMod, static, `ADBD` in device.conf) goes in (`mkbootroot.py
+    --adbd`); the setup's files step fetches checkers' `boot-root.zip` for it (and takes a browser's
+    `boot-root (1).zip`: donut's has the same name).
+  - kaeru 2.0.0 does not clear the RTC "boot to fastboot" flag that `adb reboot bootloader` sets (`rtc_mark_fast`;
+    `getvar boot-reason: RTC`, lk log `fastboot_mode=2` without reading `boot`): every `fastboot reboot` lands in
+    fastboot again. Fixed: install-boot.sh boots with `fastboot continue`, and says to replug when still in fastboot.
+  - The certificate page after the stock image is Amazon's kernel-signing cert with the image's sha256 in its SAN
+    (`URI:sha256://4c00d790…` = stock image without that page); kaeru has `amzn_image_verify`. Whether lk refuses
+    ours with it is not known (the RTC flag hid it); left out now, as the XDA image does.
+  - Not byte-reproducible across zlib builds (zlib-ng packs the ramdisk ~4 KB tighter, same cpio): README gives the
+    cpio's hash too.
+  - The `.bin` must reach the Echo complete: an MTP copy stopped 33 MB short and TWRP said "corrupt". README and
+    install-boot.sh's message: `adb push … /sdcard/update.zip`, size check, `twrp install`. Its updater-script also
+    writes lk, tee1/tee2, preloader (`mmcblk0boot0`) and MBR; amonet's TWRP renames `by-name/lk` etc. to `*_real`
+    (seen in its kernel log), so the by-name writes miss.
+    - [ ] the preloader write (`mmcblk0boot0`, not by name) is not proven harmless.
+  - setup.sh: the root step and checkers' install run in the foreground now (`live`), so install-boot.sh's hints
+    show; the root step on a booted Echo with adb as shell replaces the boot image from there instead of waiting
+    for TWRP.
+  - Diagnostics: `fastboot oem logcat` prints preloader + lk logs; TWRP's `/sys/fs/pstore/console-ramoops*` the
+    last kernel's.
 - [x] Guided setup (`devices/checkers/setup.sh`): every step written, dry-run walks them all; the first run on a
       device is the try-out (UNTESTED=1 until then).
 - [x] CI: checkers in the build matrix of `.github/workflows/build.yml` (its bundle installs now, on paper).

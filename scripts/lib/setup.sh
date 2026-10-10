@@ -264,13 +264,16 @@ need_tools() {
 # writing them), so the user only has to download them.
 declare -A _seen
 _good() { [ -z "$2" ] || [ "$(sha256sum < "$1" | cut -c1-64)" = "$2" ]; }
+# Also takes the browser's renamed copies ("boot-root (1).zip"): two files of one name can be wanted (checkers needs
+# both XDA threads' boot-root.zip).  A copy that is not the file is left alone; only one of the name itself is reported.
 _pickup() {
     local f=$1 sum=$2 name=${1##*/} c sig
-    for c in "$HOME/Downloads/$name" "./$name"; do
+    for c in "$HOME/Downloads/$name" "./$name" "$HOME/Downloads/${name%.*} ("*")${name#"${name%.*}"}"; do
         [ -s "$c" ] && [ ! -e "$c.part" ] && [ ! -e "$c.crdownload" ] || continue
-        sig=$(stat -c %s.%Y "$c"); [ "${_seen[$c]}" = "$sig" ] && continue
-        _seen[$c]=$sig
+        sig=$(stat -c %s.%Y "$c"); [ "${_seen[$f:$c]}" = "$sig" ] && continue
+        _seen[$f:$c]=$sig
         if _good "$c" "$sum"; then mkdir -p "${f%/*}"; mv "$c" "$f"; return 0; fi
+        [ "${c##*/}" = "$name" ] && [ -z "$_PICKUP_QUIET" ] || continue
         _clr; fail "$c is not the right file (checksum); download it again"
     done
     return 1
@@ -278,6 +281,8 @@ _pickup() {
 need_files() {
     local dest=() sum=() src=() miss=() left lines=() i t0=$SECONDS
     while [ $# -ge 3 ]; do dest+=("$1"); sum+=("$2"); src+=("$3"); shift 3; done
+    # two wanted files of one name: a copy that fits neither is not worth a word, it may be the other's
+    _PICKUP_QUIET=$(printf '%s\n' "${dest[@]##*/}" | sort | uniq -d)
     for i in "${!dest[@]}"; do
         if [ -f "${dest[i]}" ] && ! _good "${dest[i]}" "${sum[i]}"; then
             mv "${dest[i]}" "${dest[i]}.wrong"; warn "${dest[i]##*/} is not the right file; moved aside to ${dest[i]}.wrong"
@@ -419,7 +424,9 @@ install_satellite() {
         prompt PRESET "Settings file (Enter for none)" ""
     done
     wait_adb device || return 1
-    task "Installing (the Echo reboots)" scripts/install-system.sh || return 1
+    if [ "$INSTALL" = boot ]; then   # in the foreground: a new boot image may need the power replugged (install-boot.sh)
+        live "Installing (the Echo reboots)" bash -o pipefail -c "scripts/install-system.sh 2>&1 | tee -a '$LOG'" || return 1
+    else task "Installing (the Echo reboots)" scripts/install-system.sh || return 1; fi
     [ -n "$DRY" ] || sleep 10
     wait_adb device || return 1
     # main.sh restarts a hassmic that dies, so it has to be seen twice, 10 s apart, to not be a crash loop

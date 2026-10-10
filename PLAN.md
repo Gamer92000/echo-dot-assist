@@ -1521,5 +1521,8 @@ Run in this order. Each step says what it proves.
       `devices/checkers/setup.sh`: every step walks in a dry run.  Earcons (2026-10-10): sounds.c reads stock's
       sounds straight out of the apps (`board.earcon_zip`; aapt stores audio uncompressed), 12 of 13 found
       (SpeechInteractionManager's shrunk names mapped through its resources.arsc), all decoding at 48 kHz from the
-      unpacked firmware in make unit; no setup beacon anywhere.  Open items, one list: docs/re-checkers.md "What a
-      port needs".
+      unpacked firmware in make unit; no setup beacon anywhere.  First device (a tester's, 2026-10-10): 8149's boot
+      image with our ramdisk changes boots, but 8149's adbd is a user build and never stays root (ro.secure=0,
+      service.adb.root=1, oem flags 61 all tried); with the XDA image's adbd (mkbootroot.py --adbd) adb is root in
+      u:r:su:s0.  kaeru 2.0.0 leaves the RTC fastboot flag set: fastboot continue, not reboot.  Open items, one
+      list: docs/re-checkers.md "What a port needs".

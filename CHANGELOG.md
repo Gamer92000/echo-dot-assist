@@ -4,6 +4,14 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-10
 
+- **Echo Show 5: the rooted boot image works on a real Show.** The first try on a tester's Echo Show 5 found three
+  things the PC could not show, now fixed in the installer and the guided setup: Amazon's own adb service never runs
+  as root, so the boot image now carries the one from the XDA thread's image (the setup takes it out of that
+  thread's `boot-root.zip`); amonet's bootloader sends every restart back to fastboot after a flash, so the
+  installer now boots with `fastboot continue` and says when to replug the power; and the setup now shows what that
+  step prints instead of only a spinner. With these the Show boots with a root adb shell. The README also says how
+  to get the firmware into TWRP whole (TWRP lists only `.zip` files, and a copy cut short reads as corrupt).
+
 - **The Echo Show 5 joins Wi-Fi without its touchscreen, and has a guided setup.** Joining goes through Android's
   own WifiService, from root's shell: `scripts/device/wifictl.dex`, assembled by `tools/mkwifictl.py` from nothing
   but that file, makes the same `WifiConfiguration` call stock's own setup apps make. The guided setup

@@ -12,6 +12,9 @@ AMONET_SHA256=770324a8ed5ab922c0383f8ba072d70fc0190cc2c879f12f67b8d6cfa3ad30ee
 # that set up a Dot has it), not in firmware/checkers: boot-root.zip there is checkers' own XDA image (README.md)
 BOOTROOT=firmware/donut/boot-root.zip
 BOOTROOT_SHA256=de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0
+# checkers' own boot-root.zip (the XDA image): its sbin/adbd goes into our boot image (device.conf ADBD)
+XDAROOT=$FW/boot-root.zip
+XDAROOT_SHA256=b2474113a1f3a4a8de6728ff72774761051945641e1a5ffa78ee25c2b19a809e
 DONUT_XDA=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/
 QEMU=toolchain/qemu-arm                     # magiskpolicy runs under it, against the unpacked firmware
 QEMU_URL=https://github.com/multiarch/qemu-user-static/releases/download/v7.2.0-1/qemu-arm-static
@@ -47,6 +50,16 @@ magiskpolicy() {
         unzip -p $BOOTROOT patch/magiskpolicy32 > $SEPOLICY_TOOL &&
         [ \"\$(sha256sum < $SEPOLICY_TOOL | cut -c1-64)\" = $SEPOLICY_TOOL_SHA256 ]" || { rm -f $SEPOLICY_TOOL; return 1; }
 }
+adbd_ok() { [ -f $ADBD ] && [ "$(sha $ADBD)" = "$ADBD_SHA256" ]; }
+# the root-capable adbd, out of the XDA image in checkers' boot-root (the files step brings it; a setup that passed
+# that step before it asked for this one asks here)
+adbd() {
+    adbd_ok && return 0
+    need_files $XDAROOT $XDAROOT_SHA256 "boot-root.zip, attachment in $XDA (checkers' own, for its adbd)" || return 1
+    task "Taking adbd out of the XDA boot-root" sh -c "unzip -p $XDAROOT boot-root.img > $FW/boot-root.img &&
+        python3 scripts/mkbootroot.py --extract $FW/boot-root.img sbin/adbd $ADBD && rm -f $FW/boot-root.img &&
+        [ \"\$(sha256sum < $ADBD | cut -c1-64)\" = $ADBD_SHA256 ]" || { rm -f $ADBD $FW/boot-root.img; return 1; }
+}
 # The firmware unpacked, whatever the build mode: the build links against its libraries, and every boot image is
 # made from it (install-boot.sh: qemu runs the policy tool against its linker), at the root step as at the install.
 # debugfs exits 0 whatever happens and rdump does not create its target (issue #4): the result is checked by hand.
@@ -74,6 +87,7 @@ step_files() {
     # the firmware, rooted Echo or not, built here or not: the boot image is made from its boot.img and policy
     need+=($FW/$FIRMWARE_FILE $FIRMWARE_SHA256 "Fire OS $FIRMWARE_ID, from Amazon: the link is in $DDIR/README.md")
     rooted_already || need+=($FW/$AMONET $AMONET_SHA256 "attachment in $XDA")
+    adbd_ok || need+=($XDAROOT $XDAROOT_SHA256 "boot-root.zip, attachment in $XDA (checkers' own, for its adbd)")
     policy_tool || need+=($BOOTROOT $BOOTROOT_SHA256 "boot-root.zip, attachment in $DONUT_XDA (the Echo Dot 3's, for its magiskpolicy; not checkers' own)")
     need_files "${need[@]}" || return 1
     # the policy is patched on the PC, under qemu against the unpacked firmware; a system qemu-arm is fine too
@@ -121,11 +135,15 @@ step_unlock() {
 
 step_root() {
     [ -z "$DRY" ] && adb_is device && [ "$(ashell id -u)" = 0 ] && { ok "root adb already"; return 0; }
-    rootfs && magiskpolicy || return 1
-    wait_adb recovery || return 1
+    rootfs && magiskpolicy && adbd || return 1
+    # booted, adb as shell: an older boot image of ours (8149's own adbd never stays root) or stock with adb on;
+    # install-boot.sh takes it from the running OS as well as from TWRP
+    if [ -z "$DRY" ] && adb_is device; then info "adb is not root on the running Echo: its boot image is replaced"
+    else wait_adb recovery || return 1; fi
     # the rooted boot image from the firmware's own (root adb, no verify, the policy patched for our services);
-    # flashed in amonet's hacked fastboot, then the Echo boots Fire OS with root adb
-    task "Flashing the rooted boot image (the Echo reboots)" scripts/install-boot.sh --boot-only || return 1
+    # flashed in amonet's hacked fastboot, then the Echo boots Fire OS with root adb.  In the foreground: it may ask
+    # for the power to be replugged
+    live "Flashing the rooted boot image (the Echo reboots)" bash -o pipefail -c "scripts/install-boot.sh --boot-only 2>&1 | tee -a '$LOG'" || return 1
     ok "root adb"
     # online with Amazon it would update itself, and an update can close the way in
     warn "Do not set the Echo up with the Alexa app or its touchscreen."
@@ -161,7 +179,7 @@ step_network() {
 }
 
 step_install() {
-    rootfs && magiskpolicy || return 1        # again: the steps before may have been skipped
+    rootfs && magiskpolicy && adbd || return 1        # again: the steps before may have been skipped
     install_satellite
 }
 
