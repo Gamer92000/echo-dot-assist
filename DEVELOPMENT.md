@@ -61,6 +61,10 @@ make unit                                         # C unit tests; microWakeWord 
 .venv/bin/python tests/fake_ha_esphome.py         # ESPHome native API, as Home Assistant (aioesphomeapi)
 .venv/bin/python tests/fake_ha_arbitration.py     # two Echos + Home Assistant + an unknown device: wake word arbitration
 .venv/bin/python tests/fake_ha_dropin.py          # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer
+.venv/bin/python tests/ha_real_dropin.py --setup  # once: build/ha-venv, Home Assistant (pinned) and what its integrations need
+.venv/bin/python tests/ha_real_dropin.py          # the Drop In blueprint in that real Home Assistant with four PC Echos (one
+                                                 # the released build, from its git tag), in a network namespace with only
+                                                 # loopback (unshare -rn); skips without build/ha-venv or user namespaces
 .venv/bin/python tests/fake_web.py                # the settings page: login by the action button, signed requests, export/import
 .venv/bin/python tests/fake_web_artifacts.py      # models copied from one Echo to another through the page, root's installer
 .venv/bin/python tests/fake_web_wifi.py           # Wi-Fi switch: the sealed password, its PSK, root's wifi.sh against a fake wpa_cli

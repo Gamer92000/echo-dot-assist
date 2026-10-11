@@ -205,6 +205,43 @@ jobs:
       - name: Setup from a phone (Improv over Bluetooth), factory reset
         run: .venv/bin/python tests/fake_improv.py
 
+  # The Drop In voice blueprint in a real Home Assistant (tests/ha_real_dropin.py, which pins its version) against PC
+  # Echos, one of them the released build of a tag.  A job of its own: Home Assistant comes from PyPI with what its
+  # integrations need (a venv of about 1 GB, made fresh: uv takes a minute), and releases do not wait for it.
+  home-assistant:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0                # the released build is built from its tag
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: '3.13'        # .venv; Home Assistant's own venv asks for 3.14 (--setup)
+      - name: Packages
+        timeout-minutes: 8
+        run: |
+          echo 'man-db man-db/auto-update boolean false' | sudo debconf-set-selections
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libopus-dev libcurl4
+      - name: Python packages
+        timeout-minutes: 5
+        run: uv sync --locked
+      - name: Build
+        run: make build/hassmic-host
+      - name: Home Assistant
+        timeout-minutes: 8
+        run: .venv/bin/python tests/ha_real_dropin.py --setup
+      # The test runs in a network namespace of its own (unshare -rn); Ubuntu 24.04 lets only programs with an
+      # AppArmor profile make user namespaces unless this is off
+      - name: User namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Drop In blueprint in Home Assistant
+        env:
+          HASSMIC_HA_REQUIRED: '1'      # here a skip is a failure
+        run: .venv/bin/python tests/ha_real_dropin.py
+
   release:
     needs: [version, build, test]
     if: needs.version.outputs.publish == 'true'

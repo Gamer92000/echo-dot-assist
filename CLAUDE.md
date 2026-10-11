@@ -41,6 +41,9 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer
 .venv/bin/python tests/blueprint_dropin.py    # the Drop In voice blueprint against stand-ins of HA's registries, states,
                                              # actions and template engine: renamed ids, other devices, failures, replies
+.venv/bin/python tests/ha_real_dropin.py      # the blueprint in a real Home Assistant (build/ha-venv, made by --setup;
+                                             # skips without it) with four Echos, one the released build: replies, timing.
+                                             # All of it in an `unshare -rn` namespace with only lo
 .venv/bin/python tests/fake_ha.py [--qemu]    # Wyoming; --qemu uses the ARM build + stock Pryon model under qemu-arm
 .venv/bin/python tests/fake_ma_sendspin.py    # Sendspin, as Music Assistant
 .venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step

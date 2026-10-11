@@ -1591,6 +1591,15 @@ Run in this order. Each step says what it proves.
         which picks the reply: five more per language (do not disturb, microphones off there, here, not in the
         network, did not answer). Without it (released builds), the old waits. `tests/blueprint_dropin.py` 81 checks,
         incl. both kinds as caller and callee and the seconds the waits that run out cost.
+      - `tests/ha_real_dropin.py`: the same in a real HA, reproducible (`--setup`: `build/ha-venv` with
+        homeassistant 2026.10.1 + the requirements of the integrations it loads, from their manifests; run in
+        `unshare -rn` with only `lo`, multicast on it for HA's zeroconf, which fails at start without; http on
+        127.0.0.1 through `.storage/http`; onboarding and the ESPHome config flow through the API; four Echos, one
+        the released 2026.10.08.213741 built from its tag). 26 checks, about 40 s: calls start in 0.01-0.05 s;
+        do not disturb told in 0.03 s ("Hall has do not disturb on"; HA saw the caller's calling then idle), the
+        released caller's the same refusal in 4.01 s as before; a released callee's refusal from this build in
+        0.04 s; this Echo muted 0.02 s; the action under the second name 2.04 s (was 4.0); a stopped callee "offline"
+        in 4.05 s; the only run with an error is the call run under the wrong name.
       Device (biscuit, PC host as the other end on the LAN, `HASSMIC_ARB_ADDR=192.168.103.255`):
       - Playback stream: `Voip` exists in the mixer (`PLAYBACK_MODE_VOIP`) and switches libasp to "VoIP mode 1" (call
         tuning, NDVC, normalisation off; logcat). Same speech, volume 50, micRaw -48: residual in micAsr -60..-66 dBFS
