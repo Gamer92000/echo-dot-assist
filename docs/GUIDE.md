@@ -222,9 +222,13 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 | Illuminance | the Echo's light sensor in lux, for automations |
 | Timer ringing, Ringing timers | on while a finished timer rings; their names (diagnostic), see [Voice](#voice) |
 | Firmware | update entity, see [Updating](../README.md#updating) |
-| Identify, Factory reset | buttons |
+| Identify, Restart, Factory reset | buttons; Restart reboots the Echo |
 | Web UI address | diagnostic: the settings page's address |
 | Sendspin pairing token | diagnostic, disabled by default |
+
+A new IP address (the router hands out another one, or a Wi-Fi switch): Home Assistant finds the Echo again by itself,
+within about two minutes. It ignores the Echo's announcement while it still holds the old connection (90 s), so the
+Echo announces itself again after 100 s without Home Assistant, then less and less often, at most every 30 min.
 
 **Features**, switched on the settings page: while one is on, its entities are in Home Assistant; off, they are gone
 (Home Assistant reconnects for a moment when one is switched).
@@ -363,6 +367,9 @@ once more. WPA2 and open networks only.
 
 **Log** (System): `boot.log` with a filter, the older part, and a download for bug reports ([reading it](../README.md#when-something-is-wrong)). The Sendspin token is
 blanked; the rest travels unencrypted, like the whole page.
+
+**Restart** (System; also a button in Home Assistant): reboots the Echo, as pulling the plug does, and nothing is
+forgotten. For an Echo that is stuck while its page still answers; back in about a minute.
 
 ## Setting up from a phone
 

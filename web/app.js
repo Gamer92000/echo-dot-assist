@@ -296,6 +296,8 @@ const HELP = {
     note: 'An Echo that is called opens its microphone at once, unless it is set to answer with the button below. Only your own Echos can call it (the Echo network\'s key), never with do not disturb on or the microphones off. The ring shows green while a call runs.' },
   drop_in_answer: { parent: 'drop_in', help: 'At once: a call connects straight away, with a chime, as Alexa\'s Drop In does. After the action button: the Echo rings for 30 s, and only a press of its action button connects; nobody can listen into a room where nobody is.' },
   bluetooth_speaker: { icon: 'box', ha: ['Bluetooth speaker search', 'Play on Bluetooth speaker', 'Bluetooth speaker', 'Bluetooth speaker delay'], help: 'Plays everything (replies, timers, music) on a Bluetooth speaker instead of the Echo\'s own. Put the speaker in pairing mode near the Echo and switch on "Bluetooth speaker search" in Home Assistant: the Echo pairs with the strongest one it hears.' },
+  // not a setting: the System card's Restart button (main.c core_reboot)
+  restart: { help: 'Restarts the Echo, the same as pulling the plug and putting it back: for when it is stuck, for instance when Home Assistant cannot reach it any more but this page still can. It is gone for about a minute; nothing is forgotten. Home Assistant has the same as its "Restart" button.' },
 };
 const CHOICE_NAMES = {
   wake_engine: { amazon: 'Amazon', microwakeword: 'microWakeWord', homeassistant: 'Home Assistant' },
@@ -1880,6 +1882,7 @@ function buildSystem(el, list) {
       [h('button', { onclick: exportFile }, icon('down'), 'Export'), h('button', { onclick: () => file.click() }, icon('up'), 'Import…'), file], h('div', { class: 'row-x' }, importMsg)),
     logRow(),
     infoRow('Debug access', 'Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.', adbBox),
+    infoRow('Restart', HELP.restart.help, h('button', { onclick: restartEcho }, 'Restart…')),
     infoRow('Factory reset', 'Forgets everything this Echo was told: settings, name, Home Assistant\'s key, approved browsers, Bluetooth pairings, and its Wi-Fi networks. It then waits to be set up again, like after the install: the Home Assistant app finds it over Bluetooth. The same as holding the action button for 10 seconds.',
       h('button', { class: 'danger', onclick: factoryReset }, 'Factory reset…'))));
 
@@ -1887,6 +1890,14 @@ function buildSystem(el, list) {
   el.append(h('div', { class: 'card' },
     infoRow('Approved browsers', 'Browsers that may change settings on this Echo. Revoke one you no longer use.', null),
     h('div', { class: 'clients' }, clientsBox)));
+}
+
+// Restart (main.c core_reboot): root reboots the Echo, as a power cycle does; this page is back once it is up again
+async function restartEcho() {
+  if (!await ask({ title: 'Restart?', ok: 'Restart', body: [
+    `${echo.hello.name} restarts and is gone for about a minute. Nothing is forgotten.`] })) return;
+  try { await echo.call('POST', '/api/reboot', 'reboot'); toast(`${echo.hello.name} is restarting: back in about a minute`); }
+  catch (e) { toast(errText(e)); }
 }
 
 // Factory reset (main.c core_reset): root wipes state/ and the Wi-Fi networks, the Echo leaves the network

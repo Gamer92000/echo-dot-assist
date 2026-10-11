@@ -810,6 +810,11 @@ static void handle(int fd)
         if (!r.body || r.blen != 5 || memcmp(r.body, "reset", 5)) respond_sjson(fd, &r, 400, "{\"error\":\"say reset\"}");
         else { respond_sjson(fd, &r, 200, "{\"reset\":true}"); core_reset("settings page"); }
     }
+    else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/reboot")) {      /* body "reboot", as reset's */
+        if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
+        if (!r.body || r.blen != 6 || memcmp(r.body, "reboot", 6)) respond_sjson(fd, &r, 400, "{\"error\":\"say reboot\"}");
+        else { respond_sjson(fd, &r, 200, "{\"reboot\":true}"); core_reboot("settings page"); }
+    }
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/adb")) {
         char o[64];
         if (!signed_ok(&r, 1) || unhex(pub, r.pub, 32)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }

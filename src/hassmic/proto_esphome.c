@@ -106,7 +106,7 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_SS_UNPAIRED, KEY_DENOISE, KEY_ADB_WIFI, KEY_LUX, KEY_LED_AUTO, KEY_LED_BRIGHTNESS, KEY_SOUND_DETECTION, KEY_SOUND,
        KEY_BT_OUT_SEARCH, KEY_BT_OUT, KEY_BT_OUT_STATUS, KEY_BT_OUT_DELAY, KEY_WIFI_MOTION_ON, KEY_WIFI_MOTION, KEY_WIFI_MOTION_SENS,
        KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF, KEY_WEB_URL, KEY_IDENTIFY, KEY_RESET,
-       KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END };
+       KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -377,8 +377,8 @@ static void send_token_state(void)      /* lock held */
 
 /* The settings page as this client reached us (http://<address>:28931): diagnostic, enabled, so the address is on the
  * device page without a click.  The address is the one the subscriber connected to, sent to it only: a debugging
- * client over adb forward would otherwise show Home Assistant 127.0.0.1.  A new address drops every link, so the
- * state at subscribe stays true. */
+ * client over adb forward would otherwise show Home Assistant 127.0.0.1.  A new address drops every link over the old
+ * one (netaddr.c), so the state at subscribe stays true. */
 static void send_web_state(void)        /* lock held */
 {
     PB(b, 64); struct sockaddr_in a; socklen_t n = sizeof a; char s[INET_ADDRSTRLEN], url[48];
@@ -559,6 +559,9 @@ static void send_setting_entities(void)
      * forgotten, Home Assistant's key and the Wi-Fi networks too (core_reset): the Echo starts its setup again */
     { PB(b, 128); pb_str(&b, 1, "factory_reset"); pb_fixed32(&b, 2, KEY_RESET); pb_str(&b, 3, "Factory reset");
       pb_str(&b, 5, "mdi:restart-alert"); pb_uint(&b, 7, 1); pb_str(&b, 8, "restart"); send_msg(LIST_BUTTON, &b); }
+    /* ESPHome's restart button: the whole Echo, as a power cycle (core_reboot) */
+    { PB(b, 128); pb_str(&b, 1, "restart"); pb_fixed32(&b, 2, KEY_RESTART); pb_str(&b, 3, "Restart");
+      pb_uint(&b, 7, 1); pb_str(&b, 8, "restart"); send_msg(LIST_BUTTON, &b); }
     send_light_entities();
 }
 
@@ -1316,6 +1319,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
     case BUTTON_COMMAND: { struct pbf f;
         while (pb_next(&p, end, &f)) if (f.field == 1 && f.v == KEY_IDENTIFY) core_identify(); else if (f.field == 1 && f.v == KEY_RESET) core_reset("Home Assistant's button");
+                                       else if (f.field == 1 && f.v == KEY_RESTART) core_reboot("Home Assistant's button");
             else if (f.field == 1 && f.v == KEY_DROPIN_END && listed(KEY_DROPIN_END)) dropin_hangup("Home Assistant's button");
         break; }
     case UPDATE_COMMAND: {

@@ -1504,3 +1504,25 @@ Run in this order. Each step says what it proves.
       Open (device): a talker at the called Echo (does speech open the gate fast
       enough, is the ARA with listening mode toggled fine), the wake word in VoIP mode, call LED animations' look,
       the blueprint in a real HA.
+- [~] A new IP address (2026-10-11, GitHub issue #17: new addresses from the router, Home Assistant lost the Echos
+      until a power cycle, "sometimes it takes 2"). Home Assistant's ESPHome config flow moves an entry to the address
+      in an mDNS announcement only while the entry is not connected (`config_flow.py`
+      `_async_validate_mac_abort_configured`: "transient mDNS announcements (e.g., during WiFi mesh roaming)" must not
+      move a working one), and aioesphomeapi drops a silent link only after 90 s (ping every 20 s,
+      `KEEP_ALIVE_TIMEOUT_RATIO` 4.5). avahi announces a new address at once (netlink), inside those 90 s: ignored, and
+      no record changes again, so Home Assistant dials the old address for ever. A power cycle announces again at
+      boot, often still inside the 90 s: the second power cycle. On the Echo the old link stayed too: Linux keeps a TCP
+      socket whose address is gone, nothing leaves it, keepalive probes only while nothing is unacknowledged
+      (else ~15 min of retransmissions, `tcp_retries2`), and that link held the voice assistant (first subscriber
+      wins), so Home Assistant back over the new address would have had no pipelines.
+      Now `netaddr.c` (polls getifaddrs every 2 s): links whose local address is gone are shut down once there is
+      another; on a new address and while the Echo is set up but has no client (100 s, then doubling to 30 min) it
+      writes `state/mdns`, on which root's netwatch restarts avahi (`avahi_start`: goodbye, gone, 2 s, fresh probe and
+      announcements: Home Assistant's zeroconf sees the service removed and added, its flow probes the new address
+      and updates the entry). API links also get `TCP_USER_TIMEOUT` 60 s. Restart: page (System, signed
+      `POST /api/reboot` with body "reboot") and an ESPHome restart button -> `state/reboot` -> root's ota_watch
+      `setprop sys.powerctl reboot` (request removed first; the firewall start drops a stale one).
+      fake_ha_esphome: a new address closes the link holding the voice assistant, `state/mdns` at once and again
+      after the (test) wait, the voice assistant free for the next link, no announcements while connected. fake_web:
+      reboot signed only, body checked, HA button. Open (device): avahi's goodbye and re-announcement as seen from
+      Home Assistant on a real address change; `sys.powerctl` from the su domain on each model.

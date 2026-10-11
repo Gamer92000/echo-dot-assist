@@ -46,6 +46,7 @@
 #include "dropin.h"
 #include "micdenoise.h"
 #include "micgain.h"
+#include "netaddr.h"
 #include "netio.h"
 #include "wake.h"
 #include "mww.h"
@@ -190,6 +191,17 @@ void core_reset(const char *why)
     if (write_state("reset", line)) { fprintf(stderr, "reset: cannot ask root for it\n"); return; }
     led("-s", "factory-reset");
     fprintf(stderr, "reset (%s): root forgets the settings and Wi-Fi networks, then the setup starts again\n", why);
+}
+
+/* What a power cycle does, for an Echo that is stuck where only that helps (issue #17: Home Assistant lost it after
+ * the router handed out new addresses, and the settings page was all that still reached it).  Root reboots on
+ * state/reboot (main.sh ota_watch); hassmic itself may not. */
+void core_reboot(const char *why)
+{
+    char line[48];
+    snprintf(line, sizeof line, "%s\n", why);
+    if (write_state("reboot", line)) { fprintf(stderr, "reboot: cannot ask root for it\n"); return; }
+    fprintf(stderr, "reboot (%s): root restarts the Echo\n", why);
 }
 static int ota_port = 28929;                        /* 0 = no push updates */
 static int arb_port = 28930;                        /* 0 = no wake word arbitration */
@@ -1847,7 +1859,18 @@ static void *capture_thread(void *arg)
     return NULL;
 }
 
-static void *serve_thread(void *arg) { int c = (int)(long)arg; proto->serve(c); close(c); return NULL; }
+static void *serve_thread(void *arg) { int c = (int)(long)arg; proto->serve(c); netaddr_link(c, 0); close(c); return NULL; }
+
+/* netaddr.c: Home Assistant ought to be connected and is not, or the address changed: root announces mDNS again */
+static int na_linked(void) { pthread_mutex_lock(&core_lock); int up = connected; pthread_mutex_unlock(&core_lock); return up; }
+static int na_expected(void) { return !atomic_load(&oobe); }
+static void na_announce(const char *why)
+{
+    char line[80];
+    snprintf(line, sizeof line, "%s\n", why);
+    if (write_state("mdns", line)) fprintf(stderr, "mDNS: cannot ask root to announce again\n");
+    else fprintf(stderr, "mDNS: announced again (%s)\n", why);
+}
 
 static void on_usr1(int s) { (void)s; atomic_store(&trigger_pending, 1); }
 static void on_usr2(int s) { (void)s; atomic_store(&button_pending, 1); }
@@ -1943,21 +1966,27 @@ int main(int argc, char **argv)
 
     int ls = net_listen(core_port);
     if (ls < 0) { perror("listen"); return 1; }
+    static const struct netaddr_hooks na_hooks = { na_linked, na_expected, na_announce };
+    netaddr_start(&na_hooks);
     fprintf(stderr, "hassmic " VERSION " (" BUILD ") %s on %d, wake=%s\n", proto->id, core_port, core_local_wake ? "local" : "remote");
     if (ota_port) { pthread_t st; if (!pthread_create(&st, NULL, selftest_thread, NULL)) pthread_detach(st); }
     while (!atomic_load(&quit)) {
         int c = net_accept(ls);
         if (c < 0) break;
         /* A link that went away must not hold a client slot (or core_lock, in a blocked write) for ever:
-         * writes give up after 5 s, keepalive notices a dead peer within ~25 s.  Both make serve() return. */
-        { struct timeval tv = { 5, 0 }; int on = 1, idle = 10, intvl = 5, cnt = 3;
+         * writes give up after 5 s, keepalive notices a dead peer within ~25 s.  Both make serve() return.  Keepalive
+         * only probes while nothing waits for an acknowledgement, though; with a state update unacknowledged the
+         * kernel retransmits for some 15 min (tcp_retries2): the user timeout ends that after 60 s.  A link over an
+         * address the Echo no longer has is closed at once (netaddr.c). */
+        { struct timeval tv = { 5, 0 }; int on = 1, idle = 10, intvl = 5, cnt = 3; unsigned user_ms = 60000;
           setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv); setsockopt(c, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);
           setsockopt(c, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof idle); setsockopt(c, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof intvl);
-          setsockopt(c, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof cnt); }
+          setsockopt(c, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof cnt); setsockopt(c, IPPROTO_TCP, TCP_USER_TIMEOUT, &user_ms, sizeof user_ms); }
+        netaddr_link(c, 1);
         if (proto->threaded) {
             pthread_t t;
-            if (pthread_create(&t, NULL, serve_thread, (void *)(long)c)) close(c); else pthread_detach(t);
-        } else { proto->serve(c); close(c); }
+            if (pthread_create(&t, NULL, serve_thread, (void *)(long)c)) { netaddr_link(c, 0); close(c); } else pthread_detach(t);
+        } else { proto->serve(c); netaddr_link(c, 0); close(c); }
     }
     cap_close();
     if (core_local_wake) wake_close();

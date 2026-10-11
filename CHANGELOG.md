@@ -12,6 +12,13 @@ What changed for people using the Echo, newest first. Details and measurements a
   the Echo's own speaker louder at every volume, by up to 12 dB, for an Echo that is too quiet at full volume. It
   stays set across restarts of the Echo's audio. +6 dB was heard loud and clean on an Echo Dot 2; go up a step at a
   time and turn it down at the first crackle, as a speaker played distorted for long can be damaged.
+- **Home Assistant finds an Echo again after it gets a new IP address** (issue #17), within about two minutes and
+  without a power cycle. Home Assistant ignores an Echo's "I am here now" while it still holds the old connection,
+  which it does for 90 s, so the one announcement the Echo made at its new address went unheard, and often the one
+  after a power cycle too. The Echo now announces itself again while Home Assistant stays away, and drops the dead
+  connection at once, which had kept the voice assistant from working when Home Assistant came back.
+- **Restart** on the settings page (System) and a "Restart" button in Home Assistant: the Echo reboots, as a power
+  cycle does, without anything forgotten. For an Echo that is stuck while its page still answers.
 
 ## 2026-10-10
 

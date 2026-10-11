@@ -118,6 +118,30 @@ clock_set() {
     echo "clock: set from Home Assistant, $d s $a${first:+ (times in this log are UTC from here on, seconds since boot before)}"
 }
 
+# mDNS through the stock avahi-daemon, from the service file hassmic prints (satellite start, below).  The init-started
+# avahi runs in its own SELinux domain, which may not read /data/misc/avahi/services (avc denied), and magiskpolicy
+# cannot parse a rule for a type with a hyphen ("avahi-daemon").  So it runs from here, in our domain.
+# Host name = the ESPHome node name, as on a real ESPHome device.  Stock avahi calls every Echo "linux" (a second one
+# "linux-2"), and Home Assistant showed that next to the name.  [server] is the stock file's first section, so host-name
+# lands in it.
+# Also a restart when hassmic asks (state/mdns, src/hassmic/netaddr.c: a new address, or Home Assistant missing while
+# the Echo is set up).  The old daemon says goodbye to its records when it ends, and has to be gone before the new one
+# starts: two at once see each other's host name and the new one renames itself.  The new one announces a few seconds
+# after the goodbye, so Home Assistant sees the service go and come back and looks at where it is now.
+AVAHI_SVC=/data/misc/avahi/services/hassmic.service
+avahi_start() {
+    local conf=/system/etc/avahi-daemon.conf node i=0
+    node=$(sed -n 's|^ *<name>\([a-z0-9-]*\)</name>$|\1|p' $AVAHI_SVC 2>/dev/null)
+    if [ -n "$node" ]; then
+        { echo "[server]"; echo "host-name=$node"; grep -v '^\[server\]' $conf; } > /data/misc/avahi/avahi-daemon.conf
+        conf=/data/misc/avahi/avahi-daemon.conf
+    fi
+    stop avahi-daemon; pkill avahi-daemon
+    while [ $i -lt 5 ] && pidof avahi-daemon > /dev/null; do sleep 1; i=$((i + 1)); done
+    sleep 2
+    avahi-daemon -f $conf --no-drop-root > /dev/null 2>&1 &
+}
+
 # While the settings page switches networks (wifi.sh holds its lock), the link is that script's business: no wifisvc.
 # Whenever the address changes, wifi.sh writes down which network the Echo is on, for the page: wpa_supplicant can also
 # move to another saved network by itself when the one it is on goes away.
@@ -127,6 +151,11 @@ netwatch() {
         rotate_log
         clock_set
         fwcheck
+        if [ -f /data/local/hassmic/state/mdns ] && [ ! -L /data/local/hassmic/state/mdns ]; then
+            why=$(head -c 60 /data/local/hassmic/state/mdns | tr -cd 'a-zA-Z0-9 ')
+            rm -f /data/local/hassmic/state/mdns
+            [ -f $AVAHI_SVC ] && { echo "mDNS: announcing again (${why:-asked for}), avahi restarted"; avahi_start; }
+        fi
         if a=$(ifconfig $WLAN 2>/dev/null | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p'); [ -n "$a" ]; then
             miss=0
             [ "$a" = "$addr" ] || { addr=$a; [ -f $D/wifi.sh ] && sh $D/wifi.sh status; }
@@ -214,6 +243,15 @@ ota_watch() {
             say "== factory reset done, the satellite starts again"
             continue
         fi
+        # A reboot (main.c core_reboot: the settings page, Home Assistant's restart button): what a power cycle does, for
+        # an Echo that is stuck where nothing less helps (issue #17).  The request goes first, and if it cannot go there
+        # is no reboot: one left behind would reboot every boot (the firewall start drops one from before it, too).
+        if [ -f /data/local/hassmic/state/reboot ] && [ ! -L /data/local/hassmic/state/reboot ]; then
+            why=$(head -c 40 /data/local/hassmic/state/reboot | tr -cd 'a-zA-Z0-9 ')
+            rm -f /data/local/hassmic/state/reboot
+            if [ -e /data/local/hassmic/state/reboot ]; then say "== reboot asked for, but its request cannot be removed: not rebooting"
+            else say "== reboot (${why:-asked for})"; sync; setprop sys.powerctl reboot; sleep 30; fi
+        fi
         # asked for on the settings page: a rename (main.c core_rename; the name is in what the satellite builds at start,
         # mDNS and avahi's host name included) or the wake word moving to or from Home Assistant (core_wake_engine)
         if [ -f /data/local/hassmic/state/restart ]; then
@@ -283,6 +321,7 @@ case "$1" in
 firewall)
     quiet
     [ -f $D/wifi.sh ] && sh $D/wifi.sh clean           # a Wi-Fi request from before this start is nobody's
+    rm -f /data/local/hassmic/state/reboot             # nor a reboot: it would reboot every boot
     sh $D/lockdown.sh watch 2>&1 | stamped >> $LOG &
     ota_watch >> $LOG 2>&1                              # execs on an update: no pipe around it, its lines say when
     ;;
@@ -315,21 +354,9 @@ satellite)
         i=0
         while [ $i -lt 120 ] && ! grep -q '[1-9a-f]' /sys/class/net/$WLAN/address 2>/dev/null; do sleep 1; i=$((i + 1)); done
         [ $i -gt 0 ] && echo "mDNS: waited ${i}s for the $WLAN address"
-        $BIN -P ${PROTO:-esphome} $ARGS -S > /data/misc/avahi/services/hassmic.service
-        chown $DAEMON_USER /data/misc/avahi/services/hassmic.service; chmod 644 /data/misc/avahi/services/hassmic.service
-        # The init-started avahi runs in its own SELinux domain, which may not read /data/misc/avahi/services (avc denied),
-        # and magiskpolicy cannot parse a rule for a type with a hyphen ("avahi-daemon").  So run it from here, in our domain.
-        # Host name = the ESPHome node name, as on a real ESPHome device.  Stock avahi calls every Echo "linux" (a second
-        # one "linux-2"), and Home Assistant showed that next to the name.  [server] is the stock file's first section, so
-        # host-name lands in it.
-        conf=/system/etc/avahi-daemon.conf
-        node=$(sed -n 's|^ *<name>\([a-z0-9-]*\)</name>$|\1|p' /data/misc/avahi/services/hassmic.service)
-        if [ -n "$node" ]; then
-            { echo "[server]"; echo "host-name=$node"; grep -v '^\[server\]' $conf; } > /data/misc/avahi/avahi-daemon.conf
-            conf=/data/misc/avahi/avahi-daemon.conf
-        fi
-        stop avahi-daemon; pkill avahi-daemon; sleep 1
-        avahi-daemon -f $conf --no-drop-root > /dev/null 2>&1 &
+        $BIN -P ${PROTO:-esphome} $ARGS -S > $AVAHI_SVC
+        chown $DAEMON_USER $AVAHI_SVC; chmod 644 $AVAHI_SVC
+        avahi_start
     ) 2>&1 | stamped >> $LOG &
     # The bootstrap counted this start as an attempt; a minute of hassmic running counts as success.
     (sleep 60; pidof hassmic > /dev/null && echo 0 > $OTA/tries) &

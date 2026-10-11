@@ -286,6 +286,11 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   for tests.  Reset (`core_reset`: action held 10 s via `buttons.c` hold stages, HA button `factory_reset`, page
   `POST /api/reset` "reset") writes `state/reset`; root's `main.sh` ota_watch stops hassmic, `wifi.sh forget`, empties
   state/, starts it.
+- **New IP address** (`netaddr.c`, issue #17): polls the addresses; links whose local address is gone are shut down
+  (Linux keeps them, and one held the voice assistant); on a new address, and while the Echo is set up but no client
+  is connected (100 s, doubling to 30 min: Home Assistant ignores mDNS while it still holds its old link, 90 s), it
+  writes `state/mdns` and root's netwatch restarts avahi (`avahi_start` in `main.sh`). Restart: page `POST
+  /api/reboot` / ESPHome button `restart` -> `core_reboot` -> `state/reboot` -> root's ota_watch reboots.
 - **adb over Wi-Fi** (`adbwifi.c`): the settings page only writes a request for root's firewall watcher, as `ota.c` does
   for updates; opening needs an approved browser plus a press of the action button (`web.c`), or (`ota.c`, `HMOTA-ADB1`) a challenge signed with the update key.
 - **Wi-Fi motion** (`wifimotion.c`, experimental, off by default): polls the RCPI of the frames from the AP at 10 Hz, scatter

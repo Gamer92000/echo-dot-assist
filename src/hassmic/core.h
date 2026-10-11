@@ -58,6 +58,8 @@ int  core_oobe(void);
 /* Forget everything: root wipes state/ and the saved Wi-Fi networks and restarts the satellite, which then starts
  * the setup again (state/reset, main.sh).  why: for the log.  Any thread */
 void core_reset(const char *why);
+/* Restart the whole Echo, as a power cycle does: root reboots on state/reboot (main.sh).  why: for the log.  Any thread */
+void core_reboot(const char *why);
 extern int core_local_wake, core_port, core_sendspin_port, core_web_port;
 
 /* lock held */

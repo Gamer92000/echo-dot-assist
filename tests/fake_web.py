@@ -212,6 +212,20 @@ async def main():
         if btn is not None:
             ha2.button_command(btn.key); await asyncio.sleep(0.4)
             check(open(log).read().count("identify: rainbow") == 2, "pressed in Home Assistant: identifies")
+
+        # restart (main.c core_reboot): root reboots on state/reboot (main.sh ota_watch)
+        rb = sf("reboot")
+        check(rq("POST", "/api/reboot", b"reboot")[0] == 401 and not os.path.exists(rb), "reboot: unsigned refused")
+        check(b.call("POST", "/api/reboot", b"yes")[0] == 400 and not os.path.exists(rb), "reboot: only with the body \"reboot\"")
+        st, _, body = b.call("POST", "/api/reboot", b"reboot")
+        check(st == 200 and json.loads(body).get("reboot") is True and open(rb).read() == "settings page\n", "reboot from the page: root asked")
+        os.remove(rb)
+        rbtn = by2.get("restart")
+        check(rbtn is not None and rbtn.device_class == "restart" and int(rbtn.entity_category) == 1, "Home Assistant: a Restart button (configuration)")
+        if rbtn is not None:
+            ha2.button_command(rbtn.key); await asyncio.sleep(0.4)
+            check(os.path.exists(rb) and open(rb).read() == "Home Assistant's button\n", "pressed in Home Assistant: root asked to reboot")
+            if os.path.exists(rb): os.remove(rb)
         try: await ha2.disconnect()
         except Exception: pass
 
