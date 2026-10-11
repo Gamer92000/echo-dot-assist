@@ -89,8 +89,9 @@ adb reboot
 ```
 
 TWRP switches the active slot itself after an install (checked 2026-09-25: `bcbtool get_active` said `b` right after
-flashing B). Do not switch it back by hand, or the second install lands in the same slot again and the other one keeps
-Amazon's newer firmware. `kamakiri`'s `bootrom-step.sh` asks for Enter after the handshake: run it in a terminal, not in
+flashing B; a user saw the same on his Dots, GitHub issue 18). Do not switch it back by hand, as the XDA thread's
+`bcbtool set_active` line does, or the second install lands in the same slot again and the other one keeps Amazon's
+newer firmware. `scripts/setup.sh donut` never switches; it stops if TWRP did not. `kamakiri`'s `bootrom-step.sh` asks for Enter after the handshake: run it in a terminal, not in
 the background. With a second Echo on adb (Wi-Fi), point every command and script at the new one:
 `export ANDROID_SERIAL=<serial from adb devices>`.
 
