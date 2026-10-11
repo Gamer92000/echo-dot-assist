@@ -198,7 +198,14 @@ const HELP = {
   bluetooth_announcements: { help: 'Says "Connected to …" and "Disconnected from …" when a phone connects, in your voice assistant\'s voice.' },
   bluetooth_announcement_language: { help: 'The language of those sentences. Home Assistant does not tell the Echo which language your voice assistant speaks, so pick the one that matches its voice.' },
   sendspin_unpaired: { help: 'Lets any Music Assistant server on the network play here without pairing. Off: only a server given this Echo\'s "Sendspin pairing token" (a diagnostic entity in Home Assistant) may play.' },
-  online_updates: { help: 'Where new versions come from. Release: tested releases only. Beta: every new build, plus releases. Off: nothing is fetched. The Echo\'s "Firmware" entity in Home Assistant then shows what is new and installs it; every update is signature-checked, and the Echo falls back by itself if a new version does not stay up.' },
+  online_updates: { help: 'Where new versions come from. Release: tested releases only. Beta: every new build, plus releases. Off: nothing is fetched. The Echo downloads them itself from the project\'s releases on GitHub, not through this browser or Home Assistant, so it needs internet access to github.com: an Echo on a network kept off the internet cannot use this, and switching it on first checks that GitHub answers. The Echo\'s "Firmware" entity in Home Assistant then shows what is new and installs it; every update is signature-checked, and the Echo falls back by itself if a new version does not stay up.',
+    status: () => updCheck.busy ? h('div', { class: 'callout info' }, icon('net'), h('p', {}, 'Checking that this Echo can reach GitHub…'))
+      : updCheck.why ? h('div', { class: 'callout bad big' }, icon('warn'), h('div', { class: 'grow' },
+        h('p', {}, h('b', {}, 'Online updates were not switched on: this Echo cannot reach GitHub.')),
+        h('p', {}, 'It downloads updates itself, so it needs to get out to the internet. Check that its network, firewall, VLAN or DNS filter lets it reach github.com, api.github.com and GitHub\'s download servers (*.githubusercontent.com) over HTTPS, then pick a channel again.'),
+        h('p', { class: 'why' }, 'What failed: ', h('code', {}, updCheck.why)),
+        h('button', { class: 'link', onclick: () => { updCheck.why = ''; paintStatus('online_updates'); } }, 'Dismiss')))
+      : null },
 
   arbitration: { icon: 'net', ha: ['Arbitration peers'], help: 'When several Echos hear the wake word, only the one that heard you best answers; the others stay silent and dark. Only devices listening for the same wake word compete. Off: this Echo answers every wake word it hears.',
     status: () => {
@@ -439,16 +446,25 @@ async function load() {
   }
 }
 
+// Online updates: the Echo tries GitHub before it takes a channel (web.c updates_gate); what it found shows under the row
+let updCheck = { busy: false, why: '' };
+const paintStatus = (name) => { const c = controls.get(name); if (c && c.paint) c.paint(); };
+
 async function set(name, value) {
+  const gate = name === 'online_updates' && value !== 'off' && settingValue(name) === 'off';
+  if (name === 'online_updates') { updCheck = { busy: gate, why: '' }; paintStatus(name); }
   try {
     const r = await (await echo.call('POST', '/api/set', `${name}=${value}\n`)).json();
-    if (r.errors) toast(r.errors.trim());
+    if (gate) updCheck.why = r.github_unreachable || '';
+    if (r.github_unreachable) { /* the warning under the row says it */ }
+    else if (r.errors) toast(r.errors.trim());
     else {
       const s = state.settings.find((x) => x.name === name);
       if (s && s.feature) toast('Saved. Home Assistant reconnects to update its entities.');
       flash(name);
     }
   } catch (e) { toast(errText(e)); }
+  if (gate) { updCheck.busy = false; paintStatus(name); }
   await load();
   // once more shortly: what the change set off (a feature that cannot start switches itself back off) shows without the 15 s wait
   clearTimeout(set.again); set.again = setTimeout(() => load().catch(() => {}), 1500);
@@ -528,12 +544,14 @@ function haBadge() { return h('span', { class: 'badge ha', title: 'Also in Home 
 function settingRow(s) {
   const info = HELP[s.name] || {}, c = control(s), saved = h('span', { class: 'saved' }, 'Saved');
   const wide = s.type === 'int' || !!info.modes, stack = s.type === 'choice';      // stack: control under the text on a phone
+  const status = info.status ? h('div', { class: 'row-status' }) : null;      // under the whole row: what the last change found
   const row = h('div', { class: 'row' + (wide ? ' wide' : '') + (stack ? ' stack' : '') },
     h('div', {},
       h('label', { class: 'row-label', for: 's-' + s.name }, label(s), info.ha === true ? haBadge() : null, saved),
       info.help ? h('p', { class: 'help' }, info.help) : null),
-    h('div', { class: 'ctl' }, c.el));
-  controls.set(s.name, { update: c.update, saved, root: row });
+    h('div', { class: 'ctl' }, c.el), status);
+  const paint = () => { if (status) status.replaceChildren(...[info.status()].filter(Boolean)); };
+  controls.set(s.name, { update: (x) => { c.update(x); paint(); }, paint, saved, root: row });
   return row;
 }
 

@@ -28,6 +28,7 @@ class GitHub(BaseHTTPRequestHandler):
     releases = []           # newest first, as GitHub lists them
     files = {}              # (tag, asset) -> bytes
     hits = []
+    down = False            # GitHub out of reach: the connection closes without an answer
 
     def log_message(self, *a): pass
 
@@ -37,6 +38,7 @@ class GitHub(BaseHTTPRequestHandler):
 
     def do_GET(self):
         GitHub.hits.append(self.path)
+        if GitHub.down: self.close_connection = True; return
         if self.headers.get("User-Agent", "").split("/")[0] != "hassmic": return self.send(403, b'{"message":"no user agent"}')
         if self.path == "/repos/o/r/releases/latest":
             rel = [r for r in GitHub.releases if not r["prerelease"]]
@@ -131,6 +133,18 @@ async def main():
         await prov.noise_encryption_set_key(key); await prov.disconnect()
         enc = APIClient("127.0.0.1", PORT, None, noise_psk=key.decode()); await enc.connect(login=True)
         states.clear(); enc.subscribe_states(states.append); await asyncio.sleep(0.3)
+
+        # GitHub out of reach (an Echo on a network without internet): the channel does not take, the page is told why;
+        # the other lines of an import still apply
+        GitHub.down = True
+        r = page.set(online_updates="beta")
+        check(chan() == "off" and r.get("github_unreachable") and "GitHub cannot be reached" in r.get("errors", ""),
+              f"GitHub not reachable: stays off, the page is told why: {r}")
+        r = page.set(wake_sound="on", online_updates="release")
+        check(chan() == "off" and r.get("applied") == 1 and r.get("github_unreachable"), f"import with GitHub out of reach: the rest applied: {r}")
+        check("online_updates=off" in open(os.path.join(state, "config")).read() or "online_updates" not in open(os.path.join(state, "config")).read(),
+              "nothing saved for it")
+        GitHub.down = False
 
         pick("beta")
         check(await wait_for(lambda: last(UpdateState, upd.key) and last(UpdateState, upd.key).latest_version == "2099.01.02.120000"),

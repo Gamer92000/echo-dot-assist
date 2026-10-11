@@ -53,6 +53,7 @@
 #include "mww.h"
 #include "netio.h"
 #include "settings.h"
+#include "update.h"
 #include "wifi.h"
 #include "ws.h"
 #include "../third_party/monocypher.h"
@@ -747,6 +748,23 @@ static void log_api(int fd, struct req *r)
     free(t);
 }
 
+/* Online updates come from GitHub: a line of BODY that switches them on (from off) counts only once this Echo reached
+ * it (update_probe), else it is turned into a comment and WHY says what failed.  Imports go the same way.  Before
+ * core_lock: the probe takes up to 15 s. */
+static void updates_gate(char *body, char *why, size_t cap)
+{
+    why[0] = 0;
+    for (char *p = body; *p; ) {
+        size_t l = strcspn(p, "\n"); char *k = p + strspn(p, " \t"), v[16];
+        if (!strncmp(k, "online_updates=", 15)) {
+            snprintf(v, sizeof v, "%.*s", (int)strcspn(k + 15, "\r\n"), k + 15);
+            int on = !strcmp(v, update_channels[UPDATE_BETA]) || !strcmp(v, update_channels[UPDATE_RELEASE]);
+            if (on && update_channel(-1) == UPDATE_OFF && (why[0] || update_probe(why, cap))) *k = '#';
+        }
+        p += l + (p[l] == '\n');
+    }
+}
+
 static void handle(int fd)
 {
     struct req r; int e; uint8_t pub[32];
@@ -787,11 +805,14 @@ static void handle(int fd)
     }
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/set")) {
         /* body: "name=value" lines, one setting or a whole export */
-        char err[2048], o[2400], ej[2200]; int applied;
+        char err[2048], o[2800], ej[2200], why[300], wj[340]; int applied;
         if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
+        updates_gate(r.body, why, sizeof why);
         pthread_mutex_lock(&core_lock); applied = settings_apply_text(r.body, err, sizeof err); pthread_mutex_unlock(&core_lock);
-        jesc(ej, sizeof ej, err);
-        snprintf(o, sizeof o, "{\"applied\":%d,\"errors\":\"%s\"}", applied, ej);
+        if (why[0]) { size_t n = strlen(err); snprintf(err + n, sizeof err - n, "online_updates: GitHub cannot be reached from this Echo (%s), so they stay off\n", why); }
+        jesc(ej, sizeof ej, err); jesc(wj, sizeof wj, why);
+        /* github_unreachable: the page's warning under "Online updates" */
+        snprintf(o, sizeof o, "{\"applied\":%d,\"errors\":\"%s\",\"github_unreachable\":\"%s\"}", applied, ej, wj);
         fprintf(stderr, "web: %d setting%s changed%s%s", applied, applied == 1 ? "" : "s", err[0] ? ", refused: " : "\n", err);
         respond_sjson(fd, &r, 200, o);
     }

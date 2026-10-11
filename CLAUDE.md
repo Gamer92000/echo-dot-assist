@@ -340,7 +340,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   ESPHome update entity; checks GitHub's releases API, downloads `hassmic-<board.codename>.bundle` through the firmware's
   libcurl (dlopen; sockets via `net_socket` so the egress lock lets them out), hands it to root through `ota_handoff`.
   Root (`main.sh` ota_watch) accepts the owner's `update.pub` or the release key (`release.pub` of the running copy, else
-  the system partition). Channel change and install only over the keyed connection.
+  the system partition). Channel change and install only over the keyed connection.  The page switches a channel on
+  only once `update_probe` reached GitHub (web.c `updates_gate`, before `core_lock`; else `github_unreachable` in the
+  answer and a warning under the row).
 - `src/include/`: headers for the reversed Amazon libraries (`mixer_api.h`, `pryon_api.h`, `aipc_api.h`) and `netio.h`.
 - `src/tools/`: standalone device tools (`mixcap`, `mixplay`, `pryon_test`, `aed_test`, `latency`, `runas` — AIPC refuses uid 0 and
   the image has no `su`; `curlspy`, `hciscan`, `a2dpprobe`, `dha_test` not in `all`).

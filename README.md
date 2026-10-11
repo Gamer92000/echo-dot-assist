@@ -131,7 +131,8 @@ names itself after its model and MAC address ("Echo Dot 3 5695c4"); give it your
 
 - **From Home Assistant**: pick a channel under "Online updates" on the settings page. `release` gets releases (the
   `release` branch), `beta` also every build of `main` that changes the Echo's software, `off` (the default) nothing.
-  The Echo's firmware entity then shows new versions and installs them. ESPHome mode only.
+  The Echo's firmware entity then shows new versions and installs them. ESPHome mode only. The Echo downloads them
+  itself, so it needs internet access to GitHub; the page checks that before it takes a channel.
 - **From your PC**: `git pull`, then `scripts/ota-push.sh <echo-ip>` (it remembers the address). It builds, or takes
   that commit's build from GitHub as the setup does, signs with your `secrets/update.key` and pushes over Wi-Fi
   (TCP 28929).

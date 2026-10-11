@@ -48,6 +48,11 @@ What changed for people using the Echo, newest first. Details and measurements a
   listened for beside the first one, and it starts "Assistant 2", so each word can have its own assistant (as on a
   Voice PE). Before, a pick there did not stick, or replaced the first word. A second word costs the Echo
   some processing power all the time; leave "Wake word 2" at "No wake word" to keep one.
+- **Online updates check that the Echo reaches GitHub before they switch on.** The Echo downloads updates itself, so
+  one on a network kept off the internet never got any and only said so in the firmware entity's summary. Picking a
+  channel on the settings page now first asks GitHub; if it does not answer, the channel stays off and the page shows
+  a warning with what failed and what the Echo needs to reach. An imported settings file goes the same way. The
+  setting's description now says this too.
 
 ## 2026-10-10
 
