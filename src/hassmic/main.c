@@ -283,12 +283,19 @@ static void led(const char *op, const char *pattern)
     if (use_led && pattern) run("/system/bin/ledctrl", op, pattern);
 }
 
+/* "active-start"/"active-end", not the "ca-" ones of uxconfig.json (same look): ledcontroller turns only these two
+ * towards the talker (issue #22).  The mixer's front end sends its beam on LIPC (com.doppler.lasp beam_index);
+ * ledcontroller's EchoAnimationStore::getBeamIndexTask (libled_resources.so) stores it in every frame of exactly
+ * "active-start" and "active-end", and LedDevice rotates a frame by it when writing the ring, but only a frame of a
+ * single active animation: with two or more (mics-off_on, a ringing timer) it composes a fresh, unturned one.
+ * Checked on a Dot 2 with lipc-set-prop -i com.amazon.ledd BeamDirection N (the same path): the cyan pair moves by N
+ * LEDs, the "ca-" patterns never move. */
 static void led_for(enum state from, enum state to)
 {
-    static const char *const pattern[] = { NULL, "ca-active-start", "active-thinking", "active-talking" };
+    static const char *const pattern[] = { NULL, "active-start", "active-thinking", "active-talking" };
     if (pattern[from]) led("-u", pattern[from]);
     if (pattern[to]) led("-s", pattern[to]);
-    else if (from != IDLE) led("-s", "ca-active-end");
+    else if (from != IDLE) led("-s", "active-end");
 }
 
 /* ---------------------------------------------------------------- state (call with lock held) */

@@ -4,6 +4,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-11
 
+- **The light ring points at you again while you speak** (issue #22). After the wake word, Amazon's software turns
+  the light-blue part of the ring towards whoever spoke; with hassmic it always sat in the same place. Amazon's ring
+  only turns two of its animations, and hassmic used a look-alike that never turns. As with Amazon's software, the
+  ring does not turn while a second light shows at the same time (a ringing timer, say).
 - **"LED brightness" in Home Assistant no longer flips back and forth.** With auto brightness on, in light near the
   edge between two levels (at dusk, say), it went 11 %, 12 %, 11 %, 12 % every few seconds and filled the Echo's
   history. The ring itself does the same under Amazon's software too, one step at a time. Home Assistant now hears of

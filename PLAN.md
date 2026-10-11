@@ -154,6 +154,23 @@ Run in this order. Each step says what it proves.
       the PC. Added in HA by IP `192.168.100.147`, port 16700.
       **2026-09-21: end-to-end works** — "Alexa" → HA pipeline → TTS reply on the Echo, user verdict "works perfectly"
 - [x] LED ring states look right: listening / thinking / talking / idle / error / muted / volume — confirmed by the user during the ESPHome tests (listening / thinking / talking / mute / volume / timer)
+      Listening ring towards the talker (issue #22, 2026-10-11; Dot 2 reported, worked out on biscuit's binaries and a
+      Dot 2 over USB): stock turns it, hassmic did not. Chain: libasp (in `mixer`) sends LIPC `com.doppler.lasp
+      beam_index` on its front end's beam event; ledcontroller (subscribed as `com.amazon.puffin.ledcontroller`, no
+      PuffinApp needed; also its own int property `com.amazon.ledd BeamDirection`, same handler 0x18ed0) runs
+      `EchoAnimationStore::getBeamIndexTask` (libled_resources.so), which sets the turn of every frame of exactly
+      `active-start` and `active-end` (names at 0xc8c4/0xc8d1); `LedDevice` (0x1ea18) writes LED i from pixel
+      (i + n - turn) mod n. The AnimationThread hands it the animation's own frame only when one animation is active;
+      with two or more it composes into a fresh frame (turn 0). `AnimationFrame::onBeamIndex` in ledcontroller itself
+      is dead code. hassmic played `ca-active-start`/`ca-active-end` (uxconfig.json's names, same look), which are
+      never turned. Measured with BeamDirection on `active-start` alone: 0, 3, 6, 9 put the cyan pair on LEDs 10-11,
+      1-2, 4-5, 7-8; with `mics-off_on` beside it, or with `ca-active-start`, nothing moves. BeamDirection read 3
+      before any test: libasp does send under hassmic. Now `active-start`/`active-end` (in the map on donut, biscuit,
+      radar). The other models by their binaries: libled_resources.so is byte-identical on all three; donut's
+      ledcontroller differs from biscuit's only in the build id and the light curve at 0xc6f0; radar's is another build
+      with the same chain (LIPC handler -> setter 0x18ce0 -> beam task -> onBeamIndex, LedDevice turn, one-animation
+      pass-through); every libasp.so sends `beam_index`. Not yet seen with a real wake word: that Dot 2 was muted. Stock's limits stay: a second animation (a
+      ringing timer, DND) leaves the ring unturned.
 - [x] Buttons: `getevent -l /dev/input/event3` works beside `acebuttond`; volume keys not handled twice — volume, action and mute buttons verified; mute comes from `/dev/input/event1`
 - [x] Barge-in acoustically: the detector hears "Alexa" while speech plays on the `TTS` stream (4/4 on the device, also during HA's own
       reply), so neither the mixer nor the AEC is in the way. It was ignored because `barge_in` doubled as "already being cut" and as

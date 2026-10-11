@@ -126,8 +126,10 @@ lipc-send-event com.amazon.puffin set_animation -s active-talking
 ### Open questions
 
 - Do two active patterns layer as `layer_config_common.json` says?
-- Does `ledcontroller` still follow `com.doppler.lasp beam_index` (published by `mixer`) when PuffinApp is down? If yes, the
-  listening animation points at the speaker for free.
+- ~~Does `ledcontroller` still follow `com.doppler.lasp beam_index` (published by `mixer`) when PuffinApp is down?~~
+  Yes, but only for `active-start` and `active-end`, and only while that is the one active animation (issue #22,
+  biscuit 2026-10-11; the chain and the measurement are in PLAN.md under "LED ring states"). The `ca-active-*`
+  patterns never turn. `lipc-set-prop -i com.amazon.ledd BeamDirection N` sets the turn by hand (N LEDs).
 
 ## 2. Volume
 
