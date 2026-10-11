@@ -54,7 +54,10 @@ Device binaries need the NDK and the unpacked firmware in `firmware/<codename>/`
 make [DEVICE=donut]                               # ARM binaries into build/donut/
 make DEVICE=donut STUBS=1                         # the same, without the firmware: stand-ins for its libraries
 make host                                         # PC build (build/hassmic-host) + qemu build for the tests (needs libopus)
-make unit                                         # C unit tests; microWakeWord against pymicro-features and TFLite (mww_ref.py)
+make unit                                         # C unit tests; microWakeWord against pymicro-features and TFLite (mww_ref.py);
+                                                 # the Drop In blueprint (blueprint_dropin.py)
+.venv/bin/python tests/blueprint_dropin.py        # the Drop In blueprint against stand-ins of Home Assistant's registries,
+                                                 # states, actions and template engine (also in make unit)
 .venv/bin/python tests/fake_ha_esphome.py         # ESPHome native API, as Home Assistant (aioesphomeapi)
 .venv/bin/python tests/fake_ha_arbitration.py     # two Echos + Home Assistant + an unknown device: wake word arbitration
 .venv/bin/python tests/fake_ha_dropin.py          # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer

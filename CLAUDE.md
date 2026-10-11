@@ -27,7 +27,8 @@ make DEVICE=donut STUBS=1  # same, without firmware/: links against stand-ins fr
 make host                # build/hassmic-host (PC: file audio + no wake word, SIGUSR1 triggers wake; board.c of DEVICE),
                          # build/donut/hassmic-qemu (ARM + real Pryon, run via tools/qrun.sh), build/otatool-host (the Echo's
                          # otatool for the PC, as tests' stand-in for the device side). Needs libopus
-make unit                # C unit tests; ws/noise are checked against Python reference impls in .venv
+make unit                # C unit tests; ws/noise are checked against Python reference impls in .venv; the Drop In
+                         # blueprint (tests/blueprint_dropin.py)
 make build/hassmic-host  # single target
 ```
 
@@ -38,6 +39,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ha_esphome.py     # ESPHome native API, as Home Assistant
 .venv/bin/python tests/fake_ha_arbitration.py # two Echos under one fake HA: wake word arbitration, join paths and security
 .venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer
+.venv/bin/python tests/blueprint_dropin.py    # the Drop In voice blueprint against stand-ins of HA's registries, states,
+                                             # actions and template engine: renamed ids, other devices, failures, replies
 .venv/bin/python tests/fake_ha.py [--qemu]    # Wyoming; --qemu uses the ARM build + stock Pryon model under qemu-arm
 .venv/bin/python tests/fake_ma_sendspin.py    # Sendspin, as Music Assistant
 .venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step
@@ -202,7 +205,11 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `play_earcon_while`; action button answers/ends, "stop"/"hang up"/"auflegen" end; wake word ignored while the far end
   talks). Notifications to the core go through dropin's loop thread: `dropin_call` runs under `core_lock` (ESPHome
   handler). HA: action `drop_in`, "Drop In", "Drop In with", "End Drop In"; settings `drop_in`, `drop_in_answer`;
-  page `POST /api/dropin`. Voice: `blueprints/automation/drop_in.yaml`.
+  page `POST /api/dropin`. Voice: `blueprints/automation/drop_in.yaml` (Echos by manufacturer `hassmic` = project
+  name's first half, the sensor by its state, never by entity id; the action named from the reported name, else
+  model + MAC, so every board's project must stay `hassmic.<slug of default_name>`; called in a run of its own via
+  `automation.trigger`, since ServiceNotFound would end the conversation's run with "Done"; success seen on the
+  "Drop In" sensor). Keep the entity's states, icon and the action's name stable: released blueprints rely on them.
 - **Bluetooth**: `ble.c`/`ble_crypto.c` talk raw HCI (`hci.h`) to the controller for the HA Bluetooth proxy (scan, GATT,
   Just Works pairing); Amazon's `btmanagerd` is stopped. A2DP shares the controller; scanning pauses while a phone plays,
   and for 1 s from a wake word round (`ble_quiet` in `main.c` `wake_heard`): the scan's share of the antenna costs

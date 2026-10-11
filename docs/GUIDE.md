@@ -146,13 +146,24 @@ pages list them under Echos) and have "Drop In" on (Features, on by default).
   appeared in Home Assistant ("Echo Dot 3 5695c4") or its node name. Each Echo also has "Drop In" (idle, calling,
   ringing, connected), "Drop In with" (the other Echo) and an "End Drop In" button.
 - **By voice**: import the blueprint [`blueprints/automation/drop_in.yaml`](../blueprints/automation/drop_in.yaml)
-  (Settings › Automations › Blueprints › Import, with the file's GitHub address). "Drop in kitchen" or "Verbinde mit
-  Küche" then calls the Echo in the area of that name, or one whose name contains the word, from the Echo you spoke to.
-  Sentences come for English, German, French, Spanish, Italian and Dutch ("drop in …" in every one); the reply is
-  in the language of the voice assistant you spoke to. Sentences and replies are inputs of the blueprint. Said to a
-  device that cannot call (Drop In off, or no Echo), it answers "Only an Echo with Drop In on can drop in". It finds
-  the Echos by their "Drop In" entity, so Drop In must be on in both. A blueprint imported before 2026-10-11 found
-  no Echo at all: re-import it (the blueprint's menu › Re-import).
+  (Settings › Automations › Blueprints › Import, with the file's GitHub address), then create an automation from it.
+  "Drop in kitchen" or "Verbinde mit Küche" then calls, from the Echo you spoke to, the Echo in the area of that name
+  (an alias of the area counts, as do accents left out: "Küche", "Kueche", "kuche"), else the one with that name,
+  else the one on that floor ("drop in upstairs"), else one whose name has the word. Of two Echos in a room it calls
+  one that is free. Sentences come for English, German, French, Spanish, Italian and Dutch ("drop in …" in every
+  one); the reply is in the language of the voice assistant you spoke to. Sentences and replies are inputs of the
+  blueprint. It says "Calling kitchen" only once the call has started, and otherwise why not: no Echo there; the
+  call did not go through (do not disturb or microphones off on the other Echo, or the two not in one Echo network;
+  the caller's log says which); the other Echo is offline, in a call, or has Drop In off; the Echo you spoke to is in
+  a call, or is not an Echo with Drop In on; or you named its own room. A failed call is told after about 4 s, the
+  time the Echo waits for an answer. Renaming an Echo or its entities in Home Assistant does not get in its way: it
+  finds the Echos by what they report themselves. A blueprint imported before 2026-10-11 found no Echo at all:
+  re-import it (the blueprint's menu › Re-import). Replies set by hand before then have fewer entries; the missing
+  ones are said in English until you add them.
+
+  Each call shows up twice in the automation's traces: once for the sentence, once for the call itself, which the
+  automation makes in a run of its own (so that an Echo whose action Home Assistant does not know cannot leave you
+  with "Done": such a run ends with a repair naming the action, and the sentence's run still answers).
 - **From the settings page**: the Drop In button on another Echo's card under Echos.
 
 The Echo called plays Alexa's Drop In chime and connects at once. With "Drop In answers: after the action button" it

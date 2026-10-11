@@ -1520,12 +1520,46 @@ Run in this order. Each step says what it proves.
       under a per-call key (X25519 of ephemeral keys, BLAKE2b keyed with `arb_derive("hassmic drop in 1")`). HA: action
       `drop_in(target)` (keyed link only), text sensors "Drop In"/"Drop In with", button "End Drop In", listed while
       the setting `drop_in` is on; `drop_in_answer` auto/ask; page `POST /api/dropin` and a button per member.
-      Blueprint `blueprints/automation/drop_in.yaml` (conversation trigger, area or name, the source's action named by
-      the same slug as `node_of`; templates checked with jinja2 stand-ins). Echos found by their "Drop In" sensor:
-      the first version asked for manufacturer "Amazon", but HA takes manufacturer and model from `project_name`
-      (`hassmic`, `echo-dot-2`) and ignores field 12, so it found none and HA said "Done" (#20; the reporter's real HA
-      2026.9.4, three biscuits, called fine with the manufacturer test gone). No `conditions` now: each way out of
-      the actions sets a reply ("Only an Echo with Drop In on can drop in" for a source that cannot call).
+      Blueprint `blueprints/automation/drop_in.yaml` (conversation trigger). The first version asked for
+      manufacturer "Amazon", but HA takes manufacturer and model from `project_name` (`hassmic`, `echo-dot-2`) and
+      ignores field 12, so it found none and HA said "Done" (#20; the reporter's real HA 2026.9.4, three biscuits,
+      called fine with the manufacturer test gone). Then made robust against what HA lets people change and what HA
+      does on errors (all read in HA 2026.10.1's source):
+      - Echos: devices of ESPHome entities and of every `assist_satellite` (`integration_entities('esphome')` first
+        takes the entities of a config entry *titled* "esphome", if any) with manufacturer `hassmic` or `Amazon`
+        (`async_get_manufacturer_model`) or a known model. Their "Drop In" sensor: the sensor whose state is one of
+        `dropin_states`, preferring icon `mdi:phone-in-talk` (kept in the state while unavailable: `entity.py`
+        `__async_calculate_state`), then an id ending in `drop_in`; icon or id alone when the state cannot tell
+        (unavailable, disabled). Others only with all three. Entity ids never needed.
+      - The action: HA registers `esphome.<device_info.name with - as _>_<service>` (`build_service_name`); the device
+        registry's `name` is `friendly_name` as reported, rewritten on every connection (`async_get_or_create` passes
+        `name`), never `name_by_user`. So the slug of `name` (umlauts spelled out like `node_of`), else model + last 3
+        MAC bytes from the `mac` connection (`format_mac`: lowercase). `tests/blueprint_dropin.py` holds every board's
+        project to `hassmic.<slug of default_name>`. Target: the device's `name`, which `dropin_call` runs through
+        `node_of` like the target did (every Drop In build has `name_make`, so name and node agree).
+      - ServiceNotFound is a configuration error that `continue_on_error` does not catch (`script.py`
+        `CONFIGURATION_ERRORS`), and a failed run gives the conversation `None` = "Done" (`conversation/trigger.py`).
+        No template can test for an action (no `has_service`). So the call goes through `automation.trigger` on the
+        automation itself with `variables: dropin_call`: that run makes only the call; `async_trigger` catches
+        ServiceNotFound (and makes a repair naming the action) and HomeAssistantError, and the sentence's run goes on.
+        Run variables beat the automation's `variables` (`ScriptVariables.async_render`), so the call run is told
+        apart by them. Without `this` the action is called directly with `continue_on_error`.
+      - Success: wait (4 s, `ANSWER_MS`) for the source's sensor in calling/ringing/connected, then (5 s) for it to
+        leave calling or the target's to ring; idle again = refused. A refusal within milliseconds can reach HA
+        without any "calling" (the loop thread reports the state it finds), so a refusal is told after 4 s.
+      - Replies 9 per language (a list set by hand with fewer takes English for the rest); the target picked by area
+        (HA's `area_id`: aliases, case, spaces; or slugs with and without umlauts spelled out), then name, floor, a
+        word; the source matching first answers "This is the Echo in …"; of several Echos the idle one with Drop In.
+        Waits read in their own sequence (HA before 2025.4 scoped variables per nested sequence).
+      Checked: `tests/blueprint_dropin.py` (jinja2 sandbox + HA's extensions as stand-ins, HA's `_parse_result`, a
+      runner for the actions incl. ServiceNotFound and state changes in order; 63 checks). And a real HA 2026.10.1
+      (scratch venv, own network namespace) with three `build/hassmic-host` (`unshare -rm` + a bind-mounted
+      `/sys/class/net/wlan0/address` for distinct MACs), one of them the released 2026.10.08.213741 build: by area
+      with the sensor's entity id renamed and the device renamed, German, "this Echo", busy, no Echo, a name given in
+      HA, the old build as caller and callee, do not disturb (refused: "did not go through" after 4.0 s), the callee
+      stopped ("offline" after 4.0 s), and an Echo whose name slugs differently ("…Ł"): first name not found in its
+      own run (repair created), second name called, "Calling Küche" after 4.0 s; no sentence run ended in an error.
+      Calls that start answer in 10-20 ms.
       Device (biscuit, PC host as the other end on the LAN, `HASSMIC_ARB_ADDR=192.168.103.255`):
       - Playback stream: `Voip` exists in the mixer (`PLAYBACK_MODE_VOIP`) and switches libasp to "VoIP mode 1" (call
         tuning, NDVC, normalisation off; logcat). Same speech, volume 50, micRaw -48: residual in micAsr -60..-66 dBFS
@@ -1550,7 +1584,8 @@ Run in this order. Each step says what it proves.
       10 s, 509 frames played on each side, 0 missing, longest gap 44-48 ms.
       Open (device): a talker at the called Echo (does speech open the gate fast
       enough, is the ARA with listening mode toggled fine), the wake word in VoIP mode, call LED animations' look,
-      the blueprint in a real HA.
+      the blueprint with real Echos (it ran in a real HA against PC Echos, above), and how long a refusal takes to
+      reach HA over Wi-Fi (whether "calling" shows first).
 - [~] A new IP address (2026-10-11, GitHub issue #17: new addresses from the router, Home Assistant lost the Echos
       until a power cycle, "sometimes it takes 2"). Home Assistant's ESPHome config flow moves an entry to the address
       in an mDNS announcement only while the entry is not connected (`config_flow.py`

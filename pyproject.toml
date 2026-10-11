@@ -20,6 +20,11 @@ dependencies = [
     "pymicro-features==2.0.2",
     "pymicro-wakeword==2.5.0",
     "ai-edge-litert==2.3.0",
+    # The Drop In blueprint's templates (tests/blueprint_dropin.py): Home Assistant's template engine, its slugify and
+    # its YAML loader, at the versions Home Assistant 2026.10 pins (package_constraints.txt)
+    "jinja2==3.1.6",
+    "python-slugify==9.1.2",
+    "pyyaml==6.0.3",
 ]
 
 [tool.uv]
