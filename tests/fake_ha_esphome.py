@@ -188,8 +188,8 @@ async def main():
         avail = sorted((w.id, w.wake_word, list(w.trained_languages)) for w in cfg.available_wake_words)
         check(avail == [("alexa", "Alexa", ["en"]), ("alexa-en-US", "Alexa (en-US)", ["en"]), ("computer-de-DE", "Computer (de-DE)", ["de"]),
                         ("computer-en-US", "Computer (en-US)", ["en"]), ("echo-de", "Echo", ["de"])]
-              and list(cfg.active_wake_words) == ["alexa"] and cfg.max_active_wake_words == 1,
-              f"wake words: all installed ones offered, a name two share with its region (HA's select keys on names), Alexa active: {avail}")
+              and list(cfg.active_wake_words) == ["alexa"] and cfg.max_active_wake_words == 2,
+              f"wake words: all installed ones offered, a name two share with its region (HA's select keys on names), Alexa active, two may listen: {avail}")
 
         started = asyncio.Event(); mic = bytearray(); stopped = []
         async def handle_start(conv_id, flags, settings, phrase):
@@ -236,6 +236,25 @@ async def main():
         await asyncio.wait_for(started.wait(), 5)
         check(handle_start.args == (1, "Echo"), f"pipeline request names the new wake word: {handle_start.args}")
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+
+        # a second wake word ("Wake word 2"): HA sends the ids in the order its selects were set; the first stays first
+        await cli.set_voice_assistant_configuration(["computer-en-US", "echo-de"]); await sync(cli)
+        cfg = await cli.get_voice_assistant_configuration(5)
+        saved = open(os.path.join(state, "wake_word")).read().split()
+        check(list(cfg.active_wake_words) == ["echo-de", "computer-en-US"] and saved == ["echo-de", "computer-en-US"],
+              f"two wake words from Home Assistant, the first kept first, both saved: {list(cfg.active_wake_words)}, {saved}")
+        started.clear(); proc.send_signal(signal.SIGUSR1)                          # the PC's stand-in is the first one's
+        await asyncio.wait_for(started.wait(), 5)
+        check(handle_start.args == (1, "Echo"), f"the first one's run names it: {handle_start.args}")
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+        await cli.set_voice_assistant_configuration([]); await sync(cli)           # "No wake word" in both selects
+        await cli.set_voice_assistant_configuration(["nope", "computer-en-US", "computer-en-US"]); await sync(cli)
+        cfg = await cli.get_voice_assistant_configuration(5)
+        check(list(cfg.active_wake_words) == ["computer-en-US"] and open(os.path.join(state, "wake_word")).read().split() == ["computer-en-US"],
+              f"none picked: kept; unknown ids and doubles dropped, one left: {list(cfg.active_wake_words)}")
+        await cli.set_voice_assistant_configuration(["alexa", "echo-de", "computer-de-DE"]); await sync(cli)
+        cfg = await cli.get_voice_assistant_configuration(5)
+        check(list(cfg.active_wake_words) == ["alexa", "echo-de"], f"at most two: {list(cfg.active_wake_words)}")
         await cli.set_voice_assistant_configuration(["alexa"]); await sync(cli)
 
         # A second client beside "Home Assistant": gets answers, sees and causes state changes, cannot take the voice assistant.

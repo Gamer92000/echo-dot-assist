@@ -327,18 +327,25 @@ static void playback_hint(void)
  * Amazon's engine: the firmware only has "Alexa"; other keywords are model sets fetched from Amazon once (README,
  * "Another wake word") and kept in <models>/<keyword>-<language>/pryon.manifest.  microWakeWord (the settings page's
  * wake word engine, off by default): the models in state/mww (mww.h).  The engine's are offered to Home Assistant, which
- * shows them in the satellite's wake word select; its pick is kept in state/wake_word (state/mww_word for microWakeWord)
+ * shows them in the satellite's wake word selects; its pick is kept in state/wake_word (state/mww_word for microWakeWord)
  * and loaded live by the capture thread.  -m names the Amazon model to use until Home Assistant has picked one (before
- * 2026-09-25 it was the only way, and Home Assistant was told "Alexa" whatever -m said). */
+ * 2026-09-25 it was the only way, and Home Assistant was told "Alexa" whatever -m said).
+ * Home Assistant has a second select, "Wake word 2" (as for Voice PE, GitHub issue 18): a second wake word listens
+ * beside the first, in a decoder (or microWakeWord model) of its own, and the run it starts names it, so Home
+ * Assistant takes "Assistant 2" for it.  The file then has its id on a second line (older builds read the first). */
 #define MAX_WAKE_WORDS 16
+_Static_assert(CORE_WAKE_ACTIVE_MAX == WAKE_SLOTS, "one slot per active wake word");
 static struct core_wake_word wake_words[MAX_WAKE_WORDS];
-static int n_wake_words, wake_active;               /* under core_lock once running */
+static int n_wake_words;                            /* under core_lock once running */
+static int wake_act[WAKE_SLOTS], n_act = 1;         /* the active ones (indexes into wake_words), in their slots; same lock */
 static int wake_engine;                             /* WAKE_AMAZON / WAKE_MWW, under core_lock once running */
 static const char *wake_m_arg;                      /* -m */
 static int wake_cmdline_remote;                     /* -w remote: hassmic.conf decides, not the settings page */
 static int wake_next = -1;                          /* asked for, takes effect with the restart */
 static const char *wake_refused = "";
-static atomic_int wake_switch;                      /* capture thread: load wake_words[wake_active] */
+static atomic_int wake_switch;                      /* capture thread: load the active ones */
+static char wake_loaded[WAKE_SLOTS][64];            /* under core_lock: the names of the ones loaded, by slot ("": none) */
+static char wake_phrase[64];                        /* under core_lock: the one that started the run ("": the first) */
 
 static const char *models_dir(void) { const char *e = getenv("HASSMIC_MODELS"); return e ? e : "/data/local/hassmic/models"; }
 static const char *wake_word_path(void)
@@ -433,14 +440,18 @@ static void wake_words_scan(void)
         size_t k = strlen(wake_words[i].name);
         if (shared[i] && dash) snprintf(wake_words[i].name + k, sizeof wake_words[i].name - k, " (%.20s)", dash + 1);
     }
-    wake_active = def;
-    if ((f = fopen(wake_word_path(), "r"))) {
-        if (fscanf(f, "%63s", saved) == 1) { int i = wake_word_find(saved); if (i >= 0) wake_active = i; }
+    wake_act[0] = def; n_act = 1;
+    if ((f = fopen(wake_word_path(), "r"))) {       /* the first, then the second if there is one */
+        for (int k = 0; k < WAKE_SLOTS && fscanf(f, "%63s", saved) == 1; k++) {
+            int i = wake_word_find(saved);
+            if (i < 0) continue;
+            if (!k) wake_act[0] = i; else if (i != wake_act[0]) wake_act[n_act++] = i;
+        }
         fclose(f);
     }
     for (int i = 0; i < n_wake_words; i++)
         fprintf(stderr, "wake word: %s \"%s\" (%s%s)%s\n", wake_words[i].id, wake_words[i].name, wake_words[i].lang,
-                wake_engine == WAKE_MWW ? ", microWakeWord" : "", i == wake_active ? ", active" : "");
+                wake_engine == WAKE_MWW ? ", microWakeWord" : "", i == wake_act[0] ? ", active" : n_act > 1 && i == wake_act[1] ? ", active (second)" : "");
 }
 
 int core_wake_words(const struct core_wake_word **list) { *list = wake_words; return n_wake_words; }
@@ -489,25 +500,61 @@ void core_wake_models_changed(void)
 {
     pthread_mutex_lock(&core_lock);
     if (wake_engine == WAKE_MWW) {
-        char active[64]; snprintf(active, sizeof active, "%s", n_wake_words ? wake_words[wake_active].id : "");
-        wake_words_scan();
+        char active[64]; snprintf(active, sizeof active, "%s", n_wake_words ? wake_words[wake_act[0]].id : "");
+        wake_words_scan();                                   /* (a second one that went is no longer read back) */
         if (wake_engine != WAKE_MWW) settings_save();       /* the last one went: Amazon's again, also after a restart */
-        else if (strcmp(active, wake_words[wake_active].id)) fprintf(stderr, "wake word: %s gone, now %s\n", active, wake_words[wake_active].id);
+        else if (strcmp(active, wake_words[wake_act[0]].id)) fprintf(stderr, "wake word: %s gone, now %s\n", active, wake_words[wake_act[0]].id);
         wake_list_changed();                                 /* also when only the active one's cutoff changed: reloaded */
         core_settings_changed();
     }
     pthread_mutex_unlock(&core_lock);
 }
 
+static void wake_save(void)
+{
+    FILE *f = fopen(wake_word_path(), "w");
+    if (!f) { fprintf(stderr, "wake word: cannot write %s\n", wake_word_path()); return; }
+    for (int i = 0; i < n_act; i++) fprintf(f, "%s\n", wake_words[wake_act[i]].id);
+    fclose(f);
+}
+
+int core_wake_set(const int *list, int n)
+{
+    int a[WAKE_SLOTS], k = 0;
+    for (int i = 0; i < n && k < WAKE_SLOTS; i++) {
+        int dup = list[i] < 0 || list[i] >= n_wake_words;
+        for (int j = 0; j < k; j++) dup |= a[j] == list[i];
+        if (!dup) a[k++] = list[i];
+    }
+    if (!k) return -1;
+    /* Home Assistant sends the ids in the order its selects were last set, not by select: the first stays first */
+    for (int i = 1; i < k; i++) if (a[i] == wake_act[0]) { a[i] = a[0]; a[0] = wake_act[0]; }
+    if (k == n_act && !memcmp(a, wake_act, sizeof a[0] * (size_t)k)) return 0;
+    memcpy(wake_act, a, sizeof a[0] * (size_t)k); n_act = k;
+    wake_phrase[0] = 0;
+    wake_save();
+    fprintf(stderr, "wake word: \"%s\"%s%s%s\n", wake_words[a[0]].name, k > 1 ? " and \"" : "", k > 1 ? wake_words[a[1]].name : "", k > 1 ? "\"" : "");
+    atomic_store(&wake_switch, 1);
+    return 0;
+}
+
 int core_wake_word(int set)
 {
-    if (set >= 0 && set < n_wake_words && set != wake_active) {
-        FILE *f = fopen(wake_word_path(), "w");
-        wake_active = set;
-        if (f) { fprintf(f, "%s\n", wake_words[set].id); fclose(f); } else fprintf(stderr, "wake word: cannot write %s\n", wake_word_path());
-        atomic_store(&wake_switch, 1);
-    }
-    return wake_active;
+    if (set >= 0 && set < n_wake_words && (set != wake_act[0] || n_act > 1)) core_wake_set(&set, 1);
+    return wake_act[0];
+}
+
+int core_wake_active(int *list)
+{
+    for (int i = 0; i < n_act; i++) list[i] = wake_act[i];
+    return n_act;
+}
+
+int core_wake_max(void) { return n_wake_words < WAKE_SLOTS ? n_wake_words : WAKE_SLOTS; }
+
+const char *core_wake_phrase(void)
+{
+    return wake_phrase[0] ? wake_phrase : n_wake_words ? wake_words[wake_act[0]].name : "";
 }
 
 static long long wake_cut_ms;    /* when the wake word last cut a reply or an alarm: a "stop" right behind it belongs to that */
@@ -858,6 +905,7 @@ static void trigger(int touch)          /* touch: the action button rather than 
         /* nothing to talk to, or privacy latch on */
     } else if (state == IDLE) {
         if (atomic_load(&alarm_on)) wake_cut_ms = mono_ms();    /* its "stop" drops this pipeline again */
+        if (touch) wake_phrase[0] = 0;                          /* the button: the first wake word's assistant */
         sound_request(touch ? SND_TOUCH : SND_WAKE);
         pipeline_start();
     } else if (state == SPEAKING && !atomic_load(&flush_playback)) {       /* not already being cut.  barge_in alone does not
@@ -1072,7 +1120,8 @@ static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* captu
     int alarm = atomic_load(&alarm_on), can = alarm || (connected && satellite_running && !core_muted()), prio = alarm || state != IDLE ? 2 : 0;
     pthread_mutex_unlock(&core_lock);
     if (!can) { trigger(0); return; }               /* could not answer: a claim would only silence the Echos that can */
-    pthread_mutex_lock(&core_lock); char kw[64]; snprintf(kw, sizeof kw, "%s", wake_words[wake_active].name); pthread_mutex_unlock(&core_lock);
+    /* the one heard: with two wake words, Echos compete per wake word as they do with one each */
+    pthread_mutex_lock(&core_lock); char kw[64]; snprintf(kw, sizeof kw, "%s", core_wake_phrase()); pthread_mutex_unlock(&core_lock);
     /* Kiosk Satellite mode: their loudness, not the front end's energies (whose 150 ms only the window would pay for) */
     int score = arb_mode(-1) == ARB_KIOSK ? kiosk_score(end, simulated) : wake_score(begin, end, simulated);
     if (score == INT_MIN) { fprintf(stderr, "arbitration: less than 3 s heard, answers without a claim\n"); trigger(0); return; }
@@ -1090,9 +1139,11 @@ static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* captu
  * op.cfg.json, nothing in the set switches one off): with "Computer" picked, "Amazon" and "Ziggy" woke the Echo too
  * (GitHub issue 14).  Stock's client picks the one it wants out of the results; so do we.  The keyword is the set's
  * id up to the language ("computer-en-US" -> COMPUTER, the firmware's "alexa" -> ALEXA), but only if the set lists it:
- * a set installed by hand under another name answers to everything it knows, as before.  "" = no filter. */
-static char wake_keyword[64];
-static void on_wake(const char *keyword, uint64_t begin, uint64_t end);
+ * a set installed by hand under another name answers to everything it knows, as before.  "" = no filter.  Per slot:
+ * with "Computer" and "Amazon" both picked, both decoders hear both words, and each takes only its own. */
+static char wake_keyword[WAKE_SLOTS][64];
+static atomic_int wake_slot_heard;                  /* the slot whose wake word was heard last: its "stop" counts */
+static void on_wake(int slot, const char *keyword, uint64_t begin, uint64_t end);
 
 static int words_list(const char *path, const char *kw)    /* words.shrunk.txt: "<word> <index>" per line */
 {
@@ -1103,7 +1154,7 @@ static int words_list(const char *path, const char *kw)    /* words.shrunk.txt: 
     return hit;
 }
 
-static int wake_open_word(const struct core_wake_word *w)
+static int wake_open_word(int slot, const struct core_wake_word *w)
 {
     char dir[256], p[560], kw[64], *slash; DIR *d; struct dirent *e; int hit = 0;
     snprintf(kw, sizeof kw, "%.*s", (int)strcspn(w->id, "-"), w->id);
@@ -1119,24 +1170,27 @@ static int wake_open_word(const struct core_wake_word *w)
             closedir(d);
         }
     }
-    snprintf(wake_keyword, sizeof wake_keyword, "%s", hit ? kw : "");
-    return wake_open(w->manifest, on_wake);
+    snprintf(wake_keyword[slot], sizeof wake_keyword[slot], "%s", hit ? kw : "");
+    return wake_open(slot, w->manifest, on_wake);
 }
 
-static void on_wake(const char *keyword, uint64_t begin, uint64_t end)
+static void on_wake(int slot, const char *keyword, uint64_t begin, uint64_t end)
 {
     if (!core_local_wake) return;
-    if (wake_keyword[0] && strcasecmp(keyword, wake_keyword) && strcasecmp(keyword, "STOP")) {
-        fprintf(stderr, "wake: %s is not the wake word picked (%s), ignored\n", keyword, wake_keyword);
+    if (wake_keyword[slot][0] && strcasecmp(keyword, wake_keyword[slot]) && strcasecmp(keyword, "STOP")) {
+        fprintf(stderr, "wake: %s is not the wake word picked (%s), ignored\n", keyword, wake_keyword[slot]);
         return;
     }
     /* In a Drop In the other side's voice plays here, and what the echo canceller leaves of its "Alexa" (meant for the
      * Echo over there) can be enough for ours.  While it talks, the wake word is left to that Echo */
     if (atomic_load(&dropin_live) && dropin_far_talking()) { fprintf(stderr, "wake: %s while the other side of the Drop In talks, ignored\n", keyword); return; }
-    if (!strcasecmp(keyword, "STOP")) { stop_word(); return; }
+    /* "stop" comes from the decoder that heard its wake word just before; another one on the same model set (one
+     * multi-keyword en-US set in both slots) is awake too, and its "stop" would stop twice */
+    if (!strcasecmp(keyword, "STOP")) { if (slot == atomic_load(&wake_slot_heard)) stop_word(); return; }
     last_wake_ms = mono_ms();
+    atomic_store(&wake_slot_heard, slot);
     { float db = 10 * log10f((ring_power(begin, end) + 1) / (32768.0f * 32768.0f));     /* the talker's level, for the gain */
-      pthread_mutex_lock(&core_lock); keyword_db = db; pthread_mutex_unlock(&core_lock); }
+      pthread_mutex_lock(&core_lock); keyword_db = db; snprintf(wake_phrase, sizeof wake_phrase, "%s", wake_loaded[slot]); pthread_mutex_unlock(&core_lock); }
     if (!arb_running()) { trigger(0); return; }
     pthread_mutex_lock(&core_lock); det_begin = begin; det_end = end; pthread_mutex_unlock(&core_lock);
     atomic_store(&det_pending, 1);                  /* the ring is the capture thread's */
@@ -1752,25 +1806,61 @@ static void *selftest_thread(void *arg)
 /* Capture thread: the active wake word in place of the one loaded.  One that does not load: Amazon's first ("Alexa"),
  * and the list says so (Home Assistant's select asks again on reconnect, and must not show the one that failed); a
  * microWakeWord model that does not load switches the engine back to Amazon's, setting included */
+/* lock held: the names of what the slots hold now, for the runs they start */
+static void wake_loaded_set(void)
+{
+    for (int s = 0; s < WAKE_SLOTS; s++) snprintf(wake_loaded[s], sizeof wake_loaded[s], "%s", s < n_act ? wake_words[wake_act[s]].name : "");
+}
+
+/* a model replaced from the page is swapped in by two renames (mww_store.c): once more before giving it up */
+static int wake_open_retry(int slot, const struct core_wake_word *w)
+{
+    if (wake_open_word(slot, w) == 0) return 0;
+    if (!wake_is_mww(w->manifest)) return -1;
+    usleep(300000);
+    return wake_open_word(slot, w);
+}
+
+/* Capture thread (main() before it runs): the second wake word, if one is picked, into the second slot.  One that does
+ * not load leaves the first listening alone, as if none was picked (Home Assistant's "Wake word 2" reads so) until the
+ * next start or pick */
+static void wake_load_second(void)
+{
+    pthread_mutex_lock(&core_lock);
+    int have = n_act > 1; struct core_wake_word w; if (have) w = wake_words[wake_act[1]];
+    pthread_mutex_unlock(&core_lock);
+    if (!have) return;
+    if (wake_open_retry(1, &w) == 0) { fprintf(stderr, "wake word: second \"%s\"\n", w.name); return; }
+    fprintf(stderr, "wake word: cannot load %s, the first one listens alone\n", w.manifest);
+    pthread_mutex_lock(&core_lock);
+    if (n_act > 1 && !strcmp(wake_words[wake_act[1]].manifest, w.manifest)) n_act = 1;
+    pthread_mutex_unlock(&core_lock);
+}
+
+/* Capture thread: the active wake words in place of the ones loaded.  A first one that does not load: Amazon's first
+ * ("Alexa"), and the list says so (Home Assistant's select asks again on reconnect, and must not show the one that
+ * failed); a microWakeWord model that does not load switches the engine back to Amazon's, setting included */
 static void wake_load(void)
 {
     char e[160];
-    pthread_mutex_lock(&core_lock); struct core_wake_word w = wake_words[wake_active]; pthread_mutex_unlock(&core_lock);
-    wake_close();
-    if (wake_open_word(&w) == 0) { fprintf(stderr, "wake word: now \"%s\"\n", w.name); return; }
-    /* a model replaced from the page is swapped in by two renames (mww_store.c): once more before giving it up */
-    if (wake_is_mww(w.manifest)) { usleep(300000); if (wake_open_word(&w) == 0) { fprintf(stderr, "wake word: now \"%s\"\n", w.name); return; } }
-    pthread_mutex_lock(&core_lock);
-    if (wake_engine == WAKE_MWW) {          /* lists anew and raises wake_switch: the next round loads Amazon's pick */
-        fprintf(stderr, "wake word: cannot load %s, back to Amazon's engine\n", w.manifest);
-        settings_set("wake_engine", "amazon", e, sizeof e);
+    pthread_mutex_lock(&core_lock); struct core_wake_word w = wake_words[wake_act[0]]; pthread_mutex_unlock(&core_lock);
+    wake_close(-1);
+    if (wake_open_retry(0, &w) == 0) fprintf(stderr, "wake word: now \"%s\"\n", w.name);
+    else {
+        pthread_mutex_lock(&core_lock);
+        if (wake_engine == WAKE_MWW) {          /* lists anew and raises wake_switch: the next round loads Amazon's pick */
+            fprintf(stderr, "wake word: cannot load %s, back to Amazon's engine\n", w.manifest);
+            settings_set("wake_engine", "amazon", e, sizeof e);
+            pthread_mutex_unlock(&core_lock);
+            return;
+        }
+        fprintf(stderr, "wake word: cannot load %s, back to Alexa\n", w.manifest);
+        wake_act[0] = 0; n_act = 1; struct core_wake_word first = wake_words[0];
         pthread_mutex_unlock(&core_lock);
-        return;
+        wake_open_word(0, &first);
     }
-    fprintf(stderr, "wake word: cannot load %s, back to Alexa\n", w.manifest);
-    wake_active = 0; struct core_wake_word first = wake_words[0];
-    pthread_mutex_unlock(&core_lock);
-    wake_open_word(&first);
+    wake_load_second();
+    pthread_mutex_lock(&core_lock); wake_loaded_set(); pthread_mutex_unlock(&core_lock);
 }
 
 static void *capture_thread(void *arg)
@@ -1785,6 +1875,7 @@ static void *capture_thread(void *arg)
         if (atomic_exchange(&button_pending, 0)) on_action();      /* SIGUSR2: action button, for tests on the PC */
         if (atomic_exchange(&pair_pending, 0)) on_pair();          /* SIGWINCH: both volume keys held, for tests on the PC */
         { int t = atomic_exchange(&trigger_pending, 0);               /* 1: SIGUSR1 plays a wake word of the last 0.6 s */
+          if (t == 1) { pthread_mutex_lock(&core_lock); wake_phrase[0] = 0; pthread_mutex_unlock(&core_lock); }   /* the first one's */
           if (t == 2) trigger(1); else if (t == 1) wake_heard(ring_n > CAP_RATE * 6 / 10 ? ring_n - CAP_RATE * 6 / 10 : 0, ring_n, 1); }
         if (atomic_exchange(&stop_pending, 0)) stop_word();        /* SIGHUP: the "stop" keyword, for tests on the PC */
         if (n == 0) continue;
@@ -1927,16 +2018,18 @@ int main(int argc, char **argv)
         wake_m_arg = manifest;
         if (!settings_peek("wake_engine", eng, sizeof eng) && !strcmp(eng, "microwakeword")) wake_engine = WAKE_MWW;
         wake_words_scan();
-        int ok = wake_open_word(&wake_words[wake_active]) == 0;
+        int ok = wake_open_word(0, &wake_words[wake_act[0]]) == 0;
         if (!ok && wake_engine == WAKE_MWW) {       /* settings_load() switches back to it, and wake_load() off for good */
-            fprintf(stderr, "cannot load microWakeWord model %s, Amazon's engine\n", wake_words[wake_active].manifest);
+            fprintf(stderr, "cannot load microWakeWord model %s, Amazon's engine\n", wake_words[wake_act[0]].manifest);
             wake_engine = WAKE_AMAZON; wake_words_scan();
-            ok = wake_open_word(&wake_words[wake_active]) == 0;
+            ok = wake_open_word(0, &wake_words[wake_act[0]]) == 0;
         }
-        if (!ok && (wake_active == 0 || (fprintf(stderr, "cannot load wake word model %s, trying Alexa\n", wake_words[wake_active].manifest), wake_active = 0,
-                                         wake_open_word(&wake_words[0]) < 0))) {
-            fprintf(stderr, "cannot load wake word model %s\n", wake_words[wake_active].manifest); return 1;
+        if (!ok && (wake_act[0] == 0 || (fprintf(stderr, "cannot load wake word model %s, trying Alexa\n", wake_words[wake_act[0]].manifest), wake_act[0] = 0, n_act = 1,
+                                         wake_open_word(0, &wake_words[0]) < 0))) {
+            fprintf(stderr, "cannot load wake word model %s\n", wake_words[wake_act[0]].manifest); return 1;
         }
+        wake_load_second();
+        wake_loaded_set();
     }
     if (whisper_open(on_whisper) == 0) { atomic_store(&whisper_last, -1); whisper_model = 1; }
     else fprintf(stderr, "whisper: no model, no whisper detection (scripts/artifacts.sh installs it)\n");
@@ -1989,6 +2082,6 @@ int main(int argc, char **argv)
         } else { proto->serve(c); netaddr_link(c, 0); close(c); }
     }
     cap_close();
-    if (core_local_wake) wake_close();
+    if (core_local_wake) wake_close(-1);
     return 1;
 }

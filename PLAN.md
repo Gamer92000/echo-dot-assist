@@ -1400,6 +1400,31 @@ Run in this order. Each step says what it proves.
       Echo, an Echo with Pryon and one with microWakeWord in one arbitration network; the remote path with a real
       openWakeWord on the Dot 2.  Not done: ESPHome's "stop" model
       as a second model while a timer rings or a reply plays (as Voice PE does); openWakeWord/ONNX.
+- [~] Two wake words at once (GitHub issue 18, 2026-10-11).  Home Assistant's ESPHome integration always makes two
+      wake word selects and two pipeline selects (select.py, index 0 and 1; only `max_active_wake_words < 1` hides
+      them), sends the ids of both in one VoiceAssistantSetConfiguration, in the order its selects were last set (a
+      dict of index -> id), and runs the pipeline of the select whose state equals the run's `wake_word_phrase`
+      (assist_satellite.py `handle_pipeline_start`).  Before, the Echo took the first known id of that list: a pick in
+      "Wake word 2" was dropped (or, set before "Wake word", replaced the first).  Now `wake.h` has slots: one Pryon
+      decoder per slot on a model set of its own (`hassmic-dec`/`hassmic-ms` as before, `hassmic-dec2`/`hassmic-ms2`),
+      or one microWakeWord front end + model per slot; the result callback (one for the process) finds the slot by the
+      decoder's name.  Both words come from the engine that runs; up to 2 active, saved one id per line in
+      `state/wake_word` / `state/mww_word` (older builds read the first line), `max_active_wake_words` 2 (1 with a
+      single model installed), the first stays first whatever order HA sends, an empty list keeps what is there.  The
+      run's phrase is the slot's name; the button and SIGUSR1 use the first.  Arbitration claims the word heard.  "Stop"
+      counts only from the slot whose wake word was heard last (two en-US sets in both slots: both decoders wake on
+      either word and would both report "stop").  Front end ESP times per slot.  A second word that does not load is
+      dropped until the next pick or start; a first one falls back as before.  Wyoming stays at one.
+      Under qemu (hassmic-qemu, real libpryon, ESPHome, `-W 0`): firmware "Alexa" + DAVS `echo-de-DE` on espeak
+      "Alexa" and "Echo" (de) looped, 90 s: 20 accepts (9 ALEXA in the first slot, 11 ECHO in the second, none the
+      other way), 19 runs named after the word in the audio (one accept fell into a run); `echo-de-DE` alone on its clip: 10 runs in 45 s.  `echo-en-US` accepts nothing on
+      `testdata/echo_espeak_en-us.raw` alone or beside Alexa (near misses only): the clip, not the second slot.  CPU
+      under qemu, 72 s each, same audio: 69 s with both words, 42 s with Alexa alone (emulated: only the ratio means
+      anything).  PC tests: `fake_ha_esphome.py` (+4: two picked in HA's order, the first kept first, both saved, the
+      run names the first; none = kept, unknown ids and doubles dropped; at most two), `fake_web_mww.py` (+5: "Alexa"
+      heard in the second slot beside "Hey Jarvis", run named "Computer Alexa"; the page shows both; a model edit
+      rescans and keeps both; HA reads both back; back to one).  Open (device): CPU and temperature on the Dot 3 with
+      two Amazon words, detection of each beside the other at a distance, the multi-keyword en-US sets in both slots.
 - [~] Setup from a phone (OOBE) and factory reset (2026-10-07, asked: found over Bluetooth by the HA app, Wi-Fi, the
       node name if possible; rainbow while not set up (then stock's orange setup-mode spinner, asked the same day); "not set up" = after the install or a reset until HA took it on;
       no button press while not set up; reset wipes all of hassmic plus Wi-Fi, by the action button held 10 s, HA, the

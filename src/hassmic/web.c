@@ -492,12 +492,12 @@ static void artifact_api(int fd, struct req *r)
     respond_sjson(fd, r, 400, o);
 }
 
-/* /api/mww                              GET   {"engine","active","models":[...]}: microWakeWord's models (mww_store.c)
+/* /api/mww                              GET   {"engine","active","second","models":[...]}: microWakeWord's models (mww_store.c)
  * /api/mww/add/<id>                     POST  "<manifest length>\n<manifest JSON><model.tflite>": a new model, or a new
  *                                             version of <id> (length 0: no manifest, defaults)
  * /api/mww/edit/<id>                    POST  "name=..", "cutoff=0.85", "window=5" lines
  * /api/mww/delete/<id>                  POST
- * /api/mww/use/<id>                     POST  the active wake word (with microWakeWord on)
+ * /api/mww/use/<id>                     POST  the active wake word, then the only one (with microWakeWord on)
  * /api/mww/file/<id>/<manifest.json|model.tflite>  GET  the file, to save it
  * All signed. */
 static void mww_api(int fd, struct req *r)
@@ -511,7 +511,11 @@ static void mww_api(int fd, struct req *r)
         const struct core_wake_word *w; int k = core_wake_words(&w), mww = core_wake_engine(-1) == WAKE_MWW;
         int eng = core_wake_engine(-1);
         n += (size_t)snprintf(t + n, cap - n, "{\"engine\":\"%s\",\"active\":", eng == WAKE_HA ? "homeassistant" : mww ? "microwakeword" : "amazon");
-        if (mww && k) { jesc(ej, sizeof ej, w[core_wake_word(-1)].id); n += (size_t)snprintf(t + n, cap - n, "\"%s\"", ej); }
+        int act[CORE_WAKE_ACTIVE_MAX], na = mww && k ? core_wake_active(act) : 0;
+        if (na) { jesc(ej, sizeof ej, w[act[0]].id); n += (size_t)snprintf(t + n, cap - n, "\"%s\"", ej); }
+        else n += (size_t)snprintf(t + n, cap - n, "null");
+        n += (size_t)snprintf(t + n, cap - n, ",\"second\":");    /* Home Assistant's "Wake word 2" */
+        if (na > 1) { jesc(ej, sizeof ej, w[act[1]].id); n += (size_t)snprintf(t + n, cap - n, "\"%s\"", ej); }
         else n += (size_t)snprintf(t + n, cap - n, "null");
         pthread_mutex_unlock(&core_lock);
         n += (size_t)snprintf(t + n, cap - n, ",\"max\":%d,\"models\":", MWW_MODEL_MAX);

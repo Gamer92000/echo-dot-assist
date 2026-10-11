@@ -171,7 +171,7 @@ const errText = (e) => e.message === 'login' ? 'Not logged in any more: reload t
 // Page sections, in this order.  Settings come from the Echo (settings.c) with their group; the words are here.
 const SECTIONS = [
   { id: 'Voice', icon: 'mic', intro: 'How the Echo hears you, and how it sounds when it does.' },
-  { id: 'Wake word', icon: 'ear', intro: 'Which engine listens for the wake word. Home Assistant picks the wake word itself, from the engine\'s list (the satellite\'s "Wake word" select).' },
+  { id: 'Wake word', icon: 'ear', intro: 'Which engine listens for the wake word. Home Assistant picks the wake word itself, from the engine\'s list (the satellite\'s "Wake word" select), and a second one in "Wake word 2" if you like: each starts its own assistant ("Assistant", "Assistant 2").' },
   { id: 'Sound', icon: 'speaker', intro: 'How the Echo\'s speaker sounds. The equalizer is Amazon\'s own, applied to everything the Echo plays: replies, timers, music, Bluetooth.' },
   { id: 'Lights', icon: 'sun', intro: 'The light ring. It shows listening, thinking, speaking, errors and mute whatever you set here.' },
   { id: 'Features', icon: 'sparkle', intro: 'Optional extras. While a feature is on, its entities are in Home Assistant; switched off, they are removed there. Home Assistant reconnects for a moment when you switch one.' },
@@ -860,9 +860,10 @@ function renderWake() {
   const file = h('input', { type: 'file', accept: '.tflite,.json', multiple: true, class: 'hidden', onchange: () => { mwwFiles([...file.files]); file.value = ''; } });
   const head = cardHead('microWakeWord models', ['Wake word models for microWakeWord: a ', h('code', {}, '.tflite'), ' file with its ', h('code', {}, '.json'),
     ' manifest, as ESPHome uses them. Home Assistant\'s wake word select offers them; pick one there or with \u201cUse\u201d. ',
+    'A second one picked in Home Assistant\'s \u201cWake word 2\u201d listens beside it and starts \u201cAssistant 2\u201d. ',
     'The Echos section copies them to your other Echos.'], 'ear');
   const rows = ms.map((m) => {
-    const active = on && mww.active === m.id, busy = !!mwwBusy;
+    const second = on && mww.second === m.id, active = (on && mww.active === m.id) || second, busy = !!mwwBusy;
     const rename = async () => {
       const n = await ask({ title: `Rename ${m.name}`, ok: 'Rename', body: 'The name Home Assistant shows in the satellite\'s wake word select and in the pipeline\'s runs. Echos in wake word arbitration only compete for wake words of the same name.',
         input: { label: 'Name', value: m.name, max: 63 }, check: (v) => !v ? 'Give it a name.' : enc.encode(v).length > 63 ? 'At most 63 bytes.' : null });
@@ -876,7 +877,7 @@ function renderWake() {
     };
     const meta = [m.langs ? m.langs.split(',').join(', ') : null, m.author || null, mb(m.size), `threshold ${m.cutoff.toFixed(2)}`].filter(Boolean).join(' · ');
     return h('div', { class: 'row mww-row' },
-      h('div', {}, h('div', { class: 'row-label' }, m.name, active ? h('span', { class: 'badge ok' }, icon('check'), 'Listening for it') : null, h('code', { class: 'mww-id' }, m.id)),
+      h('div', {}, h('div', { class: 'row-label' }, m.name, active ? h('span', { class: 'badge ok' }, icon('check'), second ? 'Listening for it (wake word 2)' : 'Listening for it') : null, h('code', { class: 'mww-id' }, m.id)),
         h('p', { class: 'help' }, meta), mwwTune(m)),
       h('div', { class: 'ctl btns' },
         on && !active ? h('button', { class: 'small', disabled: busy, onclick: () => mwwDo('Switching…', () => echo.call('POST', `/api/mww/use/${m.id}`)) }, 'Use') : null,

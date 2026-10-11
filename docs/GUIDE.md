@@ -71,6 +71,19 @@ other Echos. The models are ESPHome's own files (TensorFlow Lite, not ONNX); the
 interpreter, which gives the same results as TensorFlow Lite. Switching back, or deleting the last model, restores
 everything.
 
+### Two wake words
+
+Home Assistant's "Wake word 2" select, beside "Wake word", picks a second word that the Echo listens for at the same
+time, as a Voice PE does (ESPHome protocol only). Each word starts its own assistant ("Assistant" and "Assistant 2" on the device page), so
+"Alexa" can run one and "Computer" another. Both come from the engine that runs (Amazon's or microWakeWord) and are
+picked in Home Assistant; with microWakeWord the settings page marks the second one, and its "Use" leaves one word.
+"No wake word" in "Wake word 2" goes back to one as well. The action button starts the first one's assistant.
+Several Echos settle each word on its own, and "<wake word>, stop" works after either.
+
+The second word runs a second copy of its engine all the time. With Amazon's engine that is a second model as large
+as the first, so the Echo works harder while it listens: not measured on an Echo yet (on the PC's emulator of the
+Echo, about two thirds more for hassmic as a whole). Leave "Wake word 2" at "No wake word" if you need only one.
+
 ### Home Assistant's
 
 The Echo stops listening itself and streams its microphone to Home Assistant all the time, whose wake word engine

@@ -3,7 +3,8 @@
 Home Assistant (aioesphomeapi) watching the wake word list, and real detections: the PC build has no Amazon engine
 (SIGUSR1 stands in for it), but microWakeWord runs there as on the Echo, on testdata/alexa_espeak.raw looped.
 Upload with and without a manifest, refusals (not a model, a bad id, a manifest for other features), the engine switch
-(refused without a model), rename, cutoff and window, a second model and the pick, downloads, a copy as an artifact
+(refused without a model), rename, cutoff and window, a second model and the pick, two listening at once (Home
+Assistant's "Wake word 2": "Alexa" heard in the second slot names its run), downloads, a copy as an artifact
 (the Echos section's way), deletes down to none (back to Amazon's engine, saved), and a start with microWakeWord on.
 Home Assistant's wake word (the stream, as -w remote): the switch asks root for a restart, the restarted satellite
 streams to Home Assistant, which gets no wake words of ours, and its "wake word heard" event is answered as a wake word
@@ -133,6 +134,35 @@ async def main():
         check(("alexa", "Computer Alexa") in avail and active == ["hey_jarvis"], f"Home Assistant: the new name, the page's pick: {avail}, {active}")
         await ha.set_voice_assistant_configuration(["alexa"]); await asyncio.sleep(0.6)
         check(mww(b)["active"] == "alexa", "picked in Home Assistant: active on the page")
+
+        # a second wake word (Home Assistant's "Wake word 2"): "Alexa" beside "Hey Jarvis", heard in its own slot, and the
+        # run names it, so Home Assistant runs "Assistant 2"
+        await ha.set_voice_assistant_configuration(["hey_jarvis"]); await asyncio.sleep(0.6)
+        n0 = len(open(log).read())
+        await ha.set_voice_assistant_configuration(["hey_jarvis", "alexa"]); await asyncio.sleep(0.6)
+        m = mww(b)
+        check(m["active"] == "hey_jarvis" and m["second"] == "alexa" and open(os.path.join(state, "mww_word")).read().split() == ["hey_jarvis", "alexa"],
+              f"two picked in Home Assistant: both on the page, both kept: {m['active']}, {m['second']}")
+        phrases.clear(); started.clear()
+        ha.subscribe_voice_assistant(handle_start=handle_start, handle_stop=nothing, handle_audio=nothing)
+        try: await asyncio.wait_for(started.wait(), 25)
+        except asyncio.TimeoutError: pass
+        tail = open(log).read()[n0:]
+        check(started.is_set() and phrases[-1] == "Computer Alexa" and "wake: Computer Alexa (microwakeword, mean" in tail and ", second wake word)" in tail
+              and "wake: Hey Jarvis" not in tail, f"\"Alexa\" heard by the second one: its run names it ({phrases})")
+        ha.send_voice_assistant_event(VoiceAssistantEventType.VOICE_ASSISTANT_RUN_END, None)
+        st, _, body = b.call("POST", "/api/mww/edit/hey_jarvis", b"cutoff=0.96\n"); await asyncio.sleep(0.8)
+        m = mww(b)
+        check(st == 200 and m["active"] == "hey_jarvis" and m["second"] == "alexa" and "wake word: second \"Computer Alexa\"" in open(log).read()[n0:],
+              f"a model changed: the list read anew, both still listening: {m['active']}, {m['second']}")
+        try: await ha.disconnect()
+        except Exception: pass
+        ha, avail, active = await ha_config()
+        check(active == ["hey_jarvis", "alexa"], f"Home Assistant reads both back: {active}")
+        await ha.set_voice_assistant_configuration(["alexa"]); await asyncio.sleep(0.6)
+        m = mww(b)
+        check(m["active"] == "alexa" and m["second"] is None and open(os.path.join(state, "mww_word")).read().split() == ["alexa"],
+              f"back to one: {m['active']}, {m['second']}")
 
         # copied as an artifact, as the Echos section does from another Echo: begin, pieces, commit; no root, no restart
         st, _, body = b.call("GET", "/api/artifacts")

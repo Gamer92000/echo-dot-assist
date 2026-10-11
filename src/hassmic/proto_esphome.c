@@ -1046,7 +1046,9 @@ static void start(void)
     /* audio settings: neutral.  Home Assistant ignores them today; the gain is applied here (micgain.h), and absent they
      * would read as volume multiplier 0 should it ever start using them */
     { PB(as, 8); pb_float(&as, 3, 1.0f); pb_varint(&b, 4 << 3 | 2); pb_varint(&b, as.n); pb_raw(&b, as.p, as.n); }
-    if (core_local_wake) { const struct core_wake_word *w; if (core_wake_words(&w)) pb_str(&b, 5, w[core_wake_word(-1)].name); }  /* HA's duplicate check keys on it */
+    /* the wake word heard: Home Assistant's duplicate check keys on it, and it runs the assistant of the select showing
+     * it ("Wake word 2" -> "Assistant 2") */
+    if (core_local_wake && *core_wake_phrase()) pb_str(&b, 5, core_wake_phrase());
     send_va(VA_REQUEST, &b);
 }
 
@@ -1214,31 +1216,38 @@ static void send_entities(void)
     send_msg(LIST_ENTITIES_DONE, NULL);
 }
 
-/* Every installed model (core.h); Home Assistant shows them in the satellite's wake word select, one active at a time */
+/* Every installed model (core.h); Home Assistant shows them in the satellite's wake word selects ("Wake word", "Wake
+ * word 2"), and up to max_active_wake_words of them listen at once */
 static void send_va_config(void)
 {
     PB(b, 3072);
     if (core_local_wake) {
-        const struct core_wake_word *w; int n = core_wake_words(&w);
+        const struct core_wake_word *w; int n = core_wake_words(&w), act[CORE_WAKE_ACTIVE_MAX], k = n ? core_wake_active(act) : 0;
         for (int i = 0; i < n; i++) {
             PB(e, 192); pb_str(&e, 1, w[i].id); pb_str(&e, 2, w[i].name); pb_str(&e, 3, w[i].lang);
             pb_varint(&b, 1 << 3 | 2); pb_varint(&b, e.n); pb_raw(&b, e.p, e.n);
         }
-        if (n) pb_str(&b, 2, w[core_wake_word(-1)].id);
-        pb_uint(&b, 3, 1);
+        for (int i = 0; i < k; i++) pb_str(&b, 2, w[act[i]].id);
+        pb_uint(&b, 3, core_wake_max() > 1 ? core_wake_max() : 1);
     }
     send_msg(VA_CONFIG_RESP, &b);
 }
 
+/* Home Assistant's selects: the ids of the ones picked, in the order they were picked (not by select).  None ("No wake
+ * word" in both): the Echo keeps what it has, it has no way to listen for none */
 static void on_va_set_config(const unsigned char *p, const unsigned char *end)
 {
-    struct pbf f; char id[64]; const struct core_wake_word *w; int n = core_wake_words(&w);
+    struct pbf f; char id[64]; const struct core_wake_word *w; int n = core_wake_words(&w), pick[CORE_WAKE_ACTIVE_MAX], k = 0;
     while (pb_next(&p, end, &f)) {
         if (f.field != 1 || !f.data) continue;
         pbf_str(&f, id, sizeof id);
-        for (int i = 0; i < n; i++) if (!strcmp(w[i].id, id)) { core_wake_word(i); return; }
-        fprintf(stderr, "wake word: Home Assistant picked unknown \"%s\", ignored\n", id);
+        int i = 0;
+        while (i < n && strcmp(w[i].id, id)) i++;
+        if (i == n) fprintf(stderr, "wake word: Home Assistant picked unknown \"%s\", ignored\n", id);
+        else if (k < CORE_WAKE_ACTIVE_MAX) pick[k++] = i;
+        else fprintf(stderr, "wake word: Home Assistant picked more than %d, \"%s\" ignored\n", CORE_WAKE_ACTIVE_MAX, id);
     }
+    if (k) core_wake_set(pick, k);
 }
 
 /* returns 0 to close the connection */

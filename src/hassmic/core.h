@@ -95,10 +95,17 @@ void core_speaker(int mode, int pct);            /* not the lock: playing on the
                                                     its own; the mixer at full scale).  The Echo's own volume comes back */
 /* Wake word models: with Amazon's engine the stock "Alexa" plus model sets in the models directory (README, "Another wake
  * word"), with microWakeWord its models (mww.h).  Listed anew when the engine or the models change; Home Assistant
- * picks the active one. */
+ * picks the active one, and a second one to listen beside it if it likes (its "Wake word 2").  Lock held. */
+#define CORE_WAKE_ACTIVE_MAX 2
 struct core_wake_word { char id[64], name[64], lang[16], manifest[256]; };
 int  core_wake_words(const struct core_wake_word **list);  /* count */
-int  core_wake_word(int set);                    /* index of the active one; set >= 0 switches to it and keeps it, -1 reads */
+int  core_wake_word(int set);                    /* index of the (first) active one; set >= 0 makes it the only one and
+                                                    keeps it, -1 reads */
+int  core_wake_active(int *list);                /* the active ones' indexes, the first first: count (1 or 2) */
+int  core_wake_set(const int *list, int n);      /* these active (duplicates and bad indexes dropped, at most 2): -1 if
+                                                    none is left (nothing changes) */
+int  core_wake_max(void);                        /* how many may listen at once */
+const char *core_wake_phrase(void);              /* the name of the one that started the run (the button: the first) */
 /* The engine (lock held): Amazon's (the model's own), microWakeWord (models in state/mww, mww.h), or Home Assistant's
  * (the mic streams, it listens: needs a restart either way, asked for here); the wake word list is the engine's.  -1
  * reads; microWakeWord without a model, or a change while hassmic.conf says -w remote, is refused (the engine stays) */

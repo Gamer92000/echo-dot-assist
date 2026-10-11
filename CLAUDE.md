@@ -150,6 +150,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `/data/local/hassmic/whisper` (not `models/`: it carries a stray `pryon.manifest`); without it, no sensor.
 - **Wake word (`wake.h`)**: `wake_pryon.c` (stock `libpryon.so`, headers in `src/include/pryon_api.h`) or `wake_none.c`
   (host build) as the vendor engine, link-time swap; microWakeWord (below) on every build, picked at run time.
+  Two slots (`WAKE_SLOTS`): HA's "Wake word" and "Wake word 2" listen at once, a Pryon decoder (or mww model) each;
+  `main.c` `wake_act[]`, one id per line in `state/wake_word`, the run's phrase = the slot that fired (`core_wake_phrase`).
 - **microWakeWord (`wake.c`, `wake_mww.c`, `mww_features.c`, `mww_model.c`, `mww_store.c`, `mww.h`)**: second wake word
   engine, off by default (setting `wake_engine` amazon/microwakeword, page section "Wake word"; detects much worse than
   Pryon, the page says what it costs).  `wake.c` dispatches by model: a `.json` manifest = microWakeWord, else the vendor

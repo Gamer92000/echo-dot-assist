@@ -19,6 +19,10 @@ What changed for people using the Echo, newest first. Details and measurements a
   connection at once, which had kept the voice assistant from working when Home Assistant came back.
 - **Restart** on the settings page (System) and a "Restart" button in Home Assistant: the Echo reboots, as a power
   cycle does, without anything forgotten. For an Echo that is stuck while its page still answers.
+- **Two wake words at once.** Home Assistant's "Wake word 2" select now works on the Echo: the word picked there is
+  listened for beside the first one, and it starts "Assistant 2", so each word can have its own assistant (as on a
+  Voice PE). Before, a pick there did not stick, or replaced the first word. A second word costs the Echo
+  some processing power all the time; leave "Wake word 2" at "No wake word" to keep one.
 
 ## 2026-10-10
 
