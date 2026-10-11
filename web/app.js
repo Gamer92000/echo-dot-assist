@@ -1113,10 +1113,18 @@ function dropButton(r, name) {
     title: mine ? `End the Drop In with ${name}` : busy ? 'This Echo is in another Drop In' : `Talk to ${name}: it connects at once, or rings until its action button`,
     onclick: () => dropIn(mine ? 'end' : r.node, name) }, icon('talk'), mine ? (dr.state === 'connected' ? 'End Drop In' : 'Cancel') : 'Drop In'));
 }
+// what came of a call that went out but did not connect (dropin.c dropin_results); refusals here come back as errors
+const DROPIN_FAILED = { busy: 'is in another Drop In', do_not_disturb: 'has do not disturb on', microphones_off: 'has its microphones off',
+  drop_in_off: 'has Drop In off', declined: 'declined', not_answered: 'did not answer', no_answer: 'did not answer: is it on?',
+  cancelled: 'cancelled', failed: 'did not connect (this Echo\'s log says why)' };
 async function dropIn(what, name) {
+  const before = state.dropin ? state.dropin.attempt : 0;
+  let sent = true;
   try { await echo.call('POST', '/api/dropin', what); toast(what === 'end' ? `Drop In with ${name} ended` : `Dropping in on ${name}…`); }
-  catch (e) { toast(`Drop In: ${errText(e)}`); }
-  for (let i = 0; i < 6; i++) { await new Promise((ok) => setTimeout(ok, 500)); await load().catch(() => {}); renderDevices(); if (!state.dropin || state.dropin.state !== 'calling') break; }
+  catch (e) { toast(`Drop In: ${errText(e)}`); sent = false; }
+  for (let i = 0; i < 12; i++) { await new Promise((ok) => setTimeout(ok, 500)); await load().catch(() => {}); renderDevices(); if (!state.dropin || state.dropin.state !== 'calling') break; }
+  const dr = state.dropin;
+  if (sent && what !== 'end' && dr && dr.attempt > before && dr.state === 'idle' && DROPIN_FAILED[dr.result]) toast(`Drop In: ${name} ${DROPIN_FAILED[dr.result]}`);
 }
 
 // The list is redrawn every 15 s and on every answer: the wait is kept on d, so a redraw neither resets the button nor

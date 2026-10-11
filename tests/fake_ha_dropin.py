@@ -4,7 +4,8 @@ Echo outside the network.  The two start with the same network key in state/arbi
 The kitchen Echo's microphone is speech (testdata), the hall's is silence: the call carries the kitchen's voice to the
 hall's Voip stream (HASSMIC_VOIP) and nothing back.  Then: answer by button (drop_in_answer=ask), hang up by button,
 by "<wake word>, stop", by "auflegen", from Home Assistant, from the settings page; refusals (do not disturb, Drop In
-off, an Echo outside the network, a name nobody has); and an Echo that vanishes mid-call.
+off, an Echo outside the network, a name nobody has); and an Echo that vanishes mid-call.  For each call the kitchen
+makes: every state on the way ("calling" before a refusal that comes at once) and the "Drop In result" event.
 Everything goes out on loopback (HASSMIC_ARB_ADDR): nothing of it reaches the LAN."""
 import asyncio, base64, os, re, signal, subprocess, sys, tempfile, time
 import numpy as np
@@ -38,7 +39,7 @@ class Echo:
                         HASSMIC_MDNS_FILE=os.path.join(self.state, "none"), HASSMIC_ARB_ADDR=BCAST, HASSMIC_TEST_SCORE="500",
                         HASSMIC_MODELS=os.path.join(self.state, "models"))
         if speech: self.env["HASSMIC_CAP"] = SPEECH
-        self.states, self.starts = {}, []
+        self.states, self.starts, self.seq = {}, [], []     # seq: (object id, state or event type) as they came
 
     def start(self):
         self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.port), "-n", self.name, "-L",
@@ -49,6 +50,14 @@ class Echo:
     def st(self, oid): return self.states.get(self.by[oid].key) if oid in self.by else None
     def dropin(self): return self.st("drop_in"), self.st("drop_in_with")
     def page_dropin(self): return (self.page.state().get("dropin") or {}).get("state")
+    def results(self): return [v for o, v in self.seq if o == "drop_in_result"]
+    def states_of(self, oid): return [v for o, v in self.seq if o == oid]
+
+    def on_state(self, s):
+        v = getattr(s, "state", None) if hasattr(s, "state") else getattr(s, "event_type", None)
+        self.states[s.key] = v
+        oid = next((o for o, e in self.by.items() if e.key == s.key), None)
+        self.seq.append((oid, v))
 
     async def connect(self):
         self.states = {}
@@ -56,7 +65,7 @@ class Echo:
         await self.cli.connect(login=True)
         ents, self.services = await self.cli.list_entities_services()
         self.by = {e.object_id: e for e in ents}
-        self.cli.subscribe_states(lambda s: self.states.__setitem__(s.key, getattr(s, "state", None)))
+        self.cli.subscribe_states(self.on_state)
         async def handle_start(conv, flags, settings, phrase): self.starts.append(time.monotonic()); return 0
         async def handle_stop(abort): pass
         async def handle_audio(data, *_): pass
@@ -114,13 +123,19 @@ async def main():
         for e in (a, b): e.page = Browser(e.web); check(e.page.login_with_button(e.proc), f"{e.name}: settings page logged in")
         check(await until(lambda: any(m["node"] == b.node for m in a.page.state()["arbitration"]["members"]), 5), "the two Echos see each other in the network")
         check(any(s.name == "drop_in" for s in a.services), "Home Assistant has the action drop_in")
-        check(all(o in a.by for o in ("drop_in", "drop_in_with", "end_drop_in")), "and Drop In, Drop In with, End Drop In")
+        check(all(o in a.by for o in ("drop_in", "drop_in_with", "end_drop_in", "drop_in_result")), "and Drop In, Drop In with, End Drop In, Drop In result")
+        types = list(getattr(a.by.get("drop_in_result"), "event_types", []))
+        check(types[:2] == ["connected", "ringing"] and {"do_not_disturb", "no_answer", "not_found", "busy_here"} <= set(types),
+              f"  Drop In result's event types: {types}")
         check(a.dropin() == ("idle", ""), f"idle at start ({a.dropin()})")
 
         # 1. a call from Home Assistant, by the hall's name: connected at once (answer: auto)
+        mark = len(a.seq)
         await a.call(b.name)
         ok = await until(lambda: a.dropin() == ("connected", b.node) and b.dropin() == ("connected", a.node), 3)
         check(ok, f"the kitchen drops in on the hall: both connected ({a.dropin()}, {b.dropin()})")
+        check(await until(lambda: [v for o, v in a.seq[mark:] if o in ("drop_in", "drop_in_result")] == ["calling", "connected", "connected"], 1),
+              f"  Home Assistant hears calling, connected, then the result: {a.seq[mark:]}")
         await asyncio.sleep(4)
         lb, la = level(b.voip, 2), level(a.voip, 2)
         check(lb > -45, f"the hall plays the kitchen's voice ({lb:.1f} dBFS)")
@@ -134,12 +149,16 @@ async def main():
 
         # 2. answer: ask.  The hall rings until its action button
         r = b.page.set(drop_in_answer="ask"); check(r["applied"] == 1, "the hall: drop_in_answer=ask on the page")
+        mark = len(a.seq)
         await a.call(b.node)
         check(await until(lambda: b.dropin() == ("ringing", a.node) and a.dropin()[0] == "calling", 2), f"the hall rings, the kitchen waits ({b.dropin()}, {a.dropin()})")
+        check(await until(lambda: a.results()[-1:] == ["ringing"], 1), f"  result: ringing ({a.results()[-1:]})")
+        check(re.search(r"drop in: result ringing hall-echo\n", a.text()) is not None, "  (no end of call sound for it)")
         await asyncio.sleep(2)
         check(a.dropin()[0] == "calling", "still ringing 2 s later (not answered by itself)")
         b.proc.send_signal(signal.SIGUSR2)                 # the hall's action button
         check(await until(lambda: a.dropin()[0] == "connected" and b.dropin()[0] == "connected", 2), "the action button answers")
+        check(await until(lambda: [v for o, v in a.seq[mark:] if o == "drop_in_result"] == ["ringing", "connected"], 1), f"  results: ringing, connected ({a.seq[mark:]})")
         a.proc.send_signal(signal.SIGHUP)                  # "<wake word>, stop" on the kitchen
         check(await until(lambda: a.dropin()[0] == "idle" and b.dropin()[0] == "idle", 2), "\"stop\" hangs up")
 
@@ -148,6 +167,15 @@ async def main():
         check(await until(lambda: b.dropin()[0] == "ringing", 2), "ringing again")
         b.proc.send_signal(signal.SIGUSR2); await asyncio.sleep(0.3); b.proc.send_signal(signal.SIGUSR2)
         check(await until(lambda: a.dropin()[0] == "idle" and b.dropin()[0] == "idle", 3), "answered and hung up again by button")
+        # declined: End Drop In on the hall while it rings; cancelled: the kitchen gives up while it rings
+        await asyncio.sleep(0.3); await a.call(b.node)
+        check(await until(lambda: b.dropin()[0] == "ringing", 2), "ringing again")
+        b.press("end_drop_in")
+        check(await until(lambda: a.results()[-1:] == ["declined"] and a.dropin()[0] == "idle", 2), f"declined on the hall: result {a.results()[-1:]}")
+        await asyncio.sleep(0.3); await a.call(b.node)
+        check(await until(lambda: b.dropin()[0] == "ringing", 2), "ringing again")
+        a.press("end_drop_in")
+        check(await until(lambda: a.results()[-1:] == ["cancelled"] and b.dropin()[0] == "idle", 2), f"cancelled on the kitchen: result {a.results()[-1:]}, hall {b.dropin()}")
         b.page.set(drop_in_answer="auto")
 
         # 4. "auflegen" in a request during the call ends it, and Home Assistant never gets the run
@@ -165,34 +193,59 @@ async def main():
         st, _, data = a.page.call("POST", "/api/dropin", b.node.encode())
         check(st == 200, f"the page drops in ({st} {data})")
         check(await until(lambda: a.page_dropin() == "connected", 3), "the page shows it connected")
+        pd = a.page.state()["dropin"]
+        check(pd.get("result") == "connected" and pd.get("attempt", 0) >= 7, f"  and the last call's result: {pd}")
         st, _, _ = b.page.call("POST", "/api/dropin", b"end")
         check(st == 200 and await until(lambda: a.page_dropin() == "idle", 2), "and the other Echo's page ends it")
 
         # 6. refusals
         b.cli.switch_command(b.by["do_not_disturb"].key, True)
         await asyncio.sleep(0.3)
+        mark, t0 = len(a.seq), time.monotonic()
         await a.call(b.node)
         check(await until(lambda: "refused: do not disturb is on" in a.text(), 3), "do not disturb refuses it")
         check(await until(lambda: a.dropin()[0] == "idle" and b.dropin()[0] == "idle", 2), "both idle after the refusal")
+        check(await until(lambda: a.results()[-1:] == ["do_not_disturb"], 1) and time.monotonic() - t0 < 1,
+              f"  result do_not_disturb at once ({time.monotonic() - t0:.2f} s)")
+        check([v for o, v in a.seq[mark:] if o == "drop_in"] == ["calling", "idle"],
+              f"  Home Assistant saw calling before idle, though the refusal came within the loop's 20 ms: {a.seq[mark:]}")
+        check(re.search(r"refused: do not disturb is on\n(.*\n)*.*drop in: idle", a.text()) is not None,
+              "  and the core heard of both (the end of call sound goes with idle)")
         b.cli.switch_command(b.by["do_not_disturb"].key, False); await asyncio.sleep(0.3)
         b.page.set(drop_in="off"); await b.reconnect()
         check("drop_in" not in b.by and not any(s.name == "drop_in" for s in b.services), "Drop In off: its entities and action are gone from Home Assistant")
         await a.call(b.node)
         check(await until(lambda: "refused: Drop In is off there" in a.text(), 3), "an Echo with Drop In off refuses")
+        check(await until(lambda: a.results()[-1:] == ["drop_in_off"], 1), f"  result drop_in_off ({a.results()[-1:]})")
         b.page.set(drop_in="on"); await b.reconnect()
+        mark = len(a.seq)
         await a.call("Nobody Echo")
         check(await until(lambda: 'drop in: Nobody Echo: no Echo "nobody-echo" in this Echo\'s network' in a.text(), 2), "a name nobody has: refused at once")
+        check(await until(lambda: a.results()[-1:] == ["not_found"], 1) and "drop_in" not in [o for o, _ in a.seq[mark:]],
+              f"  result not_found, and the state never left idle: {a.seq[mark:]}")
+        check("drop in: result not_found nobody-echo (refused here: end of call sound)" in a.text(), "  the Echo plays the end of call sound")
+        a.cli.switch_command(a.by["mute"].key, True); await asyncio.sleep(0.3)
+        await a.call(b.node)
+        check(await until(lambda: a.results()[-1:] == ["microphones_off_here"], 2), f"the kitchen muted: result {a.results()[-1:]}")
+        a.cli.switch_command(a.by["mute"].key, False); await asyncio.sleep(0.3)
         c.start(); await asyncio.sleep(6.5)               # outside the network: it makes one of its own after 5 s
         await a.call(c.node)
         check(await until(lambda: f'no Echo "{c.node}" in this Echo\'s network' in a.text(), 2), "an Echo outside the network cannot be called")
+        check(await until(lambda: a.results()[-1:] == ["not_found"], 1), f"  result not_found ({a.results()[-1:]})")
         check(a.dropin()[0] == "idle", "and nothing started")
 
         # 7. the hall vanishes mid-call: the kitchen notices
         await a.call(b.node)
         check(await until(lambda: a.dropin()[0] == "connected", 3), "connected once more")
+        await a.call(b.node)
+        check(await until(lambda: a.results()[-1:] == ["busy_here"], 1) and a.dropin()[0] == "connected", f"a second call during it: result {a.results()[-1:]}")
         b.proc.kill(); b.proc.wait()
         check(await until(lambda: a.dropin()[0] == "idle", 8), "a vanished Echo ends the call (no audio for 5 s)")
         check("lost: no audio for 5 s" in a.text(), "the log says it was lost")
+        mark, t0 = len(a.seq), time.monotonic()
+        await a.call(b.node)                           # still a member (5 min): nobody answers
+        check(await until(lambda: a.results()[-1:] == ["no_answer"], 6) and 3.9 < time.monotonic() - t0 < 5.5,
+              f"  called again: result no_answer after {time.monotonic() - t0:.1f} s, states {[v for o, v in a.seq[mark:] if o == 'drop_in']}")
         check(not re.search(r"drop in: send: ", a.text()), "no send errors on the way")
     finally:
         for e in (a, b, c):

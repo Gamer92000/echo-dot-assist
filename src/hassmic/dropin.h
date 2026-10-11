@@ -6,6 +6,14 @@
 
 enum { DROPIN_IDLE, DROPIN_CALLING, DROPIN_RINGING, DROPIN_LIVE };
 extern const char *const dropin_states[4];      /* "idle", "calling", "ringing", "connected": Home Assistant's text */
+/* What came of a call this Echo made (Home Assistant's event entity "Drop In result", its event types): the other Echo
+ * took it, rings (not the end: one of the others follows), refused it (busy, do not disturb, its microphones off, Drop In
+ * off there, declined, not answered), said nothing (no_answer: off or out of reach), is not in this Echo's network, this
+ * Echo cannot call now (in a call, microphones off), the call was cancelled here, or anything else */
+enum { DROPIN_R_CONNECTED, DROPIN_R_RINGING, DROPIN_R_BUSY, DROPIN_R_DND, DROPIN_R_MUTED, DROPIN_R_OFF, DROPIN_R_DECLINED,
+       DROPIN_R_NOT_ANSWERED, DROPIN_R_NO_ANSWER, DROPIN_R_NOT_FOUND, DROPIN_R_BUSY_HERE, DROPIN_R_MUTED_HERE,
+       DROPIN_R_CANCELLED, DROPIN_R_FAILED, DROPIN_NRESULTS };
+extern const char *const dropin_results[DROPIN_NRESULTS];
 
 int  dropin_start(int port);                    /* the audio socket and threads; arb must run.  0 ok */
 int  dropin_running(void);
@@ -18,6 +26,7 @@ int  dropin_call(const char *target, char *err, size_t errsz);
 void dropin_hangup(const char *why);            /* ends whatever runs: a call, a ringing one, a call going out */
 int  dropin_button(void);                       /* the action button: answers a ringing call or ends one; 1 if it did */
 int  dropin_status(char *peer, size_t cap);     /* DROPIN_*; peer: the other Echo's node ("" when idle) */
+int  dropin_last(unsigned *attempt);            /* the last call's DROPIN_R_* (-1: none yet); attempt counts calls made */
 /* The capture thread: 16 kHz mono micAsr as it comes, while a call runs (muted: zeros).  own: the Echo plays a sound or
  * a reply of its own: ducked like the far end's voice */
 void dropin_mic(const int16_t *pcm, size_t n, int own);

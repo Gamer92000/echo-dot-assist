@@ -144,7 +144,12 @@ pages list them under Echos) and have "Drop In" on (Features, on by default).
 
 - **From Home Assistant**: the action `esphome.<echo>_drop_in` with `target:` the other Echo's name as it first
   appeared in Home Assistant ("Echo Dot 3 5695c4") or its node name. Each Echo also has "Drop In" (idle, calling,
-  ringing, connected), "Drop In with" (the other Echo) and an "End Drop In" button.
+  ringing, connected), "Drop In with" (the other Echo) and an "End Drop In" button. And "Drop In result", an event
+  for each call the Echo makes, as soon as it is known: `connected`, `ringing` (it rings there; `connected`,
+  `declined` or `not_answered` follows), refused by the other Echo (`busy`, `do_not_disturb`, `microphones_off`,
+  `drop_in_off`), `no_answer` (no word from it in 4 s: off or out of reach), `not_found` (not in this Echo's
+  network), refused here (`busy_here`, `microphones_off_here`), `cancelled` (ended here before it connected) or
+  `failed`. An automation triggers on it with a state trigger and reads `trigger.to_state.attributes.event_type`.
 - **By voice**: import the blueprint [`blueprints/automation/drop_in.yaml`](../blueprints/automation/drop_in.yaml)
   (Settings › Automations › Blueprints › Import, with the file's GitHub address), then create an automation from it.
   "Drop in kitchen" or "Verbinde mit Küche" then calls, from the Echo you spoke to, the Echo in the area of that name

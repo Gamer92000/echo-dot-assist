@@ -204,12 +204,17 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   talks (`core_dropin_listen`). Core side in `main.c` (`core_dropin`: call LED animations, comms sounds, ringtones via
   `play_earcon_while`; action button answers/ends, "stop"/"hang up"/"auflegen" end; wake word ignored while the far end
   talks). Notifications to the core go through dropin's loop thread: `dropin_call` runs under `core_lock` (ESPHome
-  handler). HA: action `drop_in`, "Drop In", "Drop In with", "End Drop In"; settings `drop_in`, `drop_in_answer`;
-  page `POST /api/dropin`. Voice: `blueprints/automation/drop_in.yaml` (Echos by manufacturer `hassmic` = project
-  name's first half, the sensor by its state, never by entity id; the action named from the reported name, else
+  handler); every state and result is queued (`ev_push`) and told in order (`tell_core`), and an outgoing call's
+  first invite goes out only after that, so HA always sees "calling" before a refusal. HA: action `drop_in`, "Drop
+  In", "Drop In with", "End Drop In", and the event entity "Drop In result" (`dropin_results`: what came of each call
+  this Echo made, refusals here included; `core_dropin_result`); settings `drop_in`, `drop_in_answer`; page
+  `POST /api/dropin` (status: `result`, `attempt`). No ESPHome action response (PLAN.md says why). Voice:
+  `blueprints/automation/drop_in.yaml` (Echos by manufacturer `hassmic` = project name's first half, the sensor by
+  its state, the result entity by its event types, never by entity id; the action named from the reported name, else
   model + MAC, so every board's project must stay `hassmic.<slug of default_name>`; called in a run of its own via
-  `automation.trigger`, since ServiceNotFound would end the conversation's run with "Done"; success seen on the
-  "Drop In" sensor). Keep the entity's states, icon and the action's name stable: released blueprints rely on them.
+  `automation.trigger`, since ServiceNotFound would end the conversation's run with "Done"; the reply from "Drop In
+  result" where the Echo has it, else from the timing of the "Drop In" sensor). Keep the entities' states, event
+  types, icons and the action's name stable: released blueprints rely on them; a new result is a new event type.
 - **Bluetooth**: `ble.c`/`ble_crypto.c` talk raw HCI (`hci.h`) to the controller for the HA Bluetooth proxy (scan, GATT,
   Just Works pairing); Amazon's `btmanagerd` is stopped. A2DP shares the controller; scanning pauses while a phone plays,
   and for 1 s from a wake word round (`ble_quiet` in `main.c` `wake_heard`): the scan's share of the antenna costs

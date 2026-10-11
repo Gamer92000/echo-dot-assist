@@ -43,7 +43,8 @@ struct proto {
     void (*entities_changed)(void);             /* may be NULL: a feature went on or off: have the client list entities again */
     int  (*arb_scan)(const char *tag_id);       /* may be NULL: report a tag as scanned to Home Assistant (arb.h) */
     void (*timers_changed)(void);               /* may be NULL: a timer started or stopped ringing (core_timers_ringing) */
-    void (*dropin_changed)(void);               /* may be NULL: a Drop In started, connected or ended (dropin_status) */
+    void (*dropin_changed)(int state, const char *peer);   /* may be NULL: a Drop In's state (DROPIN_*), each in turn */
+    void (*dropin_result)(const char *result);  /* may be NULL: what came of a call this Echo made (dropin_results) */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
@@ -147,9 +148,11 @@ void   core_music(int source, int on);                      /* a music stream ru
 void   core_bt_device(const char *name, int on);            /* a Bluetooth speaker source connected / went (not the lock) */
 void   core_bt_pairing(int on);                             /* the Bluetooth speaker's pairing window opened / closed (not the lock) */
 /* Drop In (dropin.c), not the lock.  core_dropin: the call's state changed (DROPIN_*; peer: the other Echo's node;
- * outgoing: this Echo called): ring, sounds, the front end's listening mode, Home Assistant.  core_dropin_refusal: why
- * a call cannot run right now (muted; incoming: do not disturb too), NULL if it can */
+ * outgoing: this Echo called): ring, sounds, the front end's listening mode, Home Assistant.  core_dropin_result: what
+ * came of a call this Echo made (DROPIN_R_*; here: refused before it started, nothing else told).  core_dropin_refusal:
+ * why a call cannot run right now (muted; incoming: do not disturb too), NULL if it can */
 void   core_dropin(int state, const char *peer, int outgoing);
+void   core_dropin_result(int result, const char *peer, int here);
 void   core_dropin_listen(int on);                          /* the front end's listening mode: this side of a call talks */
 const char *core_dropin_refusal(int incoming);
 void   core_run(char *const argv[], char *out, size_t n);   /* runs a stock tool the way the core does, until it closes its

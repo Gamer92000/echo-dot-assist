@@ -106,6 +106,9 @@ enum { OPUS_APPLICATION_VOIP = 2048, OPUS_SET_BITRATE = 4002, OPUS_SET_COMPLEXIT
 
 enum { M_INVITE = 1, M_ACCEPT, M_RINGING, M_REFUSE, M_BYE };
 const char *const dropin_states[4] = { "idle", "calling", "ringing", "connected" };
+const char *const dropin_results[DROPIN_NRESULTS] = { "connected", "ringing", "busy", "do_not_disturb", "microphones_off", "drop_in_off",
+                                                      "declined", "not_answered", "no_answer", "not_found", "busy_here",
+                                                      "microphones_off_here", "cancelled", "failed" };
 
 static pthread_mutex_t dl = PTHREAD_MUTEX_INITIALIZER;   /* everything below; taken after core_lock, before arb's */
 static pthread_cond_t live_cond = PTHREAD_COND_INITIALIZER;
@@ -115,6 +118,7 @@ static uint16_t my_port;
 static uint8_t self_id[8];
 static struct {
     int state, outgoing, gen, keyed, rang;              /* gen: one per call; rang: the callee said it rings */
+    int invited;                                        /* the first invite went out (once the core knew: tell_core) */
     uint8_t id[8], peer[8];
     char node[64];
     uint32_t ip; uint16_t port;                         /* the other Echo's audio address (network byte order ip) */
@@ -133,6 +137,14 @@ static struct slot { uint32_t seq; int len; uint8_t d[MAXPKT]; } jb[JB];
 static uint32_t jb_hi, jb_lo; static int jb_any;      /* the newest frame in, the first of the call */
 static struct { long long t; float db; } ref[REF_N];
 static unsigned ref_n;
+/* What the core is told, in order, by the loop (tell_core): every state a call passes through and what came of every
+ * call this Echo made.  With only the state the loop found then (the first version), a call refused within the loop's
+ * 20 ms (the other Echo in do not disturb, on the same LAN) went from idle to idle: Home Assistant never saw "calling",
+ * and the Echo made no sound.  state -1: a result alone (ringing, or a call refused here: here 1) */
+#define EVQ 16                                          /* a call makes three or four */
+static struct ev { int state, outgoing, result, here, gen; char node[64]; } evq[EVQ];
+static unsigned ev_in, ev_out;
+static int last_result = -1; static unsigned attempts;  /* for the settings page */
 
 static long long now_ms(void)
 {
@@ -145,6 +157,30 @@ static float level_db(const int16_t *s, size_t n)
     double sum = 0;
     for (size_t i = 0; i < n; i++) sum += (double)s[i] * s[i];
     return (float)(10 * log10(sum / (n ? n : 1) / (32768.0 * 32768.0) + 1e-10));
+}
+
+/* dl held: a state for the core (-1: none) and what came of the call this Echo made (result -1: nothing yet; here: it
+ * was refused here, before it started) */
+static void ev_push(int state, const char *node, int outgoing, int result, int here)
+{
+    struct ev *e = &evq[ev_in++ % EVQ];
+    if (ev_in - ev_out > EVQ) ev_out = ev_in - EVQ;     /* never seen: the oldest goes */
+    e->state = state; e->outgoing = outgoing; e->result = result; e->here = here; e->gen = c.gen;
+    snprintf(e->node, sizeof e->node, "%s", node);
+    if (result >= 0) last_result = result;
+    atomic_store(&notify, 1);
+}
+
+/* The other Echo's reason (M_REFUSE: the same words in every build with Drop In) as a result */
+static int refusal(const char *why)
+{
+    static const struct { const char *why; int r; } map[] = {
+        { "busy in another Drop In", DROPIN_R_BUSY }, { "do not disturb is on", DROPIN_R_DND },
+        { "the microphones are off", DROPIN_R_MUTED }, { "Drop In is off there", DROPIN_R_OFF },
+        { "declined", DROPIN_R_DECLINED }, { "not answered", DROPIN_R_NOT_ANSWERED },
+    };
+    for (size_t i = 0; i < sizeof map / sizeof map[0]; i++) if (!strcmp(why, map[i].why)) return map[i].r;
+    return DROPIN_R_FAILED;
 }
 
 /* ---------------------------------------------------------------- messages (dl held) */
@@ -193,15 +229,18 @@ static int derive(const uint8_t peer_epk[32])
 
 static void go_live(long long now)
 {
+    ev_push(DROPIN_LIVE, c.node, c.outgoing, c.outgoing ? DROPIN_R_CONNECTED : -1, 0);
     c.state = DROPIN_LIVE; c.live_at = c.rx_at = now; c.tx_seq = 0; c.rx = c.lost = c.late = c.played = 0; c.gap_max = c.arr_at = 0; play_next = 0;
     memset(jb, 0, sizeof jb); jb_any = 0; ref_n = 0; memset(ref, 0, sizeof ref);
     fprintf(stderr, "drop in: connected with %s\n", c.node);
     pthread_cond_broadcast(&live_cond);
 }
 
-static void end_call(const char *why, int tell)
+/* result: what came of a call this Echo made that had not connected (ignored for any other) */
+static void end_call(const char *why, int tell, int result)
 {
     if (c.state == DROPIN_IDLE) return;
+    ev_push(DROPIN_IDLE, "", c.outgoing, c.state == DROPIN_CALLING && c.outgoing ? result : -1, 0);
     if (c.state == DROPIN_LIVE) fprintf(stderr, "drop in: ended with %s after %lld s (%s); %u frames in, %u played, %u of them missing "
                                         "(%u came too late), longest gap %lld ms\n", c.node, (now_ms() - c.live_at) / 1000, why, c.rx, c.played,
                                         c.lost, c.late, c.gap_max);
@@ -219,7 +258,7 @@ static void end_call(const char *why, int tell)
 static void fresh_call(const uint8_t peer[8], const char *node, uint32_t ip, int outgoing)
 {
     memset(&c.id, 0, sizeof c.id);
-    c.outgoing = outgoing; c.gen++; c.keyed = 0; c.rang = 0;
+    c.outgoing = outgoing; c.gen++; c.keyed = 0; c.rang = 0; c.invited = 0;
     memcpy(c.peer, peer, 8); snprintf(c.node, sizeof c.node, "%s", node); c.ip = ip; c.port = 0;
     ws_random(c.esk, 32); crypto_x25519_public_key(c.epk, c.esk);
     c.since = c.sig_at = now_ms();
@@ -227,13 +266,27 @@ static void fresh_call(const uint8_t peer[8], const char *node, uint32_t ip, int
 
 /* ---------------------------------------------------------------- notifications (the loop's, not dl) */
 
-static void changed(void) { atomic_store(&notify, 1); }
-
+/* Everything that happened, in order.  A call this Echo makes sends its first invite only once the core has been told:
+ * Home Assistant then has "calling" before the other Echo can answer, so every call shows there, refused ones too */
 static void tell_core(void)
 {
-    char node[64]; int st, out;
-    pthread_mutex_lock(&dl); st = c.state; out = c.outgoing; snprintf(node, sizeof node, "%s", st ? c.node : ""); pthread_mutex_unlock(&dl);
-    core_dropin(st, node, out);
+    for (;;) {
+        struct ev e;
+        pthread_mutex_lock(&dl);
+        if (ev_out == ev_in) { pthread_mutex_unlock(&dl); break; }
+        e = evq[ev_out++ % EVQ];
+        pthread_mutex_unlock(&dl);
+        if (e.state >= 0) core_dropin(e.state, e.node, e.outgoing);
+        if (e.result >= 0) core_dropin_result(e.result, e.node, e.here);
+        if (e.state == DROPIN_CALLING && e.outgoing) {
+            pthread_mutex_lock(&dl);
+            if (c.state == DROPIN_CALLING && c.outgoing && c.gen == e.gen && !c.invited) {
+                c.invited = 1; c.since = c.sig_at = now_ms();
+                send_msg(M_INVITE, NULL);
+            }
+            pthread_mutex_unlock(&dl);
+        }
+    }
 }
 
 /* ---------------------------------------------------------------- interface */
@@ -242,12 +295,10 @@ int dropin_running(void) { return running; }
 
 int dropin_enable(int set)
 {
-    int hang = 0;
     pthread_mutex_lock(&dl);
-    if (set >= 0 && set != enabled) { enabled = set != 0; hang = !enabled && c.state; if (hang) end_call("Drop In switched off", 1); }
+    if (set >= 0 && set != enabled) { enabled = set != 0; if (!enabled && c.state) end_call("Drop In switched off", 1, DROPIN_R_CANCELLED); }
     int r = enabled;
     pthread_mutex_unlock(&dl);
-    if (hang) changed();
     return r;
 }
 
@@ -269,36 +320,46 @@ int dropin_status(char *peer, size_t cap)
     return st;
 }
 
+int dropin_last(unsigned *attempt)
+{
+    pthread_mutex_lock(&dl);
+    int r = last_result;
+    if (attempt) *attempt = attempts;
+    pthread_mutex_unlock(&dl);
+    return r;
+}
+
+/* A call refused here has a result all the same, which the loop reports (callers may hold core_lock) */
 int dropin_call(const char *target, char *err, size_t errsz)
 {
-    char node[64]; uint8_t id[8]; unsigned ip;
+    char node[64]; uint8_t id[8]; unsigned ip; int r = -1;
     core_node_of(target, node);
-    if (!running) { snprintf(err, errsz, "Drop In is not running on this Echo"); return -1; }
-    if (!strcmp(node, core_node_name())) { snprintf(err, errsz, "that is this Echo"); return -1; }
-    if (arb_member(node, id, &ip)) { snprintf(err, errsz, "no Echo \"%s\" in this Echo's network", node); return -1; }
+    if (!running) { snprintf(err, errsz, "Drop In is not running on this Echo"); return -1; }       /* no loop to tell */
     const char *no = core_dropin_refusal(0);
+    int self = !strcmp(node, core_node_name()), member = !self && !arb_member(node, id, &ip);
     pthread_mutex_lock(&dl);
-    if (!enabled) { pthread_mutex_unlock(&dl); snprintf(err, errsz, "Drop In is off on this Echo"); return -1; }
-    if (no) { pthread_mutex_unlock(&dl); snprintf(err, errsz, "%s", no); return -1; }
-    if (c.state) { pthread_mutex_unlock(&dl); snprintf(err, errsz, "already in a Drop In with %s", c.node); return -1; }
+    attempts++;
+    if (self) { snprintf(err, errsz, "that is this Echo"); r = DROPIN_R_FAILED; }
+    else if (!member) { snprintf(err, errsz, "no Echo \"%s\" in this Echo's network", node); r = DROPIN_R_NOT_FOUND; }
+    else if (!enabled) { snprintf(err, errsz, "Drop In is off on this Echo"); r = DROPIN_R_FAILED; }
+    else if (no) { snprintf(err, errsz, "%s", no); r = DROPIN_R_MUTED_HERE; }
+    else if (c.state) { snprintf(err, errsz, "already in a Drop In with %s", c.node); r = DROPIN_R_BUSY_HERE; }
+    if (r >= 0) { ev_push(-1, node, 1, r, 1); pthread_mutex_unlock(&dl); return -1; }
     fresh_call(id, node, ip, 1);
     ws_random(c.id, 8);
     c.state = DROPIN_CALLING;
     fprintf(stderr, "drop in: calling %s\n", node);
-    send_msg(M_INVITE, NULL);
+    ev_push(DROPIN_CALLING, node, 1, -1, 0);            /* the invite follows once the core knows (tell_core) */
     pthread_mutex_unlock(&dl);
-    changed();
     return 0;
 }
 
 void dropin_hangup(const char *why)
 {
     pthread_mutex_lock(&dl);
-    int was = c.state;
-    if (was == DROPIN_RINGING) { send_msg(M_REFUSE, "declined"); end_call(why, 0); }
-    else end_call(why, 1);
+    if (c.state == DROPIN_RINGING) { send_msg(M_REFUSE, "declined"); end_call(why, 0, -1); }
+    else end_call(why, c.state != DROPIN_CALLING || c.invited, DROPIN_R_CANCELLED);    /* no bye for an invite never sent */
     pthread_mutex_unlock(&dl);
-    if (was) changed();
 }
 
 static void answer(void)              /* dl held: the callee takes a ringing call */
@@ -312,15 +373,14 @@ int dropin_button(void)
     pthread_mutex_lock(&dl);
     int st = c.state;
     if (st == DROPIN_RINGING) answer();
-    else if (st) end_call("action button", 1);
+    else if (st) end_call("action button", 1, DROPIN_R_CANCELLED);
     pthread_mutex_unlock(&dl);
-    if (st) changed();
     return st != DROPIN_IDLE;
 }
 
 void dropin_message(const unsigned char from[8], const char *node, unsigned ip, const unsigned char *p, size_t n)
 {
-    uint8_t id[8], epk[32]; char reason[64] = ""; unsigned port; int kind, tell = 0;
+    uint8_t id[8], epk[32]; char reason[64] = ""; unsigned port; int kind;
     if (n < 44 || n < (size_t)44 + p[43]) return;
     kind = p[0]; memcpy(id, p + 1, 8); port = p[9] | p[10] << 8; memcpy(epk, p + 11, 32);
     snprintf(reason, sizeof reason, "%.*s", p[43], (const char *)p + 44);
@@ -348,29 +408,34 @@ void dropin_message(const unsigned char from[8], const char *node, unsigned ip, 
         fresh_call(from, node, ip, 0);
         memcpy(c.id, id, 8); c.port = htons((uint16_t)port);
         if (derive(epk)) { send_to(from, id, M_REFUSE, "no key"); c.state = DROPIN_IDLE; break; }
-        if (ask) { c.state = DROPIN_RINGING; fprintf(stderr, "drop in: %s calls, ringing until the action button\n", node); send_msg(M_RINGING, NULL); }
+        if (ask) { c.state = DROPIN_RINGING; ev_push(DROPIN_RINGING, c.node, 0, -1, 0);
+                   fprintf(stderr, "drop in: %s calls, ringing until the action button\n", node); send_msg(M_RINGING, NULL); }
         else { fprintf(stderr, "drop in: %s drops in\n", node); answer(); }
-        tell = 1;
         break;
     case M_RINGING:
-        if (same && c.outgoing && c.state == DROPIN_CALLING) { if (!c.rang) fprintf(stderr, "drop in: %s rings\n", c.node); c.rang = 1; c.sig_at = now; c.rx_at = now; tell = 1; }
+        if (same && c.outgoing && c.state == DROPIN_CALLING) {
+            if (!c.rang) { fprintf(stderr, "drop in: %s rings\n", c.node); ev_push(-1, c.node, 1, DROPIN_R_RINGING, 0); }
+            c.rang = 1; c.sig_at = now; c.rx_at = now;
+        }
         break;
     case M_ACCEPT:
         if (!same || !c.outgoing || c.state != DROPIN_CALLING) break;
         c.port = htons((uint16_t)port); c.ip = ip;
-        if (!port || derive(epk)) { end_call("no key", 1); tell = 1; break; }
-        go_live(now); tell = 1;
+        if (!port || derive(epk)) { end_call("no key", 1, DROPIN_R_FAILED); break; }
+        go_live(now);
         break;
     case M_REFUSE:
-        if (same && c.outgoing && c.state == DROPIN_CALLING) { char w[80]; snprintf(w, sizeof w, "refused: %s", reason[0] ? reason : "no reason"); end_call(w, 0); tell = 1; }
+        if (same && c.outgoing && c.state == DROPIN_CALLING) {
+            char w[80]; snprintf(w, sizeof w, "refused: %s", reason[0] ? reason : "no reason");
+            end_call(w, 0, refusal(reason));
+        }
         break;
     case M_BYE:
-        if (same) { char w[80]; snprintf(w, sizeof w, "%s hung up%s%s", c.node, reason[0] ? ": " : "", reason); end_call(w, 0); tell = 1; }
+        if (same) { char w[80]; snprintf(w, sizeof w, "%s hung up%s%s", c.node, reason[0] ? ": " : "", reason); end_call(w, 0, DROPIN_R_FAILED); }
         break;
     }
     pthread_mutex_unlock(&dl);
     crypto_wipe(epk, sizeof epk);
-    if (tell) changed();
 }
 
 /* ---------------------------------------------------------------- audio out: the mic */
@@ -564,25 +629,25 @@ static void *playout(void *arg)
 
 static void tick(void)
 {
-    long long now = now_ms(); int tell = 0;
+    long long now = now_ms();
     pthread_mutex_lock(&dl);
     switch (c.state) {
-    case DROPIN_CALLING:
-        if (!c.rang && now - c.since > ANSWER_MS) { end_call("no answer", 1); tell = 1; }
-        else if (c.rang && now - c.since > RING_MS + ANSWER_MS) { end_call("not answered", 1); tell = 1; }
+    case DROPIN_CALLING:                                /* timed from the first invite (tell_core) */
+        if (!c.invited) break;
+        if (!c.rang && now - c.since > ANSWER_MS) end_call("no answer", 1, DROPIN_R_NO_ANSWER);
+        else if (c.rang && now - c.since > RING_MS + ANSWER_MS) end_call("not answered", 1, DROPIN_R_NOT_ANSWERED);
         else if (now - c.sig_at >= (c.rang ? 1000 : INVITE_MS)) { c.sig_at = now; send_msg(M_INVITE, NULL); }
         break;
     case DROPIN_RINGING:
-        if (now - c.since > RING_MS) { send_msg(M_REFUSE, "not answered"); end_call("not answered", 0); tell = 1; }
-        else if (now - c.sig_at > CALLER_MS) { end_call("the caller gave up", 0); tell = 1; }
+        if (now - c.since > RING_MS) { send_msg(M_REFUSE, "not answered"); end_call("not answered", 0, -1); }
+        else if (now - c.sig_at > CALLER_MS) end_call("the caller gave up", 0, -1);
         break;
     case DROPIN_LIVE:
-        if (now - c.rx_at > LOST_MS) { end_call("lost: no audio for 5 s", 1); tell = 1; }
+        if (now - c.rx_at > LOST_MS) end_call("lost: no audio for 5 s", 1, -1);
         break;
     }
     if (bye.left && now - bye.at >= 100) { arb_tell(bye.to, bye.p, bye.n); bye.at = now; bye.left--; }
     pthread_mutex_unlock(&dl);
-    if (tell) changed();
 }
 
 static void *loop(void *arg)
@@ -593,8 +658,8 @@ static void *loop(void *arg)
         struct pollfd pf = { sock, POLLIN, 0 }; struct sockaddr_in from; socklen_t fl = sizeof from; ssize_t n;
         if (poll(&pf, 1, 20) > 0 && (pf.revents & POLLIN) && (n = recvfrom(sock, buf, sizeof buf, 0, (struct sockaddr *)&from, &fl)) > 0)
             on_audio(buf, (size_t)n, &from);
-        tick();
         if (atomic_exchange(&notify, 0)) tell_core();
+        tick();
     }
     return NULL;
 }

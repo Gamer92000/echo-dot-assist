@@ -698,7 +698,7 @@ void core_dropin(int st, const char *peer, int outgoing)
         else if (st == DROPIN_IDLE) sound_queue(SND_CALL_OFF);
         atomic_store(&dropin_live, st == DROPIN_LIVE);
         if (st != DROPIN_LIVE) { listen_call = 0; listening_apply(); }       /* dropin.c turns it on while this side talks */
-        if (connected && proto->dropin_changed) proto->dropin_changed();
+        if (connected && proto->dropin_changed) proto->dropin_changed(st, peer);
     }
     pthread_mutex_unlock(&core_lock);
     /* A call is the newest source, as Alexa's paused what played: music's leftovers in micAsr would open the gate and go
@@ -706,6 +706,19 @@ void core_dropin(int st, const char *peer, int outgoing)
      * made silent and is heard again.  Outside core_lock: sendspin takes its own lock */
     if (st == DROPIN_LIVE && was != DROPIN_LIVE) { if (core_sendspin_port) sendspin_pause(); a2dp_pause(); }
     if (st == DROPIN_IDLE && was == DROPIN_LIVE) a2dp_unyield();
+}
+
+/* What came of a call this Echo made, for Home Assistant ("Drop In result").  One refused here (this Echo in a call or
+ * muted, the other not in its network) never left idle, so nothing above made a sound: the end of a call's, as for a
+ * call the other Echo refuses, which goes from calling back to idle.  Said to the Echo, the voice blueprint's reply
+ * follows it */
+void core_dropin_result(int r, const char *peer, int here)
+{
+    pthread_mutex_lock(&core_lock);
+    fprintf(stderr, "drop in: result %s%s%s%s\n", dropin_results[r], peer[0] ? " " : "", peer, here ? " (refused here: end of call sound)" : "");
+    if (here) sound_queue(SND_CALL_OFF);
+    if (connected && proto->dropin_result) proto->dropin_result(dropin_results[r]);
+    pthread_mutex_unlock(&core_lock);
 }
 
 /* Listening mode in a call, from dropin.c's capture side (not the lock).  On for the whole call, as for a command, the

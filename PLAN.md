@@ -1560,6 +1560,31 @@ Run in this order. Each step says what it proves.
       stopped ("offline" after 4.0 s), and an Echo whose name slugs differently ("…Ł"): first name not found in its
       own run (repair created), second name called, "Calling Küche" after 4.0 s; no sentence run ended in an error.
       Calls that start answer in 10-20 ms.
+      Then (same day) what came of a call, told by the Echo, for replies at once and with the reason:
+      - `dropin.c` queues every state and result for the core in order (`ev_push`, drained by the loop's
+        `tell_core`). With one flag and the state the loop found, a refusal within its 20 ms poll (do not disturb on
+        loopback: 1 ms) went idle -> idle: HA never saw "calling" and `core_dropin` played nothing. Now the first
+        invite goes out only after the core was told "calling" (`invited`; `ANSWER_MS` counts from it), so HA always
+        has "calling" first, and calling -> idle plays `SND_CALL_OFF`. A call refused here (not a member, muted,
+        busy) has a result too and plays the same sound (`core_dropin_result`, `here`).
+      - Results (`dropin_results`, the event types): connected, ringing, busy, do_not_disturb, microphones_off,
+        drop_in_off, declined, not_answered (from the callee's refusal words, the same in every build), no_answer
+        (4 s), not_found, busy_here, microphones_off_here, cancelled, failed. HA: event entity "Drop In result"
+        (`KEY_DROPIN_RESULT`, listed with the other Drop In entities). An event entity because its state is the
+        event's time, forced past the last one (`event/__init__.py` `_trigger_event`): every call changes it, the
+        same result twice included, and the blueprint tells this call's from older ones by the state alone; its
+        `event_types` is a capability attribute, kept while unavailable (`entity.py`), so the blueprint finds it by
+        its types whatever its id. Settings page: `result` and `attempt` in the status; a toast says why a call
+        from the page did not connect.
+      - ESPHome action responses, weighed and left out: HA registers `supports_response` (field 4 of
+        ListEntitiesServicesResponse) since 2026.1 (core f306cde, 2025-12-06, aioesphomeapi 43.0.0; STATUS = 100
+        maps to HA's NONE, OPTIONAL/ONLY to the same), and an older HA ignores the field (protobuf, `convert`
+        returns None for unknown values), so registering would not break. But with anything but NONE HA waits for
+        an ExecuteServiceResponse on every call (30 s, `DEFAULT_EXECUTE_SERVICE_TIMEOUT`) and raises when it says
+        `success: false`: existing automations would block or fail where they now go on. And the blueprint's call
+        runs in a run of its own (ServiceNotFound), which `automation.trigger` gives no response back from: the
+        result has to come through an entity anyway, which every HA version has. The HelloRequest's API version would
+        not tell either: aioesphomeapi sent 1.13 both before and with responses, 1.14 only from 2025-12-29.
       Device (biscuit, PC host as the other end on the LAN, `HASSMIC_ARB_ADDR=192.168.103.255`):
       - Playback stream: `Voip` exists in the mixer (`PLAYBACK_MODE_VOIP`) and switches libasp to "VoIP mode 1" (call
         tuning, NDVC, normalisation off; logcat). Same speech, volume 50, micRaw -48: residual in micAsr -60..-66 dBFS
@@ -1579,7 +1604,8 @@ Run in this order. Each step says what it proves.
         3 frames of double talk to pass: gate never opened by the echo, -64 dBFS mean back against -26 for speech.
         `HASSMIC_DROPIN_TRACE=<file>` writes the gate's inputs per frame.
       fake_ha_dropin: auto and ask, button / stop / "Auflegen" / HA / page, refusals (DND, off, outside the network, no
-      such name), a vanished peer ends the call after 5 s.
+      such name), a vanished peer ends the call after 5 s; every state HA gets in order and each call's result
+      (declined, cancelled, muted here, busy here, no answer after 4.1 s).
       Echo to Echo (same day, all three on the build): biscuit -> donut from the page, connected 8 ms after the invite,
       10 s, 509 frames played on each side, 0 missing, longest gap 44-48 ms.
       Open (device): a talker at the called Echo (does speech open the gate fast

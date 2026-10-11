@@ -35,7 +35,8 @@
  *                    conversation agent runs, so its prompt template can read it; listed only with the model installed
  *   drop in          the action "drop_in" (esphome.<node>_drop_in, target: another Echo's name or node) calls an Echo
  *                    of the network (dropin.c); "Drop In" says idle / calling / ringing / connected, "Drop In with"
- *                    whom, the button "End Drop In" hangs up.  Listed while the feature is on
+ *                    whom, the button "End Drop In" hangs up, the event entity "Drop In result" says what came of each
+ *                    call this Echo made (dropin_results).  Listed while the feature is on
  */
 #include <ctype.h>
 #include <errno.h>
@@ -106,7 +107,8 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_SS_UNPAIRED, KEY_DENOISE, KEY_ADB_WIFI, KEY_LUX, KEY_LED_AUTO, KEY_LED_BRIGHTNESS, KEY_SOUND_DETECTION, KEY_SOUND,
        KEY_BT_OUT_SEARCH, KEY_BT_OUT, KEY_BT_OUT_STATUS, KEY_BT_OUT_DELAY, KEY_WIFI_MOTION_ON, KEY_WIFI_MOTION, KEY_WIFI_MOTION_SENS,
        KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF, KEY_WEB_URL, KEY_IDENTIFY, KEY_RESET,
-       KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART };
+       KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
+       KEY_DROPIN_RESULT };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -463,7 +465,8 @@ static int listed(int key)
     case KEY_WHISPERED: return core_whisper_model() && settings_on("whisper_detection");
     case KEY_WIFI_MOTION: case KEY_WIFI_MOTION_SENS: return wifimotion_present() && settings_on("wifi_motion");
     case KEY_LUX: case KEY_LED_AUTO: return have_light;
-    case KEY_DROPIN_SERVICE: case KEY_DROPIN_STATE: case KEY_DROPIN_PEER: case KEY_DROPIN_END: return dropin_running() && settings_on("drop_in");
+    case KEY_DROPIN_SERVICE: case KEY_DROPIN_STATE: case KEY_DROPIN_PEER: case KEY_DROPIN_END: case KEY_DROPIN_RESULT:
+        return dropin_running() && settings_on("drop_in");
     default: return 1;
     }
 }
@@ -546,6 +549,14 @@ static void send_setting_entities(void)
           pb_str(&b, 5, "mdi:phone-in-talk"); send_msg(LIST_TEXT_SENSOR, &b); }
         { PB(b, 128); pb_str(&b, 1, "end_drop_in"); pb_fixed32(&b, 2, KEY_DROPIN_END); pb_str(&b, 3, "End Drop In");
           pb_str(&b, 5, "mdi:phone-hangup"); send_msg(LIST_BUTTON, &b); }
+        /* What came of each call this Echo made, as soon as it is known: refused (and why), not answered, connected.
+         * An event entity: its state is the time of the last one, new for every call however it ended (HA forces each
+         * event's time past the last one: event/__init__.py _trigger_event), so the voice blueprint tells this call's
+         * from the last one's by the state alone.  "Drop In" cannot: a refusal is calling, then idle as before */
+        { PB(b, 512); pb_str(&b, 1, "drop_in_result"); pb_fixed32(&b, 2, KEY_DROPIN_RESULT); pb_str(&b, 3, "Drop In result");
+          pb_str(&b, 5, "mdi:phone-check");
+          for (int i = 0; i < DROPIN_NRESULTS; i++) pb_str(&b, 9, dropin_results[i]);
+          send_msg(LIST_EVENT, &b); }
     }
     if (core_web_port) { PB(b, 128); pb_str(&b, 1, "web_ui_address"); pb_fixed32(&b, 2, KEY_WEB_URL); pb_str(&b, 3, "Web UI address");
       pb_str(&b, 5, "mdi:web"); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
@@ -1580,8 +1591,23 @@ static void sound(const char *event)    /* lock held */
 
 static void whispered(int on) { (void)on; send_setting(KEY_WHISPERED); }   /* lock held */
 static void timers_changed(void) { send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING); }   /* lock held: names first */
-static void dropin_changed(void) { send_setting(KEY_DROPIN_PEER); send_setting(KEY_DROPIN_STATE); }      /* lock held: whom first */
+/* lock held: whom first.  Each state as dropin.c's loop passed it, not the one it is in now: a refusal that came at once
+ * still shows calling, then idle */
+static void dropin_changed(int st, const char *peer)
+{
+    PB(t, 128);
+    pb_fixed32(&t, 1, KEY_DROPIN_PEER); pb_str(&t, 2, peer);
+    if (listed(KEY_DROPIN_PEER)) send_state(TEXT_SENSOR_STATE, &t);
+    t.n = 0; pb_fixed32(&t, 1, KEY_DROPIN_STATE); pb_str(&t, 2, dropin_states[st]);
+    if (listed(KEY_DROPIN_STATE)) send_state(TEXT_SENSOR_STATE, &t);
+}
+
+static void dropin_result(const char *result)   /* lock held */
+{
+    PB(b, 64); pb_fixed32(&b, 1, KEY_DROPIN_RESULT); pb_str(&b, 2, result);
+    if (listed(KEY_DROPIN_RESULT)) send_state(EVENT, &b);
+}
 
 const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, cancel, played, volume_changed, mute_changed, print_mdns, bt_device,
                                      arb_send, arb_changed, sound, whispered, arb_request, settings_changed, entities_changed, arb_scan,
-                                     timers_changed, dropin_changed };
+                                     timers_changed, dropin_changed, dropin_result };

@@ -430,8 +430,9 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
       n += (size_t)snprintf(o + n, cap - n, "},\"sound\":{\"model\":\"%s\",\"failed\":%s", models[sound_model()], core_sound_failed() ? "true" : "false"); }
     n += (size_t)snprintf(o + n, cap - n, "},\"arbitration\":");
     if (arb_running()) n += arb_status_json(o + n, cap - n); else n += (size_t)snprintf(o + n, cap - n, "null");
-    if (dropin_running()) { char peer[64]; int st = dropin_status(peer, sizeof peer);
-        n += (size_t)snprintf(o + n, cap - n, ",\"dropin\":{\"state\":\"%s\",\"peer\":\"%s\"}", dropin_states[st], peer); }   /* peer: a node, [a-z0-9-] */
+    if (dropin_running()) { char peer[64]; int st = dropin_status(peer, sizeof peer); unsigned at; int res = dropin_last(&at);
+        n += (size_t)snprintf(o + n, cap - n, ",\"dropin\":{\"state\":\"%s\",\"peer\":\"%s\",\"result\":\"%s\",\"attempt\":%u}",
+                              dropin_states[st], peer, res >= 0 ? dropin_results[res] : "", at); }   /* peer: a node, [a-z0-9-] */
     n += (size_t)snprintf(o + n, cap - n, ",\"wifi\":"); n += wifi_current_json(o + n, cap - n);
     n += (size_t)snprintf(o + n, cap - n, ",\"clients\":[");
     pthread_mutex_lock(&lk);
