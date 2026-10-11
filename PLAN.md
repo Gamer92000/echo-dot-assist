@@ -473,6 +473,27 @@ Run in this order. Each step says what it proves.
       Tried on the kitchen Echo: controller ready (4C:EF:C0:8E:D2:3F, ACL 4 x 1021, pairing: legacy only, the LE 4.0
       fallback as on biscuit), a Pixel 10 Pro XL paired (key type 4) and picked aptX HD with delay reporting, AVRCP up,
       the "connected" announcement spoken, 48 kHz stream 7 s: longest packet gap 35 ms, ran dry 0 times.
+- [x] Speaker gain (issue #19, 2026-10-11, `spkgain.c`, setting `speaker_gain`, page only): Echo Dot 2 users find it
+      quieter than they like at volume 100, and digital gain is spent (the HAL's stream_volume is 1.0 at 100, 0.398 at
+      50). Codec TLV320AIC32x4 at 2-0018; `HP Driver Gain Volume` (ctl 62, 2 channels, 0..35 = -6..+29 dB in 1 dB) feeds
+      the speaker amplifier; `Ext_Amp_Gain` (6..24 dB) does nothing for the speaker (EchoMuse issue 630). The HAL
+      (`audio.primary.mt8163_headless.so`, `/system/etc/audio_device.xml`) sets 0 in its init sequence, then 6 in
+      `ext_speaker_output`, 11 in `ext_headphone_output` (3.5 mm jack); radar's file has the same values, checkers'
+      (RT5616) and donut (no such file) have nothing alike, so the board field is set on biscuit and radar only.
+      Who writes it, on the Dot 2 with 12 set by hand: nothing while idle (20 s), during and after a mixer TTS stream
+      (Standby/open cycles: the HAL logs `mDacOn=1`, the path is not re-applied), MainVolume/TTSVolume 50 -> 40 -> 50:
+      stays. `stop mixer; start mixer`: init 0, path 6 (logcat `ApplyDeviceTurnonSequenceByName ext_speaker_output`),
+      so at every boot and mixer restart, and per the XML on a jack change. hassmic (puffin, group audio) opens
+      `/dev/snd/controlC0` (system:audio 0660, context su) itself: no root. Trial build on the Dot 2: probe found the
+      control 0..35; +6 dB from the page -> 12; `tinymix ... 6` (as the HAL) back to 12 before the next tinymix ran
+      (control event); 11 left alone, 6 after it -> 12; mixer restarted: HAL wrote 6 at 09:17:55.570, hassmic 12 at
+      .586 (16 ms); restart with speaker_gain=6 in state/config and the control at 6 -> 12 at start; +3, +12, +0 ->
+      9, 18, 6. Not measured: loudness or distortion (the Echo's mics were muted by the button, so no micRaw; nobody
+      listened). Range +0..+12 dB: reports are +6..+7 clean at full volume (issue #19), +9 and +14 fine, +29 clean at
+      half volume on one white Dot 2 and far too loud on a black one (EchoMuse 630). Not exported: speakers differ.
+      Found on the way: `run.sh` starts avahi-daemon as hassmic's child (`&` before `exec runas`), and with SIGCHLD
+      ignored hassmic's first waitpid then blocks until avahi exits: the trial run hung before the settings page until
+      avahi was killed. Installed Echos are not affected (main.sh starts avahi).
 - [x] AVRCP + one music source at a time (2026-09-24, `a2dp.c`, `main.c` `core_music`): SDP records AVRCP 1.5 target
       (category 2) and controller over AVCTP 1.4; target answers UNIT/SUBUNIT INFO, GetCapabilities (company, events:
       volume changed only), RegisterNotification(volume) with INTERIM / CHANGED, SetAbsoluteVolume (0..127 <-> 0..100 %,

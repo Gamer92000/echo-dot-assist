@@ -34,6 +34,11 @@ struct board {
     const char *thermal_type;       /* thermal zone reported as SoC temperature */
     const char *light_sensor[3];    /* files the stock light sensor HAL reads lux from, first that opens; {NULL}: none */
     int volume_steps;               /* volume_step-NN animations of ledcontroller */
+
+    /* speaker gain (spkgain.c): an ALSA control of card 0 in front of the speaker amplifier, 1 dB a step, that the
+     * settings page may raise; NULL: none.  stock: what the audio HAL's speaker path sets it to (audio_device.xml) */
+    const char *speaker_gain;
+    int speaker_gain_stock;
 };
 
 extern const struct board board;

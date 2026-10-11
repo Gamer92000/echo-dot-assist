@@ -8,6 +8,10 @@ What changed for people using the Echo, newest first. Details and measurements a
   them as made by "hassmic", so it found none and Home Assistant just said "Done". It now finds the Echos by their
   "Drop In" entity, and every way it can fail says why: "Only an Echo with Drop In on can drop in" when the device
   you spoke to cannot call. Re-import the blueprint (its menu › Re-import) to get this.
+- **Speaker gain on the Echo Dot 2 and Echo 2** (issue #19): a new setting under Sound on the settings page makes
+  the Echo's own speaker louder at every volume, by up to 12 dB, for an Echo that is too quiet at full volume. It
+  stays set across restarts of the Echo's audio. +6 dB was heard loud and clean on an Echo Dot 2; go up a step at a
+  time and turn it down at the first crackle, as a speaker played distorted for long can be damaged.
 
 ## 2026-10-10
 

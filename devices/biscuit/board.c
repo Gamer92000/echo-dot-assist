@@ -32,4 +32,8 @@ const struct board board = {
      * bus but has no driver bound here: another hardware revision */
     .light_sensor = { "/sys/bus/i2c/devices/0-0029/iio:device0/calibrated_lux", "/sys/bus/i2c/devices/0-0039/als_calibrated_lux" },
     .volume_steps = 30,                                             /* /system/etc/led-resources/volume_step-01..30 */
+    /* TI TLV320AIC32x4 at 2-0018: its headphone driver feeds the speaker amplifier.  0..35 = -6..+29 dB; the HAL's
+     * ext_speaker_output path (/system/etc/audio_device.xml) sets 6, the 3.5 mm jack's 11 (issue #19, 2026-10-11) */
+    .speaker_gain = "HP Driver Gain Volume",
+    .speaker_gain_stock = 6,
 };

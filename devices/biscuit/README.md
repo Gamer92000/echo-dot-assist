@@ -28,6 +28,7 @@ no `brhgptpl`/NAND layout like `crumpet`). Against `donut`'s NS65741 image:
 | mute latch (on the Echo) | `/sys/devices/soc/10010000.keypad/amz_privacy/state`, world-readable, 0 with the mics on. **Do not `cat` the other files there**: reading `power_button_state` crashes the kernel (NULL gpio in `get_power_button_state`), the watchdog reboots the Echo |
 | puffin service (on the Echo) | `/init.project.rc`: user `puffin`, groups `aipc davs dbus inet ace_kvstore ace_group drmrpc system audio keystore cache shell ace_maplite` |
 | A/B (on the Echo) | `ro.boot.slot_suffix=_a`; no `bcbtool` in the running image |
+| speaker gain (on the Echo, 2026-10-11) | DAC TI TLV320AIC32x4 at i2c 2-0018 (mics: four TLV320AIC3101 at 0-0018..1b). Its `HP Driver Gain Volume` (0..35 = -6..+29 dB) feeds the speaker amplifier; the audio HAL sets it to 6 (0 dB) when the mixer starts (`/system/etc/audio_device.xml`, `ext_speaker_output`), 11 for the 3.5 mm jack. The settings page's "Speaker gain" raises it (`board.c` `speaker_gain`, `spkgain.c`) |
 
 Hardware: MediaTek **MT8163**, quad Cortex-A53 @ 1.5 GHz, 512 MB RAM (64-bit kernel, 32-bit userspace), micro-USB with
 data. Reference project: [EchoMuse](https://github.com/wilbowes/EchoMuse) (same idea for this model, but it replaces the

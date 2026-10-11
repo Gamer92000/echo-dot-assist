@@ -342,6 +342,14 @@ this Echo or another, or use it as a preset for the next install (`scripts/setup
 **Identify** (top of the page, and beside each Echo in the list; also a button in Home Assistant): a rainbow on the ring
 for 10 s and stock's setup sound, to tell which Echo is which.
 
+**Speaker gain** (Sound; Echo Dot 2 and Echo 2 only): for an Echo that is too quiet at full volume. It raises the
+amplifier stage in front of the speaker (the codec's "HP Driver Gain"), +0 to +12 dB over stock, so everything the
+speaker plays gets louder at every volume step; the 3.5 mm jack and Bluetooth speakers keep their level. Owners of an
+Echo Dot 2 found +6 dB loud and clean at full volume; speakers differ, though (some Dot 2s are much louder than others
+at the same gain), so raise it a step at a time and lower it at the first crackle: loud music near full volume
+distorts above what your speaker takes, and a speaker played distorted for long can be damaged. Not copied to other
+Echos with the settings, for the same reason.
+
 **Name** (System): the one the Echo gave itself, as the Voice PE does. Its node name `echo-dot-3-5695c4` is the ESPHome
 device name, the host name `<node>.local` and the base of entity ids. It never changes, not even with a reset; name
 the Echo in Home Assistant.

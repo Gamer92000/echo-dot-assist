@@ -110,7 +110,7 @@ There is no single-test selector: run one unit test by building/running its line
 `devices/<codename>/` holds everything model-specific; porting guide in `devices/README.md`:
 - `device.mk`: NDK target, audio/wake backends, stock libs to link (included by the Makefile).
 - `board.c`: `struct board` (`src/hassmic/board.h`): HA identity, keypad/mute-latch/BT device paths, stock wake word
-  and earcon paths, thermal zone, LED volume steps. Linked into every hassmic build, host builds included.
+  and earcon paths, thermal zone, LED volume steps, speaker gain control. Linked into every hassmic build, host builds included.
 - `device.conf`: shell vars (product/firmware id, probe files, `INSTALL` method, daemon user/groups, stock service
   names). Sourced by PC scripts and shipped to the Echo next to `main.sh`/`lockdown.sh`/`alexa-off.sh`; push bundles
   carry it, and `main.sh` refuses a bundle whose `PRODUCT` is not the Echo's.
@@ -299,6 +299,11 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   fragment on arm64 defconfig, `KFRAG`), with AOSP
   `arm-eabi-4.8` / `aarch64-linux-android-4.9`. Without the module donut falls back to `iwpriv wlan0 driver RX_STAT` (last
   frame from anyone). The MT7668's CSI commands are accepted but the chip firmware sends no data.
+- **Speaker gain** (`spkgain.c`, setting `speaker_gain`, page only, not exported): +0..+12 dB on the ALSA control
+  `board.speaker_gain` (Dot 2 / Echo 2: the codec's `HP Driver Gain Volume`, stock 6), written by hassmic itself (group
+  audio). The HAL writes stock at every mixer start (and per its XML on a jack change): a thread on the card's control
+  events writes ours back when it sees stock, and leaves other values (the jack's 11) alone. `HASSMIC_FAKE_SPEAKER_GAIN`
+  (a file) for tests.
 - **Push updates**: `ota.c` receives bundles on the device; `src/tools/otatool.c` verifies/unpacks there (monocypher).
   The PC side is `scripts/otatool.py` (stdlib only: keygen, pack/sign, verify/install, push, adb; same CLI), so the PC
   needs no compiler for it; `tests/otatool_test.sh` holds the two byte for byte to each other, and CI verifies every

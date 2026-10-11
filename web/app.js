@@ -172,7 +172,7 @@ const errText = (e) => e.message === 'login' ? 'Not logged in any more: reload t
 const SECTIONS = [
   { id: 'Voice', icon: 'mic', intro: 'How the Echo hears you, and how it sounds when it does.' },
   { id: 'Wake word', icon: 'ear', intro: 'Which engine listens for the wake word. Home Assistant picks the wake word itself, from the engine\'s list (the satellite\'s "Wake word" select).' },
-  { id: 'Sound', icon: 'speaker', intro: 'Amazon\'s own equalizer, applied to everything the Echo plays: replies, timers, music, Bluetooth.' },
+  { id: 'Sound', icon: 'speaker', intro: 'How the Echo\'s speaker sounds. The equalizer is Amazon\'s own, applied to everything the Echo plays: replies, timers, music, Bluetooth.' },
   { id: 'Lights', icon: 'sun', intro: 'The light ring. It shows listening, thinking, speaking, errors and mute whatever you set here.' },
   { id: 'Features', icon: 'sparkle', intro: 'Optional extras. While a feature is on, its entities are in Home Assistant; switched off, they are removed there. Home Assistant reconnects for a moment when you switch one.' },
   { id: 'Music', icon: 'music', intro: 'Music Assistant plays on the Echo as a Sendspin player.' },
@@ -191,6 +191,7 @@ const HELP = {
   do_not_disturb: { ha: true, help: 'Drops announcements from Home Assistant while on. The ring pulses purple when you switch it on.' },
   timer_ring: { step: 10, help: 'How long a finished timer rings before it gives up. All the way left: until someone stops it ("<wake word>, stop", the action button, or the media player\'s stop in Home Assistant; the wake word alone only pauses it while you talk). Home Assistant\'s "Timer ringing" stays on just as long, so an automation can tell when nobody heard it. Default 1 min.' },
   equalizer_bass: { ha: true }, equalizer_mid: { ha: true }, equalizer_treble: { ha: true },
+  speaker_gain: { help: 'Makes the Echo\'s own speaker louder at every volume, for an Echo that is too quiet at full volume: it raises the amplifier stage in front of the speaker, which a stock Echo leaves at +0 dB. Owners of an Echo Dot 2 heard +6 dB loud and clean at full volume; above that, loud music near full volume can distort, and a speaker that plays distorted for long can be damaged. Raise it a step at a time and turn it down at the first crackle. The 3.5 mm jack and Bluetooth speakers are not affected. Default +0 dB.' },
   led_auto_brightness: { ha: true, help: 'The ring dims and brightens with the room, from the Echo\'s light sensor and Amazon\'s own curve, as on a stock Echo.' },
   led_brightness: { ha: true, help: 'A fixed brightness for the ring. Setting one turns auto brightness off.' },
   bluetooth_announcements: { help: 'Says "Connected to …" and "Disconnected from …" when a phone connects, in your voice assistant\'s voice.' },

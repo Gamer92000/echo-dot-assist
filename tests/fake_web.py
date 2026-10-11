@@ -2,7 +2,7 @@
 """The settings page (web.c) against build/hassmic-host: a browser's side written from the protocol (tests/webclient.py:
 X25519 and BLAKE2b from Python's libraries, not web/crypto.js), plus Home Assistant (aioesphomeapi) watching the same
 Echo.  Login by the action button (SIGUSR2), signed reads and writes, replays and forged signatures, two logins at once,
-export and import, the settings file from before names, features (entities in Home Assistant only while on), adb with
+export and import, the settings file from before names, the speaker gain, features (entities in Home Assistant only while on), adb with
 a press of its own, revoking."""
 import asyncio, gzip, json, os, re, signal, subprocess, sys, tempfile
 from aioesphomeapi import APIClient
@@ -37,7 +37,9 @@ async def main():
                HASSMIC_FAKE_WHISPER="1", HASSMIC_ADB_OPEN=os.path.join(state, "adb-open.root"),
                HASSMIC_FAKE_SOUND_MODEL=os.path.join(state, "aed-model"),           # which sound model there is (sound_none.c)
                HASSMIC_LOG=os.path.join(state, "log"),                              # boot.log, for the page's viewer
-               HASSMIC_CLOCK_SYNCED="0")                                            # stamps: seconds since boot (clock.c)
+               HASSMIC_CLOCK_SYNCED="0",                                            # stamps: seconds since boot (clock.c)
+               HASSMIC_FAKE_SPEAKER_GAIN=os.path.join(state, "speaker-gain"))       # the codec's control (spkgain.c)
+    with open(os.path.join(state, "speaker-gain"), "w") as f: f.write("6\n")          # stock: what the HAL's speaker path sets
     log = os.path.join(state, "log")
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Web", "-L", "-z", "0", "-o", "0",
                              "-a", "16973", "-W", str(WEB)], env=env, stderr=open(log, "w"))
@@ -86,7 +88,8 @@ async def main():
         # Home Assistant: the lean list, and what the page changes
         ha, by, states = await ha_connect()
         page_only = {"mic_level", "noise_reduction", "sound_detection", "debug_access_adb", "join_arbitration_network", "online_updates",
-                     "bluetooth_announcements", "bluetooth_announcement_language", "soc_temperature", "cpu_usage", "wifi_motion_detection"}
+                     "bluetooth_announcements", "bluetooth_announcement_language", "soc_temperature", "cpu_usage", "wifi_motion_detection",
+                     "speaker_gain"}
         check(not page_only & set(by) and {"wake_sound", "mute", "do_not_disturb", "firmware", "equalizer_bass", "led_brightness"} <= set(by),
               f"Home Assistant lists the lean set only: {sorted(set(by))}")
         check("sound" in by and "last_request_whispered" in by and "arbitration_peers" in by and "arbitration_key" in by,
@@ -137,6 +140,24 @@ async def main():
         try: await ha.disconnect()
         except Exception: pass
         ha, by, states = await ha_connect()
+
+        # the speaker gain (spkgain.c): dB over stock on the page; put back whenever the HAL writes stock, else left alone
+        spk = os.path.join(state, "speaker-gain"); ctl = lambda: open(spk).read().strip()
+        g = next((x for x in b.state()["settings"] if x["name"] == "speaker_gain"), {})
+        check(g.get("group") == "Sound" and g.get("value") == 0 and (g.get("min"), g.get("max")) == (0, 12) and not g.get("export")
+              and ctl() == "6", f"speaker gain on the page: +0 dB, up to +12, not exported; the control left at stock: {g}")
+        r = b.set(speaker_gain=6); await asyncio.sleep(0.3)
+        check(r.get("applied") == 1 and ctl() == "12" and cfg().get("speaker_gain") == "6", "+6 dB: the control at 12, saved")
+        open(spk, "w").write("6\n"); await asyncio.sleep(0.6)
+        check(ctl() == "12" and "speaker gain: +6 dB (fake 12, was 6)" in open(log).read(), "the HAL's speaker path put stock back: set again")
+        open(spk, "w").write("11\n"); await asyncio.sleep(0.6)
+        check(ctl() == "11", "the 3.5 mm jack's level (11): left alone")
+        open(spk, "w").write("6\n"); await asyncio.sleep(0.6)
+        check(ctl() == "12", "back on the speaker: +6 dB again")
+        r = b.set(speaker_gain=13)
+        check(r["applied"] == 0 and ctl() == "12", f"+13 dB: out of range, refused: {r['errors']!r}")
+        b.set(speaker_gain=0); await asyncio.sleep(0.6)
+        check(ctl() == "6" and cfg().get("speaker_gain") == "0", "+0 dB: stock again")
 
         # signatures
         body = b"wake_sound=on\n"; hd = b.headers("POST", "/api/set", body)
