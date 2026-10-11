@@ -404,8 +404,11 @@ static void send_sensor(int key, float v)   /* lock held */
  * Illuminance as stock reads it (core_lux) and the level the LED ring shows, which follows it while auto brightness is on
  * (core_led_brightness).  Polled every second, stock's rate once its engine has settled.  The sensor's integer lux flicker
  * by one or two, so a reading goes out when it is 10 % (at least 1 lx) off the last one sent, or after a minute for any
- * change; the LED level whenever it changes (auto ramps in 3 s: a few states). */
-static float sent_lux = NAN; static int sent_level = -1; static time_t sent_at;     /* lock held */
+ * change.  A fixed LED level whenever it changes; an auto one at 2 steps off the last one sent, or after 5 minutes for
+ * any change: the engine moves the ring once its average is half a step off, so in light near a step's edge (dusk) the
+ * sensor's flicker took it 11, 12, 11, 12 every few seconds, all of it in HA's history (2026-10-11).  The ring does
+ * the same under stock. */
+static float sent_lux = NAN; static int sent_level = -1; static time_t sent_at, level_at;     /* lock held */
 
 static void *light_thread(void *arg)
 {
@@ -421,7 +424,10 @@ static void *light_thread(void *arg)
             if (!isnan(lux) && (isnan(sent_lux) || d >= fmaxf(1, sent_lux / 10) || (d > 0 && now - sent_at >= 60))) {
                 send_sensor(KEY_LUX, lux); sent_lux = lux; sent_at = now;
             }
-            if (level >= 0 && level != sent_level) { send_setting(KEY_LED_BRIGHTNESS); sent_level = level; }
+            if (level >= 0 && level != sent_level
+                && (!core_led_auto(-1) || abs(level - sent_level) >= 2 || now - level_at >= 300)) {
+                send_setting(KEY_LED_BRIGHTNESS); sent_level = level; level_at = now;
+            }
         }
         pthread_mutex_unlock(&core_lock);
     }
@@ -431,7 +437,7 @@ static void *light_thread(void *arg)
 static void send_light_states(void)     /* lock held */
 {
     if (have_light) { sent_lux = core_lux(); sent_at = time(NULL); send_sensor(KEY_LUX, sent_lux); }
-    sent_level = core_led_brightness(-1);
+    sent_level = core_led_brightness(-1); level_at = time(NULL);
     send_setting(KEY_LED_AUTO); send_setting(KEY_LED_BRIGHTNESS);
 }
 

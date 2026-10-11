@@ -1131,6 +1131,12 @@ Run in this order. Each step says what it proves.
       off, file `0 60`; auto on → 74, 51, 26, 13 over 4 s (engine restarts from 98 and ramps); fixed 40, then
       `ledctrl -a on` as at boot (13) and hassmic killed: 40 again once HA reconnected. Echo Dot 2 over USB: 40 lx,
       auto 9, same sequence. Echo 2: builds, not tried. Left at auto on all Echos.
+      Auto level to HA throttled (2026-10-11): it went 11/12/11/12 every 2 s to 2 min in HA's history at dusk. The
+      engine is stock's and does that: settled, its average (fixed weight, so 60 s at 1 Hz) moves the ring once it is
+      0.005 (half a step, ~2 lx) off, and in light near a step's edge the sensor's 1-2 lx flicker crosses it. Biscuit
+      in steady light (81-87 lx): 19 for 40 s. Now sent at 2 steps off the last sent or after 5 min; fixed levels at
+      once. The ring is unchanged (one step is ~3.5 % on donut's mute LED table); the user saw the mute LED flicker,
+      not the ring. Not tested by fake_ha_esphome.py: the host build has no auto engine.
 - [x] Sound detection (Alexa Guard) as Home Assistant events (found 2026-10-01; stock path and model worked out, and
       built, the same day: `docs/re-aed.md` section 4). ESPHome switch "Sound detection" (off by default, in the
       settings file) and event entity "Sound" (8 types; smoke/CO merged, human presence left out). A window is dropped

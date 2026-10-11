@@ -4,6 +4,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-11
 
+- **"LED brightness" in Home Assistant no longer flips back and forth.** With auto brightness on, in light near the
+  edge between two levels (at dusk, say), it went 11 %, 12 %, 11 %, 12 % every few seconds and filled the Echo's
+  history. The ring itself does the same under Amazon's software too, one step at a time. Home Assistant now hears of
+  a change of 2 % or more at once, of a smaller one after 5 minutes. A level you set yourself shows at once as before.
 - **Stopping a ringing timer** (issue #21). Home Assistant has a "Stop ringing" button for each Echo: it ends a
   ringing timer and leaves music alone, where the media player's stop also stopped what the media player played. And a
   new setting under Voice on the settings page, "Any request stops a ringing timer" (off by default): with it on,
