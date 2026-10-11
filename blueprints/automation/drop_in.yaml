@@ -38,14 +38,15 @@ blueprint:
       name: Replies
       description: >-
         Per language (the first part of the assistant's language: "de" for "de-CH" too): what is said while the call
-        starts, and when there is no Echo there. {room} is replaced by the area or Echo found, or by what you said.
+        starts, when there is no Echo there, and when the one you spoke to cannot call (not an Echo running hassmic,
+        or Drop In off on it). {room} is replaced by the area or Echo found, or by what you said.
       default:
-        en: ["Calling {room}", "There is no Echo in {room}"]
-        de: ["Ich verbinde mit {room}", "Ich finde kein Echo für {room}"]
-        fr: ["J'appelle {room}", "Je ne trouve pas d'Echo pour {room}"]
-        es: ["Llamando a {room}", "No encuentro ningún Echo en {room}"]
-        it: ["Chiamo {room}", "Non trovo nessun Echo per {room}"]
-        nl: ["Ik verbind met {room}", "Ik vind geen Echo voor {room}"]
+        en: ["Calling {room}", "There is no Echo in {room}", "Only an Echo with Drop In on can drop in"]
+        de: ["Ich verbinde mit {room}", "Ich finde kein Echo für {room}", "Nur ein Echo mit eingeschaltetem Drop In kann verbinden"]
+        fr: ["J'appelle {room}", "Je ne trouve pas d'Echo pour {room}", "Seul un Echo avec Drop In activé peut appeler"]
+        es: ["Llamando a {room}", "No encuentro ningún Echo en {room}", "Solo un Echo con Drop In activado puede llamar"]
+        it: ["Chiamo {room}", "Non trovo nessun Echo per {room}", "Solo un Echo con Drop In attivo può chiamare"]
+        nl: ["Ik verbind met {room}", "Ik vind geen Echo voor {room}", "Alleen een Echo met Drop In aan kan verbinden"]
       selector:
         object:
 
@@ -59,12 +60,16 @@ variables:
   words: "{{ replies[lang] if lang in replies else replies['en'] }}"
   room: "{{ trigger.slots.room | default('') | trim }}"
   source: "{{ trigger.device_id | default('') }}"
-  # hassmic Echos: ESPHome devices made by Amazon that list a Drop In sensor (Drop In switched on)
+  # what is said when the device spoken to cannot call; replies set before this one came have two per language
+  cant: "{{ words[2] if words | count > 2 else 'Only an Echo with Drop In on can drop in' }}"
+  # hassmic Echos that can be called: ESPHome devices that list hassmic's "Drop In" sensor, which only hassmic has and
+  # only while Drop In is on. Not by manufacturer or model: Home Assistant takes both from the ESPHome project name
+  # (manufacturer "hassmic", model "echo-dot-2"), not from the manufacturer the Echo reports (issue #20).
+  # "_2" and up: Home Assistant numbers an entity id that is taken already.
   echos: >-
     {% set ns = namespace(l=[]) %}
     {% for d in integration_entities('esphome') | map('device_id') | reject('none') | unique %}
-      {% if device_attr(d, 'manufacturer') == 'Amazon'
-            and device_entities(d) | select('match', 'sensor\..*_drop_in$') | list | count > 0 %}
+      {% if device_entities(d) | select('match', 'sensor\..*_drop_in(_[0-9]+)?$') | list | count > 0 %}
         {% set ns.l = ns.l + [d] %}
       {% endif %}
     {% endfor %}
@@ -90,19 +95,23 @@ variables:
                | replace('ß', 'ss') | replace('æ', 'ae') %}
     esphome.{{ n | slugify }}_drop_in
 
-conditions:
-  - condition: template
-    value_template: "{{ source in echos }}"
-
+# No conditions: an automation that stops without a reply makes Home Assistant say "Done", so every way out of the
+# actions sets one.
 actions:
-  - if:
-      - condition: template
-        value_template: "{{ target != '' }}"
-    then:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ source not in echos }}"
+        sequence:
+          - set_conversation_response: "{{ cant }}"
+      - conditions:
+          - condition: template
+            value_template: "{{ target == '' }}"
+        sequence:
+          - set_conversation_response: "{{ words[1] | replace('{room}', said) }}"
+    default:
       - action: "{{ source_action }}"
         data:
           target: "{{ device_attr(target, 'name') }}"
       - set_conversation_response: "{{ words[0] | replace('{room}', said) }}"
-    else:
-      - set_conversation_response: "{{ words[1] | replace('{room}', said) }}"
 mode: parallel

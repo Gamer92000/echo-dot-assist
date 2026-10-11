@@ -2,6 +2,13 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-11
+
+- **"Drop in kitchen" calls again.** The Drop In blueprint looked for Echos made by "Amazon", but Home Assistant lists
+  them as made by "hassmic", so it found none and Home Assistant just said "Done". It now finds the Echos by their
+  "Drop In" entity, and every way it can fail says why: "Only an Echo with Drop In on can drop in" when the device
+  you spoke to cannot call. Re-import the blueprint (its menu › Re-import) to get this.
+
 ## 2026-10-10
 
 - **Bluetooth on the Echo 2.** It installed with Bluetooth off, untried, yet Home Assistant still showed the

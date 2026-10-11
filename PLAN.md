@@ -1453,7 +1453,11 @@ Run in this order. Each step says what it proves.
       `drop_in(target)` (keyed link only), text sensors "Drop In"/"Drop In with", button "End Drop In", listed while
       the setting `drop_in` is on; `drop_in_answer` auto/ask; page `POST /api/dropin` and a button per member.
       Blueprint `blueprints/automation/drop_in.yaml` (conversation trigger, area or name, the source's action named by
-      the same slug as `node_of`; templates checked with jinja2 stand-ins, not yet in a real HA).
+      the same slug as `node_of`; templates checked with jinja2 stand-ins). Echos found by their "Drop In" sensor:
+      the first version asked for manufacturer "Amazon", but HA takes manufacturer and model from `project_name`
+      (`hassmic`, `echo-dot-2`) and ignores field 12, so it found none and HA said "Done" (#20; the reporter's real HA
+      2026.9.4, three biscuits, called fine with the manufacturer test gone). No `conditions` now: each way out of
+      the actions sets a reply ("Only an Echo with Drop In on can drop in" for a source that cannot call).
       Device (biscuit, PC host as the other end on the LAN, `HASSMIC_ARB_ADDR=192.168.103.255`):
       - Playback stream: `Voip` exists in the mixer (`PLAYBACK_MODE_VOIP`) and switches libasp to "VoIP mode 1" (call
         tuning, NDVC, normalisation off; logcat). Same speech, volume 50, micRaw -48: residual in micAsr -60..-66 dBFS

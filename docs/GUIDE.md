@@ -136,7 +136,10 @@ pages list them under Echos) and have "Drop In" on (Features, on by default).
   (Settings › Automations › Blueprints › Import, with the file's GitHub address). "Drop in kitchen" or "Verbinde mit
   Küche" then calls the Echo in the area of that name, or one whose name contains the word, from the Echo you spoke to.
   Sentences come for English, German, French, Spanish, Italian and Dutch ("drop in …" in every one); the reply is
-  in the language of the voice assistant you spoke to. Sentences and replies are inputs of the blueprint.
+  in the language of the voice assistant you spoke to. Sentences and replies are inputs of the blueprint. Said to a
+  device that cannot call (Drop In off, or no Echo), it answers "Only an Echo with Drop In on can drop in". It finds
+  the Echos by their "Drop In" entity, so Drop In must be on in both. A blueprint imported before 2026-10-11 found
+  no Echo at all: re-import it (the blueprint's menu › Re-import).
 - **From the settings page**: the Drop In button on another Echo's card under Echos.
 
 The Echo called plays Alexa's Drop In chime and connects at once. With "Drop In answers: after the action button" it

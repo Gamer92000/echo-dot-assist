@@ -1185,6 +1185,8 @@ static void send_device_info(void)
 {
     PB(b, 512);
     pb_str(&b, 2, node_name()); pb_str(&b, 3, mac()); pb_str(&b, 4, "2025.5.0"); pb_str(&b, 5, BUILD_TIME);
+    /* With a project name (8) Home Assistant ignores model (6) and manufacturer (12): it shows the project name's two
+     * halves ("hassmic", "echo-dot-2") and project version (9) as firmware.  Match hassmic Echos by entities, not these */
     pb_str(&b, 6, board.model); pb_str(&b, 8, board.project); pb_str(&b, 9, VERSION);
     pb_str(&b, 12, "Amazon"); pb_str(&b, 13, core_name);
     if (core_web_port) pb_uint(&b, 10, core_web_port); /* webserver_port: HA links the device page to http://<host>:<it> */
