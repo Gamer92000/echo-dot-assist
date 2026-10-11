@@ -18,9 +18,13 @@ Replies start while text to speech is still being generated.
 - While a timer rings or something plays, the wake word is accepted more readily, as Amazon's models are tuned to do.
 - A finished timer rings for a minute ("Timers ring for" on the [settings page](#settings-page): 10 s to 10 min, or
   until stopped), with the cyan timer animation on the ring. Only an explicit stop ends it: "<wake word>, stop", the
-  action button, or the media player's stop in Home Assistant. The wake word alone pauses the ring while you talk, and
+  action button, or the "Stop ringing" button in Home Assistant (the media player's stop does it too, but also stops
+  what the media player plays). The wake word alone pauses the ring while you talk, and
   it goes on afterwards. With microWakeWord or Home Assistant's wake word (no "stop" keyword) the transcript does it:
   "stop" alone (also stopp, halt, arrête, basta, para) ends the ring and the run, before Home Assistant answers.
+  "Stop the timer" is not "stop": it goes to Home Assistant, which has forgotten the finished timer and says none is
+  running. Switch on "Any request stops a ringing timer" on the settings page and whatever you say after the wake
+  word during a ring stops it, in any language; a question asked during a ring then only stops it.
   Several timers can ring at once: each new one gives the ring its full time again, and one stop ends them all.
   Home Assistant's "Timer ringing" is on just as long, so an automation can tell when nobody heard it:
 
@@ -253,6 +257,7 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 | LED auto brightness, LED brightness | a level holds the ring there and switches the automatic off |
 | Illuminance | the Echo's light sensor in lux, for automations |
 | Timer ringing, Ringing timers | on while a finished timer rings; their names (diagnostic), see [Voice](#voice) |
+| Stop ringing | button: ends a ringing timer and nothing else |
 | Firmware | update entity, see [Updating](../README.md#updating) |
 | Identify, Restart, Factory reset | buttons; Restart reboots the Echo |
 | Web UI address | diagnostic: the settings page's address |

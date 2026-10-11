@@ -1510,6 +1510,12 @@ Run in this order. Each step says what it proves.
       so the "stop" goes to the one that rings. Open (device): both seen, with and without
       the mic latch (`micsoff-ready-timer` is not in the map either; layer 3 is above `mics-off_on`'s 1), with real
       HA, and an automation on "still on after 50 s".
+      Issue #21 (2026-10-11): German STT made "Alexa, stopp den Timer" `stoppdentimer`, no stop word, so the run went to
+      HA ("no timer is running") and the ring went on. Now ESPHome button "Stop ringing" (`stop_ringing`, KEY_TIMER_STOP,
+      no entity category: ends the ring only, where media player STOP also flushes what the media player plays), and
+      setting `timer_stop_any` (page-only, exported, off by default): any non-empty normalised STT_END text during a
+      ring stops it and cancels the run, as EchoMuse does (wilbowes/EchoMuse#759). Cost: a question during a ring is
+      not answered. fake_ha_esphome: the button, "Stopp den Timer" with the setting, a request without a ring untouched.
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.

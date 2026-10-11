@@ -135,14 +135,17 @@ int    core_tts_flushing(void);                             /* barge-in: drop au
 void   core_tts_flush(void);
 size_t core_tts_queued(void);                               /* bytes not yet played: for back pressure */
 /* Timers (lock held): Home Assistant's finished and cancelled events, by its timer id; a finished one rings until
- * stopped (button, "<wake word>, stop", media stop; not the wake word alone) or the ring time (core_timer_ring) is up */
+ * stopped (button, "<wake word>, stop", media stop, HA's "Stop ringing", any request with core_timer_stop_any; not the
+ * wake word alone) or the ring time (core_timer_ring) is up */
 void   core_timer_finished(const char *id, const char *name, unsigned total);
 void   core_timer_cancelled(const char *id);
 void   core_alarm_stop(const char *why);                    /* every ringing timer; why: for the log */
-int    core_transcript(const char *text);                   /* speech to text's result: 1 if it was "stop" to a ring
-                                                               (stopped, run cancelled: drop the rest of it) */
+int    core_transcript(const char *text);                   /* speech to text's result: 1 if it stopped a ring ("stop",
+                                                               or anything with core_timer_stop_any; run cancelled: drop
+                                                               the rest of it) */
 int    core_timers_ringing(char *names, size_t cap);        /* count; names: "tea, 5 min", in the order they finished */
 int    core_timer_ring(int set);                            /* seconds a ring lasts, 0 until stopped; -1 reads */
+int    core_timer_stop_any(int set);                        /* 1: any recognised speech stops a ring; -1 reads */
 enum { MUSIC_SENDSPIN = 1, MUSIC_BLUETOOTH = 2 };
 void   core_music(int source, int on);                      /* a music stream runs: the wake word threshold follows */
 void   core_bt_device(const char *name, int on);            /* a Bluetooth speaker source connected / went (not the lock) */

@@ -437,6 +437,35 @@ async def main():
         await until(lambda: ringing() == (False, ""))
         check(ringing() == (False, ""), f"the media player's stop stops a ring from Home Assistant: {ringing()}")
 
+        # "Stop ringing" (issue #21): the ring only, not what the media player plays
+        stop_btn = by.get("stop_ringing")
+        check(stop_btn is not None and not int(stop_btn.entity_category), "Stop ringing button listed, on dashboards (no entity category)")
+        cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t8", "pizza", 900, 0, False)
+        await until(lambda: ringing() == (True, "pizza"))
+        cli.button_command(stop_btn.key)
+        await until(lambda: ringing() == (False, ""))
+        check(ringing() == (False, ""), f'"Stop ringing" stops a ring from Home Assistant: {ringing()}')
+
+        # timer_stop_any (issue #21): "Stopp den Timer", or anything else said during a ring, stops it and cancels the run
+        page.set(timer_stop_any="on")
+        check(conf().get("timer_stop_any") == "on", f"any request stops a ring: saved {conf().get('timer_stop_any')}")
+        cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t9", "tea", 60, 0, False)
+        await until(lambda: ringing() == (True, "tea"))
+        started.clear(); stopped.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "Stopp den Timer"})
+        await until(lambda: ringing() == (False, "") and stopped)
+        check(ringing() == (False, "") and stopped == [True], f'with timer_stop_any "Stopp den Timer" stops the ring and cancels the run: {ringing()}, stops {stopped}')
+        started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)     # without a ring: to Home Assistant
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
+        stopped.clear()
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "what time is it"})
+        await sync(cli); await asyncio.sleep(0.3)
+        check(not stopped, f"with timer_stop_any and no ring, a request goes on as usual: stops {stopped}")
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+        page.set(timer_stop_any="off")
+
         page.set(timer_ring=1)
         check(conf().get("timer_ring") == "1", f"ring time saved: {conf().get('timer_ring')}")
         cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t5", "", 90, 0, False)

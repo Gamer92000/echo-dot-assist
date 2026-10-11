@@ -14,7 +14,8 @@
  *   announcements    VoiceAssistantAnnounceRequest with http URLs; Home Assistant transcodes to the WAV format the media
  *                    player entity advertises, we stream it.  Same path for media_player.play_media.
  *   timers           finished timers ring (core_timer_finished); "Timer ringing" and "Ringing timers" (their names)
- *                    say so until stopped or rung out, for automations; the media player's stop stops them too
+ *                    say so until stopped or rung out, for automations; the button "Stop ringing" and the media
+ *                    player's stop stop them
  *   do not disturb   a switch; announcements are dropped while it is on
  *   arbitration      "Join arbitration network" switch and "Arbitration peers"; the action "arbitration_key" (Home
  *                    Assistant names it esphome.<node>_arbitration_key) through which other Echos hand over their
@@ -108,7 +109,7 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_BT_OUT_SEARCH, KEY_BT_OUT, KEY_BT_OUT_STATUS, KEY_BT_OUT_DELAY, KEY_WIFI_MOTION_ON, KEY_WIFI_MOTION, KEY_WIFI_MOTION_SENS,
        KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF, KEY_WEB_URL, KEY_IDENTIFY, KEY_RESET,
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
-       KEY_DROPIN_RESULT };
+       KEY_DROPIN_RESULT, KEY_TIMER_STOP };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -538,6 +539,10 @@ static void send_setting_entities(void)
       pb_str(&b, 8, "mdi:timer-alert"); send_msg(LIST_BINARY_SENSOR, &b); }
     { PB(b, 128); pb_str(&b, 1, "ringing_timers"); pb_fixed32(&b, 2, KEY_TIMER_NAMES); pb_str(&b, 3, "Ringing timers");
       pb_str(&b, 5, "mdi:timer-outline"); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
+    /* ends the ring and nothing else (issue #21): the media player's stop does too, but it also stops what the media
+     * player plays, so an automation had to start the music again */
+    { PB(b, 128); pb_str(&b, 1, "stop_ringing"); pb_fixed32(&b, 2, KEY_TIMER_STOP); pb_str(&b, 3, "Stop ringing");
+      pb_str(&b, 5, "mdi:timer-off-outline"); send_msg(LIST_BUTTON, &b); }
     /* Drop In (dropin.c): "Drop In with" first, so a trigger on "Drop In" finds it set */
     if (listed(KEY_DROPIN_SERVICE)) {
         { PB(b, 256); PB(a, 48); pb_str(&b, 1, "drop_in"); pb_fixed32(&b, 2, KEY_DROPIN_SERVICE);
@@ -1192,7 +1197,7 @@ static void on_mp_command(const unsigned char *p, const unsigned char *end)
     }
     if (has_vol) core_set_volume((int)(vol * 100 + 0.5f));
     if (has_cmd && cmd == MP_CMD_STOP && media_playing) core_tts_flush();
-    if (has_cmd && cmd == MP_CMD_STOP) core_alarm_stop("media player stop");     /* the one way to stop a ring from afar */
+    if (has_cmd && cmd == MP_CMD_STOP) core_alarm_stop("media player stop");     /* as "Stop ringing" does, for automations */
     if (has_url && url[0]) media_start("", url, 0, 0, 0);
     if (has_cmd && !has_url) send_mp_state();
 }
@@ -1340,6 +1345,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case BUTTON_COMMAND: { struct pbf f;
         while (pb_next(&p, end, &f)) if (f.field == 1 && f.v == KEY_IDENTIFY) core_identify(); else if (f.field == 1 && f.v == KEY_RESET) core_reset("Home Assistant's button");
                                        else if (f.field == 1 && f.v == KEY_RESTART) core_reboot("Home Assistant's button");
+            else if (f.field == 1 && f.v == KEY_TIMER_STOP) core_alarm_stop("Home Assistant's button");
             else if (f.field == 1 && f.v == KEY_DROPIN_END && listed(KEY_DROPIN_END)) dropin_hangup("Home Assistant's button");
         break; }
     case UPDATE_COMMAND: {

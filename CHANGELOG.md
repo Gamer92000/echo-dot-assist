@@ -4,6 +4,12 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-11
 
+- **Stopping a ringing timer** (issue #21). Home Assistant has a "Stop ringing" button for each Echo: it ends a
+  ringing timer and leaves music alone, where the media player's stop also stopped what the media player played. And a
+  new setting under Voice on the settings page, "Any request stops a ringing timer" (off by default): with it on,
+  whatever you say after the wake word while a timer rings stops it, in any language. Until now only "stop" did, and
+  "Alexa, stop the timer" went to Home Assistant, which answered that no timer was running while it rang on. The
+  cost: a question asked during a ring only stops it.
 - **"Drop in kitchen" calls again, and says when it cannot.** The Drop In blueprint looked for Echos made by
   "Amazon", but Home Assistant lists them as made by "hassmic", so it found none and Home Assistant just said "Done"
   (issue #20). It now finds the Echos by what they report themselves, so an Echo or its entities renamed in Home

@@ -894,7 +894,7 @@ static void trigger(int touch)          /* touch: the action button rather than 
 {
     pthread_mutex_lock(&core_lock);
     /* A ringing timer stops only when told to: the button, "<wake word>, stop" (stop_word, core_transcript), Home
-     * Assistant's media stop.  The wake word alone puts it in the background, as on a stock Echo: the ring pauses while
+     * Assistant's media stop or "Stop ringing", any request with timer_stop_any.  The wake word alone puts it in the background, as on a stock Echo: the ring pauses while
      * the pipeline runs ("Alexa, how long is left on the pasta timer" while another rings) and goes on after it */
     if (touch && atomic_load(&alarm_on)) {
         core_alarm_stop("button");
@@ -1340,14 +1340,14 @@ size_t core_tts_queued(void)
 
 static long long mono_ms(void);
 
-/* Finished timers ring until the button, the wake word, "stop", the media player's stop or the ring time (setting
- * timer_ring, 0 = until stopped).  Home Assistant keeps several timers per satellite and forgets each as it finishes
+/* Finished timers ring until the button, "<wake word>, stop", the media player's stop, Home Assistant's "Stop ringing" or
+ * the ring time (setting timer_ring, 0 = until stopped).  Home Assistant keeps several timers per satellite and forgets each as it finishes
  * (intent/timers.py pops it before the finished event), so a cancel never names a ringing one: it is for a timer that
  * still runs, and must not silence the others.  One ring for all of them; each new one gives the ring its full time
  * again; one press stops them all (the Echo cannot ask which).  Home Assistant sees "Timer ringing" and their names. */
 #define RINGING_MAX 4
 static struct { char id[40], name[64]; } ringing[RINGING_MAX];  /* lock held: in the order they finished */
-static int nringing, timer_ring_s = 60;                         /* lock held */
+static int nringing, timer_ring_s = 60, timer_stop_any;         /* lock held */
 static atomic_llong alarm_until;                                /* mono_ms the ring ends; LLONG_MAX: until stopped */
 
 static void alarm_set(int on)          /* lock held */
@@ -1401,7 +1401,10 @@ void core_alarm_stop(const char *why)
 
 /* "<wake word>, stop" with an engine that has no "stop" keyword (microWakeWord, Home Assistant's): the transcript is the
  * word alone.  Home Assistant has nothing to stop a ringing satellite timer with (it forgot the timer when it
- * finished), so the run is cancelled here, as the button does, before Home Assistant answers it */
+ * finished), so the run is cancelled here, as the button does, before Home Assistant answers it.  "Stopp den Timer"
+ * went to Home Assistant, which answered "no timer is running" while it rang on (issue #21): with timer_stop_any any
+ * recognised speech stops the ring, as EchoMuse does, whatever the language and however the ring garbled it; then a
+ * question during a ring is not answered */
 int core_transcript(const char *text)
 {
     static const char *const stops[] = { "stop", "stopp", "stoppen", "stoppa", "halt", "arrête", "arrete", "basta", "para", "pare" };
@@ -1425,13 +1428,13 @@ int core_transcript(const char *text)
         }
     }
     if (!atomic_load(&alarm_on)) return 0;
-    for (size_t i = 0; i < sizeof stops / sizeof stops[0]; i++) if (!strcmp(w, stops[i])) {
-        core_alarm_stop("said stop");
-        if (connected && proto->cancel) { barge_in = 0; atomic_store(&streaming, 0); proto->cancel(); quiet_abort = 1; }
-        core_pipeline_finish();
-        return 1;
-    }
-    return 0;
+    int hit = 0;
+    for (size_t i = 0; i < sizeof stops / sizeof stops[0]; i++) hit |= !strcmp(w, stops[i]);
+    if (!hit && !(timer_stop_any && w[0])) return 0;
+    core_alarm_stop(hit ? "said stop" : "a request during the ring");
+    if (connected && proto->cancel) { barge_in = 0; atomic_store(&streaming, 0); proto->cancel(); quiet_abort = 1; }
+    core_pipeline_finish();
+    return 1;
 }
 
 int core_timers_ringing(char *names, size_t cap)
@@ -1446,6 +1449,12 @@ int core_timer_ring(int set)
 {
     if (set >= 0) timer_ring_s = set;
     return timer_ring_s;
+}
+
+int core_timer_stop_any(int set)
+{
+    if (set >= 0) timer_stop_any = set != 0;
+    return timer_stop_any;
 }
 
 /* The newest music source wins: a Bluetooth device that starts pauses the Sendspin group (the controller role; the

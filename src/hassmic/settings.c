@@ -47,7 +47,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, MUTE, DND, TIMER_RING, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, ARB_MODE, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WIFI_MOTION,
+enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, ARB_MODE, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WIFI_MOTION,
           WIFI_SENS, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, DROPIN, DROPIN_ANSWER, UPDATES, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
@@ -62,6 +62,7 @@ static const struct setting table[NSET] = {
     [MUTE]        = { "mute", "Mute", "Voice", NULL, S_BOOL, 0, 1, 0, 0 },            /* what the Echo is doing right now */
     [DND]         = { "do_not_disturb", "Do not disturb", "Voice", NULL, S_BOOL, 0, 1, 0, 0 },
     [TIMER_RING]  = { "timer_ring", "Timers ring for", "Voice", "s", S_INT, 0, 600, 1, 0 },     /* 0: until stopped */
+    [TIMER_STOP_ANY] = { "timer_stop_any", "Any request stops a ringing timer", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     [BT_ANNOUNCE] = { "bluetooth_announcements", "Bluetooth announcements", "Bluetooth", NULL, S_BOOL, 0, 1, 1, 0 },
     [BT_LANG]     = { "bluetooth_announcement_language", "Announcement language", "Bluetooth", NULL, S_CHOICE, 0, 0, 1, 0 },
     [LED_AUTO]    = { "led_auto_brightness", "LED auto brightness", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
@@ -147,6 +148,7 @@ int settings_get(const struct setting *s)
     case MUTE: return core_soft_mute(-1);
     case DND: return core_dnd(-1);
     case TIMER_RING: return core_timer_ring(-1);
+    case TIMER_STOP_ANY: return core_timer_stop_any(-1);
     case BT_ANNOUNCE: return core_bt_announce(-1);
     case BT_LANG: return bt_lang;
     case LED_AUTO: return core_led_auto(-1);
@@ -183,6 +185,7 @@ static void put(enum id i, int v)
     case MUTE: core_soft_mute(v); break;
     case DND: core_dnd(v); break;
     case TIMER_RING: core_timer_ring(v); break;
+    case TIMER_STOP_ANY: core_timer_stop_any(v); break;
     case BT_ANNOUNCE: core_bt_announce(v); break;
     case BT_LANG: bt_lang = v; break;
     case LED_AUTO: core_led_auto(v); break;
