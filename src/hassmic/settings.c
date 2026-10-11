@@ -89,7 +89,7 @@ static const struct setting table[NSET] = {
     [EQ_MID]      = { "equalizer_mid", "Equalizer mid", "Sound", "dB", S_INT, -6, 6, 1, 0 },
     [EQ_TREBLE]   = { "equalizer_treble", "Equalizer treble", "Sound", "dB", S_INT, -6, 6, 1, 0 },
     /* over stock (spkgain.c); not exported: speakers of one model differ (one Dot 2 is clean where another is too loud) */
-    [SPK_GAIN]    = { "speaker_gain", "Speaker gain", "Sound", "dB", S_INT, 0, SPKGAIN_MAX, 0, 0 },
+    [SPK_GAIN]    = { "speaker_gain", "Speaker gain", "Sound", "dB", S_INT, 0, SPKGAIN_MAX, 0, 0 },  /* settings_max() */
 };
 
 static int present(enum id i)
@@ -118,6 +118,9 @@ const struct setting *settings_find(const char *name)
     for (int i = 0; i < nids; i++) if (!strcmp(table[ids[i]].name, name)) return &table[ids[i]];
     return NULL;
 }
+
+/* the speaker gain's top is the control's: +12 dB on an Echo Dot 2, +2 on an Echo Dot 3 */
+int settings_max(const struct setting *s) { return s - table == SPK_GAIN ? spkgain_max() : s->max; }
 
 int settings_choices(const struct setting *s, const char *const **names)
 {
@@ -216,7 +219,7 @@ static int parse(const struct setting *s, const char *v, int *out)
         return -1;
     case S_INT:
         n = strtol(v, &end, 10);
-        if (!*v || *end || n < s->min || n > s->max) return -1;
+        if (!*v || *end || n < s->min || n > settings_max(s)) return -1;
         *out = (int)n; return 0;
     case S_CHOICE:
         for (int i = 0, k = settings_choices(s, &names); i < k; i++) if (!strcasecmp(v, names[i])) { *out = i; return 0; }

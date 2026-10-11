@@ -16,6 +16,12 @@ Model D9N29T, MediaTek MT8516, `ro.product.device` = `donut_puffin`. Supported w
   - LED ring through `ledctrl` animations (30 volume steps)
   - Bluetooth: MediaTek combo chip on `/dev/stpbt`, H4 framing, owned by `btmanagerd` in stock
   - SoC temperature: thermal zone `mtktscpu`
+  - speaker amplifier: TI TAS2770 at i2c 2-0044 (EVT..HVT boards; the DTB of Proto boards has a TLV320AIC32x4 instead),
+    on I2S; the 3.5 mm jack plays from the MT8167's own codec, and the HAL mutes the TAS2770 meanwhile. Its `DAC
+    Playback Volume` (AMP_LEVEL, 0..20 = 11..21 dBV full-scale output, 0.5 dB a step) is 16 from boot on, never
+    written by the firmware; the settings page's "Speaker gain" raises it by up to 2 dB (`board.c` `speaker_gain`).
+    `PCM Playback Volume` (its digital volume) is at 0 dB in the speaker path: no headroom there
+  - mics: two TI TLV320AIC3101 ADCs at i2c 0-0018 and 0-001a
 - **Findings**: [docs/FINDINGS.md](../../docs/FINDINGS.md), [docs/re-platform.md](../../docs/re-platform.md),
   [docs/re-pryon.md](../../docs/re-pryon.md). Progress and measurements: [PLAN.md](../../PLAN.md).
 

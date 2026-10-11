@@ -479,7 +479,8 @@ Run in this order. Each step says what it proves.
       the speaker amplifier; `Ext_Amp_Gain` (6..24 dB) does nothing for the speaker (EchoMuse issue 630). The HAL
       (`audio.primary.mt8163_headless.so`, `/system/etc/audio_device.xml`) sets 0 in its init sequence, then 6 in
       `ext_speaker_output`, 11 in `ext_headphone_output` (3.5 mm jack); radar's file has the same values, checkers'
-      (RT5616) and donut (no such file) have nothing alike, so the board field is set on biscuit and radar only.
+      (RT5616) has nothing alike. Donut's (`/system/vendor/etc/audio_device.xml`, MediaTek's generic one, naming
+      controls this card does not have) and its `mixer_paths.xml` set no analog gain, but its amplifier has one: below.
       Who writes it, on the Dot 2 with 12 set by hand: nothing while idle (20 s), during and after a mixer TTS stream
       (Standby/open cycles: the HAL logs `mDacOn=1`, the path is not re-applied), MainVolume/TTSVolume 50 -> 40 -> 50:
       stays. `stop mixer; start mixer`: init 0, path 6 (logcat `ApplyDeviceTurnonSequenceByName ext_speaker_output`),
@@ -494,6 +495,27 @@ Run in this order. Each step says what it proves.
       Found on the way: `run.sh` starts avahi-daemon as hassmic's child (`&` before `exec runas`), and with SIGCHLD
       ignored hassmic's first waitpid then blocks until avahi exits: the trial run hung before the settings page until
       avahi was killed. Installed Echos are not affected (main.sh starts avahi).
+      Echo Dot 3 (donut, echo-dot-3-dd7b93, 2026-10-11): idme board_id 0160001400020018, i2c 2-0044 bound to
+      `tas2770` (so an EVT..HVT board of the DTBs, not Proto's TLV320AIC32x4), mics on two TLV320AIC3101 (0-0018,
+      0-001a). Card 0 `mt-snd-card`, 229 controls; the amplifier's two, decoded from the kernel's soc_mixer_control and
+      TLV tables (kernel of boot.img): `DAC Playback Volume` ctl 104, reg 0x03 shift 0, 0..20, TLV 11.00 dB
+      + 0.5 dB a step: TAS2770 AMP_LEVEL, 11..21 dBV full-scale output; and `PCM Playback Volume` ctl 105, reg 0x05,
+      0..255 inverted, TLV -127.5 dB + 0.5: the amplifier's digital volume, 255 = 0 dB. The MT8167 codec's own
+      (`Audio Amp`/`Voice Amp Playback Volume`, PGAs) drive the 3.5 mm jack only. Stock values: DAC 16 (19 dBV, also
+      what the hardware held: regmap debugfs with cache_bypass, reg 03 = 0x10), PCM 255. The driver logs every register
+      write to dmesg (`tas2770_codec_write`), so who writes what is plain: nobody writes reg 0x03 (no firmware file
+      names the control; idle, a mixplay stream, `stop mixer; start mixer` (it reads it), volume 60 -> 70 -> 60 by
+      the keys: none). `PCM Playback Volume` is mixer_paths.xml's: 255 in `normal-playback speaker`, 0 (reg 0xff, mute)
+      in `normal-playback headphone`, put back to 255 when the stream stops. So the headroom is DAC 16 -> 20: +2 dB,
+      0.5 dB steps (board field `speaker_gain_steps` 2; the page's top comes from the control, `spkgain_max()`); none
+      digital. 21 dBV is 15.9 V peak, above the 15 V adapter's: if that is the amplifier's supply (not measured),
+      full-scale samples clip by a fraction of a dB at the top. Trial build on the Dot 3 (binary in
+      /data/local/hassmic, the installed satellite around it): probe `"DAC Playback Volume" 0..20, stock 16`;
+      speaker_gain=2 in state/config -> 20 at start; `tinymix ... 16` -> hassmic's 20 0.5 ms later (dmesg); 18 left
+      alone over a 10 s poll, 16 after it -> 20; mixer restarted, a stream played, volume keys: 20 throughout (hardware
+      read 0x14); page: max 2, +1 -> 18, +3 refused, +0 -> 16, +2 -> 20. Not measured: loudness. This Echo reports
+      a plug in its 3.5 mm jack (`/sys/class/switch/h2w` 1: the HAL takes the headphone path, HPOUT Mux AUDIO_AMP, and
+      mutes the TAS2770), so its speaker was silent throughout.
 - [x] AVRCP + one music source at a time (2026-09-24, `a2dp.c`, `main.c` `core_music`): SDP records AVRCP 1.5 target
       (category 2) and controller over AVCTP 1.4; target answers UNIT/SUBUNIT INFO, GetCapabilities (company, events:
       volume changed only), RegisterNotification(volume) with INTERIM / CHANGED, SetAbsoluteVolume (0..127 <-> 0..100 %,

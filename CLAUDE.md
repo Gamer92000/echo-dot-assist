@@ -307,10 +307,12 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `arm-eabi-4.8` / `aarch64-linux-android-4.9`. Without the module donut falls back to `iwpriv wlan0 driver RX_STAT` (last
   frame from anyone). The MT7668's CSI commands are accepted but the chip firmware sends no data.
 - **Speaker gain** (`spkgain.c`, setting `speaker_gain`, page only, not exported): +0..+12 dB on the ALSA control
-  `board.speaker_gain` (Dot 2 / Echo 2: the codec's `HP Driver Gain Volume`, stock 6), written by hassmic itself (group
-  audio). The HAL writes stock at every mixer start (and per its XML on a jack change): a thread on the card's control
-  events writes ours back when it sees stock, and leaves other values (the jack's 11) alone. `HASSMIC_FAKE_SPEAKER_GAIN`
-  (a file) for tests.
+  `board.speaker_gain` (Dot 2 / Echo 2: the codec's `HP Driver Gain Volume`, stock 6; Dot 3: the TAS2770 amplifier's
+  `DAC Playback Volume` = AMP_LEVEL, stock 16 of 0..20 in 0.5 dB steps (`speaker_gain_steps` 2), so +2 dB at most:
+  `spkgain_max()`/`settings_max()` give the page the control's top), written by hassmic itself (group audio). The Dot 2's
+  HAL writes stock at every mixer start (and per its XML on a jack change; the Dot 3's never writes it): a thread on the
+  card's control events writes ours back when it sees stock, and leaves other values (the jack's 11) alone.
+  `HASSMIC_FAKE_SPEAKER_GAIN=<file>[:<stock>:<steps>:<max>]` for tests (`tests/unit/spkgain_test.c`, `fake_web.py`).
 - **Push updates**: `ota.c` receives bundles on the device; `src/tools/otatool.c` verifies/unpacks there (monocypher).
   The PC side is `scripts/otatool.py` (stdlib only: keygen, pack/sign, verify/install, push, adb; same CLI), so the PC
   needs no compiler for it; `tests/otatool_test.sh` holds the two byte for byte to each other, and CI verifies every

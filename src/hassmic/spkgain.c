@@ -20,6 +20,16 @@
  * A watcher subscribed to the card's control events sets it again as soon as the HAL writes stock, and leaves any other
  * value alone (the jack's level for a line-in on a stereo, or one set by hand); a poll every 10 s covers a write that
  * sends no event.  Started with the first gain above stock: an Echo left at +0 dB never writes to the card.
+ *
+ * Echo Dot 3 (donut, EVT..HVT boards, 2026-10-11): the speaker amplifier is a TI TAS2770 at i2c 2-0044 on I2S; the
+ * jack's path in mixer_paths.xml cuts that I2S and mutes it, and the jack plays from the MT8167's own codec.  The
+ * driver's two controls, read from the kernel's soc_mixer_control and TLV tables: "PCM Playback Volume" (reg 0x05,
+ * inverted, 0..255 = -127.5..0 dB), the amplifier's digital volume, 255 in the speaker path and 0 (muted) in the
+ * jack's: no headroom.  "DAC Playback Volume" (reg 0x03, AMP_LEVEL, 0..20 = 11..21 dBV full-scale output, 0.5 dB a
+ * step: board.speaker_gain_steps 2) is 16, 19 dBV, from boot on: no firmware file names it, and neither the HAL, a
+ * mixer restart (it only reads it), nor a stream starting or stopping writes it (the driver logs every register write
+ * to dmesg).  So +2 dB is all there is (spkgain_max()).  21 dBV is 15.9 V peak, above the 15 V adapter's: if that is the
+ * amplifier's supply (not measured), samples near full scale clip by a fraction of a dB at the top step.
  */
 #include "spkgain.h"
 #include "board.h"
@@ -38,11 +48,12 @@
 #define POLL_MS 10000
 
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
-static int present = -1, fd = -1, wanted, written = -1, started, hi, count;
+static int present = -1, fd = -1, wanted, written = -1, started, hi, count, stock, steps;
 static unsigned numid;
-static const char *fake;                /* HASSMIC_FAKE_SPEAKER_GAIN: a file standing in for the control (tests) */
-
-static int stock(void) { return board.speaker_gain ? board.speaker_gain_stock : 6; }
+/* HASSMIC_FAKE_SPEAKER_GAIN=<file>[:<stock>:<steps per dB>:<max>]: a file standing in for the control (tests), shaped
+ * as the Echo Dot 2's (6:1:35) unless told otherwise, whatever the board */
+static const char *fake;
+static char fake_path[256];
 
 static int ctl_read(void)
 {
@@ -64,8 +75,16 @@ static int ctl_write(int x)
 static int probe(void)
 {
     struct snd_ctl_elem_list l; struct snd_ctl_elem_id *ids; struct snd_ctl_elem_info in;
-    if ((fake = getenv("HASSMIC_FAKE_SPEAKER_GAIN"))) { hi = 35; count = 1; return 1; }
+    const char *env = getenv("HASSMIC_FAKE_SPEAKER_GAIN");
+    if (env) {
+        const char *c = strchr(env, ':');
+        snprintf(fake_path, sizeof fake_path, "%.*s", c ? (int)(c - env) : (int)strlen(env), env);
+        stock = 6; steps = 1; hi = 35; count = 1; fake = fake_path;
+        if (c && sscanf(c, ":%d:%d:%d", &stock, &steps, &hi) != 3) { stock = 6; steps = 1; hi = 35; }
+        return steps > 0 && hi - stock >= steps;
+    }
     if (!board.speaker_gain) return 0;
+    stock = board.speaker_gain_stock; steps = board.speaker_gain_steps > 0 ? board.speaker_gain_steps : 1;
     if ((fd = open(CTL_DEV, O_RDWR | O_NONBLOCK | O_CLOEXEC)) < 0) { fprintf(stderr, "speaker gain: %s: %s\n", CTL_DEV, strerror(errno)); return 0; }
     memset(&l, 0, sizeof l);
     if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_LIST, &l) < 0 || !l.count || !(ids = calloc(l.count, sizeof *ids))) goto none;
@@ -75,9 +94,9 @@ static int probe(void)
     free(ids);
     memset(&in, 0, sizeof in); in.id.numid = numid;
     if (!numid || ioctl(fd, SNDRV_CTL_IOCTL_ELEM_INFO, &in) < 0 || in.type != SNDRV_CTL_ELEM_TYPE_INTEGER
-        || in.value.integer.max <= stock() || in.count < 1 || in.count > 2) goto none;
+        || in.value.integer.max - stock < steps || in.count < 1 || in.count > 2) goto none;
     hi = (int)in.value.integer.max; count = (int)in.count;
-    fprintf(stderr, "speaker gain: \"%s\" %d..%d, now %d\n", board.speaker_gain, (int)in.value.integer.min, hi, ctl_read());
+    fprintf(stderr, "speaker gain: \"%s\" %d..%d, stock %d, now %d\n", board.speaker_gain, (int)in.value.integer.min, hi, stock, ctl_read());
     return 1;
 none:
     fprintf(stderr, "speaker gain: no control \"%s\" on card 0\n", board.speaker_gain);
@@ -88,9 +107,9 @@ none:
 /* mu held.  Stock or what we wrote: the HAL's speaker path, or ours: the setting's.  Anything else stays. */
 static void apply(void)
 {
-    int cur = ctl_read(), target = stock() + wanted;
+    int cur = ctl_read(), target = stock + wanted * steps;
     if (cur < 0 || cur == target) { if (cur == target) written = target; return; }
-    if (cur != stock() && cur != written) return;
+    if (cur != stock && cur != written) return;
     if (ctl_write(target) < 0) { fprintf(stderr, "speaker gain: cannot set %d: %s\n", target, strerror(errno)); return; }
     fprintf(stderr, "speaker gain: %+d dB (%s %d, was %d)\n", wanted, fake ? "fake" : board.speaker_gain, target, cur);
     written = target;
@@ -121,12 +140,22 @@ int spkgain_present(void)
 
 int spkgain_get(void) { pthread_mutex_lock(&mu); int r = wanted; pthread_mutex_unlock(&mu); return r; }
 
+/* whole dB the control has above stock, at most SPKGAIN_MAX: the Dot 2's (35 - 6) / 1 -> 12, the Dot 3's (20 - 16) / 2 -> 2 */
+int spkgain_max(void)
+{
+    if (!spkgain_present()) return 0;
+    pthread_mutex_lock(&mu);
+    int r = (hi - stock) / steps;
+    pthread_mutex_unlock(&mu);
+    return r < SPKGAIN_MAX ? r : SPKGAIN_MAX;
+}
+
 void spkgain_set(int db)
 {
-    if (!spkgain_present()) return;
+    int top = spkgain_max();
+    if (!top) return;
     pthread_mutex_lock(&mu);
-    if (db > hi - stock()) db = hi - stock();
-    wanted = db < 0 ? 0 : db > SPKGAIN_MAX ? SPKGAIN_MAX : db;
+    wanted = db < 0 ? 0 : db > top ? top : db;
     if (wanted || started) apply();
     if (wanted && !started) {
         int one = 1; pthread_t t;

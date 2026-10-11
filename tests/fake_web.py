@@ -38,7 +38,7 @@ async def main():
                HASSMIC_FAKE_SOUND_MODEL=os.path.join(state, "aed-model"),           # which sound model there is (sound_none.c)
                HASSMIC_LOG=os.path.join(state, "log"),                              # boot.log, for the page's viewer
                HASSMIC_CLOCK_SYNCED="0",                                            # stamps: seconds since boot (clock.c)
-               HASSMIC_FAKE_SPEAKER_GAIN=os.path.join(state, "speaker-gain"))       # the codec's control (spkgain.c)
+               HASSMIC_FAKE_SPEAKER_GAIN=os.path.join(state, "speaker-gain"))       # an Echo Dot 2's codec control (spkgain.c)
     with open(os.path.join(state, "speaker-gain"), "w") as f: f.write("6\n")          # stock: what the HAL's speaker path sets
     log = os.path.join(state, "log")
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Web", "-L", "-z", "0", "-o", "0",
