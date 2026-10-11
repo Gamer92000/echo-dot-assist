@@ -8,12 +8,16 @@ What changed for people using the Echo, newest first. Details and measurements a
   "Amazon", but Home Assistant lists them as made by "hassmic", so it found none and Home Assistant just said "Done"
   (issue #20). It now finds the Echos by what they report themselves, so an Echo or its entities renamed in Home
   Assistant are found all the same, and it never just says "Done" any more. It only says "Calling kitchen" once the
-  call has started; otherwise it says why not: no Echo there, the call did not go through (do not disturb, the
-  microphones off, not in the same Echo network), the other Echo is offline, already in a call, or has Drop In off,
-  the one you spoke to cannot drop in, or you named the room it is in. "Drop in upstairs" calls the Echo on that
-  floor, area aliases count, and "Küche", "Kueche" and "kuche" are the same room. Re-import the blueprint (its menu ›
-  Re-import) to get this; replies you set yourself keep working, with English for the new ones until you add yours.
-  Works with every hassmic version that has Drop In.
+  call has started; otherwise it says why not: no Echo there, the other Echo has do not disturb on, its microphones
+  off, Drop In off, is in a call, did not answer, is offline or not in the same Echo network, the one you spoke to
+  is in a call, has its microphones off or cannot drop in, or you named the room it is in. "Drop in upstairs" calls
+  the Echo on that floor, area aliases count, and "Küche", "Kueche" and "kuche" are the same room. Re-import the
+  blueprint (its menu › Re-import) to get this; replies you set yourself keep working, with English for the new ones
+  until you add yours. It works with every hassmic version that has Drop In; with this update on the Echo you speak
+  to, the answer comes at once and says exactly why (before, a refused call was told after 4 s as "did not go
+  through"), and that Echo plays its end-of-call sound when a call does not go through: a call the other Echo
+  refused at once made no sound before, and Home Assistant never saw it start. For your own automations, each Echo
+  now has "Drop In result", which says what came of every call it makes.
 - **Speaker gain on the Echo Dot 2, Echo 2 and Echo Dot 3** (issue #19): a new setting under Sound on the settings
   page makes the Echo's own speaker louder at every volume, for an Echo that is too quiet at full volume: by up to
   12 dB on an Echo Dot 2 or Echo 2, by up to 2 dB on an Echo Dot 3, whose amplifier has no more above where Amazon

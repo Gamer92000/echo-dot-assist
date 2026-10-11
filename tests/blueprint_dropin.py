@@ -10,6 +10,8 @@ also run in a real Home Assistant against three build/hassmic-host, one of them 
 Cases: renamed entity ids and devices, umlauts, two Echos in one area, Drop In off on either side, other ESPHome
 devices with look-alike entities, manufacturer "Amazon" (HA without a project name), an action under
 the second name only or under none, busy and offline Echos, floors, aliases, hand-set replies with two entries.
+Echos as released before 2026-10-11 (only "Drop In") and after (also "Drop In result", and "calling" before any
+refusal), each as caller and as callee: every result's reply, and how long Home Assistant would wait.
 
 Also: every devices/*/board.c project's second half (Home Assistant's model) is the slug of its default name, which the
 blueprint's second action name relies on."""
@@ -45,6 +47,8 @@ class HA:
         self.areas, self.floors, self.devices, self.entities, self.states = {}, {}, {}, {}, {}
         self.services, self.calls, self.entries = {}, [], {}
         self.pending = []                               # state changes on their way to Home Assistant, in order
+        self.events = 0                                 # event entities' times
+        self.waited = 0                                 # seconds the waits that ran out took (their timeouts)
 
     def area(self, aid, name, floor=None, aliases=()): self.areas[aid] = dict(name=name, floor=floor, aliases=list(aliases))
     def floor(self, fid, name, aliases=()): self.floors[fid] = dict(name=name, aliases=list(aliases))
@@ -53,10 +57,10 @@ class HA:
         self.devices[did] = dict(name=name, manufacturer=manufacturer, model=model, area_id=area, name_by_user=name_by_user,
                                  connections={("mac", mac.lower())} if mac else set())
 
-    def entity(self, eid, device, state=None, platform="esphome", area=None, icon=None, disabled=False):
+    def entity(self, eid, device, state=None, platform="esphome", area=None, icon=None, disabled=False, attrs=None):
         self.entities[eid] = dict(device_id=device, platform=platform, area_id=area, disabled=disabled)
         if state is not None and not disabled:
-            self.states[eid] = dict(state=state, attributes={"icon": icon} if icon else {})
+            self.states[eid] = dict(state=state, attributes=dict({"icon": icon} if icon else {}, **(attrs or {})))
 
     def set_state(self, eid, state): self.states[eid]["state"] = state
 
@@ -64,7 +68,11 @@ class HA:
         """the next state change; False when none is left (a wait times out)"""
         if not self.pending: return False
         e, st = self.pending.pop(0)
-        if e in self.states: self.states[e]["state"] = st
+        if e in self.states and isinstance(st, tuple):  # an event: a new time (each later than the last), its type
+            self.events += 1
+            self.states[e]["state"] = f"2026-10-11T12:{self.events // 60:02d}:{self.events % 60:02d}.000+00:00"
+            self.states[e]["attributes"]["event_type"] = st[1]
+        elif e in self.states: self.states[e]["state"] = st
         return True
 
     # helpers/template/helpers.py resolve_area_id
@@ -237,6 +245,7 @@ class Automation:
                 done = bool(render(self.env, s["wait_template"], v))
                 while not done and self.ha.deliver(): done = bool(render(self.env, s["wait_template"], v))
                 v["wait"] = {"completed": done, "remaining": 0}
+                if not done: self.ha.waited += float(render(self.env, s.get("timeout", 0), v))
             elif "action" in s:
                 try: self.action(render(self.env, s["action"], v), render(self.env, s.get("data", {}), v),
                                  render(self.env, s.get("target", {}), v))
@@ -261,11 +270,15 @@ class Automation:
 
 # ------------------------------------------------------------------ a house of Echos
 
+REFUSALS = {"dnd": "do_not_disturb", "muted": "microphones_off", "off": "drop_in_off", "busy": "busy"}
+
+
 class Echo:
     """a hassmic Echo as Home Assistant has it: device, entities (renamable ids), the drop_in action; calls between
-    Echos as dropin.c makes them (the target by name or node, same network, not busy)"""
+    Echos as dropin.c makes them (the target by name or node, same network, not busy).  new: as from 2026-10-11, with
+    "Drop In result" and "calling" before the invite goes out"""
     def __init__(self, ha, did, model, default_name, mac, area=None, dropin=True, network="home", sensor_id=None,
-                 manufacturer="hassmic", name_by_user=None, online=True, ids=None):
+                 manufacturer="hassmic", name_by_user=None, online=True, ids=None, new=False, result_id=None):
         self.ha, self.id, self.network = ha, did, network
         self.name = f"{default_name} {mac.replace(':', '')[-6:].lower()}"
         self.node = re.sub(r"[^a-z0-9]+", "-", self.name.lower()).strip("-")
@@ -282,7 +295,14 @@ class Echo:
             ha.entity(f"sensor.{pre}_drop_in_with", did, st(""), icon="mdi:account-voice")
             ha.entity(f"button.{pre}_end_drop_in", did, st("unknown"), icon="mdi:phone-hangup")
             ha.services[f"esphome.{self.node.replace('-', '_')}_drop_in"] = self.drop_in
-        self.online, self.refuse, self.ask = online, False, False
+            if new:
+                self.result = result_id or f"event.{pre}_drop_in_result"
+                ha.entity(self.result, did, st("2026-10-10T08:00:00.000+00:00"), icon="mdi:phone-check",
+                          attrs={"event_types": ["connected", "ringing", "busy", "do_not_disturb", "microphones_off", "drop_in_off",
+                                                 "declined", "not_answered", "no_answer", "not_found", "busy_here",
+                                                 "microphones_off_here", "cancelled", "failed"], "event_type": "connected"})
+        self.online, self.refuse, self.ask, self.new = online, False, False, new
+        self.muted = self.busy = False                  # what this Echo knows and Home Assistant may not yet
 
     def state(self): return self.ha.states[self.sensor]["state"] if self.sensor in self.ha.states else None
 
@@ -291,6 +311,7 @@ class Echo:
         if not self.online: raise RuntimeError("Error communicating with device")     # HomeAssistantError: continuable
         node = re.sub(r"[^a-z0-9]+", "-", str(data["target"]).lower()).strip("-")
         peer = next((e for e in ECHOS if e.node == node and e is not self and e.network == self.network), None)
+        if self.new: return self.drop_in_new(peer)
         if peer is None or self.state() != "idle": return                              # refused here: stays idle
         ev = self.ha.pending
         ev.append((self.sensor, "calling"))
@@ -303,19 +324,32 @@ class Echo:
         else:
             ev += [(peer.sensor, "connected"), (self.sensor, "connected")]
 
+    def drop_in_new(self, peer):
+        """dropin.c from 2026-10-11: a result for every call, "calling" first whatever the other Echo says"""
+        ev, res = self.ha.pending, lambda r: (self.result, ("event", r))
+        if peer is None: ev.append(res("not_found")); return
+        if self.muted: ev.append(res("microphones_off_here")); return
+        if self.busy or self.state() != "idle": ev.append(res("busy_here")); return
+        ev.append((self.sensor, "calling"))
+        why = "drop_in_off" if not peer.sensor else REFUSALS.get(peer.refuse) or ("busy" if peer.state() != "idle" else None)
+        if not peer.online: ev += [(self.sensor, "idle"), res("no_answer")]                  # 4 s later
+        elif why: ev += [(self.sensor, "idle"), res(why)]
+        elif peer.ask: ev += [(peer.sensor, "ringing"), res("ringing")]
+        else: ev += [(peer.sensor, "connected"), (self.sensor, "connected"), res("connected")]
+
 
 ECHOS = []
 
 
-def house():
+def house(new=False):
     ha = HA()
     ha.floor("ground", "Ground floor", aliases=["downstairs"]); ha.floor("first", "Upstairs")
     ha.area("office", "Office", "first"); ha.area("kitchen", "Küche", "ground"); ha.area("living", "Living Room", "ground", ["Lounge"])
     ha.area("bedroom", "Bedroom", "first"); ha.area("garage", "Garage")
     ECHOS[:] = [
-        Echo(ha, "dev_office", "echo-dot-2", "Echo Dot 2", "AA:BB:CC:1C:DF:2E", "office"),
-        Echo(ha, "dev_kitchen", "echo-dot-3", "Echo Dot 3", "AA:BB:CC:56:95:C4", "kitchen", sensor_id="sensor.kuchen_dropin_renamed"),
-        Echo(ha, "dev_living", "echo-2", "Echo 2", "AA:BB:CC:00:00:01", "living", name_by_user="Wohnzimmer-Echo"),
+        Echo(ha, "dev_office", "echo-dot-2", "Echo Dot 2", "AA:BB:CC:1C:DF:2E", "office", new=new, result_id="event.buero_ergebnis"),
+        Echo(ha, "dev_kitchen", "echo-dot-3", "Echo Dot 3", "AA:BB:CC:56:95:C4", "kitchen", sensor_id="sensor.kuchen_dropin_renamed", new=new),
+        Echo(ha, "dev_living", "echo-2", "Echo 2", "AA:BB:CC:00:00:01", "living", name_by_user="Wohnzimmer-Echo", new=new),
     ]
     # not Echos: a Voice PE and an ESPHome gadget with look-alike entities
     ha.device("dev_vpe", "Home Assistant Voice 0a1b2c", "Nabu Casa", "Home Assistant Voice PE", "AA:BB:CC:0A:1B:2C", "office")
@@ -502,7 +536,66 @@ def main():
     ha = house(); r, _ = ask(ha, "", "dev_office", slots=False)
     check(r == "There is no Echo in", f"no room slot: {r!r}")
 
-    # 9. the model + MAC name rests on HA's model (project_name's second half) being the slug of the default name
+    # 9. Echos that say what came of a call ("Drop In result"): the reason, at once; a refusal is calling then idle
+    def new_house(): ha = house(new=True); return ha, ECHOS
+    ha, (off, kit, liv) = new_house(); r, a = ask(ha, "küche", "dev_office")
+    check(r == "Calling Küche" and off.state() == "connected" and ha.waited == 0 and not a.errors,
+          f"new firmware, 'drop in küche': {r!r} (waits run out: {ha.waited} s)")
+    check(ha.states["event.buero_ergebnis"]["attributes"]["event_type"] == "connected", "  its result found under an id renamed")
+    for refuse, want in (("dnd", "Küche has do not disturb on"), ("muted", "The microphones are off in Küche"),
+                         ("busy", "Küche is in a call"), ("off", "Drop In is off on Küche")):
+        ha, (off, kit, liv) = new_house(); kit.refuse = refuse
+        r, a = ask(ha, "küche", "dev_office")
+        check(r == want and ha.waited == 0 and off.state() == "idle", f"  refused ({refuse}): {r!r} (waits run out: {ha.waited} s)")
+    ha, (off, kit, liv) = new_house(); kit.ask = True
+    r, _ = ask(ha, "küche", "dev_office")
+    check(r == "Calling Küche" and ha.waited == 0 and kit.state() == "ringing", f"  it rings there: {r!r}")
+    ha, (off, kit, liv) = new_house(); kit.online = False                      # HA still has it, it is gone
+    r, _ = ask(ha, "küche", "dev_office")
+    check(r == "Küche did not answer", f"  no answer, HA still has it online: {r!r}")
+    ha, (off, kit, liv) = new_house(); kit.online = False; ha.set_state(kit.sensor, "unavailable")
+    r, _ = ask(ha, "küche", "dev_office")
+    check(r == "Küche is offline", f"  no answer, offline in HA: {r!r}")
+    ha, (off, kit, liv) = new_house(); kit.network = "other"
+    r, _ = ask(ha, "küche", "dev_office")
+    check(r == "Küche is not in this Echo's network" and ha.waited == 0 and "calling" not in [s for e, s in ha.pending],
+          f"  in another Echo network: {r!r}")
+    ha, (off, kit, liv) = new_house(); off.muted = True
+    r, _ = ask(ha, "küche", "dev_office", lang="de")
+    check(r == "Die Mikrofone dieses Echos sind aus", f"  this Echo muted (HA not told yet), German: {r!r}")
+    ha, (off, kit, liv) = new_house(); off.busy = True
+    r, _ = ask(ha, "küche", "dev_office")
+    check(r == "This Echo is in a call already", f"  this Echo in a call HA has not heard of: {r!r}")
+    two = {"en": ["Calling {room}", "No Echo in {room}"]}
+    ha, (off, kit, liv) = new_house(); kit.refuse = "dnd"
+    r, _ = ask(ha, "küche", "dev_office", inputs={"replies": two})
+    check(r == "Küche has do not disturb on", f"  replies set by hand before: the new ones in English: {r!r}")
+    # old and new together: an old callee refuses with the same words; an old caller is waited for as before
+    ha = house(); ECHOS[0] = off = Echo(ha, "dev_office", "echo-dot-2", "Echo Dot 2", "AA:BB:CC:1C:DF:2E", "office", new=True)
+    ECHOS[1].refuse = "dnd"
+    r, _ = ask(ha, "küche", "dev_office")
+    check(r == "Küche has do not disturb on" and ha.waited == 0, f"  new caller, released callee refusing: {r!r}")
+    ha, (off, kit, liv) = new_house(); ECHOS[0] = off = Echo(ha, "dev_office", "echo-dot-2", "Echo Dot 2", "AA:BB:CC:1C:DF:2E", "office")
+    del ha.states["event.buero_ergebnis"]; del ha.entities["event.buero_ergebnis"]
+    kit.refuse = "fast"
+    r, _ = ask(ha, "küche", "dev_office")
+    check(r == "The call to Küche did not go through" and ha.waited == 4, f"  released caller, a refusal before 'calling': {r!r} after {ha.waited} s")
+    # the action under the second name only: what the first costs
+    ha, (off, kit, liv) = new_house()
+    del ha.services["esphome.echo_dot_2_1cdf2e_drop_in"]
+    ha.devices["dev_office"]["name"] = "Büro"
+    ha.services["esphome.echo_dot_2_1cdf2e_drop_in"] = off.drop_in
+    r, a = ask(ha, "küche", "dev_office")
+    check(r == "Calling Küche" and ha.waited == 2, f"  first action name not found: {r!r}, {ha.waited} s for it (released Echos: 4 s)")
+    ha, (off, kit, liv) = new_house(); del ha.services["esphome.echo_dot_2_1cdf2e_drop_in"]
+    r, a = ask(ha, "küche", "dev_office")
+    check(r == "The call to Küche did not go through" and ha.waited == 6,
+          f"  no action at all: {r!r} after {ha.waited} s (the last name waits long: a slow link is no failure)")
+    ha, (off, kit, liv) = new_house(); ha.set_state("event.buero_ergebnis", "unavailable")
+    r, _ = ask(ha, "küche", "dev_office")
+    check(r == "Calling Küche", f"  its result entity unavailable at first: {r!r}")
+
+    # 10. the model + MAC name rests on HA's model (project_name's second half) being the slug of the default name
     for f in sorted(glob.glob(os.path.join(ROOT, "devices", "*", "board.c"))):
         src = open(f).read()
         project = re.search(r'\.project\s*=\s*"([^"]*)"', src).group(1)

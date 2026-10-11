@@ -44,28 +44,42 @@ blueprint:
         Per language (the first part of the assistant's language: "de" for "de-CH" too), in this order: the call
         starts; there is no Echo there; the one you spoke to cannot call (not an Echo running hassmic, or Drop In off
         on it); the call did not start; the Echo called is in a call already; the one you spoke to is in a call
-        already; Drop In is off on the Echo called; the Echo called is offline; the place named is the Echo's own.
-        {room} is replaced by the area, floor or Echo found, or by what you said. A list with fewer entries (set
-        before some of these came) takes the English one for the rest.
+        already; Drop In is off on the Echo called; the Echo called is offline; the place named is the Echo's own;
+        and, said only by Echos with hassmic from 2026-10-11 on, which tell why: the Echo called has do not disturb
+        on; its microphones are off; the microphones of the one you spoke to are off; the Echo called is not in its
+        Echo network; it did not answer. {room} is replaced by the area, floor or Echo found, or by what you said. A
+        list with fewer entries (set before some of these came) takes the English one for the rest.
       default:
         en: ["Calling {room}", "There is no Echo in {room}", "Only an Echo with Drop In on can drop in",
              "The call to {room} did not go through", "{room} is in a call", "This Echo is in a call already",
-             "Drop In is off on {room}", "{room} is offline", "This is the Echo in {room}"]
+             "Drop In is off on {room}", "{room} is offline", "This is the Echo in {room}",
+             "{room} has do not disturb on", "The microphones are off in {room}", "This Echo's microphones are off",
+             "{room} is not in this Echo's network", "{room} did not answer"]
         de: ["Ich verbinde mit {room}", "Ich finde kein Echo für {room}", "Nur ein Echo mit eingeschaltetem Drop In kann verbinden",
              "Die Verbindung mit {room} kam nicht zustande", "{room} ist schon verbunden", "Dieses Echo ist schon verbunden",
-             "Drop In ist aus bei {room}", "{room} ist offline", "Das ist das Echo in {room}"]
+             "Drop In ist aus bei {room}", "{room} ist offline", "Das ist das Echo in {room}",
+             "Bei {room} ist Nicht stören an", "Die Mikrofone in {room} sind aus", "Die Mikrofone dieses Echos sind aus",
+             "{room} ist nicht im Echo-Netzwerk dieses Echos", "{room} hat nicht geantwortet"]
         fr: ["J'appelle {room}", "Je ne trouve pas d'Echo pour {room}", "Seul un Echo avec Drop In activé peut appeler",
              "L'appel vers {room} n'a pas abouti", "{room} est déjà en communication", "Cet Echo est déjà en communication",
-             "Drop In est désactivé sur {room}", "{room} est hors ligne", "C'est l'Echo de {room}"]
+             "Drop In est désactivé sur {room}", "{room} est hors ligne", "C'est l'Echo de {room}",
+             "{room} est en mode Ne pas déranger", "Les micros de {room} sont coupés", "Les micros de cet Echo sont coupés",
+             "{room} n'est pas dans le réseau de cet Echo", "{room} n'a pas répondu"]
         es: ["Llamando a {room}", "No encuentro ningún Echo en {room}", "Solo un Echo con Drop In activado puede llamar",
              "La llamada a {room} no se pudo hacer", "{room} ya está en una llamada", "Este Echo ya está en una llamada",
-             "Drop In está desactivado en {room}", "{room} está desconectado", "Este es el Echo de {room}"]
+             "Drop In está desactivado en {room}", "{room} está desconectado", "Este es el Echo de {room}",
+             "{room} tiene No molestar activado", "Los micrófonos de {room} están apagados", "Los micrófonos de este Echo están apagados",
+             "{room} no está en la red de este Echo", "{room} no ha contestado"]
         it: ["Chiamo {room}", "Non trovo nessun Echo per {room}", "Solo un Echo con Drop In attivo può chiamare",
              "La chiamata a {room} non è riuscita", "{room} è già in chiamata", "Questo Echo è già in chiamata",
-             "Drop In è disattivato su {room}", "{room} non è in linea", "Questo è l'Echo di {room}"]
+             "Drop In è disattivato su {room}", "{room} non è in linea", "Questo è l'Echo di {room}",
+             "{room} ha Non disturbare attivo", "I microfoni di {room} sono spenti", "I microfoni di questo Echo sono spenti",
+             "{room} non è nella rete di questo Echo", "{room} non ha risposto"]
         nl: ["Ik verbind met {room}", "Ik vind geen Echo voor {room}", "Alleen een Echo met Drop In aan kan verbinden",
              "De verbinding met {room} kwam niet tot stand", "{room} is al in gesprek", "Deze Echo is al in gesprek",
-             "Drop In staat uit op {room}", "{room} is offline", "Dit is de Echo in {room}"]
+             "Drop In staat uit op {room}", "{room} is offline", "Dit is de Echo in {room}",
+             "{room} staat op Niet storen", "De microfoons in {room} staan uit", "De microfoons van deze Echo staan uit",
+             "{room} zit niet in het netwerk van deze Echo", "{room} heeft niet geantwoord"]
       selector:
         object:
 
@@ -81,7 +95,9 @@ variables:
   # for entries a hand-set list lacks (lists set before the later replies came have two or three)
   fallback: ["Calling {room}", "There is no Echo in {room}", "Only an Echo with Drop In on can drop in",
              "The call to {room} did not go through", "{room} is in a call", "This Echo is in a call already",
-             "Drop In is off on {room}", "{room} is offline", "This is the Echo in {room}"]
+             "Drop In is off on {room}", "{room} is offline", "This is the Echo in {room}",
+             "{room} has do not disturb on", "The microphones are off in {room}", "This Echo's microphones are off",
+             "{room} is not in this Echo's network", "{room} did not answer"]
   lang: >-
     {{ ((trigger.user_input | default({})).language | default('en', true) | string | lower
         | regex_replace('[-_].*$', '')) or 'en' }}
@@ -103,7 +119,8 @@ variables:
   # one that is taken).  Icon or entity id alone still count where the state cannot tell (unavailable, the sensor
   # disabled).  On any other device only all three make an Echo.  The devices: those of ESPHome entities, and of
   # every voice satellite (integration_entities first looks for a config entry titled "esphome", and takes only its
-  # entities if there is one).
+  # entities if there is one).  "Drop In result" (hassmic from 2026-10-11 on): the event entity whose event types
+  # (kept while unavailable: a capability attribute) are hassmic's, whatever its id.
   echos: >-
     {% set ok = ['idle', 'calling', 'ringing', 'connected'] %}
     {% set ns = namespace(l=[]) %}
@@ -118,6 +135,11 @@ variables:
         {% if (s >= 4 or s % 2 == 1 or (hassmic and s >= 2)) and s > b.score %}{% set b.sensor = e %}{% set b.score = s %}{% endif %}
       {% endfor %}
       {% if hassmic or b.score == 7 %}
+        {% set res = namespace(e='') %}
+        {% for e in device_entities(d) | select('match', 'event\\.') %}
+          {% set t = state_attr(e, 'event_types') %}
+          {% if t is iterable and t is not string and 'no_answer' in t and 'busy_here' in t %}{% set res.e = e %}{% endif %}
+        {% endfor %}
         {% set name = device_attr(d, 'name') or '' %}
         {% set shown = device_attr(d, 'name_by_user') or name %}
         {% set mac = namespace(v='') %}
@@ -150,6 +172,7 @@ variables:
           {% set k.name = k.name + [x | slugify, x | lower | replace('ä', 'ae') | replace('ö', 'oe') | replace('ü', 'ue') | replace('ß', 'ss') | slugify] %}
         {% endfor %}
         {% set ns.l = ns.l + [{'id': d, 'shown': shown, 'sensor': b.sensor, 'state': states(b.sensor) if b.sensor else '',
+                               'result': res.e,
                                'actions': actions, 'call': name or (model ~ '-' ~ mac.v[-6:]), 'areas': areas, 'floors': floors,
                                'area_keys': k.area | reject('in', ['', 'unknown']) | unique | list,
                                'floor_keys': k.floor | reject('in', ['', 'unknown']) | unique | list,
@@ -246,16 +269,26 @@ actions:
       - conditions: "{{ pick.state in ['calling', 'ringing', 'connected'] }}"
         sequence:
           - set_conversation_response: "{{ words[4] | replace('{room}', said) }}"
-    # The call.  hassmic's "Drop In" goes to calling as it takes the action (dropin.c dropin_call), to connected when
-    # the other Echo answers (milliseconds: both waits end at once), stays at calling while that one rings (Drop In
-    # answers: after the action button; its own sensor says ringing), and goes back to idle when it refuses (do not
-    # disturb, microphones off, in a call: its log says why) or says nothing for 4 s (ANSWER_MS).  A quick refusal can
-    # come before Home Assistant hears "calling" (hassmic's loop reports the state it finds then): the first wait then
-    # runs out, after as long as hassmic waits for an answer, and the reply is the same.  Under the second action name
-    # only if the first did not reach the Echo, which happens only where the two differ.  With the sensor disabled
-    # there is nothing to wait for.  Each wait's result is read in the sequence of the wait: Home Assistant before
-    # 2025.4 kept variables set in a nested sequence there.
+    # The call.  Echos from 2026-10-11 on say what came of it: "Drop In result", an event entity whose state (the
+    # event's time) is new for every call, its event type connected, ringing or why not; and their "Drop In" goes to
+    # calling before the call goes out, so an action that reached the Echo shows within moments, refused or not: the
+    # first wait is then 2 s where another action name is left to try (6 s for the last: a slow Wi-Fi must not turn a
+    # call that started into "did not go through"), and the result comes within hassmic's 4 s for an answer
+    # (ANSWER_MS).
+    # Older Echos say only "Drop In": calling as they take the action, connected when the other Echo answers
+    # (milliseconds: both waits end at once), calling while that one rings (Drop In answers: after the action button;
+    # its own sensor says ringing), idle again when it refuses or says nothing for 4 s.  A refusal that comes at once
+    # can reach Home Assistant before "calling" (their loop reported only the state it found): the first wait then runs
+    # out after 4 s, and the reply is the same.
+    # Under the second action name only if the first did not reach the Echo, which happens only where the two differ.
+    # With the sensor disabled there is nothing to wait for.  Each wait's result is read in the sequence of the wait:
+    # Home Assistant before 2025.4 kept variables set in a nested sequence there; so each branch below sets its reply.
     default:
+      - variables:
+          # the result's state before this call: any other is this call's (Home Assistant gives every event a time of
+          # its own, later than the last: event/__init__.py _trigger_event)
+          before: "{{ states(src.result) if src.result else '' }}"
+          gone: ['unavailable', 'unknown']
       - repeat:
           sequence:
             - variables:
@@ -277,21 +310,40 @@ actions:
                   data:
                     target: "{{ pick.call }}"
                   continue_on_error: true
-            - wait_template: "{{ src.state != 'idle' or is_state(src.sensor, ['calling', 'ringing', 'connected']) }}"
-              timeout: 4
+            - wait_template: >-
+                {{ src.state != 'idle' or is_state(src.sensor, ['calling', 'ringing', 'connected'])
+                   or (src.result != '' and states(src.result) not in [before] + gone) }}
+              timeout: "{{ (2 if repeat.index < src.actions | count else 6) if src.result else 4 }}"
               continue_on_timeout: true
             - variables:
                 sent: "{{ wait.completed }}"
-            - wait_template: >-
-                {{ not sent or src.state != 'idle' or not is_state(src.sensor, 'calling') or is_state(pick.sensor, 'ringing') }}
-              timeout: 5
+            - wait_template: "{{ not sent or not src.result or states(src.result) not in [before] + gone }}"
+              timeout: 6
               continue_on_timeout: true
             - variables:
-                ok: "{{ sent and (src.state != 'idle' or is_state(src.sensor, ['calling', 'ringing', 'connected'])) }}"
-            - set_conversation_response: >-
-                {{ (words[0] if ok else words[7] if is_state(pick.sensor, 'unavailable')
-                    else words[4] if is_state(pick.sensor, ['calling', 'ringing', 'connected']) else words[3])
-                   | replace('{room}', said) }}
+                result: >-
+                  {{ (state_attr(src.result, 'event_type') or '') if sent and src.result and states(src.result) not in [before] + gone
+                     else '' }}
+            - if: "{{ result != '' }}"
+              then:
+                - set_conversation_response: >-
+                    {% set i = {'connected': 0, 'ringing': 0, 'busy': 4, 'busy_here': 5, 'drop_in_off': 6, 'do_not_disturb': 9,
+                                'microphones_off': 10, 'microphones_off_here': 11, 'not_found': 12, 'declined': 13,
+                                'not_answered': 13}.get(result, 3) %}
+                    {% set i = 7 if result == 'no_answer' and is_state(pick.sensor, 'unavailable')
+                               else 13 if result == 'no_answer' else i %}
+                    {{ words[i] | replace('{room}', said) }}
+              else:
+                - wait_template: >-
+                    {{ not sent or src.state != 'idle' or not is_state(src.sensor, 'calling') or is_state(pick.sensor, 'ringing') }}
+                  timeout: 5
+                  continue_on_timeout: true
+                - variables:
+                    ok: "{{ sent and (src.state != 'idle' or is_state(src.sensor, ['calling', 'ringing', 'connected'])) }}"
+                - set_conversation_response: >-
+                    {{ (words[0] if ok else words[7] if is_state(pick.sensor, 'unavailable')
+                        else words[4] if is_state(pick.sensor, ['calling', 'ringing', 'connected']) else words[3])
+                       | replace('{room}', said) }}
           until: "{{ (sent is defined and sent) or repeat.index >= src.actions | count }}"
 mode: parallel
 max: 25

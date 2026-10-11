@@ -1585,6 +1585,12 @@ Run in this order. Each step says what it proves.
         runs in a run of its own (ServiceNotFound), which `automation.trigger` gives no response back from: the
         result has to come through an entity anyway, which every HA version has. The HelloRequest's API version would
         not tell either: aioesphomeapi sent 1.13 both before and with responses, 1.14 only from 2025-12-29.
+      - Blueprint: with "Drop In result" on the source, the first wait (did the action reach the Echo) is 2 s instead
+        of 4 where another action name is left to try ("calling" or a result arrives within moments), 6 s for the
+        last (a slow Wi-Fi must not make a call that started "did not go through"), then up to 6 s for the result,
+        which picks the reply: five more per language (do not disturb, microphones off there, here, not in the
+        network, did not answer). Without it (released builds), the old waits. `tests/blueprint_dropin.py` 81 checks,
+        incl. both kinds as caller and callee and the seconds the waits that run out cost.
       Device (biscuit, PC host as the other end on the LAN, `HASSMIC_ARB_ADDR=192.168.103.255`):
       - Playback stream: `Voip` exists in the mixer (`PLAYBACK_MODE_VOIP`) and switches libasp to "VoIP mode 1" (call
         tuning, NDVC, normalisation off; logcat). Same speech, volume 50, micRaw -48: residual in micAsr -60..-66 dBFS
@@ -1610,8 +1616,9 @@ Run in this order. Each step says what it proves.
       10 s, 509 frames played on each side, 0 missing, longest gap 44-48 ms.
       Open (device): a talker at the called Echo (does speech open the gate fast
       enough, is the ARA with listening mode toggled fine), the wake word in VoIP mode, call LED animations' look,
-      the blueprint with real Echos (it ran in a real HA against PC Echos, above), and how long a refusal takes to
-      reach HA over Wi-Fi (whether "calling" shows first).
+      the blueprint with real Echos (it ran in a real HA against PC Echos, above), and whether 2 s is enough over a
+      busy Wi-Fi for "calling" to reach HA (the blueprint then tries the second action name only where it differs:
+      never on an Echo with its own name).
 - [~] A new IP address (2026-10-11, GitHub issue #17: new addresses from the router, Home Assistant lost the Echos
       until a power cycle, "sometimes it takes 2"). Home Assistant's ESPHome config flow moves an entry to the address
       in an mDNS announcement only while the entry is not connected (`config_flow.py`
