@@ -24,6 +24,8 @@ int  a2dp_out_searching(void);
 void a2dp_out_enable(int on);              /* play on the paired speaker (connect, reconnect) or on the Echo again; on
                                               without one searches */
 int  a2dp_out_enabled(void);
+int  a2dp_out_stay(int set);               /* off keeps the link and only plays on the Echo again (-1 reads); a lost link
+                                              is paged for once the switch is on again */
 int  a2dp_out_delay(int set);              /* the speaker's latency for Sendspin in ms, -1 reads */
 void a2dp_out_status(char *buf, unsigned n);   /* "None", "Searching...", "<name>: playing" and so on */
 #endif

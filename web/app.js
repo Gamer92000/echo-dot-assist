@@ -300,7 +300,10 @@ const HELP = {
   wifi_motion_sensitivity: { parent: 'wifi_motion', help: 'How much the signal has to change to count as motion. Higher catches more, with more false alarms.' },
   bluetooth_audio: { icon: 'phone', ha: ['Bluetooth pairing'], help: 'Phones can pair with the Echo and play music on it (SBC, AAC, aptX). Start pairing with the "Bluetooth pairing" switch in Home Assistant; the ring shows a blue chaser meanwhile. Phones paired before still connect while this is off.' },
   bluetooth_speaker_delay: { parent: 'bluetooth_speaker', step: 10, help: 'How much later the speaker plays than the Echo would, so Music Assistant keeps it in step with your other players. Raise it if this speaker lags behind them, lower it if it runs ahead. Each speaker differs; the Echo keeps one value.' },
-  bluetooth_speaker_keep_awake: { parent: 'bluetooth_speaker', help: 'For speakers that cut off the first word of every reply: many switch their amplifier off while the Echo is silent and need half a second to switch it on again. With this on the Echo plays a 20 Hz tone too low and too quiet to hear under everything, so the speaker never hears silence. Leave it off if your speaker plays replies whole.' },
+  bluetooth_speaker_keep_awake: { parent: 'bluetooth_speaker', help: 'For speakers that cut off the first word of every reply: many switch their amplifier off while the Echo is silent and need half a second to switch it on again. With this on the Echo plays a 20 Hz tone too low and too quiet to hear under everything, so the speaker never hears silence. Leave it off if your speaker plays replies whole.',
+    warnings: () => settingValue('bluetooth_speaker_stay_connected') ? STAY_TONE_WARN : [] },
+  bluetooth_speaker_stay_connected: { parent: 'bluetooth_speaker', help: 'Switching "Play on Bluetooth speaker" off then only moves the sound back to the Echo and keeps the speaker connected, so switching it on again takes well under a second instead of a reconnect. Meant for automations that put music on the speaker and leave replies on the Echo. Home Assistant\'s "Bluetooth speaker" shows "Standing by" meanwhile.',
+    warnings: () => [...STAY_WARN, ...STAY_TONE_WARN], before: (v) => v === 'on' ? stayDialog() : true },
   drop_in: { icon: 'talk', ha: ['Drop In', 'Drop In with', 'End Drop In', 'the action drop_in'], help: 'Talk between two Echos, as Alexa\'s Drop In: one Echo calls another of your Echos (the ones listed under Echos below), and both hear each other. Start it from Home Assistant (the action drop_in, or by voice with the "Drop In" blueprint: "drop in kitchen") or with the Drop In button of an Echo below. End it with the action button, "<wake word>, stop" or "hang up", on either Echo. Off: this Echo neither calls nor can be called.',
     note: 'An Echo that is called opens its microphone at once, unless it is set to answer with the button below. Only your own Echos can call it (the Echo network\'s key), never with do not disturb on or the microphones off. The ring shows green while a call runs.' },
   drop_in_answer: { parent: 'drop_in', help: 'At once: a call connects straight away, with a chime, as Alexa\'s Drop In does. After the action button: the Echo rings for 30 s, and only a press of its action button connects; nobody can listen into a room where nobody is.' },
@@ -486,7 +489,11 @@ let built = '';
 function control(s) {
   const id = 's-' + s.name;
   if (s.type === 'bool') {
-    const i = h('input', { type: 'checkbox', id, role: 'switch', onchange: () => set(s.name, i.checked ? 'on' : 'off') });
+    const i = h('input', { type: 'checkbox', id, role: 'switch', onchange: async () => {
+      const v = i.checked ? 'on' : 'off', before = (HELP[s.name] || {}).before;      // a dialog of the page's own first
+      if (before && !(await before(v))) { i.checked = !i.checked; return; }
+      set(s.name, v);
+    } });
     return { el: h('label', { class: 'switch' }, i, h('span')), update: (x) => { i.checked = !!x.value; } };
   }
   if (s.type === 'int') {
@@ -546,12 +553,16 @@ function settingRow(s) {
   const info = HELP[s.name] || {}, c = control(s), saved = h('span', { class: 'saved' }, 'Saved');
   const wide = s.type === 'int' || !!info.modes, stack = s.type === 'choice';      // stack: control under the text on a phone
   const status = info.status ? h('div', { class: 'row-status' }) : null;      // under the whole row: what the last change found
+  const warns = info.warnings ? h('ul', { class: 'pc row-warn' }) : null;     // what it costs, small, under its help
   const row = h('div', { class: 'row' + (wide ? ' wide' : '') + (stack ? ' stack' : '') },
     h('div', {},
       h('label', { class: 'row-label', for: 's-' + s.name }, label(s), info.ha === true ? haBadge() : null, saved),
-      info.help ? h('p', { class: 'help' }, info.help) : null),
+      info.help ? h('p', { class: 'help' }, info.help) : null, warns),
     h('div', { class: 'ctl' }, c.el), status);
-  const paint = () => { if (status) status.replaceChildren(...[info.status()].filter(Boolean)); };
+  const paint = () => {
+    if (status) status.replaceChildren(...[info.status()].filter(Boolean));
+    if (warns) warns.replaceChildren(...info.warnings().map((t) => h('li', {}, icon('warn'), h('span', {}, t))));
+  };
   controls.set(s.name, { update: (x) => { c.update(x); paint(); }, paint, saved, root: row });
   return row;
 }
@@ -761,6 +772,22 @@ async function restarted() {
   toast('The satellite restarts, back in a few seconds\u2026');
   await waitBack(echo);
   await load().catch(() => {});
+}
+
+// "Stay connected when off" (a2dp.c out_stay): what keeping the speaker's link costs, under the row and to accept first
+const STAY_WARN = [
+  'While the Echo holds it, the speaker usually cannot connect to your phone or anything else, unless it takes two sources at once.',
+  'A battery speaker stays connected and runs down sooner.',
+  'Many speakers switch themselves off after some minutes without sound. The Echo then connects again only once "Play on Bluetooth speaker" is on, which takes a few seconds as before.'];
+const STAY_TONE_WARN = [
+  'With "Keep the speaker awake" on, the Echo keeps sending the speaker its inaudible tone while it stands by, so it should not switch itself off. Whether that works is up to the speaker: some go by loudness and switch off all the same.',
+  'That tone is a Bluetooth stream that never stops. Bluetooth and Wi-Fi share the Echo\'s antenna, so a few more Wi-Fi broadcasts get lost (other Echos\' wake word claims among them), as whenever the Echo plays on the speaker.'];
+
+function stayDialog() {
+  return ask({ title: 'Keep the speaker connected?', ok: 'Keep it connected',
+    body: [h('p', {}, '"Play on Bluetooth speaker" switched off will only move the sound back to the Echo; the speaker stays connected, so switching it on again is quick.'),
+      h('p', { class: 'ask-sub' }, 'What it costs:'),
+      h('ul', { class: 'pc' }, [...STAY_WARN, ...STAY_TONE_WARN].map((t) => h('li', { class: 'con' }, icon('minus'), h('span', {}, t))))] });
 }
 
 function haSwitchDialog() {

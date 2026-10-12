@@ -4,6 +4,12 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-12
 
+- **Switching between the Bluetooth speaker and the Echo is quick now** (issue #25). With the new setting "Stay
+  connected when off" in the Bluetooth speaker's card on the settings page, switching "Play on Bluetooth speaker" off
+  keeps the speaker connected and only moves the sound back to the Echo, so switching it on again takes well under a
+  second instead of a reconnect: handy for an automation that puts music on the speaker and leaves replies on the
+  Echo. Home Assistant's "Bluetooth speaker" shows "Standing by" meanwhile. With "Keep the speaker awake" on as well,
+  the Echo keeps the speaker from switching itself off. The page lists what it costs and asks before it goes on.
 - **Bluetooth speakers that cut off the first word** (issue #24). Some speakers switch their amplifier off while the
   Echo is silent and need about half a second to switch it on again, so every reply lost its start. A new setting in
   the Bluetooth speaker's card on the settings page, "Keep the speaker awake" (off by default), plays a tone too low

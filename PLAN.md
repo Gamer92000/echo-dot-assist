@@ -1244,6 +1244,30 @@ Run in this order. Each step says what it proves.
       53 keeps such tones whole (sbc.c encoded, libsbc decoded: 1 LSB 0.82 rms in, 0.94 out; 32 LSB 22.64 / 22.64; zero
       stays zero). Open: whether the reporter's speaker counts -50 dBFS at 20 Hz as sound (its threshold, a DC/high
       pass before its detector); not tried with a speaker that mutes.
+- [~] Bluetooth speaker: stay connected when off (2026-10-12, issue #25: music from Music Assistant on the speaker,
+      replies, timers and sounds on the Echo; the reporter flips "Play on Bluetooth speaker" from an automation, and
+      every flip was a full reconnect). **Decision**: no split by stream. The mixer has one output
+      (`docs/re-a2dp-source.md`: routed, the Echo's speaker is silent), so the two ways to split were: (a) route the
+      mixer only while music plays: replies during music still go to the speaker, and moving the route around each
+      reply drags the music along, costs a gap, an AVDTP START plus the speaker's unmute (#24) per reply, and jumps
+      Sendspin's latency (`btout_latency_us`); (b) feed Sendspin / the phone's A2DP past the mixer straight into
+      btout's SBC encoder: the real split, but the front end then has no echo reference for the music the mic hears
+      from the speaker (whether it uses the routed one is unmeasured either), so wake word and STT over music from a
+      speaker nearby would get worse by an unknown amount; it would also lose the mixer's volume, equalizer and
+      ducking, and ESPHome media player URLs share the TTS queue anyway. Neither was worth it for a niche wish. Instead
+      the switch gets fast: setting `bluetooth_speaker_stay_connected` (page only, off, not exported: battery or mains
+      speaker; state/config; a2dp.c gets it only while the feature is on, so switching the feature off still drops
+      the link). Switch off then only moves the route (`btout_route`; the mixer switch took 0.08 s with our AIPC
+      service, 2026-10-01); the link and AVDTP stay ("Bluetooth speaker" says "Standing by"); a link lost meanwhile is
+      not paged for until the switch is on (a sleeping speaker stays asleep), one that calls us is kept. With
+      keep-awake on too, btout.c's hal_thread makes the tone itself while not routed (zeros + tone, paced, same RTP
+      stream), so AVDTP stays started: against the speaker's auto-off, and the mixer's START is acked at once on the
+      way back (no AVDTP START, no unmute). That tone does not count as streaming for the BLE proxy's scan pause
+      (`a2dp_streaming`), or the proxy would never scan again. Volume while standing by: the Echo's own; the speaker's
+      buttons only update the value kept for the route (`btout_speaker_volume` gates both ways, set around
+      `core_speaker`). The page lists the costs under the row and asks before switching on: the speaker taken from
+      phones, battery, speakers that switch off anyway, whether the tone keeps one awake, constant airtime beside Wi-Fi.
+      Open: not tried on a device yet; switch time on air; which speakers' auto-off the tone defeats.
 - [x] First install from the running OS fixed (2026-10-01, issue #2: an Echo Dot 2 set up by someone else, guided
       setup). Four faults on the way, all first-install only: `firmware/<model>/images` was never created
       (`payload_dump.py` makes it now); adb gone for a moment between `deploy.sh` and the lockdown (now `wait_adb`);

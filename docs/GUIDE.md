@@ -240,6 +240,16 @@ name and state.
 - **First word cut off**: some speakers switch their amplifier off while the Echo is silent and switch it on only
   once sound comes, too late for the start of a reply. "Keep the speaker awake" (settings page, off by default) plays
   a 20 Hz tone at -50 dBFS under everything, too low and too quiet to hear, so the speaker never hears silence.
+- **Switching quickly**: the Echo can only play everything on one or the other (Amazon's audio mixer has a single
+  output), so music on the speaker with replies on the Echo is a matter of switching "Play on Bluetooth speaker" from an
+  automation when music starts and stops. "Stay connected when off" (settings page, off by default) makes that quick:
+  switched off, the speaker stays connected and only the sound moves back to the Echo ("Bluetooth speaker" shows
+  "Standing by"), and switching on takes well under a second instead of a reconnect. If the speaker drops the link
+  meanwhile, the Echo connects again only once the switch is on. With "Keep the speaker awake" as well, the Echo keeps
+  sending its inaudible tone while standing by, against speakers that switch themselves off when idle; whether that
+  works depends on the speaker. The costs: the speaker is taken (phones usually cannot connect to it), a battery
+  speaker runs down sooner, and with the tone the Bluetooth stream never stops, which takes airtime from the Echo's
+  Wi-Fi (they share an antenna). The page asks before switching it on.
 - The Echo still listens for the wake word meanwhile. How well it hears over loud music from elsewhere in the room is
   not measured yet.
 - SBC only (every speaker has it), one speaker at a time. Setting it up needs ESPHome mode.
