@@ -54,6 +54,7 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_web_davs.py       # models downloaded from a fake Amazon: login by code pair with the device
                                              # attestation token, DAVS, unpack, staging, install, deregister
 .venv/bin/python tests/fake_ha_update.py      # online updates: page channel + HA update entity, fake GitHub, root's installer
+.venv/bin/python tests/fake_ha_wakesound.py   # wake sound removal: the PC's stand-in echo (HASSMIC_FAKE_ECHO) off/on
 .venv/bin/python tests/fake_ha_ring.py        # light ring: the animation set from stand-in stock files, HA's light,
                                              # the Echo's own patterns first, the listening ring turned by the beam
 .venv/bin/python tests/fake_improv.py         # setup from a phone: Improv over BLE against a fake controller on a pty
@@ -138,7 +139,10 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Core (`main.c`, `core.h`)**: state machine `IDLE/LISTENING/THINKING/SPEAKING`, pipeline timeout, TTS queue with
   barge-in flush, alarms (timers), mute (hardware latch that software can set but never clear, plus a soft mute from HA),
   volume, LED ring, earcons, wake word threshold hints. The front end is told when a command is spoken (`listening()`:
-  without it its cancellers remove the talker after 1.5 s). `micdenoise.c` (RNNoise, settings page off/low/medium/high, off by default) then
+  without it its cancellers remove the talker after 1.5 s). `earsup.c` (wake sound removal: our own UI sounds taken back
+  out of the pipeline's audio by a residual echo suppressor keyed to the PCM we play; experimental, setting
+  `wake_sound_removal`, off by default; holds the audio from the sound until its echo has passed, then releases it at
+  once), then `micdenoise.c` (RNNoise, settings page off/low/medium/high, off by default), then
   `micgain.c`: AGC on the mic audio sent to the pipeline (the stock
   micAsr level is ~30 dB below what STT expects, and HA ignores the ESPHome audio settings); the wake word gets it raw. `core_lock` guards state and client socket writes; `core.h`
   documents per function whether the lock is held.

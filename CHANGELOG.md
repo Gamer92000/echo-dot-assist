@@ -4,6 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-12
 
+- **Wake sound removal (experimental).** Speaking straight on after the wake word means talking over the tone, and
+  part of it stays in what Home Assistant hears: Amazon's echo canceller leaves it about as loud as a quiet voice. A
+  new experimental card under Features on the settings page, "Wake sound removal" (off by default), finds the tone in the microphone each time
+  and turns down only its few pitches; your words around it stay. While the tone plays, the Echo holds back what it
+  hears and then sends it all at once, so the first second of a command reaches Home Assistant about a second later.
 - **No pause needed after the wake word.** What you say right after the wake word reaches Home Assistant whole, so
   "Alexa turn on the light" in one breath works. Before, the first 120-180 ms after the word were lost: the time the
   wake word engine takes to be sure, plus a moment until the microphone stream started. Echos settling who answers

@@ -49,7 +49,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, ARB_MODE, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WIFI_MOTION,
+enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, ARB_MODE, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WIFI_MOTION,
           WIFI_SENS, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
@@ -61,6 +61,9 @@ static const struct setting table[NSET] = {
     [MIC_LEVEL]   = { "mic_level", "Mic level", "Voice", "dBFS", S_INT, MICGAIN_LEVEL_MIN, MICGAIN_LEVEL_MAX, 1, 0 },
     [DENOISE]     = { "noise_reduction", "Noise reduction", "Voice", NULL, S_CHOICE, 0, 0, 1, 0 },
     [WAKE_SOUND]  = { "wake_sound", "Wake sound", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* earsup.c; experimental: a card of the page's Features, but no feature: it has no entities, and switching a
+     * feature makes Home Assistant reconnect */
+    [WAKE_SOUND_REMOVAL] = { "wake_sound_removal", "Wake sound removal (experimental)", "Features", NULL, S_BOOL, 0, 1, 1, 0 },
     [MUTE]        = { "mute", "Mute", "Voice", NULL, S_BOOL, 0, 1, 0, 0 },            /* what the Echo is doing right now */
     [DND]         = { "do_not_disturb", "Do not disturb", "Voice", NULL, S_BOOL, 0, 1, 0, 0 },
     [TIMER_RING]  = { "timer_ring", "Timers ring for", "Voice", "s", S_INT, 0, 600, 1, 0 },     /* 0: until stopped */
@@ -151,6 +154,7 @@ int settings_get(const struct setting *s)
     case MIC_LEVEL: return mic_level;
     case DENOISE: return core_mic_denoise(-1);
     case WAKE_SOUND: return core_wake_sound(-1);
+    case WAKE_SOUND_REMOVAL: return core_wake_sound_removal(-1);
     case MUTE: return core_soft_mute(-1);
     case DND: return core_dnd(-1);
     case TIMER_RING: return core_timer_ring(-1);
@@ -190,6 +194,7 @@ static void put(enum id i, int v)
     case MIC_LEVEL: mic_level = v; core_mic_level(v); break;
     case DENOISE: core_mic_denoise(v); break;
     case WAKE_SOUND: core_wake_sound(v); break;
+    case WAKE_SOUND_REMOVAL: core_wake_sound_removal(v); break;
     case MUTE: core_soft_mute(v); break;
     case DND: core_dnd(v); break;
     case TIMER_RING: core_timer_ring(v); break;

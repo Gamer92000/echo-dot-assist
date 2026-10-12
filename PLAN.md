@@ -778,6 +778,28 @@ Run in this order. Each step says what it proves.
       and came down for the command. Now the gain holds (levels and gain frozen, peak limit on) while one of our sounds
       plays and 250 ms after. The sound itself stays in the stream (RNNoise takes another 4..17 dB of it on the captures).
       Not done: a recording from HA with the fix; whether to skip the stream during the sound as the Voice PE does
+- [~] Wake sound removal (2026-10-12, experimental, setting `wake_sound_removal`, off by default; `earsup.c`): since the
+      pipeline gets the audio from the wake word's end, people talk over the sound. A residual echo suppressor keyed
+      to the sound we play, not a second linear canceller (it would have to adapt during the talker's voice, and what
+      the stock one leaves is mostly non-linear). Stock `ui_wakesound`: 650 ms, loud for ~400 ms, 90 % of its energy in
+      8 of 5178 FFT bins, 99 % in 48, mostly under 1.1 kHz: speech keeps nearly all of its spectrum. The earcon thread
+      registers the PCM (resampled to 16 kHz) and the capture clock before `play_earcon`, and again when the mixer takes
+      it (`audio_earcon_started`: the queue starts draining). The pipeline audio from there is held until delay range +
+      sound + 300 ms tail have passed, then: delay by correlating log magnitudes in the sound's ≤96 strongest bins
+      (centred per frame and per bin, so broadband speech drops out), -50..+400 ms after the mixer took it in 4 ms
+      steps; coupling per bin = 25 % quantile of mic/sound over the frames where the sound is strong (not its modelled
+      tail); gain 1 - 2 E²/|Y|² floored at -30 dB (E: coupling x sound, tail -3.2 dB per 16 ms); only (gain - 1) x mic is
+      overlap-added back, so frames left alone come out bit-exact. Released at once (Home Assistant buffers), the gain
+      holds over it. Match under 0.13: nothing done.
+      `tests/unit/earsup_test.c` (chime like stock, echo -57 dBFS 100 ms after with reflections at 3 and 10 ms, noise
+      -65, espeak speech): echo alone 20.4 dB down; speech as loud as the echo: echo left + speech lost 16.6 dB under
+      the echo, speech level kept within 0.1 dB; speech 22 dB louder: delay still found, 9.2 dB; 32 dB louder or no
+      echo: untouched, bit-exact. Plain magnitude correlation had lost the delay once speech was 7 dB louder.
+      `tests/fake_ha_wakesound.py` (`HASSMIC_FAKE_ECHO=90:-20` in `audio_file.c`): found at 94 ms, the blip's tones
+      in Home Assistant's audio 23.3 dB over the room off, 2.6 dB on; stream whole. Cost on the Dot 2 (armv7, biscuit):
+      61 ms once per sound, under `core_lock` (77 -> 96 ms before log tables and 4 ms steps).
+      Not done: anything on a device with the real sound and room (the delay and how much the canceller leaves, per
+      model and output: jack, speaker), STT results with it, whether the 1 s held hurts with streaming STT
 - [~] Noise reduction (2026-09-30): RNNoise 0.1.1 (`src/third_party/rnnoise`, BSD-3) in `micdenoise.c`, ahead of the gain,
       only on what goes to the pipeline; HA switch "Noise reduction", off by default, in the settings file's first
       field (superseded the same day: a select with three strengths and no level change around RNNoise, see "Noise

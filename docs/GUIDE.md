@@ -13,6 +13,14 @@ the [README](../README.md).
 
 Replies start while text to speech is still being generated.
 
+- **Speak straight on** after the wake word: Home Assistant gets everything from the end of the word, so "Alexa turn on
+  the light" in one breath works, and you need not wait for the tone. The tone itself is partly still in what Home
+  Assistant hears: Amazon's echo canceller leaves about as much of it as a quiet voice. "Wake sound removal"
+  (experimental, a card under Features on the settings page, off by default) takes it out: the Echo holds back the audio while the tone plays, finds
+  the tone in it and turns down only its few pitches, then sends it all at once, so the first second of what you said
+  reaches Home Assistant about a second late. When you speak much louder than the tone, it changes nothing. The log
+  says what it found each time ("wake sound removal: ...").
+
 - **"Alexa, stop"** interrupts a reply, but only right behind the wake word: Amazon's models only listen for "stop" in
   the two seconds after it. Out of silence, "Alexa, stop the music" goes to Home Assistant as a normal command.
 - While a timer rings or something plays, the wake word is accepted more readily, as Amazon's models are tuned to do.
@@ -317,6 +325,8 @@ Echo announces itself again after 100 s without Home Assistant, then less and le
 - "Mic level": how loud speech reaches the voice assistant, −35 to −15 dBFS (default −26); the Echo adjusts its gain.
 - "Noise reduction": off by default; low, medium, high take the background down by up to 6, 9 or 12 dB (RNNoise, on
   what the voice assistant gets).
+- "Wake sound removal" (experimental, under Features): off by default; takes the wake sound out of what the voice
+  assistant gets (see [Voice](#voice)).
 - "Timers ring for": 1 minute by default, 10 s to 10 min, or until stopped.
 - Bluetooth announcements and their language, the online updates channel, debug access (adb over Wi-Fi), SoC
   temperature and CPU usage.

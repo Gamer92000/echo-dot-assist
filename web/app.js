@@ -182,11 +182,13 @@ const SECTIONS = [
 ];
 
 // help: what it does, in the user's terms.  ha: also in Home Assistant (true), or for features the entities it adds.
-// icon: features.  parent: shown inside that feature's card while it is on.  tag: an extra badge.
+// icon: features.  parent: shown inside that feature's card while it is on.  tag: an extra badge.  card: a setting
+// that is no feature (no entities) shown as a feature card all the same.
 const HELP = {
   mic_level: { help: 'How loud your voice reaches speech-to-text. The Echo adjusts its gain to hold speech at this level. Raise it if quiet commands get misheard or cut off; lower it if loud speech comes out distorted. Default −26 dBFS.' },
   noise_reduction: { help: 'Takes steady background noise (fans, traffic, the dishwasher) out of what speech-to-text hears, by up to 6, 9 or 12 dB. The wake word always gets the untouched sound. Try it if commands fail in a noisy room.' },
   wake_sound: { ha: true, help: 'A tone when the Echo starts listening. Turning it off also silences the Echo\'s other local sounds.' },
+  wake_sound_removal: { card: true, icon: 'mic', tag: 'Experimental', help: 'Takes the wake sound back out of what speech-to-text hears, so you can speak straight on without waiting for the tone. The Echo\'s own echo canceller leaves part of it in, about as loud as a quiet voice. Each time, the Echo finds the tone in the microphone and turns down only its few pitches. Your first second of speech then reaches Home Assistant all at once, a moment later. The log says how much was taken off each time.' },
   mute: { ha: true, help: 'Stops listening for the wake word, as the switch in Home Assistant does. The mic-off button on the Echo is a separate, hardware mute: only the button can lift it.' },
   do_not_disturb: { ha: true, help: 'Drops announcements from Home Assistant while on. The ring pulses purple when you switch it on.' },
   timer_ring: { step: 10, help: 'How long a finished timer rings before it gives up. All the way left: until someone stops it ("<wake word>, stop", the action button, or "Stop ringing" in Home Assistant; the wake word alone only pauses it while you talk). Home Assistant\'s "Timer ringing" stays on just as long, so an automation can tell when nobody heard it. Default 1 min.' },
@@ -556,7 +558,8 @@ function settingRow(s) {
   const warns = info.warnings ? h('ul', { class: 'pc row-warn' }) : null;     // what it costs, small, under its help
   const row = h('div', { class: 'row' + (wide ? ' wide' : '') + (stack ? ' stack' : '') },
     h('div', {},
-      h('label', { class: 'row-label', for: 's-' + s.name }, label(s), info.ha === true ? haBadge() : null, saved),
+      h('label', { class: 'row-label', for: 's-' + s.name }, label(s), info.ha === true ? haBadge() : null,
+        info.tag ? h('span', { class: 'badge' + (info.tag === 'Experimental' ? ' warn' : '') }, info.tag) : null, saved),
       info.help ? h('p', { class: 'help' }, info.help) : null, warns),
     h('div', { class: 'ctl' }, c.el), status);
   const paint = () => {
@@ -606,9 +609,10 @@ function build() {
     const el = sectionShell(sec);
     if (sec.id === 'Features') {
       const grid = h('div', { class: 'features' });
-      for (const s of list.filter((x) => x.feature)) grid.append(featureCard(s, list.filter((k) => (HELP[k.name] || {}).parent === s.name)));
+      const card = (x) => x.feature || (HELP[x.name] || {}).card;
+      for (const s of list.filter(card)) grid.append(featureCard(s, list.filter((k) => (HELP[k.name] || {}).parent === s.name)));
       el.append(grid);
-      const loose = list.filter((x) => !x.feature && !(HELP[x.name] || {}).parent);
+      const loose = list.filter((x) => !card(x) && !(HELP[x.name] || {}).parent);
       if (loose.length) el.append(h('div', { class: 'card' }, loose.map(settingRow)));
     } else if (sec.id === 'Sound') {
       const eq = list.filter((s) => s.name.startsWith('equalizer_')), rest = list.filter((s) => !eq.includes(s));

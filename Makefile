@@ -174,7 +174,7 @@ WHISPER := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/
 
 RNNOISE := $(addprefix src/third_party/rnnoise/,denoise.c rnn.c rnn_data.c pitch.c kiss_fft.c celt_lpc.c)
 HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c src/hassmic/ring.c \
-           src/hassmic/sendspin.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/micgain.c src/hassmic/micdenoise.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c build/web_assets.c \
+           src/hassmic/sendspin.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/micgain.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c build/web_assets.c \
            src/hassmic/wake.c src/hassmic/wake_mww.c src/hassmic/mww_features.c src/hassmic/mww_model.c src/hassmic/mww_store.c \
            src/third_party/monocypher.c src/third_party/freeaptx.c $(RNNOISE)
 HASSMIC_H := $(wildcard src/hassmic/*.h src/include/*.h) build/.build-id
@@ -213,6 +213,7 @@ unit:
 	cc -O2 -Wall -Isrc/hassmic tests/unit/wifimotion_test.c src/hassmic/wifimotion.c -lpthread -lm -o build/wifimotion_test && build/wifimotion_test
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/spkgain_test.c src/hassmic/spkgain.c -lpthread -o build/spkgain_test && build/spkgain_test
 	cc -O2 -Wall -Isrc/hassmic tests/unit/micdenoise_test.c src/hassmic/micdenoise.c $(RNNOISE) -lm -o build/micdenoise_test && build/micdenoise_test
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/earsup_test.c src/hassmic/earsup.c -lpthread -lm -o build/earsup_test && build/earsup_test
 	cc -O2 -Wall -Isrc/hassmic -Isrc/include -include stdlib.h tests/unit/dha_hal_fake.c -shared -fPIC -o build/dha_hal_fake.so
 	cc -O2 -Wall -Isrc/hassmic -Isrc/include tests/unit/dha_jwt_test.c src/hassmic/dha.c src/hassmic/hash.c -o build/dha_jwt_test -ldl && build/dha_jwt_test build/dha_hal_fake.so
 	.venv/bin/python tests/unit/ws_ref.py build/ws_test

@@ -41,4 +41,6 @@ void      voip_close(void);
 void play_earcon(const short *pcm, size_t samples, unsigned rate);
 /* The same, cut off (flushed) as soon as go() returns 0: ringtones, 4 to 6 s long, that stop when the call is answered */
 void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go)(void));
+/* Set by the core: called when the mixer has taken a sound (it starts consuming the stream), from the playing thread */
+extern void (*audio_earcon_started)(void);
 #endif

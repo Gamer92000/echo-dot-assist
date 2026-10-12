@@ -47,6 +47,7 @@
 #include "davs.h"
 #include "dropin.h"
 #include "micdenoise.h"
+#include "earsup.h"
 #include "micgain.h"
 #include "netaddr.h"
 #include "netio.h"
@@ -221,6 +222,8 @@ static atomic_int flush_playback, alarm_on;   /* barge-in: drop queued TTS; UI s
 static atomic_int busy;                             /* state != IDLE, for threads without the lock (the ring pauses) */
 static atomic_int tts_on, music_on;                 /* something plays: the wake word model lowers its threshold then.
                                                     * music_on: MUSIC_* bits */
+static atomic_long cap_bytes;                       /* capture thread adds: micAsr bytes read since the start */
+static uint64_t cap_clock(void) { return (uint64_t)atomic_load(&cap_bytes) / 2; }   /* the ring's sample index, -w remote too */
 static atomic_int dump_toggle;                      /* SIGTTIN: start / stop writing the processed mic stream to a file */
 static int soft_mute;                               /* under lock: mute switch from Home Assistant */
 static int dnd;                                     /* under lock: do not disturb */
@@ -867,6 +870,8 @@ void core_mic_level(int dbfs)
     if (dbfs != mic_gain.level) { micgain_init(&mic_gain, dbfs); mic_fresh = 1; }
 }
 
+int core_wake_sound_removal(int set) { if (set >= 0) earsup_enable(set); return earsup_enabled(); }
+
 int core_mic_denoise(int set)
 {
     if (set >= 0 && set != mic_denoise) { mic_denoise = set > 3 ? 3 : set; mic_fresh = 1; }
@@ -1093,33 +1098,18 @@ static int kiosk_score(uint64_t end, int simulated)
     return (int)lround((speech - floor_) * 100);
 }
 
-/* lock held.  Mic audio to the pipeline: noise reduction if switched on, then brought to speech level.  at: the ring's
- * index of the first sample (0: not from the ring).
+/* lock held.  Mic audio to the pipeline: our own sounds taken out if switched on (earsup.h), noise reduction if
+ * switched on, then brought to speech level.  at: the capture clock of the first sample (the ring's index).
  * - The wake word just before it sets the gain to start with (from up to 3 s back), and RNNoise first hears the second
  *   of room and wake word ahead of the command, so that it does not start on the first word.
  * - Our own wake sound is still in the stream after the echo canceller: +21 dB over the floor in micRaw, +4 to +8 dB in
  *   micAsr (4 triggers, 2026-09-30), as loud as a quiet talker.  The gain took it for speech and came down for the
- *   command behind it (-32 instead of -26 dBFS in Home Assistant's recording), so it holds still while a sound plays. */
-static void send_mic(const int16_t *pcm, size_t n, uint64_t at)
+ *   command behind it (-32 instead of -26 dBFS in Home Assistant's recording), so it holds still while a sound plays,
+ *   and over audio earsup held back across one. */
+static void send_out(const int16_t *pcm, size_t n, int held_sound)
 {
     static int16_t out[1024 + MICDENOISE_FRAME];
-    if (mic_fresh) {
-        micgain_start(&mic_gain, mono_ms() - last_wake_ms < 3000 ? keyword_db : 1); mic_fresh = 0;
-        static const int denoise_db[] = { 0, 6, 9, 12 };
-        fprintf(stderr, "mic gain: talker %.1f dBFS, gain %+.1f dB", micgain_talker_db(&mic_gain), mic_gain.gain_db);
-        if (mic_denoise) fprintf(stderr, ", noise reduction %d dB", denoise_db[mic_denoise]);
-        fprintf(stderr, "\n");
-        if (mic_denoise) {
-            micdenoise_reset(denoise_db[mic_denoise]);
-            for (uint64_t i = at > CAP_RATE ? at - CAP_RATE : 0; at && i < at; ) {
-                size_t o = i % RING_SAMPLES, k = at - i;
-                if (k > RING_SAMPLES - o) k = RING_SAMPLES - o;
-                micdenoise_run(ring + o, k, NULL);
-                i += k;
-            }
-        }
-    }
-    mic_gain.hold = atomic_load(&sounds_pending) || atomic_load(&earcon_sounding) || mono_ms() < atomic_load(&earcon_heard_until);
+    mic_gain.hold = held_sound || atomic_load(&sounds_pending) || atomic_load(&earcon_sounding) || mono_ms() < atomic_load(&earcon_heard_until);
     while (n) {
         size_t k = n < 1024 ? n : 1024, m = k;
         const int16_t *src = pcm;
@@ -1132,6 +1122,34 @@ static void send_mic(const int16_t *pcm, size_t n, uint64_t at)
         }
         if (m) { micgain_run(&mic_gain, src, out, m); proto->audio(out, m * 2); }
         pcm += k; n -= k;
+    }
+}
+
+static void send_mic(const int16_t *pcm, size_t n, uint64_t at)
+{
+    if (mic_fresh) {
+        micgain_start(&mic_gain, mono_ms() - last_wake_ms < 3000 ? keyword_db : 1); mic_fresh = 0;
+        static const int denoise_db[] = { 0, 6, 9, 12 };
+        fprintf(stderr, "mic gain: talker %.1f dBFS, gain %+.1f dB", micgain_talker_db(&mic_gain), mic_gain.gain_db);
+        if (mic_denoise) fprintf(stderr, ", noise reduction %d dB", denoise_db[mic_denoise]);
+        fprintf(stderr, "\n");
+        if (mic_denoise) {
+            micdenoise_reset(denoise_db[mic_denoise]);
+            for (uint64_t i = at > CAP_RATE ? at - CAP_RATE : 0; core_local_wake && i < at; ) {   /* the ring: local wake word only */
+                size_t o = i % RING_SAMPLES, k = at - i;
+                if (k > RING_SAMPLES - o) k = RING_SAMPLES - o;
+                micdenoise_run(ring + o, k, NULL);
+                i += k;
+            }
+        }
+        earsup_reset();
+    }
+    while (n) {
+        size_t k = n < 1024 ? n : 1024, m;
+        const int16_t *p; int held_sound;
+        m = earsup_run(pcm, k, at, &p, &held_sound);
+        if (m) send_out(p, m, held_sound);
+        pcm += k; n -= k; at += k;
     }
 }
 
@@ -1498,6 +1516,8 @@ void core_music(int source, int on)
     if (!was != !atomic_load(&music_on)) playback_hint();
 }
 
+static void earcon_started(void) { earsup_started(cap_clock()); }     /* the earcon thread: the mixer took a sound */
+
 static int ring_sound;
 static int ring_go(void) { return atomic_load(&dropin_ring) == ring_sound && !atomic_load(&sounds_pending); }
 
@@ -1519,8 +1539,10 @@ static void *earcon_thread(void *arg)
             const short *pcm; size_t n; unsigned rate;
             if (!(p & 1 << s)) continue;
             atomic_store(&earcon_sounding, 1);
-            if (sound_get((enum sound)s, &pcm, &n, &rate)) { fprintf(stderr, "sound: %s\n", snd_names[s]); play_earcon(pcm, n, rate); }
-            else if (s == SND_WAKE || s == SND_TOUCH || s == SND_IDENTIFY) play_earcon(tone, N, RATE);
+            if (sound_get((enum sound)s, &pcm, &n, &rate)) {
+                fprintf(stderr, "sound: %s\n", snd_names[s]);
+                earsup_play(pcm, n, rate, cap_clock()); play_earcon(pcm, n, rate);
+            } else if (s == SND_WAKE || s == SND_TOUCH || s == SND_IDENTIFY) { earsup_play(tone, N, RATE, cap_clock()); play_earcon(tone, N, RATE); }
             atomic_store(&earcon_heard_until, mono_ms() + 250);         /* speaker to mic stream: 85 ms, and the room's tail */
             atomic_store(&earcon_sounding, 0);
         }
@@ -1857,7 +1879,6 @@ static void *volume_led_thread(void *arg)
  * starts), and then a second of microphone audio through the capture loop.  That is as far as a broken build gets
  * before it is noticed at all; root then makes the update that runs the factory copy, the one the Echo falls back to
  * (ota_healthy, main.sh), so that the fallback is never older than the last version that worked. */
-static atomic_long cap_bytes;
 
 static void *selftest_thread(void *arg)
 {
@@ -2001,7 +2022,7 @@ static void *capture_thread(void *arg)
         }
         if (atomic_load(&streaming)) {
             pthread_mutex_lock(&core_lock);
-            uint64_t at = core_local_wake ? ring_n - n / 2 : 0;
+            uint64_t at = cap_clock() - n / 2;
             if (atomic_load(&streaming) && connected) {
                 if (replay_from) stream_ring(replay_from, at);         /* after the wake word, up to this block */
                 send_mic(pcm, n / 2, at);
@@ -2082,6 +2103,7 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin); signal(SIGWINCH, on_winch);
     if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
     ring_start(led_run);
+    audio_earcon_started = earcon_started;
     led("-u", "scone-setup");           /* a restart inside the pairing window: the window is gone, its chaser would loop on */
     led("-u", "factory-reset");         /* a reset asked for before this start is done (main.sh) */
     oobe_load();
