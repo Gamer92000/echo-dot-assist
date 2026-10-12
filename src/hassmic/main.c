@@ -226,6 +226,10 @@ static int soft_mute;                               /* under lock: mute switch f
 static int dnd;                                     /* under lock: do not disturb */
 static int barge_in;                                /* under lock: start a new pipeline once the current one has ended
                                                       * (wake word during a reply, or the server asked to continue the conversation) */
+static uint64_t barge_from;                         /* under lock: where that wake word ended (ring samples), 0: no wake word */
+static uint64_t replay_from;                        /* under lock: the pipeline just started from a wake word that ended
+                                                      * here; the capture thread sends the ring from there ahead of the live
+                                                      * stream (stream_ring).  0: nothing to send */
 static struct micgain mic_gain;                     /* under lock: gain of what the pipeline hears (micgain.h) */
 static int mic_fresh;                               /* under lock: a pipeline started, the gain has not seen it yet */
 static float keyword_db = 1;                        /* under lock: rms of the last wake word, dBFS */
@@ -613,10 +617,11 @@ static void listening_apply(void)
 }
 static void listening(int on) { listen_pipe = on; listening_apply(); }
 
-static void pipeline_start(void)
+static void pipeline_start(uint64_t from)    /* from: where the wake word that starts it ended, 0: not a wake word */
 {
     quiet_abort = 0;
     mic_fresh = 1;
+    replay_from = from;
     proto->start();
     atomic_store(&streaming, 1);
     listening(core_local_wake);
@@ -879,7 +884,7 @@ static void mic_stopped(void)
 
 void core_mic_off(void) { atomic_store(&whisper_eou, 1); atomic_store(&streaming, 0); mic_stopped(); }
 
-void core_restart_after(void) { barge_in = 1; }
+void core_restart_after(void) { barge_in = 1; barge_from = 0; }
 
 void core_pipeline_finish(void)
 {
@@ -890,8 +895,9 @@ void core_pipeline_finish(void)
     if (!connected) barge_in = 0;
     if ((barge_in || !core_local_wake) && satellite_running && connected) {
         if (barge_in) sound_request(SND_WAKE);
-        barge_in = 0;
-        pipeline_start();
+        uint64_t from = barge_in ? barge_from : 0;      /* what was said after the wake word while the reply was cut */
+        barge_in = 0; barge_from = 0;
+        pipeline_start(from);
     }
 }
 
@@ -901,7 +907,7 @@ void core_link(int up, int ready)
     connected = up; satellite_running = up && ready;
     if (satellite_running) adopted();
     if (!satellite_running) core_pipeline_finish();
-    else if (!was && !core_local_wake && state == IDLE) pipeline_start();
+    else if (!was && !core_local_wake && state == IDLE) pipeline_start(0);
 }
 
 void core_error(void)
@@ -910,7 +916,8 @@ void core_error(void)
     if (state != SPEAKING) { led("-s", "anim_start_error_short"); core_pipeline_finish(); }
 }
 
-static void trigger(int touch)          /* touch: the action button rather than the wake word */
+/* touch: the action button rather than the wake word.  from: where the wake word ended on the ring's clock (0: unknown) */
+static void trigger(int touch, uint64_t from)
 {
     pthread_mutex_lock(&core_lock);
     /* A ringing timer stops only when told to: the button, "<wake word>, stop" (stop_word, core_transcript), Home
@@ -932,7 +939,7 @@ static void trigger(int touch)          /* touch: the action button rather than 
         if (!touch && state == IDLE && satellite_running && !core_muted()) {
             wake_cut_ms = mono_ms();
             sound_request(SND_WAKE);
-            pipeline_start();
+            pipeline_start(from);
         }
     } else if (!connected || !satellite_running || core_muted()) {
         /* nothing to talk to, or privacy latch on */
@@ -940,12 +947,12 @@ static void trigger(int touch)          /* touch: the action button rather than 
         if (atomic_load(&alarm_on)) wake_cut_ms = mono_ms();    /* its "stop" drops this pipeline again */
         if (touch) wake_phrase[0] = 0;                          /* the button: the first wake word's assistant */
         sound_request(touch ? SND_TOUCH : SND_WAKE);
-        pipeline_start();
+        pipeline_start(touch ? 0 : from);
     } else if (state == SPEAKING && !atomic_load(&flush_playback)) {       /* not already being cut.  barge_in alone does not
                                                                              * say that: continue-conversation sets it too */
         fprintf(stderr, "barge-in\n");
         wake_cut_ms = mono_ms();
-        barge_in = 1;
+        barge_in = 1; barge_from = from;
         atomic_store(&flush_playback, 1);   /* playback thread drops TTS up to audio-stop, then we restart */
     }
     pthread_mutex_unlock(&core_lock);
@@ -980,7 +987,10 @@ static void stop_word(void)
 /* ---------------------------------------------------------------- wake word arbitration (arb.c)
  * With other Echos in the arbitration network, a detection is scored and only acted on once the others' claims are in:
  * WINDOW_MS later, in the capture thread.  Until then nothing shows (no sound, no ring), so the Echos that lose stay
- * quiet.  The audio of the window is not lost: the winner sends it from the ring buffer ahead of the live stream. */
+ * quiet.  The audio of the window is not lost: the winner sends it from the ring buffer ahead of the live stream.
+ * Nor is it without arbitration: Pryon accepts a keyword 116-128 ms after its end (6 accepts in device logs, "samples
+ * <begin>-<end> (fed <n>)"), and the live stream starts with the next 50 ms block, so what the talker says right after
+ * the wake word would be cut.  Every pipeline a wake word starts sends the ring from the keyword's end (stream_ring). */
 
 #define RING_SAMPLES (CAP_RATE * 4)
 static int16_t ring[RING_SAMPLES];                  /* what the wake word engine was fed, by its sample index */
@@ -988,7 +998,7 @@ static uint64_t ring_n;                             /* capture thread: samples f
 static atomic_int det_pending;                      /* a detection for the capture thread; det_begin/end under core_lock */
 static uint64_t det_begin, det_end;
 static long long arb_due;                           /* capture thread: a round runs, decide then */
-static uint64_t arb_from;                           /* capture thread: first sample after the detection */
+static uint64_t arb_from;                           /* capture thread: where the wake word of the round ended */
 
 static void ring_put(const int16_t *s, size_t n)
 {
@@ -1125,46 +1135,43 @@ static void send_mic(const int16_t *pcm, size_t n, uint64_t at)
     }
 }
 
-static void stream_ring(uint64_t from)              /* lock held */
+static void stream_ring(uint64_t from, uint64_t to) /* capture thread, lock held: samples [from, to) as far as the ring has them */
 {
-    while (from < ring_n) {
-        uint64_t at = from % RING_SAMPLES, n = ring_n - from;
+    if (ring_n > RING_SAMPLES && from < ring_n - RING_SAMPLES) from = ring_n - RING_SAMPLES;
+    while (from < to) {
+        uint64_t at = from % RING_SAMPLES, n = to - from;
         if (n > RING_SAMPLES - at) n = RING_SAMPLES - at;
         send_mic(ring + at, n, from);
         from += n;
     }
 }
 
-static void answer(uint64_t from)                   /* capture thread: act on the wake word; audio after it from the ring */
+static void answer(uint64_t from)                   /* capture thread: act on the wake word that ended at from */
 {
-    int was = atomic_load(&streaming);
-    trigger(0);
-    pthread_mutex_lock(&core_lock);
-    if (from && !was && atomic_load(&streaming) && connected) stream_ring(from);
-    pthread_mutex_unlock(&core_lock);
+    trigger(0, from);
     if (!atomic_load(&streaming)) afe_done();          /* it stopped a ring, or cut a reply: the pipeline's end follows */
 }
 
 static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* capture thread */
 {
-    if (!arb_running()) { trigger(0); return; }
+    if (!arb_running()) { trigger(0, end); return; }
     if (arb_due) return;                            /* the same wake word once more while its round runs */
     pthread_mutex_lock(&core_lock);
     int alarm = atomic_load(&alarm_on), can = alarm || (connected && satellite_running && !core_muted()), prio = alarm || state != IDLE ? 2 : 0;
     pthread_mutex_unlock(&core_lock);
-    if (!can) { trigger(0); return; }               /* could not answer: a claim would only silence the Echos that can */
+    if (!can) { trigger(0, end); return; }               /* could not answer: a claim would only silence the Echos that can */
     /* the one heard: with two wake words, Echos compete per wake word as they do with one each */
     pthread_mutex_lock(&core_lock); char kw[64]; snprintf(kw, sizeof kw, "%s", core_wake_phrase()); pthread_mutex_unlock(&core_lock);
     /* Kiosk Satellite mode: their loudness, not the front end's energies (whose 150 ms only the window would pay for) */
     int score = arb_mode(-1) == ARB_KIOSK ? kiosk_score(end, simulated) : wake_score(begin, end, simulated);
-    if (score == INT_MIN) { fprintf(stderr, "arbitration: less than 3 s heard, answers without a claim\n"); trigger(0); return; }
+    if (score == INT_MIN) { fprintf(stderr, "arbitration: less than 3 s heard, answers without a claim\n"); trigger(0, end); return; }
     /* The other Echos' claims are Wi-Fi broadcasts, and the BLE scan's share of the antenna loses them (ble.c): no
      * scanning while this round listens.  1 s covers the window (Kiosk Satellite's up to 500 ms), the claims of Echos
      * that heard it a little later, and the winner's "answers" */
     ble_quiet(1000);
     long long due = arb_claim(kw, score, prio);
-    if (!due) { trigger(0); if (!atomic_load(&streaming)) afe_done(); return; }
-    arb_due = due; arb_from = ring_n;
+    if (!due) { answer(end); return; }
+    arb_due = due; arb_from = end;
 }
 
 /* The keyword the loaded model answers to (capture thread).  Amazon's en-US sets for "Computer", "Amazon" and "Ziggy"
@@ -1224,7 +1231,7 @@ static void on_wake(int slot, const char *keyword, uint64_t begin, uint64_t end)
     atomic_store(&wake_slot_heard, slot);
     { float db = 10 * log10f((ring_power(begin, end) + 1) / (32768.0f * 32768.0f));     /* the talker's level, for the gain */
       pthread_mutex_lock(&core_lock); keyword_db = db; snprintf(wake_phrase, sizeof wake_phrase, "%s", wake_loaded[slot]); pthread_mutex_unlock(&core_lock); }
-    if (!arb_running()) { trigger(0); return; }
+    if (!arb_running()) { trigger(0, end); return; }
     pthread_mutex_lock(&core_lock); det_begin = begin; det_end = end; pthread_mutex_unlock(&core_lock);
     atomic_store(&det_pending, 1);                  /* the ring is the capture thread's */
 }
@@ -1934,9 +1941,12 @@ static void *capture_thread(void *arg)
         if (n < 0) { fprintf(stderr, "capture: fatal\n"); atomic_store(&quit, 1); break; }
         if (atomic_exchange(&button_pending, 0)) on_action();      /* SIGUSR2: action button, for tests on the PC */
         if (atomic_exchange(&pair_pending, 0)) on_pair();          /* SIGWINCH: both volume keys held, for tests on the PC */
-        { int t = atomic_exchange(&trigger_pending, 0);               /* 1: SIGUSR1 plays a wake word of the last 0.6 s */
+        { int t = atomic_exchange(&trigger_pending, 0);               /* 1: SIGUSR1 plays a wake word of the last 0.6 s that */
+          uint64_t lag = CAP_RATE * 128 / 1000;                       /* ended 128 ms ago, as late as Pryon accepts one */
           if (t == 1) { pthread_mutex_lock(&core_lock); wake_phrase[0] = 0; pthread_mutex_unlock(&core_lock); }   /* the first one's */
-          if (t == 2) trigger(1); else if (t == 1) wake_heard(ring_n > CAP_RATE * 6 / 10 ? ring_n - CAP_RATE * 6 / 10 : 0, ring_n, 1); }
+          if (t == 2) trigger(1, 0);
+          else if (t == 1 && ring_n > CAP_RATE) wake_heard(ring_n - CAP_RATE * 6 / 10, ring_n - lag, 1);
+          else if (t == 1) wake_heard(0, ring_n, 1); }
         if (atomic_exchange(&stop_pending, 0)) stop_word();        /* SIGHUP: the "stop" keyword, for tests on the PC */
         if (n == 0) continue;
         atomic_fetch_add(&cap_bytes, n);
@@ -1991,7 +2001,12 @@ static void *capture_thread(void *arg)
         }
         if (atomic_load(&streaming)) {
             pthread_mutex_lock(&core_lock);
-            if (atomic_load(&streaming) && connected) send_mic(pcm, n / 2, core_local_wake ? ring_n - n / 2 : 0);
+            uint64_t at = core_local_wake ? ring_n - n / 2 : 0;
+            if (atomic_load(&streaming) && connected) {
+                if (replay_from) stream_ring(replay_from, at);         /* after the wake word, up to this block */
+                send_mic(pcm, n / 2, at);
+            }
+            replay_from = 0;
             pthread_mutex_unlock(&core_lock);
         }
         if (atomic_exchange(&det_pending, 0)) {

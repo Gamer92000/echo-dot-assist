@@ -105,7 +105,8 @@ satellite for a few seconds. `-w remote` in [`ARGS`](#hassmicconf) does the same
 ## Several Echos
 
 The Echos compare by how clearly the word stood out of the room's noise. An Echo in a conversation, or ringing, keeps
-the next wake word. With only one Echo there is no delay.
+the next wake word. With only one Echo there is no delay. The wait delays only the sound and the ring, not what you
+say: the Echo that answers sends Home Assistant everything from the end of the wake word, so speak on without a pause.
 
 - Only Echos listening for the same word compete: one on "Echo" and one on "Alexa" each answer their own.
 - "Wake word arbitration" on the settings page (on by default) says whether an Echo takes part. Off, it answers every

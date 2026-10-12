@@ -39,7 +39,7 @@ class Echo:
                         HASSMIC_MODELS=os.path.join(self.state, "models"))
         os.makedirs(os.path.join(self.state, "models", "echo-de"))
         open(os.path.join(self.state, "models", "echo-de", "pryon.manifest"), "w").close()
-        self.starts, self.states, self.allowed = [], {}, True
+        self.starts, self.states, self.allowed, self.chunks = [], {}, True, []
 
     def start(self):
         self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.port), "-n", self.name, "-L",
@@ -83,9 +83,9 @@ class Echo:
         self.cli.subscribe_states(lambda s: self.states.__setitem__(s.key, getattr(s, "state", None)))
         self.cli.subscribe_home_assistant_states_and_services(on_state=lambda s: None, on_service_call=lambda c: ha.action(self, c),
                                                               on_state_sub=lambda e, a: None, on_state_request=lambda e, a: ha.state(self, e, a))
-        async def handle_start(conv, flags, settings, phrase): self.starts.append(time.monotonic()); return 0
+        async def handle_start(conv, flags, settings, phrase): self.starts.append(time.monotonic()); self.chunks = []; return 0
         async def handle_stop(abort): pass
-        async def handle_audio(data, *_): pass
+        async def handle_audio(data, *_): self.chunks.append(len(data))
         self.cli.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio)
 
     def end_pipeline(self): self.cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
@@ -192,6 +192,10 @@ async def main():
         check(len(b.starts) == 1 and not a.starts, f"both heard it: the better one (900 over 500) answers alone: {len(a.starts)} / {len(b.starts)}")
         check(b.starts and b.starts[0] - t0 < 1.0, f"answer after {b.starts[0] - t0 if b.starts else -1:.2f} s")
         check("another Echo answers" in a.text() and "earcon" not in a.text(), "the other one: no sound")
+        # the winner sends from the ring what was said from the wake word's end (128 ms before it was heard on the PC)
+        # through the 200 ms window and up to the next live 50 ms block: 2048 + 3200..4800 samples
+        await asyncio.sleep(0.3); ahead = sum(b.chunks[:b.chunks.index(1600)]) if 1600 in b.chunks else None
+        check(ahead is not None and 4096 + 6400 <= ahead <= 4096 + 9600, f"nothing said after the wake word is lost to the window: {ahead} bytes ahead of the live stream")
         b.end_pipeline(); await asyncio.sleep(0.5)
 
         # Home Assistant's own duplicate check (other satellites): no error ring, just back to idle

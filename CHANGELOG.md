@@ -4,6 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-12
 
+- **No pause needed after the wake word.** What you say right after the wake word reaches Home Assistant whole, so
+  "Alexa turn on the light" in one breath works. Before, the first 120-180 ms after the word were lost: the time the
+  wake word engine takes to be sure, plus a moment until the microphone stream started. Echos settling who answers
+  lost that plus their 200 ms wait (400 ms with Kiosk Satellite). The sound and the ring still come at the same time
+  as before; you no longer need to wait for them.
 - **The light ring in Home Assistant** (issue #26). A new light, "Light ring", with colour, brightness and the effects
   pulse, spin, blink and rainbow, for automations: a flash when the doorbell rings, an orange pulse for the kitchen
   timer, a colour for the alarm system. Whatever the Echo shows itself comes first (listening, a reply, the

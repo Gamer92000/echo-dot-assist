@@ -195,11 +195,11 @@ async def main():
               and list(cfg.active_wake_words) == ["alexa"] and cfg.max_active_wake_words == 2,
               f"wake words: all installed ones offered, a name two share with its region (HA's select keys on names), Alexa active, two may listen: {avail}")
 
-        started = asyncio.Event(); mic = bytearray(); stopped = []
+        started = asyncio.Event(); mic = bytearray(); chunks = []; stopped = []
         async def handle_start(conv_id, flags, settings, phrase):
             handle_start.args = (flags, phrase); handle_start.audio = (settings.noise_suppression_level, settings.auto_gain, round(settings.volume_multiplier, 2)); started.set(); return 0           # 0 = audio over the API connection
         async def handle_stop(abort): stopped.append(abort)
-        async def handle_audio(data, *_): mic.extend(data)
+        async def handle_audio(data, *_): mic.extend(data); chunks.append(len(data))
         finished = []
         async def handle_finished(msg): finished.append(msg.success)
         cli.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio,
@@ -212,6 +212,9 @@ async def main():
         check(handle_start.audio == (0, 0, 1.0), f"neutral audio settings in the request (the gain is applied on the Echo): {handle_start.audio}")
         await speech(mic); pk = peak(mic)
         check(len(mic) > 16000, f"mic audio streamed: {len(mic)} bytes")
+        # the PC's wake word ended 128 ms before it was heard (as Pryon's do): that much from the ring, then the live 50 ms blocks
+        ahead = sum(chunks[:chunks.index(1600)]) if 1600 in chunks else None
+        check(ahead == 4096, f"what was said between the wake word's end and its detection sent ahead of the live stream: {ahead} bytes")
         check(8000 < pk <= 29100, f"mic audio brought up to speech level, peaks limited below full scale: peak {pk}")
 
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)

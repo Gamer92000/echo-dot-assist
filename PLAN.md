@@ -284,6 +284,17 @@ Run in this order. Each step says what it proves.
       with `AlarmState`; `pryon_test -p name=value`). hassmic: alarm ringing, Sendspin stream, reply playing. Pushed 2026-09-22, user: works nicely
       The `pryon WARN ... Invalid bitmask frame indices` line in `boot.log` is one per wake word in every version since 0.0.2: harmless
 - [x] Latency wake → STT start; TTS playback glitch-free — replies start before TTS_START with streaming TTS; user verdict fine
+- [x] Nothing lost between the wake word's end and the stream (2026-10-12). Pryon accepts 116-128 ms after the keyword's
+      end (`endSampleIndex` against samples fed at the callback: 6 accepts 116-128 ms, 11 type-2 results 116-144 ms, from
+      `device-logs`), on its own thread; the stream started with the capture thread's next 50 ms block, so 120-180 ms
+      after the word were cut (a command spoken straight on lost its first sound). With arbitration the ring replayed from the capture thread's
+      sample at the claim, the same gap. Now every pipeline a wake word starts (`pipeline_start(from)`, barge-in through
+      `barge_from`) sends the ring from the keyword's end up to the live block (`replay_from`, capture thread), arbitration
+      included. microWakeWord reports its detection point as the end: no change there. Home Assistant side checked
+      (2026.10.1, aioesphomeapi 46.6): the request's `handle_start` and every `handle_audio` run as eager tasks in message
+      order; the queue is cleared at the start and filled from then on, so audio right behind the request is kept. Host
+      tests: the SIGUSR1 wake word ends 128 ms back now; fake_ha_esphome checks 4096 bytes from the ring ahead of the first
+      live block, fake_ha_arbitration the window's (12096 bytes). On the Dot 2 (biscuit) the same day: user "way better".
 
 ## Phase 5 — Make it permanent **(device)**
 
