@@ -4,6 +4,7 @@
 #include "arb.h"
 #include "dropin.h"
 #include "ble.h"
+#include "btout.h"
 #include "micgain.h"
 #include "sendspin.h"
 #include "sound.h"
@@ -48,7 +49,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 /* ---------------------------------------------------------------- the table */
 
 enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, ARB_MODE, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WIFI_MOTION,
-          WIFI_SENS, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, DROPIN, DROPIN_ANSWER, UPDATES, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, NSET };
+          WIFI_SENS, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, DROPIN, DROPIN_ANSWER, UPDATES, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
  * listed()); everything else here is on the settings page only, except what Home Assistant always shows (wake sound,
@@ -81,6 +82,8 @@ static const struct setting table[NSET] = {
     /* what the speaker adds to the Echo's latency, for Sendspin's sync: a2dp.c keeps it (state/bt_speaker), per speaker
      * and Echo, so not exported */
     [BT_OUT_DELAY] = { "bluetooth_speaker_delay", "Bluetooth speaker delay", "Features", "ms", S_INT, 0, 1000, 0, 0 },
+    /* btout.c keeps it; a fix for one speaker, so not exported either */
+    [BT_OUT_AWAKE] = { "bluetooth_speaker_keep_awake", "Keep the speaker awake", "Features", NULL, S_BOOL, 0, 1, 0, 0 },
     /* dropin.c keeps them in memory, state/config on disk */
     [DROPIN]      = { "drop_in", "Drop In", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [DROPIN_ANSWER] = { "drop_in_answer", "Drop In answers", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
@@ -96,7 +99,7 @@ static const struct setting table[NSET] = {
 static int present(enum id i)
 {
     switch (i) {
-    case BT_ANNOUNCE: case BT_LANG: case BT_AUDIO: case BT_SPEAKER: case BT_OUT_DELAY: return ble_present();
+    case BT_ANNOUNCE: case BT_LANG: case BT_AUDIO: case BT_SPEAKER: case BT_OUT_DELAY: case BT_OUT_AWAKE: return ble_present();
     case WHISPER: return core_whisper_model();
     case SOUND: return sound_model() != SOUND_NONE;               /* the firmware has one on every model so far */
     case LED_AUTO: return core_lux() == core_lux();               /* a light sensor: not NAN */
@@ -166,6 +169,7 @@ int settings_get(const struct setting *s)
     case BT_AUDIO: return bt_audio;
     case BT_SPEAKER: return bt_speaker;
     case BT_OUT_DELAY: return a2dp_out_delay(-1);
+    case BT_OUT_AWAKE: return btout_keep_awake(-1);
     case WHISPER: return whisper;
     case DROPIN: return dropin_enable(-1);
     case DROPIN_ANSWER: return dropin_ask(-1);
@@ -204,6 +208,7 @@ static void put(enum id i, int v)
     case BT_SPEAKER: bt_speaker = v; if (!v && a2dp_out_enabled()) a2dp_out_enable(0); break;   /* back on the Echo */
     case WHISPER: whisper = v; core_whisper_enable(v); break;
     case BT_OUT_DELAY: a2dp_out_delay(v); break;                    /* a2dp.c saves it */
+    case BT_OUT_AWAKE: btout_keep_awake(v); break;
     case DROPIN: dropin_enable(v); break;
     case DROPIN_ANSWER: dropin_ask(v); break;
     case SPK_GAIN: spkgain_set(v); break;

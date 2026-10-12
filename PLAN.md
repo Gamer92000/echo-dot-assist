@@ -1233,6 +1233,17 @@ Run in this order. Each step says what it proves.
       speaker elsewhere (the wake word through loud music); choosing among several speakers (an ESPHome select's
       options reach Home Assistant only on connect, `manager.py` `device_info_and_list_entities`, so it would need a
       reconnect: kept as "strongest in pairing mode"); `BTUnpair` (line out) only switches playing on the speaker off.
+- [~] Bluetooth speaker keep-awake (2026-10-12, issue #24: Echo Dot 2 + a speaker named "BT HIFI AUDIO", the first
+      ~0.5 s of every reply missing, music fine, the wake sound no help). Not the stream: the mixer's keep-alive table
+      (0x733e4, the names around `keepalive_strategy` in biscuit's `mixer`: Bose, UE, Tailgater, ~30) has no such name,
+      so it plays continuously, silence as digital zero, and btout.c sends all of it (START/SUSPEND only with the
+      route). Cheap receiver/amplifier boards by that name mute their amplifier on zero and unmute late. A silence
+      pre-roll (the issue's idea) would not wake them. Now setting `bluetooth_speaker_keep_awake` (page only, inside
+      the speaker's card, off, not exported: per speaker; btout.c keeps it, state/config): a 20 Hz tone at -50 dBFS
+      (amplitude 100) added under every block after the peak statistics, saturating, phase continuous. SBC at bitpool
+      53 keeps such tones whole (sbc.c encoded, libsbc decoded: 1 LSB 0.82 rms in, 0.94 out; 32 LSB 22.64 / 22.64; zero
+      stays zero). Open: whether the reporter's speaker counts -50 dBFS at 20 Hz as sound (its threshold, a DC/high
+      pass before its detector); not tried with a speaker that mutes.
 - [x] First install from the running OS fixed (2026-10-01, issue #2: an Echo Dot 2 set up by someone else, guided
       setup). Four faults on the way, all first-install only: `firmware/<model>/images` was never created
       (`payload_dump.py` makes it now); adb gone for a moment between `deploy.sh` and the lockdown (now `wait_adb`);

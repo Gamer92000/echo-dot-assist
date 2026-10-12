@@ -2,6 +2,14 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-12
+
+- **Bluetooth speakers that cut off the first word** (issue #24). Some speakers switch their amplifier off while the
+  Echo is silent and need about half a second to switch it on again, so every reply lost its start. A new setting in
+  the Bluetooth speaker's card on the settings page, "Keep the speaker awake" (off by default), plays a tone too low
+  and too quiet to hear under everything, so the speaker never hears silence. Turn it on only if your speaker cuts off
+  replies.
+
 ## 2026-10-11
 
 - **The light ring points at you again while you speak** (issue #22). After the wake word, Amazon's software turns

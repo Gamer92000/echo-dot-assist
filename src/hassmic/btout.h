@@ -21,4 +21,6 @@ size_t btout_packet(unsigned char *buf, size_t max);    /* next media packet (RT
 /* any thread */
 int  btout_routed(void);                /* the mixer plays to the speaker */
 long long btout_latency_us(void);       /* what the speaker adds to the Echo's own output latency (Sendspin), 0 when not routed */
+int  btout_keep_awake(int set);         /* an inaudible tone under everything sent (-1 reads): for speakers that mute
+                                           themselves in silence and cut off what comes after it (issue #24) */
 #endif

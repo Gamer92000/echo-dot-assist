@@ -15,12 +15,17 @@
  *           waited ~20 s for a connect timeout; hassmic answers in its place.
  *   packets SBC (sbc.c) in RTP packets, as many frames as fit the media channel; a2dp.c sends them when the link has
  *           room.  A queue of at most QUEUE_MS: older packets go when the radio falls behind.
+ *   awake   the mixer's silence is digital zero, and cheap speakers ("BT HIFI AUDIO" boards) mute their amplifier on it
+ *           and lose the first ~0.5 s of a reply while unmuting (issue #24).  Optionally a 20 Hz tone at -50 dBFS goes
+ *           under everything: not zero for them, inaudible for us (hearing needs ~78 dB SPL at 20 Hz, small speakers
+ *           roll off far above it).  SBC keeps even a 1 LSB tone at bitpool 53 (libsbc decodes 0.94 rms from 0.82).
  */
 #define _GNU_SOURCE                     /* accept4 on the PC */
 #include "btout.h"
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -43,6 +48,8 @@
 #define QUEUE_MS 200
 #define QMAX 24
 #define START_WAIT_MS 3000              /* for the speaker to start; the HAL waits up to 5 s for our answer */
+#define AWAKE_HZ 20
+#define AWAKE_AMP 100                   /* -50 dBFS */
 
 enum { CMD_CHECK_READY = 1, CMD_START, CMD_STOP, CMD_SUSPEND, CMD_GET_AUDIO_CONFIG };
 
@@ -57,7 +64,7 @@ static int want_route, routed_now; static uint64_t want_addr, routed_addr;
 static int want_abs, abs_pct, mode_now;  /* the speaker takes absolute volume, at that; core_speaker's mode as set */
 static struct { size_t n; unsigned char b[1024]; } q[QMAX];
 static int qh, qn; static long dropped;
-static atomic_int hal_started, routed;
+static atomic_int hal_started, routed, keep_awake;
 
 /* ---------------------------------------------------------------- route */
 
@@ -217,6 +224,15 @@ static void queue_push(const unsigned char *p, size_t n, unsigned frames)
     hci_poke();
 }
 
+/* the keep-awake tone over one block, in phase from the last; saturating, so music at full scale stays as it was */
+static void awake_add(int16_t *pcm, unsigned frames)
+{
+    static int16_t tone[RATE / AWAKE_HZ]; static unsigned ph; static int made;
+    if (!made) { for (unsigned i = 0; i < RATE / AWAKE_HZ; i++) tone[i] = (int16_t)lrint(AWAKE_AMP * sin(2 * M_PI * i / (RATE / AWAKE_HZ))); made = 1; }
+    for (unsigned i = 0; i < frames; i++, ph = (ph + 1) % (RATE / AWAKE_HZ))
+        for (int c = 0; c < 2; c++) { int v = pcm[2 * i + c] + tone[ph]; pcm[2 * i + c] = v > 32767 ? 32767 : v < -32768 ? -32768 : v; }
+}
+
 static void *hal_thread(void *arg)
 {
     int lc = ((int *)arg)[0], ld = ((int *)arg)[1], ctrl = -1, data = -1;
@@ -252,6 +268,7 @@ static void *hal_thread(void *arg)
             if (fill < sizeof pcm) continue;
             fill = 0;
             for (int i = 0; i < 2 * SBC_ENC_FRAMES; i++) { int v = pcm[i] < 0 ? -pcm[i] : pcm[i]; if (v > peak) peak = v; }
+            if (atomic_load(&keep_awake)) awake_add(pcm, SBC_ENC_FRAMES);  /* after the peak: that is the mixer's */
             pthread_mutex_lock(&m);
             if (gen != cfg_gen) { gen = cfg_gen; sbc_enc_init(&enc, RATE, bitpool); k = per_packet; nf = 0; plen = 13; }
             pthread_mutex_unlock(&m);
@@ -324,5 +341,7 @@ size_t btout_packet(unsigned char *buf, size_t max)
     pthread_mutex_unlock(&m);
     return n;
 }
+
+int btout_keep_awake(int set) { if (set >= 0) atomic_store(&keep_awake, set != 0); return atomic_load(&keep_awake); }
 
 long long btout_latency_us(void) { return atomic_load(&routed) ? a2dp_out_delay(-1) * 1000LL : 0; }

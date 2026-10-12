@@ -237,6 +237,9 @@ name and state.
   the Echo turns it down itself, as stock does.
 - **In time with other players**: a Bluetooth speaker plays late, by its buffer. "Bluetooth speaker delay" (default
   250 ms) is what the Echo allows for; set it by ear, in Home Assistant or on the settings page.
+- **First word cut off**: some speakers switch their amplifier off while the Echo is silent and switch it on only
+  once sound comes, too late for the start of a reply. "Keep the speaker awake" (settings page, off by default) plays
+  a 20 Hz tone at -50 dBFS under everything, too low and too quiet to hear, so the speaker never hears silence.
 - The Echo still listens for the wake word meanwhile. How well it hears over loud music from elsewhere in the room is
   not measured yet.
 - SBC only (every speaker has it), one speaker at a time. Setting it up needs ESPHome mode.
