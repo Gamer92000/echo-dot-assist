@@ -123,17 +123,22 @@ static void *reader(void *arg)
             break;
         case KEY_VOLUMEUP:
         case KEY_VOLUMEDOWN: {
+            /* The volume steps when the key is let go within the second, as the action button acts: a hold is
+             * Home Assistant's alone (volume_*_hold), and a pair changes nothing.  ~0.1 s later than on the press
+             * for a tap; key repeat (2) is never a step */
             int k = ev.code == KEY_VOLUMEDOWN;
-            if (ev.value == 1 && handler.volume)       /* press only; key repeat (2) would run away */ handler.volume(k ? -1 : 1);
             if (ev.value == 1) {
                 vol_down[k] = now; vol_told[k] = 0;
                 if (vol_down[!k]) vol_told[0] = vol_told[1] = 1;            /* both down: a pair, not presses */
             } else if (ev.value == 0) {
-                if (vol_down[k] && !vol_told[k] && handler.event) handler.event(BUTTON_VOLUME_UP + k, now - vol_down[k] >= SHORT_PRESS_MS);
+                if (vol_down[k] && !vol_told[k]) {
+                    int held = now - vol_down[k] >= SHORT_PRESS_MS;     /* the hold's deadline had not run yet */
+                    if (!held && handler.volume) handler.volume(k ? -1 : 1);
+                    if (handler.event) handler.event(BUTTON_VOLUME_UP + k, held);
+                }
                 vol_down[k] = 0; combo_done = 0;
             }
-            /* both held: the repeats of the later one (every 150 ms) tell us when 2 s have passed; the two presses
-             * changed the volume by one step each way */
+            /* both held: the repeats of the later one (every 150 ms) tell us when 2 s have passed */
             long long later = vol_down[0] > vol_down[1] ? vol_down[0] : vol_down[1];
             if (vol_down[0] && vol_down[1] && !combo_done && now - later >= COMBO_MS && handler.pair) { combo_done = 1; handler.pair(); }
         } break;

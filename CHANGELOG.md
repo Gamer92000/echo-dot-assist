@@ -20,6 +20,10 @@ What changed for people using the Echo, newest first. Details and measurements a
   so an automation can add to it: stop an alarm clock that Home Assistant plays, skip a track with volume up held.
   Holding both volume buttons (pairing Echos) fires nothing, nor does the press that lets a browser into the settings
   page.
+- **Holding a button belongs to Home Assistant.** A volume button changes the volume when you let go of it within a
+  second, as the action button already acted; held longer, it only fires its `_hold` event in Home Assistant, so
+  "hold volume up for the next track" no longer changes the volume too. Holding both to pair Echos changes nothing
+  either. The action button held 10 s still resets the Echo.
 - **Switching between the Bluetooth speaker and the Echo is quick now** (issue #25). With the new setting "Stay
   connected when off" in the Bluetooth speaker's card on the settings page, switching "Play on Bluetooth speaker" off
   keeps the speaker connected and only moves the sound back to the Echo, so switching it on again takes well under a

@@ -205,8 +205,9 @@ Beyond the README's two figures:
   besides what the button does on the Echo. A press counts when it is let go within the second, so a hold never
   fires both. Nothing fires for both volume buttons held (that pairs Echos) or for the press that approves a login
   or a phone setting up the Wi-Fi. In an automation: trigger "Entity" → the Button event, with the event type as
-  condition (`{{ trigger.to_state.attributes.event_type == 'action_hold' }}`). The volume still changes on the
-  Echo when a volume button is held for Home Assistant.
+  condition (`{{ trigger.to_state.attributes.event_type == 'action_hold' }}`). A hold is Home Assistant's alone:
+  the volume steps only for a press let go within the second (so a step comes as you let go), the action button acts
+  only then too. Held on, the action button still warns at 5 s and resets the Echo at 10 s.
 - **Light ring in Home Assistant**: the light "Light ring" (colour, brightness, effects Pulse, Spin, Blink,
   Rainbow; "flash" blinks for 2 or 10 s) puts a colour on the ring from automations. The Echo's own lights always come
   first: while it listens, answers, has its microphones off, rings a timer or shows the volume, the colour waits and

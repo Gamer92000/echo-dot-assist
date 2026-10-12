@@ -7,7 +7,7 @@ enum { BUTTON_ACTION, BUTTON_VOLUME_UP, BUTTON_VOLUME_DOWN };
 struct button_handler {
     void (*action)(void);               /* short press of the action button */
     void (*mute_changed)(int muted);    /* hardware privacy latch changed */
-    void (*volume)(int direction);      /* +1 / -1, also on key repeat */
+    void (*volume)(int direction);      /* +1 / -1: a volume key let go within 1 s (a hold is event()'s alone) */
     void (*pair)(void);                 /* may be NULL: Volume up and Volume down held together for 2 s */
     void (*hold)(int stage);            /* may be NULL: action button held: 1 at 5 s, 2 at 10 s; 0 let go in between */
     /* may be NULL: for Home Assistant (core_button_events).  A key (BUTTON_*) held 1 s (hold 1), or a volume key let go

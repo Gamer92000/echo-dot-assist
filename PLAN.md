@@ -1584,7 +1584,12 @@ Run in this order. Each step says what it proves.
       ran still sends the hold. A second volume key pressed while the first is down makes both a pair: neither
       fires (`COMBO_MS` pairing). The action button's short press is told by `on_action` after `web_approve` and
       `improv_authorize`, so the press that lets in a browser or a phone is not an event. Volume keys still change the
-      volume on press. Wyoming has no event entities: nothing there. fake_ha_esphome: hassmic's `-b` keypad is a FIFO
+      volume on press (until the next entry). Wyoming has no event entities: nothing there.
+      Holds HA's alone (2026-10-12, asked by the user the same day): the volume steps on a release within 1 s
+      instead of on the press, so `volume_*_hold` leaves the volume alone and a pair (both keys) no longer steps it
+      up and down; a tap's step comes ~0.1 s later. The action button already acted on short release only; its 5 s
+      / 10 s reset stages stay (the only factory reset on the Echo). fake_ha_esphome: no step while down, one on
+      release, none for a hold or a pair. fake_ha_esphome: hassmic's `-b` keypad is a FIFO
       of `input_event`s written by the test (press, hold, pair, login press, action press starting a run). Not yet
       pressed on an Echo; biscuit's `mtk-kpd` also lists KEY_VOLUMEDOWN besides `keys` (getevent -lp), unchecked
       whether it ever sends it (that would double volume down, as before).
