@@ -1638,6 +1638,11 @@ Run in this order. Each step says what it proves.
       (same files and library by their firmware; the Dot 3's 12 LEDs not checked against its frame file).
       tests/fake_ha_ring.py: the set from stand-in stock files, the light's names, the Echo's patterns first, the
       turn and the move, flash, restart.
+      Gamma (2026-10-12, the user on the Dot 2: Home Assistant's coral 255,110,84 came out nearly white): the palette
+      took the colour as duty, and half duty on green and blue is three quarters as bright to the eye. Now every
+      channel goes through gamma 2.2, as Amazon maps its own: `solid_orange` is F30, Home Assistant's orange 255,165,0
+      becomes 255,98,0 (Amazon's other orange, ff6000). Coral is now the pale 15° hue, FF5B37; levels as seen 1 /
+      0.66 / 0.382 = the same duty as before (1 / 0.4 / 0.12); pulse from 35 %, spin tails 65 / 42 / 25 %.
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.

@@ -35,10 +35,12 @@
 #define HUES     24
 #define LEVELS   3
 #define MAX_LEDS 24
-#define FORMAT   "hassmic ring 1"           /* in the digest: a change of the palette's layout changes it */
-/* Linear, as the LED driver takes them.  Seen as about 100, 65 and 40 % (gamma 2.2): a dim level any lower vanishes
- * under auto brightness in a dark room, where the ring itself runs at a tenth */
-static const float level_gain[LEVELS] = { 1.0f, 0.4f, 0.12f };
+#define FORMAT   "hassmic ring 2"           /* in the digest: a change of the palette's layout changes it */
+/* As seen: 100, 66 and 38 %.  The LED driver takes linear duty, so every channel goes through gamma 2.2 (colour_rgb):
+ * 1, 0.4 and 0.12 in the file.  A dim level any lower vanishes under auto brightness in a dark room, where the ring
+ * itself runs at a tenth */
+static const float level_gain[LEVELS] = { 1.0f, 0.66f, 0.382f };
+#define GAMMA 2.2f
 enum { E_NONE, E_PULSE, E_SPIN, E_BLINK, E_RAINBOW, E_COUNT };
 const char *const ring_effects[] = { "None", "Pulse", "Spin", "Blink", "Rainbow" };
 const int ring_neffects = E_COUNT;
@@ -108,7 +110,11 @@ static void colour_rgb(const struct colour *c, float k, char px[8])
     }
     static const char hex[] = "0123456789ABCDEF";
     for (int i = 0; i < 3; i++) {
-        int v = (int)lroundf(rgb[i] * level_gain[c->level] * k * 255);
+        /* Gamma: Home Assistant's colours are as seen, the driver's duty is linear.  Half a channel unmapped is three
+         * quarters as bright to the eye, and a pale colour came out nearly white (issue #26, coral 255,110,84).
+         * Amazon's own colours are mapped so: its solid_orange is F30, its other orange ff6000; Home Assistant's
+         * orange 255,165,0 maps to 255,98,0 */
+        int v = (int)lroundf(powf(rgb[i] * level_gain[c->level] * k, GAMMA) * 255);
         if (v > 255) v = 255;
         px[2 * i] = hex[v >> 4]; px[2 * i + 1] = hex[v & 15];
     }
@@ -137,8 +143,9 @@ static void frame(struct buf *b, int ms, char px[][8], int n)
     bcat(b, "\n", 1);
 }
 
-/* One of Home Assistant's effects in one colour.  Pulse: 2.4 s from 15 % up and down again.  Spin: two comets with
- * short tails round the ring once a second, over the colour at 5 %, as stock's thinking ring.  Blink: 0.5 s on and off. */
+/* One of Home Assistant's effects in one colour (as seen; colour_rgb maps to duty).  Pulse: 2.4 s from 35 % up and
+ * down again.  Spin: two comets with short tails round the ring once a second, over the colour at 25 %, as stock's
+ * thinking ring.  Blink: 0.5 s on and off. */
 static void light_anim(struct buf *b, int effect, const struct colour *c, int n)
 {
     char px[MAX_LEDS][8];
@@ -150,7 +157,7 @@ static void light_anim(struct buf *b, int effect, const struct colour *c, int n)
         break;
     case E_PULSE:
         for (int f = 0; f < 24; f++) {
-            float k = 0.15f + 0.85f * (0.5f - 0.5f * cosf(2 * (float)M_PI * f / 24));
+            float k = 0.35f + 0.65f * (0.5f - 0.5f * cosf(2 * (float)M_PI * f / 24));
             for (int i = 0; i < n; i++) colour_rgb(c, k, px[i]);
             frame(b, 100, px, n);
         }
@@ -159,7 +166,7 @@ static void light_anim(struct buf *b, int effect, const struct colour *c, int n)
         for (int p = 0; p < n; p++) {
             for (int i = 0; i < n; i++) {
                 int d1 = (p - i + n) % n, d2 = (p + n / 2 - i + n) % n, d = d1 < d2 ? d1 : d2;   /* behind a head */
-                colour_rgb(c, d == 0 ? 1 : d == 1 ? 0.4f : d == 2 ? 0.15f : 0.05f, px[i]);
+                colour_rgb(c, d == 0 ? 1 : d == 1 ? 0.65f : d == 2 ? 0.42f : 0.25f, px[i]);
             }
             frame(b, 1000 / n, px, n);
         }

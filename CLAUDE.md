@@ -354,7 +354,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   and plays only names in a layer config (each `layer_config*.json` is a compositor of its own, so ours go into
   stock's file).  `hassmic -G dir` (root, `main.sh leds()` at each satellite start, `-G -` = digest only) makes 627
   files: active-start/its last frame/active-end turned by each LED (`hassmic_listen|hold|end_N`, first in layer 4) and
-  the light's palette (24 hues x full/half + white, 3 levels, solid/pulse/spin/blink, rainbow; last in layer 0), plus
+  the light's palette (24 hues x full/half + white, 3 levels, solid/pulse/spin/blink, rainbow; colours as seen, gamma
+  2.2 to the driver's duty as Amazon's own; last in layer 0), plus
   stock's config with them added and a digest; `sysinstall.sh leds` installs them (stock's config kept as
   `/system/etc/layer_config_common.json.pre-hassmic`, digest `/system/etc/hassmic-leds.digest`), ledcontroller
   restarts.  hassmic lists the light only when the installed digest is its own.  Every pattern of the core goes
