@@ -15,6 +15,8 @@
  *                    player entity advertises, we stream it.  Same path for media_player.play_media.
  *   buttons          the event entity "Button": a press or a 1 s hold of the action and volume keys, beside what
  *                    they do on the Echo (core_button_events)
+ *   light ring       a light with RGB, brightness and effects, steps aside while the Echo shows something of its own
+ *                    (ring.h); listed where root installed the ring's animations
  *   timers           finished timers ring (core_timer_finished); "Timer ringing" and "Ringing timers" (their names)
  *                    say so until stopped or rung out, for automations; the button "Stop ringing" and the media
  *                    player's stop stop them
@@ -51,6 +53,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -63,6 +66,7 @@
 #include "dropin.h"
 #include "settings.h"
 #include "ble.h"
+#include "ring.h"
 #include "board.h"
 #include "core.h"
 #include "micgain.h"
@@ -92,7 +96,9 @@ enum {
     BLE_CONN_FREE, BLE_GATT_ERROR, BLE_WRITTEN, BLE_NOTIFY, BLE_PAIRED, BLE_UNPAIRED, BLE_UNSUBSCRIBE, BLE_CACHE_CLEARED,
     BLE_RAW_ADV = 93, BLE_SCANNER_STATE = 126, BLE_SCANNER_SET_MODE = 127, LIST_EVENT = 107, EVENT = 108,
     LIST_UPDATE = 116, UPDATE_STATE, UPDATE_COMMAND, LIST_BUTTON = 61, BUTTON_COMMAND = 62,
+    LIST_LIGHT = 15, LIGHT_STATE = 24, LIGHT_COMMAND = 32,
 };
+enum { COLOR_MODE_RGB = 35 };           /* on/off, brightness and RGB: the light ring's one mode */
 enum { UPDATE_CMD_INSTALL = 1, UPDATE_CMD_CHECK = 2 };
 /* Proxy features: passive scan, active connections, remote caching (Home Assistant keeps the GATT database and writes the
  * notification descriptors itself), pairing, raw advertisements, scanner state and mode.  Not: cache clearing (there is
@@ -111,7 +117,7 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_BT_OUT_SEARCH, KEY_BT_OUT, KEY_BT_OUT_STATUS, KEY_BT_OUT_DELAY, KEY_WIFI_MOTION_ON, KEY_WIFI_MOTION, KEY_WIFI_MOTION_SENS,
        KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF, KEY_WEB_URL, KEY_IDENTIFY, KEY_RESET,
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
-       KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON };
+       KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON, KEY_LIGHT };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -350,6 +356,12 @@ static void send_setting(int key)       /* lock held */
         pb_fixed32(&t, 1, key); pb_str(&t, 2, names); send_state(TEXT_SENSOR_STATE, &t); } break;
     case KEY_DROPIN_STATE: case KEY_DROPIN_PEER: { PB(t, 128); char peer[64]; int st = dropin_status(peer, sizeof peer);
         pb_fixed32(&t, 1, key); pb_str(&t, 2, key == KEY_DROPIN_STATE ? dropin_states[st] : peer); send_state(TEXT_SENSOR_STATE, &t); } break;
+    case KEY_LIGHT: {
+        struct ring_light l; ring_light_get(&l);
+        pb_uint(&b, 2, l.on); pb_float(&b, 3, l.brightness); pb_uint(&b, 11, COLOR_MODE_RGB); pb_float(&b, 10, l.color_brightness);
+        pb_float(&b, 4, l.r); pb_float(&b, 5, l.g); pb_float(&b, 6, l.b); pb_str(&b, 9, ring_effects[l.effect]);
+        send_state(LIGHT_STATE, &b);
+    } break;
     case KEY_LED_AUTO: if (have_light) { pb_uint(&b, 2, core_led_auto(-1)); send_state(SWITCH_STATE, &b); } break;
     case KEY_LED_BRIGHTNESS: { int v = core_led_brightness(-1); if (v >= 0) { pb_float(&b, 2, v); send_state(NUMBER_STATE, &b); } } break;
     case KEY_BT_OUT_SEARCH: if (ble_present()) { pb_uint(&b, 2, a2dp_out_searching()); send_state(SWITCH_STATE, &b); } break;
@@ -440,11 +452,17 @@ static void send_light_states(void)     /* lock held */
 {
     if (have_light) { sent_lux = core_lux(); sent_at = time(NULL); send_sensor(KEY_LUX, sent_lux); }
     sent_level = core_led_brightness(-1); level_at = time(NULL);
-    send_setting(KEY_LED_AUTO); send_setting(KEY_LED_BRIGHTNESS);
+    send_setting(KEY_LED_AUTO); send_setting(KEY_LED_BRIGHTNESS); send_setting(KEY_LIGHT);
 }
 
 static void send_light_entities(void)
 {
+    /* Home Assistant's light on the ring (ring.h): a palette made beforehand, so the colour shows as the nearest of
+     * it; the state says what was asked for */
+    if (listed(KEY_LIGHT)) { PB(b, 256); pb_str(&b, 1, "light_ring"); pb_fixed32(&b, 2, KEY_LIGHT); pb_str(&b, 3, "Light ring");
+      pb_uint(&b, 12, COLOR_MODE_RGB); pb_uint(&b, 5, 1); pb_uint(&b, 6, 1);
+      for (int i = 0; i < ring_neffects; i++) pb_str(&b, 11, ring_effects[i]);
+      pb_str(&b, 14, "mdi:circle-slice-8"); send_msg(LIST_LIGHT, &b); }
     if (have_light) {
         { PB(b, 192); pb_str(&b, 1, "illuminance"); pb_fixed32(&b, 2, KEY_LUX); pb_str(&b, 3, "Illuminance"); pb_str(&b, 6, "lx");
           pb_uint(&b, 7, 0); pb_str(&b, 9, "illuminance"); pb_uint(&b, 10, 1); send_msg(LIST_SENSOR, &b); }
@@ -474,6 +492,7 @@ static int listed(int key)
     case KEY_WHISPERED: return core_whisper_model() && settings_on("whisper_detection");
     case KEY_WIFI_MOTION: case KEY_WIFI_MOTION_SENS: return wifimotion_present() && settings_on("wifi_motion");
     case KEY_LUX: case KEY_LED_AUTO: return have_light;
+    case KEY_LIGHT: return ring_custom();
     case KEY_DROPIN_SERVICE: case KEY_DROPIN_STATE: case KEY_DROPIN_PEER: case KEY_DROPIN_END: case KEY_DROPIN_RESULT:
         return dropin_running() && settings_on("drop_in");
     default: return 1;
@@ -657,6 +676,34 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     fprintf(stderr, "settings: mic_level=%d noise_reduction=%s mute=%d wake_sound=%d bt_announce=%d dnd=%d bt_lang=%s\n", settings_mic_level(),
             denoise_names[core_mic_denoise(-1)], core_soft_mute(-1), core_wake_sound(-1), core_bt_announce(-1), core_dnd(-1), settings_bt_lang()->code);
     settings_save(); send_setting(key);
+}
+
+/* Home Assistant's light: what the command has, over what it was (ESPHome sends only what changed).  A flash shows
+ * blinking for its length and leaves the light as it was */
+static void on_light(const unsigned char *p, const unsigned char *end)      /* lock held */
+{
+    struct pbf f; struct ring_light l; unsigned key = 0, flash = 0; int has[32] = { 0 }; float v[32] = { 0 }; char eff[32] = "";
+    ring_light_get(&l);
+    while (pb_next(&p, end, &f)) {
+        if (f.field >= 32) continue;
+        if (f.field == 1) key = (unsigned)f.v;
+        else if (f.wire == 5) { uint32_t u = (uint32_t)f.v; memcpy(&v[f.field], &u, 4); }
+        else if (f.field == 19 && f.data) pbf_str(&f, eff, sizeof eff);
+        else if (f.field == 17) flash = (unsigned)f.v;
+        else if (f.field == 3) v[3] = f.v != 0;
+        else has[f.field] = f.v != 0;
+    }
+    if (key != KEY_LIGHT || !listed(KEY_LIGHT)) return;
+    if (has[2]) l.on = v[3] != 0;
+    if (has[4]) l.brightness = v[5];
+    if (has[20]) l.color_brightness = v[21];
+    if (has[6]) { l.r = v[7]; l.g = v[8]; l.b = v[9]; }
+    if (has[18]) {
+        if (!strcasecmp(eff, "off")) l.effect = 0;        /* Home Assistant's own name for none */
+        for (int i = 0; i < ring_neffects; i++) if (!strcasecmp(eff, ring_effects[i])) l.effect = i;
+    }
+    ring_light_set(&l, has[16] ? flash : 0);
+    send_setting(KEY_LIGHT);
 }
 
 /* ---------------------------------------------------------------- media over http (announcements, play_media) */
@@ -1356,6 +1403,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         if (c >= 0 && clients[c].keyed && epoch) clock_from_ha(epoch);
     } break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
+    case LIGHT_COMMAND: on_light(p, end); break;
     case BUTTON_COMMAND: { struct pbf f;
         while (pb_next(&p, end, &f)) if (f.field == 1 && f.v == KEY_IDENTIFY) core_identify(); else if (f.field == 1 && f.v == KEY_RESET) core_reset("Home Assistant's button");
                                        else if (f.field == 1 && f.v == KEY_RESTART) core_reboot("Home Assistant's button");

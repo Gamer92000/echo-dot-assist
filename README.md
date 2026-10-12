@@ -45,7 +45,7 @@ how to add one: [`devices/`](devices/README.md).
 | Plays on a Bluetooth speaker            | ✅                             | ✅                                                    |
 | Bluetooth proxy for Home Assistant      | –                              | ✅                                                    |
 | Do not disturb, equalizer, ring brightness | Alexa app                   | [entities in Home Assistant](docs/GUIDE.md#in-home-assistant) |
-| Buttons as triggers for automations     | –                              | [an event in Home Assistant](docs/GUIDE.md#buttons-and-light-ring) |
+| Buttons and light ring in automations   | –                              | [an event and a light in Home Assistant](docs/GUIDE.md#buttons-and-light-ring) |
 | Louder speaker (Echo Dot 2, Echo 2, Echo Dot 3) | –                      | [up to +12 dB](docs/GUIDE.md#settings-page) on the settings page (Echo Dot 3: +2 dB) |
 | Sound detection (smoke alarm, glass, …) | Alexa Guard, checked in the cloud | [on the Echo](docs/GUIDE.md#sound-detection), less reliable |
 | Whisper detection                       | answers in a whisper           | [a sensor](docs/GUIDE.md#whisper-detection) for your conversation agent |

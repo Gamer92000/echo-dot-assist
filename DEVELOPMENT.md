@@ -76,6 +76,8 @@ make unit                                         # C unit tests; microWakeWord 
 tests/ota_push_test.sh                            # signed push-update path end to end
 tests/otatool_test.sh                             # the PC's otatool (Python) against the Echo's (C)
 .venv/bin/python tests/fake_ha_update.py          # online updates: Home Assistant, GitHub and root's installer in one
+.venv/bin/python tests/fake_ha_ring.py            # the light ring: the animation set hassmic -G makes, Home Assistant's light,
+                                                 # the Echo's own patterns first, the listening ring turned by the beam
 .venv/bin/python tests/fake_improv.py             # setup from a phone (Improv over BLE) on a fake Bluetooth controller,
                                                  # Wi-Fi through root's wifi.sh, adoption, factory reset
 ```

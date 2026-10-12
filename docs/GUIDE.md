@@ -207,6 +207,15 @@ Beyond the README's two figures:
   or a phone setting up the Wi-Fi. In an automation: trigger "Entity" → the Button event, with the event type as
   condition (`{{ trigger.to_state.attributes.event_type == 'action_hold' }}`). The volume still changes on the
   Echo when a volume button is held for Home Assistant.
+- **Light ring in Home Assistant**: the light "Light ring" (colour, brightness, effects Pulse, Spin, Blink,
+  Rainbow; "flash" blinks for 2 or 10 s) puts a colour on the ring from automations. The Echo's own lights always come
+  first: while it listens, answers, has its microphones off, rings a timer or shows the volume, the colour waits and
+  comes back afterwards. Colours are the nearest of a fixed set (24 hues, full or pale, and white, at three levels),
+  since the ring only plays animations made beforehand: the Echo makes them at its first start with this version and
+  restarts the ring for that (a second without light). Not on an Echo where they could not be written: then there is
+  no light in Home Assistant.
+- **Listening points at you**, as with Alexa, and also while a timer rings or the light is on (Amazon's ring stops
+  turning as soon as a second light shows; hassmic plays the listening ring already turned).
 - **Microphone off** plays Alexa's own sounds.
 - Silent and dark at boot.
 - The ring dims with the room's light as on a stock Echo (Amazon's own logic, on by default); a fixed level from Home
@@ -279,6 +288,7 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 | Timer ringing, Ringing timers | on while a finished timer rings; their names (diagnostic), see [Voice](#voice) |
 | Stop ringing | button: ends a ringing timer and nothing else |
 | Button | event: each press and 1 s hold of the action and volume buttons, see [Buttons and light ring](#buttons-and-light-ring) |
+| Light ring | light: colour, brightness, effects; the Echo's own lights first, see [Buttons and light ring](#buttons-and-light-ring) |
 | Firmware | update entity, see [Updating](../README.md#updating) |
 | Identify, Restart, Factory reset | buttons; Restart reboots the Echo |
 | Web UI address | diagnostic: the settings page's address |

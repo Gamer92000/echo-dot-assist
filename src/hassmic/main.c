@@ -5,6 +5,7 @@
  * runs the stock "Alexa" wake word locally, and speaks the ESPHome native API or Wyoming to Home Assistant.
  *
  *   hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m pryon.manifest] [-b input-device] [-L] [-E] [-V] [-S]
+ *   hassmic -G dir     the light ring's own animations into dir (ring.h), for root to install
  *     -o port  push update port (default 28929, 0 = off; see scripts/ota-push.sh)
  *     -a port  wake word arbitration between Echos, UDP (default 28930, 0 = off; see arb.c)
  *     -i port  Drop In audio between Echos, UDP (default 28932, 0 = off; needs -a; see dropin.c)
@@ -42,6 +43,7 @@
 #include "ble.h"
 #include "improv.h"
 #include "buttons.h"
+#include "ring.h"
 #include "davs.h"
 #include "dropin.h"
 #include "micdenoise.h"
@@ -278,9 +280,20 @@ static void run_output(char *const argv[], char *buf, size_t n)
     close(p[0]);                        /* SIGCHLD is ignored: nothing to wait for */
 }
 
+/* What ring.c plays: through ledctrl, or into HASSMIC_FAKE_LED's file for the tests on the PC */
+static void led_run(const char *op, const char *pattern)
+{
+    const char *fake = getenv("HASSMIC_FAKE_LED");
+    if (fake) { FILE *f = fopen(fake, "a"); if (f) { fprintf(f, "%s %s\n", op, pattern); fclose(f); } return; }
+    if (use_led) run("/system/bin/ledctrl", op, pattern);
+}
+
+/* The Echo's own patterns go through ring.c: Home Assistant's light steps aside for them, and the listening ring is
+ * turned towards the talker there */
 static void led(const char *op, const char *pattern)
 {
-    if (use_led && pattern) run("/system/bin/ledctrl", op, pattern);
+    if (!pattern) return;
+    if (!strcmp(op, "-s")) ring_set(pattern); else ring_unset(pattern);
 }
 
 /* "active-start"/"active-end", not the "ca-" ones of uxconfig.json (same look): ledcontroller turns only these two
@@ -1825,6 +1838,7 @@ static void *volume_led_thread(void *arg)
         }
         at = atomic_load(&identify_until);
         if (at && mono_ms() >= at && atomic_compare_exchange_strong(&identify_until, &at, 0)) led("-u", "zzz_rainbow");
+        ring_tick();
         usleep(200000);
     }
     return NULL;
@@ -2019,7 +2033,8 @@ int main(int argc, char **argv)
 {
     const char *manifest = NULL, *input = board.keypad; int port = 0, print_mdns = 0, o;
     micgain_init(&mic_gain, MICGAIN_LEVEL);            /* until the protocol has its saved settings (Wyoming: always) */
-    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:a:i:W:LEVSTB")) != -1) switch (o) {
+    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:a:i:W:G:LEVSTB")) != -1) switch (o) {
+        case 'G': return ring_generate(optarg);     /* root, at the satellite's start (main.sh leds) */
         case 'P': proto = !strcmp(optarg, "wyoming") ? &proto_wyoming : &proto_esphome; break;
         case 'p': port = atoi(optarg); break;
         case 'n': core_name = optarg; break;
@@ -2037,7 +2052,7 @@ int main(int argc, char **argv)
         case 'S': print_mdns = 1; break;
         case 'B': use_bt = 0; break;
         case 'T': { char tok[160]; sendspin_init(); sendspin_pairing_token(tok, sizeof tok); puts(tok); return 0; }
-        default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-z port] [-o port] [-a port] [-i port] [-W port] [-L] [-E] [-V] [-S]\n"); return 2;
+        default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-z port] [-o port] [-a port] [-i port] [-W port] [-G dir] [-L] [-E] [-V] [-S]\n"); return 2;
     }
     core_port = port ? port : proto->port;
     if (!core_name) name_make();
@@ -2051,6 +2066,7 @@ int main(int argc, char **argv)
     clock_log_start();                              /* before any thread: it forks */
     signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin); signal(SIGWINCH, on_winch);
     if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
+    ring_start(led_run);
     led("-u", "scone-setup");           /* a restart inside the pairing window: the window is gone, its chaser would loop on */
     led("-u", "factory-reset");         /* a reset asked for before this start is done (main.sh) */
     oobe_load();

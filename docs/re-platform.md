@@ -125,7 +125,10 @@ lipc-send-event com.amazon.puffin set_animation -s active-talking
 
 ### Open questions
 
-- Do two active patterns layer as `layer_config_common.json` says?
+- ~~Do two active patterns layer as `layer_config_common.json` says?~~ Yes, per LED: a higher layer's black pixels
+  show the lower ones; in one layer only the first listed active one shows, the rest wait. Every `layer_config*.json`
+  becomes a compositor of its own, and two of them overwrite each other; ledcontroller loads all animations once, at
+  its start (PLAN.md "Light ring as a Home Assistant light", where our own set is described).
 - ~~Does `ledcontroller` still follow `com.doppler.lasp beam_index` (published by `mixer`) when PuffinApp is down?~~
   Yes, but only for `active-start` and `active-end`, and only while that is the one active animation (issue #22,
   biscuit 2026-10-11; the chain and the measurement are in PLAN.md under "LED ring states"). The `ca-active-*`

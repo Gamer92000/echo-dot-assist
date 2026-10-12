@@ -297,6 +297,23 @@ ota_watch() {
     done
 }
 
+# The light ring's own animations (src/hassmic/ring.c): Home Assistant's light, and the listening ring turned towards
+# the talker beside a ringing timer.  ledcontroller reads animations only at its start and only from the system
+# partition, so the hassmic about to run makes its set from stock's files (-G) and, when that is not the installed
+# set, sysinstall.sh writes it and ledcontroller starts again (about a second without the ring, before hassmic runs).
+LEDNEW=/data/local/hassmic/leds.new
+leds() {
+    want=$($BIN -G - 2>/dev/null) || want=
+    [ -n "$want" ] && [ "$want" = "$(cat /system/etc/hassmic-leds.digest 2>/dev/null)" ] && return 0     # 0.1 s, not 0.7
+    rm -rf $LEDNEW; mkdir -p $LEDNEW
+    if ! out=$($BIN -G $LEDNEW 2>&1); then echo "light ring: no animations of ours ($out)"
+    else
+        echo "light ring: installing ours (${out#ring: })"
+        sh $D/sysinstall.sh leds $D $LEDNEW && { stop ledcontroller; start ledcontroller; }
+    fi
+    rm -rf $LEDNEW
+}
+
 # A push update runs "firewall" again (exec, same PID) while the previous firewall watcher is still looping: stop it first,
 # or every update adds one and old and new rules take turns.  Matched by command line, which also catches the ones that
 # earlier versions left behind.  Read with the shell itself: a process that exits between the open and the read leaves
@@ -328,16 +345,17 @@ firewall)
 satellite)
     # The installer that unpacked us may have been an older one running with umask 077: make sure the daemon's user gets in.
     [ "$D" != "$SYS" ] && chmod 755 $D
+    # A binary in /data wins over the installed one: lets a new build be tried without a trip through TWRP.
+    BIN=$D/hassmic; [ -x /data/local/hassmic/hassmic ] && BIN=/data/local/hassmic/hassmic
     {
         rotate_log
         echo "== satellite start, uptime $(cut -d. -f1 /proc/uptime)s, $(cat $D/VERSION 2>/dev/null || echo factory) from $D"
         sh $D/lockdown.sh services        # stops the cloud daemons that were not up yet at "on boot"; the firewall is the watcher's
         # wake word sets under a short name (echo-de) from installs by hand: the name scripts/artifacts.sh gives them
         [ -f $D/artifact-install.sh ] && sh $D/artifact-install.sh migrate /data/local/hassmic/state /data/local/hassmic
+        leds                              # before alexa-off.sh: a ledcontroller that started again may want Alexa back
         sh $D/alexa-off.sh; quiet
     } 2>&1 | stamped >> $LOG
-    # A binary in /data wins over the installed one: lets a new build be tried without a trip through TWRP.
-    BIN=$D/hassmic; [ -x /data/local/hassmic/hassmic ] && BIN=/data/local/hassmic/hassmic
     # hassmic offers Wi-Fi motion where the module can be loaded (wifimotion.c), the loop below loads it when needed
     [ -n "$KMOD" ] && [ -f $D/$KMOD ] && export HASSMIC_WIFI_KMOD=/proc/${KMOD%.ko}
     # online updates: hassmic checks downloads against the key root will check them against (ota.c)

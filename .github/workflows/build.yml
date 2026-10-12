@@ -204,6 +204,8 @@ jobs:
         run: .venv/bin/python tests/fake_web_mww.py
       - name: Setup from a phone (Improv over Bluetooth), factory reset
         run: .venv/bin/python tests/fake_improv.py
+      - name: Light ring, Home Assistant's light
+        run: .venv/bin/python tests/fake_ha_ring.py
 
   # The Drop In voice blueprint in a real Home Assistant (tests/ha_real_dropin.py, which pins its version) against PC
   # Echos, one of them the released build of a tag.  A job of its own: Home Assistant comes from PyPI with what its

@@ -4,6 +4,16 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-12
 
+- **The light ring in Home Assistant** (issue #26). A new light, "Light ring", with colour, brightness and the effects
+  pulse, spin, blink and rainbow, for automations: a flash when the doorbell rings, an orange pulse for the kitchen
+  timer, a colour for the alarm system. Whatever the Echo shows itself comes first (listening, a reply, the
+  microphones off, a ringing timer, the volume); the colour comes back afterwards. The ring shows the nearest of 147
+  colours (24 hues, full or pale, and white, each at three brightness levels): close, not exact. The first start of
+  this version writes the ring's new animations to the Echo's system partition and restarts Amazon's ring service:
+  a second without light, once.
+- **The listening ring points at you even while a timer rings.** Amazon's ring only turns towards whoever spoke while
+  nothing else shows; hassmic now plays it already turned, so it points at you over a ringing timer too, and follows
+  you if you move while you speak.
 - **The buttons in Home Assistant** (issue #26). A new event entity "Button" fires for every press of the action
   button and the volume buttons, and once when one of them is held for a second: `action`, `volume_up`,
   `volume_down`, `action_hold`, `volume_up_hold`, `volume_down_hold`. What the buttons do on the Echo stays as it was,

@@ -1588,6 +1588,51 @@ Run in this order. Each step says what it proves.
       of `input_event`s written by the test (press, hold, pair, login press, action press starting a run). Not yet
       pressed on an Echo; biscuit's `mtk-kpd` also lists KEY_VOLUMEDOWN besides `keys` (getevent -lp), unchecked
       whether it ever sends it (that would double volume down, as before).
+- [~] Light ring as a Home Assistant light, and the listening ring turned over other animations (2026-10-12, issue
+      #26; the user asked for colours, and for the beam turn to survive a second animation, or else for nothing else
+      to show beside it). Measured on a Dot 2 (biscuit) with the ring's frame read back from
+      `/sys/bus/i2c/devices/0-003f/frame` (12 x RGB, after brightness), our files tried through a bind mount of a copy
+      of `led-resources` (labelled system_file; a tmpfs with context= was refused):
+      - ledcontroller loads every file at its start (`AnimationStore::loadAnimations`, 0.9 s for stock's 266, 1.3 s
+        with ours, 893; RSS 7.5 -> 8.6 MB) and never again: a file rewritten later plays as loaded. So no colour on
+        demand; a palette made beforehand.
+      - Names must be in a layer config. Every `layer_config*.json` gets a ConfigManager and a Leds of its own (two
+        "Dumping state" in the log); a light in `layer_config_hassmic.json` and stock's `solid_blue` overwrote each
+        other's frames, and when blue stopped the ring went dark instead of back to ours. Each config also needs every
+        layer 0..numberOfLayers-1 as an array ("Layer is not an array"). So ours go into stock's file.
+      - One config composes per LED, black transparent (half blue in layer 5 over red in layer 0: half each); in one
+        layer only the first listed active one shows, the others wait and resume (active-end set while active-start
+        ran: "Stop active-start", "Start active-end", "Finished active-end", "Start active-start"). Before composing
+        it looks for a made-up animation "<higher>-<lower>" ("Animation not found"). A black loop (or none) finishes
+        by itself; a lit loop stays until unset.
+      - Pixels may be 3 or 6 hex digits (stock mixes them); restarting ledcontroller left `PUFFIN_START` at 0.
+      - Turned copies: "hassmic_listen_3" (active-start turned by 3) gave the very frame stock's own turn gives at
+        BeamDirection 3; beside `ready-timer` stock's stayed at LEDs 10-11, ours turned (LEDs 1-2), `hold_9` at 7-8,
+        `end_9` finished and the timer came back.
+      Now: `ring.c`. `hassmic -G dir` (root) makes 627 animations: active-start / its last frame / active-end turned by
+      each of the 12 LEDs (`hassmic_listen_N`, `hassmic_hold_N`, `hassmic_end_N`, first in layer 4) and the light's
+      palette (24 hues x full/half saturation + white, 3 levels at 1 / 0.4 / 0.12 linear, x solid / pulse 2.4 s / spin
+      two comets 1 s / blink 0.5 s, and a rainbow per level; last in layer 0, under stock's), plus stock's
+      `layer_config_common.json` with these names added, and a SHA-256 digest of all of it. `main.sh leds()` at every
+      satellite start: `-G -` (digest only, 0.07 s on top of the 0.3 s any hassmic start costs) against
+      `/system/etc/hassmic-leds.digest`; if it differs, `-G` into /data and `sysinstall.sh leds` (stock's config kept as
+      `/system/etc/layer_config_common.json.pre-hassmic`, ours copied in bulk: 1.4 s on the Dot 2, the digest last),
+      then ledcontroller restarts, before alexa-off.sh. `sysinstall.sh uninstall` puts stock's config back. hassmic
+      lists the light ("Light ring", RGB, effects None/Pulse/Spin/Blink/Rainbow) only when the installed digest is its
+      own. Every pattern the core plays goes through `ring_set`/`ring_unset`, which keeps how long each shows (from
+      its file: a lit loop until unset, else to the end of its last lit frame); while any shows, the light is off
+      (unset before the Echo's pattern is set), and it comes back on the 200 ms tick. "active-start"/"active-end" are
+      played as the turned copies when the beam is known: `com.amazon.ledd BeamDirection` through liblipc in-process
+      (`LipcOpenNoName`, `LipcGetIntProperty`; same library on all three models; read 5 after `lipc-set-prop` on the
+      Dot 2 as the daemon's user), polled while the ring is open, a new beam swaps in `hassmic_hold_N` (no second
+      opening). Without the beam: stock's names, as before. Flash: blink in the asked colour for its length, then as
+      before. The light left on the ring is unset at the next start (`state/ring-light`). Tried on the Dot 2: the set
+      installed by `sysinstall.sh leds` (backup byte-identical to stock's, labels system_file, read-only again), the
+      light listed, an orange light while the mute latch was on stayed behind the red ring; then removed again.
+      Open: the light seen on an unmuted ring, a real wake word turning ours (that Dot 2 was muted), donut and radar
+      (same files and library by their firmware; the Dot 3's 12 LEDs not checked against its frame file).
+      tests/fake_ha_ring.py: the set from stand-in stock files, the light's names, the Echo's patterns first, the
+      turn and the move, flash, restart.
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.

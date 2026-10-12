@@ -8,6 +8,11 @@
 #                                  becomes the factory copy: its files, boot.sh and hassmic.rc.  Never the update key or
 #                                  the policy: those change only through install-system.sh, with adb.  The release key
 #                                  (online updates) does come along: it is part of every build.
+#   sysinstall.sh leds SRC DIR     the light ring's animations that hassmic -G made in DIR (main.sh leds()): ours into
+#                                  /system/etc/led-resources beside stock's, and stock's layer config with our names in
+#                                  place of stock's.  ledcontroller reads every layer_config*.json there, each into a
+#                                  compositor of its own, so ours cannot be a file of its own; stock's is kept one
+#                                  directory up for -G and uninstall.  DIR/digest goes in last: the set is complete.
 #   sysinstall.sh uninstall SRC    what install-system.sh --uninstall does (SRC: where otatool is)
 # The factory copy is what boot.sh falls back to, and boot.sh is what init starts: if it breaks, neither service starts,
 # there is no egress lock, and Amazon's updaters can reach the internet.  So nothing is written unless every script
@@ -17,13 +22,19 @@ umask 022
 MODE=$1 SRC=$2
 H=/system/hassmic
 RC=/system/etc/init/hassmic.rc
+LR=/system/etc/led-resources
+LSTOCK=/system/etc/layer_config_common.json.pre-hassmic
 SYSLABEL=u:object_r:system_file:s0
 say() { echo "sysinstall $MODE: $*"; }
-case "$MODE" in install|factory|uninstall) ;; *) say "usage: sysinstall.sh install|factory|uninstall SRC"; exit 2;; esac
+case "$MODE" in install|factory|uninstall|leds) ;; *) say "usage: sysinstall.sh install|factory|uninstall|leds SRC [DIR]"; exit 2;; esac
 [ -x "$SRC/otatool" ] || { say "no $SRC/otatool"; exit 1; }
 [ "$(id -u)" = 0 ] || { say "needs root"; exit 1; }
 
-if [ "$MODE" != uninstall ]; then
+if [ "$MODE" = leds ]; then
+    L=$3
+    [ -s "$L/digest" ] && [ -s "$L/layer_config_common.json" ] || { say "no animation set in $L, nothing written"; exit 1; }
+    [ -f $LSTOCK ] || ! grep -q hassmic_ $LR/layer_config_common.json || { say "stock's layer config is gone, nothing written"; exit 1; }
+elif [ "$MODE" != uninstall ]; then
     for f in boot.sh main.sh lockdown.sh device.conf hassmic runas otatool hassmic.rc; do
         [ -s "$SRC/$f" ] || { say "$f missing in $SRC, nothing written"; exit 1; }
     done
@@ -60,10 +71,28 @@ commit() {
     sync
 }
 
+if [ "$MODE" = leds ]; then
+    [ -f $LSTOCK ] || new $LSTOCK $LR/layer_config_common.json 644 0:0 $SYSLABEL       # stock's, before ours replaces it
+    # Ours are files of their own, ~600 of them: in bulk, as one at a time takes minutes.  A cut in between leaves the
+    # old digest, and the next start writes them again
+    cp "$L"/hassmic_*.animation $LR/ && chmod 644 $LR/hassmic_*.animation && chcon $SYSLABEL $LR/hassmic_*.animation ||
+        { say "cannot write the animations"; exit 1; }
+    for f in $LR/hassmic_*.animation; do [ -e "$L/${f##*/}" ] || rm -f "$f"; done
+    new $LR/layer_config_common.json "$L/layer_config_common.json" 644 0:0 $SYSLABEL
+    commit
+    staged=; new /system/etc/hassmic-leds.digest "$L/digest" 644 0:0 $SYSLABEL; commit
+    say "light ring: $(ls $LR/hassmic_*.animation | wc -l) animations of ours"
+    exit 0
+fi
+
 if [ "$MODE" = uninstall ]; then
     if [ -f /sepolicy.pre-hassmic ]; then
         new /sepolicy /sepolicy.pre-hassmic 644 0:0 $SYSLABEL; commit; rm /sepolicy.pre-hassmic
     fi
+    if [ -f $LSTOCK ]; then
+        staged=; new $LR/layer_config_common.json $LSTOCK 644 0:0 $SYSLABEL; commit; rm $LSTOCK
+    fi
+    rm -f $LR/hassmic_*.animation /system/etc/hassmic-leds.digest
     rm -rf $H $RC; sync
     say "hassmic removed from the system partition"
     exit 0

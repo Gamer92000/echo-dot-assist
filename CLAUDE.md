@@ -54,6 +54,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_web_davs.py       # models downloaded from a fake Amazon: login by code pair with the device
                                              # attestation token, DAVS, unpack, staging, install, deregister
 .venv/bin/python tests/fake_ha_update.py      # online updates: page channel + HA update entity, fake GitHub, root's installer
+.venv/bin/python tests/fake_ha_ring.py        # light ring: the animation set from stand-in stock files, HA's light,
+                                             # the Echo's own patterns first, the listening ring turned by the beam
 .venv/bin/python tests/fake_improv.py         # setup from a phone: Improv over BLE against a fake controller on a pty
                                              # (HASSMIC_BT_DEV), root's wifi.sh, adoption, factory reset (HA, button hold)
 tests/ota_push_test.sh                        # signed push-update path end to end
@@ -90,6 +92,8 @@ There is no single-test selector: run one unit test by building/running its line
   `main.sh` (`factory()`, only if that version is installed and its hassmic is what runs) has `sysinstall.sh` write it to
   `/system/hassmic` as the factory copy, bootstrap included (`boot.sh`, `otatool`, `hassmic.rc`, `release.pub`; never
   `update.pub` or `/sepolicy`). Works from older installs: the pushed update brings the code.
+- The light ring's own animations: `main.sh` installs them itself at satellite start when they are not this build's
+  (`sysinstall.sh leds`, ledcontroller restarted); `install-system.sh --uninstall` puts stock's layer config back.
 - `scripts/install-system.sh`: writes `/system/hassmic/`, init rc and patched SELinux policy from the running OS
   (`sysinstall.sh install`; `otatool remount rw` since toybox cannot: `/dev/root` does not exist). `--twrp` the old way.
   `--uninstall` reverts.
@@ -230,9 +234,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   motion, Bluetooth audio, Bluetooth speaker, Drop In): their entities are listed only while on (`proto_esphome.c` `listed()`,
   which also gates states); switching one closes the HA links (`proto->entities_changed`), HA re-lists on reconnect and
   deletes what is gone (registry included). HA always has: media player, mute, DND, wake sound, LEDs, EQ, firmware,
-  Web UI address, Sendspin token (a secret: never on the page), Identify, Button (event entity: presses and 1 s holds,
-  `core_button_events`, from `buttons.c` `event` and `on_action`; types stable, automations use them). The rest is
-  page-only; diagnostics too (`diag.c`).
+  Web UI address, Sendspin token (a secret: never on the page), Identify, Light ring (where root installed `ring.c`'s
+  set), Button (event entity: presses and 1 s holds, `core_button_events`, from `buttons.c` `event` and `on_action`;
+  types stable, automations use them). The rest is page-only; diagnostics too (`diag.c`).
 - **Settings page** (`web.c`, `web/`): HTTP on 28931 (`-W`), files of `web/` gzip'd into the binary by `tools/embed.py`
   (`build/web_assets.c`). Login: the browser's X25519 key waits for the action button (`web_approve()` first in
   `on_action`; ring `authenticated_setup_mode`), approved keys in `state/web_clients`, Echo key `state/web_key`.
@@ -345,6 +349,19 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   the system partition). Channel change and install only over the keyed connection.  The page switches a channel on
   only once `update_probe` reached GitHub (web.c `updates_gate`, before `core_lock`; else `github_unreachable` in the
   answer and a warning under the row).
+- **Light ring** (`ring.c`, `ring.h`, issue #26): HA's light "Light ring" and the listening ring turned towards the
+  talker over other animations.  ledcontroller loads animations only at its start from `/system/etc/led-resources`
+  and plays only names in a layer config (each `layer_config*.json` is a compositor of its own, so ours go into
+  stock's file).  `hassmic -G dir` (root, `main.sh leds()` at each satellite start, `-G -` = digest only) makes 627
+  files: active-start/its last frame/active-end turned by each LED (`hassmic_listen|hold|end_N`, first in layer 4) and
+  the light's palette (24 hues x full/half + white, 3 levels, solid/pulse/spin/blink, rainbow; last in layer 0), plus
+  stock's config with them added and a digest; `sysinstall.sh leds` installs them (stock's config kept as
+  `/system/etc/layer_config_common.json.pre-hassmic`, digest `/system/etc/hassmic-leds.digest`), ledcontroller
+  restarts.  hassmic lists the light only when the installed digest is its own.  Every pattern of the core goes
+  through `led()` -> `ring_set`/`ring_unset`, which knows from each file how long it shows; while one does, HA's light
+  is off.  The beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N`
+  when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
+  `HASSMIC_FAKE_BEAM`.
 - `src/include/`: headers for the reversed Amazon libraries (`mixer_api.h`, `pryon_api.h`, `aipc_api.h`) and `netio.h`.
 - `src/tools/`: standalone device tools (`mixcap`, `mixplay`, `pryon_test`, `aed_test`, `latency`, `runas` — AIPC refuses uid 0 and
   the image has no `su`; `curlspy`, `hciscan`, `a2dpprobe`, `dha_test` not in `all`).
