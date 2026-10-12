@@ -950,6 +950,37 @@ Run in this order. Each step says what it proves.
       arrived -17..+59 ms from the own detection, so not the 200 ms window: both copies, sent in the same ms, were lost
       together. Now claim and "answers" go out at 0/30/80 ms (`COPY_MS`, loop woken by a pipe so they leave on time;
       kiosk copies too). fake_ha_arbitration: copies at 0/31/81 ms.
+- [~] Arbitration window learned (issue #27, 2026-10-12). Report: two Dot 2s (biscuit) behind a Fritz!Box, 1.5 days of
+      boot.log: the other Echo's claim came a median 232 / 150 ms (p75 311 / 243, p90 387 / 312) after the own
+      detection, 60 of 101 and 31 of 82 after 200 ms; the farther Echo answered in 16 / 19 rounds, 34 of them (all but
+      one) with the louder claim arriving after the decision. Replayed: missed louder claims 18 / 19 of 39 / 45 at 200 ms,
+      6 / 5 at 300, 2 / 2 at 400, 0 / 2 at 500. In their example round each Echo saw the other's claim 317 and 233 ms after
+      its own detection, i.e. ~275 ms on the air and 42 ms between the detections: delivery (DTIM buffering of
+      broadcasts for stations in power save, a multiple of 102.4 ms), not the engines. On the developer's network no
+      claim over 175 ms. Now (`arb.c`): every member's first claim in a round of ours (until 1.5 s, so a window too
+      short still sees what it missed; 0 if it came before ours) is a sample, the last 64 kept with the member's id in
+      `state/arbitration` (`delay <id hex> <ms>`, older builds skip the lines). Window = 95th percentile (nearest
+      rank) + 50 ms, over the samples of the members counted now and of each alone with 3 or more (the slowest sets
+      it), within 150-1000 ms; 500 until 10 samples. Decision early once every member that takes part claimed, or one
+      beat us (`arb_settled`, checked per capture block): the outcome cannot change then, so the window costs only when
+      an Echo did not hear it. Setting `arbitration_window_auto` (on); off, `arbitration_window` (now 100-1000, both
+      modes; Kiosk mode always waits it, nothing learned: their devices count claims within ±window, and their claims
+      are unauthenticated). The log: each claim's lateness (`+233 ms`, `after the decision`), the window per round and
+      why it ended, the learned window when it moves 10 %; the page's status line under the setting (`arb_status_json`
+      `window`, members' `late_ms`). BLE scan paused for the window + 0.5 s (1 s at least). fake_ha_arbitration: both
+      heard = decided after 0.03 s (was the 200 ms window); a fake third member signing with K, claims 300-355 ms late:
+      learning 500 ms, learned 406 ms (its p95 356 + 50), each lateness logged as sent, the round nobody else heard
+      answered after 0.50 s, fixed 200 ms misses the claim, a restart keeps it, a member out of rounds no longer counts.
+      On the three Echos (2026-10-12 20:42, first "Echo" after the push): the Echo 2 and the Dot 2 both answered.
+      Not the window: the Echo 2 (only echo-de-DE) claimed "Echo", the Dot 2 (echo-de-DE and echo-en-US) "Echo (de-DE)",
+      the name `wake_words_scan` gives sets that share one, for HA's select; the keyword hashes differed, each passed
+      over the other's claim (no `+ms` on it, no early end) and answered at its window's end. A bug since the region
+      suffix came in. Now the claim takes the name without it (`wake_phrase_bare`; Kiosk mode's phrase too).
+      fake_ha_arbitration: "Echo (de)" against "Echo", the better one alone. The same run showed a sample booked to the
+      wrong round: in the conversation test the other Echo's claim for the next wake word, 0.6 s later, went in as
+      601 ms late for the round before. Now a new round takes back the last round's samples that came nearer to it
+      than to that one (`delays[].ms` -1, not saved); the new round counts them as come first.
+      Not done: on the reporter's two Echos (they offered to test a build)
 - [x] Stale `-m` after the wake word migration (2026-10-06, donut kept going back to Alexa): `artifact-install.sh
       migrate` renamed `models/echo-de` to `echo-de-DE` and moved `state/wake_word`, but hassmic.conf kept
       `ARGS="-m .../models/echo-de/pryon.manifest"`; `wake_words_scan` added the -m path unchecked, so HA's select had two

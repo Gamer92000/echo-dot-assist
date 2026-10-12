@@ -31,7 +31,12 @@ int  arb_peers(void);                           /* other members heard from late
  * with kiosks and with Echos in that mode.  -1 only reads.  Any lock may be held. */
 enum { ARB_HASSMIC, ARB_KIOSK };
 int  arb_mode(int set);
-int  arb_window(int set);                       /* ARB_KIOSK's window in ms (100-500, as Kiosk Satellite's); -1 only reads */
+/* The window in ms (100-1000; Kiosk Satellite's own setting goes to 500): ARB_KIOSK's, and ARB_HASSMIC's while
+ * arb_window_auto is off (on: learned from how late the members' claims come, arb.c).  -1 only reads.  arb_wait: what a
+ * round would wait now, either way */
+int  arb_window(int set);
+int  arb_window_auto(int set);
+int  arb_wait(void);
 /* ARB_KIOSK: dB added to our claims' loudness (-20..20), the owner's calibration against kiosks; INT_MIN only reads */
 int  arb_offset(int set);
 /* Home Assistant ran our "arbitration_key" action: a member hands us its network.  Any lock may be held. */
@@ -62,4 +67,7 @@ void arb_self(unsigned char id[8]);                            /* the pairing ge
  * ARB_KIOSK: score is Kiosk Satellite's (main.c kiosk_score), prio is ignored, and there is always a round. */
 long long arb_claim(const char *keyword, int score, int prio);
 int       arb_decide(void);                     /* 1: this Echo answers */
+/* Before then: 1 once deciding now gives what waiting would (every member that takes part claimed, or one beat us);
+ * never in ARB_KIOSK, whose devices always wait */
+int       arb_settled(void);
 #endif

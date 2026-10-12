@@ -193,6 +193,10 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   after its first read; then `T_GIVE` on the LAN, taken outside pairing only from a confirmed Echo. Else, after 30 s,
   the newcomer's own ESPHome action `esphome.<node>_arbitration_key` (needs "Allow the device to perform Home Assistant
   actions"). Without HA: Volume up + Volume down held 2 s on both (`T_PAIR`/`T_GIVE`, exactly one requester). ESPHome only.
+  Window (issue #27): learned per Echo from how late each member's claims come (first claim per member and round, sampled
+  until 1.5 s; last 64 as `delay <id> <ms>` lines in `state/arbitration`): 95th percentile + 50 ms over the members
+  counted and per member, 150-1000 ms, 500 until 10 samples; setting `arbitration_window_auto` (off: `arbitration_window`).
+  The capture thread decides early once every member that takes part claimed or one beat us (`arb_settled`).
   The network (beacons, key handoff, pairing; tags and action) always runs: the settings pages find each other
   through it. The `arbitration` setting (`arb_arbitrate`) only gates rounds; off, the beacon carries a flags byte after
   the counter and members leave that Echo out of rounds (older builds reject the longer beacon, same effect).

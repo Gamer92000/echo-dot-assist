@@ -8,7 +8,7 @@ device's own action (esphome.<node>_arbitration_key) on that device.
 Three ways in: the tags (no permission), the action, and the volume-key pairing (SIGWINCH, no HA).
 Then Kiosk Satellite mode: their JSON claims on their port, against each other and a fake kiosk.
 Everything goes out as loopback broadcast (HASSMIC_ARB_ADDR): nothing of it reaches the LAN."""
-import asyncio, base64, datetime, json, os, re, signal, socket, struct, subprocess, sys, tempfile, time
+import asyncio, base64, datetime, hashlib, json, os, re, signal, socket, struct, subprocess, sys, tempfile, time
 from aioesphomeapi import APIClient, VoiceAssistantEventType as Ev
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
@@ -124,6 +124,9 @@ async def until(cond, secs):
 async def main():
     a, b = Echo("Echo Kitchen", 16961, 500), Echo("Echo Living Room", 16962, 900)
     ha = HA([a, b])
+    # a second "Echo" on the kitchen Echo only: there its names become "Echo (de)" and "Echo (en)" in HA's select
+    os.makedirs(os.path.join(a.state, "models", "echo-en"))
+    open(os.path.join(a.state, "models", "echo-en", "pryon.manifest"), "w").close()
     # each already in a network of its own (as two Echos that started at the same moment would be): they merge
     for e, net in ((a, 5), (b, 2)):
         with open(os.path.join(e.state, "arbitration"), "w") as f:
@@ -190,12 +193,13 @@ async def main():
         check(len(same) == 3 and all(len(v) == 3 and 20 <= v[1] <= 60 and 65 <= v[2] <= 120 for v in same.values()),
               f"two claims and one \"answers\", each three times, spread over 80 ms (ms after the first): {sorted(same.values())}")
         check(len(b.starts) == 1 and not a.starts, f"both heard it: the better one (900 over 500) answers alone: {len(a.starts)} / {len(b.starts)}")
-        check(b.starts and b.starts[0] - t0 < 1.0, f"answer after {b.starts[0] - t0 if b.starts else -1:.2f} s")
+        check(b.starts and b.starts[0] - t0 < 0.25 and "this Echo answers (after" in b.text() and "every other Echo's claim in" in b.text(),
+              f"decided once both claims were in, not after the window (500 ms until learned): {b.starts[0] - t0 if b.starts else -1:.2f} s")
         check("another Echo answers" in a.text() and "earcon" not in a.text(), "the other one: no sound")
         # the winner sends from the ring what was said from the wake word's end (128 ms before it was heard on the PC)
-        # through the 200 ms window and up to the next live 50 ms block: 2048 + 3200..4800 samples
+        # through the round (settled within a block or two) up to the next live 50 ms block: 2048 + 0..3200 samples
         await asyncio.sleep(0.3); ahead = sum(b.chunks[:b.chunks.index(1600)]) if 1600 in b.chunks else None
-        check(ahead is not None and 4096 + 6400 <= ahead <= 4096 + 9600, f"nothing said after the wake word is lost to the window: {ahead} bytes ahead of the live stream")
+        check(ahead is not None and 4096 <= ahead <= 4096 + 6400, f"nothing said after the wake word is lost to the round: {ahead} bytes ahead of the live stream")
         b.end_pipeline(); await asyncio.sleep(0.5)
 
         # Home Assistant's own duplicate check (other satellites): no error ring, just back to idle
@@ -217,6 +221,14 @@ async def main():
         a.wake(); b.wake(); await asyncio.sleep(1.5)
         check(len(a.starts) == na + 1 and len(b.starts) == nb + 1, "\"Echo\" on one, \"Alexa\" on the other: no arbitration between them")
         a.end_pipeline(); b.end_pipeline(); await asyncio.sleep(0.5)
+        # the same word under two names ("Echo (de)" where another set shares it, "Echo" where not): they compete
+        await b.cli.set_voice_assistant_configuration(["echo-de"]); await asyncio.sleep(0.5)
+        na, nb = len(a.starts), len(b.starts)
+        a.wake(); b.wake(); await asyncio.sleep(1.5)
+        check('"Echo (de)"' in a.text() and len(a.starts) == na and len(b.starts) == nb + 1 and "every other Echo's claim in" in b.text(),
+              f"\"Echo (de)\" on one, \"Echo\" on the other: one word, the better one answers alone: {len(a.starts) - na} / {len(b.starts) - nb}")
+        b.end_pipeline(); await asyncio.sleep(0.5)
+        await b.cli.set_voice_assistant_configuration(["alexa"]); await asyncio.sleep(0.5)
         await a.cli.set_voice_assistant_configuration(["alexa"]); await asyncio.sleep(0.5)
 
         check(re.search(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}Z arbitration: ", a.text(), re.M), "log lines stamped with the time (UTC) once the clock is known")
@@ -406,6 +418,72 @@ async def main():
         check(ok and any(c[1] == "esphome.echo_living_room_arbitration_key" for c in ha.calls[calls:]),
               f"allowed: the next one joined through the action ({[c[1] for c in ha.calls[calls:]]}, same network {b.net() == a.net()}, "
               f"peers {a.st('arbitration_peers')}/{b.st('arbitration_peers')})")
+
+        # The window, learned (issue #27): a third member behind a repeater, whose claims reach the kitchen Echo 300-360 ms
+        # after its own.  It speaks the protocol with the network's key, as a real Echo would
+        nid, k64 = a.net().split(); key = base64.b64decode(k64); nb8 = struct.pack("<Q", int(nid, 16))
+        mac = hashlib.blake2b(b"hassmic arbitration mac", key=key, digest_size=32).digest()
+        fpub = os.urandom(32); fid = fpub[:8]; ctr = [1 << 40]
+        def signed(p): return p + hashlib.blake2b(p, key=mac, digest_size=16).digest()
+        def fctr(): ctr[0] += 1; return struct.pack("<Q", ctr[0])
+        def fbeacon(flags=b""): send(signed(b"HMA1\x01" + fpub + nb8 + node("echo-hallway") + fctr() + flags))
+        kw = hashlib.blake2b(b"alexa", digest_size=8).digest()
+        def fclaim(score=99999): send(signed(b"HMA1\x04" + nb8 + fid + fctr() + kw + struct.pack("<iBB", score, 0, 0)))
+        sn = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sn.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); sn.bind(("", ARB)); sn.setblocking(False)
+        apk = a.pub()[:8]
+        async def a_claimed(secs=2):                    # the kitchen Echo's own claim (not its "answers"), when it went out
+            end = time.monotonic() + secs
+            while time.monotonic() < end:
+                try: p = sn.recv(512)
+                except BlockingIOError: await asyncio.sleep(0.002); continue
+                if p[4] == 4 and p[13:21] == apk and p[-17] == 0: return time.monotonic()
+            return None
+        fbeacon(); await asyncio.sleep(0.5)
+        arb = a.page.state()["arbitration"]
+        check(any(m["node"] == "echo-hallway" for m in arb["members"]) and arb["window"]["learning"] and arb["window"]["ms"] == 500,
+              f"a new member, nothing measured from it yet: the wait while learning, 500 ms: {arb['window']}")
+        delays = [300 + 5 * i for i in range(12)]
+        for d in delays:                                # it heard it better, its claim late: the kitchen Echo stays quiet
+            while True:
+                try: sn.recv(512)
+                except BlockingIOError: break
+            a.wake(); t = await a_claimed()
+            if t: await asyncio.sleep(max(0, t + d / 1000 - time.monotonic())); fclaim()
+            await asyncio.sleep(1.7)                    # past the round's sampling (1.5 s)
+        arb = a.page.state()["arbitration"]; w = arb["window"]
+        hall = next((m for m in arb["members"] if m["node"] == "echo-hallway"), {})
+        check(not w["learning"] and w["auto"] and 355 <= (hall.get("late_ms") or 0) <= 400 and hall["late_ms"] + 50 <= w["ms"] <= hall["late_ms"] + 60,
+              f"learned from its late claims: waits its 95th percentile plus 50 ms: {w}, hallway {hall.get('late_ms')} ms")
+        lines = re.findall(r"arbitration: %s heard it, score 99999, \+(\d+) ms" % fid[:4].hex(), a.text())
+        check(len(lines) == len(delays) and all(abs(int(x) - d) < 40 for x, d in zip(lines, delays)),
+              f"each claim's lateness in the log, as it was sent: {lines}")
+        check(re.search(r"arbitration: window learned: \d+ ms \(95 % of the last \d+ claims came within \d+ ms\)", a.text())
+              and "another Echo answers (after" in a.text() and "a better claim in" in a.text(), "the log says what it learned, and why each round ended")
+        check(open(os.path.join(a.state, "arbitration")).read().count("delay " + fid.hex()) == len(delays), "the samples kept in state/arbitration")
+        # the hallway Echo did not hear it, nor the living room one: the kitchen Echo waits the learned window, then answers
+        n = len(a.starts); a.wake(); t = await a_claimed()
+        await until(lambda: len(a.starts) > n, 3)
+        took = a.starts[-1] - t if t and len(a.starts) > n else -1
+        check(w["ms"] / 1000 <= took <= w["ms"] / 1000 + 0.15, f"nobody else heard it: answered after the learned {w['ms']} ms: {took:.3f} s")
+        a.end_pipeline(); await asyncio.sleep(1.7)
+        # learning off: the fixed window, too short for this network; the late claim comes after the decision
+        a.page.set(arbitration_window_auto="off", arbitration_window=200)
+        n = len(a.starts); a.wake(); t = await a_claimed()
+        if t: await asyncio.sleep(max(0, t + 0.3 - time.monotonic())); fclaim()
+        await asyncio.sleep(1.7)
+        check(len(a.starts) == n + 1 and "waits up to 200 ms (set)" in a.text() and ", after the decision" in a.text()
+              and a.page.state()["arbitration"]["window"]["ms"] == 200, "learning off: 200 ms set, the late claim missed (both would answer)")
+        a.end_pipeline(); a.page.set(arbitration_window_auto="on"); await asyncio.sleep(0.5)
+        # a restart keeps what was learned; it counts once the member is heard from again
+        await a.cli.disconnect(); a.proc.terminate(); a.proc.wait(); a.start(); await asyncio.sleep(0.5); await a.connect(ha)
+        a.page = Browser(a.web); a.page.login_with_button(a.proc)
+        fbeacon(); await asyncio.sleep(1)
+        w2 = a.page.state()["arbitration"]["window"]
+        check(not w2["learning"] and w2["ms"] == w["ms"], f"after a restart: still learned, {w2['ms']} ms")
+        fbeacon(b"\x01"); await asyncio.sleep(0.5)          # the hallway Echo switches arbitration off: nobody waits for it
+        check(a.page.state()["arbitration"]["window"]["samples"] < len(delays), "a member out of rounds: its samples no longer count")
+        sn.close()
     finally:
         for e in (a, b): e.proc.terminate()
         for e in (a, b): e.proc.wait()

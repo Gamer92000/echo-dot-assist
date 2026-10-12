@@ -41,5 +41,5 @@
   label(hx + 59, hy - 53, [Alexa, …], c: col.accent-text, size: 9.5pt)
 
   line(P(20, 236), P(800, 236), stroke: 2pt + col.line)
-  label(410, 254, [your network: the Echos compare in 0.2 s; the one that heard it clearest answers], size: 9pt)
+  label(410, 254, [your network: the Echos compare in a split second; the one that heard it clearest answers], size: 9pt)
 })

@@ -52,12 +52,13 @@ bytes. Echos in the two modes do not settle wake words with each other (beacons 
 | Score | dB of the loudest 200 ms over the quietest fifth of 3 s of mic audio | the front end's voiceEnergy / ambientEnergy (stock's own number), 1000 * log10, i.e. dB * 100; mic-stream SNR as fallback |
 | Busy device | competes normally | in a conversation or ringing: claims with priority |
 | Late detection | both answer (HA cooldown decides) | 1 s lookback, and the winner broadcasts that it answers |
-| Window | ±400 ms (configurable 100-500) | 200 ms after our detection, fixed; no wait with no peers known |
-| Copies | 3 (0/15/30 ms) | 2 |
+| Window | ±400 ms (configurable 100-500) | learned from how late the members' claims come (95th percentile + 50 ms, 150-1000 ms; 500 until learned) or fixed (setting); ends once every member's claim is in; no wait with no peers known |
+| Copies | 3 (0/15/30 ms) | 3 (0/30/80 ms) |
 | Port | UDP 2330 | UDP 28930 (inside the firewall's inbound 16384-32767) |
 
-Ideas worth taking for ourselves: a third copy of each claim (cheap). A configurable window only if the not-yet-done
-measurement of claim delay over Wi-Fi with power save (PLAN.md, wake word arbitration) shows 200 ms is too short.
+Ideas worth taking for ourselves: a third copy of each claim (done 2026-10-06). A configurable window only if a
+measurement of claim delay over Wi-Fi with power save showed 200 ms too short: it did (issue #27), so the window is
+learned now (PLAN.md, "Arbitration window learned").
 
 ## An opt-in bridge, if wanted
 

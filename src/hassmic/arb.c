@@ -6,10 +6,25 @@
  *
  * Round (per keyword: an Echo listening for "Echo" and one for "Alexa" never compete): main.c scores a detection
  * (signal to noise of the wake word: the front end's own energies where it gives them, else taken from the processed mic
- * stream) and it is broadcast as a claim; WINDOW_MS later the
+ * stream) and it is broadcast as a claim; after the window (below) the
  * Echo answers only if no claim of the last LOOKBACK_MS beats it.  An Echo in a conversation or ringing claims with
  * priority: the next wake word is for it.  The winner broadcasts that it answers, so an Echo whose detection comes late
  * does not answer as well.  With no other member heard from lately there is no round and no delay.
+ *
+ * Window: how long to wait for the others' claims.  An access point holds broadcasts for stations in power save until
+ * its next DTIM beacon (a multiple of 102.4 ms; a repeater may hold them once more), so what a network needs differs:
+ * on the developer's no claim took over 175 ms, on two Dot 2s behind a Fritz!Box (issue #27, 2026-10-11/12) the other
+ * Echo's claim came a median 232 / 150 ms after the own detection, one in ten after 387 / 312 ms, and the fixed 200 ms
+ * let the farther Echo answer in one of five rounds both heard.  One round there, the two Echos' delays taken apart
+ * (each saw the other's claim on its own clock: 317 and 233 ms), was ~275 ms on the air and 42 ms between the two
+ * detections: delivery, not the engines.  So each Echo learns its own window: every member's first claim in a round of
+ * ours is a sample of how long after our claim it came (0: before it), and the last NDELAY are kept with the member's
+ * id in state/arbitration.  The window is the 95th percentile plus AUTO_MARGIN_MS over the samples of the members
+ * counted now, and of each of them alone (the slowest member sets it), within AUTO_MIN_MS..AUTO_MAX_MS; AUTO_START_MS
+ * until AUTO_LEARN samples are in.  Claims are sampled until MEASURE_MS, long past the decision, so a window too short
+ * learns from the claims it missed.  The wait ends early once every member that takes part has claimed, or one beat
+ * us: nothing can change the outcome then, so a wide window costs only when some Echo did not hear the wake word.
+ * The setting arbitration_window_auto off: the arbitration_window setting's fixed window, the early end all the same.
  *
  * Network: the members share a key K; claims and beacons carry a MAC with it and a counter against replays (reserved in
  * blocks in the state file, so it keeps rising across restarts).  Every Echo is in one, always: it looks for members
@@ -103,7 +118,16 @@
 #include "ws.h"
 #include "../third_party/monocypher.h"
 
-#define WINDOW_MS    200        /* wait for the others' claims; Wi-Fi broadcast on a quiet LAN arrives within a few ms */
+/* The window (above) */
+#define AUTO_START_MS  500      /* until learned: past one DTIM interval of three beacons (307 ms) plus the engines' spread */
+#define AUTO_MIN_MS    150      /* never less: the engines alone spread -17..+59 ms, and the capture loop decides per 50 ms block */
+#define AUTO_MAX_MS    1000     /* never more: as far back as claims count (LOOKBACK_MS); a longer wait on every wake word
+                                 * would cost more than a second Echo answering now and then */
+#define AUTO_MARGIN_MS 50
+#define AUTO_LEARN     10       /* samples (all members together) before the window is learned */
+#define AUTO_PEER_MIN  3        /* a member's own samples before its own percentile counts */
+#define MEASURE_MS     1500     /* a member's claim this long after ours is still a sample */
+#define NDELAY         64
 /* A claim and an "answers" go out three times, these ms after the first: Wi-Fi broadcasts have no retries, and two copies
  * sent in the same ms were lost together (2026-10-06, biscuit missed radar's claim in 2 of 3 rounds while donut got it;
  * it got radar's "answers" 200 ms later).  The last copy still reaches a member whose detection came 60 ms before ours
@@ -115,7 +139,7 @@ static const int COPY_MS[] = { 30, 80 };
  * as long as we watched: it was out of their networks (their rounds, the settings page's list) for 15 s every 90 s
  * (2026-10-07, while a wired PC got every one).  A random interval keeps a sender from staying in such a phase, and a
  * member counts until it has been silent for 5 min, about ten beacons: an Echo that is really gone (unplugged) stays
- * in the list that long, and the others wait for its claim (WINDOW_MS) in that time */
+ * in the list that long, and the others wait out the window for its claim in that time */
 #define BEACON_MIN_MS 20000
 #define BEACON_MAX_MS 40000
 #define LONER_MS     10000      /* beacon interval outside a network; members answer such a beacon at once */
@@ -190,7 +214,15 @@ static long long pair_at, pair_until, pair_sent, give_at;
 static int pair_gave, give_left;
 static atomic_int pair_event;
 static uint8_t give_pkt[5 + 32 + 8 + BLOB];
-static struct { uint8_t kw[8]; int score, prio, kiosk; long long at; } round_;
+/* open: claims are sampled for the window (until MEASURE_MS); got: members sampled in it, slot: where in delays[], when:
+ * when their claim came; dirty: samples to save */
+static struct {
+    uint8_t kw[8]; int score, prio, kiosk, open, decided, dirty, ngot; long long at, due;
+    uint8_t got[NPEER][8]; unsigned slot[NPEER]; long long when[NPEER];
+} round_;
+static struct delay { uint8_t id[8]; int ms; } delays[NDELAY];         /* the window's samples: a ring, ndelay ever taken; ms -1: withdrawn */
+static unsigned ndelay;
+static int wauto = 1, wlogged;                         /* wlogged: the learned window the log told last */
 
 /* Kiosk Satellite mode.  kround.e and kclaims[].e: dB x 10, as on the wire */
 static int mode = ARB_HASSMIC, kwindow = 400, koffset;     /* koffset: dB */
@@ -220,6 +252,8 @@ static long long now_ms(void)
 
 static int ago(long long t, long long now, long long ms) { return t && now - t < ms; }     /* 0 = never */
 
+static void hex8(char out[17], const uint8_t *id) { for (int i = 0; i < 8; i++) snprintf(out + 2 * i, 3, "%02x", id[i]); }
+
 /* ---------------------------------------------------------------- state files */
 
 static const char *state_dir(void) { const char *e = getenv("HASSMIC_STATE"); return e ? e : "/data/local/hassmic/state"; }
@@ -234,6 +268,10 @@ static void save(void)
     }
     fprintf(f, "arbitrate %d\nctr %llu\n", arbitrate, (unsigned long long)ctr_saved);
     if (in_net) { b64_encode(net_key, 32, k64, 0, 1); fprintf(f, "net %016llx %s\n", (unsigned long long)net_id, k64); crypto_wipe(k64, sizeof k64); }
+    for (unsigned i = ndelay > NDELAY ? ndelay - NDELAY : 0; i < ndelay; i++) {        /* oldest first */
+        char h[17]; if (delays[i % NDELAY].ms < 0) continue;
+        hex8(h, delays[i % NDELAY].id); fprintf(f, "delay %s %d\n", h, delays[i % NDELAY].ms);
+    }
     if (fclose(f) || rename(tmp, path)) { unlink(tmp); fprintf(stderr, "arbitration: cannot write %s\n", path); }
 }
 
@@ -242,6 +280,7 @@ static void derive(void) { crypto_blake2b_keyed(mac_key, 32, net_key, 32, (const
 static void load(void)
 {
     char path[300], line[160], k64[64]; unsigned long long v; int j; FILE *f;
+    char hx[17];
     snprintf(path, sizeof path, "%s/arbitration", state_dir());
     if (!(f = fopen(path, "r"))) return;
     while (fgets(line, sizeof line, f)) {
@@ -249,6 +288,11 @@ static void load(void)
         if (sscanf(line, "arbitrate %d", &j) == 1 || sscanf(line, "join %d", &j) == 1) arbitrate = j != 0;
         else if (sscanf(line, "ctr %llu", &v) == 1) ctr_saved = v;
         else if (sscanf(line, "net %llx %63s", &v, k64) == 2 && v && b64_decode(k64, strlen(k64), net_key, 32) == 32) { net_id = v; in_net = 1; derive(); }
+        else if (sscanf(line, "delay %16[0-9a-f] %d", hx, &j) == 2 && strlen(hx) == 16 && j >= 0 && j <= MEASURE_MS) {
+            struct delay *d = &delays[ndelay++ % NDELAY];
+            for (int i = 0; i < 8; i++) { unsigned b; sscanf(hx + 2 * i, "%2x", &b); d->id[i] = (uint8_t)b; }
+            d->ms = j;
+        }
     }
     crypto_wipe(line, sizeof line); crypto_wipe(k64, sizeof k64);
     fclose(f);
@@ -365,6 +409,62 @@ static int count_peers(long long now)            /* members we settle wake words
     return n;
 }
 
+/* ---------------------------------------------------------------- the window (lk held) */
+
+/* A member's first claim in our round, ms after ours (0: before it), come at `at` */
+static void sample(const uint8_t id[8], long long ms, long long at)
+{
+    for (int i = 0; i < round_.ngot; i++) if (!memcmp(round_.got[i], id, 8)) return;
+    if (round_.ngot == NPEER) return;
+    memcpy(round_.got[round_.ngot], id, 8); round_.slot[round_.ngot] = ndelay; round_.when[round_.ngot++] = at;
+    struct delay *d = &delays[ndelay++ % NDELAY];
+    memcpy(d->id, id, 8); d->ms = ms < 0 ? 0 : (int)ms;
+    round_.dirty = 1;
+}
+
+static int cmp_int(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
+static int p95(int *v, int n) { qsort(v, (size_t)n, sizeof *v, cmp_int); return v[(n * 95 + 99) / 100 - 1]; }   /* nearest rank */
+
+/* A member's samples into v: how many */
+static int samples_of(const struct peer *p, int *v)
+{
+    int n = 0;
+    for (unsigned j = 0; j < NDELAY && j < ndelay; j++) if (delays[j].ms >= 0 && !memcmp(delays[j].id, p->id, 8)) v[n++] = delays[j].ms;
+    return n;
+}
+
+/* The learned window for a round now.  n: samples of the members counted (they alone: an Echo unplugged or gone quiet
+ * no longer holds the others up); q: their 95th percentile, -1 without any */
+static int learned(long long now, int *n, int *q)
+{
+    int all[NDELAY], mine[NDELAY], na = 0, w = 0;
+    for (int i = 0; i < NPEER; i++) {
+        const struct peer *p = &peers[i];
+        if (!ago(p->seen, now, PEER_TTL_MS) || p->quiet) continue;
+        int nm = samples_of(p, mine);
+        memcpy(all + na, mine, sizeof *mine * (size_t)nm); na += nm;
+        if (nm >= AUTO_PEER_MIN) { int x = p95(mine, nm) + AUTO_MARGIN_MS; if (x > w) w = x; }
+    }
+    *n = na; *q = na ? p95(all, na) : -1;
+    if (na < AUTO_LEARN) { if (w < AUTO_START_MS) w = AUTO_START_MS; }
+    else if (*q + AUTO_MARGIN_MS > w) w = *q + AUTO_MARGIN_MS;
+    return w < AUTO_MIN_MS ? AUTO_MIN_MS : w > AUTO_MAX_MS ? AUTO_MAX_MS : w;
+}
+
+static int window_now(long long now) { int n, q; return mode == ARB_KIOSK || !wauto ? kwindow : learned(now, &n, &q); }
+
+/* A claim of this round that beats ours: the outcome is settled */
+static int beaten(void)
+{
+    for (int i = 0; i < NCLAIM; i++) {
+        struct claim *k = &claims[i];
+        if (!k->at || k->at < round_.at - LOOKBACK_MS || memcmp(k->kw, round_.kw, 8)) continue;     /* another round, another keyword */
+        if (k->won || k->prio > round_.prio || (k->prio == round_.prio && (k->score > round_.score
+                                                                          || (k->score == round_.score && memcmp(k->id, pk, 8) > 0)))) return 1;
+    }
+    return 0;
+}
+
 static struct cand *cand(const uint8_t pub[32])
 {
     struct cand *old = &cands[0];
@@ -453,8 +553,6 @@ static int take_key(uint64_t id, const uint8_t blob[BLOB], const char *from)
     crypto_wipe(k, sizeof k); crypto_wipe(wrap, sizeof wrap);
     return ok;
 }
-
-static void hex8(char out[17], const uint8_t *id) { for (int i = 0; i < 8; i++) snprintf(out + 2 * i, 3, "%02x", id[i]); }
 
 /* Hand K to an Echo outside our network, or in a younger one: on the LAN once HA confirmed its tag (it takes it once HA
  * confirmed ours), else (after ATTEST_WAIT_MS) through its action */
@@ -567,8 +665,16 @@ static void on_packet(const uint8_t *p, size_t n, long long now, uint32_t ip)
         memcpy(k->id, id, 8); memcpy(k->kw, kw, 8);
         k->score = (int32_t)((uint32_t)s[0] | (uint32_t)s[1] << 8 | (uint32_t)s[2] << 16 | (uint32_t)s[3] << 24);
         k->prio = pw[0]; k->won = pw[1]; k->at = now;
-        fprintf(stderr, "arbitration: %02x%02x%02x%02x %s, score %d%s\n", id[0], id[1], id[2], id[3], k->won ? "answers" : "heard it",
-                k->score, k->prio ? " (in a conversation)" : "");
+        /* in our round: how long after our claim, the window's sample (an "answers" is no detection), and in the log, so
+         * anyone can see what their network takes */
+        char late[48] = "";
+        long long d = now - round_.at;
+        if (round_.open && !memcmp(kw, round_.kw, 8) && d <= MEASURE_MS) {
+            if (!k->won) sample(id, d, now);
+            snprintf(late, sizeof late, ", %+lld ms%s", d, round_.decided ? ", after the decision" : "");
+        }
+        fprintf(stderr, "arbitration: %02x%02x%02x%02x %s, score %d%s%s\n", id[0], id[1], id[2], id[3], k->won ? "answers" : "heard it",
+                k->score, k->prio ? " (in a conversation)" : "", late);
     } break;
     }
 }
@@ -794,6 +900,15 @@ static void *loop(void *arg)
         for (int i = 0; i < 2; i++) if (copies[i].left && now >= copy_at(i)) {
             struct pkt b; memcpy(b.p, copies[i].p, copies[i].n); b.n = copies[i].n; send_pkt(&b); copies[i].left--;
         }
+        if (round_.open && now - round_.at >= MEASURE_MS) round_.open = 0;
+        if (!round_.open && round_.dirty) {             /* the round's samples on disk once, and the window if it moved */
+            int ns, q, w = learned(now, &ns, &q);
+            round_.dirty = 0; save();
+            if (wauto && ns >= AUTO_LEARN && (w > wlogged + wlogged / 10 || w < wlogged - wlogged / 10)) {
+                fprintf(stderr, "arbitration: window learned: %d ms (95 %% of the last %d claims came within %d ms)\n", w, ns, q);
+                wlogged = w;
+            }
+        }
         {
             if (!in_net) {
                 int members = 0;
@@ -944,26 +1059,59 @@ long long arb_claim(const char *keyword, int score, int prio)
 {
     long long now = now_ms(), due = 0; struct pkt b; uint8_t low[64]; size_t n = 0;
     for (; keyword[n] && n < sizeof low; n++) low[n] = (uint8_t)tolower((unsigned char)keyword[n]);
-    const char *why;
+    char why[64];
     pthread_mutex_lock(&lk);
+    /* A new wake word while the last round still samples: a claim that came nearer to this detection than to that one
+     * was for this one, not a late one for that (the host test's conversation: the other Echo's claim for the next wake
+     * word, 0.6 s on, went in as 601 ms late).  This round counts it, as come before ours */
+    for (int i = 0; round_.open && i < round_.ngot; i++)
+        if (round_.when[i] - round_.at > now - round_.when[i] && ndelay - round_.slot[i] <= NDELAY) {
+            delays[round_.slot[i] % NDELAY].ms = -1; round_.dirty = 1;
+        }
     crypto_blake2b(round_.kw, 8, low, n);
-    round_.kiosk = mode == ARB_KIOSK; round_.at = now;
+    round_.kiosk = mode == ARB_KIOSK; round_.at = now; round_.open = round_.decided = round_.ngot = 0;
     if (round_.kiosk) {
         due = kiosk_claim(keyword, score, now);
-        why = due ? " (Kiosk Satellite mode)" : !arbitrate ? ", arbitration off" : ", kiosk port not open";
+        snprintf(why, sizeof why, "%s", due ? " (Kiosk Satellite mode)" : !arbitrate ? ", arbitration off" : ", kiosk port not open");
     } else if (running && arbitrate && in_net && count_peers(now)) {
-        round_.score = score; round_.prio = prio;
+        int ns, q, w = wauto ? learned(now, &ns, &q) : kwindow;
+        round_.score = score; round_.prio = prio; round_.open = 1;
+        /* claims that came before ours: those members heard it first, their delay is none */
+        for (int i = 0; i < NCLAIM; i++) {
+            struct claim *k = &claims[i];
+            if (k->at && k->at >= now - LOOKBACK_MS && !k->won && !memcmp(k->kw, round_.kw, 8)) sample(k->id, 0, k->at);
+        }
         claim_pkt(&b, score, prio, 0); send_spread(&b, now);
-        due = now + WINDOW_MS; why = "";
-    } else why = !arbitrate ? ", arbitration off" : ", no other Echo to ask";
+        due = round_.due = now + w;
+        snprintf(why, sizeof why, ", waits up to %d ms (%s)", w, !wauto ? "set" : ns < AUTO_LEARN ? "learning" : "learned");
+    } else snprintf(why, sizeof why, "%s", !arbitrate ? ", arbitration off" : ", no other Echo to ask");
     pthread_mutex_unlock(&lk);
     fprintf(stderr, "arbitration: heard it, score %d%s%s\n", score, prio && !round_.kiosk ? " (in a conversation)" : "", why);
     return due;
 }
 
+/* Every member that takes part claimed this round (or one beat us): deciding now gives what the window's end would */
+int arb_settled(void)
+{
+    long long now = now_ms(); int r = 0;
+    pthread_mutex_lock(&lk);
+    if (!round_.kiosk && round_.open && !round_.decided && !(r = beaten())) {
+        r = 1;
+        for (int i = 0; i < NPEER && r; i++) {
+            const struct peer *p = &peers[i]; int in = 0;
+            if (!ago(p->seen, now, PEER_TTL_MS) || p->quiet) continue;
+            for (int j = 0; j < NCLAIM && !in; j++)
+                in = claims[j].at && claims[j].at >= round_.at - LOOKBACK_MS && !memcmp(claims[j].id, p->id, 8) && !memcmp(claims[j].kw, round_.kw, 8);
+            r = in;
+        }
+    }
+    pthread_mutex_unlock(&lk);
+    return r;
+}
+
 int arb_decide(void)
 {
-    int win = 1; struct pkt b;
+    int win = 1; struct pkt b; long long now = now_ms();
     pthread_mutex_lock(&lk);
     if (round_.kiosk) {
         win = kiosk_decide();
@@ -971,15 +1119,12 @@ int arb_decide(void)
         fprintf(stderr, "arbitration: %s\n", win ? "this Echo answers" : "another device answers");
         return win;
     }
-    for (int i = 0; i < NCLAIM; i++) {
-        struct claim *k = &claims[i];
-        if (!k->at || k->at < round_.at - LOOKBACK_MS || memcmp(k->kw, round_.kw, 8)) continue;     /* another round, another keyword */
-        if (k->won || k->prio > round_.prio || (k->prio == round_.prio && (k->score > round_.score
-                                                                          || (k->score == round_.score && memcmp(k->id, pk, 8) > 0)))) win = 0;
-    }
-    if (win && in_net) { claim_pkt(&b, round_.score, round_.prio, 1); send_spread(&b, now_ms()); }
+    win = !beaten(); round_.decided = 1;
+    if (win && in_net) { claim_pkt(&b, round_.score, round_.prio, 1); send_spread(&b, now); }
+    const char *why = now >= round_.due ? "the window's end" : win ? "every other Echo's claim in" : "a better claim in";
+    long long after = now - round_.at;
     pthread_mutex_unlock(&lk);
-    fprintf(stderr, "arbitration: %s\n", win ? "this Echo answers" : "another Echo answers");
+    fprintf(stderr, "arbitration: %s (after %lld ms: %s)\n", win ? "this Echo answers" : "another Echo answers", after, why);
     return win;
 }
 
@@ -1025,11 +1170,25 @@ int arb_offset(int set)
 int arb_window(int set)
 {
     pthread_mutex_lock(&lk);
-    if (set >= 100 && set <= 500) kwindow = set;
+    if (set >= 100 && set <= AUTO_MAX_MS) kwindow = set;
     int r = kwindow;
     pthread_mutex_unlock(&lk);
     return r;
 }
+
+int arb_window_auto(int set)
+{
+    pthread_mutex_lock(&lk);
+    if (set >= 0 && !set != !wauto) {
+        wauto = set != 0; wlogged = 0;
+        if (running) fprintf(stderr, "arbitration: %s\n", wauto ? "window learned from the other Echos' claims" : "fixed window");
+    }
+    int r = wauto;
+    pthread_mutex_unlock(&lk);
+    return r;
+}
+
+int arb_wait(void) { pthread_mutex_lock(&lk); int r = window_now(now_ms()); pthread_mutex_unlock(&lk); return r; }
 
 static size_t jstr(char *o, size_t cap, const char *s)          /* node names: [a-z0-9_.-] only */
 {
@@ -1048,12 +1207,20 @@ size_t arb_status_json(char *o, size_t cap)
       arbitrate ? "true" : "false", node, mode == ARB_KIOSK ? "kiosk" : "hassmic", ksock >= 0 ? "true" : "false");
     if (kheard) J("\"kiosk_heard_s\":%lld,", (now - kheard) / 1000); else J("\"kiosk_heard_s\":null,");
     if (in_net) J("\"network\":\"%016llx\",", (unsigned long long)net_id); else J("\"network\":null,");
-    J("\"tag\":\"tag.%s\",\"pairing\":%s,\"members\":[", self_tag, pair_until && now < pair_until ? "true" : "false");
+    J("\"tag\":\"tag.%s\",\"pairing\":%s,", self_tag, pair_until && now < pair_until ? "true" : "false");
+    /* the window: what a round waits now (ms), what learning gives (learned) from how many samples, their 95th percentile */
+    int ns, q, w = learned(now, &ns, &q);
+    J("\"window\":{\"ms\":%d,\"auto\":%s,\"learned\":%d,\"learning\":%s,\"samples\":%d,\"p95\":", window_now(now), wauto ? "true" : "false",
+      w, ns < AUTO_LEARN ? "true" : "false", ns);
+    if (q >= 0) J("%d},", q); else J("null},");
+    J("\"members\":[");
     for (int i = 0; i < NPEER; i++) if (ago(peers[i].seen, now, PEER_TTL_MS)) {
         struct in_addr a = { peers[i].ip }; inet_ntop(AF_INET, &a, ip, sizeof ip); jstr(t, sizeof t, peers[i].node);
-        /* quiet with the kiosk flag: it takes part, the kiosk way */
-        J("%s{\"node\":\"%s\",\"ip\":\"%s\",\"seen_s\":%lld,\"arbitrates\":%s,\"mode\":\"%s\"}", k++ ? "," : "", t, peers[i].ip ? ip : "",
+        int v[NDELAY], nv = samples_of(&peers[i], v);
+        /* quiet with the kiosk flag: it takes part, the kiosk way.  late_ms: 95 % of its claims came within it */
+        J("%s{\"node\":\"%s\",\"ip\":\"%s\",\"seen_s\":%lld,\"arbitrates\":%s,\"mode\":\"%s\",\"late_ms\":", k++ ? "," : "", t, peers[i].ip ? ip : "",
           (now - peers[i].seen) / 1000, peers[i].quiet && !peers[i].kiosk ? "false" : "true", peers[i].kiosk ? "kiosk" : "hassmic");
+        if (nv >= AUTO_PEER_MIN) J("%d}", p95(v, nv)); else J("null}");
     }
     J("],\"others\":["); k = 0;
     for (int i = 0; i < NPEER; i++) if (ago(cands[i].seen, now, PEER_TTL_MS)) {

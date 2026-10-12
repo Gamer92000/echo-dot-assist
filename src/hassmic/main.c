@@ -363,6 +363,7 @@ static void playback_hint(void)
 #define MAX_WAKE_WORDS 16
 _Static_assert(CORE_WAKE_ACTIVE_MAX == WAKE_SLOTS, "one slot per active wake word");
 static struct core_wake_word wake_words[MAX_WAKE_WORDS];
+static size_t wake_bare_len[MAX_WAKE_WORDS];        /* each name's length before " (de-DE)", if wake_words_scan added one */
 static int n_wake_words;                            /* under core_lock once running */
 static int wake_act[WAKE_SLOTS], n_act = 1;         /* the active ones (indexes into wake_words), in their slots; same lock */
 static int wake_engine;                             /* WAKE_AMAZON / WAKE_MWW, under core_lock once running */
@@ -464,7 +465,7 @@ static void wake_words_scan(void)
         for (int j = 0; j < n_wake_words; j++) if (j != i && !strcmp(wake_words[i].name, wake_words[j].name)) shared[i] = 1;
     for (int i = 0; i < n_wake_words; i++) {
         const char *dash = strchr(wake_words[i].id, '-');
-        size_t k = strlen(wake_words[i].name);
+        size_t k = wake_bare_len[i] = strlen(wake_words[i].name);
         if (shared[i] && dash) snprintf(wake_words[i].name + k, sizeof wake_words[i].name - k, " (%.20s)", dash + 1);
     }
     wake_act[0] = def; n_act = 1;
@@ -582,6 +583,18 @@ int core_wake_max(void) { return n_wake_words < WAKE_SLOTS ? n_wake_words : WAKE
 const char *core_wake_phrase(void)
 {
     return wake_phrase[0] ? wake_phrase : n_wake_words ? wake_words[wake_act[0]].name : "";
+}
+
+/* Lock held: the run's wake word as said, for arbitration: its name without the language and region it gets only when
+ * this Echo has another set of that name.  With the name, Echos with different sets installed never competed:
+ * 2026-10-12, the Echo 2 (only echo-de-DE) claimed "Echo", the Dot 2 (echo-de-DE and echo-en-US) "Echo (de-DE)", each
+ * passed over the other's claim and both answered the same "Echo" */
+static void wake_phrase_bare(char *out, size_t cap)
+{
+    const char *p = core_wake_phrase();
+    for (int i = 0; i < n_wake_words; i++)
+        if (!strcmp(wake_words[i].name, p)) { snprintf(out, cap, "%.*s", (int)wake_bare_len[i], p); return; }
+    snprintf(out, cap, "%s", p);
 }
 
 static long long wake_cut_ms;    /* when the wake word last cut a reply or an alarm: a "stop" right behind it belongs to that */
@@ -991,7 +1004,8 @@ static void stop_word(void)
 
 /* ---------------------------------------------------------------- wake word arbitration (arb.c)
  * With other Echos in the arbitration network, a detection is scored and only acted on once the others' claims are in:
- * WINDOW_MS later, in the capture thread.  Until then nothing shows (no sound, no ring), so the Echos that lose stay
+ * when every member's is (arb_settled), at the latest after the window (arb.c: learned, 150-1000 ms), in the capture
+ * thread.  Until then nothing shows (no sound, no ring), so the Echos that lose stay
  * quiet.  The audio of the window is not lost: the winner sends it from the ring buffer ahead of the live stream.
  * Nor is it without arbitration: Pryon accepts a keyword 116-128 ms after its end (6 accepts in device logs, "samples
  * <begin>-<end> (fed <n>)"), and the live stream starts with the next 50 ms block, so what the talker says right after
@@ -1179,14 +1193,15 @@ static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* captu
     pthread_mutex_unlock(&core_lock);
     if (!can) { trigger(0, end); return; }               /* could not answer: a claim would only silence the Echos that can */
     /* the one heard: with two wake words, Echos compete per wake word as they do with one each */
-    pthread_mutex_lock(&core_lock); char kw[64]; snprintf(kw, sizeof kw, "%s", core_wake_phrase()); pthread_mutex_unlock(&core_lock);
+    pthread_mutex_lock(&core_lock); char kw[64]; wake_phrase_bare(kw, sizeof kw); pthread_mutex_unlock(&core_lock);
     /* Kiosk Satellite mode: their loudness, not the front end's energies (whose 150 ms only the window would pay for) */
     int score = arb_mode(-1) == ARB_KIOSK ? kiosk_score(end, simulated) : wake_score(begin, end, simulated);
     if (score == INT_MIN) { fprintf(stderr, "arbitration: less than 3 s heard, answers without a claim\n"); trigger(0, end); return; }
     /* The other Echos' claims are Wi-Fi broadcasts, and the BLE scan's share of the antenna loses them (ble.c): no
-     * scanning while this round listens.  1 s covers the window (Kiosk Satellite's up to 500 ms), the claims of Echos
-     * that heard it a little later, and the winner's "answers" */
-    ble_quiet(1000);
+     * scanning while this round listens: the window, then the claims of Echos that heard it a little later and the
+     * winner's "answers", 1 s at least */
+    int w = arb_wait();
+    ble_quiet(w + 500 > 1000 ? w + 500 : 1000);
     long long due = arb_claim(kw, score, prio);
     if (!due) { answer(end); return; }
     arb_due = due; arb_from = end;
@@ -2034,7 +2049,7 @@ static void *capture_thread(void *arg)
             pthread_mutex_lock(&core_lock); uint64_t b = det_begin, e = det_end; pthread_mutex_unlock(&core_lock);
             wake_heard(b, e, 0);
         }
-        if (arb_due && mono_ms() >= arb_due) { arb_due = 0; if (arb_decide()) answer(arb_from); else afe_done(); }    /* after this block went out live */
+        if (arb_due && (mono_ms() >= arb_due || arb_settled())) { arb_due = 0; if (arb_decide()) answer(arb_from); else afe_done(); }    /* after this block went out live */
 
         pthread_mutex_lock(&core_lock);
         if (core_local_wake && (state == LISTENING || state == THINKING) && time(NULL) - state_since > PIPELINE_TIMEOUT) {

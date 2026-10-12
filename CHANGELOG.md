@@ -4,6 +4,19 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-12
 
+- **The right Echo answers on slower Wi-Fi** (issue #27). Echos that heard the same wake word used to wait a fixed
+  0.2 s for each other's claims. On many networks the nearer Echo's claim arrives later than that: routers hold
+  broadcasts back for devices saving power, and repeaters add more. The farther Echo then answered. Now each Echo
+  learns how late the other Echos' claims reach it, and waits just long enough for nearly all of them (0.15 to 1 s;
+  0.5 s until it has measured ten). It also stops waiting as soon as every other Echo's claim is in. When all your
+  Echos heard you, the answer now comes sooner than before; the full wait applies only when one of them did not. The
+  settings page shows what an Echo waits and what it measured. "Learn the wait from the network" off gives a fixed
+  "Arbitration window" instead (the Kiosk Satellite window, now used by both modes, up to 1 s). The log shows how late
+  each claim came, so you can see what your network takes.
+- **Echos with different wake word sets settle who answers again.** An Echo that has two "Echo" sets installed (German
+  and English, say) calls them "Echo (de-DE)" and "Echo (en-US)" in Home Assistant, and it also claimed the wake word
+  under that name; an Echo with only one set claimed it as "Echo". The two took each other's claims for a different
+  word, and both answered. They now claim the word itself.
 - **Wake sound removal (experimental).** Speaking straight on after the wake word means talking over the tone, and
   part of it stays in what Home Assistant hears: Amazon's echo canceller leaves it about as loud as a quiet voice. A
   new experimental card under Features on the settings page, "Wake sound removal" (off by default), finds the tone in the microphone each time

@@ -122,6 +122,20 @@ say: the Echo that answers sends Home Assistant everything from the end of the w
 - Other satellites (ESP32 and so on) are not part of it. Home Assistant lets the first to report answer, and an Echo
   that comes second just goes quiet instead of flashing an error.
 
+**How long they wait.** An Echo decides as soon as every other Echo's claim is in. Only when one did not hear you does
+it wait out its window, which it learns from your network: how late the other Echos' claims reach it. The window is
+the time that 95 % of them took, plus 50 ms, between 0.15 and 1 s; until ten claims are measured it is 0.5 s. Wi-Fi
+repeaters, and routers that hold broadcasts back for devices saving power, make claims late (a few hundred ms is
+common); a wait shorter than that lets the farther Echo answer. The settings page shows the wait under "Learn the
+wait from the network", what it measured, and which Echo's claims come latest. Switched off, a fixed "Arbitration
+window" (100–1000 ms) applies instead. The log notes how late each claim came
+(`arbitration: a0dbbafe heard it, score 1791, +233 ms`), and `after the decision` for one that missed it.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="img/arbitration-window-dark.svg">
+  <img alt="Timelines of one wake word round. Top: the other Echos' claims came between 0 and 372 ms late; 95 % within 356 ms, plus 50 ms gives a window of 406 ms. Every Echo heard you: the living room's claim at 30 ms and the hall's at 95 ms are in, so the Echo decides at 95 ms and skips the rest of the window. One Echo did not: the hall Echo missed it, so the Echo waits the whole 406 ms, then decides. A claim later than the window, at 440 ms: the Echo decided without it, but it is still measured, so the window learns from it." src="img/arbitration-window-light.svg">
+</picture>
+
 **The shared key.** The Echos share a key so that nobody else on the network can join or silence them, and your Home
 Assistant vouches for each: every Echo reports a tag named after its key as scanned (Settings › Tags lists one "Tag
 hassmic_…" per Echo), and an Echo hands the key, encrypted, only to one whose tag Home Assistant confirms. This needs
@@ -135,7 +149,8 @@ the Tags integration (part of the default configuration); names, rooms and renam
 
 "Arbitration mode" on the settings page switches an Echo to [Kiosk Satellite](https://kiosksatellite.com/docs/voice-satellite/#wake-word-arbitration)'s
 protocol, so that Echos and tablets listening for the same word answer once between them: the device that heard it
-loudest over its room answers, after the "Kiosk Satellite window" (400 ms, as on the tablets). The page shows both
+loudest over its room answers, after the "Arbitration window" (400 ms, as on the tablets; Kiosk mode waits it out
+every time and learns nothing, since every device must count claims within the same window). The page shows both
 modes side by side. Kiosk mode costs what that protocol does not have:
 
 - anyone on the network can claim every wake word and keep the Echo silent (no key);

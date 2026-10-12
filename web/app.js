@@ -276,7 +276,7 @@ const HELP = {
         hassmic: ['+', 'The one that heard you best, scored with the wake word energies of Amazon\'s own audio front end, as stock Echos did. The Echo you are talking to, or one that is ringing, keeps the next wake word'],
         kiosk: ['-', 'The one that heard the wake word loudest over its room. No preference for the device you are talking to: a louder one can take the next wake word in the middle of a conversation. The Echo\'s loudness is not yet calibrated against a tablet\'s microphone: an offset (below) evens it out by ear'] }],
       ['Speed', {
-        hassmic: ['+', 'Decided within 0.2 s; with no other Echo around there is no wait at all'],
+        hassmic: ['+', 'Decided the moment every other Echo\'s claim is in; the full wait, learned from your network, only when one did not hear you. With no other Echo around there is no wait at all'],
         kiosk: ['-', 'Every wake word waits the full window (below), even with no other device around'] }],
       ['Lost on Wi-Fi', {
         hassmic: ['+', 'The winner says it answers, so an Echo that heard the wake word late stays quiet too'],
@@ -287,8 +287,22 @@ const HELP = {
     ] },
   arbitration_offset: { parent: 'arbitration', when: () => settingValue('arbitration_mode') === 'kiosk',
     help: 'Evens out the Echo\'s loudness against your tablets\' microphones, which hear differently. If a tablet answers when you spoke to the Echo, raise it; if the Echo answers when you faced a tablet, lower it. Only counts against devices in Kiosk Satellite mode with a different offset: set the same on every Echo. Default 0 dB.' },
-  arbitration_window: { parent: 'arbitration', step: 50, when: () => settingValue('arbitration_mode') === 'kiosk',
-    help: 'How long the Echo waits for other devices\' claims before it answers, as Kiosk Satellite\'s own setting. Longer catches devices that report late, at the cost of a slower answer. Use the same as on your tablets; Kiosk Satellite\'s default is 400 ms.' },
+  arbitration_window_auto: { parent: 'arbitration', when: () => settingValue('arbitration_mode') !== 'kiosk',
+    help: 'Each Echo measures how long the other Echos\' claims take to reach it and waits just long enough for nearly all of them (95 %, plus a little), between 0.15 and 1 s. Wi-Fi repeaters, and routers that hold broadcasts back for devices saving power, make claims late; a wait too short for your network lets the farther Echo answer. Until it has measured ten claims it waits 0.5 s. It answers as soon as every other Echo\'s claim is in, so the wait costs time only when another Echo did not hear you. Off: the fixed window below. On by default.',
+    status: () => {
+      const a = state.arbitration, w = a && a.window; if (!w || a.mode === 'kiosk') return null;
+      const p = (...t) => h('p', { class: 'f-model' }, ...t);
+      if (!(a.members || []).some((m) => m.arbitrates && m.mode !== 'kiosk')) return p('No other Echo settles wake words with this one right now: it answers at once.');
+      const slow = (a.members || []).filter((m) => m.late_ms != null).sort((x, y) => y.late_ms - x.late_ms)[0];
+      const measured = w.samples && !w.learning ? `95 % of the last ${w.samples} claims of the other Echos came within ${w.p95} ms`
+        + (slow && (a.members || []).filter((m) => m.late_ms != null).length > 1 ? `; slowest: ${slow.node}, ${slow.late_ms} ms` : '') : '';
+      if (!w.auto) return p(`Waits ${w.ms} ms, set below.` + (measured ? ` Measured: ${measured}, so learning would wait ${w.learned} ms.` : ''));
+      if (w.learning) return p(`Learning: ${w.samples} of 10 claims measured, waits ${w.ms} ms meanwhile.`);
+      return p(`Waits up to ${w.ms} ms: ${measured}.`);
+    } },
+  arbitration_window: { parent: 'arbitration', step: 50,
+    when: () => settingValue('arbitration_mode') === 'kiosk' || !settingValue('arbitration_window_auto'),
+    help: 'How long the Echo waits for other devices\' claims before it answers. Longer catches devices whose claims come late, at the cost of a slower answer when one did not hear you. Kiosk Satellite mode: use the same as on your tablets; Kiosk Satellite\'s default is 400 ms. Echo network: it still answers as soon as every other Echo\'s claim is in.' },
   sound_detection: { icon: 'wave', ha: ['Sound (event)'], help: 'Amazon\'s Alexa Guard model listens for smoke and CO alarms, breaking glass, barking, a crying baby, snoring, coughing, running water and beeping appliances, and Home Assistant gets each as a "Sound" event for automations.',
     note: 'Less reliable than on a stock Echo, which double-checks every hit in Amazon\'s cloud. Treat events as hints, never as a replacement for a smoke detector.',
     status: () => {

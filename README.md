@@ -76,7 +76,7 @@ Assistant and without a cloud; nothing to set up ([how](docs/GUIDE.md#several-ec
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/arbitration-dark.svg">
-  <img alt="Three Echos in kitchen, living room and hall. Someone in the living room says Alexa; that Echo heard it clearest and answers, the other two stay quiet. They compare over the network in 0.2 seconds." src="docs/img/arbitration-light.svg">
+  <img alt="Three Echos in kitchen, living room and hall. Someone in the living room says Alexa; that Echo heard it clearest and answers, the other two stay quiet. They compare over the network in a split second." src="docs/img/arbitration-light.svg">
 </picture>
 
 Everything else is set on the Echo's own **settings page**, `http://<echo-ip>:28931/` ("Visit" on its device page in

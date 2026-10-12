@@ -49,7 +49,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, ARB_MODE, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WIFI_MOTION,
+enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WIFI_MOTION,
           WIFI_SENS, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
@@ -75,7 +75,8 @@ static const struct setting table[NSET] = {
     [ARB]         = { "arbitration", "Wake word arbitration with other Echos", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* arb.c keeps them in memory, state/config on disk: lockdown.sh admits Kiosk Satellite's port by it */
     [ARB_MODE]    = { "arbitration_mode", "Arbitration mode", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
-    [ARB_WINDOW]  = { "arbitration_window", "Kiosk Satellite window", "Features", "ms", S_INT, 100, 500, 1, 0 },
+    [ARB_AUTO]    = { "arbitration_window_auto", "Learn the wait from the network", "Features", NULL, S_BOOL, 0, 1, 1, 0 },
+    [ARB_WINDOW]  = { "arbitration_window", "Arbitration window", "Features", "ms", S_INT, 100, 1000, 1, 0 },
     [ARB_OFFSET]  = { "arbitration_offset", "Kiosk Satellite loudness offset", "Features", "dB", S_INT, -20, 20, 1, 0 },
     [SOUND]       = { "sound_detection", "Sound detection", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [WHISPER]     = { "whisper_detection", "Whisper detection", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
@@ -110,7 +111,7 @@ static int present(enum id i)
     case SOUND: return sound_model() != SOUND_NONE;               /* the firmware has one on every model so far */
     case LED_AUTO: return core_lux() == core_lux();               /* a light sensor: not NAN */
     case WIFI_MOTION: case WIFI_SENS: return wifimotion_present();
-    case ARB: case ARB_MODE: case ARB_WINDOW: case ARB_OFFSET: return arb_running();
+    case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: return arb_running();
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
     case SS_UNPAIRED: return core_sendspin_port != 0;
     case SPK_GAIN: return spkgain_present();
@@ -169,6 +170,7 @@ int settings_get(const struct setting *s)
     case UPDATES: return update_channel(-1);
     case ARB: return arb_arbitrate(-1);
     case ARB_MODE: return arb_mode(-1);
+    case ARB_AUTO: return arb_window_auto(-1);
     case ARB_WINDOW: return arb_window(-1);
     case ARB_OFFSET: return arb_offset(INT_MIN);
     case SS_UNPAIRED: return sendspin_unpaired(-1);
@@ -209,6 +211,7 @@ static void put(enum id i, int v)
     case UPDATES: update_channel(v); break;
     case ARB: arb_arbitrate(v); break;                          /* arb.c keeps it */
     case ARB_MODE: arb_mode(v); break;
+    case ARB_AUTO: arb_window_auto(v); break;
     case ARB_WINDOW: arb_window(v); break;
     case ARB_OFFSET: arb_offset(v); break;
     case SS_UNPAIRED: sendspin_unpaired(v); break;              /* sendspin.c keeps it */
