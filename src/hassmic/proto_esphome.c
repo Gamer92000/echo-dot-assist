@@ -13,6 +13,8 @@
  *                    player's announcement format (48 kHz) instead of streaming 16 kHz over the API connection.
  *   announcements    VoiceAssistantAnnounceRequest with http URLs; Home Assistant transcodes to the WAV format the media
  *                    player entity advertises, we stream it.  Same path for media_player.play_media.
+ *   buttons          the event entity "Button": a press or a 1 s hold of the action and volume keys, beside what
+ *                    they do on the Echo (core_button_events)
  *   timers           finished timers ring (core_timer_finished); "Timer ringing" and "Ringing timers" (their names)
  *                    say so until stopped or rung out, for automations; the button "Stop ringing" and the media
  *                    player's stop stop them
@@ -109,7 +111,7 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_BT_OUT_SEARCH, KEY_BT_OUT, KEY_BT_OUT_STATUS, KEY_BT_OUT_DELAY, KEY_WIFI_MOTION_ON, KEY_WIFI_MOTION, KEY_WIFI_MOTION_SENS,
        KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF, KEY_WEB_URL, KEY_IDENTIFY, KEY_RESET,
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
-       KEY_DROPIN_RESULT, KEY_TIMER_STOP };
+       KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -454,7 +456,7 @@ static void send_light_entities(void)
       pb_str(&b, 11, "%"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
 }
 
-/* What Home Assistant lists.  Always: media player, identify, factory reset, mute, do not disturb, wake sound, LEDs, equalizer, firmware, the
+/* What Home Assistant lists.  Always: media player, identify, factory reset, mute, do not disturb, wake sound, LEDs, buttons, equalizer, firmware, the
  * Sendspin token (a secret: never on the plain-HTTP settings page).  A feature's entities only while it is on
  * (settings.c, switched on the settings page; switching one has Home Assistant read the list again).  Everything else
  * is on the settings page only.  States go out only for what is listed. */
@@ -497,6 +499,12 @@ static void send_setting_entities(void)
      * time, automations trigger on the type. */
     if (listed(KEY_SOUND)) { PB(b, 384); pb_str(&b, 1, "sound"); pb_fixed32(&b, 2, KEY_SOUND); pb_str(&b, 3, "Sound"); pb_str(&b, 5, "mdi:waveform");
       for (int i = 0; i < core_sound_nevents; i++) pb_str(&b, 9, core_sound_events[i]);
+      send_msg(LIST_EVENT, &b); }
+    /* The buttons (core_button_events): what they do on the Echo stays, Home Assistant hears of them as well.  Event
+     * types are what automations trigger on: they stay as they are, a new kind of press is a new type */
+    { PB(b, 256); pb_str(&b, 1, "button"); pb_fixed32(&b, 2, KEY_BUTTON); pb_str(&b, 3, "Button"); pb_str(&b, 5, "mdi:gesture-tap-button");
+      pb_str(&b, 8, "button");
+      for (int i = 0; i < core_button_nevents; i++) pb_str(&b, 9, core_button_events[i]);
       send_msg(LIST_EVENT, &b); }
     if (listed(KEY_BT_PAIRING)) { PB(b, 128); pb_str(&b, 1, "bluetooth_pairing"); pb_fixed32(&b, 2, KEY_BT_PAIRING); pb_str(&b, 3, "Bluetooth pairing");
       pb_str(&b, 5, "mdi:bluetooth-connect"); send_msg(LIST_SWITCH, &b); }
@@ -1601,6 +1609,12 @@ static void sound(const char *event)    /* lock held */
     fprintf(stderr, "sound: %s\n", event);
 }
 
+static void button(const char *event)   /* lock held */
+{
+    PB(b, 64); pb_fixed32(&b, 1, KEY_BUTTON); pb_str(&b, 2, event);
+    send_state(EVENT, &b);
+}
+
 static void whispered(int on) { (void)on; send_setting(KEY_WHISPERED); }   /* lock held */
 static void timers_changed(void) { send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING); }   /* lock held: names first */
 /* lock held: whom first.  Each state as dropin.c's loop passed it, not the one it is in now: a refusal that came at once
@@ -1622,4 +1636,4 @@ static void dropin_result(const char *result)   /* lock held */
 
 const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, cancel, played, volume_changed, mute_changed, print_mdns, bt_device,
                                      arb_send, arb_changed, sound, whispered, arb_request, settings_changed, entities_changed, arb_scan,
-                                     timers_changed, dropin_changed, dropin_result };
+                                     timers_changed, dropin_changed, dropin_result, button };

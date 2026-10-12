@@ -1520,12 +1520,29 @@ static void *earcon_thread(void *arg)
     return NULL;
 }
 
+/* The buttons in Home Assistant (issue #26): one event entity, "Button", told of every press and hold beside what the
+ * button does on the Echo, so an automation can stop its own alarm clock with the action button or skip a track with
+ * a volume key held.  Holds at 1 s, well before acebuttond's 5 s and the reset at 10 s (buttons.c) */
+const char *const core_button_events[] = { "action", "action_hold", "volume_up", "volume_up_hold", "volume_down", "volume_down_hold" };
+const int core_button_nevents = sizeof core_button_events / sizeof core_button_events[0];
+
+static void button_event(int key, int hold)     /* any thread but the lock's holder */
+{
+    const char *e = core_button_events[key * 2 + !!hold];
+    fprintf(stderr, "button: %s\n", e);
+    pthread_mutex_lock(&core_lock);
+    if (connected && proto->button) proto->button(e);
+    pthread_mutex_unlock(&core_lock);
+}
+
 /* Action button: cancel a running pipeline; else pause what plays (Bluetooth device first, then Sendspin), or resume
- * what the button paused; else talk */
+ * what the button paused; else talk.  Home Assistant hears of it, but not of a press that approved a login or a phone:
+ * an automation on the button must not run whenever someone lets in a browser */
 static void on_action(void)
 {
     if (web_approve()) return;                          /* a login of the settings page waited for this press */
     if (improv_authorize()) return;                     /* a phone setting up the network did */
+    button_event(BUTTON_ACTION, 0);
     if (dropin_running() && dropin_button()) return;    /* a Drop In rang (answered) or ran (ended) */
     pthread_mutex_lock(&core_lock);
     int busy = state == LISTENING || state == THINKING;
@@ -2072,7 +2089,7 @@ int main(int argc, char **argv)
     pthread_create(&ear_t, NULL, earcon_thread, NULL);
     { pthread_t vol_t; pthread_create(&vol_t, NULL, volume_led_thread, NULL); pthread_detach(vol_t); }
 
-    static const struct button_handler buttons = { on_action, on_mute, on_volume, on_pair, on_hold };
+    static const struct button_handler buttons = { on_action, on_mute, on_volume, on_pair, on_hold, button_event };
     if (buttons_start(input, &buttons) < 0) fprintf(stderr, "buttons: %s not available\n", input);
     else if (buttons_muted()) on_mute(1);
 

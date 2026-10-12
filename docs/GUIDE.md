@@ -200,6 +200,13 @@ Beyond the README's two figures:
 
 - **Action**: cancelling works while Home Assistant still listens or thinks, as on a Voice PE; the wake word then
   cancels too and listens again (ESPHome only).
+- **In Home Assistant**: the event entity "Button" fires for each press of the action and volume buttons (`action`,
+  `volume_up`, `volume_down`) and once for each held 1 s (`action_hold`, `volume_up_hold`, `volume_down_hold`),
+  besides what the button does on the Echo. A press counts when it is let go within the second, so a hold never
+  fires both. Nothing fires for both volume buttons held (that pairs Echos) or for the press that approves a login
+  or a phone setting up the Wi-Fi. In an automation: trigger "Entity" → the Button event, with the event type as
+  condition (`{{ trigger.to_state.attributes.event_type == 'action_hold' }}`). The volume still changes on the
+  Echo when a volume button is held for Home Assistant.
 - **Microphone off** plays Alexa's own sounds.
 - Silent and dark at boot.
 - The ring dims with the room's light as on a stock Echo (Amazon's own logic, on by default); a fixed level from Home
@@ -271,6 +278,7 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 | Illuminance | the Echo's light sensor in lux, for automations |
 | Timer ringing, Ringing timers | on while a finished timer rings; their names (diagnostic), see [Voice](#voice) |
 | Stop ringing | button: ends a ringing timer and nothing else |
+| Button | event: each press and 1 s hold of the action and volume buttons, see [Buttons and light ring](#buttons-and-light-ring) |
 | Firmware | update entity, see [Updating](../README.md#updating) |
 | Identify, Restart, Factory reset | buttons; Restart reboots the Echo |
 | Web UI address | diagnostic: the settings page's address |

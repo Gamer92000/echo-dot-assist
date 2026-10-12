@@ -1574,6 +1574,20 @@ Run in this order. Each step says what it proves.
       setting `timer_stop_any` (page-only, exported, off by default): any non-empty normalised STT_END text during a
       ring stops it and cancels the run, as EchoMuse does (wilbowes/EchoMuse#759). Cost: a question during a ring is
       not answered. fake_ha_esphome: the button, "Stopp den Timer" with the setting, a request without a ring untouched.
+- [x] Buttons as Home Assistant events (2026-10-12, issue #26: a Dot 2 user moved from EchoLocal, whose automations
+      stopped an HA-run alarm clock with the action button and used volume holds for next track / play-pause). ESPHome
+      event entity "Button" (`button`, KEY_BUTTON, device class `button`, always listed), types `action`,
+      `action_hold`, `volume_up`, `volume_up_hold`, `volume_down`, `volume_down_hold` (`core_button_events`), beside
+      what the key does on the Echo. `buttons.c`: a press is one let go within `SHORT_PRESS_MS` (1 s, the action
+      button's old short-press limit), a hold fires once at 1 s while still down (own deadline in the reader's poll,
+      beside the 5 s / 10 s reset stages), so the two never both fire; a release found past 1 s before the deadline
+      ran still sends the hold. A second volume key pressed while the first is down makes both a pair: neither
+      fires (`COMBO_MS` pairing). The action button's short press is told by `on_action` after `web_approve` and
+      `improv_authorize`, so the press that lets in a browser or a phone is not an event. Volume keys still change the
+      volume on press. Wyoming has no event entities: nothing there. fake_ha_esphome: hassmic's `-b` keypad is a FIFO
+      of `input_event`s written by the test (press, hold, pair, login press, action press starting a run). Not yet
+      pressed on an Echo; biscuit's `mtk-kpd` also lists KEY_VOLUMEDOWN besides `keys` (getevent -lp), unchecked
+      whether it ever sends it (that would double volume down, as before).
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.

@@ -45,6 +45,7 @@ struct proto {
     void (*timers_changed)(void);               /* may be NULL: a timer started or stopped ringing (core_timers_ringing) */
     void (*dropin_changed)(int state, const char *peer);   /* may be NULL: a Drop In's state (DROPIN_*), each in turn */
     void (*dropin_result)(const char *result);  /* may be NULL: what came of a call this Echo made (dropin_results) */
+    void (*button)(const char *event);          /* may be NULL: a button was pressed or held (core_button_events) */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
@@ -126,6 +127,9 @@ int  core_whispered(void);                       /* the last request: 1 whispere
                                                   * (whisper.h; no lock needed) */
 extern const char *const core_sound_events[];
 extern const int core_sound_nevents;
+/* The buttons for Home Assistant: a press and a hold (1 s) of each, in buttons.h's order (BUTTON_* * 2 + hold) */
+extern const char *const core_button_events[];
+extern const int core_button_nevents;
 
 /* no lock needed */
 void   core_tts_begin(unsigned rate, unsigned channels);   /* lock held for this one: switches to SPEAKING */

@@ -1,5 +1,6 @@
 #include "buttons.h"
 #include "board.h"
+#include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
 #include <poll.h>
@@ -8,7 +9,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define SHORT_PRESS_MS 1000            /* acebuttond sees the holds too: 5 s its setup mode, 21 s its factory reset */
+#define SHORT_PRESS_MS 1000            /* shorter is a press, longer a hold (handler.event).  acebuttond sees the holds
+                                        * too: 5 s its setup mode, 21 s its factory reset */
 #define HOLD_WARN_MS   5000            /* action button held: the ring warns ... */
 #define HOLD_RESET_MS 10000            /* ... and then hassmic's reset (core_reset), long before acebuttond's 21 s */
 #define COMBO_MS       2000            /* both volume keys: stock gives that no meaning (acebuttond's are action holds) */
@@ -72,23 +74,37 @@ static long long now_ms(void)
 static void *reader(void *arg)
 {
     int rfd = (int)(long)arg;
-    struct input_event ev; long long action_down = 0, up_down = 0, dn_down = 0; int combo_done = 0, held = 0;
+    struct input_event ev; long long action_down = 0, vol_down[2] = { 0, 0 }; int combo_done = 0, held = 0;
+    int action_told = 0, vol_told[2] = { 0, 0 };   /* this press went to handler.event already, or must not (a pair) */
     for (;;) {
-        /* while the action button is down, wake for its hold stages: the key repeats only as long as acebuttond's
+        /* Keys held: their stages are due by the clock, not by events.  The keys repeat only as long as acebuttond's
          * configuration says, not something to count on */
-        if (action_down && handler.hold && held < 2) {
-            long long t = now_ms() - action_down, due = (held ? HOLD_RESET_MS : HOLD_WARN_MS) - t;
+        long long now = now_ms(), next = -1;
+        if (action_down) {
+            long long t = now - action_down;
+            if (!action_told && t >= SHORT_PRESS_MS) { action_told = 1; if (handler.event) handler.event(BUTTON_ACTION, 1); }
+            if (handler.hold && held < 2 && t >= (held ? HOLD_RESET_MS : HOLD_WARN_MS)) { held++; handler.hold(held); }
+            if (!action_told) next = action_down + SHORT_PRESS_MS;
+            else if (handler.hold && held < 2) next = action_down + (held ? HOLD_RESET_MS : HOLD_WARN_MS);
+        }
+        for (int k = 0; k < 2; k++) if (vol_down[k] && !vol_told[k]) {
+            if (now - vol_down[k] >= SHORT_PRESS_MS) { vol_told[k] = 1; if (handler.event) handler.event(BUTTON_VOLUME_UP + k, 1); }
+            else if (next < 0 || vol_down[k] + SHORT_PRESS_MS < next) next = vol_down[k] + SHORT_PRESS_MS;
+        }
+        if (next >= 0) {
             struct pollfd p = { rfd, POLLIN, 0 };
-            if (due > 0 && poll(&p, 1, (int)due) == 0) continue;            /* woke for the stage: looked at below */
-            if (due <= 0) { held++; handler.hold(held); continue; }
+            int r = poll(&p, 1, next > now ? (int)(next - now) : 0);
+            if (r == 0 || (r < 0 && errno == EINTR)) continue;             /* woke for a stage: looked at above */
         }
         if (read(rfd, &ev, sizeof ev) != sizeof ev) break;
         if (ev.type != EV_KEY) continue;
+        now = now_ms();
         switch (ev.code) {
         case KEY_HELP:
-            if (ev.value == 1) { action_down = now_ms(); held = 0; }
+            if (ev.value == 1) { action_down = now; held = 0; action_told = 0; }
             else if (ev.value == 0) {
-                if (action_down && now_ms() - action_down < SHORT_PRESS_MS && handler.action) handler.action();
+                if (action_down && now - action_down < SHORT_PRESS_MS) { if (handler.action) handler.action(); }
+                else if (action_down && !action_told && handler.event) handler.event(BUTTON_ACTION, 1);   /* the event came first */
                 if (held == 1 && handler.hold) handler.hold(0);
                 action_down = 0; held = 0;
             }
@@ -107,14 +123,19 @@ static void *reader(void *arg)
             break;
         case KEY_VOLUMEUP:
         case KEY_VOLUMEDOWN: {
-            long long *down = ev.code == KEY_VOLUMEUP ? &up_down : &dn_down;
-            if (ev.value == 1 && handler.volume)       /* press only; key repeat (2) would run away */ handler.volume(ev.code == KEY_VOLUMEUP ? 1 : -1);
-            if (ev.value == 1) *down = now_ms();
-            else if (ev.value == 0) { *down = 0; combo_done = 0; }
+            int k = ev.code == KEY_VOLUMEDOWN;
+            if (ev.value == 1 && handler.volume)       /* press only; key repeat (2) would run away */ handler.volume(k ? -1 : 1);
+            if (ev.value == 1) {
+                vol_down[k] = now; vol_told[k] = 0;
+                if (vol_down[!k]) vol_told[0] = vol_told[1] = 1;            /* both down: a pair, not presses */
+            } else if (ev.value == 0) {
+                if (vol_down[k] && !vol_told[k] && handler.event) handler.event(BUTTON_VOLUME_UP + k, now - vol_down[k] >= SHORT_PRESS_MS);
+                vol_down[k] = 0; combo_done = 0;
+            }
             /* both held: the repeats of the later one (every 150 ms) tell us when 2 s have passed; the two presses
              * changed the volume by one step each way */
-            long long later = up_down > dn_down ? up_down : dn_down;
-            if (up_down && dn_down && !combo_done && now_ms() - later >= COMBO_MS && handler.pair) { combo_done = 1; handler.pair(); }
+            long long later = vol_down[0] > vol_down[1] ? vol_down[0] : vol_down[1];
+            if (vol_down[0] && vol_down[1] && !combo_done && now - later >= COMBO_MS && handler.pair) { combo_done = 1; handler.pair(); }
         } break;
         }
     }

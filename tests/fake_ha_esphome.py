@@ -113,7 +113,11 @@ async def main():
         os.makedirs(os.path.join(state, "models", m)); open(os.path.join(state, "models", m, "pryon.manifest"), "w").close()
     with open(mdns, "w") as f:                          # what main.sh does at boot
         subprocess.run([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-S"], env=env, stdout=f, check=True)
-    proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-L", "-W", str(WEB)], env=env)
+    keys = os.path.join(state, "keypad"); os.mkfifo(keys)    # the keypad (-b): input events written by the test
+    keypad = os.open(keys, os.O_RDWR)                        # opened first: hassmic's open() would wait for a writer
+    def keyev(code, value): os.write(keypad, struct.pack("llHHi", 0, 0, 1, code, value))     # struct input_event, EV_KEY
+    KEY_HELP, KEY_VOLUMEUP, KEY_VOLUMEDOWN = 138, 115, 114
+    proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-L", "-W", str(WEB), "-b", keys], env=env)
     httpd = ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     await until(lambda: port_open(PORT) and port_open(WEB))
@@ -693,6 +697,42 @@ async def main():
         c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "x", "message": "end of test pipeline"})
         await sync(c)
 
+        # The buttons in Home Assistant (issue #26): the event entity "Button", beside what each key does on the Echo.  A
+        # press is told when let go within 1 s, a hold once at 1 s while still down; both volume keys down are a pair
+        # (arbitration), no presses; a press that lets a browser in is not told
+        bev = cby.get("button")
+        check(isinstance(bev, EventInfo) and bev.device_class == "button" and list(bev.event_types)
+              == ["action", "action_hold", "volume_up", "volume_up_hold", "volume_down", "volume_down_hold"],
+              f"buttons: the event entity, with a press and a hold of each key: {bev}")
+        bevs = lambda: [x.event_type for x in st3 if isinstance(x, Event) and x.key == bev.key]
+        n0 = len(bevs())
+        keyev(KEY_VOLUMEUP, 1); await asyncio.sleep(0.2); keyev(KEY_VOLUMEUP, 0)
+        await until(lambda: len(bevs()) > n0)
+        check(bevs()[n0:] == ["volume_up"], f"volume up pressed: volume_up ({bevs()[n0:]})")
+        n0 = len(bevs()); keyev(KEY_VOLUMEDOWN, 1)
+        await until(lambda: len(bevs()) > n0, 2)
+        check(bevs()[n0:] == ["volume_down_hold"], f"volume down held: volume_down_hold at 1 s, still down ({bevs()[n0:]})")
+        keyev(KEY_VOLUMEDOWN, 0); await asyncio.sleep(0.5)
+        check(bevs()[n0:] == ["volume_down_hold"], f"and nothing when let go ({bevs()[n0:]})")
+        n0 = len(bevs()); started.clear(); keyev(KEY_HELP, 1)
+        await until(lambda: len(bevs()) > n0, 2)
+        keyev(KEY_HELP, 0); await asyncio.sleep(0.5)
+        check(bevs()[n0:] == ["action_hold"] and not started.is_set(), f"action held: action_hold, no request ({bevs()[n0:]})")
+        n0 = len(bevs())
+        keyev(KEY_VOLUMEUP, 1); await asyncio.sleep(0.1); keyev(KEY_VOLUMEDOWN, 1); await asyncio.sleep(1.5)
+        keyev(KEY_VOLUMEUP, 0); keyev(KEY_VOLUMEDOWN, 0); await asyncio.sleep(0.5)
+        check(bevs()[n0:] == [], f"both volume keys held: a pair, no presses or holds ({bevs()[n0:]})")
+        page2 = Browser(WEB); page2.login(); keyev(KEY_HELP, 1); keyev(KEY_HELP, 0)
+        await until(lambda: page2.login() == "approved")
+        await asyncio.sleep(0.3)
+        check(page2.login() == "approved" and bevs()[n0:] == [] and not started.is_set(),
+              f"a press that lets a browser in: not told, no request ({bevs()[n0:]})")
+        keyev(KEY_HELP, 1); await asyncio.sleep(0.1); keyev(KEY_HELP, 0)
+        await until(lambda: len(bevs()) > n0 and started.is_set())
+        check(bevs()[n0:] == ["action"] and started.is_set(), f"action pressed: action, and the Echo listens as before ({bevs()[n0:]})")
+        c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "x", "message": "end of test pipeline"})
+        await sync(c)
+
         # A new address (issue #17, netaddr.c): the link over the old one is closed at once, though it held the voice
         # assistant; root is asked to announce mDNS again, at once and again while nobody comes back (Home Assistant
         # ignores announcements while it still holds the dead link); back over the new address, the voice assistant is free
@@ -725,7 +765,7 @@ async def main():
         check(not os.path.exists(mreq), "Home Assistant connected: no more announcements")
         await c.disconnect()
     finally:
-        proc.terminate(); httpd.shutdown()
+        proc.terminate(); httpd.shutdown(); os.close(keypad)
         for f in (play, settings):
             if os.path.exists(f): os.unlink(f)
     print("FAILED" if check.failed else "all good")

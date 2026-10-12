@@ -4,6 +4,12 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-12
 
+- **The buttons in Home Assistant** (issue #26). A new event entity "Button" fires for every press of the action
+  button and the volume buttons, and once when one of them is held for a second: `action`, `volume_up`,
+  `volume_down`, `action_hold`, `volume_up_hold`, `volume_down_hold`. What the buttons do on the Echo stays as it was,
+  so an automation can add to it: stop an alarm clock that Home Assistant plays, skip a track with volume up held.
+  Holding both volume buttons (pairing Echos) fires nothing, nor does the press that lets a browser into the settings
+  page.
 - **Switching between the Bluetooth speaker and the Echo is quick now** (issue #25). With the new setting "Stay
   connected when off" in the Bluetooth speaker's card on the settings page, switching "Play on Bluetooth speaker" off
   keeps the speaker connected and only moves the sound back to the Echo, so switching it on again takes well under a
