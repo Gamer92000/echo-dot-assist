@@ -259,6 +259,10 @@ Assistant starting on the Echo pauses the phone. The voice assistant ducks both.
   addresses for discovery": with the port, since a bare address means Sendspin's default 8928, which is not the Echo's.
 - **From a phone** over Bluetooth: SBC, AAC, aptX, aptX HD, with media controls. Switch on "Bluetooth audio from phones" on the
   settings page; the "Bluetooth pairing" switch in Home Assistant then lets phones pair (blue chaser on the ring).
+  Connecting and disconnecting play a chime and, like stock Alexa, "Connected to <phone>" / "Disconnected from
+  <phone>": Home Assistant speaks those words, and only once "Allow the device to perform Home Assistant actions" is
+  ticked in the Echo's ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure). Without it
+  you hear the chime only. "Bluetooth announcements" on the settings page turns both off and picks their language.
 
 ### Playing on a Bluetooth speaker
 
