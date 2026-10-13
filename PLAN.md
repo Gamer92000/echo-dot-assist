@@ -1863,3 +1863,20 @@ Run in this order. Each step says what it proves.
       ever): in GUIDE and donut's README. fake_ma_sendspin: no announcement while a server is connected, server
       closed -> `state/mdns` "no Sendspin server for 4 s", again after a longer wait, the restarted server (same
       identity and pairing store) plays again paired, then no announcements (25/25). Open (device): the reporter's VLAN.
+- [~] Media from a Home Assistant on HTTPS (2026-10-13, GitHub issues #29, #30; HA with a Let's Encrypt
+      certificate in `http: ssl_certificate`, external URL `https://<name>:8124` forwarded to 8123, no plain HTTP).
+      HA 2026.10 `helpers/network.py` `get_url()`: with `api.use_ssl` it defaults to `prefer_external=True` and
+      `allow_ip=False`, so TTS (`assist_satellite` -> `async_process_play_media_url` -> `get_url(hass)`),
+      announcements and play_media all carry the external URL, never `http://<ip>:8123` (that fallback needs
+      `use_ssl` off), and an internal URL by IP is never used (#29: HA's rule for every device, not ours; ESPHome's own
+      satellites get the same URL). We refused every `https://` (`http_get`). Now `https.c`: `https://` through the
+      firmware's libcurl 7.50.1 (BoringSSL, thread-safe; CA dir `/system/etc/security/cacerts` built in, 136 roots on
+      donut), a detached thread writing the body into a socketpair whose other end the decoders read as before;
+      `https_open` returns at the end of the first 2xx response's headers (failures before a socket, as plain), the
+      media cancel's `shutdown()` makes the next `send` fail and the write callback stop curl; redirects followed (5),
+      connect 10 s, < 1 B/s for 15 s ends it (plain: 15 s receive timeout), `.local` via `mdns_resolve4` +
+      `CURLOPT_RESOLVE`. Setting `https_verify` (System, exported, default on): `SSL_VERIFYPEER`/`VERIFYHOST`; off
+      takes self-signed. fake_ha_esphome (`HASSMIC_CA_FILE` = a test CA): WAV, MP3 and a redirect over HTTPS with a
+      CA-signed certificate, self-signed refused, taken with the setting off (persisted), unreachable reports failure.
+      Device (biscuit, 2026-10-13, announcements over its ESPHome API): raw.githubusercontent.com MP3 with checks on
+      played; a self-signed server refused (curl 60), played with `https_verify=off`.  Open: a real HA over HTTPS.

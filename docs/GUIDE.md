@@ -13,6 +13,13 @@ the [README](../README.md).
 
 Replies start while text to speech is still being generated.
 
+Replies, announcements and media come from the addresses Home Assistant gives out, `http://` or `https://`. A Home
+Assistant that serves HTTPS itself (`ssl_certificate` under `http:`) gives out its external URL (not the internal one:
+its rule, for every device), so the Echo must reach that name from inside your network: through your router
+(NAT loopback) or a local DNS entry for it. The certificate is checked: a self-signed one, or one that does not name
+that address, is refused ("SSL peer certificate ... was not OK" in the log). "Check HTTPS certificates" (settings page,
+System) off takes any certificate, but then anyone on your network could slip the Echo audio of their own.
+
 - **Speak straight on** after the wake word: Home Assistant gets everything from the end of the word, so "Alexa turn on
   the light" in one breath works, and you need not wait for the tone. The tone itself is partly still in what Home
   Assistant hears: Amazon's echo canceller leaves about as much of it as a quiet voice. "Wake sound removal"

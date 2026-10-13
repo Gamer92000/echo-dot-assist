@@ -71,6 +71,7 @@
 #include "core.h"
 #include "micgain.h"
 #include "hash.h"
+#include "https.h"
 #include "noise.h"
 #include "sendspin.h"
 #include "clock.h"
@@ -743,7 +744,8 @@ static int http_get_host(const char *host, const char *port, const char *path)
 static int http_get(const char *url)    /* returns a socket positioned at the body, or -1 */
 {
     char host[256], port[8] = "80"; const char *p = url, *path;
-    if (strncmp(p, "http://", 7)) { fprintf(stderr, "media: only http:// is supported: %s\n", url); return -1; }
+    if (!strncasecmp(p, "https://", 8)) return https_open(url);     /* Home Assistant serving HTTPS itself (https.c) */
+    if (strncmp(p, "http://", 7)) { fprintf(stderr, "media: only http:// and https:// are supported: %s\n", url); return -1; }
     p += 7; path = strchr(p, '/');
     snprintf(host, sizeof host, "%.*s", (int)(path ? path - p : (long)strlen(p)), p);
     char *colon = strrchr(host, ':'), *close_br = strrchr(host, ']');

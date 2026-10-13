@@ -359,6 +359,11 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   the system partition). Channel change and install only over the keyed connection.  The page switches a channel on
   only once `update_probe` reached GitHub (web.c `updates_gate`, before `core_lock`; else `github_unreachable` in the
   answer and a warning under the row).
+- **Media over HTTPS** (`https.c`, issue #30): `proto_esphome.c` `http_get` hands `https://` to `https_open`, which
+  runs the firmware's libcurl (dlopen, BoringSSL, system CAs) in a thread writing the body into a socketpair: the
+  decoders and the cancel's `shutdown()` work as on a plain fetch.  Setting `https_verify` (default on; off takes any
+  certificate).  HA with `ssl_certificate` hands out its external URL only (`get_url`: prefer external, no IP), so
+  that name must resolve and be reachable from the LAN.  `HASSMIC_CA_FILE` for tests.
 - **Light ring** (`ring.c`, `ring.h`, issue #26): HA's light "Light ring" and the listening ring turned towards the
   talker over other animations.  ledcontroller loads animations only at its start from `/system/etc/led-resources`
   and plays only names in a layer config (each `layer_config*.json` is a compositor of its own, so ours go into

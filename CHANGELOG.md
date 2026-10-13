@@ -4,6 +4,12 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-13
 
+- **Replies and announcements from a Home Assistant that serves HTTPS itself** (issue #30). With its own certificate
+  (`ssl_certificate` under `http:`), Home Assistant gives the Echo https:// addresses for spoken replies,
+  announcements and media, and the Echo only played http://: it stayed silent and the log said "only http:// is
+  supported". It now plays https:// too, and follows redirects there. The certificate is checked as a browser would:
+  a self-signed one, or one that does not name the address Home Assistant gives out, is refused, and the log says so.
+  "Check HTTPS certificates" on the settings page (System) switched off accepts any certificate.
 - **Music Assistant finds the Echo again after it restarts** (issue #28). Music Assistant looks for Sendspin players
   only when it starts, and on some networks (the Echo on a VLAN of its own, say) that search does not reach the Echo;
   only the Echo's own announcement at boot did. After Music Assistant or Home Assistant restarted, the Echo stayed

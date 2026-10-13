@@ -13,6 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 from webclient import Browser
 PORT, HTTP_PORT, WEB = 16953, 16954, 16955
+HTTPS_PORT, SELF_PORT = 16966, 16967          # HTTPS by a CA the Echo is given (HASSMIC_CA_FILE), and self-signed
 
 
 def tone(rate, seconds, freq=440):
@@ -31,6 +32,8 @@ late_asked, late_done = threading.Event(), threading.Event()
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path.startswith("/moved"):            # Home Assistant behind a proxy that redirects
+            self.send_response(302); self.send_header("Location", "/a.wav"); self.send_header("Content-Length", "0"); self.end_headers(); return
         body = wav_bytes(48000, 3.0 if "s=3" in self.path else 0.5)
         if self.path.endswith(".mp3"):                  # what Home Assistant sends for a TTS announcement before any pipeline ran
             # 1 s of 440 Hz, 24 kHz mono: ffmpeg -bitexact -f lavfi -i sine=frequency=440:duration=1 -ar 24000 -ac 1
@@ -44,6 +47,50 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             if "late" in self.path: late_done.set()
     def log_message(self, *a): pass
+
+
+def tls_files(d):
+    """A CA and a certificate it signed for 127.0.0.1, and a self-signed one for the same address (Home Assistant with
+    its own certificate): PEM files in d."""
+    import datetime, ipaddress
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    now = datetime.datetime.now(datetime.timezone.utc)
+    def cert(name, key, issuer, issuer_key, ca):
+        b = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)]))
+             .issuer_name(issuer).public_key(key.public_key()).serial_number(x509.random_serial_number())
+             .not_valid_before(now - datetime.timedelta(days=1)).not_valid_after(now + datetime.timedelta(days=30))
+             .add_extension(x509.BasicConstraints(ca=ca, path_length=None), critical=True))
+        if not ca: b = b.add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+        return b.sign(issuer_key, hashes.SHA256())
+    def write(name, *objs):
+        with open(os.path.join(d, name), "wb") as f:
+            for o in objs:
+                f.write(o.public_bytes(serialization.Encoding.PEM) if isinstance(o, x509.Certificate) else
+                        o.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+        return os.path.join(d, name)
+    ca_key, key, self_key = (ec.generate_private_key(ec.SECP256R1()) for _ in range(3))
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "hassmic test CA")])
+    ca = cert("hassmic test CA", ca_key, ca_name, ca_key, True)
+    srv = cert("127.0.0.1", key, ca_name, ca_key, False)
+    own = cert("127.0.0.1", self_key, x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")]), self_key, False)
+    return write("ca.pem", ca), write("srv.pem", srv, key), write("self.pem", own, self_key)
+
+
+def https_server(port, pem):
+    import ssl
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(pem)
+    class TLSServer(ThreadingHTTPServer):
+        def shutdown_request(self, request):        # close_notify at the end, as aiohttp sends it: the body ends there
+            try: request.unwrap()
+            except (OSError, ValueError): pass
+            super().shutdown_request(request)
+    httpd = TLSServer(("127.0.0.1", port), Handler)
+    httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd
 
 
 def check(cond, what):
@@ -103,6 +150,8 @@ async def main():
                HASSMIC_FAKE_ADDRS=os.path.join(state, "addrs"),                 # the Echo's addresses (netaddr.c)
                HASSMIC_ANNOUNCE_TIMES="3 6")                                    # mDNS again after 3 s without a client (100 s)
     with open(env["HASSMIC_FAKE_ADDRS"], "w") as f: f.write("127.0.0.1\n")
+    ca_pem, srv_pem, self_pem = tls_files(state)
+    env["HASSMIC_CA_FILE"] = ca_pem                                         # the CAs the Echo trusts (https.c)
     def conf():                                      # state/config: name=value lines (settings.c)
         try: return dict(l.strip().split("=", 1) for l in open(os.path.join(state, "config")) if "=" in l and not l.startswith("#"))
         except OSError: return {}
@@ -120,6 +169,7 @@ async def main():
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-L", "-W", str(WEB), "-b", keys], env=env)
     httpd = ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    httpsd, selfd = https_server(HTTPS_PORT, srv_pem), https_server(SELF_PORT, self_pem)
     await until(lambda: port_open(PORT) and port_open(WEB))
     try:
         page = Browser(WEB)                                 # the settings page: what is no longer in Home Assistant
@@ -364,6 +414,30 @@ async def main():
 
         res = await cli.send_voice_assistant_announcement_await_response("http://127.0.0.1:1/none.wav", 15, "x")
         check(not res.success, "unreachable announcement URL reports failure")
+
+        # Home Assistant serving HTTPS itself (issue #30): its URLs are https://, played through libcurl (https.c)
+        check(pv("https_verify") == 1, f"HTTPS certificates are checked by default: {pv('https_verify')}")
+        before = os.path.getsize(play)
+        res = await cli.send_voice_assistant_announcement_await_response(f"https://127.0.0.1:{HTTPS_PORT}/a.wav", 15, "tls")
+        check(res.success and os.path.getsize(play) - before == 48000, f"HTTPS announcement with a valid certificate played: {os.path.getsize(play) - before} bytes")
+        before = os.path.getsize(play)
+        res = await cli.send_voice_assistant_announcement_await_response(f"https://127.0.0.1:{HTTPS_PORT}/tts.mp3", 15, "tls mp3")
+        got = os.path.getsize(play) - before
+        check(res.success and 44000 <= got <= 52000, f"HTTPS MP3 announcement played: {got} bytes")
+        before = os.path.getsize(play)
+        res = await cli.send_voice_assistant_announcement_await_response(f"https://127.0.0.1:{HTTPS_PORT}/moved", 15, "redirect")
+        check(res.success and os.path.getsize(play) - before == 48000, "HTTPS redirect followed")
+        before = os.path.getsize(play)
+        res = await cli.send_voice_assistant_announcement_await_response(f"https://127.0.0.1:{SELF_PORT}/a.wav", 15, "self-signed")
+        check(not res.success and os.path.getsize(play) == before, "self-signed certificate refused while checks are on")
+        page.set(https_verify="off")
+        check(conf().get("https_verify") == "off", f"certificate checks off, persisted: {conf().get('https_verify')}")
+        res = await cli.send_voice_assistant_announcement_await_response(f"https://127.0.0.1:{SELF_PORT}/a.wav", 15, "self-signed")
+        check(res.success and os.path.getsize(play) - before == 48000, "self-signed certificate taken with checks off")
+        page.set(https_verify="on")
+        before = os.path.getsize(play)
+        res = await cli.send_voice_assistant_announcement_await_response("https://127.0.0.1:1/none.wav", 15, "x")
+        check(not res.success and os.path.getsize(play) == before, "unreachable HTTPS URL reports failure")
 
         dnd = by.get("do_not_disturb")
         check(isinstance(dnd, SwitchInfo), "do not disturb switch listed")
@@ -772,7 +846,7 @@ async def main():
         check(not os.path.exists(mreq), "Home Assistant connected: no more announcements")
         await c.disconnect()
     finally:
-        proc.terminate(); httpd.shutdown(); os.close(keypad)
+        proc.terminate(); httpd.shutdown(); httpsd.shutdown(); selfd.shutdown(); os.close(keypad)
         for f in (play, settings):
             if os.path.exists(f): os.unlink(f)
     print("FAILED" if check.failed else "all good")
