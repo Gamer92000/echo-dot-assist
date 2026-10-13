@@ -3,7 +3,9 @@
  * writes it, and the signature over SHA-256 of the first two parts joined.  The HAL is the fake of
  * dha_hal_fake.c through HASSMIC_DHA_HAL; the key and fields are dha_hal_key.h, shared with it, so this test pins
  * dha.c's format, not the fake's data.  Both shapes: drvV1 (the RSA keymaster) and donut's drvV3 (DHA_FAKE_V3: the
- * certificate of field 0x203, the fixed cpuid, the DER signature split into R and S). */
+ * certificate of field 0x203, the fixed cpuid, the DER signature split into R and S).  With --service[2], checkers'
+ * way: no HAL, the key behind the binder service amazon.security.dha, asked through a fake of the service tool (core_run
+ * below, printing replies as Android 7's Parcel does), and the token Java MAP builds from it. */
 #include "dha.h"
 #include "hash.h"
 #include <stdint.h>
@@ -11,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include "dha_hal_key.h"
 
 static int fails;
@@ -78,18 +81,173 @@ static void expected_v3(char *out, size_t cap, time_t when)
     snprintf(out, cap, "%s.%s.%s", hb, pb, rs_b64);
 }
 
+/* ---------------------------------------------------------------- checkers: the fake service */
+
+static int svc_calls[8];
+
+/* the tool's print of a reply: exception 0, then the words, as "0x<offset>: " lines of four with an ASCII column */
+static void parcel_print(const uint32_t *w, size_t nw, char *out, size_t n)
+{
+    size_t k = (size_t)snprintf(out, n, "Result: Parcel(\n");
+    for (size_t i = 0; i < nw && k < n; i += 4)
+    {
+        k += (size_t)snprintf(out + k, n - k, "  0x%08zx: ", i * 4);
+        for (size_t j = i; j < i + 4 && j < nw && k < n; j++)
+            k += (size_t)snprintf(out + k, n - k, "%08x ", w[j]);
+        if (k < n)
+            k += (size_t)snprintf(out + k, n - k, "'....'\n");
+    }
+    if (k < n)
+        snprintf(out + k, n - k, ")\n");
+}
+
+static size_t put_bytes(uint32_t *w, const uint8_t *p, size_t len)
+{
+    w[0] = 0;
+    w[1] = (uint32_t)len;
+    for (size_t i = 0; i < len; i++)
+        w[2 + i / 4] = (i % 4 ? w[2 + i / 4] : 0) | (uint32_t)p[i] << (8 * (i % 4));
+    return 2 + (len + 3) / 4;
+}
+
+/* "/system/bin/service call amazon.security.dha <code> [i32 ...]": what fireos-dha answers on the tester's Echo, with
+ * the fixed key.  sign's signature: byte i is digest[i % 32] ^ 0x5A, so the test can check what was signed. */
+void core_run(char *const argv[], char *out, size_t n)
+{
+    uint32_t w[200];
+    size_t nw = 0;
+    int code;
+    out[0] = 0;
+    if (strcmp(argv[0], "/system/bin/service") || strcmp(argv[1], "call") || strcmp(argv[2], "amazon.security.dha"))
+        return;
+    code = atoi(argv[3]);
+    if (code >= 0 && code < 8)
+        svc_calls[code]++;
+    if (code == 6)
+    {
+        w[0] = 0;
+        w[1] = (uint32_t)atoi(getenv("DHA_FAKE_SVC_VERSION") ? getenv("DHA_FAKE_SVC_VERSION") : "1");
+        nw = 2;
+    }
+    else if (code == 3)
+        nw = put_bytes(w, dha_der, sizeof dha_der);
+    else if (code == 4)
+        nw = put_bytes(w, dha_mac, sizeof dha_mac);
+    else if (code == 1)
+    {
+        uint8_t dg[32], sig[256];
+        int k = 4;
+        if (!argv[k] || strcmp(argv[k], "i32") || atoi(argv[k + 1]) != 32)
+            return;                                 /* the byte[]'s length first */
+        for (int i = 0; i < 8; i++)
+        {
+            uint32_t v;
+            k += 2;
+            if (!argv[k] || strcmp(argv[k], "i32"))
+                return;
+            v = (uint32_t)strtol(argv[k + 1], NULL, 10);
+            for (int b = 0; b < 4; b++)
+                dg[i * 4 + b] = (uint8_t)(v >> (8 * b));
+        }
+        for (int i = 0; i < 256; i++)
+            sig[i] = dg[i % 32] ^ 0x5A;
+        nw = put_bytes(w, sig, sizeof sig);
+    }
+    else
+    {
+        w[0] = 0xfffffff9u;                          /* getDhaCertificateChain on version 1: an exception */
+        w[1] = w[2] = 0;
+        nw = 3;
+    }
+    parcel_print(w, nw, out, n);
+}
+
+/* Java MAP's drvV1 (kcpsdk.auth.w/r/l0 of com.amazon.imp.apk), built from the decompiled code's order of puts */
+static void expected_java(char *out, size_t cap, time_t when, const char *dsn, const char *cpuid)
+{
+    char h[800], p[400], hb[1100], pb[600], date[32], mod_b64[400], mac_b64[64], sig[256], sig_b64[400], cpu[96] = "";
+    uint8_t dg[32];
+    struct tm tm;
+
+    b64_encode(dha_mod, 256, mod_b64, 1, 1);                   /* Base64 flags 10: URL-safe, padded */
+    b64_encode(dha_mac, sizeof dha_mac, mac_b64, 1, 1);
+    gmtime_r(&when, &tm);                                      /* SimpleDateFormat in UTC */
+    strftime(date, sizeof date, "%Y-%m-%dT%H:%MZ", &tm);
+    snprintf(h, sizeof h, "{\"typ\":\"drvV1\",\"alg\":\"PS256\",\"jwk\":{\"kty\":\"RSA\",\"n\":\"%s\",\"e\":\"65537\","
+             "\"mac\":\"%s\"}}", mod_b64, mac_b64);
+    if (cpuid)
+        snprintf(cpu, sizeof cpu, ",\"cpuid\":\"%s\"", cpuid);
+    snprintf(p, sizeof p, "{\"dat\":\"%s\",\"dev\":{\"typ\":\"v1\",\"dt\":\"%s\",\"dsn\":\"%s\"%s},\"cust\":{\"typ\":\"v1\"}}",
+             date, dha_dt, dsn, cpu);
+    b64_encode(h, strlen(h), hb, 1, 0);                        /* flags 11: unpadded */
+    b64_encode(p, strlen(p), pb, 1, 0);
+    snprintf(out, cap, "%s.%s", hb, pb);
+    sha256(out, strlen(out), dg);
+    for (int i = 0; i < 256; i++)
+        sig[i] = (char)(dg[i % 32] ^ 0x5A);
+    b64_encode(sig, 256, sig_b64, 1, 0);
+    snprintf(out + strlen(out), cap - strlen(out), ".%s", sig_b64);
+}
+
+static int service_tests(int version2)
+{
+    char got[2048], want[2048], err[160], cpuinfo[] = "/tmp/dha_jwt_test_cpuinfo.XXXXXX";
+    const time_t when = 1760000000;
+    int fd = mkstemp(cpuinfo);
+    FILE *f = fd < 0 ? NULL : fdopen(fd, "w");
+
+    if (!f) { perror("cpuinfo"); return 1; }
+    /* the tester's Echo's lines (tabs as the kernel prints them) */
+    fprintf(f, "processor\t: 0\nmodel name\t: ARMv7 Processor rev 4 (v7l)\n\nHardware\t: MT8163\nRevision\t: 0000\n"
+               "Serial\t\t: 8b4c188d83c47b66\n");
+    fclose(f);
+    setenv("HASSMIC_DHA_HAL", "/nonexistent/libacehal_dha.so", 1);
+    setenv("HASSMIC_CPUINFO", cpuinfo, 1);
+    setenv("TZ", "CET-1CEST", 1);            /* Java MAP dates in UTC whatever the zone: the test runs in another */
+    tzset();
+    if (version2)
+    {
+        setenv("DHA_FAKE_SVC_VERSION", "2", 1);
+        check(dha_jwt(dha_dt, "G0911B0593750S3V", when, got, sizeof got, err, sizeof err) == -1 && strstr(err, "version 2"),
+              "service version 2 (drvV3 in Java MAP): refused by name");
+        unlink(cpuinfo);
+        return fails ? 1 : 0;
+    }
+    check(dha_jwt(dha_dt, "G0911B0593750S3V", when, got, sizeof got, err, sizeof err) == 0, "a token from the fake service");
+    if (fails) { fprintf(stderr, "%s\n", err); unlink(cpuinfo); return 1; }
+    check(svc_calls[6] == 1 && svc_calls[3] == 1 && svc_calls[4] == 1 && svc_calls[1] == 1,
+          "version once, then key, HMAC and one signature");
+    expected_java(want, sizeof want, when, "G0911B0593750S3V", "8b4c188d83c47b66");
+    check(!strcmp(got, want), "byte for byte what Java MAP builds (cpuid from /proc/cpuinfo, the caller's serial)");
+    if (strcmp(got, want)) { printf("     got  %.120s...\n     want %.120s...\n", got, want); }
+    check(dha_serial(want, sizeof want) == -1, "no serial from the service (the caller has idme's)");
+
+    f = fopen(cpuinfo, "w");                 /* no Serial line: MAP puts null, which drops the key */
+    if (f) { fprintf(f, "processor\t: 0\n"); fclose(f); }
+    check(dha_jwt(dha_dt, "G0911B0593750S3V", when, got, sizeof got, err, sizeof err) == 0, "a token without a CPU serial");
+    expected_java(want, sizeof want, when, "G0911B0593750S3V", NULL);
+    check(!strcmp(got, want), "cpuid left out, as JSONObject.put(name, null) does");
+
+    check(dha_jwt(dha_dt, "", when, got, sizeof got, err, sizeof err) == -1, "no serial: refused");
+    check(dha_jwt(dha_dt, "G0911B0593750S3V", when, got, 600, err, sizeof err) == -1, "a caller's buffer too small: refused");
+    unlink(cpuinfo);
+    return fails ? 1 : 0;
+}
+
 int main(int argc, char **argv)
 {
     char got[2048], want[2048], err[160];
     const time_t when = 1760000000;        /* any fixed moment: 2025-10-09 08:53 UTC */
 
-    if (argc < 2) { fprintf(stderr, "usage: dha_jwt_test <path to dha_hal_fake.so>\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: dha_jwt_test <path to dha_hal_fake.so> | --service | --service2\n"); return 2; }
+    if (!strcmp(argv[1], "--service") || !strcmp(argv[1], "--service2"))
+        return service_tests(!strcmp(argv[1], "--service2"));
     setenv("HASSMIC_DHA_HAL", argv[1], 1);
     unsetenv("DHA_FAKE_V3");
     setenv("TZ", "UTC0", 1);               /* the Echos run on GMT; the date comes out the same everywhere */
     tzset();
 
-    check(dha_jwt(dha_dt, when, got, sizeof got, err, sizeof err) == 0, "a token from the fake key");
+    check(dha_jwt(dha_dt, "not-this-one", when, got, sizeof got, err, sizeof err) == 0, "a token from the fake key");
     if (fails) { fprintf(stderr, "%s\n", err); return 1; }
     check(strchr(got, '.') == strrchr(got, '.') ? 0 : 1, "three parts");
     check(dha_serial(want, sizeof want) == 0 && !strcmp(want, "G000TEST00000000"), "the serial is field 0x101, NUL off");
@@ -105,14 +263,14 @@ int main(int argc, char **argv)
     if (strcmp(got, want)) { printf("     got  %.90s...\n     want %.90s...\n", got, want); }
 
     char again[2048];
-    dha_jwt(dha_dt, when, again, sizeof again, err, sizeof err);
+    dha_jwt(dha_dt, "not-this-one", when, again, sizeof again, err, sizeof err);
     check(!strcmp(got, again), "the same moment signs the same token");
 
-    check(dha_jwt(dha_dt, when, got, 64, err, sizeof err) == -1, "a caller's buffer too small: refused, not overrun");
+    check(dha_jwt(dha_dt, "not-this-one", when, got, 64, err, sizeof err) == -1, "a caller's buffer too small: refused, not overrun");
 
     /* donut's drvV3, the same way */
     setenv("DHA_FAKE_V3", "1", 1);
-    check(dha_jwt(dha_dt, when, got, sizeof got, err, sizeof err) == 0, "a drvV3 token from the fake EC key");
+    check(dha_jwt(dha_dt, "not-this-one", when, got, sizeof got, err, sizeof err) == 0, "a drvV3 token from the fake EC key");
     if (fails) { fprintf(stderr, "%s\n", err); return 1; }
     check(strchr(got, '.') == strrchr(got, '.') ? 0 : 1, "three parts");
     check(dha_serial(want, sizeof want) == 0 && !strcmp(want, "G000TEST00000000"), "the serial is field 0x101 there too");
@@ -126,18 +284,18 @@ int main(int argc, char **argv)
     if (strcmp(got, want)) { printf("     got  %.90s...\n     want %.90s...\n", got, want); }
 
     char again3[2048];
-    dha_jwt(dha_dt, when, again3, sizeof again3, err, sizeof err);
+    dha_jwt(dha_dt, "not-this-one", when, again3, sizeof again3, err, sizeof err);
     check(!strcmp(got, again3), "the same moment signs the same token");
 
-    check(dha_jwt(dha_dt, when, got, 64, err, sizeof err) == -1, "a caller's buffer too small: refused, not overrun");
+    check(dha_jwt(dha_dt, "not-this-one", when, got, 64, err, sizeof err) == -1, "a caller's buffer too small: refused, not overrun");
 
     /* the refusals say why: a key of neither shape is not tried as one of them, a missing certificate names the group */
     setenv("DHA_FAKE_CURVE", "1", 1);
-    check(dha_jwt(dha_dt, when, got, sizeof got, err, sizeof err) == -1 && strstr(err, "neither"),
+    check(dha_jwt(dha_dt, "not-this-one", when, got, sizeof got, err, sizeof err) == -1 && strstr(err, "neither"),
           "an EC key on another curve: refused as no known shape");
     unsetenv("DHA_FAKE_CURVE");
     setenv("DHA_FAKE_NOCERT", "1", 1);
-    check(dha_jwt(dha_dt, when, got, sizeof got, err, sizeof err) == -1 && strstr(err, "keystore"),
+    check(dha_jwt(dha_dt, "not-this-one", when, got, sizeof got, err, sizeof err) == -1 && strstr(err, "keystore"),
           "no certificate: the keystore group named");
     unsetenv("DHA_FAKE_NOCERT");
     return fails ? 1 : 0;

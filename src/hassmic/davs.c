@@ -370,7 +370,7 @@ static void identity_read(void)
     idme_read("mac_sec", idme_secret, sizeof idme_secret);    /* 0400 system: only a root-run hassmic sees it */
     if (!*idme_serial) dha_serial(idme_serial, sizeof idme_serial);   /* no idme (a PC): the key's own serial */
     if (!*idme_type) fprintf(stderr, "davs: no device type (no idme): cannot register with Amazon\n");
-    else if ((dha_ok = !dha_jwt(idme_type, time(NULL), probe, sizeof probe, err, sizeof err)) == 0)
+    else if ((dha_ok = !dha_jwt(idme_type, idme_serial, time(NULL), probe, sizeof probe, err, sizeof err)) == 0)
         fprintf(stderr, "davs: no device attestation (%s)\n", err);
 }
 
@@ -515,7 +515,7 @@ static void login_run(unsigned mine, const char *dom)
         if (abort) return;                                    /* a newer command takes over */
 
         char jwt[4096], jerr[160];                              /* drvV3: the certificate rides in it */
-        if (dha_jwt(idme_type, time(NULL), jwt, sizeof jwt, jerr, sizeof jerr))
+        if (dha_jwt(idme_type, idme_serial, time(NULL), jwt, sizeof jwt, jerr, sizeof jerr))
         {
             pthread_mutex_lock(&lk);
             state = *refresh_token ? D_ON : D_NONE;

@@ -4,7 +4,7 @@
 # libpryon.so, libopus.so and libz.so are byte-identical to donut's.
 TARGET  := armv7a-linux-androideabi24
 # Backends (src/hassmic/audio.h, wake.h) and the stock libraries they link against, from $(STOCK).
-AUDIO   := src/hassmic/audio_android.c src/hassmic/afe_parcel.c
+AUDIO   := src/hassmic/audio_android.c
 WAKE    := src/hassmic/wake_pryon.c
 LIBS    := libpryon.so libopus.so libz.so
 # No LED ring: the ring as a band along the bottom of the screen, drawn by scripts/device/ringbar.dex (ring.h)

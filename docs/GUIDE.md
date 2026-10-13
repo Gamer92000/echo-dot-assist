@@ -521,6 +521,8 @@ A stock Echo answers a whispered request in a whisper. Here the binary sensor "L
 conversation agent, so it can answer the same way. It uses Amazon's whisper detector on the Echo with a model only
 Amazon hands out: "Download from Amazon" on the settings page, or `scripts/artifacts.sh <echo-ip>` ("Other artifacts" ›
 "Whisper detection"; over Wi-Fi, open debug access first). The model stays through updates; without it there is no sensor.
+Amazon does not hand this model to the Echo Show 5 (it refuses that device type); "Copy models" from a Dot that has it
+is the way there, not yet tried on a Show.
 
 The sensor is set when you stop speaking, before speech to text has finished, so the agent's prompt can read it. For
 example, in the LLM conversation agent's instructions. The template finds the sensor of whichever Echo you spoke to,

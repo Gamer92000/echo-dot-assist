@@ -325,11 +325,13 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   attestation token `/auth/register` needs, in the two shapes Amazon's MAPs make: a drvV1 JWT (biscuit, radar; RSA
   keymaster through `libacehal_dha.so`, dlopen'd, needs group drmrpc) or donut's drvV3 token around the dhav2
   certificate (field 0x203 of the same HAL; EC key in the TEE — `/dev/trustzone` is system:drmrpc and the cert file
-  keystore:keystore, hence drmrpc,keystore in donut's DAEMON_GROUPS), whichever the HAL's key parses as.  `davs.c` does the code pair login (the code on the
+  keystore:keystore, hence drmrpc,keystore in donut's DAEMON_GROUPS), whichever the HAL's key parses as; without the
+  HAL (checkers) the binder service `amazon.security.dha` through `service call` (`afe_parcel.c`, common to every
+  build now) and Java MAP's drvV1 text (docs/re-checkers.md).  `davs.c` does the code pair login (the code on the
   page, register polled with the token, tokens in `state/davs` 0600, never sent to the page), asks DAVS with the
   engine's own compatibility ids (`wake_attributes`), downloads and unpacks the artifact tar.gz (libz), and stages it
   through artifacts.c.  Works against the real Amazon (biscuit 2026-10-06, donut with its drvV3 token 2026-10-09,
-  both amazon.de; what it answers in docs/re-davs-login.md, which also has the drvV3 analysis).  The page offers
+  checkers with Java MAP's drvV1 2026-10-13 (whisper not allowlisted for its device type), all amazon.de; what it answers in docs/re-davs-login.md, which also has the drvV3 analysis).  The page offers
   every Amazon site with Alexa (davs.c's list), any of the account's region works.
 - **Artifacts** (`artifacts.c`): Amazon's models (`wake:<name>` = `models/<name>/`, `sound` = `aed/`, `whisper`): files
   plus two levels of folders (`whisper_components/`, `BDPGeneratedFiles/`, `nttfusionconfig/ntt_conv/`; a file's name is then its path), listed

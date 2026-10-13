@@ -2447,4 +2447,9 @@ Run in this order. Each step says what it proves.
       (SW_RFB_T +16/+32, `patch_text`, kernel.org 4.9.77 + IKCONFIG, arm-eabi-4.8: Amazon's Linaro GCC 6.3 is no longer
       published), hooked on the Echo, motion seen in HA.  Reading the driver's `cali_Light` or `ir` attributes changes
       the sensor (docs/re-checkers.md).  `alexa-off.sh`'s p2p wpa_cli bounded (once hung the satellite's start).
+      Amazon downloads (2026-10-13): the attestation key behind the binder service `amazon.security.dha` (version 1,
+      RSA-2048, PSS over the given digest, as the Dots' HAL; asked as system through `service call`), the token as
+      checkers' Java MAP (com.amazon.imp, decompiled) builds its drvV1: padded n/mac, its key order, cpuid from
+      /proc/cpuinfo, UTC (dha.c, `dha_jwt_test --service`).  On the Echo against amazon.de: registered, echo de-DE
+      and aed de-DE downloaded and installed; whisper-static 403 "not allowlisted for device Type A4ZP7ZC4PI6TO".
       Open items, one list: docs/re-checkers.md "What a port needs".
