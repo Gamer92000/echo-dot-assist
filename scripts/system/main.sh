@@ -304,6 +304,7 @@ ota_watch() {
 # set, sysinstall.sh writes it and ledcontroller starts again (about a second without the ring, before hassmic runs).
 LEDNEW=/data/local/hassmic/leds.new
 leds() {
+    [ -d /system/etc/led-resources ] || return 0        # no ledcontroller (checkers: a screen, no ring)
     want=$($BIN -G - 2>/dev/null) || want=
     [ -n "$want" ] && [ "$want" = "$(cat /system/etc/hassmic-leds.digest 2>/dev/null)" ] && return 0     # 0.1 s, not 0.7
     rm -rf $LEDNEW; mkdir -p $LEDNEW

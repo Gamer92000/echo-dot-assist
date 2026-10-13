@@ -44,10 +44,12 @@ struct board {
 
     /* speaker gain (spkgain.c): an ALSA control of card 0 that sets the speaker amplifier's analog gain, which the
      * settings page may raise; NULL: none.  stock: what the speaker plays at on a stock Echo (what the audio HAL's
-     * speaker path sets it to, or where it stays from boot).  steps: the control's steps per dB, 0 for 1 */
+     * speaker path sets it to, or where it stays from boot).  steps: the control's steps per db dB, 0 for 1 each (the
+     * Echo Show 5's 1.5 dB steps: 2 per 3 dB; a whole dB then takes the nearest step) */
     const char *speaker_gain;
     int speaker_gain_stock;
     int speaker_gain_steps;
+    int speaker_gain_db;
 };
 
 extern const struct board board;

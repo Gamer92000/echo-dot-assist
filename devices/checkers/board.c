@@ -31,7 +31,7 @@ const struct board board = {
     .model = "Echo Show 5 (checkers)",
     .project = "hassmic.echo-show-5",
     .product = "Echo Show 5 (hassmic)",
-    .default_name = "Echo Show",
+    .default_name = "Echo Show 5",                                 /* + MAC: "Echo Show 5 5695c4"; slug = the project's model */
     .codename = "checkers",
 
     /* gpio-keys: volume up/down only, and from the EVT boards on the camera shutter (EV_SW 9).  No action button.  By
@@ -59,4 +59,11 @@ const struct board board = {
     .thermal_type = "mtktscpu",
     .light_sensor = { NULL },                                       /* STK3x1x on MediaTek's sensor hub, no lux file; verify */
     .volume_steps = 0,                                              /* no LED ring */
+    /* Realtek RT5616: its line out feeds the speaker amplifier.  0..39 = -46.5..+12 dB, 1.5 dB a step (the kernel's
+     * tables); the HAL's initial settings in /system/etc/audio_device.xml set 29, -3 dB, nothing writes it later (from
+     * the firmware only; verify on a device that this is what the speaker plays at, and that it has no other writer) */
+    .speaker_gain = "OUT Playback Volume",
+    .speaker_gain_stock = 29,
+    .speaker_gain_steps = 2,
+    .speaker_gain_db = 3,
 };

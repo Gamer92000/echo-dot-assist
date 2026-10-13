@@ -4,6 +4,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-13
 
+- **Echo Show 5 (untested): Speaker gain, and the newest features.** The Show 5 gets the "Speaker gain" setting: its
+  codec's line out in front of the speaker amplifier, up to +12 dB in steps of 1.5 dB (each whole dB you pick goes to
+  the nearest step). Pressing both volume keys together for the missing action button no longer also moves the
+  volume, and fires Home Assistant's Button event `action`. Wake sound removal knows when the Show's sound starts.
 - **Music Assistant finds the Echo again after it restarts** (issue #28). Music Assistant looks for Sendspin players
   only when it starts, and on some networks (the Echo on a VLAN of its own, say) that search does not reach the Echo;
   only the Echo's own announcement at boot did. After Music Assistant or Home Assistant restarted, the Echo stayed

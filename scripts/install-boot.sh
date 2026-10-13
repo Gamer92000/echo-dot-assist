@@ -14,7 +14,7 @@
 # firmware/<codename>/rootfs (qemu runs magiskpolicy against its linker); SEPOLICY_TOOL; qemu-arm, fastboot, adb.
 # Once /system has been written only a boot image without verify may boot it: the stock boot.img would find its hashes
 # wrong.  Back to stock means flashing the firmware .bin in TWRP (system and boot together).
-#   install-boot.sh [name]          default DEFAULT_NAME of the model
+#   install-boot.sh                 the Echo names itself (model and MAC address); name it in Home Assistant
 #   install-boot.sh --boot-only     only part 1: root adb, e.g. for scripts/deploy.sh trial runs before installing
 #   install-boot.sh --uninstall     Alexa's apps back on, hassmic off the system partition (the root boot image stays)
 set -e
@@ -136,11 +136,10 @@ echo "root adb: ok"
 
 # --- part 2: the files, from the running OS (as install-system.sh does on donut)
 device_check_firmware
-NAME=${1:-$DEFAULT_NAME}
 build_binaries                          # built here or this commit's release build (PREBUILT, scripts/lib/build.sh)
 mkdir -p secrets
 [ -f secrets/update.key ] || { python3 scripts/otatool.py keygen secrets/update.key secrets/update.pub; echo "new update signing key: secrets/update.key (keep it, back it up)"; }
-printf 'NAME="%s"\nARGS="%s"\n' "$NAME" "$DEFAULT_ARGS" > $OUT/hassmic.conf
+printf 'ARGS="%s"\n' "$DEFAULT_ARGS" > $OUT/hassmic.conf
 t "mkdir -p /data/local/hassmic"; adb push $OUT/hassmic.conf /data/local/hassmic/hassmic.conf > /dev/null
 t "rm -rf /data/local/hassmic/ota; rm -f /data/local/hassmic/hassmic"      # boot.sh prefers those; the fresh install wins
 FILES="$OUT/hassmic $OUT/runas $(ls $OUT/pryon_test $OUT/*.ko 2>/dev/null || true) $OUT/otatool secrets/update.pub keys/release.pub $DDIR/device.conf

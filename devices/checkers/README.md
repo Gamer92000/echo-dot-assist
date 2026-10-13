@@ -145,7 +145,7 @@ Alexa's apps with `pm` (`ALEXA_PACKAGES`, `SETUP_PACKAGES`, `UPDATE_PACKAGES`), 
 unzip -j firmware/donut/boot-root.zip patch/magiskpolicy32 -d firmware/checkers/
 unzip -p firmware/checkers/boot-root.zip boot-root.img > firmware/checkers/boot-root.img
 python3 scripts/mkbootroot.py --extract firmware/checkers/boot-root.img sbin/adbd firmware/checkers/adbd
-DEVICE=checkers scripts/install-system.sh "Kitchen"
+DEVICE=checkers scripts/install-system.sh   # the Echo names itself (model and MAC address); name it in Home Assistant
 ```
 
 `DEVICE=checkers` is needed while it is in TWRP: there the model is not asked from the Echo. Wi-Fi:
