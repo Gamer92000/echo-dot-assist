@@ -27,6 +27,7 @@ tools|Tools on this PC
 files|Downloads
 usb|Power and USB to the Echo
 unlock|Unlock, boot TWRP
+system|System partition
 root|Root boot image
 build|Build
 network|Lock down, join Wi-Fi
@@ -65,11 +66,15 @@ adbd() {
 # debugfs exits 0 whatever happens and rdump does not create its target (issue #4): the result is checked by hand.
 rootfs() {
     [ -e $FW/rootfs/system/bin/linker ] && return 0
-    task "Unpacking the firmware" sh -c "unzip -o -q $FW/$FIRMWARE_FILE system.new.dat system.transfer.list -d $FW &&
-        mkdir -p $FW/images $FW/rootfs/system &&
-        python3 tools/sdat2img.py $FW/system.transfer.list $FW/system.new.dat $FW/images/system.img &&
-        rm -f $FW/system.new.dat $FW/system.transfer.list &&
+    system_img || return 1
+    task "Unpacking the firmware" sh -c "mkdir -p $FW/rootfs/system &&
         debugfs -R 'rdump / $FW/rootfs/system' $FW/images/system.img && [ -e $FW/rootfs/system/bin/linker ]"
+}
+# The system partition's image, from the firmware's block OTA (system.new.dat), checked against SYSTEM_IMG_SHA256
+system_img() {
+    [ -f $FW/images/system.img ] || task "Unpacking the system image" sh -c "unzip -o -q $FW/$FIRMWARE_FILE system.new.dat system.transfer.list -d $FW &&
+        mkdir -p $FW/images && python3 tools/sdat2img.py $FW/system.transfer.list $FW/system.new.dat $FW/images/system.img &&
+        rm -f $FW/system.new.dat $FW/system.transfer.list" || return 1
 }
 
 step_tools() {
@@ -112,13 +117,23 @@ step_usb() {
         "Leave the Echo running normally for now; the cable goes in when the unlock step says so."
 }
 
+# TWRP's first screen: amonet's TWRP asks "Keep System Read only?" at every start until told otherwise.  Nothing here
+# writes /system from TWRP (the boot image goes in through fastboot, the files from the running Fire OS), and a system
+# mounted read-write by TWRP loses its dm-verity hashes for a stock boot image.  Its adb answers meanwhile; the answer
+# restarts TWRP's USB (MTP), so adb is gone for a few seconds after it (install-boot.sh waits for it).
+twrp_screen() {
+    tell "On the Echo's screen, TWRP may ask \"Keep System Read only?\"" \
+        "Tap \"Keep Read Only\" (tick \"Never show this screen during boot again\" if you like)." \
+        "Do not swipe to allow modifications: this setup needs none from TWRP."
+}
+
 step_unlock() {
     [ -z "$DRY" ] && adb_is recovery && { ok "TWRP is running already"; return 0; }
     # Fire OS on adb: unlocked before (stock has no adb), and the unlock left TWRP on the recovery partition
     if [ -z "$DRY" ] && adb_is device; then
         ok "unlocked already"
         task "Restarting into TWRP" adb reboot recovery || return 1
-        wait_adb recovery; return
+        twrp_screen; wait_adb recovery; return
     fi
     [ -x $FW/amonet/fastbrick.sh ] || task "Unpacking amonet" unzip -q -o $FW/$AMONET -d $FW || return 1
     tell "On the Echo, hold all three buttons (both volume keys and the camera shutter)" \
@@ -129,8 +144,83 @@ step_unlock() {
     # in the foreground: it asks to type YES, and for a key press at the end
     live "Unlocking with amonet's fastbrick" in_dir $FW/amonet env PYTHONUNBUFFERED=1 \
         bash -o pipefail -c "./fastbrick.sh 2>&1 | tee -a '$LOG'" || return 1
+    twrp_screen
     wait_adb recovery || { fail "no TWRP on adb; $DDIR/README.md, step by step, then try again"; return 1; }
     warn "Leave the Echo in TWRP for now: stock Fire OS has no adb."
+}
+
+# ro.build.version.incremental of the system partition, read from TWRP (its own getprop is TWRP's build)
+twrp_system_build() {
+    ashell "mkdir -p /mnt/hm_sys; mount -o ro $SYSTEM_DEV /mnt/hm_sys 2>/dev/null
+            sed -n 's/^ro.build.version.incremental=//p' /mnt/hm_sys/build.prop; umount /mnt/hm_sys 2>/dev/null"
+}
+
+# The system partition must be the pinned build's: the root boot image is that build's boot.img, and hassmic links
+# against its libraries (a tester's Echo came out of the unlock with 0013054618500, 2026-10-13).  Written from TWRP
+# with dd, the image on the PC, and read back; nothing else is written.  Not TWRP's install of the .bin: its
+# updater-script also writes lk, tee1/tee2, the preloader (mmcblk0boot0) and an MBR.  amonet's TWRP points lk and tee
+# at /dev/null and boot0 is force_ro there, but a brick of those is permanent (README.md), so nothing rests on that.
+# The boot partition keeps the old build's image until the root step writes ours: no reboot in between.
+step_system() {
+    local b
+    if [ -z "$DRY" ] && adb_is device; then
+        b=$(ashell getprop ro.build.version.incremental)
+        [ "$b" = "$FIRMWARE_BUILD" ] && { ok "the system is $FIRMWARE_ID already"; return 0; }
+        info "the Echo runs build ${b:-unknown}, not $FIRMWARE_ID's $FIRMWARE_BUILD"
+        task "Restarting into TWRP" adb reboot recovery || return 1
+        twrp_screen
+    fi
+    wait_adb recovery || return 1
+    if [ -z "$DRY" ]; then
+        # build.prop lies in the first pieces: a write cut short says 8149 too (the tester's Echo, 2026-10-13: the step
+        # passed on that, and Fire OS found half its /system missing).  Only the whole partition's digest counts.
+        b=$(twrp_system_build)
+        if [ "$b" = "$FIRMWARE_BUILD" ]; then
+            task "Checking the system partition (3.2 GB, 2 min)" sh -c "[ \"\$(adb shell sha256sum $SYSTEM_DEV | tr -d '\r' | cut -c1-64)\" = $SYSTEM_IMG_SHA256 ]" &&
+                { ok "the system is $FIRMWARE_ID already"; return 0; }
+            info "its build.prop says $FIRMWARE_BUILD, but the partition is not all $FIRMWARE_ID's (a write cut short): it is completed"
+        else info "the Echo's system is build ${b:-unknown}, not $FIRMWARE_ID's $FIRMWARE_BUILD: it is replaced"; fi
+    fi
+    system_img || return 1
+    task "Checking the system image" sh -c "[ \"\$(sha256sum < $FW/images/system.img | cut -c1-64)\" = $SYSTEM_IMG_SHA256 ]" ||
+        { fail "$FW/images/system.img is not $FIRMWARE_ID's: delete it and run this again"; return 1; }
+    if [ -z "$DRY" ]; then
+        local have want
+        have=$(ashell blockdev --getsize64 $SYSTEM_DEV) want=$(stat -c %s $FW/images/system.img)
+        [ "$have" = "$want" ] || { fail "the system partition holds $have bytes, the image $want: nothing written"; return 1; }
+    fi
+    warn "Keep the Echo on power and USB until the boot image is in (next step): until then it would not boot."
+    rm -f $OUT/system.progress
+    TASK_NOTE="cat $OUT/system.progress" task "Writing the system partition (3.2 GB, a few minutes)" write_system || return 1
+    task "Reading it back" sh -c "adb shell 'sync; echo 3 > /proc/sys/vm/drop_caches' &&
+        [ \"\$(adb shell sha256sum $SYSTEM_DEV | tr -d '\r' | cut -c1-64)\" = $SYSTEM_IMG_SHA256 ]" ||
+        { fail "the system partition does not read back as written: run this step again"; return 1; }
+}
+
+# write_system: the image in 64 MB pieces.  Each is compared first (sha256 of its range on the Echo, 2 s) and only a
+# different one is sent: adb push into TWRP's /tmp (tmpfs, 487 MB), dd into place, compared again.  So a write cut
+# short goes on where it stopped.  Not adb exec-in into dd: TWRP's adbd runs it on a pty, and the stream stalled for
+# good at 2.94 of 3.25 GB on the first Echo (2026-10-13; dd asleep in its read, adb asleep on the PC).  toybox's dd:
+# TWRP's own /sbin/dd refuses conv ("conv option disabled") and, given seek, truncates where it stopped writing.
+PIECE_MB=64
+write_system() {
+    local img=$FW/images/system.img tmp=$OUT/system.piece size n i want have
+    size=$(stat -c %s $img); n=$(( (size + PIECE_MB * 1048576 - 1) / (PIECE_MB * 1048576) ))
+    adb shell 'umount /system_root /system /mnt/hm_sys 2>/dev/null; true'
+    piece() { adb shell "toybox dd if=$SYSTEM_DEV bs=1048576 skip=$(( $1 * PIECE_MB )) count=$PIECE_MB 2>/dev/null | sha256sum" | tr -d '\r' | cut -c1-64; }
+    for ((i = 0; i < n; i++)); do
+        echo "$((i + 1))/$n" > $OUT/system.progress
+        dd if=$img of=$tmp bs=1048576 skip=$((i * PIECE_MB)) count=$PIECE_MB 2>/dev/null || return 1
+        want=$(sha256sum < $tmp | cut -c1-64)
+        [ "$(piece $i)" = "$want" ] && { echo "piece $i: as it should be"; continue; }
+        adb push $tmp /tmp/hm-piece > /dev/null || return 1
+        [ "$(adb shell sha256sum /tmp/hm-piece | tr -d '\r' | cut -c1-64)" = "$want" ] || { echo "piece $i: arrived damaged"; return 1; }
+        adb shell "toybox dd if=/tmp/hm-piece of=$SYSTEM_DEV bs=1048576 seek=$((i * PIECE_MB)) conv=notrunc 2>/dev/null; r=\$?; rm -f /tmp/hm-piece; sync; echo 3 > /proc/sys/vm/drop_caches; exit \$r" || return 1
+        have=$(piece $i)
+        [ "$have" = "$want" ] || { echo "piece $i: reads back as $have, not $want"; return 1; }
+        echo "piece $i: written"
+    done
+    rm -f $tmp $OUT/system.progress
 }
 
 step_root() {
@@ -139,7 +229,7 @@ step_root() {
     # booted, adb as shell: an older boot image of ours (8149's own adbd never stays root) or stock with adb on;
     # install-boot.sh takes it from the running OS as well as from TWRP
     if [ -z "$DRY" ] && adb_is device; then info "adb is not root on the running Echo: its boot image is replaced"
-    else wait_adb recovery || return 1; fi
+    else twrp_screen; wait_adb recovery || return 1; fi
     # the rooted boot image from the firmware's own (root adb, no verify, the policy patched for our services);
     # flashed in amonet's hacked fastboot, then the Echo boots Fire OS with root adb.  In the foreground: it may ask
     # for the power to be replugged
