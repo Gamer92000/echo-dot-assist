@@ -42,9 +42,9 @@ const struct board board = {
     .grab_keys = 1,                                                 /* else PhoneWindowManager turns its stream volume too */
     .privacy_state = "/sys/devices/platform/amazon-gating/state",   /* chowned to system by /init.project.rc */
     /* the gating driver's own input device: "mute", KEY_POWER (0x74, DTB); any event there means a latch read
-     * (buttons.c privacy_reader), the once-a-second read of the state catches it otherwise.  Its name: the only one the
-     * kernel has for it (verify: getevent -il) */
-    .privacy_input = "name:amazon-gating",
+     * (buttons.c privacy_reader), the once-a-second read of the state catches it otherwise.  getevent -il on the first
+     * Echo Show (2026-10-13): "gating", /dev/input/event0, KEY_POWER */
+    .privacy_input = "name:gating",
     .privacy_latch = 1,
 
     .bt_dev = "/dev/stpbt",                                         /* MT7668 combo, btmtksdio.ko */
