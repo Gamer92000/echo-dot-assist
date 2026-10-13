@@ -57,7 +57,11 @@ const struct board board = {
     .earcon_dir = "/data/local/hassmic/earcon/",                    /* none of stock's: own sounds here win over the apps' */
     .earcon_zip = sounds,
     .thermal_type = "mtktscpu",
-    .light_sensor = { NULL },                                       /* STK3x1x on MediaTek's sensor hub, no lux file; verify */
+    /* STK3x1x on MediaTek's alsps framework; Amazon's driver has a lux attribute: an I2C read of the ALS data at each
+     * read, code * 400 / the factory calibration (/proc/idme/alscal), the same value Android's light sensor reports
+     * (2026-10-13).  Its other attributes are not all readings: cali_Light calibrates against 400 lux and writes
+     * /data/als_cal_data.bin, ir switches ALS off until a reboot (docs/re-checkers.md). */
+    .light_sensor = { "/sys/bus/platform/drivers/als_ps/lux" },
     .volume_steps = 100,                                            /* the light band (ring_band.c) shows the level in % */
     /* Realtek RT5616: its line out feeds the speaker amplifier.  0..39 = -46.5..+12 dB, 1.5 dB a step (the kernel's
      * tables); the HAL's initial settings in /system/etc/audio_device.xml set 29, -3 dB, nothing writes it later (from

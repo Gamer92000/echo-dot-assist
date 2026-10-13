@@ -320,7 +320,8 @@ static int key_set(const unsigned char *k, size_t len)
  * ahead of that gain (micdenoise.h), taking the noise down by up to 6, 9 or 12 dB; it sits in the settings file's first
  * field, which held the old noise suppression level. */
 
-static int have_light;                  /* a light sensor answered at start: illuminance and auto brightness are listed */
+static int have_light;                  /* a light sensor answered at start: illuminance is listed */
+static int have_auto;                   /* and something follows it (core_led_has_auto): auto brightness too */
 
 static int listed(int key);
 static void send_setting(int key)       /* lock held */
@@ -362,7 +363,7 @@ static void send_setting(int key)       /* lock held */
         pb_float(&b, 4, l.r); pb_float(&b, 5, l.g); pb_float(&b, 6, l.b); pb_str(&b, 9, ring_effects[l.effect]);
         send_state(LIGHT_STATE, &b);
     } break;
-    case KEY_LED_AUTO: if (have_light) { pb_uint(&b, 2, core_led_auto(-1)); send_state(SWITCH_STATE, &b); } break;
+    case KEY_LED_AUTO: if (have_auto) { pb_uint(&b, 2, core_led_auto(-1)); send_state(SWITCH_STATE, &b); } break;
     case KEY_LED_BRIGHTNESS: { int v = core_led_brightness(-1); if (v >= 0) { pb_float(&b, 2, v); send_state(NUMBER_STATE, &b); } } break;
     case KEY_BT_OUT_SEARCH: if (ble_present()) { pb_uint(&b, 2, a2dp_out_searching()); send_state(SWITCH_STATE, &b); } break;
     case KEY_BT_OUT: if (ble_present()) { pb_uint(&b, 2, a2dp_out_enabled()); send_state(SWITCH_STATE, &b); } break;
@@ -463,12 +464,10 @@ static void send_light_entities(void)
       pb_uint(&b, 12, COLOR_MODE_RGB); pb_uint(&b, 5, 1); pb_uint(&b, 6, 1);
       for (int i = 0; i < ring_neffects; i++) pb_str(&b, 11, ring_effects[i]);
       pb_str(&b, 14, "mdi:circle-slice-8"); send_msg(LIST_LIGHT, &b); }
-    if (have_light) {
-        { PB(b, 192); pb_str(&b, 1, "illuminance"); pb_fixed32(&b, 2, KEY_LUX); pb_str(&b, 3, "Illuminance"); pb_str(&b, 6, "lx");
-          pb_uint(&b, 7, 0); pb_str(&b, 9, "illuminance"); pb_uint(&b, 10, 1); send_msg(LIST_SENSOR, &b); }
-        { PB(b, 160); pb_str(&b, 1, "led_auto_brightness"); pb_fixed32(&b, 2, KEY_LED_AUTO); pb_str(&b, 3, "LED auto brightness");
-          pb_str(&b, 5, "mdi:brightness-auto"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
-    }
+    if (have_light) { PB(b, 192); pb_str(&b, 1, "illuminance"); pb_fixed32(&b, 2, KEY_LUX); pb_str(&b, 3, "Illuminance"); pb_str(&b, 6, "lx");
+        pb_uint(&b, 7, 0); pb_str(&b, 9, "illuminance"); pb_uint(&b, 10, 1); send_msg(LIST_SENSOR, &b); }
+    if (have_auto) { PB(b, 160); pb_str(&b, 1, "led_auto_brightness"); pb_fixed32(&b, 2, KEY_LED_AUTO); pb_str(&b, 3, "LED auto brightness");
+        pb_str(&b, 5, "mdi:brightness-auto"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
     { PB(b, 160); pb_str(&b, 1, "led_brightness"); pb_fixed32(&b, 2, KEY_LED_BRIGHTNESS); pb_str(&b, 3, "LED brightness");
       pb_str(&b, 5, "mdi:brightness-6"); pb_float(&b, 6, 0); pb_float(&b, 7, 100); pb_float(&b, 8, 1); pb_uint(&b, 10, 1);
       pb_str(&b, 11, "%"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
@@ -491,7 +490,8 @@ static int listed(int key)
     case KEY_ARB_SERVICE: return arb_running();     /* the network, which runs either way */
     case KEY_WHISPERED: return core_whisper_model() && settings_on("whisper_detection");
     case KEY_WIFI_MOTION: case KEY_WIFI_MOTION_SENS: return wifimotion_present() && settings_on("wifi_motion");
-    case KEY_LUX: case KEY_LED_AUTO: return have_light;
+    case KEY_LUX: return have_light;
+    case KEY_LED_AUTO: return have_auto;
     case KEY_LIGHT: return ring_custom();
     case KEY_DROPIN_SERVICE: case KEY_DROPIN_STATE: case KEY_DROPIN_PEER: case KEY_DROPIN_END: case KEY_DROPIN_RESULT:
         return dropin_running() && settings_on("drop_in");
@@ -663,7 +663,7 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     else if (type == NUMBER_COMMAND && key == KEY_WIFI_MOTION_SENS && wifimotion_present()) {
         wifimotion_sensitivity((int)lroundf(num)); settings_save(); send_setting(key); return;
     }
-    else if (type == SWITCH_COMMAND && key == KEY_LED_AUTO && have_light) {
+    else if (type == SWITCH_COMMAND && key == KEY_LED_AUTO && have_auto) {
         core_led_auto(on); settings_save(); send_setting(key); return;              /* the level follows through light_thread */
     }
     else if (type == NUMBER_COMMAND && key == KEY_LED_BRIGHTNESS) {                  /* a level of its own: auto off, or it moves */
@@ -1556,7 +1556,7 @@ static void serve(int fd)
     unsigned char *buf = malloc(1 << 16), *pt = malloc(1 << 16), pre; uint32_t len, type, cap = 1 << 16; int slot = -1, n = 0, enc = 0;
     if (!buf || !pt) { free(buf); free(pt); return; }
     pthread_mutex_lock(&core_lock);
-    { static int loaded; if (!loaded) { loaded = 1; have_light = !isnan(core_lux()); settings_load(); key_load();
+    { static int loaded; if (!loaded) { loaded = 1; have_light = !isnan(core_lux()); have_auto = core_led_has_auto(); settings_load(); key_load();
                                        pthread_t t;
                                        pthread_create(&t, NULL, light_thread, NULL); pthread_detach(t);
                                        adbwifi_start(adb_changed); wifimotion_start(wifi_changed); update_start(update_changed);

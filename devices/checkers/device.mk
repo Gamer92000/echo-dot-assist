@@ -12,7 +12,12 @@ RING    := src/hassmic/ring_band.c
 # NDK system libraries the backend needs (not stock: no stubs for them)
 SYSLIBS := -lOpenSLES
 
-# Wi-Fi motion: the Wi-Fi driver is donut's gen4m wlan_mt76x8_sdio.ko, but built for a 32-bit ARM kernel (4.9.77, IKCONFIG
-# in devices/checkers/kconfig); hassmic_rcpi4m rewrites an arm64 bl, so it needs an ARM variant first.  Until then no
-# module: wifimotion.c falls back to the driver's RX_STAT.
-KMOD    :=
+# Wi-Fi motion: the Wi-Fi driver is donut's gen4m wlan_mt76x8_sdio.ko, built for a 32-bit ARM kernel (4.9.77); the same
+# module as donut's, its ARM variant (src/kmod/hassmic_rcpi4m.c).  The kernel's own config (IKCONFIG of boot.img).  Amazon
+# built the kernel with Linaro GCC 6.3-2017.05, which Linaro no longer publishes: AOSP's arm-eabi-4.8 (the Makefile's
+# default, biscuit's) builds the module, same ABI.
+KMOD    := hassmic_rcpi4m
+KVER    := 4.9.77
+KSRC_URL    := https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.9.77.tar.xz
+KSRC_SHA256 := 7c29bc3fb96f1e23d98f664e786dddd53a1599f56431b9b7fdfba402a4b3705c
+KCONFIG := devices/checkers/kconfig

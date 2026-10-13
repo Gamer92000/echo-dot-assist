@@ -58,6 +58,8 @@ for s in $SETUP_SERVICES; do stop $s; done
 # uxeventd starts the orange `setup-mode` spinner; `ledctrl -c` does not clear it and `-g` does not list it. Unset by name.
 command -v ledctrl > /dev/null && { ledctrl -c >/dev/null; ledctrl -u setup-mode >/dev/null; }
 # oobed leaves a Wi-Fi Direct group up for the Alexa app (p2p-p2p0-0 + dnsmasq).  wpa_supplicant itself must stay: it also runs wlan0.
-wpa_cli -p $WPA_SOCKETS -i p2p0 p2p_group_remove p2p-p2p0-0 >/dev/null 2>&1
+# Bounded: on an Echo Show with no group up, wpa_cli once waited on p2p0's socket for good (2026-10-13), and with it the
+# satellite's start, hassmic never started.
+timeout 5 wpa_cli -p $WPA_SOCKETS -i p2p0 p2p_group_remove p2p-p2p0-0 >/dev/null 2>&1
 sleep 1
 getprop | grep -E "init.svc.($(echo $ALEXA_SERVICES $UPDATE_SERVICES $UPDATE_ONDEMAND mixer shmd ledcontroller | tr ' ' '|'))\]"

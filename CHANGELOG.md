@@ -4,6 +4,12 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-13
 
+- **Echo Show 5: Illuminance and Wi-Fi motion.** Home Assistant now gets the Show's light sensor as "Illuminance", in
+  lux, the same value Android's own sensor reports. Wi-Fi motion (experimental, off by default) works on the Show as
+  on the Dots: switch it on in the settings page. The Show has no "LED auto brightness": the band's brightness is the
+  one you set.
+- **A satellite start that could hang for good.** On the Echo Show 5, removing a Wi-Fi Direct group left from setup
+  could wait forever, and hassmic did not start after an update. It now gives up after 5 seconds.
 - **Echo Show 5: the light ring as a band on the screen.** The Show has no light ring, so it shows the ring's lights
   along the bottom edge of the screen, as Alexa showed hers: listening, thinking, replies, mic off, volume, timers,
   calls, Do not disturb, setup, and Home Assistant's "Light ring" light, which the Show now has too. They look and move
