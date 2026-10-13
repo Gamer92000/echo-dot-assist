@@ -79,3 +79,10 @@ AOSP N `system/bt/audio_a2dp_hw` plus Amazon additions.
   absolute volume when it has one and plays the mixer at full scale then (README).
 - Echo cancellation while the sound comes out of a speaker elsewhere in the room: asp.cfg has a 44.1 kHz "A2DP"
   pipeline and AFE.cfg "…BT" parameter sets, so the front end seems to know the case. **UNVERIFIED**, not measured.
+
+## Android (checkers)
+
+The Echo Show 5 has the same HAL protocol (its own build of `audio.a2dp.default.so`) behind AudioFlinger instead of the
+mixer; the route there is AudioPolicy's device connection state (`media.audio_policy` transactions 1 and 2, see
+`docs/re-checkers.md` "Bluetooth speaker"). btout.c's sockets and encoder are shared; the backends (`audio.h`
+`audio_a2dp_*`) hold the route. No AIPC there.

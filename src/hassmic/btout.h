@@ -23,6 +23,7 @@ size_t btout_packet(unsigned char *buf, size_t max);    /* next media packet (RT
 
 /* any thread */
 int  btout_routed(void);                /* the mixer plays to the speaker */
+int  btout_moving(void);                /* a change of the route is asked and not made yet */
 int  btout_idle(void);                  /* only the keep-awake tone goes to the speaker (standing by) */
 int  btout_speaker_volume(void);        /* the Echo's volume is the speaker's own (AVRCP absolute volume, routed) */
 long long btout_latency_us(void);       /* what the speaker adds to the Echo's own output latency (Sendspin), 0 when not routed */

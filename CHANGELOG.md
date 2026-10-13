@@ -4,6 +4,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-13
 
+- **Echo Show 5: plays on a Bluetooth speaker.** "Play on a Bluetooth speaker" now works on the Show as on the Dots:
+  replies, sounds and music go to the speaker, and back to the Show when you switch it off, without a pop. Tried with
+  a PC as the speaker.
 - **Echo Show 5: Amazon's software is gone, not just switched off.** The install now takes every Amazon app off the
   Show's system partition (Alexa, Amazon's screen, its pull-down menu, Settings, cloud and telemetry services: 120 of
   them), keeping only the few shared libraries Android itself loads; uninstalling puts them back. Disabling them was

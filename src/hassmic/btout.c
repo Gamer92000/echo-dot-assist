@@ -1,18 +1,22 @@
 /*
- * Playing to a Bluetooth speaker, the mixer's side.  Stock Alexa did it with btmanagerd (Fluoride inside); the mixer has
- * the whole route built in, so hassmic stands in for btmanagerd towards it (docs/re-a2dp-source.md, checked on an Echo
- * Dot 2 with a2dpprobe):
+ * Playing to a Bluetooth speaker, the Echo's audio side.  Stock Alexa did it with Fluoride (inside btmanagerd on the
+ * Dots, Android's Bluetooth app on the Echo Show); both firmwares have the whole route up to the A2DP HAL built in, so
+ * hassmic stands in for Fluoride towards it (docs/re-a2dp-source.md, checked on an Echo Dot 2 with a2dpprobe; the Echo
+ * Show's audioserver connects to the same sockets, docs/re-checkers.md):
  *
- *   route   LIPC string property com.doppler.audiod A2DPSourceConnect, "1:<address>" moves the mixer's single output
- *           from the Echo's speaker to its A2DP HAL (audio.a2dp.default.so), "0:<address>" back.  Everything mixed goes
- *           there (music, replies, earcons), with the Echo's volume and equalizer applied, as with stock.
+ *   route   the audio backend's audio_a2dp_route: the Dots' mixer moves its single output from the Echo's speaker to
+ *           its A2DP HAL (audio.a2dp.default.so) on a LIPC property, Android's AudioPolicy moves the media strategy
+ *           (every player of ours) when told an A2DP device is connected.  Everything mixed goes there (music,
+ *           replies, earcons), with the Echo's volume applied, as with stock.
  *   HAL     AOSP's audio_a2dp_hw: it connects to two abstract sockets as Fluoride serves them, commands on .a2dp_ctrl (a
  *           byte each, a byte back: 0 done), 44.1 kHz stereo s16 on .a2dp_data once started.  The HAL writes as fast as
- *           it may: the reader sets the pace, like Fluoride's media timer.  It sends START once when the mixer opens the
- *           output and then plays all the time (silence included: the mixer's keep-alive for speakers that switch off).
- *   AIPC    on every change of A2DPSourceConnect the mixer asks btmanagerd's service (uuid 0) for the speaker's name, and on
- *           BTUnpair (line out plugged while on the speaker) tells it to disconnect.  With btmanagerd gone each change
- *           waited ~20 s for a connect timeout; hassmic answers in its place.
+ *           it may: the reader sets the pace, like Fluoride's media timer.  The Dots' mixer sends START once when it
+ *           opens the output and then plays all the time (silence included: its keep-alive for speakers that switch
+ *           off); AudioFlinger puts the output in standby (SUSPEND) after 3 s of silence and STARTs it again with the
+ *           next sound.
+ *   AIPC    on every change of A2DPSourceConnect the Dots' mixer asks btmanagerd's service (uuid 0) for the speaker's
+ *           name, and on BTUnpair (line out plugged while on the speaker) tells it to disconnect.  With btmanagerd gone
+ *           each change waited ~20 s for a connect timeout; hassmic answers in its place (audio_a2dp_aipc).
  *   packets SBC (sbc.c) in RTP packets, as many frames as fit the media channel; a2dp.c sends them when the link has
  *           room.  A queue of at most QUEUE_MS: older packets go when the radio falls behind.
  *   awake   the mixer's silence is digital zero, and cheap speakers ("BT HIFI AUDIO" boards) mute their amplifier on it
@@ -21,9 +25,9 @@
  *           roll off far above it).  SBC keeps even a 1 LSB tone at bitpool 53 (libsbc decodes 0.94 rms from 0.82).
  *   standby with "Stay connected when off" (a2dp.c keeps the link while playing on the Echo, issue #25) the route is
  *           all that moves: "Play on Bluetooth speaker" then switches in well under a second instead of a reconnect.
- *           With keep-awake on as well, hal_thread makes that tone itself while the mixer is not routed (zeros plus
- *           the tone, paced like the mixer, same RTP stream), so AVDTP stays started: the speaker neither mutes nor
- *           sees an idle link, and the mixer's START is acked at once when the route comes back.  The mixer has a
+ *           With keep-awake on as well, hal_thread makes that tone itself while the HAL is not started (not routed,
+ *           or AudioFlinger's standby: zeros plus the tone, paced like the mixer, same RTP stream), so AVDTP stays
+ *           started: the speaker neither mutes nor sees an idle link, and the HAL's START is acked at once.  The mixer has a
  *           single output, so this is all or nothing: music alone on the speaker would mean feeding it past the
  *           mixer, without the front end's echo reference for it (PLAN.md, issue #25).
  */
@@ -47,6 +51,7 @@
 #include <unistd.h>
 #include "a2dp.h"
 #include "aipc_api.h"
+#include "audio.h"
 #include "core.h"
 #include "hci.h"
 #include "sbc.h"
@@ -57,6 +62,8 @@
 #define START_WAIT_MS 3000              /* for the speaker to start; the HAL waits up to 5 s for our answer */
 #define AWAKE_HZ 20
 #define AWAKE_AMP 100                   /* -50 dBFS */
+#define RETRY_S 5                       /* a route the backend could not set, asked again */
+#define CHECK_S 60                      /* while routed: whether the backend still has it (audioserver restarts) */
 
 enum { CMD_CHECK_READY = 1, CMD_START, CMD_STOP, CMD_SUSPEND, CMD_GET_AUDIO_CONFIG };
 
@@ -69,6 +76,8 @@ static int ready, streaming, start_failed, cfg_gen;     /* a2dp.c's stream state
 static uint64_t ready_addr; static char ready_name[80]; static int bitpool; static unsigned per_packet;
 static int want_route, routed_now; static uint64_t want_addr, routed_addr;
 static int route_on = 1;                /* a2dp.c: play on the speaker; off, a link that stays is only kept awake */
+static int recheck;                     /* while routed: 1 time to check the route, 2 the HAL let go of its control
+                                           socket (audioserver gone?) */
 static int want_abs, abs_pct, mode_now;  /* the speaker takes absolute volume, at that; core_speaker's mode as set */
 static struct { size_t n; unsigned char b[1024]; } q[QMAX];
 static int qh, qn; static long dropped;
@@ -76,41 +85,41 @@ static atomic_int hal_started, routed, keep_awake, idle_tone, abs_live;   /* abs
 
 /* ---------------------------------------------------------------- route */
 
-static void set_route(int on, uint64_t addr)
-{
-    char v[16], out[64];
-    snprintf(v, sizeof v, "%d:%012llx", on, (unsigned long long)addr);     /* exactly 12 digits: the mixer copies 6 bytes */
-    char *set[] = { "/system/bin/lipc-set-prop", "-s", "com.doppler.audiod", "A2DPSourceConnect", v, NULL };
-    char *get[] = { "/system/bin/lipc-get-prop", "-s", "com.doppler.audiod", "OutputDevice", NULL };
-    long long t = us();
-    core_run(set, out, sizeof out);
-    for (int i = 0; i < 20; i++) {                      /* the mixer's playback thread switches a moment later */
-        core_run(get, out, sizeof out);
-        if (!strncmp(out, on ? "BT##" : "SPEAKER##", on ? 4 : 9)) break;
-        usleep(100000);
-    }
-    out[strcspn(out, "\r\n")] = 0;
-    fprintf(stderr, "btout: mixer output %s (%s, %lld ms)\n", on ? "to the speaker" : "to the Echo", out, (us() - t) / 1000);
-}
+static void deadline_s(struct timespec *ts, int s) { clock_gettime(CLOCK_REALTIME, ts); ts->tv_sec += s; }
 
 /* One change at a time, in an order that never plays loud: the Echo's own volume comes back (and the mixer down from
- * full scale) before the route goes back to the Echo's speaker; the speaker's volume takes over only once routed. */
+ * full scale) before the route goes back to the Echo's speaker; the speaker's volume takes over only once routed.  A
+ * move the backend could not make is tried again after RETRY_S (AudioPolicy while audioserver restarts); a route held
+ * is checked when the HAL drops its control socket (audioserver gone) and every CHECK_S. */
 static void *route_thread(void *arg)
 {
     (void)arg;
-    /* left on the speaker by a hassmic that is gone: back to the Echo (core_volume has the mixer's level back already) */
-    char out[64]; char *get[] = { "/system/bin/lipc-get-prop", "-s", "com.doppler.audiod", "OutputDevice", NULL };
-    core_run(get, out, sizeof out);
-    if (!strncmp(out, "BT##", 4)) set_route(0, 0);
+    audio_a2dp_reset();
+    int failed = 0;
     for (;;) {
         pthread_mutex_lock(&m);
         for (;;) {
             int off = routed_now && (!want_route || want_addr != routed_addr), on = !routed_now && want_route;
             int mode = routed_now && !off ? (want_abs ? SPEAKER_ABSOLUTE : SPEAKER_MIXER) : SPEAKER_NONE;
-            if (off || on || (routed_now && !off && mode != mode_now)) break;
-            pthread_cond_wait(&cv, &m);
+            if (off || (on && !failed) || (routed_now && !off && mode != mode_now) || (routed_now && recheck)) break;
+            struct timespec ts; deadline_s(&ts, failed ? RETRY_S : CHECK_S);
+            if (pthread_cond_timedwait(&cv, &m, &ts) == ETIMEDOUT) { if (failed) failed = 0; else if (routed_now) recheck = 1; }
         }
         int off = routed_now && (!want_route || want_addr != routed_addr);
+        if (routed_now && !off && recheck) {
+            uint64_t a = routed_addr; int why = recheck; recheck = 0;
+            pthread_mutex_unlock(&m);
+            /* the HAL gone: audioserver restarting, whose policy answers only once it is back (seen: >0.5 s) */
+            int lost = audio_a2dp_lost(a);
+            for (int i = 0; why == 2 && lost < 0 && i < 20; i++) { sleep(1); lost = audio_a2dp_lost(a); }
+            pthread_mutex_lock(&m);
+            if (lost > 0 && routed_now && routed_addr == a) {
+                fprintf(stderr, "btout: the output is no longer on the speaker: moving it again\n");
+                routed_now = 0; atomic_store(&routed, 0);
+            }
+            pthread_mutex_unlock(&m);
+            continue;
+        }
         if (routed_now) {                               /* volume first: down to the Echo's own before leaving */
             int mode = off ? SPEAKER_NONE : want_abs ? SPEAKER_ABSOLUTE : SPEAKER_MIXER, pct = abs_pct;
             if (mode != mode_now) {
@@ -120,10 +129,15 @@ static void *route_thread(void *arg)
                 continue;
             }
         }
-        int on = !routed_now; uint64_t a = on ? want_addr : routed_addr;
+        int on = !routed_now; uint64_t a = on ? want_addr : routed_addr; char name[sizeof ready_name];
+        snprintf(name, sizeof name, "%s", ready_name);
         pthread_mutex_unlock(&m);
-        set_route(on, a);
-        pthread_mutex_lock(&m); routed_now = on; routed_addr = a; atomic_store(&routed, on); pthread_mutex_unlock(&m);
+        int r = audio_a2dp_route(on, a, name);
+        pthread_mutex_lock(&m);
+        /* a route that did not go back to the Echo is left for gone too: nothing better to do, and no loop over it */
+        if (!r || !on) { routed_now = on; routed_addr = a; atomic_store(&routed, on); recheck = 0; failed = 0; }
+        else failed = 1;
+        pthread_mutex_unlock(&m);
     }
     return NULL;
 }
@@ -263,12 +277,13 @@ static void enc_block(struct enc *e, int16_t *pcm)
     e->nf = 0; e->plen = 13;
 }
 
-/* the speaker kept connected while the Echo plays (a2dp.c), keep-awake on, the mixer not on its way there: our tone.
- * A speaker that refused to start for it is not asked again (a2dp.c would every upkeep) until the next stream. */
+/* a speaker connected, keep-awake on, the HAL not started (the Echo plays itself, a2dp.c keeping the link; or routed,
+ * AudioFlinger's output in standby): our tone.  A speaker that refused to start for it is not asked again (a2dp.c would
+ * every upkeep) until the next stream. */
 static int idle_wanted(void)
 {
     pthread_mutex_lock(&m);
-    int r = ready && !start_failed && !(want_route && routed_now) && !atomic_load(&hal_started) && atomic_load(&keep_awake);
+    int r = ready && !start_failed && !atomic_load(&hal_started) && atomic_load(&keep_awake);
     pthread_mutex_unlock(&m);
     return r;
 }
@@ -304,7 +319,10 @@ static void *hal_thread(void *arg)
         }
         if (ctrl >= 0 && p[2].revents) {
             unsigned char c;
-            if (recv(ctrl, &c, 1, 0) != 1) { close(ctrl); ctrl = -1; atomic_store(&hal_started, 0); hci_poke(); }
+            if (recv(ctrl, &c, 1, 0) != 1) {
+                close(ctrl); ctrl = -1; atomic_store(&hal_started, 0); hci_poke();
+                pthread_mutex_lock(&m); if (routed_now) { recheck = 2; pthread_cond_signal(&cv); } pthread_mutex_unlock(&m);
+            }
             else { unsigned char a = command(ctrl, c); if (a != 0xff) ack(ctrl, a); }
         }
         if (data >= 0 && p[3].revents) {
@@ -340,7 +358,7 @@ void btout_start(void)
     pthread_t t;
     pthread_create(&t, NULL, hal_thread, fds); pthread_detach(t);
     pthread_create(&t, NULL, route_thread, NULL); pthread_detach(t);
-    pthread_create(&t, NULL, aipc_thread, NULL); pthread_detach(t);
+    if (audio_a2dp_aipc()) { pthread_create(&t, NULL, aipc_thread, NULL); pthread_detach(t); }
 }
 
 void btout_ready(uint64_t addr, const char *name, int bp, unsigned mtu)
@@ -371,6 +389,13 @@ int  btout_want(void) { return atomic_load(&hal_started) || atomic_load(&idle_to
 int  btout_idle(void) { return atomic_load(&idle_tone); }
 int  btout_speaker_volume(void) { return atomic_load(&abs_live); }
 int  btout_routed(void) { return atomic_load(&routed); }
+int  btout_moving(void)
+{
+    pthread_mutex_lock(&m);
+    int r = want_route != routed_now || (routed_now && want_addr != routed_addr);
+    pthread_mutex_unlock(&m);
+    return r;
+}
 
 size_t btout_packet(unsigned char *buf, size_t max)
 {
