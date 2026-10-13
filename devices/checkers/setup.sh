@@ -164,6 +164,15 @@ step_network() {
     task "Copying hassmic to the Echo" scripts/deploy.sh || return 1
     # adb can drop out for a moment here, shortly after the boot (seen on an Echo Dot 2, issue #2)
     wait_adb device || return 1
+    # Stock's init.checkers.rc opens adb over Wi-Fi at every boot ("setprop service.adb.tcp.port 5555", on boot).
+    # lockdown.sh closes it by restarting adbd, and init kills adbd's process group with it: the adb shell that runs
+    # lockdown.sh, before it says a word (the tester's Echo, 2026-10-13: "Service 'adbd' killed by signal 9 ... killing
+    # any children").  So it is closed here first, and adb waited for.
+    if [ -z "$DRY" ] && [ "$(ashell getprop service.adb.tcp.port)" = 5555 ]; then
+        info "closing adb over Wi-Fi (stock opens it at boot); adb restarts"
+        adb shell 'setprop service.adb.tcp.port 0; setprop ctl.restart adbd' > /dev/null 2>&1; sleep 3
+        wait_adb device || return 1
+    fi
     task "Locking down the Echo's internet access" sh -c 'adb shell sh /data/local/hassmic/lockdown.sh &&
         adb shell iptables -S hassmic_out | grep -q -- "-j DROP"' || return 1
     if [ ! -f secrets/wifi.conf ]; then

@@ -37,6 +37,11 @@ In the ramdisk:
   in it: "adbd cannot run as root in production builds"), which drops to shell whatever
   ro.secure, service.adb.root or the FOS flags say (all three tried on a checkers, 2026-10-10);
   the XDA image's adbd (CyanogenMod's, static) goes by ro.secure, and with it adb is root in su
+- init.*.rc: stock's "setprop service.adb.tcp.port 5555" (checkers' init.checkers.rc, on boot) left out, as a
+  comment line in its place.  With the changes above it opened a root shell without authentication to the network at
+  every boot, until lockdown.sh closed it again; adb over Wi-Fi is hassmic's to open (adb_gate in lockdown.sh).
+  The same for "start bootsound_anim" (bootanim_playback.sh, Amazon's boot chime): it plays at the media stream's
+  volume, which a satellite keeps at full (hassmic's own gain is the volume), so every boot was deafening
 - with --no-verity: "verify" taken out of the fs_mgr flags in every fstab.* that has it, so
   /system mounts without dm-verity and can be written (hassmic's install).  Once it has been
   written, only a boot image without verify may boot it: the stock one finds the hashes wrong.
@@ -127,6 +132,31 @@ def default_prop(data):
     return data
 
 
+RC_OUT = {  # init.*.rc lines that go, -> the comment in their place
+    b"setprop service.adb.tcp.port 5555": b"# hassmic: adb over Wi-Fi only when hassmic opens it",
+    b"start bootsound_anim": b"# hassmic: no boot chime (it plays at the full volume a satellite keeps)",
+}
+
+
+def rc_lines_out(data):
+    """init.*.rc: the lines of RC_OUT as comments; None where there is none."""
+    lines, n = data.split(b"\n"), 0
+    for i, l in enumerate(lines):
+        if l.strip() in RC_OUT:
+            lines[i] = l[:len(l) - len(l.lstrip())] + RC_OUT[l.strip()]
+            n += 1
+    return b"\n".join(lines) if n else None
+
+
+def pattern(name, edit):
+    """the key of EDIT that NAME falls under: itself, or the glob of its kind (fstab.*, init.*.rc)"""
+    if name.startswith(b"fstab.") and b"fstab.*" in edit:
+        return b"fstab.*"
+    if name.startswith(b"init.") and name.endswith(b".rc") and b"/" not in name and b"init.*.rc" in edit:
+        return b"init.*.rc"
+    return name
+
+
 def no_verity(data):
     """fstab: drop "verify" from the last column (fs_mgr flags) of each entry that has it; None if none has."""
     lines, n = data.split(b"\n"), 0
@@ -145,7 +175,7 @@ def no_verity(data):
 
 def edits(sepolicy=None, verity=True, adbd=None):
     """name -> function(data) -> new data, or None to leave that one as it is"""
-    e = {b"default.prop": default_prop, b"init.fosflags.sh": lambda d: FOSFLAGS}
+    e = {b"default.prop": default_prop, b"init.fosflags.sh": lambda d: FOSFLAGS, b"init.*.rc": rc_lines_out}
     if sepolicy is not None:
         e[b"sepolicy"] = lambda d: sepolicy
     if adbd is not None:
@@ -160,7 +190,7 @@ def edit_cpio(cpio, edit):
     out, off, done = [], 0, set()
 
     def edited(name, data):
-        key = b"fstab.*" if name.startswith(b"fstab.") and b"fstab.*" in edit else name
+        key = pattern(name, edit)
         if key not in edit:
             return None
         data = edit[key](data)
@@ -213,7 +243,7 @@ def compare(stock, new, label, edit):
     for (na, ha, da), (nb, hb, db) in zip(a, b):
         assert na == nb and hb == ha, label + ": " + na.decode() + "'s metadata changed"
         if da != db:
-            assert na in edit or (na.startswith(b"fstab.") and b"fstab.*" in edit), \
+            assert pattern(na, edit) in edit, \
                 label + ": " + na.decode() + " changed"
             print("  " + na.decode() + " changed (%d -> %d bytes)" % (len(da), len(db)))
 
