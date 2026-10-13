@@ -16,6 +16,7 @@ if [ -f $DISABLED ]; then
     done < $DISABLED
     if [ -n "$left" ]; then printf '%s\n' $left > $DISABLED; else rm -f $DISABLED; fi
 fi
+[ -n "$WAKE_LOCK" ] && echo "$WAKE_LOCK" > /sys/power/wake_unlock 2>/dev/null
 # The settings alexa-off.sh set ("null": there was none)
 SETTINGS=/data/local/hassmic/alexa-settings
 if [ -f $SETTINGS ]; then
