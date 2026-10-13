@@ -224,6 +224,12 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   `com.amazon.paladin`, left alone); what the screen shows with Alexa off.
 - [x] Firewall: `lockdown.sh` as on the Dots, plus `FW_KEEP` (DHCP answers; no stock `firewall.sh`); the updater's uid
   from `packages.list` for stock-online.
+- [x] Security: stock's `init.checkers.rc` sets `service.adb.tcp.port 5555` on boot, so with our ramdisk
+  (`ro.adb.secure=0`, adbd in `su`) every boot opened a root shell without authentication on the network until
+  `lockdown.sh` (the firewall service, also `on boot`) closed it. Found on the tester's Echo (2026-10-13): lockdown.sh
+  closing it restarted adbd, whose process group took the setup's `adb shell` along. `mkbootroot.py` now leaves that
+  line out (a comment in its place), so adb over Wi-Fi opens only through hassmic (`adb_gate`); the setup still
+  closes it before the lockdown for an Echo on the older boot image.
 - [ ] On the device, security-relevant: the invariant (Amazon's daemons only local addresses, the updater never out)
   holds with netd running, netd's own changes to OUTPUT and INPUT included; DHCP renewals and mDNS pass.
 - [x] Wi-Fi join at install and the settings page's "Switch network": through WifiService, with

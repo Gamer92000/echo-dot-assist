@@ -121,10 +121,13 @@ second as `boot-root (1).zip`; the setup takes either).  The steps written out f
 1. **Boot image, on the PC.** `boot.img` out of the firmware `.bin` (checked against `BOOT_SHA256`), its `sepolicy`
    patched with `sepolicy.rules` by magiskpolicy under qemu-arm (the Echo has no root yet; `tools/qrun.sh` against
    `firmware/checkers/rootfs`), and `scripts/mkbootroot.py --sepolicy … --adbd firmware/checkers/adbd --no-verity`:
-   root adb, `verify` out of `fstab.mt8163`. Reproducible: sha256
-   `a1772cbe8d6fcd95657f6a85eae24c8be4a1a7aa066ce5eb6b07f264e1b717f5` with classic zlib (zlib-ng packs the same
-   ramdisk tighter: then its cpio, `mkbootroot.py --cpio`, has sha256 `561f392cc213186ce9e9657551b752157230886537453c24c1e2b4b23ae05417`).
-   This image boots with root adb in `su` (first device, 2026-10-10).
+   root adb, `verify` out of `fstab.mt8163`, and two lines of stock's `init.checkers.rc` out: `setprop
+   service.adb.tcp.port 5555` (with root adb and no authentication it opened a root shell to the network at every
+   boot) and `start bootsound_anim` (Amazon's boot chime, at the full stream volume a satellite keeps). Reproducible:
+   sha256 `03253eed8df8126c9fbad812664e92c87812db973ca6d05fbb940762d688c19d` with classic zlib (zlib-ng packs the same
+   ramdisk tighter: then its cpio, `mkbootroot.py --cpio`, has sha256 `6467f26c4b25e0e0323fc195968b30af7343bd833126640e5f228e6ef6aa54d8`).
+   The image before that change (`a1772cbe…`) booted with root adb in `su` (first device, 2026-10-10; the tester's
+   2026-10-13). An Echo with the older one gets this one at the install (`install-boot.sh` compares the partition).
 2. **Flash it.** The Echo's system build is checked first (`ro.build.version.incremental` 0013222532484, from TWRP or
    the booted OS), then `adb reboot bootloader` to amonet's hacked fastboot (or: Volume down while connecting power),
    `fastboot flash boot`, `fastboot continue`. Only `boot`. Skipped when the partition holds that image already.
