@@ -7,6 +7,6 @@ mkdir -p $D/state && chown $DAEMON_USER $D/state    # settings changed from Home
 [ -n "$UX_SERVICE" ] && stop $UX_SERVICE
 mkdir -p /data/misc/avahi/services && $D/hassmic "$@" -S > /data/misc/avahi/services/hassmic.service
 # init's avahi may not read that directory (SELinux); run our own from this shell's permissive domain
-stop avahi-daemon; pkill avahi-daemon; sleep 1; avahi-daemon --no-drop-root > /dev/null 2>&1 &
+stop avahi-daemon; pkill avahi-daemon; sleep 1; avahi-daemon --no-drop-root --no-proc-title > /dev/null 2>&1 &
 # AIPC refuses uid 0 ("Root user is not allowed to use AIPC"), so run as the stock Alexa client's user.
 exec $D/runas -r 3990 $DAEMON_USER $DAEMON_GROUPS $D/hassmic "$@"

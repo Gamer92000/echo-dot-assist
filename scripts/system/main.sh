@@ -200,13 +200,18 @@ avahi_start() {
     local conf=/system/etc/avahi-daemon.conf node i=0
     node=$(sed -n 's|^ *<name>\([a-z0-9-]*\)</name>$|\1|p' $AVAHI_SVC 2>/dev/null)
     if [ -n "$node" ]; then
-        { echo "[server]"; echo "host-name=$node"; grep -v '^\[server\]' $conf; } > /data/misc/avahi/avahi-daemon.conf
+        # enable-dbus=warn: on the Echo Show D-Bus runs but its policy keeps org.freedesktop.Avahi from root, and avahi
+        # with D-Bus required exits ("Failed to acquire D-Bus name"): no mDNS at all (2026-10-13).  hassmic only needs
+        # the service file, which avahi announces without D-Bus; where D-Bus works (the Dots) it is used as before.
+        { echo "[server]"; echo "host-name=$node"; echo "enable-dbus=warn"; grep -v -e '^\[server\]' -e '^enable-dbus=' $conf; } > /data/misc/avahi/avahi-daemon.conf
         conf=/data/misc/avahi/avahi-daemon.conf
     fi
     stop avahi-daemon; pkill avahi-daemon
     while [ $i -lt 5 ] && pidof avahi-daemon > /dev/null; do sleep 1; i=$((i + 1)); done
     sleep 2
-    avahi-daemon -f $conf --no-drop-root > /dev/null 2>&1 &
+    # --no-proc-title: avahi rewrites its argv/environment memory for the title ("avahi-daemon: running [...]"), and
+    # started without a terminal on the Echo Show it died two seconds in, its parent shell with it (2026-10-13)
+    avahi-daemon -f $conf --no-drop-root --no-proc-title > /dev/null 2>&1 &
 }
 
 # While the settings page switches networks (wifi.sh holds its lock), the link is that script's business: no wifisvc.
