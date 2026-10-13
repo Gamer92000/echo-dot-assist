@@ -600,7 +600,9 @@ done_screen() {
     tell "Add it in Home Assistant" \
         "Settings → Devices & services → discovered ESPHome \"$SAT_NAME\" → Add, and give it its name there" \
         "${DIM}(not listed? Add ESPHome by hand: ${SAT_IP:-its IP}, port 26053, no encryption key)$N" \
-        "Then pick an Assist pipeline (and the wake word) in its settings."
+        "Then pick an Assist pipeline (and the wake word) in its settings, and under Configure tick" \
+        "\"Allow the device to perform Home Assistant actions\": the words of Bluetooth connection announcements" \
+        "and the fallback of the Echos' wake word arbitration need it."
     tell "Its settings page" \
         "http://${SAT_IP:-<its IP>}:28931/ (log in with a press of the action button)" \
         "${DIM}Features, settings Home Assistant does not show, the other Echos; export the settings for the next Echo.$N"

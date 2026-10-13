@@ -357,6 +357,10 @@ and the action button pauses and resumes.
   before it of Music Assistant up to 2.10.6. It picks whichever the server speaks, each time it connects.
 - **From a phone** over Bluetooth: SBC, AAC, aptX, aptX HD, with media controls. Switch on "Bluetooth audio from phones" on the
   settings page; the "Bluetooth pairing" switch in Home Assistant then lets phones pair (blue chaser on the ring).
+  Connecting and disconnecting play a chime and, like stock Alexa, "Connected to <phone>" / "Disconnected from
+  <phone>": Home Assistant speaks those words, and only once "Allow the device to perform Home Assistant actions" is
+  ticked in the Echo's ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure). Without it
+  you hear the chime only. "Bluetooth announcements" on the settings page turns both off and picks their language.
 
 ### Separate volumes
 
