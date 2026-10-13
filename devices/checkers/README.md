@@ -2,7 +2,8 @@
 
 **Runs on one Echo Show** (a tester's, from 2026-10-10), installed with the guided setup (`scripts/setup.sh
 checkers`). The unlock is public (below); the install is `scripts/install-system.sh`, which hands over to
-`scripts/install-boot.sh`. No light ring here: the screen stays black, and nothing shows that the Show listens yet.
+`scripts/install-boot.sh`. No light ring here: hassmic shows the ring as a band along the bottom of the screen
+(setting "Light band"), the rest of the screen stays black for now.
 Findings, and what works and what is open: [docs/re-checkers.md](../../docs/re-checkers.md). Porting guide:
 [devices/README.md](../README.md).
 

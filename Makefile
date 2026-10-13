@@ -6,6 +6,8 @@ ifeq ($(wildcard devices/$(DEVICE)/device.mk),)
 $(error unknown DEVICE "$(DEVICE)": no devices/$(DEVICE)/device.mk)
 endif
 include devices/$(DEVICE)/device.mk
+# the light ring: the Dots' LEDs through ledcontroller, or a band on the screen (device.mk)
+RING    ?= src/hassmic/ring.c
 
 NDK     ?= $(CURDIR)/toolchain/android-ndk-r21e
 CC      := $(NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/$(TARGET)-clang
@@ -173,7 +175,7 @@ SOUND := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/sound_pryon.c,src/hass
 WHISPER := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/hassmic/whisper_none.c)
 
 RNNOISE := $(addprefix src/third_party/rnnoise/,denoise.c rnn.c rnn_data.c pitch.c kiss_fft.c celt_lpc.c)
-HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c src/hassmic/ring.c src/hassmic/ringdesign.c src/hassmic/ledq.c \
+HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) src/hassmic/ringdesign.c src/hassmic/ledq.c \
            src/hassmic/sendspin.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/micgain.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/statefile.c build/web_assets.c \
            src/hassmic/wake.c src/hassmic/wake_mww.c src/hassmic/mww_features.c src/hassmic/mww_model.c src/hassmic/mww_store.c \
            src/third_party/monocypher.c src/third_party/freeaptx.c $(RNNOISE)
@@ -270,10 +272,13 @@ unit-blueprint_dropin:
 	.venv/bin/python tests/blueprint_dropin.py
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/buttons_test.c src/hassmic/buttons.c -lpthread -o build/buttons_test && build/buttons_test build/buttons_test.fifo
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/afe_parcel_test.c src/hassmic/afe_parcel.c -o build/afe_parcel_test && build/afe_parcel_test
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ring_band_test.c src/hassmic/ring_band.c -lm -lpthread -o build/ring_band_test && build/ring_band_test
 	python3 tests/unit/sounds_zip.py build/sounds_dir build/sounds_test.zip
 	cc -O2 -Wall -Wextra -DSYNTH -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c -o build/sounds_test && build/sounds_test synth build/sounds_dir build/sounds_test.zip
 	if [ -d firmware/checkers/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c devices/checkers/board.c -o build/sounds_checkers && HASSMIC_EARCON_ROOT=firmware/checkers/rootfs build/sounds_checkers; else echo "sounds: firmware/checkers not unpacked, its apps' sounds skipped"; fi
 	.venv/bin/python tools/mkwifictl.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)
+	.venv/bin/python tools/mkringbar.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)
+	.venv/bin/python tests/unit/ringbar_run.py
 	.venv/bin/python tests/unit/wifictl_run.py
 
 # what the daemon reports, and what bundles are called (ota-push.sh, CI)

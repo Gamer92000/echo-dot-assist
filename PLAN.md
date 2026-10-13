@@ -2438,5 +2438,8 @@ Run in this order. Each step says what it proves.
       with a PC as the speaker): the firmware's own A2DP HAL behind AudioPolicy (`media.audio_policy` 1/2,
       setDeviceConnectionState through `service call` with C strings), btout.c serving the HAL's sockets as on the Dots;
       the route moves in 410–520 ms, comes back 1.6 s after audioserver is killed, players wait while it moves (a pop
-      otherwise).  Open items, one list: docs/re-checkers.md
+      otherwise).  Light band (2026-10-13): the ring on the screen's bottom 10 px (`ring_band.c`, `ringbar.dex`: overscan + a
+      SurfaceFlinger layer, both seen working), the Dots' patterns unrolled; turning it towards the talker tried and
+      left out (the front end's beam events arrive through an IAudioEventListener, but only 4 of 7 beams, switching
+      several times a second wherever the talker stands: docs/re-checkers.md).  Open items, one list: docs/re-checkers.md
       "What a port needs".

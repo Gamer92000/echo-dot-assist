@@ -56,4 +56,11 @@ void ring_tick(void);                       /* every 200 ms: the beam while list
 void ring_light_get(struct ring_light *l);
 void ring_light_set(const struct ring_light *l, unsigned flash_ms);  /* flash_ms > 0: blinks that long, then as before */
 int  ring_rotation(int set);                /* LEDs the fill's start is turned by, 0..ring_leds()-1; -1 reads */
+
+/* A model without an LED ring draws it as a band along the bottom of its screen (ring_band.c, the Echo Show's; ring.c is
+ * the Dots' LEDs).  ring_level: the talker's level in dBFS x 10 while the pipeline listens, which widens the listening
+ * bar as stock's does (capture thread, core_lock held).  ring_band_rows: the band's height in rows, 0 off (the screen
+ * all the apps'); -1 where the ring is LEDs.  set < 0 reads. */
+void ring_level(int dbfs10);
+int  ring_band_rows(int set);
 #endif

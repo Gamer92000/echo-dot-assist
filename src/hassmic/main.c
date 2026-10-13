@@ -1229,7 +1229,11 @@ static void send_out(const int16_t *pcm, size_t n, int held_sound)
             clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t1);
             denoise_ns += (t1.tv_sec - t0.tv_sec) * 1000000000LL + t1.tv_nsec - t0.tv_nsec; denoise_frames += m / MICDENOISE_FRAME;
         }
-        if (m) { micgain_run(&mic_gain, src, out, m); proto->audio(out, m * 2); }
+        if (m) {
+            micgain_run(&mic_gain, src, out, m); proto->audio(out, m * 2);
+            double e = 0; for (size_t i = 0; i < m; i++) e += (double)out[i] * out[i];   /* the band's listening bar */
+            ring_level(e > 0 ? (int)lround(100 * log10(e / m / (32768.0 * 32768.0))) : -1000);
+        }
         pcm += k; n -= k;
     }
 }

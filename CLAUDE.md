@@ -452,6 +452,14 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   sets and unsets queued one behind the other go in one ledctrl (`LEDQ_BATCH`: it takes repeated -s/-u).  The
   beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N` when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
   `HASSMIC_FAKE_BEAM`.
+- **Light band** (`ring_band.c`, the Echo Show's `RING` in device.mk instead of `ring.c`): the same `ring.h` drawn as a
+  band along the bottom of the screen, every pattern as the Dots' ring unrolled (12 virtual LEDs blended across the
+  width, the talker's side in the middle; never turned: the Show's beam says too little, docs/re-checkers.md) plus
+  HA's light, one at a time by priority.  `scripts/device/ringbar.dex` (`tools/mkringbar.py` on `tools/dexasm.py`,
+  next to the binary, `HASSMIC_RINGBAR`) runs as app_process: overscan for the band, a SurfaceFlinger layer over it,
+  "ready <w> <rows>" on stdout, then frames (w x rows ARGB) on stdin.  Setting `light_band` (rows, 0 off).  Screen
+  power as stock's: `service call power` 9 (wakeUp) on a pattern, `screen_off_timeout` 5 min / 1 min muted or DND.
+  PC: `HASSMIC_FAKE_BAND` (a program speaking ringbar's protocol), `tests/unit/ring_band_test.c`.
 - `src/include/`: headers for the reversed Amazon libraries (`mixer_api.h`, `pryon_api.h`, `aipc_api.h`) and `netio.h`.
 - `src/tools/`: standalone device tools (`mixcap`, `mixplay`, `pryon_test`, `aed_test`, `latency`, `runas` — AIPC refuses uid 0 and
   the image has no `su`; `curlspy`, `hciscan`, `a2dpprobe`, `dha_test` not in `all`).
