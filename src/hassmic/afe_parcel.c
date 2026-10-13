@@ -29,6 +29,8 @@ static int bytes(struct afe_call *c, const unsigned char *p, size_t len)
 
 int svc_cstr(struct afe_call *c, const char *s) { return bytes(c, (const unsigned char *)s, strlen(s) + 1); }
 
+int svc_blob(struct afe_call *c, const void *p, size_t len) { return svc_i32(c, (long)len) || bytes(c, p, len) ? -1 : 0; }
+
 void svc_call_start(struct afe_call *c, const char *svc, const char *code)
 {
     c->argv[0] = "/system/bin/service"; c->argv[1] = "call"; c->argv[2] = (char *)svc; c->argv[3] = (char *)code;
@@ -38,7 +40,7 @@ void svc_call_start(struct afe_call *c, const char *svc, const char *code)
 int afe_call_build(struct afe_call *c, int cmd, const void *in, size_t in_len, int out_size)
 {
     svc_call_start(c, "audiosignalprocessor", "3");
-    if (svc_i32(c, cmd) || svc_i32(c, (long)in_len) || bytes(c, in, in_len) || svc_i32(c, out_size)) return -1;
+    if (svc_i32(c, cmd) || svc_blob(c, in, in_len) || svc_i32(c, out_size)) return -1;
     return 0;
 }
 

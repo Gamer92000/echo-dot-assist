@@ -2,7 +2,8 @@
  * command(int cmd, byte[] in, byte[] out), reached through the firmware's own /system/bin/service tool (docs/re-checkers.md).
  * The parcel is int32s only, so "service call ... i32 ..." writes it as AIDL would: cmd, in as length + bytes padded to
  * 4, the out size; the reply is exception, status, out as length + bytes, which the tool prints as a hex dump.  Pure C,
- * for the PC's unit test (tests/unit/afe_parcel_test.c). */
+ * for the PC's unit test (tests/unit/afe_parcel_test.c).  In every build: dha.c asks checkers' attestation service the
+ * same way. */
 #ifndef AFE_PARCEL_H
 #define AFE_PARCEL_H
 #include <stddef.h>
@@ -26,5 +27,6 @@ int afe_call_reply(const char *text, unsigned char *buf, size_t cap);
 void svc_call_start(struct afe_call *c, const char *svc, const char *code);
 int  svc_i32(struct afe_call *c, long v);
 int  svc_cstr(struct afe_call *c, const char *s);
+int  svc_blob(struct afe_call *c, const void *p, size_t len);   /* AIDL's byte[]: its length, then the bytes padded */
 int  svc_reply_words(const char *text, uint32_t *w, size_t max);
 #endif

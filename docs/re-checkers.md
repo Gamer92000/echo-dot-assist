@@ -134,8 +134,8 @@ Libraries in checkers' load at 0x1000–0x4000 above their file offset (libasp +
   `kni_controls_volume_adjust.mp3`); Bluetooth in KnightSettings (`kni_system_bluetooth_bt_{connected,disconnected}.mp3`),
   the comms sounds in `com.amazon.comms.multimodaltachyonarm` (`ful_comms_*.mp3`, the five Drop In uses). Every one
   stored uncompressed in its APK. No discovery (setup beacon) sound.
-- DHA: no `libacehal_dha.so`; the attestation key is behind the `fireos-dha` binder service (`libdha-aidl.so`), so
-  `dha.c` (Amazon downloads) needs another way in.
+- DHA: no `libacehal_dha.so`; the attestation key is behind the `fireos-dha` binder service `amazon.security.dha`
+  (`libdha-aidl.so`, the HAL `amzn_dha.mt8163.so` inside it), which `dha.c` asks through `service call` (below).
 
 ## Services and network
 
@@ -350,7 +350,29 @@ setup; what was checked on the PC only says so.
   +1.5). `/dev/snd/controlC0` is system:audio; the daemon has group audio and runs in `su`. On the device: that 29 is
   really what the speaker plays at (`tinymix 'OUT Playback Volume'`, or hassmic's log line "speaker gain: ... now
   N"), and how loud before the line out or the amplifier clips.
-- [ ] Amazon downloads (`dha.c`): no `libacehal_dha.so`; the key is behind the `fireos-dha` binder service.
+- [x] Amazon downloads (`dha.c`, 2026-10-13): the attestation key is behind `fireos-dha` (init: user keystore, groups
+  keystore drmrpc), registered as `amazon.security.dha` (`fireos.dha.IFireOsDha`). Transactions from `BpFireOsDha`:
+  1 sign(byte[]), 2 verify, 3 getDhaPublicKey, 4 getDhaHmac, 5 getDhaCertificateChain, 6 getDhaVersion, 7/8 unlock
+  code and version. Asked with `/system/bin/service call` on the tester's Echo, as system (hassmic's user; no
+  permission check stops it, no extra groups): version 1 (DhaService reads the HAL device's version), an RSA-2048
+  SubjectPublicKeyInfo with e 65537, a 32-byte HMAC, no certificate chain (exception -7); sign answers RSASSA-PSS,
+  SHA-256, 32-byte salt over the digest it is given (verified on the PC against the key), as the Dots' HAL does.
+  Amazon's MAP here is Java (`com.amazon.imp`, `kcpsdk.auth`; its APK carries an unquickened `classes.dex`, decompiled
+  with androguard): `FireOsDhaSigner` builds drvV1 for version 1 and drvV3 (ES256, x5c from the chain) for 2. Its
+  drvV1 is not the native MAP's text: org.json keeps the order of the puts (`jwk` = kty, n, e, mac; payload = dat,
+  dev, cust; dev = typ, dt, dsn, [ds], cpuid), `n` and `mac` are padded Base64 (flags 10), `cpuid` is the `Serial`
+  line of `/proc/cpuinfo` (`8b4c188d83c47b66` here; left out when missing), the date UTC, `dsn` the registration's
+  serial, `ds` only in a registration by device secret (idme `mac_sec` is `0` here anyway). `dha.c` builds exactly
+  that when there is no HAL but the service answers version 1 (`tests/unit/dha_jwt_test.c --service`, against a fake
+  of the tool's output); on the Echo its token's signature verifies against the key in it.
+  Against the real Amazon (2026-10-13, amazon.de, the settings page): register answered 401 until the code was
+  entered, then the tokens ("Julian's Echo Show"); DAVS handed out echo de-DE and the sound detection model (aed
+  de-DE), both installed by root. Whisper refused: `HTTP 403 Request not allowlisted for device Type A4ZP7ZC4PI6TO
+  for artifact type alexa-hybrid, artifact key whisper-static` — a device type/key allowlist, not our filters (the
+  AHE here asks with the Dots' filters: `ecid` 6, `modelClass` odie-litespeed of `/system/etc/ahe.config.json`, and
+  has a "DAVS request denied for artifactKey - deviceType pair" path); stock never had one either
+  (`/data/alexahybrid/files/AmModel` empty). The Show's whisper mode is then the cloud's (docs/re-whisper.md). The
+  Dots' model can be copied over (same libpryon): untried here.
 - [~] Bluetooth proxy and A2DP sink (2026-10-13): Android's stack (app/Bluetooth) is off the partition and
   `bluetooth_on=0`; the MT7668 behind `btmtksdio` speaks H4 on `/dev/stpbt` as the Dots' combo chips do (hciscan:
   reset, address, 315 LE adverts in 8 s). hassmic: "controller ready, 7C:D5:66:97:F7:7B, ACL 32 x 251", A2DP sink

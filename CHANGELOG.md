@@ -4,6 +4,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-13
 
+- **Echo Show 5: Download from Amazon.** The settings page's "Download from Amazon" now works on the Show: sign in
+  with the code, then wake words and the newer sound detection model download and install as on the Dots. Amazon
+  does not hand out the whisper detection model for the Show; copy it from a Dot that has it ("Copy models").
 - **Echo Show 5: Illuminance and Wi-Fi motion.** Home Assistant now gets the Show's light sensor as "Illuminance", in
   lux, the same value Android's own sensor reports. Wi-Fi motion (experimental, off by default) works on the Show as
   on the Dots: switch it on in the settings page. The Show has no "LED auto brightness": the band's brightness is the
