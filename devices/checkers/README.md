@@ -1,9 +1,10 @@
 # Echo Show 5 1st gen, 2019 (`checkers`)
 
-**Untested: nothing here has run on an Echo Show yet.** The unlock is public (below); the install is written
-(`scripts/install-system.sh`, which hands over to `scripts/install-boot.sh`) and its PC half checked, the device half
-not. What is here builds (`make DEVICE=checkers`, also with `STUBS=1`) and is worked out from the firmware only. Findings and what a port still needs: [docs/re-checkers.md](../../docs/re-checkers.md). Porting
-guide: [devices/README.md](../README.md).
+**Runs on one Echo Show** (a tester's, from 2026-10-10), installed with the guided setup (`scripts/setup.sh
+checkers`). The unlock is public (below); the install is `scripts/install-system.sh`, which hands over to
+`scripts/install-boot.sh`. No light ring here: the screen stays black, and nothing shows that the Show listens yet.
+Findings, and what works and what is open: [docs/re-checkers.md](../../docs/re-checkers.md). Porting guide:
+[devices/README.md](../README.md).
 
 Model H23K37 (`ro.product.model` AEOCH). MediaTek MT8163, 5.5" touchscreen, 2 microphones, camera with a shutter.
 
@@ -113,7 +114,7 @@ trying things with `scripts/deploy.sh` before installing).
 
 ## Install
 
-Untested on a device. The guided setup does it (`scripts/setup.sh checkers`): amonet's `fastbrick.sh` run at its
+Tried on one Echo Show. The guided setup does it (`scripts/setup.sh checkers`): amonet's `fastbrick.sh` run at its
 unlock step, 8149's system partition where the Echo runs another build, the rooted boot image at the root step (`scripts/install-boot.sh --boot-only`), the build, the egress
 lock and the Wi-Fi join, the install.  Wi-Fi joins through Android's WifiService — `scripts/device/wifictl.dex`
 (`tools/mkwifictl.py`), called as `CLASSPATH=…/wifictl.dex app_process / Wifictl <verb>`: the same

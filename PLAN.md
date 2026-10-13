@@ -2379,7 +2379,8 @@ Run in this order. Each step says what it proves.
       state/volume.music is read at start only while state/config says separate_volumes=on (`settings_peek`, now the
       last line of a name as loading takes it), else deleted: a hand edit or an older build after a fallback left it
       behind and the volume came back from it.
-- [ ] Echo Show 5 1st gen (`checkers`, 2026-10-07, firmware only; `docs/re-checkers.md`). Same Fire OS 6574.1 as donut,
+- [ ] Echo Show 5 1st gen (`checkers`, 2026-10-07; on a tester's device from 2026-10-10, installed with the guided
+      setup; `docs/re-checkers.md`). Same Fire OS 6574.1 as donut,
       but a full Android device: no `mixer`, the front end (libasp) inside the audio HAL, Alexa as apps. Checked:
       `libpryon.so`/`libopus.so`/`libz.so` byte-identical to donut's; donut's `pryon_test` under qemu detects ALEXA on
       checkers' `en-US/ALEXA` (newer model layout) and `world/ALEXA`; the binder service `audiosignalprocessor` takes

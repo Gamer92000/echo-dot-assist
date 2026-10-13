@@ -151,15 +151,17 @@ Libraries in checkers' load at 0x1000–0x4000 above their file offset (libasp +
 ## What a port needs
 
 The one list of what is done and what is open for checkers; `devices/checkers/README.md` and PLAN.md point here.
-[x] done (on the PC only, unless it says otherwise), [ ] open. Nothing has run on an Echo Show yet.
+[x] done, [~] partly, [ ] open. It runs on one Echo Show (a tester's, from 2026-10-10), installed with the guided
+setup; what was checked on the PC only says so.
 
 **Unlock, install, boot**
 - [x] Unlock: amonet-checkers v2.0.1 (public; its lk/tz are 8149's own). Root: 8149's own `boot.img` with root adb,
   `verify` out of the fstab, the policy patched (`sepolicy.rules`; the XDA `boot-root.img` is NS6570's).
 - [x] Installer: `scripts/install-boot.sh` (`INSTALL=boot`), boot then system partition only; `hassmic.rc` (firewall
-  `on boot`, satellite at `sys.boot_completed`). PC half checked end to end, device half untried.
-- [ ] First run on a device: `otatool remount` gets `/system` writable, init starts both services from
-  `/system/etc/init` (the boot image and root adb: below).
+  `on boot`, satellite at `sys.boot_completed`). Installed the tester's Echo (2026-10-13).
+- [x] First run on the device: `otatool remount` gets `/system` writable, init starts `hassmic` and `hassmic_fw` from
+  `/system/etc/init/hassmic.rc`; pushed updates pass their self test and become the factory copy (the boot image and
+  root adb: below).
 - [x] Root boot image on a device (a tester's, 2026-10-10): boots, adb root in `u:r:su:s0`. Found on the way:
   - 8149's `sbin/adbd` is a user build (no `ro.secure` string, "adbd cannot run as root in production builds"):
     it drops to shell whatever `ro.secure`, `service.adb.root` or `fastboot oem flags 61` say (all three tried).
@@ -184,36 +186,40 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
     for TWRP.
   - Diagnostics: `fastboot oem logcat` prints preloader + lk logs; TWRP's `/sys/fs/pstore/console-ramoops*` the
     last kernel's.
-- [x] Guided setup (`devices/checkers/setup.sh`): every step written, dry-run walks them all; the first run on a
-      device is the try-out (UNTESTED=1 until then).
-- [x] CI: checkers in the build matrix of `.github/workflows/build.yml` (its bundle installs now, on paper).
+- [x] Guided setup (`devices/checkers/setup.sh`): run on the tester's Echo from unlock to install (2026-10-10..13),
+      fixed where it stopped (the items above); no longer marked UNTESTED.
+- [x] CI: checkers in the build matrix of `.github/workflows/build.yml`.
 
 **Audio**
 - [x] `audio_android.c` (OpenSL ES): VOICE_RECOGNITION capture, one player per stream, mixed by AudioFlinger.
 - [x] Recording rights read from the firmware (`libserviceutility.so` `recordingAllowed`): root records; any other uid
   needs a package, system has "android" (`DAEMON_USER=system`).
-- [ ] On the device: the recording really opens as system; only one capture at a time (Android 7 hands the input to
-  the newest AudioRecord, so nothing of Alexa's may still record); the ASR pipeline's level for `micgain.c`; latency;
-  whether our playback really is the echo canceller's reference (inferred from the HAL, not measured).
+- [~] On the device (2026-10-13): the recording opens as system and runs for hours (wake word, arbitration, Home
+  Assistant's pipeline), nothing of Alexa's records any more (its apps are off the partition), and it reopens itself
+  after an audioserver restart ("capture delivers nothing, reopening"). The ASR pipeline's level: a talker at -41 to
+  -44 dBFS, `micgain.c` adds +15 to +18 dB. Open: latency; whether our playback really is the echo canceller's
+  reference (inferred from the HAL, not measured).
 - [x] The front end's listening mode and wake word energies: behind `audio.h` now (`afe_listening`,
   `afe_arbitration`, `afe_stream_stopped`; LIPC on the Dots). Here transaction 3 of `audiosignalprocessor` through
   the firmware's own `/system/bin/service call` (`afe_parcel.c`: the parcel as `i32` words, the reply read back out
   of Android 7's Parcel/HexDump print, whose format strings are in this libbinder): 146, 114 + 23, 14 as above.
-  `tests/unit/afe_parcel_test.c` (make unit). On the device: that the reply looks as printed here, the JSON's
-  energies, and the time two `service` runs take inside the arbitration window (the Dots' LIPC pair: 150 ms).
-- [x] Volume: behind `audio.h` now (`vol_read`/`vol_write`: the mixer's props on the Dots). Here a gain on each
-  OpenSL ES player (`SLVolumeItf`, 0.4 dB per step, 0 silent), kept in `state/volume`; Android's own stream volumes
-  (voice call, system, music) go to their maximum at every satellite start (`main.sh`: `wifictl.dex volume-max`,
-  IAudioService.setStreamVolume as package "root", which 8149's AudioService notes with AppOps for uid 0; no
-  `media volume` in Android 7.1's media_cmd). The keypad is grabbed (`board.grab_keys`, EVIOCGRAB) so the framework
-  does not turn its volume too, and shows no volume panel. On the device: the levels, and that nothing else (the
-  screen's settings) moves Android's stream volumes afterwards; the camera shutter's EV_SW on the same keypad no
-  longer reaches Android either.
+  `tests/unit/afe_parcel_test.c` (make unit). On the device (2026-10-13): the reply as printed here, the JSON's
+  energies there (voice 9e6..4e8, ambient 8e4..2e5), both `service` runs done ~105 ms after the wake word (the Dots'
+  LIPC pair: 150 ms).
+- [x] Volume: behind `audio.h` (`vol_read`/`vol_write`: the mixer's props on the Dots). Here Android's own: the music
+  stream's index (0..30) through IAudioService (setStreamVolume 3, getStreamMaxVolume 10, via the `service` tool as
+  package "android"), kept in `state/volume`. Not a gain on each player: Amazon's audio stack put a track back to 1.0
+  ~70 ms after it started, so sounds began at our level and jumped to full (the tester's Echo). Fire OS aliases
+  system, voice call and TTS to the music stream (one index in `dumpsys audio`). The keypad is grabbed
+  (`board.grab_keys`, EVIOCGRAB): the framework neither turns its volume too nor shows a panel, and the camera
+  shutter's EV_SW on the same keypad no longer reaches Android. On the device: keys, Home Assistant and the page
+  move it; a Bluetooth speaker gets its own index (AudioService keeps one per device).
 - [~] Equalizer: `afe_eq_get`/`afe_eq_set` (audio.h), here `command` 29 / 21 (donut's LIPC `GET/SET_USER_EQ_INFO`;
   `ADJUST` 28, `RESET` 30). This libasp has the UserEq code and its JSON (`convertUserEqJSONToVector`, BASS/MIDRANGE/
   TREBLE), reached through a vtable, so its handler was not traced: the payloads are LIPC's strings (the JSON in for
-  a set) and, for the get, REQUEST_ARBITRATION_JSON's convention (an int32 reply size in). On the device: whether
-  the get answers in that form.
+  a set) and, for the get, REQUEST_ARBITRATION_JSON's convention (an int32 reply size in). On the device
+  (2026-10-13): the get answers in that form (`{"bands":[{"name":"BASS","level":0},{"name":"TREBLE",...},
+  {"name":"MIDRANGE",...}]}` in a 512-byte array, NUL-padded), the set returns status 0. Open: hearing a band move.
 - [ ] No micRaw (`startCapture` refused on ship builds): `scripts/mic-compare.sh` cannot work.
 - [~] Music Assistant (Sendspin, 2026-10-13): paired and plays, sync within ±10 ms over minutes, no underruns.
   Open: the first stream right after pairing stopped being heard after ~0.2 s (no error in hassmic's log; not
@@ -251,8 +257,10 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   closing it restarted adbd, whose process group took the setup's `adb shell` along. `mkbootroot.py` now leaves that
   line out (a comment in its place), so adb over Wi-Fi opens only through hassmic (`adb_gate`); the setup still
   closes it before the lockdown for an Echo on the older boot image.
-- [ ] On the device, security-relevant: the invariant (Amazon's daemons only local addresses, the updater never out)
-  holds with netd running, netd's own changes to OUTPUT and INPUT included; DHCP renewals and mDNS pass.
+- [~] On the device, security-relevant (2026-10-13): `hassmic_out` first in OUTPUT with netd running and INPUT policy
+  DROP; `lockdown.sh` re-applies once at boot (netd's own setup) and holds from there, for hours. A root shell (not
+  hassmic's group) gets no connection to 1.1.1.1:80; hassmic's traffic and mDNS pass. Amazon's daemons are mostly off
+  the partition (`amazonfiled` is left), the updater with them. Open: a DHCP renewal seen through.
 - [x] Wi-Fi join at install and the settings page's "Switch network": through WifiService, with
   `scripts/device/wifictl.dex` (`tools/mkwifictl.py`). What stock's own setup apps do (a WifiConfiguration through
   the IWifiManager binder), from root as `CLASSPATH=…/wifictl.dex app_process / Wifictl …`; reflection only, so
@@ -269,7 +277,8 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   package name only for the permission-review consent dialog (`startConsentUi`), and review is off
   (`Build.PERMISSIONS_REVIEW_REQUIRED` unset, framework-res `config_permissionReviewRequired` false); otherwise it
   checks CHANGE_WIFI_STATE, which uid 0 has. The setup's join (`scripts/wifi-join.sh`) runs against a fake adb and
-  the same fake framework in `tests/fake_wifi_join.py`. On a device still open: whether it really connects and gets its address, and the
+  the same fake framework in `tests/fake_wifi_join.py`. On the device: the setup's join connected and got its
+  address (the network's entry says `creatorUid` 0: wifictl's). Open: the page's "Switch network" on the device. The
   screen fallback is gone with Amazon's Settings: TWRP and the firmware's own setup are the way back.
 
 **Buttons, lights, sounds**
@@ -279,10 +288,11 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   event of its own (main's rule since the volume steps on release: a pair is not two presses). The page words its
   texts for it (`hello.action`, `act()` in `web/app.js`); no reset by holding (the page's or Home Assistant's
   button). `tests/unit/buttons_test.c` (make unit).
-- [x] Input devices by name, not event number (`board.c` `name:gpio-keys`, `name:amazon-gating`; `buttons.c` looks
-  them up with EVIOCGNAME): the kernel's five DTBs give gpio-keys no label (so the platform name) and the gating
-  driver its own input device, "mute" = KEY_POWER (0x74), on which `privacy_reader` reads the latch at any event.
-  `amazon-gating` is the only name the kernel has for that device: confirm with `getevent -il`.
+- [x] Input devices by name, not event number (`board.c` `name:gpio-keys`, `name:gating`; `buttons.c` looks them up
+  with EVIOCGNAME): the kernel's five DTBs give gpio-keys no label (so the platform name) and the gating driver its
+  own input device, "mute" = KEY_POWER (0x74), on which `privacy_reader` reads the latch at any event. `getevent -il`
+  on the device: "gating" (the platform device is `amazon-gating`), "gpio-keys", besides "mtk-kpd", "ACCDET",
+  "goodix-ts", "amazon_touch", "m_alsps_input", "hwmdata"; both of ours grabbed.
 - [ ] Light sensor: STK3x1x behind MediaTek's sensor hub, no lux file (`light_sensor` empty).
 - [ ] No LED ring and no `ledctrl` (`main.c` then leaves LEDs off): listening/thinking/volume/identify feedback
   would go on the screen; nothing does that yet. Home Assistant's "Light ring" is not listed (no digest of ours under
@@ -291,7 +301,7 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   (`board.c` `earcon_zip`: 12 of the 13 sounds, every one stored uncompressed, as aapt keeps audio), nothing copied;
   `/data/local/hassmic/earcon/` (`earcon_dir`) wins for own sounds. All decode from the unpacked firmware
   (`make unit`, `tests/unit/sounds_test.c`); the setup beacon (Identify) stays the built-in tone. On the device:
-  the APKs readable by the daemon's user (0644, and `su` is permissive), and how they sound.
+  they play, read out of the APKs as the daemon's user.
 
 **Other features**
 - [~] Speaker gain (`board.c` `speaker_gain`, `spkgain.c`): the codec is a Realtek RT5616 (`CONFIG_SND_SOC_RT5616`;
@@ -309,8 +319,9 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
 - [~] Bluetooth proxy and A2DP sink (2026-10-13): Android's stack (app/Bluetooth) is off the partition and
   `bluetooth_on=0`; the MT7668 behind `btmtksdio` speaks H4 on `/dev/stpbt` as the Dots' combo chips do (hciscan:
   reset, address, 315 LE adverts in 8 s). hassmic: "controller ready, 7C:D5:66:97:F7:7B, ACL 32 x 251", A2DP sink
-  ready (SBC, AAC, aptX HD, aptX), scanning; a Pixel paired and played (aptX HD). Open: Home Assistant's proxy, on
-  the device.
+  ready (SBC, AAC, aptX HD, aptX); a Pixel paired and played (aptX HD). Home Assistant's proxy subscribes and
+  switches the scan between active and passive (`ble.c` scans only for a subscriber). Open: devices seen in Home
+  Assistant through it.
 - [x] Bluetooth speaker (A2DP source), on the tester's Echo with a PC (BlueZ/PipeWire) as the speaker (2026-10-13):
   heard clearly, back on the Echo cleanly. No remote submix needed: 8149 has AOSP N's `audio.a2dp.default.so` (not
   byte-identical to donut's, Amazon's `bt_a2dp_hw_fos` additions, same protocol) and its policy the `a2dp` module
