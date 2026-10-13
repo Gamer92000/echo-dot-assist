@@ -460,7 +460,7 @@ fi
 if [ "$MODE" = stock-online ]; then
     # hassmic is off on purpose: that must not count as an update that failed to come up.  Alexa's apps that
     # alexa-off.sh disabled (checkers) come back, all but the updater.
-    [ "$1" = firewall ] || { echo 0 > $OTA/tries; [ -s /data/local/hassmic/alexa-disabled ] && sh $D/alexa-on.sh keep-updates 2>&1 | stamped >> $LOG; exit 0; }
+    [ "$1" = firewall ] || { echo 0 > $OTA/tries; { [ -s /data/local/hassmic/alexa-disabled ] || [ -s /data/local/hassmic/alexa-settings ]; } && sh $D/alexa-on.sh keep-updates 2>&1 | stamped >> $LOG; exit 0; }
     { rotate_log; echo "== stock-online, uptime $(cut -d. -f1 /proc/uptime)s: Alexa runs, updaters cut off"; } 2>&1 | stamped >> $LOG
     sh $D/lockdown.sh ota-only watch 2>&1 | stamped >> $LOG
     exit 0

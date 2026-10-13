@@ -228,6 +228,13 @@ What changed for people using the Echo, newest first. Details and measurements a
   supported". It now plays https:// too, and follows redirects there. The certificate is checked as a browser would:
   a self-signed one, or one that does not name the address Home Assistant gives out, is refused, and the log says so.
   "Check HTTPS certificates" on the settings page (System) switched off accepts any certificate.
+- **Echo Show 5: Amazon's software is gone, not just switched off.** The install now takes every Amazon app off the
+  Show's system partition (Alexa, Amazon's screen, its pull-down menu, Settings, cloud and telemetry services: 120 of
+  them), keeping only the few shared libraries Android itself loads; uninstalling puts them back. Disabling them was
+  not enough: Fire OS turned some back on at every boot, and the rest kept crashing with "has stopped" dialogs. The
+  screen stays black, the Show boots in about 30 s, and half its memory is free. The volume is now Android's own,
+  the volume ticks come at once, and the mute sound plays at your volume (Amazon's own copy of it no longer plays
+  over it at full volume). The boot chime is gone, and adb over Wi-Fi no longer opens at every boot.
 - **Echo Show 5 (untested): Speaker gain, and the newest features.** The Show 5 gets the "Speaker gain" setting: its
   codec's line out in front of the speaker amplifier, up to +12 dB in steps of 1.5 dB (each whole dB you pick goes to
   the nearest step). Pressing both volume keys together for the missing action button no longer also moves the

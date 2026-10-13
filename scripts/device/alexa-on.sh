@@ -16,3 +16,11 @@ if [ -f $DISABLED ]; then
     done < $DISABLED
     if [ -n "$left" ]; then printf '%s\n' $left > $DISABLED; else rm -f $DISABLED; fi
 fi
+# The settings alexa-off.sh set ("null": there was none)
+SETTINGS=/data/local/hassmic/alexa-settings
+if [ -f $SETTINGS ]; then
+    while read -r ns k v; do
+        if [ "$v" = null ]; then settings delete $ns $k < /dev/null > /dev/null 2>&1; else settings put $ns $k "$v" < /dev/null; fi
+    done < $SETTINGS
+    rm -f $SETTINGS
+fi

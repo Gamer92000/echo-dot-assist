@@ -14,6 +14,10 @@
 #                                  compositor of its own, so ours cannot be a file of its own; stock's is kept one
 #                                  directory up for -G and uninstall.  DIR/digest goes in last: the set is complete.
 #   sysinstall.sh uninstall SRC    what install-system.sh --uninstall does (SRC: where otatool is)
+# install and factory also take the stock apps of the model's STOCK_APPS_OUT (device.conf) off the partition, into
+# /system/hassmic-removed (a rename on the same file system), and put back any that the list no longer names;
+# uninstall puts every one back.  Where it names HOME_APK, that APK (in SRC) goes in as a system app,
+# /system/app/HassmicHome/HassmicHome.apk: the home screen once stock's are off (tools/mkhome.py); uninstall removes it.
 # The factory copy is what boot.sh falls back to, and boot.sh is what init starts: if it breaks, neither service starts,
 # there is no egress lock, and Amazon's updaters can reach the internet.  So nothing is written unless every script
 # parses and the model is right, each file goes in as a new file renamed over the old one (a power cut leaves the old or
@@ -97,7 +101,32 @@ if [ "$MODE" = leds ]; then
     exit 0
 fi
 
+# Stock apps off the partition and back (STOCK_APPS_OUT): PackageManager scans /system/app, priv-app and the like at
+# boot, not REMOVED, so a package moved there is gone from the next boot on, whatever its enabled state said.
+REMOVED=/system/hassmic-removed
+HOMEDIR=/system/app/HassmicHome
+stock_apps() {      # stock_apps "LIST": those in REMOVED, the rest back where they were
+    set -- " $(echo $1) "                   # one line: device.conf spreads a long list over several
+    for d in $REMOVED/*/*; do
+        [ -e "$d" ] || continue
+        p=${d#$REMOVED/}
+        case "$1" in *" $p "*) continue;; esac
+        if [ -e "/system/$p" ]; then say "$p is back on the partition already, kept in $REMOVED"
+        else mv "$d" "/system/$p" && say "$p put back"; fi
+    done
+    for p in $1; do
+        case "$p" in /*|*..*|*/*/*|"") say "not a folder of /system/<dir>/: $p"; continue;; esac
+        [ -e "/system/$p" ] || continue
+        if [ -e "$REMOVED/$p" ]; then say "$p is in $REMOVED already, the partition's left alone"; continue; fi
+        mkdir -p "$REMOVED/${p%/*}" && chcon $SYSLABEL $REMOVED "$REMOVED/${p%/*}" && mv "/system/$p" "$REMOVED/$p" &&
+            say "$p taken off the partition (in $REMOVED; gone from the next boot on)" || say "cannot move $p"
+    done
+    rmdir $REMOVED/* $REMOVED 2>/dev/null
+    sync
+}
+
 if [ "$MODE" = uninstall ]; then
+    stock_apps ""
     if [ -f /sepolicy.pre-hassmic ]; then
         new /sepolicy /sepolicy.pre-hassmic 644 0:0 $SYSLABEL; commit; rm /sepolicy.pre-hassmic
     fi
@@ -105,7 +134,7 @@ if [ "$MODE" = uninstall ]; then
         staged=; new $LR/layer_config_common.json $LSTOCK 644 0:0 $SYSLABEL; commit; rm $LSTOCK
     fi
     rm -f $LR/hassmic_*.animation /system/etc/hassmic-leds.digest
-    rm -rf $H $RC; sync
+    rm -rf $H $RC $HOMEDIR; sync
     say "hassmic removed from the system partition"
     exit 0
 fi
@@ -116,12 +145,17 @@ for f in "$SRC"/*; do
     case "$n" in
     hassmic.rc|sepolicy) continue;;
     update.pub) [ "$MODE" = install ] || continue; m=644;;
-    device.conf|VERSION|*.ko|release.pub|wifictl.dex) m=644;;
+    device.conf|VERSION|*.ko|release.pub|wifictl.dex|*.apk) m=644;;
     *) m=755;;
     esac
     new $H/$n "$f" $m 0:2000 $SYSLABEL
 done
 new $RC "$SRC/hassmic.rc" 644 0:0 $SYSLABEL
+home=$(. "$SRC/device.conf" 2>/dev/null && echo "$HOME_APK")
+if [ -n "$home" ] && [ -s "$SRC/$home" ]; then
+    mkdir -p $HOMEDIR; chown 0:0 $HOMEDIR; chmod 755 $HOMEDIR; chcon $SYSLABEL $HOMEDIR
+    new $HOMEDIR/HassmicHome.apk "$SRC/$home" 644 0:0 $SYSLABEL
+fi
 if [ "$MODE" = install ] && [ -f "$SRC/sepolicy" ]; then
     # The policy as boot-root left it stays beside it, for --uninstall; staged first, so commit() renames it into place
     # before the new policy.  Init loads /sepolicy before any policy is in force: its label does not matter.
@@ -129,6 +163,7 @@ if [ "$MODE" = install ] && [ -f "$SRC/sepolicy" ]; then
     new /sepolicy "$SRC/sepolicy" 644 0:0 $SYSLABEL
 fi
 commit
+stock_apps "$(. "$SRC/device.conf" 2>/dev/null && echo "$STOCK_APPS_OUT")"
 if [ "$MODE" = install ]; then
     for f in $H/*; do
         n=${f##*/}

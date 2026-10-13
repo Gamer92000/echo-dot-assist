@@ -265,6 +265,12 @@ step_network() {
     fi
     task "Locking down the Echo's internet access" sh -c 'adb shell sh /data/local/hassmic/lockdown.sh &&
         adb shell iptables -S hassmic_out | grep -q -- "-j DROP"' || return 1
+    # Before the Echo is online: Amazon's setup screen would ask to be set up on the touchscreen (a wiped Fire OS shows
+    # it), and Alexa's apps would start talking.  alexa-off.sh disables both (noted for alexa-on.sh) and tells Android
+    # setup is done; the install's satellite start runs it again and finds nothing left to do.
+    task "Switching off Alexa's apps and Amazon's setup screen" sh -c 'adb shell sh /data/local/hassmic/alexa-off.sh;
+        [ "$(adb shell settings get global device_provisioned | tr -d "\r")" = 1 ] &&
+        ! adb shell pm list packages -e | tr -d "\r" | grep -qx package:com.amazon.ds2.oobe.efd' || return 1
     if [ ! -f secrets/wifi.conf ]; then
         prompt ssid "Wi-Fi name (WPA2, same network as Home Assistant)"
         prompt pass "Wi-Fi password" "" -s
