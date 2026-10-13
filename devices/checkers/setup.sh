@@ -4,7 +4,6 @@
 # quit.  A step checks first whether its result is there already, so a rerun (or work done by hand) passes through
 # quietly.
 
-UNTESTED=1                                 # nothing here has run on an Echo Show yet (scripts/setup.sh says so)
 XDA=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-5-1st-gen-2019-checkers.4762900/
 AMONET=amonet-checkers-v2.0.1.zip
 AMONET_SHA256=770324a8ed5ab922c0383f8ba072d70fc0190cc2c879f12f67b8d6cfa3ad30ee
