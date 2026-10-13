@@ -14,4 +14,5 @@ python3 scripts/otatool.py pack "$1" "$2" $OUT/hassmic.bundle \
     $(for k in $OUT/*.ko; do [ -f "$k" ] && echo "$k:644"; done) keys/release.pub:644 \
     scripts/system/main.sh scripts/system/boot.sh scripts/system/sysinstall.sh $DDIR/hassmic.rc:644 \
     scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh scripts/device/artifact-install.sh scripts/device/wifi.sh \
-    $([ "$INSTALL" != boot ] || echo scripts/device/wifictl.dex:644)    # WifiService's client (wifi.sh), INSTALL=boot only
+    $([ -z "$HOME_APK" ] || echo scripts/device/$HOME_APK:644) \
+    $([ "$INSTALL" != boot ] || echo scripts/device/wifictl.dex:644)    # wifictl: WifiService's client (wifi.sh), INSTALL=boot only; HOME_APK: the home screen (sysinstall.sh)

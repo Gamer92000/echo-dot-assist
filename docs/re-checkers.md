@@ -223,8 +223,26 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
 **Alexa, firewall, network**
 - [x] Alexa off: `alexa-off.sh` disables `ALEXA_PACKAGES`, `SETUP_PACKAGES`, `UPDATE_PACKAGES` with `pm`, undone by
   `alexa-on.sh` and by `boot.sh` without `hassmic.conf`; checked against a fake `pm`.
-- [ ] On the device: which of those packages the screen needs (`com.amazon.bishop` is in the list; the launcher is
-  `com.amazon.paladin`, left alone); what the screen shows with Alexa off.
+- [x] Amazon's software off the device (the tester's Echo, 2026-10-13). `pm disable` does not control it: Fire OS
+  enables System UI again at the next boot, and starts its persistent apps at boot even disabled (amazon.speech.sim,
+  whad, NativeAccessorProxyServices ran with `enabled=2`), and much of it crashed without Alexa's speech service ("has
+  stopped" dialogs). System UI also played stock's sounds for other apps (its NotificationPlayer: the privacy sound at
+  full volume over ours) and threw without amazon.speech.sim ("SimClient was never got created"). So every Amazon app
+  folder of `/system/app` and `/system/priv-app` (`pm list packages -f`: com.amazon.*, amazon.*, Ivona TTS, Arcus,
+  the usage stats proxy, Sidewalk, System UI and Amazon's Settings: 120) is taken off the partition (`STOCK_APPS_OUT`,
+  `sysinstall.sh`: moved into `/system/hassmic-removed` at install and with every update that becomes the factory copy,
+  back at uninstall). Not the shared-library providers of `/system/etc/permissions` (amazon.jackson-19,
+  com.amazon.communication, com.amazon.device.sync.sdk.internal, com.amazon.diode.eventsender,
+  DeviceMessagingAndroid[Internal]SDK, DeviceSoftwareOTAContracts, MetricsApi, MinervaApi, RealtimeRegistryDeviceSDK):
+  with them gone too, FusedLocation (in system_server, NoClassDefFoundError) and Settings failed, system_server
+  restarted 12 times and later Package Manager was gone. Home is hassmic's own (`tools/mkhome.py`,
+  `HOME_APK`): an APK without code declaring `android.app.Activity`, black, MAIN/HOME, `directBootAware` (without it
+  "No home screen found" before user 0's unlock, and `sys.boot_completed` never came). Result: boot in 30 s, one Amazon
+  process left (`amazonfiled`, native), ~550 MB of 1 GB free, no dialogs; `neo-service-coordinator` still panics once
+  at boot (binder registration), no dialog. Before the install, after a wipe, Amazon's setup wizard is in front:
+  `alexa-off.sh` at the setup's lockdown step disables it and sets `device_provisioned`/`user_setup_complete`.
+  Open: uninstall puts the apps back but `alexa-on.sh` runs before that (packages missing then): disabled ones may
+  stay disabled.
 - [x] Firewall: `lockdown.sh` as on the Dots, plus `FW_KEEP` (DHCP answers; no stock `firewall.sh`); the updater's uid
   from `packages.list` for stock-online.
 - [x] Security: stock's `init.checkers.rc` sets `service.adb.tcp.port 5555` on boot, so with our ramdisk
@@ -252,7 +270,7 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   (`Build.PERMISSIONS_REVIEW_REQUIRED` unset, framework-res `config_permissionReviewRequired` false); otherwise it
   checks CHANGE_WIFI_STATE, which uid 0 has. The setup's join (`scripts/wifi-join.sh`) runs against a fake adb and
   the same fake framework in `tests/fake_wifi_join.py`. On a device still open: whether it really connects and gets its address, and the
-  screen (`am start -a android.settings.WIFI_SETTINGS`) stays the fallback.
+  screen fallback is gone with Amazon's Settings: TWRP and the firmware's own setup are the way back.
 
 **Buttons, lights, sounds**
 - [x] No action button: both volume keys pressed together (within 400 ms) and let go within a second are its press

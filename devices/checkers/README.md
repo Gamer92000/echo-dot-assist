@@ -170,9 +170,10 @@ DEVICE=checkers scripts/install-system.sh   # the Echo names itself (model and M
 
 `DEVICE=checkers` is needed while it is in TWRP: there the model is not asked from the Echo. Wi-Fi:
 `scripts/wifi-join.sh` joins through WifiService on this model (wifictl.dex above; the SSID goes in as hex and the
-passphrase as its PSK, made on the PC, so nothing of either passes a shell).  Should that fail on a device, the screen is the way around: `adb shell
-am start -a android.settings.WIFI_SETTINGS` once installed (the egress lock is up from `on boot`) — not tried
-either.  Do not join before the install: Fire OS would reach Amazon.  The settings page's network switch
+passphrase as its PSK, made on the PC, so nothing of either passes a shell); it worked on the first Echo Show
+(2026-10-13).  There is no screen to fall back on: the install takes Amazon's apps off the system partition, Settings
+among them, and the screen stays black (hassmic's own home, `tools/mkhome.py`).  Do not join before the lockdown:
+Fire OS would reach Amazon.  The settings page's network switch
 (`scripts/device/wifi.sh`) uses the same wifictl calls.
 
 **Once `/system` is written, only a boot image without `verify` may boot it**: the stock `boot.img` would find its

@@ -11,8 +11,9 @@ BASE=/data/local/hassmic
 OTA=$BASE/ota
 if [ ! -f $BASE/hassmic.conf ]; then
     # Alexa's apps, where alexa-off.sh had to disable them (checkers), stay disabled through reboots: stock behaviour
-    # means turning them back on.  The Dots never leave that list.
-    [ "$1" = satellite ] && [ -s $BASE/alexa-disabled ] && [ -f $SYS/alexa-on.sh ] && sh $SYS/alexa-on.sh > /dev/null 2>&1
+    # means turning them back on, and the setup flags alexa-off.sh set with them.  The Dots never leave either list.
+    [ "$1" = satellite ] && { [ -s $BASE/alexa-disabled ] || [ -s $BASE/alexa-settings ]; } && [ -f $SYS/alexa-on.sh ] &&
+        sh $SYS/alexa-on.sh > /dev/null 2>&1
     exit 0
 fi
 [ -f $SYS/device.conf ] && . $SYS/device.conf   # this model's facts, installed together with this file; main.sh copes without

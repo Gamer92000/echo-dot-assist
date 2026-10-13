@@ -16,11 +16,32 @@ if [ -n "$(echo $PKGS)" ] && command -v pm > /dev/null; then
 '
     off=$(pm list packages -d 2>/dev/null | tr -d '\r')
     for p in $PKGS; do
-        case "$NL$off$NL" in *"${NL}package:$p$NL"*) continue;; esac
-        pm list packages "$p" 2>/dev/null | grep -qx "package:$p" || continue        # not on this firmware
+        case "$p" in
+        */*)    # one component of a package that must stay (package/class): pm lists no disabled components, so
+                # what was disabled here counts as done
+                grep -qx "$p" $DISABLED 2>/dev/null && continue;;
+        *)      case "$NL$off$NL" in *"${NL}package:$p$NL"*) continue;; esac
+                pm list packages "$p" 2>/dev/null | grep -qx "package:$p" || continue;;   # not on this firmware
+        esac
         if pm disable "$p" > /dev/null 2>&1; then
             grep -qx "$p" $DISABLED 2>/dev/null || echo "$p" >> $DISABLED
         else echo "alexa-off: $p could not be disabled"; fi
+    done
+fi
+# A setup wizard that is disabled never says it finished: Android keeps the home button, status bar and lock screen in
+# their not-set-up state until device_provisioned and user_setup_complete are 1, which the wizard sets at its end
+# (checkers after a wipe: both 0, Amazon's com.amazon.ds2.oobe.efd in front, 2026-10-13).  What they were is written
+# down (SETTINGS, "namespace key value"): alexa-on.sh puts it back, and the wizard with it.
+# The same way, ANDROID_SETTINGS of device.conf ("namespace/key=value" each): Android's own settings for a satellite.
+SETTINGS=/data/local/hassmic/alexa-settings
+if command -v settings > /dev/null; then
+    want=; [ -n "$(echo $SETUP_PACKAGES)" ] && want="global/device_provisioned=1 secure/user_setup_complete=1"
+    for t in $want $ANDROID_SETTINGS; do
+        ns=${t%%/*} kv=${t#*/}; k=${kv%%=*} val=${kv#*=}
+        v=$(settings get $ns $k 2>/dev/null | tr -d '\r')
+        [ "$v" = "$val" ] && continue
+        grep -q "^$ns $k " $SETTINGS 2>/dev/null || echo "$ns $k ${v:-null}" >> $SETTINGS
+        settings put $ns $k "$val" || echo "alexa-off: $ns $k could not be set"
     done
 fi
 if [ -n "$BT_SERVICE" ]; then

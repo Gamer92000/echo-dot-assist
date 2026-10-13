@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "../third_party/minimp3.h"
 
 static const char *const names[SND_COUNT] = { "ui_wakesound", "ui_wakesound_touch", "state_privacy_mode_on", "state_privacy_mode_off",
@@ -149,6 +150,10 @@ static short *load_zip(const char *name, size_t *samples, unsigned *rate)
         if (strcmp(b->name, name)) continue;
         char path[300]; size_t len; unsigned char *buf; short *pcm;
         snprintf(path, sizeof path, "%s%s", root ? root : "", b->zip);
+        /* an app the install took off the partition (sysinstall.sh, STOCK_APPS_OUT) keeps its APK, and its sounds, in
+         * /system/hassmic-removed under the same path below /system */
+        if (access(path, R_OK) && !strncmp(b->zip, "/system/", 8))
+            snprintf(path, sizeof path, "%s/system/hassmic-removed/%s", root ? root : "", b->zip + 8);
         if (!(buf = zip_entry(path, b->entry, &len))) { fprintf(stderr, "sound %s: no stored %s in %s\n", name, b->entry, path); return NULL; }
         pcm = decode(b->entry, buf, len, samples, rate);
         free(buf);
