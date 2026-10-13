@@ -48,7 +48,7 @@ const struct board board = {
     .privacy_latch = 1,
 
     .bt_dev = "/dev/stpbt",                                         /* MT7668 combo, btmtksdio.ko */
-    .bt_service = NULL,                                             /* Android's com.android.bluetooth, not an init service */
+    .bt_service = NULL,                                             /* none: Android's stack (app/Bluetooth) is off the partition */
     .bt_mac = "/proc/idme/bt_mac_addr",
 
     .wake_id = "alexa",

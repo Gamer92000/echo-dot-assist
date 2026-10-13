@@ -306,5 +306,10 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   really what the speaker plays at (`tinymix 'OUT Playback Volume'`, or hassmic's log line "speaker gain: ... now
   N"), and how loud before the line out or the amplifier clips.
 - [ ] Amazon downloads (`dha.c`): no `libacehal_dha.so`; the key is behind the `fireos-dha` binder service.
-- [ ] Bluetooth proxy and A2DP (`-B` in `DEFAULT_ARGS` for now): only with Android's Bluetooth stack off.
+- [~] Bluetooth proxy and A2DP sink (2026-10-13): Android's stack (app/Bluetooth) is off the partition and
+  `bluetooth_on=0`; the MT7668 behind `btmtksdio` speaks H4 on `/dev/stpbt` as the Dots' combo chips do (hciscan:
+  reset, address, 315 LE adverts in 8 s). hassmic: "controller ready, 7C:D5:66:97:F7:7B, ACL 32 x 251", A2DP sink
+  ready (SBC, AAC, aptX HD, aptX), scanning. Open: Home Assistant's proxy and a phone playing, on the device; the
+  Bluetooth speaker (A2DP source): on the Dots btout.c takes the mixer's own A2DP route, here AudioFlinger mixes, so
+  the mixed audio would have to come back through Android's remote submix (`bt_open` still -1).
 - [ ] Wi-Fi motion: the gen4m driver is 32-bit here; `hassmic_rcpi4m` rewrites an arm64 `bl`, needs an ARM variant.
