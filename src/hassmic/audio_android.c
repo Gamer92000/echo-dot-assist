@@ -15,6 +15,7 @@
  *  - the preset: VOICE_RECOGNITION is the closest OpenSL ES has to stock's HOTWORD source, both pick the ASR pipeline
  *    (getAspPipelineType in the HAL); HOTWORD itself is not reachable from OpenSL ES. */
 #include "audio.h"
+#include "core.h"
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
 #include <errno.h>
@@ -54,6 +55,8 @@ static void deadline(struct timespec *ts, long ms)
     ts->tv_sec += ms / 1000; ts->tv_nsec += (ms % 1000) * 1000000;
     if (ts->tv_nsec >= 1000000000) { ts->tv_sec++; ts->tv_nsec -= 1000000000; }
 }
+
+static long long now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000LL + t.tv_nsec / 1000000; }
 
 /* --- capture: a ring of CAP_NBUF blocks, all queued at start.  The buffer queue fills them in the order they were
  * queued, and each is queued again once cap_read's caller is done with it, so block k is always buf[k % CAP_NBUF]. */
@@ -162,30 +165,85 @@ void cap_close(void)
 #define PLAY_NBUF 8
 struct pstream {
     SLObjectItf obj; SLPlayItf play; SLAndroidSimpleBufferQueueItf q;
-    SLVolumeItf vol;                            /* the volume as a gain on this player (vol_write), NULL if refused */
-    enum vol kind;
     pthread_mutex_t lock; pthread_cond_t cond;
     unsigned bps, slot, busy, next;             /* bytes per second, slot size, slots with the player, next free slot */
-    long long written;                          /* bytes since open */
+    unsigned head, lens[PLAY_NBUF];             /* the oldest slot with the player, and each slot's bytes */
+    long long written, consumed, last_cb;       /* bytes since open, bytes the player has taken, when it last took (ms) */
     char *buf;
 };
-static struct pstream voice = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER, .kind = VOL_TTS },
+static struct pstream voice = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER },
                       music = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER },
                       earcon = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER },
-                      voip = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER };
+                      voip = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER },
+                      bt = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER };
 
-/* --- volume: a gain on each player, as the Dots' mixer applies its own per stream type.  Android's stream volumes are
- * set to their maximum once per start (main.sh: wifictl.dex volume-max), so this is all that takes level off.  The
- * curve: 0 silent, then 0.4 dB per step down from 100 (50 = -20 dB, 1 = -39.6 dB; how it sounds on the Show's
- * speaker is for the device to tell).  Kept in state/volume ("main tts"): no mixer here to remember it across a restart. */
+/* --- volume: Android's own, the music stream's index (0..its maximum, 30 on the Show), set through IAudioService with
+ * the firmware's service tool as the front end is reached (afe_parcel.c): setStreamVolume(stream, index, flags,
+ * callingPackage) = transaction 3, getStreamMaxVolume(stream) = 10 (8149's framework: IAudioService$Stub's TRANSACTION_*
+ * constants in its boot oat).  Every player of ours is on the music stream, and Fire OS aliases system, voice call and TTS
+ * to it ("dumpsys audio": one index for all of them), so it is the one volume, as MainVolume is the Dots' mixer's.  Not
+ * the player's own volume (SLVolumeItf, AudioTrack::setVolume): Amazon's audio stack put a track back to 1.0 some 70 ms
+ * after it started on the first Echo Show ("TrackVolumeChanged ... track_volume=1.0"), so a sound began at our level and
+ * jumped to full.  hassmic's 0..100 is kept in state/volume ("main tts"; the index has 31 steps); TTS has no stream of
+ * its own and follows main.  hassmic runs as system: the calling package is "android".  The call (a process, ~0.1 s)
+ * runs on a thread of its own, the newest value wins: vol_write is called under core_lock. */
+#define TX_SET_STREAM_VOLUME "3"
+#define TX_GET_STREAM_MAX_VOLUME "10"
+#define STREAM_MUSIC "3"
 static pthread_mutex_t vol_lock = PTHREAD_MUTEX_INITIALIZER;
-static int vols[2] = { -1, -1 }, vols_loaded;
+static pthread_cond_t vol_cond = PTHREAD_COND_INITIALIZER;
+static int vols[2] = { -1, -1 }, vols_loaded, vol_want = -1;
+static pthread_once_t vol_once = PTHREAD_ONCE_INIT;
 
 static const char *vol_path(void)
 {
     static char p[256]; const char *d = getenv("HASSMIC_STATE");
     snprintf(p, sizeof p, "%s/volume", d ? d : "/data/local/hassmic/state");
     return p;
+}
+
+/* "Result: Parcel(00000000 0000001e   '........')": no exception, then the int; a void method's reply is the exception
+ * word alone ("Parcel(00000000    '....')"), v NULL */
+static int parcel_int(const char *out, int *v)
+{
+    unsigned ex, x; const char *s = strstr(out, "Parcel(");
+    if (!s || sscanf(s, "Parcel(%8x", &ex) != 1 || ex) return -1;
+    if (!v) return 0;
+    if (sscanf(s, "Parcel(%8x %8x", &ex, &x) != 2) return -1;
+    *v = (int)x;
+    return 0;
+}
+
+static void *vol_thread(void *arg)
+{
+    (void)arg;
+    int max = 0;
+    for (;;) {
+        pthread_mutex_lock(&vol_lock);
+        while (vol_want < 0) pthread_cond_wait(&vol_cond, &vol_lock);
+        int v = vol_want; vol_want = -1;
+        pthread_mutex_unlock(&vol_lock);
+        char out[256], idx[12];
+        if (max <= 0) {
+            char *get[] = { "/system/bin/service", "call", "audio", TX_GET_STREAM_MAX_VOLUME, "i32", STREAM_MUSIC, NULL };
+            core_run(get, out, sizeof out);
+            if (parcel_int(out, &max) || max <= 0 || max > 100) { fprintf(stderr, "audio: no maximum for the music stream (%s)\n", out); max = 0; continue; }
+        }
+        snprintf(idx, sizeof idx, "%d", (v * max + 50) / 100);
+        char *set[] = { "/system/bin/service", "call", "audio", TX_SET_STREAM_VOLUME, "i32", STREAM_MUSIC, "i32", idx,
+                        "i32", "0", "s16", "android", NULL };
+        core_run(set, out, sizeof out);
+        if (parcel_int(out, NULL)) fprintf(stderr, "audio: setting the music stream to %s of %d failed (%s)\n", idx, max, out);
+    }
+    return NULL;
+}
+static void vol_start(void) { pthread_t t; if (!pthread_create(&t, NULL, vol_thread, NULL)) pthread_detach(t); }
+
+static void vol_push(int v)                     /* under vol_lock */
+{
+    pthread_once(&vol_once, vol_start);
+    vol_want = v;
+    pthread_cond_signal(&vol_cond);
 }
 
 static void vol_load(void)                      /* under vol_lock */
@@ -195,18 +253,7 @@ static void vol_load(void)                      /* under vol_lock */
     FILE *f = fopen(vol_path(), "r"); int m, t;
     if (f && fscanf(f, "%d %d", &m, &t) == 2 && m >= 0 && m <= 100 && t >= 0 && t <= 100) { vols[VOL_MAIN] = m; vols[VOL_TTS] = t; }
     if (f) fclose(f);
-}
-
-static SLmillibel vol_mb(int pct) { return pct <= 0 ? SL_MILLIBEL_MIN : (SLmillibel)((pct - 100) * 40); }
-
-static void vol_apply(struct pstream *s)
-{
-    pthread_mutex_lock(&vol_lock);
-    vol_load();
-    if (s->obj && !s->vol && (*s->obj)->GetInterface(s->obj, SL_IID_VOLUME, &s->vol) != SL_RESULT_SUCCESS) s->vol = NULL;
-    int v = vols[s->kind];
-    if (s->vol && v >= 0) (*s->vol)->SetVolumeLevel(s->vol, vol_mb(v));
-    pthread_mutex_unlock(&vol_lock);
+    if (vols[VOL_MAIN] >= 0) vol_push(vols[VOL_MAIN]);    /* Android's index as hassmic left it, whatever set it since */
 }
 
 int vol_read(enum vol which, int fallback)
@@ -234,23 +281,21 @@ void vol_write(enum vol which, int v)
             fprintf(f, "%d %d\n", vols[VOL_MAIN] < 0 ? v : vols[VOL_MAIN], vols[VOL_TTS] < 0 ? v : vols[VOL_TTS]);
             if (fclose(f) == 0) rename(tmp, vol_path()); else unlink(tmp);
         }
+        if (which == VOL_MAIN) vol_push(v);
     }
     pthread_mutex_unlock(&vol_lock);
-    struct pstream *all[] = { &voice, &music, &earcon, &voip };
-    for (int i = 0; i < 4; i++) if (all[i]->kind == which) vol_apply(all[i]);
 }
 
 static void play_cb(SLAndroidSimpleBufferQueueItf q, void *ctx)
 {
     struct pstream *s = ctx; (void)q;
     pthread_mutex_lock(&s->lock);
-    if (s->busy) s->busy--;
+    if (s->busy) { s->busy--; s->consumed += s->lens[s->head]; s->head = (s->head + 1) % PLAY_NBUF; s->last_cb = now_ms(); }
     pthread_cond_signal(&s->cond);
     pthread_mutex_unlock(&s->lock);
 }
 
 static void s_close(struct pstream *s, int drain);
-static void vol_apply(struct pstream *s);
 
 static int s_open(struct pstream *s, unsigned rate, unsigned channels, SLint32 stream_type)
 {
@@ -263,9 +308,9 @@ static int s_open(struct pstream *s, unsigned rate, unsigned channels, SLint32 s
     SLDataSource src = { &loc, &fmt };
     SLDataLocator_OutputMix out = { SL_DATALOCATOR_OUTPUTMIX, mix_obj };
     SLDataSink sink = { &out, NULL };
-    const SLInterfaceID ids[] = { SL_IID_ANDROIDSIMPLEBUFFERQUEUE, SL_IID_ANDROIDCONFIGURATION, SL_IID_VOLUME };
-    const SLboolean req[] = { SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE, SL_BOOLEAN_FALSE };
-    if ((*engine)->CreateAudioPlayer(engine, &s->obj, &src, &sink, 3, ids, req) != SL_RESULT_SUCCESS) {
+    const SLInterfaceID ids[] = { SL_IID_ANDROIDSIMPLEBUFFERQUEUE, SL_IID_ANDROIDCONFIGURATION };
+    const SLboolean req[] = { SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE };
+    if ((*engine)->CreateAudioPlayer(engine, &s->obj, &src, &sink, 2, ids, req) != SL_RESULT_SUCCESS) {
         fprintf(stderr, "audio: CreateAudioPlayer failed (%u Hz, %u ch)\n", rate, channels);
         s->obj = NULL;
         return -1;
@@ -285,8 +330,7 @@ static int s_open(struct pstream *s, unsigned rate, unsigned channels, SLint32 s
     s->slot = s->bps / 50 & ~3u;
     s->buf = malloc((size_t)s->slot * PLAY_NBUF);
     if (!s->buf) { (*s->obj)->Destroy(s->obj); s->obj = NULL; return -1; }
-    s->busy = s->next = 0; s->written = 0;
-    vol_apply(s);                               /* before the first sample: no burst at full scale */
+    s->busy = s->next = s->head = 0; s->written = s->consumed = 0; s->last_cb = now_ms();
     (*s->play)->SetPlayState(s->play, SL_PLAYSTATE_PLAYING);
     return 0;
 }
@@ -309,42 +353,53 @@ static int s_write(struct pstream *s, const void *data, size_t len)
         char *slot = s->buf + (size_t)s->next * s->slot;
         memcpy(slot, p, n);
         if ((*s->q)->Enqueue(s->q, slot, n) != SL_RESULT_SUCCESS) { pthread_mutex_unlock(&s->lock); return -1; }
-        s->busy++; s->next = (s->next + 1) % PLAY_NBUF; s->written += n;
+        s->lens[s->next] = n; s->busy++; s->next = (s->next + 1) % PLAY_NBUF; s->written += n;
         pthread_mutex_unlock(&s->lock);
         p += n; len -= n;
     }
     return 0;
 }
 
+/* What is queued: the slots the player has not taken back.  Not from the player's position: on the first Echo Show
+ * GetPosition stayed at 0 for these players, every sound counted as never played (2026-10-13).  AudioTrack's and the
+ * HAL's own buffers behind the slots are a steady latency, as the mixer's is on the Dots, and not counted: counted
+ * from each callback (120 ms) they made "queued" never fall below ~100 ms while a stream played, and a2dp.c, which
+ * writes below 60 ms, starved its player (a phone's audio in pieces, the jitter buffer at a second).  Where the end of
+ * a sound matters (earcons, a draining close) s_drained adds TAIL_MS after the last slot was taken. */
+#define TAIL_MS 120
 static long long s_queued_us(struct pstream *s)
 {
-    SLmillisecond pos = 0;
-    if (!s->obj || !s->bps || (*s->play)->GetPosition(s->play, &pos) != SL_RESULT_SUCCESS) return 0;
-    long long q = s->written * 1000000 / s->bps - (long long)pos * 1000;
-    return q > 0 ? q : 0;
+    if (!s->obj || !s->bps) return 0;
+    pthread_mutex_lock(&s->lock);
+    long long q = (s->written - s->consumed) * 1000000 / s->bps;
+    pthread_mutex_unlock(&s->lock);
+    return q;
+}
+static int s_drained(struct pstream *s)          /* every slot taken back, and the last one played out */
+{
+    if (!s->obj) return 1;
+    pthread_mutex_lock(&s->lock);
+    int d = s->written == s->consumed && now_ms() - s->last_cb >= TAIL_MS;
+    pthread_mutex_unlock(&s->lock);
+    return d;
 }
 
 static void s_close(struct pstream *s, int drain)
 {
     if (!s->obj) return;
     if (drain) {
-        /* the queue running empty means AudioTrack has it all; then until the position catches up (+ a margin for the
-         * HAL, whose buffer the position does not include) */
+        /* the queue running empty means AudioTrack has it all; then what AudioTrack and the HAL still hold (TAIL_MS) */
         pthread_mutex_lock(&s->lock);
         struct timespec ts; deadline(&ts, 5000);
         int rc = 0;
         while (s->busy && rc != ETIMEDOUT) rc = pthread_cond_timedwait(&s->cond, &s->lock, &ts);
         pthread_mutex_unlock(&s->lock);
-        long long q = s_queued_us(s);
-        if (q > 2000000) q = 2000000;
-        usleep(q + 50000);
+        for (int i = 0; i < 50 && !s_drained(s); i++) usleep(10000);
     }
     (*s->play)->SetPlayState(s->play, SL_PLAYSTATE_STOPPED);
     (*s->q)->Clear(s->q);
-    pthread_mutex_lock(&vol_lock);              /* vol_write may be setting its level right now */
     (*s->obj)->Destroy(s->obj);
-    s->obj = NULL; s->play = NULL; s->q = NULL; s->vol = NULL;
-    pthread_mutex_unlock(&vol_lock);
+    s->obj = NULL; s->play = NULL; s->q = NULL;
     free(s->buf); s->buf = NULL;
     s->busy = 0;
 }
@@ -358,21 +413,21 @@ int       music_write(const void *data, size_t len) { return s_write(&music, dat
 long long music_queued_us(void) { return s_queued_us(&music); }
 void      music_close(void) { s_close(&music, 0); }
 
-/* The Bluetooth speaker stream is the mixer's own A2DP route on the Dots (btout.c stands in for btmanagerd towards it).
- * Here Android's Bluetooth stack owns the controller and routes AudioTracks to a speaker itself; until that is worked
- * out there is no such stream. */
-int       bt_open(unsigned rate, unsigned channels) { (void)rate; (void)channels; return -1; }
-int       bt_write(const void *data, size_t len) { (void)data; (void)len; return -1; }
-long long bt_queued_us(void) { return 0; }
-void      bt_close(void) {}
+/* The Bluetooth speaker stream: what a phone plays to the Echo (a2dp.c), the mixer's Bluetooth stream on the Dots.
+ * Here a player of its own beside music, on the music stream like everything of ours.  Until it was there (-1) the
+ * phone's audio filled a2dp.c's buffer and was dropped: paired and streaming, nothing heard (2026-10-13). */
+int       bt_open(unsigned rate, unsigned channels) { return s_open(&bt, rate, channels, SL_ANDROID_STREAM_MEDIA); }
+int       bt_write(const void *data, size_t len) { return s_write(&bt, data, len); }
+long long bt_queued_us(void) { return s_queued_us(&bt); }
+void      bt_close(void) { s_close(&bt, 0); }
 
 /* Drop In's call audio: the voice stream, its own volume and routing in Android */
-int       voip_open(unsigned rate, unsigned channels) { return s_open(&voip, rate, channels, SL_ANDROID_STREAM_VOICE); }
+int       voip_open(unsigned rate, unsigned channels) { return s_open(&voip, rate, channels, SL_ANDROID_STREAM_MEDIA); }
 long long voip_queued_us(void) { return s_queued_us(&voip); }
 int       voip_write(const void *data, size_t len) { return s_write(&voip, data, len); }
 void      voip_close(void) { s_close(&voip, 0); }
 
-/* System stream: its own volume in Android, as stock's UI sounds.  go() says how long the sound is wanted: a
+/* On the music stream with everything else of ours (the volume above).  go() says how long the sound is wanted: a
  * ringing timer ends when someone stops it, so what is left of the queue is dropped then, not drained.  Written a
  * slot at a time with go() asked in between, as audio_mixer.c does per buffer: s_write blocks while the queue is
  * full, and a long ringtone in one call would play on until its last slot is queued.  The player is PLAYING from
@@ -383,7 +438,11 @@ void (*audio_earcon_started)(void);
 void play_earcon(const short *pcm, size_t samples, unsigned rate) { play_earcon_while(pcm, samples, rate, always); }
 void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go)(void))
 {
-    if (s_open(&earcon, rate, 1, SL_ANDROID_STREAM_SYSTEM) < 0) { fprintf(stderr, "earcon: no player\n"); return; }
+    if (s_open(&earcon, rate, 1, SL_ANDROID_STREAM_MEDIA) < 0) { fprintf(stderr, "earcon: no player\n"); return; }
+    /* the wait for the queue to run out ends at the sound's length + 1 s whatever the position says, as audio_mixer.c's:
+     * on the first Echo Show the position stopped short of what was written after the mute sound (0.4 s), and this
+     * thread waited for ever, every later sound queued behind it (2026-10-13) */
+    long long end = now_ms() + (long long)(samples * 1000ULL / rate) + 1000;
     const char *p = (const char *)pcm;
     size_t len = samples * 2;
     while (len && go()) {
@@ -392,8 +451,9 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
         if (p == (const char *)pcm && audio_earcon_started) audio_earcon_started();
         p += n; len -= n;
     }
-    while (s_queued_us(&earcon) > 0 && go()) usleep(20000);
-    s_close(&earcon, go() ? 1 : 0);
+    while (!s_drained(&earcon) && go() && now_ms() < end) usleep(20000);
+    if (now_ms() >= end) fprintf(stderr, "earcon: the player's position stopped %lld ms short\n", s_queued_us(&earcon) / 1000);
+    s_close(&earcon, go() && now_ms() < end ? 1 : 0);
 }
 
 /* --- the front end: libasp inside the audio HAL, its binder service "audiosignalprocessor" (docs/re-checkers.md).
@@ -402,7 +462,6 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
  * REQUEST_ARBITRATION_JSON 23 (int32 256 in, 256 bytes out), NOTIFY_ASR_STREAM_STOPPED 14 (int32).  Through the
  * firmware's own service tool (afe_parcel.c): no binder library of ours. */
 #include "afe_parcel.h"
-#include "core.h"
 
 static void afe_send(int cmd, const void *in, size_t len)
 {
