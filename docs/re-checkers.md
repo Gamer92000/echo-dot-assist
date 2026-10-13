@@ -294,9 +294,32 @@ setup; what was checked on the PC only says so.
   on the device: "gating" (the platform device is `amazon-gating`), "gpio-keys", besides "mtk-kpd", "ACCDET",
   "goodix-ts", "amazon_touch", "m_alsps_input", "hwmdata"; both of ours grabbed.
 - [ ] Light sensor: STK3x1x behind MediaTek's sensor hub, no lux file (`light_sensor` empty).
-- [ ] No LED ring and no `ledctrl` (`main.c` then leaves LEDs off): listening/thinking/volume/identify feedback
-  would go on the screen; nothing does that yet. Home Assistant's "Light ring" is not listed (no digest of ours under
-  `/system/etc`), and `main.sh` `leds()` makes no animations where there is no `/system/etc/led-resources`.
+- [x] Light ring as a band along the bottom of the screen (2026-10-13, on the tester's Echo). No LED ring and no
+  `ledctrl`; stock shows Alexa's attention on the screen instead ("voice chrome": SpeechInteractionManager.apk,
+  BambooAttentionSystemVisualsComponent, Lottie compositions of 960x200, a 10 px line along the bottom edge drawn over
+  the app in front, TYPE_SYSTEM_ERROR overlay; listening, thinking, mic off and calls only, never turned to the
+  talker). Ours keeps the band for itself instead, so any app can be the screen's UI: `ring_band.c` (a second
+  implementation of `ring.h`, `RING` in device.mk) draws every pattern of the core as the Dots' ring unrolled (12
+  virtual LEDs blended across the width, the talker at the centre; timings and colours as donut's led-resources play
+  them), and Home Assistant's "Light ring" light. `scripts/device/ringbar.dex` (`tools/mkringbar.py`, assembled by
+  `tools/dexasm.py`, shared with mkwifictl.py) runs as `app_process`: it sets the window manager's overscan for the
+  band (`IWindowManager.setOverscan` in the panel's natural orientation: on this 480x960 panel shown as 960x480,
+  rotation 1, the natural left edge is the bottom; every app then gets 960x470) and puts a SurfaceFlinger layer of its
+  own over it (SurfaceControl, layer 2000000000), drawing the frames hassmic sends on its stdin. Seen on the device:
+  "ready 960 10", the layer composed on the panel's 10 px strip. Setting "Light band" (0..40 px, default 10; 0 gives
+  the screen back), `wm overscan reset` on uninstall (`alexa-on.sh`, `SCREEN_BAND`). Screen power as stock's
+  EnvironmentContextService: a pattern wakes the screen (IPowerManager wakeUp = transaction 9, userActivity 8,
+  isInteractive 12 on 8149, through the service tool), `screen_off_timeout` 5 min, 1 min with the mic off or in Do
+  not disturb (stock also 1 min at night: no night mode here). `tests/unit/ring_band_test.c`, `ringbar_run.py`.
+- [x] Not done, on purpose: turning the listening animation towards the talker. The front end has the beam: libasp's
+  BeamReporter sends `what=1` (BEAM_DIRECTION, the vector (sin, 0, cos) of the beam's angle) to every
+  `com.amazon.asp.IAudioEventListener` registered with `audiosignalprocessor` (transaction 1, a strong binder; no
+  permission check), on every change while the ASR pipeline runs; nothing polled has it (not REQUEST_ARBITRATION_JSON,
+  not the HAL's parameters). A listener in ringbar.dex got them on the device (2026-10-13), but they say little: 7
+  fixed beams from 2 mics (`AFE.cfg` FixedBeamFormerV2), mapped through `{4, 2, 1, 0, 9, 10, 12}` and dropped from
+  N = 7 on, so only 4 ever arrive (0, 51, 103, 206 degrees); and with the user talking 15 s each from the left, the
+  front and the right the beam switched several times a second wherever they stood, 0 degrees most of the time in all
+  three (8, 10 and 11 s of 15). Stock's Show never turns its bar either; the band's listening cyan stays centred.
 - [x] Earcons: none in the firmware's file system; `sounds.c` reads them straight out of the stock apps
   (`board.c` `earcon_zip`: 12 of the 13 sounds, every one stored uncompressed, as aapt keeps audio), nothing copied;
   `/data/local/hassmic/earcon/` (`earcon_dir`) wins for own sounds. All decode from the unpacked firmware

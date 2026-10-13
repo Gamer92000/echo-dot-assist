@@ -58,7 +58,7 @@ const struct board board = {
     .earcon_zip = sounds,
     .thermal_type = "mtktscpu",
     .light_sensor = { NULL },                                       /* STK3x1x on MediaTek's sensor hub, no lux file; verify */
-    .volume_steps = 0,                                              /* no LED ring */
+    .volume_steps = 100,                                            /* the light band (ring_band.c) shows the level in % */
     /* Realtek RT5616: its line out feeds the speaker amplifier.  0..39 = -46.5..+12 dB, 1.5 dB a step (the kernel's
      * tables); the HAL's initial settings in /system/etc/audio_device.xml set 29, -3 dB, nothing writes it later (from
      * the firmware only; verify on a device that this is what the speaker plays at, and that it has no other writer) */

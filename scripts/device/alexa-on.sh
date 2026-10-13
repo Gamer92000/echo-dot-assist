@@ -25,3 +25,5 @@ if [ -f $SETTINGS ]; then
     done < $SETTINGS
     rm -f $SETTINGS
 fi
+# the rows hassmic's light band kept for itself (ring_band.c): the whole screen the apps' again
+[ -n "$SCREEN_BAND" ] && wm overscan reset < /dev/null > /dev/null 2>&1

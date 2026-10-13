@@ -15,4 +15,4 @@ python3 scripts/otatool.py pack "$1" "$2" $OUT/hassmic.bundle \
     scripts/system/main.sh scripts/system/boot.sh scripts/system/sysinstall.sh $DDIR/hassmic.rc:644 \
     scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh scripts/device/artifact-install.sh scripts/device/wifi.sh \
     $([ -z "$HOME_APK" ] || echo scripts/device/$HOME_APK:644) \
-    $([ "$INSTALL" != boot ] || echo scripts/device/wifictl.dex:644)    # wifictl: WifiService's client (wifi.sh), INSTALL=boot only; HOME_APK: the home screen (sysinstall.sh)
+    $([ "$INSTALL" != boot ] || echo scripts/device/wifictl.dex:644 scripts/device/ringbar.dex:644)    # wifictl: WifiService's client (wifi.sh), ringbar: the light band's renderer (ring_band.c), INSTALL=boot only; HOME_APK: the home screen (sysinstall.sh)

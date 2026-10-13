@@ -4,14 +4,21 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-13
 
+- **Echo Show 5: the light ring as a band on the screen.** The Show has no light ring, so it shows the ring's lights
+  along the bottom edge of the screen, as Alexa showed hers: listening, thinking, replies, mic off, volume, timers,
+  calls, Do not disturb, setup, and Home Assistant's "Light ring" light, which the Show now has too. They look and move
+  like a Dot's ring laid out in a line. The band keeps its own strip of the screen (10 pixels; "Light band" on the
+  settings page, 0 gives it back), so an app shown on the screen is never covered. The screen wakes for the band and
+  sleeps again 5 minutes later (1 minute with the mic off or in Do not disturb), as stock's did. The band does not
+  point towards the talker: the Show's two microphones do not tell directions apart well enough (Alexa's bar never
+  turned either).
 - **Bluetooth speakers no longer start at full volume.** A speaker that sets its own volume (most do) used to take
   over with whatever level it reported, so a PC reporting 100 % played the Echo at full volume, and the Echo's buttons
   then only asked it to turn down, which it ignored. The Echo now gives the speaker its own volume first, and lets the
   speaker set the volume only once it has confirmed that level; otherwise the Echo keeps setting it, as stock did.
 - **Echo Show 5 runs.** Tried on a tester's Show, installed with `scripts/setup.sh checkers`: the wake word, Home
   Assistant's voice assistant, wake word arbitration with the other Echos, Music Assistant, phones playing to it,
-  playing on a Bluetooth speaker, the volume keys, the mute button and the settings page. Still missing: there is no
-  light ring, and nothing on the screen yet shows that the Show is listening.
+  playing on a Bluetooth speaker, the volume keys, the mute button and the settings page.
 - **Echo Show 5: plays on a Bluetooth speaker.** "Play on a Bluetooth speaker" now works on the Show as on the Dots:
   replies, sounds and music go to the speaker, and back to the Show when you switch it off, without a pop. Tried with
   a PC as the speaker.
