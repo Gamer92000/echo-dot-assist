@@ -157,7 +157,8 @@ netwatch() {
         clock_set
         fwcheck
         if [ -f /data/local/hassmic/state/mdns ] && [ ! -L /data/local/hassmic/state/mdns ]; then
-            why=$(head -c 60 /data/local/hassmic/state/mdns | tr -cd 'a-zA-Z0-9 ')
+            # why: the file's first bytes, by dd: the Echos' toybox head has no -c ("not integer: c", so no reason was ever logged)
+            why=$(dd if=/data/local/hassmic/state/mdns bs=60 count=1 2>/dev/null | tr -cd 'a-zA-Z0-9 ')
             rm -f /data/local/hassmic/state/mdns
             [ -f $AVAHI_SVC ] && { echo "mDNS: announcing again (${why:-asked for}), avahi restarted"; avahi_start; }
         fi
@@ -236,7 +237,7 @@ ota_watch() {
         # bonds, Sendspin, microWakeWord models) and every saved Wi-Fi network; the installed system, Amazon's models in
         # models/ aed/ whisper/ and hassmic.conf stay.  The satellite starts again from scratch: the setup (OOBE).
         if [ -f /data/local/hassmic/state/reset ] && [ ! -L /data/local/hassmic/state/reset ]; then
-            why=$(head -c 40 /data/local/hassmic/state/reset | tr -cd 'a-zA-Z0-9 ')
+            why=$(dd if=/data/local/hassmic/state/reset bs=40 count=1 2>/dev/null | tr -cd 'a-zA-Z0-9 ')
             say "== factory reset (${why:-asked for}): forgetting settings and Wi-Fi networks"
             stop hassmic
             sleep 1
@@ -253,7 +254,7 @@ ota_watch() {
         # an Echo that is stuck where nothing less helps (issue #17).  The request goes first, and if it cannot go there
         # is no reboot: one left behind would reboot every boot (the firewall start drops one from before it, too).
         if [ -f /data/local/hassmic/state/reboot ] && [ ! -L /data/local/hassmic/state/reboot ]; then
-            why=$(head -c 40 /data/local/hassmic/state/reboot | tr -cd 'a-zA-Z0-9 ')
+            why=$(dd if=/data/local/hassmic/state/reboot bs=40 count=1 2>/dev/null | tr -cd 'a-zA-Z0-9 ')
             rm -f /data/local/hassmic/state/reboot
             if [ -e /data/local/hassmic/state/reboot ]; then say "== reboot asked for, but its request cannot be removed: not rebooting"
             else say "== reboot (${why:-asked for})"; sync; setprop sys.powerctl reboot; sleep 30; fi
@@ -261,7 +262,7 @@ ota_watch() {
         # asked for on the settings page: a rename (main.c core_rename; the name is in what the satellite builds at start,
         # mDNS and avahi's host name included) or the wake word moving to or from Home Assistant (core_wake_engine)
         if [ -f /data/local/hassmic/state/restart ]; then
-            why=$(head -c 40 /data/local/hassmic/state/restart | tr -cd 'a-z ')
+            why=$(dd if=/data/local/hassmic/state/restart bs=40 count=1 2>/dev/null | tr -cd 'a-z ')
             rm -f /data/local/hassmic/state/restart
             say "== ${why:-restart} asked for on the settings page, restarting hassmic"
             stop hassmic; start hassmic
