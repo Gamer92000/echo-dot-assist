@@ -222,7 +222,9 @@ static atomic_int flush_playback, alarm_on;   /* barge-in: drop queued TTS; UI s
 static atomic_int busy;                             /* state != IDLE, for threads without the lock (the ring pauses) */
 static atomic_int tts_on, music_on;                 /* something plays: the wake word model lowers its threshold then.
                                                     * music_on: MUSIC_* bits */
-static atomic_long cap_bytes;                       /* capture thread adds: micAsr bytes read since the start */
+/* 64 bits: a long is 32 on the Echo, and 32 000 bytes/s pass 2^31 after 18.6 h.  It went negative, cap_clock() made
+ * ~9.2e18 of it, and the first wake word after that streamed the ring for ever under core_lock (issue #31) */
+static atomic_llong cap_bytes;                      /* capture thread adds: micAsr bytes read since the start */
 static uint64_t cap_clock(void) { return (uint64_t)atomic_load(&cap_bytes) / 2; }   /* the ring's sample index, -w remote too */
 static atomic_int dump_toggle;                      /* SIGTTIN: start / stop writing the processed mic stream to a file */
 static int soft_mute;                               /* under lock: mute switch from Home Assistant */
@@ -1170,6 +1172,7 @@ static void send_mic(const int16_t *pcm, size_t n, uint64_t at)
 static void stream_ring(uint64_t from, uint64_t to) /* capture thread, lock held: samples [from, to) as far as the ring has them */
 {
     if (ring_n > RING_SAMPLES && from < ring_n - RING_SAMPLES) from = ring_n - RING_SAMPLES;
+    if (to > ring_n) to = ring_n;
     while (from < to) {
         uint64_t at = from % RING_SAMPLES, n = to - from;
         if (n > RING_SAMPLES - at) n = RING_SAMPLES - at;
@@ -1995,7 +1998,7 @@ static void *capture_thread(void *arg)
                 char path[256]; const char *dir = getenv("HASSMIC_STATE");
                 snprintf(path, sizeof path, "%s/capture.raw", dir ? dir : "/data/local/hassmic/state");
                 dump = fopen(path, "wb");
-                fprintf(stderr, "capture dump: %s %s (16 kHz mono s16le) from capture sample %ld\n", dump ? "on" : "cannot write", path,
+                fprintf(stderr, "capture dump: %s %s (16 kHz mono s16le) from capture sample %lld\n", dump ? "on" : "cannot write", path,
                         atomic_load(&cap_bytes) / 2 - n / 2);
             }
         }
@@ -2023,7 +2026,7 @@ static void *capture_thread(void *arg)
             int s = atomic_load(&streaming);
             if (s && !whisper_on && atomic_load(&whisper_enabled)) {             /* the position lines it up with the capture dump's */
                 atomic_store(&whisper_eou, 0); whisper_begin(); whisper_on = 1;
-                fprintf(stderr, "whisper: request from capture sample %ld\n", atomic_load(&cap_bytes) / 2 - n / 2);
+                fprintf(stderr, "whisper: request from capture sample %lld\n", atomic_load(&cap_bytes) / 2 - n / 2);
             }
             if (whisper_on && s) whisper_feed(pcm, n / 2);
             if (whisper_on && !s) { whisper_end(atomic_exchange(&whisper_eou, 0)); whisper_on = 0; }

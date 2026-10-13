@@ -4,6 +4,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-13
 
+- **No more freezing at the first wake word after 18.6 hours** (issue #31). Since 2026-10-12, an Echo whose
+  satellite had been running for more than 18.6 hours hung at its next wake word: the listening ring stayed on, the
+  buttons did nothing, and only a power cycle helped. A counter of the microphone's bytes ran past what 32 bits hold,
+  and the audio from just after the wake word was then sent to Home Assistant over and over, for ever. Fixed.
 - **Replies and announcements from a Home Assistant that serves HTTPS itself** (issue #30). With its own certificate
   (`ssl_certificate` under `http:`), Home Assistant gives the Echo https:// addresses for spoken replies,
   announcements and media, and the Echo only played http://: it stayed silent and the log said "only http:// is

@@ -1880,3 +1880,12 @@ Run in this order. Each step says what it proves.
       CA-signed certificate, self-signed refused, taken with the setting off (persisted), unreachable reports failure.
       Device (biscuit, 2026-10-13, announcements over its ESPHome API): raw.githubusercontent.com MP3 with checks on
       played; a self-signed server refused (curl 60), played with `https_verify=off`.  Open: a real HA over HTTPS.
+- [x] Frozen at the first wake word after 18.6 h (2026-10-13, GitHub issue #31; Echo Dot 3 on 2026.10.12.210015, up
+      ~24 h): wake word, wake sound, listening ring, then nothing; buttons dead (action logged, not acted on), no
+      pipeline timeout, power cycle needed. HA ran a whole pipeline meanwhile. The log's last hassmic lines: `whisper:
+      request from capture sample -904421120`, `mic gain: ...`. `cap_bytes` was an `atomic_long`: 32 bits on armv7,
+      32 000 B/s, negative after 2^31 B = 67 108 s. `cap_clock()` casts it to `uint64_t`: ~9.2e18. e51cda3 (wake sound
+      removal) had made it the stream's clock in the capture loop (`at`, was `ring_n`), so the wake word's
+      `stream_ring(replay_from ~1.24e9, at)` replayed the 4 s ring for ever under `core_lock` (it clamped `from`, never
+      `to`): HA's STT heard the replay ("I like stuff"). Fix: `atomic_llong`, `stream_ring` clamps `to` to `ring_n`.
+      Not reproducible on the PC (64-bit `long`); fake_ha_esphome, fake_ha_wakesound, fake_ha_arbitration pass.
