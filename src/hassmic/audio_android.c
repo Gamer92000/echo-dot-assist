@@ -6,7 +6,7 @@
  * AudioFlinger mixes them.  OpenSL ES is the NDK's stable C API over AudioRecord/AudioTrack (libwilhelm): no C++ ABI of
  * the firmware's libmedia to match.
  *
- * Not tried on a real Echo Show yet.  What has to hold there, in order:
+ * What has to hold there (all of it does on the first Echo Show, 2026-10-13):
  *  - recording rights: recordingAllowed() (libserviceutility.so) wants RECORD_AUDIO, then lets uid 0 through and, as
  *    OpenSL ES names no package, looks up one for any other uid to note the app op against: hassmic runs as system
  *    (1000, package "android"; device.conf DAEMON_USER);
@@ -194,7 +194,7 @@ static struct pstream voice = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHRE
 #define STREAM_MUSIC "3"
 static pthread_mutex_t vol_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t vol_cond = PTHREAD_COND_INITIALIZER;
-static int vols[2] = { -1, -1 }, vols_loaded, vol_want = -1;
+static int vols[2] = { -1, -1 }, vols_loaded, vol_want = -1, vol_pushed;
 static pthread_once_t vol_once = PTHREAD_ONCE_INIT;
 
 static const char *vol_path(void)
@@ -255,7 +255,9 @@ static void vol_load(void)                      /* under vol_lock */
     FILE *f = fopen(vol_path(), "r"); int m, t;
     if (f && fscanf(f, "%d %d", &m, &t) == 2 && m >= 0 && m <= 100 && t >= 0 && t <= 100) { vols[VOL_MAIN] = m; vols[VOL_TTS] = t; }
     if (f) fclose(f);
-    if (vols[VOL_MAIN] >= 0) vol_push(vols[VOL_MAIN]);    /* Android's index as hassmic left it, whatever set it since */
+    /* not pushed from here: on a Bluetooth speaker that sets its own volume the file holds the full scale the mixer
+     * played at, and the core puts the Echo's own volume back just after (core_volume); pushed first, the Echo's
+     * speaker had a moment at full volume.  The core's first write of it pushes, changed or not (vol_write). */
 }
 
 int vol_read(enum vol which, int fallback)
@@ -283,8 +285,8 @@ void vol_write(enum vol which, int v)
             fprintf(f, "%d %d\n", vols[VOL_MAIN] < 0 ? v : vols[VOL_MAIN], vols[VOL_TTS] < 0 ? v : vols[VOL_TTS]);
             if (fclose(f) == 0) rename(tmp, vol_path()); else unlink(tmp);
         }
-        if (which == VOL_MAIN) vol_push(v);
     }
+    if (which == VOL_MAIN && (changed || !vol_pushed)) { vol_pushed = 1; vol_push(v); }   /* Android's index as hassmic has it */
     pthread_mutex_unlock(&vol_lock);
 }
 

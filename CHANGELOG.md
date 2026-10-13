@@ -4,6 +4,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-13
 
+- **Bluetooth speakers no longer start at full volume.** A speaker that sets its own volume (most do) used to take
+  over with whatever level it reported, so a PC reporting 100 % played the Echo at full volume, and the Echo's buttons
+  then only asked it to turn down, which it ignored. The Echo now gives the speaker its own volume first, and lets the
+  speaker set the volume only once it has confirmed that level; otherwise the Echo keeps setting it, as stock did.
 - **Echo Show 5 runs.** Tried on a tester's Show, installed with `scripts/setup.sh checkers`: the wake word, Home
   Assistant's voice assistant, wake word arbitration with the other Echos, Music Assistant, phones playing to it,
   playing on a Bluetooth speaker, the volume keys, the mute button and the settings page. Still missing: there is no

@@ -1665,7 +1665,7 @@ int core_volume(void)
         if (f && fscanf(f, "%d", &v) == 1 && v >= 0 && v <= 100) {
             volume = v; vol_write(VOL_MAIN, volume);
             fprintf(stderr, "volume: %d (the Echo's own, set aside for a Bluetooth speaker)\n", volume);
-        } else volume = read_volume();
+        } else { volume = read_volume(); vol_write(VOL_MAIN, volume); }   /* Android: its index is set by the first write */
         if (f) fclose(f);
         unlink(own_volume_path());
         vol_write(VOL_TTS, volume);
