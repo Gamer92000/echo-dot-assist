@@ -437,12 +437,17 @@ leds() {
 
 # A push update runs "firewall" again (exec, same PID) while the previous firewall watcher is still looping: stop it first,
 # or every update adds one and old and new rules take turns.  Matched by command line, which also catches the ones that
-# earlier versions left behind.  Read with the shell itself: a process that exits between the open and the read leaves
-# the Echo 2's tr (Fire OS 6572) spinning on the read error for ever, and this script never got to the firewall watcher
-# and the installer below (seen 2026-09-30 right after a boot: no egress lock, push updates unanswered).
+# earlier versions left behind.  Nothing here may loop on reads of a /proc file: a process that exits between the open and
+# the read leaves the reader spinning on the read error for ever, and this script never gets to the firewall watcher and
+# the installer below.  Seen with the Echo 2's tr (Fire OS 6572, 2026-09-30: no egress lock, push updates unanswered),
+# then with the shell's own read -d '' loop on the Echo Show (2026-10-13: an update passed its self test and was never
+# promoted, main.sh at 100 % CPU on a dead process's cmdline).  So: comm with one read (only shells can be the
+# watcher), and those cmdlines with one dd read, which ends whatever the read returns.
 if [ "$1" = firewall ]; then
     for p in /proc/[0-9]*; do
-        c=; while IFS= read -r -d '' a; do c="$c $a"; done 2>/dev/null < $p/cmdline
+        comm=; { read -r comm < $p/comm; } 2>/dev/null
+        [ "$comm" = sh ] || continue
+        c=$(dd if=$p/cmdline bs=4096 count=1 2>/dev/null | tr '\0' ' ')
         case "$c" in *lockdown.sh*watch*) kill ${p#/proc/} 2>/dev/null;; esac
     done
 fi
