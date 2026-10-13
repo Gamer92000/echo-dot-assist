@@ -49,6 +49,11 @@ Afterwards, with the volume keys held while power is connected: Volume down = ha
 Mute + Volume down (USB connected) = preloader USB download for MTKClient (shows as "MT8163 Preloader", maker
 "PWNED", connecting and disconnecting). `boot-recovery.sh` / `boot-fastboot.sh` from the zip do the same over USB.
 
+At every start TWRP asks "Keep System Read only?" on the screen: tap **Keep Read Only**. Nothing of the install writes
+`/system` from TWRP (the boot image goes in through fastboot, the files from the running Fire OS), and a system that
+TWRP mounted read-write no longer passes the stock boot image's dm-verity, which is the way back while `/system` is
+untouched. adb answers while the screen shows; the answer restarts TWRP's USB, so adb drops for a few seconds.
+
 **Never write lk, preloader, tee1/tee2 (tz) or any other bootloader partition**, not even from the USB download mode:
 most units have no bootrom way back, a brick there is permanent. An install for this model may touch `system` and
 `boot` only. Stock updates only through TWRP: TWRP lists only `.zip`, and the `.bin` is one (`adb push
@@ -109,7 +114,7 @@ trying things with `scripts/deploy.sh` before installing).
 ## Install
 
 Untested on a device. The guided setup does it (`scripts/setup.sh checkers`): amonet's `fastbrick.sh` run at its
-unlock step, the rooted boot image at the root step (`scripts/install-boot.sh --boot-only`), the build, the egress
+unlock step, 8149's system partition where the Echo runs another build, the rooted boot image at the root step (`scripts/install-boot.sh --boot-only`), the build, the egress
 lock and the Wi-Fi join, the install.  Wi-Fi joins through Android's WifiService — `scripts/device/wifictl.dex`
 (`tools/mkwifictl.py`), called as `CLASSPATH=…/wifictl.dex app_process / Wifictl <verb>`: the same
 `android.net.wifi.WifiConfiguration` stock's own setup apps put in, from root, no touchscreen and no Alexa app.  It
@@ -118,6 +123,18 @@ downloads the qemu-arm it needs into `toolchain/` when the PC has none, and take
 second as `boot-root (1).zip`; the setup takes either).  The steps written out follow, for doing them one by one
 (`scripts/install-boot.sh`, from `scripts/install-system.sh`):
 
+0. **System partition, in TWRP**, where the Echo runs another build than 8149 (`ro.build.version.incremental` of the
+   system partition: mount it read-only in TWRP and read its `build.prop`; TWRP's own getprop is TWRP's build). A
+   tester's Echo came out of the unlock with 0013054618500. Only `system` is written, from the image on the PC
+   (`tools/sdat2img.py` of the firmware's `system.new.dat`, sha256 `SYSTEM_IMG_SHA256` in `device.conf`, exactly the
+   partition's 3253731328 bytes), and read back; not with `twrp install` of the `.bin`, whose updater-script also
+   writes lk, tee1/tee2, the preloader and an MBR (see the warning above):
+   ```sh
+   adb exec-in 'dd of=/dev/block/platform/mtk-msdc.0/11230000.MSDC0/by-name/system bs=4194304 && sync' < firmware/checkers/images/system.img
+   adb shell sha256sum /dev/block/platform/mtk-msdc.0/11230000.MSDC0/by-name/system   # SYSTEM_IMG_SHA256
+   ```
+   The boot partition still holds the old build's image, which does not boot this system: go on to step 2 without
+   a reboot.
 1. **Boot image, on the PC.** `boot.img` out of the firmware `.bin` (checked against `BOOT_SHA256`), its `sepolicy`
    patched with `sepolicy.rules` by magiskpolicy under qemu-arm (the Echo has no root yet; `tools/qrun.sh` against
    `firmware/checkers/rootfs`), and `scripts/mkbootroot.py --sepolicy … --adbd firmware/checkers/adbd --no-verity`:

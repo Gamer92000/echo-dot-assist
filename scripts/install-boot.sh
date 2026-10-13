@@ -74,6 +74,7 @@ wait_for() {   # wait_for SECONDS CONDITION...
     return 1
 }
 in_fastboot() { [ -n "$(fastboot devices 2>/dev/null)" ]; }
+on_adb() { [ "$(state)" = device ] || [ "$(state)" = recovery ]; }
 booted() { [ "$(state)" = device ] && [ "$(t getprop sys.boot_completed)" = 1 ]; }
 
 # flash_boot [--boot-only]: IMG into the boot partition through hacked fastboot and booted; --boot-only skips the flash
@@ -82,10 +83,16 @@ flash_boot() {
     st=$(state)
     case "$st" in
     device|recovery) b=$(system_build)
-        [ "$b" = "$FIRMWARE_BUILD" ] || die "the Echo's system is build '${b:-unknown}', the boot image is $FIRMWARE_BUILD's: flash $FIRMWARE_FILE in TWRP first:
-  adb push $FW/$FIRMWARE_FILE /sdcard/update.zip     # TWRP lists only .zip; check the size on the Echo after
-  adb shell twrp install /sdcard/update.zip           # ($DDIR/README.md)";;
-    *) die "no Echo on adb: boot it into TWRP (Volume up while connecting power) and run this again";;
+        # in TWRP, where a write of the system partition may have been cut short: its build.prop is in the first part
+        if [ "$b" = "$FIRMWARE_BUILD" ] && [ "$st" = recovery ] && [ -n "$SYSTEM_IMG_SHA256" ]; then
+            echo "checking the system partition (2 min) ..."
+            [ "$(t sha256sum $SYSTEM_DEV | cut -c1-64)" = "$SYSTEM_IMG_SHA256" ] || b="$FIRMWARE_BUILD, but not all of it (a write cut short)"
+        fi
+        [ "$b" = "$FIRMWARE_BUILD" ] || die "the Echo's system is build '${b:-unknown}', the boot image is $FIRMWARE_BUILD's: write $FIRMWARE_ID's
+  system partition first (scripts/setup.sh $DEVICE does it in its step \"System partition\"; by hand, in TWRP:
+  $DDIR/README.md \"System partition\")";;
+    *) die "no Echo on adb (state: $(adb get-state 2>&1 | head -1)): boot it into TWRP (Volume up while connecting power),
+  tap \"Keep Read Only\" if TWRP asks \"Keep System Read only?\", and run this again";;
     esac
     echo "to hacked fastboot ..."
     adb reboot bootloader
@@ -124,6 +131,11 @@ fi
 
 boot_image
 [ "$1" = --boot-only ] && BOOT_ONLY=1 && shift
+# TWRP's "Keep System Read only?" screen: answering it restarts TWRP's USB, and adb is gone for a few seconds
+if ! on_adb; then
+    echo "waiting for the Echo on adb (TWRP asking \"Keep System Read only?\" on its screen: tap \"Keep Read Only\") ..."
+    wait_for 120 on_adb || true
+fi
 if boot_is_ours; then
     echo "boot partition holds this boot image already"
     [ "$(state)" = recovery ] && flash_boot --boot-only      # in TWRP: boot it
