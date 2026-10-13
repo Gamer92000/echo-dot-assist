@@ -984,7 +984,7 @@ static void avrcp_upkeep(void)
 
 enum { O_IDLE, O_DISCOVER, O_CAPS, O_SETCONF, O_OPEN, O_ACP, O_MEDIA, O_READY, O_START, O_STREAMING, O_SUSPEND };
 enum { S_NONE, S_OFF, S_AWAY, S_CONNECTING, S_READY, S_PLAYING, S_STANDBY };     /* out_state, for Home Assistant */
-enum { A_NO = -1, A_UNKNOWN, A_ASKED, A_ON };                            /* out.absvol */
+enum { A_NO = -1, A_UNKNOWN, A_ASKED, A_PENDING, A_ON };                 /* out.absvol; A_PENDING: our level sent, not confirmed */
 
 static struct {
     uint64_t addr; char name[80]; int on;               /* the speaker (state/bt_speaker), whether to play on it */
@@ -1252,10 +1252,13 @@ static void out_inquiry_done(void)
     search_end();
 }
 
-/* The speaker's volume is the user's while we play on it (AVRCP absolute volume, we the controller): taken from it when
- * it connects (the ring and Home Assistant show it), the Echo's buttons and Home Assistant set it, its own buttons come
- * back; the mixer plays at full scale meanwhile and the Echo's own volume waits (btout_absvol, core_speaker).  Speakers
- * without it get their volume through the mixer, as stock did for all of them (persist.bluetooth.disableabsvol). */
+/* The speaker's volume is the user's while we play on it (AVRCP absolute volume, we the controller): the Echo's buttons
+ * and Home Assistant set it, its own buttons come back; the mixer plays at full scale meanwhile and the Echo's own volume
+ * waits (btout_absvol, core_speaker).  It starts at the Echo's volume, not at the speaker's: a PC (PipeWire) reported
+ * 100 % and then did not follow the Echo's buttons, so the Echo played at full scale into a speaker at full volume
+ * (the first Echo Show, 2026-10-13).  So the mixer keeps setting the volume until the speaker's answer to our level says
+ * it took it (A_PENDING); a refusal, another value or no answer leave it with the mixer, as stock had it for all
+ * speakers (persist.bluetooth.disableabsvol).  A speaker that confirms and then ignores it is beyond what we can see. */
 static void out_vendor(unsigned ctype, unsigned pdu, const unsigned char *par, size_t n)
 {
     struct link *l = out.l; unsigned char a[24] = { ctype, PANEL, AVC_VENDOR, 0x00, 0x19, 0x58, pdu, 0, n >> 8, n };
@@ -1270,10 +1273,10 @@ static void out_avrcp_answer(unsigned code, unsigned pdu, const unsigned char *p
 {
     if (pdu == PDU_REGISTER) {
         if (code == AVC_INTERIM && n >= 2 && par[0] == EVENT_VOLUME && out.absvol == A_ASKED) {
-            unsigned v = par[1] & 0x7f; int pct = (v * 100 + 63) / 127;
-            fprintf(stderr, "a2dp: speaker has absolute volume, at %d %%: it sets the volume\n", pct);
-            out.absvol = A_ON; out.sent_v = v; if (out.on) atomic_store(&echo_volume, pct);
-            btout_absvol(1, pct);
+            unsigned v = par[1] & 0x7f; int pct = (v * 100 + 63) / 127, want = volume_now();
+            fprintf(stderr, "a2dp: speaker has absolute volume, at %d %%: asked to take the Echo's %d %%\n", pct, want);
+            out.absvol = A_PENDING; out.avol_at = ms() + 3000;
+            out_set_volume(want);
         } else if (code == AVC_CHANGED && n >= 2 && par[0] == EVENT_VOLUME) {
             unsigned v = par[1] & 0x7f;
             if (out.absvol == A_ON && (int)v != out.sent_v) {        /* its own buttons */
@@ -1288,6 +1291,16 @@ static void out_avrcp_answer(unsigned code, unsigned pdu, const unsigned char *p
             if (out.absvol == A_ASKED) fprintf(stderr, "a2dp: speaker has no absolute volume (0x%02x, error 0x%02x): the mixer sets the volume\n", code, n ? par[0] : 0);
             out.absvol = A_NO;
         }
+    } else if (pdu == PDU_SET_VOLUME && out.absvol == A_PENDING) {
+        int got = code == AVC_ACCEPTED && n >= 1 ? par[0] & 0x7f : -1;
+        if (got >= 0 && abs(got - out.sent_v) <= 2) {          /* a step of rounding either way */
+            out.absvol = A_ON; out.sent_v = got;
+            fprintf(stderr, "a2dp: speaker took the Echo's volume: it sets the volume now\n");
+            btout_absvol(1, (got * 100 + 63) / 127);
+        } else {
+            out.absvol = A_NO;
+            fprintf(stderr, "a2dp: speaker did not take its volume (0x%02x, %d for %d): the mixer sets the volume\n", code, got, out.sent_v);
+        }
     } else if (pdu == PDU_SET_VOLUME && out.absvol == A_ON && code != AVC_ACCEPTED) {
         out.absvol = A_NO; btout_absvol(0, 0);
         fprintf(stderr, "a2dp: speaker refused its volume: the mixer sets the volume\n");
@@ -1298,7 +1311,7 @@ static void out_volume_upkeep(long long now)
 {
     if (!out.l || !out.l->avctp || out.phase < O_READY) return;
     if (out.absvol == A_UNKNOWN) { out.absvol = A_ASKED; out.avol_at = now + 3000; out_register_volume(); }
-    else if (out.absvol == A_ASKED && now > out.avol_at) { out.absvol = A_NO; fprintf(stderr, "a2dp: speaker does not answer about its volume\n"); }
+    else if ((out.absvol == A_ASKED || out.absvol == A_PENDING) && now > out.avol_at) { out.absvol = A_NO; fprintf(stderr, "a2dp: speaker does not answer about its volume: the mixer sets it\n"); }
     /* only while the Echo's volume is the speaker's: standing by, it is the Echo's own */
     else if (out.absvol == A_ON && btout_speaker_volume() && (out_volume_now() * 127 + 50) / 100 != out.sent_v) out_set_volume(out_volume_now());
 }
