@@ -73,7 +73,12 @@ Transport is always plain `ws://` (spec:165); security is Noise inside the WebSo
 
 ### 1.3 Which one does Music Assistant use?
 LIB `start_server(..., discover_clients=True)` does **both at once**: advertises itself and dials every discovered
-client. Whether MA 2.10.4 changes port/`discover_clients` is **UNVERIFIED** (MA source not available). Either
+client. MA 2.10.6 (`providers/sendspin/provider.py`, checked 2026-10-13) calls `start_server(port=8927,
+host=streams.bind_ip, advertise_addresses=[streams.publish_ip])`, so discovery is on; zeroconf runs on `bind_ip` only
+(0.0.0.0: the default route's interface). Its "Manual IP addresses for discovery" are dialled with
+`connect_to_client(retry_initial_connection=True, retry_indefinitely=True)`; a bare address becomes
+`ws://<ip>:8928/sendspin`, `host:port` and full URLs are taken as given. A restarted MA finds a player only by
+browsing: hassmic announces again while a server that played here is missing (`netaddr.c`, issue #28). Either
 direction works against the library; after the WebSocket is up the protocol is identical (spec:220).
 
 ### 1.4 Multiple servers (server-initiated; spec:181-200)

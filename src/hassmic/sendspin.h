@@ -10,4 +10,6 @@ void sendspin_pause(void);                              /* another source starte
 void sendspin_volume_changed(int percent);              /* volume changed locally: tell the server */
 void sendspin_mdns(int port, char *out, size_t outsz);  /* <service> element for the avahi service file */
 int  sendspin_unpaired(int set);                        /* unpaired servers may play: -1 asks, 0/1 sets (kept in the state) */
+int  sendspin_linked(void);                             /* a server holds the player now */
+int  sendspin_expected(void);                           /* a server held the player role here: it ought to come back */
 #endif

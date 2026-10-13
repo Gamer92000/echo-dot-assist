@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Plays Music Assistant's side of Sendspin against build/hassmic-host with the reference server library
 (aiosendspin 9.1.1, the version in Music Assistant 2.10.4): dials the player, approves it unpaired, streams a sine,
-sends a volume command, and checks what reaches the player's audio backend."""
-import re, asyncio, logging, math, os, signal, struct, subprocess, sys, tempfile
+sends a volume command, and checks what reaches the player's audio backend.  Then pairing, a second server, a restart of
+the server (the player asks for mDNS announcements until one is back, issue #28) and unpairing."""
+import re, asyncio, logging, math, os, signal, struct, subprocess, sys, tempfile, time
 import numpy as np
 from aiosendspin.noise import Identity, InMemoryServerPairingStore, decode_token
 from aiosendspin.noise.pairing import PairingAttempt
@@ -24,11 +25,14 @@ async def main():
     state = tempfile.mkdtemp(); music = os.path.join(state, "music.raw")
     want = os.environ.get("CODEC", "flac")         # CODEC=flac|opus|pcm: what the player lists first
     open(os.path.join(state, "sendspin.unpaired"), "w").write("1")     # unpaired access switched on for the first part
-    env = dict(os.environ, HASSMIC_SENDSPIN_CODECS=want, HASSMIC_STATE=state, HASSMIC_MUSIC=music, HASSMIC_SETTINGS=os.path.join(state, "settings"), HASSMIC_OUTPUT_LATENCY_MS="0")
+    env = dict(os.environ, HASSMIC_SENDSPIN_CODECS=want, HASSMIC_STATE=state, HASSMIC_MUSIC=music, HASSMIC_SETTINGS=os.path.join(state, "settings"), HASSMIC_OUTPUT_LATENCY_MS="0",
+               HASSMIC_ANNOUNCE_TIMES="3 6")       # mDNS again after 3 s without a server that played here (30 s), then 6
+    mreq = os.path.join(state, "mdns")                  # root's cue to restart avahi (main.sh netwatch)
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-p", "16959", "-z", str(PORT), "-L"], env=env)
     await asyncio.sleep(0.5)
     loop = asyncio.get_running_loop()
-    server = SendspinServer(loop, Identity.generate(), "fake-ma", pairing_store=InMemoryServerPairingStore())
+    ident, store = Identity.generate(), InMemoryServerPairingStore()     # what Music Assistant keeps across its restarts
+    server = SendspinServer(loop, ident, "fake-ma", pairing_store=store)
     added = asyncio.Queue(); events = []
     def on_event(_srv, ev):
         if isinstance(ev, ClientAddedEvent): added.put_nowait(ev.client_id)
@@ -68,6 +72,7 @@ async def main():
         check(player.volume == 30, f"volume command applied and echoed in client/state: {player.volume}")
         await client.group.stop()
         await asyncio.sleep(0.5)
+        check(not os.path.exists(mreq), "a server connected all along: no mDNS announcements")
 
         pcm = np.frombuffer(open(music, "rb").read(), dtype="<i2").reshape(-1, 2)[:, 0].astype(float)
         nz = np.flatnonzero(np.abs(pcm) > 100)
@@ -106,6 +111,30 @@ async def main():
               "idle second server is turned away (concurrent_attempt)")
         check(server.get_client(cid).is_connected, "first server keeps its connection")
         await other.close()
+
+        # Music Assistant restarting (issue #28): its session ends, and the new instance only browses mDNS, which may not
+        # reach the Echo.  While no server that played here is connected, root is asked to announce again, at growing
+        # intervals; a server back stops it.
+        async def until(cond, secs):
+            t0 = time.monotonic()
+            while not cond() and time.monotonic() - t0 < secs: await asyncio.sleep(0.2)
+        await server.close()
+        await until(lambda: os.path.exists(mreq), 8)
+        why = open(mreq).read().strip() if os.path.exists(mreq) else "nothing"
+        check(why.startswith("no Sendspin server for "), f"server gone: root asked to announce mDNS again ({why})")
+        if os.path.exists(mreq): os.remove(mreq)
+        t0 = time.monotonic(); await until(lambda: os.path.exists(mreq), 10); dt = time.monotonic() - t0
+        check(os.path.exists(mreq) and dt > 3, f"still gone: announced again, after a longer wait ({dt:.1f} s)")
+        server = SendspinServer(loop, ident, "fake-ma", pairing_store=store)
+        added = asyncio.Queue(); server.add_event_listener(on_event)
+        await server.start_server(port=16957, discover_clients=False)
+        server.connect_to_client(f"ws://127.0.0.1:{PORT}/sendspin", retry_initial_connection=True, retry_indefinitely=True)
+        check(await asyncio.wait_for(added.get(), 15) == cid, "the restarted server finds the player again")
+        await asyncio.sleep(3)
+        check(server.get_client(cid).role("player@v1") is not None, "and it plays again, paired")
+        if os.path.exists(mreq): os.remove(mreq)
+        await asyncio.sleep(8)
+        check(not os.path.exists(mreq), "server back: no more announcements")
 
         await server.unpair(cid)
         await asyncio.sleep(1.5)

@@ -21,9 +21,18 @@
  *    service go and come and starts its discovery, which moves the entry to the new address.  The same records merely
  *    repeated change nothing in its cache and start nothing.  A new address is announced at once as well.
  *
+ * 3. Music Assistant (2.10.6) finds the Sendspin player only by mDNS and dials it; a link it lost while running it
+ *    dials again by itself (aiosendspin: after 1, 3, 7, 15 s, ...), but after its own restart it only browses anew.
+ *    Where its queries do not reach the Echo (python-zeroconf bound to 0.0.0.0 sends them out of the default route's
+ *    interface only; issue #28: the Echo on a VLAN of its own) it never finds the player again, though avahi's
+ *    announcement at boot reached it.  So the same while a Sendspin server that played here is gone: after 30 s, then
+ *    doubling up to 30 min.  Each peer has its own schedule: Home Assistant and Music Assistant restarting together
+ *    cost two avahi restarts, which no link notices.
+ *
  * Addresses: every IPv4 address the interfaces have (getifaddrs), up or not: a link over an interface that is down for a
  * moment is not stale, and dhcpcd -K leaves the address in place anyway.  HASSMIC_FAKE_ADDRS (tests) names a file with
- * one address per line instead, loopback not set apart.  HASSMIC_ANNOUNCE_TIMES="<first> <max>" (s). */
+ * one address per line instead, loopback not set apart.  HASSMIC_ANNOUNCE_TIMES="<first> <max>" (s; first for every
+ * peer). */
 #define _GNU_SOURCE
 #include "netaddr.h"
 #include <arpa/inet.h>
@@ -42,7 +51,8 @@
 #define POLL_S      2
 #define MAX_ADDRS   16
 #define MAX_LINKS   16          /* ESPHome takes 4 clients; the rest are refused at once */
-static int FIRST_S = 100;       /* > 90 s: Home Assistant has given up the old link by then (see 2.) */
+#define MAX_PEERS   4
+static int FIRST_S;             /* HASSMIC_ANNOUNCE_TIMES: instead of each peer's own first_s */
 static int MAX_S = 1800;
 
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
@@ -119,13 +129,16 @@ static int drop_stale(const struct addrs *s)
     return n;
 }
 
+static int first(int i) { return FIRST_S ? FIRST_S : hooks->peers[i].first_s; }
+
 static time_t mono(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec; }
 
 static void *watch(void *arg)
 {
     (void)arg;
     struct addrs last = { 0 }, cur; char was[160], now_t[160], why[64];
-    time_t since = 0, next = 0; int wait = FIRST_S;
+    struct { time_t since, next; int wait; } p[MAX_PEERS] = { { 0 } };
+    int np = hooks->npeers < MAX_PEERS ? hooks->npeers : MAX_PEERS;
     for (;; sleep(POLL_S)) {
         if (addrs_get(&cur)) continue;
         time_t now = mono();
@@ -136,17 +149,20 @@ static void *watch(void *arg)
                 fprintf(stderr, "network: address %s now (was %s)\n", now_t, was);
                 drop_stale(&cur);
                 hooks->announce("new address");
-                since = now; wait = FIRST_S; next = now + wait;
+                for (int i = 0; i < np; i++) if (p[i].since) { p[i].since = now; p[i].wait = first(i); p[i].next = now + p[i].wait; }
             } else drop_stale(&cur);
             last = cur;
         }
-        /* Home Assistant should be there and is not: announce again, at growing intervals (see 2. above) */
-        if (!cur.own || !hooks->expected() || hooks->linked()) { since = 0; wait = FIRST_S; continue; }
-        if (!since) { since = now; next = now + wait; }
-        if (now >= next) {
-            snprintf(why, sizeof why, "no Home Assistant for %lld s", (long long)(now - since));
-            hooks->announce(why);
-            wait = wait * 2 > MAX_S ? MAX_S : wait * 2; next = now + wait;
+        /* A peer should be there and is not: announce again, at growing intervals (see 2. and 3. above) */
+        for (int i = 0; i < np; i++) {
+            const struct netaddr_peer *q = &hooks->peers[i];
+            if (!cur.own || !q->expected() || q->linked()) { p[i].since = 0; continue; }
+            if (!p[i].since) { p[i].since = now; p[i].wait = first(i); p[i].next = now + p[i].wait; }
+            if (now >= p[i].next) {
+                snprintf(why, sizeof why, "no %s for %lld s", q->what, (long long)(now - p[i].since));
+                hooks->announce(why);
+                p[i].wait = p[i].wait * 2 > MAX_S ? MAX_S : p[i].wait * 2; p[i].next = now + p[i].wait;
+            }
         }
     }
     return NULL;

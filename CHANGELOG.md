@@ -2,6 +2,15 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-13
+
+- **Music Assistant finds the Echo again after it restarts** (issue #28). Music Assistant looks for Sendspin players
+  only when it starts, and on some networks (the Echo on a VLAN of its own, say) that search does not reach the Echo;
+  only the Echo's own announcement at boot did. After Music Assistant or Home Assistant restarted, the Echo stayed
+  unavailable as a player until it was rebooted. Now, while Music Assistant played on it before and is not connected,
+  the Echo announces itself again: after 30 s, then less and less often, at most every 30 min. The guide also says
+  how to add the Echo to Music Assistant by hand: `<echo-ip>:28928`, with the port.
+
 ## 2026-10-12
 
 - **The right Echo answers on slower Wi-Fi** (issue #27). Echos that heard the same wake word used to wait a fixed

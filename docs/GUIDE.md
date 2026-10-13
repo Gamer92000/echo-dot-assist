@@ -253,7 +253,10 @@ Assistant starting on the Echo pauses the phone. The voice assistant ducks both.
 
 - **Music Assistant** finds the Echo by itself (Sendspin player). Pair it with the Echo's token: shown at the end of
   `scripts/setup.sh`, and as the diagnostic entity "Sendspin pairing token" in Home Assistant (disabled by default).
-  Steps: the model's page, "Optional: Music Assistant".
+  Steps: the model's page, "Optional: Music Assistant". When Music Assistant restarts, the Echo announces itself again
+  until it is back (after 30 s, then less and less often, at most every 30 min). Where Music Assistant cannot see the
+  Echo's announcements (another subnet or VLAN), add `<echo-ip>:28928` under its Sendspin provider's "Manual IP
+  addresses for discovery": with the port, since a bare address means Sendspin's default 8928, which is not the Echo's.
 - **From a phone** over Bluetooth: SBC, AAC, aptX, aptX HD, with media controls. Switch on "Bluetooth audio from phones" on the
   settings page; the "Bluetooth pairing" switch in Home Assistant then lets phones pair (blue chaser on the ring).
 

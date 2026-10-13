@@ -2063,9 +2063,15 @@ static void *capture_thread(void *arg)
 
 static void *serve_thread(void *arg) { int c = (int)(long)arg; proto->serve(c); netaddr_link(c, 0); close(c); return NULL; }
 
-/* netaddr.c: Home Assistant ought to be connected and is not, or the address changed: root announces mDNS again */
+/* netaddr.c: Home Assistant or a Sendspin server ought to be connected and is not, or the address changed: root
+ * announces mDNS again */
 static int na_linked(void) { pthread_mutex_lock(&core_lock); int up = connected; pthread_mutex_unlock(&core_lock); return up; }
 static int na_expected(void) { return !atomic_load(&oobe); }
+static int na_ss_expected(void) { return core_sendspin_port && sendspin_expected(); }
+static const struct netaddr_peer na_peers[] = {
+    { "Home Assistant", 100, na_linked, na_expected },              /* > 90 s: it has given up the old link by then */
+    { "Sendspin server", 30, sendspin_linked, na_ss_expected },
+};
 static void na_announce(const char *why)
 {
     char line[80];
@@ -2173,7 +2179,7 @@ int main(int argc, char **argv)
 
     int ls = net_listen(core_port);
     if (ls < 0) { perror("listen"); return 1; }
-    static const struct netaddr_hooks na_hooks = { na_linked, na_expected, na_announce };
+    static const struct netaddr_hooks na_hooks = { na_peers, sizeof na_peers / sizeof na_peers[0], na_announce };
     netaddr_start(&na_hooks);
     fprintf(stderr, "hassmic " VERSION " (" BUILD ") %s on %d, wake=%s\n", proto->id, core_port, core_local_wake ? "local" : "remote");
     if (ota_port) { pthread_t st; if (!pthread_create(&st, NULL, selftest_thread, NULL)) pthread_detach(st); }

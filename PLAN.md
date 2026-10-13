@@ -1847,3 +1847,19 @@ Run in this order. Each step says what it proves.
       after the (test) wait, the voice assistant free for the next link, no announcements while connected. fake_web:
       reboot signed only, body checked, HA button. Open (device): avahi's goodbye and re-announcement as seen from
       Home Assistant on a real address change; `sys.powerctl` from the su domain on each model.
+- [~] Music Assistant lost after its restart (2026-10-13, GitHub issue #28; Echo 2 on an IoT VLAN, MA 2.10.6 as HAOS
+      app): MA found the player at boot, after an HA/MA restart never again (2+ days), while the ESPHome link came back
+      in a minute. MA 2.10.6 (`providers/sendspin/provider.py`) calls aiosendspin's `start_server(port=8927,
+      host=streams.bind_ip, advertise_addresses=[publish_ip])`, discovery on: it browses `_sendspin._tcp` and dials
+      what it finds; a link it loses while running it re-dials itself (backoff 1 s doubling to 300 s), but a restarted
+      MA only browses. Its zeroconf takes `interfaces=[host]`, or `InterfaceChoice.Default` for 0.0.0.0, i.e. one
+      socket on 0.0.0.0: queries leave by the default route's interface only. The reporter's Echo answers on its VLAN
+      (UDP 5353 admitted by `lockdown.sh`), so the queries or the answers do not cross; avahi's unsolicited
+      announcement at boot did reach MA. Not verified on that network. Fix: `netaddr.c` peers: besides Home Assistant
+      (100 s), "Sendspin server" (30 s, then doubling to 30 min) while a server held the player role in this run or
+      `sendspin.lastserver` exists and none is admitted -> `state/mdns` -> avahi restarted. Dialling the last server
+      back is not allowed while advertising `_sendspin._tcp` (spec:179). Manual IPs in MA: a bare address becomes
+      `ws://<ip>:8928/sendspin`, hence nothing for the reporter; `<ip>:28928` or the full URL works (retried for
+      ever): in GUIDE and donut's README. fake_ma_sendspin: no announcement while a server is connected, server
+      closed -> `state/mdns` "no Sendspin server for 4 s", again after a longer wait, the restarted server (same
+      identity and pairing store) plays again paired, then no announcements (25/25). Open (device): the reporter's VLAN.

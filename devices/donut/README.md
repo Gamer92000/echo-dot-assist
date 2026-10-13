@@ -249,6 +249,8 @@ The token is shown at the end of `scripts/setup.sh`, in the diagnostic entity "S
 Assistant (disabled by default), and in `/data/local/hassmic/boot.log`. Pairing authenticates the connection: unpaired,
 it is encrypted under a key everyone knows, so any machine on the LAN could play or sit in between. To allow unpaired
 servers anyway, switch on "Music Assistant without pairing" on the Echo's settings page (`http://<echo-ip>:28931/`).
+If Music Assistant does not find the Echo (another subnet or VLAN), add `<echo-ip>:28928` under its Sendspin provider's
+"Manual IP addresses for discovery"; the port is needed.
 
 ### 7. Optional: Bluetooth speaker
 

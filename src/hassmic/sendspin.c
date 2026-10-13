@@ -296,6 +296,7 @@ static struct record records[MAX_RECORDS]; static int n_records;
 static uint8_t sentinel_psk[32], pairing_psk[32];
 static atomic_int unpaired_ok;         /* unpaired access (Sentinel PSK) allowed; state file sendspin.unpaired, default off */
 static char last_playback_server[48];
+static atomic_int server_known;        /* a server held the player role here (this run, or played here before) */
 
 static void state_path(char *out, size_t n, const char *name) { snprintf(out, n, "%s/%s", state_dir, name); }
 
@@ -558,7 +559,7 @@ static void on_json(struct session *s, char *j, long long t_recv)
         }
         if (js_section(j, "active_roles", sec, sizeof sec)) {                                   /* sticky when omitted */
             int on = strstr(sec, "player@v1") != NULL;
-            if (on && !s->player_active) { s->activated_at = raw_us(); s->state_sent = 0; fprintf(stderr, "sendspin: player role active (%s)\n", s->psk_cat == PSK_LONGTERM ? "paired" : "unpaired"); }
+            if (on && !s->player_active) { s->activated_at = raw_us(); s->state_sent = 0; atomic_store(&server_known, 1); fprintf(stderr, "sendspin: player role active (%s)\n", s->psk_cat == PSK_LONGTERM ? "paired" : "unpaired"); }
             if (!on && s->player_active) { stream_set(0); q_flush(); }
             if (!on && !pairing && first)
                 fprintf(stderr, "sendspin: connected, no role yet: %s\n", atomic_load(&unpaired_ok) ? "approve the device in Music Assistant"
@@ -777,6 +778,7 @@ static void load_identity(void)
     b64_encode(id_pub, 32, client_id, 1, 0);
     int r = load_file("sendspin.records", records, sizeof records); n_records = r > 0 ? r / (int)sizeof records[0] : 0;
     r = load_file("sendspin.lastserver", last_playback_server, sizeof last_playback_server - 1); last_playback_server[r > 0 ? r : 0] = 0;
+    if (r > 0) atomic_store(&server_known, 1);
     r = load_file("sendspin.unpaired", buf, sizeof buf - 1); atomic_store(&unpaired_ok, r > 0 && buf[0] == '1');
     r = load_file("sendspin.delay", buf, sizeof buf - 1); buf[r > 0 ? r : 0] = 0;
     if (r > 0 && atoi(buf) >= 0 && atoi(buf) <= 5000) atomic_store(&static_delay_ms, atoi(buf));
@@ -789,6 +791,11 @@ void sendspin_mdns(int p, char *out, size_t outsz)
 }
 
 void sendspin_init(void) { load_identity(); }
+
+/* netaddr.c: while a server that played here is not connected, root announces the mDNS records again (issue #28).  A
+ * server the operator removed for good keeps that going, at most every 30 min. */
+int sendspin_linked(void) { pthread_mutex_lock(&adm_lock); int up = admitted != NULL; pthread_mutex_unlock(&adm_lock); return up; }
+int sendspin_expected(void) { return atomic_load(&server_known); }
 
 int sendspin_unpaired(int set)
 {
