@@ -136,6 +136,7 @@ void core_set_eq(int band, int db);              /* the mixer keeps it across re
 int  core_led_auto(int set);                     /* LED ring follows the light sensor (stock's own engine, the default); -1 reads */
 int  core_led_brightness(int set);               /* 0..100; set >= 0 fixes the level (auto off); -1 reads what the ring shows */
 float core_lux(void);                            /* light sensor in lux as stock reads it (no lock needed); NAN: none */
+int  core_led_has_auto(void);                    /* a light sensor and an engine that follows it: auto brightness offered */
 /* Sound detection (sound.h): off by default.  The events Home Assistant may get, one per sound the model tells apart. */
 int  core_sound(int set);                        /* set: 0/1, or -1 to only read */
 int  core_whispered(void);                       /* the last request: 1 whispered, 0 not, -1 none scored yet, -2 no model

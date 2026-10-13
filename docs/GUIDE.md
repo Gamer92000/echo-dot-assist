@@ -446,7 +446,7 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 | Mute, Do not disturb | DND drops announcements; purple flash when switched on |
 | Wake sound | covers all the Echo's own sounds |
 | Equalizer | bass, mid, treble, −6 to +6 dB, Amazon's own, on everything the Echo plays |
-| LED auto brightness, LED brightness | a level holds the ring there and switches the automatic off |
+| LED auto brightness, LED brightness | a level holds the ring there and switches the automatic off (Echo Show 5: the band's brightness, no automatic) |
 | Timer ringing, Ringing timers | on while a finished timer rings; their names (diagnostic), see [Voice](#voice) |
 | Stop ringing | button: ends a ringing timer and nothing else |
 | Button | event: each press and 1 s hold of the action and volume buttons, see [Buttons and light ring](#buttons-and-light-ring) |
@@ -556,7 +556,8 @@ change counts. Tried in one flat for a few minutes and one night, where it mostl
 - **Only between the Echo and the router**, also in the next room if the router is there. Elsewhere in the room may
   not show at all.
 - **Expect false alarms** from other Wi-Fi devices, doors, people in the router's room; try the sensitivity before
-  relying on it. On the Echo Dot 2 and Echo 2 also when the router changes speed (the Echo Dot 3 allows for that).
+  relying on it. On the Echo Dot 2 and Echo 2 also when the router changes speed (the Echo Dot 3 and Echo Show 5 allow
+  for that).
 - **Through a kernel module of ours**: the Wi-Fi drivers do not report what this needs. Loaded only once you switch it
   on (within 10 s), then until the Echo restarts.
 - ESPHome only. It does not use the microphones; muting does not stop it.

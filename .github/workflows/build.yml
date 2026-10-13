@@ -75,6 +75,9 @@ jobs:
           - device: radar
             ksrc: linux-3.18.19
             kcc: arm-eabi-4.8
+          - device: checkers
+            ksrc: linux-4.9.77
+            kcc: arm-eabi-4.8
     steps:
       - uses: actions/checkout@v7
         with:

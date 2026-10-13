@@ -1,7 +1,8 @@
 /*
  * hassmic_rcpi4m: the receive level of every frame from the access point, for Wi-Fi motion (src/hassmic/wifimotion.c)
- * on the Echo Dot 3 (donut: MT7668, MediaTek's gen4m driver wlan_mt76x8_sdio.ko, a module of its own; kernel 4.4.22,
- * arm64).  hassmic_rcpi.c's counterpart for that driver.  The driver's own RX_STAT answer is the firmware's figure for
+ * on the Echos with MediaTek's gen4m driver wlan_mt76x8_sdio.ko (MT7668, a module of its own): the Echo Dot 3 (donut,
+ * kernel 4.4.22, arm64) and the Echo Show 5 (checkers, kernel 4.9.77, 32-bit ARM).  hassmic_rcpi.c's counterpart for
+ * that driver.  The driver's own RX_STAT answer is the firmware's figure for
  * the last frame from anyone on the channel, every station and neighbouring network included, and one per ioctl; this
  * counts only what reaches the driver's data path, which in station mode is the access point's, frame by frame.
  *
@@ -15,19 +16,25 @@
  * frames (VHT, 80 MHz, MCS 8 / 9; entry 5).
  *
  * Where: nicRxProcessDataPacket(ADAPTER_T *, SW_RFB_T *) calls nicRxFillRFB(ADAPTER_T *, SW_RFB_T *) once, first
- * thing (+0x50), which parses the RX descriptor's groups into the SW_RFB_T: ucGroupVLD at +32 (bit 2: group 3, the RX
- * vector), prRxStatusGroup3 at +64.  RCPI0 is byte 0 of RX vector word 3, as the driver's own nicRxGetRcpiValueFromRxv
+ * thing (donut +0x50, checkers +0x64), which parses the RX descriptor's groups into the SW_RFB_T: ucGroupVLD at +32
+ * (bit 2: group 3, the RX vector), prRxStatusGroup3 at +64; on 32-bit ARM, with pointers of 4 bytes, at +16 and +32
+ * (checkers' driver: the strb of DW0 bits 25-28 and the group pointers stored after it, group 3 the 24-byte one, which
+ * its nicRxGetRcpiValueFromRxv reads at +32).  RCPI0 is byte 0 of RX vector word 3, as the driver's own nicRxGetRcpiValueFromRxv
  * reads it (half dB, dBm = RCPI / 2 - 110; one receive chain, RCPI1 is 255).  The same function goes on to copy those
  * words into the access point's STA_RECORD_T for every such frame.
  *
- * How: the kernel has no kprobes.  That one `bl nicRxFillRFB` becomes `bl hm_fill`, which calls nicRxFillRFB itself and
- * then reads the levels; no trampoline, no displaced instruction.  The call is found by its target, not its offset,
- * and patched only if exactly one call to it is in the first scan_max instructions.  A bl for a bl is one of the
- * instructions arm64 lets be patched while other CPUs run it (aarch64_insn_patch_text, which also writes through the
- * fixmap where module text is read-only).  hm_rx() reads through probe_kernel_read: a field that is not where expected
- * gives no reading, not an oops.  No module_exit, as hassmic_rcpi.c: a thread may sit in hm_fill.  Layout from the
- * driver in donut's NS65741 image (PLAN.md); module parameters for another build (device.conf KMOD_ARGS).  Built against
- * kernel.org 4.4.22 with devices/donut/kconfig and AOSP's aarch64-linux-android-4.9 (Makefile).
+ * How: neither kernel has kprobes.  That one `bl nicRxFillRFB` becomes `bl hm_fill`, which calls nicRxFillRFB itself
+ * and then reads the levels; no trampoline, no displaced instruction.  The call is found by its target, not its offset,
+ * and patched only if exactly one call to it is in the first scan_max instructions.  arm64: a bl for a bl is one of
+ * the instructions it lets be patched while other CPUs run it (aarch64_insn_patch_text, which also writes through the
+ * fixmap where module text is read-only).  32-bit ARM: patch_text (built for KGDB on checkers, not exported), which
+ * writes under stop_machine and flushes the caches; module text is writable there (no DEBUG_SET_MODULE_RONX), and
+ * modules sit within a bl's 32 MB of each other.  hm_rx() reads through probe_kernel_read: a field that is not where
+ * expected gives no reading, not an oops.  No module_exit, as hassmic_rcpi.c: a thread may sit in hm_fill.  Layout from
+ * the driver in each NS65741 image (PLAN.md, docs/re-checkers.md); module parameters for another build (device.conf
+ * KMOD_ARGS).  Built against kernel.org's sources of each kernel with its config (donut: devices/donut/kconfig on
+ * arm64's defconfig, AOSP's aarch64-linux-android-4.9; checkers: its own IKCONFIG, AOSP's arm-eabi-4.8, as Amazon's
+ * Linaro GCC 6.3 is no longer published; Makefile).
  */
 #include <linux/atomic.h>
 #include <linux/jiffies.h>
@@ -40,10 +47,15 @@
 
 static char *hook_sym = "nicRxProcessDataPacket";
 static char *fill_sym = "nicRxFillRFB";
-static uint scan_max = 64;          /* instructions of hook_sym searched for the call (it is the 21st) */
+static uint scan_max = 64;          /* instructions of hook_sym searched for the call (donut: the 21st, checkers: 26th) */
+#ifdef CONFIG_ARM64
 static uint rfb_vld = 32;           /* SW_RFB_T.ucGroupVLD: nicRxFillRFB, from RX descriptor DW0 bits 25-28 */
-static uint vld_grp3 = 2;           /* its bit for group 3 */
 static uint rfb_grp3 = 64;          /* SW_RFB_T.prRxStatusGroup3 */
+#else
+static uint rfb_vld = 16;           /* the same on 32-bit ARM (checkers) */
+static uint rfb_grp3 = 32;
+#endif
+static uint vld_grp3 = 2;           /* ucGroupVLD's bit for group 3 */
 static uint grp3_rcpi = 12;         /* RCPI0 in group 3: RX vector word 3, byte 0 (nicRxGetRcpiValueFromRxv) */
 static uint rate_mask = 0x1f07f;    /* rate, mode, bandwidth in RX vector word 0 */
 module_param(hook_sym, charp, 0444);
@@ -88,20 +100,58 @@ static int show(struct seq_file *m, void *v)
 static int open_fn(struct inode *inode, struct file *file) { return single_open(file, show, NULL); }
 static const struct file_operations fops = { .owner = THIS_MODULE, .open = open_fn, .read = seq_read, .llseek = seq_lseek, .release = single_release };
 
+#ifdef CONFIG_ARM64
+#define PATCHER "aarch64_insn_patch_text"
 static int is_bl_to(u32 insn, unsigned long at, unsigned long to)
 {
     long off = sign_extend64((insn & 0x03ffffff) << 2, 27);     /* imm26 words */
     return (insn & 0xfc000000) == 0x94000000 && at + off == to;
 }
 
+static int make_bl(unsigned long at, unsigned long to, u32 *insn)
+{
+    long off = (long)to - (long)at;
+    if (off < -SZ_128M || off >= SZ_128M) return -ERANGE;
+    *insn = 0x94000000 | ((off >> 2) & 0x03ffffff);
+    return 0;
+}
+
+static int patch(void *patcher, void *addr, u32 insn)
+{
+    int (*patch_text)(void *addrs[], u32 insns[], int cnt) = patcher;
+    return patch_text(&addr, &insn, 1);
+}
+#else
+#define PATCHER "patch_text"
+static int is_bl_to(u32 insn, unsigned long at, unsigned long to)      /* bl, condition always; pc reads 8 ahead */
+{
+    long off = sign_extend32((insn & 0x00ffffff) << 2, 25);
+    return (insn & 0xff000000) == 0xeb000000 && at + 8 + off == to;
+}
+
+static int make_bl(unsigned long at, unsigned long to, u32 *insn)
+{
+    long off = (long)to - (long)(at + 8);
+    if (off < -SZ_32M || off >= SZ_32M) return -ERANGE;
+    *insn = 0xeb000000 | ((off >> 2) & 0x00ffffff);
+    return 0;
+}
+
+static int patch(void *patcher, void *addr, u32 insn)
+{
+    void (*patch_text)(void *addr, unsigned int insn) = patcher;
+    patch_text(addr, insn);
+    return 0;
+}
+#endif
+
 static int __init init_fn(void)
 {
-    int (*patch_text)(void *addrs[], u32 insns[], int cnt);
     unsigned long caller = kallsyms_lookup_name(hook_sym), target = kallsyms_lookup_name(fill_sym), site = 0;
-    void *addr; u32 insn; long off; uint i, n = 0;
-    patch_text = (void *)kallsyms_lookup_name("aarch64_insn_patch_text");
-    if (!caller || !target || !patch_text) {
-        pr_err("hassmic_rcpi4m: %s, %s or aarch64_insn_patch_text not in this kernel (Wi-Fi driver loaded?)\n", hook_sym, fill_sym);
+    void *patcher = (void *)kallsyms_lookup_name(PATCHER);
+    u32 insn; uint i, n = 0;
+    if (!caller || !target || !patcher) {
+        pr_err("hassmic_rcpi4m: %s, %s or %s not in this kernel (Wi-Fi driver loaded?)\n", hook_sym, fill_sym, PATCHER);
         return -ENOENT;
     }
     for (i = 0; i < scan_max; i++) {
@@ -109,13 +159,12 @@ static int __init init_fn(void)
         if (is_bl_to(insn, caller + 4 * i, target)) { site = caller + 4 * i; n++; }
     }
     if (n != 1) { pr_err("hassmic_rcpi4m: %u calls to %s in %s's first %u instructions, not 1: not patched\n", n, fill_sym, hook_sym, scan_max); return -EINVAL; }
-    off = (long)hm_fill - (long)site;
-    if (off < -SZ_128M || off >= SZ_128M) { pr_err("hassmic_rcpi4m: hook out of branch range\n"); return -ERANGE; }
+    if (make_bl(site, (unsigned long)hm_fill, &insn)) { pr_err("hassmic_rcpi4m: hook out of branch range\n"); return -ERANGE; }
     if (!proc_create("hassmic_rcpi4m", 0444, NULL, &fops)) return -ENOMEM;
     fill = (void *)target;
-    addr = (void *)site;
-    insn = 0x94000000 | ((off >> 2) & 0x03ffffff);              /* bl hm_fill */
-    if (patch_text(&addr, &insn, 1)) { remove_proc_entry("hassmic_rcpi4m", NULL); pr_err("hassmic_rcpi4m: patching failed\n"); return -EIO; }
+    if (patch(patcher, (void *)site, insn)) {                   /* bl hm_fill */
+        remove_proc_entry("hassmic_rcpi4m", NULL); pr_err("hassmic_rcpi4m: patching failed\n"); return -EIO;
+    }
     pr_info("hassmic_rcpi4m: %s+%#lx (call to %s) hooked, /proc/hassmic_rcpi4m\n", hook_sym, site - caller, fill_sym);
     return 0;
 }

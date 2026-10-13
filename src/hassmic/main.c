@@ -2167,6 +2167,13 @@ float core_lux(void)
     return NAN;
 }
 
+/* Auto brightness is stock's engine (ledcontroller, above), which only the LED ring has: the Echo Show's band
+ * (ring_band.c) has a light sensor but nothing that follows it, so the switch is not offered there. */
+int core_led_has_auto(void)
+{
+    return ring_band_rows(-1) < 0 && !isnan(core_lux());
+}
+
 /* Anything may move MainVolume behind our back (audio_manager_set_prop, a stock daemon, the stock keys when -V), and
  * TTSVolume does not follow by itself: replies would then play at the old volume.  Poll both every 2 s: a changed
  * MainVolume is the user's wish and is adopted (Home Assistant and Music Assistant are told, no LED), a strayed TTSVolume

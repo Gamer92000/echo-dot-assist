@@ -1,5 +1,5 @@
 # Echo Show 5 1st gen (checkers), Fire OS NS65741: the kernel's own configuration (IKCONFIG), read out of the firmware's
-# boot.img.  Kept for Wi-Fi motion's module (src/kmod/), which has no 32-bit ARM variant of hassmic_rcpi4m yet.
+# boot.img.  For Wi-Fi motion's module (src/kmod/hassmic_rcpi4m.c, its 32-bit ARM variant).
 #
 #
 # Automatically generated file; DO NOT EDIT.

@@ -2441,5 +2441,10 @@ Run in this order. Each step says what it proves.
       otherwise).  Light band (2026-10-13): the ring on the screen's bottom 10 px (`ring_band.c`, `ringbar.dex`: overscan + a
       SurfaceFlinger layer, both seen working), the Dots' patterns unrolled; turning it towards the talker tried and
       left out (the front end's beam events arrive through an IAudioEventListener, but only 4 of 7 beams, switching
-      several times a second wherever the talker stands: docs/re-checkers.md).  Open items, one list: docs/re-checkers.md
-      "What a port needs".
+      several times a second wherever the talker stands: docs/re-checkers.md).  Light sensor and Wi-Fi motion
+      (2026-10-13): Amazon's stk3x1x driver's `als_ps/lux` (a live I2C read, the factory calibration applied; 93-94 lux
+      as Android's sensor), no LED auto brightness on the band (`core_led_has_auto`); `hassmic_rcpi4m` for 32-bit ARM
+      (SW_RFB_T +16/+32, `patch_text`, kernel.org 4.9.77 + IKCONFIG, arm-eabi-4.8: Amazon's Linaro GCC 6.3 is no longer
+      published), hooked on the Echo, motion seen in HA.  Reading the driver's `cali_Light` or `ir` attributes changes
+      the sensor (docs/re-checkers.md).  `alexa-off.sh`'s p2p wpa_cli bounded (once hung the satellite's start).
+      Open items, one list: docs/re-checkers.md "What a port needs".

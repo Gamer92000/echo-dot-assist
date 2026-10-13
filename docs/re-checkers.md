@@ -124,8 +124,9 @@ Libraries in checkers' load at 0x1000–0x4000 above their file offset (libasp +
 - Privacy latch: `/sys/devices/platform/amazon-gating/state` (and `enable`), chowned to system in `/init.project.rc`.
 - Bluetooth: MT7668 combo, `/dev/stpbt` (bluetooth:net_bt_stack, `btmtksdio.ko`), address `/proc/idme/bt_mac_addr`.
   Owned by Android's `com.android.bluetooth`, which is no init service.
-- Thermal: `mtktscpu`. Light sensor: STK3x1x on MediaTek's sensor framework (`/sys/class/misc/m_alsps_misc/`, input
-  device `m_alsps_input`), no lux file.
+- Thermal: `mtktscpu`. Light sensor: STK3x1x (I2C 0-0044) on MediaTek's alsps framework (`/sys/class/misc/m_alsps_misc/`,
+  input device `m_alsps_input`); Amazon's driver has a lux file of its own, `/sys/bus/platform/drivers/als_ps/lux`
+  (below).
 - LEDs: none worth driving (the red/green/blue nodes are mode 0); the mic-off LED is the gating hardware's.
 - Earcons: no `/system/local/share/earcon`. Wake sound inside SpeechInteractionManager (`res/-E.ogg` =
   `raw/ban_ui_wakesound`, Vorbis; `res/7E.mp3` = `ful_ui_wakesound_hybrid`; names obfuscated, mapped through
@@ -293,7 +294,18 @@ setup; what was checked on the PC only says so.
   own input device, "mute" = KEY_POWER (0x74), on which `privacy_reader` reads the latch at any event. `getevent -il`
   on the device: "gating" (the platform device is `amazon-gating`), "gpio-keys", besides "mtk-kpd", "ACCDET",
   "goodix-ts", "amazon_touch", "m_alsps_input", "hwmdata"; both of ours grabbed.
-- [ ] Light sensor: STK3x1x behind MediaTek's sensor hub, no lux file (`light_sensor` empty).
+- [x] Light sensor (2026-10-13, on the Echo): `board.light_sensor` = `/sys/bus/platform/drivers/als_ps/lux`, one of the
+  driver attributes Amazon's stk3x1x driver puts on the platform driver `als_ps` ("94 lux"). `stk_als_lux_show` reads
+  the ALS data registers over I2C at every read and scales them by the factory calibration (`/proc/idme/alscal`,
+  0x4bc = 1212 ADC counts for 400 lux): code 284 gave 93-94 lux, the same as Android's light sensor in `dumpsys
+  sensorservice` (which system_server's AmazonLedBrightnessControllerService keeps active, so the chip measures).
+  Home Assistant gets "Illuminance"; "LED auto brightness" stays unlisted, since that is ledcontroller's engine and
+  the band has none (`core_led_has_auto`). Not every attribute there is a reading, found the hard way: reading
+  `cali_Light` calibrates (the light now taken as 400 lux) and writes `/data/als_cal_data.bin`, which wins over idme
+  from then on; reading `ir` turns IR measurement on in the STATE register and, when it times out ("ir data is not
+  ready for 300ms"), leaves ALS stopped until a reboot (the driver's own `enable` cannot restart it: its enable path
+  writes STATE 0). Undone on the tester's Echo: 1212 written back to `als_cali_value` (which only sets the value),
+  the file removed, rebooted. `status` prints `[ALS= 0]` even while ALS measures.
 - [x] Light ring as a band along the bottom of the screen (2026-10-13, on the tester's Echo). No LED ring and no
   `ledctrl`; stock shows Alexa's attention on the screen instead ("voice chrome": SpeechInteractionManager.apk,
   BambooAttentionSystemVisualsComponent, Lottie compositions of 960x200, a 10 px line along the bottom edge drawn over
@@ -365,4 +377,15 @@ setup; what was checked on the PC only says so.
   after the link drops, on the dead A2DP output, and AudioFlinger moved them mid-sound to the speaker when the route
   went back ~200 ms later; the route moved alone, with nothing playing, made no sound. Players opened while the route
   moves now wait for it (`route_settle`, 1.5 s at most): no pop since.
-- [ ] Wi-Fi motion: the gen4m driver is 32-bit here; `hassmic_rcpi4m` rewrites an arm64 `bl`, needs an ARM variant.
+- [x] Wi-Fi motion (2026-10-13, on the Echo): `hassmic_rcpi4m.c` builds for 32-bit ARM too. The driver
+  (`/system/lib/modules/wlan_mt76x8_sdio.ko`, the gen4m driver as on donut, ARM, not stripped) calls nicRxFillRFB once
+  at nicRxProcessDataPacket+0x64; with 4-byte pointers SW_RFB_T has ucGroupVLD at +16 and prRxStatusGroup3 at +32
+  (nicRxFillRFB stores the 24-byte group 3 there, and nicRxGetRcpiValueFromRxv reads RCPI0 at its +12, as on donut).
+  The `bl` is rewritten by the kernel's `patch_text` (present for KGDB, found through kallsyms; module text is
+  writable, no DEBUG_SET_MODULE_RONX). Built against kernel.org 4.9.77 with the IKCONFIG and AOSP's arm-eabi-4.8:
+  Amazon used Linaro GCC 6.3-2017.05, which Linaro no longer publishes; vermagic `4.9.77 SMP preempt mod_unload ARMv7
+  p2v8` and `struct module` (0x200, init at 0xdc) are the kernel's. On the Echo: "nicRxProcessDataPacket+0x64 (call
+  to nicRxFillRFB) hooked", RCPI 79-83 (-70 to -68 dBm), KIND 0x14005/0x14006 (VHT 80 MHz, MCS 5/6), hassmic "through
+  the kernel module", Home Assistant's motion sensor went on and off.
+- [x] Found on the way: `alexa-off.sh`'s `wpa_cli … -i p2p0 p2p_group_remove` once never returned (no group up, the
+  socket there), and the satellite's start waited with it: no hassmic after an update. `timeout 5` now.

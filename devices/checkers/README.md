@@ -187,8 +187,8 @@ amonet's TWRP leaves lk, preloader and tee alone).
 
 | File | State |
 |---|---|
-| `device.mk` | OpenSL ES backend, Pryon, no Wi-Fi motion module (the gen4m driver is 32-bit here; `hassmic_rcpi4m` is arm64) |
-| `board.c` | from the firmware; event numbers, privacy input device and light sensor to check on the device |
+| `device.mk` | OpenSL ES backend, Pryon, the light band; Wi-Fi motion's module `hassmic_rcpi4m` built for 32-bit ARM (kernel.org 4.9.77, arm-eabi-4.8) |
+| `board.c` | from the firmware, checked on the Echo: input devices by name, privacy latch, light sensor (`als_ps/lux`) |
 | `device.conf` | identity and probe files checked; `INSTALL=boot` (boot and system partition, firmware build, policy tool), Alexa's packages, `FW_KEEP` (DHCP: no stock `firewall.sh`) |
 | `sepolicy.rules`, `hassmic.rc` | the boot image's policy patch; init services (firewall at `on boot`, satellite at `sys.boot_completed`) |
 | `kconfig` | the kernel's IKCONFIG (4.9.77, ARM) |

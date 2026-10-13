@@ -151,7 +151,8 @@ static int present(enum id i)
     case BT_ANNOUNCE: case BT_LANG: case BT_AUDIO: case BT_SPEAKER: case BT_OUT_DELAY: case BT_OUT_AWAKE: case BT_OUT_STAY: return ble_present();
     case WHISPER: return core_whisper_model();
     case SOUND: return sound_model() != SOUND_NONE;               /* the firmware has one on every model so far */
-    case LED_AUTO: case LIGHT_SENSOR: return core_lux() == core_lux();      /* a light sensor: not NAN */
+    case LIGHT_SENSOR: return core_lux() == core_lux();          /* a light sensor: not NAN */
+    case LED_AUTO: return core_led_has_auto();
     case WIFI_MOTION: case WIFI_SENS: return wifimotion_present();
     case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: return arb_running();
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
