@@ -215,7 +215,10 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   a set) and, for the get, REQUEST_ARBITRATION_JSON's convention (an int32 reply size in). On the device: whether
   the get answers in that form.
 - [ ] No micRaw (`startCapture` refused on ship builds): `scripts/mic-compare.sh` cannot work.
-- [ ] Bluetooth speaker stream (`bt_open` returns -1): Android's stack would route an AudioTrack to a speaker itself.
+- [~] Music Assistant (Sendspin, 2026-10-13): paired and plays, sync within ±10 ms over minutes, no underruns.
+  Open: the first stream right after pairing stopped being heard after ~0.2 s (no error in hassmic's log; not
+  seen again), and the player repeats ~170 frames per 10 s to stay in sync (0.35 %: the DAC's clock, or Android's
+  buffering counted short in s_queued_us).
 
 **Alexa, firewall, network**
 - [x] Alexa off: `alexa-off.sh` disables `ALEXA_PACKAGES`, `SETUP_PACKAGES`, `UPDATE_PACKAGES` with `pm`, undone by
