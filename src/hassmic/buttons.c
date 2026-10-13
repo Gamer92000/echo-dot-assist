@@ -223,7 +223,9 @@ int buttons_start(const char *device, const struct button_handler *h)
     }
     if (!board.privacy_input) pfd = -1;
     else if ((pfd = open_input(board.privacy_input)) < 0) fprintf(stderr, "buttons: %s not available, mute button changes go unnoticed\n", board.privacy_input);
-    else if (pthread_create(&t, NULL, privacy_reader, (void *)(long)pfd)) close(pfd);
+    /* grabbed as well: the Echo Show's gating device reports KEY_POWER, and Android's framework played a stock sound
+     * (a fallback ringtone, at the ring stream's level) for every press when it got the key (2026-10-13) */
+    else if (grab(pfd, board.privacy_input), pthread_create(&t, NULL, privacy_reader, (void *)(long)pfd)) close(pfd);
     else pthread_detach(t);
     if (pthread_create(&t, NULL, reader, (void *)(long)f1)) return -1;
     pthread_detach(t);
