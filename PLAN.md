@@ -2427,5 +2427,11 @@ Run in this order. Each step says what it proves.
       unpacked firmware in make unit; no setup beacon anywhere.  First device (a tester's, 2026-10-10): 8149's boot
       image with our ramdisk changes boots, but 8149's adbd is a user build and never stays root (ro.secure=0,
       service.adb.root=1, oem flags 61 all tried); with the XDA image's adbd (mkbootroot.py --adbd) adb is root in
-      u:r:su:s0.  kaeru 2.0.0 leaves the RTC fastboot flag set: fastboot continue, not reboot.  Open items, one
-      list: docs/re-checkers.md "What a port needs".
+      u:r:su:s0.  kaeru 2.0.0 leaves the RTC fastboot flag set: fastboot continue, not reboot.  Rebased on main
+      (2026-10-13), its per-model additions brought over: speaker gain on the RT5616's line out (`OUT Playback
+      Volume` 0..39, 1.5 dB a step, stock 29 = -3 dB; read from the kernel's soc_mixer_control and TLV and the HAL's
+      audio_device.xml; `speaker_gain_db` for steps that are not a whole dB, spkgain_test +8), the wake sound
+      removal's start signal from the OpenSL ES earcon player (`audio_earcon_started` after the first Enqueue), the
+      volume-key chord under main's buttons (steps on release, a pair no step and no event; buttons_test updated),
+      no light ring animations without `/system/etc/led-resources`.  Open items, one list: docs/re-checkers.md
+      "What a port needs".

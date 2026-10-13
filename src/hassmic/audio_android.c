@@ -375,8 +375,11 @@ void      voip_close(void) { s_close(&voip, 0); }
 /* System stream: its own volume in Android, as stock's UI sounds.  go() says how long the sound is wanted: a
  * ringing timer ends when someone stops it, so what is left of the queue is dropped then, not drained.  Written a
  * slot at a time with go() asked in between, as audio_mixer.c does per buffer: s_write blocks while the queue is
- * full, and a long ringtone in one call would play on until its last slot is queued. */
+ * full, and a long ringtone in one call would play on until its last slot is queued.  The player is PLAYING from
+ * s_open on, so it consumes from the first Enqueue: audio_earcon_started then (earsup.c looks for the echo from there
+ * on, so early is safe, late is not). */
 static int always(void) { return 1; }
+void (*audio_earcon_started)(void);
 void play_earcon(const short *pcm, size_t samples, unsigned rate) { play_earcon_while(pcm, samples, rate, always); }
 void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go)(void))
 {
@@ -386,6 +389,7 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
     while (len && go()) {
         size_t n = len < earcon.slot ? len : earcon.slot;
         if (s_write(&earcon, p, n) < 0) break;
+        if (p == (const char *)pcm && audio_earcon_started) audio_earcon_started();
         p += n; len -= n;
     }
     while (s_queued_us(&earcon) > 0 && go()) usleep(20000);

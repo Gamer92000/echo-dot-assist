@@ -586,9 +586,10 @@ this Echo or another, or use it as a preset for the next install (`scripts/setup
 **Identify** (top of the page, and beside each Echo in the list; also a button in Home Assistant): a rainbow on the ring
 for 10 s and stock's setup sound, to tell which Echo is which.
 
-**Speaker gain** (Sound; Echo Dot 2, Echo 2 and Echo Dot 3): for an Echo that is too quiet at full volume. It raises
-the analog gain in front of the speaker (Echo Dot 2 and Echo 2: the codec's "HP Driver Gain", +0 to +12 dB over stock;
-Echo Dot 3: the amplifier's output level, +0 to +2 dB, all it has above where Amazon leaves it), so everything the
+**Speaker gain** (Sound; Echo Dot 2, Echo 2 and Echo Dot 3, and the untested Echo Show 5): for an Echo that is too
+quiet at full volume. It raises the analog gain in front of the speaker (Echo Dot 2 and Echo 2: the codec's "HP Driver
+Gain", +0 to +12 dB over stock; Echo Dot 3: the amplifier's output level, +0 to +2 dB, all it has above where Amazon
+leaves it; Echo Show 5: the codec's line out, +0 to +12 dB in steps of 1.5 dB, each dB set going to the nearest step), so everything the
 speaker plays gets louder at every volume step; the 3.5 mm jack and Bluetooth speakers keep their level. Owners of an
 Echo Dot 2 found +6 dB loud and clean at full volume; speakers differ, though (some Dot 2s are much louder than others
 at the same gain), so raise it a step at a time and lower it at the first crackle: loud music near full volume

@@ -248,7 +248,8 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
 **Buttons, lights, sounds**
 - [x] No action button: both volume keys pressed together (within 400 ms) and let go within a second are its press
   (`board.action_combo`, `buttons.c`; held 2 s they still pair for arbitration): the page's login, adb, Improv's
-  authorization, answering a Drop In. Each press also moves the volume a step, one up and one down. The page words its
+  authorization, answering a Drop In, and Home Assistant's Button event `action`. A pair moves no volume and fires no
+  event of its own (main's rule since the volume steps on release: a pair is not two presses). The page words its
   texts for it (`hello.action`, `act()` in `web/app.js`); no reset by holding (the page's or Home Assistant's
   button). `tests/unit/buttons_test.c` (make unit).
 - [x] Input devices by name, not event number (`board.c` `name:gpio-keys`, `name:amazon-gating`; `buttons.c` looks
@@ -257,7 +258,8 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   `amazon-gating` is the only name the kernel has for that device: confirm with `getevent -il`.
 - [ ] Light sensor: STK3x1x behind MediaTek's sensor hub, no lux file (`light_sensor` empty).
 - [ ] No LED ring and no `ledctrl` (`main.c` then leaves LEDs off): listening/thinking/volume/identify feedback
-  would go on the screen; nothing does that yet.
+  would go on the screen; nothing does that yet. Home Assistant's "Light ring" is not listed (no digest of ours under
+  `/system/etc`), and `main.sh` `leds()` makes no animations where there is no `/system/etc/led-resources`.
 - [x] Earcons: none in the firmware's file system; `sounds.c` reads them straight out of the stock apps
   (`board.c` `earcon_zip`: 12 of the 13 sounds, every one stored uncompressed, as aapt keeps audio), nothing copied;
   `/data/local/hassmic/earcon/` (`earcon_dir`) wins for own sounds. All decode from the unpacked firmware
@@ -265,6 +267,17 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
   the APKs readable by the daemon's user (0644, and `su` is permissive), and how they sound.
 
 **Other features**
+- [~] Speaker gain (`board.c` `speaker_gain`, `spkgain.c`): the codec is a Realtek RT5616 (`CONFIG_SND_SOC_RT5616`;
+  `/system/etc/audio_device.xml`, the file `audio.primary.mt8163.so` reads, says "RT5616 DAC", "LO out"); its line out
+  feeds the speaker amplifier (`ext_speaker_output` switches "OUT Playback Switch" and `Ext_Speaker_Amp_Switch`).
+  "OUT Playback Volume": reg 0x03, both channels, inverted, 0..39 with TLV -46.5 dB + 1.5 dB a step, read from the
+  `soc_mixer_control` and TLV of checkers' own kernel (decompressed from `boot.img`): 29 = -3 dB, 31 = 0 dB, 39 = +12
+  dB. The XML sets 29 among its initial settings and no path or other firmware file names it, so it should stay from
+  the HAL's start on (the watcher puts ours back after an audioserver restart). Ten steps above stock, the page offers
+  +12 dB (`speaker_gain_steps` 2 per `speaker_gain_db` 3: a whole dB takes the nearest step, +1 and +2 dB are both
+  +1.5). `/dev/snd/controlC0` is system:audio; the daemon has group audio and runs in `su`. On the device: that 29 is
+  really what the speaker plays at (`tinymix 'OUT Playback Volume'`, or hassmic's log line "speaker gain: ... now
+  N"), and how loud before the line out or the amplifier clips.
 - [ ] Amazon downloads (`dha.c`): no `libacehal_dha.so`; the key is behind the `fireos-dha` binder service.
 - [ ] Bluetooth proxy and A2DP (`-B` in `DEFAULT_ARGS` for now): only with Android's Bluetooth stack off.
 - [ ] Wi-Fi motion: the gen4m driver is 32-bit here; `hassmic_rcpi4m` rewrites an arm64 `bl`, needs an ARM variant.

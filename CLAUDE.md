@@ -115,6 +115,7 @@ One unit test: `make unit-<name>` (`UNIT_TESTS` in the Makefile).
   `/system/hassmic` as the factory copy, bootstrap included (`boot.sh`, `otatool`, `hassmic.rc`, `release.pub`; never
   `update.pub` or `/sepolicy`). Works from older installs: the pushed update brings the code.
 - The light ring's own animations: `main.sh` installs them itself at satellite start when they are not this build's
+  (none where `/system/etc/led-resources` is missing: checkers)
   (`sysinstall.sh leds`, ledcontroller restarted); `install-system.sh --uninstall` puts stock's layer config back.
 - `scripts/install-system.sh`: writes `/system/hassmic/`, init rc and patched SELinux policy from the running OS
   (`sysinstall.sh install`; `otatool remount rw` since toybox cannot: `/dev/root` does not exist). `--twrp` the old way.
@@ -395,10 +396,12 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Speaker gain** (`spkgain.c`, setting `speaker_gain`, page only, not exported): +0..+12 dB on the ALSA control
   `board.speaker_gain` (Dot 2 / Echo 2: the codec's `HP Driver Gain Volume`, stock 6; Dot 3: the TAS2770 amplifier's
   `DAC Playback Volume` = AMP_LEVEL, stock 16 of 0..20 in 0.5 dB steps (`speaker_gain_steps` 2), so +2 dB at most:
-  `spkgain_max()`/`settings_max()` give the page the control's top), written by hassmic itself (group audio). The Dot 2's
+  `spkgain_max()`/`settings_max()` give the page the control's top; Show 5: the RT5616's line out `OUT Playback Volume`,
+  stock 29 = -3 dB of 0..39 in 1.5 dB steps, `speaker_gain_steps` 2 per `speaker_gain_db` 3, a whole dB takes the
+  nearest step), written by hassmic itself (group audio). The Dot 2's
   HAL writes stock at every mixer start (and per its XML on a jack change; the Dot 3's never writes it): a thread on the
   card's control events writes ours back when it sees stock, and leaves other values (the jack's 11) alone.
-  `HASSMIC_FAKE_SPEAKER_GAIN=<file>[:<stock>:<steps>:<max>]` for tests (`tests/unit/spkgain_test.c`, `fake_web.py`).
+  `HASSMIC_FAKE_SPEAKER_GAIN=<file>[:<stock>:<steps>:<max>[:<per dB>]]` for tests (`tests/unit/spkgain_test.c`, `fake_web.py`).
 - **Push updates**: `ota.c` receives bundles on the device; `src/tools/otatool.c` verifies/unpacks there (monocypher).
   The PC side is `scripts/otatool.py` (stdlib only: keygen, pack/sign, verify/install, push, adb; same CLI), so the PC
   needs no compiler for it; `tests/otatool_test.sh` holds the two byte for byte to each other, and CI verifies every

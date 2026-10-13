@@ -404,6 +404,7 @@ LEDNEW=/data/local/hassmic/leds.new
 LEDLOCK=/data/local/hassmic/leds.lock
 leds() {
     LEDS=failed LEDWHY=
+    [ -d /system/etc/led-resources ] || { LEDWHY="no light ring on this model"; return 0; }    # no ledcontroller (checkers: a screen)
     i=0
     boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)
     while ! mkdir $LEDLOCK 2>/dev/null; do
