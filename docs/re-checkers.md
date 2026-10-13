@@ -309,7 +309,26 @@ The one list of what is done and what is open for checkers; `devices/checkers/RE
 - [~] Bluetooth proxy and A2DP sink (2026-10-13): Android's stack (app/Bluetooth) is off the partition and
   `bluetooth_on=0`; the MT7668 behind `btmtksdio` speaks H4 on `/dev/stpbt` as the Dots' combo chips do (hciscan:
   reset, address, 315 LE adverts in 8 s). hassmic: "controller ready, 7C:D5:66:97:F7:7B, ACL 32 x 251", A2DP sink
-  ready (SBC, AAC, aptX HD, aptX), scanning. Open: Home Assistant's proxy and a phone playing, on the device; the
-  Bluetooth speaker (A2DP source): on the Dots btout.c takes the mixer's own A2DP route, here AudioFlinger mixes, so
-  the mixed audio would have to come back through Android's remote submix (`bt_open` still -1).
+  ready (SBC, AAC, aptX HD, aptX), scanning; a Pixel paired and played (aptX HD). Open: Home Assistant's proxy, on
+  the device.
+- [x] Bluetooth speaker (A2DP source), on the tester's Echo with a PC (BlueZ/PipeWire) as the speaker (2026-10-13):
+  heard clearly, back on the Echo cleanly. No remote submix needed: 8149 has AOSP N's `audio.a2dp.default.so` (not
+  byte-identical to donut's, Amazon's `bt_a2dp_hw_fos` additions, same protocol) and its policy the `a2dp` module
+  (`a2dp_audio_policy_configuration.xml`, 44.1 kHz stereo), so btout.c serves its abstract `.a2dp_ctrl`/`.a2dp_data`
+  sockets as on the Dots (audioserver may connect to su: `sepolicy.rules`), and the route is AudioPolicy's: hassmic
+  tells `media.audio_policy` an A2DP device is there, as AudioService would for Android's Bluetooth app
+  (`audio_android.c` `audio_a2dp_route`). IAudioPolicyService is a native interface: transaction 1
+  setDeviceConnectionState(device 0x80, state, address, name; the strings as `writeCString`, built in `afe_parcel.c`
+  `svc_cstr`), 2 getDeviceConnectionState(device, address) -> state; status -38 when the HAL's CHECK_READY fails (it
+  tries 3 times, 250 ms apart) or the device is already in that state. The media strategy, every player of ours, then
+  plays on A2DP alone. Measured: a move takes 410–520 ms (two `service` runs; AudioFlinger opens the HAL's output
+  inside it); AudioFlinger puts the output in standby (SUSPEND) 3 s after the last sound and STARTs it with the next
+  (the wake sound 66 ms after the wake word, AVDTP START included), where the Dots' mixer plays on; audioserver killed
+  while routed: the policy forgets the device, hassmic notices the HAL's control socket close and moves it again (1.6
+  s from the kill); a route left by a hassmic that died is taken back at start (`state/a2dp-route`). AudioService
+  keeps a volume index per device and sets the one the music stream plays on: the volume is set again after each move.
+  A pop on the Echo's speaker when the speaker went away: "Bluetooth disconnected" and its announcement start ~30 ms
+  after the link drops, on the dead A2DP output, and AudioFlinger moved them mid-sound to the speaker when the route
+  went back ~200 ms later; the route moved alone, with nothing playing, made no sound. Players opened while the route
+  moves now wait for it (`route_settle`, 1.5 s at most): no pop since.
 - [ ] Wi-Fi motion: the gen4m driver is 32-bit here; `hassmic_rcpi4m` rewrites an arm64 `bl`, needs an ARM variant.

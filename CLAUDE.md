@@ -251,9 +251,10 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   Setting `stop_ends_listening` (Voice, page only, off): any "stop" within 4 s of the last detection (`heard_ms`,
   `stop_heard`) also cancels a LISTENING run (`quiet_cancel`, as the button) or keeps the round's winner from starting.
   The other way, playing on a Bluetooth speaker: `a2dp.c` (inquiry, pairing, AVDTP initiator, AVRCP absolute volume)
-  + `btout.c`, which stands in for btmanagerd towards the mixer's own A2DP route (LIPC `A2DPSourceConnect`, the A2DP
-  HAL's abstract sockets, AIPC service uuid 0 via `libace_aipc.so`; `docs/re-a2dp-source.md`) and SBC-encodes
-  (`sbc.c`). While on the speaker the core has a volume of its own (`core_speaker`).
+  + `btout.c`, which stands in for Fluoride towards the firmware's A2DP HAL (its abstract sockets) and SBC-encodes
+  (`sbc.c`); the route is the backend's (`audio_a2dp_*` in `audio.h`): the Dots' mixer by LIPC `A2DPSourceConnect`
+  plus btmanagerd's AIPC service uuid 0 via `libace_aipc.so` (`docs/re-a2dp-source.md`), Android's AudioPolicy by
+  `media.audio_policy` setDeviceConnectionState (`docs/re-checkers.md`; players opened meanwhile wait for the move). While on the speaker the core has a volume of its own (`core_speaker`).
 - **Drop In** (`dropin.c`, `dropin.h`): calls between two Echos of the arbitration network. Signalling as signed
   `T_MSG` on arb's socket (`arb_tell`, `hooks->message`; invite/ringing/accept/refuse/bye), audio Opus 16 kHz 20 ms over
   unicast UDP 28932 (`-i`), per-call key from ephemeral X25519 + `arb_derive`. Playback on the mixer's `Voip` stream

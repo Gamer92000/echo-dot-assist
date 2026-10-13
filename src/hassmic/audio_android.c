@@ -16,6 +16,8 @@
  *    (getAspPipelineType in the HAL); HOTWORD itself is not reachable from OpenSL ES. */
 #include "audio.h"
 #include "core.h"
+#include "afe_parcel.h"
+#include "btout.h"
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
 #include <errno.h>
@@ -286,6 +288,87 @@ void vol_write(enum vol which, int v)
     pthread_mutex_unlock(&vol_lock);
 }
 
+/* --- the Bluetooth speaker's route (btout.c): AudioPolicy's connection state of an A2DP device, which Android's own
+ * Bluetooth service has AudioService set; here straight on media.audio_policy (IAudioPolicyService, a native interface:
+ * setDeviceConnectionState = 1 (device, state, address and name as C strings; status back), getDeviceConnectionState
+ * = 2 (device, address; state back)).  Connected, AudioFlinger opens an output on the A2DP HAL, whose CHECK_READY
+ * btout.c acks only with a stream to the speaker configured (else the policy drops the device again: -38), and the
+ * media strategy, i.e. every player of ours, plays there alone: the Echo's speaker is silent, as on the Dots.  All
+ * seen on the first Echo Show (2026-10-13): audioserver connects to btout.c's abstract sockets, and policy and HAL
+ * speak AOSP's protocol.  AudioService keeps a volume index per output device and sets the one of the device the music
+ * stream plays on, so after a move ours is set again, for the device it now is.  The policy forgets the device when
+ * audioserver restarts (audio_a2dp_lost); getDeviceConnectionState needs the address, so the one connected is kept in
+ * state/a2dp-route, which also tells a restarted hassmic what an earlier one left. */
+#define POLICY_A2DP 0x80                /* AUDIO_DEVICE_OUT_BLUETOOTH_A2DP */
+
+static const char *route_path(void)
+{
+    static char p[256]; const char *d = getenv("HASSMIC_STATE");
+    snprintf(p, sizeof p, "%s/a2dp-route", d ? d : "/data/local/hassmic/state");
+    return p;
+}
+
+static void addr_text(uint64_t a, char *s)      /* as BluetoothDevice.getAddress() gives it AudioService */
+{
+    sprintf(s, "%02X:%02X:%02X:%02X:%02X:%02X", (unsigned)(a >> 40 & 0xff), (unsigned)(a >> 32 & 0xff),
+            (unsigned)(a >> 24 & 0xff), (unsigned)(a >> 16 & 0xff), (unsigned)(a >> 8 & 0xff), (unsigned)(a & 0xff));
+}
+
+/* the reply's one word, -1000 when there was none (no tool, audioserver gone) */
+static int policy_call(const char *code, int state, const char *addr, const char *name)
+{
+    struct afe_call c; char out[256]; uint32_t w[2];
+    svc_call_start(&c, "media.audio_policy", code);
+    if (svc_i32(&c, POLICY_A2DP) || (state >= 0 && svc_i32(&c, state)) || svc_cstr(&c, addr) || (name && svc_cstr(&c, name)))
+        return -1000;
+    core_run(c.argv, out, sizeof out);
+    return svc_reply_words(out, w, 2) == 1 ? (int)w[0] : -1000;
+}
+
+static int policy_state(const char *addr) { return policy_call("2", -1, addr, NULL); }
+
+int audio_a2dp_route(int on, uint64_t addr, const char *name)
+{
+    char a[18], n[64]; long long t = now_ms();
+    addr_text(addr, a);
+    snprintf(n, sizeof n, "%s", name ? name : "");     /* the policy only shows it (dumpsys) */
+    int r = policy_call("1", on ? 1 : 0, a, n), now = policy_state(a);
+    if (now != (on ? 1 : 0)) {
+        fprintf(stderr, "btout: AudioPolicy did not move the output %s (status %d, state %d)\n", on ? "to the speaker" : "back", r, now);
+        return -1;
+    }
+    if (on) { FILE *f = fopen(route_path(), "w"); if (f) { fprintf(f, "%s\n", a); fclose(f); } }
+    else unlink(route_path());
+    pthread_mutex_lock(&vol_lock);
+    vol_load();
+    if (vols[VOL_MAIN] >= 0) vol_push(vols[VOL_MAIN]);
+    pthread_mutex_unlock(&vol_lock);
+    fprintf(stderr, "btout: output %s (AudioPolicy, %lld ms)\n", on ? "to the speaker" : "to the Echo", now_ms() - t);
+    return 0;
+}
+
+int audio_a2dp_lost(uint64_t addr)
+{
+    char a[18]; addr_text(addr, a);
+    int st = policy_state(a);
+    return st == 0 ? 1 : st == 1 ? 0 : -1;
+}
+int audio_a2dp_aipc(void) { return 0; }
+
+void audio_a2dp_reset(void)
+{
+    char a[32] = ""; FILE *f = fopen(route_path(), "r");
+    if (!f) return;
+    if (!fgets(a, sizeof a, f)) a[0] = 0;
+    fclose(f);
+    a[strcspn(a, "\r\n")] = 0;
+    if (a[0] && policy_state(a) == 1) {
+        policy_call("1", 0, a, "");
+        fprintf(stderr, "btout: %s left connected in AudioPolicy by an earlier run: back to the Echo\n", a);
+    }
+    unlink(route_path());
+}
+
 static void play_cb(SLAndroidSimpleBufferQueueItf q, void *ctx)
 {
     struct pstream *s = ctx; (void)q;
@@ -297,9 +380,18 @@ static void play_cb(SLAndroidSimpleBufferQueueItf q, void *ctx)
 
 static void s_close(struct pstream *s, int drain);
 
+/* A player opened while the Bluetooth speaker's route moves waits for it (1.5 s at most).  AudioFlinger puts a track on
+ * the output the policy names when it is created and moves it, from wherever it got to, when that output closes: a
+ * sound started as the speaker went away began on the dead A2DP output and was moved to the Echo's speaker mid-sound,
+ * with an audible pop (the first Echo Show, 2026-10-13: "Bluetooth disconnected" and Home Assistant's announcement of
+ * it come within 30 ms of the disconnect, the route ~200 ms later; the route moved alone, with nothing playing, made no
+ * sound). */
+static void route_settle(void) { for (int i = 0; i < 75 && btout_moving(); i++) usleep(20000); }
+
 static int s_open(struct pstream *s, unsigned rate, unsigned channels, SLint32 stream_type)
 {
     if (!engine_ok() || !rate || channels < 1 || channels > 2) return -1;
+    route_settle();
     if (s->obj) s_close(s, 0);
     SLDataLocator_AndroidSimpleBufferQueue loc = { SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, PLAY_NBUF };
     SLDataFormat_PCM fmt = { SL_DATAFORMAT_PCM, channels, rate * 1000, SL_PCMSAMPLEFORMAT_FIXED_16, SL_PCMSAMPLEFORMAT_FIXED_16,
@@ -461,7 +553,6 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
  * name): SET_LISTENING_MODE 146 (int32), SET_WAKEWORD_METADATA 114 (the JSON; libasp refuses 0 or over 4095 bytes),
  * REQUEST_ARBITRATION_JSON 23 (int32 256 in, 256 bytes out), NOTIFY_ASR_STREAM_STOPPED 14 (int32).  Through the
  * firmware's own service tool (afe_parcel.c): no binder library of ours. */
-#include "afe_parcel.h"
 
 static void afe_send(int cmd, const void *in, size_t len)
 {

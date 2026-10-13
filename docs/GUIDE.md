@@ -414,7 +414,7 @@ name and state.
   once sound comes, too late for the start of a reply. "Keep the speaker awake" (settings page, off by default) plays
   a 20 Hz tone at -50 dBFS under everything, too low and too quiet to hear, so the speaker never hears silence.
 - **Switching quickly**: the Echo can only play everything on one or the other (Amazon's audio mixer has a single
-  output), so music on the speaker with replies on the Echo is a matter of switching "Play on Bluetooth speaker" from an
+  output; on the Echo Show 5, Android moves all of it), so music on the speaker with replies on the Echo is a matter of switching "Play on Bluetooth speaker" from an
   automation when music starts and stops. "Stay connected when off" (settings page, off by default) makes that quick:
   switched off, the speaker stays connected and only the sound moves back to the Echo ("Bluetooth speaker" shows
   "Standing by"), and switching on takes well under a second instead of a reconnect. If the speaker drops the link

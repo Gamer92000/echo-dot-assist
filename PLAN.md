@@ -2433,5 +2433,9 @@ Run in this order. Each step says what it proves.
       audio_device.xml; `speaker_gain_db` for steps that are not a whole dB, spkgain_test +8), the wake sound
       removal's start signal from the OpenSL ES earcon player (`audio_earcon_started` after the first Enqueue), the
       volume-key chord under main's buttons (steps on release, a pair no step and no event; buttons_test updated),
-      no light ring animations without `/system/etc/led-resources`.  Open items, one list: docs/re-checkers.md
+      no light ring animations without `/system/etc/led-resources`.  Bluetooth speaker (2026-10-13, on the tester's Echo
+      with a PC as the speaker): the firmware's own A2DP HAL behind AudioPolicy (`media.audio_policy` 1/2,
+      setDeviceConnectionState through `service call` with C strings), btout.c serving the HAL's sockets as on the Dots;
+      the route moves in 410–520 ms, comes back 1.6 s after audioserver is killed, players wait while it moves (a pop
+      otherwise).  Open items, one list: docs/re-checkers.md
       "What a port needs".

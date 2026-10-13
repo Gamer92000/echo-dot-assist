@@ -62,5 +62,21 @@ int main(void)
     memcpy(len, "00000400", 8);
     check(afe_call_reply(lied, out, sizeof out) == -1, "a length past the words that came: none");
     check(afe_call_reply("sh: service: not found\n", out, sizeof out) == -1, "no tool: none");
+
+    /* IAudioPolicyService.setDeviceConnectionState(A2DP, available, address, name): what the first Echo Show took
+     * (2026-10-13: AudioFlinger opened the A2DP output for it) */
+    svc_call_start(&c, "media.audio_policy", "1");
+    check(!svc_i32(&c, 0x80) && !svc_i32(&c, 1) && !svc_cstr(&c, "00:11:22:33:44:55") && !svc_cstr(&c, "test"), "C strings: built");
+    joined(&c, s, sizeof s);
+    check(!strcmp(s, "/system/bin/service call media.audio_policy 1 i32 128 i32 1 i32 825897008 i32 842152497 "
+                     "i32 976433978 i32 893006900 i32 53 i32 1953719668 i32 0 "), s);
+    svc_call_start(&c, "media.audio_policy", "2");
+    check(!svc_cstr(&c, "abc") && c.n == 6 && !strcmp(c.argv[5], "6513249") && !c.argv[6], "a string of 3: one word with its NUL");
+    svc_call_start(&c, "x", "1");
+    check(!svc_cstr(&c, "") && c.n == 6 && !strcmp(c.argv[5], "0"), "the empty string: one word");
+    uint32_t w[4];
+    check(svc_reply_words("Result: Parcel(ffffffda    '....')\n", w, 4) == 1 && w[0] == 0xffffffda, "a native reply: its status word");
+    check(svc_reply_words("Result: Parcel(00000001 00000002 00000003 00000004 00000005 '....')\n", w, 4) == 4, "no more words than room");
+    check(svc_reply_words("Result: Parcel(Error: 0xffffffb5 \"Not a data message\")\n", w, 4) == 0, "an error: no words");
     return fails ? 1 : 0;
 }

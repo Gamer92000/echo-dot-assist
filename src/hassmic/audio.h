@@ -2,6 +2,7 @@
 #ifndef AUDIO_H
 #define AUDIO_H
 #include <stddef.h>
+#include <stdint.h>
 
 #define CAP_RATE 16000
 
@@ -34,6 +35,18 @@ int       bt_open(unsigned rate, unsigned channels);
 int       bt_write(const void *data, size_t len);
 long long bt_queued_us(void);
 void      bt_close(void);
+
+/* Playing to a Bluetooth speaker (btout.c): btout.c serves the A2DP HAL's sockets (audio.a2dp.default.so, AOSP's
+ * audio_a2dp_hw) in Fluoride's place; the backend moves what the Echo plays onto that HAL and back.  The Dots: the
+ * mixer's LIPC property A2DPSourceConnect; Android: AudioPolicy's connection state of an A2DP device.
+ * audio_a2dp_route blocks until the output moved or gave up: 0 done.  audio_a2dp_lost: 1 the route is gone without
+ * being asked (audioserver restarted: its policy starts from nothing), 0 it is there, -1 no answer (yet).  audio_a2dp_reset, once at start: a route an earlier
+ * hassmic left goes back.  audio_a2dp_aipc: the route asks btmanagerd's AIPC service things (the mixer), which btout.c
+ * then answers. */
+int  audio_a2dp_route(int on, uint64_t addr, const char *name);
+int  audio_a2dp_lost(uint64_t addr);
+void audio_a2dp_reset(void);
+int  audio_a2dp_aipc(void);
 
 /* Drop In (dropin.c): the mixer's "Voip" stream.  Opening one puts Amazon's front end into its call mode (libasp "VoIP
  * mode 1": the canceller tuned for calls, noise dependent volume), which takes 10 dB more of the far end out of micAsr

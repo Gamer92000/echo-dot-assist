@@ -187,6 +187,12 @@ long long voip_queued_us(void) { return s_queued_us(&voip); }
 int       voip_write(const void *data, size_t len) { return s_write(&voip, data, len); }
 void      voip_close(void) { s_close(&voip); }
 
+/* The Bluetooth speaker's route: nothing to move on the PC; btout.c's sockets and encoder run as on the device */
+int  audio_a2dp_route(int on, uint64_t addr, const char *name) { (void)addr; (void)name; fprintf(stderr, "btout: output %s\n", on ? "to the speaker" : "to the Echo"); return 0; }
+int  audio_a2dp_lost(uint64_t addr) { (void)addr; return 0; }
+void audio_a2dp_reset(void) {}
+int  audio_a2dp_aipc(void) { return 0; }
+
 /* Volumes: in memory; unset = what the caller expects (as a mixer that cannot be asked).  Tests: the mixer's volumes
  * as files in HASSMIC_FAKE_MIXER instead, one per property as audio_mixer.c names them */
 static int vols[3] = { -1, -1, -1 };

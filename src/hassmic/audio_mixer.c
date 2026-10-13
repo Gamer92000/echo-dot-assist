@@ -266,3 +266,39 @@ void afe_eq_set(const char *json)
     char *argv[] = { "/system/bin/lipc-set-prop", "-s", "com.doppler.lasp", "LASP_CMD_SET_USER_EQ_INFO", (char *)json, NULL };
     core_spawn(argv);
 }
+
+/* The Bluetooth speaker's route (btout.c, docs/re-a2dp-source.md): "1:<address>" in the LIPC string property
+ * com.doppler.audiod A2DPSourceConnect moves the mixer's single output from the Echo's speaker to its A2DP HAL, "0:..."
+ * back.  Everything mixed goes there (music, replies, earcons), with the Echo's volume and equalizer applied, as with
+ * stock.  On every change the mixer asks btmanagerd's AIPC service for the speaker's name (btout.c answers). */
+static long long mono_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000000 + t.tv_nsec / 1000; }
+
+int audio_a2dp_route(int on, uint64_t addr, const char *name)
+{
+    char v[16], out[64];
+    (void)name;
+    snprintf(v, sizeof v, "%d:%012llx", on, (unsigned long long)addr);     /* exactly 12 digits: the mixer copies 6 bytes */
+    char *set[] = { "/system/bin/lipc-set-prop", "-s", "com.doppler.audiod", "A2DPSourceConnect", v, NULL };
+    char *get[] = { "/system/bin/lipc-get-prop", "-s", "com.doppler.audiod", "OutputDevice", NULL };
+    long long t = mono_us();
+    core_run(set, out, sizeof out);
+    for (int i = 0; i < 20; i++) {                      /* the mixer's playback thread switches a moment later */
+        core_run(get, out, sizeof out);
+        if (!strncmp(out, on ? "BT##" : "SPEAKER##", on ? 4 : 9)) break;
+        usleep(100000);
+    }
+    out[strcspn(out, "\r\n")] = 0;
+    fprintf(stderr, "btout: mixer output %s (%s, %lld ms)\n", on ? "to the speaker" : "to the Echo", out, (mono_us() - t) / 1000);
+    return 0;
+}
+
+int audio_a2dp_lost(uint64_t addr) { (void)addr; return 0; }   /* the mixer keeps its route */
+int audio_a2dp_aipc(void) { return 1; }
+
+/* left on the speaker by a hassmic that is gone: back to the Echo (core_volume has the mixer's level back already) */
+void audio_a2dp_reset(void)
+{
+    char out[64]; char *get[] = { "/system/bin/lipc-get-prop", "-s", "com.doppler.audiod", "OutputDevice", NULL };
+    core_run(get, out, sizeof out);
+    if (!strncmp(out, "BT##", 4)) audio_a2dp_route(0, 0, "");
+}
