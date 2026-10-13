@@ -485,6 +485,9 @@ satellite)
         [ -f $D/artifact-install.sh ] && sh $D/artifact-install.sh migrate /data/local/hassmic/state /data/local/hassmic
         leds                              # before alexa-off.sh: a ledcontroller that started again may want Alexa back
         sh $D/alexa-off.sh; quiet
+        # Android models: with the screen off Android lets the SoC suspend once no wake lock is held (autosleep), and the
+        # satellite must keep listening: a kernel wake lock of root's, for as long as the satellite runs
+        [ -n "$WAKE_LOCK" ] && echo "$WAKE_LOCK" > /sys/power/wake_lock
     } 2>&1 | stamped >> $LOG
     # hassmic offers Wi-Fi motion where the module can be loaded (wifimotion.c), the loop below loads it when needed
     [ -n "$KMOD" ] && [ -f $D/$KMOD ] && export HASSMIC_WIFI_KMOD=/proc/${KMOD%.ko}
