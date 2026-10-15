@@ -241,7 +241,7 @@ Beyond the README's two figures:
   no light in Home Assistant.
 - **Listening points at you**, as with Alexa, and also while a timer rings or the light is on (Amazon's ring stops
   turning as soon as a second light shows; hassmic plays the listening ring already turned).
-- **Echo Show 5**: no ring; its lights run along the bottom edge of the screen as the ring laid out in a line (the
+- **Echo Show 5 and Echo Show 8**: no ring; its lights run along the bottom edge of the screen as the ring laid out in a line (the
   talker's side always in the middle: two microphones tell directions apart too poorly to turn it). The band keeps
   that strip of the screen for itself, 10 pixels by default ("Light band" on the settings page; 0 gives the whole
   screen to the apps and shows no band), so an app shown on the screen is never covered. The light "Light ring" works

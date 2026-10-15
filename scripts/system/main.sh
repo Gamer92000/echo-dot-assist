@@ -12,6 +12,8 @@
 #                               off, nothing is stopped or blocked except firmware updates (lockdown.sh ota-only)
 #   ADB_WIFI=1                  optional: leave adb over Wi-Fi open (root shell for the whole network, no password; read
 #                               by lockdown.sh).  Without it: closed, opened for 30 min from the settings page (action button)
+#   TIMEZONE=America/Denver     optional, Android models: the zone for the clock and what the screen shows (Android's tz name;
+#                               the clock itself is set in UTC from Home Assistant).  Without it: GMT
 umask 022                                   # init gives us 077; what we create must be readable by the daemon's user
 D=${HASSMIC_DIR:-/system/hassmic}
 SYS=${HASSMIC_SYS:-/system/hassmic}
@@ -40,6 +42,15 @@ chown root:root $CONF; chmod 644 $CONF
 
 # uxeventd plays the "ready for setup" voice prompts and the orange setup spinner on an unregistered device.  hassmic drives
 # LEDs (ledctrl) and earcons itself, so it goes.  Stopped before "class_start main" it never starts (SVC_DISABLED).
+# TIMEZONE of hassmic.conf (Android models; none on the Dots, which show no time): the property keeps it over a reboot, the
+# alarm service applies it now (transaction 3, setTimeZone)
+timezone_set() {
+    [ -n "$TIMEZONE" ] && command -v settings > /dev/null || return 0
+    case "$TIMEZONE" in *[!A-Za-z0-9_/+-]*) echo "timezone: $TIMEZONE is not a zone name, ignored"; return;; esac
+    [ "$(getprop persist.sys.timezone)" = "$TIMEZONE" ] && return
+    setprop persist.sys.timezone "$TIMEZONE"; service call alarm 3 s16 "$TIMEZONE" > /dev/null
+    echo "timezone: $TIMEZONE"
+}
 quiet() { for s in $UX_SERVICE $SETUP_SERVICES; do stop $s; done; }
 
 # Amazon's wifisvc runs HTTP connectivity tests against AWS hosts.  Behind the egress lock they always fail, and it then
@@ -367,6 +378,7 @@ satellite)
         sh $D/lockdown.sh services        # stops the cloud daemons that were not up yet at "on boot"; the firewall is the watcher's
         # wake word sets under a short name (echo-de) from installs by hand: the name scripts/artifacts.sh gives them
         [ -f $D/artifact-install.sh ] && sh $D/artifact-install.sh migrate /data/local/hassmic/state /data/local/hassmic
+        timezone_set
         leds                              # before alexa-off.sh: a ledcontroller that started again may want Alexa back
         sh $D/alexa-off.sh; quiet
         # Android models: with the screen off Android lets the SoC suspend once no wake lock is held (autosleep), and the

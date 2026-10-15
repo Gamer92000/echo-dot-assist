@@ -413,6 +413,20 @@ push_preset() {
 # satellite runs; the Echo names itself (model and MAC address, read from its log), people name it in Home Assistant.  Settings to start with (--preset, or asked): an export of another Echo's settings page.  Name and address go to $OUT/setup.env for the final screen.  There is no trial run before
 # it: run.sh does not read hassmic.conf, so a trial announced itself under the default name, and Home Assistant kept that
 # device next to the installed one.
+# ask_adb_wifi: INSTALL=boot models (hassmic.conf is written by scripts/install-boot.sh, which reads ADB_WIFI from the
+# environment).  Closed is the default: the settings page opens adb for 30 min, scripts/adb-wifi.sh opens it with the update key.
+ask_adb_wifi() {
+    [ -n "${ADB_WIFI+x}" ] && return 0                  # given on the command line
+    warn "adb over Wi-Fi left open is a root shell for everyone on the network, with no password."
+    if ask "Leave adb over Wi-Fi open all the time (ADB_WIFI=1)?" n; then export ADB_WIFI=1; else export ADB_WIFI=; fi
+}
+# ask_timezone: Android models (screen): Android shows its time in this zone, GMT without it.  Default: this PC's.
+ask_timezone() {
+    [ -n "${TIMEZONE+x}" ] && return 0
+    local d; d=$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null)
+    prompt TIMEZONE "Time zone for the screen's clock (tz name, e.g. Europe/Berlin)" "${d:-UTC}"
+    export TIMEZONE
+}
 install_satellite() {
     local name ip tok
     if [ -z "$PRESET" ]; then

@@ -152,6 +152,8 @@ build_binaries                          # built here or this commit's release bu
 mkdir -p secrets
 [ -f secrets/update.key ] || { python3 scripts/otatool.py keygen secrets/update.key secrets/update.pub; echo "new update signing key: secrets/update.key (keep it, back it up)"; }
 printf 'ARGS="%s"\n' "$DEFAULT_ARGS" > $OUT/hassmic.conf
+[ "$ADB_WIFI" = 1 ] && echo 'ADB_WIFI=1' >> $OUT/hassmic.conf      # setup.sh asks (ask_adb_wifi)
+[ -n "$TIMEZONE" ] && echo "TIMEZONE=$TIMEZONE" >> $OUT/hassmic.conf  # setup.sh asks (ask_timezone)
 t "mkdir -p /data/local/hassmic"; adb push $OUT/hassmic.conf /data/local/hassmic/hassmic.conf > /dev/null
 t "rm -rf /data/local/hassmic/ota; rm -f /data/local/hassmic/hassmic"      # boot.sh prefers those; the fresh install wins
 FILES="$OUT/hassmic $OUT/runas $(ls $OUT/pryon_test $OUT/*.ko 2>/dev/null || true) $OUT/otatool secrets/update.pub keys/release.pub $DDIR/device.conf

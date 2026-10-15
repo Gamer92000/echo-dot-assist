@@ -87,32 +87,43 @@ static int say(char *err, size_t errsz, const char *fmt, ...)
 /* ---------------------------------------------------------------- checkers: the binder service */
 
 #define DHA_SVC "amazon.security.dha"
-static int svc;                     /* 1: the key is the service's (checkers), not a HAL's */
+static int svc;                     /* the key is the service's, not a HAL's: its version, 1 (checkers) or 2 (crown) */
 
 /* one transaction through the service tool; the reply's byte[] into *val (malloc'd) and its length; 0, or -1 */
 static int svc_get(const char *code, const void *in, size_t inlen, uint8_t **val, uint32_t *len)
 {
     struct afe_call c;
-    char *text = malloc(8192);      /* a 294-byte key prints as ~1.5 kB of hex dump */
-    uint32_t w[600];
+    enum { TEXT = 48 * 1024, WORDS = 2048 };
+    char *text = malloc(TEXT);      /* a 294-byte key prints as ~1.5 kB of hex dump, crown's 5.4 kB chain as ~24 kB */
+    uint32_t *w = malloc(WORDS * sizeof *w);
     int nw;
     *val = NULL;
-    if (!text)
+    if (!text || !w)
+    {
+        free(text);
+        free(w);
         return -1;
+    }
     svc_call_start(&c, DHA_SVC, code);
     if (in && svc_blob(&c, in, inlen))
     {
         free(text);
+        free(w);
         return -1;
     }
-    core_run(c.argv, text, 8192);
-    nw = svc_reply_words(text, w, sizeof w / sizeof w[0]);
+    core_run(c.argv, text, TEXT);
+    nw = svc_reply_words(text, w, WORDS);
     free(text);
     if (nw < 2 || w[0] != 0 || w[1] == 0xffffffffu || w[1] > (uint32_t)(nw - 2) * 4 || !(*val = malloc(w[1] + 1)))
+    {
+        free(w);
         return -1;                  /* an exception (no chain: -7), a null array, a reply cut short */
+    }
     for (uint32_t i = 0; i < w[1]; i++)
         (*val)[i] = (uint8_t)(w[2 + i / 4] >> (8 * (i % 4)));
+    (*val)[w[1]] = 0;               /* the chain is text: callers may strstr it */
     *len = w[1];
+    free(w);
     return 0;
 }
 
@@ -140,9 +151,9 @@ static int load(char *err, size_t errsz)
     if (!h)
     {
         int v = svc_version();
-        if (v == 1)
-            return svc = 1, 0;
-        if (v)                      /* version 2 is drvV3 in Java MAP, around getDhaCertificateChain: no Echo seen with it */
+        if (v == 1 || v == 2)
+            return svc = v, 0;
+        if (v)
             return say(err, errsz, "the attestation service is DHA version %d, which hassmic does not build", v);
         return say(err, errsz, "no attestation HAL (%s)", dlerror());
     }
@@ -459,6 +470,69 @@ static int cpu_serial(char *out, size_t cap)
     return ok;
 }
 
+/* Java MAP's drvV3 (crown, service version 2; kcpsdk.auth.q a/m/j/h and v.i): the header is typ, alg ES256, x5c with the
+ * chain's first certificate as the DER re-encoded in Base64 flags 2 (standard, padded, one line), written by org.json,
+ * which escapes every "/" as "\/"; the payload is drvV1's (dat, dev, cust: l0.d/c); the signature is the service's DER
+ * ECDSA over SHA-256 of the first two parts, turned into R || S (l0.o).  Neither the key nor the HMAC is asked for. */
+static int jwt_java_v3(const char *dt, const char *dsn, time_t when, char *out, size_t cap, char *err, size_t errsz)
+{
+    static const char head[] = "{\"typ\":\"drvV3\",\"alg\":\"ES256\",\"x5c\":[\"";
+    char cpuid[64], cpu_part[96] = "", date[32], p[400], *h = NULL, *hb = NULL, pb[600];
+    uint8_t *chain = NULL, *sig = NULL, rs[64], hash[32];
+    uint32_t chainlen = 0, siglen = 0;
+    const uint8_t *b, *e;
+    size_t hl, n;
+    struct tm tm;
+
+    if (!dsn || !*dsn || strpbrk(dsn, "\"\\") || strlen(dsn) > 64)
+        return say(err, errsz, "no device serial for the attestation token");
+    if (svc_get("5", NULL, 0, &chain, &chainlen) || !(b = findb(chain, chainlen, PEM_BEGIN)))
+        goto bad;
+    b += PEM_BEGIN_LEN;
+    if (!(e = findb(b, chainlen - (size_t)(b - chain), PEM_END)) || e - b > 4096)
+        goto bad;
+    if (!gmtime_r(&when, &tm) || !strftime(date, sizeof date, "%Y-%m-%dT%H:%MZ", &tm))
+        goto bad;
+    if (!cpu_serial(cpuid, sizeof cpuid))
+        snprintf(cpu_part, sizeof cpu_part, ",\"cpuid\":\"%s\"", cpuid);
+
+    if (!(h = malloc(sizeof head + 2 * (size_t)(e - b) + 8)))
+        goto bad;
+    hl = (size_t)snprintf(h, sizeof head + 2 * (size_t)(e - b) + 8, "%s", head);
+    for (const uint8_t *q = b; q < e; q++)           /* the body, one line; '/' as org.json writes it */
+        if (*q != '\r' && *q != '\n')
+        {
+            if (*q == '/')
+                h[hl++] = '\\';
+            h[hl++] = (char)*q;
+        }
+    hl += (size_t)snprintf(h + hl, 8, "\"]}");
+    snprintf(p, sizeof p, "{\"dat\":\"%s\",\"dev\":{\"typ\":\"v1\",\"dt\":\"%s\",\"dsn\":\"%s\"%s},\"cust\":{\"typ\":\"v1\"}}",
+             date, dt, dsn, cpu_part);
+    if (!(hb = malloc(4 * ((hl + 2) / 3) + 1)))
+        goto bad;
+    b64_encode(h, hl, hb, 1, 0);
+    b64_encode(p, strlen(p), pb, 1, 0);
+
+    n = strlen(hb) + 1 + strlen(pb);
+    if (n + 1 + (64 + 2) / 3 * 4 + 1 > cap)
+    {
+        free(chain); free(h); free(hb);
+        return say(err, errsz, "token longer than the caller's buffer");
+    }
+    snprintf(out, cap, "%s.%s", hb, pb);
+    sha256(out, n, hash);
+    if (svc_get("1", hash, sizeof hash, &sig, &siglen) || siglen > 72 || der_rs(sig, siglen, rs))
+        goto bad;
+    out[n] = '.';
+    b64_encode(rs, sizeof rs, out + n + 1, 1, 0);
+    free(chain); free(sig); free(h); free(hb);
+    return 0;
+bad:
+    free(chain); free(sig); free(h); free(hb);
+    return say(err, errsz, "the attestation service did not answer as MAP expects it");
+}
+
 /* Java MAP's drvV1 (checkers): the values from the service, the JSON as kcpsdk.auth puts it together */
 static int jwt_java(const char *dt, const char *dsn, time_t when, char *out, size_t cap, char *err, size_t errsz)
 {
@@ -516,6 +590,8 @@ int dha_jwt(const char *dt, const char *dsn, time_t when, char *out, size_t cap,
     int kind;
     if (load(err, errsz))
         return -1;
+    if (svc == 2)
+        return jwt_java_v3(dt, dsn, when, out, cap, err, errsz);
     if (svc)
         return jwt_java(dt, dsn, when, out, cap, err, errsz);
     if (!opened && hal.open())

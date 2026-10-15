@@ -284,6 +284,7 @@ step_network() {
 
 step_install() {
     rootfs && magiskpolicy && adbd || return 1        # again: the steps before may have been skipped
+    ask_adb_wifi
     install_satellite
 }
 

@@ -15,13 +15,16 @@ if [ -n "$(echo $PKGS)" ] && command -v pm > /dev/null; then
     NL='
 '
     off=$(pm list packages -d 2>/dev/null | tr -d '\r')
+    # one listing for "is it on this firmware": a call per package that is not (most of them, once the install moved the
+    # stock apps out) cost 1.4 s each at boot, 22 s of the 36 this script took on the Echo Show 8 (2026-10-14)
+    all=$(pm list packages 2>/dev/null | tr -d '\r')
     for p in $PKGS; do
         case "$p" in
         */*)    # one component of a package that must stay (package/class): pm lists no disabled components, so
                 # what was disabled here counts as done
                 grep -qx "$p" $DISABLED 2>/dev/null && continue;;
         *)      case "$NL$off$NL" in *"${NL}package:$p$NL"*) continue;; esac
-                pm list packages "$p" 2>/dev/null | grep -qx "package:$p" || continue;;   # not on this firmware
+                case "$NL$all$NL" in *"${NL}package:$p$NL"*) ;; *) continue;; esac;;   # not on this firmware
         esac
         if pm disable "$p" > /dev/null 2>&1; then
             grep -qx "$p" $DISABLED 2>/dev/null || echo "$p" >> $DISABLED

@@ -18,6 +18,7 @@
 #include "core.h"
 #include "afe_parcel.h"
 #include "btout.h"
+#include <stdatomic.h>
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
 #include <errno.h>
@@ -371,6 +372,8 @@ void audio_a2dp_reset(void)
     unlink(route_path());
 }
 
+static atomic_llong last_out;           /* when any of our players last had audio (the earcon's lead-in, below) */
+
 static void play_cb(SLAndroidSimpleBufferQueueItf q, void *ctx)
 {
     struct pstream *s = ctx; (void)q;
@@ -447,6 +450,7 @@ static int s_write(struct pstream *s, const void *data, size_t len)
         char *slot = s->buf + (size_t)s->next * s->slot;
         memcpy(slot, p, n);
         if ((*s->q)->Enqueue(s->q, slot, n) != SL_RESULT_SUCCESS) { pthread_mutex_unlock(&s->lock); return -1; }
+        atomic_store(&last_out, now_ms());
         s->lens[s->next] = n; s->busy++; s->next = (s->next + 1) % PLAY_NBUF; s->written += n;
         pthread_mutex_unlock(&s->lock);
         p += n; len -= n;
@@ -529,6 +533,13 @@ void      voip_close(void) { s_close(&voip, 0); }
  * on, so early is safe, late is not). */
 static int always(void) { return 1; }
 void (*audio_earcon_started)(void);
+
+/* The output is closed after ~3 s without audio and opening it takes ~170 ms (AudioALSAPlaybackHandlerNormal: open
+ * pcm 27.644 -> 27.811) plus the speaker amplifier switching on: the 120 ms wake blip, written to a cold output, was
+ * never heard (2026-10-14; the 0.5 s mute sounds were, clipped).  A cold earcon starts after this much silence. */
+#define COLD_MS 2500
+#define LEAD_MS 350
+
 void play_earcon(const short *pcm, size_t samples, unsigned rate) { play_earcon_while(pcm, samples, rate, always); }
 void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go)(void))
 {
@@ -539,6 +550,12 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
     long long end = now_ms() + (long long)(samples * 1000ULL / rate) + 1000;
     const char *p = (const char *)pcm;
     size_t len = samples * 2;
+    if (now_ms() - atomic_load(&last_out) > COLD_MS) {
+        static short lead[48000 * LEAD_MS / 1000];
+        size_t n = (size_t)rate * LEAD_MS / 1000 < sizeof lead / 2 ? (size_t)rate * LEAD_MS / 1000 : sizeof lead / 2;
+        s_write(&earcon, lead, n * 2);
+        end += LEAD_MS;
+    }
     while (len && go()) {
         size_t n = len < earcon.slot ? len : earcon.slot;
         if (s_write(&earcon, p, n) < 0) break;
@@ -546,6 +563,7 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
         p += n; len -= n;
     }
     while (!s_drained(&earcon) && go() && now_ms() < end) usleep(20000);
+    atomic_store(&last_out, now_ms());
     if (now_ms() >= end) fprintf(stderr, "earcon: the player's position stopped %lld ms short\n", s_queued_us(&earcon) / 1000);
     s_close(&earcon, go() && now_ms() < end ? 1 : 0);
 }

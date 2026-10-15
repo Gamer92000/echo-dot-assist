@@ -4,6 +4,18 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-13
 
+- **Echo Show 8 (1st gen, `crown`): first support.** The Show 8 is the same platform as the Show 5, and a trial run on one
+  (hassmic started from the PC, nothing installed) heard the wake word, took the volume keys and the mic mute switch,
+  and drew the light band. Installed on a real one since: Home Assistant, voice questions, buttons and the band work. Wi-Fi motion
+  works on it (the sensor needs a minute after switching on to settle) and "Download from Amazon" works (its attestation
+  service is DHA version 2, drvV3 in Amazon's Java MAP). Not tried yet: Bluetooth.
+- **Android models start hassmic about 25 s sooner** (Show 5, Show 8). Turning Alexa off asked Android about every
+  Amazon package one call at a time (1.4 s each, 36 s in all on the Show 8); it now asks once.
+- **Echo Show 8: no "mics off" announcement at power-on.** After a power cycle the microphone switch's latch reads "off"
+  until the Echo lets it go by itself, 20 to 80 seconds in; hassmic, now starting sooner, caught it and said "mics off"
+  to someone who had not pressed anything. It now shows the state quietly and announces only the release.
+- **Echo Show (Show 5, Show 8): the wake sound was not heard, a fix to confirm.** The speaker opens a fraction of a second after a sound
+  starts, which swallowed the 0.12 s blip; a sound that follows a pause now starts 0.35 s late so it is not clipped.
 - **Echo Show 5: Download from Amazon.** The settings page's "Download from Amazon" now works on the Show: sign in
   with the code, then wake words and the newer sound detection model download and install as on the Dots. Amazon
   does not hand out the whisper detection model for the Show; copy it from a Dot that has it ("Copy models").
