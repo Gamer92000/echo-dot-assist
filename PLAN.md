@@ -2014,3 +2014,11 @@ Run in this order. Each step says what it proves.
       emits nothing and hassmic grabs `event0`, so the press itself has no timestamp.  Wi-Fi motion (`wlan_mt76x3_sdio.ko`,
       4.4.146); lux flicker under a close lamp; untried: hassmic's own HTTPS reply and the update check, Improv, factory
       reset and `--uninstall`; `tools/mkringbar.py --framework` cannot read Android 9's compact dex.
+- [~] Kiosk Satellite next to hassmic on the screen models (crown, athena; 2026-10-14, `docs/kiosk-satellite.md`).  The app
+      (me.jxl.kiosk_satellite, the user's choice) shows dashboards; hassmic stays the voice satellite.  `main.sh`:
+      `kiosk_helper` opens the app once per boot and keeps its update helper running as the shell user (never root),
+      `kiosk_grants` gives it the permissions it would ask a person for (never the microphone), `rotation_lock` puts the
+      rotation settings back (the app flipped the screen by itself).  `lockdown.sh`: setting `kiosk_internet` (default on)
+      lets that uid out to the internet with one rule, INPUT TCP 2324 (its web page) and 6053 (its ESPHome API) from
+      private addresses only.  `install_keyboard` in the guided
+      setup offers Simple Keyboard (the image has no input method).  Lux readings agree with the app's within ~1 lx in dim light.

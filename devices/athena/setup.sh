@@ -179,4 +179,5 @@ step_network() {
 
 step_install() {
     install_satellite || return 1
+    install_keyboard
 }

@@ -27,6 +27,10 @@ What changed for people using the Echo, newest first. Details and measurements a
   the first one tried.
 - **A push update could leave hassmic stopped.** After one update on the Show 8 the service stayed down for three
   minutes: init ignores a start while the service is still stopping. The restart now waits for the stop.
+- **Kiosk Satellite on the Echo Show 8 2nd gen** ([`docs/kiosk-satellite.md`](docs/kiosk-satellite.md)): its update helper
+  now starts (Android 9's network service refused every connection from hassmic's own user, policy rule added), its ESPHome
+  server (port 6053) is reachable from Home Assistant, it is given the permissions it needs except the microphone, and it
+  reaches the internet through its own rule while every other program stays shut out.
 - **Drop In by voice: "drop into the kitchen" and "drop it in the kitchen" work too.** Speech to text often hears "drop in" that
   way. The blueprint's default sentences have both now (an automation made from it keeps its own list: add them there).
 - **Echo Show 8 (2nd gen): Speaker gain, and Sendspin works.** The "Speaker gain" setting is there, up to +9 dB: music at
@@ -69,6 +73,14 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-13
 
+- **Kiosk Satellite on the Echo Show 8 (your choice of app).** If you install Kiosk Satellite as the screen, the Echo
+  now opens it after a boot and keeps its update helper running (as the unprivileged shell user, never root). The settings
+  page has a new switch, "Kiosk Satellite internet access" (on by default): on, only that app may reach the internet,
+  for its updates and for web pages it shows. The voice satellite and Amazon's software stay on your network as before.
+  The screen is kept in landscape: Kiosk Satellite kept switching Android's rotation by itself, so the Echo puts the
+  rotation settings back every 10 seconds. The screen's time zone is set in hassmic.conf (TIMEZONE=) and asked at setup. Its web page (port 2324) is reachable from your network. Pings from the local network are answered.
+  The guided setup offers Simple Keyboard (open source, no network access) for screen models, since the image has no
+  keyboard.
 - **Echo Show 8 (1st gen, `crown`): first support.** The Show 8 is the same platform as the Show 5, and a trial run on one
   (hassmic started from the PC, nothing installed) heard the wake word, took the volume keys and the mic mute switch,
   and drew the light band. Installed on a real one since: Home Assistant, voice questions, buttons and the band work. Wi-Fi motion
