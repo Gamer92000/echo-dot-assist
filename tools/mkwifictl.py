@@ -208,17 +208,20 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dexasm import (Code, Program, AGET_OBJ, APUT_OBJ, APUT_BYTE, VIRT, DIRECT, STATIC, IFACE,  # noqa: E402
-                    STATIC_RANGE, ADD, AND, OR, ADD8, OR8, SHL8, USHR8, IFNE, IFGE, IFLT, IFEQZ, IFNEZ, IFGTZ,
+                    STATIC_RANGE, ADD, AND, OR, ADD8, OR8, SHL8, USHR8, IFNE, IFGE, IFLT, IFEQZ, IFNEZ, IFLTZ, IFGTZ,
                     SB, STR, CLS, OBJ, LST, BST, INTG, CLSARR, STRARR, OBJARR, BYTES)
 import dexasm                                                  # noqa: E402
 
 KEY_WPA_PSK = 1                              # WifiConfiguration.KeyMgmt.WPA_PSK (--framework checks it)
 ME = "LWifictl;"
+STR9 = "Ljava/lang/String;"
 
 # the class's own methods: (name, params, return)
 SELF = [
     ("main",  (STRARR,), "V"),
     ("wifi",  (), OBJ),
+    ("pkg",   (), OBJ),
+    ("lst",   (OBJ,), OBJ),
     ("cls",   (STR,), CLS),
     ("inv",   (OBJ, STR, STRARR, OBJARR), OBJ),
     ("sinv",  (STR, STR, STR, OBJ), OBJ),
@@ -327,9 +330,66 @@ def emit():
         c.ret(1, True)
         m.append(("cls", c))
 
+    def pkg():
+        # sdk=0 t=1 p=2 a=3: "android" on Android 9, where IWifiManager takes the caller's package name, else null
+        c = Code(4, 0)
+        c.const_string(0, "android.os.SystemProperties")
+        c.const_string(1, "get")
+        c.const_string(2, "java.lang.String")
+        c.const_string(3, "ro.build.version.sdk")
+        c.invoke(STATIC, "sinv", [0, 1, 2, 3]); c.move_result(0, True)
+        c.check_cast(0, STR)                                  # ART's verifier wants a String to call equals on
+        c.const_string(1, "28")
+        c.invoke(VIRT, "str.eq", [0, 1]); c.move_result(1)
+        c.ifz(IFEQZ, 1, "old")
+        c.const_string(0, "android"); c.ret(0, True)
+        c.label("old")
+        c.const_4(0, 0); c.ret(0, True)
+        m.append(("pkg", c))
+
+    def lst():
+        # o=0 t=1: Android 9 hands the network lists out as a ParceledListSlice, whose getList() is the List
+        c = Code(2, 1)
+        c.invoke(STATIC, "pkg", []); c.move_result(1, True)
+        c.ifz(IFNEZ, 1, "slice")
+        c.ret(0, True)
+        c.label("slice")
+        c.const_string(1, "getList"); c.invoke(STATIC, "os", [0, 1]); c.move_result(0, True)
+        c.ret(0, True)
+        m.append(("lst", c))
+
     def inv():
-        # o=0 n=1 ps=2 as=3 cs=4 m=5 i=6 len=7 r=8
-        c = Code(9, 4)
+        # o=0 n=1 ps=2 as=3 cs=4 m=5 i=6 len=7 r=8 pk=9 k=10 j=11
+        c = Code(12, 4)
+        c.invoke(STATIC, "pkg", []); c.move_result(9, True)
+        c.ifz(IFEQZ, 9, "std")
+        # Android 9: these calls take the caller's package name as one more String at the end.  The caller is
+        # root's shell, which runs this as uid 1000 ("android" is that uid's package: the scan results and the
+        # SSID stay hidden from any other).
+        c.const_string(10, " getConnectionInfo reconnect reassociate disconnect enableNetwork removeNetwork"
+                           " addOrUpdateNetwork ")
+        c.const_string(11, " ")
+        c.invoke(STATIC, "cat", [11, 1]); c.move_result(11, True)
+        c.const_string(8, " ")
+        c.invoke(STATIC, "cat", [11, 8]); c.move_result(11, True)
+        c.invoke(VIRT, "str.idx", [10, 11]); c.move_result(8)
+        c.ifz(IFLTZ, 8, "std")
+        c.array_length(7, 2)
+        c.binop_lit8(ADD8, 8, 7, 1)
+        c.new_array(10, 8, STRARR)
+        c.new_array(11, 8, OBJARR)
+        c.const_4(6, 0)
+        c.label("copy")
+        c.if2(IFGE, 6, 7, "copied")
+        c.aget(8, 2, 6, AGET_OBJ); c.aput(8, 10, 6, APUT_OBJ)
+        c.aget(8, 3, 6, AGET_OBJ); c.aput(8, 11, 6, APUT_OBJ)
+        c.binop_lit8(ADD8, 6, 6, 1)
+        c.goto_("copy")
+        c.label("copied")
+        c.const_string(8, "java.lang.String")
+        c.aput(8, 10, 7, APUT_OBJ); c.aput(9, 11, 7, APUT_OBJ)
+        c.move(2, 10, True); c.move(3, 11, True)
+        c.label("std")
         c.array_length(7, 2)
         c.new_array(4, 7, CLSARR)
         c.const_4(6, 0)
@@ -538,6 +598,7 @@ def emit():
         # w=0 nets=1 it=2 c=3 ido=4 ssid=5 t=6 st=7 row=8 tab=9 anyt=10
         c = Code(11, 1)
         c.const_string(2, "getConfiguredNetworks"); c.invoke(STATIC, "os", [0, 2]); c.move_result(1, True)
+        c.invoke(STATIC, "lst", [1]); c.move_result(1, True)
         c.check_cast(1, LST)
         c.const_string(2, "network id / ssid / bssid / flags"); c.invoke(STATIC, "p", [2])
         c.invoke(IFACE, "list.iter", [1]); c.move_result(2, True)
@@ -576,6 +637,7 @@ def emit():
         # w=0 nets=1 it=2 c=3 id=4 k=5 t=6
         c = Code(7, 1)
         c.const_string(2, "getPrivilegedConfiguredNetworks"); c.invoke(STATIC, "os", [0, 2]); c.move_result(1, True)
+        c.invoke(STATIC, "lst", [1]); c.move_result(1, True)
         c.check_cast(1, LST)
         c.invoke(IFACE, "list.iter", [1]); c.move_result(2, True)
         c.label("loop")
@@ -601,7 +663,7 @@ def emit():
         c = Code(7, 1)
         c.const_string(2, "getScanResults")
         c.const_string(3, "java.lang.String")
-        c.const_4(4, 0)
+        c.invoke(STATIC, "pkg", []); c.move_result(4, True)
         c.invoke(STATIC, "w1", [0, 2, 3, 4]); c.move_result(1, True)
         c.check_cast(1, LST)
         c.const_string(2, "bssid / frequency / signal level / flags / ssid"); c.invoke(STATIC, "p", [2])
@@ -626,12 +688,19 @@ def emit():
     def startscan():
         # w=0, w2's arguments 1..6 (w copied: a range may not wrap past the parameter)
         c = Code(7, 1)
+        c.invoke(STATIC, "pkg", []); c.move_result(1, True)
+        c.ifz(IFEQZ, 1, "old")
+        c.const_string(2, "startScan"); c.const_string(3, "java.lang.String")
+        c.invoke(STATIC, "w1", [0, 2, 3, 1]); c.move_result(1, True)   # Android 9: startScan(String)
+        c.goto_("ok")
+        c.label("old")
         c.move(1, 0, True)
         c.const_string(2, "startScan")
         c.const_string(3, "android.net.wifi.ScanSettings")
         c.const_string(4, "android.os.WorkSource")
         c.const_4(5, 0); c.const_4(6, 0)
-        c.invoke_range(STATIC_RANGE, "w2", 1, 6)
+        c.invoke_range(STATIC_RANGE, "w2", 1, 6); c.move_result(1, True)
+        c.label("ok")
         c.const_string(1, "OK"); c.invoke(STATIC, "p", [1])
         c.ret_void()
         m.append(("startscan", c))
@@ -770,12 +839,13 @@ def emit():
         c.const_string(2, "setWifiEnabled")
         c.const_string(3, "java.lang.String")
         c.const_string(4, "boolean")
-        c.const_4(5, 0); c.sget_obj(6, "bool.T")
+        c.invoke(STATIC, "pkg", []); c.move_result(5, True)
+        c.sget_obj(6, "bool.T")
         c.invoke_range(STATIC_RANGE, "w2", 1, 6); c.move_result(1, True)
         okfail(c, 1, 2)
         m.append(("wifion", c))
 
-    for f in (main, wifi, cls, inv, sinv, w1, w2, iz, os, fget, fset, cat, p, ps, ip, unhex, hex2s,
+    for f in (main, wifi, pkg, lst, cls, inv, sinv, w1, w2, iz, os, fget, fset, cat, p, ps, ip, unhex, hex2s,
               status, list, keys, scanres, startscan, add, enable, select, remove, reassociate, wifion, name, volmax):
         f()
     p(err=True)
@@ -788,6 +858,8 @@ def emit():
 REFLECTED = [
     ("Landroid/os/ServiceManager;", "getService", ["Ljava/lang/String;"], True),
     ("Landroid/net/wifi/IWifiManager$Stub;", "asInterface", ["Landroid/os/IBinder;"], True),
+    ("Landroid/os/SystemProperties;", "get", ["Ljava/lang/String;"], True),
+    ("Landroid/content/pm/ParceledListSlice;", "getList", [], False),
     ("Landroid/net/wifi/IWifiManager;", "getConnectionInfo", [], False),
     ("Landroid/net/wifi/IWifiManager;", "getConfiguredNetworks", [], False),
     ("Landroid/net/wifi/IWifiManager;", "getPrivilegedConfiguredNetworks", [], False),
@@ -797,6 +869,13 @@ REFLECTED = [
     ("Landroid/net/wifi/IWifiManager;", "enableNetwork", ["I", "Z"], False),
     ("Landroid/net/wifi/IWifiManager;", "removeNetwork", ["I"], False),
     ("Landroid/net/wifi/IWifiManager;", "reconnect", [], False),
+    # Android 9 (sdk 28): the same calls with the caller's package name behind (pkg() in the code)
+    ("Landroid/net/wifi/IWifiManager;", "getConnectionInfo", ["Ljava/lang/String;"], False),
+    ("Landroid/net/wifi/IWifiManager;", "startScan", ["Ljava/lang/String;"], False),
+    ("Landroid/net/wifi/IWifiManager;", "addOrUpdateNetwork", ["Landroid/net/wifi/WifiConfiguration;", "Ljava/lang/String;"], False),
+    ("Landroid/net/wifi/IWifiManager;", "enableNetwork", ["I", "Z", "Ljava/lang/String;"], False),
+    ("Landroid/net/wifi/IWifiManager;", "removeNetwork", ["I", "Ljava/lang/String;"], False),
+    ("Landroid/net/wifi/IWifiManager;", "reconnect", ["Ljava/lang/String;"], False),
     ("Landroid/net/wifi/IWifiManager;", "setWifiEnabled", ["Ljava/lang/String;", "Z"], False),
     ("Landroid/media/IAudioService$Stub;", "asInterface", ["Landroid/os/IBinder;"], True),
     ("Landroid/media/IAudioService;", "getStreamMaxVolume", ["I"], False),
@@ -823,7 +902,19 @@ REFLECTED_FIELDS = [
 ]
 CONSTANTS = [("Landroid/net/wifi/WifiConfiguration$KeyMgmt;", "WPA_PSK", KEY_WPA_PSK)]
 
-PROG = Program(ME, SELF, reflected=REFLECTED, reflected_fields=REFLECTED_FIELDS, constants=CONSTANTS)
+# which firmware has which signature: Android 9 is the one with the RTT classes (API 28)
+API9 = "Landroid/net/wifi/rtt/RangingRequest;"
+ONLY_IF = {}
+for _m, _p in (("getConnectionInfo", ()), ("startScan", ("Landroid/net/wifi/ScanSettings;", "Landroid/os/WorkSource;")),
+               ("addOrUpdateNetwork", ("Landroid/net/wifi/WifiConfiguration;",)), ("enableNetwork", ("I", "Z")),
+               ("removeNetwork", ("I",)), ("reconnect", ())):
+    ONLY_IF[("Landroid/net/wifi/IWifiManager;", _m, _p)] = "!" + API9
+for _m, _p in (("getConnectionInfo", (STR9,)), ("startScan", (STR9,)),
+               ("addOrUpdateNetwork", ("Landroid/net/wifi/WifiConfiguration;", STR9)), ("enableNetwork", ("I", "Z", STR9)),
+               ("removeNetwork", ("I", STR9)), ("reconnect", (STR9,))):
+    ONLY_IF[("Landroid/net/wifi/IWifiManager;", _m, _p)] = API9
+
+PROG = Program(ME, SELF, reflected=REFLECTED, reflected_fields=REFLECTED_FIELDS, constants=CONSTANTS, only_if=ONLY_IF)
 
 
 def main():

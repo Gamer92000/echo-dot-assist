@@ -19,6 +19,7 @@
 #include "afe_parcel.h"
 #include "btout.h"
 #include <stdatomic.h>
+#include <sys/system_properties.h>
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
 #include <errno.h>
@@ -183,15 +184,20 @@ static struct pstream voice = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHRE
 /* --- volume: Android's own, the music stream's index (0..its maximum, 30 on the Show), set through IAudioService with
  * the firmware's service tool as the front end is reached (afe_parcel.c): setStreamVolume(stream, index, flags,
  * callingPackage) = transaction 3, getStreamMaxVolume(stream) = 10 (8149's framework: IAudioService$Stub's TRANSACTION_*
- * constants in its boot oat).  Every player of ours is on the music stream, and Fire OS aliases system, voice call and TTS
+ * constants in its boot oat) up to Android 7; Android 9 (athena, SDK 28) has four more methods before them (the player
+ * tracking calls), so setStreamVolume = 7 and getStreamMaxVolume = 14 (14 answers 30 as "dumpsys audio" says; 3 is a
+ * one-way call there, which gets no reply at all, and 10 answers 0; read off the replies' types and the audio log,
+ * 2026-10-15).  Every player of ours is on the music stream, and Fire OS aliases system, voice call and TTS
  * to it ("dumpsys audio": one index for all of them), so it is the one volume, as MainVolume is the Dots' mixer's.  Not
  * the player's own volume (SLVolumeItf, AudioTrack::setVolume): Amazon's audio stack put a track back to 1.0 some 70 ms
  * after it started on the first Echo Show ("TrackVolumeChanged ... track_volume=1.0"), so a sound began at our level and
  * jumped to full.  hassmic's 0..100 is kept in state/volume ("main tts"; the index has 31 steps); TTS has no stream of
  * its own and follows main.  hassmic runs as system: the calling package is "android".  The call (a process, ~0.1 s)
  * runs on a thread of its own, the newest value wins: vol_write is called under core_lock. */
-#define TX_SET_STREAM_VOLUME "3"
-#define TX_GET_STREAM_MAX_VOLUME "10"
+#define TX_SET_STREAM_VOLUME_A7 "3"
+#define TX_SET_STREAM_VOLUME_A9 "7"
+#define TX_GET_STREAM_MAX_VOLUME_A7 "10"
+#define TX_GET_STREAM_MAX_VOLUME_A9 "14"
 #define STREAM_MUSIC "3"
 static pthread_mutex_t vol_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t vol_cond = PTHREAD_COND_INITIALIZER;
@@ -217,10 +223,21 @@ static int parcel_int(const char *out, int *v)
     return 0;
 }
 
+/* the transaction numbers follow the Android release: only the two verified ones are known, so an unknown newer one is
+ * not guessed at (a wrong number is somebody else's method) */
+static int a9;
+static void tx_init(void)
+{
+    char sdk[PROP_VALUE_MAX] = "";
+    __system_property_get("ro.build.version.sdk", sdk);
+    a9 = atoi(sdk) >= 28;
+}
+
 static void *vol_thread(void *arg)
 {
     (void)arg;
     int max = 0;
+    tx_init();
     for (;;) {
         pthread_mutex_lock(&vol_lock);
         while (vol_want < 0) pthread_cond_wait(&vol_cond, &vol_lock);
@@ -228,12 +245,12 @@ static void *vol_thread(void *arg)
         pthread_mutex_unlock(&vol_lock);
         char out[256], idx[12];
         if (max <= 0) {
-            char *get[] = { "/system/bin/service", "call", "audio", TX_GET_STREAM_MAX_VOLUME, "i32", STREAM_MUSIC, NULL };
+            char *get[] = { "/system/bin/service", "call", "audio", a9 ? TX_GET_STREAM_MAX_VOLUME_A9 : TX_GET_STREAM_MAX_VOLUME_A7, "i32", STREAM_MUSIC, NULL };
             core_run(get, out, sizeof out);
             if (parcel_int(out, &max) || max <= 0 || max > 100) { fprintf(stderr, "audio: no maximum for the music stream (%s)\n", out); max = 0; continue; }
         }
         snprintf(idx, sizeof idx, "%d", (v * max + 50) / 100);
-        char *set[] = { "/system/bin/service", "call", "audio", TX_SET_STREAM_VOLUME, "i32", STREAM_MUSIC, "i32", idx,
+        char *set[] = { "/system/bin/service", "call", "audio", a9 ? TX_SET_STREAM_VOLUME_A9 : TX_SET_STREAM_VOLUME_A7, "i32", STREAM_MUSIC, "i32", idx,
                         "i32", "0", "s16", "android", NULL };
         core_run(set, out, sizeof out);
         if (parcel_int(out, NULL)) fprintf(stderr, "audio: setting the music stream to %s of %d failed (%s)\n", idx, max, out);
@@ -538,7 +555,8 @@ void (*audio_earcon_started)(unsigned lead_ms);
  * pcm 27.644 -> 27.811) plus the speaker amplifier switching on: the 120 ms wake blip, written to a cold output, was
  * never heard (2026-10-14; the 0.5 s mute sounds were, clipped).  A cold earcon starts after this much silence. */
 #define COLD_MS 2500
-#define LEAD_MS 350
+#define LEAD_MS 200                     /* 350 first; 200 sounds clipped to no one (2026-10-15), the sounds come ~150 ms sooner */
+#define LEAD_MAX 350
 
 void play_earcon(const short *pcm, size_t samples, unsigned rate) { play_earcon_while(pcm, samples, rate, always); }
 void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go)(void))
@@ -552,10 +570,13 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
     size_t len = samples * 2;
     unsigned lead_ms = 0;
     if (now_ms() - atomic_load(&last_out) > COLD_MS) {
-        static short lead[48000 * LEAD_MS / 1000];
-        size_t n = (size_t)rate * LEAD_MS / 1000 < sizeof lead / 2 ? (size_t)rate * LEAD_MS / 1000 : sizeof lead / 2;
-        if (s_write(&earcon, lead, n * 2) == 0) lead_ms = (unsigned)(n * 1000 / rate);
-        end += LEAD_MS;
+        static short lead[48000 * LEAD_MAX / 1000];
+        /* state/lead_ms (hassmic's own, for trying another lead-in by ear without a build; 0..LEAD_MAX) */
+        int ms = LEAD_MS; FILE *lf = fopen(getenv("HASSMIC_LEAD_FILE") ? getenv("HASSMIC_LEAD_FILE") : "/data/local/hassmic/state/lead_ms", "r");
+        if (lf) { int v; if (fscanf(lf, "%d", &v) == 1 && v >= 0 && v <= LEAD_MAX) ms = v; fclose(lf); }
+        size_t n = (size_t)rate * ms / 1000 < sizeof lead / 2 ? (size_t)rate * ms / 1000 : sizeof lead / 2;
+        if (n && s_write(&earcon, lead, n * 2) == 0) lead_ms = (unsigned)(n * 1000 / rate);
+        end += ms;
     }
     while (len && go()) {
         size_t n = len < earcon.slot ? len : earcon.slot;

@@ -139,7 +139,8 @@ NAME = "hassmic-band"                     # the layer's name in dumpsys SurfaceF
 SELF = [
     ("main",  (STRARR,), "V"),
     ("overscan", (OBJ, "I", "I"), "V"),
-    ("surface", ("I", "I", "I"), OBJ),
+    ("create", ("I", "I", "I"), OBJ),
+    ("surface", (OBJ, "I"), OBJ),
     ("loop",  (OBJ, "I", "I"), "V"),
     ("full",  (ISTRM, BYTES), "Z"),
     ("meth",  (STR, STR, STRARR), MTH),
@@ -161,8 +162,8 @@ def emit():
     m = []
 
     def main():
-        # a=0 h=1 t=2..5 wm=6 di=7 w=8 dh=9 rot=10 s=11
-        c = Code(12, 1)
+        # a=0 h=1 t=2..5 wm=6 di=7 w=8 dh=9 rot=10 s=11 n=12
+        c = Code(13, 1)
         c.aget_at(2, 0, 0)
         c.invoke(STATIC, "int.parse", [2]); c.move_result(1)
         c.const_string(2, "android.os.ServiceManager"); c.const_string(3, "getService")
@@ -184,7 +185,10 @@ def emit():
         c.ret_void()
         c.label("on")
         c.binop(SUB, 9, 9, 1)                                 # y = dh - h: the band's top row
-        c.invoke(STATIC, "surface", [8, 1, 9]); c.move_result(11, True)
+        c.array_length(12, 0)                                 # argv's length: 2 = "builder", SurfaceControl.Builder (Android 8+)
+        c.invoke(STATIC, "create", [8, 1, 12]); c.move_result(11, True)    # the SurfaceControl, which must outlive the loop:
+        c.invoke(STATIC, "surface", [11, 9]); c.move_result(12, True)      # its finalizer releases the layer (Android 9: a GC
+                                                                          # every ~55 s took the band away, 2026-10-14)
         c.new_instance(2, SB); c.invoke(DIRECT, "SB.new", [2])
         c.const_string(3, "ready "); c.invoke(VIRT, "SB.appendO", [2, 3])
         c.invoke(VIRT, "SB.appendI", [2, 8])
@@ -192,7 +196,8 @@ def emit():
         c.invoke(VIRT, "SB.appendI", [2, 1])
         c.invoke(VIRT, "SB.to", [2]); c.move_result(2, True)
         c.invoke(STATIC, "out", [2])
-        c.invoke(STATIC, "loop", [11, 8, 1])
+        c.invoke(STATIC, "loop", [12, 8, 1])
+        c.invoke(VIRT, "obj.getcls", [11]); c.move_result(2, True)         # a use of it after the loop: live all along
         c.ret_void()
         m.append(("main", c))
 
@@ -220,14 +225,17 @@ def emit():
         c.ret_void()
         m.append(("overscan", c))
 
-    def surface():
-        # w=0 h=1 y=2 scc=3 ssc=4 session=5 sc=6 t=7 cs=8 as=9 k=10; w2's arguments 10..15
-        c = Code(16, 3)
+    def create():
+        # w=0 h=1 n=2 scc=3 ssc=4 session=5 sc=6 t=7 cs=8 as=9 k=10
+        c = Code(11, 3)
         c.const_string(7, "android.view.SurfaceControl")
         c.invoke(STATIC, "cls.forName", [7]); c.move_result(3, True)
         c.const_string(7, "android.view.SurfaceSession")
         c.invoke(STATIC, "cls.forName", [7]); c.move_result(4, True)
         c.invoke(VIRT, "cls.newi", [4]); c.move_result(5, True)
+        c.const_4(7, 2)
+        c.if2(IFGE, 2, 7, "builder")
+        # Android 7: new SurfaceControl(session, name, w, h, format, flags)
         c.const_4(10, 6); c.new_array(8, 10, CLSARR); c.new_array(9, 10, OBJARR)
         c.const_4(10, 0); c.aput(4, 8, 10, APUT_OBJ)
         c.const_string(7, "java.lang.String"); c.invoke(STATIC, "cls.forName", [7]); c.move_result(7, True)
@@ -245,26 +253,54 @@ def emit():
             c.const_4(10, k); c.aput(7, 9, 10, APUT_OBJ)
         c.invoke(VIRT, "cls.getc", [3, 8]); c.move_result(7, True)
         c.invoke(VIRT, "ctor.newi", [7, 9]); c.move_result(6, True)
-        c.const_string(7, "android.view.SurfaceControl")
-        c.const_string(8, "openTransaction"); c.invoke(STATIC, "sinv0", [7, 8])
-        c.const_string(8, "setLayer"); c.const_string(9, "int")
-        c.lit(10, LAYER); c.invoke(STATIC, "int.value", [10]); c.move_result(10, True)
-        c.invoke(STATIC, "w1", [6, 8, 9, 10])
-        c.move(10, 6, True); c.const_string(11, "setPosition")
-        c.const_string(12, "float"); c.const_string(13, "float")
-        c.const_string(14, "0"); c.invoke(STATIC, "float.value", [14]); c.move_result(14, True)
-        c.invoke(STATIC, "int.value", [2]); c.move_result(15, True)
-        c.invoke(STATIC, "str.valueO", [15]); c.move_result(15, True)
-        c.invoke(STATIC, "float.value", [15]); c.move_result(15, True)
-        c.invoke_range(STATIC_RANGE, "w2", 10, 6)
-        c.const_string(8, "show"); c.invoke(STATIC, "os", [6, 8])
-        c.const_string(8, "closeTransaction"); c.invoke(STATIC, "sinv0", [7, 8])
-        c.const_string(8, "android.view.Surface")
-        c.invoke(STATIC, "cls.forName", [8]); c.move_result(8, True)
-        c.invoke(VIRT, "cls.newi", [8]); c.move_result(8, True)
-        c.const_string(9, "copyFrom"); c.const_string(10, "android.view.SurfaceControl")
-        c.invoke(STATIC, "w1", [8, 9, 10, 6])
-        c.ret(8, True)
+        c.ret(6, True)
+        # Android 9: the constructor is gone; new SurfaceControl.Builder(session).setName().setSize().setFormat()
+        # .setFlags().build() (each setter returns the builder)
+        c.label("builder")
+        c.const_string(7, "android.view.SurfaceControl$Builder")
+        c.invoke(STATIC, "cls.forName", [7]); c.move_result(3, True)      # scc: the Builder class from here on
+        c.const_4(10, 1); c.new_array(8, 10, CLSARR); c.new_array(9, 10, OBJARR)
+        c.const_4(10, 0); c.aput(4, 8, 10, APUT_OBJ); c.aput(5, 9, 10, APUT_OBJ)
+        c.invoke(VIRT, "cls.getc", [3, 8]); c.move_result(7, True)
+        c.invoke(VIRT, "ctor.newi", [7, 9]); c.move_result(6, True)       # sc: the builder
+        c.const_string(7, "setName"); c.const_string(8, "java.lang.String"); c.const_string(9, NAME)
+        c.invoke(STATIC, "w1", [6, 7, 8, 9]); c.move_result(6, True)
+        c.invoke(STATIC, "int.value", [0]); c.move_result(8, True)       # w2(builder, "setSize", "int", "int", w, h):
+        c.invoke(STATIC, "int.value", [1]); c.move_result(9, True)       # six consecutive registers, 4..9
+        c.move(4, 6, True)
+        c.const_string(5, "setSize"); c.const_string(6, "int"); c.const_string(7, "int")
+        c.invoke_range(STATIC_RANGE, "w2", 4, 6); c.move_result(6, True)
+        for name, v in (("setFormat", OPAQUE), ("setFlags", HIDDEN)):
+            c.const_string(7, name); c.const_string(8, "int")
+            c.lit(9, v); c.invoke(STATIC, "int.value", [9]); c.move_result(9, True)
+            c.invoke(STATIC, "w1", [6, 7, 8, 9]); c.move_result(6, True)
+        c.const_string(7, "build"); c.invoke(STATIC, "os", [6, 7]); c.move_result(6, True)
+        c.ret(6, True)
+        m.append(("create", c))
+
+    def surface():
+        # sc=0 y=1 t=2 cs=3 as=4 s=5; w2's arguments 6..11
+        c = Code(12, 2)
+        c.const_string(2, "android.view.SurfaceControl")
+        c.const_string(3, "openTransaction"); c.invoke(STATIC, "sinv0", [2, 3])
+        c.const_string(3, "setLayer"); c.const_string(4, "int")
+        c.lit(5, LAYER); c.invoke(STATIC, "int.value", [5]); c.move_result(5, True)
+        c.invoke(STATIC, "w1", [0, 3, 4, 5])
+        c.move(6, 0, True); c.const_string(7, "setPosition")
+        c.const_string(8, "float"); c.const_string(9, "float")
+        c.const_string(10, "0"); c.invoke(STATIC, "float.value", [10]); c.move_result(10, True)
+        c.invoke(STATIC, "int.value", [1]); c.move_result(11, True)
+        c.invoke(STATIC, "str.valueO", [11]); c.move_result(11, True)
+        c.invoke(STATIC, "float.value", [11]); c.move_result(11, True)
+        c.invoke_range(STATIC_RANGE, "w2", 6, 6)
+        c.const_string(3, "show"); c.invoke(STATIC, "os", [0, 3])
+        c.const_string(3, "closeTransaction"); c.invoke(STATIC, "sinv0", [2, 3])
+        c.const_string(3, "android.view.Surface")
+        c.invoke(STATIC, "cls.forName", [3]); c.move_result(3, True)
+        c.invoke(VIRT, "cls.newi", [3]); c.move_result(3, True)
+        c.const_string(4, "copyFrom"); c.const_string(5, "android.view.SurfaceControl")
+        c.invoke(STATIC, "w1", [3, 4, 5, 0])
+        c.ret(3, True)
         m.append(("surface", c))
 
     def loop():
@@ -455,7 +491,7 @@ def emit():
         c.ret_void()
         m.append(("out", c))
 
-    for f in (main, overscan, surface, loop, full, meth, cls, inv, sinv, sinv0, w1, w2, os_, fint, out):
+    for f in (main, overscan, create, surface, loop, full, meth, cls, inv, sinv, sinv0, w1, w2, os_, fint, out):
         f()
     return m
 
@@ -464,6 +500,7 @@ def emit():
 # What the reflection asks the framework for (class, method or "<init>", parameter types, static), checked
 # against the boot class path of 8149 by --framework, and the ints the code has written in.
 SC, SURF, CANVAS = "Landroid/view/SurfaceControl;", "Landroid/view/Surface;", "Landroid/graphics/Canvas;"
+SCB = "Landroid/view/SurfaceControl$Builder;"
 DMG, DINFO = "Landroid/hardware/display/DisplayManagerGlobal;", "Landroid/view/DisplayInfo;"
 REFLECTED = [
     ("Landroid/os/ServiceManager;", "getService", [STR], True),
@@ -473,6 +510,12 @@ REFLECTED = [
     (DMG, "getDisplayInfo", ["I"], False),
     ("Landroid/view/SurfaceSession;", "<init>", [], False),
     (SC, "<init>", ["Landroid/view/SurfaceSession;", STR, "I", "I", "I", "I"], False),
+    (SCB, "<init>", ["Landroid/view/SurfaceSession;"], False),
+    (SCB, "setName", [STR], False),
+    (SCB, "setSize", ["I", "I"], False),
+    (SCB, "setFormat", ["I"], False),
+    (SCB, "setFlags", ["I"], False),
+    (SCB, "build", [], False),
     (SC, "openTransaction", [], True),
     (SC, "closeTransaction", [], True),
     (SC, "setLayer", ["I"], False),
@@ -495,7 +538,13 @@ CONSTANTS = [
     (SURF, "ROTATION_0", 0), (SURF, "ROTATION_90", 1), (SURF, "ROTATION_180", 2), (SURF, "ROTATION_270", 3),
 ]
 
-PROG = Program(ME, SELF, reflected=REFLECTED, reflected_fields=REFLECTED_FIELDS, constants=CONSTANTS)
+# the constructor of Android 7, the Builder of Android 9 (athena): the code takes the one the caller says (argv[2])
+ONLY_IF = {(SC, "<init>", ("Landroid/view/SurfaceSession;", STR, "I", "I", "I", "I")): "!" + SCB}
+for _n, _p in (("<init>", ("Landroid/view/SurfaceSession;",)), ("setName", (STR,)), ("setSize", ("I", "I")),
+               ("setFormat", ("I",)), ("setFlags", ("I",)), ("build", ())):
+    ONLY_IF[(SCB, _n, _p)] = SCB
+
+PROG = Program(ME, SELF, reflected=REFLECTED, reflected_fields=REFLECTED_FIELDS, constants=CONSTANTS, only_if=ONLY_IF)
 
 def main():
     dexasm.cli(PROG, emit, __file__, "ringbar.dex")

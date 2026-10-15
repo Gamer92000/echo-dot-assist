@@ -15,6 +15,48 @@ What changed for people using the Echo, newest first. Details and measurements a
 - **Echo Show 8 (1st gen): the speaker gain can go below stock.** The Show 8 is loud at its stock level with music at
   full volume, so the settings page's speaker gain goes down to -6 dB here (the Dots only go up). About -2 dB suited
   the first one tried.
+- **A push update could leave hassmic stopped.** After one update on the Show 8 the service stayed down for three
+  minutes: init ignores a start while the service is still stopping. The restart now waits for the stop.
+- **Drop In by voice: "drop into the kitchen" and "drop it in the kitchen" work too.** Speech to text often hears "drop in" that
+  way. The blueprint's default sentences have both now (an automation made from it keeps its own list: add them there).
+- **Echo Show 8 (2nd gen): Speaker gain, and Sendspin works.** The "Speaker gain" setting is there, up to +9 dB: music at
+  full volume was quiet, and past that point bass-heavy music distorts. Music Assistant plays to the Show over Sendspin.
+
+- **Drop In: "Alexa" works during a call again.** An Echo in a quiet, empty room still sent its own room noise, amplified,
+  back to the caller, and the caller's Echo took that for the other side talking: it ignored the wake word, never switched
+  on listening mode (so speech to "Alexa, hang up" came out as "No text recognized") and ducked its own voice. A side now counts
+  as talking only when it is clearly over its own noise floor, and an Echo sends its room only when something louder than
+  faint noise is there. Needs the new version on both Echos (an older one on the other end still makes the noise, the
+  caller's Echo copes with it less well).
+- **Echo Show 8 2nd gen: sounds start about 150 ms sooner.** The silent lead-in before a sound on a cold speaker is 200 ms
+  instead of 350. The speaker still takes about 100 ms to wake and the red band and the mute sound come about a second after
+  the button; looked into, not solved ([PLAN.md](PLAN.md)).
+
+## 2026-10-14
+
+- **Echo Show 8 2nd gen (`athena`): first support, installed on one.** Android 9 and a different chip from the other Shows,
+  so it has its own page ([`devices/athena`](devices/athena/README.md)). The Echo has to be unlocked and rooted first (the
+  saiyaku-athena unlock and its root zip, not part of this project); the install then needs no flashing from the PC. On
+  the first Echo the satellite starts 22 seconds after power-on, hears the wake word, takes the volume keys and the mic
+  mute switch, draws the light band, and Bluetooth works, and Home Assistant adopts it and gets spoken answers. Not
+  checked yet: the speaker's volume curve. Not working yet: "Download from Amazon", Wi-Fi motion.
+- **Fixed: Home Assistant could not connect to the Echo Show 8 2nd gen.** Its C library fails every `accept()` ("bad file
+  descriptor") on a connection that has arrived, which ended hassmic's listeners (the satellite restarted at the first
+  attempt, the settings page and the update port stopped). hassmic now asks the kernel directly on Android.
+- **Fixed: the Echo Show 8 2nd gen could not play spoken replies.** The same C library fault made hassmic's every
+  `connect()` fail, so Home Assistant's answers were never fetched (the light band ended at once instead of thinking). It
+  connects through the system call now, also for HTTPS replies and online updates.
+- **Music Assistant without pairing takes effect at once.** Switching it (settings page or Home Assistant) closes the idle,
+  unpaired Sendspin connections, so Music Assistant reconnects and reads the new answer instead of waiting for a pairing
+  token it was told to bring.
+- **Echo Show 8 2nd gen: "Download from Amazon".** The settings page can now fetch Amazon's wake word models on this Echo
+  too: its attestation service (`fireosdhaservice`) answers like the Echo Show 8 1st gen's, and hassmic asks it.
+- **Echo Show 8 2nd gen: Wi-Fi switch and an Illuminance sensor.** The settings page's "Switch network" and the setup's
+  join now work through Android 9's Wi-Fi service (`wifictl.dex` knows its way of calling it), and the room's light is
+  reported in lux, computed from the sensor's raw colour channels (within about 10 % of Amazon's own value in steady light; under a bright lamp it still jumps about, to be improved).
+- **The light band no longer disappears after a minute** on Echos with Android 9 (a garbage collection released its layer);
+  it uses the newer layer API there.
+
 ## 2026-10-13
 
 - **Echo Show 8 (1st gen, `crown`): first support.** The Show 8 is the same platform as the Show 5, and a trial run on one
