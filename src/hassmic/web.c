@@ -453,9 +453,12 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
     n += (size_t)snprintf(o + n, cap - n, ",\"ha\":%s,\"volume\":%d,\"settings\":[", core_ha_linked() ? "true" : "false", core_volume());
     for (int i = 0, k = settings_count(); i < k && n < cap - 600; i++) {
         const struct setting *s = settings_at(i); const char *const *names; int nc = settings_choices(s, &names);
-        n += (size_t)snprintf(o + n, cap - n, "%s{\"name\":\"%s\",\"label\":\"%s\",\"group\":\"%s\",\"type\":\"%s\",\"value\":%d,\"min\":%d,\"max\":%d,\"export\":%s,\"feature\":%s,\"unit\":\"%s\",\"choices\":[",
-                              i ? "," : "", s->name, s->label, s->group, s->type == S_BOOL ? "bool" : s->type == S_INT ? "int" : "choice",
-                              settings_get(s), settings_min(s), settings_max(s), s->export_ ? "true" : "false", s->feature ? "true" : "false", s->unit ? s->unit : "");
+        char val[2 * SETTINGS_TEXT_MAX + 3] = "\"";        /* a text's value as a JSON string, the others a number */
+        if (s->type == S_TEXT) { char t[SETTINGS_TEXT_MAX + 1]; settings_str(s, t, sizeof t); jesc(val + 1, sizeof val - 2, t); strcat(val, "\""); }
+        else snprintf(val, sizeof val, "%d", settings_get(s));
+        n += (size_t)snprintf(o + n, cap - n, "%s{\"name\":\"%s\",\"label\":\"%s\",\"group\":\"%s\",\"type\":\"%s\",\"value\":%s,\"min\":%d,\"max\":%d,\"export\":%s,\"feature\":%s,\"unit\":\"%s\",\"choices\":[",
+                              i ? "," : "", s->name, s->label, s->group, s->type == S_BOOL ? "bool" : s->type == S_INT ? "int" : s->type == S_TEXT ? "text" : "choice",
+                              val, settings_min(s), settings_max(s), s->export_ ? "true" : "false", s->feature ? "true" : "false", s->unit ? s->unit : "");
         for (int c = 0; c < nc && n < cap - 200; c++) { jesc(v, sizeof v, names[c]); n += (size_t)snprintf(o + n, cap - n, "%s\"%s\"", c ? "," : "", v); }
         n += (size_t)snprintf(o + n, cap - n, "]}");
     }
@@ -488,6 +491,9 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
       n += (size_t)snprintf(o + n, cap - n, "]"); }
     n += (size_t)snprintf(o + n, cap - n, "},\"arbitration\":");
     if (arb_running()) n += arb_status_json(o + n, cap - n); else n += (size_t)snprintf(o + n, cap - n, "null");
+    n += (size_t)snprintf(o + n, cap - n, ",\"media\":");      /* media in the room (main.c wake_heard) */
+    if (arb_running()) { pthread_mutex_lock(&core_lock); n += core_media_json(o + n, cap - n); pthread_mutex_unlock(&core_lock); }
+    else n += (size_t)snprintf(o + n, cap - n, "null");
     if (dropin_running()) { char peer[64]; int st = dropin_status(peer, sizeof peer); unsigned at; int res = dropin_last(&at);
         n += (size_t)snprintf(o + n, cap - n, ",\"dropin\":{\"state\":\"%s\",\"peer\":\"%s\",\"result\":\"%s\",\"attempt\":%u}",
                               dropin_states[st], peer, res >= 0 ? dropin_results[res] : "", at); }   /* peer: a node, [a-z0-9-] */

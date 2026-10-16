@@ -60,7 +60,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, ARB_MEDIA_PLAYERS, ARB_MEDIA_AMBIENT, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET, NSET };
@@ -108,6 +108,10 @@ static const struct setting table[NSET] = {
     [ARB_AUTO]    = { "arbitration_window_auto", "Learn the wait from the network", "Features", NULL, S_BOOL, 0, 1, 1, 0 },
     [ARB_WINDOW]  = { "arbitration_window", "Arbitration window", "Features", "ms", S_INT, 100, 1000, 1, 0 },
     [ARB_OFFSET]  = { "arbitration_offset", "Kiosk Satellite loudness offset", "Features", "dB", S_INT, -20, 20, 1, 0 },
+    /* main.c keeps them: precedence for the Echo of the room where media plays (wake_heard).  The players are this room's,
+     * so not exported; how much the background counts is a matter of taste, best the same on every Echo */
+    [ARB_MEDIA_PLAYERS] = { "arbitration_media_players", "Media players in this room", "Features", NULL, S_TEXT, 0, 0, 0, 0 },
+    [ARB_MEDIA_AMBIENT] = { "arbitration_media_ambient", "Background while media plays in the room", "Features", "%", S_INT, 10, 100, 1, 0 },
     [SOUND]       = { "sound_detection", "Sound detection", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [WHISPER]     = { "whisper_detection", "Whisper detection", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* proto_esphome.c's "Wake word" event entity (core_wake_events, issue #48) */
@@ -170,7 +174,7 @@ static int present(enum id i)
     case LIGHT_SENSOR: return core_lux() == core_lux();          /* a light sensor: not NAN */
     case LED_AUTO: return core_led_has_auto();
     case WIFI_MOTION: case WIFI_SENS: return wifimotion_present();
-    case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: return arb_running();
+    case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: case ARB_MEDIA_PLAYERS: case ARB_MEDIA_AMBIENT: return arb_running();
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
     case SS_UNPAIRED: return core_sendspin_port != 0;
     case SPK_GAIN: return spkgain_present();
@@ -249,6 +253,7 @@ int settings_get(const struct setting *s)
     case ARB_AUTO: return arb_window_auto(-1);
     case ARB_WINDOW: return arb_window(-1);
     case ARB_OFFSET: return arb_offset(INT_MIN);
+    case ARB_MEDIA_AMBIENT: return core_media_ambient(-1);
     case SS_UNPAIRED: return sendspin_unpaired(-1);
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: return core_eq((int)(s - table) - EQ_BASS);
     case BT_AUDIO: return bt_audio;
@@ -307,6 +312,7 @@ static void put(enum id i, int v)
     case ARB_AUTO: arb_window_auto(v); break;
     case ARB_WINDOW: arb_window(v); break;
     case ARB_OFFSET: arb_offset(v); break;
+    case ARB_MEDIA_AMBIENT: core_media_ambient(v); break;
     case SS_UNPAIRED: sendspin_unpaired(v); break;              /* sendspin.c keeps it */
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: core_set_eq(i - EQ_BASS, v); break;     /* the mixer keeps it */
     case BT_AUDIO: bt_audio = v; if (!v) a2dp_pair(0); break;                        /* paired phones still connect */
@@ -350,13 +356,24 @@ static int parse(const struct setting *s, const char *v, int *out)
         if (s - table == DENOISE) for (int i = 0; i < 4; i++) if (!strcasecmp(v, denoise_names[i])) { *out = i; return 0; }
         if (s - table == BT_LANG) for (int i = 0; i < bt_lang_count; i++) if (!strcmp(v, bt_langs[i].name)) { *out = i; return 0; }
         return -1;
+    case S_TEXT: return -1;                         /* put_text() checks it */
     }
     return -1;
 }
 
-static size_t format(const struct setting *s, char *out, size_t cap)
+/* an S_TEXT setting's own setter, which checks it: 0 taken, -1 refused (err says why) */
+static int put_text(enum id i, const char *v, char *err, size_t errsz)
+{
+    switch (i) {
+    case ARB_MEDIA_PLAYERS: return core_media_players(v, err, errsz);
+    default: snprintf(err, errsz, "not a text"); return -1;
+    }
+}
+
+size_t settings_str(const struct setting *s, char *out, size_t cap)
 {
     const char *const *names; int v = settings_get(s);
+    if (s->type == S_TEXT) return (size_t)snprintf(out, cap, "%s", s - table == ARB_MEDIA_PLAYERS ? core_media_list() : "");
     if (s->type == S_BOOL) return (size_t)snprintf(out, cap, "%s", v ? "on" : "off");
     if (s->type == S_CHOICE) { int k = settings_choices(s, &names); return (size_t)snprintf(out, cap, "%s", v >= 0 && v < k ? names[v] : ""); }
     return (size_t)snprintf(out, cap, "%d", v);
@@ -373,11 +390,11 @@ static int ours(enum id i) { return i != ARB && i != SS_UNPAIRED && i != EQ_BASS
 
 void settings_save(void)
 {
-    char p[300], v[48]; struct statefile s;
+    char p[300], v[SETTINGS_TEXT_MAX + 1]; struct statefile s;
     path(p, sizeof p, "config");
     if (statefile_open(&s, p, 0666)) { fprintf(stderr, "settings: cannot write %s.tmp\n", p); return; }
     fprintf(s.f, "# hassmic settings: name=value; the web page and Home Assistant write it\n");
-    for (int i = 0; i < NSET; i++) if (ours(i) && present(i)) { format(&table[i], v, sizeof v); fprintf(s.f, "%s=%s\n", table[i].name, v); }
+    for (int i = 0; i < NSET; i++) if (ours(i) && present(i)) { settings_str(&table[i], v, sizeof v); fprintf(s.f, "%s=%s\n", table[i].name, v); }
     if (statefile_commit(&s)) fprintf(stderr, "settings: cannot write %s\n", p);
 }
 
@@ -418,7 +435,7 @@ static char *line_of(char *buf, int n, FILE *f)
 
 void settings_load(void)
 {
-    static int loaded; char p[300], line[160]; FILE *f; int led_auto = 1, led_level = -1;
+    static int loaded; char p[300], line[SETTINGS_TEXT_MAX + 64], err[200]; FILE *f; int led_auto = 1, led_level = -1;
     if (loaded) return;
     loaded = 1;
     path(p, sizeof p, "config");
@@ -434,6 +451,8 @@ void settings_load(void)
         if (line[0] == '#' || !eq) continue;
         *eq = 0; v = eq + 1; v[strcspn(v, "\r\n")] = 0;
         for (int i = 0; i < NSET; i++) {
+            if (pass && !strcmp(table[i].name, line) && ours(i) && table[i].type == S_TEXT && put_text(i, v, err, sizeof err))
+                fprintf(stderr, "settings: %s in %s not taken: %s\n", line, p, err);
             if (strcmp(table[i].name, line) || !ours(i) || switches(i) != !pass || parse(&table[i], v, &x)) continue;
             /* the ring's level only counts with auto off: ledcontroller started its own auto at boot.  The band's
              * height main.c set before the band started (settings_peek: a preset not applied yet included); the
@@ -467,14 +486,14 @@ void settings_preset(void)
  * line added by hand; one it refuses changes nothing).  0, -1: none (out as it was) */
 static int peek_in(const char *rel, const char *name, const struct setting *s, char *out, size_t cap)
 {
-    char p[300], line[200]; FILE *f; size_t k = strlen(name); int r = -1, x;
+    char p[300], line[SETTINGS_TEXT_MAX + 64]; FILE *f; size_t k = strlen(name); int r = -1, x;
     path(p, sizeof p, rel);
     if (!(f = fopen(p, "r"))) return -1;
     while (line_of(line, sizeof line, f)) {
         char *l = line; while (isspace((unsigned char)*l)) l++;     /* an export may indent (settings_apply_text) */
         if (!strncmp(l, name, k) && l[k] == '=') {
             l[strcspn(l, "\r\n")] = 0;
-            if (!s || !parse(s, l + k + 1, &x)) { snprintf(out, cap, "%s", l + k + 1); r = 0; }
+            if (!s || s->type == S_TEXT || !parse(s, l + k + 1, &x)) { snprintf(out, cap, "%s", l + k + 1); r = 0; }
         }
     }
     fclose(f);
@@ -503,6 +522,13 @@ int settings_set(const char *name, const char *value, char *err, size_t errsz)
 {
     const struct setting *s = settings_find(name); int v;
     if (!s) { snprintf(err, errsz, "%s: no such setting on this Echo", name); return -1; }
+    if (s->type == S_TEXT) {
+        char e[300];
+        if (put_text((enum id)(s - table), value, e, sizeof e)) { snprintf(err, errsz, "%s: %s", name, e); return -1; }
+        settings_save();
+        core_settings_changed();
+        return 0;
+    }
     if (parse(s, value, &v)) { snprintf(err, errsz, "%s: \"%s\" is not a value it takes", name, value); return -1; }
     int was = settings_get(s);
     put((enum id)(s - table), v);
@@ -520,14 +546,14 @@ int settings_set(const char *name, const char *value, char *err, size_t errsz)
 
 size_t settings_text(char *out, size_t cap, int export_only)
 {
-    size_t n = 0; char v[48];
+    size_t n = 0; char v[SETTINGS_TEXT_MAX + 1];
     index_table();
     for (int i = 0; i < nids && n < cap; i++) {
         const struct setting *s = &table[ids[i]];
         if (export_only && !s->export_) continue;
         /* a level fixes it (auto off): with auto on, the level is only what the room made it */
         if (export_only && ids[i] == LED_LEVEL && present(LED_AUTO) && core_led_auto(-1)) continue;
-        format(s, v, sizeof v);
+        settings_str(s, v, sizeof v);
         n += (size_t)snprintf(out + n, cap - n, "%s=%s\n", s->name, v);
     }
     return n < cap ? n : cap;
@@ -538,7 +564,7 @@ int settings_apply_text(const char *text, char *err, size_t errsz)
     int applied = 0; size_t en = 0;
     if (errsz) err[0] = 0;
     for (int pass = 0; pass < 2; pass++) for (const char *p = text; *p; ) {
-        char line[200], *eq, *v; size_t l = strcspn(p, "\n");
+        char line[SETTINGS_TEXT_MAX + 64], *eq, *v; size_t l = strcspn(p, "\n");
         snprintf(line, sizeof line, "%.*s", (int)(l < sizeof line - 1 ? l : sizeof line - 1), p);
         p += l + (p[l] == '\n');
         line[strcspn(line, "\r")] = 0;
@@ -547,7 +573,7 @@ int settings_apply_text(const char *text, char *err, size_t errsz)
         *eq = 0; v = eq + 1;
         const struct setting *s = settings_find(k);
         if ((s && switches((int)(s - table))) != !pass) continue;      /* switches first */
-        char e[160];
+        char e[400];
         if (!settings_set(k, v, e, sizeof e)) applied++;
         else if (en < errsz) en += (size_t)snprintf(err + en, errsz - en, "%s\n", e);
     }

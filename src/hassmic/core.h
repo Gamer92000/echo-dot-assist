@@ -49,6 +49,9 @@ struct proto {
     void (*wake)(const char *event);            /* may be NULL: the wake word heard (core_wake_events) */
     void (*end)(void);                          /* may be NULL: the Echo heard the request end (micend.h): end of audio,
                                                  * the server goes on with what it has (stop() aborts the run) */
+    /* may be NULL: follow an entity's state in Home Assistant for as long as the link lasts (no "once": HA sends it now
+     * and on every change, core_media_state).  Only over the keyed link; returns how many links it went to */
+    int  (*media_subscribe)(const char *entity);
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
@@ -183,6 +186,17 @@ enum { TIMER_SOUND_TIMER, TIMER_SOUND_ALARM, TIMER_SOUND_BEEP, TIMER_SOUND_CUSTO
 int    core_timer_sound(int set);
 void   core_timer_sound_default(void);
 void   core_timer_sound_preview(void);                      /* not the lock: one ring of it, 10 s at most (the page's "Play") */
+/* Media in the room (main.c wake_heard): this Echo claims wake words as if the room's background counted only
+ * core_media_ambient % while its own music plays or a media player of the room plays, and for MEDIA_HOLD_MS after.
+ * The players are a setting (arbitration_media_players, settings.c), followed through proto->media_subscribe.  Lock held */
+#define MEDIA_MAX 8
+int    core_media_players(const char *list, char *err, size_t errsz);  /* "media_player.a,media_player.b": 0, or -1 and why */
+const char *core_media_list(void);                          /* the list as stored: ids, comma separated */
+const char *core_media_player(int i);                       /* the i-th id, NULL past the end */
+int    core_media_ambient(int set);                         /* 10..100 %, 100 = off; -1 reads */
+int    core_media_state(const char *entity, const char *state);    /* Home Assistant's state of one: 1 if it is listed */
+void   core_media_link_lost(void);                          /* no keyed link left: players that played count as stopped */
+size_t core_media_json(char *o, size_t cap);                /* for the settings page */
 enum { MUSIC_SENDSPIN = 1, MUSIC_BLUETOOTH = 2 };
 void   core_music(int source, int on);                      /* a music stream runs: the wake word threshold follows */
 void   core_bt_device(const char *name, int on);            /* a Bluetooth speaker source connected / went (not the lock) */
