@@ -246,6 +246,13 @@ Beyond the README's two figures:
   since the ring only plays animations made beforehand: the Echo makes them at its first start with this version and
   restarts the ring for that (a second without light). Not on an Echo where they could not be written: then there is
   no light in Home Assistant.
+- **Themes**: "Light ring theme" on the settings page (Lights) picks the colours of the listening, thinking and
+  talking rings. Rainbow puts a colour wheel round the ring (it turns while the Echo
+  thinks), Green, Sky blue and Crimson one colour each (a spinner while it thinks), Stock is Amazon's blue. Each LED
+  keeps its colour, and the light towards you is the colour brightened towards white. Red for muted microphones, the
+  volume steps and the timers stay Amazon's in every theme. The Echo makes the themes from Amazon's own rings at its
+  first start with this version, where those are the blue it knows (so far the Echo Dot 2's); elsewhere the setting is
+  not there. A theme picked shows from the next time the ring lights.
 - **Listening points at you**, as with Alexa, and also while a timer rings or the light is on (Amazon's ring stops
   turning as soon as a second light shows; hassmic plays the listening ring already turned).
 - **Microphone off** plays Alexa's own sounds.

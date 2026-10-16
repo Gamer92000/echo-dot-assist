@@ -216,6 +216,15 @@ input[type=range]::-moz-range-thumb { width: 20px; height: 20px; border-radius: 
 .mode .radio { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--line-2); background: var(--surface); margin-top: 2px; }
 .mode.on .radio { border: 5px solid var(--accent); }
 .mode-sub { color: var(--muted); font-size: 12.5px; line-height: 1.45; margin: 4px 0 0; }
+.ring-pick { margin-top: 6px; flex: 1; min-width: 0; }
+.ring-opts { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
+.ring-opt { border: 1px solid var(--line-2); border-radius: 12px; padding: 10px 6px 8px; background: var(--surface); cursor: pointer; display: grid;
+            justify-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.ring-opt canvas { width: 76px; height: 76px; }
+.ring-opt:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--line-2)); }
+.ring-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ring-opt.on { border-color: var(--accent); color: var(--fg); background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface)); box-shadow: inset 0 0 0 1px var(--accent); }
+.ring-phase { color: var(--faint); font-size: 12px; margin: 6px 0 0; min-height: 18px; }
 .compare summary { font-size: 13px; }
 /* the comparison: questions down the side, one column per choice, the chosen one tinted */
 .cmp-wrap { margin-top: 10px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }

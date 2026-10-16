@@ -2,13 +2,27 @@
 """The light ring (ring.c, issue #26) against build/hassmic-host, as Home Assistant: the animation set hassmic -G makes
 from stock's files (stand-ins written here: no Amazon file), the light entity it offers once that set is installed,
 what goes to ledctrl (HASSMIC_FAKE_LED), the Echo's own patterns before the light, and the listening ring turned by
-the beam (HASSMIC_FAKE_BEAM) and turned again when the talker moves."""
-import asyncio, json, os, re, shutil, signal, struct, subprocess, sys, tempfile, time
+the beam (HASSMIC_FAKE_BEAM) and turned again when the talker moves; the themes (ring_theme): their rings from stock's,
+coloured by LED, where they go in the layer config, and what plays with one picked."""
+import asyncio, json, os, re, shutil, signal, struct, subprocess, sys, tempfile, threading, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from aioesphomeapi import APIClient, LightInfo, LightState, VoiceAssistantEventType as Ev
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOST = f"{ROOT}/build/hassmic-host"
 PORT = 16981
+HTTP_PORT = 16982
+
+
+class Reply(BaseHTTPRequestHandler):
+    """A spoken reply of 1 s (WAV, 48 kHz mono): longer than the stand-in talking ring, which has no loop"""
+    def do_GET(self):
+        pcm = b"\0\0" * 48000
+        wav = (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, 48000, 96000, 2, 16)
+               + b"data" + struct.pack("<I", len(pcm)) + pcm)
+        self.send_response(200); self.send_header("Content-Type", "audio/wav"); self.send_header("Content-Length", str(len(wav)))
+        self.end_headers(); self.wfile.write(wav)
+    def log_message(self, *a): pass
 
 
 def check(cond, what):
@@ -24,18 +38,21 @@ async def until(cond, timeout=5.0):
     return cond()
 
 
-def stock(etc):
+def stock(etc, start=None):
     """Stand-ins for stock's files in the shape the Echos have (docs: PLAN.md "Light ring"): the listening ring opens
     and loops lit, its end goes dark and finishes; layers 5 to 0, names first-listed first"""
     d = os.path.join(etc, "led-resources"); os.makedirs(d)
     px = lambda lit: ",".join("00F" if i in lit else "000000" for i in range(12))
     with open(os.path.join(d, "active-start.animation"), "w") as f:
-        f.write(f"20:{px({10, 11})}\n20:{px({9, 10, 11, 0})}\nloop\n1000:" + ",".join(["00F"] * 10 + ["0FF", "0FF"]) + "\n")
+        f.write(start or f"20:{px({10, 11})}\n20:{px({9, 10, 11, 0})}\nloop\n1000:" + ",".join(["00F"] * 10 + ["0FF", "0FF"]) + "\n")
+    with open(os.path.join(d, "active-talking.animation"), "w") as f:      # stock's: the whole ring light blue to blue
+        f.write("100:" + ",".join(["0ff"] * 12) + "\n100:" + ",".join(["00F"] * 12) + "\n")
     with open(os.path.join(d, "active-end.animation"), "w") as f:
         f.write(f"100:{px(set(range(10)))}\n100:{px({4, 5})}\nloop\n1000:{px(set())}\n")
     with open(os.path.join(d, "volume_step-05.animation"), "w") as f:     # 2 s lit, then a black loop: finished
         f.write(f"2000:{px({0, 1, 2})}\nloop\n1000:{px(set())}\n")
-    layers = {"5": ["volume_step-05"], "4": ["active-end", "active-start", "anim_start_error_short"], "3": ["ready-timer"],
+    layers = {"5": ["volume_step-05"], "4": ["active-end", "active-start", "anim_start_error_short", "ready-timer-short", "active-thinking",
+              "active-talking"], "3": ["ready-timer"],
               "2": ["call_incoming"], "1": ["mics-off_on"], "0": ["zzz_rainbow"]}
     with open(os.path.join(d, "layer_config_common.json"), "w") as f:
         json.dump({"Comment1": "stand-in", "numberOfLayers": 6, "Layers": layers}, f, indent=2)
@@ -59,10 +76,39 @@ async def main():
     r = subprocess.run([HOST, "-G", out], env=env, capture_output=True, text=True)
     names = sorted(os.listdir(out))
     conf = json.load(open(os.path.join(out, "layer_config_common.json")))["Layers"]
-    check(r.returncode == 0 and len(names) == 36 + 588 + 3 + 2, f"-G: the set ({len(names)} files): {r.stderr.strip()}")
-    check(conf["4"][:3] == ["hassmic_listen_0", "hassmic_listen_1", "hassmic_listen_2"] and conf["4"][36:] == ["active-end", "active-start", "anim_start_error_short"]
+    check(r.returncode == 0 and len(names) == 36 + 4 * 38 + 588 + 3 + 2, f"-G: the set ({len(names)} files): {r.stderr.strip()}")
+    themes = ["rainbow", "green", "sky", "crimson"]
+    themed4 = [f"hassmic_theme_{t}_{k}_{i}" for t in themes for k in ("listen", "hold", "end") for i in range(12)]
+    check(conf["4"][:3] == ["hassmic_listen_0", "hassmic_listen_1", "hassmic_listen_2"] and conf["4"][36:36 + 144] == themed4
+          and conf["4"][180:] == ["active-end", "active-start", "anim_start_error_short", "ready-timer-short"]
+          + [f"hassmic_theme_{t}_think" for t in themes] + [f"hassmic_theme_{t}_talk" for t in themes] + ["active-thinking", "active-talking"]
           and conf["0"][0] == "zzz_rainbow" and conf["0"][-1] == "hassmic_rainbow_2" and len(conf["0"]) == 1 + 591
-          and conf["5"] == ["volume_step-05"], "stock's layer config with ours added: the turned rings first in layer 4, the light last in layer 0")
+          and conf["5"] == ["volume_step-05"], "stock's layer config with ours added: the turned rings first in layer 4, the themes' thinking "
+          "and talking rings just before stock's (behind the short timer ring, as stock's), the light last in layer 0")
+    # The themes: colours by LED, so a turned ring keeps its rainbow in place and only the highlight moves
+    rd = lambda n: open(os.path.join(out, f"hassmic_theme_{n}.animation")).read()
+    wheel = ["BF0000", "BF5F00", "BFBF00", "5FBF00", "00BF00", "00BF5F", "00BFBF", "005FBF", "0000BF", "5F00BF", "BF00BF", "BF005F"]
+    hl = lambda c: "".join("%02X" % min(255, int(c[i:i + 2], 16) + 150) for i in (0, 2, 4))
+    check(rd("rainbow_hold_0") == "loop\n1000:" + ",".join(wheel[:10] + [hl(wheel[10]), hl(wheel[11])]) + "\n"
+          and rd("rainbow_hold_3") == "loop\n1000:" + ",".join([wheel[0], hl(wheel[1]), hl(wheel[2])] + wheel[3:]) + "\n",
+          f"rainbow: the wheel by LED, the highlight brightened +150 where the beam turned it ({rd('rainbow_hold_3').strip()})")
+    check(rd("rainbow_listen_5").splitlines()[0] == "20:" + ",".join(["000000"] * 3 + wheel[3:5] + ["000000"] * 7),
+          "rainbow: the opening ring turned by 5, its blue the wheel's colour there, black still black")
+    think = rd("rainbow_think").splitlines()
+    check(len(think) == 13 and think[0] == "loop" and think[1] == "80:" + ",".join(wheel) and think[2] == "80:" + ",".join(wheel[-1:] + wheel[:-1]),
+          "rainbow thinking: the wheel turning one LED per 80 ms")
+    check(rd("rainbow_talk") == "100:" + ",".join(wheel) + "\n100:" + ",".join("%02X%02X%02X" % tuple(int(int(c[i:i + 2], 16) * 0.3 + 0.5) for i in (0, 2, 4)) for c in wheel) + "\n",
+          "rainbow talking: the wheel throbbing with stock's ring, at 30 % where stock's is blue")
+    gthink = rd("green_think").splitlines()
+    check(gthink[1] == "80:" + ",".join(["00C800"] + ["000000"] * 10 + ["003C00"]) and rd("green_hold_0").startswith("loop\n1000:00B400,")
+          and rd("green_talk").startswith("100:" + ",".join(["00C800"] * 12)), "green: its listening colour, spinner and talking colour")
+    # Another model's stock (not the blue the themes read): no themes, the rest as before
+    other = os.path.join(tmp, "other"); stock(other, "20:" + ",".join(["F00"] * 12) + "\nloop\n1000:" + ",".join(["F00"] * 12) + "\n")
+    os.makedirs(os.path.join(tmp, "out-other"))
+    r4 = subprocess.run([HOST, "-G", os.path.join(tmp, "out-other")], env=dict(env, HASSMIC_LED_ROOT=other), capture_output=True, text=True)
+    n4 = os.listdir(os.path.join(tmp, "out-other"))
+    check(r4.returncode == 0 and len(n4) == 36 + 588 + 3 + 2 and not [n for n in n4 if "theme" in n] and "no themes" in r4.stderr,
+          f"stock's ring red: turned as before, no themes ({len(n4)} files: {r4.stderr.strip()})")
     held = open(os.path.join(out, "hassmic_hold_3.animation")).read()
     check(held == "loop\n1000:" + ",".join(["00F", "0FF", "0FF"] + ["00F"] * 9) + "\n",
           f"the open ring turned by 3: its light-blue pair on LEDs 1 and 2, as stock turns it ({held.strip()})")
@@ -199,6 +245,47 @@ async def main():
     try:
         await until(lambda: ["-u", left] in log())
         check(left == "hassmic_rainbow_2" and ["-u", left] in log(), f"restart: the light left on the ring taken off ({left})")
+    finally:
+        proc.terminate(); proc.wait()
+    # A theme picked (as the settings page leaves it in state/config): the Echo's own rings play in it, turned by
+    # the beam, held turned again when the talker moves, closed in it
+    with open(os.path.join(state, "config"), "a") as f: f.write("ring_theme=rainbow\n")
+    with open(beam, "w") as f: f.write("3\n")
+    proc = start()
+    try:
+        c = await connect()
+        async def nothing2(*a): pass
+        started2 = asyncio.Event()
+        async def handle_start2(*a): started2.set(); return 0
+        c.subscribe_voice_assistant(handle_start=handle_start2, handle_stop=nothing2, handle_audio=nothing2)
+        await asyncio.sleep(0.3); open(leds, "w").close()
+        proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started2.wait(), 5)
+        await until(lambda: ["-s", "hassmic_theme_rainbow_listen_3"] in log())
+        check(["-s", "hassmic_theme_rainbow_listen_3"] in log(), f"rainbow: the listening ring in the theme, turned by beam 3 ({log()})")
+        with open(beam, "w") as f: f.write("7\n")
+        await until(lambda: ["-s", "hassmic_theme_rainbow_hold_7"] in log())
+        check(["-s", "hassmic_theme_rainbow_hold_7"] in log() and ["-u", "hassmic_theme_rainbow_listen_3"] in log(),
+              f"rainbow: the talker moved, the theme's open ring at 7 ({log()})")
+        open(leds, "w").close()
+        c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
+        c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "nothing"})
+        await until(lambda: ["-s", "hassmic_theme_rainbow_think"] in log(), 3)
+        check(["-s", "hassmic_theme_rainbow_think"] in log() and not ["-s", "active-thinking"] in log(),
+              f"rainbow: thinking in the theme, not stock's ({log()})")
+        # A reply longer than the talking ring's file (it has no loop: ledcontroller plays it again and again), then idle:
+        # the theme's talking ring must go, though hassmic took it for finished (kitchen, 2026-10-16)
+        httpd = ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), Reply); threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_END, {"url": f"http://127.0.0.1:{HTTP_PORT}/reply.wav"})
+        c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
+        await until(lambda: ["-s", "hassmic_theme_rainbow_talk"] in log(), 5)
+        check(["-s", "hassmic_theme_rainbow_talk"] in log(), f"rainbow: talking in the theme ({log()})")
+        await until(lambda: ["-s", "hassmic_theme_rainbow_end_7"] in log(), 5)
+        check(["-s", "hassmic_theme_rainbow_end_7"] in log(), f"rainbow: the ring closes in the theme, turned by 7 ({log()})")
+        l = log()
+        check(["-u", "hassmic_theme_rainbow_talk"] in l and ["-u", "active-talking"] not in l,
+              f"rainbow: after a reply longer than its file, the theme's talking ring is stopped, not stock's name ({l})")
+        httpd.shutdown()
+        await c.disconnect()
     finally:
         proc.terminate(); proc.wait()
     shutil.rmtree(tmp)

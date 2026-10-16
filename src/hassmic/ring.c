@@ -16,6 +16,11 @@
  * (they are told here, ring_set): the issue asked for the Echo's states first, and per-LED composition would mix the
  * light into the gaps of the listening ring or the volume steps.  Its colour is the nearest of the palette: 24 hues,
  * full or half saturation or white, at 3 levels, each as solid, pulse, spin and blink, and a rainbow at the 3 levels.
+ * Themes (setting ring_theme): the Echo's listening, thinking and talking rings in other colours.  Made here from stock's own animations, as the turned copies are: stock's ring is
+ * blue with a light-blue highlight (00F..0FF: blue full, green 0..F), so the green of each pixel is how much it is
+ * highlight.  The theme's colour goes by LED, not by the frame, so it stays put while the highlight turns towards the
+ * talker (turning the coloured frame would carry the rainbow round with the beam).  Red (mute), orange (setup), the
+ * volume steps and the timers are stock's in every theme.
  */
 #include "ring.h"
 #include "hash.h"
@@ -35,7 +40,7 @@
 #define HUES     24
 #define LEVELS   3
 #define MAX_LEDS 24
-#define FORMAT   "hassmic ring 2"           /* in the digest: a change of the palette's layout changes it */
+#define FORMAT   "hassmic ring 3"           /* in the digest: a change of the palette's layout changes it */
 /* As seen: 100, 66 and 38 %.  The LED driver takes linear duty, so every channel goes through gamma 2.2 (colour_rgb):
  * 1, 0.4 and 0.12 in the file.  A dim level any lower vanishes under auto brightness in a dark room, where the ring
  * itself runs at a tenth */
@@ -45,6 +50,26 @@ enum { E_NONE, E_PULSE, E_SPIN, E_BLINK, E_RAINBOW, E_COUNT };
 const char *const ring_effects[] = { "None", "Pulse", "Spin", "Blink", "Rainbow" };
 const int ring_neffects = E_COUNT;
 static const char *const effect_ids[] = { "solid", "pulse", "spin", "blink", "rainbow" };
+
+/* The themes: the rainbow is hsv(i * 360 / n, 1, 0.75) per LED, the solid ones a listening
+ * colour and a spinner's head and trail.  Written to the files as they are, without the light's gamma: the values a
+ * test on the kitchen's Dot 2 approved (2026-10-16); through gamma 2.2 the rainbow's BF would be 87, visibly darker */
+struct theme { int rainbow; unsigned char listen[3], head[3], trail[3]; };
+static const struct theme themes[] = {
+    { 0, { 0 }, { 0 }, { 0 } },                                         /* stock's own */
+    { 1, { 0 }, { 0 }, { 0 } },
+    { 0, { 0, 180, 0 }, { 0, 200, 0 }, { 0, 60, 0 } },
+    { 0, { 80, 150, 200 }, { 150, 205, 255 }, { 25, 45, 70 } },
+    { 0, { 110, 0, 45 }, { 210, 45, 0 }, { 55, 8, 0 } },                /* not pure red: that is the mute ring's */
+};
+#define NTHEMES  ((int)(sizeof themes / sizeof themes[0]))
+const char *const ring_theme_ids[NTHEMES] = { "stock", "rainbow", "green", "sky", "crimson" };
+const char *const ring_theme_names[NTHEMES] = { "Stock", "Rainbow", "Green", "Sky blue", "Crimson" };
+const int ring_nthemes = NTHEMES;
+#define THEME_V  0.75                       /* the rainbow below full, so yellow and cyan do not swamp the rest */
+#define THEME_HL 150                        /* the highlight towards the talker: +150 on each channel */
+#define THEME_TALK_FLOOR 0.3                /* the talking ring's darkest, as a share of the theme's colour */
+#define THEME_SPIN_MS 80                    /* the spinner: one LED per 80 ms */
 
 /* The system partition's directory, HASSMIC_LED_ROOT on the PC */
 static const char *root(void) { const char *e = getenv("HASSMIC_LED_ROOT"); return e ? e : "/system/etc"; }
@@ -204,9 +229,79 @@ static int line_pixels(const char *l, const char **px)
     return n;
 }
 
+/* ---------------------------------------------------------------- themes */
+
+/* A pixel of stock's listening, thinking or talking ring: how much it is highlight, 0..1 (its green: those rings are
+ * 00F..0FF, measured on the Dot 2's), -1 black, -2 not of that scale (another model's stock: no themes there) */
+static float stock_highlight(const char *px)
+{
+    size_t w = strlen(px); unsigned v[3];
+    for (size_t i = 0; i < w; i++) if (!isxdigit((unsigned char)px[i])) return -2;
+    if (w == 3) for (int i = 0; i < 3; i++) { char d[2] = { px[i], 0 }; v[i] = 17 * (unsigned)strtoul(d, NULL, 16); }
+    else if (w == 6) for (int i = 0; i < 3; i++) { char d[3] = { px[2 * i], px[2 * i + 1], 0 }; v[i] = (unsigned)strtoul(d, NULL, 16); }
+    else return -2;
+    if (!v[0] && !v[1] && !v[2]) return -1;
+    if (v[0] > 8 || v[2] < 0xC0) return -2;
+    return v[1] / 255.0f;
+}
+
+static void rgb_px(const double c[3], char px[8])
+{
+    int v[3];
+    for (int i = 0; i < 3; i++) { long x = lround(c[i]); v[i] = x < 0 ? 0 : x > 255 ? 255 : (int)x; }
+    snprintf(px, 8, "%02X%02X%02X", v[0], v[1], v[2]);
+}
+
+/* The theme's colour of LED i of n.  The rainbow as Python's colorsys makes it, then floor (the values approved);
+ * talking: the solid ones throb their spinner's head colour, the rainbow its wheel */
+static void theme_base(const struct theme *th, int i, int n, int talking, double c[3])
+{
+    if (th->rainbow) {
+        double h = (double)(i % n) / n * 6, f = h - floor(h), v = THEME_V, q = v * (1 - f), t = v * f;
+        double rgb[6][3] = { { v, t, 0 }, { q, v, 0 }, { 0, v, t }, { 0, q, v }, { t, 0, v }, { v, 0, q } };
+        for (int k = 0; k < 3; k++) c[k] = floor(rgb[(int)h % 6][k] * 255);
+    } else {
+        const unsigned char *s = talking ? th->head : th->listen;
+        for (int k = 0; k < 3; k++) c[k] = s[k];
+    }
+}
+
+/* stock's pixel on LED i in the theme: listening and end, the colour with the highlight brightened towards white by
+ * up to THEME_HL; talking, the colour throbbing as stock's ring does.  -1: off scale */
+static int theme_px(const struct theme *th, int i, int n, int talking, char px[8])
+{
+    float hl = stock_highlight(px); double c[3];
+    if (hl == -2) return -1;
+    if (hl < 0) { strcpy(px, "000000"); return 0; }
+    theme_base(th, i, n, talking, c);
+    for (int k = 0; k < 3; k++) c[k] = talking ? c[k] * (THEME_TALK_FLOOR + (1 - THEME_TALK_FLOOR) * hl) : c[k] + THEME_HL * hl;
+    rgb_px(c, px);
+    return 0;
+}
+
+/* Thinking, instead of stock's twinkle: the rainbow turning one LED per step, else the head and trail
+ * of a spinner over a dark ring */
+static void theme_think(struct buf *b, const struct theme *th, int n)
+{
+    char px[MAX_LEDS][8]; double c[3];
+    bput(b, "loop\n");
+    for (int pos = 0; pos < n; pos++) {
+        for (int i = 0; i < n; i++) {
+            if (th->rainbow) theme_base(th, ((i - pos) % n + n) % n, n, 0, c);
+            else {
+                const unsigned char *s = i == pos ? th->head : i == (pos + n - 1) % n ? th->trail : NULL;
+                for (int k = 0; k < 3; k++) c[k] = s ? s[k] : 0;
+            }
+            rgb_px(c, px[i]);
+        }
+        frame(b, THEME_SPIN_MS, px, n);
+    }
+}
+
 /* text turned by t LEDs: LED i shows what LED i - t did, as LedDevice turns stock's (PLAN.md, issue #22).  hold: only
- * the last frame, looping (for a beam that moves while the ring is already open) */
-static int turned(struct buf *out, const char *text, int t, int hold)
+ * the last frame, looping (for a beam that moves while the ring is already open).  th: in that theme's colours, by
+ * the LED each pixel lands on (talking: as the talking ring) */
+static int turned(struct buf *out, const char *text, int t, int hold, const struct theme *th, int talking)
 {
     const char *l = text, *last = NULL; int n = 0;
     for (; *l; l = strchr(l, '\n') ? strchr(l, '\n') + 1 : l + strlen(l)) {
@@ -226,6 +321,7 @@ static int turned(struct buf *out, const char *text, int t, int hold)
                 snprintf(p[(i + t) % n], sizeof p[0], "%.*s", (int)(w < 7 ? w : 7), c);
                 c += w + (c[w] == ',');
             }
+            if (th) for (int i = 0; i < n; i++) if (theme_px(th, i, n, talking, p[i])) return -1;
             frame(out, (int)strtol(l, NULL, 10), p, n);
         }
         if (hold || !e) break;
@@ -259,24 +355,36 @@ static const char *layer_open(const char *t, const char *layer)
     return NULL;
 }
 
-/* stock's config with names4 first in layer 4 (stock's "active-start" is there; first: they never wait behind another
- * of that layer, as stock's turned pair waits behind none of what hassmic plays with it) and names0 last in layer 0 (the
- * light: under everything of stock's) */
-static int merge_config(struct buf *out, const char *stock, const char *names4, const char *names0)
+/* stock's "active-thinking" in layer 4: where the themes' thinking and talking rings go, just before it, so that they
+ * wait behind what stock's waits behind (the short alarm and timer rings come before it there); NULL if not there */
+static const char *thinking_at(const char *stock)
 {
-    const char *l4 = layer_open(stock, "4"), *l0 = layer_open(stock, "0");
-    if (!l4 || !l0 || strstr(stock, "hassmic_")) return -1;
+    const char *l4 = layer_open(stock, "4"), *e4 = l4 ? strchr(l4, ']') : NULL, *t = l4 ? strstr(l4, "\"active-thinking\"") : NULL;
+    return t && e4 && t < e4 ? t : NULL;
+}
+
+/* stock's config with names4 first in layer 4 (stock's "active-start" is there; first: they never wait behind another
+ * of that layer, as stock's turned pair waits behind none of what hassmic plays with it), names4t just before stock's
+ * "active-thinking" (thinking_at) and names0 last in layer 0 (the light: under everything of stock's) */
+static int merge_config(struct buf *out, const char *stock, const char *names4, const char *names4t, const char *names0)
+{
+    const char *l4 = layer_open(stock, "4"), *l0 = layer_open(stock, "0"), *t4 = *names4t ? thinking_at(stock) : NULL;
+    if (!l4 || !l0 || strstr(stock, "hassmic_") || (*names4t && !t4)) return -1;
     const char *e0 = strchr(l0, ']');
     if (!e0) return -1;
     const char *last0 = e0;
     while (last0 > l0 && isspace((unsigned char)last0[-1])) last0--;
     const char *n4 = l4; while (isspace((unsigned char)*n4)) n4++;
-    struct { const char *at; int kind; } ins[2] = { { l4, 4 }, { last0, 0 } };
-    if (ins[1].at < ins[0].at) { ins[0].at = last0; ins[0].kind = 0; ins[1].at = l4; ins[1].kind = 4; }
+    struct ins { const char *at; int kind; } ins[3] = { { l4, 4 }, { last0, 0 }, { t4, 5 } };
+    int nins = t4 ? 3 : 2;
+    for (int i = 0; i < nins; i++)                      /* in the order they come in the text */
+        for (int j = i + 1; j < nins; j++)
+            if (ins[j].at < ins[i].at) { struct ins x = ins[i]; ins[i] = ins[j]; ins[j] = x; }
     const char *p = stock;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < nins; i++) {
         bput(out, "%.*s", (int)(ins[i].at - p), p);
         if (ins[i].kind == 4) { if (*names4) bput(out, " %s%s", names4, *n4 == ']' ? "" : ","); }
+        else if (ins[i].kind == 5) bput(out, "%s, ", names4t);
         else if (*names0) bput(out, "%s %s", last0 == l0 ? "" : ",", names0);
         p = ins[i].at;
     }
@@ -290,6 +398,7 @@ struct gen {
     const char *dir;                        /* NULL: only the digest */
     struct sha256 h;
     int files, failed, turned;              /* turned: the listening ring's copies are in it */
+    int themed;                             /* the themes' rings are in it */
 };
 static int leds = 12;                       /* the ring's, from stock's listening ring (every model's has 12) */
 
@@ -310,33 +419,85 @@ static void emit(struct gen *g, const char *name, const struct buf *b)
 
 static void listnames(struct buf *b, const char *name) { bput(b, "%s\"%s\"", b->n ? ", " : "", name); }
 
+/* "hassmic_theme_<id>_<kind>[_<turn>]": under 40 characters for every theme (struct shown, visible_ms) */
+static void theme_pattern(char *out, size_t n, int th, const char *kind, int turn)
+{
+    if (turn >= 0) snprintf(out, n, "hassmic_theme_%s_%s_%d", ring_theme_ids[th], kind, turn);
+    else snprintf(out, n, "hassmic_theme_%s_%s", ring_theme_ids[th], kind);
+}
+
+static const char *const kinds[] = { "listen", "hold", "end" };
+
+/* Every theme's rings into the set: names4 gets their listening rings, names4t their thinking rings, then their
+ * talking rings (stock's talking ring comes after its thinking one).  Made twice: first only to see that stock's rings
+ * are of the scale the themes read (theme_px), then for real, so that a set never holds half a theme */
+static int build_themes(struct gen *g, const char *start, const char *end, const char *talking, struct buf *names4,
+                        struct buf *names4t, int n)
+{
+    struct buf b = { 0 }, think = { 0 }, talk = { 0 }; char name[64]; int ok = 1;
+    for (int pass = 0; pass < 2 && ok; pass++)
+        for (int th = 1; th < NTHEMES && ok; th++) {
+            for (int k = 0; k < 3 && ok; k++)
+                for (int t = 0; t < n && ok; t++) {
+                    b.n = 0;
+                    if (turned(&b, k == 2 ? end : start, t, k == 1, &themes[th], 0) != n) { ok = 0; break; }
+                    if (!pass) continue;
+                    theme_pattern(name, sizeof name, th, kinds[k], t);
+                    listnames(names4, name);
+                    strcat(name, ".animation"); emit(g, name, &b);
+                }
+            b.n = 0;
+            if (ok && turned(&b, talking, 0, 0, &themes[th], 1) != n) ok = 0;
+            if (!ok || !pass) continue;
+            theme_pattern(name, sizeof name, th, "talk", -1);
+            listnames(&talk, name);
+            strcat(name, ".animation"); emit(g, name, &b);
+            b.n = 0; theme_think(&b, &themes[th], n);
+            theme_pattern(name, sizeof name, th, "think", -1);
+            listnames(&think, name);
+            strcat(name, ".animation"); emit(g, name, &b);
+        }
+    if (ok) bput(names4t, "%s, %s", think.p, talk.p);
+    free(b.p); free(think.p); free(talk.p);
+    return ok;
+}
+
 static int build(struct gen *g)
 {
     char file[512], name[64];
-    struct buf names4 = { 0 }, names0 = { 0 }, b = { 0 };
+    struct buf names4 = { 0 }, names4t = { 0 }, names0 = { 0 }, b = { 0 };
     sha256_init(&g->h);
     sha256_update(&g->h, FORMAT, sizeof FORMAT);
     path(file, sizeof file, "led-resources/active-start.animation");
     char *start = slurp(file);
     path(file, sizeof file, "led-resources/active-end.animation");
     char *end = slurp(file);
+    path(file, sizeof file, "led-resources/active-talking.animation");
+    char *talking = slurp(file);
+    /* stock's config: the copy kept from before our first install, else the one in place (still stock's then) */
+    path(file, sizeof file, "layer_config_common.json.pre-hassmic");
+    char *stock = slurp(file);
+    if (!stock) { path(file, sizeof file, "led-resources/layer_config_common.json"); stock = slurp(file); }
     int n = start ? leds_of(start) : 0;
     if (!n) n = 12;
     leds = n;
-    g->turned = 0;
+    g->turned = g->themed = 0;
     if (start && end && leds_of(end) == n) {
-        static const char *const kinds[] = { "listen", "hold", "end" };
         int ok = 1;
         for (int k = 0; k < 3 && ok; k++)
             for (int t = 0; t < n && ok; t++) {
                 b.n = 0;
-                if (turned(&b, k == 2 ? end : start, t, k == 1) != n) { ok = 0; break; }
+                if (turned(&b, k == 2 ? end : start, t, k == 1, NULL, 0) != n) { ok = 0; break; }
                 snprintf(name, sizeof name, "hassmic_%s_%d", kinds[k], t);
                 listnames(&names4, name);
                 strcat(name, ".animation"); emit(g, name, &b);
             }
         g->turned = ok;
         if (!ok) { fprintf(stderr, "ring: stock's listening ring has a shape we do not know: not turned\n"); names4.n = 0; }
+        else if (talking && leds_of(talking) == n && stock && thinking_at(stock)) {
+            g->themed = build_themes(g, start, end, talking, &names4, &names4t, n);
+            if (!g->themed) fprintf(stderr, "ring: stock's rings are not the blue we know: no themes\n");
+        }
     }
     for (int e = 0; e < E_COUNT; e++)
         for (int w = 0; w <= (e == E_RAINBOW ? 0 : 1); w++)
@@ -349,15 +510,12 @@ static int build(struct gen *g)
                         listnames(&names0, name);
                         strcat(name, ".animation"); emit(g, name, &b);
                     }
-    /* stock's config: the copy kept from before our first install, else the one in place (still stock's then) */
-    path(file, sizeof file, "layer_config_common.json.pre-hassmic");
-    char *stock = slurp(file);
-    if (!stock) { path(file, sizeof file, "led-resources/layer_config_common.json"); stock = slurp(file); }
     b.n = 0;
-    int rc = !stock || merge_config(&b, stock, names4.p ? names4.p : "", names0.p ? names0.p : "") ? -1 : 0;
+    int rc = !stock || merge_config(&b, stock, names4.p ? names4.p : "", g->themed && names4t.p ? names4t.p : "",
+                                    names0.p ? names0.p : "") ? -1 : 0;
     if (rc) fprintf(stderr, "ring: no layer config of stock's to add ours to (%s)\n", file);
     else emit(g, "layer_config_common.json", &b);
-    free(start); free(end); free(stock); free(names4.p); free(names0.p); free(b.p);
+    free(start); free(end); free(talking); free(stock); free(names4.p); free(names4t.p); free(names0.p); free(b.p);
     return rc || g->failed ? -1 : 0;
 }
 
@@ -385,12 +543,26 @@ int ring_generate(const char *dir)
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static void (*run_fn)(const char *op, const char *name);
-static int custom, have_turned;
+static int custom, have_turned, have_themes, theme;   /* theme: index in themes, 0 stock's */
 
 /* The Echo's own patterns that hassmic played and did not stop: how long each shows, from its file */
 #define SHOWN_MAX 24
-static struct shown { char logical[40], actual[40]; long long at; int ms, turn; } shown[SHOWN_MAX];   /* ms < 0: until unset */
+/* ms < 0: until unset; th: the theme it shows in (a theme picked meanwhile shows from the next pattern on) */
+static struct shown { char logical[40], actual[40]; long long at; int ms, turn, th; } shown[SHOWN_MAX];
 static int nshown;
+/* What played for a pattern that ran past its length (ring_tick let it go) and was ours, not stock's own name: the
+ * unset still has to stop that.  A pattern without "loop" plays again from the start (stock's talking ring, 3.4 s,
+ * stays on through a reply of any length), so a theme's talking ring left behind showed for good (kitchen, 2026-10-16:
+ * a 5.8 s reply, then the rainbow on an idle Echo) */
+static struct { char logical[40], actual[40]; } ended[SHOWN_MAX];
+static int nended;
+
+static int ended_find(const char *logical)
+{
+    for (int i = 0; i < nended; i++) if (!strcmp(ended[i].logical, logical)) return i;
+    return -1;
+}
+static void ended_drop(int i) { if (i >= 0) ended[i] = ended[--nended]; }
 static struct ring_light light = { 0, 1, 1, 1, 1, 1, E_NONE };
 static struct ring_light flash; static long long flash_until;
 static char light_shown[48];                /* what of ours is on the ring for the light, "" none */
@@ -522,8 +694,10 @@ void ring_start(void (*fn)(const char *op, const char *name))
         digest_hex(&g, hex);
         custom = inst && !strncmp(inst, hex, 64);
         have_turned = custom && g.turned;
+        have_themes = have_turned && g.themed;
     }
-    if (custom) fprintf(stderr, "ring: our animations are installed (%d files)%s\n", g.files, have_turned ? "" : ", the listening ring not turned");
+    if (custom) fprintf(stderr, "ring: our animations are installed (%d files)%s%s\n", g.files, have_turned ? "" : ", the listening ring not turned",
+                        have_themes ? ", themes" : "");
     else fprintf(stderr, "ring: %s: stock's animations only, no light in Home Assistant\n",
                  inst ? "the installed animations are another build's" : "our animations are not installed");
     free(inst);
@@ -537,22 +711,41 @@ void ring_start(void (*fn)(const char *op, const char *name))
 }
 
 int ring_custom(void) { return custom; }
+int ring_themes(void) { return have_themes; }
+
+int ring_theme(int v)
+{
+    pthread_mutex_lock(&lock);
+    if (v >= 0 && v < NTHEMES) theme = v;
+    int r = theme;
+    pthread_mutex_unlock(&lock);
+    return r;
+}
 
 void ring_set(const char *pattern)
 {
-    char actual[40]; int turn = -1;
+    char actual[40]; int turn = -1, th;
+    int ring = !strcmp(pattern, "active-start") || !strcmp(pattern, "active-end");
     snprintf(actual, sizeof actual, "%s", pattern);
     pthread_mutex_lock(&lock);
-    if (have_turned && (!strcmp(pattern, "active-start") || !strcmp(pattern, "active-end")) && (turn = beam_now()) >= 0) {
-        turn %= leds;
-        snprintf(actual, sizeof actual, "hassmic_%s_%d", pattern[7] == 's' ? "listen" : "end", turn);
+    th = have_themes ? theme : 0;
+    if (have_turned && ring && (turn = beam_now()) >= 0) turn %= leds;
+    if (th && ring) {                       /* beam not known yet: at 0, ring_tick turns it once it is */
+        if (turn < 0) turn = 0;
+        theme_pattern(actual, sizeof actual, th, pattern[7] == 's' ? "listen" : "end", turn);
     }
+    else if (th && !strcmp(pattern, "active-thinking")) theme_pattern(actual, sizeof actual, th, "think", -1);
+    else if (th && !strcmp(pattern, "active-talking")) theme_pattern(actual, sizeof actual, th, "talk", -1);
+    else if (turn >= 0) snprintf(actual, sizeof actual, "hassmic_%s_%d", pattern[7] == 's' ? "listen" : "end", turn);
     struct shown *s = find(pattern);
+    int e = ended_find(pattern);
     if (s && strcmp(s->actual, actual)) run("-u", s->actual);
+    if (e >= 0 && strcmp(ended[e].actual, actual)) run("-u", ended[e].actual);     /* another theme's, still playing */
+    ended_drop(e);
     if (!s && nshown < SHOWN_MAX) s = &shown[nshown++];
     if (s) {
         snprintf(s->logical, sizeof s->logical, "%s", pattern); snprintf(s->actual, sizeof s->actual, "%s", actual);
-        s->at = now_ms(); s->ms = visible_ms(pattern); s->turn = turn;
+        s->at = now_ms(); s->ms = visible_ms(pattern); s->turn = turn; s->th = th;
     }
     light_apply(now_ms());                  /* the light goes first: never mixed into the Echo's */
     run("-s", actual);
@@ -563,8 +756,10 @@ void ring_unset(const char *pattern)
 {
     pthread_mutex_lock(&lock);
     struct shown *s = find(pattern);
-    run("-u", s ? s->actual : pattern);
+    int e = s ? -1 : ended_find(pattern);
+    run("-u", s ? s->actual : e >= 0 ? ended[e].actual : pattern);
     if (s) *s = shown[--nshown];
+    ended_drop(e);
     pthread_mutex_unlock(&lock);
 }
 
@@ -572,8 +767,16 @@ void ring_tick(void)
 {
     long long now = now_ms();
     pthread_mutex_lock(&lock);
-    for (int i = 0; i < nshown; i++)        /* finished ones: ledcontroller let them go itself */
-        if (shown[i].ms >= 0 && now >= shown[i].at + shown[i].ms) shown[i--] = shown[--nshown];
+    for (int i = 0; i < nshown; i++)        /* finished ones: ledcontroller let them go itself (or plays them again) */
+        if (shown[i].ms >= 0 && now >= shown[i].at + shown[i].ms) {
+            if (strcmp(shown[i].logical, shown[i].actual)) {
+                int e = ended_find(shown[i].logical);
+                if (e < 0 && nended < SHOWN_MAX) e = nended++;
+                if (e >= 0) { snprintf(ended[e].logical, sizeof ended[e].logical, "%s", shown[i].logical);
+                              snprintf(ended[e].actual, sizeof ended[e].actual, "%s", shown[i].actual); }
+            }
+            shown[i--] = shown[--nshown];
+        }
     /* The talker moved while the ring is open (or the front end reported the beam after the wake word): the open ring
      * at the new turn, without its opening again */
     struct shown *s = find("active-start");
@@ -582,7 +785,8 @@ void ring_tick(void)
         if (b >= 0 && b % leds != s->turn) {
             char was[40]; snprintf(was, sizeof was, "%s", s->actual);
             s->turn = b % leds;
-            snprintf(s->actual, sizeof s->actual, "hassmic_hold_%d", s->turn);
+            if (s->th) theme_pattern(s->actual, sizeof s->actual, s->th, "hold", s->turn);
+            else snprintf(s->actual, sizeof s->actual, "hassmic_hold_%d", s->turn);
             run("-s", s->actual); run("-u", was);
         }
     }
