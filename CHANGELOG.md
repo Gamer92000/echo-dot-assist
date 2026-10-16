@@ -4,6 +4,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-15
 
+- **Echo Show 8 (1st gen): a factory reset forgets a Wi-Fi network that Amazon's own setup saved.** Android 7 only lets the
+  network's creator or the system user remove it, so the reset reported "forgotten" and the Echo stayed on the network (and
+  never offered setup from a phone). The reset now removes it as the system user, and says so when one cannot be removed.
 - **Echo Show 8 (1st gen): the speaker gain can go below stock.** The Show 8 is loud at its stock level with music at
   full volume, so the settings page's speaker gain goes down to -6 dB here (the Dots only go up). About -2 dB suited
   the first one tried.

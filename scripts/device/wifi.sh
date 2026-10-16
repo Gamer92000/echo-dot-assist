@@ -249,8 +249,13 @@ saved) Q list_networks | grep -c '^[0-9]' ;;
 forget)
     if android; then
         # WifiService: every configured network goes, saved at once; the link it was on ends with its network
-        for i in $(A list_networks | sed -n 's/^\([0-9][0-9]*\)[[:space:]].*/\1/p'); do A remove $i > /dev/null; done
-        say "every saved network forgotten"
+        # Android 7 lets only the network's creator or the system user remove it: a network of Amazon's own setup (the
+        # unlock leaves one, crown 2026-10-15: "Not authorized to remove network", the Echo stayed on it) is refused to root
+        for i in $(A list_networks | sed -n 's/^\([0-9][0-9]*\)[[:space:]].*/\1/p'); do
+            aok remove $i && continue
+            [ -x "${0%/*}/runas" ] && "${0%/*}/runas" system system env CLASSPATH=$WIFICTL app_process / Wifictl remove $i > /dev/null
+        done
+        [ "$(A list_networks | grep -c '^[0-9]')" = 0 ] && say "every saved network forgotten" || say "!! a saved network could not be removed: the Echo stays on it"
     else
         # Not wpa_supplicant's P2P groups (disabled=2), as in join.  Saved at once: the reset is meant to survive a reboot.
         # Removing the network it is on ends that link; no "disconnect", which would keep it off until told to reconnect.
