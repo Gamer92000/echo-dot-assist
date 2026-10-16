@@ -25,6 +25,9 @@ struct board {
                                        would act on the volume keys too and take its own volume off on top of ours */
     int privacy_latch;              /* 1: the sysfs state is the truth (read at start, on the mute key and once a second);
                                        0: nothing to read, presses of the keypad's mute key are counted from "unmuted" */
+    const char *privacy_button;     /* input device of the mute button itself, where the driver reports the latch late (athena:
+                                       its gpio-privacy holds the enable line 1 s, then changes state); NULL: no early notice */
+    int privacy_settle_ms;          /* with privacy_button: how long a press is believed before the latch must have confirmed it */
 
     /* Bluetooth: raw HCI (H4) character device, the init service that owns it in stock, where the address is stored */
     const char *bt_dev;

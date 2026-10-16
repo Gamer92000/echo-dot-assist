@@ -46,6 +46,11 @@ const struct board board = {
     .privacy_state = "/sys/devices/platform/gpio-privacy/state",
     .privacy_input = "name:gpio-privacy-state",
     .privacy_latch = 1,
+    /* the driver holds the enable line for enable-gpio-toggle-duration (1000 ms, device tree) before it changes state and
+     * reports it: measured 2026-10-15, button event to latch 1.23 and 1.29 s muting, 0.28 s unmuting, while the red light
+     * under the button follows the press at once.  The press itself is early enough to show it */
+    .privacy_button = "name:gpio-privacy-button",
+    .privacy_settle_ms = 2000,
 
     .bt_dev = "/dev/stpbt",                                         /* MT7668 combo, btmtksdio.ko (verify) */
     .bt_service = NULL,                                             /* none: Android's stack is off the partition */
