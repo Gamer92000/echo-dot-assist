@@ -1030,6 +1030,14 @@ Run in this order. Each step says what it proves.
       up to 1.6 kB escaped); `settings_apply_text` refuses an over-long line instead of cutting it.
       fake_ha_arbitration: A, B, A on one link (no second HA_STATE_SUB, state at once), a typo'd id unknown then
       missing, not linked after HA left; fake_web: an over-long line refused, `linked` false.
+      First measurement on the two Echos (2026-10-16, Sonos in the kitchen on a radio station, volume 30 %): 11 rounds,
+      the owner found every answer right; the offset decided 3 of them for the kitchen (0.4–1.6 dB behind raw, the
+      kitchen hearing the voice a little stronger), the living room still won when it heard clearly better.
+      Open, the volume: a factor on the background is a fixed offset whatever the music's level (log), so quiet radio
+      gets the same 3 dB as loud music, then a plain room preference. What would follow the level is weighting down only
+      what the music adds: ambient counted = baseline + (ambient - baseline) x factor, the baseline learned from the
+      rounds without media (the "no media of this room" lines); bounded by itself, since the background never counts
+      below the baseline. To be decided offline on a week of both Echos' rounds before it goes in.
 - [x] Stale `-m` after the wake word migration (2026-10-06, donut kept going back to Alexa): `artifact-install.sh
       migrate` renamed `models/echo-de` to `echo-de-DE` and moved `state/wake_word`, but hassmic.conf kept
       `ARGS="-m .../models/echo-de/pryon.manifest"`; `wake_words_scan` added the -m path unchecked, so HA's select had two
