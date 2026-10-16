@@ -12,6 +12,8 @@ What changed for people using the Echo, newest first. Details and measurements a
 - **Echo Show 8 (1st gen): a factory reset forgets a Wi-Fi network that Amazon's own setup saved.** Android 7 only lets the
   network's creator or the system user remove it, so the reset reported "forgotten" and the Echo stayed on the network (and
   never offered setup from a phone). The reset now removes it as the system user, and says so when one cannot be removed.
+- **Echo Show 8 (2nd gen): `install-system.sh --uninstall` puts the SELinux policy back.** It did not find where the policy
+  lives on this model, left the patched one in place and stopped before the reboot.
 - **Echo Show 8 (2nd gen): the mute button is answered at once.** Amazon's driver holds the microphone switch for one
   second before it reports it, so the red band and the "mics off" sound came 1.2 s after the press (the red light under the
   button was instant). hassmic now reacts to the press itself and lets the switch confirm it.

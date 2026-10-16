@@ -69,7 +69,7 @@ FILES="$OUT/hassmic $OUT/runas $(ls $OUT/mixcap $OUT/mixplay $OUT/pryon_test $OU
 if [ -z "$TWRP" ]; then
     t "rm -rf $STAGE; mkdir -p $STAGE"
     if [ "$1" = --uninstall ]; then
-        adb push $OUT/otatool scripts/system/sysinstall.sh $STAGE/ >/dev/null
+        adb push $OUT/otatool scripts/system/sysinstall.sh $DDIR/device.conf $STAGE/ >/dev/null   # device.conf: where the policy is (SEPOLICY_FILE)
         MODE=uninstall
     else
         adb push $FILES $DDIR/hassmic.rc $STAGE/ >/dev/null
@@ -87,7 +87,7 @@ if [ -z "$TWRP" ]; then
     fi
     t "chmod 755 $STAGE/otatool; sh $STAGE/sysinstall.sh $MODE $STAGE && touch $STAGE/ok"
     t "[ -f $STAGE/ok ]" || { t "rm -rf $STAGE"; echo "system partition not written (see above); nothing to undo"; exit 1; }
-    t "rm -rf $STAGE; ls -lZ /system/hassmic /system/etc/init/hassmic.rc $SPF 2>/dev/null"
+    t "rm -rf $STAGE; ls -lZ /system/hassmic /system/etc/init/hassmic.rc $SPF 2>/dev/null; true"
     [ "$MODE" = uninstall ] && echo "note: pushed updates in /data/local/hassmic/ota are no longer started; remove them with adb once the OS is up"
     echo "$MODE done on the running $DEVICE; rebooting"
     adb reboot; exit 0
