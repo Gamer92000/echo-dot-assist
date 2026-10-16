@@ -213,7 +213,7 @@ const LAYOUT = {
 };
 
 // help: what it does, in the user's terms.  ha: also in Home Assistant (true), or for features the entities it adds.
-// icon: features.  parent: shown inside that feature's card while it is on.  tag: an extra badge.
+// icon: features.  parent: shown inside that feature's card while it is on (sub: under the child above it, indented).  tag: an extra badge.
 const HELP = {
   mic_level: { help: 'How loud your voice reaches speech-to-text. The Echo adjusts its gain to hold speech at this level. Raise it if quiet commands get misheard or cut off; lower it if loud speech comes out distorted. Default −26 dBFS.' },
   noise_reduction: { help: 'Takes steady background noise (fans, traffic, the dishwasher) out of what speech-to-text hears, by up to 6, 9 or 12 dB. The wake word always gets the untouched sound. Try it if commands fail in a noisy room.' },
@@ -351,16 +351,23 @@ const HELP = {
     when: () => settingValue('arbitration_mode') === 'kiosk' || !settingValue('arbitration_window_auto'),
     help: 'How long the Echo waits for other devices\' claims before it answers. Longer catches devices whose claims come late, at the cost of a slower answer when one did not hear you. Kiosk Satellite mode: use the same as on your tablets; Kiosk Satellite\'s default is 400 ms. Echo network: it still answers as soon as every other Echo\'s claim is in.' },
   arbitration_media_players: { parent: 'arbitration', placeholder: 'media_player.kitchen_sonos, media_player.kitchen_tv',
-    help: 'The media players in this Echo\'s room, by their entity ids in Home Assistant, comma separated, at most 8: a Sonos, a TV, Music Assistant\'s player of the same speaker. Music beside an Echo drowns out a wake word said right next to it, and the Echo in the next room answers instead. While one of these plays, or this Echo plays music itself, the background counts less here (below), until 2 minutes after the music stopped. Home Assistant tells the Echo what they play over its own connection: nothing to set up there. Each Echo has its own room, so this is not copied to other Echos.',
+    help: 'Entity ids of the speakers and TVs in this Echo\'s room, comma separated, at most 8. While one of them plays, and for 2 minutes after, this Echo gets precedence for a wake word several Echos heard (below). List the speaker\'s own entity (for a Sonos, the Sonos integration\'s), not this Echo\'s own media player: that one reports playing while the Echo answers. Add Music Assistant\'s player of the same speaker only if the speaker\'s own entity does not show what Music Assistant plays. A speaker grouped across rooms plays in both, so both Echos get the same advantage and it cancels out. Home Assistant reports their states over its connection; nothing to set up there. Not copied to other Echos.',
     status: () => {
       const m = state.media; if (!m) return null;
-      const p = (t) => h('p', { class: 'f-model' }, t);
-      if (m.here) return p(`Media here: ${m.here} (${m.pct >= 100 ? 'setting off' : `background at ${m.pct} %`}).`);
-      if (!(m.players || []).length) return p('No players listed: only this Echo\'s own music counts.');
-      return p(`No media here (${m.players.map((x) => `${x.id} ${x.state}`).join(', ')}).`);
+      const p = (t, cls) => h('p', { class: cls || 'f-model' }, t), out = [];
+      const players = m.players || [];
+      if (m.here) out.push(p(`Media here: ${m.here} (${m.pct >= 100 ? 'setting off' : `background at ${m.pct} %`}).`));
+      else if (players.length) out.push(p(`No media here (${players.map((x) => `${x.id} ${x.state}`).join(', ')}).`));
+      if (players.length && !m.linked) out.push(p('Not connected to Home Assistant: the players\' states are not known.', 'f-note'));
+      for (const x of players.filter((y) => y.state === 'missing')) out.push(p(`Home Assistant does not report ${x.id}. Check the entity id.`, 'f-note'));
+      return out.length ? h('div', {}, out) : null;
     } },
-  arbitration_media_ambient: { parent: 'arbitration', step: 5,
-    help: 'How much of the room\'s background noise counts while media plays in this Echo\'s room (the players above, or its own music). At 50 % this Echo gets 3 dB more than the others; lower gives it more, and makes it answer more often when you spoke in the next room while the music played here. 100 %: off. An Echo you are talking to keeps the next wake word all the same. Default 50 %; use the same on every Echo.' },
+  arbitration_media_ambient: { parent: 'arbitration', sub: true, step: 5,
+    help: 'How much of the room\'s background noise counts while media plays here: this Echo\'s own playback (Sendspin, Bluetooth) and the players listed above. At 50 % this Echo gets 3 dB over the others; lower gives it more, and it then answers more often when you spoke in the next room. 100 %: off. Default 50 %; best the same on every Echo.',
+    status: () => {
+      const m = state.media;
+      return m && !(m.players || []).length ? h('p', { class: 'f-model' }, 'No players listed: applies to this Echo\'s own playback only.') : null;
+    } },
   sound_detection: { icon: 'wave', ha: ['Sound (event)'], help: 'Home Assistant gets a "Sound" event for smoke and CO alarms, breaking glass, barking and more. Amazon\'s Alexa Guard model listens for those, and for a crying baby, snoring, coughing, running water and beeping appliances. A stock Echo double-checks every hit in Amazon\'s cloud; this one cannot.',
     note: 'Less reliable than on a stock Echo: treat events as hints, never as a replacement for a smoke detector.',
     status: () => {
@@ -613,24 +620,27 @@ async function load() {
 let updCheck = { busy: false, why: '' };
 const paintStatus = (name) => { const c = controls.get(name); if (c && c.paint) c.paint(); };
 
-async function set(name, value) {
+// returns why it was refused ('' saved); quiet: the caller shows that itself
+async function set(name, value, quiet) {
   const gate = name === 'online_updates' && value !== 'off' && settingValue(name) === 'off';
   if (name === 'online_updates') { updCheck = { busy: gate, why: '' }; paintStatus(name); }
+  let refused = '';
   try {
     const r = await (await echo.call('POST', '/api/set', `${name}=${value}\n`)).json();
     if (gate) updCheck.why = r.github_unreachable || '';
     if (r.github_unreachable) { /* the warning under the row says it */ }
-    else if (r.errors) toast(r.errors.trim());
+    else if (r.errors) { refused = r.errors.trim(); if (!quiet) toast(refused); }
     else {
       const s = state.settings.find((x) => x.name === name);
       if (s && s.feature) toast('Saved. Home Assistant reconnects to update its entities.');
       flash(name);
     }
-  } catch (e) { toast(errText(e)); }
+  } catch (e) { refused = errText(e); if (!quiet) toast(refused); }
   if (gate) { updCheck.busy = false; paintStatus(name); }
   await load();
   // once more shortly: what the change set off (a feature that cannot start switches itself back off) shows without the 15 s wait
   clearTimeout(set.again); set.again = setTimeout(() => load().catch(() => {}), 1500);
+  return refused;
 }
 
 function flash(name) {
@@ -753,8 +763,16 @@ function control(s, prefix = 's-') {
   }
   if (s.type === 'text') {              // typed in, saved when the field is left (or on Enter); the Echo checks it
     const t = h('input', { type: 'text', id, spellcheck: 'false', autocomplete: 'off', placeholder: (HELP[s.name] || {}).placeholder || '' });
-    t.onchange = () => set(s.name, t.value.trim());
-    return { el: t, update: (x) => { if (document.activeElement !== t) t.value = x.value; } };      // not under the cursor
+    const why = h('p', { class: 'field-err', role: 'alert' });
+    let refused = null;                 // text the Echo refused: stays in the field, marked, until edited or saved
+    const mark = (text, err) => {
+      refused = err ? text : null; t.classList.toggle('invalid', !!err); why.textContent = err || '';
+      if (err) t.setAttribute('aria-invalid', 'true'); else t.removeAttribute('aria-invalid');
+    };
+    t.oninput = () => { if (refused !== null) mark(null, ''); };
+    t.onchange = async () => { const v = t.value.trim(), err = await set(s.name, v, true); mark(v, err); if (err) t.value = v; };
+    return { el: h('div', { class: 'text-field' }, t, why),
+             update: (x) => { if (document.activeElement !== t && refused === null) t.value = x.value; } };      // not under the cursor
   }
   const names = CHOICE_NAMES[s.name] || {}, modes = (HELP[s.name] || {}).modes;
   if (modes) {                          // choices worth weighing: a small card each, what each gives and costs one click away
@@ -842,7 +860,7 @@ function settingRow(s) {
 
 function featureCard(s, children) {
   const info = HELP[s.name] || {}, c = control(s), saved = h('span', { class: 'saved' }, 'Saved');
-  const kids = children.map((k) => { const r = settingRow(k); r.classList.add('f-child'); return r; });
+  const kids = children.map((k) => { const r = settingRow(k); r.classList.add('f-child'); if ((HELP[k.name] || {}).sub) r.classList.add('f-sub'); return r; });
   const status = h('div');
   const more = moreOf(s.name, info.help ? h('p', {}, act(info.help)) : null,
     info.ha ? h('div', { class: 'f-ha' }, icon('ha'), h('span', {}, 'In Home Assistant while on: ', info.ha.map((n, i) => [i ? ', ' : '', h('b', {}, n)]))) : null);

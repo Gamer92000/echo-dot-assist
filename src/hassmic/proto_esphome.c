@@ -138,7 +138,10 @@ enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3
 #define MAX_CLIENTS 4
 /* lock held.  enc: Noise frames (tx is used under the lock, rx by the client's reader only); keyed: with the device key;
  * actions: runs Home Assistant actions for us */
-static struct { int fd, states, enc, keyed, ble, ble_free, ble_user, actions, ha_states; struct noise_cs tx, rx; } clients[MAX_CLIENTS] = { { .fd = -1 }, { .fd = -1 }, { .fd = -1 }, { .fd = -1 } };
+/* media: the media players this link follows (media_sub), with the last state Home Assistant sent of each ("" none yet) */
+#define FOLLOW_MAX (2 * MEDIA_MAX)
+struct followed { char id[96], st[32]; };
+static struct { int fd, states, enc, keyed, ble, ble_free, ble_user, actions, ha_states, nmedia; struct followed media[FOLLOW_MAX]; struct noise_cs tx, rx; } clients[MAX_CLIENTS] = { { .fd = -1 }, { .fd = -1 }, { .fd = -1 }, { .fd = -1 } };
 static int va_fd = -1;                  /* lock held: voice assistant subscriber */
 static __thread int reply_fd = -1;      /* the client whose request this thread is handling */
 static int cancelled;                   /* lock held: the user cancelled the run; its events are dropped.  2: a new run
@@ -1568,7 +1571,11 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
             else if (f.field == 3) pbf_str(&f, attr, sizeof attr);
         }
         if (attr[0] || c < 0 || !clients[c].keyed) break;
-        if (!strncmp(ent, "media_player.", 13) && core_media_state(ent, st)) break;
+        if (!strncmp(ent, "media_player.", 13)) {
+            for (int i = 0; i < clients[c].nmedia; i++)  /* kept even for one no longer listed: it may be listed again */
+                if (!strcmp(clients[c].media[i].id, ent)) snprintf(clients[c].media[i].st, sizeof clients[c].media[i].st, "%s", st);
+            if (core_media_state(ent, st)) break;
+        }
         if (arb_running()) arb_ha_state(ent, st);
     } break;
     case EXECUTE_SERVICE: {
@@ -1706,7 +1713,7 @@ static void serve(int fd)
                                        adbwifi_start(adb_changed); wifimotion_start(wifi_changed); update_start(update_changed);
                                        if (core_bluetooth(-1)) { ble_start(&ble_handler); a2dp_start(bt_changed); } } }
     for (int i = 0; i < MAX_CLIENTS; i++) { if (clients[i].fd < 0 && slot < 0) slot = i; n += clients[i].fd >= 0; }
-    if (slot >= 0) { clients[slot].fd = fd; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = clients[slot].ha_states = 0; if (!n) core_link(1, 0); }
+    if (slot >= 0) { clients[slot].fd = fd; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = clients[slot].ha_states = clients[slot].nmedia = 0; if (!n) core_link(1, 0); }
     int keyed = have_key;
     pthread_mutex_unlock(&core_lock);
     if (slot < 0) { fprintf(stderr, "client refused: %d connections already\n", MAX_CLIENTS); free(buf); free(pt); return; }
@@ -1745,7 +1752,7 @@ static void serve(int fd)
 done:
 
     pthread_mutex_lock(&core_lock);
-    clients[slot].fd = -1; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = clients[slot].ha_states = 0; n = 0;
+    clients[slot].fd = -1; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = clients[slot].ha_states = clients[slot].nmedia = 0; n = 0;
     ble_update();
     if (!ble_subscribers()) {                           /* nobody left to use them */
         int users = 0; uint64_t a[BLE_MAX_CONN];
@@ -1797,8 +1804,18 @@ static int arb_request(const char *entity)
 }
 
 /* lock held: follow a media player of the room (core_media_players) for good, not once: Home Assistant sends its state at
- * once and then on every change, and drops the tracker when the link closes.  Needs no permission either */
-static void media_sub(int c, const char *entity) { PB(b, 160); pb_str(&b, 1, entity); send_to(clients[c].fd, HA_STATE_SUB, &b); }
+ * once and then on every change, and drops the tracker when the link closes.  Needs no permission either.  Once per
+ * link: one listed, removed and listed again (A, B, A) is still followed (there is no unsubscribe), so it is not
+ * subscribed twice; it gets the last state Home Assistant sent of it instead, which a second tracker would have sent.
+ * Past FOLLOW_MAX on one link (a list changed many times) it is subscribed without being kept */
+static void media_sub(int c, const char *entity)
+{
+    int k = 0;
+    while (k < clients[c].nmedia && strcmp(clients[c].media[k].id, entity)) k++;
+    if (k < clients[c].nmedia) { if (clients[c].media[k].st[0]) core_media_state(entity, clients[c].media[k].st); return; }
+    if (k < FOLLOW_MAX) { snprintf(clients[c].media[k].id, sizeof clients[c].media[k].id, "%s", entity); clients[c].media[k].st[0] = 0; clients[c].nmedia++; }
+    PB(b, 160); pb_str(&b, 1, entity); send_to(clients[c].fd, HA_STATE_SUB, &b);
+}
 static int media_subscribe(const char *entity)
 {
     int n = 0;
@@ -1810,6 +1827,7 @@ static int media_subscribe(const char *entity)
 static void media_follow(int c)
 {
     char log[MEDIA_MAX * 98] = ""; size_t ln = 0; const char *id;
+    core_media_followed();
     for (int i = 0; (id = core_media_player(i)); i++) { media_sub(c, id); if (ln < sizeof log) ln += (size_t)snprintf(log + ln, sizeof log - ln, "%s%s", i ? ", " : "", id); }
     if (ln) fprintf(stderr, "arbitration: following %s in Home Assistant\n", log);
 }

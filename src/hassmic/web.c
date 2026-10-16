@@ -451,7 +451,9 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
     pthread_mutex_lock(&core_lock);
     /* volume: the main one, for the page's Volume card to say what each kind of audio plays at now */
     n += (size_t)snprintf(o + n, cap - n, ",\"ha\":%s,\"volume\":%d,\"settings\":[", core_ha_linked() ? "true" : "false", core_volume());
-    for (int i = 0, k = settings_count(); i < k && n < cap - 600; i++) {
+    /* each setting checked before it goes in: a text's value alone may take 2 * SETTINGS_TEXT_MAX escaped; past cap,
+     * cap - n would wrap */
+    for (int i = 0, k = settings_count(); i < k && n + 2 * SETTINGS_TEXT_MAX + 1000 < cap; i++) {
         const struct setting *s = settings_at(i); const char *const *names; int nc = settings_choices(s, &names);
         char val[2 * SETTINGS_TEXT_MAX + 3] = "\"";        /* a text's value as a JSON string, the others a number */
         if (s->type == S_TEXT) { char t[SETTINGS_TEXT_MAX + 1]; settings_str(s, t, sizeof t); jesc(val + 1, sizeof val - 2, t); strcat(val, "\""); }

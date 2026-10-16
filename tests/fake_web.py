@@ -102,7 +102,7 @@ async def main():
         check(sp.get("type") == "text" and sp.get("value") == "" and sp.get("export") is False and sp.get("feature") is False
               and sa.get("type") == "int" and sa.get("value") == 50 and sa.get("unit") == "%" and (sa.get("min"), sa.get("max")) == (10, 100)
               and sa.get("export") is True and sa.get("feature") is False, f"media in the room: the players (text) and the background (50 %) on the page: {sp} {sa}")
-        check(s.get("media") == {"pct": 50, "here": None, "players": []}, f"its status: {s.get('media')}")
+        check(s.get("media") == {"pct": 50, "here": None, "linked": False, "players": []}, f"its status (no Home Assistant: not linked): {s.get('media')}")
         r = [b.set(arbitration_media_ambient=v) for v in (9, 101)] + [b.set(arbitration_media_players="media_player.TV")]
         check(all(x.get("applied") == 0 and x.get("errors") for x in r) and cfg().get("arbitration_media_ambient", "50") == "50",
               f"9 %, 101 %, an id with capitals: refused: {[x.get('errors') for x in r]}")
@@ -111,6 +111,10 @@ async def main():
         check(r.get("applied") == 2 and cfg().get("arbitration_media_ambient") == "30" and cfg().get("arbitration_media_players") == "media_player.tv,media_player.sonos_2"
               and st.get("media", {}).get("players") == [{"id": "media_player.tv", "state": "unknown"}, {"id": "media_player.sonos_2", "state": "unknown"}]
               and st.get("media", {}).get("pct") == 30, f"set: blanks and the repeated one dropped, saved; no Home Assistant yet: unknown: {st.get('media')}")
+        # a line longer than the Echo takes: refused whole (cut short, it would pass as "media_player.radio")
+        r = b.set(arbitration_media_players="media_player.radio" + " " * 900 + ",media_player.kitchen")
+        check(r.get("applied") == 0 and "longer than" in r.get("errors", "") and cfg().get("arbitration_media_players") == "media_player.tv,media_player.sonos_2",
+              f"an over-long line: refused, not cut: {r}")
 
         # Home Assistant: the lean list, and what the page changes
         ha, by, states = await ha_connect()
