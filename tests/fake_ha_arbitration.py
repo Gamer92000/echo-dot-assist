@@ -42,7 +42,7 @@ class Echo:
         self.env = dict(os.environ, HASSMIC_STATE=self.state, HASSMIC_SETTINGS=os.path.join(self.state, "settings"),
                         HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(self.state, "play.raw"),
                         HASSMIC_MDNS_FILE=os.path.join(self.state, "none"), HASSMIC_ARB_ADDR=BCAST, HASSMIC_KIOSK_PORT=str(KIOSK), HASSMIC_TEST_SCORE=str(score),
-                        HASSMIC_MODELS=os.path.join(self.state, "models"), HASSMIC_MEDIA_HOLD_MS="1500",
+                        HASSMIC_MODELS=os.path.join(self.state, "models"), HASSMIC_MEDIA_HOLD_MS="1500", HASSMIC_MEDIA_MISSING_MS="1000",
                         HASSMIC_MUSIC=os.path.join(self.state, "music.raw"))
         os.makedirs(os.path.join(self.state, "models", "echo-de"))
         open(os.path.join(self.state, "models", "echo-de", "pryon.manifest"), "w").close()
@@ -575,6 +575,21 @@ async def main():
         a.page.set(arbitration_media_players=f"{SONOS}, {RADIO}"); await asyncio.sleep(0.5)
         check(ha.subs[n:] == [(a.name, RADIO)] and f"arbitration_media_players={SONOS},{RADIO}" in open(os.path.join(a.state, "config")).read().split(),
               f"one more: only that one followed: {ha.subs[n:]}")
+        # listed, removed and listed again on the same link (A, B, A): still followed, so not subscribed twice; the last
+        # state Home Assistant sent of it counts at once (the Sonos plays)
+        n2 = len(ha.subs); a.page.set(arbitration_media_players=RADIO); a.page.set(arbitration_media_players=f"{SONOS},{RADIO}"); await asyncio.sleep(0.3)
+        m = media(a)
+        check(ha.subs[n2:] == [] and ha.subs.count((a.name, SONOS)) == 1 and m.get("here") == f"{SONOS} playing"
+              and m.get("players") == [{"id": SONOS, "state": "playing"}, {"id": RADIO, "state": "stopped"}],
+              f"listed again on the same link: no second subscription, its last state at once: {ha.subs[n2:]} {m}")
+        # an id Home Assistant does not have (a typo): it sends nothing, and after a while the page says so
+        GHOST = "media_player.kitchen_sonso"
+        a.page.set(arbitration_media_players=f"{SONOS},{GHOST}"); await asyncio.sleep(0.2)
+        m1 = media(a); await asyncio.sleep(1.2); m2 = media(a)
+        check((a.name, GHOST) in ha.subs and m1.get("linked") is True
+              and m1.get("players") == [{"id": SONOS, "state": "playing"}, {"id": GHOST, "state": "unknown"}]
+              and m2.get("players") == [{"id": SONOS, "state": "playing"}, {"id": GHOST, "state": "missing"}],
+              f"an entity Home Assistant does not report: unknown at first, then missing: {m1} {m2}")
         long_ = [f"media_player.{i}" + "z" * 79 for i in range(6)]        # the longest ids there are: 8 of them
         full = ",".join([SONOS, RADIO] + long_)
         a.page.set(arbitration_media_players=full); await asyncio.sleep(0.5)
@@ -599,7 +614,8 @@ async def main():
               f"Home Assistant gone: the Sonos counts as stopped: {m.get('here')}")
         await asyncio.sleep(1.5)
         m = media(a)
-        check(m.get("here") is None and {x["state"] for x in m.get("players", [])} == {"unknown"}, f"after the hold: no media, states unknown: {m}")
+        check(m.get("here") is None and m.get("linked") is False and {x["state"] for x in m.get("players", [])} == {"unknown"},
+              f"after the hold: no media, not linked, states unknown (not missing): {m}")
         ha.media[SONOS] = "idle"                        # meanwhile, with nobody following
         await a.connect(ha); await asyncio.sleep(0.5)
         won, sc, _ = await round_()

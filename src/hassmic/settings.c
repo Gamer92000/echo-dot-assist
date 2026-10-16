@@ -82,7 +82,7 @@ static const struct setting table[NSET] = {
     /* main.c keeps them: precedence for the Echo of the room where media plays (wake_heard).  The players are this room's,
      * so not exported; how much the background counts is a matter of taste, best the same on every Echo */
     [ARB_MEDIA_PLAYERS] = { "arbitration_media_players", "Media players in this room", "Features", NULL, S_TEXT, 0, 0, 0, 0 },
-    [ARB_MEDIA_AMBIENT] = { "arbitration_media_ambient", "Background while media plays in the room", "Features", "%", S_INT, 10, 100, 1, 0 },
+    [ARB_MEDIA_AMBIENT] = { "arbitration_media_ambient", "Background noise while media plays", "Features", "%", S_INT, 10, 100, 1, 0 },
     [SOUND]       = { "sound_detection", "Sound detection", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [WHISPER]     = { "whisper_detection", "Whisper detection", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [WIFI_MOTION] = { "wifi_motion", "Wi-Fi motion (experimental)", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
@@ -429,6 +429,11 @@ int settings_apply_text(const char *text, char *err, size_t errsz)
         char line[SETTINGS_TEXT_MAX + 64], *eq, *v; size_t l = strcspn(p, "\n");
         snprintf(line, sizeof line, "%.*s", (int)(l < sizeof line - 1 ? l : sizeof line - 1), p);
         p += l + (p[l] == '\n');
+        if (l >= sizeof line) {                     /* refused whole: cut short, a list could still pass as a shorter one */
+            line[strcspn(line, "=")] = 0;
+            if (en < errsz) en += (size_t)snprintf(err + en, errsz - en, "%.60s: longer than %zu characters, not taken\n", line, sizeof line - 1);
+            continue;
+        }
         line[strcspn(line, "\r")] = 0;
         char *k = line; while (isspace((unsigned char)*k)) k++;
         if (!*k || *k == '#' || !(eq = strchr(k, '='))) continue;

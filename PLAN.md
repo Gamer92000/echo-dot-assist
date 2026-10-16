@@ -1018,7 +1018,18 @@ Run in this order. Each step says what it proves.
       Not done: the case (a) can turn wrong (music in the kitchen, the talker in the living room) is not measured, hence
       only 3 dB by default; on the two Echos: 10 wake words each with the Sonos in the kitchen and the talker in the
       kitchen / living room, quiet, own Sendspin, with the round's log lines for (b). A state from an unkeyed client is
-      not tested: once HA set the key, no other client stays connected
+      not tested: once HA set the key, no other client stays connected.
+      Follow-up (2026-10-16): a listed id Home Assistant does not have gets no state at all (esphome manager: the
+      tracker sends the state at once only if the entity exists), so `/api/state` `media.players[].state` is `missing`
+      once a keyed link followed it 10 s (`HASSMIC_MEDIA_MISSING_MS`) without a state, and `media.linked` false without
+      a keyed link; the page says which. One subscription per id and link: each client keeps the ids it subscribed
+      with HA's last state of each (16 at most), so an id listed again (A, B, A) is not subscribed twice and its last
+      state comes back at once (without that it stayed unknown until it changed, and turned `missing`). Page: the
+      background factor indented under the list (`sub:` in app.js), not dimmed with an empty list since own playback
+      uses it too; a refused text stays in the field. web.c checks each setting's room before it goes in (a text takes
+      up to 1.6 kB escaped); `settings_apply_text` refuses an over-long line instead of cutting it.
+      fake_ha_arbitration: A, B, A on one link (no second HA_STATE_SUB, state at once), a typo'd id unknown then
+      missing, not linked after HA left; fake_web: an over-long line refused, `linked` false.
 - [x] Stale `-m` after the wake word migration (2026-10-06, donut kept going back to Alexa): `artifact-install.sh
       migrate` renamed `models/echo-de` to `echo-de-DE` and moved `state/wake_word`, but hassmic.conf kept
       `ARGS="-m .../models/echo-de/pryon.manifest"`; `wake_words_scan` added the -m path unchecked, so HA's select had two

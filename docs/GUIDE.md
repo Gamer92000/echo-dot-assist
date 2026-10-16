@@ -147,11 +147,16 @@ window" (100–1000 ms) applies instead. The log notes how late each claim came
 next room can hear you clearer than the one you stand beside: with a Sonos playing in the kitchen, the living room
 Echo took the kitchen's wake words. List each room's media players on its Echo's settings page, "Media players in this
 room" (entity ids as Home Assistant shows them, comma separated, at most 8: `media_player.kitchen_sonos,
-media_player.kitchen_tv`; Music Assistant's player of the same speaker can go in too). The Echo follows their state in
-Home Assistant over its own encrypted connection: Home Assistant sends it at once and on every change, after restarts of
-either side as well; nothing to set up there. While one of them is playing (or buffering), while the Echo plays music
-itself (Music Assistant, Bluetooth), and for 2 minutes after either stopped (paused, idle, off), the Echo counts the
-room's background only at "Background while media plays in the room": 50 % by default, 3 dB in its favour; 25 %
+media_player.kitchen_tv`). List the speaker's own entity (for a Sonos, the Sonos integration's), not the Echo's own
+media player, which reports playing while the Echo answers; Music Assistant's player of the same speaker only if the
+speaker's own entity does not show what Music Assistant plays. A speaker grouped across rooms plays in both, so both
+Echos get the same advantage and it cancels out. The Echo follows their state in Home Assistant over its own encrypted
+connection: Home Assistant sends it at once and on every change, after restarts of either side as well; nothing to set
+up there. Home Assistant sends nothing for an entity it does not have, so after 10 s the page says "Home Assistant does
+not report media_player.… Check the entity id"; without Home Assistant connected it says that instead. While one of
+them is playing (or buffering), while the Echo plays music itself (Music Assistant, Bluetooth; this counts with no list
+too), and for 2 minutes after either stopped (paused, idle, off), the Echo counts the room's background only at
+"Background noise while media plays", right under the list: 50 % by default, 3 dB in its favour; 25 %
 makes it 6 dB, 10 % (the least) 10 dB, 100 % switches it off. Lower is not simply better: speak in the living room
 while the kitchen plays music, and a kitchen Echo set too low may answer. A TV that is on but not playing does not
 count. An Echo in a conversation still keeps the next wake word; Echos of older builds take part as before, they see a

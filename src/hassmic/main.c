@@ -1184,9 +1184,10 @@ static void stream_ring(uint64_t from, uint64_t to) /* capture thread, lock held
 /* ---------------------------------------------------------------- media in the room (wake_heard)
  * The room's players come from the setting arbitration_media_players; Home Assistant sends their states over the keyed
  * link (proto->media_subscribe, core_media_state).  All of it: lock held, except own_ended */
-struct media_player { char id[96]; int active, known; long long ended; };    /* ended: mono_ms it stopped playing */
+struct media_player { char id[96]; int active, known; long long ended, since; };   /* ended: mono_ms it stopped playing;
+                                                    since: it was subscribed on a keyed link (0: not on any) */
 static struct media_player room[MEDIA_MAX];
-static int nroom, media_ambient = 50;
+static int nroom, media_ambient = 50, media_linked;  /* media_linked: a keyed link follows the room's players */
 static char media_ids[SETTINGS_TEXT_MAX + 1];
 static atomic_llong own_ended;                      /* mono_ms our own music (Sendspin, Bluetooth) last stopped; 0: never */
 
@@ -1196,6 +1197,15 @@ static long long media_hold_ms(void)
 {
     static long long ms = -1;
     if (ms < 0) { const char *e = getenv("HASSMIC_MEDIA_HOLD_MS"); ms = e && atoll(e) > 0 ? atoll(e) : 120000; }
+    return ms;
+}
+
+/* How long Home Assistant may take to send a player's state: it sends it at once when the entity exists, and nothing
+ * when it does not (a typo in the id).  HASSMIC_MEDIA_MISSING_MS for tests */
+static long long media_missing_ms(void)
+{
+    static long long ms = -1;
+    if (ms < 0) { const char *e = getenv("HASSMIC_MEDIA_MISSING_MS"); ms = e && atoll(e) > 0 ? atoll(e) : 10000; }
     return ms;
 }
 
@@ -1220,21 +1230,25 @@ int core_media_players(const char *list, char *err, size_t errsz)
         memcpy(ids[n], a, k); ids[n++][k] = 0;
     }
     /* the ones still listed keep what Home Assistant said of them; new ones are followed at once (removed ones stay
-     * followed until the link closes: ESPHome's API has no unsubscribe, and their states are ignored) */
+     * followed until the link closes: ESPHome's API has no unsubscribe, and their states are ignored; one listed again
+     * gets the last state Home Assistant sent of it, proto_esphome.c media_sub).  The list first, then the
+     * subscriptions: a state known already comes back at once (core_media_state) */
+    int fresh[MEDIA_MAX] = { 0 };
     memcpy(old, room, sizeof old);
     memset(room, 0, sizeof room); media_ids[0] = 0;
     for (int i = 0; i < n; i++) {
         int j = 0; size_t m = strlen(media_ids);
         while (j < nold && strcmp(old[j].id, ids[i])) j++;
         if (j < nold) room[i] = old[j];
-        else {
-            memcpy(room[i].id, ids[i], sizeof room[i].id);
-            if (connected && proto->media_subscribe && proto->media_subscribe(ids[i]) > 0 && ln < sizeof log)
-                ln += (size_t)snprintf(log + ln, sizeof log - ln, "%s%s", ln ? ", " : "", ids[i]);
-        }
+        else { memcpy(room[i].id, ids[i], sizeof room[i].id); fresh[i] = 1; }
         snprintf(media_ids + m, sizeof media_ids - m, "%s%s", i ? "," : "", ids[i]);
     }
     nroom = n;
+    for (int i = 0; i < n; i++)
+        if (fresh[i] && connected && proto->media_subscribe && proto->media_subscribe(ids[i]) > 0) {
+            room[i].since = mono_ms();
+            if (ln < sizeof log) ln += (size_t)snprintf(log + ln, sizeof log - ln, "%s%s", ln ? ", " : "", ids[i]);
+        }
     if (ln) fprintf(stderr, "arbitration: following %s in Home Assistant\n", log);
     return 0;
 }
@@ -1260,13 +1274,22 @@ int core_media_state(const char *entity, const char *state)
     return 0;
 }
 
+/* a keyed link subscribed to states (proto_esphome.c media_follow): it follows every listed player from now on */
+void core_media_followed(void)
+{
+    long long now = mono_ms();
+    media_linked = 1;
+    for (int i = 0; i < nroom; i++) room[i].since = now;
+}
+
 /* Home Assistant gone (restart, network): no more states come, so what played counts as stopped now */
 void core_media_link_lost(void)
 {
     long long now = mono_ms();
+    media_linked = 0;
     for (int i = 0; i < nroom; i++) {
         if (room[i].active) { room[i].ended = now; fprintf(stderr, "arbitration: %s counts as stopped, Home Assistant is gone (counts %lld s more)\n", room[i].id, media_hold_ms() / 1000); }
-        room[i].active = room[i].known = 0;
+        room[i].active = room[i].known = 0; room[i].since = 0;
     }
 }
 
@@ -1283,13 +1306,18 @@ static int media_here(char *why, size_t cap)
     return 0;
 }
 
+/* linked: a keyed link follows the players.  A player's state: playing, stopped, unknown (no keyed link, or its state
+ * not here yet), missing (subscribed media_missing_ms ago on a keyed link and still nothing: Home Assistant does not
+ * know the entity, HA's tracker sends nothing for one it does not have) */
 size_t core_media_json(char *o, size_t cap)
 {
-    char why[160]; int here = media_here(why, sizeof why); size_t n;
-    n = (size_t)snprintf(o, cap, "{\"pct\":%d,\"here\":%s%s%s,\"players\":[", media_ambient, here ? "\"" : "", here ? why : "null", here ? "\"" : "");
+    char why[160]; int here = media_here(why, sizeof why); size_t n; long long now = mono_ms();
+    n = (size_t)snprintf(o, cap, "{\"pct\":%d,\"here\":%s%s%s,\"linked\":%s,\"players\":[", media_ambient, here ? "\"" : "", here ? why : "null",
+                         here ? "\"" : "", media_linked ? "true" : "false");
     for (int i = 0; i < nroom && n < cap; i++)     /* ids: [a-z0-9_.] only, nothing to escape */
         n += (size_t)snprintf(o + n, cap - n, "%s{\"id\":\"%s\",\"state\":\"%s\"}", i ? "," : "", room[i].id,
-                              room[i].active ? "playing" : room[i].known ? "stopped" : "unknown");
+                              room[i].active ? "playing" : room[i].known ? "stopped"
+                              : media_linked && room[i].since && now - room[i].since >= media_missing_ms() ? "missing" : "unknown");
     if (n < cap) n += (size_t)snprintf(o + n, cap - n, "]}");
     return n < cap ? n : cap - 1;
 }
