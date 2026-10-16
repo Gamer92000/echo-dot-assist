@@ -38,6 +38,14 @@ Stock gain is loud at the Sendspin maximum. `board.speaker_gain_min_db` (-6 for 
 below stock; the owner liked -2 dB. The athena (TAS5805m digital volume 0..158, stock 100, limit 118) needs no negative
 range: stock is usable but without bass, +6 dB is loud and clean (owner's setting), 130 distorts.
 
+## The Show 8 has no action button to hold
+
+`board.action_combo`: a quick tap of both volume keys (within 400 ms of each other, released within 1 s) is the action
+button, which approves a settings page login, an adb opening and Improv on an Echo that is set up and offline. A hold of
+both keys is the arbitration pairing (2 s), and the 5 s warning and 10 s factory reset of a held action button do not
+exist there. Reset from Home Assistant's "Factory reset" button or the settings page. (Improv on an Echo that is not set
+up needs no button: tested on an athena, 2026-10-15, advertising 20 s after the reset, Wi-Fi from a phone worked.)
+
 ## Restart after a push update (fixed on crown)
 
 After `ota-push.sh` the `hassmic` service once stayed stopped for 3 min: `init` drops a `start` issued while the
