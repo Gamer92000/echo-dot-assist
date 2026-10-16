@@ -27,6 +27,13 @@ LOG=/data/local/hassmic/boot.log
 stamp() { if [ "$(getprop hassmic.clock.synced)" = 1 ]; then date -u '+%Y-%m-%d %H:%M:%SZ'; else read -r u _ < /proc/uptime; echo "boot+$u"; fi; }
 say() { echo "$(stamp) $*"; }
 stamped() { while IFS= read -r l; do echo "$(stamp) $l"; done; }
+# stop returns at once and init drops a start while the service is still stopping (hassmic can take seconds to let go
+# of audio, Sendspin, Bluetooth: crown, 2026-10-15, a push during music left it stopped for 3 min): wait for it first
+restart_hassmic() {
+    stop hassmic
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ "$(getprop init.svc.hassmic)" = stopped ] && break; sleep 1; done
+    start hassmic
+}
 [ -f $CONF ] || exit 0
 # Without the model's facts the satellite cannot start, but the firewall needs none of them: it must go up regardless.
 if [ ! -f $D/device.conf ]; then
@@ -234,7 +241,7 @@ ota_watch() {
             if out=$(DAEMON_USER=$DAEMON_USER READ_AS="$D/runas $DAEMON_USER $DAEMON_GROUPS" \
                      sh $D/artifact-install.sh /data/local/hassmic/state /data/local/hassmic 2>&1); then
                 say "== artifacts installed, restarting hassmic: $(echo $out)"
-                stop hassmic; start hassmic
+                restart_hassmic
             else say "== artifacts not installed: $(echo $out)"
             fi
         fi
@@ -276,7 +283,7 @@ ota_watch() {
             why=$(dd if=/data/local/hassmic/state/restart bs=40 count=1 2>/dev/null | tr -cd 'a-z ')
             rm -f /data/local/hassmic/state/restart
             say "== ${why:-restart} asked for on the settings page, restarting hassmic"
-            stop hassmic; start hassmic
+            restart_hassmic
         fi
         [ -f $IN/request ] || continue
         rm -f $IN/request $IN/result
@@ -309,7 +316,7 @@ ota_watch() {
         chown $DAEMON_USER $IN/result.tmp; mv $IN/result.tmp $IN/result
         if grep -q "^OK" $IN/result; then
             sleep 2                                     # let hassmic relay the result to the pusher
-            stop hassmic; start hassmic
+            restart_hassmic
             exec sh $SYS/boot.sh firewall               # and run the new firewall script as well
         fi
     done

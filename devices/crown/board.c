@@ -68,4 +68,5 @@ const struct board board = {
     .speaker_gain_stock = 30,
     .speaker_gain_steps = 2,
     .speaker_gain_db = 3,
+    .speaker_gain_min_db = -6,                                      /* 30 is loud at full volume on this Show: 2026-10-15 */
 };

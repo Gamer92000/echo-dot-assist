@@ -2,6 +2,14 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-15
+
+- **Echo Show 8 (1st gen): the speaker gain can go below stock.** The Show 8 is loud at its stock level with music at
+  full volume, so the settings page's speaker gain goes down to -6 dB here (the Dots only go up). About -2 dB suited
+  the first one tried.
+- **A push update could leave hassmic stopped.** After one update on the Show 8 the service stayed down for three
+  minutes: init ignores a start while the service is still stopping. The restart now waits for the stop.
+
 ## 2026-10-13
 
 - **Echo Show 8 (1st gen, `crown`): first support.** The Show 8 is the same platform as the Show 5, and a trial run on one
