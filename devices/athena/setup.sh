@@ -2,12 +2,14 @@
 # device.conf loaded and the helpers of scripts/lib/setup.sh).  The same steps, written out: README.md next to this file.
 # Each step_<id> returns non-zero when it did not finish; the runner then offers retry, skip or quit.  A step checks first
 # whether its result is there already, so a rerun (or work done by hand) passes through quietly.
-# What is different from crown: no flashing from here.  The unlock (saiyaku, a serial exploit) and the root zip are the
-# user's own work in front of this (README.md), and the install is written from the running OS (INSTALL=running).
+# What is different from crown: the unlock is saiyaku-athena's serial exploit (its meta-step.sh, run from here with its
+# output on the console), TWRP then flashes boot-root.zip, and the install is written from the running OS (INSTALL=running).
 
 XDA="the XDA thread of saiyaku-athena (devices/athena/unlock.md)"
 SAIYAKU=saiyaku-athena-v1.0.0.zip
+SAIYAKU_SHA256=6d48b4b253fa6cbecb9166c87c0177be09c8a02e5f2efd2bc0d0aec939626218
 BOOTROOT=$FW/boot-root.zip
+BOOTROOT_SHA256=741d904f7e2616c70be2c10f3466efb515769632779546a869f5591a6a9c827a
 MAGISKPOLICY=$FW/boot-root/patch/magiskpolicy32
 QEMU=toolchain/qemu-arm
 NDK=toolchain/android-ndk-r21e
@@ -17,17 +19,18 @@ STEPS="
 tools|Tools on this PC
 files|Downloads
 usb|Power and USB to the Echo
-root|Unlocked and rooted
+unlock|Unlock the bootloader
+root|Root (TWRP)
 build|Build
 network|Lock down, switch Alexa off
 install|Install
 "
-ROOTED_SKIP="usb root"           # an Echo rooted already: scripts/setup.sh asks
+ROOTED_SKIP="usb unlock root"           # an Echo rooted already: scripts/setup.sh asks
 NOTES=(
     "The screen is black with the light band along its bottom edge; Alexa's apps stay off while hassmic runs ($DDIR/README.md)."
     "adb over Wi-Fi: the settings page's debug access (http://<echo-ip>:28931/) opens it for 30 min, as on the other Echos."
     "Updates: git pull, then scripts/ota-push.sh <echo-ip>."
-    "\"Download from Amazon\" does not work on this model yet (its attestation service is another one than crown's, docs/re-athena.md). Models copied from another Echo through the settings page do."
+    "\"Download from Amazon\" on the settings page works here too (code pair login, as on crown): wake words and the newer sound detection model."
 )
 
 # The firmware unpacked, whatever the build mode: the build links against its libraries.  The .bin is a block OTA with
@@ -52,14 +55,18 @@ rootfs() {
 step_tools() {
     command -v curl > /dev/null || need_tools curl || return 1
     build_mode
-    if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb unzip brotli python3 debugfs curl sha256sum || return 1; return 0; fi
-    need_tools adb unzip brotli python3 make cc debugfs curl sha256sum bc xz || return 1
+    local unlock=; rooted_already || unlock="pyserial"          # saiyaku talks to the Echo's serial port
+    if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb unzip brotli python3 debugfs curl sha256sum $unlock || return 1; return 0; fi
+    need_tools adb unzip brotli python3 make cc debugfs curl sha256sum bc xz $unlock || return 1
     [ "$(df -Pk . | awk 'NR == 2 { print $4 }')" -gt 8000000 ] || warn "less than 8 GB free here; the NDK, firmware and images need about that"
 }
 
 step_files() {
     local need=()
     need+=($FW/$FIRMWARE_FILE $FIRMWARE_SHA256 "Fire OS $FIRMWARE_ID, from Amazon: the link is in $DDIR/README.md")
+    # the unlock and the root zip are the XDA thread's attachments; the root zip is needed afterwards for its magiskpolicy
+    rooted_already || need+=($FW/$SAIYAKU $SAIYAKU_SHA256 "the unlocker, attachment in $XDA")
+    [ -f $FW/boot-root/patch/magiskpolicy32 ] || need+=($BOOTROOT $BOOTROOT_SHA256 "the root zip, attachment in $XDA (it also holds the policy tool)")
     need_files "${need[@]}" || return 1
     [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
     if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
@@ -70,22 +77,62 @@ step_files() {
 }
 
 step_usb() {
-    [ -z "$DRY" ] && adb_is device && { ok "the Echo is on USB already"; return 0; }
-    todo "Connect the Echo to this PC with a micro-USB cable, powered by its own supply" \
+    [ -z "$DRY" ] && { adb_is recovery || adb_is device || usb_present; } && { ok "the Echo is on USB"; return 0; }
+    todo "Sit the Echo near this PC, with its power supply and a micro-USB cable" \
         "" \
-        "It must be unlocked and rooted first: $DDIR/README.md (saiyaku, then the boot-root zip in TWRP)." \
+        "Nothing has to be opened: this model unlocks through its USB port (a serial exploit)." \
         "Do not set it up with the Alexa app or its touchscreen."
+}
+
+# a stock Echo Show 8 2nd gen on USB: Amazon's vendor id 1949, "Lab126, Inc. Alexa" (no adb on stock)
+usb_present() { lsusb 2> /dev/null | grep -q -i -e "1949:" -e "lab126"; }
+
+# TWRP's first screen asks "Keep System Read only?" at every start until told otherwise: nothing is written from TWRP
+# but the boot-root zip, which patches the system itself (it does not need the system writable)
+twrp_screen() {
+    tell "On the Echo's screen TWRP may ask \"Keep System Read only?\"" \
+        "Swipe to allow modifications only if a flash below says the system is read-only; else leave it."
+}
+
+step_unlock() {
+    [ -z "$DRY" ] && adb_is recovery && { ok "TWRP is running already"; return 0; }
+    [ -z "$DRY" ] && adb_is device && { ok "unlocked already (stock has no adb)"; return 0; }
+    [ -x $FW/saiyaku-athena/meta-step.sh ] || task "Unpacking saiyaku-athena" unzip -q -o $FW/$SAIYAKU -d $FW || return 1
+    [ -n "$DRY" ] || [ -d $FW/saiyaku-athena ] || { fail "$FW/$SAIYAKU holds no saiyaku-athena folder"; return 1; }
+    tell "Start the unlocker first, then power the Echo up" \
+        "1. Keep the Echo's micro-USB cable plugged into this PC, but the power supply out." \
+        "2. The unlocker starts now and asks you to read its disclaimer and type YES." \
+        "3. When it says it is waiting for the device, plug in the power supply and let the Echo boot normally." \
+        "   It then runs by itself: this takes minutes and several attempts. ${RED}${B}Do not disconnect anything.$N" \
+        "4. It ends with the Echo rebooting into TWRP."
+    # in the foreground: it asks for YES; its output is the console's (and the log's).  bash: it may need the serial port
+    # (group uucp/dialout), and says so
+    live "Unlocking with saiyaku-athena" in_dir $FW/saiyaku-athena env PYTHONUNBUFFERED=1 \
+        bash -o pipefail -c "./meta-step.sh 2>&1 | tee -a '$LOG'" || {
+        fail "the unlock did not finish. 'Permission denied' on the serial port: add yourself to the group that owns it (uucp or dialout) or run it with sudo ($DDIR/unlock.md)"
+        return 1; }
+    twrp_screen
+    wait_adb recovery || { fail "no TWRP on adb; $DDIR/unlock.md, then run this again"; return 1; }
 }
 
 step_root() {
     [ -z "$DRY" ] && adb_is device && [ "$(ashell id -u)" = 0 ] && { ok "root adb already"; return 0; }
-    todo "Unlock and root the Echo yourself, then run this setup again" \
-        "" \
-        "1. saiyaku-athena (serial exploit): $DDIR/unlock.md" \
-        "2. flash boot-root.zip in TWRP (it patches system, vendor and adbd in place)" \
-        "" \
-        "Afterwards 'adb shell id' must say uid=0."
-    return 1
+    if [ -z "$DRY" ] && ! adb_is recovery; then
+        if adb_is device; then task "Restarting into TWRP" adb reboot recovery || return 1; fi
+        twrp_screen
+    fi
+    wait_adb recovery || return 1
+    tell "Flashing boot-root.zip in TWRP" "It patches system, vendor and adbd in place (root adb, OTA blocked, the policy opened)."
+    if [ -z "$DRY" ]; then
+        task "Copying boot-root.zip to the Echo" adb push $BOOTROOT /tmp/boot-root.zip || return 1
+        live "Installing boot-root.zip" bash -o pipefail -c "adb shell twrp install /tmp/boot-root.zip 2>&1 | tee -a '$LOG'" || return 1
+        adb shell rm -f /tmp/boot-root.zip > /dev/null 2>&1
+    fi
+    task "Restarting into the system" adb reboot || return 1
+    wait_adb device || return 1
+    [ -z "$DRY" ] && [ "$(ashell id -u)" != 0 ] && { fail "adb is not root after the flash: run this step again"; return 1; }
+    ok "root adb"
+    warn "Do not set the Echo up with the Alexa app or its touchscreen."
 }
 
 step_build() {

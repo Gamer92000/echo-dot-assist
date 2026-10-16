@@ -20,7 +20,7 @@ build is pinned to the one the first Echo ran. Put the `.bin` into `firmware/ath
 
 ## Unlock and root
 
-Not this project's work: **saiyaku-athena** (a serial exploit for the MT8183, [`unlock.md`](unlock.md)) unlocks it, and
+**saiyaku-athena**, not this project's work (`scripts/setup.sh athena` runs it for you, below), (a serial exploit for the MT8183, [`unlock.md`](unlock.md)) unlocks it, and
 its `boot-root.zip`, flashed in TWRP, makes adb root *by patching the running system in place*: `ro.secure=0`, a patched
 `adbd`, `su` and `adbd` permissive in the SELinux policy it rewrites in `/vendor/etc/selinux/precompiled_sepolicy`, OTA
 blocked (`otacerts.zip` emptied, `softwareupdates.amazon.com` pointed at localhost). dm-verity is off
@@ -86,7 +86,7 @@ itself, libcurl's included (HTTPS media, online updates). See `docs/re-athena.md
 | `device.conf` | build 7080 pins, `INSTALL=running`, `SEPOLICY_FILE` in `/vendor`, Alexa's packages, `STOCK_APPS_OUT` |
 | `sepolicy.rules`, `hassmic.rc` | init into `su`, the two init services |
 | `probe.md5`, `stubs/` | from the pinned firmware |
-| `setup.sh` | the guided steps (unlock and root are yours) |
+| `setup.sh` | the guided steps, unlock (saiyaku's `meta-step.sh`) and root (boot-root in TWRP) included |
 | `unlock.md` | saiyaku's notes |
 
 ## Unpack the firmware
