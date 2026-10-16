@@ -2,6 +2,13 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-16
+
+- **The ring no longer stays on after a very short reply.** When a reply was over within a few hundredths of a second
+  (a short confirmation, an empty answer), the talking ring could stay lit on an idle Echo until the next wake word.
+  The Echo told the ring "on" and "off" at practically the same moment, and "off" sometimes arrived first. The ring now
+  gets its changes one after the other, in order.
+
 ## 2026-10-13
 
 - **No more freezing at the first wake word after 18.6 hours** (issue #31). Since 2026-10-12, an Echo whose

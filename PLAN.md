@@ -1707,6 +1707,13 @@ Run in this order. Each step says what it proves.
       channel goes through gamma 2.2, as Amazon maps its own: `solid_orange` is F30, Home Assistant's orange 255,165,0
       becomes 255,98,0 (Amazon's other orange, ff6000). Coral is now the pale 15° hue, FF5B37; levels as seen 1 /
       0.66 / 0.382 = the same duty as before (1 / 0.4 / 0.12); pulse from 35 %, spin tails 65 / 42 / 25 %.
+      ledctrl in order (2026-10-16, issue #40): `run_argv` forks ledctrl and does not wait, so two calls started together
+      reach ledcontroller in either order. Measured on the kitchen's Dot 2 with the ring's frame read back: `ledctrl -s`
+      and `-u` of a talking ring started at once left it lit 2 times in 5, 20 ms apart 0 in 5, the `-u` after the `-s`
+      returned 0 in 15 (`ledctrl -g` is no help here: it lists patterns already unset). Seen on two Dot 2s after replies
+      of 19 and 41 ms (talking set and unset in that time): the talking ring lit on an idle Echo until the next wake word.
+      `led_run` now queues and one thread runs them one at a time, each waited for (`run_output`: its output closed), so
+      the core never waits for ledcontroller; 64 queued at most (more are dropped, with a log line).
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
