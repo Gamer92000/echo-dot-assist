@@ -27,7 +27,19 @@
  * The setting arbitration_window_auto off: the arbitration_window setting's fixed window, the early end all the same.
  *
  * Network: the members share a key K; claims and beacons carry a MAC with it and a counter against replays (reserved in
- * blocks in the state file, so it keeps rising across restarts).  Every Echo is in one, always: it looks for members
+ * blocks in the state file, so it keeps rising across restarts).  A member only takes a counter above the last it took
+ * from that Echo, and keeps that until it restarts itself, so a counter that went back is the sender's packets dropped as
+ * replays for good: 2026-10-15, a Dot 2 died hard, came back without state/arbitration (counter at 0) and took K again
+ * through its tag; it counted the others, they dropped everything of it, and one of them answered every wake word the
+ * two heard, for 25 h, until it was restarted.  So the file goes to the flash before it is renamed (fsync), and once root
+ * set the clock from Home Assistant the counter never goes below the time in microseconds: it rises 10^6 a second,
+ * faster than anything is sent, so it is above whatever went out before, file or no file.  The time is reserved an hour
+ * ahead (CTR_TIME_BLOCK), so the file is written at most once an hour for it, and an Echo restarted before its clock is
+ * set (or put back to an older build) still goes on above what it sent.  Older members take the jump like any other
+ * new counter.  The gap left: what an Echo sends before its clock is set (the first minute after a boot) comes from that
+ * reservation, up to an hour ahead of the time, and the run goes on above it; should the file be lost again within that
+ * hour, the others drop it until the time catches up (an hour at most, where it was for good).  A clock put back
+ * between two runs does the same, for as long as it was put back.  Every Echo is in one, always: it looks for members
  * first; with none after DISCOVER_MS it makes up K and a random network id itself.  Two networks that formed at the
  * same time merge: the lower id wins.  The network is also how the settings pages find each other (members' signed
  * beacons give name and address), so it does not depend on the "arbitration" setting, which only says whether this
@@ -114,6 +126,7 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#include "clock.h"
 #include "hash.h"
 #include "ws.h"
 #include "../third_party/monocypher.h"
@@ -150,6 +163,8 @@ static const int COPY_MS[] = { 30, 80 };
 #define DISCOVER_MS  5000       /* no member heard in this time: start a network */
 #define PUSH_MS      30000      /* hand our key to the same Echo at most this often */
 #define CTR_BLOCK    4096
+#define CTR_TIME_BLOCK (3600LL * 1000000)   /* the time-based counter reserved this far ahead (us): a write an hour at most */
+#define CTR_EPOCH_MIN  1767225600LL         /* 2026-01-01: a clock before it is not set (clock.c's EPOCH_MIN) */
 #define POLL_MS      3000       /* ask Home Assistant again for an Echo's tag, until it confirms the key */
 #define SCAN_MS      10000      /* scan our tag this often while another Echo may be waiting for it to change... */
 #define SCAN_N       12         /* ...this many times in a row, then every SCAN_SLOW_MS (an Echo HA never confirms, a
@@ -187,7 +202,8 @@ static uint8_t sk[32], pk[32];
 static int in_net;
 static uint64_t net_id;
 static uint8_t net_key[32], mac_key[32];
-static uint64_t ctr, ctr_saved;
+static uint64_t ctr, ctr_saved, ctr_start;
+static int ahead;                                       /* counters may have gone out above the time (next_ctr) */
 static long long started, beacon_at, answer_at, beacon_gap = BEACON_MIN_MS, hello_until;
 static int reported_peers = -1;
 static atomic_int notify;
@@ -267,12 +283,17 @@ static void save(void)
         fprintf(stderr, "arbitration: cannot write %s\n", tmp); return;
     }
     fprintf(f, "arbitrate %d\nctr %llu\n", arbitrate, (unsigned long long)ctr_saved);
+    if (ahead) fprintf(f, "ahead 1\n");                  /* older builds pass over the line */
     if (in_net) { b64_encode(net_key, 32, k64, 0, 1); fprintf(f, "net %016llx %s\n", (unsigned long long)net_id, k64); crypto_wipe(k64, sizeof k64); }
     for (unsigned i = ndelay > NDELAY ? ndelay - NDELAY : 0; i < ndelay; i++) {        /* oldest first */
         char h[17]; if (delays[i % NDELAY].ms < 0) continue;
         hex8(h, delays[i % NDELAY].id); fprintf(f, "delay %s %d\n", h, delays[i % NDELAY].ms);
     }
-    if (fclose(f) || rename(tmp, path)) { unlink(tmp); fprintf(stderr, "arbitration: cannot write %s\n", path); }
+    /* on the flash before the rename, and the rename itself after it: a hard reset leaves the old file or the new one,
+     * not an empty one or none (the counter would start again at 0, see "Network" above) */
+    int bad = fflush(f) || fsync(fileno(f));
+    if (fclose(f) || bad || rename(tmp, path)) { unlink(tmp); fprintf(stderr, "arbitration: cannot write %s\n", path); return; }
+    if ((fd = open(state_dir(), O_RDONLY | O_DIRECTORY)) >= 0) { fsync(fd); close(fd); }
 }
 
 static void derive(void) { crypto_blake2b_keyed(mac_key, 32, net_key, 32, (const uint8_t *)"hassmic arbitration mac", 23); }
@@ -287,6 +308,7 @@ static void load(void)
         /* "join 0": the switch of older versions, which also left the network; now only the rounds stay off */
         if (sscanf(line, "arbitrate %d", &j) == 1 || sscanf(line, "join %d", &j) == 1) arbitrate = j != 0;
         else if (sscanf(line, "ctr %llu", &v) == 1) ctr_saved = v;
+        else if (sscanf(line, "ahead %d", &j) == 1) ahead = j != 0;
         else if (sscanf(line, "net %llx %63s", &v, k64) == 2 && v && b64_decode(k64, strlen(k64), net_key, 32) == 32) { net_id = v; in_net = 1; derive(); }
         else if (sscanf(line, "delay %16[0-9a-f] %d", hx, &j) == 2 && strlen(hx) == 16 && j >= 0 && j <= MEASURE_MS) {
             struct delay *d = &delays[ndelay++ % NDELAY];
@@ -314,9 +336,32 @@ static int identity(void)
     return 0;
 }
 
+/* The counter's floor: the time in microseconds once root set the clock from Home Assistant, else none ("Network") */
+static uint64_t ctr_floor(void)
+{
+    struct timespec ts;
+    if (!clock_synced() || clock_gettime(CLOCK_REALTIME, &ts) || ts.tv_sec < CTR_EPOCH_MIN) return 0;
+    return (uint64_t)ts.tv_sec * 1000000 + (uint64_t)ts.tv_nsec / 1000;
+}
+
+/* ctr: the last one sent in this run (0: none yet); ctr_start: the file's reservation at the start, above all that went
+ * out before.  With the clock set the time is above that too, unless counters went out above the time: taken from the
+ * reservation before the clock was set (up to CTR_TIME_BLOCK ahead of it), in this run or in one since restarted (only
+ * hassmic, the clock still set).  ahead says so, in the file before such a counter goes out, until the time is past
+ * them; without it the reservation would keep every run above the time for up to an hour, where a file lost then
+ * would leave its counters dropped again */
 static uint64_t next_ctr(void)
 {
-    if (++ctr >= ctr_saved) { ctr_saved = ctr + CTR_BLOCK; save(); }       /* on disk before it is used */
+    uint64_t t = ctr_floor(), c = ctr + 1;
+    int was = ahead;
+    if (t > c) c = t;
+    if ((!t || ahead) && ctr_start > c) c = ctr_start;
+    if (!t) ahead = 1;
+    else if (c == t) ahead = 0;                                             /* the time is past all that went out */
+    ctr = c;
+    int more = ctr >= ctr_saved;
+    if (more) ctr_saved = ctr + (t ? CTR_TIME_BLOCK : CTR_BLOCK);
+    if (more || ahead != was) save();                                       /* on disk before it is used */
     return ctr;
 }
 
@@ -1309,7 +1354,7 @@ int arb_start(int port, const char *nd, const struct arb_hooks *h)
     memcpy(self_tag, "hassmic_", 8);
     for (int i = 0; i < 32; i++) snprintf(self_tag + 8 + 2 * i, 3, "%02x", pk[i]);
     load();
-    ctr = ctr_saved; ctr_saved += CTR_BLOCK; save();
+    ctr_start = ctr_saved; ctr = 0; ctr_saved += CTR_BLOCK; save();
     if ((sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0)) < 0) { perror("arbitration: socket"); return -1; }
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof on);
     setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &on, sizeof on);
