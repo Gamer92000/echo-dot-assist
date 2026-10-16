@@ -550,6 +550,19 @@ static int custom, have_turned, have_themes, theme;   /* theme: index in themes,
 /* ms < 0: until unset; th: the theme it shows in (a theme picked meanwhile shows from the next pattern on) */
 static struct shown { char logical[40], actual[40]; long long at; int ms, turn, th; } shown[SHOWN_MAX];
 static int nshown;
+/* What played for a pattern that ran past its length (ring_tick let it go) and was ours, not stock's own name: the
+ * unset still has to stop that.  A pattern without "loop" plays again from the start (stock's talking ring, 3.4 s,
+ * stays on through a reply of any length), so a theme's talking ring left behind showed for good (kitchen, 2026-10-16:
+ * a 5.8 s reply, then the rainbow on an idle Echo) */
+static struct { char logical[40], actual[40]; } ended[SHOWN_MAX];
+static int nended;
+
+static int ended_find(const char *logical)
+{
+    for (int i = 0; i < nended; i++) if (!strcmp(ended[i].logical, logical)) return i;
+    return -1;
+}
+static void ended_drop(int i) { if (i >= 0) ended[i] = ended[--nended]; }
 static struct ring_light light = { 0, 1, 1, 1, 1, 1, E_NONE };
 static struct ring_light flash; static long long flash_until;
 static char light_shown[48];                /* what of ours is on the ring for the light, "" none */
@@ -725,7 +738,10 @@ void ring_set(const char *pattern)
     else if (th && !strcmp(pattern, "active-talking")) theme_pattern(actual, sizeof actual, th, "talk", -1);
     else if (turn >= 0) snprintf(actual, sizeof actual, "hassmic_%s_%d", pattern[7] == 's' ? "listen" : "end", turn);
     struct shown *s = find(pattern);
+    int e = ended_find(pattern);
     if (s && strcmp(s->actual, actual)) run("-u", s->actual);
+    if (e >= 0 && strcmp(ended[e].actual, actual)) run("-u", ended[e].actual);     /* another theme's, still playing */
+    ended_drop(e);
     if (!s && nshown < SHOWN_MAX) s = &shown[nshown++];
     if (s) {
         snprintf(s->logical, sizeof s->logical, "%s", pattern); snprintf(s->actual, sizeof s->actual, "%s", actual);
@@ -740,8 +756,10 @@ void ring_unset(const char *pattern)
 {
     pthread_mutex_lock(&lock);
     struct shown *s = find(pattern);
-    run("-u", s ? s->actual : pattern);
+    int e = s ? -1 : ended_find(pattern);
+    run("-u", s ? s->actual : e >= 0 ? ended[e].actual : pattern);
     if (s) *s = shown[--nshown];
+    ended_drop(e);
     pthread_mutex_unlock(&lock);
 }
 
@@ -749,8 +767,16 @@ void ring_tick(void)
 {
     long long now = now_ms();
     pthread_mutex_lock(&lock);
-    for (int i = 0; i < nshown; i++)        /* finished ones: ledcontroller let them go itself */
-        if (shown[i].ms >= 0 && now >= shown[i].at + shown[i].ms) shown[i--] = shown[--nshown];
+    for (int i = 0; i < nshown; i++)        /* finished ones: ledcontroller let them go itself (or plays them again) */
+        if (shown[i].ms >= 0 && now >= shown[i].at + shown[i].ms) {
+            if (strcmp(shown[i].logical, shown[i].actual)) {
+                int e = ended_find(shown[i].logical);
+                if (e < 0 && nended < SHOWN_MAX) e = nended++;
+                if (e >= 0) { snprintf(ended[e].logical, sizeof ended[e].logical, "%s", shown[i].logical);
+                              snprintf(ended[e].actual, sizeof ended[e].actual, "%s", shown[i].actual); }
+            }
+            shown[i--] = shown[--nshown];
+        }
     /* The talker moved while the ring is open (or the front end reported the beam after the wake word): the open ring
      * at the new turn, without its opening again */
     struct shown *s = find("active-start");

@@ -4,12 +4,25 @@ from stock's files (stand-ins written here: no Amazon file), the light entity it
 what goes to ledctrl (HASSMIC_FAKE_LED), the Echo's own patterns before the light, and the listening ring turned by
 the beam (HASSMIC_FAKE_BEAM) and turned again when the talker moves; the themes (ring_theme): their rings from stock's,
 coloured by LED, where they go in the layer config, and what plays with one picked."""
-import asyncio, json, os, re, shutil, signal, struct, subprocess, sys, tempfile, time
+import asyncio, json, os, re, shutil, signal, struct, subprocess, sys, tempfile, threading, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from aioesphomeapi import APIClient, LightInfo, LightState, VoiceAssistantEventType as Ev
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOST = f"{ROOT}/build/hassmic-host"
 PORT = 16981
+HTTP_PORT = 16982
+
+
+class Reply(BaseHTTPRequestHandler):
+    """A spoken reply of 1 s (WAV, 48 kHz mono): longer than the stand-in talking ring, which has no loop"""
+    def do_GET(self):
+        pcm = b"\0\0" * 48000
+        wav = (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, 48000, 96000, 2, 16)
+               + b"data" + struct.pack("<I", len(pcm)) + pcm)
+        self.send_response(200); self.send_header("Content-Type", "audio/wav"); self.send_header("Content-Length", str(len(wav)))
+        self.end_headers(); self.wfile.write(wav)
+    def log_message(self, *a): pass
 
 
 def check(cond, what):
@@ -259,9 +272,19 @@ async def main():
         await until(lambda: ["-s", "hassmic_theme_rainbow_think"] in log(), 3)
         check(["-s", "hassmic_theme_rainbow_think"] in log() and not ["-s", "active-thinking"] in log(),
               f"rainbow: thinking in the theme, not stock's ({log()})")
+        # A reply longer than the talking ring's file (it has no loop: ledcontroller plays it again and again), then idle:
+        # the theme's talking ring must go, though hassmic took it for finished (kitchen, 2026-10-16)
+        httpd = ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), Reply); threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_END, {"url": f"http://127.0.0.1:{HTTP_PORT}/reply.wav"})
         c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
+        await until(lambda: ["-s", "hassmic_theme_rainbow_talk"] in log(), 5)
+        check(["-s", "hassmic_theme_rainbow_talk"] in log(), f"rainbow: talking in the theme ({log()})")
         await until(lambda: ["-s", "hassmic_theme_rainbow_end_7"] in log(), 5)
         check(["-s", "hassmic_theme_rainbow_end_7"] in log(), f"rainbow: the ring closes in the theme, turned by 7 ({log()})")
+        l = log()
+        check(["-u", "hassmic_theme_rainbow_talk"] in l and ["-u", "active-talking"] not in l,
+              f"rainbow: after a reply longer than its file, the theme's talking ring is stopped, not stock's name ({l})")
+        httpd.shutdown()
         await c.disconnect()
     finally:
         proc.terminate(); proc.wait()

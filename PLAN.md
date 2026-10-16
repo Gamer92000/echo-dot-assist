@@ -1724,6 +1724,11 @@ Run in this order. Each step says what it proves.
       that scale or active-talking or stock's active-thinking entry is missing (log "no themes"): then the setting is
       not offered. tests/fake_ha_ring.py: colours by LED in two turns, layer order, a red stock without themes, a
       wake word with the theme picked.
+      Fixed the same day on the kitchen's Dot 2: after a 5.8 s reply the rainbow's talking ring stayed on an idle Echo
+      (frame read back: the wheel). A pattern without "loop" plays again from the start (stock's talking ring, 3.4 s, lasts
+      a reply of any length), so `ring_tick`'s "finished" was wrong for it, and the unset then stopped stock's name, not
+      the theme's file playing. ring.c keeps what played for such a pattern (`ended`) and stops that; a theme's ring
+      still playing when the pattern is set again (another theme picked) goes first. Test: a 1 s reply over a 0.2 s ring.
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
