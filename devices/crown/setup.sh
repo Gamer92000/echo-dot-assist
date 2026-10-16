@@ -34,11 +34,10 @@ install|Install
 "
 ROOTED_SKIP="usb unlock root"     # done on an Echo that is rooted already (scripts/setup.sh asks)
 NOTES=(
-    "The screen keeps Amazon's clock face and settings; Alexa's apps stay off while hassmic runs ($DDIR/README.md)."
+    "The screen is black with the light band along its bottom edge; Alexa's apps stay off while hassmic runs ($DDIR/README.md)."
     "adb over Wi-Fi: the settings page's debug access (http://<echo-ip>:28931/), as on the other Echos, opens it for 30 min."
     "Updates: git pull, then scripts/ota-push.sh <echo-ip>."
-    "\"Download from Amazon\" does not work on this model yet: its attestation service is DHA version 2, which hassmic does not build (docs/re-crown.md). Models copied from another Echo through the settings page do."
-    "No Bluetooth and no Music Assistant pairing on this model yet: Android's stack owns the controller ($DDIR/README.md)."
+    "\"Download from Amazon\" on the settings page works here too (code pair login): wake words and the newer sound detection model."
 )
 
 sha() { sha256sum < "$1" | cut -c1-64; }
