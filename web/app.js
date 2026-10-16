@@ -359,7 +359,7 @@ const HELP = {
       if (m.here) out.push(p(`Media here: ${m.here} (${m.pct >= 100 ? 'setting off' : `background at ${m.pct} %`}).`));
       else if (players.length) out.push(p(`No media here (${players.map((x) => `${x.id} ${x.state}`).join(', ')}).`));
       if (players.length && !m.linked) out.push(p('Not connected to Home Assistant: the players\' states are not known.', 'f-note'));
-      for (const x of players.filter((y) => y.state === 'missing')) out.push(p(`Home Assistant does not report ${x.id}. Check the entity id.`, 'f-note'));
+      for (const x of players.filter((y) => y.state === 'missing')) out.push(p(`Home Assistant does not report ${x.id} (yet). If this stays, check the entity id.`, 'f-note'));
       return out.length ? h('div', {}, out) : null;
     } },
   arbitration_media_ambient: { parent: 'arbitration', sub: true, step: 5,
