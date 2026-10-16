@@ -5,7 +5,7 @@
 #define SETTINGS_H
 #include <stddef.h>
 
-enum stype { S_BOOL, S_INT, S_CHOICE };
+enum stype { S_BOOL, S_INT, S_CHOICE, S_TEXT };      /* S_TEXT: settings_str(), checked by the module that keeps it */
 
 struct setting {
     const char *name, *label, *group, *unit;
@@ -40,6 +40,8 @@ const struct setting *settings_find(const char *name);
 int  settings_max(const struct setting *s);                     /* S_INT: s->max, or less where this Echo has less */
 int  settings_get(const struct setting *s);                     /* S_CHOICE: the index */
 int  settings_choices(const struct setting *s, const char *const **names);   /* S_CHOICE: count and the value names */
+size_t settings_str(const struct setting *s, char *out, size_t cap);         /* any type, as state/config has it */
+#define SETTINGS_TEXT_MAX 800           /* an S_TEXT value, whole; its line in state/config and on the page fits */
 /* Set from text ("on"/"off"/"1"/"0", a number, a choice's value name).  0 ok, -1 unknown or out of range: err says why.
  * Saves, and has the protocol show it (proto->settings_changed). */
 int  settings_set(const char *name, const char *value, char *err, size_t errsz);

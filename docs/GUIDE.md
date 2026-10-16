@@ -143,6 +143,28 @@ window" (100–1000 ms) applies instead. The log notes how late each claim came
   <img alt="Timelines of one wake word round. Top: the other Echos' claims came between 0 and 372 ms late; 95 % within 356 ms, plus 50 ms gives a window of 406 ms. Every Echo heard you: the living room's claim at 30 ms and the hall's at 95 ms are in, so the Echo decides at 95 ms and skips the rest of the window. One Echo did not: the hall Echo missed it, so the Echo waits the whole 406 ms, then decides. A claim later than the window, at 440 ms: the Echo decided without it, but it is still measured, so the window learns from it." src="img/arbitration-window-light.svg">
 </picture>
 
+**Music in the room.** Music next to an Echo raises the noise it hears your wake word against, so the Echo of the
+next room can hear you clearer than the one you stand beside: with a Sonos playing in the kitchen, the living room
+Echo took the kitchen's wake words. List each room's media players on its Echo's settings page, "Media players in this
+room" (entity ids as Home Assistant shows them, comma separated, at most 8: `media_player.kitchen_sonos,
+media_player.kitchen_tv`). List the speaker's own entity (for a Sonos, the Sonos integration's), not the Echo's own
+media player, which reports playing while the Echo answers; Music Assistant's player of the same speaker only if the
+speaker's own entity does not show what Music Assistant plays. A speaker grouped across rooms plays in both, so both
+Echos get the same advantage and it cancels out. The Echo follows their state in Home Assistant over its own encrypted
+connection: Home Assistant sends it at once and on every change, after restarts of either side as well; nothing to set
+up there. Home Assistant sends nothing for an entity it does not have, so after 10 s the page says "Home Assistant does
+not report media_player.… Check the entity id"; without Home Assistant connected it says that instead. While one of
+them is playing (or buffering), while the Echo plays music itself (Music Assistant, Bluetooth; this counts with no list
+too), and for 2 minutes after either stopped (paused, idle, off), the Echo counts the room's background only at
+"Background noise while media plays", right under the list: 50 % by default, 3 dB in its favour; 25 %
+makes it 6 dB, 10 % (the least) 10 dB, 100 % switches it off. Lower is not simply better: speak in the living room
+while the kitchen plays music, and a kitchen Echo set too low may answer. A TV that is on but not playing does not
+count. An Echo in a conversation still keeps the next wake word; Echos of older builds take part as before, they see a
+higher score. The players are not copied to other Echos (each has its own room), the percentage is. The page shows
+under the list whether media counts right now and why; the log has a line per wake word
+(`arbitration: media of this room (media_player.kitchen_sonos playing): ambient counted at 50 %, score 1651 -> 1952`,
+or `no media of this room`).
+
 **The shared key.** The Echos share a key so that nobody else on the network can join or silence them, and your Home
 Assistant vouches for each: every Echo reports a tag named after its key as scanned (Settings › Tags lists one "Tag
 hassmic_…" per Echo), and an Echo hands the key, encrypted, only to one whose tag Home Assistant confirms. This needs

@@ -7,6 +7,9 @@ needed), and runs an action a device asks for ("Allow the device to perform Home
 device's own action (esphome.<node>_arbitration_key) on that device.
 Three ways in: the tags (no permission), the action, and the volume-key pairing (SIGWINCH, no HA).
 Then Kiosk Satellite mode: their JSON claims on their port, against each other and a fake kiosk.
+Last, media in the room: the fake Home Assistant follows media players as its state tracker does (the state at once,
+then on every change, to each subscriber; dropped with the link), and Music Assistant plays on the kitchen Echo over
+Sendspin (aiosendspin, as tests/fake_ma_sendspin.py).
 Everything goes out as loopback broadcast (HASSMIC_ARB_ADDR): nothing of it reaches the LAN."""
 import asyncio, base64, datetime, hashlib, json, os, re, signal, socket, struct, subprocess, sys, tempfile, time
 from aioesphomeapi import APIClient, VoiceAssistantEventType as Ev
@@ -16,6 +19,9 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 from webclient import Browser, req
+from aiosendspin.noise import Identity, InMemoryServerPairingStore
+from aiosendspin.server import SendspinServer, AudioFormat, ClientAddedEvent
+import numpy as np
 ARB, KIOSK, BCAST = 28990, 28991, "127.255.255.255"          # KIOSK: stands in for Kiosk Satellite's 2330
 
 
@@ -36,14 +42,16 @@ class Echo:
         self.env = dict(os.environ, HASSMIC_STATE=self.state, HASSMIC_SETTINGS=os.path.join(self.state, "settings"),
                         HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(self.state, "play.raw"),
                         HASSMIC_MDNS_FILE=os.path.join(self.state, "none"), HASSMIC_ARB_ADDR=BCAST, HASSMIC_KIOSK_PORT=str(KIOSK), HASSMIC_TEST_SCORE=str(score),
-                        HASSMIC_MODELS=os.path.join(self.state, "models"))
+                        HASSMIC_MODELS=os.path.join(self.state, "models"), HASSMIC_MEDIA_HOLD_MS="1500", HASSMIC_MEDIA_MISSING_MS="1000",
+                        HASSMIC_MUSIC=os.path.join(self.state, "music.raw"))
         os.makedirs(os.path.join(self.state, "models", "echo-de"))
         open(os.path.join(self.state, "models", "echo-de", "pryon.manifest"), "w").close()
         self.starts, self.states, self.allowed, self.chunks = [], {}, True, []
+        self.sendspin = 0                                   # -z: Sendspin's port, 0 none
 
     def start(self):
         self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.port), "-n", self.name, "-L",
-                                      "-z", "0", "-o", "0", "-a", str(ARB), "-W", str(self.web)], env=self.env, stderr=open(self.log, "a"))
+                                      "-z", str(self.sendspin), "-o", "0", "-a", str(ARB), "-W", str(self.web)], env=self.env, stderr=open(self.log, "a"))
 
     def text(self): return open(self.log).read()
     def net(self):
@@ -76,13 +84,14 @@ class Echo:
 
     async def connect(self, ha):
         self.ha, self.states = ha, {}
+        ha.drop(self)                                   # a new link: Home Assistant's trackers of the old one are gone
         self.cli = APIClient("127.0.0.1", self.port, None, noise_psk=self.api_key)
         await self.cli.connect(login=True)
         ents, self.services = await self.cli.list_entities_services()
         self.by = {e.object_id: e for e in ents}
         self.cli.subscribe_states(lambda s: self.states.__setitem__(s.key, getattr(s, "state", None)))
         self.cli.subscribe_home_assistant_states_and_services(on_state=lambda s: None, on_service_call=lambda c: ha.action(self, c),
-                                                              on_state_sub=lambda e, a: None, on_state_request=lambda e, a: ha.state(self, e, a))
+                                                              on_state_sub=lambda e, a: ha.sub(self, e, a), on_state_request=lambda e, a: ha.state(self, e, a))
         async def handle_start(conv, flags, settings, phrase): self.starts.append(time.monotonic()); self.chunks = []; return 0
         async def handle_stop(abort): pass
         async def handle_audio(data, *_): self.chunks.append(len(data))
@@ -94,7 +103,21 @@ class Echo:
 class HA:
     """Home Assistant's esphome manager: device actions run only with the option ticked (otherwise a repair), and
     esphome.<device_info.name with '_'>_<service> is each device's own action."""
-    def __init__(self, echos): self.echos, self.calls, self.refused, self.tags_on, self.asked, self.tags, self.scans = echos, [], [], True, [], {}, []
+    def __init__(self, echos):
+        self.echos, self.calls, self.refused, self.tags_on, self.asked, self.tags, self.scans = echos, [], [], True, [], {}, []
+        self.subs, self.media = [], {}                  # lasting subscriptions (echo name, entity); media players' states
+    def sub(self, echo, entity, attribute):
+        """a subscription without "once" (async_on_state_subscription): a tracker that sends the state now and on every
+        change, until the link closes"""
+        self.subs.append((echo.name, entity))
+        if not attribute and entity in self.media: echo.cli.send_home_assistant_state(entity, "", self.media[entity])
+    def drop(self, echo): self.subs = [x for x in self.subs if x[0] != echo.name]
+    def set_media(self, entity, state):
+        """a media player changes: every tracker of it sends the new state (nothing when it stays the same)"""
+        if self.media.get(entity) == state: return
+        self.media[entity] = state
+        for name, e in self.subs:
+            if e == entity: next(x for x in self.echos if x.name == name).cli.send_home_assistant_state(entity, "", state)
     def state(self, asker, entity, attribute):
         """async_on_state_request: the current state, nothing for an entity that has none (missing, or disabled)"""
         self.asked.append((asker.name, entity))
@@ -483,6 +506,195 @@ async def main():
         check(not w2["learning"] and w2["ms"] == w["ms"], f"after a restart: still learned, {w2['ms']} ms")
         fbeacon(b"\x01"); await asyncio.sleep(0.5)          # the hallway Echo switches arbitration off: nobody waits for it
         check(a.page.state()["arbitration"]["window"]["samples"] < len(delays), "a member out of rounds: its samples no longer count")
+
+        # Media in the room (main.c wake_heard): the kitchen Echo (500) hears worse than the living room one (900), but a
+        # Sonos plays beside it.  The players are a setting of each Echo; Home Assistant sends their states, over the keyed
+        # link only, for good (not once)
+        SONOS, RADIO, TV = "media_player.kitchen_sonos", "media_player.kitchen_radio", "media_player.living_room_tv"
+        ha.media.update({SONOS: "idle", RADIO: "idle", TV: "off"})
+        media = lambda e: (e.page.state() or {}).get("media") or {}
+        setting = lambda e, n: next((x for x in (e.page.state() or {}).get("settings", []) if x["name"] == n), {})
+        def drain():
+            while True:
+                try: sn.recv(512)
+                except BlockingIOError: return
+        async def round_(settle=1.5):
+            """both hear it: who answered ("a", "b", "ab", ""), the kitchen Echo's claim: its score and length"""
+            drain(); na, nb = len(a.starts), len(b.starts); claim = None
+            a.wake(); b.wake(); end = time.monotonic() + settle
+            while time.monotonic() < end:
+                try: p = sn.recv(512)
+                except BlockingIOError: await asyncio.sleep(0.005); continue
+                if claim is None and p[4] == 4 and p[13:21] == apk and p[-17] == 0: claim = p
+            won = ("a" if len(a.starts) > na else "") + ("b" if len(b.starts) > nb else "")
+            if "a" in won: a.end_pipeline()
+            if "b" in won: b.end_pipeline()
+            await asyncio.sleep(0.5)
+            return won, struct.unpack("<i", claim[37:41])[0] if claim else None, len(claim) if claim else None
+
+        r = [a.page.set(arbitration_media_players=v) for v in ("media_player.Kitchen", "light.kitchen", ",".join(f"media_player.p{i}" for i in range(9)),
+                                                                "media_player." + "x" * 81)]
+        check(all(x.get("applied") == 0 and "arbitration_media_players" in x.get("errors", "") for x in r) and "at most 8" in r[2].get("errors", "")
+              and "not a media player" in r[0].get("errors", "") and not ha.subs, f"not a media player's entity id, or more than 8: refused: {[x.get('errors') for x in r]}")
+        r = a.page.set(arbitration_media_players=SONOS)
+        ok = await until(lambda: (a.name, SONOS) in ha.subs, 3)
+        check(r.get("applied") == 1 and ok and not any(n == b.name for n, _ in ha.subs) and (a.name, SONOS) not in ha.asked
+              and f"following {SONOS} in Home Assistant" in a.text(), f"the list set on the page: followed at once, for good (not once): {ha.subs}")
+        check(f"arbitration_media_players={SONOS}" in open(os.path.join(a.state, "config")).read().split(), "kept in state/config")
+        sp, sa = setting(a, "arbitration_media_players"), setting(a, "arbitration_media_ambient")
+        check(sp.get("type") == "text" and sp.get("value") == SONOS and sp.get("export") is False and sp.get("feature") is False
+              and sa.get("value") == 50 and (sa.get("min"), sa.get("max")) == (10, 100) and sa.get("export") is True,
+              f"settings page: the players (text, not exported), the background (50 %, exported): {sp} {sa}")
+        m = media(a)
+        check(m.get("pct") == 50 and m.get("here") is None and m.get("players") == [{"id": SONOS, "state": "stopped"}],
+              f"status: the player as Home Assistant said at once (idle): {m}")
+        won, sc, base_len = await round_()
+        check(won == "b" and sc == 500 and "arbitration: no media of this room: score 500" in a.text(), f"no media: the better one answers: {won} {sc}")
+        ha.set_media(SONOS, "playing"); await asyncio.sleep(0.3)
+        check(f"arbitration: {SONOS} playing" in a.text() and media(a).get("here") == f"{SONOS} playing", f"the Sonos plays: {media(a)}")
+        won, sc, _ = await round_()
+        check(won == "b" and sc == 801 and f"arbitration: media of this room ({SONOS} playing): ambient counted at 50 %, score 500 -> 801" in a.text(),
+              f"background at 50 %: +3 dB, still under the other Echo's 900: {won} {sc}")
+        a.page.set(arbitration_media_ambient=25)
+        won, sc, ln = await round_()
+        check(won == "a" and sc == 1102 and ln == base_len, f"at 25 %: +6 dB, the kitchen Echo answers; its claim carries 1102, same length: {won} {sc} {ln}/{base_len}")
+        ha.set_media(SONOS, "paused"); await asyncio.sleep(0.2)
+        won, sc, _ = await round_()
+        check(won == "a" and re.search(rf"arbitration: {SONOS} paused \(counts \d+ s more\)", a.text())
+              and re.search(rf"media of this room \({SONOS} stopped 0 s ago\)", a.text()), f"paused: still counts for the hold: {won} {sc}")
+        won, sc, _ = await round_()
+        check(won == "b" and sc == 500, f"after the hold (1.5 s here): no more: {won} {sc}")
+
+        b.page.set(arbitration_media_players=TV); await until(lambda: (b.name, TV) in ha.subs, 3)
+        ha.set_media(SONOS, "playing"); ha.set_media(TV, "playing"); await asyncio.sleep(0.3)
+        won, sc, _ = await round_()
+        check(won == "b" and sc == 1102 and "score 900 -> 1201" in b.text(), f"media in both rooms: each Echo counts its own, the better one answers: {won} {sc}")
+        ha.set_media(TV, "off")
+        n = len(ha.subs); a.page.set(arbitration_media_players=SONOS); await asyncio.sleep(0.5)
+        check(len(ha.subs) == n, "the same list again: nothing followed twice")
+        a.page.set(arbitration_media_players=f"{SONOS}, {RADIO}"); await asyncio.sleep(0.5)
+        check(ha.subs[n:] == [(a.name, RADIO)] and f"arbitration_media_players={SONOS},{RADIO}" in open(os.path.join(a.state, "config")).read().split(),
+              f"one more: only that one followed: {ha.subs[n:]}")
+        # listed, removed and listed again on the same link (A, B, A): still followed, so not subscribed twice; the last
+        # state Home Assistant sent of it counts at once (the Sonos plays)
+        n2 = len(ha.subs); a.page.set(arbitration_media_players=RADIO); a.page.set(arbitration_media_players=f"{SONOS},{RADIO}"); await asyncio.sleep(0.3)
+        m = media(a)
+        check(ha.subs[n2:] == [] and ha.subs.count((a.name, SONOS)) == 1 and m.get("here") == f"{SONOS} playing"
+              and m.get("players") == [{"id": SONOS, "state": "playing"}, {"id": RADIO, "state": "stopped"}],
+              f"listed again on the same link: no second subscription, its last state at once: {ha.subs[n2:]} {m}")
+        # an id Home Assistant does not have (a typo): it sends nothing, and after a while the page says so
+        GHOST = "media_player.kitchen_sonso"
+        a.page.set(arbitration_media_players=f"{SONOS},{GHOST}"); await asyncio.sleep(0.2)
+        m1 = media(a); await asyncio.sleep(1.2); m2 = media(a)
+        check((a.name, GHOST) in ha.subs and m1.get("linked") is True
+              and m1.get("players") == [{"id": SONOS, "state": "playing"}, {"id": GHOST, "state": "unknown"}]
+              and m2.get("players") == [{"id": SONOS, "state": "playing"}, {"id": GHOST, "state": "missing"}],
+              f"an entity Home Assistant does not report: unknown at first, then missing: {m1} {m2}")
+        long_ = [f"media_player.{i}" + "z" * 79 for i in range(6)]        # the longest ids there are: 8 of them
+        full = ",".join([SONOS, RADIO] + long_)
+        a.page.set(arbitration_media_players=full); await asyncio.sleep(0.5)
+
+        # a restart: the stored list followed by itself; the Sonos plays already, so it counts at once.  Music Assistant
+        # can play on it from now on (Sendspin)
+        a.sendspin = 16965; open(os.path.join(a.state, "sendspin.unpaired"), "w").write("1")
+        await asyncio.sleep(1.2)                        # the TV's hold over
+        await a.cli.disconnect(); ha.drop(a); a.proc.terminate(); a.proc.wait(); a.start(); await asyncio.sleep(0.5); await a.connect(ha)
+        a.page = Browser(a.web); a.page.login_with_button(a.proc)
+        ok = await until(lambda: {(a.name, x) for x in full.split(",")} <= set(ha.subs), 3)
+        check(ok and setting(a, "arbitration_media_players").get("value") == full and f"following {SONOS}, {RADIO}, {long_[0]}" in a.text(),
+              f"restarted: all 8 (the longest ids) followed by itself from state/config: {len([x for x in ha.subs if x[0] == a.name])}")
+        await until(lambda: a.st("arbitration_peers") == 1, 10)
+        won, sc, _ = await round_()
+        check(won == "a" and sc == 1102, f"the Sonos played all along: its state at once, precedence at once (25 % kept): {won} {sc}")
+
+        # Home Assistant gone: what played counts as stopped, for the hold
+        await a.cli.disconnect(); ha.drop(a); await asyncio.sleep(0.3)
+        m = media(a)
+        check(re.fullmatch(rf"{SONOS} stopped [01] s ago", m.get("here") or "") and "counts as stopped, Home Assistant is gone" in a.text(),
+              f"Home Assistant gone: the Sonos counts as stopped: {m.get('here')}")
+        await asyncio.sleep(1.5)
+        m = media(a)
+        check(m.get("here") is None and m.get("linked") is False and {x["state"] for x in m.get("players", [])} == {"unknown"},
+              f"after the hold: no media, not linked, states unknown (not missing): {m}")
+        ha.media[SONOS] = "idle"                        # meanwhile, with nobody following
+        await a.connect(ha); await asyncio.sleep(0.5)
+        won, sc, _ = await round_()
+        check(won == "b" and sc == 500, f"back, the Sonos idle now: no precedence: {won} {sc}")
+        a.cli.send_home_assistant_state("media_player.bathroom_radio", "", "playing"); await asyncio.sleep(0.3)
+        won, sc, _ = await round_()
+        check(won == "b" and sc == 500 and "bathroom_radio" not in a.text(), f"a player not listed: no effect: {won} {sc}")
+
+        # an Echo in a conversation keeps the next wake word against 10 dB
+        a.page.set(arbitration_media_ambient=10); ha.set_media(SONOS, "playing"); await asyncio.sleep(0.3)
+        nb = len(b.starts); b.wake(); await until(lambda: len(b.starts) == nb + 1, 3)
+        na = len(a.starts); a.wake(); b.wake(); await asyncio.sleep(1.5)
+        check(len(a.starts) == na and len(b.starts) == nb + 1 and "score 500 -> 1500" in a.text(), "in a conversation: priority beats media (10 % = +10 dB)")
+        b.end_pipeline(); await asyncio.sleep(0.5)
+
+        # an Echo of an older build sees a number: the hallway Echo's plain claim just above or below
+        a.page.set(arbitration_media_ambient=50); fbeacon(); await asyncio.sleep(0.5)
+        res = []
+        for fs in (851, 751):
+            drain(); n = len(a.starts); a.wake(); t = await a_claimed()
+            if t: fclaim(fs)
+            await asyncio.sleep(1.7)
+            res.append(len(a.starts) > n)
+            if len(a.starts) > n: a.end_pipeline(); await asyncio.sleep(0.5)
+        check(res == [False, True], f"another Echo's claim, a number as ever: 851 beats the kitchen's 801, 751 does not: {res}")
+        fbeacon(b"\x01"); await asyncio.sleep(0.5)
+
+        # Kiosk Satellite mode: e carries it as well (5 dB + 3 dB)
+        kio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        kio.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); kio.bind(("", KIOSK)); kio.setblocking(False)
+        for e in (a, b): e.page.set(arbitration_mode="kiosk")
+        await until(lambda: all(((e.page.state() or {}).get("arbitration") or {}).get("kiosk_port") for e in (a, b)), 3)
+        await asyncio.sleep(0.5)
+        while True:
+            try: kio.recv(1024)
+            except BlockingIOError: break
+        nb = len(b.starts); a.wake(); b.wake(); await asyncio.sleep(1.5)
+        es = []
+        while True:
+            try: es.append(json.loads(kio.recv(1024))["e"])
+            except BlockingIOError: break
+        check(sorted(set(es)) == [8.0, 9.0] and len(b.starts) == nb + 1, f"Kiosk Satellite mode: the kitchen Echo claims 8.0 dB with the Sonos playing: {sorted(set(es))}")
+        if len(b.starts) > nb: b.end_pipeline()
+        for e in (a, b): e.page.set(arbitration_mode="hassmic")
+        await until(lambda: not any(((e.page.state() or {}).get("arbitration") or {}).get("kiosk_port") for e in (a, b)), 3)
+        kio.close(); await asyncio.sleep(0.5)
+
+        # its own music: Music Assistant plays on the kitchen Echo (Sendspin), then stops
+        ha.set_media(SONOS, "idle"); a.page.set(arbitration_media_ambient=25); await asyncio.sleep(1.6)
+        loop = asyncio.get_running_loop(); added = asyncio.Queue()
+        server = SendspinServer(loop, Identity.generate(), "fake-ma", pairing_store=InMemoryServerPairingStore())
+        server.add_event_listener(lambda _s, ev: added.put_nowait(ev.client_id) if isinstance(ev, ClientAddedEvent) else None)
+        playing = asyncio.Event(); stop = asyncio.Event()
+        async def play(client):
+            fmt = AudioFormat(sample_rate=48000, bit_depth=16, channels=2); stream = client.group.start_stream(); k = 0
+            while not stop.is_set():
+                s = (4000 * np.sin(2 * np.pi * 440 * np.arange(k, k + 4800) / 48000)).astype("<i2"); k += 4800
+                stream.prepare_audio(np.repeat(s, 2).tobytes(), fmt); await stream.commit_audio(); await stream.sleep_to_limit_buffer(500_000)
+                playing.set()
+            await client.group.stop()
+        try:
+            await server.start_server(port=16966, discover_clients=False)
+            server.connect_to_client(f"ws://127.0.0.1:{a.sendspin}/sendspin", retry_initial_connection=True, retry_indefinitely=True)
+            cid = await asyncio.wait_for(added.get(), 15)
+            await server.trust_unpaired(cid); await asyncio.sleep(2)
+            task = asyncio.create_task(play(server.get_client(cid)))
+            await asyncio.wait_for(playing.wait(), 10); await asyncio.sleep(1)
+            won, sc, _ = await round_()
+            check(won == "a" and sc == 1102 and "media of this room (own playback): ambient counted at 25 %" in a.text(),
+                  f"Music Assistant plays on it: its own playback counts: {won} {sc}")
+            stop.set(); await task; await asyncio.sleep(0.5)
+            won, sc, _ = await round_()
+            check(won == "a" and re.search(r"media of this room \(own playback ended [01] s ago\)", a.text()), f"stopped: counts for the hold: {won} {sc}")
+            won, sc, _ = await round_()
+            check(won == "b" and sc == 500, f"after the hold: no more: {won} {sc}")
+        except Exception as ex:
+            check(False, f"Sendspin on the kitchen Echo: {ex!r}")
+        finally:
+            await server.close()
         sn.close()
     finally:
         for e in (a, b): e.proc.terminate()

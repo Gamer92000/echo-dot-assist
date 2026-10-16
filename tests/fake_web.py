@@ -84,6 +84,24 @@ async def main():
         check("cpu" in s.get("diag", {}) and "soc_temp" in s.get("diag", {}), f"diagnostics on the page: {s.get('diag')}")
         check({n for n, x in names.items() if x["feature"]} >= {"arbitration", "sound_detection", "whisper_detection"},
               "features: arbitration, sound detection, whisper detection (Bluetooth, Wi-Fi motion: not on this PC)")
+        # media in the room (main.c wake_heard): a text setting and a percentage; neither in state/config before, so defaults
+        sp, sa = names.get("arbitration_media_players", {}), names.get("arbitration_media_ambient", {})
+        check(sp.get("type") == "text" and sp.get("value") == "" and sp.get("export") is False and sp.get("feature") is False
+              and sa.get("type") == "int" and sa.get("value") == 50 and sa.get("unit") == "%" and (sa.get("min"), sa.get("max")) == (10, 100)
+              and sa.get("export") is True and sa.get("feature") is False, f"media in the room: the players (text) and the background (50 %) on the page: {sp} {sa}")
+        check(s.get("media") == {"pct": 50, "here": None, "linked": False, "players": []}, f"its status (no Home Assistant: not linked): {s.get('media')}")
+        r = [b.set(arbitration_media_ambient=v) for v in (9, 101)] + [b.set(arbitration_media_players="media_player.TV")]
+        check(all(x.get("applied") == 0 and x.get("errors") for x in r) and cfg().get("arbitration_media_ambient", "50") == "50",
+              f"9 %, 101 %, an id with capitals: refused: {[x.get('errors') for x in r]}")
+        r = b.set(arbitration_media_ambient=30, arbitration_media_players=" media_player.tv ,media_player.sonos_2,media_player.tv")
+        st = b.state() or {}
+        check(r.get("applied") == 2 and cfg().get("arbitration_media_ambient") == "30" and cfg().get("arbitration_media_players") == "media_player.tv,media_player.sonos_2"
+              and st.get("media", {}).get("players") == [{"id": "media_player.tv", "state": "unknown"}, {"id": "media_player.sonos_2", "state": "unknown"}]
+              and st.get("media", {}).get("pct") == 30, f"set: blanks and the repeated one dropped, saved; no Home Assistant yet: unknown: {st.get('media')}")
+        # a line longer than the Echo takes: refused whole (cut short, it would pass as "media_player.radio")
+        r = b.set(arbitration_media_players="media_player.radio" + " " * 900 + ",media_player.kitchen")
+        check(r.get("applied") == 0 and "longer than" in r.get("errors", "") and cfg().get("arbitration_media_players") == "media_player.tv,media_player.sonos_2",
+              f"an over-long line: refused, not cut: {r}")
 
         # Home Assistant: the lean list, and what the page changes
         ha, by, states = await ha_connect()
@@ -183,6 +201,7 @@ async def main():
         st, h, text = b.call("GET", "/api/export"); text = text.decode()
         keys = {l.split("=")[0] for l in text.splitlines() if "=" in l and not l.startswith("#")}
         check(st == 200 and "mic_level" in keys and "sound_detection" in keys and "mute" not in keys and "do_not_disturb" not in keys
+              and "arbitration_media_ambient" in keys and "arbitration_media_players" not in keys
               and "Echo Web" not in text.split("\n", 1)[1], f"export: settings and features, not this Echo's state or name ({len(keys)} lines)")
         b.set(mic_level=-20, noise_reduction="off")
         st, _, body = b.call("POST", "/api/set", text.encode())

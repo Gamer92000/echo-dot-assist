@@ -204,6 +204,14 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   protocol reimplemented from `docs/kiosk-arbitration.md` (JSON claims on UDP 2330, three copies, loudness only from
   `main.c` `kiosk_score` + `arbitration_offset` dB, `arbitration_window` ±ms, no key, no priority, always waits); the beacon flags it (1 quiet +
   2 kiosk). The socket belongs to arb's loop thread. Page: two cards with pros and cons (`HELP.arbitration_mode.modes`).
+  Media in the room (`main.c` above `wake_heard`): while this Echo plays music (`music_on`), a media player of
+  `arbitration_media_players` (page-only text setting, `S_TEXT`, not exported, max 8 ids) plays or buffers, or for 120 s
+  after (`HASSMIC_MEDIA_HOLD_MS`), the score gets `1000 * log10(100 / arbitration_media_ambient)` (50 % = +301), both
+  modes, before `arb_claim`. The players' states: `HA_STATE_SUB` without once on each keyed link (`proto_esphome.c`
+  `media_follow` on SUBSCRIBE_HA_STATES, `media_subscribe` for ids added later), `core_media_state`; the last keyed link
+  gone, playing ones go into the hold. Once per id and link (`media_sub` keeps the ids with HA's last state, replayed on
+  A, B, A). Page status `"media"` (`core_media_json`: `linked`, a player `missing` when no state came within 10 s,
+  `HASSMIC_MEDIA_MISSING_MS`).
 - **Music**: `sendspin.c` (Music Assistant Sendspin player over `ws.c`/`noise.c`/`net.c`/`hash.c`, decodes via
   `dr_flac`/`minimp3`/libopus). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
   loaded with dlopen, aptX/aptX HD via `freeaptx`) with AVRCP. Only one music source plays at a time (newest wins).

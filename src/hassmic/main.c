@@ -1181,12 +1181,166 @@ static void stream_ring(uint64_t from, uint64_t to) /* capture thread, lock held
     }
 }
 
+/* ---------------------------------------------------------------- media in the room (wake_heard)
+ * The room's players come from the setting arbitration_media_players; Home Assistant sends their states over the keyed
+ * link (proto->media_subscribe, core_media_state).  All of it: lock held, except own_ended */
+struct media_player { char id[96]; int active, known; long long ended, since; };   /* ended: mono_ms it stopped playing;
+                                                    since: it was subscribed on a keyed link (0: not on any) */
+static struct media_player room[MEDIA_MAX];
+static int nroom, media_ambient = 50, media_linked;  /* media_linked: a keyed link follows the room's players */
+static char media_ids[SETTINGS_TEXT_MAX + 1];
+static atomic_llong own_ended;                      /* mono_ms our own music (Sendspin, Bluetooth) last stopped; 0: never */
+
+/* How long media counts after it stopped: the talk that follows the music (turn it down, the next title), and a pause
+ * that is only a pause.  HASSMIC_MEDIA_HOLD_MS for tests */
+static long long media_hold_ms(void)
+{
+    static long long ms = -1;
+    if (ms < 0) { const char *e = getenv("HASSMIC_MEDIA_HOLD_MS"); ms = e && atoll(e) > 0 ? atoll(e) : 120000; }
+    return ms;
+}
+
+/* How long Home Assistant may take to send a player's state: it sends it at once when the entity exists, and nothing
+ * when it does not (a typo in the id).  HASSMIC_MEDIA_MISSING_MS for tests */
+static long long media_missing_ms(void)
+{
+    static long long ms = -1;
+    if (ms < 0) { const char *e = getenv("HASSMIC_MEDIA_MISSING_MS"); ms = e && atoll(e) > 0 ? atoll(e) : 10000; }
+    return ms;
+}
+
+/* Home Assistant's entity ids as it makes them (slugs: lower case letters, digits, _), so that the list holds only
+ * what can match; at most MEDIA_MAX: Home Assistant keeps a tracker per subscription for as long as the link lasts */
+int core_media_players(const char *list, char *err, size_t errsz)
+{
+    char ids[MEDIA_MAX][96], log[MEDIA_MAX * 98] = ""; int n = 0; size_t ln = 0; const char *p = list;
+    struct media_player old[MEDIA_MAX]; int nold = nroom;
+    while (*p) {
+        size_t l = strcspn(p, ","), k; const char *a = p, *e = p + l; int ok, dup = 0;
+        while (a < e && isspace((unsigned char)*a)) a++;
+        while (e > a && isspace((unsigned char)e[-1])) e--;
+        p += l + (p[l] == ',');
+        if (a == e) continue;
+        k = (size_t)(e - a); ok = k > 13 && k <= 13 + 80 && !strncmp(a, "media_player.", 13);
+        for (size_t j = 13; ok && j < k; j++) ok = (a[j] >= 'a' && a[j] <= 'z') || (a[j] >= '0' && a[j] <= '9') || a[j] == '_';
+        if (!ok) { snprintf(err, errsz, "\"%.*s\" is not a media player's entity id (media_player.<lower case letters, digits, _>)", (int)(k > 100 ? 100 : k), a); return -1; }
+        for (int j = 0; j < n; j++) dup |= strlen(ids[j]) == k && !strncmp(ids[j], a, k);
+        if (dup) continue;
+        if (n == MEDIA_MAX) { snprintf(err, errsz, "at most %d media players", MEDIA_MAX); return -1; }
+        memcpy(ids[n], a, k); ids[n++][k] = 0;
+    }
+    /* the ones still listed keep what Home Assistant said of them; new ones are followed at once (removed ones stay
+     * followed until the link closes: ESPHome's API has no unsubscribe, and their states are ignored; one listed again
+     * gets the last state Home Assistant sent of it, proto_esphome.c media_sub).  The list first, then the
+     * subscriptions: a state known already comes back at once (core_media_state) */
+    int fresh[MEDIA_MAX] = { 0 };
+    memcpy(old, room, sizeof old);
+    memset(room, 0, sizeof room); media_ids[0] = 0;
+    for (int i = 0; i < n; i++) {
+        int j = 0; size_t m = strlen(media_ids);
+        while (j < nold && strcmp(old[j].id, ids[i])) j++;
+        if (j < nold) room[i] = old[j];
+        else { memcpy(room[i].id, ids[i], sizeof room[i].id); fresh[i] = 1; }
+        snprintf(media_ids + m, sizeof media_ids - m, "%s%s", i ? "," : "", ids[i]);
+    }
+    nroom = n;
+    for (int i = 0; i < n; i++)
+        if (fresh[i] && connected && proto->media_subscribe && proto->media_subscribe(ids[i]) > 0) {
+            room[i].since = mono_ms();
+            if (ln < sizeof log) ln += (size_t)snprintf(log + ln, sizeof log - ln, "%s%s", ln ? ", " : "", ids[i]);
+        }
+    if (ln) fprintf(stderr, "arbitration: following %s in Home Assistant\n", log);
+    return 0;
+}
+
+const char *core_media_list(void) { return media_ids; }
+const char *core_media_player(int i) { return i >= 0 && i < nroom ? room[i].id : NULL; }
+int core_media_ambient(int set) { if (set >= 10 && set <= 100) media_ambient = set; return media_ambient; }
+
+/* playing and buffering count; anything else (paused, idle, on, off, standby, unavailable, unknown) is over, and counts
+ * MEDIA_HOLD_MS more only if it played before: a TV that is merely on says nothing about the room */
+int core_media_state(const char *entity, const char *state)
+{
+    for (int i = 0; i < nroom; i++) {
+        struct media_player *m = &room[i]; int on = !strcmp(state, "playing") || !strcmp(state, "buffering");
+        if (strcmp(m->id, entity)) continue;
+        if (on != m->active && !on) {
+            m->ended = mono_ms();
+            fprintf(stderr, "arbitration: %s %s (counts %lld s more)\n", entity, state, media_hold_ms() / 1000);
+        } else if (on != m->active || !m->known) fprintf(stderr, "arbitration: %s %s\n", entity, state);
+        m->active = on; m->known = 1;
+        return 1;
+    }
+    return 0;
+}
+
+/* a keyed link subscribed to states (proto_esphome.c media_follow): it follows every listed player from now on */
+void core_media_followed(void)
+{
+    long long now = mono_ms();
+    media_linked = 1;
+    for (int i = 0; i < nroom; i++) room[i].since = now;
+}
+
+/* Home Assistant gone (restart, network): no more states come, so what played counts as stopped now */
+void core_media_link_lost(void)
+{
+    long long now = mono_ms();
+    media_linked = 0;
+    for (int i = 0; i < nroom; i++) {
+        if (room[i].active) { room[i].ended = now; fprintf(stderr, "arbitration: %s counts as stopped, Home Assistant is gone (counts %lld s more)\n", room[i].id, media_hold_ms() / 1000); }
+        room[i].active = room[i].known = 0; room[i].since = 0;
+    }
+}
+
+/* Is media playing in this room, and why (for the log and the page): own playback first, then a player that plays,
+ * then what stopped last within MEDIA_HOLD_MS */
+static int media_here(char *why, size_t cap)
+{
+    long long now = mono_ms(), hold = media_hold_ms(), own = atomic_load(&own_ended), last = 0; int k = -1;
+    if (atomic_load(&music_on)) { snprintf(why, cap, "own playback"); return 1; }
+    for (int i = 0; i < nroom; i++) if (room[i].active) { snprintf(why, cap, "%s playing", room[i].id); return 1; }
+    for (int i = 0; i < nroom; i++) if (room[i].ended > last) { last = room[i].ended; k = i; }
+    if (own && now - own < hold && own >= last) { snprintf(why, cap, "own playback ended %lld s ago", (now - own) / 1000); return 1; }
+    if (k >= 0 && now - last < hold) { snprintf(why, cap, "%s stopped %lld s ago", room[k].id, (now - last) / 1000); return 1; }
+    return 0;
+}
+
+/* linked: a keyed link follows the players.  A player's state: playing, stopped, unknown (no keyed link, or its state
+ * not here yet), missing (subscribed media_missing_ms ago on a keyed link and still nothing: Home Assistant does not
+ * know the entity, HA's tracker sends nothing for one it does not have) */
+size_t core_media_json(char *o, size_t cap)
+{
+    char why[160]; int here = media_here(why, sizeof why); size_t n; long long now = mono_ms();
+    n = (size_t)snprintf(o, cap, "{\"pct\":%d,\"here\":%s%s%s,\"linked\":%s,\"players\":[", media_ambient, here ? "\"" : "", here ? why : "null",
+                         here ? "\"" : "", media_linked ? "true" : "false");
+    for (int i = 0; i < nroom && n < cap; i++)     /* ids: [a-z0-9_.] only, nothing to escape */
+        n += (size_t)snprintf(o + n, cap - n, "%s{\"id\":\"%s\",\"state\":\"%s\"}", i ? "," : "", room[i].id,
+                              room[i].active ? "playing" : room[i].known ? "stopped"
+                              : media_linked && room[i].since && now - room[i].since >= media_missing_ms() ? "missing" : "unknown");
+    if (n < cap) n += (size_t)snprintf(o + n, cap - n, "]}");
+    return n < cap ? n : cap - 1;
+}
+
 static void answer(uint64_t from)                   /* capture thread: act on the wake word that ended at from */
 {
     trigger(0, from);
     if (!atomic_load(&streaming)) afe_done();          /* it stopped a ring, or cut a reply: the pipeline's end follows */
 }
 
+/* Media in the room.  The front end's score is the wake word's energy over the room's, and music beside an Echo raises
+ * its room's: 2026-10-16, a Sonos playing beside the kitchen Echo and the talker in the kitchen, the living room Echo
+ * won by 0.09 dB (17:55:05: kitchen voice 935183 / ambient 20909 = 1651, living room 529266 / 11588 = 1660; at 17:51:18
+ * 1032 against 1114, the music no help either way).  So while media plays in its room (its own Sendspin or Bluetooth
+ * music, a media player of arbitration_media_players playing or buffering, or MEDIA_HOLD_MS after either stopped), an
+ * Echo counts the background only arbitration_media_ambient % (50 by default, 100 = off): 1000 * log10(100 / pct)
+ * added to the score, +301 (3 dB) at 50 %.  The same as that factor on afe_score's ambient, but it holds for every
+ * score: the mic stream's own, Kiosk Satellite mode's loudness (e = score / 10, arb.c), HASSMIC_TEST_SCORE.  At 50 %
+ * the kitchen wins both rounds above (1952; 1333, there as a preference for the room).  The case it can turn wrong,
+ * music in the kitchen and the talker in the living room, is not measured yet: hence 3 dB by default, 10 dB at most
+ * (10 %).  On the wire it is only a higher score: claims keep their format, older Echos compare the number, and a
+ * member could always claim any score.  An Echo in a conversation or ringing still claims priority 2, which no score
+ * beats; so does one Home Assistant plays media on (play_media: state not IDLE), as before. */
 static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* capture thread */
 {
     if (!arb_running()) { trigger(0, end); return; }
@@ -1200,6 +1354,12 @@ static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* captu
     /* Kiosk Satellite mode: their loudness, not the front end's energies (whose 150 ms only the window would pay for) */
     int score = arb_mode(-1) == ARB_KIOSK ? kiosk_score(end, simulated) : wake_score(begin, end, simulated);
     if (score == INT_MIN) { fprintf(stderr, "arbitration: less than 3 s heard, answers without a claim\n"); trigger(0, end); return; }
+    { char why[160]; pthread_mutex_lock(&core_lock); int pct = media_ambient, here = media_here(why, sizeof why); pthread_mutex_unlock(&core_lock);
+      if (!here) fprintf(stderr, "arbitration: no media of this room: score %d\n", score);
+      else if (pct >= 100) fprintf(stderr, "arbitration: media of this room (%s), setting off: score %d\n", why, score);
+      else { int bonus = (int)lround(1000 * log10(100.0 / pct));
+             fprintf(stderr, "arbitration: media of this room (%s): ambient counted at %d %%, score %d -> %d\n", why, pct, score, score + bonus);
+             score += bonus; } }
     /* The other Echos' claims are Wi-Fi broadcasts, and the BLE scan's share of the antenna loses them (ble.c): no
      * scanning while this round listens: the window, then the claims of Echos that heard it a little later and the
      * winner's "answers", 1 s at least */
@@ -1531,6 +1691,7 @@ void core_music(int source, int on)
         if (source == MUSIC_SENDSPIN && was & MUSIC_BLUETOOTH) a2dp_pause();
     }
     if (!on && source == MUSIC_SENDSPIN && was & MUSIC_SENDSPIN) a2dp_unyield();
+    if (!on && was & source && !atomic_load(&music_on)) atomic_store(&own_ended, mono_ms());   /* media in the room: the hold */
     if (!was != !atomic_load(&music_on)) playback_hint();
 }
 
