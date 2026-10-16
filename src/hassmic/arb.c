@@ -9,7 +9,9 @@
  * stream) and it is broadcast as a claim; after the window (below) the
  * Echo answers only if no claim of the last LOOKBACK_MS beats it.  An Echo in a conversation or ringing claims with
  * priority: the next wake word is for it.  The winner broadcasts that it answers, so an Echo whose detection comes late
- * does not answer as well.  With no other member heard from lately there is no round and no delay.
+ * does not answer as well.  With no other member heard from lately there is no round and no delay.  While media plays
+ * in an Echo's room, main.c raises its score before the claim (wake_heard: the room's background counted less), so
+ * the claim's format is the same and older Echos just compare the number.
  *
  * Window: how long to wait for the others' claims.  An access point holds broadcasts for stations in power save until
  * its next DTIM beacon (a multiple of 102.4 ms; a repeater may hold them once more), so what a network needs differs:

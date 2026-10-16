@@ -71,6 +71,12 @@ link, or from the button pairing.
 The key travels encrypted to the receiving Echo, so it is not readable in Home Assistant's states, traces or logbook.
 Rounds are authenticated with the key and cannot be replayed. Keys: `state/arb_key`, `state/arbitration`.
 
+**Media in the room**: an Echo whose room plays media claims a higher score. Which media players are its room's is a
+setting of the settings page only (signed requests from an approved browser), and their states count only when they
+come from Home Assistant over the keyed link, which the Echo subscribes them on (no other client can stay connected
+once Home Assistant set the key). Nothing on the wire changes: a member could always claim any score it liked, and
+an Echo in a conversation still keeps the next wake word.
+
 **Kiosk Satellite mode** has none of this: its claims carry no key, so any device on the network can silence the Echo
 while that mode is on.
 

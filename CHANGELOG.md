@@ -2,6 +2,19 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-16
+
+- **The Echo in the room where music plays answers its wake words.** Music beside an Echo drowns out a wake word said
+  right next to it, so the Echo in the next room, which heard you over less noise, answered instead: a Sonos playing
+  in the kitchen handed the kitchen's wake words to the living room. List the media players of each Echo's room on its
+  settings page ("Media players in this room", under wake word arbitration: entity ids such as
+  `media_player.kitchen_sonos`, at most 8). While one of them plays, or the Echo plays music itself (Music Assistant,
+  Bluetooth), and for 2 minutes after, that Echo counts the room's background noise only at "Background while media
+  plays in the room" (50 % by default, worth 3 dB; 100 % switches it off). Home Assistant tells the Echo what the
+  players do over its encrypted connection: nothing to set up there. An Echo you are talking to still keeps the next
+  wake word, and older Echos in the network take part as before. The page shows whether media counts right now, and
+  the log notes it for every wake word.
+
 ## 2026-10-13
 
 - **No more freezing at the first wake word after 18.6 hours** (issue #31). Since 2026-10-12, an Echo whose

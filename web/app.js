@@ -304,6 +304,17 @@ const HELP = {
   arbitration_window: { parent: 'arbitration', step: 50,
     when: () => settingValue('arbitration_mode') === 'kiosk' || !settingValue('arbitration_window_auto'),
     help: 'How long the Echo waits for other devices\' claims before it answers. Longer catches devices whose claims come late, at the cost of a slower answer when one did not hear you. Kiosk Satellite mode: use the same as on your tablets; Kiosk Satellite\'s default is 400 ms. Echo network: it still answers as soon as every other Echo\'s claim is in.' },
+  arbitration_media_players: { parent: 'arbitration', placeholder: 'media_player.kitchen_sonos, media_player.kitchen_tv',
+    help: 'The media players in this Echo\'s room, by their entity ids in Home Assistant, comma separated, at most 8: a Sonos, a TV, Music Assistant\'s player of the same speaker. Music beside an Echo drowns out a wake word said right next to it, and the Echo in the next room answers instead. While one of these plays, or this Echo plays music itself, the background counts less here (below), until 2 minutes after the music stopped. Home Assistant tells the Echo what they play over its own connection: nothing to set up there. Each Echo has its own room, so this is not copied to other Echos.',
+    status: () => {
+      const m = state.media; if (!m) return null;
+      const p = (t) => h('p', { class: 'f-model' }, t);
+      if (m.here) return p(`Media here: ${m.here} (${m.pct >= 100 ? 'setting off' : `background at ${m.pct} %`}).`);
+      if (!(m.players || []).length) return p('No players listed: only this Echo\'s own music counts.');
+      return p(`No media here (${m.players.map((x) => `${x.id} ${x.state}`).join(', ')}).`);
+    } },
+  arbitration_media_ambient: { parent: 'arbitration', step: 5,
+    help: 'How much of the room\'s background noise counts while media plays in this Echo\'s room (the players above, or its own music). At 50 % this Echo gets 3 dB more than the others; lower gives it more, and makes it answer more often when you spoke in the next room while the music played here. 100 %: off. An Echo you are talking to keeps the next wake word all the same. Default 50 %; use the same on every Echo.' },
   sound_detection: { icon: 'wave', ha: ['Sound (event)'], help: 'Amazon\'s Alexa Guard model listens for smoke and CO alarms, breaking glass, barking, a crying baby, snoring, coughing, running water and beeping appliances, and Home Assistant gets each as a "Sound" event for automations.',
     note: 'Less reliable than on a stock Echo, which double-checks every hit in Amazon\'s cloud. Treat events as hints, never as a replacement for a smoke detector.',
     status: () => {
@@ -520,6 +531,11 @@ function control(s) {
     r.oninput = paint; r.onchange = () => set(s.name, r.value);
     return { el: h('div', { class: 'slider' }, r, out), update: (x) => { if (!r.matches(':active')) { r.value = x.value; paint(); } } };     // not while dragging
   }
+  if (s.type === 'text') {              // typed in, saved when the field is left (or on Enter); the Echo checks it
+    const t = h('input', { type: 'text', id, spellcheck: 'false', autocomplete: 'off', placeholder: (HELP[s.name] || {}).placeholder || '' });
+    t.onchange = () => set(s.name, t.value.trim());
+    return { el: t, update: (x) => { if (document.activeElement !== t) t.value = x.value; } };      // not under the cursor
+  }
   const names = CHOICE_NAMES[s.name] || {}, modes = (HELP[s.name] || {}).modes;
   if (modes) {                          // choices worth weighing: a small card each, what each gives and costs one click away
     const cards = s.choices.map((c) => {
@@ -568,7 +584,7 @@ function haBadge() { return h('span', { class: 'badge ha', title: 'Also in Home 
 
 function settingRow(s) {
   const info = HELP[s.name] || {}, c = control(s), saved = h('span', { class: 'saved' }, 'Saved');
-  const wide = s.type === 'int' || !!info.modes, stack = s.type === 'choice';      // stack: control under the text on a phone
+  const wide = s.type === 'int' || s.type === 'text' || !!info.modes, stack = s.type === 'choice';      // stack: control under the text on a phone
   const status = info.status ? h('div', { class: 'row-status' }) : null;      // under the whole row: what the last change found
   const warns = info.warnings ? h('ul', { class: 'pc row-warn' }) : null;     // what it costs, small, under its help
   const row = h('div', { class: 'row' + (wide ? ' wide' : '') + (stack ? ' stack' : '') },
@@ -1243,6 +1259,7 @@ function pretty(name, raw) {
   if (!s) return raw;
   if (s.type === 'bool') return raw === 'on' ? 'On' : 'Off';
   if (s.type === 'choice') return (CHOICE_NAMES[name] || {})[raw] || raw;
+  if (s.type === 'text') return raw || '—';
   return fmt(s, +raw);
 }
 

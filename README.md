@@ -72,7 +72,8 @@ The light ring speaks stock Alexa's language:
 </picture>
 
 With several Echos, all of them hear you, but only one answers. They settle it among themselves, without Home
-Assistant and without a cloud; nothing to set up ([how](docs/GUIDE.md#several-echos)).
+Assistant and without a cloud; nothing to set up ([how](docs/GUIDE.md#several-echos)). Name a room's media players on its
+Echo, and that Echo keeps its wake words while music plays beside it.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/arbitration-dark.svg">

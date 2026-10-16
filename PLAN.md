@@ -981,6 +981,44 @@ Run in this order. Each step says what it proves.
       601 ms late for the round before. Now a new round takes back the last round's samples that came nearer to it
       than to that one (`delays[].ms` -1, not saved); the new round counts them as come first.
       Not done: on the reporter's two Echos (they offered to test a build)
+- [~] Arbitration: the Echo of the room where media plays (2026-10-16). A Sonos beside the kitchen Echo playing, the
+      talker in the kitchen: 17:55:05 kitchen voice 935183 / ambient 20909 = 1651, living room 529266 / 11588 = 1660, the
+      living room answered (0.09 dB); 17:51:18 kitchen 232099 / 21536 = 1032, living room 308456 / 23725 = 1114, the
+      living room again, the music no help either way. The music lifts the kitchen's ambient; the voice energy is the
+      front end's after AEC, beamforming and its noise reduction. Two ways looked at: (a) a fixed bonus while media
+      plays in the room; (b) the music's share taken out of the ambient against a baseline of the quiet room.
+      voiceEnergy / ambientEnergy only come per detection (the query needs the keyword's place on the front end's clock),
+      so no periodic baseline; one from `ring_power` measures something else. 17:55: (a) wins it for the kitchen by
+      2.9 dB, (b) only if the baseline sits well under the music's ambient (not measured); 17:51: (a) wins, as a room
+      preference, (b) changes nothing; own playback: (a) works, (b) not (the AEC takes it out of the ambient); music in
+      the kitchen and the talker in the living room: (a) capped, (b) worse (the music is in voiceEnergy too, uncapped).
+      So (a), with the log for (b) later. Done as a factor on the background, the owner's view: setting
+      `arbitration_media_ambient` (10-100 %, 50 default, 100 off, exported, page only), score + 1000 * log10(100 / pct)
+      (+301 at 50 %: kitchen 1952 at 17:55, 1333 at 17:51, both kitchen), added in `wake_heard` after the score and
+      before `arb_wait`/`arb_claim`, both modes (Kiosk `e` = score / 10), not in `wake_score`/`kiosk_score` so that
+      HASSMIC_TEST_SCORE runs see it. Media here: own playback (`music_on`: Sendspin, A2DP), a player of
+      `arbitration_media_players` (page-only text setting, the first `S_TEXT`: comma list, at most 8 ids
+      `media_player.[a-z0-9_]{1,80}`, refused otherwise; in `state/config`, not exported: it is the room's) `playing` or
+      `buffering`, or 120 s after either ended (`HASSMIC_MEDIA_HOLD_MS`); paused, idle, on, off, standby, unavailable,
+      unknown end it, the hold only after it played. No blueprint, no event, no action in HA: the Echo subscribes each
+      id on every keyed link without `once` (on SUBSCRIBE_HA_STATES, and at once for ids added later; removed ones stay
+      until the link closes, ESPHome has no unsubscribe), HA's tracker sends the state at once and on every change;
+      states only from keyed clients, before the tag path; the last keyed link gone, playing ones go into the hold.
+      Wire unchanged, prio 2 unchanged (a conversation, a ring, play_media: state not IDLE). Log per round: `media of
+      this room (<why>): ambient counted at <pct> %, score <raw> -> <new>` or `no media of this room: score <raw>`,
+      beside `wake: front end: voice energy …, ambient …` (the data for (b)); changes `media_player.x playing` / `…
+      paused (counts 120 s more)`; `following … in Home Assistant`. Page: under the list `"media"` of `/api/state`.
+      fake_ha_arbitration (21 new checks that fail on 07d0ff7): a fake HA tracker; list from the page followed for good
+      over the keyed link only, the other Echo nothing; 500 vs 900: 801 (50 %) still loses, 1102 (25 %) wins with the
+      claim's length unchanged; paused counts for the hold, then not; both rooms with media; same list again nothing,
+      a new id one subscription; 8 ids of the longest kind kept over a restart and followed by themselves, a player
+      playing all along counts at once; HA gone: the hold, then nothing; an unlisted player nothing; priority beats
+      10 %; an older Echo's plain claim 851 beats 801, 751 not; Kiosk `e` 8.0; Sendspin from aiosendspin on the kitchen
+      Echo: `own playback`, then `own playback ended`, then nothing. fake_web: both settings, export, refusals, status.
+      Not done: the case (a) can turn wrong (music in the kitchen, the talker in the living room) is not measured, hence
+      only 3 dB by default; on the two Echos: 10 wake words each with the Sonos in the kitchen and the talker in the
+      kitchen / living room, quiet, own Sendspin, with the round's log lines for (b). A state from an unkeyed client is
+      not tested: once HA set the key, no other client stays connected
 - [x] Stale `-m` after the wake word migration (2026-10-06, donut kept going back to Alexa): `artifact-install.sh
       migrate` renamed `models/echo-de` to `echo-de-DE` and moved `state/wake_word`, but hassmic.conf kept
       `ARGS="-m .../models/echo-de/pryon.manifest"`; `wake_words_scan` added the -m path unchecked, so HA's select had two
