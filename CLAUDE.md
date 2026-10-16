@@ -368,7 +368,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   talker over other animations.  ledcontroller loads animations only at its start from `/system/etc/led-resources`
   and plays only names in a layer config (each `layer_config*.json` is a compositor of its own, so ours go into
   stock's file).  `hassmic -G dir` (root, `main.sh leds()` at each satellite start, `-G -` = digest only) makes 627
-  files: active-start/its last frame/active-end turned by each LED (`hassmic_listen|hold|end_N`, first in layer 4) and
+  files (779 with the themes): active-start/its last frame/active-end turned by each LED (`hassmic_listen|hold|end_N`, first in layer 4) and
   the light's palette (24 hues x full/half + white, 3 levels, solid/pulse/spin/blink, rainbow; colours as seen, gamma
   2.2 to the driver's duty as Amazon's own; last in layer 0), plus
   stock's config with them added and a digest; `sysinstall.sh leds` installs them (stock's config kept as
@@ -377,7 +377,10 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   through `led()` -> `ring_set`/`ring_unset`, which knows from each file how long it shows; while one does, HA's light
   is off.  The beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N`
   when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
-  `HASSMIC_FAKE_BEAM`.
+  `HASSMIC_FAKE_BEAM`.  Themes (setting `ring_theme`, page only): rings in other colours made by `-G` from stock's
+  listening, thinking and talking rings (their 00F..0FF green = highlight), coloured by LED after turning
+  (`hassmic_theme_<id>_listen|hold|end_N`, `_think`, `_talk`; think/talk just before stock's active-thinking in layer
+  4); `ring_set` plays them for the stock names; none where stock's rings are not that scale.
 - `src/include/`: headers for the reversed Amazon libraries (`mixer_api.h`, `pryon_api.h`, `aipc_api.h`) and `netio.h`.
 - `src/tools/`: standalone device tools (`mixcap`, `mixplay`, `pryon_test`, `aed_test`, `latency`, `runas` — AIPC refuses uid 0 and
   the image has no `su`; `curlspy`, `hciscan`, `a2dpprobe`, `dha_test` not in `all`).

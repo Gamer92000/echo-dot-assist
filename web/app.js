@@ -197,6 +197,7 @@ const HELP = {
   speaker_gain: { help: 'Makes the Echo\'s own speaker louder at every volume, for an Echo that is too quiet at full volume: it raises the amplifier stage in front of the speaker, which a stock Echo leaves at +0 dB (an Echo Dot 3\'s amplifier has only 2 dB more to give). Owners of an Echo Dot 2 heard +6 dB loud and clean at full volume; above that, loud music near full volume can distort, and a speaker that plays distorted for long can be damaged. Raise it a step at a time and turn it down at the first crackle. The 3.5 mm jack and Bluetooth speakers are not affected. Default +0 dB.' },
   led_auto_brightness: { ha: true, help: 'The ring dims and brightens with the room, from the Echo\'s light sensor and Amazon\'s own curve, as on a stock Echo.' },
   led_brightness: { ha: true, help: 'A fixed brightness for the ring. Setting one turns auto brightness off.' },
+  ring_theme: { ring: true, help: 'The colours of the ring while the Echo listens, thinks and talks. Stock: Amazon\'s blue. Rainbow: a colour wheel round the ring that turns while it thinks. Green, Sky blue, Crimson: the ring in one colour, with a spinner while it thinks. The light towards whoever speaks stays, brighter and paler; the mute ring stays red, and the volume and timer rings stay Amazon\'s, in every theme. Shows from the next time the ring lights.' },
   bluetooth_announcements: { help: 'Says "Connected to …" and "Disconnected from …" when a phone connects, in your voice assistant\'s voice.' },
   bluetooth_announcement_language: { help: 'The language of those sentences. Home Assistant does not tell the Echo which language your voice assistant speaks, so pick the one that matches its voice.' },
   sendspin_unpaired: { help: 'Lets any Music Assistant server on the network play here without pairing. Off: only a server given this Echo\'s "Sendspin pairing token" (a diagnostic entity in Home Assistant) may play.' },
@@ -334,6 +335,7 @@ const CHOICE_NAMES = {
   noise_reduction: { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' },
   online_updates: { off: 'Off', beta: 'Beta', release: 'Release' },
   drop_in_answer: { auto: 'At once', ask: 'After the action button' },
+  ring_theme: { stock: 'Stock', rainbow: 'Rainbow', green: 'Green', sky: 'Sky blue', crimson: 'Crimson' },
   bluetooth_announcement_language: { en: 'English', de: 'Deutsch', fr: 'Français', es: 'Español', it: 'Italiano', pt: 'Português', nl: 'Nederlands',
     sv: 'Svenska', da: 'Dansk', nb: 'Norsk', fi: 'Suomi', pl: 'Polski' },
 };
@@ -497,6 +499,108 @@ function flash(name) {
   c.saved.classList.add('show'); clearTimeout(c.saved.t); c.saved.t = setTimeout(() => c.saved.classList.remove('show'), 1600);
 }
 
+// ---------------------------------------------------------------- light ring themes: a preview of each
+
+// ring.c's themes with its values, as it writes them for the LEDs: the rainbow hsv(i * 30°, 1, 0.75) by LED, the
+// others a listening colour and a spinner's head and trail.  Each preview plays what the Echo plays, on one clock for
+// all: the ring opening towards whoever speaks (LEDs 5 and 6, the bottom here), held, thinking, talking, closing.
+// Stock's thinking is a twinkle of its own blues, made up here rather than copied from Amazon's file.
+const RING_THEMES = {
+  stock: null,
+  rainbow: { rainbow: true },
+  green: { listen: [0, 180, 0], head: [0, 200, 0], trail: [0, 60, 0] },
+  sky: { listen: [80, 150, 200], head: [150, 205, 255], trail: [25, 45, 70] },
+  crimson: { listen: [110, 0, 45], head: [210, 45, 0], trail: [55, 8, 0] },
+};
+const RING_PHASES = [['Listening', 1800], ['Thinking', 2000], ['Talking', 2800], ['', 1000]];   // the last: closing, then dark
+const RING_CYCLE = RING_PHASES.reduce((a, [, ms]) => a + ms, 0);
+
+function ringWheel(i) {                 // as ring.c theme_base: colorsys, then floor
+  const hh = (i % 12) / 2, f = hh - Math.floor(hh), v = 0.75, q = v * (1 - f), t = v * f;
+  const rgb = [[v, t, 0], [q, v, 0], [0, v, t], [0, q, v], [t, 0, v], [v, 0, q]][Math.floor(hh) % 6];
+  return rgb.map((x) => Math.floor(x * 255));
+}
+
+// stock's pixel with highlight w (0 blue .. 1 light blue) in a theme; null: dark
+function ringPixel(th, i, w, talking) {
+  if (w === null) return null;
+  if (!th) return [0, Math.round(255 * w), 255];
+  const base = th.rainbow ? ringWheel(i) : talking ? th.head : th.listen;
+  return base.map((c) => Math.min(255, Math.round(talking ? c * (0.3 + 0.7 * w) : c + 150 * w)));
+}
+
+// the 12 LEDs at t ms into the cycle
+function ringFrame(th, t) {
+  const dist = (i) => Math.min(Math.abs(i - 5.5), 12 - Math.abs(i - 5.5));     // from the talker, 0.5 .. 5.5
+  let at = t % RING_CYCLE, phase = 0;
+  while (phase < RING_PHASES.length - 1 && at >= RING_PHASES[phase][1]) at -= RING_PHASES[phase++][1];
+  const leds = [...Array(12).keys()];
+  if (phase === 0) {                    // opening from the talker in 300 ms, its edge light blue; then held
+    const r = Math.min(1, at / 300) * 6;
+    return leds.map((i) => ringPixel(th, i, dist(i) > r ? null : dist(i) < 1 || r < 6 && dist(i) > r - 1 ? 1 : 0));
+  }
+  if (phase === 1) {
+    const step = Math.floor(at / 80);
+    if (th && th.rainbow) return leds.map((i) => ringWheel((i - step % 12 + 12) % 12));
+    if (th) return leds.map((i) => (i === step % 12 ? th.head : i === (step + 11) % 12 ? th.trail : null));
+    const tick = Math.floor(at / 100);  // stock: each LED some blue between blue and light blue, new every 100 ms
+    return leds.map((i) => ringPixel(null, i, ((i * 7 + tick * 5) % 6) / 5, 0));
+  }
+  if (phase === 2) {                    // talking: light blue to blue and back, 1.4 s
+    const w = 0.5 + 0.5 * Math.cos((2 * Math.PI * at) / 1400);
+    return leds.map((i) => ringPixel(th, i, w, 1));
+  }
+  const r = 6 - Math.min(1, at / 300) * 6;          // closing towards the talker, then dark
+  return leds.map((i) => ringPixel(th, i, r <= 0 || dist(i) > r ? null : dist(i) > r - 1 ? 1 : 0));
+}
+
+function drawRing(cv, leds) {
+  const x = cv.getContext('2d'), n = cv.width, c = n / 2, dpr = n / 76;
+  x.clearRect(0, 0, n, n);
+  x.beginPath(); x.arc(c, c, c - 2 * dpr, 0, 2 * Math.PI); x.fillStyle = '#16181b'; x.fill();     // the Echo's top
+  x.lineWidth = 1.2 * dpr; x.strokeStyle = '#2b2f34'; x.stroke();
+  x.beginPath(); x.arc(c, c, c - 9 * dpr, 0, 2 * Math.PI); x.lineWidth = 6 * dpr; x.strokeStyle = '#08090a'; x.stroke();  // the ring, unlit
+  leds.forEach((rgb, i) => {
+    if (!rgb) return;
+    const a0 = -Math.PI / 2 + (i - 0.42) * (Math.PI / 6), a1 = a0 + 0.84 * (Math.PI / 6), col = `rgb(${rgb.join(',')})`;
+    x.save(); x.beginPath(); x.arc(c, c, c - 9 * dpr, a0, a1); x.lineWidth = 5 * dpr; x.lineCap = 'round';
+    x.strokeStyle = col; x.shadowColor = col; x.shadowBlur = 7 * dpr; x.stroke(); x.restore();
+  });
+}
+
+const ringStill = () => window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// the picker: one card per theme, its ring playing; a click picks it
+function ringPicker(s) {
+  const names = CHOICE_NAMES[s.name] || {}, dpr = Math.min(3, window.devicePixelRatio || 1);
+  const caption = h('p', { class: 'ring-phase', 'aria-hidden': 'true' });
+  const opts = s.choices.map((c) => {
+    const cv = h('canvas', { width: String(76 * dpr), height: String(76 * dpr), 'aria-hidden': 'true' });
+    const pick = () => { if (s.choices[settingValueIndex(s.name)] !== c) set(s.name, c); };
+    const b = h('div', { class: 'ring-opt', role: 'radio', tabindex: '0', 'aria-checked': 'false', onclick: pick,
+      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } } }, cv, h('span', {}, names[c] || c));
+    return { b, cv, th: RING_THEMES[c] };
+  });
+  const el = h('div', { class: 'ring-pick' }, h('div', { class: 'ring-opts', role: 'radiogroup', 'aria-label': s.label }, opts.map((o) => o.b)), caption);
+  // 25 frames a second is enough (the Echo's own frames are 20-80 ms), none while the section is not shown (another
+  // section picked, or scrolled away), one still frame with reduced motion; the loop ends with its row (build())
+  const t0 = performance.now(); let last = -1e9, still = null;
+  const paint = (now) => {
+    if (!el.isConnected) return;
+    requestAnimationFrame(paint);
+    const r = el.getBoundingClientRect(), shown = r.width > 0 && r.bottom > 0 && r.top < innerHeight;
+    if (!shown || (ringStill() ? still === true : now - last < 40)) return;
+    last = now; still = ringStill();
+    const t = still ? 1000 : now - t0;
+    opts.forEach((o) => drawRing(o.cv, ringFrame(o.th, t)));
+    let at = t % RING_CYCLE, k = 0;
+    while (k < RING_PHASES.length - 1 && at >= RING_PHASES[k][1]) at -= RING_PHASES[k++][1];
+    caption.textContent = RING_PHASES[k][0] || '\u00a0';
+  };
+  requestAnimationFrame(paint);
+  return { el, update: (x) => opts.forEach((o, i) => { o.b.classList.toggle('on', i === x.value); o.b.setAttribute('aria-checked', String(i === x.value)); }) };
+}
+
 // ---------------------------------------------------------------- controls (built once, updated in place)
 
 const controls = new Map();             // setting name -> { update(s), saved, root }
@@ -520,6 +624,7 @@ function control(s) {
     r.oninput = paint; r.onchange = () => set(s.name, r.value);
     return { el: h('div', { class: 'slider' }, r, out), update: (x) => { if (!r.matches(':active')) { r.value = x.value; paint(); } } };     // not while dragging
   }
+  if ((HELP[s.name] || {}).ring) return ringPicker(s);
   const names = CHOICE_NAMES[s.name] || {}, modes = (HELP[s.name] || {}).modes;
   if (modes) {                          // choices worth weighing: a small card each, what each gives and costs one click away
     const cards = s.choices.map((c) => {
@@ -568,7 +673,7 @@ function haBadge() { return h('span', { class: 'badge ha', title: 'Also in Home 
 
 function settingRow(s) {
   const info = HELP[s.name] || {}, c = control(s), saved = h('span', { class: 'saved' }, 'Saved');
-  const wide = s.type === 'int' || !!info.modes, stack = s.type === 'choice';      // stack: control under the text on a phone
+  const wide = s.type === 'int' || !!info.modes || !!info.ring, stack = s.type === 'choice';      // stack: control under the text on a phone
   const status = info.status ? h('div', { class: 'row-status' }) : null;      // under the whole row: what the last change found
   const warns = info.warnings ? h('ul', { class: 'pc row-warn' }) : null;     // what it costs, small, under its help
   const row = h('div', { class: 'row' + (wide ? ' wide' : '') + (stack ? ' stack' : '') },

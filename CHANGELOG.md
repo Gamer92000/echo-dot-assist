@@ -2,6 +2,15 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-16
+
+- **Themes for the light ring**: "Light ring theme" on the settings page (Lights) colours the ring while the Echo
+  listens, thinks and talks: Rainbow (a colour wheel round the ring, turning while it
+  thinks), Green, Sky blue and Crimson (one colour, with a spinner while it thinks), or Stock, Amazon's blue, as before.
+  The light towards whoever speaks stays, brighter and paler; the mute ring stays red, and the volume and timer rings
+  stay Amazon's. The Echo makes the themes itself from Amazon's own rings at its first start with this version (a
+  second without light, as for the light ring), only on an Echo whose rings are the blue it knows (the Echo Dot 2's).
+
 ## 2026-10-13
 
 - **No more freezing at the first wake word after 18.6 hours** (issue #31). Since 2026-10-12, an Echo whose

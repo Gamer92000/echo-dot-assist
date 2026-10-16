@@ -7,6 +7,7 @@
 #include "ble.h"
 #include "btout.h"
 #include "micgain.h"
+#include "ring.h"
 #include "sendspin.h"
 #include "sound.h"
 #include "spkgain.h"
@@ -50,7 +51,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WIFI_MOTION,
+enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_THEME, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WIFI_MOTION,
           WIFI_SENS, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
@@ -73,6 +74,8 @@ static const struct setting table[NSET] = {
     [BT_LANG]     = { "bluetooth_announcement_language", "Announcement language", "Bluetooth", NULL, S_CHOICE, 0, 0, 1, 0 },
     [LED_AUTO]    = { "led_auto_brightness", "LED auto brightness", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
     [LED_LEVEL]   = { "led_brightness", "LED brightness", "Lights", "%", S_INT, 0, 100, 1, 0 },
+    /* ring.c keeps it; only where the installed set has the themes' rings */
+    [RING_THEME]  = { "ring_theme", "Light ring theme", "Lights", NULL, S_CHOICE, 0, 0, 1, 0 },
     [ARB]         = { "arbitration", "Wake word arbitration with other Echos", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* arb.c keeps them in memory, state/config on disk: lockdown.sh admits Kiosk Satellite's port by it */
     [ARB_MODE]    = { "arbitration_mode", "Arbitration mode", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
@@ -113,6 +116,7 @@ static int present(enum id i)
     case WHISPER: return core_whisper_model();
     case SOUND: return sound_model() != SOUND_NONE;               /* the firmware has one on every model so far */
     case LED_AUTO: return core_lux() == core_lux();               /* a light sensor: not NAN */
+    case RING_THEME: return ring_themes();
     case WIFI_MOTION: case WIFI_SENS: return wifimotion_present();
     case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: return arb_running();
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
@@ -147,6 +151,7 @@ int settings_choices(const struct setting *s, const char *const **names)
     case ARB_MODE: *names = arb_modes; return 2;
     case WAKE_ENGINE: *names = wake_engines; return 3;
     case DROPIN_ANSWER: *names = dropin_answers; return 2;
+    case RING_THEME: *names = ring_theme_ids; return ring_nthemes;
     default: *names = NULL; return 0;
     }
 }
@@ -167,6 +172,7 @@ int settings_get(const struct setting *s)
     case BT_LANG: return bt_lang;
     case LED_AUTO: return core_led_auto(-1);
     case LED_LEVEL: return core_led_brightness(-1);
+    case RING_THEME: return ring_theme(-1);
     case SOUND: return core_sound(-1);
     case WIFI_MOTION: return wifimotion_enable(-1);
     case WIFI_SENS: return wifimotion_sensitivity(-1);
@@ -209,6 +215,7 @@ static void put(enum id i, int v)
     case BT_LANG: bt_lang = v; break;
     case LED_AUTO: core_led_auto(v); break;
     case LED_LEVEL: core_led_brightness(v); break;              /* a level of its own: auto off, or it moves */
+    case RING_THEME: ring_theme(v); break;
     case SOUND: core_sound(v); break;
     case WIFI_MOTION: wifimotion_enable(v); break;
     case WIFI_SENS: wifimotion_sensitivity(v); break;
@@ -276,7 +283,8 @@ void settings_save(void)
     path(p, sizeof p, "config"); snprintf(tmp, sizeof tmp, "%s.tmp", p);
     if (!(f = fopen(tmp, "w"))) { fprintf(stderr, "settings: cannot write %s\n", tmp); return; }
     fprintf(f, "# hassmic settings: name=value; the web page and Home Assistant write it\n");
-    for (int i = 0; i < NSET; i++) if (ours(i) && present(i)) { format(&table[i], v, sizeof v); fprintf(f, "%s=%s\n", table[i].name, v); }
+    /* the ring's theme also while its rings are not installed (another build's set, say): picked, it stays picked */
+    for (int i = 0; i < NSET; i++) if (ours(i) && (present(i) || (i == RING_THEME && ring_theme(-1)))) { format(&table[i], v, sizeof v); fprintf(f, "%s=%s\n", table[i].name, v); }
     if (fclose(f) || rename(tmp, p)) { remove(tmp); fprintf(stderr, "settings: cannot write %s\n", p); }
 }
 

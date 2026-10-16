@@ -1707,6 +1707,23 @@ Run in this order. Each step says what it proves.
       channel goes through gamma 2.2, as Amazon maps its own: `solid_orange` is F30, Home Assistant's orange 255,165,0
       becomes 255,98,0 (Amazon's other orange, ff6000). Coral is now the pale 15° hue, FF5B37; levels as seen 1 /
       0.66 / 0.382 = the same duty as before (1 / 0.4 / 0.12); pulse from 35 %, spin tails 65 / 42 / 25 %.
+      Themes (2026-10-16, a user asked for a rainbow and other colours on the Echo's own rings): setting `ring_theme`
+      (page only, group Lights, exported), stock / rainbow / green / sky / crimson (no free colour: any colour would
+      need its rings made beforehand too). Stock's
+      listening, thinking and talking rings on the Dot 2 are one scale, 00F..0FF (blue full, green 0..F, plus black;
+      one 0CE in thinking), so each pixel's green is how much it is highlight. `-G` makes per theme the listen / hold /
+      end rings turned by each LED and recoloured after turning, by the LED each pixel lands on (turning the coloured
+      frame, as a first test did by replacing active-start, carried the rainbow round with the beam), and talking from
+      stock's active-talking: theme colour + 150 x highlight on each channel (towards white), talking at 30..100 %
+      of it with stock's rhythm (with the audio level would need rendering, which files cannot), thinking the wheel
+      turning, else head and trail, 80 ms a step. The values as they are, no gamma
+      (approved on the kitchen's Dot 2 from files written by hand; through gamma the rainbow's BF would be 87).
+      38 files per theme, 152 more (779 in all); their thinking and talking rings go just before stock's
+      active-thinking in layer 4, behind the short alarm and timer rings as stock's are. `ring_set` plays the theme's
+      names, at turn 0 while the beam is not known (ring_tick turns it once it is). Not made where a stock pixel is off
+      that scale or active-talking or stock's active-thinking entry is missing (log "no themes"): then the setting is
+      not offered. tests/fake_ha_ring.py: colours by LED in two turns, layer order, a red stock without themes, a
+      wake word with the theme picked.
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
