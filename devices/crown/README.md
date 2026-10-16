@@ -59,9 +59,8 @@ back on and takes hassmic off `/system`; all the way back is the firmware `.bin`
 
 Installed and running on a real Echo Show 8 (2026-10-14): boot into hassmic, Wi-Fi, Home Assistant (ESPHome entities,
 buttons, voice questions answered), volume keys, mic mute, the light band (waiting for Alexa, listening, thinking,
-reply). Bluetooth (proxy, A2DP sink, pairing) works once Android's stack is off the partition. The wake sound is the built-in
-tone (stock's is not in this firmware); crown's extra Amazon apps are classified. **Open**: whether the wake blip is
-heard after the cold-output lead-in (by ear). Details: [docs/re-crown.md](../../docs/re-crown.md).
+reply). Bluetooth (proxy, A2DP sink, pairing) works once Android's stack is off the partition. The wake sound is hassmic's own
+two-note chime (stock's is not in this firmware), heard after the cold-output lead-in; crown's extra Amazon apps are classified. **Open**: nothing known. Details: [docs/re-crown.md](../../docs/re-crown.md).
 
 ## Files here
 

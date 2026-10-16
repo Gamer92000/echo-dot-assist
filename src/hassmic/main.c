@@ -1537,8 +1537,8 @@ static int ring_go(void) { return atomic_load(&dropin_ring) == ring_sound && !at
 
 static void *earcon_thread(void *arg)
 {
-    enum { RATE = 48000, N = RATE * 12 / 100 };
-    static short tone[N];
+    enum { RATE = 48000, N = RATE * 12 / 100, CN = RATE * 50 / 100 };
+    static short tone[N], chime[CN];
     static const char *const snd_names[SND_COUNT] = { "wake", "touch", "mics off", "mics on", "volume", "bluetooth connected",
                                                                 "bluetooth disconnected", "identify", "drop in", "call connected",
                                                                 "call ended", "incoming call", "outgoing call" };
@@ -1547,8 +1547,21 @@ static void *earcon_thread(void *arg)
         double f = i < N / 2 ? 880.0 : 1320.0, env = fmin(1.0, fmin(i, N - i) / (RATE * 0.01));
         tone[i] = (short)(6000 * env * sin(2 * M_PI * f * i / RATE));
     }
+    /* The wake and touch sound where the firmware has none (crown, checkers): our own soft two-note chime, a rising fifth
+     * (G5, then D6 0.12 s later) with a bell's timbre (octave and twelfth dying faster than the fundamental), 0.5 s.  Not a
+     * copy of Amazon's sound: synthesised here, so it can ship. */
+    for (int i = 0; i < CN; i++) {
+        double t = (double)i / RATE, v = 0;
+        for (int k = 0; k < 2; k++) {
+            double x = t - 0.12 * k, f = k ? 1174.66 : 783.99;
+            if (x < 0) continue;
+            double a = (1 - exp(-x / 0.004)) * exp(-x / (k ? 0.13 : 0.10));
+            v += a * (sin(2 * M_PI * f * x) + 0.30 * exp(-x / 0.05) * sin(2 * M_PI * 2 * f * x) + 0.12 * exp(-x / 0.03) * sin(2 * M_PI * 3 * f * x));
+        }
+        chime[i] = (short)(6500 * v * fmin(1.0, (CN - i) / (RATE * 0.02)));
+    }
     for (;;) {
-        /* Amazon's own sounds where the image has them; the generated blip stands in for the wake and touch sounds otherwise */
+        /* Amazon's own sounds where the image has them; our own chime stands in for the wake and touch sounds otherwise */
         for (int p = atomic_exchange(&sounds_pending, 0), s = 0; p && s < SND_COUNT; s++) {
             const short *pcm; size_t n; unsigned rate;
             if (!(p & 1 << s)) continue;
@@ -1556,7 +1569,8 @@ static void *earcon_thread(void *arg)
             if (sound_get((enum sound)s, &pcm, &n, &rate)) {
                 fprintf(stderr, "sound: %s\n", snd_names[s]);
                 earsup_play(pcm, n, rate, cap_clock()); play_earcon(pcm, n, rate);
-            } else if (s == SND_WAKE || s == SND_TOUCH || s == SND_IDENTIFY) { earsup_play(tone, N, RATE, cap_clock()); play_earcon(tone, N, RATE); }
+            } else if (s == SND_WAKE || s == SND_TOUCH) { fprintf(stderr, "sound: %s (built-in chime)\n", snd_names[s]); earsup_play(chime, CN, RATE, cap_clock()); play_earcon(chime, CN, RATE); }
+            else if (s == SND_IDENTIFY) { earsup_play(tone, N, RATE, cap_clock()); play_earcon(tone, N, RATE); }
             atomic_store(&earcon_heard_until, mono_ms() + 250);         /* speaker to mic stream: 85 ms, and the room's tail */
             atomic_store(&earcon_sounding, 0);
         }

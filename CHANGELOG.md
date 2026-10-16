@@ -4,6 +4,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-15
 
+- **Echo Show: a wake sound of our own.** The Show 8 (1st gen) and the Show 5 have no wake sound in their firmware and played a
+  120 ms blip. They now play a soft two-note rising chime that hassmic makes itself (so it can ship, and is not Amazon's
+  sound). A sound file of your own in `/data/local/hassmic/earcon/ui_wakesound.wav` (or `.mp3`) still wins.
 - **Echo Show 8 (1st gen): a factory reset forgets a Wi-Fi network that Amazon's own setup saved.** Android 7 only lets the
   network's creator or the system user remove it, so the reset reported "forgotten" and the Echo stayed on the network (and
   never offered setup from a phone). The reset now removes it as the system user, and says so when one cannot be removed.
