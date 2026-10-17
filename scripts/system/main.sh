@@ -47,8 +47,6 @@ fi
 chown root:root $CONF; chmod 644 $CONF
 . $CONF
 
-# uxeventd plays the "ready for setup" voice prompts and the orange setup spinner on an unregistered device.  hassmic drives
-# LEDs (ledctrl) and earcons itself, so it goes.  Stopped before "class_start main" it never starts (SVC_DISABLED).
 # TIMEZONE of hassmic.conf (Android models; none on the Dots, which show no time): the property keeps it over a reboot, the
 # alarm service applies it now (transaction 3, setTimeZone)
 timezone_set() {
@@ -58,6 +56,8 @@ timezone_set() {
     setprop persist.sys.timezone "$TIMEZONE"; service call alarm 3 s16 "$TIMEZONE" > /dev/null
     echo "timezone: $TIMEZONE"
 }
+# uxeventd plays the "ready for setup" voice prompts and the orange setup spinner on an unregistered device.  hassmic drives
+# LEDs (ledctrl) and earcons itself, so it goes.  Stopped before "class_start main" it never starts (SVC_DISABLED).
 quiet() { for s in $UX_SERVICE $SETUP_SERVICES; do stop $s; done; }
 
 # Amazon's wifisvc runs HTTP connectivity tests against AWS hosts.  Behind the egress lock they always fail, and it then

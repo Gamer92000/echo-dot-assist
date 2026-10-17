@@ -4,7 +4,7 @@
 # quit.  A step checks first whether its result is there already, so a rerun (or work done by hand) passes through
 # quietly.
 
-XDA="the XDA thread of amonet-crown (R0rt1z2, devices/crown/unlock.md)"
+XDA=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-8-1st-gen-2019-crown.4766687/
 AMONET=amonet-crown-v2.0.1.zip
 AMONET_SHA256=5db974c321ae2f4586f7c51c95b7bdffb61ef85bde05ce7e62f78196a984c24f
 # donut's boot-root.zip: its patch/magiskpolicy32 is the policy tool (device.conf).  Where donut's setup keeps it (a PC
@@ -225,7 +225,7 @@ write_system() {
 step_root() {
     [ -z "$DRY" ] && adb_is device && [ "$(ashell id -u)" = 0 ] && { ok "root adb already"; return 0; }
     rootfs && magiskpolicy && adbd || return 1
-    # booted, adb as shell: an older boot image of ours (a first build's own adbd never stays root) or stock with adb on;
+    # booted, adb as shell: an older boot image of ours (NS6570's own adbd never stays root) or stock with adb on;
     # install-boot.sh takes it from the running OS as well as from TWRP
     if [ -z "$DRY" ] && adb_is device; then info "adb is not root on the running Echo: its boot image is replaced"
     else twrp_screen; wait_adb recovery || return 1; fi

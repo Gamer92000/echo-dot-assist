@@ -9,8 +9,8 @@
 #                 network install)
 #     --preset F  settings to start with: an export from another Echo's settings page (hassmic-settings.conf);
 #                 without it, the install step asks (Enter for none)
-# Only one device may be on adb (it stops and says how to disconnect the others).  Keep the cable in to the end: the installed
-# Echo closes adb over Wi-Fi at its first boot.
+# Only the Echo on USB is worked on, whatever else is on adb over Wi-Fi; a second USB device stops it (it says what to
+# unplug).  Keep the cable in to the end: the installed Echo closes adb over Wi-Fi at its first boot.
 # The written instructions are the same steps: devices/<codename>/README.md.
 cd "$(dirname "$0")/.."
 . scripts/lib/device.sh
