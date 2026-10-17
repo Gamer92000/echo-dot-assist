@@ -133,6 +133,38 @@ ask() {
         case ${a:-$d} in [yY]*) return 0;; [nN]*) return 1;; esac
     done
 }
+# wifi_conf: asks the Wi-Fi name and password into secrets/wifi.conf (line 1 SSID, line 2 passphrase), the name checked
+# against what the Echo hears: one wrong capital letter left an Echo scanning with no word why (forum, 2026-10-10).
+# Sets WIFI_NEW=1 when it wrote the file (the caller deletes it if joining fails, so a typo is asked again).
+wifi_conf() {
+    local ssid pass heard= match
+    WIFI_NEW=
+    [ -f secrets/wifi.conf ] && return 0
+    if [ -z "$DRY" ]; then
+        # the Echo's own scan; scan_results: bssid, frequency, signal, flags, ssid (tab separated), header first
+        heard=$(adb shell 'W="wpa_cli -i wlan0 -p /data/misc/wifi/sockets"; $W status >/dev/null 2>&1 || { start wpa_supplicant; sleep 3; }
+            $W scan >/dev/null; sleep 5; $W scan_results' 2>/dev/null | tr -d '\r' | awk -F'\t' 'NR > 1 && $5 != "" { print $5 }' |
+            sed 's/\\"/"/g' | while IFS= read -r l; do printf '%b\n' "$l"; done | sort -u)   # wpa_cli writes \xNN, \\, \"
+        if [ -n "$heard" ]; then info "Networks the Echo hears:"; printf '%s\n' "$heard" | head -20 | sed 's/^/      /'
+        else warn "Could not list the networks the Echo hears: the name is not checked, type it exactly."; fi
+    fi
+    while :; do
+        prompt ssid "Wi-Fi name (WPA2, same network as Home Assistant)"
+        [ -n "$ssid" ] || [ -n "$DRY" ] || continue
+        [ -z "$heard" ] || printf '%s\n' "$heard" | grep -qxF -- "$ssid" && break
+        match=$(printf '%s\n' "$heard" | grep -ixF -- "$ssid" | head -1)
+        if [ -n "$match" ]; then
+            warn "The Echo hears \"$match\", not \"$ssid\": Wi-Fi names are case-sensitive."
+            ask "Use \"$match\"?" y && { ssid=$match; break; }
+        else
+            warn "The Echo does not hear \"$ssid\" (hidden networks are not listed, and it may be out of range)."
+            ask "Use \"$ssid\" anyway?" n && break
+        fi
+    done
+    prompt pass "Wi-Fi password" "" -s
+    [ -n "$DRY" ] && return 0
+    mkdir -p secrets; ( umask 077; printf '%s\n%s\n' "$ssid" "$pass" > secrets/wifi.conf ); WIFI_NEW=1
+}
 # prompt VAR "question" [default] [-s]: -s hides the input.  A dry run takes the default.  The question gets a colon
 # unless it ends in one or a "?": without it "Wi-Fi name (…)" did not read as a question to answer (forum, 2026-10-09)
 prompt() {
@@ -286,8 +318,11 @@ need_files() {
         ok "${dest[i]##*/}"
     done
     [ ${#miss[@]} = 0 ] && return 0
+    # "Waiting for 3 download(s)" with a clock read as the script downloading: people waited an hour (forum, 2026-10-15)
     for i in "${miss[@]}"; do lines+=("$B${dest[i]##*/}$N" "  $DIM${src[i]}$N"); done
-    tell "Download into ~/Downloads (picked up from there)" "${lines[@]}"
+    tell "Download these ${#miss[@]} file(s) yourself, in your browser" \
+        "This script does NOT download them (the sites need a click or a login). Save each into $B$HOME/Downloads$N" \
+        "(or this folder); it goes on by itself as soon as they are there." "" "${lines[@]}"
     [ -n "$DRY" ] && return 0
     while [ ${#miss[@]} -gt 0 ]; do
         left=()
@@ -296,7 +331,7 @@ need_files() {
         done
         miss=("${left[@]}")
         [ ${#miss[@]} = 0 ] && break
-        for i in {1..20}; do _tick "Waiting for ${#miss[@]} download(s)" $t0; sleep 0.1; done
+        for i in {1..20}; do _tick "Waiting for you to save ${#miss[@]} file(s) into ~/Downloads" $t0; sleep 0.1; done
     done
     _clr
 }

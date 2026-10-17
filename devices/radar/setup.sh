@@ -161,20 +161,15 @@ step_build() {
 }
 
 step_network() {
-    local ssid pass new=
     wait_adb device || return 1
     task "Copying hassmic to the Echo" scripts/deploy.sh || return 1
     # adb can drop out for a moment here, shortly after the boot (seen on an Echo Dot 2, issue #2)
     wait_adb device || return 1
     task "Locking down the Echo's internet access" sh -c 'adb shell sh /data/local/hassmic/lockdown.sh &&
         adb shell iptables -S hassmic_out | grep -q -- "-j DROP"' || return 1
-    if [ ! -f secrets/wifi.conf ]; then
-        prompt ssid "Wi-Fi name (WPA2, same network as Home Assistant)"
-        prompt pass "Wi-Fi password" "" -s
-        [ -n "$DRY" ] || { mkdir -p secrets; ( umask 077; printf '%s\n%s\n' "$ssid" "$pass" > secrets/wifi.conf ); new=1; }
-    fi
+    wifi_conf
     # a typo in what was just typed would otherwise be retried forever
-    task "Joining Wi-Fi" scripts/wifi-join.sh || { [ -n "$new" ] && rm -f secrets/wifi.conf; return 1; }
+    task "Joining Wi-Fi" scripts/wifi-join.sh || { [ -n "$WIFI_NEW" ] && rm -f secrets/wifi.conf; return 1; }
     # the Wi-Fi profile survives a reboot, the egress lock does not until the install
     warn "Do not restart the Echo until it is installed."
     info "Tip: give it a fixed address in your router (DHCP reservation)."

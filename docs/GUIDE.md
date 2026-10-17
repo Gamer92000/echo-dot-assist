@@ -319,7 +319,6 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 | Wake sound | covers all the Echo's own sounds |
 | Equalizer | bass, mid, treble, −6 to +6 dB, Amazon's own, on everything the Echo plays |
 | LED auto brightness, LED brightness | a level holds the ring there and switches the automatic off |
-| Illuminance | the Echo's light sensor in lux, for automations |
 | Timer ringing, Ringing timers | on while a finished timer rings; their names (diagnostic), see [Voice](#voice) |
 | Stop ringing | button: ends a ringing timer and nothing else |
 | Button | event: each press and 1 s hold of the action and volume buttons, see [Buttons and light ring](#buttons-and-light-ring) |
@@ -342,6 +341,7 @@ Echo announces itself again after 100 s without Home Assistant, then less and le
 | [Sound detection](#sound-detection) | Sound (event) |
 | [Whisper detection](#whisper-detection) | Last request whispered |
 | [Wi-Fi motion](#wi-fi-motion) | motion sensor, sensitivity |
+| Light sensor (off by default) | Illuminance (the room's light in lux); "LED brightness" then also follows auto brightness, an entry in the logbook every few minutes. Off, it shows only levels you set |
 | Bluetooth audio from phones | Bluetooth pairing |
 | [Playing on a Bluetooth speaker](#playing-on-a-bluetooth-speaker) | Bluetooth speaker search, Play on Bluetooth speaker, Bluetooth speaker, Bluetooth speaker delay |
 

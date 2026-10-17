@@ -309,12 +309,13 @@ const HELP = {
     status: () => {
       const s = state.sound; if (!s) return null;
       if (s.failed) return h('p', { class: 'f-bad' }, icon('warn'), h('span', {}, 'Could not start: the model did not load, so it was switched off. The Echo\'s log (boot.log) says why.'));
-      return h('p', { class: 'f-model' }, s.model === 'newer' ? 'Model: Amazon\'s newer one, installed with scripts/artifacts.sh.'
-        : 'Model: the one in the Echo\'s firmware. scripts/artifacts.sh can install Amazon\'s newer one (retrained, same sounds).');
+      return h('p', { class: 'f-model' }, s.model === 'newer' ? 'Model: Amazon\'s newer one, from Amazon.'
+        : 'Model: the one in the Echo\'s firmware. Download from Amazon (Wake word section) gets Amazon\'s newer one (retrained, same sounds).');
     } },
   whisper_detection: { icon: 'whisper', ha: ['Last request whispered'], help: 'Tells whether your last request was whispered, before speech-to-text finishes. Use it in your conversation agent\'s prompt to have it answer quietly.' },
   wifi_motion: { icon: 'wifi', tag: 'Experimental', ha: ['Wi-Fi motion', 'Wi-Fi motion sensitivity'], help: 'A motion sensor without extra hardware: someone walking between the Echo and your Wi-Fi router changes how the Echo receives the router. It shows motion, not presence, sees best along that path, and other Wi-Fi traffic can set it off.' },
   wifi_motion_sensitivity: { parent: 'wifi_motion', help: 'How much the signal has to change to count as motion. Higher catches more, with more false alarms.' },
+  light_sensor: { icon: 'sun', ha: ['Illuminance'], help: 'The room\'s light in lux from the Echo\'s light sensor, for automations. With this on, "LED brightness" in Home Assistant also follows the ring while auto brightness moves it, which puts an entry in its logbook every few minutes. Off, auto brightness works the same; Home Assistant only sees the levels you set.' },
   bluetooth_audio: { icon: 'phone', ha: ['Bluetooth pairing'], help: 'Phones can pair with the Echo and play music on it (SBC, AAC, aptX). Start pairing with the "Bluetooth pairing" switch in Home Assistant; the ring shows a blue chaser meanwhile. Phones paired before still connect while this is off.' },
   bluetooth_speaker_delay: { parent: 'bluetooth_speaker', step: 10, help: 'How much later the speaker plays than the Echo would, so Music Assistant keeps it in step with your other players. Raise it if this speaker lags behind them, lower it if it runs ahead. Each speaker differs; the Echo keeps one value.' },
   bluetooth_speaker_keep_awake: { parent: 'bluetooth_speaker', help: 'For speakers that cut off the first word of every reply: many switch their amplifier off while the Echo is silent and need half a second to switch it on again. With this on the Echo plays a 20 Hz tone too low and too quiet to hear under everything, so the speaker never hears silence. Leave it off if your speaker plays replies whole.',
@@ -664,12 +665,19 @@ function renderTop() {
   if (d.cpu !== null) p.append(h('span', { class: 'pill', title: 'CPU usage' }, `CPU ${d.cpu} %`));
 }
 
+// "Download from Amazon" in a warning: a link to that card, a long scroll down the Wake word section
+function linkDavs(text) {
+  const [a, b] = text.split('Download from Amazon');
+  return [a, h('a', { href: '#davs', onclick: (e) => { e.preventDefault(); $('davs').scrollIntoView({ behavior: 'smooth' }); } }, 'Download from Amazon'), b];
+}
+
 function renderAttention() {
   const box = $('attention'); box.innerHTML = '';
   for (const text of state.warnings) {
     const ha = /Home Assistant is not connected/.test(text);
     box.append(h('div', { class: 'callout' + (ha ? ' bad' : '') }, icon('warn'),
-      h('p', {}, ha ? 'Home Assistant is not connected. The Echo cannot answer requests until it is; check that the ESPHome integration has this device and that both are on the same network.' : text)));
+      h('p', {}, ha ? 'Home Assistant is not connected. The Echo cannot answer requests until it is; check that the ESPHome integration has this device and that both are on the same network.'
+        : /Download from Amazon/.test(text) && $('davs') ? linkDavs(text) : text)));
   }
 }
 
@@ -706,7 +714,7 @@ async function getMww() { mww = (await echo.call('GET', '/api/mww')).json(); ren
 function buildWake(el) {
   mwwWarn = h('div');
   mwwBox = h('div', { class: 'card' });
-  davsBox = h('div', { class: 'card' });          // more of Amazon's wake words: where one looks for them
+  davsBox = h('div', { class: 'card', id: 'davs' });          // more of Amazon's wake words: where one looks for them
   el.append(mwwWarn, mwwBox, davsBox);
 }
 
@@ -1387,7 +1395,7 @@ function drawDavs(force) {
   const body = h('div', { class: 'card-body' });
   davsBox.append(body);
   if (!davs.dha) {
-    body.append(callout('info', h('p', {}, 'This Echo cannot sign in to Amazon itself: its attestation key would not answer. Download on another Echo and copy the models here, or use scripts/artifacts.sh.')));
+    body.append(callout('info', h('p', {}, 'This Echo cannot sign in to Amazon itself: its attestation key would not answer. Download on another Echo and copy the models here (Echos section).')));
     return;
   }
   if (davs.state === 'none') davsSignIn(body);
@@ -1573,7 +1581,7 @@ const mb = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(
 function renderModels() { if (modelBox) keepFocus(modelBox, drawModels); }
 function drawModels() {
   modelBox.innerHTML = '';
-  modelBox.append(cardHead('Copy models', 'Amazon\'s extra models from scripts/artifacts.sh (more wake words, whisper detection, the newer sound detection model) and microWakeWord\'s models, Echo to Echo instead of adding them on each. A model is tried on the receiving Echo first; each Echo that gets one of Amazon\'s restarts its satellite once, for a few seconds.', 'box'));
+  modelBox.append(cardHead('Copy models', 'Amazon\'s extra models from Download from Amazon (more wake words, whisper detection, the newer sound detection model) and microWakeWord\'s models, Echo to Echo instead of adding them on each. A model is tried on the receiving Echo first; each Echo that gets one of Amazon\'s restarts its satellite once, for a few seconds.', 'box'));
   if (!myArts) { modelBox.append(empty('warn', 'This Echo cannot list its models.')); return; }
   const echos = [{ name: echo.hello.name, key: '', e: echo, arts: myArts }, ...ready().filter((d) => d.arts).map((d) => ({ name: d.echo.hello.name, key: d.echo.base, e: d.echo, arts: d.arts }))];
   const all = new Map();

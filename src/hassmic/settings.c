@@ -43,6 +43,7 @@ static const char *bt_lang_codes[sizeof bt_langs / sizeof bt_langs[0]];
 
 static int mic_level = MICGAIN_LEVEL, bt_lang;
 static int bt_audio = 1, bt_speaker, whisper = 1;      /* features kept here; bt_speaker's default: settings_load */
+static int light_sensor;                                /* off: auto brightness moved the level in HA's history all day (forum, 2026-10-15) */
 static int bt_stay;                                     /* a2dp.c gets it only while the feature is on: off drops the link */
 
 static const char *state_dir(void) { const char *e = getenv("HASSMIC_STATE"); return e ? e : "/data/local/hassmic/state"; }
@@ -51,7 +52,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 /* ---------------------------------------------------------------- the table */
 
 enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WIFI_MOTION,
-          WIFI_SENS, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, NSET };
+          WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
  * listed()); everything else here is on the settings page only, except what Home Assistant always shows (wake sound,
@@ -83,6 +84,7 @@ static const struct setting table[NSET] = {
     [WHISPER]     = { "whisper_detection", "Whisper detection", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [WIFI_MOTION] = { "wifi_motion", "Wi-Fi motion (experimental)", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [WIFI_SENS]   = { "wifi_motion_sensitivity", "Wi-Fi motion sensitivity", "Features", NULL, S_INT, WIFIMOTION_SENS_MIN, WIFIMOTION_SENS_MAX, 1, 0 },
+    [LIGHT_SENSOR] = { "light_sensor", "Light sensor", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [BT_AUDIO]    = { "bluetooth_audio", "Bluetooth audio from phones", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [BT_SPEAKER]  = { "bluetooth_speaker", "Play on a Bluetooth speaker", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* what the speaker adds to the Echo's latency, for Sendspin's sync: a2dp.c keeps it (state/bt_speaker), per speaker
@@ -112,7 +114,7 @@ static int present(enum id i)
     case BT_ANNOUNCE: case BT_LANG: case BT_AUDIO: case BT_SPEAKER: case BT_OUT_DELAY: case BT_OUT_AWAKE: case BT_OUT_STAY: return ble_present();
     case WHISPER: return core_whisper_model();
     case SOUND: return sound_model() != SOUND_NONE;               /* the firmware has one on every model so far */
-    case LED_AUTO: return core_lux() == core_lux();               /* a light sensor: not NAN */
+    case LED_AUTO: case LIGHT_SENSOR: return core_lux() == core_lux();      /* a light sensor: not NAN */
     case WIFI_MOTION: case WIFI_SENS: return wifimotion_present();
     case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: return arb_running();
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
@@ -185,6 +187,7 @@ int settings_get(const struct setting *s)
     case BT_OUT_AWAKE: return btout_keep_awake(-1);
     case BT_OUT_STAY: return bt_stay;
     case WHISPER: return whisper;
+    case LIGHT_SENSOR: return light_sensor;
     case DROPIN: return dropin_enable(-1);
     case DROPIN_ANSWER: return dropin_ask(-1);
     case SPK_GAIN: return spkgain_get();
@@ -225,6 +228,7 @@ static void put(enum id i, int v)
     case BT_SPEAKER:                                            /* back on the Echo, and the link goes */
         bt_speaker = v; a2dp_out_stay(bt_stay && v); if (!v && a2dp_out_enabled()) a2dp_out_enable(0); break;
     case WHISPER: whisper = v; core_whisper_enable(v); break;
+    case LIGHT_SENSOR: light_sensor = v; break;
     case BT_OUT_DELAY: a2dp_out_delay(v); break;                    /* a2dp.c saves it */
     case BT_OUT_AWAKE: btout_keep_awake(v); break;
     case BT_OUT_STAY: bt_stay = v; a2dp_out_stay(v && bt_speaker); break;

@@ -86,7 +86,8 @@ copy settings and wake words to, the log. A press of the action button lets your
 ## Requirements
 
 - A [supported Echo](#supported-echos), and a USB way into it (its page says what: a cable, or wires).
-- A **Linux PC** with `adb`, `fastboot`, `python3`, `make`, `unzip`, `debugfs` (e2fsprogs), `sqlite3`, ~5 GB free disk.
+- A **Linux PC**, running Linux on the machine itself (not macOS, not a VM or WSL: the unlock needs direct USB; a live
+  USB stick works), with `adb`, `fastboot`, `python3`, `make`, `unzip`, `debugfs` (e2fsprogs), `sqlite3`, ~5 GB free disk.
   The setup offers to install what is missing.
 - **Home Assistant** with a working Assist pipeline (speech to text, conversation agent, text to speech). Try it in the
   app first. Optional: Music Assistant (tested with 2.10.4).

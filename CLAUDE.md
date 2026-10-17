@@ -239,7 +239,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (`name=value`; the positional `state/settings` of older versions is read once and moved); arbitration, Sendspin and
   the equalizer stay where their module keeps them. Loaded in `main()` whatever the protocol. Changes from elsewhere
   reach HA through `proto->settings_changed`. Features (`feature` in the table: arbitration, sound, whisper, Wi-Fi
-  motion, Bluetooth audio, Bluetooth speaker, Drop In): their entities are listed only while on (`proto_esphome.c` `listed()`,
+  motion, light sensor (Illuminance + auto level), Bluetooth audio, Bluetooth speaker, Drop In): their entities are listed only while on (`proto_esphome.c` `listed()`,
   which also gates states); switching one closes the HA links (`proto->entities_changed`), HA re-lists on reconnect and
   deletes what is gone (registry included). HA always has: media player, mute, DND, wake sound, LEDs, EQ, firmware,
   Web UI address, Sendspin token (a secret: never on the page), Identify, Light ring (where root installed `ring.c`'s

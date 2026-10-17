@@ -2153,7 +2153,7 @@ int main(int argc, char **argv)
         wake_loaded_set();
     }
     if (whisper_open(on_whisper) == 0) { atomic_store(&whisper_last, -1); whisper_model = 1; }
-    else fprintf(stderr, "whisper: no model, no whisper detection (scripts/artifacts.sh installs it)\n");
+    else fprintf(stderr, "whisper: no model, no whisper detection (the settings page's Download from Amazon gets it)\n");
     static const struct arb_hooks arb_hooks = { arb_send_key, arb_notify, arb_request, arb_paired, arb_scan, dropin_message };
     if (arb_port && core_local_wake && proto->arb_send && arb_start(arb_port, core_node_name(), &arb_hooks)) fprintf(stderr, "arbitration: not available\n");
     if (dropin_port && arb_running() && dropin_start(dropin_port)) fprintf(stderr, "drop in: not available\n");

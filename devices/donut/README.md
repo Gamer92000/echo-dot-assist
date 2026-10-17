@@ -68,7 +68,12 @@ a USB cable soldered to those pads. How to open the case: the guides linked unde
 
 The Echo takes its power from its own adapter, not from USB.
 
-Keep the Echo unplugged (no power, no USB) until step 1 asks for it.
+Keep the Echo unplugged (no power, no USB) until step 1 asks for it. Then the order is: USB cable into the PC, hold the
+action (dot) button, plug in the power adapter. Without the adapter the Echo has no power and the bootrom never shows up.
+
+Do this from **Linux running on the PC itself**: not macOS, not a VM, not WSL. The bootrom's USB timing is tight: on
+macOS kamakiri stops with `RuntimeError: status is 1d1a`, and USB passed through to a VM drops off or answers too late.
+A Linux live USB stick is enough.
 
 ### 1. Unlock, flash stock firmware, root
 
@@ -76,7 +81,8 @@ Keep the Echo unplugged (no power, no USB) until step 1 asks for it.
 sudo cp scripts/51-echo-unlock.rules /etc/udev/rules.d/ && sudo udevadm control --reload   # USB without sudo; keeps ModemManager off the bootrom
 unzip firmware/donut/kamakiri-donut-v1.0.0.zip -d firmware/donut/kamakiri
 K=$(dirname "$(find firmware/donut/kamakiri -name bootrom-step.sh)")   # the zip keeps its scripts in a folder of their own
-(cd "$K" && ./bootrom-step.sh)    # start it, THEN plug the Echo in while holding the action (dot) button
+(cd "$K" && ./bootrom-step.sh)    # start it, then: USB cable into the PC, hold the action (dot) button, plug in the
+                                  # Echo's power adapter, keep holding until it asks for Enter
 (cd "$K" && ./fastboot-step.sh)   # when the ring shows a rotating rainbow; ends in TWRP (white ring)
 ```
 

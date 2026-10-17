@@ -1218,6 +1218,10 @@ Run in this order. Each step says what it proves.
       in steady light (81-87 lx): 19 for 40 s. Now sent at 2 steps off the last sent or after 5 min; fixed levels at
       once. The ring is unchanged (one step is ~3.5 % on donut's mute LED table); the user saw the mute LED flicker,
       not the ring. Not tested by fake_ha_esphome.py: the host build has no auto engine.
+      Feature "Light sensor" (2026-10-17, off by default): still an entry in HA's logbook every few minutes with auto
+      on (forum, 2026-10-15; number entities are not filtered from the logbook as sensors with a unit are). Off:
+      no "Illuminance", the level goes to HA only on subscribe and when set. On: as before. `fake_ha_esphome.py`:
+      no illuminance by default, listed and sent once switched on on the page.
 - [x] Sound detection (Alexa Guard) as Home Assistant events (found 2026-10-01; stock path and model worked out, and
       built, the same day: `docs/re-aed.md` section 4). ESPHome switch "Sound detection" (off by default, in the
       settings file) and event entity "Sound" (8 types; smoke/CO merged, human presence left out). A window is dropped

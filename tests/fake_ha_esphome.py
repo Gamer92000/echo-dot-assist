@@ -210,14 +210,13 @@ async def main():
               and any(isinstance(x, NumberState) and x.key == eqs[2].key and x.state == -6 for x in states), "equalizer commands reflected, clamped to -6..+6")
         check(pv("noise_reduction") == 0, "noise reduction off by default")
         lux, lauto, lbright = by.get("illuminance"), by.get("led_auto_brightness"), by.get("led_brightness")
-        check(isinstance(lux, SensorInfo) and lux.device_class == "illuminance" and lux.unit_of_measurement == "lx" and int(lux.state_class) == 1
+        check(lux is None and pv("light_sensor") == 0
               and isinstance(lauto, SwitchInfo) and isinstance(lbright, NumberInfo) and (lbright.min_value, lbright.max_value) == (0, 100),
-              "light sensor and LED brightness entities listed")
+              "LED brightness entities listed, the light sensor off by default (no illuminance)")
         last = lambda k, t: ([x.state for x in states if isinstance(x, t) and x.key == k] or [None])[-1]
-        await until(lambda: last(lux.key, SensorState) is not None and last(lbright.key, NumberState) is not None)
-        check(last(lux.key, SensorState) == 67 and last(lauto.key, SwitchState) is True and last(lbright.key, NumberState) == 80,
-              f"illuminance from the sensor file, auto brightness on as in stock: {last(lux.key, SensorState)} lx, "
-              f"auto {last(lauto.key, SwitchState)}, level {last(lbright.key, NumberState)}")
+        await until(lambda: last(lbright.key, NumberState) is not None)
+        check(last(lauto.key, SwitchState) is True and last(lbright.key, NumberState) == 80,
+              f"auto brightness on as in stock: auto {last(lauto.key, SwitchState)}, level {last(lbright.key, NumberState)}")
         page.set(mic_level=-20)
         cli.switch_command(by["wake_sound"].key, False)
         await until(lambda: last(by["wake_sound"].key, SwitchState) is False and pv("mic_level") == -20)
@@ -632,13 +631,6 @@ async def main():
         check((await c.device_info()).api_encryption_provisionable, "plaintext accepted again, provisionable again")
         st3 = []; c.subscribe_states(st3.append)
         last3 = lambda k, t: ([x.state for x in st3 if isinstance(x, t) and x.key == k] or [None])[-1]
-        await until(lambda: last3(lux.key, SensorState) is not None)
-        with open(env["HASSMIC_LUX"], "w") as f: f.write("68\n")                # flicker: not sent
-        await asyncio.sleep(1.5)                                               # the sensor is read once a second
-        with open(env["HASSMIC_LUX"], "w") as f: f.write("150\n")
-        await until(lambda: last3(lux.key, SensorState) == 150)
-        sent = [x.state for x in st3 if isinstance(x, SensorState) and x.key == lux.key]
-        check(sent == [67, 150], f"illuminance sent on a real change, not on flicker: {sent}")
         c.number_command(lbright.key, 30)
         await until(lambda: last3(lbright.key, NumberState) == 30 and last3(lauto.key, SwitchState) is False
                     and conf().get("led_brightness") == "30")
@@ -654,6 +646,19 @@ async def main():
             n = APIClient("127.0.0.1", PORT, None); await asyncio.wait_for(n.connect(login=True), 5)
             e, _ = await n.list_entities_services(); sts = []; n.subscribe_states(sts.append); await sync(n)
             return n, {x.object_id: x for x in e}, sts
+        # the light sensor: switched on, the illuminance entity, sent on a real change, not on flicker
+        page.set(light_sensor="on")
+        c, cby, st3 = await relist(c)
+        lux = cby.get("illuminance")
+        check(isinstance(lux, SensorInfo) and lux.device_class == "illuminance" and lux.unit_of_measurement == "lx" and int(lux.state_class) == 1
+              and conf().get("light_sensor") == "on", "light sensor switched on on the page: illuminance listed, kept in the settings file")
+        await until(lambda: last3(lux.key, SensorState) is not None)
+        with open(env["HASSMIC_LUX"], "w") as f: f.write("68\n")                # flicker: not sent
+        await asyncio.sleep(1.5)                                               # the sensor is read once a second
+        with open(env["HASSMIC_LUX"], "w") as f: f.write("150\n")
+        await until(lambda: last3(lux.key, SensorState) == 150)
+        sent = [x.state for x in st3 if isinstance(x, SensorState) and x.key == lux.key]
+        check(sent == [67, 150], f"illuminance from the sensor file, sent on a real change, not on flicker: {sent}")
         # sound detection: off by default, no entity; on, one event entity reporting what the detector hears (here
         # sound_none.c's dog, once per ~10 s window of the capture), kept in the settings file
         check("sound" not in by and "sound_detection" not in by and pv("sound_detection") == 0, "sound detection off by default: no entity in Home Assistant")

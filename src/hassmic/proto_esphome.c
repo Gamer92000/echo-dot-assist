@@ -321,7 +321,7 @@ static int key_set(const unsigned char *k, size_t len)
  * ahead of that gain (micdenoise.h), taking the noise down by up to 6, 9 or 12 dB; it sits in the settings file's first
  * field, which held the old noise suppression level. */
 
-static int have_light;                  /* a light sensor answered at start: illuminance and auto brightness are listed */
+static int have_light;                  /* a light sensor answered at start: auto brightness is listed, illuminance with the feature */
 
 static int listed(int key);
 static void send_setting(int key)       /* lock held */
@@ -422,7 +422,9 @@ static void send_sensor(int key, float v)   /* lock held */
  * change.  A fixed LED level whenever it changes; an auto one at 2 steps off the last one sent, or after 5 minutes for
  * any change: the engine moves the ring once its average is half a step off, so in light near a step's edge (dusk) the
  * sensor's flicker took it 11, 12, 11, 12 every few seconds, all of it in HA's history (2026-10-11).  The ring does
- * the same under stock. */
+ * the same under stock.  Both only with the "Light sensor" feature on (off by default): even damped, an auto level that
+ * follows the room is an entry in HA's logbook every few minutes (forum, 2026-10-15).  Off, the level goes out when HA
+ * subscribes and when it is set; auto brightness itself works the same. */
 static float sent_lux = NAN; static int sent_level = -1; static time_t sent_at, level_at;     /* lock held */
 
 static void *light_thread(void *arg)
@@ -436,11 +438,12 @@ static void *light_thread(void *arg)
         for (int i = 0; i < MAX_CLIENTS; i++) any |= clients[i].fd >= 0 && clients[i].states;
         if (any) {                                              /* a new subscriber gets them from send_light_states */
             float d = fabsf(lux - sent_lux);
-            if (!isnan(lux) && (isnan(sent_lux) || d >= fmaxf(1, sent_lux / 10) || (d > 0 && now - sent_at >= 60))) {
+            int report = settings_on("light_sensor");
+            if (report && !isnan(lux) && (isnan(sent_lux) || d >= fmaxf(1, sent_lux / 10) || (d > 0 && now - sent_at >= 60))) {
                 send_sensor(KEY_LUX, lux); sent_lux = lux; sent_at = now;
             }
             if (level >= 0 && level != sent_level
-                && (!core_led_auto(-1) || abs(level - sent_level) >= 2 || now - level_at >= 300)) {
+                && (!core_led_auto(-1) || (report && (abs(level - sent_level) >= 2 || now - level_at >= 300)))) {
                 send_setting(KEY_LED_BRIGHTNESS); sent_level = level; level_at = now;
             }
         }
@@ -451,7 +454,7 @@ static void *light_thread(void *arg)
 
 static void send_light_states(void)     /* lock held */
 {
-    if (have_light) { sent_lux = core_lux(); sent_at = time(NULL); send_sensor(KEY_LUX, sent_lux); }
+    if (listed(KEY_LUX)) { sent_lux = core_lux(); sent_at = time(NULL); send_sensor(KEY_LUX, sent_lux); }
     sent_level = core_led_brightness(-1); level_at = time(NULL);
     send_setting(KEY_LED_AUTO); send_setting(KEY_LED_BRIGHTNESS); send_setting(KEY_LIGHT);
 }
@@ -464,9 +467,9 @@ static void send_light_entities(void)
       pb_uint(&b, 12, COLOR_MODE_RGB); pb_uint(&b, 5, 1); pb_uint(&b, 6, 1);
       for (int i = 0; i < ring_neffects; i++) pb_str(&b, 11, ring_effects[i]);
       pb_str(&b, 14, "mdi:circle-slice-8"); send_msg(LIST_LIGHT, &b); }
-    if (have_light) {
-        { PB(b, 192); pb_str(&b, 1, "illuminance"); pb_fixed32(&b, 2, KEY_LUX); pb_str(&b, 3, "Illuminance"); pb_str(&b, 6, "lx");
+    if (listed(KEY_LUX)) { PB(b, 192); pb_str(&b, 1, "illuminance"); pb_fixed32(&b, 2, KEY_LUX); pb_str(&b, 3, "Illuminance"); pb_str(&b, 6, "lx");
           pb_uint(&b, 7, 0); pb_str(&b, 9, "illuminance"); pb_uint(&b, 10, 1); send_msg(LIST_SENSOR, &b); }
+    if (have_light) {
         { PB(b, 160); pb_str(&b, 1, "led_auto_brightness"); pb_fixed32(&b, 2, KEY_LED_AUTO); pb_str(&b, 3, "LED auto brightness");
           pb_str(&b, 5, "mdi:brightness-auto"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
     }
@@ -492,7 +495,8 @@ static int listed(int key)
     case KEY_ARB_SERVICE: return arb_running();     /* the network, which runs either way */
     case KEY_WHISPERED: return core_whisper_model() && settings_on("whisper_detection");
     case KEY_WIFI_MOTION: case KEY_WIFI_MOTION_SENS: return wifimotion_present() && settings_on("wifi_motion");
-    case KEY_LUX: case KEY_LED_AUTO: return have_light;
+    case KEY_LED_AUTO: return have_light;
+    case KEY_LUX: return have_light && settings_on("light_sensor");
     case KEY_LIGHT: return ring_custom();
     case KEY_DROPIN_SERVICE: case KEY_DROPIN_STATE: case KEY_DROPIN_PEER: case KEY_DROPIN_END: case KEY_DROPIN_RESULT:
         return dropin_running() && settings_on("drop_in");

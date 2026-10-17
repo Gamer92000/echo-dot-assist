@@ -4,6 +4,25 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-17
 
+- **Auto brightness no longer fills Home Assistant's logbook.** With "LED auto brightness" on, "LED brightness" in
+  Home Assistant followed the ring as the room got lighter or darker, an entry every few minutes. The light sensor is
+  now a feature on the settings page, "Light sensor", off by default: off, there is no "Illuminance" entity and Home
+  Assistant only sees brightness levels you set; the ring still dims with the room as before. Switch it on to get
+  "Illuminance" back for your automations.
+- **Settings page: models from Amazon.** The warnings about missing wake words and whisper detection pointed to
+  `scripts/artifacts.sh` on the PC, which needs the Echo on USB. They now point to "Download from Amazon" on the
+  page (a link to it), which every model can do now.
+- **Guided setup, clearer where people got stuck:**
+  - The download step says plainly that you download the three files yourself in your browser and save them to
+    `~/Downloads`. The script only waits for them; people waited an hour thinking it was downloading.
+  - Echo Dot 3: the unlock step gives the order that works: USB cable into the PC, hold the action button, plug in the
+    Echo's power adapter. USB alone does not power it, so before nothing happened.
+  - The Wi-Fi step shows the networks the Echo hears and catches a name that is off in capitals only (Wi-Fi names
+    are case-sensitive). Joining now fails with a reason (no such network, wrong password) instead of going on with
+    an Echo that never connected.
+  - Setup refuses to run on macOS or as root/sudo, and warns in a virtual machine or WSL: the unlock needs Linux on
+    the PC itself (a live USB stick works). On macOS it failed with `status is 1d1a`.
+
 - **The right Echo answers again after another one crashed.** An Echo that died hard (a freeze and a power cycle, say)
   could come back having lost a small file it keeps for the arbitration. It then numbered its messages from the start
   again, and the other Echos took them all for old ones replayed and ignored them, until they were restarted

@@ -43,6 +43,23 @@ bye() {
 trap bye INT TERM
 trap '[ -n "$TTY" ] && printf "\e[?25h\e[?7h"' EXIT
 
+# --- where it runs.  The unlocks talk to the Echo's bootrom and fastboot in the first second after power-up, through
+# timing-sensitive USB transfers: macOS failed in kamakiri's payload load ("status is 1d1a", forum, 2026-10-14), and USB
+# passed through to a VM or WSL re-enumerates too late or drops transfers.  sudo would look in root's ~/Downloads.
+case $(uname -s) in
+Linux) ;;
+*) die "This runs on Linux only, on the PC itself (not in a VM): the unlock needs direct USB access. A Linux live USB stick works." ;;
+esac
+[ "$(id -u)" = 0 ] && die "Run it as yourself, not as root or with sudo: it asks for sudo where it needs it, and looks for downloads in your ~/Downloads."
+virt=$(systemd-detect-virt --vm 2>/dev/null) || virt=
+command -v systemd-detect-virt >/dev/null || ! grep -qw hypervisor /proc/cpuinfo 2>/dev/null || virt=vm   # no systemd
+grep -qi microsoft /proc/version 2>/dev/null && virt=WSL
+if [ -n "$virt" ] && [ -z "$DRY" ]; then
+    warn "This PC is a virtual machine ($virt). Unlocking needs Linux on the PC itself: in a VM the Echo's bootrom drops off USB or answers too late."
+    info "An Echo that is rooted already only needs adb, which works here. Otherwise use a Linux live USB stick on the PC."
+    ask "Go on anyway?" n || exit 1
+fi
+
 # The Echo being set up is on USB; an explicit ANDROID_SERIAL (e.g. to finish the last steps over Wi-Fi) wins
 [ -n "$ANDROID_SERIAL" ] || USB_ONLY=1
 

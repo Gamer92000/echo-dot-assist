@@ -78,7 +78,7 @@ step_usb() {
         "green  D+   → TM5" \
         "${RED}${B}red    VCC  → nothing: leave it loose and insulate its end$N" \
         "" \
-        "Leave the Echo unplugged for now (no power, no USB)."
+        "Leave the Echo unplugged for now (no power, no USB). The next step says when to plug in which."
 }
 
 step_unlock() {
@@ -94,9 +94,13 @@ step_unlock() {
     # the zip may keep its scripts in a folder of their own: run them from wherever bootrom-step.sh landed
     kdir=$(find $FW/kamakiri -name bootrom-step.sh -print -quit 2>/dev/null); kdir=${kdir%/*}
     [ -n "$kdir" ] || [ -n "$DRY" ] || { fail "no bootrom-step.sh in $FW/kamakiri; delete that folder and try again"; return 1; }
-    tell "Hold the action button (•) and plug the USB cable in" \
-        "Keep holding until it asks you to press Enter, then release the button and press Enter." \
-        "The ring stays dark until then: the Echo is in its bootrom."
+    # the loose red wire: USB does not power the Echo, and without power the bootrom never shows up (forum, 2026-10-13/15)
+    tell "Put the Echo into its bootrom" \
+        "1. Plug the soldered USB cable into this PC (the Echo's power adapter still out)." \
+        "2. Hold the action button (•)." \
+        "3. Keep holding it and plug in the Echo's own power adapter: USB does not power it." \
+        "4. Keep holding until this asks you to press Enter, then release the button and press Enter." \
+        "The ring stays dark meanwhile: the Echo is in its bootrom. Ring lights up blue? It booted normally: unplug the power, try again."
     # in the foreground: after the handshake kamakiri waits for Enter while kicking the watchdog, and again if the rpmb
     # looks broken (a safety stop that a person answers, so no `yes` here).  Without a terminal input() hit EOF and the
     # wait never ended, the Echo dark in bootrom (issue #4).  tee keeps the output in the log; unbuffered, or the prompt
@@ -157,20 +161,15 @@ step_build() {
 }
 
 step_network() {
-    local ssid pass new=
     wait_adb device || return 1
     task "Copying hassmic to the Echo" scripts/deploy.sh || return 1
     # adb can drop out for a moment here, shortly after the boot (seen on an Echo Dot 2, issue #2)
     wait_adb device || return 1
     task "Locking down the Echo's internet access" sh -c 'adb shell sh /data/local/hassmic/lockdown.sh &&
         adb shell iptables -S hassmic_out | grep -q -- "-j DROP"' || return 1
-    if [ ! -f secrets/wifi.conf ]; then
-        prompt ssid "Wi-Fi name (WPA2, same network as Home Assistant)"
-        prompt pass "Wi-Fi password" "" -s
-        [ -n "$DRY" ] || { mkdir -p secrets; ( umask 077; printf '%s\n%s\n' "$ssid" "$pass" > secrets/wifi.conf ); new=1; }
-    fi
+    wifi_conf
     # a typo in what was just typed would otherwise be retried forever
-    task "Joining Wi-Fi" scripts/wifi-join.sh || { [ -n "$new" ] && rm -f secrets/wifi.conf; return 1; }
+    task "Joining Wi-Fi" scripts/wifi-join.sh || { [ -n "$WIFI_NEW" ] && rm -f secrets/wifi.conf; return 1; }
     # the Wi-Fi profile survives a reboot, the egress lock does not until the install
     warn "Do not restart the Echo until it is installed."
     info "Tip: give it a fixed address in your router (DHCP reservation)."
