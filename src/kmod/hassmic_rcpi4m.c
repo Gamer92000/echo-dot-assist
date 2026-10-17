@@ -1,7 +1,9 @@
 /*
  * hassmic_rcpi4m: the receive level of every frame from the access point, for Wi-Fi motion (src/hassmic/wifimotion.c)
  * on the Echos with MediaTek's gen4m driver wlan_mt76x8_sdio.ko (MT7668, a module of its own): the Echo Dot 3 (donut,
- * kernel 4.4.22, arm64) and the Echo Show 5 (checkers, kernel 4.9.77, 32-bit ARM).  hassmic_rcpi.c's counterpart for
+ * kernel 4.4.22, arm64), the Echo Show 5 (checkers, kernel 4.9.77, 32-bit ARM) and the Echo Show 8 2nd gen (athena, 4.4.146:
+ * a gen2 driver name, but the same RX vector code, nicRxGetRcpiValueFromRxv included; frames at 119-120 for -50 dBm unicast,
+ * 129 for broadcasts, 2026-10-16).  hassmic_rcpi.c's counterpart for
  * that driver.  The driver's own RX_STAT answer is the firmware's figure for
  * the last frame from anyone on the channel, every station and neighbouring network included, and one per ioctl; this
  * counts only what reaches the driver's data path, which in station mode is the access point's, frame by frame.
@@ -43,7 +45,9 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/sizes.h>
+#include <linux/stop_machine.h>
 #include <linux/uaccess.h>
+#include <asm/cacheflush.h>
 
 static char *hook_sym = "nicRxProcessDataPacket";
 static char *fill_sym = "nicRxFillRFB";
@@ -137,11 +141,25 @@ static int make_bl(unsigned long at, unsigned long to, u32 *insn)
     return 0;
 }
 
+/* athena's kernel (4.4.146, MT8183) has neither patch_text (no KGDB) nor writable module text (DEBUG_SET_MODULE_RONX):
+ * the page goes read-write by set_memory_rw (not exported either), the word is written under stop_machine, and the
+ * page stays read-write: the driver's text is ours to patch, and a page flipped back could be one being run */
+static int poke(void *arg)
+{
+    u32 *w = arg;
+    *(u32 *)w[0] = w[1];
+    flush_icache_range(w[0], w[0] + 4);
+    return 0;
+}
+
 static int patch(void *patcher, void *addr, u32 insn)
 {
     void (*patch_text)(void *addr, unsigned int insn) = patcher;
-    patch_text(addr, insn);
-    return 0;
+    int (*set_rw)(unsigned long, int) = (void *)kallsyms_lookup_name("set_memory_rw");
+    u32 w[2] = { (u32)addr, insn };
+    if (patch_text) { patch_text(addr, insn); return 0; }
+    if (!set_rw || set_rw((unsigned long)addr & PAGE_MASK, 1)) return -EPERM;
+    return stop_machine(poke, w, NULL);
 }
 #endif
 
@@ -150,7 +168,7 @@ static int __init init_fn(void)
     unsigned long caller = kallsyms_lookup_name(hook_sym), target = kallsyms_lookup_name(fill_sym), site = 0;
     void *patcher = (void *)kallsyms_lookup_name(PATCHER);
     u32 insn; uint i, n = 0;
-    if (!caller || !target || !patcher) {
+    if (!caller || !target || (!patcher && !IS_ENABLED(CONFIG_ARM))) {
         pr_err("hassmic_rcpi4m: %s, %s or %s not in this kernel (Wi-Fi driver loaded?)\n", hook_sym, fill_sym, PATCHER);
         return -ENOENT;
     }

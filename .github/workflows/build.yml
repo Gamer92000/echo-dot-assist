@@ -62,7 +62,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        device: [donut, biscuit, radar, checkers, crown]
+        device: [donut, biscuit, radar, checkers, crown, athena]
         include:
           # where Wi-Fi motion's kernel module is built from, for the cache; what is downloaded is pinned in device.mk or
           # the Makefile (make kernel-tools)
@@ -206,7 +206,7 @@ jobs:
         run: .venv/bin/python tests/fake_web_artifacts.py
       - name: Wi-Fi switch from the settings page
         run: .venv/bin/python tests/fake_web_wifi.py
-      - name: Wi-Fi join at setup through WifiService (checkers, crown)
+      - name: Wi-Fi join at setup through WifiService (checkers, crown, athena)
         run: .venv/bin/python tests/fake_wifi_join.py
       - name: microWakeWord, models from the settings page
         run: .venv/bin/python tests/fake_web_mww.py

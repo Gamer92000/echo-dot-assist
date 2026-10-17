@@ -150,6 +150,68 @@ avahi_start() {
 # While the settings page switches networks (wifi.sh holds its lock), the link is that script's business: no wifisvc.
 # Whenever the address changes, wifi.sh writes down which network the Echo is on, for the page: wpa_supplicant can also
 # move to another saved network by itself when the one it is on goes away.
+# Kiosk Satellite's update helper (device.conf KIOSK_PACKAGE; docs/re-crown.md): the app hands out a script on its content
+# provider that starts a process of ours with its own code and a token, through which the app installs its updates without
+# a dialog.  Its own instructions have it piped into sh from adb after every boot.  Here as the shell user (what adb is on
+# a locked device: pm install is allowed to it) with inet, which its listening socket needs, never as root.  Idempotent
+# (the script says "already running"), so it is asked again every 5 min: an update of the app ends the helper.
+# It also opens the app once per boot (its process may be up without a screen, so no check for one): it has no HOME category (hassmic-home is the home screen), so
+# nothing else starts it after a boot.
+# What the app is allowed (docs/kiosk-satellite.md): runtime permissions and app ops it would otherwise ask a person for on
+# a screen with no one at it; never the microphone (hassmic is the satellite).  Android's own "unknown permission" for those
+# a release lacks (notifications, Bluetooth scan before 12) is ignored.  Idempotent, a few hundred ms.
+kiosk_grants() {
+    for p in CAMERA READ_EXTERNAL_STORAGE WRITE_EXTERNAL_STORAGE ACCESS_COARSE_LOCATION ACCESS_FINE_LOCATION; do
+        pm grant $KIOSK_PACKAGE android.permission.$p > /dev/null 2>&1
+    done
+    for o in SYSTEM_ALERT_WINDOW WRITE_SETTINGS GET_USAGE_STATS REQUEST_INSTALL_PACKAGES; do
+        appops set $KIOSK_PACKAGE $o allow > /dev/null 2>&1
+    done
+    dumpsys deviceidle whitelist +$KIOSK_PACKAGE > /dev/null 2>&1       # no doze: the dashboard and its ESPHome server stay up
+    dpm set-active-admin $KIOSK_PACKAGE/.KioskAdminReceiver > /dev/null 2>&1   # device admin: it turns the screen off (force-lock)
+    pm revoke $KIOSK_PACKAGE android.permission.RECORD_AUDIO > /dev/null 2>&1
+    appops set $KIOSK_PACKAGE RECORD_AUDIO deny > /dev/null 2>&1
+}
+kiosk_helper() {
+    [ -n "$KIOSK_PACKAGE" ] || return 0
+    launched=
+    while :; do
+        if [ "$(getprop sys.boot_completed)" = 1 ] && pm path $KIOSK_PACKAGE > /dev/null 2>&1; then
+            if [ -z "$launched" ]; then
+                launched=1
+                kiosk_grants
+                sleep 10                          # the home screen first, so the app is on top of it
+                $D/runas shell shell sh -c "monkey -p $KIOSK_PACKAGE -c android.intent.category.LAUNCHER 1" > /dev/null 2>&1
+                echo "kiosk satellite: opened"
+            fi
+            out=$($D/runas shell shell,log,inet sh -c "content read --uri content://$KIOSK_PACKAGE.update-helper/start | sh" 2>&1)
+            case "$out" in *"started"*) echo "kiosk update helper: started";; *"already running"*) ;; *) echo "kiosk update helper: $(echo "$out" | tail -1)";; esac
+        fi
+        sleep 300
+    done
+}
+# Kiosk Satellite writes Android's rotation settings itself (auto, portrait: the screen flipped by itself, 2026-10-14; the
+# Show has no accelerometer, so nothing asked for it), so the rotation entries of ANDROID_SETTINGS are put back
+# whenever they differ, not only at the start.  It does so at every start of the app, and the screen turns to portrait
+# at once: looked at every 10 s, with `settings get` (a Java process, ~2 s) as the check, portrait showed for up to 15 s
+# (2026-10-17).  The settings provider keeps its values in /data/system/users/0/settings_<namespace>.xml, which a grep
+# reads in a few ms, so that is looked at every second; `settings put` (both at once) only when the file differs.
+rotation_lock() {
+    [ -n "$KIOSK_PACKAGE" ] || return 0
+    while sleep 1; do
+        [ "$(getprop sys.boot_completed)" = 1 ] || continue
+        fix=
+        for t in $ANDROID_SETTINGS; do
+            case $t in *rotation*) ;; *) continue;; esac
+            ns=${t%%/*} kv=${t#*/}; k=${kv%%=*} val=${kv#*=}
+            grep -q -F "name=\"$k\" value=\"$val\"" /data/system/users/0/settings_$ns.xml 2>/dev/null && continue
+            # together: each is a Java process of 2-4 s (while the app starts), one after the other doubled the time in portrait
+            { settings put $ns $k "$val"; echo "rotation: $k put back to $val"; } &
+            fix=1
+        done
+        [ -z "$fix" ] || { wait; sleep 1; }       # the provider writes its file a moment later: no second put for the same change
+    done
+}
 netwatch() {
     miss=0 addr=
     while :; do
@@ -378,6 +440,8 @@ satellite)
     # online updates: hassmic checks downloads against the key root will check them against (ota.c)
     export HASSMIC_RELEASE_PUB=$(release_pub)
     netwatch 2>&1 | stamped >> $LOG &
+    kiosk_helper 2>&1 | stamped >> $LOG &
+    rotation_lock 2>&1 | stamped >> $LOG &
     # mDNS through the stock avahi-daemon: hassmic prints the service file for its protocol, name and MAC address.
     # The MAC in it is how Home Assistant tells devices apart.  On radar wlan0 appears only later in the boot, hassmic
     # printed its placeholder MAC, and Home Assistant offered the adopted Echo as a new device.  So wait for Wi-Fi

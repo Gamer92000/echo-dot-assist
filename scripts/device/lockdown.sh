@@ -44,7 +44,19 @@ NL='
 # state/config says arbitration_mode=kiosk, and taken out again when it does not.  hassmic reads nothing there but
 # those claims.  Not in stock-online mode: no hassmic runs then.
 KIOSK_IN="INPUT -i $WLAN -p udp -m udp --dport 2330 -j ACCEPT"
-kiosk_state() { KIOSK=; [ -z "$OTA_ONLY" ] && grep -qx 'arbitration_mode=kiosk' /data/local/hassmic/state/config 2>/dev/null && KIOSK=1; }
+# Kiosk Satellite itself (device.conf KIOSK_PACKAGE, an app of the user's choice) may reach the internet for its own
+# updates and the pages it shows, unless the setting "kiosk_internet" is off: one rule for its uid, nothing else gets out
+# by it (Amazon's daemons have other users and stay local).  Default on: hassmic writes the setting to state/config only
+# once somebody saved it, so "not there" has to mean on (looking for "=on" kept a fresh install's Kiosk Satellite offline).
+# KSUID is empty when the setting is off or it is not installed.
+kiosk_state() {
+    KIOSK=; KSUID=
+    [ -z "$OTA_ONLY" ] || return 0
+    grep -qx 'arbitration_mode=kiosk' /data/local/hassmic/state/config 2>/dev/null && KIOSK=1
+    if [ -n "$KIOSK_PACKAGE" ] && ! grep -qx 'kiosk_internet=off' /data/local/hassmic/state/config 2>/dev/null; then
+        KSUID=$(sed -n "s/^$KIOSK_PACKAGE \([0-9][0-9]*\) .*/\1/p" /data/system/packages.list 2>/dev/null | head -1)
+    fi
+}
 
 HAVE6=; command -v ip6tables > /dev/null && HAVE6=1
 v6off() { for f in /proc/sys/net/ipv6/conf/*/disable_ipv6; do echo 1 > $f || echo "!! IPv6 NOT OFF ($f): take the Echo offline"; done; }
@@ -72,6 +84,7 @@ rules() {
         case $d in *:*) [ $1 = iptables ] && continue; d=$d/128;; *) [ $1 = iptables ] || continue; d=$d/32;; esac
         for p in udp tcp; do echo "-A hassmic_out -d $d -p $p -m $p --dport 53 -j RETURN"; done
     done
+    [ -n "$KSUID" ] && echo "-A hassmic_out -m owner --uid-owner $KSUID -j RETURN"
     echo "-A hassmic_out -m owner --gid-owner $NET_GID -j RETURN"
     echo "-A hassmic_out -j DROP"
 }
@@ -92,6 +105,14 @@ keep() {
         for p in udp tcp; do echo "-A INPUT -i $WLAN -p $p -m $p --dport 16384:32767 -j ACCEPT"; done
         echo "-A INPUT -i $WLAN -p udp -m udp --dport 5353 -j ACCEPT"      # mDNS: how Home Assistant finds the Echo
         echo "-A INPUT -p icmp -m state --state RELATED,ESTABLISHED -j ACCEPT"
+        # Kiosk Satellite's remote administration (its web page and API, TCP 2324) and its ESPHome API (TCP 6053: Home
+        # Assistant's ESPHome integration connects to it; hassmic's own is 26053), both outside 16384-32767, from private
+        # addresses only; where the app is not installed nothing listens
+        if [ -n "$KIOSK_PACKAGE" ]; then
+            for d in $LOCAL4; do case $d in 224.*|255.*) continue;; esac
+                for p in 2324 6053; do echo "-A INPUT -s $d -i $WLAN -p tcp -m tcp --dport $p -j ACCEPT"; done
+            done
+        fi
         if [ -n "$ADB" ]; then echo "-A $ADB_IN"; fi                       # only while adb over Wi-Fi is open (adb_gate)
         # what this model's stock lacks (device.conf FW_KEEP, rules separated by ";"): checkers has no firewall.sh, and
         # nothing else admits the DHCP server's answers once INPUT drops (they come to a broadcast, not as a reply)

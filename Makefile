@@ -84,6 +84,7 @@ kernel-tools:
 ifneq ($(KCONFIG),)
 $(OUT)/ktree/.config: $(KCONFIG)
 	@mkdir -p $(OUT)/ktree
+	$(if $(wildcard devices/$(DEVICE)/Module.symvers),cp devices/$(DEVICE)/Module.symvers $(OUT)/ktree/Module.symvers)
 	sed -i '/GCC_VERSION >= 40800 && GCC_VERSION < 40803/,/^#endif/d' $(KSRC)/arch/arm/kernel/asm-offsets.c
 	cp $< $@
 	$(KMAKE) -C $(KSRC) O=$(CURDIR)/$(OUT)/ktree olddefconfig modules_prepare
@@ -230,10 +231,12 @@ unit:
 	.venv/bin/python tests/blueprint_dropin.py
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/buttons_test.c src/hassmic/buttons.c -lpthread -o build/buttons_test && build/buttons_test build/buttons_test.fifo
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/afe_parcel_test.c src/hassmic/afe_parcel.c -o build/afe_parcel_test && build/afe_parcel_test
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/lux_test.c -lm -o build/lux_test && build/lux_test
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ring_band_test.c src/hassmic/ring_band.c -lm -lpthread -o build/ring_band_test && build/ring_band_test
 	python3 tests/unit/sounds_zip.py build/sounds_dir build/sounds_test.zip
 	cc -O2 -Wall -Wextra -DSYNTH -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c -o build/sounds_test && build/sounds_test synth build/sounds_dir build/sounds_test.zip
 	if [ -d firmware/checkers/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c devices/checkers/board.c -o build/sounds_checkers && HASSMIC_EARCON_ROOT=firmware/checkers/rootfs build/sounds_checkers; else echo "sounds: firmware/checkers not unpacked, its apps' sounds skipped"; fi
+	if [ -d firmware/athena/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c devices/athena/board.c -o build/sounds_athena && HASSMIC_EARCON_ROOT=firmware/athena/rootfs build/sounds_athena; else echo "sounds: firmware/athena not unpacked, its apps' sounds skipped"; fi
 	.venv/bin/python tools/mkwifictl.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)
 	.venv/bin/python tools/mkringbar.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)
 	.venv/bin/python tests/unit/ringbar_run.py
