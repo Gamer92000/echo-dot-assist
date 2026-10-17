@@ -1943,8 +1943,9 @@ Run in this order. Each step says what it proves.
       copied from checkers and adapted (speaker gain stock 30 of 0..39, no `ui_wakesound` entries, `NS6570` pins,
       absent stock apps out of `STOCK_APPS_OUT`, own kconfig; stubs byte-identical, `scripts/setup.sh crown --dry-run`
       walks every step).  Trial run from the PC on a rooted Echo (nothing installed, 2026-10-13): OpenSL ES capture,
-      wake word "alexa" detected, volume keys, mic mute latch, band 1280 x 10, speaker gain read.  Open: the install (`INSTALL=boot`, boot image from
-      the NS6570 `boot.img`; the unlock's `boot-root.img` is NS6571's) and the guided setup on a real Echo.
+      wake word "alexa" detected, volume keys, mic mute latch, band 1280 x 10, speaker gain read.  The install (`INSTALL=boot`, boot image from
+      the NS6570 `boot.img`; the unlock's `boot-root.img` is NS6571's): done since (below).  Open: the guided setup on a
+      real Echo (`--dry-run` only).
       Closed (2026-10-14, docs/re-crown.md "Bluetooth, wake sound, extra apps"): Bluetooth works after the install (proxy,
       GATT, A2DP ready); the wake sound is not in this firmware (`ban_ui_wakesound`, `ban_ui_endpointing` are empty files),
       the built-in tone stays; MODEL_NUMBER C7H6N3; crown's extra apps classified (none runs or crashes: left as they are).
@@ -1959,4 +1960,9 @@ Run in this order. Each step says what it proves.
       by itself 20-80 s later (12 s 0, 16 s 2, 17 s 1, released 36 s in one boot, 50 s and 83 s in two): hassmic started
       at 40 s caught it and played "mics off" -> `mute_latch(1, 0)` shows it quietly.  No wake sound was heard: the
       output's open takes ~170 ms plus the amplifier (logcat, AudioALSAPlaybackHandlerNormal), the blip is 120 ms ->
-      `audio_android.c` lead-in of 350 ms after 2.5 s without audio (`COLD_MS`, `LEAD_MS`); to be confirmed by ear.
+      `audio_android.c` lead-in of 350 ms after 2.5 s without audio (`COLD_MS`, `LEAD_MS`).  2026-10-15: the stock files have
+      no wake sound (above), so hassmic plays its own chime (`main.c` `earcon_thread`, 0.5 s, was the 0.12 s blip): heard on
+      the Show 8 after the lead-in.  Not measured: what the longer sound and the lead-in (0.85 s from the wake word to the
+      sound's end, was ~0.12 s) cost the start of the request when wake sound removal is off.  2026-10-17: the lead-in
+      reached earsup as part of the echo delay (85 ms + 350 > `D_MAX` 400 ms): `audio_earcon_started(lead_ms)` moves its
+      start past it.

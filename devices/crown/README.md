@@ -1,7 +1,7 @@
 # Echo Show 8 1st gen, 2019 (`crown`)
 
-**Tried from the PC on one Echo Show 8, not installed yet** (2026-10-13: wake word, volume keys, mic mute, light band;
-[docs/re-crown.md](../../docs/re-crown.md)). It is the platform of the Echo Show 5 (`checkers`): the install is the
+**Installed and running on one Echo Show 8** (2026-10-14; "What works and what is open" below,
+[docs/re-crown.md](../../docs/re-crown.md)); the guided setup is walked with `--dry-run` only, not yet on an Echo. It is the platform of the Echo Show 5 (`checkers`): the install is the
 same, `INSTALL=boot` through `scripts/install-system.sh`, which hands over to `scripts/install-boot.sh`. No light
 ring: hassmic shows it as a band along the bottom of the screen (setting "Light band"). Porting guide:
 [devices/README.md](../README.md); what checkers' page says about the install holds here too, and is not repeated:

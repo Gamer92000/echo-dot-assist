@@ -21,7 +21,7 @@ action button. `adbd` and `magiskpolicy32` are byte-identical to checkers'.
 | `libpryon.so` | 2.41 (checkers' is older) | `pryon_test` loads the firmware's ALEXA model; the stubs list is regenerated (26/17/8 symbols for pryon/opus/z) |
 | `libasp.so`, audio HAL | differ from checkers' | `probe.md5` pins them |
 | Speaker gain | `OUT Playback Volume` 0..39, stock **30** (checkers: 29), 1.5 dB steps | `board.c` |
-| Wake sound | the stock one is not in SIM's APK (`res/eb.wav` is empty) | `ui_wakesound*` entries left out of `board.c`: the built-in tone plays. Open: which of `res/*.mp3` (e.g. 24 kHz mono 22 kB) stock uses |
+| Wake sound | the stock one is not in SIM's APK (`res/eb.wav` is empty) | `ui_wakesound*` entries left out of `board.c`: hassmic's own chime plays (`main.c` `earcon_thread`; no app has the sound, below) |
 | Stock apps | ten of checkers' `STOCK_APPS_OUT` do not exist; crown has more of its own (`settings.windfall`, `ahe.damca`, `kindle.cms-service`, `FireOSDownloadProvider`, `TabletCamera2`, `knight.ecs`, `knight.hds`) | to classify by what crashes after an install |
 | Attestation | the binder service `amazon.security.dha` answers `getDhaVersion` = **2** | `dha.c` builds drvV1 (version 1) only; see below |
 
@@ -92,7 +92,7 @@ downloaded and installed from the settings page on a Show 8.
   "controller ready, ACL 32 x 251", passive and active scans, a GATT connection with service discovery, "a2dp: ready",
   codecs SBC/AAC/aptX/aptX HD. Nothing to change in `board.c`.
 - Wake sound: `ban_ui_wakesound` (`res/eb.wav`) and `ban_ui_endpointing` (`res/ie.wav`) are both empty files in SIM's APK,
-  and no other app has a resource of that name: this firmware has no wake sound file, so the built-in tone stays.
+  and no other app has a resource of that name: this firmware has no wake sound file, so hassmic's own sound plays (since 2026-10-15 a two-note chime, was a 0.12 s blip).
 - `MODEL_NUMBER` C7H6N3 is the label's (`/proc/idme` has no model number: product_name/productid read 0).
 - Crown's extra Amazon apps, on the installed Echo (none runs, none crashes, load comes from audioserver and hassmic):
   `settings.windfall` is in `STOCK_APPS_OUT` already; `kindle.cms-service` does not even parse ("Required FireOS Feature

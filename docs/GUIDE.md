@@ -247,7 +247,10 @@ Beyond the README's two figures:
   screen to the apps and shows no band), so an app shown on the screen is never covered. The light "Light ring" works
   there too, in any colour. The screen wakes for the band and sleeps 5 minutes after the last light (1 minute with
   the microphones off or in Do not disturb).
-- **Microphone off** plays Alexa's own sounds.
+- **Microphone off** plays Alexa's own sounds. A switch that is already off when hassmic starts is shown, not announced.
+- **Wake sound**: Alexa's own where the firmware has it. The Echo Show 5 and Show 8 have none: they play a two-note chime
+  of hassmic's own (`/data/local/hassmic/earcon/ui_wakesound.wav` or `.mp3` replaces it). A sound after a pause starts
+  0.35 s late there: the Show's speaker takes that long to switch on and swallowed the start of it.
 - Silent and dark at boot.
 - The ring dims with the room's light as on a stock Echo (Amazon's own logic, on by default); a fixed level from Home
   Assistant switches that off.
@@ -457,10 +460,11 @@ this Echo or another, or use it as a preset for the next install (`scripts/setup
 **Identify** (top of the page, and beside each Echo in the list; also a button in Home Assistant): a rainbow on the ring
 for 10 s and stock's setup sound, to tell which Echo is which.
 
-**Speaker gain** (Sound; Echo Dot 2, Echo 2 and Echo Dot 3, and the Echo Show 5): for an Echo that is too
+**Speaker gain** (Sound; Echo Dot 2, Echo 2 and Echo Dot 3, and the Echo Show 5 and Show 8): for an Echo that is too
 quiet at full volume. It raises the analog gain in front of the speaker (Echo Dot 2 and Echo 2: the codec's "HP Driver
 Gain", +0 to +12 dB over stock; Echo Dot 3: the amplifier's output level, +0 to +2 dB, all it has above where Amazon
-leaves it; Echo Show 5: the codec's line out, +0 to +12 dB in steps of 1.5 dB, each dB set going to the nearest step), so everything the
+leaves it; Echo Show 5: the codec's line out, +0 to +12 dB in steps of 1.5 dB, each dB set going to the nearest step; Echo Show 8:
+the same, and down to −6 dB, since it is loud at full volume already), so everything the
 speaker plays gets louder at every volume step; the 3.5 mm jack and Bluetooth speakers keep their level. Owners of an
 Echo Dot 2 found +6 dB loud and clean at full volume; speakers differ, though (some Dot 2s are much louder than others
 at the same gain), so raise it a step at a time and lower it at the first crackle: loud music near full volume
@@ -522,6 +526,7 @@ PROTO=esphome               # or wyoming (port 16700)
 ARGS=""                     # extra options, below
 #MODE=stock-online          # temporary: stock Alexa online without updates, see the model's install page
 #ADB_WIFI=1                 # leave adb over Wi-Fi open, see below
+#TIMEZONE=Europe/Berlin     # Echo Show: the zone of the screen's clock (Android's tz name; GMT without it)
 ```
 
 | `ARGS` option | Effect |
