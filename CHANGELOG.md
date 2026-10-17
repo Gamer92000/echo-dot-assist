@@ -81,7 +81,7 @@ What changed for people using the Echo, newest first. Details and measurements a
   page has a new switch, "Kiosk Satellite internet access" (on by default): on, only that app may reach the internet,
   for its updates and for web pages it shows. The voice satellite and Amazon's software stay on your network as before.
   The screen is kept in landscape: Kiosk Satellite kept switching Android's rotation by itself, so the Echo puts the
-  rotation settings back every 10 seconds. Its web page (port 2324) is reachable from your network. Pings from the local network are answered.
+  rotation settings back within a second (the screen no longer shows portrait for 10 seconds after the app starts). Its web page (port 2324) is reachable from your network. Pings from the local network are answered.
   The guided setup offers Simple Keyboard (open source, no network access) for screen models, since the image has no
   keyboard.
 - **Echo Show 8 (1st gen, `crown`): first support.** The Show 8 is the same platform as the Show 5, and a trial run on one

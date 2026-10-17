@@ -20,7 +20,7 @@ keyboard step of setup (Simple Keyboard 6.7: the Echo has no input method of its
 | Microphone, wake word, TTS, Assist pipeline | yes | no (denied the microphone) |
 | Screen: home activity, overscan, light band layer | `org.hassmic.home` stays HOME | opened over it once per boot (`monkey`) |
 | Dashboard, HA web UI | no | yes |
-| Rotation | `rotation_lock` puts the settings back every 10 s (the Show has no accelerometer; KS flips it) | would write them itself |
+| Rotation | `rotation_lock` puts the settings back within a second (the Show has no accelerometer; KS flips it) | would write them itself |
 | Wake word arbitration with tablets | `arbitration_mode` "kiosk" (UDP 2330, `kiosk-arbitration.md`) | speaks the same protocol |
 | Own updates | not hassmic's business; the helper below | installs its updates without a dialog |
 

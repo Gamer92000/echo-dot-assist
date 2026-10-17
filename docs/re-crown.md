@@ -141,7 +141,7 @@ reach GitHub through the egress lock).
 
 Kiosk Satellite (WRITE_SETTINGS granted) set `accelerometer_rotation` back to 1 and `user_rotation` to 0 on its own, so
 the screen flipped between portrait and landscape; the Show 8 has no accelerometer to ask for it. `main.sh` `rotation_lock`
-(only where `KIOSK_PACKAGE` is set) compares the `*rotation*` entries of `ANDROID_SETTINGS` every 10 s and puts them
+(only where `KIOSK_PACKAGE` is set) compares the `*rotation*` entries of `ANDROID_SETTINGS` every second (a grep of the provider's XML file; `settings` itself takes 2 s) and puts them
 back ("rotation: ... put back" in boot.log). The app's own setting (`flutter.ks.screen.orientation` in its prefs, value
 format unknown; "landscape" written by hand, no effect seen) is the cleaner fix once known. Editing its prefs as root
 leaves the file root-owned: chown it back to the app's uid or it cannot read its settings.

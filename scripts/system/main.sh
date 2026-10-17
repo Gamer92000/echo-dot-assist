@@ -192,15 +192,20 @@ kiosk_helper() {
 }
 # Kiosk Satellite writes Android's rotation settings itself (auto, portrait: the screen flipped by itself, 2026-10-14; the
 # Show has no accelerometer, so nothing asked for it), so the rotation entries of ANDROID_SETTINGS are put back
-# whenever they differ, not only at the start.  A few ms every 10 s.
+# whenever they differ, not only at the start.  It does so at every start of the app, and the screen turns to portrait
+# at once: looked at every 10 s, with `settings get` (a Java process, ~2 s) as the check, portrait showed for up to 15 s
+# (2026-10-17).  The settings provider keeps its values in /data/system/users/0/settings_<namespace>.xml, which a grep
+# reads in a few ms, so that is looked at every second; `settings put` only when the file differs.
 rotation_lock() {
     [ -n "$KIOSK_PACKAGE" ] || return 0
-    while sleep 10; do
+    while sleep 1; do
         [ "$(getprop sys.boot_completed)" = 1 ] || continue
         for t in $ANDROID_SETTINGS; do
             case $t in *rotation*) ;; *) continue;; esac
             ns=${t%%/*} kv=${t#*/}; k=${kv%%=*} val=${kv#*=}
-            [ "$(settings get $ns $k 2>/dev/null | tr -d '\r')" = "$val" ] || { settings put $ns $k "$val"; echo "rotation: $k put back to $val"; }
+            grep -q -F "name=\"$k\" value=\"$val\"" /data/system/users/0/settings_$ns.xml 2>/dev/null && continue
+            settings put $ns $k "$val"; echo "rotation: $k put back to $val"
+            sleep 2                    # the provider writes its file a moment later: no second put for the same change
         done
     done
 }
