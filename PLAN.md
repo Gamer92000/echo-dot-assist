@@ -1944,8 +1944,8 @@ Run in this order. Each step says what it proves.
       absent stock apps out of `STOCK_APPS_OUT`, own kconfig; stubs byte-identical, `scripts/setup.sh crown --dry-run`
       walks every step).  Trial run from the PC on a rooted Echo (nothing installed, 2026-10-13): OpenSL ES capture,
       wake word "alexa" detected, volume keys, mic mute latch, band 1280 x 10, speaker gain read.  The install (`INSTALL=boot`, boot image from
-      the NS6570 `boot.img`; the unlock's `boot-root.img` is NS6571's): done since (below).  Open: the guided setup on a
-      real Echo (`--dry-run` only).
+      the NS6570 `boot.img`; the unlock's `boot-root.img` is NS6571's): done since (below).  The guided setup on a real
+      Echo Show 8: tried by the port's author.
       Closed (2026-10-14, docs/re-crown.md "Bluetooth, wake sound, extra apps"): Bluetooth works after the install (proxy,
       GATT, A2DP ready); the wake sound is not in this firmware (`ban_ui_wakesound`, `ban_ui_endpointing` are empty files),
       the built-in tone stays; MODEL_NUMBER C7H6N3; crown's extra apps classified (none runs or crashes: left as they are).
