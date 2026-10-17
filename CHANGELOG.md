@@ -2,8 +2,33 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-17
+
+- **Wake sound removal (experimental) on the Echo Show.** The Show starts a sound after a pause 0.35 s late (below); the
+  removal now looks for the sound's echo from where it really starts, and no longer misses it.
+
+## 2026-10-15
+
+- **Echo Show 8 (1st gen): a factory reset forgets a Wi-Fi network that Amazon's own setup saved.** Android 7 only lets the
+  network's creator or the system user remove it, so the reset reported "forgotten" and the Echo stayed on the network (and
+  never offered setup from a phone). The reset now removes it as the system user, and says so when one cannot be removed.
+- **Echo Show 8 (1st gen): the speaker gain can go below stock.** The Show 8 is loud at its stock level with music at
+  full volume, so the settings page's speaker gain goes down to -6 dB here (the Dots only go up). About -2 dB suited
+  the first one tried.
 ## 2026-10-13
 
+- **Echo Show 8 (1st gen, `crown`): first support.** The Show 8 is the same platform as the Show 5, and a trial run on one
+  (hassmic started from the PC, nothing installed) heard the wake word, took the volume keys and the mic mute switch,
+  and drew the light band. Installed on a real one since: Home Assistant, voice questions, buttons and the band work. Wi-Fi motion
+  works on it (the sensor needs a minute after switching on to settle) and "Download from Amazon" works (its attestation
+  service is DHA version 2, drvV3 in Amazon's Java MAP). Bluetooth works once the install has taken Android's own stack off
+  (Home Assistant's Bluetooth proxy, playing from a phone).
+- **No "mics off" announcement when hassmic starts** (every model; found on the Echo Show 8). After a power cycle the
+  Show 8's microphone switch reads "off" until the Echo lets it go by itself, 20 to 80 seconds in; hassmic, up by then
+  in two boots of three, caught it and said "mics off" to someone who had not pressed anything. A switch that is off when hassmic
+  starts is now shown quietly (ring, Home Assistant), on every Echo; pressing it is announced as before.
+- **Echo Show (Show 5, Show 8): the wake sound was not heard, a fix to confirm.** The speaker opens a fraction of a second after a sound
+  starts, which swallowed the 0.12 s blip; a sound that follows a pause now starts 0.35 s late so it is not clipped.
 - **Echo Show 5: Download from Amazon.** The settings page's "Download from Amazon" now works on the Show: sign in
   with the code, then wake words and the newer sound detection model download and install as on the Dots. Amazon
   does not hand out the whisper detection model for the Show; copy it from a Dot that has it ("Copy models").

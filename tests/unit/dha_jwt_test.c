@@ -110,11 +110,31 @@ static size_t put_bytes(uint32_t *w, const uint8_t *p, size_t len)
     return 2 + (len + 3) / 4;
 }
 
+/* the DER ECDSA signature the fake EC key makes: R the digest, S the digest reversed, an INTEGER's 0x00 where the top bit is set */
+static void der_sig(const uint8_t dg[32], uint8_t *out, int *len)
+{
+    uint8_t rr[32], *q = out + 2;
+    for (int j = 0; j < 32; j++) rr[j] = dg[31 - j];
+    for (int i = 0; i < 2; i++)
+    {
+        const uint8_t *v = i ? rr : dg;
+        int pad = v[0] & 0x80;
+        *q++ = 2;
+        *q++ = (uint8_t)(32 + pad);
+        if (pad) *q++ = 0;
+        memcpy(q, v, 32);
+        q += 32;
+    }
+    out[0] = 0x30;
+    out[1] = (uint8_t)(q - out - 2);
+    *len = (int)(q - out);
+}
+
 /* "/system/bin/service call amazon.security.dha <code> [i32 ...]": what fireos-dha answers on the tester's Echo, with
  * the fixed key.  sign's signature: byte i is digest[i % 32] ^ 0x5A, so the test can check what was signed. */
 void core_run(char *const argv[], char *out, size_t n)
 {
-    uint32_t w[200];
+    uint32_t w[400];
     size_t nw = 0;
     int code;
     out[0] = 0;
@@ -133,6 +153,36 @@ void core_run(char *const argv[], char *out, size_t n)
         nw = put_bytes(w, dha_der, sizeof dha_der);
     else if (code == 4)
         nw = put_bytes(w, dha_mac, sizeof dha_mac);
+    else if (code == 5 && getenv("DHA_FAKE_SVC_VERSION"))
+    {
+        /* crown: the leaf, then another certificate; LF line ends as the service prints them */
+        static char chain[sizeof dha_cert_pem * 2];
+        size_t k = 0;
+        for (const char *c = dha_cert_pem; *c; c++)
+            if (*c != '\r')
+                chain[k++] = *c;
+        memcpy(chain + k, chain, k);
+        nw = put_bytes(w, (const uint8_t *)chain, 2 * k);
+    }
+    else if (code == 1 && getenv("DHA_FAKE_SVC_VERSION"))
+    {
+        uint8_t dg[32], der[80];
+        int k = 4, n = 2;
+        if (!argv[k] || strcmp(argv[k], "i32") || atoi(argv[k + 1]) != 32)
+            return;
+        for (int i = 0; i < 8; i++)
+        {
+            uint32_t v;
+            k += 2;
+            if (!argv[k] || strcmp(argv[k], "i32"))
+                return;
+            v = (uint32_t)strtol(argv[k + 1], NULL, 10);
+            for (int b = 0; b < 4; b++)
+                dg[i * 4 + b] = (uint8_t)(v >> (8 * b));
+        }
+        der_sig(dg, der, &n);
+        nw = put_bytes(w, der, (size_t)n);
+    }
     else if (code == 1)
     {
         uint8_t dg[32], sig[256];
@@ -189,6 +239,43 @@ static void expected_java(char *out, size_t cap, time_t when, const char *dsn, c
     snprintf(out + strlen(out), cap - strlen(out), ".%s", sig_b64);
 }
 
+/* Java MAP's drvV3 (crown): x5c = the first certificate's body in one line with "/" written "\\/" (org.json), the payload
+ * as drvV1's, R || S from the DER signature */
+static void expected_java_v3(char *out, size_t cap, time_t when, const char *dsn, const char *cpuid)
+{
+    static const char begin[] = "-----BEGIN CERTIFICATE-----", endm[] = "-----END CERTIFICATE-----";
+    char h[900], p[400], hb[1300], pb[600], date[32], rs_b64[90], cpu[96] = "";
+    const char *b = strstr(dha_cert_pem, begin) + sizeof begin - 1, *e = strstr(dha_cert_pem, endm);
+    uint8_t dg[32], der[80], rs[64];
+    struct tm tm;
+    size_t hl = (size_t)snprintf(h, sizeof h, "%s", "{\"typ\":\"drvV3\",\"alg\":\"ES256\",\"x5c\":[\"");
+    int dl;
+
+    for (const char *c = b; c < e; c++)
+        if (*c != '\r' && *c != '\n')
+        {
+            if (*c == '/') h[hl++] = '\\';
+            h[hl++] = *c;
+        }
+    hl += (size_t)snprintf(h + hl, sizeof h - hl, "%s", "\"]}");
+    gmtime_r(&when, &tm);
+    strftime(date, sizeof date, "%Y-%m-%dT%H:%MZ", &tm);
+    if (cpuid)
+        snprintf(cpu, sizeof cpu, ",\"cpuid\":\"%s\"", cpuid);
+    snprintf(p, sizeof p, "{\"dat\":\"%s\",\"dev\":{\"typ\":\"v1\",\"dt\":\"%s\",\"dsn\":\"%s\"%s},\"cust\":{\"typ\":\"v1\"}}",
+             date, dha_dt, dsn, cpu);
+    b64_encode(h, hl, hb, 1, 0);
+    b64_encode(p, strlen(p), pb, 1, 0);
+    snprintf(out, cap, "%s.%s", hb, pb);
+    sha256(out, strlen(out), dg);
+    der_sig(dg, der, &dl);
+    memset(rs, 0, sizeof rs);                         /* both halves are 32 bytes whole, the 0x00 dropped */
+    memcpy(rs, dg, 32);
+    for (int j = 0; j < 32; j++) rs[32 + j] = dg[31 - j];
+    b64_encode(rs, 64, rs_b64, 1, 0);
+    snprintf(out + strlen(out), cap - strlen(out), ".%s", rs_b64);
+}
+
 static int service_tests(int version2)
 {
     char got[2048], want[2048], err[160], cpuinfo[] = "/tmp/dha_jwt_test_cpuinfo.XXXXXX";
@@ -208,8 +295,15 @@ static int service_tests(int version2)
     if (version2)
     {
         setenv("DHA_FAKE_SVC_VERSION", "2", 1);
-        check(dha_jwt(dha_dt, "G0911B0593750S3V", when, got, sizeof got, err, sizeof err) == -1 && strstr(err, "version 2"),
-              "service version 2 (drvV3 in Java MAP): refused by name");
+        check(dha_jwt(dha_dt, "G0911B0593750S3V", when, got, sizeof got, err, sizeof err) == 0, "a drvV3 token from the fake service");
+        if (fails) { fprintf(stderr, "%s\n", err); unlink(cpuinfo); return 1; }
+        check(svc_calls[6] == 1 && svc_calls[5] == 1 && svc_calls[1] == 1 && !svc_calls[3] && !svc_calls[4],
+              "version once, then the chain and one signature; no key, no HMAC");
+        expected_java_v3(want, sizeof want, when, "G0911B0593750S3V", "8b4c188d83c47b66");
+        check(!strcmp(got, want), "byte for byte what Java MAP builds (first certificate, \\/ escapes, R || S)");
+        if (strcmp(got, want)) { printf("     got  %.140s...\n     want %.140s...\n", got, want); }
+        check(dha_jwt(dha_dt, "", when, got, sizeof got, err, sizeof err) == -1, "no serial: refused");
+        check(dha_jwt(dha_dt, "G0911B0593750S3V", when, got, 600, err, sizeof err) == -1, "a caller's buffer too small: refused");
         unlink(cpuinfo);
         return fails ? 1 : 0;
     }

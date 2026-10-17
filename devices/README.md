@@ -13,6 +13,7 @@ and refuse a mismatch.
 | Echo Dot 3rd gen refresh (2019–2020), C78MP8 | `crumpet` | `crumpet`? (OTA metadata; fastboot says `CRUMPET`) | not started: `kamakiri-donut` does not apply |
 | Echo Dot 3rd gen with clock, 36EBT3 | `doebrite` | ? | not started; thought to be `crumpet` hardware plus the clock display |
 | Echo Show 5 1st gen (2019), H23K37 | [`checkers`](checkers/README.md) | `checkers` | builds; worked out from the firmware (same 6574.1 as donut, full Android, no mixer: OpenSL ES backend); unlock public (amonet-checkers, TWRP); install (`INSTALL=boot`) and guided setup tried on one Echo Show; the ring as a band along the bottom of the screen (`ring_band.c`) |
+| Echo Show 8 1st gen (2019), C7H6N3 | [`crown`](crown/README.md) | `crown` | builds; the same platform as checkers (MT8163, Fire OS 6.5.7.0 NS6570); unlock public (amonet-crown); installed (`INSTALL=boot`) and running on one Echo Show 8: voice, buttons, mute latch, the band, Bluetooth, Wi-Fi motion; Amazon downloads work (DHA version 2); guided setup tried on one Echo Show 8 |
 
 ## What a model directory holds
 

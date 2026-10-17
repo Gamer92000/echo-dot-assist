@@ -62,7 +62,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        device: [donut, biscuit, radar, checkers]
+        device: [donut, biscuit, radar, checkers, crown]
         include:
           # where Wi-Fi motion's kernel module is built from, for the cache; what is downloaded is pinned in device.mk or
           # the Makefile (make kernel-tools)
@@ -76,6 +76,9 @@ jobs:
             ksrc: linux-3.18.19
             kcc: arm-eabi-4.8
           - device: checkers
+            ksrc: linux-4.9.77
+            kcc: arm-eabi-4.8
+          - device: crown
             ksrc: linux-4.9.77
             kcc: arm-eabi-4.8
     steps:
@@ -203,7 +206,7 @@ jobs:
         run: .venv/bin/python tests/fake_web_artifacts.py
       - name: Wi-Fi switch from the settings page
         run: .venv/bin/python tests/fake_web_wifi.py
-      - name: Wi-Fi join at setup through WifiService (checkers)
+      - name: Wi-Fi join at setup through WifiService (checkers, crown)
         run: .venv/bin/python tests/fake_wifi_join.py
       - name: microWakeWord, models from the settings page
         run: .venv/bin/python tests/fake_web_mww.py
