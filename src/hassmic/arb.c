@@ -122,6 +122,7 @@
 #include <unistd.h>
 #include "hash.h"
 #include "ws.h"
+#include "statefile.h"
 #include "../third_party/monocypher.h"
 
 /* The window (above) */
@@ -267,22 +268,18 @@ static const char *state_dir(void) { const char *e = getenv("HASSMIC_STATE"); re
 
 static void save(void)
 {
-    char path[300], tmp[310], k64[48]; FILE *f; int fd;
-    snprintf(path, sizeof path, "%s/arbitration", state_dir()); snprintf(tmp, sizeof tmp, "%s.tmp", path);
-    if ((fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600)) < 0 || !(f = fdopen(fd, "w"))) {
-        if (fd >= 0) close(fd);
-        fprintf(stderr, "arbitration: cannot write %s\n", tmp); return;
-    }
+    char path[300], k64[48]; struct statefile s; FILE *f;
+    snprintf(path, sizeof path, "%s/arbitration", state_dir());
+    if (statefile_open(&s, path, 0600)) { fprintf(stderr, "arbitration: cannot write %s.tmp\n", path); return; }
+    f = s.f;
     fprintf(f, "arbitrate %d\nctr %llu\n", arbitrate, (unsigned long long)ctr_saved);
     if (in_net) { b64_encode(net_key, 32, k64, 0, 1); fprintf(f, "net %016llx %s\n", (unsigned long long)net_id, k64); crypto_wipe(k64, sizeof k64); }
     for (unsigned i = ndelay > NDELAY ? ndelay - NDELAY : 0; i < ndelay; i++) {        /* oldest first */
         char h[17]; if (delays[i % NDELAY].ms < 0) continue;
         hex8(h, delays[i % NDELAY].id); fprintf(f, "delay %s %d\n", h, delays[i % NDELAY].ms);
     }
-    /* on the flash before the rename, and the rename after it: a hard reset leaves the old file or the new one ("Network") */
-    int bad = fflush(f) || fsync(fileno(f));
-    if (fclose(f) || bad || rename(tmp, path)) { unlink(tmp); fprintf(stderr, "arbitration: cannot write %s\n", path); return; }
-    if ((fd = open(state_dir(), O_RDONLY | O_DIRECTORY)) >= 0) { fsync(fd); close(fd); }
+    /* a hard reset leaves the old file or the new one ("Network") */
+    if (statefile_commit(&s)) fprintf(stderr, "arbitration: cannot write %s\n", path);
 }
 
 static void derive(void) { crypto_blake2b_keyed(mac_key, 32, net_key, 32, (const uint8_t *)"hassmic arbitration mac", 23); }
@@ -315,11 +312,9 @@ static int identity(int renew)
     snprintf(path, sizeof path, "%s/arb_key", state_dir());
     if (!renew && (f = fopen(path, "r"))) { ok = fgets(t, sizeof t, f) && b64_decode(t, strcspn(t, "\r\n"), sk, 32) == 32; fclose(f); }
     if (!ok) {
-        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
         fprintf(stderr, "arbitration: new identity (%s)\n", renew ? "no counter in state/arbitration" : "no key yet");
         ws_random(sk, 32); b64_encode(sk, 32, t, 0, 1); strcat(t, "\n");
-        if (fd < 0 || write(fd, t, strlen(t)) != (ssize_t)strlen(t) || fsync(fd)) { if (fd >= 0) close(fd); fprintf(stderr, "arbitration: cannot write %s\n", path); return -1; }
-        close(fd);
+        if (statefile_write(path, 0600, t, strlen(t))) { crypto_wipe(t, sizeof t); fprintf(stderr, "arbitration: cannot write %s\n", path); return -1; }
     }
     crypto_wipe(t, sizeof t);
     crypto_x25519_public_key(pk, sk);

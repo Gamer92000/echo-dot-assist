@@ -234,6 +234,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   Just Works pairing); Amazon's `btmanagerd` is stopped. A2DP shares the controller; scanning pauses while a phone plays,
   and for 1 s from a wake word round (`ble_quiet` in `main.c` `wake_heard`): the scan's share of the antenna costs
   10-30 % of Wi-Fi broadcasts (unicast is retried), i.e. the other Echos' claims.
+- **State files** (`statefile.c`, issue #46): every file hassmic keeps or hands to root is written through
+  `statefile_open`/`_commit` or `statefile_write` (temp file, fsync, rename, fsync of the folder): `/data` is ext4,
+  a rename without them can reach the flash before the data, and a hard reset left empty files (#36). New writers too.
 - **Settings** (`settings.c`, `settings.h`): one table of the satellite's settings by name (type, range, group,
   exportable or not), used by `proto_esphome.c`, the settings page and exports. Its own ones persist in `state/config`
   (`name=value`; the positional `state/settings` of older versions is read once and moved); arbitration, Sendspin and

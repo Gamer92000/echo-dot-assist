@@ -56,6 +56,7 @@
 #include "update.h"
 #include "wifi.h"
 #include "ws.h"
+#include "statefile.h"
 #include "../third_party/monocypher.h"
 #include <ctype.h>
 #include <errno.h>
@@ -117,10 +118,8 @@ static int load_key(void)
     snprintf(p, sizeof p, "%s/web_key", state_dir());
     if ((f = fopen(p, "r"))) { ok = fgets(t, sizeof t, f) && b64_decode(t, strcspn(t, "\r\n"), sk, 32) == 32; fclose(f); }
     if (!ok) {
-        int fd = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0600);
         ws_random(sk, 32); b64_encode(sk, 32, t, 0, 1); strcat(t, "\n");
-        if (fd < 0 || write(fd, t, strlen(t)) != (ssize_t)strlen(t)) { if (fd >= 0) close(fd); fprintf(stderr, "web: cannot write %s\n", p); return -1; }
-        close(fd);
+        if (statefile_write(p, 0600, t, strlen(t))) { crypto_wipe(t, sizeof t); fprintf(stderr, "web: cannot write %s\n", p); return -1; }
     }
     crypto_wipe(t, sizeof t);
     crypto_x25519_public_key(pk, sk);
@@ -129,11 +128,11 @@ static int load_key(void)
 
 static void save_clients(void)
 {
-    char p[300], tmp[310], h[65]; FILE *f; int fd;
-    snprintf(p, sizeof p, "%s/web_clients", state_dir()); snprintf(tmp, sizeof tmp, "%s.tmp", p);
-    if ((fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600)) < 0 || !(f = fdopen(fd, "w"))) { if (fd >= 0) close(fd); fprintf(stderr, "web: cannot write %s\n", tmp); return; }
-    for (int i = 0; i < nclients; i++) { hex(h, clients[i].pub, 32); fprintf(f, "%s %llu %s\n", h, clients[i].ctr, clients[i].label); }
-    if (fclose(f) || rename(tmp, p)) { unlink(tmp); fprintf(stderr, "web: cannot write %s\n", p); }
+    char p[300], h[65]; struct statefile s;
+    snprintf(p, sizeof p, "%s/web_clients", state_dir());
+    if (statefile_open(&s, p, 0600)) { fprintf(stderr, "web: cannot write %s.tmp\n", p); return; }
+    for (int i = 0; i < nclients; i++) { hex(h, clients[i].pub, 32); fprintf(s.f, "%s %llu %s\n", h, clients[i].ctr, clients[i].label); }
+    if (statefile_commit(&s)) fprintf(stderr, "web: cannot write %s\n", p);
 }
 
 static void load_clients(void)

@@ -26,6 +26,7 @@
  */
 #include "artifacts.h"
 #include "mww.h"
+#include "statefile.h"
 #include "../third_party/monocypher.h"
 #include <ctype.h>
 #include <dirent.h>
@@ -484,23 +485,22 @@ int art_commit(const char *id, char *err, size_t errsz)
 
 int art_install(char *err, size_t errsz)
 {
-    char p[300], tmp[320], line[320]; DIR *d; struct dirent *e; FILE *f; int n = 0;
+    char p[300], line[320]; DIR *d; struct dirent *e; struct statefile s; int n = 0;
     pthread_mutex_lock(&lk);
     snprintf(p, sizeof p, "%s/artifacts", state_dir());
-    snprintf(tmp, sizeof tmp, "%s/request.tmp", p);
-    if (!(d = opendir(p)) || !(f = fopen(tmp, "w"))) { if (d) closedir(d); pthread_mutex_unlock(&lk); snprintf(err, errsz, "nothing to install"); return -1; }
+    snprintf(line, sizeof line, "%s/request", p);
+    if (!(d = opendir(p)) || statefile_open(&s, line, 0666)) { if (d) closedir(d); pthread_mutex_unlock(&lk); snprintf(err, errsz, "nothing to install"); return -1; }
     while ((e = readdir(d))) {
         size_t l = strlen(e->d_name);
         if (l <= 6 || strcmp(e->d_name + l - 6, ".ready")) continue;
         snprintf(line, sizeof line, "%.*s", (int)(l - 6), e->d_name);
         if (!strncmp(line, "wake.", 5)) line[4] = ':';            /* the stage folder's name back to the id */
-        fprintf(f, "%s\n", line); n++;
+        fprintf(s.f, "%s\n", line); n++;
     }
     closedir(d);
-    fclose(f);
     snprintf(line, sizeof line, "%s/result", p); unlink(line);
-    snprintf(line, sizeof line, "%s/request", p);
-    if (!n || rename(tmp, line)) { unlink(tmp); pthread_mutex_unlock(&lk); snprintf(err, errsz, "nothing to install"); return -1; }
+    if (!n) statefile_abort(&s);
+    if (!n || statefile_commit(&s)) { pthread_mutex_unlock(&lk); snprintf(err, errsz, "nothing to install"); return -1; }
     pthread_mutex_unlock(&lk);
     fprintf(stderr, "artifacts: %d handed to root to install; hassmic restarts\n", n);
     return 0;

@@ -20,6 +20,7 @@
 #include "wifi.h"
 #include "hash.h"
 #include "ws.h"
+#include "statefile.h"
 #include "../third_party/monocypher.h"
 #include <ctype.h>
 #include <fcntl.h>
@@ -173,13 +174,9 @@ static int may_ask(const char *kind, unsigned *id, int *busy, char *err, size_t 
 
 static int write_req(const char *line, char *err, size_t errsz)
 {
-    char p[300], tmp[310]; int fd, ok;
-    req_path(p, sizeof p); snprintf(tmp, sizeof tmp, "%s.tmp", p);
-    unlink(tmp);
-    fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
-    ok = fd >= 0 && write(fd, line, strlen(line)) == (ssize_t)strlen(line);
-    if (fd >= 0 && close(fd)) ok = 0;
-    if (!ok || rename(tmp, p)) { unlink(tmp); snprintf(err, errsz, "cannot write the request for root"); fprintf(stderr, "wifi: cannot write %s\n", p); return -1; }
+    char p[300];
+    req_path(p, sizeof p);
+    if (statefile_write(p, 0600, line, strlen(line))) { snprintf(err, errsz, "cannot write the request for root"); fprintf(stderr, "wifi: cannot write %s\n", p); return -1; }
     asked_at = mono();
     return 0;
 }

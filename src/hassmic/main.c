@@ -64,6 +64,7 @@
 #include "web.h"
 #include "board.h"
 #include "clock.h"
+#include "statefile.h"
 
 #define PIPELINE_TIMEOUT 30         /* seconds in LISTENING or THINKING before giving up */
 #define TTS_RATE         22050      /* assumed when audio-start carries no rate */
@@ -150,12 +151,9 @@ static void state_file(char *out, size_t cap, const char *file)
 
 static int write_state(const char *file, const char *text)
 {
-    char p[300], tmp[310]; FILE *f;
-    state_file(p, sizeof p, file); snprintf(tmp, sizeof tmp, "%s.tmp", p);
-    if (!(f = fopen(tmp, "w"))) return -1;
-    fputs(text, f);
-    if (fclose(f) || rename(tmp, p)) { unlink(tmp); return -1; }
-    return 0;
+    char p[300];
+    state_file(p, sizeof p, file);
+    return statefile_write(p, 0666, text, strlen(text));
 }
 
 /* ---------------------------------------------------------------- setup (OOBE) and reset */

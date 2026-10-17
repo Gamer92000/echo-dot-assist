@@ -1924,6 +1924,20 @@ Run in this order. Each step says what it proves.
       5 min. PR #37's first version (a counter floored by the clock) left up to an hour of drops. fake_ha_arbitration:
       state file removed on a killed Echo, a new id, back in the network, its better claim counted (fails without
       the fix); fake_ha_dropin, fake_web, fake_web_artifacts pass.
+- [x] Every other state file had #36's `rename` without `fsync` (2026-10-17, GitHub issue #46): `state/config`,
+      `web_clients`, `web_key` (written in place, no temp file: a reset left it empty, every browser lost), the ESPHome
+      key (adopted again), `davs` (0600 only after the write), BLE bonds, A2DP keys and speaker, Sendspin (no error
+      checked at all), microWakeWord manifests and models (the folder swap: a model from another Echo came through
+      artifacts.c's stage unsynced), `write_state()`, the avahi service file, `clock`/`timezone` and root's requests
+      (ota, wifi, adbwifi, artifacts). Now all through `statefile.c`: a temp name per write (`PATH.tmp<0..99>`: one
+      shared name let a second writer unlink the first's temp file, which then renamed the second's still empty one
+      into place and reported success; `adbwifi_ask` has three unserialized callers), opened fresh (`O_EXCL|O_NOFOLLOW`,
+      a stale one removed first), `fflush` + `fsync`, `rename`, `fsync` of the folder; `arb.c` and `arb_key` use it
+      too. `tests/unit/statefile_test.c` (in `make unit`): order fsync/rename/folder fsync (`--wrap`), modes, abort,
+      stale temp files, links as temp files, a failed rename, two threads writing one file (fails with one name).
+      Open: `noauto_da_alloc` on `/data` not checked on any model yet (`adb shell grep /data /proc/mounts`; the fix
+      holds either way); the fsync's time on the Echos not measured: `settings_save` pays it under `core_lock`, once
+      per setting changed from HA or the page.
 - [~] From #33 (Echo Show 8), for every model (2026-10-17, GitHub issue #45):
       Restart lost: `stop hassmic; start hassmic` in main.sh's ota_watch. Both services are `disabled oneshot`; toolbox
       `stop`/`start` only set `ctl.stop`/`ctl.start` and return, and init (7.1) `Service::Start` returns early while

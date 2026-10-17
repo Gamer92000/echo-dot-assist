@@ -30,6 +30,7 @@
 #include "hash.h"
 #include "net.h"
 #include "wake.h"
+#include "statefile.h"
 #include <ctype.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -377,14 +378,12 @@ static void identity_read(void)
 
 static void tokens_save(void)                                 /* lk held */
 {
-    char p[300], tmp[320]; FILE *f;
-    snprintf(p, sizeof p, "%s/davs", state_dir()); snprintf(tmp, sizeof tmp, "%s.tmp", p);
-    if (!(f = fopen(tmp, "w"))) { fprintf(stderr, "davs: cannot write %s\n", tmp); return; }
-    fprintf(f, "domain %s\nname %s\nmarketplace %s\nrefresh %s\naccess %s\nexpires %lld\n",
+    char p[300]; struct statefile s;
+    snprintf(p, sizeof p, "%s/davs", state_dir());
+    if (statefile_open(&s, p, 0600)) { fprintf(stderr, "davs: cannot write %s.tmp\n", p); return; }   /* 0600 from the start: tokens */
+    fprintf(s.f, "domain %s\nname %s\nmarketplace %s\nrefresh %s\naccess %s\nexpires %lld\n",
             domain, device_name, marketplace, refresh_token, access_token, access_until);
-    fclose(f);
-    chmod(tmp, 0600);
-    if (rename(tmp, p)) unlink(tmp);
+    if (statefile_commit(&s)) fprintf(stderr, "davs: cannot write %s\n", p);
 }
 
 static void tokens_load(void)

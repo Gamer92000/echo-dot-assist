@@ -29,6 +29,7 @@
  */
 #include "clock.h"
 #include "tz.h"
+#include "statefile.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -61,15 +62,14 @@ int clock_synced(void)
 
 void clock_from_ha(uint32_t epoch)
 {
-    char p[300], tmp[310]; FILE *f; struct timespec bt;
+    char p[300], t[64]; struct timespec bt;
     long long off = (long long)epoch - (long long)time(NULL);
     if (epoch < EPOCH_MIN) { fprintf(stderr, "clock: Home Assistant says %u, earlier than this build: ignored\n", epoch); return; }
     if (clock_synced() && off >= -2 && off <= 2) return;
     clock_gettime(CLOCK_BOOTTIME, &bt);
-    snprintf(p, sizeof p, "%s/clock", state_dir()); snprintf(tmp, sizeof tmp, "%s.tmp", p);
-    if (!(f = fopen(tmp, "w"))) { fprintf(stderr, "clock: cannot write %s\n", tmp); return; }
-    fprintf(f, "%u %lld.%02ld\n", epoch, (long long)bt.tv_sec, bt.tv_nsec / 10000000);
-    if (fclose(f) || rename(tmp, p)) { unlink(tmp); fprintf(stderr, "clock: cannot write %s\n", p); return; }
+    snprintf(p, sizeof p, "%s/clock", state_dir());
+    snprintf(t, sizeof t, "%u %lld.%02ld\n", epoch, (long long)bt.tv_sec, bt.tv_nsec / 10000000);
+    if (statefile_write(p, 0666, t, strlen(t))) { fprintf(stderr, "clock: cannot write %s\n", p); return; }
     fprintf(stderr, "clock: Home Assistant's time handed to root, this Echo's clock is %lld s %s\n", off < 0 ? -off : off, off < 0 ? "ahead" : "behind");
 }
 
@@ -80,7 +80,7 @@ static const char *const TZDATA[] = { "/data/misc/zoneinfo/current/tzdata", "/da
 void clock_zone_from_ha(const char *posix)
 {
     static char told[100];
-    char cur[100] = "", zone[100] = "", p[300], tmp[310]; FILE *f;
+    char cur[100] = "", zone[100] = "", p[300], line[104];
     size_t n = strlen(posix);
     if (!n) return;                                     /* an older Home Assistant (aioesphomeapi) says none */
     /* a property value (92 bytes with its end), nothing root's shell would read as more than a word, and a rule, not a
@@ -102,10 +102,8 @@ void clock_zone_from_ha(const char *posix)
     for (size_t i = 0; !t && !found && i < sizeof TZDATA / sizeof *TZDATA; i++) found = tz_lookup(TZDATA[i], posix, cur, zone, sizeof zone);
     if (!found) snprintf(zone, sizeof zone, "%s", posix);
     if (!strcmp(zone, cur)) return;
-    snprintf(p, sizeof p, "%s/timezone", state_dir()); snprintf(tmp, sizeof tmp, "%s.tmp", p);
-    if (!(f = fopen(tmp, "w"))) { fprintf(stderr, "time zone: cannot write %s\n", tmp); return; }
-    fprintf(f, "%s\n", zone);
-    if (fclose(f) || rename(tmp, p)) { unlink(tmp); fprintf(stderr, "time zone: cannot write %s\n", p); return; }
+    snprintf(p, sizeof p, "%s/timezone", state_dir()); snprintf(line, sizeof line, "%s\n", zone);
+    if (statefile_write(p, 0666, line, strlen(line))) { fprintf(stderr, "time zone: cannot write %s\n", p); return; }
     if (strcmp(told, zone) && found) fprintf(stderr, "time zone: Home Assistant's, %s (%s), handed to root (was %s)\n", zone, posix, cur[0] ? cur : "none");
     else if (strcmp(told, zone)) fprintf(stderr, "time zone: Home Assistant's rule %s handed to root as it is: no zone of this Echo's data has it (was %s)\n", posix, cur[0] ? cur : "none");
     snprintf(told, sizeof told, "%s", zone);

@@ -12,6 +12,7 @@
 #include "spkgain.h"
 #include "update.h"
 #include "wifimotion.h"
+#include "statefile.h"
 #include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
@@ -276,12 +277,12 @@ static int ours(enum id i) { return i != ARB && i != SS_UNPAIRED && i != EQ_BASS
 
 void settings_save(void)
 {
-    char p[300], tmp[310], v[48]; FILE *f;
-    path(p, sizeof p, "config"); snprintf(tmp, sizeof tmp, "%s.tmp", p);
-    if (!(f = fopen(tmp, "w"))) { fprintf(stderr, "settings: cannot write %s\n", tmp); return; }
-    fprintf(f, "# hassmic settings: name=value; the web page and Home Assistant write it\n");
-    for (int i = 0; i < NSET; i++) if (ours(i) && present(i)) { format(&table[i], v, sizeof v); fprintf(f, "%s=%s\n", table[i].name, v); }
-    if (fclose(f) || rename(tmp, p)) { remove(tmp); fprintf(stderr, "settings: cannot write %s\n", p); }
+    char p[300], v[48]; struct statefile s;
+    path(p, sizeof p, "config");
+    if (statefile_open(&s, p, 0666)) { fprintf(stderr, "settings: cannot write %s.tmp\n", p); return; }
+    fprintf(s.f, "# hassmic settings: name=value; the web page and Home Assistant write it\n");
+    for (int i = 0; i < NSET; i++) if (ours(i) && present(i)) { format(&table[i], v, sizeof v); fprintf(s.f, "%s=%s\n", table[i].name, v); }
+    if (statefile_commit(&s)) fprintf(stderr, "settings: cannot write %s\n", p);
 }
 
 /* The file before names (one line of numbers): 5 fields (before Bluetooth announcements), 6 (before do not disturb), 7

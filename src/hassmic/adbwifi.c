@@ -7,6 +7,7 @@
  * adb-open in a directory only root writes, which exists exactly while the port is open.
  */
 #include "adbwifi.h"
+#include "statefile.h"
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -40,12 +41,7 @@ int adbwifi_granted(void) { return access(req_path(), F_OK) && !access(open_path
 
 void adbwifi_ask(int on)
 {
-    char tmp[320];
-    snprintf(tmp, sizeof tmp, "%s.tmp", req_path());
-    FILE *f = fopen(tmp, "w");
-    int ok = f && fprintf(f, "%d\n", on != 0) > 0;
-    if (f && fclose(f)) ok = 0;
-    if (!ok || rename(tmp, req_path())) {
+    if (statefile_write(req_path(), 0666, on ? "1\n" : "0\n", 2)) {
         fprintf(stderr, "adb over Wi-Fi: cannot write %s\n", req_path());
         return;
     }

@@ -4,6 +4,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-17
 
+- **Settings, pairings and the Home Assistant link survive a power cut.** A power cut or hard reset shortly after the
+  Echo saved something could leave that file empty: every setting back to default, approved browsers, Bluetooth and
+  Music Assistant pairings gone, or the Echo needing to be adopted in Home Assistant again. Every file the Echo keeps
+  is now on the flash before it replaces the old one, so a reset leaves the old content or the new one.
 - **The Echo follows Home Assistant's time zone.** It already took the time from Home Assistant; now the zone comes
   with it, on every model, and a change in Home Assistant reaches the Echo within 6 hours. The log stays in UTC.
 - **The Echo answers ping from your network.** Home Assistant's Ping integration, a router's device list or a plain

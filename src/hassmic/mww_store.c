@@ -4,6 +4,7 @@
  * change the core lists the wake words anew (core_wake_models_changed). */
 #include "mww.h"
 #include "core.h"
+#include "statefile.h"
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -138,7 +139,7 @@ static size_t jesc(char *out, size_t cap, const char *s)
 
 static int write_manifest(const char *path, const struct mww_info *i)
 {
-    char tmp[340], name[200], author[200], web[400], langs[300] = ""; FILE *f; size_t n = 0;
+    char name[200], author[200], web[400], langs[300] = ""; struct statefile sf; size_t n = 0;
     jesc(name, sizeof name, i->name); jesc(author, sizeof author, i->author); jesc(web, sizeof web, i->website);
     for (const char *s = i->langs; *s; ) {
         size_t l = strcspn(s, ","); char one[64], esc[140];
@@ -146,13 +147,11 @@ static int write_manifest(const char *path, const struct mww_info *i)
         if (n + strlen(esc) + 4 < sizeof langs) n += (size_t)snprintf(langs + n, sizeof langs - n, "%s\"%s\"", n ? ", " : "", esc);
         s += l + (s[l] == ',');
     }
-    snprintf(tmp, sizeof tmp, "%s.tmp", path);
-    if (!(f = fopen(tmp, "w"))) return -1;
-    fprintf(f, "{\n  \"type\": \"micro\",\n  \"wake_word\": \"%s\",\n  \"author\": \"%s\",\n  \"website\": \"%s\",\n  \"model\": \"model.tflite\",\n"
+    if (statefile_open(&sf, path, 0644)) return -1;
+    fprintf(sf.f, "{\n  \"type\": \"micro\",\n  \"wake_word\": \"%s\",\n  \"author\": \"%s\",\n  \"website\": \"%s\",\n  \"model\": \"model.tflite\",\n"
                "  \"trained_languages\": [%s],\n  \"version\": 2,\n  \"micro\": {\n    \"probability_cutoff\": %.2f,\n"
                "    \"sliding_window_size\": %d,\n    \"feature_step_size\": 10\n  }\n}\n", name, author, web, langs, i->cutoff, i->window);
-    if (fclose(f) || rename(tmp, path)) { unlink(tmp); return -1; }
-    return 0;
+    return statefile_commit(&sf);
 }
 
 /* ---------------------------------------------------------------- reading */
@@ -247,24 +246,29 @@ static void rm_dir(const char *dir)             /* a model folder: files only */
     rmdir(dir);
 }
 
+/* every file of a model folder, and the folder, on the flash: a folder from another Echo came through artifacts.c's
+ * stage, written without (a hard reset after the swap would leave an empty model.tflite in place of the old one) */
+static int sync_files(const char *dir)
+{
+    DIR *d = opendir(dir); struct dirent *e; char p[400]; int r = 0;
+    if (!d) return -1;
+    while ((e = readdir(d))) if (e->d_name[0] != '.') { snprintf(p, sizeof p, "%s/%s", dir, e->d_name); r |= statefile_sync(p); }
+    closedir(d);
+    return r | statefile_sync(dir);
+}
+
 /* the folder NEW becomes model ID, the old one (if any) goes */
 static int swap_in(const char *fresh, const char *id, char *err, size_t errsz)
 {
     char dst[300], old[320];
     snprintf(dst, sizeof dst, "%.250s/%.40s", mww_dir(), id); snprintf(old, sizeof old, "%.250s/.old-%.40s", mww_dir(), id);
     rm_dir(old);
+    if (sync_files(fresh)) { snprintf(err, errsz, "cannot write %s", fresh); return -1; }
     if (rename(dst, old) && errno != ENOENT) { snprintf(err, errsz, "cannot replace %s", id); return -1; }
     if (rename(fresh, dst)) { rename(old, dst); snprintf(err, errsz, "cannot write %s", dst); return -1; }
+    statefile_sync(mww_dir());                  /* both renames on the flash before the old folder goes */
     rm_dir(old);
     return 0;
-}
-
-static int write_file(const char *path, const void *data, size_t n)
-{
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
-    if (fd < 0) return -1;
-    ssize_t w = write(fd, data, n);
-    return close(fd) || w != (ssize_t)n ? -1 : 0;
 }
 
 static int count_others(const char *id)
@@ -299,7 +303,7 @@ int mww_add(const char *id, const char *json, size_t jn, const void *model, size
     if (mkdir(fresh, 0755)) snprintf(err, errsz, "cannot write %s", fresh);
     else {
         snprintf(p, sizeof p, "%s/model.tflite", fresh);
-        if (write_file(p, model, mn)) snprintf(err, errsz, "cannot write the model (space?)");
+        if (statefile_write(p, 0644, model, mn)) snprintf(err, errsz, "cannot write the model (space?)");
         else {
             snprintf(p, sizeof p, "%s/manifest.json", fresh);
             if (write_manifest(p, &i)) snprintf(err, errsz, "cannot write the manifest");

@@ -42,6 +42,7 @@
 #include "core.h"
 #include "hci.h"
 #include "a2dp_codec.h"
+#include "statefile.h"
 
 #define MAX_LINKS 3                     /* a phone playing to us, the speaker we play to, one more */
 #define MAX_CHANS 6                     /* per link: SDP, AVDTP signalling + media, and room for a retry */
@@ -97,15 +98,15 @@ static void keys_load(void)                     /* one line per device: address 
 
 static void keys_save(void)
 {
-    char tmp[300]; snprintf(tmp, sizeof tmp, "%s.tmp", keys_path());
-    int fdw = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600); FILE *f = fdw >= 0 ? fdopen(fdw, "w") : NULL;
-    if (!f) { if (fdw >= 0) close(fdw); fprintf(stderr, "a2dp: cannot write %s\n", tmp); return; }
+    struct statefile s; FILE *f;
+    if (statefile_open(&s, keys_path(), 0600)) { fprintf(stderr, "a2dp: cannot write %s.tmp\n", keys_path()); return; }
+    f = s.f;
     for (int i = 0; i < nkeys; i++) {
         fprintf(f, "%012llx %u ", (unsigned long long)keys[i].addr, keys[i].type);
         for (int j = 0; j < 16; j++) fprintf(f, "%02x", keys[i].k[j]);
         fputc('\n', f);
     }
-    if (fclose(f) || rename(tmp, keys_path())) { unlink(tmp); fprintf(stderr, "a2dp: cannot write %s\n", keys_path()); }
+    if (statefile_commit(&s)) fprintf(stderr, "a2dp: cannot write %s\n", keys_path());
 }
 
 static struct key *key_for(uint64_t a) { for (int i = 0; i < nkeys; i++) if (keys[i].addr == a) return &keys[i]; return NULL; }
@@ -1018,13 +1019,12 @@ static void speaker_load(void)                  /* address, play on it, latency 
 
 static void speaker_save(void)
 {
-    char tmp[300]; snprintf(tmp, sizeof tmp, "%s.tmp", speaker_path());
-    FILE *f = fopen(tmp, "w");
-    if (!f) { fprintf(stderr, "a2dp: cannot write %s\n", tmp); return; }
+    struct statefile s;
+    if (statefile_open(&s, speaker_path(), 0666)) { fprintf(stderr, "a2dp: cannot write %s.tmp\n", speaker_path()); return; }
     pthread_mutex_lock(&out_lock);
-    fprintf(f, "%012llx %d %d %s\n", (unsigned long long)out.addr, out.on, atomic_load(&out_delay), out.name);
+    fprintf(s.f, "%012llx %d %d %s\n", (unsigned long long)out.addr, out.on, atomic_load(&out_delay), out.name);
     pthread_mutex_unlock(&out_lock);
-    if (fclose(f) || rename(tmp, speaker_path())) { unlink(tmp); fprintf(stderr, "a2dp: cannot write %s\n", speaker_path()); }
+    if (statefile_commit(&s)) fprintf(stderr, "a2dp: cannot write %s\n", speaker_path());
 }
 
 static void out_name(const char *name)

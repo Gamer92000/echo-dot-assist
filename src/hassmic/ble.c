@@ -56,6 +56,7 @@
 #include "core.h"
 #include "ble_crypto.h"
 #include "hci.h"
+#include "statefile.h"
 
 #define SCAN_INTERVAL 512                       /* 320 ms, units of 0.625 ms */
 #define SCAN_WINDOW 48                          /* 30 ms */
@@ -740,9 +741,9 @@ static void bonds_load(void)
 
 static void bonds_save(void)
 {
-    char tmp[300]; snprintf(tmp, sizeof tmp, "%s.tmp", bonds_path());
-    int fdw = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600); FILE *f = fdw >= 0 ? fdopen(fdw, "w") : NULL;
-    if (!f) { if (fdw >= 0) close(fdw); fprintf(stderr, "bluetooth: cannot write %s\n", tmp); return; }
+    struct statefile s; FILE *f;
+    if (statefile_open(&s, bonds_path(), 0600)) { fprintf(stderr, "bluetooth: cannot write %s.tmp\n", bonds_path()); return; }
+    f = s.f;
     for (int i = 0; i < nbonds; i++) {
         struct bond *b = &bonds[i];
         fprintf(f, "%012llx %u %u %u %u ", (unsigned long long)b->addr, b->type, b->sc, b->keysize, b->ediv);
@@ -750,7 +751,7 @@ static void bonds_save(void)
         if (b->has_irk) hexout(f, b->irk, 16); else fputs("- ", f);
         fputc('\n', f);
     }
-    if (fclose(f) || rename(tmp, bonds_path())) { unlink(tmp); fprintf(stderr, "bluetooth: cannot write %s\n", bonds_path()); }
+    if (statefile_commit(&s)) fprintf(stderr, "bluetooth: cannot write %s\n", bonds_path());
 }
 
 static void addr_bytes(uint64_t a, unsigned char o[6]) { for (int i = 0; i < 6; i++) o[i] = a >> (8 * i); }

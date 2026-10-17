@@ -37,6 +37,7 @@
 #include "netio.h"
 #include "noise.h"
 #include "ws.h"
+#include "statefile.h"
 #define DR_FLAC_IMPLEMENTATION
 #define DR_FLAC_NO_STDIO
 #define DR_FLAC_NO_OGG
@@ -310,10 +311,8 @@ static int load_file(const char *name, void *buf, size_t len)
 
 static void save_file(const char *name, const void *buf, size_t len)
 {
-    char path[256], tmp[280]; state_path(path, sizeof path, name); snprintf(tmp, sizeof tmp, "%s.tmp", path);
-    FILE *f = fopen(tmp, "wb");
-    if (!f) { fprintf(stderr, "sendspin: cannot write %s\n", path); return; }
-    fwrite(buf, 1, len, f); fclose(f); chmod(tmp, 0600); rename(tmp, path);
+    char path[256]; state_path(path, sizeof path, name);
+    if (statefile_write(path, 0600, buf, len)) fprintf(stderr, "sendspin: cannot write %s\n", path);
 }
 
 static void psk_id(const uint8_t psk[32], char out[48])

@@ -79,6 +79,7 @@
 #include "wifimotion.h"
 #include "net.h"
 #include "netio.h"
+#include "statefile.h"
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_NO_SIMD                 /* plain C: same code on the PC and on the armv7 build */
 #include "../third_party/minimp3.h"
@@ -281,20 +282,19 @@ static void print_mdns(void) { key_load(); print_mdns_to(stdout); }
 /* The service file main.sh wrote at boot names the encryption state: rewrite it when that changes (avahi notices). */
 static void mdns_refresh(void)
 {
-    const char *path = getenv("HASSMIC_MDNS_FILE"); char tmp[300]; FILE *f;
+    const char *path = getenv("HASSMIC_MDNS_FILE"); struct statefile s;
     if (!path) path = "/data/misc/avahi/services/hassmic.service";
     if (access(path, F_OK)) return;
-    snprintf(tmp, sizeof tmp, "%s.tmp", path);
-    if (!(f = fopen(tmp, "w"))) { fprintf(stderr, "encryption: cannot update %s\n", path); return; }
-    print_mdns_to(f);
-    if (fclose(f) || rename(tmp, path)) { fprintf(stderr, "encryption: cannot update %s\n", path); unlink(tmp); return; }
-    chmod(path, 0644);
+    if (statefile_open(&s, path, 0644)) { fprintf(stderr, "encryption: cannot update %s\n", path); return; }
+    fchmod(fileno(s.f), 0644);                      /* avahi reads it: past hassmic's umask */
+    print_mdns_to(s.f);
+    if (statefile_commit(&s)) fprintf(stderr, "encryption: cannot update %s\n", path);
 }
 
 /* lock held.  k: base64 as Home Assistant sends it; empty clears.  Returns 1 on success. */
 static int key_set(const unsigned char *k, size_t len)
 {
-    uint8_t raw[32]; char tmp[300]; FILE *f;
+    uint8_t raw[32]; struct statefile s;
     if (!len) {
         if (unlink(key_path()) && errno != ENOENT) { fprintf(stderr, "encryption: cannot remove %s\n", key_path()); return 0; }
         memset(api_key, 0, sizeof api_key); have_key = 0; fprintf(stderr, "encryption: key cleared, plaintext connections accepted again\n");
@@ -303,11 +303,9 @@ static int key_set(const unsigned char *k, size_t len)
     char t[64]; if (len >= sizeof t) return 0;
     memcpy(t, k, len); t[len] = 0;
     if (b64_decode(t, len, raw, sizeof raw) != 32) { fprintf(stderr, "encryption: rejected a key that is not 32 bytes\n"); return 0; }
-    snprintf(tmp, sizeof tmp, "%s.tmp", key_path());
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0 || !(f = fdopen(fd, "w"))) { if (fd >= 0) close(fd); fprintf(stderr, "encryption: cannot write %s\n", tmp); return 0; }
-    fprintf(f, "%s\n", t);
-    if (fclose(f) || rename(tmp, key_path())) { unlink(tmp); fprintf(stderr, "encryption: cannot write %s\n", key_path()); return 0; }
+    if (statefile_open(&s, key_path(), 0600)) { fprintf(stderr, "encryption: cannot write %s.tmp\n", key_path()); return 0; }
+    fprintf(s.f, "%s\n", t);
+    if (statefile_commit(&s)) { fprintf(stderr, "encryption: cannot write %s\n", key_path()); return 0; }
     memcpy(api_key, raw, 32); have_key = 1;
     fprintf(stderr, "encryption: key set, only encrypted connections with it from now on\n");
     mdns_refresh();
