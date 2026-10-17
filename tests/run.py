@@ -39,8 +39,9 @@ TESTS = [
 
 
 def netns(argv):
-    """argv in a network namespace of its own with lo up, as the caller's uid again"""
-    inner = "ip link set lo up && exec unshare -U --map-user=%d --map-group=%d \"$@\"" % (os.getuid(), os.getgid())
+    """argv in a network namespace of its own with lo up, as the caller's uid again; multicast on it for zeroconf
+    (aiosendspin, avahi stand-ins), which fails without an interface that takes the mDNS group (ENODEV)"""
+    inner = "ip link set lo multicast on up && ip route add 224.0.0.0/4 dev lo && exec unshare -U --map-user=%d --map-group=%d \"$@\"" % (os.getuid(), os.getgid())
     return ["unshare", "-rn", "sh", "-c", inner, "sh", *argv]
 
 
