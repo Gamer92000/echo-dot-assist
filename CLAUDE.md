@@ -375,7 +375,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `/system/etc/layer_config_common.json.pre-hassmic`, digest `/system/etc/hassmic-leds.digest`), ledcontroller
   restarts.  hassmic lists the light only when the installed digest is its own.  Every pattern of the core goes
   through `led()` -> `ring_set`/`ring_unset`, which knows from each file how long it shows; while one does, HA's light
-  is off.  The beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N`
+  is off.  ledctrl runs through `ledq.c` (issue #40): one call at a time, in order, each waited for, in its own thread
+  (started together, an unset can overtake its set and leave the pattern on).  The beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N`
   when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
   `HASSMIC_FAKE_BEAM`.
 - `src/include/`: headers for the reversed Amazon libraries (`mixer_api.h`, `pryon_api.h`, `aipc_api.h`) and `netio.h`.

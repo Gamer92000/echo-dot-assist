@@ -1712,8 +1712,12 @@ Run in this order. Each step says what it proves.
       and `-u` of a talking ring started at once left it lit 2 times in 5, 20 ms apart 0 in 5, the `-u` after the `-s`
       returned 0 in 15 (`ledctrl -g` is no help here: it lists patterns already unset). Seen on two Dot 2s after replies
       of 19 and 41 ms (talking set and unset in that time): the talking ring lit on an idle Echo until the next wake word.
-      `led_run` now queues and one thread runs them one at a time, each waited for (`run_output`: its output closed), so
-      the core never waits for ledcontroller; 64 queued at most (more are dropped, with a log line).
+      `ledq.c`: one thread runs them one at a time, each waited for (a pipe the child keeps across exec, closed when
+      ledctrl exits: SIGCHLD is ignored, and stdout ends no wait, ledctrl chats on it), killed after 2 s so a hanging
+      ledctrl does not stop the ring for good; stderr still in the log; 64 queued at most, then the oldest queued set
+      gives way (an unset lost is this bug again). The fake file of the PC tests goes through the same queue;
+      `tests/unit/ledq_test.c` against a shell stand-in for ledctrl. Not measured yet: how long one ledctrl takes on
+      the Echo, i.e. how late a call behind others shows (they no longer run side by side).
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
