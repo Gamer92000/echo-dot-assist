@@ -21,6 +21,7 @@ int  ring_generate(const char *dir);
 /* run: plays (op "-s") or stops ("-u") a pattern, ledctrl's options.  Looks whether the installed set is this build's */
 void ring_start(void (*run)(const char *op, const char *name));
 int  ring_custom(void);                     /* ours are in ledcontroller: Home Assistant gets the light */
+int  ring_assistant_steps(void);            /* and "hassmic_assist_NN": stock's volume_step-NN in cyan */
 /* The Echo's own patterns (stock's names): while one shows, Home Assistant's light is off.  "active-start" and
  * "active-end" are played turned towards the talker (ours) where we can read the beam */
 void ring_set(const char *pattern);

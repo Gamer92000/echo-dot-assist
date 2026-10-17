@@ -72,13 +72,14 @@ static short *load_mp3(const char *path, size_t *samples, unsigned *rate)
 
 int sound_get(enum sound s, const short **pcm, size_t *samples, unsigned *rate)
 {
-    char path[160];
+    char path[300]; const char *dir = getenv("HASSMIC_EARCONS");    /* tests: stand-ins for stock's, "<dir>/" */
     if (s < 0 || s >= SND_COUNT) return 0;
+    if (!dir) dir = board.earcon_dir;
     if (!cache[s].tried) {
         cache[s].tried = 1;
-        snprintf(path, sizeof path, "%s%s.wav", board.earcon_dir, names[s]);
+        snprintf(path, sizeof path, "%s%s.wav", dir, names[s]);
         cache[s].pcm = load_wav(path, &cache[s].n, &cache[s].rate);
-        if (!cache[s].pcm) { snprintf(path, sizeof path, "%s%s.mp3", board.earcon_dir, names[s]); cache[s].pcm = load_mp3(path, &cache[s].n, &cache[s].rate); }
+        if (!cache[s].pcm) { snprintf(path, sizeof path, "%s%s.mp3", dir, names[s]); cache[s].pcm = load_mp3(path, &cache[s].n, &cache[s].rate); }
         if (!cache[s].pcm) fprintf(stderr, "sound %s: not on this image, using the built-in tone\n", names[s]);
     }
     if (!cache[s].pcm) return 0;

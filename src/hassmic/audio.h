@@ -13,6 +13,7 @@ void cap_close(void);
 
 int  play_open(unsigned rate, unsigned channels);
 int  play_write(const void *data, size_t len);      /* blocks at playback speed */
+void audio_tts_gain(float gain);                    /* as audio_music_gain (below), for this stream: replies */
 void play_close(int drain);
 
 /* Second, independent playback stream for music (Sendspin); mixes with the voice stream.  One at a time.
@@ -21,6 +22,12 @@ int       music_open(unsigned rate, unsigned channels);
 int       music_write(const void *data, size_t len);
 long long music_queued_us(void);
 void      music_close(void);
+
+/* What the music and Bluetooth streams' PCM is multiplied by before the mixer gets it: 1, or less while the volumes
+ * are separate and MainVolume is louder than the music's (main.c); audio_call_gain the same for the Voip stream (Drop
+ * In's far end).  Any thread */
+void      audio_music_gain(float gain);
+void      audio_call_gain(float gain);
 
 /* Bluetooth speaker stream: like the music stream, beside it */
 int       bt_open(unsigned rate, unsigned channels);

@@ -795,22 +795,26 @@ enum { PDU_GET_CAPS = 0x10, PDU_REGISTER = 0x31, PDU_SET_VOLUME = 0x50, EVENT_VO
 #define PANEL 0x48                                      /* subunit type panel (9), ID 0 */
 
 static atomic_int echo_volume = -1, vol_dirty, key_req, avrcp_links;
+static atomic_int out_volume = -1;                      /* a2dp_speaker_volume; -1: echo_volume */
 
 /* Setting the Echo's volume runs helper programs (mixer property, LED ring) and takes core_lock: far too slow for the
  * controller thread, whose stalls empty the jitter buffer.  A thread of its own does it, latest request wins. */
 static pthread_mutex_t vol_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t vol_cond = PTHREAD_COND_INITIALIZER;
-static int vol_want = -1;                               /* vol_lock */
+static int vol_want = -1, spk_want = -1;                /* vol_lock: from a phone; from the speaker's own buttons */
 
 static void *volume_thread(void *arg)
 {
     (void)arg;
     for (;;) {
         pthread_mutex_lock(&vol_lock);
-        while (vol_want < 0) pthread_cond_wait(&vol_cond, &vol_lock);
-        int v = vol_want; vol_want = -1;
+        while (vol_want < 0 && spk_want < 0) pthread_cond_wait(&vol_cond, &vol_lock);
+        int v = vol_want, s = spk_want; vol_want = spk_want = -1;
         pthread_mutex_unlock(&vol_lock);
-        pthread_mutex_lock(&core_lock); core_set_volume(v); pthread_mutex_unlock(&core_lock);
+        pthread_mutex_lock(&core_lock);
+        if (v >= 0) core_set_volume(v);
+        if (s >= 0) core_speaker_volume(s);
+        pthread_mutex_unlock(&core_lock);
     }
     return NULL;
 }
@@ -819,12 +823,17 @@ static void volume_set_later(int pct)
 {
     pthread_mutex_lock(&vol_lock); vol_want = pct; pthread_cond_signal(&vol_cond); pthread_mutex_unlock(&vol_lock);
 }
+static void speaker_set_later(int pct)
+{
+    pthread_mutex_lock(&vol_lock); spk_want = pct; pthread_cond_signal(&vol_cond); pthread_mutex_unlock(&vol_lock);
+}
 
 static int volume_now(void)                             /* 0..100; read at start, then kept up to date by the core */
 {
     int v = atomic_load(&echo_volume);
     return v < 0 ? 50 : v;
 }
+static int out_volume_now(void) { int v = atomic_load(&out_volume); return v < 0 ? volume_now() : v; }
 
 static void avctp_send(struct link *l, unsigned label, int response, const unsigned char *avc, size_t n)
 {
@@ -1271,7 +1280,7 @@ static void out_avrcp_answer(unsigned code, unsigned pdu, const unsigned char *p
                 int pct = (v * 100 + 63) / 127;
                 out.sent_v = v;
                 /* standing by (or on the way there or back): the Echo keeps its own, the speaker's waits for the route */
-                if (btout_speaker_volume()) { atomic_store(&echo_volume, pct); volume_set_later(pct); }
+                if (btout_speaker_volume()) { atomic_store(&out_volume, pct); speaker_set_later(pct); }
                 else btout_absvol(1, pct);
             }
             out_register_volume();                      /* a notification is good for one change */
@@ -1291,7 +1300,7 @@ static void out_volume_upkeep(long long now)
     if (out.absvol == A_UNKNOWN) { out.absvol = A_ASKED; out.avol_at = now + 3000; out_register_volume(); }
     else if (out.absvol == A_ASKED && now > out.avol_at) { out.absvol = A_NO; fprintf(stderr, "a2dp: speaker does not answer about its volume\n"); }
     /* only while the Echo's volume is the speaker's: standing by, it is the Echo's own */
-    else if (out.absvol == A_ON && btout_speaker_volume() && (volume_now() * 127 + 50) / 100 != out.sent_v) out_set_volume(volume_now());
+    else if (out.absvol == A_ON && btout_speaker_volume() && (out_volume_now() * 127 + 50) / 100 != out.sent_v) out_set_volume(out_volume_now());
 }
 
 static void out_link_up(struct link *l, int paged)
@@ -1663,6 +1672,7 @@ int a2dp_setup(void)
 
 void a2dp_pair(int on) { atomic_store(&pair_req, on != 0); hci_poke(); }
 void a2dp_volume_changed(int percent) { atomic_store(&echo_volume, percent); atomic_store(&vol_dirty, 1); hci_poke(); }
+void a2dp_speaker_volume(int percent) { if (atomic_exchange(&out_volume, percent) != percent) hci_poke(); }
 
 int a2dp_button(int resume)
 {

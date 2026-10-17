@@ -73,7 +73,7 @@ static void handle(const struct wy_event *ev)
         long rate = TTS_RATE, ch = 1, width = 2;
         wy_json_int(ev->json, "rate", &rate); wy_json_int(ev->json, "channels", &ch); wy_json_int(ev->json, "width", &width);
         if (width != 2) fprintf(stderr, "play: unsupported sample width %ld, expect noise\n", width);
-        core_tts_begin(rate, ch);
+        core_tts_begin(rate, ch, 0);
     } else if (!strcmp(t, "audio-stop")) core_tts_end();
     else if (!strcmp(t, "error")) { fprintf(stderr, "server error: %s\n", ev->json); core_error(); }
     pthread_mutex_unlock(&core_lock);

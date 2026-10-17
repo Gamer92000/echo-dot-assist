@@ -16,6 +16,8 @@
  * (they are told here, ring_set): the issue asked for the Echo's states first, and per-LED composition would mix the
  * light into the gaps of the listening ring or the volume steps.  Its colour is the nearest of the palette: 24 hues,
  * full or half saturation or white, at 3 levels, each as solid, pulse, spin and blink, and a rainbow at the 3 levels.
+ * Stock's white volume steps once more in cyan, for the Assistant's own volume (separate volumes, main.c), just before
+ * stock's in their layer.
  */
 #include "ring.h"
 #include "hash.h"
@@ -35,7 +37,7 @@
 #define HUES     24
 #define LEVELS   3
 #define MAX_LEDS 24
-#define FORMAT   "hassmic ring 2"           /* in the digest: a change of the palette's layout changes it */
+#define FORMAT   "hassmic ring 3"           /* in the digest: a change of the palette's layout changes it */
 /* As seen: 100, 66 and 38 %.  The LED driver takes linear duty, so every channel goes through gamma 2.2 (colour_rgb):
  * 1, 0.4 and 0.12 in the file.  A dim level any lower vanishes under auto brightness in a dark room, where the ring
  * itself runs at a tenth */
@@ -260,28 +262,59 @@ static const char *layer_open(const char *t, const char *layer)
 }
 
 /* stock's config with names4 first in layer 4 (stock's "active-start" is there; first: they never wait behind another
- * of that layer, as stock's turned pair waits behind none of what hassmic plays with it) and names0 last in layer 0 (the
- * light: under everything of stock's) */
-static int merge_config(struct buf *out, const char *stock, const char *names4, const char *names0)
+ * of that layer, as stock's turned pair waits behind none of what hassmic plays with it), names0 last in layer 0 (the
+ * light: under everything of stock's) and namesv just before stock's first volume step (the Assistant's steps show
+ * as stock's would) */
+static int merge_config(struct buf *out, const char *stock, const char *names4, const char *names0, const char *namesv)
 {
-    const char *l4 = layer_open(stock, "4"), *l0 = layer_open(stock, "0");
+    const char *l4 = layer_open(stock, "4"), *l0 = layer_open(stock, "0"), *v1 = strstr(stock, "\"volume_step-");
     if (!l4 || !l0 || strstr(stock, "hassmic_")) return -1;
     const char *e0 = strchr(l0, ']');
     if (!e0) return -1;
     const char *last0 = e0;
     while (last0 > l0 && isspace((unsigned char)last0[-1])) last0--;
     const char *n4 = l4; while (isspace((unsigned char)*n4)) n4++;
-    struct { const char *at; int kind; } ins[2] = { { l4, 4 }, { last0, 0 } };
-    if (ins[1].at < ins[0].at) { ins[0].at = last0; ins[0].kind = 0; ins[1].at = l4; ins[1].kind = 4; }
+    struct { const char *at; int kind; } ins[3] = { { l4, 4 }, { last0, 0 }, { v1, 'v' } }, t;
+    int k = *namesv && v1 ? 3 : 2;
+    for (int i = 0; i < k; i++)             /* in the order they come in the file */
+        for (int j = i + 1; j < k; j++) if (ins[j].at < ins[i].at) { t = ins[i]; ins[i] = ins[j]; ins[j] = t; }
     const char *p = stock;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < k; i++) {
         bput(out, "%.*s", (int)(ins[i].at - p), p);
         if (ins[i].kind == 4) { if (*names4) bput(out, " %s%s", names4, *n4 == ']' ? "" : ","); }
+        else if (ins[i].kind == 'v') bput(out, "%s, ", namesv);
         else if (*names0) bput(out, "%s %s", last0 == l0 ? "" : ",", names0);
         p = ins[i].at;
     }
     bput(out, "%s", p);
     return 0;
+}
+
+/* stock's animation with every lit LED in cyan, as bright as it was (its brightest channel) */
+static void cyan(struct buf *out, const char *text)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    for (const char *l = text; *l; ) {
+        const char *e = strchr(l, '\n'), *px; size_t len = e ? (size_t)(e - l) : strlen(l);
+        if (!line_pixels(l, &px)) bput(out, "%.*s\n", (int)len, l);
+        else {
+            bput(out, "%.*s", (int)(px - l), l);
+            for (const char *c = px; c < l + len; ) {
+                size_t w = strcspn(c, ",\n\r"); int v = 0;
+                for (int ch = 0; ch < 3; ch++) {        /* 3 digits: one per channel, 6: two */
+                    char d[3] = { 0 };
+                    if (w == 3) d[0] = d[1] = c[ch]; else if (w == 6) memcpy(d, c + 2 * ch, 2);
+                    int x = (int)strtol(d, NULL, 16);
+                    if (x > v) v = x;
+                }
+                bput(out, "%s00%c%c%c%c", c == px ? "" : ",", hex[v >> 4], hex[v & 15], hex[v >> 4], hex[v & 15]);
+                c += w; if (*c == ',') c++; else break;
+            }
+            bput(out, "\n");
+        }
+        if (!e) break;
+        l = e + 1;
+    }
 }
 
 /* ---------------------------------------------------------------- the set */
@@ -290,6 +323,7 @@ struct gen {
     const char *dir;                        /* NULL: only the digest */
     struct sha256 h;
     int files, failed, turned;              /* turned: the listening ring's copies are in it */
+    int assist;                             /* the Assistant's volume steps are in it */
 };
 static int leds = 12;                       /* the ring's, from stock's listening ring (every model's has 12) */
 
@@ -313,7 +347,7 @@ static void listnames(struct buf *b, const char *name) { bput(b, "%s\"%s\"", b->
 static int build(struct gen *g)
 {
     char file[512], name[64];
-    struct buf names4 = { 0 }, names0 = { 0 }, b = { 0 };
+    struct buf names4 = { 0 }, names0 = { 0 }, namesv = { 0 }, b = { 0 };
     sha256_init(&g->h);
     sha256_update(&g->h, FORMAT, sizeof FORMAT);
     path(file, sizeof file, "led-resources/active-start.animation");
@@ -353,11 +387,25 @@ static int build(struct gen *g)
     path(file, sizeof file, "layer_config_common.json.pre-hassmic");
     char *stock = slurp(file);
     if (!stock) { path(file, sizeof file, "led-resources/layer_config_common.json"); stock = slurp(file); }
+    /* the Assistant's volume steps: each of stock's that its config lists, in cyan */
+    g->assist = 0;
+    for (int i = 1; stock && i <= 99; i++) {
+        char quoted[40], *t;
+        snprintf(quoted, sizeof quoted, "\"volume_step-%02d\"", i);
+        if (!strstr(stock, quoted)) continue;
+        snprintf(name, sizeof name, "led-resources/volume_step-%02d.animation", i); path(file, sizeof file, name);
+        if (!(t = slurp(file))) continue;
+        b.n = 0; cyan(&b, t); free(t);
+        snprintf(name, sizeof name, "hassmic_assist_%02d", i);
+        listnames(&namesv, name);
+        strcat(name, ".animation"); emit(g, name, &b);
+        g->assist++;
+    }
     b.n = 0;
-    int rc = !stock || merge_config(&b, stock, names4.p ? names4.p : "", names0.p ? names0.p : "") ? -1 : 0;
+    int rc = !stock || merge_config(&b, stock, names4.p ? names4.p : "", names0.p ? names0.p : "", namesv.p ? namesv.p : "") ? -1 : 0;
     if (rc) fprintf(stderr, "ring: no layer config of stock's to add ours to (%s)\n", file);
     else emit(g, "layer_config_common.json", &b);
-    free(start); free(end); free(stock); free(names4.p); free(names0.p); free(b.p);
+    free(start); free(end); free(stock); free(names4.p); free(names0.p); free(namesv.p); free(b.p);
     return rc || g->failed ? -1 : 0;
 }
 
@@ -385,7 +433,7 @@ int ring_generate(const char *dir)
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static void (*run_fn)(const char *op, const char *name);
-static int custom, have_turned;
+static int custom, have_turned, have_assist;
 
 /* The Echo's own patterns that hassmic played and did not stop: how long each shows, from its file */
 #define SHOWN_MAX 24
@@ -522,6 +570,7 @@ void ring_start(void (*fn)(const char *op, const char *name))
         digest_hex(&g, hex);
         custom = inst && !strncmp(inst, hex, 64);
         have_turned = custom && g.turned;
+        have_assist = custom && g.assist;
     }
     if (custom) fprintf(stderr, "ring: our animations are installed (%d files)%s\n", g.files, have_turned ? "" : ", the listening ring not turned");
     else fprintf(stderr, "ring: %s: stock's animations only, no light in Home Assistant\n",
@@ -537,6 +586,7 @@ void ring_start(void (*fn)(const char *op, const char *name))
 }
 
 int ring_custom(void) { return custom; }
+int ring_assistant_steps(void) { return have_assist; }
 
 void ring_set(const char *pattern)
 {

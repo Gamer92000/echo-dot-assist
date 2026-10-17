@@ -4,6 +4,16 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-17
 
+- **Separate volumes for music, voice replies, sounds, timers and calls** (issue #32). The settings page has a Volume card
+  (Sound) that sets the Echo's volume from the browser. Switched to "Separate volumes", music, the voice assistant's
+  replies, the Echo's own sounds (wake sound, buttons), timers and Drop In calls each get a volume of their own, 0 to
+  100 %, set on the page or in Home Assistant ("Assistant volume", "Sounds volume", "Timer volume", "Call volume";
+  the media player's volume is the music's). Each of them can instead follow the music volume, as far above or below
+  it as you set ("Follow music"; calls start that way). 30 % sounds the same on every slider and as 30 % on a stock
+  Echo. On a Bluetooth speaker they work too: the speaker is set to the loudest, the Echo turns the rest down, and the
+  speaker's own buttons move the music. Speech sent to the media player (`tts.speak`, or `play_media` as an announcement) counts as a voice reply,
+  not music. The volume buttons change what is playing: a call, a reply (the light ring shows it in cyan), a ringing
+  timer, otherwise the music; one that follows the music moves with it.
 - **Settings, pairings and the Home Assistant link survive a power cut.** A power cut or hard reset shortly after the
   Echo saved something could leave that file empty: every setting back to default, approved browsers, Bluetooth and
   Music Assistant pairings gone, or the Echo needing to be adopted in Home Assistant again. Every file the Echo keeps

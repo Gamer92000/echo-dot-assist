@@ -11,6 +11,8 @@ void a2dp_pair(int on);                    /* any thread: discoverable and paira
 int  a2dp_pairing(void);                   /* 1 while pairable */
 /* any thread */
 void a2dp_volume_changed(int percent);     /* the Echo's volume moved: tell the device (AVRCP absolute volume) */
+void a2dp_speaker_volume(int percent);     /* lock held: what the speaker we play to is set to while it has absolute
+                                              volume (main.c: the loudest kind with separate volumes); -1: the volume */
 int  a2dp_button(int resume);              /* action button: 0 = pause the streaming device, 1 = resume it if the button
                                               paused it (within 30 min).  1 = consumed; needs AVRCP */
 void a2dp_pause(void);                     /* another source started: pause the device, or play nothing until it

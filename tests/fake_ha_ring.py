@@ -59,10 +59,14 @@ async def main():
     r = subprocess.run([HOST, "-G", out], env=env, capture_output=True, text=True)
     names = sorted(os.listdir(out))
     conf = json.load(open(os.path.join(out, "layer_config_common.json")))["Layers"]
-    check(r.returncode == 0 and len(names) == 36 + 588 + 3 + 2, f"-G: the set ({len(names)} files): {r.stderr.strip()}")
+    check(r.returncode == 0 and len(names) == 36 + 588 + 3 + 1 + 2, f"-G: the set ({len(names)} files): {r.stderr.strip()}")
     check(conf["4"][:3] == ["hassmic_listen_0", "hassmic_listen_1", "hassmic_listen_2"] and conf["4"][36:] == ["active-end", "active-start", "anim_start_error_short"]
           and conf["0"][0] == "zzz_rainbow" and conf["0"][-1] == "hassmic_rainbow_2" and len(conf["0"]) == 1 + 591
-          and conf["5"] == ["volume_step-05"], "stock's layer config with ours added: the turned rings first in layer 4, the light last in layer 0")
+          and conf["5"] == ["hassmic_assist_05", "volume_step-05"],
+          "stock's layer config with ours added: the turned rings first in layer 4, the light last in layer 0, the Assistant's volume step before stock's")
+    check(open(os.path.join(out, "hassmic_assist_05.animation")).read()
+          == "2000:" + ",".join(["00FFFF"] * 3 + ["000000"] * 9) + "\nloop\n1000:" + ",".join(["000000"] * 12) + "\n",
+          "the Assistant's volume step: stock's, its lit LEDs in cyan at their brightness")
     held = open(os.path.join(out, "hassmic_hold_3.animation")).read()
     check(held == "loop\n1000:" + ",".join(["00F", "0FF", "0FF"] + ["00F"] * 9) + "\n",
           f"the open ring turned by 3: its light-blue pair on LEDs 1 and 2, as stock turns it ({held.strip()})")

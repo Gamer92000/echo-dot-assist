@@ -60,7 +60,8 @@ make unit                                         # C unit tests; microWakeWord 
                                                  # states, actions and template engine (also in make unit)
 .venv/bin/python tests/fake_ha_esphome.py         # ESPHome native API, as Home Assistant (aioesphomeapi)
 .venv/bin/python tests/fake_ha_arbitration.py     # two Echos + Home Assistant + an unknown device: wake word arbitration
-.venv/bin/python tests/fake_ha_dropin.py          # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer
+.venv/bin/python tests/fake_ha_dropin.py          # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer,
+                                                 # the ringtone at the sounds volume (HASSMIC_EARCONS: stand-in stock sounds)
 .venv/bin/python tests/ha_real_dropin.py --setup  # once: build/ha-venv, Home Assistant (pinned) and what its integrations need
 .venv/bin/python tests/ha_real_dropin.py          # the Drop In blueprint in that real Home Assistant with four PC Echos (one
                                                  # the released build, from its git tag), in a network namespace with only
@@ -77,6 +78,9 @@ tests/ota_push_test.sh                            # signed push-update path end 
 tests/otatool_test.sh                             # the PC's otatool (Python) against the Echo's (C)
 .venv/bin/python tests/fake_ha_update.py          # online updates: Home Assistant, GitHub and root's installer in one
 .venv/bin/python tests/fake_ha_wakesound.py       # wake sound removal off and on, against the PC's stand-in echo
+.venv/bin/python tests/fake_ha_volumes.py         # separate volumes: four of their own or following the music, media, keys,
+                                                 # restart, Bluetooth speaker, page, exports, against the mixer's volumes as
+                                                 # files (HASSMIC_FAKE_MIXER, HASSMIC_FAKE_SPEAKER)
 .venv/bin/python tests/fake_ha_ring.py            # the light ring: the animation set hassmic -G makes, Home Assistant's light,
                                                  # the Echo's own patterns first, the listening ring turned by the beam
 .venv/bin/python tests/fake_improv.py             # setup from a phone (Improv over BLE) on a fake Bluetooth controller,

@@ -75,9 +75,18 @@ int play_open(unsigned rate, unsigned channels)
     return play ? 0 : -1;
 }
 
+static float tts_gain = 1;                  /* tests: as the mixer would get it, and in the log */
+void audio_tts_gain(float g)
+{
+    if (fabsf(g - tts_gain) > 0.0005f) fprintf(stderr, "audio: tts gain %.3f\n", g);
+    tts_gain = g;
+}
+
 int play_write(const void *data, size_t len)
 {
-    fwrite(data, 1, len, play);
+    if (tts_gain < 0.9995f)
+        for (size_t i = 0; i + 1 < len; i += 2) { short v; memcpy(&v, (const char *)data + i, 2); v = (short)lrintf(v * tts_gain); fwrite(&v, 2, 1, play); }
+    else fwrite(data, 1, len, play);
     usleep((useconds_t)(len * 1e6 / (2.0 * play_ch * play_rate)));
     return 0;
 }
@@ -86,15 +95,18 @@ void play_close(int drain) { (void)drain; if (play) fclose(play); play = NULL; }
 
 void play_earcon(const short *pcm, size_t samples, unsigned rate)
 {
+    int peak = 0;                               /* for the tests: how loud (separate volumes turn our sounds down) */
+    for (size_t i = 0; i < samples; i++) if (abs(pcm[i]) > peak) peak = abs(pcm[i]);
     echo_add(pcm, samples, rate);
     if (audio_earcon_started) audio_earcon_started();
-    fprintf(stderr, "earcon: %zu samples @ %u Hz\n", samples, rate);
+    fprintf(stderr, "earcon: %zu samples @ %u Hz, peak %d\n", samples, rate, peak);
 }
 
 void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go)(void))
 {
-    (void)pcm;
-    fprintf(stderr, "earcon: %zu samples @ %u Hz, until stopped\n", samples, rate);
+    int peak = 0;
+    for (size_t i = 0; i < samples; i++) if (abs(pcm[i]) > peak) peak = abs(pcm[i]);
+    fprintf(stderr, "earcon: %zu samples @ %u Hz, until stopped, peak %d\n", samples, rate, peak);
     for (long ms = 0; ms < (long)(samples * 1000ULL / (rate ? rate : 48000)) && go(); ms += 20) usleep(20000);
 }
 
@@ -119,7 +131,38 @@ static long long s_queued_us(struct stream *s)
     return q;
 }
 
+static int s_write_raw(struct stream *s, const void *data, size_t len);
+/* tests: the gain into the file as the mixer would get it, and into the log when it changes */
+static float music_gain = 1;
+void audio_music_gain(float g)
+{
+    if (fabsf(g - music_gain) > 0.0005f) fprintf(stderr, "audio: music gain %.3f\n", g);
+    music_gain = g;
+}
+static float call_gain = 1;
+void audio_call_gain(float g)
+{
+    if (fabsf(g - call_gain) > 0.0005f) fprintf(stderr, "audio: call gain %.3f\n", g);
+    call_gain = g;
+}
+
 static int s_write(struct stream *s, const void *data, size_t len)
+{
+    if (!s->f) return -1;
+    short buf[4096]; float gain = s == &voip ? call_gain : music_gain;
+    if (gain < 0.9995f) {
+        for (size_t off = 0; off < len; ) {
+            size_t n = len - off < sizeof buf ? len - off : sizeof buf;
+            for (size_t i = 0; i < n / 2; i++) { short v; memcpy(&v, (const char *)data + off + 2 * i, 2); buf[i] = (short)lrintf(v * gain); }
+            if (s_write_raw(s, buf, n)) return -1;
+            off += n;
+        }
+        return 0;
+    }
+    return s_write_raw(s, data, len);
+}
+
+static int s_write_raw(struct stream *s, const void *data, size_t len)
 {
     if (!s->f) return -1;
     s_queued_us(s);
