@@ -360,6 +360,31 @@ usb_serial() {
     if [ -n "$s" ] && [ "$s" != unknown ]; then export ANDROID_SERIAL=$s; else unset ANDROID_SERIAL; return 1; fi
 }
 
+# one_adb_device: the guided setup wants exactly one device on adb.  It reboots, wipes and reflashes the Echo, and
+# several steps ask adb for "the" device again after each reboot (TWRP reports another serial than Fire OS): with a
+# second device (an installed Echo over Wi-Fi, a phone, a stale "offline" entry) a command can land on the wrong one.
+# Counts every entry of `adb devices`, offline and unauthorized ones too.  An explicit ANDROID_SERIAL is the way round.
+one_adb_device() {
+    local list
+    [ -n "$ANDROID_SERIAL" ] || [ -n "$DRY" ] && return 0
+    list=($(adb devices 2>/dev/null | awk 'NR > 1 && NF >= 2 { print $1 }'))
+    [ ${#list[@]} -gt 1 ] || return 0
+    fail "More than one device is on adb:"
+    printf '      %s\n' "${list[@]}"
+    echo
+    warn "Setting up an Echo reboots it, wipes it and flashes it, and adb is asked for \"the\" device over and over."
+    say  "With a second one connected a step can end up on the wrong device: an Echo that already works,"
+    say  "or a phone.  Please do not do that."
+    echo
+    say  "Disconnect everything but the Echo being set up:"
+    say  "  - over Wi-Fi (an address like 192.168.1.20:5555):  adb disconnect   (all of them at once)"
+    say  "  - over USB: unplug every other device, so that the Echo's cable is the only one"
+    say  "Check with adb devices: one line, then run scripts/setup.sh again."
+    echo
+    say  "Know what you are doing? export ANDROID_SERIAL=<serial from adb devices> picks one (adb disconnect is safer)."
+    exit 1
+}
+
 # With several Echos on adb, one has to be picked, as for every script (ANDROID_SERIAL).
 pick_serial() {
     local list s

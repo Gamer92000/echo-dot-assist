@@ -4,6 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-15
 
+- **Guided setup: only one device on adb.** `scripts/setup.sh` now stops when more than one device is on adb (an installed
+  Echo over Wi-Fi, a phone, a stale "offline" entry), says why that is a bad idea (it reboots, wipes and flashes, and a step
+  could land on the wrong device) and how to fix it: `adb disconnect` the wireless ones, unplug the other USB devices.
+  `ANDROID_SERIAL` still picks one for people who know what they are doing.
+
 - **Echo Show: a wake sound of our own.** The Show 8 (1st gen) and the Show 5 have no wake sound in their firmware and played a
   120 ms blip. They now play a soft two-note rising chime that hassmic makes itself (so it can ship, and is not Amazon's
   sound). A sound file of your own in `/data/local/hassmic/earcon/ui_wakesound.wav` (or `.mp3`) still wins.
