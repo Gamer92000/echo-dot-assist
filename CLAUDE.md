@@ -396,7 +396,8 @@ Firewall invariant: Amazon's daemons may only reach local addresses; hassmic its
 TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get out. Inbound TCP and UDP are only admitted on
 16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 OTA, 28931 settings page, UDP 28930 arbitration)
 must stay in that range (UDP 28932 Drop In too). Only exception: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
-`state/config` says `arbitration_mode=kiosk` (`kiosk_state`). A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`
+`state/config` says `arbitration_mode=kiosk` (`kiosk_state`). Ping (ICMP echo request) is admitted from the private
+and link-local ranges of `LOCAL4` only. A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`
 prints it.
 
 `tools/` is PC-side reverse-engineering and firmware tooling (`payload_dump.py`, Thumb disassembly helpers,

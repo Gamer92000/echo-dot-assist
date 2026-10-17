@@ -4,6 +4,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-17
 
+- **The Echo answers ping from your network.** Home Assistant's Ping integration, a router's device list or a plain
+  `ping` can now see whether it is up. Only from private addresses (192.168.x.x, 10.x.x.x and the like); nothing
+  else gets in that did not before.
 - **An Echo no longer stays off after an update or a restart from the settings page.** Restarting hassmic (after an
   update, a wake word engine change, models copied from another Echo) could lose the start when the old one was slow to
   stop: the Echo was then unreachable until something else started it, minutes later (seen on an Echo Show 8).

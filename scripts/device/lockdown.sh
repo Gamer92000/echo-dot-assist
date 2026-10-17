@@ -84,6 +84,13 @@ keep() {
         for p in udp tcp; do echo "-A INPUT -i $WLAN -p $p -m $p --dport 16384:32767 -j ACCEPT"; done
         echo "-A INPUT -i $WLAN -p udp -m udp --dport 5353 -j ACCEPT"      # mDNS: how Home Assistant finds the Echo
         echo "-A INPUT -p icmp -m state --state RELATED,ESTABLISHED -j ACCEPT"
+        # ping (is the Echo up? Home Assistant's Ping integration, a router's device list): echo requests from private
+        # and link-local addresses only, never from a multicast or broadcast one; the reply leaves under the chain's
+        # local-address rules like everything else (issue #45)
+        for d in $LOCAL4; do
+            case $d in 224.*|255.*) continue;; esac
+            echo "-A INPUT -s $d -i $WLAN -p icmp -m icmp --icmp-type 8 -j ACCEPT"
+        done
         if [ -n "$ADB" ]; then echo "-A $ADB_IN"; fi                       # only while adb over Wi-Fi is open (adb_gate)
         if [ -n "$KIOSK" ]; then echo "-A $KIOSK_IN"; fi                   # only in Kiosk Satellite mode (kiosk_state)
     else

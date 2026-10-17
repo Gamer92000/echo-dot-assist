@@ -1939,3 +1939,10 @@ Run in this order. Each step says what it proves.
       Setup with two USB devices: `adb -d` fails ("more than one device"), `adb_is` never true. `usb_serial` lists
       `adb devices -l` lines with ` usb:` (offline/unauthorized too: adb -d counts them), `waitfor` names them once and
       keeps waiting; devices over Wi-Fi do not count (USB_ONLY). Tried with a stand-in adb.
+      Ping: `keep` admits `-s <range> -i wlan0 -p icmp -m icmp --icmp-type 8` for LOCAL4 without multicast and
+      broadcast; the reply leaves through hassmic_out's local RETURN and stock's `-o wlan0 -j ACCEPT`.
+      Dot 3 (2026-10-17, 7.1.2, iptables 1.4.20, 2026.10.13.214128 with the rules and functions tried by hand): the
+      rule lists exactly as worded; new `lockdown.sh check` rc 0 with them, names the four without; ping 3/3 (~2 ms),
+      none before. The race did not show on the Dot: 6 of 6 `stop; start` came back (its stop is quick; the Show's
+      hassmic took longer to let go). `ctl.restart hassmic`: down ~3 s, new pids. `svc_stop hassmic` under mksh: rc 0
+      within 0.1 s, "stopped". Not tried: a hung hassmic_fw, a reset whose hassmic does not stop.
