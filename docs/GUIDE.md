@@ -267,6 +267,33 @@ Assistant starting on the Echo pauses the phone. The voice assistant ducks both.
 - **From a phone** over Bluetooth: SBC, AAC, aptX, aptX HD, with media controls. Switch on "Bluetooth audio from phones" on the
   settings page; the "Bluetooth pairing" switch in Home Assistant then lets phones pair (blue chaser on the ring).
 
+### Separate volumes
+
+The settings page's Volume card (Sound) sets the Echo's volume, the same one as the volume buttons and Home
+Assistant's media player. Switch it to "Separate volumes" and four kinds of audio get a volume each, 0 to 100 %,
+independent of each other:
+
+| | What | In Home Assistant |
+|---|---|---|
+| Music | Music Assistant, Bluetooth from a phone, `media_player.play_media` (not announcements) | the media player's volume |
+| Voice replies | what the voice assistant says, and announcements (also `tts.speak` or `play_media` with `announce` on the media player) | Assistant volume |
+| Echo sounds | the wake sound, button presses, Bluetooth and Drop In chimes | Sounds volume |
+| Timers | the ring of a finished timer | Timer volume |
+| Calls | the other side of a Drop In call (only while Drop In is on) | Call volume |
+
+Voice replies, Echo sounds, Timers and Calls each have "Own volume" or "Follow music" (Calls start on "Follow music",
+as before they had a volume of their own). Following the music, the slider sets
+how far above or below the music volume it plays, in volume points (timers 20 above music at 40 play at 60), and it moves with
+the music: the media player's volume and the volume buttons change both. Home Assistant then has no number for it.
+Copying settings to another Echo (Export, the Echos section) takes the switches and the offsets, never a volume itself:
+like the Echo's volume, that is for the room it is in.
+
+The same number sounds the same on every slider, and as that volume on a stock Echo (measured on an Echo Dot 2,
+within 0.3 dB). The volume buttons change what is playing: a Drop In call, a reply (the ring shows the steps in cyan),
+a ringing timer, otherwise the music. On a Bluetooth speaker that sets its own volume (absolute volume) the speaker is
+set to the loudest of them and the Echo turns the others down, as on its own speaker (with the Echo's volume curve:
+how loud a number is depends on the speaker); the speaker's own buttons move the music.
+
 ### Playing on a Bluetooth speaker
 
 Everything the Echo plays (replies, timers, its sounds, music) can come out of a Bluetooth speaker instead, as with
@@ -285,7 +312,7 @@ name and state.
 - **Volume**: while on the speaker, the volume buttons, Home Assistant and Music Assistant set the speaker's volume, and
   the ring shows it; the speaker's own buttons move it too. Back on the Echo, its own volume returns. With Bluetooth
   absolute volume (most speakers) the Echo sends full level and the speaker turns it down, which sounds best; without,
-  the Echo turns it down itself, as stock does.
+  the Echo turns it down itself, as stock does. [Separate volumes](#separate-volumes) apply on the speaker too.
 - **In time with other players**: a Bluetooth speaker plays late, by its buffer. "Bluetooth speaker delay" (default
   250 ms) is what the Echo allows for; set it by ear, in Home Assistant or on the settings page.
 - **First word cut off**: some speakers switch their amplifier off while the Echo is silent and switch it on only
@@ -314,7 +341,7 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 
 | Always there | |
 |---|---|
-| Media player | TTS, `play_media` |
+| Media player | TTS, `play_media`; its volume is the Echo's (the music's, see [Separate volumes](#separate-volumes)) |
 | Mute, Do not disturb | DND drops announcements; purple flash when switched on |
 | Wake sound | covers all the Echo's own sounds |
 | Equalizer | bass, mid, treble, −6 to +6 dB, Amazon's own, on everything the Echo plays |
@@ -350,6 +377,7 @@ Echo announces itself again after 100 s without Home Assistant, then less and le
 | Light sensor (off by default) | Illuminance (the room's light in lux); "LED brightness" then also follows auto brightness, an entry in the logbook every few minutes. Off, it shows only levels you set |
 | Bluetooth audio from phones | Bluetooth pairing |
 | [Playing on a Bluetooth speaker](#playing-on-a-bluetooth-speaker) | Bluetooth speaker search, Play on Bluetooth speaker, Bluetooth speaker, Bluetooth speaker delay |
+| [Separate volumes](#separate-volumes) (off by default, on the Volume card) | Assistant volume, Sounds volume, Timer volume, Call volume (each while it has its own; calls with Drop In) |
 
 **On the settings page only**:
 

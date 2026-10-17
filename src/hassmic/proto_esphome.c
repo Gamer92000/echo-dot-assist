@@ -42,6 +42,10 @@
  *                    of the network (dropin.c); "Drop In" says idle / calling / ringing / connected, "Drop In with"
  *                    whom, the button "End Drop In" hangs up, the event entity "Drop In result" says what came of each
  *                    call this Echo made (dropin_results).  Listed while the feature is on
+ *   volumes          the media player's volume is the music's (Home Assistant's media too); with separate volumes the
+ *                    numbers "Assistant volume", "Sounds volume", "Timer volume" and "Call volume" (with Drop In) hold
+ *                    the others (main.c), each only while that kind has a volume of its own rather than following the
+ *                    music's
  */
 #include <ctype.h>
 #include <errno.h>
@@ -119,7 +123,8 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_BT_OUT_SEARCH, KEY_BT_OUT, KEY_BT_OUT_STATUS, KEY_BT_OUT_DELAY, KEY_WIFI_MOTION_ON, KEY_WIFI_MOTION, KEY_WIFI_MOTION_SENS,
        KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF, KEY_WEB_URL, KEY_IDENTIFY, KEY_RESET,
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
-       KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON, KEY_LIGHT };
+       KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON, KEY_LIGHT, KEY_ASSIST_VOLUME, KEY_SOUNDS_VOLUME, KEY_TIMER_VOLUME,
+       KEY_CALL_VOLUME };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -362,6 +367,8 @@ static void send_setting(int key)       /* lock held */
         send_state(LIGHT_STATE, &b);
     } break;
     case KEY_LED_AUTO: if (have_light) { pb_uint(&b, 2, core_led_auto(-1)); send_state(SWITCH_STATE, &b); } break;
+    case KEY_ASSIST_VOLUME: case KEY_SOUNDS_VOLUME: case KEY_TIMER_VOLUME: case KEY_CALL_VOLUME:     /* VOL_* order */
+        pb_float(&b, 2, core_kind_volume(key - KEY_ASSIST_VOLUME, -1)); send_state(NUMBER_STATE, &b); break;
     case KEY_LED_BRIGHTNESS: { int v = core_led_brightness(-1); if (v >= 0) { pb_float(&b, 2, v); send_state(NUMBER_STATE, &b); } } break;
     case KEY_BT_OUT_SEARCH: if (ble_present()) { pb_uint(&b, 2, a2dp_out_searching()); send_state(SWITCH_STATE, &b); } break;
     case KEY_BT_OUT: if (ble_present()) { pb_uint(&b, 2, a2dp_out_enabled()); send_state(SWITCH_STATE, &b); } break;
@@ -474,6 +481,16 @@ static void send_light_entities(void)
     { PB(b, 160); pb_str(&b, 1, "led_brightness"); pb_fixed32(&b, 2, KEY_LED_BRIGHTNESS); pb_str(&b, 3, "LED brightness");
       pb_str(&b, 5, "mdi:brightness-6"); pb_float(&b, 6, 0); pb_float(&b, 7, 100); pb_float(&b, 8, 1); pb_uint(&b, 10, 1);
       pb_str(&b, 11, "%"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
+    /* separate volumes (main.c): the three beside the media player's, which is the music's; no entity category, controls
+     * like the media player's volume */
+    static const char *const vol_ids[VOL_KINDS] = { "assistant_volume", "sounds_volume", "timer_volume", "call_volume" };
+    static const char *const vol_names[VOL_KINDS] = { "Assistant volume", "Sounds volume", "Timer volume", "Call volume" };
+    static const char *const vol_icons[VOL_KINDS] = { "mdi:account-voice", "mdi:bell-ring-outline", "mdi:timer-outline", "mdi:phone-in-talk" };
+    for (int i = 0; i < VOL_KINDS; i++) if (listed(KEY_ASSIST_VOLUME + i)) {
+        PB(b, 160); pb_str(&b, 1, vol_ids[i]); pb_fixed32(&b, 2, KEY_ASSIST_VOLUME + i); pb_str(&b, 3, vol_names[i]);
+        pb_str(&b, 5, vol_icons[i]); pb_float(&b, 6, 0); pb_float(&b, 7, 100); pb_float(&b, 8, 1);
+        pb_str(&b, 11, "%"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b);
+    }
 }
 
 /* What Home Assistant lists.  Always: media player, identify, factory reset, mute, do not disturb, wake sound, LEDs, buttons, equalizer, firmware, the
@@ -496,6 +513,10 @@ static int listed(int key)
     case KEY_LED_AUTO: return have_light;
     case KEY_LUX: return have_light && settings_on("light_sensor");
     case KEY_LIGHT: return ring_custom();
+    case KEY_CALL_VOLUME: if (!(dropin_running() && settings_on("drop_in"))) return 0;    /* calls only with Drop In */
+        /* fall through */
+    case KEY_ASSIST_VOLUME: case KEY_SOUNDS_VOLUME: case KEY_TIMER_VOLUME:       /* one that follows the music has none */
+        return settings_on("separate_volumes") && !core_kind_linked(key - KEY_ASSIST_VOLUME, -1);
     case KEY_DROPIN_SERVICE: case KEY_DROPIN_STATE: case KEY_DROPIN_PEER: case KEY_DROPIN_END: case KEY_DROPIN_RESULT:
         return dropin_running() && settings_on("drop_in");
     default: return 1;
@@ -672,6 +693,11 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     else if (type == NUMBER_COMMAND && key == KEY_LED_BRIGHTNESS) {                  /* a level of its own: auto off, or it moves */
         core_led_brightness(num < 0 ? 0 : (int)lroundf(num)); settings_save(); send_setting(KEY_LED_AUTO); send_setting(key); return;
     }
+    else if (type == NUMBER_COMMAND && key >= KEY_ASSIST_VOLUME && key <= KEY_CALL_VOLUME && listed(key)) {   /* saved, shown: settings.c */
+        static const char *const names[] = { "assistant_volume", "sounds_volume", "timer_volume", "call_volume" };
+        char v[8], e[80]; snprintf(v, sizeof v, "%d", num < 0 ? 0 : num > 100 ? 100 : (int)lroundf(num));
+        settings_set(names[key - KEY_ASSIST_VOLUME], v, e, sizeof e); return;
+    }
     else if (type == NUMBER_COMMAND && key >= KEY_EQ_BASS && key <= KEY_EQ_TREBLE) {           /* the mixer keeps it, not our file */
         core_set_eq(key - KEY_EQ_BASS, (int)lroundf(num)); send_setting(key); return;
     }
@@ -712,7 +738,7 @@ static void on_light(const unsigned char *p, const unsigned char *end)      /* l
 /* ---------------------------------------------------------------- media over http (announcements, play_media) */
 
 struct media_job {
-    char url[2][1024]; int announce, start_conversation;
+    char url[2][1024]; int announce, start_conversation, media;     /* media: play_media, at the main volume */
     int fd, aborted;                    /* lock held.  aborted: its run was cancelled; it plays nothing and touches no state */
 };
 
@@ -761,7 +787,7 @@ static int tts_begin(struct media_job *job, unsigned rate, unsigned ch)    /* -1
 {
     pthread_mutex_lock(&core_lock);
     int ok = !job->aborted;
-    if (ok) core_tts_begin(rate, ch);
+    if (ok) core_tts_begin(rate, ch, job->media);
     pthread_mutex_unlock(&core_lock);
     return ok ? 0 : -1;
 }
@@ -864,8 +890,9 @@ static void *media_thread(void *arg)
     return NULL;
 }
 
-/* lock held.  url0 = optional chime, url1 = the media */
-static void media_start(const char *url0, const char *url1, int announce, int start_conversation, int is_reply)
+/* lock held.  url0 = optional chime, url1 = the media.  media: music, at the music volume (main.c); else speech, at the
+ * replies' (separate volumes) */
+static void media_start(const char *url0, const char *url1, int announce, int start_conversation, int is_reply, int media)
 {
     struct media_job *job = calloc(1, sizeof *job); pthread_t t;
     if (!job) return;
@@ -876,7 +903,7 @@ static void media_start(const char *url0, const char *url1, int announce, int st
     }
     if (!is_reply && (core_state() == LISTENING || core_state() == THINKING)) core_pipeline_finish();
     snprintf(job->url[0], sizeof job->url[0], "%s", url0); snprintf(job->url[1], sizeof job->url[1], "%s", url1);
-    job->announce = announce; job->start_conversation = start_conversation; job->fd = -1;
+    job->announce = announce; job->start_conversation = start_conversation; job->media = media; job->fd = -1;
     media_cur = job;
     announcing = announce; media_playing = 1; send_mp_state();
     fprintf(stderr, "media: %s%s\n", announce ? "announce " : "", url1);
@@ -1209,7 +1236,7 @@ static void on_event(const unsigned char *p, const unsigned char *end)
     case EV_INTENT_PROGRESS: if (!stream_now) break;    /* streaming TTS: the URL from RUN_START can be fetched already */
         /* fall through */
     case EV_TTS_END:
-        if (!tts_expected && tts_url[0]) { tts_expected = 1; core_mic_off(); media_start("", tts_url, 1, 0, 1); }
+        if (!tts_expected && tts_url[0]) { tts_expected = 1; core_mic_off(); media_start("", tts_url, 1, 0, 1, 0); }
         break;
     case EV_RUN_END:    if (!tts_expected && core_state() != SPEAKING) core_pipeline_finish(); break;
     case EV_ERROR:
@@ -1245,12 +1272,12 @@ static void on_announce(const unsigned char *p, const unsigned char *end)
     /* Do not disturb drops announcements (reported as not played), but not the one we asked for ourselves: a Bluetooth
      * connection message answers something the user just did, as stock's does. */
     if (core_dnd(-1) && !bt_asked_ms) { fprintf(stderr, "media: do not disturb, dropped announcement %s\n", media); PB(b, 8); pb_uint(&b, 1, 0); send_va(VA_ANNOUNCE_FINISHED, &b); return; }
-    media_start(pre, media, 1, conv, 0);
+    media_start(pre, media, 1, conv, 0, 0);
 }
 
 static void on_mp_command(const unsigned char *p, const unsigned char *end)
 {
-    struct pbf f; static char url[1024]; int has_cmd = 0, cmd = 0, has_vol = 0, has_url = 0; float vol = 0;
+    struct pbf f; static char url[1024]; int has_cmd = 0, cmd = 0, has_vol = 0, has_url = 0, announcement = 0; float vol = 0;
     url[0] = 0;
     while (pb_next(&p, end, &f)) switch (f.field) {
         case 2: has_cmd = f.v != 0; break;
@@ -1259,11 +1286,12 @@ static void on_mp_command(const unsigned char *p, const unsigned char *end)
         case 5: { uint32_t u = f.v; memcpy(&vol, &u, 4); } break;
         case 6: has_url = f.v != 0; break;
         case 7: if (f.data) pbf_str(&f, url, sizeof url); break;
+        case 9: announcement = f.v != 0; break;        /* tts.speak and play_media's announce: speech, not music */
     }
     if (has_vol) core_set_volume((int)(vol * 100 + 0.5f));
     if (has_cmd && cmd == MP_CMD_STOP && media_playing) core_tts_flush();
     if (has_cmd && cmd == MP_CMD_STOP) core_alarm_stop("media player stop");     /* as "Stop ringing" does, for automations */
-    if (has_url && url[0]) media_start("", url, 0, 0, 0);
+    if (has_url && url[0]) media_start("", url, 0, 0, 0, !announcement);
     if (has_cmd && !has_url) send_mp_state();
 }
 
@@ -1345,6 +1373,7 @@ static void send_all_settings(void)
         send_setting(KEY_UPDATE_CHANNEL); send_setting(KEY_UPDATE); send_setting(KEY_WHISPERED);
         send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING);
         send_setting(KEY_DROPIN_PEER); send_setting(KEY_DROPIN_STATE);
+        send_setting(KEY_ASSIST_VOLUME); send_setting(KEY_SOUNDS_VOLUME); send_setting(KEY_TIMER_VOLUME); send_setting(KEY_CALL_VOLUME);
         send_light_states();
 }
 

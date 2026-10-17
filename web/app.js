@@ -87,6 +87,8 @@ const ICONS = {
   mic: '<path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
   talk: '<path d="M3 5h12v8H8l-5 4z"/><path d="M15 9h6v8l-4-3h-6v-1"/>',
   speaker: '<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/>',
+  timer: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/>',
+  bell: '<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   sparkle: '<path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8z"/><path d="M19 15l.8 2.2 2.2.8-2.2.8L19 21l-.8-2.2-2.2-.8 2.2-.8z"/>',
   music: '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
@@ -326,6 +328,7 @@ const HELP = {
     note: 'An Echo that is called opens its microphone at once, unless it is set to answer with the button below. Only your own Echos can call it (the Echo network\'s key), never with do not disturb on or the microphones off. The ring shows green while a call runs.' },
   drop_in_answer: { parent: 'drop_in', help: 'At once: a call connects straight away, with a chime, as Alexa\'s Drop In does. After the action button: the Echo rings for 30 s, and only a press of its action button connects; nobody can listen into a room where nobody is.' },
   bluetooth_speaker: { icon: 'box', ha: ['Bluetooth speaker search', 'Play on Bluetooth speaker', 'Bluetooth speaker', 'Bluetooth speaker delay'], help: 'Plays everything (replies, timers, music) on a Bluetooth speaker instead of the Echo\'s own. Put the speaker in pairing mode near the Echo and switch on "Bluetooth speaker search" in Home Assistant: the Echo pairs with the strongest one it hears.' },
+  // volume, separate_volumes and the kinds' volumes, links and offsets: the Volume card has their words (buildVolumes)
   // not a setting: the System card's Restart button (main.c core_reboot)
   restart: { help: 'Restarts the Echo, the same as pulling the plug and putting it back: for when it is stuck, for instance when Home Assistant cannot reach it any more but this page still can. It is gone for about a minute; nothing is forgotten. Home Assistant has the same as its "Restart" button.' },
 };
@@ -631,7 +634,8 @@ function build() {
       const loose = list.filter((x) => !card(x) && !(HELP[x.name] || {}).parent);
       if (loose.length) el.append(h('div', { class: 'card' }, loose.map(settingRow)));
     } else if (sec.id === 'Sound') {
-      const eq = list.filter((s) => s.name.startsWith('equalizer_')), rest = list.filter((s) => !eq.includes(s));
+      if (list.some((s) => s.name === 'separate_volumes')) buildVolumes(el);
+      const eq = list.filter((s) => s.name.startsWith('equalizer_')), rest = list.filter((s) => !eq.includes(s) && !VOLUMES.includes(s.name));
       if (eq.length) el.append(h('div', { class: 'card' }, h('div', { class: 'eq' }, eq.map(settingRow)),
         h('div', { class: 'card-foot eq-foot' }, h('span', { class: 'help' }, haBadge(), ' also as number entities'),
           h('button', { class: 'small', onclick: async () => { for (const s of eq) await set(s.name, 0); } }, 'Flat'))));
@@ -649,6 +653,87 @@ function build() {
   }
   $('foot').textContent = `hassmic ${state.device.version} · This page is plain HTTP, so it never shows keys or tokens; every change is signed by this browser.`;
   watchNav();
+}
+
+// ---------------------------------------------------------------- the Volume card (separate volumes, main.c)
+
+// Its settings, drawn here as one card instead of rows: one volume, or music and four kinds, where replies, sounds,
+// timers and calls (only while Drop In is on) each have a volume of their own or follow the music's, some points above
+// or below it
+const KINDS = ['assistant_volume', 'sounds_volume', 'timer_volume', 'call_volume'];
+const VOLUMES = ['volume', 'separate_volumes', ...KINDS.flatMap((k) => [k, k + '_linked', k + '_offset'])];
+
+function buildVolumes(el) {
+  const saved = h('span', { class: 'saved' }, 'Saved');
+  const slider = (name, min, max, show, moved) => {
+    const r = h('input', { type: 'range', min: String(min), max: String(max), step: '1', 'aria-label': (state.settings.find((x) => x.name === name) || {}).label || name });
+    const out = h('output');
+    const look = () => { r.style.setProperty('--p', `${((r.value - min) * 100) / (max - min)}%`); out.textContent = show(+r.value); if (moved) moved(+r.value); };
+    r.oninput = look; r.onchange = () => set(name, r.value);
+    return { el: h('div', { class: 'slider' }, r, out),
+             set: (v) => { if (!r.matches(':active') && document.activeElement !== r) { r.value = v; look(); } } };    // not while moved
+  };
+  const pct = (v) => `${v} %`, points = (v) => (v > 0 ? `+${v}` : v < 0 ? `−${-v}` : '±0');
+  const row = (ic, title, sub, name) => {
+    const sl = slider(name, 0, 100, pct);
+    return { el: h('div', { class: 'vol-row' }, h('span', { class: 'vol-ic' }, icon(ic)),
+      h('div', {}, h('div', { class: 'vol-title' }, title), h('div', { class: 'vol-sub' }, sub)), h('div', { class: 'vol-ctl' }, sl.el)),
+      paint: () => sl.set(+settingValue(name)) };
+  };
+  // a kind: its own volume, or the music's plus an offset; the line under its name says what it plays at
+  const kindRow = (ic, title, sub, name) => {
+    const subEl = h('div', { class: 'vol-sub' }, sub);
+    const says = (off) => {
+      const at = Math.max(0, Math.min(100, +settingValue('volume') + off));
+      subEl.textContent = off === 0 ? `As loud as the music: now ${at} %`
+        : `${Math.abs(off)} ${off < 0 ? 'below' : 'above'} the music volume: now ${at} %`;
+    };
+    const off = state.settings.find((x) => x.name === name + '_offset') || { min: -100, max: 100 };
+    const own = slider(name, 0, 100, pct), linked = slider(name + '_offset', off.min, off.max, points, says);
+    const btns = [['Own volume', 'off'], ['Follow music', 'on']].map(([t, v]) =>
+      h('button', { type: 'button', 'data-v': v, onclick: () => set(name + '_linked', v) }, t));
+    return { el: h('div', { class: 'vol-row' }, h('span', { class: 'vol-ic' }, icon(ic)),
+      h('div', {}, h('div', { class: 'vol-title' }, title), subEl),
+      h('div', { class: 'vol-ctl' }, h('div', { class: 'seg', role: 'group', 'aria-label': title }, btns), own.el, linked.el)),
+      paint: () => {
+        const on = !!settingValue(name + '_linked');
+        btns.forEach((b) => { const p = (b.dataset.v === 'on') === on; b.classList.toggle('on', p); b.setAttribute('aria-pressed', String(p)); });
+        own.el.classList.toggle('hidden', on); linked.el.classList.toggle('hidden', !on);
+        own.set(+settingValue(name)); linked.set(+settingValue(name + '_offset'));
+        if (on) says(+settingValue(name + '_offset')); else subEl.textContent = sub;
+      } };
+  };
+  const btns = [['One volume for everything', 'off'], ['Separate volumes', 'on']].map(([t, v]) =>
+    h('button', { type: 'button', 'data-v': v, onclick: () => set('separate_volumes', v) }, t));
+  const one = [row('speaker', 'Volume', 'Music, voice replies, sounds and timers, as on a stock Echo', 'volume')];
+  const sep = [
+    row('music', 'Music', 'Music Assistant, Bluetooth from your phone, Home Assistant\'s media player', 'volume'),
+    kindRow('talk', 'Voice replies', 'What your voice assistant says, and announcements', 'assistant_volume'),
+    kindRow('bell', 'Echo sounds', 'The wake sound, button presses and chimes', 'sounds_volume'),
+    kindRow('timer', 'Timers', 'The ring of a finished timer', 'timer_volume'),
+    kindRow('phone', 'Calls', 'The other side of a Drop In call', 'call_volume'),
+  ];
+  const calls = sep[sep.length - 1];
+  const oneBox = h('div', {}, one.map((x) => x.el));
+  const sepBox = h('div', {}, sep.map((x) => x.el),
+    h('p', { class: 'vol-hint' }, 'Follow music: it stays as far above or below the music volume as you set, and moves with it. ' +
+      'The volume buttons change what is playing: a call, a reply (the light ring turns cyan), a ringing timer, otherwise the music; one that follows the music moves with it.'),
+    h('div', { class: 'card-foot' }, h('span', { class: 'help' }, haBadge(),
+      ' The media player\'s volume is the music volume; "Assistant volume", "Sounds volume", "Timer volume" and "Call volume" set the others while they have their own.')));
+
+  function paint() {
+    const split = !!settingValue('separate_volumes');
+    btns.forEach((b) => { const on = (b.dataset.v === 'on') === split; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+    oneBox.classList.toggle('hidden', split); sepBox.classList.toggle('hidden', !split);
+    for (const x of [...one, ...sep]) x.paint();
+    calls.el.classList.toggle('hidden', !settingValue('drop_in'));       // no calls without Drop In
+  }
+  for (const n of VOLUMES) controls.set(n, { update: paint, saved, root: null });
+
+  el.append(h('div', { class: 'card vol' },
+    h('div', { class: 'vol-head' }, h('h3', {}, 'Volume ', saved), h('div', { class: 'seg', role: 'group', 'aria-label': 'Volume' }, btns)),
+    oneBox, sepBox));
+  paint();
 }
 
 function render() {

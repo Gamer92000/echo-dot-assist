@@ -53,7 +53,9 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 /* ---------------------------------------------------------------- the table */
 
 enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WIFI_MOTION,
-          WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, NSET };
+          WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
+          ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
+          CALL_LINK, CALL_LEVEL, CALL_OFFSET, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
  * listed()); everything else here is on the settings page only, except what Home Assistant always shows (wake sound,
@@ -107,6 +109,27 @@ static const struct setting table[NSET] = {
     [EQ_TREBLE]   = { "equalizer_treble", "Equalizer treble", "Sound", "dB", S_INT, -6, 6, 1, 0 },
     /* over stock (spkgain.c); not exported: speakers of one model differ (one Dot 2 is clean where another is too loud) */
     [SPK_GAIN]    = { "speaker_gain", "Speaker gain", "Sound", "dB", S_INT, 0, SPKGAIN_MAX, 0, 0 },  /* settings_max() */
+    /* the page draws these as one card of its own (web/app.js buildVolumes).  The volume itself (music's, with separate
+     * volumes) is the mixer's or main.c's, not state/config's, and no export's: a volume is for the room it is in */
+    [VOLUME]      = { "volume", "Volume", "Sound", "%", S_INT, 0, 100, 0, 0 },
+    /* main.c keeps them (issue #32), three per kind in VOL_* order.  Each after what switches it: separate volumes on
+     * starts the levels at the volume, following the music starts the offset where the level was and leaving it the
+     * level where it played; saved or imported values then win.  Following the music is a feature: the kind's own
+     * number leaves Home Assistant, the media player's volume moves it.  Exported: the switches and the offsets, how
+     * the volumes relate; not a kind's own volume, which like the volume is for the room it is in */
+    [VOL_SPLIT]   = { "separate_volumes", "Separate volumes", "Sound", NULL, S_BOOL, 0, 1, 1, 1 },
+    [ASSIST_LINK] = { "assistant_volume_linked", "Voice replies follow the music volume", "Sound", NULL, S_BOOL, 0, 1, 1, 1 },
+    [ASSIST_LEVEL] = { "assistant_volume", "Voice replies volume", "Sound", "%", S_INT, 0, 100, 0, 0 },
+    [ASSIST_OFFSET] = { "assistant_volume_offset", "Voice replies above the music", "Sound", NULL, S_INT, -VOL_OFFSET_MAX, VOL_OFFSET_MAX, 1, 0 },
+    [SOUNDS_LINK] = { "sounds_volume_linked", "Echo sounds follow the music volume", "Sound", NULL, S_BOOL, 0, 1, 1, 1 },
+    [SOUNDS_LEVEL] = { "sounds_volume", "Echo sounds volume", "Sound", "%", S_INT, 0, 100, 0, 0 },
+    [SOUNDS_OFFSET] = { "sounds_volume_offset", "Echo sounds above the music", "Sound", NULL, S_INT, -VOL_OFFSET_MAX, VOL_OFFSET_MAX, 1, 0 },
+    [TIMER_LINK]  = { "timer_volume_linked", "Timers follow the music volume", "Sound", NULL, S_BOOL, 0, 1, 1, 1 },
+    [TIMER_LEVEL] = { "timer_volume", "Timer volume", "Sound", "%", S_INT, 0, 100, 0, 0 },
+    [TIMER_OFFSET] = { "timer_volume_offset", "Timers above the music", "Sound", NULL, S_INT, -VOL_OFFSET_MAX, VOL_OFFSET_MAX, 1, 0 },
+    [CALL_LINK]   = { "call_volume_linked", "Calls follow the music volume", "Sound", NULL, S_BOOL, 0, 1, 1, 1 },
+    [CALL_LEVEL]  = { "call_volume", "Call volume", "Sound", "%", S_INT, 0, 100, 0, 0 },
+    [CALL_OFFSET] = { "call_volume_offset", "Calls above the music", "Sound", NULL, S_INT, -VOL_OFFSET_MAX, VOL_OFFSET_MAX, 1, 0 },
 };
 
 static int present(enum id i)
@@ -192,6 +215,11 @@ int settings_get(const struct setting *s)
     case DROPIN: return dropin_enable(-1);
     case DROPIN_ANSWER: return dropin_ask(-1);
     case SPK_GAIN: return spkgain_get();
+    case VOLUME: return core_volume();
+    case VOL_SPLIT: return core_separate_volumes(-1);
+    case ASSIST_LINK: case SOUNDS_LINK: case TIMER_LINK: case CALL_LINK: return core_kind_linked((int)(s - table - ASSIST_LINK) / 3, -1);
+    case ASSIST_LEVEL: case SOUNDS_LEVEL: case TIMER_LEVEL: case CALL_LEVEL: return core_kind_volume((int)(s - table - ASSIST_LINK) / 3, -1);
+    case ASSIST_OFFSET: case SOUNDS_OFFSET: case TIMER_OFFSET: case CALL_OFFSET: return core_kind_offset((int)(s - table - ASSIST_LINK) / 3);
     default: return 0;
     }
 }
@@ -236,6 +264,11 @@ static void put(enum id i, int v)
     case DROPIN: dropin_enable(v); break;
     case DROPIN_ANSWER: dropin_ask(v); break;
     case SPK_GAIN: spkgain_set(v); break;
+    case VOLUME: core_set_volume(v); break;
+    case VOL_SPLIT: core_separate_volumes(v); break;
+    case ASSIST_LINK: case SOUNDS_LINK: case TIMER_LINK: case CALL_LINK: core_kind_linked((i - ASSIST_LINK) / 3, v); break;
+    case ASSIST_LEVEL: case SOUNDS_LEVEL: case TIMER_LEVEL: case CALL_LEVEL: core_kind_volume((i - ASSIST_LINK) / 3, v); break;
+    case ASSIST_OFFSET: case SOUNDS_OFFSET: case TIMER_OFFSET: case CALL_OFFSET: core_set_kind_offset((i - ASSIST_LINK) / 3, v); break;
     default: break;
     }
 }
@@ -272,8 +305,12 @@ static size_t format(const struct setting *s, char *out, size_t cap)
 
 /* ---------------------------------------------------------------- file */
 
+/* Applied before the rest, whatever order a file has them in (state/config by hand, an import): switching seeds what
+ * comes after it (separate volumes the levels, following the music the offset), and the saved values must then win */
+static int switches(int i) { return i == VOL_SPLIT || i == ASSIST_LINK || i == SOUNDS_LINK || i == TIMER_LINK || i == CALL_LINK; }
+
 /* What state/config holds: the settings no other module keeps */
-static int ours(enum id i) { return i != ARB && i != SS_UNPAIRED && i != EQ_BASS && i != EQ_MID && i != EQ_TREBLE && i != BT_OUT_DELAY; }
+static int ours(enum id i) { return i != ARB && i != SS_UNPAIRED && i != EQ_BASS && i != EQ_MID && i != EQ_TREBLE && i != BT_OUT_DELAY && i != VOLUME; }
 
 void settings_save(void)
 {
@@ -321,12 +358,12 @@ void settings_load(void)
         core_mic_level(mic_level);
         return;
     }
-    while (fgets(line, sizeof line, f)) {
+    for (int pass = 0; pass < 2; pass++, rewind(f)) while (fgets(line, sizeof line, f)) {
         char *eq = strchr(line, '='), *v; int x;
         if (line[0] == '#' || !eq) continue;
         *eq = 0; v = eq + 1; v[strcspn(v, "\r\n")] = 0;
         for (int i = 0; i < NSET; i++) {
-            if (strcmp(table[i].name, line) || !ours(i) || parse(&table[i], v, &x)) continue;
+            if (strcmp(table[i].name, line) || !ours(i) || switches(i) != !pass || parse(&table[i], v, &x)) continue;
             /* the ring's level only counts with auto off: ledcontroller started its own auto at boot */
             if (i == LED_AUTO) led_auto = x; else if (i == LED_LEVEL) led_level = x; else put(i, x);
         }
@@ -355,11 +392,17 @@ void settings_preset(void)
 
 int settings_peek(const char *name, char *out, size_t cap)
 {
-    char p[300], line[160]; FILE *f; size_t k = strlen(name); int r = -1;
+    char p[300], line[160]; FILE *f; size_t k = strlen(name); int r = -1, x;
+    const struct setting *s = NULL;
+    for (int i = 0; i < NSET; i++) if (!strcmp(table[i].name, name)) s = &table[i];
     path(p, sizeof p, "config");
     if (!(f = fopen(p, "r"))) return -1;
-    while (r && fgets(line, sizeof line, f))
-        if (!strncmp(line, name, k) && line[k] == '=') { line[strcspn(line, "\r\n")] = 0; snprintf(out, cap, "%s", line + k + 1); r = 0; }
+    /* the last one it takes, as settings_load ends up with (a line added by hand; one it refuses changes nothing) */
+    while (fgets(line, sizeof line, f))
+        if (!strncmp(line, name, k) && line[k] == '=') {
+            line[strcspn(line, "\r\n")] = 0;
+            if (!s || !parse(s, line + k + 1, &x)) { snprintf(out, cap, "%s", line + k + 1); r = 0; }
+        }
     fclose(f);
     return r;
 }
@@ -402,9 +445,9 @@ size_t settings_text(char *out, size_t cap, int export_only)
 
 int settings_apply_text(const char *text, char *err, size_t errsz)
 {
-    int applied = 0; size_t en = 0; const char *p = text;
+    int applied = 0; size_t en = 0;
     if (errsz) err[0] = 0;
-    while (*p) {
+    for (int pass = 0; pass < 2; pass++) for (const char *p = text; *p; ) {
         char line[200], *eq, *v; size_t l = strcspn(p, "\n");
         snprintf(line, sizeof line, "%.*s", (int)(l < sizeof line - 1 ? l : sizeof line - 1), p);
         p += l + (p[l] == '\n');
@@ -412,6 +455,8 @@ int settings_apply_text(const char *text, char *err, size_t errsz)
         char *k = line; while (isspace((unsigned char)*k)) k++;
         if (!*k || *k == '#' || !(eq = strchr(k, '='))) continue;
         *eq = 0; v = eq + 1;
+        const struct setting *s = settings_find(k);
+        if ((s && switches((int)(s - table))) != !pass) continue;      /* switches first */
         char e[160];
         if (!settings_set(k, v, e, sizeof e)) applied++;
         else if (en < errsz) en += (size_t)snprintf(err + en, errsz - en, "%s\n", e);

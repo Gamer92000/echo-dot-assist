@@ -217,7 +217,7 @@ static int connected, satellite_running;
 static enum state state;
 static time_t state_since;
 static atomic_int streaming, trigger_pending, button_pending, pair_pending, stop_pending, quit;
-static atomic_int flush_playback, alarm_on;   /* barge-in: drop queued TTS; UI sounds requested (bit per enum sound) */
+static atomic_int flush_playback, alarm_on;   /* barge-in: drop queued TTS; a finished timer rings */
 static atomic_int busy;                             /* state != IDLE, for threads without the lock (the ring pauses) */
 static atomic_int tts_on, music_on;                 /* something plays: the wake word model lowers its threshold then.
                                                     * music_on: MUSIC_* bits */
@@ -242,6 +242,7 @@ static int mic_denoise;                             /* under lock: noise reducti
 static long long denoise_ns; static unsigned denoise_frames;   /* under lock: its cost in the running pipeline */
 static atomic_int earcon_sounding;                  /* one of our sounds plays ... */
 static atomic_llong earcon_heard_until;             /* ... and is still in the mic stream until then (mono_ms) */
+static atomic_int sounds_q16 = 65536, timers_q16 = 65536;  /* our sounds' and timers' gain, 1 = 65536 (separate volumes) */
 
 /* ---------------------------------------------------------------- LED ring */
 
@@ -718,6 +719,7 @@ static atomic_llong dropin_ring_at;                 /* ... from then on (mono_ms
 static atomic_int dropin_live;
 static int dropin_was;                              /* lock held */
 static const char *const dropin_led[4] = { NULL, "call_outbound_ringing", "call_incoming", "call_connected" };
+static void mix_apply(void);
 
 void core_dropin(int st, const char *peer, int outgoing)
 {
@@ -735,6 +737,7 @@ void core_dropin(int st, const char *peer, int outgoing)
         if (st == DROPIN_LIVE) sound_queue(outgoing || was == DROPIN_RINGING ? SND_CALL_ON : SND_DROPIN);
         else if (st == DROPIN_IDLE) sound_queue(SND_CALL_OFF);
         atomic_store(&dropin_live, st == DROPIN_LIVE);
+        mix_apply();                                /* a loud call's volume counts now, or no longer (mix_target) */
         if (st != DROPIN_LIVE) { listen_call = 0; listening_apply(); }       /* dropin.c turns it on while this side talks */
         if (connected && proto->dropin_changed) proto->dropin_changed(st, peer);
     }
@@ -1312,19 +1315,20 @@ static void on_pair(void)
 
 /* ---------------------------------------------------------------- playback queue */
 
-struct item { struct item *next; int kind; unsigned rate, ch; size_t len; unsigned char data[]; };
+struct item { struct item *next; int kind, media; unsigned rate, ch; size_t len; unsigned char data[]; };   /* media: Q_START */
 enum { Q_START, Q_DATA, Q_STOP };
+static void tts_kind(int media);
 
 static pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t q_cond = PTHREAD_COND_INITIALIZER;
 static struct item *q_head, *q_tail;
 static size_t q_bytes;
 
-static void q_push(int kind, unsigned rate, unsigned ch, const void *data, size_t len)
+static void q_push(int kind, int media, unsigned rate, unsigned ch, const void *data, size_t len)
 {
     struct item *it = malloc(sizeof *it + len);
     if (!it) return;
-    it->next = NULL; it->kind = kind; it->rate = rate; it->ch = ch; it->len = len;
+    it->next = NULL; it->kind = kind; it->media = media; it->rate = rate; it->ch = ch; it->len = len;
     if (len) memcpy(it->data, data, len);
     pthread_mutex_lock(&q_lock);
     if (q_tail) q_tail->next = it; else q_head = it;
@@ -1353,6 +1357,7 @@ static void *playback_thread(void *arg)
         switch (it->kind) {
         case Q_START:
             if (open) play_close(1);        /* e.g. announcement chime followed by the message */
+            tts_kind(it->media);            /* the TTS stream's volume for what comes now */
             open = play_open(it->rate, it->ch) == 0;
             if (open) { atomic_store(&tts_on, 1); playback_hint(); }
             if (!open) fprintf(stderr, "play: open %u Hz x%u failed\n", it->rate, it->ch);
@@ -1375,16 +1380,16 @@ static void *playback_thread(void *arg)
     return NULL;
 }
 
-void core_tts_begin(unsigned rate, unsigned channels)
+void core_tts_begin(unsigned rate, unsigned channels, int media)
 {
     atomic_store(&streaming, 0);
     mic_stopped();
     core_set_state(SPEAKING);
-    q_push(Q_START, rate, channels, NULL, 0);
+    q_push(Q_START, media, rate, channels, NULL, 0);
 }
 
-void core_tts_data(const void *pcm, size_t len) { if (!atomic_load(&flush_playback)) q_push(Q_DATA, 0, 0, pcm, len); }
-void core_tts_end(void) { q_push(Q_STOP, 0, 0, NULL, 0); }
+void core_tts_data(const void *pcm, size_t len) { if (!atomic_load(&flush_playback)) q_push(Q_DATA, 0, 0, 0, pcm, len); }
+void core_tts_end(void) { q_push(Q_STOP, 0, 0, 0, NULL, 0); }
 int  core_tts_flushing(void) { return atomic_load(&flush_playback); }
 void core_tts_flush(void) { atomic_store(&flush_playback, 1); }
 
@@ -1531,6 +1536,17 @@ void core_music(int source, int on)
 
 static void earcon_started(void) { earsup_started(cap_clock()); }     /* the earcon thread: the mixer took a sound */
 
+/* Our sounds and timers at their own volume (separate volumes): the Earcon stream plays at MainVolume, the loudest
+ * of music, sounds and timers, so the quieter ones are turned down here (mix_apply).  A copy to free, or NULL to play
+ * them as they are */
+static short *scaled(const short *pcm, size_t n, int q16)
+{
+    short *out;
+    if (q16 >= 65536 || !(out = malloc(n * sizeof *out))) return NULL;      /* no memory: it plays unscaled, loud */
+    for (size_t i = 0; i < n; i++) out[i] = (short)((pcm[i] * q16 + 32768) >> 16);      /* rounded, as audio_mixer.c */
+    return out;
+}
+
 static int ring_sound;
 static int ring_go(void) { return atomic_load(&dropin_ring) == ring_sound && !atomic_load(&sounds_pending); }
 
@@ -1552,22 +1568,33 @@ static void *earcon_thread(void *arg)
             const short *pcm; size_t n; unsigned rate;
             if (!(p & 1 << s)) continue;
             atomic_store(&earcon_sounding, 1);
-            if (sound_get((enum sound)s, &pcm, &n, &rate)) {
-                fprintf(stderr, "sound: %s\n", snd_names[s]);
+            if (sound_get((enum sound)s, &pcm, &n, &rate)) fprintf(stderr, "sound: %s\n", snd_names[s]);
+            else if (s == SND_WAKE || s == SND_TOUCH || s == SND_IDENTIFY) { pcm = tone; n = N; rate = RATE; }
+            else pcm = NULL;
+            if (pcm) {
+                short *quiet = scaled(pcm, n, atomic_load(&sounds_q16));
+                if (quiet) pcm = quiet;
                 earsup_play(pcm, n, rate, cap_clock()); play_earcon(pcm, n, rate);
-            } else if (s == SND_WAKE || s == SND_TOUCH || s == SND_IDENTIFY) { earsup_play(tone, N, RATE, cap_clock()); play_earcon(tone, N, RATE); }
+                free(quiet);
+            }
             atomic_store(&earcon_heard_until, mono_ms() + 250);         /* speaker to mic stream: 85 ms, and the room's tail */
             atomic_store(&earcon_sounding, 0);
         }
         { int r = atomic_load(&dropin_ring); const short *pcm; size_t n; unsigned rate;     /* a Drop In rings: cut off when answered */
           if (r >= 0 && mono_ms() >= atomic_load(&dropin_ring_at) && sound_get((enum sound)r, &pcm, &n, &rate)) {
-              ring_sound = r; play_earcon_while(pcm, n, rate, ring_go); usleep(300000); continue; } }
+              short *quiet = scaled(pcm, n, atomic_load(&sounds_q16));     /* one of our sounds: at their volume */
+              ring_sound = r; play_earcon_while(quiet ? quiet : pcm, n, rate, ring_go); free(quiet); usleep(300000); continue; } }
         if (atomic_load(&alarm_on)) {                   /* timer finished: triple blip every 1.2 s, until the ring time */
             if (mono_ms() > atomic_load(&alarm_until)) {
                 pthread_mutex_lock(&core_lock);
                 if (mono_ms() > atomic_load(&alarm_until)) core_alarm_stop("rang out");     /* not a timer that just came */
                 pthread_mutex_unlock(&core_lock);
-            } else if (!atomic_load(&busy)) { for (int k = 0; k < 3; k++) play_earcon(tone, N, RATE); usleep(800000); }
+            } else if (!atomic_load(&busy)) {
+                short *quiet = scaled(tone, N, atomic_load(&timers_q16));
+                for (int k = 0; k < 3; k++) play_earcon(quiet ? quiet : tone, N, RATE);
+                free(quiet);
+                usleep(800000);
+            }
             /* in the background while a pipeline runs: speech to text must hear the user, not the ring */
         }
         usleep(20000);
@@ -1630,7 +1657,7 @@ static void on_mute(int muted)          /* hardware latch changed (button) */
 /* Volume: 10 % per press like stock (3 of the ring's 30 steps on donut, board.volume_steps).  The volume_step-NN animations show 2 s and then loop
  * black forever, so the previous one has to be unset or they pile up in ledcontroller; a timer clears the last one. */
 static int volume = -1;                      /* 0..100, read from the device on first use */
-static char vol_pat[24];
+static char vol_pat[32];
 static atomic_llong vol_clear_at;
 
 static long long mono_ms(void)
@@ -1639,10 +1666,24 @@ static long long mono_ms(void)
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+/* PC tests: the mixer's volumes as files in HASSMIC_FAKE_MIXER (one per property), there being no audio_manager */
+static const char *fake_mixer(const char *prop, char *file, size_t n)
+{
+    const char *d = getenv("HASSMIC_FAKE_MIXER");
+    if (!d) return NULL;
+    snprintf(file, n, "%s/%s", d, prop);
+    return file;
+}
+
 static int read_prop_volume(const char *prop, int fallback)
 {
     char out[1024], *line, *save; int v = fallback, x;
     char *argv[] = { "/system/bin/audio_manager_get_prop", (char *)prop, NULL };
+    if (fake_mixer(prop, out, sizeof out)) {
+        FILE *f = fopen(out, "r");
+        if (f) { if (fscanf(f, "%d", &x) == 1 && x >= 0 && x <= 100) v = x; fclose(f); }
+        return v;
+    }
     run_output(argv, out, sizeof out);
     for (line = strtok_r(out, "\n", &save); line; line = strtok_r(NULL, "\n", &save))
         if (sscanf(line, "%d", &x) == 1 && x >= 0 && x <= 100) v = x;
@@ -1652,12 +1693,188 @@ static int read_prop_volume(const char *prop, int fallback)
 static int read_volume(void) { return read_prop_volume("MainVolume", 40); }
 
 /* The mixer keeps one volume per stream type.  MainVolume is what the stock volume keys move and covers the Music and Earcon
- * streams; the TTS stream, which carries the assistant's replies, follows TTSVolume alone.  One knob for the user: both. */
+ * streams; the TTS stream, which carries the assistant's replies, follows TTSVolume alone.  One knob for the user: both,
+ * the loudest of the four while the volumes are separate (mix_target, mix_apply). */
 static void set_prop_volume(const char *prop, int v)
 {
-    char val[8];
+    char val[8], file[300];
+    if (fake_mixer(prop, file, sizeof file)) { FILE *f = fopen(file, "w"); if (f) { fprintf(f, "%d\n", v); fclose(f); } return; }
     snprintf(val, sizeof val, "%d", v);
     run("/system/bin/audio_manager_set_prop", prop, val);
+}
+
+/* Separate volumes (setting separate_volumes, issue #32): off, one volume for everything, as stock.  On, four of
+ * their own, 0..100 each: music (`volume`: what the media player, Sendspin and the keys show), the assistant's replies
+ * and announcements, our sounds (wake, buttons, Bluetooth, Drop In's chimes), timers and Drop In calls (the far end).  What the Echo does with a
+ * volume (Echo Dot 2, docs/re-platform.md): the mixer has MainVolume for the Music, Earcon and Voip streams, TTSVolume
+ * for TTS and AlarmVolume for Alarm, and Amazon's speaker processing (libasp) adds up to 14.5 dB to everything once its
+ * own volume is 90 or more, which is whichever of MainVolume and TTSVolume was set last (AlarmVolume never moves it:
+ * the Alarm stream topped out 12 dB under the others).  So both mixer volumes stay at the loudest of the four, where
+ * libasp agrees with them, and each kind is turned down in our own PCM by what the Echo's curve puts between its volume
+ * and that one (vol_db): 30 sounds the same on every slider, and as 30 on a stock Echo.  Music, the phone's Bluetooth
+ * audio and Drop In through the backend (audio_music_gain), replies too (audio_tts_gain), sounds and timers in the
+ * earcon thread.  Home Assistant's media (media_player.play_media) plays on the TTS stream, but is music (tts_kind).
+ * A Bluetooth speaker with absolute volume takes the loudest's place: the mixer plays at full scale, the speaker is set
+ * to the loudest (a2dp_speaker_volume), the rest turned down as on the Echo's speaker (the Echo's curve standing in for
+ * the speaker's, which no one measured), and its own buttons move the music (core_speaker_volume).
+ * Replies, sounds, timers and calls each have a volume of their own or follow the music's, some points above or below
+ * it (music + offset, clamped to 0..100: a volume like the others, so at offset 0 the music's own loudness).  Calls
+ * follow it by default, as they did before they had a volume (the Voip stream follows MainVolume; its curve is taken
+ * to be the Music stream's, docs/re-platform.md). */
+static int vol_split;                        /* under lock */
+static struct { int level, linked, offset; } kinds[VOL_KINDS] = { { 40, 0, 0 }, { 40, 0, 0 }, { 40, 0, 0 }, { 40, 1, 0 } };   /* under lock */
+static int tts_media;                        /* under lock: the TTS stream plays Home Assistant's media */
+static int tts_written = -1, main_written = -1;     /* under lock: TTSVolume and MainVolume as we last set them */
+static int speaker_mode;                     /* under lock: SPEAKER_* */
+static int echo_own_volume;                  /* under lock: the Echo's volume, set aside while speaker_mode */
+
+static void volume_led(int v, int assistant);
+static int clamp100(int v) { return v < 0 ? 0 : v > 100 ? 100 : v; }
+static int clamp_offset(int v) { return v < -VOL_OFFSET_MAX ? -VOL_OFFSET_MAX : v > VOL_OFFSET_MAX ? VOL_OFFSET_MAX : v; }
+
+/* The Echo's volume curve: dB under volume 100 (Echo Dot 2, 2026-10-17: a -30 dBFS tone through the Music, Earcon and
+ * TTS streams in micRaw, the three within 0.5 dB of each other; libasp's boost above 80 included, the mixer alone is
+ * nearly flat there).  The other models' are not measured: this one */
+static float vol_db(int v)
+{
+    static const int at[] = { 0, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 };
+    static const float db[] = { -60, -47.3f, -40.6f, -35.7f, -30.5f, -26.5f, -22.4f, -19.5f, -18.4f, -14.0f, -10.0f, 0 };
+    int i = 1;
+    v = clamp100(v);
+    while (at[i] < v) i++;
+    return db[i - 1] + (db[i] - db[i - 1]) * (v - at[i - 1]) / (at[i] - at[i - 1]);
+}
+
+/* lock held: what a kind (VOL_*) plays at now, its own volume or the music's moved by its offset */
+static int kind_volume(int k) { return kinds[k].linked ? clamp100(core_volume() + kinds[k].offset) : kinds[k].level; }
+
+/* lock held: what everything is turned down from: the volume, or the loudest kind */
+static int loudest(void)
+{
+    int v = core_volume();
+    if (!vol_split) return v;
+    for (int k = 0; k < VOL_KINDS; k++)       /* a call's volume only while one is on: no hidden loud one moves the rest */
+        if ((k != VOL_CALLS || atomic_load(&dropin_live)) && kind_volume(k) > v) v = kind_volume(k);
+    return v;
+}
+
+/* lock held: what MainVolume and TTSVolume both are now: the loudest, or full scale for a speaker that sets the volume */
+static int mix_target(void) { return speaker_mode == SPEAKER_ABSOLUTE ? 100 : loudest(); }
+
+/* lock held: what audio for volume v is multiplied by: 1 at the mixer's own, 0 at volume 0 */
+static float mix_gain(int v)
+{
+    if (!vol_split) return 1;
+    return v <= 0 ? 0 : powf(10.0f, (vol_db(v) - vol_db(loudest())) / 20.0f);
+}
+
+static void mix_apply(void)                  /* lock held: the mixer's volumes and our gains, as they should be now */
+{
+    int v = mix_target();
+    if (v != main_written) { set_prop_volume("MainVolume", v); main_written = v; }
+    if (v != tts_written) { set_prop_volume("TTSVolume", v); tts_written = v; }
+    static int spk_was = -1;
+    int spk = speaker_mode == SPEAKER_ABSOLUTE ? loudest() : -1;
+    if (spk >= 0 && spk != spk_was) fprintf(stderr, "volume: the speaker at %d\n", spk);
+    spk_was = spk;
+    a2dp_speaker_volume(loudest());
+    audio_music_gain(mix_gain(core_volume()));
+    audio_tts_gain(mix_gain(tts_media ? core_volume() : kind_volume(VOL_ASSISTANT)));
+    atomic_store(&sounds_q16, (int)lroundf(mix_gain(kind_volume(VOL_SOUNDS)) * 65536));
+    atomic_store(&timers_q16, (int)lroundf(mix_gain(kind_volume(VOL_TIMERS)) * 65536));
+    audio_call_gain(mix_gain(kind_volume(VOL_CALLS)));
+}
+
+static void tts_kind(int media)              /* the playback thread, at each start of the TTS stream */
+{
+    pthread_mutex_lock(&core_lock);
+    tts_media = media;
+    mix_apply();
+    pthread_mutex_unlock(&core_lock);
+}
+
+/* The music volume while the volumes are separate: MainVolume is then the loudest of three and says nothing about it,
+ * so it is kept here (and read at start instead of MainVolume) */
+static const char *music_volume_path(void)
+{
+    static char p[256]; const char *d = getenv("HASSMIC_STATE");
+    snprintf(p, sizeof p, "%s/volume.music", d ? d : "/data/local/hassmic/state");
+    return p;
+}
+static int music_dirty;                      /* under lock: volume.music to be written (music_volume_write) */
+static void music_volume_keep(void)          /* lock held */
+{
+    music_dirty = vol_split;
+    if (!vol_split) unlink(music_volume_path());
+}
+
+/* volume_sync's thread, outside the lock: a write with its fsyncs takes tens of ms on the flash, and the volume moves
+ * in bursts (keys held, Home Assistant's slider, Sendspin); so at most once a second, the last value */
+static void music_volume_write(void)
+{
+    char t[8];
+    pthread_mutex_lock(&core_lock);
+    int v = speaker_mode ? echo_own_volume : volume, go = music_dirty;      /* a speaker that came meanwhile */
+    music_dirty = 0;
+    pthread_mutex_unlock(&core_lock);
+    if (!go) return;
+    snprintf(t, sizeof t, "%d\n", v);
+    statefile_write(music_volume_path(), 0644, t, strlen(t));
+    pthread_mutex_lock(&core_lock);
+    if (!vol_split) unlink(music_volume_path());        /* switched off meanwhile */
+    pthread_mutex_unlock(&core_lock);
+}
+
+int core_separate_volumes(int set)
+{
+    if (set >= 0 && (set != 0) != vol_split) {
+        /* on: each starts where everything was on the Echo's own speaker, so nothing jumps (levels after it, from
+         * state/config or an import, then win: settings.c lists them later) */
+        if (set) for (int k = 0; k < VOL_KINDS; k++) kinds[k].level = speaker_mode ? echo_own_volume : core_volume();
+        vol_split = set != 0;
+        if (!vol_split || speaker_mode == SPEAKER_NONE) music_volume_keep();    /* not a Bluetooth speaker's: core_speaker */
+        mix_apply();
+    }
+    return vol_split;
+}
+int core_kind_volume(int k, int set) { if (set >= 0) { kinds[k].level = clamp100(set); mix_apply(); } return kinds[k].level; }
+int core_kind_linked(int k, int set)
+{
+    if (set >= 0 && (set != 0) != kinds[k].linked) {
+        /* nothing jumps: linked, the offset puts it where it was (the offset spans -100..100, any level from any
+         * music volume); apart, its own volume is where it played (a saved or imported offset or volume after it then
+         * wins: settings.c lists them later) */
+        int music = speaker_mode ? echo_own_volume : core_volume();         /* never a Bluetooth speaker's */
+        if (set) kinds[k].offset = clamp_offset(kinds[k].level - music);
+        else kinds[k].level = clamp100(music + kinds[k].offset);
+        kinds[k].linked = set != 0;
+        mix_apply();
+    }
+    return kinds[k].linked;
+}
+int core_kind_offset(int k) { return kinds[k].offset; }
+void core_set_kind_offset(int k, int offset) { kinds[k].offset = clamp_offset(offset); mix_apply(); }
+
+/* A speaker with absolute volume turned by its own buttons: it is at the loudest kind, so the music moves by as much
+ * (separate volumes; else that is the volume) */
+void core_speaker_volume(int pct)
+{
+    int v = vol_split ? core_volume() + pct - loudest() : pct;
+    fprintf(stderr, "volume: the speaker's own buttons, %d\n", pct);
+    core_set_volume(v);
+    if (vol_split && loudest() != pct) fprintf(stderr, "volume: the speaker back at %d, the loudest\n", loudest());
+}
+
+/* lock held: a kind's own volume from the keys, a step as the main one's; the ring shows it (replies in cyan) */
+static void level_step(int k, int dir)
+{
+    static const char *const what[VOL_KINDS] = { "assistant", "sounds", "timers", "calls" };
+    int v = kinds[k].level = clamp100((kinds[k].level + 5) / 10 * 10 + dir * 10);
+    mix_apply();
+    volume_led(v, k == VOL_ASSISTANT);
+    fprintf(stderr, "volume: %s %d\n", what[k], v);
+    settings_save();
+    core_settings_changed();
 }
 
 /* Playing to a Bluetooth speaker (a2dp.c, btout.c) it has a volume of its own: what the buttons and Home Assistant move
@@ -1666,9 +1883,6 @@ static void set_prop_volume(const char *prop, int v)
  * 30 the mixer's curve, made for the Echo's small speaker, put it 38 dB down); without, the mixer applies it as before.
  * The Echo's own volume is kept in a file meanwhile, so that a hassmic that dies on the speaker does not take what the
  * mixer then says for it and play the Echo's speaker at the Bluetooth speaker's level, or at full scale. */
-static int speaker_mode;                     /* under lock: SPEAKER_* */
-static int echo_own_volume;                  /* under lock: the Echo's volume, set aside while speaker_mode */
-
 static const char *own_volume_path(void)
 {
     static char p[256]; const char *d = getenv("HASSMIC_STATE");
@@ -1679,14 +1893,21 @@ static const char *own_volume_path(void)
 int core_volume(void)
 {
     if (volume < 0) {                        /* whatever it was left at: in line now */
-        FILE *f = fopen(own_volume_path(), "r"); int v;
+        /* volume.music only while state/config says the volumes are separate (this may run before settings_load): a
+         * hand edit or an older build (a fallback after an update) leaves the file behind with the setting gone, and
+         * the volume moved since is MainVolume's */
+        char sv[8]; int split = !settings_peek("separate_volumes", sv, sizeof sv) && !strcmp(sv, "on");
+        FILE *f = fopen(own_volume_path(), "r"), *m = split ? fopen(music_volume_path(), "r") : NULL; int v;
+        if (!split && !unlink(music_volume_path())) fprintf(stderr, "volume: state/volume.music left over, the volumes are not separate\n");
         if (f && fscanf(f, "%d", &v) == 1 && v >= 0 && v <= 100) {
-            volume = v; set_prop_volume("MainVolume", volume);
+            volume = v;
             fprintf(stderr, "volume: %d (the Echo's own, set aside for a Bluetooth speaker)\n", volume);
-        } else volume = read_volume();
+        } else if (m && fscanf(m, "%d", &v) == 1 && v >= 0 && v <= 100) volume = v;     /* separate volumes */
+        else volume = read_volume();
         if (f) fclose(f);
+        if (m) fclose(m);
         unlink(own_volume_path());
-        set_prop_volume("TTSVolume", volume);
+        mix_apply();
     }
     return volume;
 }
@@ -1700,11 +1921,11 @@ void core_speaker(int mode, int pct)
         echo_own_volume = was;
         FILE *f = fopen(own_volume_path(), "w"); if (f) { fprintf(f, "%d\n", was); fclose(f); }
     }
-    if (mode == SPEAKER_NONE) volume = echo_own_volume;
+    if (mode == SPEAKER_NONE) { volume = echo_own_volume; if (vol_split) music_volume_keep(); }
     else if (mode == SPEAKER_ABSOLUTE) volume = pct < 0 ? 0 : pct > 100 ? 100 : pct;
     speaker_mode = mode;
-    int mix = mode == SPEAKER_ABSOLUTE ? 100 : volume;
-    set_prop_volume("MainVolume", mix); set_prop_volume("TTSVolume", mix);
+    mix_apply();
+    int mix = mix_target();
     if (mode == SPEAKER_NONE) unlink(own_volume_path());
     fprintf(stderr, "volume: %d, mixer at %d (%s)\n", volume, mix, mode == SPEAKER_NONE ? "the Echo's speaker" :
             mode == SPEAKER_ABSOLUTE ? "a Bluetooth speaker sets the volume" : "a Bluetooth speaker, the mixer sets the volume");
@@ -1716,17 +1937,25 @@ void core_speaker(int mode, int pct)
     pthread_mutex_unlock(&core_lock);
 }
 
-void core_set_volume(int v)
+/* The ring shows the level for 2 s: stock's white steps, the Assistant's own volume in cyan where root installed ours
+ * (ring.c; stock's otherwise, the two then look alike) */
+static void volume_led(int v, int assistant)
 {
-    char pat[24]; int step;
-    volume = v < 0 ? 0 : v > 100 ? 100 : v;
-    step = volume * board.volume_steps / 100 ? volume * board.volume_steps / 100 : 1;
-    snprintf(pat, sizeof pat, "volume_step-%02d", step);
-    if (speaker_mode != SPEAKER_ABSOLUTE) { set_prop_volume("MainVolume", volume); set_prop_volume("TTSVolume", volume); }
+    char pat[32]; int step = v * board.volume_steps / 100 ? v * board.volume_steps / 100 : 1;
+    if (assistant && ring_assistant_steps()) snprintf(pat, sizeof pat, "hassmic_assist_%02d", step);
+    else snprintf(pat, sizeof pat, "volume_step-%02d", step);
     if (vol_pat[0] && strcmp(vol_pat, pat)) led("-u", vol_pat);
     led("-s", pat);
     strcpy(vol_pat, pat);
     atomic_store(&vol_clear_at, mono_ms() + 2500);
+}
+
+void core_set_volume(int v)
+{
+    volume = clamp100(v);
+    if (vol_split && speaker_mode == SPEAKER_NONE) music_volume_keep();
+    mix_apply();
+    volume_led(volume, 0);
     fprintf(stderr, "volume: %d\n", volume);
     if (connected && proto->volume_changed) proto->volume_changed(volume);
     if (core_sendspin_port) sendspin_volume_changed(volume);
@@ -1824,7 +2053,8 @@ float core_lux(void)
 /* Anything may move MainVolume behind our back (audio_manager_set_prop, a stock daemon, the stock keys when -V), and
  * TTSVolume does not follow by itself: replies would then play at the old volume.  Poll both every 2 s: a changed
  * MainVolume is the user's wish and is adopted (Home Assistant and Music Assistant are told, no LED), a strayed TTSVolume
- * is pulled back in line.
+ * is pulled back to what it should be (mix_target); while the volumes are separate MainVolume is not the volume and is
+ * pulled back too.
  * The mixer's global Mute silences every stream whatever the volumes say, and it persists across reboots: stock Alexa
  * ("Alexa, mute") can leave it set, and then nothing plays.  Nothing of ours uses it (the mic button is a hardware latch,
  * a player mute from Music Assistant is ours in software), so a set Mute is cleared. */
@@ -1833,31 +2063,60 @@ static void volume_sync(void)
     int main_v, tts_v;
     if (read_prop_volume("Mute", 0) != 0) { fprintf(stderr, "speaker: global Mute was set, clearing it\n"); set_prop_volume("Mute", 0); }
     pthread_mutex_lock(&core_lock);
-    int cur = core_volume();
+    int cur = core_volume(), want = mix_target();
     pthread_mutex_unlock(&core_lock);
-    main_v = read_prop_volume("MainVolume", cur);
-    tts_v = read_prop_volume("TTSVolume", cur);
+    main_v = read_prop_volume("MainVolume", want);
+    tts_v = read_prop_volume("TTSVolume", want);
     pthread_mutex_lock(&core_lock);
     if (speaker_mode == SPEAKER_ABSOLUTE) {                         /* 100 is ours: only a stray TTSVolume to mend */
-        if (main_v == 100 && tts_v != 100) set_prop_volume("TTSVolume", 100);
-    } else if (volume == cur) {                                     /* nobody set it meanwhile */
-        if (main_v != cur) {
-            volume = main_v;
+        if (main_v == 100 && tts_v != 100) { tts_written = -1; mix_apply(); }
+    } else if (volume == cur && mix_target() == want) {           /* nobody set it meanwhile */
+        if (main_v != want && !vol_split) {                         /* MainVolume is the volume: the user's wish */
+            volume = main_written = main_v;
             fprintf(stderr, "volume: %d (changed outside)\n", volume);
             if (connected && proto->volume_changed) proto->volume_changed(volume);
             if (core_sendspin_port) sendspin_volume_changed(volume);
             a2dp_volume_changed(volume);
+        } else if (main_v != want) {                                /* the loudest of three: ours again */
+            fprintf(stderr, "volume: MainVolume %d changed outside, %d again (separate volumes)\n", main_v, want);
+            main_written = -1;
         }
-        if (tts_v != volume) set_prop_volume("TTSVolume", volume);
+        if (tts_v != mix_target()) tts_written = -1;               /* set by someone else: ours again */
+        mix_apply();
     }
     pthread_mutex_unlock(&core_lock);
+}
+
+/* HASSMIC_FAKE_SPEAKER=<file> (tests; the PC has no Bluetooth speaker): "none", "mixer" or "absolute <pct>" in it is
+ * a speaker coming and going, as btout.c would tell it; another <pct> while absolute, its own buttons (a2dp.c) */
+static void fake_speaker(void)
+{
+    static const char *path; static int init; char t[32]; int pct = -1; FILE *f;
+    if (!init) { init = 1; path = getenv("HASSMIC_FAKE_SPEAKER"); }
+    if (!path || !(f = fopen(path, "r"))) return;
+    if (fgets(t, sizeof t, f)) {
+        static int last = -1;
+        int mode = !strncmp(t, "mixer", 5) ? SPEAKER_MIXER : sscanf(t, "absolute %d", &pct) == 1 ? SPEAKER_ABSOLUTE : SPEAKER_NONE;
+        pthread_mutex_lock(&core_lock);
+        int same = mode == speaker_mode;
+        if (same && mode == SPEAKER_ABSOLUTE && pct != last) core_speaker_volume(pct);     /* its own buttons */
+        pthread_mutex_unlock(&core_lock);
+        if (!same) core_speaker(mode, pct);
+        last = pct;
+    }
+    fclose(f);
 }
 
 static void on_volume(int dir)
 {
     if (!use_volume) return;
     pthread_mutex_lock(&core_lock);
-    core_set_volume((core_volume() + 5) / 10 * 10 + dir * 10);
+    /* separate volumes: what plays now, a Drop In call, a reply (not Home Assistant's media) or a ringing timer, else
+     * the music; one that follows the music moves with it */
+    int k = !vol_split ? -1 : atomic_load(&dropin_live) ? VOL_CALLS : atomic_load(&tts_on) && !tts_media ? VOL_ASSISTANT
+          : atomic_load(&alarm_on) ? VOL_TIMERS : -1;
+    if (k >= 0 && !kinds[k].linked) level_step(k, dir);
+    else core_set_volume((core_volume() + 5) / 10 * 10 + dir * 10);
     sound_request(SND_VOLUME);
     pthread_mutex_unlock(&core_lock);
 }
@@ -1867,7 +2126,7 @@ static void *volume_led_thread(void *arg)
     int tick = 0;
     (void)arg;
     while (!atomic_load(&quit)) {
-        if (++tick % 10 == 0) volume_sync();
+        if (++tick % 10 == 0) { volume_sync(); music_volume_write(); fake_speaker(); }
         long long at = atomic_load(&vol_clear_at);
         if (at && mono_ms() >= at) {
             pthread_mutex_lock(&core_lock);

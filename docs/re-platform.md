@@ -168,6 +168,35 @@ lipc-send-event com.amazon.puffin set_animation -s active-talking
 - Change events on the same source: `MainVolumeChanged`, `DebouncedMainVolumeChanged`, `TTSVolumeChanged`,
   `AlarmVolumeChanged`, `MuteChanged`, `muteStateChanged`.
 - Volumes persist in `/data/mixer_meta/audiodVolumes` (`init.mt8516.rc:154`).
+- Which stream follows which volume (Echo Dot 2, 2026-10-17; a 1 kHz tone through `mixplay -t <type>` per stream,
+  recorded in micRaw, each property in turn 70 -> 30 with the others at 70; hassmic stopped with SIGSTOP):
+
+| Stream | `MainVolume` | `TTSVolume` | `AlarmVolume` |
+|---|---|---|---|
+| Music | −12.4 dB | 0 | 0 |
+| TTS | 0 | −10.9 dB | 0 |
+| Earcon | −12.0 dB | 0 | 0 |
+| Alarm | 0 | 0 | −12.0 dB (tops out early: below) |
+| Voip | about −12 dB | about −7 dB | 0 |
+
+  Voip is the call mode's: its tones were cut to ~200 ms and its level wandered ±2 dB from one to the next (noise
+  dependent volume), so its row is rough.  `NotificationVolume`, `SystemVolume`, `RingVolume`, `TelephonyVolume`,
+  `AccessibilityVolume`, `NavigationVolume` answer nothing on the Dot 2 (`audio_manager_get_prop` prints nothing).
+  The mixer itself ducks nothing: music held its level under Earcon, Alarm and TTS tones alike (hassmic ducks).
+  `audio_manager_set_prop` takes ~105 ms to return, and the mixer ramps to a new volume over ~150 ms more.
+- The volume curve (same tone at -30 dBFS, so speaker and mic stay linear; Music, Earcon and TTS within 0.5 dB of
+  each other), dB under volume 100: 90 -10.0, 80 -14.0, 70 -18.4, 60 -19.5, 50 -22.4, 40 -26.5, 30 -30.5, 20 -35.7,
+  10 -40.6, 5 -47.3, 0 silent.  The top of it is not the mixer's: libasp's speaker pipeline has a volume of its own
+  (`CurrentVolume` in `LASP_CMD_GET_ASP_DEBUG_INFO`, settable with `lipc-set-prop -i com.doppler.lasp
+  LASP_CMD_NOTIFY_CURRENT_VOLUME <n>`) and adds +7.6 dB to the whole output at 90 and +14.5 dB at 100, nothing at 70
+  or below (MainVolume fixed at 50, `CurrentVolume` stepped).  It follows whichever of `MainVolume` and `TTSVolume`
+  was set last; `AlarmVolume` does not move it, hence the Alarm stream's top end 12 dB under the others.
+- Voip's curve, with speech instead of tones (call mode cuts tones; Echo Dot 2, 2026-10-17: 4.5 s of
+  `testdata/alexa_espeak.raw` at 16 kHz through `mixplay -t Music` and `-t Voip` in turn, MainVolume and TTSVolume
+  both at 80, 50, 20, micRaw, each play aligned to the speech's own envelope and measured on its active frames): the
+  same shape as Music's, a constant ~6.5 dB under it (80: -6.5 dB, 50: -6.9, 20: -6.0; from 80 to 20 Voip falls
+  19.2 dB, Music 19.8).  So the curve above holds for calls too, and the 6.5 dB are call mode's processing, which a
+  stock call has as well.  `device-logs/volexp/callcurve.*`.
 
 ### Commands to try
 
@@ -184,7 +213,7 @@ lipc-wait-event -m com.doppler.audiod '*'               # watch volume/mute even
 ### Open questions
 
 - Exact argument order of `audio_manager_set_prop` (help text suggests `<prop> <value>`). **UNVERIFIED**
-- Does TTS played on the `TTS` stream follow `TTSVolume`, `MainVolume`, or both?
+- ~~Does TTS played on the `TTS` stream follow `TTSVolume`, `MainVolume`, or both?~~ `TTSVolume` alone (table above).
 - Note for the mixer work: `AllowMic` may default to 0 until PuffinApp sets it, which would give silent capture. Check it
   first if `micAsr` returns zeros. `CaptureRecordStart micAsr` is a built-in capture dump worth trying.
 

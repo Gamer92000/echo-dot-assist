@@ -38,7 +38,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 ```sh
 .venv/bin/python tests/fake_ha_esphome.py     # ESPHome native API, as Home Assistant
 .venv/bin/python tests/fake_ha_arbitration.py # two Echos under one fake HA: wake word arbitration, join paths and security
-.venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer
+.venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer,
+                                             # the ringtone at the sounds volume (HASSMIC_EARCONS: stand-in stock sounds)
 .venv/bin/python tests/blueprint_dropin.py    # the Drop In voice blueprint against stand-ins of HA's registries, states,
                                              # actions and template engine: renamed ids, other devices, failures, replies
 .venv/bin/python tests/ha_real_dropin.py      # the blueprint in a real Home Assistant (build/ha-venv, made by --setup;
@@ -55,6 +56,10 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # attestation token, DAVS, unpack, staging, install, deregister
 .venv/bin/python tests/fake_ha_update.py      # online updates: page channel + HA update entity, fake GitHub, root's installer
 .venv/bin/python tests/fake_ha_wakesound.py   # wake sound removal: the PC's stand-in echo (HASSMIC_FAKE_ECHO) off/on
+.venv/bin/python tests/fake_ha_volumes.py     # separate volumes: four of their own or following the music, the mixer at the
+                                             # loudest, HA's media at the music's, keys on what plays, gains in dB, a
+                                             # restart, a Bluetooth speaker, the page, exports (HASSMIC_FAKE_MIXER,
+                                             # HASSMIC_FAKE_SPEAKER)
 .venv/bin/python tests/fake_ha_ring.py        # light ring: the animation set from stand-in stock files, HA's light,
                                              # the Echo's own patterns first, the listening ring turned by the beam
 .venv/bin/python tests/fake_improv.py         # setup from a phone: Improv over BLE against a fake controller on a pty
@@ -138,7 +143,12 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 
 - **Core (`main.c`, `core.h`)**: state machine `IDLE/LISTENING/THINKING/SPEAKING`, pipeline timeout, TTS queue with
   barge-in flush, alarms (timers), mute (hardware latch that software can set but never clear, plus a soft mute from HA),
-  volume, LED ring, earcons, wake word threshold hints. The front end is told when a command is spoken (`listening()`:
+  volume, LED ring, earcons, wake word threshold hints.  Separate volumes (setting `separate_volumes`, issue #32):
+  music (`volume`), replies, sounds, timers, Drop In calls at volumes of their own or each following the music's +- an offset in
+  points (`<kind>_linked`/`_offset`; linked, its HA number is unlisted); MainVolume and TTSVolume both at the loudest
+  (libasp's own volume, which boosts the top end, follows the last of them set), each kind turned down in its PCM by
+  the measured curve (`vol_db`; `audio_music_gain`, `audio_tts_gain`, the earcon thread); HA's `play_media` is music
+  though on the TTS stream (`core_tts_begin`'s `media`, `tts_kind`). docs/re-platform.md has the measurements. The front end is told when a command is spoken (`listening()`:
   without it its cancellers remove the talker after 1.5 s). `earsup.c` (wake sound removal: our own UI sounds taken back
   out of the pipeline's audio by a residual echo suppressor keyed to the PCM we play; experimental, setting
   `wake_sound_removal`, off by default; holds the audio from the sound until its echo has passed, then releases it at
@@ -242,7 +252,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (`name=value`; the positional `state/settings` of older versions is read once and moved); arbitration, Sendspin and
   the equalizer stay where their module keeps them. Loaded in `main()` whatever the protocol. Changes from elsewhere
   reach HA through `proto->settings_changed`. Features (`feature` in the table: arbitration, sound, whisper, Wi-Fi
-  motion, light sensor (Illuminance + auto level), Bluetooth audio, Bluetooth speaker, Drop In): their entities are listed only while on (`proto_esphome.c` `listed()`,
+  motion, light sensor (Illuminance + auto level), Bluetooth audio, Bluetooth speaker, Drop In, separate volumes): their entities are listed only while on (`proto_esphome.c` `listed()`,
   which also gates states); switching one closes the HA links (`proto->entities_changed`), HA re-lists on reconnect and
   deletes what is gone (registry included). HA always has: media player, mute, DND, wake sound, LEDs, EQ, firmware,
   Web UI address, Sendspin token (a secret: never on the page), Identify, Light ring (where root installed `ring.c`'s

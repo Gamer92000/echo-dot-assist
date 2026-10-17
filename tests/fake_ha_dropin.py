@@ -7,7 +7,7 @@ by "<wake word>, stop", by "auflegen", from Home Assistant, from the settings pa
 off, an Echo outside the network, a name nobody has); and an Echo that vanishes mid-call.  For each call the kitchen
 makes: every state on the way ("calling" before a refusal that comes at once) and the "Drop In result" event.
 Everything goes out on loopback (HASSMIC_ARB_ADDR): nothing of it reaches the LAN."""
-import asyncio, base64, os, re, signal, subprocess, sys, tempfile, time
+import asyncio, base64, os, re, signal, struct, subprocess, sys, tempfile, time, wave
 import numpy as np
 from aioesphomeapi import APIClient, VoiceAssistantEventType as Ev
 
@@ -16,6 +16,11 @@ sys.path.insert(0, os.path.join(ROOT, "tests"))
 from webclient import Browser
 ARB, BCAST = 28994, "127.255.255.255"
 SPEECH = f"{ROOT}/testdata/alexa_espeak.raw"
+# a stand-in for stock's incoming ringtone (the PC has none, and plays no ring without it): 1 s of 440 Hz at 8000
+EARCONS = tempfile.mkdtemp()
+with wave.open(os.path.join(EARCONS, "comms_call_incoming_ringtone.wav"), "wb") as w:
+    w.setnchannels(1); w.setsampwidth(2); w.setframerate(48000)
+    w.writeframes((8000 * np.sin(2 * np.pi * 440 * np.arange(48000) / 48000)).astype("<i2").tobytes())
 
 
 def check(cond, what):
@@ -25,7 +30,7 @@ check.failed = False
 
 
 class Echo:
-    def __init__(self, name, port, net=None, speech=False):
+    def __init__(self, name, port, net=None, speech=False, config=""):
         self.name, self.port, self.state = name, port, tempfile.mkdtemp()
         self.web, self.audio = port + 10, port + 20
         self.node = re.sub(r"[^a-z0-9]", "-", name.lower())
@@ -33,17 +38,20 @@ class Echo:
         self.voip = os.path.join(self.state, "voip.raw")
         self.api_key = base64.b64encode(os.urandom(32)).decode()
         with open(os.path.join(self.state, "api_key"), "w") as f: f.write(self.api_key + "\n")
+        with open(os.path.join(self.state, "config"), "w") as f: f.write(config)
+        self.keys = os.path.join(self.state, "keypad"); os.mkfifo(self.keys)
+        self.keypad = os.open(self.keys, os.O_RDWR)    # opened first: hassmic's open() would wait for a writer
         if net:                                         # a member already: the network's id and key
             with open(os.path.join(self.state, "arbitration"), "w") as f: f.write(f"arbitrate 1\nctr 0\nnet {net}\n")
         self.env = dict(os.environ, HASSMIC_STATE=self.state, HASSMIC_PLAY=os.path.join(self.state, "play.raw"), HASSMIC_VOIP=self.voip,
                         HASSMIC_MDNS_FILE=os.path.join(self.state, "none"), HASSMIC_ARB_ADDR=BCAST, HASSMIC_TEST_SCORE="500",
-                        HASSMIC_MODELS=os.path.join(self.state, "models"))
+                        HASSMIC_MODELS=os.path.join(self.state, "models"), HASSMIC_EARCONS=EARCONS + "/")
         if speech: self.env["HASSMIC_CAP"] = SPEECH
         self.states, self.starts, self.seq = {}, [], []     # seq: (object id, state or event type) as they came
 
     def start(self):
         self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.port), "-n", self.name, "-L",
-                                      "-z", "0", "-o", "0", "-a", str(ARB), "-i", str(self.audio), "-W", str(self.web)],
+                                      "-z", "0", "-o", "0", "-a", str(ARB), "-i", str(self.audio), "-W", str(self.web), "-b", self.keys],
                                      env=self.env, stderr=open(self.log, "a"))
 
     def text(self): return open(self.log).read()
@@ -81,6 +89,8 @@ class Echo:
         await self.cli.execute_service(svc, {"target": target})
 
     def press(self, oid): self.cli.button_command(self.by[oid].key)
+    def key(self, code):
+        for v in (1, 0): os.write(self.keypad, struct.pack("llHHi", 0, 0, 1, code, v))     # struct input_event, EV_KEY
 
 
 def level(path, secs):
@@ -114,7 +124,10 @@ async def until(cond, secs):
 
 async def main():
     net = f"{int.from_bytes(os.urandom(8), 'little') | 1:016x} " + base64.b64encode(os.urandom(32)).decode()
-    a, b = Echo("Kitchen Echo", 26180, net, speech=True), Echo("Hall Echo", 26181, net)
+    # the hall with separate volumes, sounds at 20 under the music's 40 (its ringtone is one of its sounds), calls at
+    # their own 40
+    a, b = Echo("Kitchen Echo", 26180, net, speech=True), Echo("Hall Echo", 26181, net,
+                                                               config="separate_volumes=on\nsounds_volume=20\ncall_volume_linked=off\ncall_volume=40\n")
     c = Echo("Garage Echo", 26182)                      # outside the network: it starts one of its own... unless it joins
     for e in (a, b): e.start()
     try:
@@ -142,6 +155,10 @@ async def main():
         check(la < -70, f"the kitchen plays the hall's silence ({la:.1f} dBFS)")
         m = envelope_match(b.voip, SPEECH)
         check(m > 0.6, f"what the hall plays is the kitchen's speech (envelope match {m:.2f})")
+        check("call_volume" in b.by and "call_volume" not in a.by, "Call volume in Home Assistant where calls have their own (the hall), not where they follow the music")
+        b.key(114)                                      # volume down during the call: the call's own volume
+        check(await until(lambda: "volume: calls 30" in b.text() and "audio: call gain 0.631" in b.text(), 2),
+              "volume down during a call moves the call volume (40 -> 30: -4 dB on the curve, the call's gain 0.631)")
         check(re.search(r"drop in: connected with " + b.node, a.text()) is not None, "the kitchen's log says connected")
         b.press("end_drop_in")
         check(await until(lambda: a.dropin()[0] == "idle" and b.dropin()[0] == "idle", 2), "End Drop In in Home Assistant hangs up both")
@@ -156,6 +173,9 @@ async def main():
         check(re.search(r"drop in: result ringing hall-echo\n", a.text()) is not None, "  (no end of call sound for it)")
         await asyncio.sleep(2)
         check(a.dropin()[0] == "calling", "still ringing 2 s later (not answered by itself)")
+        rings = [int(x) for x in re.findall(r"until stopped, peak (\d+)", b.text())]
+        want = 8000 * 10 ** ((-35.7 + 26.5) / 20)          # the curve's 20 against 40 (main.c vol_db)
+        check(rings and abs(rings[-1] - want) <= 3, f"  the ring at the hall's sounds volume, not the music's ({rings[-1:]} of 8000, want {want:.0f})")
         b.proc.send_signal(signal.SIGUSR2)                 # the hall's action button
         check(await until(lambda: a.dropin()[0] == "connected" and b.dropin()[0] == "connected", 2), "the action button answers")
         check(await until(lambda: [v for o, v in a.seq[mark:] if o == "drop_in_result"] == ["ringing", "connected"], 1), f"  results: ringing, connected ({a.seq[mark:]})")

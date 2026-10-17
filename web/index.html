@@ -417,6 +417,20 @@ details.more ul { margin: 8px 0 0; padding-left: 18px; }
 details.more li { margin: 4px 0; }
 
 /* equalizer: three bands side by side */
+/* the Volume card (app.js buildVolumes): one row per kind of audio, what it plays at now on the right */
+.vol-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; padding: 16px 18px; }
+.vol-head h3 { display: flex; align-items: center; gap: 8px; }
+.vol-row { display: grid; grid-template-columns: 34px minmax(0, 1fr) minmax(220px, 340px); gap: 10px 14px; align-items: center; padding: 14px 18px; border-top: 1px solid var(--line); }
+.vol-ic { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+.vol-ic svg { width: 18px; height: 18px; }
+.vol-title { font-weight: 600; }
+.vol-sub { color: var(--muted); font-size: 13.5px; }
+.vol-ctl { min-width: 0; display: grid; gap: 8px; }
+.vol-ctl .seg { justify-self: start; }
+.vol-ctl .slider output { min-width: 48px; text-align: right; }
+.vol-hint { color: var(--muted); font-size: 13px; margin: 0; padding: 12px 18px; border-top: 1px solid var(--line); }
+@media (max-width: 560px) { .vol-row { grid-template-columns: 34px minmax(0, 1fr); } .vol-ctl { grid-column: 1 / -1; }
+  .vol-head .seg { width: 100%; } .vol-head .seg button { flex: 1; } }
 .eq { display: grid; grid-template-columns: 1fr; }
 .eq .row { border-top: 1px solid var(--line); }
 .eq .row:first-child { border-top: 0; }

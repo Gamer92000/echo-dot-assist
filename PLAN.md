@@ -1988,3 +1988,59 @@ Run in this order. Each step says what it proves.
       a link to /system/build.prop refused, nothing left behind; Etc/GMT+3, America/Argentina/Buenos_Aires, <+03>-3,
       IST-5:30, the CET rule, Europe/Berlin taken (`date` -03, -03, +03, IST, CEST, CEST); the same zone again a no-op.
       Open (device): hassmic's side (no NDK on this PC), the Shows' alarm call.
+- [x] Volumes per kind of audio (GitHub issue #32: several Dot 3 and a Dot 2; one volume for media and one for the
+      assistant, the wake sound on a slider of its own).  Built 2026-10-17, after two tries the owner rejected.
+      First: categories linked to the main volume with offsets (replies in volume points, sounds in dB under it,
+      timers with a floor on the Alarm stream), in a Features card of rows: "a wall of text", units +15 / -12 dB / 60 %
+      side by side, sounds that could only be quieter than music, music not settable from the page, timers never
+      under it.  Now: setting `separate_volumes`; off, one volume, as stock; on, four of their own, 0..100 each:
+      music (`volume`, a setting now: the page sets the Echo's volume; the media player, Sendspin and the keys show
+      it), `assistant_volume`, `sounds_volume`, `timer_volume`; HA numbers "Assistant volume", "Sounds volume",
+      "Timer volume" while on.  Page: a Volume card in Sound (app.js buildVolumes): one or separate, then a slider
+      per kind.  Then, asked for: each of replies, sounds and timers either its own volume or following the
+      music's, some points above or below it (`<kind>_linked`, `<kind>_offset` -100..+100: music + offset, clamped
+      0..100, a volume like the others; points rather than dB so the page can say what it plays at in the numbers it
+      shows everywhere).  Switching keeps it where it played (linked: offset = own - music, the range reaches any
+      level from any music volume; apart: own = where it played).  Exports carry the switches and offsets, not the
+      own volumes (as `volume`: the room's).  Linked on the Dot 2 (2026-10-17, music 50, replies and sounds -30,
+      timers own 80) against stock at that number in the same hour: replies +0.1 / -0.8 dB (two runs), media +0.1 /
+      -0.4, Identify +0.4, timer blips -0.6 / -0.8; volume up during a linked reply: music 50 -> 60, white ring.
+      Second review: linking on a Bluetooth speaker based on the Echo's own volume, volume.music written from
+      volume_sync's tick outside the lock (fsyncs), switches applied before the rest of any file (settings.c).  Linked: its HA number is not listed (a feature setting: HA re-lists), the media player's volume and
+      the keys move it with the music.  Page: per row "Own volume | Follow music", the slider then the offset, the
+      line under the name "10 below the music volume: now 30 %".
+      How (main.c, measured on the Dot 2, docs/re-platform.md): the mixer has MainVolume (Music, Earcon, Voip),
+      TTSVolume (TTS) and AlarmVolume (Alarm); Notification, System, Ring, Telephony, Accessibility, Navigation do
+      not exist there.  The curve is the same for Music, Earcon and TTS (-30 dBFS tone, within 0.5 dB), and its top
+      is libasp's: its own volume (`CurrentVolume`) adds +7.6 dB at 90 and +14.5 dB at 100 to the whole output and
+      follows whichever of MainVolume and TTSVolume was set last (AlarmVolume never: the Alarm stream's top end 12 dB
+      under the others, which ruled it out for timers).  So both stay at the loudest of the four (`mix_target`), and
+      each kind is turned down in its PCM by the curve between its volume and that one (`vol_db`, `mix_gain`):
+      music, phones over Bluetooth and Drop In in the backend (`audio_music_gain`), replies too (`audio_tts_gain`),
+      sounds and timers in the earcon thread.  HA's `play_media` plays on the TTS stream like announcements
+      (proto_esphome.c media_start), so each start of that stream says what it carries (`core_tts_begin(...,
+      media)`, `tts_kind`).  The music volume is kept in state/volume.music while separate (MainVolume is the
+      loudest then); a MainVolume or TTSVolume moved by someone else is put back.  Keys: what plays, a reply (not
+      media; the ring in cyan: `hassmic_assist_NN`, stock's `volume_step-NN` recoloured by ring.c, FORMAT "hassmic
+      ring 3"), a ringing timer, else the music.  Bluetooth speaker with absolute volume: one volume.
+      On the Dot 2 (2026-10-17), hassmic's own ESPHome client with the device key beside Home Assistant, micRaw:
+      separate (music 50, replies 20, sounds 20, timers 80) against the same sounds with one volume at that number:
+      replies -0.2 dB, media -0.2, Identify sound -0.1, timer ring +0.3.  The first try's mistake, measured on the
+      way: with TTSVolume set last at 20 and MainVolume at 80, libasp ran at 20 and everything was 3.4 dB off.
+      Volume up during an announcement: replies up, the ring cyan (003737 in i2c 0-003f/frame); idle: the music,
+      white.  Tests: `tests/fake_ha_volumes.py` (HASSMIC_FAKE_MIXER: the mixer's volumes as files; the PC's backend
+      logs its gains and earcons their peak).  Then Drop In calls as a fifth kind (`call_volume`, `_linked`,
+      `_offset`; following the music by default, as before; `audio_call_gain` on the Voip stream; HA "Call volume"
+      only with Drop In on; keys during a call move it; page row only while Drop In is on).  Voip's curve measured
+      with speech instead of tones (re-platform.md): Music's shape, 6.5 dB under it at every volume (call mode, stock
+      too), so `vol_db` holds for calls.  An audit of every playback path for anything still on the music volume
+      found one: the media player's `announcement` flag (MediaPlayerCommandRequest field 9; HA's `tts.speak` sets it,
+      API 1.10 lists MEDIA_ANNOUNCE) was ignored, so speech there played as music; now the replies' volume.  Open:
+      the Dot 3's and Echo 2's curves (they use the Dot 2's).  A Bluetooth speaker with absolute volume used to
+      play everything at one volume; now it is set to the loudest kind (`loudest`, `a2dp_speaker_volume`, apart from
+      the phone sink's `echo_volume`), the mixer stays at full scale, the rest is turned down by the Echo's curve
+      (the speaker's own is unmeasured and differs per speaker), and its own buttons move the music by as much
+      (`core_speaker_volume`).  Test: HASSMIC_FAKE_SPEAKER, another "absolute <pct>" = its buttons.
+      state/volume.music is read at start only while state/config says separate_volumes=on (`settings_peek`, now the
+      last line of a name as loading takes it), else deleted: a hand edit or an older build after a fallback left it
+      behind and the volume came back from it.

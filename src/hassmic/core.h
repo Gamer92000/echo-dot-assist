@@ -92,7 +92,17 @@ int  core_bluetooth(int set);                   /* same; -B on the command line:
 int  core_dnd(int set);                          /* same: do not disturb, announcements are dropped (the protocol checks) */
 int  core_volume(void);
 void core_set_volume(int percent);
+/* Separate volumes (main.c says how; -1 reads): on/off, and per kind beside the music's (core_volume): its own volume
+ * 0..100, whether it follows the music's instead, and by how many points above or below.  Off, all of it is core_volume */
+enum { VOL_ASSISTANT, VOL_SOUNDS, VOL_TIMERS, VOL_CALLS, VOL_KINDS };
+#define VOL_OFFSET_MAX 100
+int  core_separate_volumes(int set);
+int  core_kind_volume(int kind, int set);
+int  core_kind_linked(int kind, int set);
+int  core_kind_offset(int kind);
+void core_set_kind_offset(int kind, int offset);    /* -VOL_OFFSET_MAX..VOL_OFFSET_MAX */
 enum { SPEAKER_NONE, SPEAKER_MIXER, SPEAKER_ABSOLUTE };
+void core_speaker_volume(int pct);              /* lock held: a speaker with absolute volume set by its own buttons */
 void core_speaker(int mode, int pct);            /* not the lock: playing on the Echo's speaker, a Bluetooth speaker with a
                                                     volume of its own through the mixer, or one with absolute volume (pct:
                                                     its own; the mixer at full scale).  The Echo's own volume comes back */
@@ -133,7 +143,9 @@ extern const char *const core_button_events[];
 extern const int core_button_nevents;
 
 /* no lock needed */
-void   core_tts_begin(unsigned rate, unsigned channels);   /* lock held for this one: switches to SPEAKING */
+/* lock held for this one: switches to SPEAKING.  media: Home Assistant's media, which plays at the main volume (not a
+ * reply or an announcement: the Assistant's, with separate volumes) */
+void   core_tts_begin(unsigned rate, unsigned channels, int media);
 void   core_tts_data(const void *pcm, size_t len);
 void   core_tts_end(void);                                  /* drains, then played() and core_pipeline_finish() */
 int    core_tts_flushing(void);                             /* barge-in: drop audio until core_tts_end() */

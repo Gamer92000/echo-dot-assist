@@ -1,5 +1,7 @@
 /* Device backend: capture micAsr and play on the TTS stream through libmixerAPI, so the AEC reference stays intact. */
 #include "audio.h"
+#include <math.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -50,6 +52,23 @@ void cap_close(void)
     cap = NULL; cap_held = 0;
 }
 
+static atomic_int music_q16 = 65536, tts_q16 = 65536, call_q16 = 65536;     /* audio_*_gain; 1 = 65536 */
+static int q16(float g) { return (int)lroundf((g < 0 ? 0 : g > 1 ? 1 : g) * 65536); }
+void audio_music_gain(float g) { atomic_store(&music_q16, q16(g)); }
+void audio_tts_gain(float g) { atomic_store(&tts_q16, q16(g)); }
+void audio_call_gain(float g) { atomic_store(&call_q16, q16(g)); }
+
+/* Every writer hands whole samples (decoders, WAV in whole frames, Home Assistant's and Wyoming's chunks), and the
+ * callers cut at whole samples; a lone odd byte (a buffer of 1) passes unscaled rather than as whatever the buffer held */
+static void copy_gain(char *dst, const char *src, unsigned n, int q)
+{
+    if (q >= 65536) { memcpy(dst, src, n); return; }
+    for (unsigned i = 0; i + 1 < n; i += 2) {
+        short v; memcpy(&v, src + i, 2); v = (short)((v * q + 32768) >> 16); memcpy(dst + i, &v, 2);   /* rounded */
+    }
+    if (n & 1) dst[n - 1] = src[n - 1];
+}
+
 int play_open(unsigned rate, unsigned channels)
 {
     play = MixerOpenPlay(rate, channels, 16, MIXER_PLAY_TTS);
@@ -63,8 +82,9 @@ int play_write(const void *data, size_t len)
         int status = 0; unsigned capb = 0;
         char *buf = MixerGetBufPlay(play, &status, &capb);
         if (!buf) return -1;
-        unsigned n = len < capb ? len : capb;
-        memcpy(buf, p, n);
+        unsigned n = (len < capb ? len : capb) & ~1u;              /* whole samples: the gain works on s16 */
+        if (!n) n = len < capb ? len : capb;
+        copy_gain(buf, p, n, atomic_load(&tts_q16));
         MixerReleaseBufPlay(play, n);
         p += n; len -= n;
     }
@@ -82,8 +102,8 @@ void play_close(int drain)
 /* Music streams (Sendspin, Bluetooth speaker).  The mixer's buffer fill is not exposed in a documented way, so the queue
  * is modelled: bytes written minus bytes that real time has consumed since the stream started draining (it drains at
  * exactly the sample rate, and MixerGetBufPlay blocks once its ring is full, which keeps the model honest). */
-struct stream { MixerHandle h; unsigned bps; long long t0, written; };
-static struct stream music, bt, voip;
+struct stream { MixerHandle h; unsigned bps; long long t0, written; atomic_int *gain; };
+static struct stream music = { .gain = &music_q16 }, bt = { .gain = &music_q16 }, voip = { .gain = &call_q16 };
 
 static long long raw_us(void)
 {
@@ -116,8 +136,9 @@ static int s_write(struct stream *s, const void *data, size_t len)
         int status = 0; unsigned capb = 0;
         char *buf = MixerGetBufPlay(s->h, &status, &capb);
         if (!buf) return -1;
-        unsigned n = len < capb ? len : capb;
-        memcpy(buf, p, n);
+        unsigned n = (len < capb ? len : capb) & ~1u;              /* whole samples: the gain works on s16 */
+        if (!n) n = len < capb ? len : capb;
+        copy_gain(buf, p, n, atomic_load(s->gain));
         MixerReleaseBufPlay(s->h, n);
         p += n; len -= n; s->written += n;
     }
