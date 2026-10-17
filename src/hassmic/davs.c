@@ -96,7 +96,7 @@ static void say_err(const char *fmt, ...)                     /* lk held */
 enum { OPT_WRITEDATA = 10001, OPT_URL = 10002, OPT_POSTFIELDS = 10015, OPT_USERAGENT = 10018, OPT_HTTPHEADER = 10023,
        OPT_POSTFIELDSIZE = 60, OPT_TIMEOUT = 13, OPT_LOW_SPEED_LIMIT = 19, OPT_LOW_SPEED_TIME = 20, OPT_NOPROGRESS = 43,
        OPT_FAILONERROR = 45, OPT_FOLLOWLOCATION = 52, OPT_MAXREDIRS = 68, OPT_CONNECTTIMEOUT = 78, OPT_NOSIGNAL = 99,
-       OPT_OPENSOCKETFUNCTION = 20163, OPT_OPENSOCKETDATA = 10164, OPT_PROTOCOLS = 181, OPT_REDIR_PROTOCOLS = 182,
+       OPT_OPENSOCKETFUNCTION = 20163, OPT_SOCKOPTFUNCTION = 20148, OPT_SOCKOPTDATA = 10149, OPT_OPENSOCKETDATA = 10164, OPT_PROTOCOLS = 181, OPT_REDIR_PROTOCOLS = 182,
        OPT_WRITEFUNCTION = 20011, OPT_XFERINFODATA = 10057, OPT_XFERINFOFUNCTION = 20219,
        INFO_RESPONSE_CODE = 0x200002, PROTO_HTTP_S = 1 | 2 };
 struct curl_sockaddr { int family, socktype, protocol; unsigned addrlen; };
@@ -136,8 +136,16 @@ static int curl_load(void)
 static int on_socket(void *arg, int purpose, struct curl_sockaddr *a)
 {
     (void)arg; (void)purpose;
+#ifdef __ANDROID__
+    /* libc's connect() fails on athena (netio.h): connected here, and on_sockopt tells libcurl so (as https.c) */
+    return net_open_connected(a->family, a->socktype, a->protocol, (const struct sockaddr *)(a + 1), a->addrlen, 20);
+#else
     return net_socket(a->family, a->socktype, a->protocol);   /* the egress lock lets this group out */
+#endif
 }
+#ifdef __ANDROID__
+static int on_sockopt(void *arg, int fd, int purpose) { (void)arg; (void)fd; (void)purpose; return 2; }   /* CURL_SOCKOPT_ALREADY_CONNECTED */
+#endif
 
 struct sink { char *p; size_t n, cap; };
 
@@ -182,6 +190,9 @@ static void curl_common(void *h)
     curl.setopt(h, OPT_NOSIGNAL, 1L);
     curl.setopt(h, OPT_CONNECTTIMEOUT, 20L);
     curl.setopt(h, OPT_OPENSOCKETFUNCTION, on_socket); curl.setopt(h, OPT_OPENSOCKETDATA, NULL);
+#ifdef __ANDROID__
+    curl.setopt(h, OPT_SOCKOPTFUNCTION, on_sockopt); curl.setopt(h, OPT_SOCKOPTDATA, NULL);
+#endif
     curl.setopt(h, OPT_XFERINFOFUNCTION, on_progress); curl.setopt(h, OPT_XFERINFODATA, NULL);
     curl.setopt(h, OPT_NOPROGRESS, 0L);
 }

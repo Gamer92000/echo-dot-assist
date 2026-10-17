@@ -43,6 +43,7 @@ static const char *bt_lang_codes[sizeof bt_langs / sizeof bt_langs[0]];
 
 static int mic_level = MICGAIN_LEVEL, bt_lang;
 static int bt_audio = 1, bt_speaker, whisper = 1;      /* features kept here; bt_speaker's default: settings_load */
+static int kiosk_net = 1;                                 /* lockdown.sh reads it from state/config */
 static int bt_stay;                                     /* a2dp.c gets it only while the feature is on: off drops the link */
 
 static const char *state_dir(void) { const char *e = getenv("HASSMIC_STATE"); return e ? e : "/data/local/hassmic/state"; }
@@ -51,7 +52,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 /* ---------------------------------------------------------------- the table */
 
 enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, BAND, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WIFI_MOTION,
-          WIFI_SENS, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, NSET };
+          WIFI_SENS, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, KIOSK_NET, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
  * listed()); everything else here is on the settings page only, except what Home Assistant always shows (wake sound,
@@ -98,6 +99,8 @@ static const struct setting table[NSET] = {
     [DROPIN]      = { "drop_in", "Drop In", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [DROPIN_ANSWER] = { "drop_in_answer", "Drop In answers", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
     [UPDATES]     = { "online_updates", "Online updates", "System", NULL, S_CHOICE, 0, 0, 1, 0 },
+    /* only a number here: root's lockdown.sh lets Kiosk Satellite's uid out while state/config says on (screen models) */
+    [KIOSK_NET]   = { "kiosk_internet", "Kiosk Satellite internet access", "System", NULL, S_BOOL, 0, 1, 0, 0 },
     [SS_UNPAIRED] = { "sendspin_unpaired", "Music Assistant without pairing", "Music", NULL, S_BOOL, 0, 1, 1, 0 },
     [EQ_BASS]     = { "equalizer_bass", "Equalizer bass", "Sound", "dB", S_INT, -6, 6, 1, 0 },
     [EQ_MID]      = { "equalizer_mid", "Equalizer mid", "Sound", "dB", S_INT, -6, 6, 1, 0 },
@@ -118,7 +121,7 @@ static int present(enum id i)
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
     case SS_UNPAIRED: return core_sendspin_port != 0;
     case SPK_GAIN: return spkgain_present();
-    case BAND: return ring_band_rows(-1) >= 0;
+    case BAND: case KIOSK_NET: return ring_band_rows(-1) >= 0;
     default: return 1;
     }
 }
@@ -178,6 +181,7 @@ int settings_get(const struct setting *s)
     case ARB_AUTO: return arb_window_auto(-1);
     case ARB_WINDOW: return arb_window(-1);
     case ARB_OFFSET: return arb_offset(INT_MIN);
+    case KIOSK_NET: return kiosk_net;
     case SS_UNPAIRED: return sendspin_unpaired(-1);
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: return core_eq((int)(s - table) - EQ_BASS);
     case BT_AUDIO: return bt_audio;
@@ -220,6 +224,7 @@ static void put(enum id i, int v)
     case ARB_AUTO: arb_window_auto(v); break;
     case ARB_WINDOW: arb_window(v); break;
     case ARB_OFFSET: arb_offset(v); break;
+    case KIOSK_NET: kiosk_net = v; break;
     case SS_UNPAIRED: sendspin_unpaired(v); break;              /* sendspin.c keeps it */
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: core_set_eq(i - EQ_BASS, v); break;     /* the mixer keeps it */
     case BT_AUDIO: bt_audio = v; if (!v) a2dp_pair(0); break;                        /* paired phones still connect */

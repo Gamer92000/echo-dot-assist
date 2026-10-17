@@ -91,6 +91,38 @@ class Wifi:
     def setWifiEnabled(self, pkg, on): self.enabled = on; self.calls.append(("wifi", pkg, on)); return True
 
 
+class Slice:                                                   # android.content.pm.ParceledListSlice
+    JAVA = "android.content.pm.ParceledListSlice"
+
+    def __init__(self, items):
+        self.items = items
+
+    def getList(self): return list(self.items)
+
+
+class Wifi9(Wifi):
+    """Android 9's IWifiManager: the caller's package name behind every call that knows a caller, the network
+    lists as ParceledListSlice, startScan(String); the SSID and the scan only for the package "android"."""
+    def __init__(self):
+        super().__init__()
+        self.pkgs = []
+
+    def _p(self, pkg):
+        assert isinstance(pkg, str) and pkg == "android", f"caller package {pkg!r}"
+        self.pkgs.append(pkg)
+
+    def getConnectionInfo(self, pkg): self._p(pkg); return Info(self)
+    def getConfiguredNetworks(self): return Slice(self.nets)
+    def getPrivilegedConfiguredNetworks(self): return Slice(self.nets)
+    def getScanResults(self, pkg): self._p(pkg); return Wifi.getScanResults(self, pkg)
+    def startScan(self, pkg): self._p(pkg); self.calls.append("scan")
+    def addOrUpdateNetwork(self, c, pkg): self._p(pkg); return Wifi.addOrUpdateNetwork(self, c)
+    def enableNetwork(self, i, others, pkg): self._p(pkg); return Wifi.enableNetwork(self, i, others)
+    def removeNetwork(self, i, pkg): self._p(pkg); return Wifi.removeNetwork(self, i)
+    def reconnect(self, pkg): self._p(pkg); self.calls.append("reconnect")
+    def setWifiEnabled(self, pkg, on): self._p(pkg); return Wifi.setWifiEnabled(self, pkg, on)
+
+
 class Audio:
     """IAudioService's proxy: stream maxima as 8149's AudioService has them by default"""
     JAVA = "android.media.IAudioService$Stub$Proxy"
@@ -107,17 +139,20 @@ class Audio:
 
 
 class JavaEnv(dexrun.JavaEnv):
-    CLASSES = (Config, Info, Scan, Wifi, Audio)
-    NAMES = ("android.os.ServiceManager", "android.net.wifi.IWifiManager$Stub", "android.media.IAudioService$Stub",
+    CLASSES = (Config, Info, Scan, Wifi, Slice, Audio)
+    NAMES = ("android.os.ServiceManager", "android.os.SystemProperties", "android.net.wifi.IWifiManager$Stub", "android.media.IAudioService$Stub",
              "android.os.IBinder", "android.net.wifi.ScanSettings", "android.os.WorkSource")
 
     def __init__(self, wifi, audio=None):
         super().__init__(mk.PROG)
         self.wifi, self.audio = wifi, audio or Audio()
+        self.sdk = "28" if isinstance(wifi, Wifi9) else "24"
 
     def static_call(self, cls, name, args):
         if cls == "android.os.ServiceManager":
             assert args in (["wifi"], ["audio"]); return "binder:" + args[0]
+        if cls == "android.os.SystemProperties":
+            assert args == ["ro.build.version.sdk"]; return self.sdk
         if cls == "android.net.wifi.IWifiManager$Stub":
             assert args == ["binder:wifi"]; return self.wifi
         if cls == "android.media.IAudioService$Stub":
@@ -195,6 +230,34 @@ def main():
           "volume-max: voice call, system and music at their maximum, as \"root\" (no Wi-Fi asked)")
     out, _, _ = run(w, "reassociate")
     check(out == ["OK"] and w.calls[-1] == "reconnect", "reassociate: reconnect")
+    # Android 9: the same verbs through the signatures with a package name; every call must carry "android"
+    w9 = Wifi9()
+    out, _, _ = run(w9, "wifi-on")
+    check(out == ["OK"] and w9.enabled and w9.calls[-1] == ("wifi", "android", True), "api 28: wifi-on names the caller")
+    out, _, _ = run(w9, "add", "486f6d65", psk)
+    check(out == ["0"] and w9.calls[-1] == ("add", '"Home"', psk, True, [1]), "api 28: add (config, package)")
+    out, _, _ = run(w9, "select", "0")
+    check(out == ["OK"] and w9.calls[-2:] == [("enable", 0, True), "reconnect"], "api 28: select, reconnect(package)")
+    out, _, _ = run(w9, "enable", "0", "keep")
+    check(out == ["OK"] and w9.calls[-1] == ("enable", 0, False), "api 28: enable keep")
+    w9.current, w9.state, w9.ip = 0, "COMPLETED", 0x1401a8c0
+    out, _, _ = run(w9, "status")
+    check(out == ["wpa_state=COMPLETED", "id=0", 'ssid="Home"', "ip_address=192.168.1.20", "freq=2437"],
+          "api 28: status through getConnectionInfo(package)")
+    out, _, _ = run(w9, "list_networks")
+    check(out == ["network id / ssid / bssid / flags", '0\t"Home"\tany\t'],
+          "api 28: list_networks unwraps the ParceledListSlice")
+    out, _, _ = run(w9, "keys")
+    check(out == ["0\t" + psk], "api 28: keys through the privileged list slice")
+    out, _, _ = run(w9, "scan")
+    check(out == ["OK"] and w9.calls[-1] == "scan", "api 28: scan is startScan(package)")
+    out, _, _ = run(w9, "scan_results")
+    check(len(out) == 3 and out[1].endswith("\tHome"), "api 28: scan_results asks with the package")
+    out, _, _ = run(w9, "remove", "0")
+    check(out == ["OK"] and not w9.nets, "api 28: remove (id, package)")
+    out, _, _ = run(w9, "reassociate")
+    check(out == ["OK"] and w9.calls[-1] == "reconnect", "api 28: reassociate")
+    check(set(w9.pkgs) == {"android"}, "api 28: every call carried the package")
     check.done("wifictl.dex: all verbs as expected")
 
 

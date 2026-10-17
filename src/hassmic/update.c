@@ -62,7 +62,7 @@ static void (*notify)(void);
 enum { OPT_WRITEDATA = 10001, OPT_URL = 10002, OPT_USERAGENT = 10018, OPT_TIMEOUT = 13, OPT_LOW_SPEED_LIMIT = 19,
        OPT_LOW_SPEED_TIME = 20, OPT_NOPROGRESS = 43, OPT_FAILONERROR = 45, OPT_FOLLOWLOCATION = 52, OPT_XFERINFODATA = 10057,
        OPT_MAXREDIRS = 68, OPT_CONNECTTIMEOUT = 78, OPT_NOSIGNAL = 99, OPT_OPENSOCKETFUNCTION = 20163,
-       OPT_OPENSOCKETDATA = 10164, OPT_PROTOCOLS = 181, OPT_REDIR_PROTOCOLS = 182, OPT_WRITEFUNCTION = 20011,
+       OPT_OPENSOCKETDATA = 10164, OPT_SOCKOPTFUNCTION = 20148, OPT_SOCKOPTDATA = 10149, OPT_PROTOCOLS = 181, OPT_REDIR_PROTOCOLS = 182, OPT_WRITEFUNCTION = 20011,
        OPT_XFERINFOFUNCTION = 20219, INFO_RESPONSE_CODE = 0x200002, PROTO_HTTP_S = 1 | 2, CURLE_HTTP_RETURNED_ERROR = 22 };
 struct curl_sockaddr { int family, socktype, protocol; unsigned addrlen; };     /* followed by the address; unused here */
 
@@ -120,7 +120,20 @@ static int on_progress(void *arg, int64_t total, int64_t now, int64_t ut, int64_
     return 0;
 }
 
-static int on_socket(void *arg, int purpose, struct curl_sockaddr *a) { (void)arg; (void)purpose; return net_socket(a->family, a->socktype, a->protocol); }
+static int on_socket(void *arg, int purpose, struct curl_sockaddr *a)
+{
+    (void)arg; (void)purpose;
+#ifdef __ANDROID__
+    /* libc's connect() fails on athena (netio.h): connected here, and on_sockopt tells libcurl so.  The address
+     * follows the four ints; the SO_SNDTIMEO is connect's timeout (libcurl's CONNECTTIMEOUT does not reach it). */
+    return net_open_connected(a->family, a->socktype, a->protocol, (const struct sockaddr *)(a + 1), a->addrlen, 10);
+#else
+    return net_socket(a->family, a->socktype, a->protocol);   /* the egress lock lets this group out: an external URL */
+#endif
+}
+#ifdef __ANDROID__
+static int on_sockopt(void *arg, int fd, int purpose) { (void)arg; (void)fd; (void)purpose; return 2; }   /* CURL_SOCKOPT_ALREADY_CONNECTED */
+#endif
 
 /* GET URL into B (at most MAX bytes); 0, or -1 with the reason in ERR.  QUICK: the page waits for the answer */
 static int fetch(const char *url, struct buf *b, size_t max, int progress, int quick, char *err, size_t cap)
@@ -138,6 +151,9 @@ static int fetch(const char *url, struct buf *b, size_t max, int progress, int q
     curl.setopt(h, OPT_WRITEFUNCTION, on_data); curl.setopt(h, OPT_WRITEDATA, b);
     curl.setopt(h, OPT_XFERINFOFUNCTION, on_progress); curl.setopt(h, OPT_XFERINFODATA, b); curl.setopt(h, OPT_NOPROGRESS, 0L);
     curl.setopt(h, OPT_OPENSOCKETFUNCTION, on_socket); curl.setopt(h, OPT_OPENSOCKETDATA, NULL);
+#ifdef __ANDROID__
+    curl.setopt(h, OPT_SOCKOPTFUNCTION, on_sockopt); curl.setopt(h, OPT_SOCKOPTDATA, NULL);
+#endif
     rc = curl.perform(h);
     curl.getinfo(h, INFO_RESPONSE_CODE, &code);
     curl.cleanup(h);

@@ -508,7 +508,9 @@ ESPHome devices and the Voice PE are:
 ## Factory reset
 
 At 5 s of holding the action button the ring warns: let go and nothing happens. Or "Factory reset" in Home Assistant
-(a button on the device page), or "Factory reset…" under System on the settings page.
+(a button on the device page), or "Factory reset…" under System on the settings page. The Echo Show 8 has no action
+button: a quick tap of both volume keys together is its action button (a hold of both is the arbitration pairing), so
+there is no hold-to-reset there; use Home Assistant's button or the settings page.
 
 - **Forgotten**: everything in `/data/local/hassmic/state/` (settings, Home Assistant's key, approved browsers,
   Bluetooth pairings, Sendspin, microWakeWord models) and every saved Wi-Fi network. It starts as after the install:
