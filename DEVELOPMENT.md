@@ -56,6 +56,8 @@ make DEVICE=donut STUBS=1                         # the same, without the firmwa
 make host                                         # PC build (build/hassmic-host) + qemu build for the tests (needs libopus)
 make unit                                         # C unit tests; microWakeWord against pymicro-features and TFLite (mww_ref.py);
                                                  # the Drop In blueprint (blueprint_dropin.py)
+.venv/bin/python tests/run.py [-j N] [name ...]  # every PC test below at once (CI), each in a network namespace of its own
+                                                 # (unshare -rn); logs of those that fail, all in build/test-logs/
 .venv/bin/python tests/blueprint_dropin.py        # the Drop In blueprint against stand-ins of Home Assistant's registries,
                                                  # states, actions and template engine (also in make unit)
 .venv/bin/python tests/fake_ha_esphome.py         # ESPHome native API, as Home Assistant (aioesphomeapi)

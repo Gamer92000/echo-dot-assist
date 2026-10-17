@@ -36,6 +36,9 @@ Protocol/integration tests run `build/hassmic-host` against the real reference l
 aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 
 ```sh
+.venv/bin/python tests/run.py [-j N] [name]  # every test below at once (CI's way), each in a network namespace of its
+                                             # own (unshare -rn: fixed ports, hassmic's defaults, broadcasts); logs in
+                                             # build/test-logs/, printed for those that fail; -l lists the names
 .venv/bin/python tests/fake_ha_esphome.py     # ESPHome native API, as Home Assistant
 .venv/bin/python tests/fake_ha_arbitration.py # two Echos under one fake HA: wake word arbitration, join paths and security
 .venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer,
@@ -69,7 +72,7 @@ tests/otatool_test.sh                         # scripts/otatool.py against the C
 ```
 
 `.venv` from `uv sync` (`pyproject.toml` + `uv.lock`; change a version, then `uv lock`). CI (`.github/workflows/build.yml`, DEVELOPMENT.md "CI and releases"): every model with
-`STUBS=1`, PC tests, then a push to `main` publishes `v<version>-beta` (prerelease), a push to `release` publishes
+`STUBS=1`, PC tests (`tests/run.py`; `ha_real_dropin.py` in a job of its own), then a push to `main` publishes `v<version>-beta` (prerelease), a push to `release` publishes
 `v<version>` (a beta only when some model's `scripts/content-id.sh` differs from the newest release's: no betas for CI or doc
 changes); version = commit time in UTC, `2026.10.02.091530` (`make version`; local builds add `+<commit id>`, CI
 passes `RELEASE=1` for the bare one), bundles `hassmic-<codename>.bundle(.sig)`

@@ -185,31 +185,21 @@ jobs:
         timeout-minutes: 5
         run: uv sync --locked           # .venv exactly as uv.lock says; fails if pyproject.toml changed without uv lock
       - name: Build
-        run: make build/hassmic-host build/otatool-host
-      - name: Unit tests
-        run: make unit
-      - name: otatool, Python against C
-        run: sh tests/otatool_test.sh
-      - name: Push updates
-        run: sh tests/ota_push_test.sh
-      - name: Online updates
-        run: .venv/bin/python tests/fake_ha_update.py
-      - name: ESPHome native API
-        run: .venv/bin/python tests/fake_ha_esphome.py
-      - name: Models copied between Echos
-        run: .venv/bin/python tests/fake_web_artifacts.py
-      - name: Wi-Fi switch from the settings page
-        run: .venv/bin/python tests/fake_web_wifi.py
-      - name: microWakeWord, models from the settings page
-        run: .venv/bin/python tests/fake_web_mww.py
-      - name: Setup from a phone (Improv over Bluetooth), factory reset
-        run: .venv/bin/python tests/fake_improv.py
-      - name: Light ring, Home Assistant's light
-        run: .venv/bin/python tests/fake_ha_ring.py
-      - name: Wake sound removal
-        run: .venv/bin/python tests/fake_ha_wakesound.py
-      - name: Separate volumes
-        run: .venv/bin/python tests/fake_ha_volumes.py
+        run: make -j"$(nproc)" build/hassmic-host build/otatool-host
+      # tests/run.py starts every test at once, each in a network namespace of its own (unshare -rn: the tests' ports
+      # and hassmic's defaults would collide); they mostly wait on audio at real time and on hassmic's timers, so the
+      # job takes about as long as the slowest one.  Ubuntu 24.04 lets only programs with an AppArmor profile make user
+      # namespaces unless this is off
+      - name: User namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Tests
+        run: .venv/bin/python tests/run.py
+      - name: Test logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-logs
+          path: build/test-logs/
 
   # The Drop In voice blueprint in a real Home Assistant (tests/ha_real_dropin.py, which pins its version) against PC
   # Echos, one of them the released build of a tag.  A job of its own: Home Assistant comes from PyPI with what its
@@ -235,7 +225,7 @@ jobs:
         timeout-minutes: 5
         run: uv sync --locked
       - name: Build
-        run: make build/hassmic-host
+        run: make -j"$(nproc)" build/hassmic-host
       - name: Home Assistant
         timeout-minutes: 8
         run: .venv/bin/python tests/ha_real_dropin.py --setup
