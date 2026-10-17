@@ -132,7 +132,8 @@ async def main():
               f"red on: hassmic_solid_00f0 on the ring, the state as asked ({light_names()})")
         open(leds, "w").close()
         c.light_command(li.key, state=True, rgb=(1.0, 0.5, 0.0), brightness=0.5, effect="Pulse")
-        await until(lambda: len(light_names()) == 2)
+        # the ring's calls and the state to HA are separate paths: wait for both (CI once read the state first)
+        await until(lambda: len(light_names()) == 2 and st().effect == "Pulse")
         check(light_names() == [("-s", "hassmic_pulse_02f1"), ("-u", "hassmic_solid_00f0")] and st().effect == "Pulse",
               f"orange at half, pulsing: the new one first, then the old one off ({light_names()})")
         open(leds, "w").close()
