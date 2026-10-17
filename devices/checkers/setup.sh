@@ -284,8 +284,6 @@ step_network() {
 
 step_install() {
     rootfs && magiskpolicy && adbd || return 1        # again: the steps before may have been skipped
-    ask_adb_wifi
-    ask_timezone
-    install_satellite || return 1
+    install_satellite
 }
 

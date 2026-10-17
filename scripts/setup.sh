@@ -9,8 +9,8 @@
 #                 network install)
 #     --preset F  settings to start with: an export from another Echo's settings page (hassmic-settings.conf);
 #                 without it, the install step asks (Enter for none)
-# Only the Echo on USB is worked on, whatever else is on adb over Wi-Fi; a second USB device stops it (it says what to
-# unplug).  Keep the cable in to the end: the installed Echo closes adb over Wi-Fi at its first boot.
+# Only the Echo on USB is worked on, whatever else is on adb over Wi-Fi.  Keep the cable in to the end: the installed
+# Echo closes adb over Wi-Fi at its first boot.
 # The written instructions are the same steps: devices/<codename>/README.md.
 cd "$(dirname "$0")/.."
 . scripts/lib/device.sh
@@ -46,8 +46,6 @@ bye() {
 }
 trap bye INT TERM
 trap '[ -n "$TTY" ] && printf "\e[?25h\e[?7h"' EXIT
-
-one_adb_device
 
 # The Echo being set up is on USB; an explicit ANDROID_SERIAL (e.g. to finish the last steps over Wi-Fi) wins
 [ -n "$ANDROID_SERIAL" ] || USB_ONLY=1

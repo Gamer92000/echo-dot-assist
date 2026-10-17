@@ -7,8 +7,8 @@
 /* No earcon folder in this firmware: stock's sounds are resources of its apps, all stored uncompressed (sounds.c reads
  * them out of the APKs).  No wake sound listed: SpeechInteractionManager here has no ful_ui_wakesound_hybrid, and its
  * ban_ui_wakesound is res/eb.wav, an empty file, and so is ban_ui_endpointing (res/ie.wav): no APK or library of this
- * firmware has the sound (aapt dump resources over every app, 2026-10-14), hassmic's own chime is the one it plays (main.c earcon_thread).  No setup beacon in any app either: the built-in tone
- * stays for Identify. */
+ * firmware has the sound (aapt dump resources over every app, 2026-10-14), the built-in tone is the one it plays.  No setup beacon in
+ * any app either: the built-in tone stays for Identify. */
 #define KSUI "/system/priv-app/KnightSystemUI/KnightSystemUI.apk"
 #define KSET "/system/priv-app/KnightSettings/KnightSettings.apk"
 #define COMM "/system/priv-app/com.amazon.comms.multimodaltachyonarm/com.amazon.comms.multimodaltachyonarm.apk"

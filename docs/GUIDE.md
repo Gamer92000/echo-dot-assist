@@ -248,9 +248,8 @@ Beyond the README's two figures:
   there too, in any colour. The screen wakes for the band and sleeps 5 minutes after the last light (1 minute with
   the microphones off or in Do not disturb).
 - **Microphone off** plays Alexa's own sounds. A switch that is already off when hassmic starts is shown, not announced.
-- **Wake sound**: Alexa's own where the firmware has it. The Echo Show 5 and Show 8 have none: they play a two-note chime
-  of hassmic's own (`/data/local/hassmic/earcon/ui_wakesound.wav` or `.mp3` replaces it). A sound after a pause starts
-  0.35 s late there: the Show's speaker takes that long to switch on and swallowed the start of it.
+- **Wake sound**: Alexa's own where the firmware has it; the Echo Show 8 has none and plays hassmic's short blip. On the
+  Echo Show a sound after a pause starts 0.35 s late: the speaker takes that long to switch on and swallowed the start.
 - Silent and dark at boot.
 - The ring dims with the room's light as on a stock Echo (Amazon's own logic, on by default); a fixed level from Home
   Assistant switches that off.
@@ -526,7 +525,6 @@ PROTO=esphome               # or wyoming (port 16700)
 ARGS=""                     # extra options, below
 #MODE=stock-online          # temporary: stock Alexa online without updates, see the model's install page
 #ADB_WIFI=1                 # leave adb over Wi-Fi open, see below
-#TIMEZONE=Europe/Berlin     # Echo Show: the zone of the screen's clock (Android's tz name; GMT without it)
 ```
 
 | `ARGS` option | Effect |

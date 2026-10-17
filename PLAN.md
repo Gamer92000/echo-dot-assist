@@ -1953,16 +1953,15 @@ Run in this order. Each step says what it proves.
       builds unchanged (`make kernel-tools DEVICE=crown`); loaded by hand on the Show 8: hooked, frames counted (KIND 0x14009).
       Not yet seen through `main.sh` and HA's sensor.
       Boot time (2026-10-14, Show 8): hassmic up 64 s after the kernel started, 90-120 s from the plug. `alexa-off.sh` took
-      36 s of it (a `pm list packages <name>` per absent package, 1.4 s each under the boot load) -> one listing, 17 s;
-      hassmic up at 40 s. The 22 s of Android's own boot and the bootloader remain.
+      36 s of it (a `pm list packages <name>` per absent package, 1.4 s each under the boot load); one listing makes it
+      17 s, hassmic up at 40 s (tried on the Show 8; not in this port, its own change). The 22 s of Android's own boot and
+      the bootloader remain.
       Installed and verified on a real Show 8 (2026-10-14): voice question answered, buttons, ESPHome entities, volume
       and mute keys, the band during a command and a reply. Found: the mute latch comes up on after power-on and lets go
-      by itself 20-80 s later (12 s 0, 16 s 2, 17 s 1, released 36 s in one boot, 50 s and 83 s in two): hassmic started
-      at 40 s caught it and played "mics off" -> `mute_latch(1, 0)` shows it quietly.  No wake sound was heard: the
+      by itself 20-80 s later (12 s 0, 16 s 2, 17 s 1, released 36 s in one boot, 50 s and 83 s in two): hassmic up
+      at 40-64 s caught it and played "mics off" -> `mute_latch(1, 0)` shows it quietly.  No wake sound was heard: the
       output's open takes ~170 ms plus the amplifier (logcat, AudioALSAPlaybackHandlerNormal), the blip is 120 ms ->
-      `audio_android.c` lead-in of 350 ms after 2.5 s without audio (`COLD_MS`, `LEAD_MS`).  2026-10-15: the stock files have
-      no wake sound (above), so hassmic plays its own chime (`main.c` `earcon_thread`, 0.5 s, was the 0.12 s blip): heard on
-      the Show 8 after the lead-in.  Not measured: what the longer sound and the lead-in (0.85 s from the wake word to the
-      sound's end, was ~0.12 s) cost the start of the request when wake sound removal is off.  2026-10-17: the lead-in
+      `audio_android.c` lead-in of 350 ms after 2.5 s without audio (`COLD_MS`, `LEAD_MS`); the blip after it to be
+      confirmed by ear (a longer sound of our own was heard after it, 2026-10-15).  2026-10-17: the lead-in
       reached earsup as part of the echo delay (85 ms + 350 > `D_MAX` 400 ms): `audio_earcon_started(lead_ms)` moves its
       start past it.

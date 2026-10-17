@@ -92,9 +92,6 @@ keep() {
         for p in udp tcp; do echo "-A INPUT -i $WLAN -p $p -m $p --dport 16384:32767 -j ACCEPT"; done
         echo "-A INPUT -i $WLAN -p udp -m udp --dport 5353 -j ACCEPT"      # mDNS: how Home Assistant finds the Echo
         echo "-A INPUT -p icmp -m state --state RELATED,ESTABLISHED -j ACCEPT"
-        # ping from the local network (is the Echo up?): echo requests from private addresses only, the reply goes out
-        # under the chain's local-address rules like everything else
-        for d in $LOCAL4; do case $d in 224.*|255.*) continue;; esac; echo "-A INPUT -s $d -i $WLAN -p icmp -m icmp --icmp-type 8 -j ACCEPT"; done
         if [ -n "$ADB" ]; then echo "-A $ADB_IN"; fi                       # only while adb over Wi-Fi is open (adb_gate)
         # what this model's stock lacks (device.conf FW_KEEP, rules separated by ";"): checkers has no firewall.sh, and
         # nothing else admits the DHCP server's answers once INPUT drops (they come to a broadcast, not as a reply)

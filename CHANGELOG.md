@@ -7,28 +7,14 @@ What changed for people using the Echo, newest first. Details and measurements a
 - **Wake sound removal (experimental) on the Echo Show.** The Show starts a sound after a pause 0.35 s late (below); the
   removal now looks for the sound's echo from where it really starts, and no longer misses it.
 
-## 2026-10-16
-
-- **Guided setup: only one Echo on USB.** `scripts/setup.sh` now stops when more than one device is on adb over USB (a
-  phone, another Echo, a stale "offline" or "unauthorized" entry): it finds the Echo again after every reboot as "the USB
-  device", and with two it waited for nothing or a step could land on the wrong one. It says to unplug the others.
-  Echos on adb over Wi-Fi may stay connected, as before. `ANDROID_SERIAL` still picks one for people who know what they
-  are doing.
-
 ## 2026-10-15
 
-- **Echo Show: a wake sound of our own.** The Show 8 (1st gen) and the Show 5 have no wake sound in their firmware and played a
-  120 ms blip. They now play a soft two-note rising chime that hassmic makes itself (so it can ship, and is not Amazon's
-  sound), heard on the Show 8. A sound file of your own in `/data/local/hassmic/earcon/ui_wakesound.wav` (or `.mp3`) still wins.
 - **Echo Show 8 (1st gen): a factory reset forgets a Wi-Fi network that Amazon's own setup saved.** Android 7 only lets the
   network's creator or the system user remove it, so the reset reported "forgotten" and the Echo stayed on the network (and
   never offered setup from a phone). The reset now removes it as the system user, and says so when one cannot be removed.
 - **Echo Show 8 (1st gen): the speaker gain can go below stock.** The Show 8 is loud at its stock level with music at
   full volume, so the settings page's speaker gain goes down to -6 dB here (the Dots only go up). About -2 dB suited
   the first one tried.
-- **A push update could leave hassmic stopped.** After one update on the Show 8 the service stayed down for three
-  minutes: init ignores a start while the service is still stopping. The restart now waits for the stop.
-
 ## 2026-10-13
 
 - **Echo Show 8 (1st gen, `crown`): first support.** The Show 8 is the same platform as the Show 5, and a trial run on one
@@ -37,16 +23,10 @@ What changed for people using the Echo, newest first. Details and measurements a
   works on it (the sensor needs a minute after switching on to settle) and "Download from Amazon" works (its attestation
   service is DHA version 2, drvV3 in Amazon's Java MAP). Bluetooth works once the install has taken Android's own stack off
   (Home Assistant's Bluetooth proxy, playing from a phone).
-- **Android models start hassmic about 25 s sooner** (Show 5, Show 8). Turning Alexa off asked Android about every
-  Amazon package one call at a time (1.4 s each, 36 s in all on the Show 8); it now asks once.
 - **No "mics off" announcement when hassmic starts** (every model; found on the Echo Show 8). After a power cycle the
-  Show 8's microphone switch reads "off" until the Echo lets it go by itself, 20 to 80 seconds in; hassmic, now starting
-  sooner, caught it and said "mics off" to someone who had not pressed anything. A switch that is off when hassmic
+  Show 8's microphone switch reads "off" until the Echo lets it go by itself, 20 to 80 seconds in; hassmic, up by then
+  in two boots of three, caught it and said "mics off" to someone who had not pressed anything. A switch that is off when hassmic
   starts is now shown quietly (ring, Home Assistant), on every Echo; pressing it is announced as before.
-- **Echos answer ping from the local network** (every model). Echo requests from private addresses are let in, so
-  `ping <echo>` tells whether it is up; nothing else comes in that did not before.
-- **Echo Show: the screen's clock in your time zone.** `TIMEZONE=<zone>` in `hassmic.conf` (e.g. `Europe/Berlin`) sets
-  Android's zone at every start; the guided setup asks, with this PC's zone as the default. Without it the Show says GMT.
 - **Echo Show (Show 5, Show 8): the wake sound was not heard, a fix to confirm.** The speaker opens a fraction of a second after a sound
   starts, which swallowed the 0.12 s blip; a sound that follows a pause now starts 0.35 s late so it is not clipped.
 - **Echo Show 5: Download from Amazon.** The settings page's "Download from Amazon" now works on the Show: sign in

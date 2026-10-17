@@ -21,7 +21,7 @@ action button. `adbd` and `magiskpolicy32` are byte-identical to checkers'.
 | `libpryon.so` | 2.41 (checkers' is older) | `pryon_test` loads the firmware's ALEXA model; the stubs list is regenerated (26/17/8 symbols for pryon/opus/z) |
 | `libasp.so`, audio HAL | differ from checkers' | `probe.md5` pins them |
 | Speaker gain | `OUT Playback Volume` 0..39, stock **30** (checkers: 29), 1.5 dB steps | `board.c` |
-| Wake sound | the stock one is not in SIM's APK (`res/eb.wav` is empty) | `ui_wakesound*` entries left out of `board.c`: hassmic's own chime plays (`main.c` `earcon_thread`; no app has the sound, below) |
+| Wake sound | the stock one is not in SIM's APK (`res/eb.wav` is empty) | `ui_wakesound*` entries left out of `board.c`: hassmic's built-in blip plays (no app has the sound, below) |
 | Stock apps | ten of checkers' `STOCK_APPS_OUT` do not exist; crown has more of its own (`settings.windfall`, `ahe.damca`, `kindle.cms-service`, `FireOSDownloadProvider`, `TabletCamera2`, `knight.ecs`, `knight.hds`) | to classify by what crashes after an install |
 | Attestation | the binder service `amazon.security.dha` answers `getDhaVersion` = **2** | `dha.c` builds drvV1 (version 1) only; see below |
 
@@ -44,8 +44,8 @@ Wi-Fi (the Echo had no network), the install.
 
 ## Boot and the mute latch (2026-10-14)
 
-Kernel start to hassmic: firewall 11 s, Android's `boot_completed` and the satellite start 22 s, hassmic 40 s (64 s before
-`alexa-off.sh` asked `pm` once instead of once per package). The mute latch (`amazon-gating/state`) reads 0, 2, 1 while the
+Kernel start to hassmic: firewall 11 s, Android's `boot_completed` and the satellite start 22 s, hassmic 64 s (40 s with
+`alexa-off.sh` asking `pm` once instead of once per package: tried, not part of this port). The mute latch (`amazon-gating/state`) reads 0, 2, 1 while the
 driver comes up (12, 16, 17 s) and then **1 (muted) until something lets it go by itself 20-80 s after power on**: no file
 of the firmware's userspace names `amazon-gating` apart from `init.project.rc`'s chown, and nobody pressed the button.
 System server plays its privacy sound at 14 s (and "off" 17 s later, both missing: SystemUI's resources are not there).
@@ -92,7 +92,7 @@ downloaded and installed from the settings page on a Show 8.
   "controller ready, ACL 32 x 251", passive and active scans, a GATT connection with service discovery, "a2dp: ready",
   codecs SBC/AAC/aptX/aptX HD. Nothing to change in `board.c`.
 - Wake sound: `ban_ui_wakesound` (`res/eb.wav`) and `ban_ui_endpointing` (`res/ie.wav`) are both empty files in SIM's APK,
-  and no other app has a resource of that name: this firmware has no wake sound file, so hassmic's own sound plays (since 2026-10-15 a two-note chime, was a 0.12 s blip).
+  and no other app has a resource of that name: this firmware has no wake sound file, so hassmic's built-in blip plays.
 - `MODEL_NUMBER` C7H6N3 is the label's (`/proc/idme` has no model number: product_name/productid read 0).
 - Crown's extra Amazon apps, on the installed Echo (none runs, none crashes, load comes from audioserver and hassmic):
   `settings.windfall` is in `STOCK_APPS_OUT` already; `kindle.cms-service` does not even parse ("Required FireOS Feature
@@ -101,11 +101,3 @@ downloaded and installed from the settings page on a Show 8.
   `com.android.providers.downloads` loads its library from and `TabletCamera2` is Android's camera app: both stay.
   `ahe.damca` (a service and a receiver, idle, no Alexa client needed) and `smarthomemapviewapp` stay too: removing an app
   only pays when it crashes or burns CPU.
-
-## Time zone (2026-10-14)
-
-The clock is UTC from Home Assistant (`clock_set`); Android showed GMT. `TIMEZONE=<tz name>` in `hassmic.conf` is applied by
-`main.sh` `timezone_set` at every satellite start: `setprop persist.sys.timezone` + `service call alarm 3 s16 <zone>`
-(AlarmManager.setTimeZone). Tested: reset to GMT, restart, "timezone: America/Denver", `date` in MDT. `setup.sh`
-asks (`ask_timezone`, default the PC's zone) and `install-boot.sh` writes it. To change by hand:
-`adb shell "echo TIMEZONE=Europe/Berlin >> /data/local/hassmic/hassmic.conf"` (edit the old line out), then restart.

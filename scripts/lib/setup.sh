@@ -360,30 +360,6 @@ usb_serial() {
     if [ -n "$s" ] && [ "$s" != unknown ]; then export ANDROID_SERIAL=$s; else unset ANDROID_SERIAL; return 1; fi
 }
 
-# one_adb_device: the guided setup wants exactly one device on adb's USB.  It reboots, wipes and reflashes the Echo, and
-# finds it again after each reboot with `adb -d` (usb_serial: TWRP reports another serial than Fire OS), which fails with
-# a second USB device (a phone, another Echo, a stale "offline" or "unauthorized" entry): the setup then waited for an
-# Echo that was there, or a command went to the other device.  Devices over Wi-Fi (an installed Echo) do not count:
-# USB_ONLY leaves them alone.  An explicit ANDROID_SERIAL is the way round.
-one_adb_device() {
-    local list
-    [ -n "$ANDROID_SERIAL" ] || [ -n "$DRY" ] && return 0
-    list=($(adb devices -l 2>/dev/null | awk 'NR > 1 && / usb:/ { print $1 }'))
-    [ ${#list[@]} -gt 1 ] || return 0
-    fail "More than one device is on adb over USB:"
-    printf '      %s\n' "${list[@]}"
-    echo
-    warn "Setting up an Echo reboots it, wipes it and flashes it, and adb is asked for \"the\" USB device over and over."
-    say  "With a second one plugged in a step can wait forever or end up on the wrong device: another Echo,"
-    say  "or a phone.  Please do not do that."
-    echo
-    say  "Unplug every other USB device, so that the Echo's cable is the only one (devices on adb over Wi-Fi may stay)."
-    say  "Check with adb devices -l: one line with usb:, then run scripts/setup.sh again."
-    echo
-    say  "Know what you are doing? export ANDROID_SERIAL=<serial from adb devices> picks one."
-    exit 1
-}
-
 # With several Echos on adb, one has to be picked, as for every script (ANDROID_SERIAL).
 pick_serial() {
     local list s
@@ -433,20 +409,6 @@ push_preset() {
     adb push "$1" $PRESET_ON_ECHO && adb shell "chown $DAEMON_USER $PRESET_ON_ECHO; chmod 600 $PRESET_ON_ECHO; kill \$(pidof hassmic)"
 }
 
-# ask_adb_wifi: INSTALL=boot models (hassmic.conf is written by scripts/install-boot.sh, which reads ADB_WIFI from the
-# environment).  Closed is the default: the settings page opens adb for 30 min, scripts/adb-wifi.sh opens it with the update key.
-ask_adb_wifi() {
-    [ -n "${ADB_WIFI+x}" ] && return 0                  # given on the command line
-    warn "adb over Wi-Fi left open is a root shell for everyone on the network, with no password."
-    if ask "Leave adb over Wi-Fi open all the time (ADB_WIFI=1)?" n; then export ADB_WIFI=1; else export ADB_WIFI=; fi
-}
-# ask_timezone: Android models (screen): Android shows its time in this zone, GMT without it.  Default: this PC's.
-ask_timezone() {
-    [ -n "${TIMEZONE+x}" ] && return 0
-    local d; d=$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null)
-    prompt TIMEZONE "Time zone for the screen's clock (tz name, e.g. Europe/Berlin)" "${d:-UTC}"
-    export TIMEZONE
-}
 # install_satellite: the last step of every model.  Installs (scripts/install-system.sh), waits until the installed
 # satellite runs; the Echo names itself (model and MAC address, read from its log), people name it in Home Assistant.  Settings to start with (--preset, or asked): an export of another Echo's settings page.  Name and address go to $OUT/setup.env for the final screen.  There is no trial run before
 # it: run.sh does not read hassmic.conf, so a trial announced itself under the default name, and Home Assistant kept that

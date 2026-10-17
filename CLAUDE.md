@@ -105,7 +105,7 @@ There is no single-test selector: run one unit test by building/running its line
 - Logs: `/data/local/hassmic/boot.log`, each line stamped (`clock.c`: UTC once the clock came from HA, else `boot+<s>`;
   hassmic's own through its reader process `hassmic-log`, which `pidof hassmic` lists too; scripts through `say`/`stamped`
   in `main.sh`). The Echo's mksh is 32-bit and has no awk. Config: `/data/local/hassmic/hassmic.conf` (`PROTO`, `ARGS`, `MODE`,
-  `ADB_WIFI`, `TIMEZONE` (Android models: `main.sh` `timezone_set`); root-owned, 644: root sources it).
+  `ADB_WIFI`; root-owned, 644: root sources it).
   State (API key, BLE bonds, BT keys, Sendspin, settings): `/data/local/hassmic/state/`.
 - `kill -TTIN $(pidof hassmic)` toggles recording of the processed mic stream to `state/capture.raw`. `mixcap` cannot
   capture while hassmic runs: the mixer feeds the mic stream to one client only.
@@ -409,7 +409,7 @@ Firewall invariant: Amazon's daemons may only reach local addresses; hassmic its
 TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get out. Inbound TCP and UDP are only admitted on
 16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 OTA, 28931 settings page, UDP 28930 arbitration)
 must stay in that range (UDP 28932 Drop In too). Only exception: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
-`state/config` says `arbitration_mode=kiosk` (`kiosk_state`). ICMP: echo requests from `LOCAL4`'s private ranges only (ping), the rest RELATED/ESTABLISHED. A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`
+`state/config` says `arbitration_mode=kiosk` (`kiosk_state`). A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`
 prints it.
 
 `tools/` is PC-side reverse-engineering and firmware tooling (`payload_dump.py`, Thumb disassembly helpers,
