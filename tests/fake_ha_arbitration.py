@@ -485,12 +485,14 @@ async def main():
         check(a.page.state()["arbitration"]["window"]["samples"] < len(delays), "a member out of rounds: its samples no longer count")
         sn.close()
 
-        # A hard crash that takes state/arbitration with it (2026-10-15, a Dot 2): back with its counter at 0, it takes K
-        # again.  The other Echo takes its packets at once, rather than drop them as replays until it restarts itself
+        # A hard crash that takes state/arbitration with it (2026-10-15, a Dot 2): back with no counter, it takes a new
+        # identity and K again through the new key's tag.  The other Echo takes its packets at once, rather than drop
+        # them as replays of the old id until it restarts itself
         ha.tags_on = True; took = lambda: len(re.findall(r"joined network|moved to the older network", b.text())); joined = took()
         await b.cli.disconnect(); b.proc.kill(); b.proc.wait(); b.states = {}
-        st = os.path.join(b.state, "arbitration"); os.remove(st)
+        old = b.pub(); os.remove(os.path.join(b.state, "arbitration"))
         b.start(); await asyncio.sleep(0.5); await b.connect(ha)
+        check(b.pub() != old, "crashed without its state file: a new identity")
         ok = await until(lambda: b.net() == a.net() and b.st("arbitration_peers") == 1 and took() > joined, 60)
         check(ok, f"crashed without its state file: took the key again through its tag (peers {b.st('arbitration_peers')})")
         await asyncio.sleep(1)
@@ -498,31 +500,6 @@ async def main():
         await until(lambda: len(b.starts) > nb, 3); await asyncio.sleep(1)
         check(len(b.starts) == nb + 1 and len(a.starts) == na,
               f"both heard it: the crashed one, better (900 over 500), answers alone; its claim counted: {len(a.starts) - na} / {len(b.starts) - nb}")
-        b.end_pipeline(); await asyncio.sleep(1.7)                      # past the round's sampling: no save from it below
-        c = int(re.search(r"^ctr (\d+)$", open(st).read(), re.M).group(1)); us = time.time() * 1e6
-        check(us < c <= us + 3600e6, f"its counter comes from the clock, reserved an hour ahead: {(c - us) / 1e6:.0f} s")
-        m = os.stat(st).st_mtime; await asyncio.sleep(45)               # beacons go out every 20-40 s
-        check(os.stat(st).st_mtime == m, "the time-based counter does not write state/arbitration for every packet")
-        # restarted before root set the clock (the first minute after a boot): on from the file's reservation, above
-        # what it sent, so the other Echo still takes its claim
-        await b.cli.disconnect(); b.proc.terminate(); b.proc.wait(); b.states = {}
-        b.env["HASSMIC_CLOCK_SYNCED"] = "0"; b.start(); await asyncio.sleep(0.5); await b.connect(ha)
-        await until(lambda: b.st("arbitration_peers") == 1, 30); await asyncio.sleep(1)
-        na, nb = len(a.starts), len(b.starts); a.wake(); b.wake()
-        await until(lambda: len(b.starts) > nb, 3); await asyncio.sleep(1)
-        check(len(b.starts) == nb + 1 and len(a.starts) == na,
-              f"restarted with the clock not set: its counter from the reservation, its claim counted: {len(a.starts) - na} / {len(b.starts) - nb}")
-        b.end_pipeline(); del b.env["HASSMIC_CLOCK_SYNCED"]; await asyncio.sleep(1.7)
-        check("ahead 1" in open(st).read().split("\n"), "counters from the reservation, maybe above the time: state/arbitration says so")
-        # then only hassmic restarts, the clock set by now (an update, a crash of hassmic alone): what the last run sent
-        # from the reservation may be above the time, so it goes on above that, not from the time
-        await b.cli.disconnect(); b.proc.terminate(); b.proc.wait(); b.states = {}
-        b.start(); await asyncio.sleep(0.5); await b.connect(ha)
-        await until(lambda: b.st("arbitration_peers") == 1, 30); await asyncio.sleep(1)
-        na, nb = len(a.starts), len(b.starts); a.wake(); b.wake()
-        await until(lambda: len(b.starts) > nb, 3); await asyncio.sleep(1)
-        check(len(b.starts) == nb + 1 and len(a.starts) == na,
-              f"restarted after a run that sent from the reservation, now with the clock: its claim counted: {len(a.starts) - na} / {len(b.starts) - nb}")
         b.end_pipeline()
     finally:
         for e in (a, b): e.proc.terminate()
