@@ -163,6 +163,7 @@ const char *core_media_list(void);                          /* the list as store
 const char *core_media_player(int i);                       /* the i-th id, NULL past the end */
 int    core_media_ambient(int set);                         /* 10..100 %, 100 = off; -1 reads */
 int    core_media_state(const char *entity, const char *state);    /* Home Assistant's state of one: 1 if it is listed */
+int    core_media_volume(const char *entity, const char *value);   /* its volume_level, for the media log: 1 if listed */
 void   core_media_followed(void);                           /* a keyed link follows the listed players from now on */
 void   core_media_link_lost(void);                          /* no keyed link left: players that played count as stopped */
 size_t core_media_json(char *o, size_t cap);                /* for the settings page */

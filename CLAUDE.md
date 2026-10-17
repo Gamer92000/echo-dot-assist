@@ -211,7 +211,10 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `media_follow` on SUBSCRIBE_HA_STATES, `media_subscribe` for ids added later), `core_media_state`; the last keyed link
   gone, playing ones go into the hold. Once per id and link (`media_sub` keeps the ids with HA's last state, replayed on
   A, B, A). Page status `"media"` (`core_media_json`: `linked`, a player `missing` when no state came within 10 s,
-  `HASSMIC_MEDIA_MISSING_MS`).
+  `HASSMIC_MEDIA_MISSING_MS`). Media log (logging only, `media:` lines): `media_sub` also follows each player's
+  `volume_level` attribute (`core_media_volume`); `media_mark` logs the room level (`room_put`/`room_str`: capture
+  thread, atomics) at each change and 5 s after (`media_log_tick` in `volume_led_thread`, leaf `mlog_lock` under
+  `core_lock`; `HASSMIC_MEDIA_AFTER_MS`, `HASSMIC_MEDIA_EVERY_MS`).
 - **Music**: `sendspin.c` (Music Assistant Sendspin player over `ws.c`/`noise.c`/`net.c`/`hash.c`, decodes via
   `dr_flac`/`minimp3`/libopus). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
   loaded with dlopen, aptX/aptX HD via `freeaptx`) with AVRCP. Only one music source plays at a time (newest wins).

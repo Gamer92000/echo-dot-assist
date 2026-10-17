@@ -43,6 +43,7 @@ class Echo:
                         HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(self.state, "play.raw"),
                         HASSMIC_MDNS_FILE=os.path.join(self.state, "none"), HASSMIC_ARB_ADDR=BCAST, HASSMIC_KIOSK_PORT=str(KIOSK), HASSMIC_TEST_SCORE=str(score),
                         HASSMIC_MODELS=os.path.join(self.state, "models"), HASSMIC_MEDIA_HOLD_MS="1500", HASSMIC_MEDIA_MISSING_MS="1000",
+                        HASSMIC_MEDIA_AFTER_MS="1000", HASSMIC_MEDIA_EVERY_MS="3000",
                         HASSMIC_MUSIC=os.path.join(self.state, "music.raw"))
         os.makedirs(os.path.join(self.state, "models", "echo-de"))
         open(os.path.join(self.state, "models", "echo-de", "pryon.manifest"), "w").close()
@@ -106,12 +107,23 @@ class HA:
     def __init__(self, echos):
         self.echos, self.calls, self.refused, self.tags_on, self.asked, self.tags, self.scans = echos, [], [], True, [], {}, []
         self.subs, self.media = [], {}                  # lasting subscriptions (echo name, entity); media players' states
+        self.attr_subs, self.vols = [], {}              # the same of an attribute (echo name, entity, attribute); volume_level
     def sub(self, echo, entity, attribute):
         """a subscription without "once" (async_on_state_subscription): a tracker that sends the state now and on every
-        change, until the link closes"""
+        change, until the link closes.  One of an attribute is a tracker of its own"""
+        if attribute:
+            self.attr_subs.append((echo.name, entity, attribute))
+            if attribute == "volume_level" and entity in self.vols: echo.cli.send_home_assistant_state(entity, attribute, self.vols[entity])
+            return
         self.subs.append((echo.name, entity))
         if not attribute and entity in self.media: echo.cli.send_home_assistant_state(entity, "", self.media[entity])
-    def drop(self, echo): self.subs = [x for x in self.subs if x[0] != echo.name]
+    def drop(self, echo):
+        self.subs = [x for x in self.subs if x[0] != echo.name]; self.attr_subs = [x for x in self.attr_subs if x[0] != echo.name]
+    def set_volume(self, entity, vol):
+        """a player's volume_level changes: its attribute's trackers send it, as str(float)"""
+        self.vols[entity] = vol
+        for name, e, at in self.attr_subs:
+            if e == entity and at == "volume_level": next(x for x in self.echos if x.name == name).cli.send_home_assistant_state(entity, at, vol)
     def set_media(self, entity, state):
         """a media player changes: every tracker of it sends the new state (nothing when it stays the same)"""
         if self.media.get(entity) == state: return
@@ -511,7 +523,8 @@ async def main():
         # Sonos plays beside it.  The players are a setting of each Echo; Home Assistant sends their states, over the keyed
         # link only, for good (not once)
         SONOS, RADIO, TV = "media_player.kitchen_sonos", "media_player.kitchen_radio", "media_player.living_room_tv"
-        ha.media.update({SONOS: "idle", RADIO: "idle", TV: "off"})
+        ha.media.update({SONOS: "idle", RADIO: "idle", TV: "off"}); ha.vols[SONOS] = "0.3"
+        ROOM = r"room -?\d+\.\d dBFS \(floor -?\d+\.\d\)"     # the media log's measure (main.c room_str)
         media = lambda e: (e.page.state() or {}).get("media") or {}
         setting = lambda e, n: next((x for x in (e.page.state() or {}).get("settings", []) if x["name"] == n), {})
         def drain():
@@ -555,12 +568,28 @@ async def main():
         won, sc, _ = await round_()
         check(won == "b" and sc == 801 and f"arbitration: media of this room ({SONOS} playing): ambient counted at 50 %, score 500 -> 801" in a.text(),
               f"background at 50 %: +3 dB, still under the other Echo's 900: {won} {sc}")
+        # the media log: the room's level at the change and a while after (1 s here, 5 s on the Echo), the volume as well,
+        # and the room's floor on each round's line; logging only, the scores above and below are the same
+        t = a.text()
+        check(re.search(rf"^.*media: {SONOS} idle -> playing, {ROOM}$", t, re.M) and re.search(rf"^.*media: {SONOS} playing 1 s, {ROOM}$", t, re.M)
+              and re.search(r"arbitration: media of this room .*score 500 -> 801; room floor -?\d+\.\d dBFS$", t, re.M),
+              "media log: the change, 1 s after, the floor on the round's line")
+        check(ha.attr_subs == [(a.name, SONOS, "volume_level")] and f"media: {SONOS} volume" not in t,
+              f"its volume followed too, once; the first value is no change: {ha.attr_subs}")
+        ha.set_volume(SONOS, "0.45"); await asyncio.sleep(0.2); ha.set_volume(SONOS, "0.5"); await asyncio.sleep(1.3)
+        t = a.text()
+        check(re.search(rf"media: {SONOS} volume 0\.30 -> 0\.45, {ROOM}$", t, re.M) and re.search(rf"media: {SONOS} volume 0\.45 -> 0\.50, {ROOM}$", t, re.M)
+              and len(re.findall(rf"media: {SONOS} volume 0\.50 1 s, {ROOM}$", t, re.M)) == 1 and f"volume 0.45 1 s" not in t,
+              "media log: each volume change, one line after the last step")
+        await asyncio.sleep(2)
+        check(re.search(rf"media: {ROOM}, playing: {SONOS}$", a.text(), re.M), "media log: a line now and then while it plays")
         a.page.set(arbitration_media_ambient=25)
         won, sc, ln = await round_()
         check(won == "a" and sc == 1102 and ln == base_len, f"at 25 %: +6 dB, the kitchen Echo answers; its claim carries 1102, same length: {won} {sc} {ln}/{base_len}")
         ha.set_media(SONOS, "paused"); await asyncio.sleep(0.2)
         won, sc, _ = await round_()
         check(won == "a" and re.search(rf"arbitration: {SONOS} paused \(counts \d+ s more\)", a.text())
+              and re.search(rf"media: {SONOS} playing -> paused, {ROOM}$", a.text(), re.M)
               and re.search(rf"media of this room \({SONOS} stopped 0 s ago\)", a.text()), f"paused: still counts for the hold: {won} {sc}")
         won, sc, _ = await round_()
         check(won == "b" and sc == 500, f"after the hold (1.5 s here): no more: {won} {sc}")
@@ -582,6 +611,7 @@ async def main():
         check(ha.subs[n2:] == [] and ha.subs.count((a.name, SONOS)) == 1 and m.get("here") == f"{SONOS} playing"
               and m.get("players") == [{"id": SONOS, "state": "playing"}, {"id": RADIO, "state": "stopped"}],
               f"listed again on the same link: no second subscription, its last state at once: {ha.subs[n2:]} {m}")
+        check(sorted(x[1] for x in ha.attr_subs if x[0] == a.name) == sorted([SONOS, RADIO]), f"nor of its volume: {ha.attr_subs}")
         # an id Home Assistant does not have (a typo): it sends nothing, and after a while the page says so
         GHOST = "media_player.kitchen_sonso"
         a.page.set(arbitration_media_players=f"{SONOS},{GHOST}"); await asyncio.sleep(0.2)
@@ -684,8 +714,9 @@ async def main():
             task = asyncio.create_task(play(server.get_client(cid)))
             await asyncio.wait_for(playing.wait(), 10); await asyncio.sleep(1)
             won, sc, _ = await round_()
-            check(won == "a" and sc == 1102 and "media of this room (own playback): ambient counted at 25 %" in a.text(),
-                  f"Music Assistant plays on it: its own playback counts: {won} {sc}")
+            check(won == "a" and sc == 1102 and "media of this room (own playback): ambient counted at 25 %" in a.text()
+                  and re.search(rf"media: own playback off -> on, {ROOM}$", a.text(), re.M) and re.search(rf"media: own playback on 1 s, {ROOM}$", a.text(), re.M),
+                  f"Music Assistant plays on it: its own playback counts (and is logged): {won} {sc}")
             stop.set(); await task; await asyncio.sleep(0.5)
             won, sc, _ = await round_()
             check(won == "a" and re.search(r"media of this room \(own playback ended [01] s ago\)", a.text()), f"stopped: counts for the hold: {won} {sc}")

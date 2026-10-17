@@ -128,9 +128,10 @@ enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3
 #define MAX_CLIENTS 4
 /* lock held.  enc: Noise frames (tx is used under the lock, rx by the client's reader only); keyed: with the device key;
  * actions: runs Home Assistant actions for us */
-/* media: the media players this link follows (media_sub), with the last state Home Assistant sent of each ("" none yet) */
+/* media: the media players this link follows (media_sub), with the last state and volume_level Home Assistant sent of
+ * each ("" none yet) */
 #define FOLLOW_MAX (2 * MEDIA_MAX)
-struct followed { char id[96], st[32]; };
+struct followed { char id[96], st[32], vol[16]; };
 static struct { int fd, states, enc, keyed, ble, ble_free, ble_user, actions, ha_states, nmedia; struct followed media[FOLLOW_MAX]; struct noise_cs tx, rx; } clients[MAX_CLIENTS] = { { .fd = -1 }, { .fd = -1 }, { .fd = -1 }, { .fd = -1 } };
 static int va_fd = -1;                  /* lock held: voice assistant subscriber */
 static __thread int reply_fd = -1;      /* the client whose request this thread is handling */
@@ -1440,7 +1441,14 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
             else if (f.field == 2) pbf_str(&f, st, sizeof st);
             else if (f.field == 3) pbf_str(&f, attr, sizeof attr);
         }
-        if (attr[0] || c < 0 || !clients[c].keyed) break;
+        if (c < 0 || !clients[c].keyed) break;
+        if (attr[0]) {                                   /* a listed player's volume, for the media log (main.c) */
+            if (strcmp(attr, "volume_level") || strncmp(ent, "media_player.", 13)) break;
+            for (int i = 0; i < clients[c].nmedia; i++)
+                if (!strcmp(clients[c].media[i].id, ent)) snprintf(clients[c].media[i].vol, sizeof clients[c].media[i].vol, "%s", st);
+            core_media_volume(ent, st);
+            break;
+        }
         if (!strncmp(ent, "media_player.", 13)) {
             for (int i = 0; i < clients[c].nmedia; i++)  /* kept even for one no longer listed: it may be listed again */
                 if (!strcmp(clients[c].media[i].id, ent)) snprintf(clients[c].media[i].st, sizeof clients[c].media[i].st, "%s", st);
@@ -1678,9 +1686,19 @@ static void media_sub(int c, const char *entity)
 {
     int k = 0;
     while (k < clients[c].nmedia && strcmp(clients[c].media[k].id, entity)) k++;
-    if (k < clients[c].nmedia) { if (clients[c].media[k].st[0]) core_media_state(entity, clients[c].media[k].st); return; }
-    if (k < FOLLOW_MAX) { snprintf(clients[c].media[k].id, sizeof clients[c].media[k].id, "%s", entity); clients[c].media[k].st[0] = 0; clients[c].nmedia++; }
+    if (k < clients[c].nmedia) {
+        if (clients[c].media[k].st[0]) core_media_state(entity, clients[c].media[k].st);
+        if (clients[c].media[k].vol[0]) core_media_volume(entity, clients[c].media[k].vol);
+        return;
+    }
+    if (k < FOLLOW_MAX) {
+        snprintf(clients[c].media[k].id, sizeof clients[c].media[k].id, "%s", entity);
+        clients[c].media[k].st[0] = clients[c].media[k].vol[0] = 0; clients[c].nmedia++;
+    }
     PB(b, 160); pb_str(&b, 1, entity); send_to(clients[c].fd, HA_STATE_SUB, &b);
+    /* and its volume, for the media log only (main.c media_mark): an attribute is a tracker of its own in Home
+     * Assistant, sent at once and then when that attribute changes, nothing while the player has none */
+    PB(v, 192); pb_str(&v, 1, entity); pb_str(&v, 2, "volume_level"); send_to(clients[c].fd, HA_STATE_SUB, &v);
 }
 static int media_subscribe(const char *entity)
 {

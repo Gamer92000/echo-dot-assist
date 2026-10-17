@@ -1038,6 +1038,16 @@ Run in this order. Each step says what it proves.
       what the music adds: ambient counted = baseline + (ambient - baseline) x factor, the baseline learned from the
       rounds without media (the "no media of this room" lines); bounded by itself, since the background never counts
       below the baseline. To be decided offline on a week of both Echos' rounds before it goes in.
+      2026-10-17 14:04 it went wrong the other way: the living room Sonos playing quietly, that Echo's ambient 17056
+      under the kitchen's 26229, still +3 dB, and it took a wake word from the kitchen. Planned: the music's share
+      measured live, the Echo's own mic level just before and after a listed player starts, stops or changes volume
+      (other noise is in both). First the data: the media log (`main.c` `media_mark`, logging only): `media: <id> idle
+      -> playing, room <dBFS> (floor <dBFS>)` at each change of a listed player, its `volume_level` (subscribed as an
+      attribute, once per id and link) and own playback, the same 5 s later (`<id> playing 5 s, room ...`, `, now <state>`
+      when it flipped back), `media: room ..., playing: <ids>` every 60 s while something plays, and `; room floor
+      <dBFS>` on every round's `arbitration:` line. Room = the processed mic stream in 100 ms frames (`room_put` in the
+      capture thread, two atomics): mean square of the last 1 s, floor = 20th percentile of the last 5 s. HA's state
+      comes after the music is audible, so the 1 s before a start can hold music already; the floor is the baseline.
 - [x] Stale `-m` after the wake word migration (2026-10-06, donut kept going back to Alexa): `artifact-install.sh
       migrate` renamed `models/echo-de` to `echo-de-DE` and moved `state/wake_word`, but hassmic.conf kept
       `ARGS="-m .../models/echo-de/pryon.manifest"`; `wake_words_scan` added the -m path unchecked, so HA's select had two
