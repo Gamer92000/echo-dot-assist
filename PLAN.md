@@ -1936,3 +1936,6 @@ Run in this order. Each step says what it proves.
       loads the rules anyway beside a hung watcher (the lock matters more) and `ctl.restart`s it. #33's version polled
       20 s before every start. The Dot's toybox `head` has no `-c` ("head: not integer: c"): main.sh's `head -c 40`
       for the reason of a reset, reboot, restart and mDNS restart always came out empty there; `dd bs=N count=1` now.
+      Setup with two USB devices: `adb -d` fails ("more than one device"), `adb_is` never true. `usb_serial` lists
+      `adb devices -l` lines with ` usb:` (offline/unauthorized too: adb -d counts them), `waitfor` names them once and
+      keeps waiting; devices over Wi-Fi do not count (USB_ONLY). Tried with a stand-in adb.

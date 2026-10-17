@@ -90,11 +90,16 @@ in_dir() { cd "$1" && shift && "$@"; }
 # every 2 s).  HINT is shown once after AFTER seconds (default 60); with TIMEOUT seconds, gives up and returns 1.
 # An Echo that stays "offline" on adb over Wi-Fi (adb_is counts it) gets a hint of its own.
 waitfor() {
-    local label=${1%%|*} donel=${1#*|} check=$2 hint=$3 after=${4:-60} timeout=$5 t0=$SECONDS i offhint=1
+    local label=${1%%|*} donel=${1#*|} check=$2 hint=$3 after=${4:-60} timeout=$5 t0=$SECONDS i offhint=1 usbhint=1
     if [ -n "$DRY" ]; then printf '  %s· %s%s\n' "$DIM" "$label" "$N"; return 0; fi
-    ADB_OFFLINE=0
+    ADB_OFFLINE=0 ADB_USB_MANY=
     until eval "$check" > /dev/null 2>&1; do
         if [ -n "$hint" ] && [ $((SECONDS - t0)) -ge "$after" ]; then _clr; warn "$hint"; hint=; fi
+        if [ -n "$usbhint" ] && [ -n "$ADB_USB_MANY" ]; then
+            _clr; warn "More than one device is on adb over USB: $(echo $ADB_USB_MANY). adb cannot tell which one is the Echo."
+            info "Unplug every other one (devices on adb over Wi-Fi may stay); the setup goes on by itself."
+            usbhint=
+        fi
         if [ -n "$offhint" ] && [ $ADB_OFFLINE -ge 10 ]; then
             _clr; warn "The Echo takes adb's connection but stays \"offline\": its adb hangs. Unplug the Echo's power and plug it back in."
             offhint=
@@ -383,9 +388,13 @@ kernel_tools() {
 
 # USB_ONLY (the guided setup): the Echo being set up is the one on USB; installed ones on adb over Wi-Fi must not be
 # mistaken for it.  Its serial is looked up again each time (TWRP may report another one than Fire OS) and exported, so
-# the scripts the steps run talk to it as well.
+# the scripts the steps run talk to it as well.  adb -d fails as soon as a second device is on USB (a phone, another
+# Echo, an "unauthorized" one), and the setup then waited for an Echo that was there: ADB_USB_MANY lists them for
+# waitfor's hint (issue #45).
 usb_serial() {
     local s
+    ADB_USB_MANY=$(adb devices -l 2>/dev/null | awk 'NR > 1 && / usb:/ { print $1 }')
+    [ "$(echo "$ADB_USB_MANY" | grep -c .)" -gt 1 ] || ADB_USB_MANY=
     s=$(adb -d get-serialno 2>/dev/null)
     if [ -n "$s" ] && [ "$s" != unknown ]; then export ANDROID_SERIAL=$s; else unset ANDROID_SERIAL; return 1; fi
 }
