@@ -1889,3 +1889,15 @@ Run in this order. Each step says what it proves.
       `stream_ring(replay_from ~1.24e9, at)` replayed the 4 s ring for ever under `core_lock` (it clamped `from`, never
       `to`): HA's STT heard the replay ("I like stuff"). Fix: `atomic_llong`, `stream_ring` clamps `to` to `ring_n`.
       Not reproducible on the PC (64-bit `long`); fake_ha_esphome, fake_ha_wakesound, fake_ha_arbitration pass.
+- [x] Arbitration counter back at 0 after a hard crash (2026-10-16, GitHub issue #36, PR #37; three Dot 2 on
+      2026.10.13.214128): `state/arbitration` gone at 2 of the kitchen's 8 cold boots (`rename` without `fsync`), so
+      its counter started at 0 and it took K again through its tag. The others keep a member's last counter until
+      they restart (`fresh()`: only `seen` ages), so they dropped all of it as replays; it still counted them and
+      yielded to their "answers": the living room answered for 25 h. Fix: `save()` fsyncs the file before the rename
+      and the directory after; no `ctr` line in the file = a new `arb_key`, so a new id the others hold no counter
+      of (K was lost with the file: the owner's word is needed again anyway, through the new key's tag or pairing).
+      The old id ages out after PEER_TTL_MS; its `tag.hassmic_<old pub>` stays in HA. Forgetting a member's counter
+      after PEER_TTL_MS instead would let anyone replay an Echo's packets (a Drop In invite) once it was off for
+      5 min. PR #37's first version (a counter floored by the clock) left up to an hour of drops. fake_ha_arbitration:
+      state file removed on a killed Echo, a new id, back in the network, its better claim counted (fails without
+      the fix); fake_ha_dropin, fake_web, fake_web_artifacts pass.

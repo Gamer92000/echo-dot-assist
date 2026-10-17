@@ -484,6 +484,23 @@ async def main():
         fbeacon(b"\x01"); await asyncio.sleep(0.5)          # the hallway Echo switches arbitration off: nobody waits for it
         check(a.page.state()["arbitration"]["window"]["samples"] < len(delays), "a member out of rounds: its samples no longer count")
         sn.close()
+
+        # A hard crash that takes state/arbitration with it (2026-10-15, a Dot 2): back with no counter, it takes a new
+        # identity and K again through the new key's tag.  The other Echo takes its packets at once, rather than drop
+        # them as replays of the old id until it restarts itself
+        ha.tags_on = True; took = lambda: len(re.findall(r"joined network|moved to the older network", b.text())); joined = took()
+        await b.cli.disconnect(); b.proc.kill(); b.proc.wait(); b.states = {}
+        old = b.pub(); os.remove(os.path.join(b.state, "arbitration"))
+        b.start(); await asyncio.sleep(0.5); await b.connect(ha)
+        check(b.pub() != old, "crashed without its state file: a new identity")
+        ok = await until(lambda: b.net() == a.net() and b.st("arbitration_peers") == 1 and took() > joined, 60)
+        check(ok, f"crashed without its state file: took the key again through its tag (peers {b.st('arbitration_peers')})")
+        await asyncio.sleep(1)
+        na, nb = len(a.starts), len(b.starts); a.wake(); b.wake()
+        await until(lambda: len(b.starts) > nb, 3); await asyncio.sleep(1)
+        check(len(b.starts) == nb + 1 and len(a.starts) == na,
+              f"both heard it: the crashed one, better (900 over 500), answers alone; its claim counted: {len(a.starts) - na} / {len(b.starts) - nb}")
+        b.end_pipeline()
     finally:
         for e in (a, b): e.proc.terminate()
         for e in (a, b): e.proc.wait()
