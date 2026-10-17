@@ -166,7 +166,7 @@ int       voip_write(const void *data, size_t len) { return s_write(&voip, data,
 void      voip_close(void) { s_close(&voip); }
 
 static int always(void) { return 1; }
-void (*audio_earcon_started)(void);
+void (*audio_earcon_started)(unsigned lead_ms);
 
 void play_earcon(const short *pcm, size_t samples, unsigned rate) { play_earcon_while(pcm, samples, rate, always); }
 
@@ -198,7 +198,7 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
             MixerClose(h); usleep(50000);
             continue;
         }
-        if (audio_earcon_started) audio_earcon_started();
+        if (audio_earcon_started) audio_earcon_started(0);
         while (t < duration_ms + 1000 && MixerGetNumBytes(h) > 0 && go()) { usleep(20000); t += 20; }
         if (!go()) MixerFlush(h);
         MixerClose(h);

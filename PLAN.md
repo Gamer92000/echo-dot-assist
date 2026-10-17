@@ -2453,3 +2453,31 @@ Run in this order. Each step says what it proves.
       /proc/cpuinfo, UTC (dha.c, `dha_jwt_test --service`).  On the Echo against amazon.de: registered, echo de-DE
       and aed de-DE downloaded and installed; whisper-static 403 "not allowlisted for device Type A4ZP7ZC4PI6TO".
       Open items, one list: docs/re-checkers.md "What a port needs".
+- [~] Echo Show 8 1st gen (`crown`, 2026-10-13; `docs/re-crown.md`). Same platform as checkers: MT8163, Android 7.1.2,
+      kernel 4.9.77, RT5616, gating latch, MT7668; Fire OS 6.5.7.0 NS6570 (6074). `libpryon.so` 2.41 (newer than the
+      Show 5's; `pryon_test` loads the ALEXA model), `libasp.so` differs, `libopus`/`libz` as donut's. `devices/crown/`
+      copied from checkers and adapted (speaker gain stock 30 of 0..39, no `ui_wakesound` entries, `NS6570` pins,
+      absent stock apps out of `STOCK_APPS_OUT`, own kconfig; stubs byte-identical, `scripts/setup.sh crown --dry-run`
+      walks every step).  Trial run from the PC on a rooted Echo (nothing installed, 2026-10-13): OpenSL ES capture,
+      wake word "alexa" detected, volume keys, mic mute latch, band 1280 x 10, speaker gain read.  The install (`INSTALL=boot`, boot image from
+      the NS6570 `boot.img`; the unlock's `boot-root.img` is NS6571's): done since (below).  The guided setup on a real
+      Echo Show 8: tried by the port's author.
+      Closed (2026-10-14, docs/re-crown.md "Bluetooth, wake sound, extra apps"): Bluetooth works after the install (proxy,
+      GATT, A2DP ready); the wake sound is not in this firmware (`ban_ui_wakesound`, `ban_ui_endpointing` are empty files),
+      the built-in tone stays; MODEL_NUMBER C7H6N3; crown's extra apps classified (none runs or crashes: left as they are).
+      DHA version 2 (2026-10-14): the service's drvV3 (Java MAP, `dha.c` `jwt_java_v3`) works against the real Amazon: models downloaded and installed on a Show 8. Wi-Fi motion (2026-10-14): seen in HA's sensor after a warm-up of the per-kind levels (the first readings only set them); checkers' driver layout byte for byte (hook +0x64, SW_RFB_T +16/+32), so `hassmic_rcpi4m`
+      builds unchanged (`make kernel-tools DEVICE=crown`); loaded by hand on the Show 8: hooked, frames counted (KIND 0x14009).
+      Not yet seen through `main.sh` and HA's sensor.
+      Boot time (2026-10-14, Show 8): hassmic up 64 s after the kernel started, 90-120 s from the plug. `alexa-off.sh` took
+      36 s of it (a `pm list packages <name>` per absent package, 1.4 s each under the boot load); one listing makes it
+      17 s, hassmic up at 40 s (tried on the Show 8; not in this port, its own change). The 22 s of Android's own boot and
+      the bootloader remain.
+      Installed and verified on a real Show 8 (2026-10-14): voice question answered, buttons, ESPHome entities, volume
+      and mute keys, the band during a command and a reply. Found: the mute latch comes up on after power-on and lets go
+      by itself 20-80 s later (12 s 0, 16 s 2, 17 s 1, released 36 s in one boot, 50 s and 83 s in two): hassmic up
+      at 40-64 s caught it and played "mics off" -> `mute_latch(1, 0)` shows it quietly.  No wake sound was heard: the
+      output's open takes ~170 ms plus the amplifier (logcat, AudioALSAPlaybackHandlerNormal), the blip is 120 ms ->
+      `audio_android.c` lead-in of 350 ms after 2.5 s without audio (`COLD_MS`, `LEAD_MS`); the blip after it to be
+      confirmed by ear (a longer sound of our own was heard after it, 2026-10-15).  2026-10-17: the lead-in
+      reached earsup as part of the echo delay (85 ms + 350 > `D_MAX` 400 ms): `audio_earcon_started(lead_ms)` moves its
+      start past it.

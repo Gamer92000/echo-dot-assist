@@ -14,7 +14,7 @@
 static FILE *cap, *play;
 static short block[800];
 static unsigned play_rate, play_ch;
-void (*audio_earcon_started)(void);
+void (*audio_earcon_started)(unsigned lead_ms);
 
 #define ECHO_LEN (16000 * 4)
 static pthread_mutex_t echo_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -98,7 +98,7 @@ void play_earcon(const short *pcm, size_t samples, unsigned rate)
     int peak = 0;                               /* for the tests: how loud (separate volumes turn our sounds down) */
     for (size_t i = 0; i < samples; i++) if (abs(pcm[i]) > peak) peak = abs(pcm[i]);
     echo_add(pcm, samples, rate);
-    if (audio_earcon_started) audio_earcon_started();
+    if (audio_earcon_started) audio_earcon_started(0);
     fprintf(stderr, "earcon: %zu samples @ %u Hz, peak %d\n", samples, rate, peak);
 }
 

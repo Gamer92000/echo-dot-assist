@@ -175,6 +175,7 @@ const struct setting *settings_find(const char *name)
 }
 
 /* the speaker gain's top is the control's: +12 dB on an Echo Dot 2, +2 on an Echo Dot 3; the rotation's, the ring's last LED */
+int settings_min(const struct setting *s) { return s - table == SPK_GAIN ? spkgain_min() : s->min; }
 int settings_max(const struct setting *s)
 {
     return s - table == SPK_GAIN ? spkgain_max() : s - table == RING_ROT ? ring_leds() - 1 : s->max;
@@ -312,7 +313,7 @@ static int parse(const struct setting *s, const char *v, int *out)
         return -1;
     case S_INT:
         n = strtol(v, &end, 10);
-        if (!*v || *end || n < s->min || n > settings_max(s)) return -1;
+        if (!*v || *end || n < settings_min(s) || n > settings_max(s)) return -1;
         *out = (int)n; return 0;
     case S_CHOICE:
         for (int i = 0, k = settings_choices(s, &names); i < k; i++) if (!strcasecmp(v, names[i])) { *out = i; return 0; }

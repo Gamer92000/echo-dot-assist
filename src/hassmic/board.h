@@ -50,6 +50,7 @@ struct board {
     int speaker_gain_stock;
     int speaker_gain_steps;
     int speaker_gain_db;
+    int speaker_gain_min_db;        /* how far below stock the page may go, dB (negative), 0: not at all */
 };
 
 extern const struct board board;

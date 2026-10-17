@@ -7,6 +7,7 @@
 
 int  spkgain_present(void);             /* probed at the first call */
 int  spkgain_max(void);                 /* what this Echo's control has above stock, up to SPKGAIN_MAX; 0: absent */
-int  spkgain_get(void);                 /* dB over stock, 0..spkgain_max() */
+int  spkgain_min(void);                 /* what it offers below stock (0 or negative: board.speaker_gain_min_db) */
+int  spkgain_get(void);                 /* dB over stock, spkgain_min()..spkgain_max() */
 void spkgain_set(int db);               /* applied at once, and again whenever the audio HAL puts stock back */
 #endif

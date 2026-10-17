@@ -55,9 +55,9 @@
 #define POLL_MS 10000
 
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
-static int present = -1, fd = -1, wanted, written = -1, started, hi, count, stock, steps, per;
+static int present = -1, fd = -1, wanted, written = -1, started, hi, count, stock, steps, per, lodb;
 static unsigned numid;
-/* HASSMIC_FAKE_SPEAKER_GAIN=<file>[:<stock>:<steps>:<max>[:<per dB>]]: a file standing in for the control (tests),
+/* HASSMIC_FAKE_SPEAKER_GAIN=<file>[:<stock>:<steps>:<max>[:<per dB>[:<lowest dB, 0 or negative>]]]: a file standing in for the control (tests),
  * shaped as the Echo Dot 2's (6:1:35:1) unless told otherwise, whatever the board */
 static const char *fake;
 static char fake_path[256];
@@ -86,8 +86,9 @@ static int probe(void)
     if (env) {
         const char *c = strchr(env, ':');
         snprintf(fake_path, sizeof fake_path, "%.*s", c ? (int)(c - env) : (int)strlen(env), env);
-        stock = 6; steps = 1; hi = 35; per = 1; count = 1; fake = fake_path;
-        if (c && sscanf(c, ":%d:%d:%d:%d", &stock, &steps, &hi, &per) < 3) { stock = 6; steps = 1; hi = 35; per = 1; }
+        stock = 6; steps = 1; hi = 35; per = 1; count = 1; lodb = 0; fake = fake_path;
+        if (c && sscanf(c, ":%d:%d:%d:%d:%d", &stock, &steps, &hi, &per, &lodb) < 3) { stock = 6; steps = 1; hi = 35; per = 1; lodb = 0; }
+        if (lodb > 0) lodb = 0;
         return steps > 0 && per > 0 && (hi - stock) * per >= steps;
     }
     if (!board.speaker_gain) return 0;
@@ -104,6 +105,9 @@ static int probe(void)
     if (!numid || ioctl(fd, SNDRV_CTL_IOCTL_ELEM_INFO, &in) < 0 || in.type != SNDRV_CTL_ELEM_TYPE_INTEGER
         || (in.value.integer.max - stock) * per < steps || in.count < 1 || in.count > 2) goto none;
     hi = (int)in.value.integer.max; count = (int)in.count;
+    lodb = board.speaker_gain_min_db < 0 ? board.speaker_gain_min_db : 0;
+    int room = -((stock - (int)in.value.integer.min) * per / steps);       /* whole dB below stock the control has */
+    if (lodb < room) lodb = room;
     fprintf(stderr, "speaker gain: \"%s\" %d..%d, stock %d, now %d\n", board.speaker_gain, (int)in.value.integer.min, hi, stock, ctl_read());
     return 1;
 none:
@@ -116,7 +120,7 @@ none:
  * nearest the setting's whole dB where a step is not one (the Echo Show 5's 1.5 dB: +1 and +2 are both +1.5) */
 static void apply(void)
 {
-    int cur = ctl_read(), target = stock + (wanted * steps + per / 2) / per;
+    int cur = ctl_read(), target = stock + (wanted * steps + (wanted < 0 ? -per : per) / 2) / per;
     if (cur < 0 || cur == target) { if (cur == target) written = target; return; }
     if (cur != stock && cur != written) return;
     if (ctl_write(target) < 0) { fprintf(stderr, "speaker gain: cannot set %d: %s\n", target, strerror(errno)); return; }
@@ -147,6 +151,16 @@ int spkgain_present(void)
     return r;
 }
 
+/* whole dB below stock the page offers (0 or negative): board.speaker_gain_min_db, as far as the control goes */
+int spkgain_min(void)
+{
+    if (!spkgain_present()) return 0;
+    pthread_mutex_lock(&mu);
+    int r = lodb;
+    pthread_mutex_unlock(&mu);
+    return r;
+}
+
 int spkgain_get(void) { pthread_mutex_lock(&mu); int r = wanted; pthread_mutex_unlock(&mu); return r; }
 
 /* whole dB the control has above stock, at most SPKGAIN_MAX: the Dot 2's (35 - 6) / 1 -> 12, the Dot 3's (20 - 16) / 2 -> 2,
@@ -165,7 +179,7 @@ void spkgain_set(int db)
     int top = spkgain_max();
     if (!top) return;
     pthread_mutex_lock(&mu);
-    wanted = db < 0 ? 0 : db > top ? top : db;
+    wanted = db < lodb ? lodb : db > top ? top : db;
     if (wanted || started) apply();
     if (wanted && !started) {
         int one = 1; pthread_t t;

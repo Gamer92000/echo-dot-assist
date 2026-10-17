@@ -191,7 +191,8 @@ join() {
 agateway() {
     g=$(sed -n "s/^$WLAN[[:space:]]\{1,\}00000000[[:space:]]\{1,\}\([0-9A-Fa-f]\{8\}\).*/\1/p" $ROUTE 2>/dev/null)
     [ -n "$g" ] || return 0
-    gw=$(printf '%d.%d.%d.%d' $((16#${g:6:2})) $((16#${g:4:2})) $((16#${g:2:2})) $((16#${g:0:2})))
+    # bytes by sed, numbers by printf's 0x: ${g:6:2} and 16# are mksh's, and the PC's tests run this under dash
+    gw=$(printf '%d.%d.%d.%d' $(echo $g | sed 's/\(..\)\(..\)\(..\)\(..\)/0x\4 0x\3 0x\2 0x\1/'))
     ping -c 1 -W 1 $gw > /dev/null 2>&1
     grep "^$gw " $ARP 2>/dev/null | grep -q " 0x[26] .* $WLAN\$"
 }
@@ -252,8 +253,13 @@ saved) Q list_networks | grep -c '^[0-9]' ;;
 forget)
     if android; then
         # WifiService: every configured network goes, saved at once; the link it was on ends with its network
-        for i in $(A list_networks | sed -n 's/^\([0-9][0-9]*\)[[:space:]].*/\1/p'); do A remove $i > /dev/null; done
-        say "every saved network forgotten"
+        # Android 7 lets only the network's creator or the system user remove it: a network of Amazon's own setup (the
+        # unlock leaves one, crown 2026-10-15: "Not authorized to remove network", the Echo stayed on it) is refused to root
+        for i in $(A list_networks | sed -n 's/^\([0-9][0-9]*\)[[:space:]].*/\1/p'); do
+            aok remove $i && continue
+            [ -x "${0%/*}/runas" ] && "${0%/*}/runas" system system env CLASSPATH=$WIFICTL app_process / Wifictl remove $i > /dev/null
+        done
+        [ "$(A list_networks | grep -c '^[0-9]')" = 0 ] && say "every saved network forgotten" || say "!! a saved network could not be removed: the Echo stays on it"
     else
         # Not wpa_supplicant's P2P groups (disabled=2), as in join.  Saved at once: the reset is meant to survive a reboot.
         # Removing the network it is on ends that link; no "disconnect", which would keep it off until told to reconnect.

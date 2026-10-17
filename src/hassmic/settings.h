@@ -37,6 +37,7 @@ int  settings_bt_lang_index(int set);   /* -1 reads */
 int  settings_count(void);
 const struct setting *settings_at(int i);
 const struct setting *settings_find(const char *name);
+int  settings_min(const struct setting *s);                     /* S_INT: s->min, or below 0 where the speaker gain goes down */
 int  settings_max(const struct setting *s);                     /* S_INT: s->max, or less where this Echo has less */
 int  settings_get(const struct setting *s);                     /* S_CHOICE: the index */
 int  settings_choices(const struct setting *s, const char *const **names);   /* S_CHOICE: count and the value names */

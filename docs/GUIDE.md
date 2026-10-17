@@ -336,13 +336,15 @@ Beyond the README's two figures:
   models". Up to 50 packs; their designs count towards the 100.
 - **Listening points at you**, as with Alexa, and also while a timer rings or the light is on (Amazon's ring stops
   turning as soon as a second light shows; hassmic plays the listening ring already turned).
-- **Echo Show 5**: no ring; its lights run along the bottom edge of the screen as the ring laid out in a line (the
+- **Echo Show 5 and Echo Show 8**: no ring; its lights run along the bottom edge of the screen as the ring laid out in a line (the
   talker's side always in the middle: two microphones tell directions apart too poorly to turn it). The band keeps
   that strip of the screen for itself, 10 pixels by default ("Light band" on the settings page; 0 gives the whole
   screen to the apps and shows no band), so an app shown on the screen is never covered. The light "Light ring" works
   there too, in any colour. The screen wakes for the band and sleeps 5 minutes after the last light (1 minute with
   the microphones off or in Do not disturb).
-- **Microphone off** plays Alexa's own sounds.
+- **Microphone off** plays Alexa's own sounds. A switch that is already off when hassmic starts is shown, not announced.
+- **Wake sound**: Alexa's own where the firmware has it; the Echo Show 8 has none and plays hassmic's short blip. On the
+  Echo Show a sound after a pause starts 0.35 s late: the speaker takes that long to switch on and swallowed the start.
 - Silent and dark at boot.
 - The ring dims with the room's light as on a stock Echo (Amazon's own logic, on by default); a fixed level from Home
   Assistant switches that off.
@@ -599,10 +601,11 @@ this Echo or another, or use it as a preset for the next install (`scripts/setup
 **Identify** (top of the page, and beside each Echo in the list; also a button in Home Assistant): a rainbow on the ring
 for 10 s and stock's setup sound, to tell which Echo is which.
 
-**Speaker gain** (Sound; Echo Dot 2, Echo 2 and Echo Dot 3, and the Echo Show 5): for an Echo that is too
+**Speaker gain** (Sound; Echo Dot 2, Echo 2 and Echo Dot 3, and the Echo Show 5 and Show 8): for an Echo that is too
 quiet at full volume. It raises the analog gain in front of the speaker (Echo Dot 2 and Echo 2: the codec's "HP Driver
 Gain", +0 to +12 dB over stock; Echo Dot 3: the amplifier's output level, +0 to +2 dB, all it has above where Amazon
-leaves it; Echo Show 5: the codec's line out, +0 to +12 dB in steps of 1.5 dB, each dB set going to the nearest step), so everything the
+leaves it; Echo Show 5: the codec's line out, +0 to +12 dB in steps of 1.5 dB, each dB set going to the nearest step; Echo Show 8:
+the same, and down to −6 dB, since it is loud at full volume already), so everything the
 speaker plays gets louder at every volume step; the 3.5 mm jack and Bluetooth speakers keep their level. Owners of an
 Echo Dot 2 found +6 dB loud and clean at full volume; speakers differ, though (some Dot 2s are much louder than others
 at the same gain), so raise it a step at a time and lower it at the first crackle: loud music near full volume

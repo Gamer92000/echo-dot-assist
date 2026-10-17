@@ -1673,7 +1673,8 @@ void core_music(int source, int on)
     if (!was != !atomic_load(&music_on)) playback_hint();
 }
 
-static void earcon_started(void) { earsup_started(cap_clock()); }     /* the earcon thread: the mixer took a sound */
+/* the earcon thread: the mixer took a sound, which plays after lead_ms of silence (audio.h) */
+static void earcon_started(unsigned lead_ms) { earsup_started(cap_clock() + (uint64_t)lead_ms * CAP_RATE / 1000); }
 
 /* Our sounds and timers at their own volume (separate volumes): the Earcon stream plays at MainVolume, the loudest
  * of music, sounds and timers, so the quieter ones are turned down here (mix_apply).  A copy to free, or NULL to play
@@ -1782,16 +1783,18 @@ static void on_hold(int stage)
     else core_reset("action button held 10 s");
 }
 
-static void on_mute(int muted)          /* hardware latch changed (button) */
+static void mute_latch(int muted, int sound)
 {
     static int last = 0;
     fprintf(stderr, "mic mute button: %d\n", muted);
     pthread_mutex_lock(&core_lock);
     int was = last || soft_mute; last = muted;
     if (!muted && soft_mute) { soft_mute = 0; fprintf(stderr, "soft mute: 0 (released with the button)\n"); }
-    mute_update(was, 1);
+    mute_update(was, sound);
     pthread_mutex_unlock(&core_lock);
 }
+
+static void on_mute(int muted) { mute_latch(muted, 1); }       /* hardware latch changed (button) */
 
 /* Volume: 10 % per press like stock (3 of the ring's 30 steps on donut, board.volume_steps).  The volume_step-NN animations show 2 s and then loop
  * black forever, so the previous one has to be unset or they pile up in ledcontroller; a timer clears the last one. */
@@ -2553,7 +2556,11 @@ int main(int argc, char **argv)
 
     static const struct button_handler buttons = { on_action, on_mute, on_volume, on_pair, on_hold, button_event };
     if (buttons_start(input, &buttons) < 0) fprintf(stderr, "buttons: %s not available\n", input);
-    else if (buttons_muted()) on_mute(1);
+    /* The latch is no press at start: on the Echo Show 8 it comes up on (the mics are cut, stock's system server plays
+     * its privacy sound) and it lets go by itself 20-80 s after power on (nothing in userspace writes it).  hassmic,
+     * up 40-64 s after the kernel started, found it on in two boots of three and said "mics off" to a user who had
+     * touched nothing (2026-10-13).  Shown, not announced; the release is announced as any other. */
+    else if (buttons_muted()) mute_latch(1, 0);
 
     if (core_sendspin_port) sendspin_start(core_sendspin_port);
     if (use_bt) a2dp_start(NULL);
