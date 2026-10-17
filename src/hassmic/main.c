@@ -1530,7 +1530,8 @@ void core_music(int source, int on)
     if (!was != !atomic_load(&music_on)) playback_hint();
 }
 
-static void earcon_started(void) { earsup_started(cap_clock()); }     /* the earcon thread: the mixer took a sound */
+/* the earcon thread: the mixer took a sound, which plays after lead_ms of silence (audio.h) */
+static void earcon_started(unsigned lead_ms) { earsup_started(cap_clock() + (uint64_t)lead_ms * CAP_RATE / 1000); }
 
 static int ring_sound;
 static int ring_go(void) { return atomic_load(&dropin_ring) == ring_sound && !atomic_load(&sounds_pending); }

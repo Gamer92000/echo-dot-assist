@@ -532,7 +532,7 @@ void      voip_close(void) { s_close(&voip, 0); }
  * s_open on, so it consumes from the first Enqueue: audio_earcon_started then (earsup.c looks for the echo from there
  * on, so early is safe, late is not). */
 static int always(void) { return 1; }
-void (*audio_earcon_started)(void);
+void (*audio_earcon_started)(unsigned lead_ms);
 
 /* The output is closed after ~3 s without audio and opening it takes ~170 ms (AudioALSAPlaybackHandlerNormal: open
  * pcm 27.644 -> 27.811) plus the speaker amplifier switching on: the 120 ms wake blip, written to a cold output, was
@@ -550,16 +550,18 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
     long long end = now_ms() + (long long)(samples * 1000ULL / rate) + 1000;
     const char *p = (const char *)pcm;
     size_t len = samples * 2;
+    unsigned lead_ms = 0;
     if (now_ms() - atomic_load(&last_out) > COLD_MS) {
         static short lead[48000 * LEAD_MS / 1000];
         size_t n = (size_t)rate * LEAD_MS / 1000 < sizeof lead / 2 ? (size_t)rate * LEAD_MS / 1000 : sizeof lead / 2;
-        s_write(&earcon, lead, n * 2);
+        if (s_write(&earcon, lead, n * 2) == 0) lead_ms = (unsigned)(n * 1000 / rate);
         end += LEAD_MS;
     }
     while (len && go()) {
         size_t n = len < earcon.slot ? len : earcon.slot;
         if (s_write(&earcon, p, n) < 0) break;
-        if (p == (const char *)pcm && audio_earcon_started) audio_earcon_started();
+        /* the sound starts after the lead-in: earsup.c's echo search (up to 400 ms after this) would miss it otherwise */
+        if (p == (const char *)pcm && audio_earcon_started) audio_earcon_started(lead_ms);
         p += n; len -= n;
     }
     while (!s_drained(&earcon) && go() && now_ms() < end) usleep(20000);
