@@ -9,6 +9,8 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-15
 
+- **Echo Show 8 (2nd gen): Wi-Fi motion.** The motion sensor (experimental, off by default) now works on the Show 8 2nd gen:
+  our module reads the level of every frame from the router out of its Wi-Fi driver, as on the Echo Dot 3 and the Show 5.
 - **Echo Show 8 (1st gen): a factory reset forgets a Wi-Fi network that Amazon's own setup saved.** Android 7 only lets the
   network's creator or the system user remove it, so the reset reported "forgotten" and the Echo stayed on the network (and
   never offered setup from a phone). The reset now removes it as the system user, and says so when one cannot be removed.

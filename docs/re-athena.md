@@ -86,8 +86,15 @@ for the uninstall. Init loads the patched file at boot (the plat-and-mapping sha
   drvV3 from it (`svc_names`: it tries `amazon.security.dha`, then `fireosdhaservice`); nothing else new. Daemon user system
   is enough. Unit-tested with the fake service under athena's name; the real login and a model download worked 2026-10-14 (davs.c had its own libcurl socket hook: it needed the same already-connected bypass as https.c; the Echo's network must let it reach api.amazon.<site>, api.amazonalexa.com and CloudFront). The
   Echo's own Pryon models come with the firmware.
-- Wi-Fi motion: gen2 driver `wlan_mt76x3_sdio.ko` on a 4.4.146 kernel; `hassmic_rcpi.c` (gen2, 3.18) and `hassmic_rcpi4m.c`
-  (gen4m) have not been tried against it; no `KMOD`.
+- Wi-Fi motion works (2026-10-16): the driver is named gen2 (`wlan_mt76x3_sdio.ko`, a module, 4.4.146 kernel) but its RX path
+  is gen4m's: `nicRxProcessDataPacket` calls `nicRxFillRFB`, whose RFB has the group-valid byte at +16 and the RX vector
+  pointer at +32, and `nicRxGetRcpiValueFromRxv` reads word 3 byte 0, so `hassmic_rcpi4m.c` runs with its 32-bit defaults
+  (hook at +0x68). Unicast frames RCPI 119-120 (VHT 80 MHz MCS 9, `KIND` 0x14009), broadcasts 129 (`0x100b`), `iw` says -46 dBm.
+  Three things differ from checkers: the kernel has no `patch_text` and its module text is read-only, so the module makes the
+  page writable (`set_memory_rw` through kallsyms) and writes under `stop_machine`; `CONFIG_MODVERSIONS` is on, so the module
+  carries the kernel's CRCs (`devices/athena/Module.symvers`, read out of boot.img's Image: the words behind
+  `__kcrctab_<name>`); kernel.org's 4.4.146 with the device's config (stack protector off: arm-eabi-4.8 lacks `-strong`;
+  LOCALVERSION `+` for the vermagic). Not measured yet: motion sensor against someone walking.
 - The band's renderer died at a GC (fixed) and once at start (`lockCanvas` while the home activity came up, ~74 s): hassmic
   restarts it by itself.
 - Drop In and the blueprint list the model slug `echo-show-8-2nd-gen`; not exercised.

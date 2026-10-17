@@ -57,7 +57,7 @@ replies, the wake sound, phone audio over Bluetooth (loud enough only with the a
 Amazon" (the attestation through `fireosdhaservice`, version 2 as crown), the settings page's "Switch network".
 **Open**: Sendspin streaming (pairs, but Music Assistant never starts a stream), Drop In by voice (Home Assistant
 hands the sentence to the LLM), the speaker's volume curve and a `speaker_gain` (below), the lux value under a close
-bright lamp, Wi-Fi motion (the driver is `wlan_mt76x3_sdio`, no module yet).
+bright lamp.
 
 **Speaker.** The amplifier's volume is control 84 of card 0 (numid 83 in tinymix's list), "Master TAS5805m Playback Volume",
 0..158, 100 at boot, no dB table in the driver. Phone and Sendspin music at full volume is quiet at 100. Listened to with an

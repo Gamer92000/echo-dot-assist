@@ -84,6 +84,7 @@ kernel-tools:
 ifneq ($(KCONFIG),)
 $(OUT)/ktree/.config: $(KCONFIG)
 	@mkdir -p $(OUT)/ktree
+	$(if $(wildcard devices/$(DEVICE)/Module.symvers),cp devices/$(DEVICE)/Module.symvers $(OUT)/ktree/Module.symvers)
 	sed -i '/GCC_VERSION >= 40800 && GCC_VERSION < 40803/,/^#endif/d' $(KSRC)/arch/arm/kernel/asm-offsets.c
 	cp $< $@
 	$(KMAKE) -C $(KSRC) O=$(CURDIR)/$(OUT)/ktree olddefconfig modules_prepare

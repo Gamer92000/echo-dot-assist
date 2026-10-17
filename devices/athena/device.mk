@@ -13,5 +13,14 @@ RING    := src/hassmic/ring_band.c
 # NDK system libraries the backend needs (not stock: no stubs for them)
 SYSLIBS := -lOpenSLES
 
-# No Wi-Fi motion yet: the driver is MediaTek's gen2 wlan_mt76x3_sdio.ko on a 32-bit 4.4.146 kernel, and neither
-# src/kmod/hassmic_rcpi.c nor hassmic_rcpi4m.c has been tried on it (docs/re-athena.md).  KMOD is left out until then.
+# Wi-Fi motion: the Wi-Fi driver is MediaTek's wlan_mt76x3_sdio.ko, a module of its own, but built like the gen4m
+# driver of donut and checkers (RX vector, nicRxFillRFB, nicRxGetRcpiValueFromRxv): src/kmod/hassmic_rcpi4m.c, ARM
+# variant, with the defaults of checkers' offsets.  The kernel is 4.4.146 (MT8183, 32-bit), config from its /proc/config.gz
+# with the stack protector off (strong needs GCC 4.9, the Makefile's arm-eabi-4.8 has none) and LOCALVERSION "+" for the
+# vermagic; CONFIG_MODVERSIONS is on, so devices/athena/Module.symvers carries the kernel's own CRCs.  AOSP's arm-eabi-4.8
+# (the Makefile's default) builds it, same ABI as Amazon's GCC 4.9.
+KMOD    := hassmic_rcpi4m
+KVER    := 4.4.146
+KSRC_URL    := https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-4.4.146.tar.xz
+KSRC_SHA256 := 1f8810cc954fabca768c4726c72e49bbb8dbc038901089640755c9b5bde17df5
+KCONFIG := devices/athena/kconfig
