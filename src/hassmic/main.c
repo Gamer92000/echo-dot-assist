@@ -1784,7 +1784,7 @@ int core_led_auto(int set)
     if (set >= 0 && set != led_auto) {
         if (!set) led_level = core_led_brightness(-1);
         led_auto = set;
-        if (use_led) run("/system/bin/ledctrl", "-a", set ? "on" : "off");     /* off: the level stays where auto left it */
+        if (use_led) ledq_run("-a", set ? "on" : "off");        /* off: the level stays where auto left it */
         fprintf(stderr, "LED brightness: %s\n", set ? "auto" : "fixed");
     }
     return led_auto;
@@ -1794,13 +1794,13 @@ int core_led_brightness(int set)
 {
     if (set >= 0) {
         char n[8]; snprintf(n, sizeof n, "%d", set > 100 ? 100 : set);
-        char *argv[] = { "/system/bin/ledctrl", "-a", "off", "-b", n, NULL };
-        if (use_led) run_argv(argv);
+        const char *args[] = { "-a", "off", "-b", n };
+        if (use_led) ledq_args(4, args);            /* queued with the ring's: levels ms apart land in the order sent */
         led_auto = 0; led_level = atoi(n);
         fprintf(stderr, "LED brightness: fixed at %d\n", led_level);
     }
 #ifdef __ANDROID__
-    char v[PROP_VALUE_MAX] = "";                   /* fixed: ours, the property may not have it yet (ledctrl runs apart) */
+    char v[PROP_VALUE_MAX] = "";                   /* fixed: ours, the property may not have it yet (ledctrl queued) */
     if (led_auto && use_led && __system_property_get("persist.ledbrightness.bootup", v) > 0) return atoi(v);
 #endif
     return led_level;

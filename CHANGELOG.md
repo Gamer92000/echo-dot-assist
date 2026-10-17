@@ -8,6 +8,8 @@ What changed for people using the Echo, newest first. Details and measurements a
   (a short confirmation, an empty answer), the talking ring could stay lit on an idle Echo until the next wake word.
   The Echo told the ring "on" and "off" at practically the same moment, and "off" sometimes arrived first. The ring now
   gets its changes one after the other, in order.
+- **The ring's brightness ends where the slider stops.** Dragging the LED brightness in Home Assistant could leave the
+  ring at a level from along the way, for the same reason; brightness changes now take their turn in that same order.
 
 ## 2026-10-13
 

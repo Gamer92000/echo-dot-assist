@@ -1713,11 +1713,14 @@ Run in this order. Each step says what it proves.
       returned 0 in 15 (`ledctrl -g` is no help here: it lists patterns already unset). Seen on two Dot 2s after replies
       of 19 and 41 ms (talking set and unset in that time): the talking ring lit on an idle Echo until the next wake word.
       `ledq.c`: one thread runs them one at a time, each waited for (a pipe the child keeps across exec, closed when
-      ledctrl exits: SIGCHLD is ignored, and stdout ends no wait, ledctrl chats on it), killed after 2 s so a hanging
-      ledctrl does not stop the ring for good; stderr still in the log; 64 queued at most, then the oldest queued set
-      gives way (an unset lost is this bug again). The fake file of the PC tests goes through the same queue;
-      `tests/unit/ledq_test.c` against a shell stand-in for ledctrl. Not measured yet: how long one ledctrl takes on
-      the Echo, i.e. how late a call behind others shows (they no longer run side by side).
+      ledctrl exits: SIGCHLD is ignored, and stdout ends no wait, ledctrl chats on it), killed with its process group
+      after 2 s so a hanging ledctrl does not stop the ring for good; stderr still in the log; 64 queued at most, then
+      the oldest queued set gives way (an unset lost is this bug again). The brightness calls (`ledctrl -a`, `-a off -b
+      N`) go through the same queue: a slider dragged in Home Assistant sends levels ms apart, each its own ledctrl, and
+      the last to arrive stayed. The fake file of the PC tests is written at once, in the caller (the tests read it
+      right after an action); `tests/unit/ledq_test.c` runs the queue against a shell stand-in for ledctrl. Not
+      measured yet: how long one ledctrl takes on the Echo, i.e. how late a call behind others shows (they no longer
+      run side by side).
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
