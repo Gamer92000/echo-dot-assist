@@ -2,8 +2,15 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
-## 2026-10-16
+## 2026-10-17
 
+- **The right Echo answers again after another one crashed.** An Echo that died hard (a freeze and a power cycle, say)
+  could come back having lost a small file it keeps for the arbitration. It then numbered its messages from the start
+  again, and the other Echos took them all for old ones replayed and ignored them, until they were restarted
+  themselves. Nothing looked wrong on the crashed Echo, but another Echo answered every wake word the two heard, even
+  standing right next to the crashed one (issue #36). The file now survives a crash, and an Echo that lost it anyway
+  comes back as a new member, which the others count at once. If an Echo answered for the wrong room since a crash:
+  restart the Echo that answers.
 - **The ring no longer stays on after a very short reply.** When a reply was over within a few hundredths of a second
   (a short confirmation, an empty answer), the talking ring could stay lit on an idle Echo until the next wake word.
   The Echo told the ring "on" and "off" at practically the same moment, and "off" sometimes arrived first. The ring now
