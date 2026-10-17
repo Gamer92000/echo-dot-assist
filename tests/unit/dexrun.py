@@ -189,6 +189,7 @@ class JavaEnv:
         if key == "str.eq": return a[0] == a[1]
         if key == "str.charat": return ord(a[0][a[1]])
         if key == "str.length": return len(a[0])
+        if key == "str.idx": return a[0].find(a[1])
         if key == "str.valueO": return self.jstr(a[0])
         if key == "int.parse": return int(a[0])
         if key == "int.value": return int(a[0])

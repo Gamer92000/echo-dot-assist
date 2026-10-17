@@ -1965,3 +1965,52 @@ Run in this order. Each step says what it proves.
       confirmed by ear (a longer sound of our own was heard after it, 2026-10-15).  2026-10-17: the lead-in
       reached earsup as part of the echo delay (85 ms + 350 > `D_MAX` 400 ms): `audio_earcon_started(lead_ms)` moves its
       start past it.
+- [~] Echo Show 8 2nd gen (`athena`, 2026-10-14; `docs/re-athena.md`).  A different platform from crown: MT8183, Android 9
+      (Treble, enforcing SELinux, policy in `/vendor/etc/selinux/precompiled_sepolicy`), kernel 4.4.146, Fire OS 7574.1
+      (PS75741.7080N; build 7077's probe libraries are byte-identical).  Rooted by saiyaku-athena's zip (system and vendor
+      patched in place, dm-verity off), so `INSTALL=running`: `install-system.sh` writes `/system/hassmic`, the rc, the home
+      APK, moves `STOCK_APPS_OUT` aside, and patches the vendor policy with `sepolicy.rules` (the unlock's `magiskpolicy32`
+      on the Echo; `sysinstall.sh` `SEPOLICY_FILE`, `/vendor` remounted by `otatool`).  `devices/athena/` from crown's; stubs
+      byte-identical, `scripts/setup.sh athena --dry-run` walks the steps, `sounds_athena` decodes every earcon (athena has
+      the wake sound, `res/7E.mp3`, crown does not).  Installed on a real Echo: boot_completed ~17 s, hassmic up at 22 s, self
+      test passed, "Alexa" detected, volume keys and the mute latch grabbed, Bluetooth up once `bluetooth-1-0` is stopped
+      (`/dev/stpbt` is single-open: "mode is 3"), the band drawn.  Found and fixed: Android 9 has no `SurfaceControl`
+      constructor (`ringbar.dex` takes `builder` from `ring_band.c` when SDK >= 26, one dex for every model) and the Java
+      `SurfaceControl` must stay reachable (its finalizer released the layer every ~55 s).
+      The libc's `accept()`, `accept4()` and `connect()` failed with EBADF (a bare `socket/bind/listen/accept` program shows
+      it; the raw system call works): every listener ended and Home Assistant could not connect.  Cause (2026-10-15): netd's
+      fwmarkd, which the libc asks to mark the socket, was denied `read write` on sockets of the `su` domain; `sepolicy.rules`
+      allows it.  The workarounds stay (`netio.h` `net_accept`, `net_connect_fd`; libcurl's connect is done in its
+      open-socket callback + `CURLOPT_SOCKOPTFUNCTION` "already connected", `net_open_connected`).
+      Home Assistant adopts it and a voice round trip works (wake, transcript, spoken reply).  `ota-push.sh` works (pushed,
+      self test, factory copy; `sysinstall.sh factory` skips the `oat/` directory ART leaves beside a dex).
+      Wi-Fi: `wifictl.dex` knows Android 9's `IWifiManager` (package name argument, `ParceledListSlice`), run as uid
+      system by `wifi.sh` (`WIFICTL_USER`): status, scan, join of the current network and of a made-up one, and the settings
+      page's switch tested on the Echo (`docs/re-athena.md` "Wi-Fi"); Improv is not.  "Download from Amazon" works
+      (`fireosdhaservice` answers as crown's DHA v2, `dha.c` tries both names; `davs.c` needed the connect bypass; the
+      Echo's network must let it reach api.amazon.<site>, api.amazonalexa.com and CloudFront).  Phone Bluetooth audio works
+      (the spoken "Connected to X" needs the ESPHome option "Allow the device to perform Home Assistant actions").
+      Sendspin works: Music Assistant 2.10.6 plays an Icecast stream (FLAC, sync within +-4 ms of the server's clock, 3.7 MB
+      queued); its OpenSubsonic provider fails with `'albumInfo'` before it sends anything (Music Assistant's, not ours).
+      Lux: raw channels converted as stock's virtual_als (`lux.h`, within ~10 % in steady light; a lamp held close jumped
+      100 - 66000 - 7000 - 2000 lx: gain/integration change between reads or saturation, to look into).
+      Speaker: the TAS5805m's digital volume (control 84, 0..158, 100 at boot, no dB table).  Listened to with music at full
+      volume: 115, 120 and 122 clean on a radio stream, 130 distorted, a rap track's bass clipped at 122, so
+      `speaker_gain_limit` 118 and `speaker_gain_steps` 2 (0.5 dB assumed) = up to +9 dB.  The audio HAL did not rewrite it
+      after a voice reply or at a change of the setting.  Sounds: a cold output = HAL open ~100 ms + `LEAD_MS`, 350 -> 200 ms
+      here (`state/lead_ms` overrides for trials).
+      Drop In in a call (trace of both Echos, `HASSMIC_DROPIN_TRACE` in `state/`): the empty room's Dot sent -40..-54 dBFS
+      (micgain +24 dB on noise, gate opened by -65..-70 dBFS sounds over a -74 floor), the Show took it for the far end
+      talking: wake word ignored 8 times of 8, accepted ones ended in "No text recognized" (listening mode never on), own
+      voice ducked.  `dropin.c`: `NEAR_MIN_DB` -58, `far_voice()` = over `FAR_DB` and floor + 25 dB: first try, no ignoring
+      (the Show and a Dot; not yet the other models).  Drop In by voice through a Gemini pipeline ("prefer handling commands
+      locally" on): the blueprint's sentences match every time they are reached; they are missed on the turn after Gemini
+      ended a reply with a question (Home Assistant keeps the conversation open, the microphone reopens without a wake sound
+      and the turn goes to Gemini) and when speech to text mishears "drop in" ("Drop in.", "Drop into", "Drop it in"):
+      the blueprint has "drop into" and "drop it in" now, and the agent's prompt can say never to end a reply with a question.
+      **Open:** pressing the mute button the LED behind it comes on at once, then ~1 s later the red band is drawn and a sound
+      plays (mute on ~1.2-2 s, off < 1 s, by ear); hassmic logs the latch event and queues the sound within 4 ms, from Home
+      Assistant's soft mute the sound is queued after 19 ms, the HAL opens ~100 ms later; `event1` (gpio-privacy-button)
+      emits nothing and hassmic grabs `event0`, so the press itself has no timestamp.  Wi-Fi motion (`wlan_mt76x3_sdio.ko`,
+      4.4.146); lux flicker under a close lamp; untried: hassmic's own HTTPS reply and the update check, Improv, factory
+      reset and `--uninstall`; `tools/mkringbar.py --framework` cannot read Android 9's compact dex.

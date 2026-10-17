@@ -174,6 +174,7 @@ METHODS = {
     "str.new_b":  (STR, "<init>", ((BYTES,), "V")),
     "str.charat": (STR, "charAt", (("I",), "C")),
     "str.length": (STR, "length", ((), "I")),
+    "str.idx":    (STR, "indexOf", ((STR,), "I")),
     "str.valueO": (STR, "valueOf", ((OBJ,), STR)),
     "int.parse":  (INTG, "parseInt", ((STR,), "I")),
     "int.value":  (INTG, "valueOf", (("I",), INTG)),
@@ -223,9 +224,12 @@ class Program:
     fields its code calls by key (METHODS/FIELDS unless given), and what its reflection asks the framework for,
     checked by --framework: reflected (class, method, params, static) with "<init>" for a constructor (found
     in that class alone, as getConstructor and Class.newInstance do), reflected_fields (class, name, type), and
-    constants (class, static int field, the value the code has written in)."""
-    def __init__(self, me, own, methods=None, fields=None, reflected=(), reflected_fields=(), constants=()):
+    constants (class, static int field, the value the code has written in).  only_if: reflected entries that
+    --framework checks only on a firmware that has (or, with "!", lacks) a class: the code chooses at run time."""
+    def __init__(self, me, own, methods=None, fields=None, reflected=(), reflected_fields=(), constants=(), only_if=None):
         self.me, self.own = me, list(own)
+        self.only_if = only_if or {}                        # (class, method, params) -> a class the firmware must have
+                                                            # ("!class": must not have): what a platform's other API asks for
         self.methods, self.fields = methods or METHODS, fields or FIELDS
         self.reflected, self.reflected_fields, self.constants = list(reflected), list(reflected_fields), list(constants)
         self.own_by_name = {n: (tuple(ps), r) for n, ps, r in self.own}
@@ -853,6 +857,9 @@ def check_framework(prog, ids, uses, rootfs):
             bad.append(f"{fc}.{fn}: no static field of type {ft}")
     for c, n, ps, static in prog.reflected:
         sig = f"{c}.{n}({''.join(ps)})"
+        cond = prog.only_if.get((c, n, tuple(ps)))
+        if cond and (cond[0] != "!") != (cond.lstrip("!") in bc):
+            continue
         if n == "<init>":                                     # constructors are not inherited
             acc = bc[c][3].get((n, tuple(ps))) if c in bc else None
             if acc is None or static:

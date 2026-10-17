@@ -138,7 +138,7 @@ void core_run(char *const argv[], char *out, size_t n)
     size_t nw = 0;
     int code;
     out[0] = 0;
-    if (strcmp(argv[0], "/system/bin/service") || strcmp(argv[1], "call") || strcmp(argv[2], "amazon.security.dha"))
+    if (strcmp(argv[0], "/system/bin/service") || strcmp(argv[1], "call") || strcmp(argv[2], getenv("DHA_FAKE_SVC_NAME") ? getenv("DHA_FAKE_SVC_NAME") : "amazon.security.dha"))
         return;
     code = atoi(argv[3]);
     if (code >= 0 && code < 8)
@@ -295,6 +295,7 @@ static int service_tests(int version2)
     if (version2)
     {
         setenv("DHA_FAKE_SVC_VERSION", "2", 1);
+        setenv("DHA_FAKE_SVC_NAME", "fireosdhaservice", 1);      /* athena's name: tried after fireos-dha's */
         check(dha_jwt(dha_dt, "G0911B0593750S3V", when, got, sizeof got, err, sizeof err) == 0, "a drvV3 token from the fake service");
         if (fails) { fprintf(stderr, "%s\n", err); unlink(cpuinfo); return 1; }
         check(svc_calls[6] == 1 && svc_calls[5] == 1 && svc_calls[1] == 1 && !svc_calls[3] && !svc_calls[4],

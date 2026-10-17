@@ -25,6 +25,9 @@ struct board {
                                        would act on the volume keys too and take its own volume off on top of ours */
     int privacy_latch;              /* 1: the sysfs state is the truth (read at start, on the mute key and once a second);
                                        0: nothing to read, presses of the keypad's mute key are counted from "unmuted" */
+    const char *privacy_button;     /* input device of the mute button itself, where the driver reports the latch late (athena:
+                                       its gpio-privacy holds the enable line 1 s, then changes state); NULL: no early notice */
+    int privacy_settle_ms;          /* with privacy_button: how long a press is believed before the latch must have confirmed it */
 
     /* Bluetooth: raw HCI (H4) character device, the init service that owns it in stock, where the address is stored */
     const char *bt_dev;
@@ -39,7 +42,8 @@ struct board {
      * uncompressed (sounds.c reads it out of the zip).  earcon_dir wins; {NULL}-terminated, or NULL for none */
     const struct board_sound { const char *name, *zip, *entry; } *earcon_zip;
     const char *thermal_type;       /* thermal zone reported as SoC temperature */
-    const char *light_sensor[3];    /* files the stock light sensor HAL reads lux from, first that opens; {NULL}: none */
+    const char *light_sensor[3];    /* files the stock light sensor HAL reads lux from, first that opens; {NULL}: none.  "tcs3400:<dir>": raw channels of
+                                       a TCS3400 under <dir>/input*, main.c lux_tcs3400 */
     int volume_steps;               /* volume_step-NN animations of ledcontroller */
 
     /* speaker gain (spkgain.c): an ALSA control of card 0 that sets the speaker amplifier's analog gain, which the
@@ -51,6 +55,8 @@ struct board {
     int speaker_gain_steps;
     int speaker_gain_db;
     int speaker_gain_min_db;        /* how far below stock the page may go, dB (negative), 0: not at all */
+    /* highest control value to offer, 0 for the control's own maximum (the Show 8 2nd gen's amp distorts well below its) */
+    int speaker_gain_limit;
 };
 
 extern const struct board board;
