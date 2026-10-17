@@ -1988,3 +1988,23 @@ Run in this order. Each step says what it proves.
       a link to /system/build.prop refused, nothing left behind; Etc/GMT+3, America/Argentina/Buenos_Aires, <+03>-3,
       IST-5:30, the CET rule, Europe/Berlin taken (`date` -03, -03, +03, IST, CEST, CEST); the same zone again a no-op.
       Open (device): hassmic's side (no NDK on this PC), the Shows' alarm call.
+- [ ] Volumes per kind of audio (GitHub issue #32: several Dot 3 and a Dot 2; one volume for media and one for the
+      assistant, the wake sound on a slider of its own). Plan, nothing built yet. Off (default): everything as now, one
+      volume. On: fixed categories, each either linked to the main volume (optionally with a dB offset; the volume keys
+      move it with the rest) or with its own volume:
+      Media (Sendspin, A2DP sink, HA media; ducking stays on it alone), Assistant replies (TTS), Sounds (wake, buttons,
+      earcons), Timers and alarms (with a floor: a timer nobody hears is worse than a loud one), Drop In.
+      Not free-form groups to join and split: one shared group ("linked") gives the same outcome with far less UI.
+      What the mixer gives: `TTSVolume` is the TTS stream's own, so Assistant is cheap (today `core_set_volume` and
+      `volume_sync` keep it equal to `MainVolume` on purpose). `MainVolume` covers Music and Earcon, and Voip follows
+      it, so Sounds and Drop In apart from Media only by gain on our own PCM (hassmic plays the earcons and decodes
+      Sendspin/A2DP itself): attenuation below `MainVolume` only, never louder. `AlarmVolume`, `NotificationVolume`,
+      `SystemVolume` exist (re-platform.md) but which streams follow them is untried; an earcon stream type that
+      follows one of them would be the clean way (device first).
+      Volume keys: what plays now (a reply: Assistant, music: Media), else the main volume; the ring shows which
+      (another colour). Home Assistant: the media player keeps one volume = Media (what Music Assistant and Sendspin
+      already speak); each category with its own volume a `number` entity, listed only while the feature is on
+      (`listed()`, `entities_changed`). Settings export: yes. Page: the hardest part, one slider per category with
+      a link toggle, offset when linked, floor for alarms.
+      Order: 1. Assistant apart from Media (closes most of #32); 2. Sounds as an offset; 3. the full set once the
+      stream research is done.
