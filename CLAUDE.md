@@ -335,8 +335,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   a GATT server on one link, `conns[SRV]` beside the proxy's slots; `ble_serve`/`ble_advertise`/`ble_server_notify`):
   advertises when not set up and offline 20 s (authorized), or set up and offline 10 min (the action button authorizes,
   `improv_authorize` in `on_action`); Wi-Fi through `wifi.c` -> root's `wifi.sh` like the page's switch; no host name
-  or device name commands (the Echo names itself).  `HASSMIC_IMPROV_TIMES`, `HASSMIC_FAKE_ONLINE`
-  for tests.  Reset (`core_reset`: action held 10 s via `buttons.c` hold stages, HA button `factory_reset`, page
+  or device name commands (the Echo names itself).  `HASSMIC_IMPROV_TIMES`, `HASSMIC_FAKE_ONLINE`,
+  `HASSMIC_HOLD_TIMES` (the hold stages), wifi.sh's `WIFI_STEP` (its looks) for tests.  Reset (`core_reset`: action
+  held 10 s via `buttons.c` hold stages, HA button `factory_reset`, page
   `POST /api/reset` "reset") writes `state/reset`; root's `main.sh` ota_watch stops hassmic, `wifi.sh forget`, empties
   state/, starts it.
 - **New IP address** (`netaddr.c`, issue #17): polls the addresses; links whose local address is gone are shut down

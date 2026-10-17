@@ -6,13 +6,15 @@
 #include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
 
 #define SHORT_PRESS_MS 1000            /* shorter is a press, longer a hold (handler.event).  acebuttond sees the holds
                                         * too: 5 s its setup mode, 21 s its factory reset */
-#define HOLD_WARN_MS   5000            /* action button held: the ring warns ... */
-#define HOLD_RESET_MS 10000            /* ... and then hassmic's reset (core_reset), long before acebuttond's 21 s */
+static int HOLD_WARN_MS = 5000;        /* action button held: the ring warns ... */
+static int HOLD_RESET_MS = 10000;      /* ... and then hassmic's reset (core_reset), long before acebuttond's 21 s.
+                                        * HASSMIC_HOLD_TIMES="<warn ms> <reset ms>": tests (tests/fake_improv.py) */
 #define COMBO_MS       2000            /* both volume keys: stock gives that no meaning (acebuttond's are action holds) */
 
 static struct button_handler handler;
@@ -165,7 +167,9 @@ static void *privacy_reader(void *arg)
 int buttons_start(const char *device, const struct button_handler *h)
 {
     pthread_t t; int pfd, f2;
+    const char *times = getenv("HASSMIC_HOLD_TIMES");
     handler = *h;
+    if (times) sscanf(times, "%d %d", &HOLD_WARN_MS, &HOLD_RESET_MS);
     int f1 = open(device, O_RDONLY);
     if (f1 < 0) return -1;
     if (board.keypad2 && (f2 = open(board.keypad2, O_RDONLY)) >= 0) {   /* keys split over two nodes (biscuit) */

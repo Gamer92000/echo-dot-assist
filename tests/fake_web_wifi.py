@@ -50,7 +50,7 @@ def main():
                 "192.168.1.1      0x1         0x2         aa:bb:cc:00:00:01     *        wlan0\n")
     W = lambda: json.load(open(world))
     renv = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}", FAKE_WIFI_WORLD=world, WIFI_ARP=arp,
-                WIFI_SCAN_SECS="0", WIFI_JOIN_SECS="3", WIFI_ADDR_SECS="3", WIFI_BACK_SECS="3")
+                WIFI_SCAN_SECS="0", WIFI_STEP="0.1", WIFI_JOIN_SECS="6", WIFI_ADDR_SECS="5", WIFI_BACK_SECS="6")     # looks: the stand-ins answer at the third
     root = lambda: subprocess.Popen(["sh", f"{ROOT}/scripts/device/wifi.sh", "take", state, out], env=renv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     rootlog = []
     def root_run():

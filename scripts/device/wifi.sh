@@ -23,8 +23,11 @@ CONF="${0%/*}/device.conf"
 WLAN=${WLAN:-wlan0}
 WPA_SOCKETS=${WPA_SOCKETS:-/data/misc/wifi/sockets}
 ARP=${WIFI_ARP:-/proc/net/arp}
-# how long to wait: for the scan, to get on the new network, for an address and the router behind it, to get back
+# how long to wait: for the scan, to get on the new network, for an address and the router behind it, to get back.
+# The last three count looks, one every STEP s: tests (tests/fake_web_wifi.py, whose stand-ins move on per look, not by
+# the clock) look every 0.1 s and give the counts in tenths
 SCAN_SECS=${WIFI_SCAN_SECS:-5} JOIN_SECS=${WIFI_JOIN_SECS:-30} ADDR_SECS=${WIFI_ADDR_SECS:-30} BACK_SECS=${WIFI_BACK_SECS:-45}
+STEP=${WIFI_STEP:-1}
 
 say() { printf 'wifi: %s\n' "$*"; }        # printf, not echo: mksh's echo takes the backslashes of escaped SSIDs
 # wpa_supplicant's socket for the interface, else its global one with the interface named, as Android's framework talks
@@ -91,7 +94,7 @@ online() {
 connected() {
     t=0
     while [ $t -lt $1 ]; do
-        sleep 1; t=$((t + 1))
+        sleep $STEP; t=$((t + 1))
         st=$(W status)
         case "$NL$st$NL" in *"${NL}wpa_state=COMPLETED$NL"*) [ "$(field "$st" id)" = "$2" ] && return 0;; esac
         case "$st" in
@@ -113,7 +116,7 @@ back() {
     if [ -n "$old" ] && connected $BACK_SECS $old; then
         was=$(field "$st" ssid)
         # its lease again, if the new network's was asked for
-        if [ -n "$renewed" ]; then lease; t=0; while [ $t -lt $BACK_SECS ] && ! online; do sleep 1; t=$((t + 1)); done; fi
+        if [ -n "$renewed" ]; then lease; t=0; while [ $t -lt $BACK_SECS ] && ! online; do sleep $STEP; t=$((t + 1)); done; fi
         say "back on $was${ip:+, address $ip}"
     else say "!! not back on the previous network either: the saved configuration is unchanged, a reboot rejoins it"; fi
     status
@@ -146,7 +149,7 @@ join() {
     while [ $t -lt $ADDR_SECS ]; do
         online && break
         [ -n "$ip" ] && why=nogateway
-        sleep 1; t=$((t + 1))
+        sleep $STEP; t=$((t + 1))
     done
     if [ $t -ge $ADDR_SECS ]; then say "on $name, but $([ $why = noaddress ] && echo "no address" || echo "the router at ${gw:-?} did not answer") after $ADDR_SECS s, going back"; back; return; fi
     # It works: every network saved before goes (the same name with an older password too), then it is saved.  Not

@@ -195,7 +195,7 @@ def main():
     open(arp, "w").write("IP address       HW type     Flags       HW address            Mask     Device\n")
     W = lambda: json.load(open(world))
     renv = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}", FAKE_WIFI_WORLD=world, WIFI_ARP=arp,
-                WIFI_SCAN_SECS="0", WIFI_JOIN_SECS="3", WIFI_ADDR_SECS="3", WIFI_BACK_SECS="3")
+                WIFI_SCAN_SECS="0", WIFI_STEP="0.1", WIFI_JOIN_SECS="6", WIFI_ADDR_SECS="5", WIFI_BACK_SECS="6")     # looks: the stand-ins answer at the third
     stop_root, rootlog = threading.Event(), []
     def root():                        # main.sh's watcher: hands each request to wifi.sh; online once it says ok
         while not stop_root.is_set():
@@ -213,7 +213,8 @@ def main():
     env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_WIFI=out, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw",
                HASSMIC_PLAY=os.path.join(tmp, "play.raw"), HASSMIC_MDNS_FILE=os.path.join(tmp, "none"), HASSMIC_ARB_ADDR="127.255.255.255",
                HASSMIC_MODELS=os.path.join(tmp, "models"), HASSMIC_ADB_OPEN=os.path.join(tmp, "adb-open"), HASSMIC_LOG=log,
-               HASSMIC_BT_DEV=ctl.path, HASSMIC_FAKE_ONLINE=online, HASSMIC_IMPROV_TIMES="1 3 4 2")
+               HASSMIC_BT_DEV=ctl.path, HASSMIC_FAKE_ONLINE=online, HASSMIC_IMPROV_TIMES="1 1 4 2",
+               HASSMIC_HOLD_TIMES="1200 2400")       # the action button's hold stages: warned, reset (5 s, 10 s on the Echo)
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Improv", "-L", "-z", "0", "-o", "0",
                              "-a", str(ARB), "-W", str(WEB), "-b", keys], env=env, stderr=open(log, "w"))
     kfd = os.open(keys, os.O_WRONLY)   # the keypad: input_event structs (x86-64: timeval, type, code, value)
@@ -337,10 +338,10 @@ def main():
         rf = os.path.join(state, "reset")
         check(wait(lambda: os.path.exists(rf), 3) and open(rf).read() == "Home Assistant's button\n", "pressed: state/reset for root")
         os.unlink(rf)
-        key(138, 1); time.sleep(6); key(138, 0)
-        check(wait(lambda: "let go: no reset" in logtext(), 2) and not os.path.exists(rf), "held 6 s: warned, no reset")
-        key(138, 1); time.sleep(10.5)
-        check(os.path.exists(rf) and open(rf).read() == "action button held 10 s\n", "held 10 s: reset")
+        key(138, 1); time.sleep(1.8); key(138, 0)
+        check(wait(lambda: "let go: no reset" in logtext(), 2) and not os.path.exists(rf), "held past the warning: warned, no reset")
+        key(138, 1); time.sleep(3.0)
+        check(os.path.exists(rf) and open(rf).read() == "action button held 10 s\n", "held past the reset stage: reset")
         key(138, 0)
 
         # ---- root's part of it: every saved network forgotten
