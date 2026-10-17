@@ -25,6 +25,23 @@ LOG=/data/local/hassmic/boot.log
 stamp() { if [ "$(getprop hassmic.clock.synced)" = 1 ]; then date -u '+%Y-%m-%d %H:%M:%SZ'; else read -r u _ < /proc/uptime; echo "boot+$u"; fi; }
 say() { echo "$(stamp) $*"; }
 stamped() { while IFS= read -r l; do echo "$(stamp) $l"; done; }
+# Both of our services are oneshot, and init drops a "start" that comes while the service is still running: "stop" only
+# asks init to kill it and returns, and when init gets to the start before it has reaped the old process, that start
+# does nothing and the reaped oneshot stays stopped.  Lost so after a push update on an Echo Show 8 (2026-10-15: the
+# satellite down for 3 min).  ctl.restart is init's own stop-then-start: it starts the service again once the old one
+# is reaped, and returns at once (lockdown.sh restarts adbd so too).  Where the service must really be gone before
+# anything else happens (the factory reset empties its state, the firewall rules are loaded from here), svc_stop waits
+# until init says so ("stopping" until it reaped it), 20 s at most; false if it is still there then.
+svc_restart() { setprop ctl.restart $1; }
+svc_stop() {
+    stop $1
+    i=0
+    while :; do
+        case "$(getprop init.svc.$1)" in running|stopping) ;; *) return 0;; esac
+        [ $i -lt 40 ] || return 1
+        sleep 0.5; i=$((i + 1))
+    done
+}
 [ -f $CONF ] || exit 0
 # Without the model's facts the satellite cannot start, but the firewall needs none of them: it must go up regardless.
 if [ ! -f $D/device.conf ]; then
@@ -66,10 +83,17 @@ fwcheck() {
     fwmiss=$((fwmiss + 1))
     [ $fwmiss -ge 2 ] || return
     echo "== firewall rules wrong on two looks 10 s apart ($fwwrong; uptime $(cut -d. -f1 /proc/uptime)s): the firewall service is not doing its job; rules loaded from here, service restarted"
-    stop hassmic_fw
-    sh $D/lockdown.sh > /dev/null
-    start hassmic_fw
     fwmiss=0
+    if svc_stop hassmic_fw; then
+        sh $D/lockdown.sh > /dev/null
+        start hassmic_fw
+    else
+        # still there after 20 s: hung, so not building the chain beside us; the lock matters more than the risk of
+        # two loads interleaving.  init starts a new watcher once the old one is gone.
+        echo "== the firewall service did not stop within 20 s: rules loaded anyway, restarted when it has"
+        sh $D/lockdown.sh > /dev/null
+        svc_restart hassmic_fw
+    fi
 }
 
 # Wi-Fi motion (device.conf KMOD): our kernel module hooks the Wi-Fi driver's receive path for the level of every frame
@@ -152,7 +176,7 @@ netwatch() {
         clock_set
         fwcheck
         if [ -f /data/local/hassmic/state/mdns ] && [ ! -L /data/local/hassmic/state/mdns ]; then
-            why=$(head -c 60 /data/local/hassmic/state/mdns | tr -cd 'a-zA-Z0-9 ')
+            why=$(dd if=/data/local/hassmic/state/mdns bs=60 count=1 2>/dev/null | tr -cd 'a-zA-Z0-9 ')
             rm -f /data/local/hassmic/state/mdns
             [ -f $AVAHI_SVC ] && { echo "mDNS: announcing again (${why:-asked for}), avahi restarted"; avahi_start; }
         fi
@@ -216,7 +240,7 @@ ota_watch() {
             if out=$(DAEMON_USER=$DAEMON_USER READ_AS="$D/runas $DAEMON_USER $DAEMON_GROUPS" \
                      sh $D/artifact-install.sh /data/local/hassmic/state /data/local/hassmic 2>&1); then
                 say "== artifacts installed, restarting hassmic: $(echo $out)"
-                stop hassmic; start hassmic
+                svc_restart hassmic
             else say "== artifacts not installed: $(echo $out)"
             fi
         fi
@@ -230,24 +254,31 @@ ota_watch() {
         # bonds, Sendspin, microWakeWord models) and every saved Wi-Fi network; the installed system, Amazon's models in
         # models/ aed/ whisper/ and hassmic.conf stay.  The satellite starts again from scratch: the setup (OOBE).
         if [ -f /data/local/hassmic/state/reset ] && [ ! -L /data/local/hassmic/state/reset ]; then
-            why=$(head -c 40 /data/local/hassmic/state/reset | tr -cd 'a-zA-Z0-9 ')
-            say "== factory reset (${why:-asked for}): forgetting settings and Wi-Fi networks"
-            stop hassmic
-            sleep 1
-            while [ -d $WIFI/lock ] && [ -n "$(cat $WIFI/lock/pid 2>/dev/null)" ] && kill -0 "$(cat $WIFI/lock/pid)" 2>/dev/null; do sleep 1; done   # a switch running ends first
-            [ -f $D/wifi.sh ] && sh $D/wifi.sh forget 2>&1 | stamped
-            st=/data/local/hassmic/state
-            for f in $st/* $st/.[!.]*; do [ -e "$f" ] || [ -L "$f" ] && rm -rf "$f"; done
-            rm -f /data/misc/avahi/services/hassmic.service
-            start hassmic
-            say "== factory reset done, the satellite starts again"
-            continue
+            why=$(dd if=/data/local/hassmic/state/reset bs=40 count=1 2>/dev/null | tr -cd 'a-zA-Z0-9 ')
+            # Emptying state/ under a running hassmic would leave it writing into the empty one: if it does not go, the
+            # request stays for the next look, and the rest of this loop (a reboot, an update) still gets its turn.
+            if ! svc_stop hassmic; then
+                [ -n "$resetwait" ] || say "== factory reset (${why:-asked for}): hassmic did not stop within 20 s, trying again"
+                resetwait=1
+            else
+                resetwait=
+                say "== factory reset (${why:-asked for}): forgetting settings and Wi-Fi networks"
+                while [ -d $WIFI/lock ] && [ -n "$(cat $WIFI/lock/pid 2>/dev/null)" ] && kill -0 "$(cat $WIFI/lock/pid)" 2>/dev/null; do sleep 1; done   # a switch running ends first
+                [ -f $D/wifi.sh ] && sh $D/wifi.sh forget 2>&1 | stamped
+                st=/data/local/hassmic/state
+                for f in $st/* $st/.[!.]*; do [ -e "$f" ] || [ -L "$f" ] && rm -rf "$f"; done
+                rm -f /data/misc/avahi/services/hassmic.service
+                start hassmic
+                say "== factory reset done, the satellite starts again"
+                continue
+            fi
+        else resetwait=
         fi
         # A reboot (main.c core_reboot: the settings page, Home Assistant's restart button): what a power cycle does, for
         # an Echo that is stuck where nothing less helps (issue #17).  The request goes first, and if it cannot go there
         # is no reboot: one left behind would reboot every boot (the firewall start drops one from before it, too).
         if [ -f /data/local/hassmic/state/reboot ] && [ ! -L /data/local/hassmic/state/reboot ]; then
-            why=$(head -c 40 /data/local/hassmic/state/reboot | tr -cd 'a-zA-Z0-9 ')
+            why=$(dd if=/data/local/hassmic/state/reboot bs=40 count=1 2>/dev/null | tr -cd 'a-zA-Z0-9 ')
             rm -f /data/local/hassmic/state/reboot
             if [ -e /data/local/hassmic/state/reboot ]; then say "== reboot asked for, but its request cannot be removed: not rebooting"
             else say "== reboot (${why:-asked for})"; sync; setprop sys.powerctl reboot; sleep 30; fi
@@ -255,10 +286,10 @@ ota_watch() {
         # asked for on the settings page: a rename (main.c core_rename; the name is in what the satellite builds at start,
         # mDNS and avahi's host name included) or the wake word moving to or from Home Assistant (core_wake_engine)
         if [ -f /data/local/hassmic/state/restart ]; then
-            why=$(head -c 40 /data/local/hassmic/state/restart | tr -cd 'a-z ')
+            why=$(dd if=/data/local/hassmic/state/restart bs=40 count=1 2>/dev/null | tr -cd 'a-z ')
             rm -f /data/local/hassmic/state/restart
             say "== ${why:-restart} asked for on the settings page, restarting hassmic"
-            stop hassmic; start hassmic
+            svc_restart hassmic
         fi
         [ -f $IN/request ] || continue
         rm -f $IN/request $IN/result
@@ -291,7 +322,7 @@ ota_watch() {
         chown $DAEMON_USER $IN/result.tmp; mv $IN/result.tmp $IN/result
         if grep -q "^OK" $IN/result; then
             sleep 2                                     # let hassmic relay the result to the pusher
-            stop hassmic; start hassmic
+            svc_restart hassmic
             exec sh $SYS/boot.sh firewall               # and run the new firewall script as well
         fi
     done

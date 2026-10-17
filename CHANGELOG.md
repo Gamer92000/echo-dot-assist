@@ -4,6 +4,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-17
 
+- **An Echo no longer stays off after an update or a restart from the settings page.** Restarting hassmic (after an
+  update, a wake word engine change, models copied from another Echo) could lose the start when the old one was slow to
+  stop: the Echo was then unreachable until something else started it, minutes later (seen on an Echo Show 8).
 - **Auto brightness no longer fills Home Assistant's logbook.** With "LED auto brightness" on, "LED brightness" in
   Home Assistant followed the ring as the room got lighter or darker, an entry every few minutes. The light sensor is
   now a feature on the settings page, "Light sensor", off by default: off, there is no "Illuminance" entity and Home

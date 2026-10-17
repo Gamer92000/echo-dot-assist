@@ -1924,3 +1924,15 @@ Run in this order. Each step says what it proves.
       5 min. PR #37's first version (a counter floored by the clock) left up to an hour of drops. fake_ha_arbitration:
       state file removed on a killed Echo, a new id, back in the network, its better claim counted (fails without
       the fix); fake_ha_dropin, fake_web, fake_web_artifacts pass.
+- [~] From #33 (Echo Show 8), for every model (2026-10-17, GitHub issue #45):
+      Restart lost: `stop hassmic; start hassmic` in main.sh's ota_watch. Both services are `disabled oneshot`; toolbox
+      `stop`/`start` only set `ctl.stop`/`ctl.start` and return, and init (7.1) `Service::Start` returns early while
+      `SVC_RUNNING` (the old process not reaped yet) after clearing `SVC_DISABLED`; the reap then marks a oneshot without
+      `SVC_RESTART` disabled again: stopped. Seen on a Show 8 after a push during music (3 min down). Now `ctl.restart`
+      (`svc_restart`: `StopOrReset(SVC_RESTART)`, started again at the reap, returns at once, ota_watch not held up);
+      the factory reset and `fwcheck` (which need the old one gone first) `svc_stop`: `stop`, then wait while
+      `init.svc.<name>` is running/stopping, 20 s at most. A reset whose hassmic is still there then waits for the next
+      look (never empties state/ under it; reboot, restart and update requests still handled meanwhile); `fwcheck`
+      loads the rules anyway beside a hung watcher (the lock matters more) and `ctl.restart`s it. #33's version polled
+      20 s before every start. The Dot's toybox `head` has no `-c` ("head: not integer: c"): main.sh's `head -c 40`
+      for the reason of a reset, reboot, restart and mDNS restart always came out empty there; `dd bs=N count=1` now.
