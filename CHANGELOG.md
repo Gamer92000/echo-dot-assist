@@ -4,6 +4,8 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-17
 
+- **The Echo follows Home Assistant's time zone.** It already took the time from Home Assistant; now the zone comes
+  with it, on every model, and a change in Home Assistant reaches the Echo within 6 hours. The log stays in UTC.
 - **The Echo answers ping from your network.** Home Assistant's Ping integration, a router's device list or a plain
   `ping` can now see whether it is up. Only from private addresses (192.168.x.x, 10.x.x.x and the like); nothing
   else gets in that did not before.

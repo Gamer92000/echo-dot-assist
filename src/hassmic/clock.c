@@ -11,6 +11,10 @@
  * and sets the property hassmic.clock.synced, which a reboot clears.  Only Home Assistant over the keyed link counts:
  * anyone on the network could otherwise move the clock, and with it the validity of the certificates curl checks.
  *
+ * Time zone: Home Assistant's comes with its time, as the rule of its zone (tz.c turns it into a zone name).  It goes to
+ * root the same way (state/timezone, one line), and main.sh sets persist.sys.timezone, plus Android's alarm service
+ * where there is one (it tells the Java side).  The logs stay in UTC whatever the zone.
+ *
  * Log lines: hassmic's stderr is boot.log (main.sh), so every fprintf(stderr) there, and what the programs it runs print
  * (lipc tools, Amazon's idme tool), gets a time in front: "2026-10-06 15:18:02.417Z" (UTC; the settings page shows it
  * in the browser's zone) once root set the clock, "boot+29935.512" (seconds since boot) before, as a wrong date is
@@ -24,6 +28,7 @@
  * The pipe's write end does not block: a reader that stalls costs lines, never hassmic itself.
  */
 #include "clock.h"
+#include "tz.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -66,6 +71,44 @@ void clock_from_ha(uint32_t epoch)
     fprintf(f, "%u %lld.%02ld\n", epoch, (long long)bt.tv_sec, bt.tv_nsec / 10000000);
     if (fclose(f) || rename(tmp, p)) { unlink(tmp); fprintf(stderr, "clock: cannot write %s\n", p); return; }
     fprintf(stderr, "clock: Home Assistant's time handed to root, this Echo's clock is %lld s %s\n", off < 0 ? -off : off, off < 0 ? "ahead" : "behind");
+}
+
+/* bionic's time zone data: an update's (N and later, then M), else the system's */
+static const char *const TZDATA[] = { "/data/misc/zoneinfo/current/tzdata", "/data/misc/zoneinfo/tzdata",
+                                      "/system/usr/share/zoneinfo/tzdata" };
+
+void clock_zone_from_ha(const char *posix)
+{
+    static char told[100];
+    char cur[100] = "", zone[100] = "", p[300], tmp[310]; FILE *f;
+    size_t n = strlen(posix);
+    if (!n) return;                                     /* an older Home Assistant (aioesphomeapi) says none */
+    /* a property value (92 bytes with its end), nothing root's shell would read as more than a word, and a rule, not a
+     * path: it starts with the zone's abbreviation (a letter, or "<" for one like <+03>), never ":" or "/" */
+    if (n > 91 || strspn(posix, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789<>+-,./:") != n ||
+        !(posix[0] == '<' || (posix[0] >= 'A' && posix[0] <= 'Z') || (posix[0] >= 'a' && posix[0] <= 'z')) || strstr(posix, "..") ||
+        strcspn(posix, "/") < strcspn(posix, ",")) {     /* a "/" only in the rules after the first ",": as main.sh checks */
+        if (strcmp(told, "?")) fprintf(stderr, "time zone: Home Assistant's \"%.100s\" not understood, ignored\n", posix);
+        snprintf(told, sizeof told, "?");
+        return;
+    }
+#ifdef __ANDROID__
+    __system_property_get("persist.sys.timezone", cur);
+#else
+    const char *e = getenv("HASSMIC_TIMEZONE"); snprintf(cur, sizeof cur, "%s", e ? e : "");   /* tests: the zone set */
+#endif
+    const char *t = getenv("HASSMIC_TZDATA");
+    int found = t ? tz_lookup(t, posix, cur, zone, sizeof zone) : 0;
+    for (size_t i = 0; !t && !found && i < sizeof TZDATA / sizeof *TZDATA; i++) found = tz_lookup(TZDATA[i], posix, cur, zone, sizeof zone);
+    if (!found) snprintf(zone, sizeof zone, "%s", posix);
+    if (!strcmp(zone, cur)) return;
+    snprintf(p, sizeof p, "%s/timezone", state_dir()); snprintf(tmp, sizeof tmp, "%s.tmp", p);
+    if (!(f = fopen(tmp, "w"))) { fprintf(stderr, "time zone: cannot write %s\n", tmp); return; }
+    fprintf(f, "%s\n", zone);
+    if (fclose(f) || rename(tmp, p)) { unlink(tmp); fprintf(stderr, "time zone: cannot write %s\n", p); return; }
+    if (strcmp(told, zone) && found) fprintf(stderr, "time zone: Home Assistant's, %s (%s), handed to root (was %s)\n", zone, posix, cur[0] ? cur : "none");
+    else if (strcmp(told, zone)) fprintf(stderr, "time zone: Home Assistant's rule %s handed to root as it is: no zone of this Echo's data has it (was %s)\n", posix, cur[0] ? cur : "none");
+    snprintf(told, sizeof told, "%s", zone);
 }
 
 /* ---------------------------------------------------------------- the log */

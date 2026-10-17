@@ -328,6 +328,12 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 | Web UI address | diagnostic: the settings page's address |
 | Sendspin pairing token | diagnostic, disabled by default |
 
+Time and time zone: the Echo takes both from Home Assistant, over the encrypted connection only (no time before
+Home Assistant has given it its key), when it connects and every 6 hours. Change Home Assistant's time zone and the Echo
+follows within those 6 hours, or at once when Home Assistant reconnects. Home Assistant says the zone as its rule
+(offset and summer time), not its name, so the Echo picks a zone with that rule from its own time zone data: it may
+call Europe/Berlin "Europe/Amsterdam", with the same time. Its log stays in UTC.
+
 A new IP address (the router hands out another one, or a Wi-Fi switch): Home Assistant finds the Echo again by itself,
 within about two minutes. It ignores the Echo's announcement while it still holds the old connection (90 s), so the
 Echo announces itself again after 100 s without Home Assistant, then less and less often, at most every 30 min.

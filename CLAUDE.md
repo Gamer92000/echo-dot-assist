@@ -299,6 +299,12 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   after options) turns stderr/stdout into a pipe to a double-forked reader that stamps lines and drops known Amazon
   noise; it ignores hassmic's signals and ends at EOF. Never make it hassmic's direct child (Amazon's DHA module waits
   for all children). Host: `HASSMIC_CLOCK_SYNCED=0` plays an unset clock.
+  Time zone: GetTimeResponse field 2 (a POSIX TZ string, aioesphomeapi's `timezone.py`; HA keeps the name) ->
+  `clock_zone_from_ha` -> `tz.c` `tz_lookup`: a zone of bionic's one-file `tzdata` whose TZif footer is that rule (the
+  zone set kept when it has it, else zone.tab's names in area order), else the string itself -> `state/timezone` ->
+  `main.sh` `tz_set` (a name or a rule, never a path): `persist.sys.timezone`, plus `service call alarm 3` for
+  names where the framework runs.  `HASSMIC_TZDATA`, `HASSMIC_TIMEZONE` (the zone set) for tests;
+  `tests/unit/tz_ref.py` builds a tzdata from Python's.
 - **Wi-Fi switch** (`wifi.c`): the settings page's "Switch network…". `state/wifi-request` ("scan <id>" / "join <id> <ssid
   hex> <psk hex|->") for root (`main.sh` ota_watch) -> `scripts/device/wifi.sh` in the background; answers in root's
   `/data/local/hassmic/wifi/` (`status`, `scan`, `result`, `lock/`; the id ties answer to request). The password comes

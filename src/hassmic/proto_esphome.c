@@ -1404,9 +1404,12 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         send_mp_state(); send_all_settings(); send_token_state(); send_web_state();
         ask_time(c, 1); break;
     case GET_TIME_RESP: {
-        uint32_t epoch = 0;
-        while (pb_next(&p, end, &f)) if (f.field == 1 && f.wire == 5) epoch = (uint32_t)f.v;
-        if (c >= 0 && clients[c].keyed && epoch) clock_from_ha(epoch);
+        uint32_t epoch = 0; char tz[128] = "";
+        while (pb_next(&p, end, &f)) {
+            if (f.field == 1 && f.wire == 5) epoch = (uint32_t)f.v;
+            else if (f.field == 2 && f.wire == 2) pbf_str(&f, tz, sizeof tz);
+        }
+        if (c >= 0 && clients[c].keyed && epoch) { clock_from_ha(epoch); clock_zone_from_ha(tz); }
     } break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
     case LIGHT_COMMAND: on_light(p, end); break;

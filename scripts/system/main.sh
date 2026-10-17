@@ -142,6 +142,49 @@ clock_set() {
     echo "clock: set from Home Assistant, $d s $a${first:+ (times in this log are UTC from here on, seconds since boot before)}"
 }
 
+# Home Assistant's time zone (src/hassmic/clock.c, tz.c): state/timezone holds a zone name of this Echo's time zone
+# data, or a POSIX TZ string where none has Home Assistant's rule (bionic takes either).  The property is what native
+# code reads; where Android's framework runs (Echo Show), its alarm service is told too (IAlarmManager.setTimeZone,
+# transaction 3 on Android 7 to 9): it sets the same property and tells the Java side, which takes names only.  A rule
+# (no zone of the Echo's data has Home Assistant's) is right for native code only: Java reads the property at boot and
+# makes it GMT, so an Echo Show's screen shows GMT then.  The log stays in UTC.
+# state/ is the daemon's: the file is moved out into root's directory first, so what is read is what was checked (no
+# link, no FIFO that would hold this loop) and a newer one hassmic writes meanwhile is not deleted with it.  The binder
+# calls are bounded: a stuck system_server must not stop the firewall check that runs after this.
+TZFILE=/data/local/hassmic/state/timezone
+TZTAKE=/data/local/hassmic/timezone.take
+tz_set() {
+    [ -e $TZFILE ] || [ -L $TZFILE ] || return 0
+    rm -rf $TZTAKE; mv -f $TZFILE $TZTAKE 2>/dev/null || return 0      # rm -rf: a directory too, links not followed
+    local z= t
+    [ -f $TZTAKE ] && [ ! -L $TZTAKE ] && z=$(dd if=$TZTAKE bs=92 count=1 2>/dev/null)  # bounded: the daemon wrote it (Dot 3 toybox head has no -c)
+    rm -rf $TZTAKE
+    # a zone name (Europe/Berlin, Etc/GMT+3) or a POSIX rule (CET-1CEST,M3.5.0,M10.5.0/3, <+03>-3, IST-5:30), never
+    # a path: bionic reads the property in every process (tzcode takes ":<file>")
+    case "$z" in
+    [A-Za-z]*|\<*) ;;
+    *) z=;;
+    esac
+    case "$z" in ''|*..*|*//*|*/|*[!A-Za-z0-9\<\>+,./:_-]*) z=;; esac
+    case "$z" in
+    *,*) case "${z%%,*}" in */*) z=;; esac;;          # a rule: "/" only in its rules, after the first ","
+    */*) case "$z" in *[:\<\>.,]*) z=;; esac;;        # a name: no ":" (UTC:/etc/x), "<", ">", "."
+    esac
+    [ -n "$z" ] || { echo "time zone: state/timezone not understood, ignored"; return; }
+    [ ${#z} -le 91 ] || { echo "time zone: state/timezone too long, ignored"; return; }
+    [ "$z" = "$(getprop persist.sys.timezone)" ] && return
+    case "$z" in
+    *,*|*\<*|*:*) ;;                                  # a rule ("M10.5.0/3" has a slash too): Java would make it GMT
+    [A-Za-z]*/*)
+        t=; command -v timeout > /dev/null && t="timeout 5"
+        command -v service > /dev/null && $t service check alarm 2>/dev/null | grep -q ': found' &&
+            $t service call alarm 3 s16 "$z" > /dev/null 2>&1;;
+    esac
+    # the alarm service set it already where it runs; everywhere else (and if that call failed) it is set here
+    [ "$z" = "$(getprop persist.sys.timezone)" ] || setprop persist.sys.timezone "$z"
+    echo "time zone: $z, from Home Assistant"
+}
+
 # mDNS through the stock avahi-daemon, from the service file hassmic prints (satellite start, below).  The init-started
 # avahi runs in its own SELinux domain, which may not read /data/misc/avahi/services (avc denied), and magiskpolicy
 # cannot parse a rule for a type with a hyphen ("avahi-daemon").  So it runs from here, in our domain.
@@ -174,6 +217,7 @@ netwatch() {
     while :; do
         rotate_log
         clock_set
+        tz_set
         fwcheck
         if [ -f /data/local/hassmic/state/mdns ] && [ ! -L /data/local/hassmic/state/mdns ]; then
             why=$(dd if=/data/local/hassmic/state/mdns bs=60 count=1 2>/dev/null | tr -cd 'a-zA-Z0-9 ')

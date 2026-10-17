@@ -1946,3 +1946,31 @@ Run in this order. Each step says what it proves.
       none before. The race did not show on the Dot: 6 of 6 `stop; start` came back (its stop is quick; the Show's
       hassmic took longer to let go). `ctl.restart hassmic`: down ~3 s, new pids. `svc_stop hassmic` under mksh: rc 0
       within 0.1 s, "stopped". Not tried: a hung hassmic_fw, a reset whose hassmic does not stop.
+- [~] Time zone from Home Assistant (2026-10-17, GitHub issue #45; #33 had `TIMEZONE` in hassmic.conf, asked in the
+      setup, Android models only). aioesphomeapi answers GetTimeRequest with `timezone` (field 2): the POSIX TZ string
+      of HA's zone (`iana_to_posix_tz`: the tzdata file's footer), `parsed_timezone` (3) beside it; the IANA name
+      never leaves HA. bionic (7.1 localtime.c) takes either in `persist.sys.timezone` (tzload by name, else
+      tzparse); Java's `TimeZone.getTimeZone` only names (else GMT), so `tz.c` maps the rule back to a name: bionic's
+      tzdata (header "tzdataNNNNx\0" + index/data/zonetab offsets big-endian, 52-byte entries, TZif files whole as
+      ZoneCompactor copies them; footer = text between the last two newlines). The zone set is kept when it has the
+      rule, else zone.tab's names (the file's last part: the data holds old names as zones of their own, Australia/ACT,
+      Asia/Calcutta) in area order Europe/ America/ Asia/ ... A rule the firmware's older data lacks: another zone
+      with it, or the string itself. Python tzdata 2026e: 598 zones, 94 rules, each found back to a zone.tab zone with
+      that rule; hand-made broken files (index, offsets, 40-byte names, long footers) refused; 32-bit UBSan clean.
+      Root (`tz_set`, netwatch every 10 s): the file moved out of the daemon's state/ first (no link, FIFO or
+      directory read as root, a newer one not deleted), at most 92 bytes read; a name or a rule, never a path (starts
+      with a letter or "<"; no "..", "//", trailing "/"; a name has no ":<>.", a rule "/" only after its first ",";
+      hassmic checks Home Assistant's string the same way). For names where `service check alarm` finds it `service
+      call alarm 3 s16 <zone>` (setTimeZone, which sets the property itself; crown 2026-10-14: GMT -> America/Denver;
+      5 s bounded: netwatch runs the firewall check next), never for a rule (Java would make it GMT); then `setprop
+      persist.sys.timezone` where it is not set yet. A rule in the property: native code right, a Show's Java side GMT
+      after a reboot. fake_ha_esphome: the keyed link writes `state/timezone` (the rule: no tzdata on the PC).
+      Dot 3 (2026-10-17): `/system/usr/share/zoneinfo/tzdata` only (`/data/misc/zoneinfo` empty), "tzdata2025a",
+      596 zones, all TZif 2+ with the footer, zone.tab 17 kB. HA's rules of Berlin, New York, Mexico City, Kolkata,
+      Sydney, Sao Paulo, London -> Europe/Amsterdam, America/Detroit, America/Bahia_Banderas, Asia/Kolkata,
+      Australia/Hobart, America/Araguaina, Europe/Guernsey; the zone set kept. No alarm service on the Dot (`pm`,
+      `service` exist). `tz_set` under mksh: ":/data/x", "UTC:/etc/passwd", "/etc/passwd", "Europe/../x",
+      "Europe//Berlin", "Europe/", "Europe/Berlin.x", "EST5/x,M3", "x;reboot", a directory, 20 MB without a newline,
+      a link to /system/build.prop refused, nothing left behind; Etc/GMT+3, America/Argentina/Buenos_Aires, <+03>-3,
+      IST-5:30, the CET rule, Europe/Berlin taken (`date` -03, -03, +03, IST, CEST, CEST); the same zone again a no-op.
+      Open (device): hassmic's side (no NDK on this PC), the Shows' alarm call.

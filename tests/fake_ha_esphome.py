@@ -587,7 +587,7 @@ async def main():
             except err: ok = True
             check(ok, f"with a key: {what} connection refused ({err.__name__})")
 
-        enc = APIClient("127.0.0.1", PORT, None, noise_psk=key.decode())
+        enc = APIClient("127.0.0.1", PORT, None, noise_psk=key.decode(), timezone="Europe/Berlin")
         await asyncio.wait_for(enc.connect(login=True), 5)
         info = await enc.device_info()
         check(info.name == "echo-dot" and info.api_encryption_supported and not info.api_encryption_provisionable, "encrypted: device info, no longer provisionable")
@@ -605,6 +605,11 @@ async def main():
         boot = time.clock_gettime(time.CLOCK_BOOTTIME)
         check(abs(t - time.time()) <= 2 and re.fullmatch(r"\d+\.\d\d", at) and 0 <= boot - float(at) < 5,
               f"keyed link: Home Assistant's time in state/clock for root, with the boot clock as /proc/uptime words it: {t} {at}")
+        # and its zone, as its rule (the PC has no bionic tzdata: the rule itself; tz_ref.py checks the names)
+        from aioesphomeapi.timezone import iana_to_posix_tz
+        try: tz = open(os.path.join(state, "timezone")).read()
+        except OSError: tz = ""
+        check(tz == iana_to_posix_tz("Europe/Berlin") + "\n", f"keyed link: Home Assistant's time zone in state/timezone for root: {tz!r}")
         started.clear(); mic.clear()
         enc.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio, handle_announcement_finished=handle_finished)
         await sync(enc); proc.send_signal(signal.SIGUSR1)
