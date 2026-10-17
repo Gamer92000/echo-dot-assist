@@ -45,13 +45,15 @@ NL='
 # those claims.  Not in stock-online mode: no hassmic runs then.
 KIOSK_IN="INPUT -i $WLAN -p udp -m udp --dport 2330 -j ACCEPT"
 # Kiosk Satellite itself (device.conf KIOSK_PACKAGE, an app of the user's choice) may reach the internet for its own
-# updates and the pages it shows, while the setting "kiosk_internet" is on: one rule for its uid, nothing else gets out
-# by it (Amazon's daemons have other users and stay local).  KSUID is empty when the setting is off or it is not installed.
+# updates and the pages it shows, unless the setting "kiosk_internet" is off: one rule for its uid, nothing else gets out
+# by it (Amazon's daemons have other users and stay local).  Default on: hassmic writes the setting to state/config only
+# once somebody saved it, so "not there" has to mean on (looking for "=on" kept a fresh install's Kiosk Satellite offline).
+# KSUID is empty when the setting is off or it is not installed.
 kiosk_state() {
     KIOSK=; KSUID=
     [ -z "$OTA_ONLY" ] || return 0
     grep -qx 'arbitration_mode=kiosk' /data/local/hassmic/state/config 2>/dev/null && KIOSK=1
-    if [ -n "$KIOSK_PACKAGE" ] && grep -qx 'kiosk_internet=on' /data/local/hassmic/state/config 2>/dev/null; then
+    if [ -n "$KIOSK_PACKAGE" ] && ! grep -qx 'kiosk_internet=off' /data/local/hassmic/state/config 2>/dev/null; then
         KSUID=$(sed -n "s/^$KIOSK_PACKAGE \([0-9][0-9]*\) .*/\1/p" /data/system/packages.list 2>/dev/null | head -1)
     fi
 }

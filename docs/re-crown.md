@@ -129,8 +129,8 @@ reach GitHub through the egress lock).
 
 - Nothing started the app after a boot (no HOME category: hassmic-home is the home screen). `main.sh` `kiosk_helper` now
   opens it once with `monkey` (as shell) when it is not running, 10 s after boot_completed, then keeps the update helper up.
-- Egress: setting `kiosk_internet` (page, System; screen models only, not exported, default off). `lockdown.sh`
-  `kiosk_state` reads `kiosk_internet=on` from `state/config` and adds `-m owner --uid-owner <uid of KIOSK_PACKAGE from
+- Egress: setting `kiosk_internet` (page, System; screen models only, not exported, default on since the remote admin
+  entry below). `lockdown.sh` `kiosk_state` reads `state/config`: anything but `kiosk_internet=off` opens it and adds `-m owner --uid-owner <uid of KIOSK_PACKAGE from
   packages.list> -j RETURN` before the gid rule. Checked on the Echo: uid 10000 reaches 1.1.1.1:80, shell user times out;
   Amazon's daemons have other uids.
 - `install_keyboard` in `scripts/lib/setup.sh` (crown `step_install`, asked, default no): Simple Keyboard release 148

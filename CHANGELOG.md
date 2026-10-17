@@ -4,6 +4,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-17
 
+- **Kiosk Satellite could not reach the internet on a fresh install.** The setting "Kiosk Satellite internet access" shows
+  as on, but the firewall only opened for it once the setting had been saved at least once, so its update check and any
+  page from outside the network (a hosted Home Assistant, camera streams) timed out. On is now what a missing setting means.
 - **Wake sound removal (experimental) on the Echo Show.** The Show starts a sound after a pause 0.35 s late (below); the
   removal now looks for the sound's echo from where it really starts, and no longer misses it.
 
