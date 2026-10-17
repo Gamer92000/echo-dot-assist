@@ -44,6 +44,7 @@
 #include "improv.h"
 #include "buttons.h"
 #include "ring.h"
+#include "ledq.h"
 #include "davs.h"
 #include "dropin.h"
 #include "micdenoise.h"
@@ -289,13 +290,9 @@ static void run_output(char *const argv[], char *buf, size_t n)
     close(p[0]);                        /* SIGCHLD is ignored: nothing to wait for */
 }
 
-/* What ring.c plays: through ledctrl, or into HASSMIC_FAKE_LED's file for the tests on the PC */
-static void led_run(const char *op, const char *pattern)
-{
-    const char *fake = getenv("HASSMIC_FAKE_LED");
-    if (fake) { FILE *f = fopen(fake, "a"); if (f) { fprintf(f, "%s %s\n", op, pattern); fclose(f); } return; }
-    if (use_led) run("/system/bin/ledctrl", op, pattern);
-}
+/* What ring.c plays: through ledctrl one at a time, in order (ledq.c says why), or into HASSMIC_FAKE_LED's file for
+ * the tests on the PC, through the same queue (ledq_start in main) */
+static void led_run(const char *op, const char *pattern) { ledq_run(op, pattern); }
 
 /* The Echo's own patterns go through ring.c: Home Assistant's light steps aside for them, and the listening ring is
  * turned towards the talker there */
@@ -1787,7 +1784,7 @@ int core_led_auto(int set)
     if (set >= 0 && set != led_auto) {
         if (!set) led_level = core_led_brightness(-1);
         led_auto = set;
-        if (use_led) run("/system/bin/ledctrl", "-a", set ? "on" : "off");     /* off: the level stays where auto left it */
+        if (use_led) ledq_run("-a", set ? "on" : "off");        /* off: the level stays where auto left it */
         fprintf(stderr, "LED brightness: %s\n", set ? "auto" : "fixed");
     }
     return led_auto;
@@ -1797,13 +1794,13 @@ int core_led_brightness(int set)
 {
     if (set >= 0) {
         char n[8]; snprintf(n, sizeof n, "%d", set > 100 ? 100 : set);
-        char *argv[] = { "/system/bin/ledctrl", "-a", "off", "-b", n, NULL };
-        if (use_led) run_argv(argv);
+        const char *args[] = { "-a", "off", "-b", n };
+        if (use_led) ledq_args(4, args);            /* queued with the ring's: levels ms apart land in the order sent */
         led_auto = 0; led_level = atoi(n);
         fprintf(stderr, "LED brightness: fixed at %d\n", led_level);
     }
 #ifdef __ANDROID__
-    char v[PROP_VALUE_MAX] = "";                   /* fixed: ours, the property may not have it yet (ledctrl runs apart) */
+    char v[PROP_VALUE_MAX] = "";                   /* fixed: ours, the property may not have it yet (ledctrl queued) */
     if (led_auto && use_led && __system_property_get("persist.ledbrightness.bootup", v) > 0) return atoi(v);
 #endif
     return led_level;
@@ -2126,6 +2123,7 @@ int main(int argc, char **argv)
     clock_log_start();                              /* before any thread: it forks */
     signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin); signal(SIGWINCH, on_winch);
     if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
+    ledq_start(use_led ? "/system/bin/ledctrl" : NULL, getenv("HASSMIC_FAKE_LED"), child_ids, LEDQ_TIMEOUT_MS);
     ring_start(led_run);
     audio_earcon_started = earcon_started;
     led("-u", "scone-setup");           /* a restart inside the pairing window: the window is gone, its chaser would loop on */

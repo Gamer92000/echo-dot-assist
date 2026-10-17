@@ -1707,6 +1707,25 @@ Run in this order. Each step says what it proves.
       channel goes through gamma 2.2, as Amazon maps its own: `solid_orange` is F30, Home Assistant's orange 255,165,0
       becomes 255,98,0 (Amazon's other orange, ff6000). Coral is now the pale 15° hue, FF5B37; levels as seen 1 /
       0.66 / 0.382 = the same duty as before (1 / 0.4 / 0.12); pulse from 35 %, spin tails 65 / 42 / 25 %.
+      ledctrl in order (2026-10-16, issue #40): `run_argv` forks ledctrl and does not wait, so two calls started together
+      reach ledcontroller in either order. Measured on the kitchen's Dot 2 with the ring's frame read back: `ledctrl -s`
+      and `-u` of a talking ring started at once left it lit 2 times in 5, 20 ms apart 0 in 5, the `-u` after the `-s`
+      returned 0 in 15 (`ledctrl -g` is no help here: it lists patterns already unset). Seen on two Dot 2s after replies
+      of 19 and 41 ms (talking set and unset in that time): the talking ring lit on an idle Echo until the next wake word.
+      `ledq.c`: one thread runs them one at a time, each waited for (a pipe the child keeps across exec, closed when
+      ledctrl exits: SIGCHLD is ignored, and stdout ends no wait, ledctrl chats on it), killed with its process group
+      after 2 s so a hanging ledctrl does not stop the ring for good; stderr still in the log; 64 queued at most, then
+      the oldest queued set gives way (an unset lost is this bug again). The brightness calls (`ledctrl -a`, `-a off -b
+      N`) go through the same queue: a slider dragged in Home Assistant sends levels ms apart, each its own ledctrl, and
+      the last to arrive stayed. The fake file of the PC tests is written at once, in the caller (the tests read it
+      right after an action); `tests/unit/ledq_test.c` runs the queue against a shell stand-in for ledctrl.
+      Measured on a Dot 3 (donut, 2026-10-17, ring frame `/sys/bus/i2c/devices/0-003f/frame` read back 1.5 s later):
+      one ledctrl takes ~35 ms (20 in 0.70 s), so a call behind two others shows ~0.1 s late. Raw ledctrl -s and -u of
+      active-talking started together left the ring lit 5 of 10, one after the other 0 of 10. Through hassmic, Home
+      Assistant's light switched on and off back to back: 2026.10.13 left it lit 5 of 10, this build 0 of 10.
+      Brightness 10, 20 .. 90, 37 sent at once: 37 stays. With ledcontroller stopped ledctrl never returns (5 s
+      `timeout` seen): each call was killed after 2000 ms and logged, the next one ran, the API kept answering, and the
+      ring worked again once ledcontroller was started.
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
