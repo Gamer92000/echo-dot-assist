@@ -81,6 +81,9 @@ jobs:
           - device: crown
             ksrc: linux-4.9.77
             kcc: arm-eabi-4.8
+          - device: athena
+            ksrc: linux-4.4.146
+            kcc: arm-eabi-4.8
     steps:
       - uses: actions/checkout@v7
         with:
