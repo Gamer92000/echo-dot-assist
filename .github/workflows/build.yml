@@ -2,6 +2,7 @@
 #   push to main     prerelease  v<version>-beta  (the "beta" channel)
 #   push to release  release     v<version>       (the "release" channel)
 #   pull request     build and test only
+# A beta is skipped when no model's bundle holds anything new (scripts/content-id.sh): CI, test and doc changes.
 # The version is the commit's time in UTC, 2026.10.02.091530 (make version): nothing to bump, and a commit published
 # as beta and later as release has the same version, so an Echo on beta is not offered the same build again.
 # The firmware is not public: device binaries link against stand-ins for the stock libraries (make STUBS=1,
@@ -38,7 +39,7 @@ jobs:
       prerelease: ${{ steps.v.outputs.prerelease }}
       publish: ${{ steps.v.outputs.publish }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0                # earlier tags
       - id: v
@@ -75,7 +76,7 @@ jobs:
             ksrc: linux-3.18.19
             kcc: arm-eabi-4.8
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0                # git describe, compiled in
 
@@ -84,7 +85,7 @@ jobs:
       - name: NDK cache
         if: ${{ !env.ACT }}
         id: ndk
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: toolchain/android-ndk-r21e
           key: ndk-r21e
@@ -100,7 +101,7 @@ jobs:
 
       - name: Kernel build tools
         if: matrix.ksrc
-        run: command -v bc > /dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq bc > /dev/null; }     # timeconst.h
+        run: command -v bc > /dev/null || { sudo apt-get update && sudo apt-get install -y bc; }     # timeconst.h
       # keyed on the download command itself: the URLs and checksums make kernel-tools uses
       - name: Kernel pins
         if: matrix.ksrc
@@ -109,7 +110,7 @@ jobs:
       - name: Kernel cache
         if: matrix.ksrc && !env.ACT
         id: kernel
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             toolchain/${{ matrix.ksrc }}
@@ -139,10 +140,16 @@ jobs:
           for v in build/otatool-host "python3 scripts/otatool.py"; do
               $v verify secrets/throwaway.pub build/${{ matrix.device }}/hassmic.bundle build/${{ matrix.device }}/hassmic.bundle.sig
           done
-      - uses: actions/upload-artifact@v4
+      # what the bundle holds apart from its version: the release job publishes a beta only when it changed
+      - name: Content ID
+        run: DEVICE=${{ matrix.device }} scripts/content-id.sh STUBS=1 > build/${{ matrix.device }}.content-id
+      # beside build/<device>/, not in it: the artifact's root is then build/ and it holds <device>/ itself, which the
+      # release job needs (download-artifact puts a lone artifact's files straight into its path, without its name)
+      - uses: actions/upload-artifact@v7
         with:
           name: build-${{ matrix.device }}
           path: |
+            build/${{ matrix.device }}.content-id
             build/${{ matrix.device }}/hassmic
             build/${{ matrix.device }}/runas
             build/${{ matrix.device }}/otatool
@@ -155,19 +162,28 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30                 # apt has hung for over 20 minutes: fail instead of waiting out the 6 h default
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      # uv fetches Python and installs the wheels in parallel.  No cache: setup-uv prunes downloaded wheels from it in
+      # CI anyway, since PyPI is as fast as restoring them.
+      - uses: astral-sh/setup-uv@v10.2.0       # no major-version tags (v10) exist: the full version
         with:
           python-version: '3.13'
+      # No ffmpeg (hundreds of packages; the one MP3 a test needs is testdata/sine440_24k.mp3), no recommends, and no
+      # man-db trigger, which rebuilds the whole man database after an install.  This step took 1 to 10 minutes before.
       - name: Packages
+        timeout-minutes: 8
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libopus-dev libcurl4 netcat-openbsd ffmpeg sbc-tools > /dev/null
-          python -m venv .venv
-          .venv/bin/pip install -q -r tests/requirements.txt
+          echo 'man-db man-db/auto-update boolean false' | sudo debconf-set-selections
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libopus-dev libcurl4 netcat-openbsd sbc-tools
+      - name: Python packages
+        timeout-minutes: 5
+        run: uv sync --locked           # .venv exactly as uv.lock says; fails if pyproject.toml changed without uv lock
       - name: Build
         run: make build/hassmic-host build/otatool-host
       - name: Unit tests
@@ -180,6 +196,55 @@ jobs:
         run: .venv/bin/python tests/fake_ha_update.py
       - name: ESPHome native API
         run: .venv/bin/python tests/fake_ha_esphome.py
+      - name: Models copied between Echos
+        run: .venv/bin/python tests/fake_web_artifacts.py
+      - name: Wi-Fi switch from the settings page
+        run: .venv/bin/python tests/fake_web_wifi.py
+      - name: microWakeWord, models from the settings page
+        run: .venv/bin/python tests/fake_web_mww.py
+      - name: Setup from a phone (Improv over Bluetooth), factory reset
+        run: .venv/bin/python tests/fake_improv.py
+      - name: Light ring, Home Assistant's light
+        run: .venv/bin/python tests/fake_ha_ring.py
+      - name: Wake sound removal
+        run: .venv/bin/python tests/fake_ha_wakesound.py
+
+  # The Drop In voice blueprint in a real Home Assistant (tests/ha_real_dropin.py, which pins its version) against PC
+  # Echos, one of them the released build of a tag.  A job of its own: Home Assistant comes from PyPI with what its
+  # integrations need (a venv of about 1 GB, made fresh: uv takes a minute), and releases do not wait for it.
+  home-assistant:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0                # the released build is built from its tag
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: '3.13'        # .venv; Home Assistant's own venv asks for 3.14 (--setup)
+      - name: Packages
+        timeout-minutes: 8
+        run: |
+          echo 'man-db man-db/auto-update boolean false' | sudo debconf-set-selections
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libopus-dev libcurl4
+      - name: Python packages
+        timeout-minutes: 5
+        run: uv sync --locked
+      - name: Build
+        run: make build/hassmic-host
+      - name: Home Assistant
+        timeout-minutes: 8
+        run: .venv/bin/python tests/ha_real_dropin.py --setup
+      # The test runs in a network namespace of its own (unshare -rn); Ubuntu 24.04 lets only programs with an
+      # AppArmor profile make user namespaces unless this is off
+      - name: User namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Drop In blueprint in Home Assistant
+        env:
+          HASSMIC_HA_REQUIRED: '1'      # here a skip is a failure
+        run: .venv/bin/python tests/ha_real_dropin.py
 
   release:
     needs: [version, build, test]
@@ -189,13 +254,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: build
           pattern: build-*
+          merge-multiple: true          # each holds <device>/ and <device>.content-id: build/ as the build jobs left it
       - name: Sign
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
@@ -205,9 +271,8 @@ jobs:
           make -s build/otatool-host
           mkdir -p secrets dist
           (umask 077; echo "$RELEASE_SIGNING_KEY" | base64 -d > secrets/release.key)
-          for a in build/build-*; do
-              d=${a#build/build-}
-              mkdir -p build/$d; cp -r $a/. build/$d/       # the artifacts as the build left them (otatool pack sets modes)
+          for c in build/*.content-id; do
+              d=${c#build/}; d=${d%.content-id}
               DEVICE=$d scripts/bundle.sh secrets/release.key "$VERSION"
               # signed by the PC's otatool (Python): what the Echo's (C) checks must pass too, or nothing is published
               for v in build/otatool-host "python3 scripts/otatool.py"; do
@@ -215,10 +280,31 @@ jobs:
                       { echo "::error::$d: bundle does not verify against keys/release.pub ($v): secret and public key differ, or the two otatools do"; rm -f secrets/release.key; exit 1; }
               done
               cp build/$d/hassmic.bundle dist/hassmic-$d.bundle; cp build/$d/hassmic.bundle.sig dist/hassmic-$d.bundle.sig
+              cp $c dist/hassmic-$d.content-id
           done
           rm -f secrets/release.key
-          [ "$(ls dist | wc -l)" = $(( 2 * $(ls -d build/build-* | wc -l) )) ] || { echo "::error::a bundle is missing"; ls -l dist; exit 1; }
+          [ "$(ls dist | wc -l)" = $(( 3 * $(ls build/*.content-id | wc -l) )) ] || { echo "::error::a bundle is missing"; ls -l dist; exit 1; }
           ls -l dist
+      # A beta only when the Echos get something new: a commit that changes only CI, tests or the docs builds bundles
+      # with the content IDs of the newest release (beta or not), and a beta of it would only make every Echo on the
+      # beta channel download the same software again.  A push to release always publishes.
+      - name: Anything new
+        id: new
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          new=true
+          prev=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // empty' 2>/dev/null || true)
+          if [ "$PRERELEASE" = true ] && [ -n "$prev" ] && gh release download "$prev" -p 'hassmic-*.content-id' -D prev 2>/dev/null; then
+              same=true
+              for f in dist/*.content-id; do cmp -s "$f" "prev/${f#dist/}" || same=false; done
+              [ "$(ls prev | wc -l)" = "$(ls dist/*.content-id | wc -l)" ] || same=false        # a model added or dropped
+              if [ $same = true ]; then new=false; echo "::notice::same content as $prev: no beta published"; fi
+          fi
+          echo "newest release: ${prev:-none}, publish: $new"
+          echo "new=$new" >> "$GITHUB_OUTPUT"
       - name: Notes
         env:
           TAG: ${{ needs.version.outputs.tag }}
@@ -236,7 +322,7 @@ jobs:
           } > notes.md
           cat notes.md; ls -l dist
       - name: Publish
-        if: ${{ !env.ACT }}
+        if: ${{ !env.ACT && steps.new.outputs.new == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
@@ -250,4 +336,7 @@ jobs:
         env:
           TAG: ${{ needs.version.outputs.tag }}
           PRERELEASE: ${{ needs.version.outputs.prerelease }}
-        run: echo "would create release $TAG (prerelease=$PRERELEASE) at $GITHUB_SHA with $(ls dist | tr '\n' ' ')"
+          NEW: ${{ steps.new.outputs.new }}
+        run: |
+          if [ "$NEW" = true ]; then echo "would create release $TAG (prerelease=$PRERELEASE) at $GITHUB_SHA with $(ls dist | tr '\n' ' ')"
+          else echo "would publish nothing: same content as the newest release"; fi

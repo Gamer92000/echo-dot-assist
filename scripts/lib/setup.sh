@@ -17,7 +17,7 @@ info() { printf '  %s%s%s\n' "$DIM" "$*" "$N"; }
 ok()   { printf '  %s✓%s %s\n' "$GRN" "$N" "$*"; }
 warn() { printf '  %s!%s %s\n' "$YEL" "$N" "$*"; }
 fail() { printf '  %s✗ %s%s\n' "$RED" "$*" "$N"; }
-_clr() { [ -n "$TTY" ] && printf '\r\e[K\e[?25h'; }
+_clr() { [ -n "$TTY" ] && printf '\r\e[K\e[?25h\e[?7h'; }
 _rep() { local s; printf -v s '%*s' "$2" ''; printf '%s' "${s// /$1}"; }
 _dur() { [ "$1" -ge 60 ] && printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)) || printf '%ds' "$1"; }
 
@@ -88,11 +88,22 @@ in_dir() { cd "$1" && shift && "$@"; }
 
 # waitfor "label[|done label]" CHECK [HINT [AFTER [TIMEOUT]]]: spinner until the shell command CHECK succeeds (tried
 # every 2 s).  HINT is shown once after AFTER seconds (default 60); with TIMEOUT seconds, gives up and returns 1.
+# An Echo that stays "offline" on adb over Wi-Fi (adb_is counts it) gets a hint of its own.
 waitfor() {
-    local label=${1%%|*} donel=${1#*|} check=$2 hint=$3 after=${4:-60} timeout=$5 t0=$SECONDS i
+    local label=${1%%|*} donel=${1#*|} check=$2 hint=$3 after=${4:-60} timeout=$5 t0=$SECONDS i offhint=1 usbhint=1
     if [ -n "$DRY" ]; then printf '  %s· %s%s\n' "$DIM" "$label" "$N"; return 0; fi
+    ADB_OFFLINE=0 ADB_USB_MANY=
     until eval "$check" > /dev/null 2>&1; do
         if [ -n "$hint" ] && [ $((SECONDS - t0)) -ge "$after" ]; then _clr; warn "$hint"; hint=; fi
+        if [ -n "$usbhint" ] && [ -n "$ADB_USB_MANY" ]; then
+            _clr; warn "More than one device is on adb over USB: $(echo $ADB_USB_MANY). adb cannot tell which one is the Echo."
+            info "Unplug every other one (devices on adb over Wi-Fi may stay); the setup goes on by itself."
+            usbhint=
+        fi
+        if [ -n "$offhint" ] && [ $ADB_OFFLINE -ge 10 ]; then
+            _clr; warn "The Echo takes adb's connection but stays \"offline\": its adb hangs. Unplug the Echo's power and plug it back in."
+            offhint=
+        fi
         [ -n "$timeout" ] && [ $((SECONDS - t0)) -ge "$timeout" ] && { _clr; fail "$label: gave up after $(_dur $timeout)"; return 1; }
         for i in {1..20}; do _tick "$label" $t0; sleep 0.1; done
     done
@@ -127,11 +138,45 @@ ask() {
         case ${a:-$d} in [yY]*) return 0;; [nN]*) return 1;; esac
     done
 }
-# prompt VAR "question" [default] [-s]: -s hides the input.  A dry run takes the default.
+# wifi_conf: asks the Wi-Fi name and password into secrets/wifi.conf (line 1 SSID, line 2 passphrase), the name checked
+# against what the Echo hears: one wrong capital letter left an Echo scanning with no word why (forum, 2026-10-10).
+# Sets WIFI_NEW=1 when it wrote the file (the caller deletes it if joining fails, so a typo is asked again).
+wifi_conf() {
+    local ssid pass heard= match
+    WIFI_NEW=
+    [ -f secrets/wifi.conf ] && return 0
+    if [ -z "$DRY" ]; then
+        # the Echo's own scan; scan_results: bssid, frequency, signal, flags, ssid (tab separated), header first
+        heard=$(adb shell 'W="wpa_cli -i wlan0 -p /data/misc/wifi/sockets"; $W status >/dev/null 2>&1 || { start wpa_supplicant; sleep 3; }
+            $W scan >/dev/null; sleep 5; $W scan_results' 2>/dev/null | tr -d '\r' | awk -F'\t' 'NR > 1 && $5 != "" { print $5 }' |
+            sed 's/\\"/"/g' | while IFS= read -r l; do printf '%b\n' "$l"; done | sort -u)   # wpa_cli writes \xNN, \\, \"
+        if [ -n "$heard" ]; then info "Networks the Echo hears:"; printf '%s\n' "$heard" | head -20 | sed 's/^/      /'
+        else warn "Could not list the networks the Echo hears: the name is not checked, type it exactly."; fi
+    fi
+    while :; do
+        prompt ssid "Wi-Fi name (WPA2, same network as Home Assistant)"
+        [ -n "$ssid" ] || [ -n "$DRY" ] || continue
+        [ -z "$heard" ] || printf '%s\n' "$heard" | grep -qxF -- "$ssid" && break
+        match=$(printf '%s\n' "$heard" | grep -ixF -- "$ssid" | head -1)
+        if [ -n "$match" ]; then
+            warn "The Echo hears \"$match\", not \"$ssid\": Wi-Fi names are case-sensitive."
+            ask "Use \"$match\"?" y && { ssid=$match; break; }
+        else
+            warn "The Echo does not hear \"$ssid\" (hidden networks are not listed, and it may be out of range)."
+            ask "Use \"$ssid\" anyway?" n && break
+        fi
+    done
+    prompt pass "Wi-Fi password" "" -s
+    [ -n "$DRY" ] && return 0
+    mkdir -p secrets; ( umask 077; printf '%s\n%s\n' "$ssid" "$pass" > secrets/wifi.conf ); WIFI_NEW=1
+}
+# prompt VAR "question" [default] [-s]: -s hides the input.  A dry run takes the default.  The question gets a colon
+# unless it ends in one or a "?": without it "Wi-Fi name (…)" did not read as a question to answer (forum, 2026-10-09)
 prompt() {
-    local _answer                     # a name no caller uses: printf -v would set this local instead of the caller's VAR
+    local _answer _q=$2               # a name no caller uses: printf -v would set this local instead of the caller's VAR
     [ -n "$DRY" ] && { printf -v "$1" '%s' "$3"; return 0; }
-    printf '  %s?%s %s%s ' "$CYN" "$N" "$2" "${3:+ $DIM[$3]$N}"
+    [[ $_q == *[:?] ]] || _q="$_q:"
+    printf '  %s?%s %s%s ' "$CYN" "$N" "$_q" "${3:+ $DIM[$3]$N}"
     if [ "$4" = -s ]; then read -r -s _answer < /dev/tty || exit 1; echo; else read -r _answer < /dev/tty || exit 1; fi
     printf -v "$1" '%s' "${_answer:-$3}"
 }
@@ -142,7 +187,9 @@ menu() {
     local _var=$1 _n=$(($# - 1)) _sel=${MENU_SEL:-0} _i _k _k2 _d      # underscores: see prompt
     shift
     [ -n "$TTY" ] || { printf -v "$_var" '%s' $_sel; return 0; }
-    printf '\e[?25l'
+    # line wrap off while it is drawn: the redraw goes up one line per item, so an item wider than the terminal
+    # has to be cut, not wrapped
+    printf '\e[?25l\e[?7l'
     while :; do
         for ((_i = 0; _i < _n; _i++)); do
             if [ -z "${@:_i+1:1}" ]; then printf '\r\e[K\n'
@@ -162,7 +209,7 @@ menu() {
         [ $_d != 0 ] && { _sel=$(( (_sel + _n + _d) % _n )); while [ -z "${@:_sel+1:1}" ]; do _sel=$(( (_sel + _n + _d) % _n )); done; }
         printf '\e[%dA' $_n
     done
-    printf '\e[?25h'
+    printf '\e[?25h\e[?7h'
     printf -v "$_var" '%s' $_sel
 }
 
@@ -175,7 +222,7 @@ checklist() {
     for ((_i = 0; _i < _n; _i++)); do _on[_i]=1; done
     for _i in $CHECK_OFF; do _on[_i]=0; done
     if [ -n "$TTY" ]; then
-        printf '\e[?25l'
+        printf '\e[?25l\e[?7l'                  # line wrap off: see menu
         while :; do
             for ((_i = 0; _i < _n; _i++)); do
                 [ ${_on[_i]} = 1 ] && _box="[$GRN✓$N]" || _box='[ ]'
@@ -196,7 +243,7 @@ checklist() {
             esac
             printf '\e[%dA' $((_n + 2))
         done
-        printf '\e[?25h'
+        printf '\e[?25h\e[?7h'
     fi
     for ((_i = 0; _i < _n; _i++)); do [ ${_on[_i]} = 1 ] && _out="$_out $_i"; done
     printf -v "$_var" '%s' "${_out# }"
@@ -276,8 +323,11 @@ need_files() {
         ok "${dest[i]##*/}"
     done
     [ ${#miss[@]} = 0 ] && return 0
+    # "Waiting for 3 download(s)" with a clock read as the script downloading: people waited an hour (forum, 2026-10-15)
     for i in "${miss[@]}"; do lines+=("$B${dest[i]##*/}$N" "  $DIM${src[i]}$N"); done
-    tell "Download into ~/Downloads (picked up from there)" "${lines[@]}"
+    tell "Download these ${#miss[@]} file(s) yourself, in your browser" \
+        "This script does NOT download them (the sites need a click or a login). Save each into $B$HOME/Downloads$N" \
+        "(or this folder); it goes on by itself as soon as they are there." "" "${lines[@]}"
     [ -n "$DRY" ] && return 0
     while [ ${#miss[@]} -gt 0 ]; do
         left=()
@@ -286,7 +336,7 @@ need_files() {
         done
         miss=("${left[@]}")
         [ ${#miss[@]} = 0 ] && break
-        for i in {1..20}; do _tick "Waiting for ${#miss[@]} download(s)" $t0; sleep 0.1; done
+        for i in {1..20}; do _tick "Waiting for you to save ${#miss[@]} file(s) into ~/Downloads" $t0; sleep 0.1; done
     done
     _clr
 }
@@ -310,6 +360,21 @@ build_mode() {
 }
 build_mode_set() { BUILD_MODE=$1; if [ "$1" = prebuilt ]; then export PREBUILT=1; else export PREBUILT=0; fi; }
 
+# bootroot_unpack: boot-root's magiskpolicy, which install-system.sh patches the policy with (device.conf SEPOLICY_TOOL).
+# Checked by that file, not the folder: an unzip that broke off (WSL) left the folder, the retry passed, and the install
+# stopped a step later over the missing tool (issue #10).
+bootroot_unpack() {
+    [ -z "$DRY" ] && [ -f $SEPOLICY_TOOL ] && return 0
+    [ -n "$DRY" ] || rm -rf $FW/boot-root
+    task "Unpacking boot-root" sh -c "unzip -q -o $FW/$BOOTROOT -d $FW/boot-root && [ -f $SEPOLICY_TOOL ]" && return 0
+    [ -f $SEPOLICY_TOOL ] || fail "no $SEPOLICY_TOOL after unpacking $FW/$BOOTROOT"
+    rm -rf $FW/boot-root; return 1
+}
+
+# rooted_already: the user said at the start that the Echo on USB is unlocked and rooted already (setup.sh marks the
+# model's ROOTED_SKIP steps done and leaves "rooted" in the progress file): no unlock tool, no firmware to flash
+rooted_already() { [[ " $DONE_IDS " == *" rooted "* ]]; }
+
 # kernel_tools: what Wi-Fi motion's kernel module is built with (make kernel-tools: the model's kernel sources and the
 # compiler Amazon used), so that the build has it as CI's does.  Without them `make` quietly leaves the module out, and
 # the install once stopped over the missing file (issue #5).
@@ -323,9 +388,13 @@ kernel_tools() {
 
 # USB_ONLY (the guided setup): the Echo being set up is the one on USB; installed ones on adb over Wi-Fi must not be
 # mistaken for it.  Its serial is looked up again each time (TWRP may report another one than Fire OS) and exported, so
-# the scripts the steps run talk to it as well.
+# the scripts the steps run talk to it as well.  adb -d fails as soon as a second device is on USB (a phone, another
+# Echo, an "unauthorized" one), and the setup then waited for an Echo that was there: ADB_USB_MANY lists them for
+# waitfor's hint (issue #45).
 usb_serial() {
     local s
+    ADB_USB_MANY=$(adb devices -l 2>/dev/null | awk 'NR > 1 && / usb:/ { print $1 }')
+    [ "$(echo "$ADB_USB_MANY" | grep -c .)" -gt 1 ] || ADB_USB_MANY=
     s=$(adb -d get-serialno 2>/dev/null)
     if [ -n "$s" ] && [ "$s" != unknown ]; then export ANDROID_SERIAL=$s; else unset ANDROID_SERIAL; return 1; fi
 }
@@ -341,7 +410,9 @@ pick_serial() {
     export ANDROID_SERIAL=${list[s]}
 }
 # adb_is device|recovery: the Echo on adb in that state?  Over Wi-Fi (ANDROID_SERIAL host:port) adb does not come back
-# by itself after a reboot, so it is reconnected here.
+# by itself after a reboot, so it is reconnected here.  ADB_OFFLINE counts the checks in a row that found it "offline"
+# even after reconnecting: the Echo's adbd takes the connection and never answers.  Seen on an Echo Dot 3 after the
+# Alexa app moved it to another Wi-Fi network and back (2026-10-05); only a power cycle brought adb back.
 adb_is() {
     local s
     [ -n "$USB_ONLY" ] && { usb_serial || return 1; }
@@ -350,6 +421,7 @@ adb_is() {
         [ "$s" = offline ] && adb disconnect "$ANDROID_SERIAL" > /dev/null 2>&1
         timeout 5 adb connect "$ANDROID_SERIAL" > /dev/null 2>&1; s=$(adb get-state 2>/dev/null)
     fi
+    [ "$s" = offline ] && ADB_OFFLINE=$((${ADB_OFFLINE:-0} + 1)) || ADB_OFFLINE=0
     [ "$s" = "$1" ]
 }
 
@@ -358,29 +430,57 @@ wait_adb() {
     pick_serial
     case $1 in
     recovery) waitfor "Waiting for TWRP (white ring)|TWRP is up" "adb_is recovery" "Nothing yet? Unplug the Echo's power and plug it back in.";;
-    *) waitfor "Waiting for the Echo to boot|Echo is up" "adb_is device" "Nothing yet? Unplug the Echo's power and plug it back in.";;
+    # an unlocked Echo shows fastboot as a rainbow, not the green of a stock one: people looking for green missed it
+    *) waitfor "Waiting for the Echo to boot|Echo is up" "adb_is device" "Nothing yet? Unplug the Echo's power and plug it back in. Rainbow ring? That is fastboot on an unlocked Echo: fastboot reboot.";;
     esac
 }
 
 # ashell CMD: adb shell, output without the carriage returns
 ashell() { adb shell "$@" | tr -d '\r'; }
 
-# install_satellite: the last step of every model.  Asks the name, installs (scripts/install-system.sh), waits until the
-# installed satellite runs.  Name and address go to $OUT/setup.env for the final screen.  There is no trial run before
+# preset_ok FILE: an export of the settings page (name=value lines, # comments), nothing else
+preset_ok() { ! grep -v -e '^[[:space:]]*$' -e '^#' "$1" | grep -qv '^[a-z_][a-z0-9_]*=[^[:cntrl:]]*$'; }
+
+# push_preset FILE: hand it to hassmic (state/preset, its own user's), which applies it once when it starts; restart
+# it (main.sh starts it again)
+PRESET_ON_ECHO=/data/local/hassmic/state/preset
+push_preset() {
+    adb push "$1" $PRESET_ON_ECHO && adb shell "chown $DAEMON_USER $PRESET_ON_ECHO; chmod 600 $PRESET_ON_ECHO; kill \$(pidof hassmic)"
+}
+
+# install_satellite: the last step of every model.  Installs (scripts/install-system.sh), waits until the installed
+# satellite runs; the Echo names itself (model and MAC address, read from its log), people name it in Home Assistant.  Settings to start with (--preset, or asked): an export of another Echo's settings page.  Name and address go to $OUT/setup.env for the final screen.  There is no trial run before
 # it: run.sh does not read hassmic.conf, so a trial announced itself under the default name, and Home Assistant kept that
 # device next to the installed one.
 install_satellite() {
     local name ip tok
-    prompt name "Name for this Echo in Home Assistant" "$DEFAULT_NAME"
+    if [ -z "$PRESET" ]; then
+        prompt PRESET "Settings to start with: a file exported on another Echo's settings page (Enter for none)" ""
+        PRESET=${PRESET/#\~/$HOME}
+    fi
+    while [ -n "$PRESET" ] && ! { [ -f "$PRESET" ] && preset_ok "$PRESET"; }; do
+        warn "$PRESET: not a settings export (name=value lines)"
+        prompt PRESET "Settings file (Enter for none)" ""
+    done
     wait_adb device || return 1
-    task "Installing (the Echo reboots)" scripts/install-system.sh "$name" || return 1
+    task "Installing (the Echo reboots)" scripts/install-system.sh || return 1
     [ -n "$DRY" ] || sleep 10
     wait_adb device || return 1
     # main.sh restarts a hassmic that dies, so it has to be seen twice, 10 s apart, to not be a crash loop
     waitfor "Waiting for the satellite to start|Satellite started" '[ -n "$(ashell pidof hassmic)" ]' "" 60 180 &&
         task "Checking it stays up" sh -c 'sleep 10; adb shell pidof hassmic | grep -q .' ||
         { [ -n "$DRY" ] || { info "end of its log:"; ashell tail -8 /data/local/hassmic/boot.log | sed 's/^/    /'; }; return 1; }
+    if [ -n "$PRESET" ]; then
+        if task "Handing over the settings from $(basename "$PRESET")" push_preset "$PRESET" &&
+           waitfor "Waiting for the satellite to take them|Settings taken" \
+               '[ -n "$(ashell pidof hassmic)" ] && [ -n "$(ashell ls $PRESET_ON_ECHO.applied 2>/dev/null)" ]' "" 30 90; then
+            [ -n "$DRY" ] || info "$(ashell "grep 'settings: preset applied' /data/local/hassmic/boot.log" | tail -1)"
+        else
+            warn "the settings were not taken; set them on the settings page"
+        fi
+    fi
     [ -n "$DRY" ] && return 0
+    name=$(ashell "grep -o 'name: .* (node' /data/local/hassmic/boot.log" | tail -1 | sed 's/^name: //; s/ (node$//')
     ip=$(ashell ifconfig $WLAN | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p')     # toybox ifconfig; no ip on the Echo
     # hassmic logs its Sendspin pairing token at every start
     tok=$(ashell "grep -o 'SP:0[A-Z0-9]*' /data/local/hassmic/boot.log" | tail -1)
@@ -389,22 +489,20 @@ install_satellite() {
 
 # done_screen [line]...: the end: what to do in Home Assistant, then the model's own notes
 done_screen() {
-    local SAT_NAME=$DEFAULT_NAME SAT_IP= SAT_TOKEN=
+    local SAT_NAME="$MODEL_NAME" SAT_IP= SAT_TOKEN=
     [ -f $OUT/setup.env ] && . $OUT/setup.env
     printf '  %s%s"%s" is running%s%s\n' "$GRN$B" "✓ " "$SAT_NAME" "${SAT_IP:+ at $SAT_IP}" "$N"
     tell "Add it in Home Assistant" \
-        "Settings → Devices & services → discovered ESPHome \"$SAT_NAME\" → Add" \
+        "Settings → Devices & services → discovered ESPHome \"$SAT_NAME\" → Add, and give it its name there" \
         "${DIM}(not listed? Add ESPHome by hand: ${SAT_IP:-its IP}, port 26053, no encryption key)$N" \
         "Then pick an Assist pipeline (and the wake word) in its settings."
-    # wake word arbitration hands its network key over as an ESPHome action: without the permission a second Echo
-    # never joins, and both answer
-    tell "Allow it to perform Home Assistant actions" \
-        "ESPHome → \"$SAT_NAME\" → Configure → \"Allow the device to perform Home Assistant actions\"" \
-        "${DIM}With several Echos, only the one that heard the wake word best answers; this is how they agree.$N"
+    tell "Its settings page" \
+        "http://${SAT_IP:-<its IP>}:28931/ (log in with a press of the action button)" \
+        "${DIM}Features, settings Home Assistant does not show, the other Echos; export the settings for the next Echo.$N"
     [ -n "$SAT_TOKEN" ] && tell "Music Assistant (optional)" \
         "It finds the Echo by itself; to play on it, pair it with this token:" \
         "$B$SAT_TOKEN$N" \
-        "${DIM}Or switch on \"Music Assistant without pairing\" in Home Assistant (any server on the LAN may then play).$N"
+        "${DIM}Or switch on \"Music Assistant without pairing\" on the settings page (any server on the LAN may then play).$N"
     warn "Back up secrets/update.key: it signs your updates."
     local l; for l; do info "$l"; done
     printf '\n'

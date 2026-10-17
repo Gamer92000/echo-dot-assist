@@ -16,6 +16,12 @@ Model D9N29T, MediaTek MT8516, `ro.product.device` = `donut_puffin`. Supported w
   - LED ring through `ledctrl` animations (30 volume steps)
   - Bluetooth: MediaTek combo chip on `/dev/stpbt`, H4 framing, owned by `btmanagerd` in stock
   - SoC temperature: thermal zone `mtktscpu`
+  - speaker amplifier: TI TAS2770 at i2c 2-0044 (EVT..HVT boards; the DTB of Proto boards has a TLV320AIC32x4 instead),
+    on I2S; the 3.5 mm jack plays from the MT8167's own codec, and the HAL mutes the TAS2770 meanwhile. Its `DAC
+    Playback Volume` (AMP_LEVEL, 0..20 = 11..21 dBV full-scale output, 0.5 dB a step) is 16 from boot on, never
+    written by the firmware; the settings page's "Speaker gain" raises it by up to 2 dB (`board.c` `speaker_gain`).
+    `PCM Playback Volume` (its digital volume) is at 0 dB in the speaker path: no headroom there
+  - mics: two TI TLV320AIC3101 ADCs at i2c 0-0018 and 0-001a
 - **Findings**: [docs/FINDINGS.md](../../docs/FINDINGS.md), [docs/re-platform.md](../../docs/re-platform.md),
   [docs/re-pryon.md](../../docs/re-pryon.md). Progress and measurements: [PLAN.md](../../PLAN.md).
 
@@ -62,7 +68,12 @@ a USB cable soldered to those pads. How to open the case: the guides linked unde
 
 The Echo takes its power from its own adapter, not from USB.
 
-Keep the Echo unplugged (no power, no USB) until step 1 asks for it.
+Keep the Echo unplugged (no power, no USB) until step 1 asks for it. Then the order is: USB cable into the PC, hold the
+action (dot) button, plug in the power adapter. Without the adapter the Echo has no power and the bootrom never shows up.
+
+Do this from **Linux running on the PC itself**: not macOS, not a VM, not WSL. The bootrom's USB timing is tight: on
+macOS kamakiri stops with `RuntimeError: status is 1d1a`, and USB passed through to a VM drops off or answers too late.
+A Linux live USB stick is enough.
 
 ### 1. Unlock, flash stock firmware, root
 
@@ -70,7 +81,8 @@ Keep the Echo unplugged (no power, no USB) until step 1 asks for it.
 sudo cp scripts/51-echo-unlock.rules /etc/udev/rules.d/ && sudo udevadm control --reload   # USB without sudo; keeps ModemManager off the bootrom
 unzip firmware/donut/kamakiri-donut-v1.0.0.zip -d firmware/donut/kamakiri
 K=$(dirname "$(find firmware/donut/kamakiri -name bootrom-step.sh)")   # the zip keeps its scripts in a folder of their own
-(cd "$K" && ./bootrom-step.sh)    # start it, THEN plug the Echo in while holding the action (dot) button
+(cd "$K" && ./bootrom-step.sh)    # start it, then: USB cable into the PC, hold the action (dot) button, plug in the
+                                  # Echo's power adapter, keep holding until it asks for Enter
 (cd "$K" && ./fastboot-step.sh)   # when the ring shows a rotating rainbow; ends in TWRP (white ring)
 ```
 
@@ -89,8 +101,9 @@ adb reboot
 ```
 
 TWRP switches the active slot itself after an install (checked 2026-09-25: `bcbtool get_active` said `b` right after
-flashing B). Do not switch it back by hand, or the second install lands in the same slot again and the other one keeps
-Amazon's newer firmware. `kamakiri`'s `bootrom-step.sh` asks for Enter after the handshake: run it in a terminal, not in
+flashing B; a user saw the same on his Dots, GitHub issue 18). Do not switch it back by hand, as the XDA thread's
+`bcbtool set_active` line does, or the second install lands in the same slot again and the other one keeps Amazon's
+newer firmware. `scripts/setup.sh donut` never switches; it stops if TWRP did not. `kamakiri`'s `bootrom-step.sh` asks for Enter after the handshake: run it in a terminal, not in
 the background. With a second Echo on adb (Wi-Fi), point every command and script at the new one:
 `export ANDROID_SERIAL=<serial from adb devices>`.
 
@@ -119,7 +132,10 @@ If `probe.sh` reports a different library, the Echo runs another firmware: stop 
 
 ### 3. Optional: another wake word
 
-Want "Echo" or "Computer" instead of "Alexa"? Once the Echo is installed:
+Want "Echo" or "Computer" instead of "Alexa"? The Echo's settings page has "Download from Amazon" (a code to enter on
+Amazon's site, then the wake words of any language, whisper detection, the newer sound detection model). That is the
+way meant; the guided setup no longer downloads anything. The old way from the PC still works as a fallback (it
+warns first), and installs models already in `device-logs/models/`:
 
 ```sh
 scripts/artifacts.sh <echo-ip>
@@ -127,12 +143,15 @@ scripts/artifacts.sh <echo-ip>
 
 Its menu has a list of ticks per kind, everything new ticked: "Wake words" (the ones already in `device-logs/models/`,
 as Amazon's sets are the same for every Echo: fetch once, copy to every Echo, and the ones Amazon has in the chosen
-language) and "Other artifacts" (the sound detection model, kept on the PC for tests, `docs/re-aed.md`). Untick what
+language) and "Other artifacts", installed on the Echo as well: whisper detection (Home Assistant's "Last request
+whispered", [guide](../../docs/GUIDE.md#whisper-detection)), and Amazon's newest sound detection model in place of the
+firmware's (not ticked: so far it scores the same, `docs/re-aed.md`). Untick what
 you do not want; "Go on" shows what it will do and asks once. It tries each wake word on the Echo's own engine before installing it,
 and restarts hassmic. For downloads it walks through the Amazon route below by itself, once for all of them: stock
 mode with the update block, you register the Echo in the Alexa app, it downloads the models (asking for what this
-Echo's engine can load), you deregister, it removes the app's Wi-Fi and the registration and goes back to satellite
-mode. Home Assistant then offers every installed model in the
+Echo's engine can load), it removes the app's Wi-Fi and the registration and goes back to satellite mode, and only
+then you deregister: a stock Echo that is deregistered while online resets itself to factory settings, hassmic's
+settings and models included. Home Assistant then offers every installed model in the
 Echo's wake word select. What it does, by hand:
 
 <details>
@@ -209,7 +228,7 @@ scripts/wifi-join.sh                                     # refuses to run withou
 ### 5. Install it, adopt it in Home Assistant
 
 ```sh
-scripts/install-system.sh "Kitchen Echo"         # the name Home Assistant will show
+scripts/install-system.sh                        # the Echo names itself ("Echo Dot 3 5695c4"); name it in Home Assistant
 ```
 
 Patches the SELinux policy, writes `/system/hassmic/`, an init file and the policy into the active slot while the Echo runs
@@ -226,8 +245,8 @@ Home Assistant must reach TCP 26053 on the Echo; the Echo must reach Home Assist
 `/data/local/hassmic/boot.log`.
 
 **Back up `secrets/update.key`**, created by the installer: it signs your updates, and it is how you get adb over Wi-Fi
-without Home Assistant (`scripts/adb-wifi.sh <echo-ip>`: 30 minutes; adb over Wi-Fi is closed otherwise, see the
-README's Configuration). The USB wires can come off now.
+without Home Assistant (`scripts/adb-wifi.sh <echo-ip>`: 30 minutes; adb over Wi-Fi is closed otherwise, see
+[adb over Wi-Fi](../../docs/GUIDE.md#adb-over-wi-fi)). The USB wires can come off now.
 
 ### 6. Optional: Music Assistant
 
@@ -235,19 +254,22 @@ Music Assistant finds the Echo by itself (Sendspin player, TCP 28928); to play o
 The token is shown at the end of `scripts/setup.sh`, in the diagnostic entity "Sendspin pairing token" in Home
 Assistant (disabled by default), and in `/data/local/hassmic/boot.log`. Pairing authenticates the connection: unpaired,
 it is encrypted under a key everyone knows, so any machine on the LAN could play or sit in between. To allow unpaired
-servers anyway, switch on "Music Assistant without pairing" in Home Assistant.
+servers anyway, switch on "Music Assistant without pairing" on the Echo's settings page (`http://<echo-ip>:28931/`).
+If Music Assistant does not find the Echo (another subnet or VLAN), add `<echo-ip>:28928` under its Sendspin provider's
+"Manual IP addresses for discovery"; the port is needed.
 
 ### 7. Optional: Bluetooth speaker
 
-Turn on the "Bluetooth pairing" switch in Home Assistant, then pick the Echo in the phone's Bluetooth settings within two
+"Bluetooth audio from phones" is on by default on the Echo's settings page; with it on, Home Assistant has a
+"Bluetooth pairing" switch. Turn it on, then pick the Echo in the phone's Bluetooth settings within two
 minutes. Paired devices reconnect by themselves whenever you choose the Echo; unknown ones are refused while the switch
 is off.
 
 Like stock Alexa the Echo announces connections: a chime and "Connected to <name>" / "Disconnected from <name>". The
 words are spoken by Home Assistant, which only does that after you tick "Allow the device to perform Home Assistant
 actions" in the Echo's ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure). The
-"Bluetooth announcements" switch turns chime and words off. The words are English until you pick another language in
-"Bluetooth announcement language" (Deutsch, Français, Español, Italiano, Português, Nederlands, Svenska, Dansk, Norsk,
+"Bluetooth announcements" setting on the settings page turns chime and words off. The words are English until you pick
+another language there (Deutsch, Français, Español, Italiano, Português, Nederlands, Svenska, Dansk, Norsk,
 Suomi, Polski): set it to the language of the Echo's assistant in Home Assistant, whose voice speaks them. Home
 Assistant does not tell the Echo which language its assistant uses, so this cannot follow it by itself.
 

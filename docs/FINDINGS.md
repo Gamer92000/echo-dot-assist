@@ -102,6 +102,14 @@ within 1 dB of micRaw over 4 s).
 - Nothing reboots or restarts when PuffinApp is missing. No autosleep without it.
 - OTA: `otad`, `ace_otad` autostart; `update_engine` on demand.
 - SELinux: `ro.boot.selinux=disable` in build.prop.
+- Clock: nothing sets it behind the egress lock (stock synced with Amazon): the Dot 2 ran 83082 s (23 h) behind on
+  2026-10-06. `date -u @<epoch>` (toybox) sets it as root, `hwclock -w -u` the RTC (`/dev/rtc0`). hassmic now takes
+  Home Assistant's time (`clock.c`).
+- `/system/bin/sh` is mksh R52 with 32-bit numbers: `$((2147483647 + 1))` is -2147483648, and `[ x -ge 4102444800 ]`
+  compares a wrapped number. No awk; toybox grep takes no `\|` (use `-e` per pattern).
+- Amazon's attestation module (`lib/hw/amzn_dha.<soc>.so`) runs `/system/bin/idme` and waits for it with a plain
+  `wait()`; in a process that ignores SIGCHLD that blocks until every child has exited (POSIX), so a long-lived child
+  of hassmic hung it (`clock.c` double-forks its log reader).
 
 ## Running bionic binaries on the PC
 

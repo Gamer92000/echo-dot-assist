@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """Plays Home Assistant's side of the ESPHome native API against build/hassmic-host, using the reference
 `aioesphomeapi` client (the library Home Assistant itself uses), so framing and protobuf layout are checked by the real parser."""
-import asyncio, base64, io, math, os, random, signal, struct, subprocess, sys, tempfile, threading, time, wave
+import asyncio, base64, io, math, os, random, re, signal, struct, subprocess, sys, tempfile, threading, time, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from aioesphomeapi import SelectInfo, SelectState, NumberInfo, SwitchInfo, NumberState, SwitchState, TextSensorInfo, TextSensorState, SensorInfo, SensorState
-from aioesphomeapi import APIClient, MediaPlayerInfo, MediaPlayerEntityState, VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm
+from aioesphomeapi import APIClient, MediaPlayerInfo, MediaPlayerEntityState, MediaPlayerCommand, VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm
 from aioesphomeapi import ZERO_NOISE_PSK, EventInfo, BinarySensorInfo, BinarySensorState
 from aioesphomeapi.model import Event
 from aioesphomeapi.core import InvalidEncryptionKeyAPIError, RequiresEncryptionAPIError
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PORT, HTTP_PORT = 16953, 16954
+sys.path.insert(0, os.path.join(ROOT, "tests"))
+from webclient import Browser
+PORT, HTTP_PORT, WEB = 16953, 16954, 16955
+HTTPS_PORT, SELF_PORT = 16966, 16967          # HTTPS by a CA the Echo is given (HASSMIC_CA_FILE), and self-signed
 
 
 def tone(rate, seconds, freq=440):
@@ -24,18 +27,70 @@ def wav_bytes(rate, seconds):
     return b.getvalue()
 
 
+late_asked, late_done = threading.Event(), threading.Event()
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path.startswith("/moved"):            # Home Assistant behind a proxy that redirects
+            self.send_response(302); self.send_header("Location", "/a.wav"); self.send_header("Content-Length", "0"); self.end_headers(); return
         body = wav_bytes(48000, 3.0 if "s=3" in self.path else 0.5)
         if self.path.endswith(".mp3"):                  # what Home Assistant sends for a TTS announcement before any pipeline ran
-            body = subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-ar", "24000",
-                                   "-ac", "1", "-f", "mp3", "-"], capture_output=True, check=True).stdout
+            # 1 s of 440 Hz, 24 kHz mono: ffmpeg -bitexact -f lavfi -i sine=frequency=440:duration=1 -ar 24000 -ac 1
+            # -map_metadata -1 -f mp3 (kept as a file: ffmpeg was most of CI's package install)
+            with open(os.path.join(ROOT, "testdata", "sine440_24k.mp3"), "rb") as f: body = f.read()
         self.send_response(200); self.send_header("Content-Type", "audio/wav"); self.end_headers()   # no length: like a transcoding proxy
         if "late" in self.path:                         # streamed TTS while the LLM still works: the audio comes later
-            self.wfile.flush(); time.sleep(6)
+            late_asked.set(); self.wfile.flush(); time.sleep(3)
         try: self.wfile.write(body)
         except OSError: pass                            # the Echo hung up
+        finally:
+            if "late" in self.path: late_done.set()
     def log_message(self, *a): pass
+
+
+def tls_files(d):
+    """A CA and a certificate it signed for 127.0.0.1, and a self-signed one for the same address (Home Assistant with
+    its own certificate): PEM files in d."""
+    import datetime, ipaddress
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    now = datetime.datetime.now(datetime.timezone.utc)
+    def cert(name, key, issuer, issuer_key, ca):
+        b = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)]))
+             .issuer_name(issuer).public_key(key.public_key()).serial_number(x509.random_serial_number())
+             .not_valid_before(now - datetime.timedelta(days=1)).not_valid_after(now + datetime.timedelta(days=30))
+             .add_extension(x509.BasicConstraints(ca=ca, path_length=None), critical=True))
+        if not ca: b = b.add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+        return b.sign(issuer_key, hashes.SHA256())
+    def write(name, *objs):
+        with open(os.path.join(d, name), "wb") as f:
+            for o in objs:
+                f.write(o.public_bytes(serialization.Encoding.PEM) if isinstance(o, x509.Certificate) else
+                        o.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+        return os.path.join(d, name)
+    ca_key, key, self_key = (ec.generate_private_key(ec.SECP256R1()) for _ in range(3))
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "hassmic test CA")])
+    ca = cert("hassmic test CA", ca_key, ca_name, ca_key, True)
+    srv = cert("127.0.0.1", key, ca_name, ca_key, False)
+    own = cert("127.0.0.1", self_key, x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")]), self_key, False)
+    return write("ca.pem", ca), write("srv.pem", srv, key), write("self.pem", own, self_key)
+
+
+def https_server(port, pem):
+    import ssl
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(pem)
+    class TLSServer(ThreadingHTTPServer):
+        def shutdown_request(self, request):        # close_notify at the end, as aiohttp sends it: the body ends there
+            try: request.unwrap()
+            except (OSError, ValueError): pass
+            super().shutdown_request(request)
+    httpd = TLSServer(("127.0.0.1", port), Handler)
+    httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd
 
 
 def check(cond, what):
@@ -44,8 +99,42 @@ def check(cond, what):
 check.failed = False
 
 
+# Waiting: for what should happen, until() polls (and gives up after its timeout: the check after it then fails);
+# sync() is a request/answer round trip on that connection, so everything sent before it has been handled.  Fixed
+# sleeps are left only where a check is that something does NOT happen.
+async def until(cond, timeout=5.0):
+    end = asyncio.get_running_loop().time() + timeout
+    while not cond() and asyncio.get_running_loop().time() < end:
+        await asyncio.sleep(0.02)
+    return cond()
+
+async def sync(c): await asyncio.wait_for(c.device_info(), 5)
+
+def peak(b): return max(abs(v) for v in struct.unpack(f"<{len(b) // 2}h", b[:len(b) // 2 * 2])) if b else 0
+
+async def speech(mic):
+    # testdata/alexa_espeak.raw loops at real time, 8.4 s with 3.8 s of silence: wait for 1 s of audio with speech in
+    # it, wherever in the loop the pipeline started
+    await until(lambda: len(mic) > 16000 and peak(mic) > 8000, 12)
+
+async def settled(path, quiet=0.4, timeout=5.0):
+    # playback has stopped: the file did not grow for `quiet` s (audio_file.c writes at real-time speed, stdio-buffered:
+    # it grows in steps of a few KB, under 0.1 s of audio each)
+    end = asyncio.get_running_loop().time() + timeout; n, t = -1, 0.0
+    while asyncio.get_running_loop().time() < end:
+        m = os.path.getsize(path)
+        if m != n: n, t = m, asyncio.get_running_loop().time()
+        elif asyncio.get_running_loop().time() - t >= quiet: return
+        await asyncio.sleep(0.02)
+
+def port_open(port):
+    import socket
+    try: socket.create_connection(("127.0.0.1", port), 0.2).close(); return True
+    except OSError: return False
+
+
 async def main():
-    play = tempfile.mktemp(suffix=".raw")
+    play = tempfile.mktemp(suffix=".raw"); open(play, "wb").close()          # its size is polled before the first reply
     settings = tempfile.mktemp(suffix=".settings")
     state = tempfile.mkdtemp(); mdns = os.path.join(state, "hassmic.service")
     with open(settings, "w") as f: f.write("3 9 4.00 0 1 1 0 en\n")         # from before the mic level: gain values for HA
@@ -55,24 +144,43 @@ async def main():
                HASSMIC_ADB_OPEN=os.path.join(state, "adb-open.root"),          # on the Echo: in a directory only root writes
                HASSMIC_LUX=os.path.join(state, "calibrated_lux"),              # the light sensor's sysfs file
                HASSMIC_FAKE_SOUND="dogBark",                                    # every ~10 s window "hears" a dog (sound_none.c)
-               HASSMIC_FAKE_WIFI=os.path.join(state, "rx_stat"))                # what the Wi-Fi driver answers RX_STAT (wifimotion.c)
+               HASSMIC_FAKE_WHISPER="1",                                        # a model, and every request whispered (whisper_none.c)
+               HASSMIC_FAKE_WIFI=os.path.join(state, "rx_stat"),                # what the Wi-Fi driver answers RX_STAT (wifimotion.c)
+               HASSMIC_CLOCK_SYNCED="0",                                        # an Echo whose clock nobody set (clock.c)
+               HASSMIC_FAKE_ADDRS=os.path.join(state, "addrs"),                 # the Echo's addresses (netaddr.c)
+               HASSMIC_ANNOUNCE_TIMES="3 6")                                    # mDNS again after 3 s without a client (100 s)
+    with open(env["HASSMIC_FAKE_ADDRS"], "w") as f: f.write("127.0.0.1\n")
+    ca_pem, srv_pem, self_pem = tls_files(state)
+    env["HASSMIC_CA_FILE"] = ca_pem                                         # the CAs the Echo trusts (https.c)
+    def conf():                                      # state/config: name=value lines (settings.c)
+        try: return dict(l.strip().split("=", 1) for l in open(os.path.join(state, "config")) if "=" in l and not l.startswith("#"))
+        except OSError: return {}
     rx_stat = lambda rcpi: open(env["HASSMIC_FAKE_WIFI"], "w").write(f"RX Stat:\nRX SNR (dB)          = 32\nRCPI RX0             = {rcpi}\n")
     rx_stat(112)
     with open(env["HASSMIC_LUX"], "w") as f: f.write("67\n")
-    for m in ("echo-de", "computer-en-US"):             # installed wake word models (the PC build loads none of them)
+    for m in ("echo-de", "computer-en-US", "computer-de-DE", "alexa-en-US"):   # installed wake word models (the PC build loads none of them)
         os.makedirs(os.path.join(state, "models", m)); open(os.path.join(state, "models", m, "pryon.manifest"), "w").close()
     with open(mdns, "w") as f:                          # what main.sh does at boot
         subprocess.run([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-S"], env=env, stdout=f, check=True)
-    proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-L"], env=env)
+    keys = os.path.join(state, "keypad"); os.mkfifo(keys)    # the keypad (-b): input events written by the test
+    keypad = os.open(keys, os.O_RDWR)                        # opened first: hassmic's open() would wait for a writer
+    def keyev(code, value): os.write(keypad, struct.pack("llHHi", 0, 0, 1, code, value))     # struct input_event, EV_KEY
+    KEY_HELP, KEY_VOLUMEUP, KEY_VOLUMEDOWN = 138, 115, 114
+    proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-L", "-W", str(WEB), "-b", keys], env=env)
     httpd = ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    await asyncio.sleep(0.5)
+    httpsd, selfd = https_server(HTTPS_PORT, srv_pem), https_server(SELF_PORT, self_pem)
+    await until(lambda: port_open(PORT) and port_open(WEB))
     try:
+        page = Browser(WEB)                                 # the settings page: what is no longer in Home Assistant
+        check(page.login_with_button(proc), "settings page: logged in with the action button")
+        pv = lambda name: next((x["value"] for x in page.state()["settings"] if x["name"] == name), None)
         cli = APIClient("127.0.0.1", PORT, None)
         await cli.connect(login=True)
         info = await cli.device_info()
         check(info.name == "echo-dot" and info.friendly_name == "Echo Dot", f"device info: {info.name!r} / {info.friendly_name!r}")
         check(info.voice_assistant_feature_flags == 61, f"voice assistant feature flags = {info.voice_assistant_feature_flags}")
+        check(info.webserver_port == WEB, f"device info: settings page port {info.webserver_port} (Home Assistant's \"Visit\" link)")
         entities, _ = await cli.list_entities_services()
         mp = [e for e in entities if isinstance(e, MediaPlayerInfo)]
         check(len(mp) == 1 and len(mp[0].supported_formats) == 2 and mp[0].supported_formats[1].sample_rate == 48000,
@@ -80,101 +188,130 @@ async def main():
         states = []
         cli.subscribe_states(states.append)
         by = {e.object_id: e for e in entities}
-        check("noise_suppression_level" not in by
-              and "auto_gain" not in by and "mic_volume_multiplier" not in by
-              and isinstance(by.get("mic_level"), NumberInfo) and (by["mic_level"].min_value, by["mic_level"].max_value) == (-35, -15)
-              and isinstance(by.get("mute"), SwitchInfo) and isinstance(by.get("wake_sound"), SwitchInfo)
-              and isinstance(by.get("noise_reduction"), SelectInfo) and list(by["noise_reduction"].options) == ["Off", "Low", "Medium", "High"],
-              "settings entities listed")
+        check("noise_suppression_level" not in by and "auto_gain" not in by and "mic_volume_multiplier" not in by
+              and "mic_level" not in by and "noise_reduction" not in by
+              and isinstance(by.get("mute"), SwitchInfo) and isinstance(by.get("wake_sound"), SwitchInfo), "settings entities listed: the lean set")
+        ps = {x["name"]: x for x in page.state()["settings"]}
+        check((ps["mic_level"]["min"], ps["mic_level"]["max"]) == (-35, -15) and ps["noise_reduction"]["choices"] == ["off", "low", "medium", "high"],
+              "mic level and noise reduction on the settings page")
         tok = by.get("sendspin_pairing_token")
         check(isinstance(tok, TextSensorInfo) and tok.disabled_by_default and int(tok.entity_category) == 2, "Sendspin pairing token entity: diagnostic, disabled by default")
-        temp, cpu = by.get("soc_temperature"), by.get("cpu_usage")
-        check(isinstance(temp, SensorInfo) and temp.disabled_by_default and int(temp.entity_category) == 2 and temp.device_class == "temperature"
-              and temp.unit_of_measurement == "\u00b0C" and isinstance(cpu, SensorInfo) and cpu.disabled_by_default and cpu.unit_of_measurement == "%"
-              and int(cpu.state_class) == 1, "diagnostic sensors: SoC temperature and CPU usage, disabled by default")
-        await asyncio.sleep(0.3)
-        level0 = [x.state for x in states if isinstance(x, NumberState) and x.key == by["mic_level"].key]
-        check(level0 == [-26], f"mic level at its default after a settings file from before it: {level0}")
+        check("soc_temperature" not in by and "cpu_usage" not in by and page.state()["diag"]["cpu"] is not None,
+              "diagnostics on the settings page, not in Home Assistant")
+        check(pv("mic_level") == -26, f"mic level at its default after a settings file from before it: {pv('mic_level')}")
         eqs = [by.get(k) for k in ("equalizer_bass", "equalizer_mid", "equalizer_treble")]
-        await asyncio.sleep(0.3)
+        await until(lambda: any(isinstance(x, NumberState) and x.key == eqs[0].key for x in states))
         check(all(isinstance(e, NumberInfo) and e.min_value == -6 and e.max_value == 6 and e.step == 1 and e.unit_of_measurement == "dB" for e in eqs)
               and any(isinstance(x, NumberState) and x.key == eqs[0].key and x.state == 0 for x in states), "equalizer entities listed, flat on PC")
         cli.number_command(eqs[0].key, 4); cli.number_command(eqs[2].key, -9)
-        await asyncio.sleep(0.5)
+        await until(lambda: any(isinstance(x, NumberState) and x.key == eqs[0].key and x.state == 4 for x in states)
+                    and any(isinstance(x, NumberState) and x.key == eqs[2].key and x.state == -6 for x in states))
         check(any(isinstance(x, NumberState) and x.key == eqs[0].key and x.state == 4 for x in states)
               and any(isinstance(x, NumberState) and x.key == eqs[2].key and x.state == -6 for x in states), "equalizer commands reflected, clamped to -6..+6")
-        check(any(isinstance(x, SelectState) and x.key == by["noise_reduction"].key and x.state == "Off" for x in states), "noise reduction off by default")
+        check(pv("noise_reduction") == 0, "noise reduction off by default")
         lux, lauto, lbright = by.get("illuminance"), by.get("led_auto_brightness"), by.get("led_brightness")
-        check(isinstance(lux, SensorInfo) and lux.device_class == "illuminance" and lux.unit_of_measurement == "lx" and int(lux.state_class) == 1
+        check(lux is None and pv("light_sensor") == 0
               and isinstance(lauto, SwitchInfo) and isinstance(lbright, NumberInfo) and (lbright.min_value, lbright.max_value) == (0, 100),
-              "light sensor and LED brightness entities listed")
+              "LED brightness entities listed, the light sensor off by default (no illuminance)")
         last = lambda k, t: ([x.state for x in states if isinstance(x, t) and x.key == k] or [None])[-1]
-        check(last(lux.key, SensorState) == 67 and last(lauto.key, SwitchState) is True and last(lbright.key, NumberState) == 80,
-              f"illuminance from the sensor file, auto brightness on as in stock: {last(lux.key, SensorState)} lx, "
-              f"auto {last(lauto.key, SwitchState)}, level {last(lbright.key, NumberState)}")
-        cli.number_command(by["mic_level"].key, -20)
-        await asyncio.sleep(0.5)
-        check(any(isinstance(x, NumberState) and x.key == by["mic_level"].key and x.state == -20 for x in states),
-              "setting commands reflected in state")
+        await until(lambda: last(lbright.key, NumberState) is not None)
+        check(last(lauto.key, SwitchState) is True and last(lbright.key, NumberState) == 80,
+              f"auto brightness on as in stock: auto {last(lauto.key, SwitchState)}, level {last(lbright.key, NumberState)}")
+        page.set(mic_level=-20)
+        cli.switch_command(by["wake_sound"].key, False)
+        await until(lambda: last(by["wake_sound"].key, SwitchState) is False and pv("mic_level") == -20)
+        check(pv("mic_level") == -20 and any(isinstance(x, SwitchState) and x.key == by["wake_sound"].key and x.state is False for x in states),
+              "setting commands reflected in state (page and Home Assistant)")
+        cli.switch_command(by["wake_sound"].key, True); await until(lambda: last(by["wake_sound"].key, SwitchState) is True)
         want = subprocess.run([f"{ROOT}/build/hassmic-host", "-T"], env=env, capture_output=True, text=True).stdout.strip()
         got = [x.state for x in states if isinstance(x, TextSensorState) and x.key == tok.key]
         check(got == [want] and want.startswith("SP:0") and len(want) > 100, f"token state equals `hassmic -T`: {want[:16]}…")
-        ajoin, apeers = by.get("join_arbitration_network"), by.get("arbitration_peers")
-        check("arbitration_id" not in by and isinstance(ajoin, SwitchInfo) and int(ajoin.entity_category) == 1
-              and any(isinstance(x, SwitchState) and x.key == ajoin.key and x.state for x in states) and isinstance(apeers, SensorInfo),
-              "\"Join arbitration network\" switch on by default, peers sensor, no ID entity")
+        wu = by.get("web_ui_address")
+        check("ip_address" not in by and isinstance(wu, TextSensorInfo) and not wu.disabled_by_default and int(wu.entity_category) == 2
+              and [x.state for x in states if isinstance(x, TextSensorState) and x.key == wu.key] == [f"http://127.0.0.1:{WEB}"],
+              "Web UI address entity: diagnostic, enabled, the settings page at the address Home Assistant connected to")
+        apeers = by.get("arbitration_peers")
+        check("arbitration_id" not in by and "join_arbitration_network" not in by and pv("arbitration") == 1 and isinstance(apeers, SensorInfo),
+              "arbitration on by default (the page), peers sensor, no ID entity, no join switch")
         svcs = (await cli.list_entities_services())[1]
-        check([(v.name, [(x.name, int(x.type)) for x in v.args]) for v in svcs] == [("arbitration_key", [("network", 3), ("key", 3)])],
-              "action \"arbitration_key\" (network, key: strings) for other Echos to hand over their network")
-        check(open(settings).read().split()[:2] == ["0", "-20"] and open(settings).read().split()[8:9] == ["2"], f"settings persisted: {open(settings).read().strip()!r}")
+        check(sorted((v.name, [(x.name, int(x.type)) for x in v.args]) for v in svcs) == [("arbitration_key", [("network", 3), ("key", 3)]), ("drop_in", [("target", 3)])],
+              "actions \"arbitration_key\" (network, key: strings) for other Echos to hand over their network, \"drop_in\" (target: string)")
+        check(conf().get("noise_reduction") == "off" and conf().get("mic_level") == "-20", f"settings persisted: {conf()}")
         cfg = await cli.get_voice_assistant_configuration(5)
         avail = sorted((w.id, w.wake_word, list(w.trained_languages)) for w in cfg.available_wake_words)
-        check(avail == [("alexa", "Alexa", ["en"]), ("computer-en-US", "Computer", ["en"]), ("echo-de", "Echo", ["de"])]
-              and list(cfg.active_wake_words) == ["alexa"] and cfg.max_active_wake_words == 1, f"wake words: all installed ones offered, Alexa active: {avail}")
+        check(avail == [("alexa", "Alexa", ["en"]), ("alexa-en-US", "Alexa (en-US)", ["en"]), ("computer-de-DE", "Computer (de-DE)", ["de"]),
+                        ("computer-en-US", "Computer (en-US)", ["en"]), ("echo-de", "Echo", ["de"])]
+              and list(cfg.active_wake_words) == ["alexa"] and cfg.max_active_wake_words == 2,
+              f"wake words: all installed ones offered, a name two share with its region (HA's select keys on names), Alexa active, two may listen: {avail}")
 
-        started = asyncio.Event(); mic = bytearray(); stopped = []
+        started = asyncio.Event(); mic = bytearray(); chunks = []; stopped = []
         async def handle_start(conv_id, flags, settings, phrase):
             handle_start.args = (flags, phrase); handle_start.audio = (settings.noise_suppression_level, settings.auto_gain, round(settings.volume_multiplier, 2)); started.set(); return 0           # 0 = audio over the API connection
         async def handle_stop(abort): stopped.append(abort)
-        async def handle_audio(data, *_): mic.extend(data)
+        async def handle_audio(data, *_): mic.extend(data); chunks.append(len(data))
         finished = []
         async def handle_finished(msg): finished.append(msg.success)
         cli.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio,
                                       handle_announcement_finished=handle_finished)
-        await asyncio.sleep(0.3)
+        await sync(cli)
 
         proc.send_signal(signal.SIGUSR1)                                           # "wake word"
         await asyncio.wait_for(started.wait(), 5)
         check(handle_start.args == (1, "Alexa"), f"pipeline request: flags, phrase = {handle_start.args}")
         check(handle_start.audio == (0, 0, 1.0), f"neutral audio settings in the request (the gain is applied on the Echo): {handle_start.audio}")
-        await asyncio.sleep(1.0)
-        peak = max(abs(v) for v in struct.unpack(f"<{len(mic) // 2}h", mic[:len(mic) // 2 * 2])) if mic else 0
-        check(len(mic) > 16000, f"mic audio streamed: {len(mic)} bytes in 1 s")
-        check(8000 < peak <= 29100, f"mic audio brought up to speech level, peaks limited below full scale: peak {peak}")
+        await speech(mic); pk = peak(mic)
+        check(len(mic) > 16000, f"mic audio streamed: {len(mic)} bytes")
+        # the PC's wake word ended 128 ms before it was heard (as Pryon's do): that much from the ring, then the live 50 ms blocks
+        ahead = sum(chunks[:chunks.index(1600)]) if 1600 in chunks else None
+        check(ahead == 4096, f"what was said between the wake word's end and its detection sent ahead of the live stream: {ahead} bytes")
+        check(8000 < pk <= 29100, f"mic audio brought up to speech level, peaks limited below full scale: peak {pk}")
 
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_VAD_END, None)
-        await asyncio.sleep(0.3); n = len(mic); await asyncio.sleep(0.4)
+        await sync(cli); n = len(mic); await asyncio.sleep(0.4)
         check(len(mic) == n, "mic stream stops after STT_VAD_END")
+        wh = by.get("last_request_whispered")
+        whs = [x for x in states if isinstance(x, BinarySensorState) and wh and x.key == wh.key]
+        check(isinstance(wh, BinarySensorInfo) and whs and whs[0].missing_state and whs[-1].state is True and not whs[-1].missing_state,
+              f"\"Last request whispered\": unknown until a request, on at its VAD end, before the transcript: {[(x.state, x.missing_state) for x in whs]}")
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "turn on the light"})
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_INTENT_END, {"conversation_id": "x", "continue_conversation": "0"})
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_START, {"text": "Done"})
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_END, {"url": f"http://127.0.0.1:{HTTP_PORT}/reply.wav"})
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
-        await asyncio.sleep(2.0)
+        await until(lambda: os.path.getsize(play) == 48000 and finished == [True])
         check(os.path.getsize(play) == 48000 and finished == [True], f"reply fetched from the TTS_END url and reported: {os.path.getsize(play)} bytes, finished={finished}")
 
         # another wake word, picked in Home Assistant: kept, and named in the pipeline request (HA's duplicate check keys on it)
-        await cli.set_voice_assistant_configuration(["echo-de"]); await asyncio.sleep(0.5)
+        await cli.set_voice_assistant_configuration(["echo-de"]); await sync(cli)
         cfg = await cli.get_voice_assistant_configuration(5)
         saved = open(os.path.join(state, "wake_word")).read().strip()
         check(list(cfg.active_wake_words) == ["echo-de"] and saved == "echo-de", f"wake word switched from Home Assistant and kept: {list(cfg.active_wake_words)}, {saved}")
         started.clear(); proc.send_signal(signal.SIGUSR1)
         await asyncio.wait_for(started.wait(), 5)
         check(handle_start.args == (1, "Echo"), f"pipeline request names the new wake word: {handle_start.args}")
-        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await asyncio.sleep(0.5)
-        await cli.set_voice_assistant_configuration(["alexa"]); await asyncio.sleep(0.3)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+
+        # a second wake word ("Wake word 2"): HA sends the ids in the order its selects were set; the first stays first
+        await cli.set_voice_assistant_configuration(["computer-en-US", "echo-de"]); await sync(cli)
+        cfg = await cli.get_voice_assistant_configuration(5)
+        saved = open(os.path.join(state, "wake_word")).read().split()
+        check(list(cfg.active_wake_words) == ["echo-de", "computer-en-US"] and saved == ["echo-de", "computer-en-US"],
+              f"two wake words from Home Assistant, the first kept first, both saved: {list(cfg.active_wake_words)}, {saved}")
+        started.clear(); proc.send_signal(signal.SIGUSR1)                          # the PC's stand-in is the first one's
+        await asyncio.wait_for(started.wait(), 5)
+        check(handle_start.args == (1, "Echo"), f"the first one's run names it: {handle_start.args}")
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+        await cli.set_voice_assistant_configuration([]); await sync(cli)           # "No wake word" in both selects
+        await cli.set_voice_assistant_configuration(["nope", "computer-en-US", "computer-en-US"]); await sync(cli)
+        cfg = await cli.get_voice_assistant_configuration(5)
+        check(list(cfg.active_wake_words) == ["computer-en-US"] and open(os.path.join(state, "wake_word")).read().split() == ["computer-en-US"],
+              f"none picked: kept; unknown ids and doubles dropped, one left: {list(cfg.active_wake_words)}")
+        await cli.set_voice_assistant_configuration(["alexa", "echo-de", "computer-de-DE"]); await sync(cli)
+        cfg = await cli.get_voice_assistant_configuration(5)
+        check(list(cfg.active_wake_words) == ["alexa", "echo-de"], f"at most two: {list(cfg.active_wake_words)}")
+        await cli.set_voice_assistant_configuration(["alexa"]); await sync(cli)
 
         # A second client beside "Home Assistant": gets answers, sees and causes state changes, cannot take the voice assistant.
         cli2 = APIClient("127.0.0.1", PORT, None)
@@ -187,11 +324,12 @@ async def main():
         async def start2(*a): started2.set(); return 0
         async def stop2(*a): pass
         cli2.subscribe_voice_assistant(handle_start=start2, handle_stop=stop2)
-        await asyncio.sleep(0.3); n1 = len(states)
-        cli2.number_command(by["mic_level"].key, -30)
-        await asyncio.sleep(0.5)
-        check(any(isinstance(x, NumberState) and x.state == -30 for x in states[n1:]) and any(isinstance(x, NumberState) and x.state == -30 for x in states2),
-              "a change made by one client reaches both")
+        await sync(cli2); n1 = len(states)
+        cli2.switch_command(by["wake_sound"].key, False)
+        ws = lambda sts: any(isinstance(x, SwitchState) and x.key == by["wake_sound"].key and x.state is False for x in sts)
+        await until(lambda: ws(states[n1:]) and ws(states2))
+        check(ws(states[n1:]) and ws(states2), "a change made by one client reaches both")
+        cli2.switch_command(by["wake_sound"].key, True); await until(lambda: last(by["wake_sound"].key, SwitchState) is True)
         started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
         check(not started2.is_set(), "the voice assistant stays with the first subscriber")
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "x", "message": "end of test pipeline"})
@@ -199,7 +337,7 @@ async def main():
         started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
         check(True, "first client unaffected when the second one leaves")
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "x", "message": "end of test pipeline"})
-        await asyncio.sleep(0.5)
+        await sync(cli)
 
         # A reply that asks a follow-up question (continue_conversation) must still be interruptible by the wake word:
         # the reply is cut and the new pipeline starts at once, not after the full second of audio.
@@ -209,13 +347,13 @@ async def main():
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_INTENT_END, {"conversation_id": "x", "continue_conversation": "1"})
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_END, {"url": f"http://127.0.0.1:{HTTP_PORT}/long.wav?s=3"})
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
-        await asyncio.sleep(0.6); started.clear()
+        await until(lambda: os.path.getsize(play) > before); started.clear()
         t0 = asyncio.get_running_loop().time(); proc.send_signal(signal.SIGUSR1)       # "Alexa" while it talks
         await asyncio.wait_for(started.wait(), 5); dt = asyncio.get_running_loop().time() - t0
         played = (os.path.getsize(play) - before) / 96000
         check(dt < 1.0 and played < 2.0, f"wake word interrupts a continue-conversation reply: new pipeline after {dt:.2f} s, {played:.2f} s of 3 s played")
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "x", "message": "end of test pipeline"})
-        await asyncio.sleep(0.5)
+        await sync(cli)
 
         # "Stop" (SIGHUP here), the second keyword of the wake word model: ends what makes noise, never starts a pipeline.
         started.clear(); proc.send_signal(signal.SIGHUP); await asyncio.sleep(0.6)
@@ -227,24 +365,25 @@ async def main():
             cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_INTENT_END, {"conversation_id": "x", "continue_conversation": "1"})
             cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_END, {"url": f"http://127.0.0.1:{HTTP_PORT}/long.wav?s=3"})
             cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
-            await asyncio.sleep(0.6); started.clear()
+            n = os.path.getsize(play); await until(lambda: os.path.getsize(play) > n); started.clear()
 
         before = os.path.getsize(play); started.clear(); await reply_3s()
-        proc.send_signal(signal.SIGHUP); await asyncio.sleep(1.5)
+        proc.send_signal(signal.SIGHUP); await settled(play)
         played = (os.path.getsize(play) - before) / 96000
         check(not started.is_set() and played < 2.0, f'"stop" cuts a reply and nothing listens afterwards: {played:.2f} s of 3 s played')
 
         before = os.path.getsize(play); started.clear(); await reply_3s()
         proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)    # "<wake word>, stop": wake word cuts and listens,
-        stopped.clear(); started.clear(); proc.send_signal(signal.SIGHUP); await asyncio.sleep(0.8)  # "stop" drops that pipeline
+        stopped.clear(); started.clear(); proc.send_signal(signal.SIGHUP)                           # "stop" drops that pipeline
+        await until(lambda: stopped); await settled(play)
         played = (os.path.getsize(play) - before) / 96000
         check(stopped and not started.is_set() and played < 2.0, f'"<wake word>, stop" during a reply: pipeline dropped, {played:.2f} s of 3 s played (stops {stopped}, restarted {started.is_set()})')
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "stt-no-text-recognized", "message": "dropped"})
-        await asyncio.sleep(0.4)
+        await sync(cli)
         started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
         check(True, "wake word works again after a dropped pipeline")
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "x", "message": "end of test pipeline"})
-        await asyncio.sleep(0.5)
+        await sync(cli)
 
         # streaming TTS: URL arrives with RUN_START, playback may begin at INTENT_PROGRESS, long before TTS_END
         before = os.path.getsize(play); finished.clear(); started.clear()
@@ -252,11 +391,11 @@ async def main():
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, {"url": f"http://127.0.0.1:{HTTP_PORT}/stream.wav"})
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "tell me a story"})
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_INTENT_PROGRESS, {"tts_start_streaming": "1"})
-        await asyncio.sleep(0.4)
+        await until(lambda: os.path.getsize(play) > before, 3)
         early = os.path.getsize(play) - before
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_END, {"url": f"http://127.0.0.1:{HTTP_PORT}/stream.wav"})
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
-        await asyncio.sleep(1.5)
+        await until(lambda: os.path.getsize(play) - before >= 48000 and finished)
         check(early > 0 and os.path.getsize(play) - before == 48000 and finished == [True],
               f"streaming reply starts at INTENT_PROGRESS and plays once: early={early}, total={os.path.getsize(play) - before}, finished={finished}")
 
@@ -275,47 +414,152 @@ async def main():
         res = await cli.send_voice_assistant_announcement_await_response("http://127.0.0.1:1/none.wav", 15, "x")
         check(not res.success, "unreachable announcement URL reports failure")
 
+        # Home Assistant serving HTTPS itself (issue #30): its URLs are https://, played through libcurl (https.c)
+        check(pv("https_verify") == 1, f"HTTPS certificates are checked by default: {pv('https_verify')}")
+        before = os.path.getsize(play)
+        res = await cli.send_voice_assistant_announcement_await_response(f"https://127.0.0.1:{HTTPS_PORT}/a.wav", 15, "tls")
+        check(res.success and os.path.getsize(play) - before == 48000, f"HTTPS announcement with a valid certificate played: {os.path.getsize(play) - before} bytes")
+        before = os.path.getsize(play)
+        res = await cli.send_voice_assistant_announcement_await_response(f"https://127.0.0.1:{HTTPS_PORT}/tts.mp3", 15, "tls mp3")
+        got = os.path.getsize(play) - before
+        check(res.success and 44000 <= got <= 52000, f"HTTPS MP3 announcement played: {got} bytes")
+        before = os.path.getsize(play)
+        res = await cli.send_voice_assistant_announcement_await_response(f"https://127.0.0.1:{HTTPS_PORT}/moved", 15, "redirect")
+        check(res.success and os.path.getsize(play) - before == 48000, "HTTPS redirect followed")
+        before = os.path.getsize(play)
+        res = await cli.send_voice_assistant_announcement_await_response(f"https://127.0.0.1:{SELF_PORT}/a.wav", 15, "self-signed")
+        check(not res.success and os.path.getsize(play) == before, "self-signed certificate refused while checks are on")
+        page.set(https_verify="off")
+        check(conf().get("https_verify") == "off", f"certificate checks off, persisted: {conf().get('https_verify')}")
+        res = await cli.send_voice_assistant_announcement_await_response(f"https://127.0.0.1:{SELF_PORT}/a.wav", 15, "self-signed")
+        check(res.success and os.path.getsize(play) - before == 48000, "self-signed certificate taken with checks off")
+        page.set(https_verify="on")
+        before = os.path.getsize(play)
+        res = await cli.send_voice_assistant_announcement_await_response("https://127.0.0.1:1/none.wav", 15, "x")
+        check(not res.success and os.path.getsize(play) == before, "unreachable HTTPS URL reports failure")
+
         dnd = by.get("do_not_disturb")
         check(isinstance(dnd, SwitchInfo), "do not disturb switch listed")
-        cli.switch_command(dnd.key, True); await asyncio.sleep(0.3)
+        cli.switch_command(dnd.key, True); await until(lambda: last(dnd.key, SwitchState) is True and conf().get("do_not_disturb") == "on")
         check(any(isinstance(s, SwitchState) and s.key == dnd.key and s.state for s in states)
-              and open(settings).read().split()[6:7] == ["1"], f"do not disturb on and persisted: {open(settings).read().strip()!r}")
-        check(open(settings).read().split()[7:8] == ["en"], f"Bluetooth announcement language persisted as its code: {open(settings).read().strip()!r}")
+              and conf().get("do_not_disturb") == "on", f"do not disturb on and persisted: {conf()}")
+        check(conf().get("bluetooth_announcement_language", "en") == "en", f"Bluetooth announcement language persisted as its code: {conf()}")
         before = os.path.getsize(play)
         res = await cli.send_voice_assistant_announcement_await_response(f"http://127.0.0.1:{HTTP_PORT}/a.wav", 15, "x")
         check(not res.success and os.path.getsize(play) == before, "do not disturb drops announcements")
-        cli.switch_command(dnd.key, False); await asyncio.sleep(0.3)
+        cli.switch_command(dnd.key, False); await until(lambda: last(dnd.key, SwitchState) is False)
         res = await cli.send_voice_assistant_announcement_await_response(f"http://127.0.0.1:{HTTP_PORT}/a.wav", 15, "x")
         check(res.success and os.path.getsize(play) - before == 48000, "announcements play again once it is off")
 
         cli.media_player_command(mp[0].key, volume=0.3)
-        await asyncio.sleep(0.5)
+        await until(lambda: any(isinstance(s, MediaPlayerEntityState) and abs(s.volume - 0.3) < 0.01 for s in states))
         check(any(isinstance(s, MediaPlayerEntityState) and abs(s.volume - 0.3) < 0.01 for s in states), "volume command reflected in state")
 
-        cli.switch_command(by["mute"].key, True); await asyncio.sleep(0.3)
+        cli.switch_command(by["mute"].key, True); await until(lambda: last(by["mute"].key, SwitchState) is True)
         started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.sleep(0.6)
         check(not started.is_set(), "mute switch blocks triggers")
-        cli.switch_command(by["mute"].key, False); await asyncio.sleep(0.3)
+        cli.switch_command(by["mute"].key, False); await until(lambda: last(by["mute"].key, SwitchState) is False)
 
-        # Debug access: no key set yet, so this connection could be anyone's.  It must not open adb.
-        adb = by.get("debug_access_adb"); adb_req = os.path.join(state, "adb-request")
-        def adb_state(sts): return [x.state for x in sts if isinstance(x, SwitchState) and x.key == adb.key][-1:]
-        check(isinstance(adb, SwitchInfo) and int(adb.entity_category) == 1 and adb_state(states) == [False], "debug access (adb over Wi-Fi) switch listed, off")
-        cli.switch_command(adb.key, True); await asyncio.sleep(0.5)
-        check(not os.path.exists(adb_req) and adb_state(states) == [False], "debug access refused without the key: nothing asked, still off")
+        # Debug access: on the settings page only, with a press of its own (tests/fake_web.py)
+        check("debug_access_adb" not in by, "no debug access switch in Home Assistant")
 
+        # Timers: "Timer ringing" + "Ringing timers" (names) for automations; several at once; a cancel is for another one
+        ring, names = by.get("timer_ringing"), by.get("ringing_timers")
+        check(isinstance(ring, BinarySensorInfo) and isinstance(names, TextSensorInfo) and int(names.entity_category) == 2
+              and last(ring.key, BinarySensorState) is False and last(names.key, TextSensorState) == "",
+              "timer entities listed (names: diagnostic), not ringing")
+        ringing = lambda: (last(ring.key, BinarySensorState), last(names.key, TextSensorState))
         cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t1", "tea", 60, 0, False)
-        await asyncio.sleep(0.5)
-        proc.send_signal(signal.SIGUSR1)                                           # button press silences the alarm, no pipeline
-        started.clear(); await asyncio.sleep(0.5)
-        check(not started.is_set(), "trigger during alarm only stops the alarm")
+        await until(lambda: ringing() == (True, "tea"))
+        n = len(states)
+        cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t2", "", 300, 0, False)
+        await until(lambda: ringing() == (True, "tea, 5 min"))
+        check(ringing() == (True, "tea, 5 min") and not any(isinstance(s, BinarySensorState) and s.key == ring.key and not s.state for s in states[n:]),
+              f"a second timer joins the ring, named by its length: {ringing()}")
+        cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_CANCELLED, "t3", "eggs", 360, 200, False)
+        await sync(cli); await asyncio.sleep(0.3)
+        check(ringing() == (True, "tea, 5 min"), f"cancelling a timer that still runs leaves the ring alone: {ringing()}")
+        # Only an explicit stop ends a ring.  The wake word alone puts it in the background: a pipeline as usual
+        started.clear(); stopped.clear(); proc.send_signal(signal.SIGUSR1)       # "wake word"
+        await asyncio.wait_for(started.wait(), 5); await asyncio.sleep(0.3)
+        check(ringing() == (True, "tea, 5 min"), f"the wake word alone does not stop a ring, it listens: {ringing()}")
+        proc.send_signal(signal.SIGHUP)                                            # its "stop": the ring and that pipeline end
+        await until(lambda: ringing() == (False, "") and stopped)
+        check(ringing() == (False, "") and stopped, f'"<wake word>, stop" stops every timer at once and drops its pipeline: {ringing()}, stops {stopped}')
+
+        cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t6", "eggs", 360, 0, False)
+        await until(lambda: ringing() == (True, "eggs"))
+        started.clear(); proc.send_signal(signal.SIGUSR2)                          # the action button: stops it, no pipeline
+        await until(lambda: ringing() == (False, "")); await asyncio.sleep(0.5)
+        check(not started.is_set() and ringing() == (False, ""), f"the button only stops a ring: {ringing()}")
+
+        # an engine without the "stop" keyword (microWakeWord): the transcript "Stop." stops it and cancels the run
+        cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t7", "tea", 60, 0, False)
+        await until(lambda: ringing() == (True, "tea"))
+        started.clear(); stopped.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "what time is it"})
+        await sync(cli); await asyncio.sleep(0.3)
+        check(ringing() == (True, "tea") and not stopped, f"another question during a ring leaves it ringing: {ringing()}, stops {stopped}")
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+        started.clear(); stopped.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "Stop."})
+        await until(lambda: ringing() == (False, "") and stopped)
+        check(ringing() == (False, "") and stopped == [True], f'transcript "Stop." stops the ring and cancels the run: {ringing()}, stops {stopped}')
+        started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)     # the next run counts again
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+
+        cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t4", "pasta", 600, 0, False)
+        await until(lambda: ringing() == (True, "pasta"))
+        cli.media_player_command(mp[0].key, command=MediaPlayerCommand.STOP)
+        await until(lambda: ringing() == (False, ""))
+        check(ringing() == (False, ""), f"the media player's stop stops a ring from Home Assistant: {ringing()}")
+
+        # "Stop ringing" (issue #21): the ring only, not what the media player plays
+        stop_btn = by.get("stop_ringing")
+        check(stop_btn is not None and not int(stop_btn.entity_category), "Stop ringing button listed, on dashboards (no entity category)")
+        cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t8", "pizza", 900, 0, False)
+        await until(lambda: ringing() == (True, "pizza"))
+        cli.button_command(stop_btn.key)
+        await until(lambda: ringing() == (False, ""))
+        check(ringing() == (False, ""), f'"Stop ringing" stops a ring from Home Assistant: {ringing()}')
+
+        # timer_stop_any (issue #21): "Stopp den Timer", or anything else said during a ring, stops it and cancels the run
+        page.set(timer_stop_any="on")
+        check(conf().get("timer_stop_any") == "on", f"any request stops a ring: saved {conf().get('timer_stop_any')}")
+        cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t9", "tea", 60, 0, False)
+        await until(lambda: ringing() == (True, "tea"))
+        started.clear(); stopped.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "Stopp den Timer"})
+        await until(lambda: ringing() == (False, "") and stopped)
+        check(ringing() == (False, "") and stopped == [True], f'with timer_stop_any "Stopp den Timer" stops the ring and cancels the run: {ringing()}, stops {stopped}')
+        started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)     # without a ring: to Home Assistant
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
+        stopped.clear()
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "what time is it"})
+        await sync(cli); await asyncio.sleep(0.3)
+        check(not stopped, f"with timer_stop_any and no ring, a request goes on as usual: stops {stopped}")
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+        page.set(timer_stop_any="off")
+
+        page.set(timer_ring=1)
+        check(conf().get("timer_ring") == "1", f"ring time saved: {conf().get('timer_ring')}")
+        cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t5", "", 90, 0, False)
+        await until(lambda: ringing() == (True, "90 s"))
+        t0 = time.monotonic(); await until(lambda: ringing() == (False, ""), 5)
+        check(ringing() == (False, "") and time.monotonic() - t0 < 3, f"rings out after the ring time: {time.monotonic() - t0:.1f} s")
+        page.set(timer_ring=60)
 
         proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "stt-no-text-recognized", "message": "nothing heard"})
-        await asyncio.sleep(0.5)
+        await sync(cli)
         started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
         check(True, "new pipeline after an error")
-        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await asyncio.sleep(0.3)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
 
         # Encryption, in the order Home Assistant runs it: plaintext connection, DeviceInfo says "supported, provisionable",
         # key sent over a zero-PSK Noise connection, then only that key gets in.
@@ -343,75 +587,92 @@ async def main():
             except err: ok = True
             check(ok, f"with a key: {what} connection refused ({err.__name__})")
 
-        enc = APIClient("127.0.0.1", PORT, None, noise_psk=key.decode())
+        enc = APIClient("127.0.0.1", PORT, None, noise_psk=key.decode(), timezone="Europe/Berlin")
         await asyncio.wait_for(enc.connect(login=True), 5)
         info = await enc.device_info()
         check(info.name == "echo-dot" and info.api_encryption_supported and not info.api_encryption_provisionable, "encrypted: device info, no longer provisionable")
         ent3, _ = await enc.list_entities_services()
         check(len(ent3) == len(entities), "encrypted: entities listed")
+        # the time: asked of Home Assistant over the keyed link only (aioesphomeapi answers it), handed to root
+        clock = os.path.join(state, "clock")
+        check(not os.path.exists(clock), "no time taken from the plaintext connection before the key")
+        enc.subscribe_states(lambda s: None)
+        for _ in range(30):
+            if os.path.exists(clock): break
+            await asyncio.sleep(0.1)
+        try: t, at = open(clock).read().split(); t = int(t)
+        except (OSError, ValueError): t, at = 0, ""
+        boot = time.clock_gettime(time.CLOCK_BOOTTIME)
+        check(abs(t - time.time()) <= 2 and re.fullmatch(r"\d+\.\d\d", at) and 0 <= boot - float(at) < 5,
+              f"keyed link: Home Assistant's time in state/clock for root, with the boot clock as /proc/uptime words it: {t} {at}")
+        # and its zone, as its rule (the PC has no bionic tzdata: the rule itself; tz_ref.py checks the names)
+        from aioesphomeapi.timezone import iana_to_posix_tz
+        try: tz = open(os.path.join(state, "timezone")).read()
+        except OSError: tz = ""
+        check(tz == iana_to_posix_tz("Europe/Berlin") + "\n", f"keyed link: Home Assistant's time zone in state/timezone for root: {tz!r}")
         started.clear(); mic.clear()
         enc.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio, handle_announcement_finished=handle_finished)
-        await asyncio.sleep(0.3); proc.send_signal(signal.SIGUSR1)
-        await asyncio.wait_for(started.wait(), 5); await asyncio.sleep(1.0)
-        check(len(mic) > 16000, f"encrypted: mic audio streamed: {len(mic)} bytes in 1 s")
-        enc.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await asyncio.sleep(0.3)
-        enc.select_command(by["noise_reduction"].key, "Medium"); await asyncio.sleep(0.3)
-        check(open(settings).read().split()[:1] == ["2"], f"noise reduction set to medium and persisted: {open(settings).read().strip()!r}")
+        await sync(enc); proc.send_signal(signal.SIGUSR1)
+        await asyncio.wait_for(started.wait(), 5); await until(lambda: len(mic) > 16000)
+        check(len(mic) > 16000, f"encrypted: mic audio streamed: {len(mic)} bytes")
+        enc.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(enc)
+        page.set(noise_reduction="medium")
+        check(conf().get("noise_reduction") == "medium", f"noise reduction set to medium and persisted: {conf()}")
         started.clear(); mic.clear(); proc.send_signal(signal.SIGUSR1)
-        await asyncio.wait_for(started.wait(), 5); await asyncio.sleep(1.0)
-        peak = max(abs(v) for v in struct.unpack(f"<{len(mic) // 2}h", mic[:len(mic) // 2 * 2])) if mic else 0
-        check(len(mic) > 16000 and len(mic) % 320 == 0 and 8000 < peak <= 29100,
-              f"with noise reduction: mic audio streamed in whole 10 ms frames at speech level: {len(mic)} bytes in 1 s, peak {peak}")
-        enc.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await asyncio.sleep(0.3)
-        enc.select_command(by["noise_reduction"].key, "Off"); await asyncio.sleep(0.3)
+        await asyncio.wait_for(started.wait(), 5); await speech(mic); pk = peak(mic)
+        check(len(mic) > 16000 and len(mic) % 320 == 0 and 8000 < pk <= 29100,
+              f"with noise reduction: mic audio streamed in whole 10 ms frames at speech level: {len(mic)} bytes, peak {pk}")
+        enc.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(enc)
+        page.set(noise_reduction="off")
         before = os.path.getsize(play)
         res = await enc.send_voice_assistant_announcement_await_response(f"http://127.0.0.1:{HTTP_PORT}/a.wav", 15, "x")
         check(res.success and os.path.getsize(play) - before == 48000, "encrypted: announcement played")
 
-        # Debug access over the keyed connection.  This test is the root side (lockdown.sh): it takes the request and
-        # answers with adb-open for as long as the port is open.
-        st2 = []; enc.subscribe_states(st2.append); await asyncio.sleep(0.3)
-        enc.switch_command(adb.key, True); await asyncio.sleep(0.5)
-        check(os.path.exists(adb_req) and open(adb_req).read() == "1\n" and adb_state(st2) == [True], "debug access with the key: request written, switch on")
-        open(env["HASSMIC_ADB_OPEN"], "w").close(); os.unlink(adb_req); await asyncio.sleep(3)
-        check(adb_state(st2) == [True], "stays on once the firewall service has opened it")
-        os.unlink(env["HASSMIC_ADB_OPEN"]); await asyncio.sleep(3)
-        check(adb_state(st2) == [False], "switch goes off when the window has run out")
-        enc.switch_command(adb.key, True); await asyncio.sleep(19)
-        check(adb_state(st2) == [False] and not os.path.exists(adb_req), "no answer within 15 s: request withdrawn, switch off again")
         check(await asyncio.wait_for(enc.noise_encryption_set_key(b""), 5) is True and not os.path.exists(os.path.join(state, "api_key")),
               "empty key from the keyed connection clears it (Home Assistant deleting the device)")
         check("api_encryption_supported=" in open(mdns).read(), "mDNS back to api_encryption_supported")
         await enc.disconnect()
         c = APIClient("127.0.0.1", PORT, None); await asyncio.wait_for(c.connect(login=True), 5)
         check((await c.device_info()).api_encryption_provisionable, "plaintext accepted again, provisionable again")
-        st3 = []; c.subscribe_states(st3.append); await asyncio.sleep(0.3)    # here: the sleeps would move the mic checks' place in the capture loop
+        st3 = []; c.subscribe_states(st3.append)
         last3 = lambda k, t: ([x.state for x in st3 if isinstance(x, t) and x.key == k] or [None])[-1]
-        with open(env["HASSMIC_LUX"], "w") as f: f.write("68\n")                # flicker: not sent
-        await asyncio.sleep(1.5)
-        with open(env["HASSMIC_LUX"], "w") as f: f.write("150\n")
-        await asyncio.sleep(1.5)
-        sent = [x.state for x in st3 if isinstance(x, SensorState) and x.key == lux.key]
-        check(sent == [67, 150], f"illuminance sent on a real change, not on flicker: {sent}")
         c.number_command(lbright.key, 30)
-        await asyncio.sleep(0.5)
+        await until(lambda: last3(lbright.key, NumberState) == 30 and last3(lauto.key, SwitchState) is False
+                    and conf().get("led_brightness") == "30")
         check(last3(lbright.key, NumberState) == 30 and last3(lauto.key, SwitchState) is False, "a fixed LED level switches auto brightness off")
-        check(open(settings).read().split()[9:11] == ["0", "30"], f"LED brightness kept in the settings file: {open(settings).read().strip()!r}")
+        check(conf().get("led_auto_brightness") == "off" and conf().get("led_brightness") == "30", f"LED brightness kept in the settings file: {conf()}")
         c.switch_command(lauto.key, True)
-        await asyncio.sleep(0.5)
-        check(last3(lauto.key, SwitchState) is True and open(settings).read().split()[9] == "1", "auto brightness switched on again")
-        # sound detection: off by default, one event entity; on, it reports what the detector hears (here sound_none.c's
-        # dog, once per ~10 s window of the capture), kept in the settings file
-        sw, ev = by.get("sound_detection"), by.get("sound")
-        check(isinstance(sw, SwitchInfo) and int(sw.entity_category) == 1 and isinstance(ev, EventInfo)
+        await until(lambda: last3(lauto.key, SwitchState) is True and conf().get("led_auto_brightness") == "on")
+        check(last3(lauto.key, SwitchState) is True and conf().get("led_auto_brightness") == "on", "auto brightness switched on again")
+        # A feature switched on the page closes the link; Home Assistant comes back and lists entities again
+        async def relist(old):
+            try: await old.disconnect()
+            except Exception: pass
+            n = APIClient("127.0.0.1", PORT, None); await asyncio.wait_for(n.connect(login=True), 5)
+            e, _ = await n.list_entities_services(); sts = []; n.subscribe_states(sts.append); await sync(n)
+            return n, {x.object_id: x for x in e}, sts
+        # the light sensor: switched on, the illuminance entity, sent on a real change, not on flicker
+        page.set(light_sensor="on")
+        c, cby, st3 = await relist(c)
+        lux = cby.get("illuminance")
+        check(isinstance(lux, SensorInfo) and lux.device_class == "illuminance" and lux.unit_of_measurement == "lx" and int(lux.state_class) == 1
+              and conf().get("light_sensor") == "on", "light sensor switched on on the page: illuminance listed, kept in the settings file")
+        await until(lambda: last3(lux.key, SensorState) is not None)
+        with open(env["HASSMIC_LUX"], "w") as f: f.write("68\n")                # flicker: not sent
+        await asyncio.sleep(1.5)                                               # the sensor is read once a second
+        with open(env["HASSMIC_LUX"], "w") as f: f.write("150\n")
+        await until(lambda: last3(lux.key, SensorState) == 150)
+        sent = [x.state for x in st3 if isinstance(x, SensorState) and x.key == lux.key]
+        check(sent == [67, 150], f"illuminance from the sensor file, sent on a real change, not on flicker: {sent}")
+        # sound detection: off by default, no entity; on, one event entity reporting what the detector hears (here
+        # sound_none.c's dog, once per ~10 s window of the capture), kept in the settings file
+        check("sound" not in by and "sound_detection" not in by and pv("sound_detection") == 0, "sound detection off by default: no entity in Home Assistant")
+        page.set(sound_detection="on")
+        c, cby, st3 = await relist(c)
+        ev = cby.get("sound")
+        check(isinstance(ev, EventInfo)
               and list(ev.event_types) == ["smoke_or_co_alarm", "glass_break", "dog_bark", "baby_cry", "snoring", "cough", "water", "beeping_appliance"]
-              and last3(sw.key, SwitchState) is False, f"sound detection switch (off) and event entity listed: {list(ev.event_types) if ev else None}")
-        await asyncio.sleep(11)
-        check(not [x for x in st3 if isinstance(x, Event)], "no sound event while sound detection is off")
-        c.switch_command(sw.key, True)
-        await asyncio.sleep(0.5)
-        check(last3(sw.key, SwitchState) is True and open(settings).read().split()[11:12] == ["1"],
-              f"sound detection switched on and kept in the settings file: {open(settings).read().strip()!r}")
+              and conf().get("sound_detection") == "on", f"sound detection switched on on the page: the event entity, kept in the settings file: {conf()}")
         for _ in range(26):
             if [x for x in st3 if isinstance(x, Event)]: break
             await asyncio.sleep(0.5)
@@ -423,7 +684,7 @@ async def main():
         async def nothing(*a): pass
         unsub = c.subscribe_voice_assistant(handle_start=no_pipeline, handle_stop=nothing, handle_audio=nothing,
                                     handle_announcement_finished=nothing)      # announcements answer the assistant's client
-        await asyncio.sleep(0.3)
+        await sync(c)
         res = await c.send_voice_assistant_announcement_await_response(f"http://127.0.0.1:{HTTP_PORT}/a.wav", 15, "x")
         await asyncio.sleep(9)
         evs = [(x.key, x.event_type) for x in st3 if isinstance(x, Event)]
@@ -432,62 +693,61 @@ async def main():
             if len([x for x in st3 if isinstance(x, Event)]) > n0: break
             await asyncio.sleep(0.5)
         check(len([x for x in st3 if isinstance(x, Event)]) > n0, "sound events again once the Echo has been quiet for a window")
-        c.switch_command(sw.key, False)
-        await asyncio.sleep(0.5)
-        check(last3(sw.key, SwitchState) is False and open(settings).read().split()[11:12] == ["0"], "sound detection switched off again")
+        unsub()
+        page.set(sound_detection="off")
+        c, cby, st3 = await relist(c)
+        check("sound" not in cby and conf().get("sound_detection") == "off", "sound detection switched off again: the entity gone")
         # Wi-Fi motion (experimental): off by default, the sensor unknown while off; on, a still level is no motion, a
         # wobbling one is, and it clears after the hold (3 s in the PC build, 30 s on the Echo)
-        wsw, wbs, wsn = by.get("wifi_motion_detection"), by.get("wifi_motion"), by.get("wifi_motion_sensitivity")
-        wstate = lambda: ([x for x in st3 if isinstance(x, BinarySensorState) and x.key == wbs.key] or [None])[-1]
-        check(isinstance(wsw, SwitchInfo) and "experimental" in wsw.name and int(wsw.entity_category) == 1
-              and isinstance(wbs, BinarySensorInfo) and wbs.device_class == "motion" and "experimental" in wbs.name
+        check("wifi_motion" not in cby and "wifi_motion_detection" not in cby and pv("wifi_motion") == 0 and pv("wifi_motion_sensitivity") == 5,
+              "Wi-Fi motion off by default (sensitivity 5): no entity in Home Assistant")
+        page.set(wifi_motion="on")
+        c, cby, st3 = await relist(c)
+        wbs, wsn = cby.get("wifi_motion"), cby.get("wifi_motion_sensitivity")
+        check(isinstance(wbs, BinarySensorInfo) and wbs.device_class == "motion" and "experimental" in wbs.name
               and isinstance(wsn, NumberInfo) and (wsn.min_value, wsn.max_value) == (1, 10) and int(wsn.entity_category) == 1,
-              "Wi-Fi motion entities listed, named experimental")
-        check(last3(wsw.key, SwitchState) is False and last3(wsn.key, NumberState) == 5 and wstate() and wstate().missing_state,
-              "Wi-Fi motion off by default, sensitivity 5, the sensor unknown")
-        c.switch_command(wsw.key, True)
-        await asyncio.sleep(3)
-        check(last3(wsw.key, SwitchState) is True and wstate() and not wstate().missing_state and wstate().state is False
-              and open(settings).read().split()[12:14] == ["1", "5"],
-              f"switched on: a steady level is no motion, kept in the settings file: {open(settings).read().strip()!r}")
+              "Wi-Fi motion on: its entities listed, named experimental")
+        wstate = lambda: ([x for x in st3 if isinstance(x, BinarySensorState) and x.key == wbs.key] or [None])[-1]
+        await until(lambda: wstate() and not wstate().missing_state)
+        check(wstate() and not wstate().missing_state and wstate().state is False
+              and conf().get("wifi_motion") == "on" and conf().get("wifi_motion_sensitivity") == "5",
+              f"switched on: a steady level is no motion, kept in the settings file: {conf()}")
         for _ in range(60):                                 # someone walking through the path: 6 s
             rx_stat(random.randint(106, 118)); await asyncio.sleep(0.1)
             if wstate().state: break
         check(wstate().state is True, "a wobbling level is motion")
         rx_stat(112)
-        await asyncio.sleep(7)
+        await until(lambda: wstate().state is False, 10)
         check(wstate().state is False, "motion clears after the hold")
         c.number_command(wsn.key, 8)
-        await asyncio.sleep(0.5)
-        check(last3(wsn.key, NumberState) == 8 and open(settings).read().split()[13] == "8", "sensitivity set and kept")
-        c.switch_command(wsw.key, False)
-        await asyncio.sleep(1)
-        check(last3(wsw.key, SwitchState) is False and wstate().missing_state and open(settings).read().split()[12] == "0",
-              "switched off again: the sensor unknown")
-        unsub()                                             # the real assistant again, with mic and replies
+        await until(lambda: last3(wsn.key, NumberState) == 8 and conf().get("wifi_motion_sensitivity") == "8")
+        check(last3(wsn.key, NumberState) == 8 and conf().get("wifi_motion_sensitivity") == "8", "sensitivity set and kept")
+        page.set(wifi_motion="off")
+        c, cby, st3 = await relist(c)
+        check("wifi_motion" not in cby and conf().get("wifi_motion") == "off", "switched off again: the entities gone")
+        # the real assistant again, with mic and replies
         c.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio,
                                     handle_announcement_finished=handle_finished)
-        await asyncio.sleep(0.3)
-        # (at the end: these sleeps would move the mic checks' place in the capture loop)
+        await sync(c)
         # The action button (SIGUSR2) while Home Assistant thinks: the run is aborted (as a Voice PE's button does), and what
         # Home Assistant still sends for it plays nothing.  The wake word instead aborts and listens again.
         async def thinking():
             proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
             c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
             c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "turn off everything"})
-            await asyncio.sleep(0.3); stopped.clear(); started.clear()
+            await sync(c); stopped.clear(); started.clear()
         def late_reply():                    # the aborted run's reply, already on the way
             c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_END, {"url": f"http://127.0.0.1:{HTTP_PORT}/reply.wav"})
             c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
         before = os.path.getsize(play); started.clear(); await thinking()
-        proc.send_signal(signal.SIGUSR2); await asyncio.sleep(0.5)
-        late_reply(); await asyncio.sleep(1.0)
+        proc.send_signal(signal.SIGUSR2); await until(lambda: stopped)
+        late_reply(); await asyncio.sleep(1.0)                                 # nothing may play
         check(stopped == [True] and not started.is_set() and os.path.getsize(play) == before,
               f"button while thinking: run aborted, nothing listens, its late reply not played (stops {stopped}, {os.path.getsize(play) - before} bytes played)")
         started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
         check(True, "wake word works again after a cancelled run")
         c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "x", "message": "end of test pipeline"})
-        await asyncio.sleep(0.5)
+        await sync(c)
 
         before = os.path.getsize(play); started.clear(); await thinking()
         proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
@@ -498,7 +758,7 @@ async def main():
         c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "turn on the light"})
         c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_END, {"url": f"http://127.0.0.1:{HTTP_PORT}/reply.wav"})
         c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
-        await asyncio.sleep(2.0)
+        await until(lambda: os.path.getsize(play) - before >= 48000)
         check(os.path.getsize(play) - before == 48000, f"the new run's reply plays: {os.path.getsize(play) - before} bytes")
 
         # Streamed TTS: the reply's fetch already waits on Home Assistant (first words out, tool calls still running) when
@@ -508,24 +768,95 @@ async def main():
         c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, {"url": f"http://127.0.0.1:{HTTP_PORT}/late.wav"})
         c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "turn off everything"})
         c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_INTENT_PROGRESS, {"tts_start_streaming": "1"})
-        await asyncio.sleep(0.5); stopped.clear(); started.clear()
+        await until(late_asked.is_set); stopped.clear(); started.clear()          # the fetch waits on "Home Assistant"
         proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
         c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
         c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "turn on the light"})
         c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_END, {"url": f"http://127.0.0.1:{HTTP_PORT}/reply.wav"})
         c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
-        await asyncio.sleep(2.0)
+        await until(lambda: os.path.getsize(play) - before >= 48000)
         check(stopped == [True] and os.path.getsize(play) - before == 48000,
               f"wake word while a streamed reply is fetched: fetch cut, the new run's reply plays (stops {stopped}, {os.path.getsize(play) - before} bytes)")
-        await asyncio.sleep(6)
+        await until(late_done.is_set, 5); await asyncio.sleep(0.5)             # the old reply's audio is out: it must not play
         check(os.path.getsize(play) - before == 48000, f"the cancelled run's reply never plays: {os.path.getsize(play) - before} bytes")
         started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
         check(True, "and the wake word works after it")
         c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "x", "message": "end of test pipeline"})
-        await asyncio.sleep(0.5)
+        await sync(c)
+
+        # The buttons in Home Assistant (issue #26): the event entity "Button", beside what each key does on the Echo.  A
+        # press is told when let go within 1 s, a hold once at 1 s while still down; both volume keys down are a pair
+        # (arbitration), no presses; a press that lets a browser in is not told
+        bev = cby.get("button")
+        check(isinstance(bev, EventInfo) and bev.device_class == "button" and list(bev.event_types)
+              == ["action", "action_hold", "volume_up", "volume_up_hold", "volume_down", "volume_down_hold"],
+              f"buttons: the event entity, with a press and a hold of each key: {bev}")
+        bevs = lambda: [x.event_type for x in st3 if isinstance(x, Event) and x.key == bev.key]
+        vol = lambda: round([x.volume for x in st3 if isinstance(x, MediaPlayerEntityState)][-1], 2)
+        n0 = len(bevs()); v0 = vol()
+        keyev(KEY_VOLUMEUP, 1); await asyncio.sleep(0.2)
+        check(vol() == v0, "volume up down: no step yet (a hold may follow)")
+        keyev(KEY_VOLUMEUP, 0)
+        await until(lambda: len(bevs()) > n0 and vol() != v0)
+        check(bevs()[n0:] == ["volume_up"] and abs(vol() - min(1, v0 + 0.1)) < 0.01,
+              f"volume up pressed: one step up when let go, volume_up ({bevs()[n0:]}, {v0} -> {vol()})")
+        n0 = len(bevs()); v0 = vol(); keyev(KEY_VOLUMEDOWN, 1)
+        await until(lambda: len(bevs()) > n0, 2)
+        check(bevs()[n0:] == ["volume_down_hold"], f"volume down held: volume_down_hold at 1 s, still down ({bevs()[n0:]})")
+        keyev(KEY_VOLUMEDOWN, 0); await asyncio.sleep(0.5)
+        check(bevs()[n0:] == ["volume_down_hold"] and vol() == v0, f"and nothing when let go, the volume as it was ({bevs()[n0:]}, {v0} -> {vol()})")
+        n0 = len(bevs()); started.clear(); keyev(KEY_HELP, 1)
+        await until(lambda: len(bevs()) > n0, 2)
+        keyev(KEY_HELP, 0); await asyncio.sleep(0.5)
+        check(bevs()[n0:] == ["action_hold"] and not started.is_set(), f"action held: action_hold, no request ({bevs()[n0:]})")
+        n0 = len(bevs())
+        keyev(KEY_VOLUMEUP, 1); await asyncio.sleep(0.1); keyev(KEY_VOLUMEDOWN, 1); await asyncio.sleep(1.5)
+        v0 = vol(); keyev(KEY_VOLUMEUP, 0); keyev(KEY_VOLUMEDOWN, 0); await asyncio.sleep(0.5)
+        check(bevs()[n0:] == [] and vol() == v0, f"both volume keys held: a pair, no presses, holds or volume steps ({bevs()[n0:]})")
+        page2 = Browser(WEB); page2.login(); keyev(KEY_HELP, 1); keyev(KEY_HELP, 0)
+        await until(lambda: page2.login() == "approved")
+        await asyncio.sleep(0.3)
+        check(page2.login() == "approved" and bevs()[n0:] == [] and not started.is_set(),
+              f"a press that lets a browser in: not told, no request ({bevs()[n0:]})")
+        keyev(KEY_HELP, 1); await asyncio.sleep(0.1); keyev(KEY_HELP, 0)
+        await until(lambda: len(bevs()) > n0 and started.is_set())
+        check(bevs()[n0:] == ["action"] and started.is_set(), f"action pressed: action, and the Echo listens as before ({bevs()[n0:]})")
+        c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "x", "message": "end of test pipeline"})
+        await sync(c)
+
+        # A new address (issue #17, netaddr.c): the link over the old one is closed at once, though it held the voice
+        # assistant; root is asked to announce mDNS again, at once and again while nobody comes back (Home Assistant
+        # ignores announcements while it still holds the dead link); back over the new address, the voice assistant is free
+        mreq = os.path.join(state, "mdns"); addrs = env["HASSMIC_FAKE_ADDRS"]
+        if os.path.exists(mreq): os.remove(mreq)
+        async def alive(cl):
+            try: await asyncio.wait_for(cl.device_info(), 1.5); return True
+            except Exception: return False
+        with open(addrs, "w") as f: f.write("10.0.0.2\n")
+        t0 = time.monotonic()
+        while await alive(c) and time.monotonic() - t0 < 6: await asyncio.sleep(0.3)
+        check(not await alive(c), "a new address: the link over the old one is closed (it held the voice assistant)")
+        check(os.path.exists(mreq) and open(mreq).read() == "new address\n", "and root is asked to announce mDNS again")
+        os.remove(mreq)
+        await until(lambda: os.path.exists(mreq), 8)
+        check(os.path.exists(mreq) and open(mreq).read().startswith("no Home Assistant for "),
+              f"nobody back after the first wait: announced again ({open(mreq).read().strip() if os.path.exists(mreq) else 'nothing'})")
+        with open(addrs, "w") as f: f.write("10.0.0.2\n127.0.0.1\n")           # the address the test connects to, "new"
+        await asyncio.sleep(2.5)
+        c = APIClient("127.0.0.1", PORT, None); await asyncio.wait_for(c.connect(login=True), 5)
+        c.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio)
+        await sync(c); started.clear(); proc.send_signal(signal.SIGUSR1)
+        try: await asyncio.wait_for(started.wait(), 5)
+        except asyncio.TimeoutError: pass
+        check(started.is_set(), "back over the new address: the voice assistant is this link's, the wake word runs a pipeline")
+        c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "x", "message": "end of test pipeline"})
+        await sync(c)
+        if os.path.exists(mreq): os.remove(mreq)
+        await asyncio.sleep(6)
+        check(not os.path.exists(mreq), "Home Assistant connected: no more announcements")
         await c.disconnect()
     finally:
-        proc.terminate(); httpd.shutdown()
+        proc.terminate(); httpd.shutdown(); httpsd.shutdown(); selfd.shutdown(); os.close(keypad)
         for f in (play, settings):
             if os.path.exists(f): os.unlink(f)
     print("FAILED" if check.failed else "all good")

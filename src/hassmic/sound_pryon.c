@@ -1,11 +1,15 @@
 /* The stock acoustic event detector (docs/re-aed.md) on Amazon's libpryon.so, beside the wake word decoder.
- * The model is the firmware's (/system/local/models/AED, the same file on donut, biscuit and radar); the one Amazon
- * serves today scored the same on every test clip.  Nothing is detected until the client properties PuffinApp pushes
+ * The model is the firmware's (/system/local/models/AED, the same file on donut, biscuit and radar), or the newer one
+ * Amazon serves, where scripts/artifacts.sh installed it (/data/local/hassmic/aed): retrained weights and smoke/CO
+ * thresholds 0.845 instead of 0.825, the same types; it scored the same on every test clip.  An installed one that
+ * does not load leaves the firmware's.  Nothing is detected until the client properties PuffinApp pushes
  * are set: "AcousticEventDetectionEnabled" and "aed_<type>_enabled" per type.  The decoder scores ~10 s windows
  * (scorer.batch_scorer_reset_interval_msec 9980) and reports each one, detected or not, as JSON. */
 #include "sound.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "pryon_api.h"
 
 #define MODEL     "/system/local/models/AED/pryon.manifest"
@@ -15,8 +19,15 @@
 
 static sound_cb callback;
 static const char *types[MAX_TYPES];
-static int ntypes, opened;
+static int ntypes, opened, newer_failed;       /* newer_failed: the installed one did not load once; it will not now */
 static uint64_t sample_index;
+
+static const char *installed(void)
+{
+    static char p[256]; const char *d = getenv("HASSMIC_AED");
+    snprintf(p, sizeof p, "%s/pryon.manifest", d ? d : "/data/local/hassmic/aed");
+    return p;
+}
 
 /* "detected":true inside a type's object.  An object ends where the next type's begins: smokeSiren carries a JSON
  * string with braces in it ("detectionDescriptorProfile"), so the closing brace cannot be searched for. */
@@ -52,7 +63,12 @@ int sound_open(const char *const *t, int n, sound_cb cb)
     callback = cb; ntypes = n > MAX_TYPES ? MAX_TYPES : n;
     for (int i = 0; i < ntypes; i++) types[i] = t[i];
     PryonApi_SetAcousticEventDetectionResultCallback(on_result);
-    if (PryonModelSet_New(MODEL_SET, MODEL, "")) { fprintf(stderr, "sound: cannot load %s\n", MODEL); return -1; }
+    const char *m = installed();
+    if (access(m, R_OK) || PryonModelSet_New(MODEL_SET, m, "")) {
+        if (!access(m, R_OK)) { fprintf(stderr, "sound: cannot load %s, taking the firmware's\n", m); newer_failed = 1; }
+        m = MODEL;
+        if (PryonModelSet_New(MODEL_SET, m, "")) { fprintf(stderr, "sound: cannot load %s\n", m); return -1; }
+    }
     PryonDecoder_NewPryonMultichannelAudioFormat_Default(&fmt);
     if (PryonDecoder_NewSpotterAudioDecoder(DECODER, MODEL_SET, "pryon", fmt, "{}")) { PryonModelSet_Delete(MODEL_SET); return -1; }
     props[0].name = "AcousticEventDetectionEnabled"; props[0].value = 1;
@@ -66,8 +82,14 @@ int sound_open(const char *const *t, int n, sound_cb cb)
         PryonDecoder_Delete(DECODER); PryonModelSet_Delete(MODEL_SET); return -1;
     }
     sample_index = 0; opened = 1;
-    fprintf(stderr, "sound detection: on\n");
+    fprintf(stderr, "sound detection: on (%s)\n", m);
     return 0;
+}
+
+enum sound_model sound_model(void)
+{
+    if (!newer_failed && !access(installed(), R_OK)) return SOUND_NEWER;
+    return access(MODEL, R_OK) ? SOUND_NONE : SOUND_FIRMWARE;
 }
 
 void sound_feed(const int16_t *samples, size_t count)

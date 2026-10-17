@@ -7,7 +7,7 @@ const struct board board = {
     .model = "Echo 2 (radar)",
     .project = "hassmic.echo-2",
     .product = "Echo 2 (hassmic)",
-    .default_name = "Echo",
+    .default_name = "Echo 2",
     .codename = "radar",
 
     /* mtk-kpd: action (•) = KEY_HELP, mic mute = KEY_MUTE (and a volume key); "keys": volume ± (donut's event3 does
@@ -33,4 +33,8 @@ const struct board board = {
      * bus but has no driver bound here: another hardware revision */
     .light_sensor = { "/sys/bus/i2c/devices/0-0029/iio:device0/calibrated_lux", "/sys/bus/i2c/devices/0-0039/als_calibrated_lux" },
     .volume_steps = 30,                                             /* volume_step-01..30 in led-resources */
+    /* as biscuit's: the firmware's audio_device.xml sets the same control to 6 for the speaker, 11 for the 3.5 mm jack
+     * (from the firmware only, not tried on an Echo 2) */
+    .speaker_gain = "HP Driver Gain Volume",
+    .speaker_gain_stock = 6,
 };

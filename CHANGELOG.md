@@ -2,7 +2,479 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-17
+
+- **Settings, pairings and the Home Assistant link survive a power cut.** A power cut or hard reset shortly after the
+  Echo saved something could leave that file empty: every setting back to default, approved browsers, Bluetooth and
+  Music Assistant pairings gone, or the Echo needing to be adopted in Home Assistant again. Every file the Echo keeps
+  is now on the flash before it replaces the old one, so a reset leaves the old content or the new one.
+- **The Echo follows Home Assistant's time zone.** It already took the time from Home Assistant; now the zone comes
+  with it, on every model, and a change in Home Assistant reaches the Echo within 6 hours. The log stays in UTC.
+- **The Echo answers ping from your network.** Home Assistant's Ping integration, a router's device list or a plain
+  `ping` can now see whether it is up. Only from private addresses (192.168.x.x, 10.x.x.x and the like); nothing
+  else gets in that did not before.
+- **An Echo no longer stays off after an update or a restart from the settings page.** Restarting hassmic (after an
+  update, a wake word engine change, models copied from another Echo) could lose the start when the old one was slow to
+  stop: the Echo was then unreachable until something else started it, minutes later (seen on an Echo Show 8).
+- **Guided setup: a second device on USB is named.** With a phone or another Echo plugged in next to the one being set
+  up, adb cannot tell them apart and the setup waited for an Echo that was there. It now says which devices are on USB
+  and goes on once only the Echo is left.
+- **Auto brightness no longer fills Home Assistant's logbook.** With "LED auto brightness" on, "LED brightness" in
+  Home Assistant followed the ring as the room got lighter or darker, an entry every few minutes. The light sensor is
+  now a feature on the settings page, "Light sensor", off by default: off, there is no "Illuminance" entity and Home
+  Assistant only sees brightness levels you set; the ring still dims with the room as before. Switch it on to get
+  "Illuminance" back for your automations.
+- **Settings page: models from Amazon.** The warnings about missing wake words and whisper detection pointed to
+  `scripts/artifacts.sh` on the PC, which needs the Echo on USB. They now point to "Download from Amazon" on the
+  page (a link to it), which every model can do now.
+- **Guided setup, clearer where people got stuck:**
+  - The download step says plainly that you download the three files yourself in your browser and save them to
+    `~/Downloads`. The script only waits for them; people waited an hour thinking it was downloading.
+  - Echo Dot 3: the unlock step gives the order that works: USB cable into the PC, hold the action button, plug in the
+    Echo's power adapter. USB alone does not power it, so before nothing happened.
+  - The Wi-Fi step shows the networks the Echo hears and catches a name that is off in capitals only (Wi-Fi names
+    are case-sensitive). Joining now fails with a reason (no such network, wrong password) instead of going on with
+    an Echo that never connected.
+  - Setup refuses to run on macOS or as root/sudo, and warns in a virtual machine or WSL: the unlock needs Linux on
+    the PC itself (a live USB stick works). On macOS it failed with `status is 1d1a`.
+
+- **The right Echo answers again after another one crashed.** An Echo that died hard (a freeze and a power cycle, say)
+  could come back having lost a small file it keeps for the arbitration. It then numbered its messages from the start
+  again, and the other Echos took them all for old ones replayed and ignored them, until they were restarted
+  themselves. Nothing looked wrong on the crashed Echo, but another Echo answered every wake word the two heard, even
+  standing right next to the crashed one (issue #36). The file now survives a crash, and an Echo that lost it anyway
+  comes back as a new member, which the others count at once. If an Echo answered for the wrong room since a crash:
+  restart the Echo that answers.
+- **The ring no longer stays on after a very short reply.** When a reply was over within a few hundredths of a second
+  (a short confirmation, an empty answer), the talking ring could stay lit on an idle Echo until the next wake word.
+  The Echo told the ring "on" and "off" at practically the same moment, and "off" sometimes arrived first. The ring now
+  gets its changes one after the other, in order.
+- **The ring's brightness ends where the slider stops.** Dragging the LED brightness in Home Assistant could leave the
+  ring at a level from along the way, for the same reason; brightness changes now take their turn in that same order.
+
+## 2026-10-13
+
+- **No more freezing at the first wake word after 18.6 hours** (issue #31). Since 2026-10-12, an Echo whose
+  satellite had been running for more than 18.6 hours hung at its next wake word: the listening ring stayed on, the
+  buttons did nothing, and only a power cycle helped. A counter of the microphone's bytes ran past what 32 bits hold,
+  and the audio from just after the wake word was then sent to Home Assistant over and over, for ever. Fixed.
+- **Replies and announcements from a Home Assistant that serves HTTPS itself** (issue #30). With its own certificate
+  (`ssl_certificate` under `http:`), Home Assistant gives the Echo https:// addresses for spoken replies,
+  announcements and media, and the Echo only played http://: it stayed silent and the log said "only http:// is
+  supported". It now plays https:// too, and follows redirects there. The certificate is checked as a browser would:
+  a self-signed one, or one that does not name the address Home Assistant gives out, is refused, and the log says so.
+  "Check HTTPS certificates" on the settings page (System) switched off accepts any certificate.
+- **Music Assistant finds the Echo again after it restarts** (issue #28). Music Assistant looks for Sendspin players
+  only when it starts, and on some networks (the Echo on a VLAN of its own, say) that search does not reach the Echo;
+  only the Echo's own announcement at boot did. After Music Assistant or Home Assistant restarted, the Echo stayed
+  unavailable as a player until it was rebooted. Now, while Music Assistant played on it before and is not connected,
+  the Echo announces itself again: after 30 s, then less and less often, at most every 30 min. The guide also says
+  how to add the Echo to Music Assistant by hand: `<echo-ip>:28928`, with the port.
+
+## 2026-10-12
+
+- **The right Echo answers on slower Wi-Fi** (issue #27). Echos that heard the same wake word used to wait a fixed
+  0.2 s for each other's claims. On many networks the nearer Echo's claim arrives later than that: routers hold
+  broadcasts back for devices saving power, and repeaters add more. The farther Echo then answered. Now each Echo
+  learns how late the other Echos' claims reach it, and waits just long enough for nearly all of them (0.15 to 1 s;
+  0.5 s until it has measured ten). It also stops waiting as soon as every other Echo's claim is in. When all your
+  Echos heard you, the answer now comes sooner than before; the full wait applies only when one of them did not. The
+  settings page shows what an Echo waits and what it measured. "Learn the wait from the network" off gives a fixed
+  "Arbitration window" instead (the Kiosk Satellite window, now used by both modes, up to 1 s). The log shows how late
+  each claim came, so you can see what your network takes.
+- **Echos with different wake word sets settle who answers again.** An Echo that has two "Echo" sets installed (German
+  and English, say) calls them "Echo (de-DE)" and "Echo (en-US)" in Home Assistant, and it also claimed the wake word
+  under that name; an Echo with only one set claimed it as "Echo". The two took each other's claims for a different
+  word, and both answered. They now claim the word itself.
+- **Wake sound removal (experimental).** Speaking straight on after the wake word means talking over the tone, and
+  part of it stays in what Home Assistant hears: Amazon's echo canceller leaves it about as loud as a quiet voice. A
+  new experimental card under Features on the settings page, "Wake sound removal" (off by default), finds the tone in the microphone each time
+  and turns down only its few pitches; your words around it stay. While the tone plays, the Echo holds back what it
+  hears and then sends it all at once, so the first second of a command reaches Home Assistant about a second later.
+- **No pause needed after the wake word.** What you say right after the wake word reaches Home Assistant whole, so
+  "Alexa turn on the light" in one breath works. Before, the first 120-180 ms after the word were lost: the time the
+  wake word engine takes to be sure, plus a moment until the microphone stream started. Echos settling who answers
+  lost that plus their 200 ms wait (400 ms with Kiosk Satellite). The sound and the ring still come at the same time
+  as before; you no longer need to wait for them.
+- **The light ring in Home Assistant** (issue #26). A new light, "Light ring", with colour, brightness and the effects
+  pulse, spin, blink and rainbow, for automations: a flash when the doorbell rings, an orange pulse for the kitchen
+  timer, a colour for the alarm system. Whatever the Echo shows itself comes first (listening, a reply, the
+  microphones off, a ringing timer, the volume); the colour comes back afterwards. The ring shows the nearest of 147
+  colours (24 hues, full or pale, and white, each at three brightness levels): close, not exact. The first start of
+  this version writes the ring's new animations to the Echo's system partition and restarts Amazon's ring service:
+  a second without light, once.
+- **The listening ring points at you even while a timer rings.** Amazon's ring only turns towards whoever spoke while
+  nothing else shows; hassmic now plays it already turned, so it points at you over a ringing timer too, and follows
+  you if you move while you speak.
+- **The buttons in Home Assistant** (issue #26). A new event entity "Button" fires for every press of the action
+  button and the volume buttons, and once when one of them is held for a second: `action`, `volume_up`,
+  `volume_down`, `action_hold`, `volume_up_hold`, `volume_down_hold`. What the buttons do on the Echo stays as it was,
+  so an automation can add to it: stop an alarm clock that Home Assistant plays, skip a track with volume up held.
+  Holding both volume buttons (pairing Echos) fires nothing, nor does the press that lets a browser into the settings
+  page.
+- **Holding a button belongs to Home Assistant.** A volume button changes the volume when you let go of it within a
+  second, as the action button already acted; held longer, it only fires its `_hold` event in Home Assistant, so
+  "hold volume up for the next track" no longer changes the volume too. Holding both to pair Echos changes nothing
+  either. The action button held 10 s still resets the Echo.
+- **Switching between the Bluetooth speaker and the Echo is quick now** (issue #25). With the new setting "Stay
+  connected when off" in the Bluetooth speaker's card on the settings page, switching "Play on Bluetooth speaker" off
+  keeps the speaker connected and only moves the sound back to the Echo, so switching it on again takes well under a
+  second instead of a reconnect: handy for an automation that puts music on the speaker and leaves replies on the
+  Echo. Home Assistant's "Bluetooth speaker" shows "Standing by" meanwhile. With "Keep the speaker awake" on as well,
+  the Echo keeps the speaker from switching itself off. The page lists what it costs and asks before it goes on.
+- **Bluetooth speakers that cut off the first word** (issue #24). Some speakers switch their amplifier off while the
+  Echo is silent and need about half a second to switch it on again, so every reply lost its start. A new setting in
+  the Bluetooth speaker's card on the settings page, "Keep the speaker awake" (off by default), plays a tone too low
+  and too quiet to hear under everything, so the speaker never hears silence. Turn it on only if your speaker cuts off
+  replies.
+
+## 2026-10-11
+
+- **The light ring points at you again while you speak** (issue #22). After the wake word, Amazon's software turns
+  the light-blue part of the ring towards whoever spoke; with hassmic it always sat in the same place. Amazon's ring
+  only turns two of its animations, and hassmic used a look-alike that never turns. As with Amazon's software, the
+  ring does not turn while a second light shows at the same time (a ringing timer, say).
+- **"LED brightness" in Home Assistant no longer flips back and forth.** With auto brightness on, in light near the
+  edge between two levels (at dusk, say), it went 11 %, 12 %, 11 %, 12 % every few seconds and filled the Echo's
+  history. The ring itself does the same under Amazon's software too, one step at a time. Home Assistant now hears of
+  a change of 2 % or more at once, of a smaller one after 5 minutes. A level you set yourself shows at once as before.
+- **Stopping a ringing timer** (issue #21). Home Assistant has a "Stop ringing" button for each Echo: it ends a
+  ringing timer and leaves music alone, where the media player's stop also stopped what the media player played. And a
+  new setting under Voice on the settings page, "Any request stops a ringing timer" (off by default): with it on,
+  whatever you say after the wake word while a timer rings stops it, in any language. Until now only "stop" did, and
+  "Alexa, stop the timer" went to Home Assistant, which answered that no timer was running while it rang on. The
+  cost: a question asked during a ring only stops it.
+- **"Drop in kitchen" calls again, and says when it cannot.** The Drop In blueprint looked for Echos made by
+  "Amazon", but Home Assistant lists them as made by "hassmic", so it found none and Home Assistant just said "Done"
+  (issue #20). It now finds the Echos by what they report themselves, so an Echo or its entities renamed in Home
+  Assistant are found all the same, and it never just says "Done" any more. It only says "Calling kitchen" once the
+  call has started; otherwise it says why not: no Echo there, the other Echo has do not disturb on, its microphones
+  off, Drop In off, is in a call, did not answer, is offline or not in the same Echo network, the one you spoke to
+  is in a call, has its microphones off or cannot drop in, or you named the room it is in. "Drop in upstairs" calls
+  the Echo on that floor, area aliases count, and "Küche", "Kueche" and "kuche" are the same room. Re-import the
+  blueprint (its menu › Re-import) to get this; replies you set yourself keep working, with English for the new ones
+  until you add yours. It works with every hassmic version that has Drop In; with this update on the Echo you speak
+  to, the answer comes at once and says exactly why (before, a refused call was told after 4 s as "did not go
+  through"), and that Echo plays its end-of-call sound when a call does not go through: a call the other Echo
+  refused at once made no sound before, and Home Assistant never saw it start. For your own automations, each Echo
+  now has "Drop In result", which says what came of every call it makes.
+- **Speaker gain on the Echo Dot 2, Echo 2 and Echo Dot 3** (issue #19): a new setting under Sound on the settings
+  page makes the Echo's own speaker louder at every volume, for an Echo that is too quiet at full volume: by up to
+  12 dB on an Echo Dot 2 or Echo 2, by up to 2 dB on an Echo Dot 3, whose amplifier has no more above where Amazon
+  leaves it. It stays set across restarts of the Echo's audio. +6 dB was heard loud and clean on an Echo Dot 2; go up
+  a step at a time and turn it down at the first crackle, as a speaker played distorted for long can be damaged.
+- **Home Assistant finds an Echo again after it gets a new IP address** (issue #17), within about two minutes and
+  without a power cycle. Home Assistant ignores an Echo's "I am here now" while it still holds the old connection,
+  which it does for 90 s, so the one announcement the Echo made at its new address went unheard, and often the one
+  after a power cycle too. The Echo now announces itself again while Home Assistant stays away, and drops the dead
+  connection at once, which had kept the voice assistant from working when Home Assistant came back.
+- **Restart** on the settings page (System) and a "Restart" button in Home Assistant: the Echo reboots, as a power
+  cycle does, without anything forgotten. For an Echo that is stuck while its page still answers.
+- **Two wake words at once.** Home Assistant's "Wake word 2" select now works on the Echo: the word picked there is
+  listened for beside the first one, and it starts "Assistant 2", so each word can have its own assistant (as on a
+  Voice PE). Before, a pick there did not stick, or replaced the first word. A second word costs the Echo
+  some processing power all the time; leave "Wake word 2" at "No wake word" to keep one.
+- **Online updates check that the Echo reaches GitHub before they switch on.** The Echo downloads updates itself, so
+  one on a network kept off the internet never got any and only said so in the firmware entity's summary. Picking a
+  channel on the settings page now first asks GitHub; if it does not answer, the channel stays off and the page shows
+  a warning with what failed and what the Echo needs to reach. An imported settings file goes the same way. The
+  setting's description now says this too.
+
+## 2026-10-10
+
+- **Bluetooth on the Echo 2.** It installed with Bluetooth off, untried, yet Home Assistant still showed the
+  Bluetooth switches: "Bluetooth pairing" turned itself off again at once. Bluetooth is now on for new installs (a
+  phone pairs and plays, aptX HD included). On an Echo 2 installed before, take `-B` out of `ARGS` in
+  `/data/local/hassmic/hassmic.conf`. Wherever Bluetooth is off with `-B`, Home Assistant and the settings page no
+  longer show its switches.
+- Guided setup, Echo 2 and Echo Dot 2: the firmware now goes into both slots. The setup switched the slot back by
+  hand after the first install, so the second one landed in the same slot and the other kept whatever ran before.
+  Unpacking the firmware no longer stops with "Dangerous symbolic link path" on newer 7-Zip: it uses `debugfs`, as
+  the Echo Dot 3 always did.
+
+## 2026-10-09
+
+- **The guided setup no longer downloads models.** Its last step, which put the Echo online as a stock Alexa and
+  had you register it in the Alexa app, is gone: "Download from Amazon" on the settings page does it on every Echo
+  now, without the app and without the risk of a factory reset from deregistering too early. `scripts/artifacts.sh`
+  still works, as a fallback, and says so with a warning first.
+- Guided setup: questions end in a colon, so it is clear an answer is wanted, and waiting for the Echo says that a
+  rainbow ring is fastboot on an unlocked Echo (`fastboot reboot` gets it out), not the green of a stock one.
+- **"Download from Amazon" works on the Echo Dot 3.** Its newer way of proving to Amazon who it is — a certificate
+  its hardware key had Amazon sign — is worked out now, so the Dot 3 itself signs in on the settings page and
+  downloads wake words, whisper detection and the newer sound detection model, like the other Echos always could.
+  Tried against the real Amazon: the Dot 3 signs in and the sets arrive (where Amazon has none for a language,
+  "Ziggy" in Italian say, the page says so).
+
+## 2026-10-08
+
+- **Settings page: a feature's own choices sit under their text**, as "Drop In answers" does. Beside it, in a card half
+  the page wide, the text shrank to a column one word wide.
+- **Only the wake word you picked wakes the Echo.** Amazon's English (US) "Computer", "Amazon" and "Ziggy" are one
+  model that knows all three (and "Hey Disney"): with "Computer" picked, "Amazon" and "Ziggy" woke the Echo too.
+- **The same wake word in two languages shows twice in Home Assistant**, as "Computer (de-DE)" and "Computer (en-US)".
+  Home Assistant listed it once before and always picked the same one of the two.
+- **"Download from Amazon" takes the English (US) wake words, and German "Alexa".** Amazon now packs these sets in
+  deeper folders and with more files than the Echo accepted, so the settings page refused each one ("a file this Echo
+  cannot keep"). Copying such a set from one Echo to another on the settings page works now too.
+- **Drop In between Echos.** One Echo calls another of yours and both hear each other, as Alexa's Drop In did. Start it
+  from Home Assistant (the new action `drop_in` with the other Echo's name), by voice with the new "Echo Drop In"
+  blueprint ("drop in kitchen", "verbinde mit der Küche"; English, German, French, Spanish, Italian and Dutch,
+  replies in your assistant's language), or with the Drop In button of an Echo on the settings page. The
+  Echo called chimes and connects at once, or, set to answer with the button, rings until someone presses it. End it
+  with the action button, "Alexa, stop" or "hang up" / "auflegen", on either Echo, or with "End Drop In" in Home
+  Assistant. The ring shows Alexa's call animations, you hear Alexa's call sounds, and music pauses. Only Echos of your own Echo
+  network can call; do not disturb or the microphones off refuse a call. "Drop In" on the settings page (on by
+  default) switches it off; Home Assistant then shows none of it. The sound goes straight between the two Echos,
+  encrypted. The Echo's own echo canceller runs in its call mode; on top of it the Echo sends its room only while
+  someone there talks, so the other side does not hear itself back.
+- **Home Assistant sees a ringing timer.** "Timer ringing" is on while a finished timer rings and goes off when someone
+  stops it or it rings out; "Ringing timers" (diagnostic) names them, or gives the length of a timer without a name
+  ("5 min"). An automation can now announce a timer on every Echo, or send a phone alert, when nobody stopped it
+  within a minute. The media player's stop in Home Assistant stops the ring too.
+- **The ring lights up while a timer rings**, with the Echo's own cyan timer animation, as on a stock Echo; it went
+  dark before (the Echo was asked for an animation its light controller does not know). It goes off when the timer
+  is stopped. Listening and replies show over it, and it comes back after them.
+- **A ringing timer only stops when you say so**: "Alexa, stop", the action button, or the media player's stop in Home
+  Assistant. The wake word alone no longer stops it: as on a stock Echo, the ring pauses while you talk ("Alexa, how
+  long is left on the pasta timer?") and goes on afterwards. With microWakeWord or Home Assistant's wake word, which
+  have no "stop" of their own, saying "stop" after the wake word does it.
+- **How long a timer rings is a setting**: "Timers ring for" on the settings page, 10 s to 10 minutes or until stopped
+  (default 1 minute, as before).
+- **Several timers at once ring properly.** A second timer that finishes while one rings gives the ring its full time
+  again, and one stop ends them all. Cancelling a timer that is
+  still running no longer silences one that is ringing.
+
+## 2026-10-07
+
+- **An Echo names itself after its model, and you name it in Home Assistant.** Every Echo is now called after its
+  model and the end of its Wi-Fi MAC address, like the Voice PE: "Echo Dot 3 5695c4", "Echo Dot 2 …", "Echo 2 …"
+  (host name `echo-dot-3-5695c4.local`). The name is no longer asked for at the install, set in `hassmic.conf` or
+  changed on the settings page; give the Echo the name you want in Home Assistant, when you add it or on its device
+  page. **On updating**, an Echo installed with a name of its own changes to this one: Home Assistant keeps the
+  device and its entities (it knows the Echo by its MAC address), shows the name you gave it there, and keeps the old
+  entity ids; the host name changes. Music Assistant and Bluetooth show the new name.
+- **Set an Echo up from your phone, over Bluetooth.** A freshly installed Echo, or one reset, waits with the orange setup
+  spinner on its ring, as a stock Echo does. The Home Assistant app finds it (Settings, Devices & services, Add device), or Home Assistant itself when one
+  of its Bluetooth adapters or proxies is near: pick your Wi-Fi network, type its password, and the Echo joins it; Home
+  Assistant then discovers it as usual. The spinner stays until Home Assistant has added the Echo. This is Improv Wi-Fi,
+  the same way ESPHome devices and the Voice PE are set up. An Echo that is already set up but has had no network for
+  10 minutes (new router, moved house) offers the same, but only after a press of its action button, so nobody nearby
+  can move it onto their own network. Be aware
+  that the Wi-Fi password travels unencrypted over Bluetooth, as with every Improv device.
+- **Factory reset.** Hold the action button for 10 seconds (at 5 seconds the ring warns; let go then and nothing
+  happens), press "Factory reset" in Home Assistant (a configuration button), or use "Factory reset…" on the settings
+  page. The Echo forgets its settings, name, Home Assistant's key, approved browsers, Bluetooth pairings and its Wi-Fi
+  networks, and starts the setup above again. The install itself, Amazon's extra models and `hassmic.conf` stay.
+
+- **The settings page is tidier and about a third shorter.** The wake word engines and the arbitration modes are small
+  cards to pick from; below them, one click opens a table that compares them question by question (how well it hears,
+  which wake words, "<wake word>, stop", several Echos, ...), the current choice highlighted. "System" is two cards of
+  short rows (name, Wi-Fi, updates; settings file, log, debug access); renaming and the log open in a dialog, the log
+  as big as the window. "Download from Amazon" moved to the "Wake word" section. An Echo alone on the network no
+  longer shows two empty copy cards, only a note that other Echos show up by themselves. Fixed: the menu marked the
+  wrong section while scrolling, the "Name" card said "Give it a name." although it had one, ticking "Also change the
+  node name" showed "[object HTMLSpanElement]" instead of the new node name, and on phones an invisible "Saved" pushed
+  help texts a line down.
+- **"Copy models" lists only what there is to copy.** A model every Echo listed already has, in the same version, is
+  left out; a line says how many, and with nothing left to copy the card says so.
+- **The wake word can be left to Home Assistant from the settings page.** "Wake word" has a third choice, Home
+  Assistant: the Echo streams its microphone and your Home Assistant listens, with openWakeWord and your own wake words
+  if you like. A dialog shows what to set up there (the openWakeWord app, your models, "Add streaming wake word" on
+  the assistant) and what it costs (a constant stream, no arbitration between Echos, nothing while Home Assistant is
+  down). When Home Assistant hears the wake word, the Echo now plays its wake sound and keeps the talker's voice
+  clean to the end of the command, as with its own wake word; before, with `-w remote`, it did neither. Switching
+  restarts the satellite for a few seconds.
+- **Experimental: other wake words with microWakeWord.** The settings page has a new "Wake word" section: besides
+  Amazon's engine (still the default) the Echo can listen with microWakeWord, the wake word engine of ESPHome's voice
+  satellites, for "Okay Nabu", "Hey Jarvis", "Hey Mycroft" or any wake word someone trained a model for. Be aware that
+  **it detects wake words significantly worse** than Amazon's engine (more missed, more false wakes), and that while it
+  is on "<wake word>, stop", the extra sensitivity while the Echo plays music, Amazon's wake words and the front end's
+  scores in wake word arbitration are gone; the page lists all of it before you switch. Sound and whisper detection
+  keep working. When you pick microWakeWord, the page's dialog lists what you lose and, if the Echo has no model yet,
+  asks which wake word to start with (one of ESPHome's or your own `.tflite` and `.json` files) before it switches.
+  While it is on, the same section manages the models: add more, rename them, tune their threshold, download and
+  delete them; "Copy models" puts them on your other Echos.
+  Home Assistant's wake word select offers them while microWakeWord is on.
+- **Echos no longer drop out of each other's network every minute or so.** Each Echo's Bluetooth scanning (for Home
+  Assistant's Bluetooth proxy) shares the antenna with Wi-Fi, and messages broadcast while it scans are lost: 10 to 30
+  out of every 100. One Echo's announcements kept arriving only every third time, so it vanished from the Echos list
+  and from wake word arbitration for about 15 seconds every minute and a half. Echos now announce themselves at random
+  intervals and count each other as gone only after five minutes without one, and an Echo that heard the wake
+  word pauses its Bluetooth scan for a second, so the other Echos' claims reach it. Update every Echo.
+- **Switch the Echo to another Wi-Fi network from its settings page.** "Wi-Fi" in the System section shows the
+  network the Echo is on; "Switch network…" lists the networks it sees, or takes a name you type (for a hidden one).
+  You can type the password before or after you pick the network. The Echo keeps the new network only once it is on it
+  with an address and the router answers; otherwise it goes back to the old one within a minute or two, and the page
+  says why (wrong password, not found, no address). Once the new network works, the Echo forgets the old ones. It will most likely get a new IP address: look it up afterwards
+  under "Web UI address" on the Echo's device page in Home Assistant. The password travels encrypted, and the Echo
+  stores only the key derived from it. WPA2 and open networks; WPA3-only networks are shown but cannot be joined.
+- **The guided setup takes an Echo that is rooted already** (issue #10). If the Echo on USB has root adb and the
+  firmware this project needs, `scripts/setup.sh` offers to keep it as it is: it skips the unlock, the firmware and the
+  root steps (which would have wiped it), and asks only for `boot-root.zip`, plus the firmware when it has to build.
+  `--from <step>` skips to any step by hand.
+- **A broken unpack of boot-root no longer slips through.** If unzipping `boot-root.zip` broke off, a retry of the
+  build step passed anyway, and the install failed later with only "sepolicy patch failed". The setup now checks for
+  the tool it needs from it, unpacks it again in the install step if it is missing, and the installer says what is
+  missing before it touches the Echo.
+- **Echos hand each other the arbitration key through Home Assistant again, whatever the devices are called there.**
+  Home Assistant now puts the room (and more) into entity ids, so the Echos could no longer find each other's
+  "Arbitration handoff" entity and needed "Allow the device to perform Home Assistant actions" or the volume keys.
+  Each Echo now reports a tag named after its key as scanned, and an Echo hands the key only to one whose tag Home
+  Assistant confirms: nothing to set up, no permission needed. Home Assistant's Tags list shows one "Tag hassmic_…" per
+  Echo. The "Arbitration handoff" entity is gone. Echos on older versions still join through the action or the
+  volume keys.
+- **Fewer wake words answered by the wrong Echo.** An Echo could miss another's report of how well it heard the wake
+  word, answer itself, and have Home Assistant turn the better one away. The reports now go out three times, spread
+  over 80 ms, instead of twice at the same moment.
+- **An Echo set to another wake word no longer falls back to "Alexa" at every start.** Wake word sets installed by
+  hand were renamed to their full name (`echo-de` to `echo-de-DE`), but `-m` in `hassmic.conf` still named the old
+  folder: Home Assistant then offered "Echo" twice, and the one that no longer existed loaded nothing. The old name
+  now finds the renamed set, and a missing `-m` model is no longer offered.
+- **No false warning about the key on the settings page.** The Echos section warned that the "Arbitration handoff"
+  entity was missing even when the Echo had its key. It now warns only when an Echo has waited over a minute for one.
+
+## 2026-10-06
+
+- **Identify.** Which Echo is which: "Identify" (at the top of the settings page, beside each logged-in Echo in the
+  Echos list, and as a button in Home Assistant) turns the ring into a rainbow for 10 seconds and plays the sound a stock
+  Echo makes in setup. Pressing it again makes it last longer.
+- **Rename an Echo on the settings page** ("Name", in System). Only the name you see changes, unless you also tick
+  "Also change the node name"; the page then lists what that costs in Home Assistant and for wake word arbitration and
+  asks you to confirm. The satellite restarts once for a few seconds.
+- **"Bluetooth speaker delay" on the settings page**, in the "Play on a Bluetooth speaker" card, next to Home
+  Assistant's number.
+- **"Copy settings" follows changes right away.** A setting changed on this Echo (on the page or from Home
+  Assistant) used to be offered with its old value until the next look at the other Echos; the list now shows the
+  current value within seconds.
+- **The settings page keeps up with the Echo.** After an update it reloads itself instead of showing the old version;
+  "Log in" on another Echo stays at "Press its button…" while it waits (it used to turn back after a few seconds and
+  could start a second wait); "How Echos get the key" no longer folds itself shut while you read it; a renamed Echo
+  shows its new name; in the copy and download lists the keyboard focus stays where it was when the list refreshes.
+- **The Echo knows the time again.** Behind the firewall nothing set its clock any more (the Echo Dot 2 was 23 hours
+  behind); it now takes the time from Home Assistant, over the encrypted link, when it connects and every 6 hours.
+- **Times in the log.** Every line of the log says when it was written; the settings page shows the times in your time
+  zone. Until the Echo has the time from Home Assistant they count seconds since it started.
+- **Less noise in the log**: the four times three "Could not open /dev/block/mmcblk0boot1! Can't read the idme." lines
+  at every start (harmless: Amazon's own sign-in code trying a way it is not allowed) no longer show.
+- **The log on the settings page.** "Log" in the System section shows what the Echo wrote (hassmic, the firewall,
+  updates), with a filter, the older part, and a download for bug reports — no adb needed any more. The Sendspin
+  pairing token is blanked in it; the rest travels unencrypted, like the whole page.
+- **Kiosk Satellite claims no longer flood the log**: once a second at most, with a count of the rest.
+- **Echos and Kiosk Satellite tablets answer once between them.** Wake word arbitration has a second mode, "Kiosk
+  Satellite", next to the Echos' own (still the default): with it an Echo settles wake words the way Kiosk Satellite
+  does, with its tablets and with other Echos in that mode — the device that heard the wake word loudest answers. The
+  settings page shows the two side by side with what each gives and what it costs; in short, Kiosk Satellite's has no
+  protection (anyone on the network can keep the Echo silent), no preference for the Echo you are talking to, and a
+  wait of 400 ms (adjustable, as on the tablets) on every wake word. The firewall opens UDP 2330 only while that mode
+  is on. Set the same mode on every Echo; the page warns when they differ. A loudness offset (±20 dB) evens the Echo
+  out against your tablets' microphones by ear.
+- **Amazon's models download on the Echo itself.** The settings page's new "Download from Amazon" signs the Echo in
+  to your Amazon account with a code you enter on your Amazon site (any site with Alexa: amazon.com, .co.uk, .de, .co.jp
+  and the others), then fetches extra wake words, whisper detection and the newer sound detection model straight from
+  Amazon — no stock mode, no Alexa app, no PC (`scripts/artifacts.sh` still works). It goes step by step (site, code,
+  what to download), shows each download's progress and outcome, and marks what the Echo already has. The sign-in
+  stays until you sign out (the Echo then leaves your account again), and what lands on one Echo can be copied to the
+  others on the same page. Not on the Echo Dot 3: its newer device attestation to Amazon is not reversed, so it says
+  so and takes the copies instead.
+- **Models with folders inside** (whisper detection, the German "Alexa" set) download, copy between Echos and install
+  whole now.
+- **A new settings page.** Every setting now says what it does and when to change it, each feature which entities it
+  adds to Home Assistant, and the page works on a phone. The Echos section shows the network, the other Echos and
+  whether their settings match, in one list. The list keeps itself up to date: a new Echo shows up within 15 s, each
+  as soon as it answers (one switched off no longer holds the others back), with "Checking…" while it asks them, and
+  an Echo that was unreachable comes back by itself once it is on again.
+- **Log in once for all your Echos.** Echos in the same network (the one wake word arbitration uses, which runs on
+  every Echo) trust each other: a browser logged in on one is let in on the others without pressing their buttons.
+  The page of the Echo you are logged in to does it by itself; opening another Echo's page directly, its login offers
+  "Log in through <Echo>", which you confirm on the Echo you are logged in to. Debug access still takes a press of
+  that Echo's own button.
+- **Wake words installed by hand under a short name get the full one** (`echo-de` becomes `echo-de-DE`, as
+  `scripts/artifacts.sh` names them) when the Echo starts after this update, so the same wake word has one name on
+  every Echo and the settings page sees it as the same. The chosen wake word stays chosen. Only for languages Amazon
+  has in one region (German, Italian, Japanese, Portuguese); English, French and Spanish ones keep their name.
+- **Choose what to copy between Echos.** The settings page shows this Echo's settings beside every other Echo's you are
+  logged in to, with the differences marked; tick the settings and the Echos to copy them to.
+- **Copy Amazon's models from one Echo to the others** on the settings page: extra wake words, whisper detection and
+  the newer sound detection model. Run `scripts/artifacts.sh` for one Echo, then copy from it here; no PC needed for
+  the rest. Each wake word set is first tried on the receiving Echo, and every Echo that got something restarts its
+  satellite once. The page now also checks every answer an Echo sends, so nothing on the network can change what
+  travels between them; an Echo on an older version needs updating before the page can work with it.
+- **Sound detection says which model it uses**, Amazon's newer one or the firmware's, and when it cannot start (the
+  model does not load) it now switches itself off properly: the settings page shows why, and Home Assistant no longer
+  lists a "Sound" entity that would never fire.
+- **Echos stay in their network with arbitration off.** "Wake word arbitration" now only decides whether an Echo
+  takes part: switched off, it answers every wake word itself, and the other Echos stop waiting for it. It keeps the
+  network key and its "Arbitration handoff" entity, so the settings pages still find it and settings can be copied
+  to it. Echos switched off before this update keep arbitration off and join the network again. The volume-key
+  pairing no longer switches arbitration on.
+
+- **Home Assistant shows less, the settings page the rest.** Home Assistant keeps what you use day to day: mute, do
+  not disturb, wake sound, the LEDs, the equalizer, the media player and firmware updates. Features are switched on
+  the settings page, and while one is on its entities are in Home Assistant: wake word arbitration, sound detection,
+  whisper detection, Wi-Fi motion, Bluetooth audio from phones, playing on a Bluetooth speaker. Switched off, their
+  entities are removed from Home Assistant (it reconnects for a moment). Mic level, noise reduction, Bluetooth
+  announcements, the online updates channel, "Music Assistant without pairing", debug access and SoC temperature / CPU
+  usage are on the settings page only. After this update, entities that moved are gone from Home Assistant; the
+  settings themselves are kept. Opening debug access takes a press of the action button.
+- **The settings page shows the wake word arbitration network**: which Echos are in it, which are not and why (no key
+  yet, or a second network beside this one), with what to do about it. It also lists the other Echos it hears: log in
+  to each once, and it tells which settings differ from this Echo's and copies them over, to one Echo or to all.
+- **Set up the next Echo with the settings of the last one**: `scripts/setup.sh --preset hassmic-settings.conf` (a
+  file exported on the settings page), or give the file when the install step asks. The Echo starts with them.
+
+- **Find the settings page from Home Assistant**: "Visit" on the Echo's device page opens it, and a new diagnostic
+  entity "Web UI address" shows its address (`http://<echo-ip>:28931`).
+
+- **A settings page on every Echo**, at `http://<echo-ip>:28931/`. Log in once per browser with a press of the Echo's
+  action button. It shows every setting, warns about what does not work and why (no Home Assistant link, models
+  missing), and exports the settings to a file you can import on other Echos. The settings file on the Echo is now
+  `state/config` with one `name=value` per line; the old one is moved over by itself.
+
+## 2026-10-05
+
+- **Several Echos settle the wake word among themselves without "Allow the device to perform Home Assistant
+  actions".** Each Echo now shows a key on a diagnostic entity, "Arbitration handoff", and the Echos hand each other the
+  network key through those entities: nothing to tick, no repair in Home Assistant. Keep that entity enabled. It
+  works as long as the Echo's entities carry the name of its `NAME`; if you renamed the Echo in Home Assistant, the
+  old way (the permission) still works, and so does a new one without Home Assistant: hold Volume up and Volume down
+  together for 2 s on the new Echo, then on one that is already in.
+
+- **Whisper detection: one download, the one that exists.** Amazon has a single whisper model for every language
+  and hands it out only when asked for American English, so `scripts/artifacts.sh` now asks for just that, whatever
+  language is picked. Before, it asked for the picked language first and took the English one as a fallback.
+- **`scripts/artifacts.sh` says plainly at the end when whisper detection was ticked but not installed.** The log of
+  the run before is kept as `build/artifacts.log.1`, so a second try no longer wipes the record of the first.
+- **Downloads from Amazon work with older Python 3** (e.g. Ubuntu 20.04's 3.8): unpacking a model failed there after
+  the download.
+- **`scripts/artifacts.sh` no longer downloads with a dead registration.** An Echo could still carry the registration of
+  an earlier run, with a token Amazon refuses; the script took that for "registered already" and every download
+  failed. It now asks Amazon whether the token works, and otherwise has you set the Echo up in the Alexa app.
+- **`scripts/artifacts.sh` asks you to deregister the Echo only once it is a satellite again.** It asked before,
+  while the Echo still ran as a stock Echo online, and a stock Echo resets itself to factory settings when
+  deregistered: hassmic's settings, its Home Assistant key and the wake word models were gone, and the Echo stayed a
+  plain Alexa. If that happened to yours: block the Echo's internet at the router, then
+  `adb shell 'mkdir -p /data/local/hassmic; printf "NAME=\"Echo Dot\"\nARGS=\"\"\n" > /data/local/hassmic/hassmic.conf'`
+  and `adb reboot`, add it to Home Assistant again, and run `scripts/artifacts.sh` for the wake words.
+- **`scripts/artifacts.sh` tells you when the Echo's adb hangs.** After the Alexa app moved an Echo Dot 3 to another
+  Wi-Fi network and back, adb over Wi-Fi took the connection but never answered, and the script waited forever. It
+  now says to unplug the Echo's power and plug it back in. An Echo left waiting for the Alexa app (orange ring) by a
+  run stopped halfway is explained too.
+
 ## 2026-10-04
+
+- **Whisper detection.** Whisper to the Echo, and Home Assistant knows: the binary sensor "Last request whispered" is
+  on when your last request was whispered. Use it in your conversation agent's instructions to have the answer
+  whispered as well, as a stock Echo does ([how](docs/GUIDE.md#whisper-detection)). It is Amazon's own detector, run on the Echo
+  with a model that only Amazon hands out: the guided setup's last step offers it next to the wake words, and
+  `scripts/artifacts.sh` ("Other artifacts") adds it to an Echo set up before. ESPHome only.
+- **Newest sound detection model.** `scripts/artifacts.sh` and the guided setup can install Amazon's newest sound
+  detection model; hassmic then takes it in place of the one in the firmware (and goes back to that one if it does not
+  load). Not ticked by default: in tests it scored the same.
+- **`scripts/artifacts.sh` over Wi-Fi no longer hangs** after restarting the Echo as a stock Echo. A stock Echo
+  that is not registered drops your Wi-Fi and opens its own setup network, so it now asks you to set it up in the
+  Alexa app first and waits for it to come back afterwards. With the Echo on USB as well, it uses USB.
+- **`scripts/artifacts.sh` menus** no longer get garbled when an entry is wider than the terminal.
 
 - **Cancel a request with the action button**, as with the center button of a Voice PE: pressed while Home Assistant is
   still listening or thinking, the request is aborted, the conversation agent included, so a misheard command does not

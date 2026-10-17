@@ -11,7 +11,7 @@ struct board {
     const char *model;              /* ESPHome device info "model", Wyoming description */
     const char *project;            /* ESPHome "project_name" */
     const char *product;            /* Sendspin "product_name" */
-    const char *default_name;       /* friendly name when -n is not given */
+    const char *default_name;       /* the model as people call it ("Echo Dot 3"); the name adds the MAC's end (main.c) */
     const char *codename;           /* devices/<codename>: names this model's bundle in a release (online updates) */
 
     /* inputs */
@@ -34,6 +34,13 @@ struct board {
     const char *thermal_type;       /* thermal zone reported as SoC temperature */
     const char *light_sensor[3];    /* files the stock light sensor HAL reads lux from, first that opens; {NULL}: none */
     int volume_steps;               /* volume_step-NN animations of ledcontroller */
+
+    /* speaker gain (spkgain.c): an ALSA control of card 0 that sets the speaker amplifier's analog gain, which the
+     * settings page may raise; NULL: none.  stock: what the speaker plays at on a stock Echo (what the audio HAL's
+     * speaker path sets it to, or where it stays from boot).  steps: the control's steps per dB, 0 for 1 */
+    const char *speaker_gain;
+    int speaker_gain_stock;
+    int speaker_gain_steps;
 };
 
 extern const struct board board;

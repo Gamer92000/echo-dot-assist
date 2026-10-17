@@ -42,6 +42,7 @@
 #include "core.h"
 #include "hci.h"
 #include "a2dp_codec.h"
+#include "statefile.h"
 
 #define MAX_LINKS 3                     /* a phone playing to us, the speaker we play to, one more */
 #define MAX_CHANS 6                     /* per link: SDP, AVDTP signalling + media, and room for a retry */
@@ -97,15 +98,15 @@ static void keys_load(void)                     /* one line per device: address 
 
 static void keys_save(void)
 {
-    char tmp[300]; snprintf(tmp, sizeof tmp, "%s.tmp", keys_path());
-    int fdw = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600); FILE *f = fdw >= 0 ? fdopen(fdw, "w") : NULL;
-    if (!f) { if (fdw >= 0) close(fdw); fprintf(stderr, "a2dp: cannot write %s\n", tmp); return; }
+    struct statefile s; FILE *f;
+    if (statefile_open(&s, keys_path(), 0600)) { fprintf(stderr, "a2dp: cannot write %s.tmp\n", keys_path()); return; }
+    f = s.f;
     for (int i = 0; i < nkeys; i++) {
         fprintf(f, "%012llx %u ", (unsigned long long)keys[i].addr, keys[i].type);
         for (int j = 0; j < 16; j++) fprintf(f, "%02x", keys[i].k[j]);
         fputc('\n', f);
     }
-    if (fclose(f) || rename(tmp, keys_path())) { unlink(tmp); fprintf(stderr, "a2dp: cannot write %s\n", keys_path()); }
+    if (statefile_commit(&s)) fprintf(stderr, "a2dp: cannot write %s\n", keys_path());
 }
 
 static struct key *key_for(uint64_t a) { for (int i = 0; i < nkeys; i++) if (keys[i].addr == a) return &keys[i]; return NULL; }
@@ -962,7 +963,10 @@ static void avrcp_upkeep(void)
  * Bluetooth speaker" keeps a link to it: paged while away (backing off), and accepted when it pages us (speakers call
  * their last source when switched on).  On the link we configure SBC ourselves as AVDTP initiator (discover,
  * capabilities, set configuration, open, media channel); a speaker that configures our source endpoint itself first is
- * followed instead.  START and SUSPEND follow the mixer's HAL (btout_want). */
+ * followed instead.  START and SUSPEND follow the mixer's HAL (btout_want).  "Stay connected when off" (out_stay, issue
+ * #25): switched off, the link stays and only the mixer's route goes back to the Echo (btout_route); a link that is
+ * gone meanwhile is not paged for until the switch is on again (a speaker that went to sleep stays asleep), but one
+ * that calls us is kept. */
 
 #define OUT_SEID 0x30                   /* our source endpoint; the sink endpoints are 1..nseps */
 #define OUT_BITPOOL 53                  /* SBC "high quality" for joint stereo 44.1 kHz: 328 kbit/s */
@@ -970,7 +974,7 @@ static void avrcp_upkeep(void)
 #define OUT_DELAY_MS 250                /* default latency of a speaker for Sendspin (SBC sinks buffer 150..250 ms) */
 
 enum { O_IDLE, O_DISCOVER, O_CAPS, O_SETCONF, O_OPEN, O_ACP, O_MEDIA, O_READY, O_START, O_STREAMING, O_SUSPEND };
-enum { S_NONE, S_OFF, S_AWAY, S_CONNECTING, S_READY, S_PLAYING };      /* out_state, for Home Assistant */
+enum { S_NONE, S_OFF, S_AWAY, S_CONNECTING, S_READY, S_PLAYING, S_STANDBY };     /* out_state, for Home Assistant */
 enum { A_NO = -1, A_UNKNOWN, A_ASKED, A_ON };                            /* out.absvol */
 
 static struct {
@@ -984,7 +988,7 @@ static struct {
 } out;
 static pthread_mutex_t out_lock = PTHREAD_MUTEX_INITIALIZER;          /* out.name for other threads */
 static atomic_int out_on_req = -1, out_search_req = -1, out_searching, out_enabled, out_delay = OUT_DELAY_MS, out_save_req,
-                  out_state, out_live;
+                  out_state, out_live, out_stay;
 static long long search_until; static int inquiring;
 static struct { uint64_t addr; int rssi, psrm, clock; char name[80]; } cand;
 
@@ -1008,19 +1012,19 @@ static void speaker_load(void)                  /* address, play on it, latency 
         atomic_store(&out_delay, d >= 0 && d <= 2000 ? d : OUT_DELAY_MS);
         snprintf(out.name, sizeof out.name, "%s", l + n);
         fprintf(stderr, "a2dp: speaker %012llx \"%s\"%s\n", a, out.name, out.on ? ", playing on it" : "");
+        btout_route(out.on);
     }
     fclose(f);
 }
 
 static void speaker_save(void)
 {
-    char tmp[300]; snprintf(tmp, sizeof tmp, "%s.tmp", speaker_path());
-    FILE *f = fopen(tmp, "w");
-    if (!f) { fprintf(stderr, "a2dp: cannot write %s\n", tmp); return; }
+    struct statefile s;
+    if (statefile_open(&s, speaker_path(), 0666)) { fprintf(stderr, "a2dp: cannot write %s.tmp\n", speaker_path()); return; }
     pthread_mutex_lock(&out_lock);
-    fprintf(f, "%012llx %d %d %s\n", (unsigned long long)out.addr, out.on, atomic_load(&out_delay), out.name);
+    fprintf(s.f, "%012llx %d %d %s\n", (unsigned long long)out.addr, out.on, atomic_load(&out_delay), out.name);
     pthread_mutex_unlock(&out_lock);
-    if (fclose(f) || rename(tmp, speaker_path())) { unlink(tmp); fprintf(stderr, "a2dp: cannot write %s\n", speaker_path()); }
+    if (statefile_commit(&s)) fprintf(stderr, "a2dp: cannot write %s\n", speaker_path());
 }
 
 static void out_name(const char *name)
@@ -1232,7 +1236,7 @@ static void out_inquiry_done(void)
     if (!atomic_load(&out_searching) || !cand.addr) return;
     if (out.l && out.l->addr != cand.addr) { out_stream_reset(); out_disconnect(out.l); }
     key_forget(cand.addr);                              /* in pairing mode: whatever it had with us is gone */
-    out.addr = cand.addr; out_name(cand.name); out.on = 1; atomic_store(&out_enabled, 1);
+    out.addr = cand.addr; out_name(cand.name); out.on = 1; atomic_store(&out_enabled, 1); btout_route(1);
     out.pairing = 1; out.failures = 0; out.next_page = ms(); out.psrm = cand.psrm; out.clock = cand.clock;
     fprintf(stderr, "a2dp: pairing with speaker %012llx \"%s\"\n", (unsigned long long)out.addr, cand.name);
     speaker_save();
@@ -1259,12 +1263,16 @@ static void out_avrcp_answer(unsigned code, unsigned pdu, const unsigned char *p
         if (code == AVC_INTERIM && n >= 2 && par[0] == EVENT_VOLUME && out.absvol == A_ASKED) {
             unsigned v = par[1] & 0x7f; int pct = (v * 100 + 63) / 127;
             fprintf(stderr, "a2dp: speaker has absolute volume, at %d %%: it sets the volume\n", pct);
-            out.absvol = A_ON; out.sent_v = v; atomic_store(&echo_volume, pct); btout_absvol(1, pct);
+            out.absvol = A_ON; out.sent_v = v; if (out.on) atomic_store(&echo_volume, pct);
+            btout_absvol(1, pct);
         } else if (code == AVC_CHANGED && n >= 2 && par[0] == EVENT_VOLUME) {
             unsigned v = par[1] & 0x7f;
             if (out.absvol == A_ON && (int)v != out.sent_v) {        /* its own buttons */
                 int pct = (v * 100 + 63) / 127;
-                out.sent_v = v; atomic_store(&echo_volume, pct); volume_set_later(pct);
+                out.sent_v = v;
+                /* standing by (or on the way there or back): the Echo keeps its own, the speaker's waits for the route */
+                if (btout_speaker_volume()) { atomic_store(&echo_volume, pct); volume_set_later(pct); }
+                else btout_absvol(1, pct);
             }
             out_register_volume();                      /* a notification is good for one change */
         } else if (code == AVC_REJECTED || code == AVC_NOT_IMPLEMENTED) {
@@ -1282,7 +1290,8 @@ static void out_volume_upkeep(long long now)
     if (!out.l || !out.l->avctp || out.phase < O_READY) return;
     if (out.absvol == A_UNKNOWN) { out.absvol = A_ASKED; out.avol_at = now + 3000; out_register_volume(); }
     else if (out.absvol == A_ASKED && now > out.avol_at) { out.absvol = A_NO; fprintf(stderr, "a2dp: speaker does not answer about its volume\n"); }
-    else if (out.absvol == A_ON && (volume_now() * 127 + 50) / 100 != out.sent_v) out_set_volume(volume_now());
+    /* only while the Echo's volume is the speaker's: standing by, it is the Echo's own */
+    else if (out.absvol == A_ON && btout_speaker_volume() && (volume_now() * 127 + 50) / 100 != out.sent_v) out_set_volume(volume_now());
 }
 
 static void out_link_up(struct link *l, int paged)
@@ -1314,8 +1323,10 @@ static int out_upkeep(void)
     }
     if ((r = atomic_exchange(&out_on_req, -1)) >= 0 && r != out.on) {
         out.on = r; out.failures = 0; out.next_page = now;
-        fprintf(stderr, "a2dp: %s\n", r ? "playing on the speaker" : "playing on the Echo");
-        if (!r) { out_stream_reset(); out_disconnect(out.l); }
+        int keep = !r && atomic_load(&out_stay) && out.l;
+        fprintf(stderr, "a2dp: %s%s\n", r ? "playing on the speaker" : "playing on the Echo", keep ? ", the speaker stays connected" : "");
+        if (!r && !keep) { out_stream_reset(); out_disconnect(out.l); }
+        btout_route(r);
         speaker_save();
         if (r && !out.addr && !atomic_load(&out_searching)) atomic_store(&out_search_req, 1);   /* none yet: find one */
     }
@@ -1339,11 +1350,11 @@ static int out_upkeep(void)
         if (!st) out.paging = 1; else out.next_page = now + 10000;
     }
     struct link *l = out.l;
-    int state = !out.addr ? S_NONE : !out.on ? S_OFF : out.phase == O_STREAMING ? S_PLAYING : out.phase >= O_READY ? S_READY
+    int state = !out.addr ? S_NONE : !out.on ? (out.phase >= O_READY ? S_STANDBY : S_OFF) : out.phase == O_STREAMING ? S_PLAYING : out.phase >= O_READY ? S_READY
               : l || out.paging ? S_CONNECTING : S_AWAY;
     if (atomic_exchange(&out_state, state) != state && notify) notify();
     if (!l || l->dropping) return 0;
-    if (!out.on) { out_disconnect(l); return 0; }
+    if (!out.on && !atomic_load(&out_stay)) { out_disconnect(l); return 0; }
     if (!l->enc) { if (!l->pend_until) out_fail("link not encrypted"); return 0; }      /* a2dp_upkeep authenticates */
     if (!l->av_sig) {
         if (!out.sig_lcid) { out.sig_lcid = chan_open(l, PSM_AVDTP); out.sig_at = now; }
@@ -1606,11 +1617,12 @@ int a2dp_upkeep(void)
     return 0;
 }
 
-int a2dp_streaming(void) { return atomic_load(&streaming) || atomic_load(&out_live); }
+/* the keep-awake tone alone does not count: the proxy's scan may cost it packets, and it would keep scanning off for good */
+int a2dp_streaming(void) { return atomic_load(&streaming) || (atomic_load(&out_live) && !btout_idle()); }
 
 int a2dp_busy(void)
 {
-    int b = pair_until != 0 || npend > 0 || atomic_load(&out_searching) || out.paging || (out.on && out.addr);
+    int b = pair_until != 0 || npend > 0 || atomic_load(&out_searching) || out.paging || (out.on && out.addr) || out.l;
     for (int i = 0; i < MAX_LINKS; i++) b |= links[i].used && (links[i].pend_until || links[i].avctp_at);
     return b;
 }
@@ -1682,6 +1694,7 @@ void a2dp_out_search(int on) { atomic_store(&out_search_req, on != 0); hci_poke(
 int  a2dp_out_searching(void) { return atomic_load(&out_searching); }
 void a2dp_out_enable(int on) { atomic_store(&out_enabled, on != 0); atomic_store(&out_on_req, on != 0); hci_poke(); }
 int  a2dp_out_enabled(void) { return atomic_load(&out_enabled); }
+int  a2dp_out_stay(int set) { if (set >= 0) { atomic_store(&out_stay, set != 0); hci_poke(); } return atomic_load(&out_stay); }
 
 int a2dp_out_delay(int set)
 {
@@ -1691,7 +1704,7 @@ int a2dp_out_delay(int set)
 
 void a2dp_out_status(char *buf, unsigned n)
 {
-    static const char *const words[] = { "None", "Off", "Not reachable", "Connecting", "Connected", "Playing" };
+    static const char *const words[] = { "None", "Off", "Not reachable", "Connecting", "Connected", "Playing", "Standing by" };
     int st = atomic_load(&out_state);
     if (atomic_load(&out_searching)) { snprintf(buf, n, "Searching..."); return; }
     if (st == S_NONE) { snprintf(buf, n, "%s", words[st]); return; }

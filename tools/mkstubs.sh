@@ -15,7 +15,7 @@ DEVS=${*:-$(ls devices/*/device.mk | cut -d/ -f2)}
 NDK=${NDK:-$PWD/toolchain/android-ndk-r21e}
 BIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
 T=$(mktemp -d); trap 'rm -rf $T' EXIT
-BINS="hassmic mixcap mixplay latency pryon_test aed_test"
+BINS="hassmic mixcap mixplay latency pryon_test aed_test whisper_test"
 
 # Undefined in our binaries, not from the NDK's own libc/libm/libdl: what the stock libraries must provide.  Includes the
 # EABI helpers (__aeabi_idiv ...) that the stock libraries export: the linker takes them from there before libgcc.

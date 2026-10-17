@@ -7,8 +7,9 @@ changes by date: [CHANGELOG.md](CHANGELOG.md). Reverse-engineering notes: [docs/
 
 Amazon's `mixer` daemon owns the audio hardware and runs the whole front end (`libasp`: AEC, beamforming, mic
 calibration). `hassmic` takes the place of the Alexa client `PuffinApp` as the mixer's client through the reversed C API
-of `libmixerAPI.so`, feeds the 16 kHz post-AEC stream to the stock `libpryon.so` wake word engine, and speaks the ESPHome
-native API (default) or Wyoming to Home Assistant.
+of `libmixerAPI.so`, feeds the 16 kHz post-AEC stream to the stock `libpryon.so` wake word engine (or, picked on the
+settings page, to microWakeWord: TFLite Micro's audio front end and an int8 TFLite interpreter of our own, `mww_*.c`),
+and speaks the ESPHome native API (default) or Wyoming to Home Assistant.
 
 Boot integration (`scripts/system/`): `hassmic.rc` (init) starts `boot.sh` (fixed, on `/system`), which picks the factory
 copy or a verified push update and runs `main.sh` (updatable): `main.sh firewall` keeps the egress lock in place and is
@@ -28,15 +29,17 @@ rules. `DEVICE` picks one (default `donut`). The adb scripts check it against th
 | Path | What |
 |---|---|
 | `devices/` | one directory per Echo model (`donut`, `biscuit`, `radar`): `device.mk`, `board.c`, `device.conf`, `hassmic.rc`, `sepolicy.rules`, `setup.sh`, install instructions |
-| `src/hassmic/` | the daemon: core (capture, wake word, playback, LEDs, buttons), `sound_pryon.c` (optional sound detection, `docs/re-aed.md`), `proto_esphome.c`, `proto_wyoming.c`, `arb.c` (wake word arbitration between Echos), `micdenoise.c` (RNNoise on the mic audio sent to the pipeline), `micgain.c` (gain of the mic audio sent to the pipeline), `sendspin.c`, `a2dp.c` (Bluetooth speaker both ways), `btout.c` (playing on a Bluetooth speaker: the mixer's A2DP route, `docs/re-a2dp-source.md`), `ble.c`, push updates (`ota.c`), online updates (`update.c`), `adbwifi.c` (the debug access switch), `wifimotion.c` (experimental motion sensor from the Wi-Fi driver's receive level) |
+| `src/hassmic/` | the daemon: core (capture, wake word, playback, LEDs, buttons), `sound_pryon.c` (optional sound detection, `docs/re-aed.md`), `whisper_pryon.c` (whisper detection with Amazon's model, `docs/re-whisper.md`), `proto_esphome.c`, `proto_wyoming.c`, `arb.c` (wake word arbitration between Echos), `dropin.c` (Drop In: calls between Echos of the arbitration network), `settings.c` (settings by name, `state/config`), `web.c` (the settings page; its files in `web/`), `artifacts.c` (models copied between Echos by the page), `davs.c` (models downloaded from Amazon by the page, with `dha.c` for the device attestation its login needs, `docs/re-davs-login.md`), `earsup.c` (experimental: our own wake sound taken back out of the mic audio sent to the pipeline), `micdenoise.c` (RNNoise on the mic audio sent to the pipeline), `micgain.c` (gain of the mic audio sent to the pipeline), `sendspin.c`, `a2dp.c` (Bluetooth speaker both ways), `btout.c` (playing on a Bluetooth speaker: the mixer's A2DP route, `docs/re-a2dp-source.md`), `ble.c`, push updates (`ota.c`), online updates (`update.c`), `adbwifi.c` (the debug access switch), `improv.c` (setup from a phone: Improv Wi-Fi over `ble.c`'s peripheral role), `netaddr.c` (a new IP address: links over the old one closed, mDNS announced again until Home Assistant is back), `wifimotion.c` (experimental motion sensor from the Wi-Fi driver's receive level), `wake.c` (picks the wake word engine by the model: `wake_pryon.c`, or `wake_mww.c` = microWakeWord with `mww_features.c` (its audio front end), `mww_model.c` (its int8 .tflite models) and `mww_store.c` (its models in `state/mww`, managed by the page)) |
 | `src/kmod/` | kernel modules for Wi-Fi motion, hooking the Wi-Fi driver's receive path: `hassmic_rcpi.c` (biscuit, radar), `hassmic_rcpi4m.c` (donut); built by `make` when the model's kernel sources and compiler are in `toolchain/`, see below |
-| `src/tools/` | `mixcap`, `mixplay`, `pryon_test`, `aed_test` (stock sound detector, `docs/re-aed.md`), `latency`, `otatool`, `runas` (AIPC refuses uid 0, the image has no `su`), `curlspy`, `hciscan` (raw HCI on `/dev/stpbt`), `a2dpprobe` (stands in for the Bluetooth stack on the mixer's A2DP output) |
+| `src/tools/` | `mixcap`, `mixplay`, `pryon_test`, `aed_test` (stock sound detector, `docs/re-aed.md`), `whisper_test` (whisper detector, `docs/re-whisper.md`), `latency`, `otatool`, `runas` (AIPC refuses uid 0, the image has no `su`), `curlspy`, `hciscan` (raw HCI on `/dev/stpbt`), `a2dpprobe` (stands in for the Bluetooth stack on the mixer's A2DP output) |
 | `src/include/` | C headers for the reversed `libmixerAPI.so` and `libpryon.so` |
 | `src/third_party/` | monocypher 4.0.2, `dr_flac.h`, `minimp3.h`, libfreeaptx 0.2.2, RNNoise 0.1.1 (own licences, see README) |
-| `scripts/` | PC side: `setup.sh` (guided install), `artifacts.sh` (Amazon artifacts for an installed Echo: more wake words, the sound detection model), `deploy.sh`, `probe.sh`, `capture-test.sh`, `mic-compare.sh` (micRaw against micAsr on a running Echo), `wifi-join.sh`, `install-system.sh`, `ota-push.sh`, `bundle.sh` (packs and signs an update; also CI's), `otatool.py` (bundles on the PC: keys, signing, checking, pushing; the Echo's own is `src/tools/otatool.c`), `adb-wifi.sh` (adb over Wi-Fi with the update key); `lib/device.sh` picks the model, `lib/build.sh` builds the Echo's binaries or takes the commit's release build, `lib/setup.sh` has the guided setup's helpers, `lib/wakeword.sh` the wake word installer |
+| `scripts/` | PC side: `setup.sh` (guided install), `artifacts.sh` (Amazon artifacts for an installed Echo: more wake words, the whisper detection model, the newest sound detection model; the old way through the Alexa app, a fallback to the settings page's "Download from Amazon"), `deploy.sh`, `probe.sh`, `capture-test.sh`, `mic-compare.sh` (micRaw against micAsr on a running Echo), `wifi-join.sh`, `install-system.sh`, `ota-push.sh`, `bundle.sh` (packs and signs an update; also CI's), `otatool.py` (bundles on the PC: keys, signing, checking, pushing; the Echo's own is `src/tools/otatool.c`), `adb-wifi.sh` (adb over Wi-Fi with the update key); `lib/device.sh` picks the model, `lib/build.sh` builds the Echo's binaries or takes the commit's release build, `lib/setup.sh` has the guided setup's helpers, `lib/artifacts.sh` the logic of `artifacts.sh` |
 | `scripts/device/`, `scripts/system/` | run on the Echo, reading the model's `device.conf` next to them; boot integration (`boot.sh`, `main.sh`) |
 | `tools/` | `mkstubs.sh` (stand-ins for the stock libraries, for building without the firmware), OTA payload dumper, Thumb disassembly helpers, `qrun.sh` (device binaries under qemu-arm), `davs-fetch.py` |
+| `docs/` | user guide (`GUIDE.md`), security model (`SECURITY.md`), reverse-engineering notes; `img/src/*.typ` are the README figures (Typst + CeTZ), `tools/figures.sh` renders them to `img/*-light.svg` / `*-dark.svg` |
 | `tests/` | protocol tests against the reference implementations |
+| `blueprints/` | Home Assistant blueprints for features that need an automation (`automation/drop_in.yaml`: Drop In by voice) |
 | `keys/` | `release.pub`: the key online updates are signed with (CI and releases, below) |
 | `.github/workflows/` | `build.yml`: builds, tests, betas and releases |
 
@@ -44,20 +47,40 @@ rules. `DEVICE` picks one (default `donut`). The adb scripts check it against th
 
 Device binaries need the NDK and the unpacked firmware in `firmware/<codename>/` (the model's install page, steps 1–2, e.g. `devices/donut/README.md`), or
 `STUBS=1` instead of the firmware (below). Without the NDK only the host targets build. The test references:
-`python -m venv .venv && .venv/bin/pip install -r tests/requirements.txt`.
+`uv sync` ([uv](https://docs.astral.sh/uv/)) makes `.venv` from `uv.lock`, every package pinned; to change one, edit
+`pyproject.toml`, run `uv lock` and commit both.
 
 ```sh
 make [DEVICE=donut]                               # ARM binaries into build/donut/
 make DEVICE=donut STUBS=1                         # the same, without the firmware: stand-ins for its libraries
 make host                                         # PC build (build/hassmic-host) + qemu build for the tests (needs libopus)
-make unit                                         # C unit tests
+make unit                                         # C unit tests; microWakeWord against pymicro-features and TFLite (mww_ref.py);
+                                                 # the Drop In blueprint (blueprint_dropin.py)
+.venv/bin/python tests/blueprint_dropin.py        # the Drop In blueprint against stand-ins of Home Assistant's registries,
+                                                 # states, actions and template engine (also in make unit)
 .venv/bin/python tests/fake_ha_esphome.py         # ESPHome native API, as Home Assistant (aioesphomeapi)
 .venv/bin/python tests/fake_ha_arbitration.py     # two Echos + Home Assistant + an unknown device: wake word arbitration
+.venv/bin/python tests/fake_ha_dropin.py          # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer
+.venv/bin/python tests/ha_real_dropin.py --setup  # once: build/ha-venv, Home Assistant (pinned) and what its integrations need
+.venv/bin/python tests/ha_real_dropin.py          # the Drop In blueprint in that real Home Assistant with four PC Echos (one
+                                                 # the released build, from its git tag), in a network namespace with only
+                                                 # loopback (unshare -rn); skips without build/ha-venv or user namespaces
+.venv/bin/python tests/fake_web.py                # the settings page: login by the action button, signed requests, export/import
+.venv/bin/python tests/fake_web_artifacts.py      # models copied from one Echo to another through the page, root's installer
+.venv/bin/python tests/fake_web_wifi.py           # Wi-Fi switch: the sealed password, its PSK, root's wifi.sh against a fake wpa_cli
+.venv/bin/python tests/fake_web_mww.py            # microWakeWord: models from the page, the engine switch, real detections on the PC
+.venv/bin/python tests/fake_web_davs.py           # models downloaded from a fake Amazon on the Echo itself: the code pair
+                                                 # login with the device attestation token, the download, staging, deregister
 .venv/bin/python tests/fake_ha.py [--qemu]        # Wyoming (wyoming)
 .venv/bin/python tests/fake_ma_sendspin.py        # Sendspin, as Music Assistant (aiosendspin)
 tests/ota_push_test.sh                            # signed push-update path end to end
 tests/otatool_test.sh                             # the PC's otatool (Python) against the Echo's (C)
 .venv/bin/python tests/fake_ha_update.py          # online updates: Home Assistant, GitHub and root's installer in one
+.venv/bin/python tests/fake_ha_wakesound.py       # wake sound removal off and on, against the PC's stand-in echo
+.venv/bin/python tests/fake_ha_ring.py            # the light ring: the animation set hassmic -G makes, Home Assistant's light,
+                                                 # the Echo's own patterns first, the listening ring turned by the beam
+.venv/bin/python tests/fake_improv.py             # setup from a phone (Improv over BLE) on a fake Bluetooth controller,
+                                                 # Wi-Fi through root's wifi.sh, adoption, factory reset
 ```
 
 `tools/qrun.sh [-t secs] <arm-binary> args` runs a device binary on the PC under qemu-arm against
@@ -111,6 +134,12 @@ updates install (`src/hassmic/update.c`):
 - a push to `release` publishes `v<version>` (the `release` channel);
 - pull requests build and test only.
 
+A beta is published only when it brings the Echos something: each bundle goes out with a content ID
+(`hassmic-<codename>.content-id`, from `scripts/content-id.sh`: the bundle as it would be with the version left out,
+hashed; builds repeat byte for byte, so a commit that changes only CI, tests or the docs gives the same IDs), and when every
+model's ID equals the newest release's, `main` publishes nothing. Its commits then show in the next beta's notes. A push
+to `release` always publishes.
+
 The version is the commit's time in UTC, `2026.10.02.091530` (`make version`): nothing to bump. Home Assistant
 compares these as calendar versions, so newer is newer across both channels, and a commit published as beta and then
 as release has the same version: an Echo running that beta is not offered the release of it. A commit that is
@@ -161,6 +190,17 @@ act push --secret-file /tmp/act.secrets --artifact-server-path /tmp/act-artifact
 
 Without a payload act takes the branch checked out; `-e` with `{"ref": "refs/heads/release"}` plays a push to `release`.
 
+What act 0.2.89 gets wrong (2026-10):
+- Its artifact server refuses `upload-artifact@v7` (`unknown field "mime_type"`, nektos/act#6114). Until a release has
+  the fix, build act from nektos/act#6115 (`git fetch origin pull/6115/head`, `go build`).
+- `--concurrent-jobs 1` does not hold for the legs of the build matrix: on a fresh volume the three unpack the NDK over
+  each other. Fill it first with one run per model (`--matrix device:donut`, ...); the release job takes one artifact as
+  well as three.
+- Under rootless podman (`DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock`, `--container-daemon-socket -`)
+  copying actions into `/var/run/act` fails (`path escapes from parent`: the image's `/var/run` is a link to `/run`).
+  An image on top of `catthehacker/ubuntu:act-latest` with `RUN rm /var/run && mkdir /var/run && for f in /run/*; do
+  ln -s "$f" /var/run/; done`, given with `-P ubuntu-latest=<image> --pull=false`, works.
+
 ## Debugging on the device
 
 - Log: `/data/local/hassmic/boot.log`. State (API key, Bluetooth keys, Sendspin, settings): `/data/local/hassmic/state/`.
@@ -182,9 +222,11 @@ expires within minutes. Found by preloading `src/tools/curlspy.c` into the stock
 - No model `#ifdef`s in shared code: a new difference becomes a `struct board` field, a `device.conf` variable or a
   backend (see [devices/README.md](devices/README.md)).
 - Feature commits update [CHANGELOG.md](CHANGELOG.md) (user-facing, dated, plain language), [PLAN.md](PLAN.md) (status,
-  measurements) and the README when behaviour visible to users changes.
+  measurements) and [docs/GUIDE.md](docs/GUIDE.md) when behaviour visible to users changes. The README stays short:
+  a row in its table or a figure (`tools/figures.sh` after editing `docs/img/src/`), the detail in the guide.
 - Code comments explain *why*, with device facts and measurements.
-- Every listening port must stay in TCP 16384–32767: the Echo's firewall admits nothing else inbound.
+- Every listening port must stay in TCP/UDP 16384–32767: the Echo's firewall admits nothing else inbound. The one
+  exception is Kiosk Satellite's fixed UDP 2330, admitted by `lockdown.sh` only while `arbitration_mode=kiosk`.
 - Proprietary, derived or secret material stays out of git (git-ignored): `firmware/` (per model: stock
   image, unpacked rootfs, unlock zips, `re/` disassembly), `toolchain/`, `build/`, `device-logs/`, `secrets/` (`wifi.conf`, `update.key`, `release.key`), `*.bin`, `*.zip`.
 - Third-party code in `src/third_party/` keeps its own licence.

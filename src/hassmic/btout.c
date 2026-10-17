@@ -15,12 +15,24 @@
  *           waited ~20 s for a connect timeout; hassmic answers in its place.
  *   packets SBC (sbc.c) in RTP packets, as many frames as fit the media channel; a2dp.c sends them when the link has
  *           room.  A queue of at most QUEUE_MS: older packets go when the radio falls behind.
+ *   awake   the mixer's silence is digital zero, and cheap speakers ("BT HIFI AUDIO" boards) mute their amplifier on it
+ *           and lose the first ~0.5 s of a reply while unmuting (issue #24).  Optionally a 20 Hz tone at -50 dBFS goes
+ *           under everything: not zero for them, inaudible for us (hearing needs ~78 dB SPL at 20 Hz, small speakers
+ *           roll off far above it).  SBC keeps even a 1 LSB tone at bitpool 53 (libsbc decodes 0.94 rms from 0.82).
+ *   standby with "Stay connected when off" (a2dp.c keeps the link while playing on the Echo, issue #25) the route is
+ *           all that moves: "Play on Bluetooth speaker" then switches in well under a second instead of a reconnect.
+ *           With keep-awake on as well, hal_thread makes that tone itself while the mixer is not routed (zeros plus
+ *           the tone, paced like the mixer, same RTP stream), so AVDTP stays started: the speaker neither mutes nor
+ *           sees an idle link, and the mixer's START is acked at once when the route comes back.  The mixer has a
+ *           single output, so this is all or nothing: music alone on the speaker would mean feeding it past the
+ *           mixer, without the front end's echo reference for it (PLAN.md, issue #25).
  */
 #define _GNU_SOURCE                     /* accept4 on the PC */
 #include "btout.h"
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -43,6 +55,8 @@
 #define QUEUE_MS 200
 #define QMAX 24
 #define START_WAIT_MS 3000              /* for the speaker to start; the HAL waits up to 5 s for our answer */
+#define AWAKE_HZ 20
+#define AWAKE_AMP 100                   /* -50 dBFS */
 
 enum { CMD_CHECK_READY = 1, CMD_START, CMD_STOP, CMD_SUSPEND, CMD_GET_AUDIO_CONFIG };
 
@@ -54,10 +68,11 @@ static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
 static int ready, streaming, start_failed, cfg_gen;     /* a2dp.c's stream state; its configuration's generation */
 static uint64_t ready_addr; static char ready_name[80]; static int bitpool; static unsigned per_packet;
 static int want_route, routed_now; static uint64_t want_addr, routed_addr;
+static int route_on = 1;                /* a2dp.c: play on the speaker; off, a link that stays is only kept awake */
 static int want_abs, abs_pct, mode_now;  /* the speaker takes absolute volume, at that; core_speaker's mode as set */
 static struct { size_t n; unsigned char b[1024]; } q[QMAX];
 static int qh, qn; static long dropped;
-static atomic_int hal_started, routed;
+static atomic_int hal_started, routed, keep_awake, idle_tone, abs_live;   /* abs_live: the Echo's volume is the speaker's */
 
 /* ---------------------------------------------------------------- route */
 
@@ -99,7 +114,8 @@ static void *route_thread(void *arg)
         if (routed_now) {                               /* volume first: down to the Echo's own before leaving */
             int mode = off ? SPEAKER_NONE : want_abs ? SPEAKER_ABSOLUTE : SPEAKER_MIXER, pct = abs_pct;
             if (mode != mode_now) {
-                pthread_mutex_unlock(&m); core_speaker(mode, pct);
+                pthread_mutex_unlock(&m);
+                atomic_store(&abs_live, 0); core_speaker(mode, pct); atomic_store(&abs_live, mode == SPEAKER_ABSOLUTE);
                 pthread_mutex_lock(&m); mode_now = mode; pthread_mutex_unlock(&m);
                 continue;
             }
@@ -217,28 +233,74 @@ static void queue_push(const unsigned char *p, size_t n, unsigned frames)
     hci_poke();
 }
 
+/* the keep-awake tone over one block, in phase from the last; saturating, so music at full scale stays as it was */
+static void awake_add(int16_t *pcm, unsigned frames)
+{
+    static int16_t tone[RATE / AWAKE_HZ]; static unsigned ph; static int made;
+    if (!made) { for (unsigned i = 0; i < RATE / AWAKE_HZ; i++) tone[i] = (int16_t)lrint(AWAKE_AMP * sin(2 * M_PI * i / (RATE / AWAKE_HZ))); made = 1; }
+    for (unsigned i = 0; i < frames; i++, ph = (ph + 1) % (RATE / AWAKE_HZ))
+        for (int c = 0; c < 2; c++) { int v = pcm[2 * i + c] + tone[ph]; pcm[2 * i + c] = v > 32767 ? 32767 : v < -32768 ? -32768 : v; }
+}
+
+/* SBC frames into RTP packets of per_packet frames each */
+struct enc { struct sbc_enc sbc; int gen; unsigned k, nf; unsigned char pkt[1024]; size_t plen; uint16_t seq; uint32_t ts; };
+
+static void enc_block(struct enc *e, int16_t *pcm)
+{
+    if (atomic_load(&keep_awake)) awake_add(pcm, SBC_ENC_FRAMES);
+    pthread_mutex_lock(&m);
+    if (e->gen != cfg_gen) { e->gen = cfg_gen; sbc_enc_init(&e->sbc, RATE, bitpool); e->k = per_packet; e->nf = 0; e->plen = 13; }
+    pthread_mutex_unlock(&m);
+    if (e->plen + sbc_enc_len(e->sbc.bitpool) > sizeof e->pkt) { e->nf = 0; e->plen = 13; }
+    e->plen += sbc_encode(&e->sbc, pcm, e->pkt + e->plen);
+    if (++e->nf < e->k) return;
+    /* RTP: version 2, payload type 96, sequence, timestamp in samples, SSRC 1; then the SBC header: frame count */
+    unsigned char *p = e->pkt;
+    p[0] = 0x80; p[1] = 0x60; p[2] = e->seq >> 8; p[3] = e->seq; e->seq++;
+    p[4] = e->ts >> 24; p[5] = e->ts >> 16; p[6] = e->ts >> 8; p[7] = e->ts; e->ts += e->nf * SBC_ENC_FRAMES;
+    p[8] = p[9] = p[10] = 0; p[11] = 1; p[12] = e->nf;
+    queue_push(p, e->plen, e->nf * SBC_ENC_FRAMES);
+    e->nf = 0; e->plen = 13;
+}
+
+/* the speaker kept connected while the Echo plays (a2dp.c), keep-awake on, the mixer not on its way there: our tone.
+ * A speaker that refused to start for it is not asked again (a2dp.c would every upkeep) until the next stream. */
+static int idle_wanted(void)
+{
+    pthread_mutex_lock(&m);
+    int r = ready && !start_failed && !(want_route && routed_now) && !atomic_load(&hal_started) && atomic_load(&keep_awake);
+    pthread_mutex_unlock(&m);
+    return r;
+}
+
 static void *hal_thread(void *arg)
 {
-    int lc = ((int *)arg)[0], ld = ((int *)arg)[1], ctrl = -1, data = -1;
-    struct sbc_enc enc; int gen = -1; unsigned k = 1, nf = 0, fill = 0;
-    int16_t pcm[2 * SBC_ENC_FRAMES]; unsigned char pkt[1024]; size_t plen = 13;
-    uint16_t seq = 0; uint32_t ts = 0;
+    int lc = ((int *)arg)[0], ld = ((int *)arg)[1], ctrl = -1, data = -1, gen = 0;
+    static struct enc e = { .gen = -1, .k = 1, .plen = 13 };
+    unsigned fill = 0; int16_t pcm[2 * SBC_ENC_FRAMES];
     long long since = 0, taken = 0, stat = us(); long got = 0; int peak = 0;
     for (;;) {
-        /* the pace: what 44.1 kHz stereo s16 has delivered since the data socket opened.  Fallen far behind (the mixer
-         * paused): start counting again rather than drain it in a burst */
+        int idle = data < 0 && idle_wanted();
+        if (idle != gen) {
+            gen = idle; atomic_store(&idle_tone, idle); hci_poke();      /* a2dp.c starts or suspends AVDTP by btout_want */
+            if (idle) { since = us(); taken = 0; fill = 0; }
+            fprintf(stderr, "btout: %s\n", idle ? "keeping the speaker awake while the Echo plays" : "keep-awake tone stopped");
+        }
+        /* the pace: what 44.1 kHz stereo s16 has delivered since the data socket opened (or the tone started).  Fallen
+         * far behind (the mixer paused): start counting again rather than drain it in a burst */
+        int paced = data >= 0 || gen;
         long long now = us(), allowed = (now - since) * (RATE * 4LL) / 1000000;
-        if (data >= 0 && allowed - taken > RATE * 4LL / 5) { since = now - taken * 1000000 / (RATE * 4LL); allowed = taken; }
-        int hold = data >= 0 && taken >= allowed;
-        struct pollfd p[4] = { { lc, POLLIN, 0 }, { ld, POLLIN, 0 }, { ctrl, POLLIN, 0 }, { hold ? -1 : data, POLLIN, 0 } };
-        if (poll(p, 4, hold ? 3 : 1000) < 0 && errno != EINTR) { usleep(100000); continue; }
+        if (paced && allowed - taken > RATE * 4LL / 5) { since = now - taken * 1000000 / (RATE * 4LL); allowed = taken; }
+        int hold = paced && taken >= allowed;
+        struct pollfd p[4] = { { lc, POLLIN, 0 }, { ld, POLLIN, 0 }, { ctrl, POLLIN, 0 }, { hold || data < 0 ? -1 : data, POLLIN, 0 } };
+        if (poll(p, 4, hold ? 3 : gen ? 0 : 1000) < 0 && errno != EINTR) { usleep(100000); continue; }
         if (p[0].revents & POLLIN) {
             int fd = accept4(lc, NULL, NULL, SOCK_CLOEXEC);
             if (fd >= 0) { if (ctrl >= 0) close(ctrl); ctrl = fd; }
         }
         if (p[1].revents & POLLIN) {
             int fd = accept4(ld, NULL, NULL, SOCK_CLOEXEC);
-            if (fd >= 0) { if (data >= 0) close(data); data = fd; since = us(); taken = 0; fill = 0; nf = 0; plen = 13; fprintf(stderr, "btout: mixer playing\n"); }
+            if (fd >= 0) { if (data >= 0) close(data); data = fd; since = us(); taken = 0; fill = 0; fprintf(stderr, "btout: mixer playing\n"); }
         }
         if (ctrl >= 0 && p[2].revents) {
             unsigned char c;
@@ -252,22 +314,14 @@ static void *hal_thread(void *arg)
             if (fill < sizeof pcm) continue;
             fill = 0;
             for (int i = 0; i < 2 * SBC_ENC_FRAMES; i++) { int v = pcm[i] < 0 ? -pcm[i] : pcm[i]; if (v > peak) peak = v; }
-            pthread_mutex_lock(&m);
-            if (gen != cfg_gen) { gen = cfg_gen; sbc_enc_init(&enc, RATE, bitpool); k = per_packet; nf = 0; plen = 13; }
-            pthread_mutex_unlock(&m);
-            if (plen + sbc_enc_len(enc.bitpool) > sizeof pkt) { nf = 0; plen = 13; }
-            plen += sbc_encode(&enc, pcm, pkt + plen);
-            if (++nf < k) continue;
-            /* RTP: version 2, payload type 96, sequence, timestamp in samples, SSRC 1; then the SBC header: frame count */
-            pkt[0] = 0x80; pkt[1] = 0x60; pkt[2] = seq >> 8; pkt[3] = seq; seq++;
-            pkt[4] = ts >> 24; pkt[5] = ts >> 16; pkt[6] = ts >> 8; pkt[7] = ts; ts += nf * SBC_ENC_FRAMES;
-            pkt[8] = pkt[9] = pkt[10] = 0; pkt[11] = 1; pkt[12] = nf;
-            queue_push(pkt, plen, nf * SBC_ENC_FRAMES);
-            nf = 0; plen = 13;
+            enc_block(&e, pcm);                         /* the tone after the peak: that is the mixer's */
+        } else if (gen && data < 0 && !hold) {
+            memset(pcm, 0, sizeof pcm); taken += sizeof pcm;
+            enc_block(&e, pcm);
         }
         if (us() - stat > 60000000LL) {             /* peak: whether the mixer sends more than its keep-alive silence */
             pthread_mutex_lock(&m); long d = dropped; dropped = 0; int s = streaming; pthread_mutex_unlock(&m);
-            if (s || d) fprintf(stderr, "btout: %lld bytes/s from the mixer, peak %d, %ld packets dropped\n", got * 1000000LL / (us() - stat), peak, d);
+            if ((s && !gen) || d) fprintf(stderr, "btout: %lld bytes/s from the mixer, peak %d, %ld packets dropped\n", got * 1000000LL / (us() - stat), peak, d);
             stat = us(); got = 0; peak = 0;
         }
     }
@@ -292,12 +346,12 @@ void btout_start(void)
 void btout_ready(uint64_t addr, const char *name, int bp, unsigned mtu)
 {
     pthread_mutex_lock(&m);
-    ready = 1; streaming = 0; ready_addr = addr; snprintf(ready_name, sizeof ready_name, "%s", name);
+    ready = 1; streaming = 0; start_failed = 0; ready_addr = addr; snprintf(ready_name, sizeof ready_name, "%s", name);
     bitpool = bp; per_packet = (mtu - 13) / sbc_enc_len(bp);
     if (per_packet < 1) per_packet = 1;
     if (per_packet > 15) per_packet = 15;               /* the SBC header's frame count has 4 bits */
     cfg_gen++; qn = 0;
-    want_route = 1; want_addr = addr; pthread_cond_signal(&cv);
+    want_route = route_on; want_addr = addr; pthread_cond_signal(&cv);
     pthread_mutex_unlock(&m);
     fprintf(stderr, "btout: \"%s\": SBC bitpool %d, %u frames per packet\n", name, bp, per_packet);
 }
@@ -309,10 +363,13 @@ void btout_gone(void)
     pthread_mutex_unlock(&m);
 }
 
+void btout_route(int on) { pthread_mutex_lock(&m); route_on = on != 0; want_route = ready && route_on; pthread_cond_signal(&cv); pthread_mutex_unlock(&m); }
 void btout_absvol(int on, int pct) { pthread_mutex_lock(&m); want_abs = on; abs_pct = pct; pthread_cond_signal(&cv); pthread_mutex_unlock(&m); }
 void btout_streaming(int on) { pthread_mutex_lock(&m); streaming = on; if (!on) qn = 0; pthread_mutex_unlock(&m); }
 void btout_start_failed(void) { pthread_mutex_lock(&m); start_failed = 1; pthread_mutex_unlock(&m); }
-int  btout_want(void) { return atomic_load(&hal_started); }
+int  btout_want(void) { return atomic_load(&hal_started) || atomic_load(&idle_tone); }
+int  btout_idle(void) { return atomic_load(&idle_tone); }
+int  btout_speaker_volume(void) { return atomic_load(&abs_live); }
 int  btout_routed(void) { return atomic_load(&routed); }
 
 size_t btout_packet(unsigned char *buf, size_t max)
@@ -324,5 +381,7 @@ size_t btout_packet(unsigned char *buf, size_t max)
     pthread_mutex_unlock(&m);
     return n;
 }
+
+int btout_keep_awake(int set) { if (set >= 0) { atomic_store(&keep_awake, set != 0); hci_poke(); } return atomic_load(&keep_awake); }
 
 long long btout_latency_us(void) { return atomic_load(&routed) ? a2dp_out_delay(-1) * 1000LL : 0; }

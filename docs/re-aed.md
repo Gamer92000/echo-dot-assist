@@ -134,7 +134,7 @@ model, using fallback"). A "personalized AED" artifact (presumably the custom so
 `engineCompatibilityIdList` = the engine's `aed_ecids` ([1,2,3,5,6,7] on donut and biscuit), `modelClass` "class-10",
 `location` NA, EU or FE. The artifact type and key come from two global strings "AED" (0xf4274, 0xf42c0); the
 spelling on the wire is not confirmed. `scripts/artifacts.sh` fetches it along with wake words ("Other artifacts"
-in its menu), into `device-logs/models/aed-<region>/`, not installed.
+in its menu), into `device-logs/models/aed-<region>/`, and installs it into `/data/local/hassmic/aed`.
 
 **Newer model (fetched 2026-10-01 with the Echo Dot 2):**
 - **Request:** the name is `AED`/`AED`, as in PuffinApp; region EU.
@@ -145,7 +145,9 @@ in its menu), into `device-logs/models/aed-<region>/`, not installed.
   - the siren variant is `SMOKE_SIREN_GB`.
 - **Results:** on all clips of section 1 the two models agree in every window, with scores within ±0.02, except for
   the shared smoke/CO score. The T4 CO beeps now reach 0.47 (near miss, still not detected), and a door knock window
-  0.41. The false hits stay the same. So the newer model is not worth having.
+  0.41. The false hits stay the same. So the newer model is not worth having so far. `scripts/artifacts.sh` can
+  still install it (`/data/local/hassmic/aed`, not ticked by default); `sound_pryon.c` then takes it in place of
+  the firmware's, and the firmware's again if it does not load.
 
 **On/off.**
 - LIPC properties `AEDOverallState` (Enabled/Disabled) and `AEDTypeState_<type>`, written by `SmartHomed`, become

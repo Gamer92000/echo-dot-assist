@@ -27,12 +27,12 @@ root|Root
 build|Build
 network|Lock down, join Wi-Fi
 install|Install
-wakeword|Wake word
 "
+ROOTED_SKIP="udev usb unlock flash root"     # done on an Echo that is rooted already (scripts/setup.sh asks)
 NOTES=(
-    "adb over Wi-Fi is closed: scripts/adb-wifi.sh <echo-ip> (or \"Debug access\" in Home Assistant) opens it for 30 min."
+    "adb over Wi-Fi is closed: scripts/adb-wifi.sh <echo-ip> (or debug access on the settings page, http://<echo-ip>:28931/) opens it for 30 min."
     "Updates: git pull, then scripts/ota-push.sh <echo-ip>."
-    "More wake words later: scripts/artifacts.sh <echo-ip>"
+    "More wake words, whisper or sound detection models: the settings page, http://<echo-ip>:28931/ → \"Download from Amazon\"."
     "Music Assistant, Bluetooth speaker: $DDIR/README.md"
 )
 
@@ -41,15 +41,20 @@ slot() { ashell bcbtool get_active | tr -d " \n"; }
 step_tools() {
     command -v curl > /dev/null || need_tools curl || return 1
     build_mode
-    if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb fastboot python3 pyusb unzip sqlite3 curl sha256sum || return 1; return 0; fi
-    need_tools adb fastboot python3 pyusb make cc unzip 7z sqlite3 curl sha256sum bc xz || return 1
+    local unlock="fastboot python3 pyusb"
+    rooted_already && unlock=python3
+    if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip sqlite3 curl sha256sum || return 1; return 0; fi
+    need_tools adb $unlock make cc unzip debugfs sqlite3 curl sha256sum bc xz || return 1
     [ "$(df -Pk . | awk 'NR == 2 { print $4 }')" -gt 5000000 ] || warn "less than 5 GB free here; the NDK and firmware need about that"
 }
 
 step_files() {
-    need_files $FW/$FIRMWARE_FILE $FIRMWARE_SHA256 "Fire OS $FIRMWARE_ID: $FTVDB" \
-               $FW/$AMONET $AMONET_SHA256 "attachment in $XDA" \
-               $FW/$BOOTROOT $BOOTROOT_SHA256 "attachment in $XDA" || return 1
+    local need=()
+    # a rooted Echo needs the firmware only to build against, and the unlock tool not at all
+    rooted_already && { [ "$BUILD_MODE" = prebuilt ] || [ -d $FW/rootfs/system/lib ]; } ||
+        need+=($FW/$FIRMWARE_FILE $FIRMWARE_SHA256 "Fire OS $FIRMWARE_ID: $FTVDB")
+    rooted_already || need+=($FW/$AMONET $AMONET_SHA256 "attachment in $XDA")
+    need_files "${need[@]}" $FW/$BOOTROOT $BOOTROOT_SHA256 "attachment in $XDA" || return 1
     [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
     if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
         mkdir -p toolchain
@@ -96,7 +101,7 @@ step_unlock() {
     adir=$(find $FW/amonet -name fastbrick.sh -print -quit 2>/dev/null); adir=${adir%/*}
     [ -n "$adir" ] || [ -n "$DRY" ] || { fail "no fastbrick.sh in $FW/amonet; delete that folder and try again"; return 1; }
     tell "Put the Echo into fastboot mode" "Hold the action button (•) and plug the power adapter in." \
-        "Keep holding until the ring shows a green light."
+        "Keep holding until the ring shows a green light (an Echo unlocked before shows a rainbow instead)."
     waitfor "Waiting for fastboot|Fastboot" '[ -n "$(fastboot devices)" ]' "No green light? Unplug the power and try again." || return 1
     tell "amonet asks you to type YES, and for a key press at the end" "${RED}${B}Do not interrupt it once it runs: that can brick the Echo.$N"
     live "amonet fastbrick (about a minute)" in_dir "$adir" ./fastbrick.sh || return 1
@@ -104,20 +109,26 @@ step_unlock() {
 }
 
 step_flash() {
-    local s0 s1
+    local s0 s1 s2
     wait_adb recovery || return 1
     task "Wiping cache and data" adb shell 'twrp wipe cache && twrp wipe data' || return 1
     task "Copying the firmware to the Echo" adb push $FW/$FIRMWARE_FILE /sdcard/update.zip || return 1
     [ -n "$DRY" ] || s0=$(slot)
     task "Flashing the first slot" adb shell twrp install /sdcard/update.zip || return 1
-    # the thread's own step: switch back to the unused slot, so the second install lands there and the FIRST slot ends
-    # up active again (checked 2026-09-28 on biscuit)
-    task "Switching slots" adb shell 's=$(bcbtool get_active); case $s in a) bcbtool set_active b;; b) bcbtool set_active a;; *) echo "unexpected: $s"; exit 1;; esac' || return 1
-    [ -n "$DRY" ] || { s1=$(slot); [ "$s1" = "$s0" ] || { fail "slot switch did not take (active: $s1, before: $s0)"; return 1; }; }
+    # TWRP makes the slot it flashed the active one (radar setup log 2026-10-10: get_active said b right after flashing
+    # B, and switching back to a by hand put the second install into B again).  Switch only if it did not.
+    if [ -z "$DRY" ]; then
+        s1=$(slot)
+        if [ "$s1" = "$s0" ]; then
+            task "Switching slots" adb shell 'case $(bcbtool get_active) in a) bcbtool set_active b;; b) bcbtool set_active a;; *) exit 1;; esac' || return 1
+            s1=$(slot); [ "$s1" != "$s0" ] || { fail "slot switch did not take (active: $s1)"; return 1; }
+        fi
+    fi
     task "Restarting TWRP" adb reboot recovery || return 1
     [ -n "$DRY" ] || sleep 5
     wait_adb recovery || return 1
-    task "Flashing the second slot" adb shell twrp install /sdcard/update.zip
+    task "Flashing the second slot" adb shell twrp install /sdcard/update.zip || return 1
+    [ -n "$DRY" ] || { s2=$(slot); [ "$s2" != "$s1" ] || { fail "the second install went into slot $s1 again"; return 1; }; }
 }
 
 step_root() {
@@ -138,9 +149,10 @@ step_build() {
     # the firmware's libraries are only needed to link against
     if [ "$BUILD_MODE" != prebuilt ] && [ ! -d $FW/rootfs/system/lib ]; then
         task "Unpacking the firmware" sh -c "unzip -o -q $FW/$FIRMWARE_FILE payload.bin -d $FW &&
-            python3 tools/payload_dump.py $FW/payload.bin $FW/images && 7z x -o$FW/rootfs -y $FW/images/system.img" || return 1
+            python3 tools/payload_dump.py $FW/payload.bin $FW/images && mkdir -p $FW/rootfs &&
+            debugfs -R 'rdump / $FW/rootfs' $FW/images/system.img && [ -d $FW/rootfs/system/lib ]" || return 1
     fi
-    [ -d $FW/boot-root ] || task "Unpacking boot-root" unzip -q $FW/$BOOTROOT -d $FW/boot-root || return 1
+    bootroot_unpack || return 1
     if [ "$BUILD_MODE" = prebuilt ]; then task "Downloading the release build of this commit" build_binaries || return 1
     else task "Building" build_binaries || return 1; fi
     wait_adb device || return 1
@@ -149,29 +161,21 @@ step_build() {
 }
 
 step_network() {
-    local ssid pass new=
     wait_adb device || return 1
     task "Copying hassmic to the Echo" scripts/deploy.sh || return 1
     # adb can drop out for a moment here, shortly after the boot (seen on an Echo Dot 2, issue #2)
     wait_adb device || return 1
     task "Locking down the Echo's internet access" sh -c 'adb shell sh /data/local/hassmic/lockdown.sh &&
         adb shell iptables -S hassmic_out | grep -q -- "-j DROP"' || return 1
-    if [ ! -f secrets/wifi.conf ]; then
-        prompt ssid "Wi-Fi name (WPA2, same network as Home Assistant)"
-        prompt pass "Wi-Fi password" "" -s
-        [ -n "$DRY" ] || { mkdir -p secrets; ( umask 077; printf '%s\n%s\n' "$ssid" "$pass" > secrets/wifi.conf ); new=1; }
-    fi
+    wifi_conf
     # a typo in what was just typed would otherwise be retried forever
-    task "Joining Wi-Fi" scripts/wifi-join.sh || { [ -n "$new" ] && rm -f secrets/wifi.conf; return 1; }
+    task "Joining Wi-Fi" scripts/wifi-join.sh || { [ -n "$WIFI_NEW" ] && rm -f secrets/wifi.conf; return 1; }
     # the Wi-Fi profile survives a reboot, the egress lock does not until the install
     warn "Do not restart the Echo until it is installed."
     info "Tip: give it a fixed address in your router (DHCP reservation)."
 }
 
 step_install() {
+    bootroot_unpack || return 1        # again: the build step may have been skipped
     install_satellite
-}
-
-step_wakeword() {
-    artifacts_run setup
 }

@@ -37,6 +37,7 @@
 #include "netio.h"
 #include "noise.h"
 #include "ws.h"
+#include "statefile.h"
 #define DR_FLAC_IMPLEMENTATION
 #define DR_FLAC_NO_STDIO
 #define DR_FLAC_NO_OGG
@@ -296,6 +297,7 @@ static struct record records[MAX_RECORDS]; static int n_records;
 static uint8_t sentinel_psk[32], pairing_psk[32];
 static atomic_int unpaired_ok;         /* unpaired access (Sentinel PSK) allowed; state file sendspin.unpaired, default off */
 static char last_playback_server[48];
+static atomic_int server_known;        /* a server held the player role here (this run, or played here before) */
 
 static void state_path(char *out, size_t n, const char *name) { snprintf(out, n, "%s/%s", state_dir, name); }
 
@@ -309,10 +311,8 @@ static int load_file(const char *name, void *buf, size_t len)
 
 static void save_file(const char *name, const void *buf, size_t len)
 {
-    char path[256], tmp[280]; state_path(path, sizeof path, name); snprintf(tmp, sizeof tmp, "%s.tmp", path);
-    FILE *f = fopen(tmp, "wb");
-    if (!f) { fprintf(stderr, "sendspin: cannot write %s\n", path); return; }
-    fwrite(buf, 1, len, f); fclose(f); chmod(tmp, 0600); rename(tmp, path);
+    char path[256]; state_path(path, sizeof path, name);
+    if (statefile_write(path, 0600, buf, len)) fprintf(stderr, "sendspin: cannot write %s\n", path);
 }
 
 static void psk_id(const uint8_t psk[32], char out[48])
@@ -558,7 +558,7 @@ static void on_json(struct session *s, char *j, long long t_recv)
         }
         if (js_section(j, "active_roles", sec, sizeof sec)) {                                   /* sticky when omitted */
             int on = strstr(sec, "player@v1") != NULL;
-            if (on && !s->player_active) { s->activated_at = raw_us(); s->state_sent = 0; fprintf(stderr, "sendspin: player role active (%s)\n", s->psk_cat == PSK_LONGTERM ? "paired" : "unpaired"); }
+            if (on && !s->player_active) { s->activated_at = raw_us(); s->state_sent = 0; atomic_store(&server_known, 1); fprintf(stderr, "sendspin: player role active (%s)\n", s->psk_cat == PSK_LONGTERM ? "paired" : "unpaired"); }
             if (!on && s->player_active) { stream_set(0); q_flush(); }
             if (!on && !pairing && first)
                 fprintf(stderr, "sendspin: connected, no role yet: %s\n", atomic_load(&unpaired_ok) ? "approve the device in Music Assistant"
@@ -761,7 +761,7 @@ void sendspin_pause(void)
         paused_by_button_at = 0;                        /* the button does not resume what another source paused */
     }
     pthread_mutex_unlock(&adm_lock);
-    if (sent) fprintf(stderr, "sendspin: paused, Bluetooth took over\n");
+    if (sent) fprintf(stderr, "sendspin: paused, another source took over\n");
 }
 
 static void load_identity(void)
@@ -777,6 +777,7 @@ static void load_identity(void)
     b64_encode(id_pub, 32, client_id, 1, 0);
     int r = load_file("sendspin.records", records, sizeof records); n_records = r > 0 ? r / (int)sizeof records[0] : 0;
     r = load_file("sendspin.lastserver", last_playback_server, sizeof last_playback_server - 1); last_playback_server[r > 0 ? r : 0] = 0;
+    if (r > 0) atomic_store(&server_known, 1);
     r = load_file("sendspin.unpaired", buf, sizeof buf - 1); atomic_store(&unpaired_ok, r > 0 && buf[0] == '1');
     r = load_file("sendspin.delay", buf, sizeof buf - 1); buf[r > 0 ? r : 0] = 0;
     if (r > 0 && atoi(buf) >= 0 && atoi(buf) <= 5000) atomic_store(&static_delay_ms, atoi(buf));
@@ -789,6 +790,11 @@ void sendspin_mdns(int p, char *out, size_t outsz)
 }
 
 void sendspin_init(void) { load_identity(); }
+
+/* netaddr.c: while a server that played here is not connected, root announces the mDNS records again (issue #28).  A
+ * server the operator removed for good keeps that going, at most every 30 min. */
+int sendspin_linked(void) { pthread_mutex_lock(&adm_lock); int up = admitted != NULL; pthread_mutex_unlock(&adm_lock); return up; }
+int sendspin_expected(void) { return atomic_load(&server_known); }
 
 int sendspin_unpaired(int set)
 {

@@ -23,5 +23,9 @@ cp $T/c.bundle $T/bad.bundle; printf X | dd of=$T/bad.bundle bs=1 seek=40 conv=n
 ! $PY verify $T/c.pub $T/bad.bundle $T/c.bundle.sig 2>/dev/null && ! $C verify $T/c.pub $T/bad.bundle $T/c.bundle.sig 2>/dev/null; ok $? "both refuse a tampered bundle"
 ! $PY install $T/c.pub $T/c.bundle $T/c.bundle.sig $T/by-py 2>/dev/null; ok $? "install refuses a DESTDIR that exists"
 ! $PY pack $T/c.sec 1 $T/x.bundle "$T/.hidden" 2>/dev/null; ok $? "pack refuses a name the Echo would refuse"
+# a file whose first bytes are whitespace (the random blob above starts with one in 2 % of runs)
+printf '\n \tws\n' > $T/ws; $PY pack $T/c.sec 1 $T/ws.bundle $T/ws:644 $T/a.txt:644 >/dev/null
+$C install $T/c.pub $T/ws.bundle $T/ws.bundle.sig $T/ws-c >/dev/null && cmp -s $T/ws $T/ws-c/ws && cmp -s $T/a.txt $T/ws-c/a.txt
+ok $? "install: a file starting with whitespace"
 rm -rf $T
 [ $fail = 0 ] && echo "all good" || { echo FAILED; exit 1; }

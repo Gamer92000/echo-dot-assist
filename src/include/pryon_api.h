@@ -149,6 +149,49 @@ int PryonDecoder_BacklogWait(const char *decoderId, int32_t timeout);
 
 int PryonDecoder_Delete(const char *decoderId);
 
+/* Whisper detection (WhisperApi_*, docs/re-whisper.md): a singleton of its own beside PryonApi/PryonDecoder, called
+ * by stock only from AHE (AlexaHybridExecutionControllerLitespeed). Every call returns 0 on success and 1 on any error
+ * (the message goes to the log handler at level 2). Argument meaning from AHE's call sites; getLibraryAttributes,
+ * loadWhisperModelset, set*Handler and createWhisperDetector run on an Echo. No whisper model run yet. */
+
+/* By value, 16 bytes; AHE passes {0, 16000, 16, 1} */
+typedef struct WhisperAudioFormat {
+    int32_t encoding;       /* 0 */
+    int32_t sampleRate;     /* 16000 */
+    int32_t bitsPerSample;  /* 16 */
+    int32_t channels;       /* 1 */
+} WhisperAudioFormat;
+
+/* Library attributes, model set info and log lines: (0 or the log level, a global string (empty in every run), text).
+ * Log levels seen: 1 stack trace, 2 error, 4 info, 5 debug. */
+typedef void (*WhisperTextCallback)(int code, const char *g, const char *text);
+
+/* type "result": utteranceId as given to pushEndOfUtterance, json with whisper_results/confidence (AHE: whispered
+ * when confidence > 500; object or array UNVERIFIED). "metrics" and "metadata": utteranceId is the empty global.
+ * The last two words were always 0 (meaning UNVERIFIED). */
+typedef void (*WhisperEventHandler)(const char *detectorId, const char *utteranceId, const char *type,
+                                    const char *json, uint32_t zero0, uint32_t zero1);
+
+int WhisperApi_getLibraryAttributes(WhisperTextCallback cb);  /* donut/biscuit: {"engineCompatibilityIds":[1],...} */
+int WhisperApi_getModelSetInfo(const char *modelSetId, WhisperTextCallback cb);   /* SIGSEGV on a non-whisper set */
+int WhisperApi_setLogEventHandler(WhisperTextCallback fn);
+int WhisperApi_setEventHandler(WhisperEventHandler fn);         /* process-wide; before createWhisperDetector */
+int WhisperApi_loadWhisperModelset(const char *modelSetId, const char *manifestPath);  /* AHE: "pryon", pryon_whisper.manifest */
+int WhisperApi_deleteWhisperModelset(const char *modelSetId);
+/* modelName: AHE passes "pryon". Fails unless the model's pryon.config has a whisper section. */
+int WhisperApi_createWhisperDetector(const char *detectorId, const char *modelSetId, const char *modelName,
+                                     WhisperAudioFormat fmt);
+/* sampleIndex: samples pushed to this detector before this call (AHE starts at 0 per detector) */
+int WhisperApi_pushAudioEvent(const char *detectorId, const int16_t *samples, uint32_t sampleCount,
+                              uint64_t sampleIndex);
+/* start/end in 10 ms frames (sample index / 160), end >= start, utteranceId not empty ("Utterance-<n>" in AHE).
+ * The result comes after this, presumably once the audio up to end has been pushed. */
+int WhisperApi_pushEndOfUtterance(const char *detectorId, const char *utteranceId, uint64_t startIndex,
+                                  uint64_t endIndex);
+int WhisperApi_backlogWait(const char *detectorId, int32_t timeout);  /* AHE: -1 */
+int WhisperApi_pushSessionEnd(const char *detectorId);
+int WhisperApi_deleteWhisperDetector(const char *detectorId);
+
 #ifdef __cplusplus
 }
 #endif

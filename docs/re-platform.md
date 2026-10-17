@@ -78,6 +78,18 @@ lipc-send-event com.amazon.puffin set_animation -s active-talking
 - Recommendation: use `ledctrl` for LEDs and play earcons ourselves through `MixerOpenPlay(..., "Earcon")`.
   `uxeventd` expects PuffinApp for audio focus and is not needed.
 
+### Timer and alarm patterns (disassembly of donut's PuffinApp, 2026-10-08)
+
+- `ledcontroller` only plays patterns listed in `layer_config_common.json` ("Animation %s not in map. Check entry in
+  layer_config file(s)"); a file in `led-resources/` is not enough. `active_timer`, `ready_timer`, `active_alarm`,
+  `ready_alarm` and `micsoff-ready-*` have files but no entry, on donut, biscuit and radar alike.
+- PuffinApp's `UXEventArbitrator::onAlertStateChange` (0x25cfc0) picks the event from the AVS alert (type at +0xc:
+  0 ALARM -> `ready-alarm*`, 1 TIMER and 2 REMINDER -> `ready-timer*`; state at +0x10) and pushes it with
+  `pushUXEventLockedToQueue` (0x25797c; 1 start, 2 stop):
+  STARTED, FOCUS_ENTERED_FOREGROUND: start `ready-timer` (looping, layer 3: listening and replies show over it);
+  FOCUS_ENTERED_BACKGROUND: start `ready-timer-short` (one shot, layer 4); READY, STOPPED, SNOOZED, COMPLETED,
+  PAST_DUE, ERROR: stop `ready-timer`; DELETED, SCHEDULED_FOR_LATER: nothing.
+
 ### Verified on device (2026-09-21, unregistered device in setup mode)
 
 - `ledctrl -s active-thinking` shows and loops until `ledctrl -u active-thinking`. Works as root, no PuffinApp needed.
@@ -113,9 +125,14 @@ lipc-send-event com.amazon.puffin set_animation -s active-talking
 
 ### Open questions
 
-- Do two active patterns layer as `layer_config_common.json` says?
-- Does `ledcontroller` still follow `com.doppler.lasp beam_index` (published by `mixer`) when PuffinApp is down? If yes, the
-  listening animation points at the speaker for free.
+- ~~Do two active patterns layer as `layer_config_common.json` says?~~ Yes, per LED: a higher layer's black pixels
+  show the lower ones; in one layer only the first listed active one shows, the rest wait. Every `layer_config*.json`
+  becomes a compositor of its own, and two of them overwrite each other; ledcontroller loads all animations once, at
+  its start (PLAN.md "Light ring as a Home Assistant light", where our own set is described).
+- ~~Does `ledcontroller` still follow `com.doppler.lasp beam_index` (published by `mixer`) when PuffinApp is down?~~
+  Yes, but only for `active-start` and `active-end`, and only while that is the one active animation (issue #22,
+  biscuit 2026-10-11; the chain and the measurement are in PLAN.md under "LED ring states"). The `ca-active-*`
+  patterns never turn. `lipc-set-prop -i com.amazon.ledd BeamDirection N` sets the turn by hand (N LEDs).
 
 ## 2. Volume
 
@@ -270,7 +287,9 @@ ace mw net_cli                                                     # lists Amazo
   (b) comment out `start puffin`/`start puffinmrmd` in `init.mt8516.rc:230-231`. Option (a) leaves Amazon's files untouched
   but lets PuffinApp run for a moment at boot.
 - Does `netmgrd` raise a captive-portal/"no internet" state that triggers anything when Amazon endpoints are blocked?
-- Does deregistering wipe `wpa_supplicant.conf`? Safer to stay registered and block the cloud than to deregister — **UNVERIFIED**.
+- Deregistering a running stock Echo that is online resets it to factory settings: all of `/data`, so
+  `/data/local/hassmic` and the Wi-Fi settings as well (user report, 2026-10-05, Echo Dot 3 deregistered during
+  `scripts/artifacts.sh`). Deregister only once Amazon cannot reach it (hassmic running, or no internet).
 
 ## 5. OTA
 

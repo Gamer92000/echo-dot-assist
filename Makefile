@@ -43,7 +43,7 @@ FORCE:
 # A model without the Amazon mixer or Pryon has no use for the tools built on them: they drop out with the library.
 BIN := $(OUT)/hassmic $(OUT)/runas $(OUT)/otatool \
        $(if $(filter libmixerAPI.so,$(LIBS)),$(OUT)/mixcap $(OUT)/mixplay $(OUT)/latency) \
-       $(if $(filter libpryon.so,$(LIBS)),$(OUT)/pryon_test $(OUT)/aed_test)
+       $(if $(filter libpryon.so,$(LIBS)),$(OUT)/pryon_test $(OUT)/aed_test $(OUT)/whisper_test)
 
 .DEFAULT_GOAL := all
 all: $(BIN)
@@ -149,7 +149,13 @@ $(OUT)/libcurlspy.so: src/tools/curlspy.c
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -fPIC -shared $< -o $@ -fuse-ld=lld -ldl
 
-$(OUT)/pryon_test: src/tools/pryon_test.c src/include/pryon_api.h $(STOCK)/libpryon.so
+# not part of "all": what the Echo's device attestation HAL answers (the key, its fields, a signature), for the
+# questions dha.c was written against
+$(OUT)/dha_test: src/tools/dha_test.c
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $< -o $@ -pie -fuse-ld=lld -ldl
+
+$(OUT)/pryon_test: src/tools/pryon_test.c src/include/pryon_api.h $(STOCK)/libpryon.so $(STOCK)/libz.so
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) $(STOCK)/libpryon.so $(STOCK)/libz.so
 
@@ -157,26 +163,39 @@ $(OUT)/aed_test: src/tools/aed_test.c src/include/pryon_api.h $(STOCK)/libpryon.
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) $(STOCK)/libpryon.so
 
+$(OUT)/whisper_test: src/tools/whisper_test.c src/include/pryon_api.h $(STOCK)/libpryon.so
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) $(STOCK)/libpryon.so
+
 # Sound detection (sound.h) runs on the same engine as the wake word: a model with Pryon has it, the PC build fakes it.
 SOUND := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/sound_pryon.c,src/hassmic/sound_none.c)
+# So does whisper detection (whisper.h), with a model from Amazon (scripts/artifacts.sh).
+WHISPER := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/hassmic/whisper_none.c)
 
 RNNOISE := $(addprefix src/third_party/rnnoise/,denoise.c rnn.c rnn_data.c pitch.c kiss_fft.c celt_lpc.c)
-HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c \
-           src/hassmic/sendspin.c src/hassmic/arb.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/adbwifi.c src/hassmic/wifimotion.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/micgain.c src/hassmic/micdenoise.c \
+HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c src/hassmic/ring.c src/hassmic/ledq.c \
+           src/hassmic/sendspin.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/micgain.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/statefile.c build/web_assets.c \
+           src/hassmic/wake.c src/hassmic/wake_mww.c src/hassmic/mww_features.c src/hassmic/mww_model.c src/hassmic/mww_store.c \
            src/third_party/monocypher.c src/third_party/freeaptx.c $(RNNOISE)
 HASSMIC_H := $(wildcard src/hassmic/*.h src/include/*.h) build/.build-id
 
-$(OUT)/hassmic: $(HASSMIC) $(BOARD) $(AUDIO) $(WAKE) $(SOUND) $(HASSMIC_H) $(addprefix $(STOCK)/,$(LIBS))
+# The settings page (web.c), gzip'd into the binary
+WEB := web/index.html:/ web/app.js:/app.js web/crypto.js:/crypto.js
+build/web_assets.c: tools/embed.py $(foreach w,$(WEB),$(firstword $(subst :, ,$(w))))
+	@mkdir -p build
+	python3 tools/embed.py $@ $(WEB)
+
+$(OUT)/hassmic: $(HASSMIC) $(BOARD) $(AUDIO) $(WAKE) $(SOUND) $(WHISPER) $(HASSMIC_H) $(addprefix $(STOCK)/,$(LIBS))
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -Isrc/hassmic $(filter %.c,$^) -o $@ $(LDFLAGS) -lm -ldl $(addprefix $(STOCK)/,$(LIBS))
 
-# PC build for protocol tests: file audio backend, no wake word (SIGUSR1 triggers), fake sound detection, identity of $(DEVICE).
-build/hassmic-host: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c src/hassmic/wake_none.c src/hassmic/sound_none.c $(HASSMIC_H) build/.device
+# PC build for protocol tests: file audio backend, no wake word (SIGUSR1 triggers), fake sound and whisper detection, identity of $(DEVICE).
+build/hassmic-host: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c src/hassmic/wake_none.c src/hassmic/sound_none.c src/hassmic/whisper_none.c $(HASSMIC_H) build/.device
 	@mkdir -p build
-	cc -O2 -Wall -Wextra $(DEFS) -Isrc/include -Isrc/hassmic $(filter %.c,$^) -o $@ -lpthread -lm -ldl -lopus
+	cc -O2 -Wall -Wextra $(DEFS) -Isrc/include -Isrc/hassmic $(filter %.c,$^) -o $@ -lpthread -lm -ldl -lopus -lz
 
 # ARM build with file audio but the device's wake word engine, for running under qemu-arm (tools/qrun.sh).
-$(OUT)/hassmic-qemu: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c $(WAKE) $(SOUND) $(HASSMIC_H) $(call STOCK_LIBS,libpryon.so libopus.so libz.so)
+$(OUT)/hassmic-qemu: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c $(WAKE) $(SOUND) $(WHISPER) $(HASSMIC_H) $(call STOCK_LIBS,libpryon.so libopus.so libz.so)
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -Isrc/hassmic $(filter %.c,$^) -o $@ $(LDFLAGS) -lm -ldl $(call STOCK_LIBS,libpryon.so libopus.so libz.so)
 
@@ -192,11 +211,22 @@ unit:
 	cc -O2 -Wall -Isrc/hassmic tests/unit/ble_crypto_test.c src/hassmic/ble_crypto.c -o build/ble_crypto_test && build/ble_crypto_test
 	cc -O2 -Wall -Isrc/hassmic tests/unit/micgain_test.c src/hassmic/micgain.c -lm -o build/micgain_test && build/micgain_test
 	cc -O2 -Wall -Isrc/hassmic tests/unit/wifimotion_test.c src/hassmic/wifimotion.c -lpthread -lm -o build/wifimotion_test && build/wifimotion_test
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/spkgain_test.c src/hassmic/spkgain.c -lpthread -o build/spkgain_test && build/spkgain_test
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/tz_test.c src/hassmic/tz.c -o build/tz_test && .venv/bin/python tests/unit/tz_ref.py build/tz_test
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/statefile_test.c src/hassmic/statefile.c -Wl,--wrap=fsync,--wrap=rename -lpthread -o build/statefile_test && build/statefile_test
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ledq_test.c src/hassmic/ledq.c -lpthread -o build/ledq_test && build/ledq_test
 	cc -O2 -Wall -Isrc/hassmic tests/unit/micdenoise_test.c src/hassmic/micdenoise.c $(RNNOISE) -lm -o build/micdenoise_test && build/micdenoise_test
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/earsup_test.c src/hassmic/earsup.c -lpthread -lm -o build/earsup_test && build/earsup_test
+	cc -O2 -Wall -Isrc/hassmic -Isrc/include -include stdlib.h tests/unit/dha_hal_fake.c -shared -fPIC -o build/dha_hal_fake.so
+	cc -O2 -Wall -Isrc/hassmic -Isrc/include tests/unit/dha_jwt_test.c src/hassmic/dha.c src/hassmic/hash.c -o build/dha_jwt_test -ldl && build/dha_jwt_test build/dha_hal_fake.so
 	.venv/bin/python tests/unit/ws_ref.py build/ws_test
 	.venv/bin/python tests/unit/noise_ref.py build/noise_test
 	cc -O2 -Wall -Isrc/hassmic tests/unit/a2dp_codecs_test.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/third_party/freeaptx.c -lm -ldl -lopus -o build/a2dp_codecs_test && build/a2dp_codecs_test
 	if command -v sbcenc >/dev/null; then tests/unit/sbc_ref.sh; else echo "sbc: sbcenc/sbcdec (package sbc) missing, skipped"; fi
+	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_crypto_test.py; else echo "web crypto: node missing, skipped"; fi
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/mww_test.c src/hassmic/mww_features.c src/hassmic/mww_model.c -lm -o build/mww_test
+	.venv/bin/python tests/unit/mww_ref.py build/mww_test
+	.venv/bin/python tests/blueprint_dropin.py
 
 # what the daemon reports, and what bundles are called (ota-push.sh, CI)
 version:

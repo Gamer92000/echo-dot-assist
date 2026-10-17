@@ -37,6 +37,7 @@
 #include "../third_party/monocypher.h"
 #include "adbwifi.h"
 #include "netio.h"
+#include "statefile.h"
 
 #define MAX_BUNDLE (16u << 20)
 static int port;
@@ -52,11 +53,8 @@ static void reply(int fd, const char *line) { char b[300]; int n = snprintf(b, s
 
 static int store(const char *dir, const char *name, const void *data, size_t len)
 {
-    char path[300], tmp[320]; snprintf(path, sizeof path, "%s/%s", dir, name); snprintf(tmp, sizeof tmp, "%s.tmp", path);
-    FILE *f = fopen(tmp, "wb");
-    if (!f || fwrite(data, 1, len, f) != len) { if (f) fclose(f); return -1; }
-    fclose(f);
-    return rename(tmp, path);
+    char path[300]; snprintf(path, sizeof path, "%s/%s", dir, name);
+    return statefile_write(path, 0666, data, len);
 }
 
 static int load_key(const char *path, uint8_t pk[32])

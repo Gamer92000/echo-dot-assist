@@ -11,7 +11,7 @@
 # Later versions go over Wi-Fi with scripts/ota-push.sh (each also renews the factory copy and the bootstrap once it passed its self test); this
 # script is only needed once per device, and again if secrets/update.key is lost or the SELinux policy has to change.
 # Undo: scripts/install-system.sh --uninstall, or delete /data/local/hassmic/hassmic.conf (boot.sh then does nothing).
-#   install-system.sh [--twrp] [name]        e.g. install-system.sh "Kitchen"; default DEFAULT_NAME of the model
+#   install-system.sh [--twrp]               the Echo names itself (model and MAC address); name it in Home Assistant
 #   install-system.sh [--twrp] --uninstall
 set -e
 cd "$(dirname "$0")/.."
@@ -25,7 +25,8 @@ TWRP=; [ "$1" = --twrp ] && { TWRP=1; shift; }
 [ "$(adb get-state 2>/dev/null)" = device ] || TWRP=1
 
 if [ "$1" != --uninstall ]; then
-    NAME=${1:-$DEFAULT_NAME}
+    # before anything is touched: without it the policy patch below fails with no word of why (issue #10)
+    [ -f $SEPOLICY_TOOL ] || die "no $SEPOLICY_TOOL: unzip $FW/boot-root.zip -d $FW/boot-root ($DDIR/README.md)"
     [ "$(adb get-state 2>/dev/null)" = device ] && device_check_firmware
     build_binaries                      # built here or this commit's release build (PREBUILT, scripts/lib/build.sh)
     # Signing key for push updates.  The public half goes onto the read-only system partition and is what the device trusts.
@@ -37,12 +38,12 @@ if [ "$1" != --uninstall ]; then
         # Base = the policy as boot-root left it.  On a re-install /sepolicy is already patched; the untouched copy is kept beside it.
         BASEF=/sepolicy; t "[ -f /sepolicy.pre-hassmic ]" && BASEF=/sepolicy.pre-hassmic
         adb pull $BASEF device-logs/backup/sepolicy.boot-root >/dev/null
-        printf 'NAME="%s"\nARGS="%s"\n' "$NAME" "$DEFAULT_ARGS" > $OUT/hassmic.conf
+        printf 'ARGS="%s"\n' "$DEFAULT_ARGS" > $OUT/hassmic.conf
         t "mkdir -p /data/local/hassmic"; adb push $OUT/hassmic.conf /data/local/hassmic/hassmic.conf >/dev/null
         t "rm -rf /data/local/hassmic/ota; rm -f /data/local/hassmic/hassmic"      # boot.sh prefers a binary here (scripts/deploy.sh test builds); the fresh install wins
         # Patch the policy here, not in TWRP: magiskpolicy is dynamically linked and aborts in the recovery environment.
-        adb push $SEPOLICY_TOOL /data/local/tmp/mp >/dev/null
-        adb push $DDIR/sepolicy.rules /data/local/tmp/ >/dev/null
+        adb push $SEPOLICY_TOOL /data/local/tmp/mp >/dev/null && adb push $DDIR/sepolicy.rules /data/local/tmp/ >/dev/null ||
+            die "could not copy $SEPOLICY_TOOL and $DDIR/sepolicy.rules to the Echo, nothing changed"
         t "cd /data/local/tmp; chmod 755 mp; rm -f sepolicy.new
            ./mp --load $BASEF --apply sepolicy.rules --save sepolicy.new >/dev/null 2>&1
            [ -s sepolicy.new ] && ./mp --load sepolicy.new --print-rules 2>/dev/null | grep -q '^allow init su process'" ||
@@ -57,7 +58,7 @@ fi
 # What goes into /system/hassmic, whichever way it gets there.  The tools and the Wi-Fi motion module are optional (no
 # kernel toolchain, no .ko): `|| true`, since an assignment takes the substitution's status and set -e would end here.
 FILES="$OUT/hassmic $OUT/runas $(ls $OUT/mixcap $OUT/mixplay $OUT/pryon_test $OUT/*.ko 2>/dev/null || true) $OUT/otatool secrets/update.pub keys/release.pub $DDIR/device.conf
-       scripts/system/boot.sh scripts/system/main.sh scripts/system/sysinstall.sh scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh"
+       scripts/system/boot.sh scripts/system/main.sh scripts/system/sysinstall.sh scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh scripts/device/artifact-install.sh scripts/device/wifi.sh"
 
 if [ -z "$TWRP" ]; then
     t "rm -rf $STAGE; mkdir -p $STAGE"

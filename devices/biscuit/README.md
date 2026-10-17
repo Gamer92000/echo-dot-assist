@@ -28,6 +28,7 @@ no `brhgptpl`/NAND layout like `crumpet`). Against `donut`'s NS65741 image:
 | mute latch (on the Echo) | `/sys/devices/soc/10010000.keypad/amz_privacy/state`, world-readable, 0 with the mics on. **Do not `cat` the other files there**: reading `power_button_state` crashes the kernel (NULL gpio in `get_power_button_state`), the watchdog reboots the Echo |
 | puffin service (on the Echo) | `/init.project.rc`: user `puffin`, groups `aipc davs dbus inet ace_kvstore ace_group drmrpc system audio keystore cache shell ace_maplite` |
 | A/B (on the Echo) | `ro.boot.slot_suffix=_a`; no `bcbtool` in the running image |
+| speaker gain (on the Echo, 2026-10-11) | DAC TI TLV320AIC32x4 at i2c 2-0018 (mics: four TLV320AIC3101 at 0-0018..1b). Its `HP Driver Gain Volume` (0..35 = -6..+29 dB) feeds the speaker amplifier; the audio HAL sets it to 6 (0 dB) when the mixer starts (`/system/etc/audio_device.xml`, `ext_speaker_output`), 11 for the 3.5 mm jack. The settings page's "Speaker gain" raises it (`board.c` `speaker_gain`, `spkgain.c`) |
 
 Hardware: MediaTek **MT8163**, quad Cortex-A53 @ 1.5 GHz, 512 MB RAM (64-bit kernel, 32-bit userspace), micro-USB with
 data. Reference project: [EchoMuse](https://github.com/wilbowes/EchoMuse) (same idea for this model, but it replaces the
@@ -47,7 +48,7 @@ XDA thread with the full instructions: [UNLOCK][ROOT][TWRP][UNBRICK] Amazon Echo
 
 The unlock is **one script**: unzip the package, run `./fastbrick.sh` (Linux), put the Echo into fastboot mode —
 unplug its power, reconnect while holding the **action button** (the one with the circle) until the ring shows a
-**green LED** — and type `YES` when the script asks. It runs the whole exploit (about a minute, the ring shows
+**green LED** (an Echo unlocked before shows a rainbow) — and type `YES` when the script asks. It runs the whole exploit (about a minute, the ring shows
 progress) and reboots the Echo into TWRP (white LED). **Do not interrupt it after the 10-second grace period — that
 can brick the device.** `amonet-biscuit` **v2.0.0 writes newer bootloaders and boots Fire OS 6** — the stream the
 pinned firmware belongs to (Fire OS 5 versions do not boot from v2.0.0 on). Flash `boot-root.zip` after every stock
@@ -69,7 +70,8 @@ firmware flash: it gives root adb, as on donut.
   ring and Home Assistant watched over a press with the build that reads it.
 - A spoken wake word and a spoken command with the current build (a simulated wake word runs the pipeline through Home
   Assistant; the microphone stream is alive and hears the Echo's own wake sound).
-- A2DP with a phone and BLE pairing not tried yet (the controller comes up; see the table).
+- A2DP with a phone and BLE pairing not tried on biscuit yet (the controller comes up; see the table). A phone paired
+  and played on the Echo 2 (radar), same MT8163 combo, 2026-10-10.
 
 `INSTALL=twrp-ab` and the policy patch (`magiskpolicy32` from donut's boot-root zip) worked unchanged on the first biscuit (2026-09-28):
 `scripts/install-system.sh` wrote `system_a`, the Echo booted into the satellite.

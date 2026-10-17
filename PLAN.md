@@ -154,6 +154,23 @@ Run in this order. Each step says what it proves.
       the PC. Added in HA by IP `192.168.100.147`, port 16700.
       **2026-09-21: end-to-end works** — "Alexa" → HA pipeline → TTS reply on the Echo, user verdict "works perfectly"
 - [x] LED ring states look right: listening / thinking / talking / idle / error / muted / volume — confirmed by the user during the ESPHome tests (listening / thinking / talking / mute / volume / timer)
+      Listening ring towards the talker (issue #22, 2026-10-11; Dot 2 reported, worked out on biscuit's binaries and a
+      Dot 2 over USB): stock turns it, hassmic did not. Chain: libasp (in `mixer`) sends LIPC `com.doppler.lasp
+      beam_index` on its front end's beam event; ledcontroller (subscribed as `com.amazon.puffin.ledcontroller`, no
+      PuffinApp needed; also its own int property `com.amazon.ledd BeamDirection`, same handler 0x18ed0) runs
+      `EchoAnimationStore::getBeamIndexTask` (libled_resources.so), which sets the turn of every frame of exactly
+      `active-start` and `active-end` (names at 0xc8c4/0xc8d1); `LedDevice` (0x1ea18) writes LED i from pixel
+      (i + n - turn) mod n. The AnimationThread hands it the animation's own frame only when one animation is active;
+      with two or more it composes into a fresh frame (turn 0). `AnimationFrame::onBeamIndex` in ledcontroller itself
+      is dead code. hassmic played `ca-active-start`/`ca-active-end` (uxconfig.json's names, same look), which are
+      never turned. Measured with BeamDirection on `active-start` alone: 0, 3, 6, 9 put the cyan pair on LEDs 10-11,
+      1-2, 4-5, 7-8; with `mics-off_on` beside it, or with `ca-active-start`, nothing moves. BeamDirection read 3
+      before any test: libasp does send under hassmic. Now `active-start`/`active-end` (in the map on donut, biscuit,
+      radar). The other models by their binaries: libled_resources.so is byte-identical on all three; donut's
+      ledcontroller differs from biscuit's only in the build id and the light curve at 0xc6f0; radar's is another build
+      with the same chain (LIPC handler -> setter 0x18ce0 -> beam task -> onBeamIndex, LedDevice turn, one-animation
+      pass-through); every libasp.so sends `beam_index`. Not yet seen with a real wake word: that Dot 2 was muted. Stock's limits stay: a second animation (a
+      ringing timer, DND) leaves the ring unturned.
 - [x] Buttons: `getevent -l /dev/input/event3` works beside `acebuttond`; volume keys not handled twice — volume, action and mute buttons verified; mute comes from `/dev/input/event1`
 - [x] Barge-in acoustically: the detector hears "Alexa" while speech plays on the `TTS` stream (4/4 on the device, also during HA's own
       reply), so neither the mixer nor the AEC is in the way. It was ignored because `barge_in` doubled as "already being cut" and as
@@ -187,6 +204,67 @@ Run in this order. Each step says what it proves.
             engines, `echo-de-DE` detects espeak "Echo" (type=2) on all three. radar's engine lists `wakeword_ecids` up
             to 35 (donut, biscuit: 37) and throws on the NTT sets under qemu: `davs-fetch.py --ecids` asks with the
             Echo's own list, which `scripts/wakeword.sh` reads from `pryon_test`'s attributes line
+      - [x] One keyword per pick (2026-10-08, GitHub issue 14): DAVS's en-US computer/amazon/ziggy is one multi-keyword
+            set (`words.shrunk.txt` AMAZON COMPUTER HEY_DISNEY STOP ZIGGY; `op.cfg.json` lets each wake from sleep, no
+            switch in the set), so with "Computer" picked "Amazon" and "Ziggy" woke the Echo too (reproduced on biscuit;
+            espeak-free, a real voice). `main.c` `wake_open_word`: the keyword is the set id up to the language, applied
+            only if a `words.shrunk.txt` of the set (top or one folder down) lists it; `on_wake` drops others but STOP.
+            Also HA's ESPHome select keys options by name: of `computer-de-DE` and `computer-en-US` ("Computer" both) it
+            showed one and picked the later; a name two sets share now carries the id's region.
+      - [x] DAVS token without stock Alexa, for downloads from the settings page (2026-10-06, `docs/re-davs-login.md`,
+            probe `tools/davs-login.py`): the Echo's own code pair login gets as far as the code entry on amazon.de/code,
+            then `/auth/register` answers `InvalidDevice` (the missing piece is the device attestation token).
+            **Built since** (2026-10-06, same day): `dha.c` builds that token exactly as MAP does (biscuit and radar,
+            verified against libace_map.so instruction by instruction; the key's TEE session needs group `drmrpc`, now
+            in every model's `DAEMON_GROUPS`) and
+            `davs.c` does the whole login from the page (code shown with the link, register polled with the token,
+            tokens in `state/davs` 0600 never sent to the page, refresh, deregister with a fresh token, the registration
+            kept on its own Amazon when a login on another one fails or is cancelled), asks DAVS with this engine's own
+            ecids (`wake_attributes`), downloads the tar.gz (streamed to disk, capped as artifacts.c, free space checked
+            as it arrives), unpacks it (PAX headers and directory entries skipped, unpacked size and free space checked;
+            two levels of folders kept), and stages it through artifacts.c's checks incl. pryon_test and root's installer.
+            artifacts.c, the page's Echo-to-Echo copies and `artifact-install.sh` keep two levels of folders too (files
+            named `sub/file`, `sub/sub/file`, 127 characters, 128 files; links and deeper folders refused, root still
+            reads as the daemon's user). Two levels and 128 files since 2026-10-08 (GitHub issue 14): every en-US set
+            (alexa, echo, computer, amazon, ziggy) and alexa-de-DE carry `nttfusionconfig/ntt_conv/` etc. and 67-69
+            files; with one level and 64 the page refused each ("a file this Echo cannot keep"). The PC path
+            (`davs-fetch.py`, adb push) never had a limit. Page card
+            "Download from Amazon" (Echos section) in three steps: the Amazon site (every one with Alexa, by region,
+            guessed from the browser language), the code (countdown, cancel), the picker (wake words of a language,
+            whisper, sound detection; what is installed, each download's progress and outcome, kept over the reload
+            after installing). Tests: `tests/unit/dha_jwt_test.c` (byte for byte), `tests/fake_web_davs.py` (53 checks
+            against a fake Amazon: token shape, session header, ecids, region, whisper's own request, every file of each
+            set installed byte for byte, folders, a deeper one refused, other sites, cancel, a revoked token at logout,
+            an Echo that cannot attest, the Dot 3's drvV3 login and download), `tests/fake_web_artifacts.py` (a whisper set with its folder copied Echo to
+            Echo, a set two folders deep with 69 files copied and installed; root refusing a link in a folder and three levels); the card checked in headless Chromium.
+            **Against the real Amazon (2026-10-06, biscuit, amazon.de): works.** Register answers `401 Unauthorized`
+            until the code is entered, then the tokens; no device secret needed (none sent); Amazon names the device
+            after the account whatever `device_name` says; the Echo's clock was a day behind and the token's `dat`
+            passed; deregister answered 200. Downloaded and installed: computer, amazon, ziggy (de-DE) and the sound
+            detection model. alexa-de-DE (`BDPGeneratedFiles/`) and whisper (`whisper_components/`) were refused for
+            their folders, hence the folder support. Found on the way: `untar` never skipped a file's padding, so every
+            set arrived as its first file only (the fake's pryon_test passed it; the real one would have refused).
+            Not done: the folder sets from the real Amazon, sites other than .de, the Alexa app login route
+            **donut's drvV3 attestation reversed and built (2026-10-09):** the Dot 3 proves itself with the dhav2
+            certificate its EC key in the TEE had Amazon sign (`/persist/dha_certificate.pem`, HAL field 0x203):
+            `dha.c jwt_v3` builds the header `{"typ":"drvV3","alg":"ES256","x5c":["<the PEM's body, CR and LF
+            dropped>"]}` and a payload with a cpuid literal of donut's MAP (`dfae219fe47947c7`) and no "cust" part,
+            signed like drvV1 but over the DER ECDSA the HAL answers, split into 32-byte R and S (the JWS raw form;
+            the token carries the certificate, ~1.9 kB). The HAL's public key tells the shapes apart by its algorithm
+            OID: rsaEncryption on biscuit and radar (read off biscuit's HAL 2026-10-09), id-ecPublicKey on P-256 on
+            donut; any other key is refused by name rather than tried as drvV3 — biscuit's and radar's HALs hold a
+            dhav2 certificate file too (same NS65741 family), unused by their MAPs, so the certificate alone cannot
+            tell them apart. The TEE (`/dev/trustzone`, 0660 system:drmrpc = gid 1026 on the device) and the
+            certificate file (`/persist/dha_certificate.pem`, 0660 keystore:keystore = 1017) need two more groups →
+            `drmrpc,keystore` in donut's `DAEMON_GROUPS`, as puffinmrmd's list has them (without keystore the HAL
+            answers field 0x203 with -1, measured). Checked on a real Dot 3 with `dha_test` as puffin plus those
+            groups: the EC SPKI, the CRLF PEM at 0x203 (682 bytes, cut at the END marker), a 71-byte DER signature.
+            Tests as drvV1's (both shapes byte for byte) plus a third Echo in `tests/fake_web_davs.py`
+            that logs in and downloads with the drvV3 token. **Against the real Amazon (2026-10-09, amazon.de): it
+            works** — register 401 until the code, then the tokens and the account's name ("Julians Echo Dot");
+            alexa/echo/computer/amazon it-IT arrived whole (the two-level folder sets on real data) and root
+            installed them, ziggy it-IT answered 404 (none for that language), the registration survived the
+            restart of the install.
       - The spied `assetmgrd` must run in its own SELinux domain (`runcon u:r:assetmgrd:s0`, shim labelled `system_file`, log in
         `/data/davs`): from the `su` domain its AIPC service is unreachable and the Alexa app shows the device as unavailable
 - [x] Assistant replies ignored the volume: the mixer keeps one volume per stream type, the `TTS` stream follows `TTSVolume`, and
@@ -206,6 +284,17 @@ Run in this order. Each step says what it proves.
       with `AlarmState`; `pryon_test -p name=value`). hassmic: alarm ringing, Sendspin stream, reply playing. Pushed 2026-09-22, user: works nicely
       The `pryon WARN ... Invalid bitmask frame indices` line in `boot.log` is one per wake word in every version since 0.0.2: harmless
 - [x] Latency wake → STT start; TTS playback glitch-free — replies start before TTS_START with streaming TTS; user verdict fine
+- [x] Nothing lost between the wake word's end and the stream (2026-10-12). Pryon accepts 116-128 ms after the keyword's
+      end (`endSampleIndex` against samples fed at the callback: 6 accepts 116-128 ms, 11 type-2 results 116-144 ms, from
+      `device-logs`), on its own thread; the stream started with the capture thread's next 50 ms block, so 120-180 ms
+      after the word were cut (a command spoken straight on lost its first sound). With arbitration the ring replayed from the capture thread's
+      sample at the claim, the same gap. Now every pipeline a wake word starts (`pipeline_start(from)`, barge-in through
+      `barge_from`) sends the ring from the keyword's end up to the live block (`replay_from`, capture thread), arbitration
+      included. microWakeWord reports its detection point as the end: no change there. Home Assistant side checked
+      (2026.10.1, aioesphomeapi 46.6): the request's `handle_start` and every `handle_audio` run as eager tasks in message
+      order; the queue is cleared at the start and filled from then on, so audio right behind the request is kept. Host
+      tests: the SIGUSR1 wake word ends 128 ms back now; fake_ha_esphome checks 4096 bytes from the ring ahead of the first
+      live block, fake_ha_arbitration the window's (12096 bytes). On the Dot 2 (biscuit) the same day: user "way better".
 
 ## Phase 5 — Make it permanent **(device)**
 
@@ -406,6 +495,55 @@ Run in this order. Each step says what it proves.
       Jitter buffer now primed with the mixer's share too (150 + 60 ms): before, the mixer took 60 ms at once and the
       drift control duplicated ~3000+ frames per start; now +11 frames in 3 min of AAC. Not done: aptX LL, LDAC
       (no decoder; would also crowd Wi-Fi), HE-AAC
+- [x] Bluetooth on the Echo 2 (radar, 2026-10-10): it installed with `-B` ("until tried"), and HA still listed the
+      Bluetooth entities, since `ble_present()` only checked for `/dev/stpbt`: the "Bluetooth pairing" switch fell back
+      off at once, no thread took the request. `ble_present()` is now false under `-B`, and radar installs without it.
+      Tried on the kitchen Echo: controller ready (4C:EF:C0:8E:D2:3F, ACL 4 x 1021, pairing: legacy only, the LE 4.0
+      fallback as on biscuit), a Pixel 10 Pro XL paired (key type 4) and picked aptX HD with delay reporting, AVRCP up,
+      the "connected" announcement spoken, 48 kHz stream 7 s: longest packet gap 35 ms, ran dry 0 times.
+- [x] Speaker gain (issue #19, 2026-10-11, `spkgain.c`, setting `speaker_gain`, page only): Echo Dot 2 users find it
+      quieter than they like at volume 100, and digital gain is spent (the HAL's stream_volume is 1.0 at 100, 0.398 at
+      50). Codec TLV320AIC32x4 at 2-0018; `HP Driver Gain Volume` (ctl 62, 2 channels, 0..35 = -6..+29 dB in 1 dB) feeds
+      the speaker amplifier; `Ext_Amp_Gain` (6..24 dB) does nothing for the speaker (EchoMuse issue 630). The HAL
+      (`audio.primary.mt8163_headless.so`, `/system/etc/audio_device.xml`) sets 0 in its init sequence, then 6 in
+      `ext_speaker_output`, 11 in `ext_headphone_output` (3.5 mm jack); radar's file has the same values, checkers'
+      (RT5616) has nothing alike. Donut's (`/system/vendor/etc/audio_device.xml`, MediaTek's generic one, naming
+      controls this card does not have) and its `mixer_paths.xml` set no analog gain, but its amplifier has one: below.
+      Who writes it, on the Dot 2 with 12 set by hand: nothing while idle (20 s), during and after a mixer TTS stream
+      (Standby/open cycles: the HAL logs `mDacOn=1`, the path is not re-applied), MainVolume/TTSVolume 50 -> 40 -> 50:
+      stays. `stop mixer; start mixer`: init 0, path 6 (logcat `ApplyDeviceTurnonSequenceByName ext_speaker_output`),
+      so at every boot and mixer restart, and per the XML on a jack change. hassmic (puffin, group audio) opens
+      `/dev/snd/controlC0` (system:audio 0660, context su) itself: no root. Trial build on the Dot 2: probe found the
+      control 0..35; +6 dB from the page -> 12; `tinymix ... 6` (as the HAL) back to 12 before the next tinymix ran
+      (control event); 11 left alone, 6 after it -> 12; mixer restarted: HAL wrote 6 at 09:17:55.570, hassmic 12 at
+      .586 (16 ms); restart with speaker_gain=6 in state/config and the control at 6 -> 12 at start; +3, +12, +0 ->
+      9, 18, 6. Not measured: loudness or distortion (the Echo's mics were muted by the button, so no micRaw; nobody
+      listened). Range +0..+12 dB: reports are +6..+7 clean at full volume (issue #19), +9 and +14 fine, +29 clean at
+      half volume on one white Dot 2 and far too loud on a black one (EchoMuse 630). Not exported: speakers differ.
+      Found on the way: `run.sh` starts avahi-daemon as hassmic's child (`&` before `exec runas`), and with SIGCHLD
+      ignored hassmic's first waitpid then blocks until avahi exits: the trial run hung before the settings page until
+      avahi was killed. Installed Echos are not affected (main.sh starts avahi).
+      Echo Dot 3 (donut, echo-dot-3-dd7b93, 2026-10-11): idme board_id 0160001400020018, i2c 2-0044 bound to
+      `tas2770` (so an EVT..HVT board of the DTBs, not Proto's TLV320AIC32x4), mics on two TLV320AIC3101 (0-0018,
+      0-001a). Card 0 `mt-snd-card`, 229 controls; the amplifier's two, decoded from the kernel's soc_mixer_control and
+      TLV tables (kernel of boot.img): `DAC Playback Volume` ctl 104, reg 0x03 shift 0, 0..20, TLV 11.00 dB
+      + 0.5 dB a step: TAS2770 AMP_LEVEL, 11..21 dBV full-scale output; and `PCM Playback Volume` ctl 105, reg 0x05,
+      0..255 inverted, TLV -127.5 dB + 0.5: the amplifier's digital volume, 255 = 0 dB. The MT8167 codec's own
+      (`Audio Amp`/`Voice Amp Playback Volume`, PGAs) drive the 3.5 mm jack only. Stock values: DAC 16 (19 dBV, also
+      what the hardware held: regmap debugfs with cache_bypass, reg 03 = 0x10), PCM 255. The driver logs every register
+      write to dmesg (`tas2770_codec_write`), so who writes what is plain: nobody writes reg 0x03 (no firmware file
+      names the control; idle, a mixplay stream, `stop mixer; start mixer` (it reads it), volume 60 -> 70 -> 60 by
+      the keys: none). `PCM Playback Volume` is mixer_paths.xml's: 255 in `normal-playback speaker`, 0 (reg 0xff, mute)
+      in `normal-playback headphone`, put back to 255 when the stream stops. So the headroom is DAC 16 -> 20: +2 dB,
+      0.5 dB steps (board field `speaker_gain_steps` 2; the page's top comes from the control, `spkgain_max()`); none
+      digital. 21 dBV is 15.9 V peak, above the 15 V adapter's: if that is the amplifier's supply (not measured),
+      full-scale samples clip by a fraction of a dB at the top. Trial build on the Dot 3 (binary in
+      /data/local/hassmic, the installed satellite around it): probe `"DAC Playback Volume" 0..20, stock 16`;
+      speaker_gain=2 in state/config -> 20 at start; `tinymix ... 16` -> hassmic's 20 0.5 ms later (dmesg); 18 left
+      alone over a 10 s poll, 16 after it -> 20; mixer restarted, a stream played, volume keys: 20 throughout (hardware
+      read 0x14); page: max 2, +1 -> 18, +3 refused, +0 -> 16, +2 -> 20. Not measured: loudness. This Echo reports
+      a plug in its 3.5 mm jack (`/sys/class/switch/h2w` 1: the HAL takes the headphone path, HPOUT Mux AUDIO_AMP, and
+      mutes the TAS2770), so its speaker was silent throughout.
 - [x] AVRCP + one music source at a time (2026-09-24, `a2dp.c`, `main.c` `core_music`): SDP records AVRCP 1.5 target
       (category 2) and controller over AVCTP 1.4; target answers UNIT/SUBUNIT INFO, GetCapabilities (company, events:
       volume changed only), RegisterNotification(volume) with INTERIM / CHANGED, SetAbsoluteVolume (0..127 <-> 0..100 %,
@@ -487,6 +625,34 @@ Run in this order. Each step says what it proves.
       has no custom groups; sliders, dB, no entity category), ESPHome only. Listening test with pink noise on the device, 3.5 mm
       line-out to external speakers: +6/-6 and -6/+6 audible on both the Music and the TTS stream. Set from an API client on the
       device: mixer reads back the values. Not done: survives a reboot (only by the file), the stock `equalizer-change` ring animation
+- [~] Settings page (2026-10-06, asked: fewer entities in HA, features still there, no CLI, simple and secure). Served
+      by hassmic on TCP 28931 (inside the firewall's range), files of `web/` gzip'd into the binary. Login by approval:
+      the browser's X25519 key waits up to 60 s for a press of the action button (ring `authenticated_setup_mode`, on
+      all three models), a second browser asking meanwhile refuses both; approved keys in `state/web_clients`. Requests
+      signed (BLAKE2b-128 keyed with K = BLAKE2b(X25519) over method, path, counter, body); counter per browser, on disk
+      for writes. Plain HTTP, so no secrets in answers. `crypto.subtle` is missing on plain-HTTP pages: `web/crypto.js`
+      has X25519 (after TweetNaCl) and BLAKE2b (BigInt), 20 + 262 cases equal to Python's. Settings by name
+      (`settings.c`, `state/config`, old positional file moved once; loaded at start for Wyoming too). Phases: (1) done:
+      page, login, status warnings, settings, export/import, revoke; host test `fake_web.py` (23 checks) and the real
+      page in jsdom against the host build (login, set, no errors). (2) done: features (arbitration, sound, whisper,
+      Wi-Fi motion, Bluetooth audio, Bluetooth speaker): their entities only while on (`listed()` gates list and
+      states); a switch closes the HA links, HA re-lists on reconnect and deletes what is gone from the registry
+      (`entity.py` `async_static_info_updated` -> `entry_data.async_remove_entities`, checked in HA dev). Lean core
+      (user's pick): media player, mute, DND, wake sound, LEDs + illuminance, EQ, firmware, Sendspin token (a secret,
+      never on the page). Page-only: mic level, noise reduction, BT announcements + language, update channel, adb (a
+      press of its own), Sendspin unpaired, diagnostics (`diag.c`). Bluetooth speaker defaults to on where a speaker
+      played before (first `state/config`); the volume-key pairing switches arbitration on through the settings.
+      `main.sh` reads `wifi_motion=on` from `state/config` for the module (it read field 13 of the old file). Tests
+      reworked onto `tests/webclient.py`: fake_web 35, fake_ha_esphome 97, fake_ha_update 21, fake_ha_arbitration 31. (3) done: arbitration card (`arb_status_json`: network, members with name + IP from
+      signed beacons via `recvfrom`, others as none / younger / older with how long; warning when HA does not show our
+      handoff entity), Echos card (heard ones + added by address, `host:port` too; a login each with its own button,
+      settings that differ, copy one or all). Checked in jsdom with two host builds (log in to B from A's page, 1
+      setting differs, copied, B's state/config has it; arbitration card shows B in a second network) and in
+      fake_ha_arbitration / fake_web (status JSON, CORS preflight). (4) done: presets: `scripts/setup.sh --preset <export>` or asked
+      at the install step, checked as name=value lines, pushed to `state/preset` (daemon user's, 600), hassmic
+      restarted; it applies the file once at start like an import (unknown lines logged) and keeps it as
+      `preset.applied`; fake_web checks it, `setup.sh --dry-run --preset` walks it. Not done: on the device (the ring
+      animation, the press)
 - [~] Wake word arbitration between Echos (2026-09-25), stock's ESP ("Echo Spatial Perception", decided in Amazon's cloud)
       on the LAN, `arb.c`. Home Assistant alone only has first-come: `assist_pipeline/run.py` `accept_wake_word` drops a
       second wake-up with the same phrase within `WAKE_WORD_COOLDOWN` = 2 s (we send `wake_word_phrase` "Alexa") with error
@@ -512,6 +678,30 @@ Run in this order. Each step says what it proves.
       through HA, K not readable in what HA carried, better score answers alone, prio, different keywords both answer,
       duplicate error quiet, forged beacons (unknown name, a real Echo's name with another key, fake older network) and a
       forged claim change nothing, leave wipes the key, create after 5 s, no key without the actions option, join once allowed.
+      Joining without the actions option (2026-10-05): HA gates only action calls; devices fire `esphome.*` events and
+      request any entity's state without it (`components/esphome/manager.py` dev: `async_on_service_call` is_event
+      branch, `async_on_state_subscription`/`async_on_state_request` unchecked). The entity lookup of 09-25 comes back
+      without the guessing: every Echo shows "HMA1 <pub>" on the diagnostic text sensor "Arbitration handoff", asks HA
+      (SubscribeHomeAssistantStateResponse `once`: no tracker piles up in HA, and no "old_state None" gap for new
+      entities) for `sensor.<node>_arbitration_handoff`, `_2`, `_3` (and one further each time HA answers for the last
+      with anything but its key: another device of that name, "unavailable" if it is off; asking only the next one, so
+      linear; at most as many as hosts in the subnet: no more Echos of a name can share a broadcast group) until one shows
+      its own key, and broadcasts that id
+      (`T_ENTITY`, ignored by older Echos). A member asks HA for a newcomer's named entity every 3 s and offers K
+      ("<net> <to> <sealed K>", 224 chars, HA's limit 255) on its own entity only once HA shows the beacon key there; the
+      newcomer polls members' entities and takes an offer addressed to it. No confirmed entity after 20 s: the action as
+      before (so owners without the option see no repair when the entities work). Third way without HA: Volume up +
+      Volume down held 2 s (stock gives the combo no meaning; acebuttond owns the 5 s/21 s action holds) = 2 min
+      pairing: `T_PAIR` every 1 s, a member hands `T_GIVE` (3 copies, 500 ms apart) 2 s after its press if exactly one
+      Echo outside its network asked since 2 min before, and none of an older network is pairing (it gives instead); two =
+      refused; taking a key any way ends the window (found by the test: a newcomer that joined through the entity
+      mid-window then handed K to a forged request it had recorded). An offer not taken by the next push (30 s) goes
+      through the action too. Limit: a LAN attacker who keeps asking gets the key of an Echo pressed while alone in its
+      own network. Tap on start, BT connected/disconnected sound for the result. Host test: merge through the entities with actions refused (K not in the states HA saw, offer taken
+      down after), a forged `T_ENTITY` naming a real Echo's entity gets no offer, the action after 20 s with neither,
+      pairing joins, a second requester refuses it, a forged give does not open, entities back = join without permission,
+      action path still joins. Not done: on the device (whether HA really names the entity `sensor.<node>_…` on a fresh
+      adoption; the combo under acebuttond; the sounds)
       Not done: on the device with two Echos (score separation at distance, whether the micAsr stream's gain control
       flattens it, claim delay over Wi-Fi with power save)
 - [x] Wake word select (2026-09-25): VoiceAssistantConfigurationResponse had "alexa" hard-coded since the ESPHome API
@@ -588,6 +778,28 @@ Run in this order. Each step says what it proves.
       and came down for the command. Now the gain holds (levels and gain frozen, peak limit on) while one of our sounds
       plays and 250 ms after. The sound itself stays in the stream (RNNoise takes another 4..17 dB of it on the captures).
       Not done: a recording from HA with the fix; whether to skip the stream during the sound as the Voice PE does
+- [~] Wake sound removal (2026-10-12, experimental, setting `wake_sound_removal`, off by default; `earsup.c`): since the
+      pipeline gets the audio from the wake word's end, people talk over the sound. A residual echo suppressor keyed
+      to the sound we play, not a second linear canceller (it would have to adapt during the talker's voice, and what
+      the stock one leaves is mostly non-linear). Stock `ui_wakesound`: 650 ms, loud for ~400 ms, 90 % of its energy in
+      8 of 5178 FFT bins, 99 % in 48, mostly under 1.1 kHz: speech keeps nearly all of its spectrum. The earcon thread
+      registers the PCM (resampled to 16 kHz) and the capture clock before `play_earcon`, and again when the mixer takes
+      it (`audio_earcon_started`: the queue starts draining). The pipeline audio from there is held until delay range +
+      sound + 300 ms tail have passed, then: delay by correlating log magnitudes in the sound's ≤96 strongest bins
+      (centred per frame and per bin, so broadband speech drops out), -50..+400 ms after the mixer took it in 4 ms
+      steps; coupling per bin = 25 % quantile of mic/sound over the frames where the sound is strong (not its modelled
+      tail); gain 1 - 2 E²/|Y|² floored at -30 dB (E: coupling x sound, tail -3.2 dB per 16 ms); only (gain - 1) x mic is
+      overlap-added back, so frames left alone come out bit-exact. Released at once (Home Assistant buffers), the gain
+      holds over it. Match under 0.13: nothing done.
+      `tests/unit/earsup_test.c` (chime like stock, echo -57 dBFS 100 ms after with reflections at 3 and 10 ms, noise
+      -65, espeak speech): echo alone 20.4 dB down; speech as loud as the echo: echo left + speech lost 16.6 dB under
+      the echo, speech level kept within 0.1 dB; speech 22 dB louder: delay still found, 9.2 dB; 32 dB louder or no
+      echo: untouched, bit-exact. Plain magnitude correlation had lost the delay once speech was 7 dB louder.
+      `tests/fake_ha_wakesound.py` (`HASSMIC_FAKE_ECHO=90:-20` in `audio_file.c`): found at 94 ms, the blip's tones
+      in Home Assistant's audio 23.3 dB over the room off, 2.6 dB on; stream whole. Cost on the Dot 2 (armv7, biscuit):
+      61 ms once per sound, under `core_lock` (77 -> 96 ms before log tables and 4 ms steps).
+      Not done: anything on a device with the real sound and room (the delay and how much the canceller leaves, per
+      model and output: jack, speaker), STT results with it, whether the 1 s held hurts with streaming STT
 - [~] Noise reduction (2026-09-30): RNNoise 0.1.1 (`src/third_party/rnnoise`, BSD-3) in `micdenoise.c`, ahead of the gain,
       only on what goes to the pipeline; HA switch "Noise reduction", off by default, in the settings file's first
       field (superseded the same day: a select with three strengths and no level change around RNNoise, see "Noise
@@ -612,6 +824,169 @@ Run in this order. Each step says what it proves.
       (`{"voiceEnergy":10690,"ambientEnergy":66408,..}`, 150 ms); fake_ha_arbitration passes (its scores are given).
       Not done: a spoken wake word on the Echo (the log then shows both scores), two Echos, biscuit and radar (their
       libasp unread: the fallback applies if the property is missing)
+- [~] Arbitration with Kiosk Satellite (asked 2026-10-05; analysis in `docs/kiosk-arbitration.md`): theirs is UDP
+      broadcast on 2330, plain JSON claims (phrase, dB over the noise floor), ±400 ms window, no authentication, no
+      priority, no "answers" message. Done 2026-10-06 as a second mode rather than a bridge: setting
+      `arbitration_mode` (`hassmic` default / `kiosk`), page-only, the page compares the two. Kiosk mode speaks only
+      their protocol, as they designed it (three copies at 0/15/30 ms, ±window, highest e, lower id on a tie; no
+      priority, always waits), window `arbitration_window` 100-500 ms (400). Score: their formula on micAsr's last 3 s,
+      frames lifted +30 dB first (micAsr runs ~30 dB under speech level, which would sit on their -75 dBFS floor clamp),
+      plus the owner's `arbitration_offset` (-20..20 dB, default 0) added to e on the wire, to even out by ear.
+      Beacons flag the mode (1 quiet + 2 kiosk), so own-mode Echos do not wait and the page warns of mixed modes.
+      Firewall: `lockdown.sh` admits UDP 2330 while `state/config` has `arbitration_mode=kiosk`. fake_ha_arbitration
+      (fake kiosk socket): wire format, loudest wins, kiosk louder silences both, other phrase and malformed claims
+      ignored, no priority, offset flips the winner, back to own mode. Not done: a device test next to a real kiosk (calibrate the +30 dB lift,
+      claim delay over Wi-Fi), the firewall rule on the Echo
+- [x] Clock from Home Assistant, times in the log (2026-10-06). Found: nothing sets the clock behind the egress lock,
+      the Dot 2 was 83082 s behind. hassmic asks Home Assistant (ESPHome GetTimeRequest 36, aioesphomeapi answers it
+      itself) on each keyed link once it subscribes and every 6 h on its pings; `clock.c` hands "<epoch> <boot clock as
+      /proc/uptime>" to root (state/clock); `main.sh` netwatch adds the time since, `date -u @`, `hwclock -w -u`, setprop
+      `hassmic.clock.synced`. Log: hassmic's stderr/stdout through a pipe to a reader process ("hassmic-log",
+      double-forked: Amazon's DHA module `wait()`s for its idme child and with SIGCHLD ignored that waited for the reader,
+      hassmic never opened its ports - seen on the Dot 2, fixed before commit), stamps "2026-10-06 15:41:29.417Z" or
+      "boot+31027.076"; drops the idme tool's 3-line error (4x per signing) and the DHA module's setgroups warning.
+      Scripts: `say` / `stamped` in main.sh, boot.sh's one line. mksh is 32-bit: all shell numbers stay below 2^31.
+      Dot 2: clock set 83082 s, RTC follows, stamps UTC from then on, viewer shows local time. Tests: fake_ha_esphome
+      (state/clock only from the keyed link), fake_web (boot+ stamps), fake_ha_arbitration (UTC stamps); clock_set's
+      branches run under the Echo's mksh with stubs
+- [x] Log viewer on the settings page (2026-10-06): `GET /api/log/0|1`, signed, tail of 2 MB of `boot.log` / `.1`,
+      Sendspin pairing token blanked (signed is not encrypted: a sniffer reads the answer); filter, older part, download.
+      Kiosk claims logged once a second at most (unauthenticated, and `boot.log` is on flash: /data, mmcblk0p16 ext4).
+      fake_web: both parts, token blanked, 401/404; fake_ha_arbitration: 200 claims at once give 1-3 lines
+- [x] Rename on the settings page (2026-10-06): display name (`state/name`) and, confirmed, the node name (`state/node`);
+      node stays derived from `NAME` otherwise. HA's ESPHome manager (dev, 2026-10) keeps the entry on a new name with
+      the same MAC and just stores it; entity ids stay, so arbitration's `sensor.<node>_arbitration_handoff` lookup misses
+      after a node rename until they are renamed in HA. Restart via `state/restart` -> root `stop/start hassmic`. Not
+      tried on a device yet. fake_web: refused names, both kinds, link not followed by `-S`. Bluetooth speaker delay
+      also a page setting (`bluetooth_speaker_delay`, not exported).
+- [x] Identify (2026-10-06, a user's idea: which Echo is which on a full desk): `zzz_rainbow` for 10 s (a loop, identical
+      on donut/biscuit/radar) + `state_setup_discovery_beacon` (all three). Page header, per Echo in the list, HA button
+      (`LIST_BUTTON` 61 / `BUTTON_COMMAND` 62, device class identify, diagnostic). fake_web: page, unsigned, HA button.
+      Not seen on a device yet.
+- [~] Wi-Fi switch on the settings page (2026-10-07, asked: scan plus a name typed by hand, password before or after
+      picking, back to the old network if the new one fails, warn about the new address). hassmic (puffin) may not talk
+      to wpa_supplicant: `state/wifi-request` for root (`main.sh` ota_watch, every 2 s) -> `scripts/device/wifi.sh` in the
+      background, answers in root's `/data/local/hassmic/wifi/` (status, scan, result, lock/). The password: sealed by
+      the page with K (BLAKE2b key stream over the request counter, `web.c` unseal, `crypto.js` seal, padded to 64 bytes);
+      `wifi.c` turns it into the PSK (PBKDF2-HMAC-SHA1, 4096) and only that goes to root (0600 request, removed on read)
+      and into `wpa_supplicant.conf`. Switch: add + select in wpa_supplicant only; kept once `wpa_state=COMPLETED` on
+      it (30 s), an address and the router answers ARP (`/proc/net/arp` flags 0x2 after one ping; 30 s); then every
+      other saved network goes (asked: no fallback to an old network once the new one works; P2P groups, disabled=2,
+      stay), `save_config`. Else removed, the old network selected and the others enabled again (select_network
+      disabled them), nothing ever saved. Why it failed from the furthest `wpa_state`: never
+      associating = not found, 4-way handshake = password. netwatch: no wifisvc while `lock/` exists. WPA2-PSK and
+      open only (SAE-only, WEP, EAP, OWE shown, not offered). `tests/fake_web_wifi.py`: real wifi.sh against
+      `tests/fake_wifi_tools.py` (wpa_cli, ifconfig, getprop, ping...): escapes, merge, PBKDF2, wrong key, out of reach,
+      no DHCP, silent router, replacement, open, save failure, replay, busy, interrupted, junk requests.
+      Dot 2 (biscuit), 2026-10-07, over USB: wpa_cli as parsed (`get_network` prints no newline; key_mgmt of Amazon's
+      entry "WPA-PSK WPA-PSK-SHA256"), toybox `ifconfig`/`ping -W`/`sed [[:space:]]`, no `ip`, no `head -c`; mksh's `echo`
+      eats backslashes (`\x41` -> A), hence printf for SSIDs. Scan 5.3 s. Unknown SSID: notfound, back 4 s after the 30 s;
+      wrong PSK on a real SSID: wrongkey (4-way handshake seen), back 6 s after; `wpa_supplicant.conf` md5 unchanged
+      both times. Found there: back() let its own reconnect overwrite why (reported noassoc); fixed, fake now settles
+      through ASSOCIATING. dhcpcd: init's `dhcpcd wlan0 -AdLK` (6.8.2), `-K` = no link events: 15 s on a missing network
+      and back left address, router ARP entry (0x2) and `dhcp.wlan0.*` untouched, so the address-only check would have
+      passed on another network with the old lease. Now `setprop dhcp.wlan0.result hassmic` + `dhcpcd -n wlan0` and only
+      a lease its hook (`95-configured`) writes counts; same network: RENEW in 1 s, switch in 5 s. Other subnet
+      (192.168.100.0/22 -> DasImhof'scheTortenstueck 192.168.0.0/23): 17.8 s; there dhcpcd did see the drop (EXPIRE,
+      CARRIER, a moment of IPv4LL) and REBIND gave 192.168.1.242, router 192.168.0.1; lockdown re-applied with the new
+      resolvers by itself; Music Assistant back at once, Home Assistant after 3 min (zeroconf: mDNS announced the new
+      address, checked from the PC). Whole chain through the page API with the biscuit build in /data and a root loop
+      for main.sh's part: sealed wrong password -> wrongkey; the real one -> PBKDF2 on ARM right (switched); back from
+      the new address with a fresh login, page lost the Echo (as meant), USB: ok on the old network. Also found: the
+      page showed the old network while on the new (status written only on link up): netwatch now writes it on every
+      change of address. And `wpa_cli reconfigure` (cleanup) took wlan0's socket in /data/misc/wifi/sockets away until
+      wpa_supplicant restarts; wifi.sh then talks to the global one (`-g@android:wpa_wlan0 IFNAME=wlan0`, Android's
+      way), checked on the Dot 2 with a scan and a failed switch. Not on a device: main.sh's dispatch and netwatch
+      parts (an update brings them), the page in a real browser against the Echo.
+- [x] Echos dropping out of each other's network (2026-10-07, seen on the settings page: the Echo Dot missing from
+      the Echos list for seconds, then back). Watched from all three for 5 min: the Echo Dot heard both others' beacons
+      every 30 s (max age 29 s), both others heard its beacons only every 90 s (max age 72/74 s, PEER_TTL_MS 75 s: out
+      for ~15 s each cycle, out of rounds too). A wired PC on the VLAN got all of its beacons. Counting rule on the
+      Dot 2 (iptables, no target): the lost ones never reached its kernel. From the wired PC, broadcast vs unicast to
+      the Dot 2, 60 each: 44/60, 51/60, 48/60 vs 60/60 every time; on the other AP 54/60. Not power save (driver log:
+      PS mode CAM since boot; DTIM skip 0; autosleep off, no suspend). The PC's own Wi-Fi card on the same APs, at
+      -71 dBm against the Echo's -61, from a spare address (raw frames out of the wired card): 113/120 broadcast,
+      120/120 unicast. hassmic stopped: 59/60. Cause: the BLE scan (30 ms per 320 ms, ble.c) has the shared antenna;
+      APs never repeat broadcasts. Unicast to every peer was tried and dropped (traffic grows with the square of the
+      Echos, claims' copies multiplied). Instead: ble_quiet(1000) when a round starts (main.c wake_heard), so an Echo
+      that heard the wake word hears the others' claims: 40 broadcasts in 0.8 s, 4 times each, 136/160 scanning vs
+      158/160 in the pause. Beacons every random 20-40 s (no sender stuck in a bad phase), PEER_TTL_MS 150 s (about four
+      missed in a row); Dot 2 with it, 5 min: never dropped the Echo Dot (longest gap 59 s). Then 5 min (about ten
+      missed, asked): an unplugged Echo stays listed and waited for that long. With that, a restarted Echo (same
+      identity) is still counted by the others, so they did not answer its first beacon and its own list stayed empty
+      until their next one (up to 40 s; also what was seen first on the page after a push; fake_ha_arbitration's
+      action step flaky past its 60 s). F_HELLO (flags bit 4): its beacons for 40 s after a start or a join; members
+      answer at once; answers never carry it (two hellos would answer each other for ever); older builds ignore it.
+      Still flaky 1 in 3 after that: a newcomer restarted 1.1 s after the last one got no answer (members answer
+      newcomers once a second at most), sent its next beacon only after LONER_MS 10 s, and started a network of its
+      own at DISCOVER_MS 5 s, which the member then joined. A lost broadcast does the same. Now a newcomer asks every
+      LOOK_MS 1.2 s during its first DISCOVER_MS. The other two still on
+      the fixed 30 s / 75 s until updated.
+- [x] Arbitration key handoff through HA tags (2026-10-07, issue #8: three Echos on the latest beta, all with the
+      settings page's "handoff entity under another name" warning). HA 2026.9 names entities from area + parent device +
+      device + entity name (`helpers/entity_registry.py` `_async_get_full_entity_name`, default parts AREA,
+      PARENT_DEVICE, DEVICE, ENTITY, user-configurable in the registry's `entity_id_parts`; #179996, #183610): the
+      issue's ids were `kitchen_echo_dot_kitchen_arbitration_handoff`, so `sensor.<node>_arbitration_handoff` never
+      matches once a device has an area, and they had joined through the action. Nothing HA sends a device names an
+      entity id (ESPHome API checked: state responses answer an id the device names; templates render in events and
+      actions, but only actions answer, with permission). Sub-devices without an area would dodge the area, not the
+      parent-device part. Tags do: `tag.async_scan_tag` makes `tag.<slug(tag_id)>` (`object_id_base=tag_id`, no device,
+      no area), state = last scan (ISO, ms), and the esphome manager fires `esphome.tag_scanned` in its is_event branch,
+      before the permission check. So: tag `hassmic_<pub hex>` scanned every 10 s (12 times, then every 5 min; back to
+      fast at most once per 5 min on a new key, as anyone can make keys up) while an Echo outside a network is in sight
+      or we are outside one; the other side polls `tag.hassmic_<pub>` every 3 s and confirms the key once the state
+      differs from its first read (a stale tag of a removed device never changes; no clock needed); a confirmed member
+      sends `T_GIVE` every 5 s, a newcomer takes one outside pairing only from a confirmed Echo for the network it
+      beacons. Action after 30 s unconfirmed (was 20). The "Arbitration handoff" entity, `T_ENTITY` and the id search
+      are gone (key 38 kept free); older Echos meet new ones through the action. Merge in the host test ~20 s.
+      fake_ha_arbitration (fake tag integration): merge without actions, scans stop once in one network, a forger with a
+      stale tag and a forged `T_GIVE` gets nothing, no tags = action, tags again = in without permission. Not tried
+      against a real HA yet. On the three Echos (2026-10-06 23:11, network key removed on all, restarted together):
+      radar started a network after 5 s, all three tags scanned at 23:11:28, both others confirmed and joined by
+      23:11:31 (23 s in all), no action, no pairing; so HA 2026.9 names the tag entity `tag.hassmic_<pub hex>` as expected.
+- [x] Claim copies spread (2026-10-06): after the rejoin, a wake word heard by radar (score 5836) and biscuit (2187)
+      was answered by biscuit and HA turned radar away as a duplicate. biscuit's log has no claim from radar in 2 of 3
+      rounds (donut got it, 28 ms after biscuit's), only radar's "answers" 188/279 ms later; claims seen elsewhere
+      arrived -17..+59 ms from the own detection, so not the 200 ms window: both copies, sent in the same ms, were lost
+      together. Now claim and "answers" go out at 0/30/80 ms (`COPY_MS`, loop woken by a pipe so they leave on time;
+      kiosk copies too). fake_ha_arbitration: copies at 0/31/81 ms.
+- [~] Arbitration window learned (issue #27, 2026-10-12). Report: two Dot 2s (biscuit) behind a Fritz!Box, 1.5 days of
+      boot.log: the other Echo's claim came a median 232 / 150 ms (p75 311 / 243, p90 387 / 312) after the own
+      detection, 60 of 101 and 31 of 82 after 200 ms; the farther Echo answered in 16 / 19 rounds, 34 of them (all but
+      one) with the louder claim arriving after the decision. Replayed: missed louder claims 18 / 19 of 39 / 45 at 200 ms,
+      6 / 5 at 300, 2 / 2 at 400, 0 / 2 at 500. In their example round each Echo saw the other's claim 317 and 233 ms after
+      its own detection, i.e. ~275 ms on the air and 42 ms between the detections: delivery (DTIM buffering of
+      broadcasts for stations in power save, a multiple of 102.4 ms), not the engines. On the developer's network no
+      claim over 175 ms. Now (`arb.c`): every member's first claim in a round of ours (until 1.5 s, so a window too
+      short still sees what it missed; 0 if it came before ours) is a sample, the last 64 kept with the member's id in
+      `state/arbitration` (`delay <id hex> <ms>`, older builds skip the lines). Window = 95th percentile (nearest
+      rank) + 50 ms, over the samples of the members counted now and of each alone with 3 or more (the slowest sets
+      it), within 150-1000 ms; 500 until 10 samples. Decision early once every member that takes part claimed, or one
+      beat us (`arb_settled`, checked per capture block): the outcome cannot change then, so the window costs only when
+      an Echo did not hear it. Setting `arbitration_window_auto` (on); off, `arbitration_window` (now 100-1000, both
+      modes; Kiosk mode always waits it, nothing learned: their devices count claims within ±window, and their claims
+      are unauthenticated). The log: each claim's lateness (`+233 ms`, `after the decision`), the window per round and
+      why it ended, the learned window when it moves 10 %; the page's status line under the setting (`arb_status_json`
+      `window`, members' `late_ms`). BLE scan paused for the window + 0.5 s (1 s at least). fake_ha_arbitration: both
+      heard = decided after 0.03 s (was the 200 ms window); a fake third member signing with K, claims 300-355 ms late:
+      learning 500 ms, learned 406 ms (its p95 356 + 50), each lateness logged as sent, the round nobody else heard
+      answered after 0.50 s, fixed 200 ms misses the claim, a restart keeps it, a member out of rounds no longer counts.
+      On the three Echos (2026-10-12 20:42, first "Echo" after the push): the Echo 2 and the Dot 2 both answered.
+      Not the window: the Echo 2 (only echo-de-DE) claimed "Echo", the Dot 2 (echo-de-DE and echo-en-US) "Echo (de-DE)",
+      the name `wake_words_scan` gives sets that share one, for HA's select; the keyword hashes differed, each passed
+      over the other's claim (no `+ms` on it, no early end) and answered at its window's end. A bug since the region
+      suffix came in. Now the claim takes the name without it (`wake_phrase_bare`; Kiosk mode's phrase too).
+      fake_ha_arbitration: "Echo (de)" against "Echo", the better one alone. The same run showed a sample booked to the
+      wrong round: in the conversation test the other Echo's claim for the next wake word, 0.6 s later, went in as
+      601 ms late for the round before. Now a new round takes back the last round's samples that came nearer to it
+      than to that one (`delays[].ms` -1, not saved); the new round counts them as come first.
+      Not done: on the reporter's two Echos (they offered to test a build)
+- [x] Stale `-m` after the wake word migration (2026-10-06, donut kept going back to Alexa): `artifact-install.sh
+      migrate` renamed `models/echo-de` to `echo-de-DE` and moved `state/wake_word`, but hassmic.conf kept
+      `ARGS="-m .../models/echo-de/pryon.manifest"`; `wake_words_scan` added the -m path unchecked, so HA's select had two
+      "Echo (de)", the user's pick landed on the dead one (`state/wake_word` = echo-de) and every start logged "cannot
+      load ... trying Alexa". Now `wake_word_find`: an id matches itself, else the one set `<id>-<region>` (unique); -m
+      only added when readable; a failed live switch sets the active one back to Alexa. On donut: `echo-de-DE` active.
 - [x] Firewall service stuck at boot on the Echo 2 (2026-09-30, found when a push update got "the installer did not
       answer"): `main.sh firewall` scanned /proc/*/cmdline with `tr` for old lockdown watchers; a process (pid 209)
       exited between the open and the read, and radar's toybox `tr` (Fire OS 6572) then spun on the read error for ever
@@ -837,6 +1212,16 @@ Run in this order. Each step says what it proves.
       off, file `0 60`; auto on → 74, 51, 26, 13 over 4 s (engine restarts from 98 and ramps); fixed 40, then
       `ledctrl -a on` as at boot (13) and hassmic killed: 40 again once HA reconnected. Echo Dot 2 over USB: 40 lx,
       auto 9, same sequence. Echo 2: builds, not tried. Left at auto on all Echos.
+      Auto level to HA throttled (2026-10-11): it went 11/12/11/12 every 2 s to 2 min in HA's history at dusk. The
+      engine is stock's and does that: settled, its average (fixed weight, so 60 s at 1 Hz) moves the ring once it is
+      0.005 (half a step, ~2 lx) off, and in light near a step's edge the sensor's 1-2 lx flicker crosses it. Biscuit
+      in steady light (81-87 lx): 19 for 40 s. Now sent at 2 steps off the last sent or after 5 min; fixed levels at
+      once. The ring is unchanged (one step is ~3.5 % on donut's mute LED table); the user saw the mute LED flicker,
+      not the ring. Not tested by fake_ha_esphome.py: the host build has no auto engine.
+      Feature "Light sensor" (2026-10-17, off by default): still an entry in HA's logbook every few minutes with auto
+      on (forum, 2026-10-15; number entities are not filtered from the logbook as sensors with a unit are). Off:
+      no "Illuminance", the level goes to HA only on subscribe and when set. On: as before. `fake_ha_esphome.py`:
+      no illuminance by default, listed and sent once switched on on the page.
 - [x] Sound detection (Alexa Guard) as Home Assistant events (found 2026-10-01; stock path and model worked out, and
       built, the same day: `docs/re-aed.md` section 4). ESPHome switch "Sound detection" (off by default, in the
       settings file) and event entity "Sound" (8 types; smoke/CO merged, human presence left out). A window is dropped
@@ -865,6 +1250,29 @@ Run in this order. Each step says what it proves.
       threshold 0.845, the same results on all clips except a near miss on the CO beeps. The /system model is good enough.
       Open: played test sounds in the room (smoke alarm, glass, dog) and some talking or TV; whether to require a
       type in two windows in a row.
+- [x] Whisper detection (asked for 2026-10-04, built the same day; `docs/re-whisper.md`). Binary sensor "Last request
+      whispered" for the conversation agent's prompt template (`whisper_pryon.c`): one detector per request, fed from
+      the start of streaming, scored on HA's VAD end, so the state is in HA before STT ends. Listed only with the
+      model in `/data/local/hassmic/whisper` (`scripts/artifacts.sh`). `fake_ha_esphome.py`: unknown until a request,
+      on at its VAD end. Live with HA (Echo Dot 2): fed from the start of streaming, the normally spoken wake word's
+      tail took whispered requests to 641-979; with the first 0.5 s not fed, whispered 999/984, normal 1/0.
+      Open: that the agent's template sees the new state in time (not checked with an LLM yet), other speakers.
+      Background: stock has it on the device: `libpryon.so`
+      exports `WhisperApi_*` (a detector of its own: audio in, end of utterance in, one `confidence` out, whispered
+      above 500 as AHE reads it). Only AHE (the local "hybrid" engine) calls it, and only when Amazon's
+      `ahap-policy` selects static Litespeed pipelines. Donut's policy (2026-09-21) selected caching, so the model was
+      never fetched and the detector never ran. PuffinApp has no whisper code; for cloud requests the cloud decides
+      from the audio, and the result inside AHE goes upstream only through a stub. API reversed from AHE's call
+      sites. On the Echo Dot 2 (same libpryon): attributes `engineCompatibilityIds [1]`, model set load and the
+      handlers work, and `createWhisperDetector` refuses a set without a whisper section in `pryon.config`.
+      Model: DAVS `alexa-hybrid`/`whisper-static`, AHE's filter `ecid` "6" plus `modelClass` `odie-litespeed`.
+      `tools/davs-fetch.py ... whisper` and the "Other artifacts" list of `scripts/artifacts.sh` ask for that with
+      `locale` en-US, the only request DAVS answers (2026-10-05, Echo Dot 2's and Dot 3's tokens: 5 filter variants x 13
+      locales, 64 x HTTP 404 each; no model per language, none per device type). Fetched 2026-10-04: a DNN on 64 LFBE plus a DNN speech
+      detector, thresholds per locale (default 922, de-DE 862). `src/tools/whisper_test.c` on the
+      Echo Dot 2, German commands from 1–2 m, one detector per command: whispered 996/995/998, normal 1/0/1, quiet
+      voice 18/1/2; with 0.5 s before and 1 s of silence after the speech 997-999 against 0-8. Non-speech sounds
+      score high (859), so only the command span may be scored.
 - [x] Playing on a Bluetooth speaker (2026-10-01, `btout.c`, `a2dp.c`, `sbc.c`; `docs/re-a2dp-source.md`): the mixer
       keeps its own A2DP route; hassmic stands in for btmanagerd towards it. LIPC `com.doppler.audiod`
       `A2DPSourceConnect` `1:<12 hex>` / `0:…` switches the mixer's single output; the HAL's abstract sockets
@@ -893,6 +1301,41 @@ Run in this order. Each step says what it proves.
       speaker elsewhere (the wake word through loud music); choosing among several speakers (an ESPHome select's
       options reach Home Assistant only on connect, `manager.py` `device_info_and_list_entities`, so it would need a
       reconnect: kept as "strongest in pairing mode"); `BTUnpair` (line out) only switches playing on the speaker off.
+- [~] Bluetooth speaker keep-awake (2026-10-12, issue #24: Echo Dot 2 + a speaker named "BT HIFI AUDIO", the first
+      ~0.5 s of every reply missing, music fine, the wake sound no help). Not the stream: the mixer's keep-alive table
+      (0x733e4, the names around `keepalive_strategy` in biscuit's `mixer`: Bose, UE, Tailgater, ~30) has no such name,
+      so it plays continuously, silence as digital zero, and btout.c sends all of it (START/SUSPEND only with the
+      route). Cheap receiver/amplifier boards by that name mute their amplifier on zero and unmute late. A silence
+      pre-roll (the issue's idea) would not wake them. Now setting `bluetooth_speaker_keep_awake` (page only, inside
+      the speaker's card, off, not exported: per speaker; btout.c keeps it, state/config): a 20 Hz tone at -50 dBFS
+      (amplitude 100) added under every block after the peak statistics, saturating, phase continuous. SBC at bitpool
+      53 keeps such tones whole (sbc.c encoded, libsbc decoded: 1 LSB 0.82 rms in, 0.94 out; 32 LSB 22.64 / 22.64; zero
+      stays zero). Open: whether the reporter's speaker counts -50 dBFS at 20 Hz as sound (its threshold, a DC/high
+      pass before its detector); not tried with a speaker that mutes.
+- [~] Bluetooth speaker: stay connected when off (2026-10-12, issue #25: music from Music Assistant on the speaker,
+      replies, timers and sounds on the Echo; the reporter flips "Play on Bluetooth speaker" from an automation, and
+      every flip was a full reconnect). **Decision**: no split by stream. The mixer has one output
+      (`docs/re-a2dp-source.md`: routed, the Echo's speaker is silent), so the two ways to split were: (a) route the
+      mixer only while music plays: replies during music still go to the speaker, and moving the route around each
+      reply drags the music along, costs a gap, an AVDTP START plus the speaker's unmute (#24) per reply, and jumps
+      Sendspin's latency (`btout_latency_us`); (b) feed Sendspin / the phone's A2DP past the mixer straight into
+      btout's SBC encoder: the real split, but the front end then has no echo reference for the music the mic hears
+      from the speaker (whether it uses the routed one is unmeasured either), so wake word and STT over music from a
+      speaker nearby would get worse by an unknown amount; it would also lose the mixer's volume, equalizer and
+      ducking, and ESPHome media player URLs share the TTS queue anyway. Neither was worth it for a niche wish. Instead
+      the switch gets fast: setting `bluetooth_speaker_stay_connected` (page only, off, not exported: battery or mains
+      speaker; state/config; a2dp.c gets it only while the feature is on, so switching the feature off still drops
+      the link). Switch off then only moves the route (`btout_route`; the mixer switch took 0.08 s with our AIPC
+      service, 2026-10-01); the link and AVDTP stay ("Bluetooth speaker" says "Standing by"); a link lost meanwhile is
+      not paged for until the switch is on (a sleeping speaker stays asleep), one that calls us is kept. With
+      keep-awake on too, btout.c's hal_thread makes the tone itself while not routed (zeros + tone, paced, same RTP
+      stream), so AVDTP stays started: against the speaker's auto-off, and the mixer's START is acked at once on the
+      way back (no AVDTP START, no unmute). That tone does not count as streaming for the BLE proxy's scan pause
+      (`a2dp_streaming`), or the proxy would never scan again. Volume while standing by: the Echo's own; the speaker's
+      buttons only update the value kept for the route (`btout_speaker_volume` gates both ways, set around
+      `core_speaker`). The page lists the costs under the row and asks before switching on: the speaker taken from
+      phones, battery, speakers that switch off anyway, whether the tone keeps one awake, constant airtime beside Wi-Fi.
+      Open: not tried on a device yet; switch time on air; which speakers' auto-off the tone defeats.
 - [x] First install from the running OS fixed (2026-10-01, issue #2: an Echo Dot 2 set up by someone else, guided
       setup). Four faults on the way, all first-install only: `firmware/<model>/images` was never created
       (`payload_dump.py` makes it now); adb gone for a moment between `deploy.sh` and the lockdown (now `wait_adb`);
@@ -1057,6 +1500,491 @@ Run in this order. Each step says what it proves.
       Monocypher's, BLAKE2b): same keys and byte-identical signatures as the C one (tests/otatool_test.sh, 9 checks), the
       real release bundle verifies, one flipped byte does not; ota_push_test and fake_ha_update pass with it.
       probe.sh: devices/<codename>/probe.md5 from the pinned firmware (all three firmwares' sha256 match their pins).
-- [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): Wi-Fi setup without a PC (stock: `oobed`, 5 s action button; ESPHome's
-      way would be Improv over BLE, ble.c has the controller); offline alarm clock and reminders (HA has timers only).
-      Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, Drop In/calling (`commsd`), stereo pairs.
+- [~] microWakeWord as a second wake word engine (2026-10-07, user request: a switch on the page, Amazon's engine the
+      default, what is lost said plainly, the models managed on the page).  No TensorFlow on the Echo: `mww_features.c`
+      ports TFLite Micro's microfrontend with microWakeWord's settings (30/10 ms, 40 channels 125-7500 Hz, noise
+      reduction 10/0.025/0.06/0.05, PCAN 0.95/80/21, log shift 6) including kissfft's 16 bit fixed point FFT;
+      `mww_model.c` is an int8 interpreter for exactly the ops microWakeWord's streaming models use (all 9 models of
+      esphome/micro-wake-word-models v2 + experiments, and pymicro-wakeword's 4: CONV_2D, DEPTHWISE_CONV_2D,
+      FULLY_CONNECTED, LOGISTIC, QUANTIZE, CONCATENATION, STRIDED_SLICE, SPLIT_V, RESHAPE, VAR_HANDLE, READ_VARIABLE,
+      ASSIGN_VARIABLE, CALL_ONCE); anything else is refused at upload.  The user asked for "ONNX" models: microWakeWord's
+      are .tflite (ONNX is openWakeWord's, a different and much heavier engine), so .tflite + .json it is.
+      Measured on the PC: features bit-identical to pymicro-features 2.0.2 (what microWakeWord trains with) on synthetic
+      audio, espeak phrases and three micAsr captures (3580 windows), and 13094 windows of cap-first against TFLM's own
+      sources; every inference of the 13 models within 1/256 of TFLite 2.3 (ai-edge-litert) with BUILTIN_REF kernels,
+      variables carried along (`tests/unit/mww_ref.py`, in `make unit`).  First port differed: kissfft's real-FFT
+      twiddles use the complex half's length; TFLM's current tables are single precision (cosf, log1pf, powf).
+      The armv7 build under qemu (bionic) gave 2 filterbank weights one step off: bionic's log1pf is not correctly
+      rounded; now from double functions rounded to float: tables, features (13094 windows) and probabilities (4364
+      inferences) identical ARM vs PC.  Level: espeak "Alexa"/"Okay Nabu"/"Hey Mycroft" at -20..-62 dBFS keyword rms over a
+      -67 dBFS white floor, window means 229-255 of 255 with 0, +12 or +24 dB gain alike (PCAN): micAsr goes in as is.
+      testdata/alexa_espeak.raw: alexa model fires twice per loop (window mean 255), okay_nabu stays under 10.
+      CPU on the PC: 0.05 ms per 30 ms of audio (okay_nabu).  Untrusted files (page uploads, copies from other Echos):
+      flatbuffer offsets bounds-checked, zero points and scales validated, accumulators bounded (kernel <= 32768
+      products, bias <= 2^30); fuzzed 120k mutated models (22k of them loaded and ran) and 300k mutated manifests under
+      ASan + UBSan, clean after fixing what the first run found (an int32 overflow from a huge zero point).
+      Engine switch live (`core_wake_engine`): the list is per engine, Home Assistant's link is closed so it reads the
+      new one (`fake_web_mww.py`, 32 checks: uploads with and without manifest, refusals, switch refused without a model,
+      rename/threshold/window, the page's and Home Assistant's pick, download, copy as artifact `mww:<id>`, a copy that
+      does not load, deletes down to none = back to Amazon's engine and saved, a restart loads microWakeWord directly).
+      Page (headless Chromium): engine cards with pros and cons; picking microWakeWord opens the page's own dialog (no
+      browser popups anywhere on the page now) naming the losses and, without a model, the wake word to start with
+      (ESPHome's from GitHub, or files: a lone manifest refused in the dialog), added before the switch; the models card
+      only while microWakeWord is on; files paired .tflite/.json, rename, tune, use, delete (the last one: Amazon's again).
+      Lost with it, on the page: "<wake word>, stop" (Pryon's second keyword), Pryon's threshold hints while playing,
+      Amazon's wake words, the front end's ESP energies in arbitration (`wake_afe_times` 0: the own SNR score; Echos on
+      different engines with the same wake word name still compete, on different scores).
+      Third engine, "homeassistant" (user request: openWakeWord stays in Home Assistant, the Echo only streams; asked
+      after a user's EchoMuse Forge model, an openWakeWord .onnx classifier, which HA's openWakeWord app does not load:
+      .tflite only per its README and HA's docs): the existing -w remote, now from the page.  Decided at start
+      (arbitration, the protocol's flags): switching writes state/config, then state/restart for root's watcher
+      (main.sh, as a rename); main() reads it before anything else.  -w remote in ARGS wins and the page cannot change
+      it.  New with it: EV_WAKE_END (Home Assistant heard it) -> wake sound, ring, and the front end's listening mode
+      until the command ends (before, -w remote never set it, so a command longer than ~1.5 s faded under the
+      cancellers, 2026-09-30 captures).  fake_web_mww.py +9 checks (restart asked, wake=remote after it, no wake words
+      offered, the stream at once with USE_WAKE_WORD, the event answered, back again, -w remote refuses).  The page's
+      dialog and guide follow HA's docs of 2026-10 (add-ons are "Apps"); not checked against a live HA here.
+      Open (device): detection rate against Pryon at the same distances, false wakes per day (TV, music), CPU on the
+      Echo, an Echo with Pryon and one with microWakeWord in one arbitration network; the remote path with a real
+      openWakeWord on the Dot 2.  Not done: ESPHome's "stop" model
+      as a second model while a timer rings or a reply plays (as Voice PE does); openWakeWord/ONNX.
+- [~] Two wake words at once (GitHub issue 18, 2026-10-11).  Home Assistant's ESPHome integration always makes two
+      wake word selects and two pipeline selects (select.py, index 0 and 1; only `max_active_wake_words < 1` hides
+      them), sends the ids of both in one VoiceAssistantSetConfiguration, in the order its selects were last set (a
+      dict of index -> id), and runs the pipeline of the select whose state equals the run's `wake_word_phrase`
+      (assist_satellite.py `handle_pipeline_start`).  Before, the Echo took the first known id of that list: a pick in
+      "Wake word 2" was dropped (or, set before "Wake word", replaced the first).  Now `wake.h` has slots: one Pryon
+      decoder per slot on a model set of its own (`hassmic-dec`/`hassmic-ms` as before, `hassmic-dec2`/`hassmic-ms2`),
+      or one microWakeWord front end + model per slot; the result callback (one for the process) finds the slot by the
+      decoder's name.  Both words come from the engine that runs; up to 2 active, saved one id per line in
+      `state/wake_word` / `state/mww_word` (older builds read the first line), `max_active_wake_words` 2 (1 with a
+      single model installed), the first stays first whatever order HA sends, an empty list keeps what is there.  The
+      run's phrase is the slot's name; the button and SIGUSR1 use the first.  Arbitration claims the word heard.  "Stop"
+      counts only from the slot whose wake word was heard last (two en-US sets in both slots: both decoders wake on
+      either word and would both report "stop").  Front end ESP times per slot.  A second word that does not load is
+      dropped until the next pick or start; a first one falls back as before.  Wyoming stays at one.
+      Under qemu (hassmic-qemu, real libpryon, ESPHome, `-W 0`): firmware "Alexa" + DAVS `echo-de-DE` on espeak
+      "Alexa" and "Echo" (de) looped, 90 s: 20 accepts (9 ALEXA in the first slot, 11 ECHO in the second, none the
+      other way), 19 runs named after the word in the audio (one accept fell into a run); `echo-de-DE` alone on its clip: 10 runs in 45 s.  `echo-en-US` accepts nothing on
+      `testdata/echo_espeak_en-us.raw` alone or beside Alexa (near misses only): the clip, not the second slot.  CPU
+      under qemu, 72 s each, same audio: 69 s with both words, 42 s with Alexa alone (emulated: only the ratio means
+      anything).  PC tests: `fake_ha_esphome.py` (+4: two picked in HA's order, the first kept first, both saved, the
+      run names the first; none = kept, unknown ids and doubles dropped; at most two), `fake_web_mww.py` (+5: "Alexa"
+      heard in the second slot beside "Hey Jarvis", run named "Computer Alexa"; the page shows both; a model edit
+      rescans and keeps both; HA reads both back; back to one).  Open (device): CPU and temperature on the Dot 3 with
+      two Amazon words, detection of each beside the other at a distance, the multi-keyword en-US sets in both slots.
+- [~] Setup from a phone (OOBE) and factory reset (2026-10-07, asked: found over Bluetooth by the HA app, Wi-Fi, the
+      node name if possible; rainbow while not set up (then stock's orange setup-mode spinner, asked the same day); "not set up" = after the install or a reset until HA took it on;
+      no button press while not set up; reset wipes all of hassmic plus Wi-Fi, by the action button held 10 s, HA, the
+      page). Improv Wi-Fi over BLE (spec of improv-wifi.com, packets as py-improv-ble-client 2.0.1, HA's improv_ble):
+      `ble.c` got the peripheral role: legacy ADV_IND 100-150 ms (flags, the 128-bit service, service data 4677 =
+      state + capabilities 0x0f: 31 bytes exactly; the name in the scan response), one link a phone opens (conns[SRV],
+      outside the proxy's three slots), a GATT server (Generic Access + Improv; MTU, Find Information, Find By Type
+      Value, Read By Type / Group Type, Read / Blob, Write / Command, prepared writes, notifications), SMP pairing
+      refused (not supported). `improv.c`: advertises when not set up (`core_oobe`) and 20 s offline (authorized), or
+      set up and 600 s offline (authorization required, the action button gives 60 s); "provisioned" 60 s after, then
+      off. RPCs: Wi-Fi (through `wifi.c`/root's `wifi.sh`, as the page's switch; error 3 on its failure), identify,
+      device info, scan (one result, WPA2/open only, as many as fit 255 bytes); host name = node, device name =
+      display name: dropped again the same day (asked: one name, never stored, given in HA only; see the name item).
+      Adopted = HA's voice assistant subscribed
+      (`core_link` ready) -> `state/adopted`; existing installs with `state/api_key` count as adopted. Ring:
+      `setup-mode` (stock's orange OOBE spinner) while not set up; `authenticated_setup_mode` while a phone waits for the button; `factory-reset`
+      from 5 s of holding and while root resets (all three on donut, biscuit, radar). Reset: `state/reset` -> root
+      (`main.sh` ota_watch): stop hassmic, `wifi.sh forget` (every network but P2P groups, save_config), state/ emptied,
+      avahi's service file removed, start hassmic. netwatch no longer starts wifisvc with no network saved. wifi.sh's
+      lease on an Echo that never had one (no `dhcp.wlan0.*`): `start dhcpcd-wlan0` (wifi-join.sh's fallback), not
+      `dhcpcd -n` (would start a daemon outside init). `tests/fake_improv.py`: a controller on a pty (H4: commands,
+      LE Connection Complete as peripheral, ACL with credits), a phone's GATT client, py-improv-ble-client's packets,
+      real wifi.sh on the fake tools, aioesphomeapi for adoption and the reset button, the keypad as a FIFO for the
+      holds.  Open (device): the MT7668 advertising beside scanning/A2DP; a real phone (HA app on Android and iOS);
+      whether wifisvc or Amazon's own Wi-Fi store brings forgotten networks back after a reset; init's
+      `dhcpcd-wlan0` on a fresh Echo; acebuttond's 5 s hold (Amazon's setup mode; its services are stopped) doing
+      nothing visible; a Wi-Fi password with non-ASCII characters (refused, as on the page).
+- [x] One name (2026-10-07, asked after the first reset on the Dot 2 kept "Echo Dot 2" from hassmic.conf: no name in
+      several places, a reset resets, the name comes from Home Assistant's adoption; default by model). HA's API has no
+      message that gives a device a name, so as the Voice PE: `name_make` = model (board.default_name: Echo Dot 3 /
+      Echo Dot 2 / Echo 2) + the Wi-Fi MAC's last 3 bytes, waited for (radar brings wlan0 up late), stored nowhere.
+      Gone: hassmic.conf `NAME` (ignored, main.sh no longer passes `-n`), install-system.sh's and setup.sh's name,
+      device.conf `DEFAULT_NAME`, `state/name`/`state/node` (deleted at start), the page's rename (`/api/name`) and
+      Improv's host name/device name commands (capabilities 0x07). `-n` stays for the PC. Existing Echos change node
+      name on update (asked: no migration); HA keys on the MAC. fake_web: old files ignored and the model's name.
+- [~] Timers in Home Assistant (2026-10-08, GitHub issue #12: a ringing state that clears on dismissal or timeout,
+      the timer's name, a configurable ring time). HA keeps several timers per satellite and pops each from its list
+      before it sends "finished" (`intent/timers.py` `_timer_finished`), so a "cancelled" never names a ringing timer;
+      the old code stopped the ring on any cancel, and a second "finished" during a ring was dropped (`alarm_on` already
+      1, the 60 s not restarted). Now `main.c` keeps up to 4 ringing timers by HA's timer id (field 2), one ring for all,
+      the ring time restarted by each, stopped all at once by button / wake word / "stop" / media player STOP (the only
+      way from HA) / ring time (`timer_ring`, 0-600 s, 0 = until stopped, default 60, page-only, exported).
+      ESPHome: binary sensor "Timer ringing" (`timer_ringing`, always listed), text sensor "Ringing timers" (diagnostic,
+      names in order or the length of an unnamed timer: "5 min", "1 h 30 min", "90 s"), names sent before the ring's
+      on. fake_ha_esphome: two at once, a cancel of another timer, button, media stop, ring out at 1 s.
+      LED (reported the same day: dark while ringing, also on the wake word): hassmic started `active_timer`, which has
+      a file in `led-resources/` but no entry in `layer_config_common.json` on donut, biscuit or radar, and
+      ledcontroller refuses those ("Animation %s not in map"); every other pattern hassmic uses is in the map on all
+      three. Stock (PuffinApp `UXEventArbitrator::onAlertStateChange` at 0x25cfc0, AVS alert type at +0xc, state at
+      +0x10): ALARM -> `ready-alarm*`, TIMER and REMINDER -> `ready-timer*`; STARTED / FOCUS_ENTERED_FOREGROUND start
+      `ready-timer` (looping, layer 3), FOCUS_ENTERED_BACKGROUND starts `ready-timer-short` (one shot, layer 4),
+      READY / STOPPED / SNOOZED / COMPLETED / PAST_DUE / ERROR stop `ready-timer`. Now the same: `ready-timer` with
+      the ring, `ready-timer-short` when the state leaves IDLE during one.
+      Stopping (asked the same day: explicit stop only): the wake word alone no longer stops a ring; it starts a
+      pipeline as usual, with the ring in the background (blips paused while state != IDLE: STT must hear the user;
+      stock attenuates instead), and `wake_cut_ms` set so the Pryon "stop" right behind it drops that pipeline too.
+      Stops: action button, "stop" keyword, media player STOP, ring time, and `core_transcript` (STT_END text alone
+      "stop"/"stopp"/"stoppen"/"stoppa"/"halt"/"arrête"/"basta"/"para"/"pare", punctuation dropped) for engines
+      without the keyword: the run is cancelled as by the button (HA forgot the timer when it finished, so no intent of its
+      can stop the ring; what it would answer to "stop" is not checked). Arbitration unchanged: a ringing Echo still claims with priority 2,
+      so the "stop" goes to the one that rings. Open (device): both seen, with and without
+      the mic latch (`micsoff-ready-timer` is not in the map either; layer 3 is above `mics-off_on`'s 1), with real
+      HA, and an automation on "still on after 50 s".
+      Issue #21 (2026-10-11): German STT made "Alexa, stopp den Timer" `stoppdentimer`, no stop word, so the run went to
+      HA ("no timer is running") and the ring went on. Now ESPHome button "Stop ringing" (`stop_ringing`, KEY_TIMER_STOP,
+      no entity category: ends the ring only, where media player STOP also flushes what the media player plays), and
+      setting `timer_stop_any` (page-only, exported, off by default): any non-empty normalised STT_END text during a
+      ring stops it and cancels the run, as EchoMuse does (wilbowes/EchoMuse#759). Cost: a question during a ring is
+      not answered. fake_ha_esphome: the button, "Stopp den Timer" with the setting, a request without a ring untouched.
+- [x] Buttons as Home Assistant events (2026-10-12, issue #26: a Dot 2 user moved from EchoLocal, whose automations
+      stopped an HA-run alarm clock with the action button and used volume holds for next track / play-pause). ESPHome
+      event entity "Button" (`button`, KEY_BUTTON, device class `button`, always listed), types `action`,
+      `action_hold`, `volume_up`, `volume_up_hold`, `volume_down`, `volume_down_hold` (`core_button_events`), beside
+      what the key does on the Echo. `buttons.c`: a press is one let go within `SHORT_PRESS_MS` (1 s, the action
+      button's old short-press limit), a hold fires once at 1 s while still down (own deadline in the reader's poll,
+      beside the 5 s / 10 s reset stages), so the two never both fire; a release found past 1 s before the deadline
+      ran still sends the hold. A second volume key pressed while the first is down makes both a pair: neither
+      fires (`COMBO_MS` pairing). The action button's short press is told by `on_action` after `web_approve` and
+      `improv_authorize`, so the press that lets in a browser or a phone is not an event. Volume keys still change the
+      volume on press (until the next entry). Wyoming has no event entities: nothing there.
+      Holds HA's alone (2026-10-12, asked by the user the same day): the volume steps on a release within 1 s
+      instead of on the press, so `volume_*_hold` leaves the volume alone and a pair (both keys) no longer steps it
+      up and down; a tap's step comes ~0.1 s later. The action button already acted on short release only; its 5 s
+      / 10 s reset stages stay (the only factory reset on the Echo). fake_ha_esphome: no step while down, one on
+      release, none for a hold or a pair. fake_ha_esphome: hassmic's `-b` keypad is a FIFO
+      of `input_event`s written by the test (press, hold, pair, login press, action press starting a run). Not yet
+      pressed on an Echo; biscuit's `mtk-kpd` also lists KEY_VOLUMEDOWN besides `keys` (getevent -lp), unchecked
+      whether it ever sends it (that would double volume down, as before).
+- [~] Light ring as a Home Assistant light, and the listening ring turned over other animations (2026-10-12, issue
+      #26; the user asked for colours, and for the beam turn to survive a second animation, or else for nothing else
+      to show beside it). Measured on a Dot 2 (biscuit) with the ring's frame read back from
+      `/sys/bus/i2c/devices/0-003f/frame` (12 x RGB, after brightness), our files tried through a bind mount of a copy
+      of `led-resources` (labelled system_file; a tmpfs with context= was refused):
+      - ledcontroller loads every file at its start (`AnimationStore::loadAnimations`, 0.9 s for stock's 266, 1.3 s
+        with ours, 893; RSS 7.5 -> 8.6 MB) and never again: a file rewritten later plays as loaded. So no colour on
+        demand; a palette made beforehand.
+      - Names must be in a layer config. Every `layer_config*.json` gets a ConfigManager and a Leds of its own (two
+        "Dumping state" in the log); a light in `layer_config_hassmic.json` and stock's `solid_blue` overwrote each
+        other's frames, and when blue stopped the ring went dark instead of back to ours. Each config also needs every
+        layer 0..numberOfLayers-1 as an array ("Layer is not an array"). So ours go into stock's file.
+      - One config composes per LED, black transparent (half blue in layer 5 over red in layer 0: half each); in one
+        layer only the first listed active one shows, the others wait and resume (active-end set while active-start
+        ran: "Stop active-start", "Start active-end", "Finished active-end", "Start active-start"). Before composing
+        it looks for a made-up animation "<higher>-<lower>" ("Animation not found"). A black loop (or none) finishes
+        by itself; a lit loop stays until unset.
+      - Pixels may be 3 or 6 hex digits (stock mixes them); restarting ledcontroller left `PUFFIN_START` at 0.
+      - Turned copies: "hassmic_listen_3" (active-start turned by 3) gave the very frame stock's own turn gives at
+        BeamDirection 3; beside `ready-timer` stock's stayed at LEDs 10-11, ours turned (LEDs 1-2), `hold_9` at 7-8,
+        `end_9` finished and the timer came back.
+      Now: `ring.c`. `hassmic -G dir` (root) makes 627 animations: active-start / its last frame / active-end turned by
+      each of the 12 LEDs (`hassmic_listen_N`, `hassmic_hold_N`, `hassmic_end_N`, first in layer 4) and the light's
+      palette (24 hues x full/half saturation + white, 3 levels at 1 / 0.4 / 0.12 linear, x solid / pulse 2.4 s / spin
+      two comets 1 s / blink 0.5 s, and a rainbow per level; last in layer 0, under stock's), plus stock's
+      `layer_config_common.json` with these names added, and a SHA-256 digest of all of it. `main.sh leds()` at every
+      satellite start: `-G -` (digest only, 0.07 s on top of the 0.3 s any hassmic start costs) against
+      `/system/etc/hassmic-leds.digest`; if it differs, `-G` into /data and `sysinstall.sh leds` (stock's config kept as
+      `/system/etc/layer_config_common.json.pre-hassmic`, ours copied in bulk: 1.4 s on the Dot 2, the digest last),
+      then ledcontroller restarts, before alexa-off.sh. `sysinstall.sh uninstall` puts stock's config back. hassmic
+      lists the light ("Light ring", RGB, effects None/Pulse/Spin/Blink/Rainbow) only when the installed digest is its
+      own. Every pattern the core plays goes through `ring_set`/`ring_unset`, which keeps how long each shows (from
+      its file: a lit loop until unset, else to the end of its last lit frame); while any shows, the light is off
+      (unset before the Echo's pattern is set), and it comes back on the 200 ms tick. "active-start"/"active-end" are
+      played as the turned copies when the beam is known: `com.amazon.ledd BeamDirection` through liblipc in-process
+      (`LipcOpenNoName`, `LipcGetIntProperty`; same library on all three models; read 5 after `lipc-set-prop` on the
+      Dot 2 as the daemon's user), polled while the ring is open, a new beam swaps in `hassmic_hold_N` (no second
+      opening). Without the beam: stock's names, as before. Flash: blink in the asked colour for its length, then as
+      before. The light left on the ring is unset at the next start (`state/ring-light`). Tried on the Dot 2: the set
+      installed by `sysinstall.sh leds` (backup byte-identical to stock's, labels system_file, read-only again), the
+      light listed, an orange light while the mute latch was on stayed behind the red ring; then removed again.
+      Open: the light seen on an unmuted ring, a real wake word turning ours (that Dot 2 was muted), donut and radar
+      (same files and library by their firmware; the Dot 3's 12 LEDs not checked against its frame file).
+      tests/fake_ha_ring.py: the set from stand-in stock files, the light's names, the Echo's patterns first, the
+      turn and the move, flash, restart.
+      Gamma (2026-10-12, the user on the Dot 2: Home Assistant's coral 255,110,84 came out nearly white): the palette
+      took the colour as duty, and half duty on green and blue is three quarters as bright to the eye. Now every
+      channel goes through gamma 2.2, as Amazon maps its own: `solid_orange` is F30, Home Assistant's orange 255,165,0
+      becomes 255,98,0 (Amazon's other orange, ff6000). Coral is now the pale 15° hue, FF5B37; levels as seen 1 /
+      0.66 / 0.382 = the same duty as before (1 / 0.4 / 0.12); pulse from 35 %, spin tails 65 / 42 / 25 %.
+      ledctrl in order (2026-10-16, issue #40): `run_argv` forks ledctrl and does not wait, so two calls started together
+      reach ledcontroller in either order. Measured on the kitchen's Dot 2 with the ring's frame read back: `ledctrl -s`
+      and `-u` of a talking ring started at once left it lit 2 times in 5, 20 ms apart 0 in 5, the `-u` after the `-s`
+      returned 0 in 15 (`ledctrl -g` is no help here: it lists patterns already unset). Seen on two Dot 2s after replies
+      of 19 and 41 ms (talking set and unset in that time): the talking ring lit on an idle Echo until the next wake word.
+      `ledq.c`: one thread runs them one at a time, each waited for (a pipe the child keeps across exec, closed when
+      ledctrl exits: SIGCHLD is ignored, and stdout ends no wait, ledctrl chats on it), killed with its process group
+      after 2 s so a hanging ledctrl does not stop the ring for good; stderr still in the log; 64 queued at most, then
+      the oldest queued set gives way (an unset lost is this bug again). The brightness calls (`ledctrl -a`, `-a off -b
+      N`) go through the same queue: a slider dragged in Home Assistant sends levels ms apart, each its own ledctrl, and
+      the last to arrive stayed. The fake file of the PC tests is written at once, in the caller (the tests read it
+      right after an action); `tests/unit/ledq_test.c` runs the queue against a shell stand-in for ledctrl.
+      Measured on a Dot 3 (donut, 2026-10-17, ring frame `/sys/bus/i2c/devices/0-003f/frame` read back 1.5 s later):
+      one ledctrl takes ~35 ms (20 in 0.70 s), so a call behind two others shows ~0.1 s late. Raw ledctrl -s and -u of
+      active-talking started together left the ring lit 5 of 10, one after the other 0 of 10. Through hassmic, Home
+      Assistant's light switched on and off back to back: 2026.10.13 left it lit 5 of 10, this build 0 of 10.
+      Brightness 10, 20 .. 90, 37 sent at once: 37 stays. With ledcontroller stopped ledctrl never returns (5 s
+      `timeout` seen): each call was killed after 2000 ms and logged, the next one ran, the API kept answering, and the
+      ring worked again once ledcontroller was started.
+- [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
+      reminders (HA has timers only).
+      Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
+- [x] Drop In between Echos (2026-10-08, asked by a user with ten Echos who used Alexa's as an intercom). `dropin.c`:
+      calls signed on the arbitration network (new arb type `T_MSG`, `arb_tell`, broadcast like the rest, repeated:
+      invite every 250 ms until answered), audio unicast UDP 28932 (`-i`), Opus 16 kHz 20 ms 24 kbit/s inband FEC (stock
+      libopus has the encoder on donut, biscuit, radar; 4 symbols more in `stubs/libopus.syms`), XChaCha20-Poly1305
+      under a per-call key (X25519 of ephemeral keys, BLAKE2b keyed with `arb_derive("hassmic drop in 1")`). HA: action
+      `drop_in(target)` (keyed link only), text sensors "Drop In"/"Drop In with", button "End Drop In", listed while
+      the setting `drop_in` is on; `drop_in_answer` auto/ask; page `POST /api/dropin` and a button per member.
+      Blueprint `blueprints/automation/drop_in.yaml` (conversation trigger). The first version asked for
+      manufacturer "Amazon", but HA takes manufacturer and model from `project_name` (`hassmic`, `echo-dot-2`) and
+      ignores field 12, so it found none and HA said "Done" (#20; the reporter's real HA 2026.9.4, three biscuits,
+      called fine with the manufacturer test gone). Then made robust against what HA lets people change and what HA
+      does on errors (all read in HA 2026.10.1's source):
+      - Echos: devices of ESPHome entities and of every `assist_satellite` (`integration_entities('esphome')` first
+        takes the entities of a config entry *titled* "esphome", if any) with manufacturer `hassmic` or `Amazon`
+        (`async_get_manufacturer_model`) or a known model. Their "Drop In" sensor: the sensor whose state is one of
+        `dropin_states`, preferring icon `mdi:phone-in-talk` (kept in the state while unavailable: `entity.py`
+        `__async_calculate_state`), then an id ending in `drop_in`; icon or id alone when the state cannot tell
+        (unavailable, disabled). Others only with all three. Entity ids never needed.
+      - The action: HA registers `esphome.<device_info.name with - as _>_<service>` (`build_service_name`); the device
+        registry's `name` is `friendly_name` as reported, rewritten on every connection (`async_get_or_create` passes
+        `name`), never `name_by_user`. So the slug of `name` (umlauts spelled out like `node_of`), else model + last 3
+        MAC bytes from the `mac` connection (`format_mac`: lowercase). `tests/blueprint_dropin.py` holds every board's
+        project to `hassmic.<slug of default_name>`. Target: the device's `name`, which `dropin_call` runs through
+        `node_of` like the target did (every Drop In build has `name_make`, so name and node agree).
+      - ServiceNotFound is a configuration error that `continue_on_error` does not catch (`script.py`
+        `CONFIGURATION_ERRORS`), and a failed run gives the conversation `None` = "Done" (`conversation/trigger.py`).
+        No template can test for an action (no `has_service`). So the call goes through `automation.trigger` on the
+        automation itself with `variables: dropin_call`: that run makes only the call; `async_trigger` catches
+        ServiceNotFound (and makes a repair naming the action) and HomeAssistantError, and the sentence's run goes on.
+        Run variables beat the automation's `variables` (`ScriptVariables.async_render`), so the call run is told
+        apart by them. Without `this` the action is called directly with `continue_on_error`.
+      - Success: wait (4 s, `ANSWER_MS`) for the source's sensor in calling/ringing/connected, then (5 s) for it to
+        leave calling or the target's to ring; idle again = refused. A refusal within milliseconds can reach HA
+        without any "calling" (the loop thread reports the state it finds), so a refusal is told after 4 s.
+      - Replies 9 per language (a list set by hand with fewer takes English for the rest); the target picked by area
+        (HA's `area_id`: aliases, case, spaces; or slugs with and without umlauts spelled out), then name, floor, a
+        word; the source matching first answers "This is the Echo in …"; of several Echos the idle one with Drop In.
+        Waits read in their own sequence (HA before 2025.4 scoped variables per nested sequence).
+      Checked: `tests/blueprint_dropin.py` (jinja2 sandbox + HA's extensions as stand-ins, HA's `_parse_result`, a
+      runner for the actions incl. ServiceNotFound and state changes in order; 63 checks). And a real HA 2026.10.1
+      (scratch venv, own network namespace) with three `build/hassmic-host` (`unshare -rm` + a bind-mounted
+      `/sys/class/net/wlan0/address` for distinct MACs), one of them the released 2026.10.08.213741 build: by area
+      with the sensor's entity id renamed and the device renamed, German, "this Echo", busy, no Echo, a name given in
+      HA, the old build as caller and callee, do not disturb (refused: "did not go through" after 4.0 s), the callee
+      stopped ("offline" after 4.0 s), and an Echo whose name slugs differently ("…Ł"): first name not found in its
+      own run (repair created), second name called, "Calling Küche" after 4.0 s; no sentence run ended in an error.
+      Calls that start answer in 10-20 ms.
+      Then (same day) what came of a call, told by the Echo, for replies at once and with the reason:
+      - `dropin.c` queues every state and result for the core in order (`ev_push`, drained by the loop's
+        `tell_core`). With one flag and the state the loop found, a refusal within its 20 ms poll (do not disturb on
+        loopback: 1 ms) went idle -> idle: HA never saw "calling" and `core_dropin` played nothing. Now the first
+        invite goes out only after the core was told "calling" (`invited`; `ANSWER_MS` counts from it), so HA always
+        has "calling" first, and calling -> idle plays `SND_CALL_OFF`. A call refused here (not a member, muted,
+        busy) has a result too and plays the same sound (`core_dropin_result`, `here`).
+      - Results (`dropin_results`, the event types): connected, ringing, busy, do_not_disturb, microphones_off,
+        drop_in_off, declined, not_answered (from the callee's refusal words, the same in every build), no_answer
+        (4 s), not_found, busy_here, microphones_off_here, cancelled, failed. HA: event entity "Drop In result"
+        (`KEY_DROPIN_RESULT`, listed with the other Drop In entities). An event entity because its state is the
+        event's time, forced past the last one (`event/__init__.py` `_trigger_event`): every call changes it, the
+        same result twice included, and the blueprint tells this call's from older ones by the state alone; its
+        `event_types` is a capability attribute, kept while unavailable (`entity.py`), so the blueprint finds it by
+        its types whatever its id. Settings page: `result` and `attempt` in the status; a toast says why a call
+        from the page did not connect.
+      - ESPHome action responses, weighed and left out: HA registers `supports_response` (field 4 of
+        ListEntitiesServicesResponse) since 2026.1 (core f306cde, 2025-12-06, aioesphomeapi 43.0.0; STATUS = 100
+        maps to HA's NONE, OPTIONAL/ONLY to the same), and an older HA ignores the field (protobuf, `convert`
+        returns None for unknown values), so registering would not break. But with anything but NONE HA waits for
+        an ExecuteServiceResponse on every call (30 s, `DEFAULT_EXECUTE_SERVICE_TIMEOUT`) and raises when it says
+        `success: false`: existing automations would block or fail where they now go on. And the blueprint's call
+        runs in a run of its own (ServiceNotFound), which `automation.trigger` gives no response back from: the
+        result has to come through an entity anyway, which every HA version has. The HelloRequest's API version would
+        not tell either: aioesphomeapi sent 1.13 both before and with responses, 1.14 only from 2025-12-29.
+      - Blueprint: with "Drop In result" on the source, the first wait (did the action reach the Echo) is 2 s instead
+        of 4 where another action name is left to try ("calling" or a result arrives within moments), 6 s for the
+        last (a slow Wi-Fi must not make a call that started "did not go through"), then up to 6 s for the result,
+        which picks the reply: five more per language (do not disturb, microphones off there, here, not in the
+        network, did not answer). Without it (released builds), the old waits. `tests/blueprint_dropin.py` 81 checks,
+        incl. both kinds as caller and callee and the seconds the waits that run out cost.
+      - `tests/ha_real_dropin.py`: the same in a real HA, reproducible (`--setup`: `build/ha-venv` with
+        homeassistant 2026.10.1 + the requirements of the integrations it loads, from their manifests; run in
+        `unshare -rn` with only `lo`, multicast on it for HA's zeroconf, which fails at start without; http on
+        127.0.0.1 through `.storage/http`; onboarding and the ESPHome config flow through the API; four Echos, one
+        the released 2026.10.08.213741 built from its tag). 26 checks, about 40 s: calls start in 0.01-0.05 s;
+        do not disturb told in 0.03 s ("Hall has do not disturb on"; HA saw the caller's calling then idle), the
+        released caller's the same refusal in 4.01 s as before; a released callee's refusal from this build in
+        0.04 s; this Echo muted 0.02 s; the action under the second name 2.04 s (was 4.0); a stopped callee "offline"
+        in 4.05 s; the only run with an error is the call run under the wrong name.
+      Device (biscuit, PC host as the other end on the LAN, `HASSMIC_ARB_ADDR=192.168.103.255`):
+      - Playback stream: `Voip` exists in the mixer (`PLAYBACK_MODE_VOIP`) and switches libasp to "VoIP mode 1" (call
+        tuning, NDVC, normalisation off; logcat). Same speech, volume 50, micRaw -48: residual in micAsr -60..-66 dBFS
+        on Voip against -45..-58 on TTS (floor -72). Voip follows MainVolume (+9 dB from 30 to 60). micHfp is the bare
+        mic (floor -46), not a call Tx stream.
+      - Connect 4 ms after the invite (auto). Jitter: micAsr comes in 50 ms blocks, frames leave in bursts of 2-3; a
+        3-frame prebuffer started level with the bursts and stayed a frame ahead: 639 of 802 frames came after their
+        turn. Now 4 frames from the oldest and an underrun conceals without moving on: 0 of 805 missing, 9 waits at the
+        start, longest gap 63-68 ms.
+      - Listening mode on for the whole call froze the canceller before it knew the Voip path: residual -46..-62 in
+        micAsr; off for the whole call -63..-69. Now only while this side talks (`core_dropin_listen`, 1.5 s hangover).
+      - Echo back to the caller, natural speech (OmniVoice, German, 1.5 s pauses), 20 s: first try (80th percentile duck
+        before the gain) sent -47..-55 back; the gain undid the duck (+24 dB at micAsr level), the echo estimate let the
+        far end's onsets through, the room went out at -48 in its pauses (gain on the floor), and an echo tail 14 dB
+        over the room 0.3-1 s after each sentence opened the gate. Now: gain first, then a gate (open only while this
+        side talks, -25 dB else, own sounds -40), echo estimate peak-held 2 dB/s, far level held falling 20 dB/s,
+        3 frames of double talk to pass: gate never opened by the echo, -64 dBFS mean back against -26 for speech.
+        `HASSMIC_DROPIN_TRACE=<file>` writes the gate's inputs per frame.
+      fake_ha_dropin: auto and ask, button / stop / "Auflegen" / HA / page, refusals (DND, off, outside the network, no
+      such name), a vanished peer ends the call after 5 s; every state HA gets in order and each call's result
+      (declined, cancelled, muted here, busy here, no answer after 4.1 s).
+      Echo to Echo (same day, all three on the build): biscuit -> donut from the page, connected 8 ms after the invite,
+      10 s, 509 frames played on each side, 0 missing, longest gap 44-48 ms.
+      Open (device): a talker at the called Echo (does speech open the gate fast
+      enough, is the ARA with listening mode toggled fine), the wake word in VoIP mode, call LED animations' look,
+      the blueprint with real Echos (it ran in a real HA against PC Echos, above), and whether 2 s is enough over a
+      busy Wi-Fi for "calling" to reach HA (the blueprint then tries the second action name only where it differs:
+      never on an Echo with its own name).
+- [~] A new IP address (2026-10-11, GitHub issue #17: new addresses from the router, Home Assistant lost the Echos
+      until a power cycle, "sometimes it takes 2"). Home Assistant's ESPHome config flow moves an entry to the address
+      in an mDNS announcement only while the entry is not connected (`config_flow.py`
+      `_async_validate_mac_abort_configured`: "transient mDNS announcements (e.g., during WiFi mesh roaming)" must not
+      move a working one), and aioesphomeapi drops a silent link only after 90 s (ping every 20 s,
+      `KEEP_ALIVE_TIMEOUT_RATIO` 4.5). avahi announces a new address at once (netlink), inside those 90 s: ignored, and
+      no record changes again, so Home Assistant dials the old address for ever. A power cycle announces again at
+      boot, often still inside the 90 s: the second power cycle. On the Echo the old link stayed too: Linux keeps a TCP
+      socket whose address is gone, nothing leaves it, keepalive probes only while nothing is unacknowledged
+      (else ~15 min of retransmissions, `tcp_retries2`), and that link held the voice assistant (first subscriber
+      wins), so Home Assistant back over the new address would have had no pipelines.
+      Now `netaddr.c` (polls getifaddrs every 2 s): links whose local address is gone are shut down once there is
+      another; on a new address and while the Echo is set up but has no client (100 s, then doubling to 30 min) it
+      writes `state/mdns`, on which root's netwatch restarts avahi (`avahi_start`: goodbye, gone, 2 s, fresh probe and
+      announcements: Home Assistant's zeroconf sees the service removed and added, its flow probes the new address
+      and updates the entry). API links also get `TCP_USER_TIMEOUT` 60 s. Restart: page (System, signed
+      `POST /api/reboot` with body "reboot") and an ESPHome restart button -> `state/reboot` -> root's ota_watch
+      `setprop sys.powerctl reboot` (request removed first; the firewall start drops a stale one).
+      fake_ha_esphome: a new address closes the link holding the voice assistant, `state/mdns` at once and again
+      after the (test) wait, the voice assistant free for the next link, no announcements while connected. fake_web:
+      reboot signed only, body checked, HA button. Open (device): avahi's goodbye and re-announcement as seen from
+      Home Assistant on a real address change; `sys.powerctl` from the su domain on each model.
+- [~] Music Assistant lost after its restart (2026-10-13, GitHub issue #28; Echo 2 on an IoT VLAN, MA 2.10.6 as HAOS
+      app): MA found the player at boot, after an HA/MA restart never again (2+ days), while the ESPHome link came back
+      in a minute. MA 2.10.6 (`providers/sendspin/provider.py`) calls aiosendspin's `start_server(port=8927,
+      host=streams.bind_ip, advertise_addresses=[publish_ip])`, discovery on: it browses `_sendspin._tcp` and dials
+      what it finds; a link it loses while running it re-dials itself (backoff 1 s doubling to 300 s), but a restarted
+      MA only browses. Its zeroconf takes `interfaces=[host]`, or `InterfaceChoice.Default` for 0.0.0.0, i.e. one
+      socket on 0.0.0.0: queries leave by the default route's interface only. The reporter's Echo answers on its VLAN
+      (UDP 5353 admitted by `lockdown.sh`), so the queries or the answers do not cross; avahi's unsolicited
+      announcement at boot did reach MA. Not verified on that network. Fix: `netaddr.c` peers: besides Home Assistant
+      (100 s), "Sendspin server" (30 s, then doubling to 30 min) while a server held the player role in this run or
+      `sendspin.lastserver` exists and none is admitted -> `state/mdns` -> avahi restarted. Dialling the last server
+      back is not allowed while advertising `_sendspin._tcp` (spec:179). Manual IPs in MA: a bare address becomes
+      `ws://<ip>:8928/sendspin`, hence nothing for the reporter; `<ip>:28928` or the full URL works (retried for
+      ever): in GUIDE and donut's README. fake_ma_sendspin: no announcement while a server is connected, server
+      closed -> `state/mdns` "no Sendspin server for 4 s", again after a longer wait, the restarted server (same
+      identity and pairing store) plays again paired, then no announcements (25/25). Open (device): the reporter's VLAN.
+- [~] Media from a Home Assistant on HTTPS (2026-10-13, GitHub issues #29, #30; HA with a Let's Encrypt
+      certificate in `http: ssl_certificate`, external URL `https://<name>:8124` forwarded to 8123, no plain HTTP).
+      HA 2026.10 `helpers/network.py` `get_url()`: with `api.use_ssl` it defaults to `prefer_external=True` and
+      `allow_ip=False`, so TTS (`assist_satellite` -> `async_process_play_media_url` -> `get_url(hass)`),
+      announcements and play_media all carry the external URL, never `http://<ip>:8123` (that fallback needs
+      `use_ssl` off), and an internal URL by IP is never used (#29: HA's rule for every device, not ours; ESPHome's own
+      satellites get the same URL). We refused every `https://` (`http_get`). Now `https.c`: `https://` through the
+      firmware's libcurl 7.50.1 (BoringSSL, thread-safe; CA dir `/system/etc/security/cacerts` built in, 136 roots on
+      donut), a detached thread writing the body into a socketpair whose other end the decoders read as before;
+      `https_open` returns at the end of the first 2xx response's headers (failures before a socket, as plain), the
+      media cancel's `shutdown()` makes the next `send` fail and the write callback stop curl; redirects followed (5),
+      connect 10 s, < 1 B/s for 15 s ends it (plain: 15 s receive timeout), `.local` via `mdns_resolve4` +
+      `CURLOPT_RESOLVE`. Setting `https_verify` (System, exported, default on): `SSL_VERIFYPEER`/`VERIFYHOST`; off
+      takes self-signed. fake_ha_esphome (`HASSMIC_CA_FILE` = a test CA): WAV, MP3 and a redirect over HTTPS with a
+      CA-signed certificate, self-signed refused, taken with the setting off (persisted), unreachable reports failure.
+      Device (biscuit, 2026-10-13, announcements over its ESPHome API): raw.githubusercontent.com MP3 with checks on
+      played; a self-signed server refused (curl 60), played with `https_verify=off`.  Open: a real HA over HTTPS.
+- [x] Frozen at the first wake word after 18.6 h (2026-10-13, GitHub issue #31; Echo Dot 3 on 2026.10.12.210015, up
+      ~24 h): wake word, wake sound, listening ring, then nothing; buttons dead (action logged, not acted on), no
+      pipeline timeout, power cycle needed. HA ran a whole pipeline meanwhile. The log's last hassmic lines: `whisper:
+      request from capture sample -904421120`, `mic gain: ...`. `cap_bytes` was an `atomic_long`: 32 bits on armv7,
+      32 000 B/s, negative after 2^31 B = 67 108 s. `cap_clock()` casts it to `uint64_t`: ~9.2e18. e51cda3 (wake sound
+      removal) had made it the stream's clock in the capture loop (`at`, was `ring_n`), so the wake word's
+      `stream_ring(replay_from ~1.24e9, at)` replayed the 4 s ring for ever under `core_lock` (it clamped `from`, never
+      `to`): HA's STT heard the replay ("I like stuff"). Fix: `atomic_llong`, `stream_ring` clamps `to` to `ring_n`.
+      Not reproducible on the PC (64-bit `long`); fake_ha_esphome, fake_ha_wakesound, fake_ha_arbitration pass.
+- [x] Arbitration counter back at 0 after a hard crash (2026-10-16, GitHub issue #36, PR #37; three Dot 2 on
+      2026.10.13.214128): `state/arbitration` gone at 2 of the kitchen's 8 cold boots (`rename` without `fsync`), so
+      its counter started at 0 and it took K again through its tag. The others keep a member's last counter until
+      they restart (`fresh()`: only `seen` ages), so they dropped all of it as replays; it still counted them and
+      yielded to their "answers": the living room answered for 25 h. Fix: `save()` fsyncs the file before the rename
+      and the directory after; no `ctr` line in the file = a new `arb_key`, so a new id the others hold no counter
+      of (K was lost with the file: the owner's word is needed again anyway, through the new key's tag or pairing).
+      The old id ages out after PEER_TTL_MS; its `tag.hassmic_<old pub>` stays in HA. Forgetting a member's counter
+      after PEER_TTL_MS instead would let anyone replay an Echo's packets (a Drop In invite) once it was off for
+      5 min. PR #37's first version (a counter floored by the clock) left up to an hour of drops. fake_ha_arbitration:
+      state file removed on a killed Echo, a new id, back in the network, its better claim counted (fails without
+      the fix); fake_ha_dropin, fake_web, fake_web_artifacts pass.
+- [x] Every other state file had #36's `rename` without `fsync` (2026-10-17, GitHub issue #46): `state/config`,
+      `web_clients`, `web_key` (written in place, no temp file: a reset left it empty, every browser lost), the ESPHome
+      key (adopted again), `davs` (0600 only after the write), BLE bonds, A2DP keys and speaker, Sendspin (no error
+      checked at all), microWakeWord manifests and models (the folder swap: a model from another Echo came through
+      artifacts.c's stage unsynced), `write_state()`, the avahi service file, `clock`/`timezone` and root's requests
+      (ota, wifi, adbwifi, artifacts). Now all through `statefile.c`: a temp name per write (`PATH.tmp<0..99>`: one
+      shared name let a second writer unlink the first's temp file, which then renamed the second's still empty one
+      into place and reported success; `adbwifi_ask` has three unserialized callers), opened fresh (`O_EXCL|O_NOFOLLOW`,
+      a stale one removed first), `fflush` + `fsync`, `rename`, `fsync` of the folder; `arb.c` and `arb_key` use it
+      too. `tests/unit/statefile_test.c` (in `make unit`): order fsync/rename/folder fsync (`--wrap`), modes, abort,
+      stale temp files, links as temp files, a failed rename, two threads writing one file (fails with one name).
+      Open: `noauto_da_alloc` on `/data` not checked on any model yet (`adb shell grep /data /proc/mounts`; the fix
+      holds either way); the fsync's time on the Echos not measured: `settings_save` pays it under `core_lock`, once
+      per setting changed from HA or the page.
+- [~] From #33 (Echo Show 8), for every model (2026-10-17, GitHub issue #45):
+      Restart lost: `stop hassmic; start hassmic` in main.sh's ota_watch. Both services are `disabled oneshot`; toolbox
+      `stop`/`start` only set `ctl.stop`/`ctl.start` and return, and init (7.1) `Service::Start` returns early while
+      `SVC_RUNNING` (the old process not reaped yet) after clearing `SVC_DISABLED`; the reap then marks a oneshot without
+      `SVC_RESTART` disabled again: stopped. Seen on a Show 8 after a push during music (3 min down). Now `ctl.restart`
+      (`svc_restart`: `StopOrReset(SVC_RESTART)`, started again at the reap, returns at once, ota_watch not held up);
+      the factory reset and `fwcheck` (which need the old one gone first) `svc_stop`: `stop`, then wait while
+      `init.svc.<name>` is running/stopping, 20 s at most. A reset whose hassmic is still there then waits for the next
+      look (never empties state/ under it; reboot, restart and update requests still handled meanwhile); `fwcheck`
+      loads the rules anyway beside a hung watcher (the lock matters more) and `ctl.restart`s it. #33's version polled
+      20 s before every start. The Dot's toybox `head` has no `-c` ("head: not integer: c"): main.sh's `head -c 40`
+      for the reason of a reset, reboot, restart and mDNS restart always came out empty there; `dd bs=N count=1` now.
+      Setup with two USB devices: `adb -d` fails ("more than one device"), `adb_is` never true. `usb_serial` lists
+      `adb devices -l` lines with ` usb:` (offline/unauthorized too: adb -d counts them), `waitfor` names them once and
+      keeps waiting; devices over Wi-Fi do not count (USB_ONLY). Tried with a stand-in adb.
+      Ping: `keep` admits `-s <range> -i wlan0 -p icmp -m icmp --icmp-type 8` for LOCAL4 without multicast and
+      broadcast; the reply leaves through hassmic_out's local RETURN and stock's `-o wlan0 -j ACCEPT`.
+      Dot 3 (2026-10-17, 7.1.2, iptables 1.4.20, 2026.10.13.214128 with the rules and functions tried by hand): the
+      rule lists exactly as worded; new `lockdown.sh check` rc 0 with them, names the four without; ping 3/3 (~2 ms),
+      none before. The race did not show on the Dot: 6 of 6 `stop; start` came back (its stop is quick; the Show's
+      hassmic took longer to let go). `ctl.restart hassmic`: down ~3 s, new pids. `svc_stop hassmic` under mksh: rc 0
+      within 0.1 s, "stopped". Not tried: a hung hassmic_fw, a reset whose hassmic does not stop.
+- [~] Time zone from Home Assistant (2026-10-17, GitHub issue #45; #33 had `TIMEZONE` in hassmic.conf, asked in the
+      setup, Android models only). aioesphomeapi answers GetTimeRequest with `timezone` (field 2): the POSIX TZ string
+      of HA's zone (`iana_to_posix_tz`: the tzdata file's footer), `parsed_timezone` (3) beside it; the IANA name
+      never leaves HA. bionic (7.1 localtime.c) takes either in `persist.sys.timezone` (tzload by name, else
+      tzparse); Java's `TimeZone.getTimeZone` only names (else GMT), so `tz.c` maps the rule back to a name: bionic's
+      tzdata (header "tzdataNNNNx\0" + index/data/zonetab offsets big-endian, 52-byte entries, TZif files whole as
+      ZoneCompactor copies them; footer = text between the last two newlines). The zone set is kept when it has the
+      rule, else zone.tab's names (the file's last part: the data holds old names as zones of their own, Australia/ACT,
+      Asia/Calcutta) in area order Europe/ America/ Asia/ ... A rule the firmware's older data lacks: another zone
+      with it, or the string itself. Python tzdata 2026e: 598 zones, 94 rules, each found back to a zone.tab zone with
+      that rule; hand-made broken files (index, offsets, 40-byte names, long footers) refused; 32-bit UBSan clean.
+      Root (`tz_set`, netwatch every 10 s): the file moved out of the daemon's state/ first (no link, FIFO or
+      directory read as root, a newer one not deleted), at most 92 bytes read; a name or a rule, never a path (starts
+      with a letter or "<"; no "..", "//", trailing "/"; a name has no ":<>.", a rule "/" only after its first ",";
+      hassmic checks Home Assistant's string the same way). For names where `service check alarm` finds it `service
+      call alarm 3 s16 <zone>` (setTimeZone, which sets the property itself; crown 2026-10-14: GMT -> America/Denver;
+      5 s bounded: netwatch runs the firewall check next), never for a rule (Java would make it GMT); then `setprop
+      persist.sys.timezone` where it is not set yet. A rule in the property: native code right, a Show's Java side GMT
+      after a reboot. fake_ha_esphome: the keyed link writes `state/timezone` (the rule: no tzdata on the PC).
+      Dot 3 (2026-10-17): `/system/usr/share/zoneinfo/tzdata` only (`/data/misc/zoneinfo` empty), "tzdata2025a",
+      596 zones, all TZif 2+ with the footer, zone.tab 17 kB. HA's rules of Berlin, New York, Mexico City, Kolkata,
+      Sydney, Sao Paulo, London -> Europe/Amsterdam, America/Detroit, America/Bahia_Banderas, Asia/Kolkata,
+      Australia/Hobart, America/Araguaina, Europe/Guernsey; the zone set kept. No alarm service on the Dot (`pm`,
+      `service` exist). `tz_set` under mksh: ":/data/x", "UTC:/etc/passwd", "/etc/passwd", "Europe/../x",
+      "Europe//Berlin", "Europe/", "Europe/Berlin.x", "EST5/x,M3", "x;reboot", a directory, 20 MB without a newline,
+      a link to /system/build.prop refused, nothing left behind; Etc/GMT+3, America/Argentina/Buenos_Aires, <+03>-3,
+      IST-5:30, the CET rule, Europe/Berlin taken (`date` -03, -03, +03, IST, CEST, CEST); the same zone again a no-op.
+      Open (device): hassmic's side (no NDK on this PC), the Shows' alarm call.

@@ -122,8 +122,8 @@ static int on_progress(void *arg, int64_t total, int64_t now, int64_t ut, int64_
 
 static int on_socket(void *arg, int purpose, struct curl_sockaddr *a) { (void)arg; (void)purpose; return net_socket(a->family, a->socktype, a->protocol); }
 
-/* GET URL into B (at most MAX bytes); 0, or -1 with the reason in ERR */
-static int fetch(const char *url, struct buf *b, size_t max, int progress, char *err, size_t cap)
+/* GET URL into B (at most MAX bytes); 0, or -1 with the reason in ERR.  QUICK: the page waits for the answer */
+static int fetch(const char *url, struct buf *b, size_t max, int progress, int quick, char *err, size_t cap)
 {
     void *h; int rc; long code = 0;
     b->n = 0; b->max = max; b->progress = progress;
@@ -133,7 +133,7 @@ static int fetch(const char *url, struct buf *b, size_t max, int progress, char 
     curl.setopt(h, OPT_PROTOCOLS, (long)PROTO_HTTP_S); curl.setopt(h, OPT_REDIR_PROTOCOLS, (long)PROTO_HTTP_S);
     curl.setopt(h, OPT_FOLLOWLOCATION, 1L); curl.setopt(h, OPT_MAXREDIRS, 5L);     /* downloads redirect to a CDN */
     curl.setopt(h, OPT_FAILONERROR, 1L); curl.setopt(h, OPT_NOSIGNAL, 1L);
-    curl.setopt(h, OPT_CONNECTTIMEOUT, 20L); curl.setopt(h, OPT_TIMEOUT, 900L);
+    curl.setopt(h, OPT_CONNECTTIMEOUT, quick ? 10L : 20L); curl.setopt(h, OPT_TIMEOUT, quick ? 15L : 900L);
     curl.setopt(h, OPT_LOW_SPEED_LIMIT, 512L); curl.setopt(h, OPT_LOW_SPEED_TIME, 60L);
     curl.setopt(h, OPT_WRITEFUNCTION, on_data); curl.setopt(h, OPT_WRITEDATA, b);
     curl.setopt(h, OPT_XFERINFOFUNCTION, on_progress); curl.setopt(h, OPT_XFERINFODATA, b); curl.setopt(h, OPT_NOPROGRESS, 0L);
@@ -258,7 +258,7 @@ static int look(int ch)
 {
     char url[400], err[300], t[64], page[192], body[1024], *notes = body; struct buf b = { 0 }; int found;
     snprintf(url, sizeof url, ch == UPDATE_RELEASE ? "%s/releases/latest" : "%s/releases?per_page=10", api_base());
-    if (fetch(url, &b, 1u << 20, 0, err, sizeof err)) {
+    if (fetch(url, &b, 1u << 20, 0, 0, err, sizeof err)) {
         set_failed("could not look for updates", strstr(err, "HTTP 404") && ch == UPDATE_RELEASE ? "no release published yet" : err);
         free(b.p); return -1;
     }
@@ -309,9 +309,9 @@ static void install(int ch)
     if (notify) notify();
     fprintf(stderr, "update: downloading %s for %s\n", t, board.codename);
     snprintf(url, sizeof url, "%s/%s/hassmic-%s.bundle", dl_base(), t, board.codename);
-    if (fetch(url, &b, MAX_BUNDLE, 1, err, sizeof err)) { set_failed("download failed", err); goto out; }
+    if (fetch(url, &b, MAX_BUNDLE, 1, 0, err, sizeof err)) { set_failed("download failed", err); goto out; }
     snprintf(url, sizeof url, "%s/%s/hassmic-%s.bundle.sig", dl_base(), t, board.codename);
-    if (fetch(url, &s, 64, 0, err, sizeof err)) { set_failed("download failed", err); goto out; }
+    if (fetch(url, &s, 64, 0, 0, err, sizeof err)) { set_failed("download failed", err); goto out; }
     if (s.n != 64) { set_failed("download failed", "the signature is not 64 bytes"); goto out; }
     if (ota_handoff(b.p, b.n, s.p, res, sizeof res)) { set_failed("not installed", res + (strncmp(res, "FAILED ", 7) ? 0 : 7)); goto out; }
     pthread_mutex_lock(&ulock);
@@ -363,6 +363,21 @@ int update_channel(int ch)
     ch = channel;
     pthread_mutex_unlock(&ulock);
     return ch;
+}
+
+/* Before the page switches them on: can this Echo reach GitHub at all?  Echos often sit on a network kept off the
+ * internet, and a channel that never gets an answer would only say so in the update entity's summary.  Any HTTP answer
+ * counts (a 403 of the API's rate limit too: what is reached is GitHub, over TLS checked against the system's CAs);
+ * what fails is name lookup, connecting or TLS. */
+int update_probe(char *err, size_t cap)
+{
+    char url[400], why[300]; struct buf b = { 0 }; int rc;
+    snprintf(url, sizeof url, "%s/releases?per_page=1", api_base());
+    rc = fetch(url, &b, 1u << 20, 0, 1, why, sizeof why);
+    free(b.p);
+    if (rc && strstr(why, "HTTP ") == why) rc = 0;
+    if (rc) { size_t ul = strlen(url); snprintf(err, cap, "%s", strncmp(why, url, ul) ? why : why + ul + 2); fprintf(stderr, "update: GitHub not reachable: %s\n", why); }
+    return rc ? -1 : 0;
 }
 
 void update_check(void) { pthread_mutex_lock(&ulock); want_check = 1; pthread_cond_signal(&ucond); pthread_mutex_unlock(&ulock); }

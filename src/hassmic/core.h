@@ -37,20 +37,46 @@ struct proto {
     int  (*arb_send)(const char *node, const char *network, const char *key);
     void (*arb_changed)(void);                  /* may be NULL: arbitration membership or peers changed */
     void (*sound)(const char *event);           /* may be NULL: sound detection heard one of core_sound_events */
+    void (*whispered)(int on);                  /* may be NULL: the request just ended was whispered or not (core_whispered) */
+    int  (*arb_request)(const char *entity);    /* may be NULL: ask Home Assistant once for an entity's state (arb.h) */
+    void (*settings_changed)(void);             /* may be NULL: a setting changed elsewhere (web page): show them all again */
+    void (*entities_changed)(void);             /* may be NULL: a feature went on or off: have the client list entities again */
+    int  (*arb_scan)(const char *tag_id);       /* may be NULL: report a tag as scanned to Home Assistant (arb.h) */
+    void (*timers_changed)(void);               /* may be NULL: a timer started or stopped ringing (core_timers_ringing) */
+    void (*dropin_changed)(int state, const char *peer);   /* may be NULL: a Drop In's state (DROPIN_*), each in turn */
+    void (*dropin_result)(const char *result);  /* may be NULL: what came of a call this Echo made (dropin_results) */
+    void (*button)(const char *event);          /* may be NULL: a button was pressed or held (core_button_events) */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
 extern pthread_mutex_t core_lock;               /* guards state, the client socket (writes) and everything marked "lock held" */
-extern const char *core_name;
-const char *core_node_name(void);               /* "Echo Dot" -> "echo-dot": the ESPHome device (host) name */
-extern int core_local_wake, core_port, core_sendspin_port;
+extern const char *core_name;                   /* "Echo Dot 2 5695c4": the model and the MAC's end (main.c name_make) */
+const char *core_node_name(void);               /* "echo-dot-2-5695c4": the ESPHome device (host) name */
+void core_node_of(const char *name, char node[64]);  /* any Echo's node from its name ("Echo Dot 2 5695c4"); a node stays */
+void core_identify(void);                       /* rainbow ring for 10 s and a sound: which Echo is this */
+/* Setup (OOBE): 1 from an install or a reset until Home Assistant took the Echo on (its voice assistant subscribed:
+ * state/adopted); the ring shows stock's setup spinner meanwhile.  Any thread */
+int  core_oobe(void);
+/* Forget everything: root wipes state/ and the saved Wi-Fi networks and restarts the satellite, which then starts
+ * the setup again (state/reset, main.sh).  why: for the log.  Any thread */
+void core_reset(const char *why);
+/* Restart the whole Echo, as a power cycle does: root reboots on state/reboot (main.sh).  why: for the log.  Any thread */
+void core_reboot(const char *why);
+extern int core_local_wake, core_port, core_sendspin_port, core_web_port;
 
 /* lock held */
 enum state core_state(void);
 void core_set_state(enum state s);
 void core_link(int connected, int ready);       /* client connection / server wants pipelines.  (0,0) ends a running pipeline */
 void core_mic_off(void);                        /* server has heard enough */
+int  core_ha_linked(void);                     /* lock held: a client (Home Assistant) is connected */
+void core_settings_changed(void);
+void core_entities_changed(void);             /* lock held: a feature went on or off: the protocol lists its entities anew */
+int  core_whisper_model(void);                 /* a whisper model is loaded */
+int  core_sound_failed(void);                  /* sound detection's last start failed (its model did not load); any thread */
+void core_whisper_enable(int on);             /* whisper detection runs (with a model) */             /* lock held: settings.c changed one; the protocol shows it */
 void core_mic_level(int dbfs);                  /* speech level the pipeline gets: micgain.h */
+int  core_wake_sound_removal(int set);           /* our sounds taken out of what the pipeline gets (earsup.h), -1 reads */
 int  core_mic_denoise(int set);                 /* noise reduction on what the pipeline gets (micdenoise.h): 0 off .. 3 high, -1 reads */
 void core_pipeline_finish(void);
 void core_restart_after(void);                  /* start another pipeline once the current one has finished */
@@ -70,11 +96,27 @@ enum { SPEAKER_NONE, SPEAKER_MIXER, SPEAKER_ABSOLUTE };
 void core_speaker(int mode, int pct);            /* not the lock: playing on the Echo's speaker, a Bluetooth speaker with a
                                                     volume of its own through the mixer, or one with absolute volume (pct:
                                                     its own; the mixer at full scale).  The Echo's own volume comes back */
-/* Wake word models: the stock "Alexa" plus model sets in the models directory (README, "Another wake word").  The list
- * is fixed after start; Home Assistant picks the active one. */
+/* Wake word models: with Amazon's engine the stock "Alexa" plus model sets in the models directory (README, "Another wake
+ * word"), with microWakeWord its models (mww.h).  Listed anew when the engine or the models change; Home Assistant
+ * picks the active one, and a second one to listen beside it if it likes (its "Wake word 2").  Lock held. */
+#define CORE_WAKE_ACTIVE_MAX 2
 struct core_wake_word { char id[64], name[64], lang[16], manifest[256]; };
 int  core_wake_words(const struct core_wake_word **list);  /* count */
-int  core_wake_word(int set);                    /* index of the active one; set >= 0 switches to it and keeps it, -1 reads */
+int  core_wake_word(int set);                    /* index of the (first) active one; set >= 0 makes it the only one and
+                                                    keeps it, -1 reads */
+int  core_wake_active(int *list);                /* the active ones' indexes, the first first: count (1 or 2) */
+int  core_wake_set(const int *list, int n);      /* these active (duplicates and bad indexes dropped, at most 2): -1 if
+                                                    none is left (nothing changes) */
+int  core_wake_max(void);                        /* how many may listen at once */
+const char *core_wake_phrase(void);              /* the name of the one that started the run (the button: the first) */
+/* The engine (lock held): Amazon's (the model's own), microWakeWord (models in state/mww, mww.h), or Home Assistant's
+ * (the mic streams, it listens: needs a restart either way, asked for here); the wake word list is the engine's.  -1
+ * reads; microWakeWord without a model, or a change while hassmic.conf says -w remote, is refused (the engine stays) */
+enum { WAKE_AMAZON, WAKE_MWW, WAKE_HA };       /* WAKE_HA: Home Assistant listens in the stream (-w remote) */
+int  core_wake_engine(int set);
+const char *core_wake_refused(void);             /* lock held: why the last core_wake_engine(set) did not take */
+void core_remote_wake(void);                     /* lock held: Home Assistant heard the wake word (WAKE_HA) */
+void core_wake_models_changed(void);         /* not the lock: a model was added, changed or deleted (mww_store.c) */
 int  core_eq(int band);                          /* speaker equalizer, 0 bass / 1 mid / 2 treble: -6..+6 dB */
 void core_set_eq(int band, int db);              /* the mixer keeps it across reboots */
 int  core_led_auto(int set);                     /* LED ring follows the light sensor (stock's own engine, the default); -1 reads */
@@ -82,8 +124,13 @@ int  core_led_brightness(int set);               /* 0..100; set >= 0 fixes the l
 float core_lux(void);                            /* light sensor in lux as stock reads it (no lock needed); NAN: none */
 /* Sound detection (sound.h): off by default.  The events Home Assistant may get, one per sound the model tells apart. */
 int  core_sound(int set);                        /* set: 0/1, or -1 to only read */
+int  core_whispered(void);                       /* the last request: 1 whispered, 0 not, -1 none scored yet, -2 no model
+                                                  * (whisper.h; no lock needed) */
 extern const char *const core_sound_events[];
 extern const int core_sound_nevents;
+/* The buttons for Home Assistant: a press and a hold (1 s) of each, in buttons.h's order (BUTTON_* * 2 + hold) */
+extern const char *const core_button_events[];
+extern const int core_button_nevents;
 
 /* no lock needed */
 void   core_tts_begin(unsigned rate, unsigned channels);   /* lock held for this one: switches to SPEAKING */
@@ -92,11 +139,30 @@ void   core_tts_end(void);                                  /* drains, then play
 int    core_tts_flushing(void);                             /* barge-in: drop audio until core_tts_end() */
 void   core_tts_flush(void);
 size_t core_tts_queued(void);                               /* bytes not yet played: for back pressure */
-void   core_alarm(int on);                                  /* timer finished: ring until button, wake word or 60 s */
+/* Timers (lock held): Home Assistant's finished and cancelled events, by its timer id; a finished one rings until
+ * stopped (button, "<wake word>, stop", media stop, HA's "Stop ringing", any request with core_timer_stop_any; not the
+ * wake word alone) or the ring time (core_timer_ring) is up */
+void   core_timer_finished(const char *id, const char *name, unsigned total);
+void   core_timer_cancelled(const char *id);
+void   core_alarm_stop(const char *why);                    /* every ringing timer; why: for the log */
+int    core_transcript(const char *text);                   /* speech to text's result: 1 if it stopped a ring ("stop",
+                                                               or anything with core_timer_stop_any; run cancelled: drop
+                                                               the rest of it) */
+int    core_timers_ringing(char *names, size_t cap);        /* count; names: "tea, 5 min", in the order they finished */
+int    core_timer_ring(int set);                            /* seconds a ring lasts, 0 until stopped; -1 reads */
+int    core_timer_stop_any(int set);                        /* 1: any recognised speech stops a ring; -1 reads */
 enum { MUSIC_SENDSPIN = 1, MUSIC_BLUETOOTH = 2 };
 void   core_music(int source, int on);                      /* a music stream runs: the wake word threshold follows */
 void   core_bt_device(const char *name, int on);            /* a Bluetooth speaker source connected / went (not the lock) */
 void   core_bt_pairing(int on);                             /* the Bluetooth speaker's pairing window opened / closed (not the lock) */
+/* Drop In (dropin.c), not the lock.  core_dropin: the call's state changed (DROPIN_*; peer: the other Echo's node;
+ * outgoing: this Echo called): ring, sounds, the front end's listening mode, Home Assistant.  core_dropin_result: what
+ * came of a call this Echo made (DROPIN_R_*; here: refused before it started, nothing else told).  core_dropin_refusal:
+ * why a call cannot run right now (muted; incoming: do not disturb too), NULL if it can */
+void   core_dropin(int state, const char *peer, int outgoing);
+void   core_dropin_result(int result, const char *peer, int here);
+void   core_dropin_listen(int on);                          /* the front end's listening mode: this side of a call talks */
+const char *core_dropin_refusal(int incoming);
 void   core_run(char *const argv[], char *out, size_t n);   /* runs a stock tool the way the core does, until it closes its
                                                                stdout, which lands in out (any thread, not the lock) */
 #endif

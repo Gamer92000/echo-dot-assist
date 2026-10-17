@@ -18,13 +18,13 @@ and refuse a mismatch.
 | File | Used by | What |
 |---|---|---|
 | `device.mk` | `Makefile` | compiler target (NDK API level), audio and wake word backends, stock libraries to link against; optionally the Wi-Fi motion kernel module (`KMOD`) and its kernel (`KVER`, `KARCH`, `KCROSS`, `KCONFIG`: the kernel's own config (IKCONFIG of `boot.img`) in the model's directory, or `KFRAG`: a fragment where the kernel has none, `KCFLAGS`; and what `make kernel-tools` downloads for it: `KSRC_URL`, `KSRC_SHA256`, `KCC_URL`, `KCC_DIGEST`, unless the Makefile's 3.18 defaults fit) |
-| `board.c` | `hassmic` (linked in) | `struct board` from `src/hassmic/board.h`: identity towards Home Assistant, the codename (names the model's bundle in a release), input devices, mute latch, Bluetooth device node and address, stock wake word and earcon paths, thermal zone, light sensor, LED volume steps |
+| `board.c` | `hassmic` (linked in) | `struct board` from `src/hassmic/board.h`: identity towards Home Assistant, the codename (names the model's bundle in a release), input devices, mute latch, Bluetooth device node and address, stock wake word and earcon paths, thermal zone, light sensor, LED volume steps, the ALSA control a "Speaker gain" may raise, its stock value and steps per dB (`audio_device.xml` or `mixer_paths.xml` of the firmware, or the kernel's control tables where the firmware leaves it alone) |
 | `device.conf` | PC scripts (`scripts/lib/device.sh`) and, shipped next to them, the scripts on the Echo | product and firmware id, firmware file and checksum, files to compare in `probe.sh`, install method, the daemon's user and groups, names of the stock services to stop; `KMOD`/`KMOD_ARGS` for `main.sh` to load the Wi-Fi motion module |
 | `stubs/*.syms` | `make STUBS=1` (CI) | per stock library in `LIBS`, the symbols our binaries need of it, written by `tools/mkstubs.sh` from the firmware: stand-ins to link against without it |
 | `hassmic.rc` | `install-system.sh` → `/system/etc/init/` | init services, and the trigger that starts the satellite once the audio stack is up |
 | `sepolicy.rules` | `install-system.sh` | allow rules added to the stock policy so init can start the scripts |
 | `README.md` | people | what is known about the model, and its install instructions (requirements, downloads, unlock, root, install) |
-| `setup.sh` | `scripts/setup.sh` | the same install steps for the guided setup: `STEPS` (id and title per line) and one `step_<id>` function each, built from the helpers in `scripts/lib/setup.sh` |
+| `setup.sh` | `scripts/setup.sh` | the same install steps for the guided setup: `STEPS` (id and title per line) and one `step_<id>` function each, built from the helpers in `scripts/lib/setup.sh`; `ROOTED_SKIP`: the steps an Echo rooted already has behind it (`rooted_already` in the steps) |
 
 A model without `setup.sh` is listed by the guided setup as not supported yet; a model without `device.mk` does not
 build.
@@ -84,7 +84,7 @@ Rough order. Each step is safe to stop at.
    `task` (spinner, output into the log), waits through `waitfor`/`wait_adb`; what only the user can do (soldering,
    button presses) is a short `todo` or `tell`, never a paragraph. A step first checks whether its result is there
    already. Mark a model not tried on a real Echo with `UNTESTED=1`. End with
-   `install` (`install_satellite`) and `wakeword` (`artifacts_run setup`). Try it with `scripts/setup.sh <codename> --dry-run`.
+   `install` (`install_satellite`); models come later from the settings page. Try it with `scripts/setup.sh <codename> --dry-run`.
 6. `tools/mkstubs.sh <codename>` for the stub lists, and the codename in the build matrix of
    `.github/workflows/build.yml`: CI builds and publishes the model's bundle from then on.
 7. Add the model to the table above, to the root `README.md` and to `CHANGELOG.md`.

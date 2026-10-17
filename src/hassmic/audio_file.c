@@ -1,6 +1,10 @@
 /* PC backend for protocol tests: capture loops $HASSMIC_CAP (raw 16 kHz mono s16le, silence if unset) at real-time
- * speed; playback is appended to $HASSMIC_PLAY (default /tmp/hassmic_play.raw). */
+ * speed; playback is appended to $HASSMIC_PLAY (default /tmp/hassmic_play.raw).
+ * HASSMIC_FAKE_ECHO=<ms>:<dB>: our sounds come back in the capture <ms> after they start, <dB> under their level, with
+ * two reflections: what Amazon's echo canceller leaves of them on an Echo (earsup.h). */
 #include "audio.h"
+#include <math.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +14,29 @@
 static FILE *cap, *play;
 static short block[800];
 static unsigned play_rate, play_ch;
+void (*audio_earcon_started)(void);
+
+#define ECHO_LEN (16000 * 4)
+static pthread_mutex_t echo_mu = PTHREAD_MUTEX_INITIALIZER;
+static float echo[ECHO_LEN];                /* by capture sample, modulo */
+static unsigned long long cap_pos;          /* samples cap_read has handed out */
+
+static void echo_add(const short *pcm, size_t samples, unsigned rate)
+{
+    const char *e = getenv("HASSMIC_FAKE_ECHO"); int ms; float db;
+    if (!e || sscanf(e, "%d:%f", &ms, &db) != 2 || !rate) return;
+    float g = powf(10, db / 20) / 32768;
+    pthread_mutex_lock(&echo_mu);
+    unsigned long long at = cap_pos + (unsigned long long)ms * 16;
+    size_t n = (size_t)(samples * 16000ULL / rate);
+    for (size_t j = 0; j < n && j < ECHO_LEN / 2; j++) {
+        float v = pcm[j * rate / 16000] * g;            /* every rate/16000-th sample: the earcons are tones far under 8 kHz */
+        echo[(at + j) % ECHO_LEN] += v;
+        echo[(at + j + 48) % ECHO_LEN] += 0.5f * v;       /* reflections at 3 and 10 ms */
+        echo[(at + j + 160) % ECHO_LEN] += 0.25f * v;
+    }
+    pthread_mutex_unlock(&echo_mu);
+}
 
 int cap_open(void)
 {
@@ -27,6 +54,13 @@ int cap_read(const void **data)
         if (n < 800) rewind(cap);
     }
     usleep(50000);
+    pthread_mutex_lock(&echo_mu);
+    for (int i = 0; i < 800; i++) {
+        float *e = &echo[(cap_pos + i) % ECHO_LEN], v = block[i] + *e * 32768;
+        block[i] = (short)(v > 32767 ? 32767 : v < -32768 ? -32768 : lrintf(v)); *e = 0;
+    }
+    cap_pos += 800;
+    pthread_mutex_unlock(&echo_mu);
     *data = block;
     return sizeof block;
 }
@@ -52,13 +86,21 @@ void play_close(int drain) { (void)drain; if (play) fclose(play); play = NULL; }
 
 void play_earcon(const short *pcm, size_t samples, unsigned rate)
 {
-    (void)pcm;
+    echo_add(pcm, samples, rate);
+    if (audio_earcon_started) audio_earcon_started();
     fprintf(stderr, "earcon: %zu samples @ %u Hz\n", samples, rate);
+}
+
+void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go)(void))
+{
+    (void)pcm;
+    fprintf(stderr, "earcon: %zu samples @ %u Hz, until stopped\n", samples, rate);
+    for (long ms = 0; ms < (long)(samples * 1000ULL / (rate ? rate : 48000)) && go(); ms += 20) usleep(20000);
 }
 
 /* Music streams on the PC: files, written at real-time speed through a modelled 200 ms device buffer. */
 struct stream { FILE *f; unsigned bps; long long t0, written; };
-static struct stream music, bt;
+static struct stream music, bt, voip;
 static long long raw_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC_RAW, &ts); return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000; }
 
 static int s_open(struct stream *s, const char *env, const char *def, unsigned rate, unsigned channels)
@@ -97,3 +139,7 @@ int       bt_open(unsigned rate, unsigned channels) { return s_open(&bt, "HASSMI
 long long bt_queued_us(void) { return s_queued_us(&bt); }
 int       bt_write(const void *data, size_t len) { return s_write(&bt, data, len); }
 void      bt_close(void) { s_close(&bt); }
+int       voip_open(unsigned rate, unsigned channels) { return s_open(&voip, "HASSMIC_VOIP", "/tmp/hassmic_voip.raw", rate, channels); }
+long long voip_queued_us(void) { return s_queued_us(&voip); }
+int       voip_write(const void *data, size_t len) { return s_write(&voip, data, len); }
+void      voip_close(void) { s_close(&voip); }
