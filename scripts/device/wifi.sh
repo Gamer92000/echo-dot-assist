@@ -188,7 +188,8 @@ join() {
 agateway() {
     g=$(sed -n "s/^$WLAN[[:space:]]\{1,\}00000000[[:space:]]\{1,\}\([0-9A-Fa-f]\{8\}\).*/\1/p" $ROUTE 2>/dev/null)
     [ -n "$g" ] || return 0
-    gw=$(printf '%d.%d.%d.%d' $((16#${g:6:2})) $((16#${g:4:2})) $((16#${g:2:2})) $((16#${g:0:2})))
+    # bytes by sed, numbers by printf's 0x: ${g:6:2} and 16# are mksh's, and the PC's tests run this under dash
+    gw=$(printf '%d.%d.%d.%d' $(echo $g | sed 's/\(..\)\(..\)\(..\)\(..\)/0x\4 0x\3 0x\2 0x\1/'))
     ping -c 1 -W 1 $gw > /dev/null 2>&1
     grep "^$gw " $ARP 2>/dev/null | grep -q " 0x[26] .* $WLAN\$"
 }
