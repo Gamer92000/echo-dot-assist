@@ -173,11 +173,19 @@ def parse_result(r):                                     # helpers/template/__in
     return r
 
 
+# Each run has an environment of its own (its globals read that run's registries), but they are all made alike, so a
+# template compiles to the same code in each: compiled once, not once per run (that was most of this test's 7 s).
+_CODE = {}
+def template(env, source):                               # env.from_string, with the compiled code shared
+    if source not in _CODE: _CODE[source] = env.compile(source)
+    return env.template_class.from_code(env, _CODE[source], env.make_globals(None), None)
+
+
 def render(env, value, variables):                       # render_complex
     if isinstance(value, list): return [render(env, x, variables) for x in value]
     if isinstance(value, dict): return {render(env, k, variables): render(env, x, variables) for k, x in value.items()}
     if isinstance(value, str) and ("{{" in value or "{%" in value):
-        return parse_result(env.from_string(value).render(**variables))
+        return parse_result(template(env, value).render(**variables))
     return value
 
 

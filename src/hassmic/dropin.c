@@ -78,6 +78,8 @@ enum { OPUS_APPLICATION_VOIP = 2048, OPUS_SET_BITRATE = 4002, OPUS_SET_COMPLEXIT
 #define RING_MS     30000               /* ask: how long it rings */
 #define CALLER_MS   5000                /* ringing, the caller's invites stopped: it gave up */
 #define LOST_MS     5000                /* live, no audio for this long: the other Echo is gone */
+/* HASSMIC_DROPIN_TIMES="<answer ms> <lost ms>" (tests: an Echo that vanishes or never answers, without the waits) */
+static int answer_ms = ANSWER_MS, lost_ms = LOST_MS;
 #define JB          32                  /* jitter buffer slots (frames) */
 /* Frames held before playing.  micAsr comes in 50 ms blocks, so frames leave the other Echo two or three at a time
  * every 50 ms: three frames held (the first try) let the playout catch up with every burst and run a frame ahead of
@@ -634,8 +636,8 @@ static void tick(void)
     switch (c.state) {
     case DROPIN_CALLING:                                /* timed from the first invite (tell_core) */
         if (!c.invited) break;
-        if (!c.rang && now - c.since > ANSWER_MS) end_call("no answer", 1, DROPIN_R_NO_ANSWER);
-        else if (c.rang && now - c.since > RING_MS + ANSWER_MS) end_call("not answered", 1, DROPIN_R_NOT_ANSWERED);
+        if (!c.rang && now - c.since > answer_ms) end_call("no answer", 1, DROPIN_R_NO_ANSWER);
+        else if (c.rang && now - c.since > RING_MS + answer_ms) end_call("not answered", 1, DROPIN_R_NOT_ANSWERED);
         else if (now - c.sig_at >= (c.rang ? 1000 : INVITE_MS)) { c.sig_at = now; send_msg(M_INVITE, NULL); }
         break;
     case DROPIN_RINGING:
@@ -643,7 +645,10 @@ static void tick(void)
         else if (now - c.sig_at > CALLER_MS) end_call("the caller gave up", 0, -1);
         break;
     case DROPIN_LIVE:
-        if (now - c.rx_at > LOST_MS) end_call("lost: no audio for 5 s", 1, -1);
+        if (now - c.rx_at > lost_ms) {
+            char why[40]; snprintf(why, sizeof why, "lost: no audio for %d s", lost_ms / 1000);
+            end_call(why, 1, -1);
+        }
         break;
     }
     if (bye.left && now - bye.at >= 100) { arb_tell(bye.to, bye.p, bye.n); bye.at = now; bye.left--; }
@@ -667,7 +672,9 @@ static void *loop(void *arg)
 int dropin_start(int port)
 {
     struct sockaddr_in a; pthread_t t; int tos = 0xb8;      /* DSCP EF: Wi-Fi's voice queue (WMM) where the AP honours it */
+    const char *times = getenv("HASSMIC_DROPIN_TIMES");
     if (!arb_running()) return -1;
+    if (times) sscanf(times, "%d %d", &answer_ms, &lost_ms);
     arb_self(self_id);
     if ((sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0)) < 0) { perror("drop in: socket"); return -1; }
     memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port); a.sin_addr.s_addr = htonl(INADDR_ANY);

@@ -203,29 +203,64 @@ host: build/hassmic-host $(OUT)/hassmic-qemu build/otatool-host
 
 # Building blocks of the Sendspin client, checked against reference implementations (aiohttp, python noiseprotocol).
 UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/third_party/monocypher.c
-unit:
+# One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
+UNIT_TESTS := hash ws noise ble_crypto micgain wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
+	sbc web_crypto mww blueprint_dropin
+unit: $(addprefix unit-,$(UNIT_TESTS))
+unit-hash:
 	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic -Isrc/include tests/unit/hash_test.c $(UNIT) -lpthread -o build/hash_test && build/hash_test
+unit-ws:
+	@mkdir -p build
 	cc -O2 -Wall -D_GNU_SOURCE -Isrc/hassmic -Isrc/include -include stdlib.h tests/unit/ws_test.c $(UNIT) -lpthread -o build/ws_test
+	.venv/bin/python tests/unit/ws_ref.py build/ws_test
+unit-noise:
+	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic -Isrc/include tests/unit/noise_test.c $(UNIT) -lpthread -o build/noise_test
+	.venv/bin/python tests/unit/noise_ref.py build/noise_test
+unit-ble_crypto:
+	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic tests/unit/ble_crypto_test.c src/hassmic/ble_crypto.c -o build/ble_crypto_test && build/ble_crypto_test
+unit-micgain:
+	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic tests/unit/micgain_test.c src/hassmic/micgain.c -lm -o build/micgain_test && build/micgain_test
+unit-wifimotion:
+	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic tests/unit/wifimotion_test.c src/hassmic/wifimotion.c -lpthread -lm -o build/wifimotion_test && build/wifimotion_test
+unit-spkgain:
+	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/spkgain_test.c src/hassmic/spkgain.c -lpthread -o build/spkgain_test && build/spkgain_test
+unit-tz:
+	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/tz_test.c src/hassmic/tz.c -o build/tz_test && .venv/bin/python tests/unit/tz_ref.py build/tz_test
+unit-statefile:
+	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/statefile_test.c src/hassmic/statefile.c -Wl,--wrap=fsync,--wrap=rename -lpthread -o build/statefile_test && build/statefile_test
+unit-ledq:
+	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ledq_test.c src/hassmic/ledq.c -lpthread -o build/ledq_test && build/ledq_test
+unit-micdenoise:
+	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic tests/unit/micdenoise_test.c src/hassmic/micdenoise.c $(RNNOISE) -lm -o build/micdenoise_test && build/micdenoise_test
+unit-earsup:
+	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/earsup_test.c src/hassmic/earsup.c -lpthread -lm -o build/earsup_test && build/earsup_test
+unit-dha_jwt:
+	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic -Isrc/include -include stdlib.h tests/unit/dha_hal_fake.c -shared -fPIC -o build/dha_hal_fake.so
 	cc -O2 -Wall -Isrc/hassmic -Isrc/include tests/unit/dha_jwt_test.c src/hassmic/dha.c src/hassmic/hash.c -o build/dha_jwt_test -ldl && build/dha_jwt_test build/dha_hal_fake.so
-	.venv/bin/python tests/unit/ws_ref.py build/ws_test
-	.venv/bin/python tests/unit/noise_ref.py build/noise_test
+unit-a2dp_codecs:
+	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic tests/unit/a2dp_codecs_test.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/third_party/freeaptx.c -lm -ldl -lopus -o build/a2dp_codecs_test && build/a2dp_codecs_test
+unit-sbc:
 	if command -v sbcenc >/dev/null; then tests/unit/sbc_ref.sh; else echo "sbc: sbcenc/sbcdec (package sbc) missing, skipped"; fi
+unit-web_crypto:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_crypto_test.py; else echo "web crypto: node missing, skipped"; fi
+unit-mww:
+	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/mww_test.c src/hassmic/mww_features.c src/hassmic/mww_model.c -lm -o build/mww_test
 	.venv/bin/python tests/unit/mww_ref.py build/mww_test
+unit-blueprint_dropin:
 	.venv/bin/python tests/blueprint_dropin.py
 
 # what the daemon reports, and what bundles are called (ota-push.sh, CI)
@@ -235,4 +270,4 @@ version:
 clean:
 	rm -rf build
 
-.PHONY: all host unit version clean kmod-missing kernel-tools FORCE
+.PHONY: all host unit $(addprefix unit-,$(UNIT_TESTS)) version clean kmod-missing kernel-tools FORCE

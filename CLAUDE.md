@@ -28,7 +28,7 @@ make host                # build/hassmic-host (PC: file audio + no wake word, SI
                          # build/donut/hassmic-qemu (ARM + real Pryon, run via tools/qrun.sh), build/otatool-host (the Echo's
                          # otatool for the PC, as tests' stand-in for the device side). Needs libopus
 make unit                # C unit tests; ws/noise are checked against Python reference impls in .venv; the Drop In
-                         # blueprint (tests/blueprint_dropin.py)
+                         # blueprint (tests/blueprint_dropin.py); one target each (unit-<name>): make -j unit runs them at once
 make build/hassmic-host  # single target
 ```
 
@@ -89,7 +89,7 @@ shipped in every bundle). `tools/mkstubs.sh` regenerates the stub lists from the
 when code starts using another stock library function. Builds are reproducible (`BUILD_TIME` = commit time). Test the
 workflow with `act push` (publishing is a dry run under act).
 
-There is no single-test selector: run one unit test by building/running its line from the `unit` target in the Makefile.
+One unit test: `make unit-<name>` (`UNIT_TESTS` in the Makefile).
 `tools/qrun.sh [-t secs] <arm-binary> args` runs a device binary on the PC under qemu-arm against `firmware/$DEVICE/rootfs`
 (needs a new PID namespace; bionic mutexes deadlock with pid > 65535).
 

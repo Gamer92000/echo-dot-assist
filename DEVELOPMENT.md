@@ -55,7 +55,8 @@ make [DEVICE=donut]                               # ARM binaries into build/donu
 make DEVICE=donut STUBS=1                         # the same, without the firmware: stand-ins for its libraries
 make host                                         # PC build (build/hassmic-host) + qemu build for the tests (needs libopus)
 make unit                                         # C unit tests; microWakeWord against pymicro-features and TFLite (mww_ref.py);
-                                                 # the Drop In blueprint (blueprint_dropin.py)
+                                                 # the Drop In blueprint (blueprint_dropin.py); one target each (make
+                                                 # unit-<name>, UNIT_TESTS), so make -j unit runs them at once
 .venv/bin/python tests/run.py [-j N] [name ...]  # every PC test below at once (CI), each in a network namespace of its own
                                                  # (unshare -rn); logs of those that fail, all in build/test-logs/
 .venv/bin/python tests/blueprint_dropin.py        # the Drop In blueprint against stand-ins of Home Assistant's registries,

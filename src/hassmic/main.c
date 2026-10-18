@@ -2125,7 +2125,8 @@ static void *volume_led_thread(void *arg)
     int tick = 0;
     (void)arg;
     while (!atomic_load(&quit)) {
-        if (++tick % 10 == 0) { volume_sync(); music_volume_write(); fake_speaker(); }
+        if (++tick % 10 == 0) { volume_sync(); music_volume_write(); }
+        fake_speaker();                                 /* tests only: at once, as btout.c tells it on the Echo */
         long long at = atomic_load(&vol_clear_at);
         if (at && mono_ms() >= at) {
             pthread_mutex_lock(&core_lock);

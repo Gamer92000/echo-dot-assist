@@ -45,7 +45,8 @@ class Echo:
             with open(os.path.join(self.state, "arbitration"), "w") as f: f.write(f"arbitrate 1\nctr 0\nnet {net}\n")
         self.env = dict(os.environ, HASSMIC_STATE=self.state, HASSMIC_PLAY=os.path.join(self.state, "play.raw"), HASSMIC_VOIP=self.voip,
                         HASSMIC_MDNS_FILE=os.path.join(self.state, "none"), HASSMIC_ARB_ADDR=BCAST, HASSMIC_TEST_SCORE="500",
-                        HASSMIC_MODELS=os.path.join(self.state, "models"), HASSMIC_EARCONS=EARCONS + "/")
+                        HASSMIC_MODELS=os.path.join(self.state, "models"), HASSMIC_EARCONS=EARCONS + "/",
+                        HASSMIC_DROPIN_TIMES="2000 2000")       # no answer after 2 s, lost after 2 s without audio (4 and 5)
         if speech: self.env["HASSMIC_CAP"] = SPEECH
         self.states, self.starts, self.seq = {}, [], []     # seq: (object id, state or event type) as they came
 
@@ -128,8 +129,8 @@ async def main():
     # their own 40
     a, b = Echo("Kitchen Echo", 26180, net, speech=True), Echo("Hall Echo", 26181, net,
                                                                config="separate_volumes=on\nsounds_volume=20\ncall_volume_linked=off\ncall_volume=40\n")
-    c = Echo("Garage Echo", 26182)                      # outside the network: it starts one of its own... unless it joins
-    for e in (a, b): e.start()
+    c = Echo("Garage Echo", 26182)                      # outside the network: it hears the two, but nobody lets it in
+    for e in (a, b, c): e.start()                       # (it runs from the start: time to join, if it wrongly could)
     try:
         await asyncio.sleep(1.5)
         for e in (a, b): await e.connect()
@@ -248,7 +249,6 @@ async def main():
         await a.call(b.node)
         check(await until(lambda: a.results()[-1:] == ["microphones_off_here"], 2), f"the kitchen muted: result {a.results()[-1:]}")
         a.cli.switch_command(a.by["mute"].key, False); await asyncio.sleep(0.3)
-        c.start(); await asyncio.sleep(6.5)               # outside the network: it makes one of its own after 5 s
         await a.call(c.node)
         check(await until(lambda: f'no Echo "{c.node}" in this Echo\'s network' in a.text(), 2), "an Echo outside the network cannot be called")
         check(await until(lambda: a.results()[-1:] == ["not_found"], 1), f"  result not_found ({a.results()[-1:]})")
@@ -260,11 +260,11 @@ async def main():
         await a.call(b.node)
         check(await until(lambda: a.results()[-1:] == ["busy_here"], 1) and a.dropin()[0] == "connected", f"a second call during it: result {a.results()[-1:]}")
         b.proc.kill(); b.proc.wait()
-        check(await until(lambda: a.dropin()[0] == "idle", 8), "a vanished Echo ends the call (no audio for 5 s)")
-        check("lost: no audio for 5 s" in a.text(), "the log says it was lost")
+        check(await until(lambda: a.dropin()[0] == "idle", 8), "a vanished Echo ends the call (no audio for 2 s here, 5 on the Echo)")
+        check("lost: no audio for 2 s" in a.text(), "the log says it was lost")
         mark, t0 = len(a.seq), time.monotonic()
         await a.call(b.node)                           # still a member (5 min): nobody answers
-        check(await until(lambda: a.results()[-1:] == ["no_answer"], 6) and 3.9 < time.monotonic() - t0 < 5.5,
+        check(await until(lambda: a.results()[-1:] == ["no_answer"], 6) and 1.9 < time.monotonic() - t0 < 3.5,
               f"  called again: result no_answer after {time.monotonic() - t0:.1f} s, states {[v for o, v in a.seq[mark:] if o == 'drop_in']}")
         check(not re.search(r"drop in: send: ", a.text()), "no send errors on the way")
     finally:

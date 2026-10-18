@@ -32,7 +32,7 @@ TESTS = [
     ("volumes", [PY, "tests/fake_ha_volumes.py"]),
     ("improv", [PY, "tests/fake_improv.py"]),
     ("dropin", [PY, "tests/fake_ha_dropin.py"]),
-    ("unit", ["make", "-s", "unit"]),
+    ("unit", ["make", "-s", "-j4", "unit"]),
     ("mww", [PY, "tests/fake_web_mww.py"]),
     ("web", [PY, "tests/fake_web.py"]),
     ("update", [PY, "tests/fake_ha_update.py"]),

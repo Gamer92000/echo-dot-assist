@@ -5,19 +5,26 @@ Home Assistant's media at the music volume although it plays on the same stream,
 numbers in Home Assistant, the quieter ones turned down in their PCM, kinds that follow the music some points above or
 below it, a restart, a Bluetooth speaker (HASSMIC_FAKE_SPEAKER), the page and exports, and everything as before with the
 feature off."""
-import asyncio, io, json, os, re, signal, socket, struct, subprocess, sys, tempfile, threading, wave
+import asyncio, contextvars, io, json, os, re, signal, socket, struct, subprocess, sys, tempfile, threading, traceback, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from aioesphomeapi import VoiceAssistantEventType as Ev, APIClient, MediaPlayerInfo, NumberInfo, NumberState, VoiceAssistantTimerEventType as Tm
+from aioesphomeapi import VoiceAssistantEventType as Ev, APIClient, MediaPlayerInfo, MediaPlayerEntityState, MediaPlayerState, NumberInfo, NumberState
+from aioesphomeapi import VoiceAssistantTimerEventType as Tm
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 from webclient import Browser
-PORT, HTTP_PORT, WEB_PORT = 16983, 16984, 16985
+HTTP_PORT = 16984
 KEY_VOLUMEUP, KEY_VOLUMEDOWN = 115, 114
+# The parts below run at once, each with Echos of its own (most of the time goes to audio played at real time and to
+# hassmic's own periods): part i's Echos on ESPHome port PORT + 2i, their settings pages one above
+PORT = 17100
 
-
+# what a part checks, kept until the end and printed part by part: the parts run at once
+out = contextvars.ContextVar("out", default=None)
 def check(cond, what):
-    print(("ok   " if cond else "FAIL ") + what)
+    line = ("ok   " if cond else "FAIL ") + what
+    if out.get() is None: print(line)
+    else: out.get().append(line)
     if not cond: check.failed = True
 check.failed = False
 
@@ -41,8 +48,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class Echo:
-    def __init__(self, config, again=None):
+    def __init__(self, part, config, again=None):
         """again: an Echo stopped before, started anew on its state and mixer (a restart)"""
+        self.port, self.web = PORT + 2 * part, PORT + 2 * part + 1
         if again: self.tmp, self.state, self.mixer = again.tmp, again.state, again.mixer
         else:
             self.tmp = tempfile.mkdtemp(); self.state = os.path.join(self.tmp, "state"); self.mixer = os.path.join(self.tmp, "mixer")
@@ -61,7 +69,7 @@ class Echo:
                    HASSMIC_MODELS=os.path.join(self.tmp, "models"), HASSMIC_LED_ROOT=os.path.join(self.tmp, "etc"),
                    HASSMIC_FAKE_SPEAKER=self.speaker)
         with open(env["HASSMIC_FAKE_ADDRS"], "w") as f: f.write("127.0.0.1\n")
-        self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-W", str(WEB_PORT),
+        self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.port), "-n", "Echo Dot", "-W", str(self.web),
                                       "-a", "0", "-z", "0", "-o", "0", "-b", keys], env=env, stderr=self.log)
 
     def prop(self, name, v=None):
@@ -81,7 +89,7 @@ class Echo:
     async def connect(self):
         for _ in range(100):
             try:
-                c = APIClient("127.0.0.1", PORT, None); await c.connect(login=True); break
+                c = APIClient("127.0.0.1", self.port, None); await c.connect(login=True); break
             except Exception: await asyncio.sleep(0.1)
         else: raise RuntimeError("no connection")
         self.ents, _ = await c.list_entities_services()
@@ -94,7 +102,7 @@ class Echo:
     def stop(self): self.proc.terminate(); self.proc.wait(5); os.close(self.keypad); self.log.close()
 
     def page(self):
-        b = Browser(WEB_PORT)
+        b = Browser(self.web)
         if not b.login_with_button(self.proc): raise RuntimeError("page login")
         return b
 
@@ -117,6 +125,13 @@ async def watch(echo, prop, until_done):
     return seen, r
 
 
+async def stop_media(echo, c, mp):
+    """Home Assistant's media stopped (what it plays is 2.5 s long), and the media player idle again"""
+    n = len(echo.states)
+    c.media_player_command(mp.key, command=2)
+    await until(lambda: [x.state for x in echo.states[n:] if isinstance(x, MediaPlayerEntityState)][-1:] == [MediaPlayerState.IDLE])
+
+
 async def wake_sound_peak(echo, c):
     n = len(re.findall(r"earcon: .* peak (\d+)", echo.text()))
     echo.proc.send_signal(signal.SIGUSR1)                       # the wake word: the wake sound plays
@@ -127,13 +142,15 @@ async def wake_sound_peak(echo, c):
     return int(peaks[n]) if len(peaks) > n else None
 
 
-async def main():
-    httpd = ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), Handler)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    url = f"http://127.0.0.1:{HTTP_PORT}/a.wav"
+# the Echo's volume curve (main.c vol_db): what a kind at volume v is turned down by under the mixer at top
+db = {20: -35.7, 30: -30.5, 40: -26.5, 50: -22.4, 60: -19.5, 70: -18.4, 80: -14.0, 90: -10.0, 100: 0.0}
+g = lambda v, top: 10 ** ((db[v] - db[top]) / 20)
+near = lambda a, b: abs(a - b) < 0.003
 
+
+async def part_off(url, full):
     # Off (the default): one volume, as before
-    echo = Echo("")
+    echo = Echo(0, "")
     try:
         c = await echo.connect()
         check(not [e for e in echo.ents if isinstance(e, NumberInfo) and e.object_id == "assistant_volume"], "off: no Assistant volume in Home Assistant")
@@ -141,8 +158,8 @@ async def main():
         c.media_player_command(mp.key, volume=0.55)
         await until(lambda: echo.prop("MainVolume") == 55 and echo.prop("TTSVolume") == 55)
         check(echo.prop("MainVolume") == 55 and echo.prop("TTSVolume") == 55, "off: the media player's volume moves both of the mixer's")
-        full = await wake_sound_peak(echo, c)
-        check(full is not None and full > 5000, f"off: the wake sound at full level ({full})")
+        level = await wake_sound_peak(echo, c); full.set_result(level)
+        check(level is not None and level > 5000, f"off: the wake sound at full level ({level})")
         c.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t1", "tea", 60, 0, False)
         await until(lambda: echo.text().count("earcon: 5760 samples") >= 4)
         check("alarm stream: " not in echo.text() and echo.prop("AlarmVolume") is None, "off: a timer rings on the Earcon stream, AlarmVolume left alone")
@@ -151,20 +168,19 @@ async def main():
     finally:
         echo.stop()
 
+
+async def part_separate(url, full):
+    gain = lambda what: float(re.findall(rf"audio: {what} gain ([0-9.]+)", echo.text())[-1]) if f"{what} gain" in echo.text() else 1.0
     # Separate: music 40 (MainVolume as it was), replies 60, sounds 20, timers 80.  Both mixer volumes at the loudest
     # (timers, 80), where libasp agrees with them; everything quieter turned down in our PCM by the Echo's curve
     # between its volume and 80 (main.c vol_db)
-    db = {20: -35.7, 30: -30.5, 40: -26.5, 50: -22.4, 60: -19.5, 70: -18.4, 80: -14.0, 90: -10.0, 100: 0.0}
-    g = lambda v, top: 10 ** ((db[v] - db[top]) / 20)
-    echo = Echo("separate_volumes=on\nassistant_volume=60\nsounds_volume=20\ntimer_volume=80\ncall_volume_linked=off\ncall_volume=100\n")
+    echo = Echo(1, "separate_volumes=on\nassistant_volume=60\nsounds_volume=20\ntimer_volume=80\ncall_volume_linked=off\ncall_volume=100\n")
     try:
         c = await echo.connect()
         nums = {e.object_id: e for e in echo.ents if isinstance(e, NumberInfo)}
         check(all(k in nums for k in ("assistant_volume", "sounds_volume", "timer_volume")),
               f"separate: Assistant, Sounds and Timer volume in Home Assistant ({sorted(nums)})")
         num = lambda k: ([x.state for x in echo.states if isinstance(x, NumberState) and x.key == nums[k].key] or [None])[-1]
-        gain = lambda what: float(re.findall(rf"audio: {what} gain ([0-9.]+)", echo.text())[-1]) if f"{what} gain" in echo.text() else 1.0
-        near = lambda a, b: abs(a - b) < 0.003
         await until(lambda: echo.prop("MainVolume") == 80 and echo.prop("TTSVolume") == 80 and near(gain("tts"), g(60, 80)))
         check(echo.prop("MainVolume") == 80 and echo.prop("TTSVolume") == 80,
               "separate: both mixer volumes at the loudest of the four (timers, 80; calls' own 100 counts only during a call)")
@@ -187,18 +203,18 @@ async def main():
         c.media_player_command(mp.key, media_url=url)
         await until(lambda: gain("tts") == 1.0)
         check(gain("tts") == 1.0, "Home Assistant's media on the same stream: at the music volume (gain 1 under 90)")
-        await asyncio.sleep(3)
+        await stop_media(echo, c, mp)                  # not played to its end: another would be dropped as busy
         c.media_player_command(mp.key, media_url=url, announcement=True)     # what tts.speak sends: speech
         await until(lambda: near(gain("tts"), g(60, 90)))
         check(near(gain("tts"), g(60, 90)), f"the media player's announcement (tts.speak): at the replies' 60, not the music's ({gain('tts'):.3f})")
-        await asyncio.sleep(3)
+        await stop_media(echo, c, mp)
         snd = await wake_sound_peak(echo, c)
-        want = full * g(20, 90)
-        check(snd is not None and abs(snd - want) <= 3, f"sounds at 20 under 90: the wake sound {snd} of {full} (want {want:.0f})")
+        want = (await full) * g(20, 90)
+        check(snd is not None and abs(snd - want) <= 3, f"sounds at 20 under 90: the wake sound {snd} of {full.result()} (want {want:.0f})")
         c.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t1", "tea", 60, 0, False)
         await until(lambda: echo.text().count("earcon: 5760 samples") >= 4)
         peaks = [int(x) for x in re.findall(r"earcon: 5760 samples @ 48000 Hz, peak (\d+)", echo.text())]
-        want = full * g(80, 90)
+        want = (await full) * g(80, 90)
         check(abs(peaks[-1] - want) <= 3, f"timers at 80 under 90: the ring at {peaks[-1]} (want {want:.0f})")
         echo.key(KEY_VOLUMEDOWN)                       # while it rings: the timers' volume
         await until(lambda: num("timer_volume") == 70)
@@ -232,8 +248,11 @@ async def main():
     finally:
         echo.stop()
 
+
+async def part_linked(url, full):
+    gain = lambda what: float(re.findall(rf"audio: {what} gain ([0-9.]+)", echo.text())[-1]) if f"{what} gain" in echo.text() else 1.0
     # Following the music: replies 20 points above it, sounds 20 below, timers their own 30; music 40 (MainVolume as it was)
-    echo = Echo("separate_volumes=on\nassistant_volume_linked=on\nassistant_volume_offset=20\n"
+    echo = Echo(2, "separate_volumes=on\nassistant_volume_linked=on\nassistant_volume_offset=20\n"
                 "sounds_volume_linked=on\nsounds_volume_offset=-20\ntimer_volume=30\n")
     try:
         c = await echo.connect()
@@ -250,7 +269,7 @@ async def main():
               "the media player moves the linked replies with the music (50 + 20 = 70)")
         check(near(gain("call"), g(50, 70)), f"calls follow the music by default, as before they had a volume ({gain('call'):.3f})")
         snd = await wake_sound_peak(echo, c)
-        want = full * g(30, 70)
+        want = (await full) * g(30, 70)
         check(snd is not None and abs(snd - want) <= 3, f"linked sounds at 50 - 20 = 30 under 70: the wake sound {snd} (want {want:.0f})")
         ann = asyncio.ensure_future(c.send_voice_assistant_announcement_await_response(url, 15, "x"))
         await until(lambda: echo.text().count("media: announce") >= 1)
@@ -265,9 +284,12 @@ async def main():
     finally:
         echo.stop()
 
+
+async def part_imported(url, full):
+    gain = lambda what: float(re.findall(rf"audio: {what} gain ([0-9.]+)", echo.text())[-1]) if f"{what} gain" in echo.text() else 1.0
     # Switched by an import (state/preset), nothing jumps: replies back to their own volume where they played (music
     # 40 + 20), sounds at 95 linked 55 above the music (past the old +-50, which moved them to 90)
-    echo = Echo("separate_volumes=on\nassistant_volume_linked=on\nassistant_volume_offset=20\nsounds_volume=95\n")
+    echo = Echo(3, "separate_volumes=on\nassistant_volume_linked=on\nassistant_volume_offset=20\nsounds_volume=95\n")
     with open(os.path.join(echo.state, "preset"), "w") as f: f.write("assistant_volume_linked=off\nsounds_volume_linked=on\n")
     try:
         c = await echo.connect()
@@ -281,10 +303,13 @@ async def main():
     finally:
         echo.stop()
 
+
+async def part_restart(url, full):
+    gain = lambda what: float(re.findall(rf"audio: {what} gain ([0-9.]+)", echo.text())[-1]) if f"{what} gain" in echo.text() else 1.0
     # A restart: music 50 (state/volume.music, not MainVolume, which is the loudest), replies their own 70, sounds
     # 20 below the music, timers their own 40; as they were afterwards.  The config backwards, as by hand: the
     # switches still come first (settings.c), so they seed nothing over the saved values
-    echo = Echo("timer_volume=40\nsounds_volume_offset=-20\nsounds_volume_linked=on\nassistant_volume=70\nseparate_volumes=on\n")
+    echo = Echo(4, "timer_volume=40\nsounds_volume_offset=-20\nsounds_volume_linked=on\nassistant_volume=70\nseparate_volumes=on\n")
     try:
         c = await echo.connect()
         mp = next(e for e in echo.ents if isinstance(e, MediaPlayerInfo))
@@ -293,7 +318,7 @@ async def main():
         await c.disconnect()
     finally:
         echo.stop()
-    echo = Echo(None, again=echo)
+    echo = Echo(4, None, again=echo)
     try:
         c = await echo.connect()
         await until(lambda: near(gain("music"), g(50, 70)))
@@ -302,7 +327,7 @@ async def main():
               f"restarted: the mixer at the replies' 70, the music at 50 under it ({echo.prop('MainVolume')}, {gain('music'):.3f})")
         check(mp_state and abs(mp_state[-1].volume - 0.5) < 0.01, f"  the media player says 50 % ({mp_state[-1].volume if mp_state else None})")
         snd = await wake_sound_peak(echo, c)
-        want = full * g(30, 70)
+        want = (await full) * g(30, 70)
         check(snd is not None and abs(snd - want) <= 3, f"  sounds still 20 below the music: at 30 ({snd}, want {want:.0f})")
         await c.disconnect()
     finally:
@@ -315,7 +340,7 @@ async def main():
     check("separate_volumes=on" in text and echo.music_file() == "50", "  (before: separate in state/config, music 50 in its file)")
     with open(cfg_path, "w") as f: f.write(text.replace("separate_volumes=on", "separate_volumes=off"))
     echo.prop("MainVolume", 30); echo.prop("TTSVolume", 30)
-    echo = Echo(None, again=echo)
+    echo = Echo(4, None, again=echo)
     try:
         c = await echo.connect()
         mp_state = [x for x in echo.states if hasattr(x, "volume")]
@@ -327,7 +352,7 @@ async def main():
     # the setting given twice, the last line on (added by hand): what loading ends up with decides, the file counts
     with open(cfg_path, "a") as f: f.write("separate_volumes=on\n")
     with open(os.path.join(echo.state, "volume.music"), "w") as f: f.write("45\n")
-    echo = Echo(None, again=echo)
+    echo = Echo(4, None, again=echo)
     try:
         c = await echo.connect()
         mp_state = [x for x in echo.states if hasattr(x, "volume")]
@@ -338,7 +363,7 @@ async def main():
         echo.stop()
     # a last line loading refuses changes nothing: still separate, the file still counts
     with open(cfg_path, "a") as f: f.write("separate_volumes=yes\n")
-    echo = Echo(None, again=echo)
+    echo = Echo(4, None, again=echo)
     try:
         c = await echo.connect()
         mp_state = [x for x in echo.states if hasattr(x, "volume")]
@@ -348,9 +373,12 @@ async def main():
     finally:
         echo.stop()
 
+
+async def part_speaker(url, full):
+    gain = lambda what: float(re.findall(rf"audio: {what} gain ([0-9.]+)", echo.text())[-1]) if f"{what} gain" in echo.text() else 1.0
     # A Bluetooth speaker (absolute volume) at 70, then separate volumes switched on on the page: what the Echo's own
     # speaker had (40) is the music volume and where the others start, never the speaker's 70
-    echo = Echo("")
+    echo = Echo(5, "")
     try:
         c = await echo.connect()
         b = echo.page()
@@ -405,6 +433,23 @@ async def main():
         await c2.disconnect()
     finally:
         echo.stop()
+
+async def main():
+    httpd = ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{HTTP_PORT}/a.wav"
+
+    full = asyncio.get_running_loop().create_future()          # the wake sound at full level: part "off" measures it
+    async def part(f):
+        lines = []; out.set(lines)
+        try: await f(url, full)
+        except Exception:
+            lines.append("FAIL " + traceback.format_exc().rstrip().replace("\n", "\n     ")); check.failed = True
+        finally:
+            if f is part_off and not full.done(): full.set_result(None)       # failed before: the others fail, not wait
+        return lines
+    for lines in await asyncio.gather(*(part(f) for f in (part_off, part_separate, part_linked, part_imported, part_restart, part_speaker))):
+        print("\n".join(lines))
 
     httpd.shutdown()
     print("FAIL" if check.failed else "PASS")
