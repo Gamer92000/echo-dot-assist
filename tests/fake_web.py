@@ -4,7 +4,7 @@ X25519 and BLAKE2b from Python's libraries, not web/crypto.js), plus Home Assist
 Echo.  Login by the action button (SIGUSR2), signed reads and writes, replays and forged signatures, two logins at once,
 export and import, the settings file from before names, the speaker gain, features (entities in Home Assistant only while on), adb with
 a press of its own, revoking."""
-import asyncio, gzip, json, os, re, signal, subprocess, sys, tempfile
+import asyncio, gzip, json, os, re, signal, subprocess, sys, tempfile, time
 from aioesphomeapi import APIClient
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webclient import Browser, req
@@ -17,6 +17,13 @@ def check(cond, what):
     print(("ok   " if cond else "FAIL ") + what)
     if not cond: check.failed = True
 check.failed = False
+
+
+async def until(cond, secs=5):
+    """cond() polled until true or secs passed: on a loaded machine (every test at once, tests/run.py) hassmic's file
+    writes and its log, which comes through a reader process, can trail the answer by more than a fixed sleep"""
+    end = time.monotonic() + secs
+    while not cond() and time.monotonic() < end: await asyncio.sleep(0.05)
 
 
 async def ha_connect():
@@ -67,7 +74,7 @@ async def main():
 
         check(b.call("GET", "/api/state")[0] == 401, "not logged in: no state")
         check(b.login() == "waiting" and b.login() == "waiting", "login waits for the button")
-        proc.send_signal(signal.SIGUSR2); await asyncio.sleep(0.5)                     # the action button
+        proc.send_signal(signal.SIGUSR2); await until(lambda: "login approved" in open(log).read())    # the action button
         check(b.login() == "approved" and "login approved" in open(log).read(), "the action button approved it")
         # the log viewer: signed, the Sendspin pairing token blanked (the page is plain HTTP)
         with open(log + ".1", "w") as f: f.write("== log rotated\nsendspin: pairing token SP:0ABCDEF234567\n")
@@ -94,7 +101,7 @@ async def main():
               f"Home Assistant lists the lean set only: {sorted(set(by))}")
         check("sound" in by and "last_request_whispered" in by and "arbitration_peers" in by and "arbitration_key" in by,
               "features that are on: their entities (sound, whisper, arbitration)")
-        r = b.set(mic_level=-30, wake_sound="off"); await asyncio.sleep(0.5)
+        r = b.set(mic_level=-30, wake_sound="off"); await until(lambda: states.get(by["wake_sound"].key) is False)
         check(r.get("applied") == 2 and cfg().get("mic_level") == "-30" and cfg().get("wake_sound") == "off", f"set two, saved: {r}")
         check(states.get(by["wake_sound"].key) is False, f"Home Assistant shows it at once: {states.get(by['wake_sound'].key)}")
         r = b.set(mic_level=5, nope=1, noise_reduction="loud")
@@ -102,7 +109,7 @@ async def main():
 
         # a feature off: Home Assistant is sent away and its entities are gone when it comes back; on again: back
         lost = asyncio.Event(); ha.set_on_stop = None
-        r = b.set(sound_detection="off"); await asyncio.sleep(0.8)
+        r = b.set(sound_detection="off"); await until(lambda: "entities changed: links closed" in open(log).read())
         check(r.get("applied") == 1 and "entities changed: links closed" in open(log).read(), "a feature switched: the link to Home Assistant closed")
         try: await ha.disconnect()
         except Exception: pass
@@ -123,7 +130,8 @@ async def main():
         open(mf, "w").write("newer\n")
         check(b.state()["sound"]["model"] == "newer", "Amazon's newer model installed: the page names it")
         open(mf, "w").write("broken\n")
-        b.set(sound_detection="off"); await asyncio.sleep(0.5); b.set(sound_detection="on"); await asyncio.sleep(1.5)
+        b.set(sound_detection="off"); await asyncio.sleep(0.5); b.set(sound_detection="on")
+        await until(lambda: b.state()["sound"]["failed"] and "model did not load), switched off" in open(log).read())
         st = b.state(); on = next(x["value"] for x in st["settings"] if x["name"] == "sound_detection")
         check(st["sound"]["failed"] and on == 0 and cfg().get("sound_detection") == "off" and any("could not start" in w for w in st["warnings"])
               and "model did not load), switched off" in open(log).read(),
@@ -133,7 +141,7 @@ async def main():
         ha, by, states = await ha_connect()
         check("sound" not in by, "...and Home Assistant no longer lists \"Sound\"")
         open(mf, "w").write("firmware\n")
-        b.set(sound_detection="on"); await asyncio.sleep(1.5)
+        b.set(sound_detection="on"); await until(lambda: not b.state()["sound"]["failed"] and cfg().get("sound_detection") == "on")
         st = b.state()
         check(not st["sound"]["failed"] and not any("could not start" in w for w in st["warnings"]) and cfg().get("sound_detection") == "on",
               "it loads again: on, the warning gone")
@@ -146,17 +154,17 @@ async def main():
         g = next((x for x in b.state()["settings"] if x["name"] == "speaker_gain"), {})
         check(g.get("group") == "Sound" and g.get("value") == 0 and (g.get("min"), g.get("max")) == (0, 12) and not g.get("export")
               and ctl() == "6", f"speaker gain on the page: +0 dB, up to +12, not exported; the control left at stock: {g}")
-        r = b.set(speaker_gain=6); await asyncio.sleep(0.3)
+        r = b.set(speaker_gain=6); await until(lambda: ctl() == "12")
         check(r.get("applied") == 1 and ctl() == "12" and cfg().get("speaker_gain") == "6", "+6 dB: the control at 12, saved")
-        open(spk, "w").write("6\n"); await asyncio.sleep(0.6)
+        open(spk, "w").write("6\n"); await until(lambda: ctl() == "12" and "speaker gain: +6 dB (fake 12, was 6)" in open(log).read())
         check(ctl() == "12" and "speaker gain: +6 dB (fake 12, was 6)" in open(log).read(), "the HAL's speaker path put stock back: set again")
         open(spk, "w").write("11\n"); await asyncio.sleep(0.6)
         check(ctl() == "11", "the 3.5 mm jack's level (11): left alone")
-        open(spk, "w").write("6\n"); await asyncio.sleep(0.6)
+        open(spk, "w").write("6\n"); await until(lambda: ctl() == "12")
         check(ctl() == "12", "back on the speaker: +6 dB again")
         r = b.set(speaker_gain=13)
         check(r["applied"] == 0 and ctl() == "12", f"+13 dB: out of range, refused: {r['errors']!r}")
-        b.set(speaker_gain=0); await asyncio.sleep(0.6)
+        b.set(speaker_gain=0); await until(lambda: ctl() == "6")
         check(ctl() == "6" and cfg().get("speaker_gain") == "0", "+0 dB: stock again")
 
         # signatures
@@ -173,7 +181,7 @@ async def main():
         adb_req = os.path.join(state, "adb-request")
         r = json.loads(b.call("POST", "/api/adb", b"on")[2])
         check(r["adb"] == "waiting" and not os.path.exists(adb_req) and b.state()["adb"]["waiting"], "adb asked: waits for the button, nothing asked of root yet")
-        proc.send_signal(signal.SIGUSR2); await asyncio.sleep(0.6)
+        proc.send_signal(signal.SIGUSR2); await until(lambda: os.path.exists(adb_req) and "adb over Wi-Fi approved with the button" in open(log).read())
         check(os.path.exists(adb_req) and "adb over Wi-Fi approved with the button" in open(log).read(), "the button: root asked to open adb")
         b.call("POST", "/api/adb", b"off"); await asyncio.sleep(0.3)
         check(not os.path.exists(adb_req) or open(adb_req).read().strip() in ("0", "close", ""), "closed again")
@@ -204,13 +212,13 @@ async def main():
         # identify (main.c core_identify): from the page, and Home Assistant's button
         check(rq("POST", "/api/identify")[0] == 401, "identify: unsigned refused")
         st, _, body = b.call("POST", "/api/identify")
-        await asyncio.sleep(0.3)
+        await until(lambda: open(log).read().count("identify: rainbow") == 1)
         check(st == 200 and json.loads(body).get("identify") is True and open(log).read().count("identify: rainbow") == 1, "identify from the page")
         ha2, by2, _ = await ha_connect()
         btn = by2.get("identify")
         check(btn is not None and btn.device_class == "identify" and int(btn.entity_category) == 2, "Home Assistant: an Identify button (diagnostic)")
         if btn is not None:
-            ha2.button_command(btn.key); await asyncio.sleep(0.4)
+            ha2.button_command(btn.key); await until(lambda: open(log).read().count("identify: rainbow") == 2)
             check(open(log).read().count("identify: rainbow") == 2, "pressed in Home Assistant: identifies")
 
         # restart (main.c core_reboot): root reboots on state/reboot (main.sh ota_watch)
@@ -218,12 +226,13 @@ async def main():
         check(rq("POST", "/api/reboot", b"reboot")[0] == 401 and not os.path.exists(rb), "reboot: unsigned refused")
         check(b.call("POST", "/api/reboot", b"yes")[0] == 400 and not os.path.exists(rb), "reboot: only with the body \"reboot\"")
         st, _, body = b.call("POST", "/api/reboot", b"reboot")
+        await until(lambda: os.path.exists(rb))       # the answer goes out first (web.c), the request to root right after it
         check(st == 200 and json.loads(body).get("reboot") is True and open(rb).read() == "settings page\n", "reboot from the page: root asked")
         os.remove(rb)
         rbtn = by2.get("restart")
         check(rbtn is not None and rbtn.device_class == "restart" and int(rbtn.entity_category) == 1, "Home Assistant: a Restart button (configuration)")
         if rbtn is not None:
-            ha2.button_command(rbtn.key); await asyncio.sleep(0.4)
+            ha2.button_command(rbtn.key); await until(lambda: os.path.exists(rb))
             check(os.path.exists(rb) and open(rb).read() == "Home Assistant's button\n", "pressed in Home Assistant: root asked to reboot")
             if os.path.exists(rb): os.remove(rb)
         try: await ha2.disconnect()

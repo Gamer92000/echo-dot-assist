@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 static atomic_uint seq;
+static atomic_char busy[100];                       /* temp numbers of the writes in flight */
 
 int statefile_sync(const char *path)
 {
@@ -36,18 +37,27 @@ static int sync_parent(const char *path)
     return statefile_sync(d);
 }
 
+static void release(struct statefile *s) { if (s->slot >= 0) atomic_store(&busy[s->slot], 0); s->slot = -1; }
+
 int statefile_open(struct statefile *s, const char *path, mode_t mode)
 {
     int fd;
-    s->f = NULL;
+    s->f = NULL; s->slot = -1;
     if (snprintf(s->path, sizeof s->path, "%s", path) >= (int)sizeof s->path) { errno = ENAMETOOLONG; return -1; }
     /* a temp name per write: two threads writing one file (adbwifi_ask from the page, the push port and Home Assistant)
      * each rename their own complete file; with one name, one would unlink the other's and rename it before it holds
-     * anything.  One of a reset stays behind and is reused when the number comes round again. */
-    snprintf(s->tmp, sizeof s->tmp, "%s.tmp%u", path, atomic_fetch_add(&seq, 1) % 100);
+     * anything.  One of a reset stays behind and is reused when the number comes round again.  A number still in
+     * flight is skipped: a writer held up for 100 others' writes (two threads, one CPU busy elsewhere: statefile_test
+     * under tests/run.py) had its temp file unlinked and its rename find another's. */
+    for (int i = 0; i < 100 && s->slot < 0; i++) {
+        int n = (int)(atomic_fetch_add(&seq, 1) % 100);
+        if (!atomic_exchange(&busy[n], 1)) s->slot = n;
+    }
+    if (s->slot < 0) { errno = EAGAIN; return -1; }
+    snprintf(s->tmp, sizeof s->tmp, "%s.tmp%d", path, s->slot);
     unlink(s->tmp);                                 /* a fresh file, never one a link points elsewhere */
-    if ((fd = open(s->tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode)) < 0) return -1;
-    if (!(s->f = fdopen(fd, "w"))) { close(fd); unlink(s->tmp); return -1; }
+    if ((fd = open(s->tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode)) < 0) { release(s); return -1; }
+    if (!(s->f = fdopen(fd, "w"))) { close(fd); unlink(s->tmp); release(s); return -1; }
     return 0;
 }
 
@@ -56,7 +66,8 @@ int statefile_commit(struct statefile *s)
     int bad = ferror(s->f) || fflush(s->f) || fsync(fileno(s->f));
     if (fclose(s->f)) bad = 1;
     s->f = NULL;
-    if (bad || rename(s->tmp, s->path)) { unlink(s->tmp); return -1; }
+    if (bad || rename(s->tmp, s->path)) { unlink(s->tmp); release(s); return -1; }
+    release(s);
     sync_parent(s->path);                           /* the new name; a failure here leaves the old file or the new one */
     return 0;
 }
@@ -66,6 +77,7 @@ void statefile_abort(struct statefile *s)
     if (s->f) fclose(s->f);
     s->f = NULL;
     unlink(s->tmp);
+    release(s);
 }
 
 int statefile_write(const char *path, mode_t mode, const void *data, size_t len)

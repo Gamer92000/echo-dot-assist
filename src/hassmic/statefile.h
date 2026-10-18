@@ -5,10 +5,10 @@
 #include <stdio.h>
 #include <sys/types.h>
 
-struct statefile { FILE *f; char path[320], tmp[330]; };
+struct statefile { FILE *f; char path[320], tmp[330]; int slot; };
 
-/* Opens PATH.tmp<n> (n 0..99, one per write in flight) for writing with MODE (before the umask; 0666 = as fopen),
- * into s->f.  0, or -1 (errno set). */
+/* Opens PATH.tmp<n> (n 0..99, none in use by another write in flight) for writing with MODE (before the umask; 0666 =
+ * as fopen), into s->f.  0, or -1 (errno set; EAGAIN: 100 writes in flight). */
 int statefile_open(struct statefile *s, const char *path, mode_t mode);
 /* Puts what was written to s->f on the flash, then under the real name, then the name on the flash.  Always closes
  * s->f; on failure the temp file is gone and the old file stays.  0, or -1. */

@@ -190,6 +190,18 @@ def start_amazon():
 
 # ---------------------------------------------------------------- the Echo
 
+def fake_hal():
+    """the attestation HAL's stand-in (tests/unit/dha_hal_fake.c), built here: make unit's build/dha_hal_fake.so may not
+    be there yet, and tests/run.py has make unit write it while this test's Echos load it"""
+    so = os.path.join(tempfile.mkdtemp(), "dha_hal_fake.so")
+    subprocess.run(["cc", "-O2", "-Wall", f"-I{ROOT}/src/hassmic", f"-I{ROOT}/src/include", "-include", "stdlib.h",
+                    f"{ROOT}/tests/unit/dha_hal_fake.c", "-shared", "-fPIC", "-o", so], check=True)
+    return so
+
+
+HAL = fake_hal()
+
+
 class Echo:
     def __init__(self, name, port, with_dha=True, v3=False):
         self.name, self.web, self.api = name, port, port + 100
@@ -210,7 +222,7 @@ class Echo:
                         HASSMIC_IDME=self.idme, HASSMIC_DAVS_API=f"http://127.0.0.1:{PORT}",
                         HASSMIC_FAKE_WAKE_ATTRS='{"wakeword_ecids":[1,2,3],"aed_ecids":[7]}')
         if with_dha:
-            self.env["HASSMIC_DHA_HAL"] = f"{ROOT}/build/dha_hal_fake.so"
+            self.env["HASSMIC_DHA_HAL"] = HAL
             if v3:
                 self.env["DHA_FAKE_V3"] = "1"                              # donut's HAL: the EC key and its certificate
                 self.env["DHA_FAKE_DSN"] = V3_SN                           # its own serial, as a real HAL has it
