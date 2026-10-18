@@ -61,7 +61,9 @@ make unit                                         # C unit tests; microWakeWord 
 .venv/bin/python tests/blueprint_dropin.py        # the Drop In blueprint against stand-ins of Home Assistant's registries,
                                                  # states, actions and template engine (also in make unit)
 .venv/bin/python tests/fake_ha_esphome.py         # ESPHome native API, as Home Assistant (aioesphomeapi)
-.venv/bin/python tests/fake_ha_arbitration.py     # two Echos + Home Assistant + an unknown device: wake word arbitration
+.venv/bin/python tests/fake_ha_arbitration.py     # two Echos + Home Assistant + an unknown device: wake word arbitration: merge, forger,
+                                                 # pairing; _join.py (tags, action, crash), _rounds.py, _kiosk.py, _window.py;
+                                                 # shared tests/arbecho.py (the network's pace at 0.1: HASSMIC_ARB_SCALE)
 .venv/bin/python tests/fake_ha_dropin.py          # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer,
                                                  # the ringtone at the sounds volume (HASSMIC_EARCONS: stand-in stock sounds)
 .venv/bin/python tests/ha_real_dropin.py --setup  # once: build/ha-venv, Home Assistant (pinned) and what its integrations need

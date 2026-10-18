@@ -141,33 +141,38 @@
  * (the spread seen, -17..+59 ms) before its decision.  Copies carry the same counter: receivers drop all but the first */
 static const int COPY_MS[] = { 30, 80 };
 #define LOOKBACK_MS  1000       /* claims this much older than our own detection still count: the engines report late by different amounts */
+/* The network's own pace (beacons, discovery, tags, key handoff, pairing) below, in PACE(): tests run it faster
+ * (HASSMIC_ARB_SCALE=0.1: a tenth of each time), where the real one has them wait out half a minute per step.  Rounds,
+ * the window and the rate limits keep their real times whatever it says: the tests measure those.  Read in arb_start */
+static long long pace = 1000;                          /* per mille */
+#define PACE(ms) ((long long)(ms) * pace / 1000)
 /* Beacons are broadcasts too, and an Echo misses 10-30 % of those (ble.c: the BLE scan's share of the antenna, plus what
  * Wi-Fi loses anyway).  At a fixed 30 s one Echo's beacons fell into the gaps two times in three, at both others, for
  * as long as we watched: it was out of their networks (their rounds, the settings page's list) for 15 s every 90 s
  * (2026-10-07, while a wired PC got every one).  A random interval keeps a sender from staying in such a phase, and a
  * member counts until it has been silent for 5 min, about ten beacons: an Echo that is really gone (unplugged) stays
  * in the list that long, and the others wait out the window for its claim in that time */
-#define BEACON_MIN_MS 20000
-#define BEACON_MAX_MS 40000
-#define LONER_MS     10000      /* beacon interval outside a network; members answer such a beacon at once */
+#define BEACON_MIN_MS PACE(20000)
+#define BEACON_MAX_MS PACE(40000)
+#define LONER_MS PACE(10000)        /* beacon interval outside a network; members answer such a beacon at once */
 /* ...but at most one a second (answer_at), and broadcasts get lost: in its first DISCOVER_MS an Echo outside a network
  * asks every LOOK_MS, or one missed answer had it start a network of its own beside the existing one */
-#define LOOK_MS      1200
-#define PEER_TTL_MS  300000     /* a member not heard of for this long no longer counts */
-#define DISCOVER_MS  5000       /* no member heard in this time: start a network */
-#define PUSH_MS      30000      /* hand our key to the same Echo at most this often */
+#define LOOK_MS PACE(1200)
+#define PEER_TTL_MS PACE(300000)    /* a member not heard of for this long no longer counts */
+#define DISCOVER_MS PACE(5000)      /* no member heard in this time: start a network */
+#define PUSH_MS PACE(30000)         /* hand our key to the same Echo at most this often */
 #define CTR_BLOCK    4096
-#define POLL_MS      3000       /* ask Home Assistant again for an Echo's tag, until it confirms the key */
-#define SCAN_MS      10000      /* scan our tag this often while another Echo may be waiting for it to change... */
+#define POLL_MS PACE(3000)          /* ask Home Assistant again for an Echo's tag, until it confirms the key */
+#define SCAN_MS PACE(10000)         /* scan our tag this often while another Echo may be waiting for it to change... */
 #define SCAN_N       12         /* ...this many times in a row, then every SCAN_SLOW_MS (an Echo HA never confirms, a
                                  * forger's beacons: no endless stream of scans in HA's logbook) */
-#define SCAN_SLOW_MS 300000
-#define GIVE_MS      5000       /* hand K on the LAN to an Echo HA confirmed this often, until it is in */
-#define ATTEST_WAIT_MS 30000    /* no tag confirmed for a newcomer by then: hand K through its action instead.  A tag
-                                 * takes a read, a scan (within SCAN_MS) and a read again; the action would raise a
-                                 * repair in HA for every owner who did not allow it */
-#define PAIR_MS      120000     /* the pairing gesture's window, and how far back a member looks for requests */
-#define PAIR_SETTLE_MS 2000     /* a member waits this long after its press for a second requester */
+#define SCAN_SLOW_MS PACE(300000)
+#define GIVE_MS PACE(5000)          /* hand K on the LAN to an Echo HA confirmed this often, until it is in */
+#define ATTEST_WAIT_MS PACE(30000)  /* no tag confirmed for a newcomer by then: hand K through its action instead.  A tag
+                                    * takes a read, a scan (within SCAN_MS) and a read again; the action would raise a
+                                    * repair in HA for every owner who did not allow it */
+#define PAIR_MS PACE(120000)        /* the pairing gesture's window, and how far back a member looks for requests */
+#define PAIR_SETTLE_MS PACE(2000)   /* a member waits this long after its press for a second requester */
 #define NPEER  16
 #define NCLAIM 16
 #define NLEN   64
@@ -196,7 +201,7 @@ static uint64_t net_id;
 static uint8_t net_key[32], mac_key[32];
 static uint64_t ctr, ctr_saved;
 static int ctr_known;                                  /* the state file had a counter */
-static long long started, beacon_at, answer_at, beacon_gap = BEACON_MIN_MS, hello_until;
+static long long started, beacon_at, answer_at, beacon_gap, hello_until;
 static int reported_peers = -1;
 static atomic_int notify;
 
@@ -1049,7 +1054,7 @@ int arb_pair(void)
     pthread_mutex_lock(&lk);
     if (!running) { pthread_mutex_unlock(&lk); return -1; }
     pair_at = now; pair_until = now + PAIR_MS; pair_sent = 0; pair_gave = 0;
-    fprintf(stderr, "arbitration: pairing for %d s (%s)\n", PAIR_MS / 1000, in_net ? "a member: hands its network to the one Echo that asks"
+    fprintf(stderr, "arbitration: pairing for %d s (%s)\n", (int)(PAIR_MS / 1000), in_net ? "a member: hands its network to the one Echo that asks"
                                                                                     : "looking for a member to take a network from");
     atomic_store(&pair_event, 1);
     pthread_mutex_unlock(&lk);
@@ -1309,7 +1314,9 @@ int arb_peers(void) { pthread_mutex_lock(&lk); int n = running ? count_peers(now
 int arb_start(int port, const char *nd, const struct arb_hooks *h)
 {
     int on = 1; struct sockaddr_in a; const char *addr = getenv("HASSMIC_ARB_ADDR");   /* tests: 127.255.255.255 */
-    pthread_t t;
+    pthread_t t; const char *sc = getenv("HASSMIC_ARB_SCALE");
+    if (sc && atof(sc) > 0) pace = (long long)(atof(sc) * 1000 + 0.5);
+    beacon_gap = BEACON_MIN_MS;
     snprintf(node, sizeof node, "%s", nd); hooks = h;
     load();
     if (identity(!ctr_known)) return -1;

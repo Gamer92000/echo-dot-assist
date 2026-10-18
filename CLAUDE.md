@@ -41,6 +41,7 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # build/test-logs/, printed for those that fail; -l lists the names
 .venv/bin/python tests/fake_ha_esphome.py     # ESPHome native API, as Home Assistant
 .venv/bin/python tests/fake_ha_arbitration.py # two Echos under one fake HA: wake word arbitration, join paths and security
+                                             # (_join, _rounds, _kiosk, _window.py beside it; tests/arbecho.py)
 .venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer,
                                              # the ringtone at the sounds volume (HASSMIC_EARCONS: stand-in stock sounds)
 .venv/bin/python tests/blueprint_dropin.py    # the Drop In voice blueprint against stand-ins of HA's registries, states,
@@ -216,7 +217,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `arbitration_mode` (`arb_mode`, in `state/config`): `hassmic` (default, the above) or `kiosk`: Kiosk Satellite's
   protocol reimplemented from `docs/kiosk-arbitration.md` (JSON claims on UDP 2330, three copies, loudness only from
   `main.c` `kiosk_score` + `arbitration_offset` dB, `arbitration_window` ±ms, no key, no priority, always waits); the beacon flags it (1 quiet +
-  2 kiosk). The socket belongs to arb's loop thread. Page: two cards with pros and cons (`HELP.arbitration_mode.modes`).
+  2 kiosk). The socket belongs to arb's loop thread. `HASSMIC_ARB_SCALE` (tests, `PACE()`): the network's own timers
+  (beacons, discovery, tags, handoff, pairing) at that fraction; rounds and the window keep theirs. Page: two cards with pros and cons (`HELP.arbitration_mode.modes`).
 - **Music**: `sendspin.c` (Music Assistant Sendspin player over `ws.c`/`noise.c`/`net.c`/`hash.c`, decodes via
   `dr_flac`/`minimp3`/libopus). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
   loaded with dlopen, aptX/aptX HD via `freeaptx`) with AVRCP. Only one music source plays at a time (newest wins).

@@ -18,6 +18,10 @@ PY = os.path.join(ROOT, ".venv", "bin", "python")
 # slowest first: with fewer slots than tests the long ones must not start last
 TESTS = [
     ("arbitration", [PY, "tests/fake_ha_arbitration.py"]),
+    ("arb-window", [PY, "tests/fake_ha_arbitration_window.py"]),
+    ("arb-kiosk", [PY, "tests/fake_ha_arbitration_kiosk.py"]),
+    ("arb-rounds", [PY, "tests/fake_ha_arbitration_rounds.py"]),
+    ("arb-join", [PY, "tests/fake_ha_arbitration_join.py"]),
     ("esphome", [PY, "tests/fake_ha_esphome.py"]),
     ("sendspin", [PY, "tests/fake_ma_sendspin.py"]),
     ("wifi", [PY, "tests/fake_web_wifi.py"]),
