@@ -46,7 +46,8 @@ class Echo:
         self.env = dict(os.environ, HASSMIC_STATE=self.state, HASSMIC_PLAY=os.path.join(self.state, "play.raw"), HASSMIC_VOIP=self.voip,
                         HASSMIC_MDNS_FILE=os.path.join(self.state, "none"), HASSMIC_ARB_ADDR=BCAST, HASSMIC_TEST_SCORE="500",
                         HASSMIC_MODELS=os.path.join(self.state, "models"), HASSMIC_EARCONS=EARCONS + "/",
-                        HASSMIC_DROPIN_TIMES="2000 2000")       # no answer after 2 s, lost after 2 s without audio (4 and 5)
+                        HASSMIC_DROPIN_TIMES="3000 4000")       # no answer after 3 s, lost after 4 s without audio (4 and 5): near
+                                                                # the Echo's, so a stall of the PC under load does not end a call
         if speech: self.env["HASSMIC_CAP"] = SPEECH
         self.states, self.starts, self.seq = {}, [], []     # seq: (object id, state or event type) as they came
 
@@ -260,11 +261,11 @@ async def main():
         await a.call(b.node)
         check(await until(lambda: a.results()[-1:] == ["busy_here"], 1) and a.dropin()[0] == "connected", f"a second call during it: result {a.results()[-1:]}")
         b.proc.kill(); b.proc.wait()
-        check(await until(lambda: a.dropin()[0] == "idle", 8), "a vanished Echo ends the call (no audio for 2 s here, 5 on the Echo)")
-        check("lost: no audio for 2 s" in a.text(), "the log says it was lost")
+        check(await until(lambda: a.dropin()[0] == "idle", 10), "a vanished Echo ends the call (no audio for 4 s here, 5 on the Echo)")
+        check("lost: no audio for 4 s" in a.text(), "the log says it was lost")
         mark, t0 = len(a.seq), time.monotonic()
         await a.call(b.node)                           # still a member (5 min): nobody answers
-        check(await until(lambda: a.results()[-1:] == ["no_answer"], 6) and 1.9 < time.monotonic() - t0 < 3.5,
+        check(await until(lambda: a.results()[-1:] == ["no_answer"], 7) and 2.9 < time.monotonic() - t0 < 4.5,
               f"  called again: result no_answer after {time.monotonic() - t0:.1f} s, states {[v for o, v in a.seq[mark:] if o == 'drop_in']}")
         check(not re.search(r"drop in: send: ", a.text()), "no send errors on the way")
     finally:

@@ -34,6 +34,13 @@ def upload(b, mid, model, manifest=None):
     return st, json.loads(body)
 
 
+async def logged(log, text, n0=0, secs=5):
+    """text in hassmic's log after offset n0, waited for: the log comes through its reader process (clock.c), which
+    under load writes a line after what the line tells of has reached Home Assistant or the page"""
+    end = time.monotonic() + secs
+    while text not in open(log).read()[n0:] and time.monotonic() < end: await asyncio.sleep(0.05)
+
+
 def mww(b):
     st, _, body = b.call("GET", "/api/mww")
     return json.loads(body) if st == 200 else {}
@@ -102,6 +109,7 @@ async def main():
 
         n0 = len(open(log).read())
         r = b.set(wake_engine="microwakeword"); await asyncio.sleep(1.0)
+        await logged(log, "engine now microWakeWord", n0); await logged(log, "links closed", n0)
         check(r.get("applied") == 1 and cfg().get("wake_engine") == "microwakeword" and "engine now microWakeWord" in open(log).read()[n0:],
               f"the engine switched, saved: {r}")
         check("links closed" in open(log).read()[n0:], "Home Assistant sent away to read the new list")
@@ -112,6 +120,7 @@ async def main():
         ha.subscribe_voice_assistant(handle_start=handle_start, handle_stop=nothing, handle_audio=nothing)
         try: await asyncio.wait_for(started.wait(), 25)
         except asyncio.TimeoutError: pass
+        await logged(log, "(microwakeword, mean")
         check(started.is_set() and phrases[-1] == "Alexa" and "(microwakeword, mean" in open(log).read(),
               f"\"Alexa\" in the audio heard by microWakeWord: a pipeline for Home Assistant ({phrases})")
 
@@ -126,6 +135,7 @@ async def main():
         st, _, body = b.call("POST", "/api/mww/edit/alexa", b"cutoff=1.5\n")
         check(st == 400 and "cutoff" in json.loads(body)["error"], "a cutoff out of range: refused")
         st, _, body = b.call("POST", "/api/mww/use/hey_jarvis"); await asyncio.sleep(1.0)
+        await logged(log, "microwakeword: \"Hey Jarvis\" loaded")
         check(st == 200 and mww(b)["active"] == "hey_jarvis" and open(os.path.join(state, "mww_word")).read().strip() == "hey_jarvis"
               and "microwakeword: \"Hey Jarvis\" loaded" in open(log).read(), "picked on the page: active, kept, loaded")
         try: await ha.disconnect()
@@ -147,12 +157,13 @@ async def main():
         ha.subscribe_voice_assistant(handle_start=handle_start, handle_stop=nothing, handle_audio=nothing)
         try: await asyncio.wait_for(started.wait(), 25)
         except asyncio.TimeoutError: pass
+        await logged(log, "wake: Computer Alexa (microwakeword, mean", n0)
         tail = open(log).read()[n0:]
         check(started.is_set() and phrases[-1] == "Computer Alexa" and "wake: Computer Alexa (microwakeword, mean" in tail and ", second wake word)" in tail
               and "wake: Hey Jarvis" not in tail, f"\"Alexa\" heard by the second one: its run names it ({phrases})")
         ha.send_voice_assistant_event(VoiceAssistantEventType.VOICE_ASSISTANT_RUN_END, None)
         st, _, body = b.call("POST", "/api/mww/edit/hey_jarvis", b"cutoff=0.96\n"); await asyncio.sleep(0.8)
-        m = mww(b)
+        await logged(log, "wake word: second \"Computer Alexa\"", n0); m = mww(b)
         check(st == 200 and m["active"] == "hey_jarvis" and m["second"] == "alexa" and "wake word: second \"Computer Alexa\"" in open(log).read()[n0:],
               f"a model changed: the list read anew, both still listening: {m['active']}, {m['second']}")
         try: await ha.disconnect()
@@ -199,12 +210,13 @@ async def main():
         proc.send_signal(signal.SIGTERM); proc.wait(5)
         n0 = len(open(log).read())
         proc = start(state, log); await asyncio.sleep(1.0)
+        await logged(log, "(en, microWakeWord), active", n0)
         tail = open(log).read()[n0:]
         check("microwakeword: \"Hey Jarvis\" loaded" in tail and "(en, microWakeWord), active" in tail and "wake word: now" not in tail,
               "restarted: microWakeWord's pick loaded from the start, no Amazon model before it")
         b = Browser(WEB, b.sk)
         check(b.call("POST", "/api/mww/delete/hey_jarvis")[0] == 200, "deleted the last one")
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(0.8); await logged(log, "back to Amazon's engine")
         m = mww(b)
         check(m["engine"] == "amazon" and m["models"] == [] and cfg().get("wake_engine") == "amazon" and "back to Amazon's engine" in open(log).read(),
               f"no model left: Amazon's engine again, saved: {m}")
@@ -216,7 +228,7 @@ async def main():
         check(r.get("applied") == 1 and cfg().get("wake_engine") == "homeassistant" and open(os.path.join(state, "restart")).read() == "wake word engine\n"
               and mww(b)["engine"] == "homeassistant", f"Home Assistant's wake word: saved, the restart asked of root: {r}")
         n0 = len(open(log).read())
-        proc = restart(proc, state, log); await asyncio.sleep(1.0)
+        proc = restart(proc, state, log); await asyncio.sleep(1.0); await logged(log, ", wake=remote", n0)
         check(", wake=remote" in open(log).read()[n0:], "restarted: the wake word is Home Assistant's (as -w remote)")
         b = Browser(WEB, b.sk)
         ha, avail, active = await ha_config()
@@ -228,7 +240,7 @@ async def main():
         except asyncio.TimeoutError: pass
         check(starts and starts[0][0] & 2, f"the Echo streams at once, Home Assistant to find the wake word (flags {starts[:1]})")
         n0 = len(open(log).read())
-        ha.send_voice_assistant_event(VoiceAssistantEventType.VOICE_ASSISTANT_WAKE_WORD_END, None); await asyncio.sleep(0.5)
+        ha.send_voice_assistant_event(VoiceAssistantEventType.VOICE_ASSISTANT_WAKE_WORD_END, None); await logged(log, "state: idle -> listening", n0)
         check("state: idle -> listening" in open(log).read()[n0:], "Home Assistant heard the wake word: the Echo listens, as on its own wake word")
         r = b.set(wake_engine="microwakeword")
         check(r.get("applied") == 0 and "no microWakeWord model" in r.get("errors", "") and cfg().get("wake_engine") == "homeassistant",
@@ -238,7 +250,7 @@ async def main():
         try: await ha.disconnect()
         except Exception: pass
         n0 = len(open(log).read())
-        proc = restart(proc, state, log); await asyncio.sleep(1.0)
+        proc = restart(proc, state, log); await asyncio.sleep(1.0); await logged(log, ", wake=local", n0)
         check(", wake=local" in open(log).read()[n0:], "restarted: the wake word is the Echo's own again")
 
         # hassmic.conf's -w remote decides: the page cannot switch it
