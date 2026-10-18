@@ -7,7 +7,7 @@ as root would, and found after a restart."""
 import hashlib, json, os, shutil, signal, stat, subprocess, sys, tempfile, time
 from urllib.parse import quote
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from webclient import Browser
+from webclient import wait_port, Browser
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHUNK = 192 * 1024
@@ -36,7 +36,7 @@ class Echo:
     def start(self):
         self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.port), "-n", self.name, "-L",
                                       "-z", "0", "-o", "0", "-a", "0", "-W", str(self.web)], env=self.env, stderr=open(self.log, "a"))
-        time.sleep(0.6)
+        wait_port(self.port, self.web)
 
     def stop(self): self.proc.terminate(); self.proc.wait()
 

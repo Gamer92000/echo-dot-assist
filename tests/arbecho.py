@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
-from webclient import Browser
+from webclient import wait_port, Browser
 ARB, KIOSK, BCAST = 28990, 28991, "127.255.255.255"          # KIOSK: stands in for Kiosk Satellite's 2330
 SCALE = 0.1
 def pace(secs): return secs * SCALE                          # one of arb.c's PACE() times, in s here
@@ -59,6 +59,7 @@ class Echo:
     def start(self):
         self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.port), "-n", self.name, "-L",
                                       "-z", "0", "-o", "0", "-a", str(ARB), "-W", str(self.web)], env=self.env, stderr=open(self.log, "a"))
+        wait_port(self.port, self.web)
 
     def text(self): return open(self.log).read()
     def net(self):

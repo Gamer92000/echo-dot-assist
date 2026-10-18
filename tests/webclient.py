@@ -12,6 +12,17 @@ def req(port, method, path, body=b"", headers=None):
     return r.status, dict(r.getheaders()), data
 
 
+def wait_port(*ports, secs=20):
+    """until each port takes a connection: a hassmic just started binds them within ~0.3 s, but with every test starting
+    at once (tests/run.py on CI's four CPUs) it took more than the 0.6 s the tests used to sleep"""
+    import socket
+    end = time.monotonic() + secs
+    for p in ports:
+        while time.monotonic() < end:
+            try: socket.create_connection(("127.0.0.1", p), 0.2).close(); break
+            except OSError: time.sleep(0.05)
+
+
 class Browser:
     def __init__(self, port, sk=None):
         self.port = port

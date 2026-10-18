@@ -12,6 +12,8 @@ from aiosendspin.models.types import PairMethod, MediaCommand
 from aiosendspin.server import SendspinServer, AudioFormat, ClientAddedEvent
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tests"))
+from webclient import wait_port
 PORT, PORT2, PORT3 = 16958, 16960, 16963        # the three players' Sendspin ports
 
 
@@ -41,6 +43,7 @@ def player(state, port, http, env):
     log = open(os.path.join(state, "log"), "w+")
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-p", str(http), "-z", str(port), "-L", "-o", "0", "-a", "0", "-W", "0"],
                             env=env, stderr=log)
+    wait_port(port, http)
     def text(): log.seek(0); return log.read()
     return proc, text
 

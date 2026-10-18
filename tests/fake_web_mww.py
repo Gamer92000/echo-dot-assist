@@ -14,7 +14,7 @@ import asyncio, hashlib, json, os, signal, subprocess, sys, tempfile, time
 from aioesphomeapi import APIClient
 import pymicro_wakeword
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from webclient import Browser
+from webclient import wait_port, Browser
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODELS = os.path.join(os.path.dirname(pymicro_wakeword.__file__), "models")
@@ -73,7 +73,7 @@ async def main():
     cfg = lambda: dict(l.strip().split("=", 1) for l in open(os.path.join(state, "config")) if "=" in l and not l.startswith("#"))
     proc = start(state, log)
     try:
-        await asyncio.sleep(0.6)
+        wait_port(PORT, WEB)
         b = Browser(WEB)
         check(b.login_with_button(proc), "logged in with the button")
         m = mww(b)

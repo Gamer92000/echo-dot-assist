@@ -15,6 +15,9 @@ static int fails;
 
 static int ctl(void) { FILE *f = fopen(file, "r"); int v = -1; if (f) { if (fscanf(f, "%d", &v) != 1) v = -1; fclose(f); } return v; }
 static void put(int v) { FILE *f = fopen(file, "w"); if (f) { fprintf(f, "%d\n", v); fclose(f); } }
+/* the control as wanted within 5 s: the thread on the card's events writes it back (on a loaded machine not within a
+ * fixed 0.6 s) */
+static int becomes(int want) { for (int i = 0; i < 100 && ctl() != want; i++) usleep(50000); return ctl() == want; }
 static void check(int ok, const char *shape, const char *what) { printf("%s %s: %s\n", ok ? "ok  " : "FAIL", shape, what); if (!ok) fails++; }
 
 static int shape(const char *name, int stock, int steps, int hi, int top)
@@ -29,12 +32,12 @@ static int shape(const char *name, int stock, int steps, int hi, int top)
     check(spkgain_get() == 1 && ctl() == stock + steps, name, "+1 dB: one dB of steps over stock");
     spkgain_set(top + 5);
     check(spkgain_get() == top && ctl() == stock + top * steps, name, "above the top: the top");
-    put(stock); usleep(600000);
-    check(ctl() == stock + top * steps, name, "stock written by someone else: set again");
+    put(stock);
+    check(becomes(stock + top * steps), name, "stock written by someone else: set again");
     put(stock - 1); usleep(600000);
     check(ctl() == stock - 1, name, "another value: left alone");
-    put(stock); usleep(600000);
-    check(ctl() == stock + top * steps, name, "stock again: set again");
+    put(stock);
+    check(becomes(stock + top * steps), name, "stock again: set again");
     spkgain_set(0);
     check(spkgain_get() == 0 && ctl() == stock, name, "+0 dB: stock");
     put(stock); usleep(600000);

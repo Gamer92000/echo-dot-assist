@@ -7,7 +7,7 @@ a press of its own, revoking."""
 import asyncio, gzip, json, os, re, signal, subprocess, sys, tempfile, time
 from aioesphomeapi import APIClient
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from webclient import Browser, req
+from webclient import wait_port, Browser, req
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT, WEB = 16971, 16972
@@ -52,7 +52,7 @@ async def main():
                              "-a", "16973", "-W", str(WEB)], env=env, stderr=open(log, "w"))
     rq = lambda *a, **k: req(WEB, *a, **k)
     try:
-        await asyncio.sleep(0.6)
+        wait_port(PORT, WEB)
         cfg = lambda: dict(l.strip().split("=", 1) for l in open(os.path.join(state, "config")) if "=" in l and not l.startswith("#"))
         c0 = cfg()
         check(c0.get("noise_reduction") == "medium" and c0.get("mic_level") == "-22" and c0.get("sound_detection") == "on",

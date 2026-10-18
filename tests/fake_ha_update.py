@@ -9,7 +9,7 @@ from aioesphomeapi.model import UpdateInfo, UpdateState, UpdateCommand
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
-from webclient import Browser
+from webclient import wait_port, Browser
 PORT, GH_PORT, WEB = 16963, 16964, 16965
 OTATOOL = f"{ROOT}/build/otatool-host"              # the Echo's, for root's installer
 PCTOOL = [sys.executable, f"{ROOT}/scripts/otatool.py"]    # the PC's, as CI signs releases
@@ -103,7 +103,7 @@ async def main():
                HASSMIC_UPDATE_DOWNLOAD=f"http://127.0.0.1:{GH_PORT}/dl")
     start = lambda: subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-L", "-W", str(WEB)], env=env,
                                      stderr=open(os.path.join(tmp, "log"), "a"))
-    proc = start(); await asyncio.sleep(0.5)
+    proc = start(); wait_port(PORT, WEB)
     try:
         cli = APIClient("127.0.0.1", PORT, None); await cli.connect(login=True)
         ents, _ = await cli.list_entities_services(); by = {e.object_id: e for e in ents}

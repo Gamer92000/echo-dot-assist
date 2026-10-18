@@ -7,7 +7,7 @@ ok() { if [ "$1" = 0 ]; then echo "ok   $2"; else echo "FAIL $2"; fail=1; fi; }
 $O keygen $T/k.sec $T/k.pub; $O keygen $T/evil.sec $T/evil.pub
 mkdir $T/state
 HASSMIC_STATE=$T/state HASSMIC_ADB_OPEN=$T/adb-open HASSMIC_UPDATE_PUB=$T/k.pub HASSMIC_SETTINGS=$T/settings build/hassmic-host -p 16971 -z 0 -o 16972 -L 2>$T/log &
-PID=$!; sleep 0.7
+PID=$!; for i in $(seq 1 200); do nc -z 127.0.0.1 16972 && break; sleep 0.1; done      # bound in ~0.3 s alone, later with every test at once
 installer() {        # what ota_watch in main.sh does, once
     for i in $(seq 1 40); do [ -f $T/state/ota/request ] && break; sleep 0.25; done
     [ -f $T/state/ota/request ] || return

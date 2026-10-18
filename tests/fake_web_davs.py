@@ -13,7 +13,7 @@ import base64, gzip, io, json, os, re, subprocess, sys, tarfile, tempfile, threa
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from webclient import Browser
+from webclient import wait_port, Browser
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 17040
@@ -231,7 +231,7 @@ class Echo:
         self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.api), "-n", self.name, "-L",
                                       "-z", "0", "-o", "0", "-a", "0", "-W", str(self.web)], env=self.env,
                                      stderr=open(self.log, "a"))
-        time.sleep(0.6)
+        wait_port(self.api, self.web)
 
     def stop(self): self.proc.terminate(); self.proc.wait()
 
@@ -359,6 +359,9 @@ def main():
         AMZ.entered = False
         st, _, _ = b.call("POST", "/api/davs/login", b"co.uk")
         d = wait_state("waiting", b, seen)
+        for _ in range(60):                     # waiting from the queueing on, but a cancel is refused until the worker
+            if d and d["code"]: break           # took the login up (its code shown): under load that is not at once
+            time.sleep(0.25); d = davs_of(b, seen)
         check(st == 200 and d["domain"] == "co.uk" and d["url"] == "https://www.amazon.co.uk/code",
               f"a second login, on amazon.co.uk, shows its own link: {d['url']}")
         st, _, _ = b.call("POST", "/api/davs/cancel")

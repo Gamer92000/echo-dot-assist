@@ -13,7 +13,7 @@ from aioesphomeapi import APIClient, VoiceAssistantEventType as Ev
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
-from webclient import Browser
+from webclient import wait_port, Browser
 ARB, BCAST = 28994, "127.255.255.255"
 SPEECH = f"{ROOT}/testdata/alexa_espeak.raw"
 # a stand-in for stock's incoming ringtone (the PC has none, and plays no ring without it): 1 s of 440 Hz at 8000
@@ -55,6 +55,7 @@ class Echo:
         self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.port), "-n", self.name, "-L",
                                       "-z", "0", "-o", "0", "-a", str(ARB), "-i", str(self.audio), "-W", str(self.web), "-b", self.keys],
                                      env=self.env, stderr=open(self.log, "a"))
+        wait_port(self.port, self.web)
 
     def text(self): return open(self.log).read()
     def st(self, oid): return self.states.get(self.by[oid].key) if oid in self.by else None

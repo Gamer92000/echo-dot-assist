@@ -5,6 +5,8 @@ import asyncio, math, os, signal, struct, subprocess, sys, tempfile
 
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.asr import Transcript
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from webclient import wait_port
 from wyoming.client import AsyncTcpClient
 from wyoming.info import Describe, Info
 from wyoming.ping import Ping, Pong
@@ -37,7 +39,7 @@ async def main():
         cmd = [f"{ROOT}/build/hassmic-host", "-P", "wyoming"]
     proc = subprocess.Popen(cmd + ["-p", str(PORT), "-n", "Test Dot"], env=env, start_new_session=True)
     try:
-        await asyncio.sleep(6 if qemu else 0.3)
+        wait_port(PORT, secs=60 if qemu else 20)
         async with AsyncTcpClient("127.0.0.1", PORT) as client:
             await client.write_event(Describe().event())
             info = Info.from_event(await expect(client, Info.is_type, "info"))

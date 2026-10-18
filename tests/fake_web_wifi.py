@@ -6,7 +6,7 @@ escapes, the PSK as PBKDF2 makes it, a wrong password, a network out of reach, n
 network, a second password for a known network: what is saved, and that a failed switch goes back and saves nothing."""
 import hashlib, json, os, signal, stat, subprocess, sys, tempfile, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from webclient import Browser, req
+from webclient import wait_port, Browser, req
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB = 16981
@@ -64,7 +64,7 @@ def main():
                              "-a", "16982", "-W", str(WEB)], env=env, stderr=open(log, "w"))
     reqf = os.path.join(state, "wifi-request")
     try:
-        time.sleep(0.6)
+        wait_port(16980, WEB)
         b = Browser(WEB)
         check(b.login_with_button(proc), "logged in with the action button")
         st, _, body = b.call("GET", "/api/wifi"); w = json.loads(body)
