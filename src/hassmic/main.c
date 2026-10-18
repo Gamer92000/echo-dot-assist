@@ -798,7 +798,6 @@ static const struct { const char *amazon, *event; } sound_map[] = {
 const char *const core_sound_events[] = { "smoke_or_co_alarm", "glass_break", "dog_bark", "baby_cry", "snoring", "cough",
                                           "water", "beeping_appliance" };
 const int core_sound_nevents = sizeof core_sound_events / sizeof core_sound_events[0];
-#define SOUND_WINDOW_MS 11000               /* a scoring window (9.98 s) and the decoder's lag behind it */
 static atomic_int sound_want;               /* the switch; the capture thread opens and closes the decoder to match */
 static atomic_int sound_failed;             /* the last start failed (the model did not load): the settings page says so */
 int core_sound_failed(void) { return atomic_load(&sound_failed); }
@@ -814,10 +813,10 @@ int core_sound(int set)
 
 static void on_sound(const char *const *types, int n)    /* detector thread */
 {
-    long long now = mono_ms();
+    long long now = mono_ms(), window = sound_window_ms();
     if (atomic_load(&alarm_on) || atomic_load(&music_on) || atomic_load(&tts_on) || atomic_load(&earcon_sounding)
-        || atomic_load(&sounds_pending) || now - atomic_load(&own_sound_ms) < SOUND_WINDOW_MS
-        || now - atomic_load(&earcon_heard_until) < SOUND_WINDOW_MS) {
+        || atomic_load(&sounds_pending) || now - atomic_load(&own_sound_ms) < window
+        || now - atomic_load(&earcon_heard_until) < window) {
         fprintf(stderr, "sound: dropped, the Echo played something in that window\n");
         return;
     }

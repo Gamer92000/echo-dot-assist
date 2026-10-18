@@ -14,6 +14,9 @@ int  sound_open(const char *const *types, int n, sound_cb cb);    /* the types t
  * none (neither readable: nothing to switch on).  For the settings page; any thread. */
 enum sound_model { SOUND_NONE, SOUND_FIRMWARE, SOUND_NEWER };
 enum sound_model sound_model(void);
+/* How far back from a call its window reaches: the window and the decoder's lag behind it (the core drops a window in
+ * which the Echo played something itself). */
+int  sound_window_ms(void);
 void sound_feed(const int16_t *samples, size_t count);
 void sound_close(void);
 #endif

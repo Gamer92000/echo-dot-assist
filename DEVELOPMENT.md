@@ -60,7 +60,14 @@ make unit                                         # C unit tests; microWakeWord 
                                                  # (unshare -rn); logs of those that fail, all in build/test-logs/
 .venv/bin/python tests/blueprint_dropin.py        # the Drop In blueprint against stand-ins of Home Assistant's registries,
                                                  # states, actions and template engine (also in make unit)
-.venv/bin/python tests/fake_ha_esphome.py         # ESPHome native API, as Home Assistant (aioesphomeapi)
+.venv/bin/python tests/fake_ha_esphome.py         # ESPHome native API, as Home Assistant (aioesphomeapi): entities,
+                                                 # settings, voice assistant, replies, announcements (HTTP, HTTPS)
+.venv/bin/python tests/fake_ha_esphome_timers.py  # the same API: timers, encryption, clock and zone, noise reduction, LEDs,
+                                                 # light sensor
+.venv/bin/python tests/fake_ha_esphome_features.py  # sound detection (3 s windows: HASSMIC_FAKE_SOUND_WINDOW), Wi-Fi motion
+.venv/bin/python tests/fake_ha_esphome_buttons.py   # runs cancelled while HA thinks or streams; the "Button" event entity
+.venv/bin/python tests/fake_ha_esphome_address.py   # a new address: links closed, mDNS announced again (netaddr.c)
+                                                 # (the five share their setup: tests/esphome_common.py; one file was 90 s)
 .venv/bin/python tests/fake_ha_arbitration.py     # two Echos + Home Assistant + an unknown device: wake word arbitration: merge, forger,
                                                  # pairing; _join.py (tags, action, crash), _rounds.py, _kiosk.py, _window.py;
                                                  # shared tests/arbecho.py (the network's pace at 0.1: HASSMIC_ARB_SCALE)

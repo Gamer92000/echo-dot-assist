@@ -229,7 +229,7 @@ routines "when Alexa hears …" (product knowledge, not from the code).
 - **CPU:** `aed_test` on the Echo Dot 2 (biscuit, 4 cores at 1.3 GHz), real-time input: 7.9 s of CPU per minute, i.e.
   13 % of one core. hassmic alone (wake word included) used 36 % of one core in the same minute.
 - **Tests:**
-  - `tests/fake_ha_esphome.py` (PC build, `sound_none.c` fakes a dog per window): entities, switch off by default and
+  - `tests/fake_ha_esphome_features.py` (PC build, `sound_none.c` fakes a dog per window): entities, switch off by default and
     kept, event, and an announcement's window dropped.
   - `build/donut/hassmic-qemu` with the stock model on ESC-50 clips: glass breaking gave `glass_break` in each window
     containing it; footsteps gave nothing.

@@ -99,6 +99,8 @@ void sound_feed(const int16_t *samples, size_t count)
     sample_index += count;
 }
 
+int sound_window_ms(void) { return 11000; }      /* a scoring window (9.98 s) and the decoder's lag behind it */
+
 void sound_close(void)
 {
     if (!opened) return;

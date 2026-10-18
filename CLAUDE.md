@@ -39,7 +39,13 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/run.py [-j N] [name]  # every test below at once (CI's way), each in a network namespace of its
                                              # own (unshare -rn: fixed ports, hassmic's defaults, broadcasts); logs in
                                              # build/test-logs/, printed for those that fail; -l lists the names
-.venv/bin/python tests/fake_ha_esphome.py     # ESPHome native API, as Home Assistant
+.venv/bin/python tests/fake_ha_esphome.py     # ESPHome native API, as Home Assistant: entities, settings, voice assistant,
+                                             # replies, announcements (HTTP, HTTPS); the rest of the API in five parts
+                                             # (shared setup tests/esphome_common.py), each with an Echo of its own:
+.venv/bin/python tests/fake_ha_esphome_timers.py   #   timers, encryption, clock and zone, noise reduction, LEDs, light sensor
+.venv/bin/python tests/fake_ha_esphome_features.py #   sound detection (HASSMIC_FAKE_SOUND_WINDOW: 3 s windows), Wi-Fi motion
+.venv/bin/python tests/fake_ha_esphome_buttons.py  #   runs cancelled while HA thinks or streams, the "Button" event entity
+.venv/bin/python tests/fake_ha_esphome_address.py  #   a new address: links closed, mDNS announced again
 .venv/bin/python tests/fake_ha_arbitration.py # two Echos under one fake HA: wake word arbitration, join paths and security
                                              # (_join, _rounds, _kiosk, _window.py beside it; tests/arbecho.py)
 .venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer,
