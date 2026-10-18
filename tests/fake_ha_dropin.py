@@ -141,7 +141,7 @@ async def main():
         types = list(getattr(a.by.get("drop_in_result"), "event_types", []))
         check(types[:2] == ["connected", "ringing"] and {"do_not_disturb", "no_answer", "not_found", "busy_here"} <= set(types),
               f"  Drop In result's event types: {types}")
-        check(a.dropin() == ("idle", ""), f"idle at start ({a.dropin()})")
+        check(await until(lambda: a.dropin() == ("idle", ""), 5), f"idle at start ({a.dropin()})")    # the states follow the connect
 
         # 1. a call from Home Assistant, by the hall's name: connected at once (answer: auto)
         mark = len(a.seq)

@@ -75,7 +75,7 @@ def main():
     ap.add_argument("names", nargs="*")
     a = ap.parse_args()
     if a.l:
-        for n, argv in TESTS: print(f"{n:12} {shlex.join(argv)}")
+        for n, argv in TESTS: print(f"{n:16} {shlex.join(argv)}")
         return
     tests = [t for t in TESTS if not a.names or t[0] in a.names]
     unknown = set(a.names) - {n for n, _ in TESTS}
@@ -89,7 +89,7 @@ def main():
     with ThreadPoolExecutor(max(1, a.j)) as ex:
         for fut in as_completed([ex.submit(run, n, argv, a.t, logdir) for n, argv in tests]):
             name, rc, secs, log = fut.result()
-            print(f"{'ok  ' if rc == 0 else 'FAIL'} {name:12} {secs:6.1f} s" + ("" if rc == 0 else f"  ({rc})"), flush=True)
+            print(f"{'ok  ' if rc == 0 else 'FAIL'} {name:16} {secs:6.1f} s" + ("" if rc == 0 else f"  ({rc})"), flush=True)
             if rc != 0: failed.append((name, log))
     for name, log in failed:
         print(f"::group::{name}" if gh else f"\n===== {name} ({os.path.relpath(log, ROOT)})")

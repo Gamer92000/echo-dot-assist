@@ -178,7 +178,7 @@ async def main():
         # A flash (Home Assistant's "flash: short", 2 s): blinking in the colour asked for, then as before
         open(leds, "w").close()
         c.light_command(li.key, state=True, rgb=(0.0, 1.0, 0.0), flash_length=2.0)     # at the light's brightness
-        await until(lambda: ["-s", "hassmic_blink_08f2"] in log())
+        await until(lambda: ["-s", "hassmic_blink_08f2"] in log() and st().effect == "None")
         check(["-s", "hassmic_blink_08f2"] in log() and abs(st().green - 0.6) < 1e-6 and st().effect == "None",
               f"flash: green blinking; the light's state unchanged ({log()}, {st()})")
         await until(lambda: ["-s", "hassmic_solid_16s2"] in log(), 4)
@@ -186,14 +186,14 @@ async def main():
 
         open(leds, "w").close()
         c.light_command(li.key, effect="Rainbow")
-        await until(lambda: ["-s", "hassmic_rainbow_2"] in log())
+        await until(lambda: ["-s", "hassmic_rainbow_2"] in log() and st().effect == "Rainbow")     # ledctrl and HA's state: either first
         check(["-s", "hassmic_rainbow_2"] in log() and st().effect == "Rainbow", "rainbow at the light's level")
         open(leds, "w").close()
         c.light_command(li.key, state=False)
         await until(lambda: ["-u", "hassmic_rainbow_2"] in log() and st().state is False)
         check(log() == [["-u", "hassmic_rainbow_2"]] and st().state is False, f"off: off the ring ({log()})")
         c.light_command(li.key, state=True)
-        await until(lambda: ["-s", "hassmic_rainbow_2"] in log())
+        await until(lambda: ["-s", "hassmic_rainbow_2"] in log() and st().effect == "Rainbow")     # ledctrl and HA's state: either first
         await c.disconnect()
     finally:
         proc.terminate(); proc.wait()

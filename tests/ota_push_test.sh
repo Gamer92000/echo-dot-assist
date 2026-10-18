@@ -22,7 +22,9 @@ $O pack $T/evil.sec 6.6.6 $T/evil.bundle $T/main.sh >/dev/null
 r=$($O push 127.0.0.1 16972 $T/evil.bundle $T/evil.bundle.sig); echo "$r" | grep -q "^FAILED signature" && [ ! -f $T/state/ota/request ]; ok $? "bundle from another key is refused before it reaches the installer: $r"
 cp $T/good.bundle $T/bad.bundle; printf X | dd of=$T/bad.bundle bs=1 seek=30 conv=notrunc 2>/dev/null
 r=$($O push 127.0.0.1 16972 $T/bad.bundle $T/good.bundle.sig); echo "$r" | grep -q "^FAILED signature"; ok $? "tampered bundle is refused: $r"
-r=$(printf 'GET / HTTP/1.0\r\n\r\n' | timeout 3 nc -q1 127.0.0.1 16972 2>/dev/null || true); echo "$r" | grep -q "^FAILED bad request"; ok $? "garbage on the port is refused: $r"
+# One line only: the Echo reads a line, answers and closes, and a close with bytes left unread sends a reset, which
+# throws away the answer if nc has not read it yet (under load it had not).  nc -N quits once the Echo closed.
+r=$(printf 'GET / HTTP/1.0\n' | timeout 10 nc -N 127.0.0.1 16972 2>/dev/null || true); echo "$r" | grep -q "^FAILED bad request"; ok $? "garbage on the port is refused: $r"
 
 # adb over Wi-Fi with the update key.  This script is the firewall watcher: it takes the request and answers with adb-open.
 watcher() {
@@ -40,6 +42,6 @@ echo "$n1" | grep -qE '^NONCE [0-9a-f]{64}$' && [ "$n1" != "$n2" ]; ok $? "a new
 # installer loop, which makes the running update the factory copy (main.sh)
 for i in $(seq 1 40); do [ -f $T/state/ota/healthy ] && break; sleep 0.25; done
 [ -f $T/state/ota/healthy ] && grep -q "self test: passed" $T/log; ok $? "self test passed, installer told (state/ota/healthy)"
-r=$(printf 'HMOTA-FACTORY1 9.9.9+test\n' | timeout 3 nc -q1 127.0.0.1 16972 2>/dev/null || true); echo "$r" | grep -q "^FAILED bad request"; ok $? "no approval request any more: $r"
+r=$(printf 'HMOTA-FACTORY1 9.9.9+test\n' | timeout 10 nc -N 127.0.0.1 16972 2>/dev/null || true); echo "$r" | grep -q "^FAILED bad request"; ok $? "no approval request any more: $r"
 kill $PID; rm -rf $T
 [ $fail = 0 ] && echo "all good" || { echo FAILED; exit 1; }
