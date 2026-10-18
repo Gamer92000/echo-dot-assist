@@ -70,6 +70,10 @@ def setup():
     req = os.path.join(venv, "requirements-integrations.txt")
     open(req, "w").write("\n".join(reqs) + "\n")
     subprocess.run([uv, "pip", "install", "--python", HA_PY, "-c", cons, "-r", req], check=True)
+    # uv leaves the bytecode to the first import: Home Assistant's first start took 18 s in CI (2 s here, compiled), in
+    # the test's own time.  Here it is 5 s on four cores, for every package of the venv; a file that does not compile
+    # only costs that time again
+    subprocess.run([HA_PY, "-m", "compileall", "-q", "-j0", os.path.dirname(os.path.dirname(cons))], stdout=subprocess.DEVNULL)
     print(f"Home Assistant {HA_VERSION} in {venv}, with {len(reqs)} requirements of its integrations")
 
 
