@@ -17,6 +17,8 @@ int  a2dp_button(int resume);              /* action button: 0 = pause the strea
                                               paused it (within 30 min).  1 = consumed; needs AVRCP */
 void a2dp_pause(void);                     /* another source started: pause the device, or play nothing until it
                                               starts again or a2dp_unyield() when it has no AVRCP */
+int  a2dp_stop(void);                      /* "<wake word>, stop": pause the streaming device (the button resumes it), or
+                                              play nothing until it starts again without AVRCP.  1 = it streamed */
 void a2dp_unyield(void);                   /* the other source stopped */
 
 /* Playing to a Bluetooth speaker (the Echo as A2DP source; btout.c routes the mixer).  Any thread. */

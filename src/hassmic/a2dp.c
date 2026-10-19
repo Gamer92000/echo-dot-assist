@@ -1698,6 +1698,17 @@ void a2dp_pause(void)
     if (!atomic_exchange(&yielded, 1)) fprintf(stderr, "a2dp: no remote control: silent while the other source plays\n");
 }
 
+/* "<wake word>, stop": pause as the button does (the button resumes it); without AVRCP, play nothing until the
+ * device starts again */
+int a2dp_stop(void)
+{
+    if (!atomic_load(&streaming) || atomic_load(&yielded)) return 0;
+    if (atomic_load(&avrcp_links)) { atomic_store(&button_paused_at, ms()); atomic_store(&key_req, KEY_PAUSE); hci_poke(); }
+    else atomic_store(&yielded, 1);
+    fprintf(stderr, "a2dp: told to stop: %s\n", atomic_load(&avrcp_links) ? "paused" : "no remote control, silent");
+    return 1;
+}
+
 void a2dp_unyield(void) { if (atomic_exchange(&yielded, 0)) fprintf(stderr, "a2dp: audible again\n"); }
 
 void a2dp_out_search(int on) { atomic_store(&out_search_req, on != 0); hci_poke(); }

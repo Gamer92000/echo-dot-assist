@@ -3,18 +3,21 @@
 (aiosendspin 9.1.1, the version in Music Assistant 2.10.4): dials the player, approves it unpaired, streams a sine,
 sends a volume command, and checks what reaches the player's audio backend.  Then pairing, a second server and unpairing.  Beside it, at
 once, players of their own for a restart of the server (the player asks for mDNS announcements until one is back,
-issue #28) and for unpaired access off (the default)."""
+issue #28), for unpaired access off (the default) and for "<wake word>, stop" to music (issue #51, with Home
+Assistant's voice assistant over the ESPHome API beside the server)."""
 import re, asyncio, contextvars, logging, math, os, signal, struct, subprocess, sys, tempfile, time, traceback
 import numpy as np
 from aiosendspin.noise import Identity, InMemoryServerPairingStore, decode_token
 from aiosendspin.noise.pairing import PairingAttempt
 from aiosendspin.models.types import PairMethod, MediaCommand
 from aiosendspin.server import SendspinServer, AudioFormat, ClientAddedEvent
+from aioesphomeapi import APIClient, VoiceAssistantEventType as Ev
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 from webclient import wait_port
-PORT, PORT2, PORT3 = 16958, 16960, 16963        # the three players' Sendspin ports
+from esphome_common import assistant, sync
+PORT, PORT2, PORT3, PORT4 = 16958, 16960, 16963, 16965      # the four players' Sendspin ports
 
 
 # what a part checks, kept until the end and printed part by part: the parts run at once
@@ -222,6 +225,92 @@ async def unpaired_off(env, state):
         proc.terminate(); await server.close()
 
 
+async def stop_music(env, state):
+    """"<wake word>, stop" pauses Sendspin music itself (issue #51): its pipeline goes on, a bare "stop" transcript is
+    cancelled, the button resumes; without the keyword (microWakeWord) the transcript "stop" pauses"""
+    open(os.path.join(state, "sendspin.unpaired"), "w").write("1")
+    proc, log = player(state, PORT4, 16966, env)
+    loop = asyncio.get_running_loop()
+    cli = APIClient("127.0.0.1", 16966, None)
+    await cli.connect(login=True); await cli.list_entities_services()
+    va = assistant(cli); await sync(cli)
+    server = SendspinServer(loop, Identity.generate(), "fake-ma", pairing_store=InMemoryServerPairingStore())
+    added = asyncio.Queue()
+    server.add_event_listener(lambda _srv, ev: isinstance(ev, ClientAddedEvent) and added.put_nowait(ev.client_id))
+    feeder = None
+    try:
+        await server.start_server(port=16964, discover_clients=False)
+        server.connect_to_client(f"ws://127.0.0.1:{PORT4}/sendspin", retry_initial_connection=True, retry_indefinitely=True)
+        cid = await asyncio.wait_for(added.get(), 15)
+        client = server.get_client(cid)
+        await server.trust_unpaired(cid)
+        await until(lambda: client.role("player@v1") is not None and client.role("controller@v1") is not None)
+        ctl = []
+        client.group.add_event_listener(lambda g, e: ctl.append(type(e).__name__))
+        client.group.group_role("controller").set_supported_commands([MediaCommand.PLAY, MediaCommand.PAUSE])
+        fmt = AudioFormat(sample_rate=48000, bit_depth=16, channels=2)
+
+        async def play():                       # 440 Hz until cancelled, at real time
+            stream = client.group.start_stream(); phase = 0
+            while True:
+                k = np.arange(phase, phase + 4800); phase += 4800
+                stream.prepare_audio(np.repeat((8000 * np.sin(2 * np.pi * 440 * k / 48000)).astype("<i2"), 2).tobytes(), fmt)
+                await stream.commit_audio(); await stream.sleep_to_limit_buffer(500_000)
+        async def pause():                      # what Music Assistant does on the controller's pause
+            nonlocal feeder
+            feeder.cancel(); feeder = None
+            n = log().count("sendspin: stream end")
+            await client.group.stop(); await until(lambda: log().count("sendspin: stream end") > n)
+
+        feeder = asyncio.create_task(play())
+        await until(lambda: "sendspin: stream start" in log())
+        va.started.clear(); proc.send_signal(signal.SIGUSR1)          # the wake word over the music
+        await asyncio.wait_for(va.started.wait(), 5)
+        proc.send_signal(signal.SIGHUP)                               # its "stop"
+        await until(lambda: "ControllerPauseEvent" in ctl)
+        await asyncio.sleep(0.5)
+        check("ControllerPauseEvent" in ctl and not va.stopped, f'"<wake word>, stop" pauses the music, its pipeline goes on: {ctl}, stops {va.stopped}')
+        await pause()
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None); cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "Stop."})
+        await until(lambda: va.stopped)
+        check(bool(va.stopped) and "said stop: music paused, run cancelled" in log(), f'the transcript "Stop." after it is cancelled, not answered: stops {va.stopped}')
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+
+        n = len(ctl); proc.send_signal(signal.SIGUSR2)               # the action button
+        await until(lambda: "ControllerPlayEvent" in ctl[n:])
+        check("ControllerPlayEvent" in ctl[n:], f"the action button resumes what the stop paused: {ctl[n:]}")
+
+        # "<wake word>, stop the timer": the keyword pauses the music, the rest is Home Assistant's
+        n = log().count("sendspin: stream start"); feeder = asyncio.create_task(play())
+        await until(lambda: log().count("sendspin: stream start") > n)
+        n = len(ctl)
+        va.started.clear(); va.stopped.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(va.started.wait(), 5)
+        proc.send_signal(signal.SIGHUP)
+        await until(lambda: "ControllerPauseEvent" in ctl[n:])
+        await pause()
+        said = log().count("said stop")
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None); cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "stop the timer"})
+        await sync(cli); await asyncio.sleep(0.5)
+        check("ControllerPauseEvent" in ctl[n:] and not va.stopped and log().count("said stop") == said,
+              f'"<wake word>, stop the timer" over music: paused, the transcript goes to Home Assistant: {ctl[n:]}, stops {va.stopped}')
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+
+        # an engine without the "stop" keyword (microWakeWord): the transcript "stop" pauses and is cancelled
+        n = log().count("sendspin: stream start"); feeder = asyncio.create_task(play())
+        await until(lambda: log().count("sendspin: stream start") > n)
+        n = len(ctl)
+        va.started.clear(); va.stopped.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(va.started.wait(), 5)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None); cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
+        cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "Stop!"})
+        await until(lambda: va.stopped and "ControllerPauseEvent" in ctl[n:])
+        check(bool(va.stopped) and "ControllerPauseEvent" in ctl[n:], f'without the keyword, the transcript "Stop!" pauses the music and is cancelled: {ctl[n:]}, stops {va.stopped}')
+    finally:
+        if feeder: feeder.cancel()
+        await cli.disconnect(); proc.terminate(); await server.close()
+
+
 async def main():
     if "-v" in sys.argv: logging.basicConfig(level=logging.DEBUG)
     want = os.environ.get("CODEC", "flac")         # CODEC=flac|opus|pcm: what the player lists first
@@ -239,7 +328,7 @@ async def main():
         except Exception:
             lines.append("FAIL " + traceback.format_exc().rstrip().replace("\n", "\n     ")); check.failed = True
         return lines
-    for lines in await asyncio.gather(part(paired), part(server_restart), part(unpaired_off)):
+    for lines in await asyncio.gather(part(paired), part(server_restart), part(unpaired_off), part(stop_music)):
         print("\n".join(lines))
     print("FAILED" if check.failed else "all good")
     sys.exit(1 if check.failed else 0)

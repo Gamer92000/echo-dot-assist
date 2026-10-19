@@ -1236,7 +1236,7 @@ static void on_event(const unsigned char *p, const unsigned char *end)
     case EV_STT_START:  core_set_state(LISTENING); break;
     case EV_VAD_END:    core_mic_off(); if (core_state() == LISTENING) core_set_state(THINKING); break;
     case EV_STT_END:    fprintf(stderr, "transcript: %s\n", text);
-        if (core_transcript(text)) break;                   /* "stop" to a ringing timer: the run is cancelled */
+        if (core_transcript(text)) break;                   /* "stop" to a ring or music: the run is cancelled */
         core_mic_off(); if (core_state() == LISTENING) core_set_state(THINKING); break;
     case EV_INTENT_END: if (cont) core_restart_after(); break;
     case EV_TTS_START:  fprintf(stderr, "reply: %s\n", text); break;

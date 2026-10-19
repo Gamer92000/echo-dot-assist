@@ -4,6 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-19
 
+- **"Alexa, stop" pauses music** (issue #51). Music from Music Assistant or a phone over Bluetooth used to stop only if
+  Home Assistant's speech-to-text caught the one word over the music, which often failed. The Echo now hears "stop"
+  itself and pauses the music, as it already did for replies and timers; the action button resumes it. "Alexa, stop
+  the timer" still goes to Home Assistant. A request that is only "stop" (after the wake word or the button) pauses the
+  music the same way: with microWakeWord or Home Assistant's wake word, or when Amazon's model missed the word.
 - **A wake word with nothing after it ends quietly** (issue #48). When the Echo woke and then heard no request (you
   said "Alexa" to another device, or it woke by mistake), the ring flashed the error animation. Now it simply goes
   dark, as a stock Echo does. Other errors still show it.

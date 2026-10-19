@@ -1006,17 +1006,32 @@ static void trigger(int touch, uint64_t from)
     pthread_mutex_unlock(&core_lock);
 }
 
+/* "<wake word>, stop" to music (Sendspin, a phone over Bluetooth): paused as the action button does, which resumes it.
+ * Lock held (Sendspin's adm_lock nests inside core_lock, as for the volume).  1 = something played and was paused */
+static long long music_stopped_ms;                  /* core_lock: when a stop last paused music */
+static int music_stop(void)
+{
+    int paused = (core_sendspin_port && sendspin_stop()) | a2dp_stop();     /* both: one may not have heard it yet */
+    if (paused) music_stopped_ms = mono_ms();
+    return paused;
+}
+
 /* "Stop", the second keyword of Amazon's wake word models.  The engine reports it only right behind the wake word
  * ("<wake word>, stop"; on its own it is never detected, also not with a changed op.cfg.json: tried).
  * It ends what is making noise and never starts anything:
- * a ringing alarm, a reply being spoken (also one that would listen again afterwards).  Said as "<wake word>, stop", the wake
- * word has already cut the reply and opened a new pipeline by the time "stop" is recognised: that pipeline is dropped again.
- * Only then: "<wake word>, stop the music" out of silence is a command for Home Assistant, not for us. */
+ * a ringing alarm, a reply being spoken (also one that would listen again afterwards), a Drop In call, else music.  Said
+ * as "<wake word>, stop", the wake word has already cut the reply and opened a new pipeline by the time "stop" is
+ * recognised: that pipeline is dropped again.  Only then: "<wake word>, stop the music" out of silence is a command for
+ * Home Assistant, not for us.
+ * Music (issue #51) is paused here rather than left to speech to text, which often misses the one short word over it
+ * (three tries in a row on a Dot 2).  Its pipeline goes on, so "<wake word>, stop the timer" still reaches Home
+ * Assistant; nothing said after it ends quietly (core_no_speech), and a bare "stop" is cancelled (core_transcript). */
 static void stop_word(void)
 {
-    if (dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE) dropin_hangup("stop");     /* and the pipeline its wake word opened */
+    int ended = 0;
+    if (dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE) { dropin_hangup("stop"); ended = 1; }   /* and the pipeline its wake word opened */
     pthread_mutex_lock(&core_lock);
-    if (atomic_load(&alarm_on)) core_alarm_stop("stop");        /* and the pipeline its wake word opened, below */
+    if (atomic_load(&alarm_on)) { core_alarm_stop("stop"); ended = 1; }     /* and the pipeline its wake word opened, below */
     if (state == SPEAKING) {
         fprintf(stderr, "stop: reply cut\n");
         barge_in = 0;
@@ -1028,7 +1043,7 @@ static void stop_word(void)
         barge_in = 0;
         core_pipeline_finish();
         quiet_abort = 1;
-    }
+    } else if (!ended && atomic_load(&music_on) && music_stop()) fprintf(stderr, "stop: music paused, the pipeline goes on\n");
     pthread_mutex_unlock(&core_lock);
 }
 
@@ -1504,7 +1519,9 @@ void core_alarm_stop(const char *why)
 
 /* "<wake word>, stop" with an engine that has no "stop" keyword (microWakeWord, Home Assistant's): the transcript is the
  * word alone.  Home Assistant has nothing to stop a ringing satellite timer with (it forgot the timer when it
- * finished), so the run is cancelled here, as the button does, before Home Assistant answers it.  "Stopp den Timer"
+ * finished), so the run is cancelled here, as the button does, before Home Assistant answers it.  Music plays on
+ * without a ring: paused here as stop_word does (issue #51); after the keyword paused it, the transcript is that same
+ * "stop" again, and Home Assistant would answer it (nothing plays any more, or it pauses another player).  "Stopp den Timer"
  * went to Home Assistant, which answered "no timer is running" while it rang on (issue #21): with timer_stop_any any
  * recognised speech stops the ring, as EchoMuse does, whatever the language and however the ring garbled it; then a
  * question during a ring is not answered */
@@ -1530,11 +1547,16 @@ int core_transcript(const char *text)
             return 1;
         }
     }
-    if (!atomic_load(&alarm_on)) return 0;
     int hit = 0;
     for (size_t i = 0; i < sizeof stops / sizeof stops[0]; i++) hit |= !strcmp(w, stops[i]);
-    if (!hit && !(timer_stop_any && w[0])) return 0;
-    core_alarm_stop(hit ? "said stop" : "a request during the ring");
+    if (atomic_load(&alarm_on)) {
+        if (!hit && !(timer_stop_any && w[0])) return 0;
+        core_alarm_stop(hit ? "said stop" : "a request during the ring");
+    } else {
+        /* 10 s: the keyword's pipeline ends at Home Assistant's end of speech, a few seconds on */
+        if (!hit || !(music_stop() || (music_stopped_ms && mono_ms() - music_stopped_ms < 10000))) return 0;
+        fprintf(stderr, "said stop: music paused, run cancelled\n");
+    }
     if (connected && proto->cancel) { barge_in = 0; atomic_store(&streaming, 0); proto->cancel(); quiet_abort = 1; }
     core_pipeline_finish();
     return 1;

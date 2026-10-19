@@ -227,7 +227,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (beacons, discovery, tags, handoff, pairing) at that fraction; rounds and the window keep theirs. Page: two cards with pros and cons (`HELP.arbitration_mode.modes`).
 - **Music**: `sendspin.c` (Music Assistant Sendspin player over `ws.c`/`noise.c`/`net.c`/`hash.c`, decodes via
   `dr_flac`/`minimp3`/libopus). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
-  loaded with dlopen, aptX/aptX HD via `freeaptx`) with AVRCP. Only one music source plays at a time (newest wins).
+  loaded with dlopen, aptX/aptX HD via `freeaptx`) with AVRCP. Only one music source plays at a time (newest wins). "<wake word>, stop" pauses it when nothing else was
+  stopped (`stop_word`, a bare "stop" transcript in `core_transcript`; issue #51), the action button resumes.
   The other way, playing on a Bluetooth speaker: `a2dp.c` (inquiry, pairing, AVDTP initiator, AVRCP absolute volume)
   + `btout.c`, which stands in for btmanagerd towards the mixer's own A2DP route (LIPC `A2DPSourceConnect`, the A2DP
   HAL's abstract sockets, AIPC service uuid 0 via `libace_aipc.so`; `docs/re-a2dp-source.md`) and SBC-encodes

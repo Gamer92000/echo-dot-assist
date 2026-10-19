@@ -1988,6 +1988,23 @@ Run in this order. Each step says what it proves.
       a link to /system/build.prop refused, nothing left behind; Etc/GMT+3, America/Argentina/Buenos_Aires, <+03>-3,
       IST-5:30, the CET rule, Europe/Berlin taken (`date` -03, -03, +03, IST, CEST, CEST); the same zone again a no-op.
       Open (device): hassmic's side (no NDK on this PC), the Shows' alarm call.
+- [x] "<wake word>, stop" to music (2026-10-19, GitHub issue #51: Dot 2 on Fire OS 8146, three tries in a row over
+      Sendspin ended in `stt-no-text-recognized` and the music played on; Pryon's "stop" was heard each time).
+      `stop_word` pauses music when nothing else ended (Drop In, ring, a reply, the pipeline its wake word cut): Sendspin's
+      controller `pause` (`stop` where not offered; `sendspin_stop`) and AVRCP pause (`a2dp_stop`; without AVRCP silent
+      until the phone starts again), both marked as the button's so the action button resumes them (30 min).  The
+      wake word's pipeline goes on: "stop the timer" reaches HA, nothing said ends quietly (#48), and `core_transcript`
+      cancels a bare stop word within 10 s of the keyword's pause (else HA answers it: nothing plays any more, or it
+      pauses another player).  Without the keyword (microWakeWord, -w remote) the bare stop word pauses and cancels
+      the same way when something played; so does any run whose transcript is a bare stop word (the button, a "stop"
+      Pryon missed).  Not handled: "<wake word>, stop the music" pauses here and HA gets "stop the music" too (it
+      may answer that nothing plays; transcripts that only start with a stop word cannot be told from "stop the
+      timer" in every language).  A fresh "<wake word>, stop" within 4 s of an earlier cut drops its pipeline instead
+      of pausing (`wake_cut_ms`, as before for rings).  A reply cut by "<wake word>, stop" over music leaves the music playing (the
+      reply was the newest).  Lock order core_lock -> Sendspin's adm_lock, as for the volume.  Tests:
+      fake_ma_sendspin.py part `stop_music` (keyword over music: pause, pipeline open; "Stop." cancelled; button
+      resumes; "stop the timer" to HA; "Stop!" without the keyword pauses).  Open (device): Pryon's "stop" over loud
+      music on a Dot 2/3 (the issue says it hears it), A2DP with a phone.  Wyoming has no `core_transcript`.
 - [x] Wake word turns that hear nothing (2026-10-19, GitHub issue #48; two Dot 2 on 2026.10.17.151309: 4
       `stt-no-text-recognized` in 5 days, each with `anim_start_error_short`).  That code (HA's STT returned no text)
       now goes to `core_no_speech`: the run ends as after RUN_END, no error ring, whoever started it (wake word,

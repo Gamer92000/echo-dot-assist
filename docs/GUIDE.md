@@ -33,6 +33,12 @@ System) off takes any certificate, but then anyone on your network could slip th
 
 - **"Alexa, stop"** interrupts a reply, but only right behind the wake word: Amazon's models only listen for "stop" in
   the two seconds after it. Out of silence, "Alexa, stop the music" goes to Home Assistant as a normal command.
+  With nothing else to stop, it pauses music from Music Assistant or a phone on the Echo itself (the action button
+  resumes it), without waiting for speech-to-text to catch the word over the music. What you say after it still goes
+  to Home Assistant ("Alexa, stop the timer"); a bare "stop" does not. When Amazon's model misses the "stop", or with
+  microWakeWord or Home Assistant's wake word (no "stop" keyword), a request that is only "stop" does the same: the
+  music pauses and Home Assistant gets no request. A phone without remote control (AVRCP) goes silent instead, until
+  it starts playing again; the button cannot resume it.
 - While a timer rings or something plays, the wake word is accepted more readily, as Amazon's models are tuned to do.
 - A finished timer rings for a minute ("Timers ring for" on the [settings page](#settings-page): 10 s to 10 min, or
   until stopped), with the cyan timer animation on the ring. Only an explicit stop ends it: "<wake word>, stop", the
@@ -259,7 +265,8 @@ Beyond the README's two figures:
 ## Music
 
 One source at a time, the newest wins: a phone starting over Bluetooth pauses Music Assistant (the whole group), Music
-Assistant starting on the Echo pauses the phone. The voice assistant ducks both.
+Assistant starting on the Echo pauses the phone. The voice assistant ducks both. "<wake word>, stop" pauses either,
+and the action button pauses and resumes.
 
 - **Music Assistant** finds the Echo by itself (Sendspin player). Pair it with the Echo's token: shown at the end of
   `scripts/setup.sh`, and as the diagnostic entity "Sendspin pairing token" in Home Assistant (disabled by default).

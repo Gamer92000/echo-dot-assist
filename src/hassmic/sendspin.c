@@ -731,7 +731,17 @@ void sendspin_volume_changed(int percent)
     pthread_mutex_unlock(&adm_lock);
 }
 
-/* Action button: pause while the group plays; resume if it was this button that paused it.  1 = consumed. */
+/* The controller's pause while the group plays (stop where the server offers no pause).  adm_lock held; 1 = sent */
+static int send_pause(struct session *s)
+{
+    if (!s || !s->controller_active || !s->group_playing || !atomic_load(&stream_on)) return 0;
+    const char *cmd = strstr(s->ctl_commands, "\"pause\"") ? "pause" : strstr(s->ctl_commands, "\"stop\"") ? "stop" : NULL;
+    if (!cmd) return 0;
+    send_json(s, "{\"type\":\"client/command\",\"payload\":{\"controller\":{\"command\":\"%s\"}}}", cmd);
+    return 1;
+}
+
+/* Action button: pause while the group plays; resume if it was this button (or "stop") that paused it.  1 = consumed. */
 int sendspin_button(void)
 {
     int used = 0;
@@ -739,8 +749,7 @@ int sendspin_button(void)
     struct session *s = admitted;
     if (s && s->controller_active) {
         if (s->group_playing && atomic_load(&stream_on)) {
-            const char *cmd = strstr(s->ctl_commands, "\"pause\"") ? "pause" : strstr(s->ctl_commands, "\"stop\"") ? "stop" : NULL;
-            if (cmd) { send_json(s, "{\"type\":\"client/command\",\"payload\":{\"controller\":{\"command\":\"%s\"}}}", cmd); paused_by_button_at = raw_us(); used = 1; }
+            if (send_pause(s)) { paused_by_button_at = raw_us(); used = 1; }
         } else if (paused_by_button_at && raw_us() - paused_by_button_at < 1800LL * 1000000 && strstr(s->ctl_commands, "\"play\"")) {
             send_json(s, "{\"type\":\"client/command\",\"payload\":{\"controller\":{\"command\":\"play\"}}}"); paused_by_button_at = 0; used = 1;
         }
@@ -750,16 +759,25 @@ int sendspin_button(void)
     return used;
 }
 
+/* "<wake word>, stop": pause as the button does, and the button resumes it */
+int sendspin_stop(void)
+{
+    pthread_mutex_lock(&adm_lock);
+    int sent = send_pause(admitted);
+    if (sent) paused_by_button_at = raw_us();
+    pthread_mutex_unlock(&adm_lock);
+    if (sent) fprintf(stderr, "sendspin: paused, told to stop\n");
+    return sent;
+}
+
 void sendspin_pause(void)
 {
-    int sent = 0;
     pthread_mutex_lock(&adm_lock);
     struct session *s = admitted;
-    if (s && s->controller_active && s->group_playing && atomic_load(&stream_on)) {
-        const char *cmd = strstr(s->ctl_commands, "\"pause\"") ? "pause" : strstr(s->ctl_commands, "\"stop\"") ? "stop" : NULL;
-        if (cmd) { send_json(s, "{\"type\":\"client/command\",\"payload\":{\"controller\":{\"command\":\"%s\"}}}", cmd); sent = 1; }
-        paused_by_button_at = 0;                        /* the button does not resume what another source paused */
-    }
+    int sent = send_pause(s);
+    if (s && s->controller_active && s->group_playing && atomic_load(&stream_on))
+        paused_by_button_at = 0;                        /* the button does not resume what another source paused or
+                                                           took over, even where the server offers no pause */
     pthread_mutex_unlock(&adm_lock);
     if (sent) fprintf(stderr, "sendspin: paused, another source took over\n");
 }
