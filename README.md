@@ -135,7 +135,7 @@ names itself after its model and MAC address ("Echo Dot 3 5695c4"); give it your
   <img alt="An update comes from your PC (signed with your key) or from Home Assistant (a GitHub release, signed with the release key). Root checks the signature: a bad one is refused. The new version starts and tests itself within 30 seconds; if it passes it is kept for good, if it fails the Echo falls back to the last copy that worked." src="docs/img/update-light.svg">
 </picture>
 
-- **From Home Assistant**: pick a channel under "Online updates" on the settings page. `release` gets releases (the
+- **Online, installed from Home Assistant**: pick a channel under "Online updates" on the Echo's settings page. `release` gets releases (the
   `release` branch), `beta` also every build of `main` that changes the Echo's software, `off` (the default) nothing.
   The Echo's firmware entity then shows new versions and installs them. ESPHome mode only. The Echo downloads them
   itself, so it needs internet access to GitHub; the page checks that before it takes a channel.

@@ -1225,6 +1225,29 @@ static void stream_ring(uint64_t from, uint64_t to) /* capture thread, lock held
     }
 }
 
+/* Where the replay after a wake word starts (capture thread, lock held).  Pryon's end is where it was sure, not where
+ * the voice stopped: a drawn-out "Alexaaa" (children's; forum, 2026-10-19) still sounds after it.  Sent from the
+ * ring, that tail came out of STT as "Ja.", and Home Assistant's VAD took the pause after it for the end of the
+ * command.  Before the ring (ad224f5) the stream began 120-180 ms after the end and that user had no such trouble.
+ * So the 10 ms frames after the end are skipped while they still sound like the word: up to the first one 12 dB under
+ * the keyword's level, or the deepest dip before the level rises 3 dB again (a command spoken straight on), at most
+ * 200 ms; if neither comes, the quietest frame seen (at worst what was cut before the ring).  The gain starts at the
+ * keyword's level (mic_fresh), so a tail left in reaches STT at speech level. */
+static uint64_t word_tail_end(uint64_t end, uint64_t to)
+{
+    const uint64_t frame = CAP_RATE / 100, most = CAP_RATE / 5;
+    if (keyword_db > 0) return end;                 /* no level known (the PC's SIGUSR1) */
+    uint64_t f = end, low_at = end; double low = 1e9;
+    for (; f + frame <= to && f - end < most; f += frame) {
+        double db = 10 * log10(ring_power(f, f + frame) / (32768.0 * 32768.0) + 1e-10);
+        if (db < keyword_db - 12) { low_at = f; break; }
+        if (db > low + 3) break;
+        if (db < low) { low = db; low_at = f; }
+    }
+    if (low_at > end) fprintf(stderr, "wake: %llu ms of the word's tail left out\n", (unsigned long long)((low_at - end) * 1000 / CAP_RATE));
+    return low_at;
+}
+
 static void answer(uint64_t from)                   /* capture thread: act on the wake word that ended at from */
 {
     trigger(0, from);
@@ -2373,7 +2396,7 @@ static void *capture_thread(void *arg)
             pthread_mutex_lock(&core_lock);
             uint64_t at = cap_clock() - n / 2;
             if (atomic_load(&streaming) && connected) {
-                if (replay_from) stream_ring(replay_from, at);         /* after the wake word, up to this block */
+                if (replay_from) stream_ring(word_tail_end(replay_from, at), at);     /* after the wake word, up to this block */
                 send_mic(pcm, n / 2, at);
             }
             replay_from = 0;

@@ -4,6 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-19
 
+- **No more "Ja." when you pause after the wake word.** Since the Echo sends what you say right after the wake word,
+  the last sound of a drawn-out "Alexaaa" could reach Home Assistant too: speech-to-text heard "Ja." or garbled the
+  first word, and when you then paused, Home Assistant took the pause for the end of your command. The Echo now
+  leaves out what still sounds like the end of the wake word (at most 0.2 s, never more than was cut before), so
+  speaking straight on and pausing both work. Thanks to Thyraz for tracking it down.
 - **Draw your own light ring animations** (issue #38). The settings page (Lights) has a designer for the ring: up
   to 100 designs of as many frames as you like, painted LED by LED or as a whole ring, with spinning, fading and
   breathing frames made for you, undo, and Amazon's animation as a start if you want it. For each of the Echo's own

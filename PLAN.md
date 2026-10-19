@@ -295,6 +295,13 @@ Run in this order. Each step says what it proves.
       order; the queue is cleared at the start and filled from then on, so audio right behind the request is kept. Host
       tests: the SIGUSR1 wake word ends 128 ms back now; fake_ha_esphome checks 4096 bytes from the ring ahead of the first
       live block, fake_ha_arbitration the window's (12096 bytes). On the Dot 2 (biscuit) the same day: user "way better".
+- [ ] The word's tail left out of that replay (forum, 2026-10-19). With the ring, a child's drawn-out "Alexa" plus
+      a pause came out of STT as "Ja." and HA's VAD ended the run in the pause; the build before ad224f5 (stream from
+      120-180 ms after the end) did not do it for that user. `word_tail_end`: 10 ms frames from Pryon's end, skipped up
+      to the first 12 dB under `keyword_db`, or the deepest dip before a 3 dB rise, at most 200 ms and never past the
+      live block (so never more cut than before the ring). Logged as "wake: <n> ms of the word's tail left out". Not
+      measured on real speech yet: no recording here has a wake word in it; needs a capture dump (`kill -TTIN`, its
+      start sample in the log) with the `wake: ... samples` lines of the same run.
 
 ## Phase 5 — Make it permanent **(device)**
 
