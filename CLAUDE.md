@@ -59,6 +59,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ma_sendspin.py    # Sendspin, as Music Assistant
 .venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step
 .venv/bin/python tests/fake_web_artifacts.py  # models copied Echo to Echo through the page, root's installer, after a restart
+.venv/bin/python tests/fake_web_ring.py       # light ring designs: library, assignments, apply with the test as root,
+                                             # the turned files -G makes, what plays, root failing, caps
 .venv/bin/python tests/fake_web_wifi.py       # Wi-Fi switch: sealed password, PSK, root's wifi.sh against a fake wpa_cli
 .venv/bin/python tests/fake_web_mww.py        # microWakeWord: models added/edited/deleted from the page, engine switch,
                                              # real detections on testdata/alexa_espeak.raw, copy as an artifact
@@ -406,7 +408,16 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   2.2 to the driver's duty as Amazon's own; last in layer 0), plus
   stock's config with them added and a digest; `sysinstall.sh leds` installs them (stock's config kept as
   `/system/etc/layer_config_common.json.pre-hassmic`, digest `/system/etc/hassmic-leds.digest`), ledcontroller
-  restarts.  hassmic lists the light only when the installed digest is its own.  Every pattern of the core goes
+  restarts.  hassmic lists the light only when the installed digest is its own.  Designs (issue #38, `ringdesign.c`,
+  page `web/ring.js`): up to 100 animations in `state/ring/<id>`, per slot of `ring_slots` (every pattern `led()`
+  plays) Amazon's or one; Apply -> `state/ring-applied` + `state/leds-request` -> root's ota_watch runs `leds()` (-G
+  reads the applied file, O_NOFOLLOW; the request is renamed into root's folder before it is read) -> `leds.result` ->
+  `rd_tick` -> `ring_reload` (shown patterns set again).  What is confirmed installed is `state/ring-installed`
+  (`installed()` promotes the applied file when its digest is the set's); a draft never installed goes back (`rd_start`).
+  Listening/end turned by each LED at install (`hassmic_s_listen|hold|end_N`), others `hassmic_s_<slot>` just before
+  stock's name.  Slot ids are stored: keep them.  Theme packs (`state/ring/packs/<id>`, `/api/ring/pack*`) are folders
+  of the library: `has` lines (a design in one pack at most) and `use` lines naming only those (version 2,
+  `pack_normal`); shared with their designs inside (version 1: the page's `.ringpack` and copies).  The page: ring.js.  Every pattern of the core goes
   through `led()` -> `ring_set`/`ring_unset`, which knows from each file how long it shows; while one does, HA's light
   is off.  Every ledctrl call (patterns and brightness) goes through `ledq.c` (issue #40): one at a time, in order,
   each waited for, in its own thread (started together, an unset can overtake its set and leave the pattern on).  The

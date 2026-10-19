@@ -51,6 +51,7 @@
 #include "sound.h"
 #include "hash.h"
 #include "mww.h"
+#include "ringdesign.h"
 #include "netio.h"
 #include "settings.h"
 #include "update.h"
@@ -322,6 +323,19 @@ static size_t jesc(char *out, size_t cap, const char *s)
     return n;
 }
 
+/* An approved browser's key in X-HM-Pub.  Not yet whether the request is signed: the MAC (signed_ok) is over the body,
+ * so nothing short of reading it tells.  The big bodies are read only for these keys, and the requests they carry are
+ * all signed ones: else anyone on the LAN could have the Echo hold 1 MB per connection, 8 at once.  The keys travel in
+ * the clear (plain HTTP), so this keeps strangers out, not someone who listens on the LAN: that one gets as far as the
+ * read, then the 401 */
+static int approved_key(const char *hexpub)
+{
+    uint8_t pub[32]; int ok;
+    if (unhex(pub, hexpub, 32)) return 0;
+    pthread_mutex_lock(&lk); ok = client_of(pub) != NULL; pthread_mutex_unlock(&lk);
+    return ok;
+}
+
 static int read_request(int fd, struct req *r)
 {
     char hdr[8192]; size_t n = 0; char *end = NULL, *line, *save; long cl = 0;
@@ -345,8 +359,11 @@ static int read_request(int fd, struct req *r)
         else if (!strcasecmp(line, "X-HM-Ctr")) snprintf(r->ctr, sizeof r->ctr, "%s", v);
         else if (!strcasecmp(line, "X-HM-Mac")) snprintf(r->mac, sizeof r->mac, "%s", v);
     }
-    /* a piece of an artifact and a microWakeWord model are the big bodies: everything else is a few lines */
-    if (cl < 0 || cl > (!strncmp(r->path, "/api/artifact/chunk/", 20) ? ART_CHUNK_MAX : !strncmp(r->path, "/api/mww/add/", 13) ? MWW_MODEL_MAX + 16384 : MAX_BODY)) return -2;
+    /* a piece of an artifact, a microWakeWord model and a light ring design are the big bodies: everything else is a
+     * few lines */
+    long max = !strncmp(r->path, "/api/artifact/chunk/", 20) ? ART_CHUNK_MAX : !strncmp(r->path, "/api/mww/add/", 13) ? MWW_MODEL_MAX + 16384
+             : !strncmp(r->path, "/api/ring/design/", 17) ? RD_TEXT_MAX : MAX_BODY;
+    if (cl < 0 || (cl > MAX_BODY && (cl > max || !approved_key(r->pub)))) return -2;
     if (!(r->body = malloc((size_t)cl + 1))) return -1;
     size_t have = n - hl < (size_t)cl ? n - hl : (size_t)cl;
     memcpy(r->body, hdr + hl, have);
@@ -563,6 +580,49 @@ static void mww_api(int fd, struct req *r)
         else { core_wake_word(i); core_entities_changed(); rc = 0; }  /* Home Assistant's select reads the pick on reconnect */
         pthread_mutex_unlock(&core_lock);
     }
+    else snprintf(err, sizeof err, "not found");
+    if (!rc) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
+    jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
+    respond_sjson(fd, r, 400, o);
+}
+
+/* /api/ring              GET   the slots, what each has (drafted and on the ring), the library's names (ringdesign.c)
+ * /api/ring/designs      GET   every design as text, "design <id>" before each
+ * /api/ring/stock/<slot> GET   stock's animation for a slot, as its file has it (the designer starts from it; volume:
+ *                              every step, "step NN" before each)
+ * /api/ring/design/<id>  POST  a design's text (ringdesign.h); id 0: a new one                        -> {"id"}
+ * /api/ring/delete/<id>  POST
+ * /api/ring/assign       POST  "<slot> <design id>" lines, 0: stock's
+ * /api/ring/packs        GET   every theme pack as text, "pack <id>" before each
+ * /api/ring/pack/<id>    POST  a pack as the Echo keeps it (ringdesign.h, version 2), checked; id 0: a new one -> {"id"}
+ * /api/ring/pack-delete/<id> POST
+ * /api/ring/apply        POST  the assignments onto the ring: root installs them, the ring goes dark for a second
+ * All signed. */
+static void ring_api(int fd, struct req *r)
+{
+    char err[200] = "", o[300], ej[260], slot[32]; int rc = -1, id = 0, got = 0, write = !strcmp(r->method, "POST");
+    if (!signed_ok(r, write)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    if (!write && !strcmp(r->path, "/api/ring")) {
+        size_t cap = 65536; char *t = malloc(cap);
+        size_t n = t ? rd_status_json(t, cap) : 0;
+        if (!n) { free(t); respond_sjson(fd, r, 503, "{\"error\":\"no memory\"}"); return; }
+        respond_s(fd, r, 200, "application/json", NULL, t, n); free(t); return;
+    }
+    if (!write && (!strcmp(r->path, "/api/ring/designs") || !strcmp(r->path, "/api/ring/packs") || sscanf(r->path, "/api/ring/stock/%31s", slot) == 1)) {
+        size_t n = 0; char *t = r->path[10] == 'd' ? rd_library_text(&n) : r->path[10] == 'p' ? rd_packs_text(&n) : rd_stock(slot, &n);
+        if (!t) { respond_sjson(fd, r, 404, "{\"error\":\"not found\"}"); return; }
+        respond_s(fd, r, 200, "text/plain; charset=utf-8", NULL, t, n); free(t); return;
+    }
+    if (write && sscanf(r->path, "/api/ring/design/%d", &id) == 1) {
+        if (!(rc = rd_save(id, r->body, r->blen, &got, err, sizeof err))) { snprintf(o, sizeof o, "{\"id\":%d}", got); respond_sjson(fd, r, 200, o); return; }
+    }
+    else if (write && sscanf(r->path, "/api/ring/pack/%d", &id) == 1) {
+        if (!(rc = rd_pack_save(id, r->body, r->blen, &got, err, sizeof err))) { snprintf(o, sizeof o, "{\"id\":%d}", got); respond_sjson(fd, r, 200, o); return; }
+    }
+    else if (write && sscanf(r->path, "/api/ring/pack-delete/%d", &id) == 1) rc = rd_pack_delete(id, err, sizeof err);
+    else if (write && sscanf(r->path, "/api/ring/delete/%d", &id) == 1) rc = rd_delete(id, err, sizeof err);
+    else if (write && !strcmp(r->path, "/api/ring/assign")) rc = rd_assign(r->body, err, sizeof err);
+    else if (write && !strcmp(r->path, "/api/ring/apply")) rc = rd_apply(err, sizeof err);
     else snprintf(err, sizeof err, "not found");
     if (!rc) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
     jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
@@ -865,6 +925,7 @@ static void handle(int fd)
     else if (!strncmp(r.path, "/api/artifact", 13)) artifact_api(fd, &r);
     else if (!strncmp(r.path, "/api/davs", 9)) davs_api(fd, &r);
     else if (!strncmp(r.path, "/api/mww", 8)) mww_api(fd, &r);
+    else if (!strncmp(r.path, "/api/ring", 9)) ring_api(fd, &r);
     else if (!strncmp(r.path, "/api/wifi", 9)) wifi_api(fd, &r);
     else if (!strcmp(r.method, "GET") && !strncmp(r.path, "/api/log/", 9)) log_api(fd, &r);
     else respond_json(fd, 404, "{\"error\":\"not found\"}");

@@ -6,6 +6,9 @@
 
 const { x25519, x25519Public, blake2b, seal, hex, unhex } = hmcrypto;
 const enc = new TextEncoder(), dec = new TextDecoder();
+// v cut to max bytes of UTF-8, whole characters: the Echo counts bytes where maxlength counts UTF-16 units (an umlaut
+// is one there, two here)
+const fitBytes = (v, max) => { while (enc.encode(v).length > max) v = [...v].slice(0, -1).join(''); return v; };
 const cat = (a, b) => { const o = new Uint8Array(a.length + b.length); o.set(a); o.set(b, a.length); return o; };
 const $ = (id) => document.getElementById(id);
 
@@ -37,11 +40,12 @@ class Echo {
   // body: text or bytes, or a function of the counter that returns them (what it seals is bound to this request).
   // Returns { bytes, text(), json() } once the answer's signature checks out.  Errors: 'login' (not approved here), 'old'
   // (an Echo whose answers are not signed yet: update it), 'forged', or the Echo's own words.
-  async call(method, path, body = '') {
+  // signal: an AbortSignal that gives up on it (within())
+  async call(method, path, body = '', signal = undefined) {
     const ctr = String(this.nextCtr()), raw = typeof body === 'function' ? body(ctr) : body;
     const b = typeof raw === 'string' ? enc.encode(raw) : raw;
     const mac = blake2b(16, this.k, cat(enc.encode(`${method}\n${path}\n${ctr}\n`), b));
-    const r = await fetch(this.base + path, { method, body: method === 'POST' ? b : undefined,
+    const r = await fetch(this.base + path, { method, body: method === 'POST' ? b : undefined, signal,
       headers: { 'X-HM-Pub': hex(me.pub), 'X-HM-Ctr': ctr, 'X-HM-Mac': hex(mac) } });
     if (r.status === 401) throw new Error('login');
     const bytes = new Uint8Array(await r.arrayBuffer()), got = r.headers.get('X-HM-Mac');
@@ -128,14 +132,15 @@ const icon = (n) => h('span', { html: `<svg class="i" viewBox="0 0 24 24" aria-h
 function browserLabel() { return (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || 'browser'; }
 
 // In place of the browser's confirm() and prompt(): the page's own dialog.  title, body (nodes or text), ok (the button
-// that goes ahead), danger (it deletes or cuts something off), input (a text field: { label, value, max }), check (a
-// value from the field: an error text, or null).  Resolves to true (or the field's text) when gone ahead, null otherwise.
+// that goes ahead), danger (it deletes or cuts something off), input (a text field: { label, value, max }, max in bytes
+// of UTF-8 as the Echo counts), check (a value from the field: an error text, or null).  Resolves to true (or the
+// field's text) when gone ahead, null otherwise.
 function ask({ title, body = [], ok = 'OK', danger = false, input = null, check = null }) {
   return new Promise((done) => {
     let result = null;
     const field = input ? h('input', { type: 'text', id: 'ask-field', value: input.value || '', maxlength: String(input.max || 200), autocomplete: 'off' }) : null;
     const msg = h('p', { class: 'help ask-msg' });
-    if (field) field.oninput = () => { msg.textContent = ''; };
+    if (field) field.oninput = () => { msg.textContent = ''; const v = fitBytes(field.value, input.max || 200); if (v !== field.value) field.value = v; };
     const go = h('button', { type: 'submit', class: danger ? 'danger' : 'primary' }, ok);
     const cancel = h('button', { type: 'button', onclick: () => dlg.close() }, 'Cancel');
     const close = h('button', { type: 'button', class: 'icon-btn', title: 'Close', 'aria-label': 'Close', onclick: () => dlg.close() }, icon('x'));
@@ -645,6 +650,9 @@ function build() {
     } else if (sec.id === 'Wake word') {
       el.append(h('div', { class: 'card' }, list.map(settingRow)));
       buildWake(el);
+    } else if (sec.id === 'Lights') {
+      el.append(h('div', { class: 'card' }, list.map(settingRow)));
+      buildRing(el);                    // ring.js: the designs and where they show
     } else if (sec.id === 'Echos') {
       buildEchos(el, state.settings.find((s) => s.name === 'arbitration'));
     } else if (sec.id === 'System') {
@@ -1133,7 +1141,15 @@ function renderNetwork() {
 
 async function exportOf(e) { return (await e.call('GET', '/api/export')).text(); }
 const parse = (text) => new Map(text.split('\n').filter((l) => l.includes('=') && !l.startsWith('#')).map((l) => { const i = l.indexOf('='); return [l.slice(0, i), l.slice(i + 1)]; }));
-let mine = new Map(), myArts = null, scanMark = null, devRun = null, devNext = null;
+let mine = new Map(), myArts = null, myRing = null, scanMark = null, devRun = null, devNext = null;
+// An Echo's settings as the copy compares them: its export, and (ring.js) the ring's designs and what shows where
+async function valuesOf(e) {
+  const v = parse(await exportOf(e)), r = await ringSnapshot(e);
+  if (r) for (const [k, x] of r.values) v.set(k, x);
+  return { values: v, ring: r };
+}
+// What an Echo has for a row (undefined: a row it has not got)
+const valOf = (d, n) => d.values.get(n);
 const selfAt = new Set();                // this Echo's own other addresses
 const within = (ms) => { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; };
 
@@ -1156,7 +1172,7 @@ function refreshDevices() {
 
 // All Echos at once, each shown as soon as it answers: one at a time, a single dead address held the whole list back
 async function scanDevices() {
-  mine = parse(await exportOf(echo));
+  ({ values: mine, ring: myRing } = await valuesOf(echo));
   try { myArts = (await echo.call('GET', '/api/artifacts')).json(); } catch (e) { myArts = null; }
   const ips = knownIps(), jobs = [];
   for (const [base, d] of others) if (!ips.has(d.ip)) others.delete(base);     // moved, or added by hand and removed
@@ -1181,7 +1197,7 @@ async function probe(base) {
     }
     d.error = null;
     const read = async () => {
-      d.values = parse(await exportOf(d.echo)); d.logged = true;
+      ({ values: d.values, ring: d.ring } = await valuesOf(d.echo)); d.logged = true;
       rediff(d);
       try { d.arts = (await d.echo.call('GET', '/api/artifacts')).json(); } catch (e) { d.arts = null; }
     };
@@ -1199,13 +1215,13 @@ async function probe(base) {
   finally { d.looking = false; }
 }
 
-const rediff = (d) => { d.diff = [...mine].filter(([k, v]) => d.values.has(k) && d.values.get(k) !== v).map(([k]) => k); };
+const rediff = (d) => { d.diff = [...mine].filter(([k, v]) => valOf(d, k) !== undefined && valOf(d, k) !== v).map(([k]) => k); };
 
 // This Echo's values only, between rounds: the other Echos are read every 30 s, but what is copied is what this one has now
 async function refreshMine() {
-  const now = parse(await exportOf(echo));
+  const { values: now, ring: nowRing } = await valuesOf(echo);
   if (devRun || (now.size === mine.size && [...now].every(([k, v]) => mine.get(k) === v))) return;
-  mine = now;
+  mine = now; myRing = nowRing;
   for (const d of others.values()) if (d.values) rediff(d);
   renderDevices();
 }
@@ -1332,8 +1348,13 @@ const pick = { rows: new Map(), to: new Map() };
 const ticked = (m, k, dflt) => (m.has(k) ? m.get(k) : dflt);
 let syncing = false;
 
+// a row of the ring (ring.js): its group, words and values, resolved through every Echo's designs
+const ringMeta = (n) => ringRowMeta(n, [myRing, ...[...others.values()].map((d) => d.ring)]);
+
 function pretty(name, raw) {
   if (raw === undefined) return '—';
+  const rm = ringMeta(name);
+  if (rm) return rm.pretty(raw);
   const s = state.settings.find((x) => x.name === name);
   if (!s) return raw;
   if (s.type === 'bool') return raw === 'on' ? 'On' : 'Off';
@@ -1349,13 +1370,13 @@ function renderSync() { if (syncBox) keepFocus(syncBox, drawSync); }
 function drawSync() {
   syncBox.innerHTML = '';
   const targets = ready(), names = [...mine.keys()];
-  syncBox.append(cardHead('Copy settings', `From ${echo.hello.name} to your other Echos. Only what differs is listed; a setting an Echo does not have (no Bluetooth, no Wi-Fi motion) is left out there.`, 'sliders'));
+  syncBox.append(cardHead('Copy settings', `From ${echo.hello.name} to your other Echos. Only what differs is listed; a setting an Echo does not have (no Bluetooth, no Wi-Fi motion) is left out there. The light ring's animations take the design they show along where it is missing, and are applied there; a design alone goes with the models below.`, 'sliders'));
   if (!targets.length) {
     syncBox.append(empty('net', others.size ? 'Log in to another Echo above (its own action button, once) to copy settings to it.'
       : 'No other Echo found yet. Echos running hassmic on the same network show up above by themselves within a minute.'));
     return;
   }
-  const differs = (n, d) => d.values.has(n) && d.values.get(n) !== mine.get(n);
+  const differs = (n, d) => valOf(d, n) !== undefined && valOf(d, n) !== mine.get(n);
   const toOn = (d) => ticked(pick.to, d.echo.base, d.diff.length > 0);
   const sel = targets.filter(toOn);
   const waiting = [...others.values()].filter((d) => d.echo && !d.logged && !d.error).length;
@@ -1373,22 +1394,22 @@ function drawSync() {
   const rowOn = (n) => ticked(pick.rows, n, true);
   const setting = (n) => state.settings.find((x) => x.name === n);
   const groups = new Map();
-  for (const n of listed) { const g = (setting(n) || {}).group || 'Other'; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(n); }
+  for (const n of listed) { const g = (ringMeta(n) || setting(n) || {}).group || 'Other'; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(n); }
   const order = [...groups.keys()].sort((p, q) => ((SECTIONS.findIndex((x) => x.id === p) + 99) % 99) - ((SECTIONS.findIndex((x) => x.id === q) + 99) % 99));
   const list = h('div', { class: 'changes' }), rows = [];
   for (const g of order) {
     list.append(h('div', { class: 'grp' }, g));
     for (const n of groups.get(g)) {
-      const s = setting(n), to = mine.get(n);
+      const s = setting(n), rm = ringMeta(n), to = mine.get(n);
       const lines = sel.map((d) => {
-        const v = d.values.get(n), who = h('span', { class: 'ch-echo', title: d.echo.hello.name }, d.echo.hello.name);
+        const v = valOf(d, n), who = h('span', { class: 'ch-echo', title: d.echo.hello.name }, d.echo.hello.name);
         if (v === undefined) return h('div', { class: 'ch-line same' }, who, 'not on that model');
         if (v === to) return h('div', { class: 'ch-line same' }, who, icon('check'), 'already ', pretty(n, v));
         return h('div', { class: 'ch-line' }, who, h('span', { class: 'old' }, pretty(n, v)), icon('arrow'), h('span', { class: 'new' }, pretty(n, to)));
       });
-      const cb = checkbox(rowOn(n), (on) => { pick.rows.set(n, on); row.classList.toggle('on', on); row.classList.toggle('off', !on); foot(); }, s ? s.label : n, 'row ' + n);
+      const cb = checkbox(rowOn(n), (on) => { pick.rows.set(n, on); row.classList.toggle('on', on); row.classList.toggle('off', !on); foot(); }, rm ? rm.label : s ? s.label : n, 'row ' + n);
       cb.disabled = syncing;
-      const row = h('label', { class: 'change ' + (rowOn(n) ? 'on' : 'off') }, cb, h('div', { class: 'ch-name' }, s ? label(s) : n), h('div', { class: 'ch-to' }, lines));
+      const row = h('label', { class: 'change ' + (rowOn(n) ? 'on' : 'off') }, cb, h('div', { class: 'ch-name' }, rm ? rm.label : s ? label(s) : n), h('div', { class: 'ch-to' }, lines));
       rows.push(row); list.append(row);
     }
   }
@@ -1410,16 +1431,23 @@ function drawSync() {
   syncBox.append(footBox);
 }
 
+// Settings through /api/set; the ring's rows (ring.js ringCopy) as designs uploaded where missing, the animations
+// assigned and applied there: an animation copied takes its design along when that Echo has not got it
 async function copySettings(names, list) {
   syncing = true; renderSync();
-  const text = names.filter((n) => mine.has(n)).map((n) => `${n}=${mine.get(n)}\n`).join('');
+  const ringRows = names.filter((n) => ringMeta(n)), plain = names.filter((n) => !ringMeta(n));
+  const text = plain.filter((n) => mine.has(n)).map((n) => `${n}=${mine.get(n)}\n`).join('');
   const notes = [];
   for (const d of list) {
     try {
-      const r = (await d.echo.call('POST', '/api/set', text)).json();
-      // what that model has not got (Bluetooth, Wi-Fi motion) is no error worth showing
-      const errs = r.errors.split('\n').filter((x) => x && !x.includes('no such setting'));
-      if (errs.length) notes.push(`${d.echo.hello.name}: ${errs.join('; ')}`);
+      if (text) {
+        const r = (await d.echo.call('POST', '/api/set', text)).json();
+        // what that model has not got (Bluetooth, Wi-Fi motion) is no error worth showing
+        const errs = r.errors.split('\n').filter((x) => x && !x.includes('no such setting'));
+        if (errs.length) notes.push(`${d.echo.hello.name}: ${errs.join('; ')}`);
+      }
+      const mineRows = ringRows.filter((n) => valOf(d, n) !== undefined && valOf(d, n) !== mine.get(n));
+      if (mineRows.length && myRing) for (const x of await ringCopy(d.echo, mineRows, myRing, d.ring)) notes.push(`${d.echo.hello.name}: ${x}`);
     } catch (e) { notes.push(`${d.echo.hello.name}: ${errText(e)}`); }
   }
   toast(notes.length ? notes.join(' · ') : `Copied to ${nameList(list.map((d) => d.echo.hello.name))}`);
@@ -1657,6 +1685,8 @@ const mOn = (id) => ticked(mpick.rows, id, false), xOn = (x) => ticked(mpick.to,
 let copying = null;                             // { text, done, total } while models travel
 
 function artLabel(a) {
+  if (a.kind === 'design') return `Light ring design "${a.name}"`;
+  if (a.kind === 'pack') return `Light ring theme pack "${a.name}"`;
   if (a.kind === 'mww') return `microWakeWord model ${a.name}`;
   if (a.kind === 'sound') return 'Sound detection, newer model';
   if (a.kind === 'whisper') return 'Whisper detection';
@@ -1668,16 +1698,24 @@ const mb = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(
 function renderModels() { if (modelBox) keepFocus(modelBox, drawModels); }
 function drawModels() {
   modelBox.innerHTML = '';
-  modelBox.append(cardHead('Copy models', 'Amazon\'s extra models from Download from Amazon (more wake words, whisper detection, the newer sound detection model) and microWakeWord\'s models, Echo to Echo instead of adding them on each. A model is tried on the receiving Echo first; each Echo that gets one of Amazon\'s restarts its satellite once, for a few seconds.', 'box'));
-  if (!myArts) { modelBox.append(empty('warn', 'This Echo cannot list its models.')); return; }
-  const echos = [{ name: echo.hello.name, key: '', e: echo, arts: myArts }, ...ready().filter((d) => d.arts).map((d) => ({ name: d.echo.hello.name, key: d.echo.base, e: d.echo, arts: d.arts }))];
+  modelBox.append(cardHead('Copy models', 'Amazon\'s extra models from Download from Amazon (more wake words, whisper detection, the newer sound detection model), microWakeWord\'s models and your light ring designs and theme packs, Echo to Echo instead of adding them on each. A model is tried on the receiving Echo first; each Echo that gets one of Amazon\'s restarts its satellite once, for a few seconds. A design goes into the other Echo\'s designs only: none of its animations shows it until picked there.', 'box'));
+  if (!myArts && !myRing) { modelBox.append(empty('warn', 'This Echo cannot list its models.')); return; }
+  // each Echo's models, and its light ring designs as models of their own (ring.js): known by their text, the same
+  // everywhere or missing, never "another version"; an Echo without designs (older hassmic) cannot take them
+  const withDesigns = (arts, rs) => ({ artifacts: [...(arts ? arts.artifacts : []),
+    // designs at the top level; those in a pack travel in it
+    ...(rs ? [...rs.byMark].filter(([mark]) => !rs.inPack.has(mark)).map(([mark, x]) => ({ id: 'design:' + mark, kind: 'design', name: x.name, digest: mark, size: x.text.length, text: x.text })) : []),
+    ...(rs && rs.packs ? [...rs.packs].map(([mark, x]) => ({ id: 'pack:' + mark, kind: 'pack', name: x.name, digest: mark, size: x.text.length, text: x.text })) : [])] });
+  const echos = [{ name: echo.hello.name, key: '', e: echo, arts: withDesigns(myArts, myRing), ring: !!myRing, packs: !!(myRing && myRing.packs), snap: myRing },
+    ...ready().filter((d) => d.arts || d.ring).map((d) => ({ name: d.echo.hello.name, key: d.echo.base, e: d.echo, arts: withDesigns(d.arts, d.ring), ring: !!d.ring, packs: !!(d.ring && d.ring.packs), snap: d.ring }))];
   const all = new Map();
   for (const x of echos) for (const a of x.arts.artifacts) if (!all.has(a.id)) all.set(a.id, a);
   if (!all.size) { modelBox.append(empty('box', 'None of these Echos has any of Amazon\'s extra models or a microWakeWord model yet: download or add them first, then copy from here.')); return; }
   // where each model comes from: this Echo if it has it, else the first that does
   const source = (id) => echos.find((x) => x.arts.artifacts.some((a) => a.id === id));
   const theirs = (x, id) => x.arts.artifacts.find((a) => a.id === id);
-  const needs = (x, id) => { const s = source(id), t = theirs(x, id); return x !== s && (!t || t.digest !== theirs(s, id).digest); };
+  const takes = (x, id) => (id.startsWith('design:') ? x.ring : id.startsWith('pack:') ? x.packs : true);
+  const needs = (x, id) => { const s = source(id), t = theirs(x, id); return x !== s && takes(x, id) && (!t || t.digest !== theirs(s, id).digest); };
   // a model every Echo listed has already, the same version everywhere, has nothing to copy: left out
   const ids = [...all.keys()].filter((id) => echos.some((x) => needs(x, id))).sort((p, q) => artLabel(all.get(p)).localeCompare(artLabel(all.get(q))));
   const everywhere = all.size - ids.length;
@@ -1697,6 +1735,7 @@ function drawModels() {
       const t = theirs(x, id), who = h('span', { class: 'ch-echo', title: x.name }, x.name);
       if (x === src) return h('div', { class: 'ch-line same' }, who, icon('check'), 'has it, copied from here');
       if (t && t.digest === theirs(src, id).digest) return h('div', { class: 'ch-line same' }, who, icon('check'), 'has it');
+      if (!takes(x, id)) return h('div', { class: 'ch-line same' }, who, id.startsWith('pack:') ? 'no packs there (older hassmic)' : 'no designs there (older hassmic)');
       if (!xOn(x)) return h('div', { class: 'ch-line same' }, who, t ? 'another version, left alone' : 'not there, left alone');
       return h('div', { class: 'ch-line' + (t ? ' warn' : '') }, who, icon('arrow'), h('span', { class: 'new' }, t ? 'replace its other version' : 'install'));
     });
@@ -1723,6 +1762,14 @@ function drawModels() {
 
 async function transfer(job, done0, total) {
   const { art, from, to } = job;
+  if (art.kind === 'design' || art.kind === 'pack') {   // a light ring design or theme pack (ring.js), as a new one there
+    if (!to.toId) to.toId = new Map(to.snap ? to.snap.toId : []);         // its designs, and those copied there now
+    if (art.kind === 'design') to.toId.set(art.digest, (await to.e.call('POST', '/api/ring/design/0', art.text)).json().id);
+    else await importPack(packParse(art.text), (path, body) => to.e.call('POST', path, body));   // its designs as a folder of its own
+    copying = { text: `${artLabel(art)}: ${from.name} → ${to.name}`, done: done0 + art.size, total };
+    renderModels();
+    return;
+  }
   const spec = `${art.id} ${art.digest}\n` + art.files.map((f) => `${f.name} ${f.size}\n`).join('');
   await to.e.call('POST', '/api/artifact/begin', spec);
   let done = 0;
@@ -1754,7 +1801,7 @@ async function copyModels(jobs) {
   let done = 0, installed = 0;                                                            // microWakeWord's: in place at commit
   copying = { text: 'Starting…', done: 0, total }; renderModels();
   for (const j of jobs) {
-    try { await transfer(j, done, total); if (j.art.kind !== 'mww') got.set(j.to.key, j.to); else installed++; }
+    try { await transfer(j, done, total); if (j.art.kind !== 'mww' && j.art.kind !== 'design' && j.art.kind !== 'pack') got.set(j.to.key, j.to); else installed++; }
     catch (e) { notes.push(`${artLabel(j.art)} → ${j.to.name}: ${errText(e).replace(/^Error: /, '')}`); }
     done += j.art.size;
   }
@@ -1764,7 +1811,8 @@ async function copyModels(jobs) {
     catch (e) { notes.push(`${x.name}: ${errText(e).replace(/^Error: /, '')}`); }
   }
   copying = null; mpick.rows.clear();
-  toast(notes.length ? notes.join(' · ') : `Copied and installed: ${plural(installed + jobs.filter((j) => j.art.kind !== 'mww').length, 'model')}`);
+  toast(notes.length ? notes.join(' · ') : `Copied: ${plural(installed + jobs.filter((j) => j.art.kind !== 'mww' && j.art.kind !== 'design' && j.art.kind !== 'pack').length, 'model')}`);
+  if (jobs.some((j) => (j.art.kind === 'design' || j.art.kind === 'pack') && !j.to.key)) ringLoad().catch(() => {});      // designs came here: the cards
   if (got.has('')) { setTimeout(() => location.reload(), 500); return; }       // this Echo restarted: start the page over
   if (mwwBox) getMww().catch(() => {});
   await refreshDevices();

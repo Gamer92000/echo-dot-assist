@@ -34,6 +34,15 @@ if [ "$MODE" = leds ]; then
     L=$3
     [ -s "$L/digest" ] && [ -s "$L/layer_config_common.json" ] || { say "no animation set in $L, nothing written"; exit 1; }
     [ -f $LSTOCK ] || ! grep -q hassmic_ $LR/layer_config_common.json || { say "stock's layer config is gone, nothing written"; exit 1; }
+    # Designs from the settings page make the set as large as people draw them (ring.c caps them at 3 MB): room for it
+    # on the partition, counting ours it replaces, and half a megabyte to spare
+    need=$(du -sk "$L" | { read -r k _; echo "$k"; })
+    have=$(df -k /system | { read -r _; read -r _ _ _ a _; echo "$a"; })
+    mine=$(du -ck $LR/hassmic_*.animation 2>/dev/null | { t=0; while read -r k w; do [ "$w" = total ] && t=$k; done; echo $t; })
+    case "$need$have$mine" in
+    *[!0-9]*|'') say "cannot tell the set's size or the system partition's room, nothing written"; exit 1;;
+    *) [ $need -lt $((have + mine - 512)) ] || { say "the system partition has room for $((have + mine - 512)) kB, the set is $need kB: nothing written"; exit 1; };;
+    esac
 elif [ "$MODE" != uninstall ]; then
     for f in boot.sh main.sh lockdown.sh device.conf hassmic runas otatool hassmic.rc; do
         [ -s "$SRC/$f" ] || { say "$f missing in $SRC, nothing written"; exit 1; }
@@ -73,13 +82,16 @@ commit() {
 
 if [ "$MODE" = leds ]; then
     [ -f $LSTOCK ] || new $LSTOCK $LR/layer_config_common.json 644 0:0 $SYSLABEL       # stock's, before ours replaces it
-    # Ours are files of their own, ~600 of them: in bulk, as one at a time takes minutes.  A cut in between leaves the
-    # old digest, and the next start writes them again
+    # Ours are files of their own, ~600 of them: in bulk, as one at a time takes minutes, and over the old ones.  The
+    # digest goes first: a copy cut half way leaves old and new files mixed, and without a digest the next start
+    # writes the whole set again (with the old one it would take the set for installed)
+    rm -f /system/etc/hassmic-leds.digest; sync
     cp "$L"/hassmic_*.animation $LR/ && chmod 644 $LR/hassmic_*.animation && chcon $SYSLABEL $LR/hassmic_*.animation ||
         { say "cannot write the animations"; exit 1; }
-    for f in $LR/hassmic_*.animation; do [ -e "$L/${f##*/}" ] || rm -f "$f"; done
     new $LR/layer_config_common.json "$L/layer_config_common.json" 644 0:0 $SYSLABEL
     commit
+    # files of an earlier set only once the config naming them is gone: a cut before this leaves a config whose files exist
+    for f in $LR/hassmic_*.animation; do [ -e "$L/${f##*/}" ] || rm -f "$f"; done
     staged=; new /system/etc/hassmic-leds.digest "$L/digest" 644 0:0 $SYSLABEL; commit
     say "light ring: $(ls $LR/hassmic_*.animation | wc -l) animations of ours"
     exit 0

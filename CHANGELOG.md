@@ -4,6 +4,21 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-19
 
+- **Draw your own light ring animations** (issue #38). The settings page (Lights) has a designer for the ring: up
+  to 100 designs of as many frames as you like, painted LED by LED or as a whole ring, with spinning, fading and
+  breathing frames made for you, undo, and Amazon's animation as a start if you want it. For each of the Echo's own
+  animations (listening, thinking, speaking, timers, volume, mute, Drop In calls and more) you pick Amazon's or one of
+  yours; listening still turns towards whoever speaks. **Apply** puts them on the ring (a second without light).
+  Thanks to Nils3311 for the idea and the first themes in PR #39, which this replaces.
+  Designs go to your other Echos with "Copy models" (Echos), as models do; "Copy settings" copies what each
+  animation shows, and takes the design along where that Echo has not got it.
+- **Theme packs for the light ring**, as folders of your designs: a pack holds designs and which of them each
+  animation shows, with a name, author and a packshot in one of four styles drawn from the pack itself. Open one to
+  change its animations and designs in place; use it in a click, share it as a file, or copy it to your other Echos
+  with "Copy models".
+- **Home Assistant's light no longer shows through a Drop In call's ring.** The call rings, Amazon's talking ring and
+  the identify rainbow play again and again until they are stopped, and the Echo took them for over after one pass: the
+  light came back into their gaps, and with a long reply the ring could be stopped under the wrong name.
 - **Setup from Windows for an unlocked Echo** (issue #49). `scripts/setup.sh` now runs in Git Bash on Windows when the
   Echo on USB is unlocked already (on adb, in Fire OS or TWRP): firmware, root, the release build, Wi-Fi and the
   install, as on Linux. The unlock itself still needs Linux on the PC; an Echo Dot 2 can reportedly also be unlocked

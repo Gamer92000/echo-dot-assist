@@ -1676,8 +1676,10 @@ Run in this order. Each step says what it proves.
       - One config composes per LED, black transparent (half blue in layer 5 over red in layer 0: half each); in one
         layer only the first listed active one shows, the others wait and resume (active-end set while active-start
         ran: "Stop active-start", "Start active-end", "Finished active-end", "Start active-start"). Before composing
-        it looks for a made-up animation "<higher>-<lower>" ("Animation not found"). A black loop (or none) finishes
-        by itself; a lit loop stays until unset.
+        it looks for a made-up animation "<higher>-<lower>" ("Animation not found"). A black loop finishes by itself; a
+        lit loop stays until unset, and so does a file without "loop": it plays again from the start (seen 2026-10-16
+        on a Dot 2 in PR #39: a talking ring made from stock's, which has none, stayed on after a 5.8 s reply; stock's
+        call rings and zzz_* have none either). ring.c took those for finished after one pass until 2026-10-19.
       - Pixels may be 3 or 6 hex digits (stock mixes them); restarting ledcontroller left `PUFFIN_START` at 0.
       - Turned copies: "hassmic_listen_3" (active-start turned by 3) gave the very frame stock's own turn gives at
         BeamDirection 3; beside `ready-timer` stock's stayed at LEDs 10-11, ours turned (LEDs 1-2), `hold_9` at 7-8,
@@ -1730,6 +1732,48 @@ Run in this order. Each step says what it proves.
       Brightness 10, 20 .. 90, 37 sent at once: 37 stays. With ledcontroller stopped ledctrl never returns (5 s
       `timeout` seen): each call was killed after 2000 ms and logged, the next one ran, the API kept answering, and the
       ring worked again once ledcontroller was started.
+- [x] Light ring designs (2026-10-19, issue #38; PR #39 had four fixed themes made from stock's rings; any
+      animation instead): a designer on the settings page (`web/ring.js`), a library
+      of up to 100 designs in `state/ring/<id>` (`ringdesign.c`; text: name, leds, loop k|once, `<ms>:RRGGBB,...`
+      as seen, at most 1000 frames, 4 MB in all), and per slot (`ring.c` `ring_slots`: the 21 patterns `main.c`
+      plays) Amazon's or a design. Drafts change nothing; Apply writes every assigned design into
+      `state/ring-applied` and `state/leds-request`; root's `ota_watch` runs `leds()` (one at a time, `leds.lock`),
+      whose `-G` reads that file too, then answers `<id> ok|same|failed <why>` in `/data/local/hassmic/leds.result`
+      after ledcontroller restarted (2 s); hassmic's `rd_tick` reads it: ok -> `ring_reload` (what showed set again
+      under the new names, a fixed LED level again: ledcontroller starts with auto on, HA's light listed anew if it
+      came or went); failed -> the applied file back to what is installed, so a restart of hassmic still finds its own
+      set. A design goes just before the stock name it replaces in that name's layer (it waits and covers as stock's
+      did); listening and its end are made turned by each LED (`hassmic_s_listen|hold|end_N`; hold = its loop) and
+      go first in layer 4 after stock's turned ones; volume steps (`hassmic_s_volume_NN`, and the Assistant's
+      `hassmic_assist_NN` instead of cyan) take the design's first frame through stock's step at stock's brightness.
+      Colours through the light's gamma 2.2 (the page shows them as seen; Amazon's files taken as a start go the other
+      way). Designs can add at most 3 MB (`DESIGN_BYTES_MAX`; listening is there 24 times, its end 12), checked
+      before root is asked; `sysinstall.sh leds` checks the partition's room. With no design applied the set is byte
+      for byte what it was. `tests/fake_web_ring.py`: refusals, assignments, apply with the test as root, the files
+      made, what plays (beam 3, moved to 7), the light set again, root failing, the cap, deletes, 100 designs, a
+      start, a link as the applied file. Not yet on an Echo: the restart from ota_watch while hassmic runs (the same
+      `stop; start ledcontroller` as at a satellite start).
+      Review (2026-10-19): what is confirmed installed is kept apart (`state/ring-installed`; `ring-applied` is only what
+      root is asked for). ring.c `installed()` checks the set's digest against the installed designs, then against the
+      applied ones and promotes those (root installed them at a boot, or hassmic missed the answer); `rd_start` keeps
+      waiting for a request still out, else puts a draft never installed back (it would be retried at every boot, and
+      the ring would lose its set to hassmic's digest). Root takes the request by renaming it into its own folder before
+      it looks (no link or FIFO swapped in between), keeps sysinstall's whole reason, and a lock left by a killed install
+      is taken over when its pid is gone. The wait is CLOCK_MONOTONIC (clock.c steps the wall clock): 180 s for root to
+      take the request, then 15 min. New designs skip ids the ring still names; a design's big body is read only from an
+      approved browser key; ring.c's buffers stop on out of memory instead of writing past their end.
+      Theme packs (2026-10-19): `state/ring/packs/<id>` (50), version 2 in ringdesign.h: name, author, about, shot,
+      `has <design id>` (its designs: a folder of the library) and `use <slot> <its design id>|stock`. A design is in
+      one pack at most (the Echo refuses a second); a pack's animations show only its own designs, so packs do not
+      reach into each other; a design from elsewhere comes in as a copy. The first version embedded its designs (two
+      copies of everything, nothing to look at or change); the second without `has` let packs share designs: the page
+      converts both once (fixPacks). A design deleted leaves the pack holding it; new designs skip ids packs name.
+      Shared a pack carries its designs (version 1, the page's): `.ringpack` files and "Copy models" make a folder of
+      new designs on the other Echo. The page: one "Designs" card, packs as folders (packshot covers) above the
+      designs in no pack; a pack opened in place with its animations (the main card's tiles) and designs; Move…,
+      Details (packshot style), Save as pack, delete keeping or deleting its designs. tests/fake_web_ring.py: kept as
+      sent, ten refusals (not its own design, one in two packs among them), 50 at most, deletes, a pack larger than a
+      request, a deleted design leaving its pack.
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.

@@ -571,6 +571,274 @@ button.net-row:hover:not(:disabled) { background: var(--surface-2); }
 .wifi-step { display: flex; gap: 10px; align-items: flex-start; color: var(--muted); padding: 4px 0 14px; font-size: 14px; }
 .wifi-step .spin { margin-top: 3px; }
 
+/* ---------------------------------------------------------------- light ring designs (ring.js) */
+/* the ring art is an Echo's top: dark in both themes */
+.ringd-callout { margin: 0 18px 18px; }
+
+/* the Echo's animations: a tile each */
+.ringd-groups { display: flex; flex-wrap: wrap; gap: 6px 22px; padding: 0 18px 4px; }
+.ringd-group { min-width: 0; max-width: 100%; }
+.ringd-group-head { font-size: 12px; font-weight: 650; color: var(--faint); text-transform: uppercase; letter-spacing: .06em; padding: 8px 2px 8px; }
+.ringd-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 600px) { .ringd-group { flex: 1 1 100%; } .ringd-acts { display: grid; grid-template-columns: 1fr 1fr; } button.ringd-act { width: auto; } }
+/* where a ring plays: a dark stage, so the light reads as light in both themes */
+.ringd-art { display: grid; place-items: center; width: 100%; padding: 12px 0; border-radius: 10px;
+             background: radial-gradient(circle at 50% 40%, #262d33 0, #121518 75%); }
+.ringd-art canvas { display: block; }
+button.ringd-act { position: relative; width: 136px; display: grid; align-content: start; grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 2px;
+                   padding: 5px 5px 9px; border-radius: 14px; border-color: var(--line); background: var(--surface); min-width: 0; text-align: center; }
+button.ringd-act:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%, var(--line-2)); background: var(--surface); }
+button.ringd-act .ringd-art { margin-bottom: 6px; }
+/* tiles are buttons, and buttons do not wrap (white-space: nowrap above): their words do, in lines of even length */
+button.ringd-act, button.ringd-opt, button.ringd-tile-main, button.ringd-new { white-space: normal; }
+.ringd-act-label { font-size: 13px; font-weight: 600; line-height: 1.25; max-width: 100%; padding: 0 4px; text-wrap: balance; overflow-wrap: break-word; }
+.ringd-opt .ringd-name, .ringd-new .ringd-name { white-space: normal; text-wrap: balance; text-align: center; }
+.ringd-sub { text-wrap: balance; text-align: center; }
+.ringd-act-pick { font-size: 12px; color: var(--faint); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.ringd-act.custom .ringd-act-pick { color: var(--accent); font-weight: 560; }
+.ringd-dot { position: absolute; top: 11px; right: 11px; box-shadow: 0 0 0 2px #121518; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+.ringd-apply { display: flex; align-items: center; gap: 10px 12px; flex-wrap: wrap; margin-top: 14px; padding: 12px 18px; border-top: 1px solid var(--line);
+               background: var(--surface-2); border-radius: 0 0 var(--radius) var(--radius); position: sticky; bottom: 0; z-index: 1; }
+.ringd-apply .help { flex: 1; margin: 0; min-width: 0; max-width: none; }
+.ringd-apply .badge { font-size: 12.5px; padding: 3px 10px; }
+.ringd-apply.pending, .ringd-apply.failed { box-shadow: 0 -6px 16px rgba(0, 0, 0, .06); }
+
+/* the library and the pickers: tiles with the design playing */
+.ringd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; padding: 0 18px 18px; }
+.ringd-tile { display: grid; grid-template-rows: 1fr auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); min-width: 0; overflow: hidden; }
+.ringd-tile:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line-2)); }
+button.ringd-tile-main { display: grid; justify-items: center; gap: 3px; border: 0; border-radius: 0; background: none; padding: 6px 6px 10px; min-width: 0; }
+button.ringd-tile-main:hover:not(:disabled) { background: none; }
+.ringd-tile-art { position: relative; display: grid; place-items: center; width: 100%; padding: 14px 0; margin-bottom: 8px; border-radius: 10px;
+                  background: radial-gradient(circle at 50% 40%, #262d33 0, #121518 75%); }
+.ringd-tile-art canvas { display: block; }
+.ringd-tile-edit { position: absolute; right: 8px; top: 8px; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+                   background: var(--surface); border: 1px solid var(--line-2); color: var(--muted); opacity: 0; transition: opacity .15s; }
+.ringd-tile-edit svg.i { width: 14px; height: 14px; }
+.ringd-tile:hover .ringd-tile-edit, .ringd-tile-main:focus-visible .ringd-tile-edit { opacity: 1; }
+@media (hover: none) { .ringd-tile-edit { opacity: 1; } }
+.ringd-name { font-size: 13.5px; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ringd-sub { font-size: 12px; color: var(--faint); font-weight: 450; line-height: 1.35; font-variant-numeric: tabular-nums; }
+.ringd-tile-foot { display: flex; align-items: center; gap: 6px; padding: 7px 8px 7px 12px; border-top: 1px solid var(--line); background: var(--surface-2); min-width: 0; }
+.ringd-uses { flex: 1; min-width: 0; font-size: 12px; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ringd-uses.none { color: var(--faint); }
+.ringd-tile-foot button.link { font-size: 12.5px; white-space: nowrap; }
+button.ringd-new { display: grid; justify-items: center; align-content: center; gap: 4px; border-style: dashed; border-color: var(--line-2); min-height: 196px; padding: 14px 10px; }
+.ringd-plus { width: 72px; height: 72px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); margin-bottom: 6px; }
+.ringd-art .ringd-plus { margin: 0; background: rgba(255, 255, 255, .08); color: #d6dde4; }
+.ringd-plus svg.i { width: 26px; height: 26px; }
+dialog.modal.ringd-choose { width: min(640px, calc(100% - 24px)); }
+.ringd-opts { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; margin-top: 12px; }
+button.ringd-opt { display: grid; justify-items: center; gap: 3px; padding: 5px 5px 9px; border-radius: 14px; min-width: 0; }
+button.ringd-opt .ringd-art { margin-bottom: 6px; min-height: 100px; }
+button.ringd-opt.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft); }
+dialog.modal.ringd-use { width: min(480px, calc(100% - 24px)); }
+.ringd-use-group .sub-head { padding: 14px 0 4px; }
+label.ringd-use-row { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 7px 0; border-top: 1px solid var(--line); cursor: pointer; }
+.ringd-use-row input { width: 17px; height: 17px; accent-color: var(--accent); margin: 0; }
+
+/* theme packs: a packshot each; the pack editor beside its packshot */
+.ringd-packs { display: grid; grid-template-columns: repeat(auto-fill, minmax(232px, 1fr)); gap: 12px; padding: 0 18px 18px; }
+.ringd-pack { display: grid; grid-template-rows: auto 1fr auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); overflow: hidden; min-width: 0; }
+.ringd-pack:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line-2)); }
+button.ringd-pack-shot { display: block; padding: 0; border: 0; border-radius: 0; background: #0b0d0f; }
+button.ringd-pack-shot canvas { display: block; width: 100% !important; height: auto; }
+.ringd-pack-text { display: grid; gap: 1px; padding: 10px 12px 8px; min-width: 0; }
+.ringd-pack-text .ringd-name, .ringd-pack-text .ringd-sub { text-align: left; }
+.ringd-pack .ringd-tile-foot button.link + button.link { margin-left: 8px; }
+button.ringd-pack.ringd-new { min-height: 210px; }
+.ringd-use-shot canvas { display: block; width: 100% !important; height: auto; border-radius: 12px; }
+.ringd-use-shot { margin: 4px 0 12px; }
+/* the Designs card: packs as folders and designs at the top level; one pack opened in place */
+.ringd-headbtns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.ringd-crumbs { display: flex; align-items: center; gap: 6px; padding: 0 18px 10px; font-size: 14px; min-height: 28px; }
+.ringd-crumbs button.link { font-size: 14px; padding: 2px 0; font-weight: 560; }
+.ringd-crumb-sep { color: var(--faint); }
+.ringd-crumb-here { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.ringd-crumb-here svg.i, .ringd-sect-title svg.i { width: 15px; height: 15px; color: var(--muted); }
+.ringd-sect-title { display: flex; align-items: center; gap: 10px; padding: 8px 18px 8px; font-size: 12px; font-weight: 650; color: var(--faint);
+                    text-transform: uppercase; letter-spacing: .06em; }
+.ringd-sect-acts { display: flex; gap: 12px; margin-left: auto; text-transform: none; letter-spacing: 0; }
+.ringd-sect-acts button.link { font-size: 13px; padding: 0; }
+.ringd-designs .ringd-packs { padding-bottom: 10px; }
+.ringd-folder-tab { position: absolute; left: 8px; top: 8px; display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px 2px 6px; border-radius: 999px;
+                    background: rgba(0, 0, 0, .5); color: #e9eef2; font-size: 11.5px; font-weight: 600; backdrop-filter: blur(4px); }
+.ringd-folder-tab svg.i { width: 12px; height: 12px; }
+button.ringd-pack-shot { position: relative; }
+.ringd-tile-acts { display: inline-flex; gap: 8px; flex: none; }
+.ringd-tile-foot { flex-wrap: wrap; row-gap: 2px; }
+.ringd-tile-foot .ringd-uses { flex-basis: 100%; }
+.ringd-folder-head { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; align-items: start; padding: 0 18px 14px; }
+@media (max-width: 640px) { .ringd-folder-head { grid-template-columns: 1fr; } }
+.ringd-folder-text { display: grid; gap: 6px; align-content: start; min-width: 0; }
+.ringd-folder-text h3 { margin: 0; font-size: 20px; font-weight: 700; overflow-wrap: anywhere; }
+.ringd-folder-text .help { margin: 0; }
+.ringd-folder-text .ringd-sub { text-align: left; }
+.ringd-folder-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.ringd-folder-acts button { height: 34px; padding: 0 13px; gap: 7px; font-size: 13.5px; border-radius: 9px; }
+.ringd-folder-acts button svg.i { width: 16px; height: 16px; }
+.ringd-folder-acts button.square { width: 34px; padding: 0; justify-content: center; }
+.ringd-folder .ringd-groups { padding: 0 18px 8px; }
+button.ringd-act.ringd-pact { width: 112px; padding: 4px 4px 7px; }
+.ringd-pact-wrap { position: relative; display: inline-grid; }
+button.ringd-pact-edit { position: absolute; right: 8px; top: 8px; width: 26px; height: 26px; padding: 0; justify-content: center; border-radius: 50%;
+                         background: var(--surface); border-color: var(--line-2); color: var(--muted); opacity: 0; transition: opacity .15s; }
+button.ringd-pact-edit svg.i { width: 13px; height: 13px; }
+.ringd-pact-wrap:hover button.ringd-pact-edit, button.ringd-pact-edit:focus-visible { opacity: 1; }
+@media (hover: none) { button.ringd-pact-edit { opacity: 1; } }
+button.ringd-act.ringd-pact .ringd-art { padding: 8px 0; margin-bottom: 4px; }
+button.ringd-act.ringd-pact.out .ringd-art { opacity: .35; }
+button.ringd-act.ringd-pact.out .ringd-act-pick { font-style: italic; }
+.ringd-shotframe { width: 100%; border-radius: 14px; overflow: hidden; background: #0b0d0f; box-shadow: 0 6px 24px rgba(0, 0, 0, .18); }
+.ringd-shotframe canvas { display: block; width: 100% !important; height: auto; }
+.ringd-shotpicks { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; width: 100%; margin-top: 10px; }
+button.ringd-shotpick { display: grid; gap: 3px; padding: 4px 4px 5px; border-radius: 10px; font-size: 11.5px; justify-items: center; white-space: normal; }
+button.ringd-shotpick canvas { width: 100% !important; height: auto; border-radius: 6px; display: block; }
+button.ringd-shotpick.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft); }
+dialog.modal.ringd-details { width: min(520px, calc(100% - 24px)); }
+.ringd-details-fields { display: grid; gap: 12px; margin-top: 14px; }
+.ringd-details-fields .field { justify-items: stretch; }
+.ringd-details-fields input[type=text], .ringd-details-fields textarea { width: 100%; }
+.ringd-details-fields textarea { font: inherit; font-size: 14px; color: var(--fg); background: var(--surface); border: 1px solid var(--line-2); border-radius: 9px; padding: 7px 10px; resize: vertical; }
+.ringd-moveto { display: grid; gap: 6px; margin-top: 8px; }
+.ringd-moveto button { justify-content: flex-start; gap: 10px; padding: 10px 12px; border-radius: 10px; }
+.ringd-moveto button .ringd-sub { margin-left: auto; }
+.ringd-moveto button.on { border-color: var(--accent); background: var(--accent-soft); }
+.ringd-opts-head { padding: 16px 0 0; display: flex; align-items: center; gap: 4px; }
+.ringd-opts-note { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.ringd-art.none canvas { opacity: .35; }
+
+/* the designer: the stage (draw, play) beside the panel (colour, adjust), the timeline (time) under both */
+dialog.modal.ringd-dlg { width: min(1040px, calc(100% - 24px)); max-height: calc(100% - 24px); }
+.ringd-dlg .modal-head h2 { display: flex; }
+input.ringd-title { flex: 1; min-width: 0; font: inherit; font-size: 17px; font-weight: 650; color: var(--fg); background: none; border: 1px solid transparent;
+                    border-radius: 8px; padding: 4px 8px; margin-left: -9px; }
+input.ringd-title:hover { border-color: var(--line-2); }
+input.ringd-title:focus { border-color: var(--accent); outline: none; background: var(--surface); }
+.ringd-ed { --ed-h: 440px; display: grid; grid-template-columns: minmax(0, 1fr) 292px; gap: 14px; }
+
+/* the stage: dark, the ring in the middle, the tools down its left edge, where and undo on top, the talker below */
+.ringd-stage { position: relative; height: var(--ed-h); min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr);
+               grid-template-rows: auto minmax(0, 1fr) auto; gap: 4px 10px; padding: 12px; border-radius: 16px;
+               background: radial-gradient(circle at 56% 50%, #2a3239 0, #15191d 60%, #0f1214 100%); color: #c4cdd5; }
+.ringd-dock { grid-row: 1 / 4; grid-column: 1; align-self: center; display: grid; gap: 4px; padding: 5px; border-radius: 14px;
+              background: rgba(255, 255, 255, .05); border: 1px solid rgba(255, 255, 255, .08); }
+.ringd-dock button { flex-direction: column; gap: 3px; width: 54px; padding: 8px 0 6px; border: 0; border-radius: 10px; background: none;
+                     color: #aeb8c2; font-size: 11.5px; font-weight: 560; }
+.ringd-dock button:hover:not(:disabled) { background: rgba(255, 255, 255, .08); color: #fff; }
+.ringd-dock button.on { background: rgba(255, 255, 255, .15); color: #fff; }
+.ringd-dock button svg.i { width: 18px; height: 18px; }
+.ringd-stage-top { grid-column: 2; display: flex; align-items: center; gap: 6px; }
+.ringd-stage-top .grow { flex: 1; }
+.ringd-where { font-size: 12.5px; font-weight: 600; color: #9aa6b2; font-variant-numeric: tabular-nums; }
+button.ringd-onstage { padding: 6px 8px; border-radius: 9px; background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .09); color: #d6dde4; font-size: 12.5px; }
+button.ringd-onstage:hover:not(:disabled) { background: rgba(255, 255, 255, .13); }
+button.ringd-onstage:disabled { opacity: .3; }
+button.ringd-onstage svg.i { width: 16px; height: 16px; }
+.ringd-paint { grid-column: 2; justify-self: center; position: relative; height: 100%; max-width: 100%; aspect-ratio: 1; min-height: 0; }
+.ringd-paint canvas.ringd-paintcv { width: 100% !important; height: 100% !important; display: block; }
+.ringd-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; user-select: none; display: block; }
+.ringd-canvas[data-tool=pick] { cursor: copy; }
+.ringd-led { fill: transparent; stroke: transparent; stroke-width: 1.2; cursor: pointer; }
+.ringd-led:hover { fill: rgba(255, 255, 255, .06); stroke: rgba(255, 255, 255, .45); }
+.playing .ringd-led:hover { fill: transparent; stroke: transparent; }
+.ringd-talk { grid-column: 2; justify-self: center; display: flex; align-items: center; gap: 10px; padding: 4px 6px 4px 4px; border-radius: 12px;
+              background: rgba(255, 255, 255, .04); }
+button.ringd-talkerbtn.on { color: #f2c94c; border-color: rgba(242, 201, 76, .35); }
+.ringd-turned { font-size: 12px; color: #9aa6b2; font-variant-numeric: tabular-nums; }
+.ringd-turned:empty { display: none; }
+.ringd-canvas { overflow: visible; }
+.ringd-arrow { cursor: grab; outline: none; }
+.ringd-arrow.drag { cursor: grabbing; }
+.ringd-arrow-hit { fill: transparent; }
+.ringd-arrow-tri { fill: #f2c94c; stroke: #15191d; stroke-width: 1.5; stroke-linejoin: round; transition: transform .12s; }
+.ringd-arrow:hover .ringd-arrow-tri, .ringd-arrow.drag .ringd-arrow-tri { transform: scale(1.25); }
+.ringd-arrow:focus-visible .ringd-arrow-hit { fill: rgba(242, 201, 76, .18); stroke: #f2c94c; stroke-width: 1.5; }
+
+/* the panel: colour, then adjust with its one switch */
+.ringd-panel { height: var(--ed-h); min-width: 0; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: 16px;
+               background: var(--surface); padding: 2px 16px 14px; }
+.ringd-sect { display: grid; gap: 10px; padding: 14px 0 12px; border-top: 1px solid var(--line); }
+.ringd-sect:first-child { border-top: 0; }
+.ringd-sect-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; }
+.ringd-sect h3 { margin: 0; font-size: 13.5px; font-weight: 640; color: var(--fg); }
+.ringd-sect .help { margin: 0; font-size: 12px; line-height: 1.45; }
+.ringd-scope button { padding: 4px 10px; font-size: 12.5px; }
+.ringd-palette { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; justify-items: center; }
+.ringd-recent { display: flex; align-items: center; gap: 8px; }
+.ringd-recent-sw { display: flex; gap: 6px; flex-wrap: wrap; }
+.ringd-wellwrap { display: inline-grid; padding: 3px; border-radius: 50%; cursor: pointer; background: conic-gradient(#f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); }
+input.ringd-well { width: 22px; height: 22px; padding: 0; border: 2px solid var(--surface); border-radius: 50%; background: none; cursor: pointer; }
+input.ringd-well::-webkit-color-swatch-wrapper { padding: 0; }
+input.ringd-well::-webkit-color-swatch { border: 0; border-radius: 50%; }
+input.ringd-well::-moz-color-swatch { border: 0; border-radius: 50%; }
+button.ringd-sw { width: 28px; height: 28px; padding: 0; border-radius: 50%; border: 0; background: var(--c); box-shadow: inset 0 0 0 1px rgba(127, 127, 127, .35); }
+.ringd-recent button.ringd-sw { width: 22px; height: 22px; }
+button.ringd-sw:hover:not(:disabled) { background: var(--c); transform: scale(1.1); }
+button.ringd-sw.on { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
+.ringd-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+button.ringd-ghost { justify-content: center; gap: 6px; padding: 7px 10px; font-size: 13px; font-weight: 540; border-color: transparent; background: var(--surface-2); border-radius: 9px; }
+button.ringd-ghost:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 11%, var(--surface-2)); }
+button.ringd-ghost svg.i { width: 16px; height: 16px; color: var(--muted); }
+button.ringd-ghost.danger svg.i { color: var(--bad); }
+button.ringd-ghost.wide { grid-column: 1 / -1; }
+.ringd-hue-row { display: grid; grid-template-columns: auto minmax(0, 1fr) 46px; align-items: center; gap: 10px; padding: 4px 0; border-radius: 10px; }
+.ringd-hue-row.hl { background: var(--accent-soft); margin: 0 -8px; padding: 6px 8px; }
+.ringd-hue-row input[type=range] { min-width: 0; }
+.ringd-hue-row output { font-size: 12.5px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+input.ringd-hue { -webkit-appearance: none; appearance: none; height: 26px; background: none; }
+input.ringd-hue::-webkit-slider-runnable-track { height: 8px; border-radius: 4px; background: linear-gradient(90deg, #0ff, #00f, #f0f, #f00, #ff0, #0f0, #0ff); }
+input.ringd-hue::-moz-range-track { height: 8px; border-radius: 4px; background: linear-gradient(90deg, #0ff, #00f, #f0f, #f00, #ff0, #0f0, #0ff); }
+input.ringd-hue::-moz-range-progress { background: transparent; }
+.ringd-lbl { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+
+/* the timeline: the whole animation above the strip, the selected frame under it */
+.ringd-timeline { margin-top: 14px; display: grid; gap: 8px; }
+.ringd-tl-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.ringd-tl-bar .grow { flex: 1; }
+button.ringd-play { gap: 7px; padding: 7px 14px 7px 12px; border-radius: 999px; background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-size: 13.5px; }
+button.ringd-play:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, #000); }
+button.ringd-play svg.i { width: 15px; height: 15px; }
+.ringd-modes button { padding: 4px 12px; font-size: 13px; }
+button.ringd-ghost.small-g { padding: 5px 10px; font-size: 12.5px; }
+.ringd-summary { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ringd-tl-frame button.ringd-ghost { padding: 5px 9px; }
+.ringd-framelbl { font-size: 13px; font-weight: 620; font-variant-numeric: tabular-nums; min-width: 62px; }
+.ringd-inline { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+input.ringd-num-in { width: 76px; font: inherit; font-size: 14px; color: var(--fg); background: var(--surface); border: 1px solid var(--line-2); border-radius: 9px; padding: 5px 8px; }
+.ringd-sep { width: 1px; align-self: stretch; background: var(--line); margin: 2px 2px; }
+.ringd-strip { display: flex; gap: 4px; overflow-x: auto; padding: 6px; scroll-snap-type: x proximity; background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; }
+button.ringd-fr { flex: none; display: grid; justify-items: center; gap: 2px; padding: 6px 6px 4px; border-radius: 10px; border-color: transparent; background: none;
+                  scroll-snap-align: center; position: relative; min-width: 54px; }
+button.ringd-fr:hover:not(:disabled) { background: var(--surface); }
+button.ringd-fr.on { border-color: var(--accent); background: var(--surface); box-shadow: inset 0 0 0 1px var(--accent); }
+button.ringd-fr.head { background: color-mix(in srgb, #f2c94c 22%, var(--surface)); }
+button.ringd-fr.inloop::after { content: ""; position: absolute; left: 4px; right: 4px; bottom: -4px; height: 2px; border-radius: 1px; background: color-mix(in srgb, var(--accent) 50%, transparent); }
+button.ringd-fr.loopstart::before { content: "↻"; position: absolute; left: 3px; top: 1px; font-size: 11px; color: var(--accent); }
+.ringd-mini { width: 36px; height: 36px; border-radius: 50%; position: relative; background: #191d21 !important; }
+.ringd-mini::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--ring-bg);
+                     -webkit-mask: radial-gradient(circle, transparent 60%, #000 62%, #000 84%, transparent 86%); mask: radial-gradient(circle, transparent 60%, #000 62%, #000 84%, transparent 86%); }
+.ringd-fr-no { font-size: 11.5px; font-weight: 600; color: var(--fg); }
+.ringd-ms { font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.ringd-uses-line { font-size: 13px; color: var(--accent); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ringd-usefor { color: var(--fg); font-weight: 520; }
+.ringd-check { font-size: 13px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.ringd-check input { accent-color: var(--accent); margin: 0; }
+@media (max-width: 820px) {
+  .ringd-ed { grid-template-columns: 1fr; }
+  .ringd-stage { height: auto; grid-template-columns: 1fr; grid-template-rows: auto auto auto auto; }
+  .ringd-dock { grid-row: auto; grid-column: 1; grid-auto-flow: column; justify-self: center; order: 3; }
+  .ringd-stage-top, .ringd-paint, .ringd-talk { grid-column: 1; }
+  .ringd-paint { height: auto; width: min(100%, 380px); }
+  .ringd-talk { order: 4; }
+  .ringd-panel { height: auto; overflow: visible; }
+}
+@media (max-width: 600px) {
+  .ringd-summary { flex-basis: 100%; }
+  .ringd-tl-frame .grow { flex-basis: 100%; height: 0; }
+  .ringd-dlg .modal-foot .ringd-uses-line { flex-basis: 100%; order: -1; white-space: normal; }
+}
+
 /* ---------------------------------------------------------------- login */
 .login { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; }
 .login-card { width: 100%; max-width: 440px; background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 32px 28px;
@@ -643,5 +911,6 @@ footer { color: var(--faint); font-size: 12.5px; padding-top: 8px; border-top: 1
 <div id="toast" role="status" aria-live="polite"></div>
 <script src="/crypto.js"></script>
 <script src="/app.js"></script>
+<script src="/ring.js"></script>
 </body>
 </html>

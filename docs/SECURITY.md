@@ -36,6 +36,13 @@ Plain HTTP: an Echo has no certificate a browser accepts. So:
 - Someone who can change traffic on your network (not only read it) could change the page itself, as with any plain
   HTTP page.
 
+The light ring's designs go the other way: hassmic writes them (`state/ring-applied`), and root makes the ring's
+animations from them with its own hassmic and writes those to the system partition. Root reads that one file only if
+it is a regular file and not a link, at most 8 MB, and takes nothing from it but colours and times; the request
+to install is moved into root's own folder before root looks at it, so it cannot be swapped for a link or a pipe
+meanwhile, and a design's large upload is read only from an approved browser; the designs can
+take at most 3 MB of the partition, and root checks the room before it writes.
+
 ## adb
 
 A root shell without authentication: the unlock turns adbd's key check off. Over Wi-Fi it is closed: adbd runs without

@@ -44,6 +44,7 @@
 #include "improv.h"
 #include "buttons.h"
 #include "ring.h"
+#include "ringdesign.h"
 #include "ledq.h"
 #include "davs.h"
 #include "dropin.h"
@@ -2058,6 +2059,18 @@ void core_set_eq(int band, int db)
     fprintf(stderr, "equalizer: bass %d, mid %d, treble %d\n", eq[0], eq[1], eq[2]);
 }
 
+static int led_auto = 1, led_level = 80;            /* 80: ledcontroller's first-boot level */
+
+/* Root installed the ring's set again (designs applied on the settings page) and restarted ledcontroller, which starts
+ * with auto brightness on: a fixed level once more, and Home Assistant's light listed anew if it came or went */
+static void ring_reloaded(int custom_changed)
+{
+    pthread_mutex_lock(&core_lock);
+    if (!led_auto) core_led_brightness(led_level);
+    if (custom_changed) core_entities_changed();
+    pthread_mutex_unlock(&core_lock);
+}
+
 /* LED brightness.  Stock's auto brightness is ledcontroller's, not the Alexa client's, and it starts it by itself at boot
  * (Echo Dot 2 set to 50 with auto off and rebooted: 9 again, for 40 lux; 2026-10-01).  It polls the light sensor through
  * the same HAL file as core_lux() (1 Hz when settled, 20 Hz while moving), smooths it over 3 s and maps 0..400 lux on a
@@ -2066,7 +2079,6 @@ void core_set_eq(int band, int db)
  * engine would overwrite a level that came first.  Neither ledcontroller nor anything stock keeps the auto flag: our
  * settings file does (proto_esphome.c), and it is applied again at every start.  ledcontroller writes each level it shows
  * to persist.ledbrightness.bootup (auto steps too) and restores it at boot, so that property is what the ring shows. */
-static int led_auto = 1, led_level = 80;            /* 80: ledcontroller's first-boot level */
 
 int core_led_auto(int set)
 {
@@ -2203,6 +2215,7 @@ static void *volume_led_thread(void *arg)
         at = atomic_load(&identify_until);
         if (at && mono_ms() >= at && atomic_compare_exchange_strong(&identify_until, &at, 0)) led("-u", "zzz_rainbow");
         ring_tick();
+        if (tick % 5 == 0) rd_tick();               /* root's answer to designs applied on the settings page */
         usleep(200000);
     }
     return NULL;
@@ -2446,7 +2459,8 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin); signal(SIGTTOU, on_ttou); signal(SIGWINCH, on_winch);
     if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
     ledq_start(use_led ? "/system/bin/ledctrl" : NULL, getenv("HASSMIC_FAKE_LED"), child_ids, LEDQ_TIMEOUT_MS);
-    ring_start(led_run);
+    ring_start(led_run, ring_reloaded);
+    rd_start();                         /* designs asked for before this start: still installing, or back */
     audio_earcon_started = earcon_started;
     led("-u", "scone-setup");           /* a restart inside the pairing window: the window is gone, its chaser would loop on */
     led("-u", "factory-reset");         /* a reset asked for before this start is done (main.sh) */

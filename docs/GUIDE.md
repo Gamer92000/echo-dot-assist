@@ -255,6 +255,30 @@ Beyond the README's two figures:
   since the ring only plays animations made beforehand: the Echo makes them at its first start with this version and
   restarts the ring for that (a second without light). Not on an Echo where they could not be written: then there is
   no light in Home Assistant.
+- **Your own designs** (settings page, Lights): draw animations for the ring and pick, for each of the Echo's own
+  (listening, its end, thinking, speaking, not understood, timers, volume, microphones off and on, do not disturb,
+  identify, Bluetooth pairing, the Drop In call states, setup, factory reset, page login), Amazon's or one of yours;
+  a design is drawn on its own and can show for as many of them as you like ("Use for…").
+  Up to 100 designs; each is frames of the 12 LEDs, every frame shown as long as you set, played again and again, once,
+  or an opening then a loop. The designer paints LEDs with a brush or the whole ring, turns, mirrors, dims, makes
+  spinning, fading and breathing frames, turns the hue of a whole design or a frame (how light each colour looks stays), has undo, and starts from Amazon's
+  animation if you like; a preview plays it. "Recolour Amazon's…" on an animation is the short way to Amazon's own in
+  other colours.
+  Listening and its end turn towards whoever speaks: draw them with the talker where the arrow is, and the Echo makes
+  the turned copies itself. Volume takes the colours of the design's first frame through Amazon's steps. Nothing
+  changes on the ring until **Apply**: the Echo then writes the designs to its system partition and restarts the
+  ring (a second without light). A design goes to other Echos with "Copy models" in the Echos section (into
+  their designs only), or as a file (Download, then Upload there). What each animation shows is a setting: "Copy settings" in the
+  Echos section copies it, takes the design along where the other Echo has not got it, and applies it there.
+- **Designs and theme packs** (Lights, "Designs"): your designs, and packs as folders of them. A pack holds designs
+  and says which of them each animation shows; open it to see its packshot, its animations (the same tiles as the
+  main card: pick one of its designs, Amazon's, or "not in this pack"; a design from elsewhere comes in as a copy) and
+  its designs (opened in the designer from there, or made new in it). A design is in one pack at most: "Move…" takes
+  it to another or to the top level. "Save as pack" on the animations card makes one of what the ring shows now.
+  Packshots in four styles are drawn from the pack itself, its light on an Echo Dot: Halo (its listening animation large, the next three small), Line-up (up to eight of its animations on a row of Echos, each named), Sequence (four of them as they run, left to right) and Trail (one as a long exposure, its frames rising off the Echo), under "Details" with its
+  name, author and a line about it. **Use** sets its animations, only those or all of them (the rest back to
+  Amazon's), and applies. A pack travels with its designs: as a `.ringpack` file (Export, Import) or with "Copy
+  models". Up to 50 packs; their designs count towards the 100.
 - **Listening points at you**, as with Alexa, and also while a timer rings or the light is on (Amazon's ring stops
   turning as soon as a second light shows; hassmic plays the listening ring already turned).
 - **Microphone off** plays Alexa's own sounds.

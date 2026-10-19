@@ -288,6 +288,22 @@ ota_watch() {
             else say "== artifacts not installed: $(echo $out)"
             fi
         fi
+        # Designs for the light ring applied on the settings page (src/hassmic/ringdesign.c): the set made and installed
+        # again.  ledcontroller then starts with nothing on: hassmic sets what showed again once it reads the answer,
+        # given after ledcontroller loaded the set (~1.3 s on a Dot 2)
+        # The request is taken into root's own folder first (a rename: a link moves as a link) and only looked at and
+        # read there, where the daemon's user cannot swap it for a link or a FIFO between the look and the read
+        rm -f $LEDNEW.req
+        if mv /data/local/hassmic/state/leds-request $LEDNEW.req 2>/dev/null && [ -f $LEDNEW.req ] && [ ! -L $LEDNEW.req ]; then
+            id=$(dd if=$LEDNEW.req bs=16 count=1 2>/dev/null | tr -cd 0-9)
+            rm -f $LEDNEW.req
+            leds > $LEDNEW.out 2>&1; stamped < $LEDNEW.out; rm -f $LEDNEW.out
+            if [ $LEDS = ok ]; then sleep 2; sh $D/alexa-off.sh > /dev/null 2>&1; fi
+            echo "$id $LEDS $LEDWHY" > /data/local/hassmic/leds.result.new && mv /data/local/hassmic/leds.result.new /data/local/hassmic/leds.result
+            chmod 644 /data/local/hassmic/leds.result
+            say "== light ring designs: $LEDS${LEDWHY:+ ($LEDWHY)}"
+        fi
+        rm -f $LEDNEW.req
         # Wi-Fi from the settings page (src/hassmic/wifi.c): a scan, or a switch to another network, which takes up to two
         # minutes; so in the background, one at a time (wifi.sh's lock), and a request waits while one runs
         if [ -f /data/local/hassmic/state/wifi-request ] && [ ! -d $WIFI/lock ] && [ -f $D/wifi.sh ]; then
@@ -376,17 +392,39 @@ ota_watch() {
 # the talker beside a ringing timer.  ledcontroller reads animations only at its start and only from the system
 # partition, so the hassmic about to run makes its set from stock's files (-G) and, when that is not the installed
 # set, sysinstall.sh writes it and ledcontroller starts again (about a second without the ring, before hassmic runs).
+# The set includes the designs the settings page applied (state/ring-applied, src/hassmic/ringdesign.c), and ota_watch
+# runs this again when it applies new ones.  One at a time (a satellite start and a request could meet).  LEDS says
+# what came of it: ok (installed, ledcontroller restarted), same (nothing to do) or failed (LEDWHY: why).
+# A binary in /data wins over the installed one: lets a new build be tried without a trip through TWRP.
+BIN=$D/hassmic; [ -x /data/local/hassmic/hassmic ] && BIN=/data/local/hassmic/hassmic
 LEDNEW=/data/local/hassmic/leds.new
+LEDLOCK=/data/local/hassmic/leds.lock
 leds() {
+    LEDS=failed LEDWHY=
+    i=0
+    boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)
+    while ! mkdir $LEDLOCK 2>/dev/null; do
+        # one left by an install that was killed half way (the satellite restarted): its shell is gone, or it was of
+        # an earlier boot, whose pid may be taken again by now.  No pid yet: one being taken this moment, so that only
+        # counts after two seconds
+        p= b=; read -r p b 2>/dev/null < $LEDLOCK/pid
+        if { [ -z "$p" ] && [ $i -ge 2 ]; } || { [ -n "$p" ] && { [ "$b" != "$boot" ] || ! kill -0 "$p" 2>/dev/null; }; }; then
+            rm -rf $LEDLOCK; continue
+        fi
+        i=$((i + 1)); [ $i -lt 60 ] || { LEDWHY="another install of the ring's set still runs"; echo "light ring: $LEDWHY"; return 0; }
+        sleep 1
+    done
+    echo "$$ $boot" > $LEDLOCK/pid
     want=$($BIN -G - 2>/dev/null) || want=
-    [ -n "$want" ] && [ "$want" = "$(cat /system/etc/hassmic-leds.digest 2>/dev/null)" ] && return 0     # 0.1 s, not 0.7
+    if [ -n "$want" ] && [ "$want" = "$(cat /system/etc/hassmic-leds.digest 2>/dev/null)" ]; then LEDS=same; rm -rf $LEDLOCK; return 0; fi  # 0.1 s, not 0.7
     rm -rf $LEDNEW; mkdir -p $LEDNEW
-    if ! out=$($BIN -G $LEDNEW 2>&1); then echo "light ring: no animations of ours ($out)"
+    if ! out=$($BIN -G $LEDNEW 2>&1); then LEDWHY="no animations of ours"; echo "light ring: no animations of ours ($out)"
     else
         echo "light ring: installing ours (${out#ring: })"
-        sh $D/sysinstall.sh leds $D $LEDNEW && { stop ledcontroller; start ledcontroller; }
+        if out=$(sh $D/sysinstall.sh leds $D $LEDNEW 2>&1); then echo "$out"; stop ledcontroller; start ledcontroller; LEDS=ok
+        else echo "$out"; LEDWHY=$(echo "$out" | head -n 1); LEDWHY=${LEDWHY#sysinstall leds: }; fi
     fi
-    rm -rf $LEDNEW
+    rm -rf $LEDNEW $LEDLOCK
 }
 
 # A push update runs "firewall" again (exec, same PID) while the previous firewall watcher is still looping: stop it first,
@@ -420,8 +458,6 @@ firewall)
 satellite)
     # The installer that unpacked us may have been an older one running with umask 077: make sure the daemon's user gets in.
     [ "$D" != "$SYS" ] && chmod 755 $D
-    # A binary in /data wins over the installed one: lets a new build be tried without a trip through TWRP.
-    BIN=$D/hassmic; [ -x /data/local/hassmic/hassmic ] && BIN=/data/local/hassmic/hassmic
     {
         rotate_log
         echo "== satellite start, uptime $(cut -d. -f1 /proc/uptime)s, $(cat $D/VERSION 2>/dev/null || echo factory) from $D"

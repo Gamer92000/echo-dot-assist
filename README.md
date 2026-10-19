@@ -46,6 +46,7 @@ how to add one: [`devices/`](devices/README.md).
 | Bluetooth proxy for Home Assistant      | –                              | ✅                                                    |
 | Do not disturb, equalizer, ring brightness | Alexa app                   | [entities in Home Assistant](docs/GUIDE.md#in-home-assistant) |
 | Buttons and light ring in automations   | –                              | [an event and a light in Home Assistant](docs/GUIDE.md#buttons-and-light-ring) |
+| Light ring animations of your own       | –                              | [drawn on the settings page](docs/GUIDE.md#buttons-and-light-ring), for each of the Echo's |
 | Louder speaker (Echo Dot 2, Echo 2, Echo Dot 3) | –                      | [up to +12 dB](docs/GUIDE.md#settings-page) on the settings page (Echo Dot 3: +2 dB) |
 | Sound detection (smoke alarm, glass, …) | Alexa Guard, checked in the cloud | [on the Echo](docs/GUIDE.md#sound-detection), less reliable |
 | Whisper detection                       | answers in a whisper           | [a sensor](docs/GUIDE.md#whisper-detection) for your conversation agent |
@@ -64,7 +65,7 @@ buttons and Music Assistant work, most of the rest does not ([details](docs/GUID
   <img alt="The buttons: action (talk, pause, stop an alarm, cancel; approve a login; hold 10 s for a factory reset), volume up and down (10 % steps; both held 2 s pairs Echos), microphone off (hardware mute), and your voice." src="docs/img/buttons-light.svg">
 </picture>
 
-The light ring speaks stock Alexa's language:
+The light ring speaks stock Alexa's language, unless you [draw your own](docs/GUIDE.md#buttons-and-light-ring):
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/ring-dark.svg">
