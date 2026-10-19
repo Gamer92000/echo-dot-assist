@@ -235,8 +235,10 @@ async def part_separate(url, full):
         check("volume: 80" in echo.text() and echo.prop("MainVolume") == 80 and echo.prop("TTSVolume") == 80,
               "a volume key with nothing playing moves the music (90 -> 80: the mixer with it, the loudest still)")
         c.number_command(nums["sounds_volume"].key, 100)
-        await until(lambda: echo.prop("MainVolume") == 100)
-        check(echo.prop("MainVolume") == 100 and echo.prop("TTSVolume") == 100 and near(gain("music"), g(80, 100)) and echo.config().get("sounds_volume") == "100",
+        loud = lambda: (echo.prop("MainVolume") == 100 and echo.prop("TTSVolume") == 100 and near(gain("music"), g(80, 100))
+                        and echo.config().get("sounds_volume") == "100")   # the mixer, the gains, state/config: one at a time
+        await until(loud)
+        check(loud(),
               "Sounds volume 100 from Home Assistant: the mixer at 100, the music turned down under it, kept in state/config")
         echo.prop("TTSVolume", 20)                     # a stock daemon moves it: put back
         await until(lambda: echo.prop("TTSVolume") == 100, 4)

@@ -27,8 +27,9 @@ async def main(e):
     t0 = time.monotonic()
     while await alive(c) and time.monotonic() - t0 < 6: await asyncio.sleep(0.3)
     check(not await alive(c), "a new address: the link over the old one is closed (it held the voice assistant)")
+    await until(lambda: os.path.exists(mreq), 2)                       # netaddr.c closes the links first, then asks
     check(os.path.exists(mreq) and open(mreq).read() == "new address\n", "and root is asked to announce mDNS again")
-    os.remove(mreq)
+    if os.path.exists(mreq): os.remove(mreq)
     await until(lambda: os.path.exists(mreq), 8)
     check(os.path.exists(mreq) and open(mreq).read().startswith("no Home Assistant for "),
           f"nobody back after the first wait: announced again ({open(mreq).read().strip() if os.path.exists(mreq) else 'nothing'})")
