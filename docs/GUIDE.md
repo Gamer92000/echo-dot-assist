@@ -28,6 +28,9 @@ System) off takes any certificate, but then anyone on your network could slip th
   reaches Home Assistant about a second late. When you speak much louder than the tone, it changes nothing. The log
   says what it found each time ("wake sound removal: ...").
 
+- **Nothing said** after the wake word (or the button, or a question the assistant asked): the ring goes dark
+  without the error animation, as on a stock Echo.
+
 - **"Alexa, stop"** interrupts a reply, but only right behind the wake word: Amazon's models only listen for "stop" in
   the two seconds after it. Out of silence, "Alexa, stop the music" goes to Home Assistant as a normal command.
 - While a timer rings or something plays, the wake word is accepted more readily, as Amazon's models are tuned to do.
@@ -373,6 +376,7 @@ Echo announces itself again after 100 s without Home Assistant, then less and le
 | Wake word arbitration (on by default) | Arbitration peers |
 | [Sound detection](#sound-detection) | Sound (event) |
 | [Whisper detection](#whisper-detection) | Last request whispered |
+| Wake word events (off by default) | Wake word (event): `detected` (the Echo took it), `near_miss` (Amazon's engine heard something close, did not wake; none with microWakeWord), `answered_elsewhere` (another Echo or satellite answered), `no_speech` (woke, nothing said). A `detected` followed by `no_speech` is a false wake. Nothing while muted. Near misses can come often while the TV plays: an entry in Home Assistant's history each |
 | [Wi-Fi motion](#wi-fi-motion) | motion sensor, sensitivity |
 | Light sensor (off by default) | Illuminance (the room's light in lux); "LED brightness" then also follows auto brightness, an entry in the logbook every few minutes. Off, it shows only levels you set |
 | Bluetooth audio from phones | Bluetooth pairing |

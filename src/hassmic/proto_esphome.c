@@ -15,6 +15,8 @@
  *                    player entity advertises, we stream it.  Same path for media_player.play_media.
  *   buttons          the event entity "Button": a press or a 1 s hold of the action and volume keys, beside what
  *                    they do on the Echo (core_button_events)
+ *   wake word        the event entity "Wake word" (core_wake_events): taken, near miss, answered by another device,
+ *                    nothing said after it.  Listed while the feature is on
  *   light ring       a light with RGB, brightness and effects, steps aside while the Echo shows something of its own
  *                    (ring.h); listed where root installed the ring's animations
  *   timers           finished timers ring (core_timer_finished); "Timer ringing" and "Ringing timers" (their names)
@@ -124,7 +126,7 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF, KEY_WEB_URL, KEY_IDENTIFY, KEY_RESET,
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
        KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON, KEY_LIGHT, KEY_ASSIST_VOLUME, KEY_SOUNDS_VOLUME, KEY_TIMER_VOLUME,
-       KEY_CALL_VOLUME };
+       KEY_CALL_VOLUME, KEY_WAKE };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -504,6 +506,7 @@ static int listed(int key)
     case KEY_SOUND_DETECTION: case KEY_WIFI_MOTION_ON: case KEY_UPDATE_CHANNEL: case KEY_SOC_TEMP: case KEY_CPU_USAGE: return 0;
     case KEY_SENDSPIN_TOKEN: return core_sendspin_port != 0;
     case KEY_SOUND: return settings_on("sound_detection");
+    case KEY_WAKE: return settings_on("wake_events");
     case KEY_BT_PAIRING: return ble_present() && settings_on("bluetooth_audio");
     case KEY_BT_OUT_SEARCH: case KEY_BT_OUT: case KEY_BT_OUT_STATUS: case KEY_BT_OUT_DELAY: return ble_present() && settings_on("bluetooth_speaker");
     case KEY_ARB_PEERS: return arb_running() && settings_on("arbitration");
@@ -548,6 +551,9 @@ static void send_setting_entities(void)
     { PB(b, 256); pb_str(&b, 1, "button"); pb_fixed32(&b, 2, KEY_BUTTON); pb_str(&b, 3, "Button"); pb_str(&b, 5, "mdi:gesture-tap-button");
       pb_str(&b, 8, "button");
       for (int i = 0; i < core_button_nevents; i++) pb_str(&b, 9, core_button_events[i]);
+      send_msg(LIST_EVENT, &b); }
+    if (listed(KEY_WAKE)) { PB(b, 192); pb_str(&b, 1, "wake_word"); pb_fixed32(&b, 2, KEY_WAKE); pb_str(&b, 3, "Wake word"); pb_str(&b, 5, "mdi:account-voice");
+      for (int i = 0; i < core_wake_nevents; i++) pb_str(&b, 9, core_wake_events[i]);
       send_msg(LIST_EVENT, &b); }
     if (listed(KEY_BT_PAIRING)) { PB(b, 128); pb_str(&b, 1, "bluetooth_pairing"); pb_fixed32(&b, 2, KEY_BT_PAIRING); pb_str(&b, 3, "Bluetooth pairing");
       pb_str(&b, 5, "mdi:bluetooth-connect"); send_msg(LIST_SWITCH, &b); }
@@ -1205,6 +1211,7 @@ static void mute_changed(int muted) { (void)muted; send_setting(KEY_MUTE); setti
 
 /* ---------------------------------------------------------------- requests from Home Assistant */
 
+static void wake_event(const char *event);
 static void on_event(const unsigned char *p, const unsigned char *end)
 {
     struct pbf f, g; unsigned type = 0; char key[48], val[1024], text[512] = "", code[48] = ""; int cont = 0, stream_now = 0;
@@ -1243,7 +1250,11 @@ static void on_event(const unsigned char *p, const unsigned char *end)
         tts_expected = 0;
         /* Another satellite reported the same wake word first (Home Assistant takes the first per phrase in 2 s): not
          * this Echo's turn, and nothing went wrong, so no error ring */
-        if (!strcmp(code, "duplicate_wake_up_detected")) { fprintf(stderr, "pipeline: another satellite answers\n"); core_pipeline_finish(); break; }
+        if (!strcmp(code, "duplicate_wake_up_detected")) {
+            fprintf(stderr, "pipeline: another satellite answers\n"); wake_event("answered_elsewhere"); core_pipeline_finish(); break;
+        }
+        /* nothing said: no failure to show (core_no_speech) */
+        if (!strcmp(code, "stt-no-text-recognized")) { fprintf(stderr, "pipeline: nothing said\n"); core_no_speech(); break; }
         fprintf(stderr, "pipeline error: %s\n", text); core_error(); break;
     }
 }
@@ -1699,6 +1710,12 @@ static void button(const char *event)   /* lock held */
     send_state(EVENT, &b);
 }
 
+static void wake_event(const char *event)       /* lock held */
+{
+    PB(b, 64); pb_fixed32(&b, 1, KEY_WAKE); pb_str(&b, 2, event);
+    if (listed(KEY_WAKE)) { send_state(EVENT, &b); fprintf(stderr, "wake event: %s\n", event); }
+}
+
 static void whispered(int on) { (void)on; send_setting(KEY_WHISPERED); }   /* lock held */
 static void timers_changed(void) { send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING); }   /* lock held: names first */
 /* lock held: whom first.  Each state as dropin.c's loop passed it, not the one it is in now: a refusal that came at once
@@ -1720,4 +1737,4 @@ static void dropin_result(const char *result)   /* lock held */
 
 const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, cancel, played, volume_changed, mute_changed, print_mdns, bt_device,
                                      arb_send, arb_changed, sound, whispered, arb_request, settings_changed, entities_changed, arb_scan,
-                                     timers_changed, dropin_changed, dropin_result, button };
+                                     timers_changed, dropin_changed, dropin_result, button, wake_event };

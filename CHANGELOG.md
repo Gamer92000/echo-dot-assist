@@ -2,6 +2,16 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-19
+
+- **A wake word with nothing after it ends quietly** (issue #48). When the Echo woke and then heard no request (you
+  said "Alexa" to another device, or it woke by mistake), the ring flashed the error animation. Now it simply goes
+  dark, as a stock Echo does. Other errors still show it.
+- **Wake words in Home Assistant** (issue #48). "Wake word events" (settings page, Features, off by default) adds the
+  event entity "Wake word": `detected` each time the Echo takes its wake word, `near_miss` when Amazon's engine heard
+  something close but did not wake, `answered_elsewhere` when another Echo or satellite answered it, and `no_speech`
+  when it woke and nothing was said. Count wakes and false wakes per room in an automation.
+
 ## 2026-10-17
 
 - **Separate volumes for music, voice replies, sounds, timers and calls** (issue #32). The settings page has a Volume card

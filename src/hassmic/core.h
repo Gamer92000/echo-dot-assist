@@ -46,6 +46,7 @@ struct proto {
     void (*dropin_changed)(int state, const char *peer);   /* may be NULL: a Drop In's state (DROPIN_*), each in turn */
     void (*dropin_result)(const char *result);  /* may be NULL: what came of a call this Echo made (dropin_results) */
     void (*button)(const char *event);          /* may be NULL: a button was pressed or held (core_button_events) */
+    void (*wake)(const char *event);            /* may be NULL: the wake word heard (core_wake_events) */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
@@ -81,6 +82,8 @@ int  core_mic_denoise(int set);                 /* noise reduction on what the p
 void core_pipeline_finish(void);
 void core_restart_after(void);                  /* start another pipeline once the current one has finished */
 void core_error(void);
+/* Home Assistant heard no request (stt-no-text-recognized): the turn ends quietly, without core_error's ring */
+void core_no_speech(void);
 /* Mute.  The mute button drives a hardware latch that cuts the mics and lights the button red; software can set that latch
  * but never clear it (privacy guarantee of the gpio-privacy driver, verified on device).  So Home Assistant's switch is a
  * soft mute that can be undone remotely, its state shows latch OR soft mute, and unmuting with the button clears both. */
@@ -141,6 +144,10 @@ extern const int core_sound_nevents;
 /* The buttons for Home Assistant: a press and a hold (1 s) of each, in buttons.h's order (BUTTON_* * 2 + hold) */
 extern const char *const core_button_events[];
 extern const int core_button_nevents;
+/* The wake word for Home Assistant's "Wake word" event entity (issue #48): accepted, almost (a near miss), answered by
+ * another Echo, nothing said after it */
+extern const char *const core_wake_events[];
+extern const int core_wake_nevents;
 
 /* no lock needed */
 /* lock held for this one: switches to SPEAKING.  media: Home Assistant's media, which plays at the main volume (not a

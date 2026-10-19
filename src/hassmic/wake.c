@@ -7,6 +7,7 @@
 static const struct wake_engine *cur[WAKE_SLOTS];  /* NULL: the slot is closed */
 static uint64_t fed;                    /* samples through wake_feed since start, whichever engine: main.c's ring counts so */
 static wake_cb user_cb;
+static wake_miss_cb miss_cb;
 static atomic_int last_slot;            /* the slot that accepted a keyword last: wake_afe_times asks its engine */
 
 int wake_is_mww(const char *model)
@@ -37,6 +38,9 @@ void wake_feed(const int16_t *samples, size_t count)
     for (int i = 0; i < WAKE_SLOTS; i++) if (cur[i]) cur[i]->feed(i, samples, count);
     fed += count;
 }
+
+void wake_on_miss(wake_miss_cb cb) { miss_cb = cb; }
+void wake_near_miss(int slot, const char *keyword) { if (miss_cb) miss_cb(slot, keyword); }
 
 uint64_t wake_fed(void) { return fed; }
 void wake_reset(void) { for (int i = 0; i < WAKE_SLOTS; i++) if (cur[i]) cur[i]->reset(i); }

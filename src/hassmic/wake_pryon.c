@@ -89,6 +89,7 @@ static void on_result(const char *decoderId, PryonEnumeratedResult *r)
             slot ? ", second wake word" : "");
     if (r->detectionType == PRYON_DETECTION_TYPE_ACCEPT) read_metadata(slot, r->metadata, r->metadataSize);
     if (r->detectionType == PRYON_DETECTION_TYPE_ACCEPT && r->keyword) callback(slot, r->keyword, r->beginSampleIndex, r->endSampleIndex);
+    else if (r->detectionType == PRYON_DETECTION_TYPE_NEAR_MISS && r->keyword) wake_near_miss(slot, r->keyword);
 }
 
 static int pryon_open(int slot, const char *manifest, wake_cb cb)

@@ -598,6 +598,7 @@ static void wake_phrase_bare(char *out, size_t cap)
 static long long wake_cut_ms;    /* when the wake word last cut a reply or an alarm: a "stop" right behind it belongs to that */
 static long long last_wake_ms;   /* Amazon's models know "stop" only in the ~2 s after the wake word (op.cfg.json: awake state) */
 static int quiet_abort;
+static int run_wake;             /* under lock: the wake word started this run (ours or Home Assistant's), not the button or a follow-up */
 
 static atomic_int afe_asked;                        /* the front end was asked for the wake word's energies (afe_score) */
 
@@ -636,10 +637,28 @@ static void pipeline_start(uint64_t from)    /* from: where the wake word that s
     quiet_abort = 0;
     mic_fresh = 1;
     replay_from = from;
+    run_wake = from != 0;
     proto->start();
     atomic_store(&streaming, 1);
     listening(core_local_wake);
     if (core_local_wake) core_set_state(LISTENING);
+}
+
+/* Home Assistant's "Wake word" event entity (issue #48), listed while the feature is on (proto_esphome.c): every wake
+ * word this Echo took, its near misses, the ones another device answered and the ones nothing was said after, so an
+ * automation can count wakes per room and spot false ones (a "detected" followed by "no_speech").  Types stay as they
+ * are: automations use them, a new kind is a new type.  None while muted: the Echo does not act on the wake word then */
+const char *const core_wake_events[] = { "detected", "near_miss", "answered_elsewhere", "no_speech" };
+const int core_wake_nevents = sizeof core_wake_events / sizeof core_wake_events[0];
+
+static void wake_told(const char *event)       /* lock held */
+{
+    if (connected && proto->wake && !core_muted()) proto->wake(event);
+}
+
+static void wake_tell(const char *event)       /* any thread but the lock's holder */
+{
+    pthread_mutex_lock(&core_lock); wake_told(event); pthread_mutex_unlock(&core_lock);
 }
 
 /* lock held.  Home Assistant heard the wake word in the stream (-w remote, wake word engine "homeassistant"): what the
@@ -647,6 +666,8 @@ static void pipeline_start(uint64_t from)    /* from: where the wake word that s
 void core_remote_wake(void)
 {
     if (core_local_wake || !atomic_load(&streaming)) return;
+    run_wake = 1;
+    wake_told("detected");
     sound_request(SND_WAKE);
     listening(1);
     core_set_state(LISTENING);
@@ -931,6 +952,16 @@ void core_error(void)
 {
     if (quiet_abort) { quiet_abort = 0; return; }      /* Home Assistant's complaint about a pipeline "stop" ended: not news */
     if (state != SPEAKING) { led("-s", "anim_start_error_short"); core_pipeline_finish(); }
+}
+
+/* Nothing said after the wake word (or the button, or a follow-up question): the wake word was meant for another
+ * device, or the Echo woke by mistake (issue #48: 4 in 5 days on two Dots, each with the error ring).  Nothing failed
+ * that the ring could help with; a stock Echo ends such a turn quietly too */
+void core_no_speech(void)
+{
+    if (quiet_abort) { quiet_abort = 0; return; }
+    if (run_wake) wake_told("no_speech");
+    if (state != SPEAKING) core_pipeline_finish();
 }
 
 /* touch: the action button rather than the wake word.  from: where the wake word ended on the ring's clock (0: unknown) */
@@ -1218,6 +1249,14 @@ static char wake_keyword[WAKE_SLOTS][64];
 static atomic_int wake_slot_heard;                  /* the slot whose wake word was heard last: its "stop" counts */
 static void on_wake(int slot, const char *keyword, uint64_t begin, uint64_t end);
 
+/* Pryon's near misses (its detector thread): only of the wake word picked, as on_wake takes them */
+static void on_near_miss(int slot, const char *keyword)
+{
+    if (!core_local_wake || !strcasecmp(keyword, "STOP") || (wake_keyword[slot][0] && strcasecmp(keyword, wake_keyword[slot]))) return;
+    if (atomic_load(&dropin_live) && dropin_far_talking()) return;
+    wake_tell("near_miss");
+}
+
 static int words_list(const char *path, const char *kw)    /* words.shrunk.txt: "<word> <index>" per line */
 {
     char line[96], w[64]; FILE *f = fopen(path, "r"); int hit = 0;
@@ -1244,6 +1283,7 @@ static int wake_open_word(int slot, const struct core_wake_word *w)
         }
     }
     snprintf(wake_keyword[slot], sizeof wake_keyword[slot], "%s", hit ? kw : "");
+    wake_on_miss(on_near_miss);
     return wake_open(slot, w->manifest, on_wake);
 }
 
@@ -1260,6 +1300,7 @@ static void on_wake(int slot, const char *keyword, uint64_t begin, uint64_t end)
     /* "stop" comes from the decoder that heard its wake word just before; another one on the same model set (one
      * multi-keyword en-US set in both slots) is awake too, and its "stop" would stop twice */
     if (!strcasecmp(keyword, "STOP")) { if (slot == atomic_load(&wake_slot_heard)) stop_word(); return; }
+    wake_tell("detected");
     last_wake_ms = mono_ms();
     atomic_store(&wake_slot_heard, slot);
     { float db = 10 * log10f((ring_power(begin, end) + 1) / (32768.0f * 32768.0f));     /* the talker's level, for the gain */
@@ -2236,7 +2277,8 @@ static void *capture_thread(void *arg)
         if (atomic_exchange(&pair_pending, 0)) on_pair();          /* SIGWINCH: both volume keys held, for tests on the PC */
         { int t = atomic_exchange(&trigger_pending, 0);               /* 1: SIGUSR1 plays a wake word of the last 0.6 s that */
           uint64_t lag = CAP_RATE * 128 / 1000;                       /* ended 128 ms ago, as late as Pryon accepts one */
-          if (t == 1) { pthread_mutex_lock(&core_lock); wake_phrase[0] = 0; pthread_mutex_unlock(&core_lock); }   /* the first one's */
+          if (t == 1) { pthread_mutex_lock(&core_lock); wake_phrase[0] = 0; wake_told("detected"); pthread_mutex_unlock(&core_lock); }   /* the first one's */
+          if (t == 3) wake_tell("near_miss");                         /* SIGTTOU: Pryon's near miss */
           if (t == 2) trigger(1, 0);
           else if (t == 1 && ring_n > CAP_RATE) wake_heard(ring_n - CAP_RATE * 6 / 10, ring_n - lag, 1);
           else if (t == 1) wake_heard(0, ring_n, 1); }
@@ -2306,7 +2348,7 @@ static void *capture_thread(void *arg)
             pthread_mutex_lock(&core_lock); uint64_t b = det_begin, e = det_end; pthread_mutex_unlock(&core_lock);
             wake_heard(b, e, 0);
         }
-        if (arb_due && (mono_ms() >= arb_due || arb_settled())) { arb_due = 0; if (arb_decide()) answer(arb_from); else afe_done(); }    /* after this block went out live */
+        if (arb_due && (mono_ms() >= arb_due || arb_settled())) { arb_due = 0; if (arb_decide()) answer(arb_from); else { afe_done(); wake_tell("answered_elsewhere"); } }    /* after this block went out live */
 
         pthread_mutex_lock(&core_lock);
         if (core_local_wake && (state == LISTENING || state == THINKING) && time(NULL) - state_since > PIPELINE_TIMEOUT) {
@@ -2341,6 +2383,7 @@ static void on_usr1(int s) { (void)s; atomic_store(&trigger_pending, 1); }
 static void on_usr2(int s) { (void)s; atomic_store(&button_pending, 1); }
 static void on_hup(int s) { (void)s; atomic_store(&stop_pending, 1); }
 static void on_ttin(int s) { (void)s; atomic_store(&dump_toggle, 1); }
+static void on_ttou(int s) { (void)s; atomic_store(&trigger_pending, 3); }
 static void on_winch(int s) { (void)s; atomic_store(&pair_pending, 1); }
 
 int main(int argc, char **argv)
@@ -2378,7 +2421,7 @@ int main(int argc, char **argv)
       if (core_local_wake && !settings_peek("wake_engine", eng, sizeof eng) && !strcmp(eng, "homeassistant")) core_local_wake = 0; }
     if (print_mdns) { proto->print_mdns(); return 0; }
     clock_log_start();                              /* before any thread: it forks */
-    signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin); signal(SIGWINCH, on_winch);
+    signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin); signal(SIGTTOU, on_ttou); signal(SIGWINCH, on_winch);
     if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
     ledq_start(use_led ? "/system/bin/ledctrl" : NULL, getenv("HASSMIC_FAKE_LED"), child_ids, LEDQ_TIMEOUT_MS);
     ring_start(led_run);

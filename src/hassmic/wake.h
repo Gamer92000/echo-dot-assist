@@ -16,6 +16,11 @@
 typedef void (*wake_cb)(int slot, const char *keyword, uint64_t begin, uint64_t end);
 
 int  wake_open(int slot, const char *manifest, wake_cb cb);
+/* Near misses (Pryon's detection type 0: close to the keyword, not accepted): slot, keyword.  Set once before the
+ * first wake_open; the callback runs where wake_cb does.  microWakeWord reports none */
+typedef void (*wake_miss_cb)(int slot, const char *keyword);
+void wake_on_miss(wake_miss_cb cb);
+void wake_near_miss(int slot, const char *keyword);     /* the engines: hand one on */
 void wake_feed(const int16_t *samples, size_t count);   /* every open slot */
 void wake_reset(void);                 /* audio discontinuity */
 void wake_property(const char *name, int value);   /* engine hint, e.g. "AlarmState" 1: the model lowers its threshold */

@@ -75,7 +75,12 @@ static void handle(const struct wy_event *ev)
         if (width != 2) fprintf(stderr, "play: unsupported sample width %ld, expect noise\n", width);
         core_tts_begin(rate, ch, 0);
     } else if (!strcmp(t, "audio-stop")) core_tts_end();
-    else if (!strcmp(t, "error")) { fprintf(stderr, "server error: %s\n", ev->json); core_error(); }
+    else if (!strcmp(t, "error")) {
+        char code[64] = "";
+        fprintf(stderr, "server error: %s\n", ev->json);
+        wy_json_str(ev->json, "code", code, sizeof code);
+        if (!strcmp(code, "stt-no-text-recognized")) core_no_speech(); else core_error();     /* nothing said: quietly */
+    }
     pthread_mutex_unlock(&core_lock);
 }
 
@@ -104,4 +109,4 @@ static void print_mdns(void)
            "  <service><type>_wyoming._tcp</type><port>%d</port></service>\n</service-group>\n", core_name, core_port);
 }
 
-const struct proto proto_wyoming = { "wyoming", 16700, 0, serve, start, audio, NULL, NULL, played, NULL, NULL, print_mdns, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+const struct proto proto_wyoming = { "wyoming", 16700, 0, serve, start, audio, NULL, NULL, played, NULL, NULL, print_mdns, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };

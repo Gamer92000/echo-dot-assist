@@ -1988,6 +1988,22 @@ Run in this order. Each step says what it proves.
       a link to /system/build.prop refused, nothing left behind; Etc/GMT+3, America/Argentina/Buenos_Aires, <+03>-3,
       IST-5:30, the CET rule, Europe/Berlin taken (`date` -03, -03, +03, IST, CEST, CEST); the same zone again a no-op.
       Open (device): hassmic's side (no NDK on this PC), the Shows' alarm call.
+- [x] Wake word turns that hear nothing (2026-10-19, GitHub issue #48; two Dot 2 on 2026.10.17.151309: 4
+      `stt-no-text-recognized` in 5 days, each with `anim_start_error_short`).  That code (HA's STT returned no text)
+      now goes to `core_no_speech`: the run ends as after RUN_END, no error ring, whoever started it (wake word,
+      button, follow-up); ESPHome and Wyoming (its `error` event's `code`).  Other errors keep `core_error`.
+      Event entity "Wake word" (`wake_word`, KEY_WAKE, feature setting `wake_events`, off by default, exported), types
+      `detected` (on_wake past the keyword filter, the Drop In check and "stop"; core_remote_wake for -w remote),
+      `near_miss` (Pryon's detectionType 0 through `wake_near_miss` -> main.c `on_near_miss`, same keyword filter;
+      microWakeWord has none), `answered_elsewhere` (local round lost in arb_decide, or HA's
+      `duplicate_wake_up_detected`), `no_speech` (run_wake: the run started from a wake word, set in pipeline_start
+      for `from != 0` and in core_remote_wake).  None while muted.  ESPHome events carry no attributes, so no keyword
+      or score (the issue asked for them; a sensor for the score was declined).  PC: SIGTTOU stands in for a near
+      miss.  Tests: fake_ha_esphome_buttons.py (no error ring on no text, the ring on another error; the entity
+      listed only when on; detected + no_speech, detected + answered_elsewhere, near_miss; no event after the button
+      or a follow-up).  Open (device): near misses per day on a Dot with TV and music (how noisy the event is); the
+      false-wake count for the microWakeWord comparison above can come from these events.  Not done: the issue's
+      "keep wake clips" (audio around each wake for download).
 - [x] Volumes per kind of audio (GitHub issue #32: several Dot 3 and a Dot 2; one volume for media and one for the
       assistant, the wake sound on a slider of its own).  Built 2026-10-17, after two tries the owner rejected.
       First: categories linked to the main volume with offsets (replies in volume points, sounds in dB under it,
