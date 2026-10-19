@@ -9,6 +9,7 @@
 #                 network install)
 #     --preset F  settings to start with: an export from another Echo's settings page (hassmic-settings.conf);
 #                 without it, the install step asks (Enter for none)
+# Windows (Git Bash): an Echo that is unlocked already (on adb, in Fire OS or TWRP), with GitHub's release build.
 # Only the Echo on USB is worked on, whatever else is on adb over Wi-Fi.  Keep the cable in to the end: the installed
 # Echo closes adb over Wi-Fi at its first boot.
 # The written instructions are the same steps: devices/<codename>/README.md.
@@ -46,14 +47,28 @@ trap '[ -n "$TTY" ] && printf "\e[?25h\e[?7h"' EXIT
 # --- where it runs.  The unlocks talk to the Echo's bootrom and fastboot in the first second after power-up, through
 # timing-sensitive USB transfers: macOS failed in kamakiri's payload load ("status is 1d1a", forum, 2026-10-14), and USB
 # passed through to a VM or WSL re-enumerates too late or drops transfers.  sudo would look in root's ~/Downloads.
+# Windows (Git Bash, issue #49) for the rest: after the unlock it is all adb, and Google's adb works there.  Git Bash
+# turns arguments that look like paths into Windows paths for native programs, /data/local/... into C:/Program
+# Files/Git/data/local/... for adb.exe: MSYS_NO_PATHCONV keeps them as written.
+WINDOWS=
 case $(uname -s) in
 Linux) ;;
-*) die "This runs on Linux only, on the PC itself (not in a VM): the unlock needs direct USB access. A Linux live USB stick works." ;;
+MINGW*|MSYS*)
+    WINDOWS=1; export MSYS_NO_PATHCONV=1
+    # python.org's installer gives python (and py); python3 is often only the Store's stand-in, which fails
+    python3 -c '' 2>/dev/null || ! python -c '' 2>/dev/null || { python3() { python "$@"; }; export -f python3; }
+    ;;
+*) die "This runs on Linux only, on the PC itself (not in a VM): the unlock needs direct USB access. A Linux live USB stick works. (On Windows: Git Bash, for an Echo that is unlocked already.)" ;;
 esac
 [ "$(id -u)" = 0 ] && die "Run it as yourself, not as root or with sudo: it asks for sudo where it needs it, and looks for downloads in your ~/Downloads."
-virt=$(systemd-detect-virt --vm 2>/dev/null) || virt=
-command -v systemd-detect-virt >/dev/null || ! grep -qw hypervisor /proc/cpuinfo 2>/dev/null || virt=vm   # no systemd
-grep -qi microsoft /proc/version 2>/dev/null && virt=WSL
+# not on Windows: no systemd, and with Hyper-V or memory integrity on (Windows 11's default) the PC itself runs under a
+# hypervisor, so /proc/cpuinfo says so; the unlock does not run there anyway
+virt=
+[ -n "$WINDOWS" ] || {
+    virt=$(systemd-detect-virt --vm 2>/dev/null) || virt=
+    command -v systemd-detect-virt >/dev/null || ! grep -qw hypervisor /proc/cpuinfo 2>/dev/null || virt=vm   # no systemd
+    grep -qi microsoft /proc/version 2>/dev/null && virt=WSL
+}
 if [ -n "$virt" ] && [ -z "$DRY" ]; then
     warn "This PC is a virtual machine ($virt). Unlocking needs Linux on the PC itself: in a VM the Echo's bootrom drops off USB or answers too late."
     info "An Echo that is rooted already only needs adb, which works here. Otherwise use a Linux live USB stick on the PC."
@@ -94,6 +109,7 @@ STATE=$PWD/$OUT/setup.done LOG=$PWD/$OUT/setup.log
 touch $STATE
 # asked in the tools step; a rerun past it goes on as decided then
 [ -f $OUT/setup.build ] && build_mode_set "$(cat $OUT/setup.build)"
+[ -n "$WINDOWS" ] && build_mode_set prebuilt          # nothing else there (build_mode)
 [ -n "$DRY" ] && STATE=/dev/null LOG=/dev/null        # a dry run walks every step, and leaves the progress alone
 mapfile -t STEP_LIST < <(printf '%s\n' "$STEPS" | grep .)
 n=${#STEP_LIST[@]}
@@ -106,6 +122,12 @@ if [ -n "$FROM" ]; then
     for st in "${STEP_LIST[@]}"; do [ "${st%%|*}" = "$FROM" ] && break; ids+=("${st%%|*}"); done
     [ ${#ids[@]} = $n ] && die "--from: no step $FROM (steps: $(printf '%s\n' "${STEP_LIST[@]}" | cut -d'|' -f1 | tr '\n' ' '))"
     mark_done "${ids[@]}"
+fi
+
+# --- Windows: an unlocked Echo on USB, or nothing to do here (scripts/lib/setup.sh, unlock_elsewhere)
+if [ -n "$WINDOWS" ] && [ ! -s $STATE ] && [ -z "$DRY" ] && ! adb_is device 2>/dev/null && ! adb_is recovery 2>/dev/null; then
+    header 1 $n "${STEP_LIST[@]}"
+    unlock_elsewhere; exit 1
 fi
 
 # --- an Echo rooted already, by these steps before or some other way (issue #10): the unlock would reboot it into TWRP
@@ -137,6 +159,8 @@ if [ ! -s $STATE ] && [ -z "$DRY" ]; then
     [ "$a" = yes ] || { info "Nothing done."; exit 0; }
 fi
 
+# no udev rules on Windows: USB access there is a matter of the driver adb uses
+[ -n "$WINDOWS" ] && mark_done udev
 for ((i = 1; i <= n; i++)); do
     id=${STEP_LIST[i-1]%%|*}
     [[ " $DONE_IDS " == *" $id "* ]] && continue

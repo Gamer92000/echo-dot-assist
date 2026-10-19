@@ -87,8 +87,9 @@ copy settings and wake words to, the log. A press of the action button lets your
 
 - A [supported Echo](#supported-echos), and a USB way into it (its page says what: a cable, or wires).
 - A **Linux PC**, running Linux on the machine itself (not macOS, not a VM or WSL: the unlock needs direct USB; a live
-  USB stick works), with `adb`, `fastboot`, `python3`, `make`, `unzip`, `debugfs` (e2fsprogs), `sqlite3`, ~5 GB free disk.
-  The setup offers to install what is missing.
+  USB stick works), with `adb`, `fastboot`, `python3`, `make`, `unzip`, `debugfs` (e2fsprogs), ~5 GB free disk.
+  The setup offers to install what is missing. An Echo that is **unlocked already** can also be set up from
+  **Windows**: Git Bash (Git for Windows, with its `unzip` and `curl`), `adb` (platform-tools) and `python3`.
 - **Home Assistant** with a working Assist pipeline (speech to text, conversation agent, text to speech). Try it in the
   app first. Optional: Music Assistant (tested with 2.10.4).
 - **Wi-Fi** with a WPA2 password or none (no captive portal, no enterprise login) that reaches Home Assistant.
@@ -113,6 +114,8 @@ Echo, so it asks for a typed `yes` first.
 - **Nothing to compile** on a commit GitHub has built (every push to `main` and `release`): the setup takes that build,
   checked against the project's key, and skips the 1 GB Android NDK.
 - **Already rooted** on the right firmware? It offers a shortcut: no unlock, no wipe.
+- **Windows**: run `scripts/setup.sh` in Git Bash with the Echo unlocked (on adb, in Fire OS or TWRP); it does
+  everything after the unlock, with GitHub's build of a published commit.
 - **More Echos**: `--restart` starts over for the next one, `--preset hassmic-settings.conf` gives it the settings
   exported from another.
 - `--dry-run` shows every command without running one; `--from <step>` skips ahead.

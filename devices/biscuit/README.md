@@ -53,6 +53,9 @@ progress) and reboots the Echo into TWRP (white LED). **Do not interrupt it afte
 can brick the device.** `amonet-biscuit` **v2.0.0 writes newer bootloaders and boots Fire OS 6** — the stream the
 pinned firmware belongs to (Fire OS 5 versions do not boot from v2.0.0 on). Flash `boot-root.zip` after every stock
 firmware flash: it gives root adb, as on donut.
+- From Windows: [firebreak](https://github.com/bboe/firebreak)'s `amonet-biscuit-v2.0.0` target unlocks it (reported
+  in issue #49, not tried here); after that, `scripts/setup.sh` in Git Bash should do the rest (whether firebreak
+  leaves TWRP on the recovery partition is not known yet; the setup checks its version before it wipes anything).
 - No Magisk: this repo's daemon runs as the stock client's user; TWRP plus the system write is the whole root story.
 
 ## First contact (arrival checklist)

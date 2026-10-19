@@ -272,7 +272,8 @@ _pkg() {
     *) echo "$1";;
     esac
 }
-_have() { if [ "$1" = pyusb ]; then python3 -c 'import usb' 2>/dev/null; else command -v "$1" > /dev/null; fi; }
+# python3 has to run, not only be found: on Windows it is often the Store's stand-in, which only fails
+_have() { case $1 in pyusb) python3 -c 'import usb' 2>/dev/null;; python3) python3 -c '' 2>/dev/null;; *) command -v "$1" > /dev/null;; esac; }
 
 # need_tools TOOL...: all there?  If not, offers to install them with the system's package manager.  TOOL is a command,
 # or pyusb (the python3 module).
@@ -282,6 +283,11 @@ need_tools() {
     [ ${#miss[@]} = 0 ] && { ok "all tools there"; return 0; }
     for t in pacman apt-get dnf; do command -v $t > /dev/null && { mgr=$t; break; }; done
     fail "missing: ${miss[*]}"
+    if [ -n "$WINDOWS" ]; then
+        info "unzip, curl and sha256sum come with Git for Windows; adb with Android's platform-tools; python3 from python.org."
+        info "Put them on the PATH (open Git Bash again afterwards), then try again."
+        return 1
+    fi
     case $mgr in
     pacman) cmd="pacman -S --needed --noconfirm";;
     apt-get) cmd="apt-get install -y"; mgr=apt;;
@@ -346,6 +352,16 @@ need_files() {
 # unpacking), or a build here.  Sets BUILD_MODE and exports PREBUILT for the scripts the steps run.
 build_mode() {
     local t m
+    # building takes Linux (the NDK's compilers, the firmware's ext4 image): on Windows the release's is the only one,
+    # whatever an earlier run left in setup.build, and also when this step fails and is skipped
+    if [ -n "$WINDOWS" ]; then
+        build_mode_set prebuilt
+        if t=$(prebuilt_tag); then ok "GitHub has a release build of this commit ($t)"; return 0; fi
+        fail "no release build of this commit on GitHub, and on Windows nothing can be built"
+        info "Use a commit that has one: git pull (CI publishes one a few minutes after a push), or git checkout the newest release tag (git tag -l 'v*')."
+        info "Changed files count too: git status has to show none."
+        [ -n "$DRY" ]; return
+    fi
     if [ -f $OUT/setup.build ]; then m=$(cat $OUT/setup.build)
     elif t=$(prebuilt_tag); then
         ok "GitHub has a release build of this commit ($t)"
@@ -369,6 +385,37 @@ bootroot_unpack() {
     task "Unpacking boot-root" sh -c "unzip -q -o $FW/$BOOTROOT -d $FW/boot-root && [ -f $SEPOLICY_TOOL ]" && return 0
     [ -f $SEPOLICY_TOOL ] || fail "no $SEPOLICY_TOOL after unpacking $FW/$BOOTROOT"
     rm -rf $FW/boot-root; return 1
+}
+
+# WINDOWS (scripts/setup.sh under Git Bash, issue #49): only an Echo that is unlocked already, i.e. on adb in Fire OS
+# or TWRP (stock Fire OS has no adb).  The unlocks' bootrom and fastboot exploits stay on Linux (setup.sh says why);
+# everything after them is adb, which works there.  unlock_elsewhere says so, with the model's WIN_UNLOCK if it has one.
+unlock_elsewhere() {
+    fail "The unlock does not run on Windows: this needs an Echo that is unlocked already, on adb over USB."
+    info "Unlocked? Plug it in (Fire OS or TWRP, as \"adb devices\" lists it), then try again."
+    info "Not yet: unlock it from Linux on the PC itself (a live USB stick works), then go on here.${WIN_UNLOCK:+ $WIN_UNLOCK}"
+}
+
+# twrp_check: TWRP 3.7 or newer, before the firmware step wipes anything.  Every unlock here puts 3.7.0_9-0 on the
+# recovery partition (ro.twrp.version in the ramdisks of amonet-biscuit v2.0.0, amonet-radar v1.0.0, amonet-checkers
+# v2.0.1, kamakiri-donut v1.0.0); an Echo unlocked some other way may have an older one, and the TWRP 3.2.3 of amonet
+# v1 (Dots sold unlocked by EchoLocal) cannot install 6574.1 (issue #49), only found out after the wipe.  The property
+# where it is set, else the log's first line ("Starting TWRP %s-%s on ...": version, then the commit).
+TWRP_MIN=3.7
+twrp_check() {
+    local v maj min
+    [ -n "$DRY" ] && return 0
+    v=$(ashell getprop ro.twrp.version)
+    [ -n "$v" ] || v=$(ashell "grep -o 'Starting TWRP [0-9][^ ]*' /tmp/recovery.log" | head -1 | sed 's/^Starting TWRP //')
+    if [ -z "$v" ]; then
+        warn "Could not tell this TWRP's version. It has to be $TWRP_MIN or newer to install $FIRMWARE_ID: an older one fails after the wipe."
+        ask "Wipe and flash anyway?" n; return
+    fi
+    maj=${v%%.*} min=${v#*.}; min=${min%%[!0-9]*}
+    if [ "$maj" -gt 3 ] 2>/dev/null || { [ "$maj" -eq 3 ] && [ "$min" -ge 7 ]; } 2>/dev/null; then ok "TWRP $v"; return 0; fi
+    fail "TWRP $v is too old to install $FIRMWARE_ID ($TWRP_MIN or newer); nothing was wiped."
+    info "Put this model's unlock on it again (it brings TWRP 3.7): $DDIR/README.md. That needs Linux on the PC itself."
+    return 1
 }
 
 # rooted_already: the user said at the start that the Echo on USB is unlocked and rooted already (setup.sh marks the
@@ -438,14 +485,42 @@ wait_adb() {
 # ashell CMD: adb shell, output without the carriage returns
 ashell() { adb shell "$@" | tr -d '\r'; }
 
+# network_lock, network_wifi: every model's step_network after copying hassmic over, in two parts that can also be
+# called one by one (issue #49).  The lock: lockdown.sh closes adb over Wi-Fi, which stock opens at every boot, and
+# restarts adbd a second after it ends to do so (so not over adb over Wi-Fi: that connection would be gone for good).
+# Its own exit status does not count (an older lockdown.sh restarted adbd under itself: exit 255 with the rules not
+# loaded); "lockdown.sh check" does, asked until adb is back and it passes, 30 s at most.  Its word, not its exit
+# status: adb shell passes that on only with the shell protocol.
+network_lock() {
+    [[ $ANDROID_SERIAL == *:* ]] && { fail "Locking down closes adb over Wi-Fi: connect the Echo by USB for this step"; return 1; }
+    wait_adb device || return 1
+    task "Locking down the Echo's internet access" sh -c 'adb shell sh /data/local/hassmic/lockdown.sh
+        for i in $(seq 30); do
+            sleep 1; adb shell "sh /data/local/hassmic/lockdown.sh check && echo LOCKED" 2>&1 | grep -q LOCKED && exit 0
+        done; exit 1'
+}
+network_wifi() {
+    wait_adb device || return 1
+    wifi_conf
+    # a typo in what was just typed would otherwise be retried forever
+    task "Joining Wi-Fi" scripts/wifi-join.sh || { [ -n "$WIFI_NEW" ] && rm -f secrets/wifi.conf; return 1; }
+    # the Wi-Fi profile survives a reboot, the egress lock does not until the install
+    warn "Do not restart the Echo until it is installed."
+    info "Tip: give it a fixed address in your router (DHCP reservation)."
+}
+
 # preset_ok FILE: an export of the settings page (name=value lines, # comments), nothing else
 preset_ok() { ! grep -v -e '^[[:space:]]*$' -e '^#' "$1" | grep -qv '^[a-z_][a-z0-9_]*=[^[:cntrl:]]*$'; }
 
 # push_preset FILE: hand it to hassmic (state/preset, its own user's), which applies it once when it starts; restart
-# it (main.sh starts it again)
+# it (main.sh starts it again).  The .applied of an earlier preset goes first: install_satellite waits for that file,
+# and an old one passed the wait at once (issue #49).
 PRESET_ON_ECHO=/data/local/hassmic/state/preset
 push_preset() {
-    adb push "$1" $PRESET_ON_ECHO && adb shell "chown $DAEMON_USER $PRESET_ON_ECHO; chmod 600 $PRESET_ON_ECHO; kill \$(pidof hassmic)"
+    local f=$1
+    [ -z "$WINDOWS" ] || f=$(cygpath -m "$f")     # adb.exe takes C:/...; Git Bash leaves paths alone (MSYS_NO_PATHCONV)
+    adb shell rm -f $PRESET_ON_ECHO.applied && adb push "$f" $PRESET_ON_ECHO &&
+        adb shell "chown $DAEMON_USER $PRESET_ON_ECHO; chmod 600 $PRESET_ON_ECHO; kill \$(pidof hassmic)"
 }
 
 # install_satellite: the last step of every model.  Installs (scripts/install-system.sh), waits until the installed

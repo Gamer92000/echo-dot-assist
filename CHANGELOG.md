@@ -4,6 +4,23 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-19
 
+- **Setup from Windows for an unlocked Echo** (issue #49). `scripts/setup.sh` now runs in Git Bash on Windows when the
+  Echo on USB is unlocked already (on adb, in Fire OS or TWRP): firmware, root, the release build, Wi-Fi and the
+  install, as on Linux. The unlock itself still needs Linux on the PC; an Echo Dot 2 can reportedly also be unlocked
+  from Windows with firebreak (not tried here). Windows needs Git for Windows (it brings `unzip` and `curl`), `adb`
+  (platform-tools) and Python, and a commit GitHub has built. The guided setup no longer needs `sqlite3`.
+- **An old TWRP is refused before the wipe** (issue #49). An Echo unlocked some other way can have a TWRP too old to
+  install the firmware (3.2.3 on Echo Dot 2s sold unlocked by EchoLocal), which only showed after its data was wiped.
+  The firmware step now checks for TWRP 3.7 or newer first and stops with nothing wiped.
+- **Guided setup: the lock-down step passes the first time** (issue #49). Right after the Echo booted, "Locking down
+  the Echo's internet access" failed once with nothing loaded and only passed when run again: closing adb over Wi-Fi
+  restarts the Echo's adb, and that ended the USB connection running the step. Now the rules go up first, adb restarts
+  after, and the step waits for it and checks the lock.
+- **Guided setup: settings from a file are really checked** (issue #49). On an Echo that had been given settings before,
+  "Settings taken" showed at once, from the earlier run. It now waits for the new ones.
+- **Cloning on Windows gives working scripts** (issue #49). Git on Windows turned line ends into CRLF, which the scripts
+  fail on; the repository now keeps LF everywhere. A clone made before needs `git rm --cached -r . && git reset --hard`
+  once (or a fresh clone).
 - **"Alexa, stop" pauses music** (issue #51). Music from Music Assistant or a phone over Bluetooth used to stop only if
   Home Assistant's speech-to-text caught the one word over the music, which often failed. The Echo now hears "stop"
   itself and pauses the music, as it already did for replies and timers; the action button resumes it. "Alexa, stop

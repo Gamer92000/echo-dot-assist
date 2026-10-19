@@ -129,6 +129,8 @@ adb_state() {
     u=$(getprop hassmic.adb.until)
     if [ "${u:-0}" -gt "$(up)" ] 2>/dev/null; then ADB=1; ADB_WHY="asked for through hassmic, $(( (u - $(up) + 59) / 60 )) min left"; fi
 }
+# a socket listening on port 5555 (hex 15B3, state 0A), IPv4 or IPv6; no awk on the Echo
+adb_listening() { grep -qE '^ *[0-9]+: [0-9A-F]+:15B3 [0-9A-F]+:0000 0A ' /proc/net/tcp /proc/net/tcp6 2>/dev/null; }
 # Take a request, then make adbd what it has to be.  True if that changed (the rules then have to follow).
 adb_gate() {
     req=; got=
@@ -138,14 +140,20 @@ adb_gate() {
     fi
     adb_state
     port=$(getprop service.adb.tcp.port); changed=1
-    # an adbd that stock has not started is left that way; it reads the port if it ever starts
-    run=; [ "$(getprop init.svc.adbd)" = running ] && run="setprop ctl.restart adbd"
+    # an adbd that stock has not started is left that way; it reads the port if it ever starts.  The restart itself is
+    # apply's, after the rules (see there).
+    run=; [ "$(getprop init.svc.adbd)" = running ] && run=1
     if [ -n "$ADB" ] && [ "$port" != 5555 ]; then
-        setprop service.adb.tcp.port 5555; $run; changed=0
+        setprop service.adb.tcp.port 5555; ADB_RESTART=$run; changed=0
         echo "adb over Wi-Fi OPEN: a root shell for everyone on the network, no password ($ADB_WHY)"
     elif [ -z "$ADB" ] && [ "$port" = 5555 ]; then
-        setprop service.adb.tcp.port 0; $run; changed=0
+        setprop service.adb.tcp.port 0; ADB_RESTART=$run; changed=0
         echo "adb over Wi-Fi closed, USB only (uptime $(up)s)"
+    elif [ -z "$ADB" ] && [ -n "$run" ] && adb_listening; then
+        # the port says closed and adbd still listens: a restart that never came (apply's runs after its caller ended,
+        # and something may kill it first).  The rules drop 5555 meanwhile.
+        ADB_RESTART=1; changed=0
+        echo "adbd still listened on 5555 with adb over Wi-Fi closed: restarted"
     fi
     # the answer hassmic reads, then the request: gone means answered
     if [ -n "$ADB" ]; then [ -f $ADB_OPEN ] || : > $ADB_OPEN; else rm -f $ADB_OPEN; fi
@@ -200,6 +208,12 @@ apply() {
     DNS=$(resolvers); kiosk_state
     load iptables
     if [ -n "$HAVE6" ]; then load ip6tables; else v6off; fi
+    # adbd last, and a second later in the background: its restart ends every adb shell, the one running this script
+    # too.  Stock opens port 5555 at every boot, so the first run over adb after a boot (setup.sh's lock-down step)
+    # closes it, and restarting adbd at once ended that run with exit 255 before a single rule was loaded (issue #49).
+    # HUP ignored: the restart must happen once the port is set.  If it does not all the same, adbd listens on 5555
+    # while the property says 0: adb_gate's next run (the watcher's, 5 s) sees the listener and restarts it.
+    [ -z "$ADB_RESTART" ] || { ADB_RESTART=; ( trap '' HUP; sleep 1; setprop ctl.restart adbd ) < /dev/null > /dev/null 2>&1 & }
 }
 
 # What is wrong with the rules, in words, and false; nothing and true when all is as it has to be.  Three listings per

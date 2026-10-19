@@ -1988,6 +1988,37 @@ Run in this order. Each step says what it proves.
       a link to /system/build.prop refused, nothing left behind; Etc/GMT+3, America/Argentina/Buenos_Aires, <+03>-3,
       IST-5:30, the CET rule, Europe/Berlin taken (`date` -03, -03, +03, IST, CEST, CEST); the same zone again a no-op.
       Open (device): hassmic's side (no NDK on this PC), the Shows' alarm call.
+- [x] Setup on Windows, what it found (2026-10-19, GitHub issue #49: a Dot 2 through `step_*` one at a time from
+      Git Bash).  (1) The first `lockdown.sh` over adb after a boot ended with exit 255 and nothing loaded: stock sets
+      `service.adb.tcp.port` 5555 at boot, `adb_gate` closed it and restarted adbd at once, which ended the adb shell
+      running the script.  Now `apply` restarts adbd after the rules, in the background a second later (HUP ignored);
+      should that restart be lost, `adb_gate` sees a 5555 listener (/proc/net/tcp, tcp6) with the port closed and
+      restarts adbd (the rules drop 5555 meanwhile).  `network_lock` no longer counts lockdown.sh's exit status: it asks
+      `lockdown.sh check` once a second, 30 s at most, until adb is back and it passes; refused over adb over Wi-Fi.  (2) `push_preset` removes an earlier `state/preset.applied` first: the wait passed on the old
+      one.  (3) `.gitattributes`: LF for every text file (Windows' `core.autocrlf=true` gave CRLF scripts).
+      `step_network` of every model = deploy + `network_lock` + `network_wifi` (scripts/lib/setup.sh), so a front end
+      can call the lock and the Wi-Fi join without copying them.  Open (device): the delayed adbd restart on a Dot 2 and
+      a Dot 3 (port 5555 at boot -> one lock-down run passes, adb back, `getprop service.adb.tcp.port` 0, nothing on
+      5555).
+      `setup.sh` under Git Bash (the issue's first ask), for an Echo that is unlocked already: everything after the
+      unlock is adb (TWRP is on the recovery partition after every model's unlock), so the line is "on adb, Fire OS or
+      TWRP", not "rooted".  `uname` MINGW/MSYS -> `WINDOWS`, `MSYS_NO_PATHCONV=1` (Git Bash rewrote /data/local/... for
+      adb.exe; the preset's own path through `cygpath -m`), `python3` -> `python` where only the Store's stand-in is
+      there (`_have python3` runs it now), no VM check (Windows 11 with memory integrity shows `hypervisor` in
+      /proc/cpuinfo), udev marked done, the release build only (`build_mode` fails without one: the NDK and debugfs
+      are Linux's), no unlock tool in tools/files, `step_unlock` -> `unlock_elsewhere` (biscuit: `WIN_UNLOCK` names
+      firebreak), and at the start the Echo has to be on adb or nothing happens.  `sqlite3` out of the tools step
+      (only artifacts.sh used it, and it checks itself).  Checked on Linux with a stand-in `uname`/`cygpath`
+      (dry runs, the start without an Echo); the scripts after the unlock ran from Git Bash in the issue (Dot 2,
+      v2026.10.17.151309).  Open (Windows): one whole run of `setup.sh` (tools, downloads from ~/Downloads, the
+      unlock step's reboot into TWRP, the rest); firebreak's result (does it leave TWRP on recovery?).
+      TWRP before the wipe (`twrp_check`, first in every model's `step_flash`): 3.7 or newer, else stop with nothing
+      wiped (the issue: amonet v1's TWRP 3.2.3, on Dots EchoLocal sold unlocked, cannot install 6574.1).  Every unlock
+      here brings 3.7.0_9-0: `ro.twrp.version` and the string next to it in the ramdisks of amonet-biscuit v2.0.0,
+      amonet-radar v1.0.0, amonet-checkers v2.0.1 and kamakiri-donut v1.0.0.  Where the property is not set, the first
+      "Starting TWRP <version>-<commit>" of /tmp/recovery.log (the same format string in all four); neither: asked.
+      Version logic checked against stand-in answers (3.7.0_9-0, 3.2.3-0, 3.7.1_12-0, 3.10.0-0, 4.0.0_1-0, log only).
+      Open (device): an old TWRP itself (does 3.2.3 set the property; the log's line).
 - [x] "<wake word>, stop" to music (2026-10-19, GitHub issue #51: Dot 2 on Fire OS 8146, three tries in a row over
       Sendspin ended in `stt-no-text-recognized` and the music played on; Pryon's "stop" was heard each time).
       `stop_word` pauses music when nothing else ended (Drop In, ring, a reply, the pipeline its wake word cut): Sendspin's

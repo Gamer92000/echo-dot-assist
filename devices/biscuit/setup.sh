@@ -27,6 +27,8 @@ network|Lock down, join Wi-Fi
 install|Install
 "
 ROOTED_SKIP="udev usb unlock flash root"     # done on an Echo that is rooted already (scripts/setup.sh asks)
+# Windows (scripts/lib/setup.sh, unlock_elsewhere); reported in issue #49, not tried here
+WIN_UNLOCK="An Echo Dot 2 can reportedly also be unlocked from Windows (not tried by this project): firebreak (https://github.com/bboe/firebreak), target amonet-biscuit-v2.0.0."
 NOTES=(
     "adb over Wi-Fi is closed: scripts/adb-wifi.sh <echo-ip> (or debug access on the settings page, http://<echo-ip>:28931/) opens it for 30 min."
     "Updates: git pull, then scripts/ota-push.sh <echo-ip>."
@@ -38,20 +40,21 @@ slot() { ashell bcbtool get_active | tr -d " \n"; }
 
 step_tools() {
     command -v curl > /dev/null || need_tools curl || return 1
-    build_mode
+    build_mode || return 1
     local unlock="fastboot python3 pyusb"
-    rooted_already && unlock=python3
-    if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip sqlite3 curl sha256sum || return 1; return 0; fi
-    need_tools adb $unlock make cc unzip debugfs sqlite3 curl sha256sum bc xz || return 1
+    { rooted_already || [ -n "$WINDOWS" ]; } && unlock=python3      # no unlock here: python3 only for otatool.py
+    if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip curl sha256sum || return 1; return 0; fi
+    need_tools adb $unlock make cc unzip debugfs curl sha256sum bc xz || return 1
     [ "$(df -Pk . | awk 'NR == 2 { print $4 }')" -gt 5000000 ] || warn "less than 5 GB free here; the NDK and firmware need about that"
 }
 
 step_files() {
     local need=()
-    # a rooted Echo needs the firmware only to build against, and the unlock tool not at all
+    # a rooted Echo needs the firmware only to build against, and the unlock tool not at all (nor does Windows: the
+    # Echo is unlocked already there)
     rooted_already && { [ "$BUILD_MODE" = prebuilt ] || [ -d $FW/rootfs/system/lib ]; } ||
         need+=($FW/$FIRMWARE_FILE $FIRMWARE_SHA256 "Fire OS $FIRMWARE_ID: $FTVDB")
-    rooted_already || need+=($FW/$AMONET $AMONET_SHA256 "attachment in $XDA")
+    rooted_already || [ -n "$WINDOWS" ] || need+=($FW/$AMONET $AMONET_SHA256 "attachment in $XDA")
     need_files "${need[@]}" $FW/$BOOTROOT $BOOTROOT_SHA256 "attachment in $XDA" || return 1
     [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
     if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
@@ -84,6 +87,7 @@ step_unlock() {
         task "Restarting into TWRP" adb reboot recovery || return 1
         wait_adb recovery; return
     fi
+    [ -n "$WINDOWS" ] && { unlock_elsewhere; [ -n "$DRY" ]; return; }       # Windows: on adb at the start (setup.sh), not now
     local adir
     [ -d $FW/amonet ] || task "Unpacking amonet" unzip -q $FW/$AMONET -d $FW/amonet || return 1
     # run fastbrick.sh from wherever the zip put it (the release zip keeps it in a folder amonet/ of its own)
@@ -100,6 +104,7 @@ step_unlock() {
 step_flash() {
     local s0 s1 s2
     wait_adb recovery || return 1
+    twrp_check || return 1
     task "Wiping cache and data" adb shell 'twrp wipe cache && twrp wipe data' || return 1
     task "Copying the firmware to the Echo" adb push $FW/$FIRMWARE_FILE /sdcard/update.zip || return 1
     [ -n "$DRY" ] || s0=$(slot)
@@ -153,15 +158,7 @@ step_network() {
     wait_adb device || return 1
     task "Copying hassmic to the Echo" scripts/deploy.sh || return 1
     # adb can drop out for a moment here, shortly after the boot (seen on an Echo Dot 2, issue #2)
-    wait_adb device || return 1
-    task "Locking down the Echo's internet access" sh -c 'adb shell sh /data/local/hassmic/lockdown.sh &&
-        adb shell iptables -S hassmic_out | grep -q -- "-j DROP"' || return 1
-    wifi_conf
-    # a typo in what was just typed would otherwise be retried forever
-    task "Joining Wi-Fi" scripts/wifi-join.sh || { [ -n "$WIFI_NEW" ] && rm -f secrets/wifi.conf; return 1; }
-    # the Wi-Fi profile survives a reboot, the egress lock does not until the install
-    warn "Do not restart the Echo until it is installed."
-    info "Tip: give it a fixed address in your router (DHCP reservation)."
+    network_lock && network_wifi
 }
 
 step_install() {

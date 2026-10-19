@@ -1,0 +1,6 @@
+# LF everywhere, on every OS: the shell scripts run under bash (also Git Bash on Windows, issue #49) and on the Echo's
+# mksh, and device.conf, *.rc, sepolicy.rules and the rest are sourced or pushed to it as they are.  A Windows clone
+# with Git's default core.autocrlf=true got CRLF, and bash fails on that.
+* text=auto eol=lf
+*.raw binary
+*.mp3 binary
