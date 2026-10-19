@@ -1345,7 +1345,7 @@ Run in this order. Each step says what it proves.
       this room (<why>): ambient counted at <pct> %, score <raw> -> <new>` or `no media of this room: score <raw>`,
       beside `wake: front end: voice energy …, ambient …` (the data for (b)); changes `media_player.x playing` / `…
       paused (counts 120 s more)`; `following … in Home Assistant`. Page: under the list `"media"` of `/api/state`.
-      fake_ha_arbitration (21 new checks that fail on 07d0ff7): a fake HA tracker; list from the page followed for good
+      fake_ha_arbitration_media (21 new checks that fail on 07d0ff7): a fake HA tracker; list from the page followed for good
       over the keyed link only, the other Echo nothing; 500 vs 900: 801 (50 %) still loses, 1102 (25 %) wins with the
       claim's length unchanged; paused counts for the hold, then not; both rooms with media; same list again nothing,
       a new id one subscription; 8 ids of the longest kind kept over a restart and followed by themselves, a player
@@ -1365,7 +1365,7 @@ Run in this order. Each step says what it proves.
       background factor indented under the list (`sub:` in app.js), not dimmed with an empty list since own playback
       uses it too; a refused text stays in the field. web.c checks each setting's room before it goes in (a text takes
       up to 1.6 kB escaped); `settings_apply_text` refuses an over-long line instead of cutting it.
-      fake_ha_arbitration: A, B, A on one link (no second HA_STATE_SUB, state at once), a typo'd id unknown then
+      fake_ha_arbitration_media: A, B, A on one link (no second HA_STATE_SUB, state at once), a typo'd id unknown then
       missing, not linked after HA left; fake_web: an over-long line refused, `linked` false.
       First measurement on the two Echos (2026-10-16, Sonos in the kitchen on a radio station, volume 30 %): 11 rounds,
       the owner found every answer right; the offset decided 3 of them for the kitchen (0.4–1.6 dB behind raw, the

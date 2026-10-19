@@ -3,7 +3,9 @@ Home Assistant that does what the real one does with ESPHome devices: it connect
 device's events whatever its permission (esphome.tag_scanned: the tag integration keeps tag.<tag id>, state the last
 scan's time), answers any device's request for a state (no permission needed), and runs an action a device asks for
 ("Allow the device to perform Home Assistant actions") that names another device's own action
-(esphome.<node>_arbitration_key) on that device.
+(esphome.<node>_arbitration_key) on that device, and follows an entity a device subscribes to (no "once") as its state
+tracker does: the state at once, then on every change, to each subscriber; dropped with the link (media players:
+fake_ha_arbitration_media.py).
 Everything goes out as loopback broadcast (HASSMIC_ARB_ADDR): nothing of it reaches the LAN.  The network's own pace
 (beacons, discovery, tags, key handoff, pairing) runs at SCALE of the real one (HASSMIC_ARB_SCALE, arb.c PACE): at
 the real one a join by the action alone waits out half a minute.  Rounds and the window keep their real times."""
@@ -57,10 +59,11 @@ class Echo:
                 f.write(f"join 1\nctr 0\nnet {nid:016x} {base64.b64encode(key).decode()}\n")
         self.starts, self.states, self.allowed, self.chunks = [], {}, True, []
         self.stops = []                                     # (when, abort): the Echo ended a run (abort: start=false)
+        self.sendspin = 0                                   # -z: Sendspin's port, 0 none
 
     def start(self):
         self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.port), "-n", self.name, "-L",
-                                      "-z", "0", "-o", "0", "-a", str(ARB), "-W", str(self.web)], env=self.env, stderr=open(self.log, "a"))
+                                      "-z", str(self.sendspin), "-o", "0", "-a", str(ARB), "-W", str(self.web)], env=self.env, stderr=open(self.log, "a"))
         wait_port(self.port, self.web)
 
     def text(self): return open(self.log).read()
@@ -95,13 +98,14 @@ class Echo:
 
     async def connect(self, ha):
         self.ha, self.states = ha, {}
+        ha.drop(self)                                   # a new link: Home Assistant's trackers of the old one are gone
         self.cli = APIClient("127.0.0.1", self.port, None, noise_psk=self.api_key)
         await self.cli.connect(login=True)
         ents, self.services = await self.cli.list_entities_services()
         self.by = {e.object_id: e for e in ents}
         self.cli.subscribe_states(lambda s: self.states.__setitem__(s.key, getattr(s, "state", None)))
         self.cli.subscribe_home_assistant_states_and_services(on_state=lambda s: None, on_service_call=lambda c: ha.action(self, c),
-                                                              on_state_sub=lambda e, a: None, on_state_request=lambda e, a: ha.state(self, e, a))
+                                                              on_state_sub=lambda e, a: ha.sub(self, e, a), on_state_request=lambda e, a: ha.state(self, e, a))
         async def handle_start(conv, flags, settings, phrase):     # RUN_START as Home Assistant's pipeline sends it: after a
             self.starts.append(time.monotonic()); self.chunks = []    # cancel the Echo waits for it before it takes events again
             self.cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None); return 0
@@ -115,7 +119,32 @@ class Echo:
 class HA:
     """Home Assistant's esphome manager: device actions run only with the option ticked (otherwise a repair), and
     esphome.<device_info.name with '_'>_<service> is each device's own action."""
-    def __init__(self, echos): self.echos, self.calls, self.refused, self.tags_on, self.asked, self.tags, self.scans = echos, [], [], True, [], {}, []
+    def __init__(self, echos):
+        self.echos, self.calls, self.refused, self.tags_on, self.asked, self.tags, self.scans = echos, [], [], True, [], {}, []
+        self.subs, self.media = [], {}                  # lasting subscriptions (echo name, entity); media players' states
+        self.attr_subs, self.vols = [], {}              # the same of an attribute (echo name, entity, attribute); volume_level
+    def sub(self, echo, entity, attribute):
+        """a subscription without "once" (async_on_state_subscription): a tracker that sends the state now and on every
+        change, until the link closes.  One of an attribute is a tracker of its own"""
+        if attribute:
+            self.attr_subs.append((echo.name, entity, attribute))
+            if attribute == "volume_level" and entity in self.vols: echo.cli.send_home_assistant_state(entity, attribute, self.vols[entity])
+            return
+        self.subs.append((echo.name, entity))
+        if entity in self.media: echo.cli.send_home_assistant_state(entity, "", self.media[entity])
+    def drop(self, echo):
+        self.subs = [x for x in self.subs if x[0] != echo.name]; self.attr_subs = [x for x in self.attr_subs if x[0] != echo.name]
+    def set_volume(self, entity, vol):
+        """a player's volume_level changes: its attribute's trackers send it, as str(float)"""
+        self.vols[entity] = vol
+        for name, e, at in self.attr_subs:
+            if e == entity and at == "volume_level": next(x for x in self.echos if x.name == name).cli.send_home_assistant_state(entity, at, vol)
+    def set_media(self, entity, state):
+        """a media player changes: every tracker of it sends the new state (nothing when it stays the same)"""
+        if self.media.get(entity) == state: return
+        self.media[entity] = state
+        for name, e in self.subs:
+            if e == entity: next(x for x in self.echos if x.name == name).cli.send_home_assistant_state(entity, "", state)
     def state(self, asker, entity, attribute):
         """async_on_state_request: the current state, nothing for an entity that has none (missing, or disabled)"""
         self.asked.append((asker.name, entity))

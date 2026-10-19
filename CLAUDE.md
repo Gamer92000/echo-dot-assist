@@ -59,7 +59,7 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # one too slow (HASSMIC_FAKE_ALIGN_SLOW) or busy goes by the level, the
                                              # speaker adaptation in use and saved (a German "Alexa", timed per loop)
 .venv/bin/python tests/fake_ha_arbitration.py # two Echos under one fake HA: wake word arbitration, join paths and security
-                                             # (_join, _rounds, _kiosk, _window, _afe.py beside it; tests/arbecho.py)
+                                             # (_join, _rounds, _kiosk, _window, _afe, _media.py beside it; tests/arbecho.py)
 .venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer,
                                              # the ringtone at the sounds volume (HASSMIC_EARCONS: stand-in stock sounds)
 .venv/bin/python tests/blueprint_dropin.py    # the Drop In voice blueprint against stand-ins of HA's registries, states,
