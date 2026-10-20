@@ -2,7 +2,8 @@
 # Writes hassmic onto the system partition from the running OS, as root: no TWRP.  boot-root turned dm-verity off, so
 # the partition only has to be remounted writable (otatool remount: toybox mount cannot, /dev/root does not exist).
 #   sysinstall.sh install SRC      what scripts/install-system.sh puts there: SRC holds the files of /system/hassmic, plus
-#                                  hassmic.rc and optionally sepolicy (the patched policy).  Files in /system/hassmic that
+#                                  hassmic.rc and optionally sepolicy (the patched policy: /sepolicy, or device.conf's
+#                                  SEPOLICY_FILE where the policy lives elsewhere, athena's /vendor/etc/selinux).  Files in /system/hassmic that
 #                                  SRC lacks are removed (update.pub stays if SRC has none).
 #   sysinstall.sh factory SRC      an update that passed its self test (SRC = its directory; main.sh, factory())
 #                                  becomes the factory copy: its files, boot.sh and hassmic.rc.  Never the update key or
@@ -58,9 +59,22 @@ elif [ "$MODE" != uninstall ]; then
     [ "$MODE" = factory ] || [ -s "$SRC/update.pub" ] || [ -s $H/update.pub ] || { say "no update.pub, nothing written"; exit 1; }
 fi
 
+# The SELinux policy: /sepolicy in the system partition's root (the Dots), or the file device.conf's SEPOLICY_FILE names
+# (athena: /vendor/etc/selinux/precompiled_sepolicy, a partition of its own).  The installed device.conf serves where SRC
+# has none (uninstall); tested before it is sourced: a missing file ends the subshell with ".", the fallback never ran.
+conf_get() { c=$SRC/device.conf; [ -f "$c" ] || c=$H/device.conf; [ -f "$c" ] && (. "$c"; eval "echo \"\${$1}\""); }
+POLICY=$(conf_get SEPOLICY_FILE); POLICY=${POLICY:-/sepolicy}
+PVOL=; case "$POLICY" in /vendor/*) PVOL=/vendor;; esac       # the partition the policy is on, when it is not /system's
+# that partition writable only when the policy is written: a factory copy (every promoted update) or leds never touch it
+case "$MODE" in install) [ -f "$SRC/sepolicy" ] || PVOL=;; uninstall) [ -f $POLICY.pre-hassmic ] || PVOL=;; *) PVOL=;; esac
+PLABEL=$SYSLABEL; [ -z "$PVOL" ] || PLABEL=$(ls -dZ $POLICY 2>/dev/null | cut -d" " -f1)   # a policy in /vendor keeps its own label
+[ -n "$PLABEL" ] || PLABEL=$SYSLABEL
+
 # /system, not $H: otatool resolves the path it is given, and $H does not exist before the first install or after uninstall
 "$SRC/otatool" remount rw /system > /dev/null || exit 1
-trap '"$SRC/otatool" remount ro /system > /dev/null || say "partition still writable, the next boot mounts it read-only"' EXIT
+[ -z "$PVOL" ] || "$SRC/otatool" remount rw $PVOL > /dev/null || { "$SRC/otatool" remount ro /system > /dev/null; exit 1; }
+trap '"$SRC/otatool" remount ro /system > /dev/null || say "partition still writable, the next boot mounts it read-only"
+      [ -z "$PVOL" ] || "$SRC/otatool" remount ro $PVOL > /dev/null || say "$PVOL still writable, the next boot mounts it read-only"' EXIT
 
 # new DEST from FILE with MODE OWNER LABEL: written beside DEST as DEST.new; nothing if DEST already has that content.
 # A file for / is made in /system and renamed to /: created in / it would get the label of /, rootfs, and SELinux
@@ -127,8 +141,8 @@ stock_apps() {      # stock_apps "LIST": those in REMOVED, the rest back where t
 
 if [ "$MODE" = uninstall ]; then
     stock_apps ""
-    if [ -f /sepolicy.pre-hassmic ]; then
-        new /sepolicy /sepolicy.pre-hassmic 644 0:0 $SYSLABEL; commit; rm /sepolicy.pre-hassmic
+    if [ -f $POLICY.pre-hassmic ]; then
+        new $POLICY $POLICY.pre-hassmic 644 0:0 $PLABEL; commit; rm $POLICY.pre-hassmic
     fi
     if [ -f $LSTOCK ]; then
         staged=; new $LR/layer_config_common.json $LSTOCK 644 0:0 $SYSLABEL; commit; rm $LSTOCK
@@ -142,6 +156,7 @@ fi
 mkdir -p $H; chown 0:2000 $H; chmod 755 $H; chcon $SYSLABEL $H
 for f in "$SRC"/*; do
     n=${f##*/}
+    [ -d "$f" ] && continue                 # oat/: what ART leaves beside a dex it loaded (ringbar.dex, wifictl.dex)
     case "$n" in
     hassmic.rc|sepolicy) continue;;
     update.pub) [ "$MODE" = install ] || continue; m=644;;
@@ -158,9 +173,9 @@ if [ -n "$home" ] && [ -s "$SRC/$home" ]; then
 fi
 if [ "$MODE" = install ] && [ -f "$SRC/sepolicy" ]; then
     # The policy as boot-root left it stays beside it, for --uninstall; staged first, so commit() renames it into place
-    # before the new policy.  Init loads /sepolicy before any policy is in force: its label does not matter.
-    [ -f /sepolicy.pre-hassmic ] || new /sepolicy.pre-hassmic /sepolicy 644 0:0 $SYSLABEL
-    new /sepolicy "$SRC/sepolicy" 644 0:0 $SYSLABEL
+    # before the new policy.  Init loads it before any policy is in force: its label does not matter.
+    [ -f $POLICY.pre-hassmic ] || new $POLICY.pre-hassmic $POLICY 644 0:0 $PLABEL
+    new $POLICY "$SRC/sepolicy" 644 0:0 $PLABEL
 fi
 commit
 stock_apps "$(. "$SRC/device.conf" 2>/dev/null && echo "$STOCK_APPS_OUT")"

@@ -221,7 +221,22 @@ What changed for people using the Echo, newest first. Details and measurements a
 - **Wake sound removal (experimental) on the Echo Show.** The Show starts a sound after a pause 0.35 s late (below); the
   removal now looks for the sound's echo from where it really starts, and no longer misses it.
 
+## 2026-10-16
+
+- **Echo Show 8 (2nd gen): Wi-Fi motion.** The motion sensor (experimental, off by default) now works on the Show 8 2nd gen:
+  our module reads the level of every frame from the router out of its Wi-Fi driver, as on the Echo Dot 3 and the Show 5.
+  The guided setup downloads the kernel sources and compiler the module is built with.
+- **Echo Show 8 (2nd gen): the guided setup unlocks and roots it.** `scripts/setup.sh athena` asks for saiyaku-athena and its
+  boot-root zip (picked up from ~/Downloads), runs the unlocker with its output on the console, flashes the root zip in TWRP
+  and goes on with the install, as it does for the 1st gen.
+
 ## 2026-10-15
+
+- **Echo Show 8 (2nd gen): the mute button is answered at once.** Amazon's driver holds the microphone switch for one
+  second before it reports it, so the red band and the "mics off" sound came 1.2 s after the press (the red light under the
+  button was instant). hassmic now reacts to the press itself and lets the switch confirm it.
+- **Echo Show 8 (2nd gen): speaker gain.** The "Speaker gain" setting goes up to +9 dB: music at full volume was quiet, and
+  past that point bass-heavy music distorts.
 
 - **Echo Show 8 (1st gen): a factory reset forgets a Wi-Fi network that Amazon's own setup saved.** Android 7 only lets the
   network's creator or the system user remove it, so the reset reported "forgotten" and the Echo stayed on the network (and
@@ -229,6 +244,18 @@ What changed for people using the Echo, newest first. Details and measurements a
 - **Echo Show 8 (1st gen): the speaker gain can go below stock.** The Show 8 is loud at its stock level with music at
   full volume, so the settings page's speaker gain goes down to -6 dB here (the Dots only go up). About -2 dB suited
   the first one tried.
+## 2026-10-14
+
+- **Echo Show 8 2nd gen (`athena`): first support, installed on one.** Android 9 and a different chip from the other Shows,
+  so it has its own page ([`devices/athena`](devices/athena/README.md)). The Echo has to be unlocked and rooted first (the
+  saiyaku-athena unlock and its root zip, not part of this project); the install then needs no flashing from the PC. On
+  the first Echo hassmic is up 22 seconds after the kernel starts, hears the wake word, takes the volume keys and the mic
+  mute switch and draws the light band, and Home Assistant adopts it and gets spoken answers. Bluetooth (Home Assistant's
+  proxy, music from a phone), Music Assistant over Sendspin, the settings page's "Switch network" and the setup's Wi-Fi
+  join, and "Download from Amazon" work, and the room's light is reported in lux, computed from the sensor's raw colour
+  channels (within about 10 % of Amazon's own value in steady light; under a bright lamp held close it still jumps about).
+  Not checked yet: the speaker's volume curve.
+
 ## 2026-10-13
 
 - **No more freezing at the first wake word after 18.6 hours** (issue #31). Since 2026-10-12, an Echo whose

@@ -14,6 +14,7 @@ and refuse a mismatch.
 | Echo Dot 3rd gen with clock, 36EBT3 | `doebrite` | ? | not started; thought to be `crumpet` hardware plus the clock display |
 | Echo Show 5 1st gen (2019), H23K37 | [`checkers`](checkers/README.md) | `checkers` | builds; worked out from the firmware (same 6574.1 as donut, full Android, no mixer: OpenSL ES backend); unlock public (amonet-checkers, TWRP); install (`INSTALL=boot`) and guided setup tried on one Echo Show; the ring as a band along the bottom of the screen (`ring_band.c`) |
 | Echo Show 8 1st gen (2019), C7H6N3 | [`crown`](crown/README.md) | `crown` | builds; the same platform as checkers (MT8163, Fire OS 6.5.7.0 NS6570); unlock public (amonet-crown); installed (`INSTALL=boot`) and running on one Echo Show 8: voice, buttons, mute latch, the band, Bluetooth, Wi-Fi motion; Amazon downloads work (DHA version 2); guided setup tried on one Echo Show 8 |
+| Echo Show 8 2nd gen (2021), A8H3N2 | [`athena`](athena/README.md) | `athena` | builds; Android 9, MT8183, kernel 4.4.146, Treble; unlock public (saiyaku-athena, serial); root as that zip leaves it (system and vendor patched in place), installed from the running OS (`INSTALL=running`, policy in `/vendor`) and running on one Echo Show 8 2nd gen: voice, buttons, mute latch, the band, Bluetooth, Wi-Fi switch, light sensor, speaker gain, Wi-Fi motion; Amazon downloads work (DHA version 2 through `fireosdhaservice`) |
 
 ## What a model directory holds
 
@@ -78,8 +79,10 @@ Rough order. Each step is safe to stop at.
    - `hassmic.rc`: the property trigger that starts the stock Alexa client on this model.
    - `sepolicy.rules`: depends on how root was obtained.
    - `INSTALL` in `device.conf`: `twrp-ab` is `scripts/install-system.sh`; `boot` (policy in `boot.img`'s ramdisk, no
-     A/B: checkers) is `scripts/install-boot.sh`, which install-system.sh hands over to. A model that installs another
-     way gets its own method there, or its own script.
+     A/B: checkers) is `scripts/install-boot.sh`, which install-system.sh hands over to; `running` (athena: rooted
+     from the running OS by patching system and vendor in place, the policy in `/vendor/etc/selinux`, named by
+     `SEPOLICY_FILE`) is install-system.sh's in-OS path alone, no TWRP. A model that installs another way gets its own
+     method there, or its own script.
 4. **Try it without installing**: `scripts/probe.sh`, `scripts/deploy.sh`, `adb shell sh /data/local/hassmic/run.sh`.
    Both pick the model from the Echo on adb.
 5. **Install**, and write the steps down twice: by hand in the model's `README.md` (Install section), and as

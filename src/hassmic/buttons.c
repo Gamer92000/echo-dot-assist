@@ -5,6 +5,7 @@
 #include <linux/input.h>
 #include <poll.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +35,26 @@ static int have_latch(void)
     return have;
 }
 
+static atomic_llong early_until;       /* until when early_state is a press's word, not the latch's (set under latch_lock) */
+static atomic_int early_state;
+static pthread_mutex_t latch_lock = PTHREAD_MUTEX_INITIALIZER;   /* reports leave in the order the state was read */
+
+static long long now_ms(void)
+{
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* the latch itself */
+static int latch_read(void)
+{
+    char c = '0'; int f = open(board.privacy_state, O_RDONLY);
+    if (f < 0) return 0;
+    if (read(f, &c, 1) != 1) c = '0';
+    close(f);
+    return c == '1';
+}
+
 int buttons_muted(void)
 {
     if (!have_latch()) {               /* no sysfs truth: what we last toggled to */
@@ -42,25 +63,47 @@ int buttons_muted(void)
         pthread_mutex_unlock(&muted_lock);
         return m;
     }
-    char c = '0'; int f = open(board.privacy_state, O_RDONLY);
-    if (f < 0) return 0;
-    if (read(f, &c, 1) != 1) c = '0';
-    close(f);
-    return c == '1';
+    long long until = atomic_load(&early_until);    /* a press ahead of the driver counts for whoever asks, too (no lock: */
+    return until && now_ms() < until ? atomic_load(&early_state) : latch_read();   /* mute_changed asks from inside) */
 }
 
 /* Reports the latch when it is not what was last reported.  Input events only say when to look, and latch_poll looks
  * without one, so a lost or early event (the state read before the driver changed it) is put right a second later. */
 static void latch_check(void)
 {
-    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;   /* reports leave in the order the state was read */
-    pthread_mutex_lock(&lock);
-    int now = buttons_muted();
+    pthread_mutex_lock(&latch_lock);
+    int now = have_latch() ? latch_read() : buttons_muted();
+    if (atomic_load(&early_until)) {   /* a press was reported ahead of the driver: not taken back before it had its time */
+        if (now == muted_state || now_ms() >= atomic_load(&early_until)) atomic_store(&early_until, 0);
+        else { pthread_mutex_unlock(&latch_lock); return; }
+    }
     if (now != muted_state) {
         muted_state = now;
         if (handler.mute_changed) handler.mute_changed(now);
     }
-    pthread_mutex_unlock(&lock);
+    pthread_mutex_unlock(&latch_lock);
+}
+
+/* board.privacy_button: the press says what the driver will report in a second, as the opposite of the state reported.
+ * Presses that come while that is still due do not count (the driver does not toggle twice at once either). */
+static void early_press(void)
+{
+    pthread_mutex_lock(&latch_lock);
+    if (!atomic_load(&early_until)) {
+        muted_state = !muted_state;
+        atomic_store(&early_state, muted_state);
+        atomic_store(&early_until, now_ms() + board.privacy_settle_ms);
+        if (handler.mute_changed) handler.mute_changed(muted_state);
+    }
+    pthread_mutex_unlock(&latch_lock);
+}
+
+static void *button_reader(void *arg)
+{
+    struct input_event ev; int fd = (int)(long)arg;
+    while (read(fd, &ev, sizeof ev) == sizeof ev) if (ev.type == EV_KEY && ev.value == 1) early_press();
+    fprintf(stderr, "buttons: privacy button reader stopped\n");
+    return NULL;
 }
 
 static void *latch_poll(void *arg)
@@ -68,12 +111,6 @@ static void *latch_poll(void *arg)
     (void)arg;
     for (;;) { sleep(1); latch_check(); }
     return NULL;
-}
-
-static long long now_ms(void)
-{
-    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
 static void *reader(void *arg)
@@ -220,6 +257,12 @@ int buttons_start(const char *device, const struct button_handler *h)
         if (!pthread_create(&t, NULL, latch_poll, NULL)) pthread_detach(t);
     } else if (board.privacy_latch) {
         fprintf(stderr, "buttons: %s not readable, counting presses of the mute key instead\n", board.privacy_state);
+    }
+    if (have_latch() && board.privacy_button && board.privacy_settle_ms > 0) {   /* not grabbed: Android's own handling stays */
+        int bfd = open_input(board.privacy_button);
+        if (bfd < 0) fprintf(stderr, "buttons: %s not available, the mute button is noticed with the latch\n", board.privacy_button);
+        else if (pthread_create(&t, NULL, button_reader, (void *)(long)bfd)) close(bfd);
+        else pthread_detach(t);
     }
     if (!board.privacy_input) pfd = -1;
     else if ((pfd = open_input(board.privacy_input)) < 0) fprintf(stderr, "buttons: %s not available, mute button changes go unnoticed\n", board.privacy_input);

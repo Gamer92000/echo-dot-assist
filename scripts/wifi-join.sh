@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 F=${WIFI_CONF:-secrets/wifi.conf}; [ -f $F ] || { echo "create $F: line 1 SSID, line 2 passphrase"; exit 1; }
 D=/data/local/hassmic
 
-if [ "$INSTALL" = boot ]; then
+if [ "$INSTALL" = boot ] || [ "$INSTALL" = running ]; then
     ssid=$(sed -n 1p $F); pass=$(sed -n 2p $F)
     hex() { printf %s "$1" | od -An -tx1 | tr -d " \n"; }       # wifictl takes the SSID as hex and the PSK itself
     # (64 hex digits, PBKDF2 of passphrase and SSID, as wifi.c makes it): nothing of either passes a shell
@@ -19,7 +19,8 @@ s, p = sys.stdin.read().split("\n")[:2]
 print(hashlib.pbkdf2_hmac("sha1", p.encode(), s.encode(), 4096, 32).hex())') || exit 1
     fi
     adb push scripts/device/wifictl.dex $D/ >/dev/null
-    W() { adb shell "CLASSPATH=$D/wifictl.dex app_process / Wifictl $*" | tr -d '\r'; }
+    # WIFICTL_USER: as that user (device.conf; athena's framework hides the SSID and the scan from any other uid)
+    W() { adb shell "${WIFICTL_USER:+$D/runas $WIFICTL_USER $WIFICTL_USER env }CLASSPATH=$D/wifictl.dex app_process / Wifictl $*" | tr -d '\r'; }
     W wifi-on > /dev/null
     # the radio takes a moment to come up, and WifiService adds no network before it has
     t=0

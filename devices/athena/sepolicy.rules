@@ -1,0 +1,21 @@
+# Added with magiskpolicy to the policy the unlock left in /vendor/etc/selinux/precompiled_sepolicy (scripts/install-system.sh,
+# INSTALL=running; the unlock's own rules stay: su and adbd permissive, adbd into su).  Android 9 init loads that file at
+# boot when its sha256 pair is the one in /vendor/etc/selinux/precompiled_sepolicy.plat_and_mapping.sha256, as it is.
+# hassmic's services (hassmic.rc: seclabel u:r:su:s0), as on donut: init into su, su executing scripts of /system
+allow init su process { transition siginh rlimitinh noatsecure }
+allow su shell_exec file { read getattr map execute entrypoint open }
+allow su system_file file { read getattr map execute entrypoint open }
+allow su su process setcurrent
+allow domain su binder { call transfer }
+allow domain su fd use
+allow domain su process sigchld
+allow domain su fifo_file { read write getattr ioctl append lock map open }
+allow domain su file { read write getattr ioctl append lock map open }
+allow domain su unix_stream_socket { connectto read write getattr ioctl shutdown }
+# connect(), accept4() and sendto() of Android 9's libc ask netd's fwmarkd (libnetd_client) to mark the socket, and netd
+# then reads the caller's socket: stock policy lets it do that for the app domains only, not for su, which every hassmic
+# service, root's scripts, runas and adb run in.  Denied, the call fails with EBADF (toybox nc, ping, libcurl): every
+# listener of hassmic ended at its first connection and every fetch failed (docs/re-athena.md "The libc's sockets").
+allow netd su tcp_socket { read write getattr getopt setopt ioctl }
+allow netd su udp_socket { read write getattr getopt setopt ioctl }
+allow netd su rawip_socket { read write getattr getopt setopt ioctl }

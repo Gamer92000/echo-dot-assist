@@ -53,6 +53,7 @@
 #include "micgain.h"
 #include "netaddr.h"
 #include "netio.h"
+#include "lux.h"
 #include "wake.h"
 #include "mww.h"
 #include "core.h"
@@ -2153,6 +2154,36 @@ int core_led_brightness(int set)
     return led_level;
 }
 
+/* A TCS3400 whose driver gives raw channels only (athena: its own `als_lux` stays 0, the table behind it unset; stock's
+ * virtual_als turns red/green/blue/clear into a level itself, lux.h does the same).  DIR holds `input*` directories; the
+ * one named tcs3400_als has als_red/green/blue/clear, als_itime (ms) and als_gain. */
+static float lux_tcs3400(const char *dir)
+{
+    DIR *d = opendir(dir);
+    struct dirent *e;
+    float lux = NAN;
+    while (d && (e = readdir(d))) {
+        char p[320], n[32] = ""; FILE *f;
+        if (strncmp(e->d_name, "input", 5)) continue;
+        snprintf(p, sizeof p, "%s/%s/name", dir, e->d_name);
+        if ((f = fopen(p, "r"))) { if (fgets(n, sizeof n, f)) n[strcspn(n, "\n")] = 0; fclose(f); }
+        if (strcmp(n, "tcs3400_als")) continue;
+        static const char *const ch[] = { "als_red", "als_green", "als_blue", "als_clear", "als_itime", "als_gain" };
+        double v[6]; int ok = 1;
+        for (int i = 0; i < 6 && ok; i++) {
+            snprintf(p, sizeof p, "%s/%s/%s", dir, e->d_name, ch[i]);
+            ok = (f = fopen(p, "r")) && fscanf(f, "%lf", &v[i]) == 1;       /* "64 (auto)": the number first */
+            if (f) fclose(f);
+        }
+        if (!ok) break;
+        lux = lux_tcs3400_calc(v[0], v[1], v[2], v[3], v[4], v[5]);
+        if (lux < 0) lux = NAN;
+        break;
+    }
+    if (d) closedir(d);
+    return lux;
+}
+
 /* The light sensor as stock's HAL (libacehal_ambientLightSensor.so, its per-model "facade") reads it: a sysfs file the
  * kernel driver fills with calibrated lux, parsed with atof.  0..400 is all stock uses of it. */
 float core_lux(void)
@@ -2160,7 +2191,9 @@ float core_lux(void)
     const char *e = getenv("HASSMIC_LUX");         /* tests */
     const char *const *p = e ? (const char *const[]){ e, NULL } : board.light_sensor;
     for (; p && *p; p++) {
-        char buf[32]; int fd = open(*p, O_RDONLY); ssize_t n;
+        char buf[32]; int fd; ssize_t n;
+        if (!strncmp(*p, "tcs3400:", 8)) { float l = lux_tcs3400(*p + 8); if (!isnan(l)) return l; continue; }
+        fd = open(*p, O_RDONLY);
         if (fd < 0) continue;
         n = read(fd, buf, sizeof buf - 1); close(fd);
         if (n <= 0) continue;

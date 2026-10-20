@@ -267,6 +267,7 @@ _pkg() {
     case $2:$1 in
     pacman:adb|pacman:fastboot|dnf:adb|dnf:fastboot) echo android-tools;;
     pacman:pyusb) echo python-pyusb;;  apt:pyusb) echo python3-usb;;  dnf:pyusb) echo python3-pyusb;;
+    pacman:pyserial) echo python-pyserial;;  apt:pyserial) echo python3-serial;;  dnf:pyserial) echo python3-pyserial;;
     pacman:python3) echo python;;
     *:debugfs) echo e2fsprogs;;
     pacman:7z) echo p7zip;;  apt:7z) echo p7zip-full;;  dnf:7z) echo p7zip p7zip-plugins;;
@@ -278,10 +279,17 @@ _pkg() {
     esac
 }
 # python3 has to run, not only be found: on Windows it is often the Store's stand-in, which only fails
-_have() { case $1 in pyusb) python3 -c 'import usb' 2>/dev/null;; python3) python3 -c '' 2>/dev/null;; *) command -v "$1" > /dev/null;; esac; }
+_have() {
+    case $1 in
+    pyusb) python3 -c 'import usb' 2>/dev/null;;
+    pyserial) python3 -c 'import serial' 2>/dev/null;;
+    python3) python3 -c '' 2>/dev/null;;
+    *) command -v "$1" > /dev/null;;
+    esac
+}
 
 # need_tools TOOL...: all there?  If not, offers to install them with the system's package manager.  TOOL is a command,
-# or pyusb (the python3 module).
+# or pyusb / pyserial (python3 modules).
 need_tools() {
     local t miss=() mgr= cmd pk
     for t; do _have "$t" || miss+=("$t"); done

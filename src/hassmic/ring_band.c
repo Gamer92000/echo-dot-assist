@@ -33,6 +33,9 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#endif
 
 const char *const ring_effects[] = { "None", "Pulse", "Spin", "Blink", "Rainbow" };
 const int ring_neffects = 5;
@@ -271,11 +274,24 @@ static const char *dex_path(void)
     return p;
 }
 
+/* Android 8 and later (athena's 9) have no SurfaceControl constructor: the renderer is told to use SurfaceControl.Builder
+ * (tools/mkringbar.py, argv[2]).  The PC has no properties and the old way, as the test's stand-in expects. */
+static int builder_api(void)
+{
+#ifdef __ANDROID__
+    char v[PROP_VALUE_MAX] = "";
+    return __system_property_get("ro.build.version.sdk", v) > 0 && atoi(v) >= 26;
+#else
+    return 0;
+#endif
+}
+
 /* the renderer for `n` rows: its stdin in *in, the band's width in *w (0: band off).  0, or -1 when it did not come up */
 static int ringbar(int n, int *in, int *w)
 {
     int pin[2], pout[2]; char rs[8]; snprintf(rs, sizeof rs, "%d", n);
     const char *fake = getenv("HASSMIC_FAKE_BAND"), *dex = dex_path();
+    int builder = builder_api();        /* before the fork: a property lookup takes bionic's lock, which another thread may hold */
     if (pipe(pin)) return -1;
     if (pipe(pout)) { close(pin[0]); close(pin[1]); return -1; }
     pid_t pid = fork();
@@ -284,6 +300,7 @@ static int ringbar(int n, int *in, int *w)
         close(pin[0]); close(pin[1]); close(pout[0]); close(pout[1]);
         char cp[PATH_MAX + 16]; snprintf(cp, sizeof cp, "CLASSPATH=%s", dex); putenv(cp);
         if (fake) execl(fake, fake, rs, (char *)NULL);
+        else if (builder) execl("/system/bin/app_process", "app_process", "/", "Ringbar", rs, "builder", (char *)NULL);
         else execl("/system/bin/app_process", "app_process", "/", "Ringbar", rs, (char *)NULL);
         _exit(127);
     }
