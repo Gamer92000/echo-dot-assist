@@ -58,7 +58,8 @@ class SurfaceSession(Fake):
 class SurfaceControl(Fake):
     JAVA = "android.view.SurfaceControl"
 
-    def __init__(self, session, name, w, h, fmt, flags):
+    def __init__(self, session, name, w, h, fmt, flags, built=False):
+        assert built or not self.env.api9, "Android 9 has no SurfaceControl(session, name, w, h, format, flags)"
         assert isinstance(session, SurfaceSession)
         self.env.sc = self
         self.log("surfacecontrol", name, w, h, fmt, flags)
@@ -70,6 +71,24 @@ class SurfaceControl(Fake):
     def setLayer(self, z): self.in_tx("layer", z)
     def setPosition(self, x, y): self.in_tx("position", x, y)
     def show(self): self.in_tx("show")
+
+
+class SurfaceControlBuilder(Fake):                             # Android 8+: the only way to make a layer on Android 9
+    JAVA = "android.view.SurfaceControl$Builder"
+
+    def __init__(self, session):
+        assert self.env.api9, "SurfaceControl.Builder was asked for on a platform that has the constructor"
+        assert isinstance(session, SurfaceSession)
+        self.name = self.size = self.fmt = self.flags = None
+
+    def setName(self, name): self.name = name; return self
+    def setSize(self, w, h): self.size = (w, h); return self
+    def setFormat(self, fmt): self.fmt = fmt; return self
+    def setFlags(self, flags): self.flags = flags; return self
+
+    def build(self):
+        assert None not in (self.name, self.size, self.fmt, self.flags), "built before every setter was called"
+        return SurfaceControl(SurfaceSession(), self.name, *self.size, self.fmt, self.flags, built=True)
 
 
 class Canvas(Fake):                                            # what lockCanvas returns: Surface's own subclass
@@ -105,13 +124,15 @@ class Surface(Fake):
 
 
 class JavaEnv(dexrun.JavaEnv):
-    CLASSES = (WindowManager, DisplayInfo, DisplayManagerGlobal, SurfaceSession, SurfaceControl, Surface, Canvas)
+    CLASSES = (WindowManager, DisplayInfo, DisplayManagerGlobal, SurfaceSession, SurfaceControl, SurfaceControlBuilder,
+               Surface, Canvas)
     NAMES = ("android.os.ServiceManager", "android.view.IWindowManager$Stub", "android.os.IBinder",
              "android.graphics.Rect", "android.graphics.Canvas", "android.graphics.Paint", "[I")
 
-    def __init__(self, display, stdin=()):
+    def __init__(self, display, stdin=(), api9=False):
         super().__init__(mk.PROG, stdin)
         Fake.env = self
+        self.api9 = api9
         self.display, self.log, self.tx, self.sc, self.locked = display, [], False, None, None
         self.wm, self.dmg = WindowManager(), DisplayManagerGlobal()
 
@@ -141,8 +162,8 @@ def main():
     dex = dexrun.Dex(open(DEX, "rb").read(), mk.PROG)
     check = dexrun.Checks()
 
-    def run(argv, display, stdin=()):
-        env = JavaEnv(display, stdin)
+    def run(argv, display, stdin=(), api9=False):
+        env = JavaEnv(display, stdin, api9)
         dex.run(env, "main", [list(argv)])
         return env
 
@@ -184,6 +205,17 @@ def main():
     for rot, side in ((2, (0, 24, 0, 0)), (3, (0, 0, 24, 0))):     # left, top, right, bottom
         env = run(["24"], (960, 480, rot), [])
         check(env.log[0] == ("overscan", 0) + side, f"rotation {rot}: overscan {side}")
+
+    # Android 9 (athena): hassmic passes "builder" as a second argument and the layer comes out of SurfaceControl.Builder,
+    # everything else as above
+    env = run(["10", "builder"], (1280, 800, 0), [f1[:0] + frame(1280, 10, 3)[0]], api9=True)
+    check(env.log[0] == ("overscan", 0, 0, 0, 0, 10), "builder: the same overscan")
+    check(("surfacecontrol", "hassmic-band", 1280, 10, -1, 4) in env.log and ("position", 0.0, 790.0) in env.log
+          and env.out == ["ready 1280 10"], "builder: 1280x10, OPAQUE, HIDDEN, at (0, 790)")
+    check([e[0] for e in env.log if e[0] in ("lock", "draw", "post")] == ["lock", "draw", "post"],
+          "builder: the frame is drawn")
+    env = run(["0", "builder"], (1280, 800, 0), [], api9=True)
+    check(env.log == [("overscan", 0, 0, 0, 0, 0)] and env.out == ["off"], "builder: \"0\" resets the overscan, no layer")
 
     check.done("ringbar.dex: overscan, layer and frames as expected")
 

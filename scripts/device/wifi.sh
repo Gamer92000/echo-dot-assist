@@ -32,10 +32,14 @@ ROUTE=${WIFI_ROUTE:-/proc/net/route}
 # be driven directly.  There everything goes through wifictl.dex next to this script (tools/mkwifictl.py):
 # the same WifiService binder calls stock's own setup apps make, from root, with wpa_cli's output shape.  Q is
 # whichever client this model's world has.
-android() { [ "$INSTALL" = boot ]; }
+android() { [ "$INSTALL" = boot ] || [ "$INSTALL" = running ]; }
 WIFICTL="${0%/*}/wifictl.dex"
+# WIFICTL_USER (athena, Android 9): the framework shows the SSID and the scan results to system apps only (as uid 0
+# with any package name they came back empty; as uid 1000 with "android", the name the dex passes, complete).
 A() { [ -f $WIFICTL ] || { echo "wifi: no $WIFICTL" >&2; return 1; }
-      CLASSPATH=$WIFICTL app_process / Wifictl "$@"; }
+      if [ -n "$WIFICTL_USER" ]; then
+          "${0%/*}/runas" $WIFICTL_USER $WIFICTL_USER env CLASSPATH=$WIFICTL app_process / Wifictl "$@"
+      else CLASSPATH=$WIFICTL app_process / Wifictl "$@"; fi; }
 Q() { if android; then A "$@"; else W "$@"; fi; }
 aok() { [ "$(A "$@" | tail -n 1)" = OK ]; }
 TAB=$(printf '\t')

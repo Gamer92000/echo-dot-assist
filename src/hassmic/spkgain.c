@@ -108,6 +108,7 @@ static int probe(void)
     lodb = board.speaker_gain_min_db < 0 ? board.speaker_gain_min_db : 0;
     int room = -((stock - (int)in.value.integer.min) * per / steps);       /* whole dB below stock the control has */
     if (lodb < room) lodb = room;
+    if (board.speaker_gain_limit > stock && board.speaker_gain_limit < hi) hi = board.speaker_gain_limit;
     fprintf(stderr, "speaker gain: \"%s\" %d..%d, stock %d, now %d\n", board.speaker_gain, (int)in.value.integer.min, hi, stock, ctl_read());
     return 1;
 none:

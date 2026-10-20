@@ -86,7 +86,10 @@ static int say(char *err, size_t errsz, const char *fmt, ...)
 
 /* ---------------------------------------------------------------- checkers: the binder service */
 
-#define DHA_SVC "amazon.security.dha"
+/* the service's name: fireos-dha (checkers, crown) or, on Android 9 (athena), the Java feature service in front of the HIDL
+ * HAL, the same interface descriptor of calls (3 key, 5 chain, 6 version, 1 sign: tried 2026-10-14, version 2) */
+static const char *const svc_names[] = { "amazon.security.dha", "fireosdhaservice" };
+static const char *DHA_SVC = "amazon.security.dha";
 static int svc;                     /* the key is the service's, not a HAL's: its version, 1 (checkers) or 2 (crown) */
 
 /* one transaction through the service tool; the reply's byte[] into *val (malloc'd) and its length; 0, or -1 */
@@ -130,12 +133,17 @@ static int svc_get(const char *code, const void *in, size_t inlen, uint8_t **val
 /* getDhaVersion: Java MAP's switch between drvV1 (1) and drvV3 (2); 0 when the service does not answer (no Android) */
 static int svc_version(void)
 {
-    struct afe_call c;
-    char text[256];
-    uint32_t w[4];
-    svc_call_start(&c, DHA_SVC, "6");
-    core_run(c.argv, text, sizeof text);
-    return svc_reply_words(text, w, 4) == 2 && w[0] == 0 ? (int)w[1] : 0;
+    for (size_t i = 0; i < sizeof svc_names / sizeof *svc_names; i++)
+    {
+        struct afe_call c;
+        char text[256];
+        uint32_t w[4];
+        svc_call_start(&c, svc_names[i], "6");
+        core_run(c.argv, text, sizeof text);
+        if (svc_reply_words(text, w, 4) == 2 && w[0] == 0)
+            return DHA_SVC = svc_names[i], (int)w[1];
+    }
+    return 0;
 }
 
 static int load(char *err, size_t errsz)
