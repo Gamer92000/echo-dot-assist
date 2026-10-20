@@ -2123,6 +2123,18 @@ Run in this order. Each step says what it proves.
       fake_ma_sendspin.py part `stop_music` (keyword over music: pause, pipeline open; "Stop." cancelled; button
       resumes; "stop the timer" to HA; "Stop!" without the keyword pauses).  Open (device): Pryon's "stop" over loud
       music on a Dot 2/3 (the issue says it hears it), A2DP with a phone.  Wyoming has no `core_transcript`.
+- [x] "<wake word>, stop" drops the run its wake word opened by cancelling it (2026-10-20).  `stop_word`'s
+      `stop: pipeline dropped` (a "stop" within 4 s of `wake_cut_ms`: the wake word cut a reply, a ring or a THINKING
+      run and listened anew) ended that run with `core_pipeline_finish`: end of audio, then start=false.  Nothing marked
+      the run cancelled (after a THINKING cancel `cancelled` is 2, and the new run's RUN_START clears it), so its events
+      kept coming: HA's STT_START a moment later set LISTENING with the mic closed.  Seen once on a device (a fork
+      build), the "stop" it had been sent was also carried out (a media player elsewhere paused): HA's
+      `handle_stop(False)` (`_stop_pipeline`, STT finishes on what it has) comes before `handle_stop(True)` (the abort).
+      Now `quiet_cancel` (also the button's and the wake word's cancel in
+      `trigger`): start=false alone, `proto_esphome.c` drops the run's events until the next RUN_START, `quiet_abort`.
+      Wyoming has no `cancel`: ended there as before.  Tests: fake_ha_esphome_timers.py (ring + wake word + stop: one
+      abort, a late STT_START leaves the Echo idle, the next wake word starts a run; red before), fake_ha_esphome.py
+      (reply cut + stop: one abort).
 - [x] Wake word turns that hear nothing (2026-10-19, GitHub issue #48; two Dot 2 on 2026.10.17.151309: 4
       `stt-no-text-recognized` in 5 days, each with `anim_start_error_short`).  That code (HA's STT returned no text)
       now goes to `core_no_speech`: the run ends as after RUN_END, no error ring, whoever started it (wake word,

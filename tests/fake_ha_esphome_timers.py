@@ -41,7 +41,14 @@ async def main(e):
     check(ringing() == (True, "tea, 5 min"), f"the wake word alone does not stop a ring, it listens: {ringing()}")
     proc.send_signal(signal.SIGHUP)                                            # its "stop": the ring and that pipeline end
     await until(lambda: ringing() == (False, "") and stopped)
-    check(ringing() == (False, "") and stopped, f'"<wake word>, stop" stops every timer at once and drops its pipeline: {ringing()}, stops {stopped}')
+    check(ringing() == (False, "") and stopped == [True], f'"<wake word>, stop" stops every timer at once and cancels its pipeline: {ringing()}, stops {stopped}')
+    # cancelled, not ended: what Home Assistant still sends of that run (its STT_START) leaves the Echo idle, so the
+    # next wake word starts a run (ended, the late STT_START put it back to listening with the mic closed)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None); await sync(cli)
+    started.clear(); proc.send_signal(signal.SIGUSR1)
+    check(await until(started.is_set, 3), "after the dropped run, Home Assistant's late STT_START opens nothing: the next wake word starts a run")
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)      # as Home Assistant: after a cancelled run
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
 
     cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t6", "eggs", 360, 0, False)
     await until(lambda: ringing() == (True, "eggs"))
@@ -53,6 +60,7 @@ async def main(e):
     cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t7", "tea", 60, 0, False)
     await until(lambda: ringing() == (True, "tea"))
     started.clear(); stopped.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
     cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
     cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "what time is it"})
     await sync(cli); await asyncio.sleep(0.3)

@@ -965,6 +965,18 @@ void core_no_speech(void)
     if (state != SPEAKING) core_pipeline_finish();
 }
 
+/* Lock held.  Ends the run without anything of it carried out, as the action button does: Home Assistant aborts it
+ * (VoiceAssistantRequest start=false alone, its _abort_pipeline), proto_esphome.c drops what it still reports of it
+ * until the next run's RUN_START, and its complaint about that is not shown (quiet_abort).  Needs proto->cancel */
+static void quiet_cancel(void)
+{
+    barge_in = 0;
+    atomic_store(&streaming, 0);
+    proto->cancel();
+    core_pipeline_finish();
+    quiet_abort = 1;
+}
+
 /* touch: the action button rather than the wake word.  from: where the wake word ended on the ring's clock (0: unknown) */
 static void trigger(int touch, uint64_t from)
 {
@@ -980,11 +992,7 @@ static void trigger(int touch, uint64_t from)
          * reply.  Same message as ESPHome's voice_assistant.stop; Home Assistant cancels the run's task (the LLM, and
          * the tool calls it has not made yet).  The wake word does the same and then listens again, as during a reply */
         fprintf(stderr, "%s: pipeline cancelled\n", touch ? "button" : "wake word");
-        barge_in = 0;
-        atomic_store(&streaming, 0);
-        proto->cancel();
-        core_pipeline_finish();
-        quiet_abort = 1;
+        quiet_cancel();
         if (!touch && state == IDLE && satellite_running && !core_muted()) {
             wake_cut_ms = mono_ms();
             sound_request(SND_WAKE);
@@ -1041,9 +1049,14 @@ static void stop_word(void)
     } else if (state == LISTENING && mono_ms() - wake_cut_ms < 4000) {
         fprintf(stderr, "stop: pipeline dropped\n");
         atomic_fetch_and(&sounds_pending, ~(1 << SND_WAKE | 1 << SND_TOUCH));
-        barge_in = 0;
-        core_pipeline_finish();
-        quiet_abort = 1;
+        /* Cancelled as the button does, not ended.  Ended (end of audio, then start=false), nothing here marked the
+         * run cancelled (after a THINKING cancel the new run's RUN_START clears the mark): Home Assistant's STT_START
+         * a moment later put the Echo back to LISTENING with the mic closed.  Once the "stop" it had been sent was
+         * carried out too (a media player elsewhere paused): the end of audio reaches Home Assistant before the abort,
+         * and its STT may finish on what it has.  Without the end of audio only the abort goes out.  Wyoming has
+         * no cancel: ended there, as before */
+        if (connected && proto->cancel) quiet_cancel();
+        else { barge_in = 0; core_pipeline_finish(); quiet_abort = 1; }
     } else if (!ended && atomic_load(&music_on) && music_stop()) fprintf(stderr, "stop: music paused, the pipeline goes on\n");
     pthread_mutex_unlock(&core_lock);
 }

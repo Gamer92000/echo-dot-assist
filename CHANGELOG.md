@@ -4,6 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-21
 
+- **"Alexa, stop" right after a reply, a ring or a busy Echo drops its run for good.** When the wake word cut a reply
+  or a ringing timer (or a request still being worked on) and "stop" followed, the Echo ended the new run instead of
+  cancelling it: the Echo could show listening again a moment later with its microphone closed, and once Home
+  Assistant even carried out the "stop" (it paused music on another speaker). It is now cancelled the way the action
+  button cancels a run.
 - **Light only part of the ring, or each LED in a colour of its own** (issue #57). Home Assistant's "Light ring fill"
   (0 to 100 %) lights that share of the ring in the light's colour, for a timer's or a washing machine's progress or
   a battery level; it fills the way the volume does. "Light ring rotation" (Home Assistant's configuration, or the
