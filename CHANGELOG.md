@@ -4,11 +4,18 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-21
 
+- **"Alexa, stop" can end listening** ("Stop after the wake word ends listening", settings page, Voice, off by
+  default). An Echo that woke up by mistake listens for up to 15 s and Home Assistant carries out whatever it heard
+  meanwhile. With this on, "Alexa, stop" right behind the wake word makes it stop listening at once, quietly, with
+  nothing sent on to Home Assistant; said in one go, the Echo does not start at all. Timers, replies, Drop In calls and
+  music on the Echo stop as before. "Alexa, stop the timer" then no longer reaches Home Assistant, and now and then a
+  short command is heard as "stop" and has to be said again; off, a "stop" out of silence goes to Home Assistant as before.
 - **"Alexa, stop" right after a reply, a ring or a busy Echo drops its run for good.** When the wake word cut a reply
   or a ringing timer (or a request still being worked on) and "stop" followed, the Echo ended the new run instead of
   cancelling it: the Echo could show listening again a moment later with its microphone closed, and once Home
   Assistant even carried out the "stop" (it paused music on another speaker). It is now cancelled the way the action
-  button cancels a run.
+  button cancels a run. The same goes for "Alexa, stop" in a Drop In call, and for a "stop" that comes while several
+  Echos are still deciding which one answers: the ring stopped, but the Echo then listened anyway.
 - **Light only part of the ring, or each LED in a colour of its own** (issue #57). Home Assistant's "Light ring fill"
   (0 to 100 %) lights that share of the ring in the light's colour, for a timer's or a washing machine's progress or
   a battery level; it fills the way the volume does. "Light ring rotation" (Home Assistant's configuration, or the

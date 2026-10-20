@@ -86,6 +86,8 @@ make unit                                         # C unit tests; microWakeWord 
                                                  # login with the device attestation token, the download, staging, deregister
 .venv/bin/python tests/fake_ha.py [--qemu]        # Wyoming (wyoming)
 .venv/bin/python tests/fake_ma_sendspin.py        # Sendspin, as Music Assistant (aiosendspin)
+.venv/bin/python tests/fake_ha_stop_word.py       # "<wake word>, stop" between two Echos: a dropped run cancelled, the setting
+                                                 # stop_ends_listening off and on (the round, listening, thinking, 4 s)
 tests/ota_push_test.sh                            # signed push-update path end to end
 tests/otatool_test.sh                             # the PC's otatool (Python) against the Echo's (C)
 .venv/bin/python tests/fake_ha_update.py          # online updates: Home Assistant, GitHub and root's installer in one
