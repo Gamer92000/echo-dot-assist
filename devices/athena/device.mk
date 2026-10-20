@@ -1,4 +1,4 @@
-# Echo Show 8 2nd gen 2021 (athena), Fire OS 7.5.7.4.1 (PS75741): armv7 (the 32-bit userland of an MT8183 on a 4.4.146
+# Echo Show 8 2nd gen 2021 (athena), Fire OS 7574.1 (PS75741): armv7 (the 32-bit userland of an MT8183 on a 4.4.146
 # kernel), Android 9 bionic (API 28 on the device, API 24 NDK target as the other models), full Android framework with
 # Treble: /vendor is its own partition.  No Amazon mixer daemon: the front end (libasp, in /vendor/lib) runs inside the
 # audio HAL, so audio goes through Android's AudioRecord/AudioTrack via OpenSL ES (audio_android.c, docs/re-athena.md,

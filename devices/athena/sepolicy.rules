@@ -14,8 +14,8 @@ allow domain su file { read write getattr ioctl append lock map open }
 allow domain su unix_stream_socket { connectto read write getattr ioctl shutdown }
 # connect(), accept4() and sendto() of Android 9's libc ask netd's fwmarkd (libnetd_client) to mark the socket, and netd
 # then reads the caller's socket: stock policy lets it do that for the app domains only, not for su, which every hassmic
-# service, root's scripts, runas and adb run in.  Denied, the call fails with EBADF (toybox nc, ping, the Kiosk Satellite
-# update helper's status check, libcurl; hassmic works around it with raw system calls, netio.h).
+# service, root's scripts, runas and adb run in.  Denied, the call fails with EBADF (toybox nc, ping, libcurl): every
+# listener of hassmic ended at its first connection and every fetch failed (docs/re-athena.md "The libc's sockets").
 allow netd su tcp_socket { read write getattr getopt setopt ioctl }
 allow netd su udp_socket { read write getattr getopt setopt ioctl }
 allow netd su rawip_socket { read write getattr getopt setopt ioctl }

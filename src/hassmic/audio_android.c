@@ -223,8 +223,9 @@ static int parcel_int(const char *out, int *v)
     return 0;
 }
 
-/* the transaction numbers follow the Android release: only the two verified ones are known, so an unknown newer one is
- * not guessed at (a wrong number is somebody else's method) */
+/* the transaction numbers follow the Android release: Android 7.1 (SDK 25: checkers, crown) and 9 (SDK 28: athena) are the
+ * ones verified; SDK 28 and newer take 9's, older ones 7's.  A wrong number is somebody else's method: a model on another
+ * release checks them first (service call audio, as above) */
 static int a9;
 static void tx_init(void)
 {
@@ -555,8 +556,7 @@ void (*audio_earcon_started)(unsigned lead_ms);
  * pcm 27.644 -> 27.811) plus the speaker amplifier switching on: the 120 ms wake blip, written to a cold output, was
  * never heard (2026-10-14; the 0.5 s mute sounds were, clipped).  A cold earcon starts after this much silence. */
 #define COLD_MS 2500
-#define LEAD_MS 200                     /* 350 first; 200 sounds clipped to no one (2026-10-15), the sounds come ~150 ms sooner */
-#define LEAD_MAX 350
+#define LEAD_MS 350
 
 void play_earcon(const short *pcm, size_t samples, unsigned rate) { play_earcon_while(pcm, samples, rate, always); }
 void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go)(void))
@@ -570,13 +570,10 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
     size_t len = samples * 2;
     unsigned lead_ms = 0;
     if (now_ms() - atomic_load(&last_out) > COLD_MS) {
-        static short lead[48000 * LEAD_MAX / 1000];
-        /* state/lead_ms (hassmic's own, for trying another lead-in by ear without a build; 0..LEAD_MAX) */
-        int ms = LEAD_MS; FILE *lf = fopen(getenv("HASSMIC_LEAD_FILE") ? getenv("HASSMIC_LEAD_FILE") : "/data/local/hassmic/state/lead_ms", "r");
-        if (lf) { int v; if (fscanf(lf, "%d", &v) == 1 && v >= 0 && v <= LEAD_MAX) ms = v; fclose(lf); }
-        size_t n = (size_t)rate * ms / 1000 < sizeof lead / 2 ? (size_t)rate * ms / 1000 : sizeof lead / 2;
-        if (n && s_write(&earcon, lead, n * 2) == 0) lead_ms = (unsigned)(n * 1000 / rate);
-        end += ms;
+        static short lead[48000 * LEAD_MS / 1000];
+        size_t n = (size_t)rate * LEAD_MS / 1000 < sizeof lead / 2 ? (size_t)rate * LEAD_MS / 1000 : sizeof lead / 2;
+        if (s_write(&earcon, lead, n * 2) == 0) lead_ms = (unsigned)(n * 1000 / rate);
+        end += LEAD_MS;
     }
     while (len && go()) {
         size_t n = len < earcon.slot ? len : earcon.slot;

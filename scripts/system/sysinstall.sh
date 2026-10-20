@@ -52,10 +52,12 @@ fi
 
 # The SELinux policy: /sepolicy in the system partition's root (the Dots), or the file device.conf's SEPOLICY_FILE names
 # (athena: /vendor/etc/selinux/precompiled_sepolicy, a partition of its own).  The installed device.conf serves where SRC
-# has none (uninstall).
-conf_get() { (. "$SRC/device.conf" 2>/dev/null || . $H/device.conf 2>/dev/null; eval "echo \"\${$1}\""); }
+# has none (uninstall); tested before it is sourced: a missing file ends the subshell with ".", the fallback never ran.
+conf_get() { c=$SRC/device.conf; [ -f "$c" ] || c=$H/device.conf; [ -f "$c" ] && (. "$c"; eval "echo \"\${$1}\""); }
 POLICY=$(conf_get SEPOLICY_FILE); POLICY=${POLICY:-/sepolicy}
 PVOL=; case "$POLICY" in /vendor/*) PVOL=/vendor;; esac       # the partition the policy is on, when it is not /system's
+# that partition writable only when the policy is written: a factory copy (every promoted update) or leds never touch it
+case "$MODE" in install) [ -f "$SRC/sepolicy" ] || PVOL=;; uninstall) [ -f $POLICY.pre-hassmic ] || PVOL=;; *) PVOL=;; esac
 PLABEL=$SYSLABEL; [ -z "$PVOL" ] || PLABEL=$(ls -dZ $POLICY 2>/dev/null | cut -d" " -f1)   # a policy in /vendor keeps its own label
 [ -n "$PLABEL" ] || PLABEL=$SYSLABEL
 

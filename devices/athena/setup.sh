@@ -5,13 +5,11 @@
 # What is different from crown: the unlock is saiyaku-athena's serial exploit (its meta-step.sh, run from here with its
 # output on the console), TWRP then flashes boot-root.zip, and the install is written from the running OS (INSTALL=running).
 
-XDA="the XDA thread of saiyaku-athena (devices/athena/unlock.md)"
+XDA=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-8-2nd-gen-2021-athena.4804958/
 SAIYAKU=saiyaku-athena-v1.0.0.zip
 SAIYAKU_SHA256=6d48b4b253fa6cbecb9166c87c0177be09c8a02e5f2efd2bc0d0aec939626218
-BOOTROOT=$FW/boot-root.zip
+BOOTROOT=boot-root.zip                  # in $FW, as bootroot_unpack takes it
 BOOTROOT_SHA256=741d904f7e2616c70be2c10f3466efb515769632779546a869f5591a6a9c827a
-MAGISKPOLICY=$FW/boot-root/patch/magiskpolicy32
-QEMU=toolchain/qemu-arm
 NDK=toolchain/android-ndk-r21e
 NDK_URL=https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip
 
@@ -64,9 +62,10 @@ step_tools() {
 step_files() {
     local need=()
     need+=($FW/$FIRMWARE_FILE $FIRMWARE_SHA256 "Fire OS $FIRMWARE_ID, from Amazon: the link is in $DDIR/README.md")
-    # the unlock and the root zip are the XDA thread's attachments; the root zip is needed afterwards for its magiskpolicy
+    # the unlock and the root zip are the XDA thread's attachments; the root step flashes the zip, and the install takes the
+    # policy tool out of it (device.conf SEPOLICY_TOOL): not needed only on an Echo rooted already with the tool unpacked
     rooted_already || need+=($FW/$SAIYAKU $SAIYAKU_SHA256 "the unlocker, attachment in $XDA")
-    [ -f $FW/boot-root/patch/magiskpolicy32 ] || need+=($BOOTROOT $BOOTROOT_SHA256 "the root zip, attachment in $XDA (it also holds the policy tool)")
+    { rooted_already && [ -f $SEPOLICY_TOOL ]; } || need+=($FW/$BOOTROOT $BOOTROOT_SHA256 "the root zip, attachment in $XDA (it also holds the policy tool)")
     need_files "${need[@]}" || return 1
     [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
     if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
@@ -125,7 +124,7 @@ step_root() {
     wait_adb recovery || return 1
     tell "Flashing boot-root.zip in TWRP" "It patches system, vendor and adbd in place (root adb, OTA blocked, the policy opened)."
     if [ -z "$DRY" ]; then
-        task "Copying boot-root.zip to the Echo" adb push $BOOTROOT /tmp/boot-root.zip || return 1
+        task "Copying boot-root.zip to the Echo" adb push $FW/$BOOTROOT /tmp/boot-root.zip || return 1
         live "Installing boot-root.zip" bash -o pipefail -c "adb shell twrp install /tmp/boot-root.zip 2>&1 | tee -a '$LOG'" || return 1
         adb shell rm -f /tmp/boot-root.zip > /dev/null 2>&1
     fi
@@ -146,9 +145,9 @@ step_build() {
 }
 
 step_network() {
+    local ssid pass new=
     wait_adb device || return 1
-    [ -f $MAGISKPOLICY ] || { [ -f $BOOTROOT ] && task "Unpacking boot-root.zip (the policy tool)" unzip -q -o $BOOTROOT -d $FW/boot-root; } ||
-        { fail "no $MAGISKPOLICY: unzip boot-root.zip into $FW/boot-root ($DDIR/README.md)"; return 1; }
+    bootroot_unpack || return 1         # the policy tool (device.conf SEPOLICY_TOOL), for the install
     task "Copying hassmic to the Echo" scripts/deploy.sh || return 1
     wait_adb device || return 1
     # Stock opens adb over Wi-Fi at boot (init.athena.rc); lockdown.sh closes it by restarting adbd, which ends the adb
@@ -178,5 +177,6 @@ step_network() {
 }
 
 step_install() {
+    bootroot_unpack || return 1         # again: the steps before may have been skipped
     install_satellite || return 1
 }

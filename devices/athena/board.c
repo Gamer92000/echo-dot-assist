@@ -1,12 +1,12 @@
-/* Echo Show 8 2nd gen 2021 (athena), Fire OS 7.5.7.4.1 (PS75741, build 7080).  MediaTek MT8183, Android 9, 8" touchscreen,
+/* Echo Show 8 2nd gen 2021 (athena), Fire OS 7574.1 (PS75741, build 7080).  MediaTek MT8183, Android 9, 8" touchscreen,
  * TAS5805m speaker amplifier, TCS3400 light sensor, a privacy gating driver as on the Dots.  Probed over adb on a running
- * Echo Show 8 on 2026-10-14 (docs/re-athena.md).  Values marked "verify" are not checked against a running hassmic yet. */
+ * Echo Show 8 on 2026-10-14, then installed on it (docs/re-athena.md). */
 #include "board.h"
 #include <stddef.h>
 
 /* No earcon folder, as on checkers and crown: stock's sounds are resources of its apps, stored uncompressed (sounds.c reads
- * them out of the APKs, and out of /system/hassmic-removed once the install took the apps off the partition).  Same entries
- * as crown's, checked in this firmware's APKs (aapt dump resources, 2026-10-14).  Unlike crown's, athena's
+ * them out of the APKs, and out of /system/hassmic-removed once the install took the apps off the partition).  crown's entries
+ * and the wake sound, checked in this firmware's APKs (aapt dump resources, 2026-10-14).  Unlike crown's, athena's
  * SpeechInteractionManager has ful_ui_wakesound_hybrid (res/7E.mp3, as on checkers; ban_ui_wakesound is res/-E.ogg, the
  * other product's) and ful_ui_endpointing (res/Eh.mp3, not used).  No setup beacon in any app: the built-in tone stays for Identify. */
 #define SIM "/system/priv-app/SpeechInteractionManager/SpeechInteractionManager.apk"
@@ -52,8 +52,10 @@ const struct board board = {
     .privacy_button = "name:gpio-privacy-button",
     .privacy_settle_ms = 2000,
 
-    .bt_dev = "/dev/stpbt",                                         /* MT7668 combo, btmtksdio.ko (verify) */
-    .bt_service = NULL,                                             /* none: Android's stack is off the partition */
+    .bt_dev = "/dev/stpbt",                                         /* btmtksdio.ko */
+    /* no init service of Amazon's: the HIDL HAL that holds the node (bluetooth-1-0) is stopped by alexa-off.sh (device.conf
+     * BT_SERVICE), Android's Bluetooth app is off the partition (STOCK_APPS_OUT) */
+    .bt_service = NULL,
     .bt_mac = "/proc/idme/bt_mac_addr",
 
     .wake_id = "alexa",
@@ -68,8 +70,8 @@ const struct board board = {
     .volume_steps = 100,                                            /* the light band (ring_band.c) shows the level in % */
     /* TI TAS5805m amplifier: its "Master TAS5805m Playback Volume" is a digital volume, 0..158, 100 at boot, no dB table
      * (0.5 dB steps assumed: the chip's own).  Listened to with music at full volume, 2026-10-15: 115 and 120 clean, 122
-     * clean, 130 distorted ("gross"); a rap track's bass then clipped at 122, so 118 is the limit: +9 dB on that assumption.  The HAL's own writes are not
-     * known yet (watcher as on the Dot 2). */
+     * clean, 130 distorted ("gross"); a rap track's bass then clipped at 122, so 118 is the limit: +9 dB on that assumption.  The
+     * audio HAL did not rewrite it after a voice reply or a change of the setting (2026-10-15); the watcher stays, as on the Dot 2. */
     .speaker_gain = "Master TAS5805m Playback Volume",
     .speaker_gain_stock = 100,
     .speaker_gain_steps = 2,

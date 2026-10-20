@@ -17,7 +17,6 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include "net.h"
-#include "netio.h"
 
 /* ---------------------------------------------------------------- mDNS */
 
@@ -138,16 +137,6 @@ int net_socket(int family, int type, int protocol)
     return fd;
 }
 
-int net_open_connected(int family, int type, int protocol, const struct sockaddr *addr, unsigned len, int timeout_s)
-{
-    struct timeval tv = { timeout_s, 0 };
-    int fd = net_socket(family, type, protocol);
-    if (fd < 0) return -1;
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv); setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
-    if (net_connect_fd(fd, addr, len)) { close(fd); return -1; }
-    return fd;
-}
-
 int net_connect(const char *host, const char *port, int timeout_s)
 {
     struct addrinfo hints = { 0 }, *ai = NULL, local = { 0 }, *list = NULL; struct sockaddr_in sin = { 0 };
@@ -170,7 +159,7 @@ int net_connect(const char *host, const char *port, int timeout_s)
         struct timeval tv = { timeout_s, 0 };           /* connect() obeys the send timeout */
         if ((fd = net_socket(p->ai_family, SOCK_STREAM, 0)) < 0) continue;
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv); setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
-        if (net_connect_fd(fd, p->ai_addr, p->ai_addrlen)) { close(fd); fd = -1; }
+        if (connect(fd, p->ai_addr, p->ai_addrlen)) { close(fd); fd = -1; }
     }
     if (ai) freeaddrinfo(ai);
     if (fd < 0) fprintf(stderr, "net: cannot connect to %s:%s (not a local address? see lockdown.sh)\n", host, port);

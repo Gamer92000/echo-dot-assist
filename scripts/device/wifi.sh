@@ -34,8 +34,8 @@ ROUTE=${WIFI_ROUTE:-/proc/net/route}
 # whichever client this model's world has.
 android() { [ "$INSTALL" = boot ] || [ "$INSTALL" = running ]; }
 WIFICTL="${0%/*}/wifictl.dex"
-# WIFICTL_USER (athena, Android 9): the framework shows the SSID and the scan results to system apps only, and
-# takes the caller's package name ("android", which the dex passes there) only from a uid that owns it.
+# WIFICTL_USER (athena, Android 9): the framework shows the SSID and the scan results to system apps only (as uid 0
+# with any package name they came back empty; as uid 1000 with "android", the name the dex passes, complete).
 A() { [ -f $WIFICTL ] || { echo "wifi: no $WIFICTL" >&2; return 1; }
       if [ -n "$WIFICTL_USER" ]; then
           "${0%/*}/runas" $WIFICTL_USER $WIFICTL_USER env CLASSPATH=$WIFICTL app_process / Wifictl "$@"

@@ -1,7 +1,6 @@
 /* Outgoing TCP connections by host name, for URLs that Home Assistant or Music Assistant hand us. */
 #ifndef NET_H
 #define NET_H
-#include <sys/socket.h>
 
 /* Connected socket or -1.  Every address the name resolves to is tried in turn, so an unreachable one (a global IPv6
  * address behind the egress lock, say) does not hide a working one.  Names ending in ".local" are looked up by mDNS: the
@@ -10,10 +9,6 @@ int net_connect(const char *host, const char *port, int timeout_s);
 
 /* socket() as the group that the egress lock lets out to any address (runas -r); for sockets others open for us (libcurl) */
 int net_socket(int family, int type, int protocol);
-
-/* net_socket() and the connect made here, for libcurl's open-socket callback where the libc's connect() fails (netio.h
- * net_connect_fd; the callback then answers "already connected" to curl).  -1 on any failure. */
-int net_open_connected(int family, int type, int protocol, const struct sockaddr *addr, unsigned len, int timeout_s);
 
 /* IPv4 address of a ".local" name by one-shot mDNS query (RFC 6762 5.1), in network byte order; 0 if nobody answered. */
 unsigned mdns_resolve4(const char *name);

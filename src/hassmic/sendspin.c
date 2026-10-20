@@ -386,7 +386,6 @@ struct session {
 /* At most one admitted connection; the others are provisional until their first server/activate decides. */
 static pthread_mutex_t adm_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct session *admitted;
-static struct session *live[16];        /* sessions past the handshake (adm_lock): switching unpaired access closes the idle ones */
 static long long paused_by_button_at;
 
 static int js_str(const char *j, const char *key, char *out, size_t outsz)
@@ -685,9 +684,6 @@ static void *serve(void *arg)
     if (handshake(s)) { fprintf(stderr, "sendspin: handshake failed\n"); ws_close(&s->ws); free(s); free(plain); return NULL; }
     fprintf(stderr, "sendspin: encrypted session up (%s)\n", s->psk_cat == PSK_LONGTERM ? "paired" : s->psk_cat == PSK_PAIRING ? "pairing key" : "sentinel key");
     pthread_create(&tt, NULL, time_thread, s);
-    pthread_mutex_lock(&adm_lock);
-    for (int i = 0; i < 16; i++) if (!live[i]) { live[i] = s; break; }
-    pthread_mutex_unlock(&adm_lock);
 
     while (!s->closing && ws_recv(&s->ws, &op, &d, &n) == 1) {
         if (op != WS_BINARY) break;                                     /* text after the handshake is a protocol error */
@@ -705,7 +701,6 @@ static void *serve(void *arg)
     pthread_join(tt, NULL);
     pthread_mutex_lock(&adm_lock);
     if (admitted == s) { admitted = NULL; stream_set(0); q_flush(); }
-    for (int i = 0; i < 16; i++) if (live[i] == s) live[i] = NULL;
     pthread_mutex_unlock(&adm_lock);
     ws_close(&s->ws); pthread_mutex_destroy(&s->send_lock);
     fprintf(stderr, "sendspin: session closed\n");
@@ -808,14 +803,6 @@ int sendspin_unpaired(int set)
     atomic_store(&unpaired_ok, set != 0);
     save_file("sendspin.unpaired", set ? "1" : "0", 1);
     fprintf(stderr, "sendspin: unpaired access %s\n", set ? "allowed" : "off, paired servers only");
-    /* A server that connected and waits (Music Assistant, "no role yet") read the old answer in our hello and does not ask
-     * again: close what is idle and unpaired, it dials back and gets the new one. */
-    pthread_mutex_lock(&adm_lock);
-    for (int i = 0; i < 16; i++) {
-        struct session *l = live[i];
-        if (l && l->psk_cat != PSK_LONGTERM && !l->admitted && !l->pairing && !l->closing) { l->closing = 1; shutdown(l->ws.fd, SHUT_RDWR); }
-    }
-    pthread_mutex_unlock(&adm_lock);
     if (!set) {                         /* an unpaired server playing now goes; it has to pair to come back */
         pthread_mutex_lock(&adm_lock);
         struct session *s = admitted;

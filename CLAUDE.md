@@ -5,15 +5,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 Turns Amazon Echos into Home Assistant voice satellites. Supported so far: Echo Dot 3 (2018, `donut`, Fire OS 6574.1 /
-`donut_puffin` NS65741 only) and, less proven, the Dot 2, Echo 2, Show 5, Show 8 (1st gen) and Show 8 2nd gen (`athena`,
-Android 9: `docs/re-athena.md`); the repo is laid out for more models (`devices/`, see "Models" below). Amazon's audio front end (`mixer` daemon + `libasp`: AEC, beamforming, mic calibration) and wake word engine
+`donut_puffin` NS65741 only); the repo is laid out for more models (`devices/`, see "Models" below). Amazon's audio front end (`mixer` daemon + `libasp`: AEC, beamforming, mic calibration) and wake word engine
 (`libpryon.so`) stay; the Alexa client `PuffinApp` is replaced by `hassmic`, a C daemon that is a client of the mixer
 through the reverse-engineered C API of `libmixerAPI.so` and speaks the ESPHome native API (default) or Wyoming.
 
 Docs: `README.md` (short user-facing overview with figures; every feature in detail in `docs/GUIDE.md`, security model in
 `docs/SECURITY.md`; figures are CeTZ sources in `docs/img/src/`, rendered light+dark by `tools/figures.sh`; install instructions per model in `devices/<codename>/README.md`, guided by
 `scripts/setup.sh`), `DEVELOPMENT.md` (architecture, layout, tests, contributing), `PLAN.md` (phases, open issues, every measurement), `CHANGELOG.md`
-(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-a2dp-source.md`, `re-davs-login.md`, `re-checkers.md`, `re-crown.md`, `re-athena.md`,
+(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-a2dp-source.md`, `re-davs-login.md`, `re-checkers.md`, `re-athena.md`,
 `sendspin-digest.md`).
 
 ## Build and test
@@ -105,7 +104,7 @@ There is no single-test selector: run one unit test by building/running its line
   `sepolicy.rules` via magiskpolicy under qemu), flashed in amonet's hacked fastboot, then the same `sysinstall.sh`.
   `INSTALL=running` (athena, Android 9: rooted by saiyaku's zip patching system and vendor in place, no boot image of ours)
   is the in-OS path only, with the policy where `device.conf` `SEPOLICY_FILE` says (`/vendor/etc/selinux/precompiled_sepolicy`,
-  `sysinstall.sh` remounts `/vendor` for it; `.pre-hassmic` beside it) and the Android extras (dex programs, home APK) as `boot`.
+  `sysinstall.sh` remounts `/vendor` only to write it; `.pre-hassmic` beside it) and the Android extras (dex programs, home APK) as `boot`.
 - Logs: `/data/local/hassmic/boot.log`, each line stamped (`clock.c`: UTC once the clock came from HA, else `boot+<s>`;
   hassmic's own through its reader process `hassmic-log`, which `pidof hassmic` lists too; scripts through `say`/`stamped`
   in `main.sh`). The Echo's mksh is 32-bit and has no awk. Config: `/data/local/hassmic/hassmic.conf` (`PROTO`, `ARGS`, `MODE`,
@@ -158,7 +157,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   by HA, voice assistant, media player, timers, settings entities, Bluetooth proxy messages) and `proto_wyoming.c` +
   `wyoming.c`. Selected with `-P`. The core calls `start/audio/stop/played/...` on the active proto with lock held.
 - **Audio backend (`audio.h`)**: `audio_mixer.c` on device (mixer C API: capture, voice/TTS, music, Bluetooth and
-  earcon streams mixed by the mixer); `audio_android.c` where there is no mixer (checkers, crown, athena: OpenSL ES over
+  earcon streams mixed by the mixer); `audio_android.c` where there is no mixer (checkers, Echo Show 5; athena, Echo Show 8 2nd gen: OpenSL ES over
   AudioRecord/AudioTrack, the front end inside the audio HAL; untried on a device; device.mk `SYSLIBS` links
   `-lOpenSLES`); `audio_file.c` for PC builds. Swapped at link time in the Makefile.
 - **Sound detection (`sound.h`)**: `sound_pryon.c` (Alexa Guard's model on `libpryon.so`: the firmware's, or Amazon's newest
@@ -289,7 +288,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   certificate (field 0x203 of the same HAL; EC key in the TEE — `/dev/trustzone` is system:drmrpc and the cert file
   keystore:keystore, hence drmrpc,keystore in donut's DAEMON_GROUPS), whichever the HAL's key parses as; without the
   HAL (checkers) the binder service `amazon.security.dha` through `service call` (`afe_parcel.c`, common to every
-  build now) and Java MAP's drvV1 text (version 1, checkers) or drvV3 (version 2, crown: x5c = the chain's first certificate, `/` escaped as org.json does; docs/re-crown.md).  `davs.c` does the code pair login (the code on the
+  build now) and Java MAP's drvV1 text (version 1, checkers) or drvV3 (version 2, crown: x5c = the chain's first certificate, `/` escaped as org.json does; docs/re-crown.md; athena: the same from `fireosdhaservice`, Android 9's name for the service, `svc_names`).  `davs.c` does the code pair login (the code on the
   page, register polled with the token, tokens in `state/davs` 0600, never sent to the page), asks DAVS with the
   engine's own compatibility ids (`wake_attributes`), downloads and unpacks the artifact tar.gz (libz), and stages it
   through artifacts.c.  Works against the real Amazon (biscuit 2026-10-06, donut with its drvV3 token 2026-10-09,
@@ -396,7 +395,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   "ready <w> <rows>" on stdout, then frames (w x rows ARGB) on stdin.  Setting `light_band` (rows, 0 off).  Screen
   power as stock's: `service call power` 9 (wakeUp) on a pattern, `screen_off_timeout` 5 min / 1 min muted or DND.
   PC: `HASSMIC_FAKE_BAND` (a program speaking ringbar's protocol), `tests/unit/ring_band_test.c`.
-- `src/include/`: headers for the reversed Amazon libraries (`mixer_api.h`, `pryon_api.h`, `aipc_api.h`) and `netio.h` (`net_accept` and `net_connect_fd` make the `accept4`/`connect` system calls themselves on Android: athena's libc fails both with EBADF; libcurl is given an already connected socket, `net_open_connected`).
+- `src/include/`: headers for the reversed Amazon libraries (`mixer_api.h`, `pryon_api.h`, `aipc_api.h`) and `netio.h`.
 - `src/tools/`: standalone device tools (`mixcap`, `mixplay`, `pryon_test`, `aed_test`, `latency`, `runas` — AIPC refuses uid 0 and
   the image has no `su`; `curlspy`, `hciscan`, `a2dpprobe`, `dha_test` not in `all`).
 

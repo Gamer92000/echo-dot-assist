@@ -1256,11 +1256,7 @@ static void on_wake(int slot, const char *keyword, uint64_t begin, uint64_t end)
     }
     /* In a Drop In the other side's voice plays here, and what the echo canceller leaves of its "Alexa" (meant for the
      * Echo over there) can be enough for ours.  While it talks, the wake word is left to that Echo */
-    if (atomic_load(&dropin_live) && dropin_far_talking()) {
-        fprintf(stderr, "wake: %s while the other side of the Drop In talks (%.1f dBFS here, ours %.1f dBFS), ignored\n", keyword,
-                dropin_far_level(), 10 * log10f((ring_power(begin, end) + 1) / (32768.0f * 32768.0f)));
-        return;
-    }
+    if (atomic_load(&dropin_live) && dropin_far_talking()) { fprintf(stderr, "wake: %s while the other side of the Drop In talks, ignored\n", keyword); return; }
     /* "stop" comes from the decoder that heard its wake word just before; another one on the same model set (one
      * multi-keyword en-US set in both slots) is awake too, and its "stop" would stop twice */
     if (!strcasecmp(keyword, "STOP")) { if (slot == atomic_load(&wake_slot_heard)) stop_word(); return; }

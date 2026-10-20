@@ -291,6 +291,7 @@ static int ringbar(int n, int *in, int *w)
 {
     int pin[2], pout[2]; char rs[8]; snprintf(rs, sizeof rs, "%d", n);
     const char *fake = getenv("HASSMIC_FAKE_BAND"), *dex = dex_path();
+    int builder = builder_api();        /* before the fork: a property lookup takes bionic's lock, which another thread may hold */
     if (pipe(pin)) return -1;
     if (pipe(pout)) { close(pin[0]); close(pin[1]); return -1; }
     pid_t pid = fork();
@@ -299,7 +300,7 @@ static int ringbar(int n, int *in, int *w)
         close(pin[0]); close(pin[1]); close(pout[0]); close(pout[1]);
         char cp[PATH_MAX + 16]; snprintf(cp, sizeof cp, "CLASSPATH=%s", dex); putenv(cp);
         if (fake) execl(fake, fake, rs, (char *)NULL);
-        else if (builder_api()) execl("/system/bin/app_process", "app_process", "/", "Ringbar", rs, "builder", (char *)NULL);
+        else if (builder) execl("/system/bin/app_process", "app_process", "/", "Ringbar", rs, "builder", (char *)NULL);
         else execl("/system/bin/app_process", "app_process", "/", "Ringbar", rs, (char *)NULL);
         _exit(127);
     }

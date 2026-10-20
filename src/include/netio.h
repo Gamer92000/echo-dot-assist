@@ -9,9 +9,6 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#ifdef __ANDROID__
-#include <sys/syscall.h>
-#endif
 
 static inline int net_listen(int port)
 {
@@ -26,28 +23,9 @@ static inline int net_listen(int port)
 static inline int net_accept(int s)
 {
     int c, one = 1;
-#ifdef __ANDROID__
-    /* athena's libc (Android 9, Amazon's build): accept() and accept4() both fail with EBADF after the connection came
-     * in, which the kernel then drops (RST), while the same system call made directly works (2026-10-14).  Every
-     * listener of hassmic ended on that first error: no connection to ESPHome, the page or the push port. */
-    do c = (int)syscall(__NR_accept4, s, NULL, NULL, 0); while (c < 0 && errno == EINTR);
-#else
     do c = accept(s, NULL, NULL); while (c < 0 && errno == EINTR);
-#endif
     if (c >= 0) setsockopt(c, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
     return c;
-}
-
-/* connect() fails the same way on athena (EBADF, nothing sent: hassmic could not fetch Home Assistant's spoken replies,
- * "cannot connect" within a millisecond; toybox's ping fails too), the system call made directly works.  sendto,
- * recvfrom, bind and getsockname are fine (2026-10-14). */
-static inline int net_connect_fd(int s, const struct sockaddr *a, socklen_t len)
-{
-#ifdef __ANDROID__
-    return (int)syscall(__NR_connect, s, a, len);
-#else
-    return connect(s, a, len);
-#endif
 }
 
 static inline int write_all(int fd, const void *buf, size_t n)

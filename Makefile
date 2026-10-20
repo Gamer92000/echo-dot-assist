@@ -84,7 +84,6 @@ kernel-tools:
 ifneq ($(KCONFIG),)
 $(OUT)/ktree/.config: $(KCONFIG)
 	@mkdir -p $(OUT)/ktree
-	$(if $(wildcard devices/$(DEVICE)/Module.symvers),cp devices/$(DEVICE)/Module.symvers $(OUT)/ktree/Module.symvers)
 	sed -i '/GCC_VERSION >= 40800 && GCC_VERSION < 40803/,/^#endif/d' $(KSRC)/arch/arm/kernel/asm-offsets.c
 	cp $< $@
 	$(KMAKE) -C $(KSRC) O=$(CURDIR)/$(OUT)/ktree olddefconfig modules_prepare
@@ -97,9 +96,12 @@ $(OUT)/ktree/.config: $(KFRAG)
 	$(KMAKE) -C $(KSRC) O=$(CURDIR)/$(OUT)/ktree olddefconfig modules_prepare 2>&1 | grep -v -e 'override: reassigning' -e 'changes choice state' -e '^$$' || true
 endif
 
-$(OUT)/$(KMOD).ko: src/kmod/$(KMOD).c src/kmod/Kbuild $(OUT)/ktree/.config
+# Module.symvers: the kernel's own CRCs where it has CONFIG_MODVERSIONS (athena), for modpost; copied at every build of
+# the module, so a changed list reaches it
+$(OUT)/$(KMOD).ko: src/kmod/$(KMOD).c src/kmod/Kbuild $(OUT)/ktree/.config $(wildcard devices/$(DEVICE)/Module.symvers)
 	@mkdir -p $(OUT)/kmod
 	cp src/kmod/$(KMOD).c src/kmod/Kbuild $(OUT)/kmod/
+	$(if $(wildcard devices/$(DEVICE)/Module.symvers),cp devices/$(DEVICE)/Module.symvers $(OUT)/ktree/Module.symvers)
 	$(KMAKE) -C $(OUT)/ktree M=$(CURDIR)/$(OUT)/kmod HM_KMOD=$(KMOD) modules 2>&1 | grep -v -e 'Module.symvers' -e 'no dependencies and modversions' || true
 	cp $(OUT)/kmod/$(KMOD).ko $@
 
@@ -230,6 +232,7 @@ unit:
 	.venv/bin/python tests/unit/mww_ref.py build/mww_test
 	.venv/bin/python tests/blueprint_dropin.py
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/buttons_test.c src/hassmic/buttons.c -lpthread -o build/buttons_test && build/buttons_test build/buttons_test.fifo
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/buttons_privacy_test.c src/hassmic/buttons.c -lpthread -o build/buttons_privacy_test && build/buttons_privacy_test build/buttons_privacy.fifo
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/afe_parcel_test.c src/hassmic/afe_parcel.c -o build/afe_parcel_test && build/afe_parcel_test
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/lux_test.c -lm -o build/lux_test && build/lux_test
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ring_band_test.c src/hassmic/ring_band.c -lm -lpthread -o build/ring_band_test && build/ring_band_test
