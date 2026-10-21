@@ -17,6 +17,12 @@
  * (they are told here, ring_set): the issue asked for the Echo's states first, and per-LED composition would mix the
  * light into the gaps of the listening ring or the volume steps.  Its colour is the nearest of the palette: 24 hues,
  * full or half saturation or white, at 3 levels, each as solid, pulse, spin and blink, and a rainbow at the 3 levels.
+ * Each LED also has a layer of its own under stock's (issue #57: a fill, the ring LED by LED): ledcontroller mixes
+ * the layers per LED by brightness (a pixel weighs its brightest channel / 255, top first, what is left goes below), so
+ * black lets the layer below through and nothing dark covers it: a part of the ring lit takes patterns that light
+ * just that part.  One pattern per LED and colour of the palette (solid), each LED in a layer of its own (0..11),
+ * stock's moved up above them (12..17).  9.7 MB of the system partition: where it has no room for them, root installs
+ * the set without them (HASSMIC_RING_LEDS=0) and there is no fill (ring_per_led).
  * Stock's white volume steps once more in cyan, for the Assistant's own volume (separate volumes, main.c), just before
  * stock's in their layer.
  * Designs (ringdesign.h, issue #38): what people drew on the settings page in place of stock's patterns, one slot per
@@ -43,8 +49,8 @@
 
 #define HUES     24
 #define LEVELS   3
-#define MAX_LEDS 24
-#define FORMAT   "hassmic ring 3"           /* in the digest: a change of the palette's layout changes it */
+#define MAX_LEDS RING_LEDS_MAX
+#define FORMAT   "hassmic ring 4"           /* in the digest: a change of the palette's layout changes it */
 /* As seen: 100, 66 and 38 %.  The LED driver takes linear duty, so every channel goes through gamma 2.2 (colour_rgb):
  * 1, 0.4 and 0.12 in the file.  A dim level any lower vanishes under auto brightness in a dark room, where the ring
  * itself runs at a tenth */
@@ -75,8 +81,8 @@ const struct ring_slot ring_slots[] = {
 const int ring_nslots = (int)(sizeof ring_slots / sizeof ring_slots[0]);
 enum { S_LISTEN, S_END };                 /* ring_slots' first two */
 _Static_assert(sizeof ring_slots / sizeof ring_slots[0] <= RING_SLOTS_MAX, "RING_SLOTS_MAX");
-/* What the designs may add to the system partition: the light's set is ~0.4 MB, stock's 1.9 MB; a design for listening
- * is there 36 times (each turn, opening, held, closing) */
+/* What the designs may add to the system partition: the light's set is ~0.75 MB (9.7 MB in 4 kB blocks), stock's
+ * 1.9 MB; a design for listening is there 36 times (each turn, opening, held, closing) */
 #define DESIGN_BYTES_MAX (3 << 20)
 
 /* The system partition's directory, HASSMIC_LED_ROOT on the PC */
@@ -167,6 +173,16 @@ static void light_pattern(int effect, const struct colour *c, char *out, size_t 
     if (effect == E_RAINBOW) { snprintf(out, n, "hassmic_rainbow_%d", c->level); return; }
     colour_code(c, code, sizeof code);
     snprintf(out, n, "hassmic_%s_%s", effect_ids[effect], code);
+}
+
+/* The palette's colours: 24 hues full and half saturated, and white, at each level; 147 */
+#define NCOLOURS ((HUES * 2 + 1) * LEVELS)
+static struct colour colour_at(int i)
+{
+    struct colour c = { 0, 0, 0, i % LEVELS };
+    i /= LEVELS;
+    if (i == HUES * 2) c.white = 1; else { c.hue = i / 2; c.soft = i % 2; }
+    return c;
 }
 
 static void frame(struct buf *b, int ms, char px[][8], int n)
@@ -279,18 +295,59 @@ static int leds_of(const char *text)
 
 /* ---------------------------------------------------------------- the layer config */
 
-/* just after the "[" of layer `layer`, or NULL */
-static const char *layer_open(const char *t, const char *layer)
+/* the opening quote of layer `layer`'s key, and just after its "[" in *open; NULL */
+static const char *layer_key(const char *t, const char *layer, const char **open)
 {
     char key[8]; const char *p = t;
     snprintf(key, sizeof key, "\"%s\"", layer);
     while ((p = strstr(p, key))) {
         const char *q = p + strlen(key);
         while (isspace((unsigned char)*q)) q++;
-        if (*q == ':') { q++; while (isspace((unsigned char)*q)) q++; if (*q == '[') return q + 1; }
+        if (*q == ':') { q++; while (isspace((unsigned char)*q)) q++; if (*q == '[') { if (open) *open = q + 1; return p; } }
         p++;
     }
     return NULL;
+}
+
+/* just after the "[" of layer `layer`, or NULL */
+static const char *layer_open(const char *t, const char *layer)
+{
+    const char *open;
+    return layer_key(t, layer, &open) ? open : NULL;
+}
+
+/* T (stock's config with ours added) with stock's layers moved up by N and N layers under them, layer i the names of
+ * LED i's patterns (perled[i]).  ledcontroller wants numberOfLayers and every layer below it as an array */
+static int relayer(struct buf *out, const char *t, int n, const struct buf *perled)
+{
+    struct edit { const char *at, *end; int kind, k; } ed[2 + 100], tmp;
+    int ne = 0, layers;
+    const char *nl = strstr(t, "\"numberOfLayers\""), *lay = strstr(t, "\"Layers\""), *v, *brace;
+    char *e;
+    if (!nl || !lay || !(v = strchr(nl, ':')) || !(brace = strchr(lay, '{'))) return -1;
+    for (v++; isspace((unsigned char)*v); v++) {}
+    layers = (int)strtol(v, &e, 10);
+    if (e == v || layers < 1 || layers > 99) return -1;
+    ed[ne++] = (struct edit){ v, e, 'n', 0 };
+    ed[ne++] = (struct edit){ brace + 1, brace + 1, '{', 0 };
+    for (int k = 0; k < layers; k++) {
+        char key[8]; const char *at;
+        snprintf(key, sizeof key, "%d", k);
+        if (!(at = layer_key(t, key, NULL))) return -1;
+        ed[ne++] = (struct edit){ at, at + strlen(key) + 2, 'k', k };
+    }
+    for (int i = 1; i < ne; i++)
+        for (int j = i; j > 0 && ed[j].at < ed[j - 1].at; j--) { tmp = ed[j]; ed[j] = ed[j - 1]; ed[j - 1] = tmp; }
+    const char *p = t;
+    for (int i = 0; i < ne; i++) {
+        bput(out, "%.*s", (int)(ed[i].at - p), p);
+        if (ed[i].kind == 'n') bput(out, "%d", layers + n);
+        else if (ed[i].kind == 'k') bput(out, "\"%d\"", ed[i].k + n);
+        else for (int l = 0; l < n; l++) bput(out, "\n    \"%d\": [%s],", l, perled[l].p ? perled[l].p : "");
+        p = ed[i].end;
+    }
+    bput(out, "%s", p);
+    return 0;
 }
 
 /* stock's config with names4 first in layer 4 (stock's "active-start" is there; first: they never wait behind another
@@ -434,6 +491,7 @@ struct gen {
     size_t design_bytes;                    /* what the designs add */
     char why[200];                          /* a design left out, and why */
     int leds;                               /* the ring's, from stock's listening ring */
+    int noleds;                             /* in: without the LEDs' own layers (no room for them) */
 };
 static int leds = 12;                       /* of the set installed (take(), under the lock); every model's has 12 */
 
@@ -526,12 +584,13 @@ static void build_designs(struct gen *g, const char *stock, struct buf *names4, 
 static int build(struct gen *g)
 {
     char file[512], name[64];
-    struct buf names4 = { 0 }, names0 = { 0 }, namesv = { 0 }, b = { 0 }, before[RING_SLOTS_MAX];
+    struct buf names4 = { 0 }, names0 = { 0 }, namesv = { 0 }, b = { 0 }, before[RING_SLOTS_MAX], perled[MAX_LEDS];
     const char *at[RING_SLOTS_MAX]; int nat = 0;
     struct rd_design ds[RING_SLOTS_MAX]; int ids[RING_SLOTS_MAX];
-    memset(before, 0, sizeof before);
+    memset(before, 0, sizeof before); memset(perled, 0, sizeof perled);
     sha256_init(&g->h);
     sha256_update(&g->h, FORMAT, sizeof FORMAT);
+    if (g->noleds) sha256_update(&g->h, "noleds", 7);
     g->why[0] = 0; g->design_bytes = 0;
     path(file, sizeof file, "led-resources/active-start.animation");
     char *start = slurp(file);
@@ -566,6 +625,18 @@ static int build(struct gen *g)
                         listnames(&names0, name);
                         strcat(name, ".animation"); emit(g, name, &b);
                     }
+    /* each LED alone in each colour, solid: "hassmic_led_<led>_<colour>" */
+    for (int l = 0; l < (g->noleds ? 0 : n); l++)
+        for (int i = 0; i < NCOLOURS; i++) {
+            struct colour c = colour_at(i); char px[MAX_LEDS][8], code[8];
+            for (int k = 0; k < n; k++) strcpy(px[k], "000000");
+            colour_rgb(&c, 1, px[l]);
+            b.n = 0; bput(&b, "loop\n"); frame(&b, 1000, px, n);
+            colour_code(&c, code, sizeof code);
+            snprintf(name, sizeof name, "hassmic_led_%d_%s", l, code);
+            listnames(&perled[l], name);
+            strcat(name, ".animation"); emit(g, name, &b);
+        }
     /* stock's config: the copy kept from before our first install, else the one in place (still stock's then) */
     path(file, sizeof file, "layer_config_common.json.pre-hassmic");
     char *stock = slurp(file);
@@ -601,11 +672,16 @@ static int build(struct gen *g)
     for (int i = 0; i < nat; i++) bnames[i] = before[i].p ? before[i].p : "";
     int oom = names4.bad || names0.bad || namesv.bad;
     for (int i = 0; i < nat; i++) oom |= before[i].bad;
+    for (int l = 0; l < n; l++) oom |= perled[l].bad;
     if (oom) { fprintf(stderr, "ring: out of memory making the layer config\n"); g->failed = 1; }
     int rc = !stock || merge_config(&b, stock, names4.p ? names4.p : "", names0.p ? names0.p : "", namesv.p ? namesv.p : "",
                                     at, bnames, nat) ? -1 : 0;
-    if (rc) fprintf(stderr, "ring: no layer config of stock's to add ours to (%s)\n", file);
-    else emit(g, "layer_config_common.json", &b);
+    struct buf conf = { 0 };
+    if (!rc && !g->noleds && (relayer(&conf, b.p, n, perled) || conf.bad)) { rc = -1; fprintf(stderr, "ring: stock's layer config has a shape we do not know\n"); }
+    else if (rc) fprintf(stderr, "ring: no layer config of stock's to add ours to (%s)\n", file);
+    if (!rc) emit(g, "layer_config_common.json", g->noleds ? &b : &conf);
+    free(conf.p);
+    for (int l = 0; l < n; l++) free(perled[l].p);
     for (int i = 0; i < ring_nslots; i++) rd_free(&ds[i]);
     for (int i = 0; i < nat; i++) free(before[i].p);
     free(start); free(end); free(stock); free(names4.p); free(names0.p); free(namesv.p); free(b.p);
@@ -622,7 +698,9 @@ static void digest_hex(struct gen *g, char hex[65])
 int ring_generate(const char *dir)
 {
     struct gen g; char hex[65], file[512]; FILE *f;
+    const char *e = getenv("HASSMIC_RING_LEDS");
     memset(&g, 0, sizeof g); g.dir = strcmp(dir, "-") ? dir : NULL;
+    g.noleds = e && !strcmp(e, "0");        /* root's leds(): the partition has no room for the LEDs' own */
     if (build(&g)) return 1;
     digest_hex(&g, hex);
     if (!g.dir) { printf("%s\n", hex); return 0; }       /* "-": the digest only, for root to compare */
@@ -639,16 +717,18 @@ int ring_generate(const char *dir)
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static void (*run_fn)(const char *op, const char *name);
 static void (*reloaded_fn)(int custom_changed);
-static int custom, have_turned, have_assist;
+static int custom, have_turned, have_assist, have_leds;
 static int slot_avail[RING_SLOTS_MAX], slot_on[RING_SLOTS_MAX];         /* of the set installed */
 
 /* The Echo's own patterns that hassmic played and did not stop: how long each shows, from its file */
 #define SHOWN_MAX 24
 static struct shown { char logical[40], actual[40]; long long at; int ms, turn; } shown[SHOWN_MAX];   /* ms < 0: until unset */
 static int nshown;
-static struct ring_light light = { 0, 1, 1, 1, 1, 1, E_NONE };
+static struct ring_light light = { .brightness = 1, .color_brightness = 1, .r = 1, .g = 1, .b = 1, .effect = E_NONE, .fill = 100 };
 static struct ring_light flash; static long long flash_until;
 static char light_shown[48];                /* what of ours is on the ring for the light, "" none */
+static char led_shown[MAX_LEDS][32];        /* and on each LED's own layer (a fill), "" none */
+static int rotation;                        /* the fill's start, in LEDs from stock's */
 
 static long long now_ms(void)
 {
@@ -723,14 +803,18 @@ static struct shown *find(const char *logical)
     return NULL;
 }
 
-/* Remembered across a restart of hassmic: ledcontroller keeps playing what was left on */
+/* Remembered across a restart of hassmic: ledcontroller keeps playing what was left on.  One name per line */
 static void light_remember(void)
 {
-    char file[300]; const char *d = getenv("HASSMIC_STATE");
+    char file[300]; const char *d = getenv("HASSMIC_STATE"); int any = light_shown[0];
     snprintf(file, sizeof file, "%s/ring-light", d ? d : "/data/local/hassmic/state");
-    if (!light_shown[0]) { unlink(file); return; }
+    for (int i = 0; i < MAX_LEDS; i++) any |= led_shown[i][0];
+    if (!any) { unlink(file); return; }
     FILE *f = fopen(file, "w");
-    if (f) { fprintf(f, "%s\n", light_shown); fclose(f); }
+    if (!f) return;
+    if (light_shown[0]) fprintf(f, "%s\n", light_shown);
+    for (int i = 0; i < MAX_LEDS; i++) if (led_shown[i][0]) fprintf(f, "%s\n", led_shown[i]);
+    fclose(f);
 }
 
 static void quantize(const struct ring_light *l, struct colour *c)
@@ -751,20 +835,48 @@ static void quantize(const struct ring_light *l, struct colour *c)
 /* lock held: the light on the ring as it should be now */
 static void light_apply(long long now)
 {
-    char want[48] = "";
-    int flashing = flash_until && now < flash_until;
+    char want[48] = "", wled[MAX_LEDS][32];
+    int flashing = flash_until && now < flash_until, changed = 0;
     if (!flashing) flash_until = 0;
     const struct ring_light *l = flashing ? &flash : &light;
-    if (custom && (l->on || flashing) && !busy(now)) {
-        struct colour c; quantize(l, &c);
-        light_pattern(flashing ? E_BLINK : l->effect, &c, want, sizeof want);
+    memset(wled, 0, sizeof wled);
+    /* The fill: that share of the LEDs, rounded up (1 % one LED, all of them only at 100 %), from where stock's volume
+     * steps start (volume_step-01 lights LED 11, -05 LEDs 11 and 0, -10 LEDs 11 to 2) turned by the rotation.  A part
+     * of the ring is each LED's own solid pattern, so the effects are the whole ring's only; a flash blinks it whole */
+    int lit = (l->fill * leds + 99) / 100, start = (leds - 1 + rotation) % leds;
+    if (custom && have_leds && l->on && !flashing && !busy(now) && l->nleds > 0) {     /* LED by LED, each in the palette's nearest */
+        for (int j = 0; j < l->nleds && j < leds; j++) {
+            struct ring_light t = *l; struct colour c; char code[8]; int i = (start + j) % leds;
+            const unsigned char *p = l->led_rgb[j];
+            if (!p[0] && !p[1] && !p[2]) continue;
+            t.r = p[0] / 255.0f; t.g = p[1] / 255.0f; t.b = p[2] / 255.0f;
+            quantize(&t, &c); colour_code(&c, code, sizeof code);
+            snprintf(wled[i], sizeof wled[i], "hassmic_led_%d_%s", i, code);
+        }
     }
-    if (!strcmp(want, light_shown)) return;
+    else if (custom && (l->on || flashing) && !busy(now) && lit > 0) {
+        struct colour c; quantize(l, &c);
+        if (lit >= leds || flashing || !have_leds) light_pattern(flashing ? E_BLINK : l->effect, &c, want, sizeof want);
+        else {
+            char code[8]; colour_code(&c, code, sizeof code);
+            for (int j = 0; j < lit; j++) { int i = (start + j) % leds; snprintf(wled[i], sizeof wled[i], "hassmic_led_%d_%s", i, code); }
+        }
+    }
+    int nled = 0;
+    changed = strcmp(want, light_shown) != 0;
+    for (int i = 0; i < leds; i++) { changed |= strcmp(wled[i], led_shown[i]) != 0; nled += wled[i][0] != 0; }
+    if (!changed) return;
     if (want[0]) fprintf(stderr, "light ring: Home Assistant's light %s%s\n", want, flashing ? " (flash)" : "");
-    else fprintf(stderr, "light ring: Home Assistant's light %s\n", l->on || flashing ? "waits for the Echo's own" : "off");
-    if (want[0]) run("-s", want);           /* the new first: the ring is never dark between two colours */
-    if (light_shown[0]) run("-u", light_shown);
+    else if (nled) fprintf(stderr, "light ring: Home Assistant's light on %d LED%s from %d%s\n", nled, nled == 1 ? "" : "s", start,
+                           l->nleds > 0 && !flashing ? ", LED by LED" : "");
+    else fprintf(stderr, "light ring: Home Assistant's light %s\n", !l->on && !flashing ? "off" : busy(now) ? "waits for the Echo's own" : "dark");
+    /* Every new one on before an old one goes: the ring is never dark between two colours or two fills */
+    if (want[0] && strcmp(want, light_shown)) run("-s", want);
+    for (int i = 0; i < leds; i++) if (wled[i][0] && strcmp(wled[i], led_shown[i])) run("-s", wled[i]);
+    if (light_shown[0] && strcmp(want, light_shown)) run("-u", light_shown);
+    for (int i = 0; i < leds; i++) if (led_shown[i][0] && strcmp(wled[i], led_shown[i])) run("-u", led_shown[i]);
     snprintf(light_shown, sizeof light_shown, "%s", want);
+    memcpy(led_shown, wled, sizeof wled);
     light_remember();
 }
 
@@ -778,13 +890,13 @@ static int installed(struct gen *g)
     path(file, sizeof file, "hassmic-leds.digest");
     inst = slurp(file);
     text[0] = rd_installed_read(&len[0]); text[1] = rd_applied_read(&len[1]);
-    for (int k = 0; k < 2; k++) {
-        if (k && (!text[1] || (text[0] && len[0] == len[1] && !memcmp(text[0], text[1], len[1])))) break;   /* nothing else asked for */
+    for (int k = 0; k < 4 && rc != 1; k++) {        /* each with the LEDs' own, then without (root had no room) */
+        if (k / 2 && (!text[1] || (text[0] && len[0] == len[1] && !memcmp(text[0], text[1], len[1])))) break;   /* nothing else asked for */
         memset(g, 0, sizeof *g);
-        g->applied = text[k] ? text[k] : ""; g->applied_n = text[k] ? len[k] : 0;
+        g->applied = text[k / 2] ? text[k / 2] : ""; g->applied_n = text[k / 2] ? len[k / 2] : 0; g->noleds = k % 2;
         if (build(g)) { rc = -1; continue; }
         digest_hex(g, hex);
-        if ((rc = inst && !strncmp(inst, hex, 64))) { if (k) rd_installed_set(text[1], len[1]); break; }
+        if ((rc = inst && !strncmp(inst, hex, 64)) && k / 2) rd_installed_set(text[1], len[1]);
     }
     free(inst); free(text[0]); free(text[1]);
     return rc;
@@ -795,6 +907,7 @@ static void take(const struct gen *g, int ours)
     custom = ours > 0;
     have_turned = custom && g->turned;
     have_assist = custom && g->assist;
+    have_leds = custom && !g->noleds;
     leds = g->leds ? g->leds : 12;
     for (int i = 0; i < ring_nslots; i++) { slot_avail[i] = custom && g->avail[i]; slot_on[i] = custom && g->on[i]; }
 }
@@ -816,7 +929,10 @@ void ring_start(void (*fn)(const char *op, const char *name), void (*reloaded)(i
     }
     const char *d = getenv("HASSMIC_STATE"); char left[48] = ""; FILE *f;   /* this light from before a restart */
     snprintf(file, sizeof file, "%s/ring-light", d ? d : "/data/local/hassmic/state");
-    if ((f = fopen(file, "r"))) { if (fscanf(f, "%47s", left) == 1 && !strncmp(left, "hassmic_", 8)) run("-u", left); fclose(f); unlink(file); }
+    if ((f = fopen(file, "r"))) {
+        for (int i = 0; i <= MAX_LEDS && fscanf(f, "%47s", left) == 1; i++) if (!strncmp(left, "hassmic_", 8)) run("-u", left);
+        fclose(f); unlink(file);
+    }
 }
 
 int ring_check(const char *applied, size_t n, char *err, size_t cap)
@@ -836,6 +952,7 @@ int ring_leds(void) { return leds; }
 
 int ring_custom(void) { return custom; }
 int ring_assistant_steps(void) { return have_assist; }
+int ring_per_led(void) { return have_leds; }
 
 /* lock held: the slot that shows PATTERN (stock's name; a volume step: its number in *step), -1 none */
 static int slot_of(const char *pattern, int *step)
@@ -923,7 +1040,7 @@ void ring_reload(void)
     struct gen g;
     int ours = installed(&g);               /* outside the lock: 0.1 s on the Echo */
     pthread_mutex_lock(&lock);
-    int was = custom;
+    int was = custom, was_leds = have_leds;
     take(&g, ours);
     ncache = 0;                             /* the same names may hold other designs now */
     long long now = now_ms();
@@ -939,12 +1056,15 @@ void ring_reload(void)
         s->ms = visible_ms(s->actual); s->at = now;
         run("-s", s->actual);
     }
-    if (light_shown[0]) {
-        if (custom) run("-s", light_shown);
-        else { light_shown[0] = 0; light_remember(); }
+    int any = light_shown[0];
+    for (int i = 0; i < MAX_LEDS; i++) any |= led_shown[i][0];
+    if (any && !custom) { light_shown[0] = 0; memset(led_shown, 0, sizeof led_shown); light_remember(); }
+    else if (any) {
+        if (light_shown[0]) run("-s", light_shown);
+        for (int i = 0; i < MAX_LEDS; i++) if (led_shown[i][0]) run("-s", led_shown[i]);
     }
     pthread_mutex_unlock(&lock);
-    if (reloaded_fn) reloaded_fn(custom != was);
+    if (reloaded_fn) reloaded_fn(custom != was || have_leds != was_leds);      /* the fill's entities come and go with them */
 }
 
 void ring_light_get(struct ring_light *l) { pthread_mutex_lock(&lock); *l = light; pthread_mutex_unlock(&lock); }
@@ -955,6 +1075,9 @@ void ring_light_set(const struct ring_light *l, unsigned flash_ms)
     if (flash_ms) { flash = *l; flash.on = 1; flash_until = now_ms() + flash_ms; }
     else { light = *l; flash_until = 0; }
     if (light.effect < 0 || light.effect >= E_COUNT) light.effect = E_NONE;
+    light.fill = light.fill < 0 ? 0 : light.fill > 100 ? 100 : light.fill;
+    if (light.nleds < 0 || light.nleds > MAX_LEDS) light.nleds = 0;
+    flash.fill = flash.fill < 0 ? 0 : flash.fill > 100 ? 100 : flash.fill;
     long long now = now_ms();
     light_apply(now);
     if (custom && (light.on || flash_until) && !light_shown[0])
@@ -963,4 +1086,13 @@ void ring_light_set(const struct ring_light *l, unsigned flash_ms)
                 fprintf(stderr, "light ring: Home Assistant's light waits for the Echo's own (%s)\n", shown[i].logical); break;
             }
     pthread_mutex_unlock(&lock);
+}
+
+int ring_rotation(int set)
+{
+    pthread_mutex_lock(&lock);
+    if (set >= 0) { rotation = set % leds; light_apply(now_ms()); }
+    int r = rotation;
+    pthread_mutex_unlock(&lock);
+    return r;
 }

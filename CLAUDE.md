@@ -402,10 +402,14 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Light ring** (`ring.c`, `ring.h`, issue #26): HA's light "Light ring" and the listening ring turned towards the
   talker over other animations.  ledcontroller loads animations only at its start from `/system/etc/led-resources`
   and plays only names in a layer config (each `layer_config*.json` is a compositor of its own, so ours go into
-  stock's file).  `hassmic -G dir` (root, `main.sh leds()` at each satellite start, `-G -` = digest only) makes 627
-  files: active-start/its last frame/active-end turned by each LED (`hassmic_listen|hold|end_N`, first in layer 4) and
+  stock's file).  `hassmic -G dir` (root, `main.sh leds()` at each satellite start, `-G -` = digest only) makes 2422
+  files: active-start/its last frame/active-end turned by each LED (`hassmic_listen|hold|end_N`, first in layer 4),
   the light's palette (24 hues x full/half + white, 3 levels, solid/pulse/spin/blink, rainbow; colours as seen, gamma
-  2.2 to the driver's duty as Amazon's own; last in layer 0), plus
+  2.2 to the driver's duty as Amazon's own; last in layer 0) and each LED alone in each solid colour (issue #57:
+  `hassmic_led_<i>_<colour>`, a layer of its own per LED, 0..11, stock's moved up to 12..17 by `relayer`: the
+  compositor weighs each pixel by its brightest channel, so only lit patterns light a part of the ring; HA's "Light
+  ring fill", "Light ring rotation" (`ring_rotation`) and action `light_ring_leds`; no room for their 9.7 MB:
+  `HASSMIC_RING_LEDS=0`, the set without them, `ring_per_led()` 0), plus
   stock's config with them added and a digest; `sysinstall.sh leds` installs them (stock's config kept as
   `/system/etc/layer_config_common.json.pre-hassmic`, digest `/system/etc/hassmic-leds.digest`), ledcontroller
   restarts.  hassmic lists the light only when the installed digest is its own.  Designs (issue #38, `ringdesign.c`,
@@ -420,7 +424,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `pack_normal`); shared with their designs inside (version 1: the page's `.ringpack` and copies).  The page: ring.js.  Every pattern of the core goes
   through `led()` -> `ring_set`/`ring_unset`, which knows from each file how long it shows; while one does, HA's light
   is off.  Every ledctrl call (patterns and brightness) goes through `ledq.c` (issue #40): one at a time, in order,
-  each waited for, in its own thread (started together, an unset can overtake its set and leave the pattern on).  The
+  each waited for, in its own thread (started together, an unset can overtake its set and leave the pattern on);
+  sets and unsets queued one behind the other go in one ledctrl (`LEDQ_BATCH`: it takes repeated -s/-u).  The
   beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N` when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
   `HASSMIC_FAKE_BEAM`.
 - `src/include/`: headers for the reversed Amazon libraries (`mixer_api.h`, `pryon_api.h`, `aipc_api.h`) and `netio.h`.

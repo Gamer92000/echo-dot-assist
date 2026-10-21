@@ -2,7 +2,8 @@
  * it (issue #40), chat on stdout of any length does not end the wait early and stays out of the log while stderr
  * reaches it, a hanging call is killed with what it started after the timeout and the next one runs, a full queue
  * gives up a set and never an unset, brightness calls keep their order with the ring's, the fake file of the PC tests
- * gets every call at once.  SIGCHLD ignored, as in hassmic.  Timeouts generous where nothing should hang: CI is slow. */
+ * gets every call at once, sets and unsets queued together go in one ledctrl and a batch killed has its unsets
+ * run again (issue #57).  SIGCHLD ignored, as in hassmic.  Timeouts generous where nothing should hang: CI is slow. */
 #include "ledq.h"
 #include <signal.h>
 #include <stdio.h>
@@ -12,7 +13,7 @@
 #include <time.h>
 #include <unistd.h>
 
-static char dir[64] = "/tmp/ledq_test.XXXXXX", script[96], log_[96], err[96], fake[96], mark[96], orphan[96];
+static char dir[64] = "/tmp/ledq_test.XXXXXX", script[96], log_[96], raw[96], err[96], fake[96], mark[96], orphan[96];
 static int fails;
 
 static void check(int ok, const char *what) { printf("%s %s\n", ok ? "ok  " : "FAIL", what); if (!ok) fails++; }
@@ -32,23 +33,29 @@ static int appeared(const char *f, int within)      /* polls for the stand-in's 
 
 int main(void)
 {
-    char buf[8192], line[64];
+    char buf[8192], line[128];
     signal(SIGCHLD, SIG_IGN);
     if (!mkdtemp(dir)) { perror("mkdtemp"); return 1; }
     snprintf(script, sizeof script, "%s/ledctrl", dir); snprintf(log_, sizeof log_, "%s/calls", dir);
     snprintf(err, sizeof err, "%s/stderr", dir); snprintf(fake, sizeof fake, "%s/fake", dir);
     snprintf(mark, sizeof mark, "%s/started", dir); snprintf(orphan, sizeof orphan, "%s/orphan", dir);
+    snprintf(raw, sizeof raw, "%s/runs", dir);
     FILE *f = fopen(script, "w");
     if (!f) { perror(script); return 1; }
+    /* one line per run in `raw`, one per pattern (or other call) in `log_`, as ledctrl's getopt loop takes them */
     fprintf(f, "#!/bin/sh\n"
-               "case \"$2\" in\n"
-               "  slow) touch %s; sleep 0.3 ;;\n"
-               "  chatty) i=0; while [ $i -lt 400 ]; do echo \"ledctrl chat line $i\"; i=$((i+1)); done; sleep 0.2 ;;\n"
-               "  hang) exec sleep 10 ;;\n"
-               "  orphan) (sleep 0.8; touch %s) & exit 0 ;;\n"
-               "  oops) echo \"ledctrl: no such pattern\" >&2 ;;\n"
-               "esac\n"
-               "echo \"$*\" >> %s\n", mark, orphan, log_);
+               "echo \"$*\" >> %s\n"
+               "while [ $# -gt 0 ]; do\n"
+               "  case \"$1\" in -s|-u) a=\"$1 $2\"; p=$2; shift 2 ;; *) a=\"$*\"; p=; shift $# ;; esac\n"
+               "  case \"$p\" in\n"
+               "    slow) touch %s; sleep 0.3 ;;\n"
+               "    chatty) i=0; while [ $i -lt 400 ]; do echo \"ledctrl chat line $i\"; i=$((i+1)); done; sleep 0.2 ;;\n"
+               "    hang) touch %s; exec sleep 10 ;;\n"
+               "    orphan) (sleep 0.8; touch %s) & exit 0 ;;\n"
+               "    oops) echo \"ledctrl: no such pattern\" >&2 ;;\n"
+               "  esac\n"
+               "  echo \"$a\" >> %s\n"
+               "done\n", raw, mark, mark, orphan, log_);
     fclose(f); chmod(script, 0700);
     fflush(stderr);
     int saved = dup(2);
@@ -71,14 +78,33 @@ int main(void)
     check(!ledq_wait(10000), "brightness calls ran");
     check(!strcmp(slurp(log_, buf, sizeof buf), "-s slow\n-a off -b 40\n-a on\n"), "brightness in order, behind the ring's");
 
+    empty(log_); empty(raw); unlink(mark);
+    ledq_run("-s", "slow");
+    check(appeared(mark, 5000), "slow running");
+    ledq_run("-s", "a"); ledq_run("-u", "b"); ledq_run("-s", "c"); ledq_args(4, bright); ledq_run("-s", "d");
+    check(!ledq_wait(10000), "queued calls ran");
+    check(!strcmp(slurp(raw, buf, sizeof buf), "-s slow\n-s a -u b -s c\n-a off -b 40\n-s d\n")
+          && !strcmp(slurp(log_, line, sizeof line), "-s slow\n-s a\n-u b\n-s c\n-a off -b 40\n-s d\n"),
+          "sets and unsets queued together in one ledctrl, in order; brightness on its own");
+
     ledq_start(script, NULL, NULL, 500);
-    empty(log_);
+    empty(log_); unlink(mark);
     long long t0 = ms();
-    ledq_run("-s", "hang"); ledq_run("-u", "next");
+    ledq_run("-s", "hang");                         /* alone: a call queued behind it would go in the same ledctrl */
+    check(appeared(mark, 5000), "hang running");
+    ledq_run("-u", "next");
     check(!ledq_wait(10000), "a hanging call ends");
     long long took = ms() - t0;
     check(took >= 450 && took < 5000, "killed after the timeout (500 ms)");
     check(!strcmp(slurp(log_, buf, sizeof buf), "-u next\n"), "the call after it ran");
+
+    empty(log_); unlink(mark);                      /* a batch that hangs: its unsets again, alone */
+    ledq_run("-s", "slow");
+    check(appeared(mark, 5000), "slow running");
+    ledq_run("-u", "gone"); ledq_run("-s", "hang"); ledq_run("-u", "after"); ledq_run("-s", "lost");
+    check(!ledq_wait(10000), "a hanging batch ends");
+    check(!strcmp(slurp(log_, buf, sizeof buf), "-s slow\n-u gone\n-u gone\n-u after\n"),
+          "killed with the batch: both unsets again, each alone; the set after the hang lost");
 
     ledq_run("-s", "orphan");                       /* exits at once, a child of it keeps the pipe */
     check(!ledq_wait(10000), "a call that left a child behind ends");
@@ -112,7 +138,7 @@ int main(void)
     check(strstr(buf, "-s hang still running after 500 ms, killed") != NULL, "the kill is logged");
     check(strstr(buf, "-s s0 dropped") != NULL, "the dropped set is logged");
 
-    const char *files[] = { script, log_, err, fake, mark, orphan };
+    const char *files[] = { script, log_, raw, err, fake, mark, orphan };
     for (unsigned i = 0; i < sizeof files / sizeof *files; i++) unlink(files[i]);
     rmdir(dir);
     printf("ledq: %s\n", fails ? "FAILED" : "all passed");

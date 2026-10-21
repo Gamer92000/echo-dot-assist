@@ -1781,6 +1781,42 @@ Run in this order. Each step says what it proves.
       Details (packshot style), Save as pack, delete keeping or deleting its designs. tests/fake_web_ring.py: kept as
       sent, ten refusals (not its own design, one in two packs among them), 50 at most, deletes, a pack larger than a
       request, a deleted design leaving its pack.
+- [~] Light ring fill, rotation and LED by LED (2026-10-21, issue #57: a timer's progress, a washing machine, a
+      battery; any LED in any colour).  ledcontroller's compositor (disassembly of donut's and biscuit's, same code;
+      the frame tick 0x19228, composer 0x19758): per LED, the active animations' frames top layer first, each pixel's
+      weight is what is left of 1 after the ones above, less its own brightest channel / 255; channels summed and
+      truncated.  So black is transparent, and nothing dark covers: `000001` over red leaves 254/255 of it (and
+      becomes 0 anyway: the HAL scales each channel by its brightness table's pwm, < 1 on both models, and
+      truncates).  A first try with masks over the light (a dark pixel on the LEDs to hide) was dropped for that.
+      Now one layer per LED under stock's: layers 0..11, LED i's 147 solid colours of the palette each
+      (`hassmic_led_<i>_<colour>`, 1764 files; the set is 2422 files, 0.75 MB, 9.7 MB in blocks; biscuit's system
+      image has 506 MB and 45000 inodes free), stock's layers moved up to 12..17 (`ring.c` `relayer`).  The parser
+      (0x1b144) takes any numberOfLayers (an int, vectors sized at run time) but wants every key "0".."N-1" as an
+      array, else the whole file fails and no animation plays; the layer number only orders the compositor.
+      `ledctrl -s` passes the flag that lets the layers below show (only LIPC's set_animation can cut them off).
+      `ledctrl` takes repeated -s/-u in one run (getopt loop, one Binder call each, in order): `ledq.c` runs the
+      sets and unsets queued one behind the other in one ledctrl (32 at most), so a fill off the ring for a wake word
+      is one call, ~35 ms.  Fill: HA number "Light ring fill" 0-100 % in `struct ring_light` (not saved, as the light
+      is not), rounded up (1 % one LED, only 100 % the whole ring, as the light's pattern with its effect); from
+      where stock's volume steps start (volume_step-01 LED 11, -05 LEDs 11 and 0, -10 11 to 2), turned by the setting
+      `ring_rotation` (page, HA config number "Light ring rotation"; not exported: how this Echo stands).  0 % leaves
+      the ring dark, the light on in HA.  LED by LED: action `light_ring_leds`, `colors` a string array from the
+      fill's start, `#rrggbb` or dark, each the palette's nearest at the light's brightness; HA's rgb or effect
+      ends it.  Every new pattern goes on before an old one goes; all of them are in `state/ring-light` for the next
+      start.  FORMAT "hassmic ring 4": every Echo installs the set again once.  No room for the 9.7 MB: main.sh
+      leds() makes the set again with HASSMIC_RING_LEDS=0 when sysinstall says so (stock's 6 layers, the light, no
+      fill), and an installed one of those counts as current; hassmic takes either as its own (`installed` builds
+      both) and lists the fill's entities only with the LEDs' own (`ring_per_led`).  A batch of ledctrl calls
+      killed after the timeout has its unsets run again, each alone.  tests/fake_ha_ring.py: the set and
+      its 18 layers, the entities, 50 %, rotation, 1 %, 0 %, 100 %, the action, back to one colour, the restart;
+      tests/unit/ledq_test.c: queued calls in one ledctrl.
+      On the Dot 2 (2026-10-21, pushed with ota-push.sh, one design applied: 2446 files): installed by main.sh in 4 s,
+      ledcontroller "Number of layers=18", loadAnimations 1.54 s (1.32 with the 947 before), RSS 9.5 MB (8.6).
+      Through the ESPHome API, the ring's frame read back (brightness 11: red = 40): red at 50 % lit LEDs 11, 0..4;
+      25 % 11, 0, 1; rotation 3 then 2..4; 1 % LED 2; 0 % none; 100 % all; the action (red, -, green, -, blue,
+      white) LEDs 11 40, 0 dark, 1 green, 2 dark, 3 blue, 4 404040; HA's green then one colour at 75 %.  Identify
+      over a 50 % fill: the rainbow 0.12 s after the press, the fill back at 10.3 s.  No ledctrl errors.
+      Open: the Dot 3 (its system partition's room; no system image of it here) and the Echo 2.
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.

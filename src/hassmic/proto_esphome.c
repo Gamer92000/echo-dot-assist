@@ -126,7 +126,7 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF, KEY_WEB_URL, KEY_IDENTIFY, KEY_RESET,
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
        KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON, KEY_LIGHT, KEY_ASSIST_VOLUME, KEY_SOUNDS_VOLUME, KEY_TIMER_VOLUME,
-       KEY_CALL_VOLUME, KEY_WAKE };
+       KEY_CALL_VOLUME, KEY_WAKE, KEY_RING_FILL, KEY_RING_ROTATION, KEY_RING_LEDS };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -368,6 +368,8 @@ static void send_setting(int key)       /* lock held */
         pb_float(&b, 4, l.r); pb_float(&b, 5, l.g); pb_float(&b, 6, l.b); pb_str(&b, 9, ring_effects[l.effect]);
         send_state(LIGHT_STATE, &b);
     } break;
+    case KEY_RING_FILL: { struct ring_light l; ring_light_get(&l); pb_float(&b, 2, l.fill); send_state(NUMBER_STATE, &b); } break;
+    case KEY_RING_ROTATION: pb_float(&b, 2, ring_rotation(-1)); send_state(NUMBER_STATE, &b); break;
     case KEY_LED_AUTO: if (have_light) { pb_uint(&b, 2, core_led_auto(-1)); send_state(SWITCH_STATE, &b); } break;
     case KEY_ASSIST_VOLUME: case KEY_SOUNDS_VOLUME: case KEY_TIMER_VOLUME: case KEY_CALL_VOLUME:     /* VOL_* order */
         pb_float(&b, 2, core_kind_volume(key - KEY_ASSIST_VOLUME, -1)); send_state(NUMBER_STATE, &b); break;
@@ -464,6 +466,7 @@ static void send_light_states(void)     /* lock held */
     if (listed(KEY_LUX)) { sent_lux = core_lux(); sent_at = time(NULL); send_sensor(KEY_LUX, sent_lux); }
     sent_level = core_led_brightness(-1); level_at = time(NULL);
     send_setting(KEY_LED_AUTO); send_setting(KEY_LED_BRIGHTNESS); send_setting(KEY_LIGHT);
+    send_setting(KEY_RING_FILL); send_setting(KEY_RING_ROTATION);
 }
 
 static void send_light_entities(void)
@@ -474,6 +477,19 @@ static void send_light_entities(void)
       pb_uint(&b, 12, COLOR_MODE_RGB); pb_uint(&b, 5, 1); pb_uint(&b, 6, 1);
       for (int i = 0; i < ring_neffects; i++) pb_str(&b, 11, ring_effects[i]);
       pb_str(&b, 14, "mdi:circle-slice-8"); send_msg(LIST_LIGHT, &b); }
+    /* Its fill (issue #57): a timer's or a washing machine's progress, a battery.  Kept over the light being off, as its
+     * colour is.  The rotation is where the fill starts, in LEDs from where the volume's does: a setting (settings.c) */
+    if (listed(KEY_RING_FILL)) { PB(b, 160); pb_str(&b, 1, "light_ring_fill"); pb_fixed32(&b, 2, KEY_RING_FILL); pb_str(&b, 3, "Light ring fill");
+      pb_str(&b, 5, "mdi:circle-slice-5"); pb_float(&b, 6, 0); pb_float(&b, 7, 100); pb_float(&b, 8, 1);
+      pb_str(&b, 11, "%"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
+    if (listed(KEY_RING_ROTATION)) { PB(b, 160); pb_str(&b, 1, "light_ring_rotation"); pb_fixed32(&b, 2, KEY_RING_ROTATION);
+      pb_str(&b, 3, "Light ring rotation"); pb_str(&b, 5, "mdi:rotate-right"); pb_float(&b, 6, 0); pb_float(&b, 7, ring_leds() - 1);
+      pb_float(&b, 8, 1); pb_uint(&b, 10, 1); pb_str(&b, 11, "LEDs"); pb_uint(&b, 12, 1); send_msg(LIST_NUMBER, &b); }
+    /* LED by LED: esphome.<node>_light_ring_leds with colors ["#ff0000", "", ...] from the fill's start on; the light's
+     * own colour or effect from Home Assistant takes the ring back to one colour */
+    if (listed(KEY_RING_LEDS)) { PB(b, 256); PB(a, 48); pb_str(&b, 1, "light_ring_leds"); pb_fixed32(&b, 2, KEY_RING_LEDS);
+      pb_str(&a, 1, "colors"); pb_uint(&a, 2, 7); pb_bytes(&b, 3, a.p, a.n);
+      pb_str(&b, 5, "The light ring LED by LED: \"#rrggbb\" each, \"\" for dark, from where its fill starts"); send_msg(LIST_SERVICE, &b); }
     if (listed(KEY_LUX)) { PB(b, 192); pb_str(&b, 1, "illuminance"); pb_fixed32(&b, 2, KEY_LUX); pb_str(&b, 3, "Illuminance"); pb_str(&b, 6, "lx");
           pb_uint(&b, 7, 0); pb_str(&b, 9, "illuminance"); pb_uint(&b, 10, 1); send_msg(LIST_SENSOR, &b); }
     if (have_light) {
@@ -516,6 +532,7 @@ static int listed(int key)
     case KEY_LED_AUTO: return have_light;
     case KEY_LUX: return have_light && settings_on("light_sensor");
     case KEY_LIGHT: return ring_custom();
+    case KEY_RING_FILL: case KEY_RING_ROTATION: case KEY_RING_LEDS: return ring_per_led();
     case KEY_CALL_VOLUME: if (!(dropin_running() && settings_on("drop_in"))) return 0;    /* calls only with Drop In */
         /* fall through */
     case KEY_ASSIST_VOLUME: case KEY_SOUNDS_VOLUME: case KEY_TIMER_VOLUME:       /* one that follows the music has none */
@@ -704,6 +721,14 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
         char v[8], e[80]; snprintf(v, sizeof v, "%d", num < 0 ? 0 : num > 100 ? 100 : (int)lroundf(num));
         settings_set(names[key - KEY_ASSIST_VOLUME], v, e, sizeof e); return;
     }
+    else if (type == NUMBER_COMMAND && key == KEY_RING_FILL && listed(key)) {
+        struct ring_light l; ring_light_get(&l); l.fill = num < 0 ? 0 : num > 100 ? 100 : (int)lroundf(num);
+        ring_light_set(&l, 0); send_setting(key); return;
+    }
+    else if (type == NUMBER_COMMAND && key == KEY_RING_ROTATION && listed(key)) {              /* saved, shown: settings.c */
+        char v[8], e[80]; snprintf(v, sizeof v, "%d", num < 0 ? 0 : (int)lroundf(num));
+        settings_set("ring_rotation", v, e, sizeof e); return;
+    }
     else if (type == NUMBER_COMMAND && key >= KEY_EQ_BASS && key <= KEY_EQ_TREBLE) {           /* the mixer keeps it, not our file */
         core_set_eq(key - KEY_EQ_BASS, (int)lroundf(num)); send_setting(key); return;
     }
@@ -711,6 +736,25 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     fprintf(stderr, "settings: mic_level=%d noise_reduction=%s mute=%d wake_sound=%d bt_announce=%d dnd=%d bt_lang=%s\n", settings_mic_level(),
             denoise_names[core_mic_denoise(-1)], core_soft_mute(-1), core_wake_sound(-1), core_bt_announce(-1), core_dnd(-1), settings_bt_lang()->code);
     settings_save(); send_setting(key);
+}
+
+/* The action light_ring_leds: "#rrggbb" (or without "#") per LED from the fill's start, anything else dark.  The light
+ * on with them; an empty list is the light's own colour again */
+static void ring_leds_from(char colors[][16], int n)        /* lock held */
+{
+    struct ring_light l; ring_light_get(&l);
+    for (int i = 0; i < n; i++) {
+        const char *c = colors[i] + (colors[i][0] == '#');
+        memset(l.led_rgb[i], 0, 3);
+        if (strlen(c) == 6 && strspn(c, "0123456789abcdefABCDEF") == 6) {
+            unsigned long v = strtoul(c, NULL, 16);
+            l.led_rgb[i][0] = (unsigned char)(v >> 16); l.led_rgb[i][1] = (unsigned char)(v >> 8); l.led_rgb[i][2] = (unsigned char)v;
+        }
+        else if (*c && strcasecmp(c, "off") && strcasecmp(c, "black")) fprintf(stderr, "light ring: \"%s\" is no colour (#rrggbb), dark\n", colors[i]);
+    }
+    l.nleds = n; l.on = 1;
+    ring_light_set(&l, 0);
+    send_setting(KEY_LIGHT);
 }
 
 /* Home Assistant's light: what the command has, over what it was (ESPHome sends only what changed).  A flash shows
@@ -732,8 +776,9 @@ static void on_light(const unsigned char *p, const unsigned char *end)      /* l
     if (has[2]) l.on = v[3] != 0;
     if (has[4]) l.brightness = v[5];
     if (has[20]) l.color_brightness = v[21];
-    if (has[6]) { l.r = v[7]; l.g = v[8]; l.b = v[9]; }
+    if (has[6]) { l.r = v[7]; l.g = v[8]; l.b = v[9]; l.nleds = 0; }      /* one colour again */
     if (has[18]) {
+        l.nleds = 0;
         if (!strcasecmp(eff, "off")) l.effect = 0;        /* Home Assistant's own name for none */
         for (int i = 0; i < ring_neffects; i++) if (!strcasecmp(eff, ring_effects[i])) l.effect = i;
     }
@@ -1479,17 +1524,19 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         arb_ha_state(ent, st);
     } break;
     case EXECUTE_SERVICE: {
-        /* only from Home Assistant itself: a client holding the device key (without one, anyone on the network could
-         * connect and hand this Echo a network) */
-        unsigned key = 0; int argn = 0; char args[2][256] = { "", "" }; struct pbf g;
+        unsigned key = 0; int argn = 0, nc = 0; char args[2][256] = { "", "" }, colors[RING_LEDS_MAX][16]; struct pbf g;
         while (pb_next(&p, end, &f)) {
             if (f.field == 1) key = (unsigned)f.v;
             else if (f.field == 2 && f.data && argn < 2) {
                 const unsigned char *q = f.data;
-                while (pb_next(&q, f.data + f.len, &g)) if (g.field == 4 && g.data) pbf_str(&g, args[argn], sizeof args[argn]);
+                while (pb_next(&q, f.data + f.len, &g)) {
+                    if (g.field == 4 && g.data) pbf_str(&g, args[argn], sizeof args[argn]);
+                    else if (g.field == 9 && g.data && nc < RING_LEDS_MAX) pbf_str(&g, colors[nc++], sizeof colors[0]);   /* string array */
+                }
                 argn++;
             }
         }
+        if (key == KEY_RING_LEDS && listed(KEY_RING_LEDS)) { ring_leds_from(colors, nc); break; }
         /* Drop In from Home Assistant (an automation, the voice blueprint): it may open another Echo's microphone, so
          * only over the keyed link too */
         if (key == KEY_DROPIN_SERVICE && listed(KEY_DROPIN_SERVICE)) {
@@ -1498,6 +1545,8 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
             else if (dropin_call(args[0], e, sizeof e)) fprintf(stderr, "drop in: %s: %s\n", args[0], e);
             break;
         }
+        /* the network key only from Home Assistant itself: a client holding the device key (without one, anyone on the
+         * network could connect and hand this Echo a network) */
         if (key != KEY_ARB_SERVICE || !arb_running()) break;
         if (c < 0 || !clients[c].keyed) { fprintf(stderr, "arbitration: key refused, it did not come over the keyed connection\n"); break; }
         arb_key(args[0], args[1]);

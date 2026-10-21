@@ -129,6 +129,19 @@ lipc-send-event com.amazon.puffin set_animation -s active-talking
   show the lower ones; in one layer only the first listed active one shows, the rest wait. Every `layer_config*.json`
   becomes a compositor of its own, and two of them overwrite each other; ledcontroller loads all animations once, at
   its start (PLAN.md "Light ring as a Home Assistant light", where our own set is described).
+- How layers mix (disassembly of `ledcontroller`, donut and biscuit the same code, 2026-10-21, issue #57): per LED,
+  the active animations' frames top layer first (composer 0x19758 on donut); each pixel weighs what is left of 1
+  after the ones above, and takes its own brightest channel / 255 off what is left; channels are summed and
+  truncated. Black weighs nothing (transparent); a dark pixel covers almost nothing (`000001` over red leaves
+  254/255 of it). The HAL (`libacehal_led.so` `scaleDutyCycle`) then multiplies each channel by its brightness
+  table's `pwm` (< 1 at every level on both models, from `led_mute_ring_config.json`) and truncates: a channel of 1
+  never reaches the driver. 3-digit pixels are nibble-doubled (`001` = `000011`).
+- The layer config (parser 0x1b144): `numberOfLayers` is any int; each key "0".."N-1" must be an array of strings,
+  else the whole file fails and that compositor knows no animation. The number only orders the layers; within one,
+  the lowest index of the active ones shows. The joined name looked up before composing is "<lower>-<higher>-...",
+  once per change of the active set, not per frame. `ledctrl` takes repeated `-s`/`-u` in one run (getopt loop, one
+  Binder call each, in order) and starts with the flag that lets the layers below show; there is no call for several
+  patterns at once, nor for a raw frame or per-LED colours (ILedController codes 1-12).
 - ~~Does `ledcontroller` still follow `com.doppler.lasp beam_index` (published by `mixer`) when PuffinApp is down?~~
   Yes, but only for `active-start` and `active-end`, and only while that is the one active animation (issue #22,
   biscuit 2026-10-11; the chain and the measurement are in PLAN.md under "LED ring states"). The `ca-active-*`

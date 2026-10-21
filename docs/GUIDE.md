@@ -255,6 +255,34 @@ Beyond the README's two figures:
   since the ring only plays animations made beforehand: the Echo makes them at its first start with this version and
   restarts the ring for that (a second without light). Not on an Echo where they could not be written: then there is
   no light in Home Assistant.
+- **Fill**: "Light ring fill" (0 to 100 %) lights only that share of the ring, in the light's colour; the rest stays
+  dark. It fills the way the volume does, LED by LED; "Light ring rotation" (a configuration entity, and on the
+  settings page under Lights) turns where it starts by that many LEDs, for how the Echo stands. Rounded up: 1 %
+  lights one LED, and the whole ring shows only at 100 %. A part of the ring is a still colour: the effects (pulse,
+  spin, blink, rainbow) are for the whole ring, and a flash blinks it whole. The fill stays as set while the light is
+  off, as its colour does; after a restart of the Echo it is 100 % again. Set it from an automation, e.g. a washing
+  machine's progress:
+
+  ```yaml
+  - action: number.set_value
+    target:
+      entity_id: number.kitchen_echo_light_ring_fill
+    data:
+      value: "{{ states('sensor.washing_machine_progress') | int(0) }}"
+  ```
+- **LED by LED**: the action `esphome.<node>_light_ring_leds` (`<node>` the name the Echo was first given, e.g.
+  `echo_dot_3_5695c4`, whatever it is called in Home Assistant) gives each LED a colour of its own, in the order the
+  fill goes (from where it starts, so the rotation counts): `#rrggbb` each, `""` for a dark one, up to 12. The
+  light is on with them, at its brightness, each colour the nearest of the set; "Light ring fill" does not count
+  meanwhile. A colour or an effect for the light makes it one colour again.
+- Fill and LED by LED need each LED's own animations, 10 MB of the Echo's system partition. Where it has no room for
+  them, the Echo installs the ring without them: the light works, and Home Assistant has no fill, rotation or action.
+
+  ```yaml
+  - action: esphome.echo_dot_3_5695c4_light_ring_leds
+    data:
+      colors: ["#ff0000", "#ff0000", "", "#00ff00"]
+  ```
 - **Your own designs** (settings page, Lights): draw animations for the ring and pick, for each of the Echo's own
   (listening, its end, thinking, speaking, not understood, timers, volume, microphones off and on, do not disturb,
   identify, Bluetooth pairing, the Drop In call states, setup, factory reset, page login), Amazon's or one of yours;

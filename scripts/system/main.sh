@@ -395,6 +395,8 @@ ota_watch() {
 # The set includes the designs the settings page applied (state/ring-applied, src/hassmic/ringdesign.c), and ota_watch
 # runs this again when it applies new ones.  One at a time (a satellite start and a request could meet).  LEDS says
 # what came of it: ok (installed, ledcontroller restarted), same (nothing to do) or failed (LEDWHY: why).
+# Each LED's own layer (the fill, issue #57) takes 9.7 MB of the partition: without room for it, the set without them
+# (HASSMIC_RING_LEDS=0), which counts as installed from then on; Home Assistant then has the light but no fill.
 # A binary in /data wins over the installed one: lets a new build be tried without a trip through TWRP.
 BIN=$D/hassmic; [ -x /data/local/hassmic/hassmic ] && BIN=/data/local/hassmic/hassmic
 LEDNEW=/data/local/hassmic/leds.new
@@ -415,15 +417,19 @@ leds() {
         sleep 1
     done
     echo "$$ $boot" > $LEDLOCK/pid
+    have=$(cat /system/etc/hassmic-leds.digest 2>/dev/null)
     want=$($BIN -G - 2>/dev/null) || want=
-    if [ -n "$want" ] && [ "$want" = "$(cat /system/etc/hassmic-leds.digest 2>/dev/null)" ]; then LEDS=same; rm -rf $LEDLOCK; return 0; fi  # 0.1 s, not 0.7
-    rm -rf $LEDNEW; mkdir -p $LEDNEW
-    if ! out=$($BIN -G $LEDNEW 2>&1); then LEDWHY="no animations of ours"; echo "light ring: no animations of ours ($out)"
-    else
-        echo "light ring: installing ours (${out#ring: })"
-        if out=$(sh $D/sysinstall.sh leds $D $LEDNEW 2>&1); then echo "$out"; stop ledcontroller; start ledcontroller; LEDS=ok
-        else echo "$out"; LEDWHY=$(echo "$out" | head -n 1); LEDWHY=${LEDWHY#sysinstall leds: }; fi
-    fi
+    [ -n "$want" ] && [ "$want" != "$have" ] && [ -n "$have" ] && [ "$(HASSMIC_RING_LEDS=0 $BIN -G - 2>/dev/null)" = "$have" ] && want=$have
+    if [ -n "$want" ] && [ "$want" = "$have" ]; then LEDS=same; rm -rf $LEDLOCK; return 0; fi  # 0.1 s, not 0.7
+    for own in 1 0; do
+        rm -rf $LEDNEW; mkdir -p $LEDNEW
+        if ! out=$(HASSMIC_RING_LEDS=$own $BIN -G $LEDNEW 2>&1); then LEDWHY="no animations of ours"; echo "light ring: no animations of ours ($out)"; break; fi
+        small=; [ $own = 1 ] || small=", without the LEDs' own"
+        echo "light ring: installing ours (${out#ring: })$small"
+        if out=$(sh $D/sysinstall.sh leds $D $LEDNEW 2>&1); then echo "$out"; stop ledcontroller; start ledcontroller; LEDS=ok LEDWHY=; break; fi
+        echo "$out"; LEDWHY=$(echo "$out" | head -n 1); LEDWHY=${LEDWHY#sysinstall leds: }
+        case "$out" in *"has room for"*) ;; *) break;; esac     # no room: again without the LEDs' own
+    done
     rm -rf $LEDNEW $LEDLOCK
 }
 

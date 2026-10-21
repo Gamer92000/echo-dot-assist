@@ -210,12 +210,12 @@ async def main():
               and anim("hassmic_assist_05").startswith("2000:00FF00,00FF00,00FF00,"), f"volume: stock's step with the design's colours, as bright as stock's ({anim('hassmic_s_volume_05').splitlines()[0]})")
         check(g == "38", f"gamma: 128 as seen is 0x38 on the driver ({g})")
         conf = json.load(open(os.path.join(lr, "layer_config_common.json")))["Layers"]
-        l4 = conf["4"]
+        l4 = conf["16"]                 # stock's 4: stock's layers moved up by the 12 of the LEDs' own (ring.c relayer)
         check(l4[:36] == [f"hassmic_{k}_{i}" for k in ("listen", "hold", "end") for i in range(12)]
               and l4[36:60] == [f"hassmic_s_{k}_{i}" for k in ("listen", "hold") for i in range(12)] and l4[60:72] == [f"hassmic_s_end_{i}" for i in range(12)]
               and l4[72:] == ["active-end", "active-start", "anim_start_error_short", "hassmic_s_think", "active-thinking", "active-talking"],
               "layer 4: the turned rings first, the designs' turned ones after them, thinking's just before stock's")
-        check(conf["5"] == ["hassmic_s_volume_05", "hassmic_assist_05", "volume_step-05"], f"layer 5: the volume steps before stock's ({conf['5']})")
+        check(conf["17"] == ["hassmic_s_volume_05", "hassmic_assist_05", "volume_step-05"], f"layer 5: the volume steps before stock's ({conf['17']})")
 
         # what plays: the wake word, the ring turned by the beam; the talker moves; thinking; the end turned
         async def nothing(*a): pass
@@ -245,7 +245,7 @@ async def main():
         check(open(os.path.join(state, "ring-applied")).read() == applied0, "the applied designs back to what is installed")
         root["fail"] = None
         b.call("POST", "/api/ring/apply")
-        check(await until(lambda: st()["state"] == "applied", 8) and "hassmic_s_think" not in json.load(open(os.path.join(lr, "layer_config_common.json")))["Layers"]["4"]
+        check(await until(lambda: st()["state"] == "applied", 8) and "hassmic_s_think" not in json.load(open(os.path.join(lr, "layer_config_common.json")))["Layers"]["16"]
               and not os.path.exists(os.path.join(lr, "hassmic_s_think.animation")), "again: thinking is stock's, its file gone")
 
         # too big for the system partition: refused before root is asked

@@ -2,6 +2,15 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-21
+
+- **Light only part of the ring, or each LED in a colour of its own** (issue #57). Home Assistant's "Light ring fill"
+  (0 to 100 %) lights that share of the ring in the light's colour, for a timer's or a washing machine's progress or
+  a battery level; it fills the way the volume does. "Light ring rotation" (Home Assistant's configuration, or the
+  settings page under Lights) turns where it starts, LED by LED. The action "light_ring_leds" gives each LED a colour
+  of its own. The effects (pulse, spin, blink, rainbow) stay for the whole ring. The Echo installs its ring animations
+  once more at the first start with this version (a second without light). Thanks to abercrombie1892 for the idea.
+
 ## 2026-10-19
 
 - **No more "Ja." when you pause after the wake word.** Since the Echo sends what you say right after the wake word,

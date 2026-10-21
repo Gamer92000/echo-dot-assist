@@ -33,21 +33,26 @@ static int timeout = LEDQ_TIMEOUT_MS, started;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t more = PTHREAD_COND_INITIALIZER, done = PTHREAD_COND_INITIALIZER;
 
-static const char *text(const struct call *c, char *buf, size_t n)
+/* the arguments of NC calls, space-separated, as far as they fit */
+static const char *text(const struct call *c, int nc, char *buf, size_t n)
 {
     size_t l = 0; buf[0] = 0;
-    for (int i = 0; i < c->n && l < n; i++) l += (size_t)snprintf(buf + l, n - l, "%s%s", i ? " " : "", c->arg[i]);
+    for (int k = 0; k < nc; k++)
+        for (int i = 0; i < c[k].n && l < n; i++) l += (size_t)snprintf(buf + l, n - l, "%s%s", l ? " " : "", c[k].arg[i]);
     return buf;
 }
 
-static void exec_one(const char *bin, void (*fn)(void), int ms, const struct call *c)
+static int pattern(const struct call *c) { return c->n == 2 && (!strcmp(c->arg[0], "-s") || !strcmp(c->arg[0], "-u")); }
+
+/* 1: still running after MS, killed */
+static int exec_one(const char *bin, void (*fn)(void), int ms, const struct call *c, int nc)
 {
     int p[2]; char what[200];
-    if (pipe2(p, O_CLOEXEC)) { fprintf(stderr, "light ring: no pipe for ledctrl (%s), %s dropped\n", strerror(errno), text(c, what, sizeof what)); return; }
+    if (pipe2(p, O_CLOEXEC)) { fprintf(stderr, "light ring: no pipe for ledctrl (%s), %s dropped\n", strerror(errno), text(c, nc, what, sizeof what)); return 0; }
     pid_t pid = fork();
     if (pid == 0) {                     /* only async-signal-safe calls from here: we are a copy of a threaded process */
-        char *argv[LEDQ_ARGS + 2] = { (char *)bin };
-        for (int i = 0; i < c->n; i++) argv[i + 1] = (char *)c->arg[i];
+        char *argv[LEDQ_BATCH * LEDQ_ARGS + 2] = { (char *)bin }; int a = 1;
+        for (int k = 0; k < nc; k++) for (int i = 0; i < c[k].n; i++) argv[a++] = (char *)c[k].arg[i];
         setpgid(0, 0);                  /* a group of its own: the kill below reaches what it started, nothing else */
         if (fn) fn();
         int nul = open("/dev/null", O_WRONLY | O_CLOEXEC);  /* its chat (two log lines per call) not in the log; */
@@ -57,7 +62,7 @@ static void exec_one(const char *bin, void (*fn)(void), int ms, const struct cal
         _exit(127);
     }
     close(p[1]);
-    if (pid < 0) { fprintf(stderr, "light ring: no process for ledctrl (%s), %s dropped\n", strerror(errno), text(c, what, sizeof what)); close(p[0]); return; }
+    if (pid < 0) { fprintf(stderr, "light ring: no process for ledctrl (%s), %s dropped\n", strerror(errno), text(c, nc, what, sizeof what)); close(p[0]); return 0; }
     struct pollfd fd = { .fd = p[0], .events = POLLIN };
     struct timespec t0, t; clock_gettime(CLOCK_MONOTONIC, &t0);
     int r, left = ms;
@@ -71,22 +76,28 @@ static void exec_one(const char *bin, void (*fn)(void), int ms, const struct cal
      * ledctrl itself already reaped (SIGCHLD ignored) */
     if (r == 0) {
         kill(-pid, SIGKILL);
-        fprintf(stderr, "light ring: ledctrl %s still running after %d ms, killed\n", text(c, what, sizeof what), ms);
+        fprintf(stderr, "light ring: ledctrl %s still running after %d ms, killed\n", text(c, nc, what, sizeof what), ms);
     }
     close(p[0]);
+    return r == 0;
 }
 
 static void *thread(void *arg)
 {
     (void)arg;
     for (;;) {
-        struct call c; char bin[sizeof path]; void (*fn)(void); int ms;
+        struct call c[LEDQ_BATCH]; char bin[sizeof path]; void (*fn)(void); int ms, nc = 0;
         pthread_mutex_lock(&lock);
         while (!len) pthread_cond_wait(&more, &lock);
-        c = q[head]; head = (head + 1) % LEDQ_MAX; len--; running = 1;
+        do { c[nc++] = q[head]; head = (head + 1) % LEDQ_MAX; len--; }
+        while (len && nc < LEDQ_BATCH && pattern(&c[0]) && pattern(&q[head]));
+        running = 1;
         memcpy(bin, path, sizeof bin); fn = child_fn; ms = timeout;
         pthread_mutex_unlock(&lock);
-        if (bin[0]) exec_one(bin, fn, ms, &c);
+        /* A batch killed took the calls after the one that hung with it: its unsets again, each alone (an unset lost
+         * leaves a pattern on for good; a set lost only misses one animation) */
+        if (bin[0] && exec_one(bin, fn, ms, c, nc) && nc > 1)
+            for (int k = 0; k < nc; k++) if (!strcmp(c[k].arg[0], "-u")) exec_one(bin, fn, ms, &c[k], 1);
         pthread_mutex_lock(&lock);
         running = 0;
         if (!len) pthread_cond_broadcast(&done);
@@ -122,7 +133,7 @@ void ledq_args(int n, const char *const args[])
     pthread_mutex_lock(&lock);
     if (fake[0]) {                      /* at once, in the caller: the PC tests read the file right after an action */
         FILE *f = fopen(fake, "a");
-        if (f) { fprintf(f, "%s\n", text(&c, what, sizeof what)); fclose(f); }
+        if (f) { fprintf(f, "%s\n", text(&c, 1, what, sizeof what)); fclose(f); }
         pthread_mutex_unlock(&lock);
         return;
     }
@@ -131,11 +142,11 @@ void ledq_args(int n, const char *const args[])
         int i = 0;
         while (i < len && strcmp(q[(head + i) % LEDQ_MAX].arg[0], "-s")) i++;
         if (i == len) {
-            fprintf(stderr, "light ring: ledctrl falls behind, %s dropped\n", text(&c, what, sizeof what));
+            fprintf(stderr, "light ring: ledctrl falls behind, %s dropped\n", text(&c, 1, what, sizeof what));
             pthread_mutex_unlock(&lock);
             return;
         }
-        fprintf(stderr, "light ring: ledctrl falls behind, %s dropped\n", text(&q[(head + i) % LEDQ_MAX], what, sizeof what));
+        fprintf(stderr, "light ring: ledctrl falls behind, %s dropped\n", text(&q[(head + i) % LEDQ_MAX], 1, what, sizeof what));
         for (; i + 1 < len; i++) q[(head + i) % LEDQ_MAX] = q[(head + i + 1) % LEDQ_MAX];
         len--;
     }

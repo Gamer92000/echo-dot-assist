@@ -2,9 +2,9 @@
 """The light ring (ring.c, issue #26) against build/hassmic-host, as Home Assistant: the animation set hassmic -G makes
 from stock's files (stand-ins written here: no Amazon file), the light entity it offers once that set is installed,
 what goes to ledctrl (HASSMIC_FAKE_LED), the Echo's own patterns before the light, and the listening ring turned by
-the beam (HASSMIC_FAKE_BEAM) and turned again when the talker moves."""
+the beam (HASSMIC_FAKE_BEAM) and turned again when the talker moves; the light's fill on a layer per LED and its rotation (issue #57)."""
 import asyncio, json, os, re, shutil, signal, struct, subprocess, sys, tempfile, time
-from aioesphomeapi import APIClient, LightInfo, LightState, VoiceAssistantEventType as Ev
+from aioesphomeapi import APIClient, LightInfo, LightState, NumberInfo, NumberState, VoiceAssistantEventType as Ev
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOST = f"{ROOT}/build/hassmic-host"
@@ -58,12 +58,19 @@ async def main():
     out = os.path.join(tmp, "out"); os.makedirs(out)
     r = subprocess.run([HOST, "-G", out], env=env, capture_output=True, text=True)
     names = sorted(os.listdir(out))
-    conf = json.load(open(os.path.join(out, "layer_config_common.json")))["Layers"]
-    check(r.returncode == 0 and len(names) == 36 + 588 + 3 + 1 + 2, f"-G: the set ({len(names)} files): {r.stderr.strip()}")
-    check(conf["4"][:3] == ["hassmic_listen_0", "hassmic_listen_1", "hassmic_listen_2"] and conf["4"][36:] == ["active-end", "active-start", "anim_start_error_short"]
-          and conf["0"][0] == "zzz_rainbow" and conf["0"][-1] == "hassmic_rainbow_2" and len(conf["0"]) == 1 + 591
-          and conf["5"] == ["hassmic_assist_05", "volume_step-05"],
-          "stock's layer config with ours added: the turned rings first in layer 4, the light last in layer 0, the Assistant's volume step before stock's")
+    whole = json.load(open(os.path.join(out, "layer_config_common.json")))
+    conf = whole["Layers"]
+    colours = [f"{h:02d}{s}{l}" for h in range(24) for s in "fs" for l in range(3)] + [f"w{l}" for l in range(3)]
+    check(r.returncode == 0 and len(names) == 36 + 588 + 3 + 12 * 147 + 1 + 2, f"-G: the set ({len(names)} files): {r.stderr.strip()}")
+    check(whole["numberOfLayers"] == 18 and sorted(conf, key=int) == [str(i) for i in range(18)]
+          and conf["16"][:3] == ["hassmic_listen_0", "hassmic_listen_1", "hassmic_listen_2"] and conf["16"][36:] == ["active-end", "active-start", "anim_start_error_short"]
+          and conf["12"][0] == "zzz_rainbow" and conf["12"][-1] == "hassmic_rainbow_2" and len(conf["12"]) == 1 + 591
+          and conf["17"] == ["hassmic_assist_05", "volume_step-05"] and conf["13"] == ["mics-off_on"]
+          and all(sorted(conf[str(l)]) == sorted(f"hassmic_led_{l}_{c}" for c in colours) for l in range(12)),
+          "stock's layer config with ours added, its layers moved up by 12: the turned rings first in layer 4, the light last in layer 0, "
+          "the Assistant's volume step before stock's; under them a layer per LED with its 147 colours")
+    check(open(os.path.join(out, "hassmic_led_3_00f0.animation")).read() == "loop\n1000:" + ",".join("FF0000" if i == 3 else "000000" for i in range(12)) + "\n",
+          "a LED's own: red on LED 3, the others black")
     check(open(os.path.join(out, "hassmic_assist_05.animation")).read()
           == "2000:" + ",".join(["00FFFF"] * 3 + ["000000"] * 9) + "\nloop\n1000:" + ",".join(["000000"] * 12) + "\n",
           "the Assistant's volume step: stock's, its lit LEDs in cyan at their brightness")
@@ -119,7 +126,7 @@ async def main():
     proc = start()
     try:
         c = await connect()
-        ents, _ = await c.list_entities_services()
+        ents, services = await c.list_entities_services()
         li = next((e for e in ents if isinstance(e, LightInfo)), None)
         check(li is not None and li.object_id == "light_ring" and list(li.effects) == ["None", "Pulse", "Spin", "Blink", "Rainbow"]
               and list(li.supported_color_modes) == [35], f"installed: the light, RGB with effects: {li}")
@@ -194,16 +201,90 @@ async def main():
         check(log() == [["-u", "hassmic_rainbow_2"]] and st().state is False, f"off: off the ring ({log()})")
         c.light_command(li.key, state=True)
         await until(lambda: ["-s", "hassmic_rainbow_2"] in log() and st().effect == "Rainbow")     # ledctrl and HA's state: either first
+
+        # The fill: each LED's own pattern for a part of the ring, the whole ring's at 100 %; every new one on before an
+        # old one goes.  The light is pale blue at the dimmest level (16s2) under the rainbow effect
+        nums = {e.object_id: e for e in ents if isinstance(e, NumberInfo)}
+        fill, rot = nums.get("light_ring_fill"), nums.get("light_ring_rotation")
+        check(fill and rot and (fill.min_value, fill.max_value, fill.unit_of_measurement) == (0, 100, "%")
+              and (rot.max_value, rot.entity_category) == (11, 1), f"the fill (%) and the rotation (0-11, a config entity): {fill} {rot}")
+        num = lambda e: ([s.state for s in states if isinstance(s, NumberState) and s.key == e.key] or [None])[-1]
+        await until(lambda: num(fill) == 100 and num(rot) == 0)
+        check(num(fill) == 100 and num(rot) == 0, f"at the start: all of it, from stock's start ({num(fill)}, {num(rot)})")
+        led = lambda op, *ids: [[op, f"hassmic_led_{i}_16s2"] for i in ids]
+        open(leds, "w").close()
+        c.number_command(fill.key, 50)
+        await until(lambda: len(log()) == 7 and num(fill) == 50)
+        check(log() == led("-s", 0, 1, 2, 3, 4, 11) + [["-u", "hassmic_rainbow_2"]] and num(fill) == 50,
+              f"50 %: six LEDs from where the volume starts (11), then the whole ring off ({log()})")
+        open(leds, "w").close()
+        c.number_command(rot.key, 3)
+        await until(lambda: len(log()) == 6 and num(rot) == 3)
+        check(log() == led("-s", 5, 6, 7) + led("-u", 0, 1, 11) and num(rot) == 3, f"turned by 3: LEDs 2 to 7, the new ones first ({log()})")
+        check("ring_rotation=3" in open(os.path.join(state, "config")).read().split(), "the rotation saved in state/config")
+        open(leds, "w").close()
+        c.number_command(fill.key, 1)
+        await until(lambda: len(log()) == 5)
+        check(log() == led("-u", 3, 4, 5, 6, 7), f"1 %: one LED, rounded up ({log()})")
+        open(leds, "w").close()
+        c.number_command(fill.key, 0)
+        await until(lambda: log() and num(fill) == 0)
+        check(log() == led("-u", 2) and st().state, f"0 %: off the ring, still on in Home Assistant ({log()})")
+        open(leds, "w").close()
+        c.number_command(fill.key, 100)
+        await until(lambda: log() and num(fill) == 100)
+        check(log() == [["-s", "hassmic_rainbow_2"]], f"100 %: the whole ring, with its effect ({log()})")
+        open(leds, "w").close()
+        c.number_command(fill.key, 25)
+        await until(lambda: len(log()) == 4)
+        check(log() == led("-s", 2, 3, 4) + [["-u", "hassmic_rainbow_2"]], f"25 %: three LEDs ({log()})")
+
+        # LED by LED (the action): from the fill's start (LED 2 with the rotation 3), at the light's level; dark ones off
+        svc = next((v for v in services if v.name == "light_ring_leds"), None)
+        check(svc is not None and [(a.name, int(a.type)) for a in svc.args] == [("colors", 7)], f"the action: colors, a string array ({svc})")
+        open(leds, "w").close()
+        await c.execute_service(svc, {"colors": ["#ff0000", "", "0000FF", "nonsense"]})
+        await until(lambda: len(log()) == 5)
+        check(log() == [["-s", "hassmic_led_2_00f2"], ["-s", "hassmic_led_4_16f2"]] + led("-u", 2, 3, 4),
+              f"red on LED 2, LED 3 dark, blue on LED 4, nonsense dark ({log()})")
+        open(leds, "w").close()
+        c.light_command(li.key, rgb=(0.6, 0.6, 1.0))
+        await until(lambda: len(log()) == 5)
+        check(log() == led("-s", 2, 3, 4) + [["-u", "hassmic_led_2_00f2"], ["-u", "hassmic_led_4_16f2"]],
+              f"a colour from Home Assistant: one colour again, the fill's ({log()})")
         await c.disconnect()
     finally:
         proc.terminate(); proc.wait()
 
     # A restart with the light on: ledcontroller still plays it, so the new hassmic takes it off
-    with open(os.path.join(state, "ring-light")) as f: left = f.read().strip()
+    with open(os.path.join(state, "ring-light")) as f: left = f.read().split()
     proc = start()
     try:
-        await until(lambda: ["-u", left] in log())
-        check(left == "hassmic_rainbow_2" and ["-u", left] in log(), f"restart: the light left on the ring taken off ({left})")
+        await until(lambda: all(["-u", n] in log() for n in left))
+        check(left == ["hassmic_led_2_16s2", "hassmic_led_3_16s2", "hassmic_led_4_16s2"] and all(["-u", n] in log() for n in left),
+              f"restart: the fill left on the ring taken off ({left})")
+    finally:
+        proc.terminate(); proc.wait()
+    # No room for the LEDs' own layers (root's leds() then makes the set with HASSMIC_RING_LEDS=0): stock's 6 layers, the
+    # light in Home Assistant, no fill, rotation or LED by LED
+    small = os.path.join(tmp, "small"); os.makedirs(small)
+    r = subprocess.run([HOST, "-G", small], env=dict(env, HASSMIC_RING_LEDS="0"), capture_output=True, text=True)
+    sconf = json.load(open(os.path.join(small, "layer_config_common.json")))
+    check(r.returncode == 0 and len(os.listdir(small)) == 36 + 588 + 3 + 1 + 2 and sconf["numberOfLayers"] == 6
+          and sconf["Layers"]["0"][-1] == "hassmic_rainbow_2", f"-G without the LEDs' own: stock's 6 layers, the light's set ({r.stderr.strip()})")
+    d = os.path.join(etc, "led-resources")
+    for n in os.listdir(d):
+        if n.startswith("hassmic_"): os.unlink(os.path.join(d, n))
+    for n in os.listdir(small):
+        if n != "digest": shutil.copy(os.path.join(small, n), os.path.join(d, n))
+    shutil.copy(os.path.join(small, "digest"), os.path.join(etc, "hassmic-leds.digest"))
+    proc = start()
+    try:
+        c = await connect()
+        ents, services = await c.list_entities_services()
+        check([e for e in ents if isinstance(e, LightInfo)] and not [e for e in ents if isinstance(e, NumberInfo) and e.object_id.startswith("light_ring_")]
+              and not [v for v in services if v.name == "light_ring_leds"], "the set without them taken as ours: the light, no fill, rotation or action")
+        await c.disconnect()
     finally:
         proc.terminate(); proc.wait()
     shutil.rmtree(tmp)

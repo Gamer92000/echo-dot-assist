@@ -13,6 +13,7 @@
 #include "update.h"
 #include "wifimotion.h"
 #include "statefile.h"
+#include "ring.h"
 #include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
@@ -53,7 +54,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, WIFI_MOTION,
+enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET, NSET };
@@ -78,6 +79,8 @@ static const struct setting table[NSET] = {
     [BT_LANG]     = { "bluetooth_announcement_language", "Announcement language", "Bluetooth", NULL, S_CHOICE, 0, 0, 1, 0 },
     [LED_AUTO]    = { "led_auto_brightness", "LED auto brightness", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
     [LED_LEVEL]   = { "led_brightness", "LED brightness", "Lights", "%", S_INT, 0, 100, 1, 0 },
+    /* ring.c keeps it: where the light's fill starts.  Not exported: it is for how this Echo stands */
+    [RING_ROT]    = { "ring_rotation", "Light ring rotation", "Lights", "LEDs", S_INT, 0, 23, 0, 0 },   /* settings_max() */
     [ARB]         = { "arbitration", "Wake word arbitration with other Echos", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* arb.c keeps them in memory, state/config on disk: lockdown.sh admits Kiosk Satellite's port by it */
     [ARB_MODE]    = { "arbitration_mode", "Arbitration mode", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
@@ -162,8 +165,11 @@ const struct setting *settings_find(const char *name)
     return NULL;
 }
 
-/* the speaker gain's top is the control's: +12 dB on an Echo Dot 2, +2 on an Echo Dot 3 */
-int settings_max(const struct setting *s) { return s - table == SPK_GAIN ? spkgain_max() : s->max; }
+/* the speaker gain's top is the control's: +12 dB on an Echo Dot 2, +2 on an Echo Dot 3; the rotation's, the ring's last LED */
+int settings_max(const struct setting *s)
+{
+    return s - table == SPK_GAIN ? spkgain_max() : s - table == RING_ROT ? ring_leds() - 1 : s->max;
+}
 
 int settings_choices(const struct setting *s, const char *const **names)
 {
@@ -196,6 +202,7 @@ int settings_get(const struct setting *s)
     case BT_LANG: return bt_lang;
     case LED_AUTO: return core_led_auto(-1);
     case LED_LEVEL: return core_led_brightness(-1);
+    case RING_ROT: return ring_rotation(-1);
     case SOUND: return core_sound(-1);
     case WIFI_MOTION: return wifimotion_enable(-1);
     case WIFI_SENS: return wifimotion_sensitivity(-1);
@@ -245,6 +252,7 @@ static void put(enum id i, int v)
     case BT_LANG: bt_lang = v; break;
     case LED_AUTO: core_led_auto(v); break;
     case LED_LEVEL: core_led_brightness(v); break;              /* a level of its own: auto off, or it moves */
+    case RING_ROT: ring_rotation(v); break;
     case SOUND: core_sound(v); break;
     case WIFI_MOTION: wifimotion_enable(v); break;
     case WIFI_SENS: wifimotion_sensitivity(v); break;

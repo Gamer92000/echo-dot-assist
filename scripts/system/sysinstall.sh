@@ -82,8 +82,8 @@ commit() {
 
 if [ "$MODE" = leds ]; then
     [ -f $LSTOCK ] || new $LSTOCK $LR/layer_config_common.json 644 0:0 $SYSLABEL       # stock's, before ours replaces it
-    # Ours are files of their own, ~600 of them: in bulk, as one at a time takes minutes, and over the old ones.  The
-    # digest goes first: a copy cut half way leaves old and new files mixed, and without a digest the next start
+    # Ours are files of their own, ~2400 of them (most are the LEDs' own, issue #57): in bulk, as one at a time takes
+    # minutes, and over the old ones.  The digest goes first: a copy cut half way leaves old and new files mixed, and without a digest the next start
     # writes the whole set again (with the old one it would take the set for installed)
     rm -f /system/etc/hassmic-leds.digest; sync
     cp "$L"/hassmic_*.animation $LR/ && chmod 644 $LR/hassmic_*.animation && chcon $SYSLABEL $LR/hassmic_*.animation ||
