@@ -600,6 +600,11 @@ static long long wake_cut_ms;    /* when the wake word last cut a reply or an al
 static long long last_wake_ms;   /* Amazon's models know "stop" only in the ~2 s after the wake word (op.cfg.json: awake state) */
 static int quiet_abort;
 static int run_wake;             /* under lock: the wake word started this run (ours or Home Assistant's), not the button or a follow-up */
+/* Lock held.  heard_ms: when the engine last reported the wake word (on_wake; SIGUSR1 on the PC), stop_ms its last
+ * "stop": a "stop" after heard_ms is that wake word's.  stop_cut: that "stop" ended what its wake word had cut (a
+ * ring, a call, a reply, a THINKING run).  stop_ends: setting stop_ends_listening (stop_word) */
+static long long heard_ms, stop_ms;
+static int stop_cut, stop_ends;
 
 static atomic_int afe_asked;                        /* the front end was asked for the wake word's energies (afe_score) */
 
@@ -675,6 +680,8 @@ void core_remote_wake(void)
 }
 
 int core_wake_sound(int set) { if (set >= 0) use_earcon = set; return use_earcon; }
+
+int core_stop_ends_listening(int set) { if (set >= 0) stop_ends = set != 0; return stop_ends; }
 
 int core_bt_announce(int set) { if (set >= 0) use_bt_announce = set; return use_bt_announce; }
 
@@ -965,6 +972,29 @@ void core_no_speech(void)
     if (state != SPEAKING) core_pipeline_finish();
 }
 
+/* Lock held.  Ends the run without anything of it carried out, as the action button does: Home Assistant aborts it
+ * (VoiceAssistantRequest start=false alone, its _abort_pipeline), proto_esphome.c drops what it still reports of it
+ * until the next run's RUN_START, and its complaint about that is not shown (quiet_abort).  Needs proto->cancel */
+static void quiet_cancel(void)
+{
+    barge_in = 0;
+    atomic_store(&streaming, 0);
+    proto->cancel();
+    core_pipeline_finish();
+    quiet_abort = 1;
+}
+
+/* Lock held.  The wake word just heard has had its "stop".  4 s: the engine reports "stop" only in the ~2 s after the
+ * wake word, and a round adds at most 1 s */
+static int stop_heard(void) { return heard_ms && stop_ms >= heard_ms && stop_ms - heard_ms < 4000; }
+
+/* Lock held.  That wake word starts nothing (trigger: its "stop" came during the arbitration round, before any run).
+ * What stop_word's "pipeline dropped" does to a run that started: a "stop" that ended what the wake word cut drops
+ * that wake word's run, started or not.  Without this a ring stopped during the round was followed by a run that
+ * listened, with the "stop" in its replayed audio (the round's window is up to 1 s, all of it when the other Echos
+ * did not hear the wake word).  With stop_ends_listening any "stop" does */
+static int stopped_now(void) { return stop_heard() && (stop_cut || stop_ends); }
+
 /* touch: the action button rather than the wake word.  from: where the wake word ended on the ring's clock (0: unknown) */
 static void trigger(int touch, uint64_t from)
 {
@@ -978,25 +1008,31 @@ static void trigger(int touch, uint64_t from)
     } else if ((state == THINKING || (touch && state == LISTENING)) && connected && proto->cancel) {
         /* As the center button of a Voice PE: a misheard command is stopped before its tool calls run, not only its
          * reply.  Same message as ESPHome's voice_assistant.stop; Home Assistant cancels the run's task (the LLM, and
-         * the tool calls it has not made yet).  The wake word does the same and then listens again, as during a reply */
+         * the tool calls it has not made yet).  The wake word does the same and then listens again, as during a reply,
+         * unless its "stop" came already (during the round) */
         fprintf(stderr, "%s: pipeline cancelled\n", touch ? "button" : "wake word");
-        barge_in = 0;
-        atomic_store(&streaming, 0);
-        proto->cancel();
-        core_pipeline_finish();
-        quiet_abort = 1;
-        if (!touch && state == IDLE && satellite_running && !core_muted()) {
+        quiet_cancel();
+        if (!touch && stopped_now()) fprintf(stderr, "stop: came during the round, nothing started\n");
+        else if (!touch && state == IDLE && satellite_running && !core_muted()) {
             wake_cut_ms = mono_ms();
             sound_request(SND_WAKE);
             pipeline_start(from);
         }
     } else if (!connected || !satellite_running || core_muted()) {
         /* nothing to talk to, or privacy latch on */
+    } else if (state == IDLE && !touch && stopped_now()) {
+        fprintf(stderr, "stop: came during the round, nothing started\n");
     } else if (state == IDLE) {
-        if (atomic_load(&alarm_on)) wake_cut_ms = mono_ms();    /* its "stop" drops this pipeline again */
+        if (atomic_load(&alarm_on) || dropin_was != DROPIN_IDLE) wake_cut_ms = mono_ms();     /* its "stop" drops this pipeline again */
         if (touch) wake_phrase[0] = 0;                          /* the button: the first wake word's assistant */
         sound_request(touch ? SND_TOUCH : SND_WAKE);
         pipeline_start(touch ? 0 : from);
+    } else if (state == SPEAKING && !touch && stopped_now()) {
+        /* its "stop" came during the round to a THINKING run whose reply began before the round ended: the reply is
+         * cut as stop_word would have cut it, and no run follows */
+        fprintf(stderr, "stop: came during the round, reply cut\n");
+        barge_in = 0;
+        atomic_store(&flush_playback, 1);
     } else if (state == SPEAKING && !atomic_load(&flush_playback)) {       /* not already being cut.  barge_in alone does not
                                                                              * say that: continue-conversation sets it too */
         fprintf(stderr, "barge-in\n");
@@ -1026,13 +1062,23 @@ static int music_stop(void)
  * Home Assistant, not for us.
  * Music (issue #51) is paused here rather than left to speech to text, which often misses the one short word over it
  * (three tries in a row on a Dot 2).  Its pipeline goes on, so "<wake word>, stop the timer" still reaches Home
- * Assistant; nothing said after it ends quietly (core_no_speech), and a bare "stop" is cancelled (core_transcript). */
+ * Assistant; nothing said after it ends quietly (core_no_speech), and a bare "stop" is cancelled (core_transcript).
+ * With stop_ends_listening (off by default) "<wake word>, stop" means "be quiet": after all of the above it also ends
+ * the run that is listening, quietly, as the button does (stop_heard: also one this wake word just opened out of
+ * silence), and keeps the round's winner from opening one (trigger).  An Echo that woke by mistake listens for up to
+ * 15 s (Home Assistant's VAD limit) and has whatever is said meanwhile carried out; this ends it at once.  The cost:
+ * "<wake word>, stop the timer" no longer reaches Home Assistant, and one Echo's log (7 days) had "stop" in 24 of 700
+ * wake words, 2 of them false in 354 requests it answered: such a command is lost and has to be said again.
+ * A "stop" during the arbitration round finds no run of its wake word yet: trigger opens none then when the "stop"
+ * ended something (stop_cut, stopped_now), as the drop above would, or with stop_ends_listening. */
 static void stop_word(void)
 {
     int ended = 0;
     if (dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE) { dropin_hangup("stop"); ended = 1; }   /* and the pipeline its wake word opened */
     pthread_mutex_lock(&core_lock);
+    stop_ms = mono_ms();
     if (atomic_load(&alarm_on)) { core_alarm_stop("stop"); ended = 1; }     /* and the pipeline its wake word opened, below */
+    stop_cut = ended || state == SPEAKING || state == THINKING;               /* THINKING: the round's winner cancels it (trigger) */
     if (state == SPEAKING) {
         fprintf(stderr, "stop: reply cut\n");
         barge_in = 0;
@@ -1040,11 +1086,25 @@ static void stop_word(void)
         atomic_store(&flush_playback, 1);
     } else if (state == LISTENING && mono_ms() - wake_cut_ms < 4000) {
         fprintf(stderr, "stop: pipeline dropped\n");
+        stop_cut = 1;                       /* a wake word whose round still runs (heard while this listened) opens none */
         atomic_fetch_and(&sounds_pending, ~(1 << SND_WAKE | 1 << SND_TOUCH));
-        barge_in = 0;
-        core_pipeline_finish();
-        quiet_abort = 1;
-    } else if (!ended && atomic_load(&music_on) && music_stop()) fprintf(stderr, "stop: music paused, the pipeline goes on\n");
+        /* Cancelled as the button does, not ended.  Ended (end of audio, then start=false), nothing here marked the
+         * run cancelled (after a THINKING cancel the new run's RUN_START clears the mark): Home Assistant's STT_START
+         * a moment later put the Echo back to LISTENING with the mic closed.  Once the "stop" it had been sent was
+         * carried out too (a media player elsewhere paused): the end of audio reaches Home Assistant before the abort,
+         * and its STT may finish on what it has.  Without the end of audio only the abort goes out.  Wyoming has
+         * no cancel: ended there, as before */
+        if (connected && proto->cancel) quiet_cancel();
+        else { barge_in = 0; core_pipeline_finish(); quiet_abort = 1; }
+    } else {
+        int quiet = state == LISTENING && stop_ends && stop_heard() && connected && proto->cancel;
+        if (!ended && atomic_load(&music_on) && music_stop()) fprintf(stderr, "stop: music paused%s\n", quiet ? "" : ", the pipeline goes on");
+        if (quiet) {                                            /* as the button: nothing of the run is carried out */
+            fprintf(stderr, "stop: listening ended\n");
+            atomic_fetch_and(&sounds_pending, ~(1 << SND_WAKE | 1 << SND_TOUCH));
+            quiet_cancel();
+        }
+    }
     pthread_mutex_unlock(&core_lock);
 }
 
@@ -1343,7 +1403,7 @@ static void on_wake(int slot, const char *keyword, uint64_t begin, uint64_t end)
     last_wake_ms = mono_ms();
     atomic_store(&wake_slot_heard, slot);
     { float db = 10 * log10f((ring_power(begin, end) + 1) / (32768.0f * 32768.0f));     /* the talker's level, for the gain */
-      pthread_mutex_lock(&core_lock); keyword_db = db; snprintf(wake_phrase, sizeof wake_phrase, "%s", wake_loaded[slot]); pthread_mutex_unlock(&core_lock); }
+      pthread_mutex_lock(&core_lock); keyword_db = db; heard_ms = last_wake_ms; snprintf(wake_phrase, sizeof wake_phrase, "%s", wake_loaded[slot]); pthread_mutex_unlock(&core_lock); }
     if (!arb_running()) { trigger(0, end); return; }
     pthread_mutex_lock(&core_lock); det_begin = begin; det_end = end; pthread_mutex_unlock(&core_lock);
     atomic_store(&det_pending, 1);                  /* the ring is the capture thread's */
@@ -2335,7 +2395,7 @@ static void *capture_thread(void *arg)
         if (atomic_exchange(&pair_pending, 0)) on_pair();          /* SIGWINCH: both volume keys held, for tests on the PC */
         { int t = atomic_exchange(&trigger_pending, 0);               /* 1: SIGUSR1 plays a wake word of the last 0.6 s that */
           uint64_t lag = CAP_RATE * 128 / 1000;                       /* ended 128 ms ago, as late as Pryon accepts one */
-          if (t == 1) { pthread_mutex_lock(&core_lock); wake_phrase[0] = 0; wake_told("detected"); pthread_mutex_unlock(&core_lock); }   /* the first one's */
+          if (t == 1) { pthread_mutex_lock(&core_lock); wake_phrase[0] = 0; heard_ms = mono_ms(); wake_told("detected"); pthread_mutex_unlock(&core_lock); }   /* the first one's */
           if (t == 3) wake_tell("near_miss");                         /* SIGTTOU: Pryon's near miss */
           if (t == 2) trigger(1, 0);
           else if (t == 1 && ring_n > CAP_RATE) wake_heard(ring_n - CAP_RATE * 6 / 10, ring_n - lag, 1);

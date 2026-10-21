@@ -2123,6 +2123,55 @@ Run in this order. Each step says what it proves.
       fake_ma_sendspin.py part `stop_music` (keyword over music: pause, pipeline open; "Stop." cancelled; button
       resumes; "stop the timer" to HA; "Stop!" without the keyword pauses).  Open (device): Pryon's "stop" over loud
       music on a Dot 2/3 (the issue says it hears it), A2DP with a phone.  Wyoming has no `core_transcript`.
+- [x] "<wake word>, stop" drops the run its wake word opened by cancelling it (2026-10-20).  `stop_word`'s
+      `stop: pipeline dropped` (a "stop" within 4 s of `wake_cut_ms`: the wake word cut a reply, a ring or a THINKING
+      run and listened anew) ended that run with `core_pipeline_finish`: end of audio, then start=false.  Nothing marked
+      the run cancelled (after a THINKING cancel `cancelled` is 2, and the new run's RUN_START clears it), so its events
+      kept coming: HA's STT_START a moment later set LISTENING with the mic closed.  Seen once on a device (a fork
+      build), the "stop" it had been sent was also carried out (a media player elsewhere paused): HA's
+      `handle_stop(False)` (`_stop_pipeline`, STT finishes on what it has) comes before `handle_stop(True)` (the abort).
+      Now `quiet_cancel` (also the button's and the wake word's cancel in
+      `trigger`): start=false alone, `proto_esphome.c` drops the run's events until the next RUN_START, `quiet_abort`.
+      Wyoming has no `cancel`: ended there as before.  Tests: fake_ha_esphome_timers.py (ring + wake word + stop: one
+      abort, a late STT_START leaves the Echo idle, the next wake word starts a run; red before), fake_ha_esphome.py
+      (reply cut + stop: one abort).
+- [x] "<wake word>, stop" ends listening (2026-10-20; setting `stop_ends_listening`, Voice, page only, exported, off
+      by default).  The case: an Echo that woke wrongly (TV, talk in the room) listens up to 15 s (HA's VAD limit,
+      `assist_pipeline/vad.py`) and HA carries out what STT made of it; the only quiet way out was the action button.
+      In `stop_word`, after #51's stop (Drop In, ring, reply, the Echo's own music; `ended`), a "stop" after the last
+      detection (`heard_ms`, set in `on_wake` and for SIGUSR1; `stop_ms`; `stopped_now`: within 4 s) cancels a
+      LISTENING run as the button does (`quiet_cancel`; `stop: listening ended`), also one that listened before this
+      wake word (in LISTENING `trigger` has no branch for the wake word, so that run goes on otherwise), and `trigger`
+      starts nothing when the "stop" came during the round (`stop: came during the round, nothing started`), nor
+      listens anew after cancelling a THINKING run.  The run the wake word opened by cutting a reply or ring keeps the
+      `pipeline dropped` branch (cancelled since the entry above).  Pryon's STOP threshold is the model's (`alexa-de-DE`
+      kw.cfg.json: 0.4), not settable at run time.  One Echo's log over 7 days: STOP in 24 of 700 wake words, 2 of them
+      false in 354 requests that Echo answered (a short command heard as "stop": lost, said again).  Off: the wake word's own run as before (the round entry below
+      applies either way).
+      ESPHome only (Wyoming has no cancel).  Tests: `fake_ha_stop_word.py` (stop-word; off: a run goes on, the
+      THINKING drop cancelled; on: out of silence, during the round, both Echos, listening + wake word + stop, thinking
+      + wake word + stop with and without the new run started, stop after 4.5 s), `fake_ma_sendspin.py` (#51's part
+      off, and on: music paused and the run cancelled).  `tests/arbecho.py` sends RUN_START as HA does (after a cancel
+      the Echo waits for it).  This build not on an Echo yet; the same stop logic (in a fork, beside other changes) ran on
+      three Echo Dot 2s: listening ended 5-7 ms after Pryon's STOP (which comes ~0.12-0.14 s after the word's end),
+      no sound, no run left.
+- [x] "<wake word>, stop" during the arbitration round drops what its wake word would open (2026-10-21, always, not
+      the setting).  The "pipeline dropped" rule (a "stop" within 4 s of the wake word cutting a reply, a ring or a
+      THINKING run cancels the run it opened) only saw runs that had started: a "stop" that came while the round still
+      ran (window 150-1000 ms, all of it when no other member heard the wake word; STOP ~0.4-0.6 s after the
+      detection) found the Echo IDLE (or THINKING), and the winner opened a run afterwards.  PC test, setting off: a
+      ring, wake word, "stop" 50 ms later: `alarm: off (stop)`, `this Echo answers`, `idle -> listening`, a run that
+      sent the replayed "stop" to HA and listened up to 15 s.  Now `stop_word` notes `stop_cut` (it ended a ring or a
+      call, cut a reply, or found THINKING) and `trigger` starts nothing for that wake word (`stopped_now`: its "stop"
+      came, and `stop_cut` or `stop_ends_listening`), nor listens anew after cancelling THINKING; when that THINKING
+      run's reply began before the round ended, `trigger` cuts it and opens none (`stop: came during the round, reply
+      cut`; it barged in before, and listened anew).  A "stop" that drops a listening run (`pipeline dropped`) sets
+      `stop_cut` too: a wake word heard while that run listened opens none either.  Music paused by the
+      "stop" does not count: its run goes on as #51 has it.  Drop In had the same gap after the round: `trigger` set
+      `wake_cut_ms` for a ring only, so "<wake word>, stop" in a call hung up and its run listened on; now for a call
+      too (`dropin_was`, the core's copy under the lock).  Tests: `fake_ha_stop_word.py` (off: ring + stop in the
+      round, THINKING + stop in the round), `fake_ha_dropin.py` (wake word, stop after the round in a call: hung up,
+      one abort); red before.
 - [x] Wake word turns that hear nothing (2026-10-19, GitHub issue #48; two Dot 2 on 2026.10.17.151309: 4
       `stt-no-text-recognized` in 5 days, each with `anim_start_error_short`).  That code (HA's STT returned no text)
       now goes to `core_no_speech`: the run ends as after RUN_END, no error ring, whoever started it (wake word,

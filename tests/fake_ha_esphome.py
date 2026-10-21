@@ -215,7 +215,7 @@ async def main(e):
     stopped.clear(); started.clear(); proc.send_signal(signal.SIGHUP)                           # "stop" drops that pipeline
     await until(lambda: stopped); await settled(play)
     played = (os.path.getsize(play) - before) / 96000
-    check(stopped and not started.is_set() and played < 2.0, f'"<wake word>, stop" during a reply: pipeline dropped, {played:.2f} s of 3 s played (stops {stopped}, restarted {started.is_set()})')
+    check(stopped == [True] and not started.is_set() and played < 2.0, f'"<wake word>, stop" during a reply: pipeline cancelled, {played:.2f} s of 3 s played (stops {stopped}, restarted {started.is_set()})')
     cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "stt-no-text-recognized", "message": "dropped"})
     await sync(cli)
     started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)

@@ -17,7 +17,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 from webclient import wait_port
 from esphome_common import assistant, sync
-PORT, PORT2, PORT3, PORT4 = 16958, 16960, 16963, 16965      # the four players' Sendspin ports
+PORT, PORT2, PORT3, PORT4, PORT5 = 16958, 16960, 16963, 16965, 16968      # the five players' Sendspin ports
 
 
 # what a part checks, kept until the end and printed part by part: the parts run at once
@@ -225,13 +225,16 @@ async def unpaired_off(env, state):
         proc.terminate(); await server.close()
 
 
-async def stop_music(env, state):
+async def stop_music(env, state, quiet=False):
     """"<wake word>, stop" pauses Sendspin music itself (issue #51): its pipeline goes on, a bare "stop" transcript is
-    cancelled, the button resumes; without the keyword (microWakeWord) the transcript "stop" pauses"""
+    cancelled, the button resumes; without the keyword (microWakeWord) the transcript "stop" pauses.  That with the
+    setting stop_ends_listening off (the default); on (quiet) the same stop also ends the run quietly (main.c stop_word)"""
     open(os.path.join(state, "sendspin.unpaired"), "w").write("1")
-    proc, log = player(state, PORT4, 16966, env)
+    if quiet: open(os.path.join(state, "config"), "w").write("stop_ends_listening=on\n")
+    port, http, srv = (PORT5, 16969, 16970) if quiet else (PORT4, 16966, 16964)
+    proc, log = player(state, port, http, env)
     loop = asyncio.get_running_loop()
-    cli = APIClient("127.0.0.1", 16966, None)
+    cli = APIClient("127.0.0.1", http, None)
     await cli.connect(login=True); await cli.list_entities_services()
     va = assistant(cli); await sync(cli)
     server = SendspinServer(loop, Identity.generate(), "fake-ma", pairing_store=InMemoryServerPairingStore())
@@ -239,8 +242,8 @@ async def stop_music(env, state):
     server.add_event_listener(lambda _srv, ev: isinstance(ev, ClientAddedEvent) and added.put_nowait(ev.client_id))
     feeder = None
     try:
-        await server.start_server(port=16964, discover_clients=False)
-        server.connect_to_client(f"ws://127.0.0.1:{PORT4}/sendspin", retry_initial_connection=True, retry_indefinitely=True)
+        await server.start_server(port=srv, discover_clients=False)
+        server.connect_to_client(f"ws://127.0.0.1:{port}/sendspin", retry_initial_connection=True, retry_indefinitely=True)
         cid = await asyncio.wait_for(added.get(), 15)
         client = server.get_client(cid)
         await server.trust_unpaired(cid)
@@ -269,6 +272,11 @@ async def stop_music(env, state):
         proc.send_signal(signal.SIGHUP)                               # its "stop"
         await until(lambda: "ControllerPauseEvent" in ctl)
         await asyncio.sleep(0.5)
+        if quiet:
+            va.started.clear(); await asyncio.sleep(0.5)
+            check("ControllerPauseEvent" in ctl and va.stopped == [True] and "stop: listening ended" in log() and not va.started.is_set(),
+                  f'stop_ends_listening on: "<wake word>, stop" pauses the music and ends its run quietly: {ctl}, stops {va.stopped}')
+            return
         check("ControllerPauseEvent" in ctl and not va.stopped, f'"<wake word>, stop" pauses the music, its pipeline goes on: {ctl}, stops {va.stopped}')
         await pause()
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None); cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
@@ -328,7 +336,8 @@ async def main():
         except Exception:
             lines.append("FAIL " + traceback.format_exc().rstrip().replace("\n", "\n     ")); check.failed = True
         return lines
-    for lines in await asyncio.gather(part(paired), part(server_restart), part(unpaired_off), part(stop_music)):
+    for lines in await asyncio.gather(part(paired), part(server_restart), part(unpaired_off), part(stop_music),
+                                         part(lambda env, state: stop_music(env, state, quiet=True))):
         print("\n".join(lines))
     print("FAILED" if check.failed else "all good")
     sys.exit(1 if check.failed else 0)

@@ -50,6 +50,7 @@ class Echo:
                                                                 # the Echo's, so a stall of the PC under load does not end a call
         if speech: self.env["HASSMIC_CAP"] = SPEECH
         self.states, self.starts, self.seq = {}, [], []     # seq: (object id, state or event type) as they came
+        self.stops = []                                     # abort per run the Echo ended (True: start=false alone)
 
     def start(self):
         self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.port), "-n", self.name, "-L",
@@ -78,7 +79,7 @@ class Echo:
         self.by = {e.object_id: e for e in ents}
         self.cli.subscribe_states(self.on_state)
         async def handle_start(conv, flags, settings, phrase): self.starts.append(time.monotonic()); return 0
-        async def handle_stop(abort): pass
+        async def handle_stop(abort): self.stops.append(abort)
         async def handle_audio(data, *_): pass
         self.cli.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio)
 
@@ -211,6 +212,15 @@ async def main():
         a.cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "Auflegen."})
         check(await until(lambda: a.dropin()[0] == "idle" and b.dropin()[0] == "idle", 2), "\"Auflegen\" hangs up")
         check("said hang up" in a.text(), "the log says why")
+        # "<wake word>, stop" in a call, the "stop" after the round: the call ends, and so does the run its wake word
+        # opened, as after a ring (it listened on, with the "stop" in its replayed audio)
+        await asyncio.sleep(0.3); await a.call(b.node)
+        check(await until(lambda: a.dropin()[0] == "connected", 3), "connected again")
+        n0, s0 = len(a.starts), len(a.stops); a.proc.send_signal(signal.SIGUSR1)
+        check(await until(lambda: len(a.starts) > n0, 3), "a pipeline starts during the call")
+        a.proc.send_signal(signal.SIGHUP)
+        check(await until(lambda: a.dropin()[0] == "idle" and b.dropin()[0] == "idle" and a.stops[s0:] == [True], 2),
+              f"\"<wake word>, stop\" in a call hangs up and cancels its run (stops {a.stops[s0:]})")
 
         # 5. from the settings page: on and off
         st, _, data = a.page.call("POST", "/api/dropin", b.node.encode())

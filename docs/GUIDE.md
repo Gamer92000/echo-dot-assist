@@ -39,6 +39,17 @@ System) off takes any certificate, but then anyone on your network could slip th
   microWakeWord or Home Assistant's wake word (no "stop" keyword), a request that is only "stop" does the same: the
   music pauses and Home Assistant gets no request. A phone without remote control (AVRCP) goes silent instead, until
   it starts playing again; the button cannot resume it.
+  When "stop" ends something (a ringing timer, a Drop In call, a reply, a request still being worked on), the Echo
+  does not listen afterwards, also when it comes while several Echos are still deciding which one answers.
+  **"Alexa, stop" ends listening** ("Stop after the wake word ends listening" on the [settings page](#settings-page),
+  Voice, off by default). An Echo that woke up by mistake (the TV, people talking) listens for up to 15 s, and Home
+  Assistant carries out whatever it made of that. With this on, "Alexa, stop" means "be quiet": after all of the above
+  the Echo also stops listening at once and nothing of the run reaches Home Assistant, as with the action button; when
+  it hears both words together it does not start at all (with several Echos too), and an Echo that was listening
+  already stops as well. The cost: "Alexa, stop the timer" no longer reaches Home Assistant ("Alexa, cancel the
+  timer" does), media Home Assistant plays on other speakers is paused with "Alexa, pause" instead, and now and then the engine
+  hears "stop" in a short command (one Echo's week: 2 in 354 requests it answered): that command is lost, say it
+  again. ESPHome only. The log says `stop: listening ended` or `stop: came during the round, nothing started`.
 - While a timer rings or something plays, the wake word is accepted more readily, as Amazon's models are tuned to do.
 - A finished timer rings for a minute ("Timers ring for" on the [settings page](#settings-page): 10 s to 10 min, or
   until stopped), with the cyan timer animation on the ring. Only an explicit stop ends it: "<wake word>, stop", the
