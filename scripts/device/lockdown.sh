@@ -92,6 +92,13 @@ keep() {
         for p in udp tcp; do echo "-A INPUT -i $WLAN -p $p -m $p --dport 16384:32767 -j ACCEPT"; done
         echo "-A INPUT -i $WLAN -p udp -m udp --dport 5353 -j ACCEPT"      # mDNS: how Home Assistant finds the Echo
         echo "-A INPUT -p icmp -m state --state RELATED,ESTABLISHED -j ACCEPT"
+        # Kiosk Satellite's remote administration (TCP 2324) and its ESPHome API (TCP 6053, the one Home Assistant's ESPHome
+        # integration connects to; hassmic's own is 26053): the app's fixed ports, outside 16384-32767, private addresses only
+        if [ -n "$KIOSK_PACKAGE" ]; then
+            for d in $LOCAL4; do case $d in 224.*|255.*) continue;; esac
+                for p in 2324 6053; do echo "-A INPUT -s $d -i $WLAN -p tcp -m tcp --dport $p -j ACCEPT"; done
+            done
+        fi
         if [ -n "$ADB" ]; then echo "-A $ADB_IN"; fi                       # only while adb over Wi-Fi is open (adb_gate)
         # what this model's stock lacks (device.conf FW_KEEP, rules separated by ";"): checkers has no firewall.sh, and
         # nothing else admits the DHCP server's answers once INPUT drops (they come to a broadcast, not as a reply)
