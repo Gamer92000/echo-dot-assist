@@ -231,8 +231,9 @@ async def part_separate(url, full):
               f"a volume key during a reply moves the replies' volume (60 -> 70; {num('assistant_volume')})")
         await ann
         echo.key(KEY_VOLUMEDOWN)                       # nothing plays: the music
-        await until(lambda: echo.prop("MainVolume") == 80)
-        check("volume: 80" in echo.text() and echo.prop("MainVolume") == 80 and echo.prop("TTSVolume") == 80,
+        moved = lambda: "volume: 80" in echo.text() and echo.prop("MainVolume") == 80 and echo.prop("TTSVolume") == 80
+        await until(moved)                             # every part: the mixer's two volumes and the log come apart (CI)
+        check(moved(),
               "a volume key with nothing playing moves the music (90 -> 80: the mixer with it, the loudest still)")
         c.number_command(nums["sounds_volume"].key, 100)
         loud = lambda: (echo.prop("MainVolume") == 100 and echo.prop("TTSVolume") == 100 and near(gain("music"), g(80, 100))
@@ -278,7 +279,7 @@ async def part_linked(url, full):
         await asyncio.sleep(0.8)
         check(near(gain("tts"), 1.0), "the announcement at the replies' 70, the mixer's own")
         echo.key(KEY_VOLUMEUP)                         # during a reply that follows the music: the music
-        await until(lambda: echo.prop("MainVolume") == 80)
+        await until(lambda: "volume: 60" in echo.text() and echo.prop("MainVolume") == 80)
         check("volume: 60" in echo.text() and echo.prop("MainVolume") == 80 and "volume: assistant" not in echo.text(),
               "a volume key during a linked reply moves the music, the reply with it (60 + 20 = 80)")
         await ann
