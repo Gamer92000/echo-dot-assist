@@ -150,6 +150,24 @@ avahi_start() {
 # While the settings page switches networks (wifi.sh holds its lock), the link is that script's business: no wifisvc.
 # Whenever the address changes, wifi.sh writes down which network the Echo is on, for the page: wpa_supplicant can also
 # move to another saved network by itself when the one it is on goes away.
+# Kiosk Satellite (device.conf KIOSK_PACKAGE, an app of the user's choice, docs/kiosk-satellite.md) on the screen models: once
+# per boot it is given the permissions it would ask a person for (nobody is at the screen; never the microphone, hassmic is
+# the satellite) and opened over hassmic's home screen, since it has no HOME category and nothing else starts it.
+kiosk_start() {
+    [ -n "$KIOSK_PACKAGE" ] || return 0
+    until [ "$(getprop sys.boot_completed)" = 1 ] && pm path $KIOSK_PACKAGE > /dev/null 2>&1; do sleep 5; done
+    for p in CAMERA READ_EXTERNAL_STORAGE WRITE_EXTERNAL_STORAGE ACCESS_COARSE_LOCATION ACCESS_FINE_LOCATION; do
+        pm grant $KIOSK_PACKAGE android.permission.$p > /dev/null 2>&1
+    done
+    for o in SYSTEM_ALERT_WINDOW WRITE_SETTINGS GET_USAGE_STATS; do appops set $KIOSK_PACKAGE $o allow > /dev/null 2>&1; done
+    dumpsys deviceidle whitelist +$KIOSK_PACKAGE > /dev/null 2>&1       # no doze: the dashboard and its ESPHome server stay up
+    dpm set-active-admin $KIOSK_PACKAGE/.KioskAdminReceiver > /dev/null 2>&1   # it turns the screen off through this
+    pm revoke $KIOSK_PACKAGE android.permission.RECORD_AUDIO > /dev/null 2>&1
+    appops set $KIOSK_PACKAGE RECORD_AUDIO deny > /dev/null 2>&1
+    sleep 10                                  # the home screen first, so the app is on top of it
+    $D/runas shell shell sh -c "monkey -p $KIOSK_PACKAGE -c android.intent.category.LAUNCHER 1" > /dev/null 2>&1
+    echo "kiosk satellite: opened"
+}
 netwatch() {
     miss=0 addr=
     while :; do
@@ -378,6 +396,7 @@ satellite)
     # online updates: hassmic checks downloads against the key root will check them against (ota.c)
     export HASSMIC_RELEASE_PUB=$(release_pub)
     netwatch 2>&1 | stamped >> $LOG &
+    kiosk_start 2>&1 | stamped >> $LOG &
     # mDNS through the stock avahi-daemon: hassmic prints the service file for its protocol, name and MAC address.
     # The MAC in it is how Home Assistant tells devices apart.  On radar wlan0 appears only later in the boot, hassmic
     # printed its placeholder MAC, and Home Assistant offered the adopted Echo as a new device.  So wait for Wi-Fi

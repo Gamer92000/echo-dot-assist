@@ -2,6 +2,12 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-21
+
+- **Kiosk Satellite on the Echo Show 8 (1st and 2nd gen)** ([`docs/kiosk-satellite.md`](docs/kiosk-satellite.md)): if you
+  install the app yourself, hassmic gives it the permissions it needs (never the microphone), opens it once per boot, and
+  the firewall lets Home Assistant reach the app's web page and ESPHome server (TCP 2324 and 6053, local addresses only).
+
 ## 2026-10-17
 
 - **Wake sound removal (experimental) on the Echo Show.** The Show starts a sound after a pause 0.35 s late (below); the
