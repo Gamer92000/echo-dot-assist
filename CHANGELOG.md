@@ -4,6 +4,8 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-22
 
+- **Setup can join hidden Wi-Fi networks.** The initial Wi-Fi join now probes for the entered network name,
+  matching the settings page's Wi-Fi join; hidden networks previously stayed in `SCANNING`.
 - **Setup on Debian finds debugfs.** The guided setup said "missing: debugfs" at the build step even with e2fsprogs
   installed, and installing it again did not help: Debian keeps debugfs where only root looks for programs. The setup
   now looks there too.

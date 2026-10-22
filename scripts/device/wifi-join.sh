@@ -11,6 +11,8 @@ iptables -S OUTPUT | grep -q hassmic_out || { echo "refusing: run lockdown.sh fi
 $W status >/dev/null 2>&1 || { start wpa_supplicant; sleep 3; }
 N=$($W add_network | tail -1)
 $W set_network $N ssid $(printf %s "$SSID" | od -An -tx1 | tr -d " \n")      # hex form: apostrophes and spaces are safe
+# Probe for the name too: hidden networks do not advertise their SSID in scan results.
+$W set_network $N scan_ssid 1
 # FAIL for a passphrase wpa_supplicant does not take (WPA2: 8 to 63 characters)
 $W set_network $N psk "\"$PSK\"" | grep -q OK || { echo "the password is not one WPA2 takes (8 to 63 characters)"; $W remove_network $N >/dev/null; exit 1; }
 $W set_network $N key_mgmt WPA-PSK
