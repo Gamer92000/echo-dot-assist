@@ -9,6 +9,9 @@ else
     TTY= B= DIM= RED= GRN= YEL= CYN= N=
 fi
 LOG=${LOG:-/dev/null}
+# Debian leaves sbin off a user's PATH (only root and sudo have it), and debugfs (e2fsprogs) lives there: need_tools
+# kept offering to install it again
+case :$PATH: in *:/usr/sbin:*) ;; *) PATH=$PATH:/usr/sbin:/sbin;; esac
 SPIN=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
 _f=0 TASK_PID=
 

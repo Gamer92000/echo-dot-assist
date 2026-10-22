@@ -2,6 +2,12 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-22
+
+- **Setup on Debian finds debugfs.** The guided setup said "missing: debugfs" at the build step even with e2fsprogs
+  installed, and installing it again did not help: Debian keeps debugfs where only root looks for programs. The setup
+  now looks there too.
+
 ## 2026-10-21
 
 - **"Alexa, stop" can end listening** ("Stop after the wake word ends listening", settings page, Voice, off by
