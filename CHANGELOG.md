@@ -4,6 +4,15 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-25
 
+- **The ring no longer pulses all night after a settings page login nobody approved.** A browser asking to log in
+  (or for debug access) shows a pattern on the ring until the action button is pressed. When the page was closed
+  before that, the pattern stayed on, even across restarts of the satellite: an Echo 2 pulsed from 02:43 until the
+  next day. The request now runs out after a minute on its own, and every start clears that pattern.
+- **"Download from Amazon" no longer ends in "Failed to fetch".** Installing restarts the satellite, and the page
+  waited only a fixed 3 seconds before it took the Echo for back: often it was still the old process, about to
+  stop, and the reloaded page got no answer. The models were installed all the same. The page now waits until the
+  Echo says it started anew, and a page that reloads into a restart tries again for a few seconds. The same goes for
+  copying models between Echos and for switching the wake word engine.
 - **Echo Dot 2s on the October 2026 software can be unlocked, most likely** (issue #50). Fire OS 8338 brought a new
   bootloader that the unlock tool amonet v2.0.0 had no payload for: fastboot refused it with "restricted on locked
   hw". The setup now uses amonet v2.0.1 (download `amonet-biscuit-v2.0.1.zip` from the XDA thread), which carries a

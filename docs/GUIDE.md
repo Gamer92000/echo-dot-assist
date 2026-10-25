@@ -536,7 +536,8 @@ change counts. Tried in one flat for a few minutes and one night, where it mostl
 
 Works in Wyoming mode too; the "Web UI address" entity shows the address.
 
-**Logging in**: press "Ask the Echo", then the action button within a minute (the ring shows that a login waits).
+**Logging in**: press "Ask the Echo", then the action button within a minute (the ring shows that a login waits; without a press it
+goes back after the minute, also when the page was closed).
 Revoke approved browsers on the page. Echos in one network trust each other: a
 browser logged in on one gets into the others without their buttons ("Log in through <another Echo>"). Debug access
 still takes that Echo's own button.

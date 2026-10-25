@@ -2547,6 +2547,7 @@ int main(int argc, char **argv)
     audio_earcon_started = earcon_started;
     led("-u", "scone-setup");           /* a restart inside the pairing window: the window is gone, its chaser would loop on */
     led("-u", "factory-reset");         /* a reset asked for before this start is done (main.sh) */
+    led("-u", "authenticated_setup_mode");  /* a login or adb request the last run left waiting is gone with it */
     oobe_load();
     if (atomic_load(&oobe)) { led("-s", "setup-mode"); fprintf(stderr, "setup: not set up yet (no Home Assistant), the ring shows the setup spinner until it is\n"); }
     else led("-u", "setup-mode");

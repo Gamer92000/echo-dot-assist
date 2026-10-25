@@ -369,7 +369,15 @@ async function start() {
   echo = new Echo('', hello);
   renderThrough(hello.members || []);
   showName(hello);
-  try { await load(); } catch (e) { if (e.message === 'login') showLogin(); else toast('Error: ' + e.message); }
+  // A page reloaded just as the satellite restarts (installs, the wake word engine) reaches a process on its way out:
+  // no answer at all, which fetch calls a TypeError ("Failed to fetch").  It answers again within seconds
+  for (let i = 0; ; i++) {
+    try { await load(); return; } catch (e) {
+      if (e.message === 'login') { showLogin(); return; }
+      if (state || !(e instanceof TypeError) || i >= 15) { toast('Error: ' + e.message); return; }   // state: it answered
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
 }
 
 function showName(d) {
@@ -461,6 +469,7 @@ async function load() {
   state = await (await echo.call('GET', '/api/state')).json();
   // updated meanwhile (online update, push): this page is the old version's, its header the old number
   if (state.device.version !== echo.hello.version) { location.reload(); return; }
+  echo.hello.start = state.device.start;          // restarted meanwhile (Home Assistant's button): waitBack's baseline
   if (state.device.name !== echo.hello.name || state.device.node !== echo.hello.node) {      // renamed (hassmic.conf NAME)
     echo.hello.name = state.device.name; echo.hello.node = state.device.node; showName(echo.hello);
   }
@@ -1657,8 +1666,10 @@ async function downloadAmazon() {
     const result = { ok: ok.map((x) => x.name), bad: items.filter((x) => x.status === 'bad').map((x) => [x.name, x.why]), installed: false };
     if (!ok.length) { dv.last = result; return; }
     dv.job.phase = 'install'; renderDavs();
-    try { await echo.call('POST', '/api/artifact/install'); await waitBack(echo); }
+    const was = await startOf(echo);
+    try { await echo.call('POST', '/api/artifact/install'); }
     catch (e) { result.install = errText(e).replace(/^Error: /, ''); dv.last = result; return; }
+    if (!await waitBack(echo, was)) { result.install = 'the satellite did not restart (the log says why)'; dv.last = result; return; }
     result.installed = true;
     dv.ticks.clear();
     // the satellite restarted with the new models: the page starts over (wake word lists), and shows the outcome then
@@ -1789,10 +1800,20 @@ async function transfer(job, done0, total) {
   await to.e.call('POST', `/api/artifact/commit/${art.id}`);
 }
 
-async function waitBack(e) {             // an Echo restarting its satellite: its page answers again within seconds
-  await new Promise((r) => setTimeout(r, 3000));
-  for (let i = 0; i < 40; i++) {
-    try { const r = await fetch(e.base + '/api/hello'); if (r.ok) return true; } catch (err) { /* still restarting */ }
+// An Echo restarting its satellite: back once /api/hello names another start (web.c start_id).  Root's watcher looks
+// every 2 s and installs before it restarts, so for seconds the old process still answers: taken for the new one, the
+// page reloaded into its exit ("Failed to fetch", an Echo 2 on 2026-10-25).  A build without the id: 3 s, as before
+async function startOf(e) {                     // the start that answers now, before something restarts it
+  try { e.hello.start = (await (await fetch(e.base + '/api/hello', { signal: within(5000) })).json()).start; } catch (err) { /* the one known */ }
+  return e.hello.start;
+}
+async function waitBack(e, was = e.hello.start) {
+  await new Promise((r) => setTimeout(r, was ? 500 : 3000));
+  for (let i = 0; i < (was ? 90 : 40); i++) {
+    try {
+      const h = await (await fetch(e.base + '/api/hello', { signal: within(5000) })).json();
+      if (!was || (h.start && h.start !== was)) { e.hello.start = h.start; return true; }
+    } catch (err) { /* still restarting */ }
     await new Promise((r) => setTimeout(r, 1000));
   }
   return false;
@@ -1809,7 +1830,8 @@ async function copyModels(jobs) {
   }
   for (const x of got.values()) {
     copying = { text: `Installing on ${x.name}; its satellite restarts…`, done: total, total }; renderModels();
-    try { await x.e.call('POST', '/api/artifact/install'); await waitBack(x.e); }
+    const was = await startOf(x.e);
+    try { await x.e.call('POST', '/api/artifact/install'); if (!await waitBack(x.e, was)) notes.push(`${x.name}: its satellite did not restart (the log says why)`); }
     catch (e) { notes.push(`${x.name}: ${errText(e).replace(/^Error: /, '')}`); }
   }
   copying = null; mpick.rows.clear();

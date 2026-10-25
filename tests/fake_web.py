@@ -3,7 +3,7 @@
 X25519 and BLAKE2b from Python's libraries, not web/crypto.js), plus Home Assistant (aioesphomeapi) watching the same
 Echo.  Login by the action button (SIGUSR2), signed reads and writes, replays and forged signatures, two logins at once,
 export and import, the settings file from before names, the speaker gain, features (entities in Home Assistant only while on), adb with
-a press of its own, revoking."""
+a press of its own, revoking; a login left waiting runs out by itself, and a restart clears its ring and names a new start."""
 import asyncio, gzip, json, os, re, signal, subprocess, sys, tempfile, time
 from aioesphomeapi import APIClient
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -11,6 +11,7 @@ from webclient import wait_port, Browser, req
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT, WEB = 16971, 16972
+PORT2, WEB2 = 16975, 16976          # a second Echo of its own: logins that run out, a restart
 
 
 def check(cond, what):
@@ -66,7 +67,8 @@ async def main():
         st, h, body = rq("GET", "/crypto.js")
         check(st == 200 and b"blake2b" in gzip.decompress(body), "its scripts")
         b = Browser(WEB)
-        check(b.hello["name"] == "Echo Web" and len(b.hello["pub"]) == 64, f"hello: {b.hello['name']}, {b.hello['model']}")
+        check(b.hello["name"] == "Echo Web" and len(b.hello["pub"]) == 64 and re.fullmatch(r"[0-9a-f]{16}", b.hello.get("start", "")),
+              f"hello: {b.hello['name']}, {b.hello['model']}, start {b.hello.get('start')}")
         st, h, _ = rq("OPTIONS", "/api/set", headers={"Origin": "http://192.0.2.1:28931", "Access-Control-Request-Method": "POST",
                                                      "Access-Control-Request-Headers": "x-hm-pub,x-hm-ctr,x-hm-mac"})
         check(st == 204 and h.get("Access-Control-Allow-Origin") == "*" and "X-HM-Mac" in h.get("Access-Control-Allow-Headers", ""),
@@ -249,10 +251,41 @@ async def main():
         check(b.call("GET", "/api/state")[0] == 401, "revoked: refused")
         try: await ha.disconnect()
         except Exception: pass
+
+        await login_runs_out()
     finally:
         proc.terminate(); proc.wait()
     if check.failed:
         print(open(log).read()); print("FAILED"); raise SystemExit(1)
     print("PASS")
+
+async def login_runs_out():
+    """A page closed while its login waits: the ring's authenticated_setup_mode goes off when the login runs out, with no
+    request asking about it (it stayed on all night on an Echo 2, 2026-10-25), and a restart unsets what the last run
+    left on.  /api/hello names each start, so the page tells the new process from the old one (web/app.js waitBack)"""
+    state = tempfile.mkdtemp(); leds = os.path.join(state, "ledctrl.log"); log = os.path.join(state, "log")
+    env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(state, "play.raw"),
+               HASSMIC_MDNS_FILE=os.path.join(state, "none"), HASSMIC_ARB_ADDR="127.255.255.255", HASSMIC_FAKE_LED=leds,
+               HASSMIC_LOGIN_MS="1500")
+    run = lambda: subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT2), "-n", "Echo Two", "-L", "-z", "0",
+                                    "-o", "0", "-a", "16977", "-W", str(WEB2)], env=env, stderr=open(log, "a"))
+    lines = lambda: open(leds).read().splitlines() if os.path.exists(leds) else []
+    proc = run()
+    try:
+        wait_port(PORT2, WEB2)
+        check("-u authenticated_setup_mode" in lines(), "start: a login's ring the last run left waiting is unset")
+        b = Browser(WEB2); first = b.hello.get("start")
+        check(b.login() == "waiting" and "-s authenticated_setup_mode" in lines(), "a login waits: the ring says so")
+        open(leds, "w").close()
+        await until(lambda: "-u authenticated_setup_mode" in lines() and "login ran out without the button" in open(log).read())
+        check("-u authenticated_setup_mode" in lines() and "login ran out without the button" in open(log).read(),
+              "the page went away: the login runs out by itself, the ring off, with nothing asking")
+        check(b.login() == "refused", "...and the browser is told so when it asks again")
+        proc.terminate(); proc.wait(); proc = run(); wait_port(PORT2, WEB2)
+        again = Browser(WEB2).hello.get("start")
+        check(again and first and again != first, f"restarted: /api/hello names another start ({first} -> {again})")
+    finally:
+        proc.terminate(); proc.wait()
+
 
 asyncio.run(main())

@@ -2137,6 +2137,24 @@ Run in this order. Each step says what it proves.
       returns;
       biscuit's README names the LK build as a prerequisite.  Open: an amonet release that unlocks LK builds from
       June 2026 on (R0rt1z2's XDA thread).
+- [x] A login left waiting, a page reloaded into a restart (2026-10-25, a tester's Echo 2, radar, v2026.10.21.213542).
+      Ring: `web: login waits for the action button (iPhone)` at 00:43:12Z, then neither "approved" nor "ran out"; the
+      ring pulsed until the next day.  `login_expire` (web.c) ran only on a login or adb ask and on the button, so a
+      page closed inside the minute left `authenticated_setup_mode` on; two hassmic restarts (artifact installs,
+      13:18:44Z and 13:20:27Z) forgot the login, and nothing at start unset the pattern (ledcontroller keeps a lit
+      loop until `-u`).  Now a thread runs `login_expire` every second (`HASSMIC_LOGIN_MS` for the tests), main()
+      unsets `authenticated_setup_mode` at start beside `scone-setup`/`factory-reset`, and `ring_unset` of a pattern
+      this run never set also unsets a design's copy of it (`actual_for`), which the stock name does not reach.
+      What took the ring off at ~13:25Z is still open (the tester set LED brightness then; `-a off -b N` unsets
+      nothing).  Download: both runs worked (`== artifacts installed, restarting hassmic: OK wake:echo-de-DE OK
+      whisper`); install handed over at 13:18:41.6Z, root's restart 2.4 s later (ota_watch looks every 2 s and
+      installs first).  The page's `waitBack` waited a fixed 3 s and took the first `/api/hello`, the old process's;
+      the reload's `/api/state` then reached it on its way out: `net::ERR_EMPTY_RESPONSE`, "Error: Failed to fetch".
+      Now `/api/hello` carries `start` (8 random bytes per start) and `waitBack` waits up to 90 s for another one (a
+      build without it: 3 s as before); `false` is reported ("did not restart"), and `start()` retries a load that
+      got no answer for 15 s.  tests/fake_web.py: a second Echo with a 1.5 s login, nothing asking: the ring's `-u`
+      and "ran out"; the unset at start; a new `start` after a restart.  Seen on the way, not changed: the page's
+      server takes 8 connections and closes the ninth without an answer (`MAX_CONN`; reproduced with 8 idle ones).
 - [x] "<wake word>, stop" to music (2026-10-19, GitHub issue #51: Dot 2 on Fire OS 8146, three tries in a row over
       Sendspin ended in `stt-no-text-recognized` and the music played on; Pryon's "stop" was heard each time).
       `stop_word` pauses music when nothing else ended (Drop In, ring, a reply, the pipeline its wake word cut): Sendspin's

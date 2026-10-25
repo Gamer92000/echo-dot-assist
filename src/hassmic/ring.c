@@ -1010,6 +1010,10 @@ void ring_unset(const char *pattern)
     struct shown *s = find(pattern);
     run("-u", s ? s->actual : pattern);
     if (s) *s = shown[--nshown];
+    else {                              /* not set by this run (main()'s unsets at start): a design's copy may be the one on */
+        char actual[40]; actual_for(pattern, -1, actual);
+        if (strcmp(actual, pattern)) run("-u", actual);
+    }
     pthread_mutex_unlock(&lock);
 }
 

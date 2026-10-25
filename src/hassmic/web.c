@@ -5,8 +5,8 @@
  *
  *   Login: the page makes an X25519 key pair once (kept in the browser) and asks POST /api/login with its public key.
  *   The ring shows that a login waits (hooks->attention); a short press of the action button approves it (main.c
- *   on_action asks web_approve() first).  One at a time: a second browser asking while one waits refuses both, so
- *   someone on the network cannot slip in beside the owner.  Approved keys are kept in state/web_clients.
+ *   on_action asks web_approve() first); unanswered for LOGIN_MS, it runs out, asked about or not.  One at a time: a
+ *   second browser asking while one waits refuses both, so someone on the network cannot slip in beside the owner.  Approved keys are kept in state/web_clients.
  *   Requests: X-HM-Pub (the browser's key, hex), X-HM-Ctr (a number above the last one this browser used) and X-HM-Mac:
  *   keyed BLAKE2b-128 of "METHOD\nPATH\nCTR\nBODY" with K = BLAKE2b-256 keyed with X25519(echo key, browser key) over
  *   "hassmic web 1" + echo key + browser key.  A sniffer has neither secret key; a recorded request does not count
@@ -80,7 +80,7 @@ extern const int web_nassets;
 #define MAX_CONN    8
 #define MAX_CLIENTS 32               /* a browser has a key per Echo page it opened, and each Echo may know all of them */
 #define MAX_BODY    16384
-#define LOGIN_MS    60000           /* a login waits this long for the button */
+static int LOGIN_MS = 60000;        /* a login waits this long for the button (HASSMIC_LOGIN_MS for the tests) */
 
 static const struct web_hooks *hooks;
 static pthread_mutex_t lk = PTHREAD_MUTEX_INITIALIZER;  /* everything below; never held while taking core_lock */
@@ -91,6 +91,7 @@ static int nclients;
 enum { W_LOGIN = 1, W_ADB };
 static struct { uint8_t pub[32]; char label[64]; long long at; int state, kind; } login;
 static atomic_int nconn;
+static char start_id[17];           /* new at every start: the page knows a restart from an answer of the old process */
 #define NONCE_MS 120000
 static struct { uint8_t pub[32], nonce[16]; long long at; } nonces[8];      /* handed out for a login through another Echo */
 static unsigned nonce_next;
@@ -400,8 +401,8 @@ static size_t hello_json(char *o, size_t cap, int members)
 {
     char p[65], name[160], node[160]; size_t n;
     hex(p, pk, 32); jesc(name, sizeof name, core_name); jesc(node, sizeof node, core_node_name());
-    n = (size_t)snprintf(o, cap, "{\"name\":\"%s\",\"node\":\"%s\",\"model\":\"%s\",\"codename\":\"%s\",\"version\":\"%s\",\"pub\":\"%s\"",
-                         name, node, board.model, board.codename, VERSION, p);
+    n = (size_t)snprintf(o, cap, "{\"name\":\"%s\",\"node\":\"%s\",\"model\":\"%s\",\"codename\":\"%s\",\"version\":\"%s\",\"pub\":\"%s\",\"start\":\"%s\"",
+                         name, node, board.model, board.codename, VERSION, p, start_id);
     if (members && n < cap) { n += (size_t)snprintf(o + n, cap - n, ",\"members\":"); if (n < cap) n += arb_members_json(o + n, cap - n); }
     if (n < cap) n += (size_t)snprintf(o + n, cap - n, "}");
     return n < cap ? n : cap - 1;
@@ -957,14 +958,31 @@ static void *listener(void *arg)
     return NULL;
 }
 
+/* A login nobody asks about any more runs out here.  login_expire ran only when a browser asked or the button was
+ * pressed: a page closed while it waited (an iPhone at 00:43 on an Echo 2, 2026-10-25) left the ring's
+ * authenticated_setup_mode on until the next morning, as nothing asked again */
+static void *expiry(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        sleep(1);
+        pthread_mutex_lock(&lk); login_expire(now_ms()); pthread_mutex_unlock(&lk);
+    }
+    return NULL;
+}
+
 int web_start(int p, const struct web_hooks *h)
 {
-    pthread_t t;
+    pthread_t t; uint8_t id[8];
+    const char *e = getenv("HASSMIC_LOGIN_MS");
+    if (e && atoi(e) > 0) LOGIN_MS = atoi(e);
+    ws_random(id, sizeof id); hex(start_id, id, sizeof id);
     hooks = h; port = p;
     pthread_mutex_lock(&lk);
     int r = load_key();
     if (!r) load_clients();
     pthread_mutex_unlock(&lk);
     if (r) return -1;
+    if (!pthread_create(&t, NULL, expiry, NULL)) pthread_detach(t);
     return pthread_create(&t, NULL, listener, NULL) ? -1 : (pthread_detach(t), 0);
 }
