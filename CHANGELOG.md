@@ -4,6 +4,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-25
 
+- **Applying light ring designs again right after a failed install works.** Pressing Apply within the same second
+  as an install that failed took that old failure for the new request: the page said "failed" at once, and the
+  designs root then installed were not taken as installed.
 - **What you said and what the assistant answered, as sensors in Home Assistant** (issue #53). "Request and reply
   text" in the settings page's Features adds "Last heard" and "Last reply", for a dashboard beside the Echo or an
   automation. Both are cleared when a request starts, so saying the same thing twice still counts. Home Assistant

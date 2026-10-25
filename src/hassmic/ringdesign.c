@@ -679,7 +679,13 @@ int rd_apply(char *err, size_t cap)
     else if (!draft) rc = -1;           /* err: which slot's design, and why */
     else if (!ring_check(draft, dn, err, cap)) {
         spath(p, sizeof p, "ring-applied");
+        /* never the id of root's last answer: an Apply right after a failed one (same second, same pid) took that
+         * answer for its own and failed at once, before root had even seen the request */
+        char *last = read_file(result_path(), 4096, NULL); unsigned last_id = 0;
+        int have_last = last && sscanf(last, "%u", &last_id) == 1;
+        free(last);
         wait_id = (unsigned)time(NULL) ^ (unsigned)getpid() << 16;
+        if (have_last && wait_id == last_id) wait_id++;
         snprintf(req, sizeof req, "%u\n", wait_id);
         if (statefile_write(p, 0600, draft, dn)) { snprintf(err, cap, "cannot write the designs: %s", strerror(errno)); put_back(NULL); }
         else {
