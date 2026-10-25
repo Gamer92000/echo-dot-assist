@@ -11,6 +11,9 @@ iptables -S OUTPUT | grep -q hassmic_out || { echo "refusing: run lockdown.sh fi
 $W status >/dev/null 2>&1 || { start wpa_supplicant; sleep 3; }
 N=$($W add_network | tail -1)
 $W set_network $N ssid $(printf %s "$SSID" | od -An -tx1 | tr -d " \n")      # hex form: apostrophes and spaces are safe
+# Probe for the name too, as wifi.sh does: a hidden network leaves its name out of its beacons, and the Echo sat in
+# SCANNING (PR #61).  Without it only hidden networks are missed, so a refusal is a warning.
+$W set_network $N scan_ssid 1 | grep -q OK || echo "warning: scan_ssid refused, a hidden network will not be found"
 # FAIL for a passphrase wpa_supplicant does not take (WPA2: 8 to 63 characters)
 $W set_network $N psk "\"$PSK\"" | grep -q OK || { echo "the password is not one WPA2 takes (8 to 63 characters)"; $W remove_network $N >/dev/null; exit 1; }
 $W set_network $N key_mgmt WPA-PSK

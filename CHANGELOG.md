@@ -2,6 +2,11 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-25
+
+- **Setup joins hidden Wi-Fi networks.** The Echo's first Wi-Fi join now asks for the network by its name, as the
+  settings page's "Switch network…" already did. A hidden network was never found: the Echo kept looking for it.
+
 ## 2026-10-22
 
 - **Setup on Debian finds debugfs.** The guided setup said "missing: debugfs" at the build step even with e2fsprogs
