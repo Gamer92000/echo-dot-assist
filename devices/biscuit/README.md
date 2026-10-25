@@ -53,6 +53,11 @@ progress) and reboots the Echo into TWRP (white LED). **Do not interrupt it afte
 can brick the device.** `amonet-biscuit` **v2.0.0 writes newer bootloaders and boots Fire OS 6** — the stream the
 pinned firmware belongs to (Fire OS 5 versions do not boot from v2.0.0 on). Flash `boot-root.zip` after every stock
 firmware flash: it gives root adb, as on donut.
+- The exploit needs an LK (bootloader) build it knows; Amazon patched it in newer ones. The June 2026 LK
+  (`2c3569d-20260617`) refuses the payload — fastboot answers "the command you input is restricted on locked hw" —
+  and no payload for it exists yet (issue #50; `fastbrick-20221007.img` is for the *older* 2022 LK, no help here).
+  The guided setup says so when the Echo is still in fastboot a minute after the script; power-cycled, the Echo boots the original
+  software again, unharmed. Unlock before the Echo can update itself to such a build.
 - From Windows: [firebreak](https://github.com/bboe/firebreak)'s `amonet-biscuit-v2.0.0` target unlocks it (reported
   in issue #49, not tried here); after that, `scripts/setup.sh` in Git Bash should do the rest (whether firebreak
   leaves TWRP on the recovery partition is not known yet; the setup checks its version before it wipes anything).

@@ -91,12 +91,14 @@ in_dir() { cd "$1" && shift && "$@"; }
 
 # waitfor "label[|done label]" CHECK [HINT [AFTER [TIMEOUT]]]: spinner until the shell command CHECK succeeds (tried
 # every 2 s).  HINT is shown once after AFTER seconds (default 60); with TIMEOUT seconds, gives up and returns 1.
+# CHECK may set WAIT_ABORT: the wait then ends at once, returns 1 and leaves saying why to the caller.
 # An Echo that stays "offline" on adb over Wi-Fi (adb_is counts it) gets a hint of its own.
 waitfor() {
     local label=${1%%|*} donel=${1#*|} check=$2 hint=$3 after=${4:-60} timeout=$5 t0=$SECONDS i offhint=1 usbhint=1
     if [ -n "$DRY" ]; then printf '  %s· %s%s\n' "$DIM" "$label" "$N"; return 0; fi
-    ADB_OFFLINE=0 ADB_USB_MANY=
+    ADB_OFFLINE=0 ADB_USB_MANY= WAIT_ABORT=
     until eval "$check" > /dev/null 2>&1; do
+        [ -n "$WAIT_ABORT" ] && { _clr; return 1; }
         if [ -n "$hint" ] && [ $((SECONDS - t0)) -ge "$after" ]; then _clr; warn "$hint"; hint=; fi
         if [ -n "$usbhint" ] && [ -n "$ADB_USB_MANY" ]; then
             _clr; warn "More than one device is on adb over USB: $(echo $ADB_USB_MANY). adb cannot tell which one is the Echo."
@@ -483,6 +485,22 @@ wait_adb() {
     # an unlocked Echo shows fastboot as a rainbow, not the green of a stock one: people looking for green missed it
     *) waitfor "Waiting for the Echo to boot|Echo is up" "adb_is device" "Nothing yet? Unplug the Echo's power and plug it back in. Rainbow ring? That is fastboot on an unlocked Echo: fastboot reboot.";;
     esac
+}
+
+# unlock_wait_twrp: after amonet's fastbrick, until TWRP is up (5 min at most).  fastbrick.sh treats its own timeout
+# as success ("Exploit most likely successful!", issue #50): on an LK it cannot exploit, the Echo just sits in
+# fastboot (solid red LED) and TWRP never comes.  On a good unlock fastbrick returns with the Echo out of fastboot, so
+# one still listed there a minute on is a lock that did not open, not a slow boot.  That is said before the "unplug
+# the power" hint (90 s): a power-cycled Echo boots stock, and fastboot can no longer tell what happened.
+unlock_wait_twrp() {
+    local ut0=$SECONDS
+    pick_serial
+    waitfor "Waiting for TWRP (white ring)|TWRP is up" \
+        'adb_is recovery || { [ $((SECONDS - ut0)) -ge 60 ] && [ -n "$(fastboot devices 2>/dev/null)" ] && WAIT_ABORT=1; false; }' \
+        "Nothing yet? Unplug the Echo's power and plug it back in." 90 300 && return 0
+    [ -n "$WAIT_ABORT" ] &&
+        fail "the unlock did not take (the Echo is still in fastboot): its LK build is likely newer than $AMONET can unlock. Unplug the power and plug it back in: it boots the original software again"
+    return 1
 }
 
 # ashell CMD: adb shell, output without the carriage returns

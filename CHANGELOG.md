@@ -6,6 +6,12 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 - **Setup joins hidden Wi-Fi networks.** The Echo's first Wi-Fi join now asks for the network by its name, as the
   settings page's "Switch network…" already did. A hidden network was never found: the Echo kept looking for it.
+- **Setup no longer waits forever after a failed unlock** (issue #50). On an Echo Dot 2 whose bootloader Amazon
+  patched (a June 2026 build), the amonet unlock tool reports success while the Echo never leaves fastboot and
+  TWRP never comes — the setup waited for it with no end. An Echo still in fastboot a minute on now ends the step
+  with what happened (before the setup's usual "unplug the power" tip, which would hide it): the unlock did not take, the bootloader is likely newer than the tool can unlock, and power-cycling the Echo
+  boots the original software again, unharmed. Otherwise the wait for TWRP ends after 5 minutes. The Echo 2 (radar) unlock waits the same way now; the Dot 2's
+  README names the bootloader build as a prerequisite of the unlock.
 
 ## 2026-10-22
 

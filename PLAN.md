@@ -2106,6 +2106,21 @@ Run in this order. Each step says what it proves.
       "Starting TWRP <version>-<commit>" of /tmp/recovery.log (the same format string in all four); neither: asked.
       Version logic checked against stand-in answers (3.7.0_9-0, 3.2.3-0, 3.7.1_12-0, 3.10.0-0, 4.0.0_1-0, log only).
       Open (device): an old TWRP itself (does 3.2.3 set the property; the log's line).
+- [x] Unlock, what an LK too new for it does (2026-10-25, GitHub issue #50: a Dot 2 with LK `2c3569d-20260617`,
+      June 2026).  fastbrick sends the brick payload, fastboot answers "the command you input is restricted on
+      locked hw", and fastbrick.sh's own timeout is exit 124 to it — "Exploit most likely successful!" — so it
+      returns success with the Echo sitting in fastboot (solid red LED, getvar dead), TWRP never comes and adb
+      never sees it; power-cycled, it boots stock again, unharmed.  amonet-biscuit v2.0.0's IMAGE_MAP knows
+      `63cb91b-20221007` only, and `fastbrick-20221007.img` targets the even older 2022 LK — no help either way;
+      the endless retry and the exit-124-as-success live in the pinned amonet zip, not this repo.  Repo side:
+      `step_unlock` (biscuit, radar) waits for TWRP in `unlock_wait_twrp`: an Echo still listed by `fastboot devices`
+      60 s on fails the step with "the unlock did not take" (`waitfor`'s `WAIT_ABORT`), before the "unplug the power"
+      hint at 90 s (a power-cycled Echo boots stock and fastboot no longer tells); else it gives up after 300 s.
+      Checked with stand-in adb/fastboot (stuck: 61 s, TWRP at 8 s, fastboot left at 20 s: hint then 300 s).  Open
+      (device): that the hung LK still shows in `fastboot devices`, and that a good fastbrick leaves fastboot before it
+      returns;
+      biscuit's README names the LK build as a prerequisite.  Open: an amonet release that unlocks LK builds from
+      June 2026 on (R0rt1z2's XDA thread).
 - [x] "<wake word>, stop" to music (2026-10-19, GitHub issue #51: Dot 2 on Fire OS 8146, three tries in a row over
       Sendspin ended in `stt-no-text-recognized` and the music played on; Pryon's "stop" was heard each time).
       `stop_word` pauses music when nothing else ended (Drop In, ring, a reply, the pipeline its wake word cut): Sendspin's

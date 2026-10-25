@@ -107,7 +107,7 @@ step_unlock() {
     waitfor "Waiting for fastboot|Fastboot" '[ -n "$(fastboot devices)" ]' "No green light? Unplug the power and try again." || return 1
     tell "amonet asks you to type YES, and for a key press at the end" "${RED}${B}Do not interrupt it once it runs: that can brick the Echo.$N"
     live "amonet fastbrick (about a minute)" in_dir "$adir" ./fastbrick.sh || return 1
-    wait_adb recovery
+    unlock_wait_twrp       # gives up when the unlock did not take (issue #50)
 }
 
 step_flash() {
