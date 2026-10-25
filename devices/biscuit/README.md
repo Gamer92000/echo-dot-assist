@@ -46,6 +46,10 @@ XDA thread with the full instructions: [UNLOCK][ROOT][TWRP][UNBRICK] Amazon Echo
 | `boot-root.zip` | the XDA thread (byte-identical to donut's) | `de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0` |
 | `update-kindle-biscuit_puffin-NS65741_user_8146_0013222531716.bin` | [FTVDB](https://ftvdb.com/echo/firmware/com.amazon.biscuit.android.os/8ca06ee4ef2806c974d2944b7fadd543-13222531716-fire-os-6574-1-ns65741-8146-2026-09-17/) | `90832e86498c5e803974c30359aea71c1129757be0ddc59d831a94b27f81487f` |
 
+Use exactly this firmware version, also when the Echo already runs a newer one: hassmic works against its binaries,
+`scripts/setup.sh` only takes the file with this checksum (another version renamed to its name does not pass, issue
+#62), and `scripts/probe.sh` checks the Echo for it. Flashing it during the unlock replaces whatever the Echo ran before.
+
 The unlock is **one script**: unzip the package, run `./fastbrick.sh` (Linux), put the Echo into fastboot mode —
 unplug its power, reconnect while holding the **action button** (the one with the circle) until the ring shows a
 **green LED** (an Echo unlocked before shows a rainbow) — and type `YES` when the script asks. It runs the whole exploit (about a minute, the ring shows

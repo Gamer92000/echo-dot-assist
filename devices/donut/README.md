@@ -51,7 +51,10 @@ Besides the general [requirements](../../README.md#requirements):
 | `boot-root.zip` | root adb + permissive `su` SELinux domain, [XDA thread][xda] | `de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0` |
 | `toolchain/android-ndk-r21e/` | unpack <https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip> into `toolchain/` | – |
 
-Use exactly this firmware version: everything was worked out against its binaries, and `scripts/probe.sh` checks for it.
+Use exactly this firmware version, also when the Echo already runs a newer one, and also where a guide or thread says
+to update to the newest first: everything was worked out against its binaries, `scripts/setup.sh` only takes the file
+with this checksum (another version renamed to its name does not pass, issue #62), and `scripts/probe.sh` checks the
+Echo for it. Flashing it during the unlock replaces whatever the Echo ran before.
 
 ### USB access
 

@@ -4,6 +4,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-25
 
+- **The setup says why it will not take another firmware version** (issue #62). A newer firmware renamed to the
+  expected file name kept the setup waiting with "download it again". It now says that only that exact file works,
+  and the install guides say so too, also for an Echo that already runs a newer version: the unlock flashes the
+  pinned one over it.
 - **The install guides for the Echo Dot 3 and the Echo 2 say which cable to solder.** A cut USB-C to USB-C cable
   left the PC seeing nothing: a USB-C port needs a 5.1 kΩ resistor on the plug's CC wire before it switches on. The
   guides and the setup now say to take a cable with a USB-A plug, or add that resistor.

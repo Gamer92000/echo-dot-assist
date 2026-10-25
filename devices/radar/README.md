@@ -65,6 +65,9 @@ install `boot-root.zip` for root adb. `scripts/setup.sh radar` does all of that.
 
 ## Getting the newest firmware (FTVDB lags; radar's listing stops at 6572)
 
+For porting only, not for installing: an install needs exactly the pinned firmware below (setup takes no other file,
+issue #62); a newer build works only once it is re-pinned as described at the end of this section.
+
 Once the Echo is unlocked and rooted, the device itself reveals its latest update: watch
 `adb shell "logcat | grep -iE 'updateURL|http.*update|ota'"` while asking Alexa to check for updates (the check also
 runs at boot), take the signed URL and download the bin on the PC — or, if nothing is logged, let the update download

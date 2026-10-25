@@ -319,7 +319,8 @@ _pickup() {
         sig=$(stat -c %s.%Y "$c"); [ "${_seen[$c]}" = "$sig" ] && continue
         _seen[$c]=$sig
         if _good "$c" "$sum"; then mkdir -p "${f%/*}"; mv "$c" "$f"; return 0; fi
-        _clr; fail "$c is not the right file (checksum); download it again"
+        # people renamed another firmware version to the expected name (issue #62): say that only this exact file does
+        _clr; fail "$c is not the right file (checksum): only this exact file works, another version renamed to its name does not; download it from the link below"
     done
     return 1
 }
@@ -328,7 +329,7 @@ need_files() {
     while [ $# -ge 3 ]; do dest+=("$1"); sum+=("$2"); src+=("$3"); shift 3; done
     for i in "${!dest[@]}"; do
         if [ -f "${dest[i]}" ] && ! _good "${dest[i]}" "${sum[i]}"; then
-            mv "${dest[i]}" "${dest[i]}.wrong"; warn "${dest[i]##*/} is not the right file; moved aside to ${dest[i]}.wrong"
+            mv "${dest[i]}" "${dest[i]}.wrong"; warn "${dest[i]##*/} is not the right file (checksum; another version does not work); moved aside to ${dest[i]}.wrong"
         fi
         [ -f "${dest[i]}" ] || _pickup "${dest[i]}" "${sum[i]}" || { miss+=($i); continue; }
         ok "${dest[i]##*/}"
