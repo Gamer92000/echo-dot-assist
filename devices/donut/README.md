@@ -68,6 +68,11 @@ a USB cable soldered to those pads. How to open the case: the guides linked unde
 
 The Echo takes its power from its own adapter, not from USB.
 
+Use a cable with a USB-A plug for the PC end. With a USB-C plug there (a cut USB-C to USB-C cable), the PC sees no
+device: a USB-C port switches the connection on only once the plug's CC wire (often yellow) goes to ground through a
+5.1 kΩ resistor, which sits in the device a cable normally leads to (forum, 2026-10-22). Add that resistor, or take a
+USB-A cable, which needs none.
+
 Keep the Echo unplugged (no power, no USB) until step 1 asks for it. Then the order is: USB cable into the PC, hold the
 action (dot) button, plug in the power adapter. Without the adapter the Echo has no power and the bootrom never shows up.
 

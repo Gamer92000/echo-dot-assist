@@ -79,6 +79,9 @@ step_usb() {
         "green  D+   → TM5" \
         "${RED}${B}red    VCC  → nothing: leave it loose and insulate its end$N" \
         "" \
+        "A cable with a USB-A plug for the PC. A USB-C plug there needs a 5.1 kΩ resistor from its CC wire" \
+        "(often yellow) to ground, or the PC sees nothing." \
+        "" \
         "Leave the Echo unplugged for now (no power, no USB). The next step says when to plug in which."
 }
 

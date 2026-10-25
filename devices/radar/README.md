@@ -49,6 +49,11 @@ thread); solder a data-capable USB cable to them, or use a stable three-pin pogo
 
 The Echo takes its power from its own adapter, which the unlock also needs: fastboot mode is entered by plugging it in.
 
+Use a cable with a USB-A plug for the PC end. With a USB-C plug there (a cut USB-C to USB-C cable), the PC sees no
+device: a USB-C port switches the connection on only once the plug's CC wire (often yellow) goes to ground through a
+5.1 kΩ resistor, which sits in the device a cable normally leads to (forum, 2026-10-22). Add that resistor, or take a
+USB-A cable, which needs none.
+
 ### Unlock and flash
 
 One script, as on `biscuit`: unzip the package, run `./fastbrick.sh`, put the Echo into fastboot mode (power adapter

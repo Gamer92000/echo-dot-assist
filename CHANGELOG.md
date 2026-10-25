@@ -4,6 +4,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-25
 
+- **The install guides for the Echo Dot 3 and the Echo 2 say which cable to solder.** A cut USB-C to USB-C cable
+  left the PC seeing nothing: a USB-C port needs a 5.1 kΩ resistor on the plug's CC wire before it switches on. The
+  guides and the setup now say to take a cable with a USB-A plug, or add that resistor.
 - **Echos in other rooms no longer slow the answer down.** With several Echos, each one waited for every other's
   claim before it answered, up to a second when one far away never heard you, and more Echos meant a later wake
   sound. Each Echo now learns which others could beat it: it waits for another Echo only if, the last times it heard
