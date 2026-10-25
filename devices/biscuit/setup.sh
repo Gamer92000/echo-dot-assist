@@ -7,8 +7,10 @@
 
 XDA=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-2nd-gen-2016-biscuit.4761416/
 FTVDB=https://ftvdb.com/echo/firmware/com.amazon.biscuit.android.os/8ca06ee4ef2806c974d2944b7fadd543-13222531716-fire-os-6574-1-ns65741-8146-2026-09-17/
-AMONET=amonet-biscuit-v2.0.0.zip
-AMONET_SHA256=98297293701082bc7272efe077f941c56fc7b6e1f27ef6f2e93b6e4c6fc7b62d
+# v2.0.1 (issue #50): adds fastbrick-20260617.img for Fire OS 8338's LK 2c3569d-20260617_045829, which v2.0.0's
+# default image could not unlock ("restricted on locked hw"); its kaeru boots the active slot (v2.0.0: boot_a)
+AMONET=amonet-biscuit-v2.0.1.zip
+AMONET_SHA256=ea9cada067783a0d83f025bdd669fd5689148f555054475c7c70c634c542f3b5
 BOOTROOT=boot-root.zip                      # from this model's XDA thread; byte-identical to donut's
 BOOTROOT_SHA256=de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0
 NDK=toolchain/android-ndk-r21e
@@ -27,8 +29,11 @@ network|Lock down, join Wi-Fi
 install|Install
 "
 ROOTED_SKIP="udev usb unlock flash root"     # done on an Echo that is rooted already (scripts/setup.sh asks)
-# Windows (scripts/lib/setup.sh, unlock_elsewhere); reported in issue #49, not tried here
-WIN_UNLOCK="An Echo Dot 2 can reportedly also be unlocked from Windows (not tried by this project): firebreak (https://github.com/bboe/firebreak), target amonet-biscuit-v2.0.0."
+# Windows (issue #60): the unlock step runs there too, with firebreak (unlock_firebreak), so scripts/setup.sh does not
+# stop at the start for want of an Echo on adb.  Pinned: its command line and where it leaves the Echo are relied on.
+UNLOCK_WINDOWS=1
+FIREBREAK=firebreak@0.8.0
+FIREBREAK_DRIVERS=https://github.com/bboe/firebreak#windows
 NOTES=(
     "adb over Wi-Fi is closed: scripts/adb-wifi.sh <echo-ip> (or debug access on the settings page, http://<echo-ip>:28931/) opens it for 30 min."
     "Updates: git pull, then scripts/ota-push.sh <echo-ip>."
@@ -43,6 +48,7 @@ step_tools() {
     build_mode || return 1
     local unlock="fastboot python3 pyusb"
     { rooted_already || [ -n "$WINDOWS" ]; } && unlock=python3      # no unlock here: python3 only for otatool.py
+    [ -n "$WINDOWS" ] && ! rooted_already && unlock="python3 fastboot uvx"   # firebreak, run by uv, takes fastboot
     if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip curl sha256sum || return 1; return 0; fi
     need_tools adb $unlock make cc unzip debugfs curl sha256sum bc xz || return 1
     [ "$(df -Pk . | awk 'NR == 2 { print $4 }')" -gt 5000000 ] || warn "less than 5 GB free here; the NDK and firmware need about that"
@@ -50,9 +56,9 @@ step_tools() {
 
 step_files() {
     local need=()
-    # a rooted Echo needs the firmware only to build against, and the unlock tool not at all (nor does Windows: the
-    # Echo is unlocked already there)
-    rooted_already && { [ "$BUILD_MODE" = prebuilt ] || [ -d $FW/rootfs/system/lib ]; } ||
+    # a rooted Echo needs the firmware only to build against, and the unlock tool not at all; nor does Windows, where
+    # firebreak downloads the same build and amonet itself (checked against its own pins) and nothing is built
+    { rooted_already || [ -n "$WINDOWS" ]; } && { [ "$BUILD_MODE" = prebuilt ] || [ -d $FW/rootfs/system/lib ]; } ||
         need+=($FW/$FIRMWARE_FILE $FIRMWARE_SHA256 "Fire OS $FIRMWARE_ID: $FTVDB")
     rooted_already || [ -n "$WINDOWS" ] || need+=($FW/$AMONET $AMONET_SHA256 "attachment in $XDA")
     need_files "${need[@]}" $FW/$BOOTROOT $BOOTROOT_SHA256 "attachment in $XDA" || return 1
@@ -80,6 +86,7 @@ step_usb() {
 }
 
 step_unlock() {
+    [ -n "$WINDOWS" ] && { unlock_firebreak; return; }
     [ -z "$DRY" ] && adb_is recovery && { ok "TWRP is running already"; return 0; }
     # Fire OS on adb: unlocked before (stock has no adb), and the unlock left TWRP on the recovery partition
     if [ -z "$DRY" ] && adb_is device; then
@@ -87,12 +94,13 @@ step_unlock() {
         task "Restarting into TWRP" adb reboot recovery || return 1
         wait_adb recovery; return
     fi
-    [ -n "$WINDOWS" ] && { unlock_elsewhere; [ -n "$DRY" ]; return; }       # Windows: on adb at the start (setup.sh), not now
-    local adir
-    [ -d $FW/amonet ] || task "Unpacking amonet" unzip -q $FW/$AMONET -d $FW/amonet || return 1
+    local adir udir=$FW/${AMONET%.zip}        # a folder per version: an older one unpacked before is not reused
+    # a run whose files step passed with an older amonet (issue #50: v2.0.0) has not got this one yet
+    [ -f $FW/$AMONET ] || need_files $FW/$AMONET $AMONET_SHA256 "attachment in $XDA" || return 1
+    [ -d $udir ] || task "Unpacking amonet" unzip -q $FW/$AMONET -d $udir || return 1
     # run fastbrick.sh from wherever the zip put it (the release zip keeps it in a folder amonet/ of its own)
-    adir=$(find $FW/amonet -name fastbrick.sh -print -quit 2>/dev/null); adir=${adir%/*}
-    [ -n "$adir" ] || [ -n "$DRY" ] || { fail "no fastbrick.sh in $FW/amonet; delete that folder and try again"; return 1; }
+    adir=$(find $udir -name fastbrick.sh -print -quit 2>/dev/null); adir=${adir%/*}
+    [ -n "$adir" ] || [ -n "$DRY" ] || { fail "no fastbrick.sh in $udir; delete that folder and try again"; return 1; }
     tell "Put the Echo into fastboot mode" "Hold the action button (•) and plug the power in." \
         "Keep holding until the ring shows a green light (an Echo unlocked before shows a rainbow instead)."
     waitfor "Waiting for fastboot|Fastboot" '[ -n "$(fastboot devices)" ]' "No green light? Unplug the power and try again." || return 1
@@ -101,8 +109,36 @@ step_unlock() {
     unlock_wait_twrp       # gives up when the unlock did not take (issue #50)
 }
 
+# Windows (issue #60): firebreak's "unlock fireos6" ends where flash and root end here, on rooted Fire OS 6 build 8146
+# ($FIRMWARE_FILE) in both slots with boot-root, amonet v2.0.1 and TWRP 3.7.0 on recovery (its README and
+# route.py).  It takes the Echo there from stock or from any amonet before (v1's TWRP 3.2.3 too, which cannot install
+# this firmware: twrp_check), checks the bootloader first, and goes on where a stopped run left off; it asks for the
+# fastboot gesture itself.  So on Windows the flash step only checks its result, and root passes on root adb.  An Echo
+# rooted on $FIRMWARE_ID already is left as it is: firebreak has nothing to do there, and nothing here wipes it.
+fw_rooted() { adb_is device && [ "$(ashell id -u)" = 0 ] && [ "$(ashell getprop ro.build.display.id)" = "$FIRMWARE_ID" ]; }
+unlock_firebreak() {
+    [ -z "$DRY" ] && fw_rooted && { ok "rooted, on $FIRMWARE_ID"; return 0; }
+    tell "firebreak unlocks the Echo on Windows (https://github.com/bboe/firebreak)" \
+        "It needs two USB drivers, installed once per PC from an administrator PowerShell: $FIREBREAK_DRIVERS" \
+        "Without them the ring stays solid blue at the fastboot gesture."
+    ask "Are the drivers installed?" || { info "Install them, then try again."; return 1; }
+    tell "firebreak asks for the fastboot gesture and says what to do" "${RED}${B}Do not unplug the Echo while it writes: that can brick it.$N" \
+        "Stopped or failed? Run this step again: firebreak goes on where it left off."
+    # --managed-python: a Store Python keeps firebreak's files where adb and fastboot cannot see them (firebreak's README)
+    live "firebreak unlock fireos6 (about 10 minutes)" uvx --managed-python $FIREBREAK unlock fireos6 || return 1
+    [ -n "$DRY" ] && return 0
+    wait_adb device || return 1
+    fw_rooted || { fail "firebreak ended, but the Echo is not on rooted Fire OS $FIRMWARE_ID"; return 1; }
+    ok "rooted, on $FIRMWARE_ID"
+}
+
 step_flash() {
     local s0 s1 s2
+    if [ -n "$WINDOWS" ]; then
+        [ -n "$DRY" ] && { info "Windows: firebreak flashed both slots in the unlock step"; return 0; }
+        fw_rooted && { ok "Fire OS $FIRMWARE_ID in both slots (firebreak)"; return 0; }
+        unlock_firebreak; return            # not there (the unlock step skipped?): firebreak goes on from where it is
+    fi
     wait_adb recovery || return 1
     twrp_check || return 1
     task "Wiping cache and data" adb shell 'twrp wipe cache && twrp wipe data' || return 1

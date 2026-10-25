@@ -9,7 +9,8 @@
 #                 network install)
 #     --preset F  settings to start with: an export from another Echo's settings page (hassmic-settings.conf);
 #                 without it, the install step asks (Enter for none)
-# Windows (Git Bash): an Echo that is unlocked already (on adb, in Fire OS or TWRP), with GitHub's release build.
+# Windows (Git Bash): an Echo that is unlocked already (on adb, in Fire OS or TWRP), with GitHub's release build; an
+# Echo Dot 2 also from stock, unlocked by firebreak.
 # Only the Echo on USB is worked on, whatever else is on adb over Wi-Fi.  Keep the cable in to the end: the installed
 # Echo closes adb over Wi-Fi at its first boot.
 # The written instructions are the same steps: devices/<codename>/README.md.
@@ -49,7 +50,8 @@ trap '[ -n "$TTY" ] && printf "\e[?25h\e[?7h"' EXIT
 # passed through to a VM or WSL re-enumerates too late or drops transfers.  sudo would look in root's ~/Downloads.
 # Windows (Git Bash, issue #49) for the rest: after the unlock it is all adb, and Google's adb works there.  Git Bash
 # turns arguments that look like paths into Windows paths for native programs, /data/local/... into C:/Program
-# Files/Git/data/local/... for adb.exe: MSYS_NO_PATHCONV keeps them as written.
+# Files/Git/data/local/... for adb.exe: MSYS_NO_PATHCONV keeps them as written.  A model whose unlock runs on Windows
+# too sets UNLOCK_WINDOWS (Echo Dot 2: firebreak, with drivers of its own; issue #60).
 WINDOWS=
 case $(uname -s) in
 Linux) ;;
@@ -58,7 +60,7 @@ MINGW*|MSYS*)
     # python.org's installer gives python (and py); python3 is often only the Store's stand-in, which fails
     python3 -c '' 2>/dev/null || ! python -c '' 2>/dev/null || { python3() { python "$@"; }; export -f python3; }
     ;;
-*) die "This runs on Linux only, on the PC itself (not in a VM): the unlock needs direct USB access. A Linux live USB stick works. (On Windows: Git Bash, for an Echo that is unlocked already.)" ;;
+*) die "This runs on Linux only, on the PC itself (not in a VM): the unlock needs direct USB access. A Linux live USB stick works. (On Windows: Git Bash, for an Echo Dot 2 or an Echo that is unlocked already.)" ;;
 esac
 [ "$(id -u)" = 0 ] && die "Run it as yourself, not as root or with sudo: it asks for sudo where it needs it, and looks for downloads in your ~/Downloads."
 # not on Windows: no systemd, and with Hyper-V or memory integrity on (Windows 11's default) the PC itself runs under a
@@ -124,8 +126,9 @@ if [ -n "$FROM" ]; then
     mark_done "${ids[@]}"
 fi
 
-# --- Windows: an unlocked Echo on USB, or nothing to do here (scripts/lib/setup.sh, unlock_elsewhere)
-if [ -n "$WINDOWS" ] && [ ! -s $STATE ] && [ -z "$DRY" ] && ! adb_is device 2>/dev/null && ! adb_is recovery 2>/dev/null; then
+# --- Windows: an unlocked Echo on USB, or nothing to do here (scripts/lib/setup.sh, unlock_elsewhere), unless the
+# model's unlock runs there
+if [ -n "$WINDOWS" ] && [ -z "$UNLOCK_WINDOWS" ] && [ ! -s $STATE ] && [ -z "$DRY" ] && ! adb_is device 2>/dev/null && ! adb_is recovery 2>/dev/null; then
     header 1 $n "${STEP_LIST[@]}"
     unlock_elsewhere; exit 1
 fi

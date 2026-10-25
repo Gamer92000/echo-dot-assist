@@ -2099,6 +2099,22 @@ Run in this order. Each step says what it proves.
       (dry runs, the start without an Echo); the scripts after the unlock ran from Git Bash in the issue (Dot 2,
       v2026.10.17.151309).  Open (Windows): one whole run of `setup.sh` (tools, downloads from ~/Downloads, the
       unlock step's reboot into TWRP, the rest); firebreak's result (does it leave TWRP on recovery?).
+      Windows unlock for biscuit (issue #60): firebreak 0.8.0's `unlock fireos6` (route.py: stock or any amonet ->
+      amonet v2.0.1 + TWRP 3.7.0 -> Fire OS 6 8146, our `FIRMWARE_FILE`, in both slots + boot-root -> booted) is the
+      Windows `step_unlock` (`unlock_firebreak`, `UNLOCK_WINDOWS=1` so setup.sh does not stop without an Echo on adb);
+      `step_flash` there only checks rooted + `$FIRMWARE_ID`, root passes on root adb; no firmware download on Windows
+      (firebreak fetches 8146 from Amazon's CDN itself).  Checked on Linux with a stand-in `uname` (dry run).  Open:
+      one whole run on Windows from a stock Dot.  firebreak 0.8.0 also unlocks the June 2026 LK
+      (`2c3569d-20260617`, issue #50) with amonet v2.0.1's own fastbrick payload.
+- [x] amonet-biscuit v2.0.1 on Linux (issue #50, 2026-10-25): zip sha256 `ea9cada0...f3b5`, 73 550 504 bytes, = firebreak
+      0.8.0's pin.  `profile.sh` maps `63cb91b-20221007_072309` -> `fastbrick-20221007.img`, `2c3569d-20260617_045829`
+      -> `fastbrick-20260617.img`, else `fastbrick.img`.  The issue's Echo runs 8338 (software version 13323244164,
+      NS6575, Amazon CDN, sha256 = firebreak's pin): its `lk.img` says `20260617_045829`, 8149's `20221007_072309`.
+      Payload tails (last 137 684 bytes, distinct 16-byte windows found in each LK): 20260617 135 403/135 411 in 8338,
+      122 746 in 8149; 20221007 135 408/135 416 in 8149, 122 746 in 8338; default 246/31 400.  Preloader unchanged
+      (issue: `bd7ae89-20221003`).  kaeru boots the active slot (v2.0.0: boot_a): install-system.sh writes the active
+      slot from TWRP and the running /system otherwise, so either fits.  Unpacked per version
+      (`firmware/biscuit/amonet-biscuit-v2.0.1/`).  Open: an unlock on 8338's LK on a real Dot; 8146 flashed over 8338.
       TWRP before the wipe (`twrp_check`, first in every model's `step_flash`): 3.7 or newer, else stop with nothing
       wiped (the issue: amonet v1's TWRP 3.2.3, on Dots EchoLocal sold unlocked, cannot install 6574.1).  Every unlock
       here brings 3.7.0_9-0: `ro.twrp.version` and the string next to it in the ramdisks of amonet-biscuit v2.0.0,

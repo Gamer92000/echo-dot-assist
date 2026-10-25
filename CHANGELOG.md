@@ -4,6 +4,14 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-25
 
+- **Echo Dot 2s on the October 2026 software can be unlocked, most likely** (issue #50). Fire OS 8338 brought a new
+  bootloader that the unlock tool amonet v2.0.0 had no payload for: fastboot refused it with "restricted on locked
+  hw". The setup now uses amonet v2.0.1 (download `amonet-biscuit-v2.0.1.zip` from the XDA thread), which carries a
+  payload made for that bootloader. Nobody has reported an unlock with it yet.
+- **An Echo Dot 2 can be unlocked from Windows** (issue #60). In Git Bash, `scripts/setup.sh` now unlocks a stock Echo
+  Dot 2 too, with [firebreak](https://github.com/bboe/firebreak), which also installs the firmware and root; the setup
+  then goes on as before. It needs uv and two USB drivers, which the setup names. Other models still need Linux on the
+  PC for the unlock.
 - **Setup joins hidden Wi-Fi networks.** The Echo's first Wi-Fi join now asks for the network by its name, as the
   settings page's "Switch network…" already did. A hidden network was never found: the Echo kept looking for it.
 - **Setup no longer waits forever after a failed unlock** (issue #50). On an Echo Dot 2 whose bootloader Amazon

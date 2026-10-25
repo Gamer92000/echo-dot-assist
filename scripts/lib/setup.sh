@@ -289,7 +289,7 @@ need_tools() {
     for t in pacman apt-get dnf; do command -v $t > /dev/null && { mgr=$t; break; }; done
     fail "missing: ${miss[*]}"
     if [ -n "$WINDOWS" ]; then
-        info "unzip, curl and sha256sum come with Git for Windows; adb with Android's platform-tools; python3 from python.org."
+        info "unzip, curl and sha256sum come with Git for Windows; adb and fastboot with Android's platform-tools (winget install Google.PlatformTools); python3 from python.org; uvx with uv (winget install astral-sh.uv)."
         info "Put them on the PATH (open Git Bash again afterwards), then try again."
         return 1
     fi
@@ -395,6 +395,7 @@ bootroot_unpack() {
 # WINDOWS (scripts/setup.sh under Git Bash, issue #49): only an Echo that is unlocked already, i.e. on adb in Fire OS
 # or TWRP (stock Fire OS has no adb).  The unlocks' bootrom and fastboot exploits stay on Linux (setup.sh says why);
 # everything after them is adb, which works there.  unlock_elsewhere says so, with the model's WIN_UNLOCK if it has one.
+# A model with UNLOCK_WINDOWS unlocks on Windows itself (Echo Dot 2: firebreak, devices/biscuit/setup.sh).
 unlock_elsewhere() {
     fail "The unlock does not run on Windows: this needs an Echo that is unlocked already, on adb over USB."
     info "Unlocked? Plug it in (Fire OS or TWRP, as \"adb devices\" lists it), then try again."
