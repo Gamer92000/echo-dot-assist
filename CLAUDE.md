@@ -220,6 +220,12 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   until 1.5 s; last 64 as `delay <id> <ms>` lines in `state/arbitration`): 95th percentile + 50 ms over the members
   counted and per member, 150-1000 ms, 500 until 10 samples; setting `arbitration_window_auto` (off: `arbitration_window`).
   The capture thread decides early once every member that takes part claimed or one beat us (`arb_settled`).
+  Rivals (forum #166): per member our last 64 rounds, own score and its claim against it (`rivals`, a line
+  `obs <id> <own>:<diff|-> ...` each); a round waits for it (`rival_waits`, `round_.waits`, `waited()`; the window too)
+  only above 0.15 close calls (beat ours or within 3 dB), rounds weighted by own-score distance (4 dB) and age (0.99),
+  close calls x3, prior 0.5 in 2; both answering counts as close.  Constants from `tools/arbsim.py` (synthetic
+  house; redo with real scores); `HASSMIC_ARB_RIVALS=0` (tests) waits for all.  `state/arbitration` written at most
+  once a minute (`SAVE_MS`).
   The network (beacons, key handoff, pairing; tags and action) always runs: the settings pages find each other
   through it. The `arbitration` setting (`arb_arbitrate`) only gates rounds; off, the beacon carries a flags byte after
   the counter and members leave that Echo out of rounds (older builds reject the longer beacon, same effect).
@@ -455,7 +461,7 @@ and link-local ranges of `LOCAL4` only. A stock rule hassmic comes to depend on 
 prints it.
 
 `tools/` is PC-side reverse-engineering and firmware tooling (`payload_dump.py`, Thumb disassembly helpers,
-`davs-fetch.py` for extra wake word models).
+`davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator).
 
 ## Conventions
 

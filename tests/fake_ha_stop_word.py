@@ -11,6 +11,7 @@ from arbecho import Echo, HA, check, until, start, run
 
 key = os.urandom(32)
 a, b = Echo("Echo Kitchen", 16971, 500, net=(2, key)), Echo("Echo Hall", 16972, 900, net=(2, key))
+for e in (a, b): e.env["HASSMIC_ARB_RIVALS"] = "0"     # each hears alone here: the other is waited for all the same
 
 
 async def main():

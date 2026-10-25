@@ -1328,11 +1328,11 @@ static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* captu
     int score = arb_mode(-1) == ARB_KIOSK ? kiosk_score(end, simulated) : wake_score(begin, end, simulated);
     if (score == INT_MIN) { fprintf(stderr, "arbitration: less than 3 s heard, answers without a claim\n"); trigger(0, end); return; }
     /* The other Echos' claims are Wi-Fi broadcasts, and the BLE scan's share of the antenna loses them (ble.c): no
-     * scanning while this round listens: the window, then the claims of Echos that heard it a little later and the
-     * winner's "answers", 1 s at least */
-    int w = arb_wait();
-    ble_quiet(w + 500 > 1000 ? w + 500 : 1000);
-    long long due = arb_claim(kw, score, prio);
+     * scanning while this round listens: the wait it took (none when nobody was worth waiting for, arb.c "Rivals"),
+     * then the claims of Echos that heard it a little later and the winner's "answers", 1 s at least.  Right after the
+     * claim: its first copy is out before the scan stops anyway, the other two 30 and 80 ms on */
+    long long due = arb_claim(kw, score, prio), w = due ? due - mono_ms() : 0;
+    ble_quiet(w + 500 > 1000 ? (int)w + 500 : 1000);
     if (!due) { answer(end); return; }
     arb_due = due; arb_from = end;
 }

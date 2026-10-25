@@ -26,6 +26,26 @@
  * us: nothing can change the outcome then, so a wide window costs only when some Echo did not hear the wake word.
  * The setting arbitration_window_auto off: the arbitration_window setting's fixed window, the early end all the same.
  *
+ * Rivals: in a house with Echos at both ends, most members never hear what this one hears, or only faintly, and every
+ * round waited out the window for their claims (forum, 2026-10-25: six Echos, the wake sound later with each one).  A
+ * claim is only worth waiting for if it could beat ours, and whether it can depends on where the talker stands: one
+ * difference per pair (a running mean) mixes the sofa, where this Echo is 15 dB ahead, with the kitchen, where the
+ * other is, and says "could" always.  Our own score tells the two apart.  So each Echo keeps, per member, its last
+ * OBS_KEEP rounds: its own score and the member's claim against it (until MEASURE_MS, the decision long past: none,
+ * or the difference), and estimates how likely the member is to beat ours or come within RIVAL_DB at this score:
+ * every kept round weighs exp(-|its own score - ours| / KERN_DB) * DECAY^age, a close call CLOSE_W times that, plus a
+ * prior of PRIOR_CLOSE in PRIOR_N (a member little known, or at a score not seen yet, is waited for).  A round waits
+ * for it above RISK.  Nothing flips: a door opened shows at that score in the next rounds, one shut fades.
+ * A wrong guess: when the member heard it better, its claim beats ours if it comes in time, else this Echo answers and
+ * our "answers" stops it if it is still waiting; when it, too, waited for nobody, both answer and Home Assistant's
+ * cooldown takes the first (the other goes quiet).  Either round is kept as a close call (both answering: whatever the
+ * scores), so the next one like it waits.  Simulated (tools/arbsim.py: five rooms, six Echos, doors opening and
+ * shutting at random): the answer after 177 ms on average where waiting for everyone took 368, the best Echo not the
+ * one answering in 0.02 % of wake words, two answering in 0.11 %; a mean difference or a line fitted to the scores
+ * did no better than waiting for everyone.  A member listening for another wake word never claims ours, and is not
+ * waited for either.  Kept in state/arbitration, a line per member ("obs <id> <own>:<difference|-> ...", oldest
+ * first), written at most every SAVE_MS.
+ *
  * Network: the members share a key K; claims and beacons carry a MAC with it and a counter against replays (reserved in
  * blocks in the state file, so it keeps rising across restarts).  A member takes a counter only above the last it took
  * from that id, until it restarts itself, so a counter that went back has the sender's packets dropped for good:
@@ -115,6 +135,7 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -135,6 +156,20 @@
 #define AUTO_PEER_MIN  3        /* a member's own samples before its own percentile counts */
 #define MEASURE_MS     1500     /* a member's claim this long after ours is still a sample */
 #define NDELAY         64
+#define OBS_KEEP       64       /* our rounds kept per member: its claim against ours (DECAY^64 = 0.53) */
+#define RIVAL_DB       300      /* dB x 100: a claim this far under ours still counts as close (the scores' spread
+                                 * between two detections is not measured yet: 3 dB, generous) */
+#define KERN_DB        400      /* dB x 100: a kept round this far from our score weighs 1/e */
+#define DECAY          0.99     /* per round of ours since */
+#define PRIOR_CLOSE    0.5      /* the prior: this many close calls in */
+#define PRIOR_N        2.0      /* this many rounds (0.25: a member nothing is known of is waited for; two rounds at
+                                 * a score without a close call and it is not; a stronger prior only waited longer
+                                 * for the same wrong answers as a lower RISK) */
+#define CLOSE_W        3.0      /* a close call weighs this many rounds: one after a run of quiet ones counts sooner */
+#define RISK           0.15     /* waited for above this share of close calls (tools/arbsim.py, CLOSE_W 3: 0.15 177 ms,
+                                 * 0.11 % two answering; 0.2 142 / 0.23 %; CLOSE_W 1, 0.12: 172 / 0.19 %) */
+#define D_NONE         INT_MIN  /* no claim from it in that round */
+#define D_PRIO         INT_MAX  /* its priority beat ours (a conversation) */
 /* A claim and an "answers" go out three times, these ms after the first: Wi-Fi broadcasts have no retries, and two copies
  * sent in the same ms were lost together (2026-10-06, biscuit missed radar's claim in 2 of 3 rounds while donut got it;
  * it got radar's "answers" 200 ms later).  The last copy still reaches a member whose detection came 60 ms before ours
@@ -159,6 +194,9 @@ static long long pace = 1000;                          /* per mille */
  * asks every LOOK_MS, or one missed answer had it start a network of its own beside the existing one */
 #define LOOK_MS PACE(1200)
 #define PEER_TTL_MS PACE(300000)    /* a member not heard of for this long no longer counts */
+/* The rounds' samples and rivals go to disk at most this often: a few KB with an fsync each time, and a wake word
+ * every few seconds in a conversation.  A stop loses at most that much (init kills hassmic: no last write) */
+#define SAVE_MS PACE(60000)
 #define DISCOVER_MS PACE(5000)      /* no member heard in this time: start a network */
 #define PUSH_MS PACE(30000)         /* hand our key to the same Echo at most this often */
 #define CTR_BLOCK    4096
@@ -228,14 +266,24 @@ static int pair_gave, give_left;
 static atomic_int pair_event;
 static uint8_t give_pkt[5 + 32 + 8 + BLOB];
 /* open: claims are sampled for the window (until MEASURE_MS); got: members sampled in it, slot: where in delays[], when:
- * when their claim came; dirty: samples to save */
+ * when their claim came; dirty: samples to save; want: the members counted when it opened, waits: whether it waits for
+ * each; heard/hat/hs/hp/hw: who claimed in it ("answers" too), when, the best score and priority, whether it answered;
+ * won: we answered */
 static struct {
-    uint8_t kw[8]; int score, prio, kiosk, open, decided, dirty, ngot; long long at, due;
+    uint8_t kw[8]; int score, prio, kiosk, open, decided, won, dirty, ngot, nwant, nheard; long long at, due;
     uint8_t got[NPEER][8]; unsigned slot[NPEER]; long long when[NPEER];
+    uint8_t want[NPEER][8], heard[NPEER][8]; int waits[NPEER], hs[NPEER], hp[NPEER], hw[NPEER]; long long hat[NPEER];
 } round_;
+/* Rivals (above): o[] a ring, next ever taken, n kept; d = their score - ours, or D_* */
+static struct rival { uint8_t id[8]; unsigned n, next; long long at; struct obs { int own, d; } o[OBS_KEEP]; } rivals[NPEER];
+static int rivals_on = 1;       /* HASSMIC_ARB_RIVALS=0 (tests of what happens in a round): every member waited for */
+static struct rival *rival(const uint8_t id[8], int make);
+static void observe(struct rival *v, int own, int d, long long at);
 static struct delay { uint8_t id[8]; int ms; } delays[NDELAY];         /* the window's samples: a ring, ndelay ever taken; ms -1: withdrawn */
 static unsigned ndelay;
 static int wauto = 1, wlogged;                         /* wlogged: the learned window the log told last */
+static int unsaved;                                     /* rounds not on disk yet; saved_at: the last time they went */
+static long long saved_at;
 
 /* Kiosk Satellite mode.  kround.e and kclaims[].e: dB x 10, as on the wire */
 static int mode = ARB_HASSMIC, kwindow = 400, koffset;     /* koffset: dB */
@@ -283,6 +331,15 @@ static void save(void)
         char h[17]; if (delays[i % NDELAY].ms < 0) continue;
         hex8(h, delays[i % NDELAY].id); fprintf(f, "delay %s %d\n", h, delays[i % NDELAY].ms);
     }
+    for (int i = 0; i < NPEER; i++) if (rivals[i].n) {          /* oldest first */
+        char h[17]; const struct rival *v = &rivals[i]; hex8(h, v->id);
+        fprintf(f, "obs %s", h);
+        for (unsigned j = v->next - v->n; j != v->next; j++) {
+            const struct obs *o = &v->o[j % OBS_KEEP];
+            if (o->d == D_NONE) fprintf(f, " %d:-", o->own); else fprintf(f, " %d:%d", o->own, o->d);
+        }
+        fputc('\n', f);
+    }
     /* a hard reset leaves the old file or the new one ("Network") */
     if (statefile_commit(&s)) fprintf(stderr, "arbitration: cannot write %s\n", path);
 }
@@ -291,7 +348,7 @@ static void derive(void) { crypto_blake2b_keyed(mac_key, 32, net_key, 32, (const
 
 static void load(void)
 {
-    char path[300], line[160], k64[64]; unsigned long long v; int j; FILE *f;
+    char path[300], line[OBS_KEEP * 24 + 40], k64[64]; unsigned long long v; int j; FILE *f;
     char hx[17];
     snprintf(path, sizeof path, "%s/arbitration", state_dir());
     if (!(f = fopen(path, "r"))) return;
@@ -304,6 +361,19 @@ static void load(void)
             struct delay *d = &delays[ndelay++ % NDELAY];
             for (int i = 0; i < 8; i++) { unsigned b; sscanf(hx + 2 * i, "%2x", &b); d->id[i] = (uint8_t)b; }
             d->ms = j;
+        }
+        else if (sscanf(line, "obs %16[0-9a-f]%n", hx, &j) == 1 && strlen(hx) == 16) {
+            uint8_t id[8]; struct rival *rv; char *p = line + j, *e;
+            for (int i = 0; i < 8; i++) { unsigned b; sscanf(hx + 2 * i, "%2x", &b); id[i] = (uint8_t)b; }
+            rv = rival(id, 1);
+            for (;;) {                                  /* " <own>:<d|->" each */
+                long own = strtol(p, &e, 10), d;
+                if (e == p || *e != ':' || own < -100000 || own > 100000) break;
+                if (e[1] == '-' && (e[2] == ' ' || e[2] == '\n' || !e[2])) { d = D_NONE; p = e + 2; }
+                else { p = e + 1; d = strtol(p, &e, 10); if (e == p || d <= D_NONE || d > D_PRIO) break; p = e; }
+                observe(rv, (int)own, (int)d, 1);
+            }
+            if (!rv->n) memset(rv, 0, sizeof *rv);
         }
     }
     crypto_wipe(line, sizeof line); crypto_wipe(k64, sizeof k64);
@@ -445,14 +515,98 @@ static int samples_of(const struct peer *p, int *v)
     return n;
 }
 
-/* The learned window for a round now.  n: samples of the members counted (they alone: an Echo unplugged or gone quiet
- * no longer holds the others up); q: their 95th percentile, -1 without any */
+/* ---------------------------------------------------------------- rivals (lk held) */
+
+static struct rival *rival(const uint8_t id[8], int make)
+{
+    struct rival *old = &rivals[0];
+    for (int i = 0; i < NPEER; i++) {
+        if (rivals[i].n && !memcmp(rivals[i].id, id, 8)) return &rivals[i];
+        if (!rivals[i].n || rivals[i].at < old->at) old = &rivals[i];
+    }
+    if (!make) return NULL;
+    memset(old, 0, sizeof *old); memcpy(old->id, id, 8);
+    return old;
+}
+
+static void observe(struct rival *v, int own, int d, long long at)
+{
+    v->o[v->next++ % OBS_KEEP] = (struct obs){ own, d }; v->at = at;
+    if (v->n < OBS_KEEP) v->n++;
+}
+
+static int close_call(int d) { return d != D_NONE && d > -RIVAL_DB; }
+
+/* Whether a round with our score s waits for this member (above) */
+static int rival_waits(const uint8_t id[8], int s)
+{
+    const struct rival *v = rival(id, 0);
+    if (!rivals_on) return 1;
+    double close = PRIOR_CLOSE, all = PRIOR_N, age = 1;
+    for (unsigned j = v ? v->next : 0; v && j != v->next - v->n; j--, age *= DECAY) {      /* the newest first */
+        const struct obs *o = &v->o[(j - 1) % OBS_KEEP];
+        double w = age * exp(-fabs((double)o->own - s) / KERN_DB);
+        if (close_call(o->d)) { all += w * CLOSE_W; close += w * CLOSE_W; } else all += w;
+    }
+    return close / all > RISK;
+}
+
+static int close_calls(const struct rival *v)
+{
+    int c = 0;
+    for (unsigned j = 0; v && j < v->n; j++) c += close_call(v->o[j].d);
+    return c;
+}
+
+static void heard(const uint8_t id[8], long long at, int score, int prio, int won)
+{
+    for (int i = 0; i < round_.nheard; i++) if (!memcmp(round_.heard[i], id, 8)) {
+        if (score > round_.hs[i]) round_.hs[i] = score;
+        if (prio > round_.hp[i]) round_.hp[i] = prio;
+        round_.hw[i] |= won;
+        return;
+    }
+    if (round_.nheard < NPEER) {
+        int i = round_.nheard++; memcpy(round_.heard[i], id, 8);
+        round_.hat[i] = at; round_.hs[i] = score; round_.hp[i] = prio; round_.hw[i] = won;
+    }
+}
+
+/* The round is over: each member's claim against ours; claims after `cutoff` were for the next one */
+static void rivals_take(long long cutoff)
+{
+    for (int i = 0; i < round_.nwant; i++) {
+        int d = D_NONE;
+        for (int j = 0; j < round_.nheard; j++) if (!memcmp(round_.heard[j], round_.want[i], 8) && round_.hat[j] <= cutoff) {
+            const long long x = (long long)round_.hs[j] - round_.score;
+            /* our priority beating it says nothing of how it hears: the scores still count */
+            d = round_.hp[j] > round_.prio ? D_PRIO : x >= D_PRIO ? D_PRIO - 1 : x <= D_NONE ? D_NONE + 1 : (int)x;
+            /* both answered (each sure of itself, neither waiting): Home Assistant took one, the other went quiet.
+             * Kept as a close call, so the next such round waits */
+            if (round_.won && round_.hw[j] && d < 0) d = 0;
+        }
+        observe(rival(round_.want[i], 1), round_.score, d, cutoff);
+    }
+    if (round_.nwant) round_.dirty = 1;
+    round_.nwant = round_.nheard = 0;
+}
+
+/* A member this round waits for */
+static int waited(const struct peer *p, long long now)
+{
+    if (!ago(p->seen, now, PEER_TTL_MS) || p->quiet) return 0;
+    for (int i = 0; i < round_.nwant; i++) if (!memcmp(round_.want[i], p->id, 8)) return round_.waits[i];
+    return 1;
+}
+
+/* The learned window for a round now.  n: samples of the members waited for (they alone: an Echo unplugged, gone quiet
+ * or no rival at this score no longer holds the others up; outside a round all counted); q: their 95th percentile, -1 without any */
 static int learned(long long now, int *n, int *q)
 {
     int all[NDELAY], mine[NDELAY], na = 0, w = 0;
     for (int i = 0; i < NPEER; i++) {
         const struct peer *p = &peers[i];
-        if (!ago(p->seen, now, PEER_TTL_MS) || p->quiet) continue;
+        if (!waited(p, now)) continue;
         int nm = samples_of(p, mine);
         memcpy(all + na, mine, sizeof *mine * (size_t)nm); na += nm;
         if (nm >= AUTO_PEER_MIN) { int x = p95(mine, nm) + AUTO_MARGIN_MS; if (x > w) w = x; }
@@ -682,6 +836,7 @@ static void on_packet(const uint8_t *p, size_t n, long long now, uint32_t ip)
         char late[48] = "";
         long long d = now - round_.at;
         if (round_.open && !memcmp(kw, round_.kw, 8) && d <= MEASURE_MS) {
+            heard(id, now, k->score, k->prio, k->won);
             if (!k->won) sample(id, d, now);
             snprintf(late, sizeof late, ", %+lld ms%s", d, round_.decided ? ", after the decision" : "");
         }
@@ -912,15 +1067,16 @@ static void *loop(void *arg)
         for (int i = 0; i < 2; i++) if (copies[i].left && now >= copy_at(i)) {
             struct pkt b; memcpy(b.p, copies[i].p, copies[i].n); b.n = copies[i].n; send_pkt(&b); copies[i].left--;
         }
-        if (round_.open && now - round_.at >= MEASURE_MS) round_.open = 0;
-        if (!round_.open && round_.dirty) {             /* the round's samples on disk once, and the window if it moved */
+        if (round_.open && now - round_.at >= MEASURE_MS) { round_.open = 0; rivals_take(round_.at + MEASURE_MS); }
+        if (!round_.open && round_.dirty) {             /* the round's samples to disk, and the window if it moved */
             int ns, q, w = learned(now, &ns, &q);
-            round_.dirty = 0; save();
+            round_.dirty = 0; unsaved = 1;
             if (wauto && ns >= AUTO_LEARN && (w > wlogged + wlogged / 10 || w < wlogged - wlogged / 10)) {
                 fprintf(stderr, "arbitration: window learned: %d ms (95 %% of the last %d claims came within %d ms)\n", w, ns, q);
                 wlogged = w;
             }
         }
+        if (unsaved && !ago(saved_at, now, SAVE_MS)) { unsaved = 0; saved_at = now; save(); }
         {
             if (!in_net) {
                 int members = 0;
@@ -1080,29 +1236,38 @@ long long arb_claim(const char *keyword, int score, int prio)
         if (round_.when[i] - round_.at > now - round_.when[i] && ndelay - round_.slot[i] <= NDELAY) {
             delays[round_.slot[i] % NDELAY].ms = -1; round_.dirty = 1;
         }
+    if (round_.open) rivals_take((round_.at + now) / 2);
     crypto_blake2b(round_.kw, 8, low, n);
-    round_.kiosk = mode == ARB_KIOSK; round_.at = now; round_.open = round_.decided = round_.ngot = 0;
+    round_.kiosk = mode == ARB_KIOSK; round_.at = now; round_.open = round_.decided = round_.won = round_.ngot = 0;
     if (round_.kiosk) {
         due = kiosk_claim(keyword, score, now);
         snprintf(why, sizeof why, "%s", due ? " (Kiosk Satellite mode)" : !arbitrate ? ", arbitration off" : ", kiosk port not open");
     } else if (running && arbitrate && in_net && count_peers(now)) {
-        int ns, q, w = wauto ? learned(now, &ns, &q) : kwindow;
+        int nw = 0, nm = 0;
         round_.score = score; round_.prio = prio; round_.open = 1;
+        for (int i = 0; i < NPEER; i++) if (ago(peers[i].seen, now, PEER_TTL_MS) && !peers[i].quiet && round_.nwant < NPEER) {
+            memcpy(round_.want[round_.nwant], peers[i].id, 8);
+            nw += round_.waits[round_.nwant++] = rival_waits(peers[i].id, score); nm++;
+        }
+        int ns, q, w = wauto ? learned(now, &ns, &q) : kwindow;
         /* claims that came before ours: those members heard it first, their delay is none */
         for (int i = 0; i < NCLAIM; i++) {
             struct claim *k = &claims[i];
-            if (k->at && k->at >= now - LOOKBACK_MS && !k->won && !memcmp(k->kw, round_.kw, 8)) sample(k->id, 0, k->at);
+            if (k->at && k->at >= now - LOOKBACK_MS && !memcmp(k->kw, round_.kw, 8)) { heard(k->id, k->at, k->score, k->prio, k->won); if (!k->won) sample(k->id, 0, k->at); }
         }
         claim_pkt(&b, score, prio, 0); send_spread(&b, now);
+        /* nobody to wait for: decided with the next block, which still sends "answers" to whoever heard it late */
+        if (!nw) w = 0;
         due = round_.due = now + w;
-        snprintf(why, sizeof why, ", waits up to %d ms (%s)", w, !wauto ? "set" : ns < AUTO_LEARN ? "learning" : "learned");
+        if (!nw) snprintf(why, sizeof why, ", waits for nobody (no other Echo came close at this score)");
+        else snprintf(why, sizeof why, ", waits up to %d ms for %d of %d (%s)", w, nw, nm, !wauto ? "set" : ns < AUTO_LEARN ? "learning" : "learned");
     } else snprintf(why, sizeof why, "%s", !arbitrate ? ", arbitration off" : ", no other Echo to ask");
     pthread_mutex_unlock(&lk);
     fprintf(stderr, "arbitration: heard it, score %d%s%s\n", score, prio && !round_.kiosk ? " (in a conversation)" : "", why);
     return due;
 }
 
-/* Every member that takes part claimed this round (or one beat us): deciding now gives what the window's end would */
+/* Every member waited for claimed this round (or one beat us): deciding now gives what the window's end would */
 int arb_settled(void)
 {
     long long now = now_ms(); int r = 0;
@@ -1111,7 +1276,7 @@ int arb_settled(void)
         r = 1;
         for (int i = 0; i < NPEER && r; i++) {
             const struct peer *p = &peers[i]; int in = 0;
-            if (!ago(p->seen, now, PEER_TTL_MS) || p->quiet) continue;
+            if (!waited(p, now)) continue;
             for (int j = 0; j < NCLAIM && !in; j++)
                 in = claims[j].at && claims[j].at >= round_.at - LOOKBACK_MS && !memcmp(claims[j].id, p->id, 8) && !memcmp(claims[j].kw, round_.kw, 8);
             r = in;
@@ -1131,7 +1296,7 @@ int arb_decide(void)
         fprintf(stderr, "arbitration: %s\n", win ? "this Echo answers" : "another device answers");
         return win;
     }
-    win = !beaten(); round_.decided = 1;
+    win = !beaten(); round_.decided = 1; round_.won = win;
     if (win && in_net) { claim_pkt(&b, round_.score, round_.prio, 1); send_spread(&b, now); }
     const char *why = now >= round_.due ? "the window's end" : win ? "every other Echo's claim in" : "a better claim in";
     long long after = now - round_.at;
@@ -1200,7 +1365,6 @@ int arb_window_auto(int set)
     return r;
 }
 
-int arb_wait(void) { pthread_mutex_lock(&lk); int r = window_now(now_ms()); pthread_mutex_unlock(&lk); return r; }
 
 static size_t jstr(char *o, size_t cap, const char *s)          /* node names: [a-z0-9_.-] only */
 {
@@ -1228,10 +1392,12 @@ size_t arb_status_json(char *o, size_t cap)
     J("\"members\":[");
     for (int i = 0; i < NPEER; i++) if (ago(peers[i].seen, now, PEER_TTL_MS)) {
         struct in_addr a = { peers[i].ip }; inet_ntop(AF_INET, &a, ip, sizeof ip); jstr(t, sizeof t, peers[i].node);
-        int v[NDELAY], nv = samples_of(&peers[i], v);
-        /* quiet with the kiosk flag: it takes part, the kiosk way.  late_ms: 95 % of its claims came within it */
-        J("%s{\"node\":\"%s\",\"ip\":\"%s\",\"seen_s\":%lld,\"arbitrates\":%s,\"mode\":\"%s\",\"late_ms\":", k++ ? "," : "", t, peers[i].ip ? ip : "",
-          (now - peers[i].seen) / 1000, peers[i].quiet && !peers[i].kiosk ? "false" : "true", peers[i].kiosk ? "kiosk" : "hassmic");
+        int v[NDELAY], nv = samples_of(&peers[i], v); const struct rival *rv = rival(peers[i].id, 0);
+        /* quiet with the kiosk flag: it takes part, the kiosk way.  late_ms: 95 % of its claims came within it; rounds:
+         * of ours kept for it (OBS_KEEP at most), close: in how many it beat ours or came within RIVAL_DB */
+        J("%s{\"node\":\"%s\",\"ip\":\"%s\",\"seen_s\":%lld,\"arbitrates\":%s,\"mode\":\"%s\",\"rounds\":%u,\"close\":%d,\"late_ms\":",
+          k++ ? "," : "", t, peers[i].ip ? ip : "", (now - peers[i].seen) / 1000, peers[i].quiet && !peers[i].kiosk ? "false" : "true",
+          peers[i].kiosk ? "kiosk" : "hassmic", rv ? rv->n : 0, close_calls(rv));
         if (nv >= AUTO_PEER_MIN) J("%d}", p95(v, nv)); else J("null}");
     }
     J("],\"others\":["); k = 0;
@@ -1316,6 +1482,7 @@ int arb_start(int port, const char *nd, const struct arb_hooks *h)
     int on = 1; struct sockaddr_in a; const char *addr = getenv("HASSMIC_ARB_ADDR");   /* tests: 127.255.255.255 */
     pthread_t t; const char *sc = getenv("HASSMIC_ARB_SCALE");
     if (sc && atof(sc) > 0) pace = (long long)(atof(sc) * 1000 + 0.5);
+    rivals_on = !(sc = getenv("HASSMIC_ARB_RIVALS")) || atoi(sc);
     beacon_gap = BEACON_MIN_MS;
     snprintf(node, sizeof node, "%s", nd); hooks = h;
     load();

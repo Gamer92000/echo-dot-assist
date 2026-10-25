@@ -158,6 +158,22 @@ wait from the network", what it measured, and which Echo's claims come latest. S
 window" (100–1000 ms) applies instead. The log notes how late each claim came
 (`arbitration: a0dbbafe heard it, score 1791, +233 ms`), and `after the decision` for one that missed it.
 
+**Echos in other rooms.** Waiting only pays when the other Echo's claim could beat this one's, and that depends on
+where you stand: on the sofa this Echo may be far ahead, at the kitchen counter the other one. How clearly this Echo
+heard you tells the two apart. So each Echo remembers, for its last 64 wake words, how clearly it heard you and how
+each other Echo's claim compared, and estimates how likely that Echo is to beat it or come within 3 dB when it hears
+you as clearly as now: wake words where it heard you about as clearly count most, recent ones more than old ones, and
+an Echo it knows little of, or a loudness it has not seen yet, is waited for. Heard clearly, an Echo no longer waits
+for the one at the far end of the house that catches a faint "Alexa" now and then; heard faintly (you are elsewhere),
+it still waits for the one next door. A door opened or an Echo moved shows within a few wake words, and with nobody
+worth waiting for, the Echo answers at once. A wrong guess costs a wake word where the farther Echo answers although
+the nearer heard you better, or, when both were sure of themselves, where both start: Home Assistant takes the first
+and the other goes quiet. Either wake word is remembered, so the next one like it waits. Nothing to set; the page
+names the Echos that never came close, and the log notes per wake word how many it waited for
+(`waits up to 406 ms for 2 of 5`) or that it waited for nobody. In a simulated house (`tools/arbsim.py`) the answer
+came after 177 ms on average instead of 368, two Echos started in 0.1 % of wake words, and the best Echo was not the
+one answering in 0.02 %.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="img/arbitration-window-dark.svg">
   <img alt="Timelines of one wake word round. Top: the other Echos' claims came between 0 and 372 ms late; 95 % within 356 ms, plus 50 ms gives a window of 406 ms. Every Echo heard you: the living room's claim at 30 ms and the hall's at 95 ms are in, so the Echo decides at 95 ms and skips the rest of the window. One Echo did not: the hall Echo missed it, so the Echo waits the whole 406 ms, then decides. A claim later than the window, at 440 ms: the Echo decided without it, but it is still measured, so the window learns from it." src="img/arbitration-window-light.svg">

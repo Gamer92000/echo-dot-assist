@@ -32,11 +32,9 @@ int  arb_peers(void);                           /* other members heard from late
 enum { ARB_HASSMIC, ARB_KIOSK };
 int  arb_mode(int set);
 /* The window in ms (100-1000; Kiosk Satellite's own setting goes to 500): ARB_KIOSK's, and ARB_HASSMIC's while
- * arb_window_auto is off (on: learned from how late the members' claims come, arb.c).  -1 only reads.  arb_wait: what a
- * round would wait now, either way */
+ * arb_window_auto is off (on: learned from how late the members' claims come, arb.c).  -1 only reads */
 int  arb_window(int set);
 int  arb_window_auto(int set);
-int  arb_wait(void);
 /* ARB_KIOSK: dB added to our claims' loudness (-20..20), the owner's calibration against kiosks; INT_MIN only reads */
 int  arb_offset(int set);
 /* Home Assistant ran our "arbitration_key" action: a member hands us its network.  Any lock may be held. */

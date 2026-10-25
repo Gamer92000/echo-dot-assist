@@ -983,6 +983,37 @@ Run in this order. Each step says what it proves.
       the name `wake_words_scan` gives sets that share one, for HA's select; the keyword hashes differed, each passed
       over the other's claim (no `+ms` on it, no early end) and answered at its window's end. A bug since the region
       suffix came in. Now the claim takes the name without it (`wake_phrase_bare`; Kiosk mode's phrase too).
+- [x] Rivals (forum #166, 2026-10-25): six Echos, several at opposite ends of a house, the wake sound later with each
+      one added: every round waited the whole window for members that never hear what this one hears (`arb_settled`
+      wanted a claim from every member counted). Two first takes dropped before release: a member that claimed in none
+      of our last 4 of 16 rounds left out (an Echo that hears now and then, faintly, kept rounds waiting after each
+      claim; a claim says nothing of whether it could win), then the nearest 8 of 32 rounds by own score, wait if one
+      was a close call. Compared in `tools/arbsim.py` (synthetic: 5 rooms in a row, 6 Echos, talker at room hotspots,
+      score = level - 20 log10 distance - walls (door open 6 dB, shut 20) + N(0, 2 dB), detection logistic at 12 dB,
+      doors toggling at 1 % per wake word, window 400 ms, claims and "answers" 50-350 ms on the way; every Echo decides
+      at its due or when a better claim or an "answers" reaches it; 3 seeds x 6000 wake words; time to the answer /
+      best Echo not answering / two answering): always wait 368 ms / 0 / 0, never 30 / 0 / 100 %, oracle 30 / 0 / 0;
+      last-4-of-16 368 (no better than always); a running mean of the difference 368 (bimodal by talker position:
+      always "could"); a line of their score on ours, forgetting, no claim censored, 331 / 0.12 / 0.15 %; nearest 8 of
+      32 176 / 0.16 / 0.43 %, 16 of 96 148 / 0.06 / 0.29 %. Now (`arb.c`, `rival_waits`): per member our last 64
+      rounds, own score and its claim's difference (until 1.5 s; none; its priority beat ours), one
+      `obs <id> <own>:<diff|-> ...` line each in `state/arbitration`. Share of close calls (beat ours or within
+      `RIVAL_DB` 3 dB, a guess: the spread between two detections of one wake word is not measured), each round
+      weighted exp(-|own - ours| / 4 dB) x 0.99^age, a close call 3 times (one after a run of quiet rounds counts
+      sooner), prior 0.5 in 2; waited for above 0.15: 177 ms / 0.02 / 0.11 %. Same curve: 0.2 142 / 0.02 / 0.23 %;
+      close x1 at 0.12 172 / 0.06 / 0.19 %; a stronger prior only moves along it. Both answered (each waited for
+      nobody; Home Assistant's cooldown takes the first): kept as a close call (`round_.won`, `hw`), as in the sim.
+      A new member: waited for twice at a score, then not unless close. A close call fades slowly (weight 3, 1 % a
+      round: 13 quiet rounds in the test): time only. Its lateness leaves the window when not waited for; nobody left:
+      the next capture block decides (`waits for nobody`), and the BLE scan pauses for what the round waits (main.c,
+      after `arb_claim`; `arb_wait` gone), 1 s at least. Samples and rivals go to disk at most once a minute
+      (`SAVE_MS`; up to 16 lines of 64 a round otherwise). Members on another wake word never claim ours: not waited
+      for either. Page members `rounds`/`close`, the status line names those never close. fake_ha_arbitration_window,
+      a fresh fake member: claims at 100 against 500 waited for twice (0.31 s, its claim ends the wait), then 0.02 s;
+      one late 99999 (wrong Echo once), the next round waits 0.53 s; both answering kept as 0; restarted at 1500 (no
+      round near): waited for, and it won. `HASSMIC_ARB_RIVALS=0` for tests of what happens in a round
+      (fake_ha_stop_word: each Echo hears alone there). To do: real scores of both Echos for one wake word, then
+      RIVAL_DB and RISK from them (arbsim with their spread).
       fake_ha_arbitration: "Echo (de)" against "Echo", the better one alone. The same run showed a sample booked to the
       wrong round: in the conversation test the other Echo's claim for the next wake word, 0.6 s later, went in as
       601 ms late for the round before. Now a new round takes back the last round's samples that came nearer to it

@@ -4,6 +4,13 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-25
 
+- **Echos in other rooms no longer slow the answer down.** With several Echos, each one waited for every other's
+  claim before it answered, up to a second when one far away never heard you, and more Echos meant a later wake
+  sound. Each Echo now learns which others could beat it: it waits for another Echo only if, the last times it heard
+  you about as clearly as now, that one heard you better or nearly as well. Heard clearly, it no longer waits for the
+  Echo at the other end of the house that catches a faint "Alexa" now and then; heard faintly, it still waits for
+  the one next door. A door opened or an Echo moved shows in the next few wake words. Nothing to set; the settings
+  page names the Echos it does not wait for.
 - **The ring no longer pulses all night after a settings page login nobody approved.** A browser asking to log in
   (or for debug access) shows a pattern on the ring until the action button is pressed. When the page was closed
   before that, the pattern stayed on, even across restarts of the satellite: an Echo 2 pulsed from 02:43 until the

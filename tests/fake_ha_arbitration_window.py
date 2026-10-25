@@ -56,7 +56,9 @@ async def main():
     check(re.search(r"arbitration: window learned: \d+ ms \(95 % of the last \d+ claims came within \d+ ms\)", a.text())
           and "another Echo answers (after" in a.text() and "a better claim in" in a.text(), "the log says what it learned, and why each round ended")
     await asyncio.sleep(0.5)                        # on disk when the last round's sampling (1.5 s) closes
-    check(open(os.path.join(a.state, "arbitration")).read().count("delay " + fid.hex()) == len(delays), "the samples kept in state/arbitration")
+    stored = lambda: open(os.path.join(a.state, "arbitration")).read()
+    saved = lambda cond: until(lambda: cond(stored()), 8)     # written at most every 60 s, 6 s at this pace
+    check(await saved(lambda t: t.count("delay " + fid.hex()) == len(delays)), "the samples kept in state/arbitration")
     # the hallway Echo did not hear it: the kitchen Echo waits the learned window, then answers
     n = len(a.starts); a.wake(); t = await a_claimed()
     await until(lambda: len(a.starts) > n, 3)
@@ -68,10 +70,11 @@ async def main():
     n = len(a.starts); a.wake(); t = await a_claimed()
     if t: await asyncio.sleep(max(0, t + 0.3 - time.monotonic())); fclaim()
     await asyncio.sleep(1.7)
-    check(len(a.starts) == n + 1 and "waits up to 200 ms (set)" in a.text() and ", after the decision" in a.text()
+    check(len(a.starts) == n + 1 and "waits up to 200 ms for 1 of 1 (set)" in a.text() and ", after the decision" in a.text()
           and a.page.state()["arbitration"]["window"]["ms"] == 200, "learning off: 200 ms set, the late claim missed (both would answer)")
     a.end_pipeline(); a.page.set(arbitration_window_auto="on"); await asyncio.sleep(0.5)
-    # a restart keeps what was learned; it counts once the member is heard from again
+    # a restart keeps what was learned (once on disk); it counts once the member is heard from again
+    await saved(lambda t: t.count("delay " + fid.hex()) == len(delays) + 1)
     await a.cli.disconnect(); a.proc.terminate(); a.proc.wait(); a.start(); await asyncio.sleep(0.5); await a.connect(ha)
     a.page = Browser(a.web); a.page.login_with_button(a.proc)
     fbeacon(); await asyncio.sleep(1)
@@ -79,6 +82,49 @@ async def main():
     check(not w2["learning"] and w2["ms"] == w["ms"], f"after a restart: still learned, {w2['ms']} ms")
     fbeacon(b"\x01"); await asyncio.sleep(0.5)          # the hallway Echo switches arbitration off: nobody waits for it
     check(a.page.state()["arbitration"]["window"]["samples"] < len(delays), "a member out of rounds: its samples no longer count")
+    # Rivals: a fourth Echo in the attic, nothing known of it yet (the hallway stays out of rounds)
+    tpub = os.urandom(32); tid = tpub[:8]
+    def tbeacon(): send(signed(b"HMA1\x01" + tpub + nb8 + node("echo-attic") + fctr()))
+    def tclaim(score): send(signed(b"HMA1\x04" + nb8 + tid + fctr() + kw + struct.pack("<iBB", score, 0, 0)))
+    async def round_(claim=None, late=0.3):         # one wake word; the attic's claim (a score) that late; how long it took
+        tbeacon()                                   # its beacons go on (a member counts 30 s here)
+        n = len(a.starts); a.wake(); t = await a_claimed()
+        if t and claim is not None: await asyncio.sleep(max(0, t + late - time.monotonic())); tclaim(claim)
+        await until(lambda: len(a.starts) > n, 3)
+        took = a.starts[-1] - t if t and len(a.starts) > n else -1
+        a.end_pipeline(); await asyncio.sleep(1.6)  # past MEASURE_MS: the round is kept
+        return took
+    def decided(): return re.findall(r"arbitration: (this|another) Echo answers \(after \d+ ms: ([^)]*)\)", a.text())[-1]
+    # it hears the kitchen's wake words faintly (100 against 500): the prior has it waited for twice, then not
+    took = [await round_(100) for _ in range(3)]
+    check(0.25 <= took[0] <= 0.4 and 0.25 <= took[1] <= 0.4 and 0 <= took[2] <= 0.12,
+          f"waited for while little known (its claim ends the wait), then not: {took}")
+    check("waits for nobody (no other Echo came close at this score)" in a.text(), "the log says why")
+    check(await saved(lambda t: f"obs {tid.hex()} 500:-400 500:-400 500:-400" in t), "kept in state/arbitration, a line per member")
+    took = await round_()
+    check(0 <= took <= 0.12, f"it did not hear the next one: answered with the next block: {took:.3f} s")
+    # its door opened: a close call (late, so the kitchen answered: the wrong Echo once), and the next round waits
+    took = [await round_(99999), await round_()]
+    check(0 <= took[0] <= 0.12 and took[1] >= 0.3 and decided() == ("this", "the window's end"),
+          f"one close call at 500 and rounds there wait for it again: {took}")
+    attic = next((m for m in a.page.state()["arbitration"]["members"] if m["node"] == "echo-attic"), {})
+    check(attic.get("rounds") == 6 and attic.get("close") == 1, f"the page: rounds kept, close calls: {attic}")
+    # both answered: the attic, too, waited for nobody and sent its "answers" after ours; kept as a close call
+    took = []                                       # far quieter claims first, until it is not waited for again
+    while not took or took[-1] > 0.12 and len(took) < 30: took.append(await round_(-9000))
+    def tanswers(score): send(signed(b"HMA1\x04" + nb8 + tid + fctr() + kw + struct.pack("<iBB", score, 0, 1)))
+    n = len(a.starts); a.wake(); t = await a_claimed()
+    if t: await asyncio.sleep(max(0, t + 0.2 - time.monotonic())); tclaim(100); tanswers(100)
+    await until(lambda: len(a.starts) > n, 3); a.end_pipeline(); await asyncio.sleep(1.6)
+    attic = next((m for m in a.page.state()["arbitration"]["members"] if m["node"] == "echo-attic"), {})
+    check(took[-1] <= 0.12 and attic.get("close") == 2, f"both answered (its claim 4 dB under ours): a close call: {took}, {attic}")
+    check(await saved(lambda t: f"500:-9500 500:0" in t.split("obs " + tid.hex())[1].split("\n")[0]), "kept as 0")
+    # the kitchen hears it far louder (1500, 10 dB more): no round near that score, the prior has it wait, the attic wins
+    a.env["HASSMIC_TEST_SCORE"] = "1500"
+    await a.cli.disconnect(); a.proc.terminate(); a.proc.wait(); a.start(); await asyncio.sleep(0.5); await a.connect(ha)
+    a.page = Browser(a.web); a.page.login_with_button(a.proc); tbeacon(); await asyncio.sleep(0.5)
+    took = await round_(99999)
+    check(took == -1 and decided() == ("another", "a better claim in"), f"an unseen score: waited for, and it won: {took}, {decided()}")
     sn.close()
 
 run(main, (a,))

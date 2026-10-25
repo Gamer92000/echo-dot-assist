@@ -298,17 +298,22 @@ const HELP = {
   arbitration_offset: { parent: 'arbitration', when: () => settingValue('arbitration_mode') === 'kiosk',
     help: 'Evens out the Echo\'s loudness against your tablets\' microphones, which hear differently. If a tablet answers when you spoke to the Echo, raise it; if the Echo answers when you faced a tablet, lower it. Only counts against devices in Kiosk Satellite mode with a different offset: set the same on every Echo. Default 0 dB.' },
   arbitration_window_auto: { parent: 'arbitration', when: () => settingValue('arbitration_mode') !== 'kiosk',
-    help: 'Each Echo measures how long the other Echos\' claims take to reach it and waits just long enough for nearly all of them (95 %, plus a little), between 0.15 and 1 s. Wi-Fi repeaters, and routers that hold broadcasts back for devices saving power, make claims late; a wait too short for your network lets the farther Echo answer. Until it has measured ten claims it waits 0.5 s. It answers as soon as every other Echo\'s claim is in, so the wait costs time only when another Echo did not hear you. Off: the fixed window below. On by default.',
+    help: 'Each Echo measures how long the other Echos\' claims take to reach it and waits just long enough for nearly all of them (95 %, plus a little), between 0.15 and 1 s. Wi-Fi repeaters, and routers that hold broadcasts back for devices saving power, make claims late; a wait too short for your network lets the farther Echo answer. Until it has measured ten claims it waits 0.5 s. It answers as soon as every other Echo\'s claim is in, so the wait costs time only when another Echo did not hear you. It also learns which Echos could beat it: it waits for another Echo only if, the last times it heard you about as clearly as now, that Echo heard you better or nearly as well. An Echo in another room that hears you faintly or not at all is not waited for; one close by is. Off: the fixed window below. On by default.',
     status: () => {
       const a = state.arbitration, w = a && a.window; if (!w || a.mode === 'kiosk') return null;
       const p = (...t) => h('p', { class: 'f-model' }, ...t);
-      if (!(a.members || []).some((m) => m.arbitrates && m.mode !== 'kiosk')) return p('No other Echo settles wake words with this one right now: it answers at once.');
+      const ours = (a.members || []).filter((m) => m.arbitrates && m.mode !== 'kiosk');
+      if (!ours.length) return p('No other Echo settles wake words with this one right now: it answers at once.');
+      // never close in the rounds kept: the estimate (arb.c "Rivals") has none of them waited for after two rounds
+      const apart = ours.filter((m) => m.rounds >= 2 && m.close === 0).map((m) => m.node);
+      if (apart.length === ours.length) return p(`The other Echos never came close to this Echo's wake words lately (other rooms): it answers at once.`);
+      const tail = apart.length ? ` Never close lately, so not waited for: ${apart.join(', ')}.` : '';
       const slow = (a.members || []).filter((m) => m.late_ms != null).sort((x, y) => y.late_ms - x.late_ms)[0];
       const measured = w.samples && !w.learning ? `95 % of the last ${w.samples} claims of the other Echos came within ${w.p95} ms`
         + (slow && (a.members || []).filter((m) => m.late_ms != null).length > 1 ? `; slowest: ${slow.node}, ${slow.late_ms} ms` : '') : '';
-      if (!w.auto) return p(`Waits ${w.ms} ms, set below.` + (measured ? ` Measured: ${measured}, so learning would wait ${w.learned} ms.` : ''));
-      if (w.learning) return p(`Learning: ${w.samples} of 10 claims measured, waits ${w.ms} ms meanwhile.`);
-      return p(`Waits up to ${w.ms} ms: ${measured}.`);
+      if (!w.auto) return p(`Waits ${w.ms} ms, set below.` + (measured ? ` Measured: ${measured}, so learning would wait ${w.learned} ms.` : '') + tail);
+      if (w.learning) return p(`Learning: ${w.samples} of 10 claims measured, waits ${w.ms} ms meanwhile.` + tail);
+      return p(`Waits up to ${w.ms} ms: ${measured}.` + tail);
     } },
   arbitration_window: { parent: 'arbitration', step: 50,
     when: () => settingValue('arbitration_mode') === 'kiosk' || !settingValue('arbitration_window_auto'),
