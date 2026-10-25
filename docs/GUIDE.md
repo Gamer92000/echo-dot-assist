@@ -463,6 +463,7 @@ Echo announces itself again after 100 s without Home Assistant, then less and le
 | [Sound detection](#sound-detection) | Sound (event) |
 | [Whisper detection](#whisper-detection) | Last request whispered |
 | Wake word events (off by default) | Wake word (event): `detected` (the Echo took it), `near_miss` (Amazon's engine heard something close, did not wake; none with microWakeWord), `answered_elsewhere` (another Echo or satellite answered), `no_speech` (woke, nothing said). A `detected` followed by `no_speech` is a false wake. Nothing while muted. Near misses can come often while the TV plays: an entry in Home Assistant's history each |
+| Request and reply text (off by default) | Last heard (what speech-to-text understood), Last reply (what the assistant answered). Both are cleared when a request starts, so the same request twice is still a change. Home Assistant takes at most 255 characters per state: a longer reply ends in "…". Every request and reply goes into Home Assistant's history while this is on. ESPHome only |
 | [Wi-Fi motion](#wi-fi-motion) | motion sensor, sensitivity |
 | Light sensor (off by default) | Illuminance (the room's light in lux); "LED brightness" then also follows auto brightness, an entry in the logbook every few minutes. Off, it shows only levels you set |
 | Bluetooth audio from phones | Bluetooth pairing |

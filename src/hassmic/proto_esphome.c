@@ -38,6 +38,8 @@
  *                    listed only where the Wi-Fi driver can do it
  *   online updates   a select (off by default, beta, release) and an update entity with the newest build on that channel
  *                    and an install button (update.c); channel and install only over the connection with the key
+ *   request text     the text sensors "Last heard" and "Last reply": what speech-to-text understood and what the
+ *                    assistant answered, both cleared when a run starts (issue #53).  Listed while the feature is on
  *   whisper          a binary sensor: the last request was whispered (whisper.h), set on the VAD end, before the
  *                    conversation agent runs, so its prompt template can read it; listed only with the model installed
  *   drop in          the action "drop_in" (esphome.<node>_drop_in, target: another Echo's name or node) calls an Echo
@@ -126,7 +128,7 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF, KEY_WEB_URL, KEY_IDENTIFY, KEY_RESET,
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
        KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON, KEY_LIGHT, KEY_ASSIST_VOLUME, KEY_SOUNDS_VOLUME, KEY_TIMER_VOLUME,
-       KEY_CALL_VOLUME, KEY_WAKE, KEY_RING_FILL, KEY_RING_ROTATION, KEY_RING_LEDS };
+       KEY_CALL_VOLUME, KEY_WAKE, KEY_RING_FILL, KEY_RING_ROTATION, KEY_RING_LEDS, KEY_LAST_HEARD, KEY_LAST_REPLY };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -328,6 +330,30 @@ static int key_set(const unsigned char *k, size_t len)
 
 static int have_light;                  /* a light sensor answered at start: auto brightness is listed, illuminance with the feature */
 
+/* Home Assistant takes no state over 255 characters, whatever the integration (MAX_LENGTH_STATE_STATE: a longer one
+ * turns unknown), and a reply from an LLM agent is often longer: cut on a character, with an ellipsis.  Characters,
+ * not bytes ("für" is 3).  pbf_str may have cut the text inside one; what is left of it is dropped, so the state stays
+ * UTF-8 (aioesphomeapi fails to decode the message otherwise). */
+#define STATE_CHARS 255
+static void state_text(char *out, size_t cap, const char *s)
+{
+    size_t i = 0, cut = 0; int chars = 0;
+    while (s[i]) {
+        unsigned char c = (unsigned char)s[i]; size_t n = c < 0x80 ? 1 : c >= 0xc2 && c < 0xe0 ? 2 : c >= 0xe0 && c < 0xf0 ? 3 : c >= 0xf0 && c < 0xf5 ? 4 : 0;
+        if (!n) break;
+        for (size_t k = 1; k < n; k++) if (((unsigned char)s[i + k] & 0xc0) != 0x80) n = 0;
+        if (!n) break;
+        if (++chars == STATE_CHARS) cut = i;                    /* room for the ellipsis */
+        if (chars > STATE_CHARS) { i = cut; break; }
+        i += n;
+    }
+    while (i && s[i - 1] == ' ') i--;                           /* a cut between words */
+    if (i > cap - 4) i = 0;                                     /* never: cap holds STATE_CHARS of 4 bytes */
+    memcpy(out, s, i); strcpy(out + i, chars > STATE_CHARS ? "\xe2\x80\xa6" : "");     /* … */
+}
+/* what the text sensors say (lock held); set only while they are listed, so a switch on shows nothing from before */
+static char last_heard[STATE_CHARS * 4 + 4], last_reply[STATE_CHARS * 4 + 4];
+
 static int listed(int key);
 static void send_setting(int key)       /* lock held */
 {
@@ -362,6 +388,8 @@ static void send_setting(int key)       /* lock held */
         pb_fixed32(&t, 1, key); pb_str(&t, 2, names); send_state(TEXT_SENSOR_STATE, &t); } break;
     case KEY_DROPIN_STATE: case KEY_DROPIN_PEER: { PB(t, 128); char peer[64]; int st = dropin_status(peer, sizeof peer);
         pb_fixed32(&t, 1, key); pb_str(&t, 2, key == KEY_DROPIN_STATE ? dropin_states[st] : peer); send_state(TEXT_SENSOR_STATE, &t); } break;
+    case KEY_LAST_HEARD: case KEY_LAST_REPLY: { PB(t, sizeof last_heard + 16);
+        pb_fixed32(&t, 1, key); pb_str(&t, 2, key == KEY_LAST_HEARD ? last_heard : last_reply); send_state(TEXT_SENSOR_STATE, &t); } break;
     case KEY_LIGHT: {
         struct ring_light l; ring_light_get(&l);
         pb_uint(&b, 2, l.on); pb_float(&b, 3, l.brightness); pb_uint(&b, 11, COLOR_MODE_RGB); pb_float(&b, 10, l.color_brightness);
@@ -523,6 +551,7 @@ static int listed(int key)
     case KEY_SENDSPIN_TOKEN: return core_sendspin_port != 0;
     case KEY_SOUND: return settings_on("sound_detection");
     case KEY_WAKE: return settings_on("wake_events");
+    case KEY_LAST_HEARD: case KEY_LAST_REPLY: return settings_on("request_text");
     case KEY_BT_PAIRING: return ble_present() && settings_on("bluetooth_audio");
     case KEY_BT_OUT_SEARCH: case KEY_BT_OUT: case KEY_BT_OUT_STATUS: case KEY_BT_OUT_DELAY: return ble_present() && settings_on("bluetooth_speaker");
     case KEY_ARB_PEERS: return arb_running() && settings_on("arbitration");
@@ -603,6 +632,13 @@ static void send_setting_entities(void)
      * conversation agent's prompt template, to have it answer in whispered speech tags */
     if (listed(KEY_WHISPERED)) { PB(b, 192); pb_str(&b, 1, "last_request_whispered"); pb_fixed32(&b, 2, KEY_WHISPERED);
         pb_str(&b, 3, "Last request whispered"); pb_str(&b, 8, "mdi:account-voice"); send_msg(LIST_BINARY_SENSOR, &b); }
+    /* What was said and answered, for a dashboard beside the Echo or an automation on a misheard word */
+    if (listed(KEY_LAST_HEARD)) {
+        { PB(b, 128); pb_str(&b, 1, "last_heard"); pb_fixed32(&b, 2, KEY_LAST_HEARD); pb_str(&b, 3, "Last heard");
+          pb_str(&b, 5, "mdi:account-voice"); send_msg(LIST_TEXT_SENSOR, &b); }
+        { PB(b, 128); pb_str(&b, 1, "last_reply"); pb_fixed32(&b, 2, KEY_LAST_REPLY); pb_str(&b, 3, "Last reply");
+          pb_str(&b, 5, "mdi:message-reply-text"); send_msg(LIST_TEXT_SENSOR, &b); }
+    }
     /* Wi-Fi motion (wifimotion.c): experimental, and the names say so */
     if (listed(KEY_WIFI_MOTION)) {
         { PB(b, 192); pb_str(&b, 1, "wifi_motion"); pb_fixed32(&b, 2, KEY_WIFI_MOTION); pb_str(&b, 3, "Wi-Fi motion (experimental)");
@@ -1259,7 +1295,7 @@ static void mute_changed(int muted) { (void)muted; send_setting(KEY_MUTE); setti
 static void wake_event(const char *event);
 static void on_event(const unsigned char *p, const unsigned char *end)
 {
-    struct pbf f, g; unsigned type = 0; char key[48], val[1024], text[512] = "", code[48] = ""; int cont = 0, stream_now = 0;
+    struct pbf f, g; unsigned type = 0; char key[48], val[1024], text[512] = "", said[1024] = "", code[48] = ""; int cont = 0, stream_now = 0;
     while (pb_next(&p, end, &f)) {
         if (f.field == 1) type = f.v;
         else if (f.field == 2 && f.wire == 2) {
@@ -1267,6 +1303,7 @@ static void on_event(const unsigned char *p, const unsigned char *end)
             while (pb_next(&q, f.data + f.len, &g)) { if (g.field == 1 && g.data) pbf_str(&g, key, sizeof key); else if (g.field == 2 && g.data) pbf_str(&g, val, sizeof val); }
             if (!strcmp(key, "text") || !strcmp(key, "message") || !strcmp(key, "code")) snprintf(text + strlen(text), sizeof text - strlen(text), "%s ", val);
             if (!strcmp(key, "code")) snprintf(code, sizeof code, "%s", val);
+            if (!strcmp(key, "text")) snprintf(said, sizeof said, "%s", val);    /* whole: text holds 512 bytes of all three */
             if (!strcmp(key, "continue_conversation") && !strcmp(val, "1")) cont = 1;
             if (!strcmp(key, "tts_start_streaming") && !strcmp(val, "1")) stream_now = 1;
             if (!strcmp(key, "url")) snprintf(tts_url, sizeof tts_url, "%s", val);
@@ -1276,6 +1313,12 @@ static void on_event(const unsigned char *p, const unsigned char *end)
      * start is the new run's (one refused before it starts has no RUN_START) */
     if (cancelled == 1 || (cancelled == 2 && type != EV_RUN_START && type != EV_ERROR)) return;
     if (type == EV_RUN_START || type == EV_ERROR) cancelled = 0;
+    /* "Last heard" and "Last reply": a new run clears both, so the same request said twice is a change Home Assistant
+     * records (it drops a state equal to the last) */
+    if (listed(KEY_LAST_HEARD) && (type == EV_RUN_START || type == EV_STT_END || type == EV_TTS_START)) {
+        if (type != EV_TTS_START) { state_text(last_heard, sizeof last_heard, type == EV_STT_END ? said : ""); send_setting(KEY_LAST_HEARD); }
+        if (type != EV_STT_END) { state_text(last_reply, sizeof last_reply, type == EV_TTS_START ? said : ""); send_setting(KEY_LAST_REPLY); }
+    }
     switch (type) {
     case EV_WAKE_END:   core_remote_wake(); break;          /* the wake word was heard in Home Assistant (-w remote) */
     case EV_STT_START:  core_set_state(LISTENING); break;
@@ -1429,6 +1472,7 @@ static void send_all_settings(void)
         send_setting(KEY_UPDATE_CHANNEL); send_setting(KEY_UPDATE); send_setting(KEY_WHISPERED);
         send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING);
         send_setting(KEY_DROPIN_PEER); send_setting(KEY_DROPIN_STATE);
+        send_setting(KEY_LAST_HEARD); send_setting(KEY_LAST_REPLY);
         send_setting(KEY_ASSIST_VOLUME); send_setting(KEY_SOUNDS_VOLUME); send_setting(KEY_TIMER_VOLUME); send_setting(KEY_CALL_VOLUME);
         send_light_states();
 }
@@ -1440,6 +1484,7 @@ static void settings_changed(void) { send_all_settings(); }      /* lock held: a
 static void entities_changed(void)
 {
     for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0) shutdown(clients[i].fd, SHUT_RDWR);
+    last_heard[0] = last_reply[0] = 0;          /* request text switched off and on again shows nothing from before */
     fprintf(stderr, "entities changed: links closed, Home Assistant lists them again\n");
 }
 

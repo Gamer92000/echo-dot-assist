@@ -4,6 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-25
 
+- **What you said and what the assistant answered, as sensors in Home Assistant** (issue #53). "Request and reply
+  text" in the settings page's Features adds "Last heard" and "Last reply", for a dashboard beside the Echo or an
+  automation. Both are cleared when a request starts, so saying the same thing twice still counts. Home Assistant
+  takes at most 255 characters per sensor: a longer reply ends in "…". Off by default: while it is on, every request
+  is kept in Home Assistant's history.
 - **The setup says why it will not take another firmware version** (issue #62). A newer firmware renamed to the
   expected file name kept the setup waiting with "download it again". It now says that only that exact file works,
   and the install guides say so too, also for an Echo that already runs a newer version: the unlock flashes the

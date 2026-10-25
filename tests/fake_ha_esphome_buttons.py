@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Home Assistant's side of the ESPHome native API against build/hassmic-host (tests/esphome_common.py), part four:
 runs cancelled by the action button or the wake word while Home Assistant thinks or still streams the reply, the
-keys as Home Assistant's "Button" event entity, turns in which nothing is said and the "Wake word" event entity."""
+keys as Home Assistant's "Button" event entity, turns in which nothing is said, the "Wake word" event entity and the
+"Last heard" / "Last reply" text sensors."""
 import asyncio, os, signal, tempfile
-from aioesphomeapi import APIClient, EventInfo, MediaPlayerEntityState, VoiceAssistantEventType as Ev
+from aioesphomeapi import APIClient, EventInfo, MediaPlayerEntityState, TextSensorInfo, TextSensorState, VoiceAssistantEventType as Ev
 from aioesphomeapi.model import Event
 from esphome_common import KEY_HELP, KEY_VOLUMEUP, KEY_VOLUMEDOWN, Browser, assistant, check, until, sync, home_assistant, run, late_asked, late_done
 
@@ -164,6 +165,37 @@ async def main(e):
     c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, no_text)
     await sync(c); await asyncio.sleep(0.3)
     check(wevs()[n0:] == ["detected"], f"a follow-up question, then nothing said: only the wake word before it ({wevs()[n0:]})")
+
+    # "Last heard" and "Last reply" (issue #53): off by default; on, the transcript and the answer, both cleared when a
+    # run starts (the same request twice is a change), a reply over Home Assistant's 255 characters cut on a character
+    check("last_heard" not in cby and e.pv("request_text") == 0, "request text off by default: no sensors in Home Assistant")
+    e.page.set(request_text="on")
+    try: await c.disconnect()
+    except Exception: pass
+    c = APIClient("127.0.0.1", PORT, None); await asyncio.wait_for(c.connect(login=True), 5)
+    es, _ = await c.list_entities_services(); st4 = []; c.subscribe_states(st4.append)
+    va = assistant(c); started = va.started; await sync(c)
+    by = {x.object_id: x for x in es}
+    check(isinstance(by.get("last_heard"), TextSensorInfo) and isinstance(by.get("last_reply"), TextSensorInfo)
+          and e.conf().get("request_text") == "on", "request text switched on on the page: both text sensors, kept in the settings file")
+    texts = lambda name: [x.state for x in st4 if isinstance(x, TextSensorState) and x.key == by[name].key]
+    async def turn(heard, reply):
+        started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+        c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
+        c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": heard})
+        c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_TTS_START, {"text": reply})
+        c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
+        await sync(c); await asyncio.sleep(0.2)
+    n0, r0 = len(texts("last_heard")), len(texts("last_reply"))
+    await turn("set a 10 second timer", "Timer set for 10 seconds")
+    await turn("set a 10 second timer", "Timer set for 10 seconds")
+    check(texts("last_heard")[n0:] == ["", "set a 10 second timer"] * 2 and texts("last_reply")[r0:] == ["", "Timer set for 10 seconds"] * 2,
+          f"the same request twice: cleared at each start, then what was heard and answered ({texts('last_heard')[n0:]}, {texts('last_reply')[r0:]})")
+    long = "Für " + "ä" * 300
+    await turn("erzähl mir was", long)
+    got = texts("last_reply")[-1]
+    check(len(got) == 255 and got == long[:254] + "…" and texts("last_heard")[-1] == "erzähl mir was",
+          f"a reply over 255 characters: 254 of them and an ellipsis, cut on a character ({len(got)}: {got[-4:]!r})")
 
 
 run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT), {"HASSMIC_FAKE_LED": os.path.join(tempfile.mkdtemp(), "ledctrl.log")})

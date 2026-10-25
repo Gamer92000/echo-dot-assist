@@ -2252,6 +2252,16 @@ Run in this order. Each step says what it proves.
       too (`dropin_was`, the core's copy under the lock).  Tests: `fake_ha_stop_word.py` (off: ring + stop in the
       round, THINKING + stop in the round), `fake_ha_dropin.py` (wake word, stop after the round in a call: hung up,
       one abort); red before.
+- [x] Request and reply text (2026-10-25, GitHub issue #53): text sensors "Last heard" (`last_heard`, KEY_LAST_HEARD,
+      STT_END's `text`) and "Last reply" (`last_reply`, KEY_LAST_REPLY, TTS_START's `text`), feature setting
+      `request_text` (off by default, exported).  RUN_START sends both empty, so a request said twice is two changes
+      (HA drops a state equal to the last; the issue's point 1).  HA refuses a state over 255 characters
+      (MAX_LENGTH_STATE_STATE, any integration, not ESPHome's protocol): `state_text` keeps 254 code points and adds
+      "…", drops a UTF-8 sequence cut by the 1024-byte field buffer.  Set only while listed, so a switch on shows nothing
+      from before.  ESPHome only (Wyoming has no entities).  Not done: the full text past 255 (an `esphome.*` event
+      with it in its data would carry it; a template sensor could keep it in attributes).  Tests:
+      fake_ha_esphome_buttons.py (off by default, listed when on, cleared per run, a 300-character reply cut on a
+      character).
 - [x] Wake word turns that hear nothing (2026-10-19, GitHub issue #48; two Dot 2 on 2026.10.17.151309: 4
       `stt-no-text-recognized` in 5 days, each with `anim_start_error_short`).  That code (HA's STT returned no text)
       now goes to `core_no_speech`: the run ends as after RUN_END, no error ring, whoever started it (wake word,

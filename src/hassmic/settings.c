@@ -48,13 +48,14 @@ static int bt_audio = 1, bt_speaker, whisper = 1;      /* features kept here; bt
 static int light_sensor;                                /* off: auto brightness moved the level in HA's history all day (forum, 2026-10-15) */
 static int bt_stay;                                     /* a2dp.c gets it only while the feature is on: off drops the link */
 static int wake_events;                                 /* off: an event per near miss is HA history most homes never read */
+static int request_text;                                /* off: what people say kept in HA's history is theirs to choose */
 
 static const char *state_dir(void) { const char *e = getenv("HASSMIC_STATE"); return e ? e : "/data/local/hassmic/state"; }
 static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "%s/%s", state_dir(), file); }
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, STOP_ENDS, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, WIFI_MOTION,
+enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, STOP_ENDS, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET, NSET };
@@ -92,6 +93,8 @@ static const struct setting table[NSET] = {
     [WHISPER]     = { "whisper_detection", "Whisper detection", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* proto_esphome.c's "Wake word" event entity (core_wake_events, issue #48) */
     [WAKE_EVENTS] = { "wake_events", "Wake word events", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
+    /* proto_esphome.c's "Last heard" and "Last reply" text sensors (issue #53) */
+    [REQUEST_TEXT] = { "request_text", "Request and reply text", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [WIFI_MOTION] = { "wifi_motion", "Wi-Fi motion (experimental)", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [WIFI_SENS]   = { "wifi_motion_sensitivity", "Wi-Fi motion sensitivity", "Features", NULL, S_INT, WIFIMOTION_SENS_MIN, WIFIMOTION_SENS_MAX, 1, 0 },
     [LIGHT_SENSOR] = { "light_sensor", "Light sensor", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
@@ -225,6 +228,7 @@ int settings_get(const struct setting *s)
     case WHISPER: return whisper;
     case LIGHT_SENSOR: return light_sensor;
     case WAKE_EVENTS: return wake_events;
+    case REQUEST_TEXT: return request_text;
     case DROPIN: return dropin_enable(-1);
     case DROPIN_ANSWER: return dropin_ask(-1);
     case SPK_GAIN: return spkgain_get();
@@ -274,6 +278,7 @@ static void put(enum id i, int v)
     case WHISPER: whisper = v; core_whisper_enable(v); break;
     case LIGHT_SENSOR: light_sensor = v; break;
     case WAKE_EVENTS: wake_events = v; break;
+    case REQUEST_TEXT: request_text = v; break;
     case BT_OUT_DELAY: a2dp_out_delay(v); break;                    /* a2dp.c saves it */
     case BT_OUT_AWAKE: btout_keep_awake(v); break;
     case BT_OUT_STAY: bt_stay = v; a2dp_out_stay(v && bt_speaker); break;
