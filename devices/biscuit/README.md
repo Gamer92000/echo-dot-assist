@@ -67,7 +67,8 @@ firmware flash: it gives root adb, as on donut.
   8149's), but no unlock with it is reported yet. An LK newer than both: the guided setup says so when the Echo is
   still in fastboot a minute after the script; power-cycled, the Echo boots the original software again, unharmed.
   Unlock before the Echo can update itself further.
-- From Windows (issue #60): [firebreak](https://github.com/bboe/firebreak) unlocks it, and `scripts/setup.sh` in Git
+- From Windows (issue #60; for beginners step by step: [docs/WINDOWS.md](../../docs/WINDOWS.md)):
+  [firebreak](https://github.com/bboe/firebreak) unlocks it, and `scripts/setup.sh` in Git
   Bash runs it as its unlock step (pinned `firebreak@0.8.0`, `uvx --managed-python firebreak@0.8.0 unlock fireos6`).
   It needs `adb` and `fastboot` (platform-tools), [uv](https://docs.astral.sh/uv/) and two USB drivers, installed once
   from an administrator PowerShell as [its README says](https://github.com/bboe/firebreak#windows). firebreak writes

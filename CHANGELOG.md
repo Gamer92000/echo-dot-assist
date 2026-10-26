@@ -4,6 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-26
 
+- **Echo Dot 2 from Windows, step by step** (issue #67). A new page, [docs/WINDOWS.md](docs/WINDOWS.md), for
+  people who have never used a command line: how to tell which Echo you have, the five tools to install with every
+  command to paste, how to get this project, what each step of the setup asks of you (with the button gesture for
+  the unlock and what the light ring means), adding the Echo to Home Assistant, and what to do when something goes
+  wrong.
 - **The settings page no longer says "cannot list its models" right after you log in.** Its first requests go out
   together, and the Echo turned away the ones that arrived out of order, so a card could show an error for up to
   30 seconds. The Echo now takes them in any order, each once.

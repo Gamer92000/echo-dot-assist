@@ -119,7 +119,8 @@ Echo, so it asks for a typed `yes` first.
 - **Already rooted** on the right firmware? It offers a shortcut: no unlock, no wipe.
 - **Windows**: run `scripts/setup.sh` in Git Bash, with GitHub's build of a published commit. An Echo Dot 2 it
   unlocks there too, with [firebreak](https://github.com/bboe/firebreak); other models it takes unlocked already (on
-  adb, in Fire OS or TWRP) and does everything after the unlock.
+  adb, in Fire OS or TWRP) and does everything after the unlock. **New to command lines? [Echo Dot 2 from Windows,
+  step by step](docs/WINDOWS.md)**, every command to paste and what each step asks of you.
 - **More Echos**: `--restart` starts over for the next one, `--preset hassmic-settings.conf` gives it the settings
   exported from another.
 - `--dry-run` shows every command without running one; `--from <step>` skips ahead.

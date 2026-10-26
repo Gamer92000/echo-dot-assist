@@ -9,8 +9,8 @@
 #                 network install)
 #     --preset F  settings to start with: an export from another Echo's settings page (hassmic-settings.conf);
 #                 without it, the install step asks (Enter for none)
-# Windows (Git Bash): an Echo that is unlocked already (on adb, in Fire OS or TWRP), with GitHub's release build; an
-# Echo Dot 2 also from stock, unlocked by firebreak.
+# Windows (Git Bash), with GitHub's release build: an Echo Dot 2 from stock, unlocked by firebreak (step by step for
+# beginners: docs/WINDOWS.md); other models only once unlocked already (on adb, in Fire OS or TWRP).
 # Only the Echo on USB is worked on, whatever else is on adb over Wi-Fi.  Keep the cable in to the end: the installed
 # Echo closes adb over Wi-Fi at its first boot.
 # The written instructions are the same steps: devices/<codename>/README.md.
