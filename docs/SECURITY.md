@@ -91,7 +91,8 @@ Your key also opens adb over Wi-Fi; the release key does not.
 
 Online updates mean trusting the project's releases: GitHub Actions builds and signs them
 (`.github/workflows/build.yml`) in a job that runs only for `main` and `release`, and its secret is the only copy of the
-release key besides the maintainer's. Only Home Assistant's encrypted link may switch the channel or install.
+release key besides the maintainer's. Only a browser approved on the settings page (with the action button) may pick
+the channel, and only Home Assistant's encrypted link may install.
 
 ## Bluetooth
 

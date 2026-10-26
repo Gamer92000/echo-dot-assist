@@ -183,8 +183,8 @@ Wi-Fi motion's kernel module is built in CI for every model, against kernel.org'
 The modules come out byte-identical to local builds.
 
 **The release key.** `keys/release.pub` is in every build and install; root accepts bundles signed with it, next to the
-owner's `update.pub` (`scripts/system/main.sh`), but hassmic only downloads any once the owner picks a channel in Home
-Assistant. The secret half is `secrets/release.key` on the maintainer's PC (back it up) and, base64-encoded
+owner's `update.pub` (`scripts/system/main.sh`), but hassmic only downloads any once the owner picks a channel on the
+settings page. The secret half is `secrets/release.key` on the maintainer's PC (back it up) and, base64-encoded
 (`base64 -w0 secrets/release.key`), the secret `RELEASE_SIGNING_KEY` of the GitHub environment `release`, whose
 deployment branches are `main` and `release` only. The one job that names that environment packs and signs the
 bundles, from the binaries the build jobs left; the build jobs run whatever a branch or pull request brings, so they
@@ -194,7 +194,7 @@ protect both branches. A new key goes out signed by the old one: Echos prefer th
 over the one on their system partition.
 
 What the key does not cover, on purpose: root accepts a release-signed bundle that hassmic hands it whatever "Online
-updates" is set to (the select is enforced by hassmic, which only downloads with a channel picked), and an older one
+updates" is set to (the setting is enforced by hassmic, which only downloads with a channel picked), and an older one
 as well as a newer one (switching from beta back to release relies on that). So a hassmic taken over through the
 network could put an older release back; it could not install code of its own.
 

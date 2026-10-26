@@ -36,8 +36,8 @@
  *   debug access     a switch opens adb over Wi-Fi for 30 min (adbwifi.c); only taken over the connection with the key
  *   wifi motion      experimental, off by default: a switch, a motion binary sensor, its sensitivity (wifimotion.c);
  *                    listed only where the Wi-Fi driver can do it
- *   online updates   a select (off by default, beta, release) and an update entity with the newest build on that channel
- *                    and an install button (update.c); channel and install only over the connection with the key
+ *   online updates   an update entity with the newest build on the channel picked on the settings page, and an
+ *                    install button (update.c); install only over the connection with the key
  *   request text     the text sensors "Last heard" and "Last reply": what speech-to-text understood and what the
  *                    assistant answered, both cleared when a run starts (issue #53).  Listed while the feature is on
  *   whisper          a binary sensor: the last request was whispered (whisper.h), set on the VAD end, before the
@@ -119,8 +119,8 @@ enum { BLE_REQ_CONNECT = 0, BLE_REQ_DISCONNECT, BLE_REQ_PAIR, BLE_REQ_UNPAIR, BL
 enum { EV_ERROR = 0, EV_RUN_START, EV_RUN_END, EV_STT_START, EV_STT_END, EV_INTENT_START, EV_INTENT_END, EV_TTS_START,
        EV_TTS_END, EV_WAKE_START, EV_WAKE_END, EV_VAD_START, EV_VAD_END, EV_TTS_STREAM_START = 98, EV_TTS_STREAM_END = 99, EV_INTENT_PROGRESS = 100 };
 enum { FEAT_VOICE = 1, FEAT_SPEAKER = 2, FEAT_API_AUDIO = 4, FEAT_TIMERS = 8, FEAT_ANNOUNCE = 16, FEAT_START_CONVERSATION = 32 };
-/* KEY_NOISE, KEY_MULT and KEY_ARB_HANDOFF: retired entities (noise suppression, mic volume multiplier, arbitration
- * handoff), kept so the others keep their keys */
+/* KEY_NOISE, KEY_MULT, KEY_UPDATE_CHANNEL and KEY_ARB_HANDOFF: retired entities (noise suppression, mic volume
+ * multiplier, online updates channel (the settings page's now), arbitration handoff), kept so the others keep their keys */
 enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SENDSPIN_TOKEN, KEY_SOC_TEMP, KEY_CPU_USAGE, KEY_BT_PAIRING,
        KEY_BT_ANNOUNCE, KEY_DND, KEY_EQ_BASS, KEY_EQ_MID, KEY_EQ_TREBLE, KEY_BT_LANG, KEY_ARB_JOIN, KEY_ARB_PEERS, KEY_ARB_SERVICE,
        KEY_SS_UNPAIRED, KEY_DENOISE, KEY_ADB_WIFI, KEY_LUX, KEY_LED_AUTO, KEY_LED_BRIGHTNESS, KEY_SOUND_DETECTION, KEY_SOUND,
@@ -408,7 +408,6 @@ static void send_setting(int key)       /* lock held */
     case KEY_BT_OUT_STATUS:
         if (ble_present()) { PB(t, 160); char st[120]; a2dp_out_status(st, sizeof st); pb_fixed32(&t, 1, key); pb_str(&t, 2, st); send_state(TEXT_SENSOR_STATE, &t); }
         break;
-    case KEY_UPDATE_CHANNEL: pb_str(&b, 2, update_channels[update_channel(-1)]); send_state(SELECT_STATE, &b); break;
     case KEY_UPDATE: {
         PB(u, 768); struct update_state us; update_get(&us);
         pb_fixed32(&u, 1, key); pb_uint(&u, 3, us.in_progress); pb_uint(&u, 4, us.in_progress); pb_float(&u, 5, us.progress);
@@ -547,7 +546,7 @@ static int listed(int key)
 {
     switch (key) {
     case KEY_MIC_LEVEL: case KEY_DENOISE: case KEY_BT_ANNOUNCE: case KEY_BT_LANG: case KEY_ADB_WIFI: case KEY_ARB_JOIN: case KEY_SS_UNPAIRED:
-    case KEY_SOUND_DETECTION: case KEY_WIFI_MOTION_ON: case KEY_UPDATE_CHANNEL: case KEY_SOC_TEMP: case KEY_CPU_USAGE: return 0;
+    case KEY_SOUND_DETECTION: case KEY_WIFI_MOTION_ON: case KEY_SOC_TEMP: case KEY_CPU_USAGE: return 0;
     case KEY_SENDSPIN_TOKEN: return core_sendspin_port != 0;
     case KEY_SOUND: return settings_on("sound_detection");
     case KEY_WAKE: return settings_on("wake_events");
@@ -731,15 +730,6 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
         send_setting(key); return;
     }
     else if (type == SWITCH_COMMAND && key == KEY_SOUND_DETECTION) { core_sound(on); settings_save(); send_setting(key); return; }
-    else if (type == SELECT_COMMAND && key == KEY_UPDATE_CHANNEL) {
-        /* what this Echo runs is root's business: only Home Assistant with the key picks where it comes from */
-        int c = client_of(reply_fd);
-        for (int i = 0; i < 3; i++) if (!strcmp(opt, update_channels[i])) {
-            if (i == UPDATE_OFF || (c >= 0 && clients[c].keyed)) { update_channel(i); settings_save(); fprintf(stderr, "update: online updates %s\n", opt); }
-            else fprintf(stderr, "update: channel change refused, the request did not come over the keyed connection\n");
-        }
-        send_setting(key); send_setting(KEY_UPDATE); return;            /* the entity follows through update_changed */
-    }
     else if (type == SWITCH_COMMAND && key == KEY_WIFI_MOTION_ON && wifimotion_present()) {
         wifimotion_enable(on); settings_save(); send_setting(key); return;       /* the sensor follows through wifi_changed */
     }
@@ -1469,7 +1459,7 @@ static void send_all_settings(void)
         send_setting(KEY_SS_UNPAIRED); send_setting(KEY_ADB_WIFI);
         send_setting(KEY_BT_OUT_SEARCH); send_setting(KEY_BT_OUT); send_setting(KEY_BT_OUT_STATUS); send_setting(KEY_BT_OUT_DELAY);
         for (int k = KEY_WIFI_MOTION_ON; k <= KEY_WIFI_MOTION_SENS; k++) send_setting(k);
-        send_setting(KEY_UPDATE_CHANNEL); send_setting(KEY_UPDATE); send_setting(KEY_WHISPERED);
+        send_setting(KEY_UPDATE); send_setting(KEY_WHISPERED);
         send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING);
         send_setting(KEY_DROPIN_PEER); send_setting(KEY_DROPIN_STATE);
         send_setting(KEY_LAST_HEARD); send_setting(KEY_LAST_REPLY);
