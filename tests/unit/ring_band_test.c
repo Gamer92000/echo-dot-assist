@@ -61,7 +61,7 @@ int main(void)
 
     check(ring_band_rows(-1) == 10, "the band: 10 rows by default (stock's line)");
     ring_band_rows(ROWS);
-    ring_start(NULL);
+    ring_start(NULL, NULL);
     for (int i = 0; i < 100 && px_at(480) < 0; i++) ms(20);
     check(px_at(480) == 0 && px_at(0) == 0, "nothing shows: black");
     check(ring_custom(), "Home Assistant gets the light");

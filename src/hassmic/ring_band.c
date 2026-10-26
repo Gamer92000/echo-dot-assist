@@ -196,7 +196,7 @@ static void draw(int p, struct rgb *led, long long t, int arg)
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
 static struct { long long at; int arg, on; } act[P_COUNT];
-static struct ring_light light = { 0, 1, 1, 1, 1, 1, E_NONE }, flash;
+static struct ring_light light = { .on = 0, .brightness = 1, .color_brightness = 1, .r = 1, .g = 1, .b = 1, .effect = E_NONE, .fill = 100 }, flash;
 static long long flash_until;
 static int rows = 10, wake_req, started;
 
@@ -421,9 +421,9 @@ static void *band_thread(void *arg)
 
 int ring_generate(const char *dir) { (void)dir; fprintf(stderr, "ring: no LED ring on this model (the band is drawn at run time)\n"); return 1; }
 
-void ring_start(void (*run)(const char *op, const char *name))
+void ring_start(void (*run)(const char *op, const char *name), void (*reloaded)(int custom_changed))
 {
-    (void)run;                                      /* no ledctrl here */
+    (void)run; (void)reloaded;                      /* no ledctrl here, and no set root installs */
     pthread_mutex_lock(&lock);
     int go = !started; started = 1;
     pthread_mutex_unlock(&lock);
@@ -434,6 +434,19 @@ void ring_start(void (*run)(const char *op, const char *name))
 }
 
 int ring_custom(void) { return 1; }                 /* Home Assistant's light: drawn here, any colour */
+/* What the Dots' ledcontroller adds (ring.c): the assistant's own volume steps, each LED's own layer (the fill, the
+ * rotation, LED by LED) and designs in place of stock's animations.  None of it on the band: no slots, nothing to
+ * install, the rotation stays 0 */
+int ring_assistant_steps(void) { return 0; }
+int ring_per_led(void) { return 0; }
+const struct ring_slot ring_slots[] = { { "", "", RING_PLAIN } };
+const int ring_nslots = 0;
+int ring_slot_available(int i) { (void)i; return 0; }
+int ring_slot_live(int i) { (void)i; return 0; }
+int ring_leds(void) { return LEDS; }
+int ring_check(const char *applied, size_t n, char *err, size_t cap) { (void)applied; (void)n; snprintf(err, cap, "no LED ring on this model"); return -1; }
+void ring_reload(void) {}
+int ring_rotation(int set) { (void)set; return 0; }
 
 void ring_set(const char *pattern)
 {

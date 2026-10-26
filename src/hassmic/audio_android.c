@@ -23,6 +23,7 @@
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
 #include <errno.h>
+#include <math.h>
 #include <stdint.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -167,19 +168,38 @@ void cap_close(void)
  * write blocks while all of them are with the player, which keeps it at playback speed.  What is queued but not
  * played yet is the frames written minus the player's position (AudioTrack's, so the track's own buffer counts). */
 #define PLAY_NBUF 8
+/* audio_*_gain (separate volumes, main.c): our own PCM turned down, as audio_mixer.c does, before the player gets it.
+ * Not the player's volume: Amazon's audio stack puts a track back to 1.0 (vol_write's note below).  1 = 65536 */
+static atomic_int music_q16 = 65536, tts_q16 = 65536, call_q16 = 65536;
+static int q16(float g) { return (int)lroundf((g < 0 ? 0 : g > 1 ? 1 : g) * 65536); }
+void audio_music_gain(float g) { atomic_store(&music_q16, q16(g)); }
+void audio_tts_gain(float g) { atomic_store(&tts_q16, q16(g)); }
+void audio_call_gain(float g) { atomic_store(&call_q16, q16(g)); }
+
+/* whole samples from every writer (audio_mixer.c's copy_gain says why); a lone odd byte passes unscaled */
+static void copy_gain(char *dst, const char *src, size_t n, int q)
+{
+    if (q >= 65536) { memcpy(dst, src, n); return; }
+    for (size_t i = 0; i + 1 < n; i += 2) {
+        short v; memcpy(&v, src + i, 2); v = (short)((v * q + 32768) >> 16); memcpy(dst + i, &v, 2);   /* rounded */
+    }
+    if (n & 1) dst[n - 1] = src[n - 1];
+}
+
 struct pstream {
     SLObjectItf obj; SLPlayItf play; SLAndroidSimpleBufferQueueItf q;
+    atomic_int *gain;                           /* audio_*_gain's for this stream; NULL: none (earcons: main.c scales them) */
     pthread_mutex_t lock; pthread_cond_t cond;
     unsigned bps, slot, busy, next;             /* bytes per second, slot size, slots with the player, next free slot */
     unsigned head, lens[PLAY_NBUF];             /* the oldest slot with the player, and each slot's bytes */
     long long written, consumed, last_cb;       /* bytes since open, bytes the player has taken, when it last took (ms) */
     char *buf;
 };
-static struct pstream voice = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER },
-                      music = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER },
+static struct pstream voice = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER, .gain = &tts_q16 },
+                      music = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER, .gain = &music_q16 },
                       earcon = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER },
-                      voip = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER },
-                      bt = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER };
+                      voip = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER, .gain = &call_q16 },
+                      bt = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER, .gain = &music_q16 };
 
 /* --- volume: Android's own, the music stream's index (0..its maximum, 30 on the Show), set through IAudioService with
  * the firmware's service tool as the front end is reached (afe_parcel.c): setStreamVolume(stream, index, flags,
@@ -466,7 +486,7 @@ static int s_write(struct pstream *s, const void *data, size_t len)
             }
         }
         char *slot = s->buf + (size_t)s->next * s->slot;
-        memcpy(slot, p, n);
+        copy_gain(slot, p, n, s->gain ? atomic_load(s->gain) : 65536);
         if ((*s->q)->Enqueue(s->q, slot, n) != SL_RESULT_SUCCESS) { pthread_mutex_unlock(&s->lock); return -1; }
         atomic_store(&last_out, now_ms());
         s->lens[s->next] = n; s->busy++; s->next = (s->next + 1) % PLAY_NBUF; s->written += n;
