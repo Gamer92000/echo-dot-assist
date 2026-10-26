@@ -289,7 +289,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Settings page** (`web.c`, `web/`): HTTP on 28931 (`-W`), files of `web/` gzip'd into the binary by `tools/embed.py`
   (`build/web_assets.c`). Login: the browser's X25519 key waits for the action button (`web_approve()` first in
   `on_action`; ring `authenticated_setup_mode`), approved keys in `state/web_clients`, Echo key `state/web_key`.
-  Requests signed (BLAKE2b-128 keyed with K over method, path, counter, body; K from X25519), counter per browser; the
+  Requests signed (BLAKE2b-128 keyed with K over method, path, counter, body; K from X25519), counter per browser,
+  each taken once within a window of the last 64 (`signed_ok`: the page's first calls cross on the way); the
   answers too (`respond_s`: X-HM-Mac over "RESP\n" + counter + body), and the page refuses an unsigned one ('old').
   Vouchers: members of one arbitration network let in a browser approved on another member (`/api/vouch/nonce`, `issue`
   (signed, at the Echo it is approved on), `login`; MAC with `arb_web_key`, a key derived from K, over target key,

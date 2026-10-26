@@ -274,10 +274,13 @@ Run in this order. Each step says what it proves.
             for paths past 100 bytes) and reads ustar, GNU long names and pax paths from File slices (never all in
             memory), "./" paths and a folder around it all too (a file unpacked and packed again); sizes octal digits
             only (review: a header that adds up with a negative size had the reader loop forever), long records capped;
-            the manifest's ids, kinds and names held to artifacts.c's rules before anything is sent. A card drawn before
-            the list came asks again by itself: the page's first signed calls go out together and the Echo takes a
-            browser's counters only rising (`signed_ok`), so one of them often comes back refused (the Echos scan
-            retries only after 30 s; seen on every fresh login here). `tests/unit/web_tar_test.py` holds tar.js
+            the manifest's ids, kinds and names held to artifacts.c's rules before anything is sent. Found on the way:
+            the page's first signed calls go out together and the Echo took a browser's counters only rising
+            (`signed_ok`), so one of them often came back refused, and its card said "cannot" until the next round
+            (30 s; on every fresh login here). Now each counter is taken once, above a floor and not among the last
+            64 taken (`ctr_fresh`/`ctr_take`; the floor = the highest on disk after a start, raised to each counter
+            that leaves the window); `fake_web.py` sends two crossed, replays both, holds one back past 60 and 65;
+            four fresh page loads in Chromium got every list at once. `tests/unit/web_tar_test.py` holds tar.js
             against Python's tarfile both ways, plus those lying headers. Tried in Chromium
             against two host Echos: saved 4 models (78 entries, GNU tar lists it, contents and digests match the
             folders), loaded into the other (3 installed by root's installer, the broken set refused by pryon_test,
@@ -678,8 +681,8 @@ Run in this order. Each step says what it proves.
       by hassmic on TCP 28931 (inside the firewall's range), files of `web/` gzip'd into the binary. Login by approval:
       the browser's X25519 key waits up to 60 s for a press of the action button (ring `authenticated_setup_mode`, on
       all three models), a second browser asking meanwhile refuses both; approved keys in `state/web_clients`. Requests
-      signed (BLAKE2b-128 keyed with K = BLAKE2b(X25519) over method, path, counter, body); counter per browser, on disk
-      for writes. Plain HTTP, so no secrets in answers. `crypto.subtle` is missing on plain-HTTP pages: `web/crypto.js`
+      signed (BLAKE2b-128 keyed with K = BLAKE2b(X25519) over method, path, counter, body); counter per browser, each taken
+      once (a window of 64: the page's calls cross on the way), the highest on disk for writes. Plain HTTP, so no secrets in answers. `crypto.subtle` is missing on plain-HTTP pages: `web/crypto.js`
       has X25519 (after TweetNaCl) and BLAKE2b (BigInt), 20 + 262 cases equal to Python's. Settings by name
       (`settings.c`, `state/config`, old positional file moved once; loaded at start for Wyoming too). Phases: (1) done:
       page, login, status warnings, settings, export/import, revoke; host test `fake_web.py` (23 checks) and the real

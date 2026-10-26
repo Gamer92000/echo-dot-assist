@@ -4,6 +4,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-26
 
+- **The settings page no longer says "cannot list its models" right after you log in.** Its first requests go out
+  together, and the Echo turned away the ones that arrived out of order, so a card could show an error for up to
+  30 seconds. The Echo now takes them in any order, each once.
 - **Save your models to a file and put them back later.** "Models on file" in the settings page's Wake word section
   saves the wake words, whisper and sound detection models you downloaded from Amazon, and your microWakeWord
   models, as one file on your computer. Loading that file puts them back on this Echo or any other, with the same

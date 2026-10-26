@@ -7,7 +7,7 @@
  *   The ring shows that a login waits (hooks->attention); a short press of the action button approves it (main.c
  *   on_action asks web_approve() first); unanswered for LOGIN_MS, it runs out, asked about or not.  One at a time: a
  *   second browser asking while one waits refuses both, so someone on the network cannot slip in beside the owner.  Approved keys are kept in state/web_clients.
- *   Requests: X-HM-Pub (the browser's key, hex), X-HM-Ctr (a number above the last one this browser used) and X-HM-Mac:
+ *   Requests: X-HM-Pub (the browser's key, hex), X-HM-Ctr (a number new for this browser, see signed_ok) and X-HM-Mac:
  *   keyed BLAKE2b-128 of "METHOD\nPATH\nCTR\nBODY" with K = BLAKE2b-256 keyed with X25519(echo key, browser key) over
  *   "hassmic web 1" + echo key + browser key.  A sniffer has neither secret key; a recorded request does not count
  *   twice (the counter is written to disk for every request that changes something).
@@ -85,7 +85,13 @@ static int LOGIN_MS = 60000;        /* a login waits this long for the button (H
 static const struct web_hooks *hooks;
 static pthread_mutex_t lk = PTHREAD_MUTEX_INITIALIZER;  /* everything below; never held while taking core_lock */
 static uint8_t sk[32], pk[32];
-static struct client { uint8_t pub[32]; unsigned long long ctr; char label[64]; } clients[MAX_CLIENTS];
+/* Counters a browser may have in flight at once.  The page sends its first calls together (state, export, artifacts,
+ * models, Amazon) and they arrive in any order: taking only a counter above the last, the Echo refused the ones that
+ * came late, and a card said "cannot list its models" until its next round (forum #172).  ctr: the highest taken (the
+ * one on disk); floor: nothing at or below it counts (the persisted ctr after a start, raised to each counter that
+ * leaves seen[]); seen: the last CTR_WINDOW taken, so none counts twice */
+#define CTR_WINDOW 64
+static struct client { uint8_t pub[32]; unsigned long long ctr, floor, seen[CTR_WINDOW]; int nseen; char label[64]; } clients[MAX_CLIENTS];
 static int nclients;
 /* what waits for the button: a login, or adb for an approved browser.  state: 0 none, 1 waits, 2 approved, 3 refused */
 enum { W_LOGIN = 1, W_ADB };
@@ -146,7 +152,7 @@ static void load_clients(void)
         struct client *k = &clients[nclients];
         line[strcspn(line, "\r\n")] = 0;
         if (sscanf(line, "%79s %llu %n", h, &c, &n) < 2 || unhex(k->pub, h, 32)) continue;
-        k->ctr = c; snprintf(k->label, sizeof k->label, "%s", line + n); nclients++;
+        k->ctr = k->floor = c; k->nseen = 0; snprintf(k->label, sizeof k->label, "%s", line + n); nclients++;
     }
     fclose(f);
 }
@@ -175,7 +181,7 @@ static void add_client(const uint8_t pub[32], const char *label)     /* lk held 
     struct client *k = client_of(pub);
     if (!k) {
         if (nclients == MAX_CLIENTS) { memmove(clients, clients + 1, sizeof clients[0] * (MAX_CLIENTS - 1)); nclients--; }   /* the oldest goes */
-        k = &clients[nclients++]; memcpy(k->pub, pub, 32); k->ctr = 0;
+        k = &clients[nclients++]; memcpy(k->pub, pub, 32); k->ctr = k->floor = 0; k->nseen = 0;
     }
     snprintf(k->label, sizeof k->label, "%s", label);
     save_clients();
@@ -373,21 +379,42 @@ static int read_request(int fd, struct req *r)
     return 0;
 }
 
-/* 1 if the request is signed by an approved browser with a fresh counter (written to disk when persist) */
+/* a counter not taken before: above the floor and not among the last ones taken */
+static int ctr_fresh(const struct client *c, unsigned long long ctr)
+{
+    if (ctr <= c->floor) return 0;
+    for (int i = 0; i < c->nseen; i++) if (c->seen[i] == ctr) return 0;
+    return 1;
+}
+
+/* taken: into seen[], the oldest of a full window out and the floor up to it */
+static void ctr_take(struct client *c, unsigned long long ctr)
+{
+    if (c->nseen < CTR_WINDOW) c->seen[c->nseen++] = ctr;
+    else {
+        int lo = 0;
+        for (int i = 1; i < CTR_WINDOW; i++) if (c->seen[i] < c->seen[lo]) lo = i;
+        if (c->seen[lo] > c->floor) c->floor = c->seen[lo];
+        c->seen[lo] = ctr;
+    }
+    if (ctr > c->ctr) c->ctr = ctr;
+}
+
+/* 1 if the request is signed by an approved browser with a fresh counter (the highest written to disk when persist) */
 static int signed_ok(const struct req *r, int persist)
 {
     uint8_t pub[32], mac[16], want[16], k[32]; crypto_blake2b_ctx ctx; char *end; struct client *c; int ok = 0;
     unsigned long long ctr = strtoull(r->ctr, &end, 10);
     if (unhex(pub, r->pub, 32) || unhex(mac, r->mac, 16) || !r->ctr[0] || *end) return 0;
     pthread_mutex_lock(&lk);
-    if ((c = client_of(pub)) && ctr > c->ctr && !session_key(k, pub)) {
+    if ((c = client_of(pub)) && ctr_fresh(c, ctr) && !session_key(k, pub)) {
         crypto_blake2b_keyed_init(&ctx, 16, k, 32);
         crypto_blake2b_update(&ctx, (const uint8_t *)r->method, strlen(r->method)); crypto_blake2b_update(&ctx, (const uint8_t *)"\n", 1);
         crypto_blake2b_update(&ctx, (const uint8_t *)r->path, strlen(r->path)); crypto_blake2b_update(&ctx, (const uint8_t *)"\n", 1);
         crypto_blake2b_update(&ctx, (const uint8_t *)r->ctr, strlen(r->ctr)); crypto_blake2b_update(&ctx, (const uint8_t *)"\n", 1);
         crypto_blake2b_update(&ctx, (const uint8_t *)r->body, r->blen);
         crypto_blake2b_final(&ctx, want);
-        if (!crypto_verify16(want, mac)) { ok = 1; c->ctr = ctr; if (persist) save_clients(); }
+        if (!crypto_verify16(want, mac)) { ok = 1; ctr_take(c, ctr); if (persist) save_clients(); }
         crypto_wipe(k, sizeof k);
     }
     pthread_mutex_unlock(&lk);
@@ -718,7 +745,7 @@ static void vouch_api(int fd, struct req *r)
 
 /* What the page seals for this Echo alone (a Wi-Fi password: the page is plain HTTP).  XOR with a key stream: block i
  * (64 bytes) = BLAKE2b-512 keyed with EK over the request's counter, "\n" and the byte i, EK = BLAKE2b-256 keyed with K
- * over "hassmic seal 1".  The counter is new with every request of a browser (signed_ok refuses an old one), so no
+ * over "hassmic seal 1".  The counter is new with every request of a browser (signed_ok takes each once), so no
  * stream serves twice; the request's MAC covers the sealed bytes.  web/crypto.js seal does the other half. */
 static int unseal(const struct req *r, const uint8_t *in, size_t n, uint8_t *out)
 {

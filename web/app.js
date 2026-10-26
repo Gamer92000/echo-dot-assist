@@ -1884,7 +1884,7 @@ function renderFile() { if (fileBox) keepFocus(fileBox, drawFile); }
 function drawFile() {
   fileBox.innerHTML = '';
   fileBox.append(cardHead('Models on file', 'Amazon\'s extra models and your microWakeWord models, saved as one file on your computer, and put back from it on this Echo or another one. A copy that no longer needs Amazon to hand them out. Load only files you saved yourself or got from someone you trust: a model runs inside the Echo.', 'down'));
-  if (!myArts) { fileBox.append(empty('warn', 'This Echo did not list its models yet.')); if (!fileArts.tried) fileArts(); return; }
+  if (!myArts) { fileBox.append(empty('warn', 'This Echo did not list its models yet.')); return; }
   const busy = !!fileJob, mineOf = (id) => myArts.artifacts.find((a) => a.id === id);
   const progress = busy ? [h('div', { class: 'busy' }, fileJob.text),
     h('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(fileJob.total), 'aria-valuenow': String(fileJob.done) },
@@ -1927,18 +1927,6 @@ function drawFile() {
     h('button', { disabled: busy, onclick: () => file.click() }, icon('up'), 'Load from file…'), file,
     h('button', { class: 'primary', 'data-k': 'save', disabled: busy || !picks.length, onclick: () => saveModels(picks) },
       busy ? [h('span', { class: 'spin' }), 'Saving…'] : [icon('down'), `Save ${plural(picks.length, 'model')}`])));
-}
-
-// The list for this card when the Echos scan did not get it: the page's first calls go out together, and the Echo
-// takes a browser's counters only rising (web.c signed_ok), so the one that arrives late comes back refused.  The
-// scan asks again only in 30 s; this card is in another section, where that read as "cannot".  Asked again, alone
-async function fileArts() {
-  fileArts.tried = true;
-  for (let i = 1; i <= 3 && !myArts; i++) {
-    await new Promise((r) => setTimeout(r, 700 * i));
-    try { myArts = (await echo.call('GET', '/api/artifacts')).json(); } catch (e) { /* again, then the next scan */ }
-  }
-  renderFile(); renderModels();
 }
 
 async function saveModels(arts) {

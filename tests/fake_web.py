@@ -174,6 +174,19 @@ async def main():
         body = b"wake_sound=on\n"; hd = b.headers("POST", "/api/set", body)
         check(rq("POST", "/api/set", body, hd)[0] == 200, "signed write")
         check(rq("POST", "/api/set", body, hd)[0] == 401 and cfg().get("wake_sound") == "on", "the same request again (replay): refused")
+        # the page's first calls go out together and arrive in any order: each counter counts once, whichever comes first;
+        # one left behind more than the window (64 taken) counts no more
+        c0 = b.ctr; b.ctr += 3
+        late, early = b.headers("GET", "/api/artifacts", b"", ctr=c0 + 1), b.headers("GET", "/api/artifacts", b"", ctr=c0 + 2)
+        check(rq("GET", "/api/artifacts", b"", early)[0] == 200 and rq("GET", "/api/artifacts", b"", late)[0] == 200,
+              "two requests that crossed on the way: both taken")
+        check(rq("GET", "/api/artifacts", b"", late)[0] == 401 and rq("GET", "/api/artifacts", b"", early)[0] == 401, "either again (replay): refused")
+        kept = b.headers("GET", "/api/artifacts", b"")                  # signed, held back while newer ones pass: the floor
+        for _ in range(65): b.call("GET", "/api/artifacts")             # rises to the first of them once 65 are in
+        check(rq("GET", "/api/artifacts", b"", kept)[0] == 401, "held back past 65 newer ones: refused")
+        kept = b.headers("GET", "/api/artifacts", b"")
+        for _ in range(60): b.call("GET", "/api/artifacts")
+        check(rq("GET", "/api/artifacts", b"", kept)[0] == 200 and rq("GET", "/api/artifacts", b"", kept)[0] == 401, "held back past 60: still taken, once")
         check(b.call("POST", "/api/set", b"wake_sound=off\n", key=os.urandom(32))[0] == 401, "wrong key: refused")
         hd = b.headers("POST", "/api/set", b"wake_sound=off\n")
         check(rq("POST", "/api/set", b"mic_level=-15\n", hd)[0] == 401 and cfg().get("mic_level") == "-30", "body changed after signing: refused")
