@@ -1273,7 +1273,7 @@ static void out_avrcp_answer(unsigned code, unsigned pdu, const unsigned char *p
 {
     if (pdu == PDU_REGISTER) {
         if (code == AVC_INTERIM && n >= 2 && par[0] == EVENT_VOLUME && out.absvol == A_ASKED) {
-            unsigned v = par[1] & 0x7f; int pct = (v * 100 + 63) / 127, want = volume_now();
+            unsigned v = par[1] & 0x7f; int pct = (v * 100 + 63) / 127, want = out_volume_now();     /* the loudest kind (separate volumes) */
             fprintf(stderr, "a2dp: speaker has absolute volume, at %d %%: asked to take the Echo's %d %%\n", pct, want);
             out.absvol = A_PENDING; out.avol_at = ms() + 3000;
             out_set_volume(want);

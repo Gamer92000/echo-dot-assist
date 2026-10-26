@@ -159,6 +159,7 @@ static int present(enum id i)
     case SS_UNPAIRED: return core_sendspin_port != 0;
     case SPK_GAIN: return spkgain_present();
     case BAND: return ring_band_rows(-1) >= 0;
+    case RING_ROT: return ring_band_rows(-1) < 0;                 /* LEDs to turn: the Dots' ring, not the band */
     default: return 1;
     }
 }

@@ -214,7 +214,11 @@ setup; what was checked on the PC only says so.
   system, voice call and TTS to the music stream (one index in `dumpsys audio`). The keypad is grabbed
   (`board.grab_keys`, EVIOCGRAB): the framework neither turns its volume too nor shows a panel, and the camera
   shutter's EV_SW on the same keypad no longer reaches Android. On the device: keys, Home Assistant and the page
-  move it; a Bluetooth speaker gets its own index (AudioService keeps one per device).
+  move it; a Bluetooth speaker gets its own index (AudioService keeps one per device). Separate volumes (main's #32):
+  the index at the loudest kind, the others turned down in our PCM (`audio_*_gain`) by the Echo Dot 2's curve
+  (`main.c` `vol_db`). Open: the Show's own curve (the index's steps plus the amplifier) is not measured, so a reply
+  at 30 beside music at 60 is only about as loud as music at 30. `state/volume` through `statefile.c` (#46), written
+  on the volume thread, not under `core_lock`.
 - [~] Equalizer: `afe_eq_get`/`afe_eq_set` (audio.h), here `command` 29 / 21 (donut's LIPC `GET/SET_USER_EQ_INFO`;
   `ADJUST` 28, `RESET` 30). This libasp has the UserEq code and its JSON (`convertUserEqJSONToVector`, BASS/MIDRANGE/
   TREBLE), reached through a vtable, so its handler was not traced: the payloads are LIPC's strings (the JSON in for

@@ -18,6 +18,7 @@
 #include "core.h"
 #include "afe_parcel.h"
 #include "btout.h"
+#include "statefile.h"
 #include <stdatomic.h>
 #include <sys/system_properties.h>
 #include <SLES/OpenSLES.h>
@@ -213,7 +214,8 @@ static struct pstream voice = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHRE
  * after it started on the first Echo Show ("TrackVolumeChanged ... track_volume=1.0"), so a sound began at our level and
  * jumped to full.  hassmic's 0..100 is kept in state/volume ("main tts"; the index has 31 steps); TTS has no stream of
  * its own and follows main.  hassmic runs as system: the calling package is "android".  The call (a process, ~0.1 s)
- * runs on a thread of its own, the newest value wins: vol_write is called under core_lock. */
+ * and the state file (statefile.c: its fsyncs take tens of ms on the flash) are done on a thread of its own, the newest
+ * value wins: vol_write is called under core_lock. */
 #define TX_SET_STREAM_VOLUME_A7 "3"
 #define TX_SET_STREAM_VOLUME_A9 "7"
 #define TX_GET_STREAM_MAX_VOLUME_A7 "10"
@@ -221,7 +223,7 @@ static struct pstream voice = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHRE
 #define STREAM_MUSIC "3"
 static pthread_mutex_t vol_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t vol_cond = PTHREAD_COND_INITIALIZER;
-static int vols[2] = { -1, -1 }, vols_loaded, vol_want = -1, vol_pushed;
+static int vols[2] = { -1, -1 }, vols_loaded, vol_want = -1, vol_pushed, vol_save[2] = { -1, -1 };    /* vol_save: to write */
 static pthread_once_t vol_once = PTHREAD_ONCE_INIT;
 
 static const char *vol_path(void)
@@ -261,9 +263,14 @@ static void *vol_thread(void *arg)
     tx_init();
     for (;;) {
         pthread_mutex_lock(&vol_lock);
-        while (vol_want < 0) pthread_cond_wait(&vol_cond, &vol_lock);
-        int v = vol_want; vol_want = -1;
+        while (vol_want < 0 && vol_save[0] < 0) pthread_cond_wait(&vol_cond, &vol_lock);
+        int v = vol_want, m = vol_save[0], t = vol_save[1]; vol_want = vol_save[0] = vol_save[1] = -1;
         pthread_mutex_unlock(&vol_lock);
+        if (m >= 0) {
+            char line[16]; snprintf(line, sizeof line, "%d %d\n", m, t);
+            if (statefile_write(vol_path(), 0666, line, strlen(line))) fprintf(stderr, "audio: cannot write %s\n", vol_path());
+        }
+        if (v < 0) continue;
         char out[256], idx[12];
         if (max <= 0) {
             char *get[] = { "/system/bin/service", "call", "audio", a9 ? TX_GET_STREAM_MAX_VOLUME_A9 : TX_GET_STREAM_MAX_VOLUME_A7, "i32", STREAM_MUSIC, NULL };
@@ -284,6 +291,12 @@ static void vol_push(int v)                     /* under vol_lock */
 {
     pthread_once(&vol_once, vol_start);
     vol_want = v;
+    pthread_cond_signal(&vol_cond);
+}
+static void vol_store(int m, int t)             /* under vol_lock: state/volume on vol_thread */
+{
+    pthread_once(&vol_once, vol_start);
+    vol_save[0] = m; vol_save[1] = t;
     pthread_cond_signal(&vol_cond);
 }
 
@@ -317,14 +330,7 @@ void vol_write(enum vol which, int v)
     vol_load();
     int changed = vols[which] != v;
     vols[which] = v;
-    if (changed) {
-        char tmp[270]; FILE *f;
-        snprintf(tmp, sizeof tmp, "%s.new", vol_path());
-        if ((f = fopen(tmp, "w"))) {
-            fprintf(f, "%d %d\n", vols[VOL_MAIN] < 0 ? v : vols[VOL_MAIN], vols[VOL_TTS] < 0 ? v : vols[VOL_TTS]);
-            if (fclose(f) == 0) rename(tmp, vol_path()); else unlink(tmp);
-        }
-    }
+    if (changed) vol_store(vols[VOL_MAIN] < 0 ? v : vols[VOL_MAIN], vols[VOL_TTS] < 0 ? v : vols[VOL_TTS]);
     if (which == VOL_MAIN && (changed || !vol_pushed)) { vol_pushed = 1; vol_push(v); }   /* Android's index as hassmic has it */
     pthread_mutex_unlock(&vol_lock);
 }
@@ -378,7 +384,7 @@ int audio_a2dp_route(int on, uint64_t addr, const char *name)
         fprintf(stderr, "btout: AudioPolicy did not move the output %s (status %d, state %d)\n", on ? "to the speaker" : "back", r, now);
         return -1;
     }
-    if (on) { FILE *f = fopen(route_path(), "w"); if (f) { fprintf(f, "%s\n", a); fclose(f); } }
+    if (on) { char line[20]; snprintf(line, sizeof line, "%s\n", a); statefile_write(route_path(), 0666, line, strlen(line)); }
     else unlink(route_path());
     pthread_mutex_lock(&vol_lock);
     vol_load();

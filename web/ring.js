@@ -422,6 +422,7 @@ const usedFor = (did) => slotsOf().filter((s) => s.design === did).map((s) => pl
 
 function ringRender() {
   if (!ringBox || !ring.status) return;
+  if (!ring.status.slots.length) { ringBox.replaceChildren(); return; }   // no animations to design: the Echo Show's band
   if (!ring.status.installed) {
     ringBox.replaceChildren(h('div', { class: 'card' }, cardHead('Light ring animations', null, 'sun'),
       h('div', { class: 'callout info ringd-callout' }, icon('info'),
@@ -938,7 +939,7 @@ const designMark = (text) => hex(blake2b(8, null, enc.encode(text)));
 async function ringSnapshot(e) {
   let st, lib;
   try { st = (await e.call('GET', '/api/ring')).json(); lib = (await e.call('GET', '/api/ring/designs')).text(); } catch (x) { return null; }
-  if (!st.installed) return null;
+  if (!st.installed || !st.slots.length) return null;
   const snap = { byMark: new Map(), byId: new Map(), values: new Map() };
   const parts = ('\n' + lib).split(/\ndesign (\d+)\n/);
   for (let i = 1; i + 1 < parts.length; i += 2) {

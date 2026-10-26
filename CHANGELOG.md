@@ -4,6 +4,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-26
 
+- **Echo Show: the settings page shows only what the light band can do.** "Light ring rotation" and the light ring
+  designs are for the Dots' LEDs; the Show's page no longer lists them, where they did nothing or failed on Apply. A
+  Bluetooth speaker that sets its own volume now starts at the loudest of the separate volumes, not the music's, so
+  replies are not quieter for a moment after it connects. The volume the Show keeps survives a power cut.
 - **Echo Dot 2 from Windows, step by step** (issue #67). A new page, [docs/WINDOWS.md](docs/WINDOWS.md), for
   people who have never used a command line: how to tell which Echo you have, the five tools to install with every
   command to paste, how to get this project, what each step of the setup asks of you (with the button gesture for
@@ -26,6 +30,16 @@ What changed for people using the Echo, newest first. Details and measurements a
   Assistant logged four warnings on every connection, and a later version could refuse the Echo outright. The Echo
   now speaks Sendspin 1.0 to Music Assistant 2.10.8 and later, and the earlier draft to versions up to 2.10.6,
   picking the right one each time a server connects. Pairing, volume and the delay setting work with both.
+- **Guided setup: a Wi-Fi network the Echo had saved before is taken as it is.** Joining failed with "WifiService did
+  not add the network" when the Echo Show already knew the network (from a stock update over Wi-Fi, or Amazon's setup):
+  Android lets only the system user change it, and the setup now asks as that user.
+- **Echo Show 5 (2nd gen, `cronos`): first support, installed on one.** The 2021 Show 5 runs the same Fire OS build as
+  the 1st gen, so it installs the same way ([`devices/cronos`](devices/cronos/README.md), `scripts/setup.sh cronos`). Its
+  mute button and speaker amplifier differ: the mute button is answered as on the Echo Show 8 2nd gen, and the "Speaker
+  gain" setting finds whichever amplifier the unit has (Realtek's as on the 1st gen; TI's up to +4 dB; Maxim's, the
+  first one's, up to +6 dB). Its setup installs the udev rules for USB access, as the Dots' do. On the first Echo the
+  guided setup ran through; Home Assistant, the wake word, the keys, the mute switch, the light band and the light
+  sensor work. Not checked yet: the speaker gain by ear, Wi-Fi motion, "Download from Amazon", Bluetooth.
 
 ## 2026-10-25
 
@@ -215,22 +229,6 @@ What changed for people using the Echo, newest first. Details and measurements a
   gets its changes one after the other, in order.
 - **The ring's brightness ends where the slider stops.** Dragging the LED brightness in Home Assistant could leave the
   ring at a level from along the way, for the same reason; brightness changes now take their turn in that same order.
-
-## 2026-10-26
-
-- **Guided setup: a Wi-Fi network the Echo had saved before is taken as it is.** Joining failed with "WifiService did
-  not add the network" when the Echo Show already knew the network (from a stock update over Wi-Fi, or Amazon's setup):
-  Android lets only the system user change it, and the setup now asks as that user.
-- **Echo Show 5 (2nd gen, `cronos`): first support, installed on one.** The 2021 Show 5 runs the same Fire OS build as
-  the 1st gen, so it installs the same way ([`devices/cronos`](devices/cronos/README.md), `scripts/setup.sh cronos`). Its
-  mute button and speaker amplifier differ: the mute button is answered as on the Echo Show 8 2nd gen, and the "Speaker
-  gain" setting finds whichever amplifier the unit has (Realtek's as on the 1st gen; TI's up to +4 dB; Maxim's, the
-  first one's, up to +6 dB). Its setup installs the udev rules for USB access, as the Dots' do. On the first Echo the
-  guided setup ran through; Home Assistant, the wake word, the keys, the mute switch, the light band and the light
-  sensor work. Not checked yet: the speaker gain by ear, Wi-Fi motion, "Download from Amazon", Bluetooth.
-
-## 2026-10-17
-
 - **Wake sound removal (experimental) on the Echo Show.** The Show starts a sound after a pause 0.35 s late (below); the
   removal now looks for the sound's echo from where it really starts, and no longer misses it.
 
@@ -257,6 +255,7 @@ What changed for people using the Echo, newest first. Details and measurements a
 - **Echo Show 8 (1st gen): the speaker gain can go below stock.** The Show 8 is loud at its stock level with music at
   full volume, so the settings page's speaker gain goes down to -6 dB here (the Dots only go up). About -2 dB suited
   the first one tried.
+
 ## 2026-10-14
 
 - **Echo Show 8 2nd gen (`athena`): first support, installed on one.** Android 9 and a different chip from the other Shows,
