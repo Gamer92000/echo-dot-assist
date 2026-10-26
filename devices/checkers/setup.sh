@@ -24,6 +24,7 @@ NDK_URL=https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.z
 STEPS="
 tools|Tools on this PC
 files|Downloads
+udev|USB access to the Echo
 usb|Power and USB to the Echo
 unlock|Unlock, boot TWRP
 system|System partition
@@ -94,18 +95,23 @@ step_files() {
     adbd_ok || need+=($XDAROOT $XDAROOT_SHA256 "boot-root.zip, attachment in $XDA (checkers' own, for its adbd)")
     policy_tool || need+=($BOOTROOT $BOOTROOT_SHA256 "boot-root.zip, attachment in $DONUT_XDA (the Echo Dot 3's, for its magiskpolicy; not checkers' own)")
     need_files "${need[@]}" || return 1
-    # the policy is patched on the PC, under qemu against the unpacked firmware; a system qemu-arm is fine too
-    if ! command -v qemu-arm > /dev/null && [ ! -x $QEMU ]; then
-        mkdir -p toolchain
-        task "Downloading qemu-arm (runs the policy tool on the PC)" sh -c "curl -fsSL -o $QEMU $QEMU_URL &&
-            [ \"\$(sha256sum < $QEMU | cut -c1-64)\" = $QEMU_SHA256 ] && chmod 755 $QEMU" || { rm -f $QEMU; return 1; }
-    fi
+    # the policy is patched on the PC, under qemu against the unpacked firmware (scripts/lib/setup.sh)
+    qemu_arm || return 1
     [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
     if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
         mkdir -p toolchain
         TASK_NOTE="du -h toolchain/ndk.zip | cut -f1" task "Downloading Android NDK r21e (1 GB)" curl -fsSL -o toolchain/ndk.zip $NDK_URL &&
             task "Unpacking the NDK" unzip -q -o toolchain/ndk.zip -d toolchain && rm -f toolchain/ndk.zip || return 1
     fi
+}
+
+# lets adb and fastboot reach the Echo without sudo, also over ssh (scripts/51-echo-unlock.rules)
+step_udev() {
+    local rules=/etc/udev/rules.d/51-echo-unlock.rules
+    cmp -s scripts/51-echo-unlock.rules $rules && { ok "udev rules installed"; return 0; }
+    need_sudo "to install udev rules" || return 1
+    task "Installing udev rules" sh -c "sudo cp scripts/51-echo-unlock.rules $rules && sudo udevadm control --reload &&
+        sudo udevadm trigger --subsystem-match=usb"
 }
 
 step_usb() {

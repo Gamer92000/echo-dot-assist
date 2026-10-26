@@ -37,6 +37,10 @@
  * 0..39 = -46.5..+12 dB, 1.5 dB a step: the soc_mixer_control and TLV in checkers' own kernel) is set to 29, -3 dB, among
  * the XML's initial settings, which the HAL applies at its start; no path and no other file of the firmware names it.
  * Ten steps above stock: up to +15 dB, of which the page offers 12 (board.speaker_gain_steps 2 per speaker_gain_db 3).
+ *
+ * Echo Show 5 2nd gen (cronos, from the firmware only, 2026-10-26): one firmware for boards with three different
+ * amplifiers (a device tree per revision; RT5616/RT5616E as checkers, TAS5805M, MAX98396), each with its own control.
+ * board.speaker_gain_alt lists the others; the first name card 0 has is the one, the rest of a board_gain with it.
  */
 #include "spkgain.h"
 #include "board.h"
@@ -57,6 +61,7 @@
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static int present = -1, fd = -1, wanted, written = -1, started, hi, count, stock, steps, per, lodb;
 static unsigned numid;
+static const char *ctl_name;           /* the control found: board.speaker_gain or one of speaker_gain_alt */
 /* HASSMIC_FAKE_SPEAKER_GAIN=<file>[:<stock>:<steps>:<max>[:<per dB>[:<lowest dB, 0 or negative>]]]: a file standing in for the control (tests),
  * shaped as the Echo Dot 2's (6:1:35:1) unless told otherwise, whatever the board */
 static const char *fake;
@@ -92,27 +97,35 @@ static int probe(void)
         return steps > 0 && per > 0 && (hi - stock) * per >= steps;
     }
     if (!board.speaker_gain) return 0;
-    stock = board.speaker_gain_stock; steps = board.speaker_gain_steps > 0 ? board.speaker_gain_steps : 1;
-    per = board.speaker_gain_db > 0 ? board.speaker_gain_db : 1;
+    /* the board's control, then the other amplifiers it may have (board.speaker_gain_alt): the first one on the card */
+    struct board_gain g = { board.speaker_gain, board.speaker_gain_stock, board.speaker_gain_steps, board.speaker_gain_db,
+                            board.speaker_gain_min_db, board.speaker_gain_limit };
+    const struct board_gain *alt = board.speaker_gain_alt;
     if ((fd = open(CTL_DEV, O_RDWR | O_NONBLOCK | O_CLOEXEC)) < 0) { fprintf(stderr, "speaker gain: %s: %s\n", CTL_DEV, strerror(errno)); return 0; }
     memset(&l, 0, sizeof l);
     if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_LIST, &l) < 0 || !l.count || !(ids = calloc(l.count, sizeof *ids))) goto none;
     l.space = l.count; l.pids = ids;
-    if (!ioctl(fd, SNDRV_CTL_IOCTL_ELEM_LIST, &l))
-        for (unsigned i = 0; i < l.used && !numid; i++) if (!strcmp((const char *)ids[i].name, board.speaker_gain)) numid = ids[i].numid;
+    if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_LIST, &l)) l.used = 0;
+    for (;;) {
+        for (unsigned i = 0; i < l.used && !numid; i++) if (!strcmp((const char *)ids[i].name, g.name)) numid = ids[i].numid;
+        if (numid || !alt || !alt->name) break;
+        g = *alt++;
+    }
     free(ids);
+    ctl_name = g.name;
+    stock = g.stock; steps = g.steps > 0 ? g.steps : 1; per = g.db > 0 ? g.db : 1;
     memset(&in, 0, sizeof in); in.id.numid = numid;
     if (!numid || ioctl(fd, SNDRV_CTL_IOCTL_ELEM_INFO, &in) < 0 || in.type != SNDRV_CTL_ELEM_TYPE_INTEGER
         || (in.value.integer.max - stock) * per < steps || in.count < 1 || in.count > 2) goto none;
     hi = (int)in.value.integer.max; count = (int)in.count;
-    lodb = board.speaker_gain_min_db < 0 ? board.speaker_gain_min_db : 0;
+    lodb = g.min_db < 0 ? g.min_db : 0;
     int room = -((stock - (int)in.value.integer.min) * per / steps);       /* whole dB below stock the control has */
     if (lodb < room) lodb = room;
-    if (board.speaker_gain_limit > stock && board.speaker_gain_limit < hi) hi = board.speaker_gain_limit;
-    fprintf(stderr, "speaker gain: \"%s\" %d..%d, stock %d, now %d\n", board.speaker_gain, (int)in.value.integer.min, hi, stock, ctl_read());
+    if (g.limit > stock && g.limit < hi) hi = g.limit;
+    fprintf(stderr, "speaker gain: \"%s\" %d..%d, stock %d, now %d\n", ctl_name, (int)in.value.integer.min, hi, stock, ctl_read());
     return 1;
 none:
-    fprintf(stderr, "speaker gain: no control \"%s\" on card 0\n", board.speaker_gain);
+    fprintf(stderr, "speaker gain: no control \"%s\"%s on card 0\n", board.speaker_gain, board.speaker_gain_alt ? " (nor another of the board's)" : "");
     close(fd); fd = -1;
     return 0;
 }
@@ -125,7 +138,7 @@ static void apply(void)
     if (cur < 0 || cur == target) { if (cur == target) written = target; return; }
     if (cur != stock && cur != written) return;
     if (ctl_write(target) < 0) { fprintf(stderr, "speaker gain: cannot set %d: %s\n", target, strerror(errno)); return; }
-    fprintf(stderr, "speaker gain: %+d dB (%s %d, was %d)\n", wanted, fake ? "fake" : board.speaker_gain, target, cur);
+    fprintf(stderr, "speaker gain: %+d dB (%s %d, was %d)\n", wanted, fake ? "fake" : ctl_name, target, cur);
     written = target;
 }
 

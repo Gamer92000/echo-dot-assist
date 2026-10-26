@@ -162,20 +162,27 @@ def wifictl(w, args):
         return "\n".join("%d\t%s" % (n["id"], n.get("psk") or "-") for n in w["networks"])
     if verb == "add" and w.get("radio_off", 0) > 0:             # the radio still coming up: no network added
         w["radio_off"] -= 1; return "-1"
+    # Android 7: only a network's creator or the system user may change it ("Not authorized to update network"):
+    # "creator" of a network (a uid; none = anyone may), the caller's uid from runas (FAKE_WIFI_UID, root otherwise)
+    uid = int(os.environ.get("FAKE_WIFI_UID", "0"))
+    may = lambda n: n.get("creator") in (None, uid) or uid == 1000
     if verb == "add":
         ssid = value(args[1])
         for n in w["networks"]:
-            if n.get("ssid") == ssid.hex(): break             # the same name replaces, not a second entry
+            if n.get("ssid") == ssid.hex():                     # the same name replaces, not a second entry
+                if not may(n): return "-1"
+                break
         else:
             i = w["next_id"]; w["next_id"] += 1
-            n = {"id": i, "disabled": 0, "priority": 0, "ssid": ssid.hex()}
+            n = {"id": i, "disabled": 0, "priority": 0, "ssid": ssid.hex(), "creator": uid}
             w["networks"].append(n)
         n["scan_ssid"] = 1                                      # wifictl sets hiddenSSID: found when not broadcast
         if args[2] == "-": n.pop("psk", None); n["key_mgmt"] = "NONE"
         else: n["psk"] = args[2]; n["key_mgmt"] = "WPA-PSK"
         w["saved"] = json.loads(json.dumps(w["networks"])); return str(n["id"])
     if verb == "select":
-        if not next((n for n in w["networks"] if str(n["id"]) == args[1]), None): return "FAIL"
+        n = next((n for n in w["networks"] if str(n["id"]) == args[1]), None)
+        if not n or not may(n): return "FAIL"
         for n in w["networks"]:
             if n["disabled"] != 2: n["disabled"] = 0 if str(n["id"]) == args[1] else 1
         w["current"] = None; w["target"] = int(args[1]); w["settle"] = 2; w["saved"] = json.loads(json.dumps(w["networks"])); return "OK"

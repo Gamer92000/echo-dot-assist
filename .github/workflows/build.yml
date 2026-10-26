@@ -62,7 +62,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        device: [donut, biscuit, radar, checkers, crown, athena]
+        device: [donut, biscuit, radar, checkers, crown, cronos, athena]
         include:
           # where Wi-Fi motion's kernel module is built from, for the cache; what is downloaded is pinned in device.mk or
           # the Makefile (make kernel-tools)
@@ -79,6 +79,9 @@ jobs:
             ksrc: linux-4.9.77
             kcc: arm-eabi-4.8
           - device: crown
+            ksrc: linux-4.9.77
+            kcc: arm-eabi-4.8
+          - device: cronos
             ksrc: linux-4.9.77
             kcc: arm-eabi-4.8
           - device: athena

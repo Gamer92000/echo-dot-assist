@@ -37,15 +37,16 @@ boot_image() {
     [ -f $SEPOLICY_TOOL ] && [ "$(sha $SEPOLICY_TOOL)" = "$SEPOLICY_TOOL_SHA256" ] ||
         die "no $SEPOLICY_TOOL (or not the pinned one): patch/magiskpolicy32 of donut's boot-root.zip ($DDIR/README.md)"
     [ -f $ADBD ] && [ "$(sha $ADBD)" = "$ADBD_SHA256" ] ||
-        die "no $ADBD (or not the pinned one): sbin/adbd of boot-root.img in checkers' own boot-root.zip ($DDIR/README.md)"
+        die "no $ADBD (or not the pinned one): sbin/adbd of the boot image in the model's own XDA boot-root.zip ($DDIR/README.md)"
     [ -e $FW/rootfs/system/bin/linker ] || die "$FW/rootfs not unpacked: qemu runs magiskpolicy against its linker ($DDIR/README.md)"
-    { command -v qemu-arm > /dev/null || [ -x toolchain/qemu-arm ]; } || die "no qemu-arm (qemu user mode; devices/checkers/setup.sh puts one in toolchain/)"
+    { command -v qemu-arm > /dev/null || [ -x toolchain/qemu-arm ]; } || die "no qemu-arm (qemu user mode; $DDIR/setup.sh puts one in toolchain/)"
     python3 scripts/mkbootroot.py --extract $OUT/boot.stock.img sepolicy $OUT/sepolicy.stock
     rm -f $OUT/sepolicy.hassmic
     chmod 755 $SEPOLICY_TOOL
     DEVICE=$DEVICE tools/qrun.sh -t 120 $SEPOLICY_TOOL --load $OUT/sepolicy.stock --apply $DDIR/sepolicy.rules \
-        --save $OUT/sepolicy.hassmic > /dev/null 2>&1 || true
-    [ -s $OUT/sepolicy.hassmic ] || die "the policy patch failed (tools/qrun.sh $SEPOLICY_TOOL)"
+        --save $OUT/sepolicy.hassmic > $OUT/qrun.log 2>&1 || true
+    # qrun.sh says there why it could not run qemu (no user namespace on Ubuntu 24.04+ and high process ids)
+    [ -s $OUT/sepolicy.hassmic ] || die "the policy patch failed (tools/qrun.sh $SEPOLICY_TOOL): $(grep qrun.sh -A2 $OUT/qrun.log || tail -n 3 $OUT/qrun.log)"
     DEVICE=$DEVICE tools/qrun.sh -t 120 $SEPOLICY_TOOL --load $OUT/sepolicy.hassmic --print-rules > $OUT/sepolicy.rules.txt 2>/dev/null || true
     grep -qx 'permissive adbd' $OUT/sepolicy.rules.txt && grep -q '^allow init su process' $OUT/sepolicy.rules.txt ||
         die "the patched policy lacks its rules ($OUT/sepolicy.rules.txt)"

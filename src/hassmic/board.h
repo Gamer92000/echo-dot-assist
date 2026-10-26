@@ -57,6 +57,9 @@ struct board {
     int speaker_gain_min_db;        /* how far below stock the page may go, dB (negative), 0: not at all */
     /* highest control value to offer, 0 for the control's own maximum (the Show 8 2nd gen's amp distorts well below its) */
     int speaker_gain_limit;
+    /* other amplifiers the same model is built with (the Echo Show 5 2nd gen: three, by board revision), each with its
+     * own control: tried in order where speaker_gain is not on the card.  Fields as above; {NULL}-terminated, or NULL */
+    const struct board_gain { const char *name; int stock, steps, db, min_db, limit; } *speaker_gain_alt;
 };
 
 extern const struct board board;

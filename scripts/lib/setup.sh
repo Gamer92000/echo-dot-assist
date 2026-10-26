@@ -231,6 +231,7 @@ _pkg() {
     pacman:7z) echo p7zip;;  apt:7z) echo p7zip-full;;  dnf:7z) echo p7zip p7zip-plugins;;
     pacman:sqlite3|dnf:sqlite3) echo sqlite;;
     *:cc) echo gcc;;
+    *:qemu-arm) echo qemu-user;;                    # Ubuntu 26.04 has no qemu-user-static any more
     *:sha256sum) echo coreutils;;
     apt:xz) echo xz-utils;;
     *) echo "$1";;
@@ -264,6 +265,24 @@ need_tools() {
     task "Installing ${pk% }" sudo $cmd $pk || return 1
     [ -n "$DRY" ] && return 0
     for t in "${miss[@]}"; do _have "$t" || { fail "still missing: $t"; return 1; }; done
+}
+
+# qemu_arm: the qemu-arm tools/qrun.sh runs the policy tool of an INSTALL=boot model with (QEMU, QEMU_URL, QEMU_SHA256
+# of its setup.sh): the system's, else on an x86_64 PC the static build of QEMU_URL into QEMU, else (a Raspberry Pi:
+# that build is x86_64) the package manager's.  Then whether qrun.sh gets its PID namespace: Ubuntu 24.04 and later
+# refuse users one (AppArmor), and qrun.sh then runs qemu without one only while the PC's process ids are low.
+qemu_arm() {
+    if ! command -v qemu-arm > /dev/null && [ ! -x $QEMU ]; then
+        if [ "$(uname -m)" = x86_64 ]; then
+            mkdir -p toolchain
+            task "Downloading qemu-arm (runs the policy tool on the PC)" sh -c "curl -fsSL -o $QEMU $QEMU_URL &&
+                [ \"\$(sha256sum < $QEMU | cut -c1-64)\" = $QEMU_SHA256 ] && chmod 755 $QEMU" || { rm -f $QEMU; return 1; }
+        else need_tools qemu-arm || return 1; fi
+    fi
+    unshare --user --map-root-user --pid --fork true 2> /dev/null && return 0
+    warn "This PC does not let users make namespaces (Ubuntu 24.04 and later: AppArmor)."
+    info "The root step works anyway while its process ids are low (soon after a boot); if it fails, run"
+    info "  sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0   (until the next boot)"
 }
 
 # need_files DEST SHA256 "where to get it" [DEST SHA256 "where"]...: waits until every DEST is there with its checksum.

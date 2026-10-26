@@ -2,6 +2,27 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-26
+
+- **Guided setup for the Echo Show models on Ubuntu 24.04 and later, and on a Raspberry Pi.** Ubuntu no longer lets
+  users make the namespace the setup ran its policy tool in, so the root step failed with "the policy patch failed"
+  (checkers, crown, cronos). It now runs it without one while that is safe (for a while after a boot), and otherwise
+  says what to do; the setup warns about it in its first steps. On a PC that is not x86_64, such as a Raspberry Pi, it
+  installs qemu from the package manager instead of downloading one that would not run there.
+- **Guided setup: a Wi-Fi network the Echo had saved before is taken as it is.** Joining failed with "WifiService did
+  not add the network" when the Echo Show already knew the network (from a stock update over Wi-Fi, or Amazon's setup):
+  Android lets only the system user change it, and the setup now asks as that user.
+- **Guided setup: USB access for the Echo Show models, also over ssh.** The Show setups now install the udev rules the
+  Dots' do, and the rules give the Echo to the plugdev group as well: run over ssh, adb found no Echo Show 5 2nd gen
+  after its root boot image, since its adb's USB id was not covered.
+- **Echo Show 5 (2nd gen, `cronos`): first support, installed on one.** The 2021 Show 5 runs the same Fire OS build as
+  the 1st gen, so it installs the same way ([`devices/cronos`](devices/cronos/README.md), `scripts/setup.sh cronos`). Its
+  mute button and speaker amplifier differ: the mute button is answered as on the Echo Show 8 2nd gen, and the "Speaker
+  gain" setting finds whichever amplifier the unit has (Realtek's as on the 1st gen; TI's up to +4 dB; Maxim's, the
+  first one's, up to +6 dB). On the first Echo the guided setup ran through from a Raspberry Pi; Home Assistant, the
+  wake word, the keys, the mute switch, the light band and the light sensor work. Not checked yet: the speaker gain by
+  ear, Wi-Fi motion, "Download from Amazon", Bluetooth.
+
 ## 2026-10-17
 
 - **Wake sound removal (experimental) on the Echo Show.** The Show starts a sound after a pause 0.35 s late (below); the
