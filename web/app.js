@@ -1087,7 +1087,10 @@ function renderWake() {
 
 const escape = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const others = new Map();                // base URL -> { echo, hello, logged, diff, error }
-const baseOf = (ip) => ip.includes(':') ? `http://${ip}` : `http://${ip}:${location.port || 80}`;   // host:port when added so
+// The port the Echos' pages are on: this one's, as it says it (all Echos run it on the same one).  Not the page's URL:
+// behind a reverse proxy that is 80 or 443, and the other Echos were asked there (forum #171)
+const echoPort = () => (echo && echo.hello.port) || location.port || 80;
+const baseOf = (ip) => ip.includes(':') ? `http://${ip}` : `http://${ip}:${echoPort()}`;   // host:port when added so
 const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 const nameList = (l) => l.length <= 2 ? l.join(' and ') : `${l.slice(0, -1).join(', ')} and ${l[l.length - 1]}`;
 let netHead, netWarn, devBox, syncBox, modelBox;
@@ -1229,7 +1232,11 @@ async function probe(base) {
         if (await d.echo.through(echo).catch(() => 'refused') === 'approved') await read().catch(() => {});
       }
     }
-  } catch (e) { d.error = 'Not reachable'; }
+  } catch (e) {
+    // a page opened over HTTPS (a proxy) may not call plain HTTP, and the Echos speak nothing else (mixed content)
+    d.error = location.protocol === 'https:' ? 'Not reachable over HTTPS' : 'Not reachable';
+    d.hint = location.protocol === 'https:' ? `The browser blocks calls from an HTTPS page to plain HTTP: open this page at http://${(state.wifi && state.wifi.ip) || '<this Echo\'s IP>'}:${echoPort()} for this section` : null;
+  }
   finally { d.looking = false; }
 }
 
@@ -1260,7 +1267,7 @@ function netBadge(r) {
 }
 
 const ready = () => [...others.values()].filter((d) => d.echo && d.logged && !d.error);
-const shortAddr = (base) => base.replace('http://', '').replace(`:${location.port || 80}`, '');
+const shortAddr = (base) => base.replace('http://', '').replace(`:${echoPort()}`, '');
 
 function renderDevices() { if (devBox) keepFocus(devBox, drawDevices); }
 function drawDevices() {
@@ -1277,7 +1284,7 @@ function drawDevices() {
     const r = arbOf(d.ip), name = d.echo ? d.echo.hello.name : d.ip;
     const meta = [];
     if (!d.echo && d.looking) meta.push(h('span', { class: 'badge' }, h('span', { class: 'spin' }), 'Looking…'));
-    else if (d.error) meta.push(h('span', { class: 'badge bad' }, d.error));
+    else if (d.error) meta.push(h('span', { class: 'badge bad', title: d.hint }, d.error));
     else if (!d.logged) meta.push(h('span', { class: 'badge' }, 'Not logged in'));
     else if (d.diff.length) meta.push(h('span', { class: 'badge warn' }, `${plural(d.diff.length, 'setting')} differ${d.diff.length === 1 ? 's' : ''}`));
     else meta.push(h('span', { class: 'badge ok' }, icon('check'), 'Same settings'));
@@ -2041,7 +2048,7 @@ function wifiDialog() {
     const again = h('button', { type: 'button', onclick: () => { pickView(); scan(); } }, 'Try again');
     const done = h('button', { type: 'button', class: 'primary', onclick: () => dlg.close() }, 'Close');
     if (kind === 'ok') {
-      const moved = r.ip && r.ip !== location.hostname, url = `http://${r.ip}${location.port ? ':' + location.port : ''}/`;
+      const moved = r.ip && r.ip !== location.hostname, url = `http://${r.ip}:${echoPort()}/`;
       title.textContent = `On ${r.ssid || net.ssid}`;
       body.replaceChildren(callout('ok', h('p', {}, `The Echo is on ${r.ssid || net.ssid} now, at ${r.ip || 'a new address'}.`),
         moved ? h('p', {}, h('a', { href: url }, 'Open its settings page there'), ' (the action button approves this browser there once more).') : null,

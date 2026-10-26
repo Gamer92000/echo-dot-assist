@@ -564,7 +564,9 @@ still takes that Echo's own button.
 At the top it says what does not work and why (Home Assistant not connected, models missing).
 
 **Echos**: every Echo this one hears (and any you add by address), the arbitration network and those outside it with
-the reason and what to do.
+the reason and what to do. The page talks to the other Echos directly, at their own addresses on port 28931, also when
+you opened it through a reverse proxy. Over plain HTTP only, though: a page that came through an HTTPS proxy may not
+call them (the browser blocks it), so open `http://<echo-ip>:28931` for this section.
 
 - **Copy settings**: every setting of this Echo beside the others', differences marked. Tick settings and Echos to copy.
 - **Copy models**: wake words, microWakeWord models, whisper and sound detection models, Echo to Echo. A wake word set

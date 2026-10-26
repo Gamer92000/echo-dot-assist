@@ -396,13 +396,14 @@ static int signed_ok(const struct req *r, int persist)
 
 /* ---------------------------------------------------------------- API */
 
-/* members: the Echos of our network (for the login page's "through another Echo"; what beacons say anyway) */
+/* members: the Echos of our network (for the login page's "through another Echo"; what beacons say anyway).
+ * port: the page's own, which it calls the other Echos on; the URL it was opened at may be a reverse proxy's (80, 443) */
 static size_t hello_json(char *o, size_t cap, int members)
 {
     char p[65], name[160], node[160]; size_t n;
     hex(p, pk, 32); jesc(name, sizeof name, core_name); jesc(node, sizeof node, core_node_name());
-    n = (size_t)snprintf(o, cap, "{\"name\":\"%s\",\"node\":\"%s\",\"model\":\"%s\",\"codename\":\"%s\",\"version\":\"%s\",\"pub\":\"%s\",\"start\":\"%s\"",
-                         name, node, board.model, board.codename, VERSION, p, start_id);
+    n = (size_t)snprintf(o, cap, "{\"name\":\"%s\",\"node\":\"%s\",\"model\":\"%s\",\"codename\":\"%s\",\"version\":\"%s\",\"pub\":\"%s\",\"start\":\"%s\",\"port\":%d",
+                         name, node, board.model, board.codename, VERSION, p, start_id, core_web_port);
     if (members && n < cap) { n += (size_t)snprintf(o + n, cap - n, ",\"members\":"); if (n < cap) n += arb_members_json(o + n, cap - n); }
     if (n < cap) n += (size_t)snprintf(o + n, cap - n, "}");
     return n < cap ? n : cap - 1;

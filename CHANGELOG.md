@@ -4,6 +4,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-26
 
+- **The settings page finds the other Echos when you open it through a reverse proxy.** It called them on the port
+  of the address in the browser, which behind a proxy is 80 or 443, so every other Echo showed "Not reachable". It
+  now calls them on the port the Echos' pages really use. A page that comes through an HTTPS proxy still cannot call
+  them (the browser blocks plain HTTP from it); the Echo then says so and which address to open instead.
 - **Music Assistant 2.10.8 no longer calls the Echo a "non-compliant client"** (issue #64). Music Assistant 2.10.8
   speaks Sendspin 1.0, and the Echo only spoke the draft of the earlier versions. Music played anyway, but Music
   Assistant logged four warnings on every connection, and a later version could refuse the Echo outright. The Echo

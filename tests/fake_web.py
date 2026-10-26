@@ -69,6 +69,7 @@ async def main():
         b = Browser(WEB)
         check(b.hello["name"] == "Echo Web" and len(b.hello["pub"]) == 64 and re.fullmatch(r"[0-9a-f]{16}", b.hello.get("start", "")),
               f"hello: {b.hello['name']}, {b.hello['model']}, start {b.hello.get('start')}")
+        check(b.hello.get("port") == WEB, f"hello names the page's own port (the other Echos are called on it, not a proxy's): {b.hello.get('port')}")
         st, h, _ = rq("OPTIONS", "/api/set", headers={"Origin": "http://192.0.2.1:28931", "Access-Control-Request-Method": "POST",
                                                      "Access-Control-Request-Headers": "x-hm-pub,x-hm-ctr,x-hm-mac"})
         check(st == 204 and h.get("Access-Control-Allow-Origin") == "*" and "X-HM-Mac" in h.get("Access-Control-Allow-Headers", ""),
