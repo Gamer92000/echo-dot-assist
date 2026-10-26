@@ -281,6 +281,7 @@ unit-blueprint_dropin:
 	python3 tests/unit/sounds_zip.py build/sounds_dir build/sounds_test.zip
 	cc -O2 -Wall -Wextra -DSYNTH -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c -o build/sounds_test && build/sounds_test synth build/sounds_dir build/sounds_test.zip
 	if [ -d firmware/checkers/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c devices/checkers/board.c -o build/sounds_checkers && HASSMIC_EARCON_ROOT=firmware/checkers/rootfs build/sounds_checkers; else echo "sounds: firmware/checkers not unpacked, its apps' sounds skipped"; fi
+	if [ -d firmware/cronos/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c devices/cronos/board.c -o build/sounds_cronos && HASSMIC_EARCON_ROOT=firmware/cronos/rootfs build/sounds_cronos; else echo "sounds: firmware/cronos not unpacked, its apps' sounds skipped"; fi
 	if [ -d firmware/athena/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c devices/athena/board.c -o build/sounds_athena && HASSMIC_EARCON_ROOT=firmware/athena/rootfs build/sounds_athena; else echo "sounds: firmware/athena not unpacked, its apps' sounds skipped"; fi
 	.venv/bin/python tools/mkwifictl.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)
 	.venv/bin/python tools/mkringbar.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)

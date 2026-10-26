@@ -127,7 +127,7 @@ variables:
     {% set devs = (integration_entities('esphome') | list) + (states.assist_satellite | map(attribute='entity_id') | list) %}
     {% for d in devs | map('device_id') | reject('none') | unique | list %}
       {% set model = (device_attr(d, 'model') or '') | string | lower %}
-      {% set hassmic = device_attr(d, 'manufacturer') in ['hassmic', 'Amazon'] or model in ['echo-dot-2', 'echo-dot-3', 'echo-2', 'echo-show-5', 'echo-show-8', 'echo-show-8-2nd-gen'] %}
+      {% set hassmic = device_attr(d, 'manufacturer') in ['hassmic', 'Amazon'] or model in ['echo-dot-2', 'echo-dot-3', 'echo-2', 'echo-show-5', 'echo-show-8', 'echo-show-8-2nd-gen', 'echo-show-5-2nd-gen'] %}
       {% set b = namespace(sensor='', score=0) %}
       {% for e in device_entities(d) | select('match', 'sensor\\.') %}
         {% set s = (4 if states(e) in ok else 0) + (2 if state_attr(e, 'icon') == 'mdi:phone-in-talk' else 0)

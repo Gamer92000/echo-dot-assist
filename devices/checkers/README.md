@@ -26,7 +26,7 @@ release as donut's; sha256 `f96fcfa1240f809711fcf855ce7742762437e4f3754615315363
 
 XDA thread with the full instructions (R0rt1z2): [UNLOCK][ROOT][TWRP][UNBRICK] Amazon Echo Show 5 1st gen (2019)
 (checkers) <https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-5-1st-gen-2019-checkers.4762900/#post-90318137>.
-H23K37 only: the Echo Show 8 `crown` and the Echo Show 5 2nd gen `cronos` have threads of their own. It ends with an
+H23K37 only: the Echo Show 8 `crown` and the Echo Show 5 2nd gen [`cronos`](../cronos/README.md) have threads of their own. It ends with an
 unlocked bootloader and TWRP (written to `recovery` and `swdl`). These files go into `firmware/checkers/` (not in git):
 
 | File | Source | sha256 |

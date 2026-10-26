@@ -27,6 +27,14 @@ print(hashlib.pbkdf2_hmac("sha1", p.encode(), s.encode(), 4096, 32).hex())') || 
     while :; do
         out=$(W add "$(hex "$ssid")" $psk); n=$(printf '%s\n' "$out" | tail -1)
         case $n in ''|*[!0-9]*) ;; *) break;; esac
+        # Android 7 lets only a network's creator or the system user change it: one saved before (Amazon's setup, or a
+        # stock update over Wi-Fi first) is refused to root ("Not authorized to update network", cronos 2026-10-26).
+        # Then as system, for the rest too (selecting it is refused the same way)
+        if [ -z "$WIFICTL_USER" ] && [ "$n" = -1 ] && [ "$(adb shell "[ -x $D/runas ] && echo y" | tr -d '\r')" = y ]; then
+            WIFICTL_USER=system
+            out=$(W add "$(hex "$ssid")" $psk); n=$(printf '%s\n' "$out" | tail -1)
+            case $n in ''|*[!0-9]*) WIFICTL_USER=;; *) break;; esac
+        fi
         [ $t -ge ${WIFI_ADD_SECS:-30} ] && { echo "WifiService did not add the network:"; printf '%s\n' "$out"; exit 1; }
         sleep 2; t=$((t + 2))
     done

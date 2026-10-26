@@ -37,9 +37,9 @@ boot_image() {
     [ -f $SEPOLICY_TOOL ] && [ "$(sha $SEPOLICY_TOOL)" = "$SEPOLICY_TOOL_SHA256" ] ||
         die "no $SEPOLICY_TOOL (or not the pinned one): patch/magiskpolicy32 of donut's boot-root.zip ($DDIR/README.md)"
     [ -f $ADBD ] && [ "$(sha $ADBD)" = "$ADBD_SHA256" ] ||
-        die "no $ADBD (or not the pinned one): sbin/adbd of boot-root.img in checkers' own boot-root.zip ($DDIR/README.md)"
+        die "no $ADBD (or not the pinned one): sbin/adbd of the boot image in the model's own XDA boot-root.zip ($DDIR/README.md)"
     [ -e $FW/rootfs/system/bin/linker ] || die "$FW/rootfs not unpacked: qemu runs magiskpolicy against its linker ($DDIR/README.md)"
-    { command -v qemu-arm > /dev/null || [ -x toolchain/qemu-arm ]; } || die "no qemu-arm (qemu user mode; devices/checkers/setup.sh puts one in toolchain/)"
+    { command -v qemu-arm > /dev/null || [ -x toolchain/qemu-arm ]; } || die "no qemu-arm (qemu user mode; $DDIR/setup.sh puts one in toolchain/)"
     python3 scripts/mkbootroot.py --extract $OUT/boot.stock.img sepolicy $OUT/sepolicy.stock
     rm -f $OUT/sepolicy.hassmic
     chmod 755 $SEPOLICY_TOOL

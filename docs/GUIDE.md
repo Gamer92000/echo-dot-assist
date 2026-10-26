@@ -336,7 +336,7 @@ Beyond the README's two figures:
   models". Up to 50 packs; their designs count towards the 100.
 - **Listening points at you**, as with Alexa, and also while a timer rings or the light is on (Amazon's ring stops
   turning as soon as a second light shows; hassmic plays the listening ring already turned).
-- **Echo Show 5 and Echo Show 8**: no ring; its lights run along the bottom edge of the screen as the ring laid out in a line (the
+- **Echo Show 5 (both generations) and Echo Show 8**: no ring; its lights run along the bottom edge of the screen as the ring laid out in a line (the
   talker's side always in the middle: two microphones tell directions apart too poorly to turn it). The band keeps
   that strip of the screen for itself, 10 pixels by default ("Light band" on the settings page; 0 gives the whole
   screen to the apps and shows no band), so an app shown on the screen is never covered. The light "Light ring" works
@@ -606,7 +606,8 @@ quiet at full volume. It raises the analog gain in front of the speaker (Echo Do
 Gain", +0 to +12 dB over stock; Echo Dot 3: the amplifier's output level, +0 to +2 dB, all it has above where Amazon
 leaves it; Echo Show 5: the codec's line out, +0 to +12 dB in steps of 1.5 dB, each dB set going to the nearest step; Echo Show 8 1st gen:
 the same, and down to −6 dB, since it is loud at full volume already; Echo Show 8 2nd gen: the amplifier's digital
-volume, +0 to +9 dB in steps of 0.5 dB, the top kept below where bass distorts), so everything the
+volume, +0 to +9 dB in steps of 0.5 dB, the top kept below where bass distorts; Echo Show 5 2nd gen: it depends on the
+amplifier in that unit: as the Show 5 with Realtek's codec, +0 to +4 dB with TI's, +0 to +6 dB with Maxim's), so everything the
 speaker plays gets louder at every volume step; the 3.5 mm jack and Bluetooth speakers keep their level. Owners of an
 Echo Dot 2 found +6 dB loud and clean at full volume; speakers differ, though (some Dot 2s are much louder than others
 at the same gain), so raise it a step at a time and lower it at the first crackle: loud music near full volume

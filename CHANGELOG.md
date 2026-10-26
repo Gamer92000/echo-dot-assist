@@ -216,6 +216,19 @@ What changed for people using the Echo, newest first. Details and measurements a
 - **The ring's brightness ends where the slider stops.** Dragging the LED brightness in Home Assistant could leave the
   ring at a level from along the way, for the same reason; brightness changes now take their turn in that same order.
 
+## 2026-10-26
+
+- **Guided setup: a Wi-Fi network the Echo had saved before is taken as it is.** Joining failed with "WifiService did
+  not add the network" when the Echo Show already knew the network (from a stock update over Wi-Fi, or Amazon's setup):
+  Android lets only the system user change it, and the setup now asks as that user.
+- **Echo Show 5 (2nd gen, `cronos`): first support, installed on one.** The 2021 Show 5 runs the same Fire OS build as
+  the 1st gen, so it installs the same way ([`devices/cronos`](devices/cronos/README.md), `scripts/setup.sh cronos`). Its
+  mute button and speaker amplifier differ: the mute button is answered as on the Echo Show 8 2nd gen, and the "Speaker
+  gain" setting finds whichever amplifier the unit has (Realtek's as on the 1st gen; TI's up to +4 dB; Maxim's, the
+  first one's, up to +6 dB). Its setup installs the udev rules for USB access, as the Dots' do. On the first Echo the
+  guided setup ran through; Home Assistant, the wake word, the keys, the mute switch, the light band and the light
+  sensor work. Not checked yet: the speaker gain by ear, Wi-Fi motion, "Download from Amazon", Bluetooth.
+
 ## 2026-10-17
 
 - **Wake sound removal (experimental) on the Echo Show.** The Show starts a sound after a pause 0.35 s late (below); the
