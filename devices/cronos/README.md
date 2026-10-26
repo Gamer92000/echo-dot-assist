@@ -1,7 +1,6 @@
 # Echo Show 5 2nd gen, 2021 (`cronos`)
 
-**Installed and running on one Echo Show 5 2nd gen** (2026-10-26, with the guided setup from a Raspberry Pi 4 running
-Ubuntu 26.04; "What works and what is open" below, [docs/re-cronos.md](../../docs/re-cronos.md)). It is the Echo Show 5 1st gen (`checkers`) with another mute button
+**Installed and running on one Echo Show 5 2nd gen** (2026-10-26, with the guided setup; "What works and what is open" below, [docs/re-cronos.md](../../docs/re-cronos.md)). It is the Echo Show 5 1st gen (`checkers`) with another mute button
 driver and other speaker amplifiers: the same platform, the same Fire OS build (NS65741/8149), the same install
 (`INSTALL=boot` through `scripts/install-system.sh`, which hands over to `scripts/install-boot.sh`). No light ring:
 hassmic shows it as a band along the bottom of the screen (setting "Light band"). Porting guide:
@@ -34,7 +33,9 @@ are not supported until pinned here.
 
 amonet's `fastbrick.sh` runs its own `bin/fastboot`, an x86_64 Linux program (glibc only), on every 64-bit PC. On an
 aarch64 PC such as a Raspberry Pi it runs only under qemu-user with x86_64 glibc (`qemu-user-binfmt`, `QEMU_LD_PREFIX`):
-try it first with the Echo in fastboot mode, `bin/fastboot getvar product` (reads only), before the unlock.
+try it first with the Echo in fastboot mode, `bin/fastboot getvar product` (reads only), before the unlock. The guided
+setup itself expects an x86_64 PC (the qemu-arm it downloads, the NDK); a Raspberry Pi worked with `qemu-user` from its
+package manager (docs/re-cronos.md, "First install").
 
 **Never write lk, preloader, tee1/tee2 (tz) or any other bootloader partition.** This model has no bootrom USB download:
 a brick there is permanent. An install for this model touches `system` and `boot` only.

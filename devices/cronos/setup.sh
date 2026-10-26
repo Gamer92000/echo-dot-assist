@@ -108,8 +108,12 @@ step_files() {
     policy_tool || need+=($BOOTROOT $BOOTROOT_SHA256 "boot-root.zip, attachment in $DONUT_XDA (the Echo Dot 3's, for its magiskpolicy; not cronos' own)")
     adbd_ok || need+=($XDAROOT "$XDAROOT_SHA256" "boot-root.zip, attachment in $XDA (cronos' own, for its adbd)")
     need_files "${need[@]}" || return 1
-    # the policy is patched on the PC, under qemu against the unpacked firmware (scripts/lib/setup.sh)
-    qemu_arm || return 1
+    # the policy is patched on the PC, under qemu against the unpacked firmware; a system qemu-arm is fine too
+    if ! command -v qemu-arm > /dev/null && [ ! -x $QEMU ]; then
+        mkdir -p toolchain
+        task "Downloading qemu-arm (runs the policy tool on the PC)" sh -c "curl -fsSL -o $QEMU $QEMU_URL &&
+            [ \"\$(sha256sum < $QEMU | cut -c1-64)\" = $QEMU_SHA256 ] && chmod 755 $QEMU" || { rm -f $QEMU; return 1; }
+    fi
     [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
     if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
         mkdir -p toolchain
@@ -118,7 +122,7 @@ step_files() {
     fi
 }
 
-# lets adb and fastboot reach the Echo without sudo, also over ssh (scripts/51-echo-unlock.rules)
+# lets adb and fastboot reach the Echo without sudo (scripts/51-echo-unlock.rules: the Shows' fastboot id)
 step_udev() {
     local rules=/etc/udev/rules.d/51-echo-unlock.rules
     cmp -s scripts/51-echo-unlock.rules $rules && { ok "udev rules installed"; return 0; }
@@ -170,9 +174,15 @@ step_unlock() {
         lk=$(fastboot getvar lk_build_desc 2>&1 | sed -n 's/^lk_build_desc: *//p' | head -n1)
         info "the Echo's bootloader: ${lk:-unknown}"
         lk=${lk#*-}; lk=${lk%%_*}
-        case $lk in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;; *) lk=0;; esac
+        case $lk in
+        [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+        *)  fail "could not read the Echo's bootloader version (fastboot getvar lk_build_desc): nothing was sent to it"
+            tell "Is it in fastboot?" \
+                "Its screen should say \"=> FASTBOOT mode...\" and \`fastboot devices\` list it; then run this step again."
+            return 1;;
+        esac
         if [ "$lk" -lt 20240709 ]; then
-            fail "this Echo runs a Fire OS older than 6.5.7.0, which amonet-cronos may not unlock: nothing was sent to it"
+            fail "this Echo's bootloader is older than 8149's (July 2024): an older Fire OS, which amonet-cronos may not unlock; nothing was sent to it"
             tell "Update it first" \
                 "Unplug the USB cable, start the Echo normally, connect it to Wi-Fi (and Amazon, if it insists)," \
                 "and install every update (Settings > Device Options > Check for Software Updates) until there is none." \

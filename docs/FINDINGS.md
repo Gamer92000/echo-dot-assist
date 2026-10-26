@@ -114,8 +114,7 @@ within 1 dB of micRaw over 4 s).
 ## Running bionic binaries on the PC
 
 `qemu-arm -L firmware/donut/rootfs` hangs in a futex unless the PID is below 65536: bionic mutexes store a 16-bit owner tid.
-`tools/qrun.sh` wraps qemu in a fresh PID namespace (where users may not make one, Ubuntu 24.04+, it runs without one
-while the PC's PIDs are below 60000). `libmixerAPI` clients abort under qemu (no LIPC/D-Bus), `libpryon` works.
+`tools/qrun.sh` wraps qemu in a fresh PID namespace. `libmixerAPI` clients abort under qemu (no LIPC/D-Bus), `libpryon` works.
 
 ## Protocol choice
 

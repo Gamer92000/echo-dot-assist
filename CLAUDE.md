@@ -77,8 +77,7 @@ workflow with `act push` (publishing is a dry run under act).
 
 There is no single-test selector: run one unit test by building/running its line from the `unit` target in the Makefile.
 `tools/qrun.sh [-t secs] <arm-binary> args` runs a device binary on the PC under qemu-arm against `firmware/$DEVICE/rootfs`
-(needs a new PID namespace; bionic mutexes deadlock with pid > 65535; where users may not make one, Ubuntu 24.04+'s
-AppArmor, it runs qemu without one while the PC's PIDs are below 60000, else says what to do).
+(needs a new PID namespace; bionic mutexes deadlock with pid > 65535).
 
 ## Device workflow
 

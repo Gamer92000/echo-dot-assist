@@ -44,9 +44,8 @@ boot_image() {
     rm -f $OUT/sepolicy.hassmic
     chmod 755 $SEPOLICY_TOOL
     DEVICE=$DEVICE tools/qrun.sh -t 120 $SEPOLICY_TOOL --load $OUT/sepolicy.stock --apply $DDIR/sepolicy.rules \
-        --save $OUT/sepolicy.hassmic > $OUT/qrun.log 2>&1 || true
-    # qrun.sh says there why it could not run qemu (no user namespace on Ubuntu 24.04+ and high process ids)
-    [ -s $OUT/sepolicy.hassmic ] || die "the policy patch failed (tools/qrun.sh $SEPOLICY_TOOL): $(grep qrun.sh -A2 $OUT/qrun.log || tail -n 3 $OUT/qrun.log)"
+        --save $OUT/sepolicy.hassmic > /dev/null 2>&1 || true
+    [ -s $OUT/sepolicy.hassmic ] || die "the policy patch failed (tools/qrun.sh $SEPOLICY_TOOL)"
     DEVICE=$DEVICE tools/qrun.sh -t 120 $SEPOLICY_TOOL --load $OUT/sepolicy.hassmic --print-rules > $OUT/sepolicy.rules.txt 2>/dev/null || true
     grep -qx 'permissive adbd' $OUT/sepolicy.rules.txt && grep -q '^allow init su process' $OUT/sepolicy.rules.txt ||
         die "the patched policy lacks its rules ($OUT/sepolicy.rules.txt)"

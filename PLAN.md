@@ -1978,10 +1978,10 @@ Run in this order. Each step says what it proves.
       Installed on a real cronos with the guided setup from a Raspberry Pi 4 (2026-10-26): amonet v2.0.1 (its x86_64
       fastboot under qemu-user), system 8149 written, root boot image, build, lockdown, Wi-Fi, install; hassmic up, IP by
       DHCP.  Seen: `gpio-privacy-state`/`-button` (mute pressed and released), volume keys, the band 960 x 10, `als_ps/lux`
-      (250 lux), wake word engine loaded; the XDA boot-root's adbd is checkers'.  Found and fixed on the way: Ubuntu
-      26.04 refuses `unshare --user` (qrun.sh runs without while PIDs are low), the udev rules missed the Show's adb id and
-      ssh sessions (plugdev), `wifi-join.sh` as root could not update a network the stock update had saved (as system
-      now), the speaker amp is a MAX98396 (added).  The lk (`20240709`) is 8149's and does not change with stock updates.
+      (250 lux), wake word engine loaded; the XDA boot-root's adbd is checkers'.  Fixed on the way: `wifi-join.sh` as
+      root could not update a network the stock update had saved (as system now), the speaker amp is a MAX98396
+      (added), the udev rules lacked the Shows' fastboot id.  Found and left to their own PRs (issue #45): Ubuntu 26.04
+      refuses `unshare --user` (qrun.sh), qemu-arm on a non-x86_64 PC, the udev rules over ssh (plugdev).  The lk (`20240709`) is 8149's and does not change with stock updates.
       Home Assistant adopted it and works (the tester).  Not yet: the speaker gain by ear, Wi-Fi motion, DHA version /
       Download from Amazon, Bluetooth.
 - [~] Echo Show 8 2nd gen (`athena`, 2026-10-14; `docs/re-athena.md`).  A different platform from crown: MT8183, Android 9

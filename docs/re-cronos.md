@@ -107,10 +107,12 @@ install; hassmic up after the reboot, address by DHCP, adopted by Home Assistant
 - `als_ps/lux` 250 in a lit room; the band 960 x 10; the wake word engine loaded (OpenSL ES capture, VOICE_RECOGNITION).
 - A push update (`scripts/ota-push.sh`) passed its self test and became the factory copy.
 
-What the setup ran into, fixed in it since: Ubuntu 26.04 refuses users `unshare --user` (`tools/qrun.sh` now runs qemu
-without one while the PIDs are low); the udev rules covered neither this adb id (1949:01e8) nor an ssh session
-(plugdev now; the Show setups install them); the Wi-Fi network the stock update had saved could not be changed by root
-(`wifi-join.sh` falls back to the system user). The Pi itself dropped its USB SSD once during the setup (a Pi 4 with an
+What the setup ran into: the Wi-Fi network the stock update had saved could not be changed by root (`wifi-join.sh`
+falls back to the system user since). Not this model's, and left to their own PRs (issue #45): Ubuntu 26.04 refuses
+users `unshare --user`, which `tools/qrun.sh` needs (the PR ran qemu without it while the PIDs were low; until that
+is in, `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0` before the root step); qemu-arm for the policy tool on an aarch64 PC (the setup downloads
+an x86_64 one: `qemu-user` from the package manager instead); the udev rules over ssh, where `uaccess` gives nobody
+the device (`GROUP="plugdev"`). The Pi itself dropped its USB SSD once during the setup (a Pi 4 with an
 Argon M.2 case; not seen again), so run the setup in `screen`.
 
 Still open: speaker gain by ear, Wi-Fi motion, the DHA version ("Download from Amazon"), Bluetooth.
