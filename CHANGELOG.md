@@ -2,6 +2,14 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-26
+
+- **Music Assistant 2.10.8 no longer calls the Echo a "non-compliant client"** (issue #64). Music Assistant 2.10.8
+  speaks Sendspin 1.0, and the Echo only spoke the draft of the earlier versions. Music played anyway, but Music
+  Assistant logged four warnings on every connection, and a later version could refuse the Echo outright. The Echo
+  now speaks Sendspin 1.0 to Music Assistant 2.10.8 and later, and the earlier draft to versions up to 2.10.6,
+  picking the right one each time a server connects. Pairing, volume and the delay setting work with both.
+
 ## 2026-10-25
 
 - **Applying light ring designs again right after a failed install works.** Pressing Apply within the same second

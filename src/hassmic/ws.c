@@ -67,8 +67,15 @@ static void ws_init(struct ws *w, int fd, int client)
 
 int ws_accept(struct ws *w, int fd, char *path, size_t pathsz)
 {
-    char h[4096], key[128], acc[64], resp[256];
+    char h[4096], key[128], acc[64], resp[256], origin[8];
     if (read_headers(fd, h, sizeof h) || strncmp(h, "GET ", 4) || !header(h, "Sec-WebSocket-Key", key, sizeof key)) return -1;
+    /* Only a browser sends Origin (Sendspin servers never do; the spec has clients refuse it): a page open anywhere on
+     * the LAN would otherwise reach the endpoint */
+    if (header(h, "Origin", origin, sizeof origin)) {
+        static const char no[] = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        write_all(fd, no, sizeof no - 1);
+        return -1;
+    }
     if (path) { size_t i = 0; for (const char *p = h + 4; *p && *p != ' ' && i < pathsz - 1; p++) path[i++] = *p; path[i] = 0; }
     accept_key(key, acc);
     int n = snprintf(resp, sizeof resp, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", acc);

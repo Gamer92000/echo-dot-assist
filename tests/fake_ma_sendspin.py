@@ -1,22 +1,63 @@
 #!/usr/bin/env python3
-"""Plays Music Assistant's side of Sendspin against build/hassmic-host with the reference server library
-(aiosendspin 9.1.1, the version in Music Assistant 2.10.4): dials the player, approves it unpaired, streams a sine,
-sends a volume command, and checks what reaches the player's audio backend.  Then pairing, a second server and unpairing.  Beside it, at
-once, players of their own for a restart of the server (the player asks for mDNS announcements until one is back,
-issue #28), for unpaired access off (the default) and for "<wake word>, stop" to music (issue #51, with Home
-Assistant's voice assistant over the ESPHome API beside the server)."""
-import re, asyncio, contextvars, logging, math, os, signal, struct, subprocess, sys, tempfile, time, traceback
+"""Plays Music Assistant's side of Sendspin against build/hassmic-host with the reference server library: dials the
+player, approves it unpaired, streams a sine, sends volume and delay commands, and checks what reaches the player's
+audio backend.  Then pairing, a second server and unpairing.  Beside it, at once, players of their own for a restart of
+the server (the player asks for mDNS announcements until one is back, issue #28), for unpaired access off (the default)
+and for "<wake word>, stop" to music (issue #51, with Home Assistant's voice assistant over the ESPHome API beside the
+server).
+
+    tests/fake_ma_sendspin.py             aiosendspin 10.2.1 from .venv (Music Assistant 2.10.8): spec 1.0's wire
+    tests/fake_ma_sendspin.py --legacy    aiosendspin 9.1.1 (Music Assistant up to 2.10.6): the wire before it, from
+                                          build/aiosendspin-9.1.1, which --setup makes (tests/run.py does)
+
+The server is strict either way (allow_noncompliant_clients=False): a deviation the library would only log in Music
+Assistant (issue #64) closes the connection here."""
+import re, asyncio, contextvars, inspect, logging, math, os, signal, struct, subprocess, sys, tempfile, time, traceback
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LIB9 = os.path.join(ROOT, "build", "aiosendspin-9.1.1")
+# the wheel uv.lock pinned before 10.2.1; pure Python with the same requirements as 10.2.1, so it runs on .venv's
+LIB9_REQ = "aiosendspin==9.1.1 --hash=sha256:cb7227f70a8c6cfea450fb92ad26ed6fe3d86e883620700e2cde9372ad8c995b"
+LEGACY = "--legacy" in sys.argv
+
+
+def setup():
+    if os.path.isdir(os.path.join(LIB9, "aiosendspin-9.1.1.dist-info")): return
+    import shutil
+    uv = shutil.which("uv") or sys.exit("--setup needs uv (https://docs.astral.sh/uv/)")
+    with tempfile.NamedTemporaryFile("w", suffix=".txt") as req:
+        req.write(LIB9_REQ + "\n"); req.flush()
+        subprocess.run([uv, "pip", "install", "--python", sys.executable, "--no-deps", "--require-hashes",
+                        "--target", LIB9, "-r", req.name], check=True)
+
+if "--setup" in sys.argv: setup(); sys.exit(0)
+if LEGACY:
+    if not os.path.isdir(os.path.join(LIB9, "aiosendspin")): sys.exit(f"no aiosendspin 9.1.1 in {LIB9}: run {sys.argv[0]} --setup")
+    sys.path.insert(0, LIB9)
+
 import numpy as np
-from aiosendspin.noise import Identity, InMemoryServerPairingStore, decode_token
+import aiosendspin.noise as noise
+from aiosendspin.noise import Identity, InMemoryServerPairingStore
 from aiosendspin.noise.pairing import PairingAttempt
 from aiosendspin.models.types import PairMethod, MediaCommand
 from aiosendspin.server import SendspinServer, AudioFormat, ClientAddedEvent
 from aioesphomeapi import APIClient, VoiceAssistantEventType as Ev
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 from webclient import wait_port
 from esphome_common import assistant, sync
+
+# What changed in the library's API between the two versions
+decode_token = getattr(noise, "decode_psk_token", None) or noise.decode_token
+def server_of(loop, ident, name, store):
+    return SendspinServer(loop, ident, name, pairing_store=store, allow_noncompliant_clients=False)
+def psk_attempt(tok):
+    """pairing with the token; 10.x also wants the client_id it names"""
+    kw = {"client_id": tok.client_id} if "client_id" in inspect.signature(PairingAttempt).parameters else {}
+    return PairingAttempt(method=PairMethod.PAIRING_PSK, pairing_psk=tok.pairing_psk, **kw)
+def delay_of(p): return p.output_delay_ms if hasattr(p, "output_delay_ms") else p.static_delay_ms
+def set_delay(p, ms): (p.set_output_delay if hasattr(p, "set_output_delay") else p.set_static_delay)(ms)
+
 PORT, PORT2, PORT3, PORT4, PORT5 = 16958, 16960, 16963, 16965, 16968      # the five players' Sendspin ports
 
 
@@ -59,7 +100,7 @@ async def paired(env, state):
     await asyncio.sleep(0.5)
     loop = asyncio.get_running_loop()
     ident, store = Identity.generate(), InMemoryServerPairingStore()     # what Music Assistant keeps across its restarts
-    server = SendspinServer(loop, ident, "fake-ma", pairing_store=store)
+    server = server_of(loop, ident, "fake-ma", store)
     added = asyncio.Queue(); events = []
     def on_event(_srv, ev):
         if isinstance(ev, ClientAddedEvent): added.put_nowait(ev.client_id)
@@ -71,6 +112,8 @@ async def paired(env, state):
         client = server.get_client(cid)
         check(re.fullmatch(r"Echo Dot 3( [0-9a-f]{6})?", client.info.name or "") and "player@v1" in client.info.supported_roles, f"hello over the encrypted session: {client.info.name!r} {client.info.supported_roles}")
         check(open(os.path.join(state, "sendspin.key"), "rb").read().__len__() == 32, "identity key persisted")
+        dialect = "aiosendspin 9 dialect" if LEGACY else "spec 1.0"
+        check(f"encrypted session up (sentinel key, {dialect})" in log(), f"the player speaks the server's dialect: {dialect}")
         client.add_event_listener(lambda c, e: events.append(type(e).__name__))
         check(client.role("player@v1") is None, "no role before the operator approves the unpaired device")
         await server.trust_unpaired(cid)
@@ -78,7 +121,7 @@ async def paired(env, state):
         player_ = client.role("player@v1")
         check(player_ is not None and client.role("controller@v1") is not None, "player and controller roles active after approval")
         await until(lambda: player_.required_lead_time_ms == 300)
-        check((player_.required_lead_time_ms, player_.min_buffer_ms, player_.static_delay_ms) == (300, 300, 0), f"initial client/state received: lead {player_.required_lead_time_ms}, buffer {player_.min_buffer_ms}, delay {player_.static_delay_ms}")
+        check((player_.required_lead_time_ms, player_.min_buffer_ms, delay_of(player_)) == (300, 300, 0), f"initial client/state received: lead {player_.required_lead_time_ms}, buffer {player_.min_buffer_ms}, delay {delay_of(player_)}")
 
         fmt = AudioFormat(sample_rate=48000, bit_depth=16, channels=2)
         ctl_events = []
@@ -106,6 +149,10 @@ async def paired(env, state):
         await client.group.stop()
         await until(lambda: "sendspin: stream end" in log())
         check(not os.path.exists(mreq), "a server connected all along: no mDNS announcements")
+        set_delay(player_, 120)                         # after the tone: the new delay resyncs, a jump in it
+        saved = lambda: open(os.path.join(state, "sendspin.delay")).read().strip() if os.path.exists(os.path.join(state, "sendspin.delay")) else ""
+        await until(lambda: delay_of(player_) == 120 and saved() == "120")
+        check(delay_of(player_) == 120 and saved() == "120", f"delay command applied, kept and echoed in client/state: {delay_of(player_)} ms, saved {saved()!r}")
 
         pcm = np.frombuffer(open(music, "rb").read(), dtype="<i2").reshape(-1, 2)[:, 0].astype(float)
         nz = np.flatnonzero(np.abs(pcm) > 100)
@@ -124,7 +171,7 @@ async def paired(env, state):
         token = subprocess.run([f"{ROOT}/build/hassmic-host", "-T"], env=env, capture_output=True, text=True).stdout.strip()
         tok = decode_token(token)
         check(token.startswith("SP:0") and tok.client_id == cid, f"pairing token decodes to this player: {token[:14]}…")
-        await server.initiate_pairing(cid, PairingAttempt(method=PairMethod.PAIRING_PSK, pairing_psk=tok.pairing_psk))
+        await server.initiate_pairing(cid, psk_attempt(tok))
         records = os.path.join(state, "sendspin.records")
         async def done():
             return (len(await server.pairing_store.list_records()) == 1 and os.path.exists(records) and os.path.getsize(records) > 0
@@ -138,7 +185,7 @@ async def paired(env, state):
         check(server.get_client(cid).role("player@v1") is not None, "player role active on the paired session")
 
         # a second server dials while the first one is idle: it never played here, so it is turned away
-        other = SendspinServer(loop, Identity.generate(), "intruder", pairing_store=InMemoryServerPairingStore())
+        other = server_of(loop, Identity.generate(), "intruder", InMemoryServerPairingStore())
         await other.start_server(port=16956, discover_clients=False)
         other.connect_to_client(f"ws://127.0.0.1:{PORT}/sendspin", retry_initial_connection=False, retry_indefinitely=False)
         await until(lambda: "second server turned away" in log())
@@ -169,14 +216,14 @@ async def server_restart(env, state):
     added = asyncio.Queue()
     def on_event(_srv, ev):
         if isinstance(ev, ClientAddedEvent): added.put_nowait(ev.client_id)
-    server = SendspinServer(loop, ident, "fake-ma", pairing_store=store); server.add_event_listener(on_event)
+    server = server_of(loop, ident, "fake-ma", store); server.add_event_listener(on_event)
     try:
         await server.start_server(port=16962, discover_clients=False)
         server.connect_to_client(f"ws://127.0.0.1:{PORT3}/sendspin", retry_initial_connection=True, retry_indefinitely=True)
         cid = await asyncio.wait_for(added.get(), 15)
         await server.trust_unpaired(cid)                # paired, as the part above does it: the server comes back to it
         tok = decode_token(subprocess.run([f"{ROOT}/build/hassmic-host", "-T"], env=env, capture_output=True, text=True).stdout.strip())
-        await server.initiate_pairing(cid, PairingAttempt(method=PairMethod.PAIRING_PSK, pairing_psk=tok.pairing_psk))
+        await server.initiate_pairing(cid, psk_attempt(tok))
         await until(lambda: "sendspin: player role active (paired)" in log(), 10)
         check("sendspin: player role active (paired)" in log() and not os.path.exists(mreq),
               "another player, paired with its server, which holds its role: no mDNS announcements")
@@ -187,7 +234,7 @@ async def server_restart(env, state):
         if os.path.exists(mreq): os.remove(mreq)
         t0 = time.monotonic(); await until(lambda: os.path.exists(mreq), 8); dt = time.monotonic() - t0
         check(os.path.exists(mreq) and dt > 2.5, f"still gone: announced again, after a longer wait ({dt:.1f} s)")
-        server = SendspinServer(loop, ident, "fake-ma", pairing_store=store)
+        server = server_of(loop, ident, "fake-ma", store)
         added = asyncio.Queue(); server.add_event_listener(on_event)
         await server.start_server(port=16962, discover_clients=False)
         server.connect_to_client(f"ws://127.0.0.1:{PORT3}/sendspin", retry_initial_connection=True, retry_indefinitely=True)
@@ -206,7 +253,7 @@ async def unpaired_off(env, state):
     # unpaired gives it no role; pairing with the token still works and then it plays
     proc, _ = player(state, PORT2, 16954, env)       # no sendspin.unpaired file: the default
     await asyncio.sleep(0.5)
-    server = SendspinServer(asyncio.get_running_loop(), Identity.generate(), "fake-ma", pairing_store=InMemoryServerPairingStore())
+    server = server_of(asyncio.get_running_loop(), Identity.generate(), "fake-ma", InMemoryServerPairingStore())
     added = asyncio.Queue()
     server.add_event_listener(lambda _s, ev: isinstance(ev, ClientAddedEvent) and added.put_nowait(ev.client_id))
     try:
@@ -218,7 +265,7 @@ async def unpaired_off(env, state):
         check(server.get_client(cid).role("player@v1") is None,
               "unpaired access off: approved unpaired, still no player role")
         tok = decode_token(subprocess.run([f"{ROOT}/build/hassmic-host", "-T"], env=env, capture_output=True, text=True).stdout.strip())
-        await server.initiate_pairing(cid, PairingAttempt(method=PairMethod.PAIRING_PSK, pairing_psk=tok.pairing_psk))
+        await server.initiate_pairing(cid, psk_attempt(tok))
         await until(lambda: (c := server.get_client(cid)) is not None and c.role("player@v1") is not None, 10)
         check(server.get_client(cid).role("player@v1") is not None, "unpaired access off: plays once paired with the token")
     finally:
@@ -237,7 +284,7 @@ async def stop_music(env, state, quiet=False):
     cli = APIClient("127.0.0.1", http, None)
     await cli.connect(login=True); await cli.list_entities_services()
     va = assistant(cli); await sync(cli)
-    server = SendspinServer(loop, Identity.generate(), "fake-ma", pairing_store=InMemoryServerPairingStore())
+    server = server_of(loop, Identity.generate(), "fake-ma", InMemoryServerPairingStore())
     added = asyncio.Queue()
     server.add_event_listener(lambda _srv, ev: isinstance(ev, ClientAddedEvent) and added.put_nowait(ev.client_id))
     feeder = None
@@ -335,6 +382,9 @@ async def main():
         try: await f(env, state)
         except Exception:
             lines.append("FAIL " + traceback.format_exc().rstrip().replace("\n", "\n     ")); check.failed = True
+        if any(l.startswith("FAIL") for l in lines) and os.path.exists(os.path.join(state, "log")):
+            tail = open(os.path.join(state, "log"), errors="replace").read().splitlines()[-40:]
+            lines.append("     the player's log, last lines:\n" + "\n".join("       " + l for l in tail))
         return lines
     for lines in await asyncio.gather(part(paired), part(server_restart), part(unpaired_off), part(stop_music),
                                          part(lambda env, state: stop_music(env, state, quiet=True))):

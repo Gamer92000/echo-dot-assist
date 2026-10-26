@@ -85,7 +85,10 @@ make unit                                         # C unit tests; microWakeWord 
 .venv/bin/python tests/fake_web_davs.py           # models downloaded from a fake Amazon on the Echo itself: the code pair
                                                  # login with the device attestation token, the download, staging, deregister
 .venv/bin/python tests/fake_ha.py [--qemu]        # Wyoming (wyoming)
-.venv/bin/python tests/fake_ma_sendspin.py        # Sendspin, as Music Assistant (aiosendspin)
+.venv/bin/python tests/fake_ma_sendspin.py        # Sendspin, as Music Assistant 2.10.8 (aiosendspin 10.2.1: Sendspin 1.0), the
+                                                 # server strict: a deviation it would only log closes the connection
+.venv/bin/python tests/fake_ma_sendspin.py --legacy  # the same as Music Assistant up to 2.10.6 (aiosendspin 9.1.1, the draft before
+                                                 # 1.0) from build/aiosendspin-9.1.1, which --setup makes (tests/run.py does)
 .venv/bin/python tests/fake_ha_stop_word.py       # "<wake word>, stop" between two Echos: a dropped run cancelled, the setting
                                                  # stop_ends_listening off and on (the round, listening, thinking, 4 s)
 tests/ota_push_test.sh                            # signed push-update path end to end

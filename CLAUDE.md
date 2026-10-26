@@ -56,7 +56,9 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # skips without it) with four Echos, one the released build: replies, timing.
                                              # All of it in an `unshare -rn` namespace with only lo
 .venv/bin/python tests/fake_ha.py [--qemu]    # Wyoming; --qemu uses the ARM build + stock Pryon model under qemu-arm
-.venv/bin/python tests/fake_ma_sendspin.py    # Sendspin, as Music Assistant
+.venv/bin/python tests/fake_ma_sendspin.py [--legacy]  # Sendspin, as Music Assistant 2.10.8 (aiosendspin 10.2.1, Sendspin 1.0;
+                                             # --legacy: 9.1.1 of MA <= 2.10.6, build/aiosendspin-9.1.1 from --setup),
+                                             # strict: a deviation MA would only log fails
 .venv/bin/python tests/fake_ha_stop_word.py   # "<wake word>, stop" between two Echos: the drop cancelled, stop_ends_listening
 .venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step
 .venv/bin/python tests/fake_web_artifacts.py  # models copied Echo to Echo through the page, root's installer, after a restart

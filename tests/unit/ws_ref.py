@@ -1,6 +1,13 @@
 import asyncio, sys, aiohttp
 from aiohttp import web
 async def main():
+    # 0) our server refuses a browser's upgrade (it carries Origin)
+    p = await asyncio.create_subprocess_exec(sys.argv[1], "server", "16961"); await asyncio.sleep(0.3)
+    async with aiohttp.ClientSession() as s:
+        try:
+            async with s.ws_connect("ws://127.0.0.1:16961/x", origin="http://example.com"): raise AssertionError("upgrade with Origin accepted")
+        except aiohttp.WSServerHandshakeError as e: assert e.status == 403, e.status
+    assert await p.wait() == 1; print("our server refuses an upgrade with Origin: ok")
     # 1) our server, aiohttp client
     p = await asyncio.create_subprocess_exec(sys.argv[1], "server", "16961"); await asyncio.sleep(0.3)
     async with aiohttp.ClientSession() as s, s.ws_connect("ws://127.0.0.1:16961/x") as ws:

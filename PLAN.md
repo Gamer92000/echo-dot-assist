@@ -412,6 +412,30 @@ Run in this order. Each step says what it proves.
       Not implemented: PIN pairing (CPace: SHA-512 + Elligator2) → refused with `pair/abort method_not_supported`;
       metadata/artwork roles (no display). Installed and in daily use. Missing: listening test against another synced player in the
       same room (trim with MA's static delay)
+      **Sendspin 1.0 beside the 9.1.1 dialect (2026-10-26, GitHub issue #64).** MA 2.10.8 pins aiosendspin 10.2.1 (2.10.4 and
+      2.10.6: 9.1.1), which implements spec 1.0 and tolerates the old wire with a warning per difference ("non-compliant
+      client ...: client/hello declared player supported_commands, superseded by client/state", list-shaped
+      `supported_pair_methods`, `static_delay_ms`, `set_static_delay`). It runs lenient only because MA's hidden
+      `allow_legacy_clients` (default true) says so; strict, it refuses the Echo. `supported_commands` in the hello's
+      `player@v1_support` is what puts a connection on 10.x's legacy wire (9-byte audio header, fragments 2/3, hellos again
+      after a re-handshake, pairing without `client/pair-init`); 9.1.1 rejects a hello without it, so no single hello
+      suits both. The dialect is picked per connection from Noise message 1: only 10.x sends `psk_category` there, before
+      our hello. 1.0: `psk_category` selects the PSK (a key held as another category is a miss, another server's record
+      fails the handshake), hello without the player's commands and with `supported_pair_methods` as an object,
+      `client/state` with `output_delay_ms` and `supported_commands` volume/mute/set_output_delay, `available` only once the
+      clock filter converged, `set_output_delay` clamped to 0-5000, 13-byte audio header (`send_ahead` read past), type 1
+      fragments, `client/pair-init` (`pairing_index`) before `client/pair-finalize`, `unauthorized` for a paired session
+      asked to pair. Both: objects of inactive roles ignored, the controller's state dropped with its role, fragments
+      reassembled (up to 1 MB), filter input in integer halves with `max_error <= 0` dropped, message 2 and the key swap
+      under one lock, nothing else sent from a re-handshake's message 1 to the next activate (a gate under the send lock;
+      10.2.1 flags it; a `client/state` held back goes after it), flac or pcm always listed (pcm added when
+      `HASSMIC_SENDSPIN_CODECS` leaves both out; 10.2.1 flags it), WebSocket upgrades carrying `Origin` refused (403; spec
+      #324). 10.2.1's differences from 9.1.1 as a client sees them: `docs/sendspin-digest.md` §0a. `tests/fake_ma_sendspin.py`: 34/34
+      against aiosendspin 10.2.1 and 34/34 with `--legacy` against 9.1.1 (`build/aiosendspin-9.1.1`, hash-pinned wheel made by
+      `--setup`, which `tests/run.py` runs), both servers strict (`allow_noncompliant_clients=False`), plus a delay command
+      now; `CODEC=opus` and `CODEC=pcm` pass too. Not done: time sync in bursts of 8 (spec since 2026-10-21, after 10.2.1).
+      Not exercised: fragments (the library fragments only beyond 65518 bytes), a volume change during a re-handshake.
+      Not yet against a real MA 2.10.8
 - [x] mDNS: init's `avahi-daemon` runs in SELinux domain `avahi-daemon`, which is denied read on `/data/misc/avahi/services`
       (so nothing was ever published, also not for Wyoming). `magiskpolicy` cannot parse a rule for a type with a hyphen →
       `boot.sh`/`run.sh` stop the init service and start avahi themselves in the `su` domain. Verified: answers queries from the PC.

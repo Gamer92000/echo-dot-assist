@@ -353,6 +353,8 @@ and the action button pauses and resumes.
   until it is back (after 30 s, then less and less often, at most every 30 min). Where Music Assistant cannot see the
   Echo's announcements (another subnet or VLAN), add `<echo-ip>:28928` under its Sendspin provider's "Manual IP
   addresses for discovery": with the port, since a bare address means Sendspin's default 8928, which is not the Echo's.
+  The Echo speaks both versions of Sendspin in use: Sendspin 1.0 of Music Assistant 2.10.8 and later, and the draft
+  before it of Music Assistant up to 2.10.6. It picks whichever the server speaks, each time it connects.
 - **From a phone** over Bluetooth: SBC, AAC, aptX, aptX HD, with media controls. Switch on "Bluetooth audio from phones" on the
   settings page; the "Bluetooth pairing" switch in Home Assistant then lets phones pair (blue chaser on the ring).
 

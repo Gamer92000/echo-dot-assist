@@ -1,4 +1,4 @@
-# Sendspin client implementer's digest (target: Music Assistant 2.10.4 / aiosendspin 9.1.1)
+# Sendspin client implementer's digest (target: Music Assistant 2.10.4 / aiosendspin 9.1.1; spec 1.0 / aiosendspin 10.2.1 in §0a)
 
 Sources: spec `sendspin.md` (1868 lines, cited as `spec:LINE`) and the unpacked wheel `aiosendspin 9.1.1`
 (cited as `path.py:LINE`, relative to `aiosendspin/`). `noiseprotocol 0.3.1` and `cpace 0.1.0` were unpacked and read
@@ -41,6 +41,54 @@ be disconnected by the library. Where they differ, follow the LIB column.
 Forward-compat strategy: the LIB ignores unknown JSON *keys* (mashumaro default; `models/base.py:48-61` sets no
 `forbid_extra_keys`), so you MAY send both `static_delay_ms` and `output_delay_ms`. You can NOT send unknown enum
 values or unknown message types (D8, D16). Make the dialect a build-time switch: `SENDSPIN_DIALECT_AIOSENDSPIN_9`.
+(Superseded by §0a: the dialect is picked per connection.)
+
+## 0a. aiosendspin 10.2.1 (Music Assistant 2.10.8 on): spec 1.0, and how hassmic speaks both (2026-10-26, issue #64)
+MA 2.10.4 and 2.10.6 pin aiosendspin 9.1.1, MA 2.10.7 10.2.0 (as good as 10.2.1 here), 2.10.8 10.2.1. 10.x
+implements spec 1.0 (`Sendspin/spec` at rc1 plus the October changes up to 2026-10-19) and still takes the 9.1.1
+wire, flagging each difference. MA runs it lenient (`allow_noncompliant_clients=allow_legacy_clients`, a hidden
+setting, default true): flags are warnings ("non-compliant client ..."). Strict, the first flag closes the connection
+and the server does not dial again. Refs below: the 10.2.1 wheel, relative to `aiosendspin/`.
+
+**How 10.2.1 picks the wire**, once per connection from `client/hello` (`server/connection.py:1583-1663`): legacy
+(9-byte audio header, fragments 2/3, `{"<role>":null}` on deactivation, pairing with `active_roles: []`, the
+`management` activity) when the hello carries `player@v1_support.supported_commands` (even `[]`) or `trust_level`, or
+the connection is unencrypted. Hellos exchanged again after every re-handshake when, besides those, the pair methods
+are a list, support keys are unversioned or `artwork@v1_support` is present (`:1604-1671`). 9.1.1 rejects a hello
+without `supported_commands` (D7) and with pair methods as an object (D11): no hello suits both.
+
+**How hassmic picks:** Noise message 1 carries `psk_category` from 10.x always (`noise/driver.py:426`), from 9.1.1
+never (D3), and it arrives before our hello. Present: spec 1.0 (`struct session.spec`); absent: the 9.1.1 dialect of
+§0. A re-handshake whose message 1 disagrees fails.
+
+| # | Topic | 9.1.1 | 10.2.1, current wire (what hassmic sends with `spec`) | Ref (10.2.1) |
+|---|---|---|---|---|
+| E1 | Noise msg 1 | `{"psk_id"}` | `{"psk_id","psk_category"}`: `lt` records only (another server's record fails the handshake), `pr` the pairing PSK only, `sn` the Sentinel only; a key held as another category is a miss; an unknown code fails | `noise/driver.py:426`, spec connection.md |
+| E2 | Sentinel fallback | none | the server retries msg 2 under the Sentinel (initial handshake only); the session is then pairing-only while its record exists | `noise/driver.py:436-447` |
+| E3 | `server/error` | never | sent for a bad `client/init` | `noise/driver.py:147-154` |
+| E4 | Re-handshake | hellos again, then activate | no hellos; `server/activate` first under the new keys. Nothing else may be sent between msg 1 and that activate (flagged): hassmic's `quiet` gate under `send_lock`, a held-back `client/state` sent after it | `server/connection.py:2246-2276`, `client/connection.py:1376-1438` |
+| E5 | client/hello | `supported_commands` required, pair methods a list | no `supported_commands`; `"supported_pair_methods":{"pairing_psk":{"locations":["device"]}}`; `unpaired_access.enabled` required; flac or pcm among the formats (hassmic adds pcm when `HASSMIC_SENDSPIN_CODECS` leaves both out) | `server/connection.py:1583-1709` |
+| E6 | client/state player | `static_delay_ms`, commands ⊆ {`set_static_delay`} | `output_delay_ms`, `supported_commands:["volume","mute","set_output_delay"]`, both timing fields, every time; `available:false` until the clock filter converged (a first state with `false` only records it; later `false` moves the client to a stopped solo group) | `models/player.py:165-252`, `server/roles/player/v1.py:660-697` |
+| E7 | server/command | `set_static_delay`+`static_delay_ms` | `set_output_delay`+`output_delay_ms`, clamped to 0-5000 | `server/roles/player/v1.py:522-650` |
+| E8 | Audio | 9-byte header | 13 bytes: type, int64 BE timestamp, uint32 BE `send_ahead` (read past); shorter = close | `models/player.py:37-81` |
+| E9 | Fragments | types 2/3 | type 1 + flags (bit 1 first, bit 0 last); 2-3 reserved. Neither library fragments below 65518 bytes, so a player never sees them; hassmic reassembles both shapes up to 1 MB anyway | `noise/wire.py:188-237` |
+| E10 | Pairing PSK | `client/pair-finalize` only | `client/pair-init {"pairing_index":N}` then `client/pair-finalize`; N counts pairing activates since the last (re-)handshake, first = 1 (lower: discarded, the server times out in 60 s; higher: fails) | `noise/pairing.py:223-303`, `server/connection.py:2200-2203` |
+| E11 | Pairing on an unpaired playback session | `[pairing]`, `active_roles: []` | `["playback","pairing"]`, roles kept: "player role active (paired)" is logged per handshake, not per role change | `server/connection.py:2103-2118` |
+| E12 | Track change while playing | `stream/end` + `stream/start` | `stream/clear`, `stream/start` only when format or header change (hassmic keeps stream and decoder on clear) | `server/group.py:130-135` |
+| E13 | `group/update` | after the first client/state | right after the first activate | `server/connection.py:586-590` |
+| E14 | Controller `supported_commands` | always `volume`,`mute`,`switch` | `volume`/`mute` only while a group player declares them | `server/roles/controller/group.py:154-174` |
+| E15 | Unknown client message types | disconnect (D16) | ignored with a warning (needs a `payload` object) | `server/connection.py:2803-2830` |
+| E16 | Redial after `client/goodbye` | `restart`, `concurrent_attempt` | `restart` only: a server hassmic turned away comes back to reclaim playback or after an mDNS remove and add | `server/connection.py:510-525` |
+| E17 | Initial client/state, strict | close after 5 s | no timer: binary held until it arrives | `server/connection.py:1332-1340` |
+
+Also from the spec, both dialects: objects for inactive roles ignored (stream/start, server/command, audio), the
+controller's state dropped with its role, `server/time` input in integer halves with `max_error <= 0` dropped,
+WebSocket upgrades with `Origin` refused (spec #324, 2026-10-23; neither library sends it). Not done: `client/time` in
+bursts of 8 with only the best fed to the filter (spec #303, 2026-10-21, after 10.2.1; servers must not close over it).
+
+Tested: `tests/fake_ma_sendspin.py` against 10.2.1 and, with `--legacy`, 9.1.1, both strict
+(`allow_noncompliant_clients=False`), so any flag fails the test. Not run: a real MA 2.10.8; fragments; a volume change
+during a re-handshake.
 
 ## 1. Connection establishment
 Transport is always plain `ws://` (spec:165); security is Noise inside the WebSocket.

@@ -1,6 +1,9 @@
 /*
- * Sendspin player (synchronised multiroom audio, Music Assistant), in the dialect aiosendspin 9.1.1 speaks; where that
- * differs from the published spec the library wins, see docs/sendspin-digest.md section 0.
+ * Sendspin player (synchronised multiroom audio, Music Assistant), in two dialects: spec 1.0 as aiosendspin 10.2.1 speaks
+ * it (Music Assistant 2.10.8 on), and the older one of aiosendspin 9.1.1 (up to 2.10.6), which differs from the spec in
+ * many places (docs/sendspin-digest.md section 0).  A 10.x server reads our 9.1.1-shaped hello as that dialect, logs
+ * every difference and may refuse it (issue #64); 9.1.1 refuses the 1.0 shapes.  Which one a server speaks shows before
+ * our client/hello: only 1.0 declares psk_category in Noise message 1 (`spec` in the session).
  *
  *   transport   the server finds us by mDNS (_sendspin._tcp) and dials our WebSocket; text frames carry the cleartext init
  *               exchange and the Noise KKpsk2 handshake (we are the responder), binary frames the encrypted session
@@ -344,16 +347,23 @@ static void record_drop(const char *server_id)
     pthread_mutex_unlock(&rec_lock);
 }
 
-/* Which of our PSKs does the server mean?  -1: none (spec: fall back to the Sentinel on an initial handshake). */
-static int psk_select(const char *id, const char *server_id, uint8_t out[32])
+/* Which of our PSKs does the server mean?  `declared`: the category it uses it as ("lt", "pr", "sn"; spec 1.0: a key we
+ * hold only as another category is a miss), NULL from aiosendspin 9.x, which declares none.  -1: none (fall back to the
+ * Sentinel on an initial handshake), -2: fail the handshake (an unknown category; 1.0: another server's record, a
+ * misbinding rather than a miss). */
+static int psk_select(const char *id, const char *declared, const char *server_id, uint8_t out[32])
 {
     char cand[48]; int cat = -1;
-    psk_id(sentinel_psk, cand); if (!strcmp(cand, id)) { memcpy(out, sentinel_psk, 32); return PSK_SENTINEL; }
-    psk_id(pairing_psk, cand);  if (!strcmp(cand, id)) { memcpy(out, pairing_psk, 32); return PSK_PAIRING; }
+    if (declared && strcmp(declared, "lt") && strcmp(declared, "pr") && strcmp(declared, "sn")) return -2;
+    if (!declared || !strcmp(declared, "sn")) { psk_id(sentinel_psk, cand); if (!strcmp(cand, id)) { memcpy(out, sentinel_psk, 32); return PSK_SENTINEL; } }
+    if (!declared || !strcmp(declared, "pr")) { psk_id(pairing_psk, cand);  if (!strcmp(cand, id)) { memcpy(out, pairing_psk, 32); return PSK_PAIRING; } }
+    if (declared && strcmp(declared, "lt")) return -1;
     pthread_mutex_lock(&rec_lock);
-    for (int i = 0; i < n_records && cat < 0; i++) {
+    for (int i = 0; i < n_records && cat == -1; i++) {
         psk_id(records[i].psk, cand);
-        if (!strcmp(cand, id) && !strcmp(records[i].server_id, server_id)) { memcpy(out, records[i].psk, 32); cat = PSK_LONGTERM; }
+        if (strcmp(cand, id)) continue;
+        if (!strcmp(records[i].server_id, server_id)) { memcpy(out, records[i].psk, 32); cat = PSK_LONGTERM; }
+        else if (declared) cat = -2;
     }
     pthread_mutex_unlock(&rec_lock);
     return cat;
@@ -378,8 +388,13 @@ void sendspin_pairing_token(char *out, size_t outsz)
 struct session {
     struct ws ws; struct noise_cs tx, rx; pthread_mutex_t send_lock;
     uint8_t server_pub[32], hs_hash[32], new_psk[32]; char server_id[48]; int psk_cat;
-    int activated, admitted, rank, player_active, controller_active, state_sent, pairing, closing; long long activated_at;
+    int spec;                          /* the server speaks spec 1.0 (aiosendspin 10.x), else 9.1.1's dialect */
+    int activated, admitted, rank, player_active, controller_active, state_sent, available_sent, pairing, closing; long long activated_at;
+    int pairing_index;                 /* pairing server/activates since the last Noise handshake (1.0: in client/pair-init) */
+    int quiet, state_owed;             /* re-handshake: nothing but its own messages until the next server/activate (under
+                                          send_lock); a client/state held back meanwhile, sent after it */
     char ctl_commands[256]; int group_playing;
+    uint8_t *frag; size_t frag_len; int frag_on;     /* a fragmented message being put together: its type byte, then data */
 };
 
 /* At most one admitted connection; the others are provisional until their first server/activate decides. */
@@ -435,24 +450,50 @@ static int js_section(const char *j, const char *key, char *out, size_t outsz)
     return 0;
 }
 
-static int send_json(struct session *s, const char *fmt, ...)
+/* 0 sent, -1 error, 1 held back: from Noise message 1 of a re-handshake to the next server/activate neither side may
+ * start a message but the handshake's (1.0; 10.2.1 flags anything else, and strict it closes without coming back).
+ * `forced`: such a message, past that gate.  `rekey`: the keys for every later message, swapped under the same lock
+ * (message 2 still goes under the old ones, and nothing another thread sends may come between). */
+static int vsend_json(struct session *s, int forced, const struct noise_cs *rekey, const char *fmt, va_list ap)
 {
-    static __thread char msg[2048]; uint8_t out[2048 + NOISE_TAG]; va_list ap; int rc;
+    static __thread char msg[2048]; uint8_t out[2048 + NOISE_TAG]; int rc;
     msg[0] = 0;                                         /* type byte 0 = JSON */
-    va_start(ap, fmt); int n = vsnprintf(msg + 1, sizeof msg - 1, fmt, ap); va_end(ap);
+    int n = vsnprintf(msg + 1, sizeof msg - 1, fmt, ap);
     pthread_mutex_lock(&s->send_lock);                  /* nonce order must equal wire order */
+    if (s->quiet && !forced) { pthread_mutex_unlock(&s->send_lock); return 1; }
     size_t cl = noise_encrypt(&s->tx, msg, n + 1, out);
     rc = ws_send(&s->ws, WS_BINARY, out, cl);
+    if (rekey) s->tx = *rekey;
     pthread_mutex_unlock(&s->send_lock);
     return rc;
 }
 
+static int send_json(struct session *s, const char *fmt, ...)
+{
+    va_list ap; va_start(ap, fmt); int rc = vsend_json(s, 0, NULL, fmt, ap); va_end(ap);
+    return rc;
+}
+
+static int send_json_forced(struct session *s, const struct noise_cs *rekey, const char *fmt, ...)
+{
+    va_list ap; va_start(ap, fmt); int rc = vsend_json(s, 1, rekey, fmt, ap); va_end(ap);
+    return rc;
+}
+
+static void set_quiet(struct session *s, int on) { pthread_mutex_lock(&s->send_lock); s->quiet = on; pthread_mutex_unlock(&s->send_lock); }
+
+/* 1.0: the delay is output_delay_ms / set_output_delay, and every command the server may send is listed here (9.1.1
+ * takes only its set_static_delay here and the rest from the hello).  available only once the clock filter has
+ * converged (spec: the server starts no stream before); 9.1.1 has no such rule. */
 static void send_state_vol(struct session *s, int vol)
 {
-    send_json(s, "{\"type\":\"client/state\",\"payload\":{\"available\":true,\"player\":{\"volume\":%d,\"muted\":%s,\"static_delay_ms\":%d,"
-                 "\"required_lead_time_ms\":%d,\"min_buffer_ms\":%d,\"supported_commands\":[\"set_static_delay\"]}}}",
-              vol, atomic_load(&player_muted) ? "true" : "false", atomic_load(&static_delay_ms), LEAD_MS, LEAD_MS);
-    s->state_sent = 1;
+    int available = !s->spec || tf_synced(NULL);
+    s->state_owed = 1 == send_json(s, "{\"type\":\"client/state\",\"payload\":{\"available\":%s,\"player\":{\"volume\":%d,\"muted\":%s,\"%s\":%d,"
+                 "\"required_lead_time_ms\":%d,\"min_buffer_ms\":%d,\"supported_commands\":[%s]}}}",
+              available ? "true" : "false", vol, atomic_load(&player_muted) ? "true" : "false",
+              s->spec ? "output_delay_ms" : "static_delay_ms", atomic_load(&static_delay_ms), LEAD_MS, LEAD_MS,
+              s->spec ? "\"volume\",\"mute\",\"set_output_delay\"" : "\"set_static_delay\"");
+    s->state_sent = 1; s->available_sent = available;
 }
 
 static void send_state(struct session *s)
@@ -476,8 +517,10 @@ static void *time_thread(void *arg)
          * the admitted connection drives the clock */
         if (!s->activated || !s->admitted || s->pairing) { usleep(50000); continue; }
         send_json(s, "{\"type\":\"client/time\",\"payload\":{\"client_transmitted\":%lld}}", raw_us());
-        /* first client/state: once the clock is usable, but well inside the server's 5 s initial-state timer */
+        /* first client/state: once the clock is usable, but well inside the server's 5 s initial-state timer; sent
+         * unavailable (1.0) when the filter was not there yet, then again once it is */
         if (s->player_active && !s->state_sent && ((ok && e < 5000) || raw_us() - s->activated_at > 3000000)) send_state(s);
+        else if (s->player_active && !s->available_sent && ok) send_state(s);
         long long nap = !ok ? 200000 : e < 1000 ? 3000000 : e < 2000 ? 1000000 : e < 5000 ? 500000 : 200000;
         for (long long t = 0; t < nap && !s->closing; t += 50000) usleep(50000);
     }
@@ -506,18 +549,22 @@ static int arbitrate(struct session *s)
 
 static int rehandshake(struct session *s, const char *j);
 
-/* supported_formats in order of preference: the server takes the first one it can encode */
+/* supported_formats in order of preference: the server takes the first one it can encode.  flac or pcm always among
+ * them (spec: every server makes both; 10.2.1 flags a list without either): pcm last if the override left both out */
 static const char *formats_json(void)
 {
-    static char out[512]; const char *pref = getenv("HASSMIC_SENDSPIN_CODECS"); size_t o = 0;
+    static char out[512]; const char *pref = getenv("HASSMIC_SENDSPIN_CODECS"); size_t o = 0; int any = 0;
     if (!pref || !*pref) pref = "flac,opus,pcm";
     out[0] = 0;
     for (const char *p = pref; *p; ) {
         size_t n = strcspn(p, ",");
-        if ((n == 4 && !strncmp(p, "flac", 4)) || (n == 4 && !strncmp(p, "opus", 4)) || (n == 3 && !strncmp(p, "pcm", 3)))
+        int flac = n == 4 && !strncmp(p, "flac", 4), pcm = n == 3 && !strncmp(p, "pcm", 3);
+        if (flac || pcm || (n == 4 && !strncmp(p, "opus", 4)))
             o += snprintf(out + o, sizeof out - o, "%s{\"codec\":\"%.*s\",\"channels\":%d,\"sample_rate\":%d,\"bit_depth\":16}", o ? "," : "", (int)n, p, CHANNELS, RATE);
+        any |= flac || pcm;
         p += n; if (*p == ',') p++;
     }
+    if (!any) snprintf(out + o, sizeof out - o, "%s{\"codec\":\"pcm\",\"channels\":%d,\"sample_rate\":%d,\"bit_depth\":16}", o ? "," : "", CHANNELS, RATE);
     return out;
 }
 
@@ -526,20 +573,28 @@ static void on_json(struct session *s, char *j, long long t_recv)
     char type[48] = "", sec[512], str[64]; long long a, b, c;
     js_str(j, "type", type, sizeof type);
     if (!strcmp(type, "server/time")) {
-        if (s->admitted && js_i64(j, "client_transmitted", &a) && js_i64(j, "server_received", &b) && js_i64(j, "server_transmitted", &c))
-            tf_update(((double)(b - a) + (double)(c - t_recv)) / 2, ((double)(t_recv - a) - (double)(c - b)) / 2, t_recv);
+        /* spec's filter input: integer halves; a round trip of nothing (or less) says nothing */
+        long long z, e;
+        if (s->admitted && js_i64(j, "client_transmitted", &a) && js_i64(j, "server_received", &b) && js_i64(j, "server_transmitted", &c) &&
+            (z = ((b - a) + (c - t_recv)) / 2, e = ((t_recv - a) - (c - b)) / 2) > 0)
+            tf_update((double)z, (double)e, t_recv);
     } else if (!strcmp(type, "noise/handshake")) {
         if (rehandshake(s, j)) { fprintf(stderr, "sendspin: re-handshake failed\n"); s->closing = 1; shutdown(s->ws.fd, SHUT_RDWR); }
     } else if (!strcmp(type, "server/hello")) {
         js_str(j, "name", str, sizeof str); fprintf(stderr, "sendspin: server \"%s\"\n", str);
-        send_json(s, "{\"type\":\"client/hello\",\"payload\":{\"name\":\"%s\",\"device_info\":{\"product_name\":\"%s\","
+        /* 1.0: the player's commands go to client/state, the pairing methods are an object keyed by method.  The
+         * 9.1.1 shapes are what that library requires, and what marks a client as its dialect for 10.x.  Forced: 9.1.1
+         * asks for it again after a re-handshake, before its server/activate (1.0 does not ask). */
+        send_json_forced(s, NULL, "{\"type\":\"client/hello\",\"payload\":{\"name\":\"%s\",\"device_info\":{\"product_name\":\"%s\","
                      "\"manufacturer\":\"Amazon\",\"software_version\":\"" VERSION "\"},\"supported_roles\":[\"player@v1\",\"controller@v1\"],"
-                     "\"player@v1_support\":{\"supported_formats\":[%s],"
-                     "\"buffer_capacity\":%u,\"supported_commands\":[\"volume\",\"mute\"]},"
-                     "\"supported_pair_methods\":[{\"method\":\"pairing_psk\",\"locations\":[\"device\"]}],\"unpaired_access\":{\"enabled\":%s}}}",
-                  core_name, board.product, formats_json(), BUFFER_CAPACITY, atomic_load(&unpaired_ok) ? "true" : "false");
+                     "\"player@v1_support\":{\"supported_formats\":[%s],\"buffer_capacity\":%u%s},"
+                     "\"supported_pair_methods\":%s,\"unpaired_access\":{\"enabled\":%s}}}",
+                  core_name, board.product, formats_json(), BUFFER_CAPACITY, s->spec ? "" : ",\"supported_commands\":[\"volume\",\"mute\"]",
+                  s->spec ? "{\"pairing_psk\":{\"locations\":[\"device\"]}}" : "[{\"method\":\"pairing_psk\",\"locations\":[\"device\"]}]",
+                  atomic_load(&unpaired_ok) ? "true" : "false");
     } else if (!strcmp(type, "server/activate")) {
-        int first = !s->activated, playback = 0, pairing = 0;
+        int first = !s->activated, playback = 0, pairing = 0, rekeyed = s->quiet;
+        if (rekeyed) set_quiet(s, 0);                   /* its receipt ends a re-handshake's quiet period */
         if (js_section(j, "activities", sec, sizeof sec)) { playback = strstr(sec, "playback") != NULL; pairing = strstr(sec, "pairing") != NULL; }
         s->rank = playback ? 2 : pairing ? 1 : 0;
         s->activated = 1;
@@ -550,33 +605,43 @@ static void on_json(struct session *s, char *j, long long t_recv)
             fprintf(stderr, "sendspin: unpaired server turned away (paired servers only)\n");
             goodbye(s, "pairing_required"); return;
         }
+        /* 1.0: a paired session never pairs (a server re-handshakes to the pairing key first) */
+        if (s->spec && pairing && s->psk_cat == PSK_LONGTERM) { fprintf(stderr, "sendspin: paired server asked to pair, refused\n"); goodbye(s, "unauthorized"); return; }
         if (first && !arbitrate(s)) return;
         if (!s->admitted) return;
         if (playback && strcmp(last_playback_server, s->server_id)) {
             snprintf(last_playback_server, sizeof last_playback_server, "%s", s->server_id);
             save_file("sendspin.lastserver", last_playback_server, strlen(last_playback_server));
         }
+        int had_player = s->player_active;
         if (js_section(j, "active_roles", sec, sizeof sec)) {                                   /* sticky when omitted */
             int on = strstr(sec, "player@v1") != NULL;
-            if (on && !s->player_active) { s->activated_at = raw_us(); s->state_sent = 0; atomic_store(&server_known, 1); fprintf(stderr, "sendspin: player role active (%s)\n", s->psk_cat == PSK_LONGTERM ? "paired" : "unpaired"); }
+            if (on && !s->player_active) { s->activated_at = raw_us(); s->state_sent = 0; atomic_store(&server_known, 1); }
             if (!on && s->player_active) { stream_set(0); q_flush(); }
             if (!on && !pairing && first)
                 fprintf(stderr, "sendspin: connected, no role yet: %s\n", atomic_load(&unpaired_ok) ? "approve the device in Music Assistant"
                         : "pair it with the token (or allow Music Assistant without pairing in Home Assistant)");
             s->player_active = on;
             s->controller_active = strstr(sec, "controller@v1") != NULL;
+            if (!s->controller_active) { s->ctl_commands[0] = 0; s->group_playing = 0; }      /* its server/state goes with it */
         }
+        /* and again after each re-handshake: 1.0 keeps the role through pairing, the new key is what changed */
+        if (s->player_active && (!had_player || first)) fprintf(stderr, "sendspin: player role active (%s)\n", s->psk_cat == PSK_LONGTERM ? "paired" : "unpaired");
+        if (rekeyed && had_player && s->player_active && s->state_owed) send_state(s);       /* a client/state held back */
         s->pairing = 0;
         if (pairing) {
             char method[32] = "";
+            s->pairing_index++;
             if (js_section(j, "pairing", sec, sizeof sec)) js_str(sec, "method", method, sizeof method);
             if (!strcmp(method, "pairing_psk") && s->psk_cat == PSK_PAIRING) {
                 /* The server proved it knows our token (the handshake used the pairing PSK).  Hand it a fresh long-term
-                 * PSK; it is only stored once the server confirms. */
+                 * PSK; it is only stored once the server confirms.  1.0 opens the attempt with client/pair-init first,
+                 * which 9.1.1 takes for a protocol error. */
                 char b64[48];
                 ws_random(s->new_psk, 32); b64_encode(s->new_psk, 32, b64, 1, 0);
                 s->pairing = 1;
                 fprintf(stderr, "sendspin: pairing with this server\n");
+                if (s->spec) send_json(s, "{\"type\":\"client/pair-init\",\"payload\":{\"pairing_index\":%d}}", s->pairing_index);
                 send_json(s, "{\"type\":\"client/pair-finalize\",\"payload\":{\"long_term_psk\":\"%s\"}}", b64);
             } else {
                 fprintf(stderr, "sendspin: pairing method \"%s\" refused (only the pairing token is supported)\n", method);
@@ -592,15 +657,18 @@ static void on_json(struct session *s, char *j, long long t_recv)
     } else if (!s->admitted) {
         /* everything below belongs to the admitted connection */
     } else if (!strcmp(type, "server/command")) {
-        if (!js_section(j, "player", sec, sizeof sec) || !js_str(sec, "command", str, sizeof str)) return;
+        if (!s->player_active || !js_section(j, "player", sec, sizeof sec) || !js_str(sec, "command", str, sizeof str)) return;
         if (!strcmp(str, "volume") && js_i64(sec, "volume", &a)) { pthread_mutex_lock(&core_lock); core_set_volume((int)a); pthread_mutex_unlock(&core_lock); }
         else if (!strcmp(str, "mute") && js_i64(sec, "mute", &a)) atomic_store(&player_muted, a != 0);
-        else if (!strcmp(str, "set_static_delay") && js_i64(sec, "static_delay_ms", &a) && a >= 0 && a <= 5000) { atomic_store(&static_delay_ms, (int)a); save_delay(); atomic_store(&snap_next, 1); }
+        else if (!strcmp(str, s->spec ? "set_output_delay" : "set_static_delay") && js_i64(sec, s->spec ? "output_delay_ms" : "static_delay_ms", &a) &&
+                 (s->spec || (a >= 0 && a <= 5000))) {                           /* 1.0: clamped, not refused */
+            atomic_store(&static_delay_ms, a < 0 ? 0 : a > 5000 ? 5000 : (int)a); save_delay(); atomic_store(&snap_next, 1);
+        }
         send_state(s);
     } else if (!strcmp(type, "server/state")) {
         if (js_section(j, "controller", sec, sizeof sec)) js_section(sec, "supported_commands", s->ctl_commands, sizeof s->ctl_commands);
     } else if (!strcmp(type, "stream/start")) {
-        if (!js_section(j, "player", sec, sizeof sec)) return;
+        if (!s->player_active || !js_section(j, "player", sec, sizeof sec)) return;
         static char hdr64[1024]; static uint8_t hdr[768]; long hl = 0;
         js_str(sec, "codec", str, sizeof str); js_i64(sec, "sample_rate", &a); js_i64(sec, "channels", &b); js_i64(sec, "bit_depth", &c);
         if (js_str(sec, "codec_header", hdr64, sizeof hdr64)) hl = b64_decode(hdr64, strlen(hdr64), hdr, sizeof hdr);
@@ -621,22 +689,27 @@ static void on_json(struct session *s, char *j, long long t_recv)
 }
 
 /* Read Noise message 1, pick the PSK it names, answer with message 2.  `initial`: cleartext exchange, Sentinel fallback
- * allowed.  Re-handshake: both messages travel as encrypted JSON under the old keys, prologue = previous handshake hash. */
+ * allowed, and the dialect is decided.  Re-handshake: both messages travel as encrypted JSON under the old keys,
+ * prologue = previous handshake hash. */
 static int noise_respond(struct session *s, const uint8_t *prologue, size_t pl, const char *data_b64, int initial, char *out_b64, struct noise_cs *tx, struct noise_cs *rx)
 {
-    uint8_t msg[512], payload[512], psk[32]; char id[64] = ""; struct noise_hs hs;
+    uint8_t msg[512], payload[512], psk[32]; char id[64] = "", declared[8]; struct noise_hs hs;
     long ml = b64_decode(data_b64, strlen(data_b64), msg, sizeof msg);
     noise_kk_responder_init(&hs, prologue, pl, id_priv, id_pub, s->server_pub);
     long pll = ml < 0 ? -1 : noise_kk_read_msg1(&hs, msg, ml, payload);
     if (pll < 0) { fprintf(stderr, "sendspin: handshake message 1 does not authenticate\n"); return -1; }
     payload[pll] = 0; js_str((char *)payload, "psk_id", id, sizeof id);
-    int cat = psk_select(id, s->server_id, psk);
+    int has_cat = js_str((char *)payload, "psk_category", declared, sizeof declared);
+    if (initial) s->spec = has_cat;
+    else if (has_cat != s->spec) return -1;                      /* a server does not change dialect mid-connection */
+    int cat = psk_select(id, has_cat ? declared : NULL, s->server_id, psk);
+    if (cat == -2) { fprintf(stderr, "sendspin: handshake message 1 names a key we hold for another server, or a key category we do not know\n"); return -1; }
     if (cat < 0) {
         if (!initial) return -1;
         fprintf(stderr, "sendspin: server refers to a key we do not have (remove this player's pairing in the server); trying the Sentinel key\n");
         memcpy(psk, sentinel_psk, 32); cat = PSK_SENTINEL;
     }
-    s->psk_cat = cat;
+    s->psk_cat = cat; s->pairing_index = 0;
     size_t n = noise_kk_write_msg2(&hs, psk, "{}", 2, msg, tx, rx);
     memcpy(s->hs_hash, hs.hash_out, 32);
     b64_encode(msg, n, out_b64, 1, 0);
@@ -663,13 +736,52 @@ static int rehandshake(struct session *s, const char *j)
     char data[512], out_b64[128]; struct noise_cs tx, rx; uint8_t prev[32];
     if (!js_str(j, "data", data, sizeof data)) return -1;
     memcpy(prev, s->hs_hash, 32);
-    s->activated = 0;                                   /* nothing else is sent until the next server/activate */
+    s->activated = 0; set_quiet(s, 1);                  /* nothing else is sent until the next server/activate */
     if (noise_respond(s, prev, 32, data, 0, out_b64, &tx, &rx)) return -1;
-    if (send_json(s, "{\"type\":\"noise/handshake\",\"payload\":{\"data\":\"%s\"}}", out_b64)) return -1;       /* still under the old keys */
-    pthread_mutex_lock(&s->send_lock); s->tx = tx; pthread_mutex_unlock(&s->send_lock);
+    if (send_json_forced(s, &tx, "{\"type\":\"noise/handshake\",\"payload\":{\"data\":\"%s\"}}", out_b64)) return -1;  /* still under the old keys */
     s->rx = rx;
     fprintf(stderr, "sendspin: re-handshake done (%s)\n", s->psk_cat == PSK_LONGTERM ? "paired" : s->psk_cat == PSK_PAIRING ? "pairing key" : "sentinel");
     return 0;
+}
+
+/* One whole message, type byte first, with room for a NUL after it.  0: a protocol error, close. */
+static int on_message(struct session *s, uint8_t *m, size_t len, long long t_recv)
+{
+    if (m[0] == 0) { m[len] = 0; on_json(s, (char *)m + 1, t_recv); }
+    else if (m[0] == 4) {                       /* audio: int64 big-endian server time, (1.0) uint32 send_ahead, frames */
+        size_t hl = s->spec ? 13 : 9;
+        if (len < hl) return !s->spec;          /* 1.0: shorter than its header is an error */
+        if (len == hl || !s->admitted || !s->player_active) return 1;
+        long long ts = 0; for (int i = 0; i < 8; i++) ts = ts << 8 | m[1 + i];
+        const uint8_t *pcm; size_t n = atomic_load(&stream_on) ? decode_chunk(m + hl, len - hl, &pcm) : 0;
+        if (n) q_push(ts, pcm, n);
+    }
+    return 1;                                   /* other ids: roles we do not have, ignored */
+}
+
+#define FRAG_MAX (1u << 20)                     /* far above anything we take: chunks are at most 150 ms, JSON a few KB */
+
+/* The protocol's own fragmentation of a message beyond one Noise message (65518 bytes).  1.0: [1][flags][type][data],
+ * then [1][flags][data]; flags bit 1 = first, bit 0 = last, the rest zero.  9.1.1: [2][type][data], [2][data] ...,
+ * the last one [3][data].  0: a broken sequence, close (both). */
+static int on_fragment(struct session *s, const uint8_t *p, size_t n, long long t_recv)
+{
+    int first, last; size_t off;
+    if (s->spec) {
+        if (n < 2 || (p[1] & ~3)) return 0;
+        first = p[1] & 2; last = p[1] & 1; off = 2;
+    } else { first = !s->frag_on && p[0] == 2; last = p[0] == 3; off = 1; }
+    if (!!first == s->frag_on) return 0;        /* a first one while one is open, or a later one with none */
+    if (first) {
+        if (n < off + 1 || p[off] == 1 || (!s->spec && p[off] >= 2 && p[off] <= 3)) return 0;
+        s->frag_len = 0; s->frag_on = 1;
+    }
+    if (s->frag_len + (n - off) > FRAG_MAX) return 0;
+    if (!s->frag && !(s->frag = malloc(FRAG_MAX + 1))) return 0;
+    memcpy(s->frag + s->frag_len, p + off, n - off); s->frag_len += n - off;
+    if (!last) return 1;
+    s->frag_on = 0;
+    return on_message(s, s->frag, s->frag_len, t_recv);
 }
 
 static void *serve(void *arg)
@@ -681,7 +793,8 @@ static void *serve(void *arg)
     pthread_mutex_init(&s->send_lock, NULL);
     if (ws_accept(&s->ws, fd, path, sizeof path)) { close(fd); free(s); free(plain); return NULL; }
     if (handshake(s)) { fprintf(stderr, "sendspin: handshake failed\n"); ws_close(&s->ws); free(s); free(plain); return NULL; }
-    fprintf(stderr, "sendspin: encrypted session up (%s)\n", s->psk_cat == PSK_LONGTERM ? "paired" : s->psk_cat == PSK_PAIRING ? "pairing key" : "sentinel key");
+    fprintf(stderr, "sendspin: encrypted session up (%s, %s)\n", s->psk_cat == PSK_LONGTERM ? "paired" : s->psk_cat == PSK_PAIRING ? "pairing key" : "sentinel key",
+            s->spec ? "spec 1.0" : "aiosendspin 9 dialect");
     pthread_create(&tt, NULL, time_thread, s);
 
     while (!s->closing && ws_recv(&s->ws, &op, &d, &n) == 1) {
@@ -689,11 +802,9 @@ static void *serve(void *arg)
         long long t_recv = raw_us();
         long pl = n <= 70000 - 1 ? noise_decrypt(&s->rx, d, n, plain) : -1;
         if (pl < 1) { fprintf(stderr, "sendspin: message does not authenticate, closing\n"); break; }
-        if (plain[0] == 0) { plain[pl] = 0; on_json(s, (char *)plain + 1, t_recv); }
-        else if (plain[0] == 4 && pl > 9 && s->admitted) {              /* audio: int64 big-endian server time, then PCM */
-            long long ts = 0; for (int i = 0; i < 8; i++) ts = ts << 8 | plain[1 + i];
-            const uint8_t *pcm; size_t n2 = atomic_load(&stream_on) ? decode_chunk(plain + 9, pl - 9, &pcm) : 0;
-            if (n2) q_push(ts, pcm, n2);
+        int frag = s->spec ? plain[0] == 1 : plain[0] == 2 || plain[0] == 3;
+        if (frag ? !on_fragment(s, plain, pl, t_recv) : s->frag_on || !on_message(s, plain, pl, t_recv)) {
+            fprintf(stderr, "sendspin: malformed binary message, closing\n"); break;
         }
     }
     s->closing = 1;
@@ -703,7 +814,7 @@ static void *serve(void *arg)
     pthread_mutex_unlock(&adm_lock);
     ws_close(&s->ws); pthread_mutex_destroy(&s->send_lock);
     fprintf(stderr, "sendspin: session closed\n");
-    free(plain); free(s);
+    free(plain); free(s->frag); free(s);
     return NULL;
 }
 
@@ -727,14 +838,14 @@ static void *listen_thread(void *arg)
 void sendspin_volume_changed(int percent)
 {
     pthread_mutex_lock(&adm_lock);
-    if (admitted && admitted->player_active && admitted->state_sent) send_state_vol(admitted, percent);
+    if (admitted && admitted->activated && admitted->player_active && admitted->state_sent) send_state_vol(admitted, percent);
     pthread_mutex_unlock(&adm_lock);
 }
 
 /* The controller's pause while the group plays (stop where the server offers no pause).  adm_lock held; 1 = sent */
 static int send_pause(struct session *s)
 {
-    if (!s || !s->controller_active || !s->group_playing || !atomic_load(&stream_on)) return 0;
+    if (!s || !s->activated || !s->controller_active || !s->group_playing || !atomic_load(&stream_on)) return 0;
     const char *cmd = strstr(s->ctl_commands, "\"pause\"") ? "pause" : strstr(s->ctl_commands, "\"stop\"") ? "stop" : NULL;
     if (!cmd) return 0;
     send_json(s, "{\"type\":\"client/command\",\"payload\":{\"controller\":{\"command\":\"%s\"}}}", cmd);
@@ -747,7 +858,7 @@ int sendspin_button(void)
     int used = 0;
     pthread_mutex_lock(&adm_lock);
     struct session *s = admitted;
-    if (s && s->controller_active) {
+    if (s && s->activated && s->controller_active) {      /* not during a re-handshake: only its own messages then */
         if (s->group_playing && atomic_load(&stream_on)) {
             if (send_pause(s)) { paused_by_button_at = raw_us(); used = 1; }
         } else if (paused_by_button_at && raw_us() - paused_by_button_at < 1800LL * 1000000 && strstr(s->ctl_commands, "\"play\"")) {

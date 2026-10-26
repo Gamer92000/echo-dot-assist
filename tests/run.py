@@ -29,6 +29,7 @@ TESTS = [
     ("esphome-buttons", [PY, "tests/fake_ha_esphome_buttons.py"]),
     ("esphome-timers", [PY, "tests/fake_ha_esphome_timers.py"]),
     ("sendspin", [PY, "tests/fake_ma_sendspin.py"]),
+    ("sendspin-9", [PY, "tests/fake_ma_sendspin.py", "--legacy"]),
     ("wifi", [PY, "tests/fake_web_wifi.py"]),
     ("volumes", [PY, "tests/fake_ha_volumes.py"]),
     ("improv", [PY, "tests/fake_improv.py"]),
@@ -46,6 +47,9 @@ TESTS = [
     ("wyoming", [PY, "tests/fake_ha.py"]),
     ("otatool", ["sh", "tests/otatool_test.sh"]),
 ]
+# what a test needs from the network, made here before the namespaces (each a no-op once done); a test whose setup
+# failed says so itself
+SETUP = {"sendspin-9": [PY, "tests/fake_ma_sendspin.py", "--setup"]}       # aiosendspin 9.1.1 beside .venv's
 
 
 def netns(argv):
@@ -84,6 +88,9 @@ def main():
     if unknown: sys.exit(f"no such test: {' '.join(sorted(unknown))} (-l lists them)")
     if subprocess.run(["unshare", "-rn", "true"], capture_output=True).returncode:
         sys.exit("unshare -rn is not allowed here (user namespaces; Ubuntu: sysctl kernel.apparmor_restrict_unprivileged_userns=0)")
+    for n, argv in SETUP.items():
+        if any(t[0] == n for t in tests) and subprocess.run(argv, cwd=ROOT).returncode:
+            print(f"setup of {n} failed: {shlex.join(argv)}", flush=True)
     logdir = os.path.join(ROOT, "build", "test-logs")
     os.makedirs(logdir, exist_ok=True)
     gh = os.environ.get("GITHUB_ACTIONS") == "true"
