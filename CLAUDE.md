@@ -326,7 +326,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Artifacts** (`artifacts.c`): Amazon's models (`wake:<name>` = `models/<name>/`, `sound` = `aed/`, `whisper`): files
   plus two levels of folders (`whisper_components/`, `BDPGeneratedFiles/`, `nttfusionconfig/ntt_conv/`; a file's name is then its path), listed
   with a digest (BLAKE2b-256 over name, size, content per file), read and written in pieces (`ART_CHUNK_MAX`) over
-  signed requests, so the page copies them Echo to Echo. Staged in `state/artifacts/<stage>/`; commit checks sizes,
+  signed requests, so the page copies them Echo to Echo, and saves them into a tar and back ("Models on file": `web/tar.js`,
+  `hassmic-models.json` with the digests first; `tests/unit/web_tar_test.py`). Staged in `state/artifacts/<stage>/`; commit checks sizes,
   digest and, for wake word sets, `pryon_test` (next to the binary, `HASSMIC_PRYON_TEST`); install writes
   `state/artifacts/request`. The model folders are root's: `main.sh`'s watcher runs `scripts/device/artifact-install.sh`,
   which reads the staged files as the daemon's user (runas: no link can point root at its files), swaps a fresh

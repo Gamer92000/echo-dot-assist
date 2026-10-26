@@ -4,6 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-26
 
+- **Save your models to a file and put them back later.** "Models on file" in the settings page's Wake word section
+  saves the wake words, whisper and sound detection models you downloaded from Amazon, and your microWakeWord
+  models, as one file on your computer. Loading that file puts them back on this Echo or any other, with the same
+  checks as a copy between Echos. So your models no longer depend on Amazon still handing them out. The file is a
+  plain `.tar` that any computer opens.
 - **The settings page finds the other Echos when you open it through a reverse proxy.** It called them on the port
   of the address in the browser, which behind a proxy is 80 or 443, so every other Echo showed "Not reachable". It
   now calls them on the port the Echos' pages really use. A page that comes through an HTTPS proxy still cannot call

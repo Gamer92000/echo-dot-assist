@@ -265,6 +265,24 @@ Run in this order. Each step says what it proves.
             alexa/echo/computer/amazon it-IT arrived whole (the two-level folder sets on real data) and root
             installed them, ziggy it-IT answered 404 (none for that language), the registration survived the
             restart of the install.
+      - [x] Models on file (2026-10-26, forum #172: Echos that downloaded once and later could not sign in any
+            more): the page's card "Models on file" (Wake word section, also on an Echo alone) saves the ticked models
+            into one tar and puts them back from one, all through the artifacts API as Copy models does (`sendArt`,
+            the file in place of the other Echo; no C change). `hassmic-models.json` first (id, digest, files of
+            each), then `<id with : as />/<file>`. The digest travels in the file: `crypto.js`'s BLAKE2b on BigInt is
+            far too slow for 24 MB, and the Echo checks it at commit anyway. `web/tar.js` writes ustar (prefix split
+            for paths past 100 bytes) and reads ustar, GNU long names and pax paths from File slices (never all in
+            memory), "./" paths and a folder around it all too (a file unpacked and packed again); sizes octal digits
+            only (review: a header that adds up with a negative size had the reader loop forever), long records capped;
+            the manifest's ids, kinds and names held to artifacts.c's rules before anything is sent. A card drawn before
+            the list came asks again by itself: the page's first signed calls go out together and the Echo takes a
+            browser's counters only rising (`signed_ok`), so one of them often comes back refused (the Echos scan
+            retries only after 30 s; seen on every fresh login here). `tests/unit/web_tar_test.py` holds tar.js
+            against Python's tarfile both ways, plus those lying headers. Tried in Chromium
+            against two host Echos: saved 4 models (78 entries, GNU tar lists it, contents and digests match the
+            folders), loaded into the other (3 installed by root's installer, the broken set refused by pryon_test,
+            the page back after the restart, a second load shows them as there), a text file, a cut file and a tar
+            without the manifest refused by name; GNU tar repacks (a folder around it, "./" paths) installed byte for byte.
       - The spied `assetmgrd` must run in its own SELinux domain (`runcon u:r:assetmgrd:s0`, shim labelled `system_file`, log in
         `/data/davs`): from the `su` domain its AIPC service is unreachable and the Alexa app shows the device as unavailable
 - [x] Assistant replies ignored the volume: the mixer keeps one volume per stream type, the `TTS` stream follows `TTSVolume`, and

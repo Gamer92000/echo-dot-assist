@@ -574,6 +574,11 @@ call them (the browser blocks it), so open `http://<echo-ip>:28931` for this sec
 - **Download from Amazon**: wake words, whisper detection, the newer sound detection model, fetched on the Echo itself.
   Sign in with a code you enter on your Amazon site, tick what you want. If an Echo's attestation key ever refuses,
   download on another Echo, or with `scripts/artifacts.sh`, and copy.
+- **Models on file** (Wake word section): tick models and "Save" puts them into one `.tar` on your computer
+  (`hassmic-models.json` lists them, each model in a folder of its own). "Load from file…" reads such a file and
+  installs what you tick on this Echo, checked as a copy is; models already there, the same version, are left out.
+  Keep one, and you have your Amazon models even if Amazon stops handing them out. Load only files you saved yourself
+  or got from someone you trust: a model runs inside the Echo.
 
 **Export / Import**: `hassmic-settings.conf` (name=value lines, without name, keys and pairings). Import applies it to
 this Echo or another, or use it as a preset for the next install (`scripts/setup.sh --preset <file>`).

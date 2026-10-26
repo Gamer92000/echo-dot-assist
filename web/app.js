@@ -828,7 +828,8 @@ function buildWake(el) {
   mwwWarn = h('div');
   mwwBox = h('div', { class: 'card' });
   davsBox = h('div', { class: 'card', id: 'davs' });          // more of Amazon's wake words: where one looks for them
-  el.append(mwwWarn, mwwBox, davsBox);
+  fileBox = h('div', { class: 'card', id: 'model-file' });
+  el.append(mwwWarn, mwwBox, davsBox, fileBox);
 }
 
 async function mwwAdd(id, model, manifest) {
@@ -1302,7 +1303,7 @@ function drawDevices() {
     h('div', { class: 'echo-body' }, h('div', { class: 'echo-name' }, 'No other Echo yet'),
       h('div', { class: 'help' }, 'Echos running hassmic on the same network show up here by themselves within a minute. Then this section copies settings and models to them.'))));
   syncBox.classList.toggle('hidden', !others.size); modelBox.classList.toggle('hidden', !others.size);
-  renderSync(); renderDavs(); renderModels();
+  renderSync(); renderDavs(); renderModels(); renderFile();
 }
 
 // Drop In (dropin.c) on a member of the network: from this Echo, which needs no login on the other one
@@ -1797,21 +1798,32 @@ async function transfer(job, done0, total) {
     renderModels();
     return;
   }
-  const spec = `${art.id} ${art.digest}\n` + art.files.map((f) => `${f.name} ${f.size}\n`).join('');
-  await to.e.call('POST', '/api/artifact/begin', spec);
+  await sendArt(to.e, art, (f, off, len) => artPiece(from.e, from.name, art, f, off, len), (done) => {
+    copying = { text: `${artLabel(art)}: ${from.name} → ${to.name}, ${mb(done)} of ${mb(art.size)}`, done: done0 + done, total };
+    renderModels();
+  });
+}
+
+// a piece of one of a model's files, read from an Echo
+async function artPiece(e, who, art, f, off, len) {
+  const r = await e.call('GET', `/api/artifact/read/${art.id}/${encodeURIComponent(f.name)}/${off}/${len}`);
+  if (r.bytes.length !== len) throw new Error(`${who} sent less of ${f.name} than asked`);
+  return r.bytes;
+}
+
+// a model onto an Echo: begin, its files piece by piece from read(f, off, len) (another Echo, or a file), commit.
+// step(bytes sent so far)
+async function sendArt(to, art, read, step) {
+  await to.call('POST', '/api/artifact/begin', `${art.id} ${art.digest}\n` + art.files.map((f) => `${f.name} ${f.size}\n`).join(''));
   let done = 0;
   for (const f of art.files) {
     for (let off = 0; off < f.size; off += CHUNK) {
       const len = Math.min(CHUNK, f.size - off);
-      const r = await from.e.call('GET', `/api/artifact/read/${art.id}/${encodeURIComponent(f.name)}/${off}/${len}`);
-      if (r.bytes.length !== len) throw new Error(`${from.name} sent less of ${f.name} than asked`);
-      await to.e.call('POST', `/api/artifact/chunk/${art.id}/${encodeURIComponent(f.name)}/${off}`, r.bytes);
-      done += len;
-      copying = { text: `${artLabel(art)}: ${from.name} → ${to.name}, ${mb(done)} of ${mb(art.size)}`, done: done0 + done, total };
-      renderModels();
+      await to.call('POST', `/api/artifact/chunk/${art.id}/${encodeURIComponent(f.name)}/${off}`, await read(f, off, len));
+      step(done += len);
     }
   }
-  await to.e.call('POST', `/api/artifact/commit/${art.id}`);
+  await to.call('POST', `/api/artifact/commit/${art.id}`);
 }
 
 // An Echo restarting its satellite: back once /api/hello names another start (web.c start_id).  Root's watcher looks
@@ -1852,6 +1864,166 @@ async function copyModels(jobs) {
   toast(notes.length ? notes.join(' · ') : `Copied: ${plural(installed + jobs.filter((j) => j.art.kind !== 'mww' && j.art.kind !== 'design' && j.art.kind !== 'pack').length, 'model')}`);
   if (jobs.some((j) => (j.art.kind === 'design' || j.art.kind === 'pack') && !j.to.key)) ringLoad().catch(() => {});      // designs came here: the cards
   if (got.has('')) { setTimeout(() => location.reload(), 500); return; }       // this Echo restarted: start the page over
+  if (mwwBox) getMww().catch(() => {});
+  await refreshDevices();
+}
+
+// ---------------------------------------------------------------- models on file: saved to the computer, put back later
+
+// This Echo's models (Amazon's and microWakeWord's, as /api/artifacts lists them) in one tar (tar.js) any computer opens:
+// hassmic-models.json first (each model's id, digest and files), then each model's files in a folder named after its
+// id (wake:alexa-de-DE -> wake/alexa-de-DE/).  Put back the way Copy models copies, with the file as the other Echo.
+// The digest comes from the file: the Echo checks every file against it at commit, and crypto.js's BLAKE2b (BigInt)
+// would take minutes over a 24 MB set.  A copy of Amazon's models that no longer needs Amazon (forum #172)
+const MODELS_FILE = 'hassmic-models.json';
+const artDir = (id) => id.replace(':', '/');
+const fpick = new Map();                        // ticks: what to save (default all), or, with a file read in, what to install (default what is new)
+let fileBox, fileJob = null, fileIn = null;     // fileJob: { text, done, total } while models travel; fileIn: the file read in
+
+function renderFile() { if (fileBox) keepFocus(fileBox, drawFile); }
+function drawFile() {
+  fileBox.innerHTML = '';
+  fileBox.append(cardHead('Models on file', 'Amazon\'s extra models and your microWakeWord models, saved as one file on your computer, and put back from it on this Echo or another one. A copy that no longer needs Amazon to hand them out. Load only files you saved yourself or got from someone you trust: a model runs inside the Echo.', 'down'));
+  if (!myArts) { fileBox.append(empty('warn', 'This Echo did not list its models yet.')); if (!fileArts.tried) fileArts(); return; }
+  const busy = !!fileJob, mineOf = (id) => myArts.artifacts.find((a) => a.id === id);
+  const progress = busy ? [h('div', { class: 'busy' }, fileJob.text),
+    h('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(fileJob.total), 'aria-valuenow': String(fileJob.done) },
+      h('div', { style: `width:${fileJob.total ? (100 * fileJob.done) / fileJob.total : 0}%` }))] : [];
+  const row = (a, on, idle, sub, line, k) => {
+    const cb = checkbox(on, (v) => { fpick.set(a.id, v); renderFile(); }, artLabel(a), k);
+    cb.disabled = idle || busy;
+    return h('label', { class: 'change ' + (idle ? 'idle off' : on ? 'on' : 'off') }, cb,
+      h('div', { class: 'ch-name' }, artLabel(a), h('div', { class: 'ch-sub' }, sub)), h('div', { class: 'ch-to' }, line));
+  };
+
+  if (fileIn) {                                 // a file read in: what of it goes onto this Echo
+    const list = h('div', { class: 'changes' }), picks = [];
+    for (const a of fileIn.arts) {
+      const t = mineOf(a.id), same = t && t.digest === a.digest, idle = same || !a.whole, on = !idle && ticked(fpick, a.id, !t);
+      const line = !a.whole ? h('div', { class: 'ch-line warn' }, icon('warn'), h('span', { class: 'new' }, 'files missing in the file'))
+        : same ? h('div', { class: 'ch-line same' }, icon('check'), 'on this Echo already')
+        : on ? h('div', { class: 'ch-line' + (t ? ' warn' : '') }, icon('arrow'), h('span', { class: 'new' }, t ? 'replace the other version here' : 'install'))
+        : h('div', { class: 'ch-line same' }, t ? 'another version here, left alone' : 'left out');
+      if (on) picks.push(a);
+      list.append(row(a, on, idle, mb(a.size), line, 'load ' + a.id));
+    }
+    fileBox.append(h('div', { class: 'pickbar' }, h('span', { class: 'pick-hint' }, `${fileIn.name}${fileIn.from ? `, saved on ${fileIn.from}` : ''}`)), list);
+    const bytes = picks.reduce((n, a) => n + a.size, 0);
+    fileBox.append(h('div', { class: 'card-foot sync-foot' }, ...progress,
+      busy ? null : h('div', { class: 'count grow' }, picks.length ? h('b', {}, plural(picks.length, 'model')) : 'Tick the models to install', picks.length ? `, ${mb(bytes)}` : ''),
+      h('button', { disabled: busy, onclick: () => { fileIn = null; fpick.clear(); renderFile(); } }, 'Close file'),
+      h('button', { class: 'primary', 'data-k': 'load', disabled: busy || !picks.length, onclick: () => loadModels(picks) },
+        busy ? [h('span', { class: 'spin' }), 'Installing…'] : `Install ${plural(picks.length, 'model')}`)));
+    return;
+  }
+
+  const arts = [...myArts.artifacts].sort((p, q) => artLabel(p).localeCompare(artLabel(q)));
+  const picks = arts.filter((a) => ticked(fpick, a.id, true)), bytes = picks.reduce((n, a) => n + a.size, 0);
+  if (arts.length) fileBox.append(h('div', { class: 'changes' }, arts.map((a) => row(a, ticked(fpick, a.id, true), false, mb(a.size), null, 'save ' + a.id))));
+  else fileBox.append(empty('box', 'No models of Amazon\'s or microWakeWord\'s on this Echo to save yet. A file saved on another Echo can still be put back here.'));
+  const file = h('input', { type: 'file', accept: '.tar,application/x-tar', class: 'hidden', onchange: () => { const f = file.files[0]; file.value = ''; if (f) readModelsFile(f); } });
+  fileBox.append(h('div', { class: 'card-foot sync-foot' }, ...progress,
+    busy ? null : h('div', { class: 'count grow' }, picks.length ? h('b', {}, plural(picks.length, 'model')) : 'Tick the models to save', picks.length ? `, ${mb(bytes)}` : ''),
+    h('button', { disabled: busy, onclick: () => file.click() }, icon('up'), 'Load from file…'), file,
+    h('button', { class: 'primary', 'data-k': 'save', disabled: busy || !picks.length, onclick: () => saveModels(picks) },
+      busy ? [h('span', { class: 'spin' }), 'Saving…'] : [icon('down'), `Save ${plural(picks.length, 'model')}`])));
+}
+
+// The list for this card when the Echos scan did not get it: the page's first calls go out together, and the Echo
+// takes a browser's counters only rising (web.c signed_ok), so the one that arrives late comes back refused.  The
+// scan asks again only in 30 s; this card is in another section, where that read as "cannot".  Asked again, alone
+async function fileArts() {
+  fileArts.tried = true;
+  for (let i = 1; i <= 3 && !myArts; i++) {
+    await new Promise((r) => setTimeout(r, 700 * i));
+    try { myArts = (await echo.call('GET', '/api/artifacts')).json(); } catch (e) { /* again, then the next scan */ }
+  }
+  renderFile(); renderModels();
+}
+
+async function saveModels(arts) {
+  const total = arts.reduce((n, a) => n + a.size, 0), files = [];
+  let done = 0;
+  fileJob = { text: 'Starting…', done: 0, total }; renderFile();
+  try {
+    const head = { hassmic_models: 1, echo: echo.hello.name, model: echo.hello.model, version: echo.hello.version, saved: new Date().toISOString(),
+      artifacts: arts.map(({ id, kind, name, digest, size, files: fs }) => ({ id, kind, name, digest, size, files: fs.map(({ name: n, size: s }) => ({ name: n, size: s })) })) };
+    files.push({ path: MODELS_FILE, parts: [enc.encode(JSON.stringify(head, null, 1))] });
+    for (const a of arts) {
+      for (const f of a.files) {
+        const parts = [];
+        for (let off = 0; off < f.size; off += CHUNK) {
+          const len = Math.min(CHUNK, f.size - off);
+          parts.push(await artPiece(echo, 'The Echo', a, f, off, len));
+          done += len;
+          fileJob = { text: `${artLabel(a)}: ${mb(done)} of ${mb(total)}`, done, total }; renderFile();
+        }
+        files.push({ path: `${artDir(a.id)}/${f.name}`, parts: [new Blob(parts)] });  // the pieces can go: a Blob can live outside the page's memory
+      }
+    }
+    const url = URL.createObjectURL(new Blob(hmtar.write(files), { type: 'application/x-tar' }));
+    const link = h('a', { href: url, download: `hassmic-models-${echo.hello.node}-${new Date().toISOString().slice(0, 10)}.tar` });
+    document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);   // big: let the download start
+    toast(`Saved: ${plural(arts.length, 'model')}, ${mb(total)}`);
+  } catch (e) { toast(`Saving: ${errText(e)}`); }
+  finally { fileJob = null; renderFile(); }
+}
+
+// A file someone picked: its models as hassmic-models.json lists them, each whole only if every file is in the tar at
+// its size.  The manifest may sit in a folder (the tar unpacked and packed again with its folder): the models are
+// beside it.  Read in slices: the file stays on the disk.  Names as artifacts.c takes them (good_path), the kind from
+// the id as the Echo installs by it: a file that breaks either is refused here, not half way through an install
+const ART_ID = /^(?:(wake|mww):[\w.-]+|(sound|whisper))$/;
+const ART_FILE = /^(?:[A-Za-z0-9][\w.-]{0,62}\/){0,2}[A-Za-z0-9][\w.-]{0,62}$/;
+async function readModelsFile(file) {
+  const read = async (off, len) => new Uint8Array(await file.slice(off, off + len).arrayBuffer());
+  const no = (why) => toast(`${file.name}: ${why}`);
+  let at, head = null;
+  try { at = new Map((await hmtar.list(read, file.size)).map((x) => [x.path, x])); } catch (e) { no(e.message); return; }
+  const mp = [...at.keys()].filter((p) => p === MODELS_FILE || p.endsWith('/' + MODELS_FILE)).sort((p, q) => p.length - q.length)[0];
+  const m = mp && at.get(mp), base = mp ? mp.slice(0, -MODELS_FILE.length) : '';
+  if (m && m.size < 1048576) try { head = JSON.parse(dec.decode(await read(m.off, m.size))); } catch (e) { head = null; }
+  if (!head || head.hassmic_models !== 1 || !Array.isArray(head.artifacts)) { no('not a models file saved from an Echo'); return; }
+  const kindOf = (id) => { const k = ART_ID.exec(id); return k && (k[1] || k[2]); };
+  const good = (a) => a && typeof a.id === 'string' && kindOf(a.id) && a.kind === kindOf(a.id)
+    && typeof a.name === 'string' && /^[^\s-]/.test(a.name) && /^[0-9a-f]{64}$/.test(a.digest) && Array.isArray(a.files) && a.files.length
+    && a.files.every((f) => f && typeof f.name === 'string' && f.name.length <= 127 && ART_FILE.test(f.name) && Number.isSafeInteger(f.size) && f.size >= 0);
+  const arts = head.artifacts.filter(good).map((a) => {
+    const src = new Map(a.files.map((f) => [f.name, at.get(`${base}${artDir(a.id)}/${f.name}`)]));
+    return { ...a, src, size: a.files.reduce((n, f) => n + f.size, 0), whole: a.files.every((f) => src.get(f.name) && src.get(f.name).size === f.size) };
+  });
+  if (!arts.length) { no('no models in it'); return; }
+  fpick.clear();
+  fileIn = { name: file.name, from: typeof head.echo === 'string' ? head.echo : '', arts, read };
+  renderFile();
+}
+
+async function loadModels(arts) {
+  const total = arts.reduce((n, a) => n + a.size, 0), notes = [], { read } = fileIn;
+  let done = 0, sent = 0, restart = false;
+  fileJob = { text: 'Starting…', done: 0, total }; renderFile();
+  for (const a of arts) {
+    try {
+      await sendArt(echo, a, async (f, off, len) => {
+        const b = await read(a.src.get(f.name).off + off, len);
+        if (b.length !== len) throw new Error(`the file changed: ${f.name} is shorter now`);    // changed on the disk since it was picked
+        return b;
+      }, (k) => {
+        fileJob = { text: `${artLabel(a)}: ${mb(done + k)} of ${mb(total)}`, done: done + k, total }; renderFile();
+      });
+      sent++; if (a.kind !== 'mww') restart = true;       // microWakeWord's are in place at commit; Amazon's wait for root
+    } catch (e) { notes.push(`${artLabel(a)}: ${errText(e).replace(/^Error: /, '')}`); }
+    done += a.size;
+  }
+  if (restart) {
+    fileJob = { text: 'Installing; the satellite restarts…', done: total, total }; renderFile();
+    const was = await startOf(echo);
+    try { await echo.call('POST', '/api/artifact/install'); if (!await waitBack(echo, was)) notes.push('the satellite did not restart (the log says why)'); }
+    catch (e) { notes.push(errText(e).replace(/^Error: /, '')); restart = false; }
+  }
+  fileJob = null; fileIn = null; fpick.clear();
+  toast(notes.length ? notes.join(' · ') : `Installed: ${plural(sent, 'model')}`);
+  if (restart) { setTimeout(() => location.reload(), 500); return; }   // the satellite restarted: start the page over
   if (mwwBox) getMww().catch(() => {});
   await refreshDevices();
 }
