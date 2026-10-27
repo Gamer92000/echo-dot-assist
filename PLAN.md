@@ -2452,6 +2452,15 @@ Run in this order. Each step says what it proves.
       checkers' Java MAP (com.amazon.imp, decompiled) builds its drvV1: padded n/mac, its key order, cpuid from
       /proc/cpuinfo, UTC (dha.c, `dha_jwt_test --service`).  On the Echo against amazon.de: registered, echo de-DE
       and aed de-DE downloaded and installed; whisper-static 403 "not allowlisted for device Type A4ZP7ZC4PI6TO".
+      Volume curve (2026-10-27, `tools/vol-curve.py` + `slplay`, an Echo Dot 2's micRaw beside it, a loud room):
+      dB under index 30: 27 -4.0, 21 -12.3, 15 -19.7, 9 -31.8, 6 -41.0, 3 -51.2, 2 -60.0; three tones within 0.5 dB,
+      down and up alike, index 21 nine times within 1.8 dB; 3770 Hz wandered (11.6 dB) and is left out.  Now
+      `board.volume_curve` (`volcurve.c`, unit-tested per model; NULL elsewhere = the Dot 2's).  Light ring designs on the band
+      (2026-10-27): ring.c's slots on `ring_band.c`, drawn live and flattened (position p = LED p + 5, the talker's
+      pair in the middle, never turned), Apply without root (`ring_designs_live`), the band's patterns as files for
+      the page (`ring_stock`), the page's band drawing and designer; `hassmic_assist_NN` in cyan on the band.
+      `ring_band_test.c` (with ringdesign.c), the page checked in headless Chromium on the PC build, the build on the
+      tester's Show (self test, factory copy).
       Open items, one list: docs/re-checkers.md "What a port needs".
 - [~] Echo Show 8 1st gen (`crown`, 2026-10-13; `docs/re-crown.md`). Same platform as checkers: MT8163, Android 7.1.2,
       kernel 4.9.77, RT5616, gating latch, MT7668; Fire OS 6.5.7.0 NS6570 (6074). `libpryon.so` 2.41 (newer than the

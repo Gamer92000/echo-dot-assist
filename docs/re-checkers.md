@@ -215,10 +215,19 @@ setup; what was checked on the PC only says so.
   (`board.grab_keys`, EVIOCGRAB): the framework neither turns its volume too nor shows a panel, and the camera
   shutter's EV_SW on the same keypad no longer reaches Android. On the device: keys, Home Assistant and the page
   move it; a Bluetooth speaker gets its own index (AudioService keeps one per device). Separate volumes (main's #32):
-  the index at the loudest kind, the others turned down in our PCM (`audio_*_gain`) by the Echo Dot 2's curve
-  (`main.c` `vol_db`). Open: the Show's own curve (the index's steps plus the amplifier) is not measured, so a reply
-  at 30 beside music at 60 is only about as loud as music at 30. `state/volume` through `statefile.c` (#46), written
-  on the volume thread, not under `core_lock`.
+  the index at the loudest kind, the others turned down in our PCM (`audio_*_gain`) by the Show's own curve
+  (`board.volume_curve`, `volcurve.c`). Measured 2026-10-27 (`tools/vol-curve.py`): the index stepped 30..0 and
+  back up under a steady tone from `slplay` (OpenSL ES on the music stream, as hassmic's players), an Echo Dot 2 beside
+  it recording micRaw, each of four tones at -30 dBFS measured in 0.5 Hz bins against the noise beside it (a loud
+  room: the noise only hides index 1). dB under index 30: 27 -4.0, 24 -7.6, 21 -12.3, 18 -15.8, 15 -19.7, 12 -24.8,
+  9 -31.8, 6 -41.0, 5 -43.7, 4 -47.2, 3 -51.2, 2 -60.0, 1 under the noise, 0 silent; 470, 1070 and 2230 Hz within
+  0.5 dB of each other at nearly every index (no loudness dependent equalizer there), the same down and up, index 21
+  measured nine times over the run within 0.2-1.8 dB (no volume that follows the room).  3770 Hz wandered by up to
+  11.6 dB at one index and is left out (unexplained: the Dot's microphone there, or something adaptive in the Show's
+  speaker path at the top).  So the Show's index is flat at the top and steep at the bottom, unlike the Dot 2's
+  (volume 90: -4 dB against the Dot's -10; 10: -51 against -41): with the Dot's curve a reply at 30 beside music at
+  60 was turned down 11 dB where it needs 16.  `device-logs/volcurve-checkers-20261027-142951/`.  `state/volume`
+  through `statefile.c` (#46), written on the volume thread, not under `core_lock`.
 - [~] Equalizer: `afe_eq_get`/`afe_eq_set` (audio.h), here `command` 29 / 21 (donut's LIPC `GET/SET_USER_EQ_INFO`;
   `ADJUST` 28, `RESET` 30). This libasp has the UserEq code and its JSON (`convertUserEqJSONToVector`, BASS/MIDRANGE/
   TREBLE), reached through a vtable, so its handler was not traced: the payloads are LIPC's strings (the JSON in for
@@ -327,6 +336,17 @@ setup; what was checked on the PC only says so.
   EnvironmentContextService: a pattern wakes the screen (IPowerManager wakeUp = transaction 9, userActivity 8,
   isInteractive 12 on 8149, through the service tool), `screen_off_timeout` 5 min, 1 min with the mic off or in Do
   not disturb (stock also 1 min at night: no night mode here). `tests/unit/ring_band_test.c`, `ringbar_run.py`.
+- [x] Light ring designs on the band (2026-10-27): the Dots' slots (same ids, so designs and theme packs copy between
+  Echos), each design drawn by `ring_band.c` in place of its pattern, frame by frame, flattened and never turned: band
+  position p shows LED p + 5, the ring cut open opposite where stock's listening ring points at turn 0 (LEDs 10 and
+  11), so what faces the talker is in the middle as in the band's own patterns.  No set for root: Apply writes
+  `state/ring-applied` and `state/ring-installed` and the band takes them at once (`ring_designs_live`,
+  `ring_reload`).  The volume slot tints the fill with the design's first frame as ring.c does; the replies' own
+  volume is its own pattern now (`hassmic_assist_NN`, cyan) and slot.  The page gets the band's patterns as
+  `.animation` files (`ring_stock`, drawn every 40 ms, merged) to start designs from, and draws the band (a screen,
+  the band along its bottom, blended as `unroll`) wherever it draws the ring.  The designer is one editor on every
+  Echo with a Ring / Band switch on its stage (opening on the Echo's own): the band view paints its cells, has no
+  talker's arrow and words the adjustments for a row (Move, Run).  Checked under the PC build in headless Chromium (tiles, Apply, the designer, painting).
 - [x] Not done, on purpose: turning the listening animation towards the talker. The front end has the beam: libasp's
   BeamReporter sends `what=1` (BEAM_DIRECTION, the vector (sin, 0, cos) of the beam's angle) to every
   `com.amazon.asp.IAudioEventListener` registered with `audiosignalprocessor` (transaction 1, a strong binder; no

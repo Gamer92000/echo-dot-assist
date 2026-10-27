@@ -946,6 +946,9 @@ int ring_check(const char *applied, size_t n, char *err, size_t cap)
     return 0;
 }
 
+int ring_designs_live(void) { return 0; }                  /* root installs them, ledcontroller restarts */
+char *ring_stock(int i, size_t *n) { (void)i; (void)n; return NULL; }   /* stock's own files */
+
 int ring_slot_available(int i) { pthread_mutex_lock(&lock); int r = i >= 0 && i < ring_nslots && slot_avail[i]; pthread_mutex_unlock(&lock); return r; }
 int ring_slot_live(int i) { pthread_mutex_lock(&lock); int r = i >= 0 && i < ring_nslots && slot_on[i]; pthread_mutex_unlock(&lock); return r; }
 int ring_leds(void) { return leds; }

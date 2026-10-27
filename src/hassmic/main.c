@@ -245,6 +245,9 @@ static long long denoise_ns; static unsigned denoise_frames;   /* under lock: it
 static atomic_int earcon_sounding;                  /* one of our sounds plays ... */
 static atomic_llong earcon_heard_until;             /* ... and is still in the mic stream until then (mono_ms) */
 static atomic_int sounds_q16 = 65536, timers_q16 = 65536;  /* our sounds' and timers' gain, 1 = 65536 (separate volumes) */
+/* the volume keys' tone: at the volume they just set, as stock's (on_volume).  At the sounds' own it said nothing of the
+ * step: with nothing playing the keys seemed to do nothing */
+static atomic_int click_q16 = 65536;
 
 /* ---------------------------------------------------------------- LED ring */
 
@@ -1713,7 +1716,7 @@ static void *earcon_thread(void *arg)
             else if (s == SND_WAKE || s == SND_TOUCH || s == SND_IDENTIFY) { pcm = tone; n = N; rate = RATE; }
             else pcm = NULL;
             if (pcm) {
-                short *quiet = scaled(pcm, n, atomic_load(&sounds_q16));
+                short *quiet = scaled(pcm, n, atomic_load(s == SND_VOLUME ? &click_q16 : &sounds_q16));
                 if (quiet) pcm = quiet;
                 earsup_play(pcm, n, rate, cap_clock()); play_earcon(pcm, n, rate);
                 free(quiet);
@@ -1844,18 +1847,7 @@ static void volume_led(int v, int assistant);
 static int clamp100(int v) { return v < 0 ? 0 : v > 100 ? 100 : v; }
 static int clamp_offset(int v) { return v < -VOL_OFFSET_MAX ? -VOL_OFFSET_MAX : v > VOL_OFFSET_MAX ? VOL_OFFSET_MAX : v; }
 
-/* The Echo's volume curve: dB under volume 100 (Echo Dot 2, 2026-10-17: a -30 dBFS tone through the Music, Earcon and
- * TTS streams in micRaw, the three within 0.5 dB of each other; libasp's boost above 80 included, the mixer alone is
- * nearly flat there).  The other models' are not measured: this one */
-static float vol_db(int v)
-{
-    static const int at[] = { 0, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 };
-    static const float db[] = { -60, -47.3f, -40.6f, -35.7f, -30.5f, -26.5f, -22.4f, -19.5f, -18.4f, -14.0f, -10.0f, 0 };
-    int i = 1;
-    v = clamp100(v);
-    while (at[i] < v) i++;
-    return db[i - 1] + (db[i] - db[i - 1]) * (v - at[i - 1]) / (at[i] - at[i - 1]);
-}
+static float vol_db(int v) { return board_vol_db(v); }      /* the Echo's volume curve (volcurve.c) */
 
 /* lock held: what a kind (VOL_*) plays at now, its own volume or the music's moved by its offset */
 static int kind_volume(int k) { return kinds[k].linked ? clamp100(core_volume() + kinds[k].offset) : kinds[k].level; }
@@ -2106,7 +2098,8 @@ void core_set_eq(int band, int db)
     fprintf(stderr, "equalizer: bass %d, mid %d, treble %d\n", eq[0], eq[1], eq[2]);
 }
 
-static int led_auto = 1, led_level = 80;            /* 80: ledcontroller's first-boot level */
+static atomic_int led_auto = 1, led_level = 80;     /* 80: ledcontroller's first-boot level; read without core_lock
+                                                     * (core_led_brightness(-1): the band's thread, the protocols) */
 
 /* Root installed the ring's set again (designs applied on the settings page) and restarted ledcontroller, which starts
  * with auto brightness on: a fixed level once more, and Home Assistant's light listed anew if it came or went */
@@ -2277,6 +2270,10 @@ static void on_volume(int dir)
           : atomic_load(&alarm_on) ? VOL_TIMERS : -1;
     if (k >= 0 && !kinds[k].linked) level_step(k, dir);
     else core_set_volume((core_volume() + 5) / 10 * 10 + dir * 10);
+    int now = k >= 0 ? kind_volume(k) : core_volume();         /* linked: the music moved, the kind with it */
+    /* at 0 the lowest step's, so a press is still heard where another kind keeps the speaker up (separate volumes;
+     * above the loudest, scaled() leaves it at full) */
+    atomic_store(&click_q16, (int)lroundf(mix_gain(now > 0 ? now : 10) * 65536));
     sound_request(SND_VOLUME);
     pthread_mutex_unlock(&core_lock);
 }
@@ -2545,6 +2542,10 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin); signal(SIGTTOU, on_ttou); signal(SIGWINCH, on_winch);
     if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
     ledq_start(use_led ? "/system/bin/ledctrl" : NULL, getenv("HASSMIC_FAKE_LED"), child_ids, LEDQ_TIMEOUT_MS);
+    { char rows[8];                                 /* the band's height before it starts (a preset's too): else the
+                                                     * default 10 px came up first, and with "Light band" 0 the apps were
+                                                     * laid out twice */
+      if (!settings_peek("light_band", rows, sizeof rows)) ring_band_rows(atoi(rows)); }
     ring_start(led_run, ring_reloaded);
     rd_start();                         /* designs asked for before this start: still installing, or back */
     audio_earcon_started = earcon_started;

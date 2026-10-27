@@ -84,6 +84,8 @@ downloaded and installed from the settings page on a Show 8.
 
 ## Open
 - The guided setup on a real Echo Show 8 (the install by `scripts/install-system.sh` works, 2026-10-14).
+- Separate volumes take the Echo Dot 2's curve (`board.volume_curve` unset) until `tools/vol-curve.py` has measured
+  this one; the light ring designs on the band (`ring_band.c`, as on checkers, where they are) not tried here.
 - The wake blip by ear (lead-in of 350 ms, `audio_android.c`).
 
 ## Bluetooth, wake sound, extra apps (2026-10-14)

@@ -51,6 +51,12 @@ int  ring_check(const char *applied, size_t n, char *err, size_t cap);
 /* Root installed a set (ledcontroller started again with it): what plays where from now on, and what showed set
  * again, since the new ledcontroller shows nothing */
 void ring_reload(void);
+/* The ring draws designs itself (the band): Apply needs no root, state/ring-installed is what it shows from then on
+ * (ring_reload).  0: root installs them (the Dots' ledcontroller) */
+int  ring_designs_live(void);
+/* Stock's animation for slot i as an .animation file has it, where the ring makes its own pictures (the band: its
+ * patterns, frame by frame); malloc'd.  NULL: stock's files are the animations (ringdesign.c rd_stock reads them) */
+char *ring_stock(int i, size_t *n);
 void ring_unset(const char *pattern);
 void ring_tick(void);                       /* every 200 ms: the beam while listening, the light back after the Echo's */
 void ring_light_get(struct ring_light *l);
@@ -58,7 +64,8 @@ void ring_light_set(const struct ring_light *l, unsigned flash_ms);  /* flash_ms
 int  ring_rotation(int set);                /* LEDs the fill's start is turned by, 0..ring_leds()-1; -1 reads */
 
 /* A model without an LED ring draws it as a band along the bottom of its screen (ring_band.c, the Echo Show's; ring.c is
- * the Dots' LEDs).  ring_level: the talker's level in dBFS x 10 while the pipeline listens, which widens the listening
+ * the Dots' LEDs).  Designs show there flattened, never turned: the ring cut open opposite the talker of turn 0
+ * (RING_TALKER in web/ring.js), so what faces the talker is in the middle, as in the band's own patterns.  ring_level: the talker's level in dBFS x 10 while the pipeline listens, which widens the listening
  * bar as stock's does (capture thread, core_lock held).  ring_band_rows: the band's height in rows, 0 off (the screen
  * all the apps'); -1 where the ring is LEDs.  set < 0 reads. */
 void ring_level(int dbfs10);

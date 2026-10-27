@@ -8,6 +8,8 @@
  *   - root answers "<id> ok|same|failed <why>" in its own leds.result; rd_tick reads it: ok, and ring.c takes the new
  *     set (ring_reload: what showed is set again); failed, and the applied file goes back to what is installed, so a
  *     start of hassmic still finds its own set there.
+ * Where the ring draws designs itself (ring_designs_live: the Echo Show's band, ring_band.c) there is nothing for root
+ * to do: Apply writes state/ring-applied and state/ring-installed, and the band takes them at once (ring_reload).
  * state/ is the daemon's and root parses the applied file: ringdesign.h says how it is read (a regular file, not
  * followed through a link, of bounded size), and rd_parse takes nothing but the format above.  Root writes the set from
  * its own folder, made by its own hassmic; nothing of the daemon's is copied or run.
@@ -218,10 +220,14 @@ char *rd_installed_read(size_t *n)
     return read_file(p, RD_APPLIED_MAX, n);
 }
 
-void rd_installed_set(const char *text, size_t n)
+int rd_installed_set(const char *text, size_t n)
 {
     char p[320]; spath(p, sizeof p, "ring-installed");
-    if (statefile_write(p, 0600, text, n)) fprintf(stderr, "ring: cannot write %s: %s\n", p, strerror(errno));
+    if (!statefile_write(p, 0600, text, n)) return 0;
+    int e = errno;
+    fprintf(stderr, "ring: cannot write %s: %s\n", p, strerror(e));
+    errno = e;                              /* the caller words it too */
+    return -1;
 }
 
 static long long mono_s(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec; }
@@ -331,8 +337,9 @@ size_t rd_status_json(char *out, size_t cap)
     slot_ids(applied, applied_ids);         /* which design each slot has on the ring: the installed designs */
     int same = applied ? draft && an == dn && !memcmp(applied, draft, an) : draft && dn == sizeof APPLIED_HEAD - 1;
     const char *st = waiting ? "installing" : last_error[0] ? "failed" : !same ? "pending" : "applied";
-    sput(&b, "{\"installed\":%s,\"leds\":%d,\"max\":%d,\"frames_max\":%d,\"state\":\"%s\",\"error\":",
-         ring_custom() ? "true" : "false", ring_leds(), RD_MAX, RD_FRAMES, st);
+    sput(&b, "{\"installed\":%s,\"band\":%s,\"band_on\":%s,\"leds\":%d,\"max\":%d,\"frames_max\":%d,\"state\":\"%s\",\"error\":",
+         ring_custom() ? "true" : "false", ring_band_rows(-1) >= 0 ? "true" : "false", ring_band_rows(-1) > 0 ? "true" : "false",
+         ring_leds(), RD_MAX, RD_FRAMES, st);
     jstr(&b, last_error);
     sput(&b, ",\"slots\":[");
     for (int i = 0; i < ring_nslots; i++)
@@ -670,14 +677,22 @@ static void put_back(const char *why)
 
 int rd_apply(char *err, size_t cap)
 {
-    char p[320], req[32]; size_t dn = 0; int rc = -1;
+    char p[320], req[32]; size_t dn = 0; int rc = -1, live = 0;
     if (!ring_custom()) return fail(err, cap, 0, "the ring's own animations are not installed (see the log)");
     pthread_mutex_lock(&lock);
     if (!loaded) load_assign();
     char *draft = waiting ? NULL : draft_applied(&dn, err, cap);
     if (waiting) fail(err, cap, 0, "the ring is being installed already");
     else if (!draft) rc = -1;           /* err: which slot's design, and why */
-    else if (!ring_check(draft, dn, err, cap)) {
+    else if (ring_check(draft, dn, err, cap)) rc = -1;
+    else if (ring_designs_live()) {     /* the band draws them itself: nothing for root to install */
+        spath(p, sizeof p, "ring-applied");
+        if (statefile_write(p, 0600, draft, dn) || rd_installed_set(draft, dn)) {
+            snprintf(err, cap, "cannot write the designs: %s", strerror(errno)); put_back(NULL);   /* before: it writes */
+        }
+        else { last_error[0] = 0; rc = 0; live = 1; fprintf(stderr, "ring: designs applied\n"); }
+    }
+    else {
         spath(p, sizeof p, "ring-applied");
         /* never the id of root's last answer: an Apply right after a failed one (same second, same pid) took that
          * answer for its own and failed at once, before root had even seen the request */
@@ -696,6 +711,7 @@ int rd_apply(char *err, size_t cap)
     }
     pthread_mutex_unlock(&lock);
     free(draft);
+    if (live) ring_reload();
     return rc;
 }
 
@@ -709,7 +725,8 @@ void rd_start(void)
     char *req = read_file(p, 64, NULL), *applied = rd_applied_read(&an), *inst = rd_installed_read(&in);
     if (req && sscanf(req, "%u", &wait_id) == 1) { waiting = 1; wait_since = mono_s(); fprintf(stderr, "ring: designs asked for before this start, root installs them\n"); }
     else if (applied && !(inst && an == in && !memcmp(applied, inst, an)) && !(!inst && an == sizeof APPLIED_HEAD - 1))
-        put_back("the designs applied before were not installed (the log says why: \"light ring\")");
+        put_back(ring_designs_live() ? "the designs applied before were not saved whole: apply them again"
+                                     : "the designs applied before were not installed (the log says why: \"light ring\")");
     pthread_mutex_unlock(&lock);
     free(req); free(applied); free(inst);
 }
@@ -753,6 +770,8 @@ char *rd_stock(const char *slot, size_t *n)
     int i = slot_index(slot); char file[512];
     const char *r = getenv("HASSMIC_LED_ROOT");
     if (i < 0) return NULL;
+    char *own = ring_stock(i, n);           /* the band's patterns: no files */
+    if (own) return own;
     if (ring_slots[i].kind == RING_VOLUME || ring_slots[i].kind == RING_ASSIST) {   /* every step, "step NN" before each */
         struct sb b = { 0 };
         for (int st = 1; st <= 99; st++) {

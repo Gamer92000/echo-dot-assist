@@ -63,6 +63,15 @@ const struct board board = {
      * /data/als_cal_data.bin, ir switches ALS off until a reboot (docs/re-checkers.md). */
     .light_sensor = { "/sys/bus/platform/drivers/als_ps/lux" },
     .volume_steps = 100,                                            /* the light band (ring_band.c) shows the level in % */
+    /* Measured (2026-10-27, tools/vol-curve.py: the music stream's index stepped under a steady tone, an Echo Dot 2's
+     * micRaw beside it): 470, 1070 and 2230 Hz within 0.5 dB of each other at nearly every index, the same down and up.
+     * Flat at the top and steep at the bottom, unlike the Dot's: 90 is 4 dB under 100 (Dot 10), 10 is 51 (Dot 41).
+     * hassmic's volume v plays at index (30 v + 50) / 100: a point every 5, each that index's (the curve between them
+     * within 1 dB of the index played); index 1 is under the room's noise, 0 silent */
+    .volume_curve = (const struct board_vol[]){
+        { 0, -66 }, { 5, -60.0f }, { 10, -51.2f }, { 15, -43.7f }, { 20, -41.0f }, { 25, -34.9f }, { 30, -31.8f },
+        { 35, -26.7f }, { 40, -24.8f }, { 45, -20.8f }, { 50, -19.7f }, { 55, -17.8f }, { 60, -15.8f }, { 65, -13.0f },
+        { 70, -12.3f }, { 75, -9.4f }, { 80, -7.6f }, { 85, -4.5f }, { 90, -4.0f }, { 95, -1.2f }, { 100, 0 }, { -1, 0 } },
     /* Realtek RT5616: its line out feeds the speaker amplifier.  0..39 = -46.5..+12 dB, 1.5 dB a step (the kernel's
      * tables); the HAL's initial settings in /system/etc/audio_device.xml set 29, -3 dB, nothing writes it later (from
      * the firmware only; verify on a device that this is what the speaker plays at, and that it has no other writer) */

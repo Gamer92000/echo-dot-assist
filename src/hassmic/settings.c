@@ -375,6 +375,18 @@ static int load_old(void)
     return 1;
 }
 
+/* the next line of f into buf, as fgets; one longer than buf is skipped whole (its tail, read as a line of its own,
+ * could look like a setting).  NULL at the end */
+static char *line_of(char *buf, int n, FILE *f)
+{
+    while (fgets(buf, n, f)) {
+        size_t l = strlen(buf);
+        if (l && buf[l - 1] != '\n' && !feof(f)) { int c; while ((c = fgetc(f)) != EOF && c != '\n') {} continue; }
+        return buf;
+    }
+    return NULL;
+}
+
 void settings_load(void)
 {
     static int loaded; char p[300], line[160]; FILE *f; int led_auto = 1, led_level = -1;
@@ -388,14 +400,16 @@ void settings_load(void)
         core_mic_level(mic_level);
         return;
     }
-    for (int pass = 0; pass < 2; pass++, rewind(f)) while (fgets(line, sizeof line, f)) {
+    for (int pass = 0; pass < 2; pass++, rewind(f)) while (line_of(line, sizeof line, f)) {
         char *eq = strchr(line, '='), *v; int x;
         if (line[0] == '#' || !eq) continue;
         *eq = 0; v = eq + 1; v[strcspn(v, "\r\n")] = 0;
         for (int i = 0; i < NSET; i++) {
             if (strcmp(table[i].name, line) || !ours(i) || switches(i) != !pass || parse(&table[i], v, &x)) continue;
-            /* the ring's level only counts with auto off: ledcontroller started its own auto at boot */
-            if (i == LED_AUTO) led_auto = x; else if (i == LED_LEVEL) led_level = x; else put(i, x);
+            /* the ring's level only counts with auto off: ledcontroller started its own auto at boot.  The band's
+             * height main.c set before the band started (settings_peek: a preset not applied yet included); the
+             * config's here would flip it to that and back to the preset's */
+            if (i == LED_AUTO) led_auto = x; else if (i == LED_LEVEL) led_level = x; else if (i != BAND) put(i, x);
         }
     }
     fclose(f);
@@ -420,21 +434,32 @@ void settings_preset(void)
     if (rename(p, done)) remove(p);                     /* once only, whatever happened */
 }
 
-int settings_peek(const char *name, char *out, size_t cap)
+/* name's value in a "name=value" file of state/ into out: the last one it takes, as applying the file ends up with (a
+ * line added by hand; one it refuses changes nothing).  0, -1: none (out as it was) */
+static int peek_in(const char *rel, const char *name, const struct setting *s, char *out, size_t cap)
 {
-    char p[300], line[160]; FILE *f; size_t k = strlen(name); int r = -1, x;
-    const struct setting *s = NULL;
-    for (int i = 0; i < NSET; i++) if (!strcmp(table[i].name, name)) s = &table[i];
-    path(p, sizeof p, "config");
+    char p[300], line[200]; FILE *f; size_t k = strlen(name); int r = -1, x;
+    path(p, sizeof p, rel);
     if (!(f = fopen(p, "r"))) return -1;
-    /* the last one it takes, as settings_load ends up with (a line added by hand; one it refuses changes nothing) */
-    while (fgets(line, sizeof line, f))
-        if (!strncmp(line, name, k) && line[k] == '=') {
-            line[strcspn(line, "\r\n")] = 0;
-            if (!s || !parse(s, line + k + 1, &x)) { snprintf(out, cap, "%s", line + k + 1); r = 0; }
+    while (line_of(line, sizeof line, f)) {
+        char *l = line; while (isspace((unsigned char)*l)) l++;     /* an export may indent (settings_apply_text) */
+        if (!strncmp(l, name, k) && l[k] == '=') {
+            l[strcspn(l, "\r\n")] = 0;
+            if (!s || !parse(s, l + k + 1, &x)) { snprintf(out, cap, "%s", l + k + 1); r = 0; }
         }
+    }
     fclose(f);
     return r;
+}
+
+int settings_peek(const char *name, char *out, size_t cap)
+{
+    const struct setting *s = NULL;
+    for (int i = 0; i < NSET; i++) if (!strcmp(table[i].name, name)) s = &table[i];
+    /* state/config, then a preset not applied yet over it: settings_preset applies it after the config, so what it says
+     * is what this start ends up with */
+    int r = peek_in("config", name, s, out, cap);
+    return !peek_in("preset", name, s, out, cap) ? 0 : r;
 }
 
 int settings_mic_level(void) { return mic_level; }

@@ -2,6 +2,24 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-27
+
+- **Echo Show: your own light ring designs show on the band.** The light designs and theme packs are back on the
+  Show's settings page. Each design plays on the band along the bottom of the screen as the ring's twelve LEDs laid
+  out in a row, with the side that faces the talker in the middle; it is never turned towards the talker. The
+  designer is the same on every Echo, with a Ring / Band switch on its stage: it opens on what this Echo has and
+  shows the same design the other way at a click, so you can see how it looks on a Dot and on a Show while you draw.
+  Amazon's animations to start from are the band's own, and Apply shows the designs at once, with no restart. Designs and packs move between Dots and Shows as before. The volume of
+  voice replies now shows in cyan on the band, as it does on the Dots' ring.
+- **The volume keys' tone plays at the volume they set.** With separate volumes it played at the "Echo sounds"
+  volume, so with nothing playing the keys sounded like they did nothing. It now plays at the volume you just
+  set: the music's, or the reply's, timer's or call's while one of those plays (at 0, as quiet as the lowest step). This applies to every model.
+- **Echo Show: with "Light band" at 0 the band no longer shows for a moment at every start**, and apps on the screen
+  are no longer laid out twice then. The settings page also says when the band is off instead of "On the band".
+- **Echo Show 5: separate volumes now use the Show's own volume steps.** They were worked out from an Echo Dot 2,
+  whose steps are quite different, so a reply set well below the music came out about 5 dB too loud. Measured on an
+  Echo Show 5: each kind now plays as loud as that number on the Show's volume.
+
 ## 2026-10-26
 
 - **Echo Show: the settings page shows only what the light band can do.** "Light ring rotation" and the light ring

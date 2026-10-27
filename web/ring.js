@@ -31,6 +31,13 @@ const RING_PLACES = [
   { id: 'login', group: 'Setup', label: 'Page login', help: 'While a browser waits for the action button to log in to this page.' },
 ];
 const RING_TALKER = 10.5;              // where stock's listening ring points at turn 0: its light-blue pair, LEDs 10 and 11
+// The Echo Show has no ring: a band along the bottom of its screen shows the designs (ring_band.c), flattened and never
+// turned.  Band position p (0 at the left) shows LED p + BAND_SHIFT: the ring cut open opposite RING_TALKER, so the
+// talker's pair is in the middle, as in the band's own patterns
+const BAND_SHIFT = 5;
+const isBand = () => !!(ring.status && ring.status.band);
+const bandOff = () => isBand() && ring.status.band_on === false;      // "Light band" 0: the band shows nothing
+const bandLed = (p, n) => (p + BAND_SHIFT) % n;
 const RING_PRESETS = ['#000000', '#ffffff', '#0000ff', '#00ffff', '#ff0000', '#ff7a00', '#ffd400', '#00e040', '#00c8a0', '#7a3cff', '#ff2fb4', '#ff8080'];
 
 let ringBox = null;
@@ -226,9 +233,74 @@ function ringImage(px, s, talker) {
   return img;
 }
 
+// The Echo Show's screen instead (2:1), dark, with the band along its bottom edge: drawn taller than its 10 rows of 480,
+// so a tile shows it.  As fractions of a square canvas, for the designer's targets too
+const BAND_BOX = { x0: 0.04, x1: 0.96, top: 0.27, y0: 0.63, y1: 0.73 };
+// the band's colours left to right, w of them, as ring_band.c unroll() draws them: each LED a twelfth of the width,
+// running into the next over the middle 40 % between them
+function bandColours(px, w) {
+  const n = px.length, out = new Array(w);
+  for (let x = 0; x < w; x++) {
+    const f = ((x + 0.5) * n) / w - 0.5, i = Math.floor(f), u = f - i;
+    const a = px[bandLed(Math.max(0, i), n)], b = px[bandLed(Math.min(n - 1, i + 1), n)];
+    const k = Math.max(0, Math.min(1, (u - 0.5) * 2.5 + 0.5));
+    out[x] = [0, 1, 2].map((c) => a[c] + (b[c] - a[c]) * k);
+  }
+  return out;
+}
+// The designer's adjustments and its hit test on the band, as functions of a frame's LEDs (top level for
+// tests/unit/band_map_test.py, which holds them to the band's own order).  rotPx: LED i takes what LED i - k had,
+// clockwise on the ring, k cells to the right on the band (round to the other end); mirrorPx: through the talker, left to
+// right on the band; wheelPx: hues round the ring from LED 0, or along the band from its left end
+const rotPx = (px, k) => { const n = px.length; return px.map((_, i) => px[(((i - k) % n) + n) % n].slice()); };
+const mirrorPx = (px) => { const n = px.length, ax = Math.round(RING_TALKER * 2); return px.map((_, i) => px[((ax - i) % n + n) % n].slice()); };
+function wheelPx(n, band) {
+  return Array.from({ length: n }, (_, i) => {
+    const j = band ? (i - BAND_SHIFT + n) % n : i, h6 = (j / n) * 6, f = h6 - Math.floor(h6);
+    return [[1, f, 0], [1 - f, 1, 0], [0, 1, f], [0, 1 - f, 1], [f, 0, 1], [1, 0, 1 - f]][Math.floor(h6) % 6].map((x) => Math.round(x * 255));
+  });
+}
+// the LED under a point of the designer's square stage (fractions of it), the band's cells (a little above and below
+// them too); -1 off the band
+function bandCellAt(fx, fy, n) {
+  const B = BAND_BOX, cell = (B.x1 - B.x0) / n;
+  if (fy < B.y0 - 0.08 || fy > B.y1 + 0.08 || fx < B.x0 - 0.02 || fx > B.x1 + 0.02) return -1;
+  return bandLed(Math.max(0, Math.min(n - 1, Math.floor((fx - B.x0) / cell))), n);
+}
+
+function bandImage(px, s) {
+  const key = `band|${s}|${px.map((c) => (lit(c) ? rgbHex(c) : '0')).join()}`;
+  let img = ringCache.get(key);
+  if (img) return img;
+  const B = BAND_BOX, X0 = B.x0 * s, X1 = B.x1 * s, top = B.top * s, Y0 = B.y0 * s, Y1 = B.y1 * s, w = Math.max(1, Math.round(X1 - X0));
+  img = document.createElement('canvas'); img.width = img.height = s;
+  const x = img.getContext('2d'), rr = s * 0.03;
+  const screen = (pad) => { x.beginPath(); if (x.roundRect) x.roundRect(X0 - pad, top - pad, X1 - X0 + 2 * pad, Y1 - top + 2 * pad, rr + pad); else x.rect(X0 - pad, top - pad, X1 - X0 + 2 * pad, Y1 - top + 2 * pad); };
+  screen(s * 0.025); x.fillStyle = '#101316'; x.fill();                       // the bezel
+  const g = x.createLinearGradient(0, top, 0, Y1);
+  g.addColorStop(0, '#22282e'); g.addColorStop(1, '#171b1f');
+  screen(0); x.fillStyle = g; x.fill();
+  x.save(); screen(0); x.clip();
+  x.fillStyle = '#07090a'; x.fillRect(X0, Y0, X1 - X0, Y1 - Y0);              // the band, dark
+  const cols = bandColours(px, w);
+  if (cols.some((c) => c[0] + c[1] + c[2] >= 3)) {
+    const row = document.createElement('canvas'); row.width = w; row.height = 1;
+    const r = row.getContext('2d'), d = r.createImageData(w, 1);
+    cols.forEach((c, i) => { d.data[4 * i] = c[0]; d.data[4 * i + 1] = c[1]; d.data[4 * i + 2] = c[2]; d.data[4 * i + 3] = 255; });   // every pixel as the band sends it, the dimmest too
+    r.putImageData(d, 0, 0);
+    x.imageSmoothingEnabled = true; x.drawImage(row, X0, Y0, X1 - X0, Y1 - Y0);
+  }
+  x.fillStyle = 'rgba(255,255,255,.06)'; x.fillRect(X0, Y0 - Math.max(1, s * 0.003), X1 - X0, Math.max(1, s * 0.003));
+  x.restore();
+  ringCache.set(key, img);
+  return img;
+}
+
+// opts.view: 'ring' or 'band' (the designer's switch); else as this Echo shows it
 function drawRing(cv, px, opts = {}) {
   const x = cv.getContext('2d');
   x.clearRect(0, 0, cv.width, cv.height);
+  if (opts.view ? opts.view === 'band' : isBand()) { x.drawImage(bandImage(px, cv.width), 0, 0); return; }   // no talker there: never turned
   x.drawImage(ringImage(px, cv.width, opts.talker == null ? null : opts.talker), 0, 0);
 }
 
@@ -241,7 +313,15 @@ function sizedCanvas(css, cls) {
 
 // A frame as a CSS background, for the frame strip (hundreds of them: no canvas each): each LED a spot of its colour,
 // running into the next as on the ring
-function frameCss(px) {
+function frameCss(px, band = isBand()) {
+  if (band) {                           // the band: left to right
+    const n = px.length, step = 100 / n, half = step * 0.3, stops = [];
+    for (let p = 0; p < n; p++) {
+      const c = px[bandLed(p, n)], css = lit(c) ? cssRgb(c) : '#07090a', a = step / 2 + p * step;
+      stops.push(`${css} ${(a - half).toFixed(2)}%`, `${css} ${(a + half).toFixed(2)}%`);
+    }
+    return `linear-gradient(90deg, ${stops.join(',')})`;
+  }
   const n = px.length, step = 360 / n, half = step * 0.32;
   const col = (c) => (lit(c) ? cssRgb(c.map((v, k) => Math.min(255, v + RING_OFF[k]))) : cssRgb(RING_OFF));
   const mid = (a, b) => cssRgb([0, 1, 2].map((k) => Math.round(((lit(a) ? a[k] + RING_OFF[k] : RING_OFF[k]) + (lit(b) ? b[k] + RING_OFF[k] : RING_OFF[k])) / 2)));
@@ -307,7 +387,7 @@ function tickPlayers(now) {
     const g = p.get();
     if (!g) { drawRing(p.cv, black(12)); continue; }
     const at = g.still ? null : reduced ? (g.d.loop > 0 ? g.d.frames.slice(0, g.d.loop).reduce((a, f) => a + f.ms, 0) : 0) : now - p.t0;
-    drawRing(p.cv, g.still ? turned(g.still, g.turn || 0) : frameAt(g.d, at, g.turn || 0), { talker: g.talker });
+    drawRing(p.cv, g.still ? turned(g.still, g.turn || 0) : frameAt(g.d, at, g.turn || 0), { talker: g.talker, view: g.view });
   }
 }
 
@@ -417,12 +497,14 @@ function buildRing(el) {
 }
 
 const placeOf = (id) => RING_PLACES.find((p) => p.id === id) || { id, group: 'Other', label: id };
+// what a place's help says on this Echo: the band turns nothing towards the talker
+const placeHelp = (p) => (isBand() ? (p.help || '').replace(/ ?Turned towards[^.]*\./, '').replace(/ \(the arrow in the designer\)/, '') : p.help || '');
 const slotsOf = () => (ring.status ? ring.status.slots.filter((s) => s.available) : []);
 const usedFor = (did) => slotsOf().filter((s) => s.design === did).map((s) => placeOf(s.id).label);
 
 function ringRender() {
   if (!ringBox || !ring.status) return;
-  if (!ring.status.slots.length) { ringBox.replaceChildren(); return; }   // no animations to design: the Echo Show's band
+  if (!ring.status.slots.length) { ringBox.replaceChildren(); return; }   // an Echo with no animations to design
   if (!ring.status.installed) {
     ringBox.replaceChildren(h('div', { class: 'card' }, cardHead('Light ring animations', null, 'sun'),
       h('div', { class: 'callout info ringd-callout' }, icon('info'),
@@ -434,8 +516,9 @@ function ringRender() {
 
 function applyBar(st) {
   const [cls, text, help] = {
-    applied: ['ok', 'On the ring', ''],
-    pending: ['warn', 'Not on the ring yet', 'Apply writes them to the Echo and restarts its ring: a second without light.'],
+    applied: ['ok', bandOff() ? 'Applied' : isBand() ? 'On the band' : 'On the ring', bandOff() ? 'The band is off ("Light band" 0 above): it shows them once it is on again.' : ''],
+    pending: ['warn', isBand() ? 'Not on the band yet' : 'Not on the ring yet', bandOff() ? 'Apply keeps them for the band, which is off ("Light band" 0 above).'
+      : isBand() ? 'Apply shows them on the band at once.' : 'Apply writes them to the Echo and restarts its ring: a second without light.'],
     installing: ['', 'Installing…', 'The ring goes dark for a second.'],
     failed: ['bad', 'Not installed', st.error],
   }[st.state] || ['', st.state, ''];
@@ -458,14 +541,15 @@ function actionsCard(st) {
     const talker = s.id === 'listen' || s.id === 'end' ? RING_TALKER : null;
     play(cv, () => { const x = shownFor(s.id, designOf(s)); return x ? { d: x, talker } : null; });
     const changed = s.applied !== s.design;
-    return h('button', { class: 'ringd-act' + (d ? ' custom' : ''), 'aria-haspopup': 'dialog', title: p.help || '',
+    return h('button', { class: 'ringd-act' + (d ? ' custom' : ''), 'aria-haspopup': 'dialog', title: placeHelp(p),
       onclick: () => pickDesign({ slot: s.id, current: s.design, onPick: (v) => { if (v !== s.design) ringDo(null, () => assignAll([`${s.id} ${v}`])); } }) },
       h('span', { class: 'ringd-art' }, cv), h('span', { class: 'ringd-act-label' }, p.label),
       h('span', { class: 'ringd-act-pick' }, d ? d.name : 'Amazon\'s'),
       changed ? h('span', { class: 'ringd-dot', title: 'Changed: on the ring once you apply' }) : null);
   };
   return h('div', { class: 'card ringd-actions' },
-    cardHead('Light ring animations', 'What the ring shows for each of the Echo\'s own states. Click one to pick Amazon\'s or one of your designs; a design can show for as many as you like.', 'sun',
+    cardHead('Light ring animations', (isBand() ? 'What the band along the bottom of the screen shows for each of the Echo\'s own states, in place of a ring: designs show there flattened, the ring\'s twelve LEDs in a row with the side facing the talker in the middle, never turned. '
+      : 'What the ring shows for each of the Echo\'s own states. ') + 'Click one to pick Amazon\'s or one of your designs; a design can show for as many as you like.', 'sun',
       h('button', { class: 'small', title: 'Every animation as it is now, as a theme pack', onclick: saveRingAsPack }, icon('plus'), 'Save as pack')),
     h('div', { class: 'ringd-groups' }, groups.map((g) => h('div', { class: 'ringd-group' }, h('div', { class: 'ringd-group-head' }, g),
       h('div', { class: 'ringd-acts' }, slots.filter((s) => placeOf(s.id).group === g).map(tile))))),
@@ -488,7 +572,7 @@ function pickDesign({ slot, current, onPick, notInPack = false, sections = null 
     sec.sub || (isVolume(slot) ? 'its first frame\'s colours' : `${d.frames.length} frame${d.frames.length === 1 ? '' : 's'}`), sec); };
   sections = (sections || [{ title: 'Designs', ids: [...ring.designs.keys()].filter((id) => !ring.home.has(id)) },
     ...[...ring.packs].map(([pid, pk]) => ({ title: pk.name, ids: pk.has.filter((id) => ring.designs.has(id)), pack: pid }))]).filter((x) => x.ids.length);
-  fill(m.body, p.help ? h('p', { class: 'help' }, p.help) : null,
+  fill(m.body, placeHelp(p) ? h('p', { class: 'help' }, placeHelp(p)) : null,
     h('div', { class: 'ringd-opts' },
       notInPack ? opt(null, 'Not in this pack', null, 'stays as it is') : null,
       opt(0, 'Amazon\'s', () => { const d = shownFor(slot, null); return d && { d, talker }; }, 'as stock')),
@@ -554,7 +638,7 @@ function newDialog(packId = 0) {
   };
   fill(m.body, h('p', { class: 'help' }, 'Start from an empty ring, or from one of Amazon\'s animations to change it. Either way it is a design of its own: pick where it shows afterwards.'),
     h('div', { class: 'ringd-opts' },
-      h('button', { class: 'ringd-opt', onclick: () => start(null) }, h('span', { class: 'ringd-art' }, h('span', { class: 'ringd-plus' }, icon('plus'))), h('span', { class: 'ringd-name' }, 'Empty ring')),
+      h('button', { class: 'ringd-opt', onclick: () => start(null) }, h('span', { class: 'ringd-art' }, h('span', { class: 'ringd-plus' }, icon('plus'))), h('span', { class: 'ringd-name' }, isBand() ? 'Empty band' : 'Empty ring')),
       slotsOf().filter((s) => !isVolume(s.id)).map((s) => opt(s.id))));
   m.foot.append(h('button', { onclick: () => m.dlg.close() }, 'Cancel'));
   m.show();
@@ -573,8 +657,11 @@ const svgEl = (t, a) => { const e = document.createElementNS(SVG_NS, t); for (co
 
 function designer(id, start, opts = {}) {
   const n = start.leds;
+  // view: the ring (the Dots) or the band (the Echo Show), this Echo's own first; the switch on the stage shows the
+  // other.  The design is the same either way: only how it is drawn and painted on changes
   const ed = { id, d: copyDesign(start), cur: 0, colour: [0, 0, 255], tool: 'paint', undo: [], redo: [], dirty: !id,
-               turn: 0, talker: true, recent: [], playing: false, all: !!opts.hue, playAt: -1 };
+               turn: 0, talker: true, recent: [], playing: false, all: !!opts.hue, playAt: -1, view: isBand() ? 'band' : 'ring' };
+  const band = () => ed.view === 'band';
   const m = modal('', 'ringd-dlg');
 
   // ---- history: each change one undo step (a stroke of the brush is one, a run of hue drags is one)
@@ -596,17 +683,22 @@ function designer(id, start, opts = {}) {
   };
   const ic = (k) => glyph(G[k]);
 
-  // ---- the stage: the ring, a target per LED over it, the tools on its edge
+  // ---- the stage: the ring or the Echo Show's screen with its band, a target per LED over it, the tools on its edge
   const edCv = sizedCanvas(360, 'ringd-paintcv');
-  const svg = svgEl('svg', { viewBox: '-100 -100 200 200', class: 'ringd-canvas', role: 'img', 'aria-label': 'The ring: click or drag over its LEDs to paint them' });
+  const svg = svgEl('svg', { viewBox: '-100 -100 200 200', class: 'ringd-canvas', role: 'img' });
   const pt = (r, a) => `${(Math.cos(a) * r).toFixed(2)} ${(Math.sin(a) * r).toFixed(2)}`;
   const R0 = 100 * (RING_R - RING_W * 1.1), R1 = 100 * (RING_R + RING_W * 1.1), half = Math.PI / n - 0.03;
+  const B = BAND_BOX, cell = (B.x1 - B.x0) / n, vb = (f) => -100 + 200 * f;
+  const ringLeds = svgEl('g', {}), bandLeds = svgEl('g', {});
   for (let i = 0; i < n; i++) {
     const a = ledAngle(i, n);
-    svg.append(svgEl('path', { d: `M${pt(R1, a - half)} A${R1} ${R1} 0 0 1 ${pt(R1, a + half)} L${pt(R0, a + half)} A${R0} ${R0} 0 0 0 ${pt(R0, a - half)} Z`, class: 'ringd-led' }));
+    ringLeds.append(svgEl('path', { d: `M${pt(R1, a - half)} A${R1} ${R1} 0 0 1 ${pt(R1, a + half)} L${pt(R0, a + half)} A${R0} ${R0} 0 0 0 ${pt(R0, a - half)} Z`, class: 'ringd-led' }));
+    bandLeds.append(svgEl('rect', { x: vb(B.x0 + i * cell) + 0.4, y: vb(B.y0) - 4, width: 200 * cell - 0.8, height: 200 * (B.y1 - B.y0) + 8, rx: 2, class: 'ringd-led' }));
   }
+  svg.append(ringLeds, bandLeds);
   const ledAt = (e) => {
     const r = svg.getBoundingClientRect(), x = ((e.clientX - r.left) / r.width) * 200 - 100, y = ((e.clientY - r.top) / r.height) * 200 - 100;
+    if (band()) return bandCellAt((x + 100) / 200, (y + 100) / 200, n);
     const d = Math.hypot(x, y);
     if (d < R0 - 14 || d > 100) return -1;
     let a = Math.atan2(y, x) + Math.PI / 2; if (a < 0) a += 2 * Math.PI;
@@ -614,7 +706,7 @@ function designer(id, start, opts = {}) {
   };
   // the stage shows the design turned towards the talker (ed.turn): what is under the pointer is the design's LED
   // that many before it, as the Echo turns them
-  const shownLed = (e) => { const j = ledAt(e); return j < 0 ? -1 : (j - ed.turn + n) % n; };
+  const shownLed = (e) => { const j = ledAt(e); return j < 0 || band() ? j : (j - ed.turn + n) % n; };
   let stroke = null;
   const apply = (i) => {
     const f = frame();
@@ -632,13 +724,17 @@ function designer(id, start, opts = {}) {
   };
   svg.onpointermove = (e) => { if (!stroke || ed.tool === 'fill') return; const i = shownLed(e); if (i >= 0 && !stroke.has(i)) { stroke.add(i); apply(i); paint(); } };
   svg.onpointerup = svg.onpointercancel = () => { stroke = null; };
-  const tools = [['paint', 'Paint', 'Paint LEDs (click or drag)', icon('pen')], ['fill', 'Fill', 'Fill the ring', ic('fill')],
+  const tools = [['paint', 'Paint', 'Paint LEDs (click or drag)', icon('pen')], ['fill', 'Fill', 'Fill them all', ic('fill')],
     ['erase', 'Off', 'Switch LEDs off', icon('x')], ['pick', 'Pick', 'Take an LED\'s colour', icon('eye')]].map(([t, label, title, i]) =>
     h('button', { type: 'button', 'data-t': t, title, onclick: () => setTool(t) }, i, h('span', {}, label)));
   const setTool = (t) => { ed.tool = t; paintTools(); };
   const undoBtn = glyphBtn('ringd-onstage', null, 'Undo (Ctrl+Z)', undo, ic('undo'));
   const redoBtn = glyphBtn('ringd-onstage', null, 'Redo (Ctrl+Y)', redo, ic('redo'));
   const where = h('span', { class: 'ringd-where' });
+  const views = [['ring', 'Ring', 'As the Echo Dots show it: round, listening turned towards the talker'],
+    ['band', 'Band', 'As the Echo Show shows it: the band along the bottom of its screen, the side facing the talker in the middle, never turned']]
+    .map(([v, label, title]) => h('button', { type: 'button', class: 'ringd-onstage', 'data-v': v, title, onclick: () => { if (ed.view !== v) { ed.view = v; paint(); } } }, label));
+  const viewSw = h('div', { class: 'ringd-viewsw', role: 'group', 'aria-label': 'Show it as' }, views);
   // The talker: the yellow arrow outside the ring, dragged round it (from LED to LED) or turned with the arrow keys.
   // The stage shows the design turned towards it, as the Echo turns listening; drawing on it turned still lands on the
   // design's own LEDs (shownLed)
@@ -669,7 +765,7 @@ function designer(id, start, opts = {}) {
     const a = ledAngle(RING_TALKER + ed.turn, n);
     arrowG.setAttribute('transform', `translate(${pt(97, a)}) rotate(${(a * 180) / Math.PI + 90})`);
     arrowG.setAttribute('aria-valuenow', String(ed.turn));
-    arrowG.classList.toggle('hidden', !ed.talker);
+    arrowG.classList.toggle('hidden', !ed.talker || band());   // the band turns nothing
   };
   const turnOut = h('span', { class: 'ringd-turned' });
   const turnReset = glyphBtn('ringd-onstage', null, 'Back as drawn', () => setTurn(0), ic('undo'));
@@ -707,11 +803,7 @@ function designer(id, start, opts = {}) {
   // ---- adjustments: of this frame or of all frames, one switch for every one of them
   const each = (fn) => ed.d.frames.forEach((f, i) => { if (ed.all || i === ed.cur) fn(f, i); });
   const adjust = (fn) => change(() => each(fn));
-  const rot = (k) => adjust((f) => { const p = f.px; f.px = p.map((_, i) => p[(i - k + n) % n]); });
-  const wheel = (i) => {
-    const h6 = ((i % n) / n) * 6, f = h6 - Math.floor(h6);
-    return [[1, f, 0], [1 - f, 1, 0], [0, 1, f], [0, 1 - f, 1], [f, 0, 1], [1, 0, 1 - f]][Math.floor(h6) % 6].map((x) => Math.round(x * 255));
-  };
+  const rot = (k) => adjust((f) => { f.px = rotPx(f.px, k); });
   let hueBase = null;
   const hueIn = h('input', { type: 'range', min: '-180', max: '180', step: '1', value: '0', class: 'ringd-hue', 'aria-label': 'Hue',
     oninput: () => {
@@ -725,11 +817,15 @@ function designer(id, start, opts = {}) {
   const scopeBtns = [['frame', 'This frame'], ['all', 'All frames']].map(([k, t]) =>
     h('button', { type: 'button', 'data-k': k, onclick: () => { hueEnd(); ed.all = k === 'all'; paint(); } }, t));
   const adj = (label, title, fn, i, cls) => glyphBtn('ringd-ghost' + (cls ? ' ' + cls : ''), label, title, fn, i);
+  const turnL = adj('Turn left', '', () => rot(-1), ic('left')), turnR = adj('Turn right', '', () => rot(1), ic('right'));
+  const mirrorB = adj('Mirror', '', () => adjust((f) => { f.px = mirrorPx(f.px); }), ic('mirror'));
+  const rainbowB = adj('Rainbow', '', () => adjust((f) => { f.px = wheelPx(n, band()); }), ic('rainbow'));
+  const relabel = (b, label, title) => { b.title = title; b.setAttribute('aria-label', title); b.lastChild.textContent = label; };
   const hueRow = h('div', { class: 'ringd-hue-row' + (opts.hue ? ' hl' : ''), title: 'Turns every colour round the colour wheel; how light and how colourful each looks stays' },
     h('span', { class: 'ringd-lbl' }, 'Hue'), hueIn, hueOut);
 
   // ---- time: playing, how it repeats, the frames
-  const player = play(edCv, () => ({ d: ed.d, turn: ed.turn, talker: null,         /* the arrow is the stage's own (arrowG) */
+  const player = play(edCv, () => ({ d: ed.d, turn: band() ? 0 : ed.turn, talker: null, view: ed.view,  /* the arrow is the stage's own (arrowG) */
                                      still: ed.playing ? null : frame().px }));
   const playBtn = h('button', { type: 'button', class: 'ringd-play', onclick: () => (ed.playing ? pause() : resume()) });
   const resume = () => { ed.playing = true; player.t0 = performance.now(); tickHead(); paint(); };
@@ -772,7 +868,7 @@ function designer(id, start, opts = {}) {
     });
   };
   const spin = () => { if (room(n - 1)) change(() => {
-    const f = frame(); insert(Array.from({ length: n - 1 }, (_, k) => ({ ms: f.ms, px: f.px.map((_, i) => f.px[(i - k - 1 + n * 2) % n].slice()) }))); }); };
+    const f = frame(); insert(Array.from({ length: n - 1 }, (_, k) => ({ ms: f.ms, px: rotPx(f.px, k + 1) }))); }); };
   const fade = () => {                      // 6 frames blending this one into the next
     const k = 6, a = frame(), b = ed.d.frames[(ed.cur + 1) % ed.d.frames.length];
     if (room(k)) change(() => insert(Array.from({ length: k }, (_, x) => ({ ms: Math.max(1, Math.round(a.ms / (k + 1))),
@@ -783,6 +879,7 @@ function designer(id, start, opts = {}) {
     if (room(2 * k - 1)) change(() => insert(Array.from({ length: 2 * k - 1 }, (_, x) => { const v = 0.5 + 0.5 * Math.cos((Math.PI * (x + 1)) / k);
       return { ms: a.ms, px: a.px.map((c) => c.map((y) => Math.round(y * (0.15 + 0.85 * v)))) }; })));
   };
+  const spinB = adj('Spin', '', spin);
   const msIn = h('input', { type: 'number', min: '1', max: '60000', class: 'ringd-num-in', 'aria-label': 'Milliseconds this frame shows',
     onchange: () => { const v = Math.max(1, Math.min(60000, Math.round(+msIn.value) || 1)); change(() => { frame().ms = v; }); } });
   const frameLbl = h('span', { class: 'ringd-framelbl' });
@@ -825,14 +922,23 @@ function designer(id, start, opts = {}) {
 
   function paint() {
     const f = frame();
-    if (!ed.playing) drawRing(edCv, turned(f.px, ed.turn));
+    if (!ed.playing) drawRing(edCv, band() ? f.px : turned(f.px, ed.turn), { view: ed.view });
+    svg.setAttribute('aria-label', `The ${band() ? 'band' : 'ring'}: click or drag over its LEDs to paint them`);
+    ringLeds.classList.toggle('hidden', band()); bandLeds.classList.toggle('hidden', !band());
+    talkBox.classList.toggle('hidden', band());
+    views.forEach((b) => { const o = b.dataset.v === ed.view; b.classList.toggle('on', o); b.setAttribute('aria-pressed', String(o)); });
+    relabel(turnL, ...(band() ? ['Move left', 'Move one LED to the left (round to the other end)'] : ['Turn left', 'Turn one LED anticlockwise']));
+    relabel(turnR, ...(band() ? ['Move right', 'Move one LED to the right (round to the other end)'] : ['Turn right', 'Turn one LED clockwise']));
+    relabel(mirrorB, 'Mirror', band() ? 'Mirrored left to right (through the talker on the ring)' : 'Mirrored through the talker (left to right on the band)');
+    relabel(rainbowB, 'Rainbow', band() ? 'A colour wheel along the band' : 'A colour wheel round the ring');
+    relabel(spinB, band() ? 'Run' : 'Spin', band() ? `${n - 1} frames after it, each moved one LED further right` : `${n - 1} frames after it, each turned one LED further`);
     placeArrow();
     const loopAt = ed.d.loop;
     strip.replaceChildren(...ed.d.frames.map((fr, i) => h('button', {
       type: 'button', class: 'ringd-fr' + (i === ed.cur ? ' on' : '') + (i === loopAt && loopAt > 0 ? ' loopstart' : '') + (loopAt >= 0 && i >= loopAt ? ' inloop' : '')
         + (ed.playing && i === ed.playAt ? ' head' : ''),
       role: 'option', 'aria-selected': String(i === ed.cur), title: `Frame ${i + 1}: ${fr.ms} ms`, onclick: () => { if (ed.playing) pause(); ed.cur = i; paint(); } },
-      h('span', { class: 'ringd-mini', style: `--ring-bg:${frameCss(fr.px)}` }), h('span', { class: 'ringd-fr-no' }, String(i + 1)), h('span', { class: 'ringd-ms' }, `${fr.ms}`))));
+      h('span', { class: 'ringd-mini' + (band() ? ' band' : ''), style: `--ring-bg:${frameCss(fr.px, band())}` }), h('span', { class: 'ringd-fr-no' }, String(i + 1)), h('span', { class: 'ringd-ms' }, `${fr.ms}`))));
     const on = strip.children[ed.cur]; if (on && on.scrollIntoView && !ed.playing) on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     if (document.activeElement !== msIn) msIn.value = String(f.ms);
     const mode = ed.d.loop < 0 ? 'once' : ed.d.loop === 0 ? 'all' : 'intro';
@@ -864,7 +970,7 @@ function designer(id, start, opts = {}) {
     h('div', { class: 'ringd-ed' },
       h('div', { class: 'ringd-stage' },
         h('div', { class: 'ringd-dock', role: 'group', 'aria-label': 'Tool' }, tools),
-        h('div', { class: 'ringd-stage-top' }, where, h('span', { class: 'grow' }), undoBtn, redoBtn),
+        h('div', { class: 'ringd-stage-top' }, where, h('span', { class: 'grow' }), viewSw, undoBtn, redoBtn),
         h('div', { class: 'ringd-paint' }, edCv, svg),
         talkBox),
       h('aside', { class: 'ringd-panel' },
@@ -873,12 +979,10 @@ function designer(id, start, opts = {}) {
           recentRow),
         sect('Adjust', h('div', { class: 'seg ringd-scope', role: 'group', 'aria-label': 'Adjust' }, scopeBtns),
           h('div', { class: 'ringd-grid2' },
-            adj('Turn left', 'Turn one LED anticlockwise', () => rot(-1), ic('left')),
-            adj('Turn right', 'Turn one LED clockwise', () => rot(1), ic('right')),
+            turnL, turnR,
             adj('Darker', 'Every LED darker', () => adjust((f) => { f.px = f.px.map((c) => c.map((v) => Math.round(v * 0.75))); }), ic('darker')),
             adj('Brighter', 'Every LED brighter', () => adjust((f) => { f.px = f.px.map((c) => c.map((v) => Math.min(255, Math.round(v * 1.33)))); }), icon('sun')),
-            adj('Mirror', 'Mirrored through the talker', () => adjust((f) => { const p = f.px, ax = Math.round(RING_TALKER * 2); f.px = p.map((_, i) => p[((ax - i) % n + n) % n]); }), ic('mirror')),
-            adj('Rainbow', 'A colour wheel round the ring', () => adjust((f) => { f.px = f.px.map((_, i) => wheel(i)); }), ic('rainbow')),
+            mirrorB, rainbowB,
             adj('Clear', 'Every LED off', () => adjust((f) => { f.px = black(n); }), icon('x'), 'wide')),
           hueRow))),
     h('div', { class: 'ringd-timeline' },
@@ -897,7 +1001,7 @@ function designer(id, start, opts = {}) {
         adj(null, 'Delete this frame', del, icon('trash'), 'danger'),
         h('span', { class: 'grow' }),
         h('span', { class: 'ringd-lbl' }, 'Make from it'),
-        adj('Spin', `${n - 1} frames after it, each turned one LED further`, spin),
+        spinB,
         adj('Fade', '6 frames blending it into the next', fade),
         adj('Breathe', '11 frames dimming and coming back', breathe))));
   m.foot.append(...[delBtn, download, uses, useRow, h('span', { class: 'grow' })].filter(Boolean),

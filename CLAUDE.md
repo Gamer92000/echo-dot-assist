@@ -169,7 +169,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   music (`volume`), replies, sounds, timers, Drop In calls at volumes of their own or each following the music's +- an offset in
   points (`<kind>_linked`/`_offset`; linked, its HA number is unlisted); MainVolume and TTSVolume both at the loudest
   (libasp's own volume, which boosts the top end, follows the last of them set), each kind turned down in its PCM by
-  the measured curve (`vol_db`; `audio_music_gain`, `audio_tts_gain`, the earcon thread); HA's `play_media` is music
+  the measured curve (`volcurve.c`: `board.volume_curve`, the Dot 2's where none, `tests/unit/volcurve_test.c` per model; `audio_music_gain`, `audio_tts_gain`, the earcon thread); HA's `play_media` is music
   though on the TTS stream (`core_tts_begin`'s `media`, `tts_kind`). docs/re-platform.md has the measurements. The front end is told when a command is spoken (`listening()`:
   without it its cancellers remove the talker after 1.5 s). `earsup.c` (wake sound removal: our own UI sounds taken back
   out of the pipeline's audio by a residual echo suppressor keyed to the PCM we play; experimental, setting
@@ -452,7 +452,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   of the library: `has` lines (a design in one pack at most) and `use` lines naming only those (version 2,
   `pack_normal`); shared with their designs inside (version 1: the page's `.ringpack` and copies).  The page: ring.js.  Every pattern of the core goes
   through `led()` -> `ring_set`/`ring_unset`, which knows from each file how long it shows; while one does, HA's light
-  is off.  Every ledctrl call (patterns and brightness) goes through `ledq.c` (issue #40): one at a time, in order,
+  is off.  The Echo Show's band (`ring_band.c`) has the same slots and draws designs itself, flattened and never
+  turned (band position p = LED p + 5: the talker's pair in the middle): Apply needs no root there
+  (`ring_designs_live`), and `ring_stock` gives the page the band's own patterns as files.  Every ledctrl call (patterns and brightness) goes through `ledq.c` (issue #40): one at a time, in order,
   each waited for, in its own thread (started together, an unset can overtake its set and leave the pattern on);
   sets and unsets queued one behind the other go in one ledctrl (`LEDQ_BATCH`: it takes repeated -s/-u).  The
   beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N` when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
@@ -464,9 +466,11 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   next to the binary, `HASSMIC_RINGBAR`) runs as app_process: overscan for the band, a SurfaceFlinger layer over it,
   "ready <w> <rows>" on stdout, then frames (w x rows ARGB) on stdin.  Setting `light_band` (rows, 0 off).  Screen
   power as stock's: `service call power` 9 (wakeUp) on a pattern, `screen_off_timeout` 5 min / 1 min muted or DND.
-  PC: `HASSMIC_FAKE_BAND` (a program speaking ringbar's protocol), `tests/unit/ring_band_test.c`.
+  PC: `HASSMIC_FAKE_BAND` (a program speaking ringbar's protocol), `tests/unit/ring_band_test.c` (designs too, a restart
+  on the same state included); `tests/unit/band_map_test.py` holds web/ring.js's band drawing to ring_band.c's, pixel
+  for pixel (node).  The band's height comes from `state/config` before `ring_start` (`settings_peek`).
 - `src/include/`: headers for the reversed Amazon libraries (`mixer_api.h`, `pryon_api.h`, `aipc_api.h`) and `netio.h`.
-- `src/tools/`: standalone device tools (`mixcap`, `mixplay`, `pryon_test`, `aed_test`, `latency`, `runas` — AIPC refuses uid 0 and
+- `src/tools/`: standalone device tools (`mixcap`, `mixplay`, `slplay` (the Android models' mixplay: OpenSL ES on the music stream), `pryon_test`, `aed_test`, `latency`, `runas` — AIPC refuses uid 0 and
   the image has no `su`; `curlspy`, `hciscan`, `a2dpprobe`, `dha_test` not in `all`).
 
 Boot integration (`scripts/system/`, rc in `devices/<codename>/`): `hassmic.rc` (init) starts `boot.sh` (fixed, on /system), which picks the factory
@@ -487,7 +491,8 @@ and link-local ranges of `LOCAL4` only. A stock rule hassmic comes to depend on 
 prints it.
 
 `tools/` is PC-side reverse-engineering and firmware tooling (`payload_dump.py`, Thumb disassembly helpers,
-`davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator).
+`davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator, `vol-curve.py`: an Android Echo's
+volume curve with a Dot's micRaw beside it, for `board.volume_curve`).
 
 ## Conventions
 

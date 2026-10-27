@@ -13,15 +13,24 @@
  *            with the talker's loudness, as its ListeningRamp is driven); what only the Dots' ring shows (replies,
  *            volume, timers, Do not disturb, setup, identify, errors) in the ring's colours, laid out in a line.  One
  *            pattern shows at a time, by priority; Home Assistant's light only while none does, as on the ring.
- *   screen   stock's power policy (EnvironmentContextService, ECStateMachine): the screen sleeps 5 min after the last
+ *   designs  the settings page's (ringdesign.h), drawn here in place of a pattern as they are, frame by frame: no set
+ *            for root to install, Apply shows them at once.  Flattened, never turned (no beam to follow): cut open
+ *            opposite where stock's listening ring points at turn 0, so the side facing the talker is in the middle, as
+ *            in the patterns.  The page gets the patterns as files (ring_stock) to start designs from.
+ *   screen  stock's power policy (EnvironmentContextService, ECStateMachine): the screen sleeps 5 min after the last
  *            activity, 1 min with the mic off or in Do not disturb; a pattern wakes it (IPowerManager.wakeUp, through the
  *            service tool: transaction 9, isInteractive 12 on 8149, checked on the first Echo Show).  An app in front
  *            keeps its own wake locks.
  */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE                     /* pipe2 on glibc */
+#endif
 #include "ring.h"
 #include "board.h"
 #include "core.h"
+#include "ringdesign.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <math.h>
 #include <poll.h>
@@ -115,7 +124,7 @@ static void runner(struct rgb *led, long long t, int lap, struct rgb c, float ta
 static atomic_int level_db = -1000;      /* the talker, dBFS x 10, from the pipeline's audio (ring_level) */
 static float loud;                       /* smoothed 0..1; the band thread's */
 
-enum pid { P_RESET, P_VOLUME, P_LISTEN, P_THINK, P_TALK, P_END, P_CALL_OUT, P_CALL_IN, P_CALL, P_CALL_END, P_ERROR,
+enum pid { P_RESET, P_VOLUME, P_ASSIST, P_LISTEN, P_THINK, P_TALK, P_END, P_CALL_OUT, P_CALL_IN, P_CALL, P_CALL_END, P_ERROR,
            P_MUTE, P_UNMUTE, P_DND, P_IDENTIFY, P_LOGIN, P_PAIRING, P_TIMER, P_TIMER_SHORT, P_SETUP, P_COUNT };
 /* priority order (first wins: the volume over a reply, as the ring shows it) and how long each shows: -1 until unset */
 static const struct { const char *name; int ms; } pats[P_COUNT] = {
@@ -125,6 +134,7 @@ static const struct { const char *name; int ms; } pats[P_COUNT] = {
     [P_CALL_OUT] = { "call_outbound_ringing", -1 }, [P_CALL_IN] = { "call_incoming", -1 },
     [P_CALL] = { "call_connected", -1 }, [P_CALL_END] = { "call_connected_end", 1480 },
     [P_VOLUME] = { "volume_step-", -1 },             /* a prefix: the step follows */
+    [P_ASSIST] = { "hassmic_assist_", -1 },          /* the replies' own volume (ring_assistant_steps), the same */
     [P_ERROR] = { "anim_start_error_short", 3300 },
     [P_MUTE] = { "mics-off_on", -1 }, [P_UNMUTE] = { "mics-off_end", 1100 },
     [P_DND] = { "do_not_disturb", 1760 },
@@ -135,8 +145,9 @@ static const struct { const char *name; int ms; } pats[P_COUNT] = {
     [P_SETUP] = { "setup-mode", -1 },
 };
 
-/* Each as the Dot's file of that name plays it (timings and colours read off donut's led-resources, 2026-10-13) */
-static void draw(int p, struct rgb *led, long long t, int arg)
+/* Each as the Dot's file of that name plays it (timings and colours read off donut's led-resources, 2026-10-13);
+ * loudness: the talker's, 0..1 */
+static void draw(int p, struct rgb *led, long long t, int arg, float loudness)
 {
     all(led, hex(0));
     switch (p) {
@@ -145,7 +156,7 @@ static void draw(int p, struct rgb *led, long long t, int arg)
         for (int i = 0; i < LEDS; i++) {
             float front = clamp01(t / 500.f) * (LEDS / 2), e = from_end(i);
             if (t < 500) led[i] = e < front - 1 ? hex(BLUE) : e < front ? hex(CYAN) : hex(0);
-            else led[i] = mix(hex(BLUE), hex(CYAN), clamp01(1 + loud * 2.5f - from_centre(i)));
+            else led[i] = mix(hex(BLUE), hex(CYAN), clamp01(1 + loudness * 2.5f - from_centre(i)));
         }
         break;
     case P_THINK:                        /* cyan and blue LEDs taking turns, every 100 ms */
@@ -183,9 +194,10 @@ static void draw(int p, struct rgb *led, long long t, int arg)
             led[i] = scale(hex(GREEN), d > 0 && d < 2 ? 1 - fabsf(d - 1) : 0);
         }
         break;
-    case P_VOLUME: {                     /* white LEDs filled from the left, as many as the level */
+    case P_VOLUME: case P_ASSIST: {      /* white LEDs filled from the left, as many as the level (the replies' own
+                                            volume in cyan, as ring.c makes its steps) */
         float n = arg / 100.f * LEDS;
-        for (int i = 0; i < LEDS; i++) led[i] = scale(hex(WHITE), clamp01(n - i));
+        for (int i = 0; i < LEDS; i++) led[i] = scale(hex(p == P_ASSIST ? CYAN : WHITE), clamp01(n - i));
         break; }
     case P_IDENTIFY: for (int i = 0; i < LEDS; i++) led[i] = hue((float)i / LEDS - (float)(t % 2000) / 2000); break;
     }
@@ -195,7 +207,7 @@ static void draw(int p, struct rgb *led, long long t, int arg)
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
-static struct { long long at; int arg, on; } act[P_COUNT];
+static struct { long long at; int arg, on, ms; } act[P_COUNT];     /* ms: how long it shows (pats', or its design's) */
 static struct ring_light light = { .on = 0, .brightness = 1, .color_brightness = 1, .r = 1, .g = 1, .b = 1, .effect = E_NONE, .fill = 100 }, flash;
 static long long flash_until;
 static int rows = 10, wake_req, started;
@@ -203,9 +215,9 @@ static int rows = 10, wake_req, started;
 static int find(const char *pattern, int *arg)
 {
     for (int i = 0; i < P_COUNT; i++) {
-        size_t n = strlen(pats[i].name);
-        if (i == P_VOLUME ? !strncmp(pattern, pats[i].name, n) : !strcmp(pattern, pats[i].name)) {
-            if (arg) *arg = i == P_VOLUME ? atoi(pattern + n) * 100 / (board.volume_steps > 0 ? board.volume_steps : 100) : 0;
+        size_t n = strlen(pats[i].name); int step = i == P_VOLUME || i == P_ASSIST;
+        if (step ? !strncmp(pattern, pats[i].name, n) : !strcmp(pattern, pats[i].name)) {
+            if (arg) *arg = step ? atoi(pattern + n) * 100 / (board.volume_steps > 0 ? board.volume_steps : 100) : 0;
             return i;
         }
     }
@@ -217,10 +229,166 @@ static int top(long long now)
 {
     for (int i = 0; i < P_COUNT; i++) {
         if (!act[i].on) continue;
-        if (pats[i].ms >= 0 && now >= act[i].at + pats[i].ms) { act[i].on = 0; continue; }
+        if (act[i].ms >= 0 && now >= act[i].at + act[i].ms) { act[i].on = 0; continue; }
         return i;
     }
     return P_COUNT;
+}
+
+/* ---------------------------------------------------------------- designs (ringdesign.h)
+ *
+ * ring.c's slots, their ids and order (the page's and state/ring-applied's: the same on every model, so designs and
+ * packs go from Echo to Echo), each one of the patterns above.  A design is drawn flattened: band position p (0 at the
+ * left) shows its LED p + SHIFT, the ring cut open opposite LEDs 10 and 11, where stock's listening ring points at turn
+ * 0 (web/ring.js RING_TALKER): what faces the talker is in the middle, as in the patterns (unroll).  Never turned. */
+const struct ring_slot ring_slots[] = {
+    { "listen", "active-start", RING_LISTEN }, { "end", "active-end", RING_END },
+    { "think", "active-thinking", RING_PLAIN }, { "talk", "active-talking", RING_PLAIN },
+    { "error", "anim_start_error_short", RING_PLAIN },
+    { "timer", "ready-timer", RING_PLAIN }, { "timer_short", "ready-timer-short", RING_PLAIN },
+    { "volume", "volume_step-", RING_VOLUME }, { "assist_volume", "hassmic_assist_", RING_ASSIST },
+    { "mute", "mics-off_on", RING_PLAIN }, { "unmute", "mics-off_end", RING_PLAIN },
+    { "dnd", "do_not_disturb", RING_PLAIN }, { "identify", "zzz_rainbow", RING_PLAIN },
+    { "bt_pairing", "scone-setup", RING_PLAIN },
+    { "call_out", "call_outbound_ringing", RING_PLAIN }, { "call_in", "call_incoming", RING_PLAIN },
+    { "call_live", "call_connected", RING_PLAIN }, { "call_end", "call_connected_end", RING_PLAIN },
+    { "setup", "setup-mode", RING_PLAIN }, { "reset", "factory-reset", RING_PLAIN },
+    { "login", "authenticated_setup_mode", RING_PLAIN },
+};
+const int ring_nslots = (int)(sizeof ring_slots / sizeof ring_slots[0]);
+#define SHIFT 5                          /* 10.5 - 5.5: the talker's pair to the middle of the band */
+static struct rd_design des[RING_SLOTS_MAX];    /* under lock: state/ring-installed's, by slot */
+
+static int slot_of(int p) { for (int i = 0; i < ring_nslots; i++) if (!strcmp(ring_slots[i].stock, pats[p].name)) return i; return -1; }
+static int pid_of(int s) { for (int p = 0; p < P_COUNT; p++) if (!strcmp(ring_slots[s].stock, pats[p].name)) return p; return -1; }
+static int stepped(int p) { return p == P_VOLUME || p == P_ASSIST; }
+
+/* the frame a design shows t ms after it started, as ledcontroller plays one: its frames up to the loop once, then the
+ * loop again and again; played once, then dark (NULL) */
+static const struct rd_frame *design_frame(const struct rd_design *d, long long t)
+{
+    int lp = d->loop < 0 ? d->nframes : d->loop;
+    long long intro = 0, rest = 0;
+    for (int i = 0; i < d->nframes; i++) *(i < lp ? &intro : &rest) += d->f[i].ms;
+    if (t < intro) for (int i = 0; i < lp; i++) { if (t < d->f[i].ms) return &d->f[i]; t -= d->f[i].ms; }
+    if (d->loop < 0 || !rest) return NULL;
+    t = (t - intro) % rest;
+    for (int i = lp; i < d->nframes; i++) { if (t < d->f[i].ms) return &d->f[i]; t -= d->f[i].ms; }
+    return NULL;
+}
+
+/* How long a design shows, as ring.c's visible_ms reads a file: until unset while its loop has light, else up to its
+ * last lit frame */
+static int design_ms(const struct rd_design *d)
+{
+    int at = 0, lit_end = 0, loop_lit = 0;
+    for (int i = 0; i < d->nframes; i++) {
+        int lit = 0;
+        for (int k = 0; k < d->leds; k++) lit |= d->f[i].px[k][0] | d->f[i].px[k][1] | d->f[i].px[k][2];
+        at += d->f[i].ms;
+        if (lit && d->loop >= 0 && i >= d->loop) loop_lit = 1;
+        if (lit && (d->loop < 0 || i < d->loop)) lit_end = at;
+    }
+    return loop_lit ? -1 : lit_end;
+}
+
+/* lock held: how long pattern p shows now (a volume: until unset, its design only colours it) */
+static int shows_ms(int p)
+{
+    int s = slot_of(p);
+    return s >= 0 && des[s].nframes && !stepped(p) ? design_ms(&des[s]) : pats[p].ms;
+}
+
+static struct rgb seen(const unsigned char c[3]) { return (struct rgb){ c[0] / 255.f, c[1] / 255.f, c[2] / 255.f }; }
+
+/* lock held: led[] from slot s's design, t ms after pattern p started; a volume's fill (arg) in its first frame's
+ * colours, each LED as bright as the fill has it there (ring.c's tinted steps) */
+static void design_draw(int s, int p, struct rgb *led, long long t, int arg)
+{
+    const struct rd_design *d = &des[s];
+    all(led, hex(0));
+    if (stepped(p)) {
+        float n = arg / 100.f * LEDS;
+        for (int i = 0; i < LEDS; i++) led[i] = scale(seen(d->f[0].px[(i + SHIFT) % LEDS]), clamp01(n - i));
+        return;
+    }
+    const struct rd_frame *f = design_frame(d, t);
+    if (f) for (int i = 0; i < LEDS; i++) led[i] = seen(f->px[(i + SHIFT) % LEDS]);
+}
+
+/* ---------------------------------------------------------------- the patterns as files, for the settings page
+ *
+ * The page starts designs from stock's animations and shows them beside the designs: here the patterns, drawn frame by
+ * frame as .animation files have them (LED by LED in the design's order, the driver's duty: gamma 2.2, as Amazon's) */
+#define STOCK_MS 40                      /* a frame of a gradual change */
+#define STEP_MS  5                       /* looked at this often: a jump (thinking's turns, 100 ms) cut where it is */
+/* how each runs: intro ms played once, then loop ms again and again (0: once, then dark) */
+static const struct { int intro, loop; } runs[P_COUNT] = {
+    [P_LISTEN] = { 500, STOCK_MS }, [P_THINK] = { 0, 200 }, [P_TALK] = { 0, 1690 }, [P_END] = { 600, 0 },
+    [P_MUTE] = { 700, STOCK_MS }, [P_UNMUTE] = { 1100, 0 }, [P_DND] = { 1760, 0 }, [P_ERROR] = { 3300, 0 },
+    [P_LOGIN] = { 0, 1800 }, [P_PAIRING] = { 0, 1060 }, [P_SETUP] = { 0, 1380 }, [P_RESET] = { 0, 830 },
+    [P_TIMER] = { 0, 750 }, [P_TIMER_SHORT] = { 2233, 0 }, [P_CALL_OUT] = { 0, 900 }, [P_CALL_IN] = { 0, 5200 },
+    [P_CALL] = { 0, 2400 }, [P_CALL_END] = { 1480, 0 }, [P_IDENTIFY] = { 0, 2000 },
+};
+
+static int duty(float v) { return (int)lroundf(powf(clamp01(v), 2.2f) * 255); }
+
+static void put_frame(FILE *f, int ms, const struct rgb *led)
+{
+    fprintf(f, "%d:", ms);
+    for (int j = 0; j < LEDS; j++) {
+        struct rgb c = led[(j - SHIFT + LEDS) % LEDS];         /* the design's LED j is band position j - SHIFT */
+        fprintf(f, "%s%02X%02X%02X", j ? "," : "", duty(c.r), duty(c.g), duty(c.b));
+    }
+    fputc('\n', f);
+}
+
+/* how far a picture moved between two looks: the largest change of any LED's channel */
+static float moved(const struct rgb *a, const struct rgb *b)
+{
+    float d = 0;
+    for (int i = 0; i < LEDS; i++) d = fmaxf(d, fmaxf(fabsf(a[i].r - b[i].r), fmaxf(fabsf(a[i].g - b[i].g), fabsf(a[i].b - b[i].b))));
+    return d;
+}
+
+/* pattern p from ms `from` to `to` as frames: a new one where the picture jumps (at that very ms), or every STOCK_MS
+ * while it changes gradually; what stays the same is one frame */
+static void put_run(FILE *f, int p, int from, int to, int arg)
+{
+    struct rgb led[LEDS], last[LEDS], cur[LEDS]; int start = from;
+    if (to <= from) return;
+    draw(p, cur, from, arg, 0); memcpy(last, cur, sizeof cur);
+    for (int t = from + STEP_MS; t < to; t += STEP_MS) {
+        draw(p, led, t, arg, 0);
+        if (moved(led, cur) > 0 && (moved(led, last) > 0.15f || t - start >= STOCK_MS)) {
+            put_frame(f, t - start, cur); memcpy(cur, led, sizeof led); start = t;
+        }
+        memcpy(last, led, sizeof led);
+    }
+    put_frame(f, to - start, cur);
+}
+
+char *ring_stock(int s, size_t *n)
+{
+    int p = s >= 0 && s < ring_nslots ? pid_of(s) : -1;
+    char *t = NULL; size_t len = 0;
+    FILE *f = p >= 0 ? open_memstream(&t, &len) : NULL;
+    if (!f) return NULL;
+    if (stepped(p))                      /* a step per LED, "step NN" before each, as rd_stock gives the Dots' files */
+        for (int k = 1; k <= LEDS; k++) {
+            struct rgb led[LEDS];
+            for (int i = 0; i < LEDS; i++) led[i] = i < k ? hex(p == P_ASSIST ? CYAN : WHITE) : hex(0);  /* as draw()'s fill */
+            fprintf(f, "step %02d\n", k); put_frame(f, 1000, led);
+        }
+    else {
+        put_run(f, p, 0, runs[p].intro, 0);
+        fputs("loop\n", f);
+        if (runs[p].loop) put_run(f, p, runs[p].intro, runs[p].intro + runs[p].loop, 0);
+        else { struct rgb dark[LEDS]; all(dark, hex(0)); put_frame(f, 1000, dark); }    /* a dark loop: once */
+    }
+    if (fclose(f)) { free(t); return NULL; }
+    *n = len;
+    return t;
 }
 
 /* Home Assistant's light as ring.c gives it the ring: pulse 2.4 s from 35 %, two comets over the colour at 25 % once a
@@ -292,18 +460,41 @@ static int ringbar(int n, int *in, int *w)
     int pin[2], pout[2]; char rs[8]; snprintf(rs, sizeof rs, "%d", n);
     const char *fake = getenv("HASSMIC_FAKE_BAND"), *dex = dex_path();
     int builder = builder_api();        /* before the fork: a property lookup takes bionic's lock, which another thread may hold */
-    if (pipe(pin)) return -1;
-    if (pipe(pout)) { close(pin[0]); close(pin[1]); return -1; }
+    /* the child's environment made here too, CLASSPATH in place of any: putenv after the fork allocates, and malloc's
+     * lock may be another thread's at that moment */
+    extern char **environ;
+    size_t ne = 0; while (environ[ne]) ne++;
+    char cp[PATH_MAX + 16], **envp = malloc((ne + 2) * sizeof *envp);
+    if (!envp) return -1;
+    snprintf(cp, sizeof cp, "CLASSPATH=%s", dex);
+    size_t m = 0; envp[m++] = cp;
+    for (size_t i = 0; i < ne; i++) if (strncmp(environ[i], "CLASSPATH=", 10)) envp[m++] = environ[i];
+    envp[m] = NULL;
+    /* The renderer gets these as its stdin and stdout and nothing else of hassmic's: its listening sockets and the log's
+     * pipe it would hold until it exits (ports bound, no EOF for the log's reader).  The pipes close-on-exec, as ledq.c's
+     * (dup2 clears the flag on 0 and 1); every other descriptor the child closes before exec, from a bound found here */
+    long maxfd = sysconf(_SC_OPEN_MAX);
+    if (maxfd < 0 || maxfd > 65536) maxfd = 65536;
+    /* what to run, made before the fork too: after it only async-signal-safe calls (execve, not execle) */
+    char *argv_[7] = { NULL }; const char *prog;
+    if (fake) { prog = fake; argv_[0] = (char *)fake; argv_[1] = rs; }
+    else {
+        prog = "/system/bin/app_process";
+        argv_[0] = "app_process"; argv_[1] = "/"; argv_[2] = "Ringbar"; argv_[3] = rs; argv_[4] = builder ? "builder" : NULL;
+    }
+    if (pipe2(pin, O_CLOEXEC)) { free(envp); return -1; }
+    if (pipe2(pout, O_CLOEXEC)) { close(pin[0]); close(pin[1]); free(envp); return -1; }
     pid_t pid = fork();
     if (pid == 0) {
-        dup2(pin[0], 0); dup2(pout[1], 1);
-        close(pin[0]); close(pin[1]); close(pout[0]); close(pout[1]);
-        char cp[PATH_MAX + 16]; snprintf(cp, sizeof cp, "CLASSPATH=%s", dex); putenv(cp);
-        if (fake) execl(fake, fake, rs, (char *)NULL);
-        else if (builder) execl("/system/bin/app_process", "app_process", "/", "Ringbar", rs, "builder", (char *)NULL);
-        else execl("/system/bin/app_process", "app_process", "/", "Ringbar", rs, (char *)NULL);
+        /* each end first to a descriptor of 3 or more: a daemon with 0 or 1 closed got them from pipe2, and a dup2 onto
+         * itself would keep close-on-exec; F_DUPFD's copy has none, nor have dup2's */
+        int in = fcntl(pin[0], F_DUPFD, 3), out = fcntl(pout[1], F_DUPFD, 3);
+        if (in < 0 || out < 0 || dup2(in, 0) < 0 || dup2(out, 1) < 0) _exit(127);
+        for (long d = 3; d < maxfd; d++) close((int)d);      /* stderr stays: its lines are in the log */
+        execve(prog, argv_, envp);
         _exit(127);
     }
+    free(envp);
     close(pin[0]); close(pout[1]);
     if (pid < 0) { close(pin[1]); close(pout[0]); return -1; }
     char line[64]; size_t k = 0; long long until = now_ms() + 15000;      /* ART's start: ~1 s */
@@ -351,6 +542,7 @@ static void *band_thread(void *arg)
     (void)arg;
     static struct rgb row[MAX_W], last[MAX_W];
     int fd = -1, w = 0, have_rows = -1, sent = 0, timeout = 0, fails = 0;
+    float last_k = -1;                              /* the brightness of the frame sent last */
     long long last_wake = 0, next_check = 0;
     for (;;) {
         pthread_mutex_lock(&lock);
@@ -361,7 +553,11 @@ static void *band_thread(void *arg)
             fd = -1; w = 0; sent = 0;
             if (ringbar(want, &fd, &w) < 0) {
                 if (!fails++) fprintf(stderr, "band: no renderer, trying again every 30 s\n");
-                sleep(30); continue;
+                pthread_mutex_lock(&lock);          /* a new height ("Light band") tries again at once */
+                struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 30;
+                if (rows == want) pthread_cond_timedwait(&cv, &lock, &ts);
+                pthread_mutex_unlock(&lock);
+                continue;
             }
             fails = 0; have_rows = want;
             if (!want) fprintf(stderr, "band: off, the whole screen is the apps'\n");
@@ -372,12 +568,16 @@ static void *band_thread(void *arg)
             if (t != timeout) { timeout = t; screen_timeout(t); }
             next_check = now + 1000;
         }
+        struct rgb led[LEDS];
         pthread_mutex_lock(&lock);
+        now = now_ms();                             /* under the lock: a ring_set just before would be in its future */
         int p = top(now), arg_ = p < P_COUNT ? act[p].arg : 0, blink = flash_until && now < flash_until, moving = 1;
         long long at = p < P_COUNT ? act[p].at : 0;
         struct ring_light l = blink ? flash : light;
         if (!blink) flash_until = 0;
         int wake = wake_req; wake_req = 0;
+        int s = p < P_COUNT ? slot_of(p) : -1, designed = s >= 0 && des[s].nframes;
+        if (designed) design_draw(s, p, led, now - at, arg_);      /* here: ring_reload frees the designs it replaces */
         pthread_mutex_unlock(&lock);
         if (wake && now - last_wake >= WAKE_EVERY) { last_wake = now; screen_wake(); }
         if (fd < 0) {                               /* band off: nothing to draw, wait for a change */
@@ -389,19 +589,20 @@ static void *band_thread(void *arg)
         int lv = atomic_load(&level_db);            /* the talker: -50 dBFS nothing, -20 the widest */
         float target = clamp01((lv / 10.f + 50) / 30);
         loud += (target - loud) * (target > loud ? 0.35f : 0.08f);
-        struct rgb led[LEDS];
-        all(led, hex(0));
-        if (p < P_COUNT) draw(p, led, now - at, arg_);
-        else if (l.on || blink) light_draw(&l, blink, led, now);
-        else moving = 0;
+        if (!designed) {
+            if (p < P_COUNT) draw(p, led, now - at, arg_, loud);
+            else if (l.on || blink) { light_draw(&l, blink, led, now); moving = blink || l.effect != E_NONE; }  /* a still
+                                                     * light: no frames 30 times a second, the 1 s wait below takes a new level */
+            else { all(led, hex(0)); moving = 0; }
+        }
         unroll(led, row, w);
         float k = core_led_brightness(-1) / 100.f;
-        if (!sent || memcmp(row, last, sizeof row[0] * w)) {
+        if (!sent || k != last_k || memcmp(row, last, sizeof row[0] * w)) {    /* the level too: a still light dims */
             if (send_frame(fd, row, w, have_rows, k) < 0) {
                 fprintf(stderr, "band: the renderer is gone, starting it again\n");
                 close(fd); fd = -1; have_rows = -1; sleep(1); continue;
             }
-            memcpy(last, row, sizeof row[0] * w); sent = 1;
+            memcpy(last, row, sizeof row[0] * w); last_k = k; sent = 1;
         }
         pthread_mutex_lock(&lock);
         if (moving) {
@@ -428,33 +629,83 @@ void ring_start(void (*run)(const char *op, const char *name), void (*reloaded)(
     int go = !started; started = 1;
     pthread_mutex_unlock(&lock);
     if (!go) return;
+    ring_reload();                                  /* the designs applied before */
     pthread_t t;
-    if (pthread_create(&t, NULL, band_thread, NULL)) { fprintf(stderr, "band: no thread\n"); return; }
+    if (pthread_create(&t, NULL, band_thread, NULL)) {
+        fprintf(stderr, "band: no thread\n");
+        pthread_mutex_lock(&lock); started = 0; pthread_mutex_unlock(&lock);   /* a later ring_start tries again */
+        return;
+    }
     pthread_detach(t);
 }
 
 int ring_custom(void) { return 1; }                 /* Home Assistant's light: drawn here, any colour */
-/* What the Dots' ledcontroller adds (ring.c): the assistant's own volume steps, each LED's own layer (the fill, the
- * rotation, LED by LED) and designs in place of stock's animations.  None of it on the band: no slots, nothing to
- * install, the rotation stays 0 */
-int ring_assistant_steps(void) { return 0; }
+int ring_assistant_steps(void) { return 1; }        /* the replies' own volume in cyan (P_ASSIST) */
+/* Each LED's own layer of the Dots' ledcontroller (ring.c: the fill, the rotation, LED by LED): not on the band, the
+ * rotation stays 0 */
 int ring_per_led(void) { return 0; }
-const struct ring_slot ring_slots[] = { { "", "", RING_PLAIN } };
-const int ring_nslots = 0;
-int ring_slot_available(int i) { (void)i; return 0; }
-int ring_slot_live(int i) { (void)i; return 0; }
+int ring_slot_available(int i) { return i >= 0 && i < ring_nslots; }      /* every slot is one of the patterns */
+int ring_slot_live(int i) { if (i < 0 || i >= ring_nslots) return 0; pthread_mutex_lock(&lock); int r = des[i].nframes > 0; pthread_mutex_unlock(&lock); return r; }
 int ring_leds(void) { return LEDS; }
-int ring_check(const char *applied, size_t n, char *err, size_t cap) { (void)applied; (void)n; snprintf(err, cap, "no LED ring on this model"); return -1; }
-void ring_reload(void) {}
 int ring_rotation(int set) { (void)set; return 0; }
+int ring_designs_live(void) { return 1; }
+
+int ring_check(const char *applied, size_t n, char *err, size_t cap)
+{
+    struct rd_design ds[RING_SLOTS_MAX]; int ids[RING_SLOTS_MAX], rc = 0;
+    memset(ds, 0, sizeof ds);
+    if (rd_applied_parse(applied, n, ds, ids)) { snprintf(err, cap, "not a set of designs"); rc = -1; }
+    for (int i = 0; i < ring_nslots; i++) {
+        if (!rc && ds[i].nframes && ds[i].leds != LEDS) {
+            snprintf(err, cap, "%s: drawn for %d LEDs, the band shows the ring's %d", ring_slots[i].id, ds[i].leds, LEDS);
+            rc = -1;
+        }
+        rd_free(&ds[i]);
+    }
+    return rc;
+}
+
+static int same_design(const struct rd_design *a, const struct rd_design *b)
+{
+    return a->nframes == b->nframes && a->loop == b->loop && a->leds == b->leds
+        && (!a->nframes || !memcmp(a->f, b->f, sizeof *a->f * (size_t)a->nframes));
+}
+
+/* state/ring-installed's designs from now on (an Apply: ringdesign.c wrote it); what shows with a changed design starts
+ * again with it, the rest goes on */
+void ring_reload(void)
+{
+    struct rd_design ds[RING_SLOTS_MAX]; int ids[RING_SLOTS_MAX], nd = 0; size_t n = 0;
+    char *t = rd_installed_read(&n);
+    memset(ds, 0, sizeof ds);
+    if (t && rd_applied_parse(t, n, ds, ids) != 0)                  /* not ours: what it parsed of it goes */
+        for (int i = 0; i < ring_nslots; i++) rd_free(&ds[i]);
+    free(t);
+    for (int i = 0; i < ring_nslots; i++) {
+        if (ds[i].nframes && ds[i].leds != LEDS) { fprintf(stderr, "band: the design for %s is for %d LEDs, left out\n", ring_slots[i].id, ds[i].leds); rd_free(&ds[i]); }
+        nd += ds[i].nframes > 0;
+    }
+    pthread_mutex_lock(&lock);
+    int changed[RING_SLOTS_MAX];
+    for (int i = 0; i < ring_nslots; i++) { changed[i] = !same_design(&des[i], &ds[i]); rd_free(&des[i]); des[i] = ds[i]; }
+    long long now = now_ms();
+    for (int i = 0; i < P_COUNT; i++) {                 /* what shows: from its start again only where its design changed */
+        int s = slot_of(i);
+        if (!act[i].on || (act[i].ms >= 0 && now >= act[i].at + act[i].ms) || s < 0 || !changed[s]) continue;
+        act[i].at = now; act[i].ms = shows_ms(i);
+    }
+    pthread_cond_signal(&cv);
+    pthread_mutex_unlock(&lock);
+    fprintf(stderr, "band: designs in %d place%s\n", nd, nd == 1 ? "" : "s");
+}
 
 void ring_set(const char *pattern)
 {
     int arg, i = find(pattern, &arg);
     if (i < 0) { fprintf(stderr, "band: no picture for \"%s\"\n", pattern); return; }
     pthread_mutex_lock(&lock);
-    if (!(act[i].on && i == P_VOLUME)) act[i].at = now_ms();       /* a volume step moves the fill, not a new start */
-    act[i].on = 1; act[i].arg = arg; wake_req = 1;
+    if (!(act[i].on && stepped(i))) act[i].at = now_ms();        /* a volume step moves the fill, not a new start */
+    act[i].on = 1; act[i].arg = arg; act[i].ms = shows_ms(i); wake_req = 1;
     if (i == P_LISTEN) atomic_store(&level_db, -1000);              /* the last command's loudness is not this one's */
     pthread_cond_signal(&cv);
     pthread_mutex_unlock(&lock);

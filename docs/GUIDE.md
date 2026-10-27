@@ -318,7 +318,8 @@ Beyond the README's two figures:
   or an opening then a loop. The designer paints LEDs with a brush or the whole ring, turns, mirrors, dims, makes
   spinning, fading and breathing frames, turns the hue of a whole design or a frame (how light each colour looks stays), has undo, and starts from Amazon's
   animation if you like; a preview plays it. "Recolour Amazon's…" on an animation is the short way to Amazon's own in
-  other colours.
+  other colours. A Ring / Band switch on the designer's stage shows the design as an Echo Show's band shows it (the
+  LEDs in a row, never turned), and paints there too; it opens on what this Echo has.
   Listening and its end turn towards whoever speaks: draw them with the talker where the arrow is, and the Echo makes
   the turned copies itself. Volume takes the colours of the design's first frame through Amazon's steps. Nothing
   changes on the ring until **Apply**: the Echo then writes the designs to its system partition and restarts the
@@ -340,7 +341,11 @@ Beyond the README's two figures:
   talker's side always in the middle: two microphones tell directions apart too poorly to turn it). The band keeps
   that strip of the screen for itself, 10 pixels by default ("Light band" on the settings page; 0 gives the whole
   screen to the apps and shows no band), so an app shown on the screen is never covered. The light "Light ring" works
-  there too, in any colour. The screen wakes for the band and sleeps 5 minutes after the last light (1 minute with
+  there too, in any colour, and so do your own designs: each shows on the band as the ring's twelve LEDs in a row,
+  the side that faces the talker in the middle, never turned (the settings page draws and edits them that way on
+  these models, and Apply shows them at once). A design made on a Dot works on the band and the other way round;
+  the designer's Ring / Band switch shows a design either way on any Echo.
+  The volume of voice replies shows in cyan, as on the Dots. The screen wakes for the band and sleeps 5 minutes after the last light (1 minute with
   the microphones off or in Do not disturb).
 - **Microphone off** plays Alexa's own sounds. A switch that is already off when hassmic starts is shown, not announced.
 - **Wake sound**: Alexa's own where the firmware has it; the Echo Show 8 1st gen has none and plays hassmic's short blip. On the
@@ -380,7 +385,7 @@ independent of each other:
 |---|---|---|
 | Music | Music Assistant, Bluetooth from a phone, `media_player.play_media` (not announcements) | the media player's volume |
 | Voice replies | what the voice assistant says, and announcements (also `tts.speak` or `play_media` with `announce` on the media player) | Assistant volume |
-| Echo sounds | the wake sound, button presses, Bluetooth and Drop In chimes | Sounds volume |
+| Echo sounds | the wake sound, button presses, Bluetooth and Drop In chimes (not the volume keys' tone: it plays at the volume they just set, so you hear the step; at 0 as quiet as the lowest step) | Sounds volume |
 | Timers | the ring of a finished timer | Timer volume |
 | Calls | the other side of a Drop In call (only while Drop In is on) | Call volume |
 
@@ -392,7 +397,8 @@ Copying settings to another Echo (Export, the Echos section) takes the switches 
 like the Echo's volume, that is for the room it is in.
 
 The same number sounds the same on every slider, and as that volume on a stock Echo (measured on an Echo Dot 2,
-within 0.3 dB). The volume buttons change what is playing: a Drop In call, a reply (the ring shows the steps in cyan),
+within 0.3 dB, and on an Echo Show 5, whose volume steps are its own: its top end is much flatter and its bottom end
+steeper than the Dot's; the other models use the Dot's until someone measures theirs with `tools/vol-curve.py`). The volume buttons change what is playing: a Drop In call, a reply (the ring shows the steps in cyan),
 a ringing timer, otherwise the music. On a Bluetooth speaker that sets its own volume (absolute volume) the speaker is
 set to the loudest of them and the Echo turns the others down, as on its own speaker (with the Echo's volume curve:
 how loud a number is depends on the speaker); the speaker's own buttons move the music.

@@ -81,6 +81,10 @@ Volume A` 127 of 0..127).
 
 ## The rest
 
+- Not tried on this Echo: the light ring designs on the band (`ring_band.c`, as on checkers, where they are), and its
+  volume curve: separate volumes take the Echo Dot 2's (`board.volume_curve` unset) until `tools/vol-curve.py` has
+  measured it. Likely checkers' (the same build and amplifier family), not assumed.
+
 - Light sensor: the device trees name a JSA1214 (checkers: STK3x1x) on MediaTek's alsps framework, the kernel has
   `CONFIG_ALS_FORMULA_CHANGE`. checkers' `als_ps/lux` is there (250 lux in a lit room on the first cronos).
 - Sounds: every one of checkers' entries is stored in this firmware's APKs, SpeechInteractionManager's `res/7E.mp3`

@@ -55,7 +55,7 @@ int   rd_applied_parse(const char *text, size_t n, struct rd_design *out, int *i
 char *rd_applied_read(size_t *n);
 /* state/ring-installed: those of them root is known to have installed (ring.c confirms by the set's digest) */
 char *rd_installed_read(size_t *n);
-void  rd_installed_set(const char *text, size_t n);
+int   rd_installed_set(const char *text, size_t n);   /* 0, or -1 (logged) */
 
 /* The settings page's side (web.c), each under the module's lock */
 size_t rd_status_json(char *out, size_t cap);         /* slots, the library's names, what is on the ring */

@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(ROOT, "tests"))
 from webclient import Browser
 HTTP_PORT = 16984
 KEY_VOLUMEUP, KEY_VOLUMEDOWN = 115, 114
+CLICK_PEAK = 10000                                      # the stand-in volume tone: 4800 samples at this level
 # The parts below run at once, each with Echos of its own (most of the time goes to audio played at real time and to
 # hassmic's own periods): part i's Echos on ESPHome port PORT + 2i, their settings pages one above
 PORT = 17100
@@ -67,8 +68,12 @@ class Echo:
                    HASSMIC_PLAY=os.path.join(self.tmp, "play.raw"), HASSMIC_MDNS_FILE=os.path.join(self.tmp, "mdns"),
                    HASSMIC_FAKE_ADDRS=os.path.join(self.tmp, "addrs"), HASSMIC_ARB_ADDR="127.255.255.255",
                    HASSMIC_MODELS=os.path.join(self.tmp, "models"), HASSMIC_LED_ROOT=os.path.join(self.tmp, "etc"),
-                   HASSMIC_FAKE_SPEAKER=self.speaker)
+                   HASSMIC_FAKE_SPEAKER=self.speaker, HASSMIC_EARCONS=os.path.join(self.tmp, "earcons") + "/")
         with open(env["HASSMIC_FAKE_ADDRS"], "w") as f: f.write("127.0.0.1\n")
+        os.makedirs(env["HASSMIC_EARCONS"], exist_ok=True)       # the volume keys' tone only (the rest: the built-in blip)
+        with wave.open(env["HASSMIC_EARCONS"] + "state_volume_adjust_tone.wav", "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(48000)
+            w.writeframes(struct.pack("<h", CLICK_PEAK) * 4800)
         self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.port), "-n", "Echo Dot", "-W", str(self.web),
                                       "-a", "0", "-z", "0", "-o", "0", "-b", keys], env=env, stderr=self.log)
 
@@ -171,6 +176,8 @@ async def part_off(url, full):
 
 async def part_separate(url, full):
     gain = lambda what: float(re.findall(rf"audio: {what} gain ([0-9.]+)", echo.text())[-1]) if f"{what} gain" in echo.text() else 1.0
+    clicks = lambda: len(re.findall(r"earcon: 4800 samples @ 48000 Hz, peak (\d+)", echo.text()))
+    click = lambda: ([int(x) for x in re.findall(r"earcon: 4800 samples @ 48000 Hz, peak (\d+)", echo.text())] or [None])[-1]
     # Separate: music 40 (MainVolume as it was), replies 60, sounds 20, timers 80.  Both mixer volumes at the loudest
     # (timers, 80), where libasp agrees with them; everything quieter turned down in our PCM by the Echo's curve
     # between its volume and 80 (main.c vol_db)
@@ -195,7 +202,8 @@ async def part_separate(url, full):
         await until(lambda: echo.music_file() == "50")             # written at most once a second, outside the lock
         check(echo.music_file() == "50", "the music volume kept in state/volume.music (the mixer says nothing of it)")
         c.media_player_command(mp.key, volume=0.9)
-        await until(lambda: echo.prop("MainVolume") == 90 and gain("music") == 1.0)
+        await until(lambda: echo.prop("MainVolume") == 90 and echo.prop("TTSVolume") == 90 and gain("music") == 1.0
+                    and near(gain("tts"), g(60, 90)))     # all of it: the mixer's two and the gains come apart (CI)
         check(echo.prop("MainVolume") == 90 and echo.prop("TTSVolume") == 90 and gain("music") == 1.0 and near(gain("tts"), g(60, 90)),
               "music the loudest: the mixer follows it, its gain 1, the replies' gain retaken under 90")
         seen, res = await watch(echo, "TTSVolume", c.send_voice_assistant_announcement_await_response(url, 15, "x"))
@@ -216,10 +224,14 @@ async def part_separate(url, full):
         peaks = [int(x) for x in re.findall(r"earcon: 5760 samples @ 48000 Hz, peak (\d+)", echo.text())]
         want = (await full) * g(80, 90)
         check(abs(peaks[-1] - want) <= 3, f"timers at 80 under 90: the ring at {peaks[-1]} (want {want:.0f})")
+        before = clicks()
         echo.key(KEY_VOLUMEDOWN)                       # while it rings: the timers' volume
         await until(lambda: num("timer_volume") == 70)
         check(num("timer_volume") == 70 and echo.prop("MainVolume") == 90 and "volume: timers 70" in echo.text(),
               f"a volume key while a timer rings moves the timers' volume ({num('timer_volume')})")
+        await until(lambda: clicks() > before)
+        check(clicks() > before and abs(click() - CLICK_PEAK * g(70, 90)) <= 3,
+              f"... and its tone plays at that 70, not at the sounds' 20 ({click()}, want {CLICK_PEAK * g(70, 90):.0f})")
         c.media_player_command(mp.key, command=2)
         await asyncio.sleep(0.5)
         ann = asyncio.ensure_future(c.send_voice_assistant_announcement_await_response(url, 15, "x"))
@@ -230,11 +242,15 @@ async def part_separate(url, full):
         check(num("assistant_volume") == 70 and near(gain("tts"), g(70, 90)) and echo.prop("TTSVolume") == 90,
               f"a volume key during a reply moves the replies' volume (60 -> 70; {num('assistant_volume')})")
         await ann
+        before = clicks()
         echo.key(KEY_VOLUMEDOWN)                       # nothing plays: the music
         moved = lambda: "volume: 80" in echo.text() and echo.prop("MainVolume") == 80 and echo.prop("TTSVolume") == 80
         await until(moved)                             # every part: the mixer's two volumes and the log come apart (CI)
         check(moved(),
               "a volume key with nothing playing moves the music (90 -> 80: the mixer with it, the loudest still)")
+        await until(lambda: clicks() > before)
+        check(clicks() > before and abs(click() - CLICK_PEAK) <= 3,
+              f"its tone at the music's 80, the loudest: full scale, so the step is heard ({click()})")
         c.number_command(nums["sounds_volume"].key, 100)
         loud = lambda: (echo.prop("MainVolume") == 100 and echo.prop("TTSVolume") == 100 and near(gain("music"), g(80, 100))
                         and echo.config().get("sounds_volume") == "100")   # the mixer, the gains, state/config: one at a time
@@ -254,6 +270,8 @@ async def part_separate(url, full):
 
 async def part_linked(url, full):
     gain = lambda what: float(re.findall(rf"audio: {what} gain ([0-9.]+)", echo.text())[-1]) if f"{what} gain" in echo.text() else 1.0
+    clicks = lambda: len(re.findall(r"earcon: 4800 samples @ 48000 Hz, peak (\d+)", echo.text()))
+    click = lambda: ([int(x) for x in re.findall(r"earcon: 4800 samples @ 48000 Hz, peak (\d+)", echo.text())] or [None])[-1]
     # Following the music: replies 20 points above it, sounds 20 below, timers their own 30; music 40 (MainVolume as it was)
     echo = Echo(2, "separate_volumes=on\nassistant_volume_linked=on\nassistant_volume_offset=20\n"
                 "sounds_volume_linked=on\nsounds_volume_offset=-20\ntimer_volume=30\n")
@@ -278,10 +296,14 @@ async def part_linked(url, full):
         await until(lambda: echo.text().count("media: announce") >= 1)
         await asyncio.sleep(0.8)
         check(near(gain("tts"), 1.0), "the announcement at the replies' 70, the mixer's own")
+        before = clicks()
         echo.key(KEY_VOLUMEUP)                         # during a reply that follows the music: the music
         await until(lambda: "volume: 60" in echo.text() and echo.prop("MainVolume") == 80)
         check("volume: 60" in echo.text() and echo.prop("MainVolume") == 80 and "volume: assistant" not in echo.text(),
               "a volume key during a linked reply moves the music, the reply with it (60 + 20 = 80)")
+        await until(lambda: clicks() > before)
+        check(clicks() > before and abs(click() - CLICK_PEAK) <= 3,
+              f"... its tone at the reply's 80, the loudest, not the music's 60 ({click()}, want {CLICK_PEAK})")
         await ann
         await c.disconnect()
     finally:

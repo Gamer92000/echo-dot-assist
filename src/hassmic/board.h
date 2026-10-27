@@ -45,6 +45,11 @@ struct board {
     const char *light_sensor[3];    /* files the stock light sensor HAL reads lux from, first that opens; {NULL}: none.  "tcs3400:<dir>": raw channels of
                                        a TCS3400 under <dir>/input*, main.c lux_tcs3400 */
     int volume_steps;               /* volume_step-NN animations of ledcontroller */
+    /* The speaker's volume curve: dB under volume 100 at volumes 0..100, each `at` above the last (tests/unit/volcurve_test.c
+     * checks it: the same one twice divides by 0), {-1} after the last (volcurve.c:
+     * separate volumes turn each kind down by it).  NULL: the Echo Dot 2's, measured there and taken where nobody has
+     * measured (tools/vol-curve.py measures an Android Echo's with a Dot beside it) */
+    const struct board_vol { int at; float db; } *volume_curve;
 
     /* speaker gain (spkgain.c): an ALSA control of card 0 that sets the speaker amplifier's analog gain, which the
      * settings page may raise; NULL: none.  stock: what the speaker plays at on a stock Echo (what the audio HAL's
@@ -63,4 +68,6 @@ struct board {
 };
 
 extern const struct board board;
+/* volcurve.c: the curve at volume v (clamped to 0..100): dB under volume 100, board.volume_curve's or the Echo Dot 2's */
+float board_vol_db(int v);
 #endif
