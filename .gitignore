@@ -17,3 +17,6 @@ secrets/
 xda_post.md
 __pycache__/
 *.pyc
+
+# Cube install archives and locally generated integrity files
+dist/
