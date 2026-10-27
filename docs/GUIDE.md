@@ -466,11 +466,22 @@ Echo announces itself again after 100 s without Home Assistant, then less and le
 | [Whisper detection](#whisper-detection) | Last request whispered |
 | Wake word events (off by default) | Wake word (event): `detected` (the Echo took it), `near_miss` (Amazon's engine heard something close, did not wake; none with microWakeWord), `answered_elsewhere` (another Echo or satellite answered), `no_speech` (woke, nothing said). A `detected` followed by `no_speech` is a false wake. Nothing while muted. Near misses can come often while the TV plays: an entry in Home Assistant's history each |
 | Request and reply text (off by default) | Last heard (what speech-to-text understood), Last reply (what the assistant answered). Both are cleared when a request starts, so the same request twice is still a change. Home Assistant takes at most 255 characters per state: a longer reply ends in "…". Every request and reply goes into Home Assistant's history while this is on. ESPHome only |
+| Home Assistant VAD compatibility (off by default) | Request audio padding (0–1000 ms). Switching on starts at 800 ms; switching off resets to zero and hides the number. Zero while on keeps the number but sends no padding. ESPHome only |
 | [Wi-Fi motion](#wi-fi-motion) | motion sensor, sensitivity |
 | Light sensor (off by default) | Illuminance (the room's light in lux); "LED brightness" then also follows auto brightness, an entry in the logbook every few minutes. Off, it shows only levels you set |
 | Bluetooth audio from phones | Bluetooth pairing |
 | [Playing on a Bluetooth speaker](#playing-on-a-bluetooth-speaker) | Bluetooth speaker search, Play on Bluetooth speaker, Bluetooth speaker, Bluetooth speaker delay |
 | [Separate volumes](#separate-volumes) (off by default, on the Volume card) | Assistant volume, Sounds volume, Timer volume, Call volume (each while it has its own; calls with Drop In) |
+
+"Home Assistant VAD compatibility" can help if Home Assistant misses short commands spoken straight after the
+wake word, or keeps listening without responding. VAD is Home Assistant's speech detector. This option adds a
+little silence before your command audio to help it detect your speech; you can speak normally without adding a
+pause. The card is shown with Amazon or microWakeWord, and hidden when "Home Assistant" is the wake-word engine,
+because it is not needed there. Switching engines preserves the saved compatibility setting.
+
+Only ESPHome requests started by this Echo's own wake word are padded. Button starts, follow-up conversations,
+requests started by Home Assistant and Wyoming are unchanged. Speech is not trimmed or amplified differently.
+The duration is saved and included in settings exports.
 
 **On the settings page only**:
 

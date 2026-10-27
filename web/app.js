@@ -331,6 +331,10 @@ const HELP = {
   request_text: { icon: 'whisper', ha: ['Last heard', 'Last reply'], help: 'Two text sensors in Home Assistant: what speech-to-text understood of your last request, and what the assistant answered. For a dashboard beside the Echo, or an automation on a word it keeps mishearing. Both are cleared when a new request starts, so saying the same thing twice still counts as a change.',
     note: 'Home Assistant keeps every request and reply in its history while this is on. It takes at most 255 characters per state: a longer reply ends in "…".' },
   whisper_detection: { icon: 'whisper', ha: ['Last request whispered'], help: 'Tells whether your last request was whispered, before speech-to-text finishes. Use it in your conversation agent\'s prompt to have it answer quietly.' },
+  pad_request_audio: { icon: 'wave', ha: ['Request audio padding'], when: () => settingValue('wake_engine') !== 'homeassistant',
+    help: 'Enable if Home Assistant misses short commands spoken straight after the wake word, or keeps listening without responding. It adds a little silence before your command audio to help Home Assistant detect your speech. You can speak normally without adding a pause.',
+    note: 'Starts at 800 ms. Turning this off resets the padding to zero and hides the Home Assistant control. Only affects requests started by this Echo\'s own wake word using ESPHome.' },
+  request_audio_padding: { parent: 'pad_request_audio', help: 'Silence to send before each local wake-word request, from 0 to 1000 ms. Zero sends no padding but keeps this control in Home Assistant while the feature is on.' },
   wifi_motion: { icon: 'wifi', tag: 'Experimental', ha: ['Wi-Fi motion', 'Wi-Fi motion sensitivity'], help: 'A motion sensor without extra hardware: someone walking between the Echo and your Wi-Fi router changes how the Echo receives the router. It shows motion, not presence, sees best along that path, and other Wi-Fi traffic can set it off.' },
   wifi_motion_sensitivity: { parent: 'wifi_motion', help: 'How much the signal has to change to count as motion. Higher catches more, with more false alarms.' },
   light_sensor: { icon: 'sun', ha: ['Illuminance'], help: 'The room\'s light in lux from the Echo\'s light sensor, for automations. With this on, "LED brightness" in Home Assistant also follows the ring while auto brightness moves it, which puts an entry in its logbook every few minutes. Off, auto brightness works the same; Home Assistant only sees the levels you set.' },
@@ -628,6 +632,7 @@ function featureCard(s, children) {
     info.ha ? h('div', { class: 'f-ha' }, icon('ha'), h('span', {}, 'In Home Assistant while on: ', info.ha.map((n, i) => [i ? ', ' : '', h('b', {}, n)]))) : null);
   controls.set(s.name, { saved, root: card, update: (x) => {
     c.update(x); card.classList.toggle('on', !!x.value);
+    card.classList.toggle('hidden', !!(info.when && !info.when()));
     kids.forEach((k, i) => { const w = (HELP[children[i].name] || {}).when; k.classList.toggle('hidden', !x.value || !!(w && !w())); });
     if (info.status) status.replaceChildren(...[info.status()].filter(Boolean));
   } });

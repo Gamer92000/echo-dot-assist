@@ -2297,6 +2297,20 @@ Run in this order. Each step says what it proves.
       too (`dropin_was`, the core's copy under the lock).  Tests: `fake_ha_stop_word.py` (off: ring + stop in the
       round, THINKING + stop in the round), `fake_ha_dropin.py` (wake word, stop after the round in a call: hung up,
       one abort); red before.
+- [x] Optional request audio padding (2026-10-26, PC): Features card "Home Assistant VAD compatibility" (`pad_request_audio`, off
+      by default), with "Request audio padding" (`request_audio_padding`, 0–1000 ms) in the page and HA while on.
+      Off→on seeds 800 ms; repeated on keeps an explicit zero; off resets zero. Switch-first config/import load
+      preserves saved custom values and explicit zero in either order; hidden writes cannot resurrect padding.
+      `pipeline_start` sends static zero chunks after start/streaming, before capture replay, under `core_lock`:
+      only local wake-originated ESPHome requests, no sleep or changes to mic gain/trimming. Real protocol peers
+      test 1/137/800/1000 ms (32/4384/25600/32000 zero bytes), followed by 16000 ordered synthetic command bytes
+      with unchanged gain; dropped, duplicated and reordered chunks are rejected. Button, follow-up,
+      server-announcement starts, remote wake and Wyoming are unchanged. Tests: `fake_ha_request_padding.py` (signed HTTP,
+      HA relisting/commands, persistence, imports, bounds), `fake_ha_request_padding_audio.py` (PCM),
+      `web_request_padding.py` (actual Chrome DOM when installed). All three failed before implementation.
+      Card hidden when the wake-word engine is Home Assistant; visible with Amazon or microWakeWord, preserving
+      saved values when switching. These synthetic tests check the protocol and settings contract, not
+      Home Assistant's VAD/STT effectiveness on a physical Echo.
 - [x] Request and reply text (2026-10-25, GitHub issue #53): text sensors "Last heard" (`last_heard`, KEY_LAST_HEARD,
       STT_END's `text`) and "Last reply" (`last_reply`, KEY_LAST_REPLY, TTS_START's `text`), feature setting
       `request_text` (off by default, exported).  RUN_START sends both empty, so a request said twice is two changes

@@ -49,6 +49,7 @@ static int light_sensor;                                /* off: auto brightness 
 static int bt_stay;                                     /* a2dp.c gets it only while the feature is on: off drops the link */
 static int wake_events;                                 /* off: an event per near miss is HA history most homes never read */
 static int request_text;                                /* off: what people say kept in HA's history is theirs to choose */
+static int pad_request_audio, request_audio_padding;
 
 static const char *state_dir(void) { const char *e = getenv("HASSMIC_STATE"); return e ? e : "/data/local/hassmic/state"; }
 static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "%s/%s", state_dir(), file); }
@@ -58,7 +59,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, STOP_ENDS, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
-          CALL_LINK, CALL_LEVEL, CALL_OFFSET, NSET };
+          CALL_LINK, CALL_LEVEL, CALL_OFFSET, PAD_REQUEST_AUDIO, REQUEST_AUDIO_PADDING, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
  * listed()); everything else here is on the settings page only, except what Home Assistant always shows (wake sound,
@@ -95,6 +96,8 @@ static const struct setting table[NSET] = {
     [WAKE_EVENTS] = { "wake_events", "Wake word events", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* proto_esphome.c's "Last heard" and "Last reply" text sensors (issue #53) */
     [REQUEST_TEXT] = { "request_text", "Request and reply text", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
+    [PAD_REQUEST_AUDIO] = { "pad_request_audio", "Home Assistant VAD compatibility", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
+    [REQUEST_AUDIO_PADDING] = { "request_audio_padding", "Request audio padding", "Features", "ms", S_INT, 0, 1000, 1, 0 },
     [WIFI_MOTION] = { "wifi_motion", "Wi-Fi motion (experimental)", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [WIFI_SENS]   = { "wifi_motion_sensitivity", "Wi-Fi motion sensitivity", "Features", NULL, S_INT, WIFIMOTION_SENS_MIN, WIFIMOTION_SENS_MAX, 1, 0 },
     [LIGHT_SENSOR] = { "light_sensor", "Light sensor", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
@@ -229,6 +232,8 @@ int settings_get(const struct setting *s)
     case LIGHT_SENSOR: return light_sensor;
     case WAKE_EVENTS: return wake_events;
     case REQUEST_TEXT: return request_text;
+    case PAD_REQUEST_AUDIO: return pad_request_audio;
+    case REQUEST_AUDIO_PADDING: return request_audio_padding;
     case DROPIN: return dropin_enable(-1);
     case DROPIN_ANSWER: return dropin_ask(-1);
     case SPK_GAIN: return spkgain_get();
@@ -279,6 +284,12 @@ static void put(enum id i, int v)
     case LIGHT_SENSOR: light_sensor = v; break;
     case WAKE_EVENTS: wake_events = v; break;
     case REQUEST_TEXT: request_text = v; break;
+    case PAD_REQUEST_AUDIO:
+        if (v && !pad_request_audio && !request_audio_padding) request_audio_padding = 800;
+        pad_request_audio = v;
+        if (!v) request_audio_padding = 0;
+        break;
+    case REQUEST_AUDIO_PADDING: request_audio_padding = pad_request_audio ? v : 0; break;
     case BT_OUT_DELAY: a2dp_out_delay(v); break;                    /* a2dp.c saves it */
     case BT_OUT_AWAKE: btout_keep_awake(v); break;
     case BT_OUT_STAY: bt_stay = v; a2dp_out_stay(v && bt_speaker); break;
@@ -327,8 +338,9 @@ static size_t format(const struct setting *s, char *out, size_t cap)
 /* ---------------------------------------------------------------- file */
 
 /* Applied before the rest, whatever order a file has them in (state/config by hand, an import): switching seeds what
- * comes after it (separate volumes the levels, following the music the offset), and the saved values must then win */
-static int switches(int i) { return i == VOL_SPLIT || i == ASSIST_LINK || i == SOUNDS_LINK || i == TIMER_LINK || i == CALL_LINK; }
+ * comes after it (separate volumes the levels, following the music the offset, request padding its initial duration),
+ * and the saved values must then win, including an explicit zero */
+static int switches(int i) { return i == VOL_SPLIT || i == ASSIST_LINK || i == SOUNDS_LINK || i == TIMER_LINK || i == CALL_LINK || i == PAD_REQUEST_AUDIO; }
 
 /* What state/config holds: the settings no other module keeps */
 static int ours(enum id i) { return i != ARB && i != SS_UNPAIRED && i != EQ_BASS && i != EQ_MID && i != EQ_TREBLE && i != BT_OUT_DELAY && i != VOLUME; }
@@ -429,6 +441,7 @@ int settings_peek(const char *name, char *out, size_t cap)
 }
 
 int settings_mic_level(void) { return mic_level; }
+int settings_request_audio_padding(void) { return request_audio_padding; }
 int settings_on(const char *name) { const struct setting *s = settings_find(name); return s && s->type == S_BOOL && settings_get(s); }
 const struct bt_lang *settings_bt_lang(void) { return &bt_langs[bt_lang]; }
 int settings_bt_lang_index(int set) { if (set >= 0 && set < bt_lang_count) bt_lang = set; return bt_lang; }

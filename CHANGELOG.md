@@ -4,6 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-26
 
+- **Home Assistant VAD compatibility.** The Features card adds "Request audio padding" in Home Assistant
+  (0–1000 ms, initially 800 ms when switched on). Enable it if Home Assistant misses short commands spoken straight
+  after the wake word or keeps listening without responding. Off by default; switching it off resets the value to
+  zero and hides the number. The card is hidden when Home Assistant listens for the wake word.
+  Only ESPHome requests started by the Echo's own wake word are padded, without delaying or trimming speech.
 - **Echo Dot 2 from Windows, step by step** (issue #67). A new page, [docs/WINDOWS.md](docs/WINDOWS.md), for
   people who have never used a command line: how to tell which Echo you have, the five tools to install with every
   command to paste, how to get this project, what each step of the setup asks of you (with the button gesture for

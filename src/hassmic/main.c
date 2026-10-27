@@ -646,6 +646,17 @@ static void pipeline_start(uint64_t from)    /* from: where the wake word that s
     run_wake = from != 0;
     proto->start();
     atomic_store(&streaming, 1);
+    /* A local wake's first command can reach HA before its VAD is ready.  Send silence, not a delay: the lock keeps
+     * capture/replay behind it, and real mic audio still goes through the usual gain and wake-word trimming. */
+    if (proto == &proto_esphome && core_local_wake && from) {
+        static const short zero[512];
+        int left = settings_request_audio_padding() * CAP_RATE / 1000;
+        while (left > 0) {
+            int n = left < (int)(sizeof zero / sizeof zero[0]) ? left : (int)(sizeof zero / sizeof zero[0]);
+            proto->audio(zero, (size_t)n * sizeof zero[0]);
+            left -= n;
+        }
+    }
     listening(core_local_wake);
     if (core_local_wake) core_set_state(LISTENING);
 }

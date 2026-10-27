@@ -128,7 +128,7 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF, KEY_WEB_URL, KEY_IDENTIFY, KEY_RESET,
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
        KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON, KEY_LIGHT, KEY_ASSIST_VOLUME, KEY_SOUNDS_VOLUME, KEY_TIMER_VOLUME,
-       KEY_CALL_VOLUME, KEY_WAKE, KEY_RING_FILL, KEY_RING_ROTATION, KEY_RING_LEDS, KEY_LAST_HEARD, KEY_LAST_REPLY };
+       KEY_CALL_VOLUME, KEY_WAKE, KEY_RING_FILL, KEY_RING_ROTATION, KEY_RING_LEDS, KEY_LAST_HEARD, KEY_LAST_REPLY, KEY_REQUEST_PADDING };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -362,6 +362,7 @@ static void send_setting(int key)       /* lock held */
     pb_fixed32(&b, 1, key);
     switch (key) {
     case KEY_MIC_LEVEL: pb_float(&b, 2, settings_mic_level()); send_state(NUMBER_STATE, &b); break;
+    case KEY_REQUEST_PADDING: pb_float(&b, 2, settings_get(settings_find("request_audio_padding"))); send_state(NUMBER_STATE, &b); break;
     case KEY_MUTE:  pb_uint(&b, 2, core_muted()); send_state(SWITCH_STATE, &b); break;
     case KEY_WAKE_SOUND: pb_uint(&b, 2, core_wake_sound(-1)); send_state(SWITCH_STATE, &b); break;
     case KEY_BT_PAIRING: if (ble_present()) { pb_uint(&b, 2, a2dp_pairing()); send_state(SWITCH_STATE, &b); } break;
@@ -551,6 +552,7 @@ static int listed(int key)
     case KEY_SOUND: return settings_on("sound_detection");
     case KEY_WAKE: return settings_on("wake_events");
     case KEY_LAST_HEARD: case KEY_LAST_REPLY: return settings_on("request_text");
+    case KEY_REQUEST_PADDING: return settings_on("pad_request_audio");
     case KEY_BT_PAIRING: return ble_present() && settings_on("bluetooth_audio");
     case KEY_BT_OUT_SEARCH: case KEY_BT_OUT: case KEY_BT_OUT_STATUS: case KEY_BT_OUT_DELAY: return ble_present() && settings_on("bluetooth_speaker");
     case KEY_ARB_PEERS: return arb_running() && settings_on("arbitration");
@@ -573,6 +575,12 @@ static int listed(int key)
 
 static void send_setting_entities(void)
 {
+    if (listed(KEY_REQUEST_PADDING)) {
+        const struct setting *s = settings_find("request_audio_padding");
+        PB(b, 192); pb_str(&b, 1, s->name); pb_fixed32(&b, 2, KEY_REQUEST_PADDING); pb_str(&b, 3, s->label);
+        pb_str(&b, 5, "mdi:waveform"); pb_float(&b, 6, s->min); pb_float(&b, 7, s->max); pb_float(&b, 8, 1);
+        pb_uint(&b, 10, 1); pb_str(&b, 11, s->unit); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b);
+    }
     static const char *const eq_ids[] = { "equalizer_bass", "equalizer_mid", "equalizer_treble" };
     static const char *const eq_labels[] = { "Equalizer bass", "Equalizer mid", "Equalizer treble" };   /* sort together in HA */
     for (int i = 0; i < 3; i++) {       /* like the Alexa app's sliders */
@@ -746,6 +754,11 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
         static const char *const names[] = { "assistant_volume", "sounds_volume", "timer_volume", "call_volume" };
         char v[8], e[80]; snprintf(v, sizeof v, "%d", num < 0 ? 0 : num > 100 ? 100 : (int)lroundf(num));
         settings_set(names[key - KEY_ASSIST_VOLUME], v, e, sizeof e); return;
+    }
+    else if (type == NUMBER_COMMAND && key == KEY_REQUEST_PADDING && listed(key)) {
+        if (!isfinite(num) || num < 0 || num > 1000) return;
+        char v[8], e[80]; snprintf(v, sizeof v, "%d", (int)lroundf(num));
+        settings_set("request_audio_padding", v, e, sizeof e); return;
     }
     else if (type == NUMBER_COMMAND && key == KEY_RING_FILL && listed(key)) {
         struct ring_light l; ring_light_get(&l); l.fill = num < 0 ? 0 : num > 100 ? 100 : (int)lroundf(num);
@@ -1462,7 +1475,7 @@ static void send_all_settings(void)
         send_setting(KEY_UPDATE); send_setting(KEY_WHISPERED);
         send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING);
         send_setting(KEY_DROPIN_PEER); send_setting(KEY_DROPIN_STATE);
-        send_setting(KEY_LAST_HEARD); send_setting(KEY_LAST_REPLY);
+        send_setting(KEY_LAST_HEARD); send_setting(KEY_LAST_REPLY); send_setting(KEY_REQUEST_PADDING);
         send_setting(KEY_ASSIST_VOLUME); send_setting(KEY_SOUNDS_VOLUME); send_setting(KEY_TIMER_VOLUME); send_setting(KEY_CALL_VOLUME);
         send_light_states();
 }

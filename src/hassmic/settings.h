@@ -29,6 +29,7 @@ void settings_preset(void);             /* state/preset (scripts/setup.sh --pres
 /* one value as state/config has it, before settings_load (main.c: the wake word engine); no lock needed.  0, -1: none */
 int  settings_peek(const char *name, char *out, size_t cap);
 int  settings_mic_level(void);
+int  settings_request_audio_padding(void);     /* ms; zero while the feature is off */
 int  settings_on(const char *name);     /* a bool setting's value; 0 if this Echo has no such setting */
 const struct bt_lang *settings_bt_lang(void);
 int  settings_bt_lang_index(int set);   /* -1 reads */
