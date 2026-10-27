@@ -328,7 +328,8 @@ static int key_set(const unsigned char *k, size_t len)
  * ahead of that gain (micdenoise.h), taking the noise down by up to 6, 9 or 12 dB; it sits in the settings file's first
  * field, which held the old noise suppression level. */
 
-static int have_light;                  /* a light sensor answered at start: auto brightness is listed, illuminance with the feature */
+static int have_light;                  /* a light sensor answered at start: illuminance is listed, with the feature */
+static int have_auto;                   /* and something follows it (core_led_has_auto): auto brightness too */
 
 /* Home Assistant takes no state over 255 characters, whatever the integration (MAX_LENGTH_STATE_STATE: a longer one
  * turns unknown), and a reply from an LLM agent is often longer: cut on a character, with an ellipsis.  Characters,
@@ -398,7 +399,7 @@ static void send_setting(int key)       /* lock held */
     } break;
     case KEY_RING_FILL: { struct ring_light l; ring_light_get(&l); pb_float(&b, 2, l.fill); send_state(NUMBER_STATE, &b); } break;
     case KEY_RING_ROTATION: pb_float(&b, 2, ring_rotation(-1)); send_state(NUMBER_STATE, &b); break;
-    case KEY_LED_AUTO: if (have_light) { pb_uint(&b, 2, core_led_auto(-1)); send_state(SWITCH_STATE, &b); } break;
+    case KEY_LED_AUTO: if (have_auto) { pb_uint(&b, 2, core_led_auto(-1)); send_state(SWITCH_STATE, &b); } break;
     case KEY_ASSIST_VOLUME: case KEY_SOUNDS_VOLUME: case KEY_TIMER_VOLUME: case KEY_CALL_VOLUME:     /* VOL_* order */
         pb_float(&b, 2, core_kind_volume(key - KEY_ASSIST_VOLUME, -1)); send_state(NUMBER_STATE, &b); break;
     case KEY_LED_BRIGHTNESS: { int v = core_led_brightness(-1); if (v >= 0) { pb_float(&b, 2, v); send_state(NUMBER_STATE, &b); } } break;
@@ -519,7 +520,7 @@ static void send_light_entities(void)
       pb_str(&b, 5, "The light ring LED by LED: \"#rrggbb\" each, \"\" for dark, from where its fill starts"); send_msg(LIST_SERVICE, &b); }
     if (listed(KEY_LUX)) { PB(b, 192); pb_str(&b, 1, "illuminance"); pb_fixed32(&b, 2, KEY_LUX); pb_str(&b, 3, "Illuminance"); pb_str(&b, 6, "lx");
           pb_uint(&b, 7, 0); pb_str(&b, 9, "illuminance"); pb_uint(&b, 10, 1); send_msg(LIST_SENSOR, &b); }
-    if (have_light) {
+    if (have_auto) {
         { PB(b, 160); pb_str(&b, 1, "led_auto_brightness"); pb_fixed32(&b, 2, KEY_LED_AUTO); pb_str(&b, 3, "LED auto brightness");
           pb_str(&b, 5, "mdi:brightness-auto"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
     }
@@ -557,7 +558,7 @@ static int listed(int key)
     case KEY_ARB_SERVICE: return arb_running();     /* the network, which runs either way */
     case KEY_WHISPERED: return core_whisper_model() && settings_on("whisper_detection");
     case KEY_WIFI_MOTION: case KEY_WIFI_MOTION_SENS: return wifimotion_present() && settings_on("wifi_motion");
-    case KEY_LED_AUTO: return have_light;
+    case KEY_LED_AUTO: return have_auto;
     case KEY_LUX: return have_light && settings_on("light_sensor");
     case KEY_LIGHT: return ring_custom();
     case KEY_RING_FILL: case KEY_RING_ROTATION: case KEY_RING_LEDS: return ring_per_led();
@@ -736,7 +737,7 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     else if (type == NUMBER_COMMAND && key == KEY_WIFI_MOTION_SENS && wifimotion_present()) {
         wifimotion_sensitivity((int)lroundf(num)); settings_save(); send_setting(key); return;
     }
-    else if (type == SWITCH_COMMAND && key == KEY_LED_AUTO && have_light) {
+    else if (type == SWITCH_COMMAND && key == KEY_LED_AUTO && have_auto) {
         core_led_auto(on); settings_save(); send_setting(key); return;              /* the level follows through light_thread */
     }
     else if (type == NUMBER_COMMAND && key == KEY_LED_BRIGHTNESS) {                  /* a level of its own: auto off, or it moves */
@@ -1687,7 +1688,7 @@ static void serve(int fd)
     unsigned char *buf = malloc(1 << 16), *pt = malloc(1 << 16), pre; uint32_t len, type, cap = 1 << 16; int slot = -1, n = 0, enc = 0;
     if (!buf || !pt) { free(buf); free(pt); return; }
     pthread_mutex_lock(&core_lock);
-    { static int loaded; if (!loaded) { loaded = 1; have_light = !isnan(core_lux()); settings_load(); key_load();
+    { static int loaded; if (!loaded) { loaded = 1; have_light = !isnan(core_lux()); have_auto = core_led_has_auto(); settings_load(); key_load();
                                        pthread_t t;
                                        pthread_create(&t, NULL, light_thread, NULL); pthread_detach(t);
                                        adbwifi_start(adb_changed); wifimotion_start(wifi_changed); update_start(update_changed);

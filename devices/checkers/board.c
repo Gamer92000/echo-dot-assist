@@ -1,0 +1,82 @@
+/* Echo Show 5 1st gen 2019 (checkers), Fire OS 6574.1.  Device facts from the firmware only (no Echo Show tried yet):
+ * docs/re-checkers.md.  Values marked "verify" need the running device. */
+#include "board.h"
+#include <stddef.h>
+
+/* No earcon folder in this firmware: stock's sounds are resources of its apps, all stored uncompressed (sounds.c reads
+ * them out of the APKs).  SpeechInteractionManager's names are shrunk (res/7E.mp3); its resources.arsc maps them back:
+ * ful_ui_wakesound_hybrid = res/7E.mp3 (ban_ui_wakesound, res/-E.ogg, is the other product's, and Ogg).  No setup
+ * beacon in any app: the built-in tone stays for Identify. */
+#define SIM  "/system/priv-app/SpeechInteractionManager/SpeechInteractionManager.apk"
+#define KSUI "/system/priv-app/KnightSystemUI/KnightSystemUI.apk"
+#define KSET "/system/priv-app/KnightSettings/KnightSettings.apk"
+#define COMM "/system/priv-app/com.amazon.comms.multimodaltachyonarm/com.amazon.comms.multimodaltachyonarm.apk"
+static const struct board_sound sounds[] = {
+    { "ui_wakesound", SIM, "res/7E.mp3" },
+    { "ui_wakesound_touch", SIM, "res/7E.mp3" },
+    { "state_privacy_mode_on", KSUI, "res/raw/kni_controls_privacy_mode_on.mp3" },
+    { "state_privacy_mode_off", KSUI, "res/raw/kni_controls_privacy_mode_off.mp3" },
+    { "state_volume_adjust_tone", KSUI, "res/raw/kni_controls_volume_adjust.mp3" },
+    { "state_bluetooth_connected", KSET, "res/raw/kni_system_bluetooth_bt_connected.mp3" },
+    { "state_bluetooth_disconnected", KSET, "res/raw/kni_system_bluetooth_bt_disconnected.mp3" },
+    { "comms_drop_in_incoming", COMM, "res/raw/ful_comms_drop_in_incoming.mp3" },
+    { "comms_call_connected", COMM, "res/raw/ful_comms_call_connected.mp3" },
+    { "comms_call_disconnected", COMM, "res/raw/ful_comms_call_disconnected.mp3" },
+    { "comms_call_incoming_ringtone", COMM, "res/raw/ful_comms_call_incoming_ringtone.mp3" },
+    { "comms_outbound_ringtone", COMM, "res/raw/ful_comms_outbound_ringtone.mp3" },
+    { NULL, NULL, NULL },
+};
+
+const struct board board = {
+    .model = "Echo Show 5 (checkers)",
+    .project = "hassmic.echo-show-5",
+    .product = "Echo Show 5 (hassmic)",
+    .default_name = "Echo Show 5",                                 /* + MAC: "Echo Show 5 5695c4"; slug = the project's model */
+    .codename = "checkers",
+
+    /* gpio-keys: volume up/down only, and from the EVT boards on the camera shutter (EV_SW 9).  No action button.  By
+     * name: the event numbers depend on the probe order (the kernel's DTBs: gpio-keys has no label, so the input device
+     * takes the platform device's name; MediaTek's matrix keypad is "mtk-kpd", nothing on it here) */
+    .keypad = "name:gpio-keys",
+    .action_combo = 1,                                              /* the settings page's login, adb, Improv */
+    .grab_keys = 1,                                                 /* else PhoneWindowManager turns its stream volume too */
+    .privacy_state = "/sys/devices/platform/amazon-gating/state",   /* chowned to system by /init.project.rc */
+    /* the gating driver's own input device: "mute", KEY_POWER (0x74, DTB); any event there means a latch read
+     * (buttons.c privacy_reader), the once-a-second read of the state catches it otherwise.  getevent -il on the first
+     * Echo Show (2026-10-13): "gating", /dev/input/event0, KEY_POWER */
+    .privacy_input = "name:gating",
+    .privacy_latch = 1,
+
+    .bt_dev = "/dev/stpbt",                                         /* MT7668 combo, btmtksdio.ko */
+    .bt_service = NULL,                                             /* none: Android's stack (app/Bluetooth) is off the partition */
+    .bt_mac = "/proc/idme/bt_mac_addr",
+
+    .wake_id = "alexa",
+    /* the newer model layout (encoder/decoder, NTT); loads in pryon_test under qemu and detects ALEXA */
+    .wake_manifest = "/system/local/models/keyword/en-US/ALEXA/pryon.manifest",
+    .earcon_dir = "/data/local/hassmic/earcon/",                    /* none of stock's: own sounds here win over the apps' */
+    .earcon_zip = sounds,
+    .thermal_type = "mtktscpu",
+    /* STK3x1x on MediaTek's alsps framework; Amazon's driver has a lux attribute: an I2C read of the ALS data at each
+     * read, code * 400 / the factory calibration (/proc/idme/alscal), the same value Android's light sensor reports
+     * (2026-10-13).  Its other attributes are not all readings: cali_Light calibrates against 400 lux and writes
+     * /data/als_cal_data.bin, ir switches ALS off until a reboot (docs/re-checkers.md). */
+    .light_sensor = { "/sys/bus/platform/drivers/als_ps/lux" },
+    .volume_steps = 100,                                            /* the light band (ring_band.c) shows the level in % */
+    /* Measured (2026-10-27, tools/vol-curve.py: the music stream's index stepped under a steady tone, an Echo Dot 2's
+     * micRaw beside it): 470, 1070 and 2230 Hz within 0.5 dB of each other at nearly every index, the same down and up.
+     * Flat at the top and steep at the bottom, unlike the Dot's: 90 is 4 dB under 100 (Dot 10), 10 is 51 (Dot 41).
+     * hassmic's volume v plays at index (30 v + 50) / 100: a point every 5, each that index's (the curve between them
+     * within 1 dB of the index played); index 1 is under the room's noise, 0 silent */
+    .volume_curve = (const struct board_vol[]){
+        { 0, -66 }, { 5, -60.0f }, { 10, -51.2f }, { 15, -43.7f }, { 20, -41.0f }, { 25, -34.9f }, { 30, -31.8f },
+        { 35, -26.7f }, { 40, -24.8f }, { 45, -20.8f }, { 50, -19.7f }, { 55, -17.8f }, { 60, -15.8f }, { 65, -13.0f },
+        { 70, -12.3f }, { 75, -9.4f }, { 80, -7.6f }, { 85, -4.5f }, { 90, -4.0f }, { 95, -1.2f }, { 100, 0 }, { -1, 0 } },
+    /* Realtek RT5616: its line out feeds the speaker amplifier.  0..39 = -46.5..+12 dB, 1.5 dB a step (the kernel's
+     * tables); the HAL's initial settings in /system/etc/audio_device.xml set 29, -3 dB, nothing writes it later (from
+     * the firmware only; verify on a device that this is what the speaker plays at, and that it has no other writer) */
+    .speaker_gain = "OUT Playback Volume",
+    .speaker_gain_stock = 29,
+    .speaker_gain_steps = 2,
+    .speaker_gain_db = 3,
+};

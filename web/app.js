@@ -202,11 +202,12 @@ const HELP = {
   stop_ends_listening: { help: 'Makes "<wake word>, stop" mean "be quiet". An Echo that woke up by mistake (the TV, someone talking in the room) listens for up to 15 seconds, and Home Assistant carries out whatever it heard. With this on, "<wake word>, stop" ends that at once: the Echo stops listening and nothing of it reaches Home Assistant, and when it hears both words together it does not start at all. A ringing timer, a reply, a Drop In call and music on this Echo stop as before. The cost: "<wake word>, stop the timer" no longer reaches Home Assistant (say "<wake word>, cancel the timer"), media Home Assistant plays elsewhere is paused with "<wake word>, pause" instead, and now and then the engine hears "stop" in a short command (about 2 in 350): that command is lost, say it again. Off by default.' },
   timer_stop_any: { help: 'While a timer rings, whatever you say after the wake word stops it, in any language and however you put it ("Alexa, stop the timer", "Alexa, Ruhe"). Without it only "stop" does, and "stop the timer" goes to Home Assistant, which has forgotten the finished timer and says none is running. The cost: a question during a ring ("how long is left on the pasta timer?") is not answered, it only stops the ring. Off by default.' },
   equalizer_bass: { ha: true }, equalizer_mid: { ha: true }, equalizer_treble: { ha: true },
-  speaker_gain: { help: 'Makes the Echo\'s own speaker louder at every volume, for an Echo that is too quiet at full volume: it raises the amplifier stage in front of the speaker, which a stock Echo leaves at +0 dB (an Echo Dot 3\'s amplifier has only 2 dB more to give). Owners of an Echo Dot 2 heard +6 dB loud and clean at full volume; above that, loud music near full volume can distort, and a speaker that plays distorted for long can be damaged. Raise it a step at a time and turn it down at the first crackle. The 3.5 mm jack and Bluetooth speakers are not affected. Default +0 dB.' },
+  speaker_gain: { help: 'Makes the Echo\'s own speaker louder at every volume, for an Echo that is too quiet at full volume: it raises the amplifier stage in front of the speaker, which a stock Echo leaves at +0 dB (an Echo Dot 3\'s amplifier has only 2 dB more to give; an Echo Show 5 goes in steps of 1.5 dB, the nearest one to what you pick). Owners of an Echo Dot 2 heard +6 dB loud and clean at full volume; above that, loud music near full volume can distort, and a speaker that plays distorted for long can be damaged. Raise it a step at a time and turn it down at the first crackle. The 3.5 mm jack and Bluetooth speakers are not affected. An Echo Show 8 (1st gen) is loud already at +0 dB and goes down to −6 dB for that; a 2nd gen goes up to +9 dB, below where its amplifier distorts. Default +0 dB.' },
   led_auto_brightness: { ha: true, help: 'The ring dims and brightens with the room, from the Echo\'s light sensor and Amazon\'s own curve, as on a stock Echo.' },
   led_brightness: { ha: true, help: 'A fixed brightness for the ring. Setting one turns auto brightness off.' },
   ring_rotation: { ha: true, help: 'Where the light ring\'s fill starts. Home Assistant\'s "Light ring fill" lights that share of the ring in the light\'s colour, for a timer\'s or a washing machine\'s progress or a battery; it fills the way the volume does, from where the volume starts. Turn the start by this many LEDs, so it starts where you want it to for how the Echo stands. Only where the Echo has room for each LED\'s own animations (Home Assistant then lists "Light ring fill"). Default 0.' },
-  bluetooth_announcements: { help: 'Says "Connected to …" and "Disconnected from …" when a phone connects, in your voice assistant\'s voice.' },
+  light_band: { help: 'The Echo Show has no light ring: it shows the ring\'s lights (listening, thinking, mic off, calls, volume, timers, Home Assistant\'s "Light ring") as a band along the bottom of the screen, as Alexa did. This many pixels at the bottom are kept for it, so an app on the screen never has the band over it. 0 gives the whole screen to the apps and shows no band. Default 10, stock\'s line.' },
+  bluetooth_announcements: { help: 'Says "Connected to …" and "Disconnected from …" when a phone connects, in your voice assistant\'s voice, after the chime. Home Assistant speaks the words, and only once "Allow the device to perform Home Assistant actions" is ticked in this Echo\'s ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure); without it there is the chime only.' },
   bluetooth_announcement_language: { help: 'The language of those sentences. Home Assistant does not tell the Echo which language your voice assistant speaks, so pick the one that matches its voice.' },
   sendspin_unpaired: { help: 'Lets any Music Assistant server on the network play here without pairing. Off: only a server given this Echo\'s "Sendspin pairing token" (a diagnostic entity in Home Assistant) may play.' },
   https_verify: { help: 'When Home Assistant serves HTTPS itself, it gives the Echo https:// addresses for its spoken replies and announcements, usually its external URL. On (the default): the Echo plays them only from a server whose certificate a known authority signed for that very name, as a browser would. A self-signed certificate, or one that does not name the address Home Assistant gives out, is refused: replies stay silent and the log says why. Off: any certificate is taken, so someone on your network could pass the Echo audio of their own instead of Home Assistant\'s. Plain http:// addresses are not affected.' },
@@ -371,11 +372,22 @@ const fmt = (s, v) => {
 
 let echo, state;
 
+// The Echo Show has no action button: both volume keys pressed together stand in for it (hello.action, board.c
+// action_combo).  act() words a text for the Echo it is about: this one by default, another one's hello where named.
+function act(s, d = echo && echo.hello) {
+  if (!d || d.action !== 'volume_keys') return s;
+  return s.replace(/its own action button/g, 'both its own volume keys together')
+    .replace(/its action button/g, 'both its volume keys together')
+    .replace(/the action button/g, 'both volume keys together')
+    .replace(/action button/g, 'volume keys pressed together');
+}
+
 async function start() {
   const hello = await (await fetch('/api/hello')).json();
   echo = new Echo('', hello);
   renderThrough(hello.members || []);
   showName(hello);
+  if (hello.action === 'volume_keys') $('actline').innerHTML = 'Within a minute, press <b>both volume keys together</b> on the Echo, briefly (held 2 s they pair it with other Echos instead).';
   // A page reloaded just as the satellite restarts (installs, the wake word engine) reaches a process on its way out:
   // no answer at all, which fetch calls a TypeError ("Failed to fetch").  It answers again within seconds
   for (let i = 0; ; i++) {
@@ -451,7 +463,7 @@ async function answerVouch() {
 
 $('ask').onclick = async () => {
   const msg = $('loginmsg'), art = $('art'), b = $('ask');
-  msg.className = 'login-msg'; msg.textContent = 'Waiting… press the action button on the Echo now.';
+  msg.className = 'login-msg'; msg.textContent = act('Waiting… press the action button on the Echo now.');
   art.classList.add('wait'); b.disabled = true;
   const done = (text, bad) => { art.classList.remove('wait'); b.disabled = false; msg.textContent = text; if (bad) msg.classList.add('bad'); };
   for (let i = 0; i < 70; i++) {
@@ -604,7 +616,7 @@ function settingRow(s) {
     h('div', {},
       h('label', { class: 'row-label', for: 's-' + s.name }, label(s), info.ha === true ? haBadge() : null,
         info.tag ? h('span', { class: 'badge' + (info.tag === 'Experimental' ? ' warn' : '') }, info.tag) : null, saved),
-      info.help ? h('p', { class: 'help' }, info.help) : null, warns),
+      info.help ? h('p', { class: 'help' }, act(info.help)) : null, warns),
     h('div', { class: 'ctl' }, c.el), status);
   const paint = () => {
     if (status) status.replaceChildren(...[info.status()].filter(Boolean));
@@ -621,7 +633,7 @@ function featureCard(s, children) {
   const card = h('article', { class: 'feature' },
     h('div', { class: 'f-head' }, h('span', { class: 'f-icon' }, icon(info.icon || 'sparkle')),
       h('label', { class: 'f-title', for: 's-' + s.name }, label(s), info.tag ? h('span', { class: 'badge warn' }, info.tag) : null, saved), c.el),
-    info.help ? h('p', { class: 'f-help' }, info.help) : null,
+    info.help ? h('p', { class: 'f-help' }, act(info.help)) : null,
     info.note ? h('p', { class: 'f-note' }, info.note) : null,
     status,
     kids,
@@ -1337,7 +1349,7 @@ const idButton = (e, name) => h('button', { class: 'small', 'data-k': 'id ' + e.
 
 async function loginOther(d) {
   d.asking = true; renderDevices();
-  toast(`Press the action button on ${d.echo.hello.name}`);
+  toast(act(`Press the action button on ${d.echo.hello.name}`, d.echo.hello));
   try {
     for (let i = 0; i < 70; i++) {
       let s;
@@ -2297,9 +2309,9 @@ function buildSystem(el, list) {
     infoRow('Settings file', ['All settings except what belongs to this one Echo (its name, keys, pairings), as a text file. Import it on another Echo, keep it as a backup, or give it to ', h('code', {}, 'scripts/setup.sh --preset'), ' so the next Echo you install starts with these settings.'],
       [h('button', { onclick: exportFile }, icon('down'), 'Export'), h('button', { onclick: () => file.click() }, icon('up'), 'Import…'), file], h('div', { class: 'row-x' }, importMsg)),
     logRow(),
-    infoRow('Debug access', 'Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.', adbBox),
+    infoRow('Debug access', act('Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.'), adbBox),
     infoRow('Restart', HELP.restart.help, h('button', { onclick: restartEcho }, 'Restart…')),
-    infoRow('Factory reset', 'Forgets everything this Echo was told: settings, name, Home Assistant\'s key, approved browsers, Bluetooth pairings, and its Wi-Fi networks. It then waits to be set up again, like after the install: the Home Assistant app finds it over Bluetooth. The same as holding the action button for 10 seconds.',
+    infoRow('Factory reset', ('Forgets everything this Echo was told: settings, name, Home Assistant\'s key, approved browsers, Bluetooth pairings, and its Wi-Fi networks. It then waits to be set up again, like after the install: the Home Assistant app finds it over Bluetooth. The same as holding the action button for 10 seconds.'.replace(echo.hello.action === 'volume_keys' ? / The same as holding.*$/ : /^$/, '')),
       h('button', { class: 'danger', onclick: factoryReset }, 'Factory reset…'))));
 
   clientsBox = h('div');
@@ -2330,7 +2342,7 @@ function renderSystem() {
   if (nameCtl) nameCtl.paint();
   if (wifiCtl) wifiCtl.paint();
   const s = state.adb;
-  const status = s.waiting ? h('span', { class: 'badge acc' }, 'Waiting for the action button…')
+  const status = s.waiting ? h('span', { class: 'badge acc' }, act('Waiting for the action button…'))
     : s.open ? h('span', { class: 'badge bad' }, 'Open: closes by itself after 30 min') : h('span', { class: 'badge' }, 'Closed');
   adbBox.replaceChildren(status,
     s.open ? h('button', { onclick: adbClose }, 'Close now') : h('button', { class: 'danger', disabled: s.waiting, onclick: adbOpen }, icon('term'), 'Open'));
@@ -2427,7 +2439,7 @@ async function adbOpen() {
   try {
     const r = await (await echo.call('POST', '/api/adb', 'on')).json();
     if (r.adb === 'busy') { toast('A login is waiting for the button first'); return; }
-    toast('Press the action button on the Echo');
+    toast(act('Press the action button on the Echo'));
     for (let i = 0; i < 65; i++) {
       await new Promise((res) => setTimeout(res, 1000));
       await load();

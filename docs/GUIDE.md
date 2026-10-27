@@ -318,7 +318,8 @@ Beyond the README's two figures:
   or an opening then a loop. The designer paints LEDs with a brush or the whole ring, turns, mirrors, dims, makes
   spinning, fading and breathing frames, turns the hue of a whole design or a frame (how light each colour looks stays), has undo, and starts from Amazon's
   animation if you like; a preview plays it. "Recolour Amazon's…" on an animation is the short way to Amazon's own in
-  other colours.
+  other colours. A Ring / Band switch on the designer's stage shows the design as an Echo Show's band shows it (the
+  LEDs in a row, never turned), and paints there too; it opens on what this Echo has.
   Listening and its end turn towards whoever speaks: draw them with the talker where the arrow is, and the Echo makes
   the turned copies itself. Volume takes the colours of the design's first frame through Amazon's steps. Nothing
   changes on the ring until **Apply**: the Echo then writes the designs to its system partition and restarts the
@@ -336,7 +337,19 @@ Beyond the README's two figures:
   models". Up to 50 packs; their designs count towards the 100.
 - **Listening points at you**, as with Alexa, and also while a timer rings or the light is on (Amazon's ring stops
   turning as soon as a second light shows; hassmic plays the listening ring already turned).
-- **Microphone off** plays Alexa's own sounds.
+- **Echo Show 5 (both generations) and Echo Show 8**: no ring; its lights run along the bottom edge of the screen as the ring laid out in a line (the
+  talker's side always in the middle: two microphones tell directions apart too poorly to turn it). The band keeps
+  that strip of the screen for itself, 10 pixels by default ("Light band" on the settings page; 0 gives the whole
+  screen to the apps and shows no band), so an app shown on the screen is never covered. The light "Light ring" works
+  there too, in any colour, and so do your own designs: each shows on the band as the ring's twelve LEDs in a row,
+  the side that faces the talker in the middle, never turned (the settings page draws and edits them that way on
+  these models, and Apply shows them at once). A design made on a Dot works on the band and the other way round;
+  the designer's Ring / Band switch shows a design either way on any Echo.
+  The volume of voice replies shows in cyan, as on the Dots. The screen wakes for the band and sleeps 5 minutes after the last light (1 minute with
+  the microphones off or in Do not disturb).
+- **Microphone off** plays Alexa's own sounds. A switch that is already off when hassmic starts is shown, not announced.
+- **Wake sound**: Alexa's own where the firmware has it; the Echo Show 8 1st gen has none and plays hassmic's short blip. On the
+  Echo Show a sound after a pause starts 0.35 s late: the speaker takes that long to switch on and swallowed the start.
 - Silent and dark at boot.
 - The ring dims with the room's light as on a stock Echo (Amazon's own logic, on by default); a fixed level from Home
   Assistant switches that off.
@@ -357,6 +370,10 @@ and the action button pauses and resumes.
   before it of Music Assistant up to 2.10.6. It picks whichever the server speaks, each time it connects.
 - **From a phone** over Bluetooth: SBC, AAC, aptX, aptX HD, with media controls. Switch on "Bluetooth audio from phones" on the
   settings page; the "Bluetooth pairing" switch in Home Assistant then lets phones pair (blue chaser on the ring).
+  Connecting and disconnecting play a chime and, like stock Alexa, "Connected to <phone>" / "Disconnected from
+  <phone>": Home Assistant speaks those words, and only once "Allow the device to perform Home Assistant actions" is
+  ticked in the Echo's ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure). Without it
+  you hear the chime only. "Bluetooth announcements" on the settings page turns both off and picks their language.
 
 ### Separate volumes
 
@@ -368,7 +385,7 @@ independent of each other:
 |---|---|---|
 | Music | Music Assistant, Bluetooth from a phone, `media_player.play_media` (not announcements) | the media player's volume |
 | Voice replies | what the voice assistant says, and announcements (also `tts.speak` or `play_media` with `announce` on the media player) | Assistant volume |
-| Echo sounds | the wake sound, button presses, Bluetooth and Drop In chimes | Sounds volume |
+| Echo sounds | the wake sound, button presses, Bluetooth and Drop In chimes (not the volume keys' tone: it plays at the volume they just set, so you hear the step; at 0 as quiet as the lowest step) | Sounds volume |
 | Timers | the ring of a finished timer | Timer volume |
 | Calls | the other side of a Drop In call (only while Drop In is on) | Call volume |
 
@@ -380,7 +397,8 @@ Copying settings to another Echo (Export, the Echos section) takes the switches 
 like the Echo's volume, that is for the room it is in.
 
 The same number sounds the same on every slider, and as that volume on a stock Echo (measured on an Echo Dot 2,
-within 0.3 dB). The volume buttons change what is playing: a Drop In call, a reply (the ring shows the steps in cyan),
+within 0.3 dB, and on an Echo Show 5, whose volume steps are its own: its top end is much flatter and its bottom end
+steeper than the Dot's; the other models use the Dot's until someone measures theirs with `tools/vol-curve.py`). The volume buttons change what is playing: a Drop In call, a reply (the ring shows the steps in cyan),
 a ringing timer, otherwise the music. On a Bluetooth speaker that sets its own volume (absolute volume) the speaker is
 set to the loudest of them and the Echo turns the others down, as on its own speaker (with the Echo's volume curve:
 how loud a number is depends on the speaker); the speaker's own buttons move the music.
@@ -410,7 +428,7 @@ name and state.
   once sound comes, too late for the start of a reply. "Keep the speaker awake" (settings page, off by default) plays
   a 20 Hz tone at -50 dBFS under everything, too low and too quiet to hear, so the speaker never hears silence.
 - **Switching quickly**: the Echo can only play everything on one or the other (Amazon's audio mixer has a single
-  output), so music on the speaker with replies on the Echo is a matter of switching "Play on Bluetooth speaker" from an
+  output; on the Echo Show 5, Android moves all of it), so music on the speaker with replies on the Echo is a matter of switching "Play on Bluetooth speaker" from an
   automation when music starts and stops. "Stay connected when off" (settings page, off by default) makes that quick:
   switched off, the speaker stays connected and only the sound moves back to the Echo ("Bluetooth speaker" shows
   "Standing by"), and switching on takes well under a second instead of a reconnect. If the speaker drops the link
@@ -436,7 +454,7 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 | Mute, Do not disturb | DND drops announcements; purple flash when switched on |
 | Wake sound | covers all the Echo's own sounds |
 | Equalizer | bass, mid, treble, −6 to +6 dB, Amazon's own, on everything the Echo plays |
-| LED auto brightness, LED brightness | a level holds the ring there and switches the automatic off |
+| LED auto brightness, LED brightness | a level holds the ring there and switches the automatic off (Echo Show 5: the band's brightness, no automatic) |
 | Timer ringing, Ringing timers | on while a finished timer rings; their names (diagnostic), see [Voice](#voice) |
 | Stop ringing | button: ends a ringing timer and nothing else |
 | Button | event: each press and 1 s hold of the action and volume buttons, see [Buttons and light ring](#buttons-and-light-ring) |
@@ -511,6 +529,8 @@ A stock Echo answers a whispered request in a whisper. Here the binary sensor "L
 conversation agent, so it can answer the same way. It uses Amazon's whisper detector on the Echo with a model only
 Amazon hands out: "Download from Amazon" on the settings page, or `scripts/artifacts.sh <echo-ip>` ("Other artifacts" ›
 "Whisper detection"; over Wi-Fi, open debug access first). The model stays through updates; without it there is no sensor.
+Amazon does not hand this model to the Echo Show 5 (it refuses that device type); "Copy models" from a Dot that has it
+is the way there, not yet tried on a Show.
 
 The sensor is set when you stop speaking, before speech to text has finished, so the agent's prompt can read it. For
 example, in the LLM conversation agent's instructions. The template finds the sensor of whichever Echo you spoke to,
@@ -546,7 +566,8 @@ change counts. Tried in one flat for a few minutes and one night, where it mostl
 - **Only between the Echo and the router**, also in the next room if the router is there. Elsewhere in the room may
   not show at all.
 - **Expect false alarms** from other Wi-Fi devices, doors, people in the router's room; try the sensitivity before
-  relying on it. On the Echo Dot 2 and Echo 2 also when the router changes speed (the Echo Dot 3 allows for that).
+  relying on it. On the Echo Dot 2 and Echo 2 also when the router changes speed (the Echo Dot 3 and Echo Show 5 allow
+  for that).
 - **Through a kernel module of ours**: the Wi-Fi drivers do not report what this needs. Loaded only once you switch it
   on (within 10 s), then until the Echo restarts.
 - ESPHome only. It does not use the microphones; muting does not stop it.
@@ -586,9 +607,13 @@ this Echo or another, or use it as a preset for the next install (`scripts/setup
 **Identify** (top of the page, and beside each Echo in the list; also a button in Home Assistant): a rainbow on the ring
 for 10 s and stock's setup sound, to tell which Echo is which.
 
-**Speaker gain** (Sound; Echo Dot 2, Echo 2 and Echo Dot 3): for an Echo that is too quiet at full volume. It raises
-the analog gain in front of the speaker (Echo Dot 2 and Echo 2: the codec's "HP Driver Gain", +0 to +12 dB over stock;
-Echo Dot 3: the amplifier's output level, +0 to +2 dB, all it has above where Amazon leaves it), so everything the
+**Speaker gain** (Sound; Echo Dot 2, Echo 2 and Echo Dot 3, and the Echo Show 5 and both Show 8s): for an Echo that is too
+quiet at full volume. It raises the analog gain in front of the speaker (Echo Dot 2 and Echo 2: the codec's "HP Driver
+Gain", +0 to +12 dB over stock; Echo Dot 3: the amplifier's output level, +0 to +2 dB, all it has above where Amazon
+leaves it; Echo Show 5: the codec's line out, +0 to +12 dB in steps of 1.5 dB, each dB set going to the nearest step; Echo Show 8 1st gen:
+the same, and down to −6 dB, since it is loud at full volume already; Echo Show 8 2nd gen: the amplifier's digital
+volume, +0 to +9 dB in steps of 0.5 dB, the top kept below where bass distorts; Echo Show 5 2nd gen: it depends on the
+amplifier in that unit: as the Show 5 with Realtek's codec, +0 to +4 dB with TI's, +0 to +6 dB with Maxim's), so everything the
 speaker plays gets louder at every volume step; the 3.5 mm jack and Bluetooth speakers keep their level. Owners of an
 Echo Dot 2 found +6 dB loud and clean at full volume; speakers differ, though (some Dot 2s are much louder than others
 at the same gain), so raise it a step at a time and lower it at the first crackle: loud music near full volume

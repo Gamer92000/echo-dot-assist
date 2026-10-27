@@ -19,16 +19,23 @@ as an ESPHome device, with no YAML and no add-on.
 
 ## Supported Echos
 
-|    | Echo                         | Model  | Codename                               | Way in                                           |
-|----|------------------------------|--------|----------------------------------------|--------------------------------------------------|
-| ✅ | Echo Dot 3rd gen (2018)      | D9N29T | [`donut`](devices/donut/README.md)     | open the case, wires on test pads                |
-| ✅ | Echo Dot 2nd gen (2016)      | RS03QR | [`biscuit`](devices/biscuit/README.md) | micro-USB, no soldering                          |
-| ✅ | Echo 2nd gen (2017)          | XC56PY | [`radar`](devices/radar/README.md)     | open the case, solder USB to the amplifier board |
-| ❌ | Echo Dot 3rd gen (2019–2020) | C78MP8 | `crumpet`                              | the Dot 3 unlock does not work on it             |
-| ❌ | Echo Dot 3rd gen with clock  | 36EBT3 | `doebrite`                             | thought to be `crumpet` hardware                 |
+|    | Echo                         | Model  | Codename                                 | Way in                                           |
+|----|------------------------------|--------|------------------------------------------|--------------------------------------------------|
+| ✅ | Echo Dot 3rd gen (2018)      | D9N29T | [`donut`](devices/donut/README.md)       | open the case, wires on test pads                |
+| ✅ | Echo Dot 2nd gen (2016)      | RS03QR | [`biscuit`](devices/biscuit/README.md)   | micro-USB, no soldering                          |
+| ✅ | Echo 2nd gen (2017)          | XC56PY | [`radar`](devices/radar/README.md)       | open the case, solder USB to the amplifier board |
+| ❌ | Echo Dot 3rd gen (2019–2020) | C78MP8 | `crumpet`                                | the Dot 3 unlock does not work on it             |
+| ❌ | Echo Dot 3rd gen with clock  | 36EBT3 | `doebrite`                               | thought to be `crumpet` hardware                 |
+| ✅ | Echo Show 5 1st gen (2019)   | H23K37 | [`checkers`](devices/checkers/README.md) | micro-USB, no soldering; the ring as a band on screen |
+| ✅ | Echo Show 8 1st gen (2019)   | C7H6N3 | [`crown`](devices/crown/README.md)       | micro-USB, no soldering; as checkers |
+| ✅ | Echo Show 5 2nd gen (2021)   | C76N8S | [`cronos`](devices/cronos/README.md)     | micro-USB, no soldering; as checkers |
+| ✅ | Echo Show 8 2nd gen (2021)   | A8H3N2 | [`athena`](devices/athena/README.md)     | micro-USB, no soldering (a serial-port unlock); the ring as a band on screen |
 
 Each model needs exactly the firmware its page names (`donut`: Fire OS 6574.1 only). Another model? What is known and
 how to add one: [`devices/`](devices/README.md).
+✅ works, tried on one Echo of that model · 🧪 untested: builds and installs on paper, never run on a device · ❌ not
+supported yet
+
 
 ## What you get
 

@@ -11,8 +11,9 @@ async def main():
     ha = HA([a, b])
     a.allowed = b.allowed = False                   # the tags alone
     await start((a, b), ha, login=False)
-    ok = await until(lambda: b.net() == a.net(), 15)
-    check(ok and "(key from echo-kitchen, confirmed by Home Assistant)" in b.text() and not ha.calls and not ha.refused,
+    # the log line comes after state/arbitration and through hassmic's log reader: waited for too
+    ok = await until(lambda: b.net() == a.net() and "(key from echo-kitchen, confirmed by Home Assistant)" in b.text(), 15)
+    check(ok and not ha.calls and not ha.refused,
           "tags: joined without permission")
     await until(lambda: a.st("arbitration_peers") == 1 and b.st("arbitration_peers") == 1, 10)
 

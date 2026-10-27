@@ -166,7 +166,7 @@ int       voip_write(const void *data, size_t len) { return s_write(&voip, data,
 void      voip_close(void) { s_close(&voip); }
 
 static int always(void) { return 1; }
-void (*audio_earcon_started)(void);
+void (*audio_earcon_started)(unsigned lead_ms);
 
 void play_earcon(const short *pcm, size_t samples, unsigned rate) { play_earcon_while(pcm, samples, rate, always); }
 
@@ -198,11 +198,107 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
             MixerClose(h); usleep(50000);
             continue;
         }
-        if (audio_earcon_started) audio_earcon_started();
+        if (audio_earcon_started) audio_earcon_started(0);
         while (t < duration_ms + 1000 && MixerGetNumBytes(h) > 0 && go()) { usleep(20000); t += 20; }
         if (!go()) MixerFlush(h);
         MixerClose(h);
         return;
     }
     fprintf(stderr, "earcon: giving up\n");
+}
+
+/* Volumes: the mixer's own per stream type, set and read through the stock tools (it keeps them across reboots) */
+#include "core.h"
+static const char *const vol_props[] = { "MainVolume", "TTSVolume", "Mute" };
+
+int vol_read(enum vol which, int fallback)
+{
+    char out[1024], *line, *save; int v = fallback, x;
+    char *argv[] = { "/system/bin/audio_manager_get_prop", (char *)vol_props[which], NULL };
+    core_run(argv, out, sizeof out);
+    for (line = strtok_r(out, "\n", &save); line; line = strtok_r(NULL, "\n", &save))
+        if (sscanf(line, "%d", &x) == 1 && x >= 0 && x <= 100) v = x;
+    return v;
+}
+
+void vol_write(enum vol which, int v)
+{
+    char val[8];
+    snprintf(val, sizeof val, "%d", v);
+    char *argv[] = { "/system/bin/audio_manager_set_prop", (char *)vol_props[which], val, NULL };
+    core_spawn(argv);
+}
+
+/* The front end: LIPC properties of com.doppler.lasp, through the stock tools (FINDINGS.md "Listening mode") */
+void afe_listening(int on)
+{
+    char *argv[] = { "/system/bin/lipc-set-prop", "-i", "com.doppler.lasp", "LASP_CMD_SET_LISTENING_MODE", on ? "1" : "0", NULL };
+    core_spawn(argv);
+}
+
+void afe_stream_stopped(void)
+{
+    char *argv[] = { "/system/bin/lipc-set-prop", "-i", "com.doppler.lasp", "LASP_CMD_NOTIFY_ASR_STREAM_STOPPED", "1", NULL };
+    core_spawn(argv);
+}
+
+/* both tools in one shell: 150 ms on the device */
+int afe_arbitration(long ts, long te, char *json, size_t n)
+{
+    char cmd[400];
+    snprintf(cmd, sizeof cmd, "/system/bin/lipc-set-prop -s com.doppler.lasp LASP_CMD_SET_WAKEWORD_METADATA "
+             "'{\"timestamp_before_ww_start\":%ld,\"timestamp_before_ww_end\":%ld}' && "
+             "/system/bin/lipc-get-prop -s com.doppler.lasp LASP_CMD_REQUEST_ARBITRATION_JSON", ts, te);
+    char *argv[] = { "/system/bin/sh", "-c", cmd, NULL };
+    core_run(argv, json, n);
+    return json[0] != 0;
+}
+
+int afe_eq_get(char *json, size_t n)
+{
+    char *argv[] = { "/system/bin/lipc-get-prop", "-s", "com.doppler.lasp", "LASP_CMD_GET_USER_EQ_INFO", NULL };
+    core_run(argv, json, n);
+    return json[0] != 0;
+}
+
+void afe_eq_set(const char *json)
+{
+    char *argv[] = { "/system/bin/lipc-set-prop", "-s", "com.doppler.lasp", "LASP_CMD_SET_USER_EQ_INFO", (char *)json, NULL };
+    core_spawn(argv);
+}
+
+/* The Bluetooth speaker's route (btout.c, docs/re-a2dp-source.md): "1:<address>" in the LIPC string property
+ * com.doppler.audiod A2DPSourceConnect moves the mixer's single output from the Echo's speaker to its A2DP HAL, "0:..."
+ * back.  Everything mixed goes there (music, replies, earcons), with the Echo's volume and equalizer applied, as with
+ * stock.  On every change the mixer asks btmanagerd's AIPC service for the speaker's name (btout.c answers). */
+static long long mono_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000000 + t.tv_nsec / 1000; }
+
+int audio_a2dp_route(int on, uint64_t addr, const char *name)
+{
+    char v[16], out[64];
+    (void)name;
+    snprintf(v, sizeof v, "%d:%012llx", on, (unsigned long long)addr);     /* exactly 12 digits: the mixer copies 6 bytes */
+    char *set[] = { "/system/bin/lipc-set-prop", "-s", "com.doppler.audiod", "A2DPSourceConnect", v, NULL };
+    char *get[] = { "/system/bin/lipc-get-prop", "-s", "com.doppler.audiod", "OutputDevice", NULL };
+    long long t = mono_us();
+    core_run(set, out, sizeof out);
+    for (int i = 0; i < 20; i++) {                      /* the mixer's playback thread switches a moment later */
+        core_run(get, out, sizeof out);
+        if (!strncmp(out, on ? "BT##" : "SPEAKER##", on ? 4 : 9)) break;
+        usleep(100000);
+    }
+    out[strcspn(out, "\r\n")] = 0;
+    fprintf(stderr, "btout: mixer output %s (%s, %lld ms)\n", on ? "to the speaker" : "to the Echo", out, (mono_us() - t) / 1000);
+    return 0;
+}
+
+int audio_a2dp_lost(uint64_t addr) { (void)addr; return 0; }   /* the mixer keeps its route */
+int audio_a2dp_aipc(void) { return 1; }
+
+/* left on the speaker by a hassmic that is gone: back to the Echo (core_volume has the mixer's level back already) */
+void audio_a2dp_reset(void)
+{
+    char out[64]; char *get[] = { "/system/bin/lipc-get-prop", "-s", "com.doppler.audiod", "OutputDevice", NULL };
+    core_run(get, out, sizeof out);
+    if (!strncmp(out, "BT##", 4)) audio_a2dp_route(0, 0, "");
 }

@@ -29,6 +29,22 @@
  * MAP dates the token with local time and an appended Z; the Echos run on GMT.  The date is the caller's, not the
  * clock's: an Echo whose clock never synced (biscuit on 2026-10-06 said a day earlier) would sign a stale one.
  * Loaded with dlopen: donut, biscuit and radar each have their own HAL build, and the PC build has none.
+ *
+ * checkers (Echo Show 5, Fire OS on Android) has no libacehal_dha.so: its key sits behind fireos-dha, the binder service
+ * "amazon.security.dha" (fireos.dha.IFireOsDha, libdha-aidl.so; init runs it as keystore with drmrpc), which Amazon's
+ * Java MAP (com.amazon.imp, kcpsdk.auth.r "FireOsDhaSigner") reaches through amazon.security.FireOsDha.  Transactions
+ * (BpFireOsDha): 1 sign(byte[] digest), 3 getDhaPublicKey, 4 getDhaHmac, 5 getDhaCertificateChain, 6 getDhaVersion;
+ * each reply is the exception, then the value.  Asked through the firmware's /system/bin/service as hassmic's user
+ * system on the tester's Echo (2026-10-13): version 1, an RSA-2048 SubjectPublicKeyInfo, a 32-byte HMAC, no chain (-7),
+ * and sign answers RSASSA-PSS with SHA-256 and a 32-byte salt over the digest it is given, as the Dots' HAL does.  For
+ * version 1 Java MAP builds drvV1 too, from the same values, but its JSON is its own (org.json keeps the order of the
+ * puts; kcpsdk.auth.w/r/l0/h0, read out of com.amazon.imp.apk):
+ *   header   {"typ":"drvV1","alg":"PS256","jwk":{"kty":"RSA","n":"<modulus>","e":"65537","mac":"<getDhaHmac>"}}
+ *            (n and mac in Base64 flags 10: URL-safe, *padded*; e the key's exponent in decimal)
+ *   payload  {"dat":"<UTC, yyyy-MM-dd'T'HH:mm'Z'>","dev":{"typ":"v1","dt":"<device type>","dsn":"<the registration's
+ *            serial>","cpuid":"<the Serial line of /proc/cpuinfo>"},"cust":{"typ":"v1"}}
+ *            ("ds", the device secret, only in a registration by device secret: not the code pair's)
+ *   token    as above, header and payload in flags 11 (unpadded), the signature over SHA-256 of the first two parts.
  */
 #include "dha.h"
 #include <dlfcn.h>
@@ -37,6 +53,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "afe_parcel.h"
+#include "core.h"
 #include "hash.h"
 
 enum
@@ -66,18 +84,87 @@ static int say(char *err, size_t errsz, const char *fmt, ...)
     return -1;
 }
 
+/* ---------------------------------------------------------------- checkers: the binder service */
+
+/* the service's name: fireos-dha (checkers, crown) or, on Android 9 (athena), the Java feature service in front of the HIDL
+ * HAL, the same interface descriptor of calls (3 key, 5 chain, 6 version, 1 sign: tried 2026-10-14, version 2) */
+static const char *const svc_names[] = { "amazon.security.dha", "fireosdhaservice" };
+static const char *DHA_SVC = "amazon.security.dha";
+static int svc;                     /* the key is the service's, not a HAL's: its version, 1 (checkers) or 2 (crown) */
+
+/* one transaction through the service tool; the reply's byte[] into *val (malloc'd) and its length; 0, or -1 */
+static int svc_get(const char *code, const void *in, size_t inlen, uint8_t **val, uint32_t *len)
+{
+    struct afe_call c;
+    enum { TEXT = 48 * 1024, WORDS = 2048 };
+    char *text = malloc(TEXT);      /* a 294-byte key prints as ~1.5 kB of hex dump, crown's 5.4 kB chain as ~24 kB */
+    uint32_t *w = malloc(WORDS * sizeof *w);
+    int nw;
+    *val = NULL;
+    if (!text || !w)
+    {
+        free(text);
+        free(w);
+        return -1;
+    }
+    svc_call_start(&c, DHA_SVC, code);
+    if (in && svc_blob(&c, in, inlen))
+    {
+        free(text);
+        free(w);
+        return -1;
+    }
+    core_run(c.argv, text, TEXT);
+    nw = svc_reply_words(text, w, WORDS);
+    free(text);
+    if (nw < 2 || w[0] != 0 || w[1] == 0xffffffffu || w[1] > (uint32_t)(nw - 2) * 4 || !(*val = malloc(w[1] + 1)))
+    {
+        free(w);
+        return -1;                  /* an exception (no chain: -7), a null array, a reply cut short */
+    }
+    for (uint32_t i = 0; i < w[1]; i++)
+        (*val)[i] = (uint8_t)(w[2 + i / 4] >> (8 * (i % 4)));
+    (*val)[w[1]] = 0;               /* the chain is text: callers may strstr it */
+    *len = w[1];
+    free(w);
+    return 0;
+}
+
+/* getDhaVersion: Java MAP's switch between drvV1 (1) and drvV3 (2); 0 when the service does not answer (no Android) */
+static int svc_version(void)
+{
+    for (size_t i = 0; i < sizeof svc_names / sizeof *svc_names; i++)
+    {
+        struct afe_call c;
+        char text[256];
+        uint32_t w[4];
+        svc_call_start(&c, svc_names[i], "6");
+        core_run(c.argv, text, sizeof text);
+        if (svc_reply_words(text, w, 4) == 2 && w[0] == 0)
+            return DHA_SVC = svc_names[i], (int)w[1];
+    }
+    return 0;
+}
+
 static int load(char *err, size_t errsz)
 {
     static int done;
     const char *so;
     if (done)
-        return hal.sign ? 0 : say(err, errsz, "no attestation HAL");
+        return hal.sign || svc ? 0 : say(err, errsz, "no attestation HAL");
     done = 1;
     /* HASSMIC_DHA_HAL points tests at a stand-in; on an Echo nobody sets it */
     so = getenv("HASSMIC_DHA_HAL");
     void *h = dlopen(so ? so : "libacehal_dha.so", RTLD_NOW);
     if (!h)
+    {
+        int v = svc_version();
+        if (v == 1 || v == 2)
+            return svc = v, 0;
+        if (v)
+            return say(err, errsz, "the attestation service is DHA version %d, which hassmic does not build", v);
         return say(err, errsz, "no attestation HAL (%s)", dlerror());
+    }
     hal.open = (int (*)(void))dlsym(h, "aceDhaHal_open");
     hal.close = (int (*)(void))dlsym(h, "aceDhaHal_close");
     hal.pubkey = (int (*)(uint8_t **, uint32_t *))dlsym(h, "aceDhaHal_getPublicKey");
@@ -163,8 +250,8 @@ static int key_kind(const uint8_t *k, size_t klen)
     return len == sizeof p256 && !memcmp(p, p256, len) ? KEY_P256 : KEY_OTHER;
 }
 
-/* the RSA modulus of a SubjectPublicKeyInfo, without the sign byte */
-static int modulus(const uint8_t *k, size_t klen, const uint8_t **n, size_t *nlen)
+/* the RSA modulus of a SubjectPublicKeyInfo, without the sign byte; with f4, whether the exponent is 65537 */
+static int modulus(const uint8_t *k, size_t klen, const uint8_t **n, size_t *nlen, int *f4)
 {
     const uint8_t *p = k, *end = k + klen;
     size_t len;
@@ -180,10 +267,15 @@ static int modulus(const uint8_t *k, size_t klen, const uint8_t **n, size_t *nle
         return -1; /* RSAPublicKey */
     if (der(&p, end, 0x02, &len))
         return -1; /* modulus */
-    while (len > 1 && !*p)
-        p++, len--;
     *n = p;
     *nlen = len;
+    while (*nlen > 1 && !**n)
+        (*n)++, (*nlen)--;
+    if (f4)
+    {
+        p += len;
+        *f4 = !der(&p, end, 0x02, &len) && len == 3 && p[0] == 1 && p[1] == 0 && p[2] == 1;
+    }
     return 0;
 }
 
@@ -260,7 +352,7 @@ static int jwt_v1(const char *dt, time_t when, char *out, size_t cap, char *err,
     size_t modlen;
     uint8_t hash[32];
 
-    if (hal.pubkey(&pub, &publen) || !pub || modulus(pub, publen, &mod, &modlen) || modlen != 256
+    if (hal.pubkey(&pub, &publen) || !pub || modulus(pub, publen, &mod, &modlen, NULL) || modlen != 256
         || hal.field(F_MAC, &mac, &maclen) || !mac || !maclen || maclen > 74        /* MAP's b64 of it holds 100 bytes */
         || text_field(F_CPUID, cpuid, sizeof cpuid) || text_field(F_DSN, dsn, sizeof dsn)
         || !localtime_r(&when, &tm) || !strftime(date, sizeof date, "%Y-%m-%dT%H:%MZ", &tm))
@@ -361,7 +453,144 @@ bad:
     return say(err, errsz, "the attestation key did not answer as MAP expects it");
 }
 
-int dha_jwt(const char *dt, time_t when, char *out, size_t cap, char *err, size_t errsz)
+/* the Serial line of /proc/cpuinfo, as Java MAP's AmazonJWTHelper reads it (l0.c: the text after the colon, trimmed);
+ * HASSMIC_CPUINFO points tests at a stand-in.  0, or -1: then MAP leaves cpuid out (JSONObject.put of null) */
+static int cpu_serial(char *out, size_t cap)
+{
+    char line[256];
+    FILE *f = fopen(getenv("HASSMIC_CPUINFO") ? getenv("HASSMIC_CPUINFO") : "/proc/cpuinfo", "r");
+    int ok = -1;
+    while (f && ok && fgets(line, sizeof line, f))
+    {
+        char *v = strchr(line, ':'), *e;
+        if (strncmp(line, "Serial", 6) || !v)
+            continue;
+        for (v++; *v == ' ' || *v == '\t'; v++)
+            ;
+        for (e = v + strlen(v); e > v && (e[-1] == '\n' || e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r'); e--)
+            ;
+        *e = 0;
+        ok = (size_t)(e - v) < cap && !strpbrk(v, "\"\\") ? (memcpy(out, v, (size_t)(e - v) + 1), 0) : -1;
+        break;                      /* MAP takes the first Serial line */
+    }
+    if (f)
+        fclose(f);
+    return ok;
+}
+
+/* Java MAP's drvV3 (crown, service version 2; kcpsdk.auth.q a/m/j/h and v.i): the header is typ, alg ES256, x5c with the
+ * chain's first certificate as the DER re-encoded in Base64 flags 2 (standard, padded, one line), written by org.json,
+ * which escapes every "/" as "\/"; the payload is drvV1's (dat, dev, cust: l0.d/c); the signature is the service's DER
+ * ECDSA over SHA-256 of the first two parts, turned into R || S (l0.o).  Neither the key nor the HMAC is asked for. */
+static int jwt_java_v3(const char *dt, const char *dsn, time_t when, char *out, size_t cap, char *err, size_t errsz)
+{
+    static const char head[] = "{\"typ\":\"drvV3\",\"alg\":\"ES256\",\"x5c\":[\"";
+    char cpuid[64], cpu_part[96] = "", date[32], p[400], *h = NULL, *hb = NULL, pb[600];
+    uint8_t *chain = NULL, *sig = NULL, rs[64], hash[32];
+    uint32_t chainlen = 0, siglen = 0;
+    const uint8_t *b, *e;
+    size_t hl, n;
+    struct tm tm;
+
+    if (!dsn || !*dsn || strpbrk(dsn, "\"\\") || strlen(dsn) > 64)
+        return say(err, errsz, "no device serial for the attestation token");
+    if (svc_get("5", NULL, 0, &chain, &chainlen) || !(b = findb(chain, chainlen, PEM_BEGIN)))
+        goto bad;
+    b += PEM_BEGIN_LEN;
+    if (!(e = findb(b, chainlen - (size_t)(b - chain), PEM_END)) || e - b > 4096)
+        goto bad;
+    if (!gmtime_r(&when, &tm) || !strftime(date, sizeof date, "%Y-%m-%dT%H:%MZ", &tm))
+        goto bad;
+    if (!cpu_serial(cpuid, sizeof cpuid))
+        snprintf(cpu_part, sizeof cpu_part, ",\"cpuid\":\"%s\"", cpuid);
+
+    if (!(h = malloc(sizeof head + 2 * (size_t)(e - b) + 8)))
+        goto bad;
+    hl = (size_t)snprintf(h, sizeof head + 2 * (size_t)(e - b) + 8, "%s", head);
+    for (const uint8_t *q = b; q < e; q++)           /* the body, one line; '/' as org.json writes it */
+        if (*q != '\r' && *q != '\n')
+        {
+            if (*q == '/')
+                h[hl++] = '\\';
+            h[hl++] = (char)*q;
+        }
+    hl += (size_t)snprintf(h + hl, 8, "\"]}");
+    snprintf(p, sizeof p, "{\"dat\":\"%s\",\"dev\":{\"typ\":\"v1\",\"dt\":\"%s\",\"dsn\":\"%s\"%s},\"cust\":{\"typ\":\"v1\"}}",
+             date, dt, dsn, cpu_part);
+    if (!(hb = malloc(4 * ((hl + 2) / 3) + 1)))
+        goto bad;
+    b64_encode(h, hl, hb, 1, 0);
+    b64_encode(p, strlen(p), pb, 1, 0);
+
+    n = strlen(hb) + 1 + strlen(pb);
+    if (n + 1 + (64 + 2) / 3 * 4 + 1 > cap)
+    {
+        free(chain); free(h); free(hb);
+        return say(err, errsz, "token longer than the caller's buffer");
+    }
+    snprintf(out, cap, "%s.%s", hb, pb);
+    sha256(out, n, hash);
+    if (svc_get("1", hash, sizeof hash, &sig, &siglen) || siglen > 72 || der_rs(sig, siglen, rs))
+        goto bad;
+    out[n] = '.';
+    b64_encode(rs, sizeof rs, out + n + 1, 1, 0);
+    free(chain); free(sig); free(h); free(hb);
+    return 0;
+bad:
+    free(chain); free(sig); free(h); free(hb);
+    return say(err, errsz, "the attestation service did not answer as MAP expects it");
+}
+
+/* Java MAP's drvV1 (checkers): the values from the service, the JSON as kcpsdk.auth puts it together */
+static int jwt_java(const char *dt, const char *dsn, time_t when, char *out, size_t cap, char *err, size_t errsz)
+{
+    char cpuid[64], cpu_part[96] = "", date[32], h[700], p[400], hb[1000], pb[600];
+    uint8_t *pub = NULL, *mac = NULL, *sig = NULL, hash[32];
+    uint32_t publen = 0, maclen = 0, siglen = 0;
+    const uint8_t *mod;
+    size_t modlen, hl, n;
+    struct tm tm;
+    int f4 = 0;
+
+    if (!dsn || !*dsn || strpbrk(dsn, "\"\\") || strlen(dsn) > 64)
+        return say(err, errsz, "no device serial for the attestation token");
+    if (svc_get("3", NULL, 0, &pub, &publen) || modulus(pub, publen, &mod, &modlen, &f4) || modlen != 256 || !f4
+        || svc_get("4", NULL, 0, &mac, &maclen) || !maclen || maclen > 74
+        || !gmtime_r(&when, &tm) || !strftime(date, sizeof date, "%Y-%m-%dT%H:%MZ", &tm))
+        goto bad;
+    if (!cpu_serial(cpuid, sizeof cpuid))
+        snprintf(cpu_part, sizeof cpu_part, ",\"cpuid\":\"%s\"", cpuid);
+
+    hl = (size_t)snprintf(h, sizeof h, "%s", "{\"typ\":\"drvV1\",\"alg\":\"PS256\",\"jwk\":{\"kty\":\"RSA\",\"n\":\"");
+    hl += b64_encode(mod, modlen, h + hl, 1, 1);
+    hl += (size_t)snprintf(h + hl, sizeof h - hl, "%s", "\",\"e\":\"65537\",\"mac\":\"");
+    hl += b64_encode(mac, maclen, h + hl, 1, 1);
+    hl += (size_t)snprintf(h + hl, sizeof h - hl, "%s", "\"}}");
+    snprintf(p, sizeof p, "{\"dat\":\"%s\",\"dev\":{\"typ\":\"v1\",\"dt\":\"%s\",\"dsn\":\"%s\"%s},\"cust\":{\"typ\":\"v1\"}}",
+             date, dt, dsn, cpu_part);
+    b64_encode(h, hl, hb, 1, 0);
+    b64_encode(p, strlen(p), pb, 1, 0);
+
+    n = strlen(hb) + 1 + strlen(pb);
+    if (n + 1 + (256 + 2) / 3 * 4 + 1 > cap)         /* a 2048-bit key's signature, plus its dot */
+    {
+        free(pub); free(mac);
+        return say(err, errsz, "token longer than the caller's buffer");
+    }
+    snprintf(out, cap, "%s.%s", hb, pb);
+    sha256(out, n, hash);                            /* FireOsDhaSigner.h: the service signs the digest */
+    if (svc_get("1", hash, sizeof hash, &sig, &siglen) || siglen != 256)
+        goto bad;
+    out[n] = '.';
+    b64_encode(sig, siglen, out + n + 1, 1, 0);
+    free(pub); free(mac); free(sig);
+    return 0;
+bad:
+    free(pub); free(mac); free(sig);
+    return say(err, errsz, "the attestation service did not answer as MAP expects it");
+}
+
+int dha_jwt(const char *dt, const char *dsn, time_t when, char *out, size_t cap, char *err, size_t errsz)
 {
     static int opened;
     uint8_t *pub = NULL;
@@ -369,6 +598,10 @@ int dha_jwt(const char *dt, time_t when, char *out, size_t cap, char *err, size_
     int kind;
     if (load(err, errsz))
         return -1;
+    if (svc == 2)
+        return jwt_java_v3(dt, dsn, when, out, cap, err, errsz);
+    if (svc)
+        return jwt_java(dt, dsn, when, out, cap, err, errsz);
     if (!opened && hal.open())
         return say(err, errsz, "the attestation key would not open (hassmic needs the drmrpc group)");
     opened = 1;                     /* one session for the process; the PC build has none and fails at load() */
@@ -391,7 +624,7 @@ int dha_jwt(const char *dt, time_t when, char *out, size_t cap, char *err, size_
 int dha_serial(char *out, size_t cap)
 {
     char err[80];
-    if (load(err, sizeof err) || text_field(F_DSN, out, cap))
+    if (load(err, sizeof err) || svc || text_field(F_DSN, out, cap))      /* the service has no field call */
         return -1;
     return 0;
 }

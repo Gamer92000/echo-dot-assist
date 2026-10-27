@@ -53,6 +53,7 @@
 #include "micgain.h"
 #include "netaddr.h"
 #include "netio.h"
+#include "lux.h"
 #include "wake.h"
 #include "mww.h"
 #include "core.h"
@@ -244,6 +245,9 @@ static long long denoise_ns; static unsigned denoise_frames;   /* under lock: it
 static atomic_int earcon_sounding;                  /* one of our sounds plays ... */
 static atomic_llong earcon_heard_until;             /* ... and is still in the mic stream until then (mono_ms) */
 static atomic_int sounds_q16 = 65536, timers_q16 = 65536;  /* our sounds' and timers' gain, 1 = 65536 (separate volumes) */
+/* the volume keys' tone: at the volume they just set, as stock's (on_volume).  At the sounds' own it said nothing of the
+ * step: with nothing playing the keys seemed to do nothing */
+static atomic_int click_q16 = 65536;
 
 /* ---------------------------------------------------------------- LED ring */
 
@@ -262,15 +266,10 @@ static void run_argv(char *const argv[])
     }
 }
 
-static void run(const char *path, const char *a1, const char *a2)
-{
-    char *argv[] = { (char *)path, (char *)a1, (char *)a2, NULL };
-    run_argv(argv);
-}
-
 /* Its stdout into buf (NUL-terminated, cut at n - 1); empty when it cannot run (PC build) */
 static void run_output(char *const argv[], char *buf, size_t n);
 void core_run(char *const argv[], char *out, size_t n) { run_output(argv, out, n); }
+void core_spawn(char *const argv[]) { run_argv(argv); }
 static void run_output(char *const argv[], char *buf, size_t n)
 {
     int p[2]; size_t len = 0; ssize_t r;
@@ -611,8 +610,7 @@ static atomic_int afe_asked;                        /* the front end was asked f
 static void afe_done(void)                          /* any thread: no command follows, or it is over */
 {
     if (!atomic_exchange(&afe_asked, 0)) return;
-    char *argv[] = { "/system/bin/lipc-set-prop", "-i", "com.doppler.lasp", "LASP_CMD_NOTIFY_ASR_STREAM_STOPPED", "1", NULL };
-    run_argv(argv);
+    afe_stream_stopped();
 }
 
 /* lock held.  Tells Amazon's front end that a command is being spoken, as stock does after the wake word.  While its
@@ -633,8 +631,7 @@ static void listening_apply(void)
     int on = listen_pipe || listen_call;
     if (on == is) return;
     is = on;
-    char *argv[] = { "/system/bin/lipc-set-prop", "-i", "com.doppler.lasp", "LASP_CMD_SET_LISTENING_MODE", on ? "1" : "0", NULL };
-    run_argv(argv);
+    afe_listening(on);
 }
 static void listening(int on) { listen_pipe = on; listening_apply(); }
 
@@ -1153,13 +1150,9 @@ static double ring_power(uint64_t a, uint64_t b)    /* mean square over samples 
  * starts its diagnostics (FINDINGS.md "Listening mode"): afe_done() ends both.  0: not available. */
 static int afe_score(int *score)                    /* capture thread */
 {
-    long ts, te; char cmd[400], buf[512]; const char *v, *a;
+    long ts, te; char buf[512]; const char *v, *a;
     if (!wake_afe_times(&ts, &te)) return 0;
-    snprintf(cmd, sizeof cmd, "/system/bin/lipc-set-prop -s com.doppler.lasp LASP_CMD_SET_WAKEWORD_METADATA "
-             "'{\"timestamp_before_ww_start\":%ld,\"timestamp_before_ww_end\":%ld}' && "
-             "/system/bin/lipc-get-prop -s com.doppler.lasp LASP_CMD_REQUEST_ARBITRATION_JSON", ts, te);
-    char *argv[] = { "/system/bin/sh", "-c", cmd, NULL };
-    run_output(argv, buf, sizeof buf);
+    if (!afe_arbitration(ts, te, buf, sizeof buf)) return 0;
     if (!(v = strstr(buf, "\"voiceEnergy\":")) || !(a = strstr(buf, "\"ambientEnergy\":"))) return 0;
     atomic_store(&afe_asked, 1);
     double voice = atof(strchr(v, ':') + 1), ambient = atof(strchr(a, ':') + 1);
@@ -1240,7 +1233,11 @@ static void send_out(const int16_t *pcm, size_t n, int held_sound)
             clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t1);
             denoise_ns += (t1.tv_sec - t0.tv_sec) * 1000000000LL + t1.tv_nsec - t0.tv_nsec; denoise_frames += m / MICDENOISE_FRAME;
         }
-        if (m) { micgain_run(&mic_gain, src, out, m); proto->audio(out, m * 2); }
+        if (m) {
+            micgain_run(&mic_gain, src, out, m); proto->audio(out, m * 2);
+            double e = 0; for (size_t i = 0; i < m; i++) e += (double)out[i] * out[i];   /* the band's listening bar */
+            ring_level(e > 0 ? (int)lround(100 * log10(e / m / (32768.0 * 32768.0))) : -1000);
+        }
         pcm += k; n -= k;
     }
 }
@@ -1680,7 +1677,8 @@ void core_music(int source, int on)
     if (!was != !atomic_load(&music_on)) playback_hint();
 }
 
-static void earcon_started(void) { earsup_started(cap_clock()); }     /* the earcon thread: the mixer took a sound */
+/* the earcon thread: the mixer took a sound, which plays after lead_ms of silence (audio.h) */
+static void earcon_started(unsigned lead_ms) { earsup_started(cap_clock() + (uint64_t)lead_ms * CAP_RATE / 1000); }
 
 /* Our sounds and timers at their own volume (separate volumes): the Earcon stream plays at MainVolume, the loudest
  * of music, sounds and timers, so the quieter ones are turned down here (mix_apply).  A copy to free, or NULL to play
@@ -1718,7 +1716,7 @@ static void *earcon_thread(void *arg)
             else if (s == SND_WAKE || s == SND_TOUCH || s == SND_IDENTIFY) { pcm = tone; n = N; rate = RATE; }
             else pcm = NULL;
             if (pcm) {
-                short *quiet = scaled(pcm, n, atomic_load(&sounds_q16));
+                short *quiet = scaled(pcm, n, atomic_load(s == SND_VOLUME ? &click_q16 : &sounds_q16));
                 if (quiet) pcm = quiet;
                 earsup_play(pcm, n, rate, cap_clock()); play_earcon(pcm, n, rate);
                 free(quiet);
@@ -1789,16 +1787,18 @@ static void on_hold(int stage)
     else core_reset("action button held 10 s");
 }
 
-static void on_mute(int muted)          /* hardware latch changed (button) */
+static void mute_latch(int muted, int sound)
 {
     static int last = 0;
     fprintf(stderr, "mic mute button: %d\n", muted);
     pthread_mutex_lock(&core_lock);
     int was = last || soft_mute; last = muted;
     if (!muted && soft_mute) { soft_mute = 0; fprintf(stderr, "soft mute: 0 (released with the button)\n"); }
-    mute_update(was, 1);
+    mute_update(was, sound);
     pthread_mutex_unlock(&core_lock);
 }
+
+static void on_mute(int muted) { mute_latch(muted, 1); }       /* hardware latch changed (button) */
 
 /* Volume: 10 % per press like stock (3 of the ring's 30 steps on donut, board.volume_steps).  The volume_step-NN animations show 2 s and then loop
  * black forever, so the previous one has to be unset or they pile up in ledcontroller; a timer clears the last one. */
@@ -1812,44 +1812,13 @@ static long long mono_ms(void)
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-/* PC tests: the mixer's volumes as files in HASSMIC_FAKE_MIXER (one per property), there being no audio_manager */
-static const char *fake_mixer(const char *prop, char *file, size_t n)
-{
-    const char *d = getenv("HASSMIC_FAKE_MIXER");
-    if (!d) return NULL;
-    snprintf(file, n, "%s/%s", d, prop);
-    return file;
-}
+static int read_volume(void) { return vol_read(VOL_MAIN, 40); }
 
-static int read_prop_volume(const char *prop, int fallback)
-{
-    char out[1024], *line, *save; int v = fallback, x;
-    char *argv[] = { "/system/bin/audio_manager_get_prop", (char *)prop, NULL };
-    if (fake_mixer(prop, out, sizeof out)) {
-        FILE *f = fopen(out, "r");
-        if (f) { if (fscanf(f, "%d", &x) == 1 && x >= 0 && x <= 100) v = x; fclose(f); }
-        return v;
-    }
-    run_output(argv, out, sizeof out);
-    for (line = strtok_r(out, "\n", &save); line; line = strtok_r(NULL, "\n", &save))
-        if (sscanf(line, "%d", &x) == 1 && x >= 0 && x <= 100) v = x;
-    return v;
-}
-
-static int read_volume(void) { return read_prop_volume("MainVolume", 40); }
-
-/* The mixer keeps one volume per stream type.  MainVolume is what the stock volume keys move and covers the Music and Earcon
- * streams; the TTS stream, which carries the assistant's replies, follows TTSVolume alone.  One knob for the user: both,
- * the loudest of the four while the volumes are separate (mix_target, mix_apply). */
-static void set_prop_volume(const char *prop, int v)
-{
-    char val[8], file[300];
-    if (fake_mixer(prop, file, sizeof file)) { FILE *f = fopen(file, "w"); if (f) { fprintf(f, "%d\n", v); fclose(f); } return; }
-    snprintf(val, sizeof val, "%d", v);
-    run("/system/bin/audio_manager_set_prop", prop, val);
-}
-
-/* Separate volumes (setting separate_volumes, issue #32): off, one volume for everything, as stock.  On, four of
+/* The backend keeps one volume per kind of stream (audio.h).  VOL_MAIN is what the stock volume keys move and covers
+ * music and sounds; the assistant's replies follow VOL_TTS alone.  One knob for the user: both, the loudest of the
+ * four while the volumes are separate (mix_target, mix_apply).
+ *
+ * Separate volumes (setting separate_volumes, issue #32): off, one volume for everything, as stock.  On, four of
  * their own, 0..100 each: music (`volume`: what the media player, Sendspin and the keys show), the assistant's replies
  * and announcements, our sounds (wake, buttons, Bluetooth, Drop In's chimes), timers and Drop In calls (the far end).  What the Echo does with a
  * volume (Echo Dot 2, docs/re-platform.md): the mixer has MainVolume for the Music, Earcon and Voip streams, TTSVolume
@@ -1878,18 +1847,7 @@ static void volume_led(int v, int assistant);
 static int clamp100(int v) { return v < 0 ? 0 : v > 100 ? 100 : v; }
 static int clamp_offset(int v) { return v < -VOL_OFFSET_MAX ? -VOL_OFFSET_MAX : v > VOL_OFFSET_MAX ? VOL_OFFSET_MAX : v; }
 
-/* The Echo's volume curve: dB under volume 100 (Echo Dot 2, 2026-10-17: a -30 dBFS tone through the Music, Earcon and
- * TTS streams in micRaw, the three within 0.5 dB of each other; libasp's boost above 80 included, the mixer alone is
- * nearly flat there).  The other models' are not measured: this one */
-static float vol_db(int v)
-{
-    static const int at[] = { 0, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 };
-    static const float db[] = { -60, -47.3f, -40.6f, -35.7f, -30.5f, -26.5f, -22.4f, -19.5f, -18.4f, -14.0f, -10.0f, 0 };
-    int i = 1;
-    v = clamp100(v);
-    while (at[i] < v) i++;
-    return db[i - 1] + (db[i] - db[i - 1]) * (v - at[i - 1]) / (at[i] - at[i - 1]);
-}
+static float vol_db(int v) { return board_vol_db(v); }      /* the Echo's volume curve (volcurve.c) */
 
 /* lock held: what a kind (VOL_*) plays at now, its own volume or the music's moved by its offset */
 static int kind_volume(int k) { return kinds[k].linked ? clamp100(core_volume() + kinds[k].offset) : kinds[k].level; }
@@ -1917,8 +1875,8 @@ static float mix_gain(int v)
 static void mix_apply(void)                  /* lock held: the mixer's volumes and our gains, as they should be now */
 {
     int v = mix_target();
-    if (v != main_written) { set_prop_volume("MainVolume", v); main_written = v; }
-    if (v != tts_written) { set_prop_volume("TTSVolume", v); tts_written = v; }
+    if (v != main_written) { vol_write(VOL_MAIN, v); main_written = v; }
+    if (v != tts_written) { vol_write(VOL_TTS, v); tts_written = v; }
     static int spk_was = -1;
     int spk = speaker_mode == SPEAKER_ABSOLUTE ? loudest() : -1;
     if (spk >= 0 && spk != spk_was) fprintf(stderr, "volume: the speaker at %d\n", spk);
@@ -2118,9 +2076,8 @@ static int eq[3], eq_read;
 int core_eq(int band)
 {
     if (!eq_read) {
-        char out[256], key[32], *s; int x;
-        char *argv[] = { "/system/bin/lipc-get-prop", "-s", "com.doppler.lasp", "LASP_CMD_GET_USER_EQ_INFO", NULL };
-        run_output(argv, out, sizeof out);          /* {"bands":[{"name":"BASS","level":0},{"name":"MIDRANGE",... */
+        char out[1024] = "", key[32], *s; int x;
+        afe_eq_get(out, sizeof out);                /* {"bands":[{"name":"BASS","level":0},{"name":"MIDRANGE",... */
         for (int i = 0; i < 3; i++) {
             snprintf(key, sizeof key, "\"%s\",\"level\":", eq_names[i]);
             if ((s = strstr(out, key)) && sscanf(s + strlen(key), "%d", &x) == 1) eq[i] = x < -6 ? -6 : x > 6 ? 6 : x;
@@ -2137,12 +2094,12 @@ void core_set_eq(int band, int db)
     eq[band] = db < -6 ? -6 : db > 6 ? 6 : db;
     snprintf(json, sizeof json, "{\"bands\":[{\"name\":\"%s\",\"level\":%d},{\"name\":\"%s\",\"level\":%d},{\"name\":\"%s\",\"level\":%d}]}",
              eq_names[0], eq[0], eq_names[1], eq[1], eq_names[2], eq[2]);
-    char *argv[] = { "/system/bin/lipc-set-prop", "-s", "com.doppler.lasp", "LASP_CMD_SET_USER_EQ_INFO", json, NULL };
-    run_argv(argv);
+    afe_eq_set(json);
     fprintf(stderr, "equalizer: bass %d, mid %d, treble %d\n", eq[0], eq[1], eq[2]);
 }
 
-static int led_auto = 1, led_level = 80;            /* 80: ledcontroller's first-boot level */
+static atomic_int led_auto = 1, led_level = 80;     /* 80: ledcontroller's first-boot level; read without core_lock
+                                                     * (core_led_brightness(-1): the band's thread, the protocols) */
 
 /* Root installed the ring's set again (designs applied on the settings page) and restarted ledcontroller, which starts
  * with auto brightness on: a fixed level once more, and Home Assistant's light listed anew if it came or went */
@@ -2190,6 +2147,36 @@ int core_led_brightness(int set)
     return led_level;
 }
 
+/* A TCS3400 whose driver gives raw channels only (athena: its own `als_lux` stays 0, the table behind it unset; stock's
+ * virtual_als turns red/green/blue/clear into a level itself, lux.h does the same).  DIR holds `input*` directories; the
+ * one named tcs3400_als has als_red/green/blue/clear, als_itime (ms) and als_gain. */
+static float lux_tcs3400(const char *dir)
+{
+    DIR *d = opendir(dir);
+    struct dirent *e;
+    float lux = NAN;
+    while (d && (e = readdir(d))) {
+        char p[320], n[32] = ""; FILE *f;
+        if (strncmp(e->d_name, "input", 5)) continue;
+        snprintf(p, sizeof p, "%s/%s/name", dir, e->d_name);
+        if ((f = fopen(p, "r"))) { if (fgets(n, sizeof n, f)) n[strcspn(n, "\n")] = 0; fclose(f); }
+        if (strcmp(n, "tcs3400_als")) continue;
+        static const char *const ch[] = { "als_red", "als_green", "als_blue", "als_clear", "als_itime", "als_gain" };
+        double v[6]; int ok = 1;
+        for (int i = 0; i < 6 && ok; i++) {
+            snprintf(p, sizeof p, "%s/%s/%s", dir, e->d_name, ch[i]);
+            ok = (f = fopen(p, "r")) && fscanf(f, "%lf", &v[i]) == 1;       /* "64 (auto)": the number first */
+            if (f) fclose(f);
+        }
+        if (!ok) break;
+        lux = lux_tcs3400_calc(v[0], v[1], v[2], v[3], v[4], v[5]);
+        if (lux < 0) lux = NAN;
+        break;
+    }
+    if (d) closedir(d);
+    return lux;
+}
+
 /* The light sensor as stock's HAL (libacehal_ambientLightSensor.so, its per-model "facade") reads it: a sysfs file the
  * kernel driver fills with calibrated lux, parsed with atof.  0..400 is all stock uses of it. */
 float core_lux(void)
@@ -2197,7 +2184,9 @@ float core_lux(void)
     const char *e = getenv("HASSMIC_LUX");         /* tests */
     const char *const *p = e ? (const char *const[]){ e, NULL } : board.light_sensor;
     for (; p && *p; p++) {
-        char buf[32]; int fd = open(*p, O_RDONLY); ssize_t n;
+        char buf[32]; int fd; ssize_t n;
+        if (!strncmp(*p, "tcs3400:", 8)) { float l = lux_tcs3400(*p + 8); if (!isnan(l)) return l; continue; }
+        fd = open(*p, O_RDONLY);
         if (fd < 0) continue;
         n = read(fd, buf, sizeof buf - 1); close(fd);
         if (n <= 0) continue;
@@ -2205,6 +2194,13 @@ float core_lux(void)
         return (float)atof(buf);
     }
     return NAN;
+}
+
+/* Auto brightness is stock's engine (ledcontroller, above), which only the LED ring has: the Echo Show's band
+ * (ring_band.c) has a light sensor but nothing that follows it, so the switch is not offered there. */
+int core_led_has_auto(void)
+{
+    return ring_band_rows(-1) < 0 && !isnan(core_lux());
 }
 
 /* Anything may move MainVolume behind our back (audio_manager_set_prop, a stock daemon, the stock keys when -V), and
@@ -2218,12 +2214,12 @@ float core_lux(void)
 static void volume_sync(void)
 {
     int main_v, tts_v;
-    if (read_prop_volume("Mute", 0) != 0) { fprintf(stderr, "speaker: global Mute was set, clearing it\n"); set_prop_volume("Mute", 0); }
+    if (vol_read(VOL_MUTE, 0) != 0) { fprintf(stderr, "speaker: global Mute was set, clearing it\n"); vol_write(VOL_MUTE, 0); }
     pthread_mutex_lock(&core_lock);
     int cur = core_volume(), want = mix_target();
     pthread_mutex_unlock(&core_lock);
-    main_v = read_prop_volume("MainVolume", want);
-    tts_v = read_prop_volume("TTSVolume", want);
+    main_v = vol_read(VOL_MAIN, want);
+    tts_v = vol_read(VOL_TTS, want);
     pthread_mutex_lock(&core_lock);
     if (speaker_mode == SPEAKER_ABSOLUTE) {                         /* 100 is ours: only a stray TTSVolume to mend */
         if (main_v == 100 && tts_v != 100) { tts_written = -1; mix_apply(); }
@@ -2274,6 +2270,10 @@ static void on_volume(int dir)
           : atomic_load(&alarm_on) ? VOL_TIMERS : -1;
     if (k >= 0 && !kinds[k].linked) level_step(k, dir);
     else core_set_volume((core_volume() + 5) / 10 * 10 + dir * 10);
+    int now = k >= 0 ? kind_volume(k) : core_volume();         /* linked: the music moved, the kind with it */
+    /* at 0 the lowest step's, so a press is still heard where another kind keeps the speaker up (separate volumes;
+     * above the loudest, scaled() leaves it at full) */
+    atomic_store(&click_q16, (int)lroundf(mix_gain(now > 0 ? now : 10) * 65536));
     sound_request(SND_VOLUME);
     pthread_mutex_unlock(&core_lock);
 }
@@ -2542,6 +2542,10 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin); signal(SIGTTOU, on_ttou); signal(SIGWINCH, on_winch);
     if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
     ledq_start(use_led ? "/system/bin/ledctrl" : NULL, getenv("HASSMIC_FAKE_LED"), child_ids, LEDQ_TIMEOUT_MS);
+    { char rows[8];                                 /* the band's height before it starts (a preset's too): else the
+                                                     * default 10 px came up first, and with "Light band" 0 the apps were
+                                                     * laid out twice */
+      if (!settings_peek("light_band", rows, sizeof rows)) ring_band_rows(atoi(rows)); }
     ring_start(led_run, ring_reloaded);
     rd_start();                         /* designs asked for before this start: still installing, or back */
     audio_earcon_started = earcon_started;
@@ -2586,7 +2590,11 @@ int main(int argc, char **argv)
 
     static const struct button_handler buttons = { on_action, on_mute, on_volume, on_pair, on_hold, button_event };
     if (buttons_start(input, &buttons) < 0) fprintf(stderr, "buttons: %s not available\n", input);
-    else if (buttons_muted()) on_mute(1);
+    /* The latch is no press at start: on the Echo Show 8 it comes up on (the mics are cut, stock's system server plays
+     * its privacy sound) and it lets go by itself 20-80 s after power on (nothing in userspace writes it).  hassmic,
+     * up 40-64 s after the kernel started, found it on in two boots of three and said "mics off" to a user who had
+     * touched nothing (2026-10-13).  Shown, not announced; the release is announced as any other. */
+    else if (buttons_muted()) mute_latch(1, 0);
 
     if (core_sendspin_port) sendspin_start(core_sendspin_port);
     if (use_bt) a2dp_start(NULL);

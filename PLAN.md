@@ -2379,3 +2379,179 @@ Run in this order. Each step says what it proves.
       state/volume.music is read at start only while state/config says separate_volumes=on (`settings_peek`, now the
       last line of a name as loading takes it), else deleted: a hand edit or an older build after a fallback left it
       behind and the volume came back from it.
+- [ ] Echo Show 5 1st gen (`checkers`, 2026-10-07; on a tester's device from 2026-10-10, installed with the guided
+      setup; `docs/re-checkers.md`). Same Fire OS 6574.1 as donut,
+      but a full Android device: no `mixer`, the front end (libasp) inside the audio HAL, Alexa as apps. Checked:
+      `libpryon.so`/`libopus.so`/`libz.so` byte-identical to donut's; donut's `pryon_test` under qemu detects ALEXA on
+      checkers' `en-US/ALEXA` (newer model layout) and `world/ALEXA`; the binder service `audiosignalprocessor` takes
+      donut's LASP command numbers (`SET_LISTENING_MODE` 0x92, `REQUEST_ARBITRATION_JSON` 0x17). Built:
+      `devices/checkers/` and `audio_android.c` (OpenSL ES: VOICE_RECOGNITION capture, which the HAL routes into the ASR
+      pipeline, one player per stream; `make DEVICE=checkers` and `STUBS=1` byte-identical, `mkstubs.sh`). Shared:
+      SYSLIBS (NDK libraries beside the stock ones), `ble.c` takes a model without a stock Bluetooth service.
+      Unlock: amonet-checkers v2.0.1 (XDA; fastboot exploit over micro-USB, or the bootrom through TP30 on 2019
+      units), ends in TWRP; its lk/tz are 8149's own. The thread's root `boot-root.img` is 6570's kernel and ramdisk
+      (adb root, insecure props): mixed with 8149's /system, untried. Built: the same changes in 8149's own boot.img
+      (`scripts/mkbootroot.py`, the XDA ramdisk edits only; PC-checked — the stock image reassembles byte for byte
+      but for the header ID, which lk does not check, the XDA image boots with a foreign one; Amazon's kernel-signing
+      cert page after the stock image copied over; 8149's ramdisk is a bare gzip stream, only the kernel carries
+      MTK's 512-byte header — untried on a device).
+      That image alone would leave adb dead (2026-10-07): with ro.secure=0 adbd setcon()s to its --root_seclabel
+      u:r:su:s0 (init.usb.rc) and AOSP 7 adbd LOG(FATAL)s when refused; 8149's policy has `permissive su` but no
+      `adbd su process dyntransition` (magiskpolicy --print-rules of both under qemu: 13903 rules; the XDA 6570 policy
+      has `permissive adbd` and `permissive untrusted_app`). Install written (INSTALL=boot, `scripts/install-boot.sh`,
+      install-system.sh hands over): boot image = 8149's + `--sepolicy` (stock policy + `sepolicy.rules`: donut
+      boot-root's adb rules and our init->su rules, applied by donut's magiskpolicy32 under qemu-arm; the diff against
+      stock is exactly those 13 rules) + `--no-verity` (`verify` out of fstab.mt8163); reproducible, sha256 5518117....
+      Flashed in hacked fastboot after checking the system build (incremental 0013222532484) from TWRP or the OS; the
+      boot partition compared first (md5: no sha256sum in toybox). Then sysinstall.sh as on donut; `otatool remount`
+      clears BLKROSET when the kernel refuses (/system is its own block device here). `hassmic.rc`: firewall `on boot`,
+      satellite at sys.boot_completed. `alexa-off.sh` disables ALEXA/SETUP/UPDATE_PACKAGES with pm (only what is not
+      disabled; noted in alexa-disabled, which alexa-on.sh and, without hassmic.conf, boot.sh undo; stock-online keeps
+      the updater off: `keep-updates`); checked against a fake pm. `lockdown.sh`: `FW_KEEP` (DHCP answers: no stock
+      firewall.sh), the updater's uid from packages.list for ota-only. Recording rights settled from the firmware:
+      libserviceutility.so recordingAllowed lets uid 0 through after RECORD_AUDIO and looks up a package for any other
+      uid (system: "android"). `tools/sdat2img.py` (reproduces the system image, md5-checked); `mkbootroot.py --extract`,
+      `--cpio`. PC-checked: the boot image build end to end with adb stubbed out (a biscuit was on adb here: the model
+      guard refused it), otatool_test.sh, fake_ha_esphome.py.  Wi-Fi without the touchscreen (2026-10-10):
+      `scripts/device/wifictl.dex` (tools/mkwifictl.py; reflection-only, wpa_cli-shaped answers) puts a
+      WifiConfiguration in through the IWifiManager binder as root — wifi.sh's switch and wifi-join.sh's setup join
+      both use it, checked end to end against a fake framework (fake_web_wifi.py, both worlds).  The first dex passed
+      the firmware's dexdump but would not have loaded (dexdump checks structure, not types: int aget/sget opcodes,
+      parameters read from the low registers, lit8 opcodes off by 8, java/lang/List and java/lang/io/PrintStream,
+      Class.forName("int"), KeyMgmt bit 0 = NONE, the page's PSK quoted as a passphrase).  Now: a type-flow check of
+      every method in mkwifictl.py, `--framework` against 8149's boot*.oat dex files (every reference and reflected
+      call, KeyMgmt.WPA_PSK = 1), tests/unit/wifictl_run.py interpreting the dex against a fake WifiService (make
+      unit); qemu-user cannot run the firmware's ART (dalvikvm32 dies in its start-up), so a device is the rest.
+      `devices/checkers/setup.sh`: every step walks in a dry run.  Earcons (2026-10-10): sounds.c reads stock's
+      sounds straight out of the apps (`board.earcon_zip`; aapt stores audio uncompressed), 12 of 13 found
+      (SpeechInteractionManager's shrunk names mapped through its resources.arsc), all decoding at 48 kHz from the
+      unpacked firmware in make unit; no setup beacon anywhere.  First device (a tester's, 2026-10-10): 8149's boot
+      image with our ramdisk changes boots, but 8149's adbd is a user build and never stays root (ro.secure=0,
+      service.adb.root=1, oem flags 61 all tried); with the XDA image's adbd (mkbootroot.py --adbd) adb is root in
+      u:r:su:s0.  kaeru 2.0.0 leaves the RTC fastboot flag set: fastboot continue, not reboot.  Rebased on main
+      (2026-10-13), its per-model additions brought over: speaker gain on the RT5616's line out (`OUT Playback
+      Volume` 0..39, 1.5 dB a step, stock 29 = -3 dB; read from the kernel's soc_mixer_control and TLV and the HAL's
+      audio_device.xml; `speaker_gain_db` for steps that are not a whole dB, spkgain_test +8), the wake sound
+      removal's start signal from the OpenSL ES earcon player (`audio_earcon_started` after the first Enqueue), the
+      volume-key chord under main's buttons (steps on release, a pair no step and no event; buttons_test updated),
+      no light ring animations without `/system/etc/led-resources`.  Bluetooth speaker (2026-10-13, on the tester's Echo
+      with a PC as the speaker): the firmware's own A2DP HAL behind AudioPolicy (`media.audio_policy` 1/2,
+      setDeviceConnectionState through `service call` with C strings), btout.c serving the HAL's sockets as on the Dots;
+      the route moves in 410–520 ms, comes back 1.6 s after audioserver is killed, players wait while it moves (a pop
+      otherwise).  Light band (2026-10-13): the ring on the screen's bottom 10 px (`ring_band.c`, `ringbar.dex`: overscan + a
+      SurfaceFlinger layer, both seen working), the Dots' patterns unrolled; turning it towards the talker tried and
+      left out (the front end's beam events arrive through an IAudioEventListener, but only 4 of 7 beams, switching
+      several times a second wherever the talker stands: docs/re-checkers.md).  Light sensor and Wi-Fi motion
+      (2026-10-13): Amazon's stk3x1x driver's `als_ps/lux` (a live I2C read, the factory calibration applied; 93-94 lux
+      as Android's sensor), no LED auto brightness on the band (`core_led_has_auto`); `hassmic_rcpi4m` for 32-bit ARM
+      (SW_RFB_T +16/+32, `patch_text`, kernel.org 4.9.77 + IKCONFIG, arm-eabi-4.8: Amazon's Linaro GCC 6.3 is no longer
+      published), hooked on the Echo, motion seen in HA.  Reading the driver's `cali_Light` or `ir` attributes changes
+      the sensor (docs/re-checkers.md).  `alexa-off.sh`'s p2p wpa_cli bounded (once hung the satellite's start).
+      Amazon downloads (2026-10-13): the attestation key behind the binder service `amazon.security.dha` (version 1,
+      RSA-2048, PSS over the given digest, as the Dots' HAL; asked as system through `service call`), the token as
+      checkers' Java MAP (com.amazon.imp, decompiled) builds its drvV1: padded n/mac, its key order, cpuid from
+      /proc/cpuinfo, UTC (dha.c, `dha_jwt_test --service`).  On the Echo against amazon.de: registered, echo de-DE
+      and aed de-DE downloaded and installed; whisper-static 403 "not allowlisted for device Type A4ZP7ZC4PI6TO".
+      Volume curve (2026-10-27, `tools/vol-curve.py` + `slplay`, an Echo Dot 2's micRaw beside it, a loud room):
+      dB under index 30: 27 -4.0, 21 -12.3, 15 -19.7, 9 -31.8, 6 -41.0, 3 -51.2, 2 -60.0; three tones within 0.5 dB,
+      down and up alike, index 21 nine times within 1.8 dB; 3770 Hz wandered (11.6 dB) and is left out.  Now
+      `board.volume_curve` (`volcurve.c`, unit-tested per model; NULL elsewhere = the Dot 2's).  Light ring designs on the band
+      (2026-10-27): ring.c's slots on `ring_band.c`, drawn live and flattened (position p = LED p + 5, the talker's
+      pair in the middle, never turned), Apply without root (`ring_designs_live`), the band's patterns as files for
+      the page (`ring_stock`), the page's band drawing and designer; `hassmic_assist_NN` in cyan on the band.
+      `ring_band_test.c` (with ringdesign.c), the page checked in headless Chromium on the PC build, the build on the
+      tester's Show (self test, factory copy).
+      Open items, one list: docs/re-checkers.md "What a port needs".
+- [~] Echo Show 8 1st gen (`crown`, 2026-10-13; `docs/re-crown.md`). Same platform as checkers: MT8163, Android 7.1.2,
+      kernel 4.9.77, RT5616, gating latch, MT7668; Fire OS 6.5.7.0 NS6570 (6074). `libpryon.so` 2.41 (newer than the
+      Show 5's; `pryon_test` loads the ALEXA model), `libasp.so` differs, `libopus`/`libz` as donut's. `devices/crown/`
+      copied from checkers and adapted (speaker gain stock 30 of 0..39, no `ui_wakesound` entries, `NS6570` pins,
+      absent stock apps out of `STOCK_APPS_OUT`, own kconfig; stubs byte-identical, `scripts/setup.sh crown --dry-run`
+      walks every step).  Trial run from the PC on a rooted Echo (nothing installed, 2026-10-13): OpenSL ES capture,
+      wake word "alexa" detected, volume keys, mic mute latch, band 1280 x 10, speaker gain read.  The install (`INSTALL=boot`, boot image from
+      the NS6570 `boot.img`; the unlock's `boot-root.img` is NS6571's): done since (below).  The guided setup on a real
+      Echo Show 8: tried by the port's author.
+      Closed (2026-10-14, docs/re-crown.md "Bluetooth, wake sound, extra apps"): Bluetooth works after the install (proxy,
+      GATT, A2DP ready); the wake sound is not in this firmware (`ban_ui_wakesound`, `ban_ui_endpointing` are empty files),
+      the built-in tone stays; MODEL_NUMBER C7H6N3; crown's extra apps classified (none runs or crashes: left as they are).
+      DHA version 2 (2026-10-14): the service's drvV3 (Java MAP, `dha.c` `jwt_java_v3`) works against the real Amazon: models downloaded and installed on a Show 8. Wi-Fi motion (2026-10-14): seen in HA's sensor after a warm-up of the per-kind levels (the first readings only set them); checkers' driver layout byte for byte (hook +0x64, SW_RFB_T +16/+32), so `hassmic_rcpi4m`
+      builds unchanged (`make kernel-tools DEVICE=crown`); loaded by hand on the Show 8: hooked, frames counted (KIND 0x14009).
+      Not yet seen through `main.sh` and HA's sensor.
+      Boot time (2026-10-14, Show 8): hassmic up 64 s after the kernel started, 90-120 s from the plug. `alexa-off.sh` took
+      36 s of it (a `pm list packages <name>` per absent package, 1.4 s each under the boot load); one listing makes it
+      17 s, hassmic up at 40 s (tried on the Show 8; not in this port, its own change). The 22 s of Android's own boot and
+      the bootloader remain.
+      Installed and verified on a real Show 8 (2026-10-14): voice question answered, buttons, ESPHome entities, volume
+      and mute keys, the band during a command and a reply. Found: the mute latch comes up on after power-on and lets go
+      by itself 20-80 s later (12 s 0, 16 s 2, 17 s 1, released 36 s in one boot, 50 s and 83 s in two): hassmic up
+      at 40-64 s caught it and played "mics off" -> `mute_latch(1, 0)` shows it quietly.  No wake sound was heard: the
+      output's open takes ~170 ms plus the amplifier (logcat, AudioALSAPlaybackHandlerNormal), the blip is 120 ms ->
+      `audio_android.c` lead-in of 350 ms after 2.5 s without audio (`COLD_MS`, `LEAD_MS`); the blip after it to be
+      confirmed by ear (a longer sound of our own was heard after it, 2026-10-15).  2026-10-17: the lead-in
+      reached earsup as part of the echo delay (85 ms + 350 > `D_MAX` 400 ms): `audio_earcon_started(lead_ms)` moves its
+      start past it.
+- [~] Echo Show 5 2nd gen (`cronos`, 2026-10-26; `docs/re-cronos.md`).  checkers' platform and its pinned build: Fire OS
+      6574.1 NS65741/8149 (same `ro.build.version.incremental`, cronos' own image), kernel 4.9.77 (20 config lines from
+      checkers', 74 from crown's), `libpryon.so` byte-identical to checkers', stubs identical in symbols and order,
+      `STOCK_APPS_OUT` all present but two.  Differs: mute button `gpio-privacy` (athena's driver, toggle 1000 ms), and
+      the speaker amplifier by board revision (RT5616E / RT5616 `OUT Playback Volume` 29, TAS5805M `Master TAS5805m
+      Playback Volume A` 110, MAX98396): `board.speaker_gain_alt`, `spkgain.c` takes the first control on the card;
+      MAX98396: `Speaker Volume A` 0..17 = +4..+21 dB (the kernel's TLV), stock 8, capped at +6 dB.  Checked on the PC: `sounds_test` decodes all twelve earcons from its APKs,
+      `mkbootroot.py --check` and the patched image (adb tcp line, chime, verify out), the Wi-Fi driver's hook site
+      (+0x64).  The XDA zips are pinned since (amonet's lk/tz are 8149's;
+      the boot-root zip's adbd is checkers'), and the device answered the rest:
+      Installed on a real cronos with the guided setup from a Raspberry Pi 4 (2026-10-26): amonet v2.0.1 (its x86_64
+      fastboot under qemu-user), system 8149 written, root boot image, build, lockdown, Wi-Fi, install; hassmic up, IP by
+      DHCP.  Seen: `gpio-privacy-state`/`-button` (mute pressed and released), volume keys, the band 960 x 10, `als_ps/lux`
+      (250 lux), wake word engine loaded; the XDA boot-root's adbd is checkers'.  Fixed on the way: `wifi-join.sh` as
+      root could not update a network the stock update had saved (as system now), the speaker amp is a MAX98396
+      (added), the udev rules lacked the Shows' fastboot id.  Found and left to their own PRs (issue #45): Ubuntu 26.04
+      refuses `unshare --user` (qrun.sh), qemu-arm on a non-x86_64 PC, the udev rules over ssh (plugdev).  The lk (`20240709`) is 8149's and does not change with stock updates.
+      Home Assistant adopted it and works (the tester).  Not yet: the speaker gain by ear, Wi-Fi motion, DHA version /
+      Download from Amazon, Bluetooth.
+- [~] Echo Show 8 2nd gen (`athena`, 2026-10-14; `docs/re-athena.md`).  A different platform from crown: MT8183, Android 9
+      (Treble, enforcing SELinux, policy in `/vendor/etc/selinux/precompiled_sepolicy`), kernel 4.4.146, Fire OS 7574.1
+      (PS75741.7080N; build 7077's probe libraries are byte-identical).  Rooted by saiyaku-athena's zip (system and vendor
+      patched in place, dm-verity off), so `INSTALL=running`: `install-system.sh` writes `/system/hassmic`, the rc, the home
+      APK, moves `STOCK_APPS_OUT` aside, and patches the vendor policy with `sepolicy.rules` (the unlock's `magiskpolicy32`
+      on the Echo; `sysinstall.sh` `SEPOLICY_FILE`, `/vendor` remounted by `otatool` only when the policy is written).
+      `devices/athena/` from crown's; stubs byte-identical, `scripts/setup.sh athena --dry-run` walks the steps,
+      `sounds_athena` decodes every earcon (athena has the wake sound, `res/7E.mp3`, crown does not).  Installed on a real
+      Echo: boot_completed ~17 s, hassmic up at 22 s, self test passed, "Alexa" detected, volume keys and the mute latch
+      grabbed, Bluetooth up once `bluetooth-1-0` is stopped (`/dev/stpbt` is single-open: "mode is 3"), the band drawn.
+      Found and fixed: Android 9 has no `SurfaceControl` constructor (`ringbar.dex` takes `builder` from `ring_band.c` when
+      SDK >= 26, one dex for every model) and the Java `SurfaceControl` must stay reachable (its finalizer released the
+      layer every ~55 s).  On checkers and crown the new `ringbar.dex` and `wifictl.dex` have passed the PC runs
+      (`ringbar_run.py`, `wifictl_run.py`) and `--framework` on checkers 8149 only, not yet a device.
+      The libc's `accept()`, `accept4()` and `connect()` failed with EBADF (a bare `socket/bind/listen/accept` program shows
+      it; the raw system call works): every listener ended and Home Assistant could not connect.  Cause (2026-10-15): netd's
+      fwmarkd, which the libc asks to mark the socket, was denied `read write` on sockets of the `su` domain; `sepolicy.rules`
+      allows it.  (The first builds made the system calls themselves, `netio.h`; taken out, the rule is the fix: not run on the Echo yet.)
+      Home Assistant adopts it and a voice round trip works (wake, transcript, spoken reply).  `ota-push.sh` works (pushed,
+      self test, factory copy; `sysinstall.sh factory` skips the `oat/` directory ART leaves beside a dex).
+      Wi-Fi: `wifictl.dex` knows Android 9's `IWifiManager` (package name argument, `ParceledListSlice`), run as uid
+      system by `wifi.sh` (`WIFICTL_USER`): status, scan, join of the current network and of a made-up one, and the settings
+      page's switch tested on the Echo (`docs/re-athena.md` "Wi-Fi").  "Download from Amazon" works (`fireosdhaservice`
+      answers as crown's DHA v2, `dha.c` tries both names; the Echo's network must let it reach api.amazon.<site>,
+      api.amazonalexa.com and CloudFront).  Phone Bluetooth audio works (the spoken "Connected to X" needs the ESPHome option
+      "Allow the device to perform Home Assistant actions").
+      Sendspin works: Music Assistant 2.10.6 plays an Icecast stream (FLAC, sync within +-4 ms of the server's clock, 3.7 MB
+      queued); its OpenSubsonic provider fails with `'albumInfo'` before it sends anything (Music Assistant's, not ours).
+      Volume: `IAudioService`'s transaction numbers are 7 (setStreamVolume) and 14 (getStreamMaxVolume) on Android 9
+      (`audio_android.c` by `ro.build.version.sdk`).
+      Lux: raw channels converted as stock's virtual_als (`lux.h`, within ~10 % in steady light; a lamp held close jumped
+      100 - 66000 - 7000 - 2000 lx: gain/integration change between reads or saturation, to look into).
+      Speaker: the TAS5805m's digital volume (control 84, 0..158, 100 at boot, no dB table).  Listened to with music at full
+      volume: 115, 120 and 122 clean on a radio stream, 130 distorted, a rap track's bass clipped at 122, so
+      `speaker_gain_limit` 118 and `speaker_gain_steps` 2 (0.5 dB assumed) = up to +9 dB.  The audio HAL did not rewrite it
+      after a voice reply or at a change of the setting.  Sounds: a cold output = ~575 ms until the HAL pulls the first
+      buffer (the amplifier unmuting) + `LEAD_MS` (350, as crown).
+      Mute button: `gpio-privacy` reports the latch 1.23/1.29 s after a press that mutes, 0.28 s unmuting
+      (`enable-gpio-toggle-duration` 1000 ms); `board.privacy_button` (`gpio-privacy-button`, not grabbed) shows the press at
+      once, the latch confirms it within `privacy_settle_ms` (2000) or it is taken back (`buttons_privacy_test`).
+      Wi-Fi motion (2026-10-16): `wlan_mt76x3_sdio.ko` has gen4m's RX path, so `hassmic_rcpi4m` with its 32-bit defaults
+      (hook +0x68); no `patch_text` and read-only module text: `set_memory_rw` + `stop_machine`; `devices/athena/Module.symvers`
+      for `CONFIG_MODVERSIONS`.  RCPI 120 unicast (0x14009), 129 broadcasts; the sensor switched on as someone walked past.
+      **Open:** lux flicker under a close lamp; not confirmed on the Echo: Improv, factory reset, `--uninstall`, the
+      update check, and the build without the `netio.h` system calls (the rule alone);
+      `tools/mkringbar.py --framework` cannot read Android 9's compact dex (checked by hand once, 2026-10-20).

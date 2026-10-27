@@ -136,6 +136,7 @@ void core_set_eq(int band, int db);              /* the mixer keeps it across re
 int  core_led_auto(int set);                     /* LED ring follows the light sensor (stock's own engine, the default); -1 reads */
 int  core_led_brightness(int set);               /* 0..100; set >= 0 fixes the level (auto off); -1 reads what the ring shows */
 float core_lux(void);                            /* light sensor in lux as stock reads it (no lock needed); NAN: none */
+int  core_led_has_auto(void);                    /* a light sensor and an engine that follows it: auto brightness offered */
 /* Sound detection (sound.h): off by default.  The events Home Assistant may get, one per sound the model tells apart. */
 int  core_sound(int set);                        /* set: 0/1, or -1 to only read */
 int  core_whispered(void);                       /* the last request: 1 whispered, 0 not, -1 none scored yet, -2 no model
@@ -183,6 +184,7 @@ void   core_dropin(int state, const char *peer, int outgoing);
 void   core_dropin_result(int result, const char *peer, int here);
 void   core_dropin_listen(int on);                          /* the front end's listening mode: this side of a call talks */
 const char *core_dropin_refusal(int incoming);
+void   core_spawn(char *const argv[]);                      /* the same, without waiting for it or its output */
 void   core_run(char *const argv[], char *out, size_t n);   /* runs a stock tool the way the core does, until it closes its
                                                                stdout, which lands in out (any thread, not the lock) */
 #endif

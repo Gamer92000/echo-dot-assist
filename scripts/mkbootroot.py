@@ -1,0 +1,309 @@
+#!/usr/bin/env python3
+"""mkbootroot: a rooted boot.img from the device's own stock one, in the standard library only.
+
+  mkbootroot.py --check BOOT.img            prove the rebuild: stock image in, the same out but for the ID
+  mkbootroot.py BOOT.img OUT.img [--sepolicy FILE] [--adbd FILE] [--no-verity]
+                                            build the rooted image
+  mkbootroot.py --extract BOOT.img NAME OUT a file of the ramdisk (e.g. sepolicy, to patch it)
+  mkbootroot.py --cpio BOOT.img OUT         the whole ramdisk, uncompressed (cpio -id < OUT unpacks it)
+
+The XDA boot-root.imgs are built from some other build's boot.img (checkers': NS6570/6086, to
+run against 8149's /system), so this applies their ramdisk changes to the stock image of the
+firmware actually installed: kernel, sepolicy and every other ramdisk file stay that build's.
+adb is then a root shell without authentication.  The certificate page after the last page of
+the stock image is left out: Amazon's kernel-signing cert, which names the stock image's sha256
+in its subject alt name (URI:sha256://...), so it can only be wrong for ours; lk has
+amzn_image_verify.  The XDA image has none and boots.
+
+Boot image: Android header v0, page as the header says; kernel and (if there) ramdisk blobs
+carry MediaTek's 512-byte header, whose size field counts the payload without it (the Android
+header's sizes with it).  The ramdisk is a gzip'd cpio (newc); the two files are replaced inside
+the stream, so every other entry keeps its exact bytes — order, metadata, data.  The new ramdisk
+is deflated anew (mtime 0, level 9, the stock stream's header bytes).  The header page is the
+stock one but for ramdisk_size and the ID, which AOSP mkbootimg's v0 formula computes (sizes,
+then the blobs); the stock ID follows some other formula, but lk does not check it: the XDA
+image boots with a foreign one.
+
+In the ramdisk:
+- default.prop: ro.secure=0, ro.adb.secure=0, ro.debuggable=1, ro.allow.mock.location=1,
+  persist.sys.usb.config=mtp,adb  (the XDA image's changes)
+- init.fosflags.sh: adb on, authentication off, nothing else (the XDA image's file, byte for
+  byte: it ends without a newline)
+- with --sepolicy FILE: sepolicy replaced by FILE (the stock one patched: with ro.secure=0 adbd
+  switches itself to its --root_seclabel u:r:su:s0 and dies when the policy refuses, and
+  checkers' stock policy has su permissive but no way for adbd into it; devices/checkers/
+  sepolicy.rules)
+- with --adbd FILE: sbin/adbd replaced by FILE.  8149's own adbd is a user build (no ro.secure
+  in it: "adbd cannot run as root in production builds"), which drops to shell whatever
+  ro.secure, service.adb.root or the FOS flags say (all three tried on a checkers, 2026-10-10);
+  the XDA image's adbd (CyanogenMod's, static) goes by ro.secure, and with it adb is root in su
+- init.*.rc: stock's "setprop service.adb.tcp.port 5555" (checkers' init.checkers.rc, on boot) left out, as a
+  comment line in its place.  With the changes above it opened a root shell without authentication to the network at
+  every boot, until lockdown.sh closed it again; adb over Wi-Fi is hassmic's to open (adb_gate in lockdown.sh).
+  The same for "start bootsound_anim" (bootanim_playback.sh, Amazon's boot chime): it plays at the media stream's
+  volume, which a satellite keeps at full (hassmic's own gain is the volume), so every boot was deafening
+- with --no-verity: "verify" taken out of the fs_mgr flags in every fstab.* that has it, so
+  /system mounts without dm-verity and can be written (hassmic's install).  Once it has been
+  written, only a boot image without verify may boot it: the stock one finds the hashes wrong.
+"""
+import hashlib, struct, sys, zlib
+
+MTK_MAGIC = bytes.fromhex("88168858")
+ID_OFF, ID_LEN = 0x240, 0x20
+
+PROPS = [  # default.prop, old line -> new line; each must be there exactly once
+    (b"ro.adb.secure=1", b"ro.adb.secure=0"),
+    (b"ro.secure=1", b"ro.secure=0"),
+    (b"ro.allow.mock.location=0", b"ro.allow.mock.location=1"),
+    (b"ro.debuggable=0", b"ro.debuggable=1"),
+    (b"persist.sys.usb.config=none", b"persist.sys.usb.config=mtp,adb"),
+]
+FOSFLAGS = (b"#!/system/bin/sh\n"
+            b"PATH=/sbin:/system/sbin:/system/bin:/system/xbin\n"
+            b"\n"
+            b"setprop persist.sys.usb.config mtp,adb\n"
+            b"setprop amazon.fos_flags.noadbauth 1")
+
+
+class Boot:
+    def __init__(self, raw):
+        assert raw[:8] == b"ANDROID!", "not a boot image"
+        (self.ksz, self.kaddr, self.rsz, self.raddr, self.ssz, _, _, self.page) = \
+            struct.unpack("<8I", raw[8:40])
+        assert self.ssz == 0, "a second stage is not handled"
+
+        def pages(n):
+            return (n + self.page - 1) // self.page
+
+        self.hdr = raw[:self.page]
+        self.kernel = raw[self.page:self.page + self.ksz]
+        ro = self.page + pages(self.ksz) * self.page
+        ramdisk = raw[ro:ro + self.rsz]
+        self.ramdisk_mtk = ramdisk[:4] == MTK_MAGIC
+        if self.ramdisk_mtk:  # same convention as the kernel: the header's size is the payload's
+            assert struct.unpack("<I", ramdisk[4:8])[0] == self.rsz - 512
+            ramdisk = ramdisk[512:]
+        self.ramdisk = ramdisk
+        self.trailing = raw[ro + pages(self.rsz) * self.page:]  # the certificate page, or ""
+
+    def cpio(self):
+        return gunzip_mem(self.ramdisk)
+
+    def assemble(self, ramdisk):
+        blob = (mtk_header(len(ramdisk), b"ROOTFS") + ramdisk) if self.ramdisk_mtk else ramdisk
+        h = hashlib.sha1()
+        h.update(struct.pack("<3I", self.ksz, len(blob), self.ssz))
+        h.update(self.kernel + blob)  # AOSP mkbootimg's v0 ID
+
+        def pad(b):
+            return b + bytes(pages_(len(b), self.page) * self.page - len(b))
+
+        hdr = bytearray(self.hdr)
+        struct.pack_into("<I", hdr, 0x10, len(blob))
+        hdr[ID_OFF:ID_OFF + ID_LEN] = h.digest() + bytes(ID_LEN - 20)
+        return bytes(hdr) + pad(self.kernel) + pad(blob) + self.trailing
+
+
+def pages_(n, page):
+    return (n + page - 1) // page
+
+
+def mtk_header(size, name):
+    return MTK_MAGIC + struct.pack("<I", size) + name.ljust(8, b"\0") + bytes(512 - 16)
+
+
+def gzip_mem(data):  # stock stream: mtime 0, XFL 0, OS 3; deflate level 9
+    co = zlib.compressobj(9, zlib.DEFLATED, -15)
+    return (b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03" + co.compress(data) + co.flush()
+            + struct.pack("<II", zlib.crc32(data) & 0xFFFFFFFF, len(data) & 0xFFFFFFFF))
+
+
+def gunzip_mem(data):
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    out = d.decompress(data) + d.flush()
+    assert not d.unused_data and not d.unconsumed_tail, "more than one gzip member"
+    return out
+
+
+def default_prop(data):
+    for old, new in PROPS:
+        assert data.count(old + b"\n") == 1, old + b" not exactly once in default.prop"
+        data = data.replace(old + b"\n", new + b"\n")
+    return data
+
+
+RC_OUT = {  # init.*.rc lines that go, -> the comment in their place
+    b"setprop service.adb.tcp.port 5555": b"# hassmic: adb over Wi-Fi only when hassmic opens it",
+    b"start bootsound_anim": b"# hassmic: no boot chime (it plays at the full volume a satellite keeps)",
+}
+
+
+def rc_lines_out(data):
+    """init.*.rc: the lines of RC_OUT as comments; None where there is none."""
+    lines, n = data.split(b"\n"), 0
+    for i, l in enumerate(lines):
+        if l.strip() in RC_OUT:
+            lines[i] = l[:len(l) - len(l.lstrip())] + RC_OUT[l.strip()]
+            n += 1
+    return b"\n".join(lines) if n else None
+
+
+def pattern(name, edit):
+    """the key of EDIT that NAME falls under: itself, or the glob of its kind (fstab.*, init.*.rc)"""
+    if name.startswith(b"fstab.") and b"fstab.*" in edit:
+        return b"fstab.*"
+    if name.startswith(b"init.") and name.endswith(b".rc") and b"/" not in name and b"init.*.rc" in edit:
+        return b"init.*.rc"
+    return name
+
+
+def no_verity(data):
+    """fstab: drop "verify" from the last column (fs_mgr flags) of each entry that has it; None if none has."""
+    lines, n = data.split(b"\n"), 0
+    for i, l in enumerate(lines):
+        f = l.split()
+        if len(f) < 5 or l.lstrip().startswith(b"#"):
+            continue
+        flags = f[-1].split(b",")
+        if b"verify" not in flags and not any(x.startswith(b"verify=") for x in flags):
+            continue
+        new = b",".join(x for x in flags if x != b"verify" and not x.startswith(b"verify=")) or b"defaults"
+        lines[i] = l[:l.rindex(f[-1])] + new
+        n += 1
+    return b"\n".join(lines) if n else None
+
+
+def edits(sepolicy=None, verity=True, adbd=None):
+    """name -> function(data) -> new data, or None to leave that one as it is"""
+    e = {b"default.prop": default_prop, b"init.fosflags.sh": lambda d: FOSFLAGS, b"init.*.rc": rc_lines_out}
+    if sepolicy is not None:
+        e[b"sepolicy"] = lambda d: sepolicy
+    if adbd is not None:
+        e[b"sbin/adbd"] = lambda d: adbd
+    if not verity:
+        e[b"fstab.*"] = no_verity
+    return e
+
+
+def edit_cpio(cpio, edit):
+    """Replace the files of EDIT inside the stream; every other byte of an entry stays."""
+    out, off, done = [], 0, set()
+
+    def edited(name, data):
+        key = pattern(name, edit)
+        if key not in edit:
+            return None
+        data = edit[key](data)
+        if data is not None:
+            done.add(key)
+        return data
+
+    while True:
+        assert cpio[off:off + 6] in (b"070701", b"070702"), "not a newc cpio at %d" % off
+        f = [int(cpio[off + 6 + 8 * i:off + 6 + 8 * (i + 1)], 16) for i in range(13)]
+        size, namesize = f[6], f[11]
+        name = cpio[off + 110:off + 110 + namesize - 1]
+        data_off = (off + 110 + namesize + 3) & ~3
+        data = cpio[data_off:data_off + size]
+        if name == b"TRAILER!!!":
+            out.append(cpio[off:data_off])  # the trailer and whatever follows it, verbatim
+            break
+        new = edited(name, data)
+        if new is not None:
+            f[6] = len(new)
+            out.append(cpio[off:off + 54] + b"%08x" % f[6] + cpio[off + 62:off + 110]
+                       + name + b"\0" + b"\0" * (-(110 + namesize) % 4)
+                       + new + b"\0" * (-len(new) % 4))
+        else:
+            out.append(cpio[off:data_off + size + (-size % 4)])
+        off = data_off + size + (-size % 4)
+    missing = set(edit) - done
+    assert not missing, "not in the ramdisk: %s" % b", ".join(sorted(missing)).decode()
+    return b"".join(out)
+
+
+def entries(cpio):
+    """(name, metadata without the size, data) in stream order; to compare ramdisks file by file."""
+    out, off = [], 0
+    while True:
+        assert cpio[off:off + 6] in (b"070701", b"070702"), "not a newc cpio at %d" % off
+        f = [int(cpio[off + 6 + 8 * i:off + 6 + 8 * (i + 1)], 16) for i in range(13)]
+        size, namesize = f[6], f[11]
+        name = cpio[off + 110:off + 110 + namesize - 1]
+        data_off = (off + 110 + namesize + 3) & ~3
+        if name == b"TRAILER!!!":
+            return out
+        out.append((name, tuple(f[:6] + f[7:]), cpio[data_off:data_off + size]))
+        off = data_off + size + (-size % 4)
+
+
+def compare(stock, new, label, edit):
+    a, b = entries(stock), entries(new)
+    assert [e[0] for e in a] == [e[0] for e in b], label + ": the file list changed"
+    for (na, ha, da), (nb, hb, db) in zip(a, b):
+        assert na == nb and hb == ha, label + ": " + na.decode() + "'s metadata changed"
+        if da != db:
+            assert pattern(na, edit) in edit, \
+                label + ": " + na.decode() + " changed"
+            print("  " + na.decode() + " changed (%d -> %d bytes)" % (len(da), len(db)))
+
+
+def main(argv):
+    if argv[:1] == ["--cpio"]:
+        if len(argv) != 3:
+            sys.exit(__doc__)
+        open(argv[2], "wb").write(Boot(open(argv[1], "rb").read()).cpio())
+        return
+    if argv[:1] == ["--extract"]:
+        if len(argv) != 4:
+            sys.exit(__doc__)
+        for name, _, data in entries(Boot(open(argv[1], "rb").read()).cpio()):
+            if name == argv[2].encode():
+                open(argv[3], "wb").write(data)
+                return
+        sys.exit("%s: no %s in the ramdisk" % (argv[1], argv[2]))
+    sepolicy, verity = None, True
+    adbd = None
+    while "--adbd" in argv:
+        i = argv.index("--adbd")
+        assert i + 1 < len(argv), "--adbd needs a file"
+        adbd = open(argv[i + 1], "rb").read()
+        del argv[i:i + 2]
+    while "--sepolicy" in argv:
+        i = argv.index("--sepolicy")
+        assert i + 1 < len(argv), "--sepolicy needs a file"
+        sepolicy = open(argv[i + 1], "rb").read()
+        del argv[i:i + 2]
+    if "--no-verity" in argv:
+        argv.remove("--no-verity")
+        verity = False
+    check = argv[:1] == ["--check"]
+    argv = argv[1:] if check else argv
+    if len(argv) != (1 if check else 2):
+        sys.exit(__doc__)
+    boot = Boot(open(argv[0], "rb").read())
+    assert boot.kernel[:4] == MTK_MAGIC, "the kernel blob has no MediaTek header"
+    assert struct.unpack("<I", boot.kernel[4:8])[0] == boot.ksz - 512
+
+    if check:
+        rebuilt = boot.assemble(boot.ramdisk)
+        stock = open(argv[0], "rb").read()
+        assert len(rebuilt) == len(stock), "check: length %d, stock %d" % (len(rebuilt), len(stock))
+        diff = [i for i in range(len(stock)) if rebuilt[i] != stock[i]]
+        assert all(ID_OFF <= i < ID_OFF + ID_LEN for i in diff), \
+            "check: the rebuild differs outside the ID: %s" % diff[:8]
+        print("check: %d of %d bytes differ, all inside the ID" % (len(diff), len(stock)))
+        return
+
+    edit = edits(sepolicy, verity, adbd)
+    cpio = edit_cpio(boot.cpio(), edit)
+    boot.trailing = b""  # the stock image's certificate: its sha256 is not ours
+    out = boot.assemble(gzip_mem(cpio))
+    compare(boot.cpio(), Boot(out).cpio(), "the built image", edit)
+    open(argv[1], "wb").write(out)
+    print("%s: %d bytes, ramdisk blob %d -> %d\n  sha256 %s" %
+          (argv[1], len(out), boot.rsz, Boot(out).rsz, hashlib.sha256(out).hexdigest()))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

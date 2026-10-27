@@ -121,6 +121,14 @@ matched by dha.c (`tests/unit/dha_jwt_test.c` pins it byte for byte against the 
     which it does not have; root's installer put them into `models/`, and the registration survived the restart
     that installing them caused.
 
+- **checkers (Echo Show 5) has neither HAL wrapper nor native MAP** (2026-10-13): the key sits behind the binder
+  service `amazon.security.dha` (`fireos-dha`), and MAP is Java (`com.amazon.imp`). Version 1 there: RSA-PSS like
+  biscuit's, but Java MAP's own drvV1 text (padded `n`/`mac`, its key order, `cpuid` from `/proc/cpuinfo`, UTC).
+  dha.c reaches the service through `/system/bin/service call` and builds that token; details in
+  docs/re-checkers.md "Amazon downloads". Against the real Amazon (2026-10-13, amazon.de) it works: registered,
+  echo de-DE and the sound detection model downloaded. Whisper is refused for its device type (HTTP 403 "not
+  allowlisted for device Type A4ZP7ZC4PI6TO ... whisper-static").
+
 ## Endpoints, for reference
 
 - `/auth/register`, `/auth/token` (refresh: `{"requested_token_type":"access_token","app_name","app_version",

@@ -30,6 +30,17 @@
  * mixer restart (it only reads it), nor a stream starting or stopping writes it (the driver logs every register write
  * to dmesg).  So +2 dB is all there is (spkgain_max()).  21 dBV is 15.9 V peak, above the 15 V adapter's: if that is the
  * amplifier's supply (not measured), samples near full scale clip by a fraction of a dB at the top step.
+ *
+ * Echo Show 5 (checkers, from the firmware only, 2026-10-13): the codec is a Realtek RT5616 whose line out feeds the
+ * external speaker amplifier (/system/etc/audio_device.xml, the file the HAL reads: "LO out", ext_speaker_output switches
+ * "OUT Playback Switch" and Ext_Speaker_Amp_Switch).  Its "OUT Playback Volume" (reg 0x03, both channels, inverted,
+ * 0..39 = -46.5..+12 dB, 1.5 dB a step: the soc_mixer_control and TLV in checkers' own kernel) is set to 29, -3 dB, among
+ * the XML's initial settings, which the HAL applies at its start; no path and no other file of the firmware names it.
+ * Ten steps above stock: up to +15 dB, of which the page offers 12 (board.speaker_gain_steps 2 per speaker_gain_db 3).
+ *
+ * Echo Show 5 2nd gen (cronos, from the firmware only, 2026-10-26): one firmware for boards with three different
+ * amplifiers (a device tree per revision; RT5616/RT5616E as checkers, TAS5805M, MAX98396), each with its own control.
+ * board.speaker_gain_alt lists the others; the first name card 0 has is the one, the rest of a board_gain with it.
  */
 #include "spkgain.h"
 #include "board.h"
@@ -48,10 +59,11 @@
 #define POLL_MS 10000
 
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
-static int present = -1, fd = -1, wanted, written = -1, started, hi, count, stock, steps;
+static int present = -1, fd = -1, wanted, written = -1, started, hi, count, stock, steps, per, lodb;
 static unsigned numid;
-/* HASSMIC_FAKE_SPEAKER_GAIN=<file>[:<stock>:<steps per dB>:<max>]: a file standing in for the control (tests), shaped
- * as the Echo Dot 2's (6:1:35) unless told otherwise, whatever the board */
+static const char *ctl_name;           /* the control found: board.speaker_gain or one of speaker_gain_alt */
+/* HASSMIC_FAKE_SPEAKER_GAIN=<file>[:<stock>:<steps>:<max>[:<per dB>[:<lowest dB, 0 or negative>]]]: a file standing in for the control (tests),
+ * shaped as the Echo Dot 2's (6:1:35:1) unless told otherwise, whatever the board */
 static const char *fake;
 static char fake_path[256];
 
@@ -79,39 +91,54 @@ static int probe(void)
     if (env) {
         const char *c = strchr(env, ':');
         snprintf(fake_path, sizeof fake_path, "%.*s", c ? (int)(c - env) : (int)strlen(env), env);
-        stock = 6; steps = 1; hi = 35; count = 1; fake = fake_path;
-        if (c && sscanf(c, ":%d:%d:%d", &stock, &steps, &hi) != 3) { stock = 6; steps = 1; hi = 35; }
-        return steps > 0 && hi - stock >= steps;
+        stock = 6; steps = 1; hi = 35; per = 1; count = 1; lodb = 0; fake = fake_path;
+        if (c && sscanf(c, ":%d:%d:%d:%d:%d", &stock, &steps, &hi, &per, &lodb) < 3) { stock = 6; steps = 1; hi = 35; per = 1; lodb = 0; }
+        if (lodb > 0) lodb = 0;
+        return steps > 0 && per > 0 && (hi - stock) * per >= steps;
     }
     if (!board.speaker_gain) return 0;
-    stock = board.speaker_gain_stock; steps = board.speaker_gain_steps > 0 ? board.speaker_gain_steps : 1;
+    /* the board's control, then the other amplifiers it may have (board.speaker_gain_alt): the first one on the card */
+    struct board_gain g = { board.speaker_gain, board.speaker_gain_stock, board.speaker_gain_steps, board.speaker_gain_db,
+                            board.speaker_gain_min_db, board.speaker_gain_limit };
+    const struct board_gain *alt = board.speaker_gain_alt;
     if ((fd = open(CTL_DEV, O_RDWR | O_NONBLOCK | O_CLOEXEC)) < 0) { fprintf(stderr, "speaker gain: %s: %s\n", CTL_DEV, strerror(errno)); return 0; }
     memset(&l, 0, sizeof l);
     if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_LIST, &l) < 0 || !l.count || !(ids = calloc(l.count, sizeof *ids))) goto none;
     l.space = l.count; l.pids = ids;
-    if (!ioctl(fd, SNDRV_CTL_IOCTL_ELEM_LIST, &l))
-        for (unsigned i = 0; i < l.used && !numid; i++) if (!strcmp((const char *)ids[i].name, board.speaker_gain)) numid = ids[i].numid;
+    if (ioctl(fd, SNDRV_CTL_IOCTL_ELEM_LIST, &l)) l.used = 0;
+    for (;;) {
+        for (unsigned i = 0; i < l.used && !numid; i++) if (!strcmp((const char *)ids[i].name, g.name)) numid = ids[i].numid;
+        if (numid || !alt || !alt->name) break;
+        g = *alt++;
+    }
     free(ids);
+    ctl_name = g.name;
+    stock = g.stock; steps = g.steps > 0 ? g.steps : 1; per = g.db > 0 ? g.db : 1;
     memset(&in, 0, sizeof in); in.id.numid = numid;
     if (!numid || ioctl(fd, SNDRV_CTL_IOCTL_ELEM_INFO, &in) < 0 || in.type != SNDRV_CTL_ELEM_TYPE_INTEGER
-        || in.value.integer.max - stock < steps || in.count < 1 || in.count > 2) goto none;
+        || (in.value.integer.max - stock) * per < steps || in.count < 1 || in.count > 2) goto none;
     hi = (int)in.value.integer.max; count = (int)in.count;
-    fprintf(stderr, "speaker gain: \"%s\" %d..%d, stock %d, now %d\n", board.speaker_gain, (int)in.value.integer.min, hi, stock, ctl_read());
+    lodb = g.min_db < 0 ? g.min_db : 0;
+    int room = -((stock - (int)in.value.integer.min) * per / steps);       /* whole dB below stock the control has */
+    if (lodb < room) lodb = room;
+    if (g.limit > stock && g.limit < hi) hi = g.limit;
+    fprintf(stderr, "speaker gain: \"%s\" %d..%d, stock %d, now %d\n", ctl_name, (int)in.value.integer.min, hi, stock, ctl_read());
     return 1;
 none:
-    fprintf(stderr, "speaker gain: no control \"%s\" on card 0\n", board.speaker_gain);
+    fprintf(stderr, "speaker gain: no control \"%s\"%s on card 0\n", board.speaker_gain, board.speaker_gain_alt ? " (nor another of the board's)" : "");
     close(fd); fd = -1;
     return 0;
 }
 
-/* mu held.  Stock or what we wrote: the HAL's speaker path, or ours: the setting's.  Anything else stays. */
+/* mu held.  Stock or what we wrote: the HAL's speaker path, or ours: the setting's.  Anything else stays.  The step
+ * nearest the setting's whole dB where a step is not one (the Echo Show 5's 1.5 dB: +1 and +2 are both +1.5) */
 static void apply(void)
 {
-    int cur = ctl_read(), target = stock + wanted * steps;
+    int cur = ctl_read(), target = stock + (wanted * steps + (wanted < 0 ? -per : per) / 2) / per;
     if (cur < 0 || cur == target) { if (cur == target) written = target; return; }
     if (cur != stock && cur != written) return;
     if (ctl_write(target) < 0) { fprintf(stderr, "speaker gain: cannot set %d: %s\n", target, strerror(errno)); return; }
-    fprintf(stderr, "speaker gain: %+d dB (%s %d, was %d)\n", wanted, fake ? "fake" : board.speaker_gain, target, cur);
+    fprintf(stderr, "speaker gain: %+d dB (%s %d, was %d)\n", wanted, fake ? "fake" : ctl_name, target, cur);
     written = target;
 }
 
@@ -138,14 +165,25 @@ int spkgain_present(void)
     return r;
 }
 
+/* whole dB below stock the page offers (0 or negative): board.speaker_gain_min_db, as far as the control goes */
+int spkgain_min(void)
+{
+    if (!spkgain_present()) return 0;
+    pthread_mutex_lock(&mu);
+    int r = lodb;
+    pthread_mutex_unlock(&mu);
+    return r;
+}
+
 int spkgain_get(void) { pthread_mutex_lock(&mu); int r = wanted; pthread_mutex_unlock(&mu); return r; }
 
-/* whole dB the control has above stock, at most SPKGAIN_MAX: the Dot 2's (35 - 6) / 1 -> 12, the Dot 3's (20 - 16) / 2 -> 2 */
+/* whole dB the control has above stock, at most SPKGAIN_MAX: the Dot 2's (35 - 6) / 1 -> 12, the Dot 3's (20 - 16) / 2 -> 2,
+ * the Echo Show 5's (39 - 29) * 3 / 2 -> 15 */
 int spkgain_max(void)
 {
     if (!spkgain_present()) return 0;
     pthread_mutex_lock(&mu);
-    int r = (hi - stock) / steps;
+    int r = (hi - stock) * per / steps;
     pthread_mutex_unlock(&mu);
     return r < SPKGAIN_MAX ? r : SPKGAIN_MAX;
 }
@@ -155,7 +193,7 @@ void spkgain_set(int db)
     int top = spkgain_max();
     if (!top) return;
     pthread_mutex_lock(&mu);
-    wanted = db < 0 ? 0 : db > top ? top : db;
+    wanted = db < lodb ? lodb : db > top ? top : db;
     if (wanted || started) apply();
     if (wanted && !started) {
         int one = 1; pthread_t t;

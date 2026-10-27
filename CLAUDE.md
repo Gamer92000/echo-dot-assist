@@ -12,7 +12,7 @@ through the reverse-engineered C API of `libmixerAPI.so` and speaks the ESPHome 
 Docs: `README.md` (short user-facing overview with figures; every feature in detail in `docs/GUIDE.md`, security model in
 `docs/SECURITY.md`; `docs/WINDOWS.md` the Echo Dot 2 from Windows for beginners; figures are CeTZ sources in `docs/img/src/`, rendered light+dark by `tools/figures.sh`; install instructions per model in `devices/<codename>/README.md`, guided by
 `scripts/setup.sh`), `DEVELOPMENT.md` (architecture, layout, tests, contributing), `PLAN.md` (phases, open issues, every measurement), `CHANGELOG.md`
-(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-a2dp-source.md`, `re-davs-login.md`,
+(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-a2dp-source.md`, `re-davs-login.md`, `re-checkers.md`, `re-athena.md`,
 `sendspin-digest.md`).
 
 ## Build and test
@@ -65,6 +65,7 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_web_ring.py       # light ring designs: library, assignments, apply with the test as root,
                                              # the turned files -G makes, what plays, root failing, caps
 .venv/bin/python tests/fake_web_wifi.py       # Wi-Fi switch: sealed password, PSK, root's wifi.sh against a fake wpa_cli
+.venv/bin/python tests/fake_wifi_join.py      # checkers' setup join (wifi-join.sh) through a fake adb and WifiService
 .venv/bin/python tests/fake_web_mww.py        # microWakeWord: models added/edited/deleted from the page, engine switch,
                                              # real detections on testdata/alexa_espeak.raw, copy as an artifact
 .venv/bin/python tests/fake_web_davs.py       # models downloaded from a fake Amazon: login by code pair with the device
@@ -114,10 +115,16 @@ One unit test: `make unit-<name>` (`UNIT_TESTS` in the Makefile).
   `/system/hassmic` as the factory copy, bootstrap included (`boot.sh`, `otatool`, `hassmic.rc`, `release.pub`; never
   `update.pub` or `/sepolicy`). Works from older installs: the pushed update brings the code.
 - The light ring's own animations: `main.sh` installs them itself at satellite start when they are not this build's
+  (none where `/system/etc/led-resources` is missing: checkers)
   (`sysinstall.sh leds`, ledcontroller restarted); `install-system.sh --uninstall` puts stock's layer config back.
 - `scripts/install-system.sh`: writes `/system/hassmic/`, init rc and patched SELinux policy from the running OS
   (`sysinstall.sh install`; `otatool remount rw` since toybox cannot: `/dev/root` does not exist). `--twrp` the old way.
-  `--uninstall` reverts.
+  `--uninstall` reverts.  `INSTALL=boot` (checkers: no A/B, policy in boot.img) hands over to `scripts/install-boot.sh`:
+  the firmware's own boot.img + root adb, `verify` out of fstab and the policy patched (`scripts/mkbootroot.py`,
+  `sepolicy.rules` via magiskpolicy under qemu), flashed in amonet's hacked fastboot, then the same `sysinstall.sh`.
+  `INSTALL=running` (athena, Android 9: rooted by saiyaku's zip patching system and vendor in place, no boot image of ours)
+  is the in-OS path only, with the policy where `device.conf` `SEPOLICY_FILE` says (`/vendor/etc/selinux/precompiled_sepolicy`,
+  `sysinstall.sh` remounts `/vendor` only to write it; `.pre-hassmic` beside it) and the Android extras (dex programs, home APK) as `boot`.
 - Logs: `/data/local/hassmic/boot.log`, each line stamped (`clock.c`: UTC once the clock came from HA, else `boot+<s>`;
   hassmic's own through its reader process `hassmic-log`, which `pidof hassmic` lists too; scripts through `say`/`stamped`
   in `main.sh`). The Echo's mksh is 32-bit and has no awk. Config: `/data/local/hassmic/hassmic.conf` (`PROTO`, `ARGS`, `MODE`,
@@ -162,7 +169,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   music (`volume`), replies, sounds, timers, Drop In calls at volumes of their own or each following the music's +- an offset in
   points (`<kind>_linked`/`_offset`; linked, its HA number is unlisted); MainVolume and TTSVolume both at the loudest
   (libasp's own volume, which boosts the top end, follows the last of them set), each kind turned down in its PCM by
-  the measured curve (`vol_db`; `audio_music_gain`, `audio_tts_gain`, the earcon thread); HA's `play_media` is music
+  the measured curve (`volcurve.c`: `board.volume_curve`, the Dot 2's where none, `tests/unit/volcurve_test.c` per model; `audio_music_gain`, `audio_tts_gain`, the earcon thread); HA's `play_media` is music
   though on the TTS stream (`core_tts_begin`'s `media`, `tts_kind`). docs/re-platform.md has the measurements. The front end is told when a command is spoken (`listening()`:
   without it its cancellers remove the talker after 1.5 s). `earsup.c` (wake sound removal: our own UI sounds taken back
   out of the pipeline's audio by a residual echo suppressor keyed to the PCM we play; experimental, setting
@@ -175,7 +182,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   by HA, voice assistant, media player, timers, settings entities, Bluetooth proxy messages) and `proto_wyoming.c` +
   `wyoming.c`. Selected with `-P`. The core calls `start/audio/stop/played/...` on the active proto with lock held.
 - **Audio backend (`audio.h`)**: `audio_mixer.c` on device (mixer C API: capture, voice/TTS, music, Bluetooth and
-  earcon streams mixed by the mixer); `audio_file.c` for PC builds. Swapped at link time in the Makefile.
+  earcon streams mixed by the mixer); `audio_android.c` where there is no mixer (checkers, Echo Show 5; cronos, its 2nd gen; athena, Echo Show 8 2nd gen: OpenSL ES over
+  AudioRecord/AudioTrack, the front end inside the audio HAL; untried on a device; device.mk `SYSLIBS` links
+  `-lOpenSLES`); `audio_file.c` for PC builds. Swapped at link time in the Makefile.
 - **Sound detection (`sound.h`)**: `sound_pryon.c` (Alexa Guard's model on `libpryon.so`: the firmware's, or Amazon's newest
   from `/data/local/hassmic/aed` (`scripts/artifacts.sh`); a second decoder, off unless HA's
   switch is on; ESPHome event entity "Sound"; windows with own playback dropped; `docs/re-aed.md`) or `sound_none.c`
@@ -245,9 +254,10 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   Setting `stop_ends_listening` (Voice, page only, off): any "stop" within 4 s of the last detection (`heard_ms`,
   `stop_heard`) also cancels a LISTENING run (`quiet_cancel`, as the button) or keeps the round's winner from starting.
   The other way, playing on a Bluetooth speaker: `a2dp.c` (inquiry, pairing, AVDTP initiator, AVRCP absolute volume)
-  + `btout.c`, which stands in for btmanagerd towards the mixer's own A2DP route (LIPC `A2DPSourceConnect`, the A2DP
-  HAL's abstract sockets, AIPC service uuid 0 via `libace_aipc.so`; `docs/re-a2dp-source.md`) and SBC-encodes
-  (`sbc.c`). While on the speaker the core has a volume of its own (`core_speaker`).
+  + `btout.c`, which stands in for Fluoride towards the firmware's A2DP HAL (its abstract sockets) and SBC-encodes
+  (`sbc.c`); the route is the backend's (`audio_a2dp_*` in `audio.h`): the Dots' mixer by LIPC `A2DPSourceConnect`
+  plus btmanagerd's AIPC service uuid 0 via `libace_aipc.so` (`docs/re-a2dp-source.md`), Android's AudioPolicy by
+  `media.audio_policy` setDeviceConnectionState (`docs/re-checkers.md`; players opened meanwhile wait for the move). While on the speaker the core has a volume of its own (`core_speaker`).
 - **Drop In** (`dropin.c`, `dropin.h`): calls between two Echos of the arbitration network. Signalling as signed
   `T_MSG` on arb's socket (`arb_tell`, `hooks->message`; invite/ringing/accept/refuse/bye), audio Opus 16 kHz 20 ms over
   unicast UDP 28932 (`-i`), per-call key from ephemeral X25519 + `arb_derive`. Playback on the mixer's `Voip` stream
@@ -318,11 +328,13 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   attestation token `/auth/register` needs, in the two shapes Amazon's MAPs make: a drvV1 JWT (biscuit, radar; RSA
   keymaster through `libacehal_dha.so`, dlopen'd, needs group drmrpc) or donut's drvV3 token around the dhav2
   certificate (field 0x203 of the same HAL; EC key in the TEE — `/dev/trustzone` is system:drmrpc and the cert file
-  keystore:keystore, hence drmrpc,keystore in donut's DAEMON_GROUPS), whichever the HAL's key parses as.  `davs.c` does the code pair login (the code on the
+  keystore:keystore, hence drmrpc,keystore in donut's DAEMON_GROUPS), whichever the HAL's key parses as; without the
+  HAL (checkers) the binder service `amazon.security.dha` through `service call` (`afe_parcel.c`, common to every
+  build now) and Java MAP's drvV1 text (version 1, checkers) or drvV3 (version 2, crown: x5c = the chain's first certificate, `/` escaped as org.json does; docs/re-crown.md; athena: the same from `fireosdhaservice`, Android 9's name for the service, `svc_names`).  `davs.c` does the code pair login (the code on the
   page, register polled with the token, tokens in `state/davs` 0600, never sent to the page), asks DAVS with the
   engine's own compatibility ids (`wake_attributes`), downloads and unpacks the artifact tar.gz (libz), and stages it
   through artifacts.c.  Works against the real Amazon (biscuit 2026-10-06, donut with its drvV3 token 2026-10-09,
-  both amazon.de; what it answers in docs/re-davs-login.md, which also has the drvV3 analysis).  The page offers
+  crown with its drvV3 2026-10-14, checkers with Java MAP's drvV1 2026-10-13 (whisper not allowlisted for its device type), all amazon.de; what it answers in docs/re-davs-login.md, which also has the drvV3 analysis).  The page offers
   every Amazon site with Alexa (davs.c's list), any of the account's region works.
 - **Artifacts** (`artifacts.c`): Amazon's models (`wake:<name>` = `models/<name>/`, `sound` = `aed/`, `whisper`): files
   plus two levels of folders (`whisper_components/`, `BDPGeneratedFiles/`, `nttfusionconfig/ntt_conv/`; a file's name is then its path), listed
@@ -390,10 +402,12 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Speaker gain** (`spkgain.c`, setting `speaker_gain`, page only, not exported): +0..+12 dB on the ALSA control
   `board.speaker_gain` (Dot 2 / Echo 2: the codec's `HP Driver Gain Volume`, stock 6; Dot 3: the TAS2770 amplifier's
   `DAC Playback Volume` = AMP_LEVEL, stock 16 of 0..20 in 0.5 dB steps (`speaker_gain_steps` 2), so +2 dB at most:
-  `spkgain_max()`/`settings_max()` give the page the control's top), written by hassmic itself (group audio). The Dot 2's
+  `spkgain_max()`/`settings_max()` give the page the control's top; Show 5: the RT5616's line out `OUT Playback Volume`,
+  stock 29 = -3 dB of 0..39 in 1.5 dB steps, `speaker_gain_steps` 2 per `speaker_gain_db` 3, a whole dB takes the
+  nearest step), written by hassmic itself (group audio). The Dot 2's
   HAL writes stock at every mixer start (and per its XML on a jack change; the Dot 3's never writes it): a thread on the
   card's control events writes ours back when it sees stock, and leaves other values (the jack's 11) alone.
-  `HASSMIC_FAKE_SPEAKER_GAIN=<file>[:<stock>:<steps>:<max>]` for tests (`tests/unit/spkgain_test.c`, `fake_web.py`).
+  `HASSMIC_FAKE_SPEAKER_GAIN=<file>[:<stock>:<steps>:<max>[:<per dB>]]` for tests (`tests/unit/spkgain_test.c`, `fake_web.py`).
 - **Push updates**: `ota.c` receives bundles on the device; `src/tools/otatool.c` verifies/unpacks there (monocypher).
   The PC side is `scripts/otatool.py` (stdlib only: keygen, pack/sign, verify/install, push, adb; same CLI), so the PC
   needs no compiler for it; `tests/otatool_test.sh` holds the two byte for byte to each other, and CI verifies every
@@ -438,13 +452,25 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   of the library: `has` lines (a design in one pack at most) and `use` lines naming only those (version 2,
   `pack_normal`); shared with their designs inside (version 1: the page's `.ringpack` and copies).  The page: ring.js.  Every pattern of the core goes
   through `led()` -> `ring_set`/`ring_unset`, which knows from each file how long it shows; while one does, HA's light
-  is off.  Every ledctrl call (patterns and brightness) goes through `ledq.c` (issue #40): one at a time, in order,
+  is off.  The Echo Show's band (`ring_band.c`) has the same slots and draws designs itself, flattened and never
+  turned (band position p = LED p + 5: the talker's pair in the middle): Apply needs no root there
+  (`ring_designs_live`), and `ring_stock` gives the page the band's own patterns as files.  Every ledctrl call (patterns and brightness) goes through `ledq.c` (issue #40): one at a time, in order,
   each waited for, in its own thread (started together, an unset can overtake its set and leave the pattern on);
   sets and unsets queued one behind the other go in one ledctrl (`LEDQ_BATCH`: it takes repeated -s/-u).  The
   beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N` when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
   `HASSMIC_FAKE_BEAM`.
+- **Light band** (`ring_band.c`, the Echo Show's `RING` in device.mk instead of `ring.c`): the same `ring.h` drawn as a
+  band along the bottom of the screen, every pattern as the Dots' ring unrolled (12 virtual LEDs blended across the
+  width, the talker's side in the middle; never turned: the Show's beam says too little, docs/re-checkers.md) plus
+  HA's light, one at a time by priority.  `scripts/device/ringbar.dex` (`tools/mkringbar.py` on `tools/dexasm.py`,
+  next to the binary, `HASSMIC_RINGBAR`) runs as app_process: overscan for the band, a SurfaceFlinger layer over it,
+  "ready <w> <rows>" on stdout, then frames (w x rows ARGB) on stdin.  Setting `light_band` (rows, 0 off).  Screen
+  power as stock's: `service call power` 9 (wakeUp) on a pattern, `screen_off_timeout` 5 min / 1 min muted or DND.
+  PC: `HASSMIC_FAKE_BAND` (a program speaking ringbar's protocol), `tests/unit/ring_band_test.c` (designs too, a restart
+  on the same state included); `tests/unit/band_map_test.py` holds web/ring.js's band drawing to ring_band.c's, pixel
+  for pixel (node).  The band's height comes from `state/config` before `ring_start` (`settings_peek`).
 - `src/include/`: headers for the reversed Amazon libraries (`mixer_api.h`, `pryon_api.h`, `aipc_api.h`) and `netio.h`.
-- `src/tools/`: standalone device tools (`mixcap`, `mixplay`, `pryon_test`, `aed_test`, `latency`, `runas` — AIPC refuses uid 0 and
+- `src/tools/`: standalone device tools (`mixcap`, `mixplay`, `slplay` (the Android models' mixplay: OpenSL ES on the music stream), `pryon_test`, `aed_test`, `latency`, `runas` — AIPC refuses uid 0 and
   the image has no `su`; `curlspy`, `hciscan`, `a2dpprobe`, `dha_test` not in `all`).
 
 Boot integration (`scripts/system/`, rc in `devices/<codename>/`): `hassmic.rc` (init) starts `boot.sh` (fixed, on /system), which picks the factory
@@ -465,7 +491,8 @@ and link-local ranges of `LOCAL4` only. A stock rule hassmic comes to depend on 
 prints it.
 
 `tools/` is PC-side reverse-engineering and firmware tooling (`payload_dump.py`, Thumb disassembly helpers,
-`davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator).
+`davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator, `vol-curve.py`: an Android Echo's
+volume curve with a Dot's micRaw beside it, for `board.volume_curve`).
 
 ## Conventions
 

@@ -200,13 +200,18 @@ avahi_start() {
     local conf=/system/etc/avahi-daemon.conf node i=0
     node=$(sed -n 's|^ *<name>\([a-z0-9-]*\)</name>$|\1|p' $AVAHI_SVC 2>/dev/null)
     if [ -n "$node" ]; then
-        { echo "[server]"; echo "host-name=$node"; grep -v '^\[server\]' $conf; } > /data/misc/avahi/avahi-daemon.conf
+        # enable-dbus=warn: on the Echo Show D-Bus runs but its policy keeps org.freedesktop.Avahi from root, and avahi
+        # with D-Bus required exits ("Failed to acquire D-Bus name"): no mDNS at all (2026-10-13).  hassmic only needs
+        # the service file, which avahi announces without D-Bus; where D-Bus works (the Dots) it is used as before.
+        { echo "[server]"; echo "host-name=$node"; echo "enable-dbus=warn"; grep -v -e '^\[server\]' -e '^enable-dbus=' $conf; } > /data/misc/avahi/avahi-daemon.conf
         conf=/data/misc/avahi/avahi-daemon.conf
     fi
     stop avahi-daemon; pkill avahi-daemon
     while [ $i -lt 5 ] && pidof avahi-daemon > /dev/null; do sleep 1; i=$((i + 1)); done
     sleep 2
-    avahi-daemon -f $conf --no-drop-root > /dev/null 2>&1 &
+    # --no-proc-title: avahi rewrites its argv/environment memory for the title ("avahi-daemon: running [...]"), and
+    # started without a terminal on the Echo Show it died two seconds in, its parent shell with it (2026-10-13)
+    avahi-daemon -f $conf --no-drop-root --no-proc-title > /dev/null 2>&1 &
 }
 
 # While the settings page switches networks (wifi.sh holds its lock), the link is that script's business: no wifisvc.
@@ -228,13 +233,14 @@ netwatch() {
             miss=0
             [ "$a" = "$addr" ] || { addr=$a; [ -f $D/wifi.sh ] && sh $D/wifi.sh status; }
             kmod
-            [ "$(getprop init.svc.$WIFI_SERVICE)" = running ] && [ ! -d $WIFI/lock ] && { sleep 5; stop $WIFI_SERVICE; echo "netwatch: link up, $WIFI_SERVICE stopped"; }
+            [ -n "$WIFI_SERVICE" ] && [ "$(getprop init.svc.$WIFI_SERVICE)" = running ] && [ ! -d $WIFI/lock ] && { sleep 5; stop $WIFI_SERVICE; echo "netwatch: link up, $WIFI_SERVICE stopped"; }
         elif [ -d $WIFI/lock ]; then
             miss=0 addr=
         else
             miss=$((miss + 1)) addr=
             # No saved network (a reset, a new install): nothing for wifisvc to bring up; the phone's setup (Improv) does
-            [ $miss -ge 6 ] && [ "$(getprop init.svc.$WIFI_SERVICE)" != running ] && [ "$(sh $D/wifi.sh saved 2>/dev/null)" != 0 ] &&
+            # (checkers has no WIFI_SERVICE of its own: Android's WifiService brings its networks up)
+            [ $miss -ge 6 ] && [ -n "$WIFI_SERVICE" ] && [ "$(getprop init.svc.$WIFI_SERVICE)" != running ] && [ "$(sh $D/wifi.sh saved 2>/dev/null)" != 0 ] &&
                 { start $WIFI_SERVICE; echo "netwatch: no address for 60 s, $WIFI_SERVICE started"; miss=0; }
         fi
         sleep 10
@@ -403,6 +409,7 @@ LEDNEW=/data/local/hassmic/leds.new
 LEDLOCK=/data/local/hassmic/leds.lock
 leds() {
     LEDS=failed LEDWHY=
+    [ -d /system/etc/led-resources ] || { LEDWHY="no light ring on this model"; return 0; }    # no ledcontroller (checkers: a screen)
     i=0
     boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)
     while ! mkdir $LEDLOCK 2>/dev/null; do
@@ -435,19 +442,25 @@ leds() {
 
 # A push update runs "firewall" again (exec, same PID) while the previous firewall watcher is still looping: stop it first,
 # or every update adds one and old and new rules take turns.  Matched by command line, which also catches the ones that
-# earlier versions left behind.  Read with the shell itself: a process that exits between the open and the read leaves
-# the Echo 2's tr (Fire OS 6572) spinning on the read error for ever, and this script never got to the firewall watcher
-# and the installer below (seen 2026-09-30 right after a boot: no egress lock, push updates unanswered).
+# earlier versions left behind.  Nothing here may loop on reads of a /proc file: a process that exits between the open and
+# the read leaves the reader spinning on the read error for ever, and this script never gets to the firewall watcher and
+# the installer below.  Seen with the Echo 2's tr (Fire OS 6572, 2026-09-30: no egress lock, push updates unanswered),
+# then with the shell's own read -d '' loop on the Echo Show (2026-10-13: an update passed its self test and was never
+# promoted, main.sh at 100 % CPU on a dead process's cmdline).  So: comm with one read (only shells can be the
+# watcher), and those cmdlines with one dd read, which ends whatever the read returns.
 if [ "$1" = firewall ]; then
     for p in /proc/[0-9]*; do
-        c=; while IFS= read -r -d '' a; do c="$c $a"; done 2>/dev/null < $p/cmdline
+        comm=; { read -r comm < $p/comm; } 2>/dev/null
+        [ "$comm" = sh ] || continue
+        c=$(dd if=$p/cmdline bs=4096 count=1 2>/dev/null | tr '\0' ' ')
         case "$c" in *lockdown.sh*watch*) kill ${p#/proc/} 2>/dev/null;; esac
     done
 fi
 
 if [ "$MODE" = stock-online ]; then
-    # hassmic is off on purpose: that must not count as an update that failed to come up.
-    [ "$1" = firewall ] || { echo 0 > $OTA/tries; exit 0; }
+    # hassmic is off on purpose: that must not count as an update that failed to come up.  Alexa's apps that
+    # alexa-off.sh disabled (checkers) come back, all but the updater.
+    [ "$1" = firewall ] || { echo 0 > $OTA/tries; { [ -s /data/local/hassmic/alexa-disabled ] || [ -s /data/local/hassmic/alexa-settings ]; } && sh $D/alexa-on.sh keep-updates 2>&1 | stamped >> $LOG; exit 0; }
     { rotate_log; echo "== stock-online, uptime $(cut -d. -f1 /proc/uptime)s: Alexa runs, updaters cut off"; } 2>&1 | stamped >> $LOG
     sh $D/lockdown.sh ota-only watch 2>&1 | stamped >> $LOG
     exit 0
@@ -472,6 +485,9 @@ satellite)
         [ -f $D/artifact-install.sh ] && sh $D/artifact-install.sh migrate /data/local/hassmic/state /data/local/hassmic
         leds                              # before alexa-off.sh: a ledcontroller that started again may want Alexa back
         sh $D/alexa-off.sh; quiet
+        # Android models: with the screen off Android lets the SoC suspend once no wake lock is held (autosleep), and the
+        # satellite must keep listening: a kernel wake lock of root's, for as long as the satellite runs
+        [ -n "$WAKE_LOCK" ] && echo "$WAKE_LOCK" > /sys/power/wake_lock
     } 2>&1 | stamped >> $LOG
     # hassmic offers Wi-Fi motion where the module can be loaded (wifimotion.c), the loop below loads it when needed
     [ -n "$KMOD" ] && [ -f $D/$KMOD ] && export HASSMIC_WIFI_KMOD=/proc/${KMOD%.ko}

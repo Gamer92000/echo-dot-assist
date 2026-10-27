@@ -5,8 +5,11 @@
 #include <linux/input.h>
 #include <poll.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -16,6 +19,7 @@ static int HOLD_WARN_MS = 5000;        /* action button held: the ring warns ...
 static int HOLD_RESET_MS = 10000;      /* ... and then hassmic's reset (core_reset), long before acebuttond's 21 s.
                                         * HASSMIC_HOLD_TIMES="<warn ms> <reset ms>": tests (tests/fake_improv.py) */
 #define COMBO_MS       2000            /* both volume keys: stock gives that no meaning (acebuttond's are action holds) */
+#define CHORD_MS        400            /* board.action_combo: the two presses this close count as one */
 
 static struct button_handler handler;
 static int muted_state;                /* latch: what was last reported; no latch: the software toggle */
@@ -31,6 +35,26 @@ static int have_latch(void)
     return have;
 }
 
+static atomic_llong early_until;       /* until when early_state is a press's word, not the latch's (set under latch_lock) */
+static atomic_int early_state;
+static pthread_mutex_t latch_lock = PTHREAD_MUTEX_INITIALIZER;   /* reports leave in the order the state was read */
+
+static long long now_ms(void)
+{
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* the latch itself */
+static int latch_read(void)
+{
+    char c = '0'; int f = open(board.privacy_state, O_RDONLY);
+    if (f < 0) return 0;
+    if (read(f, &c, 1) != 1) c = '0';
+    close(f);
+    return c == '1';
+}
+
 int buttons_muted(void)
 {
     if (!have_latch()) {               /* no sysfs truth: what we last toggled to */
@@ -39,25 +63,47 @@ int buttons_muted(void)
         pthread_mutex_unlock(&muted_lock);
         return m;
     }
-    char c = '0'; int f = open(board.privacy_state, O_RDONLY);
-    if (f < 0) return 0;
-    if (read(f, &c, 1) != 1) c = '0';
-    close(f);
-    return c == '1';
+    long long until = atomic_load(&early_until);    /* a press ahead of the driver counts for whoever asks, too (no lock: */
+    return until && now_ms() < until ? atomic_load(&early_state) : latch_read();   /* mute_changed asks from inside) */
 }
 
 /* Reports the latch when it is not what was last reported.  Input events only say when to look, and latch_poll looks
  * without one, so a lost or early event (the state read before the driver changed it) is put right a second later. */
 static void latch_check(void)
 {
-    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;   /* reports leave in the order the state was read */
-    pthread_mutex_lock(&lock);
-    int now = buttons_muted();
+    pthread_mutex_lock(&latch_lock);
+    int now = have_latch() ? latch_read() : buttons_muted();
+    if (atomic_load(&early_until)) {   /* a press was reported ahead of the driver: not taken back before it had its time */
+        if (now == muted_state || now_ms() >= atomic_load(&early_until)) atomic_store(&early_until, 0);
+        else { pthread_mutex_unlock(&latch_lock); return; }
+    }
     if (now != muted_state) {
         muted_state = now;
         if (handler.mute_changed) handler.mute_changed(now);
     }
-    pthread_mutex_unlock(&lock);
+    pthread_mutex_unlock(&latch_lock);
+}
+
+/* board.privacy_button: the press says what the driver will report in a second, as the opposite of the state reported.
+ * Presses that come while that is still due do not count (the driver does not toggle twice at once either). */
+static void early_press(void)
+{
+    pthread_mutex_lock(&latch_lock);
+    if (!atomic_load(&early_until)) {
+        muted_state = !muted_state;
+        atomic_store(&early_state, muted_state);
+        atomic_store(&early_until, now_ms() + board.privacy_settle_ms);
+        if (handler.mute_changed) handler.mute_changed(muted_state);
+    }
+    pthread_mutex_unlock(&latch_lock);
+}
+
+static void *button_reader(void *arg)
+{
+    struct input_event ev; int fd = (int)(long)arg;
+    while (read(fd, &ev, sizeof ev) == sizeof ev) if (ev.type == EV_KEY && ev.value == 1) early_press();
+    fprintf(stderr, "buttons: privacy button reader stopped\n");
+    return NULL;
 }
 
 static void *latch_poll(void *arg)
@@ -65,12 +111,6 @@ static void *latch_poll(void *arg)
     (void)arg;
     for (;;) { sleep(1); latch_check(); }
     return NULL;
-}
-
-static long long now_ms(void)
-{
-    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
 static void *reader(void *arg)
@@ -133,6 +173,11 @@ static void *reader(void *arg)
                 vol_down[k] = now; vol_told[k] = 0;
                 if (vol_down[!k]) vol_told[0] = vol_told[1] = 1;            /* both down: a pair, not presses */
             } else if (ev.value == 0) {
+                /* board.action_combo: the first of the two let go, both pressed together and short of the pairing
+                 * hold: the action button's press.  A pair, so no volume step and no event of its own */
+                long long a = vol_down[0], b = vol_down[1];
+                if (board.action_combo && a && b && !combo_done && llabs(a - b) <= CHORD_MS &&
+                    now - (a > b ? a : b) < SHORT_PRESS_MS && handler.action) handler.action();
                 if (vol_down[k] && !vol_told[k]) {
                     int held = now - vol_down[k] >= SHORT_PRESS_MS;     /* the hold's deadline had not run yet */
                     if (!held && handler.volume) handler.volume(k ? -1 : 1);
@@ -164,15 +209,44 @@ static void *privacy_reader(void *arg)
     return NULL;
 }
 
+/* An input device by path, or "name:<its name>" (EVIOCGNAME) where the event number depends on the probe order: the
+ * first /dev/input/eventN of that name (HASSMIC_INPUT_DIR for tests). */
+static int open_input(const char *spec)
+{
+    if (strncmp(spec, "name:", 5)) return open(spec, O_RDONLY);
+    const char *dir = getenv("HASSMIC_INPUT_DIR");
+    for (int i = 0; i < 32; i++) {
+        char path[160], name[128] = ""; int fd;
+        snprintf(path, sizeof path, "%s/event%d", dir ? dir : "/dev/input", i);
+        if ((fd = open(path, O_RDONLY)) < 0) continue;
+        if (ioctl(fd, EVIOCGNAME(sizeof name - 1), name) >= 0 && !strcmp(name, spec + 5)) {
+            fprintf(stderr, "buttons: %s is %s\n", spec + 5, path);
+            return fd;
+        }
+        close(fd);
+    }
+    errno = ENOENT;
+    return -1;
+}
+
+/* board.grab_keys: the keys are ours alone.  A grab is the input device's, so it ends with our process. */
+static void grab(int fd, const char *dev)
+{
+    if (board.grab_keys && ioctl(fd, EVIOCGRAB, 1) < 0) perror("buttons: EVIOCGRAB");
+    else if (board.grab_keys) fprintf(stderr, "buttons: %s grabbed: its keys reach nothing else\n", dev);
+}
+
 int buttons_start(const char *device, const struct button_handler *h)
 {
     pthread_t t; int pfd, f2;
     const char *times = getenv("HASSMIC_HOLD_TIMES");
     handler = *h;
     if (times) sscanf(times, "%d %d", &HOLD_WARN_MS, &HOLD_RESET_MS);
-    int f1 = open(device, O_RDONLY);
+    int f1 = open_input(device);
     if (f1 < 0) return -1;
-    if (board.keypad2 && (f2 = open(board.keypad2, O_RDONLY)) >= 0) {   /* keys split over two nodes (biscuit) */
+    grab(f1, device);
+    if (board.keypad2 && (f2 = open_input(board.keypad2)) >= 0) {   /* keys split over two nodes (biscuit) */
+        grab(f2, board.keypad2);
         if (pthread_create(&t, NULL, reader, (void *)(long)f2)) close(f2);
         else pthread_detach(t);
     } else if (board.keypad2) {
@@ -184,9 +258,17 @@ int buttons_start(const char *device, const struct button_handler *h)
     } else if (board.privacy_latch) {
         fprintf(stderr, "buttons: %s not readable, counting presses of the mute key instead\n", board.privacy_state);
     }
+    if (have_latch() && board.privacy_button && board.privacy_settle_ms > 0) {   /* not grabbed: Android's own handling stays */
+        int bfd = open_input(board.privacy_button);
+        if (bfd < 0) fprintf(stderr, "buttons: %s not available, the mute button is noticed with the latch\n", board.privacy_button);
+        else if (pthread_create(&t, NULL, button_reader, (void *)(long)bfd)) close(bfd);
+        else pthread_detach(t);
+    }
     if (!board.privacy_input) pfd = -1;
-    else if ((pfd = open(board.privacy_input, O_RDONLY)) < 0) fprintf(stderr, "buttons: %s not available, mute button changes go unnoticed\n", board.privacy_input);
-    else if (pthread_create(&t, NULL, privacy_reader, (void *)(long)pfd)) close(pfd);
+    else if ((pfd = open_input(board.privacy_input)) < 0) fprintf(stderr, "buttons: %s not available, mute button changes go unnoticed\n", board.privacy_input);
+    /* grabbed as well: the Echo Show's gating device reports KEY_POWER, and Android's framework played a stock sound
+     * (a fallback ringtone, at the ring stream's level) for every press when it got the key (2026-10-13) */
+    else if (grab(pfd, board.privacy_input), pthread_create(&t, NULL, privacy_reader, (void *)(long)pfd)) close(pfd);
     else pthread_detach(t);
     if (pthread_create(&t, NULL, reader, (void *)(long)f1)) return -1;
     pthread_detach(t);
