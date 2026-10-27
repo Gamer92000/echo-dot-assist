@@ -113,7 +113,8 @@ async def paired(env, state):
         check(re.fullmatch(r"Echo Dot 3( [0-9a-f]{6})?", client.info.name or "") and "player@v1" in client.info.supported_roles, f"hello over the encrypted session: {client.info.name!r} {client.info.supported_roles}")
         check(open(os.path.join(state, "sendspin.key"), "rb").read().__len__() == 32, "identity key persisted")
         dialect = "aiosendspin 9 dialect" if LEGACY else "spec 1.0"
-        check(f"encrypted session up (sentinel key, {dialect})" in log(), f"the player speaks the server's dialect: {dialect}")
+        check(await until(lambda: f"encrypted session up (sentinel key, {dialect})" in log()),     # through the log reader
+              f"the player speaks the server's dialect: {dialect}")
         client.add_event_listener(lambda c, e: events.append(type(e).__name__))
         check(client.role("player@v1") is None, "no role before the operator approves the unpaired device")
         await server.trust_unpaired(cid)
@@ -328,7 +329,7 @@ async def stop_music(env, state, quiet=False):
         await pause()
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None); cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "Stop."})
-        await until(lambda: va.stopped)
+        await until(lambda: va.stopped and "said stop: music paused, run cancelled" in log())
         check(bool(va.stopped) and "said stop: music paused, run cancelled" in log(), f'the transcript "Stop." after it is cancelled, not answered: stops {va.stopped}')
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
 
