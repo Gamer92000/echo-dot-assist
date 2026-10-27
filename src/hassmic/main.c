@@ -38,6 +38,9 @@
 #include <sys/system_properties.h>
 #endif
 #include "audio.h"
+#ifdef CUBE
+#include "cube.h"
+#endif
 #include "a2dp.h"
 #include "arb.h"
 #include "ble.h"
@@ -291,7 +294,13 @@ static void run_output(char *const argv[], char *buf, size_t n)
 
 /* What ring.c plays: through ledctrl one at a time, in order (ledq.c says why), or into HASSMIC_FAKE_LED's file for
  * the tests on the PC, through the same queue (ledq_start in main) */
-static void led_run(const char *op, const char *pattern) { ledq_run(op, pattern); }
+static void led_run(const char *op, const char *pattern) {
+#ifdef CUBE
+    if(cube_indicator(op,pattern)<0) fprintf(stderr,"cube: indicator update failed\n");
+#else
+    ledq_run(op, pattern);
+#endif
+}
 
 /* The Echo's own patterns go through ring.c: Home Assistant's light steps aside for them, and the listening ring is
  * turned towards the talker there */
@@ -311,9 +320,14 @@ static void led(const char *op, const char *pattern)
 static void led_for(enum state from, enum state to)
 {
     static const char *const pattern[] = { NULL, "active-start", "active-thinking", "active-talking" };
+#ifdef CUBE
+    if(cube_indicator_transition(pattern[from],pattern[to]?pattern[to]:"active-end")<0)
+        fprintf(stderr,"cube: indicator transition failed\n");
+#else
     if (pattern[from]) led("-u", pattern[from]);
     if (pattern[to]) led("-s", pattern[to]);
     else if (from != IDLE) led("-s", "active-end");
+#endif
 }
 
 /* ---------------------------------------------------------------- state (call with lock held) */
@@ -323,6 +337,9 @@ enum state core_state(void) { return state; }
 void core_set_state(enum state s)
 {
     if (s == state) return;
+#ifdef CUBE
+    if (cube_control(1, s != IDLE) < 0) fprintf(stderr,"cube: focus state update failed\n");
+#endif
     fprintf(stderr, "state: %s -> %s\n", state_names[state], state_names[s]);
     /* a ringing timer goes to the background (an announcement, a conversation Home Assistant starts): stock flashes
      * "ready-timer-short" once on FOCUS_ENTERED_BACKGROUND, then the pipeline's own patterns cover "ready-timer" */
@@ -948,6 +965,9 @@ void core_link(int up, int ready)
 {
     int was = satellite_running;
     connected = up; satellite_running = up && ready;
+#ifdef CUBE
+    if (cube_control(3,satellite_running) < 0) fprintf(stderr,"cube: Alexa wake state update failed\n");
+#endif
     if (satellite_running) adopted();
     if (!satellite_running) core_pipeline_finish();
     else if (!was && !core_local_wake && state == IDLE) pipeline_start(0);
@@ -2393,7 +2413,11 @@ static void *capture_thread(void *arg)
     (void)arg;
     while (!atomic_load(&quit)) {
         const void *pcm; int n = cap_read(&pcm);
-        if (n < 0) { fprintf(stderr, "capture: fatal\n"); atomic_store(&quit, 1); break; }
+        if (n < 0) { fprintf(stderr, "capture: fatal\n"); atomic_store(&quit, 1);
+#ifdef CUBE
+            _exit(1); /* The independent supervisor restores Alexa and starts a fresh helper. */
+#endif
+            break; }
         if (atomic_exchange(&button_pending, 0)) on_action();      /* SIGUSR2: action button, for tests on the PC */
         if (atomic_exchange(&pair_pending, 0)) on_pair();          /* SIGWINCH: both volume keys held, for tests on the PC */
         { int t = atomic_exchange(&trigger_pending, 0);               /* 1: SIGUSR1 plays a wake word of the last 0.6 s that */

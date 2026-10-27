@@ -524,7 +524,7 @@ static void send_light_entities(void)
         { PB(b, 160); pb_str(&b, 1, "led_auto_brightness"); pb_fixed32(&b, 2, KEY_LED_AUTO); pb_str(&b, 3, "LED auto brightness");
           pb_str(&b, 5, "mdi:brightness-auto"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
     }
-    { PB(b, 160); pb_str(&b, 1, "led_brightness"); pb_fixed32(&b, 2, KEY_LED_BRIGHTNESS); pb_str(&b, 3, "LED brightness");
+    if (listed(KEY_LED_BRIGHTNESS)) { PB(b, 160); pb_str(&b, 1, "led_brightness"); pb_fixed32(&b, 2, KEY_LED_BRIGHTNESS); pb_str(&b, 3, "LED brightness");
       pb_str(&b, 5, "mdi:brightness-6"); pb_float(&b, 6, 0); pb_float(&b, 7, 100); pb_float(&b, 8, 1); pb_uint(&b, 10, 1);
       pb_str(&b, 11, "%"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
     /* separate volumes (main.c): the three beside the media player's, which is the music's; no entity category, controls
@@ -545,6 +545,13 @@ static void send_light_entities(void)
  * is on the settings page only.  States go out only for what is listed. */
 static int listed(int key)
 {
+#ifdef CUBE
+    switch(key) {
+    case KEY_EQ_BASS: case KEY_EQ_MID: case KEY_EQ_TREBLE: case KEY_LED_AUTO:
+    case KEY_LED_BRIGHTNESS: case KEY_UPDATE: case KEY_LIGHT: case KEY_RING_FILL:
+    case KEY_RING_ROTATION: case KEY_RING_LEDS: return 0;
+    }
+#endif
     switch (key) {
     case KEY_MIC_LEVEL: case KEY_DENOISE: case KEY_BT_ANNOUNCE: case KEY_BT_LANG: case KEY_ADB_WIFI: case KEY_ARB_JOIN: case KEY_SS_UNPAIRED:
     case KEY_SOUND_DETECTION: case KEY_WIFI_MOTION_ON: case KEY_SOC_TEMP: case KEY_CPU_USAGE: return 0;
@@ -576,7 +583,7 @@ static void send_setting_entities(void)
 {
     static const char *const eq_ids[] = { "equalizer_bass", "equalizer_mid", "equalizer_treble" };
     static const char *const eq_labels[] = { "Equalizer bass", "Equalizer mid", "Equalizer treble" };   /* sort together in HA */
-    for (int i = 0; i < 3; i++) {       /* like the Alexa app's sliders */
+    for (int i = 0; i < 3; i++) if (listed(KEY_EQ_BASS+i)) {       /* like the Alexa app's sliders */
         PB(b, 192); pb_str(&b, 1, eq_ids[i]); pb_fixed32(&b, 2, KEY_EQ_BASS + i); pb_str(&b, 3, eq_labels[i]); pb_str(&b, 5, "mdi:tune-vertical");
         pb_float(&b, 6, -6); pb_float(&b, 7, 6); pb_float(&b, 8, 1); pb_str(&b, 11, "dB"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b);
     }
@@ -682,14 +689,19 @@ static void send_setting_entities(void)
     if (core_web_port) { PB(b, 128); pb_str(&b, 1, "web_ui_address"); pb_fixed32(&b, 2, KEY_WEB_URL); pb_str(&b, 3, "Web UI address");
       pb_str(&b, 5, "mdi:web"); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
     /* online updates (update.c): the channel is picked on the settings page; the entity says what is new and installs it */
-    { PB(b, 128); pb_str(&b, 1, "firmware"); pb_fixed32(&b, 2, KEY_UPDATE); pb_str(&b, 3, "Firmware");
+    if (listed(KEY_UPDATE)) { PB(b, 128); pb_str(&b, 1, "firmware"); pb_fixed32(&b, 2, KEY_UPDATE); pb_str(&b, 3, "Firmware");
       pb_uint(&b, 7, 1); pb_str(&b, 8, "firmware"); send_msg(LIST_UPDATE, &b); }
     /* which Echo is this: a diagnostic button with HA's "identify" class, as ESPHome's own devices offer */
     { PB(b, 128); pb_str(&b, 1, "identify"); pb_fixed32(&b, 2, KEY_IDENTIFY); pb_str(&b, 3, "Identify");
       pb_uint(&b, 7, 2); pb_str(&b, 8, "identify"); send_msg(LIST_BUTTON, &b); }
     /* ESPHome's factory_reset button: a configuration entity, so no dashboard shows it by itself.  Everything is
      * forgotten, Home Assistant's key and the Wi-Fi networks too (core_reset): the Echo starts its setup again */
-    { PB(b, 128); pb_str(&b, 1, "factory_reset"); pb_fixed32(&b, 2, KEY_RESET); pb_str(&b, 3, "Factory reset");
+    { PB(b, 128); pb_str(&b, 1, "factory_reset"); pb_fixed32(&b, 2, KEY_RESET);
+#ifdef CUBE
+      pb_str(&b, 3, "Reset Cube Assist");
+#else
+      pb_str(&b, 3, "Factory reset");
+#endif
       pb_str(&b, 5, "mdi:restart-alert"); pb_uint(&b, 7, 1); pb_str(&b, 8, "restart"); send_msg(LIST_BUTTON, &b); }
     /* ESPHome's restart button: the whole Echo, as a power cycle (core_reboot) */
     { PB(b, 128); pb_str(&b, 1, "restart"); pb_fixed32(&b, 2, KEY_RESTART); pb_str(&b, 3, "Restart");

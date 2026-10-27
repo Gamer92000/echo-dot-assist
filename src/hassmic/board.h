@@ -14,6 +14,9 @@ struct board {
     const char *default_name;       /* the model as people call it ("Echo Dot 3"); the name adds the MAC's end (main.c) */
     const char *codename;           /* devices/<codename>: names this model's bundle in a release (online updates) */
 
+    /* Optional platform capabilities; zero keeps the existing Echo behavior. */
+    int fire_tv;                   /* stock Fire TV manages networking; status indicators are bars */
+
     /* inputs */
     const char *keypad;             /* input device with action and volume keys (-b overrides) */
     const char *keypad2;            /* second input device with more keys; NULL if one is enough */

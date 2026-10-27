@@ -30,7 +30,7 @@ BUILD_TIME := $(shell LC_ALL=C git log -1 --format=%cd --date=format:'%b %e %Y %
 # VERSION+BUILD (git describe), which online updates take for that version.
 VERSION := $(shell TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y.%m.%d.%H%M%S 2>/dev/null || echo 0)
 DEFS    := -DVERSION='"$(VERSION)"' -DBUILD='"$(BUILD)"' -DBUILD_TIME='"$(BUILD_TIME)"' $(if $(RELEASE),-DRELEASE)
-CFLAGS  := -O2 -Wall -Wextra -fPIE -Isrc/include $(DEFS)
+CFLAGS  := -O2 -Wall -Wextra -fPIE -Isrc/include $(DEFS) $(if $(CUBE),-DCUBE=1)
 LDFLAGS := -pie -fuse-ld=lld -Wl,--allow-shlib-undefined -Wl,--unresolved-symbols=ignore-in-shared-libs
 STOCK_LIBS = $(addprefix $(STOCK)/,$(filter $(LIBS),$(1)))
 
@@ -47,6 +47,12 @@ BIN := $(OUT)/hassmic $(OUT)/runas $(OUT)/otatool \
        $(if $(filter libmixerAPI.so,$(LIBS)),$(OUT)/mixcap $(OUT)/mixplay $(OUT)/latency) \
        $(if $(filter -lOpenSLES,$(SYSLIBS)),$(OUT)/slplay) \
        $(if $(filter libpryon.so,$(LIBS)),$(OUT)/pryon_test $(OUT)/aed_test $(OUT)/whisper_test)
+
+# The Fire TV helper and install bundle are built by scripts/cube/build.py.
+# Echo-only diagnostic tools use a different Pryon ABI and are not Cube tools.
+ifneq ($(CUBE),)
+BIN := $(OUT)/hassmic
+endif
 
 .DEFAULT_GOAL := all
 all: $(BIN)
@@ -179,9 +185,9 @@ $(OUT)/whisper_test: src/tools/whisper_test.c src/include/pryon_api.h $(STOCK)/l
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) $(STOCK)/libpryon.so
 
 # Sound detection (sound.h) runs on the same engine as the wake word: a model with Pryon has it, the PC build fakes it.
-SOUND := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/sound_pryon.c,src/hassmic/sound_none.c)
+SOUND := $(if $(CUBE),src/hassmic/sound_none.c,$(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/sound_pryon.c,src/hassmic/sound_none.c))
 # So does whisper detection (whisper.h), with a model from Amazon (scripts/artifacts.sh).
-WHISPER := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/hassmic/whisper_none.c)
+WHISPER := $(if $(CUBE),src/hassmic/whisper_none.c,$(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/hassmic/whisper_none.c))
 
 RNNOISE := $(addprefix src/third_party/rnnoise/,denoise.c rnn.c rnn_data.c pitch.c kiss_fft.c celt_lpc.c)
 HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) src/hassmic/ringdesign.c src/hassmic/ledq.c \

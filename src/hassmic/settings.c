@@ -15,6 +15,9 @@
 #include "wifimotion.h"
 #include "statefile.h"
 #include "ring.h"
+#ifdef CUBE
+#include "cube.h"
+#endif
 #include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
@@ -59,12 +62,13 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, STOP_ENDS, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
-          CALL_LINK, CALL_LEVEL, CALL_OFFSET, NSET };
+          CALL_LINK, CALL_LEVEL, CALL_OFFSET, EXTRA_DUCK, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
  * listed()); everything else here is on the settings page only, except what Home Assistant always shows (wake sound,
  * mute, do not disturb, LEDs, equalizer). */
 static const struct setting table[NSET] = {
+    [EXTRA_DUCK] = { "extra_duck_db", "Extra TV ducking", "Voice", "dB", S_INT, 0, 24, 1, 0 },
     /* main.c keeps it; microWakeWord's models are in state/mww (mww_store.c), not in an export */
     [WAKE_ENGINE] = { "wake_engine", "Wake word engine", "Wake word", NULL, S_CHOICE, 0, 0, 1, 0 },
     [MIC_LEVEL]   = { "mic_level", "Mic level", "Voice", "dBFS", S_INT, MICGAIN_LEVEL_MIN, MICGAIN_LEVEL_MAX, 1, 0 },
@@ -147,6 +151,12 @@ static const struct setting table[NSET] = {
 
 static int present(enum id i)
 {
+#ifdef CUBE
+    /* These Echo-specific paths are not implemented by the Cube audio adapter. */
+    if(i==UPDATES||i==LED_AUTO||i==LED_LEVEL||i==RING_ROT||i==EQ_BASS||i==EQ_MID||i==EQ_TREBLE)return 0;
+#else
+    if(i==EXTRA_DUCK)return 0;
+#endif
     switch (i) {
     case BT_ANNOUNCE: case BT_LANG: case BT_AUDIO: case BT_SPEAKER: case BT_OUT_DELAY: case BT_OUT_AWAKE: case BT_OUT_STAY: return ble_present();
     case WHISPER: return core_whisper_model();
@@ -200,6 +210,9 @@ int settings_choices(const struct setting *s, const char *const **names)
 int settings_get(const struct setting *s)
 {
     switch (s - table) {
+#ifdef CUBE
+    case EXTRA_DUCK: return cube_extra_duck(-1);
+#endif
     case WAKE_ENGINE: return core_wake_engine(-1);
     case MIC_LEVEL: return mic_level;
     case DENOISE: return core_mic_denoise(-1);
@@ -253,6 +266,9 @@ int settings_get(const struct setting *s)
 static void put(enum id i, int v)
 {
     switch (i) {
+#ifdef CUBE
+    case EXTRA_DUCK: cube_extra_duck(v); break;
+#endif
     case WAKE_ENGINE: core_wake_engine(v); break;
     case MIC_LEVEL: mic_level = v; core_mic_level(v); break;
     case DENOISE: core_mic_denoise(v); break;
