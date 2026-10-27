@@ -27,6 +27,11 @@ What changed for people using the Echo, newest first. Details and measurements a
   whoever sits at the PC. The Echo Show setups now install those rules too. On a PC that is not x86_64, they install
   qemu-user from the package manager. Where users may not create namespaces (Ubuntu 24.04 and later), they ask to allow
   them until the next boot. Before, the root step failed with "the policy patch failed" and no reason.
+- **Echo Dot 2 on the October 2026 software: an unlock is proven, on Linux** (issues #50, #74). amonet v2.0.1's
+  payload for that bootloader (`2c3569d-20260617_045829`) unlocked #50's Echo on 2026-10-26, on Linux. From Windows
+  nobody has yet: #74's one attempt ran amonet through a wrapper around platform-tools 37.0.1's fastboot — refused,
+  exit 1, no error text kept, the Echo unharmed. amonet's own Windows runner, `fastbrick.bat`, flashes with the zip's
+  bundled `bin\fastboot.exe` (platform-tools 36.0.0) before any system fastboot.
 
 - **Echo Dot 2, Echo 2 and Echo Dot 3: "Download from Amazon" signs in again where it said "no device
   attestation".** Amazon's attestation library refused to open its key when an earlier, harmless library lookup in

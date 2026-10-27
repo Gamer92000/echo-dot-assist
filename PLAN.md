@@ -2215,7 +2215,11 @@ Run in this order. Each step says what it proves.
       122 746 in 8149; 20221007 135 408/135 416 in 8149, 122 746 in 8338; default 246/31 400.  Preloader unchanged
       (issue: `bd7ae89-20221003`).  kaeru boots the active slot (v2.0.0: boot_a): install-system.sh writes the active
       slot from TWRP and the running /system otherwise, so either fits.  Unpacked per version
-      (`firmware/biscuit/amonet-biscuit-v2.0.1/`).  Open: an unlock on 8338's LK on a real Dot; 8146 flashed over 8338.
+      (`firmware/biscuit/amonet-biscuit-v2.0.1/`).  8338's LK unlocked on a real Dot 2026-10-26 (issue #50's reporter,
+      Linux, amonet v2.0.1's `fastbrick-20260617.img`).  Open: 8146 flashed over 8338; an unlock from Windows (issue
+      #74, 2026-10-27: one attempt through a wrapper around platform-tools 37.0.1's fastboot — refused, exit 1, no
+      error line caught, the Echo unharmed; amonet's `fastbrick.bat` flashes with the zip's bundled `bin/fastboot.exe`,
+      platform-tools 36.0.0, before any system fastboot, as v2.0.0's runner does — firebreak 0.8.0 stays the route).
       TWRP before the wipe (`twrp_check`, first in every model's `step_flash`): 3.7 or newer, else stop with nothing
       wiped (the issue: amonet v1's TWRP 3.2.3, on Dots EchoLocal sold unlocked, cannot install 6574.1).  Every unlock
       here brings 3.7.0_9-0: `ro.twrp.version` and the string next to it in the ramdisks of amonet-biscuit v2.0.0,
