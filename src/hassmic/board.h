@@ -19,8 +19,15 @@ struct board {
     const char *keypad2;            /* second input device with more keys; NULL if one is enough */
     const char *privacy_state;      /* sysfs file, '1' = mics muted by the hardware latch; NULL if there is no latch */
     const char *privacy_input;      /* input device that reports changes of that latch; NULL if the keypad does */
+    int action_combo;               /* 1: no action button: both volume keys pressed together and let go within a second
+                                       stand in for it (buttons.c); held 2 s they still pair (arbitration) */
+    int grab_keys;                  /* 1: the keypad is hassmic's alone (EVIOCGRAB): Android's framework, where there is one,
+                                       would act on the volume keys too and take its own volume off on top of ours */
     int privacy_latch;              /* 1: the sysfs state is the truth (read at start, on the mute key and once a second);
                                        0: nothing to read, presses of the keypad's mute key are counted from "unmuted" */
+    const char *privacy_button;     /* input device of the mute button itself, where the driver reports the latch late (athena:
+                                       its gpio-privacy holds the enable line 1 s, then changes state); NULL: no early notice */
+    int privacy_settle_ms;          /* with privacy_button: how long a press is believed before the latch must have confirmed it */
 
     /* Bluetooth: raw HCI (H4) character device, the init service that owns it in stock, where the address is stored */
     const char *bt_dev;
@@ -31,17 +38,36 @@ struct board {
     const char *wake_id;            /* id of the firmware's own wake word model */
     const char *wake_manifest;
     const char *earcon_dir;         /* with trailing slash */
+    /* where the firmware has no earcon folder: stock's sound name -> an entry of a stock app (APK) holding it, stored
+     * uncompressed (sounds.c reads it out of the zip).  earcon_dir wins; {NULL}-terminated, or NULL for none */
+    const struct board_sound { const char *name, *zip, *entry; } *earcon_zip;
     const char *thermal_type;       /* thermal zone reported as SoC temperature */
-    const char *light_sensor[3];    /* files the stock light sensor HAL reads lux from, first that opens; {NULL}: none */
+    const char *light_sensor[3];    /* files the stock light sensor HAL reads lux from, first that opens; {NULL}: none.  "tcs3400:<dir>": raw channels of
+                                       a TCS3400 under <dir>/input*, main.c lux_tcs3400 */
     int volume_steps;               /* volume_step-NN animations of ledcontroller */
+    /* The speaker's volume curve: dB under volume 100 at volumes 0..100, each `at` above the last (tests/unit/volcurve_test.c
+     * checks it: the same one twice divides by 0), {-1} after the last (volcurve.c:
+     * separate volumes turn each kind down by it).  NULL: the Echo Dot 2's, measured there and taken where nobody has
+     * measured (tools/vol-curve.py measures an Android Echo's with a Dot beside it) */
+    const struct board_vol { int at; float db; } *volume_curve;
 
     /* speaker gain (spkgain.c): an ALSA control of card 0 that sets the speaker amplifier's analog gain, which the
      * settings page may raise; NULL: none.  stock: what the speaker plays at on a stock Echo (what the audio HAL's
-     * speaker path sets it to, or where it stays from boot).  steps: the control's steps per dB, 0 for 1 */
+     * speaker path sets it to, or where it stays from boot).  steps: the control's steps per db dB, 0 for 1 each (the
+     * Echo Show 5's 1.5 dB steps: 2 per 3 dB; a whole dB then takes the nearest step) */
     const char *speaker_gain;
     int speaker_gain_stock;
     int speaker_gain_steps;
+    int speaker_gain_db;
+    int speaker_gain_min_db;        /* how far below stock the page may go, dB (negative), 0: not at all */
+    /* highest control value to offer, 0 for the control's own maximum (the Show 8 2nd gen's amp distorts well below its) */
+    int speaker_gain_limit;
+    /* other amplifiers the same model is built with (the Echo Show 5 2nd gen: three, by board revision), each with its
+     * own control: tried in order where speaker_gain is not on the card.  Fields as above; {NULL}-terminated, or NULL */
+    const struct board_gain { const char *name; int stock, steps, db, min_db, limit; } *speaker_gain_alt;
 };
 
 extern const struct board board;
+/* volcurve.c: the curve at volume v (clamped to 0..100): dB under volume 100, board.volume_curve's or the Echo Dot 2's */
+float board_vol_db(int v);
 #endif

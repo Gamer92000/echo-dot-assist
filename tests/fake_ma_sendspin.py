@@ -2,8 +2,8 @@
 """Plays Music Assistant's side of Sendspin against build/hassmic-host with the reference server library: dials the
 player, approves it unpaired, streams a sine, sends volume and delay commands, and checks what reaches the player's
 audio backend.  Then pairing, a second server and unpairing.  Beside it, at once, players of their own for a restart of
-the server (the player asks for mDNS announcements until one is back, issue #28), for unpaired access off (the default)
-and for "<wake word>, stop" to music (issue #51, with Home Assistant's voice assistant over the ESPHome API beside the
+the server (the player asks for mDNS announcements until one is back, issue #28), for unpaired access off (the default),
+for unpaired access switched on while the server waits, and for "<wake word>, stop" to music (issue #51, with Home Assistant's voice assistant over the ESPHome API beside the
 server).
 
     tests/fake_ma_sendspin.py             aiosendspin 10.2.1 from .venv (Music Assistant 2.10.8): spec 1.0's wire
@@ -44,7 +44,7 @@ from aiosendspin.server import SendspinServer, AudioFormat, ClientAddedEvent
 from aioesphomeapi import APIClient, VoiceAssistantEventType as Ev
 
 sys.path.insert(0, os.path.join(ROOT, "tests"))
-from webclient import wait_port
+from webclient import wait_port, Browser
 from esphome_common import assistant, sync
 
 # What changed in the library's API between the two versions
@@ -81,13 +81,13 @@ async def until(cond, secs=5.0):
         await asyncio.sleep(0.05)
 
 
-def player(state, port, http, env):
-    """a hassmic-host with Sendspin on port, its log in state/log; no push updates, arbitration or settings page: two run
-    at once"""
+def player(state, port, http, env, web=0):
+    """a hassmic-host with Sendspin on port, its log in state/log; no push updates or arbitration, and no settings page
+    unless web: several run at once"""
     log = open(os.path.join(state, "log"), "w+")
-    proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-p", str(http), "-z", str(port), "-L", "-o", "0", "-a", "0", "-W", "0"],
+    proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-p", str(http), "-z", str(port), "-L", "-o", "0", "-a", "0", "-W", str(web)],
                             env=env, stderr=log)
-    wait_port(port, http)
+    wait_port(port, http, *([web] if web else []))
     def text(): log.seek(0); return log.read()
     return proc, text
 
@@ -113,7 +113,8 @@ async def paired(env, state):
         check(re.fullmatch(r"Echo Dot 3( [0-9a-f]{6})?", client.info.name or "") and "player@v1" in client.info.supported_roles, f"hello over the encrypted session: {client.info.name!r} {client.info.supported_roles}")
         check(open(os.path.join(state, "sendspin.key"), "rb").read().__len__() == 32, "identity key persisted")
         dialect = "aiosendspin 9 dialect" if LEGACY else "spec 1.0"
-        check(f"encrypted session up (sentinel key, {dialect})" in log(), f"the player speaks the server's dialect: {dialect}")
+        check(await until(lambda: f"encrypted session up (sentinel key, {dialect})" in log()),     # through the log reader
+              f"the player speaks the server's dialect: {dialect}")
         client.add_event_listener(lambda c, e: events.append(type(e).__name__))
         check(client.role("player@v1") is None, "no role before the operator approves the unpaired device")
         await server.trust_unpaired(cid)
@@ -129,8 +130,10 @@ async def paired(env, state):
         client.group.group_role("controller").set_supported_commands([MediaCommand.PLAY, MediaCommand.PAUSE, MediaCommand.NEXT])
         stream = client.group.start_stream()
         n, phase = 4800, 0
-        for i in range(40):                                # 4 s of 440 Hz
-            k = np.arange(phase, phase + n); s = (8000 * np.sin(2 * np.pi * 440 * k / 48000)).astype("<i2")
+        # 4 s of 440 Hz, then 0.3 s of silence: the server's FLAC encoder holds back what does not fill a block of 4608
+        # samples until the stream ends, which was the tone's last 64 ms (played 3.936 s of 4, never "out")
+        for i in range(43):
+            k = np.arange(phase, phase + n); s = (8000 * np.sin(2 * np.pi * 440 * k / 48000) * (i < 40)).astype("<i2")
             phase += n
             stream.prepare_audio(np.repeat(s, 2).tobytes(), fmt)
             await stream.commit_audio()
@@ -272,6 +275,31 @@ async def unpaired_off(env, state):
         proc.terminate(); await server.close()
 
 
+async def unpaired_switch(env, state):
+    # ---- unpaired access switched on (on the settings page) while the server waits for a pairing token: the server read
+    # the refusal in our hello and does not ask again, so the idle session is closed; on its redial it gets the roles
+    proc, log = player(state, 16950, 16951, env, web=16953)     # unpaired access off: the default
+    page = Browser(16953)
+    check(await asyncio.to_thread(page.login_with_button, proc), "settings page logged in")
+    server = server_of(asyncio.get_running_loop(), Identity.generate(), "fake-ma", InMemoryServerPairingStore())
+    added = asyncio.Queue()
+    server.add_event_listener(lambda _s, ev: isinstance(ev, ClientAddedEvent) and added.put_nowait(ev.client_id))
+    try:
+        await server.start_server(port=16952, discover_clients=False)
+        server.connect_to_client("ws://127.0.0.1:16950/sendspin", retry_initial_connection=True, retry_indefinitely=True)
+        cid = await asyncio.wait_for(added.get(), 15)
+        await server.trust_unpaired(cid)
+        await asyncio.sleep(2)
+        check(server.get_client(cid).role("player@v1") is None, "unpaired access off: the server waits, approved unpaired, no role")
+        r = await asyncio.to_thread(page.set, sendspin_unpaired="on")
+        check(r.get("applied") == 1 and await until(lambda: "sendspin: session closed" in log(), 5),
+              f"switched on from the page: the waiting session is closed ({r})")
+        check(await until(lambda: (c := server.get_client(cid)) is not None and c.role("player@v1") is not None, 15),
+              "the server dials back and plays, unpaired")
+    finally:
+        proc.terminate(); await server.close()
+
+
 async def stop_music(env, state, quiet=False):
     """"<wake word>, stop" pauses Sendspin music itself (issue #51): its pipeline goes on, a bare "stop" transcript is
     cancelled, the button resumes; without the keyword (microWakeWord) the transcript "stop" pauses.  That with the
@@ -328,7 +356,7 @@ async def stop_music(env, state, quiet=False):
         await pause()
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None); cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "Stop."})
-        await until(lambda: va.stopped)
+        await until(lambda: va.stopped and "said stop: music paused, run cancelled" in log())
         check(bool(va.stopped) and "said stop: music paused, run cancelled" in log(), f'the transcript "Stop." after it is cancelled, not answered: stops {va.stopped}')
         cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
 
@@ -386,7 +414,7 @@ async def main():
             tail = open(os.path.join(state, "log"), errors="replace").read().splitlines()[-40:]
             lines.append("     the player's log, last lines:\n" + "\n".join("       " + l for l in tail))
         return lines
-    for lines in await asyncio.gather(part(paired), part(server_restart), part(unpaired_off), part(stop_music),
+    for lines in await asyncio.gather(part(paired), part(server_restart), part(unpaired_off), part(unpaired_switch), part(stop_music),
                                          part(lambda env, state: stop_music(env, state, quiet=True))):
         print("\n".join(lines))
     print("FAILED" if check.failed else "all good")

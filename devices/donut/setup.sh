@@ -62,12 +62,7 @@ step_files() {
 }
 
 # lets the unlock reach the Echo without sudo, and keeps ModemManager from probing the bootrom's serial port mid-handshake
-step_udev() {
-    local rules=/etc/udev/rules.d/51-echo-unlock.rules
-    cmp -s scripts/51-echo-unlock.rules $rules && { ok "udev rules installed"; return 0; }
-    need_sudo "to install udev rules" || return 1
-    task "Installing udev rules" sh -c "sudo cp scripts/51-echo-unlock.rules $rules && sudo udevadm control --reload"
-}
+step_udev() { udev_rules; }      # scripts/lib/setup.sh
 
 step_usb() {
     [ -z "$DRY" ] && { adb_is recovery || adb_is device; } && { ok "the Echo is on USB already"; return 0; }

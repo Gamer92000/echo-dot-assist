@@ -318,6 +318,9 @@ async def run(tmp, old):
             check(r == "Ich verbinde mit Hall" and await until(lambda: _is(c, hsens, "connected"), 3),
                   f"German, the released build calling this one: {r!r} in {t:.2f} s")
             await hang_up(kd, ksens)
+            r, t = await c.say("drop it in the hall", od)        # speech to text's way of hearing "drop in"
+            check(r == "Calling Hall" and await until(lambda: _is(c, hsens, "connected"), 3), f"'drop it in the hall': {r!r}")
+            await hang_up(od, osens)
             r, t = await c.say("drop in office", od)
             check(r == "This is the Echo in Office", f"its own room: {r!r}")
 

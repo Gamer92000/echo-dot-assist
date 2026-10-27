@@ -2,6 +2,52 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-27
+
+- **Drop In: the wake word works during a call to an empty room.** An Echo in a quiet room sent its own room noise,
+  turned up to speech level, to the caller. The caller's Echo took that for the other side talking: it ignored the wake
+  word, never switched on listening mode (so "Alexa, hang up" came out as "No text recognized") and turned its own
+  voice down. An Echo now sends its room only when something clearly louder than quiet speech is there, and counts
+  the other side as talking only when it is well over that side's own noise. Both Echos need this version.
+- **"Music Assistant without pairing" takes effect at once.** Switching it on, on the settings page, closes the
+  Sendspin connections that wait for a pairing token, so Music Assistant reconnects and plays instead of waiting.
+- **Drop In by voice: "drop into the kitchen" and "drop it in the kitchen" work too.** Speech to text often hears
+  "drop in" that way. The blueprint's default sentences have both now. An automation made from it before keeps its own
+  list: add the two sentences there.
+- **Echo Show: hassmic starts sooner after a boot.** Turning Alexa's apps off asked Android about each one
+  separately; it now asks once.
+- **Echo Show: switching Wi-Fi works on a network Amazon's setup saved.** Android lets only the one who saved a network
+  change it. The settings page's "Switch network…" and setup from a phone now do it as Android's system user when root
+  is refused, as the guided setup already did.
+- **Echo Show: no hold-to-reset.** The guide now says it: the Shows have no action button. Both volume keys pressed
+  together stand in for it (logins, debug access, setup from a phone), and held they pair Echos. Reset a Show from
+  Home Assistant or the settings page.
+- **Guided setup over ssh and on a Raspberry Pi.** Run over ssh, the setup also gives the Echo's USB devices to a
+  group you are in (plugdev, adbusers, sudo or wheel). Before, adb found no Echo, because the udev rules only serve
+  whoever sits at the PC. The Echo Show setups now install those rules too. On a PC that is not x86_64, they install
+  qemu-user from the package manager. Where users may not create namespaces (Ubuntu 24.04 and later), they ask to allow
+  them until the next boot. Before, the root step failed with "the policy patch failed" and no reason.
+
+- **Echo Dot 2, Echo 2 and Echo Dot 3: "Download from Amazon" signs in again where it said "no device
+  attestation".** Amazon's attestation library refused to open its key when an earlier, harmless library lookup in
+  hassmic had failed, and the log blamed a missing group ("dlsym(HMI) failed: (null)"). hassmic now clears that
+  leftover before it opens the key.
+- **Echo Show: your own light ring designs show on the band.** The light designs and theme packs are back on the
+  Show's settings page. Each design plays on the band along the bottom of the screen as the ring's twelve LEDs laid
+  out in a row, with the side that faces the talker in the middle; it is never turned towards the talker. The
+  designer is the same on every Echo, with a Ring / Band switch on its stage: it opens on what this Echo has and
+  shows the same design the other way at a click, so you can see how it looks on a Dot and on a Show while you draw.
+  Amazon's animations to start from are the band's own, and Apply shows the designs at once, with no restart. Designs and packs move between Dots and Shows as before. The volume of
+  voice replies now shows in cyan on the band, as it does on the Dots' ring.
+- **The volume keys' tone plays at the volume they set.** With separate volumes it played at the "Echo sounds"
+  volume, so with nothing playing the keys sounded like they did nothing. It now plays at the volume you just
+  set: the music's, or the reply's, timer's or call's while one of those plays (at 0, as quiet as the lowest step). This applies to every model.
+- **Echo Show: with "Light band" at 0 the band no longer shows for a moment at every start**, and apps on the screen
+  are no longer laid out twice then. The settings page also says when the band is off instead of "On the band".
+- **Echo Show 5: separate volumes now use the Show's own volume steps.** They were worked out from an Echo Dot 2,
+  whose steps are quite different, so a reply set well below the music came out about 5 dB too loud. Measured on an
+  Echo Show 5: each kind now plays as loud as that number on the Show's volume.
+
 ## 2026-10-26
 
 - **Home Assistant VAD compatibility.** The Features card adds "Request audio padding" in Home Assistant
@@ -9,6 +55,10 @@ What changed for people using the Echo, newest first. Details and measurements a
   after the wake word or keeps listening without responding. Off by default; switching it off resets the value to
   zero and hides the number. The card is hidden when Home Assistant listens for the wake word.
   Only ESPHome requests started by the Echo's own wake word are padded, without delaying or trimming speech.
+- **Echo Show: the settings page shows only what the light band can do.** "Light ring rotation" and the light ring
+  designs are for the Dots' LEDs; the Show's page no longer lists them, where they did nothing or failed on Apply. A
+  Bluetooth speaker that sets its own volume now starts at the loudest of the separate volumes, not the music's, so
+  replies are not quieter for a moment after it connects. The volume the Show keeps survives a power cut.
 - **Echo Dot 2 from Windows, step by step** (issue #67). A new page, [docs/WINDOWS.md](docs/WINDOWS.md), for
   people who have never used a command line: how to tell which Echo you have, the five tools to install with every
   command to paste, how to get this project, what each step of the setup asks of you (with the button gesture for
@@ -31,6 +81,16 @@ What changed for people using the Echo, newest first. Details and measurements a
   Assistant logged four warnings on every connection, and a later version could refuse the Echo outright. The Echo
   now speaks Sendspin 1.0 to Music Assistant 2.10.8 and later, and the earlier draft to versions up to 2.10.6,
   picking the right one each time a server connects. Pairing, volume and the delay setting work with both.
+- **Guided setup: a Wi-Fi network the Echo had saved before is taken as it is.** Joining failed with "WifiService did
+  not add the network" when the Echo Show already knew the network (from a stock update over Wi-Fi, or Amazon's setup):
+  Android lets only the system user change it, and the setup now asks as that user.
+- **Echo Show 5 (2nd gen, `cronos`): first support, installed on one.** The 2021 Show 5 runs the same Fire OS build as
+  the 1st gen, so it installs the same way ([`devices/cronos`](devices/cronos/README.md), `scripts/setup.sh cronos`). Its
+  mute button and speaker amplifier differ: the mute button is answered as on the Echo Show 8 2nd gen, and the "Speaker
+  gain" setting finds whichever amplifier the unit has (Realtek's as on the 1st gen; TI's up to +4 dB; Maxim's, the
+  first one's, up to +6 dB). Its setup installs the udev rules for USB access, as the Dots' do. On the first Echo the
+  guided setup ran through; Home Assistant, the wake word, the keys, the mute switch, the light band and the light
+  sensor work. Not checked yet: the speaker gain by ear, Wi-Fi motion, "Download from Amazon", Bluetooth.
 
 ## 2026-10-25
 
@@ -220,6 +280,44 @@ What changed for people using the Echo, newest first. Details and measurements a
   gets its changes one after the other, in order.
 - **The ring's brightness ends where the slider stops.** Dragging the LED brightness in Home Assistant could leave the
   ring at a level from along the way, for the same reason; brightness changes now take their turn in that same order.
+- **Wake sound removal (experimental) on the Echo Show.** The Show starts a sound after a pause 0.35 s late (below); the
+  removal now looks for the sound's echo from where it really starts, and no longer misses it.
+
+## 2026-10-16
+
+- **Echo Show 8 (2nd gen): Wi-Fi motion.** The motion sensor (experimental, off by default) now works on the Show 8 2nd gen:
+  our module reads the level of every frame from the router out of its Wi-Fi driver, as on the Echo Dot 3 and the Show 5.
+  The guided setup downloads the kernel sources and compiler the module is built with.
+- **Echo Show 8 (2nd gen): the guided setup unlocks and roots it.** `scripts/setup.sh athena` asks for saiyaku-athena and its
+  boot-root zip (picked up from ~/Downloads), runs the unlocker with its output on the console, flashes the root zip in TWRP
+  and goes on with the install, as it does for the 1st gen.
+
+## 2026-10-15
+
+- **Echo Show 8 (2nd gen): the mute button is answered at once.** Amazon's driver holds the microphone switch for one
+  second before it reports it, so the red band and the "mics off" sound came 1.2 s after the press (the red light under the
+  button was instant). hassmic now reacts to the press itself and lets the switch confirm it.
+- **Echo Show 8 (2nd gen): speaker gain.** The "Speaker gain" setting goes up to +9 dB: music at full volume was quiet, and
+  past that point bass-heavy music distorts.
+
+- **Echo Show 8 (1st gen): a factory reset forgets a Wi-Fi network that Amazon's own setup saved.** Android 7 only lets the
+  network's creator or the system user remove it, so the reset reported "forgotten" and the Echo stayed on the network (and
+  never offered setup from a phone). The reset now removes it as the system user, and says so when one cannot be removed.
+- **Echo Show 8 (1st gen): the speaker gain can go below stock.** The Show 8 is loud at its stock level with music at
+  full volume, so the settings page's speaker gain goes down to -6 dB here (the Dots only go up). About -2 dB suited
+  the first one tried.
+
+## 2026-10-14
+
+- **Echo Show 8 2nd gen (`athena`): first support, installed on one.** Android 9 and a different chip from the other Shows,
+  so it has its own page ([`devices/athena`](devices/athena/README.md)). The Echo has to be unlocked and rooted first (the
+  saiyaku-athena unlock and its root zip, not part of this project); the install then needs no flashing from the PC. On
+  the first Echo hassmic is up 22 seconds after the kernel starts, hears the wake word, takes the volume keys and the mic
+  mute switch and draws the light band, and Home Assistant adopts it and gets spoken answers. Bluetooth (Home Assistant's
+  proxy, music from a phone), Music Assistant over Sendspin, the settings page's "Switch network" and the setup's Wi-Fi
+  join, and "Download from Amazon" work, and the room's light is reported in lux, computed from the sensor's raw colour
+  channels (within about 10 % of Amazon's own value in steady light; under a bright lamp held close it still jumps about).
+  Not checked yet: the speaker's volume curve.
 
 ## 2026-10-13
 
@@ -233,6 +331,56 @@ What changed for people using the Echo, newest first. Details and measurements a
   supported". It now plays https:// too, and follows redirects there. The certificate is checked as a browser would:
   a self-signed one, or one that does not name the address Home Assistant gives out, is refused, and the log says so.
   "Check HTTPS certificates" on the settings page (System) switched off accepts any certificate.
+- **Echo Show 8 (1st gen, `crown`): first support.** The Show 8 is the same platform as the Show 5, and a trial run on one
+  (hassmic started from the PC, nothing installed) heard the wake word, took the volume keys and the mic mute switch,
+  and drew the light band. Installed on a real one since: Home Assistant, voice questions, buttons and the band work. Wi-Fi motion
+  works on it (the sensor needs a minute after switching on to settle) and "Download from Amazon" works (its attestation
+  service is DHA version 2, drvV3 in Amazon's Java MAP). Bluetooth works once the install has taken Android's own stack off
+  (Home Assistant's Bluetooth proxy, playing from a phone).
+- **No "mics off" announcement when hassmic starts** (every model; found on the Echo Show 8). After a power cycle the
+  Show 8's microphone switch reads "off" until the Echo lets it go by itself, 20 to 80 seconds in; hassmic, up by then
+  in two boots of three, caught it and said "mics off" to someone who had not pressed anything. A switch that is off when hassmic
+  starts is now shown quietly (ring, Home Assistant), on every Echo; pressing it is announced as before.
+- **Echo Show (Show 5, Show 8): the wake sound was not heard, a fix to confirm.** The speaker opens a fraction of a second after a sound
+  starts, which swallowed the 0.12 s blip; a sound that follows a pause now starts 0.35 s late so it is not clipped.
+- **Echo Show 5: Download from Amazon.** The settings page's "Download from Amazon" now works on the Show: sign in
+  with the code, then wake words and the newer sound detection model download and install as on the Dots. Amazon
+  does not hand out the whisper detection model for the Show; copy it from a Dot that has it ("Copy models").
+- **Echo Show 5: Illuminance and Wi-Fi motion.** Home Assistant now gets the Show's light sensor as "Illuminance", in
+  lux, the same value Android's own sensor reports. Wi-Fi motion (experimental, off by default) works on the Show as
+  on the Dots: switch it on in the settings page. The Show has no "LED auto brightness": the band's brightness is the
+  one you set.
+- **A satellite start that could hang for good.** On the Echo Show 5, removing a Wi-Fi Direct group left from setup
+  could wait forever, and hassmic did not start after an update. It now gives up after 5 seconds.
+- **Echo Show 5: the light ring as a band on the screen.** The Show has no light ring, so it shows the ring's lights
+  along the bottom edge of the screen, as Alexa showed hers: listening, thinking, replies, mic off, volume, timers,
+  calls, Do not disturb, setup, and Home Assistant's "Light ring" light, which the Show now has too. They look and move
+  like a Dot's ring laid out in a line. The band keeps its own strip of the screen (10 pixels; "Light band" on the
+  settings page, 0 gives it back), so an app shown on the screen is never covered. The screen wakes for the band and
+  sleeps again 5 minutes later (1 minute with the mic off or in Do not disturb), as stock's did. The band does not
+  point towards the talker: the Show's two microphones do not tell directions apart well enough (Alexa's bar never
+  turned either).
+- **Bluetooth speakers no longer start at full volume.** A speaker that sets its own volume (most do) used to take
+  over with whatever level it reported, so a PC reporting 100 % played the Echo at full volume, and the Echo's buttons
+  then only asked it to turn down, which it ignored. The Echo now gives the speaker its own volume first, and lets the
+  speaker set the volume only once it has confirmed that level; otherwise the Echo keeps setting it, as stock did.
+- **Echo Show 5 runs.** Tried on a tester's Show, installed with `scripts/setup.sh checkers`: the wake word, Home
+  Assistant's voice assistant, wake word arbitration with the other Echos, Music Assistant, phones playing to it,
+  playing on a Bluetooth speaker, the volume keys, the mute button and the settings page.
+- **Echo Show 5: plays on a Bluetooth speaker.** "Play on a Bluetooth speaker" now works on the Show as on the Dots:
+  replies, sounds and music go to the speaker, and back to the Show when you switch it off, without a pop. Tried with
+  a PC as the speaker.
+- **Echo Show 5: Amazon's software is gone, not just switched off.** The install now takes every Amazon app off the
+  Show's system partition (Alexa, Amazon's screen, its pull-down menu, Settings, cloud and telemetry services: 120 of
+  them), keeping only the few shared libraries Android itself loads; uninstalling puts them back. Disabling them was
+  not enough: Fire OS turned some back on at every boot, and the rest kept crashing with "has stopped" dialogs. The
+  screen stays black, the Show boots in about 30 s, and half its memory is free. The volume is now Android's own,
+  the volume ticks come at once, and the mute sound plays at your volume (Amazon's own copy of it no longer plays
+  over it at full volume). The boot chime is gone, and adb over Wi-Fi no longer opens at every boot.
+- **Echo Show 5: Speaker gain, and the newest features.** The Show 5 gets the "Speaker gain" setting: its
+  codec's line out in front of the speaker amplifier, up to +12 dB in steps of 1.5 dB (each whole dB you pick goes to
+  the nearest step). Pressing both volume keys together for the missing action button no longer also moves the
+  volume, and fires Home Assistant's Button event `action`. Wake sound removal knows when the Show's sound starts.
 - **Music Assistant finds the Echo again after it restarts** (issue #28). Music Assistant looks for Sendspin players
   only when it starts, and on some networks (the Echo on a VLAN of its own, say) that search does not reach the Echo;
   only the Echo's own announcement at boot did. After Music Assistant or Home Assistant restarted, the Echo stayed
@@ -351,6 +499,24 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-10
 
+- **Echo Show 5: the rooted boot image works on a real Show.** The first try on a tester's Echo Show 5 found three
+  things the PC could not show, now fixed in the installer and the guided setup: Amazon's own adb service never runs
+  as root, so the boot image now carries the one from the XDA thread's image (the setup takes it out of that
+  thread's `boot-root.zip`); amonet's bootloader sends every restart back to fastboot after a flash, so the
+  installer now boots with `fastboot continue` and says when to replug the power; and the setup now shows what that
+  step prints instead of only a spinner. With these the Show boots with a root adb shell. The README also says how
+  to get the firmware into TWRP whole (TWRP lists only `.zip` files, and a copy cut short reads as corrupt).
+
+- **The Echo Show 5 joins Wi-Fi without its touchscreen, and has a guided setup.** Joining goes through Android's
+  own WifiService, from root's shell: `scripts/device/wifictl.dex`, assembled by `tools/mkwifictl.py` from nothing
+  but that file, makes the same `WifiConfiguration` call stock's own setup apps make. The guided setup
+  (`scripts/setup.sh checkers`) runs amonet's unlock, flashes the rooted boot image, locks the egress down and joins
+  Wi-Fi before the Echo ever talks to Amazon, and installs — the steps it walks in a dry run, nothing of it tried on
+  a real Show yet. The settings page's network switch works the same way (checked end to end against a fake
+  WifiService in `tests/fake_web_wifi.py`; the dex itself is type-checked, checked against the firmware's own
+  framework and run in an interpreter on the PC); a mistyped password for a network the Echo knows puts its old one
+  back. Updates carry the dex too, and checkers is back in CI's build matrix. Details:
+  [devices/checkers](devices/checkers/README.md).
 - **Bluetooth on the Echo 2.** It installed with Bluetooth off, untried, yet Home Assistant still showed the
   Bluetooth switches: "Bluetooth pairing" turned itself off again at once. Bluetooth is now on for new installs (a
   phone pairs and plays, aptX HD included). On an Echo 2 installed before, take `-B` out of `ARGS` in
@@ -416,7 +582,7 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-07
 
-- **An Echo names itself after its model, and you name it in Home Assistant.** Every Echo is now called after its
+ **An Echo names itself after its model, and you name it in Home Assistant.** Every Echo is now called after its
   model and the end of its Wi-Fi MAC address, like the Voice PE: "Echo Dot 3 5695c4", "Echo Dot 2 …", "Echo 2 …"
   (host name `echo-dot-3-5695c4.local`). The name is no longer asked for at the install, set in `hassmic.conf` or
   changed on the settings page; give the Echo the name you want in Home Assistant, when you add it or on its device
@@ -435,7 +601,12 @@ What changed for people using the Echo, newest first. Details and measurements a
   happens), press "Factory reset" in Home Assistant (a configuration button), or use "Factory reset…" on the settings
   page. The Echo forgets its settings, name, Home Assistant's key, approved browsers, Bluetooth pairings and its Wi-Fi
   networks, and starts the setup above again. The install itself, Amazon's extra models and `hassmic.conf` stay.
-
+- **Groundwork for the Echo Show 5 (1st gen).** Its firmware is worked out and hassmic builds for it, but it cannot
+  be installed yet: the unlock exists (amonet-checkers), the installation for this model is still to be written.
+- **Echo Show 5 (1st gen): an installer, not tried on a device yet.** `scripts/install-system.sh` builds a root boot
+  image from the firmware's own, flashes it in amonet's fastboot and installs hassmic as on the Dots; Alexa's apps are
+  switched off and come back when hassmic's config is removed. Details and risks:
+  [devices/checkers](devices/checkers/README.md).
 - **The settings page is tidier and about a third shorter.** The wake word engines and the arbitration modes are small
   cards to pick from; below them, one click opens a table that compares them question by question (how well it hears,
   which wake words, "<wake word>, stop", several Echos, ...), the current choice highlighted. "System" is two cards of

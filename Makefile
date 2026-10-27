@@ -6,6 +6,8 @@ ifeq ($(wildcard devices/$(DEVICE)/device.mk),)
 $(error unknown DEVICE "$(DEVICE)": no devices/$(DEVICE)/device.mk)
 endif
 include devices/$(DEVICE)/device.mk
+# the light ring: the Dots' LEDs through ledcontroller, or a band on the screen (device.mk)
+RING    ?= src/hassmic/ring.c
 
 NDK     ?= $(CURDIR)/toolchain/android-ndk-r21e
 CC      := $(NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/$(TARGET)-clang
@@ -43,6 +45,7 @@ FORCE:
 # A model without the Amazon mixer or Pryon has no use for the tools built on them: they drop out with the library.
 BIN := $(OUT)/hassmic $(OUT)/runas $(OUT)/otatool \
        $(if $(filter libmixerAPI.so,$(LIBS)),$(OUT)/mixcap $(OUT)/mixplay $(OUT)/latency) \
+       $(if $(filter -lOpenSLES,$(SYSLIBS)),$(OUT)/slplay) \
        $(if $(filter libpryon.so,$(LIBS)),$(OUT)/pryon_test $(OUT)/aed_test $(OUT)/whisper_test)
 
 .DEFAULT_GOAL := all
@@ -94,9 +97,12 @@ $(OUT)/ktree/.config: $(KFRAG)
 	$(KMAKE) -C $(KSRC) O=$(CURDIR)/$(OUT)/ktree olddefconfig modules_prepare 2>&1 | grep -v -e 'override: reassigning' -e 'changes choice state' -e '^$$' || true
 endif
 
-$(OUT)/$(KMOD).ko: src/kmod/$(KMOD).c src/kmod/Kbuild $(OUT)/ktree/.config
+# Module.symvers: the kernel's own CRCs where it has CONFIG_MODVERSIONS (athena), for modpost; copied at every build of
+# the module, so a changed list reaches it
+$(OUT)/$(KMOD).ko: src/kmod/$(KMOD).c src/kmod/Kbuild $(OUT)/ktree/.config $(wildcard devices/$(DEVICE)/Module.symvers)
 	@mkdir -p $(OUT)/kmod
 	cp src/kmod/$(KMOD).c src/kmod/Kbuild $(OUT)/kmod/
+	$(if $(wildcard devices/$(DEVICE)/Module.symvers),cp devices/$(DEVICE)/Module.symvers $(OUT)/ktree/Module.symvers)
 	$(KMAKE) -C $(OUT)/ktree M=$(CURDIR)/$(OUT)/kmod HM_KMOD=$(KMOD) modules 2>&1 | grep -v -e 'Module.symvers' -e 'no dependencies and modversions' || true
 	cp $(OUT)/kmod/$(KMOD).ko $@
 
@@ -116,6 +122,11 @@ endif
 $(OUT)/mixcap $(OUT)/mixplay: $(OUT)/%: src/tools/%.c src/include/mixer_api.h src/include/netio.h $(STOCK)/libmixerAPI.so
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) $(STOCK)/libmixerAPI.so
+
+# the Android models' mixplay: OpenSL ES on the music stream, as audio_android.c plays
+$(OUT)/slplay: src/tools/slplay.c
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) -lOpenSLES
 
 $(OUT)/latency: src/tools/latency.c src/include/mixer_api.h $(STOCK)/libmixerAPI.so
 	@mkdir -p $(OUT)
@@ -173,8 +184,8 @@ SOUND := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/sound_pryon.c,src/hass
 WHISPER := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/hassmic/whisper_none.c)
 
 RNNOISE := $(addprefix src/third_party/rnnoise/,denoise.c rnn.c rnn_data.c pitch.c kiss_fft.c celt_lpc.c)
-HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c src/hassmic/ring.c src/hassmic/ringdesign.c src/hassmic/ledq.c \
-           src/hassmic/sendspin.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/micgain.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/statefile.c build/web_assets.c \
+HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) src/hassmic/ringdesign.c src/hassmic/ledq.c \
+           src/hassmic/sendspin.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/micgain.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/statefile.c src/hassmic/volcurve.c build/web_assets.c \
            src/hassmic/wake.c src/hassmic/wake_mww.c src/hassmic/mww_features.c src/hassmic/mww_model.c src/hassmic/mww_store.c \
            src/third_party/monocypher.c src/third_party/freeaptx.c $(RNNOISE)
 HASSMIC_H := $(wildcard src/hassmic/*.h src/include/*.h) build/.build-id
@@ -185,9 +196,11 @@ build/web_assets.c: tools/embed.py $(foreach w,$(WEB),$(firstword $(subst :, ,$(
 	@mkdir -p build
 	python3 tools/embed.py $@ $(WEB)
 
+# SYSLIBS (device.mk): NDK system libraries a backend needs beside the stock ones (-lOpenSLES on checkers): they come
+# with the NDK, so no stubs are needed for them.
 $(OUT)/hassmic: $(HASSMIC) $(BOARD) $(AUDIO) $(WAKE) $(SOUND) $(WHISPER) $(HASSMIC_H) $(addprefix $(STOCK)/,$(LIBS))
 	@mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -Isrc/hassmic $(filter %.c,$^) -o $@ $(LDFLAGS) -lm -ldl $(addprefix $(STOCK)/,$(LIBS))
+	$(CC) $(CFLAGS) -Isrc/hassmic $(filter %.c,$^) -o $@ $(LDFLAGS) -lm -ldl $(SYSLIBS) $(addprefix $(STOCK)/,$(LIBS))
 
 # PC build for protocol tests: file audio backend, no wake word (SIGUSR1 triggers), fake sound and whisper detection, identity of $(DEVICE).
 build/hassmic-host: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c src/hassmic/wake_none.c src/hassmic/sound_none.c src/hassmic/whisper_none.c $(HASSMIC_H) build/.device
@@ -205,7 +218,7 @@ host: build/hassmic-host $(OUT)/hassmic-qemu build/otatool-host
 UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/third_party/monocypher.c
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
-	sbc web_crypto web_tar ring_pack mww blueprint_dropin
+	sbc web_crypto web_tar ring_pack mww blueprint_dropin buttons buttons_privacy afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map
 unit: $(addprefix unit-,$(UNIT_TESTS))
 unit-hash:
 	@mkdir -p build
@@ -248,14 +261,14 @@ unit-earsup:
 unit-dha_jwt:
 	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic -Isrc/include -include stdlib.h tests/unit/dha_hal_fake.c -shared -fPIC -o build/dha_hal_fake.so
-	cc -O2 -Wall -Isrc/hassmic -Isrc/include tests/unit/dha_jwt_test.c src/hassmic/dha.c src/hassmic/hash.c -o build/dha_jwt_test -ldl && build/dha_jwt_test build/dha_hal_fake.so
+	cc -O2 -Wall -Isrc/hassmic -Isrc/include tests/unit/dha_jwt_test.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/hash.c -o build/dha_jwt_test -ldl && build/dha_jwt_test build/dha_hal_fake.so && build/dha_jwt_test --service && build/dha_jwt_test --service2
 unit-a2dp_codecs:
 	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic tests/unit/a2dp_codecs_test.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/third_party/freeaptx.c -lm -ldl -lopus -o build/a2dp_codecs_test && build/a2dp_codecs_test
 unit-sbc:
 	if command -v sbcenc >/dev/null; then tests/unit/sbc_ref.sh; else echo "sbc: sbcenc/sbcdec (package sbc) missing, skipped"; fi
 unit-web_crypto:
-	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_crypto_test.py; else echo "web crypto: node missing, skipped"; fi
+	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_crypto_test.py; elif [ -n "$$CI" ]; then echo "web crypto: node missing"; exit 1; else echo "web crypto: node missing, skipped"; fi
 unit-web_tar:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_tar_test.py; else echo "web tar: node missing, skipped"; fi
 unit-ring_pack:
@@ -266,6 +279,42 @@ unit-mww:
 	.venv/bin/python tests/unit/mww_ref.py build/mww_test
 unit-blueprint_dropin:
 	.venv/bin/python tests/blueprint_dropin.py
+unit-buttons:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/buttons_test.c src/hassmic/buttons.c -lpthread -o build/buttons_test && build/buttons_test build/buttons_test.fifo
+unit-buttons_privacy:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/buttons_privacy_test.c src/hassmic/buttons.c -lpthread -o build/buttons_privacy_test && build/buttons_privacy_test build/buttons_privacy.fifo
+unit-afe_parcel:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/afe_parcel_test.c src/hassmic/afe_parcel.c -o build/afe_parcel_test && build/afe_parcel_test
+unit-lux:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/lux_test.c -lm -o build/lux_test && build/lux_test
+unit-ring_band:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ring_band_test.c src/hassmic/ring_band.c src/hassmic/ringdesign.c src/hassmic/statefile.c -lm -lpthread -o build/ring_band_test && build/ring_band_test
+# volcurve.c with each model's board.c: the curve where it was measured, the Dot 2's elsewhere
+unit-volcurve:
+	@mkdir -p build
+	for d in $(patsubst devices/%/board.c,%,$(wildcard devices/*/board.c)); do \
+	  cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/volcurve_test.c src/hassmic/volcurve.c devices/$$d/board.c -lm -o build/volcurve_$$d && build/volcurve_$$d || exit 1; done
+# the page's band (web/ring.js) against ring_band.c's, pixel for pixel
+unit-band_map:
+	if command -v node >/dev/null; then .venv/bin/python tests/unit/band_map_test.py; elif [ -n "$$CI" ]; then echo "band map: node missing"; exit 1; else echo "band map: node missing, skipped"; fi
+unit-sounds:
+	@mkdir -p build
+	python3 tests/unit/sounds_zip.py build/sounds_dir build/sounds_test.zip
+	cc -O2 -Wall -Wextra -DSYNTH -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c -o build/sounds_test && build/sounds_test synth build/sounds_dir build/sounds_test.zip
+	if [ -d firmware/checkers/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c devices/checkers/board.c -o build/sounds_checkers && HASSMIC_EARCON_ROOT=firmware/checkers/rootfs build/sounds_checkers; else echo "sounds: firmware/checkers not unpacked, its apps' sounds skipped"; fi
+	if [ -d firmware/cronos/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c devices/cronos/board.c -o build/sounds_cronos && HASSMIC_EARCON_ROOT=firmware/cronos/rootfs build/sounds_cronos; else echo "sounds: firmware/cronos not unpacked, its apps' sounds skipped"; fi
+	if [ -d firmware/athena/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c devices/athena/board.c -o build/sounds_athena && HASSMIC_EARCON_ROOT=firmware/athena/rootfs build/sounds_athena; else echo "sounds: firmware/athena not unpacked, its apps' sounds skipped"; fi
+unit-wifictl:
+	.venv/bin/python tools/mkwifictl.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)
+	.venv/bin/python tests/unit/wifictl_run.py
+unit-ringbar:
+	.venv/bin/python tools/mkringbar.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)
+	.venv/bin/python tests/unit/ringbar_run.py
 
 # what the daemon reports, and what bundles are called (ota-push.sh, CI)
 version:

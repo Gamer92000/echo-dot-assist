@@ -1,0 +1,6 @@
+fd0adba31ef18f0ffd8a9c3c44769249  lib/libpryon.so
+861ec335b03d739b9564830d0ddcb8fa  lib/libasp.so
+b692877edbb18830efe9fc7fc6bed6f0  lib/libaspclient.so
+af612f897134eb541531137bb01b9347  lib/libaudioflinger.so
+7278a0a92fe0b0bf6be991e5aa70224b  vendor/lib/hw/audio.primary.mt8163.so
+ef604b5e4d578032457a6d3fa747fa75  lib/libwakewordserver_jni.so

@@ -17,6 +17,9 @@ from webclient import wait_port, Browser, req
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOST = f"{ROOT}/build/hassmic-host"
 PORT, WEB = 16983, 16984
+# root's stand-in (-G, then 2400 files copied) takes 25 ms alone, 8-9 s on a loaded machine (40 of this test on two
+# cores), past 8 s on a CI runner with the whole suite: a shorter wait failed the next Apply ("being installed already")
+ROOT_S = 60
 
 
 def check(cond, what):
@@ -189,7 +192,7 @@ async def main():
 
         open(leds, "w").close()
         check(b.call("POST", "/api/ring/apply")[0] == 200, "apply")
-        check(await until(lambda: st()["state"] == "applied", 8), f"root installed them: {st()['state']} {st()['error']}")
+        check(await until(lambda: st()["state"] == "applied", ROOT_S), f"root installed them: {st()['state']} {st()['error']}")
         s = st()
         live = {x["id"]: (x["live"], x["applied"]) for x in s["slots"]}
         check(live["listen"] == (True, 1) and live["think"] == (True, 2) and live["volume"] == (True, 3) and live["talk"] == (False, 0),
@@ -241,11 +244,11 @@ async def main():
         check(st()["state"] == "pending", "stock's thinking again: pending")
         root["fail"] = "the system partition has room for 10 kB"
         b.call("POST", "/api/ring/apply")
-        check(await until(lambda: st()["state"] == "failed", 8) and "room for 10 kB" in st()["error"], f"root failed: shown ({st()['error']})")
+        check(await until(lambda: st()["state"] == "failed", ROOT_S) and "room for 10 kB" in st()["error"], f"root failed: shown ({st()['error']})")
         check(open(os.path.join(state, "ring-applied")).read() == applied0, "the applied designs back to what is installed")
         root["fail"] = None
         b.call("POST", "/api/ring/apply")
-        check(await until(lambda: st()["state"] == "applied", 8) and "hassmic_s_think" not in json.load(open(os.path.join(lr, "layer_config_common.json")))["Layers"]["16"]
+        check(await until(lambda: st()["state"] == "applied", ROOT_S) and "hassmic_s_think" not in json.load(open(os.path.join(lr, "layer_config_common.json")))["Layers"]["16"]
               and not os.path.exists(os.path.join(lr, "hassmic_s_think.animation")), "again: thinking is stock's, its file gone")
 
         # too big for the system partition: refused before root is asked
@@ -364,7 +367,7 @@ async def main():
         proc.terminate(); proc.wait(); proc = await again()
         check(st()["state"] == "installing", "restarted with the request still out: still installing")
         root["pause"] = False
-        check(await until(lambda: st()["state"] == "applied", 8), f"root answered after the restart: applied ({st()['state']})")
+        check(await until(lambda: st()["state"] == "applied", ROOT_S), f"root answered after the restart: applied ({st()['state']})")
         check({x["id"]: x["applied"] for x in st()["slots"]}["listen"] == 2 and "slot listen 2" in rd(installed_f), "listening's new design installed")
 
         # Asked for, and then nothing: root took the request and never answered, hassmic restarted.  The draft goes

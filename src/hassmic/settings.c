@@ -7,6 +7,7 @@
 #include "ble.h"
 #include "btout.h"
 #include "micgain.h"
+#include "ring.h"
 #include "sendspin.h"
 #include "sound.h"
 #include "spkgain.h"
@@ -56,7 +57,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, STOP_ENDS, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
+enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, STOP_ENDS, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET, PAD_REQUEST_AUDIO, REQUEST_AUDIO_PADDING, NSET };
@@ -84,6 +85,8 @@ static const struct setting table[NSET] = {
     [LED_LEVEL]   = { "led_brightness", "LED brightness", "Lights", "%", S_INT, 0, 100, 1, 0 },
     /* ring.c keeps it: where the light's fill starts.  Not exported: it is for how this Echo stands */
     [RING_ROT]    = { "ring_rotation", "Light ring rotation", "Lights", "LEDs", S_INT, 0, 23, 0, 0 },   /* settings_max() */
+    /* ring_band.c: the screen's rows kept for the light band (stock's attention line is 10) */
+    [BAND]        = { "light_band", "Light band", "Lights", "px", S_INT, 0, 40, 1, 0 },
     [ARB]         = { "arbitration", "Wake word arbitration with other Echos", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* arb.c keeps them in memory, state/config on disk: lockdown.sh admits Kiosk Satellite's port by it */
     [ARB_MODE]    = { "arbitration_mode", "Arbitration mode", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
@@ -151,12 +154,15 @@ static int present(enum id i)
     case BT_ANNOUNCE: case BT_LANG: case BT_AUDIO: case BT_SPEAKER: case BT_OUT_DELAY: case BT_OUT_AWAKE: case BT_OUT_STAY: return ble_present();
     case WHISPER: return core_whisper_model();
     case SOUND: return sound_model() != SOUND_NONE;               /* the firmware has one on every model so far */
-    case LED_AUTO: case LIGHT_SENSOR: return core_lux() == core_lux();      /* a light sensor: not NAN */
+    case LIGHT_SENSOR: return core_lux() == core_lux();          /* a light sensor: not NAN */
+    case LED_AUTO: return core_led_has_auto();
     case WIFI_MOTION: case WIFI_SENS: return wifimotion_present();
     case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: return arb_running();
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
     case SS_UNPAIRED: return core_sendspin_port != 0;
     case SPK_GAIN: return spkgain_present();
+    case BAND: return ring_band_rows(-1) >= 0;
+    case RING_ROT: return ring_band_rows(-1) < 0;                 /* LEDs to turn: the Dots' ring, not the band */
     default: return 1;
     }
 }
@@ -173,6 +179,7 @@ const struct setting *settings_find(const char *name)
 }
 
 /* the speaker gain's top is the control's: +12 dB on an Echo Dot 2, +2 on an Echo Dot 3; the rotation's, the ring's last LED */
+int settings_min(const struct setting *s) { return s - table == SPK_GAIN ? spkgain_min() : s->min; }
 int settings_max(const struct setting *s)
 {
     return s - table == SPK_GAIN ? spkgain_max() : s - table == RING_ROT ? ring_leds() - 1 : s->max;
@@ -242,6 +249,7 @@ int settings_get(const struct setting *s)
     case ASSIST_LINK: case SOUNDS_LINK: case TIMER_LINK: case CALL_LINK: return core_kind_linked((int)(s - table - ASSIST_LINK) / 3, -1);
     case ASSIST_LEVEL: case SOUNDS_LEVEL: case TIMER_LEVEL: case CALL_LEVEL: return core_kind_volume((int)(s - table - ASSIST_LINK) / 3, -1);
     case ASSIST_OFFSET: case SOUNDS_OFFSET: case TIMER_OFFSET: case CALL_OFFSET: return core_kind_offset((int)(s - table - ASSIST_LINK) / 3);
+    case BAND: return ring_band_rows(-1);
     default: return 0;
     }
 }
@@ -301,6 +309,7 @@ static void put(enum id i, int v)
     case ASSIST_LINK: case SOUNDS_LINK: case TIMER_LINK: case CALL_LINK: core_kind_linked((i - ASSIST_LINK) / 3, v); break;
     case ASSIST_LEVEL: case SOUNDS_LEVEL: case TIMER_LEVEL: case CALL_LEVEL: core_kind_volume((i - ASSIST_LINK) / 3, v); break;
     case ASSIST_OFFSET: case SOUNDS_OFFSET: case TIMER_OFFSET: case CALL_OFFSET: core_set_kind_offset((i - ASSIST_LINK) / 3, v); break;
+    case BAND: ring_band_rows(v); break;
     default: break;
     }
 }
@@ -316,7 +325,7 @@ static int parse(const struct setting *s, const char *v, int *out)
         return -1;
     case S_INT:
         n = strtol(v, &end, 10);
-        if (!*v || *end || n < s->min || n > settings_max(s)) return -1;
+        if (!*v || *end || n < settings_min(s) || n > settings_max(s)) return -1;
         *out = (int)n; return 0;
     case S_CHOICE:
         for (int i = 0, k = settings_choices(s, &names); i < k; i++) if (!strcasecmp(v, names[i])) { *out = i; return 0; }
@@ -378,6 +387,18 @@ static int load_old(void)
     return 1;
 }
 
+/* the next line of f into buf, as fgets; one longer than buf is skipped whole (its tail, read as a line of its own,
+ * could look like a setting).  NULL at the end */
+static char *line_of(char *buf, int n, FILE *f)
+{
+    while (fgets(buf, n, f)) {
+        size_t l = strlen(buf);
+        if (l && buf[l - 1] != '\n' && !feof(f)) { int c; while ((c = fgetc(f)) != EOF && c != '\n') {} continue; }
+        return buf;
+    }
+    return NULL;
+}
+
 void settings_load(void)
 {
     static int loaded; char p[300], line[160]; FILE *f; int led_auto = 1, led_level = -1;
@@ -391,14 +412,16 @@ void settings_load(void)
         core_mic_level(mic_level);
         return;
     }
-    for (int pass = 0; pass < 2; pass++, rewind(f)) while (fgets(line, sizeof line, f)) {
+    for (int pass = 0; pass < 2; pass++, rewind(f)) while (line_of(line, sizeof line, f)) {
         char *eq = strchr(line, '='), *v; int x;
         if (line[0] == '#' || !eq) continue;
         *eq = 0; v = eq + 1; v[strcspn(v, "\r\n")] = 0;
         for (int i = 0; i < NSET; i++) {
             if (strcmp(table[i].name, line) || !ours(i) || switches(i) != !pass || parse(&table[i], v, &x)) continue;
-            /* the ring's level only counts with auto off: ledcontroller started its own auto at boot */
-            if (i == LED_AUTO) led_auto = x; else if (i == LED_LEVEL) led_level = x; else put(i, x);
+            /* the ring's level only counts with auto off: ledcontroller started its own auto at boot.  The band's
+             * height main.c set before the band started (settings_peek: a preset not applied yet included); the
+             * config's here would flip it to that and back to the preset's */
+            if (i == LED_AUTO) led_auto = x; else if (i == LED_LEVEL) led_level = x; else if (i != BAND) put(i, x);
         }
     }
     fclose(f);
@@ -423,21 +446,32 @@ void settings_preset(void)
     if (rename(p, done)) remove(p);                     /* once only, whatever happened */
 }
 
-int settings_peek(const char *name, char *out, size_t cap)
+/* name's value in a "name=value" file of state/ into out: the last one it takes, as applying the file ends up with (a
+ * line added by hand; one it refuses changes nothing).  0, -1: none (out as it was) */
+static int peek_in(const char *rel, const char *name, const struct setting *s, char *out, size_t cap)
 {
-    char p[300], line[160]; FILE *f; size_t k = strlen(name); int r = -1, x;
-    const struct setting *s = NULL;
-    for (int i = 0; i < NSET; i++) if (!strcmp(table[i].name, name)) s = &table[i];
-    path(p, sizeof p, "config");
+    char p[300], line[200]; FILE *f; size_t k = strlen(name); int r = -1, x;
+    path(p, sizeof p, rel);
     if (!(f = fopen(p, "r"))) return -1;
-    /* the last one it takes, as settings_load ends up with (a line added by hand; one it refuses changes nothing) */
-    while (fgets(line, sizeof line, f))
-        if (!strncmp(line, name, k) && line[k] == '=') {
-            line[strcspn(line, "\r\n")] = 0;
-            if (!s || !parse(s, line + k + 1, &x)) { snprintf(out, cap, "%s", line + k + 1); r = 0; }
+    while (line_of(line, sizeof line, f)) {
+        char *l = line; while (isspace((unsigned char)*l)) l++;     /* an export may indent (settings_apply_text) */
+        if (!strncmp(l, name, k) && l[k] == '=') {
+            l[strcspn(l, "\r\n")] = 0;
+            if (!s || !parse(s, l + k + 1, &x)) { snprintf(out, cap, "%s", l + k + 1); r = 0; }
         }
+    }
     fclose(f);
     return r;
+}
+
+int settings_peek(const char *name, char *out, size_t cap)
+{
+    const struct setting *s = NULL;
+    for (int i = 0; i < NSET; i++) if (!strcmp(table[i].name, name)) s = &table[i];
+    /* state/config, then a preset not applied yet over it: settings_preset applies it after the config, so what it says
+     * is what this start ends up with */
+    int r = peek_in("config", name, s, out, cap);
+    return !peek_in("preset", name, s, out, cap) ? 0 : r;
 }
 
 int settings_mic_level(void) { return mic_level; }

@@ -14,7 +14,7 @@
 static FILE *cap, *play;
 static short block[800];
 static unsigned play_rate, play_ch;
-void (*audio_earcon_started)(void);
+void (*audio_earcon_started)(unsigned lead_ms);
 
 #define ECHO_LEN (16000 * 4)
 static pthread_mutex_t echo_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -98,7 +98,7 @@ void play_earcon(const short *pcm, size_t samples, unsigned rate)
     int peak = 0;                               /* for the tests: how loud (separate volumes turn our sounds down) */
     for (size_t i = 0; i < samples; i++) if (abs(pcm[i]) > peak) peak = abs(pcm[i]);
     echo_add(pcm, samples, rate);
-    if (audio_earcon_started) audio_earcon_started();
+    if (audio_earcon_started) audio_earcon_started(0);
     fprintf(stderr, "earcon: %zu samples @ %u Hz, peak %d\n", samples, rate, peak);
 }
 
@@ -186,3 +186,47 @@ int       voip_open(unsigned rate, unsigned channels) { return s_open(&voip, "HA
 long long voip_queued_us(void) { return s_queued_us(&voip); }
 int       voip_write(const void *data, size_t len) { return s_write(&voip, data, len); }
 void      voip_close(void) { s_close(&voip); }
+
+/* The Bluetooth speaker's route: nothing to move on the PC; btout.c's sockets and encoder run as on the device */
+int  audio_a2dp_route(int on, uint64_t addr, const char *name) { (void)addr; (void)name; fprintf(stderr, "btout: output %s\n", on ? "to the speaker" : "to the Echo"); return 0; }
+int  audio_a2dp_lost(uint64_t addr) { (void)addr; return 0; }
+void audio_a2dp_reset(void) {}
+int  audio_a2dp_aipc(void) { return 0; }
+
+/* Volumes: in memory; unset = what the caller expects (as a mixer that cannot be asked).  Tests: the mixer's volumes
+ * as files in HASSMIC_FAKE_MIXER instead, one per property as audio_mixer.c names them */
+static int vols[3] = { -1, -1, -1 };
+static const char *const vol_props[] = { "MainVolume", "TTSVolume", "Mute" };
+
+static const char *fake_mixer(enum vol which, char *file, size_t n)
+{
+    const char *d = getenv("HASSMIC_FAKE_MIXER");
+    if (!d) return NULL;
+    snprintf(file, n, "%s/%s", d, vol_props[which]);
+    return file;
+}
+
+int vol_read(enum vol which, int fallback)
+{
+    char file[300]; int v = fallback, x;
+    if (fake_mixer(which, file, sizeof file)) {
+        FILE *f = fopen(file, "r");
+        if (f) { if (fscanf(f, "%d", &x) == 1 && x >= 0 && x <= 100) v = x; fclose(f); }
+        return v;
+    }
+    return vols[which] < 0 ? fallback : vols[which];
+}
+
+void vol_write(enum vol which, int v)
+{
+    char file[300];
+    if (fake_mixer(which, file, sizeof file)) { FILE *f = fopen(file, "w"); if (f) { fprintf(f, "%d\n", v); fclose(f); } return; }
+    vols[which] = v;
+}
+
+/* No front end on the PC */
+void afe_listening(int on) { (void)on; }
+void afe_stream_stopped(void) {}
+int  afe_arbitration(long ts, long te, char *json, size_t n) { (void)ts; (void)te; if (n) json[0] = 0; return 0; }
+int  afe_eq_get(char *json, size_t n) { if (n) json[0] = 0; return 0; }
+void afe_eq_set(const char *json) { (void)json; }

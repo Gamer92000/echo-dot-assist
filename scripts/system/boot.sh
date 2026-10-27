@@ -9,7 +9,13 @@ umask 022
 SYS=/system/hassmic
 BASE=/data/local/hassmic
 OTA=$BASE/ota
-[ -f $BASE/hassmic.conf ] || exit 0
+if [ ! -f $BASE/hassmic.conf ]; then
+    # Alexa's apps, where alexa-off.sh had to disable them (checkers), stay disabled through reboots: stock behaviour
+    # means turning them back on, and the setup flags alexa-off.sh set with them.  The Dots never leave either list.
+    [ "$1" = satellite ] && { [ -s $BASE/alexa-disabled ] || [ -s $BASE/alexa-settings ]; } && [ -f $SYS/alexa-on.sh ] &&
+        sh $SYS/alexa-on.sh > /dev/null 2>&1
+    exit 0
+fi
 [ -f $SYS/device.conf ] && . $SYS/device.conf   # this model's facts, installed together with this file; main.sh copes without
 
 # Only root may put things where root executes them from; the daemon (DAEMON_USER) owns state/ alone.

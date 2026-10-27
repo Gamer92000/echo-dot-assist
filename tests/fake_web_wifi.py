@@ -3,8 +3,10 @@
 from the protocol (tests/webclient.py: the password sealed with Python's BLAKE2b), and root's side played by the real
 scripts/device/wifi.sh against stand-ins for wpa_cli and friends (tests/fake_wifi_tools.py).  Scans with wpa_supplicant's
 escapes, the PSK as PBKDF2 makes it, a wrong password, a network out of reach, no DHCP, a silent router, an open
-network, a second password for a known network: what is saved, and that a failed switch goes back and saves nothing."""
-import hashlib, json, os, signal, stat, subprocess, sys, tempfile, time
+network, a second password for a known network: what is saved, and that a failed switch goes back and saves nothing.
+Run twice: the Dots' world (wpa_supplicant) and checkers' (INSTALL=boot: WifiService through the wifictl.dex
+calls, the same fake world answering as the framework would, app_process included)."""
+import shutil, hashlib, json, os, signal, stat, subprocess, sys, tempfile, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webclient import wait_port, Browser, req
 
@@ -23,15 +25,18 @@ KITCHEN = 'Kitchen "5G"\\'                                          # a quote an
 EXOTIC = b"Caf\xc3\xa9\tTab"                                         # UTF-8 and a tab: \t in wpa_cli's lines
 
 
-def main():
+def main(android=False):
+    mode = "checkers' WifiService" if android else "the Dots' wpa_supplicant"
+    print(f"--- {mode}")
     tmp = tempfile.mkdtemp(); state, out, fake = (os.path.join(tmp, d) for d in ("state", "wifi", "bin"))
     for d in (state, out, fake): os.makedirs(d)
-    for t in ("wpa_cli", "ifconfig", "getprop", "setprop", "dhcpcd", "ping", "stop", "start"):     # argv[0] tells the tool which one it is
+    for t in ("wpa_cli", "app_process", "ifconfig", "getprop", "setprop", "dhcpcd", "ping", "stop", "start"):     # argv[0] tells the tool which one it is
         os.symlink(f"{ROOT}/tests/fake_wifi_tools.py", os.path.join(fake, t))
-    world = os.path.join(tmp, "world.json"); arp = os.path.join(tmp, "arp")
+    world = os.path.join(tmp, "world.json"); arp = os.path.join(tmp, "arp"); route = os.path.join(tmp, "route")
     home = {"id": 0, "ssid": H("HomeNet"), "psk": PSK("old password", "HomeNet"), "key_mgmt": "WPA-PSK", "priority": 3, "disabled": 0}
     attic = {"id": 1, "ssid": H("Attic"), "psk": PSK("attic pass", "Attic"), "key_mgmt": "WPA-PSK", "priority": 0, "disabled": 0}
-    p2p = {"id": 2, "ssid": H("DIRECT-xy"), "key_mgmt": "WPA-PSK", "priority": 0, "disabled": 2}       # a P2P group: not a network
+    p2p = {"id": 2, "ssid": H("DIRECT-xy"), "key_mgmt": "WPA-PSK", "priority": 0, "disabled": 2}       # a P2P group: not a network (wpa_supplicant's world only)
+    nets = [home, attic] if android else [home, attic, p2p]
     air = [
         {"hex": H("HomeNet"), "psk": PSK("old password", "HomeNet"), "flags": "[WPA2-PSK-CCMP][ESS]", "bss": [["aa:00:00:00:00:01", 2437, -60]], "ip": "192.168.1.20", "gw": "192.168.1.1"},
         {"hex": H(KITCHEN), "psk": PSK("kitchen pass", KITCHEN), "flags": "[WPA2-PSK-CCMP][ESS]",
@@ -43,15 +48,27 @@ def main():
         {"hex": H("Silent"), "psk": None, "flags": "[ESS]", "bss": [["aa:00:00:00:00:08", 2412, -67]], "ip": "10.7.7.7", "gw": "10.7.7.1", "arp": False},
     ]
     with open(world, "w") as f:
-        json.dump({"networks": [home, attic, p2p], "next_id": 3, "current": 0, "target": None, "air": air, "arp_file": arp,
-                   "saved": [home, attic, p2p], "lease": {"ip": "192.168.1.20", "gw": "192.168.1.1"}, "props": {"result": "ok", "reason": "BOUND"}}, f)
+        json.dump({"networks": nets, "next_id": 3 if android else 3, "current": 0, "target": None, "air": air,
+                   "arp_file": arp, "route_file": route, "saved": list(nets) if android else [home, attic, p2p],
+                   "lease": {"ip": "192.168.1.20", "gw": "192.168.1.1"}, "props": {"result": "ok", "reason": "BOUND"}}, f)
     with open(arp, "w") as f:                      # the router of the network it is on: an entry that stays (Dot 2)
         f.write("IP address       HW type     Flags       HW address            Mask     Device\n"
                 "192.168.1.1      0x1         0x2         aa:bb:cc:00:00:01     *        wlan0\n")
+    with open(route, "w") as f:                    # its default route, little-endian as /proc/net/route has it
+        f.write("Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n"
+                "wlan0\t00000000\t0101A8C0\t0003\t0\t0\t0\t00000000\t0\t0\t0\n")
     W = lambda: json.load(open(world))
-    renv = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}", FAKE_WIFI_WORLD=world, WIFI_ARP=arp,
-                WIFI_SCAN_SECS="0", WIFI_STEP="0.1", WIFI_JOIN_SECS="6", WIFI_ADDR_SECS="5", WIFI_BACK_SECS="6")     # looks: the stand-ins answer at the third
-    root = lambda: subprocess.Popen(["sh", f"{ROOT}/scripts/device/wifi.sh", "take", state, out], env=renv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    renv = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}", FAKE_WIFI_WORLD=world, WIFI_ARP=arp, WIFI_ROUTE=route,
+                WIFI_SCAN_SECS="0", WIFI_STEP="0.1", WIFI_JOIN_SECS="6", WIFI_ADDR_SECS="5", WIFI_BACK_SECS="6",
+                **({"INSTALL": "boot"} if android else {}))     # looks: the stand-ins answer at the third
+    # root's folder: wifi.sh with what it finds next to it (wifictl.dex, runas: a stand-in that hands the uid to the fake
+    # framework)
+    dev = os.path.join(tmp, "dev"); os.makedirs(dev)
+    for f in ("wifi.sh", "wifictl.dex"): shutil.copy(f"{ROOT}/scripts/device/{f}", dev)
+    with open(os.path.join(dev, "runas"), "w") as f:
+        f.write('#!/bin/sh\ncase "$1" in system) export FAKE_WIFI_UID=1000;; *) export FAKE_WIFI_UID=$1;; esac\nshift 2; exec "$@"\n')
+    os.chmod(os.path.join(dev, "runas"), 0o755)
+    root = lambda: subprocess.Popen(["sh", f"{dev}/wifi.sh", "take", state, out], env=renv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     rootlog = []
     def root_run():
         p = root(); o, _ = p.communicate(timeout=60); rootlog.append(o); return o
@@ -127,16 +144,23 @@ def main():
         w = json.loads(b.call("GET", "/api/wifi")[2]); res = w["result"]; wd = W()
         check(res["state"] == "failed" and res["reason"] == "wrongkey" and res["back"] == "HomeNet" and not w["busy"],
               f"wrong password: failed at the key handshake, back on HomeNet ({res})")
-        check(wd["current"] == 0 and [n["id"] for n in wd["networks"]] == [0, 1, 2] and [n["disabled"] for n in wd["networks"]] == [0, 0, 2]
-              and wd["saved"] == [home, attic, p2p] and not any(c.endswith("save_config") for c in wd["calls"]),
-              "the new network removed, the others enabled again, the saved configuration never touched")
+        if android:
+            check(wd["current"] == 0 and [n["id"] for n in wd["networks"]] == [0, 1] and [n["disabled"] for n in wd["networks"]] == [0, 0]
+                  and not any(c.endswith("save_config") for c in wd["calls"])
+                  and any(c == "app_process enable 0 keep" for c in wd["calls"]),
+                  "the new network removed, the old ones enabled again (the framework's store is the saved state)")
+        else:
+            check(wd["current"] == 0 and [n["id"] for n in wd["networks"]] == [0, 1, 2] and [n["disabled"] for n in wd["networks"]] == [0, 0, 2]
+                  and wd["saved"] == [home, attic, p2p] and not any(c.endswith("save_config") for c in wd["calls"]),
+                  "the new network removed, the others enabled again, the saved configuration never touched")
 
         # ---- out of reach, no address, a silent router
         for name, why in (("Nowhere", "notfound"), ("NoDHCP", "noaddress"), ("Silent", "nogateway")):
             st, r = join(name, None); root_run()
             res = json.loads(b.call("GET", "/api/wifi")[2])["result"]; wd = W()
             check(st == 200 and res["id"] == r["id"] and res["state"] == "failed" and res["reason"] == why and res["back"] == "HomeNet"
-                  and wd["current"] == 0 and wd["saved"] == [home, attic, p2p], f"{name}: {why}, back on HomeNet, nothing saved")
+                  and wd["current"] == 0 and wd["saved"] == ([home, attic] if android else [home, attic, p2p]),
+                  f"{name}: {why}, back on HomeNet, nothing saved")
 
         # ---- it works
         st, r = join(KITCHEN, "kitchen pass"); root_run()
@@ -146,7 +170,7 @@ def main():
               f"the right password: on {KITCHEN}, address 10.0.5.33, saved")
         check(new.get("psk") == PSK("kitchen pass", KITCHEN) and new.get("key_mgmt") == "WPA-PSK" and new.get("scan_ssid") == 1,
               "saved as a PSK, found even when hidden")
-        check([n["ssid"] for n in wd["saved"]] == [H("DIRECT-xy"), H(KITCHEN)] and new.get("disabled") == 0,
+        check([n["ssid"] for n in wd["saved"]] == ([H(KITCHEN)] if android else [H("DIRECT-xy"), H(KITCHEN)]) and new.get("disabled") == 0,
               "the networks from before forgotten once it works (the P2P group left alone)")
 
         # ---- the same network with another password (the router's changed): replaced, not added
@@ -159,19 +183,42 @@ def main():
         check(len(k) == 1 and k[0]["psk"] == "f" * 64 and json.loads(b.call("GET", "/api/wifi")[2])["result"]["state"] == "ok",
               "the PSK as 64 hex digits taken as it is; the network's older entry replaced")
 
+        # ---- the network it is on, its password typed wrong: back on it with the password it had (WifiService
+        # changes an entry of the same name in place: its old key goes back in)
+        st, r = join(KITCHEN, "kitchen typo"); root_run(); wd = W()
+        res = json.loads(b.call("GET", "/api/wifi")[2])["result"]
+        k = [n for n in wd["saved"] if n["ssid"] == H(KITCHEN)]
+        check(res["state"] == "failed" and res["reason"] == "wrongkey" and res["back"] == KITCHEN
+              and len(k) == 1 and k[0]["psk"] == "f" * 64 and wd["current"] == k[0]["id"],
+              "the same network, a wrong password: back on it, its saved password the one from before")
+        check(not any("f" * 64 in o for o in rootlog), "the stored key in no log")
+
+        # ---- WifiService's network saved by another user (Amazon's setup, a stock update): root may not change it, the
+        # system user may
+        if android:
+            with open(world) as f: wd = json.load(f)
+            next(n for n in wd["networks"] if n["ssid"] == H(KITCHEN))["creator"] = 1010
+            with open(world, "w") as f: json.dump(wd, f)
+            st, r = join(KITCHEN, "f" * 64); root_run(); wd = W()
+            res = json.loads(b.call("GET", "/api/wifi")[2])["result"]
+            adds = [c for c in wd["calls"] if c.startswith("app_process add")]
+            check(res["state"] == "ok" and len(adds) >= 2 and adds[-1] == adds[-2],
+                  f"a network root may not change: changed as the system user, on it ({res['state']})")
+
         # ---- an open network with an odd name
         st, r = join(EXOTIC, None); root_run(); wd = W()
         e = next((n for n in wd["saved"] if n["ssid"] == H(EXOTIC)), {})
         res = json.loads(b.call("GET", "/api/wifi")[2])["result"]
         check(res["state"] == "ok" and e.get("key_mgmt") == "NONE" and "psk" not in e and res["ssid"] == EXOTIC.decode(), "open network: key_mgmt NONE")
 
-        # ---- a save that fails: on it, but said so
-        with open(world) as f: wd = json.load(f)
-        wd["save_fails"] = True
-        with open(world, "w") as f: json.dump(wd, f)
-        join("HomeNet", "old password"); root_run()
-        res = json.loads(b.call("GET", "/api/wifi")[2])["result"]
-        check(res["state"] == "ok" and res["saved"] is False and any("could not be written" in o for o in rootlog), "save_config failing: ok, but not saved, and said so")
+        # ---- a save that fails: on it, but said so (wpa_supplicant's world: the framework saves as it goes)
+        if not android:
+            with open(world) as f: wd = json.load(f)
+            wd["save_fails"] = True
+            with open(world, "w") as f: json.dump(wd, f)
+            join("HomeNet", "old password"); root_run()
+            res = json.loads(b.call("GET", "/api/wifi")[2])["result"]
+            check(res["state"] == "ok" and res["saved"] is False and any("could not be written" in o for o in rootlog), "save_config failing: ok, but not saved, and said so")
 
         # ---- replay, root not there, a run that died
         ctr = b.ctr + 1
@@ -181,7 +228,7 @@ def main():
         with open(os.path.join(out, "result"), "w") as f: f.write(f"77 switching {H('HomeNet')}\n")
         check(json.loads(b.call("GET", "/api/wifi")[2])["result"]["state"] == "interrupted", "\"switching\" without the lock: interrupted (a reboot)")
         os.makedirs(os.path.join(out, "lock")); open(os.path.join(out, "lock", "pid"), "w").write("999999\n")
-        subprocess.run(["sh", f"{ROOT}/scripts/device/wifi.sh", "clean", state, out], env=renv, check=True)
+        subprocess.run(["sh", f"{dev}/wifi.sh", "clean", state, out], env=renv, check=True)
         check(not os.path.exists(reqf) and not os.path.exists(os.path.join(out, "lock")), "clean (firewall service start): the old request and the dead run's lock gone")
         with open(reqf, "w") as f: f.write("join 5 6869;reboot ffff\n")
         o = root_run()
@@ -189,8 +236,9 @@ def main():
     finally:
         proc.send_signal(signal.SIGTERM); proc.wait()
     if check.failed:
-        print(open(log).read()); print("".join(rootlog)); print("FAILED"); raise SystemExit(1)
-    print("PASS")
+        print(open(log).read()); print("".join(rootlog)); print(f"FAILED ({mode})"); raise SystemExit(1)
 
 
-main()
+for android in (False, True):
+    main(android)
+print("PASS")

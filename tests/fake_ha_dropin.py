@@ -4,7 +4,8 @@ Echo outside the network.  The two start with the same network key in state/arbi
 The kitchen Echo's microphone is speech (testdata), the hall's is silence: the call carries the kitchen's voice to the
 hall's Voip stream (HASSMIC_VOIP) and nothing back.  Then: answer by button (drop_in_answer=ask), hang up by button,
 by "<wake word>, stop", by "auflegen", from Home Assistant, from the settings page; refusals (do not disturb, Drop In
-off, an Echo outside the network, a name nobody has); and an Echo that vanishes mid-call.  For each call the kitchen
+off, an Echo outside the network, a name nobody has); an Echo in an empty room, whose noise must stay there; and an
+Echo that vanishes mid-call.  For each call the kitchen
 makes: every state on the way ("calling" before a refusal that comes at once) and the "Drop In result" event.
 Everything goes out on loopback (HASSMIC_ARB_ADDR): nothing of it reaches the LAN."""
 import asyncio, base64, os, re, signal, struct, subprocess, sys, tempfile, time, wave
@@ -21,6 +22,13 @@ EARCONS = tempfile.mkdtemp()
 with wave.open(os.path.join(EARCONS, "comms_call_incoming_ringtone.wav"), "wb") as w:
     w.setnchannels(1); w.setsampwidth(2); w.setframerate(48000)
     w.writeframes((8000 * np.sin(2 * np.pi * 440 * np.arange(48000) / 48000)).astype("<i2").tobytes())
+# an empty room in micAsr, as a traced call had it (dropin.c NEAR_MIN_DB): a floor of -74 dBFS and a 150 ms sound of -64
+# every 0.7 s.  Each sound is 10 dB over the floor, and the gate once opened for it and sent it with the speech gain
+QUIET = os.path.join(EARCONS, "quiet_room.raw")
+_rng = np.random.default_rng(1)
+_x = _rng.standard_normal(16000 * 7) * 32768 * 10 ** (-74 / 20)
+for _i in range(0, len(_x), 11200): _x[_i:_i + 2400] *= 10 ** (10 / 20)
+_x.astype("<i2").tofile(QUIET)
 
 
 def check(cond, what):
@@ -30,7 +38,7 @@ check.failed = False
 
 
 class Echo:
-    def __init__(self, name, port, net=None, speech=False, config=""):
+    def __init__(self, name, port, net=None, speech=False, config="", cap=None):
         self.name, self.port, self.state = name, port, tempfile.mkdtemp()
         self.web, self.audio = port + 10, port + 20
         self.node = re.sub(r"[^a-z0-9]", "-", name.lower())
@@ -48,7 +56,9 @@ class Echo:
                         HASSMIC_MODELS=os.path.join(self.state, "models"), HASSMIC_EARCONS=EARCONS + "/",
                         HASSMIC_DROPIN_TIMES="3000 4000")       # no answer after 3 s, lost after 4 s without audio (4 and 5): near
                                                                 # the Echo's, so a stall of the PC under load does not end a call
-        if speech: self.env["HASSMIC_CAP"] = SPEECH
+        if speech or cap: self.env["HASSMIC_CAP"] = cap or SPEECH
+        self.trace = os.path.join(self.state, "dropin.trace")
+        self.env["HASSMIC_DROPIN_TRACE"] = self.trace
         self.states, self.starts, self.seq = {}, [], []     # seq: (object id, state or event type) as they came
         self.stops = []                                     # abort per run the Echo ended (True: start=false alone)
 
@@ -133,7 +143,8 @@ async def main():
     a, b = Echo("Kitchen Echo", 26180, net, speech=True), Echo("Hall Echo", 26181, net,
                                                                config="separate_volumes=on\nsounds_volume=20\ncall_volume_linked=off\ncall_volume=40\n")
     c = Echo("Garage Echo", 26182)                      # outside the network: it hears the two, but nobody lets it in
-    for e in (a, b, c): e.start()                       # (it runs from the start: time to join, if it wrongly could)
+    d = Echo("Bedroom Echo", 26183, net, cap=QUIET)     # an empty room
+    for e in (a, b, c, d): e.start()                       # (it runs from the start: time to join, if it wrongly could)
     try:
         await asyncio.sleep(1.5)
         for e in (a, b): await e.connect()
@@ -266,7 +277,23 @@ async def main():
         check(await until(lambda: a.results()[-1:] == ["not_found"], 1), f"  result not_found ({a.results()[-1:]})")
         check(a.dropin()[0] == "idle", "and nothing started")
 
-        # 7. the hall vanishes mid-call: the kitchen notices
+        # 7. an empty bedroom: its noise stays there.  The kitchen took it for the other side talking (its wake word
+        # ignored, its listening mode kept off), and the bedroom switched listening mode on for nothing
+        check(await until(lambda: any(m["node"] == d.node for m in a.page.state()["arbitration"]["members"]), 5), "the bedroom is in the network")
+        await a.call(d.node)
+        check(await until(lambda: a.dropin() == ("connected", d.node), 3), f"the kitchen drops in on the empty bedroom ({a.dropin()})")
+        await asyncio.sleep(5)
+        lq = level(a.voip, 3)
+        check(lq < -66, f"the kitchen plays the bedroom's quiet, not its noise turned up ({lq:.1f} dBFS)")
+        rows = [l.split() for l in open(d.trace) if len(l.split()) >= 10]
+        loud = [r for r in rows if float(r[1]) > -70]
+        check(len(loud) > 20 and not any(r[5] == "1" for r in rows),
+              f"the bedroom's sounds ({len(loud)} frames over -70 dBFS) never count as someone talking there")
+        a.press("end_drop_in")
+        check(await until(lambda: a.dropin()[0] == "idle", 2), "hung up")
+        await asyncio.sleep(0.3)
+
+        # 8. the hall vanishes mid-call: the kitchen notices
         await a.call(b.node)
         check(await until(lambda: a.dropin()[0] == "connected", 3), "connected once more")
         await a.call(b.node)
@@ -280,7 +307,7 @@ async def main():
               f"  called again: result no_answer after {time.monotonic() - t0:.1f} s, states {[v for o, v in a.seq[mark:] if o == 'drop_in']}")
         check(not re.search(r"drop in: send: ", a.text()), "no send errors on the way")
     finally:
-        for e in (a, b, c):
+        for e in (a, b, c, d):
             try: e.proc.terminate(); e.proc.wait(timeout=3)
             except Exception: pass
     if check.failed:

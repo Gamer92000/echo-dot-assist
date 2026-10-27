@@ -267,21 +267,30 @@ _pkg() {
     case $2:$1 in
     pacman:adb|pacman:fastboot|dnf:adb|dnf:fastboot) echo android-tools;;
     pacman:pyusb) echo python-pyusb;;  apt:pyusb) echo python3-usb;;  dnf:pyusb) echo python3-pyusb;;
+    pacman:pyserial) echo python-pyserial;;  apt:pyserial) echo python3-serial;;  dnf:pyserial) echo python3-pyserial;;
     pacman:python3) echo python;;
     *:debugfs) echo e2fsprogs;;
     pacman:7z) echo p7zip;;  apt:7z) echo p7zip-full;;  dnf:7z) echo p7zip p7zip-plugins;;
     pacman:sqlite3|dnf:sqlite3) echo sqlite;;
     *:cc) echo gcc;;
+    *:qemu-arm) echo qemu-user;;                    # Ubuntu 26.04 has no qemu-user-static any more
     *:sha256sum) echo coreutils;;
     apt:xz) echo xz-utils;;
     *) echo "$1";;
     esac
 }
 # python3 has to run, not only be found: on Windows it is often the Store's stand-in, which only fails
-_have() { case $1 in pyusb) python3 -c 'import usb' 2>/dev/null;; python3) python3 -c '' 2>/dev/null;; *) command -v "$1" > /dev/null;; esac; }
+_have() {
+    case $1 in
+    pyusb) python3 -c 'import usb' 2>/dev/null;;
+    pyserial) python3 -c 'import serial' 2>/dev/null;;
+    python3) python3 -c '' 2>/dev/null;;
+    *) command -v "$1" > /dev/null;;
+    esac
+}
 
 # need_tools TOOL...: all there?  If not, offers to install them with the system's package manager.  TOOL is a command,
-# or pyusb (the python3 module).
+# or pyusb / pyserial (python3 modules).
 need_tools() {
     local t miss=() mgr= cmd pk
     for t; do _have "$t" || miss+=("$t"); done
@@ -307,18 +316,69 @@ need_tools() {
     for t in "${miss[@]}"; do _have "$t" || { fail "still missing: $t"; return 1; }; done
 }
 
+# udev_rules: scripts/51-echo-unlock.rules into /etc/udev/rules.d (adb, fastboot and the unlocks without sudo;
+# ModemManager kept off the bootrom).  Its uaccess gives the devices only to whoever sits at the PC: a setup run over
+# ssh saw no adb device (a Raspberry Pi, 2026-10-26).  Over ssh, 52-echo-unlock-ssh.rules gives them to a group the
+# user is in already, so no new login: Debian's plugdev, Arch's adbusers, else the sudo group the setup needs anyway
+# (plugdev alone does not exist on Arch or Fedora; OWNER= of a person's account is deprecated in udev)
+udev_rules() {
+    local d=/etc/udev/rules.d ssh= g=
+    if [ -n "$SSH_CONNECTION" ]; then
+        for g in plugdev adbusers sudo wheel ""; do [[ " $(id -nG) " == *" $g "* ]] && break; done
+        [ -n "$g" ] || warn "Over ssh, and $USER is in none of plugdev, sudo or wheel: adb may not see the Echo (run the setup at the PC)."
+        [ -n "$g" ] && ssh=$(printf '%s\n' \
+            "# scripts/setup.sh, run over ssh by $USER: the Echos' USB devices for its group $g too (uaccess: only the seat's)" \
+            "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"0e8d|1949\", MODE=\"0660\", GROUP=\"$g\"" \
+            "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"0bb4\", ATTR{idProduct}==\"0c01\", MODE=\"0660\", GROUP=\"$g\"")
+    fi
+    cmp -s scripts/51-echo-unlock.rules $d/51-echo-unlock.rules &&
+        { [ -z "$ssh" ] || [ "$(cat $d/52-echo-unlock-ssh.rules 2> /dev/null)" = "$ssh" ]; } && { ok "udev rules installed"; return 0; }
+    need_sudo "to install udev rules" || return 1
+    task "Installing udev rules" sh -c 'sudo cp scripts/51-echo-unlock.rules "$1"/ &&
+        { [ -z "$2" ] || printf "%s\n" "$2" | sudo tee "$1"/52-echo-unlock-ssh.rules > /dev/null; } &&
+        sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=usb' sh $d "$ssh"
+}
+
+# qemu_arm: the qemu-arm tools/qrun.sh runs an INSTALL=boot model's policy tool with (QEMU, QEMU_URL, QEMU_SHA256 of
+# its setup.sh): the system's; else on an x86_64 PC the static build of QEMU_URL into QEMU; else the package manager's
+# (that build is x86_64: a Raspberry Pi, 2026-10-26).  Then the PID namespace qrun.sh needs (bionic's mutexes hang
+# above pid 65535): Ubuntu 24.04 and later refuse users one (AppArmor), so it is allowed until the next boot here,
+# before the root step, rather than found missing there
+qemu_arm() {
+    local k v
+    if ! command -v qemu-arm > /dev/null && [ ! -x $QEMU ]; then
+        if [ "$(uname -m)" = x86_64 ]; then
+            mkdir -p toolchain
+            task "Downloading qemu-arm (runs the policy tool on the PC)" sh -c "curl -fsSL -o $QEMU $QEMU_URL &&
+                [ \"\$(sha256sum < $QEMU | cut -c1-64)\" = $QEMU_SHA256 ] && chmod 755 $QEMU" || { rm -f $QEMU; return 1; }
+        else need_tools qemu-arm || return 1; fi
+    fi
+    [ -n "$DRY" ] || unshare --user --map-root-user --pid --fork true 2> /dev/null && return 0
+    read -r k v <<< "$(tools/qrun.sh --userns)"
+    if [ -z "$k" ]; then fail "This PC does not let users make namespaces (unshare --user), which tools/qrun.sh needs."; return 1; fi
+    warn "This PC does not let users make namespaces (on Ubuntu 24.04 and later: AppArmor's default)."
+    info "The root step patches the Echo's policy under tools/qrun.sh, which needs one."
+    ask "Allow them until the next boot (sudo sysctl $k=$v)?" || return 1
+    need_sudo "to allow user namespaces" || return 1
+    task "Allowing user namespaces until the next boot" sudo sysctl -w "$k=$v" &&
+        unshare --user --map-root-user --pid --fork true 2> /dev/null || { fail "still no user namespace"; return 1; }
+}
+
 # need_files DEST SHA256 "where to get it" [DEST SHA256 "where"]...: waits until every DEST is there with its checksum.
 # Files are picked up from ~/Downloads or the repository root the moment they land there (not while a browser is still
 # writing them), so the user only has to download them.
 declare -A _seen
 _good() { [ -z "$2" ] || [ "$(sha256sum < "$1" | cut -c1-64)" = "$2" ]; }
+# Also takes the browser's renamed copies ("boot-root (1).zip"): two files of one name can be wanted (checkers needs
+# both XDA threads' boot-root.zip).  A copy that is not the file is left alone; only one of the name itself is reported.
 _pickup() {
     local f=$1 sum=$2 name=${1##*/} c sig
-    for c in "$HOME/Downloads/$name" "./$name"; do
+    for c in "$HOME/Downloads/$name" "./$name" "$HOME/Downloads/${name%.*} ("*")${name#"${name%.*}"}"; do
         [ -s "$c" ] && [ ! -e "$c.part" ] && [ ! -e "$c.crdownload" ] || continue
-        sig=$(stat -c %s.%Y "$c"); [ "${_seen[$c]}" = "$sig" ] && continue
-        _seen[$c]=$sig
+        sig=$(stat -c %s.%Y "$c"); [ "${_seen[$f:$c]}" = "$sig" ] && continue
+        _seen[$f:$c]=$sig
         if _good "$c" "$sum"; then mkdir -p "${f%/*}"; mv "$c" "$f"; return 0; fi
+        [ "${c##*/}" = "$name" ] && [ -z "$_PICKUP_QUIET" ] || continue
         # people renamed another firmware version to the expected name (issue #62): say that only this exact file does
         _clr; fail "$c is not the right file (checksum): only this exact file works, another version renamed to its name does not; download it from the link below"
     done
@@ -327,6 +387,8 @@ _pickup() {
 need_files() {
     local dest=() sum=() src=() miss=() left lines=() i t0=$SECONDS
     while [ $# -ge 3 ]; do dest+=("$1"); sum+=("$2"); src+=("$3"); shift 3; done
+    # two wanted files of one name: a copy that fits neither is not worth a word, it may be the other's
+    _PICKUP_QUIET=$(printf '%s\n' "${dest[@]##*/}" | sort | uniq -d)
     for i in "${!dest[@]}"; do
         if [ -f "${dest[i]}" ] && ! _good "${dest[i]}" "${sum[i]}"; then
             mv "${dest[i]}" "${dest[i]}.wrong"; warn "${dest[i]##*/} is not the right file (checksum; another version does not work); moved aside to ${dest[i]}.wrong"
@@ -378,6 +440,9 @@ build_mode() {
         m=source
     fi
     [ -n "$DRY" ] || echo $m > $OUT/setup.build
+    # the NDK is an x86_64 program: a Raspberry Pi 4 built with it under qemu-user's binfmt in ~15 min (2026-10-26)
+    [ "$m" = source ] && [ "$(uname -m)" != x86_64 ] &&
+        info "this PC is $(uname -m): the NDK (x86_64) runs here only under qemu-user's binfmt (qemu-user-binfmt), slowly"
     build_mode_set $m
 }
 build_mode_set() { BUILD_MODE=$1; if [ "$1" = prebuilt ]; then export PREBUILT=1; else export PREBUILT=0; fi; }
@@ -561,7 +626,9 @@ install_satellite() {
         prompt PRESET "Settings file (Enter for none)" ""
     done
     wait_adb device || return 1
-    task "Installing (the Echo reboots)" scripts/install-system.sh || return 1
+    if [ "$INSTALL" = boot ]; then   # in the foreground: a new boot image may need the power replugged (install-boot.sh)
+        live "Installing (the Echo reboots)" bash -o pipefail -c "scripts/install-system.sh 2>&1 | tee -a '$LOG'" || return 1
+    else task "Installing (the Echo reboots)" scripts/install-system.sh || return 1; fi
     [ -n "$DRY" ] || sleep 10
     wait_adb device || return 1
     # main.sh restarts a hassmic that dies, so it has to be seen twice, 10 s apart, to not be a crash loop
@@ -593,7 +660,9 @@ done_screen() {
     tell "Add it in Home Assistant" \
         "Settings → Devices & services → discovered ESPHome \"$SAT_NAME\" → Add, and give it its name there" \
         "${DIM}(not listed? Add ESPHome by hand: ${SAT_IP:-its IP}, port 26053, no encryption key)$N" \
-        "Then pick an Assist pipeline (and the wake word) in its settings."
+        "Then pick an Assist pipeline (and the wake word) in its settings, and under Configure tick" \
+        "\"Allow the device to perform Home Assistant actions\": the words of Bluetooth connection announcements" \
+        "and the fallback of the Echos' wake word arbitration need it."
     tell "Its settings page" \
         "http://${SAT_IP:-<its IP>}:28931/ (log in with a press of the action button)" \
         "${DIM}Features, settings Home Assistant does not show, the other Echos; export the settings for the next Echo.$N"

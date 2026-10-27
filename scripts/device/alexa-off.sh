@@ -3,20 +3,66 @@
 # Which services that are: device.conf of this model, next to this script.
 . "${0%/*}/device.conf" || exit 1
 # ledcontroller sets ALEXA_PROP=1 after the boot animation, which starts the Alexa services.
-setprop $ALEXA_PROP 0
+[ -n "$ALEXA_PROP" ] && setprop $ALEXA_PROP 0
 for s in $ALEXA_SERVICES $UPDATE_SERVICES $UPDATE_ONDEMAND; do stop $s; done
-# Amazon's Bluetooth stack (speaker mode, pairing through the Alexa app).  hassmic drives the radio itself, for Home
-# Assistant's Bluetooth proxy and as a Bluetooth speaker, and /dev/stpbt does not keep a second user out: it has to go.
-stop $BT_SERVICE
-# Its AIPC service directory outlives it and stays its own (0710): hassmic answers the mixer on that service in its place
-# when it plays to a Bluetooth speaker (btout.c) and could neither remove nor reuse it.
-i=0; while [ "$(getprop init.svc.$BT_SERVICE)" = running ] && [ $i -lt 20 ]; do sleep 0.25; i=$((i + 1)); done
-rm -rf /dev/aipc/0
+# Where Alexa is Android apps (checkers): the framework starts them, and restarts a persistent one that is only stopped,
+# so they are disabled.  That outlives a reboot, so what was disabled here is written down (DISABLED): alexa-on.sh, and
+# boot.sh when hassmic.conf is gone, turn exactly those back on.  pm is slow (the Java runtime, ~1 s a call), and this
+# runs after every restart of hassmic: what is disabled, and only when something is not, what is installed (once: a
+# call per package to ask whether it is there kept hassmic waiting 36 s at boot instead of 17 on an Echo Show 8,
+# 2026-10-15; a package the firmware lacks cost that call at every start), then pm only for what is there to disable
+DISABLED=/data/local/hassmic/alexa-disabled
+PKGS="$ALEXA_PACKAGES $SETUP_PACKAGES $UPDATE_PACKAGES"
+if [ -n "$(echo $PKGS)" ] && command -v pm > /dev/null; then
+    NL='
+'
+    off=$(pm list packages -d 2>/dev/null | tr -d '\r') all=
+    for p in $PKGS; do
+        case "$p" in
+        */*)    # one component of a package that must stay (package/class): pm lists no disabled components, so
+                # what was disabled here counts as done
+                grep -qx "$p" $DISABLED 2>/dev/null && continue;;
+        *)      case "$NL$off$NL" in *"${NL}package:$p$NL"*) continue;; esac
+                [ -n "$all" ] || all=$(pm list packages 2>/dev/null | tr -d '\r')
+                case "$NL$all$NL" in *"${NL}package:$p$NL"*) ;; *) continue;; esac;;      # not on this firmware
+        esac
+        if pm disable "$p" > /dev/null 2>&1; then
+            grep -qx "$p" $DISABLED 2>/dev/null || echo "$p" >> $DISABLED
+        else echo "alexa-off: $p could not be disabled"; fi
+    done
+fi
+# A setup wizard that is disabled never says it finished: Android keeps the home button, status bar and lock screen in
+# their not-set-up state until device_provisioned and user_setup_complete are 1, which the wizard sets at its end
+# (checkers after a wipe: both 0, Amazon's com.amazon.ds2.oobe.efd in front, 2026-10-13).  What they were is written
+# down (SETTINGS, "namespace key value"): alexa-on.sh puts it back, and the wizard with it.
+# The same way, ANDROID_SETTINGS of device.conf ("namespace/key=value" each): Android's own settings for a satellite.
+SETTINGS=/data/local/hassmic/alexa-settings
+if command -v settings > /dev/null; then
+    want=; [ -n "$(echo $SETUP_PACKAGES)" ] && want="global/device_provisioned=1 secure/user_setup_complete=1"
+    for t in $want $ANDROID_SETTINGS; do
+        ns=${t%%/*} kv=${t#*/}; k=${kv%%=*} val=${kv#*=}
+        v=$(settings get $ns $k 2>/dev/null | tr -d '\r')
+        [ "$v" = "$val" ] && continue
+        grep -q "^$ns $k " $SETTINGS 2>/dev/null || echo "$ns $k ${v:-null}" >> $SETTINGS
+        settings put $ns $k "$val" || echo "alexa-off: $ns $k could not be set"
+    done
+fi
+if [ -n "$BT_SERVICE" ]; then
+    # Amazon's Bluetooth stack (speaker mode, pairing through the Alexa app).  hassmic drives the radio itself, for Home
+    # Assistant's Bluetooth proxy and as a Bluetooth speaker, and /dev/stpbt does not keep a second user out: it has to go.
+    stop $BT_SERVICE
+    # Its AIPC service directory outlives it and stays its own (0710): hassmic answers the mixer on that service in its
+    # place when it plays to a Bluetooth speaker (btout.c) and could neither remove nor reuse it.
+    i=0; while [ "$(getprop init.svc.$BT_SERVICE)" = running ] && [ $i -lt 20 ]; do sleep 0.25; i=$((i + 1)); done
+    rm -rf /dev/aipc/0
+fi
 # Setup mode (unregistered device): oobed advertises for the Alexa app and keeps the orange setup animation on the ring.
 for s in $SETUP_SERVICES; do stop $s; done
 # uxeventd starts the orange `setup-mode` spinner; `ledctrl -c` does not clear it and `-g` does not list it. Unset by name.
-ledctrl -c >/dev/null; ledctrl -u setup-mode >/dev/null
+command -v ledctrl > /dev/null && { ledctrl -c >/dev/null; ledctrl -u setup-mode >/dev/null; }
 # oobed leaves a Wi-Fi Direct group up for the Alexa app (p2p-p2p0-0 + dnsmasq).  wpa_supplicant itself must stay: it also runs wlan0.
-wpa_cli -p $WPA_SOCKETS -i p2p0 p2p_group_remove p2p-p2p0-0 >/dev/null 2>&1
+# Bounded: on an Echo Show with no group up, wpa_cli once waited on p2p0's socket for good (2026-10-13), and with it the
+# satellite's start, hassmic never started.
+timeout 5 wpa_cli -p $WPA_SOCKETS -i p2p0 p2p_group_remove p2p-p2p0-0 >/dev/null 2>&1
 sleep 1
 getprop | grep -E "init.svc.($(echo $ALEXA_SERVICES $UPDATE_SERVICES $UPDATE_ONDEMAND mixer shmd ledcontroller | tr ' ' '|'))\]"

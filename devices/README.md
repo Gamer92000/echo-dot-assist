@@ -12,14 +12,18 @@ and refuse a mismatch.
 | Echo 2nd gen (2017) | [`radar`](radar/README.md) | `radar_puffin` (OTA metadata) | in preparation: builds, Pryon verified under qemu against its own ALEXA model; unlock files staged; on-device values to check |
 | Echo Dot 3rd gen refresh (2019–2020), C78MP8 | `crumpet` | `crumpet`? (OTA metadata; fastboot says `CRUMPET`) | not started: `kamakiri-donut` does not apply |
 | Echo Dot 3rd gen with clock, 36EBT3 | `doebrite` | ? | not started; thought to be `crumpet` hardware plus the clock display |
+| Echo Show 5 1st gen (2019), H23K37 | [`checkers`](checkers/README.md) | `checkers` | builds; worked out from the firmware (same 6574.1 as donut, full Android, no mixer: OpenSL ES backend); unlock public (amonet-checkers, TWRP); install (`INSTALL=boot`) and guided setup tried on one Echo Show; the ring as a band along the bottom of the screen (`ring_band.c`) |
+| Echo Show 8 1st gen (2019), C7H6N3 | [`crown`](crown/README.md) | `crown` | builds; the same platform as checkers (MT8163, Fire OS 6.5.7.0 NS6570); unlock public (amonet-crown); installed (`INSTALL=boot`) and running on one Echo Show 8: voice, buttons, mute latch, the band, Bluetooth, Wi-Fi motion; Amazon downloads work (DHA version 2); guided setup tried on one Echo Show 8 |
+| Echo Show 5 2nd gen (2021), C76N8S | [`cronos`](cronos/README.md) | `cronos` | builds; checkers' platform and Fire OS build (6574.1, NS65741/8149), with athena's mute button driver (gpio-privacy) and one of three speaker amplifiers by board revision (`speaker_gain_alt`); unlock public (amonet-cronos); install as checkers (`INSTALL=boot`) and the guided setup run on one Echo: voice, buttons, mute latch, the band, light sensor; the first has a MAX98396 |
+| Echo Show 8 2nd gen (2021), A8H3N2 | [`athena`](athena/README.md) | `athena` | builds; Android 9, MT8183, kernel 4.4.146, Treble; unlock public (saiyaku-athena, serial); root as that zip leaves it (system and vendor patched in place), installed from the running OS (`INSTALL=running`, policy in `/vendor`) and running on one Echo Show 8 2nd gen: voice, buttons, mute latch, the band, Bluetooth, Wi-Fi switch, light sensor, speaker gain, Wi-Fi motion; Amazon downloads work (DHA version 2 through `fireosdhaservice`) |
 
 ## What a model directory holds
 
 | File | Used by | What |
 |---|---|---|
 | `device.mk` | `Makefile` | compiler target (NDK API level), audio and wake word backends, stock libraries to link against; optionally the Wi-Fi motion kernel module (`KMOD`) and its kernel (`KVER`, `KARCH`, `KCROSS`, `KCONFIG`: the kernel's own config (IKCONFIG of `boot.img`) in the model's directory, or `KFRAG`: a fragment where the kernel has none, `KCFLAGS`; and what `make kernel-tools` downloads for it: `KSRC_URL`, `KSRC_SHA256`, `KCC_URL`, `KCC_DIGEST`, unless the Makefile's 3.18 defaults fit) |
-| `board.c` | `hassmic` (linked in) | `struct board` from `src/hassmic/board.h`: identity towards Home Assistant, the codename (names the model's bundle in a release), input devices, mute latch, Bluetooth device node and address, stock wake word and earcon paths, thermal zone, light sensor, LED volume steps, the ALSA control a "Speaker gain" may raise, its stock value and steps per dB (`audio_device.xml` or `mixer_paths.xml` of the firmware, or the kernel's control tables where the firmware leaves it alone) |
-| `device.conf` | PC scripts (`scripts/lib/device.sh`) and, shipped next to them, the scripts on the Echo | product and firmware id, firmware file and checksum, files to compare in `probe.sh`, install method, the daemon's user and groups, names of the stock services to stop; `KMOD`/`KMOD_ARGS` for `main.sh` to load the Wi-Fi motion module |
+| `board.c` | `hassmic` (linked in) | `struct board` from `src/hassmic/board.h`: identity towards Home Assistant, the codename (names the model's bundle in a release), input devices, mute latch, Bluetooth device node and address, stock wake word and earcon paths, thermal zone, light sensor, LED volume steps, the ALSA control a "Speaker gain" may raise, its stock value and steps per dB (or per `speaker_gain_db` dB where a step is not a whole dB) (`audio_device.xml` or `mixer_paths.xml` of the firmware, or the kernel's control tables where the firmware leaves it alone) |
+| `device.conf` | PC scripts (`scripts/lib/device.sh`) and, shipped next to them, the scripts on the Echo | product and firmware id, firmware file and checksum, files to compare in `probe.sh`, install method, the daemon's user and groups, names of the stock services to stop; `KMOD`/`KMOD_ARGS` for `main.sh` to load the Wi-Fi motion module; Android models: `ALEXA_PACKAGES`/`SETUP_PACKAGES` (`pm disable`, `package/class` for one component) and `STOCK_APPS_OUT` (folders under `/system` that `sysinstall.sh` takes off the partition) |
 | `stubs/*.syms` | `make STUBS=1` (CI) | per stock library in `LIBS`, the symbols our binaries need of it, written by `tools/mkstubs.sh` from the firmware: stand-ins to link against without it |
 | `hassmic.rc` | `install-system.sh` → `/system/etc/init/` | init services, and the trigger that starts the satellite once the audio stack is up |
 | `sepolicy.rules` | `install-system.sh` | allow rules added to the stock policy so init can start the scripts |
@@ -75,8 +79,11 @@ Rough order. Each step is safe to stop at.
      new `audio_*.c` or `wake_*.c` behind `audio.h` / `wake.h` and name it here.
    - `hassmic.rc`: the property trigger that starts the stock Alexa client on this model.
    - `sepolicy.rules`: depends on how root was obtained.
-   - `INSTALL` in `device.conf`: `twrp-ab` is `scripts/install-system.sh`. A model that installs another way gets its
-     own method there, or its own script.
+   - `INSTALL` in `device.conf`: `twrp-ab` is `scripts/install-system.sh`; `boot` (policy in `boot.img`'s ramdisk, no
+     A/B: checkers) is `scripts/install-boot.sh`, which install-system.sh hands over to; `running` (athena: rooted
+     from the running OS by patching system and vendor in place, the policy in `/vendor/etc/selinux`, named by
+     `SEPOLICY_FILE`) is install-system.sh's in-OS path alone, no TWRP. A model that installs another way gets its own
+     method there, or its own script.
 4. **Try it without installing**: `scripts/probe.sh`, `scripts/deploy.sh`, `adb shell sh /data/local/hassmic/run.sh`.
    Both pick the model from the Echo on adb.
 5. **Install**, and write the steps down twice: by hand in the model's `README.md` (Install section), and as
