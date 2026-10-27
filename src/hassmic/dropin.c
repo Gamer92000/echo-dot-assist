@@ -100,6 +100,14 @@ static int answer_ms = ANSWER_MS, lost_ms = LOST_MS;
 #define DOUBLE_TALK_DB 6.0f             /* the near end this much over the echo estimate passes... */
 #define DOUBLE_TALK_N 3                 /* ...for this many frames in a row: an echo's onset is shorter */
 #define NEAR_DB     9.0f                /* this side talks: this far over the room's floor */
+/* ...and at least this loud in micAsr.  An empty room's floor is -74 dBFS: sounds of -65..-70 passed NEAR_DB, opened the
+ * gate and got the speech gain (+24 dB) put on them: the far Echo sent -40..-54 dBFS of amplified room noise, which the
+ * other end took for the far end talking (wake word ignored, its listening mode never on: STT heard nothing; trace of a
+ * call with an empty master bedroom, 2026-10-15).  Quiet speech in micAsr is -55 and up */
+#define NEAR_MIN_DB -58.0f
+/* The far end talks when it plays this far over its own floor (what it sent in its pauses: the noise of its room
+ * after its gain, -88..-38 dBFS in that call), and over FAR_DB: an older build on the other side still sends that noise */
+#define FAR_OVER_DB 25.0f
 /* What we play, held after it stops and falling 20 dB/s: the echo's tail outlasts ECHO_MS.  In every pause of the other
  * side a tail 14 dB over the room came 0.3 to 1 s after its last word and passed for this side talking (trace,
  * 2026-10-08).  A reply 0.5 s after the other side stops passes at -48 dBFS in micAsr, a quiet one after a second */
@@ -449,6 +457,7 @@ static struct micgain gain;
 static float es_c, es_g;                /* echo against what we play, dB (peak held); the gain applied, linear */
 static int dt_n;                        /* frames in a row over the echo estimate */
 static float far_hold;                  /* what we play, held: falls FAR_FALL dB a frame */
+static float far_floor;                 /* the quietest the far end has played lately (dl): drops at once, rises 1.5 dB/s */
 static float floor_db;                  /* the room in micAsr */
 static long long near_until;            /* this side talked until then (+ LISTEN_HANG_MS) */
 static int listen_on;                   /* what we last asked of core_dropin_listen */
@@ -462,10 +471,23 @@ static float far_db(long long now)       /* the loudest we played that can still
     return m;
 }
 
+static int far_voice(float db, float floor)     /* a level of the far end that is a voice, not its room's noise */
+{
+    return db > FAR_DB && db > floor + FAR_OVER_DB;
+}
+
+float dropin_far_level(void)
+{
+    pthread_mutex_lock(&dl);
+    float r = c.state == DROPIN_LIVE ? far_db(now_ms()) : -100;
+    pthread_mutex_unlock(&dl);
+    return r;
+}
+
 int dropin_far_talking(void)
 {
     pthread_mutex_lock(&dl);
-    int r = c.state == DROPIN_LIVE && far_db(now_ms()) > FAR_DB;
+    int r = c.state == DROPIN_LIVE && far_voice(far_db(now_ms()), far_floor);
     pthread_mutex_unlock(&dl);
     return r;
 }
@@ -476,7 +498,7 @@ static void send_frame(const int16_t *pcm, int own)
     pthread_mutex_lock(&dl);
     if (c.state != DROPIN_LIVE || !c.keyed || !c.port) { pthread_mutex_unlock(&dl); return; }
     gen = c.gen;
-    float far = far_db(now_ms());
+    float far = far_db(now_ms()), ffloor = far_floor;
     memcpy(key, c.key, 32);
     memcpy(pkt, "HMD1", 4); memcpy(pkt + 4, c.id, 8); pkt[12] = (uint8_t)!c.outgoing;
     uint32_t seq = c.tx_seq++;
@@ -500,7 +522,7 @@ static void send_frame(const int16_t *pcm, int own)
     /* echo suppression: the far end talks and the mic is not clearly louder than its echo has been */
     float m = level_db(f, FRAME), target = 1; long long now = now_ms(); int farend, near;
     far_hold = far > far_hold - FAR_FALL ? far : far_hold - FAR_FALL;
-    farend = far_hold > FAR_DB;
+    farend = far_voice(far_hold, ffloor);
     int over = farend && m >= far_hold + es_c + DOUBLE_TALK_DB;
     dt_n = over ? dt_n + 1 : 0;
     if (farend && !own && dt_n < DOUBLE_TALK_N) {       /* echo, as far as we can tell (not our own sounds): its peak */
@@ -510,7 +532,7 @@ static void send_frame(const int16_t *pcm, int own)
         if (es_c > 0) es_c = 0;
     }
     floor_db = m < floor_db ? (m > -90 ? m : -90) : floor_db + 0.03f;     /* drops at once, rises 1.5 dB/s */
-    near = !own && m > floor_db + NEAR_DB && (!farend || dt_n >= DOUBLE_TALK_N);
+    near = !own && m > floor_db + NEAR_DB && m > NEAR_MIN_DB && (!farend || dt_n >= DOUBLE_TALK_N);
     /* A gate: open while this side talks (and LISTEN_HANG_MS after, unless the far end plays), else ducked.  Ducked only
      * while the far end played (the first try), the gain lifted the room in its pauses from -72 to -48 dBFS while the
      * rest went out at -70: hiss that came and went with every sentence of the other side (2026-10-08) */
@@ -582,6 +604,7 @@ static void *playout(void *arg)
         pthread_mutex_lock(&dl);
         while (c.state != DROPIN_LIVE) pthread_cond_wait(&live_cond, &dl);
         int gen = c.gen; long long t0 = now_ms();
+        far_floor = -70;
         pthread_mutex_unlock(&dl);
         int e = 0, open = voip_open(RATE, 1) == 0, started = 0, missing = 0, skipped = 0, stretched = 0;
         OpusDecoder *dec = opus_decoder_create(RATE, 1, &e);
@@ -616,7 +639,9 @@ static void *playout(void *arg)
             if (open && voip_write(pcm, sizeof pcm) < 0) { fprintf(stderr, "drop in: the Voip stream failed\n"); voip_close(); open = 0; }
             if (!open) usleep(20000);
             pthread_mutex_lock(&dl);
-            ref[ref_n++ % REF_N].t = now_ms() + q / 1000; ref[(ref_n - 1) % REF_N].db = level_db(pcm, FRAME);   /* when it plays */
+            float pdb = level_db(pcm, FRAME);
+            ref[ref_n++ % REF_N].t = now_ms() + q / 1000; ref[(ref_n - 1) % REF_N].db = pdb;   /* when it plays */
+            far_floor = pdb < far_floor ? (pdb > -90 ? pdb : -90) : far_floor + 0.03f;
             pthread_mutex_unlock(&dl);
         }
         if (skipped || stretched) fprintf(stderr, "drop in: playout skipped ahead %d times (more than %d ms waiting), waited %d times for a late frame\n",

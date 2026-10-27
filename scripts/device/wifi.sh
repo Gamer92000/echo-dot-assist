@@ -227,7 +227,12 @@ ajoin() {
     old= ; [ "$(field "$cur" wpa_state)" = COMPLETED ] && old=$(field "$cur" id)
     on=$(A list_networks | sed -n 's/^\([0-9][0-9]*\)[[:space:]].*/\1/p')
     keys=$(A keys)                                      # never printed: what goes back if the add replaces one
-    n=$(aval add $ssid $psk); case $n in ''|*[!0-9]*) n=;; esac
+    n=$(aval add $ssid $psk)
+    # Android 7 lets only a network's creator or the system user change it: one Amazon's setup or a stock update saved
+    # is refused to root ("Not authorized to update network", cronos 2026-10-26; wifi-join.sh does the same).  Then the
+    # whole switch as the system user: selecting it is refused the same way
+    if [ "$n" = -1 ] && [ -z "$WIFICTL_USER" ] && [ -x "${0%/*}/runas" ]; then WIFICTL_USER=system; n=$(aval add $ssid $psk); fi
+    case $n in ''|*[!0-9]*) n=;; esac
     why=notfound
     if [ -z "$n" ]; then why=bad; say "!! WifiService did not add the network"; printf '%s\n' "$id failed $ssid $why $(field "$cur" ssid)" | put result; return; fi
     replaced= oldkey=

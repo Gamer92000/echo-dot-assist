@@ -120,7 +120,9 @@ unlock step, 8149's system partition where the Echo runs another build, the root
 lock and the Wi-Fi join, the install.  Wi-Fi joins through Android's WifiService — `scripts/device/wifictl.dex`
 (`tools/mkwifictl.py`), called as `CLASSPATH=…/wifictl.dex app_process / Wifictl <verb>`: the same
 `android.net.wifi.WifiConfiguration` stock's own setup apps put in, from root, no touchscreen and no Alexa app.  It
-downloads the qemu-arm it needs into `toolchain/` when the PC has none, and takes `magiskpolicy32` out of donut's
+downloads the qemu-arm it needs into `toolchain/` when the PC has none (on an x86_64 PC; elsewhere `qemu-user` from
+the package manager), asks to allow user namespaces where the PC refuses them (Ubuntu 24.04 and later: `tools/qrun.sh`
+needs one), installs the udev rules (`scripts/51-echo-unlock.rules`; over ssh also for a group the user is in), and takes `magiskpolicy32` out of donut's
 `boot-root.zip` (`firmware/donut/`) and `adbd` out of checkers' own `boot-root.zip` on its own (the browser saves the
 second as `boot-root (1).zip`; the setup takes either).  The steps written out follow, for doing them one by one
 (`scripts/install-boot.sh`, from `scripts/install-system.sh`):

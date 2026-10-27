@@ -106,7 +106,8 @@ tests/otatool_test.sh                             # the PC's otatool (Python) ag
 ```
 
 `tools/qrun.sh [-t secs] <arm-binary> args` runs a device binary on the PC under qemu-arm against
-`firmware/$DEVICE/rootfs`.
+`firmware/$DEVICE/rootfs`, in a PID namespace of its own (bionic's mutexes hang with a pid over 65535). Where users may
+not make namespaces (Ubuntu 24.04 and later) it stops and names the sysctl that allows them; `--userns` prints it.
 
 The Wi-Fi motion kernel modules (`src/kmod/`) need the model's kernel sources and compiler in `toolchain/`; without
 them `make` leaves the module out and says so, and that Echo gets no Wi-Fi motion (donut falls back to its driver's

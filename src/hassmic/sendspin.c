@@ -13,7 +13,7 @@
  *   trust       unpaired access under the published Sentinel PSK (the operator approves the device in Music Assistant),
  *               or paired: the operator pastes our pairing token, we hand over a fresh long-term PSK ("pairing_psk" flow),
  *               the server re-handshakes in band to it.  PIN pairing (CPace) is not implemented and is refused.
- *               Unpaired access is off unless switched on (sendspin_unpaired, a Home Assistant switch): anyone on the
+ *               Unpaired access is off unless switched on (sendspin_unpaired, on the settings page): anyone on the
  *               LAN knows the Sentinel PSK, so it can play here and sit between us and a real server.  Off, a server
  *               has to pair with the token first; the Sentinel session still carries that pairing.
  *   servers     every Sendspin server on the LAN dials us; one connection is admitted, ranked by declared activity
@@ -400,6 +400,7 @@ struct session {
 /* At most one admitted connection; the others are provisional until their first server/activate decides. */
 static pthread_mutex_t adm_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct session *admitted;
+static struct session *live[16];        /* sessions past the handshake (adm_lock): switching unpaired access closes the idle ones */
 static long long paused_by_button_at;
 
 static int js_str(const char *j, const char *key, char *out, size_t outsz)
@@ -620,7 +621,7 @@ static void on_json(struct session *s, char *j, long long t_recv)
             if (!on && s->player_active) { stream_set(0); q_flush(); }
             if (!on && !pairing && first)
                 fprintf(stderr, "sendspin: connected, no role yet: %s\n", atomic_load(&unpaired_ok) ? "approve the device in Music Assistant"
-                        : "pair it with the token (or allow Music Assistant without pairing in Home Assistant)");
+                        : "pair it with the token (or allow Music Assistant without pairing on the settings page)");
             s->player_active = on;
             s->controller_active = strstr(sec, "controller@v1") != NULL;
             if (!s->controller_active) { s->ctl_commands[0] = 0; s->group_playing = 0; }      /* its server/state goes with it */
@@ -796,6 +797,9 @@ static void *serve(void *arg)
     fprintf(stderr, "sendspin: encrypted session up (%s, %s)\n", s->psk_cat == PSK_LONGTERM ? "paired" : s->psk_cat == PSK_PAIRING ? "pairing key" : "sentinel key",
             s->spec ? "spec 1.0" : "aiosendspin 9 dialect");
     pthread_create(&tt, NULL, time_thread, s);
+    pthread_mutex_lock(&adm_lock);
+    for (int i = 0; i < 16; i++) if (!live[i]) { live[i] = s; break; }
+    pthread_mutex_unlock(&adm_lock);
 
     while (!s->closing && ws_recv(&s->ws, &op, &d, &n) == 1) {
         if (op != WS_BINARY) break;                                     /* text after the handshake is a protocol error */
@@ -811,6 +815,7 @@ static void *serve(void *arg)
     pthread_join(tt, NULL);
     pthread_mutex_lock(&adm_lock);
     if (admitted == s) { admitted = NULL; stream_set(0); q_flush(); }
+    for (int i = 0; i < 16; i++) if (live[i] == s) live[i] = NULL;
     pthread_mutex_unlock(&adm_lock);
     ws_close(&s->ws); pthread_mutex_destroy(&s->send_lock);
     fprintf(stderr, "sendspin: session closed\n");
@@ -928,13 +933,22 @@ int sendspin_expected(void) { return atomic_load(&server_known); }
 int sendspin_unpaired(int set)
 {
     if (set < 0) return atomic_load(&unpaired_ok);
-    atomic_store(&unpaired_ok, set != 0);
+    int was = atomic_exchange(&unpaired_ok, set != 0);
     save_file("sendspin.unpaired", set ? "1" : "0", 1);
     fprintf(stderr, "sendspin: unpaired access %s\n", set ? "allowed" : "off, paired servers only");
+    /* A server that connected and waits (Music Assistant: "no role yet", admitted without one) read the old answer in our
+     * hello and does not ask again: what is unpaired and has no player role is closed, the server dials back and reads the
+     * new one.  Only on a change: an import sets every setting, the same value too */
+    pthread_mutex_lock(&adm_lock);
+    for (int i = 0; was != (set != 0) && i < 16; i++) {
+        struct session *l = live[i];
+        if (l && l->psk_cat != PSK_LONGTERM && !l->player_active && !l->pairing && !l->closing) { l->closing = 1; shutdown(l->ws.fd, SHUT_RDWR); }
+    }
+    pthread_mutex_unlock(&adm_lock);
     if (!set) {                         /* an unpaired server playing now goes; it has to pair to come back */
         pthread_mutex_lock(&adm_lock);
         struct session *s = admitted;
-        if (s && s->psk_cat != PSK_LONGTERM && !s->pairing) { s->admitted = 0; admitted = NULL; stream_set(0); q_flush(); goodbye(s, "pairing_required"); }
+        if (s && s->psk_cat != PSK_LONGTERM && !s->pairing && !s->closing) { s->admitted = 0; admitted = NULL; stream_set(0); q_flush(); goodbye(s, "pairing_required"); }
         pthread_mutex_unlock(&adm_lock);
     }
     return set != 0;

@@ -112,11 +112,13 @@ install; hassmic up after the reboot, address by DHCP, adopted by Home Assistant
 - A push update (`scripts/ota-push.sh`) passed its self test and became the factory copy.
 
 What the setup ran into: the Wi-Fi network the stock update had saved could not be changed by root (`wifi-join.sh`
-falls back to the system user since). Not this model's, and left to their own PRs (issue #45): Ubuntu 26.04 refuses
-users `unshare --user`, which `tools/qrun.sh` needs (the PR ran qemu without it while the PIDs were low; until that
-is in, `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0` before the root step); qemu-arm for the policy tool on an aarch64 PC (the setup downloads
-an x86_64 one: `qemu-user` from the package manager instead); the udev rules over ssh, where `uaccess` gives nobody
-the device (`GROUP="plugdev"`). The Pi itself dropped its USB SSD once during the setup (a Pi 4 with an
+falls back to the system user since, and so does `wifi.sh`, the settings page's and Improv's switch). Not this model's,
+and fixed for every model afterwards (issue #45): Ubuntu 26.04 refuses users `unshare --user`, which `tools/qrun.sh`
+needs (the PR ran qemu without it while the PIDs were low; the setup now asks to run `sudo sysctl
+kernel.apparmor_restrict_unprivileged_userns=0` before the root step, and qrun.sh says so instead of hanging); qemu-arm
+for the policy tool on an aarch64 PC (the setup downloaded an x86_64 one: `qemu-user` from the package manager now);
+the udev rules over ssh, where `uaccess` gives nobody the device (the PR's `GROUP="plugdev"`; now a rules file of its
+own for a group the user is in, since Arch and Fedora have no plugdev). The Pi itself dropped its USB SSD once during the setup (a Pi 4 with an
 Argon M.2 case; not seen again), so run the setup in `screen`.
 
 Still open: speaker gain by ear, Wi-Fi motion, the DHA version ("Download from Amazon"), Bluetooth.

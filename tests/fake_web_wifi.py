@@ -6,7 +6,7 @@ escapes, the PSK as PBKDF2 makes it, a wrong password, a network out of reach, n
 network, a second password for a known network: what is saved, and that a failed switch goes back and saves nothing.
 Run twice: the Dots' world (wpa_supplicant) and checkers' (INSTALL=boot: WifiService through the wifictl.dex
 calls, the same fake world answering as the framework would, app_process included)."""
-import hashlib, json, os, signal, stat, subprocess, sys, tempfile, time
+import shutil, hashlib, json, os, signal, stat, subprocess, sys, tempfile, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webclient import wait_port, Browser, req
 
@@ -61,7 +61,14 @@ def main(android=False):
     renv = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}", FAKE_WIFI_WORLD=world, WIFI_ARP=arp, WIFI_ROUTE=route,
                 WIFI_SCAN_SECS="0", WIFI_STEP="0.1", WIFI_JOIN_SECS="6", WIFI_ADDR_SECS="5", WIFI_BACK_SECS="6",
                 **({"INSTALL": "boot"} if android else {}))     # looks: the stand-ins answer at the third
-    root = lambda: subprocess.Popen(["sh", f"{ROOT}/scripts/device/wifi.sh", "take", state, out], env=renv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    # root's folder: wifi.sh with what it finds next to it (wifictl.dex, runas: a stand-in that hands the uid to the fake
+    # framework)
+    dev = os.path.join(tmp, "dev"); os.makedirs(dev)
+    for f in ("wifi.sh", "wifictl.dex"): shutil.copy(f"{ROOT}/scripts/device/{f}", dev)
+    with open(os.path.join(dev, "runas"), "w") as f:
+        f.write('#!/bin/sh\ncase "$1" in system) export FAKE_WIFI_UID=1000;; *) export FAKE_WIFI_UID=$1;; esac\nshift 2; exec "$@"\n')
+    os.chmod(os.path.join(dev, "runas"), 0o755)
+    root = lambda: subprocess.Popen(["sh", f"{dev}/wifi.sh", "take", state, out], env=renv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     rootlog = []
     def root_run():
         p = root(); o, _ = p.communicate(timeout=60); rootlog.append(o); return o
@@ -186,6 +193,18 @@ def main(android=False):
               "the same network, a wrong password: back on it, its saved password the one from before")
         check(not any("f" * 64 in o for o in rootlog), "the stored key in no log")
 
+        # ---- WifiService's network saved by another user (Amazon's setup, a stock update): root may not change it, the
+        # system user may
+        if android:
+            with open(world) as f: wd = json.load(f)
+            next(n for n in wd["networks"] if n["ssid"] == H(KITCHEN))["creator"] = 1010
+            with open(world, "w") as f: json.dump(wd, f)
+            st, r = join(KITCHEN, "f" * 64); root_run(); wd = W()
+            res = json.loads(b.call("GET", "/api/wifi")[2])["result"]
+            adds = [c for c in wd["calls"] if c.startswith("app_process add")]
+            check(res["state"] == "ok" and len(adds) >= 2 and adds[-1] == adds[-2],
+                  f"a network root may not change: changed as the system user, on it ({res['state']})")
+
         # ---- an open network with an odd name
         st, r = join(EXOTIC, None); root_run(); wd = W()
         e = next((n for n in wd["saved"] if n["ssid"] == H(EXOTIC)), {})
@@ -209,7 +228,7 @@ def main(android=False):
         with open(os.path.join(out, "result"), "w") as f: f.write(f"77 switching {H('HomeNet')}\n")
         check(json.loads(b.call("GET", "/api/wifi")[2])["result"]["state"] == "interrupted", "\"switching\" without the lock: interrupted (a reboot)")
         os.makedirs(os.path.join(out, "lock")); open(os.path.join(out, "lock", "pid"), "w").write("999999\n")
-        subprocess.run(["sh", f"{ROOT}/scripts/device/wifi.sh", "clean", state, out], env=renv, check=True)
+        subprocess.run(["sh", f"{dev}/wifi.sh", "clean", state, out], env=renv, check=True)
         check(not os.path.exists(reqf) and not os.path.exists(os.path.join(out, "lock")), "clean (firewall service start): the old request and the dead run's lock gone")
         with open(reqf, "w") as f: f.write("join 5 6869;reboot ffff\n")
         o = root_run()

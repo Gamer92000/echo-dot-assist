@@ -8,20 +8,23 @@ for s in $ALEXA_SERVICES $UPDATE_SERVICES $UPDATE_ONDEMAND; do stop $s; done
 # Where Alexa is Android apps (checkers): the framework starts them, and restarts a persistent one that is only stopped,
 # so they are disabled.  That outlives a reboot, so what was disabled here is written down (DISABLED): alexa-on.sh, and
 # boot.sh when hassmic.conf is gone, turn exactly those back on.  pm is slow (the Java runtime, ~1 s a call), and this
-# runs after every restart of hassmic: only what is not disabled yet.
+# runs after every restart of hassmic: what is disabled, and only when something is not, what is installed (once: a
+# call per package to ask whether it is there kept hassmic waiting 36 s at boot instead of 17 on an Echo Show 8,
+# 2026-10-15; a package the firmware lacks cost that call at every start), then pm only for what is there to disable
 DISABLED=/data/local/hassmic/alexa-disabled
 PKGS="$ALEXA_PACKAGES $SETUP_PACKAGES $UPDATE_PACKAGES"
 if [ -n "$(echo $PKGS)" ] && command -v pm > /dev/null; then
     NL='
 '
-    off=$(pm list packages -d 2>/dev/null | tr -d '\r')
+    off=$(pm list packages -d 2>/dev/null | tr -d '\r') all=
     for p in $PKGS; do
         case "$p" in
         */*)    # one component of a package that must stay (package/class): pm lists no disabled components, so
                 # what was disabled here counts as done
                 grep -qx "$p" $DISABLED 2>/dev/null && continue;;
         *)      case "$NL$off$NL" in *"${NL}package:$p$NL"*) continue;; esac
-                pm list packages "$p" 2>/dev/null | grep -qx "package:$p" || continue;;   # not on this firmware
+                [ -n "$all" ] || all=$(pm list packages 2>/dev/null | tr -d '\r')
+                case "$NL$all$NL" in *"${NL}package:$p$NL"*) ;; *) continue;; esac;;      # not on this firmware
         esac
         if pm disable "$p" > /dev/null 2>&1; then
             grep -qx "$p" $DISABLED 2>/dev/null || echo "$p" >> $DISABLED

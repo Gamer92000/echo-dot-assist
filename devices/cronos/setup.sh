@@ -108,12 +108,8 @@ step_files() {
     policy_tool || need+=($BOOTROOT $BOOTROOT_SHA256 "boot-root.zip, attachment in $DONUT_XDA (the Echo Dot 3's, for its magiskpolicy; not cronos' own)")
     adbd_ok || need+=($XDAROOT "$XDAROOT_SHA256" "boot-root.zip, attachment in $XDA (cronos' own, for its adbd)")
     need_files "${need[@]}" || return 1
-    # the policy is patched on the PC, under qemu against the unpacked firmware; a system qemu-arm is fine too
-    if ! command -v qemu-arm > /dev/null && [ ! -x $QEMU ]; then
-        mkdir -p toolchain
-        task "Downloading qemu-arm (runs the policy tool on the PC)" sh -c "curl -fsSL -o $QEMU $QEMU_URL &&
-            [ \"\$(sha256sum < $QEMU | cut -c1-64)\" = $QEMU_SHA256 ] && chmod 755 $QEMU" || { rm -f $QEMU; return 1; }
-    fi
+    # the policy is patched on the PC, under qemu against the unpacked firmware (qemu_arm: scripts/lib/setup.sh)
+    qemu_arm || return 1
     [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
     if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
         mkdir -p toolchain
@@ -123,13 +119,7 @@ step_files() {
 }
 
 # lets adb and fastboot reach the Echo without sudo (scripts/51-echo-unlock.rules: the Shows' fastboot id)
-step_udev() {
-    local rules=/etc/udev/rules.d/51-echo-unlock.rules
-    cmp -s scripts/51-echo-unlock.rules $rules && { ok "udev rules installed"; return 0; }
-    need_sudo "to install udev rules" || return 1
-    task "Installing udev rules" sh -c "sudo cp scripts/51-echo-unlock.rules $rules && sudo udevadm control --reload &&
-        sudo udevadm trigger --subsystem-match=usb"
-}
+step_udev() { udev_rules; }      # scripts/lib/setup.sh
 
 step_usb() {
     [ -z "$DRY" ] && { adb_is recovery || adb_is device; } && { ok "the Echo is on USB already"; return 0; }

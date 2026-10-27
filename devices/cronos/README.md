@@ -34,8 +34,11 @@ are not supported until pinned here.
 amonet's `fastbrick.sh` runs its own `bin/fastboot`, an x86_64 Linux program (glibc only), on every 64-bit PC. On an
 aarch64 PC such as a Raspberry Pi it runs only under qemu-user with x86_64 glibc (`qemu-user-binfmt`, `QEMU_LD_PREFIX`):
 try it first with the Echo in fastboot mode, `bin/fastboot getvar product` (reads only), before the unlock. The guided
-setup itself expects an x86_64 PC (the qemu-arm it downloads, the NDK); a Raspberry Pi worked with `qemu-user` from its
-package manager (docs/re-cronos.md, "First install").
+setup installs `qemu-user` from the package manager there for the policy tool (its qemu-arm download is x86_64) and,
+on Ubuntu 24.04 and later, asks to allow user namespaces until the next boot (`tools/qrun.sh` needs one). The NDK is
+x86_64 too: take the release's binaries when the setup offers them, else the build runs under `qemu-user-binfmt`
+(about 15 min on a Raspberry Pi 4; docs/re-cronos.md, "First install"). Over ssh the udev step gives the USB devices
+to a group the user is in (`plugdev`, `adbusers`, `sudo` or `wheel`): `uaccess` serves only whoever sits at the PC.
 
 **Never write lk, preloader, tee1/tee2 (tz) or any other bootloader partition.** This model has no bootrom USB download:
 a brick there is permanent. An install for this model touches `system` and `boot` only.

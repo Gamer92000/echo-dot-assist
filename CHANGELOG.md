@@ -4,6 +4,30 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-27
 
+- **Drop In: the wake word works during a call to an empty room.** An Echo in a quiet room sent its own room noise,
+  turned up to speech level, to the caller. The caller's Echo took that for the other side talking: it ignored the wake
+  word, never switched on listening mode (so "Alexa, hang up" came out as "No text recognized") and turned its own
+  voice down. An Echo now sends its room only when something clearly louder than quiet speech is there, and counts
+  the other side as talking only when it is well over that side's own noise. Both Echos need this version.
+- **"Music Assistant without pairing" takes effect at once.** Switching it on, on the settings page, closes the
+  Sendspin connections that wait for a pairing token, so Music Assistant reconnects and plays instead of waiting.
+- **Drop In by voice: "drop into the kitchen" and "drop it in the kitchen" work too.** Speech to text often hears
+  "drop in" that way. The blueprint's default sentences have both now. An automation made from it before keeps its own
+  list: add the two sentences there.
+- **Echo Show: hassmic starts sooner after a boot.** Turning Alexa's apps off asked Android about each one
+  separately; it now asks once.
+- **Echo Show: switching Wi-Fi works on a network Amazon's setup saved.** Android lets only the one who saved a network
+  change it. The settings page's "Switch network…" and setup from a phone now do it as Android's system user when root
+  is refused, as the guided setup already did.
+- **Echo Show: no hold-to-reset.** The guide now says it: the Shows have no action button. Both volume keys pressed
+  together stand in for it (logins, debug access, setup from a phone), and held they pair Echos. Reset a Show from
+  Home Assistant or the settings page.
+- **Guided setup over ssh and on a Raspberry Pi.** Run over ssh, the setup also gives the Echo's USB devices to a
+  group you are in (plugdev, adbusers, sudo or wheel). Before, adb found no Echo, because the udev rules only serve
+  whoever sits at the PC. The Echo Show setups now install those rules too. On a PC that is not x86_64, they install
+  qemu-user from the package manager. Where users may not create namespaces (Ubuntu 24.04 and later), they ask to allow
+  them until the next boot. Before, the root step failed with "the policy patch failed" and no reason.
+
 - **Echo Dot 2, Echo 2 and Echo Dot 3: "Download from Amazon" signs in again where it said "no device
   attestation".** Amazon's attestation library refused to open its key when an earlier, harmless library lookup in
   hassmic had failed, and the log blamed a missing group ("dlsym(HMI) failed: (null)"). hassmic now clears that

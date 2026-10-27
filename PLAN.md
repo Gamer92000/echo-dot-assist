@@ -2151,6 +2151,31 @@ Run in this order. Each step says what it proves.
       a link to /system/build.prop refused, nothing left behind; Etc/GMT+3, America/Argentina/Buenos_Aires, <+03>-3,
       IST-5:30, the CET rule, Europe/Berlin taken (`date` -03, -03, +03, IST, CEST, CEST); the same zone again a no-op.
       Open (device): hassmic's side (no NDK on this PC), the Shows' alarm call.
+- [~] From #34 (athena) and #65 (cronos), for every model (2026-10-27, GitHub issue #45):
+      Drop In: `NEAR_MIN_DB` -58 on the sending gate (an empty room's -65..-70 sounds passed NEAR_DB over its -74 floor
+      and went out with the +24 dB speech gain: -40..-54 dBFS at the other end, which ignored its wake word; athena's
+      trace of 2026-10-15) and `far_voice`: the far end talks over FAR_DB and 25 dB over the quietest it played
+      lately (`far_floor`, per call, read under `dl`), for an older build that still sends its room.  Weak there:
+      the silence before playout starts and every concealment gap drop the floor to -90, and it climbs 1.5 dB/s, so
+      it bites only after ~25 s of that noise; the sending side's floor is the fix that counts.
+      `tests/fake_ha_dropin.py` "Bedroom Echo": -74 dBFS noise with a -64 sound of 150 ms every 0.7 s; the kitchen
+      plays -56.7 dBFS of it with the old gate (the trace's range), -73.1 with the new, and the bedroom's gate trace
+      never says "talks" (56 frames over -70).  The `far_voice` half has no test: SIGUSR1 bypasses on_wake.
+      Sendspin: switching unpaired access closes the sessions that are unpaired, not pairing and have no player role.
+      Music Assistant waiting for a token is admitted (`arbitrate`: rank 0) with no role, so athena's `!admitted`
+      closed nothing here; `fake_ma_sendspin.py` unpaired_switch (both dialects): switched on from the page, the
+      session closes, the server redials and plays.  The blueprint's "drop into" / "drop it in": `ha_real_dropin.py`
+      ("drop it in the hall" in a real HA).  alexa-off.sh: `pm list packages` once (all) beside `-d`, no call per
+      package to ask whether it exists, and only when something is not disabled yet (a fake pm: 2 list calls, a
+      disable only for what is there and enabled; 1 call when everything is disabled).
+      wifi.sh's WifiService join: an add refused to root (-1: a network another uid saved) is done again as the system
+      user for the whole switch, as wifi-join.sh does (`fake_web_wifi.py`, creator 1010; fails without).  The setup:
+      `udev_rules` (all six models; checkers and crown get the step) and, over ssh, `52-echo-unlock-ssh.rules` for
+      the first of plugdev/adbusers/sudo/wheel the user is in (OWNER= of a person's account: `udevadm verify` calls it
+      deprecated); `qemu_arm` (the Shows): qemu-user from the package manager off x86_64, and where users may not make
+      namespaces it asks for the sysctl qrun.sh names (`qrun.sh --userns`: AppArmor's, or Debian's
+      unprivileged_userns_clone).  qrun.sh no longer runs without the namespace (the PR's low-PID snapshot: Ubuntu's
+      pid_max is 4194304) but says why; install-boot.sh shows it.  Not tried: any of it on a device, the setup on a Pi.
 - [x] Setup on Windows, what it found (2026-10-19, GitHub issue #49: a Dot 2 through `step_*` one at a time from
       Git Bash).  (1) The first `lockdown.sh` over adb after a boot ended with exit 255 and nothing loaded: stock sets
       `service.adb.tcp.port` 5555 at boot, `adb_gate` closed it and restarted adbd at once, which ended the adb shell
@@ -2505,8 +2530,8 @@ Run in this order. Each step says what it proves.
       DHCP.  Seen: `gpio-privacy-state`/`-button` (mute pressed and released), volume keys, the band 960 x 10, `als_ps/lux`
       (250 lux), wake word engine loaded; the XDA boot-root's adbd is checkers'.  Fixed on the way: `wifi-join.sh` as
       root could not update a network the stock update had saved (as system now), the speaker amp is a MAX98396
-      (added), the udev rules lacked the Shows' fastboot id.  Found and left to their own PRs (issue #45): Ubuntu 26.04
-      refuses `unshare --user` (qrun.sh), qemu-arm on a non-x86_64 PC, the udev rules over ssh (plugdev).  The lk (`20240709`) is 8149's and does not change with stock updates.
+      (added), the udev rules lacked the Shows' fastboot id.  Found, fixed for every model since (issue #45): Ubuntu 26.04
+      refuses `unshare --user` (qrun.sh), qemu-arm on a non-x86_64 PC, the udev rules over ssh.  The lk (`20240709`) is 8149's and does not change with stock updates.
       Home Assistant adopted it and works (the tester).  Not yet: the speaker gain by ear, Wi-Fi motion, DHA version /
       Download from Amazon, Bluetooth.
 - [~] Echo Show 8 2nd gen (`athena`, 2026-10-14; `docs/re-athena.md`).  A different platform from crown: MT8183, Android 9

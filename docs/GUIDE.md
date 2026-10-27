@@ -275,6 +275,9 @@ Beyond the README's two figures:
   condition (`{{ trigger.to_state.attributes.event_type == 'action_hold' }}`). A hold is Home Assistant's alone:
   the volume steps only for a press let go within the second (so a step comes as you let go), the action button acts
   only then too. Held on, the action button still warns at 5 s and resets the Echo at 10 s.
+- **Echo Show**: no action button. Both volume keys pressed together and let go within a second are it: a login on
+  the settings page, debug access, setup from a phone, answering a Drop In. Held 2 s they pair Echos, as on a Dot, so
+  there is no hold to reset a Show (see [Factory reset](#factory-reset)).
 - **Light ring in Home Assistant**: the light "Light ring" (colour, brightness, effects Pulse, Spin, Blink,
   Rainbow; "flash" blinks for 2 or 10 s) puts a colour on the ring from automations. The Echo's own lights always come
   first: while it listens, answers, has its microphones off, rings a timer or shows the volume, the colour waits and
@@ -658,7 +661,8 @@ ESPHome devices and the Voice PE are:
 ## Factory reset
 
 At 5 s of holding the action button the ring warns: let go and nothing happens. Or "Factory reset" in Home Assistant
-(a button on the device page), or "Factory reset…" under System on the settings page.
+(a button on the device page), or "Factory reset…" under System on the settings page. The Echo Shows have no action
+button to hold (both volume keys held pair Echos instead): only Home Assistant's button or the settings page reset them.
 
 - **Forgotten**: everything in `/data/local/hassmic/state/` (settings, Home Assistant's key, approved browsers,
   Bluetooth pairings, Sendspin, microWakeWord models) and every saved Wi-Fi network. It starts as after the install:

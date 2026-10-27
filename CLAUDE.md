@@ -97,7 +97,8 @@ workflow with `act push` (publishing is a dry run under act).
 
 One unit test: `make unit-<name>` (`UNIT_TESTS` in the Makefile).
 `tools/qrun.sh [-t secs] <arm-binary> args` runs a device binary on the PC under qemu-arm against `firmware/$DEVICE/rootfs`
-(needs a new PID namespace; bionic mutexes deadlock with pid > 65535).
+(needs a new PID namespace; bionic mutexes deadlock with pid > 65535; where users may not make one, Ubuntu 24.04+, it
+stops and names the sysctl, which the setup's `qemu_arm` asks to set).
 
 ## Device workflow
 
@@ -261,9 +262,10 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Drop In** (`dropin.c`, `dropin.h`): calls between two Echos of the arbitration network. Signalling as signed
   `T_MSG` on arb's socket (`arb_tell`, `hooks->message`; invite/ringing/accept/refuse/bye), audio Opus 16 kHz 20 ms over
   unicast UDP 28932 (`-i`), per-call key from ephemeral X25519 + `arb_derive`. Playback on the mixer's `Voip` stream
-  (front end's call mode); mic = micAsr through the pipeline's gain, then a gate (open only while this side talks,
-  echo estimate peak-held against the far end's level held after it stops), listening mode only while this side
-  talks (`core_dropin_listen`). Core side in `main.c` (`core_dropin`: call LED animations, comms sounds, ringtones via
+  (front end's call mode); mic = micAsr through the pipeline's gain, then a gate (open only while this side talks:
+  9 dB over the room and over -58 dBFS, `NEAR_MIN_DB`, or an empty room's noise goes out with the speech gain; echo
+  estimate peak-held against the far end's level held after it stops), listening mode only while this side talks
+  (`core_dropin_listen`); the far end talks when it plays over -55 dBFS and 25 dB over its own floor (`far_voice`). Core side in `main.c` (`core_dropin`: call LED animations, comms sounds, ringtones via
   `play_earcon_while`; action button answers/ends, "stop"/"hang up"/"auflegen" end; wake word ignored while the far end
   talks). Notifications to the core go through dropin's loop thread: `dropin_call` runs under `core_lock` (ESPHome
   handler); every state and result is queued (`ev_push`) and told in order (`tell_core`), and an outgoing call's
