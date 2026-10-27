@@ -602,9 +602,14 @@ int dha_jwt(const char *dt, const char *dsn, time_t when, char *out, size_t cap,
         return jwt_java_v3(dt, dsn, when, out, cap, err, errsz);
     if (svc)
         return jwt_java(dt, dsn, when, out, cap, err, errsz);
-    if (!opened && hal.open())
-        return say(err, errsz, "the attestation key would not open (hassmic needs the drmrpc group)");
-    opened = 1;                     /* one session for the process; the PC build has none and fails at load() */
+    /* aceDhaHal_open dlopens hw/amzn_dha.<soc>.so and takes dlsym(HMI) as failed when dlerror() is not NULL after it,
+     * not when the symbol is: bionic keeps a failed dl call's message per thread until someone reads it, and the
+     * main thread, which runs this at start, has loaded libpryon (it dlopens hwloc's components and the TVM
+     * scorer).  Read it away, or the HAL prints "dlsym(HMI) failed: (null)" and refuses with every group in place */
+    if (!opened && (dlerror(), hal.open()))
+        return say(err, errsz, "the attestation key would not open (the HAL's reason is the line before; "
+                               "its session needs the drmrpc group)");
+    opened = 1;                    /* one session for the process; the PC build has none and fails at load() */
 
     /* which token this Echo's MAP builds, asked of the key: the RSA keymaster of biscuit and radar makes drvV1, the
      * EC dhav2 key of donut drvV3 (biscuit's and radar's HALs have the certificate too, so its presence would not tell

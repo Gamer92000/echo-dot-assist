@@ -4,6 +4,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-27
 
+- **Echo Dot 2, Echo 2 and Echo Dot 3: "Download from Amazon" signs in again where it said "no device
+  attestation".** Amazon's attestation library refused to open its key when an earlier, harmless library lookup in
+  hassmic had failed, and the log blamed a missing group ("dlsym(HMI) failed: (null)"). hassmic now clears that
+  leftover before it opens the key.
 - **Echo Show: your own light ring designs show on the band.** The light designs and theme packs are back on the
   Show's settings page. Each design plays on the band along the bottom of the screen as the ring's twelve LEDs laid
   out in a row, with the side that faces the talker in the middle; it is never turned towards the talker. The
