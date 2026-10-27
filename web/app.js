@@ -11,6 +11,8 @@ const enc = new TextEncoder(), dec = new TextDecoder();
 const fitBytes = (v, max) => { while (enc.encode(v).length > max) v = [...v].slice(0, -1).join(''); return v; };
 const cat = (a, b) => { const o = new Uint8Array(a.length + b.length); o.set(a); o.set(b, a.length); return o; };
 const $ = (id) => document.getElementById(id);
+// The server advertises the platform; absent on older Echo releases means Echo.
+const isCube = () => !!(echo && echo.hello.platform === 'fire_tv');
 
 function store(k, v) { try { if (v === undefined) return JSON.parse(localStorage.getItem(k)); localStorage.setItem(k, JSON.stringify(v)); } catch (e) { return null; } }
 
@@ -188,11 +190,28 @@ const SECTIONS = [
   { id: 'System', icon: 'sliders', intro: 'This Echo\'s name and network, updates, backups and troubleshooting.' },
 ];
 
+// Keep the existing Echo copy and navigation unchanged. Fire TV owns networking,
+// uses bars instead of a ring, and has no Echo equalizer controls.
+function sectionForDevice(sec) {
+  if (!isCube()) return sec;
+  const copy = {
+    Voice: { intro: 'How the Cube hears you, and how it sounds when it does.' },
+    Sound: { intro: 'Volumes for the Cube speaker: music, replies, sounds, timers and calls.' },
+    Lights: { intro: 'Matching light bars on the Cube and TV show listening, thinking, speaking, errors and mute.' },
+    Music: { intro: 'Music Assistant plays on the Cube as a Sendspin player.' },
+    Echos: { title: 'Devices and arbitration' },
+    System: { intro: 'Cube Assist settings, backups and troubleshooting. Manage Fire TV networking separately.' },
+  };
+  return { ...sec, ...(copy[sec.id] || {}) };
+}
+
+
 // help: what it does, in the user's terms.  ha: also in Home Assistant (true), or for features the entities it adds.
 // icon: features.  parent: shown inside that feature's card while it is on.  tag: an extra badge.  card: a setting
 // that is no feature (no entities) shown as a feature card all the same.
 const HELP = {
-  mic_level: { help: 'How loud your voice reaches speech-to-text. The Echo adjusts its gain to hold speech at this level. Raise it if quiet commands get misheard or cut off; lower it if loud speech comes out distorted. Default −26 dBFS.' },
+  extra_duck_db: { help: 'Extra reduction of active Fire TV media volume during an Assist request, in addition to Android audio focus. The original level returns afterwards. This does not control other TV inputs.' },
+  mic_level: { get help() { return isCube() ? 'How loud speech reaches Home Assistant after waking. This does not change Amazon wake-word sensitivity. Default −26 dBFS.' : 'How loud your voice reaches speech-to-text. The Echo adjusts its gain to hold speech at this level. Raise it if quiet commands get misheard or cut off; lower it if loud speech comes out distorted. Default −26 dBFS.'; } },
   noise_reduction: { help: 'Takes steady background noise (fans, traffic, the dishwasher) out of what speech-to-text hears, by up to 6, 9 or 12 dB. The wake word always gets the untouched sound. Try it if commands fail in a noisy room.' },
   wake_sound: { ha: true, help: 'A tone when the Echo starts listening. Turning it off also silences the Echo\'s other local sounds.' },
   wake_sound_removal: { card: true, icon: 'mic', tag: 'Experimental', help: 'Takes the wake sound back out of what speech-to-text hears, so you can speak straight on without waiting for the tone. The Echo\'s own echo canceller leaves part of it in, about as loud as a quiet voice. Each time, the Echo finds the tone in the microphone and turns down only its few pitches. Your first second of speech then reaches Home Assistant all at once, a moment later. The log says how much was taken off each time.' },
@@ -227,7 +246,7 @@ const HELP = {
       return h('p', { class: 'f-model' }, a.kiosk_heard_s == null ? 'No claim from another Kiosk Satellite device heard yet.'
         : `Last claim from another Kiosk Satellite device: ${a.kiosk_heard_s < 90 ? a.kiosk_heard_s + ' s' : Math.round(a.kiosk_heard_s / 60) + ' min'} ago.`);
     } },
-  wake_engine: { help: 'Amazon\'s engine is the one the Echo was built around. microWakeWord, the engine of ESPHome\'s voice satellites, takes wake words anyone can train, at the cost of hearing them much less reliably. Home Assistant: the Echo streams its microphone and your Home Assistant listens, with openWakeWord for instance.',
+  wake_engine: { get help() { return isCube() ? 'Amazon’s Pryon engine uses the Alexa model installed on the Cube. microWakeWord uses additional models you import. Home Assistant mode streams microphone audio to your server for wake-word detection.' : 'Amazon\'s engine is the one the Echo was built around. microWakeWord, the engine of ESPHome\'s voice satellites, takes wake words anyone can train, at the cost of hearing them much less reliably. Home Assistant: the Echo streams its microphone and your Home Assistant listens, with openWakeWord for instance.'; },
     // the warning, a first model, or Home Assistant's side of it, before the switch; from or to Home Assistant the satellite restarts
     before: (c) => c === 'microwakeword' ? mwwSwitchDialog() : c === 'homeassistant' ? haSwitchDialog() : true,
     after: async (c, was) => { if (c === 'homeassistant' || was === 'homeassistant') await restarted(); },
@@ -653,15 +672,17 @@ function sectionShell(sec) {
 }
 
 function build() {
+  document.title = isCube() ? 'Cube Assist settings' : 'Echo settings';
   controls.clear();
   const root = $('sections'), nav = $('nav');
   root.innerHTML = ''; nav.innerHTML = '';
   const by = new Map();
   for (const s of state.settings) { if (!by.has(s.group)) by.set(s.group, []); by.get(s.group).push(s); }
   const order = [...SECTIONS, ...[...by.keys()].filter((g) => !SECTIONS.some((x) => x.id === g)).map((id) => ({ id, icon: 'sliders' }))];
-  for (const sec of order) {
+  for (const original of order) {
+    const sec = sectionForDevice(original);
     const list = (by.get(sec.id) || []).filter((s) => s.name !== 'arbitration');
-    if (!list.length && sec.id !== 'Echos' && sec.id !== 'System') continue;
+    if (!list.length && sec.id !== 'Echos' && sec.id !== 'System' && !(isCube() && sec.id === 'Lights')) continue;
     const el = sectionShell(sec);
     if (sec.id === 'Features') {
       const grid = h('div', { class: 'features' });
@@ -681,7 +702,7 @@ function build() {
       el.append(h('div', { class: 'card' }, list.map(settingRow)));
       buildWake(el);
     } else if (sec.id === 'Lights') {
-      el.append(h('div', { class: 'card' }, list.map(settingRow)));
+      if (list.length) el.append(h('div', { class: 'card' }, list.map(settingRow)));
       buildRing(el);                    // ring.js: the designs and where they show
     } else if (sec.id === 'Echos') {
       buildEchos(el, state.settings.find((s) => s.name === 'arbitration'));
@@ -1543,6 +1564,10 @@ function drawDavs(force) {
   if (!force && key === davsKey) return;
   davsKey = key;
   davsBox.innerHTML = '';
+  if (isCube()) {
+    davsBox.append(cardHead('Amazon wake word', 'Uses the Alexa model already installed on your Cube. Downloading additional Amazon models through this page is not available on this firmware.', 'mic'));
+    return;
+  }
   davsBox.append(cardHead('Download from Amazon', 'More wake words and Amazon\'s newer models, straight from Amazon onto this Echo. Once here, the Echos section copies them to your other Echos.', 'ext'));
   if (!davs) { davsBox.append(empty('warn', 'This Echo did not say where its Amazon sign-in stands: it may be restarting.')); return; }
   const body = h('div', { class: 'card-body' });
@@ -1895,7 +1920,9 @@ let fileBox, fileJob = null, fileIn = null;     // fileJob: { text, done, total 
 function renderFile() { if (fileBox) keepFocus(fileBox, drawFile); }
 function drawFile() {
   fileBox.innerHTML = '';
-  fileBox.append(cardHead('Models on file', 'Amazon\'s extra models and your microWakeWord models, saved as one file on your computer, and put back from it on this Echo or another one. A copy that no longer needs Amazon to hand them out. Load only files you saved yourself or got from someone you trust: a model runs inside the Echo.', 'down'));
+  fileBox.append(cardHead(isCube() ? 'Extra models: import and export' : 'Models on file', isCube()
+    ? 'The built-in Alexa model is already available from Fire TV and is not included in these exports. This section saves or loads additional Amazon and microWakeWord models. Load only files you saved yourself or received from someone you trust.'
+    : 'Amazon\'s extra models and your microWakeWord models, saved as one file on your computer, and put back from it on this Echo or another one. A copy that no longer needs Amazon to hand them out. Load only files you saved yourself or got from someone you trust: a model runs inside the Echo.', 'down'));
   if (!myArts) { fileBox.append(empty('warn', 'This Echo did not list its models yet.')); return; }
   const busy = !!fileJob, mineOf = (id) => myArts.artifacts.find((a) => a.id === id);
   const progress = busy ? [h('div', { class: 'busy' }, fileJob.text),
@@ -1932,7 +1959,9 @@ function drawFile() {
   const arts = [...myArts.artifacts].sort((p, q) => artLabel(p).localeCompare(artLabel(q)));
   const picks = arts.filter((a) => ticked(fpick, a.id, true)), bytes = picks.reduce((n, a) => n + a.size, 0);
   if (arts.length) fileBox.append(h('div', { class: 'changes' }, arts.map((a) => row(a, ticked(fpick, a.id, true), false, mb(a.size), null, 'save ' + a.id))));
-  else fileBox.append(empty('box', 'No models of Amazon\'s or microWakeWord\'s on this Echo to save yet. A file saved on another Echo can still be put back here.'));
+  else fileBox.append(empty('box', isCube()
+    ? 'No extra models to export. The Cube’s built-in Alexa model is available and does not need to be imported.'
+    : 'No models of Amazon\'s or microWakeWord\'s on this Echo to save yet. A file saved on another Echo can still be put back here.'));
   const file = h('input', { type: 'file', accept: '.tar,application/x-tar', class: 'hidden', onchange: () => { const f = file.files[0]; file.value = ''; if (f) readModelsFile(f); } });
   fileBox.append(h('div', { class: 'card-foot sync-foot' }, ...progress,
     busy ? null : h('div', { class: 'count grow' }, picks.length ? h('b', {}, plural(picks.length, 'model')) : 'Tick the models to save', picks.length ? `, ${mb(bytes)}` : ''),
@@ -2292,7 +2321,7 @@ function wifiDialog() {
 }
 
 function buildSystem(el, list) {
-  el.append(h('div', { class: 'card' }, nameRow(), state.wifi !== undefined ? wifiRow() : null, list.map(settingRow)));
+  el.append(h('div', { class: 'card' }, nameRow(), !isCube() && state.wifi !== undefined ? wifiRow() : null, list.map(settingRow)));
   const file = h('input', { type: 'file', accept: '.conf,.txt,text/plain', class: 'hidden' });
   importMsg = h('pre', { class: 'help import-msg' });
   file.onchange = async () => {
@@ -2309,10 +2338,11 @@ function buildSystem(el, list) {
     infoRow('Settings file', ['All settings except what belongs to this one Echo (its name, keys, pairings), as a text file. Import it on another Echo, keep it as a backup, or give it to ', h('code', {}, 'scripts/setup.sh --preset'), ' so the next Echo you install starts with these settings.'],
       [h('button', { onclick: exportFile }, icon('down'), 'Export'), h('button', { onclick: () => file.click() }, icon('up'), 'Import…'), file], h('div', { class: 'row-x' }, importMsg)),
     logRow(),
-    infoRow('Debug access', act('Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.'), adbBox),
-    infoRow('Restart', HELP.restart.help, h('button', { onclick: restartEcho }, 'Restart…')),
-    infoRow('Factory reset', ('Forgets everything this Echo was told: settings, name, Home Assistant\'s key, approved browsers, Bluetooth pairings, and its Wi-Fi networks. It then waits to be set up again, like after the install: the Home Assistant app finds it over Bluetooth. The same as holding the action button for 10 seconds.'.replace(echo.hello.action === 'volume_keys' ? / The same as holding.*$/ : /^$/, '')),
-      h('button', { class: 'danger', onclick: factoryReset }, 'Factory reset…'))));
+    isCube() ? infoRow('Debug access', 'Use ADB debugging in Fire TV Developer options. Cube Assist does not change ADB access or your Fire TV network settings.', null) :
+      infoRow('Debug access', act('Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.'), adbBox),
+    infoRow('Restart', isCube() ? 'Restart Cube Assist. Fire TV and your apps keep running.' : HELP.restart.help, h('button', { onclick: restartEcho }, 'Restart…')),
+    infoRow(isCube() ? 'Reset Cube Assist' : 'Factory reset', isCube() ? 'Archive Cube Assist settings and start its setup again. Home Assistant keys, approved browsers and music pairings are cleared. Fire TV settings, apps and Wi-Fi stay as they are.' : ('Forgets everything this Echo was told: settings, name, Home Assistant\'s key, approved browsers, Bluetooth pairings, and its Wi-Fi networks. It then waits to be set up again, like after the install: the Home Assistant app finds it over Bluetooth. The same as holding the action button for 10 seconds.'.replace(echo.hello.action === 'volume_keys' ? / The same as holding.*$/ : /^$/, '')),
+      h('button', { class: 'danger', onclick: factoryReset }, isCube() ? 'Reset Assist…' : 'Factory reset…'))));
 
   clientsBox = h('div');
   el.append(h('div', { class: 'card' },
@@ -2330,6 +2360,12 @@ async function restartEcho() {
 
 // Factory reset (main.c core_reset): root wipes state/ and the Wi-Fi networks, the Echo leaves the network
 async function factoryReset() {
+  if (isCube()) {
+    if (!await ask({ title: 'Reset Cube Assist?', ok: 'Reset Assist', danger: true, body: 'Archive Cube Assist settings and clear its Home Assistant key, approved browsers and music pairings. Fire TV, its apps and Wi-Fi are unchanged. Add the Cube in Home Assistant again afterwards.' })) return;
+    try { await echo.call('POST', '/api/reset', 'reset'); toast('Cube Assist is restarting with new settings. Add it in Home Assistant again.'); }
+    catch (e) { toast(errText(e)); }
+    return;
+  }
   if (!await ask({ title: 'Factory reset?', ok: 'Reset', danger: true, body: [
     `${echo.hello.name} forgets its settings, its name, Home Assistant's key, the browsers approved here, its Bluetooth pairings and its Wi-Fi networks, and leaves the network.`,
     'Then it waits with the orange setup spinner on the ring: set it up again with the Home Assistant app (Settings, Devices, Add device), which finds it over Bluetooth. Home Assistant has to add it again too.'] })) return;

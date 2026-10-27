@@ -489,6 +489,23 @@ async function assignAll(lines) { if (lines.length) await rcall('POST', '/api/ri
 // ---------------------------------------------------------------- the cards: which design shows for what, the library
 
 function buildRing(el) {
+  if (isCube()) {
+    const states = [
+      ['Listening', 'listen', 'Blue and cyan: Assist has accepted the wake word and is listening. TV audio ducks while you speak.'],
+      ['Thinking', 'think', 'Blue: Home Assistant is processing your request.'],
+      ['Speaking', 'talk', 'Blue and cyan: the Cube is speaking the reply.'],
+      ['Finished', 'end', 'The blue bar fades away; TV audio returns to its previous level.'],
+      ['Microphones off', 'mute', 'Red: the microphones are muted. The Cube’s physical privacy indicator remains controlled by Fire OS.'],
+      ['Timer', 'timer', 'The Cube’s timer animation stays visible until the timer is dismissed.'],
+      ['Error', 'error', 'A short error animation signals that the request could not finish.'],
+      ['Setup / approval', 'setup', 'Orange: waiting for Home Assistant setup or a settings approval.'],
+    ];
+    el.append(h('div', { class: 'card' }, cardHead('Cube and TV light bars', 'The same Assist state appears on the Cube and along the bottom of the TV picture. Replies play through the Cube speaker.', 'sun'),
+      h('div', { class: 'cube-bar-states' }, states.map(([name, cls, help]) => h('div', { class: 'cube-bar-state' },
+        h('div', { class: `cube-bar-preview ${cls}`, 'aria-hidden': 'true' }), h('b', {}, name), h('p', { class: 'help' }, help)))),
+      h('p', { class: 'help card-pad' }, 'These previews explain the states; the device uses its own Fire TV animation frames. The TV bar does not take focus or intercept remote buttons. It disappears when Assist finishes or stops. Custom Echo ring designs are not installed on the Cube.')));
+    return;
+  }
   if (!ringBox) {
     ringBox = h('div', { class: 'ringd' });
     ringLoad().catch((e) => { ringBox.replaceChildren(h('div', { class: 'card card-pad' }, h('p', { class: 'help' }, 'Light ring designs: ' + errText(e)))); });
