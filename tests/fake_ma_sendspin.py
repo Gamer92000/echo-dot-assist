@@ -130,8 +130,10 @@ async def paired(env, state):
         client.group.group_role("controller").set_supported_commands([MediaCommand.PLAY, MediaCommand.PAUSE, MediaCommand.NEXT])
         stream = client.group.start_stream()
         n, phase = 4800, 0
-        for i in range(40):                                # 4 s of 440 Hz
-            k = np.arange(phase, phase + n); s = (8000 * np.sin(2 * np.pi * 440 * k / 48000)).astype("<i2")
+        # 4 s of 440 Hz, then 0.3 s of silence: the server's FLAC encoder holds back what does not fill a block of 4608
+        # samples until the stream ends, which was the tone's last 64 ms (played 3.936 s of 4, never "out")
+        for i in range(43):
+            k = np.arange(phase, phase + n); s = (8000 * np.sin(2 * np.pi * 440 * k / 48000) * (i < 40)).astype("<i2")
             phase += n
             stream.prepare_audio(np.repeat(s, 2).tobytes(), fmt)
             await stream.commit_audio()
