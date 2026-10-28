@@ -2720,3 +2720,17 @@ Run in this order. Each step says what it proves.
       **Open:** lux flicker under a close lamp; not confirmed on the Echo: Improv, factory reset, `--uninstall`, the
       update check, and the build without the `netio.h` system calls (the rule alone);
       `tools/mkringbar.py --framework` cannot read Android 9's compact dex (checked by hand once, 2026-10-20).
+- [ ] Echo Input (`cupcake`, 2026-10-28; `docs/re-cupcake.md`), from the firmware only (NS6575/8338).  donut's platform
+      (MT8516, arm64 kernel 4.4.22+, A/B, `/sepolicy` on system, kamakiri + TWRP in swdl) with checkers' software
+      (framework, Alexa as apps, WifiService, the front end in the audio HAL: `audio_android.c`; the HAL's source ->
+      pipeline map is checkers', VOICE_RECOGNITION = ASR).  `INSTALL=twrp-ab` with the new `ANDROID=1` (was implied by
+      `INSTALL=boot|running` in wifi.sh, wifi-join.sh, deploy.sh, bundle.sh, install-system.sh; the Shows set it now).
+      Checked on the PC: libpryon (own build, same symbols) detects ALEXA on its en-US model under qemu as checkers'
+      does; wifictl.dex resolves against its framework; IAudioService/IPowerManager codes as checkers'; the Wi-Fi
+      driver's hook (+0x50) and module ABI as donut's (`hassmic_rcpi4m` builds with donut's fragment); donut's
+      boot-root finds what it patches (cmdline `veritykeyid`, adbd's autoroot site at 0x19bf4); stubs byte-identical;
+      `scripts/setup.sh cupcake --dry-run`.  One LP5562 LED for the 12-LED animations: `board.ring_leds` 1 (no turned
+      copies, no LED layers: 622 files), and ring.c puts listening's names into the layer that lists `active-start`
+      (layer 3 here; 4 on the Dots, their set byte-identical).  No speaker: no `speaker_gain`, the Dot 2's volume curve.
+      **Open:** everything on a device (unlock, root, install, audio level, buttons, which LED index shows, DHA
+      version, Bluetooth, the wake lock).  kamakiri-cupcake v1.0.0 pinned (its lk and tee are 8338's).

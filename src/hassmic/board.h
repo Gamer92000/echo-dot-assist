@@ -45,6 +45,10 @@ struct board {
     const char *light_sensor[3];    /* files the stock light sensor HAL reads lux from, first that opens; {NULL}: none.  "tcs3400:<dir>": raw channels of
                                        a TCS3400 under <dir>/input*, main.c lux_tcs3400 */
     int volume_steps;               /* volume_step-NN animations of ledcontroller */
+    /* LEDs the light really shows, where that is fewer than stock's animations draw (12): 1 = one RGB LED that shows the
+     * first of each frame (the Echo Input's LP5562): nothing turned towards the talker, no LED's own layer (ring.c).
+     * 0: a ring of them all */
+    int ring_leds;
     /* The speaker's volume curve: dB under volume 100 at volumes 0..100, each `at` above the last (tests/unit/volcurve_test.c
      * checks it: the same one twice divides by 0), {-1} after the last (volcurve.c:
      * separate volumes turn each kind down by it).  NULL: the Echo Dot 2's, measured there and taken where nobody has

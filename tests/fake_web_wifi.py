@@ -4,7 +4,7 @@ from the protocol (tests/webclient.py: the password sealed with Python's BLAKE2b
 scripts/device/wifi.sh against stand-ins for wpa_cli and friends (tests/fake_wifi_tools.py).  Scans with wpa_supplicant's
 escapes, the PSK as PBKDF2 makes it, a wrong password, a network out of reach, no DHCP, a silent router, an open
 network, a second password for a known network: what is saved, and that a failed switch goes back and saves nothing.
-Run twice: the Dots' world (wpa_supplicant) and checkers' (INSTALL=boot: WifiService through the wifictl.dex
+Run twice: the Dots' world (wpa_supplicant) and checkers' (ANDROID=1: WifiService through the wifictl.dex
 calls, the same fake world answering as the framework would, app_process included)."""
 import shutil, hashlib, json, os, signal, stat, subprocess, sys, tempfile, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -60,7 +60,7 @@ def main(android=False):
     W = lambda: json.load(open(world))
     renv = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}", FAKE_WIFI_WORLD=world, WIFI_ARP=arp, WIFI_ROUTE=route,
                 WIFI_SCAN_SECS="0", WIFI_STEP="0.1", WIFI_JOIN_SECS="6", WIFI_ADDR_SECS="5", WIFI_BACK_SECS="6",
-                **({"INSTALL": "boot"} if android else {}))     # looks: the stand-ins answer at the third
+                **({"ANDROID": "1"} if android else {}))     # looks: the stand-ins answer at the third
     # root's folder: wifi.sh with what it finds next to it (wifictl.dex, runas: a stand-in that hands the uid to the fake
     # framework)
     dev = os.path.join(tmp, "dev"); os.makedirs(dev)
