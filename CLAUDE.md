@@ -47,7 +47,7 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ha_esphome_buttons.py  #   runs cancelled while HA thinks or streams, the "Button" event entity
 .venv/bin/python tests/fake_ha_esphome_address.py  #   a new address: links closed, mDNS announced again
 .venv/bin/python tests/fake_ha_arbitration.py # two Echos under one fake HA: wake word arbitration, join paths and security
-                                             # (_join, _rounds, _kiosk, _window.py beside it; tests/arbecho.py)
+                                             # (_join, _rounds, _kiosk, _window, _afe.py beside it; tests/arbecho.py)
 .venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer,
                                              # the ringtone at the sounds volume (HASSMIC_EARCONS: stand-in stock sounds)
 .venv/bin/python tests/blueprint_dropin.py    # the Drop In voice blueprint against stand-ins of HA's registries, states,
@@ -220,7 +220,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `tests/unit/mww_ref.py` (in `make unit`) checks features and every inference against pymicro-features and TFLite
   BUILTIN_REF on all of pymicro-wakeword's models.
 - **Wake word arbitration (`arb.c`, `arb.h`)**: when several Echos hear the wake word, only the best one answers
-  (stock's ESP, done on the LAN; the score is the front end's own wake word energy ratio, as stock reads it). UDP broadcast on 28930 (beacons at random 20-40 s, a member counts for 5 min: broadcasts get lost; for 40 s after a start or join the beacons carry F_HELLO and every member answers at once; a newcomer asks every 1.2 s for its first 5 s), shared network key; a member hands it to a newcomer (sealed to its X25519 key) only
+  (stock's ESP, done on the LAN; the score is the front end's own wake word energy ratio, as stock reads it, in a
+  thread of its own (`afe_thread`; the capture never waits on it, issue #77: `score_wait` claims once it is in or after
+  `AFE_WAIT_MS`, `afe_late` ends a reading left behind), and only when a round runs (`arb_rounds`); PC: `HASSMIC_FAKE_AFE`). UDP broadcast on 28930 (beacons at random 20-40 s, a member counts for 5 min: broadcasts get lost; for 40 s after a start or join the beacons carry F_HELLO and every member answers at once; a newcomer asks every 1.2 s for its first 5 s), shared network key; a member hands it to a newcomer (sealed to its X25519 key) only
   when Home Assistant vouches for both: each Echo that may be waited for reports the tag `hassmic_<pub hex>` as scanned
   (event `esphome.tag_scanned`: HA fires device events without "perform actions"; `tag.<id>` has no area or device in
   it, unlike every entity id, which HA builds from area, parent device, device and entity name), the other reads

@@ -2336,6 +2336,28 @@ Run in this order. Each step says what it proves.
       with it in its data would carry it; a template sensor could keep it in attributes).  Tests:
       fake_ha_esphome_buttons.py (off by default, listed when on, cleared per run, a 300-character reply cut on a
       character).
+- [~] Audio lost right after the wake word (2026-10-28, GitHub issue #77; reported as "Echo Dot 3 (checkers)" on
+      2026.10.27.202406, arbitration with 2 peers, Wyoming STT).  `afe_score` ran on the capture thread: two blocking
+      `service call audiosignalprocessor` (114, 23) took 240 and 380 ms there (the comment said 150 ms: the Dots' lipc),
+      `audio_android.c` had `CAP_NBUF` 8 x 20 ms = 160 ms queued, OpenSL dropped the rest.  The reporter's evidence:
+      the capture clock fell 218 and 188 ms behind the wall clock across one wake word each; a splice (sign flip at the
+      same level) 270-420 ms into the stream in 3 of 5 recordings; none in 5 with Kiosk Satellite mode (no
+      `afe_score`).  Arbitration off did not help: `wake_score` ran before `arb_claim` looked at `arbitrate`.
+      Now: `afe_thread` reads it (times from `wake_afe_times` on the capture thread first), the capture goes on into
+      the ring, `score_wait` claims once it is in (claim as late as before, the same windows learn) or after
+      `AFE_WAIT_MS` 500 (the others' window until learned) with the mic stream's score; a reading left behind sets
+      `afe_asked` after the round, so `afe_late_check` runs `afe_done` once it ends unless a round or a command still
+      runs.  One reading at a time (a hung service call costs scores, no longer the capture).  `arb_rounds()`: no
+      reading unless a round of ours runs (on, in a network, a member counted, not kiosk).  `CAP_NBUF` 32 (640 ms,
+      20 KB) for any other stall; `cap_read` logs one ("all 32 blocks full: up to N ms lost", time since the last free
+      block filled, summed, a line a second at most; AudioRecord's own buffer may have kept some: "up to").  PC: `HASSMIC_FAKE_AFE=<ms>:<voice>:<ambient>`
+      (audio_file.c; wake_none.c then gives SIGUSR1's wake word a place).  Test fake_ha_arbitration_afe.py: 250 ms
+      reading, its 2000 beats 900; the winner's ring replay is 15296 bytes ahead (300 ms reading) of the live stream (4096 with the
+      reading inline on the capture thread: the test fails there); 900 ms: claim with 500 after 500 ms, the late
+      reading's `stream stopped` after the lost round; arbitration off: no reading.  Open (device): the log on a Show
+      (no "capture held up" line, the front end's ms); which model the reporter has (the code path cited is the
+      Shows'); the Dots' mixer queue depth behind `MixerGetBufRec` is unknown, their 150 ms read may have lost audio
+      too.
 - [x] Wake word turns that hear nothing (2026-10-19, GitHub issue #48; two Dot 2 on 2026.10.17.151309: 4
       `stt-no-text-recognized` in 5 days, each with `anim_start_error_short`).  That code (HA's STT returned no text)
       now goes to `core_no_speech`: the run ends as after RUN_END, no error ring, whoever started it (wake word,

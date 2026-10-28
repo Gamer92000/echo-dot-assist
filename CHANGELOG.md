@@ -2,6 +2,15 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-28
+
+- **Nothing lost right after the wake word** (issue #77). With other Echos around, an Echo asks Amazon's audio front
+  end how well it heard the wake word before it claims it. On an Echo Show that took up to 0.4 s, during which the Echo
+  stopped listening: up to a quarter of a second of the command was lost, and speech to text misheard the word the
+  gap fell into. The Echo now listens on while it asks, and sends Home Assistant all of it. With arbitration off, or
+  no other Echo to compare with, it no longer asks at all and answers sooner. Switching to "Kiosk Satellite" mode as a
+  workaround is no longer needed.
+
 ## 2026-10-27
 
 - **Drop In: the wake word works during a call to an empty room.** An Echo in a quiet room sent its own room noise,

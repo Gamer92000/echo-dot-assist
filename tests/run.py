@@ -22,6 +22,7 @@ TESTS = [
     ("arb-kiosk", [PY, "tests/fake_ha_arbitration_kiosk.py"]),
     ("arb-rounds", [PY, "tests/fake_ha_arbitration_rounds.py"]),
     ("arb-join", [PY, "tests/fake_ha_arbitration_join.py"]),
+    ("arb-afe", [PY, "tests/fake_ha_arbitration_afe.py"]),
     ("stop-word", [PY, "tests/fake_ha_stop_word.py"]),
     ("esphome-features", [PY, "tests/fake_ha_esphome_features.py"]),
     ("esphome-address", [PY, "tests/fake_ha_esphome_address.py"]),

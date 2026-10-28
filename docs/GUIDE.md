@@ -142,6 +142,8 @@ satellite for a few seconds. `-w remote` in [`ARGS`](#hassmicconf) does the same
 The Echos compare by how clearly the word stood out of the room's noise. An Echo in a conversation, or ringing, keeps
 the next wake word. With only one Echo there is no delay. The wait delays only the sound and the ring, not what you
 say: the Echo that answers sends Home Assistant everything from the end of the wake word, so speak on without a pause.
+How clearly the word stood out comes from Amazon's audio front end, which takes 0.15 s to answer on the Dots and up to
+0.4 s on an Echo Show; the Echo keeps listening meanwhile, and after 0.5 s without an answer it uses its own measure.
 
 - Only Echos listening for the same word compete: one on "Echo" and one on "Alexa" each answer their own.
 - "Wake word arbitration" on the settings page (on by default) says whether an Echo takes part. Off, it answers every

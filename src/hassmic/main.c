@@ -1144,20 +1144,19 @@ static double ring_power(uint64_t a, uint64_t b)    /* mean square over samples 
 /* Amazon's own measure of the wake word, which its cloud used to pick the Echo that answers ("ESP"): the energy of the
  * keyword and of the room before it as the front end measures them ("1-mic ESP" in its log).  As stock does it: hand the front end the keyword's place on its clock
  * (wake_afe_times), then read LASP_CMD_REQUEST_ARBITRATION_JSON: {"voiceEnergy":..,"ambientEnergy":..,..}.  Both
- * through lipc's tools: 150 ms (measured), inside the arbitration window of the others, who wait 200 ms and count
- * claims up to a second old.  Their ratio in dB x 100 is a signal to noise like our own score below, so Echos without
- * it (older builds, other front ends) still compare.  Reading it also puts the front end into its utterance state and
- * starts its diagnostics (FINDINGS.md "Listening mode"): afe_done() ends both.  0: not available. */
-static int afe_score(int *score)                    /* capture thread */
+ * through the firmware's tools: 150 ms on the Dots (lipc), 240 and 380 ms on an Echo Show 5 (two service calls; issue
+ * #77), so on a thread of its own (afe_thread).  Their ratio in dB x 100 is a signal to noise like our own score below,
+ * so Echos without it (older builds, other front ends) still compare.  Reading it also puts the front end into its
+ * utterance state and starts its diagnostics (FINDINGS.md "Listening mode"): afe_done() ends both.  0: not available. */
+static int afe_score(long ts, long te, int *score)  /* afe_thread */
 {
-    long ts, te; char buf[512]; const char *v, *a;
-    if (!wake_afe_times(&ts, &te)) return 0;
+    char buf[512]; const char *v, *a; long long t0 = mono_ms();
     if (!afe_arbitration(ts, te, buf, sizeof buf)) return 0;
     if (!(v = strstr(buf, "\"voiceEnergy\":")) || !(a = strstr(buf, "\"ambientEnergy\":"))) return 0;
     atomic_store(&afe_asked, 1);
     double voice = atof(strchr(v, ':') + 1), ambient = atof(strchr(a, ':') + 1);
     *score = (int)lround(1000 * log10((voice + 1) / (ambient + 1)));
-    fprintf(stderr, "wake: front end: voice energy %.0f, ambient %.0f\n", voice, ambient);
+    fprintf(stderr, "wake: front end: voice energy %.0f, ambient %.0f (%lld ms)\n", voice, ambient, mono_ms() - t0);
     return 1;
 }
 
@@ -1168,11 +1167,56 @@ static int wake_score(uint64_t begin, uint64_t end, int simulated)
     uint64_t gap = CAP_RATE / 10, len = CAP_RATE / 2;
     uint64_t ne = begin > gap ? begin - gap : 0, nb = ne > len ? ne - len : 0;
     double w = ring_power(begin, end), n = ring_power(nb, ne), fs = 32768.0 * 32768.0;
-    int own = (int)lround(1000 * log10((w + 1) / (n + 1))), afe;
     fprintf(stderr, "wake: level %.1f dBFS over noise %.1f dBFS\n", 10 * log10((w + 1) / fs), 10 * log10((n + 1) / fs));
-    if (simulated || !afe_score(&afe)) return own;
-    fprintf(stderr, "wake: score %d from the front end (%d from the mic stream)\n", afe, own);
-    return afe;
+    return (int)lround(1000 * log10((w + 1) / (n + 1)));
+}
+
+/* The front end's reading, off the capture thread (issue #77).  On it, the capture stood still for as long as the
+ * reading took, and the Echo Show 5's recorder had 160 ms of blocks to fill meanwhile (audio_android.c CAP_NBUF, then
+ * 8): the rest was lost, a splice 100-250 ms long in the command right after the wake word, which speech-to-text
+ * misheard.  Now the capture goes on into the ring, and the claim goes out once the score is in (score_wait), as late
+ * as before; without it after AFE_WAIT_MS, with the mic stream's score (the others' window until learned is 500 ms,
+ * arb.c).  A reading left behind still puts the front end into its utterance state: afe_late ends that again when no
+ * command came of the wake word.  One at a time: a wake word while one runs goes without (a service call that hangs
+ * costs the score, no longer the capture). */
+#define AFE_WAIT_MS 500
+static atomic_int afe_busy;                         /* a reading runs (afe_thread) */
+static atomic_int afe_got;                          /* its score; INT_MIN: none */
+static long afe_ts, afe_te;                         /* the keyword's place on the front end's clock, set before it starts */
+static long long score_due;                         /* capture thread: the claim waits for the reading until then */
+static struct { uint64_t end; int own, prio; char kw[64]; } pend;   /* capture thread: the wake word that waits */
+static int afe_late;                                /* capture thread: a reading was left behind */
+
+static void *afe_thread(void *arg)
+{
+    int score;
+    (void)arg;
+    atomic_store(&afe_got, afe_score(afe_ts, afe_te, &score) ? score : INT_MIN);
+    atomic_store(&afe_busy, 0);                     /* last: once it is 0, afe_asked says what the reading did */
+    return NULL;
+}
+
+static int afe_start(int simulated)                 /* capture thread: 1 = a reading runs */
+{
+    pthread_t t;
+    if (atomic_load(&afe_busy)) { fprintf(stderr, "wake: the front end's last reading still runs, no score from it\n"); return 0; }
+    /* SIGUSR1's wake word has no place on the front end's clock; on the PC HASSMIC_FAKE_AFE plays one (audio_file.c) */
+    if ((simulated && !getenv("HASSMIC_FAKE_AFE")) || !wake_afe_times(&afe_ts, &afe_te)) return 0;
+    atomic_store(&afe_busy, 1);
+    if (pthread_create(&t, NULL, afe_thread, NULL)) { atomic_store(&afe_busy, 0); return 0; }
+    pthread_detach(t);
+    return 1;
+}
+
+static void afe_late_check(void)                    /* capture thread */
+{
+    if (!afe_late || atomic_load(&afe_busy)) return;
+    afe_late = 0;
+    /* a round or a command still to come ends it itself; under the lock, so that a command starting meanwhile
+     * (pipeline_start, Home Assistant's thread) does not get its utterance state ended */
+    pthread_mutex_lock(&core_lock);
+    if (!arb_due && !atomic_load(&streaming)) afe_done();
+    pthread_mutex_unlock(&core_lock);
 }
 
 /* Kiosk Satellite's measure of a wake word, for arb.c's Kiosk Satellite mode (docs/kiosk-arbitration.md, "Score"): of the
@@ -1311,19 +1355,8 @@ static void answer(uint64_t from)                   /* capture thread: act on th
     if (!atomic_load(&streaming)) afe_done();          /* it stopped a ring, or cut a reply: the pipeline's end follows */
 }
 
-static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* capture thread */
+static void claim(const char *kw, int score, int prio, uint64_t end)   /* capture thread */
 {
-    if (!arb_running()) { trigger(0, end); return; }
-    if (arb_due) return;                            /* the same wake word once more while its round runs */
-    pthread_mutex_lock(&core_lock);
-    int alarm = atomic_load(&alarm_on), can = alarm || (connected && satellite_running && !core_muted()), prio = alarm || state != IDLE ? 2 : 0;
-    pthread_mutex_unlock(&core_lock);
-    if (!can) { trigger(0, end); return; }               /* could not answer: a claim would only silence the Echos that can */
-    /* the one heard: with two wake words, Echos compete per wake word as they do with one each */
-    pthread_mutex_lock(&core_lock); char kw[64]; wake_phrase_bare(kw, sizeof kw); pthread_mutex_unlock(&core_lock);
-    /* Kiosk Satellite mode: their loudness, not the front end's energies (whose 150 ms only the window would pay for) */
-    int score = arb_mode(-1) == ARB_KIOSK ? kiosk_score(end, simulated) : wake_score(begin, end, simulated);
-    if (score == INT_MIN) { fprintf(stderr, "arbitration: less than 3 s heard, answers without a claim\n"); trigger(0, end); return; }
     /* The other Echos' claims are Wi-Fi broadcasts, and the BLE scan's share of the antenna loses them (ble.c): no
      * scanning while this round listens: the wait it took (none when nobody was worth waiting for, arb.c "Rivals"),
      * then the claims of Echos that heard it a little later and the winner's "answers", 1 s at least.  Right after the
@@ -1332,6 +1365,40 @@ static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* captu
     ble_quiet(w + 500 > 1000 ? (int)w + 500 : 1000);
     if (!due) { answer(end); return; }
     arb_due = due; arb_from = end;
+}
+
+static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* capture thread */
+{
+    if (!arb_running()) { trigger(0, end); return; }
+    if (arb_due || score_due) return;               /* the same wake word once more while its round runs */
+    pthread_mutex_lock(&core_lock);
+    int alarm = atomic_load(&alarm_on), can = alarm || (connected && satellite_running && !core_muted()), prio = alarm || state != IDLE ? 2 : 0;
+    pthread_mutex_unlock(&core_lock);
+    if (!can) { trigger(0, end); return; }               /* could not answer: a claim would only silence the Echos that can */
+    /* the one heard: with two wake words, Echos compete per wake word as they do with one each */
+    pthread_mutex_lock(&core_lock); char kw[64]; wake_phrase_bare(kw, sizeof kw); pthread_mutex_unlock(&core_lock);
+    /* Kiosk Satellite mode: their loudness, not the front end's energies (whose time only the window would pay for) */
+    if (arb_mode(-1) == ARB_KIOSK) {
+        int score = kiosk_score(end, simulated);
+        if (score == INT_MIN) { fprintf(stderr, "arbitration: less than 3 s heard, answers without a claim\n"); trigger(0, end); return; }
+        claim(kw, score, prio, end);
+        return;
+    }
+    int own = wake_score(begin, end, simulated);
+    /* the front end's score only for a round: arbitration off, or nobody to ask, and the claim is only a log line */
+    if (!arb_rounds() || !afe_start(simulated)) { claim(kw, own, prio, end); return; }
+    pend.end = end; pend.own = own; pend.prio = prio; snprintf(pend.kw, sizeof pend.kw, "%s", kw);
+    score_due = mono_ms() + AFE_WAIT_MS;
+}
+
+static void score_wait(void)                        /* capture thread, while score_due: the claim once the reading is in */
+{
+    int busy = atomic_load(&afe_busy), afe = busy ? INT_MIN : atomic_load(&afe_got), score = pend.own;
+    if (busy && mono_ms() < score_due) return;
+    score_due = 0;
+    if (afe != INT_MIN) { fprintf(stderr, "wake: score %d from the front end (%d from the mic stream)\n", afe, pend.own); score = afe; }
+    else if (busy) { fprintf(stderr, "wake: no score from the front end within %d ms, the mic stream's goes\n", AFE_WAIT_MS); afe_late = 1; }
+    claim(pend.kw, score, pend.prio, pend.end);
 }
 
 /* The keyword the loaded model answers to (capture thread).  Amazon's en-US sets for "Computer", "Amazon" and "Ziggy"
@@ -2469,6 +2536,8 @@ static void *capture_thread(void *arg)
             pthread_mutex_lock(&core_lock); uint64_t b = det_begin, e = det_end; pthread_mutex_unlock(&core_lock);
             wake_heard(b, e, 0);
         }
+        if (score_due) score_wait();
+        afe_late_check();
         if (arb_due && (mono_ms() >= arb_due || arb_settled())) { arb_due = 0; if (arb_decide()) answer(arb_from); else { afe_done(); wake_tell("answered_elsewhere"); } }    /* after this block went out live */
 
         pthread_mutex_lock(&core_lock);

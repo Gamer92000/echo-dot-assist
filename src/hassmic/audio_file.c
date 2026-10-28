@@ -224,9 +224,19 @@ void vol_write(enum vol which, int v)
     vols[which] = v;
 }
 
-/* No front end on the PC */
+/* No front end on the PC.  HASSMIC_FAKE_AFE=<ms>:<voice>:<ambient> plays one that answers the wake word's energies
+ * after <ms> (an Echo Show 5's took 240 and 380 ms, issue #77), for SIGUSR1's wake word too (wake_none.c) */
 void afe_listening(int on) { (void)on; }
-void afe_stream_stopped(void) {}
-int  afe_arbitration(long ts, long te, char *json, size_t n) { (void)ts; (void)te; if (n) json[0] = 0; return 0; }
+void afe_stream_stopped(void) { if (getenv("HASSMIC_FAKE_AFE")) fprintf(stderr, "front end: stream stopped\n"); }
+int  afe_arbitration(long ts, long te, char *json, size_t n)
+{
+    const char *e = getenv("HASSMIC_FAKE_AFE"); int ms; double voice, ambient;
+    (void)ts; (void)te;
+    if (n) json[0] = 0;
+    if (!e || sscanf(e, "%d:%lf:%lf", &ms, &voice, &ambient) != 3) return 0;
+    usleep((useconds_t)ms * 1000);
+    snprintf(json, n, "{\"voiceEnergy\":%.0f,\"ambientEnergy\":%.0f}", voice, ambient);
+    return 1;
+}
 int  afe_eq_get(char *json, size_t n) { if (n) json[0] = 0; return 0; }
 void afe_eq_set(const char *json) { (void)json; }
