@@ -19,3 +19,5 @@ jobs:
         run: python3 -m unittest discover -s tests -p test_cube_installer.py
       - name: Supervisor shell syntax
         run: sh -n scripts/cube/service.sh
+      - name: Cube audio interface with a local fake helper
+        run: make unit-cube_audio

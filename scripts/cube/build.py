@@ -28,7 +28,8 @@ def build(sdk,java,stock):
         else: os.environ['JAVA_HOME']=env_java
     run([os.sys.executable,ROOT/'tools/embed.py',ROOT/'build/web_assets.c','web/index.html:/','web/app.js:/app.js','web/crypto.js:/crypto.js','web/tar.js:/tar.js','web/ring.js:/ring.js'])
     make=(ROOT/'Makefile').read_text();section=make.split('HASSMIC :=',1)[1].split('\nHASSMIC_H',1)[0]
-    sources=re.findall(r'(?:src|build)/[\w/.-]+\.c',section)
+    # The shared Makefile now selects ring.c/ring_band.c through $(RING).
+    sources=re.findall(r'(?:src|build)/[\w/.-]+\.c',section.replace('$(RING)','src/hassmic/ring.c'))
     sources += ['src/third_party/rnnoise/'+n+'.c' for n in ['denoise','rnn','rnn_data','pitch','kiss_fft','celt_lpc']]
     sources += ['devices/gazelle/board.c','src/hassmic/audio_cube.c','src/hassmic/wake_pryon.c','src/hassmic/sound_none.c','src/hassmic/whisper_none.c']
     for name in ['libpryon.so','libopus.so']:

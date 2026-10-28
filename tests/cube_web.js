@@ -40,23 +40,24 @@ function run(codename, platform) {
     assert.equal(context.document.title,'Echo settings');
   }
 }
-for (const name of ['donut','biscuit','radar','checkers']) run(name,undefined);
+for (const name of ['donut','biscuit','radar','checkers','crown','cronos','athena']) run(name,undefined);
 run('gazelle','fire_tv');
 // Selection must come from the advertised platform, not just a hardcoded codename.
 run('gazelle',undefined);
 console.log('PASS: Echo defaults preserved, Cube capability selection, eight bar states and navigation');
 
 
-function systemPage(cube) {
+function systemPage(cube, action) {
   const root = node('section');
   const context = {
-    h:node, isCube:()=>cube, state:{wifi:{}}, echo:{hello:{}}, icon:()=>null,
+    h:node, isCube:()=>cube, state:{wifi:{}}, echo:{hello:{action}}, icon:()=>null,
     nameRow:()=>node('name'), wifiRow:()=>node('wifi-control'), settingRow:()=>null,
     infoRow:(...args)=>node('row',{},...args), logRow:()=>node('logs'),
     exportFile:()=>{}, restartEcho:()=>{}, factoryReset:()=>{},
     HELP:{restart:{help:'Echo restart help'}}, root,
   };
   vm.createContext(context);
+  vm.runInContext(app.match(/function act\([^\n]+\{[\s\S]+?\n\}/)[0],context);
   vm.runInContext(app.match(/function buildSystem\(el, list\) \{[\s\S]+?\n\}/)[0]+'\nbuildSystem(root, []);',context);
   return JSON.stringify(root);
 }
@@ -71,3 +72,8 @@ assert.ok(!cubeSystem.includes('Opens adb over Wi-Fi for 30 minutes'));
 assert.ok(cubeSystem.includes('Reset Cube Assist'));
 assert.ok(cubeSystem.includes('Fire TV settings, apps and Wi-Fi stay as they are'));
 console.log('PASS: Echo networking/ADB/factory reset retained; Cube system controls isolated');
+
+const showSystem=systemPage(false,'volume_keys');
+assert.ok(!showSystem.includes('holding the action button for 10 seconds'));
+assert.ok(showSystem.includes('volume keys'));
+console.log('PASS: Echo Show approval uses volume keys and reset omits the unsupported hold action');

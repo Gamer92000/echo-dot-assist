@@ -224,7 +224,7 @@ host: build/hassmic-host $(OUT)/hassmic-qemu build/otatool-host
 UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/third_party/monocypher.c
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
-	sbc web_crypto web_tar ring_pack mww blueprint_dropin buttons buttons_privacy afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map
+	sbc web_crypto web_tar ring_pack mww blueprint_dropin buttons buttons_privacy afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map cube_audio
 unit: $(addprefix unit-,$(UNIT_TESTS))
 unit-hash:
 	@mkdir -p build
@@ -330,3 +330,8 @@ clean:
 	rm -rf build
 
 .PHONY: all host unit $(addprefix unit-,$(UNIT_TESTS)) version clean kmod-missing kernel-tools FORCE
+
+# Cube adapter with a local fake helper; no Android device or audio output.
+unit-cube_audio:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/cube_audio_test.c src/hassmic/audio_cube.c src/hassmic/statefile.c -lpthread -lm -o build/cube_audio_test && build/cube_audio_test

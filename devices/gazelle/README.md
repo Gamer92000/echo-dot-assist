@@ -103,9 +103,12 @@ Use an installed Android SDK, NDK and JDK. Copy `libpryon.so` and `libopus.so` f
 ```sh
 python scripts/cube/build.py --sdk ANDROID_SDK --java JAVA_HOME --stock PRIVATE_LIB_DIRECTORY
 python -m unittest discover -s tests -p test_cube_installer.py
+node tests/cube_web.js
+# Linux host, local fake audio helper only:
+make unit-cube_audio
 ```
 
-`node tests/cube_web.js` checks both Cube and Echo page builders without a device. Installer tests use a fake device. The evidence below comes from the original working development build; this upstream preparation branch has not been installed on hardware. Keep device recordings, pairing keys and firmware out of distributions.
+`node tests/cube_web.js` checks both Cube and Echo page builders without a device. Installer tests use a fake device. The Cube audio unit test checks the common volume/AFE interface, listening messages, unchanged capture samples and earcon callback against a local fake helper, without playing or recording audio. The evidence below comes from the original working development build; this upstream preparation branch has not been installed on hardware. Keep device recordings, pairing keys and firmware out of distributions.
 
 Evidence so far: native build; signed browser login and setting round-trip; ESPHome entity/protocol checks; live microphone streaming; listening/thinking/speaking/idle LED transitions; TV overlay creation/removal; user-confirmed TV and Cube bars; paired strict-reference Sendspin streaming; mDNS discovery from another computer; seven installer validation/rollback tests; helper-crash recovery with stock Alexa restored in 5.24 seconds and Amazon’s audio server unchanged. HA has now provisioned encryption on the installed port, and two natural wake-word requests completed listening, thinking, reply playback through the Cube speaker, and volume recovery in the device logs. Music Assistant 2.10.8 completed long-term Sendspin pairing. The user confirmed the installed port answers correctly, ducks and restores TV audio, shows both bars, and plays Music Assistant tracks through the Cube speaker. A subsequent ADB reboot verified automatic microphone startup, encrypted HA voice subscription and paired Music Assistant reconnection, with all 11 checked settings/pairing files byte-for-byte unchanged and arbitration still off. A post-reboot indicator probe observed both the TV window and physical LED pattern, then clean removal at idle. Audible post-reboot voice/music confirmation, a cold power-cycle and multi-device arbitration testing remain outstanding. This is a development release.
 
