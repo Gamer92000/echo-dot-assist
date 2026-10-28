@@ -4,6 +4,18 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-27
 
+- **Kiosk Satellite on the Echo Shows** ([`docs/kiosk-satellite.md`](docs/kiosk-satellite.md)): if you install the app as
+  the screen of a Show 5 (1st or 2nd gen) or Show 8 (1st or 2nd gen), the Echo opens it after every boot, gives it the
+  permissions it would otherwise ask a person for (the microphone excepted) and keeps its update helper running, as the
+  unprivileged shell user and never as root, so the app can install its own updates. Its web page (port 2324) and its
+  Home Assistant API (port 6053) are reachable from your network. The guided setup offers Simple Keyboard (open
+  source, no network access), since the image has no keyboard. Only the Show 8s have been tried with the app.
+- **Kiosk Satellite internet access** (settings page, System; on by default): on, only that app may reach the internet,
+  for its updates and for the web pages it shows; the voice satellite and Amazon's software stay on your network as before.
+- **Kiosk Satellite microphone, for a plugin that talks** (settings page, System; off by default): a doorbell plugin's
+  two-way talk needs a recorder of its own, and the voice satellite keeps listening for the wake word during the call.
+  The plugin has to record from "Voice communication"; "Voice recognition" and "Camcorder" (which "Automatic" picks first)
+  open but give the plugin silence. Off: the app has no microphone. Turning it off makes Android close the app.
 - **Drop In: the wake word works during a call to an empty room.** An Echo in a quiet room sent its own room noise,
   turned up to speech level, to the caller. The caller's Echo took that for the other side talking: it ignored the wake
   word, never switched on listening mode (so "Alexa, hang up" came out as "No text recognized") and turned its own

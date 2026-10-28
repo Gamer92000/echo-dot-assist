@@ -652,6 +652,25 @@ install_satellite() {
     printf 'SAT_NAME=%q\nSAT_IP=%q\nSAT_TOKEN=%q\n' "$name" "$ip" "$tok" > $OUT/setup.env
 }
 
+# install_keyboard: screen models only.  The image has no input method (Amazon's needs its account libraries), so an app
+# that shows a text field (Kiosk Satellite's settings, a login in a dashboard) gets no keyboard.  Simple Keyboard (open
+# source, only the VIBRATE permission, no network) is offered: release 148 = 6.7, checked against its checksum.
+KEYBOARD_URL=https://github.com/rkkr/simple-keyboard/releases/download/148/app-release.apk
+KEYBOARD_SHA=b0a81d62e5229a28d90ff2c7a25a7dc434c56f23e4304158e1adb61192b9978a
+KEYBOARD_IME=rkr.simplekeyboard.inputmethod/.latin.LatinIME
+keyboard_get() {
+    local f=$OUT/simple-keyboard-148.apk
+    _good "$f" "$KEYBOARD_SHA" && [ -s "$f" ] || curl -fL --retry 3 -o "$f" "$KEYBOARD_URL" || return 1
+    _good "$f" "$KEYBOARD_SHA" || { rm -f "$f"; fail "Simple Keyboard: wrong checksum"; return 1; }
+    adb install -r "$f" > /dev/null && adb shell ime enable $KEYBOARD_IME > /dev/null && adb shell ime set $KEYBOARD_IME > /dev/null
+}
+install_keyboard() {
+    info "The Echo has no on-screen keyboard. Simple Keyboard (open source, no network access) adds one."
+    ask "Install Simple Keyboard?" n || return 0
+    wait_adb device || return 1
+    task "Installing Simple Keyboard" keyboard_get || warn "the keyboard was not installed; install any keyboard app by hand"
+}
+
 # done_screen [line]...: the end: what to do in Home Assistant, then the model's own notes
 done_screen() {
     local SAT_NAME="$MODEL_NAME" SAT_IP= SAT_TOKEN=

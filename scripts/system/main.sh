@@ -217,6 +217,72 @@ avahi_start() {
 # While the settings page switches networks (wifi.sh holds its lock), the link is that script's business: no wifisvc.
 # Whenever the address changes, wifi.sh writes down which network the Echo is on, for the page: wpa_supplicant can also
 # move to another saved network by itself when the one it is on goes away.
+# Kiosk Satellite's update helper (device.conf KIOSK_PACKAGE; docs/re-crown.md): the app hands out a script on its content
+# provider that starts a process of ours with its own code and a token, through which the app installs its updates without
+# a dialog.  Its own instructions have it piped into sh from adb after every boot.  Here as the shell user (what adb is on
+# a locked device: pm install is allowed to it) with inet, which its listening socket needs, never as root.  Idempotent
+# (the script says "already running"), so it is asked again every 5 min: an update of the app ends the helper.
+# It also opens the app once per boot (its process may be up without a screen, so no check for one): it has no HOME category (hassmic-home is the home screen), so
+# nothing else starts it after a boot.
+# What the app is allowed (docs/kiosk-satellite.md): runtime permissions and app ops it would otherwise ask a person for on
+# a screen with no one at it; the microphone only while the setting kiosk_mic is on (hassmic is the satellite).  Android's own "unknown permission" for those
+# a release lacks (notifications, Bluetooth scan before 12) is ignored.  Idempotent, a few hundred ms.
+kiosk_grants() {
+    for p in CAMERA READ_EXTERNAL_STORAGE WRITE_EXTERNAL_STORAGE ACCESS_COARSE_LOCATION ACCESS_FINE_LOCATION; do
+        pm grant $KIOSK_PACKAGE android.permission.$p > /dev/null 2>&1
+    done
+    for o in SYSTEM_ALERT_WINDOW WRITE_SETTINGS GET_USAGE_STATS REQUEST_INSTALL_PACKAGES; do
+        appops set $KIOSK_PACKAGE $o allow > /dev/null 2>&1
+    done
+    dumpsys deviceidle whitelist +$KIOSK_PACKAGE > /dev/null 2>&1       # no doze: the dashboard and its ESPHome server stay up
+    dpm set-active-admin $KIOSK_PACKAGE/.KioskAdminReceiver > /dev/null 2>&1   # device admin: it turns the screen off (force-lock)
+    kiosk_mic_apply
+}
+# RECORD_AUDIO follows the setting kiosk_mic (settings page, default off; state/config has kiosk_mic=on or off).  hassmic is
+# the satellite and keeps its own capture either way; an app plugin that talks (a doorbell's two-way talk) needs a recorder
+# of its own.  Athena, 2026-10-26: the audio HAL lets the app record beside hassmic's VOICE_RECOGNITION, but only a recorder
+# on the VOICE_COMMUNICATION source (its own pipeline, with echo cancellation) gets audio; VOICE_RECOGNITION and CAMCORDER
+# opened and delivered nothing.  Revoking a permission ends the app's process, so this only runs when the value changes.
+kiosk_mic_on() { grep -qx 'kiosk_mic=on' /data/local/hassmic/state/config 2>/dev/null; }
+kiosk_mic_apply() {
+    if kiosk_mic_on; then
+        pm grant $KIOSK_PACKAGE android.permission.RECORD_AUDIO > /dev/null 2>&1
+        appops set $KIOSK_PACKAGE RECORD_AUDIO allow > /dev/null 2>&1
+    else
+        pm revoke $KIOSK_PACKAGE android.permission.RECORD_AUDIO > /dev/null 2>&1
+        appops set $KIOSK_PACKAGE RECORD_AUDIO deny > /dev/null 2>&1
+    fi
+}
+kiosk_mic_sync() {
+    [ -n "$KIOSK_PACKAGE" ] || return 0
+    if kiosk_mic_on; then last=on; else last=off; fi       # what kiosk_grants just applied
+    while sleep 2; do
+        [ "$(getprop sys.boot_completed)" = 1 ] || continue
+        if kiosk_mic_on; then now=on; else now=off; fi
+        [ "$now" = "$last" ] && continue
+        last=$now
+        kiosk_mic_apply
+        echo "kiosk satellite: microphone $now"
+    done
+}
+kiosk_helper() {
+    [ -n "$KIOSK_PACKAGE" ] || return 0
+    launched=
+    while :; do
+        if [ "$(getprop sys.boot_completed)" = 1 ] && pm path $KIOSK_PACKAGE > /dev/null 2>&1; then
+            if [ -z "$launched" ]; then
+                launched=1
+                kiosk_grants
+                sleep 10                          # the home screen first, so the app is on top of it
+                $D/runas shell shell sh -c "monkey -p $KIOSK_PACKAGE -c android.intent.category.LAUNCHER 1" > /dev/null 2>&1
+                echo "kiosk satellite: opened"
+            fi
+            out=$($D/runas shell shell,log,inet sh -c "content read --uri content://$KIOSK_PACKAGE.update-helper/start | sh" 2>&1)
+            case "$out" in *"started"*) echo "kiosk update helper: started";; *"already running"*) ;; *) echo "kiosk update helper: $(echo "$out" | tail -1)";; esac
+        fi
+        sleep 300
+    done
+}
 netwatch() {
     miss=0 addr=
     while :; do
@@ -494,6 +560,8 @@ satellite)
     # online updates: hassmic checks downloads against the key root will check them against (ota.c)
     export HASSMIC_RELEASE_PUB=$(release_pub)
     netwatch 2>&1 | stamped >> $LOG &
+    kiosk_helper 2>&1 | stamped >> $LOG &
+    kiosk_mic_sync 2>&1 | stamped >> $LOG &
     # mDNS through the stock avahi-daemon: hassmic prints the service file for its protocol, name and MAC address.
     # The MAC in it is how Home Assistant tells devices apart.  On radar wlan0 appears only later in the boot, hassmic
     # printed its placeholder MAC, and Home Assistant offered the adopted Echo as a new device.  So wait for Wi-Fi
