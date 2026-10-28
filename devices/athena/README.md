@@ -15,9 +15,10 @@ as the Dots'). No action button, no LED ring: hassmic draws the light ring as a 
 Pinned: `update-kindle-athena-PS75741_user_7080_0036274153604.bin`, Fire OS 7574.1 (PS75741.7080N, build 7080), from
 [FTVDB](https://ftvdb.com/echo/firmware/com.amazon.athena.android.os/84ffb126664e1a3569404ba61d580e05-36274153604-fire-os-7574-1-ps75741-7080-2026-09-29/),
 sha256 `7a76fe6f…c422a1a` (full value in `device.conf`). `libpryon`, `libasp`, the audio HAL, `libaspclient`,
-`libaudioflinger` and the wake word service are byte-identical in build 7077 (checked), but the build is pinned to the
-one the first Echo ran: `scripts/install-system.sh` stops on any other `ro.build.display.id` than PS75741.7080N. Put the
-`.bin` into `firmware/athena/` (not in git).
+`libaudioflinger` and the wake word service are byte-identical in builds 7077 and 7082 (PS75741.7082N, build
+0036274154116; the six `probe.md5` files checked on an Echo running it), so an Echo on 7082N is installed as it is. The
+build is pinned to the one the first Echo ran: on any other `ro.build.display.id` than PS75741.7080N or those listed in
+`FIRMWARE_ALSO` (`device.conf`), `scripts/install-system.sh` prints a large warning and asks before it goes on. Put the `.bin` into `firmware/athena/` (not in git).
 
 ## Unlock and root (public: saiyaku-athena)
 

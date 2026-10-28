@@ -155,9 +155,9 @@ if [ ! -s $STATE ] && [ -z "$DRY" ] && [ -n "$ROOTED_SKIP" ] && adb_is device 2>
         keep="skip the unlock and root steps" scratch="Go through every step: a rooted Echo passes them, nothing is wiped"
         wrongfw="no step here changes its firmware, and hassmic needs $FIRMWARE_ID"
     fi
-    if [ "$fwid" = "$FIRMWARE_ID" ]; then
+    if firmware_ok "$fwid"; then
         header 1 $n "${STEP_LIST[@]}"
-        ok "The $MODEL_NAME on USB is rooted already and runs $FIRMWARE_ID."
+        ok "The $MODEL_NAME on USB is rooted already and runs $fwid."
         menu a "Keep it as it is: $keep" "$scratch"
         if [ "$a" = 0 ]; then mark_done $ROOTED_SKIP rooted; else SCRATCH=1; fi
     else

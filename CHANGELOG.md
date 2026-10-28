@@ -232,6 +232,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-27
 
+- **Echo Show 8 2nd gen: another firmware build no longer stops the install.** It stopped with "support is built for
+  PS75741.7080N: reflash that one", although the Echo is rooted by then. It now prints a large warning and asks
+  whether to go on (`HASSMIC_FIRMWARE_OK=1` answers yes without a terminal). PS75741.7082N, whose audio and wake word
+  libraries are the same as 7080N's, goes through without the question.
 - **Drop In: the wake word works during a call to an empty room.** An Echo in a quiet room sent its own room noise,
   turned up to speech level, to the caller. The caller's Echo took that for the other side talking: it ignored the wake
   word, never switched on listening mode (so "Alexa, hang up" came out as "No text recognized") and turned its own
