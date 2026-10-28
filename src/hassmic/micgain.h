@@ -22,6 +22,10 @@ struct micgain {
     float applied;                      /* linear gain at the end of the last frame: the next one ramps from there */
     int hold;                           /* set by the caller: what comes in is not the talker (our own sounds): the
                                          * levels and the gain stay as they are, the peak limit still works */
+    float talker_min_db;                /* set by the caller: frames under this (dBFS, as they come in) are not the
+                                         * talker's (micend.h): they neither feed its level nor lift the gain.  Else
+                                         * other voices alone in the room are brought up to speech level within 2 s
+                                         * (12 dB/s), a talker's 20 dB under too (tests/fake_ha_end.py).  -1000: all */
 };
 
 void micgain_init(struct micgain *g, int level);

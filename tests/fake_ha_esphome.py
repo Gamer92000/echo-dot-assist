@@ -121,6 +121,21 @@ async def main(e):
     await until(lambda: os.path.getsize(play) == 48000 and finished == [True])
     check(os.path.getsize(play) == 48000 and finished == [True], f"reply fetched from the TTS_END url and reported: {os.path.getsize(play)} bytes, finished={finished}")
 
+    # the wake word sent too (setting "Wake word in the request", off by default): the ring from 100 ms ahead of the
+    # word on (the PC's is 0.6 s long and ends 128 ms back), not from its end
+    check(pv("wake_word_in_request") == 0, "wake word in the request: off by default")
+    page.set(wake_word_in_request="on")
+    started.clear(); chunks.clear(); proc.send_signal(signal.SIGUSR1)
+    await asyncio.wait_for(started.wait(), 5)
+    await until(lambda: 1600 in chunks)
+    ahead = sum(chunks[:chunks.index(1600)]) if 1600 in chunks else None
+    check(ahead == 24000, f"the wake word sent ahead of the live stream too: {ahead} bytes (700 ms, and the block in hand)")
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_VAD_END, None)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
+    await sync(cli)
+    page.set(wake_word_in_request="off")
+
     # another wake word, picked in Home Assistant: kept, and named in the pipeline request (HA's duplicate check keys on it)
     await cli.set_voice_assistant_configuration(["echo-de"]); await sync(cli)
     cfg = await cli.get_voice_assistant_configuration(5)

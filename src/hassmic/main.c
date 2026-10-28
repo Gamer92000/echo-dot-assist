@@ -50,7 +50,10 @@
 #include "dropin.h"
 #include "micdenoise.h"
 #include "earsup.h"
+#include "afemeta.h"
+#include "micend.h"
 #include "micgain.h"
+#include "wordtail.h"
 #include "netaddr.h"
 #include "netio.h"
 #include "lux.h"
@@ -234,11 +237,21 @@ static int barge_in;                                /* under lock: start a new p
                                                       * (wake word during a reply, or the server asked to continue the conversation) */
 static uint64_t barge_from;                         /* under lock: where that wake word ended (ring samples), 0: no wake word */
 static uint64_t replay_from;                        /* under lock: the pipeline just started from a wake word that ended
-                                                      * here; the capture thread sends the ring from there ahead of the live
-                                                      * stream (stream_ring).  0: nothing to send */
+                                                      * here; the capture thread sends the ring from the end of the word's
+                                                      * tail (word_tail_end) ahead of the live stream, which waits until
+                                                      * that is known (stream_ring).  0: nothing to send */
 static struct micgain mic_gain;                     /* under lock: gain of what the pipeline hears (micgain.h) */
 static int mic_fresh;                               /* under lock: a pipeline started, the gain has not seen it yet */
 static float keyword_db = 1;                        /* under lock: rms of the last wake word, dBFS */
+/* Setting wake_word_in_request: the request's audio starts at the wake word, not after it.  Off by default: Home
+ * Assistant's own sentences ("turn on the light") do not take "Alexa, turn on the light"; an LLM agent does, and
+ * speech-to-text gets the whole utterance (nothing of the command cut, no stray end of the word: issue #72) */
+static int wake_in_request;                         /* under lock */
+static uint64_t kw_begin, kw_end;                   /* under lock: the last wake word heard, ring samples (wake engine's) */
+static int replay_whole;                            /* under lock: this pipeline's replay starts at kw_begin */
+static uint64_t talker_from;                        /* under lock: where the command starts (the word's tail end), micend */
+static struct micend mic_end;                       /* under lock: the end of the request heard here (micend.h) */
+static int end_mode;                                /* under lock: setting end_of_request, MICEND_* */
 static int mic_denoise;                             /* under lock: noise reduction ahead of the gain (micdenoise.h):
                                                       * 0 off, 1 low, 2 medium, 3 high */
 static long long denoise_ns; static unsigned denoise_frames;   /* under lock: its cost in the running pipeline */
@@ -640,6 +653,11 @@ static void pipeline_start(uint64_t from)    /* from: where the wake word that s
     quiet_abort = 0;
     mic_fresh = 1;
     replay_from = from;
+    replay_whole = wake_in_request && from && from == kw_end && kw_begin < kw_end;
+    talker_from = 0;
+    /* until the first audio (send_mic: up to 0.5 s while the word's tail is looked for), not the last request's: its
+     * end ended this one before any audio went out (heard_end in the capture thread) */
+    micend_start(&mic_end, MICEND_OFF, 0, 0, NULL);
     run_wake = from != 0;
     proto->start();
     atomic_store(&streaming, 1);
@@ -678,6 +696,8 @@ void core_remote_wake(void)
 
 int core_wake_sound(int set) { if (set >= 0) use_earcon = set; return use_earcon; }
 
+int core_wake_in_request(int set) { if (set >= 0) wake_in_request = set != 0; return wake_in_request; }
+int core_end_of_request(int set) { if (set >= 0 && set < MICEND_MODES) end_mode = set; return end_mode; }
 int core_stop_ends_listening(int set) { if (set >= 0) stop_ends = set != 0; return stop_ends; }
 
 int core_bt_announce(int set) { if (set >= 0) use_bt_announce = set; return use_bt_announce; }
@@ -919,6 +939,12 @@ int core_mic_denoise(int set)
 /* lock held.  The mic stream to the pipeline has stopped. */
 static void mic_stopped(void)
 {
+    if (mic_end.mode && !mic_end.ended && mic_end.heard) {     /* for tuning (issue #66) */
+        fprintf(stderr, "end of request: not heard here first (talker heard %d ms, quiet for %d ms", mic_end.heard * 10, mic_end.quiet * 10);
+        if (mic_end.vad_frames) fprintf(stderr, ", Amazon's VAD: no speech in %d of %d loud frames", mic_end.vad_vetoed, mic_end.vad_frames);
+        fprintf(stderr, ")\n");
+        mic_end.mode = MICEND_OFF;
+    }
     listening(0);
     afe_done();
     if (denoise_frames) fprintf(stderr, "denoise: %.1f s of audio took %.0f ms of CPU\n", denoise_frames / 100.0, denoise_ns / 1e6);
@@ -926,6 +952,18 @@ static void mic_stopped(void)
 }
 
 void core_mic_off(void) { atomic_store(&whisper_eou, 1); atomic_store(&streaming, 0); mic_stopped(); }
+
+/* lock held, capture thread: the talker finished (micend.h).  As Home Assistant's own VAD end, from here */
+static void heard_end(void)
+{
+    fprintf(stderr, "end of request: heard here (talker %.1f dBFS, nothing within %.0f dB of it for %d ms; ",
+            mic_end.talker_db, micend_margin(mic_end.mode), micend_hold_ms(mic_end.mode));
+    if (mic_end.vad_frames) fprintf(stderr, "Amazon's VAD heard no speech in %d of %d loud frames)\n", mic_end.vad_vetoed, mic_end.vad_frames);
+    else fprintf(stderr, "no VAD in the stream)\n");
+    proto->end();
+    core_mic_off();
+    if (state == LISTENING) core_set_state(THINKING);
+}
 
 void core_restart_after(void) { barge_in = 1; barge_from = 0; }
 
@@ -1112,7 +1150,8 @@ static void stop_word(void)
  * quiet.  The audio of the window is not lost: the winner sends it from the ring buffer ahead of the live stream.
  * Nor is it without arbitration: Pryon accepts a keyword 116-128 ms after its end (6 accepts in device logs, "samples
  * <begin>-<end> (fed <n>)"), and the live stream starts with the next 50 ms block, so what the talker says right after
- * the wake word would be cut.  Every pipeline a wake word starts sends the ring from the keyword's end (stream_ring). */
+ * the wake word would be cut.  Every pipeline a wake word starts sends the ring from the end of the word's tail, which
+ * comes after the keyword's end (word_tail_end, wordtail.h). */
 
 #define RING_SAMPLES (CAP_RATE * 4)
 static int16_t ring[RING_SAMPLES];                  /* what the wake word engine was fed, by its sample index */
@@ -1126,6 +1165,43 @@ static void ring_put(const int16_t *s, size_t n)
 {
     for (size_t i = 0; i < n; i++) ring[(ring_n + i) % RING_SAMPLES] = s[i];
     ring_n += n;
+}
+
+/* Amazon's front end heard speech in samples [from, to) of the ring (micend.h): its DNN VAD >= 1 in a record of a
+ * 128-sample frame overlapping them (afemeta.h), 0 when none (a veto, so only where the network is sure: inside
+ * commands it dips under 2 for up to 0.44 s, mostly to 1, and aggressive ends after 0.45 s; sounds without words are 0
+ * in 91-100 % of frames, docs/re-vad.md), -1 when the ring has no records there (the PC, an audio
+ * HAL that drops the lowest bits, -w remote: no ring).  Records start every 128 samples from the mixer stream's
+ * start, the ring's 0, until a read loses samples (a stalled micAsr reopened): then the phase is looked for again in
+ * the 128 samples before from.  Capture thread */
+static int meta_phase = -1;
+
+static int ring_meta(uint64_t at, struct afemeta *m)
+{
+    int16_t s[AFEMETA_FRAME];
+    if (at + AFEMETA_FRAME > ring_n || (ring_n > RING_SAMPLES && at < ring_n - RING_SAMPLES)) return 0;
+    for (int i = 0; i < AFEMETA_FRAME; i++) s[i] = ring[(at + i) % RING_SAMPLES];
+    return afemeta_frame(s, m);
+}
+
+static int ring_speech(uint64_t from, uint64_t to)
+{
+    struct afemeta m;
+    for (int tries = 0; tries < 2; tries++) {
+        if (meta_phase >= 0) {
+            int v = -1, lost = 0;
+            for (uint64_t a = from - (from + AFEMETA_FRAME - (uint64_t)meta_phase) % AFEMETA_FRAME; a < to && a + AFEMETA_FRAME <= ring_n; a += AFEMETA_FRAME) {
+                if (!ring_meta(a, &m)) { lost = 1; break; }
+                v = m.vad >= 1 ? 1 : v < 0 ? 0 : v;
+            }
+            if (!lost) return v;
+        }
+        meta_phase = -1;
+        for (uint64_t k = 0; k < AFEMETA_FRAME && k <= from; k++)
+            if (ring_meta(from - k, &m)) { meta_phase = (int)((from - k) % AFEMETA_FRAME); break; }
+        if (meta_phase < 0) return -1;
+    }
+    return -1;
 }
 
 static double ring_power(uint64_t a, uint64_t b)    /* mean square over samples [a, b), as far as the ring still has them */
@@ -1267,6 +1343,7 @@ static void send_out(const int16_t *pcm, size_t n, int held_sound)
 {
     static int16_t out[1024 + MICDENOISE_FRAME];
     mic_gain.hold = held_sound || atomic_load(&sounds_pending) || atomic_load(&earcon_sounding) || mono_ms() < atomic_load(&earcon_heard_until);
+    micend_run(&mic_end, pcm, n, mic_gain.hold);        /* the level as heard, before the gain; heard_end() acts on it */
     while (n) {
         size_t k = n < 1024 ? n : 1024, m = k;
         const int16_t *src = pcm;
@@ -1293,6 +1370,10 @@ static void send_mic(const int16_t *pcm, size_t n, uint64_t at)
         static const int denoise_db[] = { 0, 6, 9, 12 };
         fprintf(stderr, "mic gain: talker %.1f dBFS, gain %+.1f dB", micgain_talker_db(&mic_gain), mic_gain.gain_db);
         if (mic_denoise) fprintf(stderr, ", noise reduction %d dB", denoise_db[mic_denoise]);
+        micend_start(&mic_end, proto->end ? end_mode : MICEND_OFF, micgain_talker_db(&mic_gain), at, ring_speech);
+        if (talker_from > at) mic_end.from = talker_from;   /* the wake word sent too: not the request's speech yet */
+        mic_gain.talker_min_db = mic_end.mode ? mic_end.talker_db - micend_margin(mic_end.mode) : -1000;   /* nor the gain's */
+        if (mic_end.mode) fprintf(stderr, ", end heard here: %s", micend_names[mic_end.mode]);
         fprintf(stderr, "\n");
         if (mic_denoise) {
             micdenoise_reset(denoise_db[mic_denoise]);
@@ -1326,27 +1407,17 @@ static void stream_ring(uint64_t from, uint64_t to) /* capture thread, lock held
     }
 }
 
-/* Where the replay after a wake word starts (capture thread, lock held).  Pryon's end is where it was sure, not where
- * the voice stopped: a drawn-out "Alexaaa" (children's; forum, 2026-10-19) still sounds after it.  Sent from the
- * ring, that tail came out of STT as "Ja.", and Home Assistant's VAD took the pause after it for the end of the
- * command.  Before the ring (ad224f5) the stream began 120-180 ms after the end and that user had no such trouble.
- * So the 10 ms frames after the end are skipped while they still sound like the word: up to the first one 12 dB under
- * the keyword's level, or the deepest dip before the level rises 3 dB again (a command spoken straight on), at most
- * 200 ms; if neither comes, the quietest frame seen (at worst what was cut before the ring).  The gain starts at the
- * keyword's level (mic_fresh), so a tail left in reaches STT at speech level. */
-static uint64_t word_tail_end(uint64_t end, uint64_t to)
+/* Where the replay after a wake word that ended at end starts, from the ring up to to (wordtail.h; capture thread, lock
+ * held); -1: not known yet, the stream waits for more */
+static int64_t word_tail_end(uint64_t end, uint64_t to)
 {
-    const uint64_t frame = CAP_RATE / 100, most = CAP_RATE / 5;
-    if (keyword_db > 0) return end;                 /* no level known (the PC's SIGUSR1) */
-    uint64_t f = end, low_at = end; double low = 1e9;
-    for (; f + frame <= to && f - end < most; f += frame) {
-        double db = 10 * log10(ring_power(f, f + frame) / (32768.0 * 32768.0) + 1e-10);
-        if (db < keyword_db - 12) { low_at = f; break; }
-        if (db > low + 3) break;
-        if (db < low) { low = db; low_at = f; }
-    }
-    if (low_at > end) fprintf(stderr, "wake: %llu ms of the word's tail left out\n", (unsigned long long)((low_at - end) * 1000 / CAP_RATE));
-    return low_at;
+    float db[WORDTAIL_FRAMES]; int n = 0, cut; const char *why = "";
+    if (keyword_db > 0) return (int64_t)end;        /* no level known (the PC's SIGUSR1) */
+    for (; n < WORDTAIL_FRAMES && end + (uint64_t)(n + 1) * WORDTAIL_FRAME <= to; n++)
+        db[n] = 10 * log10(ring_power(end + (uint64_t)n * WORDTAIL_FRAME, end + (uint64_t)(n + 1) * WORDTAIL_FRAME) / (32768.0 * 32768.0) + 1e-10);
+    if ((cut = wordtail_cut(db, n, keyword_db, &why)) < 0) return -1;
+    if (!replay_whole) fprintf(stderr, "wake: %d ms of the word's tail left out (%s)\n", cut * 1000 * WORDTAIL_FRAME / CAP_RATE, why);
+    return (int64_t)(end + (uint64_t)cut * WORDTAIL_FRAME);
 }
 
 static void answer(uint64_t from)                   /* capture thread: act on the wake word that ended at from */
@@ -1470,7 +1541,7 @@ static void on_wake(int slot, const char *keyword, uint64_t begin, uint64_t end)
     last_wake_ms = mono_ms();
     atomic_store(&wake_slot_heard, slot);
     { float db = 10 * log10f((ring_power(begin, end) + 1) / (32768.0f * 32768.0f));     /* the talker's level, for the gain */
-      pthread_mutex_lock(&core_lock); keyword_db = db; heard_ms = last_wake_ms; snprintf(wake_phrase, sizeof wake_phrase, "%s", wake_loaded[slot]); pthread_mutex_unlock(&core_lock); }
+      pthread_mutex_lock(&core_lock); keyword_db = db; heard_ms = last_wake_ms; kw_begin = begin; kw_end = end; snprintf(wake_phrase, sizeof wake_phrase, "%s", wake_loaded[slot]); pthread_mutex_unlock(&core_lock); }
     if (!arb_running()) { trigger(0, end); return; }
     pthread_mutex_lock(&core_lock); det_begin = begin; det_end = end; pthread_mutex_unlock(&core_lock);
     atomic_store(&det_pending, 1);                  /* the ring is the capture thread's */
@@ -1690,10 +1761,23 @@ int core_transcript(const char *text)
     static const char *const hangups[] = { "hangup", "endcall", "endthecall", "enddropin", "auflegen", "legauf", "beenden", "anrufbeenden",
                                            "dropinbeenden", "gesprächbeenden", "raccroche", "raccrocher", "cuelga", "colgar",
                                            "riattacca", "riaggancia", "ophangen", "hangop", "legop" };     /* the blueprint's languages */
-    char w[32]; size_t n = 0;
+    char w[32], k[32], kw[64]; size_t n = 0, m = 0;
     for (const char *p = text; *p && n < sizeof w - 1; p++)        /* lower case, without spaces and punctuation */
         if (!strchr(" \t.,!?¡¿\"'", *p)) w[n++] = (char)tolower((unsigned char)*p);
     w[n] = 0;
+    wake_phrase_bare(kw, sizeof kw);                                /* "Echo", not "Echo (de-DE)" */
+    for (const char *p = kw; *p && m < sizeof k - 1; p++)          /* "Alexa, stop" with the wake word sent too */
+        if (!strchr(" \t.,!?¡¿\"'", *p)) k[m++] = (char)tolower((unsigned char)*p);
+    k[m] = 0;
+    if (m && n > m && !strncmp(w, k, m)) memmove(w, w + m, n - m + 1);
+    /* The wake word sent too and nothing after it: without the word Home Assistant would have heard nothing and ended
+     * quietly (core_no_speech).  So here: not speech that stops a ring (timer_stop_any), nor a request for the agent */
+    if (replay_whole && m && n == m && !strcmp(w, k)) {
+        fprintf(stderr, "transcript: the wake word alone, as nothing said\n");
+        if (run_wake) wake_told("no_speech");
+        if (connected && proto->cancel) quiet_cancel(); else core_pipeline_finish();
+        return 1;
+    }
     if (dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE) {
         int hit = 0;
         for (size_t i = 0; i < sizeof stops / sizeof stops[0]; i++) hit |= !strcmp(w, stops[i]);
@@ -2510,8 +2594,13 @@ static void *capture_thread(void *arg)
           if (t == 1) { pthread_mutex_lock(&core_lock); wake_phrase[0] = 0; heard_ms = mono_ms(); wake_told("detected"); pthread_mutex_unlock(&core_lock); }   /* the first one's */
           if (t == 3) wake_tell("near_miss");                         /* SIGTTOU: Pryon's near miss */
           if (t == 2) trigger(1, 0);
-          else if (t == 1 && ring_n > CAP_RATE) wake_heard(ring_n - CAP_RATE * 6 / 10, ring_n - lag, 1);
-          else if (t == 1) wake_heard(0, ring_n, 1); }
+          else if (t == 1) {
+              uint64_t b = ring_n > CAP_RATE ? ring_n - CAP_RATE * 6 / 10 : 0, e = ring_n > CAP_RATE ? ring_n - lag : ring_n;
+              pthread_mutex_lock(&core_lock); kw_begin = b; kw_end = e;
+              if (getenv("HASSMIC_FAKE_KEYWORD")) keyword_db = 10 * log10f((ring_power(b, e) + 1) / (32768.0f * 32768.0f));   /* as on_wake: the tail is looked for */
+              pthread_mutex_unlock(&core_lock);
+              wake_heard(b, e, 1);
+          } }
         if (atomic_exchange(&stop_pending, 0)) stop_word();        /* SIGHUP: the "stop" keyword, for tests on the PC */
         if (n == 0) continue;
         atomic_fetch_add(&cap_bytes, n);
@@ -2568,10 +2657,23 @@ static void *capture_thread(void *arg)
             pthread_mutex_lock(&core_lock);
             uint64_t at = cap_clock() - n / 2;
             if (atomic_load(&streaming) && connected) {
-                if (replay_from) stream_ring(word_tail_end(replay_from, at), at);     /* after the wake word, up to this block */
-                send_mic(pcm, n / 2, at);
-            }
-            replay_from = 0;
+                if (!replay_from) send_mic(pcm, n / 2, at);
+                else {                                      /* after the wake word: from its tail's end, this block included */
+                    int64_t from = word_tail_end(replay_from, at + n / 2);
+                    if (from >= 0) {
+                        talker_from = (uint64_t)from;
+                        if (replay_whole) {                 /* or the word itself too, from a little ahead of it */
+                            uint64_t lead = CAP_RATE / 10;
+                            from = (int64_t)(kw_begin > lead ? kw_begin - lead : 0);
+                            fprintf(stderr, "wake: the wake word sent too, from %llu ms before its end (the command from %llu ms after it)\n",
+                                    (unsigned long long)((replay_from - (uint64_t)from) * 1000 / CAP_RATE),
+                                    (unsigned long long)((talker_from - replay_from) * 1000 / CAP_RATE));
+                        }
+                        stream_ring((uint64_t)from, at + n / 2); replay_from = 0;
+                    }
+                }
+                if (mic_end.ended && atomic_load(&streaming)) heard_end();
+            } else replay_from = 0;
             pthread_mutex_unlock(&core_lock);
         }
         if (atomic_exchange(&det_pending, 0)) {

@@ -4,6 +4,28 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-28
 
+- **Optionally, the wake word goes to Home Assistant too** ("Wake word in the request", settings page, Voice; off by
+  default). Speech to text then hears the whole sentence, "Alexa, turn on the light", so nothing of your first word
+  can be cut and no stray end of the wake word turns up. Meant for an AI conversation agent: Home Assistant's own
+  built-in sentences may not recognise a command with "Alexa" in front. "Alexa, stop" still stops a ringing timer or
+  music.
+- **Other people talking no longer end up in your request: "End of request heard on the Echo"** (experimental, issue
+  #66; settings page, Voice; off by default). Home Assistant ends a request only when the room goes quiet, so in a busy
+  kitchen it stayed open while others talked, and speech to text wrote down their words after yours ("Next. Eat some
+  food please"). The Echo knows how loud you said the wake word: with this on, it ends the request itself when *you*
+  pause, and quieter voices around you no longer get turned up to speech level either (they were, within two
+  seconds). On the Echo Dots it also listens to Amazon's own speech detector, which the Echo's audio front end turns
+  out to report for every 8 ms of sound: clattering dishes as loud as your voice don't hold the request
+  open. Relaxed, Normal and Aggressive differ in how long a pause ends it (1.25, 0.7, 0.45 s) and how much quieter
+  than you another voice must be to be left out (about 17, 14, 11 dB). It cannot tell a voice as loud as yours, and
+  may end too soon if you turn away mid-sentence: start with Relaxed and tell us how it goes. ESPHome only.
+- **The end of the wake word no longer reaches speech to text** (issue #72). Amazon's wake word engine is sure of
+  "Alexa" before it has been fully said, and a drawn-out "Alexaaa", or one in a room that echoes, sounds on for a
+  third of a second after that. That end went to Home Assistant as loud as the command and came out as a stray word in
+  front of it ("The next track", "Faint memories"), so built-in sentences such as "next track" no longer matched. The
+  Echo now waits for the pause after the word and starts there. When there is no pause (the command said straight on,
+  a loud room) it never leaves out more than before: a sliver of the word left in is better than your first word cut.
+  The log says how much it left out and why.
 - **Timers ring with Alexa's own timer tone** (issue #63). A finished timer now plays the tone a stock Echo rings with,
   from the Echo's own firmware, instead of the quiet triple beep. "Timer sound" on the settings page (Voice) picks
   another: Alexa's alarm tone, the beep (now as loud as Alexa's tone: it was about 4 dB quieter), or a sound of your

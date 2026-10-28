@@ -47,6 +47,8 @@ struct proto {
     void (*dropin_result)(const char *result);  /* may be NULL: what came of a call this Echo made (dropin_results) */
     void (*button)(const char *event);          /* may be NULL: a button was pressed or held (core_button_events) */
     void (*wake)(const char *event);            /* may be NULL: the wake word heard (core_wake_events) */
+    void (*end)(void);                          /* may be NULL: the Echo heard the request end (micend.h): end of audio,
+                                                 * the server goes on with what it has (stop() aborts the run) */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
@@ -90,6 +92,8 @@ void core_no_speech(void);
 int  core_soft_mute(int set);                    /* set: 0/1, or -1 to only read */
 int  core_muted(void);                           /* effective */
 int  core_wake_sound(int set);                   /* same convention */
+int  core_wake_in_request(int set);              /* the request's audio from the wake word on, not after it; -1 reads */
+int  core_end_of_request(int set);               /* the end of a request heard on the Echo (micend.h: MICEND_*), -1 reads */
 int  core_stop_ends_listening(int set);          /* "<wake word>, stop" also ends listening (main.c stop_word), -1 reads */
 int  core_bt_announce(int set);                  /* same: chime and "Connected to <name>" when a phone connects */
 int  core_bluetooth(int set);                   /* same; -B on the command line: leave the radio to the stock stack */
