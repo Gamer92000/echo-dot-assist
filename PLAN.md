@@ -2580,3 +2580,26 @@ Run in this order. Each step says what it proves.
       **Open:** lux flicker under a close lamp; not confirmed on the Echo: Improv, factory reset, `--uninstall`, the
       update check, and the build without the `netio.h` system calls (the rule alone);
       `tools/mkringbar.py --framework` cannot read Android 9's compact dex (checked by hand once, 2026-10-20).
+- [~] Kiosk Satellite next to hassmic on the screen models (crown, athena; 2026-10-14, `docs/kiosk-satellite.md`).  The app
+      (me.jxl.kiosk_satellite, the user's choice) shows dashboards; hassmic stays the voice satellite.  `main.sh`:
+      `kiosk_helper` opens the app once per boot and keeps its update helper running as the shell user (never root),
+      `kiosk_grants` gives it the permissions it would ask a person for (never the microphone).  `lockdown.sh`: setting
+      `kiosk_internet` (default on) lets that uid out to the internet with one rule, INPUT TCP 2324 (its web page) and 6053
+      (its ESPHome API) from private addresses only.  `install_keyboard` in the guided setup offers Simple Keyboard (the
+      image has no input method).  Lux readings agree with the app's within ~1 lx in dim light.
+- [x] Kiosk Satellite microphone for a plugin (2026-10-26, athena, Show 8 2nd gen, Android 9; user's doorbell plugin
+      `reolink-doorbell` 1.1.1 inside KS 2026.10.40, a Reolink doorbell on the LAN, talk over Baichuan/ONVIF, no Home
+      Assistant).  Question: can the app record while hassmic holds the mic?  `dumpsys audio` (recording activity)
+      watched through three calls: hassmic uid 1000, session 41, VOICE_RECOGNITION, started 09:19:47, no stop or restart
+      in the whole run; the app (uid 10183) opened VOICE_COMMUNICATION (32.9 s), VOICE_RECOGNITION (19.1 s) and
+      CAMCORDER (17.7 s) one after the other.  boot.log: no "capture delivers nothing, reopening", the wake word fired
+      during the calls (score 2206 from the front end, level -49 dBFS over noise -73) and answered.  The user: only
+      VOICE_COMMUNICATION reached the doorbell, without echo; the other two gave nothing and echoed; sound at the
+      doorbell poor (cause unmeasured: G.711 talk channel, the doorbell's speaker, or the Voice pipeline's level).
+      The plugin's default "Automatic" tries CAMCORDER first and keeps what opens, so it fails here.  Done: setting
+      `kiosk_mic` (settings.c, off by default, page only, not exported); main.sh `kiosk_mic_apply`/`kiosk_mic_sync`
+      grant or revoke RECORD_AUDIO from state/config (revoking ends the app).  Not done: the mechanism behind the
+      silent sources; the same on crown and checkers (Android 7.1.2, where audio_android.c's header expects a newer
+      recorder to take the input from an older one); the Voice pipeline's level and noise (a recording from
+      VOICE_COMMUNICATION next to hassmic's).
+

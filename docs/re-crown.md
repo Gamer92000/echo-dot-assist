@@ -103,3 +103,54 @@ downloaded and installed from the settings page on a Show 8.
   `com.android.providers.downloads` loads its library from and `TabletCamera2` is Android's camera app: both stay.
   `ahe.damca` (a service and a receiver, idle, no Alexa client needed) and `smarthomemapviewapp` stay too: removing an app
   only pays when it crashes or burns CPU.
+
+## Kiosk Satellite as a display (2026-10-14, trial)
+
+`me.jxl.kiosk_satellite` 2026.10.23 (armeabi-v7a, minSdk 24, Flutter + WebView) installs with `adb install` and starts, but
+needs a WebView provider: with `app/AmazonWebView` (Chromium 118, `com.amazon.webview.chromium`) off the partition the
+Echo had none ("No WebView installed"). It is no longer in crown's `STOCK_APPS_OUT`; after the reboot the provider loads
+and the setup wizard shows, above the light band (the band's overscan is respected). Open: its voice assistant stays off
+(deny RECORD_AUDIO/CAMERA), HOME choice, screen timeout, ports above 16384 for its own server, updates (its APK cannot
+reach GitHub through the egress lock).
+
+### Kiosk Satellite: helper, keyboard, screen (2026-10-14)
+
+- Update helper: the app's content provider `content://me.jxl.kiosk_satellite.update-helper/start` returns a script that
+  starts `app_process … UpdateHelper serve <uid> <token>` (the app's own code, a local TCP socket, the app installs its
+  updates through it). Over adb that is root's; `main.sh` `kiosk_helper` (device.conf `KIOSK_PACKAGE`) runs it as `shell`
+  with groups `log,inet` (`inet`: without it `ServerSocket` fails with "Permission denied"), after boot and again every 5 min
+  (an update of the app ends it; the script is idempotent). The app still has to fetch its APK: the egress lock drops its
+  traffic to the internet, so touchless updates need either hassmic fetching the APK or letting the app out.
+- Keyboard: the Echo has no input method (Amazon's `bluestone-kb` needs Amazon's account libraries). Simple Keyboard 6.7
+  (`rkr.simplekeyboard.inputmethod`, only VIBRATE, minSdk 24) installed by hand and set with `ime set`.
+- Screen: `ANDROID_SETTINGS` now sets manual brightness 120 (auto mode had the backlight at 1/255), and
+  `accelerometer_rotation=0`, `user_rotation=1`: the Echo has no accelerometer; KS had put it in portrait, where the band's
+  overscan became a strip down the left edge.
+
+## Kiosk Satellite: start, internet, keyboard (2026-10-14)
+
+- Nothing started the app after a boot (no HOME category: hassmic-home is the home screen). `main.sh` `kiosk_helper` now
+  opens it once with `monkey` (as shell) when it is not running, 10 s after boot_completed, then keeps the update helper up.
+- Egress: setting `kiosk_internet` (page, System; screen models only, not exported, default on since the remote admin
+  entry below). `lockdown.sh` `kiosk_state` reads `state/config`: anything but `kiosk_internet=off` opens it and adds `-m owner --uid-owner <uid of KIOSK_PACKAGE from
+  packages.list> -j RETURN` before the gid rule. Checked on the Echo: uid 10000 reaches 1.1.1.1:80, shell user times out;
+  Amazon's daemons have other uids.
+- `install_keyboard` in `scripts/lib/setup.sh` (crown `step_install`, asked, default no): Simple Keyboard release 148
+  (6.7), sha256 pinned, `adb install`, `ime enable` + `ime set`.
+- Not in setup: Kiosk Satellite itself (the user picks the app: VACA and others exist).
+
+### Remote admin port and internet default (2026-10-14)
+
+TCP 2324 (KS's web page/API; 6053, its ESPHome API, added 2026-10-15 after Home Assistant could not reach it) is outside the admitted 16384-32767: `lockdown.sh` `keep()` now admits it from private
+addresses where device.conf has `KIOSK_PACKAGE` (nothing listens without the app). LAN egress from KS's uid already
+worked (the chain returns local destinations); a hosted or external HA URL needs the internet, so `kiosk_internet` now
+defaults to on (an Echo that saved "off" before keeps it).
+
+### Do not make Kiosk Satellite the home app (2026-10-14)
+
+Leave `org.hassmic.home` as HOME. KS declares no HOME category, so Android will not offer it (`cmd package
+set-home-activity` refused it), and it need not be: the home activity is what keeps the screen's overscan and the light
+band's layer in place, and `main.sh` opens KS over it once per boot. Skip any KS step that asks for the launcher role or
+a lockdown/kiosk mode built on it (its device admin only has force-lock here). Cost: if the app is closed or crashes,
+the screen shows the plain home screen until the next boot or a manual start (remote admin on 2324 or
+`monkey -p me.jxl.kiosk_satellite -c android.intent.category.LAUNCHER 1`).

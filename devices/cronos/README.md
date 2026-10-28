@@ -109,3 +109,9 @@ debugfs -R "rdump / firmware/cronos/rootfs/system" firmware/cronos/images/system
 python3 scripts/mkbootroot.py --cpio firmware/cronos/images/boot.img firmware/cronos/ramdisk.cpio
 (cd firmware/cronos/rootfs && cpio -id < ../ramdisk.cpio)
 ```
+
+## Kiosk Satellite (optional)
+
+Install it yourself if you want the screen to show a dashboard (voice assistant off in the app: hassmic is the
+satellite). Do not make it the home app: keep hassmic's own home screen as HOME (the band lives on it); hassmic opens
+Kiosk Satellite over it at every boot. Details in `docs/kiosk-satellite.md`; not yet tried on this model.

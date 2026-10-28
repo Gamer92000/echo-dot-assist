@@ -120,3 +120,9 @@ debugfs -R "rdump /system firmware/athena/rootfs" firmware/athena/images/system.
 rm firmware/athena/rootfs/system/vendor; mkdir firmware/athena/rootfs/system/vendor     # a link to /vendor
 debugfs -R "rdump / firmware/athena/rootfs/system/vendor" firmware/athena/images/vendor.img
 ```
+
+## Kiosk Satellite (optional)
+
+Install it yourself if you want the screen to show a dashboard (`adb install`, voice assistant off in the app). hassmic opens it
+at every boot, grants it what it needs (never the microphone), keeps its update helper running and lets only its uid out to
+the internet (setting `kiosk_internet`). Details: `docs/kiosk-satellite.md`.

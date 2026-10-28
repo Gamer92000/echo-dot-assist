@@ -47,6 +47,8 @@ static const char *bt_lang_codes[sizeof bt_langs / sizeof bt_langs[0]];
 static int mic_level = MICGAIN_LEVEL, bt_lang;
 static int bt_audio = 1, bt_speaker, whisper = 1;      /* features kept here; bt_speaker's default: settings_load */
 static int light_sensor;                                /* off: auto brightness moved the level in HA's history all day (forum, 2026-10-15) */
+static int kiosk_net = 1;                                 /* lockdown.sh reads it from state/config */
+static int kiosk_mic;                                     /* off: main.sh keeps RECORD_AUDIO from the app; it reads state/config */
 static int bt_stay;                                     /* a2dp.c gets it only while the feature is on: off drops the link */
 static int wake_events;                                 /* off: an event per near miss is HA history most homes never read */
 static int request_text;                                /* off: what people say kept in HA's history is theirs to choose */
@@ -57,7 +59,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 /* ---------------------------------------------------------------- the table */
 
 enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, STOP_ENDS, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
-          WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
+          WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET, NSET };
 
@@ -116,6 +118,11 @@ static const struct setting table[NSET] = {
     [UPDATES]     = { "online_updates", "Online updates", "System", NULL, S_CHOICE, 0, 0, 1, 0 },
     /* https.c keeps it: media from a Home Assistant that serves HTTPS itself (issue #30) */
     [HTTPS_VERIFY] = { "https_verify", "Check HTTPS certificates", "System", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* only a number here: root's lockdown.sh lets Kiosk Satellite's uid out while state/config says on (screen models) */
+    [KIOSK_NET]   = { "kiosk_internet", "Kiosk Satellite internet access", "System", NULL, S_BOOL, 0, 1, 0, 0 },
+    /* only a number here, as kiosk_internet: root's main.sh grants or revokes the app's RECORD_AUDIO (screen models; not exported:
+     * it lets an app record, so one Echo does not hand it to another) */
+    [KIOSK_MIC]   = { "kiosk_mic", "Kiosk Satellite microphone", "System", NULL, S_BOOL, 0, 1, 0, 0 },
     [SS_UNPAIRED] = { "sendspin_unpaired", "Music Assistant without pairing", "Music", NULL, S_BOOL, 0, 1, 1, 0 },
     [EQ_BASS]     = { "equalizer_bass", "Equalizer bass", "Sound", "dB", S_INT, -6, 6, 1, 0 },
     [EQ_MID]      = { "equalizer_mid", "Equalizer mid", "Sound", "dB", S_INT, -6, 6, 1, 0 },
@@ -158,7 +165,7 @@ static int present(enum id i)
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
     case SS_UNPAIRED: return core_sendspin_port != 0;
     case SPK_GAIN: return spkgain_present();
-    case BAND: return ring_band_rows(-1) >= 0;
+    case BAND: case KIOSK_NET: case KIOSK_MIC: return ring_band_rows(-1) >= 0;
     case RING_ROT: return ring_band_rows(-1) < 0;                 /* LEDs to turn: the Dots' ring, not the band */
     default: return 1;
     }
@@ -225,6 +232,8 @@ int settings_get(const struct setting *s)
     case ARB_AUTO: return arb_window_auto(-1);
     case ARB_WINDOW: return arb_window(-1);
     case ARB_OFFSET: return arb_offset(INT_MIN);
+    case KIOSK_NET: return kiosk_net;
+    case KIOSK_MIC: return kiosk_mic;
     case SS_UNPAIRED: return sendspin_unpaired(-1);
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: return core_eq((int)(s - table) - EQ_BASS);
     case BT_AUDIO: return bt_audio;
@@ -278,6 +287,8 @@ static void put(enum id i, int v)
     case ARB_AUTO: arb_window_auto(v); break;
     case ARB_WINDOW: arb_window(v); break;
     case ARB_OFFSET: arb_offset(v); break;
+    case KIOSK_NET: kiosk_net = v; break;
+    case KIOSK_MIC: kiosk_mic = v; break;
     case SS_UNPAIRED: sendspin_unpaired(v); break;              /* sendspin.c keeps it */
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: core_set_eq(i - EQ_BASS, v); break;     /* the mixer keeps it */
     case BT_AUDIO: bt_audio = v; if (!v) a2dp_pair(0); break;                        /* paired phones still connect */
