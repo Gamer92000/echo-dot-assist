@@ -107,7 +107,9 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
     int peak = 0;
     for (size_t i = 0; i < samples; i++) if (abs(pcm[i]) > peak) peak = abs(pcm[i]);
     fprintf(stderr, "earcon: %zu samples @ %u Hz, until stopped, peak %d\n", samples, rate, peak);
-    for (long ms = 0; ms < (long)(samples * 1000ULL / (rate ? rate : 48000)) && go(); ms += 20) usleep(20000);
+    long ms = 0, len = (long)(samples * 1000ULL / (rate ? rate : 48000));
+    for (; ms < len && go(); ms += 20) usleep(20000);
+    if (ms < len) fprintf(stderr, "earcon: cut at %ld ms\n", ms);       /* for the tests: what stopped it stopped it at once */
 }
 
 /* Music streams on the PC: files, written at real-time speed through a modelled 200 ms device buffer. */

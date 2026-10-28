@@ -34,6 +34,7 @@ TESTS = [
     ("wifi", [PY, "tests/fake_web_wifi.py"]),
     ("wifi-join", [PY, "tests/fake_wifi_join.py"]),
     ("volumes", [PY, "tests/fake_ha_volumes.py"]),
+    ("timer-sound", [PY, "tests/fake_ha_timer_sound.py"]),
     ("improv", [PY, "tests/fake_improv.py"]),
     ("dropin", [PY, "tests/fake_ha_dropin.py"]),
     ("unit", ["make", "-s", "-j4", "unit"]),

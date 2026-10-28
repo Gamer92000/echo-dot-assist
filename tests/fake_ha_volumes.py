@@ -5,7 +5,7 @@ Home Assistant's media at the music volume although it plays on the same stream,
 numbers in Home Assistant, the quieter ones turned down in their PCM, kinds that follow the music some points above or
 below it, a restart, a Bluetooth speaker (HASSMIC_FAKE_SPEAKER), the page and exports, and everything as before with the
 feature off."""
-import asyncio, contextvars, io, json, os, re, signal, socket, struct, subprocess, sys, tempfile, threading, traceback, wave
+import asyncio, contextvars, io, json, math, os, re, signal, socket, struct, subprocess, sys, tempfile, threading, traceback, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from aioesphomeapi import VoiceAssistantEventType as Ev, APIClient, MediaPlayerInfo, MediaPlayerEntityState, MediaPlayerState, NumberInfo, NumberState
 from aioesphomeapi import VoiceAssistantTimerEventType as Tm
@@ -16,6 +16,10 @@ from webclient import Browser
 HTTP_PORT = 16984
 KEY_VOLUMEUP, KEY_VOLUMEDOWN = 115, 114
 CLICK_PEAK = 10000                                      # the stand-in volume tone: 4800 samples at this level
+# a timer's ring here, without a stand-in for stock's tone: the built-in blip at Alexa's level (main.c BEEP_PEAK), not
+# the wake sound's 6000
+_B = int(re.search(r"#define BEEP_PEAK (\d+)", open(os.path.join(ROOT, "src/hassmic/main.c")).read()).group(1))
+RING_PEAK = max(abs(int(_B * min(1.0, min(i, 5760 - i) / 480) * math.sin(2 * math.pi * (880.0 if i < 2880 else 1320.0) * i / 48000))) for i in range(5760))
 # The parts below run at once, each with Echos of its own (most of the time goes to audio played at real time and to
 # hassmic's own periods): part i's Echos on ESPHome port PORT + 2i, their settings pages one above
 PORT = 17100
@@ -222,7 +226,7 @@ async def part_separate(url, full):
         c.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t1", "tea", 60, 0, False)
         await until(lambda: echo.text().count("earcon: 5760 samples") >= 4)
         peaks = [int(x) for x in re.findall(r"earcon: 5760 samples @ 48000 Hz, peak (\d+)", echo.text())]
-        want = (await full) * g(80, 90)
+        want = RING_PEAK * g(80, 90)
         check(abs(peaks[-1] - want) <= 3, f"timers at 80 under 90: the ring at {peaks[-1]} (want {want:.0f})")
         before = clicks()
         echo.key(KEY_VOLUMEDOWN)                       # while it rings: the timers' volume

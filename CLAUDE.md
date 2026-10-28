@@ -76,6 +76,9 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # loudest, HA's media at the music's, keys on what plays, gains in dB, a
                                              # restart, a Bluetooth speaker, the page, exports (HASSMIC_FAKE_MIXER,
                                              # HASSMIC_FAKE_SPEAKER)
+.venv/bin/python tests/fake_ha_timer_sound.py # the timer's sound (issue #63): stock's tone by default, looped and cut by
+                                             # stops and pipelines, the beep at its level, uploads (the page's WAV only),
+                                             # Play, delete, restart, the beep without the tone
 .venv/bin/python tests/fake_ha_ring.py        # light ring: the animation set from stand-in stock files, HA's light,
                                              # the Echo's own patterns first, the listening ring turned by the beam
 .venv/bin/python tests/fake_improv.py         # setup from a phone: Improv over BLE against a fake controller on a pty
@@ -165,8 +168,13 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 `src/hassmic/` is one daemon; `main.c` is the satellite core, the rest plug into it through narrow headers:
 
 - **Core (`main.c`, `core.h`)**: state machine `IDLE/LISTENING/THINKING/SPEAKING`, pipeline timeout, TTS queue with
-  barge-in flush, alarms (timers), mute (hardware latch that software can set but never clear, plus a soft mute from HA),
-  volume, LED ring, earcons, wake word threshold hints.  Separate volumes (setting `separate_volumes`, issue #32):
+  barge-in flush, alarms (timers; `timer_sound`: stock's timer tone by default (`sounds.c`, libEarconAdapter's
+  timerDefault; the blip where the firmware has none), its alarm tone, the blip at the same loudness (`BEEP_PEAK`,
+  -16.5 LUFS), or the page's upload `state/timer_sound.wav`, which the browser converts to 48 kHz mono WAV and offers
+  to bring to that loudness (`web/loudness.js`, BS.1770; `tests/unit/web_loudness_test.py`): the Echo only checks the
+  format; looped by `play_earcon_while`, cut by any stop, a pipeline or our sounds; issue #63), mute (hardware latch
+  that software can set but never clear, plus a soft mute from HA), volume, LED ring, earcons, wake word threshold hints.
+  Separate volumes (setting `separate_volumes`, issue #32):
   music (`volume`), replies, sounds, timers, Drop In calls at volumes of their own or each following the music's +- an offset in
   points (`<kind>_linked`/`_offset`; linked, its HA number is unlisted); MainVolume and TTSVolume both at the loudest
   (libasp's own volume, which boosts the top end, follows the last of them set), each kind turned down in its PCM by

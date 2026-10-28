@@ -1618,6 +1618,13 @@ static long long mono_ms(void);
 static struct { char id[40], name[64]; } ringing[RINGING_MAX];  /* lock held: in the order they finished */
 static int nringing, timer_ring_s = 60, timer_stop_any;         /* lock held */
 static atomic_llong alarm_until;                                /* mono_ms the ring ends; LLONG_MAX: until stopped */
+/* What rings (issue #63): stock's timer tone (the default, where the firmware has it: core_timer_sound_default), its
+ * alarm tone, the built-in blip, or one uploaded on the page; set with the lock, read by the earcon thread.  The
+ * page's "Play" (preview) rings it once, PREVIEW_MS at most */
+static atomic_int timer_sound = TIMER_SOUND_BEEP, preview;
+static atomic_llong preview_until;
+#define PREVIEW_MS 10000
+static const enum sound timer_sounds[] = { [TIMER_SOUND_TIMER] = SND_TIMER, [TIMER_SOUND_ALARM] = SND_ALARM, [TIMER_SOUND_CUSTOM] = SND_CUSTOM };
 
 static void alarm_set(int on)          /* lock held */
 {
@@ -1727,6 +1734,16 @@ int core_timer_ring(int set)
     return timer_ring_s;
 }
 
+int core_timer_sound(int set)
+{
+    if (set >= 0 && set <= TIMER_SOUND_CUSTOM && (set == TIMER_SOUND_BEEP || sound_present(timer_sounds[set]))) atomic_store(&timer_sound, set);
+    return atomic_load(&timer_sound);
+}
+
+void core_timer_sound_default(void) { if (core_timer_sound(TIMER_SOUND_TIMER) != TIMER_SOUND_TIMER) core_timer_sound(TIMER_SOUND_BEEP); }
+
+void core_timer_sound_preview(void) { atomic_store(&preview, 1); }
+
 int core_timer_stop_any(int set)
 {
     if (set >= 0) timer_stop_any = set != 0;
@@ -1763,18 +1780,37 @@ static short *scaled(const short *pcm, size_t n, int q16)
 
 static int ring_sound;
 static int ring_go(void) { return atomic_load(&dropin_ring) == ring_sound && !atomic_load(&sounds_pending); }
+/* a timer's sound plays on until it is stopped or rings out, and gives way to a pipeline (speech to text must hear the
+ * user, not the ring), our other sounds and a Drop In's ring; then it starts again from the top */
+static int alarm_go(void)
+{
+    return atomic_load(&alarm_on) && mono_ms() <= atomic_load(&alarm_until) && !atomic_load(&busy) && !atomic_load(&sounds_pending)
+           && atomic_load(&dropin_ring) < 0;
+}
+static int preview_go(void)
+{
+    return mono_ms() < atomic_load(&preview_until) && !atomic_load(&alarm_on) && !atomic_load(&busy) && !atomic_load(&sounds_pending)
+           && atomic_load(&dropin_ring) < 0;
+}
+
+/* The ring's blip as loud as Alexa's timer tone: BS.1770 loudness of its cycle (three blips, 0.8 s of silence) at a peak
+ * of 6000 is -20.8 LUFS, the tone's -16.6 (donut; -16.2 on the Shows), so the ring takes 4.3 dB more (issue #63).  The
+ * same blip standing in for the wake and touch sounds keeps 6000 */
+#define BEEP_PEAK 9850
 
 static void *earcon_thread(void *arg)
 {
     enum { RATE = 48000, N = RATE * 12 / 100 };
-    static short tone[N];
+    static short tone[N], beep[N];
     static const char *const snd_names[SND_COUNT] = { "wake", "touch", "mics off", "mics on", "volume", "bluetooth connected",
                                                                 "bluetooth disconnected", "identify", "drop in", "call connected",
-                                                                "call ended", "incoming call", "outgoing call" };
+                                                                "call ended", "incoming call", "outgoing call", "timer", "alarm",
+                                                                "own timer sound" };
     (void)arg;
     for (int i = 0; i < N; i++) {           /* 120 ms rising two-tone blip with 10 ms fades */
         double f = i < N / 2 ? 880.0 : 1320.0, env = fmin(1.0, fmin(i, N - i) / (RATE * 0.01));
         tone[i] = (short)(6000 * env * sin(2 * M_PI * f * i / RATE));
+        beep[i] = (short)(BEEP_PEAK * env * sin(2 * M_PI * f * i / RATE));
     }
     for (;;) {
         /* Amazon's own sounds where the image has them; the generated blip stands in for the wake and touch sounds otherwise */
@@ -1798,16 +1834,22 @@ static void *earcon_thread(void *arg)
           if (r >= 0 && mono_ms() >= atomic_load(&dropin_ring_at) && sound_get((enum sound)r, &pcm, &n, &rate)) {
               short *quiet = scaled(pcm, n, atomic_load(&sounds_q16));     /* one of our sounds: at their volume */
               ring_sound = r; play_earcon_while(quiet ? quiet : pcm, n, rate, ring_go); free(quiet); usleep(300000); continue; } }
-        if (atomic_load(&alarm_on)) {                   /* timer finished: triple blip every 1.2 s, until the ring time */
-            if (mono_ms() > atomic_load(&alarm_until)) {
+        int pv = atomic_exchange(&preview, 0) && !atomic_load(&alarm_on);   /* none during a ring, nor after it */
+        if (atomic_load(&alarm_on) || pv) {             /* timer finished: its sound, or a triple blip every 1.2 s, until the ring time */
+            if (!pv && mono_ms() > atomic_load(&alarm_until)) {
                 pthread_mutex_lock(&core_lock);
                 if (mono_ms() > atomic_load(&alarm_until)) core_alarm_stop("rang out");     /* not a timer that just came */
                 pthread_mutex_unlock(&core_lock);
             } else if (!atomic_load(&busy)) {
-                short *quiet = scaled(tone, N, atomic_load(&timers_q16));
-                for (int k = 0; k < 3; k++) play_earcon(quiet ? quiet : tone, N, RATE);
+                int ts = atomic_load(&timer_sound); const short *pcm = beep; size_t n = N; unsigned rate = RATE;
+                if (ts != TIMER_SOUND_BEEP && !sound_get(timer_sounds[ts], &pcm, &n, &rate)) { pcm = beep; n = N; rate = RATE; }  /* gone: the blip */
+                short *quiet = scaled(pcm, n, atomic_load(&timers_q16));
+                if (pv) { atomic_store(&preview_until, mono_ms() + PREVIEW_MS); atomic_store(&earcon_sounding, 1); }
+                if (pcm != beep) play_earcon_while(quiet ? quiet : pcm, n, rate, pv ? preview_go : alarm_go);
+                else for (int k = 0; k < 3; k++) play_earcon(quiet ? quiet : beep, N, RATE);
                 free(quiet);
-                usleep(800000);
+                if (pv) { atomic_store(&earcon_heard_until, mono_ms() + 250); atomic_store(&earcon_sounding, 0); }
+                else if (pcm == beep) usleep(800000);
             }
             /* in the background while a pipeline runs: speech to text must hear the user, not the ring */
         }
@@ -2673,7 +2715,7 @@ int main(int argc, char **argv)
     static const struct improv_hooks improv_hooks = { web_attention, improv_authorized };
     if (use_bt) improv_start(&improv_hooks);                 /* setup over Bluetooth, when there is no network (improv.c) */
     if (ota_port) ota_start(ota_port);
-    pthread_mutex_lock(&core_lock); settings_load(); settings_preset(); pthread_mutex_unlock(&core_lock);    /* whatever the protocol */
+    pthread_mutex_lock(&core_lock); core_timer_sound_default(); settings_load(); settings_preset(); pthread_mutex_unlock(&core_lock);    /* whatever the protocol */
     davs_start();                                             /* Amazon login for artifact downloads (settings page) */
     static const struct web_hooks web_hooks = { web_attention, web_approved };
     if (core_web_port && web_start(core_web_port, &web_hooks)) { fprintf(stderr, "web: not available\n"); core_web_port = 0; }

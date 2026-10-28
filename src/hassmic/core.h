@@ -172,6 +172,13 @@ int    core_transcript(const char *text);                   /* speech to text's 
 int    core_timers_ringing(char *names, size_t cap);        /* count; names: "tea, 5 min", in the order they finished */
 int    core_timer_ring(int set);                            /* seconds a ring lasts, 0 until stopped; -1 reads */
 int    core_timer_stop_any(int set);                        /* 1: any recognised speech stops a ring; -1 reads */
+/* What a ring plays (issue #63): the built-in blip (as loud as stock's timer tone), stock's timer or alarm tone (looped),
+ * or the page's upload (sounds.h SND_CUSTOM).  One this Echo has no file for is refused (it stays); -1 reads.  The
+ * default: stock's timer tone, the blip where the firmware has none (also after the upload chosen is deleted) */
+enum { TIMER_SOUND_TIMER, TIMER_SOUND_ALARM, TIMER_SOUND_BEEP, TIMER_SOUND_CUSTOM };
+int    core_timer_sound(int set);
+void   core_timer_sound_default(void);
+void   core_timer_sound_preview(void);                      /* not the lock: one ring of it, 10 s at most (the page's "Play") */
 enum { MUSIC_SENDSPIN = 1, MUSIC_BLUETOOTH = 2 };
 void   core_music(int source, int on);                      /* a music stream runs: the wake word threshold follows */
 void   core_bt_device(const char *name, int on);            /* a Bluetooth speaker source connected / went (not the lock) */

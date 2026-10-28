@@ -99,6 +99,9 @@ tests/otatool_test.sh                             # the PC's otatool (Python) ag
 .venv/bin/python tests/fake_ha_volumes.py         # separate volumes: four of their own or following the music, media, keys,
                                                  # restart, Bluetooth speaker, page, exports, against the mixer's volumes as
                                                  # files (HASSMIC_FAKE_MIXER, HASSMIC_FAKE_SPEAKER)
+.venv/bin/python tests/fake_ha_timer_sound.py     # the timer's sound: stock's tone (a stand-in) by default, looped and cut
+                                                 # off, the beep at its level, uploads as the page makes them, Play, delete,
+                                                 # a restart (the page's loudness check: tests/unit/web_loudness_test.py)
 .venv/bin/python tests/fake_ha_ring.py            # the light ring: the animation set hassmic -G makes, Home Assistant's light,
                                                  # the Echo's own patterns first, the listening ring turned by the beam
 .venv/bin/python tests/fake_improv.py             # setup from a phone (Improv over BLE) on a fake Bluetooth controller,

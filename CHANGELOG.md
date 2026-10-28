@@ -4,6 +4,14 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-28
 
+- **Timers ring with Alexa's own timer tone** (issue #63). A finished timer now plays the tone a stock Echo rings with,
+  from the Echo's own firmware, instead of the quiet triple beep. "Timer sound" on the settings page (Voice) picks
+  another: Alexa's alarm tone, the beep (now as loud as Alexa's tone: it was about 4 dB quieter), or a sound of your
+  own. For your own, upload any sound file your browser plays (MP3, WAV, OGG, ...): its first 30 seconds play over
+  and over. The page measures how loud it is, and when it is clearly louder or quieter than Alexa's tone it says so
+  and offers to bring it to the same level, so one timer volume suits them all. "Play" plays the chosen sound once.
+  Each Echo keeps its own; the ring time, every way of stopping it, and the timer volume work as before. An Echo
+  whose firmware has no such tone keeps the beep.
 - **Nothing lost right after the wake word** (issue #77). With other Echos around, an Echo asks Amazon's audio front
   end how well it heard the wake word before it claims it. On an Echo Show that took up to 0.4 s, during which the Echo
   stopped listening: up to a quarter of a second of the command was lost, and speech to text misheard the word the

@@ -61,6 +61,15 @@ System) off takes any certificate, but then anyone on your network could slip th
   running. Switch on "Any request stops a ringing timer" on the settings page and whatever you say after the wake
   word during a ring stops it, in any language; a question asked during a ring then only stops it.
   Several timers can ring at once: each new one gives the ring its full time again, and one stop ends them all.
+  A timer rings with Alexa's own timer tone, from the Echo's firmware. "Timer sound" on the settings page picks
+  another: Alexa's alarm tone, a triple beep (as loud as Alexa's tone), or a sound of your own: "Upload a sound…" takes
+  any file your browser plays (MP3, WAV, OGG, M4A, ..., up to 20 MB), and its first 30 seconds play over and over. The page
+  measures its loudness (LUFS, as streaming services do) against Alexa's tone: more than 3 dB off, it says by how much
+  and offers to match it, turning it up or down before it is uploaded (turned up, its loudest moments are held back
+  so nothing clips; 24 dB up at most). Or keep it as it is and set the timer volume to suit it. "Play" plays the chosen
+  sound once, at the timer volume. Each Echo keeps its own; an export says which one is chosen, but your own sound
+  stays on the Echo it was uploaded to (upload it on each). Whichever plays, a stop cuts it off at once, and it
+  pauses while you talk. Where the firmware has no timer tone, the beep is the default.
   Home Assistant's "Timer ringing" is on just as long, so an automation can tell when nobody heard it:
 
   ```yaml
@@ -503,6 +512,7 @@ Echo announces itself again after 100 s without Home Assistant, then less and le
 - "Wake sound removal" (experimental, under Features): off by default; takes the wake sound out of what the voice
   assistant gets (see [Voice](#voice)).
 - "Timers ring for": 1 minute by default, 10 s to 10 min, or until stopped.
+- "Timer sound": Alexa's timer tone by default; its alarm tone, a beep, or a sound of your own (see [Voice](#voice)).
 - Bluetooth announcements and their language, the online updates channel, debug access (adb over Wi-Fi), SoC
   temperature and CPU usage.
 - "Music Assistant without pairing": off by default, so only Sendspin servers paired with the token may play.

@@ -1725,6 +1725,38 @@ Run in this order. Each step says what it proves.
       setting `timer_stop_any` (page-only, exported, off by default): any non-empty normalised STT_END text during a
       ring stops it and cancels the run, as EchoMuse does (wilbowes/EchoMuse#759). Cost: a question during a ring is
       not answered. fake_ha_esphome: the button, "Stopp den Timer" with the setting, a request without a ring untouched.
+      Issue #63 (2026-10-28, a Dot 3 user: the ring "strangely quiet" at full timer volume): the ring was the built-in
+      blip (main.c `earcon_thread`: 3 x 120 ms at 6000 = -14.7 dBFS peak, then 0.8 s of silence: -23.3 dBFS RMS over
+      the 1.2 s). Stock's tones, from `libEarconAdapter.so` `EarconsAudioProvider` (each getter binds a file name):
+      timerDefault `system_alerts_melodic_02.mp3`, timerShort `_02_short`, alarmDefault `system_alerts_melodic_01.mp3`,
+      alarmShort `_01_short`, reminderDefault/Short `alerts_notification_03.mp3` (one function), notificationDefault
+      `alerts_notification_01.mp3`. melodic_02: 6.08 s, 48 kHz stereo, -7.2 dBFS peak, -19.0 dB mean (ffmpeg
+      volumedetect), so ~4 dB louder on average and 7.5 dB at the peaks than the blip at the same volume. In
+      `/system/local/share/earcon/base/` on donut, biscuit, radar; on checkers and athena in
+      `priv-app/com.amazon.alarms` (`res/raw/system_alerts_melodic_0[12].mp3` = `default_timer_earcon` /
+      `default_alert_earcon`, same CRC, stored; the app is in STOCK_APPS_OUT, so read from `/system/hassmic-removed`);
+      cronos and crown: the same entries assumed (verify), greyed out on the page where the entry is missing
+      (`sound_present` reads the APK's central directory once, `zip_find`).
+      BS.1770 integrated loudness (the decoded mono, a Python meter that agreed with ffmpeg ebur128 to 0.01 LU):
+      melodic_02 -16.56 LUFS on donut, -16.17 on checkers (another encode); melodic_01 -17.26; the blip's ring cycle
+      at peak 6000 -20.81. So the ring's blip went to peak 9850 (`BEEP_PEAK`, -16.5 LUFS; the wake/touch stand-in
+      stays 6000), and the page's target is -16.5 (`TS_LUFS`).
+      Now setting `timer_sound` (timer / alarm / beep / custom, page-only, exported; default stock's timer tone, the
+      blip where the firmware has none, `core_timer_sound_default`; a sound without its file is refused, also at
+      start, and deleting the chosen upload goes back to the default). The chosen file loops through `play_earcon_while` with `alarm_go`: cut at once
+      by any stop, the ring time, a pipeline (busy), our other sounds and a Drop In's ring, then again from the top;
+      at `timers_q16`. Custom: the page decodes any file the browser plays (decodeAudioData), down-mixes and resamples
+      it to 48 kHz mono (OfflineAudioContext; files over 20 MB refused first: decoded whole in the tab), measures it
+      looped to 3 s as it rings (`web/loudness.js` `ringLufs`: BS.1770-4 K-weighting and gates; a clip under 400 ms
+      has no block of its own); more
+      than 3 LU from -16.5 it asks: match (gain, and where peaks would pass -1 dBFS a limiter with 5 ms look-ahead, a
+      5 ms average and ~80 ms release; the gain searched between the plain difference and +24 dB, secant and halving
+      by turns, since the limiter takes loudness away: 30 s in ~250 ms in node) or keep. It posts the first 30 s as
+      16-bit WAV to `POST /api/timer-sound` (signed); the Echo checks the format only (sounds.c `sound_custom_save`: no decoder or resampler on its side)
+      and keeps `state/timer_sound.wav` (statefile), not in exports or artifacts. `POST /api/timer-sound/play`: one
+      ring, 10 s at most. Tests: fake_ha_timer_sound.py, unit-sounds (format checks, a replaced upload read again,
+      the Show models' tones decode), unit-web_loudness (loudness.js against BS.1770 in Python; `BEEP_PEAK` at
+      `TS_LUFS`; matching quiet, loud and peaky clips, the limiter never over -1 dBFS). Open (device): heard on a Dot 3 and a Show.
 - [x] Buttons as Home Assistant events (2026-10-12, issue #26: a Dot 2 user moved from EchoLocal, whose automations
       stopped an HA-run alarm clock with the action button and used volume holds for next track / play-pause). ESPHome
       event entity "Button" (`button`, KEY_BUTTON, device class `button`, always listed), types `action`,
