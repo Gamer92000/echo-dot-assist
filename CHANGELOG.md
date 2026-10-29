@@ -4,6 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-28
 
+- **Home Assistant VAD compatibility.** The Features card adds "Request audio padding" in Home Assistant
+  (0–1000 ms, initially 800 ms when switched on). Enable it if Home Assistant misses short commands spoken straight
+  after the wake word or keeps listening without responding. Off by default; switching it off resets the value to
+  zero and hides the number. The card is hidden when Home Assistant listens for the wake word.
+  Only ESPHome requests started by the Echo's own wake word are padded, without delaying or trimming speech.
 - **Optionally, the wake word goes to Home Assistant too** ("Wake word in the request", settings page, Voice; off by
   default). Speech to text then hears the whole sentence, "Alexa, turn on the light", so nothing of your first word
   can be cut and no stray end of the wake word turns up. Meant for an AI conversation agent: Home Assistant's own
@@ -94,11 +99,6 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-26
 
-- **Home Assistant VAD compatibility.** The Features card adds "Request audio padding" in Home Assistant
-  (0–1000 ms, initially 800 ms when switched on). Enable it if Home Assistant misses short commands spoken straight
-  after the wake word or keeps listening without responding. Off by default; switching it off resets the value to
-  zero and hides the number. The card is hidden when Home Assistant listens for the wake word.
-  Only ESPHome requests started by the Echo's own wake word are padded, without delaying or trimming speech.
 - **Echo Show: the settings page shows only what the light band can do.** "Light ring rotation" and the light ring
   designs are for the Dots' LEDs; the Show's page no longer lists them, where they did nothing or failed on Apply. A
   Bluetooth speaker that sets its own volume now starts at the loudest of the separate volumes, not the music's, so

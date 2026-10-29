@@ -757,7 +757,7 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
         settings_set(names[key - KEY_ASSIST_VOLUME], v, e, sizeof e); return;
     }
     else if (type == NUMBER_COMMAND && key == KEY_REQUEST_PADDING && listed(key)) {
-        if (!isfinite(num) || num < 0 || num > 1000) return;
+        if (!isfinite(num) || num < 0 || num > 1000) { send_setting(key); return; }  /* HA's number back to ours */
         char v[8], e[80]; snprintf(v, sizeof v, "%d", (int)lroundf(num));
         settings_set("request_audio_padding", v, e, sizeof e); return;
     }

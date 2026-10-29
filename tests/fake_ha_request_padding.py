@@ -78,8 +78,11 @@ async def main(e):
     check(ha.cli.is_connected and e.pv("request_audio_padding") == 0,
           "repeated on leaves HA connected and explicit zero unchanged")
     for bad in (-1, 1001, float("nan"), float("inf")):
+        before = len(ha.states)
         ha.cli.number_command(n.key, bad)
         await sync(ha.cli)
+        resent = [x.state for x in ha.states[before:] if isinstance(x, NumberState) and x.key == n.key]
+        check(resent == [0], "HA's number snaps back to the saved value after rejected " + str(bad))
     check(e.pv("request_audio_padding") == 0, "HA rejects out of bounds and nonfinite numbers")
     for bad in (-1, 1001, "junk"):
         r = e.page.set(request_audio_padding=bad)
