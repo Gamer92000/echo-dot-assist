@@ -1,5 +1,5 @@
-/* Echo Input 2018 (cupcake), Fire OS 6.5.7.5 (NS6575/8338).  Device facts from the firmware only (no Echo Input tried
- * yet): docs/re-cupcake.md.  Values marked "verify" need the running device. */
+/* Echo Input 2018 (cupcake), Fire OS 6.5.7.5 (NS6575/8338).  Device facts from the firmware (docs/re-cupcake.md), as
+ * found on a running Echo Input (2026-10-29). */
 #include "board.h"
 #include <stddef.h>
 
@@ -32,7 +32,7 @@ const struct board board = {
     .wake_manifest = "/system/local/models/keyword/en-US/ALEXA/pryon.manifest",
     .earcon_dir = "/system/local/share/earcon/base/",               /* the Dots' folder, wake sound and timer tones included */
     .thermal_type = "mtktscpu",
-    /* TSL2572 (IIO) at 0-0039 as on donut: the files libled_hal.so's ambient light engine reads, in its order (verify) */
+    /* TSL2572 (IIO) at 0-0039 as on donut: the files libled_hal.so's ambient light engine reads, in its order */
     .light_sensor = { "/sys/bus/i2c/devices/0-0039/iio:device0/calibrated_lux",
                       "/sys/bus/i2c/devices/0-0039/iio:device0/in_illuminance0_input" },
     .volume_steps = 30,                                             /* volume_step-01..30, as the Dots' */

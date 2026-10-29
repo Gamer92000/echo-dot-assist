@@ -1,6 +1,7 @@
 # Echo Input 2018 (`cupcake`): what the firmware says
 
-Worked out from the firmware only, 2026-10-28; nobody has run hassmic on an Echo Input yet. The unlock is
+Worked out from the firmware, 2026-10-28; installed and running on one Echo Input since 2026-10-29, everything as
+expected. The unlock is
 kamakiri-cupcake v1.0.0 ([XDA](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-input-2018-cupcake.4797603/): bootrom exploit over the micro-USB socket, TWRP in `swdl`; its
 `bin/lk-cupcake.bin` and `bin/tee-cupcake.bin` are byte-identical to this firmware's `lk` and `tee1`/`tee2`, its
 preloader is another build and not flashed by its scripts; `devices/cupcake/README.md`).
@@ -53,7 +54,7 @@ exactly as checkers' `getAspPipelineType`: 6 VOICE_RECOGNITION and 1999 HOTWORD 
 - `audiosignalprocessor` (`com.amazon.asp.IAudioSignalProcessor`, `audioserver_service`) and `amazon.security.dha`
   (`fireos.dha.IFireOsDha`, `fireos-dha` as keystore with drmrpc; HAL `amzn_dha.mt8167.so`, no `libacehal_dha.so`) are
   registered under checkers' names: `afe_parcel.c` and `dha.c`'s service path apply. Which DHA version it answers
-  (1: drvV1, 2: drvV3) is open.
+  (1: drvV1, 2: drvV3) does not matter: `dha.c` takes either, and it works on the device.
 - The framework's binder codes, read out of `boot-framework.oat` (`tools/dexasm.py` `boot_classes`): IAudioService
   setStreamVolume 3, getStreamMaxVolume 10; IPowerManager wakeUp 9, userActivity 8, isInteractive 12: checkers'.
   `/system/bin/service` is byte-identical to checkers'.
@@ -101,22 +102,22 @@ off at the end of the system image, `ro.secure=0`, `ro.adb.secure=0`, `ro.debugg
 `init.fosflags.sh` that turns on adb without authentication (cupcake's stock one is byte-identical to donut's), the
 autoroot site of `sbin/adbd` (`10b50220` followed by `044624b1` 8 bytes on: at 0x19bf4 in cupcake's adbd as in
 donut's, though the files differ), the policy through its magiskpolicy with the system's libraries (`permissive su`,
-adbd into su), `verify` out of the fstab, the build number raised. Nothing in it is donut-only, so it is expected to work
-here; not tried.
+adbd into su), `verify` out of the fstab, the build number raised. Nothing in it is donut-only, and it works
+here (2026-10-29).
 
 ## What a port needs
 
 [x] done, [~] partly, [ ] open.
 
 - [x] `devices/cupcake/`: board.c, device.conf, device.mk, hassmic.rc, sepolicy.rules (donut's), probe.md5, stubs
-  (byte-identical builds), setup.sh (`UNTESTED=1`; `--dry-run` walks it), README.md. CI builds it.
-- [ ] Unlock with kamakiri-cupcake, both slots flashed, boot-root: on a device.
-- [ ] Install (`install-system.sh` from the running OS), the apps off the partition (`STOCK_APPS_OUT`, 64 folders; the
+  (byte-identical builds), setup.sh (`--dry-run` walks it), README.md. CI builds it.
+- [x] Unlock with kamakiri-cupcake, both slots flashed, boot-root: on a device.
+- [x] Install (`install-system.sh` from the running OS), the apps off the partition (`STOCK_APPS_OUT`, 64 folders; the
   shared libraries of `/system/etc/permissions` and SimpleLauncher, a code-less home, stay), boot.
-- [ ] Audio: recording as system, the ASR pipeline's level, our playback as the echo canceller's reference.
-- [ ] Buttons and the mute latch by name; KEY_HELP held 10 s (factory reset).
-- [ ] The LED: which of the 12 the LP5562 shows (assumed the first), HA's light, designs.
-- [ ] DHA version, light sensor file, Wi-Fi motion module, Bluetooth on `/dev/stpbt` with Android's stack gone, the
+- [x] Audio: recording as system, the ASR pipeline's level, our playback as the echo canceller's reference.
+- [x] Buttons and the mute latch by name; KEY_HELP held 10 s (factory reset).
+- [x] The LED: the LP5562 shows the first of the 12, HA's light, designs.
+- [x] DHA, light sensor file, Wi-Fi motion module, Bluetooth on `/dev/stpbt` with Android's stack gone, the
   wake lock (`/sys/power/autosleep`).
 - No volume keys: arbitration's pairing by holding Volume up + Volume down cannot be done on this model; Home
   Assistant's way (the tags, or the key action) can.

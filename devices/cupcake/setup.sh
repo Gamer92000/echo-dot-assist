@@ -5,7 +5,6 @@
 # Each step_<id> returns non-zero when it did not finish; the runner then offers retry, skip or quit.  A step checks
 # first whether its result is there already, so a rerun (or work done by hand) passes through quietly.
 
-UNTESTED=1                                  # scripts/setup.sh lists the model as untested
 XDA=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-input-2018-cupcake.4797603/
 XDA_DONUT=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/
 FTVDB=https://ftvdb.com/echo/firmware/com.amazon.cupcake.android.os/675ff746519090e1cbd2366a92132d55-13323244164-fire-os-6-5-7-5-ns6575-8338-2026-10-14/

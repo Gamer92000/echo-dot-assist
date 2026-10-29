@@ -1,8 +1,8 @@
 # Echo Input, 2018 (`cupcake`)
 
-**Untested**: worked out from the firmware (2026-10-28), never run on an Echo Input. It builds, CI publishes its
-bundle, and the guided setup (`scripts/setup.sh cupcake`, marked untested) walks the steps below. Findings and what is
-open: [docs/re-cupcake.md](../../docs/re-cupcake.md). Porting guide: [devices/README.md](../README.md).
+**Installed and running on one Echo Input** (2026-10-29): worked out from the firmware (2026-10-28), then tried on the
+device, everything as expected. It builds, CI publishes its bundle, and the guided setup (`scripts/setup.sh cupcake`)
+walks the steps below. Findings: [docs/re-cupcake.md](../../docs/re-cupcake.md). Porting guide: [devices/README.md](../README.md).
 
 Model C1125P (`ro.product.model` AEOCK), `ro.product.device` = `cupcake`. MediaTek MT8516, four microphones, one RGB
 LED, action and mute buttons, **no speaker**: sound comes from the 3.5 mm jack or a Bluetooth speaker.
