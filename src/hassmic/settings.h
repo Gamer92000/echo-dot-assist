@@ -30,6 +30,7 @@ void settings_preset(void);             /* state/preset (scripts/setup.sh --pres
  * or a preset's not applied yet (settings_preset, after it).  No lock needed.  0, -1: none */
 int  settings_peek(const char *name, char *out, size_t cap);
 int  settings_mic_level(void);
+const char *settings_speech_language(void);    /* "de", "en", ...; "" for automatic (main.c speech_locale) */
 int  settings_on(const char *name);     /* a bool setting's value; 0 if this Echo has no such setting */
 const struct bt_lang *settings_bt_lang(void);
 int  settings_bt_lang_index(int set);   /* -1 reads */

@@ -154,12 +154,27 @@ if [ "$MODE" = uninstall ]; then
 fi
 
 mkdir -p $H; chown 0:2000 $H; chmod 755 $H; chcon $SYSLABEL $H
+# The wake word aligners (*.wa a word, *.was a language: 2.5 MB; hassmic reads them next to itself) only where the
+# partition has room for them beside what is there, and a megabyte to spare: without them hassmic finds the word's end
+# by the level.  What an older install left of them goes: other names (a file per word and locale, 6.6 MB, before the
+# .was files), or all of them where these do not fit
+wa=$(du -ck "$SRC"/*.wa "$SRC"/*.was 2>/dev/null | { t=0; while read -r k w; do [ "$w" = total ] && t=$k; done; echo $t; })
+room=$(df -k /system | { read -r _; read -r _ _ _ a _; echo "$a"; })
+case "$wa$room" in *[!0-9]*|'') wa_fit=0;; *) [ $wa -lt $((room - 1024)) ] && wa_fit=1 || wa_fit=0;; esac
+[ "$wa" = 0 ] || [ $wa_fit = 1 ] || say "the system partition has no room for the wake word aligners ($wa kB, $room kB free): left out"
+if [ "$SRC" != $H ]; then
+    for f in $H/*.wa $H/*.was; do
+        [ -e "$f" ] || continue
+        [ $wa_fit = 1 ] && [ -e "$SRC/${f##*/}" ] || rm -f "$f"
+    done
+fi
 for f in "$SRC"/*; do
     n=${f##*/}
     [ -d "$f" ] && continue                 # oat/: what ART leaves beside a dex it loaded (ringbar.dex, wifictl.dex)
     case "$n" in
     hassmic.rc|sepolicy) continue;;
     update.pub) [ "$MODE" = install ] || continue; m=644;;
+    *.wa|*.was) [ $wa_fit = 1 ] || continue; m=644;;
     device.conf|VERSION|*.ko|release.pub|*.dex|*.apk) m=644;;
     *) m=755;;
     esac

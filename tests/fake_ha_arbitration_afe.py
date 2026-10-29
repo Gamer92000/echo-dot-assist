@@ -5,7 +5,7 @@ Echos in one network, the kitchen one with a stand-in front end (HASSMIC_FAKE_AF
 the claim carries the front end's score once it is in, the mic stream's after 500 ms without it, a reading left
 behind ends the front end's utterance state again, and with arbitration off nothing is read."""
 import asyncio, os
-from arbecho import Echo, HA, check, until, start, run
+from arbecho import LEAD_IN, Echo, HA, check, until, start, run
 
 key = os.urandom(32)
 a, b = Echo("Echo Kitchen", 16961, 500, net=(2, key)), Echo("Echo Living Room", 16962, 900, net=(2, key))
@@ -26,8 +26,9 @@ async def main():
     check("score 2000 from the front end (500 from the mic stream)" in a.text(), "the claim waited for the front end's score")
     # sent from the ring: the 128 ms of SIGUSR1's lag, then what the capture took while the front end was read (250 ms,
     # 250 short of AFE_WAIT_MS: five 50 ms blocks, three at least on a busy runner), up to the next live block.  On the capture
-    # thread the reading held all of it up, and the ring had only the lag and a block at most (2048 + 0..800 samples)
-    ahead = sum(a.chunks[:a.chunks.index(1600)]) if 1600 in a.chunks else None
+    # thread the reading held all of it up, and the ring had only the lag and a block at most (2048 + 0..800 samples).
+    # The request's 800 ms of silence comes first (main.c lead_in)
+    ahead = sum(a.chunks[:a.chunks.index(1600)]) - LEAD_IN if 1600 in a.chunks else None
     check(ahead is not None and 4096 + 3 * 1600 <= ahead <= 4096 + 12 * 1600, f"the capture went on while the front end was read: {ahead} bytes ahead of the live stream")
     a.end_pipeline(); await asyncio.sleep(0.5)
 

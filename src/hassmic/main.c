@@ -54,6 +54,7 @@
 #include "micend.h"
 #include "micgain.h"
 #include "wordtail.h"
+#include "wakealign.h"
 #include "netaddr.h"
 #include "netio.h"
 #include "lux.h"
@@ -248,6 +249,7 @@ static float keyword_db = 1;                        /* under lock: rms of the la
  * speech-to-text gets the whole utterance (nothing of the command cut, no stray end of the word: issue #72) */
 static int wake_in_request;                         /* under lock */
 static uint64_t kw_begin, kw_end;                   /* under lock: the last wake word heard, ring samples (wake engine's) */
+static int kw_slot;                                 /* under lock: its slot (wake_align) */
 static int replay_whole;                            /* under lock: this pipeline's replay starts at kw_begin */
 static uint64_t talker_from;                        /* under lock: where the command starts (the word's tail end), micend */
 static struct micend mic_end;                       /* under lock: the end of the request heard here (micend.h) */
@@ -648,6 +650,24 @@ static void listening_apply(void)
 }
 static void listening(int on) { listen_pipe = on; listening_apply(); }
 
+/* Lock held.  Silence ahead of every request Home Assistant starts at speech to text (issue #80; PR #71 had it as a
+ * setting).  Its VAD is a new one per run (assist_pipeline's MicroVadSpeexEnhancer; pymicro-vad 1.0.1 in HA 2026.10.1):
+ * -1 for the first 76 chunks of 10 ms, which the segmenter counts as silence, and speech starts it after 0.3 s over 0.2.
+ * Our stream opens on the command (the ring's replay from the word's tail), so a short one fell into that blindness:
+ * espeak's "on" (0.2 s, -26 dBFS in a -55 dBFS room) started it only with 160 ms or more in front, and a Dot 2 user's
+ * "Alexa lights off" waited for the 15 s timeout (home-assistant/core#175735 has the same with ESPHome satellites:
+ * 800 ms of silence cured it).  Some speech to text wants a lead-in too: Parakeet TDT v2 gave "" for two of that user's
+ * requests, "The lights on." for the same audio with 50-300 ms of silence in front.  The button and follow-ups start
+ * runs as cold, so all of them; not the wake word at the server, whose run streams all the time.  800 ms (the VAD's
+ * 760 and a little), sent at once: nothing waits for it, and STT gets 0.8 s more to listen to */
+#define LEAD_IN_MS 800
+static void lead_in(void)
+{
+    static const int16_t zero[1024];
+    for (int left = LEAD_IN_MS * CAP_RATE / 1000; left > 0; left -= 1024)
+        proto->audio(zero, (size_t)(left < 1024 ? left : 1024) * sizeof zero[0]);
+}
+
 static void pipeline_start(uint64_t from)    /* from: where the wake word that starts it ended, 0: not a wake word */
 {
     quiet_abort = 0;
@@ -661,6 +681,7 @@ static void pipeline_start(uint64_t from)    /* from: where the wake word that s
     run_wake = from != 0;
     proto->start();
     atomic_store(&streaming, 1);
+    if (core_local_wake) lead_in();                 /* ahead of the capture thread's first block: it needs the lock */
     listening(core_local_wake);
     if (core_local_wake) core_set_state(LISTENING);
 }
@@ -1407,12 +1428,213 @@ static void stream_ring(uint64_t from, uint64_t to) /* capture thread, lock held
     }
 }
 
-/* Where the replay after a wake word that ended at end starts, from the ring up to to (wordtail.h; capture thread, lock
- * held); -1: not known yet, the stream waits for more */
+/* Each slot's wake word aligner (wakealign.h): the file for the word the slot holds in the language spoken here
+ * (align_resolve), next to our binary (scripts/bundle.sh) or in $HASSMIC_WAKEALIGN.  Capture thread: looked up at
+ * every detection, loaded when the file to use changed (the time zone comes from Home Assistant after the start, the
+ * language from the page).  NULL: none for that word, the replay starts by wordtail.h's rule */
+static struct wakealign *wake_align[WAKE_SLOTS];
+static struct core_wake_word align_word[WAKE_SLOTS];        /* capture thread: what each slot holds */
+static char align_file[WAKE_SLOTS][600];                    /* and the file its aligner came from, "" none */
+static int align_stale[WAKE_SLOTS];                         /* capture thread: wake_align[slot] is a word's the slot no
+                                                             * longer holds, kept while a run may use it */
+
+static atomic_int align_busy;                       /* align_thread runs on one of them */
+
+/* wake_open_word (capture thread): the slot holds w now.  The old word's aligner goes at once, unless a run uses it:
+ * then align_resolve frees it when the run is over (waiting here would hold up the capture, issue #77); until then it
+ * is never run (align_ahead resolves first) and word_tail_end goes by the level */
+static void wake_align_load(int slot, const struct core_wake_word *w)
+{
+    align_word[slot] = *w; align_file[slot][0] = 0; align_stale[slot] = 0;
+    if (atomic_load(&align_busy)) { align_stale[slot] = 1; return; }
+    wakealign_free(wake_align[slot]); wake_align[slot] = NULL;
+}
+
+/* The language spoken here, as a locale of tools/wakealign/build.sh's: the page's speech_language, else the time zone
+ * Home Assistant gave (clock.c state/timezone; a German speaker's "Alexa" with the English wake word is found far better
+ * with German sounds, settings.c SPEECH_LANG), else the word's own ("computer-en-US"); "" when none of them says.  A
+ * language picked on the page in the zone's variety of it where the zone has one (en in London: en-GB) */
+static void speech_locale(const struct core_wake_word *w, char *out, size_t cap)
+{
+    static const char *const langs[][2] = { { "de", "de-DE" }, { "en", "en-US" }, { "fr", "fr-FR" }, { "es", "es-ES" }, { "ja", "ja-JP" } };
+    static const char *const zones[][2] = {      /* by prefix, the first that matches */
+        { "Europe/Berlin", "de-DE" }, { "Europe/Vienna", "de-DE" }, { "Europe/Zurich", "de-DE" }, { "Europe/Busingen", "de-DE" },
+        { "Europe/Vaduz", "de-DE" }, { "Europe/Paris", "fr-FR" }, { "Europe/Monaco", "fr-FR" }, { "Europe/Madrid", "es-ES" },
+        { "Atlantic/Canary", "es-ES" }, { "America/Mexico_City", "es-MX" }, { "America/Monterrey", "es-MX" }, { "America/Tijuana", "es-MX" },
+        { "America/Cancun", "es-MX" }, { "America/Merida", "es-MX" }, { "America/Chihuahua", "es-MX" }, { "Asia/Tokyo", "ja-JP" },
+        { "Europe/London", "en-GB" }, { "Europe/Dublin", "en-GB" }, { "Australia/", "en-AU" }, { "Asia/Kolkata", "en-IN" },
+        { "Asia/Calcutta", "en-IN" }, { "Canada/", "en-CA" }, { "America/", "en-US" }, { "US/", "en-US" } };
+    const char *l = settings_speech_language(), *zl = NULL; char p[300], zone[96] = ""; FILE *f; size_t ln = strlen(l);
+    out[0] = 0;
+    state_file(p, sizeof p, "timezone");
+    if ((f = fopen(p, "r"))) { if (fscanf(f, "%95s", zone) != 1) zone[0] = 0; fclose(f); }
+    for (size_t i = 0; zone[0] && !zl && i < sizeof zones / sizeof *zones; i++) if (!strncmp(zone, zones[i][0], strlen(zones[i][0]))) zl = zones[i][1];
+    /* a language picked: the zone's variety of it where the zone has one (English in London: en-GB's dictionary) */
+    if (ln && zl && !strncmp(zl, l, ln) && zl[ln] == '-') { snprintf(out, cap, "%s", zl); return; }
+    for (size_t i = 0; ln && i < sizeof langs / sizeof *langs; i++) if (!strcmp(l, langs[i][0])) { snprintf(out, cap, "%s", langs[i][1]); return; }
+    if (zl) { snprintf(out, cap, "%s", zl); return; }
+    const char *dash = strchr(w->id, '-');
+    if (dash && !wake_is_mww(w->manifest)) snprintf(out, cap, "%s", dash + 1);     /* a microWakeWord id is a name, no locale */
+}
+
+static void align_resolve(int slot)                 /* capture thread */
+{
+    /* locales whose words are made of the same models and dictionary as another's (tools/wakealign/build.sh): its files */
+    static const char *const same[][2] = { { "en-CA", "en-US" }, { "en-AU", "en-GB" }, { "fr-CA", "fr-FR" } };
+    char dir[300], loc[16], word[64], cand[2][600]; const char *env = getenv("HASSMIC_WAKEALIGN"); int n = 0;
+    const struct core_wake_word *w = &align_word[slot];
+    if (!w->id[0]) return;
+    if (env) snprintf(dir, sizeof dir, "%s", env);
+    else {
+        char *slash; ssize_t l = readlink("/proc/self/exe", dir, sizeof dir - 1);
+        if (l <= 0) return;
+        dir[l] = 0; if ((slash = strrchr(dir, '/'))) *slash = 0;
+    }
+    speech_locale(w, loc, sizeof loc);
+    if (wake_is_mww(w->manifest)) {                 /* a microWakeWord model by its name: "Okay Nabu" -> okay_nabu */
+        size_t k = 0;
+        for (const char *c = w->name; *c && k < sizeof word - 1; c++) word[k++] = isalnum((unsigned char)*c) ? (char)tolower((unsigned char)*c) : '_';
+        word[k] = 0;
+    } else snprintf(word, sizeof word, "%.*s", (int)strcspn(w->id, "-"), w->id);      /* Amazon's: "computer-en-US" -> computer */
+    /* the language spoken, else the word's own (the firmware's "alexa" and microWakeWord's are English) */
+    const char *dash = strchr(w->id, '-'), *own = !wake_is_mww(w->manifest) && dash ? dash + 1 : "en-US", *locs[2] = { loc, own };
+    for (int i = 0; i < 2; i++) {
+        const char *l = locs[i];
+        for (size_t k = 0; k < sizeof same / sizeof *same; k++) if (!strcmp(l, same[k][0])) l = same[k][1];
+        if (l[0]) snprintf(cand[n++], sizeof cand[0], "%s/%s-%s.wa", dir, word, l);
+    }
+    const char *pick = "";
+    for (int i = 0; i < n && !*pick; i++) if (!access(cand[i], R_OK)) pick = cand[i];
+    if (!align_stale[slot] && !strcmp(pick, align_file[slot])) return;
+    wakealign_free(wake_align[slot]); wake_align[slot] = NULL; align_stale[slot] = 0;
+    snprintf(align_file[slot], sizeof align_file[slot], "%.599s", pick);
+    if (*pick && (wake_align[slot] = wakealign_load(pick))) fprintf(stderr, "wake: %s aligned by %s (%s spoken)\n", w->id, pick, loc[0] ? loc : "?");
+}
+
+/* The aligner's run, off the capture thread as the front end's reading is (issue #77: on it the capture stood still,
+ * and the Echo Show 5's recorder lost what came meanwhile): 4 ms for the window on the PC, 0.2 s under qemu-arm, and
+ * the speaker adaptation's update after it more again.  The capture goes on into the ring; the replay waits for the
+ * answer (align_done) as it waits for the window.  One run at a time: a wake word while one runs goes by the level.
+ * Speaker adaptation (wakealign.h, setting wake_word_adaptation): one household's statistics per feature space (a
+ * language's models share one), state/wakealign-<space>.adapt, written at most every 10 minutes; the run aligns with
+ * the transform where there is one and falls back to the plain alignment when that finds nothing near Pryon's end, and
+ * what it settled on is added.  Online on the 220 German requests (each with what the ones before taught): 158 ->
+ * 163; on 75 English ones in German voices: 48 -> 53 */
+static uint64_t align_key;                          /* capture thread: the wake word a run was started (or given up) for */
+static uint64_t align_skipped;                      /* capture thread: one that got none (a run busy, no thread): by the level */
+static _Atomic uint64_t align_done;                 /* the one whose answer is in align_at, align_ms (set before it) */
+static int64_t align_at; static long long align_ms;
+static struct { const struct wakealign *wa; int16_t win[WAKEALIGN_BEFORE + WAKEALIGN_AFTER]; size_t n; uint64_t from, end, stop; int adapt; } job;
+/* align_thread's: a household's statistics per feature space in memory (557 KB each), one per acoustic model of
+ * tools/wakealign/build.sh; past that the one used longest ago makes room, saved first */
+#define ADAPT_SPACES 5
+static struct { struct wakealign_adapt *ad; long long saved_ms, used_ms; int saved_at; } adapts[ADAPT_SPACES];
+
+static void adapt_save(int i)                       /* align_thread: adapts[i] to state/, if it learnt since */
+{
+    char name[64], p[300]; struct wakealign_adapt *ad = adapts[i].ad;
+    if (!ad || ad->requests == adapts[i].saved_at) return;
+    snprintf(name, sizeof name, "wakealign-%016llx.adapt", (unsigned long long)ad->space); state_file(p, sizeof p, name);
+    if (!wakealign_adapt_save(ad, p)) { adapts[i].saved_ms = mono_ms(); adapts[i].saved_at = ad->requests; }
+}
+
+static int adapt_for(uint64_t space)                /* align_thread: the slot of the household's statistics in space, -1 */
+{
+    int i, at = -1; char name[64], p[300];
+    if (!space) return -1;
+    for (i = 0; i < ADAPT_SPACES; i++) if (adapts[i].ad && adapts[i].ad->space == space) { adapts[i].used_ms = mono_ms(); return i; }
+    for (i = 0; i < ADAPT_SPACES; i++) {            /* a free slot, else the one used longest ago */
+        if (!adapts[i].ad) { at = i; break; }
+        if (at < 0 || adapts[i].used_ms < adapts[at].used_ms) at = i;
+    }
+    if (adapts[at].ad) { adapt_save(at); free(adapts[at].ad); adapts[at].ad = NULL; }
+    if (!(adapts[at].ad = calloc(1, sizeof *adapts[at].ad))) return -1;
+    struct wakealign_adapt *ad = adapts[at].ad;
+    ad->space = space;
+    snprintf(name, sizeof name, "wakealign-%016llx.adapt", (unsigned long long)space); state_file(p, sizeof p, name);
+    if (!wakealign_adapt_load(ad, p)) fprintf(stderr, "wake: speaker adaptation from %d requests (%s)\n", ad->requests, name);
+    adapts[at].saved_ms = adapts[at].used_ms = mono_ms(); adapts[at].saved_at = ad->requests;
+    return at;
+}
+
+static int align_near(int64_t at) { return at >= (int64_t)job.end - CAP_RATE * 2 / 5 && at <= (int64_t)job.stop; }
+
+static void *align_thread(void *arg)
+{
+    (void)arg;
+    long long t0 = mono_ms();
+    int slot = job.adapt ? adapt_for(wakealign_space(job.wa)) : -1;
+    struct wakealign_adapt *ad = slot >= 0 ? adapts[slot].ad : NULL;
+    int adapted = 0; long e = -1;
+    /* the word's end against Pryon's in the 220 requests of wakealign.h: 250 ms before to 450 ms after; further off is
+     * a misalignment (the PC's SIGUSR1 has no word there: 1 s before) */
+    if (ad && ad->have) { e = wakealign_end_adapt(job.wa, job.win, job.n, ad, NULL); adapted = e >= 0 && align_near((int64_t)(job.from + (uint64_t)e)); }
+    if (!adapted) e = wakealign_end(job.wa, job.win, job.n);
+    int64_t at = e >= 0 ? (int64_t)(job.from + (uint64_t)e) : -1;
+    align_at = at >= 0 && align_near(at) ? at : -1;
+    /* tests: a CPU too busy for it (word_tail_end's ALIGN_LATE): the ms in that file, read each run */
+    const char *slow = getenv("HASSMIC_FAKE_ALIGN_SLOW"); FILE *sf; int ms = 0;
+    if (slow && (sf = fopen(slow, "r"))) { if (fscanf(sf, "%d", &ms) != 1) ms = 0; fclose(sf); }
+    if (ms > 0) usleep((useconds_t)ms * 1000);
+    align_ms = mono_ms() - t0;
+    atomic_store(&align_done, job.end);             /* the answer is out: the capture thread may go on */
+    if (ad && align_at >= 0) {
+        wakealign_end_adapt(job.wa, job.win, job.n, adapted ? ad : NULL, ad);
+        int had = ad->have; wakealign_estimate(ad);
+        if (ad->have && !had) fprintf(stderr, "wake: speaker adaptation in use (%d requests)\n", ad->requests);
+        if (mono_ms() - adapts[slot].saved_ms > 600000 || ad->requests == WAKEALIGN_ADAPT_MIN) adapt_save(slot);
+    }
+    atomic_store(&align_busy, 0);
+    return NULL;
+}
+
+static void align_ahead(void)                       /* capture thread, before it takes core_lock for the block */
+{
+    pthread_mutex_lock(&core_lock); uint64_t end = replay_from; int slot = kw_slot; float kdb = keyword_db; pthread_mutex_unlock(&core_lock);
+    if (!end || end == align_key || kdb > 0 || slot < 0 || slot >= WAKE_SLOTS) return;
+    if (!atomic_load(&align_busy)) align_resolve(slot);         /* the model for it (never swapped under a run) */
+    if (ring_n < end + WAKEALIGN_AFTER) return;                 /* while the window fills */
+    align_key = end;
+    if (!wake_align[slot]) return;
+    if (atomic_load(&align_busy)) { align_skipped = end; return; }
+    uint64_t from = end > WAKEALIGN_BEFORE ? end - WAKEALIGN_BEFORE : 0, stop = end + WAKEALIGN_AFTER;
+    if (ring_n > RING_SAMPLES && from < ring_n - RING_SAMPLES) from = ring_n - RING_SAMPLES;
+    for (uint64_t i = from; i < stop; i++) job.win[i - from] = ring[i % RING_SAMPLES];
+    job.wa = wake_align[slot]; job.n = (size_t)(stop - from); job.from = from; job.end = end; job.stop = stop;
+    job.adapt = settings_on("wake_word_adaptation");
+    pthread_t t;
+    atomic_store(&align_busy, 1);
+    if (pthread_create(&t, NULL, align_thread, NULL)) { atomic_store(&align_busy, 0); align_skipped = end; return; }
+    pthread_detach(t);
+}
+
+/* Where the replay after a wake word that ended at end starts, from the ring up to to (capture thread, lock held); -1:
+ * not known yet, the stream waits for more.  With an aligner the word's end as aligned in [end - 1.5 s, end + 0.5 s]
+ * (align_ahead), before Pryon's end too (Echo, Ziggy: it fires after the word); else, or when it finds nothing near,
+ * wordtail.h's rule from Pryon's end on.  Both wait for 0.5 s after the end, then the stream catches up from the ring */
+#define ALIGN_LATE CAP_RATE                         /* samples past the aligner's window it is waited for: 1 s */
 static int64_t word_tail_end(uint64_t end, uint64_t to)
 {
     float db[WORDTAIL_FRAMES]; int n = 0, cut; const char *why = "";
     if (keyword_db > 0) return (int64_t)end;        /* no level known (the PC's SIGUSR1) */
+    if (kw_slot >= 0 && kw_slot < WAKE_SLOTS && wake_align[kw_slot]) {
+        static uint64_t told;                       /* the wake word the level's reason was logged for */
+        int in = atomic_load(&align_done) == end;
+        /* align_thread's answer not in yet: waited for until ALIGN_LATE past the window (0.2 s under qemu-arm; a CPU
+         * that busy would hold the whole request), then the level, and its answer is not taken any more */
+        if (align_skipped != end && !in && to < end + WAKEALIGN_AFTER + ALIGN_LATE) return -1;
+        if (align_skipped != end && in && align_at >= 0) {
+            if (!replay_whole) fprintf(stderr, "wake: the word ends %+lld ms from Pryon's end (aligned in %lld ms)\n",
+                                       (long long)(align_at - (int64_t)end) * 1000 / CAP_RATE, align_ms);
+            return align_at;
+        }
+        if (told != end) {
+            told = end;
+            fprintf(stderr, "wake: %s, by the level instead\n", align_skipped == end ? "no aligner run for it (one was busy)" :
+                    in ? "the aligner found no end near Pryon's" : "the aligner took over 1 s");
+        }
+        align_skipped = end;
+    }
     for (; n < WORDTAIL_FRAMES && end + (uint64_t)(n + 1) * WORDTAIL_FRAME <= to; n++)
         db[n] = 10 * log10(ring_power(end + (uint64_t)n * WORDTAIL_FRAME, end + (uint64_t)(n + 1) * WORDTAIL_FRAME) / (32768.0 * 32768.0) + 1e-10);
     if ((cut = wordtail_cut(db, n, keyword_db, &why)) < 0) return -1;
@@ -1518,7 +1740,9 @@ static int wake_open_word(int slot, const struct core_wake_word *w)
     }
     snprintf(wake_keyword[slot], sizeof wake_keyword[slot], "%s", hit ? kw : "");
     wake_on_miss(on_near_miss);
-    return wake_open(slot, w->manifest, on_wake);
+    int r = wake_open(slot, w->manifest, on_wake);
+    wake_align_load(slot, w);
+    return r;
 }
 
 static void on_wake(int slot, const char *keyword, uint64_t begin, uint64_t end)
@@ -1541,7 +1765,7 @@ static void on_wake(int slot, const char *keyword, uint64_t begin, uint64_t end)
     last_wake_ms = mono_ms();
     atomic_store(&wake_slot_heard, slot);
     { float db = 10 * log10f((ring_power(begin, end) + 1) / (32768.0f * 32768.0f));     /* the talker's level, for the gain */
-      pthread_mutex_lock(&core_lock); keyword_db = db; heard_ms = last_wake_ms; kw_begin = begin; kw_end = end; snprintf(wake_phrase, sizeof wake_phrase, "%s", wake_loaded[slot]); pthread_mutex_unlock(&core_lock); }
+      pthread_mutex_lock(&core_lock); keyword_db = db; heard_ms = last_wake_ms; kw_begin = begin; kw_end = end; kw_slot = slot; snprintf(wake_phrase, sizeof wake_phrase, "%s", wake_loaded[slot]); pthread_mutex_unlock(&core_lock); }
     if (!arb_running()) { trigger(0, end); return; }
     pthread_mutex_lock(&core_lock); det_begin = begin; det_end = end; pthread_mutex_unlock(&core_lock);
     atomic_store(&det_pending, 1);                  /* the ring is the capture thread's */
@@ -2596,7 +2820,7 @@ static void *capture_thread(void *arg)
           if (t == 2) trigger(1, 0);
           else if (t == 1) {
               uint64_t b = ring_n > CAP_RATE ? ring_n - CAP_RATE * 6 / 10 : 0, e = ring_n > CAP_RATE ? ring_n - lag : ring_n;
-              pthread_mutex_lock(&core_lock); kw_begin = b; kw_end = e;
+              pthread_mutex_lock(&core_lock); kw_begin = b; kw_end = e; kw_slot = 0;
               if (getenv("HASSMIC_FAKE_KEYWORD")) keyword_db = 10 * log10f((ring_power(b, e) + 1) / (32768.0f * 32768.0f));   /* as on_wake: the tail is looked for */
               pthread_mutex_unlock(&core_lock);
               wake_heard(b, e, 1);
@@ -2654,6 +2878,7 @@ static void *capture_thread(void *arg)
             else for (size_t k = n / 2; k; ) { size_t m = k < 1024 ? k : 1024; dropin_mic(zeros, m, 0); k -= m; }
         }
         if (atomic_load(&streaming)) {
+            align_ahead();                              /* outside the lock: it takes up to ~0.1 s on an Echo */
             pthread_mutex_lock(&core_lock);
             uint64_t at = cap_clock() - n / 2;
             if (atomic_load(&streaming) && connected) {

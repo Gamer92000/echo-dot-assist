@@ -12,6 +12,7 @@ OUT=${BUNDLE_FROM:-$OUT}            # scripts/content-id.sh: packs from a build 
 python3 scripts/otatool.py pack "$1" "$2" $OUT/hassmic.bundle \
     $OUT/hassmic $OUT/runas $OUT/otatool $(ls $OUT/latency $OUT/mixcap $OUT/mixplay $OUT/pryon_test 2>/dev/null) $DDIR/device.conf:644 \
     $(for k in $OUT/*.ko; do [ -f "$k" ] && echo "$k:644"; done) keys/release.pub:644 \
+    $(for k in wakealign/*.wa wakealign/*.was; do echo "$k:644"; done) \
     scripts/system/main.sh scripts/system/boot.sh scripts/system/sysinstall.sh $DDIR/hassmic.rc:644 \
     scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh scripts/device/artifact-install.sh scripts/device/wifi.sh \
     $([ -z "$HOME_APK" ] || echo scripts/device/$HOME_APK:644) \

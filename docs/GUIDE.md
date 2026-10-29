@@ -28,12 +28,36 @@ System) off takes any certificate, but then anyone on your network could slip th
   reaches Home Assistant about a second late. When you speak much louder than the tone, it changes nothing. The log
   says what it found each time ("wake sound removal: ...").
 
-- **The end of the wake word** is left out of what Home Assistant gets. Amazon's engine is sure of "Alexa" before
-  the word has been fully said, and a drawn-out one, or one in a room that echoes, sounds on for up to a third of a
-  second after that: the Echo waits for the pause after the word (up to half a second) and starts there. Said straight
-  on, without a pause, or in a loud room, it never leaves out more than earlier versions did: a sliver of the word
-  left in is better than your first word cut. The log says how much it
-  left out and why (`wake: 260 ms of the word's tail left out (a pause)`).
+- **The end of the wake word** is left out of what Home Assistant gets. Amazon's engine says "heard" near the end of
+  the word, not at it: for the German "Alexa" typically a tenth of a second before the end (a drawn-out one, or one in
+  a room that echoes, up to half a second), for the English one, "Echo" and "Ziggy" a little after it, already in your
+  command. The Echo waits half a second after Amazon's "heard" and then finds the end by lining up the word's sounds
+  ("a-l-e-k-s-a") with what its microphone heard, as the Montreal Forced Aligner does (its pretrained models, CC BY
+  4.0, cut down to the wake words: 2.5 MB for all of them): your request starts right there, also before Amazon's "heard".
+  This works for Amazon's wake words (Alexa, Amazon, Computer, Echo, Ziggy) in German, English (US, UK, Canada,
+  Australia, India), French, Spanish and Japanese, and for microWakeWord's Okay Nabu, Hey Jarvis and Hey Mycroft
+  (measured in German and English, the others made the same way and untried). Not yet for Italian, Portuguese and
+  Hindi (no usable models for them). It hears the word best in the language you *speak*,
+  which need not be the wake word's: German voices saying the English "Alexa" were found in 48 of 75 tests with
+  German sounds, in 23 with English ones. So "Language you speak" (settings page, Wake word) picks it; automatic goes
+  by your time zone in Home Assistant (Germany, Austria, Switzerland: German; France: French; Spain, Mexico: Spanish;
+  Japan; else English), then by the wake word's own language. It also learns from your requests how the word sounds
+  in your home (your voices, your room, its microphone: speaker adaptation, as the aligner's models were trained for)
+  and finds the end a little more often from the sixth request on (163 of 220 instead of 158 in tests); it forgets
+  the oldest as new ones come, and what it learns stays on the Echo ("Learn how the wake word is said here" on the
+  settings page, on by default). For words without a model, and when the sounds give no
+  answer near Amazon's "heard", it waits for the pause after the word and starts there; said straight on, without a
+  pause, or in a loud room, it never leaves out more than earlier versions did. The log says what it found
+  (`wake: the word ends +90 ms from Pryon's end (aligned in 40 ms)`, or `wake: 260 ms of the word's tail left out (a
+  pause)`).
+
+- **Silence ahead of each request.** Home Assistant's speech detector starts afresh for each request and does not
+  listen to its first three quarters of a second. Without anything ahead, a short command said straight after the
+  wake word was over before it listened: Home Assistant then waited 15 seconds for you to finish, and some speech to
+  text (Parakeet) found no words at all in audio that opens mid-word. So every request the Echo starts (wake word,
+  button, a follow-up question) opens with 0.8 s of silence. It goes out at once, so nothing waits for it; Home
+  Assistant's debug recordings start with it. Not with Home Assistant's own wake word engine, which listens all the
+  time.
 
 - **The wake word in the request** ("Wake word in the request" on the [settings page](#settings-page), Voice, off by
   default): Home Assistant gets the audio from just before the wake word on, so speech to text hears "Alexa, turn on
@@ -540,6 +564,8 @@ Echo announces itself again after 100 s without Home Assistant, then less and le
 - "Wake sound removal" (experimental, under Features): off by default; takes the wake sound out of what the voice
   assistant gets (see [Voice](#voice)).
 - "Wake word in the request": off by default; Home Assistant gets the wake word too (see [Voice](#voice)).
+- "Language you speak" (Wake word): the language whose sounds find the wake word's end (see [Voice](#voice)); automatic by default.
+- "Learn how the wake word is said here" (Wake word): the Echo adapts the wake word's sounds to your home (see [Voice](#voice)); on by default.
 - "End of request heard on the Echo" (experimental): off by default; relaxed, normal or aggressive end a request when
   the one who said the wake word stops talking (see [Voice](#voice)).
 - "Timers ring for": 1 minute by default, 10 s to 10 min, or until stopped.

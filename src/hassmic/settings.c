@@ -28,6 +28,8 @@ static const char *const arb_modes[2] = { "hassmic", "kiosk" };            /* AR
 static const char *const wake_engines[3] = { "amazon", "microwakeword", "homeassistant" };  /* WAKE_AMAZON, WAKE_MWW, WAKE_HA */
 static const char *const dropin_answers[2] = { "auto", "ask" };          /* dropin_ask() 0, 1 */
 static const char *const timer_sounds[4] = { "timer", "alarm", "beep", "custom" };    /* TIMER_SOUND_* */
+static const char *const speech_langs[6] = { "auto", "de", "en", "fr", "es", "ja" };
+static int speech_lang, wake_adapt = 1;
 
 const struct bt_lang bt_langs[] = {
     { "en", "English", "Connected to %s", "Disconnected from %s", "Connected to a Bluetooth device", "Disconnected from a Bluetooth device" },
@@ -58,7 +60,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET, NSET };
@@ -69,6 +71,11 @@ enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE,
 static const struct setting table[NSET] = {
     /* main.c keeps it; microWakeWord's models are in state/mww (mww_store.c), not in an export */
     [WAKE_ENGINE] = { "wake_engine", "Wake word engine", "Wake word", NULL, S_CHOICE, 0, 0, 1, 0 },
+    /* which language's aligner finds the wake word's end (wakealign.h, main.c align_resolve): the speakers', not the wake
+     * word model's (German voices saying the English "Alexa": 48 of 75 right with German aligners, 23 with English) */
+    [SPEECH_LANG] = { "speech_language", "Language you speak", "Wake word", NULL, S_CHOICE, 0, 0, 1, 0 },
+    /* the aligner's speaker adaptation (wakealign.h, main.c align_thread): learnt from this home's requests */
+    [WAKE_ADAPT]  = { "wake_word_adaptation", "Learn how the wake word is said here", "Wake word", NULL, S_BOOL, 0, 1, 1, 0 },
     [MIC_LEVEL]   = { "mic_level", "Mic level", "Voice", "dBFS", S_INT, MICGAIN_LEVEL_MIN, MICGAIN_LEVEL_MAX, 1, 0 },
     [DENOISE]     = { "noise_reduction", "Noise reduction", "Voice", NULL, S_CHOICE, 0, 0, 1, 0 },
     [WAKE_SOUND]  = { "wake_sound", "Wake sound", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
@@ -201,6 +208,7 @@ int settings_choices(const struct setting *s, const char *const **names)
     case UPDATES: *names = update_channels; return 3;
     case ARB_MODE: *names = arb_modes; return 2;
     case WAKE_ENGINE: *names = wake_engines; return 3;
+    case SPEECH_LANG: *names = speech_langs; return 6;
     case DROPIN_ANSWER: *names = dropin_answers; return 2;
     case TIMER_SOUND: *names = timer_sounds; return 4;
     case END_REQ: *names = micend_names; return MICEND_MODES;
@@ -212,6 +220,8 @@ int settings_get(const struct setting *s)
 {
     switch (s - table) {
     case WAKE_ENGINE: return core_wake_engine(-1);
+    case SPEECH_LANG: return speech_lang;
+    case WAKE_ADAPT: return wake_adapt;
     case MIC_LEVEL: return mic_level;
     case DENOISE: return core_mic_denoise(-1);
     case WAKE_SOUND: return core_wake_sound(-1);
@@ -268,6 +278,8 @@ static void put(enum id i, int v)
 {
     switch (i) {
     case WAKE_ENGINE: core_wake_engine(v); break;
+    case SPEECH_LANG: speech_lang = v; break;
+    case WAKE_ADAPT: wake_adapt = v; break;
     case MIC_LEVEL: mic_level = v; core_mic_level(v); break;
     case DENOISE: core_mic_denoise(v); break;
     case WAKE_SOUND: core_wake_sound(v); break;
@@ -480,6 +492,7 @@ int settings_peek(const char *name, char *out, size_t cap)
 }
 
 int settings_mic_level(void) { return mic_level; }
+const char *settings_speech_language(void) { return speech_lang > 0 && speech_lang < 6 ? speech_langs[speech_lang] : ""; }
 int settings_on(const char *name) { const struct setting *s = settings_find(name); return s && s->type == S_BOOL && settings_get(s); }
 const struct bt_lang *settings_bt_lang(void) { return &bt_langs[bt_lang]; }
 int settings_bt_lang_index(int set) { if (set >= 0 && set < bt_lang_count) bt_lang = set; return bt_lang; }

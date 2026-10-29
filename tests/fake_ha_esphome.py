@@ -6,7 +6,7 @@ fake_ha_esphome_{timers,features,buttons,address}.py."""
 import asyncio, os, signal, subprocess
 from aioesphomeapi import SwitchInfo, NumberInfo, NumberState, SwitchState, TextSensorInfo, TextSensorState, SensorInfo
 from aioesphomeapi import APIClient, MediaPlayerInfo, MediaPlayerEntityState, VoiceAssistantEventType as Ev, BinarySensorInfo, BinarySensorState
-from esphome_common import ROOT, check, until, sync, peak, speech, settled, run
+from esphome_common import ROOT, LEAD_IN, check, until, sync, peak, speech, settled, run
 
 PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT = 16953, 16954, 16955, 16966, 16967
 
@@ -99,8 +99,10 @@ async def main(e):
     check(handle_start.audio == (0, 0, 1.0), f"neutral audio settings in the request (the gain is applied on the Echo): {handle_start.audio}")
     await speech(mic); pk = peak(mic)
     check(len(mic) > 16000, f"mic audio streamed: {len(mic)} bytes")
+    # 800 ms of silence first, for Home Assistant's VAD and STT (issue #80), at once: ahead of the ring's replay
+    check(len(mic) > LEAD_IN and not any(mic[:LEAD_IN]), f"the request opens with {LEAD_IN} bytes of silence")
     # the PC's wake word ended 128 ms before it was heard (as Pryon's do): that much from the ring, then the live 50 ms blocks
-    ahead = sum(chunks[:chunks.index(1600)]) if 1600 in chunks else None
+    ahead = sum(chunks[:chunks.index(1600)]) - LEAD_IN if 1600 in chunks else None
     check(ahead == 4096, f"what was said between the wake word's end and its detection sent ahead of the live stream: {ahead} bytes")
     check(8000 < pk <= 29100, f"mic audio brought up to speech level, peaks limited below full scale: peak {pk}")
 
@@ -128,7 +130,7 @@ async def main(e):
     started.clear(); chunks.clear(); proc.send_signal(signal.SIGUSR1)
     await asyncio.wait_for(started.wait(), 5)
     await until(lambda: 1600 in chunks)
-    ahead = sum(chunks[:chunks.index(1600)]) if 1600 in chunks else None
+    ahead = sum(chunks[:chunks.index(1600)]) - LEAD_IN if 1600 in chunks else None
     check(ahead == 24000, f"the wake word sent ahead of the live stream too: {ahead} bytes (700 ms, and the block in hand)")
     cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
     cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_VAD_END, None)

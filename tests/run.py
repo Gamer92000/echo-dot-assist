@@ -37,6 +37,7 @@ TESTS = [
     ("esphome-buttons", [PY, "tests/fake_ha_esphome_buttons.py"]),
     ("esphome-timers", [PY, "tests/fake_ha_esphome_timers.py"]),
     ("end-of-request", [PY, "tests/fake_ha_end.py"]),
+    ("wakealign", [PY, "tests/fake_ha_wakealign.py"]),
     ("sendspin", [PY, "tests/fake_ma_sendspin.py"]),
     ("sendspin-9", [PY, "tests/fake_ma_sendspin.py", "--legacy"]),
     ("wifi", [PY, "tests/fake_web_wifi.py"]),

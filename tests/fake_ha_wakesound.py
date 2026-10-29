@@ -9,6 +9,7 @@ from aioesphomeapi import APIClient, VoiceAssistantEventType as Ev
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 16996
 RATE = 16000
+LEAD_IN = 800 * 32                                              # main.c lead_in: 800 ms of silence opens the request
 
 
 def check(cond, what):
@@ -58,7 +59,8 @@ async def run(removal, noise):
     finally:
         proc.terminate(); proc.wait(5)
     log.seek(0)
-    return np.frombuffer(bytes(mic[:got * 2]), "<i2").astype(float), live, log.read()
+    lead = bytes(mic[:LEAD_IN]); check(len(lead) == LEAD_IN and not any(lead), "the request opens with 800 ms of silence")
+    return np.frombuffer(bytes(mic[LEAD_IN:got * 2]), "<i2").astype(float), live, log.read()
 
 
 async def main():

@@ -351,6 +351,97 @@ Run in this order. Each step says what it proves.
       inside the command within 500 ms while the word ran straight into it. Logged as
       "wake: <n> ms of the word's tail left out (<why>)", 0 ms too. Open: the reporter's verdict; a capture dump
       (`kill -TTIN`) with the `wake: ... samples` lines of the same runs would show the frames before the cut.
+- [~] The wake word's end by alignment (2026-10-29, issues #72, #79; PC, `wakealign.c`). #79 (Dot 2, 004a2f6,
+      Parakeet TDT v2; the Echo's capture beside what HA got, 18 requests): `wordtail_cut` reproduces every logged cut;
+      "Alexa lights on" in one breath: a 90 ms gap (one frame short of a pause), "Ligh", the 100 ms closure of "ts" taken
+      for the pause, cuts of 220-310 ms. A first fix (a longer pause once the voice came back) and every later rule on
+      the level or the spectrum were measured and dropped:
+      Data: OmniVoice (k2-fsa, zero-shot clones of two German voices on the owner's server; every clip transcribed back
+      by canary-1b-v2 and kept only when it says what it should), 77 + 37 "Alexa [,] <command>" and 119 for Amazon,
+      Computer, Echo, Ziggy; a synthetic room (RIR 50 ms decay, noise -58 dBFS); Pryon's end from the stock models under
+      qemu (`tools/qrun.sh build/donut/pryon_test -m device-logs/models/<id>/unpacked/pryon.manifest -x 4`). Truth: the
+      Montreal Forced Aligner 3.4.3 (german_mfa acoustic model and dictionary, `alexa` = a l ɛ k s a) on the dry audio
+      with the whole sentence; checked on 96 clips of a separate "Alexa." and command joined: its end -31 ms against the
+      -50 dBFS end of the joined word, p90 61 ms (torchaudio's MMS_FA CTC aligner put it 100-200 ms early: not usable).
+      Pryon's end against MFA's: Alexa median 90 ms before (in the final /s/ or /a/, 30 ms after the /a/ starts), Computer
+      25 before, Amazon at it, Echo 75 and Ziggy 20 after (-250 .. +450 ms over all).  Right (the cut within 40 ms of
+      the end, or in the pause after it), of 220: Pryon's end 80; the release's `wordtail_cut` about as many (for Alexa 20
+      of 77, cutting into the command in 25); the 150 ms change no better; a
+      phonetic rule for Alexa (the /s/ -> /a/ change by 3-7 kHz against 150-900 Hz energy, then the vowel's own
+      spectrum) 47+28 of 114 for Alexa but at or under Pryon's end for the others; templates of learned word endings
+      (DTW on log-mel) 56+24 for Alexa, and the same with the other voice's templates (so: the word's shape, not the
+      speaker's); a learned offset per household: no gain. Combinations of these: none better than the best alone.
+      MFA with only the wake word known (the rest as its "spn"), room audio, no speaker adaptation: 152 of 220.
+      `wakealign.c` is that, cut down: MFA's first pass (final.alimdl, LDA after 7 spliced MFCC frames) over the word's
+      triphones (from MFA's tree; the first after silence or at the start, the last before silence or into spn: with
+      only the spn variant of the last /a/ the decay before a pause went to silence, 59 of 77 equal to MFA, with both
+      71 and none off by more than 40 ms), the dictionary's silence probabilities, acoustic scale 1/12, self loops 0.1;
+      the mean over the window for CMVN (MFA's per speaker or a long-term mean: 157 either way); a window of 1.5 s
+      before to 0.5 s after Pryon's end (+0.3 s: 140; -0.9 s: 151): 158 of 220 (Alexa 88/114, Amazon 14/29, Computer
+      24/32, Echo 24/30, Ziggy 8/15). A phone loop instead of spn after the word: worse (108-139). Amazon's misses: its
+      final /n/ runs on into a command starting with m, l, w. `tools/wakealign/` (extract.py in MFA's env, walign.py the
+      numpy reference and writer, build.sh) makes `build/wakealign/<id>.wa`, 360-490 KB, float32: C and numpy give the
+      same end on all 220 to the sample (tests/unit/wakealign_ref.py holds them together on synthetic models; ASan and
+      UBSan clean, cut or altered files refused). Time for the 2 s: 10 ms on the PC, 0.2 s under qemu-arm, run in the
+      capture thread before it takes core_lock (`align_ahead`). Accepted only 400 ms before to 500 ms after Pryon's
+      end; else, and without a model, `wordtail_cut` as before. Bundles carry the models next to hassmic; the factory
+      copy only where /system has room.
+      Later the same day: every language MFA has an acoustic model for (`tools/wakealign/build.sh`: Amazon's five words
+      in de-DE, en-US/GB/CA/AU/IN, fr-FR/CA, es-ES/MX, ja-JP (katakana), the firmware's "alexa", microWakeWord's
+      okay_nabu, hey_jarvis, hey_mycroft in English and German); pronunciations: every one in the dictionary (3 at most,
+      a path each), else MFA's G2P (2 best): "alexa" is in no English dictionary; pt-BR left out (portuguese_mfa is MFA
+      2.0's, position-dependent phones and no phone table), Italian (only a Common Voice model, no G2P), Hindi and
+      Arabic (none). Format 2: 16 Gaussians a pdf (the heaviest, renormalised) in float16: 158 of 220 as with all of them
+      in float32 (24: 159, 12: 153, 8: 152), 80-160 KB a file, ~5 MB for all, 4 ms for the window on the PC. English:
+      92 OmniVoice requests in the two German voices (canary in English kept 92 of 96), the firmware's en-US Pryon and
+      computer/echo-en-US (75 accepted; Pryon's end 205 ms after the word for Alexa, 70 for both others), MFA english_mfa
+      with the whole sentence as truth: Pryon's end 20, release's rule 18, english aligners 23 (Computer 2 of 26: its end
+      180 ms early), german aligners 48. So the language spoken decides, not the wake word's: setting
+      `speech_language` (auto/de/en/fr/es/ja), auto by the time zone Home Assistant gave, then the word's locale
+      (main.c `speech_locale`, `align_resolve` at each detection). Phone loop after the word (MFA's phone_lm.fst as
+      bigrams, loop phones in silence's context, the word's last phone in each loop phone's): 136-158 of 220; with the
+      first loop phone in the word's context 159-161 at 7x the size: dropped. Speaker adaptation (fMLLR, Kaldi's
+      fmllr-diag-gmm, stats from the first pass of 5 or 20 other requests of the same voice): 166, 169 of 220 (Amazon
+      16 -> 22, Echo 23 -> 28, Ziggy 7 -> 10, Alexa 88 -> 86). Built then as the Echo would learn it, online: per
+      voice the requests in a fixed random order, each aligned with the transform so far, then added (forgetting 0.98 a
+      request, from 5 requests on; the transform's result only where it lies near Pryon's end, else the plain one):
+      German 158 -> 163 of 220, German-voiced English 48 -> 53 of 75. `wakealign_end_adapt`, `wakealign_estimate`
+      (Kaldi's row update; A^-1 by Sherman-Morrison between a round's rows, G_i's upper halves): C and walign.py Adapt
+      the same ends and the transform to 5e-6 (tests/unit/wakealign_ref.py). Per request under qemu-arm: the alignment
+      0.03 s, with the update 0.22 s (0.47 before those two), all of it in `align_thread`, off the capture thread
+      (issue #77) as the answer is out first; statistics in state/wakealign-<space>.adapt (557 KB), written at most
+      every 10 minutes and at the 5th request. Setting `wake_word_adaptation` (on).
+      Open: the time on a device, real recordings (rmaffeo's, the #72 reporter's), native English and the untried
+      languages. The models are in git (`wakealign/`, CC BY 4.0, credited in its README), every bundle carries them.
+      Format 3 (2026-10-29): the 62 files were 6.58 MB (gzip 6.05, xz 2.09: the same data again and again), 16 of
+      them byte for byte another's (en-CA = en-US, en-AU = en-GB, fr-CA = fr-FR: the same acoustic model and
+      dictionary; alexa = alexa-en-US). Now a .was per acoustic model holds each GMM once (german 557 KB, english 757,
+      french 283, spanish 438, japanese 313), 46 word files name theirs by place and FNV-1a check (1.5-3 KB): 2.45 MB,
+      made from the format 2 files without MFA (the GMMs of a pdf are the same bytes in every word that has it).
+      The ends of all 62 old files against the new ones on 8 windows: 496 of 496 the same. Memory as before (only the
+      word's GMMs are read). align_resolve: the spoken locale, else the word's own (en-US where the id has none), the
+      three aliased; sysinstall.sh removes older names from /system/hassmic.
+      Review (2026-10-29): the replay waits for align_thread's answer until 1 s past its window, then the level
+      (a CPU that busy held the whole request: HA got the lead-in only); a wake word change while a run goes on no
+      longer sleeps the capture thread (up to 2 s, issue #77): the old model is freed by align_resolve after the run;
+      a language picked on the page takes the zone's variety (English in London: en-GB); five adaptation slots, the one
+      used longest ago saved and replaced; build.sh's full rebuild made aside, put in place only when every word was.
+      tests/fake_ha_wakealign.py covers it in the daemon (file per language, too slow, busy, adaptation in use and
+      saved) on a German "Alexa" of an OmniVoice designed voice (testdata/alexa_omnivoice.raw), each wake word timed
+      by the capture's clock: the aligner takes the first "Alexa" in its window.
+- [~] Silence ahead of each request (2026-10-29, issue #80, PR #71; PC).
+      HA's VAD (assist_pipeline MicroVadSpeexEnhancer, pymicro-vad 1.0.1, HA 2026.10.1) is a new one per run:
+      `Process10ms` gives -1 for chunks 0-75 (from zeros: first value at chunk 76), the segmenter takes -1 as 0 and
+      starts after 0.3 s over 0.2 (`VoiceCommandSegmenter`, timeout 15 s). Measured with the real classes on espeak
+      words at -26 dBFS, room -55 dBFS after: "lights off" (0.47 s) started without a lead-in, "on" (0.2 s) only with
+      160 ms or more ahead, "stop" (0.29 s) unreliably at any (under the 0.3 s); content of the lead-in (zeros, -75 or
+      -55 dBFS noise) made no difference. The reporter's Echo: "Alexa lights off" waited for the 15 s timeout before
+      the tail rule existed; home-assistant/core#175735: the same with ESPHome satellites, 800 ms of silence cured it.
+      Parakeet offline on two requests cut 20 and 0 ms: "" as received, "The lights on." with 50-300 ms of silence in
+      front. PR #71 had it as an opt-in setting for local wake words over ESPHome; `lead_in` (main.c) sends 800 ms of
+      zeros at once after `proto->start()` for every run with the wake word on the Echo (wake word, button, follow-ups,
+      both protocols): each starts HA's VAD cold. Not with `-w remote`. Tests: the 25600 zero bytes ahead of the ring's
+      4096 (`fake_ha_esphome.py`). Open: the reporter's verdict on a device.
 
 ## Phase 5 — Make it permanent **(device)**
 

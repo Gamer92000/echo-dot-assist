@@ -235,6 +235,8 @@ const HELP = {
       return h('p', { class: 'f-model' }, a.kiosk_heard_s == null ? 'No claim from another Kiosk Satellite device heard yet.'
         : `Last claim from another Kiosk Satellite device: ${a.kiosk_heard_s < 90 ? a.kiosk_heard_s + ' s' : Math.round(a.kiosk_heard_s / 60) + ' min'} ago.`);
     } },
+  wake_word_adaptation: { help: 'The Echo learns from your requests how the wake word sounds here, in your voices, your room and through its microphone, and finds where the word ends a little more often (in tests 163 of 220 instead of 158, from the sixth request on). What it learns stays on the Echo; it forgets the oldest as new requests come. On by default.' },
+  speech_language: { help: 'The language you and the others at home speak. After a wake word the Echo finds where the word ends by its sounds, and it hears those best when it knows how you say them: a German speaker\'s "Alexa" is found far better with German sounds, even with the English wake word. Automatic takes it from your time zone in Home Assistant (Germany, Austria, Switzerland: German; France: French; ...), else from the wake word\'s own language.' },
   wake_engine: { help: 'Amazon\'s engine is the one the Echo was built around. microWakeWord, the engine of ESPHome\'s voice satellites, takes wake words anyone can train, at the cost of hearing them much less reliably. Home Assistant: the Echo streams its microphone and your Home Assistant listens, with openWakeWord for instance.',
     // the warning, a first model, or Home Assistant's side of it, before the switch; from or to Home Assistant the satellite restarts
     before: (c) => c === 'microwakeword' ? mwwSwitchDialog() : c === 'homeassistant' ? haSwitchDialog() : true,
@@ -359,6 +361,7 @@ const HELP = {
 };
 const CHOICE_NAMES = {
   wake_engine: { amazon: 'Amazon', microwakeword: 'microWakeWord', homeassistant: 'Home Assistant' },
+  speech_language: { auto: 'Automatic', de: 'German', en: 'English', fr: 'French', es: 'Spanish', ja: 'Japanese' },
   arbitration_mode: { hassmic: 'Echo network', kiosk: 'Kiosk Satellite' },
   noise_reduction: { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' },
   online_updates: { off: 'Off', beta: 'Beta', release: 'Release' },

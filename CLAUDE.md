@@ -54,6 +54,9 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # voices on another pitch; end of audio, not an abort; the gain left alone;
                                              # the next request after one (HASSMIC_FAKE_KEYWORD: SIGUSR1's wake word gets
                                              # a level, so its tail is looked for as on a device)
+.venv/bin/python tests/fake_ha_wakealign.py   # the wake word's end by the aligner (wakealign/): the file per language spoken,
+                                             # one too slow (HASSMIC_FAKE_ALIGN_SLOW) or busy goes by the level, the
+                                             # speaker adaptation in use and saved (a German "Alexa", timed per loop)
 .venv/bin/python tests/fake_ha_arbitration.py # two Echos under one fake HA: wake word arbitration, join paths and security
                                              # (_join, _rounds, _kiosk, _window, _afe.py beside it; tests/arbecho.py)
 .venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer,
@@ -198,9 +201,23 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   once), then `micdenoise.c` (RNNoise, settings page off/low/medium/high, off by default), then
   `micgain.c`: AGC on the mic audio sent to the pipeline (the stock
   micAsr level is ~30 dB below what STT expects, and HA ignores the ESPHome audio settings); the wake word gets it raw.
-  After a wake word the stream starts from the ring past the word's tail (`wordtail.c`, issue #72: Pryon's end comes
-  before the voice's; a 100 ms pause 9 dB under the word, the live stream waits up to 500 ms for it; no pause: never
-  more than a4fe0bd's rule left out, often nothing).
+  After a wake word the stream starts from the ring at the word's end: `wakealign.c` (issues #72, #79) aligns the word's
+  phones (MFA's GMM-HMM, cut down per wake word and spoken language to `<word>-<locale>.wa` (microWakeWord: name slug),
+  its GMMs in `<acoustic model>.was` shared by the words of that model, next to the binary or in `HASSMIC_WAKEALIGN`,
+  picked per detection by `align_resolve`: setting `speech_language`, else the time zone, else the word's own locale
+  (en-US for the firmware's "alexa" and microWakeWord's); en-CA, en-AU, fr-CA take en-US's, en-GB's, fr-FR's files (the
+  same models); made by `tools/wakealign/build.sh` from MFA's pretrained models, in git as `wakealign/` (2.5 MB; CC BY
+  4.0, credited in `wakealign/README.md`); format 3: 16 Gaussians a pdf, float16, a check per GMM) in [Pryon's end - 1.5 s, + 0.5 s],
+  run in `align_thread` (started by `align_ahead`; never on the capture thread, issue #77; the replay waits for
+  `align_done`), taken in [-400 ms, +500 ms] of Pryon's end (it may start before it: Echo, Ziggy, the English models
+  fire after the word); speaker adaptation (fMLLR per household and model space, `state/wakealign-<space>.adapt`,
+  setting `wake_word_adaptation`, from 5 requests on, forgetting 0.98 a request); `tools/wakealign/walign.py` is its numpy reference
+  (`tests/unit/wakealign_ref.py`). Without a model (the firmware's English "alexa" so far, microWakeWord) or a result
+  near: `wordtail.c` (a 100 ms pause 9 dB under the word, waiting up to 500 ms; no pause: never more than a4fe0bd's
+  rule left out, often nothing).
+  Every run HA starts at STT (local wake word, button, follow-ups; not `-w remote`) opens with 800 ms of zeros
+  (`lead_in`, issue #80): HA's microVAD is new per run and blind for its first 760 ms, and Parakeet answers "" to audio
+  that opens mid-word. Tests: `esphome_common.LEAD_IN` bytes ahead of the ring's replay.
   Setting `wake_word_in_request` (off): the replay from 100 ms ahead of the keyword's begin instead (`replay_whole`,
   `kw_begin`/`kw_end` of the last detection; mww's begin is its end - 1 s); micend counts from the tail's end
   (`talker_from`); `core_transcript` drops a leading wake phrase ("Alexa, stop" = "stop"), and the wake word alone

@@ -113,6 +113,9 @@ async def sync(c): await asyncio.wait_for(c.device_info(), 5)
 
 def peak(b): return max(abs(v) for v in struct.unpack(f"<{len(b) // 2}h", b[:len(b) // 2 * 2])) if b else 0
 
+# every run with the wake word on the Echo opens with 800 ms of silence (main.c lead_in, issue #80), in 2048-byte chunks
+LEAD_IN = 800 * 32
+
 async def speech(mic):
     # testdata/alexa_espeak.raw loops at real time, 8.4 s with 3.8 s of silence: wait for 1 s of audio with speech in
     # it, wherever in the loop the pipeline started
@@ -165,7 +168,7 @@ class Echo:
     """build/hassmic-host as the tests know it: its state in a temp directory, a settings file from before the mic
     level, installed wake word models, a keypad (a FIFO), the light sensor and Wi-Fi driver's files, the settings page
     logged in"""
-    def __init__(self, ports, extra_env=None):
+    def __init__(self, ports, extra_env=None, log=False):
         self.PORT, self.HTTP_PORT, self.WEB, self.HTTPS_PORT, self.SELF_PORT = ports
         self.play = tempfile.mktemp(suffix=".raw"); open(self.play, "wb").close()   # its size is polled before the first reply
         self.settings = tempfile.mktemp(suffix=".settings")
@@ -194,7 +197,10 @@ class Echo:
             subprocess.run([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.PORT), "-n", "Echo Dot", "-S"], env=env, stdout=f, check=True)
         keys = os.path.join(state, "keypad"); os.mkfifo(keys)    # the keypad (-b): input events written by the test
         self.keypad = os.open(keys, os.O_RDWR)                   # opened first: hassmic's open() would wait for a writer
-        self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.PORT), "-n", "Echo Dot", "-L", "-W", str(self.WEB), "-b", keys], env=env)
+        # log: what it writes into a file (log()) rather than this test's output, which gets its last lines on a failure
+        self.logpath = os.path.join(state, "hassmic.log") if log else None
+        self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.PORT), "-n", "Echo Dot", "-L", "-W", str(self.WEB), "-b", keys],
+                                     env=env, stderr=open(self.logpath, "w") if log else None)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", self.HTTP_PORT), Handler)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
         self.httpsd, self.selfd = https_server(self.HTTPS_PORT, self.srv_pem), https_server(self.SELF_PORT, self.self_pem)
@@ -202,6 +208,7 @@ class Echo:
     def keyev(self, code, value): os.write(self.keypad, struct.pack("llHHi", 0, 0, 1, code, value))     # struct input_event, EV_KEY
     def rx_stat(self, rcpi): open(self.env["HASSMIC_FAKE_WIFI"], "w").write(f"RX Stat:\nRX SNR (dB)          = 32\nRCPI RX0             = {rcpi}\n")
     def wake(self): self.proc.send_signal(signal.SIGUSR1)          # the PC's stand-in for the wake word
+    def log(self): return open(self.logpath, errors="replace").read() if self.logpath else ""
 
     def conf(self):                                       # state/config: name=value lines (settings.c)
         try: return dict(l.strip().split("=", 1) for l in open(os.path.join(self.state, "config")) if "=" in l and not l.startswith("#"))
@@ -216,10 +223,12 @@ class Echo:
             if os.path.exists(f): os.unlink(f)
 
 
-def run(main, ports, extra_env=None):
-    """main(e) against a fresh Echo; prints the verdict and exits with it"""
+def run(main, ports, extra_env=None, log=False):
+    """main(e) against a fresh Echo; prints the verdict and exits with it (log: Echo's log(), its end printed on a failure)"""
+    e = None
     async def go():
-        e = Echo(ports, extra_env)
+        nonlocal e
+        e = Echo(ports, extra_env, log)
         await until(lambda: port_open(e.PORT) and port_open(e.WEB))
         try:
             e.page = Browser(e.WEB)                         # the settings page: what is no longer in Home Assistant
@@ -228,5 +237,6 @@ def run(main, ports, extra_env=None):
         finally:
             e.close()
     asyncio.run(go())
+    if check.failed and e and e.logpath: print("     the Echo's log, last lines:\n" + "".join("       " + l for l in e.log().splitlines(True)[-40:]))
     print("FAILED" if check.failed else "all good")
     sys.exit(1 if check.failed else 0)
