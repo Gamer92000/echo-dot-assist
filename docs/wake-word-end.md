@@ -116,8 +116,9 @@ timeout ([`vad.md`](wake-word-end/vad.md)):
 
 Its VAD is a new one per request and blind for its first 760 ms; the silence covers that. What is left are one-word
 commands ("on", "off", "an") shorter than the 0.3 s of speech the segmenter wants before a command starts: no silence
-can help those, the wake word in the request does (334 of 335), and so would "End of request heard on the Echo"
-(setting `end_of_request`), which ends the request on the Echo itself.
+can help those; the wake word in the request does (334 of 335). "End of request heard on the Echo" (setting
+`end_of_request`) does not: it too wants 300 ms of the talker before it ends anything (`micend.c` `SPEECH_MIN`, as
+rmaffeo noted in #80).
 
 ## What this does not tell
 
