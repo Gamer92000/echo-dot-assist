@@ -72,11 +72,11 @@
  *   of an Echo since removed from HA never changes).  Both sides check: a member hands K (T_GIVE, sealed to the
  *   newcomer's key) only to an Echo whose tag HA confirmed, and the newcomer takes it only from an Echo whose tag HA
  *   confirmed, so a forger can neither get K nor push a network of its own.  No clock needed, nothing to configure.
- *   Action: with no tag confirmed after ATTEST_WAIT_MS (HA without the tag integration, an older Echo), the member
- *   has HA run the newcomer's own action, "esphome.<its node name>_arbitration_key", which HA delivers only over the
- *   encrypted API link of the device it adopted under that node name; the receiving Echo takes it only from a client
- *   holding the device's API key.  Needs "Allow the device to perform Home Assistant actions" on the member (HA raises
- *   a repair without it).
+ *   Action: with no tag confirmed ATTEST_WAIT_MS after the newcomer was heard and our link to HA was up (HA without
+ *   the tag integration, an older Echo), the member has HA run the newcomer's own action, "esphome.<its node
+ *   name>_arbitration_key", which HA delivers only over the encrypted API link of the device it adopted under that node
+ *   name; the receiving Echo takes it only from a client holding the device's API key.  Needs "Allow the device to
+ *   perform Home Assistant actions" on the member (HA raises a repair without it).
  *   Pairing (no Home Assistant at all): Volume up + Volume down held on both Echos.  For 2 min each broadcasts a pair
  *   request; a member hands K (T_GIVE) PAIR_SETTLE_MS after its own press, and only if exactly one Echo outside its
  *   network asked since 2 min before that press, and no Echo of an older network is pairing (that one gives).  Taking
@@ -260,6 +260,10 @@ static int npoll;
 static char self_tag[TLEN - 4];                         /* our tag id, "hassmic_<pub hex>" */
 static long long scan_at;
 static int scans, scan_due;                             /* scans in a row while someone may wait; one to send outside the lock */
+/* since when Home Assistant takes our tag requests (0: no link; arb's thread only).  The wait for a newcomer's tag runs
+ * from then, not from its first beacon: a tag takes the link of both and up to two of its scans, and HA connecting
+ * late (a restart, both Echos booting) would else see the action first, a repair for owners who did not allow it */
+static long long ha_since;
 static struct preq { uint8_t pub[32]; char node[NLEN]; uint64_t net; long long seen; } preqs[NPEER];   /* pair requests heard */
 static long long pair_at, pair_until, pair_sent, give_at;
 static int pair_gave, give_left;
@@ -736,7 +740,8 @@ static void push(struct cand *c, long long now)
         crypto_wipe(&b, sizeof b); crypto_wipe(blob, sizeof blob);
         return;
     }
-    if (ago(c->pushed, now, PUSH_MS) || !c->node[0] || now - c->first < ATTEST_WAIT_MS || npush == NPEER) return;
+    if (ago(c->pushed, now, PUSH_MS) || !c->node[0] || !ha_since || now - (c->first > ha_since ? c->first : ha_since) < ATTEST_WAIT_MS
+        || npush == NPEER) return;
     if (seal(blob, c->pub)) return;
     c->pushed = now;
     b64_encode(blob, sizeof blob, k64, 0, 1);
@@ -1159,7 +1164,10 @@ static void *loop(void *arg)
             fprintf(stderr, "arbitration: %s network %s to %s through Home Assistant\n", r < 0 ? "cannot hand (no link)" : "handing", q[i].net, q[i].node);
         }
         crypto_wipe(q, sizeof q);
-        for (int i = 0; i < npq; i++) if (hooks->request) hooks->request(pq[i]);
+        for (int i = 0; i < npq; i++) if (hooks->request) {
+            if (hooks->request(pq[i]) < 0) ha_since = 0;
+            else if (!ha_since) ha_since = now;
+        }
         if (sd && hooks->scan) hooks->scan(self_tag);
         int pe = atomic_exchange(&pair_event, 0);
         if (pe && hooks->paired) hooks->paired(pe);

@@ -2,6 +2,12 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-29
+
+- **Joining another Echo's wake word arbitration** no longer falls back to the newcomer's action when Home Assistant
+  connected late (after a restart, or both Echos booting at once): the Echos give Home Assistant's tags their 30 s from
+  then. Owners who did not allow the Echo to perform actions got a repair in Home Assistant for nothing.
+
 ## 2026-10-28
 
 - **Echo Input (2018, `cupcake`).** Worked out from its firmware (Fire OS 6.5.7.5, NS6575/8338): the Echo

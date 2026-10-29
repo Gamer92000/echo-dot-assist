@@ -1078,6 +1078,10 @@ Run in this order. Each step says what it proves.
       against a real HA yet. On the three Echos (2026-10-06 23:11, network key removed on all, restarted together):
       radar started a network after 5 s, all three tags scanned at 23:11:28, both others confirmed and joined by
       23:11:31 (23 s in all), no action, no pairing; so HA 2026.9 names the tag entity `tag.hassmic_<pub hex>` as expected.
+      The 30 s run from the newcomer's first beacon or our link to HA, whichever is later (`ha_since`, 2026-10-29): CI's
+      arb-join failed so (runs 40560756025, 2026-10-27, and 40914090327, PR #78, 2026-10-29), HA linked 1.3 s after both Echos started (at
+      0.1 scale: the action at first + 3 s, the tag, which needs both links and up to two scans, confirmed 0.2 s later).
+      HA connecting 1.0, 1.5, 2.0 s late to both: the old rule handed through the action in 6 of 6, this one in none.
 - [x] Claim copies spread (2026-10-06): after the rejoin, a wake word heard by radar (score 5836) and biscuit (2187)
       was answered by biscuit and HA turned radar away as a duplicate. biscuit's log has no claim from radar in 2 of 3
       rounds (donut got it, 28 ms after biscuit's), only radar's "answers" 188/279 ms later; claims seen elsewhere

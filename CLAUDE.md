@@ -259,7 +259,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (event `esphome.tag_scanned`: HA fires device events without "perform actions"; `tag.<id>` has no area or device in
   it, unlike every entity id, which HA builds from area, parent device, device and entity name), the other reads
   `tag.hassmic_<pub hex>` (state requests need no permission either) and trusts the key once the scan time changed
-  after its first read; then `T_GIVE` on the LAN, taken outside pairing only from a confirmed Echo. Else, after 30 s,
+  after its first read; then `T_GIVE` on the LAN, taken outside pairing only from a confirmed Echo. Else, 30 s after it was heard with HA's link up (`ha_since`),
   the newcomer's own ESPHome action `esphome.<node>_arbitration_key` (needs "Allow the device to perform Home Assistant
   actions"). Without HA: Volume up + Volume down held 2 s on both (`T_PAIR`/`T_GIVE`, exactly one requester). ESPHome only.
   Window (issue #27): learned per Echo from how late each member's claims come (first claim per member and round, sampled
