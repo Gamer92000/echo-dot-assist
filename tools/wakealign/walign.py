@@ -97,6 +97,8 @@ def build(m, ascale=1 / 12, sls=0.1, init_sil=0.21, fsc=0.99, fnsc=0.05):
         succ[pre + "wl_sil"] = [("sil_mid", L(ws) + L(bfs))]; succ[pre + "wl_spn"] = [("spn", L(1 - ws) + L(bfn))]
         entry_nodes.append((pre + "w0_start", L(1 - init_sil) + L(wfn) + L(pp)))
     used = [n for n in names if n in succ]                  # nodes of other graphs (tools' experiments) left out
+    if used[0] != "sil_start" or len(m.hmms[idx["sil_start"]]) != 5:
+        raise ValueError("the graph must open on sil_start's 5 states: wakealign.c takes silence's pdfs from them")
     base, states = {}, []
     for n in used: base[n] = len(states); states += [None] * len(m.hmms[idx[n]])
     for n in used:
@@ -146,10 +148,32 @@ def word_end(m, x, graph=None, xform=None, adapt=None):
     graph = graph or build(m); feats = features(m, x); fx = transformed(feats, xform)
     path = viterbi(m, loglikes(m, fx), graph)
     if adapt is not None and path: adapt.add(m, feats, fx, path, graph)
-    lastst = set(graph[2])
-    for t in range(len(path) - 1, -1, -1):
-        if path[t] in lastst: return min(len(x), (t + 1) * (m.feat["frame_shift"] * R // 1000))
-    return -1
+    lastst = set(graph[2]); shift = m.feat["frame_shift"] * R // 1000
+    tw = next((t for t in range(len(path) - 1, -1, -1) if path[t] in lastst), -1)
+    if tw < 0: return -1
+    # a pause after the word (5 frames of silence's states and more): the replay from its middle (wakealign.c)
+    states = graph[0]; silp = {states[s][0] for s in range(5)}; t = tw + 1
+    while t < len(path) and states[path[t]][0] in silp: t += 1
+    if t - tw - 1 >= 5: return min(len(x), (tw + 1 + (t - tw - 1) // 2) * shift)
+    return min(len(x), pause_after(x, (tw + 1) * shift, shift))
+
+
+def pause_after(x, at, shift, floor_db=6.0, frames=8, look=20, into=30):
+    """wakealign.c pause_after: a pause at the room's floor (10th percentile of the window's 10 ms levels) within look
+    frames after at: the replay from its middle, at most into frames into it"""
+    nf = len(x) // shift; k = (at + shift - 1) // shift
+    if nf < 10 or k >= nf: return at
+    f = x[:nf * shift].astype(np.float64).reshape(nf, shift)
+    db = np.array([10 * np.log10(sum(float(v) * float(v) for v in row) / shift + 1) for row in f])
+    s = np.sort(db); pos = (nf - 1) * 0.1; i = int(pos); fl = s[i] + (pos - i) * (s[min(i + 1, nf - 1)] - s[i])
+    t = k
+    while t < nf and t < k + look:
+        if db[t] >= fl + floor_db: t += 1; continue
+        u = t
+        while u < nf and db[u] < fl + floor_db: u += 1
+        if u - t >= frames: return (t + min((u - t) // 2, into)) * shift
+        t = u
+    return at
 
 
 class Adapt:
@@ -261,7 +285,8 @@ def write_word(path, shared, head, lda, dim, blocks, tail):
 def write_wa(m, path, shared):
     """little-endian: "HMWA" 3; the shared file's name (next to it); the GMMs the word takes from it (place, check);
     the graph's states (with their GMM as an index into that list) and arcs, entries, finals, the states of the word's
-    last phones; the acoustic scale.  The feature settings, the LDA and the GMMs are in shared (write_shared), one file
+    last phones; the acoustic scale.  States 0-4 are the leading silence's (build checks): wakealign.c knows every
+    silence state by their GMMs.  The feature settings, the LDA and the GMMs are in shared (write_shared), one file
     for every word of one acoustic model: they need the same silence, spn and phones (6.6 MB as one file a word, of
     which 1.6 MB in copies).  m: compact()'s"""
     states, entry, lastst, ascale = build(m); f = m.feat

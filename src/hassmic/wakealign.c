@@ -11,6 +11,54 @@
 #define MAXCEP 16
 #define MAXMEL 40
 #define MAXDIM 64
+#ifndef PAUSE_MIN                       /* -D for tools/wakealign/corpus_eval.py --cflags (1000: without) */
+#define PAUSE_MIN 5                     /* frames of silence after the word that make a pause: 50 ms */
+#endif
+/* A pause by the level after the aligned end (pause_after): the room's floor within FLOOR_DB, PAUSE_FRAMES of it,
+ * starting within PAUSE_LOOK frames; the replay from its middle, at most PAUSE_INTO into it */
+#ifndef PAUSE_LOOK                      /* -D for tools/wakealign/corpus_eval.py --cflags */
+#define FLOOR_DB 6.0
+#define PAUSE_FRAMES 8
+#define PAUSE_LOOK 20
+#define PAUSE_INTO 30
+#endif
+
+
+static int cmp_double(const void *a, const void *b) { double x = *(const double *)a, y = *(const double *)b; return (x > y) - (x < y); }
+
+/* The corpus (testdata/corpus, tools/wakealign/corpus_eval.py, 4586 wake words of 30 voices, 2026-10-29): where the word
+ * runs into a pause the aligner often ends it early and its silence states do not follow (the last vowel and the
+ * room's reverb go to spn): a third of those left the word's tail in.  The level knows the pause: frames at the room's
+ * floor (its 10th percentile in the window, which starts 1.5 s ahead of the word), not merely under the word (a
+ * command's "s", "sch" lie 10-20 dB under its vowels, and taking those for a pause cut "stopp").  Right with it and
+ * the aligned silence's middle: in a pause 63 -> 90 %, the word alone 56 -> 85 %, said in one breath 62 -> 64 %,
+ * "stop" 79 -> 80 %; all 63 -> 74 %.  Looking 300 ms ahead rather than 200 gave 76 %, but took the silence after a
+ * one-word command for the pause ("Alexa, an": the whole command skipped; 45 starts over 300 ms into the command
+ * instead of 23; neither a rising level nor the time at speech level in between told them apart) */
+static long pause_after(const int16_t *pcm, long n, long at, int fshift)
+{
+    long nf = n / fshift, k = (at + fshift - 1) / fshift;
+    if (nf < 10 || k >= nf) return at;
+    double *db = malloc(sizeof(double) * nf * 2), *sorted = db + nf;
+    if (!db) return at;
+    for (long f = 0; f < nf; f++) {
+        double s = 0;
+        for (int i = 0; i < fshift; i++) { double v = pcm[f * fshift + i]; s += v * v; }
+        db[f] = sorted[f] = 10 * log10(s / fshift + 1);
+    }
+    qsort(sorted, (size_t)nf, sizeof *sorted, cmp_double);
+    double pos = (nf - 1) * 0.1, floor_db = sorted[(long)pos] + (pos - (long)pos) * (sorted[(long)pos + 1 < nf ? (long)pos + 1 : (long)pos] - sorted[(long)pos]);
+    long out = at;
+    for (long t = k; t < nf && t < k + PAUSE_LOOK; ) {
+        if (db[t] >= floor_db + FLOOR_DB) { t++; continue; }
+        long u = t;
+        while (u < nf && db[u] < floor_db + FLOOR_DB) u++;
+        if (u - t >= PAUSE_FRAMES) { out = (t + ((u - t) / 2 < PAUSE_INTO ? (u - t) / 2 : PAUSE_INTO)) * fshift; break; }
+        t = u;
+    }
+    free(db);
+    return out;
+}
 
 struct wakealign {
     int ncep, nmel, flen, fshift, lctx, rctx;
@@ -21,6 +69,7 @@ struct wakealign {
     int *poff, *psrc; float *pw;                        /* the same arcs by destination (predecessors) */
     int nentry; int *estate; float *ew;
     float *final; int nlast; int *last; float ascale;
+    unsigned char *sil;                                 /* per state: one of silence's (PAUSE_MIN, wakealign_end) */
     uint64_t space;                                     /* FNV-1a of the LDA: the feature space (wakealign_space) */
     float banks[MAXMEL][FFT_N / 2 + 1], dct[MAXCEP][MAXMEL], lift[MAXCEP], win[1024];
     float cw[FFT_N / 2], sw[FFT_N / 2]; int rev[FFT_N];
@@ -182,6 +231,13 @@ struct wakealign *wakealign_load(const char *path)
             }
         free(fill);
     }
+    if (ok) {                                       /* silence's states: those with the pdfs of the leading silence's 5, the
+                                                     * first entry's (walign.py build: sil_start first, then the word) */
+        w->sil = calloc(w->nstates, 1); ok = w->sil != NULL;
+        if (ok && w->estate[0] == 0 && w->nstates > 5)
+            for (int s = 0; s < w->nstates; s++)
+                for (int k = 0; k < 5; k++) if (w->pdf[s] == w->pdf[k]) w->sil[s] = 1;
+    }
     if (!ok) { fprintf(stderr, "wakealign: %s: not an aligner model%s%s\n", path, sp[0] ? " with " : "", sp); wakealign_free(w); return NULL; }
     tables(w);
     w->space = 1469598103934665603ULL;
@@ -193,7 +249,7 @@ void wakealign_free(struct wakealign *w)
 {
     if (!w) return;
     free(w->lda); free(w->goff); free(w->gconst); free(w->mi); free(w->iv); free(w->pdf); free(w->aoff); free(w->adest);
-    free(w->aw); free(w->poff); free(w->psrc); free(w->pw); free(w->estate); free(w->ew); free(w->final); free(w->last); free(w);
+    free(w->aw); free(w->poff); free(w->psrc); free(w->pw); free(w->estate); free(w->ew); free(w->final); free(w->last); free(w->sil); free(w);
 }
 
 static void fft(const struct wakealign *w, float *re, float *im)
@@ -468,8 +524,18 @@ long wakealign_end_adapt(const struct wakealign *w, const int16_t *pcm, size_t l
         if (t > 0) s = back[t * S + s];
         if (s < 0) goto out;
     }
-    for (long t = T - 1; t >= 0 && result < 0; t--)  /* the last frame in the word's last phone */
-        for (int i = 0; i < w->nlast; i++) if (w->last[i] == path[t]) { result = (t + 1) * w->fshift; break; }
+    long tw = -1;
+    for (long t = T - 1; t >= 0 && tw < 0; t--)      /* the last frame in the word's last phone */
+        for (int i = 0; i < w->nlast; i++) if (w->last[i] == path[t]) { tw = t; break; }
+    if (tw >= 0) {
+        /* a pause after it: the replay from its middle.  Where the word runs into silence the end comes early (its
+         * last vowel fading, a room's reverb, as silence: the corpus's 1637 such requests 40-70 ms before MFA's end,
+         * the speaker adaptation took half of it), and anywhere in a pause is right */
+        long t = tw + 1;
+        while (t < T && w->sil[path[t]]) t++;
+        if (t - tw - 1 >= PAUSE_MIN) result = (tw + 1 + (t - tw - 1) / 2) * w->fshift;
+        else result = pause_after(pcm, n, (tw + 1) * w->fshift, w->fshift);
+    }
     if (orig) accumulate(w, orig, feat, path, T, add);
 out:
     free(cep); free(feat); free(delta); free(ll); free(back); free(orig); free(path);

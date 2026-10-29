@@ -25,7 +25,15 @@
  * firmware's en-US Pryon (which ends 205 ms after the word for Alexa, 70 for Computer and Echo): 23 right with
  * english_mfa, 48 with german_mfa (release's rule 18).  Tried and dropped: a phone loop after the word instead of spn,
  * with MFA's phone bigram and the first phone in context (151-161 of 220, at seven times the size).  Speaker
- * adaptation (below) on top: 163 of 220, 53 of 75, learnt request by request. */
+ * adaptation (below) on top: 163 of 220, 53 of 75, learnt request by request.
+ *
+ * On the speech corpus (testdata/corpus: 30 OmniVoice designed voices, de/en/fr/es; tools/wakealign/corpus_eval.py, a
+ * room, stock Pryon under qemu or microWakeWord, each voice a household learning as it goes; 2026-10-29) the word
+ * ran into a pause early (40-70 ms before MFA's end, its last vowel and the reverb as silence), so a pause after the
+ * word now has the replay from its middle: the aligned silence's, or one at the room's floor (wakealign.c
+ * pause_after).  Right of 4586: Pryon's end 42 %, the release 47 %, the aligner alone 55 %, adapted 74 % (63 %
+ * without the pauses; with a pause 90 %, the word alone 85 %, said in one breath 64 %, "stop" 80 %; de 75, en 73,
+ * fr 79, es 79 %). */
 #ifndef WAKEALIGN_H
 #define WAKEALIGN_H
 #include <stddef.h>

@@ -9,14 +9,16 @@ What changed for people using the Echo, newest first. Details and measurements a
   the English one, "Echo" and "Ziggy" already inside your command. Judging by loudness alone, the Echo could not tell
   the end of "Alexa" from the start of a command said in one breath ("Alexa lights on" came out as "On"). Now it lines
   up the word's sounds ("a-l-e-k-s-a") with what the microphone heard, the way speech researchers' forced aligners do,
-  and starts your request right where the word ends, before Amazon's "heard" where that came late. In tests it found
-  the end twice as often as before (158 of 220 German requests against 80; 48 of 75 English ones said with a German
-  accent against 18). It works for all of Amazon's wake words in German, English, French, Spanish and Japanese, and for
-  microWakeWord's "Okay Nabu", "Hey Jarvis" and "Hey Mycroft" (measured in German and English; the others are made
-  the same way and not tried yet: tell us how it goes). It hears the word best in the language you speak, so it
+  and starts your request right where the word ends, before Amazon's "heard" where that came late; with a pause after
+  the word, in the middle of it. Measured on 4586 wake words said by 30 synthetic voices in German, English, French and
+  Spanish (children to elderly, whispering, accents), against where each word really ends: the request starts at the
+  right place in 74 % of them, against 47 % with the release and 42 % at Amazon's "heard" (90 % with a pause after
+  the word, 64 % said in one breath). It works for all of Amazon's wake words in German, English, French, Spanish and
+  Japanese, and for microWakeWord's "Okay Nabu", "Hey Jarvis" and "Hey Mycroft" (Japanese not measured yet: tell us
+  how it goes). It hears the word best in the language you speak, so it
   goes by that, not by the wake word's: "Language you speak" on the settings page (Wake word), automatic from your time
   zone in Home Assistant. And it learns from your requests how the wake word sounds in your home (your voices, your
-  room, its microphone) and gets a little better still (163 instead of 158 in the tests, from the sixth request on;
+  room, its microphone) and gets better still from the sixth request on (that is in the 74 %: 55 % without it;
   "Learn how the wake word is said here", on by default; what it learns stays on the Echo). Nothing to switch on.
 - **Short commands said straight after the wake word are heard** (issue #80). Home Assistant's speech detector starts
   afresh for each request and does not listen to its first three quarters of a second, so a short command said at

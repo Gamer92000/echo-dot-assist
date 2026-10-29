@@ -43,7 +43,7 @@ System) off takes any certificate, but then anyone on your network could slip th
   by your time zone in Home Assistant (Germany, Austria, Switzerland: German; France: French; Spain, Mexico: Spanish;
   Japan; else English), then by the wake word's own language. It also learns from your requests how the word sounds
   in your home (your voices, your room, its microphone: speaker adaptation, as the aligner's models were trained for)
-  and finds the end a little more often from the sixth request on (163 of 220 instead of 158 in tests); it forgets
+  and finds the end more often from the sixth request on (in tests 74 % right instead of 55 % without it); it forgets
   the oldest as new ones come, and what it learns stays on the Echo ("Learn how the wake word is said here" on the
   settings page, on by default). For words without a model, and when the sounds give no
   answer near Amazon's "heard", it waits for the pause after the word and starts there; said straight on, without a

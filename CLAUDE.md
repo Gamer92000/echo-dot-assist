@@ -210,7 +210,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   4.0, credited in `wakealign/README.md`); format 3: 16 Gaussians a pdf, float16, a check per GMM) in [Pryon's end - 1.5 s, + 0.5 s],
   run in `align_thread` (started by `align_ahead`; never on the capture thread, issue #77; the replay waits for
   `align_done`), taken in [-400 ms, +500 ms] of Pryon's end (it may start before it: Echo, Ziggy, the English models
-  fire after the word); speaker adaptation (fMLLR per household and model space, `state/wakealign-<space>.adapt`,
+  fire after the word); a pause after the word: the replay from its middle (the aligned silence's, or
+  `pause_after`: 80 ms at the room's floor + 6 dB within 200 ms; the corpus: 63 -> 74 % right); speaker adaptation (fMLLR per household and model space, `state/wakealign-<space>.adapt`,
   setting `wake_word_adaptation`, from 5 requests on, forgetting 0.98 a request); `tools/wakealign/walign.py` is its numpy reference
   (`tests/unit/wakealign_ref.py`). Without a model (the firmware's English "alexa" so far, microWakeWord) or a result
   near: `wordtail.c` (a 100 ms pause 9 dB under the word, waiting up to 500 ms; no pause: never more than a4fe0bd's
@@ -547,6 +548,8 @@ prints it.
 
 `tools/speechcorpus/` makes a speech corpus of OmniVoice's designed voices into `testdata/corpus/` (Git LFS, CC BY-NC: its README;
 DEVELOPMENT.md "Speech corpus"): checked by STT, words timed by MFA; look there before making speech for a test.
+`tools/wakealign/corpus_eval.py` measures the replay's start on it (stock Pryon under qemu, the release's rule, the
+aligner, adapted) and `tools/vad_leadin.py` HA's VAD with and without the lead-in (build/ha-venv).
 `tools/` is PC-side reverse-engineering and firmware tooling (`payload_dump.py`, Thumb disassembly helpers,
 `davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator, `vol-curve.py`: an Android Echo's
 volume curve with a Dot's micRaw beside it, for `board.volume_curve`).

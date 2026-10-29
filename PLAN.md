@@ -429,6 +429,30 @@ Run in this order. Each step says what it proves.
       tests/fake_ha_wakealign.py covers it in the daemon (file per language, too slow, busy, adaptation in use and
       saved) on a German "Alexa" of an OmniVoice designed voice (testdata/alexa_omnivoice.raw), each wake word timed
       by the capture's clock: the aligner takes the first "Alexa" in its window.
+      On the speech corpus (2026-10-29, testdata/corpus, tools/wakealign/corpus_eval.py): 6337 clips with a wake word
+      in a room (the issue's: 50 ms reverb, -30/-58 dBFS), stock Pryon under qemu (de-DE models; en-US: firmware Alexa,
+      computer/echo-en-US; fr/es Amazon words through de-DE as a proxy; Amazon/Ziggy in English: no model) or
+      pymicro-wakeword: 4586 detected (Pryon 2899 of 3267). Pryon one clip a run, at -x 2: clips back to back at -x 4
+      with 24 qemu at once had its backlog at 14 s and 5 s of audio skipped (skipped_audio_backlog_since_last_ww_msec),
+      5 of 30 ends where real time has them, and even -x 1 skipped with 40 clips a stream; a run that skipped is made
+      again in real time. Right (40 ms either side of MFA's boundary, anywhere in a pause, after the word alone):
+      Pryon's end 42 %, release 47 %, aligner alone 45 %, adapted 63 % at first. Where it ran into a pause the aligner
+      ended early (median -40 ms joined, -70 the word alone; one breath +20): its last vowel and the reverb taken for
+      silence or spn. Now the replay from a pause's middle, the aligned silence's (5 frames and more) or one at the
+      room's floor (10th percentile of the window's 10 ms levels + 6 dB, 80 ms and more, starting within 200 ms of the
+      aligned end; at the floor, not under the word: a command's "s", "sch" lie 10-20 dB under its vowels, and a
+      threshold relative to the word cut "stopp", 83 -> 58 %). Then: aligner alone 55 %, adapted / the Echo 74 %
+      (joined 63 -> 90, alone 56 -> 85, one breath 62 -> 64, stop 79 -> 80; de 75, en 73, fr 79, es 79, the fr/es
+      proxies 73/65; words 67-82 %). 300 ms ahead gave 76 % but found the silence after one-word commands ("Alexa,
+      an", "Echo on": the whole command skipped): starts over 300 ms into the command 45 against 23 (150 ms: 22); a
+      guard on a rising level (6, 10 dB) or on the time at speech level before the pause (6-15 frames under the
+      window's 90th percentile - 12 dB) kept 25-30 of them, so 200 ms it is. Left: one breath, +30 ms late in the
+      median (the truth is the dry clip's, the aligner hears the reverb); 2776 one-breath requests 64 %.
+      Issue #80 on the corpus (tools/vad_leadin.py, HA 2026.10.1's VoiceCommandSegmenter on MicroVadSpeexEnhancer as
+      default_pipeline.py makes it; its VAD sees the audio before speex in any case): the 773
+      commands alone, opening the request: heard and ended within 3 s without the silence 87 %, with 800 ms 97 %
+      (under 0.4 s 17 -> 57 %, 0.4-0.8 s 63 -> 93 %). The rest are too short for HA's 0.3 s of speech before a
+      command starts; with the wake word in the request (wake_word_in_request) 334 of 335 commands under 0.6 s.
 - [~] Silence ahead of each request (2026-10-29, issue #80, PR #71; PC).
       HA's VAD (assist_pipeline MicroVadSpeexEnhancer, pymicro-vad 1.0.1, HA 2026.10.1) is a new one per run:
       `Process10ms` gives -1 for chunks 0-75 (from zeros: first value at chunk 76), the segmenter takes -1 as 0 and
