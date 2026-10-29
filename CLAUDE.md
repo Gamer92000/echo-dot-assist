@@ -545,6 +545,8 @@ must stay in that range (UDP 28932 Drop In too). Only exception: UDP 2330 (Kiosk
 and link-local ranges of `LOCAL4` only. A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`
 prints it.
 
+`tools/speechcorpus/` makes a speech corpus of OmniVoice's designed voices into `testdata/corpus/` (not in git;
+DEVELOPMENT.md "Speech corpus"): checked by STT, words timed by MFA; look there before making speech for a test.
 `tools/` is PC-side reverse-engineering and firmware tooling (`payload_dump.py`, Thumb disassembly helpers,
 `davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator, `vol-curve.py`: an Android Echo's
 volume curve with a Dot's micRaw beside it, for `board.volume_curve`).

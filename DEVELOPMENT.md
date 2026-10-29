@@ -37,7 +37,7 @@ rules. `DEVICE` picks one (default `donut`). The adb scripts check it against th
 | `src/third_party/` | monocypher 4.0.2, `dr_flac.h`, `minimp3.h`, libfreeaptx 0.2.2, RNNoise 0.1.1 (own licences, see README) |
  `scripts/` | PC side: `setup.sh` (guided install), `artifacts.sh` (Amazon artifacts for an installed Echo: more wake words, the whisper detection model, the newest sound detection model; the old way through the Alexa app, a fallback to the settings page's "Download from Amazon"), `deploy.sh`, `probe.sh`, `capture-test.sh`, `mic-compare.sh` (micRaw against micAsr on a running Echo), `wifi-join.sh`, `install-system.sh`, `ota-push.sh`, `bundle.sh` (packs and signs an update; also CI's), `otatool.py` (bundles on the PC: keys, signing, checking, pushing; the Echo's own is `src/tools/otatool.c`), `mkbootroot.py` (a root `boot.img` from the model's stock one: checkers'), `adb-wifi.sh` (adb over Wi-Fi with the update key); `lib/device.sh` picks the model, `lib/build.sh` builds the Echo's binaries or takes the commit's release build, `lib/setup.sh` has the guided setup's helpers, `lib/artifacts.sh` the logic of `artifacts.sh` |)
 | `scripts/device/`, `scripts/system/` | run on the Echo, reading the model's `device.conf` next to them; boot integration (`boot.sh`, `main.sh`) |
-| `tools/` | `mkstubs.sh` (stand-ins for the stock libraries, for building without the firmware), `wakealign/` (the wake word aligners from the Montreal Forced Aligner's models: `build.sh` -> `wakealign/<word>-<locale>.wa` and a `<model>.was` per acoustic model, needs MFA's env), OTA payload dumper, Thumb disassembly helpers, `qrun.sh` (device binaries under qemu-arm; a `toolchain/qemu-arm` serves too), `dexasm.py` (a Dalvik assembler, writer, reader and type check, and a check against the firmware's own framework, for our hand-made dex files: no javac or d8 here), `mkwifictl.py` (assembles `scripts/device/wifictl.dex`, checkers' way into WifiService), `mkringbar.py` (`scripts/device/ringbar.dex`, checkers' light band on the screen), `davs-fetch.py` |
+| `tools/` | `mkstubs.sh` (stand-ins for the stock libraries, for building without the firmware), `wakealign/` (the wake word aligners from the Montreal Forced Aligner's models: `build.sh` -> `wakealign/<word>-<locale>.wa` and a `<model>.was` per acoustic model, needs MFA's env), `speechcorpus/` (a speech corpus of designed voices: "Speech corpus" below), OTA payload dumper, Thumb disassembly helpers, `qrun.sh` (device binaries under qemu-arm; a `toolchain/qemu-arm` serves too), `dexasm.py` (a Dalvik assembler, writer, reader and type check, and a check against the firmware's own framework, for our hand-made dex files: no javac or d8 here), `mkwifictl.py` (assembles `scripts/device/wifictl.dex`, checkers' way into WifiService), `mkringbar.py` (`scripts/device/ringbar.dex`, checkers' light band on the screen), `davs-fetch.py` |
 | `docs/` | user guide (`GUIDE.md`), security model (`SECURITY.md`), reverse-engineering notes; `img/src/*.typ` are the README figures (Typst + CeTZ), `tools/figures.sh` renders them to `img/*-light.svg` / `*-dark.svg` |
 | `tests/` | protocol tests against the reference implementations |
 | `blueprints/` | Home Assistant blueprints for features that need an automation (`automation/drop_in.yaml`: Drop In by voice) |
@@ -155,6 +155,22 @@ compiler at all. Monocypher's EdDSA is Ed25519 with BLAKE2b where Ed25519 has SH
 the arithmetic is RFC 8032's. The Echo keeps the C `otatool` (`src/tools/otatool.c`), which is what checks a bundle
 there, so the two are held to each other: `tests/otatool_test.sh` (signatures byte for byte, each one's bundles
 installed by the other), and CI checks every bundle it signs with both before it publishes.
+
+### Speech corpus
+
+For measurements and fixtures with speech in them (the wake word's end, `wakealign.h`; requests cut or held up),
+`tools/speechcorpus/run.sh [OUT]` makes a corpus in `testdata/corpus/` (not in git; 7393 clips, 4.3 h of speech,
+500 MB, about 1.5 h on a 16 GB GPU; 7110 of them pass speech to text, 2026-10-29): 30 voices designed by OmniVoice from a description (gender, age, pitch, whisper, English accents; nobody's
+voice cloned, so clips of them may go into git as fixtures), German, English, French, Spanish, some voices in a second
+language. Each says the 8 wake words with commands (with a comma and without), the wake word alone, "<wake word>,
+stop" and each command alone; `align.py` adds clips of the wake word and the command joined by pauses of known length,
+which OmniVoice hardly makes by itself. Every clip is checked by speech to text (canary-1b-v2; `verify.py` says what
+it lets through) and has its words' times from the Montreal Forced Aligner, the ground truth. One line per clip in
+`manifest.jsonl` (text, voice, language, wake word, kind, what was heard, words, `wake_end`, `command_start`, `gap`).
+Needs OmniVoice in `toolchain/omnivoice/venv` (`uv venv -p 3.11`, then `uv pip install omnivoice==0.2.1 torch==2.9.1
+torchaudio==2.9.1 transformers==5.16.1 num2words`; weights k2-fsa/OmniVoice in `toolchain/omnivoice/hf`), MFA 3.4.3 in
+`toolchain/mfa/` (micromamba env `env`, models in `mfa_root/pretrained_models`) and a canary Wyoming server
+(`verify.py`'s `STT`, the host it reaches).
 
 ## CI and releases
 
