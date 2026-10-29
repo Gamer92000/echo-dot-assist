@@ -441,13 +441,15 @@ Run in this order. Each step says what it proves.
       silence or spn. Now the replay from a pause's middle, the aligned silence's (5 frames and more) or one at the
       room's floor (10th percentile of the window's 10 ms levels + 6 dB, 80 ms and more, starting within 200 ms of the
       aligned end; at the floor, not under the word: a command's "s", "sch" lie 10-20 dB under its vowels, and a
-      threshold relative to the word cut "stopp", 83 -> 58 %). Then: aligner alone 55 %, adapted / the Echo 74 %
+      threshold relative to the word cut "stopp", 83 -> 58 % in the first run, before the Pryon fix). Then: aligner alone 55 %, adapted / the Echo 74 %
       (joined 63 -> 90, alone 56 -> 85, one breath 62 -> 64, stop 79 -> 80; de 75, en 73, fr 79, es 79, the fr/es
       proxies 73/65; words 67-82 %). 300 ms ahead gave 76 % but found the silence after one-word commands ("Alexa,
       an", "Echo on": the whole command skipped): starts over 300 ms into the command 45 against 23 (150 ms: 22); a
       guard on a rising level (6, 10 dB) or on the time at speech level before the pause (6-15 frames under the
       window's 90th percentile - 12 dB) kept 25-30 of them, so 200 ms it is. Left: one breath, +30 ms late in the
-      median (the truth is the dry clip's, the aligner hears the reverb); 2776 one-breath requests 64 %.
+      median (the truth is the dry clip's, the aligner hears the reverb); 2776 one-breath requests 64 %. All of it, how
+      far off each start is too, and how to make it again: docs/wake-word-end.md (tables generated into
+      docs/wake-word-end/, each request in its .jsonl).
       Issue #80 on the corpus (tools/vad_leadin.py, HA 2026.10.1's VoiceCommandSegmenter on MicroVadSpeexEnhancer as
       default_pipeline.py makes it; its VAD sees the audio before speex in any case): the 773
       commands alone, opening the request: heard and ended within 3 s without the silence 87 %, with 800 ms 97 %

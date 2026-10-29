@@ -171,7 +171,8 @@ the fields). Licence: CC BY-NC, as OmniVoice's model, not MIT (the README says w
 that along (`testdata/alexa_omnivoice.raw`).
 Measured on it: `tools/wakealign/corpus_eval.py` (where the replay after the wake word starts: stock Pryon under qemu,
 the release's rule, the aligner alone and adapted, against MFA's times; results in `build/corpus-eval/`) and
-`build/ha-venv/bin/python tools/vad_leadin.py` (Home Assistant's own VAD on the commands, with and without the lead-in).
+`build/ha-venv/bin/python tools/vad_leadin.py` (Home Assistant's own VAD on the commands, with and without the lead-in);
+with `--publish docs/wake-word-end` both write their tables there, described in `docs/wake-word-end.md`.
 
 Making it again needs OmniVoice in `toolchain/omnivoice/venv` (`uv venv -p 3.11`, then `uv pip install
 omnivoice==0.2.1 torch==2.9.1 torchaudio==2.9.1 transformers==5.16.1 num2words`; weights k2-fsa/OmniVoice in
