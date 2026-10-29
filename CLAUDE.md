@@ -39,7 +39,9 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 ```sh
 .venv/bin/python tests/run.py [-j N] [name]  # every test below at once (CI's way), each in a network namespace of its
                                              # own (unshare -rn: fixed ports, hassmic's defaults, broadcasts); logs in
-                                             # build/test-logs/, printed for those that fail; -l lists the names
+                                             # build/test-logs/, printed for those that fail; -l lists the names;
+                                             # a failure under that load runs again alone (passing: flaky, a warning
+                                             # and <name>.first.log; --strict: no reruns)
 .venv/bin/python tests/fake_ha_esphome.py     # ESPHome native API, as Home Assistant: entities, settings, voice assistant,
                                              # replies, announcements (HTTP, HTTPS); the rest of the API in five parts
                                              # (shared setup tests/esphome_common.py), each with an Echo of its own:

@@ -203,14 +203,15 @@ jobs:
         run: make -j"$(nproc)" build/hassmic-host build/otatool-host
       # tests/run.py starts every test at once, each in a network namespace of its own (unshare -rn: the tests' ports
       # and hassmic's defaults would collide); they mostly wait on audio at real time and on hassmic's timers, so the
-      # job takes about as long as the slowest one.  Ubuntu 24.04 lets only programs with an AppArmor profile make user
+      # job takes about as long as the slowest one; one that fails under that load runs again alone (a warning if it
+      # passes then, tests/run.py RETRY_MAX).  Ubuntu 24.04 lets only programs with an AppArmor profile make user
       # namespaces unless this is off
       - name: User namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Tests
         run: .venv/bin/python tests/run.py
       - name: Test logs
-        if: failure()
+        if: failure() || hashFiles('build/test-logs/*.first.log') != ''      # failed, or flaky (tests/run.py)
         uses: actions/upload-artifact@v7
         with:
           name: test-logs

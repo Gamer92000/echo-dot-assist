@@ -58,7 +58,9 @@ make unit                                         # C unit tests; microWakeWord 
                                                  # the Drop In blueprint (blueprint_dropin.py); one target each (make
                                                  # unit-<name>, UNIT_TESTS), so make -j unit runs them at once
 .venv/bin/python tests/run.py [-j N] [name ...]  # every PC test below at once (CI), each in a network namespace of its own
-                                                 # (unshare -rn); logs of those that fail, all in build/test-logs/
+                                                 # (unshare -rn); logs of those that fail, all in build/test-logs/;
+                                                 # one that failed with the others runs again alone: passing then, it is
+                                                 # flaky (a warning, <name>.first.log), not a failure; --strict: no reruns
 .venv/bin/python tests/blueprint_dropin.py        # the Drop In blueprint against stand-ins of Home Assistant's registries,
                                                  # states, actions and template engine (also in make unit)
 .venv/bin/python tests/fake_ha_esphome.py         # ESPHome native API, as Home Assistant (aioesphomeapi): entities,
