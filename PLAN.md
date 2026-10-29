@@ -1078,6 +1078,10 @@ Run in this order. Each step says what it proves.
       against a real HA yet. On the three Echos (2026-10-06 23:11, network key removed on all, restarted together):
       radar started a network after 5 s, all three tags scanned at 23:11:28, both others confirmed and joined by
       23:11:31 (23 s in all), no action, no pairing; so HA 2026.9 names the tag entity `tag.hassmic_<pub hex>` as expected.
+      The 30 s run from the newcomer's first beacon or our link to HA, whichever is later (`ha_since`, 2026-10-29): CI's
+      arb-join failed so (runs 40560756025, 2026-10-27, and 40914090327, PR #78, 2026-10-29), HA linked 1.3 s after both Echos started (at
+      0.1 scale: the action at first + 3 s, the tag, which needs both links and up to two scans, confirmed 0.2 s later).
+      HA connecting 1.0, 1.5, 2.0 s late to both: the old rule handed through the action in 6 of 6, this one in none.
 - [x] Claim copies spread (2026-10-06): after the rejoin, a wake word heard by radar (score 5836) and biscuit (2187)
       was answered by biscuit and HA turned radar away as a duplicate. biscuit's log has no claim from radar in 2 of 3
       rounds (donut got it, 28 ms after biscuit's), only radar's "answers" 188/279 ms later; claims seen elsewhere
@@ -2720,3 +2724,18 @@ Run in this order. Each step says what it proves.
       **Open:** lux flicker under a close lamp; not confirmed on the Echo: Improv, factory reset, `--uninstall`, the
       update check, and the build without the `netio.h` system calls (the rule alone);
       `tools/mkringbar.py --framework` cannot read Android 9's compact dex (checked by hand once, 2026-10-20).
+- [x] Echo Input (`cupcake`, 2026-10-28; `docs/re-cupcake.md`), worked out from the firmware (NS6575/8338), installed
+      and running on one Echo Input (2026-10-29).  donut's platform
+      (MT8516, arm64 kernel 4.4.22+, A/B, `/sepolicy` on system, kamakiri + TWRP in swdl) with checkers' software
+      (framework, Alexa as apps, WifiService, the front end in the audio HAL: `audio_android.c`; the HAL's source ->
+      pipeline map is checkers', VOICE_RECOGNITION = ASR).  `INSTALL=twrp-ab` with the new `ANDROID=1` (was implied by
+      `INSTALL=boot|running` in wifi.sh, wifi-join.sh, deploy.sh, bundle.sh, install-system.sh; the Shows set it now).
+      Checked on the PC: libpryon (own build, same symbols) detects ALEXA on its en-US model under qemu as checkers'
+      does; wifictl.dex resolves against its framework; IAudioService/IPowerManager codes as checkers'; the Wi-Fi
+      driver's hook (+0x50) and module ABI as donut's (`hassmic_rcpi4m` builds with donut's fragment); donut's
+      boot-root finds what it patches (cmdline `veritykeyid`, adbd's autoroot site at 0x19bf4); stubs byte-identical;
+      `scripts/setup.sh cupcake --dry-run`.  One LP5562 LED for the 12-LED animations: `board.ring_leds` 1 (no turned
+      copies, no LED layers: 622 files), and ring.c puts listening's names into the layer that lists `active-start`
+      (layer 3 here; 4 on the Dots, their set byte-identical).  No speaker: no `speaker_gain`, the Dot 2's volume curve.
+      Tried on the device (2026-10-29), all as expected: unlock, root, install, audio level, buttons, the LED, DHA,
+      Bluetooth, the wake lock.  kamakiri-cupcake v1.0.0 pinned (its lk and tee are 8338's).

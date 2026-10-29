@@ -503,7 +503,7 @@ static void send_light_entities(void)
      * it; the state says what was asked for */
     if (listed(KEY_LIGHT)) { PB(b, 256); pb_str(&b, 1, "light_ring"); pb_fixed32(&b, 2, KEY_LIGHT); pb_str(&b, 3, "Light ring");
       pb_uint(&b, 12, COLOR_MODE_RGB); pb_uint(&b, 5, 1); pb_uint(&b, 6, 1);
-      for (int i = 0; i < ring_neffects; i++) pb_str(&b, 11, ring_effects[i]);
+      for (int i = 0; i < ring_neffects; i++) if (ring_effect_listed(i)) pb_str(&b, 11, ring_effects[i]);
       pb_str(&b, 14, "mdi:circle-slice-8"); send_msg(LIST_LIGHT, &b); }
     /* Its fill (issue #57): a timer's or a washing machine's progress, a battery.  Kept over the light being off, as its
      * colour is.  The rotation is where the fill starts, in LEDs from where the volume's does: a setting (settings.c) */
@@ -807,7 +807,7 @@ static void on_light(const unsigned char *p, const unsigned char *end)      /* l
     if (has[18]) {
         l.nleds = 0;
         if (!strcasecmp(eff, "off")) l.effect = 0;        /* Home Assistant's own name for none */
-        for (int i = 0; i < ring_neffects; i++) if (!strcasecmp(eff, ring_effects[i])) l.effect = i;
+        for (int i = 0; i < ring_neffects; i++) if (ring_effect_listed(i) && !strcasecmp(eff, ring_effects[i])) l.effect = i;
     }
     ring_light_set(&l, has[16] ? flash : 0);
     send_setting(KEY_LIGHT);

@@ -2,8 +2,20 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-29
+
+- **Joining another Echo's wake word arbitration** no longer falls back to the newcomer's action when Home Assistant
+  connected late (after a restart, or both Echos booting at once): the Echos give Home Assistant's tags their 30 s from
+  then. Owners who did not allow the Echo to perform actions got a repair in Home Assistant for nothing.
+
 ## 2026-10-28
 
+- **Echo Input (2018, `cupcake`).** Worked out from its firmware (Fire OS 6.5.7.5, NS6575/8338): the Echo
+  Dot 3's hardware with the Echo Shows' Android software. It builds, the releases carry its bundle, and
+  `scripts/setup.sh cupcake` walks the steps (unlock with kamakiri-cupcake over the micro-USB socket, no soldering;
+  root with the Echo Dot 3's boot-root). No speaker: replies, sounds and music come from its 3.5 mm jack or a Bluetooth
+  speaker. Its one LED shows the Echo's states and Home Assistant's "Light ring" light; nothing turns towards the
+  talker. Installed and running on one Echo Input (2026-10-29): everything works as expected (`devices/cupcake/README.md`).
 - **Optionally, the wake word goes to Home Assistant too** ("Wake word in the request", settings page, Voice; off by
   default). Speech to text then hears the whole sentence, "Alexa, turn on the light", so nothing of your first word
   can be cut and no stray end of the wake word turns up. Meant for an AI conversation agent: Home Assistant's own

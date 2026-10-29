@@ -135,7 +135,7 @@ def wpa(w, args):
 
 def wifictl(w, args):
     """scripts/device/wifictl.dex, as WifiService would answer: the framework world of a model with
-    INSTALL=boot (checkers).  Its calls land in the same world the wpa_cli fake serves; the shapes it prints
+    ANDROID=1 (checkers).  Its calls land in the same world the wpa_cli fake serves; the shapes it prints
     are wpa_cli's (that is what wifi.sh expects), with WifiService's habits: adding a network with a name
     already there replaces it, the framework saves every change at once (the world is the store), it hands
     out an address with the network it connects to (no dhcpcd), and WifiInfo quotes the name."""
@@ -219,7 +219,7 @@ def main():
             out = wifictl(w, args)
         elif tool == "ifconfig":                    # the lease's address, whatever network the Echo is on now
             ip = w["lease"]["ip"]
-            if os.environ.get("INSTALL") == "boot":
+            if os.environ.get("ANDROID"):
                 n, air = connected(w)               # Android's DHCP: the address comes with its network
                 ip = air["ip"] if n and air and air.get("dhcp", True) and air["ip"] not in ("", "0") else ""
             out = "wlan0     Link encap:Ethernet  HWaddr 02:00:00:00:00:01"

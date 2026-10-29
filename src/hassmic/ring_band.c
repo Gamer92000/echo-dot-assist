@@ -644,6 +644,7 @@ int ring_assistant_steps(void) { return 1; }        /* the replies' own volume i
 /* Each LED's own layer of the Dots' ledcontroller (ring.c: the fill, the rotation, LED by LED): not on the band, the
  * rotation stays 0 */
 int ring_per_led(void) { return 0; }
+int ring_effect_listed(int i) { return i >= 0 && i < ring_neffects; }
 int ring_slot_available(int i) { return i >= 0 && i < ring_nslots; }      /* every slot is one of the patterns */
 int ring_slot_live(int i) { if (i < 0 || i >= ring_nslots) return 0; pthread_mutex_lock(&lock); int r = des[i].nframes > 0; pthread_mutex_unlock(&lock); return r; }
 int ring_leds(void) { return LEDS; }

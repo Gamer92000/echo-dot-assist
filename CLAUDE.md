@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 Turns Amazon Echos into Home Assistant voice satellites. Supported so far: Echo Dot 3 (2018, `donut`, Fire OS 6574.1 /
-`donut_puffin` NS65741 only); the repo is laid out for more models (`devices/`, see "Models" below). Amazon's audio front end (`mixer` daemon + `libasp`: AEC, beamforming, mic calibration) and wake word engine
+`donut_puffin` NS65741 only); the repo is laid out for more models (`devices/`, see "Models" below; the Echo Input, `cupcake`: donut's
+platform with the Shows' Android software, one LED, no speaker, running on one, `docs/re-cupcake.md`). Amazon's audio front end (`mixer` daemon + `libasp`: AEC, beamforming, mic calibration) and wake word engine
 (`libpryon.so`) stay; the Alexa client `PuffinApp` is replaced by `hassmic`, a C daemon that is a client of the mixer
 through the reverse-engineered C API of `libmixerAPI.so` and speaks the ESPHome native API (default) or Wyoming.
 
@@ -136,6 +137,8 @@ stops and names the sysctl, which the setup's `qemu_arm` asks to set).
   `INSTALL=running` (athena, Android 9: rooted by saiyaku's zip patching system and vendor in place, no boot image of ours)
   is the in-OS path only, with the policy where `device.conf` `SEPOLICY_FILE` says (`/vendor/etc/selinux/precompiled_sepolicy`,
   `sysinstall.sh` remounts `/vendor` only to write it; `.pre-hassmic` beside it) and the Android extras (dex programs, home APK) as `boot`.
+  Whether Android's framework runs is `device.conf` `ANDROID=1`, not the install method (cupcake: `twrp-ab` and Android):
+  the dex programs, `wifi.sh`'s and `wifi-join.sh`'s WifiService path go by it.
 - Logs: `/data/local/hassmic/boot.log`, each line stamped (`clock.c`: UTC once the clock came from HA, else `boot+<s>`;
   hassmic's own through its reader process `hassmic-log`, which `pidof hassmic` lists too; scripts through `say`/`stamped`
   in `main.sh`). The Echo's mksh is 32-bit and has no awk. Config: `/data/local/hassmic/hassmic.conf` (`PROTO`, `ARGS`, `MODE`,
@@ -212,8 +215,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   by HA, voice assistant, media player, timers, settings entities, Bluetooth proxy messages) and `proto_wyoming.c` +
   `wyoming.c`. Selected with `-P`. The core calls `start/audio/stop/played/...` on the active proto with lock held.
 - **Audio backend (`audio.h`)**: `audio_mixer.c` on device (mixer C API: capture, voice/TTS, music, Bluetooth and
-  earcon streams mixed by the mixer); `audio_android.c` where there is no mixer (checkers, Echo Show 5; cronos, its 2nd gen; athena, Echo Show 8 2nd gen: OpenSL ES over
-  AudioRecord/AudioTrack, the front end inside the audio HAL; untried on a device; device.mk `SYSLIBS` links
+  earcon streams mixed by the mixer); `audio_android.c` where there is no mixer (checkers, Echo Show 5; cronos, its 2nd gen; athena, Echo Show 8 2nd gen; cupcake, Echo Input: OpenSL ES over
+  AudioRecord/AudioTrack, the front end inside the audio HAL; device.mk `SYSLIBS` links
   `-lOpenSLES`); `audio_file.c` for PC builds. Swapped at link time in the Makefile.
 - **Sound detection (`sound.h`)**: `sound_pryon.c` (Alexa Guard's model on `libpryon.so`: the firmware's, or Amazon's newest
   from `/data/local/hassmic/aed` (`scripts/artifacts.sh`); a second decoder, off unless HA's
@@ -256,7 +259,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (event `esphome.tag_scanned`: HA fires device events without "perform actions"; `tag.<id>` has no area or device in
   it, unlike every entity id, which HA builds from area, parent device, device and entity name), the other reads
   `tag.hassmic_<pub hex>` (state requests need no permission either) and trusts the key once the scan time changed
-  after its first read; then `T_GIVE` on the LAN, taken outside pairing only from a confirmed Echo. Else, after 30 s,
+  after its first read; then `T_GIVE` on the LAN, taken outside pairing only from a confirmed Echo. Else, 30 s after it was heard with HA's link up (`ha_since`),
   the newcomer's own ESPHome action `esphome.<node>_arbitration_key` (needs "Allow the device to perform Home Assistant
   actions"). Without HA: Volume up + Volume down held 2 s on both (`T_PAIR`/`T_GIVE`, exactly one requester). ESPHome only.
   Window (issue #27): learned per Echo from how late each member's claims come (first claim per member and round, sampled

@@ -153,7 +153,7 @@ async def main():
             st, _, data = page.call("POST", "/api/timer-sound", body)
             check(st == 400 and why in json.loads(data).get("error", ""), f"upload of {what} refused: {st} {data[:120]!r}")
         try: st = page.call("POST", "/api/timer-sound", wav(48000, 1, 31, 1000))[0]      # answered before the body is read
-        except ConnectionResetError: st = 413
+        except (ConnectionResetError, BrokenPipeError): st = 413        # closed while we still send: a reset or, on CI, a broken pipe
         check(st == 413, f"upload of 31 s refused as too large: {st}")
         check(ts()["custom_ms"] == 0 and not os.path.exists(os.path.join(e.state, "timer_sound.wav")), "nothing kept of them")
         st, _, data = page.call("POST", "/api/timer-sound", wav(48000, 1, 0.5, OWN_PEAK))

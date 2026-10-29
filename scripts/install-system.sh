@@ -64,7 +64,7 @@ fi
 FILES="$OUT/hassmic $OUT/runas $(ls $OUT/mixcap $OUT/mixplay $OUT/pryon_test $OUT/*.ko 2>/dev/null || true) $OUT/otatool secrets/update.pub keys/release.pub $DDIR/device.conf
        scripts/system/boot.sh scripts/system/main.sh scripts/system/sysinstall.sh scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh scripts/device/artifact-install.sh scripts/device/wifi.sh"
 # Android models (the screen shows the light band, Wi-Fi is WifiService's): their dex programs, and the home screen
-[ "$INSTALL" = running ] && FILES="$FILES scripts/device/wifictl.dex scripts/device/ringbar.dex ${HOME_APK:+scripts/device/$HOME_APK}"
+[ -n "$ANDROID" ] && FILES="$FILES scripts/device/wifictl.dex ${SCREEN_BAND:+scripts/device/ringbar.dex} ${HOME_APK:+scripts/device/$HOME_APK}"
 
 if [ -z "$TWRP" ]; then
     t "rm -rf $STAGE; mkdir -p $STAGE"

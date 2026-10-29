@@ -19,6 +19,7 @@ struct ring_light {
 };
 extern const char *const ring_effects[];    /* "None" first, as ESPHome's own lights */
 extern const int ring_neffects;
+int  ring_effect_listed(int i);            /* offered to Home Assistant: not "Spin" on one LED (board.ring_leds) */
 
 /* hassmic -G DIR: the animations, the layer config with their names added to stock's, and "digest" (what the running
  * hassmic compares with the installed set); -G - prints only the digest.  Root runs it; stock's files are read from
