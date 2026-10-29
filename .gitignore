@@ -8,7 +8,8 @@ toolchain/
 build/
 .venv/
 testdata/*.wav
-testdata/corpus/
+testdata/corpus/.lock
+testdata/corpus/**/*.tmp
 kamakiri/
 boot-root/
 *.zip

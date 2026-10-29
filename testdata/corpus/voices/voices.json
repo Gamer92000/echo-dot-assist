@@ -1,0 +1,242 @@
+{
+ "de-f-young": {
+  "description": "female, young adult, moderate pitch",
+  "language": "de",
+  "text": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "tries": 1,
+  "heard": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "ok": true
+ },
+ "de-m-middle": {
+  "description": "male, middle-aged, low pitch",
+  "language": "de",
+  "text": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "tries": 1,
+  "heard": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "ok": true
+ },
+ "de-f-elderly": {
+  "description": "female, elderly, moderate pitch",
+  "language": "de",
+  "text": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "tries": 1,
+  "heard": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "ok": true
+ },
+ "de-m-young": {
+  "description": "male, young adult, moderate pitch",
+  "language": "de",
+  "text": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "tries": 1,
+  "heard": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "ok": true
+ },
+ "de-f-middle-high": {
+  "description": "female, middle-aged, high pitch",
+  "language": "de",
+  "text": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "tries": 1,
+  "heard": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "ok": true
+ },
+ "de-m-elderly": {
+  "description": "male, elderly, very low pitch",
+  "language": "de",
+  "text": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "tries": 1,
+  "heard": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "ok": true
+ },
+ "de-f-teen": {
+  "description": "female, teenager, high pitch",
+  "language": "de",
+  "text": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "tries": 1,
+  "heard": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "ok": true
+ },
+ "de-m-child": {
+  "description": "male, child, high pitch",
+  "language": "de",
+  "text": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "tries": 1,
+  "heard": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "ok": true
+ },
+ "de-f-whisper": {
+  "description": "female, young adult, whisper",
+  "language": "de",
+  "text": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "tries": 1,
+  "heard": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "ok": true
+ },
+ "de-m-whisper": {
+  "description": "male, middle-aged, whisper",
+  "language": "de",
+  "text": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "tries": 1,
+  "heard": "Heute Abend kommen ein paar Freunde vorbei, wir kochen zusammen und spielen danach noch eine Runde Karten.",
+  "ok": true
+ },
+ "en-us-f-young": {
+  "description": "female, young adult, american accent",
+  "language": "en",
+  "text": "A few friends are coming over tonight, we will cook together and play a round of cards afterwards.",
+  "tries": 1,
+  "heard": "A few friends are coming over tonight we will cook together and play a round of cards afterwards.",
+  "ok": true
+ },
+ "en-us-m-middle": {
+  "description": "male, middle-aged, low pitch, american accent",
+  "language": "en",
+  "text": "A few friends are coming over tonight, we will cook together and play a round of cards afterwards.",
+  "tries": 1,
+  "heard": "A few friends are coming over to night we will cook together and play a round of cards afterwards.",
+  "ok": true
+ },
+ "en-us-m-elderly": {
+  "description": "male, elderly, low pitch, american accent",
+  "language": "en",
+  "text": "A few friends are coming over tonight, we will cook together and play a round of cards afterwards.",
+  "tries": 1,
+  "heard": "A few friends are coming over tonight we will cook together and play a round of cards afterwards.",
+  "ok": true
+ },
+ "en-gb-f-elderly": {
+  "description": "female, elderly, british accent",
+  "language": "en",
+  "text": "A few friends are coming over tonight, we will cook together and play a round of cards afterwards.",
+  "tries": 1,
+  "heard": "A few friends are coming over tonight we will cook together and play a round of cards afterwards.",
+  "ok": true
+ },
+ "en-gb-m-young": {
+  "description": "male, young adult, british accent",
+  "language": "en",
+  "text": "A few friends are coming over tonight, we will cook together and play a round of cards afterwards.",
+  "tries": 1,
+  "heard": "A few friends are coming over tonight. We will cook together and play a round of cards afterwards.",
+  "ok": true
+ },
+ "en-au-f-middle": {
+  "description": "female, middle-aged, australian accent",
+  "language": "en",
+  "text": "A few friends are coming over tonight, we will cook together and play a round of cards afterwards.",
+  "tries": 1,
+  "heard": "A few friends are coming over to night we will cook together, and play a round of cards afterwards.",
+  "ok": true
+ },
+ "en-in-m-young": {
+  "description": "male, young adult, indian accent",
+  "language": "en",
+  "text": "A few friends are coming over tonight, we will cook together and play a round of cards afterwards.",
+  "tries": 1,
+  "heard": "A few friends are coming over tonight. We will cook together and play a round of cards afterwards.",
+  "ok": true
+ },
+ "en-ca-f-teen": {
+  "description": "female, teenager, canadian accent",
+  "language": "en",
+  "text": "A few friends are coming over tonight, we will cook together and play a round of cards afterwards.",
+  "tries": 1,
+  "heard": "A few friends are coming over to night we will cook together and play a round of cards afterwards.",
+  "ok": true
+ },
+ "en-ru-m-middle": {
+  "description": "male, middle-aged, russian accent",
+  "language": "en",
+  "text": "A few friends are coming over tonight, we will cook together and play a round of cards afterwards.",
+  "tries": 1,
+  "heard": "A few friends are coming over tonight, we will cook together and play a round of cards afterwards.",
+  "ok": true
+ },
+ "en-zh-f-young": {
+  "description": "female, young adult, chinese accent",
+  "language": "en",
+  "text": "A few friends are coming over tonight, we will cook together and play a round of cards afterwards.",
+  "tries": 1,
+  "heard": "A few friends are coming over tonight. We will cook together and play a round of cards afterwards.",
+  "ok": true
+ },
+ "en-ja-m-young": {
+  "description": "male, young adult, japanese accent",
+  "language": "en",
+  "text": "A few friends are coming over tonight, we will cook together and play a round of cards afterwards.",
+  "tries": 1,
+  "heard": "A few friends are coming over tonight we will cook together and play a round of cards afterwards.",
+  "ok": true
+ },
+ "en-us-f-whisper": {
+  "description": "female, middle-aged, whisper, american accent",
+  "language": "en",
+  "text": "A few friends are coming over tonight, we will cook together and play a round of cards afterwards.",
+  "tries": 1,
+  "heard": "A few friends are coming over tonight. We will cook together and play a round of cards afterwards.",
+  "ok": true
+ },
+ "fr-f-young": {
+  "description": "female, young adult, moderate pitch",
+  "language": "fr",
+  "text": "Quelques amis viennent ce soir, nous allons cuisiner ensemble et jouer aux cartes ensuite.",
+  "tries": 1,
+  "heard": "Quelques amis viennent ce soir. Nous allons cuisiner ensemble et jouer aux cartes ensuite.",
+  "ok": true
+ },
+ "fr-m-middle": {
+  "description": "male, middle-aged, low pitch",
+  "language": "fr",
+  "text": "Quelques amis viennent ce soir, nous allons cuisiner ensemble et jouer aux cartes ensuite.",
+  "tries": 1,
+  "heard": "Quelques amis viennent ce soir, nous allons cuisiner ensemble et jouer aux cartes ensuite.",
+  "ok": true
+ },
+ "fr-f-elderly": {
+  "description": "female, elderly, moderate pitch",
+  "language": "fr",
+  "text": "Quelques amis viennent ce soir, nous allons cuisiner ensemble et jouer aux cartes ensuite.",
+  "tries": 1,
+  "heard": "Quelques amis viennent ce soir, nous allons cuisiner ensemble et jouer aux cartes ensuite.",
+  "ok": true
+ },
+ "fr-m-teen": {
+  "description": "male, teenager, moderate pitch",
+  "language": "fr",
+  "text": "Quelques amis viennent ce soir, nous allons cuisiner ensemble et jouer aux cartes ensuite.",
+  "tries": 5,
+  "heard": "Quelques amis viennent ce soir. Nous allons cuisiner ensemble et jouer aux cartes ensuite.",
+  "ok": true
+ },
+ "es-f-young": {
+  "description": "female, young adult, moderate pitch",
+  "language": "es",
+  "text": "Esta noche vienen unos amigos, vamos a cocinar juntos y después jugaremos a las cartas.",
+  "tries": 1,
+  "heard": "Esta noche vienen unos amigos, vamos a cocinar juntos y después jugaremos a las cartas.",
+  "ok": true
+ },
+ "es-m-middle": {
+  "description": "male, middle-aged, moderate pitch",
+  "language": "es",
+  "text": "Esta noche vienen unos amigos, vamos a cocinar juntos y después jugaremos a las cartas.",
+  "tries": 1,
+  "heard": "Esta noche vienen unos amigos, vamos a cocinar juntos y después jugaremos a las cartas.",
+  "ok": true
+ },
+ "es-f-middle-high": {
+  "description": "female, middle-aged, high pitch",
+  "language": "es",
+  "text": "Esta noche vienen unos amigos, vamos a cocinar juntos y después jugaremos a las cartas.",
+  "tries": 1,
+  "heard": "Esta noche vienen unos amigos, vamos a cocinar juntos y después jugaremos a las cartas.",
+  "ok": true
+ },
+ "es-m-elderly": {
+  "description": "male, elderly, low pitch",
+  "language": "es",
+  "text": "Esta noche vienen unos amigos, vamos a cocinar juntos y después jugaremos a las cartas.",
+  "tries": 1,
+  "heard": "Esta noche vienen unos amigos, vamos a cocinar juntos y después jugaremos a las cartas.",
+  "ok": true
+ }
+}

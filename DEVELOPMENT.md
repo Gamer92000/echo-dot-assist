@@ -159,18 +159,21 @@ installed by the other), and CI checks every bundle it signs with both before it
 ### Speech corpus
 
 For measurements and fixtures with speech in them (the wake word's end, `wakealign.h`; requests cut or held up),
-`tools/speechcorpus/run.sh [OUT]` makes a corpus in `testdata/corpus/` (not in git; 7393 clips, 4.3 h of speech,
-500 MB, about 1.5 h on a 16 GB GPU; 7110 of them pass speech to text, 2026-10-29): 30 voices designed by OmniVoice from a description (gender, age, pitch, whisper, English accents; nobody's
-voice cloned, so clips of them may go into git as fixtures), German, English, French, Spanish, some voices in a second
-language. Each says the 8 wake words with commands (with a comma and without), the wake word alone, "<wake word>,
-stop" and each command alone; `align.py` adds clips of the wake word and the command joined by pauses of known length,
-which OmniVoice hardly makes by itself. Every clip is checked by speech to text (canary-1b-v2; `verify.py` says what
-it lets through) and has its words' times from the Montreal Forced Aligner, the ground truth. One line per clip in
-`manifest.jsonl` (text, voice, language, wake word, kind, what was heard, words, `wake_end`, `command_start`, `gap`).
-Needs OmniVoice in `toolchain/omnivoice/venv` (`uv venv -p 3.11`, then `uv pip install omnivoice==0.2.1 torch==2.9.1
-torchaudio==2.9.1 transformers==5.16.1 num2words`; weights k2-fsa/OmniVoice in `toolchain/omnivoice/hf`), MFA 3.4.3 in
-`toolchain/mfa/` (micromamba env `env`, models in `mfa_root/pretrained_models`) and a canary Wyoming server
-(`verify.py`'s `STT`, the host it reaches).
+`testdata/corpus/` has 7393 clips, 4.3 h of speech (500 MB, in Git LFS: `git lfs pull --include "testdata/corpus/**"`
+fetches them; CI does not), made 2026-10-29 by `tools/speechcorpus/run.sh [OUT]` (about 1.5 h on a 16 GB GPU). 30
+voices designed by OmniVoice from a description (gender, age, pitch, whisper, English accents; nobody's voice cloned),
+German, English, French, Spanish, some voices in a second language. Each says the 8 wake words with commands (with a
+comma and without), the wake word alone, "<wake word>, stop" and each command alone; `align.py` adds clips of the wake
+word and the command joined by pauses of known length, which OmniVoice hardly makes by itself. Every clip is checked
+by speech to text (canary-1b-v2; `verify.py` says what it lets through: 7110 pass) and has its words' times from the
+Montreal Forced Aligner, the ground truth. One line per clip in `manifest.jsonl` (`testdata/corpus/README.md` lists
+the fields). Licence: CC BY-NC, as OmniVoice's model, not MIT (the README says why); a fixture cut from it carries
+that along (`testdata/alexa_omnivoice.raw`).
+
+Making it again needs OmniVoice in `toolchain/omnivoice/venv` (`uv venv -p 3.11`, then `uv pip install
+omnivoice==0.2.1 torch==2.9.1 torchaudio==2.9.1 transformers==5.16.1 num2words`; weights k2-fsa/OmniVoice in
+`toolchain/omnivoice/hf`), MFA 3.4.3 in `toolchain/mfa/` (micromamba env `env`, models in
+`mfa_root/pretrained_models`) and a canary Wyoming server (`verify.py`'s `STT`, the host it reaches).
 
 ## CI and releases
 
