@@ -318,11 +318,39 @@ Run in this order. Each step says what it proves.
       live block, fake_ha_arbitration the window's (12096 bytes). On the Dot 2 (biscuit) the same day: user "way better".
 - [ ] The word's tail left out of that replay (forum, 2026-10-19). With the ring, a child's drawn-out "Alexa" plus
       a pause came out of STT as "Ja." and HA's VAD ended the run in the pause; the build before ad224f5 (stream from
-      120-180 ms after the end) did not do it for that user. `word_tail_end`: 10 ms frames from Pryon's end, skipped up
-      to the first 12 dB under `keyword_db`, or the deepest dip before a 3 dB rise, at most 200 ms and never past the
-      live block (so never more cut than before the ring). Logged as "wake: <n> ms of the word's tail left out". Not
-      measured on real speech yet: no recording here has a wake word in it; needs a capture dump (`kill -TTIN`, its
-      start sample in the log) with the `wake: ... samples` lines of the same run.
+      120-180 ms after the end) did not do it for that user. First try (a4fe0bd) `word_tail_end`: 10 ms frames from
+      Pryon's end, skipped up to the first 12 dB under `keyword_db`, or the deepest dip before a 3 dB rise, at most
+      200 ms and never past the live block.
+      Issue #72 (2026-10-27, Dot 2 in a kitchen, Scribe v2; HA debug recordings = what STT got, 50 ms frames): the tail
+      still came through ("The …", "Anna, …", "Faint …"; "next track" no longer matched). 07:28, keyword -40.3 dBFS:
+      the recording opens with -40 -34 -36 -38 then decays to -54 over 150 ms (gain of +14.3 dB taken out), the command
+      at 0.9 s: the last vowel sounds 200 ms past Pryon's end, louder than the keyword's rms, and the 3 dB rise came at
+      once (nothing left out). 07:39: 60 ms left out (12 dB under at a single quiet frame), then 150 ms as loud as the
+      word: the "ks" of "Ale-ks-a", Pryon sure before the last syllable. Room before the word as loud as it at 07:28
+      (-43.1 dBFS, 3 dB under), but -55..-68 after it: the "noise" there was not the room.
+      Also measured (stock Pryon under qemu, `pryon_test`): the result's `endSampleIndex` = metadata
+      `kwSampleDetectionIndex`; `kwSampleEndIndex` is 70 ms earlier; on `testdata/alexa_espeak.raw` the "a" ends 35 ms
+      after the detection and is the word's loudest part (-16 against -22 dBFS rms). No capture in `device-logs/` has a
+      spoken "Alexa" (Pryon over all of them: one accept, on played audio).
+      Now (2026-10-28, `wordtail.c`): the word ends at a pause, frames (30 ms means) 9 dB under the word's loudest so far
+      (keyword rms or the tail's peak) for 100 ms; the replay starts where that pause is 12 dB under, else at its lowest.
+      A consonant inside the word is shorter. No pause within 500 ms says nothing about the word's end: a dip may be
+      inside the command ("turn | on" when the word ended before Pryon was sure), and a command word cut is worse than a
+      syllable of the word left in. So then the least: the first dip's lowest point if it starts within 150 ms, never
+      later than a4fe0bd's rule would have cut (what the releases since 2026-10-19 did; with its live-block bound,
+      120 ms without arbitration, as `first_version` caps it), else nothing (the ring's
+      behaviour from ad224f5 on). A first draft of this (same day) took the first dip wherever it was and a fixed
+      150 ms without one: the latter is the pre-ring loss of a straight-on command's first sound, in a loud room, and
+      the former could cut a command word; both reverted before release. The live stream waits for the decision (up
+      to 500 ms, then caught up from the ring at once). `tests/unit/wordtail_test.c`: both recordings (cut at 250 and
+      310 ms, before the command), espeak's word (50 ms; the same under qemu with stock Pryon, `fake_ha.py --qemu`),
+      a pause then the command (nothing of it cut), straight on with an early dip, straight on with the word already
+      over (its first dip at 160 ms: nothing), never more than a4fe0bd, a room as loud as the word (nothing), a child's
+      450 ms vowel (nothing: the tail stays, as before), a flickering room; fed a frame at a time each as the capture
+      thread does. Only where a pause shows can it leave out more than before; the one way that hurts is a 100 ms gap
+      inside the command within 500 ms while the word ran straight into it. Logged as
+      "wake: <n> ms of the word's tail left out (<why>)", 0 ms too. Open: the reporter's verdict; a capture dump
+      (`kill -TTIN`) with the `wake: ... samples` lines of the same runs would show the frames before the cut.
 
 ## Phase 5 — Make it permanent **(device)**
 
@@ -865,6 +893,60 @@ Run in this order. Each step says what it proves.
       `device-logs/denoise/`). CPU: 11 ms per second of audio on the PC, 2755 ms for 15.1 s on the Echo (18 % of one
       A35 core, only while a pipeline runs). Binary +41 kB. `tests/unit/micdenoise_test.c`, switch and stream in
       `fake_ha_esphome.py`. Not done: what STT makes of it (the reason to have it), a listening test
+- [~] Wake word in the request (2026-10-28, setting `wake_word_in_request`, off by default; asked for with #66/#72): the
+      replay from 100 ms ahead of the keyword's begin (`replay_whole`: the pipeline's `from` is the last detection's
+      `kw_end`; `kw_begin` from Pryon's beginSampleIndex, mww's end - 1 s, the PC's SIGUSR1 0.6 s back). Pryon's begin
+      on `testdata/alexa_espeak.raw` is 110 ms ahead of the word's onset; the 100 ms lead is for real speech, not
+      measured. word_tail_end still runs (its decision is where the command starts: `talker_from`, so `micend` does
+      not count the word itself, or the word plus a wait for the tone would end the request before the command).
+      `core_transcript` drops a leading wake phrase (`wake_phrase_bare()`, normalised), so "Alexa, stop." is "stop";
+      the wake word alone ("Alexa.", from a false wake or nothing said) is what HA's "no text recognized" was without
+      the word: the run cancelled quietly, `no_speech` told, no ring stopped by timer_stop_any (found in review).
+      Trade-off: Home Assistant's built-in sentences may not take a command with "Alexa" in front: for LLM agents.
+      Tests: `fake_ha_esphome.py` (24000 bytes ahead of the first live block: 700 ms of ring plus the block in hand;
+      off, 4096: the 128 ms, and the block in hand comes out as one 1600-byte chunk that passes for the first live one),
+      `fake_ha_esphome_timers.py` ("Alexa, stop." stops a ring), `micend_test.c` (the word sent too, a 1 s wait, the
+      command: ends after it; counted, it would end in the wait).
+- [~] End of request heard on the Echo (issue #66, 2026-10-28; experimental, setting `end_of_request`, off by default;
+      `micend.c`). Reporter (Dot 2, busy kitchen, Scribe v2): "Alexa, next" came out as "Next. Eat some food please
+      Now", capture 3.58-5.78 s; four of five runs that evening had others' talk after the command. HA's VAD ends on
+      silence; any voice keeps the run open. And `micgain` learns from any frame 9 dB over the floor: others alone after
+      the command were brought up to speech level at 12 dB/s (`tests/fake_ha_end.py`, off: others 20 dB under in the
+      room, 12 dB under in what HA got).
+      Now, on: the talker = whoever said the wake word, its level the keyword's rms (button/follow-up: the gain's talker
+      level). 10 ms frames within 12/9/6 dB of it (relaxed/normal/aggressive) are the talker; after 300 ms of them, a
+      pause of 1.25/0.7/0.45 s (HA's own "Finished speaking detection" values) ends the run on the Echo. Frames under the
+      margin do not feed the gain either (`micgain` `talker_min_db`). Voiced frames peak ~5 dB over their rms, so others
+      are left out from ~17/14/11 dB under; a command 6 dB quieter than its keyword still counts. Our own sounds stop the
+      clock (`mic_gain.hold`). HA's VAD stays on: only ever sooner.
+      Ending: `VoiceAssistantAudio end=true` only (`proto->end`, `end_audio`): aioesphomeapi maps it to
+      `handle_stop(False)` -> HA `_stop_pipeline` (audio queue closed, STT goes on); `VoiceAssistantRequest start=false`,
+      which `stop()` also sends, is `handle_stop(True)` -> `_abort_pipeline` (task cancelled). Wyoming: none.
+      In a real Home Assistant 2026.10.1 (`tests/ha_real_end.py`, CI's home-assistant job; stand-in STT/TTS as a custom
+      component): its STT stream ended within 0.1 s of the Echo's end (238400 bytes), then stt-end, intent-end ("4:31
+      PM"), tts, run-end; its own VAD had heard speech start and no end (the dishes, the others).
+      Tests: `tests/unit/micend_test.c` (each mode's pause, quieter voices after, one as loud, a quieter command with a
+      pause, 200 ms only, our sound before the command), `tests/fake_ha_end.py` (off: nothing ends; normal: end of audio
+      0.55 s after the talker's last sound, no abort, no audio after, others 19 dB under in what HA got).
+      Amazon's VAD (docs/re-vad.md, same day): the front end's DNN VAD (`vad_lite.tflite`) rides in the lowest bit of
+      every 128 micAsr samples, record version 3.3, 2 bits (`afemeta.c`). Checked here on the captures: every frame
+      passes sync and checksum; record RMS within 0.2 dB of the measured (Dot 2); loud frames at >= 2: normal voice
+      98-100 %, quiet 82 %, whisper 39 %, sounds without words 0-23 %. A speech detector, not a talker detector, and it
+      misses quiet far speech: so a veto in `micend` (a frame is the talker only when loud *and* speech to it), never
+      an end of its own. `ring_speech` reads it from the ring. Tests: `micend_test.c` (dishes as loud: open without it,
+      ended with it; a talker it misses: never ended here), `afemeta_test.c`, `fake_ha_end.py` (records written into the
+      capture, phase moved every loop: ends 0.8 s after the talker, the dishes in between). Logged per request: vetoed
+      frames, or "not heard here first" with the talker's time and quiet when HA's VAD came first.
+      Review (same day): `mic_end` kept the last request's `ended`, and the capture thread's `heard_end()` check runs
+      while a wake word's pipeline still waits for the tail decision (up to 0.5 s, nothing sent yet): a request right
+      after one ended here was ended at once, before any audio (device only: the PC's SIGUSR1 had no level, so no
+      wait). `pipeline_start` now resets it; `HASSMIC_FAKE_KEYWORD` gives SIGUSR1's wake word a level so the PC waits
+      as a device does, and `fake_ha_end.py` runs a second request (failed before: 0 bytes, ended). Also the transcript's
+      wake phrase strip takes `wake_phrase_bare()` ("Echo", not "Echo (de-DE)" on an Echo with two "Echo" sets).
+      Second review: the VAD vetoed every frame under 2, but inside commands it dips under 2 for up to 0.44 s (mostly
+      to 1) and aggressive ends after 0.45 s: now a veto only at 0 (`ring_speech`: VAD >= 1 is speech).
+      Open: the reporter's kitchen; background talkers / TV against the VAD (no capture); whether the Android Echos'
+      HAL keeps the bits (else level only there).
 - [~] Arbitration score from the front end (2026-09-30): stock's numbers instead of our own SNR of the mic stream.
       `wake_pryon.c` inflates the result metadata (stock libz.so) for the keyword's place on the front end's clock,
       `main.c` hands it over and reads voiceEnergy / ambientEnergy (FINDINGS.md "Listening mode"); score =
@@ -1725,6 +1807,38 @@ Run in this order. Each step says what it proves.
       setting `timer_stop_any` (page-only, exported, off by default): any non-empty normalised STT_END text during a
       ring stops it and cancels the run, as EchoMuse does (wilbowes/EchoMuse#759). Cost: a question during a ring is
       not answered. fake_ha_esphome: the button, "Stopp den Timer" with the setting, a request without a ring untouched.
+      Issue #63 (2026-10-28, a Dot 3 user: the ring "strangely quiet" at full timer volume): the ring was the built-in
+      blip (main.c `earcon_thread`: 3 x 120 ms at 6000 = -14.7 dBFS peak, then 0.8 s of silence: -23.3 dBFS RMS over
+      the 1.2 s). Stock's tones, from `libEarconAdapter.so` `EarconsAudioProvider` (each getter binds a file name):
+      timerDefault `system_alerts_melodic_02.mp3`, timerShort `_02_short`, alarmDefault `system_alerts_melodic_01.mp3`,
+      alarmShort `_01_short`, reminderDefault/Short `alerts_notification_03.mp3` (one function), notificationDefault
+      `alerts_notification_01.mp3`. melodic_02: 6.08 s, 48 kHz stereo, -7.2 dBFS peak, -19.0 dB mean (ffmpeg
+      volumedetect), so ~4 dB louder on average and 7.5 dB at the peaks than the blip at the same volume. In
+      `/system/local/share/earcon/base/` on donut, biscuit, radar; on checkers and athena in
+      `priv-app/com.amazon.alarms` (`res/raw/system_alerts_melodic_0[12].mp3` = `default_timer_earcon` /
+      `default_alert_earcon`, same CRC, stored; the app is in STOCK_APPS_OUT, so read from `/system/hassmic-removed`);
+      cronos and crown: the same entries assumed (verify), greyed out on the page where the entry is missing
+      (`sound_present` reads the APK's central directory once, `zip_find`).
+      BS.1770 integrated loudness (the decoded mono, a Python meter that agreed with ffmpeg ebur128 to 0.01 LU):
+      melodic_02 -16.56 LUFS on donut, -16.17 on checkers (another encode); melodic_01 -17.26; the blip's ring cycle
+      at peak 6000 -20.81. So the ring's blip went to peak 9850 (`BEEP_PEAK`, -16.5 LUFS; the wake/touch stand-in
+      stays 6000), and the page's target is -16.5 (`TS_LUFS`).
+      Now setting `timer_sound` (timer / alarm / beep / custom, page-only, exported; default stock's timer tone, the
+      blip where the firmware has none, `core_timer_sound_default`; a sound without its file is refused, also at
+      start, and deleting the chosen upload goes back to the default). The chosen file loops through `play_earcon_while` with `alarm_go`: cut at once
+      by any stop, the ring time, a pipeline (busy), our other sounds and a Drop In's ring, then again from the top;
+      at `timers_q16`. Custom: the page decodes any file the browser plays (decodeAudioData), down-mixes and resamples
+      it to 48 kHz mono (OfflineAudioContext; files over 20 MB refused first: decoded whole in the tab), measures it
+      looped to 3 s as it rings (`web/loudness.js` `ringLufs`: BS.1770-4 K-weighting and gates; a clip under 400 ms
+      has no block of its own); more
+      than 3 LU from -16.5 it asks: match (gain, and where peaks would pass -1 dBFS a limiter with 5 ms look-ahead, a
+      5 ms average and ~80 ms release; the gain searched between the plain difference and +24 dB, secant and halving
+      by turns, since the limiter takes loudness away: 30 s in ~250 ms in node) or keep. It posts the first 30 s as
+      16-bit WAV to `POST /api/timer-sound` (signed); the Echo checks the format only (sounds.c `sound_custom_save`: no decoder or resampler on its side)
+      and keeps `state/timer_sound.wav` (statefile), not in exports or artifacts. `POST /api/timer-sound/play`: one
+      ring, 10 s at most. Tests: fake_ha_timer_sound.py, unit-sounds (format checks, a replaced upload read again,
+      the Show models' tones decode), unit-web_loudness (loudness.js against BS.1770 in Python; `BEEP_PEAK` at
+      `TS_LUFS`; matching quiet, loud and peaky clips, the limiter never over -1 dBFS). Open (device): heard on a Dot 3 and a Show.
 - [x] Buttons as Home Assistant events (2026-10-12, issue #26: a Dot 2 user moved from EchoLocal, whose automations
       stopped an HA-run alarm clock with the action button and used volume holds for next track / play-pause). ESPHome
       event entity "Button" (`button`, KEY_BUTTON, device class `button`, always listed), types `action`,
@@ -2215,7 +2329,11 @@ Run in this order. Each step says what it proves.
       122 746 in 8149; 20221007 135 408/135 416 in 8149, 122 746 in 8338; default 246/31 400.  Preloader unchanged
       (issue: `bd7ae89-20221003`).  kaeru boots the active slot (v2.0.0: boot_a): install-system.sh writes the active
       slot from TWRP and the running /system otherwise, so either fits.  Unpacked per version
-      (`firmware/biscuit/amonet-biscuit-v2.0.1/`).  Open: an unlock on 8338's LK on a real Dot; 8146 flashed over 8338.
+      (`firmware/biscuit/amonet-biscuit-v2.0.1/`).  8338's LK unlocked on a real Dot 2026-10-26 (issue #50's reporter,
+      Linux, amonet v2.0.1's `fastbrick-20260617.img`).  Open: 8146 flashed over 8338; an unlock from Windows (issue
+      #74, 2026-10-27: one attempt through a wrapper around platform-tools 37.0.1's fastboot — refused, exit 1, no
+      error line caught, the Echo unharmed; amonet's `fastbrick.bat` flashes with the zip's bundled `bin/fastboot.exe`,
+      platform-tools 36.0.0, before any system fastboot, as v2.0.0's runner does — firebreak 0.8.0 stays the route).
       TWRP before the wipe (`twrp_check`, first in every model's `step_flash`): 3.7 or newer, else stop with nothing
       wiped (the issue: amonet v1's TWRP 3.2.3, on Dots EchoLocal sold unlocked, cannot install 6574.1).  Every unlock
       here brings 3.7.0_9-0: `ro.twrp.version` and the string next to it in the ramdisks of amonet-biscuit v2.0.0,
@@ -2346,6 +2464,28 @@ Run in this order. Each step says what it proves.
       with it in its data would carry it; a template sensor could keep it in attributes).  Tests:
       fake_ha_esphome_buttons.py (off by default, listed when on, cleared per run, a 300-character reply cut on a
       character).
+- [~] Audio lost right after the wake word (2026-10-28, GitHub issue #77; reported as "Echo Dot 3 (checkers)" on
+      2026.10.27.202406, arbitration with 2 peers, Wyoming STT).  `afe_score` ran on the capture thread: two blocking
+      `service call audiosignalprocessor` (114, 23) took 240 and 380 ms there (the comment said 150 ms: the Dots' lipc),
+      `audio_android.c` had `CAP_NBUF` 8 x 20 ms = 160 ms queued, OpenSL dropped the rest.  The reporter's evidence:
+      the capture clock fell 218 and 188 ms behind the wall clock across one wake word each; a splice (sign flip at the
+      same level) 270-420 ms into the stream in 3 of 5 recordings; none in 5 with Kiosk Satellite mode (no
+      `afe_score`).  Arbitration off did not help: `wake_score` ran before `arb_claim` looked at `arbitrate`.
+      Now: `afe_thread` reads it (times from `wake_afe_times` on the capture thread first), the capture goes on into
+      the ring, `score_wait` claims once it is in (claim as late as before, the same windows learn) or after
+      `AFE_WAIT_MS` 500 (the others' window until learned) with the mic stream's score; a reading left behind sets
+      `afe_asked` after the round, so `afe_late_check` runs `afe_done` once it ends unless a round or a command still
+      runs.  One reading at a time (a hung service call costs scores, no longer the capture).  `arb_rounds()`: no
+      reading unless a round of ours runs (on, in a network, a member counted, not kiosk).  `CAP_NBUF` 32 (640 ms,
+      20 KB) for any other stall; `cap_read` logs one ("all 32 blocks full: up to N ms lost", time since the last free
+      block filled, summed, a line a second at most; AudioRecord's own buffer may have kept some: "up to").  PC: `HASSMIC_FAKE_AFE=<ms>:<voice>:<ambient>`
+      (audio_file.c; wake_none.c then gives SIGUSR1's wake word a place).  Test fake_ha_arbitration_afe.py: 250 ms
+      reading, its 2000 beats 900; the winner's ring replay is 15296 bytes ahead (300 ms reading) of the live stream (4096 with the
+      reading inline on the capture thread: the test fails there); 900 ms: claim with 500 after 500 ms, the late
+      reading's `stream stopped` after the lost round; arbitration off: no reading.  Open (device): the log on a Show
+      (no "capture held up" line, the front end's ms); which model the reporter has (the code path cited is the
+      Shows'); the Dots' mixer queue depth behind `MixerGetBufRec` is unknown, their 150 ms read may have lost audio
+      too.
 - [x] Wake word turns that hear nothing (2026-10-19, GitHub issue #48; two Dot 2 on 2026.10.17.151309: 4
       `stt-no-text-recognized` in 5 days, each with `anim_start_error_short`).  That code (HA's STT returned no text)
       now goes to `core_no_speech`: the run ends as after RUN_END, no error ring, whoever started it (wake word,

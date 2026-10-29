@@ -26,6 +26,9 @@ int  arb_running(void);
 int  arb_arbitrate(int set);                    /* take part in rounds (the "arbitration" setting): 0/1, -1 only reads.  The
                                                  * network (keys, beacons: the settings pages' list of Echos) runs either way */
 int  arb_peers(void);                           /* other members heard from lately that take part in rounds */
+/* A wake word now would go to a round of ours (arb_claim sends a claim with its score): on, in a network, a member
+ * to settle with, not Kiosk Satellite mode.  Without one the score goes nowhere and is not worth the front end's time */
+int  arb_rounds(void);
 /* How rounds are settled (the "arbitration_mode" setting, kept in state/config by settings.c, read by lockdown.sh):
  * ARB_HASSMIC our own protocol between the Echos of the network; ARB_KIOSK Kiosk Satellite's (UDP 2330, loudness only),
  * with kiosks and with Echos in that mode.  -1 only reads.  Any lock may be held. */

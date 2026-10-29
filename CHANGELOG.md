@@ -2,6 +2,45 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-28
+
+- **Optionally, the wake word goes to Home Assistant too** ("Wake word in the request", settings page, Voice; off by
+  default). Speech to text then hears the whole sentence, "Alexa, turn on the light", so nothing of your first word
+  can be cut and no stray end of the wake word turns up. Meant for an AI conversation agent: Home Assistant's own
+  built-in sentences may not recognise a command with "Alexa" in front. "Alexa, stop" still stops a ringing timer or
+  music.
+- **Other people talking no longer end up in your request: "End of request heard on the Echo"** (experimental, issue
+  #66; settings page, Voice; off by default). Home Assistant ends a request only when the room goes quiet, so in a busy
+  kitchen it stayed open while others talked, and speech to text wrote down their words after yours ("Next. Eat some
+  food please"). The Echo knows how loud you said the wake word: with this on, it ends the request itself when *you*
+  pause, and quieter voices around you no longer get turned up to speech level either (they were, within two
+  seconds). On the Echo Dots it also listens to Amazon's own speech detector, which the Echo's audio front end turns
+  out to report for every 8 ms of sound: clattering dishes as loud as your voice don't hold the request
+  open. Relaxed, Normal and Aggressive differ in how long a pause ends it (1.25, 0.7, 0.45 s) and how much quieter
+  than you another voice must be to be left out (about 17, 14, 11 dB). It cannot tell a voice as loud as yours, and
+  may end too soon if you turn away mid-sentence: start with Relaxed and tell us how it goes. ESPHome only.
+- **The end of the wake word no longer reaches speech to text** (issue #72). Amazon's wake word engine is sure of
+  "Alexa" before it has been fully said, and a drawn-out "Alexaaa", or one in a room that echoes, sounds on for a
+  third of a second after that. That end went to Home Assistant as loud as the command and came out as a stray word in
+  front of it ("The next track", "Faint memories"), so built-in sentences such as "next track" no longer matched. The
+  Echo now waits for the pause after the word and starts there. When there is no pause (the command said straight on,
+  a loud room) it never leaves out more than before: a sliver of the word left in is better than your first word cut.
+  The log says how much it left out and why.
+- **Timers ring with Alexa's own timer tone** (issue #63). A finished timer now plays the tone a stock Echo rings with,
+  from the Echo's own firmware, instead of the quiet triple beep. "Timer sound" on the settings page (Voice) picks
+  another: Alexa's alarm tone, the beep (now as loud as Alexa's tone: it was about 4 dB quieter), or a sound of your
+  own. For your own, upload any sound file your browser plays (MP3, WAV, OGG, ...): its first 30 seconds play over
+  and over. The page measures how loud it is, and when it is clearly louder or quieter than Alexa's tone it says so
+  and offers to bring it to the same level, so one timer volume suits them all. "Play" plays the chosen sound once.
+  Each Echo keeps its own; the ring time, every way of stopping it, and the timer volume work as before. An Echo
+  whose firmware has no such tone keeps the beep.
+- **Nothing lost right after the wake word** (issue #77). With other Echos around, an Echo asks Amazon's audio front
+  end how well it heard the wake word before it claims it. On an Echo Show that took up to 0.4 s, during which the Echo
+  stopped listening: up to a quarter of a second of the command was lost, and speech to text misheard the word the
+  gap fell into. The Echo now listens on while it asks, and sends Home Assistant all of it. With arbitration off, or
+  no other Echo to compare with, it no longer asks at all and answers sooner. Switching to "Kiosk Satellite" mode as a
+  workaround is no longer needed.
+
 ## 2026-10-27
 
 - **Drop In: the wake word works during a call to an empty room.** An Echo in a quiet room sent its own room noise,
@@ -27,6 +66,11 @@ What changed for people using the Echo, newest first. Details and measurements a
   whoever sits at the PC. The Echo Show setups now install those rules too. On a PC that is not x86_64, they install
   qemu-user from the package manager. Where users may not create namespaces (Ubuntu 24.04 and later), they ask to allow
   them until the next boot. Before, the root step failed with "the policy patch failed" and no reason.
+- **Echo Dot 2 on the October 2026 software: an unlock is proven, on Linux** (issues #50, #74). amonet v2.0.1's
+  payload for that bootloader (`2c3569d-20260617_045829`) unlocked #50's Echo on 2026-10-26, on Linux. From Windows
+  nobody has yet: #74's one attempt ran amonet through a wrapper around platform-tools 37.0.1's fastboot — refused,
+  exit 1, no error text kept, the Echo unharmed. amonet's own Windows runner, `fastbrick.bat`, flashes with the zip's
+  bundled `bin\fastboot.exe` (platform-tools 36.0.0) before any system fastboot.
 
 - **Echo Dot 2, Echo 2 and Echo Dot 3: "Download from Amazon" signs in again where it said "no device
   attestation".** Amazon's attestation library refused to open its key when an earlier, harmless library lookup in

@@ -30,6 +30,8 @@
  *   Wi-Fi (wifi.c): GET /api/wifi, POST /api/wifi/scan and /api/wifi/join, signed; root scans and switches.  The one
  *   secret that comes from the page, the network's password, travels sealed (unseal below), and only the PSK made from
  *   it goes on to root.
+ *   The timer's own sound (sounds.c): POST /api/timer-sound, a WAV the page made of the file picked, signed; the
+ *   Echo checks the format only, it decodes nothing else.
  *   The log: GET /api/log/0 (boot.log) and /1 (its rotated part), signed, for the page's viewer.  What it says is
  *   plain on the network then, like the rest of the page: names, addresses, when the Echo was spoken to.  Secrets do
  *   not go out: the one hassmic logs, the Sendspin pairing token (scripts/lib/setup.sh reads it there over adb), is
@@ -54,6 +56,7 @@
 #include "ringdesign.h"
 #include "netio.h"
 #include "settings.h"
+#include "sounds.h"
 #include "update.h"
 #include "wifi.h"
 #include "ws.h"
@@ -366,10 +369,10 @@ static int read_request(int fd, struct req *r)
         else if (!strcasecmp(line, "X-HM-Ctr")) snprintf(r->ctr, sizeof r->ctr, "%s", v);
         else if (!strcasecmp(line, "X-HM-Mac")) snprintf(r->mac, sizeof r->mac, "%s", v);
     }
-    /* a piece of an artifact, a microWakeWord model and a light ring design are the big bodies: everything else is a
-     * few lines */
+    /* a piece of an artifact, a microWakeWord model, a light ring design and a timer sound are the big bodies:
+     * everything else is a few lines */
     long max = !strncmp(r->path, "/api/artifact/chunk/", 20) ? ART_CHUNK_MAX : !strncmp(r->path, "/api/mww/add/", 13) ? MWW_MODEL_MAX + 16384
-             : !strncmp(r->path, "/api/ring/design/", 17) ? RD_TEXT_MAX : MAX_BODY;
+             : !strncmp(r->path, "/api/ring/design/", 17) ? RD_TEXT_MAX : !strcmp(r->path, "/api/timer-sound") ? SOUND_CUSTOM_MAX : MAX_BODY;
     if (cl < 0 || (cl > MAX_BODY && (cl > max || !approved_key(r->pub)))) return -2;
     if (!(r->body = malloc((size_t)cl + 1))) return -1;
     size_t have = n - hl < (size_t)cl ? n - hl : (size_t)cl;
@@ -478,6 +481,11 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
     n += isnan(cpu) ? (size_t)snprintf(o + n, cap - n, "null") : (size_t)snprintf(o + n, cap - n, "%.0f", cpu);
     { static const char *const models[] = { "none", "firmware", "newer" };
       n += (size_t)snprintf(o + n, cap - n, "},\"sound\":{\"model\":\"%s\",\"failed\":%s", models[sound_model()], core_sound_failed() ? "true" : "false"); }
+    /* the timer sounds this Echo has (the stock ones where its firmware keeps them), and the length of its own */
+    { static const enum sound snd[] = { SND_TIMER, SND_ALARM, SND_CUSTOM }; static const char *const nm[] = { "timer", "alarm", "custom" };
+      n += (size_t)snprintf(o + n, cap - n, "},\"timer_sound\":{\"custom_ms\":%u,\"present\":[\"beep\"", sound_custom_ms());
+      for (int i = 0; i < 3; i++) if (sound_present(snd[i])) n += (size_t)snprintf(o + n, cap - n, ",\"%s\"", nm[i]);
+      n += (size_t)snprintf(o + n, cap - n, "]"); }
     n += (size_t)snprintf(o + n, cap - n, "},\"arbitration\":");
     if (arb_running()) n += arb_status_json(o + n, cap - n); else n += (size_t)snprintf(o + n, cap - n, "null");
     if (dropin_running()) { char peer[64]; int st = dropin_status(peer, sizeof peer); unsigned at; int res = dropin_last(&at);
@@ -538,6 +546,30 @@ static void artifact_api(int fd, struct req *r)
     else if (write && sscanf(r->path, "/api/artifact/commit/%79[^/]", id) == 1) rc = art_commit(id, err, sizeof err);
     else if (write && !strcmp(r->path, "/api/artifact/install")) rc = art_install(err, sizeof err);
     else snprintf(err, sizeof err, "not found");
+    if (!rc) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
+    jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
+    respond_sjson(fd, r, 400, o);
+}
+
+/* /api/timer-sound       POST  a WAV, 16-bit mono at 48 kHz, up to 30 s (sounds.h): this Echo's own timer sound, which
+ *                               the ring then plays; an empty body deletes it (the ring back to the default if it played it)
+ * /api/timer-sound/play  POST  one ring of the chosen sound, 10 s at most, at the timer volume
+ * Signed. */
+static void timer_sound_api(int fd, struct req *r)
+{
+    char err[200] = "", o[300], ej[260]; int rc = -1;
+    if (!signed_ok(r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    if (strcmp(r->method, "POST")) snprintf(err, sizeof err, "not found");
+    else if (!strcmp(r->path, "/api/timer-sound/play")) { core_timer_sound_preview(); rc = 0; }
+    else if (strcmp(r->path, "/api/timer-sound")) snprintf(err, sizeof err, "not found");
+    else if (r->blen) rc = sound_custom_save(r->body, r->blen, err, sizeof err);
+    else {
+        pthread_mutex_lock(&core_lock);
+        int chosen = core_timer_sound(-1) == TIMER_SOUND_CUSTOM;
+        if ((rc = sound_custom_delete())) snprintf(err, sizeof err, "cannot delete it");     /* it stays, and stays chosen */
+        else if (chosen) { core_timer_sound_default(); settings_save(); core_settings_changed(); }
+        pthread_mutex_unlock(&core_lock);
+    }
     if (!rc) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
     jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
     respond_sjson(fd, r, 400, o);
@@ -958,6 +990,7 @@ static void handle(int fd)
     else if (!strncmp(r.path, "/api/mww", 8)) mww_api(fd, &r);
     else if (!strncmp(r.path, "/api/ring", 9)) ring_api(fd, &r);
     else if (!strncmp(r.path, "/api/wifi", 9)) wifi_api(fd, &r);
+    else if (!strncmp(r.path, "/api/timer-sound", 16)) timer_sound_api(fd, &r);
     else if (!strcmp(r.method, "GET") && !strncmp(r.path, "/api/log/", 9)) log_api(fd, &r);
     else respond_json(fd, 404, "{\"error\":\"not found\"}");
     free(r.body);

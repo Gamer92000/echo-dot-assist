@@ -74,6 +74,17 @@ async def main(e):
     started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)     # the next run counts again
     cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
     cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+    # the same with the wake word in the transcript ("Wake word in the request"): "Alexa, stop." is "stop"
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t8", "eggs", 60, 0, False)
+    await until(lambda: ringing() == (True, "eggs"))
+    started.clear(); stopped.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "Alexa, stop."})
+    await until(lambda: ringing() == (False, "") and stopped)
+    check(ringing() == (False, "") and stopped == [True], f'transcript "Alexa, stop." stops the ring as "Stop." does: {ringing()}, stops {stopped}')
+    started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
 
     cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t4", "pasta", 600, 0, False)
     await until(lambda: ringing() == (True, "pasta"))
@@ -108,6 +119,23 @@ async def main(e):
     await sync(cli); await asyncio.sleep(0.3)
     check(not stopped, f"with timer_stop_any and no ring, a request goes on as usual: stops {stopped}")
     cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+    # the wake word sent too ("Wake word in the request") and nothing after it: "Alexa." is nothing said, not a request
+    # that stops the ring; the run ends quietly
+    page.set(wake_word_in_request="on")
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t10", "rice", 60, 0, False)
+    await until(lambda: ringing() == (True, "rice"))
+    started.clear(); stopped.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "Alexa."})
+    await until(lambda: stopped)
+    await asyncio.sleep(0.3)
+    check(stopped == [True] and ringing() == (True, "rice"), f'"Alexa." alone with the wake word sent too: run cancelled quietly, the ring goes on: {ringing()}, stops {stopped}')
+    proc.send_signal(signal.SIGUSR2); await until(lambda: ringing() == (False, ""))     # the button stops it
+    started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)     # the next run counts again
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+    page.set(wake_word_in_request="off")
     page.set(timer_stop_any="off")
 
     page.set(timer_ring=1)

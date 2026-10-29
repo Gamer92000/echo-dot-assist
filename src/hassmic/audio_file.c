@@ -107,7 +107,9 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
     int peak = 0;
     for (size_t i = 0; i < samples; i++) if (abs(pcm[i]) > peak) peak = abs(pcm[i]);
     fprintf(stderr, "earcon: %zu samples @ %u Hz, until stopped, peak %d\n", samples, rate, peak);
-    for (long ms = 0; ms < (long)(samples * 1000ULL / (rate ? rate : 48000)) && go(); ms += 20) usleep(20000);
+    long ms = 0, len = (long)(samples * 1000ULL / (rate ? rate : 48000));
+    for (; ms < len && go(); ms += 20) usleep(20000);
+    if (ms < len) fprintf(stderr, "earcon: cut at %ld ms\n", ms);       /* for the tests: what stopped it stopped it at once */
 }
 
 /* Music streams on the PC: files, written at real-time speed through a modelled 200 ms device buffer. */
@@ -224,9 +226,19 @@ void vol_write(enum vol which, int v)
     vols[which] = v;
 }
 
-/* No front end on the PC */
+/* No front end on the PC.  HASSMIC_FAKE_AFE=<ms>:<voice>:<ambient> plays one that answers the wake word's energies
+ * after <ms> (an Echo Show 5's took 240 and 380 ms, issue #77), for SIGUSR1's wake word too (wake_none.c) */
 void afe_listening(int on) { (void)on; }
-void afe_stream_stopped(void) {}
-int  afe_arbitration(long ts, long te, char *json, size_t n) { (void)ts; (void)te; if (n) json[0] = 0; return 0; }
+void afe_stream_stopped(void) { if (getenv("HASSMIC_FAKE_AFE")) fprintf(stderr, "front end: stream stopped\n"); }
+int  afe_arbitration(long ts, long te, char *json, size_t n)
+{
+    const char *e = getenv("HASSMIC_FAKE_AFE"); int ms; double voice, ambient;
+    (void)ts; (void)te;
+    if (n) json[0] = 0;
+    if (!e || sscanf(e, "%d:%lf:%lf", &ms, &voice, &ambient) != 3) return 0;
+    usleep((useconds_t)ms * 1000);
+    snprintf(json, n, "{\"voiceEnergy\":%.0f,\"ambientEnergy\":%.0f}", voice, ambient);
+    return 1;
+}
 int  afe_eq_get(char *json, size_t n) { if (n) json[0] = 0; return 0; }
 void afe_eq_set(const char *json) { (void)json; }

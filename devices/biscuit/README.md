@@ -64,7 +64,8 @@ firmware flash: it gives root adb, as on donut.
   (Fire OS 6 4405 to 8149) to `fastbrick-20221007.img` and `2c3569d-20260617_045829` (Fire OS 8338, NS6575,
   October 2026) to `fastbrick-20260617.img`; v2.0.0 knew only the first. That second payload's tail is built from
   8338's LK (135,403 of its 135,411 16-byte windows in the last 137,684 bytes are in 8338's `lk.img`, 122,746 in
-  8149's), but no unlock with it is reported yet. An LK newer than both: the guided setup says so when the Echo is
+  8149's), and it unlocked the first Echo tried with it, on Linux (issue #50, 2026-10-26); from Windows nobody has yet
+  (issue #74). An LK newer than both: the guided setup says so when the Echo is
   still in fastboot a minute after the script; power-cycled, the Echo boots the original software again, unharmed.
   Unlock before the Echo can update itself further.
 - From Windows (issue #60; for beginners step by step: [docs/WINDOWS.md](../../docs/WINDOWS.md)):
@@ -75,7 +76,10 @@ firmware flash: it gives root adb, as on donut.
   amonet **v2.0.1**, as the setup does on Linux, with TWRP 3.7.0, downloads what it needs itself
   against pinned hashes, and ends where the flash and root steps end here: Fire OS 6574.1 build 8146 in both slots,
   `boot-root.zip` installed, root adb. The setup then checks that and goes on with the build. Not run here as a whole
-  yet; firebreak's own README has it measured on Windows 11.
+  yet; firebreak's own README has it measured on Windows 11. amonet's zip runs on Windows by itself too
+  (`fastbrick.bat`), which flashes with its bundled `bin\fastboot.exe` (platform-tools 36.0.0) before any system
+  fastboot — but the one attempt reported through another fastboot (platform-tools 37.0.1, in a wrapper) was refused,
+  the Echo unharmed (issue #74) — so the setup stays with firebreak from Windows.
 - No Magisk: this repo's daemon runs as the stock client's user; TWRP plus the system write is the whole root story.
 
 ## First contact (arrival checklist)

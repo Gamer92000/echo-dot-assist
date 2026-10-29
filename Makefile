@@ -185,13 +185,13 @@ WHISPER := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/
 
 RNNOISE := $(addprefix src/third_party/rnnoise/,denoise.c rnn.c rnn_data.c pitch.c kiss_fft.c celt_lpc.c)
 HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) src/hassmic/ringdesign.c src/hassmic/ledq.c \
-           src/hassmic/sendspin.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/micgain.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/statefile.c src/hassmic/volcurve.c build/web_assets.c \
+           src/hassmic/sendspin.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/statefile.c src/hassmic/volcurve.c build/web_assets.c \
            src/hassmic/wake.c src/hassmic/wake_mww.c src/hassmic/mww_features.c src/hassmic/mww_model.c src/hassmic/mww_store.c \
            src/third_party/monocypher.c src/third_party/freeaptx.c $(RNNOISE)
 HASSMIC_H := $(wildcard src/hassmic/*.h src/include/*.h) build/.build-id
 
 # The settings page (web.c), gzip'd into the binary
-WEB := web/index.html:/ web/app.js:/app.js web/crypto.js:/crypto.js web/tar.js:/tar.js web/ring.js:/ring.js
+WEB := web/index.html:/ web/app.js:/app.js web/crypto.js:/crypto.js web/tar.js:/tar.js web/loudness.js:/loudness.js web/ring.js:/ring.js
 build/web_assets.c: tools/embed.py $(foreach w,$(WEB),$(firstword $(subst :, ,$(w))))
 	@mkdir -p build
 	python3 tools/embed.py $@ $(WEB)
@@ -217,8 +217,8 @@ host: build/hassmic-host $(OUT)/hassmic-qemu build/otatool-host
 # Building blocks of the Sendspin client, checked against reference implementations (aiohttp, python noiseprotocol).
 UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/third_party/monocypher.c
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
-UNIT_TESTS := hash ws noise ble_crypto micgain wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
-	sbc web_crypto web_tar ring_pack mww blueprint_dropin buttons buttons_privacy afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map
+UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
+	sbc web_crypto web_tar web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map
 unit: $(addprefix unit-,$(UNIT_TESTS))
 unit-hash:
 	@mkdir -p build
@@ -237,6 +237,15 @@ unit-ble_crypto:
 unit-micgain:
 	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic tests/unit/micgain_test.c src/hassmic/micgain.c -lm -o build/micgain_test && build/micgain_test
+unit-micend:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/micend_test.c src/hassmic/micend.c -lm -o build/micend_test && build/micend_test
+unit-afemeta:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/afemeta_test.c src/hassmic/afemeta.c -o build/afemeta_test && build/afemeta_test
+unit-wordtail:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/wordtail_test.c src/hassmic/wordtail.c -lm -o build/wordtail_test && build/wordtail_test
 unit-wifimotion:
 	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic tests/unit/wifimotion_test.c src/hassmic/wifimotion.c -lpthread -lm -o build/wifimotion_test && build/wifimotion_test
@@ -271,6 +280,9 @@ unit-web_crypto:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_crypto_test.py; elif [ -n "$$CI" ]; then echo "web crypto: node missing"; exit 1; else echo "web crypto: node missing, skipped"; fi
 unit-web_tar:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_tar_test.py; else echo "web tar: node missing, skipped"; fi
+# the page's timer sound level (web/loudness.js) against BS.1770, and main.c's ring beep at Alexa's level
+unit-web_loudness:
+	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_loudness_test.py; elif [ -n "$$CI" ]; then echo "web loudness: node missing"; exit 1; else echo "web loudness: node missing, skipped"; fi
 unit-ring_pack:
 	if command -v node >/dev/null; then node tests/unit/ring_pack_test.js; else echo "ring packs: node missing, skipped"; fi
 unit-mww:
@@ -305,10 +317,10 @@ unit-band_map:
 unit-sounds:
 	@mkdir -p build
 	python3 tests/unit/sounds_zip.py build/sounds_dir build/sounds_test.zip
-	cc -O2 -Wall -Wextra -DSYNTH -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c -o build/sounds_test && build/sounds_test synth build/sounds_dir build/sounds_test.zip
-	if [ -d firmware/checkers/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c devices/checkers/board.c -o build/sounds_checkers && HASSMIC_EARCON_ROOT=firmware/checkers/rootfs build/sounds_checkers; else echo "sounds: firmware/checkers not unpacked, its apps' sounds skipped"; fi
-	if [ -d firmware/cronos/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c devices/cronos/board.c -o build/sounds_cronos && HASSMIC_EARCON_ROOT=firmware/cronos/rootfs build/sounds_cronos; else echo "sounds: firmware/cronos not unpacked, its apps' sounds skipped"; fi
-	if [ -d firmware/athena/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c devices/athena/board.c -o build/sounds_athena && HASSMIC_EARCON_ROOT=firmware/athena/rootfs build/sounds_athena; else echo "sounds: firmware/athena not unpacked, its apps' sounds skipped"; fi
+	cc -O2 -Wall -Wextra -DSYNTH -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c -o build/sounds_test && build/sounds_test synth build/sounds_dir build/sounds_test.zip
+	if [ -d firmware/checkers/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c devices/checkers/board.c -o build/sounds_checkers && HASSMIC_EARCON_ROOT=firmware/checkers/rootfs build/sounds_checkers; else echo "sounds: firmware/checkers not unpacked, its apps' sounds skipped"; fi
+	if [ -d firmware/cronos/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c devices/cronos/board.c -o build/sounds_cronos && HASSMIC_EARCON_ROOT=firmware/cronos/rootfs build/sounds_cronos; else echo "sounds: firmware/cronos not unpacked, its apps' sounds skipped"; fi
+	if [ -d firmware/athena/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c devices/athena/board.c -o build/sounds_athena && HASSMIC_EARCON_ROOT=firmware/athena/rootfs build/sounds_athena; else echo "sounds: firmware/athena not unpacked, its apps' sounds skipped"; fi
 unit-wifictl:
 	.venv/bin/python tools/mkwifictl.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)
 	.venv/bin/python tests/unit/wifictl_run.py

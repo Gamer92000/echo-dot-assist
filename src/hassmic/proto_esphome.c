@@ -1267,6 +1267,10 @@ static void stop(void)
     send_va(VA_REQUEST, NULL);                                 /* start = false */
 }
 
+/* The Echo heard the request end (micend.h): the end of the audio alone, which Home Assistant takes as its own VAD's end
+ * (aioesphomeapi: handle_stop(False), the audio queue closed).  start = false, as stop() sends it too, is an abort */
+static void end_audio(void) { PB(a, 8); pb_uint(&a, 2, 1); send_va(VA_AUDIO, &a); }
+
 static void cancel(void)
 {
     send_va(VA_REQUEST, NULL);                                 /* start = false: abort */
@@ -1835,4 +1839,4 @@ static void dropin_result(const char *result)   /* lock held */
 
 const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, cancel, played, volume_changed, mute_changed, print_mdns, bt_device,
                                      arb_send, arb_changed, sound, whispered, arb_request, settings_changed, entities_changed, arb_scan,
-                                     timers_changed, dropin_changed, dropin_result, button, wake_event };
+                                     timers_changed, dropin_changed, dropin_result, button, wake_event, end_audio };

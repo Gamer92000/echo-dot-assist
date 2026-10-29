@@ -28,6 +28,34 @@ System) off takes any certificate, but then anyone on your network could slip th
   reaches Home Assistant about a second late. When you speak much louder than the tone, it changes nothing. The log
   says what it found each time ("wake sound removal: ...").
 
+- **The end of the wake word** is left out of what Home Assistant gets. Amazon's engine is sure of "Alexa" before
+  the word has been fully said, and a drawn-out one, or one in a room that echoes, sounds on for up to a third of a
+  second after that: the Echo waits for the pause after the word (up to half a second) and starts there. Said straight
+  on, without a pause, or in a loud room, it never leaves out more than earlier versions did: a sliver of the word
+  left in is better than your first word cut. The log says how much it
+  left out and why (`wake: 260 ms of the word's tail left out (a pause)`).
+
+- **The wake word in the request** ("Wake word in the request" on the [settings page](#settings-page), Voice, off by
+  default): Home Assistant gets the audio from just before the wake word on, so speech to text hears "Alexa, turn on
+  the light". Nothing of your first word can be cut and no stray end of the word turns up. Meant for an AI (LLM)
+  conversation agent: Home Assistant's built-in sentences may not recognise a command with the wake word in front
+  (with "Prefer handling commands locally" those go on to the agent). "Alexa, stop" as a transcript still stops a
+  ringing timer or music, and "Alexa" with nothing after it still ends quietly. No effect with Home Assistant's wake word engine. The log says
+  `wake: the wake word sent too, from 670 ms before its end`.
+
+- **The end of a request heard on the Echo** ("End of request heard on the Echo" on the
+  [settings page](#settings-page), Voice; experimental, off by default; ESPHome only). Home Assistant ends a request
+  when the room goes quiet, so with others talking it stays open and speech to text writes down their words after
+  yours ("Next. Eat some food please"). The Echo knows how loud you said the wake word; with this on, a pause in
+  *your* voice ends the request, and quieter voices neither keep it open nor get turned up to speech level for Home
+  Assistant. On the Echo Dots, Amazon's own speech detector (in its audio front end) has a say too: the dishes, a
+  kettle or a door as loud as your voice do not keep the request open either. Relaxed: a pause of 1.25 s, voices from about 17 dB under yours left out; Normal: 0.7 s and 14 dB;
+  Aggressive: 0.45 s and 11 dB. A voice as loud as yours counts as yours. If you turn away or drop your voice by more
+  than that mid-sentence the request may end too soon, so start with Relaxed. Home Assistant's own end (its "Finished
+  speaking detection") still applies: a request never runs longer than before. The log says
+  `end of request: heard here (talker -41.2 dBFS, ...)` each time it ends one, and `not heard here first` with the
+  numbers when Home Assistant was first: send those along if it ends too soon or too late.
+
 - **Nothing said** after the wake word (or the button, or a question the assistant asked): the ring goes dark
   without the error animation, as on a stock Echo.
 
@@ -61,6 +89,15 @@ System) off takes any certificate, but then anyone on your network could slip th
   running. Switch on "Any request stops a ringing timer" on the settings page and whatever you say after the wake
   word during a ring stops it, in any language; a question asked during a ring then only stops it.
   Several timers can ring at once: each new one gives the ring its full time again, and one stop ends them all.
+  A timer rings with Alexa's own timer tone, from the Echo's firmware. "Timer sound" on the settings page picks
+  another: Alexa's alarm tone, a triple beep (as loud as Alexa's tone), or a sound of your own: "Upload a sound…" takes
+  any file your browser plays (MP3, WAV, OGG, M4A, ..., up to 20 MB), and its first 30 seconds play over and over. The page
+  measures its loudness (LUFS, as streaming services do) against Alexa's tone: more than 3 dB off, it says by how much
+  and offers to match it, turning it up or down before it is uploaded (turned up, its loudest moments are held back
+  so nothing clips; 24 dB up at most). Or keep it as it is and set the timer volume to suit it. "Play" plays the chosen
+  sound once, at the timer volume. Each Echo keeps its own; an export says which one is chosen, but your own sound
+  stays on the Echo it was uploaded to (upload it on each). Whichever plays, a stop cuts it off at once, and it
+  pauses while you talk. Where the firmware has no timer tone, the beep is the default.
   Home Assistant's "Timer ringing" is on just as long, so an automation can tell when nobody heard it:
 
   ```yaml
@@ -142,6 +179,8 @@ satellite for a few seconds. `-w remote` in [`ARGS`](#hassmicconf) does the same
 The Echos compare by how clearly the word stood out of the room's noise. An Echo in a conversation, or ringing, keeps
 the next wake word. With only one Echo there is no delay. The wait delays only the sound and the ring, not what you
 say: the Echo that answers sends Home Assistant everything from the end of the wake word, so speak on without a pause.
+How clearly the word stood out comes from Amazon's audio front end, which takes 0.15 s to answer on the Dots and up to
+0.4 s on an Echo Show; the Echo keeps listening meanwhile, and after 0.5 s without an answer it uses its own measure.
 
 - Only Echos listening for the same word compete: one on "Echo" and one on "Alexa" each answer their own.
 - "Wake word arbitration" on the settings page (on by default) says whether an Echo takes part. Off, it answers every
@@ -511,7 +550,11 @@ The duration is saved and included in settings exports.
   what the voice assistant gets).
 - "Wake sound removal" (experimental, under Features): off by default; takes the wake sound out of what the voice
   assistant gets (see [Voice](#voice)).
+- "Wake word in the request": off by default; Home Assistant gets the wake word too (see [Voice](#voice)).
+- "End of request heard on the Echo" (experimental): off by default; relaxed, normal or aggressive end a request when
+  the one who said the wake word stops talking (see [Voice](#voice)).
 - "Timers ring for": 1 minute by default, 10 s to 10 min, or until stopped.
+- "Timer sound": Alexa's timer tone by default; its alarm tone, a beep, or a sound of your own (see [Voice](#voice)).
 - Bluetooth announcements and their language, the online updates channel, debug access (adb over Wi-Fi), SoC
   temperature and CPU usage.
 - "Music Assistant without pairing": off by default, so only Sendspin servers paired with the token may play.

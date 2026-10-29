@@ -12,7 +12,7 @@ through the reverse-engineered C API of `libmixerAPI.so` and speaks the ESPHome 
 Docs: `README.md` (short user-facing overview with figures; every feature in detail in `docs/GUIDE.md`, security model in
 `docs/SECURITY.md`; `docs/WINDOWS.md` the Echo Dot 2 from Windows for beginners; figures are CeTZ sources in `docs/img/src/`, rendered light+dark by `tools/figures.sh`; install instructions per model in `devices/<codename>/README.md`, guided by
 `scripts/setup.sh`), `DEVELOPMENT.md` (architecture, layout, tests, contributing), `PLAN.md` (phases, open issues, every measurement), `CHANGELOG.md`
-(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-a2dp-source.md`, `re-davs-login.md`, `re-checkers.md`, `re-athena.md`,
+(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-vad.md`, `re-a2dp-source.md`, `re-davs-login.md`, `re-checkers.md`, `re-athena.md`,
 `sendspin-digest.md`).
 
 ## Build and test
@@ -46,12 +46,19 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ha_esphome_features.py #   sound detection (HASSMIC_FAKE_SOUND_WINDOW: 3 s windows), Wi-Fi motion
 .venv/bin/python tests/fake_ha_esphome_buttons.py  #   runs cancelled while HA thinks or streams, the "Button" event entity
 .venv/bin/python tests/fake_ha_esphome_address.py  #   a new address: links closed, mDNS announced again
+.venv/bin/python tests/fake_ha_end.py         # the end of a request heard on the Echo (micend.c): a talker, dishes as loud
+                                             # (no speech in the front end's records written into the capture), quieter
+                                             # voices on another pitch; end of audio, not an abort; the gain left alone;
+                                             # the next request after one (HASSMIC_FAKE_KEYWORD: SIGUSR1's wake word gets
+                                             # a level, so its tail is looked for as on a device)
 .venv/bin/python tests/fake_ha_arbitration.py # two Echos under one fake HA: wake word arbitration, join paths and security
-                                             # (_join, _rounds, _kiosk, _window.py beside it; tests/arbecho.py)
+                                             # (_join, _rounds, _kiosk, _window, _afe.py beside it; tests/arbecho.py)
 .venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer,
                                              # the ringtone at the sounds volume (HASSMIC_EARCONS: stand-in stock sounds)
 .venv/bin/python tests/blueprint_dropin.py    # the Drop In voice blueprint against stand-ins of HA's registries, states,
                                              # actions and template engine: renamed ids, other devices, failures, replies
+.venv/bin/python tests/ha_real_end.py         # the Echo's end of audio in a real Home Assistant (stand-in STT and TTS as a
+                                             # custom component): HA's STT stream ends with it, intent and reply follow
 .venv/bin/python tests/ha_real_dropin.py      # the blueprint in a real Home Assistant (build/ha-venv, made by --setup;
                                              # skips without it) with four Echos, one the released build: replies, timing.
                                              # All of it in an `unshare -rn` namespace with only lo
@@ -76,6 +83,9 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # loudest, HA's media at the music's, keys on what plays, gains in dB, a
                                              # restart, a Bluetooth speaker, the page, exports (HASSMIC_FAKE_MIXER,
                                              # HASSMIC_FAKE_SPEAKER)
+.venv/bin/python tests/fake_ha_timer_sound.py # the timer's sound (issue #63): stock's tone by default, looped and cut by
+                                             # stops and pipelines, the beep at its level, uploads (the page's WAV only),
+                                             # Play, delete, restart, the beep without the tone
 .venv/bin/python tests/fake_ha_ring.py        # light ring: the animation set from stand-in stock files, HA's light,
                                              # the Echo's own patterns first, the listening ring turned by the beam
 .venv/bin/python tests/fake_improv.py         # setup from a phone: Improv over BLE against a fake controller on a pty
@@ -165,8 +175,13 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 `src/hassmic/` is one daemon; `main.c` is the satellite core, the rest plug into it through narrow headers:
 
 - **Core (`main.c`, `core.h`)**: state machine `IDLE/LISTENING/THINKING/SPEAKING`, pipeline timeout, TTS queue with
-  barge-in flush, alarms (timers), mute (hardware latch that software can set but never clear, plus a soft mute from HA),
-  volume, LED ring, earcons, wake word threshold hints.  Separate volumes (setting `separate_volumes`, issue #32):
+  barge-in flush, alarms (timers; `timer_sound`: stock's timer tone by default (`sounds.c`, libEarconAdapter's
+  timerDefault; the blip where the firmware has none), its alarm tone, the blip at the same loudness (`BEEP_PEAK`,
+  -16.5 LUFS), or the page's upload `state/timer_sound.wav`, which the browser converts to 48 kHz mono WAV and offers
+  to bring to that loudness (`web/loudness.js`, BS.1770; `tests/unit/web_loudness_test.py`): the Echo only checks the
+  format; looped by `play_earcon_while`, cut by any stop, a pipeline or our sounds; issue #63), mute (hardware latch
+  that software can set but never clear, plus a soft mute from HA), volume, LED ring, earcons, wake word threshold hints.
+  Separate volumes (setting `separate_volumes`, issue #32):
   music (`volume`), replies, sounds, timers, Drop In calls at volumes of their own or each following the music's +- an offset in
   points (`<kind>_linked`/`_offset`; linked, its HA number is unlisted); MainVolume and TTSVolume both at the loudest
   (libasp's own volume, which boosts the top end, follows the last of them set), each kind turned down in its PCM by
@@ -177,7 +192,21 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `wake_sound_removal`, off by default; holds the audio from the sound until its echo has passed, then releases it at
   once), then `micdenoise.c` (RNNoise, settings page off/low/medium/high, off by default), then
   `micgain.c`: AGC on the mic audio sent to the pipeline (the stock
-  micAsr level is ~30 dB below what STT expects, and HA ignores the ESPHome audio settings); the wake word gets it raw. `core_lock` guards state and client socket writes; `core.h`
+  micAsr level is ~30 dB below what STT expects, and HA ignores the ESPHome audio settings); the wake word gets it raw.
+  After a wake word the stream starts from the ring past the word's tail (`wordtail.c`, issue #72: Pryon's end comes
+  before the voice's; a 100 ms pause 9 dB under the word, the live stream waits up to 500 ms for it; no pause: never
+  more than a4fe0bd's rule left out, often nothing).
+  Setting `wake_word_in_request` (off): the replay from 100 ms ahead of the keyword's begin instead (`replay_whole`,
+  `kw_begin`/`kw_end` of the last detection; mww's begin is its end - 1 s); micend counts from the tail's end
+  (`talker_from`); `core_transcript` drops a leading wake phrase ("Alexa, stop" = "stop"), and the wake word alone
+  ends the run quietly as "nothing said" would have.
+  `micend.c` (setting `end_of_request`, experimental, off; issue #66): the request ends on a pause in the voice of
+  whoever said the wake word (frames within 12/9/6 dB of the keyword's rms, unless Amazon's DNN VAD says 0,
+  1.25/0.7/0.45 s), quieter voices neither keep it open nor lift the gain (`micgain` `talker_min_db`); `proto->end` =
+  end of audio only (`stop()`'s `start = false` is an abort to HA).  The VAD: `afemeta.c` decodes the front end's
+  record in the lowest bit of every 128 micAsr samples (version 3.3; clock, RMS, playback, mute, DNN VAD 2 bits;
+  docs/re-vad.md), `main.c` `ring_speech` reads it from the ring (phase found again after lost samples); none on the
+  PC or where a HAL drops the bits (then level only). `core_lock` guards state and client socket writes; `core.h`
   documents per function whether the lock is held.
 - **Protocols (`struct proto` in `core.h`)**: `proto_esphome.c` (ESPHome native API incl. Noise encryption provisioned
   by HA, voice assistant, media player, timers, settings entities, Bluetooth proxy messages) and `proto_wyoming.c` +
@@ -220,7 +249,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `tests/unit/mww_ref.py` (in `make unit`) checks features and every inference against pymicro-features and TFLite
   BUILTIN_REF on all of pymicro-wakeword's models.
 - **Wake word arbitration (`arb.c`, `arb.h`)**: when several Echos hear the wake word, only the best one answers
-  (stock's ESP, done on the LAN; the score is the front end's own wake word energy ratio, as stock reads it). UDP broadcast on 28930 (beacons at random 20-40 s, a member counts for 5 min: broadcasts get lost; for 40 s after a start or join the beacons carry F_HELLO and every member answers at once; a newcomer asks every 1.2 s for its first 5 s), shared network key; a member hands it to a newcomer (sealed to its X25519 key) only
+  (stock's ESP, done on the LAN; the score is the front end's own wake word energy ratio, as stock reads it, in a
+  thread of its own (`afe_thread`; the capture never waits on it, issue #77: `score_wait` claims once it is in or after
+  `AFE_WAIT_MS`, `afe_late` ends a reading left behind), and only when a round runs (`arb_rounds`); PC: `HASSMIC_FAKE_AFE`). UDP broadcast on 28930 (beacons at random 20-40 s, a member counts for 5 min: broadcasts get lost; for 40 s after a start or join the beacons carry F_HELLO and every member answers at once; a newcomer asks every 1.2 s for its first 5 s), shared network key; a member hands it to a newcomer (sealed to its X25519 key) only
   when Home Assistant vouches for both: each Echo that may be waited for reports the tag `hassmic_<pub hex>` as scanned
   (event `esphome.tag_scanned`: HA fires device events without "perform actions"; `tag.<id>` has no area or device in
   it, unlike every entity id, which HA builds from area, parent device, device and entity name), the other reads

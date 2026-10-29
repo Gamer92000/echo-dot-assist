@@ -12,6 +12,7 @@
 #define KSUI "/system/priv-app/KnightSystemUI/KnightSystemUI.apk"
 #define KSET "/system/priv-app/KnightSettings/KnightSettings.apk"
 #define COMM "/system/priv-app/com.amazon.comms.multimodaltachyonarm/com.amazon.comms.multimodaltachyonarm.apk"
+#define ALRM "/system/priv-app/com.amazon.alarms/com.amazon.alarms.apk"
 static const struct board_sound sounds[] = {
     { "ui_wakesound", SIM, "res/7E.mp3" },
     { "ui_wakesound_touch", SIM, "res/7E.mp3" },
@@ -25,6 +26,9 @@ static const struct board_sound sounds[] = {
     { "comms_call_disconnected", COMM, "res/raw/ful_comms_call_disconnected.mp3" },
     { "comms_call_incoming_ringtone", COMM, "res/raw/ful_comms_call_incoming_ringtone.mp3" },
     { "comms_outbound_ringtone", COMM, "res/raw/ful_comms_outbound_ringtone.mp3" },
+    /* the timer's and the alarm's, as the Dots' (issue #63; verify: in checkers' and athena's alarms app, not looked for in this firmware) */
+    { "system_alerts_melodic_02", ALRM, "res/raw/system_alerts_melodic_02.mp3" },
+    { "system_alerts_melodic_01", ALRM, "res/raw/system_alerts_melodic_01.mp3" },
     { NULL, NULL, NULL },
 };
 

@@ -65,9 +65,12 @@ static void deadline(struct timespec *ts, long ms)
 static long long now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000LL + t.tv_nsec / 1000000; }
 
 /* --- capture: a ring of CAP_NBUF blocks, all queued at start.  The buffer queue fills them in the order they were
- * queued, and each is queued again once cap_read's caller is done with it, so block k is always buf[k % CAP_NBUF]. */
+ * queued, and each is queued again once cap_read's caller is done with it, so block k is always buf[k % CAP_NBUF].
+ * With all of them full the recorder has nowhere to put what comes and it is lost: 8 blocks (160 ms) were too few for
+ * the front end's reading after a wake word, 240-380 ms on the capture thread then (issue #77).  640 ms for any stall
+ * of the caller, logged by cap_read. */
 #define CAP_BLOCK 320                   /* samples: 20 ms */
-#define CAP_NBUF  8
+#define CAP_NBUF  32
 static SLObjectItf rec_obj;
 static SLRecordItf rec;
 static SLAndroidSimpleBufferQueueItf rec_q;
@@ -76,12 +79,14 @@ static pthread_mutex_t cap_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t cap_cond = PTHREAD_COND_INITIALIZER;
 static unsigned cap_filled, cap_taken;
 static int cap_held;
+static long long cap_full_ms;           /* when the last free block was filled (cap_lock): from then on audio is lost */
+static long long cap_lost_ms, cap_lost_said;    /* cap_read: lost since the last line, when that was */
 
 static void cap_cb(SLAndroidSimpleBufferQueueItf q, void *ctx)
 {
     (void)q; (void)ctx;
     pthread_mutex_lock(&cap_lock);
-    cap_filled++;
+    if (++cap_filled - cap_taken == CAP_NBUF) cap_full_ms = now_ms();
     pthread_cond_signal(&cap_cond);
     pthread_mutex_unlock(&cap_lock);
 }
@@ -136,7 +141,15 @@ int cap_read(const void **data)
     pthread_mutex_lock(&cap_lock);
     if (cap_held) {
         /* the block the caller had goes back to the recorder (were all of them full, it dropped audio meanwhile and
-         * goes on with this one) */
+         * goes on with this one).  The recorder wanted a block one block after the last went full; AudioRecord's own
+         * buffer may have kept some of it: "up to".  A line a second at most: a caller slower than the mic all along
+         * would otherwise write one per block */
+        long long now = now_ms(), full = cap_filled - cap_taken == CAP_NBUF ? now - cap_full_ms : 0;
+        if (full >= CAP_BLOCK * 1000 / CAP_RATE) cap_lost_ms += full;
+        if (cap_lost_ms && now - cap_lost_said >= 1000) {
+            fprintf(stderr, "audio: capture held up, all %d blocks full: up to %lld ms of the mic lost\n", CAP_NBUF, cap_lost_ms);
+            cap_lost_ms = 0; cap_lost_said = now;
+        }
         (*rec_q)->Enqueue(rec_q, cap_buf[cap_taken % CAP_NBUF], sizeof cap_buf[0]);
         cap_taken++; cap_held = 0;
     }

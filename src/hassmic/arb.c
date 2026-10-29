@@ -1476,6 +1476,7 @@ void arb_self(unsigned char id[8]) { memcpy(id, pk, 8); }
 
 int arb_running(void) { return running; }
 int arb_peers(void) { pthread_mutex_lock(&lk); int n = running ? count_peers(now_ms()) : 0; pthread_mutex_unlock(&lk); return n; }
+int arb_rounds(void) { pthread_mutex_lock(&lk); int r = running && arbitrate && in_net && mode != ARB_KIOSK && count_peers(now_ms()); pthread_mutex_unlock(&lk); return r; }
 
 int arb_start(int port, const char *nd, const struct arb_hooks *h)
 {

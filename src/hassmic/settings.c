@@ -6,6 +6,7 @@
 #include "https.h"
 #include "ble.h"
 #include "btout.h"
+#include "micend.h"
 #include "micgain.h"
 #include "ring.h"
 #include "sendspin.h"
@@ -26,6 +27,7 @@ static const char *const denoise_values[4] = { "off", "low", "medium", "high" };
 static const char *const arb_modes[2] = { "hassmic", "kiosk" };            /* ARB_HASSMIC, ARB_KIOSK */
 static const char *const wake_engines[3] = { "amazon", "microwakeword", "homeassistant" };  /* WAKE_AMAZON, WAKE_MWW, WAKE_HA */
 static const char *const dropin_answers[2] = { "auto", "ask" };          /* dropin_ask() 0, 1 */
+static const char *const timer_sounds[4] = { "timer", "alarm", "beep", "custom" };    /* TIMER_SOUND_* */
 
 const struct bt_lang bt_langs[] = {
     { "en", "English", "Connected to %s", "Disconnected from %s", "Connected to a Bluetooth device", "Disconnected from a Bluetooth device" },
@@ -57,7 +59,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_STOP_ANY, STOP_ENDS, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
+enum id { WAKE_ENGINE, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET, PAD_REQUEST_AUDIO, REQUEST_AUDIO_PADDING, NSET };
@@ -77,8 +79,15 @@ static const struct setting table[NSET] = {
     [MUTE]        = { "mute", "Mute", "Voice", NULL, S_BOOL, 0, 1, 0, 0 },            /* what the Echo is doing right now */
     [DND]         = { "do_not_disturb", "Do not disturb", "Voice", NULL, S_BOOL, 0, 1, 0, 0 },
     [TIMER_RING]  = { "timer_ring", "Timers ring for", "Voice", "s", S_INT, 0, 600, 1, 0 },     /* 0: until stopped */
+    /* main.c keeps it (default: stock's timer tone, core_timer_sound_default); an uploaded sound stays on its Echo
+     * (state/timer_sound.wav), an export says only "custom" */
+    [TIMER_SOUND] = { "timer_sound", "Timer sound", "Voice", NULL, S_CHOICE, 0, 0, 1, 0 },
     [TIMER_STOP_ANY] = { "timer_stop_any", "Any request stops a ringing timer", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     [STOP_ENDS]   = { "stop_ends_listening", "Stop after the wake word ends listening", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* main.c: the request's audio from the wake word on (replay_whole); not with Home Assistant's wake word */
+    [WAKE_IN_REQ] = { "wake_word_in_request", "Wake word in the request", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* micend.c, issue #66: ESPHome only (Wyoming has no end of audio here) */
+    [END_REQ]     = { "end_of_request", "End of request heard on the Echo (experimental)", "Voice", NULL, S_CHOICE, 0, 0, 1, 0 },
     [BT_ANNOUNCE] = { "bluetooth_announcements", "Bluetooth announcements", "Bluetooth", NULL, S_BOOL, 0, 1, 1, 0 },
     [BT_LANG]     = { "bluetooth_announcement_language", "Announcement language", "Bluetooth", NULL, S_CHOICE, 0, 0, 1, 0 },
     [LED_AUTO]    = { "led_auto_brightness", "LED auto brightness", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
@@ -196,6 +205,8 @@ int settings_choices(const struct setting *s, const char *const **names)
     case ARB_MODE: *names = arb_modes; return 2;
     case WAKE_ENGINE: *names = wake_engines; return 3;
     case DROPIN_ANSWER: *names = dropin_answers; return 2;
+    case TIMER_SOUND: *names = timer_sounds; return 4;
+    case END_REQ: *names = micend_names; return MICEND_MODES;
     default: *names = NULL; return 0;
     }
 }
@@ -211,8 +222,11 @@ int settings_get(const struct setting *s)
     case MUTE: return core_soft_mute(-1);
     case DND: return core_dnd(-1);
     case TIMER_RING: return core_timer_ring(-1);
+    case TIMER_SOUND: return core_timer_sound(-1);
     case TIMER_STOP_ANY: return core_timer_stop_any(-1);
     case STOP_ENDS: return core_stop_ends_listening(-1);
+    case WAKE_IN_REQ: return core_wake_in_request(-1);
+    case END_REQ: return core_end_of_request(-1);
     case BT_ANNOUNCE: return core_bt_announce(-1);
     case BT_LANG: return bt_lang;
     case LED_AUTO: return core_led_auto(-1);
@@ -266,8 +280,11 @@ static void put(enum id i, int v)
     case MUTE: core_soft_mute(v); break;
     case DND: core_dnd(v); break;
     case TIMER_RING: core_timer_ring(v); break;
+    case TIMER_SOUND: core_timer_sound(v); break;              /* refused without its file: settings_set says so */
     case TIMER_STOP_ANY: core_timer_stop_any(v); break;
     case STOP_ENDS: core_stop_ends_listening(v); break;
+    case WAKE_IN_REQ: core_wake_in_request(v); break;
+    case END_REQ: core_end_of_request(v); break;
     case BT_ANNOUNCE: core_bt_announce(v); break;
     case BT_LANG: bt_lang = v; break;
     case LED_AUTO: core_led_auto(v); break;
@@ -490,6 +507,11 @@ int settings_set(const char *name, const char *value, char *err, size_t errsz)
     int was = settings_get(s);
     put((enum id)(s - table), v);
     if (s - table == WAKE_ENGINE && settings_get(s) != v) { snprintf(err, errsz, "%s: %s", name, core_wake_refused()); return -1; }
+    if (s - table == TIMER_SOUND && settings_get(s) != v) {
+        snprintf(err, errsz, "%s: %s", name, v == TIMER_SOUND_CUSTOM ? "no sound of its own on this Echo: upload one on its page first"
+                                                                    : "this Echo's firmware has no such sound");
+        return -1;
+    }
     if (ours((enum id)(s - table))) settings_save();
     core_settings_changed();
     if (s->feature && was != v) core_entities_changed();          /* Home Assistant reads the list again */

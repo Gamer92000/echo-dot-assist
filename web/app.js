@@ -135,7 +135,8 @@ function browserLabel() { return (navigator.userAgentData && navigator.userAgent
 // that goes ahead), danger (it deletes or cuts something off), input (a text field: { label, value, max }, max in bytes
 // of UTF-8 as the Echo counts), check (a value from the field: an error text, or null).  Resolves to true (or the
 // field's text) when gone ahead, null otherwise.
-function ask({ title, body = [], ok = 'OK', danger = false, input = null, check = null }) {
+// alt: a second way to go on beside ok, which resolves to 'alt'
+function ask({ title, body = [], ok = 'OK', alt = null, danger = false, input = null, check = null }) {
   return new Promise((done) => {
     let result = null;
     const field = input ? h('input', { type: 'text', id: 'ask-field', value: input.value || '', maxlength: String(input.max || 200), autocomplete: 'off' }) : null;
@@ -143,11 +144,12 @@ function ask({ title, body = [], ok = 'OK', danger = false, input = null, check 
     if (field) field.oninput = () => { msg.textContent = ''; const v = fitBytes(field.value, input.max || 200); if (v !== field.value) field.value = v; };
     const go = h('button', { type: 'submit', class: danger ? 'danger' : 'primary' }, ok);
     const cancel = h('button', { type: 'button', onclick: () => dlg.close() }, 'Cancel');
+    const other = alt ? h('button', { type: 'button', onclick: () => { result = 'alt'; dlg.close(); } }, alt) : null;
     const close = h('button', { type: 'button', class: 'icon-btn', title: 'Close', 'aria-label': 'Close', onclick: () => dlg.close() }, icon('x'));
     const form = h('form', { method: 'dialog', class: 'ask-form' },
       h('div', { class: 'modal-body' }, ...[].concat(body).map((b) => typeof b === 'string' ? h('p', {}, b) : b),
         field ? h('div', { class: 'field ask-field' }, h('label', { for: 'ask-field' }, input.label), field, msg) : null),
-      h('div', { class: 'modal-foot' }, cancel, go));
+      h('div', { class: 'modal-foot' }, cancel, other, go));
     const dlg = h('dialog', { class: 'modal ask', 'aria-labelledby': 'ask-title' }, h('div', { class: 'modal-head' }, h('h2', { id: 'ask-title' }, title), close), form);
     form.onsubmit = (e) => {
       e.preventDefault();
@@ -199,6 +201,12 @@ const HELP = {
   mute: { ha: true, help: 'Stops listening for the wake word, as the switch in Home Assistant does. The mic-off button on the Echo is a separate, hardware mute: only the button can lift it.' },
   do_not_disturb: { ha: true, help: 'Drops announcements from Home Assistant while on. The ring pulses purple when you switch it on.' },
   timer_ring: { step: 10, help: 'How long a finished timer rings before it gives up. All the way left: until someone stops it ("<wake word>, stop", the action button, or "Stop ringing" in Home Assistant; the wake word alone only pauses it while you talk). Home Assistant\'s "Timer ringing" stays on just as long, so an automation can tell when nobody heard it. Default 1 min.' },
+  timer_sound: { help: 'What a finished timer plays. Alexa timer and Alexa alarm: Amazon\'s own tones from the Echo\'s firmware, the ones a stock Echo rings with. Beep: a short triple beep, just as loud. Your own: a sound you upload here (MP3, WAV, OGG, or whatever else this browser plays), its first 30 seconds, played over and over; the page measures how loud it is and offers to bring it to Alexa\'s level, so one timer volume suits them all. Each Echo keeps its own, at the timer volume, and every way of stopping a ring stops it. Default Alexa timer (Beep where the firmware has no such tone).',
+    unavailable: (c) => c !== 'beep' && c !== 'custom' && !((state.timer_sound || {}).present || []).includes(c),
+    before: (c) => c !== 'custom' || (state.timer_sound || {}).custom_ms > 0 || (timerSoundBox().file.click(), false),
+    status: () => timerSoundBox().el },
+  wake_word_in_request: { help: 'Sends the wake word to Home Assistant too: speech-to-text hears "Alexa, turn on the light" instead of "turn on the light". Speech-to-text then gets the whole sentence: nothing of your first word can be cut off, and no stray end of the wake word turns up in front of the command. Meant for an AI (LLM) conversation agent, which takes the sentence either way. Home Assistant\'s built-in sentences may not recognise a command with the wake word in front; with "Prefer handling commands locally" such commands then go to the agent. "<wake word>, stop" still stops a ringing timer or music, and the wake word with nothing after it still ends quietly. No effect with Home Assistant\'s wake word engine. Off by default.' },
+  end_of_request: { tag: 'Experimental', help: 'Lets the Echo end a request itself once the person who said the wake word stops talking, instead of waiting until the room is quiet. Home Assistant ends a request on silence, so with others talking in the room it stays open and speech-to-text writes down their words after your command. The Echo knows how loud you said the wake word: quieter voices (from about 17, 14 or 11 dB under yours) no longer keep the request open, and on the Echo Dots Amazon\'s own speech detector keeps the dishes or a kettle from doing so. Relaxed waits 1.25 s after you stop, Normal 0.7 s, Aggressive 0.45 s and lets in the least of the others. It cannot tell a voice as loud as yours, and if you turn away or drop your voice mid-sentence it may end too soon: start with Relaxed. Home Assistant\'s own end still applies, so a request never runs longer than before. ESPHome only. Off by default.' },
   stop_ends_listening: { help: 'Makes "<wake word>, stop" mean "be quiet". An Echo that woke up by mistake (the TV, someone talking in the room) listens for up to 15 seconds, and Home Assistant carries out whatever it heard. With this on, "<wake word>, stop" ends that at once: the Echo stops listening and nothing of it reaches Home Assistant, and when it hears both words together it does not start at all. A ringing timer, a reply, a Drop In call and music on this Echo stop as before. The cost: "<wake word>, stop the timer" no longer reaches Home Assistant (say "<wake word>, cancel the timer"), media Home Assistant plays elsewhere is paused with "<wake word>, pause" instead, and now and then the engine hears "stop" in a short command (about 2 in 350): that command is lost, say it again. Off by default.' },
   timer_stop_any: { help: 'While a timer rings, whatever you say after the wake word stops it, in any language and however you put it ("Alexa, stop the timer", "Alexa, Ruhe"). Without it only "stop" does, and "stop the timer" goes to Home Assistant, which has forgotten the finished timer and says none is running. The cost: a question during a ring ("how long is left on the pasta timer?") is not answered, it only stops the ring. Off by default.' },
   equalizer_bass: { ha: true }, equalizer_mid: { ha: true }, equalizer_treble: { ha: true },
@@ -359,6 +367,8 @@ const CHOICE_NAMES = {
   noise_reduction: { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' },
   online_updates: { off: 'Off', beta: 'Beta', release: 'Release' },
   drop_in_answer: { auto: 'At once', ask: 'After the action button' },
+  timer_sound: { beep: 'Beep', timer: 'Alexa timer', alarm: 'Alexa alarm', custom: 'Your own' },
+  end_of_request: { off: 'Off', relaxed: 'Relaxed', normal: 'Normal', aggressive: 'Aggressive' },
   bluetooth_announcement_language: { en: 'English', de: 'Deutsch', fr: 'Français', es: 'Español', it: 'Italiano', pt: 'Português', nl: 'Nederlands',
     sv: 'Svenska', da: 'Dansk', nb: 'Norsk', fi: 'Suomi', pl: 'Polski' },
 };
@@ -542,6 +552,95 @@ function flash(name) {
   c.saved.classList.add('show'); clearTimeout(c.saved.t); c.saved.t = setTimeout(() => c.saved.classList.remove('show'), 1600);
 }
 
+// ---------------------------------------------------------------- Voice: the timer's own sound (sounds.c, issue #63)
+
+// The Echo takes one format only, 16-bit mono WAV at 48 kHz, the Earcon stream's rate: it has no decoder or resampler
+// for it.  The browser decodes whatever it plays, mixes it down and resamples it (OfflineAudioContext), and keeps the
+// first 30 s.  Its loudness is held to Alexa's timer tone's (web/loudness.js, BS.1770): -16.6 LUFS on the Dots, -16.2
+// on the Shows (the ring's beep is matched to it in main.c); more than 3 LU off, the page offers to bring it there.
+// Built once: the row's status is painted again at every refresh, and a file picker must outlive that.
+// TS_FILE_MAX: 30 s of a studio WAV (96 kHz, 24 bit, stereo: 17 MB) fits; a long song past it would decode whole in
+// the tab, hundreds of MB, to keep 30 s of it
+const TS_RATE = 48000, TS_SECS = 30, TS_LUFS = -16.5, TS_OFF = 3, TS_FILE_MAX = 20 << 20;
+let tsBox = null, tsBusy = '';
+
+async function timerSoundPcm(file) {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC || !window.OfflineAudioContext) throw new Error('this browser cannot convert sounds');
+  if (file.size > TS_FILE_MAX) throw new Error(`${file.name} is ${(file.size / 1048576).toFixed(0)} MB: ${TS_FILE_MAX >> 20} MB at most (cut the part you want, ${TS_SECS} s are kept)`);
+  const ctx = new AC();
+  let buf;
+  try { buf = await ctx.decodeAudioData(await file.arrayBuffer()); } catch (e) { throw new Error(`${file.name} is no sound this browser plays`); } finally { ctx.close(); }
+  const frames = Math.max(1, Math.ceil(Math.min(buf.duration, TS_SECS) * TS_RATE));
+  const off = new OfflineAudioContext(1, frames, TS_RATE), src = off.createBufferSource();
+  src.buffer = buf; src.connect(off.destination); src.start();      // one channel: the Web Audio down-mix, (L + R) / 2
+  return { pcm: (await off.startRendering()).getChannelData(0), cut: buf.duration > TS_SECS };
+}
+
+function wavOf(pcm) {
+  const n = pcm.length, v = new DataView(new ArrayBuffer(44 + n * 2));
+  const tag = (o, t) => { for (let i = 0; i < 4; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  tag(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); tag(8, 'WAVE'); tag(12, 'fmt '); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, TS_RATE, true); v.setUint32(28, TS_RATE * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true); tag(36, 'data'); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) v.setInt16(44 + 2 * i, Math.max(-32768, Math.min(32767, Math.round(pcm[i] * 32767))), true);
+  return new Uint8Array(v.buffer);
+}
+
+// far from Alexa's level: what the user wants of it.  The samples to upload, null to upload nothing, and what to say
+async function timerSoundLevel(pcm, l) {
+  const d = l - TS_LUFS, dB = (x) => `${Math.abs(x).toFixed(Math.abs(x) < 10 ? 1 : 0)} dB`;
+  if (Math.abs(d) <= TS_OFF) return { pcm, said: 'about as loud as Alexa\'s timer tone' };
+  const m = hmloud.match(pcm, TS_LUFS, { loop: true }), quiet = d < 0;
+  const body = [`Measured ${l.toFixed(1)} LUFS, Alexa's timer tone ${TS_LUFS} LUFS. ` + (quiet
+    ? 'At the same timer volume it would be that much harder to hear from another room.'
+    : 'At a timer volume that suits Alexa\'s tone it would blare, and turned down for it, the other sounds would be too quiet.')];
+  if (quiet && m.limited) body.push('To get there its loudest moments are held back, so nothing clips.');
+  if (m.short_db >= 0.5) body.push(`It can be turned up by 24 dB at most: it stays ${dB(m.short_db)} under Alexa's.`);
+  body.push('Or keep it as it is and set the timer volume to suit it.');
+  const pick = await ask({ title: `Your sound is ${dB(d)} ${quiet ? 'quieter' : 'louder'} than Alexa's timer tone`, body,
+    ok: 'Match Alexa\'s level', alt: 'Keep it as it is' });
+  if (!pick) return null;
+  if (pick === 'alt') return { pcm, said: `${dB(d)} ${quiet ? 'quieter' : 'louder'} than Alexa's timer tone, as you kept it` };
+  return { pcm: m.out, said: m.short_db >= 0.5 ? `turned up by 24 dB, ${dB(m.short_db)} under Alexa's level` : 'at Alexa\'s level' };
+}
+
+async function timerSoundDo(what, fn) {
+  tsBusy = what; paintStatus('timer_sound');
+  try { await fn(); } catch (e) { toast(errText(e)); }
+  tsBusy = ''; await load().catch(() => {});
+}
+
+const timerSoundUpload = (file) => timerSoundDo('Converting…', async () => {
+  const { pcm, cut } = await timerSoundPcm(file), l = hmloud.ringLufs(pcm);      // as it rings: over and over
+  if (!isFinite(l)) throw new Error(`${file.name} is silent`);
+  const lv = await timerSoundLevel(pcm, l);
+  if (!lv) return;
+  tsBusy = 'Uploading…'; paintStatus('timer_sound');
+  await echo.call('POST', '/api/timer-sound', wavOf(lv.pcm));
+  await set('timer_sound', 'custom');
+  if (settingValue('timer_sound') !== 'custom') return;               // refused: set() said why
+  toast(`Uploaded${cut ? ` its first ${TS_SECS} seconds` : ''}, ${lv.said}: timers ring with it now`);
+});
+
+const timerSoundDelete = async () => {
+  if (await ask({ title: 'Delete your timer sound?', ok: 'Delete', danger: true, body: 'Timers that ring with it go back to Alexa\'s timer tone (the beep where this Echo\'s firmware has none).' }))
+    timerSoundDo('Deleting…', () => echo.call('POST', '/api/timer-sound', ''));
+};
+
+function timerSoundBox() {
+  if (!tsBox) tsBox = { el: h('div', { class: 'btns ts-box' }),
+    file: h('input', { type: 'file', accept: 'audio/*', class: 'hidden', onchange: () => { const f = tsBox.file.files[0]; tsBox.file.value = ''; if (f) timerSoundUpload(f); } }) };
+  const ms = (state.timer_sound || {}).custom_ms || 0, busy = !!tsBusy;
+  tsBox.el.replaceChildren(
+    h('button', { class: 'small', disabled: busy, title: 'Play the chosen sound once here, at the timer volume', onclick: () => echo.call('POST', '/api/timer-sound/play').catch((e) => toast(errText(e))) }, icon('speaker'), 'Play'),
+    h('button', { class: 'small', disabled: busy, onclick: () => tsBox.file.click() }, icon('up'), ms ? 'Replace your sound…' : 'Upload a sound…'),
+    ms ? h('span', { class: 'f-model' }, `Your own: ${(ms / 1000).toFixed(1)} s`) : null,
+    ms ? h('button', { class: 'small danger', disabled: busy, title: 'Delete your sound', onclick: timerSoundDelete }, icon('trash')) : null,
+    busy ? h('span', { class: 'f-model' }, tsBusy) : null, tsBox.file);
+  return tsBox;
+}
+
 // ---------------------------------------------------------------- controls (built once, updated in place)
 
 const controls = new Map();             // setting name -> { update(s), saved, root }
@@ -601,9 +700,13 @@ function control(s) {
              } };
   }
   if (s.choices.length <= 4) {
-    const btns = s.choices.map((c) => h('button', { type: 'button', onclick: () => set(s.name, c) }, names[c] || c));
+    const { before, unavailable } = HELP[s.name] || {};          // a dialog (or a file to pick) first; one this Echo lacks greyed out
+    const btns = s.choices.map((c) => h('button', { type: 'button', onclick: async () => { if (!before || await before(c)) set(s.name, c); } }, names[c] || c));
     return { el: h('div', { class: 'seg', role: 'group', 'aria-label': s.label }, btns),
-             update: (x) => btns.forEach((b, i) => { b.classList.toggle('on', i === x.value); b.setAttribute('aria-pressed', String(i === x.value)); }) };
+             update: (x) => btns.forEach((b, i) => {
+               b.classList.toggle('on', i === x.value); b.setAttribute('aria-pressed', String(i === x.value));
+               b.disabled = !!(unavailable && unavailable(s.choices[i])); b.title = b.disabled ? 'Not in this Echo\'s firmware' : '';
+             }) };
   }
   const sel = h('select', { id, onchange: () => set(s.name, sel.value) }, s.choices.map((c) => h('option', { value: c }, names[c] || c)));
   return { el: sel, update: (x) => { sel.value = s.choices[x.value]; } };
@@ -974,6 +1077,7 @@ async function mwwSwitchDialog() {
     const msg = h('p', { class: 'help ask-msg', role: 'alert' });
     const go = h('button', { type: 'submit', class: 'primary', disabled: need }, 'Switch to microWakeWord');
     const cancel = h('button', { type: 'button', onclick: () => dlg.close() }, 'Cancel');
+    const other = alt ? h('button', { type: 'button', onclick: () => { result = 'alt'; dlg.close(); } }, alt) : null;
     const close = h('button', { type: 'button', class: 'icon-btn', title: 'Close', 'aria-label': 'Close', onclick: () => dlg.close() }, icon('x'));
     const file = h('input', { type: 'file', accept: '.tflite,.json', multiple: true, class: 'hidden' });
     const fileName = h('span', { class: 'mww-pick-sub' }, 'A .tflite with its .json manifest');

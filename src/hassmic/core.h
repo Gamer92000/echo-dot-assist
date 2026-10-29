@@ -47,6 +47,8 @@ struct proto {
     void (*dropin_result)(const char *result);  /* may be NULL: what came of a call this Echo made (dropin_results) */
     void (*button)(const char *event);          /* may be NULL: a button was pressed or held (core_button_events) */
     void (*wake)(const char *event);            /* may be NULL: the wake word heard (core_wake_events) */
+    void (*end)(void);                          /* may be NULL: the Echo heard the request end (micend.h): end of audio,
+                                                 * the server goes on with what it has (stop() aborts the run) */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
@@ -90,6 +92,8 @@ void core_no_speech(void);
 int  core_soft_mute(int set);                    /* set: 0/1, or -1 to only read */
 int  core_muted(void);                           /* effective */
 int  core_wake_sound(int set);                   /* same convention */
+int  core_wake_in_request(int set);              /* the request's audio from the wake word on, not after it; -1 reads */
+int  core_end_of_request(int set);               /* the end of a request heard on the Echo (micend.h: MICEND_*), -1 reads */
 int  core_stop_ends_listening(int set);          /* "<wake word>, stop" also ends listening (main.c stop_word), -1 reads */
 int  core_bt_announce(int set);                  /* same: chime and "Connected to <name>" when a phone connects */
 int  core_bluetooth(int set);                   /* same; -B on the command line: leave the radio to the stock stack */
@@ -172,6 +176,13 @@ int    core_transcript(const char *text);                   /* speech to text's 
 int    core_timers_ringing(char *names, size_t cap);        /* count; names: "tea, 5 min", in the order they finished */
 int    core_timer_ring(int set);                            /* seconds a ring lasts, 0 until stopped; -1 reads */
 int    core_timer_stop_any(int set);                        /* 1: any recognised speech stops a ring; -1 reads */
+/* What a ring plays (issue #63): the built-in blip (as loud as stock's timer tone), stock's timer or alarm tone (looped),
+ * or the page's upload (sounds.h SND_CUSTOM).  One this Echo has no file for is refused (it stays); -1 reads.  The
+ * default: stock's timer tone, the blip where the firmware has none (also after the upload chosen is deleted) */
+enum { TIMER_SOUND_TIMER, TIMER_SOUND_ALARM, TIMER_SOUND_BEEP, TIMER_SOUND_CUSTOM };
+int    core_timer_sound(int set);
+void   core_timer_sound_default(void);
+void   core_timer_sound_preview(void);                      /* not the lock: one ring of it, 10 s at most (the page's "Play") */
 enum { MUSIC_SENDSPIN = 1, MUSIC_BLUETOOTH = 2 };
 void   core_music(int source, int on);                      /* a music stream runs: the wake word threshold follows */
 void   core_bt_device(const char *name, int on);            /* a Bluetooth speaker source connected / went (not the lock) */
