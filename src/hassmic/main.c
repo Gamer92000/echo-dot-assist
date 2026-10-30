@@ -2890,9 +2890,11 @@ static void *capture_thread(void *arg)
                         if (replay_whole) {                 /* or the word itself too, from a little ahead of it */
                             uint64_t lead = CAP_RATE / 10;
                             from = (int64_t)(kw_begin > lead ? kw_begin - lead : 0);
-                            fprintf(stderr, "wake: the wake word sent too, from %llu ms before its end (the command from %llu ms after it)\n",
+                            /* the command's start can lie before Pryon's end (the aligner's answer, taken from 400 ms
+                             * ahead of it): signed, or a Dot 2's log read "the command from 1152921504606726 ms after it" */
+                            fprintf(stderr, "wake: the wake word sent too, from %llu ms before its end (the command from %+lld ms after it)\n",
                                     (unsigned long long)((replay_from - (uint64_t)from) * 1000 / CAP_RATE),
-                                    (unsigned long long)((talker_from - replay_from) * 1000 / CAP_RATE));
+                                    ((long long)talker_from - (long long)replay_from) * 1000 / CAP_RATE);
                         }
                         stream_ring((uint64_t)from, at + n / 2); replay_from = 0;
                     }
