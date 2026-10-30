@@ -30,7 +30,7 @@ static int first_version(const float *db, int n, float keyword_db)
     return low_at;
 }
 
-int wordtail_cut(const float *db, int n, float keyword_db, const char **why)
+int wordtail_cut(const float *db, int n, float keyword_db, int pause_ok, const char **why)
 {
     float top = keyword_db, run_low = 0, first_low = 0, s;
     int run = -1, run_at = 0, over_at = -1, first_at = -1, first_start = -1, runs = 0;
@@ -46,7 +46,7 @@ int wordtail_cut(const float *db, int n, float keyword_db, const char **why)
         if (s < run_low) { run_low = s; run_at = i; }
         if (runs == 1 && (first_at < 0 || s < first_low)) { first_low = s; first_at = i; }
         if (over_at < 0 && s <= top - OVER_DB) over_at = i;
-        if (i - run + 1 >= PAUSE) { *why = "a pause"; return over_at >= 0 ? over_at : run_at; }
+        if (pause_ok && i - run + 1 >= PAUSE) { *why = "a pause"; return over_at >= 0 ? over_at : run_at; }
     }
     if (n < WORDTAIL_FRAMES) return -1;
     int cut = first_at >= 0 && first_start < WORDTAIL_EARLY ? first_at : 0, old = first_version(db, n, keyword_db);

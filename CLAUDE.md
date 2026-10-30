@@ -214,9 +214,10 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   fire after the word); a pause after the word: the replay from its middle (the aligned silence's, or
   `pause_after`: 80 ms at the room's floor + 6 dB within 200 ms; the corpus: 63 -> 74 % right); speaker adaptation (fMLLR per household and model space, `state/wakealign-<space>.adapt`,
   setting `wake_word_adaptation`, from 5 requests on, forgetting 0.98 a request); `tools/wakealign/walign.py` is its numpy reference
-  (`tests/unit/wakealign_ref.py`). Without a model (the firmware's English "alexa" so far, microWakeWord) or a result
-  near: `wordtail.c` (a 100 ms pause 9 dB under the word, waiting up to 500 ms; no pause: never more than a4fe0bd's
-  rule left out, often nothing).
+  (`tests/unit/wakealign_ref.py`). Without a model (the firmware's English "alexa" so far, microWakeWord):
+  `wordtail.c` (a 100 ms pause 9 dB under the word, waiting up to 500 ms; no pause: never more than a4fe0bd's
+  rule left out, often nothing). With a model and no answer near (rejected, too slow, busy): the same without its
+  pause (`pause_ok` 0, issue #79: a command's "ts" passes for one); `align_thread` logs what the aligner said.
   Every run HA starts at STT (local wake word, button, follow-ups; not `-w remote`) opens with 800 ms of zeros
   (`lead_in`, issue #80): HA's microVAD is new per run and blind for its first 760 ms, and Parakeet answers "" to audio
   that opens mid-word. Tests: `esphome_common.LEAD_IN` bytes ahead of the ring's replay.

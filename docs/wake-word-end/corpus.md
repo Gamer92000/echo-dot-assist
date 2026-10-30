@@ -1,6 +1,6 @@
 # Where the request starts after the wake word: the speech corpus
 
-Made by `tools/wakealign/corpus_eval.py` at e3253ba, 2026-10-29; 4586 wake words of 6337 clips. What it is and how to read it: [`../wake-word-end.md`](../wake-word-end.md). Right: from 40 ms before the wake word's end to 40 ms after the command's start (in a pause anywhere in it; the word alone: anywhere after its end). Columns: Pryon's end as it is, the release's rule (wordtail.c), the aligner alone (else the rule), with the household's adaptation, and the Echo (the aligner where it answers, else the rule).
+Made by `tools/wakealign/corpus_eval.py` at b18c489 with changes, 2026-10-30; 4586 wake words of 6337 clips. What it is and how to read it: [`../wake-word-end.md`](../wake-word-end.md). Right: from 40 ms before the wake word's end to 40 ms after the command's start (in a pause anywhere in it; the word alone: anywhere after its end). Columns: Pryon's end as it is, the release's rule (wordtail.c), the aligner alone (else the rule), with the household's adaptation, and the Echo (the aligner where it answers, else the rule).
 
 ## Right in all
 
@@ -84,7 +84,7 @@ Made by `tools/wakealign/corpus_eval.py` at e3253ba, 2026-10-29; 4586 wake words
 | release | 11.1 % | 10.1 % | 8.4 % | 6.3 % | 47.1 % | 9.9 % | 5.3 % | 1.9 % |
 | aligner | 2.4 % | 3.2 % | 5.9 % | 10.8 % | 57.4 % | 5.3 % | 7.0 % | 8.1 % |
 | adapted | 0.5 % | 1.0 % | 3.6 % | 11.9 % | 73.7 % | 4.1 % | 3.5 % | 1.7 % |
-| echo | 0.5 % | 1.0 % | 3.6 % | 11.9 % | 73.7 % | 4.1 % | 3.5 % | 1.7 % |
+| echo | 0.5 % | 1.0 % | 3.6 % | 12.0 % | 73.7 % | 4.1 % | 3.5 % | 1.7 % |
 
 ## How far off, command (2776): the command cut or the wake word's tail left in, ms
 

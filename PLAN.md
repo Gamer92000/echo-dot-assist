@@ -415,6 +415,15 @@ Run in this order. Each step says what it proves.
       capture thread before it takes core_lock (`align_ahead`). Accepted only 400 ms before to 500 ms after Pryon's
       end; else, and without a model, `wordtail_cut` as before. Bundles carry the models next to hassmic; the factory
       copy only where /system has room.
+      Issue #79 again (2026-10-30, Dot 2, en-US Alexa, Parakeet, 055ab9f, six requests in one breath, one clean, five
+      paused controls all clean): two aligner answers rejected, then `wordtail_cut`'s pause at +320 ms, the closure of
+      "lights": "So on.", "And so on."; the reporter's replay of the second with those 320 ms put back: "The lights
+      on.", with zeros instead: unchanged. Rejected can only mean under -400 ms or no alignment (the window ends at
+      +500), and one accepted at exactly -400 ms kept "Alexa": early, as #82's on a Dot 2 may be. "The lights on."
+      from +60 and +100, clean once at +100: the word may end ~130 ms later against Pryon's end than in the corpus, as
+      in the Dot 2 recording of wordtail.h. Now with a model and no answer `wordtail_cut` has no pause (`pause_ok` 0),
+      and `align_thread` logs what the aligner said (`wake: the aligner's end, from Pryon's end: ...`). Tighter bounds
+      than -400 ms measured and dropped: docs/wake-word-end.md. Why it answers early on real audio: open
       Later the same day: every language MFA has an acoustic model for (`tools/wakealign/build.sh`: Amazon's five words
       in de-DE, en-US/GB/CA/AU/IN, fr-FR/CA, es-ES/MX, ja-JP (katakana), the firmware's "alexa", microWakeWord's
       okay_nabu, hey_jarvis, hey_mycroft in English and German); pronunciations: every one in the dictionary (3 at most,
@@ -1004,6 +1013,19 @@ Run in this order. Each step says what it proves.
       and came down for the command. Now the gain holds (levels and gain frozen, peak limit on) while one of our sounds
       plays and 250 ms after. The sound itself stays in the stream (RNNoise takes another 4..17 dB of it on the captures).
       Not done: a recording from HA with the fix; whether to skip the stream during the sound as the Voice PE does
+      Issue #82 (2026-10-30): the hold went by the time a block is sent, and the ring's replay goes out in one burst
+      during the sound, so audio captured before it was held too: the gain stayed at the wake word's (+17..+31 dB on a
+      Dot 2 whose "Alexa" came at -43..-57 dBFS), and the frames of a louder command were each cut to the peak limit,
+      the gain jumping with every syllable. Now by the capture clock (`sound_in`, `sound_spans`: from where the sound
+      can first be in the stream, 85 ms after the mixer took it, to 250 ms after it ended; a slow aligner's replay can
+      come after the hold with the sound in it),
+      and what the limit takes while held stays off until the hold ends (`limit_stays`, the pipeline only: Drop In
+      holds for whole sentences). Taken into the gain as well (a first version) changed nothing: at the hold's end the
+      level is on a talker 5-40 dB over the wake word within 2 frames, at every phase of a syllable, and a sound's peak
+      would have stayed.
+      PC: 4 Hz syllables at -24 dBFS over the wake sound, frames of the first 300 ms on the limit: 9 of 30 -> 0
+      (`tests/fake_ha_wakesound.py`). A command that starts inside the hold (a pause under 0.9 s) still comes hot, its
+      peaks at the limit; not cut
 - [~] Wake sound removal (2026-10-12, experimental, setting `wake_sound_removal`, off by default; `earsup.c`): since the
       pipeline gets the audio from the wake word's end, people talk over the sound. A residual echo suppressor keyed
       to the sound we play, not a second linear canceller (it would have to adapt during the talker's voice, and what

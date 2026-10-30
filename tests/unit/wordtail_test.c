@@ -22,8 +22,8 @@ static void flat(int from, int to, float v) { for (int i = from; i < to; i++) db
 static void check(const char *what, int n, float keyword, int lo, int hi)
 {
     const char *why = "", *w = "";
-    int all = wordtail_cut(db, n, keyword, &why), step = -1, at = 0;
-    for (at = 1; at <= n && (step = wordtail_cut(db, at, keyword, &w)) < 0; at++) ;
+    int all = wordtail_cut(db, n, keyword, 1, &why), step = -1, at = 0;
+    for (at = 1; at <= n && (step = wordtail_cut(db, at, keyword, 1, &w)) < 0; at++) ;
     int ok = all >= lo && all <= hi && step == all;
     printf("%s %s: frame %d (%s), decided after %d frames%s\n", ok ? "ok  " : "FAIL", what, all, why, at,
            step == all ? "" : ", fed a frame at a time it differs");
@@ -78,5 +78,19 @@ int main(void)
     flat(0, 10, -36);
     for (int i = 10; i < 80; i++) db[i] = -50 + ((i * 7) % 5 - 2) * 2;
     check("flickering room", 80, -40, 10, 14);
+    /* "Alexa lights on" in one breath (issue #79): the "ts" closure 320 ms after Pryon's end as long as a pause.  It
+     * passes for one, unless an aligner gave no answer: then nothing left out */
+    flat(0, 30, -36); flat(30, 42, -56); flat(42, 80, -36);
+    check("the closure in \"lights\" taken for a pause", 80, -40, 30, 42);
+    const char *why = "";
+    int least = wordtail_cut(db, 80, -40, 0, &why);
+    printf("%s no aligner's answer: no pause: frame %d (%s)\n", least == 0 ? "ok  " : "FAIL", least, why);
+    if (least) bad = 1;
+    /* a real pause early after the word: without pause_ok the first dip's lowest, at most what the first version took */
+    flat(0, 5, -36); flat(5, 30, -62); flat(30, 80, -36);
+    least = wordtail_cut(db, 80, -40, 0, &why);
+    printf("%s no aligner's answer, a pause: inside it, at most 120 ms: frame %d (%s)\n", least >= 5 && least <= 12 ? "ok  " : "FAIL", least, why);
+    if (least < 5 || least > 12) bad = 1;
+    if (wordtail_cut(db, 20, -40, 0, &why) >= 0) { printf("FAIL no aligner's answer: decided before its 500 ms\n"); bad = 1; }
     return bad;
 }

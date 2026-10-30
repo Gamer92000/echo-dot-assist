@@ -45,11 +45,12 @@ System) off takes any certificate, but then anyone on your network could slip th
   in your home (your voices, your room, its microphone: speaker adaptation, as the aligner's models were trained for)
   and finds the end more often from the sixth request on (in tests 74 % right instead of 55 % without it); it forgets
   the oldest as new ones come, and what it learns stays on the Echo ("Learn how the wake word is said here" on the
-  settings page, on by default). For words without a model, and when the sounds give no
-  answer near Amazon's "heard", it waits for the pause after the word and starts there; said straight on, without a
-  pause, or in a loud room, it never leaves out more than earlier versions did. The log says what it found
-  (`wake: the word ends +90 ms from Pryon's end (aligned in 40 ms)`, or `wake: 260 ms of the word's tail left out (a
-  pause)`).
+  settings page, on by default). For words without a model it waits for the pause after the word and starts there;
+  said straight on, without a pause, or in a loud room, it never leaves out more than earlier versions did. When the
+  sounds give no answer near Amazon's "heard" it looks for no pause either, since a short stop inside your command can
+  pass for one, and leaves out at most 0.12 s. The log says what it found (`wake: the word ends +90 ms from Pryon's
+  end (aligned in 40 ms)`, or `wake: 260 ms of the word's tail left out (a pause)`), and what the sounds said where
+  that was no use (`wake: the aligner's end, from Pryon's end: -680 ms`, or `none`).
 
 - **Silence ahead of each request.** Home Assistant's speech detector starts afresh for each request and does not
   listen to its first three quarters of a second. Without anything ahead, a short command said straight after the

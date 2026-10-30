@@ -153,9 +153,9 @@ def main():
             lines.append(f"{p} {wa} {voice} {e - f} {kdb:.2f}\n"); j["_from"] = f
         r = subprocess.run([os.path.join(OUT, "eval")], input="".join(lines), capture_output=True, text=True, check=True)
         for j, l in zip(js, r.stdout.split("\n")):
-            rel, plain, final = map(int, l.split()); f = j["_from"]
+            rel, plain, final, rule = map(int, l.split()); f = j["_from"]
             j["_starts"] = dict(pryon=hits[j["id"]][1], release=f + rel, aligner=f + plain if plain >= 0 else -1,
-                                adapted=f + final if final >= 0 else -1, echo=f + final if final >= 0 else f + rel)
+                                adapted=f + final if final >= 0 else -1, echo=f + final if final >= 0 else f + rule)
         return js
     with ThreadPoolExecutor(a.jobs) as ex: done = [j for js in ex.map(household, by_home.items()) for j in js]
     # scoring

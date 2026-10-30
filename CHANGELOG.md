@@ -4,6 +4,16 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-30
 
+- **When the wake word's sounds give no answer, the Echo no longer guesses a pause inside your command** (issue #79).
+  It then fell back on the old rule, which could take the short stop in the "ts" of "lights" for the pause after the
+  wake word: "Alexa lights on" came out as "And so on." Now it leaves out at most 0.12 s there, so at worst a bit of the
+  wake word stays in. Words that have no sounds to go by work as before. The log now also shows what the sounds said:
+  `wake: the aligner's end, from Pryon's end: -680 ms`.
+- **A command said straight after the wake word is no longer squashed at its start** (issue #82). While the wake sound
+  played, the microphone's level stayed where the wake word had set it, also for the part of your command spoken before
+  the sound began. "Alexa" often arrives much quieter than what follows, so the start of the command came out far too
+  loud and was held down by a limiter, syllable by syllable. Now whatever was spoken before the sound sets the level, and
+  over the sound the level can only come down, smoothly.
 - **The settings page is a set of pages now, and uses your screen.** It was one narrow column to scroll through from
   top to bottom. There is a menu down the side (behind a button on a phone), a page for each subject, and as many
   columns of cards as your screen has room for, from one on a phone to four or five on a big monitor. Every page has an

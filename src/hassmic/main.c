@@ -259,6 +259,10 @@ static int mic_denoise;                             /* under lock: noise reducti
 static long long denoise_ns; static unsigned denoise_frames;   /* under lock: its cost in the running pipeline */
 static atomic_int earcon_sounding;                  /* one of our sounds plays ... */
 static atomic_llong earcon_heard_until;             /* ... and is still in the mic stream until then (mono_ms) */
+/* the last ones as spans of the capture clock in the mic stream (to: LLONG_MAX while it plays), one sound starting
+ * inside the last one's tail going on in its span: a held volume key takes one */
+static struct { atomic_llong from, to; } sound_spans[8];
+static int sound_span, sound_taken;                 /* earcon thread: the newest, the mixer took it */
 static atomic_int sounds_q16 = 65536, timers_q16 = 65536;  /* our sounds' and timers' gain, 1 = 65536 (separate volumes) */
 /* the volume keys' tone: at the volume they just set, as stock's (on_volume).  At the sounds' own it said nothing of the
  * step: with nothing playing the keys seemed to do nothing */
@@ -1359,11 +1363,11 @@ static int kiosk_score(uint64_t end, int simulated)
  * - Our own wake sound is still in the stream after the echo canceller: +21 dB over the floor in micRaw, +4 to +8 dB in
  *   micAsr (4 triggers, 2026-09-30), as loud as a quiet talker.  The gain took it for speech and came down for the
  *   command behind it (-32 instead of -26 dBFS in Home Assistant's recording), so it holds still while a sound plays,
- *   and over audio earsup held back across one. */
-static void send_out(const int16_t *pcm, size_t n, int held_sound)
+ *   and over audio earsup held back across one.  sound: this audio has one in it (sound_in, earsup). */
+static void send_out(const int16_t *pcm, size_t n, int sound)
 {
     static int16_t out[1024 + MICDENOISE_FRAME];
-    mic_gain.hold = held_sound || atomic_load(&sounds_pending) || atomic_load(&earcon_sounding) || mono_ms() < atomic_load(&earcon_heard_until);
+    mic_gain.hold = sound;
     micend_run(&mic_end, pcm, n, mic_gain.hold);        /* the level as heard, before the gain; heard_end() acts on it */
     while (n) {
         size_t k = n < 1024 ? n : 1024, m = k;
@@ -1384,10 +1388,22 @@ static void send_out(const int16_t *pcm, size_t n, int held_sound)
     }
 }
 
+/* Whether audio has our sound in it, by when it was captured: the replay goes out later than that, so what plays now
+ * says nothing of it.  Held from ahead of a sound, a command said in one breath kept the gain of the quieter wake word
+ * (issue #82, Dot 2: +17..+31 dB), each frame on the peak limit; not held after one that is over (a slow aligner), the
+ * sound fed the talker's level.  A Drop In's ring and a timer's tone are not in it, as before: both stop for a pipeline */
+static int sound_in(uint64_t at, size_t n)
+{
+    for (size_t i = 0; i < sizeof sound_spans / sizeof *sound_spans; i++)
+        if (at < (uint64_t)atomic_load(&sound_spans[i].to) && at + n > (uint64_t)atomic_load(&sound_spans[i].from)) return 1;  /* to first: sound_start */
+    return 0;
+}
+
 static void send_mic(const int16_t *pcm, size_t n, uint64_t at)
 {
     if (mic_fresh) {
         micgain_start(&mic_gain, mono_ms() - last_wake_ms < 3000 ? keyword_db : 1); mic_fresh = 0;
+        mic_gain.limit_stays = 1;                       /* people speak on over the wake sound */
         static const int denoise_db[] = { 0, 6, 9, 12 };
         fprintf(stderr, "mic gain: talker %.1f dBFS, gain %+.1f dB", micgain_talker_db(&mic_gain), mic_gain.gain_db);
         if (mic_denoise) fprintf(stderr, ", noise reduction %d dB", denoise_db[mic_denoise]);
@@ -1411,7 +1427,7 @@ static void send_mic(const int16_t *pcm, size_t n, uint64_t at)
         size_t k = n < 1024 ? n : 1024, m;
         const int16_t *p; int held_sound;
         m = earsup_run(pcm, k, at, &p, &held_sound);
-        if (m) send_out(p, m, held_sound);
+        if (m) send_out(p, m, held_sound || sound_in(at, m));
         pcm += k; n -= k; at += k;
     }
 }
@@ -1559,19 +1575,31 @@ static int adapt_for(uint64_t space)                /* align_thread: the slot of
 
 static int align_near(int64_t at) { return at >= (int64_t)job.end - CAP_RATE * 2 / 5 && at <= (int64_t)job.stop; }
 
+static void align_said(char *s, size_t n, long e)   /* e: in the window, -1 none */
+{
+    if (e < 0) snprintf(s, n, "none");
+    else snprintf(s, n, "%+lld ms", ((long long)job.from + e - (long long)job.end) * 1000 / CAP_RATE);
+}
+
 static void *align_thread(void *arg)
 {
     (void)arg;
     long long t0 = mono_ms();
     int slot = job.adapt ? adapt_for(wakealign_space(job.wa)) : -1;
     struct wakealign_adapt *ad = slot >= 0 ? adapts[slot].ad : NULL;
-    int adapted = 0; long e = -1;
+    int adapted = 0; long e = -1, by_adapt = -1;
     /* the word's end against Pryon's in the 220 requests of wakealign.h: 250 ms before to 450 ms after; further off is
-     * a misalignment (the PC's SIGUSR1 has no word there: 1 s before) */
-    if (ad && ad->have) { e = wakealign_end_adapt(job.wa, job.win, job.n, ad, NULL); adapted = e >= 0 && align_near((int64_t)(job.from + (uint64_t)e)); }
+     * a misalignment (the PC's SIGUSR1 has no word there: 1 s before).  Tighter than -400 ms loses words: over 200 ms
+     * of the command cut in 67 of 4586 -> 115 at -250 ms (docs/wake-word-end.md) */
+    if (ad && ad->have) { e = by_adapt = wakealign_end_adapt(job.wa, job.win, job.n, ad, NULL); adapted = e >= 0 && align_near((int64_t)(job.from + (uint64_t)e)); }
     if (!adapted) e = wakealign_end(job.wa, job.win, job.n);
     int64_t at = e >= 0 ? (int64_t)(job.from + (uint64_t)e) : -1;
     align_at = at >= 0 && align_near(at) ? at : -1;
+    if (align_at < 0) {                             /* what it said: issue #79's two on a Dot 2 left no trace of it */
+        char plain[32], adapt[32];
+        align_said(plain, sizeof plain, e); align_said(adapt, sizeof adapt, by_adapt);
+        fprintf(stderr, "wake: the aligner's end, from Pryon's end: %s, with the speaker adaptation %s\n", plain, ad && ad->have ? adapt : "not in use");
+    }
     /* tests: a CPU too busy for it (word_tail_end's ALIGN_LATE): the ms in that file, read each run */
     const char *slow = getenv("HASSMIC_FAKE_ALIGN_SLOW"); FILE *sf; int ms = 0;
     if (slow && (sf = fopen(slow, "r"))) { if (fscanf(sf, "%d", &ms) != 1) ms = 0; fclose(sf); }
@@ -1615,7 +1643,7 @@ static void align_ahead(void)                       /* capture thread, before it
 #define ALIGN_LATE CAP_RATE                         /* samples past the aligner's window it is waited for: 1 s */
 static int64_t word_tail_end(uint64_t end, uint64_t to)
 {
-    float db[WORDTAIL_FRAMES]; int n = 0, cut; const char *why = "";
+    float db[WORDTAIL_FRAMES]; int n = 0, cut, pause_ok = 1; const char *why = "";
     if (keyword_db > 0) return (int64_t)end;        /* no level known (the PC's SIGUSR1) */
     if (kw_slot >= 0 && kw_slot < WAKE_SLOTS && wake_align[kw_slot]) {
         static uint64_t told;                       /* the wake word the level's reason was logged for */
@@ -1634,10 +1662,11 @@ static int64_t word_tail_end(uint64_t end, uint64_t to)
                     in ? "the aligner found no end near Pryon's" : "the aligner took over 1 s");
         }
         align_skipped = end;
+        pause_ok = 0;
     }
     for (; n < WORDTAIL_FRAMES && end + (uint64_t)(n + 1) * WORDTAIL_FRAME <= to; n++)
         db[n] = 10 * log10(ring_power(end + (uint64_t)n * WORDTAIL_FRAME, end + (uint64_t)(n + 1) * WORDTAIL_FRAME) / (32768.0 * 32768.0) + 1e-10);
-    if ((cut = wordtail_cut(db, n, keyword_db, &why)) < 0) return -1;
+    if ((cut = wordtail_cut(db, n, keyword_db, pause_ok, &why)) < 0) return -1;
     if (!replay_whole) fprintf(stderr, "wake: %d ms of the word's tail left out (%s)\n", cut * 1000 * WORDTAIL_FRAME / CAP_RATE, why);
     return (int64_t)(end + (uint64_t)cut * WORDTAIL_FRAME);
 }
@@ -2072,8 +2101,34 @@ void core_music(int source, int on)
     if (!was != !atomic_load(&music_on)) playback_hint();
 }
 
+#define SOUND_TO_MIC (CAP_RATE * 85 / 1000)         /* speaker to mic stream (2026-09-30) */
+static void sound_start(void)                       /* earcon thread: a sound goes to the mixer */
+{
+    long long from = (long long)(cap_clock() + SOUND_TO_MIC);
+    sound_taken = from <= atomic_load(&sound_spans[sound_span].to);     /* its span goes on: from stays */
+    if (!sound_taken) {
+        sound_span = (sound_span + 1) % (int)(sizeof sound_spans / sizeof *sound_spans);
+        atomic_store(&sound_spans[sound_span].to, 0);   /* empty first: sound_in never pairs the old from with to below */
+        atomic_store(&sound_spans[sound_span].from, from);
+    }
+    atomic_store(&sound_spans[sound_span].to, LLONG_MAX);
+}
+static void sound_over(void)                        /* earcon thread: it played; the room's tail goes on for a while */
+{
+    atomic_store(&sound_spans[sound_span].to, (long long)(cap_clock() + CAP_RATE / 4));
+}
+
 /* the earcon thread: the mixer took a sound, which plays after lead_ms of silence (audio.h) */
-static void earcon_started(unsigned lead_ms) { earsup_started(cap_clock() + (uint64_t)lead_ms * CAP_RATE / 1000); }
+static void earcon_started(unsigned lead_ms)
+{
+    uint64_t now = cap_clock() + (uint64_t)lead_ms * CAP_RATE / 1000;
+    /* a ring's or a timer's tone comes here too: no span; the preview's three blips one span: from the first */
+    if (atomic_load(&sound_spans[sound_span].to) == LLONG_MAX && !sound_taken) {
+        sound_taken = 1;
+        atomic_store(&sound_spans[sound_span].from, (long long)(now + SOUND_TO_MIC));
+    }
+    earsup_started(now);
+}
 
 /* Our sounds and timers at their own volume (separate volumes): the Earcon stream plays at MainVolume, the loudest
  * of music, sounds and timers, so the quieter ones are turned down here (mix_apply).  A copy to free, or NULL to play
@@ -2132,7 +2187,9 @@ static void *earcon_thread(void *arg)
             if (pcm) {
                 short *quiet = scaled(pcm, n, atomic_load(s == SND_VOLUME ? &click_q16 : &sounds_q16));
                 if (quiet) pcm = quiet;
+                sound_start();
                 earsup_play(pcm, n, rate, cap_clock()); play_earcon(pcm, n, rate);
+                sound_over();
                 free(quiet);
             }
             atomic_store(&earcon_heard_until, mono_ms() + 250);         /* speaker to mic stream: 85 ms, and the room's tail */
@@ -2152,11 +2209,11 @@ static void *earcon_thread(void *arg)
                 int ts = atomic_load(&timer_sound); const short *pcm = beep; size_t n = N; unsigned rate = RATE;
                 if (ts != TIMER_SOUND_BEEP && !sound_get(timer_sounds[ts], &pcm, &n, &rate)) { pcm = beep; n = N; rate = RATE; }  /* gone: the blip */
                 short *quiet = scaled(pcm, n, atomic_load(&timers_q16));
-                if (pv) { atomic_store(&preview_until, mono_ms() + PREVIEW_MS); atomic_store(&earcon_sounding, 1); }
+                if (pv) { atomic_store(&preview_until, mono_ms() + PREVIEW_MS); atomic_store(&earcon_sounding, 1); sound_start(); }
                 if (pcm != beep) play_earcon_while(quiet ? quiet : pcm, n, rate, pv ? preview_go : alarm_go);
                 else for (int k = 0; k < 3; k++) play_earcon(quiet ? quiet : beep, N, RATE);
                 free(quiet);
-                if (pv) { atomic_store(&earcon_heard_until, mono_ms() + 250); atomic_store(&earcon_sounding, 0); }
+                if (pv) { sound_over(); atomic_store(&earcon_heard_until, mono_ms() + 250); atomic_store(&earcon_sounding, 0); }
                 else if (pcm == beep) usleep(800000);
             }
             /* in the background while a pipeline runs: speech to text must hear the user, not the ring */

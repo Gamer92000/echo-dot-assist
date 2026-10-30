@@ -20,7 +20,12 @@
  * word left in only adds a stray word.  So then the least: the lowest point of the first dip if it starts within
  * WORDTAIL_EARLY, never later than the first version would have cut (what the releases since 2026-10-19 did), else
  * nothing (as the ring did from ad224f5 on).  The replay waits for the decision: up to 500 ms at the start of the
- * stream, caught up at once from the ring. */
+ * stream, caught up at once from the ring.
+ *
+ * pause_ok 0, where a word has an aligner that gave no answer to go by (main.c word_tail_end): no pause, only that
+ * least.  The level cannot tell a pause from the closure in a command's "ts": on a Dot 2 (issue #79, 2026-10-30) the
+ * aligner found no end and this rule took 320 ms of "Alexa lights on", which came out as "And so on."; with those 320 ms
+ * put back "The lights on.".  A stray word costs less than a lost one. */
 #ifndef WORDTAIL_H
 #define WORDTAIL_H
 
@@ -30,6 +35,7 @@
 
 /* db: level of each 10 ms frame from Pryon's end on (dBFS), n of them so far; keyword_db: the keyword's rms (dBFS).
  * Returns the frame the replay starts at, or -1 while more frames are needed (never once n >= WORDTAIL_FRAMES).
+ * pause_ok: as above.
  * why: what decided, for the log. */
-int wordtail_cut(const float *db, int n, float keyword_db, const char **why);
+int wordtail_cut(const float *db, int n, float keyword_db, int pause_ok, const char **why);
 #endif

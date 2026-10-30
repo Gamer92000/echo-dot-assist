@@ -22,6 +22,10 @@ struct micgain {
     float applied;                      /* linear gain at the end of the last frame: the next one ramps from there */
     int hold;                           /* set by the caller: what comes in is not the talker (our own sounds): the
                                          * levels and the gain stay as they are, the peak limit still works */
+    int limit_stays;                    /* set by the caller: held, what the peak limit takes stays off, for someone
+                                         * talking over a sound.  Not for Drop In: it holds for whole sentences of the
+                                         * other side, and one peak of their echo would leave this side quiet */
+    float limit;                        /* limit_stays: the lowest gain the limit left while held, 0: none */
     float talker_min_db;                /* set by the caller: frames under this (dBFS, as they come in) are not the
                                          * talker's (micend.h): they neither feed its level nor lift the gain.  Else
                                          * other voices alone in the room are brought up to speech level within 2 s

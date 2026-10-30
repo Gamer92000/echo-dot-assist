@@ -4,7 +4,8 @@
  * on added, the transform estimated anew).  Lines on stdin, one wake word each, a household's in the order it says them:
  *   <window.raw> <model.wa> <household> <pryon end in the window> <keyword dBFS>
  * the window being [Pryon's end - WAKEALIGN_BEFORE, + WAKEALIGN_AFTER] as align_ahead copies it.  Out, a line each:
- *   <release start> <aligner alone> <aligner adapted>       (samples in the window; -1: none)
+ *   <release start> <aligner alone> <aligner adapted> <the rule where the aligner gives no answer>   (samples in the
+ * window; -1: none)
  *   cc -O2 -Isrc/hassmic tools/wakealign/eval.c src/hassmic/wakealign.c src/hassmic/wordtail.c src/hassmic/statefile.c -lm */
 #include <math.h>
 #include <stdio.h>
@@ -13,7 +14,9 @@
 #include "wakealign.h"
 #include "wordtail.h"
 
+#ifndef NEAR_BEFORE                     /* -D for corpus_eval.py --cflags */
 #define NEAR_BEFORE 6400                /* main.c align_near: from 400 ms before Pryon's end to the window's end */
+#endif
 
 static struct { char who[64]; struct wakealign_adapt *ad; } homes[64];
 
@@ -49,8 +52,8 @@ int main(void)
             for (int i = 0; i < WORDTAIL_FRAME; i++) { double v = pcm[end + k * WORDTAIL_FRAME + i]; s += v * v; }
             db[k] = (float)(10 * log10(s / WORDTAIL_FRAME / (32768.0 * 32768.0) + 1e-10));
         }
-        int cut = wordtail_cut(db, k, kdb, &why);
-        long release = cut < 0 ? end : end + (long)cut * WORDTAIL_FRAME;
+        int cut = wordtail_cut(db, k, kdb, 1, &why), least = wordtail_cut(db, k, kdb, 0, &why);
+        long release = cut < 0 ? end : end + (long)cut * WORDTAIL_FRAME, rule = least < 0 ? end : end + (long)least * WORDTAIL_FRAME;
         long plain = -1, final = -1;
         if (w) {
             plain = wakealign_end(w, pcm, n);
@@ -63,7 +66,7 @@ int main(void)
             if (ad && final >= 0) { wakealign_end_adapt(w, pcm, n, adapted ? ad : NULL, ad); wakealign_estimate(ad); }
             if (plain >= 0 && !NEAR(plain)) plain = -1;
         }
-        printf("%ld %ld %ld\n", release, plain, final);
+        printf("%ld %ld %ld %ld\n", release, plain, final, w ? rule : release);   /* no model: main.c's pause stays */
         fflush(stdout);
     }
     wakealign_free(w);

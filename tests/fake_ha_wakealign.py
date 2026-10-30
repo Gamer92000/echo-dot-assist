@@ -82,6 +82,12 @@ async def main(e):
     zone(e, "Canada/Eastern"); e.page.set(speech_language="auto")
     lines, secs = await request(e, ha, r"aligned by \S*/alexa-en-US\.wa \(en-CA spoken\)")
     check(secs is not None, "time zone Canada/Eastern, no language: alexa-en-US.wa (en-CA spoken)")
+    # that aligner finds no end near Pryon's in this German voice: what it said goes into the log, and the level looks
+    # for no pause then, whatever follows the word (issue #79)
+    check("the aligner found no end near Pryon's" in lines
+          and re.search(r"the aligner's end, from Pryon's end: (none|[-+]\d+ ms), with the speaker adaptation not in use", lines),
+          f"no end near Pryon's: its answer in the log: {re.findall(r'wake: the aligner.*', lines)}")
+    check("tail left out (no pause" in lines, f"and the level finds no pause: {re.findall(r'wake: .*tail left out.*', lines)}")
     # the speaker adaptation: one statistics file for German (every German word's), from each request with an end near
     # Pryon's (the one above among them); in use and saved from the 5th
     zone(e, "Europe/Berlin")

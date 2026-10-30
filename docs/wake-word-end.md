@@ -18,7 +18,9 @@ end.
 2. **A pause after the word: its middle.** Where the aligned path runs into silence for 50 ms or more, the request
    starts in the middle of it; else, where the level finds a pause within 200 ms after the aligned end (80 ms or more
    within 6 dB of the room's floor), in the middle of that (`pause_after`).
-3. **No answer near Pryon's end** (no model for the word, a misalignment): the release's rule, `wordtail.c`.
+3. **No model for the word:** the release's rule, `wordtail.c`. **No answer near Pryon's end** (a misalignment, too
+   slow): that rule without its pause, at most 120 ms left out. In that case the level alone can't tell a pause from
+   the closure in a command's "ts" (issue #79).
 4. **800 ms of silence** open every request Home Assistant starts at speech to text (`main.c` `lead_in`, issue #80).
 
 ## How it is measured
@@ -66,7 +68,7 @@ How far off, all 4586: of the command cut (late) or of the wake word left in (ea
 |---|---|---|---|---|---|---|---|---|
 | Pryon's end | 0.7 % | 3.0 % | 9.6 % | 9.5 % | 41.8 % | 16.2 % | 13.0 % | 6.3 % |
 | release | 11.1 % | 10.1 % | 8.4 % | 6.3 % | 47.1 % | 9.9 % | 5.3 % | 1.9 % |
-| the Echo | 0.5 % | 1.0 % | 3.6 % | 11.9 % | 73.7 % | 4.1 % | 3.5 % | 1.7 % |
+| the Echo | 0.5 % | 1.0 % | 3.6 % | 12.0 % | 73.7 % | 4.1 % | 3.5 % | 1.7 % |
 
 Roughly: 40-100 ms cut is part of the first sound, 100-200 ms the first sound or syllable, over 200 ms a short word
 ("an", "aus") gone; a tail of 100 ms or more is a syllable ("-xa"). The release lost 200 ms or more of the command in
@@ -97,6 +99,22 @@ at speech level before the pause told them apart, so the search stops at 200 ms.
 floor, not under the word's level: a command's "s" or "sch" lies 10-20 dB under its vowels, and a threshold relative
 to the word took those for a pause ("<wake word>, stop" 83 -> 58 % in the first run, the one with Pryon's skips). (Variants: `corpus_eval.py --cflags
 -DPAUSE_LOOK=…`, wakealign.c's constants.)
+
+### No answer near Pryon's end
+
+The aligner's answer is taken from 400 ms before Pryon's end on. A wrong early one was seen on a real Dot 2 (issue
+#79: at exactly -400 ms, "Alexa" stayed in), so tighter bounds were measured, with the fallback above:
+
+| answers taken from | no answer | right | cut over 200 ms | tail over 100 ms |
+|---|---|---|---|---|
+| **-400 ms (kept)** | 11 | 73.7 % | 67 | 239 |
+| -350 ms | 19 | 73.6 % | 70 | 239 |
+| -300 ms | 42 | 73.4 % | 87 | 233 |
+| -250 ms | 90 | 73.3 % | 115 | 202 |
+
+Tighter bounds trade a stray syllable for a lost word, so -400 ms stays. Of the 11 without an answer, the release's
+rule cut over 200 ms into the command in 7, the rule without its pause in 5. The corpus says little here: 0.24 % have
+no answer, where two of six one-breath requests on that Dot 2 had none. (`corpus_eval.py --cflags=-DNEAR_BEFORE=…`.)
 
 ## Issue #80: Home Assistant's VAD
 

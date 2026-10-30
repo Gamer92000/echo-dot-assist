@@ -33,7 +33,7 @@ static float wanted(const struct micgain *g)
 
 void micgain_init(struct micgain *g, int level)
 {
-    g->level = level; g->hold = 0; g->talker_min_db = -1000;
+    g->level = level; g->hold = 0; g->limit_stays = 0; g->limit = 0; g->talker_min_db = -1000;
     g->speech_pow = 1e-5f; g->noise_db = -67.0f;               /* -50 dBFS */
     g->gain_db = wanted(g);
     g->applied = db_to_lin(g->gain_db);
@@ -44,6 +44,7 @@ float micgain_talker_db(const struct micgain *g) { return speech_db(g); }
 void micgain_start(struct micgain *g, float keyword_db)
 {
     if (keyword_db <= 0) g->speech_pow = powf(10.0f, keyword_db / 10.0f);      /* the keyword is nearly all speech */
+    g->limit = 0;
     g->gain_db = wanted(g);
     g->applied = db_to_lin(g->gain_db);
 }
@@ -65,7 +66,16 @@ static void frame(struct micgain *g, const int16_t *in, int16_t *out, size_t n)
         else g->gain_db = w;
     }
     float to = db_to_lin(g->gain_db);
-    if (peak * to > PEAK_MAX) to = PEAK_MAX / peak;
+    /* held, the level cannot bring the gain down, and a limit frame by frame would turn it up and down with every
+     * syllable of someone talking over the sound (issue #82): limit_stays keeps the lowest, and only until the hold
+     * ends, so a sound's own peak leaves nothing behind.  A talker then is on the level within 2 frames: a syllable's
+     * dips at most stand more than 3 dB over the gain held (talkers 5-40 dB over the wake word, every phase) */
+    if (!g->hold) g->limit = 0;
+    else if (g->limit > 0 && g->limit < to) to = g->limit;
+    if (peak * to > PEAK_MAX) {
+        to = PEAK_MAX / peak;
+        if (g->hold && g->limit_stays) g->limit = to;
+    }
     /* up: ramp from the last frame's gain; down at once, or the frame's first samples clip (measured on the captures) */
     float from = to < g->applied ? to : g->applied, d = (to - from) / n;
     for (size_t i = 0; i < n; i++) {
