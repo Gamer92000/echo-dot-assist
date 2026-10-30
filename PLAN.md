@@ -265,6 +265,35 @@ Run in this order. Each step says what it proves.
             alexa/echo/computer/amazon it-IT arrived whole (the two-level folder sets on real data) and root
             installed them, ziggy it-IT answered 404 (none for that language), the registration survived the
             restart of the install.
+      - [x] Settings page as pages (2026-10-30): one column 780 px wide and 9900 px long at 1440 x 900 became a menu
+            and eleven pages (`PAGES`, `LAYOUT` in `web/app.js`), all built at once and hidden (the polls keep them
+            current; a copy or a sign-in goes on behind another page), routed by `#/<page>[/<setting or id>]` (`route`,
+            `reveal`); `#vouch=` stays. `flow` places cards in as many columns as fit, each under the shortest, fewer columns
+            if that leaves more than 5 % less empty, never moving a card that grows. A card is one list of rows, every row
+            name, one line (`SUB`), control: a switch beside the words, a slider or choice under them or, from a card of
+            720 px, in a column of 340 px; the long words behind an ⓘ (`moreOf`). Tried and dropped: rows side by side
+            inside wide cards, which raised the share of the page under cards and made it unreadable (the eye zig-zags
+            and every control is somewhere else; seen on the Dot 2 at 1800 px). That share is no measure of a page; the
+            audit in Chromium (each page at 360 to 2560 px, with a Dot 2's settings laid over the PC build's, all
+            open too) now checks what does matter: nothing past its box, one column of rows per card, every switch of
+            a card on one edge. Tried with 15 Echos (15 `build/hassmic-host`, three setups, a few of their own):
+            all columns in 0.9 s, a table drawn in under 10 ms, 89 requests a round; at 168 px a column 2760 px of table
+            in a 1470 px box, so past six columns they narrow (126 px, no addresses: 2070 px) and grouping starts on
+            (5 columns, no sideways scroll). The Echos are asked only while a page shows them (`othersShown`):
+            six requests each every 30 s, a design library of up to 4 MB among them, and this Echo's own every 15 s. `NPEER` holds 16 others.
+            Models: Download and Models on file down the side, the Copy table beside them (a
+            list of 15 models in the card left a hole above Copy; it is in a dialog now, for a moment's choosing). Search
+            over the settings' labels and words (`searchHits`, `FINDABLE`). `start` waits for DOMContentLoaded: ring.js
+            and matrix.js could arrive after the first answers.
+            Compare & copy: `web/matrix.js` (`hmmatrix`, no DOM, `tests/unit/web_matrix_test.py` under node) keeps a plan,
+            row -> { from: an Echo, skip }, never by column, since columns merge and split with the values
+            (`groups`: an Echo joins a group only if it agrees with all of it, an absent row being no difference, so
+            a group never has two values in one cell). `changes()` is all Apply reads, a plan outliving refreshes
+            simply stops being a change. Copy any way round needed each Echo's `/api/state` too (`d.state`: the words
+            of settings this model has not got), and `ringCopy` from any Echo's snapshot. Driven by hand in headless
+            Chromium against four `build/hassmic-host` (no browser in CI): pick, turn around, skip, lock, a whole column,
+            grouped, both ways on real daemons, a design between two others, login from the table, scroll and filter
+            kept over refreshes, 390 px with no sideways scroll on any page, light and dark.
       - [x] Models on file (2026-10-26, forum #172: Echos that downloaded once and later could not sign in any
             more): the page's card "Models on file" (Wake word section, also on an Echo alone) saves the ticked models
             into one tar and puts them back from one, all through the artifacts API as Copy models does (`sendArt`,

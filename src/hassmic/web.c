@@ -465,13 +465,13 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
     int w = 0;
     if (!core_ha_linked()) n += (size_t)snprintf(o + n, cap - n, "%s\"Home Assistant is not connected\"", w++ ? "," : "");
     if (core_local_wake && core_whispered() == -2)
-        n += (size_t)snprintf(o + n, cap - n, "%s\"Whisper detection: no model on this Echo yet. Get it with Download from Amazon (Wake word section), or copy it from another Echo\"", w++ ? "," : "");
+        n += (size_t)snprintf(o + n, cap - n, "%s\"Whisper detection: no model on this Echo yet. Get it with Download from Amazon (Models page), or copy it from another Echo\"", w++ ? "," : "");
     if (core_local_wake && sound_model() == SOUND_NONE)
         n += (size_t)snprintf(o + n, cap - n, "%s\"Sound detection: no model on this Echo (neither the firmware's nor one from Download from Amazon)\"", w++ ? "," : "");
     if (core_sound_failed())
         n += (size_t)snprintf(o + n, cap - n, "%s\"Sound detection could not start: its model did not load, so it was switched off (boot.log says why)\"", w++ ? "," : "");
     { const struct core_wake_word *l; if (core_local_wake && core_wake_engine(-1) == WAKE_AMAZON && core_wake_words(&l) <= 1)
-        n += (size_t)snprintf(o + n, cap - n, "%s\"Wake words: only Alexa. Amazon's others (Echo, Computer, ...) come with Download from Amazon (Wake word section), or copy them from another Echo\"", w++ ? "," : ""); }
+        n += (size_t)snprintf(o + n, cap - n, "%s\"Wake words: only Alexa. Amazon's others (Echo, Computer, ...) come with Download from Amazon (Models page), or copy them from another Echo\"", w++ ? "," : ""); }
     pthread_mutex_unlock(&core_lock);
     float t = diag_soc_temp(), cpu = diag_cpu();
     pthread_mutex_lock(&lk); int adb_wait = login.state == 1 && login.kind == W_ADB; pthread_mutex_unlock(&lk);

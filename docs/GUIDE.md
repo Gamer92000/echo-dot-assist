@@ -23,7 +23,7 @@ System) off takes any certificate, but then anyone on your network could slip th
 - **Speak straight on** after the wake word: Home Assistant gets everything from the end of the word, so "Alexa turn on
   the light" in one breath works, and you need not wait for the tone. The tone itself is partly still in what Home
   Assistant hears: Amazon's echo canceller leaves about as much of it as a quiet voice. "Wake sound removal"
-  (experimental, a card under Features on the settings page, off by default) takes it out: the Echo holds back the audio while the tone plays, finds
+  (experimental, on the settings page under Voice, off by default) takes it out: the Echo holds back the audio while the tone plays, finds
   the tone in it and turns down only its few pitches, then sends it all at once, so the first second of what you said
   reaches Home Assistant about a second late. When you speak much louder than the tone, it changes nothing. The log
   says what it found each time ("wake sound removal: ...").
@@ -165,8 +165,8 @@ lose "<wake word>, stop", the extra sensitivity while the Echo plays, rings or s
 front end's energies in arbitration. Sound and whisper detection keep working.
 
 Switching on, the page lists these costs and, on an Echo without a model yet, asks for one to start with: one of
-ESPHome's (fetched from GitHub by your browser) or your own `.tflite` with its `.json` manifest. The same section then
-adds, renames, tunes (threshold), saves and deletes models; "Copy models" in the Echos section copies them to your
+ESPHome's (fetched from GitHub by your browser) or your own `.tflite` with its `.json` manifest. The same page then
+adds, renames, tunes (threshold), saves and deletes models; "Copy models" on the Models page copies them to your
 other Echos. The models are ESPHome's own files (TensorFlow Lite, not ONNX); the Echo runs them with its own
 interpreter, which gives the same results as TensorFlow Lite. Switching back, or deleting the last model, restores
 everything.
@@ -389,9 +389,9 @@ Beyond the README's two figures:
   Listening and its end turn towards whoever speaks: draw them with the talker where the arrow is, and the Echo makes
   the turned copies itself. Volume takes the colours of the design's first frame through Amazon's steps. Nothing
   changes on the ring until **Apply**: the Echo then writes the designs to its system partition and restarts the
-  ring (a second without light). A design goes to other Echos with "Copy models" in the Echos section (into
-  their designs only), or as a file (Download, then Upload there). What each animation shows is a setting: "Copy settings" in the
-  Echos section copies it, takes the design along where the other Echo has not got it, and applies it there.
+  ring (a second without light). A design goes to other Echos with "Copy models" on the Models page (into
+  their designs only), or as a file (Download, then Upload there). What each animation shows is a setting: "Compare & copy"
+  copies it, takes the design along where the other Echo has not got it, and applies it there.
 - **Designs and theme packs** (Lights, "Designs"): your designs, and packs as folders of them. A pack holds designs
   and says which of them each animation shows; open it to see its packshot, its animations (the same tiles as the
   main card: pick one of its designs, Amazon's, or "not in this pack"; a design from elsewhere comes in as a copy) and
@@ -459,7 +459,7 @@ Voice replies, Echo sounds, Timers and Calls each have "Own volume" or "Follow m
 as before they had a volume of their own). Following the music, the slider sets
 how far above or below the music volume it plays, in volume points (timers 20 above music at 40 play at 60), and it moves with
 the music: the media player's volume and the volume buttons change both. Home Assistant then has no number for it.
-Copying settings to another Echo (Export, the Echos section) takes the switches and the offsets, never a volume itself:
+Copying settings to another Echo (Export, Compare & copy) takes the switches and the offsets, never a volume itself:
 like the Echo's volume, that is for the room it is in.
 
 The same number sounds the same on every slider, and as that volume on a stock Echo (measured on an Echo Dot 2,
@@ -561,7 +561,7 @@ Echo announces itself again after 100 s without Home Assistant, then less and le
 - "Mic level": how loud speech reaches the voice assistant, −35 to −15 dBFS (default −26); the Echo adjusts its gain.
 - "Noise reduction": off by default; low, medium, high take the background down by up to 6, 9 or 12 dB (RNNoise, on
   what the voice assistant gets).
-- "Wake sound removal" (experimental, under Features): off by default; takes the wake sound out of what the voice
+- "Wake sound removal" (experimental, under Voice): off by default; takes the wake sound out of what the voice
   assistant gets (see [Voice](#voice)).
 - "Wake word in the request": off by default; Home Assistant gets the wake word too (see [Voice](#voice)).
 - "Language you speak" (Wake word): the language whose sounds find the wake word's end (see [Voice](#voice)); automatic by default.
@@ -654,21 +654,48 @@ Revoke approved browsers on the page. Echos in one network trust each other: a
 browser logged in on one gets into the others without their buttons ("Log in through <another Echo>"). Debug access
 still takes that Echo's own button.
 
-At the top it says what does not work and why (Home Assistant not connected, models missing).
+The page is a set of pages with a menu down the side (on a phone, behind the button at the top left), each with an
+address of its own, so the browser's back button and bookmarks work: `#/voice`, and `#/voice/mic_level` for one
+setting. **Search settings** (or the `/` key) finds any setting, and things that are none (Log, Wi-Fi, Factory reset),
+in any page and takes you there. Each setting shows its name, one line on what it is for, and its control; the ⓘ
+beside its name has the full explanation. Colours follow the system's, or Light or Dark at the foot of the menu.
+
+**Overview** says how the Echo is doing and what does not work and why (models missing, for instance; that Home
+Assistant is not connected shows on every page), with volume, mute, do not disturb and the wake sound at hand, your
+Echos with how each stands against this one, and every feature with its switch.
 
 **Echos**: every Echo this one hears (and any you add by address), the arbitration network and those outside it with
 the reason and what to do. The page talks to the other Echos directly, at their own addresses on port 28931, also when
 you opened it through a reverse proxy. Over plain HTTP only, though: a page that came through an HTTPS proxy may not
-call them (the browser blocks it), so open `http://<echo-ip>:28931` for this section.
+call them (the browser blocks it), so open `http://<echo-ip>:28931` for those.
 
-- **Copy settings**: every setting of this Echo beside the others', differences marked. Tick settings and Echos to copy.
-- **Copy models**: wake words, microWakeWord models, whisper and sound detection models, Echo to Echo. A wake word set
-  is tried on the receiving Echo's engine first; each Echo that got something restarts its satellite once.
+**Compare & copy**: a table of your Echos side by side, a row per setting, a column per Echo, the values that stand out
+tinted. No Echo is the source: click the value you want and it goes to the other Echos in that row, from whichever Echo
+has it; click another value in the row and the copy turns around, click the same one and the row is left as it was.
+Nothing changes until you press Apply.
+
+- **Use all** under an Echo's name takes that Echo's value in every row with a difference: "make them all like this one".
+- The cross on a cell leaves that Echo out of the row (only with three Echos or more); the lock under an Echo's name
+  leaves it out altogether.
+- **Group identical Echos** folds Echos with the same settings into one column. A setting one of them has not got
+  (another model) is no difference. Picking in such a column picks for all its Echos. Past six Echos it starts on, until
+  you choose; the Models table has the same box, and there a model an Echo has not got is a difference.
+- **Only differences** (on by default) hides the rows where all agree; the box beside it filters by name.
+- A setting an Echo does not have shows a dash there, and that Echo is left out of the row. An animation of the light
+  ring copied takes the design it shows along where the other Echo has not got it, and is applied there. A change of
+  wake word engine to or from Home Assistant restarts that Echo's satellite, and Apply waits for it.
+
+**Models**: everything that is added to an Echo.
+
+- **Copy models**: wake words, microWakeWord models, whisper and sound detection models and your light ring designs and
+  theme packs, between any of your Echos, in the same kind of table: click the Echo a model should come from, or "Fill
+  in what is missing". A wake word set is tried on the receiving Echo's engine first; each Echo that got something
+  restarts its satellite once.
 - **Download from Amazon**: wake words, whisper detection, the newer sound detection model, fetched on the Echo itself.
   Sign in with a code you enter on your Amazon site, tick what you want. If an Echo's attestation key ever refuses,
   download on another Echo, or with `scripts/artifacts.sh`, and copy.
-- **Models on file** (Wake word section): tick models and "Save" puts them into one `.tar` on your computer
-  (`hassmic-models.json` lists them, each model in a folder of its own). "Load from file…" reads such a file and
+- **Models on file**: "Save all", or "Choose…" to tick some, puts them into one `.tar` on your computer
+  (`hassmic-models.json` lists them, each model in a folder of its own). "Load…" reads such a file and
   installs what you tick on this Echo, checked as a copy is; models already there, the same version, are left out.
   Keep one, and you have your Amazon models even if Amazon stops handing them out. Load only files you saved yourself
   or got from someone you trust: a model runs inside the Echo.
@@ -676,7 +703,7 @@ call them (the browser blocks it), so open `http://<echo-ip>:28931` for this sec
 **Export / Import**: `hassmic-settings.conf` (name=value lines, without name, keys and pairings). Import applies it to
 this Echo or another, or use it as a preset for the next install (`scripts/setup.sh --preset <file>`).
 
-**Identify** (top of the page, and beside each Echo in the list; also a button in Home Assistant): a rainbow on the ring
+**Identify** (at the foot of the menu, and beside each Echo in the lists; also a button in Home Assistant): a rainbow on the ring
 for 10 s and stock's setup sound, to tell which Echo is which.
 
 **Speaker gain** (Sound; Echo Dot 2, Echo 2 and Echo Dot 3, and the Echo Show 5 and both Show 8s): for an Echo that is too

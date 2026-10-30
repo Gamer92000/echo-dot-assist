@@ -32,7 +32,7 @@ for l in \
     "" \
     "Use the Echo's settings page instead:  http://<echo-ip>:28931/  →  \"Download from Amazon\"" \
     "Every model signs in there itself: a code to enter on Amazon's site, no Alexa app," \
-    "no stock Echo online, nothing to undo. The Echos section copies models to other Echos." \
+    "no stock Echo online, nothing to undo. The settings page's Models page copies them to other Echos." \
     "" \
     "This script runs the Echo as a stock Alexa online and needs it registered in the" \
     "Alexa app. Deregistered too early (while it is a stock Echo), it resets itself to" \

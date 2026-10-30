@@ -89,8 +89,8 @@ Assistant and without a cloud; nothing to set up ([how](docs/GUIDE.md#several-ec
 </picture>
 
 Everything else is set on the Echo's own **settings page**, `http://<echo-ip>:28931/` ("Visit" on its device page in
-Home Assistant): every setting with what it does, the features to switch on and the entities each adds, other Echos to
-copy settings and wake words to, the log. A press of the action button lets your browser in. [More](docs/GUIDE.md#settings-page).
+Home Assistant): every setting with what it does, the features to switch on and the entities each adds, your Echos side
+by side to copy settings and wake words between them, the log. A press of the action button lets your browser in. [More](docs/GUIDE.md#settings-page).
 
 ## Requirements
 
@@ -161,7 +161,7 @@ to the last one that worked. What changed: [CHANGELOG.md](CHANGELOG.md). What on
 
 ## When something is wrong
 
-The settings page's **Log** (System section) shows what the Echo did; over adb it is
+The settings page's **Log** (System page) shows what the Echo did; over adb it is
 `adb shell tail -30 /data/local/hassmic/boot.log`. Lines start with UTC once the Echo has the time from Home Assistant
 (the page shows your time zone), `boot+<seconds>` before that: behind the firewall only Home Assistant sets the clock,
 on connecting and every 6 hours.

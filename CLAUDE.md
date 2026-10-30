@@ -366,7 +366,14 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   adb still needs that Echo's own button.
   Never send secrets: it is plain HTTP.  Log viewer: `GET /api/log/0|1` (signed) sends `boot.log` / `.1` (`HASSMIC_LOG`,
   tail of 2 MB), with the Sendspin pairing token blanked (`log_redact`; `setup.sh` greps it from the log over adb). The page's words (what each setting does, what a feature adds to HA) live in
-  `web/app.js` `HELP`, keyed by setting name: a new setting gets an entry there. Echos section from `arb_status_json`
+  `web/app.js`, keyed by setting name: a new setting gets a line in `SUB` (what it is for, a few words: what a row shows),
+  an entry in `HELP` (the full words, behind the row's ⓘ, `moreOf`), and a place in `LAYOUT` (the cards of a page; one not
+  named comes last in a card of its own, so nothing is lost). Layout: `flow` (cards in as many columns as fit, placed
+  once per column count, by height); a card is one list of rows, all alike (`settingRow`, `infoRow`): never rows side by
+  side, scanning down a card is what makes a setting findable. Pages: `PAGES` (`groups`: which settings;
+  `MOVED`: those that live elsewhere, a parent's children with it), all built at once and hidden, `route()` by
+  `#/<page>[/<setting or element id>]` (`#vouch=` is the login's); `FINDABLE` is what the search finds beside settings.
+  Echos page from `arb_status_json`
   (members with name, IP and whether they arbitrate from their signed beacons, others: in no network / younger / older); other Echos' pages are called cross-origin (CORS `*`,
   the signature counts), each approved once with its own button; "make like this Echo" posts this one's export.
   Name: one, made at start and stored nowhere (`main.c` `name_make`): `board.default_name` (the model: "Echo Dot 3")
@@ -379,8 +386,14 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `state_setup_discovery_beacon`) past the wake sound setting.
   Presets: `scripts/setup.sh --preset <export>` (or asked in `install_satellite`) pushes it to `state/preset`; hassmic
   applies it once at start (`settings_preset`, as an import) and renames it `preset.applied`. `web/crypto.js` (X25519, BLAKE2b; no `crypto.subtle` on plain HTTP) is checked
-  against Python by `tests/unit/web_crypto_test.py` (in `make unit`, needs node). The Echos section copies chosen
-  settings to chosen Echos (a matrix of exports), and models.
+  against Python by `tests/unit/web_crypto_test.py` (in `make unit`, needs node). Compare & copy (`buildCompare`, `drawSync`,
+  `applySettings`) and Copy models (`drawModels`) are one table, `web/matrix.js` `matrixTable`: a row per setting or model
+  (the exports, ring rows included; other models' words from each Echo's `/api/state`, `d.state`), a column per Echo,
+  any cell the source of its row. What is picked is a plan, row -> { from, skip }, by Echo, never by column;
+  `hmmatrix` is pure (`tests/unit/web_matrix_test.py`, node): `groups` (Echos that agree on every row both have,
+  an Echo joining only a group it agrees with all of), `pick`, `skip`, `column`, `changes` (all Apply reads).
+  Past six columns a table narrows and grouping starts on (`grouping`: the stored choice wins); the other Echos are polled
+  only while a page shows them (`othersShown`).
 - **Amazon downloads** (`davs.c` + `dha.c`): the settings page's "Download from Amazon".  `dha.c` builds the device
   attestation token `/auth/register` needs, in the two shapes Amazon's MAPs make: a drvV1 JWT (biscuit, radar; RSA
   keymaster through `libacehal_dha.so`, dlopen'd, needs group drmrpc) or donut's drvV3 token around the dhav2

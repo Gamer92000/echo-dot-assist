@@ -2,6 +2,32 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-10-30
+
+- **The settings page is a set of pages now, and uses your screen.** It was one narrow column to scroll through from
+  top to bottom. There is a menu down the side (behind a button on a phone), a page for each subject, and as many
+  columns of cards as your screen has room for, from one on a phone to four or five on a big monitor. Every page has an
+  address of its own, so the back button and bookmarks work. "Search settings" (or the `/` key) finds any setting and takes you there. Every setting reads the
+  same: its name, one line on what it is for, its control in the same place, and the full explanation behind the ⓘ
+  beside its name. A new Overview shows how the Echo is doing, your other Echos, every
+  feature with its switch, and volume, mute and do not disturb at hand. Everything to do with models is together under Models; Bluetooth is together
+  with music; "Wake sound removal" moved to Voice. Colours follow the system, or pick Light or Dark.
+- **Copy settings is now "Compare & copy": all your Echos side by side, copying any way round.** A table with a row per
+  setting and a column per Echo. Click the value you want and it goes to the other Echos in that row, from whichever
+  Echo has it, this one or another: one page is enough now, you no longer have to open the page of the Echo you want to
+  copy from. Click another value and the copy turns around; "Use all" makes every row like one Echo. Echos left out by
+  a cross or a lock stay as they are, and nothing changes until you press Apply. "Group identical Echos" folds Echos with
+  the same settings into one column, so five Echos in two setups read as two columns; past six Echos it starts switched
+  on, and the table draws narrower. A setting only another model has is listed too. "Copy models" works the same way, between any of your Echos.
+- **A row of "null" under "Timer sound"** on the settings page is gone.
+- **microWakeWord can be picked again.** Since the timer sounds of 2026-10-28, clicking it on the settings page did nothing:
+  the dialog that asks for a first model failed before it opened.
+- **With Home Assistant's wake word the settings page keeps your other Echos.** The Echo network does not run then, and
+  the page dropped every other Echo, promising they would show up by themselves. They stay now, and it says to add
+  more by address.
+- **"Log in through another Echo" no longer loses its question.** The Allow and No buttons went away at the page's next
+  refresh, within 15 seconds, and left nothing to answer.
+
 ## 2026-10-29
 
 - **The Echo now finds where the wake word ends by its sounds** (issues #72, #79). Amazon's engine says "heard"
