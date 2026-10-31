@@ -3,7 +3,7 @@
 device on the network that Home Assistant does not know: two networks merge through the tags (no permission), a forger
 gets nothing, an Echo alone starts a network, without tags or permission no key goes anywhere, the volume-key pairing
 (SIGWINCH, no HA).  The other ways in: fake_ha_arbitration_join.py; who answers: _rounds.py, Kiosk Satellite mode:
-_kiosk.py, the learned window: _window.py."""
+_kiosk.py, the learned window: _window.py, media in the room: _media.py."""
 import asyncio, os, socket, struct
 from aioesphomeapi import APIClient
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey

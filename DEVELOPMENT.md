@@ -73,7 +73,7 @@ make unit                                         # C unit tests; microWakeWord 
 .venv/bin/python tests/fake_ha_esphome_address.py   # a new address: links closed, mDNS announced again (netaddr.c)
                                                  # (the five share their setup: tests/esphome_common.py; one file was 90 s)
 .venv/bin/python tests/fake_ha_arbitration.py     # two Echos + Home Assistant + an unknown device: wake word arbitration: merge, forger,
-                                                 # pairing; _join.py (tags, action, crash), _rounds.py, _kiosk.py, _window.py;
+                                                 # pairing; _join.py (tags, action, crash), _rounds.py, _kiosk.py, _window.py, _media.py;
                                                  # shared tests/arbecho.py (the network's pace at 0.1: HASSMIC_ARB_SCALE)
 .venv/bin/python tests/fake_ha_dropin.py          # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer,
                                                  # the ringtone at the sounds volume (HASSMIC_EARCONS: stand-in stock sounds)
