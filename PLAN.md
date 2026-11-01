@@ -2917,3 +2917,9 @@ Run in this order. Each step says what it proves.
       (layer 3 here; 4 on the Dots, their set byte-identical).  No speaker: no `speaker_gain`, the Dot 2's volume curve.
       Tried on the device (2026-10-29), all as expected: unlock, root, install, audio level, buttons, the LED, DHA,
       Bluetooth, the wake lock.  kamakiri-cupcake v1.0.0 pinned (its lk and tee are 8338's).
+- [x] amonet-radar v1.0.1 (issue #88, 2026-11-01): zip sha256 `22809bc4...88a9`, 94 789 047 bytes.  Against v1.0.0: LK
+      payloads for `63cb91b-20221007_073612` and `2c3569d-20260617_051433` beside `59779ca-20220524_183401` (`profile.sh`;
+      the pinned 6436's `lk.img` carries `20221007_073612`), the default and 20220524 payloads and `radar-kaeru.bin`
+      rebuilt, a macOS fastboot, `fastbrick.sh` without bash 4 arrays and `timeout`.  `twrp.img`, `lk.bin`, `preloader.img`,
+      `tz.img`, `tee-payload.bin`, `gpt-radar.bin` unchanged, so the flash steps stand.  A folder per version as on
+      biscuit (`firmware/radar/amonet-radar-v1.0.1/`).  Checked: `scripts/setup.sh radar --dry-run`.  Open: an unlock with it.

@@ -9,6 +9,9 @@ What changed for people using the Echo, newest first. Details and measurements a
   Echo looked deaf. Now the ring shows the short error animation, and the log says why (`no Home Assistant link`).
   Not while the microphones are off, and not before the Echo was set up.
 
+- **The Echo 2's setup uses amonet-radar v1.0.1** (issue #88), which knows the bootloaders of newer Fire OS builds.
+  Get the new zip from the XDA thread into `firmware/radar/`; a setup already under way asks for it at the unlock.
+
 ## 2026-10-30
 
 - **When the wake word's sounds give no answer, the Echo no longer guesses a pause inside your command** (issue #79).
