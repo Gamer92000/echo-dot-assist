@@ -33,7 +33,7 @@ async def main():
     leds = tempfile.mktemp(suffix=".ledctrl")
     errs = lambda: open(leds).read().count("anim_start_error_short") if os.path.exists(leds) else 0
     env = dict(os.environ, HASSMIC_PLAY=play, HASSMIC_FAKE_LED=leds)
-    qemu ="--qemu" in sys.argv          # ARM build + stock Pryon model under qemu-arm; wake word comes from the audio file
+    qemu = "--qemu" in sys.argv          # ARM build + stock Pryon model under qemu-arm; wake word comes from the audio file
     if qemu:
         env["HASSMIC_CAP"] = f"{ROOT}/testdata/alexa_espeak.raw"
         cmd = [f"{ROOT}/tools/qrun.sh", "-t", "120", f"{ROOT}/build/{os.environ.get('DEVICE', 'donut')}/hassmic-qemu", "-P", "wyoming"]

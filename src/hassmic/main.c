@@ -1064,6 +1064,15 @@ static int stop_heard(void) { return heard_ms && stop_ms >= heard_ms && stop_ms 
  * did not hear the wake word).  With stop_ends_listening any "stop" does */
 static int stopped_now(void) { return stop_heard() && (stop_cut || stop_ends); }
 
+/* Lock held.  Whether the wake word or the button, finding nothing to talk to, says so.  Not while muted, here or by Home
+ * Assistant (asked for), not before the Echo was set up (the setup spinner already says it), not over a ringing timer
+ * or a Drop In (their own ring) */
+static int error_shows(void)
+{
+    return !core_muted() && !link_paused && !atomic_load(&oobe) && state == IDLE &&
+           !atomic_load(&alarm_on) && dropin_was == DROPIN_IDLE;
+}
+
 /* touch: the action button rather than the wake word.  from: where the wake word ended on the ring's clock (0: unknown) */
 static void trigger(int touch, uint64_t from)
 {
@@ -1091,12 +1100,11 @@ static void trigger(int touch, uint64_t from)
         /* Nothing to talk to, or privacy latch on.  Without Home Assistant the Echo used to do nothing at all here: no
          * sound, no ring, no log line, so "it does not listen" during an HA restart or a lost link looked like a deaf
          * Echo and left nothing to find afterwards.  Unlike nothing said (core_no_speech, issue #48) something did fail
-         * here that the ring can help with, so the error ring shows it.  Not while muted, here or by Home Assistant
-         * (asked for), not before the Echo was set up (the setup spinner already says it), not over a ringing timer or
-         * a Drop In (their own ring) */
-        if (!core_muted() && !link_paused && !atomic_load(&oobe) && state == IDLE && !atomic_load(&alarm_on) && dropin_was == DROPIN_IDLE) {
+         * here that the ring can help with, so the error ring shows it.  Linked is no sign of Home Assistant: the
+         * client may be another one (ESPHome's dashboard reading logs) */
+        if (error_shows()) {
             fprintf(stderr, "%s: %s, nothing started\n", touch ? "button" : "wake word",
-                    connected ? "Home Assistant is linked but its voice assistant has not subscribed" : "no Home Assistant link");
+                    connected ? "a client is linked, no voice assistant running" : "no Home Assistant link");
             led("-s", "anim_start_error_short");
         }
     } else if (state == IDLE && !touch && stopped_now()) {

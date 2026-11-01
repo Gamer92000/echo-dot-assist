@@ -201,19 +201,22 @@ async def main(e):
     # log, nothing started; linked again, a run as before and no error ring
     try: await c.disconnect()
     except Exception: pass
+    linkless = "wake word: no Home Assistant link, nothing started"
     n0 = errs(); proc.send_signal(signal.SIGUSR1)
-    await until(lambda: errs() > n0)
-    check(errs() == n0 + 1 and "wake word: no Home Assistant link, nothing started" in e.log(),
+    await until(lambda: errs() > n0 and linkless in e.log())           # the log comes through a reader process of its own
+    check(errs() == n0 + 1 and linkless in e.log(),
           f"the wake word without Home Assistant: the error ring and why in the log ({errs() - n0})")
     n0 = errs(); keyev(KEY_HELP, 1); await asyncio.sleep(0.1); keyev(KEY_HELP, 0)
-    await until(lambda: errs() > n0)
-    check(errs() == n0 + 1 and "button: no Home Assistant link, nothing started" in e.log(),
+    linkless = "button: no Home Assistant link, nothing started"
+    await until(lambda: errs() > n0 and linkless in e.log())
+    check(errs() == n0 + 1 and linkless in e.log(),
           f"the button without Home Assistant: the error ring and why in the log ({errs() - n0})")
     c = APIClient("127.0.0.1", PORT, None); await asyncio.wait_for(c.connect(login=True), 5)
     await c.list_entities_services()
     n0 = errs(); proc.send_signal(signal.SIGUSR1)
-    await until(lambda: errs() > n0)
-    check(errs() == n0 + 1 and "wake word: Home Assistant is linked but its voice assistant has not subscribed, nothing started" in e.log(),
+    linked = "wake word: a client is linked, no voice assistant running, nothing started"
+    await until(lambda: errs() > n0 and linked in e.log())
+    check(errs() == n0 + 1 and linked in e.log(),
           f"linked, the voice assistant not subscribed: the error ring and why in the log ({errs() - n0})")
     va = assistant(c); started = va.started; await sync(c)
     n0 = errs(); started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
