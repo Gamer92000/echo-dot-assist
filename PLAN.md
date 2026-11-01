@@ -2011,6 +2011,21 @@ Run in this order. Each step says what it proves.
       ring, 10 s at most. Tests: fake_ha_timer_sound.py, unit-sounds (format checks, a replaced upload read again,
       the Show models' tones decode), unit-web_loudness (loudness.js against BS.1770 in Python; `BEEP_PEAK` at
       `TS_LUFS`; matching quiet, loud and peaky clips, the limiter never over -1 dBFS). Open (device): heard on a Dot 3 and a Show.
+- [x] Sounds of one's own in place of stock's (2026-11-01, asked by a Dot 3 user who renamed the assistant): every
+      `enum sound` from SND_WAKE to SND_RING_OUT (13: not the timer and alarm tones, which `timer_sound` picks) by an id
+      of `sounds.c` (`wake`, `ring_in`, ...; stored as file names: keep them). `state/sounds/<id>.wav`, the timer
+      upload's format and checks (`sound_own_save`; `sound_custom_*` are now its SND_CUSTOM case), looked for before
+      stock's in `sound_get`; a generation per sound (was SND_CUSTOM's only) has the earcon thread read it again after
+      an upload or delete. Lengths (`sound_own_secs`): wake, touch and volume 2 s (over the start of the request:
+      the echo canceller leaves ~a quiet voice's worth of it to STT, wake sound removal holds the audio until its echo
+      passed; stock's wake sound is 0.65 s; the volume tone at every key press), the rest 30 s. API (signed): `POST
+      /api/sound/<id>` (WAV; empty: delete), `/play` (`core_sound_preview`: queued past `use_earcon`, as Identify),
+      `GET /stock` (stock's decoded, as a WAV at its own rate); `/api/state` `sounds` [{id, own_ms, stock, max_s}].
+      Page: Voice's "Sounds" card, a row per sound; upload as the timer's (`pcmOf`, `timerSoundLevel` with the stock
+      sound's `ringLufs` as the target, measured looped: the volume click is under one 400 ms block). Not exported or
+      copied (per Echo, as the timer's); a factory reset empties state/. Tests: fake_web_sounds.py (list, stock WAV, refusals,
+      Play, the wake word playing one's own, replaced, kept over a restart, deleted, unsigned refused), unit-sounds (own
+      first, stock's again, ids and lengths). Open (device): heard on a Dot 3.
 - [x] Buttons as Home Assistant events (2026-10-12, issue #26: a Dot 2 user moved from EchoLocal, whose automations
       stopped an HA-run alarm clock with the action button and used volume holds for next track / play-pause). ESPHome
       event entity "Button" (`button`, KEY_BUTTON, device class `button`, always listed), types `action`,

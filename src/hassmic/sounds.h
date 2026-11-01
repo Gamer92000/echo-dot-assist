@@ -1,4 +1,5 @@
-/* Amazon's own UI sounds, left on the system image by the stock firmware (/system/local/share/earcon/base). */
+/* Amazon's own UI sounds, left on the system image by the stock firmware (/system/local/share/earcon/base), or one's
+ * own in their place. */
 #ifndef SOUNDS_H
 #define SOUNDS_H
 #include <stddef.h>
@@ -21,4 +22,16 @@ int sound_present(enum sound s);
 int sound_custom_save(const void *wav, size_t len, char *err, size_t errsz);   /* checked, then kept: 0, -1 (err says why) */
 int sound_custom_delete(void);
 unsigned sound_custom_ms(void);             /* its length, 0: none */
+
+/* Sounds of one's own in place of stock's (the settings page's "Sounds" card): SND_WAKE to SND_RING_OUT, each a WAV
+ * as the timer's in state/sounds/<id>.wav, played wherever stock's would be; deleted, stock's again.  Any thread */
+const char *sound_id(enum sound s);         /* the page's name for it ("wake"), NULL: not replaceable */
+int sound_by_id(const char *id);            /* -1: no such replaceable sound */
+unsigned sound_own_secs(enum sound s);      /* how long one may be */
+int sound_own_save(enum sound s, const void *wav, size_t len, char *err, size_t errsz);
+int sound_own_delete(enum sound s);
+unsigned sound_own_ms(enum sound s);        /* its length, 0: none (stock's plays) */
+int sound_stock_present(enum sound s);      /* stock's is on this image */
+/* stock's, decoded (mono s16 at its own rate) and the caller's to free: the page measures its loudness to match */
+short *sound_stock(enum sound s, size_t *samples, unsigned *rate);
 #endif

@@ -2,6 +2,15 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-01
+
+- **Your own sounds in place of Alexa's.** A new "Sounds" card on the settings page (Voice) lists the Echo's sounds:
+  the wake sound, the action button, microphone off and on, the volume keys, Bluetooth connected and disconnected,
+  Identify, and Drop In's chimes and ringtones. Each can be replaced by any sound your browser plays, the same way as
+  the timer sound: the page converts it and offers to bring it to the loudness of Alexa's sound it replaces. "Play"
+  plays it once; deleting yours brings Alexa's back. The wake, button and volume sounds may be 2 seconds long at most
+  (they play over the start of your command), the rest 30. Each Echo keeps its own; a factory reset deletes them.
+
 ## 2026-10-30
 
 - **When the wake word's sounds give no answer, the Echo no longer guesses a pause inside your command** (issue #79).

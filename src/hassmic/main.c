@@ -769,6 +769,10 @@ void core_identify(void)
     sound_queue(SND_IDENTIFY);
     fprintf(stderr, "identify: rainbow for %d s\n", IDENTIFY_MS / 1000);
 }
+
+/* The page's "Play" on its Sounds card: once, at the sounds volume, whatever the wake sound setting says: it was asked for */
+void core_sound_preview(int s) { if (s >= 0 && s < SND_TIMER) sound_queue((enum sound)s); }
+
 int core_dnd(int set)
 {
     if (set >= 0 && set != dnd) {

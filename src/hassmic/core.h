@@ -57,6 +57,7 @@ extern const char *core_name;                   /* "Echo Dot 2 5695c4": the mode
 const char *core_node_name(void);               /* "echo-dot-2-5695c4": the ESPHome device (host) name */
 void core_node_of(const char *name, char node[64]);  /* any Echo's node from its name ("Echo Dot 2 5695c4"); a node stays */
 void core_identify(void);                       /* rainbow ring for 10 s and a sound: which Echo is this */
+void core_sound_preview(int s);                 /* sounds.h's sound once (the page's Sounds card), lock or not */
 /* Setup (OOBE): 1 from an install or a reset until Home Assistant took the Echo on (its voice assistant subscribed:
  * state/adopted); the ring shows stock's setup spinner meanwhile.  Any thread */
 int  core_oobe(void);

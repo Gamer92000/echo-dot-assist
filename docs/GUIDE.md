@@ -417,6 +417,16 @@ Beyond the README's two figures:
 - **Microphone off** plays Alexa's own sounds. A switch that is already off when hassmic starts is shown, not announced.
 - **Wake sound**: Alexa's own where the firmware has it; the Echo Show 8 1st gen has none and plays hassmic's short blip. On the
   Echo Show a sound after a pause starts 0.35 s late: the speaker takes that long to switch on and swallowed the start.
+- **Your own sounds**: the settings page's "Sounds" card (Voice) replaces any of the Echo's sounds with one of yours:
+  the wake sound, the action button, microphone off and on, the volume keys, Bluetooth connected and disconnected,
+  Identify, and Drop In's chimes and ringtones (the timer's sound is "Timer sound", above). "Upload…" takes any file
+  your browser plays, as the timer sound does, and offers to bring it to the loudness of Alexa's sound it replaces, so
+  the sounds volume suits both. The wake, button and volume sounds may be 2 seconds at most: the wake sound plays over
+  the start of your command, and the echo canceller leaves part of it in what Home Assistant hears. The rest may be
+  30 seconds; ringtones repeat. "Play" plays one once at the sounds volume, even with "Wake sound" off; otherwise
+  "Wake sound" off silences yours as it does Alexa's. The bin deletes yours, and Alexa's plays again. Where the firmware has none
+  of Alexa's for a sound, yours still plays. Each Echo keeps its own: exports and "Copy models" leave them out, and a
+  factory reset deletes them.
 - Silent and dark at boot.
 - The ring dims with the room's light as on a stock Echo (Amazon's own logic, on by default); a fixed level from Home
   Assistant switches that off.
