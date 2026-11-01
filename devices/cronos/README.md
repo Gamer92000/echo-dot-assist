@@ -54,7 +54,8 @@ as checkers':
 3. **System partition**: must be 8149's (`ro.build.version.incremental` = `0013222532484` in its `build.prop`). Else write
    `firmware/cronos/images/system.img` (sha256 `78c4c2fa…091669`, 3253731328 bytes) to
    `/dev/block/platform/mtk-msdc.0/11230000.MSDC0/by-name/system` from TWRP and read it back; `setup.sh` does this in
-   64 MB pieces with a check of each.
+   64 MB pieces with a check of each. Wipe cache and data first (`adb shell 'twrp wipe cache && twrp wipe data'`): the
+   old build's app updates in `/data/app` would run over this older system.
 4. **Root boot image**: `scripts/install-boot.sh --boot-only` (the firmware's `boot.img`, sha256 `ecdd1452…87db49`, with
    root adb, `verify` out of the fstab, adb over Wi-Fi and the boot chime out of `init.cronos.rc`, the policy patched by
    `sepolicy.rules`; flashed in hacked fastboot, then `fastboot continue`).
