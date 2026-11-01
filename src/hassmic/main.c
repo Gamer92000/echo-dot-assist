@@ -220,6 +220,7 @@ static const struct proto *proto = &proto_esphome;
 
 pthread_mutex_t core_lock = PTHREAD_MUTEX_INITIALIZER;
 static int connected, satellite_running;
+static int link_paused;                 /* lock held: Home Assistant told the satellite to pause (core_link_pause) */
 static enum state state;
 static time_t state_since;
 static atomic_int streaming, trigger_pending, button_pending, pair_pending, stop_pending, quit;
@@ -1010,10 +1011,18 @@ void core_pipeline_finish(void)
 void core_link(int up, int ready)
 {
     int was = satellite_running;
-    connected = up; satellite_running = up && ready;
+    connected = up; satellite_running = up && ready; link_paused = 0;
     if (satellite_running) adopted();
     if (!satellite_running) core_pipeline_finish();
     else if (!was && !core_local_wake && state == IDLE) pipeline_start(0);
+}
+
+/* Wyoming's pause-satellite: what Home Assistant's mute switch sends, and the link stays open.  Linked and not running
+ * as before run-satellite, but asked for: trigger shows no error */
+void core_link_pause(void)
+{
+    core_link(1, 0);
+    link_paused = 1;
 }
 
 void core_error(void)
@@ -1082,9 +1091,10 @@ static void trigger(int touch, uint64_t from)
         /* Nothing to talk to, or privacy latch on.  Without Home Assistant the Echo used to do nothing at all here: no
          * sound, no ring, no log line, so "it does not listen" during an HA restart or a lost link looked like a deaf
          * Echo and left nothing to find afterwards.  Unlike nothing said (core_no_speech, issue #48) something did fail
-         * here that the ring can help with, so the error ring shows it.  Not while muted (asked for), not before the
-         * Echo was set up (the setup spinner already says it), not over a ringing timer or a Drop In (their own ring) */
-        if (!core_muted() && !atomic_load(&oobe) && state == IDLE && !atomic_load(&alarm_on) && dropin_was == DROPIN_IDLE) {
+         * here that the ring can help with, so the error ring shows it.  Not while muted, here or by Home Assistant
+         * (asked for), not before the Echo was set up (the setup spinner already says it), not over a ringing timer or
+         * a Drop In (their own ring) */
+        if (!core_muted() && !link_paused && !atomic_load(&oobe) && state == IDLE && !atomic_load(&alarm_on) && dropin_was == DROPIN_IDLE) {
             fprintf(stderr, "%s: %s, nothing started\n", touch ? "button" : "wake word",
                     connected ? "Home Assistant is linked but its voice assistant has not subscribed" : "no Home Assistant link");
             led("-s", "anim_start_error_short");

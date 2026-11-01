@@ -2669,6 +2669,9 @@ Run in this order. Each step says what it proves.
       triggers at once, so the Echo without HA shows the ring while another one answers: wanted, it is the broken
       one.  Tests: fake_ha_esphome_buttons.py (HA gone: ring + line for wake word and button; HA back: a run, no
       ring).  PC by hand: hassmic-host without a client, SIGUSR1 + KEY_HELP: two rings, two lines; not set up: none.
+      Wyoming: HA's mute switch sends `pause-satellite` and keeps the link: linked and not running as before
+      `run-satellite`, so `core_link_pause` marks it and no ring shows (`fake_ha.py`).  HA started with the switch on
+      does not connect at all, which here reads as no link: the ring shows.
       Open: a sound as well; left out until someone asks.
 - [x] Volumes per kind of audio (GitHub issue #32: several Dot 3 and a Dot 2; one volume for media and one for the
       assistant, the wake sound on a slider of its own).  Built 2026-10-17, after two tries the owner rejected.

@@ -71,6 +71,7 @@ extern int core_local_wake, core_port, core_sendspin_port, core_web_port;
 enum state core_state(void);
 void core_set_state(enum state s);
 void core_link(int connected, int ready);       /* client connection / server wants pipelines.  (0,0) ends a running pipeline */
+void core_link_pause(void);                     /* the server asked to pause (Wyoming, HA's mute switch): core_link(1, 0), no error */
 void core_mic_off(void);                        /* server has heard enough */
 int  core_ha_linked(void);                     /* lock held: a client (Home Assistant) is connected */
 void core_settings_changed(void);
