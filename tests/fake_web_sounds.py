@@ -3,10 +3,11 @@
 the page is told which sounds there are, which of Alexa's this "firmware" has (stand-ins in HASSMIC_EARCONS) and how
 long each may be; Alexa's handed out as a WAV for the page's loudness match; uploads only as the page makes them and
 within each sound's length; "Play"; the wake word playing one's own where Alexa's played; a new upload played from the
-next time on; deleting it (Alexa's again); kept over a restart; refused unsigned.  The page's loudness check is
+next time on; deleting it (Alexa's again); kept over a restart; refused unsigned; a switch per sound, Home Assistant's
+"Wake sound" for the wake sound alone, what an Echo with it off keeps after the update.  The page's loudness check is
 tests/unit/web_loudness_test.py's."""
-import asyncio, io, json, os, re, signal, struct, subprocess, sys, tempfile, urllib.request, wave
-from aioesphomeapi import APIClient
+import asyncio, io, json, os, re, signal, struct, subprocess, sys, tempfile, time, urllib.request, wave
+from aioesphomeapi import APIClient, SwitchInfo
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
@@ -36,7 +37,7 @@ def wav(rate, channels, seconds, level):
 
 
 class Echo:
-    def __init__(self, tmp):
+    def __init__(self, tmp, **extra):
         self.tmp, self.state = tmp, os.path.join(tmp, "state")
         os.makedirs(self.state, exist_ok=True)
         if not os.path.exists(os.path.join(self.state, "adopted")): open(os.path.join(self.state, "adopted"), "w").write("ha\n")
@@ -48,13 +49,19 @@ class Echo:
         addrs = os.path.join(tmp, "addrs"); open(addrs, "w").write("127.0.0.1\n")
         env = dict(os.environ, HASSMIC_STATE=self.state, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(tmp, "play.raw"),
                    HASSMIC_MDNS_FILE=os.path.join(tmp, "mdns"), HASSMIC_FAKE_ADDRS=addrs, HASSMIC_ARB_ADDR="127.255.255.255",
-                   HASSMIC_MODELS=os.path.join(tmp, "models"), HASSMIC_LED_ROOT=os.path.join(tmp, "etc"), HASSMIC_EARCONS=earcons)
-        self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-W", str(WEB)],
+                   HASSMIC_MODELS=os.path.join(tmp, "models"), HASSMIC_LED_ROOT=os.path.join(tmp, "etc"), HASSMIC_EARCONS=earcons, **extra)
+        keys = os.path.join(tmp, "keypad")
+        if not os.path.exists(keys): os.mkfifo(keys)
+        self.keypad = os.open(keys, os.O_RDWR)                # opened first: hassmic's open() would wait for a writer
+        self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-W", str(WEB), "-b", keys],
                                      env=env, stderr=self.log)
 
     def text(self): self.log.seek(0); return self.log.read()
     def count(self, pattern): return len(re.findall(pattern, self.text()))
-    def stop(self): self.proc.terminate(); self.proc.wait(5); self.log.close()
+    def stop(self): self.proc.terminate(); self.proc.wait(5); self.log.close(); os.close(self.keypad)
+    def key(self, code):
+        os.write(self.keypad, struct.pack("llHHi", 0, 0, 1, code, 1)); time.sleep(0.1)
+        os.write(self.keypad, struct.pack("llHHi", 0, 0, 1, code, 0)); time.sleep(0.3)
 
     def page(self):
         wait_port(PORT, WEB)
@@ -67,7 +74,7 @@ class Echo:
             try: c = APIClient("127.0.0.1", PORT, None); await c.connect(login=True); break
             except Exception: await asyncio.sleep(0.1)
         else: raise RuntimeError("no connection")
-        await c.list_entities_services()
+        self.switches = {x.object_id: x for x in (await c.list_entities_services())[0] if isinstance(x, SwitchInfo)}
         self.started = asyncio.Event()
         async def start(*a): self.started.set(); return 0
         async def nothing(*a): return 0
@@ -103,6 +110,8 @@ async def main():
 
         # uploads: only what the page makes, within each sound's length
         for path, body, why, what in (("wake", wav(48000, 1, 2.5, 1000), "2 s at most", "a 2.5 s wake sound"),
+                                      ("call_on", wav(48000, 1, 2.5, 1000), "2 s at most", "a 2.5 s chime that ducks a call's start"),
+                                      ("bluetooth_on", wav(48000, 1, 5.5, 1000), "5 s at most", "a 5.5 s chime"),
                                       ("wake", wav(44100, 1, 0.5, 1000), "48000 Hz", "44.1 kHz"),
                                       ("ring_in", wav(48000, 2, 0.5, 1000), "2 channels", "stereo"),
                                       ("wake", wav(48000, 1, 0.05, 1000), "too short", "50 ms"),
@@ -135,6 +144,76 @@ async def main():
         check(await until(lambda: e.count(played(14400, OWN_PEAK)) == 1, 2) and snd()["mics_off"]["own_ms"] == 300,
               "one's own plays where the firmware has none of Alexa's")
 
+        # a switch per sound.  Home Assistant's "Wake sound" is the wake sound's alone, and off keeps the one chosen
+        setting = lambda name: next(x["value"] for x in page.state()["settings"] if x["name"] == name)
+        page.call("POST", "/api/sound/volume", wav(48000, 1, 0.1, 500))     # none of Alexa's for it here
+        e.key(138)                                                           # KEY_HELP: the action button ends the run above
+        n = e.count(played(12000, OWN_PEAK - 1)); stock = e.count(played(31200, WAKE_PEAK))
+        c.switch_command(e.switches["wake_sound"].key, False)
+        check(await until(lambda: not setting("wake_sound")), "Home Assistant's switch: the wake sound off")
+        check(setting("sound_volume") and setting("sound_touch"), "and only the wake sound")
+        e.started.clear(); e.proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(e.started.wait(), 5); await asyncio.sleep(0.5)
+        check(e.count(played(12000, OWN_PEAK - 1)) == n and e.count(played(31200, WAKE_PEAK)) == stock, "the wake word: heard, silent")
+        e.key(138)
+        n0 = len(re.findall(r"sound: volume", e.text()))
+        e.key(115)                                                           # KEY_VOLUMEUP
+        check(await until(lambda: len(re.findall(r"sound: volume", e.text())) == n0 + 1, 2), "the volume keys still sound")
+        page.call("POST", "/api/sound/wake/play")
+        check(await until(lambda: e.count(played(12000, OWN_PEAK - 1)) == n + 1, 2), "Play still plays it, asked for")
+        c.switch_command(e.switches["wake_sound"].key, True); await until(lambda: setting("wake_sound"))
+        e.started.clear(); e.proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(e.started.wait(), 5)
+        check(await until(lambda: e.count(played(12000, OWN_PEAK - 1)) == n + 2, 2) and e.count(played(31200, WAKE_PEAK)) == stock,
+              "on again: the one chosen, one's own, not Alexa's")
+        page.set(sound_volume="off")
+        e.key(115); await asyncio.sleep(0.4)
+        check(len(re.findall(r"sound: volume", e.text())) == n0 + 1 and setting("wake_sound"), "the volume keys' own switch, the wake sound's left alone")
+        check("sound_volume=off" in open(os.path.join(e.state, "config")).read(), "saved")
+        page.call("POST", "/api/set", b"".join(f"{k}=off\n".encode() for k in ("wake_sound", "sound_touch", "sound_mics_off", "sound_mics_on", "sound_volume", "sound_bluetooth_on", "sound_bluetooth_off")))
+        check(not any(setting(k) for k in ("wake_sound", "sound_touch", "sound_bluetooth_off")), "All off is those settings in one request")
+        page.call("POST", "/api/set", b"".join(f"{k}=on\n".encode() for k in ("wake_sound", "sound_touch", "sound_mics_off", "sound_mics_on", "sound_volume", "sound_bluetooth_on", "sound_bluetooth_off")))
+
+        # a long chime gives way, and is not kept in memory but played again
+        e.key(138)                                                           # ends the wake word's run above
+        page.call("POST", "/api/sound/identify", wav(48000, 1, 4, 3333))
+        page.call("POST", "/api/sound/identify/play"); await asyncio.sleep(0.3)
+        cuts = e.count(r"earcon: cut at")
+        e.started.clear(); e.proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(e.started.wait(), 5)
+        check(await until(lambda: e.count(r"earcon: cut at") == cuts + 1, 1), "a 4 s chime: cut by the wake word, not played out")
+        e.key(138)
+        peak = r"earcon: 192000 samples @ 48000 Hz, until stopped, peak 3333\n"; n = e.count(peak)
+        page.call("POST", "/api/sound/identify/play")
+        check(await until(lambda: e.count(peak) == n + 1, 2), "played again from its file")
+        page.call("POST", "/api/sound/identify", b""); await asyncio.sleep(0.2)
+
+        # packs: what is in use saved, one made by hand, each in use by turns; a bad upload refused
+        packs = lambda: json.loads(page.call("GET", "/api/sound-pack")[2])
+        st, _, data = page.call("POST", "/api/sound-pack/save", b"Mine"); mine = json.loads(data)["id"]
+        p = next(x for x in packs()["packs"] if x["id"] == mine)
+        check(st == 200 and p["name"] == "Mine" and {"wake", "ring_in", "mics_off"} <= set(p["sounds"]) and p["bytes"] > 2_000_000, f"what is in use saved as a pack: {p}")
+        beeps = json.loads(page.call("POST", "/api/sound-pack/new", 'Bips "\\ ü'.encode())[2])["id"]
+        check(next(x for x in packs()["packs"] if x["id"] == beeps)["name"] == 'Bips "\\ ü', "a name as it was typed")
+        w = wav(48000, 1, 0.5, OWN_PEAK - 2)
+        st, _, _ = page.call("POST", f"/api/sound-pack/{beeps}/file/wake", w)
+        check(st == 200 and page.call("GET", f"/api/sound-pack/{beeps}/file/wake")[2] == w, "a sound into a pack, back unchanged")
+        for path, body, what in ((f"/api/sound-pack/{beeps}/file/wake", wav(48000, 1, 2.5, 1000), "2.5 s of wake sound"),
+                                 (f"/api/sound-pack/{beeps}/file/nope", w, "an unknown sound"),
+                                 (f"/api/sound-pack/{beeps}/file/..%2f..%2fconfig", w, "a path"),
+                                 ("/api/sound-pack/99/file/wake", w, "an unknown pack"), ("/api/sound-pack/0/apply", b"", "pack 0"),
+                                 ("/api/sound-pack/new", b"a\nb", "a name with a newline"), ("/api/sound-pack/new", b"", "no name")):
+            check(page.call("POST", path, body)[0] == 400, f"refused: {what}")
+        check(snd()["wake"]["own_ms"] == 250, "a pack changes nothing before it is used")
+        st, _, _ = page.call("POST", f"/api/sound-pack/{beeps}/apply")
+        check(st == 200 and snd()["wake"]["own_ms"] == 500 and snd()["ring_in"]["own_ms"] == 0, f"used: its sounds, Alexa's for the rest: {snd()['wake']}")
+        n = e.count(played(24000, OWN_PEAK - 2)); page.call("POST", "/api/sound/wake/play")
+        check(await until(lambda: e.count(played(24000, OWN_PEAK - 2)) == n + 1, 2), "and it plays")
+        st, _, _ = page.call("POST", f"/api/sound-pack/{mine}/apply")
+        check(st == 200 and snd()["wake"]["own_ms"] == 250 and snd()["ring_in"]["own_ms"] == 25000, "the saved one back")
+        st, _, _ = page.call("POST", f"/api/sound-pack/{beeps}/delete")
+        check(st == 200 and [x["id"] for x in packs()["packs"]] == [mine] and not os.path.exists(os.path.join(e.state, "sound-packs", str(beeps))), "deleted, its folder gone")
+        ids = [json.loads(page.call("POST", "/api/sound-pack/new", f"p{i}".encode())[2]).get("id") for i in range(15)]
+        check(len(packs()["packs"]) == 16 and page.call("POST", "/api/sound-pack/new", b"one more")[0] == 400, "16 packs at most")
+        for i in ids: page.call("POST", f"/api/sound-pack/{i}/delete")
+
         # kept over a restart
         await c.disconnect(); e.stop()
         e = Echo(tmp); page = e.page()
@@ -148,11 +227,45 @@ async def main():
         page.call("POST", "/api/sound/wake/play")
         check(await until(lambda: e.count(played(31200, WAKE_PEAK)) == n + 1, 2), "then Alexa's plays again")
 
+        check([x["name"] for x in json.loads(page.call("GET", "/api/sound-pack")[2])["packs"]] == ["Mine"], "the pack kept over a restart")
+
         # signed only
-        for method, path in (("POST", "/api/sound/wake"), ("POST", "/api/sound/wake/play"), ("GET", "/api/sound/wake/stock")):
+        for method, path in (("POST", "/api/sound/wake"), ("POST", "/api/sound/wake/play"), ("GET", "/api/sound/wake/stock"),
+                             ("GET", "/api/sound-pack"), ("POST", "/api/sound-pack/new"), ("POST", "/api/sound-pack/1/apply")):
             try: st = urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{WEB}{path}", method=method, data=b"x" if method == "POST" else None), timeout=5).status
             except urllib.error.HTTPError as x: st = x.code
             check(st == 401, f"{method} {path} unsigned: refused ({st})")
+
+        # the library's cap, and the room the partition keeps
+        e.stop(); full = tempfile.mkdtemp(); os.makedirs(os.path.join(full, "state"))
+        e = Echo(full, HASSMIC_SOUNDPACK_MAX="300000"); page = e.page()
+        i = json.loads(page.call("POST", "/api/sound-pack/new", b"cap")[2])["id"]
+        check(page.call("POST", f"/api/sound-pack/{i}/file/wake", wav(48000, 1, 2, 1000))[0] == 200
+              and page.call("POST", f"/api/sound-pack/{i}/file/wake", wav(48000, 1, 1.5, 1000))[0] == 200, "within the cap, a sound replaced counts once")
+        st, _, data = page.call("POST", f"/api/sound-pack/{i}/file/touch", wav(48000, 1, 2, 1000))
+        check(st == 400 and b"library is full" in data, f"past the cap: {st} {data[:80]!r}")
+        page.call("POST", "/api/sound/wake", wav(48000, 1, 2, 1000)); page.call("POST", "/api/sound/touch", wav(48000, 1, 2, 1000))
+        page.call("POST", f"/api/sound-pack/{i}/delete")
+        st, _, data = page.call("POST", "/api/sound-pack/save", b"over")
+        check(st == 400 and b"library is full" in data and not os.path.exists(os.path.join(full, "state", "sound-packs", "1")), f"what is in use past the cap: refused, nothing left ({st})")
+        i = json.loads(page.call("POST", "/api/sound-pack/new", b"cap")[2])["id"]
+        e.stop(); e = Echo(full, HASSMIC_SOUNDPACK_FREE_MIN=str(1 << 62)); page = e.page()
+        st, _, data = page.call("POST", f"/api/sound-pack/{i}/file/touch", wav(48000, 1, 0.5, 1000))
+        check(st == 400 and b"not enough room" in data, f"the partition nearly full: {st} {data[:80]!r}")
+        st, _, data = page.call("POST", "/api/sound-pack/new", b"more")
+        check(st == 400 and b"not enough room" in data, "no new pack either")
+
+        # an Echo with "Wake sound" off from before the switches: as quiet as it was, Bluetooth's chimes (never covered) on
+        e.stop(); old = tempfile.mkdtemp(); os.makedirs(os.path.join(old, "state"))
+        open(os.path.join(old, "state", "config"), "w").write("wake_sound=off\n")
+        e = Echo(old); page = e.page()
+        setting = lambda name: next(x["value"] for x in page.state()["settings"] if x["name"] == name)
+        check(not any(setting(k) for k in ("wake_sound", "sound_touch", "sound_mics_off", "sound_mics_on", "sound_volume")), "wake_sound=off: the sounds it covered off")
+        check(setting("sound_bluetooth_on") and setting("sound_bluetooth_off"), "Bluetooth's stay on: it never covered them")
+        check("sound_touch=off" in open(os.path.join(old, "state", "config")).read(), "written, so once only")
+        page.set(sound_touch="on"); e.stop()
+        e = Echo(old); page = e.page()
+        check(setting("sound_touch") and not setting("wake_sound"), "one turned on after that stays on")
     finally:
         try: e.stop()
         except Exception: pass

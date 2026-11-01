@@ -421,12 +421,19 @@ Beyond the README's two figures:
   the wake sound, the action button, microphone off and on, the volume keys, Bluetooth connected and disconnected,
   Identify, and Drop In's chimes and ringtones (the timer's sound is "Timer sound", above). "Upload…" takes any file
   your browser plays, as the timer sound does, and offers to bring it to the loudness of Alexa's sound it replaces, so
-  the sounds volume suits both. The wake, button and volume sounds may be 2 seconds at most: the wake sound plays over
-  the start of your command, and the echo canceller leaves part of it in what Home Assistant hears. The rest may be
-  30 seconds; ringtones repeat. "Play" plays one once at the sounds volume, even with "Wake sound" off; otherwise
-  "Wake sound" off silences yours as it does Alexa's. The bin deletes yours, and Alexa's plays again. Where the firmware has none
+  the sounds volume suits both. The wake, button, volume, Drop In and call connected sounds may be 2 seconds at most: the wake sound plays over
+  the start of your command, and the echo canceller leaves part of it in what Home Assistant hears. Ringtones may be
+  30 seconds and repeat, the others 5. "Play" plays one once at the sounds volume, even when its switch is off. The wake sound, action
+  button, microphone, volume and Bluetooth sounds have a switch each, and "All off" sets them together; a switch silences
+  that sound and keeps your choice, so on again plays yours or Alexa's as before. Home Assistant's "Wake sound" is the wake
+  sound's switch. Identify and Drop In have none: Identify is asked for, and Drop In's tell the room a microphone is open.
+  The bin deletes yours, and Alexa's plays again. Where the firmware has none
   of Alexa's for a sound, yours still plays. Each Echo keeps its own: exports and "Copy models" leave them out, and a
   factory reset deletes them.
+- **Sound packs**: sets of those sounds, on the same page. "Save these sounds" keeps what is in use as a pack, "Use"
+  puts a pack in use (it replaces your sounds, and those it has none of go back to Alexa's), "Export" gives a `.soundpack`
+  file, a plain tar with `pack.json` and one WAV per sound, and "Import" takes one on any Echo. 16 packs and
+  30 MB at most; nothing is written with under 32 MB free on the Echo. Switches stay as they are when a pack changes.
 - Silent and dark at boot.
 - The ring dims with the room's light as on a stock Echo (Amazon's own logic, on by default); a fixed level from Home
   Assistant switches that off.
@@ -529,7 +536,7 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 |---|---|
 | Media player | TTS, `play_media`; its volume is the Echo's (the music's, see [Separate volumes](#separate-volumes)) |
 | Mute, Do not disturb | DND drops announcements; purple flash when switched on |
-| Wake sound | covers all the Echo's own sounds |
+| Wake sound | the wake sound only, on or off; off keeps the one you chose |
 | Equalizer | bass, mid, treble, −6 to +6 dB, Amazon's own, on everything the Echo plays |
 | LED auto brightness, LED brightness | a level holds the ring there and switches the automatic off (Echo Show 5: the band's brightness, no automatic) |
 | Timer ringing, Ringing timers | on while a finished timer rings; their names (diagnostic), see [Voice](#voice) |

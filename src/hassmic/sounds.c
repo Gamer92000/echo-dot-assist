@@ -51,8 +51,17 @@ int sound_by_id(const char *id)
 }
 /* The wake and touch sounds play over the start of the request: the echo canceller leaves part of them in what speech
  * to text hears, and wake sound removal holds the audio back until their echo has passed (stock's: 0.65 s).  The
- * volume tone plays at every key press.  2 s for those; the rest may ring as long as the timer's */
-unsigned sound_own_secs(enum sound s) { return s == SND_WAKE || s == SND_TOUCH || s == SND_VOLUME ? 2 : SOUND_CUSTOM_SECS; }
+ * volume tone plays at every key press.  A call's first chimes duck the near mic for as long as they play (dropin.c
+ * SUPPRESS_OWN_DB), so the far end hears nothing meanwhile.  2 s for those.  Our sounds hold the gain and end of request
+ * and drop sound detection while they play, so 5 s for the other chimes; only the ringtones may ring as the timer's */
+unsigned sound_own_secs(enum sound s)
+{
+    switch (s) {
+    case SND_RING_IN: case SND_RING_OUT: case SND_CUSTOM: return SOUND_CUSTOM_SECS;
+    case SND_MICS_OFF: case SND_MICS_ON: case SND_BT_ON: case SND_BT_OFF: case SND_IDENTIFY: case SND_CALL_OFF: return 5;
+    default: return 2;
+    }
+}
 
 #define SOUND_MAX (4u << 20)                /* the longest stock sound (a ringtone) is ~180 kB */
 
@@ -103,7 +112,8 @@ static short *wav_decode(const unsigned char *in, size_t len, size_t *samples, u
 static short *mp3_decode(const unsigned char *in, size_t len, size_t *samples, unsigned *rate)
 {
     short *out = NULL; size_t cap = 0, n = 0; unsigned ch = 0;
-    static mp3dec_t dec; mp3dec_frame_info_t info; mp3d_sample_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME];
+    mp3dec_t dec;                               /* not static: the page's sound_stock decodes on its own thread */
+    mp3dec_frame_info_t info; mp3d_sample_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME];
     mp3dec_init(&dec);
     for (size_t pos = 0; pos < len;) {
         int got = mp3dec_decode_frame(&dec, in + pos, (int)(len - pos), pcm, &info);
@@ -258,6 +268,14 @@ done:
     return 1;
 }
 
+/* Stock's are a few kB to 180 kB and stay.  A ringtone of one's own is 2.9 MB of PCM: read again the next time */
+#define SOUND_KEPT (256u << 10)
+void sound_played(enum sound s)
+{
+    if (s < 0 || s >= SND_COUNT || !cache[s].pcm || cache[s].n * sizeof *cache[s].pcm <= SOUND_KEPT) return;
+    free(cache[s].pcm); cache[s].pcm = NULL; cache[s].tried = 0;
+}
+
 /* the system partition does not change while hassmic runs: what an APK has is looked up once (1 there, 2 not) */
 static atomic_int in_zip[SND_COUNT];
 
@@ -294,9 +312,9 @@ int sound_stock_present(enum sound s)
 
 /* Only what the page makes of an upload: anything else would need a resampler or a decoder on the Echo, and this is
  * decoded at every ring */
-int sound_own_save(enum sound s, const void *wav, size_t len, char *err, size_t errsz)
+int sound_own_check(enum sound s, const void *wav, size_t len, char *err, size_t errsz)
 {
-    unsigned fmt, ch, rate = 0, bits, secs = sound_own_secs(s); size_t n = 0; char path[300];
+    unsigned fmt, ch, rate = 0, bits, secs = sound_own_secs(s); size_t n = 0;
     if (!ownable(s)) { snprintf(err, errsz, "no such sound"); return -1; }
     if (len > SOUND_CUSTOM_MAX) { snprintf(err, errsz, "too long: %u s at most", secs); return -1; }
     if (!wav_data(wav, len, &fmt, &ch, &rate, &bits, &n)) { snprintf(err, errsz, "not a WAV file"); return -1; }
@@ -306,12 +324,32 @@ int sound_own_save(enum sound s, const void *wav, size_t len, char *err, size_t 
     }
     if (n < SOUND_CUSTOM_RATE / 10 * 2) { snprintf(err, errsz, "too short: a tenth of a second at least"); return -1; }
     if (n > (size_t)secs * SOUND_CUSTOM_RATE * 2) { snprintf(err, errsz, "too long: %u s at most", secs); return -1; }
-    if (s != SND_CUSTOM) { snprintf(path, sizeof path, "%s/sounds", state_dir()); mkdir(path, 0755); }
+    return 0;
+}
+
+int sound_own_save(enum sound s, const void *wav, size_t len, char *err, size_t errsz)
+{
+    char path[300];
+    if (sound_own_check(s, wav, len, err, errsz)) return -1;
+    size_t n = len > 44 ? len - 44 : 0;
+    if (s != SND_CUSTOM) {
+        snprintf(path, sizeof path, "%s/sounds", state_dir());
+        if (!mkdir(path, 0755)) statefile_sync(state_dir());        /* the folder's name too: a hard reset (issue #46) */
+        else if (errno != EEXIST) { snprintf(err, errsz, "cannot make %s: %s", path, strerror(errno)); return -1; }
+    }
     own_path(s, path, sizeof path);
     if (statefile_write(path, 0644, wav, len)) { snprintf(err, errsz, "cannot write %s", path); return -1; }
     atomic_fetch_add(&gen[s], 1);
     fprintf(stderr, "sound %s: %u ms uploaded\n", s == SND_CUSTOM ? names[s] : ids[s], (unsigned)(n / 2 * 1000 / SOUND_CUSTOM_RATE));
     return 0;
+}
+
+unsigned char *sound_own_read(enum sound s, size_t *len)
+{
+    char path[300];
+    if (!ownable(s)) return NULL;
+    own_path(s, path, sizeof path);
+    return read_file(path, len);
 }
 
 int sound_own_delete(enum sound s)
@@ -334,6 +372,3 @@ unsigned sound_own_ms(enum sound s)
     return (unsigned)((unsigned long long)(st.st_size - 44) / 2 * 1000 / SOUND_CUSTOM_RATE);
 }
 
-int sound_custom_save(const void *wav, size_t len, char *err, size_t errsz) { return sound_own_save(SND_CUSTOM, wav, len, err, errsz); }
-int sound_custom_delete(void) { return sound_own_delete(SND_CUSTOM); }
-unsigned sound_custom_ms(void) { return sound_own_ms(SND_CUSTOM); }

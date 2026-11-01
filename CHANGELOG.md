@@ -8,8 +8,17 @@ What changed for people using the Echo, newest first. Details and measurements a
   the wake sound, the action button, microphone off and on, the volume keys, Bluetooth connected and disconnected,
   Identify, and Drop In's chimes and ringtones. Each can be replaced by any sound your browser plays, the same way as
   the timer sound: the page converts it and offers to bring it to the loudness of Alexa's sound it replaces. "Play"
-  plays it once; deleting yours brings Alexa's back. The wake, button and volume sounds may be 2 seconds long at most
-  (they play over the start of your command), the rest 30. Each Echo keeps its own; a factory reset deletes them.
+  plays it once; deleting yours brings Alexa's back. The wake, button, volume, Drop In and call connected sounds may be
+  2 seconds long at most (they play over the start of your command or call), ringtones 30, the others 5. One longer
+  than 2 seconds stops when you speak to the Echo or another sound plays. Each Echo keeps its own; a factory reset deletes them.
+- **Sound packs.** The Voice page keeps sets of sounds on the Echo: save the sounds in use as a pack, switch between
+  packs, and save one as a `.soundpack` file to load on another Echo. A pack is a whole set: sounds it has none of go
+  back to Alexa's. Up to 16 packs and 30 MB on an Echo, and none are written when its storage is nearly full.
+- **Each sound has its own switch.** The Sounds card turns the wake sound, action button, microphone, volume and
+  Bluetooth sounds on and off one by one, with "All off" for all of them. The "Wake sound" switch in Home Assistant now
+  does what it says: it used to silence the button, microphone and volume sounds too, and now only the wake sound. Off
+  keeps the sound you chose. An Echo that had it off stays quiet after the update: those sounds start with their own
+  switches off.
 
 ## 2026-10-30
 
