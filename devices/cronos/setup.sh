@@ -181,8 +181,16 @@ step_unlock() {
         fi
     fi
     # in the foreground: it asks to type YES, and for a key press at the end
+    local mark; mark=$(stat -c %s "$LOG" 2>/dev/null || echo 0)
     live "Unlocking with amonet's fastbrick" in_dir $FW/amonet env PYTHONUNBUFFERED=1 \
         bash -o pipefail -c "./fastbrick.sh 2>&1 | tee -a '$LOG'" || return 1
+    # fastbrick.sh exits 0 when its prompt gets anything but YES ("Aborting.", nothing sent), as it does for an Echo
+    # unlocked already: only its output tells them apart.  Read as success, the step waited for a TWRP that never came
+    # (an Echo Show 8, 2026-11-01: "YES\" typed, the Echo back in Fire OS, the step ticked).
+    if [ -z "$DRY" ] && tail -c +$((mark + 1)) "$LOG" | grep -q 'Aborting\.'; then
+        fail "amonet stopped before the unlock: it takes YES, in capitals and nothing else. Nothing on the Echo changed; run this step again."
+        return 1
+    fi
     twrp_screen
     wait_adb recovery || { fail "no TWRP on adb; $DDIR/README.md, step by step, then try again"; return 1; }
     warn "Leave the Echo in TWRP for now: stock Fire OS has no adb."

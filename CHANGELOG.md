@@ -4,6 +4,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-03
 
+- **Setup on the Echo Show 5 and Echo Show 8 1st gen stops when the unlock was not confirmed.** amonet asks you to type
+  `YES`; anything else (a typo, a stray key) makes it stop without touching the Echo, but setup took that as done and
+  waited for a TWRP that never came. Now it says amonet stopped, and the step can simply be run again.
 - **Echo Shows: the screen's face and drawer now come with the releases.** The published updates had left them out,
   so a Show installed or updated from a release showed only the light band on a black screen. Builds of your own
   (`make`, `scripts/ota-push.sh`) had it all along.
