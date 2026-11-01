@@ -2943,3 +2943,20 @@ Run in this order. Each step says what it proves.
       rebuilt, a macOS fastboot, `fastbrick.sh` without bash 4 arrays and `timeout`.  `twrp.img`, `lk.bin`, `preloader.img`,
       `tz.img`, `tee-payload.bin`, `gpt-radar.bin` unchanged, so the flash steps stand.  A folder per version as on
       biscuit (`firmware/radar/amonet-radar-v1.0.1/`).  Checked: `scripts/setup.sh radar --dry-run`.  Open: an unlock with it.
+- [~] Echo Shows' setup wipes `/data` with the old system (PR #92, TRusselo, 2026-11-01): crown from build 0013222532996
+      kept 16 app updates in `/data/app` over NS6570's `/system`; Spotlight's (system copy off the partition, account
+      libraries gone) crashed every 1-4 min, `ClassNotFoundException: com.amazon.neo.service.api.sdk.PackageManagerUtils`.
+      By hand afterwards (`pm uninstall` of the leftovers, webview kept): no crash in 4 min.  One `pm uninstall` of an
+      updated app whose system copy is in `/system/hassmic-removed` crashed system_server once (NullPointerException in
+      `deleteSystemPackageLIF`), which came back by itself.  `wipe_data` (`scripts/lib/setup.sh`, crown, checkers, cronos)
+      runs before the write, a run cut off after it would find the right system and skip the step.  Differences from the
+      Dots' wipe: Enter on TWRP's main menu first (their TWRP has no screen; answering "Keep System Read only?" restarts
+      USB), and `/data/app` read back with `/data` known mounted, since what `twrp` exits with on a failed wipe was never
+      seen.  The read-back decides, not adb's exit (a USB restart ends the adb shell while TWRP wipes on: 30 s of tries).
+      Once per run (`WIPED`: a retried write), not by the progress file (a later run may find the old system booted
+      since).  "Start from scratch" keeps its word on the right firmware too (`wipe` / `wiped` in the progress file, set
+      after the warning: a non-empty progress file skips it); athena has no firmware step and no wipe, so its menu and
+      `ROOTED_NOTE` say so.  `/data` unencrypted: `ro.crypto.state` on crown, fstab `encryptable=` on checkers.  Checked:
+      `tests/unit/setup_wipe_test.sh` (stand-ins of adb and the UI around the real functions and menu block), `--dry-run`.  Open: a wipe on a real Show, whether
+      `twrp wipe` runs under the "Keep System Read only?" screen, "Download from Amazon" after a wipe (the Dots' DHA
+      certificate is on `/persist`; the Shows' place not confirmed).

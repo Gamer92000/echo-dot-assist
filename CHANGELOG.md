@@ -4,6 +4,15 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-01
 
+- **Setup on the Echo Show 5 (both generations) and Echo Show 8 1st gen wipes the old data with the old system.** An
+  Echo that had updated itself past the firmware the setup installs kept that newer build's app updates, and Android
+  ran them over the older system: on an Echo Show 8, "Spotlight has stopped" popped up every minute or so. Setup now
+  wipes cache and data before it writes the system partition, as it always did on the Dots, and checks that the apps
+  are gone. "Start from scratch" on a rooted Echo now wipes there too, also when the firmware is the right one already.
+  Already installed and seeing such messages? `scripts/setup.sh <model> --restart` and "Start from scratch" clears them,
+  along with the Echo's settings and its link to Home Assistant. Or by hand: `adb shell pm uninstall <package>` for each
+  Amazon package left in `/data/app` (keep `com.amazon.webview.chromium`); Android may restart once on that and comes
+  back by itself.
 - **The Echo says when Home Assistant is not there.** While Home Assistant restarts, or when the Echo has lost its link
   to it, the wake word and the action button used to do nothing at all: no sound, no light, nothing in the log, so the
   Echo looked deaf. Now the ring shows the short error animation, and the log says why (`no Home Assistant link`).

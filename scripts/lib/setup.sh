@@ -494,6 +494,45 @@ twrp_check() {
 # model's ROOTED_SKIP steps done and leaves "rooted" in the progress file): no unlock tool, no firmware to flash
 rooted_already() { [[ " $DONE_IDS " == *" rooted "* ]]; }
 
+# wipe_asked: the user chose "Start from scratch" on a rooted Echo (setup.sh leaves "wipe" in the progress file) and it
+# has not happened yet.  The Echo Shows' step_system has nothing to write when the system is the right one already, but
+# /data still holds what the Echo collected, so that promise is kept there; "wiped" stops a rerun wiping again.
+wipe_asked() { [[ " $DONE_IDS " == *" wipe "* && " $DONE_IDS " != *" wiped "* ]]; }
+
+# wipe_data: the Echo Shows' wipe in TWRP.  /data goes with the old system, as the Dots' step_flash wipes it: a newer
+# build's app updates stay in /data/app and outlive the downgrade, and PackageManager runs them over the older /system.
+# On an Echo Show 8 from build 0013222532996 (2026-11-01) 16 were left after the install, Spotlight's among them; with
+# its system copy off the partition (STOCK_APPS_OUT) and Amazon's account apps gone it crashed every minute or so, a
+# "Spotlight has stopped" on screen.  The Shows' TWRP has a screen, the Dots' none: answering its "Keep System Read
+# only?" restarts USB, so it is answered first, not during the wipe.  Once per run: a write that failed and is tried
+# again needs no second one.  Not by the progress file: a later run may find an Echo that booted its old system since.
+wipe_data() {
+    [ -z "$WIPED" ] || return 0
+    todo "On the Echo's screen, get to TWRP's main menu" \
+        "If it asks \"Keep System Read only?\", tap \"Keep Read Only\" and wait for the menu." \
+        "Do not swipe to allow modifications."
+    wait_adb recovery || return 1
+    task "Wiping cache and data" wipe_twrp || { fail "the wipe did not take: try this step again"; return 1; }
+    WIPED=1
+    mark_done wiped
+}
+# Whether the wipe worked is read from /data/app, since the bug it prevents shows only long after.  Not from adb's exit
+# status: what twrp exits with was never seen for a failed wipe, and a USB restart ends the adb shell while TWRP wipes
+# on, hence the 30 s of tries.  Each ends in a word: nothing back means adb is away, and an unmounted /data would pass
+# for an empty one.  Run through task, in a process of its own.
+wipe_twrp() {
+    local left i
+    adb shell 'twrp wipe cache && twrp wipe data' || echo "adb shell: exit $?"
+    for ((i = 0; i < 30; i++)); do
+        left=$(ashell "grep -q ' /data ' /proc/mounts || mount -t ext4 ${SYSTEM_DEV%/*}/userdata /data 2>/dev/null
+                       if grep -q ' /data ' /proc/mounts; then ls /data/app 2>/dev/null; echo end; else echo unmounted; fi")
+        [ "$left" = end ] && return 0
+        sleep 1
+    done
+    echo "after the wipe, /data/app holds: ${left:-(no answer from the Echo)}"
+    return 1
+}
+
 # kernel_tools: what Wi-Fi motion's kernel module is built with (make kernel-tools: the model's kernel sources and the
 # compiler Amazon used), so that the build has it as CI's does.  Without them `make` quietly leaves the module out, and
 # the install once stopped over the missing file (issue #5).
