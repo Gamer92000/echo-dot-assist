@@ -197,5 +197,23 @@ async def main(e):
     check(len(got) == 255 and got == long[:254] + "…" and texts("last_heard")[-1] == "erzähl mir was",
           f"a reply over 255 characters: 254 of them and an ellipsis, cut on a character ({len(got)}: {got[-4:]!r})")
 
+    # The wake word and the button with Home Assistant gone (a restart, a lost link): the error ring and a line in the
+    # log, nothing started; linked again, a run as before and no error ring
+    try: await c.disconnect()
+    except Exception: pass
+    n0 = errs(); proc.send_signal(signal.SIGUSR1)
+    await until(lambda: errs() > n0)
+    check(errs() == n0 + 1 and "wake word: no Home Assistant link, nothing started" in e.log(),
+          f"the wake word without Home Assistant: the error ring and why in the log ({errs() - n0})")
+    n0 = errs(); keyev(KEY_HELP, 1); await asyncio.sleep(0.1); keyev(KEY_HELP, 0)
+    await until(lambda: errs() > n0)
+    check(errs() == n0 + 1 and "button: no Home Assistant link, nothing started" in e.log(),
+          f"the button without Home Assistant: the error ring and why in the log ({errs() - n0})")
+    c = APIClient("127.0.0.1", PORT, None); await asyncio.wait_for(c.connect(login=True), 5)
+    await c.list_entities_services(); va = assistant(c); started = va.started; await sync(c)
+    n0 = errs(); started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+    await asyncio.sleep(0.3)
+    check(started.is_set() and errs() == n0, f"Home Assistant back: the wake word starts a run, no error ring ({errs() - n0})")
 
-run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT), {"HASSMIC_FAKE_LED": os.path.join(tempfile.mkdtemp(), "ledctrl.log")})
+
+run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT), {"HASSMIC_FAKE_LED": os.path.join(tempfile.mkdtemp(), "ledctrl.log")}, log=True)

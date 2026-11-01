@@ -2660,6 +2660,16 @@ Run in this order. Each step says what it proves.
       or a follow-up).  Open (device): near misses per day on a Dot with TV and music (how noisy the event is); the
       false-wake count for the microWakeWord comparison above can come from these events.  Not done: the issue's
       "keep wake clips" (audio around each wake for download).
+- [x] Wake word or button without Home Assistant (2026-11-01; during an HA restart or a lost link the Echo cannot be
+      told from a deaf one, and boot.log has nothing to say why).  `trigger` did nothing when `!connected || !satellite_running`: no sound, no
+      ring, no line.  Now, when not muted, set up (`oobe` 0), IDLE, no ringing timer and no Drop In: the error ring
+      (`anim_start_error_short`, as `core_error`) and `wake word|button: no Home Assistant link, nothing started`
+      (linked but the voice assistant not subscribed: says so).  Unlike #48's no-speech case something failed that
+      the ring helps with.  With arbitration an Echo that cannot answer does not claim (`wake_heard`'s `can`) and
+      triggers at once, so the Echo without HA shows the ring while another one answers: wanted, it is the broken
+      one.  Tests: fake_ha_esphome_buttons.py (HA gone: ring + line for wake word and button; HA back: a run, no
+      ring).  PC by hand: hassmic-host without a client, SIGUSR1 + KEY_HELP: two rings, two lines; not set up: none.
+      Open: a sound as well; left out until someone asks.
 - [x] Volumes per kind of audio (GitHub issue #32: several Dot 3 and a Dot 2; one volume for media and one for the
       assistant, the wake sound on a slider of its own).  Built 2026-10-17, after two tries the owner rejected.
       First: categories linked to the main volume with offsets (replies in volume points, sounds in dB under it,

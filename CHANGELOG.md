@@ -2,6 +2,13 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-01
+
+- **The Echo says when Home Assistant is not there.** While Home Assistant restarts, or when the Echo has lost its link
+  to it, the wake word and the action button used to do nothing at all: no sound, no light, nothing in the log, so the
+  Echo looked deaf. Now the ring shows the short error animation, and the log says why (`no Home Assistant link`).
+  Not while the microphones are off, and not before the Echo was set up.
+
 ## 2026-10-30
 
 - **When the wake word's sounds give no answer, the Echo no longer guesses a pause inside your command** (issue #79).

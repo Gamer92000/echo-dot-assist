@@ -1079,7 +1079,16 @@ static void trigger(int touch, uint64_t from)
             pipeline_start(from);
         }
     } else if (!connected || !satellite_running || core_muted()) {
-        /* nothing to talk to, or privacy latch on */
+        /* Nothing to talk to, or privacy latch on.  Without Home Assistant the Echo used to do nothing at all here: no
+         * sound, no ring, no log line, so "it does not listen" during an HA restart or a lost link looked like a deaf
+         * Echo and left nothing to find afterwards.  Unlike nothing said (core_no_speech, issue #48) something did fail
+         * here that the ring can help with, so the error ring shows it.  Not while muted (asked for), not before the
+         * Echo was set up (the setup spinner already says it), not over a ringing timer or a Drop In (their own ring) */
+        if (!core_muted() && !atomic_load(&oobe) && state == IDLE && !atomic_load(&alarm_on) && dropin_was == DROPIN_IDLE) {
+            fprintf(stderr, "%s: %s, nothing started\n", touch ? "button" : "wake word",
+                    connected ? "Home Assistant is linked but its voice assistant has not subscribed" : "no Home Assistant link");
+            led("-s", "anim_start_error_short");
+        }
     } else if (state == IDLE && !touch && stopped_now()) {
         fprintf(stderr, "stop: came during the round, nothing started\n");
     } else if (state == IDLE) {
