@@ -84,6 +84,11 @@ System) off takes any certificate, but then anyone on your network could slip th
 - **Nothing said** after the wake word (or the button, or a question the assistant asked): the ring goes dark
   without the error animation, as on a stock Echo.
 
+- **No Home Assistant** (it restarts, or the link to the Echo is lost): the wake word and the action button show the
+  short error animation and start nothing; the log says `wake word: no Home Assistant link, nothing started` (or
+  `button: ...`). Not while muted (with Wyoming, Home Assistant's mute switch too), and not before the Echo was set up
+  (the setup spinner shows then).
+
 - **"Alexa, stop"** interrupts a reply, but only right behind the wake word: Amazon's models only listen for "stop" in
   the two seconds after it. Out of silence, "Alexa, stop the music" goes to Home Assistant as a normal command.
   With nothing else to stop, it pauses music from Music Assistant or a phone on the Echo itself (the action button
@@ -746,7 +751,7 @@ password before or after, empty for an open network. The Echo tries the new netw
 once it has an address and the router answers, and otherwise returns to the old one within a minute or two, saying
 why. Once the new one works it forgets the old ones. Expect a new IP address: find it as "Web UI address" in Home
 Assistant (which finds the Echo again within a few minutes if it reaches that network), and approve the browser there
-once more. WPA2 and open networks only.
+once more. WPA2 and open networks only; a WPA2/WPA3 mixed network joins as WPA2 (tried on an Echo 2).
 
 **Log** (System): `boot.log` with a filter, the older part, and a download for bug reports ([reading it](../README.md#when-something-is-wrong)). The Sendspin token is
 blanked; the rest travels unencrypted, like the whole page.

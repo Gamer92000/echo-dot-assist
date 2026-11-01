@@ -5,8 +5,9 @@ scripts/device/wifi.sh against stand-ins for wpa_cli and friends (tests/fake_wif
 escapes, the PSK as PBKDF2 makes it, a wrong password, a network out of reach, no DHCP, a silent router, an open
 network, a second password for a known network: what is saved, and that a failed switch goes back and saves nothing.
 Run twice: the Dots' world (wpa_supplicant) and checkers' (ANDROID=1: WifiService through the wifictl.dex
-calls, the same fake world answering as the framework would, app_process included)."""
-import shutil, hashlib, json, os, signal, stat, subprocess, sys, tempfile, time
+calls, the same fake world answering as the framework would, app_process included).  The Dots' run also holds issue #90:
+main.sh's psk_only (the entry wifisvc rewrites, cut back) and the setup's scripts/device/wifi-join.sh on WPA3."""
+import shutil, hashlib, json, os, re, signal, socket, stat, subprocess, sys, tempfile, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webclient import wait_port, Browser, req
 
@@ -233,6 +234,61 @@ def main(android=False):
         with open(reqf, "w") as f: f.write("join 5 6869;reboot ffff\n")
         o = root_run()
         check("not understood" in o and not os.path.exists(reqf) and not any("reboot" in c for c in W()["calls"][-3:]), "a request that is not hex: dropped")
+
+        # ---- issue #90: what wifisvc makes of a saved network, main.sh netwatch's psk_only; the setup's join on WPA3
+        if not android:
+            mixed = {"id": 0, "ssid": H("Mixed"), "psk": PSK("mixed pass", "Mixed"), "key_mgmt": "WPA-PSK WPA-PSK-SHA256", "priority": 0, "disabled": 0}
+            def world_set(**kw):
+                w = W(); w.update(kw)
+                with open(world, "w") as f: json.dump(w, f)
+            air_mixed = {"hex": H("Mixed"), "psk": PSK("mixed pass", "Mixed"), "flags": "[WPA2-PSK+SAE+PSK-SHA256-CCMP][ESS]",
+                         "bss": [["aa:00:00:00:00:09", 2472, -37]], "ip": "10.6.6.6", "gw": "10.6.6.1"}
+            main_sh = open(f"{ROOT}/scripts/system/main.sh").read()
+            fn = re.search(r"^wpa\(\) \{.*?^psk_only\(\) \{.*?^\}$", main_sh, re.M | re.S).group(0)
+            check(re.search(r"^        psk_only$", re.search(r"^netwatch\(\) \{.*?^\}$", main_sh, re.M | re.S).group(0), re.M), "netwatch looks every round, the address or not")
+            def looks(n=1, down=3, service="wifisvc", socks="/none", tail=""):
+                """main.sh netwatch's calls, n of them, the 30 s before them counted in down"""
+                sh = f"WLAN=wlan0 WPA_SOCKETS={socks} WIFI={out} WIFI_SERVICE={service} down={down}\n{fn}\n" + "psk_only\n" * n + tail
+                return subprocess.run(["sh", "-c", sh], env=renv, capture_output=True, text=True, timeout=30).stdout
+            cut = lambda: W()["networks"][0]["key_mgmt"] == "WPA-PSK"
+            world_set(networks=[dict(mixed)], current=0, target=None, air=W()["air"] + [air_mixed], saved=[])
+            check(looks(tail='echo "down=$down"\n') == "down=0\n" and not cut() and W()["current"] == 0, "associated, the address or not: the entry and the link left alone, the count back at 0")
+            world_set(current=None)
+            check(looks(n=3, down=0) == "" and not cut(), "not on the network for less than 30 s: left alone")
+            check(looks(service="") == "" and not cut(), "no wifisvc (Android's WifiService owns its networks): left alone")
+            os.makedirs(os.path.join(out, "lock"))
+            check(looks() == "" and not cut(), "while wifi.sh switches: left alone")
+            os.rmdir(os.path.join(out, "lock"))
+            world_set(calls=[])
+            o = looks()
+            check("network 0 cut back to WPA-PSK" in o and cut(), f"30 s off on PSK-SHA256: cut back ({o.strip()!r})")
+            check(all(" -g@android:wpa_wlan0 IFNAME=wlan0 " in c for c in W()["calls"] if c.startswith("wpa_cli")), "no socket for the interface (a reconfigure): through the global one")
+            check(W()["saved"] == [], "in memory only: nothing saved")
+            r = subprocess.run(["wpa_cli", "status"], env=renv, capture_output=True, text=True).stdout
+            check("wpa_state=COMPLETED" in r, "and it associates")
+            world_set(current=None)
+            check(looks() == "", "the next round has nothing left to do")
+            sockets = os.path.join(tmp, "sockets"); os.makedirs(sockets)
+            s = socket.socket(socket.AF_UNIX); s.bind(os.path.join(sockets, "wlan0"))
+            world_set(networks=[dict(mixed)], current=None, target=None, calls=[])
+            check("cut back" in looks(socks=sockets) and all(" -i wlan0 -p " in c for c in W()["calls"] if c.startswith("wpa_cli")), "with the interface's socket: through that")
+            s.close()
+
+            with open(os.path.join(fake, "iptables"), "w") as f: f.write("#!/bin/sh\necho '-A OUTPUT -j hassmic_out'\n")
+            os.chmod(os.path.join(fake, "iptables"), 0o755)
+            join = lambda ssid, pw: subprocess.run(["sh", f"{ROOT}/scripts/device/wifi-join.sh", ssid, pw], env=dict(renv, WIFI_JOIN_SECS="1"),
+                                                   capture_output=True, text=True, timeout=30)
+            def on_air(flags):
+                world_set(networks=[], current=None, target=None, next_id=0, save_fails=False,
+                          air=[{"hex": H("Only3"), "psk": "not a PSK network", "flags": flags, "bss": [["aa:00:00:00:00:05", 5200, -50]], "ip": "10.9.9.9", "gw": "10.9.9.1"}])
+            on_air("[WPA2-SAE-CCMP][ESS]")
+            p = join("Only3", "whatever!")
+            check(p.returncode == 1 and "WPA3 only" in p.stdout and W()["networks"] == [], f"a WPA3-only network: says so, nothing kept ({p.stdout.strip()!r})")
+            on_air("[WPA2-PSK+SAE+PSK-SHA256-CCMP][ESS]")
+            p = join("Only3", "whatever!")
+            check(p.returncode == 1 and "WPA3" not in p.stdout and "password is probably wrong" in p.stdout, f"mixed, the wrong password: as before ({p.stdout.strip()!r})")
+            p = join("Elsewhere", "whatever!")
+            check(p.returncode == 1 and "WPA3" not in p.stdout and "no network named" in p.stdout, f"a name not on the air: as before ({p.stdout.strip()!r})")
     finally:
         proc.send_signal(signal.SIGTERM); proc.wait()
     if check.failed:

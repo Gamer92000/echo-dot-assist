@@ -19,6 +19,27 @@ What changed for people using the Echo, newest first. Details and measurements a
   does what it says: it used to silence the button, microphone and volume sounds too, and now only the wake sound. Off
   keeps the sound you chose. An Echo that had it off stays quiet after the update: those sounds start with their own
   switches off.
+- **Setup on the Echo Show 5 (both generations) and Echo Show 8 1st gen wipes the old data with the old system.** An
+  Echo that had updated itself past the firmware the setup installs kept that newer build's app updates, and Android
+  ran them over the older system: on an Echo Show 8, "Spotlight has stopped" popped up every minute or so. Setup now
+  wipes cache and data before it writes the system partition, as it always did on the Dots, and checks that the apps
+  are gone. "Start from scratch" on a rooted Echo now wipes there too, also when the firmware is the right one already.
+  Already installed and seeing such messages? `scripts/setup.sh <model> --restart` and "Start from scratch" clears them,
+  along with the Echo's settings and its link to Home Assistant. Or by hand: `adb shell pm uninstall <package>` for each
+  Amazon package left in `/data/app` (keep `com.amazon.webview.chromium`); Android may restart once on that and comes
+  back by itself.
+- **The Echo says when Home Assistant is not there.** While Home Assistant restarts, or when the Echo has lost its link
+  to it, the wake word and the action button used to do nothing at all: no sound, no light, nothing in the log, so the
+  Echo looked deaf. Now the ring shows the short error animation, and the log says why (`no Home Assistant link`).
+  Not while the microphones are off, or muted from Home Assistant over Wyoming, and not before the Echo was set up.
+- **A fix for the Echo 2 going offline on WPA2/WPA3 mixed Wi-Fi** (issue #90). Amazon's Wi-Fi service changes the saved
+  network at every start to a form the Echo 2's Wi-Fi refuses on such routers: it joined at setup and was never online
+  again after a reboot. Now, after 30 s off the network, the Echo puts it back by itself. Tried on an Echo 2 in an
+  earlier form, by the owner who reported it.
+- **Setup on the Dots and the Echo 2 says so when a network is WPA3 only** (issue #90), instead of blaming the name or
+  the password: setup joins WPA2 networks.
+- **The Echo 2's setup uses amonet-radar v1.0.1** (issue #88), which knows the bootloaders of newer Fire OS builds.
+  Get the new zip from the XDA thread into `firmware/radar/`; a setup already under way asks for it at the unlock.
 
 ## 2026-10-30
 

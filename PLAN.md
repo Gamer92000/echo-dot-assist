@@ -2688,6 +2688,20 @@ Run in this order. Each step says what it proves.
       or a follow-up).  Open (device): near misses per day on a Dot with TV and music (how noisy the event is); the
       false-wake count for the microWakeWord comparison above can come from these events.  Not done: the issue's
       "keep wake clips" (audio around each wake for download).
+- [x] Wake word or button without Home Assistant (2026-11-01; during an HA restart or a lost link the Echo cannot be
+      told from a deaf one, and boot.log has nothing to say why).  `trigger` did nothing when
+      `!connected || !satellite_running`: no sound, no ring, no line.  Now, when not muted, set up (`oobe` 0), IDLE, no
+      ringing timer and no Drop In (`error_shows`): the error ring
+      (`anim_start_error_short`, as `core_error`) and `wake word|button: no Home Assistant link, nothing started`
+      (a client linked, no voice assistant running: says so; it need not be HA).  Unlike #48's no-speech case something failed that
+      the ring helps with.  With arbitration an Echo that cannot answer does not claim (`wake_heard`'s `can`) and
+      triggers at once, so the Echo without HA shows the ring while another one answers: wanted, it is the broken
+      one.  Tests: fake_ha_esphome_buttons.py (HA gone: ring + line for wake word and button; HA back: a run, no
+      ring).  PC by hand: hassmic-host without a client, SIGUSR1 + KEY_HELP: two rings, two lines; not set up: none.
+      Wyoming: HA's mute switch sends `pause-satellite` and keeps the link: linked and not running as before
+      `run-satellite`, so `core_link_pause` marks it and no ring shows (`fake_ha.py`).  HA started with the switch on
+      does not connect at all, which here reads as no link: the ring shows.
+      Open: a sound as well; left out until someone asks.
 - [x] Volumes per kind of audio (GitHub issue #32: several Dot 3 and a Dot 2; one volume for media and one for the
       assistant, the wake sound on a slider of its own).  Built 2026-10-17, after two tries the owner rejected.
       First: categories linked to the main volume with offsets (replies in volume points, sounds in dB under it,
@@ -2935,3 +2949,42 @@ Run in this order. Each step says what it proves.
       (layer 3 here; 4 on the Dots, their set byte-identical).  No speaker: no `speaker_gain`, the Dot 2's volume curve.
       Tried on the device (2026-10-29), all as expected: unlock, root, install, audio level, buttons, the LED, DHA,
       Bluetooth, the wake lock.  kamakiri-cupcake v1.0.0 pinned (its lk and tee are 8338's).
+- [~] WPA2/WPA3 mixed Wi-Fi (issue #90, 2026-11-01; reported and tried on an Echo 2 by its reporter; this form on the PC,
+      and on a Dot 2 with its writes stubbed).  wifisvc's `libacehal_network_all.so` (biscuit, radar, donut) rewrites entries to `WPA-PSK
+      WPA-PSK-SHA256` at each start; on an AP with `[WPA2-PSK+SAE+PSK-SHA256-CCMP]` radar's driver refuses that AKM
+      (`err=22`), plain `WPA-PSK` associates at once.  The Dots' drivers unknown.  The issue's patch asked
+      `get_capability key_mgmt` first; useless: wpa_supplicant 2.6 prints only NONE, IEEE8021X, WPA-EAP, WPA-PSK, WPA-NONE
+      there (no ` WPA-PSK-SHA256` string in any of the three binaries), so its "no-op elsewhere" was never one.
+      Dot 2 on adb, 2026-11-01: capability `NONE IEEE8021X WPA-EAP WPA-PSK`, its entry `WPA-PSK WPA-PSK-SHA256`.
+      `psk_only` (main.sh netwatch, every look): 30 s without `wpa_state=COMPLETED` (not the address: `dhcpcd -K` keeps
+      it over a lost link, and a restarted wpa_supplicant reads SHA256 back), wifisvc models, not under wifi.sh's lock,
+      in memory, by the interface's socket or the global one.  Accepted loss: a network Amazon's setup saved on a
+      PSK-SHA256-only AP, if a driver takes that AKM at all, stays off after such a cut until a reboot.  What setup and
+      wifi.sh saved is WPA-PSK, so such an AP never joined those.  An Echo offline by this takes no update: USB.
+      `wifi-join.sh` (Dots, Echo 2) names a WPA3-only network (`[WPA2-SAE-CCMP]`) from the scan flags: it saves
+      `key_mgmt WPA-PSK`, as wifi.sh does, so neither joins one.  Whether a model could: unknown.  ` SAE` is in none of
+      the three binaries, so `get_capability` cannot print it, whatever the driver (the issue's "no SAE" proves nothing);
+      donut's has SAE code (`SAE: own commit-scalar`), no such strings on biscuit or radar.  `tests/fake_web_wifi.py`.
+- [x] amonet-radar v1.0.1 (issue #88, 2026-11-01): zip sha256 `22809bc4...88a9`, 94 789 047 bytes.  Against v1.0.0: LK
+      payloads for `63cb91b-20221007_073612` and `2c3569d-20260617_051433` beside `59779ca-20220524_183401` (`profile.sh`;
+      the pinned 6436's `lk.img` carries `20221007_073612`), the default and 20220524 payloads and `radar-kaeru.bin`
+      rebuilt, a macOS fastboot, `fastbrick.sh` without bash 4 arrays and `timeout`.  `twrp.img`, `lk.bin`, `preloader.img`,
+      `tz.img`, `tee-payload.bin`, `gpt-radar.bin` unchanged, so the flash steps stand.  A folder per version as on
+      biscuit (`firmware/radar/amonet-radar-v1.0.1/`).  Checked: `scripts/setup.sh radar --dry-run`.  Open: an unlock with it.
+- [~] Echo Shows' setup wipes `/data` with the old system (PR #92, TRusselo, 2026-11-01): crown from build 0013222532996
+      kept 16 app updates in `/data/app` over NS6570's `/system`; Spotlight's (system copy off the partition, account
+      libraries gone) crashed every 1-4 min, `ClassNotFoundException: com.amazon.neo.service.api.sdk.PackageManagerUtils`.
+      By hand afterwards (`pm uninstall` of the leftovers, webview kept): no crash in 4 min.  One `pm uninstall` of an
+      updated app whose system copy is in `/system/hassmic-removed` crashed system_server once (NullPointerException in
+      `deleteSystemPackageLIF`), which came back by itself.  `wipe_data` (`scripts/lib/setup.sh`, crown, checkers, cronos)
+      runs before the write, a run cut off after it would find the right system and skip the step.  Differences from the
+      Dots' wipe: Enter on TWRP's main menu first (their TWRP has no screen; answering "Keep System Read only?" restarts
+      USB), and `/data/app` read back with `/data` known mounted, since what `twrp` exits with on a failed wipe was never
+      seen.  The read-back decides, not adb's exit (a USB restart ends the adb shell while TWRP wipes on: 30 s of tries).
+      Once per run (`WIPED`: a retried write), not by the progress file (a later run may find the old system booted
+      since).  "Start from scratch" keeps its word on the right firmware too (`wipe` / `wiped` in the progress file, set
+      after the warning: a non-empty progress file skips it); athena has no firmware step and no wipe, so its menu and
+      `ROOTED_NOTE` say so.  `/data` unencrypted: `ro.crypto.state` on crown, fstab `encryptable=` on checkers.  Checked:
+      `tests/unit/setup_wipe_test.sh` (stand-ins of adb and the UI around the real functions and menu block), `--dry-run`.  Open: a wipe on a real Show, whether
+      `twrp wipe` runs under the "Keep System Read only?" screen, "Download from Amazon" after a wipe (the Dots' DHA
+      certificate is on `/persist`; the Shows' place not confirmed).
