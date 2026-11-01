@@ -45,9 +45,10 @@ The guided setup does all of it: `scripts/setup.sh crown` (`--dry-run` walks the
 1. **Unpack the firmware** (see below), build: `make DEVICE=crown`.
 2. **System partition**: must be NS6570's (`adb shell getprop ro.build.version.incremental` = `0012383140484`). Else write
    `firmware/crown/images/system.img` (sha256 `0877b48d…bf41db`, 3253731328 bytes) to `/dev/block/platform/mtk-msdc.0/11230000.MSDC0/by-name/system`
-   from TWRP, and read it back; `setup.sh` does this in 64 MB pieces with a check of each. Wipe cache and data first
-   (`adb shell 'twrp wipe cache && twrp wipe data'`): the old build's app updates in `/data/app` would run over this
-   older system.
+   from TWRP, and read it back; `setup.sh` does this in 64 MB pieces with a check of each. Wipe cache and data first,
+   from TWRP's main menu (past "Keep System Read only?": answering it restarts USB), with
+   `adb shell 'twrp wipe cache && twrp wipe data'`: the old build's app updates in `/data/app` would run over this
+   older system. `adb shell 'mount /data 2>/dev/null; grep " /data " /proc/mounts && ls /data/app'` must then print the mount and no app.
 3. **Root boot image**: `scripts/install-boot.sh --boot-only` (the firmware's `boot.img` with root adb, `verify` out of
    the fstab, the policy patched by `sepolicy.rules`; flashed in hacked fastboot).
 4. **Lock down, join Wi-Fi, install**: `scripts/wifi-join.sh` after the lockdown (`scripts/device/lockdown.sh`; do not

@@ -134,7 +134,9 @@ second as `boot-root (1).zip`; the setup takes either).  The steps written out f
    partition's 3253731328 bytes), and read back; not with `twrp install` of the `.bin`, whose updater-script also
    writes lk, tee1/tee2, the preloader and an MBR (see the warning above):
    ```sh
+   # on TWRP's main menu, past "Keep System Read only?" (Keep Read Only): answering it restarts USB
    adb shell 'twrp wipe cache && twrp wipe data'   # the old build's app updates in /data/app would run over this system
+   adb shell 'mount /data 2>/dev/null; grep " /data " /proc/mounts && ls /data/app'   # must print the mount and no app
    adb exec-in 'dd of=/dev/block/platform/mtk-msdc.0/11230000.MSDC0/by-name/system bs=4194304 && sync' < firmware/checkers/images/system.img
    adb shell sha256sum /dev/block/platform/mtk-msdc.0/11230000.MSDC0/by-name/system   # SYSTEM_IMG_SHA256
    ```

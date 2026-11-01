@@ -204,8 +204,8 @@ step_system() {
     local b
     if [ -z "$DRY" ] && adb_is device; then
         b=$(ashell getprop ro.build.version.incremental)
-        [ "$b" = "$FIRMWARE_BUILD" ] && { ok "the system is $FIRMWARE_ID already"; return 0; }
-        info "the Echo runs build ${b:-unknown}, not $FIRMWARE_ID's $FIRMWARE_BUILD"
+        [ "$b" = "$FIRMWARE_BUILD" ] && ! wipe_asked && { ok "the system is $FIRMWARE_ID already"; return 0; }
+        [ "$b" = "$FIRMWARE_BUILD" ] || info "the Echo runs build ${b:-unknown}, not $FIRMWARE_ID's $FIRMWARE_BUILD"
         task "Restarting into TWRP" adb reboot recovery || return 1
         twrp_screen
     fi
@@ -216,7 +216,7 @@ step_system() {
         b=$(twrp_system_build)
         if [ "$b" = "$FIRMWARE_BUILD" ]; then
             task "Checking the system partition (3.2 GB, 2 min)" sh -c "[ \"\$(adb shell sha256sum $SYSTEM_DEV | tr -d '\r' | cut -c1-64)\" = $SYSTEM_IMG_SHA256 ]" &&
-                { ok "the system is $FIRMWARE_ID already"; return 0; }
+                { ok "the system is $FIRMWARE_ID already"; ! wipe_asked || wipe_data; return; }
             info "its build.prop says $FIRMWARE_BUILD, but the partition is not all $FIRMWARE_ID's (a write cut short): it is completed"
         else info "the Echo's system is build ${b:-unknown}, not $FIRMWARE_ID's $FIRMWARE_BUILD: it is replaced"; fi
     fi
@@ -228,11 +228,7 @@ step_system() {
         have=$(ashell blockdev --getsize64 $SYSTEM_DEV) want=$(stat -c %s $FW/images/system.img)
         [ "$have" = "$want" ] || { fail "the system partition holds $have bytes, the image $want: nothing written"; return 1; }
     fi
-    # /data goes with the old system, as the Dots' step_flash wipes it: a newer build's app updates stay in /data/app and
-    # outlive the downgrade, and PackageManager runs them over the older /system.  On an Echo Show 8 from build
-    # 0013222532996 (2026-11-01) 16 were left after the install, Spotlight's among them; with its system copy off the
-    # partition (STOCK_APPS_OUT) and Amazon's account apps gone it crashed every minute or so, a "Spotlight has stopped" on screen.
-    task "Wiping cache and data" adb shell 'twrp wipe cache && twrp wipe data' || return 1
+    wipe_data || return 1           # before the write: a run cut off after it finds the right system and stops above
     warn "Keep the Echo on power and USB until the boot image is in (next step): until then it would not boot."
     rm -f $OUT/system.progress
     TASK_NOTE="cat $OUT/system.progress" task "Writing the system partition (3.2 GB, a few minutes)" write_system || return 1
