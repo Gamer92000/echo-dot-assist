@@ -22,11 +22,22 @@ $W select_network $N
 $W save_config
 # connected, or why not: the script used to end the same either way, and an Echo with a mistyped name sat in SCANNING
 # while setup went on (forum, 2026-10-10)
-i=0; while [ $i -lt 20 ]; do $W status | grep -q "^wpa_state=COMPLETED" && break; sleep 1; i=$((i + 1)); done
+i=0; while [ $i -lt ${WIFI_JOIN_SECS:-20} ]; do $W status | grep -q "^wpa_state=COMPLETED" && break; sleep 1; i=$((i + 1)); done
 $W status | grep -E "^(wpa_state|ssid|ip_address)"
 S=$($W status | grep "^wpa_state=" | cut -d= -f2)
 if [ "$S" != COMPLETED ]; then
+    # What the network asks for, read as wifi.c reads it: SAE without PSK is WPA3 only, and the key_mgmt above is WPA-PSK
+    # (issue #90: reported as a name or password nobody had mistyped).  Whether a model's wpa_supplicant could do SAE is
+    # another matter: donut's has the code, get_capability says nothing either way.  A name wpa_cli escapes (a quote, not
+    # ASCII) is not found here and gets the words below.
+    TAB=$(printf '\t')
+    FLAGS=$($W scan_results | while IFS=$TAB read -r b f l fl name; do [ "$name" = "$SSID" ] && echo "$fl"; done)
+    case $S:$FLAGS in
+    *PSK*) ;;
+    *SAE*) S=WPA3;;
+    esac
     case $S in
+    WPA3) echo "not connected: \"$SSID\" is WPA3 only, and setup joins WPA2 networks; use a WPA2 or WPA2/WPA3 mixed network";;
     *HANDSHAKE*) echo "not connected ($S): the password is probably wrong";;
     *) echo "not connected ($S): no network named \"$SSID\" in range (names are case-sensitive), or the password is wrong";;
     esac

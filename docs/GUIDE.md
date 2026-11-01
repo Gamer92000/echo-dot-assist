@@ -734,7 +734,7 @@ password before or after, empty for an open network. The Echo tries the new netw
 once it has an address and the router answers, and otherwise returns to the old one within a minute or two, saying
 why. Once the new one works it forgets the old ones. Expect a new IP address: find it as "Web UI address" in Home
 Assistant (which finds the Echo again within a few minutes if it reaches that network), and approve the browser there
-once more. WPA2 and open networks only.
+once more. WPA2 and open networks only; a WPA2/WPA3 mixed network joins as WPA2 (tried on an Echo 2).
 
 **Log** (System): `boot.log` with a filter, the older part, and a download for bug reports ([reading it](../README.md#when-something-is-wrong)). The Sendspin token is
 blanked; the rest travels unencrypted, like the whole page.

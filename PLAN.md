@@ -2921,6 +2921,22 @@ Run in this order. Each step says what it proves.
       (layer 3 here; 4 on the Dots, their set byte-identical).  No speaker: no `speaker_gain`, the Dot 2's volume curve.
       Tried on the device (2026-10-29), all as expected: unlock, root, install, audio level, buttons, the LED, DHA,
       Bluetooth, the wake lock.  kamakiri-cupcake v1.0.0 pinned (its lk and tee are 8338's).
+- [~] WPA2/WPA3 mixed Wi-Fi (issue #90, 2026-11-01; reported and tried on an Echo 2 by its reporter; this form on the PC,
+      and on a Dot 2 with its writes stubbed).  wifisvc's `libacehal_network_all.so` (biscuit, radar, donut) rewrites entries to `WPA-PSK
+      WPA-PSK-SHA256` at each start; on an AP with `[WPA2-PSK+SAE+PSK-SHA256-CCMP]` radar's driver refuses that AKM
+      (`err=22`), plain `WPA-PSK` associates at once.  The Dots' drivers unknown.  The issue's patch asked
+      `get_capability key_mgmt` first; useless: wpa_supplicant 2.6 prints only NONE, IEEE8021X, WPA-EAP, WPA-PSK, WPA-NONE
+      there (no ` WPA-PSK-SHA256` string in any of the three binaries), so its "no-op elsewhere" was never one.
+      Dot 2 on adb, 2026-11-01: capability `NONE IEEE8021X WPA-EAP WPA-PSK`, its entry `WPA-PSK WPA-PSK-SHA256`.
+      `psk_only` (main.sh netwatch, every look): 30 s without `wpa_state=COMPLETED` (not the address: `dhcpcd -K` keeps
+      it over a lost link, and a restarted wpa_supplicant reads SHA256 back), wifisvc models, not under wifi.sh's lock,
+      in memory, by the interface's socket or the global one.  Accepted loss: a network Amazon's setup saved on a
+      PSK-SHA256-only AP, if a driver takes that AKM at all, stays off after such a cut until a reboot.  What setup and
+      wifi.sh saved is WPA-PSK, so such an AP never joined those.  An Echo offline by this takes no update: USB.
+      `wifi-join.sh` (Dots, Echo 2) names a WPA3-only network (`[WPA2-SAE-CCMP]`) from the scan flags: it saves
+      `key_mgmt WPA-PSK`, as wifi.sh does, so neither joins one.  Whether a model could: unknown.  ` SAE` is in none of
+      the three binaries, so `get_capability` cannot print it, whatever the driver (the issue's "no SAE" proves nothing);
+      donut's has SAE code (`SAE: own commit-scalar`), no such strings on biscuit or radar.  `tests/fake_web_wifi.py`.
 - [x] amonet-radar v1.0.1 (issue #88, 2026-11-01): zip sha256 `22809bc4...88a9`, 94 789 047 bytes.  Against v1.0.0: LK
       payloads for `63cb91b-20221007_073612` and `2c3569d-20260617_051433` beside `59779ca-20220524_183401` (`profile.sh`;
       the pinned 6436's `lk.img` carries `20221007_073612`), the default and 20220524 payloads and `radar-kaeru.bin`

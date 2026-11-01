@@ -214,11 +214,41 @@ avahi_start() {
     avahi-daemon -f $conf --no-drop-root --no-proc-title > /dev/null 2>&1 &
 }
 
+# wpa_supplicant's socket for the interface, else its global one, as wifi.sh's W(): a "reconfigure" takes the interface's
+# socket away until wpa_supplicant restarts (Dot 2, 2026-10-07)
+wpa() { if [ -S $WPA_SOCKETS/$WLAN ]; then wpa_cli -i $WLAN -p $WPA_SOCKETS "$@"; else wpa_cli -g@android:wpa_$WLAN IFNAME=$WLAN "$@"; fi 2>/dev/null; }
+
+# Issue #90 (Echo 2, 2026-11-01): wifisvc rewrites every WPA2 entry to "WPA-PSK WPA-PSK-SHA256" at its start (the string
+# is in libacehal_network_all.so, on the Dots too; seen on a Dot 2).  An AP that offers PSK-SHA256 as well (WPA2/WPA3
+# mixed, PMF optional: scan flags [WPA2-PSK+SAE+PSK-SHA256-CCMP]) gets that AKM and the driver refuses every association
+# ("Association request to the driver failed: err=22"): joined fine at setup, never online again after the first reboot.
+# So after 30 s off the network (the fourth look, netwatch's first counts) such entries are cut back to the WPA-PSK that
+# setup and wifi.sh saved, in memory only (wifisvc would write the file anew anyway), and the supplicant associates
+# again.  `get_capability key_mgmt` cannot tell who needs this: no Dot's wpa_supplicant prints PSK-SHA256 there, though
+# they all know it.  By wpa_state, not the address: dhcpcd -K keeps that over a lost link, and a wpa_supplicant restarted
+# then reads SHA256 back from the file.  The wait spares a healthy link's way up a reassociation at every boot.  Only
+# with wifisvc: Android's WifiService owns its networks.  During a switch the link is wifi.sh's.
+psk_only() {
+    local n fixed=
+    [ -n "$WIFI_SERVICE" ] && [ ! -d $WIFI/lock ] || return 0
+    wpa status | grep -q '^wpa_state=COMPLETED$' && { down=0; return 0; }
+    down=$((down + 1))
+    [ $down -ge 4 ] || return 0
+    for n in $(wpa list_networks | sed -n 's/^\([0-9][0-9]*\)[[:space:]].*/\1/p'); do
+        case " $(wpa get_network $n key_mgmt) " in
+        *" WPA-PSK-SHA256 "*) wpa set_network $n key_mgmt WPA-PSK | grep -q OK && fixed="$fixed $n";;
+        esac
+    done
+    [ -n "$fixed" ] || return 0
+    wpa reassociate > /dev/null
+    echo "netwatch: network$fixed cut back to WPA-PSK, associating again"
+}
+
 # While the settings page switches networks (wifi.sh holds its lock), the link is that script's business: no wifisvc.
 # Whenever the address changes, wifi.sh writes down which network the Echo is on, for the page: wpa_supplicant can also
 # move to another saved network by itself when the one it is on goes away.
 netwatch() {
-    miss=0 addr=
+    miss=0 addr= down=0
     while :; do
         rotate_log
         clock_set
@@ -243,6 +273,7 @@ netwatch() {
             [ $miss -ge 6 ] && [ -n "$WIFI_SERVICE" ] && [ "$(getprop init.svc.$WIFI_SERVICE)" != running ] && [ "$(sh $D/wifi.sh saved 2>/dev/null)" != 0 ] &&
                 { start $WIFI_SERVICE; echo "netwatch: no address for 60 s, $WIFI_SERVICE started"; miss=0; }
         fi
+        psk_only
         sleep 10
     done
 }

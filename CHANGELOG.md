@@ -8,6 +8,12 @@ What changed for people using the Echo, newest first. Details and measurements a
   to it, the wake word and the action button used to do nothing at all: no sound, no light, nothing in the log, so the
   Echo looked deaf. Now the ring shows the short error animation, and the log says why (`no Home Assistant link`).
   Not while the microphones are off, or muted from Home Assistant over Wyoming, and not before the Echo was set up.
+- **A fix for the Echo 2 going offline on WPA2/WPA3 mixed Wi-Fi** (issue #90). Amazon's Wi-Fi service changes the saved
+  network at every start to a form the Echo 2's Wi-Fi refuses on such routers: it joined at setup and was never online
+  again after a reboot. Now, after 30 s off the network, the Echo puts it back by itself. Tried on an Echo 2 in an
+  earlier form, by the owner who reported it.
+- **Setup on the Dots and the Echo 2 says so when a network is WPA3 only** (issue #90), instead of blaming the name or
+  the password: setup joins WPA2 networks.
 - **The Echo 2's setup uses amonet-radar v1.0.1** (issue #88), which knows the bootloaders of newer Fire OS builds.
   Get the new zip from the XDA thread into `firmware/radar/`; a setup already under way asks for it at the unlock.
 
