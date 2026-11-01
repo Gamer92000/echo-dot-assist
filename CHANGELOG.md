@@ -2,6 +2,11 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-01
+
+- **The Echo 2's setup uses amonet-radar v1.0.1** (issue #88), which knows the bootloaders of newer Fire OS builds.
+  Get the new zip from the XDA thread into `firmware/radar/`; a setup already under way asks for it at the unlock.
+
 ## 2026-10-30
 
 - **When the wake word's sounds give no answer, the Echo no longer guesses a pause inside your command** (issue #79).
