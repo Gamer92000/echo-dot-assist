@@ -12,7 +12,7 @@ through the reverse-engineered C API of `libmixerAPI.so` and speaks the ESPHome 
 
 Docs: `README.md` (short user-facing overview with figures; every feature in detail in `docs/GUIDE.md`, security model in
 `docs/SECURITY.md`; `docs/WINDOWS.md` the Echo Dot 2 from Windows for beginners; figures are CeTZ sources in `docs/img/src/`, rendered light+dark by `tools/figures.sh`; install instructions per model in `devices/<codename>/README.md`, guided by
-`scripts/setup.sh`), `DEVELOPMENT.md` (architecture, layout, tests, contributing), `PLAN.md` (phases, open issues, every measurement), `CHANGELOG.md`
+`scripts/setup.sh`; every Echo on Fire OS or Vega OS and its status in `devices/MODELS.md`), `DEVELOPMENT.md` (architecture, layout, tests, contributing), `PLAN.md` (phases, open issues, every measurement), `CHANGELOG.md`
 (user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-vad.md`, `re-a2dp-source.md`, `re-davs-login.md`, `wake-word-end.md` (where the request starts after the wake word: measurements on the speech
 corpus, tables generated into `wake-word-end/`), `re-checkers.md`, `re-athena.md`,
 `sendspin-digest.md`).
