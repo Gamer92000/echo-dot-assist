@@ -76,10 +76,13 @@
 #define TTS_RATE         22050      /* assumed when audio-start carries no rate */
 
 static const char *const state_names[] = { "idle", "listening", "thinking", "speaking" };
-static int use_led = 1, use_earcon = 1, use_volume = 1, use_bt_announce = 1, use_bt = 1;
+static int use_led = 1, use_earcon = 1, no_earcons, use_volume = 1, use_bt_announce = 1, use_bt = 1;
+static unsigned sounds_off;               /* bit per sound: its own switch on the Sounds card; SND_WAKE's is use_earcon */
 static atomic_int sounds_pending;
 static void sound_queue(enum sound s) { atomic_fetch_or(&sounds_pending, 1 << s); }                          /* played by the earcon thread */
-static void sound_request(enum sound s) { if (use_earcon) sound_queue(s); }
+/* The sounds with a switch.  Not Identify or Drop In's: the one was asked for, the others say a microphone is open to
+ * someone else; nor what only borrows a Bluetooth sound (web_approved, improv_authorized, arb_paired): those call sound_queue */
+static void sound_request(enum sound s) { if (!no_earcons && (s == SND_WAKE ? use_earcon : !(sounds_off >> s & 1))) sound_queue(s); }
 
 const char *core_name;                  /* name_make(), or -n (the PC) */
 
@@ -721,6 +724,11 @@ void core_remote_wake(void)
 }
 
 int core_wake_sound(int set) { if (set >= 0) use_earcon = set; return use_earcon; }
+int core_sound_on(int s, int set)
+{
+    if (set >= 0) sounds_off = set ? sounds_off & ~(1u << s) : sounds_off | 1u << s;
+    return !(sounds_off >> s & 1);
+}
 
 int core_wake_in_request(int set) { if (set >= 0) wake_in_request = set != 0; return wake_in_request; }
 int core_end_of_request(int set) { if (set >= 0 && set < MICEND_MODES) end_mode = set; return end_mode; }
@@ -738,7 +746,7 @@ void core_bt_device(const char *name, int on)
 {
     pthread_mutex_lock(&core_lock);
     if (use_bt_announce) {
-        sound_queue(on ? SND_BT_ON : SND_BT_OFF);
+        sound_request(on ? SND_BT_ON : SND_BT_OFF);
         if (connected && proto->bt_device) proto->bt_device(name, on);
     }
     pthread_mutex_unlock(&core_lock);
@@ -770,6 +778,10 @@ void core_identify(void)
     sound_queue(SND_IDENTIFY);
     fprintf(stderr, "identify: rainbow for %d s\n", IDENTIFY_MS / 1000);
 }
+
+/* The page's "Play" on its Sounds card: once, at the sounds volume, whatever the wake sound setting says: it was asked for */
+void core_sound_preview(int s) { if (s >= 0 && s < SND_TIMER) sound_queue((enum sound)s); }
+
 int core_dnd(int set)
 {
     if (set >= 0 && set != dnd) {
@@ -2183,6 +2195,17 @@ static int preview_go(void)
            && atomic_load(&dropin_ring) < 0;
 }
 
+/* A chime of one's own may last seconds (sounds.c): past stock's length it gives way as the rings do, to our other
+ * sounds, a Drop In's ring, a timer, and a pipeline that starts under it (the stop or button that cancels it, too;
+ * one playing over a pipeline stays: the wake sound).  Shorter ones finish, as they always did: volume ticks must not
+ * cut each other */
+#define CHIME_FINISHES_MS 2000
+static int chime_busy;
+static int chime_go(void)
+{
+    return !atomic_load(&sounds_pending) && atomic_load(&dropin_ring) < 0 && !atomic_load(&alarm_on) && (chime_busy || !atomic_load(&busy));
+}
+
 /* The ring's blip as loud as Alexa's timer tone: BS.1770 loudness of its cycle (three blips, 0.8 s of silence) at a peak
  * of 6000 is -20.8 LUFS, the tone's -16.6 (donut; -16.2 on the Shows), so the ring takes 4.3 dB more (issue #63).  The
  * same blip standing in for the wake and touch sounds keeps 6000 */
@@ -2215,9 +2238,12 @@ static void *earcon_thread(void *arg)
                 short *quiet = scaled(pcm, n, atomic_load(s == SND_VOLUME ? &click_q16 : &sounds_q16));
                 if (quiet) pcm = quiet;
                 sound_start();
-                earsup_play(pcm, n, rate, cap_clock()); play_earcon(pcm, n, rate);
+                earsup_play(pcm, n, rate, cap_clock());
+                if (n > (size_t)rate * CHIME_FINISHES_MS / 1000) { chime_busy = atomic_load(&busy); play_earcon_while(pcm, n, rate, chime_go); }
+                else play_earcon(pcm, n, rate);
                 sound_over();
                 free(quiet);
+                sound_played((enum sound)s);
             }
             atomic_store(&earcon_heard_until, mono_ms() + 250);         /* speaker to mic stream: 85 ms, and the room's tail */
             atomic_store(&earcon_sounding, 0);
@@ -2225,7 +2251,7 @@ static void *earcon_thread(void *arg)
         { int r = atomic_load(&dropin_ring); const short *pcm; size_t n; unsigned rate;     /* a Drop In rings: cut off when answered */
           if (r >= 0 && mono_ms() >= atomic_load(&dropin_ring_at) && sound_get((enum sound)r, &pcm, &n, &rate)) {
               short *quiet = scaled(pcm, n, atomic_load(&sounds_q16));     /* one of our sounds: at their volume */
-              ring_sound = r; play_earcon_while(quiet ? quiet : pcm, n, rate, ring_go); free(quiet); usleep(300000); continue; } }
+              ring_sound = r; play_earcon_while(quiet ? quiet : pcm, n, rate, ring_go); free(quiet); sound_played((enum sound)r); usleep(300000); continue; } }
         int pv = atomic_exchange(&preview, 0) && !atomic_load(&alarm_on);   /* none during a ring, nor after it */
         if (atomic_load(&alarm_on) || pv) {             /* timer finished: its sound, or a triple blip every 1.2 s, until the ring time */
             if (!pv && mono_ms() > atomic_load(&alarm_until)) {
@@ -3049,7 +3075,7 @@ int main(int argc, char **argv)
         case 'i': dropin_port = atoi(optarg); break;
         case 'W': core_web_port = atoi(optarg); break;
         case 'L': use_led = 0; break;
-        case 'E': use_earcon = 0; break;
+        case 'E': no_earcons = 1; break;
         case 'V': use_volume = 0; break;
         case 'S': print_mdns = 1; break;
         case 'B': use_bt = 0; break;

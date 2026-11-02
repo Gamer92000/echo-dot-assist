@@ -2011,6 +2011,34 @@ Run in this order. Each step says what it proves.
       ring, 10 s at most. Tests: fake_ha_timer_sound.py, unit-sounds (format checks, a replaced upload read again,
       the Show models' tones decode), unit-web_loudness (loudness.js against BS.1770 in Python; `BEEP_PEAK` at
       `TS_LUFS`; matching quiet, loud and peaky clips, the limiter never over -1 dBFS). Open (device): heard on a Dot 3 and a Show.
+- [x] Sounds of one's own in place of stock's (2026-11-01, asked by a Dot 3 user who renamed the assistant): every
+      `enum sound` from SND_WAKE to SND_RING_OUT (13: not the timer and alarm tones, which `timer_sound` picks) by an id
+      of `sounds.c` (`wake`, `ring_in`, ...; stored as file names: keep them). `state/sounds/<id>.wav`, the timer
+      upload's format and checks (`sound_own_save`; `sound_custom_*` are now its SND_CUSTOM case), looked for before
+      stock's in `sound_get`; a generation per sound (was SND_CUSTOM's only) has the earcon thread read it again after
+      an upload or delete. Lengths (`sound_own_secs`): wake, touch and volume 2 s (over the start of the request:
+      the echo canceller leaves ~a quiet voice's worth of it to STT, wake sound removal holds the audio until its echo
+      passed; stock's wake sound is 0.65 s; the volume tone at every key press), drop in and call connected 2 s (the far end hears nothing while the near mic is ducked 40 dB), ringtones 30 s, the other chimes 5 s (our sounds freeze gain and end of request and drop sound detection while they play). Past 2 s a chime goes through `play_earcon_while` (`chime_go`); a sound over 256 kB of PCM is read again per play (`sound_played`). API (signed): `POST
+      /api/sound/<id>` (WAV; empty: delete), `/play` (`core_sound_preview`: queued past `use_earcon`, as Identify),
+      `GET /stock` (stock's decoded, as a WAV at its own rate); `/api/state` `sounds` [{id, own_ms, stock, max_s}].
+      Page: Voice's "Sounds" card, a row per sound; upload as the timer's (`pcmOf`, `timerSoundLevel` with the stock
+      sound's `ringLufs` as the target, measured looped: the volume click is under one 400 ms block). Not exported or
+      copied (per Echo, as the timer's); a factory reset empties state/. Tests: fake_web_sounds.py (list, stock WAV, refusals,
+      Play, the wake word playing one's own, replaced, kept over a restart, deleted, unsigned refused), unit-sounds (own
+      first, stock's again, ids and lengths). Open (device): heard on a Dot 3.
+      Sound packs (`soundpack.c`, `/api/sound-pack`, page's `packsCard`): `state/sound-packs/<id>/` = `name` + `<sound>.wav`;
+      a pack is a whole set (apply: `sound_own_save`, or delete where it has none), every file checked before the first is
+      touched. WAV is 96 kB/s: 9.6 MB a pack at the limits, ~1.7 MB at stock-like length. Cap 30 MB, 16 packs, 32 MB left free
+      on the partition (`/data`'s size not measured on any model: `df /data` still open). Pack file: tar (`pack.json`
+      {hassmic_sounds:1,name}, then WAVs), checked by the Echo per sound. Tests: fake_web_sounds.py, unit-web_soundpack (`hmtar.packWrite`/`packRead`
+      against tarfile). The page itself (cards, dialogs, download) was driven once in headless Chromium, not part of CI.
+      A switch per sound: `wake_sound` (Home Assistant's, unchanged key) is the wake sound's alone, `sound_touch`,
+      `sound_mics_off`/`_on`, `sound_volume`, `sound_bluetooth_on`/`_off` are page settings, exported (main.c `sound_request`
+      asks them; `use_earcon` had covered four sounds since 29c86e0 by way of one code path, nobody chose it). None for
+      Identify and Drop In's (`sound_queue`), nor the login's cue that borrows Bluetooth's. "All off" is one `/api/set`.
+      Laid out as the ring designs (full width under the settings cards, groups of tiles), not as `LAYOUT`'s rows.
+      `settings_load`: a config with `wake_sound=off` and no `sound_touch` gets the four off once. Not done for imports:
+      an older export's `wake_sound=off` now means the wake sound alone.
 - [x] Buttons as Home Assistant events (2026-10-12, issue #26: a Dot 2 user moved from EchoLocal, whose automations
       stopped an HA-run alarm clock with the action button and used volume holds for next track / play-pause). ESPHome
       event entity "Button" (`button`, KEY_BUTTON, device class `button`, always listed), types `action`,

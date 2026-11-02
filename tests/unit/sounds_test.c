@@ -1,7 +1,8 @@
 /* sounds.c: stock sounds from earcon_dir and out of zips (board.earcon_zip).
  *   sounds_test synth DIR ZIP   a board of its own: DIR/ui_wakesound.wav overrides, ZIP (tests/unit/sounds_zip.py) holds a
  *                               stored WAV, a deflated one (refused), an entry that is not there; the timer sound of
- *                               one's own (DIR as the state folder): the page's format only, read again once replaced
+ *                               one's own (DIR as the state folder): the page's format only, read again once replaced;
+ *                               sounds of one's own in place of stock's, stock's again once deleted
  *   sounds_test board           linked with a model's board.c, HASSMIC_EARCON_ROOT at its unpacked firmware: every
  *                               entry of its table decodes, as the Echo would read it */
 #define MINIMP3_IMPLEMENTATION
@@ -49,19 +50,35 @@ int main(int argc, char **argv)
     w[4] = (36 + 9600) & 0xff; w[5] = (36 + 9600) >> 8;
     for (int i = 0; i < 4800; i++) { w[44 + 2 * i] = 777 & 0xff; w[45 + 2 * i] = 777 >> 8; }
     setenv("HASSMIC_STATE", argv[2], 1);
-    check(!sound_present(SND_CUSTOM) && !sound_get(SND_CUSTOM, &pcm, &n, &rate) && !sound_custom_ms(), "own timer sound: none before an upload");
-    check(!sound_custom_save(w, sizeof w, err, sizeof err) && sound_present(SND_CUSTOM) && sound_custom_ms() == 100, "own timer sound: saved, 100 ms");
+    check(!sound_present(SND_CUSTOM) && !sound_get(SND_CUSTOM, &pcm, &n, &rate) && !sound_own_ms(SND_CUSTOM), "own timer sound: none before an upload");
+    check(!sound_own_save(SND_CUSTOM, w, sizeof w, err, sizeof err) && sound_present(SND_CUSTOM) && sound_own_ms(SND_CUSTOM) == 100, "own timer sound: saved, 100 ms");
     check(sound_get(SND_CUSTOM, &pcm, &n, &rate) && rate == 48000 && n == 4800 && pcm[0] == 777 && pcm[4799] == 777, "own timer sound: read back");
     w[44] = 555 & 0xff; w[45] = 555 >> 8;
-    check(!sound_custom_save(w, sizeof w, err, sizeof err) && sound_get(SND_CUSTOM, &pcm, &n, &rate) && pcm[0] == 555, "own timer sound: read again once replaced");
+    check(!sound_own_save(SND_CUSTOM, w, sizeof w, err, sizeof err) && sound_get(SND_CUSTOM, &pcm, &n, &rate) && pcm[0] == 555, "own timer sound: read again once replaced");
     w[22] = 2;                                                  /* two channels */
-    check(sound_custom_save(w, sizeof w, err, sizeof err) && strstr(err, "2 channels") && sound_get(SND_CUSTOM, &pcm, &n, &rate) && pcm[0] == 555,
+    check(sound_own_save(SND_CUSTOM, w, sizeof w, err, sizeof err) && strstr(err, "2 channels") && sound_get(SND_CUSTOM, &pcm, &n, &rate) && pcm[0] == 555,
           "own timer sound: stereo refused, the one before kept");
     w[22] = 1; w[24] = 0x44; w[25] = 0xac;                      /* 44100 Hz */
-    check(sound_custom_save(w, sizeof w, err, sizeof err) && strstr(err, "44100 Hz"), "own timer sound: 44.1 kHz refused");
-    check(sound_custom_save(w, 40, err, sizeof err) && !strcmp(err, "not a WAV file"), "own timer sound: a cut-off header refused");
-    check(!sound_custom_delete() && !sound_present(SND_CUSTOM) && !sound_get(SND_CUSTOM, &pcm, &n, &rate) && !sound_custom_delete(),
+    check(sound_own_save(SND_CUSTOM, w, sizeof w, err, sizeof err) && strstr(err, "44100 Hz"), "own timer sound: 44.1 kHz refused");
+    check(sound_own_save(SND_CUSTOM, w, 40, err, sizeof err) && !strcmp(err, "not a WAV file"), "own timer sound: a cut-off header refused");
+    check(!sound_own_delete(SND_CUSTOM) && !sound_present(SND_CUSTOM) && !sound_get(SND_CUSTOM, &pcm, &n, &rate) && !sound_own_delete(SND_CUSTOM),
           "own timer sound: deleted (twice: no error)");
+
+    /* one's own in place of stock's: state/sounds/<id>.wav first, stock's again once deleted */
+    w[24] = 0x80; w[25] = 0xbb;                                 /* 48 kHz again */
+    check(sound_by_id("wake") == SND_WAKE && sound_by_id("ring_out") == SND_RING_OUT && sound_by_id("timer") < 0 && !sound_id(SND_TIMER)
+          && !sound_id(SND_CUSTOM), "ids: the page's names, none for the timer's (its own setting)");
+    check(sound_own_secs(SND_WAKE) == 2 && sound_own_secs(SND_VOLUME) == 2 && sound_own_secs(SND_CALL_ON) == 2 && sound_own_secs(SND_BT_ON) == 5 && sound_own_secs(SND_RING_IN) == 30 && sound_own_secs(SND_CUSTOM) == 30, "lengths: 2 s over a request's start, 30 s for the rest");
+    check(sound_stock_present(SND_WAKE) && !sound_own_ms(SND_WAKE), "the wake sound: stock's, none of one's own");
+    check(!sound_own_save(SND_WAKE, w, sizeof w, err, sizeof err) && sound_own_ms(SND_WAKE) == 100
+          && sound_get(SND_WAKE, &pcm, &n, &rate) && rate == 48000 && n == 4800 && pcm[0] == 555, "one's own wake sound: saved, played in place of stock's");
+    check(sound_stock(SND_WAKE, &n, &rate) && rate == 16000 && n == 160, "stock's still handed out beside it (the page's loudness match)");
+    check(!sound_own_save(SND_BT_ON, w, sizeof w, err, sizeof err) && sound_present(SND_BT_ON) && !sound_stock_present(SND_BT_ON)
+          && sound_get(SND_BT_ON, &pcm, &n, &rate) && pcm[0] == 555, "one's own where stock's has none");
+    check(sound_own_save(SND_TIMER, w, sizeof w, err, sizeof err) && !strcmp(err, "no such sound"), "stock's timer tone: not replaceable here");
+    check(!sound_own_delete(SND_WAKE) && !sound_own_ms(SND_WAKE) && sound_get(SND_WAKE, &pcm, &n, &rate) && rate == 16000 && pcm[0] == 1000,
+          "deleted: stock's again");
+    check(!sound_own_delete(SND_BT_ON) && !sound_present(SND_BT_ON) && !sound_get(SND_BT_ON, &pcm, &n, &rate), "deleted where stock's has none: none again");
     return fails ? 1 : 0;
 }
 #else

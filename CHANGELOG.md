@@ -4,6 +4,21 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-01
 
+- **Your own sounds in place of Alexa's.** A new "Sounds" card on the settings page (Voice) lists the Echo's sounds:
+  the wake sound, the action button, microphone off and on, the volume keys, Bluetooth connected and disconnected,
+  Identify, and Drop In's chimes and ringtones. Each can be replaced by any sound your browser plays, the same way as
+  the timer sound: the page converts it and offers to bring it to the loudness of Alexa's sound it replaces. "Play"
+  plays it once; deleting yours brings Alexa's back. The wake, button, volume, Drop In and call connected sounds may be
+  2 seconds long at most (they play over the start of your command or call), ringtones 30, the others 5. One longer
+  than 2 seconds stops when you speak to the Echo or another sound plays. Each Echo keeps its own; a factory reset deletes them.
+- **Sound packs.** The Voice page keeps sets of sounds on the Echo: save the sounds in use as a pack, switch between
+  packs, and save one as a `.soundpack` file to load on another Echo. A pack is a whole set: sounds it has none of go
+  back to Alexa's. Up to 16 packs and 30 MB on an Echo, and none are written when its storage is nearly full.
+- **Each sound has its own switch.** The Sounds card turns the wake sound, action button, microphone, volume and
+  Bluetooth sounds on and off one by one, with "All off" for all of them. The "Wake sound" switch in Home Assistant now
+  does what it says: it used to silence the button, microphone and volume sounds too, and now only the wake sound. Off
+  keeps the sound you chose. An Echo that had it off stays quiet after the update: those sounds start with their own
+  switches off.
 - **Setup on the Echo Show 5 (both generations) and Echo Show 8 1st gen wipes the old data with the old system.** An
   Echo that had updated itself past the firmware the setup installs kept that newer build's app updates, and Android
   ran them over the older system: on an Echo Show 8, "Spotlight has stopped" popped up every minute or so. Setup now

@@ -206,7 +206,7 @@ const MOVED = { arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speake
 // The cards of a settings page: [title, settings...].  A setting not named here (a new one, or a model's own) comes
 // last, in a card of its own, so nothing is ever lost from the page
 const LAYOUT = {
-  voice: [['Microphone', 'mic_level', 'noise_reduction'], ['Mute and wake sound', 'mute', 'do_not_disturb', 'wake_sound', 'wake_sound_removal'],
+  voice: [['Microphone', 'mic_level', 'noise_reduction'], ['Mute and wake sound removal', 'mute', 'do_not_disturb', 'wake_sound_removal'],
           ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any']],
   wake: [['Engine', 'wake_engine'], ['How it hears you', 'speech_language', 'wake_word_adaptation']],
   lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band']],
@@ -217,7 +217,13 @@ const LAYOUT = {
 const HELP = {
   mic_level: { help: 'How loud your voice reaches speech-to-text. The Echo adjusts its gain to hold speech at this level. Raise it if quiet commands get misheard or cut off; lower it if loud speech comes out distorted. Default −26 dBFS.' },
   noise_reduction: { help: 'Takes steady background noise (fans, traffic, the dishwasher) out of what speech-to-text hears, by up to 6, 9 or 12 dB. The wake word always gets the untouched sound. Try it if commands fail in a noisy room.' },
-  wake_sound: { ha: true, help: 'A tone when the Echo starts listening. Turning it off also silences the Echo\'s other local sounds.' },
+  wake_sound: { ha: true, help: 'A tone when the Echo starts listening. Off keeps the sound you chose: on again, yours or Alexa\'s plays as before.' },
+  sound_touch: { help: 'The tone when the action button starts listening. Off keeps the sound you chose.' },
+  sound_mics_off: { help: 'The tone when the microphones go off. The ring still shows it. Off keeps the sound you chose.' },
+  sound_mics_on: { help: 'The tone when the microphones come back on. Off keeps the sound you chose.' },
+  sound_volume: { help: 'The tone at each press of the volume keys. Off keeps the sound you chose.' },
+  sound_bluetooth_on: { help: 'The chime when a phone connects; the spoken announcement is "Bluetooth announcements". A login on this page, a phone\'s setup and pairing Echos borrow this sound and play it either way. Off keeps the sound you chose.' },
+  sound_bluetooth_off: { help: 'The chime when a phone leaves; the spoken announcement is "Bluetooth announcements". A refused login on this page and a failed pairing of Echos borrow this sound and play it either way. Off keeps the sound you chose.' },
   wake_sound_removal: { tag: 'Experimental', help: 'Takes the wake sound back out of what speech-to-text hears, so you can speak straight on without waiting for the tone. The Echo\'s own echo canceller leaves part of it in, about as loud as a quiet voice. Each time, the Echo finds the tone in the microphone and turns down only its few pitches. Your first second of speech then reaches Home Assistant all at once, a moment later. The log says how much was taken off each time.' },
   mute: { ha: true, help: 'Stops listening for the wake word, as the switch in Home Assistant does. The mic-off button on the Echo is a separate, hardware mute: only the button can lift it.' },
   do_not_disturb: { ha: true, help: 'Drops announcements from Home Assistant while on. The ring pulses purple when you switch it on.' },
@@ -385,6 +391,12 @@ const SUB = {
   mic_level: 'How loud your voice reaches speech-to-text',
   noise_reduction: 'Takes steady background noise out of requests',
   wake_sound: 'A tone when the Echo starts listening',
+  sound_touch: 'The button starts listening',
+  sound_mics_off: 'The mic button turns the microphones off',
+  sound_mics_on: 'The mic button turns them back on',
+  sound_volume: 'Each press of the volume keys',
+  sound_bluetooth_on: 'A phone connects to play',
+  sound_bluetooth_off: 'The phone leaves',
   wake_sound_removal: 'Speak straight on, without waiting for the tone',
   mute: 'Stops listening for the wake word',
   do_not_disturb: 'Drops announcements from Home Assistant',
@@ -640,17 +652,22 @@ function flash(name) {
 const TS_RATE = 48000, TS_SECS = 30, TS_LUFS = -16.5, TS_OFF = 3, TS_FILE_MAX = 20 << 20;
 let tsBox = null, tsBusy = '';
 
-async function timerSoundPcm(file) {
+// what the Echo takes of any sound the browser plays (bytes: an ArrayBuffer), its first secs
+async function pcmOf(bytes, name, secs) {
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC || !window.OfflineAudioContext) throw new Error('this browser cannot convert sounds');
-  if (file.size > TS_FILE_MAX) throw new Error(`${file.name} is ${(file.size / 1048576).toFixed(0)} MB: ${TS_FILE_MAX >> 20} MB at most (cut the part you want, ${TS_SECS} s are kept)`);
   const ctx = new AC();
   let buf;
-  try { buf = await ctx.decodeAudioData(await file.arrayBuffer()); } catch (e) { throw new Error(`${file.name} is no sound this browser plays`); } finally { ctx.close(); }
-  const frames = Math.max(1, Math.ceil(Math.min(buf.duration, TS_SECS) * TS_RATE));
+  try { buf = await ctx.decodeAudioData(bytes); } catch (e) { throw new Error(`${name} is no sound this browser plays`); } finally { ctx.close(); }
+  const frames = Math.max(1, Math.ceil(Math.min(buf.duration, secs) * TS_RATE));
   const off = new OfflineAudioContext(1, frames, TS_RATE), src = off.createBufferSource();
   src.buffer = buf; src.connect(off.destination); src.start();      // one channel: the Web Audio down-mix, (L + R) / 2
-  return { pcm: (await off.startRendering()).getChannelData(0), cut: buf.duration > TS_SECS };
+  return { pcm: (await off.startRendering()).getChannelData(0), cut: buf.duration > secs };
+}
+
+async function timerSoundPcm(file, secs = TS_SECS) {
+  if (file.size > TS_FILE_MAX) throw new Error(`${file.name} is ${(file.size / 1048576).toFixed(0)} MB: ${TS_FILE_MAX >> 20} MB at most (cut the part you want, ${secs} s are kept)`);
+  return pcmOf(await file.arrayBuffer(), file.name, secs);
 }
 
 function wavOf(pcm) {
@@ -663,21 +680,23 @@ function wavOf(pcm) {
   return new Uint8Array(v.buffer);
 }
 
-// far from Alexa's level: what the user wants of it.  The samples to upload, null to upload nothing, and what to say
-async function timerSoundLevel(pcm, l) {
-  const d = l - TS_LUFS, dB = (x) => `${Math.abs(x).toFixed(Math.abs(x) < 10 ? 1 : 0)} dB`;
-  if (Math.abs(d) <= TS_OFF) return { pcm, said: 'about as loud as Alexa\'s timer tone' };
-  const m = hmloud.match(pcm, TS_LUFS, { loop: true }), quiet = d < 0;
-  const body = [`Measured ${l.toFixed(1)} LUFS, Alexa's timer tone ${TS_LUFS} LUFS. ` + (quiet
-    ? 'At the same timer volume it would be that much harder to hear from another room.'
-    : 'At a timer volume that suits Alexa\'s tone it would blare, and turned down for it, the other sounds would be too quiet.')];
+// far from Alexa's level: what the user wants of it.  The samples to upload, null to upload nothing, and what to say.
+// to: the level it is held to, Alexa's sound there (the timer tone; the sound it stands in for on the Sounds card) and
+// the volume that plays it
+async function timerSoundLevel(pcm, l, to = { lufs: TS_LUFS, ref: 'Alexa\'s timer tone', volume: 'timer volume' }) {
+  const d = l - to.lufs, dB = (x) => `${Math.abs(x).toFixed(Math.abs(x) < 10 ? 1 : 0)} dB`, lv = to.lufs.toFixed(1).replace(/\.0$/, '');
+  if (Math.abs(d) <= TS_OFF) return { pcm, said: `about as loud as ${to.ref}` };
+  const m = hmloud.match(pcm, to.lufs, { loop: true }), quiet = d < 0;
+  const body = [`Measured ${l.toFixed(1)} LUFS, ${to.ref} ${lv} LUFS. ` + (quiet
+    ? `At the same ${to.volume} it would be that much harder to hear from another room.`
+    : `At a ${to.volume} that suits ${to.ref} it would blare, and turned down for it, the other sounds would be too quiet.`)];
   if (quiet && m.limited) body.push('To get there its loudest moments are held back, so nothing clips.');
   if (m.short_db >= 0.5) body.push(`It can be turned up by 24 dB at most: it stays ${dB(m.short_db)} under Alexa's.`);
-  body.push('Or keep it as it is and set the timer volume to suit it.');
-  const pick = await ask({ title: `Your sound is ${dB(d)} ${quiet ? 'quieter' : 'louder'} than Alexa's timer tone`, body,
+  body.push(`Or keep it as it is and set the ${to.volume} to suit it.`);
+  const pick = await ask({ title: `Your sound is ${dB(d)} ${quiet ? 'quieter' : 'louder'} than ${to.ref}`, body,
     ok: 'Match Alexa\'s level', alt: 'Keep it as it is' });
   if (!pick) return null;
-  if (pick === 'alt') return { pcm, said: `${dB(d)} ${quiet ? 'quieter' : 'louder'} than Alexa's timer tone, as you kept it` };
+  if (pick === 'alt') return { pcm, said: `${dB(d)} ${quiet ? 'quieter' : 'louder'} than ${to.ref}, as you kept it` };
   return { pcm: m.out, said: m.short_db >= 0.5 ? `turned up by 24 dB, ${dB(m.short_db)} under Alexa's level` : 'at Alexa\'s level' };
 }
 
@@ -715,6 +734,209 @@ function timerSoundBox() {
     ms ? h('button', { class: 'small danger', disabled: busy, title: 'Delete your sound', onclick: timerSoundDelete }, icon('trash')) : null,
     busy ? h('span', { class: 'f-model' }, tsBusy) : null, tsBox.file].filter(Boolean));
   return tsBox;
+}
+
+// ---------------------------------------------------------------- Voice: sounds of one's own in place of Alexa's (sounds.c)
+
+// The Echo's sounds, by sounds.c's id: [name, when it plays].  Uploads are made as the timer sound's (16-bit mono WAV
+// at 48 kHz) and held to the loudness of Alexa's sound they stand in for, measured as rings measure (looped: the
+// volume click is shorter than one 400 ms block).  How long each may be comes with it (`max_s`, sounds.c says
+// why).  Each Echo keeps its own: exports and copies leave them out, a factory reset deletes them
+const SOUNDS = {
+  wake: ['Wake sound', 'The Echo starts listening after the wake word'],
+  touch: ['Action button', 'The button starts listening'],
+  mics_off: ['Microphone off', 'The mic button turns the microphones off'],
+  mics_on: ['Microphone on', 'The mic button turns them back on'],
+  volume: ['Volume keys', 'Each press, at the volume it just set'],
+  bluetooth_on: ['Bluetooth connected', 'A phone connects to play'],
+  bluetooth_off: ['Bluetooth disconnected', 'The phone leaves'],
+  identify: ['Identify', 'Identify asks which Echo this is'],
+  drop_in: ['Drop In', 'Another Echo drops in'],
+  call_on: ['Call connected', 'A Drop In call is answered'],
+  call_off: ['Call ended', 'Either side hangs up'],
+  ring_in: ['Incoming call', 'Rings until answered'],
+  ring_out: ['Outgoing call', 'Rings while the other Echo does'],
+};
+// The sounds with a switch, its setting by sounds.c's id.  Identify and Drop In's have none (main.c sound_request)
+const SOUND_SWITCH = { wake: 'wake_sound', touch: 'sound_touch', mics_off: 'sound_mics_off', mics_on: 'sound_mics_on', volume: 'sound_volume',
+  bluetooth_on: 'sound_bluetooth_on', bluetooth_off: 'sound_bluetooth_off' };
+const soundSwitch = (name) => Object.values(SOUND_SWITCH).includes(name);
+const BLIP = ['wake', 'touch', 'identify'];       // main.c earcon_thread: where none is on the firmware, the short blip plays
+const sndBusy = {};
+let sndCtl = null;
+
+const soundWord = (name) => `${name.toLowerCase().replace(/ sound$/, '')} sound`;
+
+// Alexa's sound's loudness, from the Echo: decoded there, as it plays
+async function stockLufs(id) {
+  const r = await echo.call('GET', `/api/sound/${id}/stock`);
+  const { pcm } = await pcmOf(r.bytes.slice().buffer, 'Alexa\'s sound', TS_SECS);
+  return hmloud.ringLufs(pcm);
+}
+
+async function soundDo(id, what, fn) {
+  sndBusy[id] = what; renderSounds();
+  try { await fn(); } catch (e) { toast(errText(e)); }
+  delete sndBusy[id]; await load().catch(() => {});
+}
+
+const soundUpload = (snd, file) => soundDo(snd.id, 'Converting…', async () => {
+  const [name] = SOUNDS[snd.id] || [snd.id];
+  const { pcm, cut } = await timerSoundPcm(file, snd.max_s), l = hmloud.ringLufs(pcm);
+  if (!isFinite(l)) throw new Error(`${file.name} is silent`);
+  let lv = { pcm, said: 'as it is' };
+  if (snd.stock) {
+    const target = await stockLufs(snd.id).catch(() => NaN);        // the match is an offer: without it, as it is
+    if (isFinite(target)) lv = await timerSoundLevel(pcm, l, { lufs: target, ref: `Alexa's ${soundWord(name)}`, volume: 'sounds volume' });
+  }
+  if (!lv) return;
+  sndBusy[snd.id] = 'Uploading…'; renderSounds();
+  await echo.call('POST', `/api/sound/${snd.id}`, wavOf(lv.pcm));
+  toast(`${name}: yours from now on${cut ? `, its first ${snd.max_s} seconds` : ''}, ${lv.said}`);
+});
+
+const soundDelete = async (snd) => {
+  const [name] = SOUNDS[snd.id] || [snd.id];
+  if (await ask({ title: `Delete your ${soundWord(name)}?`, ok: 'Delete', danger: true,
+    body: snd.stock ? 'Alexa\'s own plays again in its place.' : 'This Echo\'s firmware has none of Alexa\'s for it: ' + (BLIP.includes(snd.id) ? 'a short blip plays instead.' : 'it is silent again.') }))
+    soundDo(snd.id, 'Deleting…', () => echo.call('POST', `/api/sound/${snd.id}`, ''));
+};
+
+// Laid out as the light ring's animations (ring.js): full width, a group per kind, a tile per sound.  The tile's face plays
+// it, as a design's plays; its foot has what changes it.  The file pickers are built once (a refresh must not take one
+// away while it is open), the tiles painted again at every refresh
+const SOUND_GROUPS = [['Voice', 'wake', 'touch'], ['Microphone', 'mics_off', 'mics_on'], ['Volume', 'volume'], ['Bluetooth', 'bluetooth_on', 'bluetooth_off'],
+  ['Identify', 'identify'], ['Drop In', 'drop_in', 'call_on', 'call_off', 'ring_in', 'ring_out']];
+
+function soundTile(snd) {
+  const [name, when] = SOUNDS[snd.id] || [snd.id, ''];
+  const st = state.settings.find((x) => x.name === SOUND_SWITCH[snd.id]), sw = st ? control(st) : null;
+  const info = (st && HELP[st.name]) || {}, saved = h('span', { class: 'saved' }, 'Saved');
+  const help = info.help || when, more = moreOf('snd ' + snd.id, h('p', {}, act(help)));         // no hover on a phone: not a tooltip
+  const file = h('input', { type: 'file', accept: 'audio/*', class: 'hidden', onchange: () => {
+    const f = file.files[0]; file.value = ''; const now = (state.sounds || []).find((x) => x.id === snd.id);
+    if (f && now) soundUpload(now, f); } });
+  const sub = h('span', { class: 'ringd-sub' }), acts = h('span', { class: 'ringd-tile-acts' });
+  const main = h('button', { class: 'ringd-tile-main snd-main', title: 'Play it once here, at the sounds volume',
+    onclick: () => echo.call('POST', `/api/sound/${snd.id}/play`).catch((e) => toast(errText(e))) },
+    h('span', { class: 'ringd-art' }, icon('speaker')), h('span', { class: 'ringd-name' }, name, info.ha === true ? haMark() : null), sub, saved);
+  const tile = h('div', { class: 'ringd-tile snd-tile', id: 'sound-' + snd.id }, main, more.btn,
+    h('div', { class: 'ringd-tile-foot' }, sw ? sw.el : null, acts, file), more.panel);
+  if (sw) controls.set(st.name, { update: sw.update, paint() {}, saved, root: tile });
+  sndCtl.tiles.set(snd.id, { main, sub, acts, file });
+  return tile;
+}
+
+function soundsCard() {
+  sndCtl = { tiles: new Map(), all: h('button', { class: 'small', onclick: () => soundsAll(sndCtl.all.dataset.to) }) };
+  const have = new Map((state.sounds || []).map((s) => [s.id, s]));
+  const groups = SOUND_GROUPS.map(([title, ...ids]) => [title, ids.filter((id) => have.has(id))]).filter(([, ids]) => ids.length);
+  const card = h('div', { class: 'card ringd-designs', id: 'sounds' },
+    cardHead('Sounds', 'Any sound this browser plays (MP3, WAV, OGG, …), held to the loudness of Alexa\'s own. Click one to hear it.', 'speaker', h('div', { class: 'ringd-headbtns' }, sndCtl.all),
+      'A switch silences that sound and keeps your choice; playing it here still works. Identify and Drop In have none: Identify is asked for, and Drop In\'s tell the room a microphone is open. Each Echo keeps its own sound files: exports and copies leave them out, and a factory reset deletes them.'),
+    h('div', { class: 'snd-groups' }, groups.map(([title, ids]) => h('div', { class: 'ringd-group snd-group', style: `--c:${ids.length}` }, h('div', { class: 'ringd-group-head' }, title),
+      h('div', { class: 'ringd-acts' }, ids.map((id) => soundTile(have.get(id))))))));
+  renderSounds();
+  return card;
+}
+
+// ---------------------------------------------------------------- Voice: sound packs (soundpack.c)
+
+// Sets of the sounds kept on the Echo; a pack file is a tar any computer opens: pack.json first, then <sound id>.wav.
+// A pack is the whole set: applied, a sound it has none of goes back to Alexa's
+const PACK_FILE_MAX = 16 << 20;                              // what the longest of every sound comes to, and room
+let packs = null, packCtl = null;
+
+async function loadPacks() {
+  packs = await (await echo.call('GET', '/api/sound-pack')).json();
+  renderPacks();
+}
+const packDo = (what, fn) => { packCtl.busy.textContent = what; return fn().catch((e) => toast(errText(e))).finally(() => { packCtl.busy.textContent = ''; return loadPacks().catch(() => {}); }); };
+
+const packName = (title, value = '') => ask({ title, ok: 'Save', input: { label: 'Name', value, max: 63 } });
+async function packSaveCurrent() {
+  const name = await packName('Save these sounds as a pack');
+  if (name) packDo('Saving…', async () => { await echo.call('POST', '/api/sound-pack/save', name); toast(`Saved "${name}"`); });
+}
+
+async function packApply(p) {
+  if (await ask({ title: `Use "${p.name}"?`, ok: 'Use it', danger: true,
+    body: 'Your sounds on this Echo are replaced: save them as a pack first to keep them. Sounds this pack has none of go back to Alexa\'s.' }))
+    packDo('Applying…', async () => { await echo.call('POST', `/api/sound-pack/${p.id}/apply`); await load(); toast(`"${p.name}" in use`); });
+}
+
+async function packDelete(p) {
+  if (await ask({ title: `Delete "${p.name}"?`, ok: 'Delete', danger: true, body: 'The sounds in use stay as they are.' }))
+    packDo('Deleting…', () => echo.call('POST', `/api/sound-pack/${p.id}/delete`));
+}
+
+const packExport = (p) => packDo('Reading…', async () => {
+  const files = [];
+  for (const id of p.sounds) files.push({ id, bytes: (await echo.call('GET', `/api/sound-pack/${p.id}/file/${id}`)).bytes });
+  const url = URL.createObjectURL(new Blob(hmtar.packWrite(p.name, files), { type: 'application/x-tar' }));
+  const link = h('a', { href: url, download: `${p.name.replace(/[^\w-]+/g, '-') || 'sounds'}.soundpack` });
+  document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
+});
+
+// The Echo checks each sound; here only what makes it a pack.  Half loaded is taken back
+const packImport = (file) => packDo('Loading…', async () => {
+  if (file.size > PACK_FILE_MAX) throw new Error(`${file.name}: too big for a sound pack`);
+  const read = async (off, len) => new Uint8Array(await file.slice(off, off + len).arrayBuffer());
+  const head = await hmtar.packRead(read, file.size).catch((e) => { throw new Error(`${file.name}: ${e.message}`); });
+  const { id } = await (await echo.call('POST', '/api/sound-pack/new', fitBytes(head.name.trim(), 63))).json();
+  try {
+    for (const f of head.files) if ((state.sounds || []).some((s) => s.id === f.id)) await echo.call('POST', `/api/sound-pack/${id}/file/${f.id}`, await read(f.off, f.size));
+  } catch (e) { await echo.call('POST', `/api/sound-pack/${id}/delete`).catch(() => {}); throw e; }
+  toast(`Loaded "${head.name}"`);
+});
+
+function packsCard() {
+  const file = h('input', { type: 'file', accept: '.soundpack,.tar', class: 'hidden', onchange: () => { const f = file.files[0]; file.value = ''; if (f) packImport(f); } });
+  packCtl = { list: h('div'), busy: h('span', { class: 'f-model' }), use: h('span', { class: 'help' }) };
+  const card = h('div', { class: 'card ringd-designs', id: 'sound-packs' },
+    cardHead('Sound packs', 'Sets of sounds kept on this Echo, used at once and shared as one: saved as a file, a pack goes to any other Echo.', 'box',
+      h('div', { class: 'ringd-headbtns' }, packCtl.busy,
+        h('button', { class: 'small', onclick: packSaveCurrent }, icon('plus'), 'Save these sounds'),
+        h('button', { class: 'small', onclick: () => file.click(), title: 'A .soundpack file' }, icon('up'), 'Import'))),
+    file, packCtl.list, h('div', { class: 'card-foot' }, packCtl.use));
+  loadPacks().catch(() => {});
+  return card;
+}
+
+function renderPacks() {
+  if (!packCtl || !packs) return;
+  packCtl.use.textContent = `${mb(packs.bytes)} of ${mb(packs.max)} used, ${packs.packs.length} of ${packs.packs_max} packs`;
+  packCtl.list.replaceChildren(packs.packs.length ? h('div', { class: 'ringd-packs' }, packs.packs.map((p) => h('div', { class: 'ringd-pack' },
+    h('div', { class: 'ringd-pack-text' }, h('span', { class: 'ringd-name' }, p.name), h('span', { class: 'ringd-sub' }, `${plural(p.sounds.length, 'sound')} · ${mb(p.bytes)}`)),
+    h('div', { class: 'ringd-tile-foot' },
+      h('button', { class: 'link', onclick: () => packApply(p) }, 'Use'),
+      h('button', { class: 'link', title: 'Save it as a .soundpack file', onclick: () => packExport(p) }, 'Export'),
+      h('button', { class: 'link', onclick: () => packDelete(p) }, 'Delete'))))) : h('div', { class: 'ringd-sect-title' }, 'None yet'));
+}
+
+// Every switch at once: only the page's convenience, the settings stay one each
+async function soundsAll(to) {
+  try {
+    const r = await (await echo.call('POST', '/api/set', Object.values(SOUND_SWITCH).map((n) => `${n}=${to}\n`).join(''))).json();
+    if (r.errors) toast(r.errors.trim());
+  } catch (e) { toast(errText(e)); }
+  await load();
+}
+
+function renderSounds() {
+  if (!sndCtl) return;
+  const on = Object.values(SOUND_SWITCH).some((n) => settingValue(n));
+  sndCtl.all.dataset.to = on ? 'off' : 'on'; sndCtl.all.textContent = on ? 'All off' : 'All on';
+  for (const snd of state.sounds || []) {
+    const c = sndCtl.tiles.get(snd.id), busy = sndBusy[snd.id];
+    if (!c) continue;
+    c.main.disabled = !!busy || (!snd.own_ms && !snd.stock && !BLIP.includes(snd.id));
+    c.main.classList.toggle('custom', !!snd.own_ms);
+    c.sub.textContent = busy || (snd.own_ms ? `Yours · ${(snd.own_ms / 1000).toFixed(1)} s` : snd.stock ? 'Alexa\'s' : BLIP.includes(snd.id) ? 'A short blip' : 'None on this firmware');
+    c.acts.replaceChildren(...[
+      h('button', { class: 'link', disabled: !!busy, onclick: () => c.file.click() }, snd.own_ms ? 'Replace…' : 'Upload…'),
+      snd.own_ms ? h('button', { class: 'link', disabled: !!busy, title: 'Delete yours: Alexa\'s again', 'aria-label': 'Delete yours', onclick: () => soundDelete(snd) }, icon('trash')) : null].filter(Boolean));
+  }
 }
 
 // ---------------------------------------------------------------- controls (built once, updated in place)
@@ -909,6 +1131,7 @@ function settingCards(list, id) {
 // What only some pages have, beside their settings cards
 const PAGE_BUILD = {
   overview: (el) => buildOverview(el),
+  voice: (el, list) => { el.append(flow(settingCards(list.filter((s) => !soundSwitch(s.name)), 'voice'))); el.append(h('div', { class: 'ringd' }, soundsCard(), packsCard())); },   // laid out as lights' ring designs
   wake: (el, list) => { el.append(flow(settingCards(list, 'wake'))); buildWake(el); },
   sound: (el, list) => {
     const vol = h('div', {}), cards = [];
@@ -1031,6 +1254,8 @@ const FINDABLE = [
   ['Copy models', 'models', 'model-copy', 'wake word design theme pack'],
   ['Models on file', 'models', 'model-file', 'backup tar save load'],
   ['Light ring animations', 'lights', 'ring-acts', 'designs led theme pack'],
+  ['Sounds', 'voice', 'sounds', 'wake sound chime earcon ringtone your own upload replace'],
+  ['Sound packs', 'voice', 'sound-packs', 'sets themes share file soundpack'],
   ['Wi-Fi', 'system', 'wifi', 'network switch password ssid'],
   ['Settings file', 'system', 'settings-file', 'export import backup preset'],
   ['Log', 'system', 'log', 'boot.log troubleshooting bug report'],
@@ -1168,7 +1393,7 @@ function render() {
   if (fresh) { built = sig; build(); }
   for (const s of state.settings) { const c = controls.get(s.name); if (c) c.update(s); }
   for (const q of quick) { const s = state.settings.find((x) => x.name === q.name); if (s) q.update(s); }
-  renderTop(); renderAttention(); renderNetwork(); renderDevices(); renderSystem(); renderWake();
+  renderTop(); renderAttention(); renderNetwork(); renderDevices(); renderSystem(); renderWake(); renderSounds();
   if (fresh) route();                   // after the controls: cards are placed by their height, with what is hidden hidden
 }
 
