@@ -35,6 +35,13 @@ with a clock (36EBT3) is another model, and not supported. Every other Echo, and
 [all models](devices/MODELS.md); how to add one: [`devices/`](devices/README.md).
 ✅ works, tried on one Echo of that model · 🧪 untested: builds and installs on paper, never run on a device
 
+> [!IMPORTANT]
+> **Getting into the Echo is [R0rt1z2](https://github.com/R0rt1z2)'s work, not this project's.** Every model above
+> unlocks with their exploits for MediaTek's chips ([amonet](https://github.com/R0rt1z2/amonet),
+> [kamakiri](https://github.com/R0rt1z2/kamakiri), saiyaku), their bootloader payload
+> [kaeru](https://github.com/R0rt1z2/kaeru) and TWRP as they ported it to each model, and their XDA threads walk
+> through the unlock and root.
+> The setup runs the packages you download from those threads. Without them none of this would run on an Echo.
 
 ## What you get
 
