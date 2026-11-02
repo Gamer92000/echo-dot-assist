@@ -137,3 +137,25 @@ camera" on the settings page (System). Set its remote admin password: that page 
 
 By hand: `kiosk-satellite-<version>.armeabi-v7a.apk` from its [releases](https://github.com/jxlarrea/kiosk-satellite/releases),
 `adb install`. What the app is allowed, and what it costs: [docs/GUIDE.md](../../docs/GUIDE.md#kiosk-satellite-on-the-screen).
+
+**Tested on a real Echo (2026-11-01, PS75751.7806N):** `kiosk-install.sh` over both USB and Wi-Fi; `kiosk_tick`
+opening the app, granting permissions and starting the update helper on first boot; camera and microphone off by
+default. `kiosk_camera` and `kiosk_mic` only restart the app's process when turned *off* (Android kills an app whose
+already-granted dangerous permission is revoked; granting one does not need a restart — `main.sh` already says so at
+the `kiosk_perm` definition). `kiosk_internet` restarts nothing either way: it is a firewall rule, not a permission.
+Kiosk Satellite wins the screen-timeout race against hassmic's `screen_off_timeout`: it holds its own
+`SCREEN_BRIGHT_WAKE_LOCK` (`FLAG_KEEP_SCREEN_ON`) while its activity is foregrounded, so hassmic's 300 s setting never
+gets a chance to fire.
+
+Uninstalling it is not a plain `adb uninstall`: Kiosk Satellite registers itself as an Android device admin, and
+`hassmic`'s own `kiosk_tick` re-grants that admin within about a minute of it seeing the app (its component simply
+staying installed is enough — `pm path` succeeds for a disabled package too). AOSP also hardcodes
+`dpm`/`forceRemoveActiveAdmin` to refuse any admin that is not `testOnly`, so neither adb nor root can lift it that
+way, and this Echo has no Settings app to do it by hand (same limitation as crown/checkers: too many of Amazon's
+apps are gone for Settings to start). The only way found: `stop hassmic` (so `kiosk_tick` cannot re-grant the
+admin), edit the one `<admin>` block out of `/data/system/device_policies.xml` as root (keep the original as
+`device_policies.xml.pre-hassmic`), reboot, and `stop hassmic` again within the first few seconds after
+`sys.boot_completed` (before `kiosk_tick`'s ~60 s grace window reasserts it). `adb uninstall` then succeeds; the
+2324/6053 firewall rules close within about 3 seconds, by `hassmic_fw`'s own loop (`lockdown.sh` reads the package
+straight out of `/data/system/packages.list`), independent of the `hassmic` service being stopped. Worth raising with
+Kiosk Satellite's developer: a production kiosk app should offer its own clean deactivation/uninstall path.
