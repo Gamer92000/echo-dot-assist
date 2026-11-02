@@ -175,7 +175,7 @@ for f in "$SRC"/*; do
     hassmic.rc|sepolicy) continue;;
     update.pub) [ "$MODE" = install ] || continue; m=644;;
     *.wa|*.was) [ $wa_fit = 1 ] || continue; m=644;;
-    device.conf|VERSION|*.ko|release.pub|*.dex|*.apk) m=644;;
+    device.conf|VERSION|*.ko|release.pub|*.dex|*.apk|*.so) m=644;;
     *) m=755;;
     esac
     new $H/$n "$f" $m 0:2000 $SYSLABEL

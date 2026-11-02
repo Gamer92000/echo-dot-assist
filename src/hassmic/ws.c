@@ -91,8 +91,9 @@ int ws_connect(struct ws *w, const char *host, int port, const char *path)
     int fd = net_connect(host, ports, 5);
     if (fd < 0) return -1;
     ws_random(nonce, sizeof nonce); b64_encode(nonce, 16, key, 0, 1);
-    int n = snprintf(req, sizeof req, "GET %s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-                     "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n", path, host, port, key);
+    int v6 = strchr(host, ':') != NULL;                         /* Host: [v6]:port */
+    int n = snprintf(req, sizeof req, "GET %s HTTP/1.1\r\nHost: %s%s%s:%d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                     "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n", path, v6 ? "[" : "", host, v6 ? "]" : "", port, key);
     accept_key(key, want);
     if (write_all(fd, req, n) < 0 || read_headers(fd, h, sizeof h) || !strstr(h, " 101") ||
         !header(h, "Sec-WebSocket-Accept", got, sizeof got) || strcmp(got, want)) { close(fd); return -1; }
@@ -123,9 +124,19 @@ static int send_frame(struct ws *w, int opcode, const void *data, size_t len)
 
 int ws_send(struct ws *w, int opcode, const void *data, size_t len) { return send_frame(w, opcode, data, len); }
 
+#define WS_HEAD 256                                     /* what is kept of a message too big: enough for its id */
+
+/* n bytes of the socket read and dropped: 0, or -1 */
+static int skip(int fd, uint64_t n)
+{
+    uint8_t b[4096];
+    while (n) { size_t k = n < sizeof b ? (size_t)n : sizeof b; if (read_full(fd, b, k) != (ssize_t)k) return -1; n -= k; }
+    return 0;
+}
+
 int ws_recv(struct ws *w, int *opcode, uint8_t **data, size_t *len)
 {
-    size_t total = 0; int first_op = 0;
+    size_t total = 0; int first_op = 0, over = 0;
     for (;;) {
         uint8_t h[2], ext[8], mask[4]; uint64_t n;
         if (read_full(w->fd, h, 2) != 2) return 0;
@@ -134,7 +145,19 @@ int ws_recv(struct ws *w, int *opcode, uint8_t **data, size_t *len)
         if (n == 126) { if (read_full(w->fd, ext, 2) != 2) return 0; n = ext[0] << 8 | ext[1]; }
         else if (n == 127) { if (read_full(w->fd, ext, 8) != 8) return 0; n = 0; for (int i = 0; i < 8; i++) n = n << 8 | ext[i]; }
         if (masked && read_full(w->fd, mask, 4) != 4) return 0;
-        if (n > WS_MAX_MESSAGE || total + n > WS_MAX_MESSAGE) return -1;
+        if (op >= 8 && n > 125) return -1;                /* a control frame that long is no frame */
+        if (op < 8 && (over || n > WS_MAX_MESSAGE || total + n > WS_MAX_MESSAGE)) {   /* too big: read to its end, its head kept */
+            if (n > 16 * (uint64_t)WS_MAX_MESSAGE || total + n > 16 * (uint64_t)WS_MAX_MESSAGE) return -1;   /* (no listing is that) */
+            size_t keep = total < WS_HEAD ? WS_HEAD - total : 0; if (keep > n) keep = (size_t)n;
+            if (total + keep + 1 > w->cap) { uint8_t *nb = realloc(w->buf, total + keep + 1); if (!nb) return -1; w->buf = nb; w->cap = total + keep + 1; }
+            if (keep && read_full(w->fd, w->buf + total, keep) != (ssize_t)keep) return 0;
+            if (masked) for (size_t i = 0; i < keep; i++) w->buf[total + i] ^= mask[i & 3];
+            if (skip(w->fd, n - keep)) return 0;
+            total += keep; over = 1;
+            if (op) first_op = op;
+            if (fin) { w->buf[total] = 0; *opcode = first_op; *data = w->buf; *len = total; return 2; }
+            continue;
+        }
         if (total + n + 1 > w->cap) {
             size_t cap = total + n + 1 + 4096; uint8_t *nb = realloc(w->buf, cap);
             if (!nb) return -1;

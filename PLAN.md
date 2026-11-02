@@ -2842,6 +2842,55 @@ Run in this order. Each step says what it proves.
       the page (`ring_stock`), the page's band drawing and designer; `hassmic_assist_NN` in cyan on the band.
       `ring_band_test.c` (with ringdesign.c), the page checked in headless Chromium on the PC build, the build on the
       tester's Show (self test, factory copy).
+      Screen UI (2026-10-14): not one frontend for everyone, a small fallback of our own and any app beside it.
+      `src/ui/` (scene.c: face, music, switcher as a display list diffed per frame into one dirty rectangle; gfx.c:
+      anti-aliased boxes and polygons by distance, fills inside; android.c: JNI) as libhmui.so, loaded by
+      `scripts/device/screen.dex` (tools/mkscreen.py: System.load + Thread.join, 664 bytes) in one app_process that
+      hassmic starts (screen.c: state kept by generation, written by one thread, so no caller ever waits on the UI).
+      Probe on the Echo first: SurfaceControl by JNI 2.5 ms, a 200x200 dirty rectangle 0.48 ms drawn + 0.47 ms posted
+      (ANativeWindow_lock keeps the rest of the buffer), a whole frame 3.8 ms, IActivityManager.getTasks 0.85 ms.
+      Running (hassmic's child, uid system): the talking face 6 % of a core at 30 fps, the idle face 1.3 % (blinks and
+      glances), the muted face 0.1 %; PSS 33 MB.  The band moved into the same process (one row a frame over the pipe,
+      its own layer and the overscan): ringbar.dex's VM was 16 MB PSS more, both now 31.8 MB.  Text and images by Skia
+      through JNI (TextPaint + TextUtils.ellipsize onto ALPHA_8, BitmapFactory for the artwork), apps from
+      IPackageManager with labels and icons from each APK's own Resources (4 in 146 ms on the Echo), launch through
+      IActivityManager.startActivityAsUser as `am start`; all 64 methods and 21 fields checked against 8149's boot
+      class path (mkscreen.py --framework).  Touch read from goodix-ts beside Android (not grabbed) and turned as
+      InputReader does; the layer shows only while hassmic's codeless home activity is in front, so touches land on
+      it.  Seen on the Echo: face states, real Music Assistant metadata and cover, the switcher opened by an edge swipe
+      (sendevent on the evdev node) and the music tile tapped; tz from HA's GetTimeResponse (field 2, POSIX) for the
+      clock.  Sendspin: metadata@v1 (changes only: aiosendspin's diff_update) and artwork@v1 (one channel, album, 400
+      px JPEG; fragments put together); tests/fake_screen.py against aiosendspin, tests/unit/ui_test.c (every
+      incremental frame byte for byte the whole one, gestures, timings).  dexasm fix: an empty id section has offset
+      0 (ART refused screen.dex, no fields).  AmazonWebView kept on the partition (the only provider in
+      config_webview_packages, Chromium 118): installed and selected after a reboot; its RELRO preparation fails as
+      in stock (the manifest names libwebviewchromium.so, the firmware ships libwebviewextchromium.so).  Not yet:
+      a WebView app run; Back injection and the home-app relaunch on the device; a finger instead of sendevent.
+      Screen UI, second round (2026-11-02, on the PC only: the tester's Show runs the Kiosk Satellite branch, not
+      this): the switcher (swipe up from the band) replaced by a drawer pulled from the top edge, as Amazon's own (over
+      an app: SurfaceControl.screenshot(II) of the panel as mounted, turned as touch_map turns touches, under the
+      drawer; hassmic's home activity started at the pull so the next touches are ours; nothing chosen = the app
+      relaunched).  The music view became Music Assistant's: Playing (Sendspin, as before, plus seek, shuffle,
+      repeat), Queue, Library, Search, Speakers through MA's own API (mass.c, ws :8095, schema >= 28 token auth; MA
+      2.10.8's sources read: player_id = Sendspin client id, events only after auth, imageproxy sizes 0/80/160/256/
+      512/1024 and `/imageproxy/<proxy_id>`, set_members since 2.4).  src/ui split into scene/widgets/face/drawer/music
+      (ui.h); the display list got a clip per item, scrollers (flings: e^(-t/325 ms), a third of the finger past the
+      ends), an image cache by key and size, outlines, arcs, gradients, premultiplied icons scaled.  ui_test.c: every
+      incremental frame byte for byte the full one through all views and gestures (it caught two: the picture under the
+      drawer freed after its item was in the list, a scroller of a freed list); ASan/UBSan.  tools/uishot.c draws every
+      view with the firmware's Roboto.  Kiosk Satellite (PR #76) and the UI: the UI's home app defaults to it, and
+      kiosk_tick leaves opening it to the UI while state/screen-ui names a live pid (kiosk_test.py).  Sendspin 1.0
+      metadata is a snapshot (aiosendspin 10 snapshot_update: a field left out is None), so left out = empty there,
+      unchanged only in the 9.1.1 dialect; MA 2.10.8 offers the controller's volume only where the group's players
+      declare it, so the Playing page's volume falls back to the API's group_volume.  On the tester's Show
+      (2026-11-02, flashed): the drawer listed every launcher app (AOSP Music, two Downloads: DocumentsUI and
+      FireOSDownloadProviderUi, Simple Keyboard's settings), so the drawer has no apps now and the home app is the
+      page's (Screen page); a pull from Kiosk Satellite's top also refreshed it (it got the touch), so 16 rows along the
+      top are overscan too (the grip) and only a pull from there opens the drawer over an app; closing it back to the
+      app showed the face for up to a second (the picture freed in the frame that relaunched the app, the layer hidden
+      only at the next getTasks poll), so the last frame now stays until the app is in front.  Not yet on the device:
+      the rest of this round (the drawer over an app, the screenshot's orientation, a fling with a real finger, image decoding
+      off the UI thread, goToSleep/wakeUp, a real MA token).
       Open items, one list: docs/re-checkers.md "What a port needs".
 - [~] Echo Show 8 1st gen (`crown`, 2026-10-13; `docs/re-crown.md`). Same platform as checkers: MT8163, Android 7.1.2,
       kernel 4.9.77, RT5616, gating latch, MT7668; Fire OS 6.5.7.0 NS6570 (6074). `libpryon.so` 2.41 (newer than the

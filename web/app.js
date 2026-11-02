@@ -97,6 +97,7 @@ const ICONS = {
   speaker: '<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/>',
   timer: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/>',
   bell: '<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+  screen: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   sparkle: '<path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8z"/><path d="M19 15l.8 2.2 2.2.8-2.2.8L19 21l-.8-2.2-2.2-.8 2.2-.8z"/>',
   music: '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
@@ -195,6 +196,7 @@ const PAGES = [
   { id: 'wake', title: 'Wake word', icon: 'ear', nav: 'This Echo', groups: ['Wake word'], intro: 'Which engine listens for the wake word. Home Assistant picks the wake word itself, from the engine\'s list (the satellite\'s "Wake word" select), and a second one in "Wake word 2" if you like: each starts its own assistant ("Assistant", "Assistant 2").' },
   { id: 'sound', title: 'Sound', icon: 'speaker', nav: 'This Echo', groups: ['Sound'], intro: 'How the Echo\'s speaker sounds. The equalizer is Amazon\'s own, applied to everything the Echo plays: replies, timers, music, Bluetooth.' },
   { id: 'lights', title: 'Lights', icon: 'sun', nav: 'This Echo', groups: ['Lights'], intro: 'The light ring. It shows listening, thinking, speaking, errors and mute whatever you set here.' },
+  { id: 'screen', title: 'Screen', icon: 'screen', nav: 'This Echo', when: () => !!state.screen, intro: 'The Echo Show\'s screen: what it shows when nothing else does, and the band of light along its bottom. Pull down from the top edge of the screen for the drawer: home, the face, music, Do not disturb, screen off and the volume.' },
   { id: 'media', title: 'Music & Bluetooth', icon: 'music', nav: 'This Echo', groups: ['Music', 'Bluetooth'], intro: 'Music Assistant plays on the Echo as a Sendspin player, phones play on it over Bluetooth, and it can play on a Bluetooth speaker itself.' },
   { id: 'features', title: 'Features', icon: 'sparkle', nav: 'This Echo', groups: ['Features'], intro: 'Optional extras. While a feature is on, its entities are in Home Assistant; switched off, they are removed there. Home Assistant reconnects for a moment when you switch one.' },
   { id: 'echos', title: 'Echos', icon: 'net', nav: 'All your Echos', always: true, intro: 'Your Echos find each other on the local network and share a key, so nothing else on the network can join them or silence them. This runs with arbitration off too: it is also how this page finds your other Echos.' },
@@ -202,7 +204,7 @@ const PAGES = [
   { id: 'models', title: 'Models', icon: 'box', nav: 'All your Echos', always: true, intro: 'Amazon\'s extra wake words and models, microWakeWord\'s models and your light ring designs: fetched, copied between Echos, kept on file.' },
   { id: 'system', title: 'System', icon: 'sliders', nav: 'This Echo\'s system', groups: ['System'], always: true, intro: 'This Echo\'s name and network, updates, backups and troubleshooting.' },
 ];
-const MOVED = { arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
+const MOVED = { light_band: 'screen', arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
 // The cards of a settings page: [title, settings...].  A setting not named here (a new one, or a model's own) comes
 // last, in a card of its own, so nothing is ever lost from the page
 const LAYOUT = {
@@ -1118,7 +1120,8 @@ const reflowPage = () => document.querySelectorAll('.page:not(.hidden) .flow').f
 new ResizeObserver(reflowPage).observe($('pages'));
 
 function pageOf(s) {
-  const moved = MOVED[(HELP[s.name] || {}).parent || s.name];
+  let moved = MOVED[(HELP[s.name] || {}).parent || s.name];
+  if (moved === 'screen' && !state.screen) moved = null;      // the Shows without hassmic's screen: the band stays on Lights
   return moved || (pages.find((p) => (p.groups || []).includes(s.group)) || { id: s.group }).id;
 }
 
@@ -1149,11 +1152,13 @@ const PAGE_BUILD = {
     if (rest.length) cards.push(titled('Speaker', rest.map(settingRow)));
     el.append(flow(cards));
   },
-  lights: (el, list) => { el.append(flow(settingCards(list, 'lights'))); buildRing(el); },   // ring.js: the designs and where they show
+  lights: (el, list) => { el.append(flow(settingCards(list, 'lights'))); buildRing(el); },
+  screen: (el, list) => el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.map(settingRow))])),   // ring.js: the designs and where they show
   media: (el, list) => {
     const parent = (k) => (HELP[k.name] || {}).parent, plain = list.filter((x) => !x.feature && !parent(x));
     const music = plain.filter((x) => x.group === 'Music'), bt = plain.filter((x) => x.group !== 'Music');
-    el.append(flow([music.length ? titled('Music Assistant', music.map(settingRow)) : null, bt.length ? titled('Announcements', bt.map(settingRow)) : null,
+    const api = state.mass ? h('div', { id: 'mass' }, massRow()) : null;     // models with a screen: its music pages
+    el.append(flow([music.length || api ? titled('Music Assistant', api, music.map(settingRow)) : null, bt.length ? titled('Announcements', bt.map(settingRow)) : null,
       ...list.filter((x) => x.feature).map((s) => featureCard(s, list.filter((k) => parent(k) === s.name)))].filter(Boolean)));
   },
   features: (el, list) => {
@@ -1179,7 +1184,7 @@ function build() {
   let head = null;
   for (const pg of pages) {
     const list = by.get(pg.id) || [];
-    if (!list.length && !pg.always) continue;
+    if (!list.length && !pg.always && !(pg.when && pg.when())) continue;
     const el = pageShell(pg);
     if (PAGE_BUILD[pg.id]) PAGE_BUILD[pg.id](el, list);
     else el.append(flow(settingCards(list, pg.id)));
@@ -1252,7 +1257,7 @@ $('identify').onclick = () => identify(echo, echo.hello.name);
 
 // ---------------------------------------------------------------- search
 
-// Anything on the pages that is no setting: [what it is called, page, id to go to, other words for it]
+// Anything on the pages that is no setting: [what it is called, page, id to go to, other words for it, (where it is)]
 const FINDABLE = [
   ['Compare and copy settings', 'compare', '', 'matrix sync differences other echos same'],
   ['Your Echos', 'echos', '', 'network arbitration key pairing'],
@@ -1263,6 +1268,8 @@ const FINDABLE = [
   ['Sounds', 'voice', 'sounds', 'wake sound chime earcon ringtone your own upload replace'],
   ['Sound packs', 'voice', 'sound-packs', 'sets themes share file soundpack'],
   ['Wi-Fi', 'system', 'wifi', 'network switch password ssid'],
+  ['Music Assistant on the screen', 'media', 'mass', 'token library browse queue speakers groups api', () => !!state.mass],
+  ['Home app', 'screen', 'home-app', 'kiosk satellite face launcher start screen'],
   ['Settings file', 'system', 'settings-file', 'export import backup preset'],
   ['Log', 'system', 'log', 'boot.log troubleshooting bug report'],
   ['Debug access', 'system', 'debug', 'adb root shell'],
@@ -1278,7 +1285,7 @@ function searchHits(q) {
   for (const s of state.settings) {
     if (controls.has(s.name)) all.push({ t: label(s), sub: titleOf(pageOf(s)), page: pageOf(s), key: s.name, more: `${SUB[s.name] || ''} ${(HELP[s.name] || {}).help || ''}` });
   }
-  for (const [t, page, key, more] of FINDABLE) if (pageBuilt(page)) all.push({ t, sub: titleOf(page), page, key, more });
+  for (const [t, page, key, more, when] of FINDABLE) if (pageBuilt(page) && (!when || when())) all.push({ t, sub: titleOf(page), page, key, more });
   const score = (x) => {
     const a = x.t.toLowerCase(), b = x.more.toLowerCase();
     if (!words.every((w) => a.includes(w) || b.includes(w))) return 0;
@@ -1395,11 +1402,11 @@ function buildVolumes(el) {
 }
 
 function render() {
-  const sig = state.settings.map((s) => s.name).join() + '|' + !!state.arbitration + '|' + !!state.kiosk_app, fresh = sig !== built;
+  const sig = state.settings.map((s) => s.name).join() + '|' + !!state.arbitration + '|' + !!state.kiosk_app + '|' + !!state.screen, fresh = sig !== built;
   if (fresh) { built = sig; build(); }
   for (const s of state.settings) { const c = controls.get(s.name); if (c) c.update(s); }
   for (const q of quick) { const s = state.settings.find((x) => x.name === q.name); if (s) q.update(s); }
-  renderTop(); renderAttention(); renderNetwork(); renderDevices(); renderSystem(); renderWake(); renderSounds();
+  renderTop(); renderAttention(); renderNetwork(); renderDevices(); renderSystem(); renderWake(); renderSounds(); if (massCtl) massCtl.paint(); if (homeCtl) homeCtl.paint();
   if (fresh) route();                   // after the controls: cards are placed by their height, with what is hidden hidden
 }
 
@@ -2827,6 +2834,100 @@ function infoRow(title, sub, help, ctl, extra, val) {
   return h('div', { class: 'row info' },
     h('div', { class: 'row-t' }, h('div', { class: 'row-label' }, h('span', {}, title), more ? more.btn : null), val || null, h('p', { class: 'help' }, sub)),
     h('div', { class: 'ctl btns' }, ctl), more ? more.panel : null, extra || null);
+}
+
+// ---------------------------------------------------------------- Music Assistant's API (mass.c: the screen's music pages)
+
+let massCtl = null, homeCtl = null;
+
+// What the screen shows when nothing else does (screen.c): Kiosk Satellite until another is picked, the face, or any app
+// installed (Android's own are left out: the firmware's Music, Downloads and Settings were never meant for this)
+function homeRow() {
+  const sel = h('select', { id: 'home-sel', onchange: async () => {
+    try { state.screen = (await echo.call('POST', '/api/screen', `home ${sel.value}`.trim())).json(); toast('Saved: the screen shows it now'); }
+    catch (e) { toast(errText(e)); }
+    homeCtl.paint();
+  } });
+  let built = '';
+  homeCtl = { paint: () => {
+    const sc = state.screen; if (!sc) return;
+    const ksLabel = sc.kiosk ? ((sc.apps.find((a) => a.pkg === sc.kiosk) || {}).label || 'Kiosk Satellite') : '';
+    const mine = sc.apps.filter((a) => !a.system && a.pkg !== sc.kiosk);
+    const v = sc.home === null ? '-' : sc.home;
+    const opts = [['-', ksLabel ? `${ksLabel} (default)` : 'The face (default)'], ['', 'The face'],
+      ...(ksLabel ? [[sc.kiosk, ksLabel]] : []), ...mine.map((a) => [a.pkg, a.label])];
+    if (v && v !== '-' && !opts.some(([p]) => p === v)) opts.push([v, `${v} (not installed)`]);
+    const sig = JSON.stringify(opts);
+    if (sig !== built && document.activeElement !== sel) {   // rebuilt only when it changed, never under an open list
+      built = sig; sel.replaceChildren(...opts.map(([p, t]) => h('option', { value: p }, t)));
+    }
+    if (document.activeElement !== sel) sel.value = v;
+  } };
+  homeCtl.paint();
+  return h('div', { class: 'row val' },
+    h('div', { class: 'row-t' }, h('div', { class: 'row-label' }, h('label', { for: 'home-sel' }, 'Home app')),
+      h('p', { class: 'help' }, 'What the screen shows at start and goes back to when an app ends. The face is hassmic\'s own.')),
+    h('div', { class: 'ctl' }, sel));
+}
+
+const MASS_STATE = { off: 'Not connected', connecting: 'Connecting…', up: 'Connected', auth: 'Token refused', error: 'Not reachable' };
+
+function massRow() {
+  const now = h('div', { class: 'row-val' }), btns = h('span', { class: 'btns' });
+  massCtl = { paint: () => {
+    const m = state.mass; if (!m) return;
+    const where = m.url || m.found;
+    const what = m.state === 'off' && !m.token ? 'Not connected' : m.state === 'off' ? 'Waiting for Music Assistant' : MASS_STATE[m.state] || m.state;
+    const sub = m.state === 'up' ? [m.text, !m.self ? 'this Echo is not one of its players yet' : null]
+      : m.state === 'auth' ? ['make a new token in Music Assistant']
+      : m.state === 'error' ? [m.text]
+      : [!m.token ? 'needs a token' : null, where || 'its address comes when it plays here'];
+    now.replaceChildren(what, h('span', { class: 'row-val-sub' }, sub.filter(Boolean).join(' · ')));
+    btns.replaceChildren(...[h('button', { onclick: massDialog }, icon('music'), m.token ? 'Change…' : 'Connect…'),
+      m.token ? h('button', { onclick: () => massSend('-', '-') }, 'Disconnect') : null].filter(Boolean));
+  } };
+  massCtl.paint();
+  return infoRow('Music Assistant on the screen', 'The library, queue, search and speakers',
+    'Playing, and what plays, need nothing more: they come over Sendspin. Browsing the library, searching, the queue and grouping speakers go through Music Assistant\'s own API, which wants a long-lived token: in Music Assistant, open your profile (the person icon), Long-lived tokens, Create, and paste it here. It is sent sealed for this Echo and kept on it; the page never shows it again. Left empty, the address is taken from the Music Assistant that plays here when you save (port 8095), and kept: the token only ever goes there.',
+    btns, null, now);
+}
+
+async function massSend(url, token) {
+  try {
+    const r = (await echo.call('POST', '/api/mass', (ctr) => {
+      const u = url === '-' ? '-' : hex(enc.encode(url));
+      if (token === '-' || token === '=') return `${u} ${token}`;
+      const t = enc.encode(token), b = new Uint8Array(Math.ceil((t.length + 1) / 64) * 64); b.set(t);   // padded: its length stays inside
+      return `${u} ${hex(seal(echo.k, ctr, b))}`;
+    })).json();
+    state.mass = r; if (massCtl) massCtl.paint();
+    toast(token === '-' ? 'Music Assistant disconnected' : 'Saved: the Echo connects now');
+  } catch (e) { toast(errText(e)); }
+}
+
+function massDialog() {
+  const m = modal('Connect Music Assistant', 'mass'), mst = state.mass || {};
+  const url = h('input', { id: 'mass-url', type: 'text', placeholder: mst.found || 'http://music-assistant:8095', value: mst.url || '', autocomplete: 'off', spellcheck: 'false' });
+  const tok = h('textarea', { id: 'mass-tok', rows: 4, placeholder: mst.token ? 'Leave empty to keep the token it has (same address only)' : 'Paste the long-lived token here', spellcheck: 'false', autocomplete: 'off' });
+  const go = h('button', { class: 'primary', onclick: async () => {
+    const t = tok.value.trim();
+    if (!t && !mst.token) { toast('A token is needed: Music Assistant 2.7 and later ask for one'); return; }
+    if (t && !/^[\x21-\x7e]+$/.test(t)) { toast('That is not a token: no spaces or other characters'); return; }
+    if (t.length > 2000) { toast('That token is longer than any Music Assistant makes'); return; }
+    // empty: the address shown, not whichever server plays here by the time it arrives
+    const where = url.value.trim() || (mst.found ? `http://${mst.found}` : '-');
+    // a token only ever goes where it was given: another address takes it again (the Echo refuses it too)
+    if (!t && mst.token && where !== (mst.url || '-')) { toast('A new address takes the token again'); tok.focus(); return; }
+    go.disabled = true; await massSend(where, t || '='); m.dlg.close();
+  } }, 'Save');
+  m.body.append(
+    h('p', { class: 'help' }, 'In Music Assistant: your profile (the person icon), Long-lived tokens, Create. Copy it and paste it below.'),
+    h('div', { class: 'field' }, h('label', { for: 'mass-tok' }, 'Token'), tok),
+    h('div', { class: 'field' }, h('label', { for: 'mass-url' }, 'Address'), url,
+      h('p', { class: 'help' }, mst.found ? `Empty: ${mst.found}, the Music Assistant that plays here, kept` : 'None has played here yet: give its address'),
+      h('p', { class: 'help' }, 'The token goes only there. An IP address is surer than a name: a name (a .local one above all) goes to whoever answers to it on the network.')));
+  m.foot.append(h('button', { onclick: () => m.dlg.close() }, 'Cancel'), go);
+  m.show(); tok.focus();
 }
 
 // ---------------------------------------------------------------- Wi-Fi (wifi.c; root's scripts/device/wifi.sh scans and switches)

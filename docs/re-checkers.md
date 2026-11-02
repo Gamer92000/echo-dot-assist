@@ -347,6 +347,23 @@ setup; what was checked on the PC only says so.
   the band along its bottom, blended as `unroll`) wherever it draws the ring.  The designer is one editor on every
   Echo with a Ring / Band switch on its stage (opening on the Echo's own): the band view paints its cells, has no
   talker's arrow and words the adjustments for a row (Move, Run).  Checked under the PC build in headless Chromium (tiles, Apply, the designer, painting).
+- [~] Screen UI (2026-10-14, second round 2026-11-02): hassmic's own screen (a face, Music Assistant's pages, a
+  drawer from the top edge) in one app_process with the band (`src/ui/`, `screen.c`, `scripts/device/screen.dex`;
+  DEVELOPMENT.md). The layer (SurfaceControl at 1999990000, under the band) shows only while hassmic's home activity is
+  in front; touches come from `goodix-ts` (event2: x 0..480, y 0..960, INPUT_PROP_DIRECT) beside Android, mapped as
+  AOSP 7's TouchInputMapper does for rotation 1 (x = y_raw, y = x_max - x_raw: the natural left edge, the band's, is
+  the bottom). The band's rows belong to no window, so its edge is ours over any app: along it = Back
+  (InputManager.injectInputEvent as system). The top edge has no such rows: a pull there over an app is seen beside
+  Android (the app gets it too, as a drag), hassmic's home activity is started at once so the next touches are ours,
+  and SurfaceControl.screenshot(II) (static, in 8149's framework; the panel as mounted, 480x960) is turned for under
+  the drawer as touches are turned. Screen off: IPowerManager.goToSleep(J,I,I) with the power button's reason 4; a
+  touch while off: wakeUp(J,String,String). On the device (first round): drawing, fonts, the switcher with icons, the
+  music view with Music Assistant, the band. Open: everything of the second round, Back and the home-app relaunch.
+- [x] Amazon's WebView stays (`STOCK_APPS_OUT` no longer lists `app/AmazonWebView`): `config_webview_packages` lists
+  `com.amazon.webview.chromium` (available by default) and `com.android.webview` (fallback, not installed). Back on
+  the tester's Echo after a reboot, `webview_provider` = com.amazon.webview.chromium, version 118.0.5993.155. Its
+  RELRO file is not made at boot ("can't read file /system/lib": the manifest's WebViewLibrary is
+  libwebviewchromium.so, the firmware has libwebviewextchromium.so), the same files as stock.
 - [x] Not done, on purpose: turning the listening animation towards the talker. The front end has the beam: libasp's
   BeamReporter sends `what=1` (BEAM_DIRECTION, the vector (sin, 0, cos) of the beam's angle) to every
   `com.amazon.asp.IAudioEventListener` registered with `audiosignalprocessor` (transaction 1, a strong binder; no

@@ -13,7 +13,8 @@ struct ws { int fd, client; uint8_t *buf; size_t cap; pthread_mutex_t wlock; };
 int  ws_accept(struct ws *w, int fd, char *path, size_t pathsz);           /* server side; path of the GET, may be NULL */
 int  ws_connect(struct ws *w, const char *host, int port, const char *path);
 int  ws_send(struct ws *w, int opcode, const void *data, size_t len);
-/* 1 = complete message (fragments joined, NUL appended, *data valid until the next call), 0 = closed, -1 = error.
+/* 1 = complete message (fragments joined, NUL appended, *data valid until the next call), 2 = one beyond 4 MB, read
+ * and dropped (*data: its first 256 bytes), 0 = closed, -1 = error.
  * Ping is answered, close is echoed. */
 int  ws_recv(struct ws *w, int *opcode, uint8_t **data, size_t *len);
 void ws_close(struct ws *w);

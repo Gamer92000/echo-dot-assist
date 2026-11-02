@@ -64,11 +64,14 @@
 #include "statefile.h"
 #include "../third_party/monocypher.h"
 #include <ctype.h>
+#include "mass.h"
+#include "screen.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -451,73 +454,87 @@ static int kiosk_app(void)
 }
 
 /* lock order: core_lock first (settings), lk only inside the helpers above */
+/* appended at n of o (cap bytes), never past its end: what does not fit is cut (the page then refuses the answer;
+ * the parts are bounded, the screen's apps by what fits) */
+static size_t app(char *o, size_t n, size_t cap, const char *fmt, ...) __attribute__((format(printf, 4, 5)));
+static size_t app(char *o, size_t n, size_t cap, const char *fmt, ...)
+{
+    if (n + 1 >= cap) return cap ? cap - 1 : 0;
+    va_list ap; va_start(ap, fmt); int k = vsnprintf(o + n, cap - n, fmt, ap); va_end(ap);
+    return k < 0 ? n : n + (size_t)k < cap ? n + (size_t)k : cap - 1;
+}
+
 static void state_json(int fd, const struct req *r, const uint8_t me[32])
 {
-    size_t cap = 32768, n = 0; char *o = malloc(cap), v[300];
+    size_t cap = 65536, n = 0;   /* the settings ~25 KB, the screen's apps up to 10 */ char *o = malloc(cap), v[300];
     int whisper_refused = davs_refused("whisper");          /* davs.c's lock, never under core_lock */
     if (!o) { respond_json(fd, 503, "{}"); return; }
-    n += (size_t)snprintf(o + n, cap - n, "{\"device\":");
+    n = app(o, n, cap, "{\"device\":");
     n += hello_json(o + n, cap - n, 0);
     pthread_mutex_lock(&core_lock);
     /* volume: the main one, for the page's Volume card to say what each kind of audio plays at now */
-    n += (size_t)snprintf(o + n, cap - n, ",\"ha\":%s,\"volume\":%d,\"kiosk_app\":%s,\"settings\":[", core_ha_linked() ? "true" : "false", core_volume(), kiosk_app() ? "true" : "false");
+    n = app(o, n, cap, ",\"ha\":%s,\"volume\":%d,\"kiosk_app\":%s,\"settings\":[", core_ha_linked() ? "true" : "false", core_volume(), kiosk_app() ? "true" : "false");
     for (int i = 0, k = settings_count(); i < k && n < cap - 600; i++) {
         const struct setting *s = settings_at(i); const char *const *names; int nc = settings_choices(s, &names);
-        n += (size_t)snprintf(o + n, cap - n, "%s{\"name\":\"%s\",\"label\":\"%s\",\"group\":\"%s\",\"type\":\"%s\",\"value\":%d,\"min\":%d,\"max\":%d,\"export\":%s,\"feature\":%s,\"unit\":\"%s\",\"choices\":[",
+        n = app(o, n, cap, "%s{\"name\":\"%s\",\"label\":\"%s\",\"group\":\"%s\",\"type\":\"%s\",\"value\":%d,\"min\":%d,\"max\":%d,\"export\":%s,\"feature\":%s,\"unit\":\"%s\",\"choices\":[",
                               i ? "," : "", s->name, s->label, s->group, s->type == S_BOOL ? "bool" : s->type == S_INT ? "int" : "choice",
                               settings_get(s), settings_min(s), settings_max(s), s->export_ ? "true" : "false", s->feature ? "true" : "false", s->unit ? s->unit : "");
-        for (int c = 0; c < nc && n < cap - 200; c++) { jesc(v, sizeof v, names[c]); n += (size_t)snprintf(o + n, cap - n, "%s\"%s\"", c ? "," : "", v); }
-        n += (size_t)snprintf(o + n, cap - n, "]}");
+        for (int c = 0; c < nc && n < cap - 200; c++) { jesc(v, sizeof v, names[c]); n = app(o, n, cap, "%s\"%s\"", c ? "," : "", v); }
+        n = app(o, n, cap, "]}");
     }
     /* what does not work, and why.  Models point at the page's Download from Amazon: these said scripts/artifacts.sh
      * after the page could do it, and people who had taken the USB wires off asked how (forum, 2026-10-17) */
-    n += (size_t)snprintf(o + n, cap - n, "],\"warnings\":[");
+    n = app(o, n, cap, "],\"warnings\":[");
     int w = 0;
-    if (!core_ha_linked()) n += (size_t)snprintf(o + n, cap - n, "%s\"Home Assistant is not connected\"", w++ ? "," : "");
+    if (!core_ha_linked()) n = app(o, n, cap, "%s\"Home Assistant is not connected\"", w++ ? "," : "");
     /* Amazon refuses the whisper model to some models (the Echo Show 5: issue #100): then only a copy brings it */
     if (core_local_wake && core_whispered() == -2)
-        n += (size_t)snprintf(o + n, cap - n, "%s\"%s\"", w++ ? "," : "", whisper_refused
-                              ? "Whisper detection: no model on this Echo. Amazon does not hand it out to this model of Echo: copy it from another Echo that has it with Copy models (Models page)"
-                              : "Whisper detection: no model on this Echo yet. Get it with Download from Amazon (Models page), or copy it from another Echo with Copy models");
+        n = app(o, n, cap, "%s\"%s\"", w++ ? "," : "", whisper_refused
+                   ? "Whisper detection: no model on this Echo. Amazon does not hand it out to this model of Echo: copy it from another Echo that has it with Copy models (Models page)"
+                   : "Whisper detection: no model on this Echo yet. Get it with Download from Amazon (Models page), or copy it from another Echo with Copy models");
     if (core_local_wake && sound_model() == SOUND_NONE)
-        n += (size_t)snprintf(o + n, cap - n, "%s\"Sound detection: no model on this Echo (neither the firmware's nor one from Download from Amazon)\"", w++ ? "," : "");
+        n = app(o, n, cap, "%s\"Sound detection: no model on this Echo (neither the firmware's nor one from Download from Amazon)\"", w++ ? "," : "");
     if (core_sound_failed())
-        n += (size_t)snprintf(o + n, cap - n, "%s\"Sound detection could not start: its model did not load, so it was switched off (boot.log says why)\"", w++ ? "," : "");
+        n = app(o, n, cap, "%s\"Sound detection could not start: its model did not load, so it was switched off (boot.log says why)\"", w++ ? "," : "");
     { const struct core_wake_word *l; if (core_local_wake && core_wake_engine(-1) == WAKE_AMAZON && core_wake_words(&l) <= 1)
-        n += (size_t)snprintf(o + n, cap - n, "%s\"Wake words: only Alexa. Amazon's others (Echo, Computer, ...) come with Download from Amazon (Models page), or copy them from another Echo\"", w++ ? "," : ""); }
+        n = app(o, n, cap, "%s\"Wake words: only Alexa. Amazon's others (Echo, Computer, ...) come with Download from Amazon (Models page), or copy them from another Echo\"", w++ ? "," : ""); }
     pthread_mutex_unlock(&core_lock);
     float t = diag_soc_temp(), cpu = diag_cpu();
     pthread_mutex_lock(&lk); int adb_wait = login.state == 1 && login.kind == W_ADB; pthread_mutex_unlock(&lk);
-    n += (size_t)snprintf(o + n, cap - n, "],\"adb\":{\"open\":%s,\"waiting\":%s},\"diag\":{\"soc_temp\":", adbwifi_open() ? "true" : "false", adb_wait ? "true" : "false");
-    n += isnan(t) ? (size_t)snprintf(o + n, cap - n, "null") : (size_t)snprintf(o + n, cap - n, "%.1f", t);
-    n += (size_t)snprintf(o + n, cap - n, ",\"cpu\":");
-    n += isnan(cpu) ? (size_t)snprintf(o + n, cap - n, "null") : (size_t)snprintf(o + n, cap - n, "%.0f", cpu);
+    n = app(o, n, cap, "],\"adb\":{\"open\":%s,\"waiting\":%s},\"diag\":{\"soc_temp\":", adbwifi_open() ? "true" : "false", adb_wait ? "true" : "false");
+    n = isnan(t) ? app(o, n, cap, "null") : app(o, n, cap, "%.1f", t);
+    n = app(o, n, cap, ",\"cpu\":");
+    n = isnan(cpu) ? app(o, n, cap, "null") : app(o, n, cap, "%.0f", cpu);
     { static const char *const models[] = { "none", "firmware", "newer" };
-      n += (size_t)snprintf(o + n, cap - n, "},\"sound\":{\"model\":\"%s\",\"failed\":%s", models[sound_model()], core_sound_failed() ? "true" : "false"); }
+      n = app(o, n, cap, "},\"sound\":{\"model\":\"%s\",\"failed\":%s", models[sound_model()], core_sound_failed() ? "true" : "false"); }
     /* the timer sounds this Echo has (the stock ones where its firmware keeps them), and the length of its own */
     { static const enum sound snd[] = { SND_TIMER, SND_ALARM, SND_CUSTOM }; static const char *const nm[] = { "timer", "alarm", "custom" };
-      n += (size_t)snprintf(o + n, cap - n, "},\"timer_sound\":{\"custom_ms\":%u,\"present\":[\"beep\"", sound_own_ms(SND_CUSTOM));
-      for (int i = 0; i < 3; i++) if (sound_present(snd[i])) n += (size_t)snprintf(o + n, cap - n, ",\"%s\"", nm[i]);
-      n += (size_t)snprintf(o + n, cap - n, "]"); }
+      n = app(o, n, cap, "},\"timer_sound\":{\"custom_ms\":%u,\"present\":[\"beep\"", sound_own_ms(SND_CUSTOM));
+      for (int i = 0; i < 3; i++) if (sound_present(snd[i])) n = app(o, n, cap, ",\"%s\"", nm[i]);
+      n = app(o, n, cap, "]"); }
     /* the sounds one's own can stand in for: its length (0: stock's plays), whether stock's is on this image, the longest */
-    n += (size_t)snprintf(o + n, cap - n, "},\"sounds\":[");
+    n = app(o, n, cap, "},\"sounds\":[");
     for (int s = 0, k = 0; s < SND_COUNT; s++) if (sound_id(s))
-        n += (size_t)snprintf(o + n, cap - n, "%s{\"id\":\"%s\",\"own_ms\":%u,\"stock\":%s,\"max_s\":%u}", k++ ? "," : "", sound_id(s),
+        n = app(o, n, cap, "%s{\"id\":\"%s\",\"own_ms\":%u,\"stock\":%s,\"max_s\":%u}", k++ ? "," : "", sound_id(s),
                               sound_own_ms(s), sound_stock_present(s) ? "true" : "false", sound_own_secs(s));
-    n += (size_t)snprintf(o + n, cap - n, "],\"arbitration\":");
-    if (arb_running()) n += arb_status_json(o + n, cap - n); else n += (size_t)snprintf(o + n, cap - n, "null");
+    n = app(o, n, cap, "],\"arbitration\":");
+    if (arb_running()) n += arb_status_json(o + n, cap - n); else n = app(o, n, cap, "null");
     if (dropin_running()) { char peer[64]; int st = dropin_status(peer, sizeof peer); unsigned at; int res = dropin_last(&at);
-        n += (size_t)snprintf(o + n, cap - n, ",\"dropin\":{\"state\":\"%s\",\"peer\":\"%s\",\"result\":\"%s\",\"attempt\":%u}",
+        n = app(o, n, cap, ",\"dropin\":{\"state\":\"%s\",\"peer\":\"%s\",\"result\":\"%s\",\"attempt\":%u}",
                               dropin_states[st], peer, res >= 0 ? dropin_results[res] : "", at); }   /* peer: a node, [a-z0-9-] */
-    n += (size_t)snprintf(o + n, cap - n, ",\"wifi\":"); n += wifi_current_json(o + n, cap - n);
-    n += (size_t)snprintf(o + n, cap - n, ",\"clients\":[");
+    n = app(o, n, cap, ",\"wifi\":"); n += wifi_current_json(o + n, cap - n);
+    if (screen_present()) {                                       /* the screen: its home app, its music pages */
+        n = app(o, n, cap, ",\"screen\":"); n += screen_status_json(o + n, cap - n);
+        n = app(o, n, cap, ",\"mass\":"); n += mass_status_json(o + n, cap - n);
+    }
+    n = app(o, n, cap, ",\"clients\":[");
     pthread_mutex_lock(&lk);
     for (int i = 0; i < nclients && n < cap - 300; i++) {
         char h[65]; hex(h, clients[i].pub, 32); jesc(v, sizeof v, clients[i].label);
-        n += (size_t)snprintf(o + n, cap - n, "%s{\"pub\":\"%s\",\"label\":\"%s\",\"me\":%s}", i ? "," : "", h, v, memcmp(clients[i].pub, me, 32) ? "false" : "true");
+        n = app(o, n, cap, "%s{\"pub\":\"%s\",\"label\":\"%s\",\"me\":%s}", i ? "," : "", h, v, memcmp(clients[i].pub, me, 32) ? "false" : "true");
     }
     pthread_mutex_unlock(&lk);
-    n += (size_t)snprintf(o + n, cap - n, "]}");
+    n = app(o, n, cap, "]}");
     respond_s(fd, r, 200, "application/json", NULL, o, n < cap ? n : cap);
     free(o);
 }
@@ -891,7 +908,7 @@ static void vouch_api(int fd, struct req *r)
 static int unseal(const struct req *r, const uint8_t *in, size_t n, uint8_t *out)
 {
     uint8_t pub[32], k[32], ek[32], ks[64]; crypto_blake2b_ctx ctx; int bad;
-    if (n > 64 * 4 || unhex(pub, r->pub, 32)) return -1;
+    if (n > 64 * 40 || unhex(pub, r->pub, 32)) return -1;   /* callers bound n by their buffers: a Wi-Fi password, a token */
     pthread_mutex_lock(&lk); bad = session_key(k, pub); pthread_mutex_unlock(&lk);
     if (bad) return -1;
     crypto_blake2b_keyed(ek, 32, k, 32, (const uint8_t *)"hassmic seal 1", 14);
@@ -905,6 +922,49 @@ static int unseal(const struct req *r, const uint8_t *in, size_t n, uint8_t *out
     }
     crypto_wipe(k, sizeof k); crypto_wipe(ek, sizeof ek); crypto_wipe(ks, sizeof ks);
     return 0;
+}
+
+/* /api/screen  POST "home <package>" | "home" (the face) | "home -" (none chosen: Kiosk Satellite where installed).  Signed */
+static void screen_api(int fd, struct req *r)
+{
+    if (!signed_ok(r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    if (!screen_present() || strcmp(r->method, "POST")) { respond_sjson(fd, r, 404, "{\"error\":\"not found\"}"); return; }
+    char what[16] = "", v[128] = ""; int k = sscanf(r->body, "%15s %127s", what, v);
+    if (k < 1 || strcmp(what, "home") || screen_set_home(k < 2 ? "" : !strcmp(v, "-") ? NULL : v)) { respond_sjson(fd, r, 400, "{\"error\":\"bad request\"}"); return; }
+    size_t cap = 16384; char *o = malloc(cap);
+    if (!o) { respond_sjson(fd, r, 503, "{\"error\":\"no memory\"}"); return; }
+    size_t n = screen_status_json(o, cap);
+    respond_s(fd, r, 200, "application/json", NULL, o, n); free(o);
+}
+
+/* /api/mass  POST "<url hex | -> <token sealed, hex | - | =>": Music Assistant's API for the screen (mass.c): its
+ * address ("-": none; without a token the Echo looks at the one Sendspin played from) and a long-lived token, sealed
+ * as a Wi-Fi password ("-": forget it, "=": keep it); a token needs an address (409).  Signed.  The token is never
+ * sent back: /api/state says only whether there is one. */
+static void mass_api(int fd, struct req *r)
+{
+    char uh[600] = "", th[5000] = "", url[260] = ""; uint8_t sealed[2400], tok[2401]; int tl = 0, ul = 0;
+    if (!signed_ok(r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    if (!screen_present() || strcmp(r->method, "POST")) { respond_sjson(fd, r, 404, "{\"error\":\"not found\"}"); return; }
+    if (sscanf(r->body, "%599s %4999s", uh, th) != 2 || (strcmp(uh, "-") && (ul = unhex_any((uint8_t *)url, sizeof url - 1, uh)) < 0)
+        || (strcmp(th, "-") && strcmp(th, "=") && ((tl = unhex_any(sealed, sizeof sealed, th)) < 0 || unseal(r, sealed, (size_t)tl, tok)))) {
+        respond_sjson(fd, r, 400, "{\"error\":\"bad request\"}"); return;
+    }
+    if (strcmp(uh, "-")) url[ul] = 0;
+    for (char *c = url; *c; c++) if ((unsigned char)*c < 0x21 || *c == '"' || *c == '\\' || (unsigned char)*c > 0x7e) {
+        crypto_wipe(tok, sizeof tok); crypto_wipe(sealed, sizeof sealed); respond_sjson(fd, r, 400, "{\"error\":\"bad address\"}"); return;
+    }
+    tok[tl] = 0;                                        /* the page pads with zeros: a token has none */
+    for (int i = 0; i < tl && tok[i]; i++) if (tok[i] < 0x21 || tok[i] > 0x7e || tok[i] == '"' || tok[i] == '\\') {
+        crypto_wipe(tok, sizeof tok); crypto_wipe(sealed, sizeof sealed); respond_sjson(fd, r, 400, "{\"error\":\"not a token\"}"); return;
+    }
+    int rc = mass_set(url, !strcmp(th, "-") ? "-" : !strcmp(th, "=") ? "" : (const char *)tok);
+    crypto_wipe(tok, sizeof tok); crypto_wipe(sealed, sizeof sealed);
+    if (rc == -2) { respond_sjson(fd, r, 409, "{\"error\":\"Give Music Assistant's address\"}"); return; }
+    if (rc == -4) { respond_sjson(fd, r, 400, "{\"error\":\"The Echo talks to Music Assistant's API without TLS: give its http address (port 8095)\"}"); return; }
+    if (rc == -3) { respond_sjson(fd, r, 409, "{\"error\":\"A new address takes the token again: it only ever goes where it was given\"}"); return; }
+    char o[4096]; size_t n = mass_status_json(o, sizeof o);
+    respond_s(fd, r, rc ? 500 : 200, "application/json", NULL, o, n);
 }
 
 /* /api/wifi        GET   the network now, the last scan, the last switch (wifi.c)
@@ -1097,6 +1157,8 @@ static void handle(int fd)
     else if (!strncmp(r.path, "/api/mww", 8)) mww_api(fd, &r);
     else if (!strncmp(r.path, "/api/ring", 9)) ring_api(fd, &r);
     else if (!strncmp(r.path, "/api/wifi", 9)) wifi_api(fd, &r);
+    else if (!strcmp(r.path, "/api/mass")) mass_api(fd, &r);
+    else if (!strcmp(r.path, "/api/screen")) screen_api(fd, &r);
     else if (!strncmp(r.path, "/api/timer-sound", 16)) timer_sound_api(fd, &r);
     else if (!strncmp(r.path, "/api/sound/", 11)) sound_api(fd, &r);
     else if (!strncmp(r.path, "/api/sound-pack", 15)) sound_pack_api(fd, &r);

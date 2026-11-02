@@ -439,9 +439,63 @@ Beyond the README's two figures:
   puts a pack in use (it replaces your sounds, and those it has none of go back to Alexa's), "Export" gives a `.soundpack`
   file, a plain tar with `pack.json` and one WAV per sound, and "Import" takes one on any Echo. 16 packs and
   30 MB at most; nothing is written with under 32 MB free on the Echo. Switches stay as they are when a pack changes.
+- On the **Echo Show 5** the screen says the same with a face: see [The screen](#the-screen-echo-show-5).
 - Silent and dark at boot.
 - The ring dims with the room's light as on a stock Echo (Amazon's own logic, on by default); a fixed level from Home
   Assistant switches that off.
+
+## The screen (Echo Show 5)
+
+hassmic's own screen is small on purpose: the Show's screen is yours to give to any app (Kiosk Satellite, View
+Assist, a dashboard browser). Install apps with `adb install <app>.apk`; Amazon's WebView is there for those that
+show web pages. Only one app can use the microphone at a time, and hassmic has it: an app that runs a voice
+satellite of its own has to run without its microphone (as a display) while hassmic listens.
+
+- **The face** shows over hassmic's home screen. Its eyes follow the assistant: wide and cyan while it listens,
+  glancing up while it thinks, a mouth moving with the reply, closed and red with the microphone off, asleep in Do not
+  disturb, orange with a **Stop** button while a timer rings, green during a Drop In (**Answer** and **Decline** when
+  one rings, **End** during a call), orange while the Echo waits to be added to Home Assistant. Tap the eyes and they
+  smile. Below them: the clock, in Home Assistant's time zone (12-hour where the Echo's language is US, Canadian or
+  Australian English), or what Music Assistant plays, with play/pause; tap it for the music. The face dims in a dark
+  room. A request to the assistant, a ringing timer or a Drop In bring the face back from the music.
+- **The drawer**: pull down from the top edge of the screen, whatever shows, as on Amazon's own Echo Show. In it:
+  **Home** (the home app), **Face** (where the home app is another), **Music**, **Do not disturb**, **Screen off** (a
+  touch wakes it), what plays (tap it for the music) and the Echo's volume. Over an app, start the pull on the thin
+  black strip along the top of the screen: the app never gets that touch, so it does not scroll or refresh. Pulled over
+  an app, the drawer shows on a picture of it; close it (tap below it, or push it up) and the app is back as it was.
+- **The home app**: the settings page's **Screen** page picks what the Echo shows at start and brings back when it
+  ends or crashes (three times a minute at most), but not while you have the face or the music open: Kiosk Satellite
+  until you pick another (if it is installed), the face, or any app you installed. A new choice applies at once.
+- **Back**: over an app, swipe along the bottom edge (the light band), left or right.
+
+### Music Assistant on the screen
+
+The music page has five tabs down its left side, and the face's button above them goes back to the face.
+
+- **Playing**: the cover, title, artist and album; where the track is (drag the bar to move in it); shuffle,
+  previous, play/pause, next, repeat (tap again: one track, then off); the group's volume. "Playing on" at the top
+  is the group this Echo plays in: tap it for the speakers.
+- **Queue**: what this Echo's queue holds, the current track marked. Tap a track to play from there; long press it to
+  remove it. **Shuffle** and **Clear** (asks first) above.
+- **Library**: artists, albums, playlists, tracks, radio, podcasts and audiobooks, by name; more load as you scroll. An
+  artist opens its albums, an album or a playlist its tracks, each with **Play**, **Shuffle**, **+** (to the end of
+  the queue) and **Radio** (Music Assistant's radio mode: more like it). Tap the Library tab again to go back to its top.
+- **Search**: type on the screen's keyboard; Music Assistant searches once you pause (all its providers, not only the
+  library) and the results come grouped: artists, albums, songs, playlists, radio. **Done** hides the keyboard.
+- **Speakers**: every player Music Assistant has. A tick is a speaker that plays together with this Echo: tap one to
+  add it or take it out (a speaker without a circle cannot play together with this Echo, as Music Assistant says).
+  Each one's volume beside it, the whole group's on top. Long press a speaker: play what it plays here instead.
+  Joined to another speaker's group, the page says so, with **Leave**.
+- A long press on anything in the library or the results: **Play now**, **Play next**, **Add to queue**, **Start
+  radio**. Tapping a song plays it at once.
+
+Playing needs nothing to set up: Music Assistant plays on the Echo over Sendspin and says what plays. The queue, the
+library, search and the speakers need Music Assistant's own API, which wants a token: in Music Assistant open your
+profile (the person icon), **Long-lived tokens**, **Create**, and on the Echo's settings page (Music) press
+**Connect…** and paste it. The page sends it sealed for that Echo, which keeps it and never shows it again. The
+address, left empty, is taken from the Music Assistant that plays on the Echo when you save (port 8095) and kept:
+the token only ever goes there, so a Music Assistant that moves needs **Connect…** again (or its address given).
+Until then those tabs say how to connect.
 
 ## Music
 
@@ -605,6 +659,9 @@ the same. Do the app's setup from your PC at `http://<echo-ip>:2324`, and set it
 network. Then:
 
 - The Echo opens the app within seconds of the install, and again whenever it ends: after a crash, its own update, or a boot. Allow up to a minute.
+  On a Show with hassmic's own screen ([The screen](#the-screen-echo-show-5)) the app is that screen's home app (the
+  Screen page can pick another): the drawer from the top edge leaves it for the face or the music, and its Home brings
+  it back.
 - It gets storage, location, overlay, settings, usage stats and device admin without asking, since nobody is there to
   answer. Its web page (port 2324) and its Home Assistant API (port 6053) are reachable from private addresses.
   Its updates install by themselves.
@@ -622,7 +679,7 @@ The app's own setup goes with it, the Home Assistant login included: installed a
 
 **Trust it like adb.** The update helper runs the app's own code as the shell user. Those switches set Android's
 permissions, but an app that wanted to could get past them. Install only an app you trust; `docs/SECURITY.md` has
-the detail. Turn the app's own voice assistant off, and do not make it the home app.
+the detail. Turn the app's own voice assistant off, and do not make it Android's home app (its launcher).
 
 ## Sound detection
 

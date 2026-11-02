@@ -14,4 +14,8 @@ void sendspin_mdns(int port, char *out, size_t outsz);  /* <service> element for
 int  sendspin_unpaired(int set);                        /* unpaired servers may play: -1 asks, 0/1 sets (kept in the state) */
 int  sendspin_linked(void);                             /* a server holds the player now */
 int  sendspin_expected(void);                           /* a server held the player role here: it ought to come back */
+int  sendspin_control(const char *cmd, long long arg);  /* a controller command (play, pause, next, previous, stop,
+                                                           volume arg, mute arg, seek arg ms, repeat_*, shuffle,
+                                                           unshuffle) if the server allows it: 0 sent */
+const char *sendspin_client_id(void);                  /* this Echo's id towards Music Assistant (its player id there) */
 #endif

@@ -58,11 +58,15 @@ TESTS = [
     ("ring-designs", [PY, "tests/fake_web_ring.py"]),
     ("artifacts", [PY, "tests/fake_web_artifacts.py"]),
     ("wyoming", [PY, "tests/fake_ha.py"]),
+    ("screen", [PY, "tests/fake_screen.py"]),
+    ("screen-9", [PY, "tests/fake_screen.py", "--legacy"]),
+    ("ma-api", [PY, "tests/fake_ma_api.py"]),
     ("otatool", ["sh", "tests/otatool_test.sh"]),
 ]
 # what a test needs from the network, made here before the namespaces (each a no-op once done); a test whose setup
 # failed says so itself
-SETUP = {"sendspin-9": [PY, "tests/fake_ma_sendspin.py", "--setup"]}       # aiosendspin 9.1.1 beside .venv's
+SETUP = {"sendspin-9": [PY, "tests/fake_ma_sendspin.py", "--setup"],      # aiosendspin 9.1.1 beside .venv's
+         "screen-9": [PY, "tests/fake_ma_sendspin.py", "--setup"]}
 RETRY_MAX = 4           # more failing at once than load makes (at most 2 a run seen): something is broken, no reruns
 
 

@@ -340,7 +340,20 @@ kiosk_tick() {
             echo "kiosk satellite: back to landscape";;
         esac
     fi
-    if [ $kiosk_wait -gt 0 ]; then
+    # hassmic names an empty file state/screen-ui.<its pid> while its screen UI (screen.c, the Echo Show's own screen)
+    # is meant to run, restarts included, and the UI opens the app itself: it is that UI's home app unless another was
+    # chosen there, and the UI knows when its own screen was asked for (the face, the music, the drawer).  Opened here
+    # as well, the app would cover them within 10 s.  The pid comes from the name (a glob: the folder listed), never from
+    # opening a file the daemon could swap; a name of more than digits is none (statefile.c's temp file beside it)
+    ui=
+    for f in /data/local/hassmic/state/screen-ui.*; do
+        n=${f##*/screen-ui.}; case "$n" in ''|*[!0-9]*) ;; *) ui=$n;; esac
+    done
+    comm=; [ -n "$ui" ] && read -r comm < /proc/$ui/comm 2>/dev/null
+    if [ -n "$ui" ] && [ -d /proc/$ui ] && case "$comm" in hassmic*) true;; *) false;; esac; then   # (a pid of a hassmic
+                                                    # that died, taken by another process since: no UI's)
+        kiosk_failing= kiosk_wait=0
+    elif [ $kiosk_wait -gt 0 ]; then
         kiosk_wait=$((kiosk_wait - 1))
     else
         case "$(dumpsys activity activities 2>/dev/null | grep mResumedActivity)" in

@@ -24,11 +24,14 @@ libraries extracted to `firmware/<codename>/rootfs/system/lib`**. Neither the ND
 without them only the host targets build. Extraction steps: `devices/donut/README.md` "2. Unpack the firmware and build".
 
 ```sh
-make [DEVICE=donut]      # ARM binaries into build/donut/ (hassmic, mixcap, mixplay, pryon_test, aed_test, runas, latency, otatool)
+make [DEVICE=donut]      # ARM binaries into build/donut/ (hassmic, mixcap, mixplay, pryon_test, aed_test, runas, latency, otatool;
+                         # libhmui.so where device.mk has SCREEN)
 make DEVICE=donut STUBS=1  # same, without firmware/: links against stand-ins from devices/<codename>/stubs/*.syms (byte-identical)
 make host                # build/hassmic-host (PC: file audio + no wake word, SIGUSR1 triggers wake, SIGTTOU a near miss; board.c of DEVICE),
                          # build/donut/hassmic-qemu (ARM + real Pryon, run via tools/qrun.sh), build/otatool-host (the Echo's
-                         # otatool for the PC, as tests' stand-in for the device side). Needs libopus
+                         # otatool for the PC, as tests' stand-in for the device side), build/hassmic-host-screen (the same
+                         # with screen.c and the band, for tests/fake_screen.py, fake_ma_api.py). Needs libopus
+make build/uishot        # the Echo Show's screen UI as PNG pictures, every view (FreeType; build/uishot <dir>)
 make unit                # C unit tests; ws/noise are checked against Python reference impls in .venv; the Drop In
                          # blueprint (tests/blueprint_dropin.py); one target each (unit-<name>): make -j unit runs them at once
 make build/hassmic-host  # single target
@@ -74,6 +77,11 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # --legacy: 9.1.1 of MA <= 2.10.6, build/aiosendspin-9.1.1 from --setup),
                                              # strict: a deviation MA would only log fails
 .venv/bin/python tests/fake_ha_stop_word.py   # "<wake word>, stop" between two Echos: the drop cancelled, stop_ends_listening
+.venv/bin/python tests/fake_screen.py [--legacy]  # the Echo Show's screen UI as hassmic feeds it (stand-in UI): Sendspin
+                                             # metadata/artwork (1.0's transfer, scheduled; --legacy: 9.1.1's), the band,
+                                             # commands, home app, restarts
+.venv/bin/python tests/fake_ma_api.py         # Music Assistant's API for the screen (mass.c) against a stand-in server:
+                                             # the page's sealed token, auth, players, queue, lists, commands, images
 .venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step
 .venv/bin/python tests/fake_web_artifacts.py  # models copied Echo to Echo through the page, root's installer, after a restart
 .venv/bin/python tests/fake_web_ring.py       # light ring designs: library, assignments, apply with the test as root,
@@ -538,6 +546,44 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   sets and unsets queued one behind the other go in one ledctrl (`LEDQ_BATCH`: it takes repeated -s/-u).  The
   beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N` when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
   `HASSMIC_FAKE_BEAM`.
+- **Screen UI** (`src/ui/`, `screen.c`, `screen.h`; device.mk `SCREEN`, else `screen_none.c`; checkers only so far): the
+  Echo Show's own screen, small beside any app (Kiosk Satellite, View Assist...).  `src/ui/ui.h` lists the parts:
+  `scene.c` (display list with a clip per item, diffed by id into one dirty rectangle; text cache by hash; image cache
+  by key and shown size, asked of the platform once; touches: taps, long presses, HIT_DRAG sliders, scrollers with
+  flings and rubber band, a shade's hits block what is under them; the top edge = the drawer once the finger moves
+  down, a tap there is still a tap; over an app only from the grip (y < 0: 16 rows along the top that, like the
+  band's, no app has, overscan; a pull from the app's own top refreshed Kiosk Satellite); the band along = Back over an
+  app; an app launched leaves the last frame up (`leaving_until`, the app's picture under the drawer) until it is in
+  front, polled every 150 ms meanwhile (`scene_waiting`); frames only while something moves),
+  `widgets.c` (icons drawn from shapes, buttons, sliders, keyboard, action sheet, toast), `face.c` (the face for the
+  core's patterns, mouth on the reply's level, clock with HA's tz, bottom line), `drawer.c` (pulled from the top over
+  anything: over an app a SurfaceControl.screenshot under it and hassmic's home activity brought up, closed with
+  nothing chosen it relaunches that app; Home, Face, Music, DND, Screen off, what plays, volume; no apps), `music.c` (rail: Playing from Sendspin's metadata/artwork/controller, Queue, Library with
+  drill-down, Search with the keyboard, Speakers with groups and volumes; lists by "ml" requests, pages of 60).  The
+  home app: the page's Screen page (`POST /api/screen`, `state/screen_home`; the apps the UI listed at start, "app"
+  lines), else Kiosk Satellite where installed ("kiosk", root's `kiosk-app` mark), else the face; a new choice applies
+  at once; relaunched 3x a minute at most, not while our own screen was asked for.  One app_process: `scripts/device/screen.dex`
+  (`tools/mkscreen.py`) loads `libhmui.so` (`android.c`: JNI table C/J/F checked by `mkscreen.py --framework`; images
+  decoded on a thread of their own); layer shown only while hassmic's home activity is in front (getTasks polled);
+  touches from evdev beside Android (`touch.c`: protocol B, the first finger followed; `tests/unit/touch_test.c`).  The band runs in the same process (`ring_band.c` -> `screen_band`, one row a
+  frame; ringbar.dex only without the UI and in tests).  `screen.c` keeps state by generation and one writer thread
+  sends what changed (callers hold `core_lock`: never block on the pipe), plus mass.c's lines from a FIFO (8 MB, a
+  new UI drops it and `mass_replay` tells the state again); hassmic's pid in a file's name while a UI is meant to run
+  (restarts included, until given up), `state/screen-ui.<pid>` (root lists the folder, never opens it), which makes
+  root's `kiosk_tick` leave opening the app to the UI.  PC: `tests/unit/ui_test.c` (every incremental frame == the full one,
+  gestures, commands), `tools/uishot.c` (`make build/uishot`: every view as PNG with the firmware's Roboto, FreeType),
+  `HASSMIC_SCREEN` (a stand-in UI).
+- **Music Assistant's API** (`mass.c`, `mass.h`, `json.c`): the screen's library, search, queue and speakers over
+  MA's own websocket (`/ws`, port 8095; the page's URL, or with none given the Sendspin server's address pinned when the
+  token is saved: a token only ever goes to that address, `mass_peer` merely suggests one, from sessions whose player
+  role is active; without a token mass.c may look at the suggested one to say what it is); the first
+  message is the server's info, from schema 28 `auth` with a long-lived token (page: `POST /api/mass`, sealed as the
+  Wi-Fi password, `state/mass` 0600, never sent back); events after it.  This Echo = the player whose id is Sendspin's
+  client id (`sendspin_client_id`) or has it as an output protocol; its queue by `get_active_queue`.  Digested into the
+  UI's lines (scene.h: ma, pl, pq, qc, L/I/E, img, merr), `pl` written only when it changes; group with set_members
+  (group/ungroup where unknown), images from `/imageproxy/<proxy_id>?size=` (80/160/256/512, `fmt=jpeg`, the token
+  along).  `json.c` is a token reader (no DOM copies, depth 64; `tests/unit/json_test.c` fuzzes it).
+  `tests/fake_ma_api.py`: a stand-in MA server.
 - **Light band** (`ring_band.c`, the Echo Show's `RING` in device.mk instead of `ring.c`): the same `ring.h` drawn as a
   band along the bottom of the screen, every pattern as the Dots' ring unrolled (12 virtual LEDs blended across the
   width, the talker's side in the middle; never turned: the Show's beam says too little, docs/re-checkers.md) plus

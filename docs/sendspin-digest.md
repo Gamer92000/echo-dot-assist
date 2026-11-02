@@ -80,6 +80,8 @@ never (D3), and it arrives before our hello. Present: spec 1.0 (`struct session.
 | E15 | Unknown client message types | disconnect (D16) | ignored with a warning (needs a `payload` object) | `server/connection.py:2803-2830` |
 | E16 | Redial after `client/goodbye` | `restart`, `concurrent_attempt` | `restart` only: a server hassmic turned away comes back to reclaim playback or after an mDNS remove and add | `server/connection.py:510-525` |
 | E17 | Initial client/state, strict | close after 5 s | no timer: binary held until it arrives | `server/connection.py:1332-1340` |
+| E18 | Artwork (a model with a screen) | channels in client/hello's `artwork@v1_support` (`media_width`/`media_height`); an image is one message `[8][int64 time][image]` (header only: cleared) | channels in client/state's `artwork` (`width`/`height`), every time (the same again changes nothing; the hello's key is flagged and puts 10.x back on single messages); an image is an announce `[8][2][int64 time][uint32 size]` (size 0: cleared), parts `[8][0][data]` of at most 65517 bytes (never fragments), a cancel `[8][1]` drops the transfer and an image still waiting for its time; announced up to 20 s ahead (the next track's cover): hassmic shows it at its time | `server/roles/artwork/v1.py`, `models/artwork.py` |
+| E19 | Scheduled metadata, roles gone (a model with a screen) | the server sends metadata when due; `{"<role>":null}` on deactivation | `server/state` metadata with a future `timestamp`, up to 20 s ahead (the next track's), and on every join the current state then the scheduled one: hassmic holds it until then, a newer one replaces it, one for now (or null) drops it. No null object for a deactivated role: hassmic drops the screen's metadata, cover or controller with the role (and the covers on an artwork `stream/end`) | `server/roles/scheduled_state.py`, `server/roles/metadata/group.py` |
 
 Also from the spec, both dialects: objects for inactive roles ignored (stream/start, server/command, audio), the
 controller's state dropped with its role, `server/time` input in integer halves with `max_error <= 0` dropped,
@@ -87,7 +89,8 @@ WebSocket upgrades with `Origin` refused (spec #324, 2026-10-23; neither library
 bursts of 8 with only the best fed to the filter (spec #303, 2026-10-21, after 10.2.1; servers must not close over it).
 
 Tested: `tests/fake_ma_sendspin.py` against 10.2.1 and, with `--legacy`, 9.1.1, both strict
-(`allow_noncompliant_clients=False`), so any flag fails the test. Not run: a real MA 2.10.8; fragments; a volume change
+(`allow_noncompliant_clients=False`), so any flag fails the test; `tests/fake_screen.py` (metadata, artwork) against
+10.2.1, strict too. Not run: a real MA 2.10.8; fragments; a volume change
 during a re-handshake.
 
 ## 1. Connection establishment

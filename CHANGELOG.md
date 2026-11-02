@@ -4,6 +4,36 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-03
 
+- **Echo Show 5: a screen of its own** ([guide](docs/GUIDE.md#the-screen-echo-show-5)). Over hassmic's home screen the
+  Show now has a face: two eyes that listen, think and speak with the assistant (a mouth moves with the reply), close
+  when the microphone is off, sleep in Do not disturb, light up for a ringing timer (with a Stop button) and for a Drop
+  In (Answer, Decline, End), and the clock below in Home Assistant's time zone. While Music Assistant plays on the
+  Show, the track and its cover sit at the bottom, with play/pause. Kiosk Satellite or any other app can still have the
+  screen: hassmic's own stays small.
+- **Echo Show 5: a drawer from the top edge, as on Amazon's Echo Show.** Pull down from the top of the screen, over any
+  app: Home, Face, Music, Do not disturb, Screen off, the Echo's volume and what plays. Over an app, start the pull on the
+  thin black strip along the top: the app never gets that touch (Kiosk Satellite took it as its pull to refresh), and
+  the app's picture stays under the drawer until the app is back, without the face showing in between. Over an app, a
+  swipe along the light band is Back.
+- **Echo Show 5: a home app.** The settings page's new Screen page picks what the Show shows at start and brings back
+  when it ends (three times a minute at most): Kiosk Satellite until you pick another, the face, or any app you
+  installed. The drawer's Home goes there.
+- **Echo Show 5: Music Assistant on the screen.** A music page with five tabs on the left: Playing (cover, title,
+  artist, album, a progress bar you can drag, shuffle, previous, play/pause, next, repeat, the volume), Queue (what comes
+  next; tap a track to play from there, long press to remove it, Clear, Shuffle), Library (artists, albums, playlists,
+  tracks, radio, podcasts, audiobooks; an artist opens its albums, an album or a playlist its tracks, with Play,
+  Shuffle, Add to queue and Radio), Search (a keyboard on the screen; results as you type, grouped) and Speakers (every
+  player Music Assistant has: tap one to play it together with the Show, or take it out of the group, each one's
+  volume and the group's, long press to move what another speaker plays to the Show). A long press on anything in
+  the library or the results: Play now, Play next, Add to queue, Start radio. Playing works as it did with nothing to
+  set up; the rest needs Music Assistant's API: on the settings page (Music), paste a long-lived token from Music
+  Assistant (your profile, Long-lived tokens). It is sent sealed for that Echo and kept on it. The address is that of
+  the Music Assistant that plays on the Echo when you save it, and the token only ever goes there.
+- **Echo Show 5: the light band uses less memory.** The band is now drawn by the same process as the screen, which
+  saves about 16 MB.
+- **Kiosk Satellite and the screen get along.** Where hassmic's screen runs, it opens Kiosk Satellite (its home app)
+  instead of the background check that did so every 10 seconds: the face or the music, once asked for, stay on the
+  screen until you leave them.
 - **Kiosk Satellite on the Echo Shows** ([guide](docs/GUIDE.md#kiosk-satellite-on-the-screen)): with the app on a
   Show 5 (1st or 2nd gen) or Show 8 (1st or 2nd gen), the Echo opens it by itself, opens it again when it ends, gives it
   the permissions it would otherwise ask a person for and keeps its update helper running, so it updates itself. Its web

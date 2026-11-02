@@ -415,8 +415,11 @@ def build(prog, codes):
     out += cd
     while len(out) % 4:
         out += b"\0"
-    entries = [(0x0000, 1, 0), (0x0001, ns, so), (0x0002, nt, to), (0x0003, np, po),
-               (0x0004, nf, fo), (0x0005, nm, mo), (0x0006, ncd, cdo)]
+    # an empty id section has offset 0 and no map entry: ART refuses anything else ("Offset(240) should be zero when
+    # size is zero for field-ids", screen.dex has no fields; 2026-10-14)
+    fo = fo if nf else 0
+    entries = [e for e in [(0x0000, 1, 0), (0x0001, ns, so), (0x0002, nt, to), (0x0003, np, po),
+                           (0x0004, nf, fo), (0x0005, nm, mo), (0x0006, ncd, cdo)] if e[1]]
     if tl_off:
         entries.append((0x1001, len(tl_off), min(tl_off.values())))
     entries.append((0x2001, len(blobs), code_offs[0]))
@@ -674,6 +677,9 @@ def read(data, prog):
     where = {t: (sz, f) for t, sz, f in seen}
     assert where[0x0001][0] == ns and where[0x0002][0] == nt and where[0x0003][0] == np
     assert where[0x0005][0] == nm and where[0x0006][0] == ncd and where[0x1000][0] == 1
+    for sz, off, t in ((ns, so, 1), (nt, to, 2), (np, po, 3), (nf, fo, 4), (nm, mo, 5), (ncd, cdo, 6)):
+        assert sz or (off == 0 and t not in where), f"empty id section {t} with offset {off} or a map entry"
+        assert not sz or where[t] == (sz, off), f"id section {t}: header {sz}@{off}, map {where.get(t)}"
     # ids sorted, strings readable, every offset inside the file
     strs = []
     for i in range(ns):
@@ -775,7 +781,7 @@ def boot_classes(rootfs):
                 cls, acc, sup, ifo, _, _, cdata, sv = struct.unpack("<8I", d[cdo + 32 * c:cdo + 32 * c + 32])
                 desc = ty(cls)
                 ifs = [ty(u16(ifo + 4 + 2 * k)) for k in range(u32(ifo))] if ifo else []
-                meths, flds = {}, {}
+                meths, flds, rets = {}, {}, {}
                 if cdata:
                     o = cdata
                     sf, o = uleb_at(o); iff, o = uleb_at(o); dm, o = uleb_at(o); vm, o = uleb_at(o)
@@ -797,8 +803,9 @@ def boot_classes(rootfs):
                     for k in range(dm + vm):
                         if k == dm: idx = 0
                         dd, o = uleb_at(o); ma, o = uleb_at(o); _, o = uleb_at(o); idx += dd
-                        meths[(string(u32(mo + 8 * idx + 4)), params(u16(mo + 8 * idx + 2)))] = ma
-                out.setdefault(desc, (acc, ty(sup) if sup != 0xFFFFFFFF else None, ifs, meths, flds))
+                        pi = u16(mo + 8 * idx + 2); key = (string(u32(mo + 8 * idx + 4)), params(pi))
+                        meths[key] = ma; rets[key] = ty(u32(po + 12 * pi + 4))      # proto_id: shorty, return type, params
+                out.setdefault(desc, (acc, ty(sup) if sup != 0xFFFFFFFF else None, ifs, meths, flds, rets))
     return out
 
 

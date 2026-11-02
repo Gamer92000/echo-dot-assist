@@ -46,6 +46,7 @@
 #include "ring.h"
 #include "ringdesign.h"
 #include "ledq.h"
+#include "screen.h"
 #include "davs.h"
 #include "dropin.h"
 #include "micdenoise.h"
@@ -322,6 +323,7 @@ static void led(const char *op, const char *pattern)
 {
     if (!pattern) return;
     if (!strcmp(op, "-s")) ring_set(pattern); else ring_unset(pattern);
+    screen_led(op, pattern);                        /* the face on a screen says the same (screen.h) */
 }
 
 /* "active-start"/"active-end", not the "ca-" ones of uxconfig.json (same look): ledcontroller turns only these two
@@ -1421,7 +1423,8 @@ static void send_out(const int16_t *pcm, size_t n, int sound)
         if (m) {
             micgain_run(&mic_gain, src, out, m); proto->audio(out, m * 2);
             double e = 0; for (size_t i = 0; i < m; i++) e += (double)out[i] * out[i];   /* the band's listening bar */
-            ring_level(e > 0 ? (int)lround(100 * log10(e / m / (32768.0 * 32768.0))) : -1000);
+            int db10 = e > 0 ? (int)lround(100 * log10(e / m / (32768.0 * 32768.0))) : -1000;
+            ring_level(db10); screen_level(db10);
         }
         pcm += k; n -= k;
     }
@@ -1932,6 +1935,11 @@ static void *playback_thread(void *arg)
             if (!open) fprintf(stderr, "play: open %u Hz x%u failed\n", it->rate, it->ch);
             break;
         case Q_DATA:
+            if (open) {                     /* the reply's level, for the mouth on a screen (screen.h) */
+                const int16_t *pcm = (const int16_t *)it->data; size_t ns = it->len / 2; double e = 0;
+                for (size_t i = 0; i < ns; i += 4) e += (double)pcm[i] * pcm[i];
+                screen_level(ns >= 4 && e > 0 ? (int)lround(100 * log10(e / (ns / 4) / (32768.0 * 32768.0))) : -1000);
+            }
             if (open && play_write(it->data, it->len) < 0) { play_close(0); open = 0; }
             break;
         case Q_STOP:
@@ -3101,6 +3109,7 @@ int main(int argc, char **argv)
       if (!settings_peek("light_band", rows, sizeof rows)) ring_band_rows(atoi(rows)); }
     ring_start(led_run, ring_reloaded);
     rd_start();                         /* designs asked for before this start: still installing, or back */
+    screen_start();                                 /* a model with a screen: its UI process (screen.h) */
     audio_earcon_started = earcon_started;
     led("-u", "scone-setup");           /* a restart inside the pairing window: the window is gone, its chaser would loop on */
     led("-u", "factory-reset");         /* a reset asked for before this start is done (main.sh) */

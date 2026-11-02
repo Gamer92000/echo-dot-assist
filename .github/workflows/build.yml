@@ -200,7 +200,7 @@ jobs:
         timeout-minutes: 5
         run: uv sync --locked           # .venv exactly as uv.lock says; fails if pyproject.toml changed without uv lock
       - name: Build
-        run: make -j"$(nproc)" build/hassmic-host build/otatool-host
+        run: make -j"$(nproc)" build/hassmic-host build/hassmic-host-screen build/otatool-host
       # tests/run.py starts every test at once, each in a network namespace of its own (unshare -rn: the tests' ports
       # and hassmic's defaults would collide); they mostly wait on audio at real time and on hassmic's timers, so the
       # job takes about as long as the slowest one; one that fails under that load runs again alone (a warning if it

@@ -75,6 +75,7 @@
 #include "settings.h"
 #include "ble.h"
 #include "ring.h"
+#include "screen.h"
 #include "board.h"
 #include "core.h"
 #include "micgain.h"
@@ -1533,6 +1534,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
             else if (f.field == 2 && f.wire == 2) pbf_str(&f, tz, sizeof tz);
         }
         if (c >= 0 && clients[c].keyed && epoch) { clock_from_ha(epoch); clock_zone_from_ha(tz); }
+        if (c >= 0 && clients[c].keyed && tz[0]) screen_tz(tz);
     } break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
     case LIGHT_COMMAND: on_light(p, end); break;
