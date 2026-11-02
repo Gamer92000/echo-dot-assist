@@ -20,6 +20,14 @@ sha256 `7a76fe6f…c422a1a` (full value in `device.conf`). `libpryon`, `libasp`,
 build is pinned to the one the first Echo ran: on any other `ro.build.display.id` than PS75741.7080N or those listed in
 `FIRMWARE_ALSO` (`device.conf`), `scripts/install-system.sh` prints a large warning and asks before it goes on. Put the `.bin` into `firmware/athena/` (not in git).
 
+Amazon moved athena to a new Fire OS line with `update-kindle-athena-PS75751_user_7806_0036811210372.bin`
+(PS75751.7806N, build 7806, Android 9 still): unlike 7082, two of the six `PROBE_FILES` differ from 7080's
+(`libpryon.so`, `libaudioflinger.so`; different build IDs, but the same exported symbols — the embedded
+`codebuild` source paths say these were rebuilt, not that the API moved), so it is **not** in `FIRMWARE_ALSO` and
+goes through the warning instead. Installed and self-tested on an Echo on 7806 (2026-11-01): boot, wake word, voice
+assistant start, and Kiosk Satellite (install, Wi-Fi install, the `kiosk_mic` restart-on-revoke behavior, and a full
+uninstall) all worked.
+
 ## Unlock and root (public: saiyaku-athena)
 
 saiyaku-athena, a serial-port exploit for the MT8183 and not this project's work, unlocks it; [`unlock.md`](unlock.md)
