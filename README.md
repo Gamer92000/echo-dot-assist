@@ -204,7 +204,8 @@ Open issues and measurements: [PLAN.md](PLAN.md).
 
 - **For now**: `adb shell rm /data/local/hassmic/hassmic.conf`, reboot. A stock, unregistered Echo, which updates itself
   if it gets internet.
-- **For good**: `scripts/install-system.sh --uninstall`.
+- **For good**: `scripts/install-system.sh --uninstall`. On the Echo Shows this also wipes the Echo's data, which
+  Amazon's apps need to start again: it starts at Amazon's setup.
 - **All of it**: reflash the stock firmware from TWRP, step 1 of the model's page.
 - **Start over** but keep the install: [factory reset](docs/GUIDE.md#factory-reset) (hold the action button 10 s).
 

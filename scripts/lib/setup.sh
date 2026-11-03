@@ -519,22 +519,9 @@ wipe_data() {
     WIPED=1
     mark_done wiped
 }
-# Whether the wipe worked is read from /data/app, since the bug it prevents shows only long after.  Not from adb's exit
-# status: what twrp exits with was never seen for a failed wipe, and a USB restart ends the adb shell while TWRP wipes
-# on, hence the 30 s of tries.  Each ends in a word: nothing back means adb is away, and an unmounted /data would pass
-# for an empty one.  Run through task, in a process of its own.
-wipe_twrp() {
-    local left i
-    adb shell 'twrp wipe cache && twrp wipe data' || echo "adb shell: exit $?"
-    for ((i = 0; i < 30; i++)); do
-        left=$(ashell "grep -q ' /data ' /proc/mounts || mount -t ext4 ${SYSTEM_DEV%/*}/userdata /data 2>/dev/null
-                       if grep -q ' /data ' /proc/mounts; then ls /data/app 2>/dev/null; echo end; else echo unmounted; fi")
-        [ "$left" = end ] && return 0
-        sleep 1
-    done
-    echo "after the wipe, /data/app holds: ${left:-(no answer from the Echo)}"
-    return 1
-}
+# wipe_twrp (the wipe, read back from /data/app) is install-boot.sh's too, for the uninstall: scripts/lib/twrp.sh.
+# Run through task, in a process of its own.
+. scripts/lib/twrp.sh
 
 # kernel_tools: what Wi-Fi motion's kernel module is built with (make kernel-tools: the model's kernel sources and the
 # compiler Amazon used), so that the build has it as CI's does.  Without them `make` quietly leaves the module out, and

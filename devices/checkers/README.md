@@ -190,8 +190,9 @@ touchscreen and no Alexa app.
 
 ## Going back to stock
 
-- `scripts/install-system.sh --uninstall` turns Alexa's apps back on and takes hassmic off `/system`, but keeps the
-  root boot image.
+- `scripts/install-system.sh --uninstall` turns Alexa's apps back on, takes hassmic off `/system` and wipes cache and
+  data in TWRP (tap **Keep Read Only** when it asks): Amazon's apps come back without their data and default
+  permissions otherwise, and their setup wizard crashes in a loop ("OOBE has stopped"). It keeps the root boot image.
 - All the way back is the firmware `.bin` flashed in TWRP (system and boot together), and it is the one step here
   that goes against the first rule above: its updater script also writes lk, tee1/tee2, the preloader and an MBR.
   amonet's TWRP renames `by-name/lk` and the other bootloader partitions to `*_real` at start, so the writes by name

@@ -16,7 +16,8 @@
 # wrong.  Back to stock means flashing the firmware .bin in TWRP (system and boot together).
 #   install-boot.sh                 the Echo names itself (model and MAC address); name it in Home Assistant
 #   install-boot.sh --boot-only     only part 1: root adb, e.g. for scripts/deploy.sh trial runs before installing
-#   install-boot.sh --uninstall     Alexa's apps back on, hassmic off the system partition (the root boot image stays)
+#   install-boot.sh --uninstall     Alexa's apps back on, hassmic off the system partition, cache and data wiped in TWRP
+#                                   (the root boot image stays); --uninstall --yes without asking
 set -e
 cd "$(dirname "$0")/.."
 . scripts/lib/device.sh; device_load adb
@@ -25,6 +26,8 @@ cd "$(dirname "$0")/.."
 STAGE=/data/local/tmp/hm-install
 IMG=$OUT/boot-hassmic.img
 t() { adb shell "$@" | tr -d '\r'; }
+# whether FILE exists on the Echo: read from its answer, since t's pipe into tr leaves adb's exit status behind
+on_echo() { [ "$(t "[ -e $1 ] && echo yes")" = yes ]; }
 state() { adb get-state 2>/dev/null || true; }
 sha() { sha256sum "$1" | cut -c1-64; }
 
@@ -118,17 +121,84 @@ flash_boot() {
     fi
 }
 
+# The uninstall ends with a wipe of cache and data in TWRP.  The install took Amazon's apps off the system partition
+# (STOCK_APPS_OUT), and Android then forgot them: their data went, and with it the permissions it grants system apps
+# by default only at the first boot after a wipe.  Put back on /system they came up as new apps without either: on a
+# cronos after an uninstall (2026-11-03), Amazon's setup wizard (com.amazon.kindle.otter.oobe) crashed every 2-3 s
+# (ConfigBundleProvider: no unzipped device config bundle, a NullPointerException) and amazon.speech.sim on its
+# missing RECORD_AUDIO: "OOBE has stopped" and "SpeechUI has stopped" on the screen for good.  After the wipe the
+# first boot granted it (SYSTEM_FIXED GRANTED_BY_DEFAULT), the wizard came up, no crash.  Nothing is kept that a
+# working Echo would need: the uninstalled one starts at Amazon's setup either way.  The wipe: scripts/lib/twrp.sh.
+. scripts/lib/twrp.sh
+in_recovery() { [ "$(state)" = recovery ]; }
+
+# yes or no: hassmic on the system partition.  In TWRP from the partition itself, read-only (as system_build), or
+# where TWRP has it mounted already (a second mount read-only next to a writable one fails).  Nothing when the Echo
+# does not answer or TWRP cannot mount it
+hassmic_on_system() {
+    case "$(state)" in
+    device) t '[ -e /system/hassmic/sysinstall.sh ] && echo yes || echo no';;
+    recovery) t 'd=/mnt/hm_sys
+                 if grep -q " /system " /proc/mounts; then d=/system
+                 else mkdir -p $d; mount -o ro '"$SYSTEM_DEV"' $d 2>/dev/null || d=; fi
+                 [ -z "$d" ] || { [ -e $d/hassmic/sysinstall.sh ] && echo yes || echo no; }
+                 [ "$d" != /mnt/hm_sys ] || umount $d';;
+    esac
+}
+
 if [ "$1" = --uninstall ]; then
-    [ "$(state)" = device ] || die "boot the Echo (with the root boot image) and connect it over USB"
-    t "[ -f /system/hassmic/sysinstall.sh ]" || die "hassmic is not installed on this Echo's system partition"
-    t "sh /system/hassmic/alexa-on.sh > /dev/null 2>&1; rm -f /data/local/hassmic/hassmic.conf"
-    t "rm -rf $STAGE; mkdir -p $STAGE; cp /system/hassmic/otatool /system/hassmic/sysinstall.sh $STAGE/ &&
-       sh $STAGE/sysinstall.sh uninstall $STAGE && touch $STAGE/ok"
-    t "[ -f $STAGE/ok ]" || die "system partition not written (see above)"
-    t "rm -rf $STAGE"
-    echo "removed; Alexa's apps are on again.  The root boot image stays: /system was written, the stock boot.img would"
-    echo "not accept it.  All the way back to stock: flash $FIRMWARE_FILE in TWRP.  Rebooting"
-    adb reboot; exit 0
+    on_adb || die "boot the Echo (with the root boot image) and connect it over USB"
+    # Installed: hassmic off /system first, from Fire OS, where sysinstall.sh runs.  Not (a run cut off before its
+    # wipe, or an Echo uninstalled by an older version of this script): only the wipe is left to do.  In TWRP the
+    # partition is read as well: a wipe alone would leave hassmic there and Amazon's apps off it, under an Echo told
+    # to start at Amazon's setup
+    case "$(hassmic_on_system)" in
+    yes) in_recovery && die "hassmic is still on this Echo's system partition, and it comes off from Fire OS: boot it
+  (adb reboot) and run this again.  Nothing changed"
+         INSTALLED=1;;
+    no) INSTALLED=;;
+    *) die "cannot tell whether hassmic is on this Echo's system partition (no answer$(in_recovery &&
+            echo ", or TWRP cannot mount $SYSTEM_DEV")): run this again.  Nothing changed";;
+    esac
+    if [ -n "$INSTALLED" ]; then
+        echo "This takes hassmic off the Echo and wipes its data (Wi-Fi, Amazon account, hassmic's settings and its link"
+        echo "to Home Assistant): the Echo starts at Amazon's setup.  Without the wipe Amazon's apps, put back on the"
+        echo "system partition, crash in a loop (\"OOBE has stopped\")."
+    else
+        echo "hassmic is not on this Echo's system partition (uninstalled before): this only wipes its data (Wi-Fi,"
+        echo "Amazon account).  Without the wipe Amazon's apps, put back on the system partition, crash in a loop"
+        echo "(\"OOBE has stopped\").  The Echo starts at Amazon's setup."
+    fi
+    if [ "$2" != --yes ]; then
+        [ -t 0 ] || die "not on a terminal: run it as install-system.sh --uninstall --yes"
+        printf 'Type YES to go on: '; read -r a; [ "$a" = YES ] || die "nothing changed"
+    fi
+    if [ -n "$INSTALLED" ]; then
+        t "sh /system/hassmic/alexa-on.sh > /dev/null 2>&1; rm -f /data/local/hassmic/hassmic.conf"
+        t "rm -rf $STAGE; mkdir -p $STAGE; cp /system/hassmic/otatool /system/hassmic/sysinstall.sh $STAGE/ &&
+           sh $STAGE/sysinstall.sh uninstall $STAGE && touch $STAGE/ok"
+        on_echo $STAGE/ok || die "system partition not written (see above)"
+        t "rm -rf $STAGE"
+        echo "hassmic is off the system partition"
+    fi
+    if ! in_recovery; then
+        echo "to TWRP ..."
+        adb reboot recovery
+        wait_for 120 in_recovery || die "the Echo is not in TWRP: unplug its power, hold Volume up and plug it in again
+  (USB stays connected), then run this again"
+    fi
+    echo "On the Echo's screen: if TWRP asks \"Keep System Read only?\", tap \"Keep Read Only\" (not the swipe)"
+    # with nobody to press Enter, the wipe starts at once; wipe_twrp gives it 5 min, should TWRP wait for that tap
+    if [ -t 0 ]; then printf 'and press Enter here once TWRP shows its main menu: '; read -r a; fi
+    wait_for 60 in_recovery || die "TWRP is not back on adb: run this again"
+    echo "wiping cache and data ..."
+    wipe_twrp || die "the wipe did not take: run this again, or wipe in TWRP's menu (Wipe, Factory Reset)"
+    echo "wiped.  The root boot image stays: /system was written, the stock boot.img would not accept it.  All the way"
+    echo "back to stock: $DDIR/README.md.  Rebooting (the first boot after a wipe takes a few minutes) ..."
+    adb reboot
+    wait_for 600 booted && echo "Fire OS is up: set the Echo up on its screen as a new one" ||
+        echo "not booted after 10 min: unplug its power and plug it in again (no buttons)"
+    exit 0
 fi
 
 boot_image
@@ -162,7 +232,7 @@ FILES="$OUT/hassmic $OUT/runas $(ls $OUT/pryon_test $OUT/*.ko $OUT/libhmui.so 2>
 t "rm -rf $STAGE; mkdir -p $STAGE"
 adb push $FILES $DDIR/hassmic.rc $STAGE/ > /dev/null
 t "chmod 755 $STAGE/otatool; sh $STAGE/sysinstall.sh install $STAGE && touch $STAGE/ok"
-t "[ -f $STAGE/ok ]" || { t "rm -rf $STAGE"; die "system partition not written (see above); nothing to undo"; }
+on_echo $STAGE/ok || { t "rm -rf $STAGE"; die "system partition not written (see above); nothing to undo"; }
 t "rm -rf $STAGE; ls -lZ /system/hassmic /system/etc/init/hassmic.rc"
 echo "install done on the running $DEVICE; rebooting"
 adb reboot

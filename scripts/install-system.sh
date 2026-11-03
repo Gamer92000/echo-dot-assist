@@ -91,6 +91,10 @@ if [ -z "$TWRP" ]; then
     t "[ -f $STAGE/ok ]" || { t "rm -rf $STAGE"; echo "system partition not written (see above); nothing to undo"; exit 1; }
     t "rm -rf $STAGE; ls -lZ /system/hassmic /system/etc/init/hassmic.rc $SPF 2>/dev/null; true"
     [ "$MODE" = uninstall ] && echo "note: pushed updates in /data/local/hassmic/ota are no longer started; remove them with adb once the OS is up"
+    # Amazon's apps the install took off the partition come back without their data and default permissions: on the
+    # Echo Shows (install-boot.sh, which wipes) the setup wizard crashed in a loop.  Not seen here yet, so only said
+    [ "$MODE" = uninstall ] && [ -n "$(echo $STOCK_APPS_OUT)" ] &&
+        echo "note: if \"... has stopped\" messages keep coming after the reboot, wipe cache and data (TWRP: twrp wipe cache && twrp wipe data)"
     echo "$MODE done on the running $DEVICE; rebooting"
     adb reboot; exit 0
 fi

@@ -57,7 +57,7 @@ The guided setup does all of it: `scripts/setup.sh crown` (`--dry-run` walks the
    join before it: Fire OS would reach Amazon), then `DEVICE=crown scripts/install-system.sh`.
 
 Updating later: `scripts/ota-push.sh <echo-ip>` (`DEVICE=crown`). `scripts/install-system.sh --uninstall` turns Alexa's apps
-back on and takes hassmic off `/system`; all the way back is the firmware `.bin` as a `.zip` in TWRP, or amonet's
+back on, takes hassmic off `/system` and wipes cache and data in TWRP (as on [cronos](../cronos/README.md)); all the way back is the firmware `.bin` as a `.zip` in TWRP, or amonet's
 `restore-stock-crown`.
 
 ## What works and what is open

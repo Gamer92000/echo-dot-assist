@@ -63,7 +63,9 @@ as checkers':
    join before it: Fire OS would reach Amazon), then `DEVICE=cronos scripts/install-system.sh`.
 
 Updating later: `DEVICE=cronos scripts/ota-push.sh <echo-ip>`. `scripts/install-system.sh --uninstall` turns Alexa's
-apps back on and takes hassmic off `/system`; all the way back is the firmware `.bin` as a `.zip` in TWRP after a factory
+apps back on, takes hassmic off `/system` and wipes cache and data in TWRP (tap **Keep Read Only** when it asks):
+Amazon's apps lost their data and permissions when the install took them off, and without the wipe their setup
+wizard crashes in a loop ("OOBE has stopped"). The Echo then starts at Amazon's setup. All the way back is the firmware `.bin` as a `.zip` in TWRP after a factory
 reset there (amonet v2.0.0 and later), as the thread describes.
 
 ## What works and what is open
