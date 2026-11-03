@@ -35,11 +35,11 @@ install|Install
 "
 ROOTED_SKIP="usb unlock root"     # done on an Echo that is rooted already (scripts/setup.sh asks)
 NOTES=(
-    "The screen keeps Amazon's clock face and settings; Alexa's apps stay off while hassmic runs ($DDIR/README.md)."
+    "The screen shows hassmic's face and the light band, or Kiosk Satellite where installed; the settings page's Screen page picks the home app (docs/GUIDE.md). Alexa's apps stay off while hassmic runs ($DDIR/README.md)."
     "adb over Wi-Fi: the settings page's debug access (http://<echo-ip>:28931/), as on the other Echos, opens it for 30 min."
     "Updates: git pull, then scripts/ota-push.sh <echo-ip>."
     "More wake words, whisper or sound detection models: \"Download from Amazon\" on the settings page (scripts/artifacts.sh <echo-ip> is the fallback)."
-    "No Bluetooth and no Music Assistant pairing on this model yet: Android's stack owns the controller ($DDIR/README.md)."
+    "Bluetooth: phones play on the Echo and it plays on a speaker; devices seen by Home Assistant's Bluetooth proxy are untried (docs/re-checkers.md)."
 )
 
 sha() { sha256sum < "$1" | cut -c1-64; }

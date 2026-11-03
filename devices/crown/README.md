@@ -13,8 +13,10 @@ shutter, volume keys, mic mute. No action button.
 ## Firmware
 
 Pinned: `update-kindle-crown-NS6570_user_6074_0012383140484.bin`, Fire OS 6.5.7.0 (NS6570), sha256
-`4b6fb088…ce421` (full value in `device.conf`). The system partition must be exactly this build's: the boot image is
-made from its `boot.img` and hassmic links against its libraries. amonet does not depend on the Fire OS version.
+`4b6fb088…ce421` (full value in `device.conf`). Download it from its
+[FTVDB record](https://ftvdb.com/echo/firmware/com.amazon.crown.android.os/90ad1be88b4e7ed9ddb0ef58c8d6200a-12383140484-fire-os-6-5-7-0-ns6570-6074-2025-08-23/).
+The system partition must be exactly this build's: the boot image is made from its `boot.img` and hassmic links
+against its libraries. amonet does not depend on the Fire OS version.
 
 ## Unlock (public: amonet-crown)
 
@@ -23,7 +25,7 @@ made from its `boot.img` and hassmic links against its libraries. amonet does no
 | File | Source | sha256 |
 |---|---|---|
 | `amonet-crown-v2.0.1.zip` | the XDA thread | `5db974c321ae2f4586f7c51c95b7bdffb61ef85bde05ce7e62f78196a984c24f` |
-| `update-kindle-crown-NS6570_user_6074_0012383140484.bin` | Amazon | `4b6fb088…ce421` |
+| `update-kindle-crown-NS6570_user_6074_0012383140484.bin` | Amazon, link above | `4b6fb088…ce421` |
 | `boot-root.zip` | the XDA thread (one `boot-root.img`, NS6571's); the install takes only its `sbin/adbd` (`ADBD` in `device.conf`) | `d18f8256869820a87527ec08e75ec495362103ed4ad669e946d052f0f705012d` |
 | `magiskpolicy32` | `patch/magiskpolicy32` of donut's `boot-root.zip` ([its README](../donut/README.md)); the guided setup takes it from there | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
 

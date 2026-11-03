@@ -1,7 +1,7 @@
 # Echo Show 5 1st gen (`checkers`): what the firmware says
 
-Worked out from the firmware only, 2026-10-07; nobody has run hassmic on an Echo Show yet. The unlock is public
-(amonet-checkers, `devices/checkers/README.md`).
+Worked out from the firmware first, 2026-10-07; hassmic runs on an Echo Show since 2026-10-10, and "What a port
+needs" says what was checked on it. The unlock is public (amonet-checkers, `devices/checkers/README.md`).
 Firmware: `update-kindle-checkers-NS65741_user_8149_0013222532484.bin` (sha256 `f96fcfa1…73cfa3`), Fire OS 6574.1
 (NS65741/8149), the same release as donut's. Model H23K37, `ro.product.model=AEOCH`, `ro.product.device=checkers`.
 
@@ -23,6 +23,61 @@ python3 scripts/mkbootroot.py --cpio firmware/checkers/images/boot.img firmware/
 
 The kernel (`boot.img`, 4.9.77, 32-bit ARM) carries its config: `devices/checkers/kconfig`. Five device trees are
 appended (proto, hvt, evt, dvt, pvt boards).
+
+## Root boot image
+
+What the install flashes, and why not the XDA thread's image. The steps:
+[devices/checkers/README.md](../devices/checkers/README.md#4-root-boot-image-and-the-install).
+
+### The XDA boot-root.img
+
+The thread roots with `fastboot oem flags 61` (adb on, no authentication), `fastboot flash boot boot-root.img`,
+`fastboot reboot`. **That image is not built from 8149:** its kernel and ramdisk are NS6570 / 6086's (kernel
+`4.9.77-g1f91447-dirty`, 2025-09-23; 8149's is `4.9.77-ga3ad36a2995d-dirty`, 2026-09-28). Against 8149's `boot.img`
+(both with MediaTek's 512-byte kernel header; 8149's ramdisk a bare gzip stream, the XDA image's with a `ROOTFS`
+header too):
+
+- `default.prop`: `ro.secure=0`, `ro.adb.secure=0`, `ro.debuggable=1`, `persist.sys.usb.config=mtp,adb`;
+- `init.fosflags.sh` cut down to turning adb on without authentication;
+- `sepolicy`, `file_contexts.bin`, `seapp_contexts`, `service_contexts`, `init` and `sbin/*` differ (6570's or
+  patched); `init.whad_cc.rc` lacks 8149's `net_raw` group; `fstab.mt8163` is the same (`/system` `wait,verify`).
+
+So it would run 6570's kernel and policy under 8149's `/system`. The modules load (they say only `vermagic=4.9.77` and
+the kernel has no MODVERSIONS), but whether 8149's Wi-Fi and Bluetooth drivers work against that kernel, and whether
+6570's policy covers 8149's services, is not known.
+
+Applying the same changes to 8149's own image is not enough either:
+
+- With `ro.secure=0`, adbd switches itself to `--root_seclabel u:r:su:s0` (`init.usb.rc`) and, in AOSP 7, stops with a
+  fatal error when that is refused. 8149's policy has `su` as a permissive domain but no rule that lets adbd into it.
+  The XDA image gets past this with 6570's policy, which makes adbd (and `untrusted_app`: any installed app)
+  permissive. So the policy is patched too (`sepolicy.rules`: donut boot-root's rules for adb, and our services'
+  rules; not `untrusted_app`).
+- 8149's own `adbd` is a user build (first device, 2026-10-10): `ro.secure=0`, `service.adb.root=1` and `fastboot oem
+  flags 61` all leave adb a shell in `u:r:shell:s0` (`adb root` says "restarting adbd as root" and it comes back as
+  shell). The XDA image's `sbin/adbd` (CyanogenMod's, static) goes by `ro.secure`; with it in 8149's ramdisk, adb is
+  root in `u:r:su:s0` (`mkbootroot.py --adbd`).
+
+### Building the boot images by hand
+
+```sh
+python3 scripts/mkbootroot.py --check firmware/checkers/images/boot.img  # rebuilds it exact but for the header ID
+python3 scripts/mkbootroot.py firmware/checkers/images/boot.img firmware/checkers/boot-root-8149.img
+```
+
+`boot-root-8149.img` is 8149's ramdisk with the five properties above and `init.fosflags.sh` (byte for byte the XDA
+file) replaced; every other entry and the kernel are untouched. Amazon's kernel-signing certificate (a page after the
+stock image, naming its sha256 as `URI:sha256://…`) is left out; the XDA image has none either. The header ID is AOSP
+mkbootimg's formula, which lk does not check. sha256 `e787a08ed7d39471ae4228659879939cb7e5225e82dbdd5e5d47e4dbf2c6a9a7`
+with classic zlib (zlib-ng deflates the same ramdisk differently). **Do not flash it:** with its stock policy and adbd,
+adb is dead or a shell.
+
+What the install flashes adds the patched policy, the XDA adbd and `--no-verity` (`scripts/mkbootroot.py --sepolicy …
+--adbd firmware/checkers/adbd --no-verity`). It is reproducible: sha256
+`03253eed8df8126c9fbad812664e92c87812db973ca6d05fbb940762d688c19d` with classic zlib (with zlib-ng the cpio from
+`mkbootroot.py --cpio` has sha256 `6467f26c4b25e0e0323fc195968b30af7343bd833126640e5f228e6ef6aa54d8`). The image before
+the `init.checkers.rc` change (`a1772cbe…`) booted with root adb in `su` (first device 2026-10-10, the tester's
+2026-10-13); an Echo with it gets the new one at the next install (`install-boot.sh` compares the partition).
 
 ## Platform: an Android device, not a Dot
 

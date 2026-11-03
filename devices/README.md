@@ -61,6 +61,9 @@ Rough order. Each step is safe to stop at.
 1. **Unlock and root.** This is the hard part, and it is different for almost every model (bootrom exploit, TWRP or
    none, A/B slots or not, how the SELinux policy can be patched). Write down what worked in the new model's
    `README.md`. Pin the firmware version before the Echo ever reaches Amazon: an update can close the hole.
+   Amazon's help pages list only version numbers now; FTVDB has a record page for most builds (not always the
+   newest: radar's), with Amazon's download (`https://ftvdb.com/echo/firmware/com.amazon.<codename>.android.os/`).
+   Link that record page, not the download itself, and put the size and sha256 in the README.
 2. **Firmware on the PC.** Unpack it into `firmware/<codename>/rootfs` (`tools/payload_dump.py` handles A/B
    `payload.bin`). `tools/` has the disassembly helpers; `docs/re-platform.md` and `docs/re-pryon.md` show what to
    look for, as found on `donut`.
