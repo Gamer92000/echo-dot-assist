@@ -5,7 +5,9 @@ SurfaceSession/SurfaceControl/Surface/Canvas.  What it checks is what hassmic re
 overscan on the natural side that is at the bottom, a layer of width x rows at the bottom above every window,
 "ready <w> <rows>" (flushed) before stdin is read, every whole frame of stdin drawn as it came (little-endian
 0xAARRGGBB, rows top to bottom), however the pipe splits it, and the end at EOF; "0" resets the overscan and
-says "off".  The reflected names are tools/mkringbar.py's lists, which --framework checks against 8149."""
+says "off".  The text layer ("-<percent>"): no overscan, a see-through layer of that share of the screen's height
+standing on its bottom just under the band, frames drawn with alpha through a Paint in SRC mode.  The reflected
+names are tools/mkringbar.py's lists, which --framework checks against 8149."""
 import os
 import struct
 import sys
@@ -100,6 +102,37 @@ class Canvas(Fake):                                            # what lockCanvas
         self.log("draw", list(colors), offset, stride, x, y, w, h, alpha, paint)
 
 
+class Mode(Fake):                                              # android.graphics.PorterDuff.Mode, the enum
+    JAVA = "android.graphics.PorterDuff$Mode"
+
+    def __init__(self, n):
+        self.n = n
+
+
+Mode.SRC = Mode("SRC")
+
+
+class PorterDuffXfermode(Fake):
+    JAVA = "android.graphics.PorterDuffXfermode"
+    AS = ("Landroid/graphics/Xfermode;",)
+
+    def __init__(self, mode):
+        assert isinstance(mode, Mode)
+        self.mode = mode
+
+
+class Paint(Fake):
+    JAVA = "android.graphics.Paint"
+
+    def __init__(self):
+        self.xfermode = None
+
+    def setXfermode(self, x):
+        assert isinstance(x, PorterDuffXfermode)
+        self.xfermode = x
+        return x
+
+
 class Surface(Fake):
     JAVA = "android.view.Surface"
 
@@ -125,9 +158,9 @@ class Surface(Fake):
 
 class JavaEnv(dexrun.JavaEnv):
     CLASSES = (WindowManager, DisplayInfo, DisplayManagerGlobal, SurfaceSession, SurfaceControl, SurfaceControlBuilder,
-               Surface, Canvas)
+               Surface, Canvas, Mode, PorterDuffXfermode, Paint)
     NAMES = ("android.os.ServiceManager", "android.view.IWindowManager$Stub", "android.os.IBinder",
-             "android.graphics.Rect", "android.graphics.Canvas", "android.graphics.Paint", "[I")
+             "android.graphics.Rect", "android.graphics.Canvas", "android.graphics.Xfermode", "[I")
 
     def __init__(self, display, stdin=(), api9=False):
         super().__init__(mk.PROG, stdin)
@@ -216,6 +249,29 @@ def main():
           "builder: the frame is drawn")
     env = run(["0", "builder"], (1280, 800, 0), [], api9=True)
     check(env.log == [("overscan", 0, 0, 0, 0, 0)] and env.out == ["off"], "builder: \"0\" resets the overscan, no layer")
+
+    # the text layer: "-55" = 55 % of the screen's height, see-through, no overscan (the apps keep the screen)
+    t1, tpx1 = frame(960, 264, 4)
+    env = run(["-55"], (960, 480, 1), [t1[:7000], t1[7000:]])
+    check(not [e for e in env.log if e[0] == "overscan"], "text: the overscan left alone")
+    check(("surfacecontrol", "hassmic-band", 960, 264, -3, 4) in env.log,
+          "text: a 960x264 layer (55 % of 480), PixelFormat.TRANSLUCENT, created HIDDEN")
+    setup = [e for e in env.log if e[0] in ("openTransaction", "layer", "position", "show", "closeTransaction", "copyFrom")]
+    check(setup == [("openTransaction",), ("layer", 1999999999), ("position", 0.0, 216.0), ("show",),
+                    ("closeTransaction",), ("copyFrom",)], "text: just under the band's layer, standing on the bottom")
+    check(env.out == ["ready 960 264"] and env.flushed == 1, "text: prints \"ready 960 264\", its rows")
+    draws = [e for e in env.log if e[0] == "draw"]
+    check(len(draws) == 1 and draws[0][:9] == ("draw", tpx1, 0, 960, 0, 0, 960, 264, True),
+          "text: the frame drawn with its alpha")
+    p = draws[0][9] if draws else None
+    check(isinstance(p, Paint) and p.xfermode is not None and p.xfermode.mode is Mode.SRC,
+          "text: through a Paint in SRC mode: each frame replaces the last, see-through parts too")
+    env = run(["-55", "builder"], (1280, 800, 0), [frame(1280, 440, 5)[0]], api9=True)
+    check(("surfacecontrol", "hassmic-band", 1280, 440, -3, 4) in env.log and ("position", 0.0, 360.0) in env.log
+          and env.out == ["ready 1280 440"], "text, builder: 1280x440, TRANSLUCENT, at (0, 360)")
+    env = run(["-1"], (960, 50, 1), [])
+    check(env.out == ["off"] and not [e for e in env.log if e[0] == "overscan"] and env.sc is None,
+          "text: a share too small for a row: \"off\", no layer, the overscan left alone")
 
     check.done("ringbar.dex: overscan, layer and frames as expected")
 

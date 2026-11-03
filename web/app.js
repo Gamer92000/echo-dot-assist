@@ -211,7 +211,7 @@ const LAYOUT = {
   voice: [['Microphone', 'mic_level', 'noise_reduction'], ['Mute and wake sound removal', 'mute', 'do_not_disturb', 'wake_sound_removal'],
           ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any']],
   wake: [['Engine', 'wake_engine'], ['How it hears you', 'speech_language', 'wake_word_adaptation']],
-  lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band']],
+  lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band'], ['Screen', 'screen_text', 'screen_text_seconds', 'screen_timers']],
 };
 
 // help: what it does, in the user's terms.  ha: also in Home Assistant (true), or for features the entities it adds.
@@ -243,6 +243,9 @@ const HELP = {
   led_auto_brightness: { ha: true, help: 'The ring dims and brightens with the room, from the Echo\'s light sensor and Amazon\'s own curve, as on a stock Echo.' },
   led_brightness: { ha: true, help: 'A fixed brightness for the ring. Setting one turns auto brightness off.' },
   ring_rotation: { ha: true, help: 'Where the light ring\'s fill starts. Home Assistant\'s "Light ring fill" lights that share of the ring in the light\'s colour, for a timer\'s or a washing machine\'s progress or a battery; it fills the way the volume does, from where the volume starts. Turn the start by this many LEDs, so it starts where you want it to for how the Echo stands. Only where the Echo has room for each LED\'s own animations (Home Assistant then lists "Light ring fill"). Default 0.' },
+  screen_text: { help: 'What you said and the assistant\'s reply in large letters over the screen, above the band: your words smaller and grey, the reply white beside a cyan bar, both as large as they fit (a very long reply is cut at the end of the screen). They appear as speech-to-text and the reply come in, stay while the Echo answers and for 8 seconds after, then fade; the next request takes them away at once. The screen behind them is darkened, so they stay readable over whatever it shows. With Wyoming only your words are shown (it tells no reply text). Off by default: what people say appears only where someone wants it to.' },
+  screen_text_seconds: { help: 'How long what you said and the reply stay on the screen once the Echo is idle again, in seconds. 0 keeps them until the next request (or a timer that rings). Default 8.' },
+  screen_timers: { help: 'Timers set on this Echo, on the screen: each one\'s name (or its length) over its time left in large digits with its unit (4:59 min, 1:02:05 h, 45 s) and a bar of what is left, the one that ends first on top; a paused one in grey. When one rings it shows in orange and pulses until it is stopped. The screen stays on while timers show. What you said and the reply (Speech on screen) go before them while they show. Off by default.' },
   light_band: { help: 'The Echo Show has no light ring: it shows the ring\'s lights as a band along the bottom of the screen, as Alexa did. That is listening, thinking, mic off, calls, volume, timers and Home Assistant\'s "Light ring". This many pixels at the bottom are kept for it, so an app on the screen never has the band over it. 0 gives the whole screen to the apps and shows no band. Default 10, stock\'s line.' },
   bluetooth_announcements: { help: 'Says "Connected to …" and "Disconnected from …" when a phone connects, in your voice assistant\'s voice, after the chime. Home Assistant speaks the words, and only once "Allow the device to perform Home Assistant actions" is ticked in this Echo\'s ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure); without it there is the chime only.' },
   bluetooth_announcement_language: { help: 'The language of those sentences. Home Assistant does not tell the Echo which language your voice assistant speaks, so pick the one that matches its voice.' },
@@ -416,6 +419,9 @@ const SUB = {
   led_brightness: 'A fixed level; turns auto brightness off',
   ring_rotation: 'Where "Light ring fill" starts',
   light_band: 'Pixels kept for the band along the bottom of the screen',
+  screen_text: 'What you said and the reply, in large letters on the screen',
+  screen_text_seconds: 'How long the words stay after the reply; 0: until the next request',
+  screen_timers: 'Running timers counted down, a ringing one in orange',
   bluetooth_announcements: 'Says when a phone connects or disconnects',
   bluetooth_announcement_language: 'The language of those sentences',
   sendspin_unpaired: 'Any Music Assistant server may play here',
