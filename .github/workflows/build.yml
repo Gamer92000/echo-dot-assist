@@ -173,6 +173,7 @@ jobs:
             build/${{ matrix.device }}/mixplay
             build/${{ matrix.device }}/pryon_test
             build/${{ matrix.device }}/*.ko
+            build/${{ matrix.device }}/libhmui.so
           if-no-files-found: error
 
   test:
@@ -285,6 +286,10 @@ jobs:
           (umask 077; echo "$RELEASE_SIGNING_KEY" | base64 -d > secrets/release.key)
           for c in build/*.content-id; do
               d=${c#build/}; d=${d%.content-id}
+              # bundle.sh leaves the screen's UI out when libhmui.so is missing: here that is a lost artifact, not a model without a screen
+              if grep -q '^SCREEN *:=.*screen\.c' devices/$d/device.mk && [ ! -f build/$d/libhmui.so ]; then
+                  echo "::error::$d: libhmui.so missing from the build artifact"; exit 1
+              fi
               DEVICE=$d scripts/bundle.sh secrets/release.key "$VERSION"
               # signed by the PC's otatool (Python): what the Echo's (C) checks must pass too, or nothing is published
               for v in build/otatool-host "python3 scripts/otatool.py"; do
