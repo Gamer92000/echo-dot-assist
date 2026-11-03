@@ -82,12 +82,22 @@ receiver no longer resolves (`handlePackagesChanged`: `getReceiverInfo` without 
 `set-active-admin` refuses a disabled receiver ("Unknown admin", `findAdmin`), so a `kiosk_grants` meanwhile cannot bring
 it back. Then `pm uninstall`, once dumpsys no longer lists the admin; after 15 s without that, the receivers are enabled
 again and the script stops. Read in Amazon's `services.jar` of checkers, cronos (the same dex) and crown (2026-11-03);
-athena's is compact dex and was not read, AOSP 9's code is the same. **Not yet run on an Echo.**
+athena's is compact dex and was not read, AOSP 9's code is the same. Run on a Show 5 (checkers, Android 7.1.2, KS
+2026.10.45, 2026-11-03): dumpsys no longer listed the admin at the first look after `pm disable`, `Success` 5 s after the
+start; package, data, admin, doze entry, ports and uid rule gone, hassmic's home on top. Not yet run on athena.
 
 Within 10 s `kiosk_tick` sees the folder gone. It ends the update helper (`kiosk_helper_end`: that is the app's code as
-the shell user, started by us, so Android's uninstall does not end it), forgets the app, and the firewall closes 2324
-and 6053 (`lockdown.sh` reads packages.list: within about 3 s on athena, 2026-11-01). Simple Keyboard stays
-(`adb uninstall rkr.simplekeyboard.inputmethod`).
+the shell user, started by us, so Android's uninstall does not end it; on that Show 5 `ks-update-helper-10002`, uid
+2000, was still up after the uninstall, and `kiosk_helper_end` ended it), removes the helper's folder and log in
+`/data/local/tmp` (empty, named by the uid), forgets the app, and the firewall closes 2324 and 6053 (`lockdown.sh` reads
+packages.list: within about 3 s on athena, 2026-11-01). Simple Keyboard stays (`adb uninstall
+rkr.simplekeyboard.inputmethod`).
+
+The uninstall deletes the app's data, its setup with the Home Assistant login included. Installed again it gets another
+uid (10002 -> 10154 on that Show 5); `kiosk_tick` grants again, the firewall's uid rule follows from packages.list. To
+keep its setup over a reinstall, as done there: `tar` of `/data/data/<package>` (not `lib`, `code_cache`) before,
+afterwards the app stopped, the folders put back, `chown -R` to the new uid and `chcon -R` to the folder's own context
+(`app_data_file:s0:c512,c768`: toybox tar keeps no labels), with hassmic stopped meanwhile so nothing opens the app.
 
 By hand, as done on athena before the script (2026-11-01): `stop hassmic`, delete the app's `<admin>` block from
 `/data/system/device_policies.xml` as root (the service reads that file only at boot), reboot, `stop hassmic` again as

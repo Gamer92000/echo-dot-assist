@@ -618,6 +618,7 @@ network. Then:
 
 To remove it, `scripts/kiosk-install.sh --uninstall [echo-ip]`. A plain `adb uninstall` fails, because the Echo made the
 app a device admin; the script takes that off first. The Echo's own screen shows again and ports 2324 and 6053 close.
+The app's own setup goes with it, the Home Assistant login included: installed again, it starts from the beginning.
 
 **Trust it like adb.** The update helper runs the app's own code as the shell user. Those switches set Android's
 permissions, but an app that wanted to could get past them. Install only an app you trust; `docs/SECURITY.md` has

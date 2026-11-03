@@ -25,7 +25,8 @@ def tool(bin_, name, body):
 
 
 def moved(text, tmp):
-    return text.replace("/data/local/hassmic", tmp + "/hassmic").replace("/data/system", tmp + "/system").replace("/data/app", tmp + "/app")
+    return (text.replace("/data/local/hassmic", tmp + "/hassmic").replace("/data/local/tmp", tmp + "/ltmp")
+            .replace("/data/system", tmp + "/system").replace("/data/app", tmp + "/app"))
 
 
 def lockdown(tmp, conf, config, pkglist):
@@ -314,14 +315,17 @@ with tempfile.TemporaryDirectory() as tmp:
     open(tmp + "/hassmic/kiosk-app", "w").close(); tool(e.bin, "sleep", "exit 0")
 
     helper = subprocess.Popen(["bash", "-c", f"exec -a ks-update-helper-10999 {real} 30"])
+    os.makedirs(tmp + "/ltmp/ks-update-helper-10999"); open(tmp + "/ltmp/ks-update-helper-10999.log", "w").close()
+    open(tmp + "/ltmp/other", "w").close()
     o, c = e.ticks("t")
-    check("installed: its update helper left alone", helper.poll() is None, o)
+    check("installed: its update helper left alone", helper.poll() is None and os.path.isdir(tmp + "/ltmp/ks-update-helper-10999"), o)
     e.install(0)
     o, c = e.ticks("t")
     check("uninstalled: the page is told", not os.path.exists(tmp + "/hassmic/kiosk-app"))
     try: helper.wait(timeout=5)
     except subprocess.TimeoutExpired: helper.kill(); helper.wait()
     check("uninstalled: its update helper ended, said once", helper.returncode == -9 and o.count("uninstalled") == 1, o)
+    check("uninstalled: its folder and log gone, nothing else", os.listdir(tmp + "/ltmp") == ["other"], str(os.listdir(tmp + "/ltmp")))
     o, c = e.ticks("t; t")
     check("and nothing more after", "uninstalled" not in o and c == "", c + o)
 

@@ -2989,7 +2989,14 @@ Run in this order. Each step says what it proves.
       Amazon added `VendorDevicePolicyManagerCallback.callIsDeactivationBlocked` to `removeActiveAdmin`, not to that path.
       athena's services are compact dex (`cdex001` in the vdex), not read.  `kiosk_tick` now ends `ks-update-helper-*`
       when the app goes (`kiosk_helper_end`, by `/proc/*/cmdline`: toybox pkill on Android 7 has no -f).
-      `tests/unit/kiosk_test.py` with a stand-in adb.  Open: a run on an Echo.
+      `tests/unit/kiosk_test.py` with a stand-in adb.  Run on the user's Show 5 (checkers, 7.1.2, KS 2026.10.45,
+      2026-11-03, over adb-wifi.sh): admin gone at the first dumpsys after `pm disable`, `pm uninstall` Success, 5.2 s;
+      package, data, doze entry, 2324/6053 and the uid rule gone.  The helper `ks-update-helper-10002` (uid 2000)
+      survived on that Echo's older main.sh; the branch's `kiosk_helper_end`, pushed and run there, ended it.  Its
+      `/data/local/tmp/ks-update-helper-<uid>` folder and log (empty) stayed: removed by `kiosk_helper_end` now.
+      Put back: same APK by `pm install -r`, uid 10154 (was 10002), data restored (tar, chown, chcon to
+      `app_data_file:s0:c512,c768`) with hassmic stopped; dashboard back, logged in, 48 of 49 prefs keys the same
+      (`boot_pending_since` cleared by the app), grants, admin, uid rule and helper back within 42 s.  Open: athena.
 - [~] WPA2/WPA3 mixed Wi-Fi (issue #90, 2026-11-01; reported and tried on an Echo 2 by its reporter; this form on the PC,
       and on a Dot 2 with its writes stubbed).  wifisvc's `libacehal_network_all.so` (biscuit, radar, donut) rewrites entries to `WPA-PSK
       WPA-PSK-SHA256` at each start; on an AP with `[WPA2-PSK+SAE+PSK-SHA256-CCMP]` radar's driver refuses that AKM

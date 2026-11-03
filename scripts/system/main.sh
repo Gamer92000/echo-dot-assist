@@ -294,13 +294,15 @@ kiosk_helper_said() {
     esac
 }
 # The app is gone, so its helper goes too: that is the shell user's power for code that is no longer on the Echo.  Android's
-# uninstall ends only the processes it started for the app's uid, not one of ours as shell; whether the helper ends by
-# itself is not known.  By its name (`ks-update-helper-<uid>`) in the command line: the Show 5's toybox pkill has no -f.
-# One grep for all of /proc, once per uninstall.
+# uninstall ends only the processes it started for the app's uid, not one of ours as shell: on a Show 5 it was still up
+# after one (2026-11-03).  By its name (`ks-update-helper-<uid>`) in the command line: the Show 5's toybox pkill has no -f.
+# One grep for all of /proc, once per uninstall.  Its folder and log in /data/local/tmp go too: empty there, but named by
+# the uid, which a reinstall changes, so each reinstall left a pair behind.
 kiosk_helper_end() {
     for f in $(grep -l ks-update-helper- /proc/[0-9]*/cmdline 2> /dev/null); do
         f=${f#/proc/}; kill -9 ${f%/cmdline} 2> /dev/null
     done
+    rm -rf /data/local/tmp/ks-update-helper-*
 }
 # One look, every 10 s, without Java (a pm per round would be a whole runtime): the folder of the app's APK says it is
 # there, and is another one after an install or update (the same uid can come back), so grants never wait for a boot.  Where our
