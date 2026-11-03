@@ -1405,10 +1405,12 @@ function renderTop() {
   renderOverview();
 }
 
-// "Download from Amazon" in a warning: a link to that card
-function linkDavs(text) {
-  const [a, b] = text.split('Download from Amazon');
-  return [a, h('a', { href: '#/models/davs' }, 'Download from Amazon'), b];
+// "Download from Amazon" and "Copy models" in a warning: links to those cards
+const MODEL_CARDS = [['Download from Amazon', '#/models/davs'], ['Copy models', '#/models/model-copy']];
+const MODEL_WARN = /Download from Amazon|Copy models/;
+function linkModels(text) {
+  return MODEL_CARDS.reduce((parts, [name, href]) => parts.flatMap((p) => typeof p !== 'string' ? [p]
+    : p.split(name).flatMap((s, i) => i ? [h('a', { href }, name), s] : [s])), [text]);
 }
 
 // What does not work: Home Assistant's link on every page, the rest on Overview (its count on the menu) and, for the
@@ -1421,11 +1423,11 @@ function renderAttention() {
     const ha = /Home Assistant is not connected/.test(text);
     return h('div', { class: 'callout' + (ha ? ' bad' : '') }, icon('warn'),
       h('p', {}, ha ? 'Home Assistant is not connected. The Echo cannot answer requests until it is; check that the ESPHome integration has this device and that both are on the same network.'
-        : /Download from Amazon/.test(text) ? linkDavs(text) : text));
+        : MODEL_WARN.test(text) ? linkModels(text) : text));
   };
   for (const text of all) {
     const ha = /Home Assistant is not connected/.test(text);
-    if (ha || curPage === 'overview' || (curPage === 'models' && /Download from Amazon/.test(text))) box.append(says(text));
+    if (ha || curPage === 'overview' || (curPage === 'models' && MODEL_WARN.test(text))) box.append(says(text));
   }
   const rest = all.filter((t) => !/Home Assistant is not connected/.test(t)).length, n = $('nav').querySelector('[data-page=overview] .nav-n');
   if (n) { n.textContent = String(rest); n.classList.toggle('hidden', !rest); n.title = plural(rest, 'thing') + ' to look at'; }
@@ -2375,11 +2377,13 @@ function davsPicker(body) {
   davsBox.append(h('div', { class: 'pickbar' }, h('label', { class: 'pick-l', for: 'davs-lang' }, 'Language'), lang,
     h('span', { class: 'pick-hint' }, 'Which wake words exist depends on it')));
 
-  const list = h('div', { class: 'changes' });
+  const list = h('div', { class: 'changes' }), refused = new Set(davs.refused || []);
   let group = '';
   for (const c of davsCatalog()) {
     if (c.group !== group) { group = c.group; list.append(h('div', { class: 'grp' }, group)); }
     const it = job && job.items.find((x) => x.id === c.id), on = !!dv.ticks.get(c.id);
+    // refused before (the Echo Show 5's whisper model, issue #100): said up front, still tickable should Amazon change its mind
+    const no = refused.has(c.id) && !it && !has(c.id) ? h('div', { class: 'ch-sub bad' }, 'Amazon does not hand this out to this model of Echo: copy it from another Echo with Copy models') : null;
     const cb = checkbox(on, (v) => { dv.ticks.set(c.id, v); dv.last = null; renderDavs(); }, c.name, 'art ' + c.id);
     cb.disabled = !!job;
     let st = has(c.id) ? h('span', { class: 'badge ok' }, icon('check'), 'Installed') : null;
@@ -2387,7 +2391,7 @@ function davsPicker(body) {
       : it.status === 'ok' ? h('span', { class: 'badge ok' }, icon('check'), 'Downloaded')
       : it.status === 'bad' ? h('span', { class: 'badge bad' }, 'Failed') : h('span', { class: 'davs-none' }, 'Waiting');
     list.append(h('label', { class: `change davs-row ${on ? 'on' : 'off'}${job ? ' idle' : ''}` }, cb,
-      h('div', { class: 'ch-name' }, c.name, c.note ? h('div', { class: 'ch-sub' }, c.note) : null,
+      h('div', { class: 'ch-name' }, c.name, c.note ? h('div', { class: 'ch-sub' }, c.note) : null, no,
         it && it.why ? h('div', { class: 'ch-sub bad' }, it.why) : null),
       h('div', { class: 'davs-st' }, st)));
   }

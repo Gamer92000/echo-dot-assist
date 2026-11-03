@@ -2988,3 +2988,16 @@ Run in this order. Each step says what it proves.
       `tests/unit/setup_wipe_test.sh` (stand-ins of adb and the UI around the real functions and menu block), `--dry-run`.  Open: a wipe on a real Show, whether
       `twrp wipe` runs under the "Keep System Read only?" screen, "Download from Amazon" after a wipe (the Dots' DHA
       certificate is on `/persist`; the Shows' place not confirmed).
+- [~] Echo Show 5: the firewall loaded again every 5 s, the service restarted every 20 s (issue #100, 2026-11-03,
+      d1nd141's Echo; `ip6tables: hassmic_out is not as loaded`).  The tester's Show held its rules for hours
+      (2026-10-13), so the network's: Android 7.1's ConnectivityService writes `net.dnsN` with `getHostAddress`, which
+      names the interface of a link-local IPv6 resolver ("fe80::1%wlan0"; `net.dns` in 8149's services.odex), and a
+      router announcing its own link-local address as DNS (RDNSS) is common.  ip6tables lists no scope (it refuses such
+      a rule, or loads it without), so `wrong()` never matched `rules`.  `resolvers()` drops the scope; the expression
+      checked with checkers', donut's and biscuit's toybox sed under qemu.  Not confirmed on that Echo: the reporter's
+      `getprop | grep dns` and `ip6tables -S hassmic_out` would say.
+      Whisper there: Amazon's 403 "Request not allowlisted for device Type A4ZP7ZC4PI6TO ... whisper-static" (expected,
+      see 2026-10-13 above) was worded as a lost registration ("log in again").  davs.c now says Amazon does not hand it
+      to this model, keeps the refused ids with the tokens (`refused` line in `state/davs`, `"refused"` in
+      `/api/davs`), forgets one that arrives after all; the Models warning and the download row point at Copy models
+      instead.  `tests/fake_web_davs.py`.  Open: whether the Dots' whisper model runs on a Show (same libpryon).

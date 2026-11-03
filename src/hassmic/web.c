@@ -447,6 +447,7 @@ static size_t hello_json(char *o, size_t cap, int members)
 static void state_json(int fd, const struct req *r, const uint8_t me[32])
 {
     size_t cap = 32768, n = 0; char *o = malloc(cap), v[300];
+    int whisper_refused = davs_refused("whisper");          /* davs.c's lock, never under core_lock */
     if (!o) { respond_json(fd, 503, "{}"); return; }
     n += (size_t)snprintf(o + n, cap - n, "{\"device\":");
     n += hello_json(o + n, cap - n, 0);
@@ -466,8 +467,11 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
     n += (size_t)snprintf(o + n, cap - n, "],\"warnings\":[");
     int w = 0;
     if (!core_ha_linked()) n += (size_t)snprintf(o + n, cap - n, "%s\"Home Assistant is not connected\"", w++ ? "," : "");
+    /* Amazon refuses the whisper model to some models (the Echo Show 5: issue #100): then only a copy brings it */
     if (core_local_wake && core_whispered() == -2)
-        n += (size_t)snprintf(o + n, cap - n, "%s\"Whisper detection: no model on this Echo yet. Get it with Download from Amazon (Models page), or copy it from another Echo\"", w++ ? "," : "");
+        n += (size_t)snprintf(o + n, cap - n, "%s\"%s\"", w++ ? "," : "", whisper_refused
+                              ? "Whisper detection: no model on this Echo. Amazon does not hand it out to this model of Echo: copy it from another Echo that has it with Copy models (Models page)"
+                              : "Whisper detection: no model on this Echo yet. Get it with Download from Amazon (Models page), or copy it from another Echo with Copy models");
     if (core_local_wake && sound_model() == SOUND_NONE)
         n += (size_t)snprintf(o + n, cap - n, "%s\"Sound detection: no model on this Echo (neither the firmware's nor one from Download from Amazon)\"", w++ ? "," : "");
     if (core_sound_failed())

@@ -2,6 +2,17 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-03
+
+- **Echo Show 5: the firewall no longer reloads every few seconds.** On a network whose router announces its own IPv6
+  address as DNS server, the log said "lockdown re-applied (ip6tables: hassmic_out is not as loaded)" every 5 seconds,
+  and "firewall rules wrong on two looks" with a restart of the firewall service every 20. The Echo stayed locked
+  down all along; only the check misread that DNS server's address (issue #100).
+- **"Download from Amazon" says when Amazon does not hand a model to this Echo.** Amazon refuses the whisper detection
+  model to the Echo Show 5, and the page called that a lost sign-in ("log in again"), which changes nothing. It now
+  says Amazon does not hand it out to this model, and the whisper warning and the download list point at Copy models:
+  bring it over from an Echo that has it. Should Amazon hand it out later, a download still works.
+
 ## 2026-11-01
 
 - **Your own sounds in place of Alexa's.** A new "Sounds" card on the settings page (Voice) lists the Echo's sounds:

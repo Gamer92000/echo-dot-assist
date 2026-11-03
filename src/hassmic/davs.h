@@ -7,8 +7,10 @@
 
 void davs_start(void);                        /* thread; a saved registration (state/davs) is loaded */
 /* the page's view: {"state":"none|waiting|registered|busy","dha":bool,"code","url","left_s","device","domain",
- * "busy":"<what>","progress":0..100,"error":"...","done":"<artifact id>"} — never a token (the page is plain HTTP) */
+ * "busy":"<what>","progress":0..100,"error":"...","done":"<artifact id>","refused":["<artifact id>",...]} — never a
+ * token (the page is plain HTTP).  refused: what Amazon does not hand out to this model of Echo */
 size_t davs_status_json(char *out, size_t cap);
+int davs_refused(const char *id);             /* artifact ID ("whisper", "wake:echo-de-DE") is in that list */
 /* an Amazon site ("de", "com", "co.uk", ... davs.c has the list): start a login; the code to enter shows up in
  * davs_status_json.  0, or -1 with the reason in ERR */
 int davs_login(const char *domain, char *err, size_t errsz);

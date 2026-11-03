@@ -49,8 +49,11 @@ kiosk_state() { KIOSK=; [ -z "$OTA_ONLY" ] && grep -qx 'arbitration_mode=kiosk' 
 HAVE6=; command -v ip6tables > /dev/null && HAVE6=1
 v6off() { for f in /proc/sys/net/ipv6/conf/*/disable_ipv6; do echo 1 > $f || echo "!! IPv6 NOT OFF ($f): take the Echo offline"; done; }
 
-# DNS servers from DHCP (dhcp.<iface>.dnsN) and the system's own (net.dnsN), one per line, sorted
-resolvers() { getprop | sed -nE 's/^\[(dhcp\.[^.]+|net)\.dns[0-9]+\]: \[([^]]+)\]$/\2/p' | sort -u; }
+# DNS servers from DHCP (dhcp.<iface>.dnsN) and the system's own (net.dnsN), one per line, sorted, without a scope.
+# Android 7.1 writes net.dnsN with Java's getHostAddress, which names the interface of a link-local IPv6 resolver the
+# router announces ("fe80::1%wlan0"); ip6tables lists no scope (it refuses the rule, or loads it as fe80::1), so the
+# chain never matched its rules and was loaded again every 5 s (Echo Show 5, issue #100).
+resolvers() { getprop | sed -nE 's/^\[(dhcp\.[^.]+|net)\.dns[0-9]+\]: \[([^]%]+)(%[^]]*)?\]$/\2/p' | sort -u; }
 
 # The updaters' user as a number: UPDATE_UID (a user of the image, Dots), else the uid Android gave the updater app
 # (UPDATE_PACKAGES, checkers: packages.list, "<name> <uid> ...").  Nothing if neither is there: no rule then, and on
