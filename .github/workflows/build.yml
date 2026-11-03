@@ -293,6 +293,8 @@ jobs:
               # bundle.sh leaves out what it does not find (a model without a screen has no libhmui.so), so a file missing
               # from the artifact's list above went out without a word: every Show's screen UI until 2026-11-03.  The
               # build job packed the same files at the same version: anything but its bytes is a lost file.
+              [ -s build/$d.bundle-sha256 ] ||
+                  { echo "::error::$d: $d.bundle-sha256 missing from the build artifact"; rm -f secrets/release.key; exit 1; }
               [ "$(sha256sum build/$d/hassmic.bundle | cut -d' ' -f1)" = "$(cat build/$d.bundle-sha256)" ] ||
                   { echo "::error::$d: bundle differs from the build job's: a file missing from its artifact"; rm -f secrets/release.key; exit 1; }
               # signed by the PC's otatool (Python): what the Echo's (C) checks must pass too, or nothing is published
