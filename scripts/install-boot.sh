@@ -128,31 +128,47 @@ flash_boot() {
 # (ConfigBundleProvider: no unzipped device config bundle, a NullPointerException) and amazon.speech.sim on its
 # missing RECORD_AUDIO: "OOBE has stopped" and "SpeechUI has stopped" on the screen for good.  After the wipe the
 # first boot granted it (SYSTEM_FIXED GRANTED_BY_DEFAULT), the wizard came up, no crash.  Nothing is kept that a
-# working Echo would need: the uninstalled one starts at Amazon's setup either way.
-# Read back from /data/app, as setup.sh's wipe_twrp does: what twrp exits with for a failed wipe was never seen, and a
-# USB restart (TWRP's "Keep System Read only?" answered late) ends the adb shell while TWRP wipes on: 30 s of tries
-wipe_twrp() {
-    t 'twrp wipe cache && twrp wipe data' || echo "adb shell: exit $?"
-    i=0
-    while [ $i -lt 30 ]; do
-        left=$(t "grep -q ' /data ' /proc/mounts || mount -t ext4 ${SYSTEM_DEV%/*}/userdata /data 2>/dev/null
-                  if grep -q ' /data ' /proc/mounts; then ls /data/app 2>/dev/null; echo end; else echo unmounted; fi" 2>/dev/null)
-        [ "$left" = end ] && return 0
-        sleep 1; i=$((i + 1))
-    done
-    echo "after the wipe, /data/app holds: ${left:-(no answer from the Echo)}"
-    return 1
-}
+# working Echo would need: the uninstalled one starts at Amazon's setup either way.  The wipe: scripts/lib/twrp.sh.
+. scripts/lib/twrp.sh
 in_recovery() { [ "$(state)" = recovery ]; }
+
+# yes or no: hassmic on the system partition.  In TWRP from the partition itself, read-only (as system_build), or
+# where TWRP has it mounted already (a second mount read-only next to a writable one fails).  Nothing when the Echo
+# does not answer or TWRP cannot mount it
+hassmic_on_system() {
+    case "$(state)" in
+    device) t '[ -e /system/hassmic/sysinstall.sh ] && echo yes || echo no';;
+    recovery) t 'd=/mnt/hm_sys
+                 if grep -q " /system " /proc/mounts; then d=/system
+                 else mkdir -p $d; mount -o ro '"$SYSTEM_DEV"' $d 2>/dev/null || d=; fi
+                 [ -z "$d" ] || { [ -e $d/hassmic/sysinstall.sh ] && echo yes || echo no; }
+                 [ "$d" != /mnt/hm_sys ] || umount $d';;
+    esac
+}
 
 if [ "$1" = --uninstall ]; then
     on_adb || die "boot the Echo (with the root boot image) and connect it over USB"
-    # installed: hassmic off /system first.  Not (a run cut off before its wipe, or an Echo uninstalled by an older
-    # version of this script): only the wipe is left to do
-    if [ "$(state)" = device ] && on_echo /system/hassmic/sysinstall.sh; then INSTALLED=1; else INSTALLED=; fi
-    echo "This takes hassmic off the Echo and wipes its data (Wi-Fi, Amazon account, hassmic's settings and its link to"
-    echo "Home Assistant): the Echo starts at Amazon's setup.  Without the wipe Amazon's apps, put back on the system"
-    echo "partition, crash in a loop (\"OOBE has stopped\")."
+    # Installed: hassmic off /system first, from Fire OS, where sysinstall.sh runs.  Not (a run cut off before its
+    # wipe, or an Echo uninstalled by an older version of this script): only the wipe is left to do.  In TWRP the
+    # partition is read as well: a wipe alone would leave hassmic there and Amazon's apps off it, under an Echo told
+    # to start at Amazon's setup
+    case "$(hassmic_on_system)" in
+    yes) in_recovery && die "hassmic is still on this Echo's system partition, and it comes off from Fire OS: boot it
+  (adb reboot) and run this again.  Nothing changed"
+         INSTALLED=1;;
+    no) INSTALLED=;;
+    *) die "cannot tell whether hassmic is on this Echo's system partition (no answer$(in_recovery &&
+            echo ", or TWRP cannot mount $SYSTEM_DEV")): run this again.  Nothing changed";;
+    esac
+    if [ -n "$INSTALLED" ]; then
+        echo "This takes hassmic off the Echo and wipes its data (Wi-Fi, Amazon account, hassmic's settings and its link"
+        echo "to Home Assistant): the Echo starts at Amazon's setup.  Without the wipe Amazon's apps, put back on the"
+        echo "system partition, crash in a loop (\"OOBE has stopped\")."
+    else
+        echo "hassmic is not on this Echo's system partition (uninstalled before): this only wipes its data (Wi-Fi,"
+        echo "Amazon account).  Without the wipe Amazon's apps, put back on the system partition, crash in a loop"
+        echo "(\"OOBE has stopped\").  The Echo starts at Amazon's setup."
+    fi
     if [ "$2" != --yes ]; then
         [ -t 0 ] || die "not on a terminal: run it as install-system.sh --uninstall --yes"
         printf 'Type YES to go on: '; read -r a; [ "$a" = YES ] || die "nothing changed"
@@ -164,8 +180,6 @@ if [ "$1" = --uninstall ]; then
         on_echo $STAGE/ok || die "system partition not written (see above)"
         t "rm -rf $STAGE"
         echo "hassmic is off the system partition"
-    elif [ "$(state)" = device ]; then
-        echo "hassmic is not on this Echo's system partition: only the wipe is left to do"
     fi
     if ! in_recovery; then
         echo "to TWRP ..."
@@ -174,6 +188,7 @@ if [ "$1" = --uninstall ]; then
   (USB stays connected), then run this again"
     fi
     echo "On the Echo's screen: if TWRP asks \"Keep System Read only?\", tap \"Keep Read Only\" (not the swipe)"
+    # with nobody to press Enter, the wipe starts at once; wipe_twrp gives it 5 min, should TWRP wait for that tap
     if [ -t 0 ]; then printf 'and press Enter here once TWRP shows its main menu: '; read -r a; fi
     wait_for 60 in_recovery || die "TWRP is not back on adb: run this again"
     echo "wiping cache and data ..."
