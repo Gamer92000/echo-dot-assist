@@ -32,30 +32,43 @@ void touch_reset(struct touch *t)
     t->p = -1; t->dropped = t->lift = t->waking = t->rest = t->born = t->later = 0;
 }
 
+/* Which direct multitouch screen: the lowest event number, the same every boot (readdir has no order), and amazon_touch
+ * only when there is no other.  That one is system_server's own (AmazonInputManagerJNI in libandroid_servers.so, every
+ * Show's firmware: a "virtual touch device" on /dev/uinput, amazon_touch.idc makes it a touchscreen), which carries only
+ * what Amazon's services inject, never a finger; the panel's driver (goodix-ts on the Show 5s, FocalTech or Goodix on
+ * the Show 8s) is the one to read.  Rank: lower is better. */
+static long rank(const char *nm, long num) { return (strcmp(nm, "amazon_touch") ? 0 : 1L << 20) + num; }
+
 int touch_open(struct touch *t, char *name, int n)
 {
-    DIR *d = opendir("/dev/input"); struct dirent *e;
+    DIR *d = opendir("/dev/input"); struct dirent *e; long best = -1;
     t->fd = -1; if (n > 0) name[0] = 0;
     while (d && (e = readdir(d))) {
-        char p[300], nm[64] = ""; struct input_absinfo ax, ay;
+        char p[300], nm[64] = "", *end; struct input_absinfo ax, ay;
         if (strncmp(e->d_name, "event", 5)) continue;
+        long num = strtol(e->d_name + 5, &end, 10);
+        if (end == e->d_name + 5 || *end || num < 0 || num >= 1L << 20) continue;
         snprintf(p, sizeof p, "/dev/input/%s", e->d_name);
         int fd = open(p, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
         if (fd < 0) continue;
         unsigned long props = 0;
         if (ioctl(fd, EVIOCGNAME(sizeof nm - 1), nm) >= 0 && ioctl(fd, EVIOCGPROP(sizeof props), &props) >= 0 &&
             (props & (1 << INPUT_PROP_DIRECT)) && !ioctl(fd, EVIOCGABS(ABS_MT_POSITION_X), &ax) && !ioctl(fd, EVIOCGABS(ABS_MT_POSITION_Y), &ay) &&
-            ax.maximum > ax.minimum && ay.maximum > ay.minimum) {
-            t->fd = fd; t->xmin = ax.minimum; t->xmax = ax.maximum; t->ymin = ay.minimum; t->ymax = ay.maximum;
-            int mono = CLOCK_MONOTONIC; ioctl(fd, EVIOCSCLOCKID, &mono);   /* the events' own times on our clock (mono_ms) */
-            struct input_absinfo sl; t->slot = !ioctl(fd, EVIOCGABS(ABS_MT_SLOT), &sl) ? sl.value : 0;
-            if (t->slot < 0 || t->slot >= TOUCH_SLOTS) t->slot = -1;
+            ax.maximum > ax.minimum && ay.maximum > ay.minimum && (best < 0 || rank(nm, num) < best)) {
+            if (t->fd >= 0) close(t->fd);                        /* (a worse one found first) */
+            t->fd = fd; best = rank(nm, num);
+            t->xmin = ax.minimum; t->xmax = ax.maximum; t->ymin = ay.minimum; t->ymax = ay.maximum;
             if (n > 0) snprintf(name, (size_t)n, "%s (%s)", nm, p);
-            break;
+            continue;
         }
         close(fd);
     }
     if (d) closedir(d);
+    if (t->fd >= 0) {
+        int mono = CLOCK_MONOTONIC; ioctl(t->fd, EVIOCSCLOCKID, &mono);   /* the events' own times on our clock (mono_ms) */
+        struct input_absinfo sl; t->slot = !ioctl(t->fd, EVIOCGABS(ABS_MT_SLOT), &sl) ? sl.value : 0;
+        if (t->slot < 0 || t->slot >= TOUCH_SLOTS) t->slot = -1;
+    }
     touch_reset(t);
     /* the slots as they are: the kernel sends a slot's value only when it changes, so a first touch where that slot's
      * last one was (before this open) would come without it; a finger down already is no touch of ours */

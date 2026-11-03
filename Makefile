@@ -356,8 +356,10 @@ unit-wifictl:
 unit-ringbar:
 	.venv/bin/python tools/mkringbar.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)
 	.venv/bin/python tests/unit/ringbar_run.py
+# every model with the screen UI (device.mk SCREEN), against its own firmware where that is unpacked here (CI: the dex only)
+SCREEN_MODELS := $(patsubst devices/%/device.mk,%,$(shell grep -l '^SCREEN ' devices/*/device.mk))
 unit-screen:
-	.venv/bin/python tools/mkscreen.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)
+	.venv/bin/python tools/mkscreen.py --check $(foreach m,$(SCREEN_MODELS),$(if $(wildcard firmware/$(m)/rootfs/system/framework),--framework=firmware/$(m)/rootfs))
 # the screen UI as pictures, on the PC (FreeType, the firmware's Roboto): tools/uishot.c says how
 build/uishot: tools/uishot.c $(UI_SCENE) src/ui/scene.h src/ui/ui.h src/ui/gfx.h
 	@mkdir -p build

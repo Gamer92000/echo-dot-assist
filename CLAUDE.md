@@ -546,7 +546,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   sets and unsets queued one behind the other go in one ledctrl (`LEDQ_BATCH`: it takes repeated -s/-u).  The
   beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N` when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
   `HASSMIC_FAKE_BEAM`.
-- **Screen UI** (`src/ui/`, `screen.c`, `screen.h`; device.mk `SCREEN`, else `screen_none.c`; checkers only so far): the
+- **Screen UI** (`src/ui/`, `screen.c`, `screen.h`; device.mk `SCREEN`, else `screen_none.c`; checkers, cronos): the
   Echo Show's own screen, small beside any app (Kiosk Satellite, View Assist...).  `src/ui/ui.h` lists the parts:
   `scene.c` (display list with a clip per item, diffed by id into one dirty rectangle; text cache by hash; image cache
   by key and shown size, asked of the platform once; touches: taps, long presses, HIT_DRAG sliders, scrollers with
@@ -563,9 +563,11 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   home app: the page's Screen page (`POST /api/screen`, `state/screen_home`; the apps the UI listed at start, "app"
   lines), else Kiosk Satellite where installed ("kiosk", root's `kiosk-app` mark), else the face; a new choice applies
   at once; relaunched 3x a minute at most, not while our own screen was asked for.  One app_process: `scripts/device/screen.dex`
-  (`tools/mkscreen.py`) loads `libhmui.so` (`android.c`: JNI table C/J/F checked by `mkscreen.py --framework`; images
+  (`tools/mkscreen.py`) loads `libhmui.so` (`android.c`: JNI table C/J/F checked by `mkscreen.py --framework`, `make
+  unit-screen` against every `SCREEN` model's unpacked firmware; images
   decoded on a thread of their own); layer shown only while hassmic's home activity is in front (getTasks polled);
-  touches from evdev beside Android (`touch.c`: protocol B, the first finger followed; `tests/unit/touch_test.c`).  The band runs in the same process (`ring_band.c` -> `screen_band`, one row a
+  touches from evdev beside Android (`touch.c`: the panel's node, lowest event number, system_server's uinput
+  `amazon_touch` last; protocol B, the first finger followed; `tests/unit/touch_test.c`).  The band runs in the same process (`ring_band.c` -> `screen_band`, one row a
   frame; ringbar.dex only without the UI and in tests).  `screen.c` keeps state by generation and one writer thread
   sends what changed (callers hold `core_lock`: never block on the pipe), plus mass.c's lines from a FIFO (8 MB, a
   new UI drops it and `mass_replay` tells the state again); hassmic's pid in a file's name while a UI is meant to run

@@ -2937,8 +2937,11 @@ Run in this order. Each step says what it proves.
       root could not update a network the stock update had saved (as system now), the speaker amp is a MAX98396
       (added), the udev rules lacked the Shows' fastboot id.  Found, fixed for every model since (issue #45): Ubuntu 26.04
       refuses `unshare --user` (qrun.sh), qemu-arm on a non-x86_64 PC, the udev rules over ssh.  The lk (`20240709`) is 8149's and does not change with stock updates.
-      Home Assistant adopted it and works (the tester).  Not yet: the speaker gain by ear, Wi-Fi motion, DHA version /
-      Download from Amazon, Bluetooth.
+      Home Assistant adopted it and works (the tester).  Screen UI (2026-11-03): `SCREEN` in device.mk, libhmui.so in its
+      build and bundle; the JNI table found on cronos' own boot class path (`make unit-screen` checks every model with
+      `SCREEN` against its unpacked firmware; framework.jar is checkers' byte for byte), display and touch as checkers'
+      (960 x 480, rotation 1, goodix-ts).  Not yet: the speaker gain by ear, Wi-Fi motion, DHA version / Download from
+      Amazon, Bluetooth, the screen UI on the Echo.
 - [~] Echo Show 8 2nd gen (`athena`, 2026-10-14; `docs/re-athena.md`).  A different platform from crown: MT8183, Android 9
       (Treble, enforcing SELinux, policy in `/vendor/etc/selinux/precompiled_sepolicy`), kernel 4.4.146, Fire OS 7574.1
       (PS75741.7080N; build 7077's probe libraries are byte-identical).  Rooted by saiyaku-athena's zip (system and vendor

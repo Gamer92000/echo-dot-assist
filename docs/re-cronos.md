@@ -20,7 +20,7 @@ an older one (NS6570).
 | `libaspclient.so` | identical | identical |
 | `libasp.so`, audio HAL, `libaudioflinger.so`, `libwakewordserver_jni.so` | differ | differ |
 | `libopus.so`, `libz.so` | what we link, in the same order (stubs identical) | |
-| Screen | 1024 x 600 panel, density 160, same LCM family (`st7701s_wsvga`) | crown: 1280 x 800 |
+| Screen | 960 x 480 as checkers (the band 960 x 10 on the first one), density 160; the kernel's LCM config (1024 x 600, `st7701s_wsvga`) is checkers' as well, not the panel | crown: 1280 x 800 |
 | `STOCK_APPS_OUT` | all present but `HumanDetectionService`, `SmartHomeWifiAdapterService` | five absent |
 | Wi-Fi driver | `nicRxFillRFB` at `nicRxProcessDataPacket` +0x64 | the same |
 
@@ -85,6 +85,14 @@ Volume A` 127 of 0..127).
   volume curve: separate volumes take the Echo Dot 2's (`board.volume_curve` unset) until `tools/vol-curve.py` has
   measured it. Likely checkers' (the same build and amplifier family), not assumed.
 
+- Screen UI (2026-11-03, on the PC only): built as on checkers (`device.mk` `SCREEN`). The framework is checkers' (the
+  same 8149 `framework.jar`, byte for byte; `boot-framework.oat` compiled for this device): every class, method and
+  field of `src/ui/android.c`'s JNI table is on its boot class path (`make unit-screen` with the firmware unpacked). The
+  rest is checkers' too: `user_rotation` 1 on a 480 x 960 panel (`ro.sf.hwrotation` 0), `goodix-ts` beside
+  `amazon_touch` (the first cronos' `getevent`), the band and the grip as overscan. `amazon_touch` is system_server's
+  own touchscreen on `/dev/uinput` (`AmazonInputManagerJNI` in `libandroid_servers.so`, on every Show's firmware: what
+  Amazon's services inject, never a finger), so `touch.c` takes it only when there is no other, and the lowest event
+  number otherwise (it took the first in readdir's order, which has none). Not tried on this Echo.
 - Light sensor: the device trees name a JSA1214 (checkers: STK3x1x) on MediaTek's alsps framework, the kernel has
   `CONFIG_ALS_FORMULA_CHANGE`. checkers' `als_ps/lux` is there (250 lux in a lit room on the first cronos).
 - Sounds: every one of checkers' entries is stored in this firmware's APKs, SpeechInteractionManager's `res/7E.mp3`

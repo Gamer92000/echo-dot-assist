@@ -7,7 +7,7 @@ hassmic shows it as a band along the bottom of the screen (setting "Light band")
 [devices/README.md](../README.md); what checkers' page says about the install holds here too, and is not repeated:
 [devices/checkers/README.md](../checkers/README.md).
 
-Model C76N8S (`ro.product.model` AEOCN), MediaTek MT8163, 5.5" touchscreen (1024 x 600 panel), 2 microphones, camera
+Model C76N8S (`ro.product.model` AEOCN), MediaTek MT8163, 5.5" touchscreen (960 x 480, as checkers'), 2 microphones, camera
 with a shutter, volume keys, mic mute. No action button.
 
 ## Firmware
@@ -78,8 +78,11 @@ The speaker amplifier is one of three by board revision; the first cronos has th
 RT5616/RT5616E as checkers', TAS5805M up to +4 dB, MAX98396 up to +6 dB, the caps until someone has listened at full
 volume (the TAS5805M's steps are assumed, it is in no cronos seen yet).
 
+hassmic's own screen (the face, the drawer, the home app, Music Assistant: [the guide](../../docs/GUIDE.md#the-screen-echo-show-5))
+is built for it as for checkers; its JNI table resolves against this firmware (`make unit-screen`).
+
 **Open:** speaker gain by ear, Wi-Fi motion (module built, its hook site as checkers'), the DHA version for "Download
-from Amazon", Bluetooth.
+from Amazon", Bluetooth, the screen UI on the Echo.
 
 The screen stays black but for the band: the install takes Amazon's apps off the system partition, Settings and System
 UI among them, as on checkers (`STOCK_APPS_OUT`; why: [devices/checkers/README.md](../checkers/README.md)). The Echo's

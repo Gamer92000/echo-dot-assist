@@ -21,7 +21,8 @@ as it checks this dex's own references (JNI sees private members too, so they ne
 
 python3 tools/mkscreen.py            rebuild scripts/device/screen.dex
 python3 tools/mkscreen.py --check    only re-read and check the one in the tree
-    --framework=firmware/checkers/rootfs   also against the firmware's boot class path, the JNI table included"""
+    --framework=firmware/checkers/rootfs   also against the firmware's boot class path, the JNI table included
+                                           (any number: every model with the UI, make unit-screen)"""
 import os
 import re
 import sys
@@ -78,8 +79,8 @@ def jni_table(path):
 
 
 def check_jni(rootfs):
-    """every method and field of the JNI table exists on 8149's boot class path, static where the table says so, with the
-    return type it says (GetMethodID matches the whole signature)"""
+    """every method and field of the JNI table exists on the firmware's boot class path, static where the table says so,
+    with the return type it says (GetMethodID matches the whole signature)"""
     meths, flds = jni_table(JNI_TABLE)
     bc = dexasm.boot_classes(rootfs)
 
@@ -114,7 +115,7 @@ def check_jni(rootfs):
         elif bool(got[1] & 0x0008) != static:
             bad.append(f"{c}.{n}: {'static' if got[1] & 0x0008 else 'not static'} on the device")
     assert not bad, "\n".join(bad)
-    print(f"jni: {len(classes)} classes, {len(meths)} methods and {len(flds)} fields of {os.path.relpath(JNI_TABLE)} found on the boot class path")
+    print(f"jni {rootfs}: {len(classes)} classes, {len(meths)} methods and {len(flds)} fields of {os.path.relpath(JNI_TABLE)} found on the boot class path")
 
 
 PROG = Program(ME, SELF, methods=METHODS)
@@ -123,8 +124,8 @@ PROG = Program(ME, SELF, methods=METHODS)
 def main():
     dexasm.cli(PROG, emit, __file__, "screen.dex")
     fw = [a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--framework=")]
-    if fw:
-        check_jni(fw[0])
+    for f in fw:
+        check_jni(f)
 
 
 if __name__ == "__main__":

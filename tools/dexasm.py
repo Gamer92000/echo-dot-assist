@@ -895,14 +895,14 @@ def check_framework(prog, ids, uses, rootfs):
 
 def cli(prog, emit, tool, dex):
     """the command line of tools/mk<name>.py: rebuild scripts/device/<dex> (or the path given), --check it
-    against what this builds, --framework=<rootfs> also against the firmware.  Nothing is written before the
-    dex parses back."""
+    against what this builds, --framework=<rootfs> (any number) also against each firmware.  Nothing is written
+    before the dex parses back."""
     blob = build(prog, emit())
     ids, uses = read(blob, prog)
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     fw = [a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--framework=")]
-    if fw:
-        print(f"framework: {check_framework(prog, ids, uses, fw[0])} boot classes, every reference found")
+    for f in fw:
+        print(f"framework {f}: {check_framework(prog, ids, uses, f)} boot classes, every reference found")
     out = args[0] if args else os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(tool))),
                                             "scripts", "device", dex)
     if "--check" in sys.argv:
