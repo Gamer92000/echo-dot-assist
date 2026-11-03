@@ -2999,6 +2999,14 @@ Run in this order. Each step says what it proves.
       (28 on), as `JV`/`CV` entries resolved by `ro.build.version.sdk` (mkscreen.py checks each firmware for what its SDK
       resolves).  Display and touch go by DisplayInfo (`ro.sf.hwrotation` 90 read only by a capture tool; the
       hwcomposer reads `ro.vendor.sf.hwrotation`, unset).  Not yet on the Echo.
+      Other builds (PR #98, 2026-11-03): PS75741.7082N (build 0036274154116) has 7080's six `PROBE_FILES` byte for
+      byte; PS75751.7806N (a new line, still Android 9) differs in `libpryon.so` and `libaudioflinger.so` by build id
+      only (exported symbols the same, `codebuild` paths of a rebuild); on it boot, wake word, voice assistant start
+      and Kiosk Satellite worked (baudneo, 2026-11-01).  So `firmware_ok` (`scripts/lib/device.sh`) takes the probe's
+      verdict instead of the build id, wherever the install flashes nothing build-bound (`INSTALL` twrp-ab, running;
+      `boot` keeps the pinned build, its boot.img is that build's); athena, with no firmware step, asks where it
+      differs (`device_check_firmware`; the setup asks itself in `firmware_accept`: under `task` a question on
+      `/dev/tty` waited unseen).  `tests/unit/firmware_test.sh` runs the real probe.sh against a stand-in adb.
 - [x] Echo Input (`cupcake`, 2026-10-28; `docs/re-cupcake.md`), worked out from the firmware (NS6575/8338), installed
       and running on one Echo Input (2026-10-29).  donut's platform
       (MT8516, arm64 kernel 4.4.22+, A/B, `/sepolicy` on system, kamakiri + TWRP in swdl) with checkers' software

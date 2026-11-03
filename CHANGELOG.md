@@ -4,6 +4,17 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-03
 
+- **Another firmware build with the same audio and wake word libraries installs like the pinned one.** The install
+  stopped on any firmware but the one each model is built for, even where those libraries are byte for byte the same.
+  Now it compares them (`scripts/probe.sh`) and goes on when they match, and the setup offers to keep an Echo rooted
+  already on such a build as it is. This holds on every model except the Echo Show 5, Show 5 2nd gen and Show 8 1st
+  gen, whose install flashes a boot image made for that one build. The Echo Show 8 2nd gen on PS75741.7082N installs
+  this way.
+- **Echo Show 8 2nd gen: a firmware with other libraries asks instead of stopping.** Its setup has no step that could
+  put the pinned PS75741.7080N back, so where the libraries differ, the setup and `scripts/install-system.sh` show a
+  large warning naming them and ask whether to go on (`HASSMIC_FIRMWARE_OK=1` answers yes for `install-system.sh`
+  without a terminal). Amazon's new line PS75751.7806N is such a build: two of its libraries were rebuilt; on it the
+  Echo booted, heard its wake word, started the voice assistant and ran Kiosk Satellite.
 - **Setup on the Echo Show 5 and Echo Show 8 1st gen stops when the unlock was not confirmed.** amonet asks you to type
   `YES`; anything else (a typo, a stray key) makes it stop without touching the Echo, but setup took that as done and
   waited for a TWRP that never came. Now it says amonet stopped, and the step can simply be run again.
@@ -232,10 +243,6 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-27
 
-- **Echo Show 8 2nd gen: another firmware build no longer stops the install.** It stopped with "support is built for
-  PS75741.7080N: reflash that one", although the Echo is rooted by then. It now prints a large warning and asks
-  whether to go on (`HASSMIC_FIRMWARE_OK=1` answers yes without a terminal). PS75741.7082N, whose audio and wake word
-  libraries are the same as 7080N's, goes through without the question.
 - **Drop In: the wake word works during a call to an empty room.** An Echo in a quiet room sent its own room noise,
   turned up to speech level, to the caller. The caller's Echo took that for the other side talking: it ignored the wake
   word, never switched on listening mode (so "Alexa, hang up" came out as "No text recognized") and turned its own

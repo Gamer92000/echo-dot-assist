@@ -233,7 +233,7 @@ host: build/hassmic-host build/hassmic-host-screen $(OUT)/hassmic-qemu build/ota
 UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/third_party/monocypher.c
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
-	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map setup_wipe kiosk \
+	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk \
 	screen ui touch json
 unit: $(addprefix unit-,$(UNIT_TESTS))
 unit-hash:
@@ -312,6 +312,9 @@ unit-web_loudness:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_loudness_test.py; elif [ -n "$$CI" ]; then echo "web loudness: node missing"; exit 1; else echo "web loudness: node missing, skipped"; fi
 unit-setup_wipe:
 	bash tests/unit/setup_wipe_test.sh
+# which firmware hassmic goes onto (device.sh firmware_ok, device_check_firmware; setup's firmware_accept), PR #98
+unit-firmware:
+	bash tests/unit/firmware_test.sh
 unit-ring_pack:
 	if command -v node >/dev/null; then node tests/unit/ring_pack_test.js; else echo "ring packs: node missing, skipped"; fi
 unit-mww:

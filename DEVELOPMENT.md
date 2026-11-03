@@ -280,8 +280,12 @@ expires within minutes. Found by preloading `src/tools/curlspy.c` into the stock
 
 ## Contributing
 
-- Each model is supported on exactly one firmware (`FIRMWARE_ID` in its `device.conf`; `donut`: 6574.1). `scripts/probe.sh`
-  checks the device matches, and `install-system.sh` refuses another one.
+- Each model is built for exactly one firmware (`FIRMWARE_ID` in its `device.conf`; `donut`: 6574.1). `scripts/probe.sh`
+  compares the Echo's `PROBE_FILES` with it (the libraries with reverse-engineered interfaces and the audio path; not
+  libopus, libz or what is dlopen'd, whose ABIs are public). Another build, by `install-system.sh`
+  (`device_check_firmware`) and the setup: `INSTALL=boot` never (its boot.img is the pinned build's); `twrp-ab` when
+  every probed file is the same, else refused (the firmware step puts the pinned build back); `running` (athena) when
+  they are the same, else after a question.
 - No model `#ifdef`s in shared code: a new difference becomes a `struct board` field, a `device.conf` variable or a
   backend (see [devices/README.md](devices/README.md)).
 - Feature commits update [CHANGELOG.md](CHANGELOG.md) (user-facing, dated, plain language), [PLAN.md](PLAN.md) (status,

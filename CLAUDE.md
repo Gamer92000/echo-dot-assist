@@ -169,7 +169,9 @@ stops and names the sysctl, which the setup's `qemu_arm` asks to set).
   artifacts, picked in a menu with a checklist per kind (new ones ticked): wake words, installed from `device-logs/models/`
   after loading each with the Echo's `pryon_test`, and other artifacts (the sound detection model), kept on the PC for tests.
   Downloads come from Amazon in one go (stock-online + Alexa app registration, undone afterwards).
-- `scripts/probe.sh` checks the device's libraries match the analysed firmware. Everything assumes exactly that version.
+- `scripts/probe.sh` checks the device's libraries match the analysed firmware. Everything assumes exactly that version;
+  another build goes in only with every `PROBE_FILES` the same and no build-bound image flashed (`device.sh` `firmware_ok`:
+  not `INSTALL=boot`), or, `INSTALL=running` (athena), after a question (`HASSMIC_FIRMWARE_OK=1`; setup's `firmware_accept`).
 - PC scripts that use adb (`deploy`, `probe`, `install-system`, `capture-test`, `mic-compare`) detect the model from `ro.product.device`
   via `scripts/lib/device.sh`; `ota-push.sh` takes `DEVICE` (default donut). With two Echos on adb set `ANDROID_SERIAL`.
 

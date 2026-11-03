@@ -140,8 +140,10 @@ step_build() {
     if [ "$BUILD_MODE" = prebuilt ]; then task "Downloading the release build of this commit" build_binaries || return 1
     else task "Building" build_binaries || return 1; fi
     wait_adb device || return 1
+    # libraries other than the pinned build's are no stop here: no step of athena's puts that build back, so the person
+    # decides (firmware_accept; install_satellite asks again only in a later run of the setup)
     task "Checking the Echo's firmware" sh -c 'out=$(scripts/probe.sh) && echo "$out" && ! echo "$out" | grep -q DIFFERENT' ||
-        { fail "the Echo runs another firmware than $FIRMWARE_ID: $DDIR/README.md"; return 1; }
+        firmware_accept || return 1
 }
 
 step_network() {
