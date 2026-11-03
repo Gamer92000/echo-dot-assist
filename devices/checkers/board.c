@@ -35,6 +35,7 @@ const struct board board = {
     .model = "Echo Show 5 (checkers)",
     .project = "hassmic.echo-show-5",
     .product = "Echo Show 5 (hassmic)",
+    .kiosk = 1,
     .default_name = "Echo Show 5",                                 /* + MAC: "Echo Show 5 5695c4"; slug = the project's model */
     .codename = "checkers",
 

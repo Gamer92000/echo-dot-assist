@@ -214,6 +214,153 @@ avahi_start() {
     avahi-daemon -f $conf --no-drop-root --no-proc-title > /dev/null 2>&1 &
 }
 
+# >>> kiosk (tests/unit/kiosk_test.py runs this block)
+# Kiosk Satellite (device.conf KIOSK_PACKAGE, docs/kiosk-satellite.md), an app of the user's choice on the screen.  It has
+# no HOME category (hassmic-home is the home screen), so nothing else opens it, and nothing brings it back when it ends.
+# Runtime permissions and app ops it would otherwise ask a person for on a screen with no one at it.  Android's "unknown
+# permission" for those a release lacks is ignored.  Idempotent, a few hundred ms.
+KIOSK_APP=/data/local/hassmic/kiosk-app         # exists while the app is installed: the page's answer, as adb-open
+kiosk_grants() {
+    for p in READ_EXTERNAL_STORAGE WRITE_EXTERNAL_STORAGE ACCESS_COARSE_LOCATION ACCESS_FINE_LOCATION; do
+        pm grant $KIOSK_PACKAGE android.permission.$p > /dev/null 2>&1
+    done
+    for o in SYSTEM_ALERT_WINDOW WRITE_SETTINGS GET_USAGE_STATS REQUEST_INSTALL_PACKAGES; do
+        appops set $KIOSK_PACKAGE $o allow > /dev/null 2>&1
+    done
+    dumpsys deviceidle whitelist +$KIOSK_PACKAGE > /dev/null 2>&1       # no doze: the dashboard and its ESPHome server stay up
+    dpm set-active-admin $KIOSK_PACKAGE/.KioskAdminReceiver > /dev/null 2>&1   # device admin: it turns the screen off (force-lock)
+    kiosk_perm RECORD_AUDIO kiosk_mic
+    kiosk_perm CAMERA kiosk_camera
+}
+# Microphone and camera follow their settings (settings page, default off; state/config has name=on or off).  hassmic
+# is the satellite and keeps its own capture either way; an app plugin that talks (a doorbell's two-way talk) needs a
+# recorder of its own.  Athena, 2026-10-26: the audio HAL lets the app record beside hassmic's VOICE_RECOGNITION, but only
+# a recorder on the VOICE_COMMUNICATION source (its own pipeline, with echo cancellation) gets audio; VOICE_RECOGNITION and
+# CAMCORDER opened and delivered nothing.  Revoking a permission that was granted ends the app's process: kiosk_tick
+# opens it again.
+kiosk_on() { grep -qx "$1=on" /data/local/hassmic/state/config 2>/dev/null; }
+kiosk_perm() {
+    if kiosk_on $2; then
+        pm grant $KIOSK_PACKAGE android.permission.$1 > /dev/null 2>&1
+        appops set $KIOSK_PACKAGE $1 allow > /dev/null 2>&1
+    else
+        pm revoke $KIOSK_PACKAGE android.permission.$1 > /dev/null 2>&1
+        appops set $KIOSK_PACKAGE $1 deny > /dev/null 2>&1
+    fi
+}
+kiosk_perms_now() { for s in kiosk_mic kiosk_camera; do if kiosk_on $s; then echo $s=on; else echo $s=off; fi; done; }
+kiosk_perm_sync() {
+    [ -n "$KIOSK_PACKAGE" ] || return 0
+    last=$(kiosk_perms_now)                 # kiosk_grants applies it when it sees the app
+    while sleep 2; do
+        [ "$(getprop sys.boot_completed)" = 1 ] || continue
+        now=$(kiosk_perms_now)
+        [ "$now" = "$last" ] && continue
+        last=$now
+        [ -f $KIOSK_APP ] || continue
+        kiosk_perm RECORD_AUDIO kiosk_mic
+        kiosk_perm CAMERA kiosk_camera
+        echo "kiosk satellite:" $now
+    done
+}
+# The update helper: the app hands out a script on its content provider that starts a process with its own code and a
+# token, through which it installs its updates without a dialog.  Its own instructions have it piped into sh from adb
+# after every boot.  Here as the shell user (what adb is on a locked device: pm install is allowed to it) with inet, which
+# its listening socket needs, never as root.  That is the shell user's power in the app's hands, whatever the settings
+# above say: docs/SECURITY.md.  Idempotent ("already running"), so it is asked again: an update of the app ends the helper.
+# Not waited for: its pipe ends only when the provider and every child are done with it, and kiosk_tick also keeps the
+# rotation and the app on screen.  A session of its own, so that one left over from the last round goes with all its
+# children (setsid from a background job execs, so $! is the group; checked on a Show 5): kill of a shell alone left them.
+KIOSK_PID=$KIOSK_APP.asking                     # root's, kept over a restart of this loop; a pid is checked before it is killed
+KIOSK_SAID=$KIOSK_APP.said                      # appears when the round is over: renamed, never half written
+kiosk_stale() {
+    p=$(cat $KIOSK_PID 2> /dev/null)
+    [ -n "$p" ] && grep -q update-helper/start /proc/$p/cmdline 2> /dev/null || return 0
+    kill -9 -$p 2> /dev/null; echo "kiosk update helper: no answer, asked again"
+}
+kiosk_ask_helper() {
+    kiosk_stale
+    setsid sh -c "$D/runas shell shell,log,inet sh -c 'content read --uri content://$KIOSK_PACKAGE.update-helper/start | sh' > $KIOSK_SAID.new 2>&1; mv $KIOSK_SAID.new $KIOSK_SAID" < /dev/null > /dev/null 2>&1 &
+    echo $! > $KIOSK_PID        # lost in a crash just here: the next round runs beside it and hears "already running"
+}
+kiosk_helper_said() {
+    [ -f $KIOSK_SAID ] || return 0
+    out=$(cat $KIOSK_SAID); rm -f $KIOSK_SAID
+    case "$out" in
+    "") ;;
+    *"update helper started."*) echo "kiosk update helper: started";;
+    *"already running."*) ;;
+    *) echo "kiosk update helper: $(echo "$out" | tail -1)";;
+    esac
+}
+# The app is gone, so its helper goes too: that is the shell user's power for code that is no longer on the Echo.  Android's
+# uninstall ends only the processes it started for the app's uid, not one of ours as shell: on a Show 5 it was still up
+# after one (2026-11-03).  By its name (`ks-update-helper-<uid>`) in the command line: the Show 5's toybox pkill has no -f.
+# One grep for all of /proc, once per uninstall.  Its folder and log in /data/local/tmp go too: empty there, but named by
+# the uid, which a reinstall changes, so each reinstall left a pair behind.
+kiosk_helper_end() {
+    for f in $(grep -l ks-update-helper- /proc/[0-9]*/cmdline 2> /dev/null); do
+        f=${f#/proc/}; kill -9 ${f%/cmdline} 2> /dev/null
+    done
+    rm -rf /data/local/tmp/ks-update-helper-*
+}
+# One look, every 10 s, without Java (a pm per round would be a whole runtime): the folder of the app's APK says it is
+# there, and is another one after an install or update (the same uid can come back), so grants never wait for a boot.  Where our
+# home screen is what shows, the app has ended (setting switched off, crash, its own update) or never opened: no check for
+# its process, which can be up without a screen.  dumpsys: 20 ms on a Show 5.  Half a minute for it to come up, a minute
+# between tries while it does not stay, so an app that cannot start does not fill the log.
+kiosk_seen= kiosk_wait=0 kiosk_failing= kiosk_ask=0 kiosk_norot= kiosk_pm=0
+kiosk_tick() {
+    [ "$(getprop sys.boot_completed)" = 1 ] || return 0
+    k=$(ls -d /data/app/$KIOSK_PACKAGE-* 2>/dev/null)
+    if [ -z "$k" ]; then
+        kiosk_stale > /dev/null
+        [ -f $KIOSK_APP ] && { kiosk_helper_end; echo "kiosk satellite: uninstalled"; }
+        rm -f $KIOSK_APP $KIOSK_PID $KIOSK_SAID $KIOSK_SAID.new; kiosk_seen=
+        return 0
+    fi
+    [ -f $KIOSK_APP ] || : > $KIOSK_APP
+    if [ "$k" != "$kiosk_seen" ]; then
+        # the folder may come first, and grants before the package manager knows the app would fail and not come back
+        # (a leftover folder never comes right: pm is a whole runtime, so once a minute)
+        if [ $kiosk_pm -gt 0 ]; then kiosk_pm=$((kiosk_pm - 1))
+        elif pm path $KIOSK_PACKAGE > /dev/null 2>&1; then kiosk_seen=$k; kiosk_grants; kiosk_ask=0
+        else kiosk_pm=5; fi
+    fi
+    kiosk_helper_said
+    # The app writes accelerometer_rotation=1, user_rotation=0 about 5 s after it opens.  With no sensor Android keeps the
+    # rotation it has, until something makes it look again: after a reinstall the Show 5 went to portrait, band across
+    # the middle (2026-11-01).  So on the rotation itself, not the settings the app keeps writing; settings is Java, only then.
+    if [ -n "$KIOSK_ROTATION" ]; then
+        case "$(dumpsys window policy 2>/dev/null | grep mCurrentRotation)" in
+        *"mCurrentRotation=$KIOSK_ROTATION"*) ;;
+        "") [ -n "$kiosk_norot" ] || echo "kiosk satellite: dumpsys names no rotation here, landscape not watched"; kiosk_norot=1;;
+        *)  settings put system accelerometer_rotation 0
+            settings put system user_rotation $KIOSK_ROTATION
+            echo "kiosk satellite: back to landscape";;
+        esac
+    fi
+    if [ $kiosk_wait -gt 0 ]; then
+        kiosk_wait=$((kiosk_wait - 1))
+    else
+        case "$(dumpsys activity activities 2>/dev/null | grep mResumedActivity)" in
+        *" org.hassmic.home/"*)
+            if $D/runas shell shell sh -c "monkey -p $KIOSK_PACKAGE -c android.intent.category.LAUNCHER 1" > /dev/null 2>&1
+            then [ -n "$kiosk_failing" ] || echo "kiosk satellite: opened"
+            else [ -n "$kiosk_failing" ] || echo "kiosk satellite: could not be opened"; fi
+            if [ -n "$kiosk_failing" ]; then kiosk_wait=5; else kiosk_wait=2; fi       # ticks skipped; its start takes 15-30 s
+            kiosk_failing=1;;
+        *) kiosk_failing=;;
+        esac
+    fi
+    if [ $kiosk_ask -le 0 ]; then kiosk_ask=30; kiosk_ask_helper; else kiosk_ask=$((kiosk_ask - 1)); fi
+}
+kiosk_helper() {
+    [ -n "$KIOSK_PACKAGE" ] || return 0
+    while :; do kiosk_tick; sleep 10; done
+}
+# <<< kiosk
+
 # wpa_supplicant's socket for the interface, else its global one, as wifi.sh's W(): a "reconfigure" takes the interface's
 # socket away until wpa_supplicant restarts (Dot 2, 2026-10-07)
 wpa() { if [ -S $WPA_SOCKETS/$WLAN ]; then wpa_cli -i $WLAN -p $WPA_SOCKETS "$@"; else wpa_cli -g@android:wpa_$WLAN IFNAME=$WLAN "$@"; fi 2>/dev/null; }
@@ -525,6 +672,8 @@ satellite)
     # online updates: hassmic checks downloads against the key root will check them against (ota.c)
     export HASSMIC_RELEASE_PUB=$(release_pub)
     netwatch 2>&1 | stamped >> $LOG &
+    kiosk_helper 2>&1 | stamped >> $LOG &
+    kiosk_perm_sync 2>&1 | stamped >> $LOG &
     # mDNS through the stock avahi-daemon: hassmic prints the service file for its protocol, name and MAC address.
     # The MAC in it is how Home Assistant tells devices apart.  On radar wlan0 appears only later in the boot, hassmic
     # printed its placeholder MAC, and Home Assistant offered the adopted Echo as a new device.  So wait for Wi-Fi

@@ -443,6 +443,13 @@ static size_t hello_json(char *o, size_t cap, int members)
     return n < cap ? n : cap - 1;
 }
 
+/* root's kiosk_tick keeps this file while the Kiosk Satellite app is installed: the daemon's user cannot read packages.list */
+static int kiosk_app(void)
+{
+    const char *e = getenv("HASSMIC_KIOSK_APP");
+    return board.kiosk && !access(e ? e : "/data/local/hassmic/kiosk-app", F_OK);
+}
+
 /* lock order: core_lock first (settings), lk only inside the helpers above */
 static void state_json(int fd, const struct req *r, const uint8_t me[32])
 {
@@ -453,7 +460,7 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
     n += hello_json(o + n, cap - n, 0);
     pthread_mutex_lock(&core_lock);
     /* volume: the main one, for the page's Volume card to say what each kind of audio plays at now */
-    n += (size_t)snprintf(o + n, cap - n, ",\"ha\":%s,\"volume\":%d,\"settings\":[", core_ha_linked() ? "true" : "false", core_volume());
+    n += (size_t)snprintf(o + n, cap - n, ",\"ha\":%s,\"volume\":%d,\"kiosk_app\":%s,\"settings\":[", core_ha_linked() ? "true" : "false", core_volume(), kiosk_app() ? "true" : "false");
     for (int i = 0, k = settings_count(); i < k && n < cap - 600; i++) {
         const struct setting *s = settings_at(i); const char *const *names; int nc = settings_choices(s, &names);
         n += (size_t)snprintf(o + n, cap - n, "%s{\"name\":\"%s\",\"label\":\"%s\",\"group\":\"%s\",\"type\":\"%s\",\"value\":%d,\"min\":%d,\"max\":%d,\"export\":%s,\"feature\":%s,\"unit\":\"%s\",\"choices\":[",

@@ -4,6 +4,19 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-03
 
+- **Kiosk Satellite on the Echo Shows** ([guide](docs/GUIDE.md#kiosk-satellite-on-the-screen)): with the app on a
+  Show 5 (1st or 2nd gen) or Show 8 (1st or 2nd gen), the Echo opens it by itself, opens it again when it ends, gives it
+  the permissions it would otherwise ask a person for and keeps its update helper running, so it updates itself. Its web
+  page (port 2324) and Home Assistant API (port 6053) are reachable from your network. Trust it like adb: the helper
+  runs the app's code as the shell user. The guided setup offers it with Simple Keyboard (open source, no network access: the image has no
+  keyboard); on an Echo already installed, `scripts/kiosk-install.sh`, and `scripts/kiosk-install.sh --uninstall` takes it
+  off again (a plain `adb uninstall` fails: the Echo makes it a device admin). The Show 5s keep Amazon's WebView for
+  this, an update puts it back, and they now stay in landscape.
+- **Kiosk Satellite internet access** (settings page, System, once the app is installed; on by default): only that app may
+  reach the internet; the voice satellite and Amazon's software stay as before.
+- **Kiosk Satellite microphone and camera** (same place; off by default). The microphone is for a plugin that talks, such
+  as a doorbell: pick "Voice communication" in it, the wake word keeps working during the call. Turning either off closes
+  the app for a moment.
 - **Setup on Windows: no "no release build of this commit" after a change to the docs.** Only changes to what goes
   onto the Echo get a release build of their own, so with the newest commit changing only a README or the PC's
   scripts, the setup refused to go on in Git Bash, where it cannot build anything. It now takes the newest release

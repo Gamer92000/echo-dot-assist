@@ -7,6 +7,7 @@
 #define BOARD_H
 
 struct board {
+    int kiosk;                      /* device.conf has KIOSK_PACKAGE: the Kiosk Satellite settings exist */
     /* identity towards Home Assistant and Music Assistant */
     const char *model;              /* ESPHome device info "model", Wyoming description */
     const char *project;            /* ESPHome "project_name" */

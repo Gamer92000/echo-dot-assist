@@ -597,6 +597,33 @@ Echo announces itself again after 100 s without Home Assistant, then less and le
   temperature and CPU usage.
 - "Music Assistant without pairing": off by default, so only Sendspin servers paired with the token may play.
 
+## Kiosk Satellite on the screen
+
+On an Echo Show, [Kiosk Satellite](https://kiosksatellite.com/) can show a Home Assistant dashboard while the Echo stays
+the voice satellite. It is optional: the guided setup offers it, and on an Echo already installed `scripts/kiosk-install.sh [echo-ip]` does
+the same. Do the app's setup from your PC at `http://<echo-ip>:2324`, and set its remote admin password: that page is open to your
+network. Then:
+
+- The Echo opens the app within seconds of the install, and again whenever it ends: after a crash, its own update, or a boot. Allow up to a minute.
+- It gets storage, location, overlay, settings, usage stats and device admin without asking, since nobody is there to
+  answer. Its web page (port 2324) and its Home Assistant API (port 6053) are reachable from private addresses.
+  Its updates install by themselves.
+- Three rows appear on the settings page under System, once the app is installed:
+  - **Internet access** (on): only that app gets out, for its updates and outside pages. Off: your network only.
+  - **Microphone** (off): for a plugin that talks, such as a doorbell. In the plugin pick "Voice communication": "Automatic"
+    and the other sources give silence. The wake word keeps working during such a call.
+  - **Camera** (off): needed to scan a QR code on the Echo. The Home Assistant token can also be pasted from a PC at
+    `http://<echo-ip>:2324`.
+  Turning microphone or camera off closes the app for a moment.
+
+To remove it, `scripts/kiosk-install.sh --uninstall [echo-ip]`. A plain `adb uninstall` fails, because the Echo made the
+app a device admin; the script takes that off first. The Echo's own screen shows again and ports 2324 and 6053 close.
+The app's own setup goes with it, the Home Assistant login included: installed again, it starts from the beginning.
+
+**Trust it like adb.** The update helper runs the app's own code as the shell user. Those switches set Android's
+permissions, but an app that wanted to could get past them. Install only an app you trust; `docs/SECURITY.md` has
+the detail. Turn the app's own voice assistant off, and do not make it the home app.
+
 ## Sound detection
 
 Optional, off by default. Runs Amazon's own Alexa Guard model on the Echo, beside the wake word; the "Sound" event

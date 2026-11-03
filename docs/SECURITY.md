@@ -7,10 +7,12 @@ What protects an Echo running hassmic, and where that ends. Nobody has audited a
 
 | Direction | What gets through |
 |---|---|
-| **Out** | Amazon's daemons: local addresses only, plus DNS to the servers DHCP hands out. `otad` and `ace_otad` (firmware updates): never. hassmic itself: anywhere, to fetch replies and music from where Home Assistant or Music Assistant point it. |
-| **In, TCP** | 16384–32767 only: 26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 updates, 28931 settings page |
+| **Out** | Amazon's daemons: local addresses only, plus DNS to the servers DHCP hands out. `otad` and `ace_otad` (firmware updates): never. hassmic itself: anywhere, to fetch replies and music from where Home Assistant or Music Assistant point it. On the screen models the Kiosk Satellite app too, while "Kiosk Satellite internet access" is on (default; one rule for that app's uid, nothing else of Amazon's or the system's gets out through it). |
+| **In, TCP** | 16384–32767 only: 26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 updates, 28931 settings page; on the screen models that name a Kiosk Satellite package (`KIOSK_PACKAGE`), also 2324 (the app's remote administration) and 6053 (its ESPHome API), from private addresses only |
 | **In, UDP** | 16384–32767 only (28930: arbitration between Echos, 28932: Drop In audio), and 2330 only while arbitration is in Kiosk Satellite mode (their fixed port) |
 | **In, ICMP** | ping (echo request) from private and link-local addresses only; answers to the Echo's own traffic |
+
+**Kiosk Satellite**, where you install it, is an app you trust like adb. Its update helper runs the app's own code as the shell user, every few minutes, so the app and each update of it can do what an adb shell can, `pm grant` included. It also gets storage and location without asking. The "microphone" and "camera" switches are Android's permissions, no wall against the app itself. Setup and `scripts/kiosk-install.sh` check who signed the APK against a pinned certificate on the PC, before it reaches the Echo; a copy you install by hand and the app's own updates are not checked by this project. The helper's provider is exported with no manifest permission, so another app on the Echo might reach it: install nothing else you do not trust. Ports 2324 and 6053 are open only while the app is installed. Its page on 2324 asks for a login once the app's remote admin password is set (seen on 2026.10.45): set one. Beyond that its pages are the app's own, and this project has not reviewed them.
 
 Put the Echo on a network without internet as a second layer.
 

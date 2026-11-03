@@ -246,6 +246,9 @@ const HELP = {
   bluetooth_announcement_language: { help: 'The language of those sentences. Home Assistant does not tell the Echo which language your voice assistant speaks, so pick the one that matches its voice.' },
   sendspin_unpaired: { help: 'Lets any Music Assistant server on the network play here without pairing. Off: only a server given this Echo\'s "Sendspin pairing token" (a diagnostic entity in Home Assistant) may play.' },
   https_verify: { help: 'Whether the Echo checks the certificate of a Home Assistant that serves HTTPS itself. Home Assistant then gives the Echo https:// addresses for its spoken replies and announcements, usually its external URL. On (the default): the Echo plays them only from a server whose certificate a known authority signed for that very name, as a browser would. A self-signed certificate, or one that does not name the address Home Assistant gives out, is refused: replies stay silent and the log says why. Off: any certificate is taken, so someone on your network could pass the Echo audio of their own instead of Home Assistant\'s. Plain http:// addresses are not affected.' },
+  kiosk_internet: { help: 'Kiosk Satellite may reach the internet while this is on: for its own updates and for web pages it shows (iframes, dashboards). Only that app gets out: the Echo\'s own voice satellite stays on your network except for what it needs, and Amazon\'s software stays cut off. Off: it reaches your network only, so it shows Home Assistant but cannot update itself or load outside pages. On by default. Takes effect within seconds.' },
+  kiosk_mic: { help: 'Lets the Kiosk Satellite app use the microphone, for an app plugin that talks, such as a doorbell\'s two-way talk. The Echo\'s own voice satellite keeps listening for the wake word and answers during such a call. In the plugin, pick "Voice communication": that source has its own processing with echo cancellation. "Automatic" picks "Camcorder" first, and that and "Voice recognition" open but give the plugin silence. Off by default. Turning it off closes the app; the Echo opens it again by itself, within half a minute. This switch sets Android\'s permission. It is no wall against the app itself: the update helper gives it the power of an adb shell, so install only an app you trust.' },
+  kiosk_camera: { help: 'Lets the Kiosk Satellite app use the camera: to scan a QR code such as the Home Assistant token in its setup, or for a dashboard that shows the camera. Off by default, and while it is off the app\'s scanner cannot work. The token can also be pasted from a PC at this Echo\'s address on port 2324. Turning it off closes the app; the Echo opens it again by itself, within half a minute. As with the microphone, this sets Android\'s permission and is no wall against the app itself.' },
   online_updates: { help: 'Where new versions come from. Release: tested releases only. Beta: every new build, plus releases. Off: nothing is fetched. The Echo downloads them itself from the project\'s releases on GitHub, not through this browser or Home Assistant, so it needs internet access to github.com: an Echo on a network kept off the internet cannot use this, and switching it on first checks that GitHub answers. The Echo\'s "Firmware" entity in Home Assistant then shows what is new and installs it; every update is signature-checked, and the Echo falls back by itself if a new version does not stay up.',
     status: () => updCheck.busy ? h('div', { class: 'callout info' }, icon('net'), h('p', {}, 'Checking that this Echo can reach GitHub…'))
       : updCheck.why ? h('div', { class: 'callout bad big' }, icon('warn'), h('div', { class: 'grow' },
@@ -415,6 +418,9 @@ const SUB = {
   bluetooth_announcement_language: 'The language of those sentences',
   sendspin_unpaired: 'Any Music Assistant server may play here',
   https_verify: 'Checks the certificate of an HTTPS Home Assistant',
+  kiosk_internet: 'Kiosk Satellite may reach the internet',
+  kiosk_mic: 'Kiosk Satellite may use the microphone',
+  kiosk_camera: 'Kiosk Satellite may use the camera, also to scan a QR code',
   online_updates: 'Where new versions come from',
   arbitration: 'Only the Echo that heard you best answers',
   wake_word_adaptation: 'Learns how the wake word sounds in your home',
@@ -1389,7 +1395,7 @@ function buildVolumes(el) {
 }
 
 function render() {
-  const sig = state.settings.map((s) => s.name).join() + '|' + !!state.arbitration, fresh = sig !== built;
+  const sig = state.settings.map((s) => s.name).join() + '|' + !!state.arbitration + '|' + !!state.kiosk_app, fresh = sig !== built;
   if (fresh) { built = sig; build(); }
   for (const s of state.settings) { const c = controls.get(s.name); if (c) c.update(s); }
   for (const q of quick) { const s = state.settings.find((x) => x.name === q.name); if (s) q.update(s); }
@@ -3067,7 +3073,8 @@ function buildSystem(el, list) {
   clientsBox = h('div');
   const named = (id, row) => { row.id = id; return row; };
   el.append(flow([
-    titled('This Echo', nameRow(), state.wifi !== undefined ? named('wifi', wifiRow()) : null, list.map(settingRow)),
+    titled('This Echo', nameRow(), state.wifi !== undefined ? named('wifi', wifiRow()) : null,
+      list.filter((s) => !s.name.startsWith('kiosk_') || state.kiosk_app).map(settingRow)),
     titled('When something is wrong', named('log', logRow()),
       named('debug', infoRow('Debug access', 'A root shell over Wi-Fi for 30 minutes', act('Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.'), adbBox)),
       named('restart', infoRow('Restart', 'Back in about a minute, nothing is forgotten', HELP.restart.help, h('button', { onclick: restartEcho }, 'Restart…'))),

@@ -120,3 +120,35 @@ debugfs -R "rdump /system firmware/athena/rootfs" firmware/athena/images/system.
 rm firmware/athena/rootfs/system/vendor; mkdir firmware/athena/rootfs/system/vendor     # a link to /vendor
 debugfs -R "rdump / firmware/athena/rootfs/system/vendor" firmware/athena/images/vendor.img
 ```
+
+## Kiosk Satellite (optional)
+
+Shows a Home Assistant dashboard on the screen; hassmic stays the voice satellite. The guided setup offers it. On an Echo
+that is already installed:
+
+```sh
+scripts/kiosk-install.sh             # over USB
+scripts/kiosk-install.sh <echo-ip>   # over Wi-Fi
+scripts/kiosk-install.sh --uninstall [<echo-ip>]   # takes it off again
+```
+
+That fetches the newest release and Simple Keyboard, and the Echo opens the app by itself. Do its setup from your PC at
+`http://<echo-ip>:2324`, where you can paste the Home Assistant token: scanning a QR code on the Echo needs "Kiosk Satellite
+camera" on the settings page (System). Set its remote admin password: that page is open to your network. Leave the app's voice assistant off, and do not make it the home app.
+
+By hand: `kiosk-satellite-<version>.armeabi-v7a.apk` from its [releases](https://github.com/jxlarrea/kiosk-satellite/releases),
+`adb install`. What the app is allowed, and what it costs: [docs/GUIDE.md](../../docs/GUIDE.md#kiosk-satellite-on-the-screen).
+
+**Tested on a real Echo (2026-11-01, PS75751.7806N):** `kiosk-install.sh` over both USB and Wi-Fi; `kiosk_tick`
+opening the app, granting permissions and starting the update helper on first boot; camera and microphone off by
+default. `kiosk_camera` and `kiosk_mic` only restart the app's process when turned *off* (Android kills an app whose
+already-granted dangerous permission is revoked; granting one does not need a restart — `main.sh` already says so at
+the `kiosk_perm` definition). `kiosk_internet` restarts nothing either way: it is a firewall rule, not a permission.
+Kiosk Satellite wins the screen-timeout race against hassmic's `screen_off_timeout`: it holds its own
+`SCREEN_BRIGHT_WAKE_LOCK` (`FLAG_KEEP_SCREEN_ON`) while its activity is foregrounded, so hassmic's 300 s setting never
+gets a chance to fire.
+
+Uninstalling it is not a plain `adb uninstall`: Kiosk Satellite is an Android device admin, which Android refuses to
+uninstall. `scripts/kiosk-install.sh --uninstall` takes the admin off first;
+[docs/kiosk-satellite.md](../../docs/kiosk-satellite.md#uninstalling) has how, and the way by hand used on this Echo
+before the script existed. Once the app was gone, ports 2324 and 6053 closed within about 3 seconds.

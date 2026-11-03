@@ -218,7 +218,7 @@ host: build/hassmic-host $(OUT)/hassmic-qemu build/otatool-host
 UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/third_party/monocypher.c
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
-	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map setup_wipe
+	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map setup_wipe kiosk
 unit: $(addprefix unit-,$(UNIT_TESTS))
 unit-hash:
 	@mkdir -p build
@@ -282,6 +282,8 @@ unit-sbc:
 	if command -v sbcenc >/dev/null; then tests/unit/sbc_ref.sh; else echo "sbc: sbcenc/sbcdec (package sbc) missing, skipped"; fi
 unit-web_crypto:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_crypto_test.py; elif [ -n "$$CI" ]; then echo "web crypto: node missing"; exit 1; else echo "web crypto: node missing, skipped"; fi
+unit-kiosk:
+	.venv/bin/python tests/unit/kiosk_test.py
 unit-web_soundpack:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_soundpack_test.py; else echo "web sound pack: node missing, skipped"; fi
 

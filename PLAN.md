@@ -2951,6 +2951,52 @@ Run in this order. Each step says what it proves.
       (layer 3 here; 4 on the Dots, their set byte-identical).  No speaker: no `speaker_gain`, the Dot 2's volume curve.
       Tried on the device (2026-10-29), all as expected: unlock, root, install, audio level, buttons, the LED, DHA,
       Bluetooth, the wake lock.  kamakiri-cupcake v1.0.0 pinned (its lk and tee are 8338's).
+- [~] Kiosk Satellite next to hassmic on the screen models (crown, athena; 2026-10-14, `docs/kiosk-satellite.md`).  The app
+      (me.jxl.kiosk_satellite, the user's choice) shows dashboards; hassmic stays the voice satellite.  `main.sh`:
+      `kiosk_tick` opens the app whenever hassmic's home shows and keeps its update helper running as the shell user (never root),
+      `kiosk_grants` gives it the permissions it would ask a person for (microphone and camera by their settings).  `lockdown.sh`: setting
+      `kiosk_internet` (default on) lets that uid out to the internet with one rule, INPUT TCP 2324 (its web page) and 6053
+      (its ESPHome API) from private addresses only.  `install_screen_apps` in the guided setup offers Simple Keyboard (the
+      image has no input method).  Lux readings agree with the app's within ~1 lx in dim light.
+- [x] Kiosk Satellite microphone for a plugin (2026-10-26, athena, Show 8 2nd gen, Android 9; user's doorbell plugin
+      `reolink-doorbell` 1.1.1 inside KS 2026.10.40, a Reolink doorbell on the LAN, talk over Baichuan/ONVIF, no Home
+      Assistant).  Question: can the app record while hassmic holds the mic?  `dumpsys audio` (recording activity)
+      watched through three calls: hassmic uid 1000, session 41, VOICE_RECOGNITION, started 09:19:47, no stop or restart
+      in the whole run; the app (uid 10183) opened VOICE_COMMUNICATION (32.9 s), VOICE_RECOGNITION (19.1 s) and
+      CAMCORDER (17.7 s) one after the other.  boot.log: no "capture delivers nothing, reopening", the wake word fired
+      during the calls (score 2206 from the front end, level -49 dBFS over noise -73) and answered.  The user: only
+      VOICE_COMMUNICATION reached the doorbell, without echo; the other two gave nothing and echoed; sound at the
+      doorbell poor (cause unmeasured: G.711 talk channel, the doorbell's speaker, or the Voice pipeline's level).
+      The plugin's default "Automatic" tries CAMCORDER first and keeps what opens, so it fails here.  Done: setting
+      `kiosk_mic` (settings.c, off by default, page only, not exported); main.sh `kiosk_perm`/`kiosk_perm_sync`
+      grant or revoke RECORD_AUDIO from state/config (revoking ends the app).  Not done: the mechanism behind the
+      silent sources; the same on crown and checkers (Android 7.1.2, where audio_android.c's header expects a newer
+      recorder to take the input from an older one); the Voice pipeline's level and noise (a recording from
+      VOICE_COMMUNICATION next to hassmic's).
+- [x] Kiosk Satellite review fixes (2026-11-01, PR #76): `app/AmazonWebView` stays on checkers and cronos (the only provider;
+      checkers had none); `kiosk_tick` replaces once-per-boot: install, reinstall and an ended app handled within 10 s
+      (`mResumedActivity` is hassmic-home), one open a minute; `kiosk_camera` (off); `board.kiosk` instead of the band for the
+      settings; the page shows the rows once root's `kiosk-app` exists; `tests/unit/kiosk_test.py`.  `install_screen_apps` in setup and `scripts/kiosk-install.sh`: newest release, sha256 from GitHub, signer pinned on the PC (`apkcert.py`).
+- [~] Kiosk Satellite uninstall (2026-11-03, PR #76): `kiosk_grants` makes it a device admin, so `pm uninstall` fails with
+      `DELETE_FAILED_DEVICE_POLICY_MANAGER`, and `dpm remove-active-admin` (`forceRemoveActiveAdmin`) refuses non-testOnly
+      admins, root included; the way found on athena (2026-11-01) was editing `device_policies.xml` and a reboot.
+      `scripts/kiosk-install.sh --uninstall` (`kiosk_remove`): `pm disable` of each admin receiver dumpsys lists, wait
+      until dumpsys drops it (15 s, else enabled again), `pm uninstall`.  Why that works, from checkers' and crown's
+      `services.jar` (androguard; cronos' dex is checkers'): `DevicePolicyManagerService$4.onReceive` hands
+      `PACKAGE_CHANGED` to `handlePackagesChanged`, which drops an admin whose `getReceiverInfo(.., 0xC0000)` is null
+      (direct boot flags only, so a disabled receiver does not resolve) and saves; `findAdmin` asks with 0xC8080
+      (`MATCH_DISABLED_UNTIL_USED_COMPONENTS`, not disabled), so `set-active-admin` throws "Unknown admin" meanwhile.
+      Amazon added `VendorDevicePolicyManagerCallback.callIsDeactivationBlocked` to `removeActiveAdmin`, not to that path.
+      athena's services are compact dex (`cdex001` in the vdex), not read.  `kiosk_tick` now ends `ks-update-helper-*`
+      when the app goes (`kiosk_helper_end`, by `/proc/*/cmdline`: toybox pkill on Android 7 has no -f).
+      `tests/unit/kiosk_test.py` with a stand-in adb.  Run on the user's Show 5 (checkers, 7.1.2, KS 2026.10.45,
+      2026-11-03, over adb-wifi.sh): admin gone at the first dumpsys after `pm disable`, `pm uninstall` Success, 5.2 s;
+      package, data, doze entry, 2324/6053 and the uid rule gone.  The helper `ks-update-helper-10002` (uid 2000)
+      survived on that Echo's older main.sh; the branch's `kiosk_helper_end`, pushed and run there, ended it.  Its
+      `/data/local/tmp/ks-update-helper-<uid>` folder and log (empty) stayed: removed by `kiosk_helper_end` now.
+      Put back: same APK by `pm install -r`, uid 10154 (was 10002), data restored (tar, chown, chcon to
+      `app_data_file:s0:c512,c768`) with hassmic stopped; dashboard back, logged in, 48 of 49 prefs keys the same
+      (`boot_pending_since` cleared by the app), grants, admin, uid rule and helper back within 42 s.  Open: athena.
 - [~] WPA2/WPA3 mixed Wi-Fi (issue #90, 2026-11-01; reported and tried on an Echo 2 by its reporter; this form on the PC,
       and on a Dot 2 with its writes stubbed).  wifisvc's `libacehal_network_all.so` (biscuit, radar, donut) rewrites entries to `WPA-PSK
       WPA-PSK-SHA256` at each start; on an AP with `[WPA2-PSK+SAE+PSK-SHA256-CCMP]` radar's driver refuses that AKM

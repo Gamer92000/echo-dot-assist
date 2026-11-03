@@ -435,3 +435,7 @@ setup; what was checked on the PC only says so.
   the kernel module", Home Assistant's motion sensor went on and off.
 - [x] Found on the way: `alexa-off.sh`'s `wpa_cli … -i p2p0 p2p_group_remove` once never returned (no group up, the
   socket there), and the satellite's start waited with it: no hassmic after an update. `timeout 5` now.
+
+## Kiosk Satellite: what the Echo reads from dumpsys (2026-11-01)
+
+`main.sh` `kiosk_tick` goes by two lines, seen on this model (Android 7.1.2): in `dumpsys window policy` `      mCurrentRotation=1`, a number (`dumpsys window displays` does not have it); in `dumpsys activity activities` `    mResumedActivity: ActivityRecord{23301c3 u0 org.hassmic.home/android.app.Activity t1}`. The panel is 480x960 (`wm size`), so rotation 0 is portrait. Both dumps take 20-60 ms. `setsid` and a group `kill -9 -<pid>` work from mksh here.

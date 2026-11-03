@@ -694,9 +694,28 @@ install_satellite() {
     printf 'SAT_NAME=%q\nSAT_IP=%q\nSAT_TOKEN=%q\n' "$name" "$ip" "$tok" > $OUT/setup.env
 }
 
+# install_screen_apps: screen models only, after install_satellite.  Kiosk Satellite is the user's to want (scripts/lib/kiosk.sh
+# fetches it); its setup has text fields, so yes to it brings the keyboard along, and no still offers the keyboard alone.
+. scripts/lib/kiosk.sh
+install_screen_apps() {
+    info "Kiosk Satellite shows a Home Assistant dashboard on the screen; this Echo stays the voice assistant."
+    info "It is someone else's app with the power of an adb shell (docs/SECURITY.md), and it updates itself from the internet."
+    if ask "Install Kiosk Satellite?" n; then
+        wait_adb device || return 1
+        task "Installing Simple Keyboard" keyboard_get || warn "the keyboard was not installed; the app's setup can still be done from a PC"
+        if task "Installing Kiosk Satellite, newest release" kiosk_get; then echo 'SAT_KIOSK=1' >> $OUT/setup.env
+        else warn "Kiosk Satellite was not installed; later: scripts/kiosk-install.sh"; fi
+        return 0
+    fi
+    info "The Echo has no on-screen keyboard. Simple Keyboard (open source, no network access) adds one, for an app you type into."
+    ask "Install Simple Keyboard?" n || return 0
+    wait_adb device || return 1
+    task "Installing Simple Keyboard" keyboard_get || warn "the keyboard was not installed; install any keyboard app by hand"
+}
+
 # done_screen [line]...: the end: what to do in Home Assistant, then the model's own notes
 done_screen() {
-    local SAT_NAME="$MODEL_NAME" SAT_IP= SAT_TOKEN=
+    local SAT_NAME="$MODEL_NAME" SAT_IP= SAT_TOKEN= SAT_KIOSK=
     [ -f $OUT/setup.env ] && . $OUT/setup.env
     printf '  %s%s"%s" is running%s%s\n' "$GRN$B" "✓ " "$SAT_NAME" "${SAT_IP:+ at $SAT_IP}" "$N"
     tell "Add it in Home Assistant" \
@@ -712,6 +731,10 @@ done_screen() {
         "It finds the Echo by itself; to play on it, pair it with this token:" \
         "$B$SAT_TOKEN$N" \
         "${DIM}Or switch on \"Music Assistant without pairing\" on the settings page (any server on the LAN may then play).$N"
+    [ -n "$SAT_KIOSK" ] && tell "Kiosk Satellite" \
+        "The Echo opens it by itself. Do its setup from this PC, where you can paste the Home Assistant token:" \
+        "http://${SAT_IP:-<its IP>}:2324" \
+        "${DIM}Leave its voice assistant off. Scanning a QR code needs \"Kiosk Satellite camera\" on the settings page.$N"
     warn "Back up secrets/update.key: it signs your updates."
     local l; for l; do info "$l"; done
     printf '\n'

@@ -285,6 +285,7 @@ step_network() {
 
 step_install() {
     rootfs && magiskpolicy && adbd || return 1        # again: the steps before may have been skipped
-    install_satellite
+    install_satellite || return 1
+    install_screen_apps
 }
 
