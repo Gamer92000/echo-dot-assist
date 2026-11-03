@@ -2,7 +2,7 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
-## 2026-11-01
+## 2026-11-03
 
 - **Kiosk Satellite on the Echo Shows** ([guide](docs/GUIDE.md#kiosk-satellite-on-the-screen)): with the app on a
   Show 5 (1st or 2nd gen) or Show 8 (1st or 2nd gen), the Echo opens it by itself, opens it again when it ends, gives it
@@ -15,6 +15,66 @@ What changed for people using the Echo, newest first. Details and measurements a
 - **Kiosk Satellite microphone and camera** (same place; off by default). The microphone is for a plugin that talks, such
   as a doorbell: pick "Voice communication" in it, the wake word keeps working during the call. Turning either off closes
   the app for a moment.
+- **Setup on Windows: no "no release build of this commit" after a change to the docs.** Only changes to what goes
+  onto the Echo get a release build of their own, so with the newest commit changing only a README or the PC's
+  scripts, the setup refused to go on in Git Bash, where it cannot build anything. It now takes the newest release
+  before that commit, which holds the same files for the Echo (issue #106). So [docs/WINDOWS.md](docs/WINDOWS.md) no
+  longer has you check out the newest version by its tag: the project as cloned works, with the setup's newest fixes.
+- **Setup on Windows: prompts no longer stop taking keys.** In Git Bash, a question asked after the setup had talked
+  to the Echo (whether firebreak's drivers are installed, the Wi-Fi name and password) could ignore what you typed,
+  and Ctrl-C too, until the window was closed. The programs the setup runs no longer get the keyboard unless they
+  ask something themselves, the likely cause; should it happen again, please say so in issue #106.
+- **Setup on Windows: Ctrl-C no longer empties your Temp folder.** Stopping `scripts/setup.sh` (or
+  `scripts/artifacts.sh`) with Ctrl-C in Git Bash deleted everything in `C:\Users\<you>\AppData\Local\Temp` that no
+  running program held open: the scripts cleaned up a temporary folder under a name Windows already uses for that
+  folder. They now only delete what they made themselves (issue #103).
+- **Echo Show 5: the firewall no longer reloads every few seconds.** On a network whose router announces its own IPv6
+  address as DNS server, the log said "lockdown re-applied (ip6tables: hassmic_out is not as loaded)" every 5 seconds,
+  and "firewall rules wrong on two looks" with a restart of the firewall service every 20. The Echo stayed locked
+  down all along; only the check misread that DNS server's address (issue #100).
+- **"Download from Amazon" says when Amazon does not hand a model to this Echo.** Amazon refuses the whisper detection
+  model to the Echo Show 5, and the page called that a lost sign-in ("log in again"), which changes nothing. It now
+  says Amazon does not hand it out to this model, and the whisper warning and the download list point at Copy models:
+  bring it over from an Echo that has it. Should Amazon hand it out later, a download still works.
+
+## 2026-11-01
+
+- **Your own sounds in place of Alexa's.** A new "Sounds" card on the settings page (Voice) lists the Echo's sounds:
+  the wake sound, the action button, microphone off and on, the volume keys, Bluetooth connected and disconnected,
+  Identify, and Drop In's chimes and ringtones. Each can be replaced by any sound your browser plays, the same way as
+  the timer sound: the page converts it and offers to bring it to the loudness of Alexa's sound it replaces. "Play"
+  plays it once; deleting yours brings Alexa's back. The wake, button, volume, Drop In and call connected sounds may be
+  2 seconds long at most (they play over the start of your command or call), ringtones 30, the others 5. One longer
+  than 2 seconds stops when you speak to the Echo or another sound plays. Each Echo keeps its own; a factory reset deletes them.
+- **Sound packs.** The Voice page keeps sets of sounds on the Echo: save the sounds in use as a pack, switch between
+  packs, and save one as a `.soundpack` file to load on another Echo. A pack is a whole set: sounds it has none of go
+  back to Alexa's. Up to 16 packs and 30 MB on an Echo, and none are written when its storage is nearly full.
+- **Each sound has its own switch.** The Sounds card turns the wake sound, action button, microphone, volume and
+  Bluetooth sounds on and off one by one, with "All off" for all of them. The "Wake sound" switch in Home Assistant now
+  does what it says: it used to silence the button, microphone and volume sounds too, and now only the wake sound. Off
+  keeps the sound you chose. An Echo that had it off stays quiet after the update: those sounds start with their own
+  switches off.
+- **Setup on the Echo Show 5 (both generations) and Echo Show 8 1st gen wipes the old data with the old system.** An
+  Echo that had updated itself past the firmware the setup installs kept that newer build's app updates, and Android
+  ran them over the older system: on an Echo Show 8, "Spotlight has stopped" popped up every minute or so. Setup now
+  wipes cache and data before it writes the system partition, as it always did on the Dots, and checks that the apps
+  are gone. "Start from scratch" on a rooted Echo now wipes there too, also when the firmware is the right one already.
+  Already installed and seeing such messages? `scripts/setup.sh <model> --restart` and "Start from scratch" clears them,
+  along with the Echo's settings and its link to Home Assistant. Or by hand: `adb shell pm uninstall <package>` for each
+  Amazon package left in `/data/app` (keep `com.amazon.webview.chromium`); Android may restart once on that and comes
+  back by itself.
+- **The Echo says when Home Assistant is not there.** While Home Assistant restarts, or when the Echo has lost its link
+  to it, the wake word and the action button used to do nothing at all: no sound, no light, nothing in the log, so the
+  Echo looked deaf. Now the ring shows the short error animation, and the log says why (`no Home Assistant link`).
+  Not while the microphones are off, or muted from Home Assistant over Wyoming, and not before the Echo was set up.
+- **A fix for the Echo 2 going offline on WPA2/WPA3 mixed Wi-Fi** (issue #90). Amazon's Wi-Fi service changes the saved
+  network at every start to a form the Echo 2's Wi-Fi refuses on such routers: it joined at setup and was never online
+  again after a reboot. Now, after 30 s off the network, the Echo puts it back by itself. Tried on an Echo 2 in an
+  earlier form, by the owner who reported it.
+- **Setup on the Dots and the Echo 2 says so when a network is WPA3 only** (issue #90), instead of blaming the name or
+  the password: setup joins WPA2 networks.
+- **The Echo 2's setup uses amonet-radar v1.0.1** (issue #88), which knows the bootloaders of newer Fire OS builds.
+  Get the new zip from the XDA thread into `firmware/radar/`; a setup already under way asks for it at the unlock.
 
 ## 2026-10-30
 

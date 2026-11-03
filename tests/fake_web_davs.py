@@ -70,6 +70,7 @@ class Amazon:
         self.entered = False
         self.code_expires = 120
         self.revoked = set()                  # access tokens deregister answers 401 to
+        self.not_allowlisted = set()          # artifact keys refused to the device type (the Echo Show 5's whisper)
         self.registers, self.token_calls, self.davs, self.dereg = [], [], [], []
         self.tars = {
             "echo": tar_bytes([("/", b"5", b""), ("pryon.manifest", 0, b"manifest\n"),
@@ -163,7 +164,10 @@ class Handler(BaseHTTPRequestHandler):
                                  urllib.parse.parse_qs(self.path.split("?", 1)[1])["artifactFilter"][0])))))
             auth, want = AMZ.davs[-1]
             key = want["artifactKey"]
-            if key not in ("echo", "AED", "whisper-static", "alexa", "computer"):
+            if key in AMZ.not_allowlisted:   # what the real Amazon answered an Echo Show 5 (issue #100)
+                self.reply(403, {"message": f"Request not allowlisted for device Type A3S5BH2HU6VAYF for artifact type "
+                                            f"{want['artifactType']}, artifact key {key}."})
+            elif key not in ("echo", "AED", "whisper-static", "alexa", "computer"):
                 self.reply(404, {"message": "No suitable artifact found for request."})
             elif key == "echo" and want["filters"]["engineCompatibilityIdList"] != [1, 2, 3]:
                 self.reply(400, {"message": "wrong engine ids"})
@@ -262,7 +266,7 @@ def main():
         check(__import__("webclient").req(e.web, "GET", "/api/davs")[0] == 401, "the Amazon state: only signed")
         d = davs_of(b, seen)
         check(d == {"state": "none", "dha": True, "domain": "de", "code": "", "url": "https://www.amazon.de/code",
-                    "left_s": 0, "device": "", "busy": "", "progress": 0, "error": "", "done": ""},
+                    "left_s": 0, "device": "", "busy": "", "progress": 0, "error": "", "done": "", "refused": []},
               f"first: no login, but this Echo could attest itself: {d}")
 
         st, _, body = b.call("POST", "/api/davs/login", b"de")
@@ -416,6 +420,30 @@ def main():
         check(d and d["done"] == "wake:echo-de-DE" and not d["error"],
               f"and downloads like the others ({d and d['done']}, {d and d['error']!r})")
         check(os.path.exists(os.path.join(e3.state, "davs")), "its tokens on disk too")
+
+        # an artifact Amazon does not hand to this device type (the Echo Show 5's whisper model, issue #100): said so,
+        # not taken for a lost login, remembered over a restart, and forgotten once it arrives after all
+        AMZ.not_allowlisted.add("whisper-static")
+        st, _, _ = b3.call("POST", "/api/davs/fetch", b"whisper en-US")
+        d = wait_state("registered", b3, seen3)
+        check(st == 200 and d and "does not hand out whisper to this model" in d["error"] and "log in again" not in d["error"]
+              and d["refused"] == ["whisper"],
+              f"refused for the device type: said so, still signed in ({d and d['error']!r}, refused {d and d['refused']})")
+        warns = json.loads(b3.call("GET", "/api/state")[2])["warnings"]
+        whisper = [w for w in warns if w.startswith("Whisper detection")]
+        check(len(whisper) == 1 and "does not hand it out" in whisper[0] and "Copy models" in whisper[0]
+              and "Download from Amazon" not in whisper[0], f"the page's warning points at a copy only: {whisper}")
+        e3.stop(); e3.start()
+        b3 = Browser(e3.web, b3.sk)
+        d = davs_of(b3, seen3)
+        check(d and d["state"] == "registered" and d["refused"] == ["whisper"] and "refused whisper" in open(os.path.join(e3.state, "davs")).read(),
+              f"after a restart: still known as refused ({d and d['refused']})")
+        AMZ.not_allowlisted.clear()
+        b3.call("POST", "/api/davs/fetch", b"whisper en-US")
+        d = wait_state("registered", b3, seen3)
+        check(d and d["done"] == "whisper" and not d["error"] and d["refused"] == []
+              and "refused" not in open(os.path.join(e3.state, "davs")).read(),
+              f"handed out after all: downloaded, no longer refused ({d and d['done']}, {d and d['refused']})")
     finally:
         try: e3.stop()
         except Exception: pass

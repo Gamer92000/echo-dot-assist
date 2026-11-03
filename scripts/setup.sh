@@ -15,6 +15,12 @@
 # Echo closes adb over Wi-Fi at its first boot.
 # The written instructions are the same steps: devices/<codename>/README.md.
 cd "$(dirname "$0")/.."
+# Nothing the setup runs gets the terminal as its stdin: every prompt reads /dev/tty, and live() hands it to the tools
+# that ask.  Issue #106, Git Bash (mintty and Windows Terminal): the prompts after adb shell calls (the drivers, the
+# Wi-Fi name) got no keys and ignored Ctrl-C until the window was closed, the ones before worked.  Likely why, not
+# reproduced: adb shell reads the stdin it is given, and the adb server, started by whichever adb call comes first,
+# keeps the handles it inherited.
+exec < /dev/null
 . scripts/lib/device.sh
 . scripts/lib/setup.sh
 . scripts/lib/build.sh
@@ -23,7 +29,7 @@ cd "$(dirname "$0")/.."
 case $(pwd -P) in *[[:space:]]*) die "this folder's path has a space in it, which the build cannot handle: $(pwd -P)
   move it (with firmware/, secrets/ and build/: the progress is kept) to a path without spaces and run it from there";; esac
 
-DRY= RESTART= PRESET= FROM= ROOTED_NOTE=
+DRY= RESTART= PRESET= FROM= ROOTED_NOTE= SCRATCH=
 while [ $# -gt 0 ]; do
     a=$1; shift
     case $a in
@@ -41,7 +47,6 @@ done
 
 bye() {
     [ -n "$TASK_PID" ] && kill $TASK_PID 2>/dev/null
-    [ -n "$TMP" ] && rm -rf "$TMP"
     [ -n "$TTY" ] && printf '\e[?25h\e[?7h\r\e[K'
     printf '\n  %sStopped. Run scripts/setup.sh%s again to go on from here.%s\n' "$DIM" "${DEVICE:+ $DEVICE}" "$N"
     exit 130
@@ -142,13 +147,21 @@ fi
 # anything else needs the firmware step anyway.
 if [ ! -s $STATE ] && [ -z "$DRY" ] && [ -n "$ROOTED_SKIP" ] && adb_is device 2>/dev/null && [ "$(ashell id -u)" = 0 ]; then
     fwid=$(ashell getprop ro.build.display.id)
+    # athena's setup has no firmware step: its zip patches the system in place, and nothing there wipes
+    if declare -F step_flash step_system | grep -q .; then
+        keep="skip the unlock, firmware and root steps" scratch="Start from scratch: unlock, wipe and reflash it"
+        wrongfw="the firmware step reflashes and wipes it"
+    else
+        keep="skip the unlock and root steps" scratch="Go through every step: a rooted Echo passes them, nothing is wiped"
+        wrongfw="no step here changes its firmware, and hassmic needs $FIRMWARE_ID"
+    fi
     if [ "$fwid" = "$FIRMWARE_ID" ]; then
         header 1 $n "${STEP_LIST[@]}"
         ok "The $MODEL_NAME on USB is rooted already and runs $FIRMWARE_ID."
-        menu a "Keep it as it is: skip the unlock, firmware and root steps" "Start from scratch: unlock, wipe and reflash it"
-        [ "$a" = 0 ] && mark_done $ROOTED_SKIP rooted
+        menu a "Keep it as it is: $keep" "$scratch"
+        if [ "$a" = 0 ]; then mark_done $ROOTED_SKIP rooted; else SCRATCH=1; fi
     else
-        ROOTED_NOTE="The $MODEL_NAME on USB is rooted, but runs '$fwid', not $FIRMWARE_ID: the firmware step reflashes it."
+        ROOTED_NOTE="The $MODEL_NAME on USB is rooted, but runs '$fwid', not $FIRMWARE_ID: $wrongfw."
     fi
 fi
 
@@ -164,6 +177,8 @@ if [ ! -s $STATE ] && [ -z "$DRY" ]; then
     printf '\n'
     prompt a "Type yes to start:"
     [ "$a" = yes ] || { info "Nothing done."; exit 0; }
+    # only now: a progress file with anything in it skips the warning above
+    [ -z "$SCRATCH" ] || mark_done wipe
 fi
 
 # no udev rules on Windows: USB access there is a matter of the driver adb uses

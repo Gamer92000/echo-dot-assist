@@ -12,6 +12,7 @@
 #include "ring.h"
 #include "sendspin.h"
 #include "sound.h"
+#include "sounds.h"
 #include "spkgain.h"
 #include "update.h"
 #include "wifimotion.h"
@@ -64,7 +65,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET, NSET };
@@ -83,6 +84,14 @@ static const struct setting table[NSET] = {
     [MIC_LEVEL]   = { "mic_level", "Mic level", "Voice", "dBFS", S_INT, MICGAIN_LEVEL_MIN, MICGAIN_LEVEL_MAX, 1, 0 },
     [DENOISE]     = { "noise_reduction", "Noise reduction", "Voice", NULL, S_CHOICE, 0, 0, 1, 0 },
     [WAKE_SOUND]  = { "wake_sound", "Wake sound", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* the page's Sounds card, a switch per sound beside Home Assistant's "Wake sound" (main.c sound_request); until
+     * these came that switch stood for all of them, as settings_load still reads it once */
+    [SOUND_TOUCH]    = { "sound_touch", "Action button sound", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    [SOUND_MICS_OFF] = { "sound_mics_off", "Microphone off sound", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    [SOUND_MICS_ON]  = { "sound_mics_on", "Microphone on sound", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    [SOUND_VOLUME]   = { "sound_volume", "Volume keys sound", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    [SOUND_BT_ON]    = { "sound_bluetooth_on", "Bluetooth connected sound", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    [SOUND_BT_OFF]   = { "sound_bluetooth_off", "Bluetooth disconnected sound", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     /* earsup.c; experimental: a card of the page's Features, but no feature: it has no entities, and switching a
      * feature makes Home Assistant reconnect */
     [WAKE_SOUND_REMOVAL] = { "wake_sound_removal", "Wake sound removal (experimental)", "Features", NULL, S_BOOL, 0, 1, 1, 0 },
@@ -227,6 +236,18 @@ int settings_choices(const struct setting *s, const char *const **names)
     }
 }
 
+static int switched_sound(int i)
+{
+    switch (i) {
+    case SOUND_TOUCH: return SND_TOUCH;
+    case SOUND_MICS_OFF: return SND_MICS_OFF;
+    case SOUND_MICS_ON: return SND_MICS_ON;
+    case SOUND_VOLUME: return SND_VOLUME;
+    case SOUND_BT_ON: return SND_BT_ON;
+    default: return SND_BT_OFF;
+    }
+}
+
 int settings_get(const struct setting *s)
 {
     switch (s - table) {
@@ -236,6 +257,8 @@ int settings_get(const struct setting *s)
     case MIC_LEVEL: return mic_level;
     case DENOISE: return core_mic_denoise(-1);
     case WAKE_SOUND: return core_wake_sound(-1);
+    case SOUND_TOUCH: case SOUND_MICS_OFF: case SOUND_MICS_ON: case SOUND_VOLUME: case SOUND_BT_ON: case SOUND_BT_OFF:
+        return core_sound_on(switched_sound(s - table), -1);
     case WAKE_SOUND_REMOVAL: return core_wake_sound_removal(-1);
     case MUTE: return core_soft_mute(-1);
     case DND: return core_dnd(-1);
@@ -297,6 +320,8 @@ static void put(enum id i, int v)
     case MIC_LEVEL: mic_level = v; core_mic_level(v); break;
     case DENOISE: core_mic_denoise(v); break;
     case WAKE_SOUND: core_wake_sound(v); break;
+    case SOUND_TOUCH: case SOUND_MICS_OFF: case SOUND_MICS_ON: case SOUND_VOLUME: case SOUND_BT_ON: case SOUND_BT_OFF:
+        core_sound_on(switched_sound(i), v); break;
     case WAKE_SOUND_REMOVAL: core_wake_sound_removal(v); break;
     case MUTE: core_soft_mute(v); break;
     case DND: core_dnd(v); break;
@@ -421,6 +446,16 @@ static int load_old(void)
     return 1;
 }
 
+/* "Wake sound" off used to silence the button, microphone and volume sounds too (never Bluetooth's).  An Echo that had
+ * it off stays as quiet: called while its config has none of the sounds' own switches yet */
+static void wake_sound_was_all(void)
+{
+    if (core_wake_sound(-1)) return;
+    static const int s[] = { SND_TOUCH, SND_MICS_OFF, SND_MICS_ON, SND_VOLUME };
+    for (size_t i = 0; i < sizeof s / sizeof *s; i++) core_sound_on(s[i], 0);
+    fprintf(stderr, "settings: \"Wake sound\" was off: the button, microphone and volume sounds now off on their own switches\n");
+}
+
 /* the next line of f into buf, as fgets; one longer than buf is skipped whole (its tail, read as a line of its own,
  * could look like a setting).  NULL at the end */
 static char *line_of(char *buf, int n, FILE *f)
@@ -433,6 +468,8 @@ static char *line_of(char *buf, int n, FILE *f)
     return NULL;
 }
 
+static int peek_in(const char *rel, const char *name, const struct setting *s, char *out, size_t cap);
+
 void settings_load(void)
 {
     static int loaded; char p[300], line[160]; FILE *f; int led_auto = 1, led_level = -1;
@@ -442,7 +479,7 @@ void settings_load(void)
     if (!(f = fopen(p, "r"))) {
         /* an Echo from before features: what it showed in Home Assistant stays (the speaker if one played) */
         bt_speaker = ble_present() && a2dp_out_enabled();
-        if (load_old()) { settings_save(); fprintf(stderr, "settings: moved to %s\n", p); }
+        if (load_old()) { wake_sound_was_all(); settings_save(); fprintf(stderr, "settings: moved to %s\n", p); }
         core_mic_level(mic_level);
         return;
     }
@@ -461,6 +498,8 @@ void settings_load(void)
     fclose(f);
     if (!led_auto) { if (led_level >= 0) core_led_brightness(led_level); else core_led_auto(0); }
     core_mic_level(mic_level);
+    char own[8];
+    if (peek_in("config", table[SOUND_TOUCH].name, NULL, own, sizeof own) && !core_wake_sound(-1)) { wake_sound_was_all(); settings_save(); }
 }
 
 /* A preset (an export from another Echo's settings page) that scripts/setup.sh left in state/preset: applied once, at

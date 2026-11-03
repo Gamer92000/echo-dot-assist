@@ -12,7 +12,7 @@ through the reverse-engineered C API of `libmixerAPI.so` and speaks the ESPHome 
 
 Docs: `README.md` (short user-facing overview with figures; every feature in detail in `docs/GUIDE.md`, security model in
 `docs/SECURITY.md`; `docs/WINDOWS.md` the Echo Dot 2 from Windows for beginners; figures are CeTZ sources in `docs/img/src/`, rendered light+dark by `tools/figures.sh`; install instructions per model in `devices/<codename>/README.md`, guided by
-`scripts/setup.sh`), `DEVELOPMENT.md` (architecture, layout, tests, contributing), `PLAN.md` (phases, open issues, every measurement), `CHANGELOG.md`
+`scripts/setup.sh`; every Echo on Fire OS or Vega OS and its status in `devices/MODELS.md`), `DEVELOPMENT.md` (architecture, layout, tests, contributing), `PLAN.md` (phases, open issues, every measurement), `CHANGELOG.md`
 (user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-vad.md`, `re-a2dp-source.md`, `re-davs-login.md`, `wake-word-end.md` (where the request starts after the wake word: measurements on the speech
 corpus, tables generated into `wake-word-end/`), `re-checkers.md`, `re-athena.md`,
 `sendspin-digest.md`, `kiosk-satellite.md`: Kiosk Satellite next to hassmic on the Shows).
@@ -93,6 +93,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ha_timer_sound.py # the timer's sound (issue #63): stock's tone by default, looped and cut by
                                              # stops and pipelines, the beep at its level, uploads (the page's WAV only),
                                              # Play, delete, restart, the beep without the tone
+.venv/bin/python tests/fake_web_sounds.py      # sounds of one's own in place of stock's (Sounds card): the list, stock's
+                                             # as a WAV, uploads within each sound's length, Play, the wake word, restart
 .venv/bin/python tests/fake_ha_ring.py        # light ring: the animation set from stand-in stock files, HA's light,
                                              # the Echo's own patterns first, the listening ring turned by the beam
 .venv/bin/python tests/fake_improv.py         # setup from a phone: Improv over BLE against a fake controller on a pty
@@ -189,7 +191,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   -16.5 LUFS), or the page's upload `state/timer_sound.wav`, which the browser converts to 48 kHz mono WAV and offers
   to bring to that loudness (`web/loudness.js`, BS.1770; `tests/unit/web_loudness_test.py`): the Echo only checks the
   format; looped by `play_earcon_while`, cut by any stop, a pipeline or our sounds; issue #63), mute (hardware latch
-  that software can set but never clear, plus a soft mute from HA), volume, LED ring, earcons, wake word threshold hints.
+  that software can set but never clear, plus a soft mute from HA), volume, LED ring, earcons (one's own in place of
+  stock's: `state/sounds/<id>.wav`, sounds.c `sound_own_*`, the page's Sounds card), wake word threshold hints.
   Separate volumes (setting `separate_volumes`, issue #32):
   music (`volume`), replies, sounds, timers, Drop In calls at volumes of their own or each following the music's +- an offset in
   points (`<kind>_linked`/`_offset`; linked, its HA number is unlisted); MainVolume and TTSVolume both at the loudest
@@ -246,6 +249,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (host build, `HASSMIC_FAKE_SOUND`; `HASSMIC_FAKE_SOUND_MODEL` names the model, `broken` fails to load). `sound_model()`
   says which model it takes, for the page; a start that fails switches the setting off via `settings_set` and sets
   `core_sound_failed()` (page warning). Picked in the Makefile from the wake word backend.
+- **Sound packs** (`soundpack.c`, `soundpack.h`): sets of the Sounds card's sounds in `state/sound-packs/<id>/` (`name`,
+  `<sound>.wav`), `/api/sound-pack`, page `packsCard`, a `.soundpack` file = a tar of `pack.json` + WAVs (`web/tar.js`).
+  A pack is a whole set; 16 packs, 30 MB, 32 MB left on the partition (`HASSMIC_SOUNDPACK_MAX`, `_FREE_MIN` for tests).
 - **Whisper detection (`whisper.h`)**: `whisper_pryon.c` (libpryon `WhisperApi_*`, one detector per request fed from the
   start of streaming, end of utterance on HA's VAD end (`core_mic_off`), result into the ESPHome binary sensor "Last
   request whispered" before STT ends, for the agent's prompt template; `docs/re-whisper.md`) or `whisper_none.c` (host
@@ -484,8 +490,10 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   needs no compiler for it; `tests/otatool_test.sh` holds the two byte for byte to each other, and CI verifies every
   bundle with both. `scripts/bundle.sh` packs (ota-push.sh and CI).
 - **Prebuilt** (`scripts/lib/build.sh`, `build_binaries`): deploy/install-system/ota-push/setup take the device binaries
-  from the release CI published of HEAD (tag `v<commit time>[-beta]` pointing at HEAD, clean tree; bundle verified
-  against `keys/release.pub`, marked `build/<codename>/PREBUILT`) where there is no NDK, or with `PREBUILT=1`;
+  from the release CI published of HEAD (tag `v<commit time>[-beta]` pointing at HEAD, clean tree; else the newest
+  release tag before HEAD when nothing since touches a bundle, `_bundle_free`: CI publishes no beta of such commits,
+  issue #106; bundle verified against `keys/release.pub`, marked `build/<codename>/PREBUILT`) where there is no NDK,
+  or with `PREBUILT=1`;
   `PREBUILT=0` always builds. `scripts/probe.sh` compares with `devices/<codename>/probe.md5`, not the unpacked firmware.
 - **Online updates** (`update.c`): "Online updates" on the settings page (off default / beta / release, `state/config`) and an
   ESPHome update entity; checks GitHub's releases API, downloads `hassmic-<board.codename>.bundle` through the firmware's

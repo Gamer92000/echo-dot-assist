@@ -11,7 +11,7 @@ from wyoming.client import AsyncTcpClient
 from wyoming.info import Describe, Info
 from wyoming.ping import Ping, Pong
 from wyoming.pipeline import PipelineStage, RunPipeline
-from wyoming.satellite import RunSatellite
+from wyoming.satellite import PauseSatellite, RunSatellite
 from wyoming.snd import Played
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -30,12 +30,15 @@ async def expect(client, pred, what, timeout=5):
 
 async def main():
     play = tempfile.mktemp(suffix=".raw")
-    env = dict(os.environ, HASSMIC_PLAY=play)
+    leds = tempfile.mktemp(suffix=".ledctrl")
+    errs = lambda: open(leds).read().count("anim_start_error_short") if os.path.exists(leds) else 0
+    env = dict(os.environ, HASSMIC_PLAY=play, HASSMIC_FAKE_LED=leds)
     qemu = "--qemu" in sys.argv          # ARM build + stock Pryon model under qemu-arm; wake word comes from the audio file
     if qemu:
         env["HASSMIC_CAP"] = f"{ROOT}/testdata/alexa_espeak.raw"
         cmd = [f"{ROOT}/tools/qrun.sh", "-t", "120", f"{ROOT}/build/{os.environ.get('DEVICE', 'donut')}/hassmic-qemu", "-P", "wyoming"]
     else:
+        env["HASSMIC_STATE"] = tempfile.mkdtemp()                  # state/adopted: without it the Echo stays in its setup
         cmd = [f"{ROOT}/build/hassmic-host", "-P", "wyoming"]
     proc = subprocess.Popen(cmd + ["-p", str(PORT), "-n", "Test Dot"], env=env, start_new_session=True)
     try:
@@ -97,12 +100,37 @@ async def main():
                 await expect(client, AudioChunk.is_type, "mic audio after barge-in", timeout=2)
                 print(f"ok   barge-in: playback cut and new pipeline after {asyncio.get_running_loop().time() - t0:.2f}s")
 
+                # Home Assistant's mute switch: pause-satellite, the link stays open.  The wake word starts nothing and
+                # is no error; run-satellite again and it works
+                await client.write_event(PauseSatellite().event())
+                await asyncio.sleep(0.2)
+                n0 = errs(); proc.send_signal(signal.SIGUSR1); await asyncio.sleep(0.3)
+                assert errs() == n0, f"error ring while paused ({errs() - n0})"
+                print("ok   paused by Home Assistant: the wake word starts nothing, no error ring")
+                await client.write_event(RunSatellite().event())
+                await asyncio.sleep(0.2)
+                proc.send_signal(signal.SIGUSR1)
+                await expect(client, RunPipeline.is_type, "run-pipeline after run-satellite")
+                assert errs() == n0, f"error ring after run-satellite ({errs() - n0})"
+                print("ok   running again: a run, no error ring")
+
+        if not qemu:                                               # set up by now: linked and not told to run is an error
+            async with AsyncTcpClient("127.0.0.1", PORT) as client:
+                await asyncio.sleep(0.2)
+                n0 = errs(); proc.send_signal(signal.SIGUSR1)
+                for _ in range(100):
+                    if errs() > n0: break
+                    await asyncio.sleep(0.02)
+                assert errs() == n0 + 1, f"linked but not running: {errs() - n0} error rings"
+                print("ok   linked but not running: the error ring")
+
         assert open(play, "rb").read().startswith(tone), "playback data mismatch"
         print("ok   TTS audio reached playback backend intact")
     finally:
         os.killpg(proc.pid, signal.SIGKILL); proc.wait()
-        if os.path.exists(play):
-            os.unlink(play)
+        for f in (play, leds):
+            if os.path.exists(f):
+                os.unlink(f)
 
 
 asyncio.run(main())

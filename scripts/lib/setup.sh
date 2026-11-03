@@ -83,6 +83,9 @@ live() {
     if [ -n "$DRY" ]; then printf '  %s· %s  $ %s%s\n' "$DIM" "$label" "$*" "$N"; return 0; fi
     printf '  %s┌ %s%s\n' "$CYN" "$label" "$N"
     ( "$@" ) < /dev/tty; r=$?          # a subshell: CMD may be in_dir, whose cd must not stick
+    # an adb server CMD started (firebreak runs adb) likely holds the terminal: the next adb call starts one without
+    # it (scripts/setup.sh's stdin, issue #106)
+    [ -n "$WINDOWS" ] && adb kill-server > /dev/null 2>&1
     if [ $r = 0 ]; then ok "$label"; else fail "$label"; fi
     return $r
 }
@@ -424,15 +427,15 @@ build_mode() {
     # whatever an earlier run left in setup.build, and also when this step fails and is skipped
     if [ -n "$WINDOWS" ]; then
         build_mode_set prebuilt
-        if t=$(prebuilt_tag); then ok "GitHub has a release build of this commit ($t)"; return 0; fi
+        if t=$(prebuilt_tag); then ok "GitHub has a release build $(prebuilt_of $t)"; return 0; fi
         fail "no release build of this commit on GitHub, and on Windows nothing can be built"
-        info "Use a commit that has one: git pull (CI publishes one a few minutes after a push), or git checkout the newest release tag (git tag -l 'v*')."
+        info "CI publishes one a few minutes after a push: then git checkout main && git pull. Or git checkout the newest release tag (git tag -l 'v*')."
         info "Changed files count too: git status has to show none."
         [ -n "$DRY" ]; return
     fi
     if [ -f $OUT/setup.build ]; then m=$(cat $OUT/setup.build)
     elif t=$(prebuilt_tag); then
-        ok "GitHub has a release build of this commit ($t)"
+        ok "GitHub has a release build $(prebuilt_of $t)"
         menu m "Use it (recommended): nothing to compile" "Build it here (Android NDK, 1 GB, and a compiler)"
         [ "$m" = 0 ] && m=prebuilt || m=source
     else
@@ -493,6 +496,45 @@ twrp_check() {
 # rooted_already: the user said at the start that the Echo on USB is unlocked and rooted already (setup.sh marks the
 # model's ROOTED_SKIP steps done and leaves "rooted" in the progress file): no unlock tool, no firmware to flash
 rooted_already() { [[ " $DONE_IDS " == *" rooted "* ]]; }
+
+# wipe_asked: the user chose "Start from scratch" on a rooted Echo (setup.sh leaves "wipe" in the progress file) and it
+# has not happened yet.  The Echo Shows' step_system has nothing to write when the system is the right one already, but
+# /data still holds what the Echo collected, so that promise is kept there; "wiped" stops a rerun wiping again.
+wipe_asked() { [[ " $DONE_IDS " == *" wipe "* && " $DONE_IDS " != *" wiped "* ]]; }
+
+# wipe_data: the Echo Shows' wipe in TWRP.  /data goes with the old system, as the Dots' step_flash wipes it: a newer
+# build's app updates stay in /data/app and outlive the downgrade, and PackageManager runs them over the older /system.
+# On an Echo Show 8 from build 0013222532996 (2026-11-01) 16 were left after the install, Spotlight's among them; with
+# its system copy off the partition (STOCK_APPS_OUT) and Amazon's account apps gone it crashed every minute or so, a
+# "Spotlight has stopped" on screen.  The Shows' TWRP has a screen, the Dots' none: answering its "Keep System Read
+# only?" restarts USB, so it is answered first, not during the wipe.  Once per run: a write that failed and is tried
+# again needs no second one.  Not by the progress file: a later run may find an Echo that booted its old system since.
+wipe_data() {
+    [ -z "$WIPED" ] || return 0
+    todo "On the Echo's screen, get to TWRP's main menu" \
+        "If it asks \"Keep System Read only?\", tap \"Keep Read Only\" and wait for the menu." \
+        "Do not swipe to allow modifications."
+    wait_adb recovery || return 1
+    task "Wiping cache and data" wipe_twrp || { fail "the wipe did not take: try this step again"; return 1; }
+    WIPED=1
+    mark_done wiped
+}
+# Whether the wipe worked is read from /data/app, since the bug it prevents shows only long after.  Not from adb's exit
+# status: what twrp exits with was never seen for a failed wipe, and a USB restart ends the adb shell while TWRP wipes
+# on, hence the 30 s of tries.  Each ends in a word: nothing back means adb is away, and an unmounted /data would pass
+# for an empty one.  Run through task, in a process of its own.
+wipe_twrp() {
+    local left i
+    adb shell 'twrp wipe cache && twrp wipe data' || echo "adb shell: exit $?"
+    for ((i = 0; i < 30; i++)); do
+        left=$(ashell "grep -q ' /data ' /proc/mounts || mount -t ext4 ${SYSTEM_DEV%/*}/userdata /data 2>/dev/null
+                       if grep -q ' /data ' /proc/mounts; then ls /data/app 2>/dev/null; echo end; else echo unmounted; fi")
+        [ "$left" = end ] && return 0
+        sleep 1
+    done
+    echo "after the wipe, /data/app holds: ${left:-(no answer from the Echo)}"
+    return 1
+}
 
 # kernel_tools: what Wi-Fi motion's kernel module is built with (make kernel-tools: the model's kernel sources and the
 # compiler Amazon used), so that the build has it as CI's does.  Without them `make` quietly leaves the module out, and

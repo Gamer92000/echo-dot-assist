@@ -71,6 +71,10 @@ static char busy_what[64], error_text[256], done_id[80];     /* lk */
 static int progress_pct;                                     /* lk */
 static char access_token[2048], refresh_token[2048];         /* lk: the account's device credentials */
 static long long access_until;                               /* lk: unix s */
+/* lk: artifact ids Amazon refuses to this device type, " id id " (the Echo Show 5 gets no whisper model: HTTP 403
+ * "Request not allowlisted for device Type A4ZP7ZC4PI6TO ..."), so the page stops offering what cannot arrive.  Kept
+ * with the tokens; a logout keeps it until the restart, since it is the model's and not the account's */
+static char refused[200] = " ";
 
 /* this Echo's own identity, read once */
 static char idme_serial[64], idme_type[24], idme_mac[32], idme_secret[32];
@@ -383,6 +387,7 @@ static void tokens_save(void)                                 /* lk held */
     if (statefile_open(&s, p, 0600)) { fprintf(stderr, "davs: cannot write %s.tmp\n", p); return; }   /* 0600 from the start: tokens */
     fprintf(s.f, "domain %s\nname %s\nmarketplace %s\nrefresh %s\naccess %s\nexpires %lld\n",
             domain, device_name, marketplace, refresh_token, access_token, access_until);
+    if (refused[1]) fprintf(s.f, "refused%.*s\n", (int)strlen(refused) - 1, refused);
     if (statefile_commit(&s)) fprintf(stderr, "davs: cannot write %s\n", p);
 }
 
@@ -401,6 +406,7 @@ static void tokens_load(void)
         else if (!strcmp(k, "refresh")) snprintf(refresh_token, sizeof refresh_token, "%.2047s", v);
         else if (!strcmp(k, "access")) snprintf(access_token, sizeof access_token, "%.2047s", v);
         else if (!strcmp(k, "expires")) access_until = atoll(v);
+        else if (!strcmp(k, "refused")) snprintf(refused, sizeof refused, " %.*s ", (int)sizeof refused - 3, v);
     }
     fclose(f);
     if (*refresh_token)
@@ -408,6 +414,26 @@ static void tokens_load(void)
         state = D_ON;
         fprintf(stderr, "davs: a registration is here (%s)\n", device_name[0] ? device_name : "unnamed");
     }
+}
+
+/* lk held: whether Amazon refused artifact ID here; set or clear that (true if it changed: then save) */
+static int refused_has(const char *id)
+{
+    char k[90];
+    snprintf(k, sizeof k, " %s ", id);
+    return strstr(refused, k) != NULL;
+}
+
+static int refused_set(const char *id, int on)
+{
+    char k[90], *p;
+    size_t kl = (size_t)snprintf(k, sizeof k, " %s ", id) - 1;   /* without its trailing blank: refused keeps one */
+    p = strstr(refused, k);
+    if (on == (p != NULL)) return 0;
+    if (!on) { memmove(p, p + kl, strlen(p + kl) + 1); return 1; }
+    if (strlen(refused) + kl >= sizeof refused) return 0;
+    strcat(refused, k + 1);
+    return 1;
 }
 
 static void tokens_clear(void)                                /* lk held */
@@ -915,6 +941,12 @@ static void fetch_run(const char *key, const char *locale)
         pthread_mutex_lock(&lk);
         state = D_ON;
         if (code == 404) say_err("Amazon has no %s", what);
+        else if (code == 403 && strstr(ans, "not allowlisted"))
+        {   /* the device type's refusal, not the login's: logging in again changes nothing (issue #100) */
+            say_err("Amazon does not hand out %s to this model of Echo (device type %s): copy it from another Echo "
+                    "that has it (Copy models)", what, idme_type);
+            if (refused_set(id, 1)) tokens_save();
+        }
         else if (code == 401 || code == 403) say_err("the registration is not taken any more: log in again");
         else say_err("Amazon answered HTTP %ld to the %s request", code, what);
         pthread_mutex_unlock(&lk);
@@ -961,6 +993,7 @@ static void fetch_run(const char *key, const char *locale)
     state = D_ON;
     progress_pct = 100;
     snprintf(done_id, sizeof done_id, "%s", id);
+    if (refused_set(id, 0)) tokens_save();                    /* Amazon hands it out after all */
     pthread_mutex_unlock(&lk);
     fprintf(stderr, "davs: %s (%s) arrived whole, waits to be installed\n", what, id);
 }
@@ -1119,9 +1152,26 @@ size_t davs_status_json(char *out, size_t cap)
     if (left < 0) left = 0;
     n = (size_t)snprintf(out, cap, "{\"state\":\"%s\",\"dha\":%s,\"domain\":\"%s\",\"code\":\"%s\","
             "\"url\":\"https://www.amazon.%s/code\",\"left_s\":%lld,\"device\":\"%s\",\"busy\":\"%s\","
-            "\"progress\":%d,\"error\":\"%s\",\"done\":\"%s\"}",
+            "\"progress\":%d,\"error\":\"%s\",\"done\":\"%s\",\"refused\":[",
             names[state], dha_ok ? "true" : "false", dom, state == D_WAITING ? pub_code : "", dom,
             left, dn, w, progress_pct, e, di);
+    for (const char *p = refused + 1, *q; n < cap && (q = strchr(p, ' ')); p = q + 1)
+    {
+        char id[90], ej[180];
+        snprintf(id, sizeof id, "%.*s", (int)(q - p), p);
+        jesc(ej, sizeof ej, id);
+        n += (size_t)snprintf(out + n, cap - n, "%s\"%s\"", p == refused + 1 ? "" : ",", ej);
+    }
+    if (n < cap) n += (size_t)snprintf(out + n, cap - n, "]}");
     pthread_mutex_unlock(&lk);
     return n < cap ? n : cap - 1;
+}
+
+int davs_refused(const char *id)
+{
+    int r;
+    pthread_mutex_lock(&lk);
+    r = refused_has(id);
+    pthread_mutex_unlock(&lk);
+    return r;
 }

@@ -1501,7 +1501,9 @@ Run in this order. Each step says what it proves.
       in a quiet room: -73 dBFS, -45 dBFS in the second of the wake sound (speaker and mics work, the canceller
       leaves that much).
       Not done on the biscuit: the button pressed with this build (latch 1, red ring, HA), a spoken wake word and
-      command, a phone on A2DP
+      command, a phone on A2DP. The last two reported working (issue #106, 2026-11-02, 2026.11.02.000053-beta set up
+      from Windows 11 with firebreak): Alexa, and Echo and Ziggy de-DE from DAVS, through four Assist pipelines;
+      microWakeWord (Hey Jarvis, microwakeword.com models); a phone on A2DP; request and reply text
 - [x] System partition written from the running OS, no TWRP (2026-09-30, from issue #1: toybox `mount -o remount,rw /`
       fails because `/proc/mounts` names `/dev/root`, which does not exist, while `mount(2)` with MS_REMOUNT works).
       On all three models: `dm-0` named `system` spans the whole active slot (donut `system_b` = mmcblk0p14, radar
@@ -2011,6 +2013,34 @@ Run in this order. Each step says what it proves.
       ring, 10 s at most. Tests: fake_ha_timer_sound.py, unit-sounds (format checks, a replaced upload read again,
       the Show models' tones decode), unit-web_loudness (loudness.js against BS.1770 in Python; `BEEP_PEAK` at
       `TS_LUFS`; matching quiet, loud and peaky clips, the limiter never over -1 dBFS). Open (device): heard on a Dot 3 and a Show.
+- [x] Sounds of one's own in place of stock's (2026-11-01, asked by a Dot 3 user who renamed the assistant): every
+      `enum sound` from SND_WAKE to SND_RING_OUT (13: not the timer and alarm tones, which `timer_sound` picks) by an id
+      of `sounds.c` (`wake`, `ring_in`, ...; stored as file names: keep them). `state/sounds/<id>.wav`, the timer
+      upload's format and checks (`sound_own_save`; `sound_custom_*` are now its SND_CUSTOM case), looked for before
+      stock's in `sound_get`; a generation per sound (was SND_CUSTOM's only) has the earcon thread read it again after
+      an upload or delete. Lengths (`sound_own_secs`): wake, touch and volume 2 s (over the start of the request:
+      the echo canceller leaves ~a quiet voice's worth of it to STT, wake sound removal holds the audio until its echo
+      passed; stock's wake sound is 0.65 s; the volume tone at every key press), drop in and call connected 2 s (the far end hears nothing while the near mic is ducked 40 dB), ringtones 30 s, the other chimes 5 s (our sounds freeze gain and end of request and drop sound detection while they play). Past 2 s a chime goes through `play_earcon_while` (`chime_go`); a sound over 256 kB of PCM is read again per play (`sound_played`). API (signed): `POST
+      /api/sound/<id>` (WAV; empty: delete), `/play` (`core_sound_preview`: queued past `use_earcon`, as Identify),
+      `GET /stock` (stock's decoded, as a WAV at its own rate); `/api/state` `sounds` [{id, own_ms, stock, max_s}].
+      Page: Voice's "Sounds" card, a row per sound; upload as the timer's (`pcmOf`, `timerSoundLevel` with the stock
+      sound's `ringLufs` as the target, measured looped: the volume click is under one 400 ms block). Not exported or
+      copied (per Echo, as the timer's); a factory reset empties state/. Tests: fake_web_sounds.py (list, stock WAV, refusals,
+      Play, the wake word playing one's own, replaced, kept over a restart, deleted, unsigned refused), unit-sounds (own
+      first, stock's again, ids and lengths). Open (device): heard on a Dot 3.
+      Sound packs (`soundpack.c`, `/api/sound-pack`, page's `packsCard`): `state/sound-packs/<id>/` = `name` + `<sound>.wav`;
+      a pack is a whole set (apply: `sound_own_save`, or delete where it has none), every file checked before the first is
+      touched. WAV is 96 kB/s: 9.6 MB a pack at the limits, ~1.7 MB at stock-like length. Cap 30 MB, 16 packs, 32 MB left free
+      on the partition (`/data`'s size not measured on any model: `df /data` still open). Pack file: tar (`pack.json`
+      {hassmic_sounds:1,name}, then WAVs), checked by the Echo per sound. Tests: fake_web_sounds.py, unit-web_soundpack (`hmtar.packWrite`/`packRead`
+      against tarfile). The page itself (cards, dialogs, download) was driven once in headless Chromium, not part of CI.
+      A switch per sound: `wake_sound` (Home Assistant's, unchanged key) is the wake sound's alone, `sound_touch`,
+      `sound_mics_off`/`_on`, `sound_volume`, `sound_bluetooth_on`/`_off` are page settings, exported (main.c `sound_request`
+      asks them; `use_earcon` had covered four sounds since 29c86e0 by way of one code path, nobody chose it). None for
+      Identify and Drop In's (`sound_queue`), nor the login's cue that borrows Bluetooth's. "All off" is one `/api/set`.
+      Laid out as the ring designs (full width under the settings cards, groups of tiles), not as `LAYOUT`'s rows.
+      `settings_load`: a config with `wake_sound=off` and no `sound_touch` gets the four off once. Not done for imports:
+      an older export's `wake_sound=off` now means the wake sound alone.
 - [x] Buttons as Home Assistant events (2026-10-12, issue #26: a Dot 2 user moved from EchoLocal, whose automations
       stopped an HA-run alarm clock with the action button and used volume holds for next track / play-pause). ESPHome
       event entity "Button" (`button`, KEY_BUTTON, device class `button`, always listed), types `action`,
@@ -2660,6 +2690,20 @@ Run in this order. Each step says what it proves.
       or a follow-up).  Open (device): near misses per day on a Dot with TV and music (how noisy the event is); the
       false-wake count for the microWakeWord comparison above can come from these events.  Not done: the issue's
       "keep wake clips" (audio around each wake for download).
+- [x] Wake word or button without Home Assistant (2026-11-01; during an HA restart or a lost link the Echo cannot be
+      told from a deaf one, and boot.log has nothing to say why).  `trigger` did nothing when
+      `!connected || !satellite_running`: no sound, no ring, no line.  Now, when not muted, set up (`oobe` 0), IDLE, no
+      ringing timer and no Drop In (`error_shows`): the error ring
+      (`anim_start_error_short`, as `core_error`) and `wake word|button: no Home Assistant link, nothing started`
+      (a client linked, no voice assistant running: says so; it need not be HA).  Unlike #48's no-speech case something failed that
+      the ring helps with.  With arbitration an Echo that cannot answer does not claim (`wake_heard`'s `can`) and
+      triggers at once, so the Echo without HA shows the ring while another one answers: wanted, it is the broken
+      one.  Tests: fake_ha_esphome_buttons.py (HA gone: ring + line for wake word and button; HA back: a run, no
+      ring).  PC by hand: hassmic-host without a client, SIGUSR1 + KEY_HELP: two rings, two lines; not set up: none.
+      Wyoming: HA's mute switch sends `pause-satellite` and keeps the link: linked and not running as before
+      `run-satellite`, so `core_link_pause` marks it and no ring shows (`fake_ha.py`).  HA started with the switch on
+      does not connect at all, which here reads as no link: the ring shows.
+      Open: a sound as well; left out until someone asks.
 - [x] Volumes per kind of audio (GitHub issue #32: several Dot 3 and a Dot 2; one volume for media and one for the
       assistant, the wake sound on a slider of its own).  Built 2026-10-17, after two tries the owner rejected.
       First: categories linked to the main volume with offsets (replies in volume points, sounds in dB under it,
@@ -2933,3 +2977,72 @@ Run in this order. Each step says what it proves.
       checkers had none); `kiosk_tick` replaces once-per-boot: install, reinstall and an ended app handled within 10 s
       (`mResumedActivity` is hassmic-home), one open a minute; `kiosk_camera` (off); `board.kiosk` instead of the band for the
       settings; the page shows the rows once root's `kiosk-app` exists; `tests/unit/kiosk_test.py`.  `install_screen_apps` in setup and `scripts/kiosk-install.sh`: newest release, sha256 from GitHub, signer pinned on the PC (`apkcert.py`).
+- [~] WPA2/WPA3 mixed Wi-Fi (issue #90, 2026-11-01; reported and tried on an Echo 2 by its reporter; this form on the PC,
+      and on a Dot 2 with its writes stubbed).  wifisvc's `libacehal_network_all.so` (biscuit, radar, donut) rewrites entries to `WPA-PSK
+      WPA-PSK-SHA256` at each start; on an AP with `[WPA2-PSK+SAE+PSK-SHA256-CCMP]` radar's driver refuses that AKM
+      (`err=22`), plain `WPA-PSK` associates at once.  The Dots' drivers unknown.  The issue's patch asked
+      `get_capability key_mgmt` first; useless: wpa_supplicant 2.6 prints only NONE, IEEE8021X, WPA-EAP, WPA-PSK, WPA-NONE
+      there (no ` WPA-PSK-SHA256` string in any of the three binaries), so its "no-op elsewhere" was never one.
+      Dot 2 on adb, 2026-11-01: capability `NONE IEEE8021X WPA-EAP WPA-PSK`, its entry `WPA-PSK WPA-PSK-SHA256`.
+      `psk_only` (main.sh netwatch, every look): 30 s without `wpa_state=COMPLETED` (not the address: `dhcpcd -K` keeps
+      it over a lost link, and a restarted wpa_supplicant reads SHA256 back), wifisvc models, not under wifi.sh's lock,
+      in memory, by the interface's socket or the global one.  Accepted loss: a network Amazon's setup saved on a
+      PSK-SHA256-only AP, if a driver takes that AKM at all, stays off after such a cut until a reboot.  What setup and
+      wifi.sh saved is WPA-PSK, so such an AP never joined those.  An Echo offline by this takes no update: USB.
+      `wifi-join.sh` (Dots, Echo 2) names a WPA3-only network (`[WPA2-SAE-CCMP]`) from the scan flags: it saves
+      `key_mgmt WPA-PSK`, as wifi.sh does, so neither joins one.  Whether a model could: unknown.  ` SAE` is in none of
+      the three binaries, so `get_capability` cannot print it, whatever the driver (the issue's "no SAE" proves nothing);
+      donut's has SAE code (`SAE: own commit-scalar`), no such strings on biscuit or radar.  `tests/fake_web_wifi.py`.
+- [x] amonet-radar v1.0.1 (issue #88, 2026-11-01): zip sha256 `22809bc4...88a9`, 94 789 047 bytes.  Against v1.0.0: LK
+      payloads for `63cb91b-20221007_073612` and `2c3569d-20260617_051433` beside `59779ca-20220524_183401` (`profile.sh`;
+      the pinned 6436's `lk.img` carries `20221007_073612`), the default and 20220524 payloads and `radar-kaeru.bin`
+      rebuilt, a macOS fastboot, `fastbrick.sh` without bash 4 arrays and `timeout`.  `twrp.img`, `lk.bin`, `preloader.img`,
+      `tz.img`, `tee-payload.bin`, `gpt-radar.bin` unchanged, so the flash steps stand.  A folder per version as on
+      biscuit (`firmware/radar/amonet-radar-v1.0.1/`).  Checked: `scripts/setup.sh radar --dry-run`.  Open: an unlock with it.
+- [~] Echo Shows' setup wipes `/data` with the old system (PR #92, TRusselo, 2026-11-01): crown from build 0013222532996
+      kept 16 app updates in `/data/app` over NS6570's `/system`; Spotlight's (system copy off the partition, account
+      libraries gone) crashed every 1-4 min, `ClassNotFoundException: com.amazon.neo.service.api.sdk.PackageManagerUtils`.
+      By hand afterwards (`pm uninstall` of the leftovers, webview kept): no crash in 4 min.  One `pm uninstall` of an
+      updated app whose system copy is in `/system/hassmic-removed` crashed system_server once (NullPointerException in
+      `deleteSystemPackageLIF`), which came back by itself.  `wipe_data` (`scripts/lib/setup.sh`, crown, checkers, cronos)
+      runs before the write, a run cut off after it would find the right system and skip the step.  Differences from the
+      Dots' wipe: Enter on TWRP's main menu first (their TWRP has no screen; answering "Keep System Read only?" restarts
+      USB), and `/data/app` read back with `/data` known mounted, since what `twrp` exits with on a failed wipe was never
+      seen.  The read-back decides, not adb's exit (a USB restart ends the adb shell while TWRP wipes on: 30 s of tries).
+      Once per run (`WIPED`: a retried write), not by the progress file (a later run may find the old system booted
+      since).  "Start from scratch" keeps its word on the right firmware too (`wipe` / `wiped` in the progress file, set
+      after the warning: a non-empty progress file skips it); athena has no firmware step and no wipe, so its menu and
+      `ROOTED_NOTE` say so.  `/data` unencrypted: `ro.crypto.state` on crown, fstab `encryptable=` on checkers.  Checked:
+      `tests/unit/setup_wipe_test.sh` (stand-ins of adb and the UI around the real functions and menu block), `--dry-run`.  Open: a wipe on a real Show, whether
+      `twrp wipe` runs under the "Keep System Read only?" screen, "Download from Amazon" after a wipe (the Dots' DHA
+      certificate is on `/persist`; the Shows' place not confirmed).
+- [~] Echo Show 5: the firewall loaded again every 5 s, the service restarted every 20 s (issue #100, 2026-11-03,
+      d1nd141's Echo; `ip6tables: hassmic_out is not as loaded`).  The tester's Show held its rules for hours
+      (2026-10-13), so the network's: Android 7.1's ConnectivityService writes `net.dnsN` with `getHostAddress`, which
+      names the interface of a link-local IPv6 resolver ("fe80::1%wlan0"; `net.dns` in 8149's services.odex), and a
+      router announcing its own link-local address as DNS (RDNSS) is common.  ip6tables lists no scope (it refuses such
+      a rule, or loads it without), so `wrong()` never matched `rules`.  `resolvers()` drops the scope; the expression
+      checked with checkers', donut's and biscuit's toybox sed under qemu.  Not confirmed on that Echo: the reporter's
+      `getprop | grep dns` and `ip6tables -S hassmic_out` would say.
+      Whisper there: Amazon's 403 "Request not allowlisted for device Type A4ZP7ZC4PI6TO ... whisper-static" (expected,
+      see 2026-10-13 above) was worded as a lost registration ("log in again").  davs.c now says Amazon does not hand it
+      to this model, keeps the refused ids with the tokens (`refused` line in `state/davs`, `"refused"` in
+      `/api/davs`), forgets one that arrives after all; the Models warning and the download row point at Copy models
+      instead.  `tests/fake_web_davs.py`.  Open: whether the Dots' whisper model runs on a Show (same libpryon).
+- [~] Setup on Windows, one whole run from a stock Dot 2 (issue #106, 2026-11-02, hannes813's Echo: Windows 11, Git
+      Bash, firebreak, LK `63cb91b-20221007_072309`, v2026.11.02.000053-beta): unlock, flash, root, lock-down, Wi-Fi
+      and install went through (the "Open: one whole run on Windows" of #49 and #60 above).  Two snags.  (1) The tip of
+      main was a README commit: CI publishes no beta of a commit whose bundles hold nothing new (content-id.sh), and
+      `prebuilt_tag` wanted a tag on HEAD itself, so Windows, which builds nothing, stopped at the tools step.  It now
+      also takes the newest release tag before HEAD (`git describe`, GitHub's tag on the same commit) when every path
+      changed since is `_bundle_free` (docs, tests, `.github`, the PC's scripts; `scripts/device`, `system`,
+      `bundle.sh`, `content-id.sh`, `otatool.py`, `lib/device.sh`, `kernel-tools.sh` and everything unnamed count as
+      the Echo's).  Checked: 71d099b -> v2026.11.02.000053-beta (README after it), f95d9f9 -> its own tag, 8977ebc ->
+      none (d9f8f62's src between).  docs/WINDOWS.md stays on main now (it checked out the newest tag, which left out
+      every later fix to the PC's scripts, #103's among them).  (2) Prompts that read /dev/tty took no keys and
+      ignored Ctrl-C, mintty and Windows Terminal both, until the window was closed: the drivers question and the
+      Wi-Fi name and password, not "Type yes"; a fresh window went on.  Both followed adb shell calls with the terminal as stdin (`fw_rooted`'s
+      ashell, the scan in `wifi_conf`), and the adb server, a native program started by whichever adb call comes
+      first, keeps the handles it was given.  Not reproduced (no Windows here): setup.sh now runs with stdin from
+      /dev/null (every prompt reads /dev/tty, `live` hands it to the tools that ask), and on Windows `live` kills
+      adb's server after its command (firebreak runs adb).  Open: the reporter's next run.

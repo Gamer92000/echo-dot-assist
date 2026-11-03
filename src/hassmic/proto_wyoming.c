@@ -59,7 +59,7 @@ static void handle(const struct wy_event *ev)
     if (!strcmp(t, "ping")) send_event("pong", NULL, NULL, 0);
     else if (!strcmp(t, "describe")) send_info();
     else if (!strcmp(t, "run-satellite")) { fprintf(stderr, "satellite: running\n"); core_link(1, 1); }
-    else if (!strcmp(t, "pause-satellite")) core_link(1, 0);
+    else if (!strcmp(t, "pause-satellite")) core_link_pause();
     else if (!strcmp(t, "detection")) core_set_state(LISTENING);
     else if (!strcmp(t, "voice-stopped") || !strcmp(t, "transcript")) {
         if (!strcmp(t, "transcript")) {

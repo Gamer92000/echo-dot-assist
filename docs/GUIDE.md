@@ -84,6 +84,11 @@ System) off takes any certificate, but then anyone on your network could slip th
 - **Nothing said** after the wake word (or the button, or a question the assistant asked): the ring goes dark
   without the error animation, as on a stock Echo.
 
+- **No Home Assistant** (it restarts, or the link to the Echo is lost): the wake word and the action button show the
+  short error animation and start nothing; the log says `wake word: no Home Assistant link, nothing started` (or
+  `button: ...`). Not while muted (with Wyoming, Home Assistant's mute switch too), and not before the Echo was set up
+  (the setup spinner shows then).
+
 - **"Alexa, stop"** interrupts a reply, but only right behind the wake word: Amazon's models only listen for "stop" in
   the two seconds after it. Out of silence, "Alexa, stop the music" goes to Home Assistant as a normal command.
   With nothing else to stop, it pauses music from Music Assistant or a phone on the Echo itself (the action button
@@ -417,6 +422,23 @@ Beyond the README's two figures:
 - **Microphone off** plays Alexa's own sounds. A switch that is already off when hassmic starts is shown, not announced.
 - **Wake sound**: Alexa's own where the firmware has it; the Echo Show 8 1st gen has none and plays hassmic's short blip. On the
   Echo Show a sound after a pause starts 0.35 s late: the speaker takes that long to switch on and swallowed the start.
+- **Your own sounds**: the settings page's "Sounds" card (Voice) replaces any of the Echo's sounds with one of yours:
+  the wake sound, the action button, microphone off and on, the volume keys, Bluetooth connected and disconnected,
+  Identify, and Drop In's chimes and ringtones (the timer's sound is "Timer sound", above). "Upload…" takes any file
+  your browser plays, as the timer sound does, and offers to bring it to the loudness of Alexa's sound it replaces, so
+  the sounds volume suits both. The wake, button, volume, Drop In and call connected sounds may be 2 seconds at most: the wake sound plays over
+  the start of your command, and the echo canceller leaves part of it in what Home Assistant hears. Ringtones may be
+  30 seconds and repeat, the others 5. "Play" plays one once at the sounds volume, even when its switch is off. The wake sound, action
+  button, microphone, volume and Bluetooth sounds have a switch each, and "All off" sets them together; a switch silences
+  that sound and keeps your choice, so on again plays yours or Alexa's as before. Home Assistant's "Wake sound" is the wake
+  sound's switch. Identify and Drop In have none: Identify is asked for, and Drop In's tell the room a microphone is open.
+  The bin deletes yours, and Alexa's plays again. Where the firmware has none
+  of Alexa's for a sound, yours still plays. Each Echo keeps its own: exports and "Copy models" leave them out, and a
+  factory reset deletes them.
+- **Sound packs**: sets of those sounds, on the same page. "Save these sounds" keeps what is in use as a pack, "Use"
+  puts a pack in use (it replaces your sounds, and those it has none of go back to Alexa's), "Export" gives a `.soundpack`
+  file, a plain tar with `pack.json` and one WAV per sound, and "Import" takes one on any Echo. 16 packs and
+  30 MB at most; nothing is written with under 32 MB free on the Echo. Switches stay as they are when a pack changes.
 - Silent and dark at boot.
 - The ring dims with the room's light as on a stock Echo (Amazon's own logic, on by default); a fixed level from Home
   Assistant switches that off.
@@ -519,7 +541,7 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 |---|---|
 | Media player | TTS, `play_media`; its volume is the Echo's (the music's, see [Separate volumes](#separate-volumes)) |
 | Mute, Do not disturb | DND drops announcements; purple flash when switched on |
-| Wake sound | covers all the Echo's own sounds |
+| Wake sound | the wake sound only, on or off; off keeps the one you chose |
 | Equalizer | bass, mid, treble, −6 to +6 dB, Amazon's own, on everything the Echo plays |
 | LED auto brightness, LED brightness | a level holds the ring there and switches the automatic off (Echo Show 5: the band's brightness, no automatic) |
 | Timer ringing, Ringing timers | on while a finished timer rings; their names (diagnostic), see [Voice](#voice) |
@@ -752,7 +774,7 @@ password before or after, empty for an open network. The Echo tries the new netw
 once it has an address and the router answers, and otherwise returns to the old one within a minute or two, saying
 why. Once the new one works it forgets the old ones. Expect a new IP address: find it as "Web UI address" in Home
 Assistant (which finds the Echo again within a few minutes if it reaches that network), and approve the browser there
-once more. WPA2 and open networks only.
+once more. WPA2 and open networks only; a WPA2/WPA3 mixed network joins as WPA2 (tried on an Echo 2).
 
 **Log** (System): `boot.log` with a filter, the older part, and a download for bug reports ([reading it](../README.md#when-something-is-wrong)). The Sendspin token is
 blanked; the rest travels unencrypted, like the whole page.

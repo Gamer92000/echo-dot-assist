@@ -3,7 +3,7 @@
 The daemon, the protocols, the boot logic and the firewall are the same on every Echo. What differs between models is
 kept here, one directory per model, named after Amazon's codename (the first part of `ro.product.device`). The build and
 every script pick the model's directory by `DEVICE`. The scripts that use adb ask the connected Echo which model it is
-and refuse a mismatch.
+and refuse a mismatch. Every Echo on Fire OS or Vega OS, with or without a directory here: [`MODELS.md`](MODELS.md).
 
 | Model | Codename | `ro.product.device` | Status |
 |---|---|---|---|
@@ -97,7 +97,7 @@ Rough order. Each step is safe to stop at.
    `install` (`install_satellite`); models come later from the settings page. Try it with `scripts/setup.sh <codename> --dry-run`.
 6. `tools/mkstubs.sh <codename>` for the stub lists, and the codename in the build matrix of
    `.github/workflows/build.yml`: CI builds and publishes the model's bundle from then on.
-7. Add the model to the table above, to the root `README.md` and to `CHANGELOG.md`.
+7. Add the model to the table above, to `MODELS.md`, to the root `README.md` and to `CHANGELOG.md`.
 
 Shared code stays free of `#ifdef DEVICE_...`. When a model needs more than a different value, add a field to
 `struct board`, a variable to `device.conf`, or a backend, and give `donut` its current behaviour there.

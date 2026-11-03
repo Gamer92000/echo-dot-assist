@@ -57,6 +57,7 @@ extern const char *core_name;                   /* "Echo Dot 2 5695c4": the mode
 const char *core_node_name(void);               /* "echo-dot-2-5695c4": the ESPHome device (host) name */
 void core_node_of(const char *name, char node[64]);  /* any Echo's node from its name ("Echo Dot 2 5695c4"); a node stays */
 void core_identify(void);                       /* rainbow ring for 10 s and a sound: which Echo is this */
+void core_sound_preview(int s);                 /* sounds.h's sound once (the page's Sounds card), lock or not */
 /* Setup (OOBE): 1 from an install or a reset until Home Assistant took the Echo on (its voice assistant subscribed:
  * state/adopted); the ring shows stock's setup spinner meanwhile.  Any thread */
 int  core_oobe(void);
@@ -71,6 +72,7 @@ extern int core_local_wake, core_port, core_sendspin_port, core_web_port;
 enum state core_state(void);
 void core_set_state(enum state s);
 void core_link(int connected, int ready);       /* client connection / server wants pipelines.  (0,0) ends a running pipeline */
+void core_link_pause(void);                     /* the server asked to pause (Wyoming, HA's mute switch): core_link(1, 0), no error */
 void core_mic_off(void);                        /* server has heard enough */
 int  core_ha_linked(void);                     /* lock held: a client (Home Assistant) is connected */
 void core_settings_changed(void);
@@ -91,7 +93,8 @@ void core_no_speech(void);
  * soft mute that can be undone remotely, its state shows latch OR soft mute, and unmuting with the button clears both. */
 int  core_soft_mute(int set);                    /* set: 0/1, or -1 to only read */
 int  core_muted(void);                           /* effective */
-int  core_wake_sound(int set);                   /* same convention */
+int  core_wake_sound(int set);                   /* same convention: the wake sound only, one's own or Alexa's stays chosen */
+int  core_sound_on(int s, int set);              /* sounds.h's sound has its switch on: set 0/1, or -1 to only read */
 int  core_wake_in_request(int set);              /* the request's audio from the wake word on, not after it; -1 reads */
 int  core_end_of_request(int set);               /* the end of a request heard on the Echo (micend.h: MICEND_*), -1 reads */
 int  core_stop_ends_listening(int set);          /* "<wake word>, stop" also ends listening (main.c stop_word), -1 reads */

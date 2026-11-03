@@ -103,17 +103,16 @@ Then **close every PowerShell window**. From here on everything happens in Git B
 ## 3. Get this project
 
 Press the Windows key, type `Git Bash`, press Enter. A black window opens. **Pasting in Git Bash** is different:
-**Shift+Insert**, or right-click and "Paste" (Ctrl+V does not work there). Paste these three lines and press Enter:
+**Shift+Insert**, or right-click and "Paste" (Ctrl+V does not work there). Paste these two lines and press Enter:
 
 ```sh
 git clone https://github.com/Gamer92000/echo-dot-assist.git
 cd echo-dot-assist
-git checkout "$(git tag -l 'v*' --sort=-creatordate | head -1)"
 ```
 
 The first line copies the project into a folder `echo-dot-assist` in your user folder
-(`C:\Users\<you>\echo-dot-assist`). The third picks the newest version GitHub has built and published, so nothing
-has to be compiled on your PC. It prints a message about "detached HEAD": that is normal.
+(`C:\Users\<you>\echo-dot-assist`). The setup takes the Echo's software from the newest version GitHub has built and
+published, so nothing has to be compiled on your PC.
 
 Want to see first what the setup will do, without touching the Echo? `scripts/setup.sh biscuit --dry-run` walks
 through every step and only shows the commands.
@@ -195,12 +194,13 @@ when you ask for help.
 |---|---|
 | `missing: python3` although you installed Python | Python's installer ran without "Add python.exe to PATH". Run it again: "Modify", "Next", tick "Add Python to environment variables", "Install". Open Git Bash anew. |
 | `missing: adb fastboot` or `uvx` | Close Git Bash and open it anew (it only sees tools installed before it started). Still missing: run the `winget` line again. |
-| `no release build of this commit on GitHub` | Your copy is not exactly a published version. In Git Bash, in `echo-dot-assist`: `git fetch --tags`, then the `git checkout` line from section 3 again. |
+| `no release build of this commit on GitHub` | GitHub has not published the newest change yet: it does a few minutes after one. Wait a few minutes, then in Git Bash, in `echo-dot-assist`: `git checkout main`, `git pull`, and run the setup again. Still there: `git checkout "$(git tag -l 'v*' --sort=-creatordate \| head -1)"` takes the newest published version. |
 | `bash: scripts/setup.sh: No such file or directory` | You are not in the project folder: `cd ~/echo-dot-assist` first. |
 | At the gesture the ring **stays solid blue** | No data reaches the PC: the drivers (section 2, item 5), a charge-only cable, or a bad port. Try another cable, then another USB port on the PC itself. |
 | The ring **restarts** again and again, little or no white | That USB port cannot power the Echo. Use a port on the PC itself with nothing else plugged in next to it. |
 | firebreak stops with an error | Press Enter to run the step again; firebreak continues where it stopped. Still failing: run `uvx --managed-python firebreak@0.8.0 report` in Git Bash and post what it prints, with `setup.log`, in an issue here or in `#support-device-unlocking` on the [EchoMuse Discord](https://discord.gg/vAPHMDvREG). |
 | The setup stopped, or you closed the window | Open Git Bash, `cd echo-dot-assist`, `scripts/setup.sh biscuit`. It carries on. |
+| A question takes no answer, and Ctrl+C does nothing either | Close the window, then go on as in the row above. Please say so in [issue #106](https://github.com/Gamer92000/echo-dot-assist/issues/106), with `setup.log`. |
 | Home Assistant does not find the Echo | Add it by hand (section 5, step 1). The Echo and Home Assistant have to be on the same network. |
 
 **Alexa back?** With the Echo on USB, `uvx --managed-python firebreak@0.8.0 stock` in Git Bash puts Amazon's
