@@ -87,6 +87,29 @@ downloaded and installed from the settings page on a Show 8.
 - Separate volumes take the Echo Dot 2's curve (`board.volume_curve` unset) until `tools/vol-curve.py` has measured
   this one; the light ring designs on the band (`ring_band.c`, as on checkers, where they are) not tried here.
 - The wake blip by ear (lead-in of 350 ms, `audio_android.c`).
+- The screen UI on the Echo (below).
+
+## Screen UI (2026-11-03, on the PC only)
+
+hassmic's own screen (`src/ui/`, `screen.c`; checkers' "Screen UI" in re-checkers.md) is built for crown
+(`device.mk` `SCREEN`). What it relies on, from the firmware:
+
+- Every class, method and field of `src/ui/android.c`'s JNI table is on NS6570's boot class path (`make unit-screen`
+  with the firmware unpacked; 20498 boot classes, checkers' 8149 has 20508): Android 7.1.2's, nothing differs.
+- The display: an 800 x 1280 panel shown landscape by `user_rotation` 1 (`ANDROID_SETTINGS`), so 1280 x 800 at
+  rotation 1 as on checkers, as far as Android's side shows: the band, laid out by `DisplayInfo` as the UI is (width,
+  rotation, overscan side), was 1280 x 10 along the bottom (and a strip down the left edge when Kiosk Satellite had
+  turned the screen portrait, before `user_rotation` was set: below). Below Android it differs from checkers: `ro.sf.hwrotation` is 90 here (checkers', cronos': 0), read by
+  MediaTek's `hwcomposer.mt8163.so` (its display dump logs "hwrotation") and `magd`, no framework class or other
+  library; and the kernel's `CONFIG_MTK_LCM_PHYSICAL_ROTATION` is 90 (checkers: 0), with
+  `CONFIG_TOUCHSCREEN_PHYSICAL_ROTATION_WITH_LCM` turning the touch driver's coordinates alike. The UI logs what it
+  found ("screen: WxH ... rotation r", "touch: <name>, x .., y .."), and says so when the touch ranges do not have the
+  natural panel's shape (taps would land turned) or the screen starts portrait: the first run on a Show 8 settles it.
+- Touch: a FocalTech panel (`CONFIG_TOUCHSCREEN_FTS`; checkers' is Goodix), `amazon_touch.idc` as on checkers (the
+  idc of system_server's own uinput device, which `touch.c` takes last). Not seen yet.
+- The layout at 1280 x 774 (the band's 10 rows and the grip's 16 off): the scale is 1.33 of the Show 5's, the face, the
+  music pages, the keyboard and the drawer drawn by `tools/uishot.c` at that size look as they should. The grip's 16
+  rows are 2.2 mm at 189 ppi.
 
 ## Bluetooth, wake sound, extra apps (2026-10-14)
 

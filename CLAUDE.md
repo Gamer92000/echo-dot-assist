@@ -546,7 +546,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   sets and unsets queued one behind the other go in one ledctrl (`LEDQ_BATCH`: it takes repeated -s/-u).  The
   beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N` when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
   `HASSMIC_FAKE_BEAM`.
-- **Screen UI** (`src/ui/`, `screen.c`, `screen.h`; device.mk `SCREEN`, else `screen_none.c`; checkers, cronos): the
+- **Screen UI** (`src/ui/`, `screen.c`, `screen.h`; device.mk `SCREEN`, else `screen_none.c`; checkers, cronos, crown): the
   Echo Show's own screen, small beside any app (Kiosk Satellite, View Assist...).  `src/ui/ui.h` lists the parts:
   `scene.c` (display list with a clip per item, diffed by id into one dirty rectangle; text cache by hash; image cache
   by key and shown size, asked of the platform once; touches: taps, long presses, HIT_DRAG sliders, scrollers with

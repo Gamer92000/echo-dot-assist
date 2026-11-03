@@ -439,14 +439,15 @@ Beyond the README's two figures:
   puts a pack in use (it replaces your sounds, and those it has none of go back to Alexa's), "Export" gives a `.soundpack`
   file, a plain tar with `pack.json` and one WAV per sound, and "Import" takes one on any Echo. 16 packs and
   30 MB at most; nothing is written with under 32 MB free on the Echo. Switches stay as they are when a pack changes.
-- On the **Echo Show 5** the screen says the same with a face: see [The screen](#the-screen-echo-show-5).
+- On an **Echo Show** the screen says the same with a face: see [The screen](#the-screen-echo-show).
 - Silent and dark at boot.
 - The ring dims with the room's light as on a stock Echo (Amazon's own logic, on by default); a fixed level from Home
   Assistant switches that off.
 
-## The screen (Echo Show 5)
+## The screen (Echo Show)
 
-hassmic's own screen is small on purpose: the Show's screen is yours to give to any app (Kiosk Satellite, View
+On the Echo Show 5 (both generations) and the Echo Show 8 1st gen. hassmic's own screen is small on purpose: the
+Show's screen is yours to give to any app (Kiosk Satellite, View
 Assist, a dashboard browser). Install apps with `adb install <app>.apk`; Amazon's WebView is there for those that
 show web pages. Only one app can use the microphone at a time, and hassmic has it: an app that runs a voice
 satellite of its own has to run without its microphone (as a display) while hassmic listens.
@@ -659,7 +660,7 @@ the same. Do the app's setup from your PC at `http://<echo-ip>:2324`, and set it
 network. Then:
 
 - The Echo opens the app within seconds of the install, and again whenever it ends: after a crash, its own update, or a boot. Allow up to a minute.
-  On a Show with hassmic's own screen ([The screen](#the-screen-echo-show-5)) the app is that screen's home app (the
+  On a Show with hassmic's own screen ([The screen](#the-screen-echo-show)) the app is that screen's home app (the
   Screen page can pick another): the drawer from the top edge leaves it for the face or the music, and its Home brings
   it back.
 - It gets storage, location, overlay, settings, usage stats and device admin without asking, since nobody is there to

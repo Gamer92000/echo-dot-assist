@@ -27,7 +27,7 @@ KS is **not** made the home app (it declares no HOME category; the home activity
 the app ends (a crash, its own update, a permission taken away) or was only just installed, `kiosk_tick` sees our home
 screen on top within 10 s and opens it, half a minute after the last open at the soonest and a minute apart while it does not stay; it takes 15-30 s to come up (checkers: on screen 34 s after boot_completed).
 
-Where hassmic's own screen runs (`screen.c`, the Show 5 so far), its UI opens the app instead: KS is the UI's home
+Where hassmic's own screen runs (`screen.c`: the Show 5, the Show 8 1st gen), its UI opens the app instead: KS is the UI's home
 app until the settings page's Screen page picks another (`state/screen_home`), launched at start and again when it leaves (three
 times a minute at most), but not while the face, the music or the drawer were asked for. While a UI is meant to run
 (from hassmic's start, through the UI's restarts, until a UI that never stays up is given up) `screen.c` keeps

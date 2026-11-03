@@ -2920,6 +2920,10 @@ Run in this order. Each step says what it proves.
       confirmed by ear (a longer sound of our own was heard after it, 2026-10-15).  2026-10-17: the lead-in
       reached earsup as part of the echo delay (85 ms + 350 > `D_MAX` 400 ms): `audio_earcon_started(lead_ms)` moves its
       start past it.
+      Screen UI (2026-11-03, PC only): `SCREEN` in device.mk; the JNI table found on NS6570's boot class path as is;
+      1280 x 800 at rotation 1 (`user_rotation`; `ro.sf.hwrotation` 90 only MediaTek's hwcomposer and magd read, below
+      Android: the band laid out by DisplayInfo was right), FocalTech touch; the layout
+      drawn at 1280 x 774 by uishot (docs/re-crown.md "Screen UI").  Not yet on the Echo.
 - [~] Echo Show 5 2nd gen (`cronos`, 2026-10-26; `docs/re-cronos.md`).  checkers' platform and its pinned build: Fire OS
       6574.1 NS65741/8149 (same `ro.build.version.incremental`, cronos' own image), kernel 4.9.77 (20 config lines from
       checkers', 74 from crown's), `libpryon.so` byte-identical to checkers', stubs identical in symbols and order,

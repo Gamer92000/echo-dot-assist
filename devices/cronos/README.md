@@ -78,7 +78,7 @@ The speaker amplifier is one of three by board revision; the first cronos has th
 RT5616/RT5616E as checkers', TAS5805M up to +4 dB, MAX98396 up to +6 dB, the caps until someone has listened at full
 volume (the TAS5805M's steps are assumed, it is in no cronos seen yet).
 
-hassmic's own screen (the face, the drawer, the home app, Music Assistant: [the guide](../../docs/GUIDE.md#the-screen-echo-show-5))
+hassmic's own screen (the face, the drawer, the home app, Music Assistant: [the guide](../../docs/GUIDE.md#the-screen-echo-show))
 is built for it as for checkers; its JNI table resolves against this firmware (`make unit-screen`).
 
 **Open:** speaker gain by ear, Wi-Fi motion (module built, its hook site as checkers'), the DHA version for "Download

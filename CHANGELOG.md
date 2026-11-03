@@ -5,9 +5,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 ## 2026-11-03
 
 - **Echo Show 5 2nd gen: the screen of its own too.** The face, the drawer from the top edge, the home app and Music
-  Assistant on the screen, as on the 1st gen ([guide](docs/GUIDE.md#the-screen-echo-show-5)). It comes with the next
+  Assistant on the screen, as on the 1st gen ([guide](docs/GUIDE.md#the-screen-echo-show)). It comes with the next
   update; not tried on one of these Echos yet.
-- **Echo Show 5: a screen of its own** ([guide](docs/GUIDE.md#the-screen-echo-show-5)). Over hassmic's home screen the
+- **Echo Show 8 1st gen: the screen of its own too**, the same as on the Show 5, laid out for its larger screen. It
+  comes with the next update; not tried on a Show 8 yet.
+- **Echo Show 5: a screen of its own** ([guide](docs/GUIDE.md#the-screen-echo-show)). Over hassmic's home screen the
   Show now has a face: two eyes that listen, think and speak with the assistant (a mouth moves with the reply), close
   when the microphone is off, sleep in Do not disturb, light up for a ringing timer (with a Stop button) and for a Drop
   In (Answer, Decline, End), and the clock below in Home Assistant's time zone. While Music Assistant plays on the

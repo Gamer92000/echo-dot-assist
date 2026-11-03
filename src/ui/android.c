@@ -922,7 +922,16 @@ static void *ui_main(void *arg)
     fcntl(wake_pipe[0], F_SETFL, O_NONBLOCK);
 
     struct touch t = { .rot = rot, .W = W, .H = H, .grip = GRIP, .screen_on = &screen_on_, .interactive = interactive, .wake = touch_wake };
-    { char tn[160]; if (touch_open(&t, tn, sizeof tn) >= 0) say("touch: %s, x %d..%d, y %d..%d", tn, t.xmin, t.xmax, t.ymin, t.ymax); }
+    char tn[160];
+    if (touch_open(&t, tn, sizeof tn) >= 0) {
+        say("touch: %s, x %d..%d, y %d..%d", tn, t.xmin, t.xmax, t.ymin, t.ymax);
+        /* touch_map takes the ranges as the natural panel's, as InputReader does; a driver that turned them already
+         * (MediaTek's TOUCHSCREEN_PHYSICAL_ROTATION_WITH_LCM, the Show 8 1st gen's LCM at 90) would land every tap
+         * turned: said, for the log to tell (no model seen so yet) */
+        int nw = rot & 1 ? H : W, nh = rot & 1 ? W : H;
+        if ((t.xmax - t.xmin > t.ymax - t.ymin) != (nw > nh))
+            say("touch: those ranges are not the shape of the panel as mounted (%dx%d): taps will land turned", nw, nh);
+    }
     struct scene *s = scene_new(W, h, band, &plat, NULL, mono_ms());
     the_scene = s;
     { pthread_t dt; if (!pthread_create(&dt, NULL, decode_thread, NULL)) pthread_detach(dt); }
@@ -931,6 +940,8 @@ static void *ui_main(void *arg)
     if (!strncmp(loc, "en-US", 5) || !strncmp(loc, "en-CA", 5) || !strncmp(loc, "en-AU", 5)) scene_msg(s, "h12 1", mono_ms());
     printf("ready %d %d\n", W, h); fflush(stdout);
     say("screen: %dx%d between a grip of %d and a band of %d, rotation %d", W, h, GRIP, band, rot);
+    if (W < H)                                                  /* (taken for good, above: until the UI starts again) */
+        say("screen: portrait at start: the layout is made for landscape and stays small until the UI starts again");
     p_apps(NULL);                                               /* the page's home app choice: the apps at once */
 
     static uint8_t in[ART_MAX + 4096]; size_t have = 0, art_need = 0, band_need = 0, img_need = 0; int shown = -1, img_size = 0; char img_key[40] = "";

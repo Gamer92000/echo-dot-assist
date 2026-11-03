@@ -64,7 +64,9 @@ Installed and running on a real Echo Show 8 (2026-10-14): boot into hassmic, Wi-
 buttons, voice questions answered), volume keys, mic mute, the light band (waiting for Alexa, listening, thinking,
 reply). Bluetooth (proxy, A2DP sink, pairing) works once Android's stack is off the partition. The wake sound is the built-in
 blip (stock's is not in this firmware); crown's extra Amazon apps are classified. **Open**: whether the blip is heard
-after the cold-output lead-in (by ear). Details: [docs/re-crown.md](../../docs/re-crown.md).
+after the cold-output lead-in (by ear), hassmic's own screen (the face, the drawer, the home app, Music Assistant:
+[the guide](../../docs/GUIDE.md#the-screen-echo-show)) on the Echo: built and checked against this firmware's
+framework only. Details: [docs/re-crown.md](../../docs/re-crown.md).
 
 ## Files here
 
