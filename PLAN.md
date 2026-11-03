@@ -3052,6 +3052,22 @@ Run in this order. Each step says what it proves.
       1280 x 800 at rotation 1 (`user_rotation`; `ro.sf.hwrotation` 90 only MediaTek's hwcomposer and magd read, below
       Android: the band laid out by DisplayInfo was right), FocalTech touch; the layout
       drawn at 1280 x 774 by uishot (docs/re-crown.md "Screen UI").  Not yet on the Echo.
+- [~] Echo Show: speech on screen (2026-11-03, branch `screen-text`).  What was said and the reply as subtitles above the
+      band, as stock's Alexa screens and Kiosk Satellite show them: `textdraw.c` (stb_truetype on the firmware's Amazon
+      Ember) draws, a second ringbar.dex in text mode (`-100`, TRANSLUCENT, just under the band, Paint SRC) shows.  Checked
+      on the PC: `textdraw_test` (layout, fit, cut, broken UTF-8, under ASan/UBSan; build/textdraw_*.ppm),
+      `ringbar_run.py` (text mode in the dex interpreter), the dex against 8149's boot classes.  On the first cronos
+      (2026-11-03): works; a strip of 55 % at the bottom (960 x 264) with the reply at 15 % of it, four lines at most,
+      was small and cut short with the screen black above it -> the whole screen, the reply 12 % of the height down to
+      6.5 %, as many lines as fit, centred.  Timers on the same layer (setting `screen_timers`): counted down from Home
+      Assistant's started/updated events (seconds left, is_active), the ringing ones from the core's list, orange and
+      pulsing; the screen held on meanwhile; the time with its unit (SI symbols: "4:59 min", "1:02:05 h", "45 s", placed
+      by a zero-digit template so it keeps still).  Asked on the device: the hold settable (`screen_text_seconds`, 0
+      until the next request), and "stop" not shown when the Echo carries it out (it showed "Stopp" after
+      stop_ends_listening had ended the run): the transcript goes to the screen only after `core_transcript`, and
+      `stop_word` clears what it ended.  Left for the WebView dashboard: the shade (75 %) and the heard text's grey over
+      a light dashboard (a mock-up: readable, the grey weaker).  Open: frame cost (~1.8 MB per fade step, one a second
+      for a running timer, on the MT8163); `ring_band_test` does not run the text layer (off by default).
 - [~] Echo Show 5 2nd gen (`cronos`, 2026-10-26; `docs/re-cronos.md`).  checkers' platform and its pinned build: Fire OS
       6574.1 NS65741/8149 (same `ro.build.version.incremental`, cronos' own image), kernel 4.9.77 (20 config lines from
       checkers', 74 from crown's), `libpryon.so` byte-identical to checkers', stubs identical in symbols and order,

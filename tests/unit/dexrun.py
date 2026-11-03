@@ -55,8 +55,8 @@ class JCtor:
 
 
 class JField:
-    def __init__(self, name):
-        self.name = name
+    def __init__(self, name, cls=None):
+        self.name, self.cls = name, cls             # cls: the class it was asked of (Field.get(null): a static one)
 
 
 class ByteOrder:
@@ -206,13 +206,17 @@ class JavaEnv:
         if key == "cls.getf":
             known = {n for c, n, t in self.prog.reflected_fields if c in self.listed_as(a[0])}
             assert a[1] in known, f"{a[0].name}.{a[1]}: not in the program's reflected fields"
-            return JField(a[1])
+            return JField(a[1], a[0])
         if key == "obj.getcls": return self.jclass(a[0])
         if key == "obj.tostr": return self.jstr(a[0])
         if key == "obj.eq": return a[0] is a[1] or a[0] == a[1] and type(a[0]) is type(a[1])
         if key == "m.invoke": return self.invoke(a[0], a[1], list(a[2]))
         if key == "m.setacc": return None
-        if key == "f.get": return getattr(a[1], a[0].name)
+        if key == "f.get":
+            if a[1] is None or isinstance(a[1], Zero):              # get(null): a static field of the fake class
+                assert a[0].cls is not None and a[0].cls.make is not None, f"static {a[0].name} of no fake class"
+                return getattr(a[0].cls.make, a[0].name)
+            return getattr(a[1], a[0].name)
         if key == "f.set":
             old = getattr(a[1], a[0].name)
             assert type(old) is type(a[2]) or old is None or (isinstance(old, bool) and isinstance(a[2], bool)), \
@@ -325,6 +329,10 @@ class Dex:
                 a, n = r[o[1]], o[2]
                 r[o[0]] = i32({0xd8: a + n, 0xda: a * n, 0xde: a | n, 0xe0: a << (n & 31),
                                0xe2: (a & 0xffffffff) >> (n & 31)}[op])
+            elif op == 0xdb:                                     # div-int/lit8: Java's, towards zero
+                a, n = r[o[1]], o[2]
+                if n == 0: raise ZeroDivisionError(f"{name}: div-int/lit8 by 0")
+                r[o[0]] = i32(abs(a) // abs(n) * (1 if (a < 0) == (n < 0) else -1))
             elif op == 0x8d: r[o[0]] = ((r[o[1]] & 0xff) ^ 0x80) - 0x80
             else:
                 raise AssertionError(f"{name}: {op:#x} not run here")

@@ -1407,10 +1407,12 @@ static void on_event(const unsigned char *p, const unsigned char *end)
     case EV_STT_START:  core_set_state(LISTENING); break;
     case EV_VAD_END:    core_mic_off(); if (core_state() == LISTENING) core_set_state(THINKING); break;
     case EV_STT_END:    fprintf(stderr, "transcript: %s\n", text);
-        if (core_transcript(text)) break;                   /* "stop" to a ring or music: the run is cancelled */
+        /* "stop" to a ring or music: the run is cancelled, and the word is not put on the screen (what showed goes) */
+        if (core_transcript(text)) { ring_text(RING_TEXT_RUN, NULL); break; }
+        ring_text(RING_TEXT_HEARD, said);
         core_mic_off(); if (core_state() == LISTENING) core_set_state(THINKING); break;
     case EV_INTENT_END: if (cont) core_restart_after(); break;
-    case EV_TTS_START:  fprintf(stderr, "reply: %s\n", text); break;
+    case EV_TTS_START:  fprintf(stderr, "reply: %s\n", text); ring_text(RING_TEXT_REPLY, said); break;
     case EV_INTENT_PROGRESS: if (!stream_now) break;    /* streaming TTS: the URL from RUN_START can be fetched already */
         /* fall through */
     case EV_TTS_END:
@@ -1443,6 +1445,7 @@ static void on_event(const unsigned char *p, const unsigned char *end)
 
 static void on_timer(const unsigned char *p, const unsigned char *end)
 {
+    /* VoiceAssistantTimerEventResponse: event_type, timer_id, name, total_seconds, seconds_left, is_active */
     struct pbf f; unsigned type = 0, total = 0, left = 0, active = 0; char tname[64] = "", id[40] = "";
     while (pb_next(&p, end, &f)) {
         if (f.field == 1) type = f.v; else if (f.field == 2 && f.data) pbf_str(&f, id, sizeof id);
@@ -1452,6 +1455,8 @@ static void on_timer(const unsigned char *p, const unsigned char *end)
     static const char *const names[] = { "started", "updated", "cancelled", "finished" };
     if (type < 2) fprintf(stderr, "timer %s: %s (%u s, %u s left%s)\n", names[type], tname, total, left, active ? "" : ", paused");
     else fprintf(stderr, "timer %s: %s (%u s)\n", type < 4 ? names[type] : "?", tname, total);
+    if (type <= 1) ring_timer(id, tname, (int)total, (int)left, active);     /* the screen counts down itself */
+    else ring_timer_gone(id);
     if (type == 3) core_timer_finished(id, tname, total); else if (type == 2) core_timer_cancelled(id);
     else if (type < 2) core_timer_running(id, tname, total, left, active);
 }
