@@ -41,7 +41,7 @@ install|Install
 "
 ROOTED_SKIP="usb unlock root"     # done on an Echo that is rooted already (scripts/setup.sh asks)
 NOTES=(
-    "The screen is black with the light band along its bottom edge; Alexa's apps stay off while hassmic runs ($DDIR/README.md)."
+    "The screen shows the light band; hassmic's own screen (the face, the drawer) is built for this model but not yet tried on one, Kiosk Satellite where installed (docs/GUIDE.md). Alexa's apps stay off while hassmic runs ($DDIR/README.md)."
     "adb over Wi-Fi: the settings page's debug access (http://<echo-ip>:28931/), as on the other Echos, opens it for 30 min."
     "Updates: git pull, then scripts/ota-push.sh <echo-ip>."
     "More wake words, whisper or sound detection models: \"Download from Amazon\" on the settings page (scripts/artifacts.sh <echo-ip> is the fallback)."

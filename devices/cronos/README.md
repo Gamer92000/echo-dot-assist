@@ -13,9 +13,8 @@ with a shutter, volume keys, mic mute. No action button.
 ## Firmware
 
 Pinned: `update-kindle-cronos-NS65741_user_8149_0013222532484.bin`, Fire OS 6574.1 (NS65741/8149), sha256
-`fa6203b55d8764201cd531507750e66e1ab2215969433b52d715a4b6089f1b09`, 1388134745 bytes. Amazon's link, as
-[FTVDB](https://ftvdb.com/echo/firmware/com.amazon.cronos.android.os/c204364d8a65c6da5d60024c6334fe1e-13222532484-fire-os-6574-1-ns65741-8149-2026-09-28/) lists it:
-<https://d1s31zyz7dcc2d.cloudfront.net/2026/9/28/d8beae39-5193-4cbe-8efd-b1ea742e772e/update-kindle-cronos-NS65741_user_8149_0013222532484.bin>.
+`fa6203b55d8764201cd531507750e66e1ab2215969433b52d715a4b6089f1b09`, 1388134745 bytes. Download it from its
+[FTVDB record](https://ftvdb.com/echo/firmware/com.amazon.cronos.android.os/c204364d8a65c6da5d60024c6334fe1e-13222532484-fire-os-6574-1-ns65741-8149-2026-09-28/).
 This is cronos' own image, not checkers' (same build number, other files). The system partition must be exactly this
 build's: the boot image is made from its `boot.img` and hassmic links against its libraries. Newer builds (8150, 8151)
 are not supported until pinned here.
@@ -84,9 +83,10 @@ is built for it as for checkers; its JNI table resolves against this firmware (`
 **Open:** speaker gain by ear, Wi-Fi motion (module built, its hook site as checkers'), the DHA version for "Download
 from Amazon", Bluetooth, the screen UI on the Echo.
 
-The screen stays black but for the band: the install takes Amazon's apps off the system partition, Settings and System
-UI among them, as on checkers (`STOCK_APPS_OUT`; why: [devices/checkers/README.md](../checkers/README.md)). The Echo's
-settings are on its settings page and in Home Assistant.
+Amazon's screens are gone: the install takes Amazon's apps off the system partition, Settings and System UI among them,
+as on checkers (`STOCK_APPS_OUT`; why: [devices/checkers/README.md](../checkers/README.md)). hassmic's own screen
+takes their place ([docs/GUIDE.md](../../docs/GUIDE.md#the-screen-echo-show)); on this model only its band has been
+seen so far (open, above). The Echo's settings are on its settings page and in Home Assistant.
 
 ## Files here
 

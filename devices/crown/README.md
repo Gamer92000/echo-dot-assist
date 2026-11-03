@@ -13,11 +13,10 @@ shutter, volume keys, mic mute. No action button.
 ## Firmware
 
 Pinned: `update-kindle-crown-NS6570_user_6074_0012383140484.bin`, Fire OS 6.5.7.0 (NS6570), sha256
-`4b6fb088…ce421` (full value in `device.conf`), md5 `90ad1be88b4e7ed9ddb0ef58c8d6200a` as [FTVDB](https://ftvdb.com/echo/firmware/com.amazon.crown.android.os/90ad1be88b4e7ed9ddb0ef58c8d6200a-12383140484-fire-os-6-5-7-0-ns6570-6074-2025-08-23/) lists it, with
-Amazon's link:
-<https://d1s31zyz7dcc2d.cloudfront.net/2025/8/23/a4b315d6-00d4-4815-85c2-c36c01fa1ff2/update-kindle-crown-NS6570_user_6074_0012383140484.bin>.
-The system partition must be exactly this build's: the boot image is
-made from its `boot.img` and hassmic links against its libraries. amonet does not depend on the Fire OS version.
+`4b6fb088…ce421` (full value in `device.conf`). Download it from its
+[FTVDB record](https://ftvdb.com/echo/firmware/com.amazon.crown.android.os/90ad1be88b4e7ed9ddb0ef58c8d6200a-12383140484-fire-os-6-5-7-0-ns6570-6074-2025-08-23/).
+The system partition must be exactly this build's: the boot image is made from its `boot.img` and hassmic links
+against its libraries. amonet does not depend on the Fire OS version.
 
 ## Unlock (public: amonet-crown)
 
