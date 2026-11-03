@@ -20,7 +20,7 @@ case $1 in -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0;; esac
 [ -n "$1" ] && { export ANDROID_SERIAL=$1; [[ $1 == *:* ]] || ANDROID_SERIAL=$1:5555; }
 
 trap '[ -n "$TTY" ] && printf "\e[?25h\e[?7h"' EXIT
-trap '[ -n "$TASK_PID" ] && kill $TASK_PID 2>/dev/null; rm -rf "$TMP"; _clr; printf "\n  %sStopped. Run scripts/artifacts.sh again to go on; leave the Echo registered until then (deregistered as a stock Echo, it resets itself to factory settings).%s\n" "$DIM" "$N"; exit 130' INT TERM
+trap '[ -n "$TASK_PID" ] && kill $TASK_PID 2>/dev/null; [ -n "$ART_TMP" ] && rm -rf "$ART_TMP"; _clr; printf "\n  %sStopped. Run scripts/artifacts.sh again to go on; leave the Echo registered until then (deregistered as a stock Echo, it resets itself to factory settings).%s\n" "$DIM" "$N"; exit 130' INT TERM
 LOG=build/artifacts.log; mkdir -p build; [ -s $LOG ] && mv $LOG $LOG.1; : > $LOG   # the run before kept: it may be the one that failed
 MODEL_NAME="Artifacts"
 

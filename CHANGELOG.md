@@ -4,6 +4,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-03
 
+- **Setup on Windows: Ctrl-C no longer empties your Temp folder.** Stopping `scripts/setup.sh` (or
+  `scripts/artifacts.sh`) with Ctrl-C in Git Bash deleted everything in `C:\Users\<you>\AppData\Local\Temp` that no
+  running program held open: the scripts cleaned up a temporary folder under a name Windows already uses for that
+  folder. They now only delete what they made themselves (issue #103).
 - **Echo Show 5: the firewall no longer reloads every few seconds.** On a network whose router announces its own IPv6
   address as DNS server, the log said "lockdown re-applied (ip6tables: hassmic_out is not as loaded)" every 5 seconds,
   and "firewall rules wrong on two looks" with a restart of the firewall service every 20. The Echo stayed locked

@@ -41,7 +41,6 @@ done
 
 bye() {
     [ -n "$TASK_PID" ] && kill $TASK_PID 2>/dev/null
-    [ -n "$TMP" ] && rm -rf "$TMP"
     [ -n "$TTY" ] && printf '\e[?25h\e[?7h\r\e[K'
     printf '\n  %sStopped. Run scripts/setup.sh%s again to go on from here.%s\n' "$DIM" "${DEVICE:+ $DEVICE}" "$N"
     exit 130

@@ -17,6 +17,7 @@
 MODELS=device-logs/models
 D=/data/local/hassmic
 MAPDB=/data/ace/kvstorage/map.db
+ART_TMP=                        # artifacts_run's mktemp only: Ctrl-C's trap deletes it, so nothing from the environment
 ADB_OURS="ADB_WIFI=1 # artifacts.sh"
 ADB_OURS_OLD="ADB_WIFI=1 # wakeword.sh"   # the marker before the rename; an Echo stopped halfway may still carry it
 WW_KEYS=(echo computer amazon ziggy alexa)
@@ -46,13 +47,13 @@ is_whisper() { [ "${1%%-*}" = whisper ]; }
 region() { case $1 in en-US|en-CA|fr-CA|es-MX|pt-BR) echo NA;; ja-JP|en-AU|en-IN) echo FE;; *) echo EU;; esac; }
 wpa() { ashell "wpa_cli -i $WLAN -p $WPA_SOCKETS $*"; }
 net_ids() { wpa list_networks | awk 'NR > 1 { print $1 }' | tr '\n' ' '; }
-# token: the registered Echo's access token, pulled into $TMP/map.db, and one DAVS takes.  A registration left behind by
+# token: the registered Echo's access token, pulled into $ART_TMP/map.db, and one DAVS takes.  A registration left behind by
 # an older run keeps its expired token in map.db (DAVS: HTTP 403), so being there is not enough.
 token() {
-    rm -f $TMP/map.db*
-    for f in $(ashell "ls $MAPDB*" 2>/dev/null); do adb pull "$f" $TMP/ > /dev/null 2>&1; done
-    [ -n "$(sqlite3 $TMP/map.db "select value from deviceData where key='access_token'" 2>/dev/null)" ] &&
-        python3 tools/davs-fetch.py $TMP/map.db check > /dev/null 2>&1
+    rm -f $ART_TMP/map.db*
+    for f in $(ashell "ls $MAPDB*" 2>/dev/null); do adb pull "$f" $ART_TMP/ > /dev/null 2>&1; done
+    [ -n "$(sqlite3 $ART_TMP/map.db "select value from deviceData where key='access_token'" 2>/dev/null)" ] &&
+        python3 tools/davs-fetch.py $ART_TMP/map.db check > /dev/null 2>&1
 }
 # update_block: a firmware update would cost the unlock, so nothing goes on without main.sh's guard in place
 update_block() {
@@ -150,21 +151,23 @@ sub_list() {
     _on=$r
 }
 
-# fetch_model ID: one download from DAVS with the token in $TMP/map.db
+# fetch_model ID: one download from DAVS with the token in $ART_TMP/map.db
 fetch_model() {
     local id=$1 key=${1%%-*} loc=${1#*-} ecids=$ECIDS
     is_aed $id && { ecids=$AED_ECIDS; loc=$LOC; }
     [ $key = whisper ] && ecids=          # davs-fetch.py has its own request
-    task "Downloading $(label $id)" python3 tools/davs-fetch.py ${ecids:+--ecids $ecids} $TMP/map.db $key $loc $MODELS
+    task "Downloading $(label $id)" python3 tools/davs-fetch.py ${ecids:+--ecids $ecids} $ART_TMP/map.db $key $loc $MODELS
 }
 
 # artifacts_run: the whole thing
 artifacts_run() {
     local r
     M_PLAN=(connect "Connect" choose "Choose") INSTALLED=() FETCHED=() FAILED=()
-    TMP=$(mktemp -d)                  # map.db is the account's device credential: never kept on the PC
+    # map.db is the account's device credential: never kept on the PC.  Not TMP: Windows sets that to the user's Temp
+    # folder, Git Bash inherits it, and Ctrl-C's rm -rf emptied it (issue #103)
+    ART_TMP=$(mktemp -d)
     _artifacts_run; r=$?
-    rm -rf "$TMP"
+    rm -rf "$ART_TMP"
     return $r
 }
 
@@ -301,7 +304,7 @@ _artifacts_run() {
         for id in "${AMAZON[@]}"; do
             if fetch_model $id; then FETCHED+=("$id"); else FAILED+=("$id"); fi
         done
-        rm -f $TMP/map.db*
+        rm -f $ART_TMP/map.db*
         [ ${#FAILED[@]} -gt 0 ] &&
             info "Not downloaded: ${FAILED[*]} (why: above). Run this again to try again."
     fi
@@ -330,9 +333,9 @@ _artifacts_run() {
                 wpa_cli -i $WLAN -p $WPA_SOCKETS remove_network \$n; done; wpa_cli -i $WLAN -p $WPA_SOCKETS save_config" &&
                 { wait_adb device || return 1; }
         fi
-        task "Clearing the registration" sh -c "adb pull $MAPDB $TMP/map.db && sqlite3 $TMP/map.db 'delete from deviceData; vacuum;' &&
-            adb push $TMP/map.db $MAPDB && adb shell 'rm -f $MAPDB-wal $MAPDB-shm; chown ace_maplite:ace_maplite $MAPDB; chmod 660 $MAPDB'" || return 1
-        rm -f $TMP/map.db* $NETS
+        task "Clearing the registration" sh -c "adb pull $MAPDB $ART_TMP/map.db && sqlite3 $ART_TMP/map.db 'delete from deviceData; vacuum;' &&
+            adb push $ART_TMP/map.db $MAPDB && adb shell 'rm -f $MAPDB-wal $MAPDB-shm; chown ace_maplite:ace_maplite $MAPDB; chmod 660 $MAPDB'" || return 1
+        rm -f $ART_TMP/map.db* $NETS
         ashell "sed -i '/^MODE=/d' $D/hassmic.conf"
         task "Restarting the Echo as a satellite" adb reboot || return 1
         sleep 10
