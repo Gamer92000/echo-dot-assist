@@ -198,6 +198,11 @@ hashed; builds repeat byte for byte, so a commit that changes only CI, tests or 
 model's ID equals the newest release's, `main` publishes nothing. Its commits then show in the next beta's notes. A push
 to `release` always publishes.
 
+The release job packs the bundles again from the build jobs' artifacts, signed with the release key, and stops unless each
+is byte for byte the bundle its build job packed and checked (`<codename>.bundle-sha256`; the signature is a file of its
+own, so the key does not change the bundle): `bundle.sh` leaves out what it does not find, and a file missing from the
+artifact's list would otherwise go out without a word.
+
 The version is the commit's time in UTC, `2026.10.02.091530` (`make version`): nothing to bump. Home Assistant
 compares these as calendar versions, so newer is newer across both channels, and a commit published as beta and then
 as release has the same version: an Echo running that beta is not offered the release of it. A commit that is

@@ -11,7 +11,8 @@ cd "$(dirname "$0")/.."
 . scripts/lib/device.sh; device_load
 N=build/$DEVICE-content
 rm -rf $N; mkdir -p $N
-find $OUT -maxdepth 1 -type f ! -name 'hassmic*' -exec cp -p {} $N/ \;
+# not 'hassmic*': that left out Wi-Fi motion's module (hassmic_rcpi*.ko), so a change to it alone published no beta
+find $OUT -maxdepth 1 -type f ! -name hassmic ! -name 'hassmic.bundle*' -exec cp -p {} $N/ \;
 make -s DEVICE=$DEVICE RELEASE=1 OUT=$N VERSION=0 BUILD=0 BUILD_TIME=0 "$@" $N/hassmic >&2
 python3 scripts/otatool.py keygen $N/throwaway.key $N/throwaway.pub > /dev/null
 BUNDLE_FROM=$N scripts/bundle.sh $N/throwaway.key 0 > /dev/null
