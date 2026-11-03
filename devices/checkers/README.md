@@ -32,7 +32,7 @@ unlocked bootloader and TWRP (written to `recovery` and `swdl`). These files go 
 | File | Source | sha256 |
 |---|---|---|
 | `amonet-checkers-v2.0.1.zip` | the XDA thread | `770324a8ed5ab922c0383f8ba072d70fc0190cc2c879f12f67b8d6cfa3ad30ee` |
-| `update-kindle-checkers-NS65741_user_8149_0013222532484.bin` | Amazon | `f96fcfa1240f809711fcf855ce7742762437e4f37546153153635c096773cfa3` |
+| `update-kindle-checkers-NS65741_user_8149_0013222532484.bin` | Amazon, from [FTVDB](https://ftvdb.com/echo/firmware/com.amazon.checkers.android.os/2a4c5a8f3af7da963955229bd1431411-13222532484-fire-os-6574-1-ns65741-8149-2026-09-28/) (<https://d1s31zyz7dcc2d.cloudfront.net/2026/9/28/4ce2e205-8886-4121-8433-0d149c9b4036/update-kindle-checkers-NS65741_user_8149_0013222532484.bin>) | `f96fcfa1240f809711fcf855ce7742762437e4f37546153153635c096773cfa3` |
 | `boot-root.zip` | the XDA thread (one `boot-root.img`, see "Root" below); the install takes only its `sbin/adbd` (`ADBD` in `device.conf`, sha256 `108ba403…`) | `b2474113a1f3a4a8de6728ff72774761051945641e1a5ffa78ee25c2b19a809e` |
 | `magiskpolicy32` | `patch/magiskpolicy32` of donut's `boot-root.zip` ([its README](../donut/README.md)); the guided setup takes it from `firmware/donut/boot-root.zip` (where donut's setup keeps it, and where it asks for it) | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
 

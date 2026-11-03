@@ -155,6 +155,8 @@ jobs:
           for v in build/otatool-host "python3 scripts/otatool.py"; do
               $v verify secrets/throwaway.pub build/${{ matrix.device }}/hassmic.bundle build/${{ matrix.device }}/hassmic.bundle.sig
           done
+          # the bundle's bytes do not depend on the key (the signature is the .sig): the release job's must be this one
+          sha256sum build/${{ matrix.device }}/hassmic.bundle | cut -d' ' -f1 > build/${{ matrix.device }}.bundle-sha256
       # what the bundle holds apart from its version: the release job publishes a beta only when it changed
       - name: Content ID
         run: DEVICE=${{ matrix.device }} scripts/content-id.sh STUBS=1 > build/${{ matrix.device }}.content-id
@@ -165,6 +167,7 @@ jobs:
           name: build-${{ matrix.device }}
           path: |
             build/${{ matrix.device }}.content-id
+            build/${{ matrix.device }}.bundle-sha256
             build/${{ matrix.device }}/hassmic
             build/${{ matrix.device }}/runas
             build/${{ matrix.device }}/otatool
@@ -173,6 +176,7 @@ jobs:
             build/${{ matrix.device }}/mixplay
             build/${{ matrix.device }}/pryon_test
             build/${{ matrix.device }}/*.ko
+            build/${{ matrix.device }}/libhmui.so
           if-no-files-found: error
 
   test:
@@ -286,6 +290,13 @@ jobs:
           for c in build/*.content-id; do
               d=${c#build/}; d=${d%.content-id}
               DEVICE=$d scripts/bundle.sh secrets/release.key "$VERSION"
+              # bundle.sh leaves out what it does not find (a model without a screen has no libhmui.so), so a file missing
+              # from the artifact's list above went out without a word: every Show's screen UI until 2026-11-03.  The
+              # build job packed the same files at the same version: anything but its bytes is a lost file.
+              [ -s build/$d.bundle-sha256 ] ||
+                  { echo "::error::$d: $d.bundle-sha256 missing from the build artifact"; rm -f secrets/release.key; exit 1; }
+              [ "$(sha256sum build/$d/hassmic.bundle | cut -d' ' -f1)" = "$(cat build/$d.bundle-sha256)" ] ||
+                  { echo "::error::$d: bundle differs from the build job's: a file missing from its artifact"; rm -f secrets/release.key; exit 1; }
               # signed by the PC's otatool (Python): what the Echo's (C) checks must pass too, or nothing is published
               for v in build/otatool-host "python3 scripts/otatool.py"; do
                   $v verify keys/release.pub build/$d/hassmic.bundle build/$d/hassmic.bundle.sig > /dev/null ||

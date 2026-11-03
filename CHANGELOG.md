@@ -4,6 +4,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-03
 
+- **Echo Shows: the screen's face and drawer now come with the releases.** The published updates had left them out,
+  so a Show installed or updated from a release showed only the light band on a black screen. Builds of your own
+  (`make`, `scripts/ota-push.sh`) had it all along.
 - **Echo Show 5 2nd gen: the screen of its own too.** The face, the drawer from the top edge, the home app and Music
   Assistant on the screen, as on the 1st gen ([guide](docs/GUIDE.md#the-screen-echo-show)). It comes with the next
   update; not tried on one of these Echos yet.
