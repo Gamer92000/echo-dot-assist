@@ -4,6 +4,12 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-03
 
+- **Uninstalling from an Echo Show no longer leaves "OOBE has stopped" on the screen.** The install takes Amazon's apps
+  off the system partition, and Android forgets their data and permissions; put back, Amazon's setup wizard and Alexa's
+  speech service crashed in a loop ("OOBE has stopped", "SpeechUI has stopped"). `scripts/install-system.sh
+  --uninstall` now ends with a wipe of cache and data in TWRP (tap "Keep Read Only" when it asks), and the Echo starts
+  at Amazon's setup as a new one. It asks first (or `--uninstall --yes`). Already uninstalled and seeing these
+  messages? Run `scripts/install-system.sh --uninstall` again with the Echo on USB: it does only the wipe.
 - **Another firmware build with the same audio and wake word libraries installs like the pinned one.** The install
   stopped on any firmware but the one each model is built for, even where those libraries are byte for byte the same.
   Now it compares them (`scripts/probe.sh`) and goes on when they match, and the setup offers to keep an Echo rooted

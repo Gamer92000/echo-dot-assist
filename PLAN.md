@@ -3137,3 +3137,17 @@ Run in this order. Each step says what it proves.
       first, keeps the handles it was given.  Not reproduced (no Windows here): setup.sh now runs with stdin from
       /dev/null (every prompt reads /dev/tty, `live` hands it to the tools that ask), and on Windows `live` kills
       adb's server after its command (firebreak runs adb).  Open: the reporter's next run.
+- [x] Echo Shows' uninstall wipes cache and data (2026-11-03, a cronos uninstalled the day after its install): after
+      `--uninstall` Fire OS came up at Amazon's setup with "OOBE has stopped" and "SpeechUI has stopped" for good.  No
+      package disabled (`pm list packages -d` empty, though `alexa-disabled` still listed all 17: `alexa-on.sh` ran
+      before the apps were back on `/system`).  Crash buffer: `com.amazon.kindle.otter.oobe` 183 times, every 2-3 s,
+      NullPointerException in `ConfigBundleProvider.setUnZippedLocationOfDeviceConfigBundle` (no unzipped device config
+      bundle: its data went with the APK); `amazon.speech.sim` on RECORD_AUDIO (default grants come at the first boot
+      after a wipe only).  `twrp wipe cache && twrp wipe data` (TWRP 3.7.0_9-0, run after "Keep Read Only" was tapped:
+      the USB restart showed as a new adb transport) left `/data` with `media`, `misc`, `lost+found`; first boot then:
+      the wizard (`com.amazon.ds2.oobe.efd`) in front, RECORD_AUDIO `granted=true` (SYSTEM_FIXED GRANTED_BY_DEFAULT),
+      crash buffer empty.  `install-boot.sh --uninstall` now does it (asks, `--yes` without; read back as setup.sh's
+      `wipe_twrp`; a run on an Echo without hassmic on `/system`, or in TWRP, only wipes).  Found with it: `t "[ -f … ]"`
+      never failed (the status is `tr`'s), so neither did the install's check of `$STAGE/ok`: `on_echo` reads an answer.
+      `tests/unit/uninstall_boot_test.sh`.  Open: athena and cupcake (`install-system.sh`, STOCK_APPS_OUT too) only
+      print that a wipe is needed; whether their uninstall shows the same crashes is not seen.

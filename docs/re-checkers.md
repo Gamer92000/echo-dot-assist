@@ -316,8 +316,10 @@ setup; what was checked on the PC only says so.
   process left (`amazonfiled`, native), ~550 MB of 1 GB free, no dialogs; `neo-service-coordinator` still panics once
   at boot (binder registration), no dialog. Before the install, after a wipe, Amazon's setup wizard is in front:
   `alexa-off.sh` at the setup's lockdown step disables it and sets `device_provisioned`/`user_setup_complete`.
-  Open: uninstall puts the apps back but `alexa-on.sh` runs before that (packages missing then): disabled ones may
-  stay disabled.
+  Uninstall puts the apps back but `alexa-on.sh` runs before that (packages missing then), and the apps come back
+  without their data and default permissions: on a cronos (2026-11-03) none stayed disabled, but the setup wizard
+  crashed every 2-3 s (no device config bundle) and amazon.speech.sim on RECORD_AUDIO.  `install-boot.sh --uninstall`
+  now ends with TWRP's wipe of cache and data; after it, no crash.
 - [x] Firewall: `lockdown.sh` as on the Dots, plus `FW_KEEP` (DHCP answers; no stock `firewall.sh`); the updater's uid
   from `packages.list` for stock-online.
 - [x] Security: stock's `init.checkers.rc` sets `service.adb.tcp.port 5555` on boot, so with our ramdisk
