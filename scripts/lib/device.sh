@@ -34,10 +34,72 @@ device_load() {
 }
 
 # The binaries link against one firmware's libraries; on another one they may crash or misbehave in the audio path.
-# device_check_firmware [warn]: stop (or only warn) when the Echo on adb runs a different firmware.
+# firmware_same: the stock files of PROBE_FILES on the Echo on adb are byte-identical to the pinned firmware's
+# (scripts/probe.sh against devices/<codename>/probe.md5): the libraries whose interfaces are reverse-engineered or
+# whose behaviour hassmic is tuned to (wake word engine, mixer or audio HAL, front end).  Not probed: those with a
+# public, stable ABI it links (libopus, libz) or dlopens (libcurl, ...); a missing symbol there fails at load, and
+# the install's self test with it.  PROBE_DIFF: the probe's DIFFERENT lines.  2 when the probe did not run (no Echo on
+# adb, adb gone): nothing is known.  stdin /dev/null: adb shell forwards a terminal's input, and would take what was
+# typed ahead for the question below.
+firmware_same() {
+    local out
+    PROBE_DIFF=
+    out=$(sh scripts/probe.sh 2>/dev/null < /dev/null) || return 2
+    PROBE_DIFF=$(printf '%s\n' "$out" | grep DIFFERENT)
+    [ -z "$PROBE_DIFF" ]
+}
+
+# firmware_ok [id]: hassmic may go onto the Echo on adb, which runs firmware id (default: asked).  The pinned build, or
+# one whose PROBE_FILES are the pinned build's (Amazon's builds of one line mostly are: athena's 7077 and 7082 are 7080's)
+# where the install flashes nothing made for one build: INSTALL=twrp-ab and running write files and patch the policy of
+# the running OS.  INSTALL=boot flashes the pinned firmware's own boot.img, which must match the system build
+# (install-boot.sh checks it): the pinned build only.
+firmware_ok() {
+    local id=${1-$(adb shell getprop ro.build.display.id | tr -d '\r')}
+    [ "$id" = "$FIRMWARE_ID" ] && return 0
+    [ "$INSTALL" != boot ] && firmware_same
+}
+
+# firmware_warning ID: what a person is told before hassmic goes onto a build whose libraries differ (PROBE_DIFF)
+firmware_warning() {
+    echo
+    echo "################################################################################"
+    echo "# WARNING: this Echo runs firmware '$1'"
+    echo "#          $DEVICE support is built and tested for $FIRMWARE_ID"
+    if [ -n "$PROBE_DIFF" ]; then
+        echo "# Of the stock files scripts/probe.sh compares (the audio and wake word code), these differ from $FIRMWARE_ID's:"
+        printf '%s\n' "$PROBE_DIFF" | sed 's/^ */#   /'
+    else
+        echo "# scripts/probe.sh did not run, so it is not known whether its libraries are $FIRMWARE_ID's."
+    fi
+    echo "# If Amazon changed the audio or wake word code in them, hassmic may crash or hear nothing."
+    echo "################################################################################"
+    echo
+}
+
+# device_check_firmware [warn]: stop (or only warn) when the Echo on adb runs a firmware hassmic may not go onto
+# (firmware_ok).  INSTALL=running, libraries different: the person decides, since no step puts the pinned build back
+# (the Echo is rooted in the running OS, before this check) and a new line's libraries may differ by a rebuild only
+# (athena's 7806N: two of six, build ids, the same exported symbols; it ran).  HASSMIC_FIRMWARE_OK=1 is the answer; without it, asked on stdin when that is a terminal, never on
+# /dev/tty: scripts/setup.sh runs install-system.sh under task (output into its log, stdin /dev/null), where a
+# question on /dev/tty waited unseen behind the spinner.  setup.sh asks itself (firmware_accept) and passes the answer.
 device_check_firmware() {
+    local have a
     have=$(adb shell getprop ro.build.display.id | tr -d '\r')
     [ "$have" = "$FIRMWARE_ID" ] && return 0
+    if firmware_ok "$have"; then
+        echo "this Echo runs firmware '$have', not $FIRMWARE_ID, with the same probed stock files (scripts/probe.sh): going on" >&2
+        return 0
+    fi
     [ "$1" = warn ] && { echo "warning: this Echo runs firmware '$have', $DEVICE support is built for $FIRMWARE_ID" >&2; return 0; }
+    if [ "$INSTALL" = running ]; then
+        firmware_warning "$have" >&2
+        [ "$HASSMIC_FIRMWARE_OK" = 1 ] && return 0
+        [ -t 0 ] || die "no terminal to ask on: set HASSMIC_FIRMWARE_OK=1 to install anyway"
+        # || a=: install-system.sh is set -e, and a read at the end of input (Ctrl-D) ended it without a word
+        printf 'Install anyway? [y/N] ' >&2; read -r a || a=
+        case $a in y|Y|yes) return 0;; esac
+        die "cancelled: hassmic is built for $FIRMWARE_ID ($DDIR/README.md); HASSMIC_FIRMWARE_OK=1 installs anyway"
+    fi
     die "this Echo runs firmware '$have', $DEVICE support is built for $FIRMWARE_ID: reflash that one ($DDIR/README.md)"
 }

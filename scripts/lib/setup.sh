@@ -653,6 +653,29 @@ push_preset() {
         adb shell "chown $DAEMON_USER $PRESET_ON_ECHO; chmod 600 $PRESET_ON_ECHO; kill \$(pidof hassmic)"
 }
 
+# firmware_accept: before hassmic goes onto a model installed from the running OS (INSTALL=running: no firmware step
+# puts the pinned build back) whose stock libraries are not the pinned firmware's (firmware_ok): the person decides
+# here, since install-system.sh runs under task with no terminal to ask on (device_check_firmware), and the answer goes
+# to it as HASSMIC_FIRMWARE_OK=1.  Asked again by a later run of the setup: the answer is kept nowhere.
+firmware_accept() {
+    local fw a
+    [ -z "$DRY" ] && [ "$INSTALL" = running ] && [ "$HASSMIC_FIRMWARE_OK" != 1 ] || return 0
+    fw=$(ashell getprop ro.build.display.id)
+    firmware_ok "$fw" && return 0
+    printf '\n'
+    warn "${B}This Echo runs $fw; hassmic is built and tested for $FIRMWARE_ID.$N"
+    if [ -n "$PROBE_DIFF" ]; then
+        warn "Of the stock files scripts/probe.sh compares (the audio and wake word code), these differ from $FIRMWARE_ID's:"
+        printf '%s\n' "$PROBE_DIFF" | sed 's/^ */      /'
+    else
+        warn "scripts/probe.sh did not run: whether its libraries are $FIRMWARE_ID's is not known."
+    fi
+    warn "If Amazon changed the audio or wake word code in them, hassmic may crash or hear nothing."
+    prompt a "Type yes to install on $fw anyway:"
+    [ "$a" = yes ] || { info "Nothing installed: hassmic is built for $FIRMWARE_ID ($DDIR/README.md)."; return 1; }
+    export HASSMIC_FIRMWARE_OK=1
+}
+
 # install_satellite: the last step of every model.  Installs (scripts/install-system.sh), waits until the installed
 # satellite runs; the Echo names itself (model and MAC address, read from its log), people name it in Home Assistant.  Settings to start with (--preset, or asked): an export of another Echo's settings page.  Name and address go to $OUT/setup.env for the final screen.  There is no trial run before
 # it: run.sh does not read hassmic.conf, so a trial announced itself under the default name, and Home Assistant kept that
@@ -668,6 +691,7 @@ install_satellite() {
         prompt PRESET "Settings file (Enter for none)" ""
     done
     wait_adb device || return 1
+    firmware_accept || return 1
     if [ "$INSTALL" = boot ]; then   # in the foreground: a new boot image may need the power replugged (install-boot.sh)
         live "Installing (the Echo reboots)" bash -o pipefail -c "scripts/install-system.sh 2>&1 | tee -a '$LOG'" || return 1
     else task "Installing (the Echo reboots)" scripts/install-system.sh || return 1; fi

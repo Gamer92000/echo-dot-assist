@@ -143,8 +143,9 @@ if [ -n "$WINDOWS" ] && [ -z "$UNLOCK_WINDOWS" ] && [ ! -s $STATE ] && [ -z "$DR
 fi
 
 # --- an Echo rooted already, by these steps before or some other way (issue #10): the unlock would reboot it into TWRP
-# and the firmware step wipe it, so offer to go straight on.  Only with the firmware this model's support is built for;
-# anything else needs the firmware step anyway.
+# and the firmware step wipe it, so offer to go straight on.  Only with a firmware hassmic may go onto (firmware_ok: the
+# pinned one, or the same stock libraries where nothing build-bound is flashed); anything else needs the firmware step
+# anyway, or, where there is none (athena), the person's answer before the install (firmware_accept).
 if [ ! -s $STATE ] && [ -z "$DRY" ] && [ -n "$ROOTED_SKIP" ] && adb_is device 2>/dev/null && [ "$(ashell id -u)" = 0 ]; then
     fwid=$(ashell getprop ro.build.display.id)
     # athena's setup has no firmware step: its zip patches the system in place, and nothing there wipes
@@ -153,11 +154,12 @@ if [ ! -s $STATE ] && [ -z "$DRY" ] && [ -n "$ROOTED_SKIP" ] && adb_is device 2>
         wrongfw="the firmware step reflashes and wipes it"
     else
         keep="skip the unlock and root steps" scratch="Go through every step: a rooted Echo passes them, nothing is wiped"
-        wrongfw="no step here changes its firmware, and hassmic needs $FIRMWARE_ID"
+        wrongfw="no step here changes its firmware, and its stock libraries are not $FIRMWARE_ID's: the install asks before it goes on"
     fi
-    if [ "$fwid" = "$FIRMWARE_ID" ]; then
+    if firmware_ok "$fwid"; then
         header 1 $n "${STEP_LIST[@]}"
-        ok "The $MODEL_NAME on USB is rooted already and runs $FIRMWARE_ID."
+        same=; [ "$fwid" = "$FIRMWARE_ID" ] || same=", with $FIRMWARE_ID's stock libraries"
+        ok "The $MODEL_NAME on USB is rooted already and runs $fwid$same."
         menu a "Keep it as it is: $keep" "$scratch"
         if [ "$a" = 0 ]; then mark_done $ROOTED_SKIP rooted; else SCRATCH=1; fi
     else

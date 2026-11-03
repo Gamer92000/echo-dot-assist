@@ -8,6 +8,8 @@ ok_() { if [ "$1" = 0 ]; then echo "ok   $2"; else echo "FAIL $2"; fail=1; fi; }
 SYSTEM_DEV=/dev/block/platform/mtk-msdc.0/11230000.MSDC0/by-name/system
 LOG=/dev/null FW=x OUT=$Q FIRMWARE_BUILD=good FIRMWARE_ID=FW SYSTEM_IMG_SHA256=abc DRY=
 eval "$(grep -E '^(done_ids|mark_done)\(\)' scripts/setup.sh)"
+eval "$(sed -n '/^firmware_ok() {/,/^}/p' scripts/lib/device.sh)"
+firmware_same() { [ "$SAME" = 1 ]; }      # the probe's verdict on the Echo's stock libraries (tests/unit/firmware_test.sh)
 STATE=$Q/state
 sleep() { :; }
 
@@ -79,8 +81,8 @@ adb_is() { [ "$1" = device ]; }
 ashell() { case "$1" in id) echo 0;; getprop) echo "$FWID";; esac; }
 menu() { shift; echo "$*" > $Q/menu; printf -v a %s "$CHOICE"; }
 prompt() { printf -v a %s "$TYPED"; }
-rooted() {     # CHOICE TYPED ECHO-FIRMWARE MODEL-HAS-FIRMWARE-STEP
-    CHOICE=$1 TYPED=$2 FWID=$3
+rooted() {     # CHOICE TYPED ECHO-FIRMWARE MODEL-HAS-FIRMWARE-STEP [SAME-LIBRARIES [INSTALL]]
+    CHOICE=$1 TYPED=$2 FWID=$3 SAME=${5:-0} INSTALL=${6:-twrp-ab}
     command rm -f $STATE $Q/warned $Q/menu; : > $STATE; : > $Q/warned; : > $Q/menu
     ( DRY= DONE_IDS= ROOTED_SKIP="usb unlock root" MODEL_NAME=Echo ROOTED_NOTE= SCRATCH= STEP_LIST=(x) n=1 B= N=
       if [ "$4" = 1 ]; then step_system() { :; }; else unset -f step_system step_flash; fi
@@ -97,5 +99,11 @@ grep -q "reflashes and wipes it" $Q/warned; ok_ $? "other firmware: says it is w
 rooted 1 yes FW 0
 grep -q "nothing is wiped" $Q/menu && ! grep -q "reflash\|firmware" $Q/menu; ok_ $? "no firmware step (athena): the menu promises no wipe"
 rooted 0 yes other 0
-grep -q "no step here changes its firmware" $Q/warned; ok_ $? "no firmware step (athena): the note says so"
+grep -q "no step here changes its firmware" $Q/warned && grep -q "the install asks" $Q/warned; ok_ $? "no firmware step (athena): the note says so"
+rooted 0 x other 1 1
+grep -q rooted $STATE && ! grep -q wipe $STATE && [ ! -s $Q/warned ]; ok_ $? "other firmware, the same libraries: kept as it is"
+rooted 0 x other 0 1 running
+grep -q rooted $STATE && [ ! -s $Q/warned ]; ok_ $? "other firmware, the same libraries (athena): kept as it is"
+rooted 0 yes other 1 1 boot
+grep -q "reflashes and wipes it" $Q/warned && ! grep -q rooted $STATE; ok_ $? "other firmware, the same libraries, a boot image to flash: wiped"
 exit $fail
