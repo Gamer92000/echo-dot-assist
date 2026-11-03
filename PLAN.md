@@ -1501,7 +1501,9 @@ Run in this order. Each step says what it proves.
       in a quiet room: -73 dBFS, -45 dBFS in the second of the wake sound (speaker and mics work, the canceller
       leaves that much).
       Not done on the biscuit: the button pressed with this build (latch 1, red ring, HA), a spoken wake word and
-      command, a phone on A2DP
+      command, a phone on A2DP. The last two reported working (issue #106, 2026-11-02, 2026.11.02.000053-beta set up
+      from Windows 11 with firebreak): Alexa, and Echo and Ziggy de-DE from DAVS, through four Assist pipelines;
+      microWakeWord (Hey Jarvis, microwakeword.com models); a phone on A2DP; request and reply text
 - [x] System partition written from the running OS, no TWRP (2026-09-30, from issue #1: toybox `mount -o remount,rw /`
       fails because `/proc/mounts` names `/dev/root`, which does not exist, while `mount(2)` with MS_REMOUNT works).
       On all three models: `dm-0` named `system` spans the whole active slot (donut `system_b` = mmcblk0p14, radar
@@ -3001,3 +3003,20 @@ Run in this order. Each step says what it proves.
       to this model, keeps the refused ids with the tokens (`refused` line in `state/davs`, `"refused"` in
       `/api/davs`), forgets one that arrives after all; the Models warning and the download row point at Copy models
       instead.  `tests/fake_web_davs.py`.  Open: whether the Dots' whisper model runs on a Show (same libpryon).
+- [~] Setup on Windows, one whole run from a stock Dot 2 (issue #106, 2026-11-02, hannes813's Echo: Windows 11, Git
+      Bash, firebreak, LK `63cb91b-20221007_072309`, v2026.11.02.000053-beta): unlock, flash, root, lock-down, Wi-Fi
+      and install went through (the "Open: one whole run on Windows" of #49 and #60 above).  Two snags.  (1) The tip of
+      main was a README commit: CI publishes no beta of a commit whose bundles hold nothing new (content-id.sh), and
+      `prebuilt_tag` wanted a tag on HEAD itself, so Windows, which builds nothing, stopped at the tools step.  It now
+      also takes the newest release tag before HEAD (`git describe`, GitHub's tag on the same commit) when every path
+      changed since is `_bundle_free` (docs, tests, `.github`, the PC's scripts; `scripts/device`, `system`,
+      `bundle.sh`, `content-id.sh`, `otatool.py`, `lib/device.sh`, `kernel-tools.sh` and everything unnamed count as
+      the Echo's).  Checked: 71d099b -> v2026.11.02.000053-beta (README after it), f95d9f9 -> its own tag, 8977ebc ->
+      none (d9f8f62's src between).  docs/WINDOWS.md stays on main now (it checked out the newest tag, which left out
+      every later fix to the PC's scripts, #103's among them).  (2) Prompts that read /dev/tty took no keys and
+      ignored Ctrl-C, mintty and Windows Terminal both, until the window was closed: the drivers question and the
+      Wi-Fi name and password, not "Type yes"; a fresh window went on.  Both followed adb shell calls with the terminal as stdin (`fw_rooted`'s
+      ashell, the scan in `wifi_conf`), and the adb server, a native program started by whichever adb call comes
+      first, keeps the handles it was given.  Not reproduced (no Windows here): setup.sh now runs with stdin from
+      /dev/null (every prompt reads /dev/tty, `live` hands it to the tools that ask), and on Windows `live` kills
+      adb's server after its command (firebreak runs adb).  Open: the reporter's next run.

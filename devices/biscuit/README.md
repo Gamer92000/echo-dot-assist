@@ -75,8 +75,9 @@ firmware flash: it gives root adb, as on donut.
   from an administrator PowerShell as [its README says](https://github.com/bboe/firebreak#windows). firebreak writes
   amonet **v2.0.1**, as the setup does on Linux, with TWRP 3.7.0, downloads what it needs itself
   against pinned hashes, and ends where the flash and root steps end here: Fire OS 6574.1 build 8146 in both slots,
-  `boot-root.zip` installed, root adb. The setup then checks that and goes on with the build. Not run here as a whole
-  yet; firebreak's own README has it measured on Windows 11. amonet's zip runs on Windows by itself too
+  `boot-root.zip` installed, root adb. The setup then checks that and goes on with the build. Run as a whole on
+  Windows 11 (issue #106, 2026-11-02: Git Bash, LK 63cb91b-20221007_072309, from stock to installed, build
+  2026.11.02.000053-beta). amonet's zip runs on Windows by itself too
   (`fastbrick.bat`), which flashes with its bundled `bin\fastboot.exe` (platform-tools 36.0.0) before any system
   fastboot — but the one attempt reported through another fastboot (platform-tools 37.0.1, in a wrapper) was refused,
   the Echo unharmed (issue #74) — so the setup stays with firebreak from Windows.
@@ -95,10 +96,12 @@ firmware flash: it gives root adb, as on donut.
 
 - Mute latch: the file is there and reads 0 with the mics on (2026-09-30); not yet read with the button lit, nor the
   ring and Home Assistant watched over a press with the build that reads it.
-- A spoken wake word and a spoken command with the current build (a simulated wake word runs the pipeline through Home
-  Assistant; the microphone stream is alive and hears the Echo's own wake sound).
-- A2DP with a phone and BLE pairing not tried on biscuit yet (the controller comes up; see the table). A phone paired
-  and played on the Echo 2 (radar), same MT8163 combo, 2026-10-10.
+- BLE pairing not tried on biscuit yet (the controller comes up; see the table).
+
+Answered (issue #106, 2026-11-02, build 2026.11.02.000053-beta): a spoken wake word and command reach Home Assistant
+with Amazon's engine ("Alexa", and "Echo" and "Ziggy" de-DE from the page's "Download from Amazon", through four
+Assist pipelines) and with microWakeWord ("Hey Jarvis" of ESPHome's collection, community models); a phone paired and
+played over A2DP; "Request and reply text" fills its sensors.
 
 `INSTALL=twrp-ab` and the policy patch (`magiskpolicy32` from donut's boot-root zip) worked unchanged on the first biscuit (2026-09-28):
 `scripts/install-system.sh` wrote `system_a`, the Echo booted into the satellite.

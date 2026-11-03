@@ -15,6 +15,12 @@
 # Echo closes adb over Wi-Fi at its first boot.
 # The written instructions are the same steps: devices/<codename>/README.md.
 cd "$(dirname "$0")/.."
+# Nothing the setup runs gets the terminal as its stdin: every prompt reads /dev/tty, and live() hands it to the tools
+# that ask.  Issue #106, Git Bash (mintty and Windows Terminal): the prompts after adb shell calls (the drivers, the
+# Wi-Fi name) got no keys and ignored Ctrl-C until the window was closed, the ones before worked.  Likely why, not
+# reproduced: adb shell reads the stdin it is given, and the adb server, started by whichever adb call comes first,
+# keeps the handles it inherited.
+exec < /dev/null
 . scripts/lib/device.sh
 . scripts/lib/setup.sh
 . scripts/lib/build.sh

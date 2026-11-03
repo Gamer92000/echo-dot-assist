@@ -4,6 +4,15 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-03
 
+- **Setup on Windows: no "no release build of this commit" after a change to the docs.** Only changes to what goes
+  onto the Echo get a release build of their own, so with the newest commit changing only a README or the PC's
+  scripts, the setup refused to go on in Git Bash, where it cannot build anything. It now takes the newest release
+  before that commit, which holds the same files for the Echo (issue #106). So [docs/WINDOWS.md](docs/WINDOWS.md) no
+  longer has you check out the newest version by its tag: the project as cloned works, with the setup's newest fixes.
+- **Setup on Windows: prompts no longer stop taking keys.** In Git Bash, a question asked after the setup had talked
+  to the Echo (whether firebreak's drivers are installed, the Wi-Fi name and password) could ignore what you typed,
+  and Ctrl-C too, until the window was closed. The programs the setup runs no longer get the keyboard unless they
+  ask something themselves, the likely cause; should it happen again, please say so in issue #106.
 - **Setup on Windows: Ctrl-C no longer empties your Temp folder.** Stopping `scripts/setup.sh` (or
   `scripts/artifacts.sh`) with Ctrl-C in Git Bash deleted everything in `C:\Users\<you>\AppData\Local\Temp` that no
   running program held open: the scripts cleaned up a temporary folder under a name Windows already uses for that

@@ -11,20 +11,50 @@
 REPO=Gamer92000/echo-dot-assist         # as src/hassmic/update.c
 
 _head() { git rev-parse HEAD 2>/dev/null; }
+_vhead() { TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y.%m.%d.%H%M%S; }
 # no changes to tracked files: only then is the release's build this tree's
 _clean() { git diff --quiet HEAD -- 2>/dev/null; }
+# _gh_tag TAG: the commit GitHub's tag points at (CI's tags are lightweight)
+_gh_tag() {
+    curl -fsS --max-time 20 "https://api.github.com/repos/$REPO/git/ref/tags/$1" 2>/dev/null |
+        sed -n 's/.*"sha": *"\([0-9a-f]*\)".*/\1/p' | head -1
+}
+# _bundle_free PATH...: none of them goes into a model's bundle (scripts/bundle.sh) or into making what does: the docs,
+# the tests, the PC's own scripts.  Anything not named counts as the Echo's: wrong that way, a commit only goes without
+# a release build, as all did before.
+_bundle_free() {
+    for _p; do
+        case $_p in
+        scripts/device/*|scripts/system/*|scripts/bundle.sh|scripts/content-id.sh|scripts/otatool.py|\
+        scripts/lib/device.sh|scripts/kernel-tools.sh) return 1;;
+        *.md|docs/*|tests/*|testdata/*|blueprints/*|.github/*|scripts/*|devices/*/setup.sh|devices/*/probe.md5|\
+        LICENSE|.gitignore|.gitattributes|pyproject.toml|uv.lock) ;;
+        *) return 1;;
+        esac
+    done
+}
 
-# prebuilt_tag: the release of HEAD.  CI tags v<commit time, UTC> (-beta from main) on the commit it built: the tag must
-# point at HEAD itself.  Fails for a tree with changes, a commit not pushed, CI not done yet, or no git checkout.
+# prebuilt_tag: the release of HEAD.  CI tags v<commit time, UTC> (-beta from main) on the commit it built.  It
+# publishes no beta of a commit that changes nothing on the Echos (scripts/content-id.sh: docs, tests, the PC's
+# scripts), so failing that, the newest release tag before HEAD, when nothing after it touches a bundle (issue #106: a
+# README commit on top of main left Windows, which builds nothing, no release to take).  Fails for a tree with changes,
+# a commit not pushed, CI not done yet, or no git checkout.
 prebuilt_tag() {
     _clean || return 1
-    _h=$(_head) _v=$(TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y.%m.%d.%H%M%S)
+    _h=$(_head) _v=$(_vhead)
     for _t in v$_v-beta v$_v; do
-        _s=$(curl -fsS --max-time 20 "https://api.github.com/repos/$REPO/git/ref/tags/$_t" 2>/dev/null |
-             sed -n 's/.*"sha": *"\([0-9a-f]*\)".*/\1/p' | head -1)
-        [ "$_s" = "$_h" ] && { echo "$_t"; return 0; }
+        [ "$(_gh_tag $_t)" = "$_h" ] && { echo "$_t"; return 0; }
     done
+    # --no-renames: a file moved out of src/ into docs/ is listed under both names
+    _t=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2>/dev/null) && _c=$(git rev-parse "$_t^{commit}") &&
+        _bundle_free $(git diff --name-only --no-renames $_c HEAD) && [ "$(_gh_tag $_t)" = "$_c" ] &&
+        { echo "$_t"; return 0; }
     return 1
+}
+# prebuilt_of TAG: which commit's the release is, for messages
+prebuilt_of() {
+    if [ "${1%-beta}" = "v$(_vhead)" ]; then echo "of this commit ($1)"
+    else echo "for this commit ($1: what came after it changes nothing on the Echo)"; fi
 }
 
 # prebuilt_current: $OUT holds the release of HEAD already
@@ -58,14 +88,14 @@ prebuilt_fetch() {
     done
     { echo "$1 $(_head) $(cat $_d/files/VERSION)"; printf '%s\n' $_names; } > $OUT/PREBUILT
     rm -rf $_d
-    echo "release build $1 of this commit, verified:$_names"
+    echo "release build $(prebuilt_of $1), verified:$_names"
 }
 
 # build_binaries: the device binaries into $OUT, from wherever PREBUILT says
 build_binaries() {
     mkdir -p $OUT
     if [ "$PREBUILT" != 0 ]; then
-        prebuilt_current && { echo "release build $(head -1 $OUT/PREBUILT | cut -d' ' -f1) of this commit"; return 0; }
+        prebuilt_current && { echo "release build $(prebuilt_of "$(head -1 $OUT/PREBUILT | cut -d' ' -f1)")"; return 0; }
         if [ "$PREBUILT" = 1 ] || [ ! -d toolchain/android-ndk-r21e ]; then
             if _t=$(prebuilt_tag); then prebuilt_fetch "$_t"; return; fi
             [ "$PREBUILT" = 1 ] && die "GitHub has no release build of this commit (changes here, not pushed, or CI not done yet); build it here: PREBUILT=0"
