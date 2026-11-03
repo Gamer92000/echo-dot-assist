@@ -68,6 +68,32 @@ What that costs: the helper is the app's own code as the shell user, so the app 
 included. The settings above are Android's permissions, no wall against an app that wants past them. docs/SECURITY.md
 says the same to users.
 
+## Uninstalling
+
+`scripts/kiosk-install.sh --uninstall [echo-ip]` (`kiosk_remove`, `scripts/lib/kiosk.sh`). A plain `adb uninstall` fails:
+`kiosk_grants` makes the app a device admin, and Android refuses to uninstall an active admin
+(`DELETE_FAILED_DEVICE_POLICY_MANAGER`). The Shows have no Settings app to turn it off, and `dpm remove-active-admin` is
+`forceRemoveActiveAdmin`, which takes testOnly admins only, root or not. `removeActiveAdmin` would let root through
+(`MANAGE_DEVICE_ADMINS` is granted to uid 0), but only by `service call` with a transaction number of each firmware's own.
+
+So the script disables the admin's receiver, `pm disable <package>/<receiver>` for every admin of the package that
+`dumpsys device_policy` lists. The device policy service checks its admins on every `PACKAGE_CHANGED` and drops one whose
+receiver no longer resolves (`handlePackagesChanged`: `getReceiverInfo` without `MATCH_DISABLED_COMPONENTS`).
+`set-active-admin` refuses a disabled receiver ("Unknown admin", `findAdmin`), so a `kiosk_grants` meanwhile cannot bring
+it back. Then `pm uninstall`, once dumpsys no longer lists the admin; after 15 s without that, the receivers are enabled
+again and the script stops. Read in Amazon's `services.jar` of checkers, cronos (the same dex) and crown (2026-11-03);
+athena's is compact dex and was not read, AOSP 9's code is the same. **Not yet run on an Echo.**
+
+Within 10 s `kiosk_tick` sees the folder gone. It ends the update helper (`kiosk_helper_end`: that is the app's code as
+the shell user, started by us, so Android's uninstall does not end it), forgets the app, and the firewall closes 2324
+and 6053 (`lockdown.sh` reads packages.list: within about 3 s on athena, 2026-11-01). Simple Keyboard stays
+(`adb uninstall rkr.simplekeyboard.inputmethod`).
+
+By hand, as done on athena before the script (2026-11-01): `stop hassmic`, delete the app's `<admin>` block from
+`/data/system/device_policies.xml` as root (the service reads that file only at boot), reboot, `stop hassmic` again as
+soon as boot completes (a new `kiosk_tick` loop grants the admin on its first look), `adb uninstall`, `start hassmic`.
+The app itself offers no way to give up its admin (2026.10.45).
+
 ## Microphone and camera
 
 Settings `kiosk_mic`, `kiosk_camera` (settings page, System, shown once the app is installed; default off; not exported).

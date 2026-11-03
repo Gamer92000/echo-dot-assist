@@ -313,9 +313,17 @@ with tempfile.TemporaryDirectory() as tmp:
     check("no app: a change of setting touches nothing", "pm grant" not in c, c + o)
     open(tmp + "/hassmic/kiosk-app", "w").close(); tool(e.bin, "sleep", "exit 0")
 
+    helper = subprocess.Popen(["bash", "-c", f"exec -a ks-update-helper-10999 {real} 30"])
+    o, c = e.ticks("t")
+    check("installed: its update helper left alone", helper.poll() is None, o)
     e.install(0)
-    e.ticks("t")
+    o, c = e.ticks("t")
     check("uninstalled: the page is told", not os.path.exists(tmp + "/hassmic/kiosk-app"))
+    try: helper.wait(timeout=5)
+    except subprocess.TimeoutExpired: helper.kill(); helper.wait()
+    check("uninstalled: its update helper ended, said once", helper.returncode == -9 and o.count("uninstalled") == 1, o)
+    o, c = e.ticks("t; t")
+    check("and nothing more after", "uninstalled" not in o and c == "", c + o)
 
 # ------------------------------------------------------------------ scripts/lib/kiosk.sh: the download
 
@@ -500,6 +508,60 @@ esac''')
     echo_adb("x", "offline")
     r = script()
     check("script: no Echo said", r.returncode != 0 and "no Echo on adb" in r.stderr, r.stderr)
+
+# kiosk_remove: the device admin dropped by disabling its receiver, then the uninstall.  dumpsys as Android 7 prints it,
+# through an adb that ends lines with \r\n; the admin goes `gone` looks after the disable (None: never)
+ADMIN2 = PKG + "/me.jxl.kiosk_satellite.OtherAdmin"
+def remove(gone=2, installed=True, uninstall="Success", disable="new state: disabled", admins=(PKG + "/.KioskAdminReceiver",), script=False):
+    with tempfile.TemporaryDirectory() as tmp:
+        b = tmp + "/bin"; os.makedirs(b)
+        tool(b, "sleep", "exit 0")
+        listed = ": ; " + "".join(f"printf '    {a}:\\r\\n      uid=10183\\r\\n      policies:\\r\\n        force-lock\\r\\n'; " for a in admins)
+        tool(b, "adb", f'''echo "adb $*" >> {tmp}/calls
+case "$*" in
+get-state) echo device;;
+*getprop*) echo checkers;;
+"shell pm path {PKG}") {"echo package:/data/app/" + PKG + "-1/base.apk" if installed else ":"};;
+"shell dumpsys device_policy")
+    printf 'Current Device Policy Manager state:\\r\\n\\r\\n  Enabled Device Admins (User 0, provisioningState: 0):\\r\\n'
+    n=$(cat {tmp}/n 2>/dev/null || echo 0)
+    if [ -f {tmp}/off ]; then echo $((n+1)) > {tmp}/n; fi
+    if [ ! -f {tmp}/off ] || {"true" if gone is None else f"[ $n -lt {gone} ]"}; then {listed}fi
+    printf '  Device Owner: none\\r\\n';;
+"shell pm disable"*) echo "{disable}"; [ "{disable}" = "new state: disabled" ] && : > {tmp}/off;;
+"shell pm enable"*) rm -f {tmp}/off;;
+"shell pm uninstall {PKG}") n=$(cat {tmp}/n 2>/dev/null || echo 0)
+    if {"true" if not admins else f"[ -f {tmp}/off ] && [ $n -gt {gone if gone is not None else 10**6} ]"}; then echo "{uninstall}"; else echo "Failure [DELETE_FAILED_DEVICE_POLICY_MANAGER]"; exit 1; fi;;
+esac''')
+        env = {**os.environ, "PATH": b + ":" + os.environ["PATH"]}
+        if script:
+            r = subprocess.run(["sh", "scripts/kiosk-install.sh", "--uninstall"], cwd=ROOT, capture_output=True, text=True, env={**env, "DEVICE": ""})
+        else:
+            r = subprocess.run(["bash", "-c", "set -e; . scripts/lib/kiosk.sh; kiosk_remove"], cwd=ROOT, capture_output=True, text=True, env={**env, "KIOSK_PACKAGE": PKG})
+        calls = open(tmp + "/calls").read() if os.path.exists(tmp + "/calls") else ""
+        return r.returncode, calls, r.stdout + r.stderr
+
+c, calls, o = remove()
+check("uninstall: the admin's receiver disabled, then the app uninstalled", c == 0 and f"pm disable {PKG}/.KioskAdminReceiver\n" in calls
+      and calls.index("pm disable") < calls.index("pm uninstall"), calls + o)
+check("uninstall: not before Android dropped the admin", calls.count("dumpsys device_policy") == 4, calls)
+c, calls, o = remove(admins=(PKG + "/.KioskAdminReceiver", ADMIN2))
+check("uninstall: every admin of the app, by dumpsys", c == 0 and calls.count("pm disable") == 2 and f"pm disable {ADMIN2}\n" in calls, calls + o)
+c, calls, o = remove(gone=None)
+check("uninstall: the admin stays: given back, not uninstalled, said", c != 0 and f"pm enable {PKG}/.KioskAdminReceiver" in calls
+      and "pm uninstall" not in calls and "by hand" in o, calls + o)
+c, calls, o = remove(disable="Error: java.lang.SecurityException")
+check("uninstall: Android does not disable it: stopped", c != 0 and "pm uninstall" not in calls and "did not disable" in o, calls + o)
+c, calls, o = remove(admins=(PKG + "/.KioskAdminReceiver", ADMIN2), disable="no")
+check("uninstall: the first disable fails: nothing left disabled", c != 0 and calls.count("pm disable") == 1, calls + o)
+c, calls, o = remove(installed=False)
+check("uninstall: not installed: nothing touched", c == 0 and "pm disable" not in calls and "pm uninstall" not in calls and "not installed" in o, calls + o)
+c, calls, o = remove(uninstall="Failure [DELETE_FAILED_INTERNAL_ERROR]")
+check("uninstall: Android's failure said, exit 1", c != 0 and "DELETE_FAILED_INTERNAL_ERROR" in o, o)
+c, calls, o = remove(admins=())
+check("uninstall: no admin: uninstalled at once", c == 0 and "pm disable" not in calls and "pm uninstall" in calls, calls + o)
+c, calls, o = remove(script=True)
+check("script --uninstall: uninstalled, no download", c == 0 and "pm uninstall" in calls and "install -r" not in calls and "Done." in o, calls + o)
 
 # board.kiosk and device.conf say the same
 for m in sorted(os.listdir(ROOT + "/devices")):

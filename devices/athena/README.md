@@ -129,6 +129,7 @@ that is already installed:
 ```sh
 scripts/kiosk-install.sh             # over USB
 scripts/kiosk-install.sh <echo-ip>   # over Wi-Fi
+scripts/kiosk-install.sh --uninstall [<echo-ip>]   # takes it off again
 ```
 
 That fetches the newest release and Simple Keyboard, and the Echo opens the app by itself. Do its setup from your PC at
@@ -147,15 +148,7 @@ Kiosk Satellite wins the screen-timeout race against hassmic's `screen_off_timeo
 `SCREEN_BRIGHT_WAKE_LOCK` (`FLAG_KEEP_SCREEN_ON`) while its activity is foregrounded, so hassmic's 300 s setting never
 gets a chance to fire.
 
-Uninstalling it is not a plain `adb uninstall`: Kiosk Satellite registers itself as an Android device admin, and
-`hassmic`'s own `kiosk_tick` re-grants that admin within about a minute of it seeing the app (its component simply
-staying installed is enough — `pm path` succeeds for a disabled package too). AOSP also hardcodes
-`dpm`/`forceRemoveActiveAdmin` to refuse any admin that is not `testOnly`, so neither adb nor root can lift it that
-way, and this Echo has no Settings app to do it by hand (same limitation as crown/checkers: too many of Amazon's
-apps are gone for Settings to start). The only way found: `stop hassmic` (so `kiosk_tick` cannot re-grant the
-admin), edit the one `<admin>` block out of `/data/system/device_policies.xml` as root (keep the original as
-`device_policies.xml.pre-hassmic`), reboot, and `stop hassmic` again within the first few seconds after
-`sys.boot_completed` (before `kiosk_tick`'s ~60 s grace window reasserts it). `adb uninstall` then succeeds; the
-2324/6053 firewall rules close within about 3 seconds, by `hassmic_fw`'s own loop (`lockdown.sh` reads the package
-straight out of `/data/system/packages.list`), independent of the `hassmic` service being stopped. Worth raising with
-Kiosk Satellite's developer: a production kiosk app should offer its own clean deactivation/uninstall path.
+Uninstalling it is not a plain `adb uninstall`: Kiosk Satellite is an Android device admin, which Android refuses to
+uninstall. `scripts/kiosk-install.sh --uninstall` takes the admin off first;
+[docs/kiosk-satellite.md](../../docs/kiosk-satellite.md#uninstalling) has how, and the way by hand used on this Echo
+before the script existed. Once the app was gone, ports 2324 and 6053 closed within about 3 seconds.

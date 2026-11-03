@@ -57,3 +57,36 @@ kiosk_get() {
     }
     adb_install "$f"
 }
+
+# Taking it off again.  kiosk_grants made it a device admin, and Android refuses to uninstall an active admin
+# (DELETE_FAILED_DEVICE_POLICY_MANAGER); `dpm remove-active-admin` is forceRemoveActiveAdmin, for testOnly admins only,
+# root or not.  Disabling the admin's receiver does it: the device policy service looks at its admins on every
+# PACKAGE_CHANGED and drops one whose receiver no longer resolves (handlePackagesChanged), and set-active-admin refuses a
+# disabled receiver ("Unknown admin", findAdmin), so a kiosk_grants meanwhile cannot bring it back.  Read in the
+# services.jar of checkers, cronos and crown; athena's is compact dex, AOSP 9's code is the same.  The admins as dumpsys
+# lists them ("    <package>/<receiver>:"), not only the one kiosk_grants sets.
+kiosk_admins() { adb shell dumpsys device_policy | tr -d '\r' | sed -n "s|^ *\($KIOSK_PACKAGE/[^ :]*\):\$|\1|p"; }
+kiosk_admins_back() { for c in $1; do adb shell pm enable "$c" > /dev/null; done; }
+kiosk_remove() {
+    adb shell pm path $KIOSK_PACKAGE | grep -q '^package:' || { echo "Kiosk Satellite is not installed"; return 0; }
+    a=$(kiosk_admins) off=
+    for c in $a; do
+        case "$(adb shell pm disable "$c" 2>&1)" in
+        *"new state: disabled"*) off="$off $c";;
+        *) kiosk_admins_back "$off"; echo "$c: Android did not disable it" >&2; return 1;;
+        esac
+    done
+    # the broadcast goes out at once (pm disable kills the app); its handling takes a moment
+    i=0
+    while [ -n "$(kiosk_admins)" ]; do
+        i=$((i + 1))
+        [ $i -le 15 ] || {
+            kiosk_admins_back "$off"
+            echo "Android still lists it as a device admin; docs/kiosk-satellite.md \"Uninstalling\" has the way by hand" >&2
+            return 1
+        }
+        sleep 1
+    done
+    o=$(adb shell pm uninstall $KIOSK_PACKAGE 2>&1) || :
+    case "$o" in *Success*) ;; *) echo "$o" >&2; return 1;; esac
+}

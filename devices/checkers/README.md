@@ -226,6 +226,7 @@ that is already installed:
 ```sh
 scripts/kiosk-install.sh             # over USB
 scripts/kiosk-install.sh <echo-ip>   # over Wi-Fi
+scripts/kiosk-install.sh --uninstall [<echo-ip>]   # takes it off again
 ```
 
 That fetches the newest release and Simple Keyboard, and the Echo opens the app by itself. Do its setup from your PC at

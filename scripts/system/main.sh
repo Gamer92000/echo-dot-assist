@@ -293,6 +293,15 @@ kiosk_helper_said() {
     *) echo "kiosk update helper: $(echo "$out" | tail -1)";;
     esac
 }
+# The app is gone, so its helper goes too: that is the shell user's power for code that is no longer on the Echo.  Android's
+# uninstall ends only the processes it started for the app's uid, not one of ours as shell; whether the helper ends by
+# itself is not known.  By its name (`ks-update-helper-<uid>`) in the command line: the Show 5's toybox pkill has no -f.
+# One grep for all of /proc, once per uninstall.
+kiosk_helper_end() {
+    for f in $(grep -l ks-update-helper- /proc/[0-9]*/cmdline 2> /dev/null); do
+        f=${f#/proc/}; kill -9 ${f%/cmdline} 2> /dev/null
+    done
+}
 # One look, every 10 s, without Java (a pm per round would be a whole runtime): the folder of the app's APK says it is
 # there, and is another one after an install or update (the same uid can come back), so grants never wait for a boot.  Where our
 # home screen is what shows, the app has ended (setting switched off, crash, its own update) or never opened: no check for
@@ -304,6 +313,7 @@ kiosk_tick() {
     k=$(ls -d /data/app/$KIOSK_PACKAGE-* 2>/dev/null)
     if [ -z "$k" ]; then
         kiosk_stale > /dev/null
+        [ -f $KIOSK_APP ] && { kiosk_helper_end; echo "kiosk satellite: uninstalled"; }
         rm -f $KIOSK_APP $KIOSK_PID $KIOSK_SAID $KIOSK_SAID.new; kiosk_seen=
         return 0
     fi

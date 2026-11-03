@@ -2977,6 +2977,19 @@ Run in this order. Each step says what it proves.
       checkers had none); `kiosk_tick` replaces once-per-boot: install, reinstall and an ended app handled within 10 s
       (`mResumedActivity` is hassmic-home), one open a minute; `kiosk_camera` (off); `board.kiosk` instead of the band for the
       settings; the page shows the rows once root's `kiosk-app` exists; `tests/unit/kiosk_test.py`.  `install_screen_apps` in setup and `scripts/kiosk-install.sh`: newest release, sha256 from GitHub, signer pinned on the PC (`apkcert.py`).
+- [~] Kiosk Satellite uninstall (2026-11-03, PR #76): `kiosk_grants` makes it a device admin, so `pm uninstall` fails with
+      `DELETE_FAILED_DEVICE_POLICY_MANAGER`, and `dpm remove-active-admin` (`forceRemoveActiveAdmin`) refuses non-testOnly
+      admins, root included; the way found on athena (2026-11-01) was editing `device_policies.xml` and a reboot.
+      `scripts/kiosk-install.sh --uninstall` (`kiosk_remove`): `pm disable` of each admin receiver dumpsys lists, wait
+      until dumpsys drops it (15 s, else enabled again), `pm uninstall`.  Why that works, from checkers' and crown's
+      `services.jar` (androguard; cronos' dex is checkers'): `DevicePolicyManagerService$4.onReceive` hands
+      `PACKAGE_CHANGED` to `handlePackagesChanged`, which drops an admin whose `getReceiverInfo(.., 0xC0000)` is null
+      (direct boot flags only, so a disabled receiver does not resolve) and saves; `findAdmin` asks with 0xC8080
+      (`MATCH_DISABLED_UNTIL_USED_COMPONENTS`, not disabled), so `set-active-admin` throws "Unknown admin" meanwhile.
+      Amazon added `VendorDevicePolicyManagerCallback.callIsDeactivationBlocked` to `removeActiveAdmin`, not to that path.
+      athena's services are compact dex (`cdex001` in the vdex), not read.  `kiosk_tick` now ends `ks-update-helper-*`
+      when the app goes (`kiosk_helper_end`, by `/proc/*/cmdline`: toybox pkill on Android 7 has no -f).
+      `tests/unit/kiosk_test.py` with a stand-in adb.  Open: a run on an Echo.
 - [~] WPA2/WPA3 mixed Wi-Fi (issue #90, 2026-11-01; reported and tried on an Echo 2 by its reporter; this form on the PC,
       and on a Dot 2 with its writes stubbed).  wifisvc's `libacehal_network_all.so` (biscuit, radar, donut) rewrites entries to `WPA-PSK
       WPA-PSK-SHA256` at each start; on an AP with `[WPA2-PSK+SAE+PSK-SHA256-CCMP]` radar's driver refuses that AKM
