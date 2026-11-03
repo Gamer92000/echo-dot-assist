@@ -446,7 +446,7 @@ Beyond the README's two figures:
 
 ## The screen (Echo Show)
 
-On the Echo Show 5 (both generations) and the Echo Show 8 1st gen. hassmic's own screen is small on purpose: the
+On the Echo Show 5 and the Echo Show 8, both generations. hassmic's own screen is small on purpose: the
 Show's screen is yours to give to any app (Kiosk Satellite, View
 Assist, a dashboard browser). Install apps with `adb install <app>.apk`; Amazon's WebView is there for those that
 show web pages. Only one app can use the microphone at a time, and hassmic has it: an app that runs a voice

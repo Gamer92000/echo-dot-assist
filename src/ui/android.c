@@ -6,7 +6,8 @@
  *
  * JNI_OnLoad starts the UI's thread; the dex's main thread waits on it for ever, and this thread ends the process.
  * What runs where:
- *   layer     a SurfaceFlinger layer of our own (SurfaceControl, as ringbar.dex makes the band's) over the screen above
+ *   layer     a SurfaceFlinger layer of our own (SurfaceControl, as ringbar.dex makes the band's; SurfaceControl.Builder
+ *             from SDK 26, Android 9 has no such constructor) over the screen above
  *             the band, under the band's layer, over every window; shown only while hassmic's home activity is in
  *             front (scene.h says why).  Drawn through ANativeWindow_lock: the gralloc buffer itself, the dirty
  *             rectangle only (Surface copies the rest from the last frame).  On the Echo Show 5 (2026-10-14): a
@@ -33,8 +34,8 @@
  *             them; as ringbar.dex did, which this replaces where the UI runs), a layer of its own over everything,
  *             one row per frame from hassmic ("band <w>" + w ARGB pixels), repeated down the band
  *
- * Every class, method and field reached through JNI is in the table below (J, F, C); tools/mkscreen.py
- * --framework checks it against the firmware's boot class path, as it checks the dex.
+ * Every class, method and field reached through JNI is in the table below (J, F, C; JV, CV those of some Android
+ * versions only); tools/mkscreen.py --framework checks it against the firmware's boot class path, as it checks the dex.
  */
 #include <jni.h>
 #include <android/bitmap.h>
@@ -74,7 +75,7 @@ static JavaVM *vm;
 
 static jclass c_rect, c_session, c_sc, c_surface, c_sm, c_pm_stub, c_amn, c_list, c_cn, c_intent, c_ipm_stub, c_plist,
               c_obj, c_am, c_res, c_bitmap, c_config, c_canvas, c_tpaint, c_typeface, c_textutils, c_truncate,
-              c_bfactory, c_im, c_keyevent, c_clock, c_dmg, c_wm_stub;
+              c_bfactory, c_im, c_keyevent, c_clock, c_dmg, c_wm_stub, c_scb;
 static jmethodID m_below, m_rect, m_sleep, m_wake, m_bmp_copy, m_session, m_sc_init, m_open, m_close, m_layer, m_pos, m_show, m_hide, m_surface, m_copy,
                  m_service, m_pm_as, m_interactive, m_amn_default, m_tasks, m_start, m_size, m_get, m_cn_pkg,
                  m_intent0, m_intent, m_cat, m_classname, m_package, m_flags, m_ipm_as, m_query, m_plist_get,
@@ -82,15 +83,20 @@ static jmethodID m_below, m_rect, m_sleep, m_wake, m_bmp_copy, m_session, m_sc_i
                  m_res_text, m_res_draw, m_dr_bounds, m_dr_draw, m_bmp_create, m_bmp_crop, m_bmp_scale, m_bmp_recycle,
                  m_bmp_w, m_bmp_h, m_canvas, m_drawtext, m_tpaint, m_textsize, m_settf, m_measure, m_metrics,
                  m_tf_create, m_ellipsize, m_decode, m_im_get, m_inject, m_key, m_uptime, m_dmg_get, m_dinfo,
-                 m_wm_as, m_overscan;
+                 m_wm_as, m_overscan, m_scb_init, m_scb_name, m_scb_size, m_scb_format, m_scb_flags, m_scb_build, m_tasks1;
 static jfieldID f_base, f_ri_ai, f_ri_label, f_ri_labelres, f_ri_icon, f_pi_pkg, f_pi_name, f_pi_label, f_pi_labelres,
                 f_pi_icon, f_ci_app, f_app_src, f_app_flags, f_fm_ascent, f_fm_descent, f_cfg_alpha8, f_cfg_argb, f_tf_default,
                 f_trunc_end, f_di_w, f_di_h, f_di_rot;
 
-#define C(v, n)             { &v, n }
-#define J(v, c, n, s, st)   { &v, c, n, s, st }
-#define F(v, c, n, s, st)   { &v, c, n, s, st }
-static const struct { jclass *v; const char *n; } classes[] = {
+/* JV, CV: only where from <= ro.build.version.sdk < to (0: no bound), resolved there alone (NULL elsewhere): what Android
+ * 9 (athena, SDK 28) changed of Android 7's (25) */
+static int sdk;
+#define C(v, n)                         { &v, n, 0, 0 }
+#define CV(v, n, from, to)              { &v, n, from, to }
+#define J(v, c, n, s, st)               { &v, c, n, s, st, 0, 0 }
+#define JV(v, c, n, s, st, from, to)    { &v, c, n, s, st, from, to }
+#define F(v, c, n, s, st)               { &v, c, n, s, st }
+static const struct { jclass *v; const char *n; int from, to; } classes[] = {
     C(c_rect, "android/graphics/Rect"), C(c_session, "android/view/SurfaceSession"), C(c_sc, "android/view/SurfaceControl"), C(c_surface, "android/view/Surface"),
     C(c_sm, "android/os/ServiceManager"), C(c_pm_stub, "android/os/IPowerManager$Stub"),
     C(c_amn, "android/app/ActivityManagerNative"), C(c_list, "java/util/List"), C(c_cn, "android/content/ComponentName"),
@@ -103,10 +109,17 @@ static const struct { jclass *v; const char *n; } classes[] = {
     C(c_bfactory, "android/graphics/BitmapFactory"), C(c_im, "android/hardware/input/InputManager"),
     C(c_keyevent, "android/view/KeyEvent"), C(c_clock, "android/os/SystemClock"),
     C(c_dmg, "android/hardware/display/DisplayManagerGlobal"), C(c_wm_stub, "android/view/IWindowManager$Stub"),
+    CV(c_scb, "android/view/SurfaceControl$Builder", 26, 0),
 };
-static const struct { jmethodID *v; const char *c, *n, *s; int st; } methods[] = {
+static const struct { jmethodID *v; const char *c, *n, *s; int st, from, to; } methods[] = {
     J(m_session, "android/view/SurfaceSession", "<init>", "()V", 0),
-    J(m_sc_init, "android/view/SurfaceControl", "<init>", "(Landroid/view/SurfaceSession;Ljava/lang/String;IIII)V", 0),
+    JV(m_sc_init, "android/view/SurfaceControl", "<init>", "(Landroid/view/SurfaceSession;Ljava/lang/String;IIII)V", 0, 0, 26),
+    JV(m_scb_init, "android/view/SurfaceControl$Builder", "<init>", "(Landroid/view/SurfaceSession;)V", 0, 26, 0),
+    JV(m_scb_name, "android/view/SurfaceControl$Builder", "setName", "(Ljava/lang/String;)Landroid/view/SurfaceControl$Builder;", 0, 26, 0),
+    JV(m_scb_size, "android/view/SurfaceControl$Builder", "setSize", "(II)Landroid/view/SurfaceControl$Builder;", 0, 26, 0),
+    JV(m_scb_format, "android/view/SurfaceControl$Builder", "setFormat", "(I)Landroid/view/SurfaceControl$Builder;", 0, 26, 0),
+    JV(m_scb_flags, "android/view/SurfaceControl$Builder", "setFlags", "(I)Landroid/view/SurfaceControl$Builder;", 0, 26, 0),
+    JV(m_scb_build, "android/view/SurfaceControl$Builder", "build", "()Landroid/view/SurfaceControl;", 0, 26, 0),
     J(m_open, "android/view/SurfaceControl", "openTransaction", "()V", 1),
     J(m_close, "android/view/SurfaceControl", "closeTransaction", "()V", 1),
     J(m_layer, "android/view/SurfaceControl", "setLayer", "(I)V", 0),
@@ -119,7 +132,8 @@ static const struct { jmethodID *v; const char *c, *n, *s; int st; } methods[] =
     J(m_pm_as, "android/os/IPowerManager$Stub", "asInterface", "(Landroid/os/IBinder;)Landroid/os/IPowerManager;", 1),
     J(m_interactive, "android/os/IPowerManager", "isInteractive", "()Z", 0),
     J(m_amn_default, "android/app/ActivityManagerNative", "getDefault", "()Landroid/app/IActivityManager;", 1),
-    J(m_tasks, "android/app/IActivityManager", "getTasks", "(II)Ljava/util/List;", 0),
+    JV(m_tasks, "android/app/IActivityManager", "getTasks", "(II)Ljava/util/List;", 0, 0, 28),
+    JV(m_tasks1, "android/app/IActivityManager", "getTasks", "(I)Ljava/util/List;", 0, 28, 0),     /* (Android 9: no flags) */
     J(m_start, "android/app/IActivityManager", "startActivityAsUser", "(Landroid/app/IApplicationThread;Ljava/lang/String;Landroid/content/Intent;Ljava/lang/String;Landroid/os/IBinder;Ljava/lang/String;IILandroid/app/ProfilerInfo;Landroid/os/Bundle;I)I", 0),
     J(m_size, "java/util/List", "size", "()I", 0),
     J(m_get, "java/util/List", "get", "(I)Ljava/lang/Object;", 0),
@@ -222,14 +236,21 @@ static int failed(JNIEnv *env, const char *what)
     return 1;
 }
 
+static int applies(int from, int to) { return (!from || sdk >= from) && (!to || sdk < to); }
+
 static int resolve(JNIEnv *env)
 {
+    char v[PROP_VALUE_MAX] = "";
+    __system_property_get("ro.build.version.sdk", v);
+    sdk = atoi(v);
     for (size_t i = 0; i < sizeof classes / sizeof classes[0]; i++) {
+        if (!applies(classes[i].from, classes[i].to)) continue;
         jclass c = (*env)->FindClass(env, classes[i].n);
         if (!c || failed(env, classes[i].n)) { (*env)->ExceptionClear(env); say("no class %s", classes[i].n); return -1; }
         *classes[i].v = (*env)->NewGlobalRef(env, c); (*env)->DeleteLocalRef(env, c);
     }
     for (size_t i = 0; i < sizeof methods / sizeof methods[0]; i++) {
+        if (!applies(methods[i].from, methods[i].to)) continue;
         jclass c = (*env)->FindClass(env, methods[i].c);
         if (c) *methods[i].v = methods[i].st ? (*env)->GetStaticMethodID(env, c, methods[i].n, methods[i].s)
                                               : (*env)->GetMethodID(env, c, methods[i].n, methods[i].s);
@@ -779,7 +800,17 @@ static int layer_make(JNIEnv *env, struct layer *l, const char *name, int w, int
     if (!session) { jobject s = (*env)->NewObject(env, c_session, m_session); if (failed(env, "SurfaceSession") || !s) return -1; session = (*env)->NewGlobalRef(env, s); }
     jstring nm = (*env)->NewStringUTF(env, name);
     if (failed(env, "name") || !nm) return -1;
-    jobject c = (*env)->NewObject(env, c_sc, m_sc_init, session, nm, w, h, -1 /* OPAQUE */, 4 /* HIDDEN */);
+    jobject c = NULL;
+    if (c_scb) {                                                /* SDK 26 on: the Builder, the constructor's arguments */
+        jobject b = (*env)->NewObject(env, c_scb, m_scb_init, session);
+        if (!failed(env, "SurfaceControl.Builder") && b) {
+            (*env)->CallObjectMethod(env, b, m_scb_name, nm);
+            if (!failed(env, "setName")) (*env)->CallObjectMethod(env, b, m_scb_size, w, h);
+            if (!failed(env, "setSize")) (*env)->CallObjectMethod(env, b, m_scb_format, -1 /* OPAQUE */);
+            if (!failed(env, "setFormat")) (*env)->CallObjectMethod(env, b, m_scb_flags, 4 /* HIDDEN */);
+            if (!failed(env, "setFlags")) c = (*env)->CallObjectMethod(env, b, m_scb_build);
+        }
+    } else c = (*env)->NewObject(env, c_sc, m_sc_init, session, nm, w, h, -1 /* OPAQUE */, 4 /* HIDDEN */);
     if (failed(env, "SurfaceControl") || !c) return -1;
     l->sc = (*env)->NewGlobalRef(env, c); l->w = w; l->h = h;
     (*env)->CallStaticVoidMethod(env, c_sc, m_open);
@@ -870,7 +901,7 @@ static void poll_front(JNIEnv *env, struct scene *s, jobject am)
     }
     if (!power_) power_manager(env);
     if (osc.owed) overscan(env, osc.rot, osc.rows, osc.top);
-    jobject l = am ? (*env)->CallObjectMethod(env, am, m_tasks, 1, 0) : NULL;
+    jobject l = !am ? NULL : m_tasks1 ? (*env)->CallObjectMethod(env, am, m_tasks1, 1) : (*env)->CallObjectMethod(env, am, m_tasks, 1, 0);
     int bad = failed(env, "getTasks") || !am;
     /* failing for good: system_server started again (this process is hassmic's child, not zygote's, and outlives it;
      * the binder proxies it holds are dead).  Ended: hassmic starts a new one, which asks for the services anew */

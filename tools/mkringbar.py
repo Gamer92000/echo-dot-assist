@@ -498,7 +498,8 @@ def emit():
 
 # ---------------------------------------------------------------- against the firmware's own framework
 # What the reflection asks the framework for (class, method or "<init>", parameter types, static), checked
-# against the boot class path of 8149 by --framework, and the ints the code has written in.
+# against the boot class path of each firmware --framework names (make unit: every model with the band), and the ints
+# the code has written in.
 SC, SURF, CANVAS = "Landroid/view/SurfaceControl;", "Landroid/view/Surface;", "Landroid/graphics/Canvas;"
 SCB = "Landroid/view/SurfaceControl$Builder;"
 DMG, DINFO = "Landroid/hardware/display/DisplayManagerGlobal;", "Landroid/view/DisplayInfo;"

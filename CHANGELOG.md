@@ -9,6 +9,8 @@ What changed for people using the Echo, newest first. Details and measurements a
   update; not tried on one of these Echos yet.
 - **Echo Show 8 1st gen: the screen of its own too**, the same as on the Show 5, laid out for its larger screen. It
   comes with the next update; not tried on a Show 8 yet.
+- **Echo Show 8 2nd gen: the screen of its own too**, now on every Echo Show hassmic runs on. It comes with the next
+  update; not tried on one yet.
 - **Echo Show 5: a screen of its own** ([guide](docs/GUIDE.md#the-screen-echo-show)). Over hassmic's home screen the
   Show now has a face: two eyes that listen, think and speak with the assistant (a mouth moves with the reply), close
   when the microphone is off, sleep in Do not disturb, light up for a ringing timer (with a Stop button) and for a Drop

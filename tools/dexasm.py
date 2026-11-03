@@ -738,31 +738,48 @@ def read(data, prog):
 
 
 # ---------------------------------------------------------------- against the firmware's own framework
+def unhide(acc, method):
+    """a field's or method's access flags without Android 9's hidden API bits, as ART's
+    HiddenApiAccessFlags::RemoveFromDex takes them off: the first bit turns public into two visibility bits at once
+    (XOR 7: none a valid dex has), the second is 0x20, unused on fields and on methods that are not native; a native
+    method's 0x20 is its own (synchronized: 44 on checkers' boot classpath, 45 on athena's), so there it is 0x200"""
+    if bin(acc & 7).count("1") > 1:
+        acc ^= 7
+    return acc & ~(0x200 if method and acc & 0x100 else 0x20)
+
+
 def boot_classes(rootfs):
     """every class of the boot class path: the dex files inside /system/framework/<arch>/boot*.oat (Android 7
-    keeps them there whole).  descriptor -> (access, super, interfaces, {(name, params): access},
-    {name: (type, access, initial int value or None)})"""
+    keeps them there whole), or Android 9's compact dex in /system/framework/boot*.vdex (athena: cdex001, its ids
+    where the header says, everything they point at in the data section shared by the vdex's dex files, which
+    starts data_off after the dex's own start; ART's DexFileLoader::OpenCommon reads it so).
+    descriptor -> (access, super, interfaces, {(name, params): access}, {name: (type, access, initial int value or None)})"""
     import glob
     import re
     out = {}
-    oats = sorted(glob.glob(f"{rootfs}/system/framework/*/boot*.oat"))
-    assert oats, f"no boot*.oat under {rootfs}/system/framework"
-    for path in oats:
+    fw = f"{rootfs}/system/framework"
+    files = sorted(glob.glob(f"{fw}/*/boot*.oat")) + sorted(glob.glob(f"{fw}/boot*.vdex"))
+    assert files, f"no boot*.oat or boot*.vdex under {fw}"
+    for path in files:
         blob = open(path, "rb").read()
-        for m in re.finditer(rb"dex\n03[5-9]\0", blob):
-            base = m.start()
-            size = struct.unpack("<I", blob[base + 32:base + 36])[0]
+        for m in re.finditer(rb"dex\n03[5-9]\0|cdex001\0", blob):
+            base = m.start(); compact = blob[base] == ord("c")
+            size, hsize = struct.unpack("<II", blob[base + 32:base + 40])
             d = blob[base:base + size]
-            if len(d) != size or struct.unpack("<I", d[36:40])[0] != 112:
+            if len(d) != size or hsize != (136 if compact else 112):
                 continue
+            # what the ids point at: the dex itself, or compact dex's data section (data_off from its start)
+            dat = blob[base + struct.unpack("<I", d[108:112])[0]:] if compact else d
             u16 = lambda o: struct.unpack("<H", d[o:o + 2])[0]
             u32 = lambda o: struct.unpack("<I", d[o:o + 4])[0]
+            du16 = lambda o: struct.unpack("<H", dat[o:o + 2])[0]
+            du32 = lambda o: struct.unpack("<I", dat[o:o + 4])[0]
             (ns, so, nt, to, np, po, nf, fo, nm, mo, ncd, cdo) = struct.unpack("<12I", d[56:104])
 
-            def uleb_at(o):
+            def uleb_at(o):                                 # (class data, static values, strings: in the data)
                 r = s = 0
                 while True:
-                    b = d[o]; o += 1
+                    b = dat[o]; o += 1
                     r |= (b & 0x7f) << s
                     if b < 0x80:
                         return r, o
@@ -771,16 +788,16 @@ def boot_classes(rootfs):
             def string(i):
                 o = u32(so + 4 * i)
                 _, o = uleb_at(o)
-                return d[o:d.index(b"\0", o)].decode("utf-8", "replace")
+                return dat[o:dat.index(b"\0", o)].decode("utf-8", "replace")
             ty = lambda i: string(u32(to + 4 * i))
 
             def params(p):
                 tl = u32(po + 12 * p + 8)
-                return tuple(ty(u16(tl + 4 + 2 * k)) for k in range(u32(tl))) if tl else ()
+                return tuple(ty(du16(tl + 4 + 2 * k)) for k in range(du32(tl))) if tl else ()
             for c in range(ncd):
                 cls, acc, sup, ifo, _, _, cdata, sv = struct.unpack("<8I", d[cdo + 32 * c:cdo + 32 * c + 32])
                 desc = ty(cls)
-                ifs = [ty(u16(ifo + 4 + 2 * k)) for k in range(u32(ifo))] if ifo else []
+                ifs = [ty(du16(ifo + 4 + 2 * k)) for k in range(du32(ifo))] if ifo else []
                 meths, flds, rets = {}, {}, {}
                 if cdata:
                     o = cdata
@@ -789,20 +806,20 @@ def boot_classes(rootfs):
                     if sv:
                         nv, v = uleb_at(sv)
                         for _ in range(nv):
-                            t = d[v]; v += 1
+                            t = dat[v]; v += 1
                             n = 0 if (t & 0x1f) in (0x1e, 0x1f) else (t >> 5) + 1
-                            vals.append(int.from_bytes(d[v:v + n], "little", signed=True) if (t & 0x1f) == 4 else None)
+                            vals.append(int.from_bytes(dat[v:v + n], "little", signed=True) if (t & 0x1f) == 4 else None)
                             v += n
                     idx = 0
                     for k in range(sf + iff):
                         if k == sf: idx = 0
-                        dd, o = uleb_at(o); fa, o = uleb_at(o); idx += dd
+                        dd, o = uleb_at(o); fa, o = uleb_at(o); idx += dd; fa = unhide(fa, False)
                         flds[string(u32(fo + 8 * idx + 4))] = (ty(u16(fo + 8 * idx + 2)), fa,
                                                                  vals[k] if k < min(sf, len(vals)) else None)
                     idx = 0
                     for k in range(dm + vm):
                         if k == dm: idx = 0
-                        dd, o = uleb_at(o); ma, o = uleb_at(o); _, o = uleb_at(o); idx += dd
+                        dd, o = uleb_at(o); ma, o = uleb_at(o); _, o = uleb_at(o); idx += dd; ma = unhide(ma, True)
                         pi = u16(mo + 8 * idx + 2); key = (string(u32(mo + 8 * idx + 4)), params(pi))
                         meths[key] = ma; rets[key] = ty(u32(po + 12 * pi + 4))      # proto_id: shorty, return type, params
                 out.setdefault(desc, (acc, ty(sup) if sup != 0xFFFFFFFF else None, ifs, meths, flds, rets))

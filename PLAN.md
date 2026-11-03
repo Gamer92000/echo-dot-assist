@@ -2990,8 +2990,15 @@ Run in this order. Each step says what it proves.
       (hook +0x68); no `patch_text` and read-only module text: `set_memory_rw` + `stop_machine`; `devices/athena/Module.symvers`
       for `CONFIG_MODVERSIONS`.  RCPI 120 unicast (0x14009), 129 broadcasts; the sensor switched on as someone walked past.
       **Open:** lux flicker under a close lamp; not confirmed on the Echo: Improv, factory reset, `--uninstall`, the
-      update check, and the build without the `netio.h` system calls (the rule alone);
-      `tools/mkringbar.py --framework` cannot read Android 9's compact dex (checked by hand once, 2026-10-20).
+      update check, the build without the `netio.h` system calls (the rule alone), the screen UI.
+      Screen UI (2026-11-03, PC only): `SCREEN` in device.mk, libhmui.so and screen.dex in `install-system.sh` too.
+      `tools/dexasm.py` reads Android 9's boot classes (compact dex in vdex 019, the shared data section, hidden API bits
+      off the access flags), so `--framework` works on athena: wifictl.dex and ringbar.dex resolve there (was checked by
+      hand once, 2026-10-20), and `make unit` checks every dex against every model's unpacked firmware that runs it.
+      android.c's JNI table differs in two: `SurfaceControl.Builder` for the constructor (SDK 26 on), `getTasks(int)`
+      (28 on), as `JV`/`CV` entries resolved by `ro.build.version.sdk` (mkscreen.py checks each firmware for what its SDK
+      resolves).  Display and touch go by DisplayInfo (`ro.sf.hwrotation` 90 read only by a capture tool; the
+      hwcomposer reads `ro.vendor.sf.hwrotation`, unset).  Not yet on the Echo.
 - [x] Echo Input (`cupcake`, 2026-10-28; `docs/re-cupcake.md`), worked out from the firmware (NS6575/8338), installed
       and running on one Echo Input (2026-10-29).  donut's platform
       (MT8516, arm64 kernel 4.4.22+, A/B, `/sepolicy` on system, kamakiri + TWRP in swdl) with checkers' software

@@ -62,8 +62,11 @@ spoken replies), volume keys and the mute latch, Bluetooth (proxy, phone audio) 
 stopped, the light band (SurfaceControl.Builder), Amazon's UI gone with the apps, hassmic's home screen, Music Assistant
 over Sendspin, Wi-Fi (the setup's join and the settings page's "Switch network"), "Illuminance", "Speaker gain",
 "Download from Amazon" (the attestation through `fireosdhaservice`, version 2 as crown), Wi-Fi motion, push updates.
-**Open**: the lux under a bright lamp held close; not confirmed on this Echo: Improv, the factory reset, `--uninstall`
-and the update check. Details and measurements: [docs/re-athena.md](../../docs/re-athena.md).
+hassmic's own screen (the face, the drawer, the home app, Music Assistant: [the guide](../../docs/GUIDE.md#the-screen-echo-show))
+is built for it, with Android 9's `SurfaceControl.Builder` and `getTasks`, and checked against this firmware's
+framework.
+**Open**: the lux under a bright lamp held close; not confirmed on this Echo: Improv, the factory reset, `--uninstall`,
+the update check and the screen UI. Details and measurements: [docs/re-athena.md](../../docs/re-athena.md).
 
 **Mute button.** Amazon's `gpio-privacy` driver changes its state 1.2-1.3 s after a press that mutes (0.3 s unmuting;
 `enable-gpio-toggle-duration` 1000 ms in the device tree), while the red light under the button follows the press.

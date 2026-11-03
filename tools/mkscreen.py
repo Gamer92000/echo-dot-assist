@@ -17,7 +17,8 @@ run, as hassmic's own child (uid system, SELinux su), as
 
 The protocol on stdin/stdout is the library's (src/ui/ui.h).  The framework classes the library reaches through
 JNI are listed in src/ui/android.c's JNI table; --framework checks them against the firmware's boot class path
-as it checks this dex's own references (JNI sees private members too, so they need not be public).
+as it checks this dex's own references (JNI sees private members too, so they need not be public), the entries
+of some Android versions only (JV, CV) where the firmware's ro.build.version.sdk is one of them.
 
 python3 tools/mkscreen.py            rebuild scripts/device/screen.dex
 python3 tools/mkscreen.py --check    only re-read and check the one in the tree
@@ -53,9 +54,15 @@ def emit():
     return [("main", c)]
 
 
-def jni_table(path):
+def applies(sdk, lo, hi):
+    """a JV/CV entry's bounds (strings as matched, None or 0 = no bound) hold for that SDK: android.c's applies()"""
+    return (not lo or sdk >= int(lo)) and (not hi or not int(hi) or sdk < int(hi))
+
+
+def jni_table(path, sdk):
     """the JNI table of src/ui/android.c: lines  J(var, "class/Name", "method", "(params)ret", static)  and
-    F(var, "class/Name", "field", "type", static) -> reflected methods and fields as check_framework wants them"""
+    F(var, "class/Name", "field", "type", static), and JV(..., static, from, to) where from <= sdk < to (0: no bound)
+    -> reflected methods and fields as check_framework wants them"""
     src = open(path).read()
     meths, flds = [], []
 
@@ -68,9 +75,11 @@ def jni_table(path):
             j = sig.index(";", j) + 1 if sig[j] == "L" else j + 1
             out.append(sig[i:j]); i = j
         return out
-    for m in re.finditer(r'\bJ\(\s*\w+\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"\(([^)]*)\)([^"]+)"\s*,\s*(\d)\s*\)', src):
-        cls, name, params, ret, static = m.groups()
-        meths.append(("L" + cls + ";", name, types(params), static == "1", ret))
+    for m in re.finditer(r'\bJV?\(\s*\w+\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"\(([^)]*)\)([^"]+)"\s*,\s*(\d)\s*'
+                         r'(?:,\s*(\d+)\s*,\s*(\d+)\s*)?\)', src):
+        cls, name, params, ret, static, lo, hi = m.groups()
+        if applies(sdk, lo, hi):
+            meths.append(("L" + cls + ";", name, types(params), static == "1", ret))
     for m in re.finditer(r'\bF\(\s*\w+\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*(\d)\s*\)', src):
         cls, name, ty, static = m.groups()
         flds.append(("L" + cls + ";", name, ty, static == "1"))
@@ -78,10 +87,19 @@ def jni_table(path):
     return meths, flds
 
 
+def sdk_of(rootfs):
+    """the firmware's ro.build.version.sdk, as android.c's resolve() reads it on the Echo"""
+    for line in open(os.path.join(rootfs, "system", "build.prop"), errors="replace"):
+        if line.startswith("ro.build.version.sdk="):
+            return int(line.split("=", 1)[1])
+    raise SystemExit(f"{rootfs}: no ro.build.version.sdk in system/build.prop")
+
+
 def check_jni(rootfs):
-    """every method and field of the JNI table exists on the firmware's boot class path, static where the table says so,
-    with the return type it says (GetMethodID matches the whole signature)"""
-    meths, flds = jni_table(JNI_TABLE)
+    """every method and field of the JNI table that the firmware's SDK resolves exists on its boot class path, static
+    where the table says so, with the return type it says (GetMethodID matches the whole signature)"""
+    sdk = sdk_of(rootfs)
+    meths, flds = jni_table(JNI_TABLE, sdk)
     bc = dexasm.boot_classes(rootfs)
 
     def supers(c):
@@ -105,7 +123,8 @@ def check_jni(rootfs):
             bad.append(f"{c}.{n}({''.join(ps)}): {'static' if hit[1] & 0x0008 else 'not static'} on the device")
         elif bc[hit[0]][5][(n, tuple(ps))] != ret:
             bad.append(f"{c}.{n}({''.join(ps)}): returns {bc[hit[0]][5][(n, tuple(ps))]} on the device, the table says {ret}")
-    classes = re.findall(r'\bC\(\w+, "([^"]+)"\)', open(JNI_TABLE).read())   # FindClass's table
+    classes = [c for c, lo, hi in re.findall(r'\bCV?\(\w+, "([^"]+)"(?:, (\d+), (\d+))?\)', open(JNI_TABLE).read())
+               if applies(sdk, lo, hi)]                                                      # FindClass's table
     assert classes, f"no class table in {JNI_TABLE}"
     bad += [f"{c}: no such class (FindClass)" for c in classes if "L" + c + ";" not in bc]
     for c, n, ty, static in flds:
@@ -115,7 +134,7 @@ def check_jni(rootfs):
         elif bool(got[1] & 0x0008) != static:
             bad.append(f"{c}.{n}: {'static' if got[1] & 0x0008 else 'not static'} on the device")
     assert not bad, "\n".join(bad)
-    print(f"jni {rootfs}: {len(classes)} classes, {len(meths)} methods and {len(flds)} fields of {os.path.relpath(JNI_TABLE)} found on the boot class path")
+    print(f"jni {rootfs} (SDK {sdk}): {len(classes)} classes, {len(meths)} methods and {len(flds)} fields of {os.path.relpath(JNI_TABLE)} found on the boot class path")
 
 
 PROG = Program(ME, SELF, methods=METHODS)

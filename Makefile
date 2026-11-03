@@ -350,11 +350,14 @@ unit-sounds:
 	if [ -d firmware/checkers/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c devices/checkers/board.c -o build/sounds_checkers && HASSMIC_EARCON_ROOT=firmware/checkers/rootfs build/sounds_checkers; else echo "sounds: firmware/checkers not unpacked, its apps' sounds skipped"; fi
 	if [ -d firmware/cronos/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c devices/cronos/board.c -o build/sounds_cronos && HASSMIC_EARCON_ROOT=firmware/cronos/rootfs build/sounds_cronos; else echo "sounds: firmware/cronos not unpacked, its apps' sounds skipped"; fi
 	if [ -d firmware/athena/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c devices/athena/board.c -o build/sounds_athena && HASSMIC_EARCON_ROOT=firmware/athena/rootfs build/sounds_athena; else echo "sounds: firmware/athena not unpacked, its apps' sounds skipped"; fi
+# the dex programs against each model's own firmware that runs them, where it is unpacked here (CI: the dex only):
+# wifictl.dex where Android's framework runs (device.conf ANDROID), ringbar.dex with the band (SCREEN_BAND)
+frameworks = $(foreach m,$(patsubst devices/%/device.conf,%,$(shell grep -l '^$(1)' devices/*/device.conf)),$(if $(wildcard firmware/$(m)/rootfs/system/framework),--framework=firmware/$(m)/rootfs))
 unit-wifictl:
-	.venv/bin/python tools/mkwifictl.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)
+	.venv/bin/python tools/mkwifictl.py --check $(call frameworks,ANDROID=1)
 	.venv/bin/python tests/unit/wifictl_run.py
 unit-ringbar:
-	.venv/bin/python tools/mkringbar.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)
+	.venv/bin/python tools/mkringbar.py --check $(call frameworks,SCREEN_BAND=1)
 	.venv/bin/python tests/unit/ringbar_run.py
 # every model with the screen UI (device.mk SCREEN), against its own firmware where that is unpacked here (CI: the dex only)
 SCREEN_MODELS := $(patsubst devices/%/device.mk,%,$(shell grep -l '^SCREEN ' devices/*/device.mk))
