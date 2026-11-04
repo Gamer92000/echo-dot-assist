@@ -498,7 +498,73 @@ address, left empty, is taken from the Music Assistant that plays on the Echo wh
 the token only ever goes there, so a Music Assistant that moves needs **Connect…** again (or its address given).
 Until then those tabs say how to connect.
 
+## Clock and alarms
+
+**Alarms** ring on the Echo itself, on its own clock (which Home Assistant sets; until it has, none rings), with or
+without Home Assistant. Home Assistant has no alarms of its own.
+
+- **By voice** ("Answer alarm requests on the Echo", on by default): "<wake word>, set an alarm for 7 AM", "wake me up
+  at 6:30 tomorrow", "set an alarm for quarter to 8", "set an alarm for 6:45 on weekdays", "wake me up every day at
+  7", "set an alarm every Monday and Friday at 5:30", "wake me up in 20 minutes", "what alarms do I have", "when is my
+  alarm", "change my alarm to 6:30" (the next one, its days kept), "cancel my alarm" (the next one), "cancel the 7 AM alarm",
+  "cancel all alarms". A time without AM or PM is
+  the next time it comes ("7" said at 2 PM is 7 PM today), with a day said the morning. The Echo answers these itself
+  and Home Assistant never sees them; the answer is spoken through `assist_satellite.announce`, which needs "Allow the
+  device to perform Home Assistant actions" ticked in the device's options in Home Assistant, and shows on an Echo
+  Show's screen. English sentences; "snooze" and "stop" in any case. Requests about an alarm system ("disarm the
+  alarm", "arm the alarm system", "the smoke alarm") stay Home Assistant's.
+- **On the settings page** ("Clock & alarms"): the list, Add, Edit (time, the days it repeats on, a label), a switch to
+  turn one off, Delete; Snooze and Stop while one rings.
+- **From Home Assistant** ("Alarms" in Features is on by default): `esphome.<node>_set_alarm` (time "07:30", "7:30
+  pm" or "in 20 minutes"; days "weekdays", "weekends", "daily", "mon, fri" or empty for once; a label) and
+  `esphome.<node>_delete_alarm` (which: "next", "all", its id or its time), for automations and AI agents' tools.
+  Entities: "Next alarm" (a timestamp: a dashboard counts down to it, a trigger "10 minutes before" turns the lights
+  on), "Alarms" (the list), "Alarm ringing", the button "Snooze alarm", and the event entity "Alarm" with the types
+  `ringing`, `snoozed`, `stopped`, `rang_out`, `set`, `deleted`, `not_understood`. "Stop ringing" stops alarms too.
+
+A ringing alarm:
+
+| | Snooze | Stop |
+|---|---|---|
+| Voice | "<wake word>, snooze" | "<wake word>, stop", "cancel the alarm" |
+| Echo Dot | a volume key ("Volume keys while an alarm rings": Snooze) | the action button |
+| Echo Show | a volume key | both volume keys together, **Stop** on the screen |
+| Home Assistant | "Snooze alarm" | "Stop ringing", the media player's stop |
+
+It plays "Alarm sound" (Alexa's alarm tone; Alexa's timer tone, the beep, or the sound uploaded for timers), starts at
+a fifth of the timer volume and comes up to it over "Alarms start quietly" (30 s), then, while nobody answers it, keeps
+getting louder by "Unanswered alarms get louder" (10 points of volume a minute) up to the loudest the Echo plays
+(music and replies keep their own volume meanwhile, and everything is as before once it is stopped or snoozed). It
+rings for "Alarms ring for" (10 min; all the way left: until stopped) and snoozes for "Snooze" (9 min). It rings in Do not disturb too. A once alarm
+that was stopped or rang out turns itself off; a repeating one goes on to its next day. One missed by a restart (an
+update) less than 5 minutes ago still rings after it. "Clock": 7:30 AM or 07:30, automatic by the time zone.
+
+**The Home Assistant integration and card.** The esphome integration shows "Next alarm" and the rest; to see every
+alarm and change them from Home Assistant, add the Echo Local integration (`custom_components/echo_local` of this
+repository): copy that folder into Home Assistant's `config/custom_components/` (or add this repository to HACS as a
+custom repository of type Integration), restart Home Assistant, then Settings → Devices & services → Add integration →
+"Echo Local" (or Configure on the Echo it found by itself). Give the Echo's address; Home Assistant then
+waits for the Echo to let it in, as a browser on its settings page does: press the action button (an Echo Show: both
+volume keys together) and Submit. It adds:
+
+- a switch per alarm (on: it rings; off: kept), with its time, days, label and next ring as attributes;
+- the actions `echo_local.add_alarm` (time, days, label), `echo_local.edit_alarm` and `echo_local.delete_alarm` (on an alarm's
+  switch), `echo_local.snooze` and `echo_local.stop`;
+- the dashboard card "Echo alarms" (`type: custom:echo-local-alarms-card`, `device_id:` the Echo, optional `title:`), loaded
+  by the integration itself: the alarms with their switches, tap one to change its time, days and label or delete
+  it, "Add alarm", and Snooze and Stop while one rings.
+
+Home Assistant 2026 keeps each integration's devices apart, so the Echo shows as two devices with the same name (and
+MAC): the esphome one and hassmic's. Should the Echo forget Home Assistant (a factory reset, its login revoked on the
+settings page), Home Assistant raises a repair: Submit, press the button.
+
 ## Music
+
+Said to an Echo that plays music itself (Music Assistant or a phone), "pause", "resume", "next", "previous",
+"volume up", "louder", "quieter" and "set the volume to 5" (Alexa's 0 to 10; "volume 45" is 45 %) are carried out on
+that Echo at once, without Home Assistant, which otherwise only knows the player by the satellite's area and asks
+which one. Volume requests always set this Echo's volume. What the Echo does not play itself ("pause" with the TV on)
+stays Home Assistant's. While the Echo listens, its music is turned down to a sixth, gliding over 30 ms each way.
 
 One source at a time, the newest wins: a phone starting over Bluetooth pauses Music Assistant (the whole group), Music
 Assistant starting on the Echo pauses the phone. The voice assistant ducks both. "<wake word>, stop" pauses either,

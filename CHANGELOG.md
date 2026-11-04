@@ -12,6 +12,27 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-04
 
+- **Alarms on the Echo.** Home Assistant has timers but no alarms; now the Echo keeps its own, and they ring by
+  themselves, with or without Home Assistant. Ask for them: "<wake word>, set an alarm for 7 AM", "wake me up at 6:30
+  tomorrow", "set an alarm for 6:45 on weekdays", "wake me up in 20 minutes", "what alarms do I have", "change my
+  alarm to 6:30", "cancel my alarm", "cancel all alarms". The Echo answers these itself (Home Assistant speaks the
+  answer; tick "Allow the device to perform Home Assistant actions" in the device's options). A ringing alarm snoozes
+  with "<wake word>, snooze" or a volume key, and stops with "<wake word>, stop", the action button (both volume keys
+  on an Echo Show) or Stop on the screen. It starts quietly and comes up to the timer volume over 30 seconds, then,
+  unanswered, keeps getting louder (10 points a minute); it plays Alexa's alarm tone, rings for 10 minutes at most and
+  snoozes for 9 (all on the settings page's new "Clock & alarms" page, which also lists, adds, edits and deletes
+  alarms). In Home Assistant: "Next alarm" (a time: a dashboard counts down to it, an automation can turn on the
+  lights 10 minutes before), "Alarms", "Alarm ringing", "Snooze alarm", an "Alarm" event entity (ringing, snoozed,
+  stopped, ...) and the actions `set_alarm` and `delete_alarm` for automations and AI agents. English sentences for now.
+- **Your alarms in Home Assistant, with a card.** A Home Assistant integration, Echo Local
+  (`custom_components/echo_local`, installable from this repository with HACS): a switch per alarm, actions to add,
+  change and delete them, and a dashboard card "Echo alarms" that lists them like the Alexa app (switch, tap to change
+  time, days and label, Add, Snooze, Stop). Home Assistant is let in with a press of the Echo's button, as a browser
+  is. See the guide's "Clock and alarms".
+- **"Pause" knows which Echo you mean.** "Pause", "resume", "next", "previous", "volume up", "louder" and "set the
+  volume to 5" said to an Echo that is playing music are carried out on that Echo, rather than Home Assistant asking
+  which media player.
+
 - **Even volume steps.** Every point of the volume is now the same step: 0.5 dB a point, 5 dB a press of the volume
   buttons, from 1 (about 50 dB under full) to 100 (as loud as before). The Echos' own volume puts most of the change at
   one end: on an Echo Show 5 the bottom half covers 46 dB and the top half 20, and since it has only 31 steps for 100
