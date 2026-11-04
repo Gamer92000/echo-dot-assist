@@ -1,14 +1,13 @@
 # Sourced by the PC scripts after scripts/lib/device.sh (DEVICE, OUT): where the Echo's binaries in build/<codename>/
 # come from.  Built here (make: the Android NDK and the unpacked firmware), or the release CI published of this very
-# commit: hassmic-<codename>.bundle, checked against keys/release.pub and unpacked by scripts/otatool.py, so nothing
-# has to be installed or compiled for it.  It is what online updates install, the same files byte for byte.
+# commit: hassmic-<codename>.bundle from UPDATE_REPO's releases, checked against RELEASE_PUB (device.sh release_load:
+# this project's, or a fork's own) and unpacked by scripts/otatool.py, so nothing has to be installed or compiled for
+# it.  It is what online updates install, the same files byte for byte.
 #   PREBUILT=1    the release's; stop if this commit has none
 #   PREBUILT=0    always build
 #   (unset)       build where the NDK is there, else the release's
 # $OUT/PREBUILT marks a release's files there: "<tag> <commit> <version>", then their names.  A build here removes them
 # first, or make would take the downloaded binaries (newer than the sources) as up to date.
-
-REPO=Gamer92000/echo-dot-assist         # as src/hassmic/update.c
 
 _head() { git rev-parse HEAD 2>/dev/null; }
 _vhead() { TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y.%m.%d.%H%M%S; }
@@ -16,7 +15,7 @@ _vhead() { TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y.%m.%d.%H%M%S; 
 _clean() { git diff --quiet HEAD -- 2>/dev/null; }
 # _gh_tag TAG: the commit GitHub's tag points at (CI's tags are lightweight)
 _gh_tag() {
-    curl -fsS --max-time 20 "https://api.github.com/repos/$REPO/git/ref/tags/$1" 2>/dev/null |
+    curl -fsS --max-time 20 "https://api.github.com/repos/$UPDATE_REPO/git/ref/tags/$1" 2>/dev/null |
         sed -n 's/.*"sha": *"\([0-9a-f]*\)".*/\1/p' | head -1
 }
 # _bundle_free PATH...: none of them goes into a model's bundle (scripts/bundle.sh) or into making what does: the docs,
@@ -75,11 +74,11 @@ prebuilt_fetch() {
     _d=$OUT/.prebuilt.$$ _b=hassmic-$DEVICE.bundle
     rm -rf $_d; mkdir -p $_d
     for _f in $_b $_b.sig; do
-        curl -fsSL --retry 3 -o $_d/$_f "https://github.com/$REPO/releases/download/$1/$_f" ||
+        curl -fsSL --retry 3 -o $_d/$_f "https://github.com/$UPDATE_REPO/releases/download/$1/$_f" ||
             { rm -rf $_d; echo "cannot download $_f of release $1" >&2; return 1; }
     done
-    python3 scripts/otatool.py install keys/release.pub $_d/$_b $_d/$_b.sig $_d/files > /dev/null ||
-        { rm -rf $_d; echo "release $1: $_b does not verify against keys/release.pub" >&2; return 1; }
+    python3 scripts/otatool.py install $RELEASE_PUB $_d/$_b $_d/$_b.sig $_d/files > /dev/null ||
+        { rm -rf $_d; echo "release $1: $_b does not verify against $RELEASE_PUB" >&2; return 1; }
     prebuilt_clear
     _names=
     for _f in $_d/files/*; do

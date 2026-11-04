@@ -31,7 +31,14 @@ BUILD_TIME := $(shell LC_ALL=C git log -1 --format=%cd --date=format:'%b %e %Y %
 # Assistant compares it as numbers.  A build CI publishes (RELEASE=1) reports just that; any other reports
 # VERSION+BUILD (git describe), which online updates take for that version.
 VERSION := $(shell TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y.%m.%d.%H%M%S 2>/dev/null || echo 0)
-DEFS    := -DVERSION='"$(VERSION)"' -DBUILD='"$(BUILD)"' -DBUILD_TIME='"$(BUILD_TIME)"' $(if $(RELEASE),-DRELEASE)
+# Where online updates look (UPDATE_REPO): this project's releases, or a fork's own (scripts/fork-release.sh)
+include keys/release.conf
+-include secrets/fork.conf
+UPDATE_REPO := $(strip $(UPDATE_REPO))
+ifneq ($(words $(UPDATE_REPO))$(findstring ",$(UPDATE_REPO))$(findstring ',$(UPDATE_REPO)),1)
+$(error UPDATE_REPO "$(UPDATE_REPO)": owner/name, no quotes or spaces (keys/release.conf, secrets/fork.conf))
+endif
+DEFS    := -DVERSION='"$(VERSION)"' -DBUILD='"$(BUILD)"' -DBUILD_TIME='"$(BUILD_TIME)"' -DREPO='"$(UPDATE_REPO)"' $(if $(RELEASE),-DRELEASE)
 CFLAGS  := -O2 -Wall -Wextra -fPIE -Isrc/include $(DEFS)
 LDFLAGS := -pie -fuse-ld=lld -Wl,--allow-shlib-undefined -Wl,--unresolved-symbols=ignore-in-shared-libs
 STOCK_LIBS = $(addprefix $(STOCK)/,$(filter $(LIBS),$(1)))
@@ -234,7 +241,7 @@ UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
 	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk \
-	screen ui touch json uninstall_boot resample
+	screen ui touch json uninstall_boot resample fork_release
 unit: $(addprefix unit-,$(UNIT_TESTS))
 unit-hash:
 	@mkdir -p build
@@ -312,6 +319,9 @@ unit-web_loudness:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_loudness_test.py; elif [ -n "$$CI" ]; then echo "web loudness: node missing"; exit 1; else echo "web loudness: node missing, skipped"; fi
 unit-setup_wipe:
 	bash tests/unit/setup_wipe_test.sh
+# a fork's own releases (scripts/fork-release.sh, keys/release.conf, secrets/fork.conf), against a stand-in gh
+unit-fork_release:
+	bash tests/unit/fork_release_test.sh
 # which firmware hassmic goes onto (device.sh firmware_ok, device_check_firmware; setup's firmware_accept), PR #98
 unit-firmware:
 	bash tests/unit/firmware_test.sh

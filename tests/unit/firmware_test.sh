@@ -8,7 +8,7 @@ cd "$(dirname "$0")/../.."; ROOT=$PWD; Q=$(mktemp -d); trap 'rm -rf "$Q"' EXIT; 
 ok_() { if [ "$1" = 0 ]; then echo "ok   $2"; else echo "FAIL $2"; fail=1; fi; }
 
 # probe.sh writes device-logs/ beside scripts/: a tree of links, so that lands in $Q
-mkdir -p $Q/r $Q/bin; ln -s $ROOT/scripts $ROOT/devices $Q/r/; cd $Q/r
+mkdir -p $Q/r $Q/bin; ln -s $ROOT/scripts $ROOT/devices $ROOT/keys $Q/r/; cd $Q/r
 cat > $Q/bin/adb <<'EOF'
 #!/bin/sh
 case "$*" in

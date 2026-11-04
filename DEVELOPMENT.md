@@ -42,7 +42,7 @@ rules. `DEVICE` picks one (default `donut`). The adb scripts check it against th
 | `docs/` | user guide (`GUIDE.md`), security model (`SECURITY.md`), reverse-engineering notes; `img/src/*.typ` are the README figures (Typst + CeTZ), `tools/figures.sh` renders them to `img/*-light.svg` / `*-dark.svg` |
 | `tests/` | protocol tests against the reference implementations |
 | `blueprints/` | Home Assistant blueprints for features that need an automation (`automation/drop_in.yaml`: Drop In by voice) |
-| `keys/` | `release.pub`: the key online updates are signed with (CI and releases, below) |
+| `keys/` | `release.pub`: the key online updates are signed with; `release.conf`: that key and the repository whose releases they are (CI and releases, below) |
 | `.github/workflows/` | `build.yml`: builds, tests, betas and releases |
 
 ## Build and test
@@ -239,6 +239,30 @@ What the key does not cover, on purpose: root accepts a release-signed bundle th
 updates" is set to (the setting is enforced by hassmic, which only downloads with a channel picked), and an older one
 as well as a newer one (switching from beta back to release relies on that). So a hassmic taken over through the
 network could put an older release back; it could not install code of its own.
+
+**Releases from a fork.** A fork's CI cannot sign with this project's key, so a fork that publishes builds of its own
+signs them with its own key, and its Echos then look for updates in the fork. `keys/release.conf` names the repository
+(`UPDATE_REPO`, compiled into `update.c`, and where `scripts/lib/build.sh` takes prebuilt binaries from) and the key
+(`RELEASE_PUB`, in every bundle and install as `release.pub`); a fork sets both in `secrets/fork.conf`, outside git, so
+its tree stays this one and its branches make pull requests here like any other. Once, on the PC, as an admin of the
+fork:
+
+```sh
+scripts/fork-release.sh me/fork      # key pair and secrets/fork.conf; on GitHub (gh): environment release, its secret, a variable
+```
+
+It makes `secrets/release.key` and `.pub`, and on GitHub the environment `release` (`main` and `release` only) with
+the secret `RELEASE_SIGNING_KEY`, plus the repository variable `RELEASE_PUBLIC_KEY` (the public half, which the build
+jobs need too: they pack the bundles). An environment the fork has already is kept as it is when it admits only chosen
+branches or protected ones, and refused, before anything is written, when it admits every branch (by its setting or a
+pattern like `**`). In CI, `scripts/fork-release.sh ci` writes `secrets/fork.conf` from that variable
+and the repository the workflow runs in; without the variable (this project) it does nothing. Then allow the fork's
+workflows (off in a fork until someone does), protect `main` and `release`, push a commit of your own to `main` (the
+script changes nothing in git; a commit whose tag the fork took from this project is not published again, and a manual
+run never publishes), and put each Echo on a build of the fork once from the PC (`scripts/ota-push.sh` or
+`scripts/setup.sh`): that brings it the fork's key. Back up `secrets/`. A fork without `secrets/fork.conf` builds what
+this project builds, byte for byte, and its Echos take this project's updates. `tests/unit/fork_release_test.sh` runs
+the script against a stand-in `gh`.
 
 **Trying the workflow locally** with [nektos/act](https://github.com/nektos/act): the publishing step only says what it
 would publish under act. The toolchains go on a volume: unpacked inside the job containers (3 GB), act times out

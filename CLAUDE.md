@@ -120,8 +120,10 @@ changes); version = commit time in UTC, `2026.10.02.091530` (`make version`; loc
 passes `RELEASE=1` for the bare one), bundles `hassmic-<codename>.bundle(.sig)`
 signed in the `release` job only (secret `RELEASE_SIGNING_KEY` of the GitHub environment `release`, main/release only;
 build jobs sign with a throwaway key) with the release key (base64 of `secrets/release.key`; public half `keys/release.pub`,
-shipped in every bundle). `tools/mkstubs.sh` regenerates the stub lists from the firmware and checks byte-identity; rerun it
-when code starts using another stock library function. Builds are reproducible (`BUILD_TIME` = commit time). Test the
+shipped in every bundle; `keys/release.conf` names it and the repository, `UPDATE_REPO`; a fork's own releases:
+`scripts/fork-release.sh`, `secrets/fork.conf` over it, in CI from the variable `RELEASE_PUBLIC_KEY`).
+`tools/mkstubs.sh` regenerates the stub lists from the firmware and checks byte-identity; rerun it when code starts
+using another stock library function. Builds are reproducible (`BUILD_TIME` = commit time). Test the
 workflow with `act push` (publishing is a dry run under act).
 
 One unit test: `make unit-<name>` (`UNIT_TESTS` in the Makefile).
