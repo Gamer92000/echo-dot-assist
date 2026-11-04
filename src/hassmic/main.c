@@ -15,16 +15,17 @@
  *
  * Default ports 26053 (ESPHome) and 16700 (Wyoming): the stock firewall only admits inbound TCP 16384-32767.
  */
+#define _GNU_SOURCE                     /* pipe2 on glibc (the PC builds) */
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <poll.h>
 #include <limits.h>
 #include <math.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
+#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -35,6 +36,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #ifdef __ANDROID__
 #include <sys/system_properties.h>
 #endif
@@ -280,19 +282,19 @@ static atomic_int click_q16 = 65536;
  * (net.c); a shell would make it the effective group, and AIPC and the mixer refuse that. */
 static void child_ids(void) { gid_t e = getegid(); setregid(e, e); }
 
-/* execv, and a script without "#!" (Android's /system/bin/settings, am, pm are such: "# Script to start ...") through
- * the shell, as a shell runs them: execv alone fails with ENOEXEC, and every `settings put` hassmic made had done
- * nothing (the screen's timeout and brightness, 2026-11-02).  In the child: no allocation */
+/* execv, and a script without "#!" through the shell, as a shell runs it: execv alone fails with ENOEXEC.  Android 7's
+ * /system/bin/settings and pm are such ("# Script to start ..."; checkers, crown, cronos, cupcake; athena's Android 9
+ * ones and every am have "#!"): the band's `settings put system screen_off_timeout` had never been made there (seen
+ * on an Echo Show 5, 2026-11-02).  In the child: no allocation; an argv too long for the copy is not run cut short */
 static void exec_any(char *const argv[])
 {
     execv(argv[0], argv);
-    if (errno == ENOEXEC) {
-        char *a[34]; int n = 0;
-        a[n++] = "/system/bin/sh";
-        for (int i = 0; argv[i] && n < 33; i++) a[n++] = argv[i];
-        a[n] = NULL;
-        execv(a[0], a);
-    }
+    if (errno != ENOEXEC) return;
+    char *a[34]; int n = 0;
+    a[n++] = "/system/bin/sh";
+    for (int i = 0; argv[i]; i++) { if (n == 33) return; a[n++] = argv[i]; }
+    a[n] = NULL;
+    execv(a[0], a);
 }
 
 static void run_argv(char *const argv[])
@@ -314,34 +316,37 @@ static void run_output(char *const argv[], char *buf, size_t n)
 {
     int p[2]; size_t len = 0; ssize_t r;
     buf[0] = 0;
-    /* close-on-exec: a child another thread starts meanwhile (the band's renderer lives as long as hassmic) would hold
-     * the write end, and this read would never see its end (the screen's timeout thread stuck in its 5 min check,
-     * 2026-11-02); dup2 onto 1 below clears the flag for this child alone */
-    if (pipe(p)) return;
-    fcntl(p[0], F_SETFD, FD_CLOEXEC); fcntl(p[1], F_SETFD, FD_CLOEXEC);
+    /* close-on-exec from the start (pipe2: no window for another thread's fork): every child forked meanwhile
+     * (run_argv's, ledq's ledctrl, artifacts' pryon_test, another run_output's) held the write end as long as it ran,
+     * and this read waited for it too.  dup2 onto 1 below clears the flag for this child alone.  The band's renderer
+     * and the screen UI close all but their own pipes before exec */
+    if (pipe2(p, O_CLOEXEC)) return;
     pid_t pid = fork();
     if (pid == 0) {                     /* not popen: its shell would undo child_ids() */
         child_ids();
         dup2(p[1], 1);                  /* errors (stderr) reach the log, as run_argv's do */
-        close(p[0]); close(p[1]);
         exec_any(argv);
         /* the log says it could not; write() only: the child of a threaded process may take no lock (snprintf,
          * strerror) that another thread held at the fork */
         ssize_t w = write(2, "run: ", 5); w = write(2, argv[0], strlen(argv[0])); w = write(2, ": cannot be run\n", 16); (void)w;
         _exit(127);
     }
-    if (pid < 0) fprintf(stderr, "run: %s: no fork (%s)\n", argv[0], strerror(errno));
     close(p[1]);
-    /* and 20 s at most, whatever a tool does: the callers are threads that must go on */
+    if (pid < 0) { fprintf(stderr, "run: %s: no fork (%s)\n", argv[0], strerror(errno)); close(p[0]); return; }
+    /* 20 s at most, whatever a tool does: the callers are threads that must go on (volume, the front end's scores,
+     * Amazon's login) */
     struct timespec t0; clock_gettime(CLOCK_MONOTONIC, &t0);
+    int late = 0;
     for (;;) {
         struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
         int left = 20000 - (int)((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000);
         struct pollfd pf = { p[0], POLLIN, 0 };
-        if (left <= 0 || len + 1 >= n) break;
+        if (len + 1 >= n) break;        /* cut: closing the pipe ends a tool that writes on (SIGPIPE) */
+        if (left <= 0) { late = 1; break; }
         int k = poll(&pf, 1, left);
         if (k < 0 && errno == EINTR) continue;
-        if (k <= 0) break;
+        if (k == 0) { late = 1; break; }
+        if (k < 0) break;
         r = read(p[0], buf + len, n - 1 - len);
         if (r < 0 && errno == EINTR) continue;
         if (r <= 0) break;
@@ -349,6 +354,14 @@ static void run_output(char *const argv[], char *buf, size_t n)
     }
     buf[len] = 0;
     close(p[0]);                        /* SIGCHLD is ignored: nothing to wait for */
+    /* a tool that hangs would stay for good, one more each call.  Only while waitpid says it is our child still
+     * running: SIGCHLD is ignored, so one that ended is gone at once and its pid free for anyone (a thread of ours
+     * too).  What it started (sh -c's) stays, in hassmic's process group, which init's stop ends */
+    if (late) {
+        int st, alive = waitpid(pid, &st, WNOHANG) == 0;
+        if (alive) kill(pid, SIGKILL);
+        fprintf(stderr, "run: %s: no end after 20 s%s\n", argv[0], alive ? ", stopped" : " (its pipe held by what it started)");
+    }
 }
 
 /* What ring.c plays: through ledctrl one at a time, in order (ledq.c says why), or into HASSMIC_FAKE_LED's file for
