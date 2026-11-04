@@ -42,7 +42,8 @@ struct proto {
     void (*settings_changed)(void);             /* may be NULL: a setting changed elsewhere (web page): show them all again */
     void (*entities_changed)(void);             /* may be NULL: a feature went on or off: have the client list entities again */
     int  (*arb_scan)(const char *tag_id);       /* may be NULL: report a tag as scanned to Home Assistant (arb.h) */
-    void (*timers_changed)(void);               /* may be NULL: a timer started or stopped ringing (core_timers_ringing) */
+    void (*timers_changed)(void);               /* may be NULL: a timer started or stopped ringing (core_timers_ringing),
+                                                   or the next one to end changed (core_timer_next) */
     void (*dropin_changed)(int state, const char *peer);   /* may be NULL: a Drop In's state (DROPIN_*), each in turn */
     void (*dropin_result)(const char *result);  /* may be NULL: what came of a call this Echo made (dropin_results) */
     void (*button)(const char *event);          /* may be NULL: a button was pressed or held (core_button_events) */
@@ -172,6 +173,13 @@ size_t core_tts_queued(void);                               /* bytes not yet pla
  * wake word alone) or the ring time (core_timer_ring) is up */
 void   core_timer_finished(const char *id, const char *name, unsigned total);
 void   core_timer_cancelled(const char *id);
+/* Running timers (lock held): Home Assistant's started and updated events (a pause, a resume, time added) with the
+ * seconds left, so the Echo can say which ends next; finished and cancelled ones go, and so does one Home Assistant
+ * never finished (it restarted and forgot it) a while after its end.  core_timer_next: 1 and the one that ends first
+ * among those not paused (left_ms: until it ends; total: the length it was set for, without time added; name: "" for
+ * "a timer for 5 minutes"); 0 when none runs */
+void   core_timer_running(const char *id, const char *name, unsigned total, unsigned left, int active);
+int    core_timer_next(char *name, size_t cap, unsigned *total, long long *left_ms);
 void   core_alarm_stop(const char *why);                    /* every ringing timer; why: for the log */
 int    core_transcript(const char *text);                   /* speech to text's result: 1 if it stopped a ring ("stop",
                                                                or anything with core_timer_stop_any), a Drop In or music

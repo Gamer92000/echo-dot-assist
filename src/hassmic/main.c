@@ -1997,6 +1997,73 @@ static atomic_llong preview_until;
 #define PREVIEW_MS 10000
 static const enum sound timer_sounds[] = { [TIMER_SOUND_TIMER] = SND_TIMER, [TIMER_SOUND_ALARM] = SND_ALARM, [TIMER_SOUND_CUSTOM] = SND_CUSTOM };
 
+/* Timers that run (core_timer_running): Home Assistant tells a satellite of each of its timers as it starts and changes,
+ * with the seconds left, and nobody else (an Assist timer is no entity), so the Echo is where they can be read.  The end
+ * is kept on the monotonic clock: Home Assistant's time moves the wall clock under it (clock.c).  One Home Assistant
+ * never finished (it restarted: its timers live in memory only) goes TIMER_STALE_MS after its end, from the earcon
+ * thread (timers_prune); a paused one stays until it is resumed, cancelled or pushed out by newer ones */
+#define RUNNING_MAX 8
+#define TIMER_STALE_MS 10000
+static struct { char id[40], name[64]; unsigned total; int active; long long end, left; } running[RUNNING_MAX];  /* lock held */
+static int nrunning;                                            /* lock held; end: mono_ms (active), left: ms (paused) */
+static atomic_llong timers_stale_at = LLONG_MAX;                /* mono_ms the first active one is overdue */
+
+static void running_drop(int i)         /* lock held */
+{
+    memmove(running + i, running + i + 1, sizeof running[0] * (size_t)(nrunning - i - 1));
+    nrunning--;
+}
+
+static int running_find(const char *id) /* lock held: its index, or -1 */
+{
+    for (int i = 0; i < nrunning; i++) if (!strcmp(running[i].id, id)) return i;
+    return -1;
+}
+
+static void running_stale_at(void)      /* lock held */
+{
+    long long at = LLONG_MAX;
+    for (int i = 0; i < nrunning; i++) if (running[i].active && running[i].end + TIMER_STALE_MS < at) at = running[i].end + TIMER_STALE_MS;
+    atomic_store(&timers_stale_at, at);
+}
+
+void core_timer_running(const char *id, const char *name, unsigned total, unsigned left, int active)
+{
+    int i = running_find(id);
+    if (i < 0) {
+        if (nrunning == RUNNING_MAX) running_drop(0);           /* the oldest goes */
+        i = nrunning++;
+        snprintf(running[i].id, sizeof running[i].id, "%s", id);
+    }
+    snprintf(running[i].name, sizeof running[i].name, "%s", name);
+    running[i].total = total; running[i].active = active;
+    running[i].left = left * 1000LL; running[i].end = mono_ms() + running[i].left;
+    running_stale_at();
+    if (connected && proto->timers_changed) proto->timers_changed();
+}
+
+int core_timer_next(char *name, size_t cap, unsigned *total, long long *left_ms)
+{
+    int best = -1; long long now = mono_ms();
+    for (int i = 0; i < nrunning; i++) if (running[i].active && (best < 0 || running[i].end < running[best].end)) best = i;
+    if (best < 0) return 0;
+    if (cap) snprintf(name, cap, "%s", running[best].name);
+    if (total) *total = running[best].total;
+    if (left_ms) *left_ms = running[best].end > now ? running[best].end - now : 0;
+    return 1;
+}
+
+static void timers_prune(void)          /* lock held */
+{
+    int gone = 0; long long now = mono_ms();
+    for (int i = 0; i < nrunning; ) if (running[i].active && running[i].end + TIMER_STALE_MS <= now) {
+        fprintf(stderr, "timer: %s never finished, forgotten\n", running[i].name[0] ? running[i].name : running[i].id);
+        running_drop(i); gone = 1;
+    } else i++;
+    running_stale_at();
+    if (gone && connected && proto->timers_changed) proto->timers_changed();
+}
+
 static void alarm_set(int on)          /* lock held */
 {
     if (atomic_exchange(&alarm_on, on) == on) return;
@@ -2010,7 +2077,9 @@ static void alarm_set(int on)          /* lock held */
 
 void core_timer_finished(const char *id, const char *name, unsigned total)
 {
-    int i = 0; unsigned h = total / 3600, m = total % 3600 / 60;
+    int i = running_find(id); unsigned h = total / 3600, m = total % 3600 / 60;
+    if (i >= 0) { running_drop(i); running_stale_at(); }
+    i = 0;
     while (i < nringing && strcmp(ringing[i].id, id)) i++;
     if (i == RINGING_MAX) { memmove(ringing, ringing + 1, sizeof ringing[0] * --i); nringing = i; }    /* the oldest goes */
     if (i == nringing) nringing++;
@@ -2029,6 +2098,11 @@ void core_timer_finished(const char *id, const char *name, unsigned total)
 
 void core_timer_cancelled(const char *id)
 {
+    int r = running_find(id);
+    if (r >= 0) {
+        running_drop(r); running_stale_at();
+        if (connected && proto->timers_changed) proto->timers_changed();
+    }
     for (int i = 0; i < nringing; i++) if (!strcmp(ringing[i].id, id)) {
         memmove(ringing + i, ringing + i + 1, sizeof ringing[0] * (size_t)(nringing - i - 1));
         if (!--nringing) alarm_set(0);
@@ -2260,6 +2334,9 @@ static void *earcon_thread(void *arg)
           if (r >= 0 && mono_ms() >= atomic_load(&dropin_ring_at) && sound_get((enum sound)r, &pcm, &n, &rate)) {
               short *quiet = scaled(pcm, n, atomic_load(&sounds_q16));     /* one of our sounds: at their volume */
               ring_sound = r; play_earcon_while(quiet ? quiet : pcm, n, rate, ring_go); free(quiet); sound_played((enum sound)r); usleep(300000); continue; } }
+        if (mono_ms() > atomic_load(&timers_stale_at)) {               /* a timer Home Assistant forgot */
+            pthread_mutex_lock(&core_lock); timers_prune(); pthread_mutex_unlock(&core_lock);
+        }
         int pv = atomic_exchange(&preview, 0) && !atomic_load(&alarm_on);   /* none during a ring, nor after it */
         if (atomic_load(&alarm_on) || pv) {             /* timer finished: its sound, or a triple blip every 1.2 s, until the ring time */
             if (!pv && mono_ms() > atomic_load(&alarm_until)) {

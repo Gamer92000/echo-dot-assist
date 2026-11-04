@@ -9,6 +9,11 @@ What changed for people using the Echo, newest first. Details and measurements a
   Android lets the screen's program load its library only from a few folders, and the system partition, where the
   install puts hassmic, is not one of them (updates live in `/data`, which is); hassmic now tells it where to look.
   Seen on an Echo Show 5 2nd gen.
+- **Running timers in Home Assistant.** A timer set by voice is Home Assistant's, but no entity: only the Echo that set
+  it hears of it, and the Echo used to wait until it rang. Now "Next timer" (when the running timer that ends first
+  ends, a timestamp), "Next timer name" and "Next timer length" follow it as it starts, pauses, resumes, gets time
+  added, is cancelled or rings, so a dashboard, another speaker or a display elsewhere in the house can count it down
+  ([Voice](docs/GUIDE.md#voice)). Paused timers are left out; with none running they are unknown.
 
 ## 2026-11-03
 

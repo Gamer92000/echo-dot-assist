@@ -67,8 +67,8 @@ make unit                                         # C unit tests; microWakeWord 
                                                  # states, actions and template engine (also in make unit)
 .venv/bin/python tests/fake_ha_esphome.py         # ESPHome native API, as Home Assistant (aioesphomeapi): entities,
                                                  # settings, voice assistant, replies, announcements (HTTP, HTTPS)
-.venv/bin/python tests/fake_ha_esphome_timers.py  # the same API: timers, encryption, clock and zone, noise reduction, LEDs,
-                                                 # light sensor
+.venv/bin/python tests/fake_ha_esphome_timers.py  # the same API: timers (ringing, and the next one running), encryption,
+                                                 # clock and zone, noise reduction, LEDs, light sensor
 .venv/bin/python tests/fake_ha_esphome_features.py  # sound detection (3 s windows: HASSMIC_FAKE_SOUND_WINDOW), Wi-Fi motion
 .venv/bin/python tests/fake_ha_esphome_buttons.py   # runs cancelled while HA thinks or streams; the "Button" event entity
 .venv/bin/python tests/fake_ha_esphome_address.py   # a new address: links closed, mDNS announced again (netaddr.c)
