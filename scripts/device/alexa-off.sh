@@ -20,15 +20,18 @@ PKGS="$ALEXA_PACKAGES $SETUP_PACKAGES $UPDATE_PACKAGES"
 # packages.xml ends in </packages>: the package manager writes it again in place after many a change, and a file half
 # written lacks packages without saying so ("android" is a quarter of the way in on checkers, Alexa's updated apps in
 # /data/app after it); another format says nothing either.  Anything not shown done there goes to pm as before: the
-# files can only save calls, never one that is needed.
+# files can only save calls, never one that is needed.  Not quite: package-restrictions.xml is written 10 s after a
+# change, so a pm enable within 10 s before this run would still read as disabled; nothing runs alexa-on.sh that close
+# (stock-online's is a boot before), and the next start puts it right.  Names as fixed strings: a dot is no wildcard.
 PM=/data/system/packages.xml PMR=/data/system/users/0/package-restrictions.xml
 pm_done() {
     grep -q '^</packages>' $PM 2>/dev/null || return 1
     for p in $PKGS; do
         case "$p" in */*) grep -qx "$p" $DISABLED 2>/dev/null && continue; return 1;; esac
-        grep -q "<package name=\"$p\"" $PM || continue
-        grep "<pkg name=\"$p\"" $PMR 2>/dev/null | grep -q 'enabled="[234]"' || return 1
+        grep -qF "<package name=\"$p\"" $PM || continue
+        grep -F "<pkg name=\"$p\"" $PMR 2>/dev/null | grep -q 'enabled="[234]"' || return 1
     done
+    return 0
 }
 if [ -n "$(echo $PKGS)" ] && command -v pm > /dev/null && ! pm_done; then
     NL='
@@ -66,7 +69,7 @@ if command -v settings > /dev/null; then
         [ -n "$kiosk" ] && [ "$ns/$k" = system/screen_brightness ] && continue
         # SettingsProvider's own file first (plain XML up to Android 11; it writes within 200 ms of a change): already
         # the value, no Java call (~2 s each, checkers).  Anything else asks settings as before
-        grep -q "name=\"$k\" value=\"$val\"" /data/system/users/0/settings_$ns.xml 2>/dev/null && continue
+        grep -qF "name=\"$k\" value=\"$val\"" /data/system/users/0/settings_$ns.xml 2>/dev/null && continue
         v=$(settings get $ns $k 2>/dev/null | tr -d '\r')
         [ "$v" = "$val" ] && continue
         grep -q "^$ns $k " $SETTINGS 2>/dev/null || echo "$ns $k ${v:-null}" >> $SETTINGS

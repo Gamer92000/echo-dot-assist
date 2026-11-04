@@ -3239,3 +3239,10 @@ Run in this order. Each step says what it proves.
       off; ours at each satellite start only fought it, so `alexa-off.sh` leaves the level alone while the app's
       folder is in `/data/app` (the mode stays manual: its adaptive brightness runs under it).  Open: 120 by eye in
       daylight (33/255; stock ran at 238).
+      Boot time (2026-11-02, Show 5, PR #114): `alexa-off.sh` took 16 s of a 41 s boot at a start with nothing left to
+      do, all of it Java: `pm list packages -d` and `pm list packages` ~2 s each, a `settings get` ~2 s per
+      `ANDROID_SETTINGS` entry, `wpa_cli p2p_group_remove` 7 s with no group up.  Now the package manager's and
+      SettingsProvider's own XML first (`packages.xml` trusted only when it ends in `</packages>`: it is written again
+      in place, and "android" is at line 1381 of 3339 with Alexa's `/data/app` updates after it), `wpa_cli` only when
+      `/sys/class/net/p2p-p2p0-0` exists; anything not shown done goes to pm/settings as before.  `pm_done` checked
+      against fake files (whole, cut off, enabled, no restriction entry, component not noted, state 4).
