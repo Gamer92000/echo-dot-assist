@@ -283,9 +283,9 @@ int audio_a2dp_route(int on, uint64_t addr, const char *name)
     char *get[] = { "/system/bin/lipc-get-prop", "-s", "com.doppler.audiod", "OutputDevice", NULL };
     long long t = mono_us();
     core_run(set, out, sizeof out);
-    /* the mixer's playback thread switches a moment later.  5 s at most from the set: a lipc that hangs takes core_run's
-     * 20 s each time */
-    for (int i = 0; i < 20 && mono_us() - t < 5000000; i++) {
+    /* the mixer's playback thread switches a moment later.  Asked once at least (the line below logs its answer), then
+     * until 5 s from the start of the set: a lipc that hangs takes core_run's 20 s each time */
+    for (int i = 0; i < 20 && (i == 0 || mono_us() - t < 5000000); i++) {
         core_run(get, out, sizeof out);
         if (!strncmp(out, on ? "BT##" : "SPEAKER##", on ? 4 : 9)) break;
         usleep(100000);
