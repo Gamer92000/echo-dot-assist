@@ -49,6 +49,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, add: AddEnt
 
     sync()
     entry.async_on_unload(c.async_add_listener(sync))
+    # Settings HA has only from here (the Echo's ESPHome entities leave them to its page): listed where the Echo has them
+    if "own_voice_replies" in (c.data or {}).get("settings", {}):
+        add([SettingSwitch(c, entry, "own_voice_replies", "Replies in the Echo's own voice", "mdi:account-voice")])
 
     platform = entity_platform.async_get_current_platform()
     platform.async_register_entity_service("edit_alarm", {
@@ -124,3 +127,33 @@ class AlarmSwitch(CoordinatorEntity[EchoLocalCoordinator], SwitchEntity):
 
     async def async_delete(self) -> None:
         await self.coordinator.run(self.coordinator.echo.delete_alarm(self.alarm_id))
+
+
+class SettingSwitch(CoordinatorEntity[EchoLocalCoordinator], SwitchEntity):
+    """One of the Echo's on/off settings (settings.c), changed through its signed /api/set as the settings page does.
+    own_voice_replies: Home Assistant's replies said on the Echo in its own voice from their text, streamed ones
+    sentence by sentence as the agent writes them, and Home Assistant's audio of them never fetched (docs/GUIDE.md
+    "The Echo's own voice")."""
+    _attr_has_entity_name = True
+
+    def __init__(self, c: EchoLocalCoordinator, entry: ConfigEntry, key: str, name: str, icon: str) -> None:
+        super().__init__(c)
+        self.key = key
+        self._attr_name = name
+        self._attr_icon = icon
+        self._attr_unique_id = f"{entry.data[CONF_NODE]}-setting-{key}"
+        self._attr_device_info = device_info(entry, c.echo.hello)
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.key in (self.coordinator.data or {}).get("settings", {})
+
+    @property
+    def is_on(self) -> bool:
+        return (self.coordinator.data or {}).get("settings", {}).get(self.key) in ("1", "on", "true")
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.run(self.coordinator.echo.set(f"{self.key}=on\n"))
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.run(self.coordinator.echo.set(f"{self.key}=off\n"))

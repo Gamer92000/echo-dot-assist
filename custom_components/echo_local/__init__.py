@@ -56,11 +56,23 @@ class EchoLocalCoordinator(DataUpdateCoordinator[dict]):
 
     async def _async_update_data(self) -> dict:
         try:
-            return await self.echo.alarms()
+            data = await self.echo.alarms()
+            data["settings"] = await self._settings()
+            return data
         except EchoAuthError as e:
             raise ConfigEntryAuthFailed(str(e)) from e
         except EchoError as e:
             raise UpdateFailed(str(e)) from e
+
+    async def _settings(self) -> dict:
+        """the Echo's settings (its export), for the switches of the few HA has from Echo Local; the last ones kept
+        when they cannot be read now (an older build answers 404)"""
+        try:
+            return await self.echo.settings()
+        except EchoAuthError:
+            raise
+        except EchoError:
+            return (self.data or {}).get("settings", {})
 
     async def run(self, what) -> None:
         """a change on the Echo, then the list read again at once (the next poll would be up to 30 s on)"""

@@ -72,6 +72,7 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/ha_real_end.py         # the Echo's end of audio in a real Home Assistant (stand-in STT and TTS as a
                                              # custom component): HA's STT stream ends with it, intent and reply follow
 .venv/bin/python tests/ha_real_alarms.py      # custom_components/echo_local (alarms integration and card) in a real HA
+.venv/bin/python tests/ha_real_own_voice.py   # Echo Local's "Replies in the Echo's own voice" switch in a real HA (HASSMIC_FAKE_SPEECH)
 .venv/bin/python tests/ha_real_kiosk.py       # the Echo Show's kiosk set up from the integration: user, token, screens
 .venv/bin/python tests/ha_real_panel.py       # the sidebar panel (panel.py, apps.py): the Echos, the screen's options set
                                              # and pushed, the kiosk user kept out, the Echo Show's apps (upload, install,
@@ -87,6 +88,10 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # 500 ppm slow (HASSMIC_FAKE_MUSIC_PPM) and AudioTrack's burst at the
                                              # start (HASSMIC_FAKE_MUSIC_BURST_MS), followed without a phase step
 .venv/bin/python tests/fake_ha_stop_word.py   # "<wake word>, stop" between two Echos: the drop cancelled, stop_ends_listening
+.venv/bin/python tests/fake_ha_own_voice.py   # replies in the Echo's own voice: streamed ones sentence by sentence (Wyoming
+                                             # synthesize-start/-chunk/-stop on 16710), HA's audio silence and never
+                                             # fetched, the run ended by the last sentence, learning, stop/barge-in
+                                             # (HASSMIC_FAKE_SPEECH=1: speech_none.c a stand-in voice)
 .venv/bin/python tests/fake_screen.py [--legacy]  # the Echo Show's screen UI as hassmic feeds it (stand-in UI): Sendspin
                                              # metadata/artwork (1.0's transfer, scheduled; --legacy: 9.1.1's), the band,
                                              # commands, home app, restarts

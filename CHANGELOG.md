@@ -25,6 +25,8 @@ What changed for people using the Echo, newest first. Details and measurements a
   for the whole answer and then downloading it from Home Assistant. With another text-to-speech the Echo says the
   whole reply in its own voice once it is complete, and no longer downloads Home Assistant's audio for it. Others
   using the Echo's voice (tts.speak to other speakers) get their sentences as they come too.
+- **"Replies in the Echo's own voice" from Home Assistant**: Echo Local adds a switch for it on
+  each Echo that has a voice of its own, so you no longer need the Echo's settings page to turn it on.
 
 - **Apps on the Echo Show, installed from the settings page or Home Assistant.** The settings page's Screen page and
   Echo Local's new Apps tab list the Android apps you installed beside the home app (NewPipe, say), remove them, and
