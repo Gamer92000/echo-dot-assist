@@ -4,6 +4,8 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-04
 
+- **The Echo Shows start sooner** (the Echo Show 5 about 15 seconds). Turning Alexa off at each start no longer asks
+  Android questions it already knows the answers to (the Echo Show 5 took 16 of its 41 seconds there).
 - **No more ticks in music.** Music Assistant's music had a small tick several times a second on the Echo Show 5,
   most noticeable in quiet passages. The Show 5's speaker runs a little slow, and to stay in sync with the other
   speakers the Echo skipped a few samples now and then. It now evens that out all along, by a change of speed far
