@@ -45,7 +45,6 @@ size_t rs_run(struct resampler *r, const int16_t *in, size_t frames, double step
 #define SERVO_SMOOTH_S 0.25                     /* the error averaged over this long first */
 #define SERVO_KP 0.2                            /* per s: 1 ms early plays 200 ppm slower */
 #define SERVO_KI (SERVO_KP * SERVO_KP / 4)      /* critically damped: the drift learnt without overshoot */
-#define DRIFT_MAX 0.002                         /* 2000 ppm: a crystal is within 100; a phone's clock was 0.2 % off */
 #define RATE_MAX 0.005                          /* drift and error together: 0.5 % (8.6 cents), only while catching up */
 
 double rate_servo(struct rate_servo *s, double err_us, double dt)
@@ -53,7 +52,7 @@ double rate_servo(struct rate_servo *s, double err_us, double dt)
     double e = err_us * 1e-6;
     s->smooth += dt / (SERVO_SMOOTH_S + dt) * (e - s->smooth);
     s->drift += SERVO_KI * s->smooth * dt;
-    s->drift = s->drift > DRIFT_MAX ? DRIFT_MAX : s->drift < -DRIFT_MAX ? -DRIFT_MAX : s->drift;
+    s->drift = s->drift > RATE_DRIFT_MAX ? RATE_DRIFT_MAX : s->drift < -RATE_DRIFT_MAX ? -RATE_DRIFT_MAX : s->drift;
     double c = SERVO_KP * s->smooth + s->drift;             /* > 0: early, so slower: fewer input frames per frame out */
     c = c > RATE_MAX ? RATE_MAX : c < -RATE_MAX ? -RATE_MAX : c;
     return 1 - c;

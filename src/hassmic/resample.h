@@ -28,8 +28,9 @@ double rs_lag(const struct resampler *r);       /* the next frame out against th
 /* The rate from the sync error, a PI loop.  The error is read through the output's queue, which the Echo Shows count
  * in 20 ms slots, polled every 5 ms: noise of a few ms per chunk, averaged over SERVO_SMOOTH_S first.  `drift` is what
  * the integral learnt of the clocks' difference; it is kept across snaps and streams (same output, same clock;
- * sendspin.c keeps one per route: the Echo's speaker, a Bluetooth one). */
+ * sendspin.c keeps one per route, the Echo's speaker and a Bluetooth one, in state/sendspin.drift). */
 struct rate_servo { double smooth, drift; };
+#define RATE_DRIFT_MAX 0.002                    /* 2000 ppm: a crystal is within 100; a phone's clock was 0.2 % off */
 double rate_servo(struct rate_servo *s, double err_us, double dt_s);   /* err_us > 0: early.  Returns the step */
 double rate_servo_snap(struct rate_servo *s);   /* after a jump in the schedule: the error starts from 0; the step */
 

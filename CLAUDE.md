@@ -322,7 +322,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Music**: `sendspin.c` (Music Assistant Sendspin player over `ws.c`/`noise.c`/`net.c`/`hash.c`, decodes via
   `dr_flac`/`minimp3`/libopus; in sync by a rate of its own, `resample.c`: a PI servo on the error steering a cubic
   resampler, never frames skipped or repeated, which ticked on the Show 5's clock 350 ppm off; snap past 20 ms; a drift
-  learnt per route, the Echo's speaker or a Bluetooth one; the A2DP sink resamples through it too). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
+  learnt per route, the Echo's speaker or a Bluetooth one, kept in `state/sendspin.drift`; the A2DP sink resamples
+  through it too). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
   loaded with dlopen, aptX/aptX HD via `freeaptx`) with AVRCP. Only one music source plays at a time (newest wins). "<wake word>, stop" pauses it when nothing else was
   stopped (`stop_word`, a bare "stop" transcript in `core_transcript`; issue #51), the action button resumes.
   A "stop" that ended what its wake word cut (ring, Drop In, reply, THINKING run) drops that wake word's run: after the

@@ -175,17 +175,40 @@ static void q_push(long long ts, const uint8_t *pcm, size_t len)
     pthread_mutex_unlock(&q_lock);
 }
 
+static int load_file(const char *name, void *buf, size_t len);
+static void save_file(const char *name, const void *buf, size_t len);
+
+/* The drift learnt per route (resample.h), in state/sendspin.drift as "<Echo's ppm> <Bluetooth speaker's ppm>": learnt
+ * again from nothing it took 20-60 s after every restart and update, a few ms off the other players meanwhile.  Saved
+ * when the output closes and every 10 min while it plays, and only once it moved by 5 ppm: the flash spared. */
+static void drift_load(double d[2])
+{
+    char buf[64]; int r = load_file("sendspin.drift", buf, sizeof buf - 1); double a, b;
+    buf[r > 0 ? r : 0] = 0; d[0] = d[1] = 0;
+    if (sscanf(buf, "%lf %lf", &a, &b) == 2 && fabs(a) <= RATE_DRIFT_MAX * 1e6 && fabs(b) <= RATE_DRIFT_MAX * 1e6) {
+        d[0] = a * 1e-6; d[1] = b * 1e-6;
+        fprintf(stderr, "sendspin: output clock as learnt before: %+.1f ppm (Echo), %+.1f (Bluetooth speaker)\n", a, b);
+    }
+}
+static void drift_save(const double d[2], double kept[2])
+{
+    if (fabs(d[0] - kept[0]) < 5e-6 && fabs(d[1] - kept[1]) < 5e-6) return;
+    char buf[64]; int n = snprintf(buf, sizeof buf, "%.1f %.1f\n", d[0] * 1e6, d[1] * 1e6);
+    save_file("sendspin.drift", buf, (size_t)n); kept[0] = d[0]; kept[1] = d[1];
+}
+
 /* Each chunk is due at its timestamp.  A snap (the start, an underrun, a new delay, an error past SNAP_US) pads with
  * silence or drops the chunk's late part; in between the music plays at a rate of its own, which the sync error steers
  * (resample.h): an output clock that is off, as the Echo Show 5's, is followed without a frame skipped or repeated. */
 static void *player_thread(void *arg)
 {
-    static int16_t silence[RATE / 100 * CHANNELS]; int open = 0; long long stat_t = 0; int resyncs = 0, routed = -1;
-    float duck_g = 1; double step = 1, rate_sum = 0, drift_of[2] = { 0, 0 }; long rate_n = 0;   /* rate_sum: the log's mean */
+    static int16_t silence[RATE / 100 * CHANNELS]; int open = 0; long long stat_t = 0; int resyncs = 0, routed = -1, stats = 0;
+    float duck_g = 1; double step = 1, rate_sum = 0, drift_of[2], drift_kept[2]; long rate_n = 0;   /* rate_sum: the log's mean */
     struct resampler rs; struct rate_servo servo = { 0, 0 };    /* the drift kept across streams: the same output clock */
     int16_t *out = NULL; size_t out_cap = 0;
     (void)arg;
     rs_reset(&rs);
+    drift_load(drift_of); memcpy(drift_kept, drift_of, sizeof drift_kept);
     for (;;) {
         pthread_mutex_lock(&q_lock);
         while (!q_head && atomic_load(&stream_on)) {
@@ -198,7 +221,10 @@ static void *player_thread(void *arg)
 
         if (!atomic_load(&stream_on)) {
             if (c) free(c);
-            if (open) { music_close(); open = 0; fprintf(stderr, "sendspin: output closed\n"); }
+            if (open) {
+                music_close(); open = 0; fprintf(stderr, "sendspin: output closed\n");
+                if (routed >= 0) { drift_of[routed] = servo.drift; drift_save(drift_of, drift_kept); }
+            }
             usleep(20000);
             continue;
         }
@@ -249,9 +275,12 @@ static void *player_thread(void *arg)
         rate_sum += step - 1; rate_n++;
         if (raw_us() - stat_t > 10000000) {
             double e; tf_synced(&e); stat_t = raw_us();
-            fprintf(stderr, "sendspin: sync err %+.2f ms, clock ±%.2f ms, queued %zu KB, rate %+.0f ppm (output clock %+.0f), %d resyncs\n",
+            /* the rate: what the music plays at, the output's clock (the error's share of it besides: the queue's slots
+             * read skewed); integral: what was learnt of it, kept */
+            fprintf(stderr, "sendspin: sync err %+.2f ms, clock ±%.2f ms, queued %zu KB, rate %+.0f ppm (integral %+.0f), %d resyncs\n",
                     servo.smooth * 1e3, e / 1000, q_bytes / 1024, rate_sum / rate_n * 1e6, servo.drift * 1e6, resyncs);
             rate_sum = 0; rate_n = 0;
+            if (++stats % 60 == 0) { drift_of[routed] = servo.drift; drift_save(drift_of, drift_kept); }      /* 10 min */
         }
         free(c);
     }

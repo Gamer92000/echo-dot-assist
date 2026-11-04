@@ -653,7 +653,9 @@ Run in this order. Each step says what it proves.
       6/s (even at 0 ppm: the noise crossed the 400 us threshold) → none, the rate's noise ~280 ppm rms below 1 Hz
       (0.5 cent); the drift is learnt within a minute (20 s the Show 5's way). The cubic: 1 kHz within rounding,
       8 kHz -32 dB under the sine (linear dips 8 kHz by 1.3 dB at half-frame phases). Log every 10 s: `rate +350 ppm
-      (output clock -350)` (the rate's mean over those 10 s), and every snap past 20 ms as `resynced`. Ducking glides over 30 ms (Sendspin and the A2DP
+      (integral -350)` (the rate's mean over those 10 s; the integral's share, kept), and every snap past 20 ms as
+      `resynced`. The drift learnt survives restarts and updates in `state/sendspin.drift` ("<Echo ppm> <Bluetooth
+      ppm>", saved as the output closes and every 10 min, only once moved by 5 ppm). Ducking glides over 30 ms (Sendspin and the A2DP
       sink; a step at a block's edge clicked). `make unit-resample` (the resampler, a step changing per call as
       the sink's, the servo against the queue model at ±350, 0, -1500 ppm), `tests/fake_ma_sendspin.py` with `HASSMIC_FAKE_MUSIC_PPM=-500` (`audio_file.c`'s buffer
       drains that much slower): the tone's phase step 0.000 rad (the nudging: 0.232; limit 0.03, was 0.3), no resync.

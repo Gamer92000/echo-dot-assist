@@ -155,6 +155,13 @@ async def paired(env, state):
         await client.group.stop()
         await until(lambda: "sendspin: stream end" in log())
         check(not os.path.exists(mreq), "a server connected all along: no mDNS announcements")
+        # what the rate learnt of the slow clock, kept when the output closes: the Echo's ppm, a Bluetooth speaker's
+        dfile = os.path.join(state, "sendspin.drift")
+        await until(lambda: "sendspin: output closed" in log() and os.path.exists(dfile))
+        drift = open(dfile).read().split() if os.path.exists(dfile) else []
+        # (-31 after this tone's 4.5 s: the integral is slow by design; slow is what counts here)
+        check(len(drift) == 2 and -2000 <= float(drift[0]) < 0 and float(drift[1]) == 0,
+              f"the drift learnt kept as the output closes: {drift} (ppm: the Echo's speaker, a Bluetooth one)")
         set_delay(player_, 120)                         # after the tone: the new delay resyncs, a jump in it
         saved = lambda: open(os.path.join(state, "sendspin.delay")).read().strip() if os.path.exists(os.path.join(state, "sendspin.delay")) else ""
         await until(lambda: delay_of(player_) == 120 and saved() == "120")
@@ -210,6 +217,15 @@ async def paired(env, state):
         check(os.path.getsize(records) == 0, "server/unpair deletes the record on the player")
     finally:
         proc.terminate(); await server.close()
+    # started again on that state, the player begins from what it learnt
+    proc.wait()
+    proc, log = player(state, PORT, 16959, env)
+    try:
+        want = f"output clock as learnt before: {float(drift[0]):+.1f} ppm (Echo)" if len(drift) == 2 else "?"
+        await until(lambda: want in log())
+        check(want in log(), f"a restart starts from the drift kept: {want!r}")
+    finally:
+        proc.terminate()
 
 
 async def server_restart(env, state):
