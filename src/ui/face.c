@@ -226,25 +226,30 @@ static void caption(struct scene *s, int m, float br, int *used)
     }
 }
 
-/* the face's bottom line: the track playing, with its own play/pause; a tap anywhere else on it opens the music */
+/* what plays, as a card in the bottom right corner with its own play/pause; a tap anywhere else on it opens the music.
+ * A bar under the eyes across half the screen was in the way of the face (asked on an Echo Show 5, 2026-11-04): the
+ * corner leaves the face and its clock where they are */
 static void miniplayer(struct scene *s, float br)
 {
-    float w = s->w, h = s->h, y0 = 0.79f * h, y1 = 0.95f * h, x0 = 0.22f * w, x1 = 0.78f * w, ph = y1 - y0;
-    rrect(s, ID_FACE + 30, x0, y0, x1, y1, ph / 2, pressed(s, A_TOMUSIC, 0) ? 0x2A2E35 : DARK, 255);
-    float a = ph - U(12);
-    if (!image(s, ID_FACE + 31, &s->art, x0 + U(6), y0 + U(6), a, a, a / 2)) {
-        rrect(s, ID_FACE + 31, x0 + U(6), y0 + U(6), x0 + U(6) + a, y0 + U(6) + a, a / 2, 0x30343B, 255);
-        icon(s, ID_FACE + 32, IC_NOTE, x0 + U(6) + a / 2, y0 + ph / 2, a * 0.32f, DIM, 0x30343B);
+    float ch = U(76), cw = U(300) < 0.4f * s->w ? U(300) : 0.4f * s->w;
+    float x1 = s->w - U(18), y1 = s->h - U(18), x0 = x1 - cw, y0 = y1 - ch;
+    rrect(s, ID_FACE + 30, x0, y0, x1, y1, U(18), pressed(s, A_TOMUSIC, 0) ? 0x2A2E35 : DARK, 255);
+    float a = ch - U(16);
+    if (!image(s, ID_FACE + 31, &s->art, x0 + U(8), y0 + U(8), a, a, U(10))) {
+        rrect(s, ID_FACE + 31, x0 + U(8), y0 + U(8), x0 + U(8) + a, y0 + U(8) + a, U(10), 0x30343B, 255);
+        icon(s, ID_FACE + 32, IC_NOTE, x0 + U(8) + a / 2, y0 + ch / 2, a * 0.32f, DIM, 0x30343B);
     }
-    float tx = x0 + U(18) + a, tw = x1 - tx - ph - U(8);
-    text(s, ID_FACE + 35, s->title[0] ? s->title : "Music Assistant", U(23), 1, tw, tx, y0 + U(8), 0, gfx_scale(FG, br), 255);
-    text(s, ID_FACE + 36, s->artist, U(19), 0, tw, tx, y0 + U(34), 0, gfx_scale(DIM, br), 255);
-    hit(s, x0, y0, x1 - ph, y1, A_TOMUSIC, 0);
-    if (can(s, s->mstate == 1 ? "pause" : "play")) {
-        float bx = x1 - ph / 2, by = (y0 + y1) / 2;
-        rrect(s, ID_FACE + 37, bx - a / 2, by - a / 2, bx + a / 2, by + a / 2, a / 2, pressed(s, A_PLAYPAUSE, 0) ? 0xB0B4BA : FG, 255);
-        icon(s, ID_FACE + 38, s->mstate == 1 ? IC_PAUSE : IC_PLAY, bx + (s->mstate == 1 ? 0 : a * 0.03f), by, a * 0.27f, DARK, FG);
-        hit(s, x1 - ph, y0, x1, y1, A_PLAYPAUSE, 0);
+    float b = ch - U(30);                                       /* the button's diameter */
+    int playable = can(s, s->mstate == 1 ? "pause" : "play");
+    float tx = x0 + U(20) + a, tw = x1 - tx - (playable ? b + U(18) : U(12));
+    text(s, ID_FACE + 35, s->title[0] ? s->title : "Music Assistant", U(19), 1, tw, tx, y0 + U(15), 0, gfx_scale(FG, br), 255);
+    text(s, ID_FACE + 36, s->artist, U(16), 0, tw, tx, y0 + U(40), 0, gfx_scale(DIM, br), 255);
+    hit(s, x0, y0, playable ? x1 - b - U(16) : x1, y1, A_TOMUSIC, 0);
+    if (playable) {
+        float bx = x1 - U(12) - b / 2, by = (y0 + y1) / 2;
+        rrect(s, ID_FACE + 37, bx - b / 2, by - b / 2, bx + b / 2, by + b / 2, b / 2, pressed(s, A_PLAYPAUSE, 0) ? 0xB0B4BA : FG, 255);
+        icon(s, ID_FACE + 38, s->mstate == 1 ? IC_PAUSE : IC_PLAY, bx + (s->mstate == 1 ? 0 : b * 0.03f), by, b * 0.27f, DARK, FG);
+        hit(s, x1 - b - U(16), y0, x1, y1, A_PLAYPAUSE, 0);
     }
 }
 
@@ -256,7 +261,7 @@ int face_view(struct scene *s, float dt)
     moving = eyes(s, m, dt, br);
     caption(s, m, br, &used);
     clock_text(s, clk, sizeof clk);
-    if (!used && s->music && (s->title[0] || s->mstate)) miniplayer(s, br), used = 1;
+    if (!used && s->music && (s->title[0] || s->mstate)) miniplayer(s, br);     /* (in its corner: the clock stays) */
     if (used) text(s, ID_FACE + 20, clk, U(33), 0, s->w, s->w - U(28), U(14), 2, gfx_scale(DIM, br), 255);
     else text(s, ID_FACE + 20, clk, U(47), 0, s->w, s->w / 2.0f, 0.83f * s->h, 1, gfx_scale(DIM, br), 255);
     if (s->face.poke_at && s->now - s->face.poke_at < POKE_MS + 400) moving = 1;

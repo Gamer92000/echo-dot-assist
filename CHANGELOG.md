@@ -2,6 +2,11 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-06
+
+- **What plays sits in a corner of the face.** The bar across the bottom of the Echo Show's face (the song, its cover,
+  play/pause) is now a small card in the bottom right corner, out of the face's way; the clock stays in its place.
+
 ## 2026-11-05
 
 - **Echo Dot 3: the unlock can leave the Echo unusable; the setup now warns before it.** On two Echo Dot 3s the

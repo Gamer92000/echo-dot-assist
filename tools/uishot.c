@@ -260,7 +260,7 @@ int main(int argc, char **argv)
     music_data(); run(400); png("face_music");
     pull(300); png("drawer");
     tap(W / 2, H - 20); run(500);                               /* the shade: closed again */
-    line("ma off"); tap(W / 2, (int)(0.87f * H)); run(500);     /* the music, from the face's bottom line */
+    line("ma off"); tap(W - 200, H - 56); run(500);             /* the music, from the face's card (bottom right) */
     png("music_now");
     tap(46, 76 + 0 * 79 + 140); run(300); png("music_setup");     /* the queue's tab without Music Assistant's API */
     ma_data(); run(200);
