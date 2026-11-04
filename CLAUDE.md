@@ -570,7 +570,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   lines), else Kiosk Satellite where installed ("kiosk", root's `kiosk-app` mark), else the face; a new choice applies
   at once; relaunched 3x a minute at most, not while our own screen was asked for.  One app_process: `scripts/device/screen.dex`
   (`tools/mkscreen.py`; `ui_start` puts the library's folder on `LD_LIBRARY_PATH`, else the class loader namespace
-  refuses `/system/hassmic`, issue #122) loads `libhmui.so` (`android.c`: JNI table C/J/F, JV/CV for some SDKs only (Android 9:
+  refuses `/system/hassmic`, and sets the real group to the effective one, else AT_SECURE drops it, issue #122) loads `libhmui.so` (`android.c`: JNI table C/J/F, JV/CV for some SDKs only (Android 9:
   SurfaceControl.Builder, getTasks(int)), checked by `mkscreen.py --framework`, `make unit-screen` against every
   `SCREEN` model's unpacked firmware for what its SDK resolves; `tools/dexasm.py` reads Android 7's oat and Android
   9's compact dex in vdex, hidden API bits off; images
