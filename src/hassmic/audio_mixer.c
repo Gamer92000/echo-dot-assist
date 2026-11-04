@@ -156,6 +156,7 @@ int       music_open(unsigned rate, unsigned channels) { return s_open(&music, r
 long long music_queued_us(void) { return s_queued_us(&music); }
 int       music_write(const void *data, size_t len) { return s_write(&music, data, len); }
 void      music_close(void) { s_close(&music); }
+long long music_prime_us(void) { return 0; }                /* the queue is a model at playback speed: no burst */
 int       bt_open(unsigned rate, unsigned channels) { return s_open(&bt, rate, channels, MIXER_PLAY_MUSIC); }
 long long bt_queued_us(void) { return s_queued_us(&bt); }
 int       bt_write(const void *data, size_t len) { return s_write(&bt, data, len); }

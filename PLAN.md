@@ -589,7 +589,7 @@ Run in this order. Each step says what it proves.
 - [~] Sendspin player (`src/hassmic/sendspin.c`, port 28928, mDNS `_sendspin._tcp`, `-z 0` disables): dialect of aiosendspin 9.1.1 = Music
       Assistant 2.10.4, which differs from the published spec in 22 places (`docs/sendspin-digest.md` §0). WebSocket (`ws.c`), Noise
       KKpsk2 responder (`noise.c`, Monocypher), Sentinel PSK + unpaired access (operator approves in MA), player@v1 PCM 48k stereo,
-      Kalman clock filter, scheduler (hard snap, then ≤6 frames/chunk nudging), volume/mute/static delay, ducking under the
+      Kalman clock filter, scheduler (hard snap, then a rate of its own steered by the error, `resample.c`; ≤6 frames/chunk nudging until 2026-11-04), volume/mute/static delay, ducking under the
       voice assistant. `tests/fake_ma_sendspin.py` against the reference server: 9/9 (4.000 s of 4.000 s played, no discontinuity,
       clock ±0.07 ms). `make unit`: WebSocket vs aiohttp, Noise vs python noiseprotocol, hash vectors.
       **Real Music Assistant 2026-09-21:** MA found the Echo by mDNS, dialled 28928 over its IoT-VLAN interface (no router rule),
@@ -640,6 +640,51 @@ Run in this order. Each step says what it proves.
       now; `CODEC=opus` and `CODEC=pcm` pass too. Not done: time sync in bursts of 8 (spec since 2026-10-21, after 10.2.1).
       Not exercised: fragments (the library fragments only beyond 65518 bytes), a volume change during a re-handshake.
       Not yet against a real MA 2.10.8
+      **In sync without a cut (2026-11-04, PR #113).** The Echo Show 5's output clock runs ~350 ppm slow against the
+      system clock (its log: "nudged -170 frames" every 10 s, 2026-11-02): the frames skipped to catch up, up to 6 at one
+      point, were a step in the waveform, a tick several times a second in quiet music. The PR resampled the whole 25 ms
+      chunk instead (0.5 %, linear): no step, but the threshold loop stayed, a pitch blip of 8.6 cents for 25 ms every
+      ~0.36 s. Now the rate follows the drift (`resample.c`): a PI servo (error averaged over 2 s, Kp 0.1/s, Ki
+      Kp²/4, critically damped; 0.25 s and 0.2/s until the Show 5's log below; drift held to ±2000 ppm, rate to ±0.5 %) steers a stereo cubic (Catmull-Rom) resampler
+      that carries its position and last frames across chunks; the error counts where the next frame out lies
+      (`rs_lag`). The drift learnt is kept across snaps and streams, one per route (the Echo's speaker, a Bluetooth
+      one: another clock). The Bluetooth sink (a phone playing here) resamples through it too (was linear). A model of the Show 5's queue (20 ms slots,
+      polled every 5 ms, 5 ms of jitter) against the old loop, 180 s: the error's swing 5.3 → 2 ms, 0.5 % rate jumps
+      6/s (even at 0 ppm: the noise crossed the 400 us threshold) → none, the rate's noise ~280 ppm rms below 1 Hz
+      (0.5 cent); the drift is learnt within a minute (20 s the Show 5's way). The cubic: 1 kHz within rounding,
+      8 kHz -32 dB under the sine (linear dips 8 kHz by 1.3 dB at half-frame phases). Log every 10 s: `rate +350 ppm
+      (integral -350)` (the rate's mean over those 10 s; the integral's share, kept), and every snap past 20 ms as
+      `resynced`. The drift learnt survives restarts and updates in `state/sendspin.drift` ("<Echo ppm> <Bluetooth
+      ppm>", saved as the output closes and every 10 min, only once moved by 5 ppm). Ducking glides over 30 ms (Sendspin and the A2DP
+      sink; a step at a block's edge clicked). `make unit-resample` (the resampler, a step changing per call as
+      the sink's, the servo against the queue model at ±350, 0, -1500 ppm), `tests/fake_ma_sendspin.py` with `HASSMIC_FAKE_MUSIC_PPM=-500` (`audio_file.c`'s buffer
+      drains that much slower): the tone's phase step 0.000 rad (the nudging: 0.232; limit 0.03, was 0.3), no resync.
+      **On the Show 5 (2026-11-04, 2026.11.04.201339+7b3751a, real MA):** after 10 s `sync err -0.46 ms, rate +161 ppm
+      (integral -63)`; but every stream's second chunk came 135-139 ms early, `resynced` (the old loop did the same,
+      silently): 137 ms of silence after the stream's first 25 ms of music. AudioTrack takes its buffer's worth of the
+      slots at once as it starts, which `s_queued_us` leaves out as a steady latency, and the first snap waited with
+      nothing written until the chunk was 200 ms from due: the queue ran dry, AudioTrack emptied, and its next burst came
+      after the chunk was timed. Now `music_prime_us()` (150 ms on Android, 0 on the mixer) primes a fresh output with
+      silence and waits for the burst ("output primed with 150 ms of silence, N ms of it taken at once"), and the snap
+      writes silence as it plays, 20 ms at a time (an Android slot each: prime and all, 150 ms fit the 8 without a
+      wait), the error read again before each. And the -4.8 ms the second snap
+      left had taken the integral from -127 to -328 ppm in 4 s: it is held for 5 s after every snap (`SERVO_HOLD_S`).
+      `audio_file.c`'s `HASSMIC_FAKE_MUSIC_BURST_MS=137` (137 ms hidden at once as the output starts) reproduces it:
+      without the prime `+137.0 ms off the schedule, resynced`, with it none; the test's tone is 8 s (learning after
+      the hold: -54 ppm saved).
+      **Then 10.5 min of real MA on the Show 5 (2026.11.04.205835+dd75395):** primed, 89 ms taken at once, no resync at
+      all. Its clock is about right (the 350 ppm were the PR author's Show 5; this one's frame nudging said +16..+54
+      ppm): the -328 saved by the jolt unlearnt in ~2.5 min, then the integral within ±18 ppm of 0, the 10 s mean error
+      within ±0.3 ms. But the 0.25 s average of the error swung ±4..7 ms reading to reading (the queue read in slots
+      that AudioTrack takes back in bursts: ~10 ms of noise a reading, chunks of ~96 ms), and at 0.2/s the rate wobbled
+      ~800 ppm rms at about 1 Hz (1.4 cents; the old nudging ticked on the same swings). A model with that noise
+      (15 min): averaged over 2 s at 0.1/s (Ki Kp²/4) the wobble is ~120 ppm rms, the true error 0.7 ms rms, the
+      integral's spread 17 ppm (51), 350 ppm learnt in ~2 min, 3.4 ms off at worst meanwhile: now the gains. The unit
+      model runs 6 min; the PC test learns -15 ppm in its 8 s. **At these gains, 11 min on the Show 5
+      (2026.11.04.211845+4775064):** the 2 s error's sd 1.3 ms (±3.7 at most), the 10 s rate's sd 62 ppm, the integral
+      within ±115 ppm (slow excursions: ~1.5 ms early for 30-60 s, twice, then back), mean drift ~+10 ppm. One resync,
+      +24.3 ms 0.4 s into a stream that resumed 0.5 s after Music Assistant reconnected, its clock still ±5.33 ms
+      (±0.1 after a minute): older builds snap the same. Still to see: the sink's resampler (no PC test reaches it)
 - [x] mDNS: init's `avahi-daemon` runs in SELinux domain `avahi-daemon`, which is denied read on `/data/misc/avahi/services`
       (so nothing was ever published, also not for Wyoming). `magiskpolicy` cannot parse a rule for a type with a hyphen →
       `boot.sh`/`run.sh` stop the init service and start avahi themselves in the `su` domain. Verified: answers queries from the PC.
