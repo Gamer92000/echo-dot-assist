@@ -3158,7 +3158,7 @@ Run in this order. Each step says what it proves.
       `$STAGE/ok`: `on_echo` reads an answer.  `tests/unit/uninstall_boot_test.sh` (14 cases; the TWRP probe and the
       5 min bound each fail it when broken).  Open: athena and cupcake (`install-system.sh`, STOCK_APPS_OUT too) only
       print that a wipe is needed; whether their uninstall shows the same crashes is not seen.
-- [~] Echo Shows' screen UI from the system partition (issue #122, PR #123, 2026-11-04, M0ebiu5's cronos, main at
+- [x] Echo Shows' screen UI from the system partition (issue #122, PR #123, 2026-11-04, M0ebiu5's cronos, main at
       5fb7c70): installed by the guided setup, the UI's app_process died at every start and hassmic started it again;
       only the band showed.  logcat: `UnsatisfiedLinkError: dlopen failed: library "/system/hassmic/libhmui.so" needed
       or dlopened by "/system/lib/libnativeloader.so" is not accessible for the namespace "classloader-namespace"`.
@@ -3174,8 +3174,23 @@ Run in this order. Each step says what it proves.
       `LD_LIBRARY_PATH=/system/hassmic`.  The fixed build pushed (`ota-push.sh`, self test passed): face, clock,
       drawer handle, no linker errors; that copy runs from `ota/current`, so it shows the UI working on cronos, not
       the fix itself.  Build for cronos clean (`-Wall -Wextra`), `tests/fake_screen.py` 51 ok (the reporter).
-      Open: the factory copy with it on an Echo (installed fresh, or `ota/current` gone); checkers and crown (Android
-      7.1, the same libnativeloader) and athena (Android 9: AOSP's does the same for class loaders it did not make).
+      Not enough on its own (checkers, 2026-11-04, the factory copy of 89a0a21 run with `ota/current` moved aside):
+      the same error, `ld_library_paths=""`, though the UI's `/proc/<pid>/environ` had `LD_LIBRARY_PATH=/system/hassmic`.
+      hassmic runs with real group 3990 and effective system (`runas -r 3990`, main.sh: its own sockets' group for
+      the egress lock), the kernel makes an exec with the two apart AT_SECURE (`cap_bprm_secureexec`: egid != gid;
+      the UI's auxv: AT_SECURE 1), and bionic's linker drops `LD_LIBRARY_PATH` under it.  The hand check on cronos ran
+      as root, ids equal.  main.c's `child_ids` (setregid(egid, egid)) was done for the programs main.c and ledq.c run, not
+      for the UI (nor ringbar.dex, which loads no library of ours); `ui_start`'s child now does it before `execve`.  Then from `/system` (276c0c2 as the factory copy,
+      `ota/current` aside, hassmic restarted): `screen: up`, no linker error in logcat, the UI at gid 1000/1000;
+      `ota/current` put back.  `tests/fake_screen.py` (and `--legacy`) ok.  Open: crown and athena (Android 9: AOSP's
+      libnativeloader does the same for class loaders it did not make; athena's runas the same).
       Seen there too: Android's auto brightness with `als_ps/lux` at 4-6 held the backlight at 5/255, the screen as
-      good as off until `screen_brightness_mode 0`.  athena and crown set `screen_brightness_mode=0` in
-      `ANDROID_SETTINGS`; checkers and cronos do not.
+      good as off until `screen_brightness_mode 0`.  checkers and cronos now set manual 120 in `ANDROID_SETTINGS`, as
+      athena and crown did.  Fire OS maps the setting to the backlight on a curve of its own (checkers, `dumpsys power`
+      mScreenBrightnessSetting = `lcd-backlight/brightness`): 10 -> 5, 30 -> 7, 120 -> 33, 130 -> 39, 144 -> 49,
+      155 -> 59, 240 -> 210, 255 -> 255; Android's default setting is 90.  Kiosk Satellite's adaptive brightness
+      (`flutter.ks.screen.adaptive_brightness`, on by default, WRITE_SETTINGS) writes the setting from the light
+      sensor while the mode is manual (120 to 155 at 20 to 45 lux within seconds), or a level of its own with that
+      off; ours at each satellite start only fought it, so `alexa-off.sh` leaves the level alone while the app's
+      folder is in `/data/app` (the mode stays manual: its adaptive brightness runs under it).  Open: 120 by eye in
+      daylight (33/255; stock ran at 238).
