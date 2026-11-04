@@ -589,7 +589,7 @@ Run in this order. Each step says what it proves.
 - [~] Sendspin player (`src/hassmic/sendspin.c`, port 28928, mDNS `_sendspin._tcp`, `-z 0` disables): dialect of aiosendspin 9.1.1 = Music
       Assistant 2.10.4, which differs from the published spec in 22 places (`docs/sendspin-digest.md` §0). WebSocket (`ws.c`), Noise
       KKpsk2 responder (`noise.c`, Monocypher), Sentinel PSK + unpaired access (operator approves in MA), player@v1 PCM 48k stereo,
-      Kalman clock filter, scheduler (hard snap, then ≤6 frames/chunk nudging), volume/mute/static delay, ducking under the
+      Kalman clock filter, scheduler (hard snap, then a rate of its own steered by the error, `resample.c`; ≤6 frames/chunk nudging until 2026-11-04), volume/mute/static delay, ducking under the
       voice assistant. `tests/fake_ma_sendspin.py` against the reference server: 9/9 (4.000 s of 4.000 s played, no discontinuity,
       clock ±0.07 ms). `make unit`: WebSocket vs aiohttp, Noise vs python noiseprotocol, hash vectors.
       **Real Music Assistant 2026-09-21:** MA found the Echo by mDNS, dialled 28928 over its IoT-VLAN interface (no router rule),
@@ -640,6 +640,51 @@ Run in this order. Each step says what it proves.
       now; `CODEC=opus` and `CODEC=pcm` pass too. Not done: time sync in bursts of 8 (spec since 2026-10-21, after 10.2.1).
       Not exercised: fragments (the library fragments only beyond 65518 bytes), a volume change during a re-handshake.
       Not yet against a real MA 2.10.8
+      **In sync without a cut (2026-11-04, PR #113).** The Echo Show 5's output clock runs ~350 ppm slow against the
+      system clock (its log: "nudged -170 frames" every 10 s, 2026-11-02): the frames skipped to catch up, up to 6 at one
+      point, were a step in the waveform, a tick several times a second in quiet music. The PR resampled the whole 25 ms
+      chunk instead (0.5 %, linear): no step, but the threshold loop stayed, a pitch blip of 8.6 cents for 25 ms every
+      ~0.36 s. Now the rate follows the drift (`resample.c`): a PI servo (error averaged over 2 s, Kp 0.1/s, Ki
+      Kp²/4, critically damped; 0.25 s and 0.2/s until the Show 5's log below; drift held to ±2000 ppm, rate to ±0.5 %) steers a stereo cubic (Catmull-Rom) resampler
+      that carries its position and last frames across chunks; the error counts where the next frame out lies
+      (`rs_lag`). The drift learnt is kept across snaps and streams, one per route (the Echo's speaker, a Bluetooth
+      one: another clock). The Bluetooth sink (a phone playing here) resamples through it too (was linear). A model of the Show 5's queue (20 ms slots,
+      polled every 5 ms, 5 ms of jitter) against the old loop, 180 s: the error's swing 5.3 → 2 ms, 0.5 % rate jumps
+      6/s (even at 0 ppm: the noise crossed the 400 us threshold) → none, the rate's noise ~280 ppm rms below 1 Hz
+      (0.5 cent); the drift is learnt within a minute (20 s the Show 5's way). The cubic: 1 kHz within rounding,
+      8 kHz -32 dB under the sine (linear dips 8 kHz by 1.3 dB at half-frame phases). Log every 10 s: `rate +350 ppm
+      (integral -350)` (the rate's mean over those 10 s; the integral's share, kept), and every snap past 20 ms as
+      `resynced`. The drift learnt survives restarts and updates in `state/sendspin.drift` ("<Echo ppm> <Bluetooth
+      ppm>", saved as the output closes and every 10 min, only once moved by 5 ppm). Ducking glides over 30 ms (Sendspin and the A2DP
+      sink; a step at a block's edge clicked). `make unit-resample` (the resampler, a step changing per call as
+      the sink's, the servo against the queue model at ±350, 0, -1500 ppm), `tests/fake_ma_sendspin.py` with `HASSMIC_FAKE_MUSIC_PPM=-500` (`audio_file.c`'s buffer
+      drains that much slower): the tone's phase step 0.000 rad (the nudging: 0.232; limit 0.03, was 0.3), no resync.
+      **On the Show 5 (2026-11-04, 2026.11.04.201339+7b3751a, real MA):** after 10 s `sync err -0.46 ms, rate +161 ppm
+      (integral -63)`; but every stream's second chunk came 135-139 ms early, `resynced` (the old loop did the same,
+      silently): 137 ms of silence after the stream's first 25 ms of music. AudioTrack takes its buffer's worth of the
+      slots at once as it starts, which `s_queued_us` leaves out as a steady latency, and the first snap waited with
+      nothing written until the chunk was 200 ms from due: the queue ran dry, AudioTrack emptied, and its next burst came
+      after the chunk was timed. Now `music_prime_us()` (150 ms on Android, 0 on the mixer) primes a fresh output with
+      silence and waits for the burst ("output primed with 150 ms of silence, N ms of it taken at once"), and the snap
+      writes silence as it plays, 20 ms at a time (an Android slot each: prime and all, 150 ms fit the 8 without a
+      wait), the error read again before each. And the -4.8 ms the second snap
+      left had taken the integral from -127 to -328 ppm in 4 s: it is held for 5 s after every snap (`SERVO_HOLD_S`).
+      `audio_file.c`'s `HASSMIC_FAKE_MUSIC_BURST_MS=137` (137 ms hidden at once as the output starts) reproduces it:
+      without the prime `+137.0 ms off the schedule, resynced`, with it none; the test's tone is 8 s (learning after
+      the hold: -54 ppm saved).
+      **Then 10.5 min of real MA on the Show 5 (2026.11.04.205835+dd75395):** primed, 89 ms taken at once, no resync at
+      all. Its clock is about right (the 350 ppm were the PR author's Show 5; this one's frame nudging said +16..+54
+      ppm): the -328 saved by the jolt unlearnt in ~2.5 min, then the integral within ±18 ppm of 0, the 10 s mean error
+      within ±0.3 ms. But the 0.25 s average of the error swung ±4..7 ms reading to reading (the queue read in slots
+      that AudioTrack takes back in bursts: ~10 ms of noise a reading, chunks of ~96 ms), and at 0.2/s the rate wobbled
+      ~800 ppm rms at about 1 Hz (1.4 cents; the old nudging ticked on the same swings). A model with that noise
+      (15 min): averaged over 2 s at 0.1/s (Ki Kp²/4) the wobble is ~120 ppm rms, the true error 0.7 ms rms, the
+      integral's spread 17 ppm (51), 350 ppm learnt in ~2 min, 3.4 ms off at worst meanwhile: now the gains. The unit
+      model runs 6 min; the PC test learns -15 ppm in its 8 s. **At these gains, 11 min on the Show 5
+      (2026.11.04.211845+4775064):** the 2 s error's sd 1.3 ms (±3.7 at most), the 10 s rate's sd 62 ppm, the integral
+      within ±115 ppm (slow excursions: ~1.5 ms early for 30-60 s, twice, then back), mean drift ~+10 ppm. One resync,
+      +24.3 ms 0.4 s into a stream that resumed 0.5 s after Music Assistant reconnected, its clock still ±5.33 ms
+      (±0.1 after a minute): older builds snap the same. Still to see: the sink's resampler (no PC test reaches it)
 - [x] mDNS: init's `avahi-daemon` runs in SELinux domain `avahi-daemon`, which is denied read on `/data/misc/avahi/services`
       (so nothing was ever published, also not for Wyoming). `magiskpolicy` cannot parse a rule for a type with a hyphen →
       `boot.sh`/`run.sh` stop the init service and start avahi themselves in the `su` domain. Verified: answers queries from the PC.
@@ -2944,8 +2989,9 @@ Run in this order. Each step says what it proves.
       Home Assistant adopted it and works (the tester).  Screen UI (2026-11-03): `SCREEN` in device.mk, libhmui.so in its
       build and bundle; the JNI table found on cronos' own boot class path (`make unit-screen` checks every model with
       `SCREEN` against its unpacked firmware; framework.jar is checkers' byte for byte), display and touch as checkers'
-      (960 x 480, rotation 1, goodix-ts).  Not yet: the speaker gain by ear, Wi-Fi motion, DHA version / Download from
-      Amazon, Bluetooth, the screen UI on the Echo.
+      (960 x 480, rotation 1, goodix-ts).  On the Echo (2026-11-04, issue #122 below): the face, the clock and the
+      drawer handle, once its library loaded.  Not yet: the speaker gain by ear, Wi-Fi motion, DHA version / Download
+      from Amazon, Bluetooth, the rest of the screen UI (touches, drawer, music).
 - [~] Echo Show 8 2nd gen (`athena`, 2026-10-14; `docs/re-athena.md`).  A different platform from crown: MT8183, Android 9
       (Treble, enforcing SELinux, policy in `/vendor/etc/selinux/precompiled_sepolicy`), kernel 4.4.146, Fire OS 7574.1
       (PS75741.7080N; build 7077's probe libraries are byte-identical).  Rooted by saiyaku-athena's zip (system and vendor
@@ -3157,3 +3203,46 @@ Run in this order. Each step says what it proves.
       `$STAGE/ok`: `on_echo` reads an answer.  `tests/unit/uninstall_boot_test.sh` (14 cases; the TWRP probe and the
       5 min bound each fail it when broken).  Open: athena and cupcake (`install-system.sh`, STOCK_APPS_OUT too) only
       print that a wipe is needed; whether their uninstall shows the same crashes is not seen.
+- [x] Echo Shows' screen UI from the system partition (issue #122, PR #123, 2026-11-04, M0ebiu5's cronos, main at
+      5fb7c70): installed by the guided setup, the UI's app_process died at every start and hassmic started it again;
+      only the band showed.  logcat: `UnsatisfiedLinkError: dlopen failed: library "/system/hassmic/libhmui.so" needed
+      or dlopened by "/system/lib/libnativeloader.so" is not accessible for the namespace "classloader-namespace"`.
+      app_process's system class loader is not one ApplicationLoaders made, so libnativeloader gives it an isolated
+      namespace whose permitted paths are `java.library.path` (ART takes it from `LD_LIBRARY_PATH`) plus `/data` and
+      `/mnt/expand`; screen.dex's `System.load` of `/system/hassmic/libhmui.so` is outside them.  Unseen until now
+      because every copy that runs from `/data` loads it: deploy.sh's `/data/local/hassmic`, and every pushed or
+      online update (`ota/current`, boot.sh); a Show is black from its install until its first update.  `ui_start`
+      now puts libhmui.so's folder on `LD_LIBRARY_PATH` (replacing an inherited one: nothing of ours sets it), as it
+      sets `CLASSPATH` and `HMUI_BAND`; `/system/hassmic` holds no other library, so app_process's own resolve as
+      before.  Checked on the cronos as root with the installed files: `CLASSPATH=/system/hassmic/screen.dex
+      HMUI_BAND=10 app_process / Screen /system/hassmic/libhmui.so` fails so, and loads (exit 0 at EOF) with
+      `LD_LIBRARY_PATH=/system/hassmic`.  The fixed build pushed (`ota-push.sh`, self test passed): face, clock,
+      drawer handle, no linker errors; that copy runs from `ota/current`, so it shows the UI working on cronos, not
+      the fix itself.  Build for cronos clean (`-Wall -Wextra`), `tests/fake_screen.py` 51 ok (the reporter).
+      Not enough on its own (checkers, 2026-11-04, the factory copy of 89a0a21 run with `ota/current` moved aside):
+      the same error, `ld_library_paths=""`, though the UI's `/proc/<pid>/environ` had `LD_LIBRARY_PATH=/system/hassmic`.
+      hassmic runs with real group 3990 and effective system (`runas -r 3990`, main.sh: its own sockets' group for
+      the egress lock), the kernel makes an exec with the two apart AT_SECURE (`cap_bprm_secureexec`: egid != gid;
+      the UI's auxv: AT_SECURE 1), and bionic's linker drops `LD_LIBRARY_PATH` under it.  The hand check on cronos ran
+      as root, ids equal.  main.c's `child_ids` (setregid(egid, egid)) was done for the programs main.c and ledq.c run, not
+      for the UI (nor ringbar.dex, which loads no library of ours); `ui_start`'s child now does it before `execve`.  Then from `/system` (276c0c2 as the factory copy,
+      `ota/current` aside, hassmic restarted): `screen: up`, no linker error in logcat, the UI at gid 1000/1000;
+      `ota/current` put back.  `tests/fake_screen.py` (and `--legacy`) ok.  Open: crown and athena (Android 9: AOSP's
+      libnativeloader does the same for class loaders it did not make; athena's runas the same).
+      Seen there too: Android's auto brightness with `als_ps/lux` at 4-6 held the backlight at 5/255, the screen as
+      good as off until `screen_brightness_mode 0`.  checkers and cronos now set manual 120 in `ANDROID_SETTINGS`, as
+      athena and crown did.  Fire OS maps the setting to the backlight on a curve of its own (checkers, `dumpsys power`
+      mScreenBrightnessSetting = `lcd-backlight/brightness`): 10 -> 5, 30 -> 7, 120 -> 33, 130 -> 39, 144 -> 49,
+      155 -> 59, 240 -> 210, 255 -> 255; Android's default setting is 90.  Kiosk Satellite's adaptive brightness
+      (`flutter.ks.screen.adaptive_brightness`, on by default, WRITE_SETTINGS) writes the setting from the light
+      sensor while the mode is manual (120 to 155 at 20 to 45 lux within seconds), or a level of its own with that
+      off; ours at each satellite start only fought it, so `alexa-off.sh` leaves the level alone while the app's
+      folder is in `/data/app` (the mode stays manual: its adaptive brightness runs under it).  Open: 120 by eye in
+      daylight (33/255; stock ran at 238).
+      Boot time (2026-11-02, Show 5, PR #114): `alexa-off.sh` took 16 s of a 41 s boot at a start with nothing left to
+      do, all of it Java: `pm list packages -d` and `pm list packages` ~2 s each, a `settings get` ~2 s per
+      `ANDROID_SETTINGS` entry, `wpa_cli p2p_group_remove` 7 s with no group up.  Now the package manager's and
+      SettingsProvider's own XML first (`packages.xml` trusted only when it ends in `</packages>`: it is written again
+      in place, and "android" is at line 1381 of 3339 with Alexa's `/data/app` updates after it), `wpa_cli` only when
+      `/sys/class/net/p2p-p2p0-0` exists; anything not shown done goes to pm/settings as before.  `pm_done` checked
+      against fake files (whole, cut off, enabled, no restriction entry, component not noted, state 4).

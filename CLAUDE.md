@@ -75,7 +75,9 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ha.py [--qemu]    # Wyoming; --qemu uses the ARM build + stock Pryon model under qemu-arm
 .venv/bin/python tests/fake_ma_sendspin.py [--legacy]  # Sendspin, as Music Assistant 2.10.8 (aiosendspin 10.2.1, Sendspin 1.0;
                                              # --legacy: 9.1.1 of MA <= 2.10.6, build/aiosendspin-9.1.1 from --setup),
-                                             # strict: a deviation MA would only log fails
+                                             # strict: a deviation MA would only log fails; the output's clock
+                                             # 500 ppm slow (HASSMIC_FAKE_MUSIC_PPM) and AudioTrack's burst at the
+                                             # start (HASSMIC_FAKE_MUSIC_BURST_MS), followed without a phase step
 .venv/bin/python tests/fake_ha_stop_word.py   # "<wake word>, stop" between two Echos: the drop cancelled, stop_ends_listening
 .venv/bin/python tests/fake_screen.py [--legacy]  # the Echo Show's screen UI as hassmic feeds it (stand-in UI): Sendspin
                                              # metadata/artwork (1.0's transfer, scheduled; --legacy: 9.1.1's), the band,
@@ -118,8 +120,10 @@ changes); version = commit time in UTC, `2026.10.02.091530` (`make version`; loc
 passes `RELEASE=1` for the bare one), bundles `hassmic-<codename>.bundle(.sig)`
 signed in the `release` job only (secret `RELEASE_SIGNING_KEY` of the GitHub environment `release`, main/release only;
 build jobs sign with a throwaway key) with the release key (base64 of `secrets/release.key`; public half `keys/release.pub`,
-shipped in every bundle). `tools/mkstubs.sh` regenerates the stub lists from the firmware and checks byte-identity; rerun it
-when code starts using another stock library function. Builds are reproducible (`BUILD_TIME` = commit time). Test the
+shipped in every bundle; `keys/release.conf` names it and the repository, `UPDATE_REPO`; a fork's own releases:
+`scripts/fork-release.sh`, `secrets/fork.conf` over it, in CI from the variable `RELEASE_PUBLIC_KEY`).
+`tools/mkstubs.sh` regenerates the stub lists from the firmware and checks byte-identity; rerun it when code starts
+using another stock library function. Builds are reproducible (`BUILD_TIME` = commit time). Test the
 workflow with `act push` (publishing is a dry run under act).
 
 One unit test: `make unit-<name>` (`UNIT_TESTS` in the Makefile).
@@ -319,7 +323,11 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   2 kiosk). The socket belongs to arb's loop thread. `HASSMIC_ARB_SCALE` (tests, `PACE()`): the network's own timers
   (beacons, discovery, tags, handoff, pairing) at that fraction; rounds and the window keep theirs. Page: two cards with pros and cons (`HELP.arbitration_mode.modes`).
 - **Music**: `sendspin.c` (Music Assistant Sendspin player over `ws.c`/`noise.c`/`net.c`/`hash.c`, decodes via
-  `dr_flac`/`minimp3`/libopus). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
+  `dr_flac`/`minimp3`/libopus; in sync by a rate of its own, `resample.c`: a PI servo on the error steering a cubic
+  resampler, never frames skipped or repeated, which ticked on the Show 5's clock 350 ppm off; snap past 20 ms; a drift
+  learnt per route, the Echo's speaker or a Bluetooth one, kept in `state/sendspin.drift`, held 5 s after a snap; a
+  fresh output primed with silence first, `music_prime_us()`: Android's AudioTrack takes its buffer at once as it
+  starts, ~137 ms on the Show 5, which the queue leaves out; the A2DP sink resamples through resample.c too). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
   loaded with dlopen, aptX/aptX HD via `freeaptx`) with AVRCP. Only one music source plays at a time (newest wins). "<wake word>, stop" pauses it when nothing else was
   stopped (`stop_word`, a bare "stop" transcript in `core_transcript`; issue #51), the action button resumes.
   A "stop" that ended what its wake word cut (ring, Drop In, reply, THINKING run) drops that wake word's run: after the
@@ -565,7 +573,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   home app: the page's Screen page (`POST /api/screen`, `state/screen_home`; the apps the UI listed at start, "app"
   lines), else Kiosk Satellite where installed ("kiosk", root's `kiosk-app` mark), else the face; a new choice applies
   at once; relaunched 3x a minute at most, not while our own screen was asked for.  One app_process: `scripts/device/screen.dex`
-  (`tools/mkscreen.py`) loads `libhmui.so` (`android.c`: JNI table C/J/F, JV/CV for some SDKs only (Android 9:
+  (`tools/mkscreen.py`; `ui_start` puts the library's folder on `LD_LIBRARY_PATH`, else the class loader namespace
+  refuses `/system/hassmic`, and sets the real group to the effective one, else AT_SECURE drops it, issue #122) loads `libhmui.so` (`android.c`: JNI table C/J/F, JV/CV for some SDKs only (Android 9:
   SurfaceControl.Builder, getTasks(int)), checked by `mkscreen.py --framework`, `make unit-screen` against every
   `SCREEN` model's unpacked firmware for what its SDK resolves; `tools/dexasm.py` reads Android 7's oat and Android
   9's compact dex in vdex, hidden API bits off; images

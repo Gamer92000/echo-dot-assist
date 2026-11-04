@@ -31,6 +31,26 @@ device_load() {
     OUT=build/$DEVICE
     FW=firmware/$DEVICE
     export DEVICE
+    release_load
+}
+
+# release_load: UPDATE_REPO (whose GitHub releases online updates and prebuilt binaries come from) and RELEASE_PUB (the
+# key they are signed with, which every bundle and install carries), as the Makefile reads them: keys/release.conf, or a
+# fork's own secrets/fork.conf (scripts/fork-release.sh)
+release_load() {
+    for _f in keys/release.conf secrets/fork.conf; do
+        [ -f $_f ] || continue
+        # the lines as written: make keeps quotes that sh drops, and reads NAME = value, which sh runs as a command
+        _bad=$(grep -E '^[[:space:]]*(export[[:space:]]+)?(UPDATE_REPO|RELEASE_PUB)([^A-Za-z0-9_]|$)' $_f |
+            grep -Ev '^(UPDATE_REPO|RELEASE_PUB)=[A-Za-z0-9._/-]+[[:space:]]*(#.*)?$') &&
+            die "$_f: '$_bad': NAME=value, no quotes or spaces (keys/release.conf)"
+        . ./$_f
+    done
+    case $UPDATE_REPO in */*/*|*[!A-Za-z0-9._/-]*) die "UPDATE_REPO=$UPDATE_REPO: not owner/name";; ?*/?*) ;;
+        *) die "UPDATE_REPO=$UPDATE_REPO: not owner/name";; esac
+    # otatool's bundles and adb push name a file by its own name: the Echo looks for release.pub
+    case $RELEASE_PUB in release.pub|*/release.pub) ;; *) die "RELEASE_PUB=$RELEASE_PUB: the file must be called release.pub";; esac
+    [ -s "$RELEASE_PUB" ] || die "no $RELEASE_PUB (the release key of $UPDATE_REPO)"
 }
 
 # The binaries link against one firmware's libraries; on another one they may crash or misbehave in the audio path.

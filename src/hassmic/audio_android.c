@@ -567,6 +567,11 @@ int       music_open(unsigned rate, unsigned channels) { return s_open(&music, r
 int       music_write(const void *data, size_t len) { return s_write(&music, data, len); }
 long long music_queued_us(void) { return s_queued_us(&music); }
 void      music_close(void) { s_close(&music, 0); }
+/* A fresh player, once it plays, takes AudioTrack's buffer's worth of slots at once (the Echo Show 5: ~137 ms, Sendspin's
+ * second chunk timed 135-139 ms early in every stream, 2026-11-04), which s_queued_us leaves out from then on, as a
+ * steady latency.  Timed before that, a stream's first chunk was off by it.  150 ms: more than that, and within the
+ * slots (PLAY_NBUF x 20 ms), so writing it never waits. */
+long long music_prime_us(void) { return 150000; }
 
 /* The Bluetooth speaker stream: what a phone plays to the Echo (a2dp.c), the mixer's Bluetooth stream on the Dots.
  * Here a player of its own beside music, on the music stream like everything of ours.  Until it was there (-1) the

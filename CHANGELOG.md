@@ -4,10 +4,27 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-04
 
-- **The Echo Show's screen timeout and brightness settings take effect.** hassmic runs Android's `settings`, `am`
-  and `pm`, which are shell scripts without a `#!` line; started directly they failed, and every `settings put` had
-  done nothing. They now run through the shell. A tool that never ends no longer stalls the thread that asked (20 s
-  at most), and what a tool prints as an error reaches the log.
+- **Echo Show 5, Show 5 2nd gen and Show 8: the screen turns off on time.** hassmic sets how soon the
+  screen turns off (5 minutes, 1 minute while muted or on Do not disturb, as stock) with Android's `settings`, which
+  on these Echos is a shell script without a `#!` line: started directly it failed, and the setting was never made.
+  hassmic now runs such a script through the shell, as a shell would. A tool that hangs no longer holds up the part
+  of hassmic that asked (it waits 20 s at most), and what a tool prints as an error now reaches the log.
+- **The Echo Shows start sooner** (the Echo Show 5 about 15 seconds). Turning Alexa off at each start no longer asks
+  Android questions it already knows the answers to (the Echo Show 5 took 16 of its 41 seconds there).
+- **No more ticks in music.** Music Assistant's music had a small tick several times a second on the Echo Show 5,
+  most noticeable in quiet passages. The Show 5's speaker runs a little slow, and to stay in sync with the other
+  speakers the Echo skipped a few samples now and then. It now evens that out all along, by a change of speed far
+  too small to hear (0.035 %), so nothing is skipped or repeated, on every Echo. On the Echo Shows the music also starts
+  without the short break that came right after its first moment. And the music no longer clicks as it is turned down
+  for a request and back up after: it glides.
+- **Echo Shows: the screen's face comes up right after the install** (issue #122). Installed by the setup, the
+  screen's own UI never started: the screen stayed black but for the light band, until the first update arrived.
+  Android lets the screen's program load its library only from a few folders, and the system partition, where the
+  install puts hassmic, is not one of them (updates live in `/data`, which is); hassmic now tells it where to look,
+  in a way Android does not ignore. Seen on an Echo Show 5 2nd gen, checked on an Echo Show 5.
+- **Echo Show 5 and Show 5 2nd gen: the screen at a fixed brightness**, as on the Show 8s. Android's automatic
+  brightness took the screen down to almost nothing in a dim room. Where Kiosk Satellite is installed, it sets the
+  brightness, as before: its own adaptive brightness or the level chosen in it (on every Echo Show).
 
 ## 2026-11-03
 

@@ -508,6 +508,7 @@ wait_adb() {{ :; }}; keyboard_get() {{ echo KB; }}; kiosk_get() {{ echo KS; retu
 with tempfile.TemporaryDirectory() as tmp:
     os.makedirs(tmp + "/repo"); b = tmp + "/bin"; os.makedirs(b)
     shutil.copytree(ROOT + "/scripts", tmp + "/repo/scripts"); shutil.copytree(ROOT + "/devices", tmp + "/repo/devices")
+    shutil.copytree(ROOT + "/keys", tmp + "/repo/keys")
     p = tmp + "/repo/scripts/lib/kiosk.sh"; t = open(p).read()
     open(p, "w").write(t.replace("KIOSK_CERT=2a77", "KIOSK_CERT=" + hashlib.sha256(GOOD).hexdigest() + " #"))
     data = apk(GOOD)

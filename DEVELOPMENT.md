@@ -29,7 +29,7 @@ rules. `DEVICE` picks one (default `donut`). The adb scripts check it against th
 | Path | What |
 |---|---|
 | `devices/` | one directory per Echo model (`donut`, `biscuit`, `radar`): `device.mk`, `board.c`, `device.conf`, `hassmic.rc`, `sepolicy.rules`, `setup.sh`, install instructions |
-| `src/hassmic/` | the daemon: core (capture, wake word, playback, LEDs, buttons), `sound_pryon.c` (optional sound detection, `docs/re-aed.md`), `whisper_pryon.c` (whisper detection with Amazon's model, `docs/re-whisper.md`), `proto_esphome.c`, `proto_wyoming.c`, `arb.c` (wake word arbitration between Echos), `dropin.c` (Drop In: calls between Echos of the arbitration network), `settings.c` (settings by name, `state/config`), `web.c` (the settings page; its files in `web/`), `artifacts.c` (models copied between Echos by the page), `davs.c` (models downloaded from Amazon by the page, with `dha.c` for the device attestation its login needs, `docs/re-davs-login.md`), `earsup.c` (experimental: our own wake sound taken back out of the mic audio sent to the pipeline), `micdenoise.c` (RNNoise on the mic audio sent to the pipeline), `micgain.c` (gain of the mic audio sent to the pipeline), `wakealign.c` (where the wake word ends: its phones aligned with a cut-down Montreal Forced Aligner model, `tools/wakealign/`), `wordtail.c` (the same by the level, without a model), `micend.c` (experimental: the end of a request heard on the Echo, by the talker's level and Amazon's VAD), `afemeta.c` (the front end's record in the micAsr samples' lowest bits, `docs/re-vad.md`), `sendspin.c`, `mass.c` (Music Assistant's own API for the screen's music pages, `json.c` reads it), `a2dp.c` (Bluetooth speaker both ways), `btout.c` (playing on a Bluetooth speaker: the mixer's A2DP route, `docs/re-a2dp-source.md`), `ble.c`, push updates (`ota.c`), online updates (`update.c`), `adbwifi.c` (the debug access switch), `improv.c` (setup from a phone: Improv Wi-Fi over `ble.c`'s peripheral role), `netaddr.c` (a new IP address: links over the old one closed, mDNS announced again until Home Assistant is back), `wifimotion.c` (experimental motion sensor from the Wi-Fi driver's receive level), `wake.c` (picks the wake word engine by the model: `wake_pryon.c`, or `wake_mww.c` = microWakeWord with `mww_features.c` (its audio front end), `mww_model.c` (its int8 .tflite models) and `mww_store.c` (its models in `state/mww`, managed by the page)) |
+| `src/hassmic/` | the daemon: core (capture, wake word, playback, LEDs, buttons), `sound_pryon.c` (optional sound detection, `docs/re-aed.md`), `whisper_pryon.c` (whisper detection with Amazon's model, `docs/re-whisper.md`), `proto_esphome.c`, `proto_wyoming.c`, `arb.c` (wake word arbitration between Echos), `dropin.c` (Drop In: calls between Echos of the arbitration network), `settings.c` (settings by name, `state/config`), `web.c` (the settings page; its files in `web/`), `artifacts.c` (models copied between Echos by the page), `davs.c` (models downloaded from Amazon by the page, with `dha.c` for the device attestation its login needs, `docs/re-davs-login.md`), `earsup.c` (experimental: our own wake sound taken back out of the mic audio sent to the pipeline), `micdenoise.c` (RNNoise on the mic audio sent to the pipeline), `micgain.c` (gain of the mic audio sent to the pipeline), `wakealign.c` (where the wake word ends: its phones aligned with a cut-down Montreal Forced Aligner model, `tools/wakealign/`), `wordtail.c` (the same by the level, without a model), `micend.c` (experimental: the end of a request heard on the Echo, by the talker's level and Amazon's VAD), `afemeta.c` (the front end's record in the micAsr samples' lowest bits, `docs/re-vad.md`), `sendspin.c` (kept in sync by a rate of its own: `resample.c`), `mass.c` (Music Assistant's own API for the screen's music pages, `json.c` reads it), `a2dp.c` (Bluetooth speaker both ways), `btout.c` (playing on a Bluetooth speaker: the mixer's A2DP route, `docs/re-a2dp-source.md`), `ble.c`, push updates (`ota.c`), online updates (`update.c`), `adbwifi.c` (the debug access switch), `improv.c` (setup from a phone: Improv Wi-Fi over `ble.c`'s peripheral role), `netaddr.c` (a new IP address: links over the old one closed, mDNS announced again until Home Assistant is back), `wifimotion.c` (experimental motion sensor from the Wi-Fi driver's receive level), `wake.c` (picks the wake word engine by the model: `wake_pryon.c`, or `wake_mww.c` = microWakeWord with `mww_features.c` (its audio front end), `mww_model.c` (its int8 .tflite models) and `mww_store.c` (its models in `state/mww`, managed by the page)) |
 | `src/ui/` | the Echo Show's screen UI, a process of its own (hassmic's `screen.c` starts it; `ui.h` lists the parts): `scene.c` (display list diffed per frame into one dirty rectangle, caches, touches, scrolling), `widgets.c` (icons, buttons, sliders, keyboard), `face.c`, `drawer.c` (pulled from the top edge: home, music, DND, apps), `music.c` (Music Assistant: playing, queue, library, search, speakers), `gfx.c` (anti-aliased drawing into the gralloc buffer), `android.c` (libhmui.so: JNI for the layers, text, images, apps, the screenshot; loaded by `scripts/device/screen.dex`, `tools/mkscreen.py`), `touch.c` (the touchscreen's evdev node, protocol B; `tests/unit/touch_test.c`); `tools/uishot.c` draws every view on the PC |
 | `src/kmod/` | kernel modules for Wi-Fi motion, hooking the Wi-Fi driver's receive path: `hassmic_rcpi.c` (biscuit, radar), `hassmic_rcpi4m.c` (donut, and checkers as 32-bit ARM); built by `make` when the model's kernel sources and compiler are in `toolchain/`, see below |
 | `src/tools/` | `mixcap`, `mixplay`, `pryon_test`, `aed_test` (stock sound detector, `docs/re-aed.md`), `whisper_test` (whisper detector, `docs/re-whisper.md`), `latency`, `otatool`, `runas` (AIPC refuses uid 0, the image has no `su`), `curlspy`, `hciscan` (raw HCI on `/dev/stpbt`), `a2dpprobe` (stands in for the Bluetooth stack on the mixer's A2DP output) |
@@ -42,7 +42,7 @@ rules. `DEVICE` picks one (default `donut`). The adb scripts check it against th
 | `docs/` | user guide (`GUIDE.md`), security model (`SECURITY.md`), reverse-engineering notes; `img/src/*.typ` are the README figures (Typst + CeTZ), `tools/figures.sh` renders them to `img/*-light.svg` / `*-dark.svg` |
 | `tests/` | protocol tests against the reference implementations |
 | `blueprints/` | Home Assistant blueprints for features that need an automation (`automation/drop_in.yaml`: Drop In by voice) |
-| `keys/` | `release.pub`: the key online updates are signed with (CI and releases, below) |
+| `keys/` | `release.pub`: the key online updates are signed with; `release.conf`: that key and the repository whose releases they are (CI and releases, below) |
 | `.github/workflows/` | `build.yml`: builds, tests, betas and releases |
 
 ## Build and test
@@ -239,6 +239,30 @@ What the key does not cover, on purpose: root accepts a release-signed bundle th
 updates" is set to (the setting is enforced by hassmic, which only downloads with a channel picked), and an older one
 as well as a newer one (switching from beta back to release relies on that). So a hassmic taken over through the
 network could put an older release back; it could not install code of its own.
+
+**Releases from a fork.** A fork's CI cannot sign with this project's key, so a fork that publishes builds of its own
+signs them with its own key, and its Echos then look for updates in the fork. `keys/release.conf` names the repository
+(`UPDATE_REPO`, compiled into `update.c`, and where `scripts/lib/build.sh` takes prebuilt binaries from) and the key
+(`RELEASE_PUB`, in every bundle and install as `release.pub`); a fork sets both in `secrets/fork.conf`, outside git, so
+its tree stays this one and its branches make pull requests here like any other. Once, on the PC, as an admin of the
+fork:
+
+```sh
+scripts/fork-release.sh me/fork      # key pair and secrets/fork.conf; on GitHub (gh): environment release, its secret, a variable
+```
+
+It makes `secrets/release.key` and `.pub`, and on GitHub the environment `release` (`main` and `release` only) with
+the secret `RELEASE_SIGNING_KEY`, plus the repository variable `RELEASE_PUBLIC_KEY` (the public half, which the build
+jobs need too: they pack the bundles). An environment the fork has already is kept as it is when it admits only chosen
+branches or protected ones, and refused, before anything is written, when it admits every branch (by its setting or a
+pattern like `**`). In CI, `scripts/fork-release.sh ci` writes `secrets/fork.conf` from that variable
+and the repository the workflow runs in; without the variable (this project) it does nothing. Then allow the fork's
+workflows (off in a fork until someone does), protect `main` and `release`, push a commit of your own to `main` (the
+script changes nothing in git; a commit whose tag the fork took from this project is not published again, and a manual
+run never publishes), and put each Echo on a build of the fork once from the PC (`scripts/ota-push.sh` or
+`scripts/setup.sh`): that brings it the fork's key. Back up `secrets/`. A fork without `secrets/fork.conf` builds what
+this project builds, byte for byte, and its Echos take this project's updates. `tests/unit/fork_release_test.sh` runs
+the script against a stand-in `gh`.
 
 **Trying the workflow locally** with [nektos/act](https://github.com/nektos/act): the publishing step only says what it
 would publish under act. The toolchains go on a volume: unpacked inside the job containers (3 GB), act times out

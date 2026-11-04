@@ -8,6 +8,8 @@
 # The firmware is not public: device binaries link against stand-ins for the stock libraries (make STUBS=1,
 # devices/<codename>/stubs/, tools/mkstubs.sh), which gives the same binaries byte for byte.  Bundles are signed with the
 # release key (secret RELEASE_SIGNING_KEY: base64 of secrets/release.key); Echos check them against keys/release.pub.
+# A fork with releases of its own (scripts/fork-release.sh) has the variable RELEASE_PUBLIC_KEY: its key and repository
+# then go into its builds instead (secrets/fork.conf).
 # The key is a secret of the environment "release", which only main and release may use: only the release job names
 # it, so builds of pull requests and other branches never run with it, and their bundles are signed with a throwaway key.
 # Under nektos/act everything runs except the publishing itself, which only says what it would do.
@@ -94,6 +96,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0                # git describe, compiled in
+      # a fork's own release key and repository (scripts/fork-release.sh), compiled in and packed: as the release job's
+      - name: Fork
+        env:
+          RELEASE_PUBLIC_KEY: ${{ vars.RELEASE_PUBLIC_KEY }}
+        run: scripts/fork-release.sh ci
 
       # Under act the toolchains are on a volume shared by the jobs (DEVELOPMENT.md): that is the cache there, and a
       # restore would unpack over a compiler another job is running ("Text file busy").
@@ -278,6 +285,10 @@ jobs:
           path: build
           pattern: build-*
           merge-multiple: true          # each holds <device>/ and <device>.content-id: build/ as the build jobs left it
+      - name: Fork
+        env:
+          RELEASE_PUBLIC_KEY: ${{ vars.RELEASE_PUBLIC_KEY }}
+        run: scripts/fork-release.sh ci
       - name: Sign
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
@@ -285,6 +296,7 @@ jobs:
         run: |
           [ -n "$RELEASE_SIGNING_KEY" ] || { echo "::error::secret RELEASE_SIGNING_KEY missing in the environment release"; exit 1; }
           make -s build/otatool-host
+          . scripts/lib/device.sh; release_load      # RELEASE_PUB: keys/release.pub, or a fork's (the step before)
           mkdir -p secrets dist
           (umask 077; echo "$RELEASE_SIGNING_KEY" | base64 -d > secrets/release.key)
           for c in build/*.content-id; do
@@ -299,8 +311,8 @@ jobs:
                   { echo "::error::$d: bundle differs from the build job's: a file missing from its artifact"; rm -f secrets/release.key; exit 1; }
               # signed by the PC's otatool (Python): what the Echo's (C) checks must pass too, or nothing is published
               for v in build/otatool-host "python3 scripts/otatool.py"; do
-                  $v verify keys/release.pub build/$d/hassmic.bundle build/$d/hassmic.bundle.sig > /dev/null ||
-                      { echo "::error::$d: bundle does not verify against keys/release.pub ($v): secret and public key differ, or the two otatools do"; rm -f secrets/release.key; exit 1; }
+                  $v verify $RELEASE_PUB build/$d/hassmic.bundle build/$d/hassmic.bundle.sig > /dev/null ||
+                      { echo "::error::$d: bundle does not verify against $RELEASE_PUB ($v): secret and public key differ (a fork: scripts/fork-release.sh), or the two otatools do"; rm -f secrets/release.key; exit 1; }
               done
               cp build/$d/hassmic.bundle dist/hassmic-$d.bundle; cp build/$d/hassmic.bundle.sig dist/hassmic-$d.bundle.sig
               cp $c dist/hassmic-$d.content-id
@@ -341,7 +353,7 @@ jobs:
               echo
               git log --no-merges --format='- %s' ${prev:+$prev..}HEAD | head -40
               echo
-              echo "Install from Home Assistant: the Echo's \"Online updates\" select, then its firmware update entity. Bundles are signed with the release key (keys/release.pub)."
+              echo "Install from Home Assistant: the Echo's \"Online updates\" select, then its firmware update entity. Bundles are signed with this repository's release key."
           } > notes.md
           cat notes.md; ls -l dist
       - name: Publish
