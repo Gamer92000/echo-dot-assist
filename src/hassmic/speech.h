@@ -7,8 +7,11 @@
 
 /* What the speech thread hands the core: a sentence begins (RATE Hz mono s16), its audio in pieces, its end.  The
  * core's (main.c), called from the speech thread without the lock (end also from speech_cancel's caller).  TAG is
- * speech_say's.  end comes for every sentence taken, also one that failed, was cancelled or was dropped from the queue
- * (begin then never came): a Home Assistant reply's run ends with it. */
+ * speech_say's, the core's to give: 0 a sentence of the Echo's own, 1 Home Assistant's whole reply (its end ends the
+ * run), SPEECH_PART + n a sentence of reply n streamed sentence by sentence (main.c core_reply_part: only the last
+ * one's end ends the run).  end comes for every sentence taken, also one that failed, was cancelled or was dropped
+ * from the queue (begin then never came). */
+#define SPEECH_PART 2
 struct speech_out {
     void (*begin)(unsigned rate, int tag);
     void (*data)(const void *pcm, unsigned len);

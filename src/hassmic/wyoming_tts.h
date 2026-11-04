@@ -6,6 +6,8 @@
 #define WYTTS_PORT 16710            /* inbound TCP 16384-32767 only (lockdown.sh); 16700 is the Wyoming satellite's */
 
 void wytts_start(int port);         /* where a voice is installed: listens in a thread of its own */
-/* KEY's string in a JSON text as UTF-8 (escapes and \uXXXX undone, line breaks as spaces); 0, or -1 */
+/* KEY's string in a JSON text as UTF-8 (escapes and \uXXXX undone); 0, or -1 */
 int  wytts_json_text(const char *json, const char *key, char *out, size_t cap);
+/* The length of the first whole sentence of S (N bytes), 0 while it may go on; FINAL: no more text comes */
+size_t wytts_sentence(const char *s, size_t n, int final);
 #endif

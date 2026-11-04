@@ -102,9 +102,22 @@ int  core_wake_in_request(int set);              /* the request's audio from the
 int  core_end_of_request(int set);               /* the end of a request heard on the Echo (micend.h: MICEND_*), -1 reads */
 int  core_own_voice(int set);                    /* own_voice_replies (main.c core_reply_local), -1 reads */
 int  core_own_voice_present(void);               /* a voice of the Echo's own is installed (speech.h) */
-int  core_reply_local(const char *text);
+int  core_reply_local(const char *text);         /* lock held: 1 = the Echo's own voice says this whole reply, end and all */
+/* A reply Home Assistant streams (main.c, "Setting own_voice_replies").  Lock held: tts_start_streaming came; 1 = the
+ * core says the reply (do not fetch its URL), 0 = fetch and play it as before.  At its TTS start: 1 = said (sentence
+ * by sentence, or now whole: its end ends the run), 0 = nothing says it (end the run as without a reply) */
+int  core_reply_stream(void);
+int  core_reply_streamed(const char *text);
+/* The Echo's own Wyoming TTS server (wyoming_tts.c), lock not held.  A synthesis began: 1 = it is this run's streamed
+ * reply, hand its sentences to core_reply_part and give Home Assistant silence; 2 = this run's reply, said already:
+ * silence only; 0 = someone else's, render it; -1 = may be this run's reply whose event is still on its way: ask again
+ * shortly (and take 0 after a while).  core_reply_part: 0 queued, 1 the voice is busy (again shortly), -1 the reply is
+ * gone (cut, a new run): say nothing more.  core_reply_final: the synthesis ended (or its link did) */
+int  core_reply_claim(void);
+int  core_reply_part(const char *text);
+void core_reply_final(void);
 int  core_error_speech(int set);                 /* error_speech: failures said by the Echo's own voice, -1 reads */
-void core_error_say(const char *code, const char *message);   /* the failure in words (errsay.h), where it can speak */         /* lock held: 1 = the Echo's own voice says this reply, end and all */
+void core_error_say(const char *code, const char *message);   /* the failure in words (errsay.h), where it can speak */
 int  core_stop_ends_listening(int set);          /* "<wake word>, stop" also ends listening (main.c stop_word), -1 reads */
 int  core_bt_announce(int set);                  /* same: chime and "Connected to <name>" when a phone connects */
 int  core_bluetooth(int set);                   /* same; -B on the command line: leave the radio to the stock stack */

@@ -154,12 +154,20 @@ these only then):
   took too long to answer."); also when the wake word is heard while Home Assistant is not connected, or it does not
   answer within 30 seconds. Quiet while muted or in Do not disturb.
 - **Replies in the Echo's own voice** (off): Home Assistant's replies spoken on the Echo from their text instead of
-  the audio of Home Assistant's text to speech: they start sooner (a fifth of a second after Home Assistant has the
-  answer) and need no text-to-speech engine. English voices read other languages with an English accent; replies an
-  AI agent streams while still writing play as before.
+  the audio of Home Assistant's text to speech, which is never downloaded: they start sooner (a fifth of a second
+  after Home Assistant has the answer) and need no text-to-speech engine. English voices read other languages with an
+  English accent. A long AI answer that Home Assistant streams: with the Echo as the voice assistant's text-to-speech,
+  each sentence is said the moment the AI has written it, so the answer starts while the rest is still being written;
+  with another text-to-speech (Piper, a cloud), the Echo says the whole answer once it is complete. The Echo learns
+  which it is after one such answer, and looks again every 20th, so after switching the text-to-speech to the Echo it
+  may take up to 20 long answers until they are spoken sentence by sentence. "Alexa, stop", the wake word and the
+  action button cut a streamed answer as any other; the rest of it is not said. Rarely, a `tts.speak` with the Echo's
+  voice for another speaker sent in the moment an answer starts streaming is said here instead, and that answer is
+  said whole at its end.
 - **The Echo's voice**: which installed voice speaks (about 5 s to switch). Alarm answers and Bluetooth
   announcements use it too, and Home Assistant's Wyoming integration finds it (port 16710) as a text-to-speech
-  service for any automation.
+  service, for the voice assistant and for `tts.speak` to any speaker; it takes text as it is written, each sentence
+  made as soon as it is complete.
 
 ## Wake word
 

@@ -19,6 +19,12 @@ What changed for people using the Echo, newest first. Details and measurements a
   replies itself** from their text, a fifth of a second after the answer and with no text-to-speech engine needed
   ("Replies in the Echo's own voice", off by default); alarm answers and Bluetooth announcements use it too; and Home
   Assistant finds it as a Wyoming text-to-speech service. "The Echo's voice" picks among the installed ones.
+- **Long AI replies start sooner in the Echo's own voice** (Echo Show with Amazon's voice installed, "Replies in the
+  Echo's own voice" on): when your voice assistant's text-to-speech is the Echo itself ("hassmic" in Home Assistant's
+  Wyoming integration), the Echo now says each sentence of an AI's reply as soon as it is written, instead of waiting
+  for the whole answer and then downloading it from Home Assistant. With another text-to-speech the Echo says the
+  whole reply in its own voice once it is complete, and no longer downloads Home Assistant's audio for it. Others
+  using the Echo's voice (tts.speak to other speakers) get their sentences as they come too.
 
 - **Apps on the Echo Show, installed from the settings page or Home Assistant.** The settings page's Screen page and
   Echo Local's new Apps tab list the Android apps you installed beside the home app (NewPipe, say), remove them, and

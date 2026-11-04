@@ -249,9 +249,14 @@ UNIT_TESTS += errsay
 UNIT_TESTS += apps
 UNIT_TESTS += lockdown
 UNIT_TESTS += touchgate
+UNIT_TESTS += wytts
 unit: $(addprefix unit-,$(UNIT_TESTS))
 
 # errsay.c: Home Assistant's pipeline errors as the sentences the Echo says
+# wyoming_tts.c: a streamed reply's text cut into sentences as it comes
+unit-wytts:
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/hassmic -Isrc/include -DVERSION='"test"' tests/unit/wytts_test.c src/hassmic/wyoming_tts.c src/hassmic/wyoming.c src/hassmic/speech_none.c -lpthread -lm -o build/wytts_test && build/wytts_test
 unit-errsay:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/errsay_test.c src/hassmic/errsay.c -o build/errsay_test && build/errsay_test

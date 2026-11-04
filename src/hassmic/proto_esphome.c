@@ -156,6 +156,7 @@ static int cancelled;                   /* lock held: the user cancelled the run
                                          * was asked for, whose RUN_START ends that (TCP keeps the order) */
 static int tts_expected;                /* lock held: the reply is being fetched or played; RUN_END must not end the pipeline */
 static char tts_url[1024];              /* lock held: reply URL of the running pipeline (known from RUN_START with streaming TTS) */
+static int reply_own;                   /* lock held: the run's streamed reply is the Echo's own voice's (core_reply_stream) */
 static int announcing, media_playing;   /* lock held */
 static void announce_done(void);
 static atomic_int media_busy;
@@ -1322,7 +1323,7 @@ static void alarm_action_delete(const char *which)
 static void start(void)
 {
     PB(b, 96);
-    tts_expected = 0; tts_url[0] = 0; if (cancelled) cancelled = 2;
+    tts_expected = 0; tts_url[0] = 0; reply_own = 0; if (cancelled) cancelled = 2;
     pb_uint(&b, 1, 1);                                  /* start */
     pb_uint(&b, 3, core_local_wake ? 1 : 3);            /* flags: USE_VAD, plus USE_WAKE_WORD when detection is remote */
     /* audio settings: neutral.  Home Assistant ignores them today; the gain is applied here (micgain.h), and absent they
@@ -1422,12 +1423,18 @@ static void on_event(const unsigned char *p, const unsigned char *end)
         core_mic_off(); if (core_state() == LISTENING) core_set_state(THINKING); break;
     case EV_INTENT_END: if (cont) core_restart_after(); break;
     case EV_TTS_START:  fprintf(stderr, "reply: %s\n", text);
-        if (!tts_expected && core_reply_local(said)) { tts_expected = 2; core_mic_off(); }    /* 2: HA's audio not wanted */
+        /* a streamed reply in the Echo's own voice: said sentence by sentence, or now whole where none came.  Over
+         * already (played() reset tts_expected: cut, or said): nothing more.  The voice failing: Home Assistant's audio */
+        if (reply_own) { if (tts_expected == 2 && !core_reply_streamed(said)) { reply_own = 0; tts_expected = 0; } }
+        else if (!tts_expected && core_reply_local(said)) { tts_expected = 2; core_mic_off(); }    /* 2: HA's audio not wanted */
         break;
     case EV_INTENT_PROGRESS: if (!stream_now) break;    /* streaming TTS: the URL from RUN_START can be fetched already */
+        /* own voice: never fetched (main.c "Setting own_voice_replies"), whoever makes Home Assistant's audio */
+        if (!tts_expected && !reply_own && core_reply_stream()) { reply_own = 1; tts_expected = 2; core_mic_off(); break; }
         /* fall through */
     case EV_TTS_END:
-        if (!tts_expected && tts_url[0]) { tts_expected = 1; core_mic_off(); media_start("", tts_url, 1, 0, 1, 0); }
+        if (reply_own) { if (type == EV_TTS_END) fprintf(stderr, "reply: Home Assistant's audio not fetched (own voice)\n"); }
+        else if (!tts_expected && tts_url[0]) { tts_expected = 1; core_mic_off(); media_start("", tts_url, 1, 0, 1, 0); }
         else if (tts_expected == 2 && type == EV_TTS_END) fprintf(stderr, "reply: Home Assistant's audio not fetched (own voice)\n");
         break;
     case EV_RUN_END:    if (!tts_expected && core_state() != SPEAKING) core_pipeline_finish(); break;

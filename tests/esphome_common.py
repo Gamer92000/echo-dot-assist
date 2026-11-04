@@ -29,10 +29,12 @@ def wav_bytes(rate, seconds):
 
 
 late_asked, late_done = threading.Event(), threading.Event()
+requested = []                                          # every path the Echo fetched, in order
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        requested.append(self.path)
         if self.path.startswith("/moved"):            # Home Assistant behind a proxy that redirects
             self.send_response(302); self.send_header("Location", "/a.wav"); self.send_header("Content-Length", "0"); self.end_headers(); return
         body = wav_bytes(48000, 3.0 if "s=3" in self.path else 0.5)

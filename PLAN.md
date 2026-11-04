@@ -3320,3 +3320,25 @@ Run in this order. Each step says what it proves.
       in place, and "android" is at line 1381 of 3339 with Alexa's `/data/app` updates after it), `wpa_cli` only when
       `/sys/class/net/p2p-p2p0-0` exists; anything not shown done goes to pm/settings as before.  `pm_done` checked
       against fake files (whole, cut off, enabled, no restriction entry, component not noted, state 4).
+- [~] Streamed replies in the Echo's own voice (2026-11-04; setting `own_voice_replies`).  `wyoming_tts.c` offers
+      `supports_synthesize_streaming`: Home Assistant (wyoming/tts.py of 2026.10) then sends every synthesis as
+      synthesize-start, -chunk (as the LLM writes), the whole text as "synthesize" (ignored inside a stream), -stop, and
+      reads until synthesize-stopped (one audio-start for its WAV header, audio-stop ignored).  The text is cut into
+      sentences (`wytts_sentence`: . ! ? before white space, line breaks; not after 1-2 digits, single letters, short
+      abbreviations; 400 bytes without an end cut at a space; `make unit-wytts`), each made as soon as complete.  While
+      this Echo's run waits for a streamed reply (`tts_start_streaming`, main.c `own_st` OWN_STREAM) the synthesis is
+      claimed (`core_reply_claim`): each sentence said at once (`core_reply_part`, tag `SPEECH_PART` + the reply's
+      number), Home Assistant gets 100 ms of silence (streamed results are not in its file cache: ulid key).  Only the
+      last sentence ends the run (`own_parts`, `own_final`: part_stop/part_done in the playback thread; consecutive
+      sentences stay in one open stream); a cut (barge-in, "stop", media stop: `playback_cut`) ends it at once, a new
+      run or an error drops it (`own_reset`).  Findings in HA 2026.10's source (build/ha-venv): the pipeline streams to
+      a TTS only when the engine says it takes streamed text (`tts_stream.supports_streaming_input`); its TTS runs from
+      a background task set off by `async_set_message[_stream]`, whether anyone fetches the URL or not, so the Echo
+      never fetches a reply with own voice on (no fetch-and-discard); a reply HA does not stream comes to the server
+      too (a one-chunk stream after the TTS start event) and is made as before (that one is file-cached by text).
+      Learning: a streamed run whose synthesis never came by the TTS start = the pipeline's TTS is elsewhere
+      (`own_elsewhere`): the TTS start says the whole text, later streamed runs claim nothing, every 20th
+      (`OWN_RECHECK`) looks again.  Measured before (Show 5): a 129-character reply's first byte 855 ms after the text
+      through HA's MP3.  `tests/fake_ha_own_voice.py` with a stand-in voice (`HASSMIC_FAKE_SPEECH`, speech_none.c).
+      Open: the first sentence's latency on the Show 5 with a real LLM; the clash with a tts.speak to the same TTS
+      entity during a streamed reply (taken for the reply: documented, not seen).

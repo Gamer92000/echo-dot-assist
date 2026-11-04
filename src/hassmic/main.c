@@ -742,6 +742,8 @@ static void lead_in(void)
         proto->audio(zero, (size_t)(left < 1024 ? left : 1024) * sizeof zero[0]);
 }
 
+static void own_reset(void);                 /* the Echo's own voice saying a streamed reply: below, at the playback queue */
+static void playback_cut(void);
 static void pipeline_start(uint64_t from)    /* from: where the wake word that starts it ended, 0: not a wake word */
 {
     quiet_abort = 0;
@@ -753,6 +755,7 @@ static void pipeline_start(uint64_t from)    /* from: where the wake word that s
      * end ended this one before any audio went out (heard_end in the capture thread) */
     micend_start(&mic_end, MICEND_OFF, 0, 0, NULL);
     run_wake = from != 0;
+    own_reset();
     proto->start();
     atomic_store(&streaming, 1);
     if (core_local_wake) lead_in();                 /* ahead of the capture thread's first block: it needs the lock */
@@ -1078,6 +1081,7 @@ void core_restart_after(void) { barge_in = 1; barge_from = 0; }
 
 void core_pipeline_finish(void)
 {
+    own_reset();
     if (atomic_exchange(&streaming, 0) && connected && proto->stop) proto->stop();
     mic_stopped();
     core_set_state(IDLE);
@@ -1203,13 +1207,13 @@ static void trigger(int touch, uint64_t from)
          * cut as stop_word would have cut it, and no run follows */
         fprintf(stderr, "stop: came during the round, reply cut\n");
         barge_in = 0;
-        atomic_store(&flush_playback, 1);
+        playback_cut();
     } else if (state == SPEAKING && !atomic_load(&flush_playback)) {       /* not already being cut.  barge_in alone does not
                                                                              * say that: continue-conversation sets it too */
         fprintf(stderr, "barge-in\n");
         wake_cut_ms = mono_ms();
         barge_in = 1; barge_from = from;
-        atomic_store(&flush_playback, 1);   /* playback thread drops TTS up to audio-stop, then we restart */
+        playback_cut();                     /* playback thread drops TTS up to audio-stop, then we restart */
     }
     pthread_mutex_unlock(&core_lock);
 }
@@ -1254,7 +1258,7 @@ static void stop_word(void)
         fprintf(stderr, "stop: reply cut\n");
         barge_in = 0;
         atomic_fetch_and(&sounds_pending, ~(1 << SND_WAKE | 1 << SND_TOUCH));
-        atomic_store(&flush_playback, 1);
+        playback_cut();
     } else if (state == LISTENING && mono_ms() - wake_cut_ms < 4000) {
         fprintf(stderr, "stop: pipeline dropped\n");
         stop_cut = 1;                       /* a wake word whose round still runs (heard while this listened) opens none */
@@ -1961,8 +1965,11 @@ struct item { struct item *next; int kind, media; unsigned rate, ch; size_t len;
 enum { Q_START, Q_DATA, Q_STOP };
 #define Q_SPEECH 2                           /* media of the Echo's own voice (speech.h): a reply's volume, no pipeline */
 #define Q_REPLY 3                            /* the same voice saying Home Assistant's reply: ends the run as its audio does */
+#define Q_PART 4                             /* Q_STOP of one sentence of a streamed reply (rate: its generation) */
 static int speech_state;                     /* core_lock: the Echo's own voice set SPEAKING (it was IDLE) */
 static void tts_kind(int media);
+static int part_stop(unsigned gen, int flushed);
+static void part_done(unsigned gen, int flushed);
 
 static pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t q_cond = PTHREAD_COND_INITIALIZER;
@@ -1984,7 +1991,8 @@ static void q_push(int kind, int media, unsigned rate, unsigned ch, const void *
 
 static void *playback_thread(void *arg)
 {
-    int open = 0;
+    int open = 0, cont = 0;                 /* cont: a streamed reply's next sentence goes on in the open stream */
+    unsigned open_rate = 0, open_ch = 0;
     (void)arg;
     for (;;) {
         pthread_mutex_lock(&q_lock);
@@ -1996,13 +2004,19 @@ static void *playback_thread(void *arg)
 
         if (atomic_load(&flush_playback) && it->kind != Q_STOP) {
             if (open) { play_close(0); open = 0; }
+            cont = 0;
             if (it->media == Q_SPEECH || it->media == Q_REPLY) speech_cancel();   /* the rest of the Echo's own sentence too */
             free(it);
             continue;
         }
         switch (it->kind) {
         case Q_START:
+            /* The sentences of a streamed reply (Q_PART) follow each other in one stream: closed and opened again
+             * between them, the mixer's stream would drain and start again for every sentence */
+            if (cont && open && it->media == Q_REPLY && it->rate == open_rate && it->ch == open_ch) { cont = 0; break; }
+            cont = 0;
             if (open) play_close(1);        /* e.g. announcement chime followed by the message */
+            open_rate = it->rate; open_ch = it->ch;
             tts_kind(it->media >= Q_SPEECH ? 0 : it->media);   /* the TTS stream's volume for what comes now */
             open = play_open(it->rate, it->ch) == 0;
             if (open) { atomic_store(&tts_on, 1); playback_hint(); }
@@ -2017,7 +2031,22 @@ static void *playback_thread(void *arg)
             if (open && play_write(it->data, it->len) < 0) { play_close(0); open = 0; }
             break;
         case Q_STOP:
+            if (it->media == Q_PART) {                    /* one sentence of a streamed reply: the run ends only after the last */
+                int flushed = atomic_exchange(&flush_playback, 0);
+                pthread_mutex_lock(&core_lock);
+                int more = part_stop(it->rate, flushed);     /* 1: the reply goes on, its next sentence is queued */
+                pthread_mutex_unlock(&core_lock);
+                if (more && open) { cont = 1; break; }
+                if (open) { play_close(1); open = 0; }
+                cont = 0;
+                atomic_store(&tts_on, 0); playback_hint();
+                pthread_mutex_lock(&core_lock);
+                part_done(it->rate, flushed);
+                pthread_mutex_unlock(&core_lock);
+                break;
+            }
             if (open) { play_close(1); open = 0; }
+            cont = 0;
             atomic_store(&tts_on, 0); playback_hint();
             atomic_store(&flush_playback, 0);
             pthread_mutex_lock(&core_lock);
@@ -2046,31 +2075,183 @@ void core_tts_begin(unsigned rate, unsigned channels, int media)
 void core_tts_data(const void *pcm, size_t len) { if (!atomic_load(&flush_playback)) q_push(Q_DATA, 0, 0, 0, pcm, len); }
 void core_tts_end(void) { q_push(Q_STOP, 0, 0, 0, NULL, 0); }
 int  core_tts_flushing(void) { return atomic_load(&flush_playback); }
-void core_tts_flush(void) { atomic_store(&flush_playback, 1); }
+void core_tts_flush(void) { playback_cut(); }
 
-/* The Echo's own voice (speech.h): its sentences go through the same queue as Home Assistant's replies, behind what
- * is queued, at the replies' volume; a wake word cuts them as it cuts a reply (barge-in), "stop" too.  It shows as
- * SPEAKING only when nothing else ran: a sentence during a request leaves the request's state alone. */
-static atomic_int speech_reply_on;                  /* the sentence being made is Home Assistant's reply */
-static void speech_begin(unsigned rate, int reply)
-{
-    pthread_mutex_lock(&core_lock);
-    if (reply) { atomic_store(&streaming, 0); mic_stopped(); core_set_state(SPEAKING); }   /* as core_tts_begin */
-    else if (state == IDLE) { speech_state = 1; core_set_state(SPEAKING); }
-    pthread_mutex_unlock(&core_lock);
-    atomic_store(&speech_reply_on, reply);
-    q_push(Q_START, reply ? Q_REPLY : Q_SPEECH, rate, 1, NULL, 0);
-}
-static void speech_data(const void *pcm, unsigned len)
-{ if (!atomic_load(&flush_playback)) q_push(Q_DATA, atomic_load(&speech_reply_on) ? Q_REPLY : Q_SPEECH, 0, 0, pcm, len); }
-static void speech_end(int reply) { q_push(Q_STOP, reply ? 0 : Q_SPEECH, 0, 0, NULL, 0); }   /* a reply's: played(), the run ends */
-
-/* Setting own_voice_replies: Home Assistant's replies said by the Echo's own voice from their text (the TTS start
- * event), its audio left unfetched: no TTS engine in Home Assistant needed, and the reply starts ~0.2 s after the
- * text instead of after Home Assistant's TTS and the download.  Lock held */
+/* Setting own_voice_replies: Home Assistant's replies said by the Echo's own voice from their text, its audio left
+ * unfetched: no TTS engine in Home Assistant needed, and the reply starts ~0.2 s after the text instead of after Home
+ * Assistant's TTS and the download.  Two ways the text comes:
+ *   - whole, in the TTS start event (core_reply_local): replies Home Assistant does not stream (intents, an LLM's
+ *     under 60 characters, any TTS engine that takes no streamed text);
+ *   - sentence by sentence, when the pipeline's TTS is this Echo's own Wyoming server (wyoming_tts.c) and the agent
+ *     streams (an LLM's reply past 60 characters: assist_pipeline's STREAM_RESPONSE_CHARS, tts_start_streaming).  Home
+ *     Assistant then sends the reply's text to that server as the LLM writes it, and the server hands each sentence
+ *     here (core_reply_part) to be said at once: the first sentence plays while the LLM still writes the rest, where
+ *     the TTS start event comes only after the last word (a 129-character reply: first audio 855 ms after the text
+ *     through Home Assistant's MP3 and the download, 2026-11-04).  Home Assistant gets 100 ms of silence for it.
+ * Which synthesis is this run's reply (core_reply_claim): the one that comes to the Echo's own server while its run
+ * waits for a streamed reply (own_st OWN_STREAM, from Home Assistant's tts_start_streaming on).  Home Assistant opens
+ * it right after that event (default_pipeline.py: the event, then tts_stream.async_set_message_stream, whose
+ * background task connects), so it cannot be told apart from a tts.speak another automation sends to the same TTS
+ * entity in that moment: that one would be said here and its own speaker would get the silence, and this reply be
+ * rendered for Home Assistant and said whole at the TTS start.  Rare, and nothing is lost but the right speaker.
+ * Where the pipeline's TTS is not this Echo (Piper, a cloud) nothing comes, and the TTS start says the whole text
+ * (core_reply_streamed): the reply is never fetched once own voice is on, since Home Assistant runs its TTS from its
+ * own background task whether anyone fetches the URL or not (tts/__init__.py async_cache_message_stream_in_memory).
+ * That is learnt (own_elsewhere): after a streamed run whose synthesis never came, the next ones expect none and
+ * claim nothing, a tts.speak elsewhere is never taken for the reply; every OWN_RECHECK-th streamed run looks again, in
+ * case the pipeline's TTS was switched to this Echo.  Lock held where not said otherwise */
 static int own_voice_replies;
 int core_own_voice(int set) { if (set >= 0) own_voice_replies = set != 0; return own_voice_replies; }
 int core_own_voice_present(void) { return speech_installed(); }
+
+enum { OWN_NONE, OWN_STREAM, OWN_CLAIMED, OWN_SAID };
+#define OWN_RECHECK 20                      /* streamed runs between two looks for a synthesis while it comes elsewhere */
+static int own_st;                          /* this run's reply: OWN_* */
+static int own_streamed;                    /* this run's reply is streamed (tts_start_streaming came) */
+static unsigned own_gen;                    /* the claimed reply's number, in its sentences' tags (SPEECH_PART + n) */
+static int own_parts;                       /* its sentences handed to the voice whose end has not been played */
+static int own_final;                       /* its synthesis ended: no sentence comes after those handed over */
+static int own_done;                        /* its end is done: played() and the run's end called, or the reply dropped */
+static int own_elsewhere, own_skipped;      /* learnt: the pipeline's TTS is not this Echo; streamed runs since */
+
+static int part_current(unsigned gen) { return own_st == OWN_CLAIMED && gen == own_gen && !own_done; }
+
+/* the claimed reply is over: Home Assistant's run ends as after its own audio (played(), then the run's end) */
+static void own_end(void)
+{
+    own_done = 1;
+    if (proto->played) proto->played();
+    core_pipeline_finish();
+}
+
+/* the playback thread, at a streamed reply's sentence's end.  1: more of the reply is queued after it */
+static int part_stop(unsigned gen, int flushed)
+{
+    if (!part_current(gen)) return 0;
+    if (own_parts > 0) own_parts--;
+    return !flushed && own_parts > 0;
+}
+/* ...after its audio is out: the last sentence of a finished synthesis ends the run, a cut one (barge-in, "stop", Home
+ * Assistant's media stop) at once.  One whose reply is gone is the Echo's own sentence (Q_SPEECH) */
+static void part_done(unsigned gen, int flushed)
+{
+    if (part_current(gen)) { if (flushed || (own_final && !own_parts)) own_end(); }
+    else if (speech_state) { speech_state = 0; core_pipeline_finish(); }
+}
+
+/* A run starts or ends: a reply claimed and still going is dropped (its sentences already queued end as the Echo's own) */
+static void own_reset(void)
+{
+    if (own_st == OWN_CLAIMED && !own_done) { own_done = 1; if (own_parts) speech_cancel(); }
+    own_st = OWN_NONE; own_streamed = 0;
+}
+
+/* The playback is being cut (flush_playback set): with nothing of a claimed reply queued (the LLM still writing),
+ * no sentence's end would come to end it: one is queued for it */
+static void own_cut(void)
+{
+    if (own_st != OWN_CLAIMED || own_done) return;
+    if (own_parts) speech_cancel();
+    else q_push(Q_STOP, Q_PART, own_gen, 0, NULL, 0);
+}
+static void playback_cut(void) { atomic_store(&flush_playback, 1); own_cut(); }
+
+int core_reply_stream(void)
+{
+    if (!own_voice_replies || !speech_ready()) return 0;
+    own_streamed = 1;
+    if (own_st == OWN_NONE && (!own_elsewhere || ++own_skipped % OWN_RECHECK == 0)) own_st = OWN_STREAM;
+    fprintf(stderr, "reply: streamed, %s\n", own_st == OWN_STREAM ? "waiting for its sentences on the Echo's own voice"
+                                                                  : "said whole at its end (the pipeline's TTS is elsewhere)");
+    return 1;
+}
+
+int core_reply_streamed(const char *text)
+{
+    if (own_st == OWN_CLAIMED) {
+        if (own_done) return 0;
+        fprintf(stderr, "reply: said sentence by sentence (%d sentences still to play)\n", own_parts);
+        return 1;
+    }
+    if (own_st == OWN_STREAM) {              /* nothing came: the pipeline's TTS is elsewhere */
+        if (!own_elsewhere) fprintf(stderr, "reply: no streamed synthesis came to the Echo's voice, the pipeline's TTS is elsewhere\n");
+        own_elsewhere = 1; own_skipped = 0;
+    }
+    if (!text || !*text || speech_say(text, 1)) { own_st = OWN_NONE; return 0; }
+    own_st = OWN_SAID;
+    fprintf(stderr, "reply: said whole by the Echo's own voice (%s)\n", speech_voice());
+    return 1;
+}
+
+int core_reply_local(const char *text)
+{
+    if (!own_voice_replies || !speech_ready() || !text || !*text) return 0;
+    if (speech_say(text, 1)) return 0;
+    own_st = OWN_SAID;
+    fprintf(stderr, "reply: said by the Echo's own voice (%s)\n", speech_voice());
+    return 1;
+}
+
+int core_reply_claim(void)
+{
+    int r = 0;
+    pthread_mutex_lock(&core_lock);
+    if (!own_voice_replies) r = 0;
+    else if (own_st == OWN_STREAM) {
+        own_st = OWN_CLAIMED; own_gen++; own_parts = 0; own_final = 0; own_done = 0;
+        if (own_elsewhere) fprintf(stderr, "reply: the pipeline's TTS is this Echo again\n");
+        own_elsewhere = 0; own_skipped = 0;
+        r = 1;
+    } else if (own_st == OWN_SAID) r = own_streamed ? 2 : 0;    /* a streamed one, said whole: Home Assistant's copy is not cached */
+    else if (own_st == OWN_NONE && state == THINKING && speech_ready() && !own_streamed) r = -1;  /* its event may be behind it */
+    pthread_mutex_unlock(&core_lock);
+    return r;
+}
+
+int core_reply_part(const char *text)
+{
+    int r;
+    pthread_mutex_lock(&core_lock);
+    if (own_st != OWN_CLAIMED || own_done) r = -1;
+    else if (speech_say(text, SPEECH_PART + (int)own_gen)) r = 1;     /* the voice's queue is full: again in a moment */
+    else { own_parts++; r = 0; }
+    pthread_mutex_unlock(&core_lock);
+    return r;
+}
+
+void core_reply_final(void)
+{
+    pthread_mutex_lock(&core_lock);
+    if (own_st == OWN_CLAIMED && !own_done) {
+        own_final = 1;
+        if (!own_parts) own_end();          /* the last sentence played already, or none came */
+    }
+    pthread_mutex_unlock(&core_lock);
+}
+
+/* The Echo's own voice (speech.h): its sentences go through the same queue as Home Assistant's replies, behind what
+ * is queued, at the replies' volume; a wake word cuts them as it cuts a reply (barge-in), "stop" too.  It shows as
+ * SPEAKING only when nothing else ran: a sentence during a request leaves the request's state alone.  A sentence of a
+ * streamed reply that is gone (cut, a new run) is one of the Echo's own */
+static atomic_int speech_reply_on;                  /* the sentence being made is Home Assistant's reply */
+static void speech_begin(unsigned rate, int tag)
+{
+    pthread_mutex_lock(&core_lock);
+    if (tag >= SPEECH_PART && !part_current((unsigned)(tag - SPEECH_PART))) tag = 0;
+    if (tag) { atomic_store(&streaming, 0); mic_stopped(); core_set_state(SPEAKING); }   /* as core_tts_begin */
+    else if (state == IDLE) { speech_state = 1; core_set_state(SPEAKING); }
+    pthread_mutex_unlock(&core_lock);
+    atomic_store(&speech_reply_on, tag != 0);
+    q_push(Q_START, tag ? Q_REPLY : Q_SPEECH, rate, 1, NULL, 0);
+}
+static void speech_data(const void *pcm, unsigned len)
+{ if (!atomic_load(&flush_playback)) q_push(Q_DATA, atomic_load(&speech_reply_on) ? Q_REPLY : Q_SPEECH, 0, 0, pcm, len); }
+static void speech_end(int tag)                     /* a whole reply's: played(), the run ends; a part's: part_done */
+{
+    if (tag >= SPEECH_PART) q_push(Q_STOP, Q_PART, (unsigned)(tag - SPEECH_PART), 0, NULL, 0);
+    else q_push(Q_STOP, tag ? 0 : Q_SPEECH, 0, 0, NULL, 0);
+}
+
 /* Setting error_speech (on): a failure said in words by the Echo's own voice (errsay.h), as stock Alexa did ("Sorry,
  * something went wrong."), beside the red ring.  Lock held or not */
 static int error_speech = 1;
@@ -2083,13 +2264,6 @@ void core_error_say(const char *code, const char *message)
     if (s[0] && speech_local(s, "en")) fprintf(stderr, "error said: %s\n", s);
 }
 
-int core_reply_local(const char *text)
-{
-    if (!own_voice_replies || !speech_ready() || !text || !*text) return 0;
-    if (speech_say(text, 1)) return 0;
-    fprintf(stderr, "reply: said by the Echo's own voice (%s)\n", speech_voice());
-    return 1;
-}
 static const struct speech_out speech_core = { speech_begin, speech_data, speech_end };
 
 /* Says TEXT with the Echo's own voice where it has one that speaks LANG ("en", "de"; NULL: any).  1 = it does */

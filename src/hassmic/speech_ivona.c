@@ -49,7 +49,8 @@
 
 #define VOICE_DIR "/data/securedStorageLocation/com.amazon.providers.contentsupport/tts/ivona/"
 #define BUF 8192
-#define QUEUE 8
+#define QUEUE 32                                           /* a streamed reply queues each sentence as its text comes
+                                                            * (wyoming_tts.c): an LLM writes faster than the voice speaks */
 #define CONTRAST 0
 
 static const char *const glue_dirs[] = {                  /* the app's libraries: moved by sysinstall.sh, or stock's */

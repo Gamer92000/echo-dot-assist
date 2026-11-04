@@ -11,6 +11,7 @@ struct wy_event {
     char  json[WY_MAX_JSON];      /* header line followed by the data block, NUL terminated */
     unsigned char *payload;       /* points into a buffer owned by the reader */
     size_t payload_len;
+    int   data_dropped;           /* the data block was longer than json holds: read and left out (json = header) */
 };
 
 struct wy_reader { int fd; unsigned char *buf; };
