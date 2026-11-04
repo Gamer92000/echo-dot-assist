@@ -574,12 +574,15 @@ for hassmic speaks a small contract with the Echo ([docs/screen-apps.md](screen-
 address and a login of its own from the Echo, the pages it should offer, and what to draw (a request's words, a
 ringing alarm) if it would rather draw them in its own look. **Echo-Wall** ([Nt-f/Echo-Wall](https://github.com/Nt-f/Echo-Wall),
 Flutter, an app of its own with a Home Assistant integration of its own) is one: frosted-glass cards over a photo,
-a page per room, a lock screen with the time and the next alarm; its README says how to install it. Kiosk Satellite
+a page per room, a lock screen with the time and the next alarm; its README says how to install it, or
+Echo Local's *Screen* tab installs it (below). Kiosk Satellite
 (Home Assistant's dashboards in a browser of its own) is the other choice, and it is set up by the guided setup.
 
 It is set up from Home Assistant, in the Echo Local integration (the one for the Echo's alarms): **Echo Local** in the
 sidebar › the Echo › *Screen* (or *Settings › Devices & services › Echo Local › Configure*). Pick the **App** (the
-same choice as the settings page's Screen page), switch on **Connect it to Home Assistant**, and pick its **Pages in
+same choice as the settings page's Screen page; Echo-Wall picked but not on the Echo yet: **Install Echo-Wall**
+fetches its newest release from GitHub through Home Assistant and installs it, the Echo itself staying off the
+internet), switch on **Connect it to Home Assistant**, and pick its **Pages in
 the drawer**: its own Home, a Home Assistant dashboard, a clock, a web page of yours (the drawer offers them by name,
 in its row of apps; music is the drawer's own **Music**, the Echo's Music Assistant player). The Echo has no keyboard
 to log in with, so the integration makes a Home Assistant user for it ("Echo Show 5 … kiosk": local network only,

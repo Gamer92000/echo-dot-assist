@@ -15,7 +15,9 @@ Websocket (administrators only, as the options are):
     echo_local/apps/lan        {echo, package, on}    that app reachable from the home network (the ports it listens on:
                                                       a DLNA renderer, a cast receiver; issue #109)
     echo_local/apps/uninstall  {echo, package}        removed (root refuses the screen app)
-    echo_local/apps/install    {echo, path}           an APK from a folder Home Assistant may read"""
+    echo_local/apps/install    {echo, path}           an APK from a folder Home Assistant may read
+    echo_local/apps/fetch      {echo, package}        a known home app's newest release (KNOWN_APPS), downloaded here
+                                                      (the Echo has no internet) and sent on as an upload is"""
 from __future__ import annotations
 
 import asyncio
@@ -38,6 +40,12 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 APK_MAX = 200 * 1024 * 1024             # apps.c's limit
+# Home apps made for the Echo (docs/screen-apps.md) that publish a signed APK as a GitHub release asset: package ->
+# (repository, asset).  The newest release's is fetched by Home Assistant, which reaches the internet; the Echo's apps
+# stay off it until the owner allows them.
+KNOWN_APPS = {
+    "io.github.nt_f.echowall": ("Nt-f/Echo-Wall", "Echo-Wall.apk"),
+}
 PKG = vol.All(str, vol.Match(r"^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+)+$"), vol.Length(max=200))
 
 
@@ -52,7 +60,7 @@ def _entry(hass: HomeAssistant, echo: str):
     return e
 
 
-async def install(hass: HomeAssistant, echo: str, path: str, delete: bool = False) -> None:
+async def install(hass: HomeAssistant, echo: str, path: str, delete: bool = False, name: str | None = None) -> None:
     """send the APK at path to the Echo and have root install it; this side's part in _sends until the Echo's own
     status takes over (its "install" in GET /api/apps)"""
     entry = _entry(hass, echo)
@@ -62,7 +70,7 @@ async def install(hass: HomeAssistant, echo: str, path: str, delete: bool = Fals
     size = os.path.getsize(path)
     if size > APK_MAX:
         raise HomeAssistantError("an APK is 200 MB at most")
-    st[echo] = {"op": "install", "state": "sending", "sent": 0, "size": size, "error": "", "name": os.path.basename(path), "at": time.time()}
+    st[echo] = {"op": "install", "state": "sending", "sent": 0, "size": size, "error": "", "name": name or os.path.basename(path), "at": time.time()}
 
     async def run() -> None:
         try:
@@ -118,7 +126,7 @@ class ApkUploadView(HomeAssistantView):
 
 async def async_setup(hass: HomeAssistant) -> None:
     hass.http.register_view(ApkUploadView())
-    for c in (ws_list, ws_net, ws_lan, ws_uninstall, ws_install):
+    for c in (ws_list, ws_net, ws_lan, ws_uninstall, ws_install, ws_fetch):
         websocket_api.async_register_command(hass, c)
 
     async def install_apk(call: ServiceCall) -> None:
@@ -184,6 +192,72 @@ async def ws_uninstall(hass: HomeAssistant, connection, msg: dict) -> None:
         return
     # the Echo's status says "ok" for a removal as for an install: which one it was, for the panel
     _sends(hass)[msg["echo"]] = {"op": "uninstall", "state": "sent", "package": msg["package"], "at": time.time()}
+    connection.send_result(msg["id"])
+
+
+async def fetch(hass: HomeAssistant, echo: str, package: str) -> None:
+    """a known app's newest release downloaded into a temporary file here, then sent to the Echo and installed; its
+    progress in _sends ("downloading", then install()'s)"""
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+    repo, asset = KNOWN_APPS[package]
+    entry = _entry(hass, echo)
+    st = _sends(hass)
+    if (st.get(echo) or {}).get("state") in ("downloading", "sending"):
+        raise HomeAssistantError("an app is being sent to this Echo already")
+    base = os.environ.get("ECHO_LOCAL_GITHUB", "https://github.com")       # tests: a stand-in GitHub
+    url = f"{base}/{repo}/releases/latest/download/{asset}"
+    st[echo] = {"op": "install", "state": "downloading", "sent": 0, "size": 0, "error": "", "name": asset, "at": time.time()}
+
+    async def run() -> None:
+        fd, path = tempfile.mkstemp(prefix="echo_local_", suffix=".apk")
+        try:
+            async with async_get_clientsession(hass).get(url, timeout=aiohttp_timeout()) as r:
+                if r.status != 200:
+                    raise OSError(f"{repo} has no release with {asset} (HTTP {r.status})")
+                size, n = r.content_length or 0, 0
+                st[echo].update(size=size)
+                with os.fdopen(fd, "wb") as f:
+                    fd = -1
+                    async for piece in r.content.iter_chunked(1 << 16):
+                        n += len(piece)
+                        if n > APK_MAX:
+                            raise OSError("an APK is 200 MB at most")
+                        f.write(piece)
+                        st[echo].update(sent=n)
+            st[echo]["state"] = "downloaded"    # install() takes it from here (and deletes the file)
+            await install(hass, echo, path, delete=True, name=asset)
+            path = None
+        except (OSError, HomeAssistantError, asyncio.TimeoutError) as e:
+            _LOGGER.warning("%s: %s not fetched: %s", entry.title, asset, e)
+            st[echo].update(state="failed", error=f"not downloaded: {e}")
+        except Exception as e:                  # aiohttp's own errors: the network
+            _LOGGER.warning("%s: %s not fetched: %s", entry.title, asset, e)
+            st[echo].update(state="failed", error=f"not downloaded: {e}")
+        finally:
+            if fd >= 0:
+                os.close(fd)
+            if path:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+    entry.async_create_background_task(hass, run(), f"echo_local fetch {echo}")
+
+
+def aiohttp_timeout():
+    import aiohttp
+    return aiohttp.ClientTimeout(total=600, sock_read=60)
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "echo_local/apps/fetch", vol.Required("echo"): str, vol.Required("package"): vol.In(list(KNOWN_APPS))})
+@websocket_api.async_response
+async def ws_fetch(hass: HomeAssistant, connection, msg: dict) -> None:
+    try:
+        await fetch(hass, msg["echo"], msg["package"])
+    except HomeAssistantError as e:
+        connection.send_error(msg["id"], "echo", str(e))
+        return
     connection.send_result(msg["id"])
 
 

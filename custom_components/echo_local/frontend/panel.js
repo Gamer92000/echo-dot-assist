@@ -362,7 +362,7 @@ class EchoLocalPanel extends HTMLElement {
       if (echo === this.echo) { this.apps = { error: (e && e.message) || String(e), apps: [] }; if (this.tab === 'apps') this.render(); }
     }
     // an install or removal under way: asked again every second until it is done
-    const busy = this.apps && ((this.apps.send || {}).state === 'sending' || ['receiving', 'installing', 'removing'].includes((this.apps.install || {}).state)
+    const busy = this.apps && (['downloading', 'downloaded', 'sending'].includes((this.apps.send || {}).state) || ['receiving', 'installing', 'removing'].includes((this.apps.install || {}).state)
       || this.uploading);
     clearTimeout(this._appsPoll);
     if (busy && echo === this.echo) this._appsPoll = setTimeout(() => this.loadApps(), 1000);
@@ -376,7 +376,7 @@ class EchoLocalPanel extends HTMLElement {
     if (a.none) { box.append(h('div', { class: 'empty' }, 'This Echo has no Android apps.')); return box; }
     const screenApp = (this.echoInfo() || {}).app || '';
     const st = a.install || {}, send = a.send || {};
-    const busy = send.state === 'sending' || ['receiving', 'installing', 'removing'].includes(st.state) || this.uploading;
+    const busy = ['downloading', 'downloaded', 'sending'].includes(send.state) || ['receiving', 'installing', 'removing'].includes(st.state) || this.uploading;
 
     const list = h('div', { class: 'list' });
     if (!a.apps.length) list.append(h('div', { class: 'empty' }, 'None yet: add one below.'));
@@ -408,6 +408,7 @@ class EchoLocalPanel extends HTMLElement {
     const status = h('div');
     let pct = null, msg = '', cls = '';
     if (this.uploading) { pct = this.uploading.pct; msg = `Uploading to Home Assistant… ${Math.round(this.uploading.pct)} %`; }
+    else if (send.state === 'downloading' || send.state === 'downloaded') { pct = send.size ? 100 * send.sent / send.size : 0; msg = `Downloading ${send.name || 'the APK'} from GitHub… ${send.size ? Math.round(pct) + ' %' : ''}`; }
     else if (send.state === 'sending') { pct = send.size ? 100 * send.sent / send.size : 0; msg = `Sending ${send.name || 'the APK'} to the Echo… ${Math.round(pct)} %`; }
     else if (send.state === 'failed') { msg = 'Not sent to the Echo: ' + send.error; cls = 'bad'; }
     else if (send.op === 'uninstall' && (st.state === 'installing' || st.state === 'receiving')) { msg = `Removing ${send.package}…`; }
@@ -536,7 +537,15 @@ class EchoLocalPanel extends HTMLElement {
       : h('a', { href: 'https://my.home-assistant.io/redirect/hacs_repository/?owner=Nt-f&repository=Echo-Wall&category=integration', target: '_blank', rel: 'noreferrer' }, 'Add Echo-Wall’s integration from HACS →'),
       hasWall ? 'Tiles, rooms and wallpaper: Echo-Wall’s own integration, in its Home tab.' : 'Its layout lives in an integration of its own: in HACS, a custom repository (Nt-f/Echo-Wall, Integration), then Settings › Devices › Add integration › Echo-Wall.');
     wallRow.style.display = (o.kiosk_app || '') === WALL ? '' : 'none';
-    const appSel = h('select', { onchange: () => { o.kiosk_app = appSel.value === '*' ? (o.kiosk_app || '') : appSel.value; appOwn.style.display = appSel.value === '*' ? '' : 'none'; wallRow.style.display = appSel.value === WALL ? '' : 'none'; touch(); } },
+    // Echo-Wall chosen but not on this Echo: its newest release fetched by Home Assistant and installed (apps.py fetch)
+    const haveWall = ((this.apps && this.apps.apps) || []).some((a) => a.package === WALL);
+    const wallInstall = row('Not on this Echo yet', h('button', { class: 'btn primary', onclick: async (ev) => {
+      ev.target.disabled = true;
+      try { await this.ws({ type: 'echo_local/apps/fetch', echo: this.echo, package: WALL }); this.toast('Downloading Echo-Wall'); this.tab = 'apps'; this.loadApps(); this.render(); }
+      catch (e) { ev.target.disabled = false; this.toast('Not installed: ' + ((e && e.message) || e)); }
+    } }, 'Install Echo-Wall'), 'Its newest release from GitHub (Nt-f/Echo-Wall), downloaded by Home Assistant and installed on the Echo; the Apps tab shows how it goes.');
+    wallInstall.style.display = (o.kiosk_app || '') === WALL && this.apps && !this.apps.none && !this.apps.error && !haveWall ? '' : 'none';
+    const appSel = h('select', { onchange: () => { o.kiosk_app = appSel.value === '*' ? (o.kiosk_app || '') : appSel.value; appOwn.style.display = appSel.value === '*' ? '' : 'none'; wallRow.style.display = appSel.value === WALL ? '' : 'none'; wallInstall.style.display = appSel.value === WALL && this.apps && !this.apps.none && !this.apps.error && !haveWall ? '' : 'none'; touch(); } },
       offered.map(([v, l]) => h('option', { value: v, selected: (o.kiosk_app || '') === v }, l)),
       h('option', { value: '*', selected: !offered.some(([v]) => v === (o.kiosk_app || '')) }, 'Another app (its package)…'));
     const appOwn = text('kiosk_app', 'org.example.screen');
@@ -550,6 +559,7 @@ class EchoLocalPanel extends HTMLElement {
         h('div', { class: 'about' }, 'The app the Echo opens and comes back to: Echo-Wall, Echo-Screen, Kiosk Satellite or any app installed on the Echo (docs/screen-apps.md). Pull down from the top edge, over any app, for the Echo’s drawer: Home (this app), Face, Music (the Echo’s own Music Assistant player), the pages below and your other apps.'),
         row('App', h('span', null, appSel, ' ', appOwn)),
         wallRow,
+        wallInstall,
         row('Connect it to Home Assistant', sw('kiosk'), 'Gives it a Home Assistant login of this Echo’s own and the pages below. Off: it gets neither (an app not made for hassmic logs in by itself).'),
         h('div', { class: 'row' }, h('div', { class: 'head' }, h('span', { class: 'name' }, 'Its own settings')), h('div', { class: 'help' }, 'One key=value a line, as the app documents them; sent sealed with the Echo’s login.'), settings),
         row('The Echo’s login is an administrator', sw('kiosk_admin'), 'Lets Home Assistant’s settings be changed from the Echo. Off is safer.'),

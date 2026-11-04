@@ -28,6 +28,7 @@ EW_INT = "" if os.environ.get("HASSMIC_ECHO_WALL") == "none" else os.environ.get
                                                               for d in ("Echo-Wall", "hassmic-homeview")) if os.path.isdir(p)), "")
 
 
+GITHUB_PORT = 18211
 # the Echo Show's apps (apps.c, root's apps.sh, Echo Local's Apps tab) where this tree has them
 HAVE_APPS = os.path.exists(os.path.join(hr.ROOT, "scripts", "device", "apps.sh"))
 
@@ -210,6 +211,29 @@ async def apps_part(c, session, cfg, conf, root):
           f"one from a path under /config, refused by Android: its reason ({r.get('install')})")
     e = await fails(c.ws(type="echo_local/apps/install", echo=NODE, path="/etc/passwd"))
     check("may read" in e, "a path outside the folders Home Assistant may read: refused")
+    # a known home app's newest release, fetched by Home Assistant from (a stand-in) GitHub and installed (apps.py fetch)
+    from aiohttp import web
+    rel = {"apk": b"PK pkg " + EW.encode() + b"\n" + os.urandom(3 << 20)}
+    async def asset(req):
+        return web.Response(body=rel["apk"]) if rel["apk"] else web.Response(status=404)
+    app = web.Application(); app.router.add_get("/Nt-f/Echo-Wall/releases/latest/download/Echo-Wall.apk", asset)
+    runner = web.AppRunner(app); await runner.setup(); await web.TCPSite(runner, "127.0.0.1", GITHUB_PORT).start()
+    try:
+        await c.ws(type="echo_local/apps/fetch", echo=NODE, package=EW)
+        r = await until_done(lambda r: (r.get("send") or {}).get("state") not in ("downloading", "downloaded"))
+        check(r["install"]["state"] == "ok" and r["install"]["package"] == EW and any(a["package"] == EW and not a["net"] for a in r["apps"]),
+              f"Echo-Wall's newest release downloaded by Home Assistant and installed, off the internet ({r.get('install')}, {r.get('send')})")
+        e = await fails(c.ws(type="echo_local/apps/fetch", echo=NODE, package="org.example.other"))
+        check(e != "", "only a known home app is fetched")
+        rel["apk"] = None
+        await c.ws(type="echo_local/apps/fetch", echo=NODE, package=EW)
+        for _ in range(60):
+            r = await c.ws(type="echo_local/apps/list", echo=NODE)
+            if (r.get("send") or {}).get("state") == "failed": break
+            await asyncio.sleep(0.5)
+        check("no release" in (r.get("send") or {}).get("error", ""), f"no release there: said ({r.get('send')})")
+    finally:
+        await runner.cleanup()
     await c.ws(type="echo_local/apps/uninstall", echo=NODE, package="org.example.app")
     r = await until_done(lambda r: not any(a["package"] == "org.example.app" for a in r["apps"]))
     check(not any(a["package"] == "org.example.app" for a in r["apps"]), f"removed ({r.get('install')})")
@@ -223,6 +247,7 @@ async def run(tmp):
     net = f"{int.from_bytes(os.urandom(8), 'little') | 1:016x} " + base64.b64encode(os.urandom(32)).decode()
     echo = hr.Echo(tmp, "Echo Show 5 a1b2c3", "02:00:00:a1:b2:c3", 26190, net, os.path.join(hr.ROOT, "build", "hassmic-host"))
     halog = open(os.path.join(tmp, "ha.log"), "w")
+    os.environ["ECHO_LOCAL_GITHUB"] = f"http://127.0.0.1:{GITHUB_PORT}"     # apps.py fetch: a stand-in GitHub (only lo here)
     hass = subprocess.Popen([hr.HA_PY, "-m", "homeassistant", "-c", conf, "--skip-pip"], stdout=halog, stderr=subprocess.STDOUT, cwd=conf)
     apps = os.path.join(tmp, "apps"); os.makedirs(os.path.join(apps, "io.github.nt_f.echowall"))
     os.environ["HASSMIC_APP_DATA"] = apps

@@ -16,6 +16,9 @@ What changed for people using the Echo, newest first. Details and measurements a
   Echo Local's new Apps tab list the Android apps you installed beside the home app (NewPipe, say), remove them, and
   install new ones from an APK on your computer or on Home Assistant (also the action "Install app"). Each shows in
   the drawer's row. Every app stays off the internet until you switch its **Internet** on.
+- **Install Echo-Wall from Echo Local.** With Echo-Wall picked as an Echo Show's home app but not on it yet, the Screen
+  tab offers **Install Echo-Wall**: Home Assistant downloads its newest release from GitHub and installs it on the Echo
+  (the Echo itself stays off the internet); the Apps tab shows how it goes.
 - **An app on the Echo Show can be reached from your network** (issue #109): each app has an **Open ports** switch
   beside its Internet one. On, the firewall admits the ports that app listens on, from your own network only, and
   follows them when the app moves to another one: Kiosk Satellite's DLNA renderer (its port and SSDP discovery on
