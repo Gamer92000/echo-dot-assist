@@ -112,8 +112,10 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
     if (ms < len) fprintf(stderr, "earcon: cut at %ld ms\n", ms);       /* for the tests: what stopped it stopped it at once */
 }
 
-/* Music streams on the PC: files, written at real-time speed through a modelled 200 ms device buffer. */
-struct stream { FILE *f; unsigned bps; long long t0, written; };
+/* Music streams on the PC: files, written at real-time speed through a modelled 200 ms device buffer.  The music's
+ * buffer drains HASSMIC_FAKE_MUSIC_PPM faster (or slower: < 0) than real time: an output clock that is off, as the
+ * Echo Show 5's (~350 ppm), for Sendspin's sync. */
+struct stream { FILE *f; unsigned bps; long long t0, written; double speed; };
 static struct stream music, bt, voip;
 static long long raw_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC_RAW, &ts); return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000; }
 
@@ -128,7 +130,7 @@ static int s_open(struct stream *s, const char *env, const char *def, unsigned r
 static long long s_queued_us(struct stream *s)
 {
     if (!s->f || !s->t0) return 0;
-    long long q = s->written * 1000000 / s->bps - (raw_us() - s->t0);
+    long long q = s->written * 1000000 / s->bps - (long long)((double)(raw_us() - s->t0) * (s->speed ? s->speed : 1));
     if (q < 0) { s->t0 = 0; s->written = 0; q = 0; }
     return q;
 }
@@ -176,7 +178,13 @@ static int s_write_raw(struct stream *s, const void *data, size_t len)
 
 static void s_close(struct stream *s) { if (s->f) fclose(s->f); s->f = NULL; }
 
-int       music_open(unsigned rate, unsigned channels) { return s_open(&music, "HASSMIC_MUSIC", "/tmp/hassmic_music.raw", rate, channels); }
+int       music_open(unsigned rate, unsigned channels)
+{
+    const char *ppm = getenv("HASSMIC_FAKE_MUSIC_PPM");
+    int r = s_open(&music, "HASSMIC_MUSIC", "/tmp/hassmic_music.raw", rate, channels);
+    music.speed = ppm ? 1 + atof(ppm) * 1e-6 : 1;
+    return r;
+}
 long long music_queued_us(void) { return s_queued_us(&music); }
 int       music_write(const void *data, size_t len) { return s_write(&music, data, len); }
 void      music_close(void) { s_close(&music); }

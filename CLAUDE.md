@@ -75,7 +75,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ha.py [--qemu]    # Wyoming; --qemu uses the ARM build + stock Pryon model under qemu-arm
 .venv/bin/python tests/fake_ma_sendspin.py [--legacy]  # Sendspin, as Music Assistant 2.10.8 (aiosendspin 10.2.1, Sendspin 1.0;
                                              # --legacy: 9.1.1 of MA <= 2.10.6, build/aiosendspin-9.1.1 from --setup),
-                                             # strict: a deviation MA would only log fails
+                                             # strict: a deviation MA would only log fails; the output's clock
+                                             # 500 ppm slow (HASSMIC_FAKE_MUSIC_PPM), followed without a phase step
 .venv/bin/python tests/fake_ha_stop_word.py   # "<wake word>, stop" between two Echos: the drop cancelled, stop_ends_listening
 .venv/bin/python tests/fake_screen.py [--legacy]  # the Echo Show's screen UI as hassmic feeds it (stand-in UI): Sendspin
                                              # metadata/artwork (1.0's transfer, scheduled; --legacy: 9.1.1's), the band,
@@ -319,7 +320,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   2 kiosk). The socket belongs to arb's loop thread. `HASSMIC_ARB_SCALE` (tests, `PACE()`): the network's own timers
   (beacons, discovery, tags, handoff, pairing) at that fraction; rounds and the window keep theirs. Page: two cards with pros and cons (`HELP.arbitration_mode.modes`).
 - **Music**: `sendspin.c` (Music Assistant Sendspin player over `ws.c`/`noise.c`/`net.c`/`hash.c`, decodes via
-  `dr_flac`/`minimp3`/libopus). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
+  `dr_flac`/`minimp3`/libopus; in sync by a rate of its own, `resample.c`: a PI servo on the error steering a cubic
+  resampler, never frames skipped or repeated, which ticked on the Show 5's clock 350 ppm off; snap past 20 ms). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
   loaded with dlopen, aptX/aptX HD via `freeaptx`) with AVRCP. Only one music source plays at a time (newest wins). "<wake word>, stop" pauses it when nothing else was
   stopped (`stop_word`, a bare "stop" transcript in `core_transcript`; issue #51), the action button resumes.
   A "stop" that ended what its wake word cut (ring, Drop In, reply, THINKING run) drops that wake word's run: after the

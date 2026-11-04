@@ -94,6 +94,9 @@ def player(state, port, http, env, web=0):
 
 async def paired(env, state):
     music = env["HASSMIC_MUSIC"]
+    # the output's clock 500 ppm slow (the Echo Show 5's is ~350): followed by the rate, no frame skipped or repeated,
+    # which the continuity check below sees (6 frames nudged at once were a phase step of 0.35 rad)
+    env = dict(env, HASSMIC_FAKE_MUSIC_PPM="-500")
     open(os.path.join(state, "sendspin.unpaired"), "w").write("1")     # unpaired access switched on for this part
     mreq = os.path.join(state, "mdns")                  # root's cue to restart avahi (main.sh netwatch)
     proc, log = player(state, PORT, 16959, env)
@@ -166,7 +169,10 @@ async def paired(env, state):
         if len(tone) > 48000:
             ph = np.unwrap(np.angle(np.fft.ifft(np.fft.fft(tone) * (np.fft.fftfreq(len(tone)) > 0) * 2)))     # analytic signal
             jumps = np.abs(np.diff(ph) - 2 * np.pi * 440 / 48000)
-            check(jumps[2000:-2000].max() < 0.3, f"tone is continuous (max phase step error {jumps[2000:-2000].max():.3f} rad)")
+            # 0.000 as FLAC, Opus and PCM; 6 frames nudged at once showed as 0.23 (the analytic signal spreads a step)
+            check(jumps[2000:-2000].max() < 0.03, f"tone is continuous (max phase step error {jumps[2000:-2000].max():.3f} rad)")
+        resyncs = [l for l in log().splitlines() if "resynced" in l]
+        check(not resyncs, f"an output clock 500 ppm slow is followed without a resync: {resyncs[:2]}")
         lead = nz[0] / 48000 if len(nz) else -1
         check(0 <= lead < 2.0, f"silence padded before the scheduled start: {lead:.3f} s")
 

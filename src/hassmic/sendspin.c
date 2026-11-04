@@ -23,7 +23,8 @@
  *               has to pair with the token first; the Sentinel session still carries that pairing.
  *   servers     every Sendspin server on the LAN dials us; one connection is admitted, ranked by declared activity
  *   sync        two-state Kalman filter on client/time exchanges; chunks are written to the mixer so that their first
- *               frame leaves the speaker at the server's timestamp (hard snap at start, then whole-frame drop/duplicate)
+ *               frame leaves the speaker at the server's timestamp (hard snap at start, then a rate of the music's own,
+ *               steered by the error: resample.h)
  */
 #include "sendspin.h"
 #include <ctype.h>
@@ -47,6 +48,7 @@
 #include "hash.h"
 #include "netio.h"
 #include "noise.h"
+#include "resample.h"
 #include "screen.h"
 #include "mass.h"
 #include "ws.h"
@@ -69,7 +71,7 @@ void opus_decoder_destroy(OpusDecoder *st);
 #define QUEUE_MAX (8u << 20)            /* decoded PCM we hold: the server's 30 s horizon plus margin */
 #define LEAD_MS 300                     /* required_lead_time_ms and min_buffer_ms we report */
 #define MIXER_TARGET_US 120000          /* keep about this much queued in the mixer: reacts fast to stop / duck / volume */
-#define SNAP_US 20000                   /* beyond this error: one-shot resync instead of frame nudging */
+#define SNAP_US 20000                   /* beyond this error: one-shot resync instead of the rate catching up */
 
 static int port; static const char *state_dir = "/data/local/hassmic/state";
 static uint8_t id_priv[32], id_pub[32]; static char client_id[48];
@@ -173,30 +175,6 @@ static void q_push(long long ts, const uint8_t *pcm, size_t len)
     pthread_mutex_unlock(&q_lock);
 }
 
-/* A chunk played `n` frames longer (n > 0: we are early) or shorter: the whole chunk resampled by linear interpolation,
- * 0.5 % at the most (6 frames in a 25 ms chunk), which nobody hears.  Skipping or repeating the frames in one place, as
- * this did before, put a step in the waveform each time: a tick in quiet music, several a second on an Echo Show 5,
- * whose output clock runs ~350 ppm off (2026-11-02: "nudged -170 frames" every 10 s).  Returns the frames in *out
- * (malloc'd; NULL: play the chunk as it is) */
-static int16_t *stretch(const int16_t *in, size_t frames, int n, size_t *out_frames)
-{
-    size_t m = (size_t)((long)frames + n);
-    if (frames < 2 || m < 2) return NULL;
-    int16_t *o = malloc(m * FRAME);
-    if (!o) return NULL;
-    for (size_t i = 0; i < m; i++) {
-        double pos = (double)i * (double)(frames - 1) / (double)(m - 1);
-        size_t k = (size_t)pos; double f = pos - (double)k;
-        if (k >= frames - 1) { k = frames - 2; f = 1; }
-        for (int ch = 0; ch < CHANNELS; ch++) {
-            double v = in[k * CHANNELS + ch] * (1 - f) + in[(k + 1) * CHANNELS + ch] * f;
-            o[i * CHANNELS + ch] = (int16_t)lrint(v);
-        }
-    }
-    *out_frames = m;
-    return o;
-}
-
 /* The music under the voice assistant: down to a sixth (-15.6 dB) while a request runs, glided over ~30 ms each way,
  * frame by frame.  It used to be a sixth from one 25 ms chunk to the next: a click as listening started and ended */
 #define DUCK 0.1667f
@@ -211,11 +189,17 @@ static void duck(int16_t *s, size_t frames, float *g, float target)
     }
 }
 
+/* Each chunk is due at its timestamp.  A snap (the start, an underrun, a new delay, an error past SNAP_US) pads with
+ * silence or drops the chunk's late part; in between the music plays at a rate of its own, which the sync error steers
+ * (resample.h): an output clock that is off, as the Echo Show 5's, is followed without a frame skipped or repeated. */
 static void *player_thread(void *arg)
 {
-    static int16_t silence[RATE / 100 * CHANNELS]; int open = 0; double smooth = 0; long long stat_t = 0; long adj_total = 0;
-    float duck_g = 1;
+    static int16_t silence[RATE / 100 * CHANNELS]; int open = 0; long long stat_t = 0; int resyncs = 0;
+    float duck_g = 1; double step = 1;
+    struct resampler rs; struct rate_servo servo = { 0, 0 };    /* the drift kept across streams: the same output clock */
+    int16_t *out = NULL; size_t out_cap = 0;
     (void)arg;
+    rs_reset(&rs);
     for (;;) {
         pthread_mutex_lock(&q_lock);
         while (!q_head && atomic_load(&stream_on)) {
@@ -234,14 +218,18 @@ static void *player_thread(void *arg)
         }
         if (!c) continue;
         if (!tf_synced(NULL)) { free(c); continue; }
-        if (!open) { if (music_open(RATE, CHANNELS)) { free(c); usleep(200000); continue; } open = 1; atomic_store(&snap_next, 1); smooth = 0; }
+        if (!open) { if (music_open(RATE, CHANNELS)) { free(c); usleep(200000); continue; } open = 1; atomic_store(&snap_next, 1); }
 
         while (music_queued_us() > MIXER_TARGET_US && atomic_load(&stream_on)) usleep(5000);
 
-        uint8_t *pcm = c->pcm; size_t len = c->len; int16_t *stretched = NULL;
-        long long due = tf_client_time(c->ts) - atomic_load(&static_delay_ms) * 1000LL;
-        long long err = due - (raw_us() + music_queued_us() + out_latency_us());       /* > 0: we are early */
-        if (atomic_exchange(&snap_next, 0) || llabs(err) > SNAP_US) {
+        const uint8_t *pcm = c->pcm; size_t len = c->len;
+        long long due = tf_client_time(c->ts) - atomic_load(&static_delay_ms) * 1000LL, at = raw_us() + music_queued_us() + out_latency_us();
+        /* > 0: we are early.  The next frame out is still one of the chunk before's (what the resampler looks ahead) */
+        long long err = due + llround(rs_lag(&rs) * 1e6 / RATE) - at;
+        int fresh = atomic_exchange(&snap_next, 0);
+        if (fresh || llabs(err) > SNAP_US) {
+            if (!fresh) { resyncs++; fprintf(stderr, "sendspin: %+.1f ms off the schedule, resynced\n", err / 1000.0); }
+            err = due - at;                                                             /* from this chunk's first frame */
             if (err > 0) {
                 while (err > 200000 && atomic_load(&stream_on)) { usleep(20000); err = due - (raw_us() + music_queued_us() + out_latency_us()); }
                 for (long long frames = err * RATE / 1000000; frames > 0; ) {
@@ -253,24 +241,23 @@ static void *player_thread(void *arg)
                 if (drop >= len) { free(c); atomic_store(&snap_next, 1); continue; }             /* whole chunk is late */
                 pcm += drop; len -= drop;
             }
-            smooth = 0;
-        } else {
-            smooth = 0.9 * smooth + 0.1 * (double)err;
-            if (fabs(smooth) > 400) {                                                           /* nudge: at most 6 frames per 25 ms chunk */
-                int n = (int)fmin(6, fmax(1, fabs(smooth) * RATE / 1e6)), d = smooth > 0 ? n : -n; size_t m;
-                if ((stretched = stretch((const int16_t *)pcm, len / FRAME, d, &m))) {         /* early: longer, late: shorter */
-                    pcm = (uint8_t *)stretched; len = m * FRAME; adj_total += d;
-                    smooth -= d * 1e6 / RATE;
-                }
-            }
+            rs_reset(&rs); step = rate_servo_snap(&servo);
+        } else step = rate_servo(&servo, (double)err, (double)(len / FRAME) / RATE);
+
+        size_t frames = len / FRAME, room = rs_out_max(frames), n;
+        if (room > out_cap) {
+            int16_t *o = realloc(out, room * FRAME);
+            if (!o) { free(c); atomic_store(&snap_next, 1); continue; }
+            out = o; out_cap = room;
         }
-        if (atomic_load(&player_muted)) memset(pcm, 0, len);
-        else duck((int16_t *)pcm, len / FRAME, &duck_g, core_state() != IDLE ? DUCK : 1);        /* under the voice assistant */
-        music_write(pcm, len);
-        free(stretched);
+        n = rs_run(&rs, (const int16_t *)pcm, frames, step, out);
+        if (atomic_load(&player_muted)) memset(out, 0, n * FRAME);
+        else duck(out, n, &duck_g, core_state() != IDLE ? DUCK : 1);                     /* under the voice assistant */
+        music_write(out, n * FRAME);
         if (raw_us() - stat_t > 10000000) {
             double e; tf_synced(&e); stat_t = raw_us();
-            fprintf(stderr, "sendspin: sync err %+.2f ms, clock ±%.2f ms, queued %zu KB, nudged %+ld frames\n", smooth / 1000, e / 1000, q_bytes / 1024, adj_total);
+            fprintf(stderr, "sendspin: sync err %+.2f ms, clock ±%.2f ms, queued %zu KB, rate %+.0f ppm (output clock %+.0f), %d resyncs\n",
+                    servo.smooth * 1e3, e / 1000, q_bytes / 1024, (step - 1) * 1e6, servo.drift * 1e6, resyncs);
         }
         free(c);
     }
