@@ -10,8 +10,8 @@ What changed for people using the Echo, newest first. Details and measurements a
   install puts hassmic, is not one of them (updates live in `/data`, which is); hassmic now tells it where to look,
   in a way Android does not ignore. Seen on an Echo Show 5 2nd gen, checked on an Echo Show 5.
 - **Echo Show 5 and Show 5 2nd gen: the screen at a fixed brightness**, as on the Show 8s. Android's automatic
-  brightness took the screen down to almost nothing in a dim room. Kiosk Satellite's own adaptive brightness, where
-  it is on, still sets it.
+  brightness took the screen down to almost nothing in a dim room. Where Kiosk Satellite is installed, it sets the
+  brightness, as before: its own adaptive brightness or the level chosen in it (on every Echo Show).
 
 ## 2026-11-03
 

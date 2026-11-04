@@ -3190,5 +3190,7 @@ Run in this order. Each step says what it proves.
       mScreenBrightnessSetting = `lcd-backlight/brightness`): 10 -> 5, 30 -> 7, 120 -> 33, 130 -> 39, 144 -> 49,
       155 -> 59, 240 -> 210, 255 -> 255; Android's default setting is 90.  Kiosk Satellite's adaptive brightness
       (`flutter.ks.screen.adaptive_brightness`, on by default, WRITE_SETTINGS) writes the setting from the light
-      sensor while the mode is manual (120 to 155 at 20 to 45 lux within seconds), so where it runs ours lasts until its
-      next write.
+      sensor while the mode is manual (120 to 155 at 20 to 45 lux within seconds), or a level of its own with that
+      off; ours at each satellite start only fought it, so `alexa-off.sh` leaves the level alone while the app's
+      folder is in `/data/app` (the mode stays manual: its adaptive brightness runs under it).  Open: 120 by eye in
+      daylight (33/255; stock ran at 238).
