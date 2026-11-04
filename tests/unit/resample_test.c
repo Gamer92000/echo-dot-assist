@@ -119,7 +119,7 @@ static void servo(double ppm)
 {
     const double slot = 960, target = 0.120, poll = 0.005, rate_out = R * (1 + ppm * 1e-6), T = 180;
     static int16_t in[1200 * 2], out[1300 * 2];
-    struct resampler rs; struct rate_servo sv = { 0, 0 }; rs_reset(&rs);
+    struct resampler rs; struct rate_servo sv = { 0 }; rs_reset(&rs);
     double t = 0, step = rate_servo_snap(&sv), lo = 1e9, hi = -1e9, worst_jump = 0, drift_sum = 0, rate_sum = 0, rate_sq = 0, prev = step;
     double steady = 0, far = 0; long long written = 0, j0 = 0; int late = 0, chunks = 0;
     double errs[8000]; int ne = 0;
@@ -172,9 +172,27 @@ static void duck(void)
     check(g == 1 && t[0] == 123 && t[1] == -456 && t[2] == 32767 && t[3] == -32768, "music_duck: back at 1, the samples left as they are");
 }
 
+/* After a snap: what it missed by (the Echo Show 5: -4.8 ms a second after a stream's start) is no drift.  The drift
+ * learnt stays through 4 s of it, the proportional share takes it out, and after the hold the integral learns again. */
+static void hold(void)
+{
+    struct rate_servo sv = { 0 }; double dt = 0.025;
+    for (int i = 0; i < 4000; i++) rate_servo(&sv, 0, dt);
+    sv.drift = -350e-6;
+    double step = rate_servo_snap(&sv), before = sv.drift;
+    for (int i = 0; i < 160; i++) step = rate_servo(&sv, -4800, dt);           /* 4 s */
+    char what[160];
+    snprintf(what, sizeof what, "after a snap 4 s at -4.8 ms leave the drift alone (%+.0f -> %+.0f ppm), the rate catches up (%+.0f ppm)",
+             before * 1e6, sv.drift * 1e6, (step - 1) * 1e6);
+    check(sv.drift == before && step - 1 > 900e-6, what);
+    for (int i = 0; i < 80; i++) rate_servo(&sv, -4800, dt);                   /* past the 5 s */
+    check(sv.drift < before - 5e-6, "and after 5 s it learns again");
+}
+
 int main(void)
 {
     resampler();
+    hold();
     duck();
     servo(-350); servo(350); servo(0); servo(-1500);
     return fails ? 1 : 0;

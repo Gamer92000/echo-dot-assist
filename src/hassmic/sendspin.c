@@ -197,14 +197,37 @@ static void drift_save(const double d[2], double kept[2])
     save_file("sendspin.drift", buf, (size_t)n); kept[0] = d[0]; kept[1] = d[1];
 }
 
+/* A fresh output: silence first (music_prime_us), then wait until the player took it, so the first chunk is timed against
+ * the queue it will play behind.  On the Echo Shows AudioTrack takes its buffer's worth at once as it starts (the Show
+ * 5's ~137 ms), which the queue leaves out from then on: timed before that, every stream's second chunk came 135-139 ms
+ * early, a resync with that much silence after the first 25 ms of music (2026-11-04).  Done once the queue fell by
+ * 100 ms, and 30 ms after that: the burst comes in one go.  The log says how much of it went at once, for other models. */
+static void prime_output(void)
+{
+    static const int16_t zero[RATE / 50 * CHANNELS];           /* 20 ms: a slot of audio_android.c's each */
+    long long p = music_prime_us();
+    if (p <= 0) return;
+    for (long long f = p * RATE / 1000000; f > 0; ) { size_t n = f > RATE / 50 ? RATE / 50 : (size_t)f; music_write(zero, n * FRAME); f -= n; }
+    long long t0 = raw_us(), first = 0, q;
+    while ((q = music_queued_us()) > p - 100000 && raw_us() - t0 < 1000000 && atomic_load(&stream_on)) {
+        if (!first && q < p) first = raw_us();
+        usleep(5000);
+    }
+    if (!first) first = raw_us();
+    usleep(30000);
+    q = music_queued_us();
+    long long at_once = p - q - (raw_us() - first);
+    fprintf(stderr, "sendspin: output primed with %lld ms of silence, %lld ms of it taken at once\n", p / 1000, at_once > 0 ? at_once / 1000 : 0);
+}
+
 /* Each chunk is due at its timestamp.  A snap (the start, an underrun, a new delay, an error past SNAP_US) pads with
  * silence or drops the chunk's late part; in between the music plays at a rate of its own, which the sync error steers
  * (resample.h): an output clock that is off, as the Echo Show 5's, is followed without a frame skipped or repeated. */
 static void *player_thread(void *arg)
 {
-    static int16_t silence[RATE / 100 * CHANNELS]; int open = 0; long long stat_t = 0; int resyncs = 0, routed = -1, stats = 0;
+    static int16_t silence[RATE / 50 * CHANNELS]; int open = 0; long long stat_t = 0; int resyncs = 0, routed = -1, stats = 0;
     float duck_g = 1; double step = 1, rate_sum = 0, drift_of[2], drift_kept[2]; long rate_n = 0;   /* rate_sum: the log's mean */
-    struct resampler rs; struct rate_servo servo = { 0, 0 };    /* the drift kept across streams: the same output clock */
+    struct resampler rs; struct rate_servo servo = { 0 };    /* the drift kept across streams: the same output clock */
     int16_t *out = NULL; size_t out_cap = 0;
     (void)arg;
     rs_reset(&rs);
@@ -230,7 +253,7 @@ static void *player_thread(void *arg)
         }
         if (!c) continue;
         if (!tf_synced(NULL)) { free(c); continue; }
-        if (!open) { if (music_open(RATE, CHANNELS)) { free(c); usleep(200000); continue; } open = 1; atomic_store(&snap_next, 1); }
+        if (!open) { if (music_open(RATE, CHANNELS)) { free(c); usleep(200000); continue; } open = 1; atomic_store(&snap_next, 1); prime_output(); }
 
         while (music_queued_us() > MIXER_TARGET_US && atomic_load(&stream_on)) usleep(5000);
 
@@ -249,10 +272,15 @@ static void *player_thread(void *arg)
             if (!fresh) { resyncs++; fprintf(stderr, "sendspin: %+.1f ms off the schedule, resynced\n", err / 1000.0); }
             err = due - at;                                                             /* from this chunk's first frame */
             if (err > 0) {
-                while (err > 200000 && atomic_load(&stream_on)) { usleep(20000); err = due - (raw_us() + music_queued_us() + out_latency_us()); }
-                for (long long frames = err * RATE / 1000000; frames > 0; ) {
-                    size_t n = frames > RATE / 100 ? RATE / 100 : (size_t)frames;
-                    music_write(silence, n * FRAME); frames -= n;
+                /* silence until the chunk is due, 20 ms at a time as it plays, the error read again before each: left
+                 * to run dry while it waited (it used to, down to the last 200 ms), the Shows' AudioTrack emptied and
+                 * took its buffer's worth at once again from the next writes, after the chunk was timed (prime_output) */
+                for (long long q; atomic_load(&stream_on); ) {
+                    q = music_queued_us(); err = due - (raw_us() + q + out_latency_us());
+                    long long f = err * RATE / 1000000;
+                    if (f <= 0) break;
+                    if (q > MIXER_TARGET_US) { usleep(5000); continue; }
+                    music_write(silence, (size_t)(f > RATE / 50 ? RATE / 50 : f) * FRAME);
                 }
             } else {
                 size_t drop = (size_t)(-err * RATE / 1000000) * FRAME;

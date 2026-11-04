@@ -7,8 +7,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 - **No more ticks in music.** Music Assistant's music had a small tick several times a second on the Echo Show 5,
   most noticeable in quiet passages. The Show 5's speaker runs a little slow, and to stay in sync with the other
   speakers the Echo skipped a few samples now and then. It now evens that out all along, by a change of speed far
-  too small to hear (0.035 %), so nothing is skipped or repeated, on every Echo. And the music no longer clicks as it is
-  turned down for a request and back up after: it glides.
+  too small to hear (0.035 %), so nothing is skipped or repeated, on every Echo. On the Echo Shows the music also starts
+  without the short break that came right after its first moment. And the music no longer clicks as it is turned down
+  for a request and back up after: it glides.
 - **Echo Shows: the screen's face comes up right after the install** (issue #122). Installed by the setup, the
   screen's own UI never started: the screen stayed black but for the light band, until the first update arrived.
   Android lets the screen's program load its library only from a few folders, and the system partition, where the

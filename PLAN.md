@@ -659,8 +659,20 @@ Run in this order. Each step says what it proves.
       sink; a step at a block's edge clicked). `make unit-resample` (the resampler, a step changing per call as
       the sink's, the servo against the queue model at ±350, 0, -1500 ppm), `tests/fake_ma_sendspin.py` with `HASSMIC_FAKE_MUSIC_PPM=-500` (`audio_file.c`'s buffer
       drains that much slower): the tone's phase step 0.000 rad (the nudging: 0.232; limit 0.03, was 0.3), no resync.
-      Not yet on the device: the Show 5's log of rate and drift, and the measured queue's real noise; the sink's
-      resampler only in the unit test (no PC test reaches the sink)
+      **On the Show 5 (2026-11-04, 2026.11.04.201339+7b3751a, real MA):** after 10 s `sync err -0.46 ms, rate +161 ppm
+      (integral -63)`; but every stream's second chunk came 135-139 ms early, `resynced` (the old loop did the same,
+      silently): 137 ms of silence after the stream's first 25 ms of music. AudioTrack takes its buffer's worth of the
+      slots at once as it starts, which `s_queued_us` leaves out as a steady latency, and the first snap waited with
+      nothing written until the chunk was 200 ms from due: the queue ran dry, AudioTrack emptied, and its next burst came
+      after the chunk was timed. Now `music_prime_us()` (150 ms on Android, 0 on the mixer) primes a fresh output with
+      silence and waits for the burst ("output primed with 150 ms of silence, N ms of it taken at once"), and the snap
+      writes silence as it plays, 20 ms at a time (an Android slot each: prime and all, 150 ms fit the 8 without a
+      wait), the error read again before each. And the -4.8 ms the second snap
+      left had taken the integral from -127 to -328 ppm in 4 s: it is held for 5 s after every snap (`SERVO_HOLD_S`).
+      `audio_file.c`'s `HASSMIC_FAKE_MUSIC_BURST_MS=137` (137 ms hidden at once as the output starts) reproduces it:
+      without the prime `+137.0 ms off the schedule, resynced`, with it none; the test's tone is 8 s (learning after
+      the hold: -54 ppm saved). Still to see on the device: ~10 min of play, the rate settling near +350; the sink's
+      resampler (no PC test reaches the sink)
 - [x] mDNS: init's `avahi-daemon` runs in SELinux domain `avahi-daemon`, which is denied read on `/data/misc/avahi/services`
       (so nothing was ever published, also not for Wyoming). `magiskpolicy` cannot parse a rule for a type with a hyphen →
       `boot.sh`/`run.sh` stop the init service and start avahi themselves in the `su` domain. Verified: answers queries from the PC.
