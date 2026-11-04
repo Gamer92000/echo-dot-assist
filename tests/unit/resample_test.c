@@ -1,8 +1,8 @@
 /* resample.c (make unit-resample): the resampler at step 1 from a reset hands every frame through as it is; any chunk
  * sizes give what one chunk gives; a sine resampled by 350 ppm is the true sine at the new rate; rs_lag says where the
  * next frame out lies; rs_out_max holds.  The servo against a model of the Echo Show 5's queue (20 ms slots, polled
- * every 5 ms, up to 5 ms of jitter on top) with the output's clock off: the error stays within a few ms without a
- * resync, the drift is learnt, the rate never jumps. */
+ * every 5 ms, up to 5 ms of jitter on top) with the output's clock off, 6 min: the error stays within a few ms without
+ * a resync, the drift is learnt, the rate never jumps. */
 #include "resample.h"
 #include <math.h>
 #include <stdio.h>
@@ -117,12 +117,12 @@ static void resampler(void)
  * R * (1 + ppm) frames per second; the frame out at `written` plays at written / that. */
 static void servo(double ppm)
 {
-    const double slot = 960, target = 0.120, poll = 0.005, rate_out = R * (1 + ppm * 1e-6), T = 180;
+    const double slot = 960, target = 0.120, poll = 0.005, rate_out = R * (1 + ppm * 1e-6), T = 360;
     static int16_t in[1200 * 2], out[1300 * 2];
     struct resampler rs; struct rate_servo sv = { 0 }; rs_reset(&rs);
     double t = 0, step = rate_servo_snap(&sv), lo = 1e9, hi = -1e9, worst_jump = 0, drift_sum = 0, rate_sum = 0, rate_sq = 0, prev = step;
     double steady = 0, far = 0; long long written = 0, j0 = 0; int late = 0, chunks = 0;
-    double errs[8000]; int ne = 0;
+    double errs[16000]; int ne = 0;
     while (t < T) {
         double rep;
         for (;;) { rep = floor(rate_out * t / slot) * slot; if ((written - rep) / R <= target) break; t += poll; }
@@ -130,7 +130,7 @@ static void servo(double ppm)
         double due = ((double)j0 + rs_lag(&rs)) / R, err = due - (t + q);
         if (chunks++) step = rate_servo(&sv, err * 1e6, 1200.0 / R);
         double truth = due - written / rate_out;                  /* when the next frame out is due against when it plays */
-        if (ne < 8000 && chunks % 4 == 0) errs[ne++] = truth;
+        if (ne < 16000 && chunks % 4 == 0) errs[ne++] = truth;
         if (fabs(step - prev) > worst_jump) worst_jump = fabs(step - prev);
         prev = step;
         if (t > T / 2) {
@@ -150,7 +150,9 @@ static void servo(double ppm)
     snprintf(what, sizeof what, "output clock %+.0f ppm: followed at %+.0f (integral %+.0f), error within %.2f ms once it is (%.2f ms "
              "off at worst from the start), the rate's noise %.0f ppm rms, its largest step %.0f ppm",
              ppm, rate, learnt, (hi - lo) * 1e3, far * 1e3, noise, worst_jump * 1e6);
-    check(fabs(rate - ppm) <= 0.05 * fabs(ppm) + 10 && hi - lo < 0.004 && far < 0.010 && noise < 600 && worst_jump < 3e-4, what);
+    /* far: the slots' skew settling in (~8 ms in this model at 0 ppm), and while a drift is learnt ~4 ms per 1000 ppm:
+     * clear of a resync (SNAP_US, 20 ms) for any crystal (100 ppm) and the stress case of 1500 */
+    check(fabs(rate - ppm) <= 0.05 * fabs(ppm) + 10 && hi - lo < 0.004 && far < 0.010 + fabs(ppm) * 4e-6 && noise < 600 && worst_jump < 3e-4, what);
 }
 
 /* music_duck: down to a sixth with a time constant of 30 ms, no step a click would be, exactly there and back */
@@ -184,7 +186,7 @@ static void hold(void)
     char what[160];
     snprintf(what, sizeof what, "after a snap 4 s at -4.8 ms leave the drift alone (%+.0f -> %+.0f ppm), the rate catches up (%+.0f ppm)",
              before * 1e6, sv.drift * 1e6, (step - 1) * 1e6);
-    check(sv.drift == before && step - 1 > 900e-6, what);
+    check(sv.drift == before && step - 1 > 600e-6, what);
     for (int i = 0; i < 80; i++) rate_servo(&sv, -4800, dt);                   /* past the 5 s */
     check(sv.drift < before - 5e-6, "and after 5 s it learns again");
 }

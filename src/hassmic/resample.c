@@ -37,13 +37,17 @@ size_t rs_run(struct resampler *r, const int16_t *in, size_t frames, double step
     return n;
 }
 
-/* Gains from a simulation of the Echo Show 5's queue (20 ms slots, polled every 5 ms, 5 ms of jitter on top) with its
- * clock 350 ppm off, 2026-11-04: the drift learnt to 10 % within a minute (20 s the Show 5's way, its output slow), the
- * error swinging over 2 ms once it is (the frame nudging before: 5.3 ms, and 0.5 % rate jumps six times a second, even
- * with no drift at all: the noise crossed its 400 us threshold), the rate's own noise ~280 ppm rms (0.5 cent), below
- * 1 Hz: inaudible.  tests/unit/resample_test.c runs the same model. */
-#define SERVO_SMOOTH_S 0.25                     /* the error averaged over this long first */
-#define SERVO_KP 0.2                            /* per s: 1 ms early plays 200 ppm slower */
+/* Gains from the Echo Show 5 (2026-11-04, 10 min of Music Assistant's FLAC, chunks of ~96 ms): its queue, read in 20 ms
+ * slots that AudioTrack takes back in bursts, has the error swing +-4..7 ms from one reading to the next (the 0.25 s
+ * average the first build had), noise of ~10 ms a reading; its 10 s mean stayed within +-0.3 ms.  That average and a
+ * gain of 0.2/s turned it into a rate wobbling ~800 ppm rms at about 1 Hz (1.4 cents, below hearing, but needless; and
+ * the frame nudging before this ticked on the same swings).  A model with that noise, 15 min: averaged over 2 s and at
+ * 0.1/s the wobble is ~120 ppm rms (0.2 cent), the true error 0.7 ms rms, the integral's spread 17 ppm (51 before), a
+ * drift of 350 ppm learnt in ~2 min (kept: once per Echo), 3.4 ms off at worst meanwhile; 4 s at 0.05/s wobbles less
+ * still (36 ppm) but is 7.6 ms off while it unlearns a wrong saved drift.  The first build learnt the Show 5's clock
+ * at +-18 ppm of 0 (its frame nudging: +16..+54). */
+#define SERVO_SMOOTH_S 2.0                      /* the error averaged over this long first */
+#define SERVO_KP 0.1                            /* per s: 1 ms early plays 100 ppm slower */
 #define SERVO_KI (SERVO_KP * SERVO_KP / 4)      /* critically damped: the drift learnt without overshoot */
 #define RATE_MAX 0.005                          /* drift and error together: 0.5 % (8.6 cents), only while catching up */
 /* After a snap the error is what the snap missed by, not drift: on the Echo Show 5 -4.8 ms a second after a stream's

@@ -644,8 +644,8 @@ Run in this order. Each step says what it proves.
       system clock (its log: "nudged -170 frames" every 10 s, 2026-11-02): the frames skipped to catch up, up to 6 at one
       point, were a step in the waveform, a tick several times a second in quiet music. The PR resampled the whole 25 ms
       chunk instead (0.5 %, linear): no step, but the threshold loop stayed, a pitch blip of 8.6 cents for 25 ms every
-      ~0.36 s. Now the rate follows the drift (`resample.c`): a PI servo (error averaged over 0.25 s, Kp 0.2/s, Ki
-      Kp²/4, critically damped; drift held to ±2000 ppm, rate to ±0.5 %) steers a stereo cubic (Catmull-Rom) resampler
+      ~0.36 s. Now the rate follows the drift (`resample.c`): a PI servo (error averaged over 2 s, Kp 0.1/s, Ki
+      Kp²/4, critically damped; 0.25 s and 0.2/s until the Show 5's log below; drift held to ±2000 ppm, rate to ±0.5 %) steers a stereo cubic (Catmull-Rom) resampler
       that carries its position and last frames across chunks; the error counts where the next frame out lies
       (`rs_lag`). The drift learnt is kept across snaps and streams, one per route (the Echo's speaker, a Bluetooth
       one: another clock). The Bluetooth sink (a phone playing here) resamples through it too (was linear). A model of the Show 5's queue (20 ms slots,
@@ -671,8 +671,17 @@ Run in this order. Each step says what it proves.
       left had taken the integral from -127 to -328 ppm in 4 s: it is held for 5 s after every snap (`SERVO_HOLD_S`).
       `audio_file.c`'s `HASSMIC_FAKE_MUSIC_BURST_MS=137` (137 ms hidden at once as the output starts) reproduces it:
       without the prime `+137.0 ms off the schedule, resynced`, with it none; the test's tone is 8 s (learning after
-      the hold: -54 ppm saved). Still to see on the device: ~10 min of play, the rate settling near +350; the sink's
-      resampler (no PC test reaches the sink)
+      the hold: -54 ppm saved).
+      **Then 10.5 min of real MA on the Show 5 (2026.11.04.205835+dd75395):** primed, 89 ms taken at once, no resync at
+      all. Its clock is about right (the 350 ppm were the PR author's Show 5; this one's frame nudging said +16..+54
+      ppm): the -328 saved by the jolt unlearnt in ~2.5 min, then the integral within ±18 ppm of 0, the 10 s mean error
+      within ±0.3 ms. But the 0.25 s average of the error swung ±4..7 ms reading to reading (the queue read in slots
+      that AudioTrack takes back in bursts: ~10 ms of noise a reading, chunks of ~96 ms), and at 0.2/s the rate wobbled
+      ~800 ppm rms at about 1 Hz (1.4 cents; the old nudging ticked on the same swings). A model with that noise
+      (15 min): averaged over 2 s at 0.1/s (Ki Kp²/4) the wobble is ~120 ppm rms, the true error 0.7 ms rms, the
+      integral's spread 17 ppm (51), 350 ppm learnt in ~2 min, 3.4 ms off at worst meanwhile: now the gains. The unit
+      model runs 6 min; the PC test learns -15 ppm in its 8 s. Still to see on the device: the wobble's log at these
+      gains; the sink's resampler (no PC test reaches the sink)
 - [x] mDNS: init's `avahi-daemon` runs in SELinux domain `avahi-daemon`, which is denied read on `/data/misc/avahi/services`
       (so nothing was ever published, also not for Wyoming). `magiskpolicy` cannot parse a rule for a type with a hyphen →
       `boot.sh`/`run.sh` stop the init service and start avahi themselves in the `su` domain. Verified: answers queries from the PC.
