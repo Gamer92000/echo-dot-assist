@@ -947,6 +947,99 @@ function alarmEdit(a) {
   time.focus();
 }
 
+// ---------------------------------------------------------------- Clock & screen: the owner's apps (apps.c)
+
+// Apps installed beside the screen app (a YouTube client): its Home and switcher list them by themselves, but the
+// Echo's firewall keeps everything except hassmic off the internet, so each is let out here (root's lockdown.sh reads
+// the list and checks every name again).  Added from an APK file here or from the Echo Local integration (the same API:
+// pieces, then install, which root's apps.sh does with Android's pm).  Only on an Echo with Android: elsewhere the
+// card stays hidden
+const APK_PIECE = 262144;                                    // apps.h APPS_CHUNK
+let appsBox = null, appsMsg = null, appsBusy = false;
+function appsCard() {
+  appsBox = h('div'); appsMsg = h('p', { class: 'help' });
+  const file = h('input', { type: 'file', accept: '.apk,application/vnd.android.package-archive', class: 'hidden' });
+  const card = h('div', { class: 'card hidden', id: 'apps' },
+    cardHead('Apps', 'Apps you installed beside the screen app', 'box', h('div', { class: 'ringd-headbtns' },
+      h('button', { class: 'small', onclick: () => file.click() }, icon('up'), 'Add app…'), file),
+      'An app added here (an APK file: a 32-bit ARM build, armeabi-v7a, for Android 7.1) appears on the screen app\'s Home and in its switcher by itself; pull down from the middle of the top edge for the bar of apps and Home. The Echo\'s firewall keeps everything but hassmic on your own network, so an app reaches the internet only once its Internet switch is on here, and nothing on your network can reach an app until its Network switch is on (then only the ports that app itself listens on, from your own network: a DLNA renderer, a cast receiver). Amazon\'s own apps can never be. The Echo Local integration in Home Assistant can add and remove apps too.'),
+    appsBox, appsMsg);
+  file.onchange = () => { const f = file.files[0]; file.value = ''; if (f) apkAdd(f, card); };
+  loadApps(card).catch(() => {});
+  return card;
+}
+
+const apkState = (i) => i.state === 'ok' ? (i.package ? `Done: ${i.package}` : 'Done.') : i.state === 'failed' ? `Not done: ${i.error || 'Android refused it'}` : '';
+
+async function loadApps(card) {
+  const d = await (await echo.call('GET', '/api/apps')).json();
+  if (d.none) return d;
+  card.classList.remove('hidden');
+  const rows = d.apps.map((a) => {
+    // two switches: the internet (out) and the home network (in: issue #109, a DLNA renderer, a cast receiver)
+    const toggle = (kind, label, on) => {
+      const sw = h('input', { type: 'checkbox', role: 'switch', 'aria-label': `${label} for ${a.package}`, onchange: async () => {
+        try { await echo.call('POST', '/api/apps', `${kind} ${a.package} ${sw.checked ? 1 : 0}`); await loadApps(card); }
+        catch (e) { sw.checked = !sw.checked; toast(errText(e)); }
+      } });
+      sw.checked = on;
+      return h('label', { class: 'switch', title: label }, sw, h('span'));
+    };
+    const del = h('button', { class: 'icon-btn', title: 'Remove', 'aria-label': `Remove ${a.package}`, onclick: () => apkRemove(a.package, card) }, icon('trash'));
+    const what = [a.net ? 'may reach the internet' : 'kept off the internet', a.lan ? 'its ports open to your network' : 'its ports closed'].join(', ');
+    return infoRow(a.package, `${what[0].toUpperCase()}${what.slice(1)} · version ${a.version}`, null,
+      [del, h('span', { class: 'help' }, 'Internet'), toggle('net', 'Internet', a.net), h('span', { class: 'help' }, 'Open ports'), toggle('lan', 'Open ports: devices on your network may connect to this app', a.lan)]);
+  });
+  appsBox.replaceChildren(...(rows.length ? rows : [h('p', { class: 'help' }, 'No apps installed yet.')]));
+  if (!appsBusy) appsMsg.textContent = apkState(d.install || {});
+  return d;
+}
+
+// root installs or removes in the background (5 to 30 s): asked until it says
+async function apkWait(card) {
+  for (let i = 0; i < 90; i++) {
+    await sleep(1000);
+    const d = await loadApps(card);
+    const st = (d.install || {}).state;
+    if (st === 'ok' || st === 'failed') return d.install;
+  }
+  throw new Error('no answer from the Echo within 90 s');
+}
+
+async function apkAdd(f, card) {
+  if (appsBusy) return;
+  if (f.size > 200 * 1048576) { toast(`${f.name}: an APK of 200 MB at most`); return; }
+  appsBusy = true;
+  try {
+    appsMsg.textContent = `Reading ${f.name}…`;
+    const all = new Uint8Array(await f.arrayBuffer());
+    if (all[0] !== 0x50 || all[1] !== 0x4b) throw new Error(`${f.name} is not an APK (no zip)`);
+    appsMsg.textContent = 'Checking it…'; await sleep(30);
+    const digest = hex(blake2b(32, null, all));
+    for (let off = 0; off < all.length; off += APK_PIECE) {
+      appsMsg.textContent = `Sending ${f.name}: ${Math.floor(off * 100 / all.length)} %`;
+      await echo.call('POST', `/api/apps/apk/${off}`, all.subarray(off, off + APK_PIECE));
+    }
+    appsMsg.textContent = 'Installing… (up to half a minute)';
+    await echo.call('POST', '/api/apps/apk/install', `${all.length} ${digest}`);
+    const r = await apkWait(card);
+    appsMsg.textContent = apkState(r);
+    if (r.state === 'ok') toast(r.package ? `${r.package} installed: switch on its internet below if it needs it` : 'Installed');
+  } catch (e) { appsMsg.textContent = ''; toast(errText(e)); }
+  appsBusy = false;
+}
+
+async function apkRemove(pkg, card) {
+  if (appsBusy || !await ask({ title: `Remove ${pkg}?`, ok: 'Remove', danger: true, body: 'The app and everything it keeps on this Echo are deleted.' })) return;
+  appsBusy = true;
+  try {
+    appsMsg.textContent = `Removing ${pkg}…`;
+    await echo.call('POST', '/api/apps/uninstall', pkg);
+    appsMsg.textContent = apkState(await apkWait(card));
+  } catch (e) { appsMsg.textContent = ''; toast(errText(e)); }
+  appsBusy = false;
+}
+
 function soundsCard() {
   sndCtl = { tiles: new Map(), all: h('button', { class: 'small', onclick: () => soundsAll(sndCtl.all.dataset.to) }) };
   const have = new Map((state.sounds || []).map((s) => [s.id, s]));
@@ -1265,7 +1358,7 @@ const PAGE_BUILD = {
     el.append(flow(cards));
   },
   lights: (el, list) => { el.append(flow(settingCards(list, 'lights'))); buildRing(el); },
-  screen: (el, list) => el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.map(settingRow))])),   // ring.js: the designs and where they show
+  screen: (el, list) => el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.map(settingRow)), appsCard()])),   // the home app, then the owner's apps
   clock: (el, list) => { el.append(h('div', { class: 'alarms-wrap' }, alarmsCard())); el.append(flow(settingCards(list, 'clock'))); },
   media: (el, list) => {
     const parent = (k) => (HELP[k.name] || {}).parent, plain = list.filter((x) => !x.feature && !parent(x));

@@ -2296,6 +2296,17 @@ Run in this order. Each step says what it proves.
       and options flow (kiosk.py: a user and a long-lived token per Echo, sealed for it), tests/ha_real_kiosk.py,
       tests/ha_real_panel.py (headless Chrome, laptop and phone widths).  Tried on an Echo Show 5: the drawer over an
       app from the top's middle with no event reaching Android; taps there reach the app.
+- [x] The owner's apps on an Echo Show (2026-11-03; issue #109).  `apps.c`: the installed ones from packages.xml
+      (an app in /data/app, no shared uid, no update of a system app), `state/apps` lines "net <package>" (may reach the
+      internet) and "lan <package>" (may be reached from the home network); an APK sent in pieces (`/api/apps/apk/<off>`,
+      262144 bytes each) into state/apps-staged.apk, checked whole (size, BLAKE2b) and handed to root
+      (`state/apps-request`), whose `scripts/device/apps.sh` installs it with pm as the daemon's user reads it (runas),
+      or removes an app; never the home app (state/screen_home) nor one of Amazon's.  `lockdown.sh`: `app_uids` (each
+      package checked again against PackageManager's record) let out by uid in `hassmic_out`; `hassmic_in`, the
+      app's listening TCP and bound UDP sockets from /proc/net (followed when they move), from private and link-local
+      sources only, never below 1024.  The settings page's Screen page: the Apps card; Echo
+      Local: apps.py, the panel's Apps tab, the action install_apk.  tests/fake_web_apps.py, tests/unit/apps_test.c,
+      tests/unit/lockdown_test.py (the rules as they would load, against stand-in tables).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
 - [x] Drop In between Echos (2026-10-08, asked by a user with ten Echos who used Alexa's as an intercom). `dropin.c`:
       calls signed on the arbitration network (new arb type `T_MSG`, `arb_tell`, broadcast like the rest, repeated:

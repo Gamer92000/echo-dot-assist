@@ -590,6 +590,16 @@ login. An Echo Local entry added anew (after removing the old one) takes over th
 sends it with a login of its own. With Echo-Wall as the app and its integration installed, a *Home* tab beside
 *Screen* arranges its Home (Echo-Wall's own panel).
 
+**Apps** (Echo Shows): the settings page's Screen page and Echo Local's *Apps* tab list the Android apps you
+installed beside the home app (a YouTube client such as NewPipe), each with an **Internet** switch (the Echo keeps
+every app off the internet until you allow it), an **Open ports** switch (the Echo keeps everything on your network
+away from an app until you allow it; then only the ports that app listens on, from your own network: a DLNA renderer
+that phones play to, a cast receiver) and **Remove**. **Add an app**: an APK from your computer, or a file Home
+Assistant can read (`/config/www/app.apk`); it must be built for 32-bit ARM (armeabi-v7a) and Android 7.1 on the Echo
+Show 5; Android's reason is shown when it refuses one. The action `echo_local.install_apk` (device, path) does the same
+from an automation. New apps show in the drawer's row by themselves. Where the Echo has no working keyboard, the home
+app's (Echo-Wall ships one) becomes the one in use.
+
 A ringing timer or alarm shows over the home app as it does over any app (the face with Stop), unless the app draws it
 itself (Echo-Wall draws a request's words and a ring in its own look; a tap on its ring snoozes, a hold stops). The
 Echo reaches local addresses only, so Home Assistant's address for it is its local one (the Screen tab shows which;

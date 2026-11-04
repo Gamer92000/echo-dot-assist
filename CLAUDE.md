@@ -73,9 +73,10 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # custom component): HA's STT stream ends with it, intent and reply follow
 .venv/bin/python tests/ha_real_alarms.py      # custom_components/echo_local (alarms integration and card) in a real HA
 .venv/bin/python tests/ha_real_kiosk.py       # the Echo Show's kiosk set up from the integration: user, token, screens
-.venv/bin/python tests/ha_real_panel.py       # the sidebar panel (panel.py): the Echos, the screen's options set and
-                                             # pushed, the kiosk user kept out, adopt, the panel's Screen tab in headless
-                                             # Chrome at a laptop's and a phone's width (build/test-logs/panel*.png)
+.venv/bin/python tests/ha_real_panel.py       # the sidebar panel (panel.py, apps.py): the Echos, the screen's options set
+                                             # and pushed, the kiosk user kept out, the Echo Show's apps (upload, install,
+                                             # remove), adopt, the panel's Screen and Apps tabs in headless Chrome
+                                             # (build/test-logs/panel*.png)
 .venv/bin/python tests/ha_real_dropin.py      # the blueprint in a real Home Assistant (build/ha-venv, made by --setup;
                                              # skips without it) with four Echos, one the released build: replies, timing.
                                              # All of it in an `unshare -rn` namespace with only lo
@@ -659,7 +660,9 @@ Firewall invariant: Amazon's daemons may only reach local addresses; hassmic its
 TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get out. Inbound TCP and UDP are only admitted on
 16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 OTA, 28931 settings page, UDP 28930 arbitration)
 must stay in that range (UDP 28932 Drop In too). Exceptions: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
-`state/config` says `arbitration_mode=kiosk` (`kiosk_state`), and, where device.conf has `KIOSK_PACKAGE` (and the board `kiosk`, for the settings), the app's own TCP 2324 and 6053 from private addresses while it is installed; its uid may also reach the internet unless `kiosk_internet` is off (`KSUID`). Ping (ICMP echo request) is admitted from the private
+`state/config` says `arbitration_mode=kiosk` (`kiosk_state`), and, where device.conf has `KIOSK_PACKAGE` (and the board `kiosk`, for the settings), the app's own TCP 2324 and 6053 from private addresses while it is installed; its uid may also reach the internet unless `kiosk_internet` is off (`KSUID`); and on the Shows the ports of any other app of the owner's whose
+"Open ports" is on (`state/apps` `lan <package>`, `lockdown.sh` `lan_ports`/`rules_in`: chain `hassmic_in`, the app's uid's
+listening TCP and bound UDP sockets from `/proc/net`, from private and link-local sources only; issue #109). Ping (ICMP echo request) is admitted from the private
 and link-local ranges of `LOCAL4` only. A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`
 prints it.
 

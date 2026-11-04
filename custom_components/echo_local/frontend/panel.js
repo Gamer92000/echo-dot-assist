@@ -3,6 +3,7 @@
 //   - left: the Echos (config entries of echo_local)
 //   - "Screen": the home app's options (kiosk.py, panel.py), which the options flow also sets: the home app (any
 //     package; the settings page's Screen page sets the same), Home Assistant in it or not, its screens, its settings
+//   - "Apps": the owner's Android apps on an Echo Show (apps.py): the internet for each, remove, add an APK
 //
 // A home screen app arranges its Home itself: Echo-Wall has an integration of its own with its own panel
 // (Nt-f/Echo-Wall).  Only Home Assistant's websocket (this.hass.connection).  Plain custom element, no build step.
@@ -202,7 +203,7 @@ class EchoLocalPanel extends HTMLElement {
   set narrow(n) { this.toggleAttribute('narrow', !!n); this._narrow = !!n; if (this._wall) this._wall.narrow = !!n; }
 
   connectedCallback() { this.render(); }
-  disconnectedCallback() { if (this._wall && this._wall.release) this._wall.release(); this._wall = null; }
+  disconnectedCallback() { clearTimeout(this._appsPoll); if (this._wall && this._wall.release) this._wall.release(); this._wall = null; }
 
   ws(msg) { return this._hass.connection.sendMessagePromise(msg); }
   echoInfo(node = this.echo) { return this.state.echos.find((e) => e.echo === node); }
@@ -229,6 +230,7 @@ class EchoLocalPanel extends HTMLElement {
     this.kiosk = null;
     this.apps = null;
     this.loadKiosk();
+    this.loadApps();                        // whether it has apps at all (an Echo Dot has none): the tab follows
     this.render();
   }
 
@@ -293,12 +295,14 @@ class EchoLocalPanel extends HTMLElement {
     const main = this.shadowRoot.querySelector('main'); if (!main) return;
     main.textContent = '';
     if (!this.echoInfo()) { main.append(h('div', { class: 'empty' }, 'Add an Echo to Echo Local first.')); return; }
+    const hasApps = !(this.apps && this.apps.none);
     const hasHome = this.echoInfo().app === WALL;
-    if (this.tab === 'home' && !hasHome) this.tab = 'screen';
+    if ((this.tab === 'apps' && !hasApps) || (this.tab === 'home' && !hasHome)) this.tab = 'screen';
     main.append(h('div', { class: 'tabs' },
       h('button', { class: 'tab' + (this.tab === 'screen' ? ' sel' : ''), onclick: () => { this.tab = 'screen'; if (!this.kiosk) this.loadKiosk(); this.render(); } }, 'Screen'),
-      hasHome && h('button', { class: 'tab' + (this.tab === 'home' ? ' sel' : ''), onclick: () => { this.tab = 'home'; this.render(); } }, 'Home')));
-    main.append(this.tab === 'home' ? this.homeTab() : this.screenTab());
+      hasHome && h('button', { class: 'tab' + (this.tab === 'home' ? ' sel' : ''), onclick: () => { this.tab = 'home'; this.render(); } }, 'Home'),
+      hasApps && h('button', { class: 'tab' + (this.tab === 'apps' ? ' sel' : ''), onclick: () => { this.tab = 'apps'; this.loadApps(); this.render(); } }, 'Apps')));
+    main.append(this.tab === 'apps' ? this.appsTab() : this.tab === 'home' ? this.homeTab() : this.screenTab());
   }
 
   // ---------------------------------------------------------------- the Home tab: Echo-Wall's panel, for this Echo
@@ -339,6 +343,127 @@ class EchoLocalPanel extends HTMLElement {
     const i = h('input', { type: 'checkbox', checked: on });
     i.addEventListener('change', () => cb(i.checked));
     return h('label', { class: 'switch' }, i, h('span'));
+  }
+
+  // what Echo-Wall picks itself (a thermostat, a camera, scenes, locks): a start for a list of one's own
+
+  async loadApps() {
+    const echo = this.echo;
+    try {
+      const r = await this.ws({ type: 'echo_local/apps/list', echo });
+      if (echo !== this.echo) return;
+      this.apps = r;
+      if (this.tab === 'apps') { const t = this.shadowRoot.querySelector('.appstab'); if (t) t.replaceWith(this.appsTab()); else this.render(); }
+      else if (this.tab === 'screen' && !r.none && this.kiosk && !this.kiosk.error) this.render();   // its app list offers them
+      else if (r.none) {               // no Apps tab on an Echo Dot; nothing else redrawn (the preview would load again)
+        const b = [...this.shadowRoot.querySelectorAll('.tab')].find((x) => x.textContent === 'Apps'); if (b) b.remove();
+      }
+    } catch (e) {
+      if (echo === this.echo) { this.apps = { error: (e && e.message) || String(e), apps: [] }; if (this.tab === 'apps') this.render(); }
+    }
+    // an install or removal under way: asked again every second until it is done
+    const busy = this.apps && ((this.apps.send || {}).state === 'sending' || ['receiving', 'installing', 'removing'].includes((this.apps.install || {}).state)
+      || this.uploading);
+    clearTimeout(this._appsPoll);
+    if (busy && echo === this.echo) this._appsPoll = setTimeout(() => this.loadApps(), 1000);
+  }
+
+  appsTab() {
+    const a = this.apps;
+    const box = h('div', { class: 'appstab' });
+    if (!a) { box.append(h('div', { class: 'empty' }, 'Loading…')); return box; }
+    if (a.error) { box.append(h('div', { class: 'banner' }, 'The Echo did not answer: ' + a.error)); return box; }
+    if (a.none) { box.append(h('div', { class: 'empty' }, 'This Echo has no Android apps.')); return box; }
+    const screenApp = (this.echoInfo() || {}).app || '';
+    const st = a.install || {}, send = a.send || {};
+    const busy = send.state === 'sending' || ['receiving', 'installing', 'removing'].includes(st.state) || this.uploading;
+
+    const list = h('div', { class: 'list' });
+    if (!a.apps.length) list.append(h('div', { class: 'empty' }, 'None yet: add one below.'));
+    for (const app of a.apps.slice().sort((x, y) => x.package.localeCompare(y.package))) {
+      const isScreen = app.package === screenApp;
+      list.append(h('div', { class: 'item app' },
+        h('div', { class: 'nm' }, h('div', null, app.package),
+          h('div', { class: 'id' }, `version ${app.version}` + (isScreen ? ' · the home app' : ''))),
+        h('span', { class: 'note' }, 'Internet'),
+        this.switch(!!app.net, async (on) => {
+          try { await this.ws({ type: 'echo_local/apps/net', echo: this.echo, package: app.package, on }); app.net = on; this.toast(`${app.package}: ${on ? 'may reach the internet' : 'kept off the internet'}`); }
+          catch (e) { this.toast('Not changed: ' + ((e && e.message) || e)); this.loadApps(); }
+        }),
+        h('span', { class: 'note', title: 'Open ports: devices on your own network may connect to the ports this app listens on (a DLNA renderer that phones play to, a cast receiver). Off: nothing on your network reaches it.' }, 'Open ports'),
+        this.switch(!!app.lan, async (on) => {
+          try { await this.ws({ type: 'echo_local/apps/lan', echo: this.echo, package: app.package, on }); app.lan = on; this.toast(`${app.package}: ${on ? 'its ports open to your network' : 'its ports closed'}`); }
+          catch (e) { this.toast('Not changed: ' + ((e && e.message) || e)); this.loadApps(); }
+        }),
+        h('button', { class: 'btn small danger', disabled: isScreen || busy, title: isScreen ? 'The home app: pick another one on the Screen tab first' : '', onclick: async () => {
+          if (!confirm(`Remove ${app.package} from the Echo? Its data goes with it.`)) return;
+          try { await this.ws({ type: 'echo_local/apps/uninstall', echo: this.echo, package: app.package }); this.loadApps(); }
+          catch (e) { this.toast('Not removed: ' + ((e && e.message) || e)); }
+        } }, 'Remove')));
+    }
+
+    // add: an APK from this computer (uploaded to Home Assistant, then sent on) or from a folder Home Assistant reads
+    const file = h('input', { type: 'file', accept: '.apk,application/vnd.android.package-archive' });
+    const path = h('input', { type: 'text', placeholder: '/config/www/app.apk', style: 'min-width:260px' });
+    const status = h('div');
+    let pct = null, msg = '', cls = '';
+    if (this.uploading) { pct = this.uploading.pct; msg = `Uploading to Home Assistant… ${Math.round(this.uploading.pct)} %`; }
+    else if (send.state === 'sending') { pct = send.size ? 100 * send.sent / send.size : 0; msg = `Sending ${send.name || 'the APK'} to the Echo… ${Math.round(pct)} %`; }
+    else if (send.state === 'failed') { msg = 'Not sent to the Echo: ' + send.error; cls = 'bad'; }
+    else if (send.op === 'uninstall' && (st.state === 'installing' || st.state === 'receiving')) { msg = `Removing ${send.package}…`; }
+    else if (send.op === 'uninstall' && st.state === 'ok') { msg = `Removed ${send.package}.`; cls = 'good'; }
+    else if (st.state === 'receiving' || st.state === 'installing') { msg = 'Installing on the Echo…'; }
+    else if (st.state === 'ok' && st.package) { msg = `Installed ${st.package}. It is off the internet until you switch it on above.`; cls = 'good'; }
+    else if (st.state === 'failed') {
+      msg = (send.op === 'uninstall' ? `${send.package} not removed: ` : 'Android refused it: ') + (st.error || 'no reason given');
+      if (/NO_MATCHING_ABIS/.test(st.error || '')) msg += ' (the Echo Show runs 32-bit ARM apps: armeabi-v7a)';
+      if (/OLDER_SDK|MIN_SDK/.test(st.error || '')) msg += ' (the app needs a newer Android than the Echo has: 7.1 on the Show 5)';
+      if (/UPDATE_INCOMPATIBLE/.test(st.error || '')) msg += ' (signed by someone else than the installed one: remove it first)';
+      cls = 'bad';
+    }
+    if (msg) status.append(h('div', { class: 'inst ' + cls }, msg));
+    if (pct != null) status.append(h('div', { class: 'prog' }, h('div', { style: `width:${Math.max(2, pct)}%` })));
+
+    const upload = () => {
+      const f = file.files[0]; if (!f) { this.toast('Pick an APK first'); return; }
+      if (f.size > 200 * 1024 * 1024) { this.toast('An APK is 200 MB at most'); return; }
+      const xhr = new XMLHttpRequest();
+      const echo = this.echo;
+      this.uploading = { pct: 0 };
+      xhr.upload.onprogress = (ev) => { if (ev.lengthComputable && this.uploading) { this.uploading.pct = 100 * ev.loaded / ev.total; const t = this.shadowRoot.querySelector('.appstab'); if (t && this.tab === 'apps') t.replaceWith(this.appsTab()); } };
+      xhr.onloadend = () => {
+        this.uploading = null;
+        if (xhr.status !== 200) { let m = xhr.statusText; try { m = JSON.parse(xhr.responseText).message || m; } catch (e) { /* not JSON */ } this.toast('Not uploaded: ' + (m || 'no answer')); }
+        if (echo === this.echo) this.loadApps();
+      };
+      (async () => {
+        const auth = this._hass.auth; if (auth.expired) await auth.refreshAccessToken();
+        xhr.open('POST', `/api/echo_local/apk/${encodeURIComponent(echo)}`);
+        xhr.setRequestHeader('Authorization', 'Bearer ' + auth.accessToken);
+        xhr.setRequestHeader('Content-Type', 'application/vnd.android.package-archive');
+        xhr.send(f);
+        this.loadApps();
+      })();
+    };
+    const fromPath = async () => {
+      const v = path.value.trim(); if (!v) return;
+      try { await this.ws({ type: 'echo_local/apps/install', echo: this.echo, path: v }); this.loadApps(); }
+      catch (e) { this.toast('Not installed: ' + ((e && e.message) || e)); }
+    };
+
+    box.append(h('div', { class: 'grid' },
+      h('div', { class: 'card' }, h('h2', null, 'Apps on this Echo'),
+        h('div', { class: 'about' }, 'The apps you installed beside the home app (not Amazon’s or Android’s own). Each shows in the drawer pulled down from the top of the screen. The Echo keeps every app off the internet until you switch its Internet on, and nothing on your network reaches it until you switch its Open ports on (then only the ports it listens on, from your own network).'),
+        list, h('div', { style: 'height:12px' })),
+      h('div', { class: 'card' }, h('h2', null, 'Add an app'),
+        h('div', { class: 'about' }, 'An APK built for 32-bit ARM (armeabi-v7a) and Android 7.1 (the Echo Show 5); up to 200 MB. Installing an app that is there already updates it (same signature).'),
+        h('div', { class: 'row' }, h('div', { class: 'head' }, h('span', { class: 'name' }, 'From this computer')),
+          h('div', { class: 'add' }, file, h('button', { class: 'btn primary', disabled: busy, onclick: upload }, 'Install'))),
+        h('div', { class: 'row' }, h('div', { class: 'head' }, h('span', { class: 'name' }, 'From a file on Home Assistant')),
+          h('div', { class: 'help' }, 'A path in a folder Home Assistant may read (allowlist_external_dirs: /config, /media).'),
+          h('div', { class: 'add' }, path, h('button', { class: 'btn', disabled: busy, onclick: fromPath }, 'Install'))),
+        status)));
+    return box;
   }
 
   screenTab() {

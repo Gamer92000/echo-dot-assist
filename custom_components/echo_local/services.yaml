@@ -59,3 +59,15 @@ stop:
       selector:
         device:
           integration: echo_local
+install_apk:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: echo_local
+    path:
+      required: true
+      example: /config/www/newpipe.apk
+      selector:
+        text:

@@ -23,7 +23,7 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import DEFAULT_PORT, Echo, EchoAuthError, EchoError
-from . import kiosk, panel
+from . import apps, kiosk, panel
 from .const import CARD_URL, CONF_KEY, DAY_KEYS, DOMAIN, PANEL_PATH, PANEL_URL, SCAN_INTERVAL_S
 
 _LOGGER = logging.getLogger(__name__)
@@ -77,11 +77,12 @@ class EchoLocalCoordinator(DataUpdateCoordinator[dict]):
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # the dashboard card, served from here and loaded on every dashboard
     await panel.async_setup(hass)         # the sidebar panel's commands: the Echos, their screen's setup
+    await apps.async_setup(hass)          # the owner's Android apps on an Echo Show: list, internet, add, remove
     fe = Path(__file__).parent / "frontend"
     # the card and the panel: no login to fetch them (only code), the panel's data then over the websocket with its login
     await hass.http.async_register_static_paths([StaticPathConfig(CARD_URL, str(fe / "echo-local-alarms-card.js"), False),
                                                  StaticPathConfig(PANEL_URL, str(fe / "panel.js"), False)])
-    # the sidebar's "Echo Local": every Echo Show's screen (which app, which pages; frontend/panel.js);
+    # the sidebar's "Echo Local": every Echo Show's screen (which pages, which app) and its Android apps (frontend/panel.js);
     # administrators only, as the options it changes are.  A home screen app arranges its Home itself (Echo-Wall: its
     # own integration)
     from homeassistant.components import panel_custom

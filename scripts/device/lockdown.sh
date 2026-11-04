@@ -87,6 +87,76 @@ update_uid() {
     for p in $UPDATE_PACKAGES; do sed -n "s/^$p \([0-9][0-9]*\) .*/\1/p" /data/system/packages.list 2>/dev/null; done | head -1
 }
 
+# Apps of the owner's that may reach the internet (the settings page: hassmic's src/hassmic/apps.c writes "net
+# <package>" lines into state/apps), as their uids, sorted: an app the screen app starts (a video client) fetches nothing
+# from behind the lock otherwise.  hassmic's file is only a wish: each name is checked here against PackageManager's own
+# record as apps.c does, and only an app installed into /data/app, no update of a system app (publicFlags bit 1), with
+# a uid of its own from 10000 to 19999 (not sharedUserId: system's 1000 is hassmic's and the daemons') is let out.
+# Amazon's apps live in /system, so the lock on them stands.  Read on every look (DNS's way): a reinstall changes a uid.
+# "lan <package>" lines (app_uids lan) are the apps the home network may reach (issue #109): see lan_ports.
+APPS_FILE=${LOCKDOWN_APPS:-/data/local/hassmic/state/apps}     # LOCKDOWN_*: tests/unit/lockdown_test.py's stand-ins
+PKGXML=${LOCKDOWN_PACKAGES_XML:-/data/system/packages.xml}
+PROCNET=${LOCKDOWN_PROC_NET:-/proc/net}
+app_uids() {
+    kind=${1:-net}
+    [ -f $APPS_FILE ] && [ ! -L $APPS_FILE ] && [ -f $PKGXML ] || return 0
+    n=0
+    while read -r k p; do
+        [ "$k" = "$kind" ] || continue
+        n=$((n + 1)); [ $n -le 32 ] || break
+        case "$p" in ''|.*|*.|*..*|*[!A-Za-z0-9_.]*) continue;; esac
+        [ ${#p} -le 150 ] || continue
+        l=$(grep -m1 -F "<package name=\"$p\" " $PKGXML) || continue
+        case "$l" in *' codePath="/data/app/'*) ;; *) continue;; esac
+        case "$l" in *' sharedUserId='*) continue;; esac
+        f=${l#*' publicFlags="'}; f=${f%%'"'*}
+        case "$f" in ''|*[!0-9-]*) continue;; esac
+        [ $((f & 1)) = 0 ] || continue
+        u=${l#*' userId="'}; u=${u%%'"'*}
+        case "$u" in 1[0-9][0-9][0-9][0-9]) echo $u;; esac
+    done < $APPS_FILE | sort -un
+}
+
+# Apps the home network may reach (issue #109: Kiosk Satellite's DLNA renderer, a cast receiver): the ports their uids
+# listen on now, "tcp <port>" / "udp <port>" lines, sorted.  INPUT cannot match a socket's owner (-m owner is OUTPUT's),
+# so the kernel's own tables say which ports are theirs: /proc/net/tcp* (state 0A, listening) and /proc/net/udp* (07,
+# bound), the uid in the 8th column, the port in hex after the local address.  So a port that moves (the renderer takes
+# the next free one after the app's own, 2326 or 2327) is followed within the watcher's 5 s, UDP 1900 (SSDP) is open
+# only while such an app holds it, and nothing of Amazon's is ever admitted this way (their uids are never in the list).
+# Ports below 1024 never (apps cannot bind them), nor 5353 and 16384-32767 (admitted for everyone already).  At most 64.
+lan_ports() {
+    [ -n "$LANS" ] || return 0
+    for f in $PROCNET/tcp $PROCNET/tcp6 $PROCNET/udp $PROCNET/udp6; do
+        [ -r $f ] || continue
+        pr=${f##*/}; pr=${pr%6}; want=0A; [ $pr = udp ] && want=07
+        while read -r sl loc rem st q tr rt uid rest; do
+            [ "$st" = $want ] || continue
+            case " $LANS " in *" $uid "*) ;; *) continue;; esac
+            h=${loc##*:}
+            case "$h" in ''|*[!0-9A-Fa-f]*) continue;; esac
+            port=$((16#$h))
+            [ $port -ge 1024 ] && [ $port -ne 5353 ] || continue
+            [ $port -ge 16384 ] && [ $port -le 32767 ] && continue
+            echo "$pr $port"
+        done < $f
+    done | sort -u | head -64
+}
+
+# INPUT's chain for them, for $1 = iptables or ip6tables, as rules() is for hassmic_out: from the private and
+# link-local ranges only (never from a multicast or broadcast address; a search sent to 239.255.255.250 comes from the
+# controller's own private one), to the ports lan_ports found
+rules_in() {
+    [ -z "$OTA_ONLY" ] || return 0
+    if [ $1 = iptables ]; then loc=$LOCAL4; else loc=$LOCAL6; fi
+    echo "$LANP" | while read -r pr port; do
+        [ -n "$port" ] || continue
+        for d in $loc; do
+            case $d in 224.*|255.*|ff*) continue;; esac
+            echo "-A hassmic_in -s $d -i $WLAN -p $pr -m $pr --dport $port -j ACCEPT"
+        done
+    done
+}
+
 # The chain as it has to be, for $1 = iptables or ip6tables: one rule per line, worded as "iptables -S" prints it (a
 # length on every address, "-m udp" after "-p udp", the updaters' user as a number), because the check compares that
 # text.  The chain is loaded from this list and checked against it.
@@ -101,6 +171,7 @@ rules() {
     done
     [ -n "$KSUID" ] && echo "-A hassmic_out -m owner --uid-owner $KSUID -j RETURN"
     echo "-A hassmic_out -m owner --gid-owner $NET_GID -j RETURN"
+    for u in $APPS; do echo "-A hassmic_out -m owner --uid-owner $u -j RETURN"; done
     echo "-A hassmic_out -j DROP"
 }
 
@@ -114,6 +185,7 @@ keep() {
     echo "-A OUTPUT -o $WLAN -j ACCEPT"                 # the chain only hands on what may pass: this lets it out
     echo "-A OUTPUT -o lo -j ACCEPT"
     echo "-A INPUT -i lo -j ACCEPT"
+    echo "-A INPUT -i $WLAN -j hassmic_in"             # the apps the home network may reach (rules_in, lan_ports)
     for p in tcp udp; do echo "-A INPUT -i $WLAN -p $p -m state --state RELATED,ESTABLISHED -j ACCEPT"; done   # answers to us
     if [ $1 = iptables ]; then
         # every port hassmic listens on is in this range (ESPHome, Wyoming, Sendspin, push updates, arbitration)
@@ -213,8 +285,9 @@ adb_gate() {
 load_once() {
     all=$($1 -w -S 2>/dev/null)
     in=$(
-        echo "*filter"; echo ":INPUT DROP [0:0]"; echo ":hassmic_out - [0:0]"
+        echo "*filter"; echo ":INPUT DROP [0:0]"; echo ":hassmic_out - [0:0]"; echo ":hassmic_in - [0:0]"
         rules $1
+        rules_in $1
         echo "$all" | while read -r r; do [ "$r" = "-A OUTPUT -j hassmic_out" ] && echo "-D OUTPUT -j hassmic_out"; done
         echo "-I OUTPUT 1 -j hassmic_out"
         missing $1 "$all"
@@ -230,6 +303,9 @@ load_once() {
 load_each() {
     $1 -w -N hassmic_out 2>/dev/null
     $1 -w -F hassmic_out
+    $1 -w -N hassmic_in 2>/dev/null
+    $1 -w -F hassmic_in
+    rules_in $1 | while read -r r; do $1 -w $r || echo "!! rule not loaded ($1): $r"; done
     rules $1 | while read -r r; do
         $1 -w $r || case "$r" in
             "-A hassmic_out -m owner --uid-owner $KSUID -j RETURN") echo "!! Kiosk Satellite limited to local addresses ($1)";;
@@ -248,7 +324,7 @@ load_each() {
 }
 load() { load_once $1 2>/dev/null || load_once $1 || { echo "!! $1-restore failed twice: loading rule by rule"; load_each $1; }; }
 apply() {
-    DNS=$(resolvers); kiosk_state
+    DNS=$(resolvers); APPS=$(app_uids); LANS=$(app_uids lan); LANP=$(lan_ports); kiosk_state
     load iptables
     if [ -n "$HAVE6" ]; then load ip6tables; else v6off; fi
     # adbd last, and a second later in the background: its restart ends every adb shell, the one running this script
@@ -267,6 +343,8 @@ wrong() {
     kiosk_state
     for t in iptables ${HAVE6:+ip6tables}; do
         [ "$($t -w -S hassmic_out 2>/dev/null)" = "-N hassmic_out$NL$(rules $t)" ] || { echo "$t: hassmic_out is not as loaded"; return 1; }
+        ri=$(rules_in $t)
+        [ "$($t -w -S hassmic_in 2>/dev/null)" = "-N hassmic_in${ri:+$NL$ri}" ] || { echo "$t: hassmic_in is not as loaded"; return 1; }
         o=$($t -w -S OUTPUT 2>/dev/null)                   # policy line, then its rules (cutting them out of the whole
         case "${o#*"$NL"}$NL" in "-A OUTPUT -j hassmic_out$NL"*) ;; *) echo "$t: hassmic_out is not first in OUTPUT"; return 1;; esac   # listing took mksh 0.9 s)
         all=$($t -w -S 2>/dev/null)
@@ -284,7 +362,9 @@ wrong() {
 ota_off() { for s in $UPDATE_SERVICES $UPDATE_ONDEMAND; do stop $s 2>/dev/null; done; }
 
 OTA_ONLY=; [ "$1" = ota-only ] && { OTA_ONLY=1; shift; }
-[ "$1" = check ] && { DNS=$(resolvers); adb_state; wrong; exit; }
+[ "$1" = check ] && { DNS=$(resolvers); APPS=$(app_uids); LANS=$(app_uids lan); LANP=$(lan_ports); adb_state; wrong; exit; }
+# tests: the chains as they would be loaded, changing nothing (tests/unit/lockdown_test.py)
+[ "$1" = print ] && { DNS=; APPS=$(app_uids); LANS=$(app_uids lan); LANP=$(lan_ports); rules iptables; rules_in iptables; keep iptables; exit 0; }
 # A request left from before a reboot is not one: the window would open at boot with nobody asking.
 [ "$1" = watch ] && rm -f $ADB_REQ
 
@@ -314,6 +394,9 @@ echo "egress limited to local addresses$([ -n "$HAVE6" ] || echo ", IPv6 off (no
     [ -n "$HAVE6" ] || v6off                        # an interface that comes up later starts with IPv6 on
     if adb_gate; then apply                         # says so itself
     elif [ "$(resolvers)" != "$DNS" ]; then apply; echo "lockdown re-applied, resolvers:" $DNS
+    elif [ "$(app_uids)" != "$APPS" ]; then apply; echo "lockdown re-applied, apps let out (uids):" ${APPS:-none}
+    elif [ "$(app_uids lan)" != "$LANS" ] || { [ -n "$LANS" ] && [ "$(lan_ports)" != "$LANP" ]; }; then
+        apply; echo "lockdown re-applied, apps the home network reaches (uids):" ${LANS:-none} "ports:" $(echo "$LANP" | tr '\n' ' ')
     elif ! w=$(wrong); then apply; echo "lockdown re-applied ($w)"; fi
 done
 exit 0

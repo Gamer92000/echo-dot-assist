@@ -148,6 +148,47 @@ class Echo:
             lines.append(f"app {app}")
         await self.call("POST", "/api/kiosk", ("\n".join(lines) + "\n").encode(), ctr=ctr)
 
+    # ---------------------------------------------------------------- the owner's Android apps (apps.c, /api/apps)
+
+    APK_PIECE = 262144                  # web.c takes at most this much a request (413 above it)
+
+    async def apps(self) -> dict:
+        """{"apps": [{package, version, net}], "install": {state, package, error, have}}; {"apps": [], "none": true}
+        where the Echo has no Android (the Dots)"""
+        return json.loads(await self.call("GET", "/api/apps"))
+
+    async def app_net(self, package: str, on: bool) -> None:
+        await self.call("POST", "/api/apps", f"net {package} {1 if on else 0}".encode())
+
+    async def app_lan(self, package: str, on: bool) -> None:
+        """the app reachable from the home network: the ports it listens on, from private addresses (issue #109)"""
+        await self.call("POST", "/api/apps", f"lan {package} {1 if on else 0}".encode())
+
+    async def apk_send(self, path: str, progress=None) -> tuple[int, str]:
+        """an APK sent in pieces from offset 0 (a new upload: an earlier one dropped), read from the file as it goes
+        (up to 200 MB: not held in memory); its size and BLAKE2b-256, which the install names"""
+        import asyncio, hashlib
+        h, off = hashlib.blake2b(digest_size=32), 0
+        loop = asyncio.get_running_loop()
+        with open(path, "rb") as f:
+            while True:
+                piece = await loop.run_in_executor(None, f.read, self.APK_PIECE)
+                if not piece:
+                    break
+                h.update(piece)
+                await self.call("POST", f"/api/apps/apk/{off}", piece)
+                off += len(piece)
+                if progress:
+                    progress(off)
+        return off, h.hexdigest()
+
+    async def apk_install(self, size: int, digest: str) -> None:
+        """root's pm install -r of what was sent; GET /api/apps' "install" says how it went"""
+        await self.call("POST", "/api/apps/apk/install", f"{size} {digest}".encode())
+
+    async def app_uninstall(self, package: str) -> None:
+        await self.call("POST", "/api/apps/uninstall", package.encode())
+
     async def set(self, text: str) -> dict:
         """settings as an export has them ("name=value" lines)"""
         return json.loads(await self.call("POST", "/api/set", text.encode()))

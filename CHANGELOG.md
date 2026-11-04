@@ -12,6 +12,15 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-04
 
+- **Apps on the Echo Show, installed from the settings page or Home Assistant.** The settings page's Screen page and
+  Echo Local's new Apps tab list the Android apps you installed beside the home app (NewPipe, say), remove them, and
+  install new ones from an APK on your computer or on Home Assistant (also the action "Install app"). Each shows in
+  the drawer's row. Every app stays off the internet until you switch its **Internet** on.
+- **An app on the Echo Show can be reached from your network** (issue #109): each app has an **Open ports** switch
+  beside its Internet one. On, the firewall admits the ports that app listens on, from your own network only, and
+  follows them when the app moves to another one: Kiosk Satellite's DLNA renderer (its port and SSDP discovery on
+  1900) works, as does any other app that phones or media servers talk to. Off by default.
+
 - **The drawer, pulled over an app, never reaches the app below.** It no longer needs the black strip along the top
   over an app: the Echo holds a touch that starts along the top edge's middle (80 % of it, up to a fingertip below
   the edge) back from the app until it is clear whether it is a pull (a tap there goes on to the app as you lift your

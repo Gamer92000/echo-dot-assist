@@ -50,7 +50,8 @@
     },
     "delete_alarm": { "name": "Delete alarm", "description": "Deletes an alarm (its switch entity) from the Echo." },
     "snooze": { "name": "Snooze", "description": "Snoozes the alarm ringing on an Echo.", "fields": { "device_id": { "name": "Echo", "description": "Which Echo." } } },
-    "stop": { "name": "Stop", "description": "Stops what rings on an Echo, alarms and timers.", "fields": { "device_id": { "name": "Echo", "description": "Which Echo." } } }
+    "stop": { "name": "Stop", "description": "Stops what rings on an Echo, alarms and timers.", "fields": { "device_id": { "name": "Echo", "description": "Which Echo." } } },
+    "install_apk": { "name": "Install app", "description": "Installs an Android app (an APK, 32-bit ARM, Android 7.1 on the Echo Show 5) on an Echo Show. It stays off the internet until you allow it in Echo Local's Apps tab.", "fields": { "device_id": { "name": "Echo", "description": "Which Echo Show." }, "path": { "name": "APK file", "description": "Its path in a folder Home Assistant may read (allowlist_external_dirs), such as /config/www/app.apk." } } }
   },
   "options": {
     "step": {

@@ -1,5 +1,5 @@
 """The sidebar panel's commands (frontend/panel.js): the Echos with a screen, their screen's setup (kiosk.py), which
-the options flow also sets.  Administrators only, as the options are.
+the options flow also sets.  The Echo Show's own apps have theirs in apps.py.  Administrators only, as the options are.
 
     echo_local/list                                admin: the Echos (node, title, whether the screen is on, its app)
     echo_local/kiosk/get   {echo}                  admin: the screen's options, for the panel

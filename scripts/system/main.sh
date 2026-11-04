@@ -537,6 +537,12 @@ ota_watch() {
             say "== light ring designs: $LEDS${LEDWHY:+ ($LEDWHY)}"
         fi
         rm -f $LEDNEW.req
+        # Apps from the settings page or Home Assistant (src/hassmic/apps.c): an APK installed or an app removed by pm, 5 to
+        # 30 s, so in the background, one at a time (apps.sh's lock)
+        if [ -f /data/local/hassmic/state/apps-request ] && [ ! -d /data/local/hassmic/apps/lock ] && [ -f $D/apps.sh ]; then
+            READ_AS="$D/runas $DAEMON_USER $DAEMON_GROUPS" sh $D/apps.sh take 2>&1 | stamped &
+            sleep 1                                     # its lock taken before the next look
+        fi
         # Wi-Fi from the settings page (src/hassmic/wifi.c): a scan, or a switch to another network, which takes up to two
         # minutes; so in the background, one at a time (wifi.sh's lock), and a request waits while one runs
         if [ -f /data/local/hassmic/state/wifi-request ] && [ ! -d $WIFI/lock ] && [ -f $D/wifi.sh ]; then

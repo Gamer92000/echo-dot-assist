@@ -15,7 +15,7 @@ python3 scripts/otatool.py pack "$1" "$2" $OUT/hassmic.bundle \
     $(for k in $OUT/*.ko; do [ -f "$k" ] && echo "$k:644"; done) $RELEASE_PUB:644 \
     $(for k in wakealign/*.wa wakealign/*.was; do echo "$k:644"; done) \
     scripts/system/main.sh scripts/system/boot.sh scripts/system/sysinstall.sh $DDIR/hassmic.rc:644 \
-    scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh scripts/device/artifact-install.sh scripts/device/wifi.sh \
+    scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh scripts/device/artifact-install.sh scripts/device/apps.sh scripts/device/wifi.sh \
     $([ -z "$HOME_APK" ] || echo scripts/device/$HOME_APK:644) \
     $([ -n "$ANDROID" ] && echo scripts/device/wifictl.dex:644) $([ -n "$SCREEN_BAND" ] && echo scripts/device/ringbar.dex:644) \
     $([ ! -f $OUT/libhmui.so ] || echo $OUT/libhmui.so:644 scripts/device/screen.dex:644)
