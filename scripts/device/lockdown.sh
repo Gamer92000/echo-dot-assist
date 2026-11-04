@@ -134,7 +134,7 @@ lan_ports() {
             case " $LANS " in *" $uid "*) ;; *) continue;; esac
             h=${loc##*:}
             case "$h" in ''|*[!0-9A-Fa-f]*) continue;; esac
-            port=$((16#$h))
+            port=$((0x$h))                # (POSIX hex: 16# is bash's and mksh's, not dash's, CI's sh)
             [ $port -ge 1024 ] && [ $port -ne 5353 ] || continue
             [ $port -ge 16384 ] && [ $port -le 32767 ] && continue
             echo "$pr $port"
