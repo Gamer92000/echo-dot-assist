@@ -180,6 +180,8 @@ void   core_alarm_stop(const char *why);                    /* every ringing tim
 /* The Echo's own alarms (alarms.h) ring with the timers.  Snooze (lock held): the alarms ringing come back in their
  * snooze time, timers ringing with them stop; 0 if no alarm rang */
 int    core_alarm_snooze(const char *why);
+void   core_ring_tap(int stop);                               /* not the lock: the home app's ring tapped (snooze, a timer
+                                                                 stopped) or held (stop) */
 int    core_alarm_ringing(void);                            /* no lock needed: an alarm (not only timers) rings */
 /* their settings (lock held): CORE_ALARM_RING minutes a ring lasts (0 until stopped), _SNOOZE minutes, _RAMP seconds to
  * full volume, _LOUDER points of volume a minute it gets louder after that (0: never), _KEYS 0 the volume keys snooze / 1 they set the volume, _VOICE answer alarm requests here, _SOUND a

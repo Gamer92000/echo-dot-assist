@@ -51,5 +51,26 @@
     "delete_alarm": { "name": "Delete alarm", "description": "Deletes an alarm (its switch entity) from the Echo." },
     "snooze": { "name": "Snooze", "description": "Snoozes the alarm ringing on an Echo.", "fields": { "device_id": { "name": "Echo", "description": "Which Echo." } } },
     "stop": { "name": "Stop", "description": "Stops what rings on an Echo, alarms and timers.", "fields": { "device_id": { "name": "Echo", "description": "Which Echo." } } }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "The Echo Show's screen",
+        "description": "The Echo Show's home app: the app the Echo opens and comes back to (Echo-Wall, Echo-Screen, Kiosk Satellite or any app on the Echo; the same choice as the Echo's settings page). Connected, it gets a Home Assistant login made for this Echo (local only, removed with this entry) and the pages below, which the Echo's drawer offers beside its own Face and Music. Home Assistant's address as the Echo reaches it: {url}. The Echo reaches local addresses only.",
+        "data": {
+          "kiosk": "Connect the home app to Home Assistant (a login of this Echo's own, and the pages below)",
+          "kiosk_screens": "Pages in the drawer (its row of apps, before your other apps)",
+          "kiosk_default": "Opens on",
+          "kiosk_dashboard": "Dashboard's path (lovelace is Overview)",
+          "kiosk_custom_name": "Your web page's name",
+          "kiosk_custom_url": "Your web page's address",
+          "kiosk_return": "Back to it after untouched for (seconds; 0: never)",
+          "kiosk_admin": "The Echo's login is an administrator (Home Assistant's settings on the Echo)",
+          "kiosk_ha_url": "Home Assistant's address for the Echo (empty: the one found)",
+          "kiosk_app": "Home app: its package (empty: as the Echo has it)",
+          "kiosk_app_settings": "The home app's own settings, one key=value a line (Echo-Wall's photos: immich.url=, immich.key=, immich.album=)"
+        }
+      }
+    }
   }
 }

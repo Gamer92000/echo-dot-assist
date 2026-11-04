@@ -3,7 +3,7 @@
   "name": "Echo Local",
   "codeowners": [],
   "config_flow": true,
-  "dependencies": ["http", "frontend"],
+  "dependencies": ["http", "frontend", "panel_custom", "websocket_api"],
   "documentation": "https://github.com/Gamer92000/echo-dot-assist/blob/main/docs/GUIDE.md#clock-and-alarms",
   "integration_type": "device",
   "iot_class": "local_polling",

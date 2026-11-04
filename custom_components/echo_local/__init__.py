@@ -23,7 +23,8 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import DEFAULT_PORT, Echo, EchoAuthError, EchoError
-from .const import CARD_URL, CONF_KEY, DAY_KEYS, DOMAIN, SCAN_INTERVAL_S
+from . import kiosk, panel
+from .const import CARD_URL, CONF_KEY, DAY_KEYS, DOMAIN, PANEL_PATH, PANEL_URL, SCAN_INTERVAL_S
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.SWITCH]
@@ -75,9 +76,18 @@ class EchoLocalCoordinator(DataUpdateCoordinator[dict]):
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # the dashboard card, served from here and loaded on every dashboard
+    await panel.async_setup(hass)         # the sidebar panel's commands: the Echos, their screen's setup
     fe = Path(__file__).parent / "frontend"
-    # the card: no login to fetch it (only code)
-    await hass.http.async_register_static_paths([StaticPathConfig(CARD_URL, str(fe / "echo-local-alarms-card.js"), False)])
+    # the card and the panel: no login to fetch them (only code), the panel's data then over the websocket with its login
+    await hass.http.async_register_static_paths([StaticPathConfig(CARD_URL, str(fe / "echo-local-alarms-card.js"), False),
+                                                 StaticPathConfig(PANEL_URL, str(fe / "panel.js"), False)])
+    # the sidebar's "Echo Local": every Echo Show's screen (which app, which pages; frontend/panel.js);
+    # administrators only, as the options it changes are.  A home screen app arranges its Home itself (Echo-Wall: its
+    # own integration)
+    from homeassistant.components import panel_custom
+    await panel_custom.async_register_panel(hass, frontend_url_path=PANEL_PATH, webcomponent_name="echo-local-panel",
+                                            sidebar_title="Echo Local", sidebar_icon="mdi:tablet-dashboard",
+                                            module_url=PANEL_URL, require_admin=True, embed_iframe=False)
     from homeassistant.components.frontend import add_extra_js_url
     add_extra_js_url(hass, CARD_URL)
     add_extra_js_url(hass, CARD_URL, es5=True)      # the legacy build too (older browsers); defined once either way
@@ -124,7 +134,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    if kiosk.OPT_KIOSK not in entry.options:
+        # never set up from this entry: an Echo that shows a screen already (a replaced entry's) keeps it, with this
+        # entry's own login (the old one went with the old entry's user)
+        try:
+            new = kiosk.adopt(hass, await echo.kiosk())
+        except EchoError:
+            new = None
+        if new:
+            _LOGGER.info("%s: taking over the screen the Echo shows (%s)", entry.title, ", ".join(new[kiosk.OPT_SCREENS]))
+            hass.config_entries.async_update_entry(entry, options={**entry.options, **new})
+    if entry.options.get(kiosk.OPT_KIOSK) or entry.data.get(kiosk.DATA_USER):
+        try:
+            await kiosk.push(hass, entry, echo)
+        except EchoError:
+            pass                            # logged; the next start or options change sends it again
     return True
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    await kiosk.remove(hass, entry)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

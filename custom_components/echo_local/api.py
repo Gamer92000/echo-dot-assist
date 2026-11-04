@@ -123,6 +123,31 @@ class Echo:
     async def stop(self) -> None:
         await self.call("POST", "/api/alarms/stop")
 
+    # ---------------------------------------------------------------- the kiosk (kiosk.h, /api/kiosk)
+
+    async def kiosk(self) -> dict:
+        return json.loads(await self.call("GET", "/api/kiosk"))
+
+    async def put_kiosk(self, ha: str, screens: list[tuple[str, str]], default: int, return_s: int, token: str | None,
+                        app: str = "", settings: dict[str, str] | None = None) -> None:
+        """the screens the Echo Show's kiosk app offers; the token and the screen app's settings (an Immich key: secrets
+        too) sealed for this Echo together, in one block (the request is plain HTTP; one key stream per request)"""
+        if self.k is None:
+            await self.get_hello()
+        ctr = self._counter()
+        lines = [f"ha {ha}"]
+        secret = (f"token {token}\n" if token else "") + "".join(f"set {k} {v}\n" for k, v in (settings or {}).items())
+        if secret:
+            raw = secret.encode()
+            if len(raw) > 2048:
+                raise EchoError("the kiosk's login and settings are longer than the Echo takes (2 kB)")
+            lines.append("sealed " + self.seal(ctr, raw).hex())
+        lines += [f"screen {n}\t{u}" for n, u in screens]
+        lines += [f"default {default}", f"return {return_s}"]
+        if app:
+            lines.append(f"app {app}")
+        await self.call("POST", "/api/kiosk", ("\n".join(lines) + "\n").encode(), ctr=ctr)
+
     async def set(self, text: str) -> dict:
         """settings as an export has them ("name=value" lines)"""
         return json.loads(await self.call("POST", "/api/set", text.encode()))

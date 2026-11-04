@@ -11,15 +11,50 @@
  *   top row   Home (the home app: Kiosk Satellite, or what the settings page picked), Face (where the home app is
  *             another), Music, Do not disturb, Screen off; the clock, or what plays
  *   then      the Echo's volume
- * No apps: the home app and our own pages are all a Show needs, and Android's own (Music, two Downloads, Settings, a
- * keyboard's settings) only confuse.
+ *   then      the apps the owner installed (the settings page's Apps, Echo Local's Apps tab), along a row that scrolls:
+ *             the app switcher.  Not Android's own (Music, two Downloads, Settings, a keyboard's settings: they only
+ *             confuse) nor the home app (Home is it); none installed, no row and the drawer as high as before.
  */
 #include "ui.h"
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
-#define PANEL  220                       /* the drawer's height, in units */
+#define PANEL  220                       /* the drawer's height, in units, without the apps row */
+#define APPS_H 118                       /* the apps row's */
+#define CELL   104                       /* an app's place along it */
+#define MAX_ROW 90                       /* (ids: ID_DRAWER + 100 + 4 a cell, under ID_TOP) */
+
+/* an app of the owner's for the row: not the firmware's, not ours, not the home app */
+static int row_app(const struct scene *s, const struct ui_app *a)
+{
+    return !a->system && a->pkg[0] && !is_home(a->pkg) && !eq(a->pkg, home_app(s));
+}
+
+/* the home app's screens (its config's, from Echo Local: hassmic's kiosk.c), by name; the i-th into out */
+static int screen_name(const struct scene *s, int i, char *out, size_t cap)
+{
+    const char *p = s->screens;
+    if (!home_app(s)[0] || !p[0]) return 0;
+    for (int k = 0; *p; k++) {
+        size_t n = strcspn(p, "\t");
+        if (k == i) { snprintf(out, cap, "%.*s", (int)n, p); return n > 0; }
+        p += n; if (*p) p++;
+    }
+    return 0;
+}
+
+static int screens_count(const struct scene *s) { char b[64]; int n = 0; while (n < 8 && screen_name(s, n, b, sizeof b)) n++; return n; }
+
+static int row_count(const struct scene *s)
+{
+    int n = screens_count(s);
+    for (int i = 0; i < s->napps && n < MAX_ROW; i++) n += row_app(s, &s->apps[i]);
+    return n;
+}
+
+static float panel_h(struct scene *s) { return U(row_count(s) ? PANEL + APPS_H : PANEL); }
 
 int drawer_open(const struct scene *s) { return s->dr.pos > 0.001f || s->dr.t > 0 || s->dr.pulling; }
 
@@ -28,7 +63,7 @@ int drawer_open(const struct scene *s) { return s->dr.pos > 0.001f || s->dr.t > 
 static void done_closing(struct scene *s)
 {
     struct drawer *d = &s->dr;
-    if (d->go) launch(s, d->go_pkg, NULL);
+    if (d->go) launch(s, d->go_pkg, d->go_cls[0] ? d->go_cls : NULL);
     /* back to it, unless the page picked another home app meanwhile: that one (or the face) comes instead */
     else if (d->from_app && d->from[0] && !is_home(d->from) && !home_pending()) launch(s, d->from, NULL);
     else scene_backdrop(s, NULL, 0, 0);
@@ -47,21 +82,24 @@ void drawer_close_now(struct scene *s)
     d->pos = d->t = 0; d->pulling = 0; d->go = 0; d->from_app = 0; d->from[0] = 0;
 }
 
-/* the home app: the drawer goes, then the app comes (the one it was pulled over: back to it) */
-static void drawer_go(struct scene *s, const char *pkg)
+/* an app: the drawer goes, then the app comes (the one it was pulled over: back to it, unless one of its screens or its
+ * Home was asked for).  how: the contract's way (scene.h launch's cls: "home:", "screen:<name>"), NULL as launchers */
+static void drawer_go(struct scene *s, const char *pkg, const char *how)
 {
     struct drawer *d = &s->dr;
     drawer_close(s, 1);
-    if (d->from_app && eq(pkg, d->from)) return;
-    d->go = 1; snprintf(d->go_pkg, sizeof d->go_pkg, "%s", pkg);
+    if (d->from_app && eq(pkg, d->from) && !how) return;
+    d->go = 1; snprintf(d->go_pkg, sizeof d->go_pkg, "%s", pkg); snprintf(d->go_cls, sizeof d->go_cls, "%s", how ? how : "");
     s->view = V_FACE;                                           /* what shows when that app is gone again */
     s->own_asked = 0;                                           /* (the home app asked for: back when it leaves, tried again) */
-    scene_backdrop(s, NULL, 0, 0);                              /* not the other app's picture while this one comes: ours */
+    /* pulled over an app: its picture stays until the chosen one is in front (scene.c leaving_until), as Android
+     * switches apps; ours (the face) would show for the second the app takes to come.  Over our own screen: ours */
+    if (!d->from_app) scene_backdrop(s, NULL, 0, 0);
 }
 
 void drawer_pull(struct scene *s, int y, int ev)
 {
-    struct drawer *d = &s->dr; float H = U(PANEL);
+    struct drawer *d = &s->dr; float H = panel_h(s);
     if (ev == TOUCH_DOWN) {
         if (!drawer_open(s)) {
             if (!scene_visible(s)) {                           /* over an app: its picture, and our home activity up */
@@ -71,6 +109,7 @@ void drawer_pull(struct scene *s, int y, int ev)
             } else d->from_app = 0;
         }
         d->go = 0;                                              /* (grabbed again as it closed for a Home: that Home no more) */
+        d->was_open = d->pos > 0.9f;
         d->pulling = 1; d->grab = y - d->pos * H; d->vy = 0; d->ty = s->now;
         return;
     }
@@ -83,7 +122,9 @@ void drawer_pull(struct scene *s, int y, int ev)
     }
     d->pulling = 0;                                             /* TOUCH_UP: open or shut, by the flick or by how far */
     if (s->now - d->ty > 120) d->vy = 0;
-    d->t = d->vy > 0.4f ? 1 : d->vy < -0.4f ? 0 : d->pos > 0.4f ? 1 : 0;
+    /* little is enough either way: pushed up a tenth from open, it shuts; pulled down a third from shut, it opens; a
+     * light flick (half the speed it took before) decides before either */
+    d->t = d->vy > 0.2f ? 1 : d->vy < -0.2f ? 0 : d->was_open ? (d->pos > 0.9f ? 1 : 0) : (d->pos > 0.3f ? 1 : 0);
 }
 
 /* the home app's package (labelled Home, as on Amazon's own: what it is, the page says) */
@@ -120,7 +161,7 @@ void drawer_draw(struct scene *s)
 {
     struct drawer *d = &s->dr;
     if (d->pos <= 0.001f && !d->pulling) return;
-    float H = U(PANEL), top = (d->pos - 1) * H, w = (float)s->w;
+    float H = panel_h(s), top = (d->pos - 1) * H, w = (float)s->w;
     rrect(s, ID_DRAWER, 0, 0, w, (float)s->h, 0, 0x000000, (int)(175 * clampf(d->pos * 1.4f, 0, 1)));
     hit(s, 0, 0, 0, 0, A_DR_SHADE, 0);
     rrect(s, ID_DRAWER + 1, 0, top - U(40), w, top + H, U(26), SURF, 255);
@@ -165,12 +206,44 @@ void drawer_draw(struct scene *s)
     float v = d->vol_drag ? d->vol_frac : s->evol >= 0 ? s->evol / 100.0f : 0.5f;
     slider(s, ID_DRAWER + 75, vx0, vx1, vy, v, ACCENT, A_DR_VOL, 0);
 
+    /* the apps: the app switcher, a row that scrolls along (a swipe up on it still closes the drawer: scene.c) */
+    if (row_count(s)) {
+        float ay = top + U(PANEL) - U(6), x = U(28) - d->apps.pos, total = 0;
+        struct rect r = { (int)U(12), (int)(ay - U(4)), s->w - (int)U(12), (int)(ay + U(APPS_H) - U(14)) }, saved;
+        clip_push(s, r, &saved);
+        int k = 0;
+        for (int i = 0; i < 8; i++) {                          /* first the home app's own screens, by name */
+            char nm[64]; if (!screen_name(s, i, nm, sizeof nm)) break;
+            float cx = x + U(CELL) / 2, is = U(60);
+            char l[8]; snprintf(l, sizeof l, "%c", nm[0] >= 'a' && nm[0] <= 'z' ? nm[0] - 32 : nm[0]);
+            if (pressed(s, A_DR_SCREEN, i)) rrect(s, ID_DRAWER + 100 + 4 * k, x + U(8), ay, x + U(CELL) - U(8), ay + U(100), U(16), 0x2A2E35, 255);
+            rrect(s, ID_DRAWER + 101 + 4 * k, cx - is / 2, ay + U(6), cx + is / 2, ay + U(6) + is, is / 2, SURF2, 255);
+            text(s, ID_DRAWER + 103 + 4 * k, l, U(26), 1, is, cx, ay + U(20), 1, FG, 255);
+            text(s, ID_DRAWER + 102 + 4 * k, nm, U(14), 0, U(CELL) - U(8), cx, ay + U(72), 1, DIM, 255);
+            hit(s, x + U(4), ay, x + U(CELL) - U(4), ay + U(100), A_DR_SCREEN, i);
+            x += U(CELL); total += U(CELL); k++;
+        }
+        for (int i = 0; i < s->napps && k < MAX_ROW; i++) {
+            const struct ui_app *a = &s->apps[i];
+            if (!row_app(s, a)) continue;
+            float cx = x + U(CELL) / 2, is = U(60);
+            if (pressed(s, A_DR_APP, i)) rrect(s, ID_DRAWER + 100 + 4 * k, x + U(8), ay, x + U(CELL) - U(8), ay + U(100), U(16), 0x2A2E35, 255);
+            if (a->icon.px) app_icon(s, ID_DRAWER + 101 + 4 * k, &a->icon, cx - is / 2, ay + U(6), is, is);
+            else rrect(s, ID_DRAWER + 101 + 4 * k, cx - is / 2, ay + U(6), cx + is / 2, ay + U(6) + is, U(14), SURF2, 255);
+            text(s, ID_DRAWER + 102 + 4 * k, a->label[0] ? a->label : a->pkg, U(14), 0, U(CELL) - U(8), cx, ay + U(72), 1, DIM, 255);
+            hit(s, x + U(4), ay, x + U(CELL) - U(4), ay + U(100), A_DR_APP, i);
+            x += U(CELL); total += U(CELL); k++;
+        }
+        scroll_area(s, r, &d->apps, 0, total + U(32));
+        clip_pop(s, saved);
+    }
+
     rrect(s, ID_DRAWER + 90, w / 2 - U(26), top + H - U(14), w / 2 + U(26), top + H - U(9), U(3), 0x4A505A, 255);
 }
 
 int drawer_act(struct scene *s, int a, int arg, int ev)
 {
-    struct drawer *d = &s->dr; (void)arg;
+    struct drawer *d = &s->dr;
     if (a == A_DR_VOL) {                                        /* a slider: the finger's moves */
         if (ev != EV_DRAG && ev != EV_DROP) return 0;
         d->vol_drag = ev == EV_DRAG; d->vol_frac = slider_value(s, U(80), s->w - U(48));
@@ -183,7 +256,7 @@ int drawer_act(struct scene *s, int a, int arg, int ev)
     case A_DR_SHADE: if (d->t > 0) drawer_close(s, 1); break;   /* (closing already, maybe for a Home chosen: as it is) */
     case A_DR_HOME: {
         const char *pkg; home_label(s, &pkg);
-        if (pkg[0]) drawer_go(s, pkg);
+        if (pkg[0]) drawer_go(s, pkg, "home:");
         else { drawer_close(s, 0); go_home(s, V_FACE); }
     } break;
     case A_DR_FACE: drawer_close(s, 0); go_home(s, V_FACE); ask_own(s); break;
@@ -191,6 +264,13 @@ int drawer_act(struct scene *s, int a, int arg, int ev)
     case A_DR_DND: s->dnd = !s->dnd; send(s, "dnd %d", s->dnd); break;
     case A_DR_SLEEP: drawer_close(s, 1); if (s->p->sleep) s->p->sleep(s->ctx); break;
     case A_DR_PLAY: music_toggle(s); break;
+    case A_DR_SCREEN: {                                         /* one of the home app's screens: the contract's extra */
+        char nm[64], how[80];
+        if (screen_name(s, arg, nm, sizeof nm)) { snprintf(how, sizeof how, "screen:%s", nm); drawer_go(s, home_app(s), how); }
+    } break;
+    case A_DR_APP:                                              /* an app of the row: the drawer goes, then it comes */
+        if (arg >= 0 && arg < s->napps && row_app(s, &s->apps[arg])) drawer_go(s, s->apps[arg].pkg, NULL);
+        break;
     default: return 0;
     }
     return 1;

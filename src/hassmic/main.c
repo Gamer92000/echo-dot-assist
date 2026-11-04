@@ -42,6 +42,7 @@
 #endif
 #include "audio.h"
 #include "alarms.h"
+#include "kiosk.h"
 #include "a2dp.h"
 #include "arb.h"
 #include "ble.h"
@@ -414,6 +415,7 @@ void core_set_state(enum state s)
     led_for(state, s);
     state = s; state_since = time(NULL);
     atomic_store(&busy, s != IDLE);
+    kiosk_run(s != IDLE);                           /* a request's words, for a home app that draws them (kiosk.h) */
 }
 
 static long long mono_ms(void);
@@ -2073,6 +2075,12 @@ const char *const core_alarm_events[] = { "ringing", "snoozed", "stopped", "rang
 const int core_alarm_nevents = sizeof core_alarm_events / sizeof core_alarm_events[0];
 void core_alarms_changed(void) { atomic_store(&alarms_dirty, 1); }      /* alarms.c, settings: any thread, any lock */
 static void alarm_event(const char *e) { if (connected && proto->alarm) proto->alarm(e); }   /* lock held */
+static void ringing_shown(void)                                 /* lock held: the screen's ring line */
+{
+    char t[160]; size_t n = 0; t[0] = 0;
+    for (int i = 0; i < nringing && n < sizeof t; i++) n += (size_t)snprintf(t + n, sizeof t - n, "%s%s", i ? ", " : "", ringing[i].name);
+    kiosk_ringing(nringing ? t : NULL);             /* for a home app that draws the ring (kiosk.h) */
+}
 
 static void alarm_set(int on)          /* lock held */
 {
@@ -2104,6 +2112,7 @@ void core_timer_finished(const char *id, const char *name, unsigned total)
     ringing[i].alarm = 0;
     fprintf(stderr, "alarm: %s rings (%d ringing)\n", ringing[i].name, nringing);
     alarm_set(1);
+    ringing_shown();
     if (connected && proto->timers_changed) proto->timers_changed();
 }
 
@@ -2125,6 +2134,7 @@ static void core_alarm_ring(int id, const char *what)
     atomic_store(&alarm_kind, 1);
     fprintf(stderr, "alarm: alarm %d (%s) rings (%d ringing)\n", id, what, nringing);
     alarm_set(1);
+    ringing_shown();
     if (connected && proto->timers_changed) proto->timers_changed();
     alarm_event("ringing");
     pthread_mutex_unlock(&core_lock);
@@ -2143,11 +2153,20 @@ int core_alarm_snooze(const char *why)
     for (int i = 0; i < nringing; i++) if (ringing[i].alarm > 0) alarms_ended(ringing[i].alarm, alarm_snooze_min);
     nringing = 0;
     alarm_set(0);
+    ringing_shown();
     if (connected && proto->timers_changed) proto->timers_changed();
     alarm_event("snoozed");
     return 1;
 }
 
+/* the home app's ring, tapped (snooze an alarm, stop a timer) or held (stop): GET /kiosk/ring/snooze|stop (kiosk.h),
+ * since an app that draws the ring itself is where the finger is.  Not the lock */
+void core_ring_tap(int stop)
+{
+    pthread_mutex_lock(&core_lock);
+    if (atomic_load(&alarm_on) && (stop || !core_alarm_snooze("the home app's ring tapped"))) core_alarm_stop(stop ? "the home app's ring held" : "the home app's ring tapped");
+    pthread_mutex_unlock(&core_lock);
+}
 int core_alarm_setting(int which, int set)
 {
     int *v[] = { &alarm_ring_min, &alarm_snooze_min, &alarm_ramp_s, &alarm_keys, &alarm_voice, NULL, &alarm_louder };
@@ -2165,6 +2184,7 @@ void core_timer_cancelled(const char *id)
     for (int i = 0; i < nringing; i++) if (!strcmp(ringing[i].id, id)) {
         memmove(ringing + i, ringing + i + 1, sizeof ringing[0] * (size_t)(nringing - i - 1));
         if (!--nringing) alarm_set(0);
+        ringing_shown();
         if (connected && proto->timers_changed) proto->timers_changed();
         return;
     }
@@ -2178,6 +2198,7 @@ void core_alarm_stop(const char *why)
     for (int i = 0; i < nringing; i++) if (ringing[i].alarm > 0) { alarms_ended(ringing[i].alarm, 0); alarms++; }   /* once: off */
     nringing = 0;
     alarm_set(0);
+    ringing_shown();
     if (connected && proto->timers_changed) proto->timers_changed();
     if (alarms) alarm_event(!strcmp(why, "rang out") ? "rang_out" : "stopped");
 }
@@ -3231,6 +3252,7 @@ static void *volume_led_thread(void *arg)
         alarm_escalate();                           /* an unanswered alarm gets louder */
         if (atomic_exchange(&alarms_dirty, 0)) {    /* alarms.c's list changed: Home Assistant's sensors, the screen */
             pthread_mutex_lock(&core_lock); if (connected && proto->alarms_changed) proto->alarms_changed(); pthread_mutex_unlock(&core_lock);
+            kiosk_changed();                        /* the next alarm, for a home app's clock */
         }
         usleep(200000);
     }
@@ -3504,6 +3526,7 @@ int main(int argc, char **argv)
       if (!settings_peek("light_band", rows, sizeof rows)) ring_band_rows(atoi(rows)); }
     ring_start(led_run, ring_reloaded);
     rd_start();                         /* designs asked for before this start: still installing, or back */
+    kiosk_load();                                             /* the home app's config (kiosk.h), set from Home Assistant */
     screen_start();                                 /* a model with a screen: its UI process (screen.h) */
     audio_earcon_started = earcon_started;
     led("-u", "scone-setup");           /* a restart inside the pairing window: the window is gone, its chaser would loop on */

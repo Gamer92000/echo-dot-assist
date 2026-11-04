@@ -23,6 +23,9 @@ void screen_music_gone(void);                            /* no Music Assistant a
 void screen_line(const char *line);
 size_t screen_status_json(char *o, size_t cap);         /* the settings page's Screen page: {"apps","home","kiosk"} */
 int  screen_set_home(const char *pkg);                   /* a package, "" the face, NULL none chosen: 0 set */
+int  screen_home(char *out, size_t cap);                 /* the home app in effect (chosen, else Kiosk Satellite): 0, -1 none */
+void screen_claim(const char *pkg, int mask);            /* what that app draws itself while in front (kiosk.h KIOSK_DRAWS_*) */
+void screen_screens(const char *names);                  /* its screens' names, tab-separated: the drawer offers them */
 void screen_bin(const char *line, const void *data, size_t n);
 /* The light band (ring_band.c) drawn by the UI process as one more layer: whether that process can run here (no more
  * once it was given up), its width once it is up (0 before, and again while it is started anew), and a row of it (w

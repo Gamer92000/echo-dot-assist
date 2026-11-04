@@ -84,6 +84,7 @@
 #include "screen.h"
 #include "board.h"
 #include "core.h"
+#include "kiosk.h"
 #include "micgain.h"
 #include "hash.h"
 #include "https.h"
@@ -1401,6 +1402,8 @@ static void on_event(const unsigned char *p, const unsigned char *end)
     if (type == EV_RUN_START || type == EV_ERROR) cancelled = 0;
     /* "Last heard" and "Last reply": a new run clears both, so the same request said twice is a change Home Assistant
      * records (it drops a state equal to the last) */
+    if (type == EV_STT_END) kiosk_heard(said);             /* for a home app that draws the words (kiosk.h) */
+    if (type == EV_TTS_START) kiosk_reply(said);
     if (listed(KEY_LAST_HEARD) && (type == EV_RUN_START || type == EV_STT_END || type == EV_TTS_START)) {
         if (type != EV_TTS_START) { state_text(last_heard, sizeof last_heard, type == EV_STT_END ? said : ""); send_setting(KEY_LAST_HEARD); }
         if (type != EV_STT_END) { state_text(last_reply, sizeof last_reply, type == EV_TTS_START ? said : ""); send_setting(KEY_LAST_REPLY); }

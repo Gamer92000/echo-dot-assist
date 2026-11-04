@@ -7,12 +7,15 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlowWithReload
+from homeassistant.core import callback
+from homeassistant.helpers import selector
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 
 from .api import DEFAULT_PORT, Echo, EchoError, new_key
+from . import kiosk as k
 from .const import CONF_KEY, CONF_MAC, CONF_NODE, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -20,6 +23,11 @@ _LOGGER = logging.getLogger(__name__)
 
 class EchoLocalConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(entry: ConfigEntry) -> EchoLocalOptionsFlow:
+        return EchoLocalOptionsFlow()
 
     def __init__(self) -> None:
         self.host: str | None = None
@@ -111,3 +119,35 @@ class EchoLocalConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="cannot_connect")
         return await self.async_step_approve()
 
+
+class EchoLocalOptionsFlow(OptionsFlowWithReload):
+    """The Echo Show's screen (kiosk.py): Home Assistant on it, which screens, where it starts.  The entry reloads on
+    Submit, and its setup sends it all to the Echo."""
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        o = self.config_entry.options
+        if user_input is not None:
+            # Home's layout is the sidebar panel's (Echo Local › Home screen), and the Echo's own edit mode's
+            return self.async_create_entry(data={**self.config_entry.options, **user_input})
+        kinds = [selector.SelectOptionDict(value=v, label=l) for v, l in (
+            ("wall", "Home: the home app's own (Echo-Wall's Home)"), ("dashboard", "A Home Assistant dashboard"),
+            ("clock", "Clock: the home app's own (where it has one)"), ("custom", "A web page of your own"))]
+        schema = vol.Schema({
+            vol.Required(k.OPT_KIOSK, default=o.get(k.OPT_KIOSK, False)): bool,
+            vol.Required(k.OPT_SCREENS, default=[x for x in o.get(k.OPT_SCREENS, ["wall", "dashboard"]) if x in k.SCREEN_KINDS]):
+                selector.SelectSelector(selector.SelectSelectorConfig(options=kinds, multiple=True)),
+            vol.Required(k.OPT_DEFAULT, default=o.get(k.OPT_DEFAULT) if o.get(k.OPT_DEFAULT) in k.SCREEN_KINDS else "wall"):
+                selector.SelectSelector(selector.SelectSelectorConfig(options=kinds, mode=selector.SelectSelectorMode.DROPDOWN)),
+            vol.Optional(k.OPT_DASHBOARD, default=o.get(k.OPT_DASHBOARD, "lovelace")): str,
+            vol.Optional(k.OPT_CUSTOM_NAME, default=o.get(k.OPT_CUSTOM_NAME, "")): str,
+            vol.Optional(k.OPT_CUSTOM_URL, default=o.get(k.OPT_CUSTOM_URL, "")): str,
+            vol.Required(k.OPT_RETURN, default=o.get(k.OPT_RETURN, 120)):
+                selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=3600, step=10, unit_of_measurement="s", mode=selector.NumberSelectorMode.BOX)),
+            vol.Required(k.OPT_ADMIN, default=o.get(k.OPT_ADMIN, False)): bool,
+            vol.Optional(k.OPT_URL, default=o.get(k.OPT_URL, "")): str,
+            vol.Optional(k.OPT_APP, default=o.get(k.OPT_APP, "")): str,
+            vol.Optional(k.OPT_APP_SETTINGS, default=o.get(k.OPT_APP_SETTINGS, "")):
+                selector.TextSelector(selector.TextSelectorConfig(multiline=True)),
+        })
+        return self.async_show_form(step_id="init", data_schema=schema,
+                                    description_placeholders={"url": k.ha_url(self.hass, self.config_entry)})

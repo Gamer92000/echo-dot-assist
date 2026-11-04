@@ -12,6 +12,20 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-04
 
+- **The drawer, pulled over an app, never reaches the app below.** It no longer needs the black strip along the top
+  over an app: the Echo holds a touch that starts along the top edge's middle (80 % of it, up to a fingertip below
+  the edge) back from the app until it is clear whether it is a pull (a tap there goes on to the app as you lift your
+  finger), so apps have the whole screen and none of them scrolls or refreshes under a pull. The drawer shuts with a
+  swipe up from anywhere on it, and a short push or a light flick is enough.
+- **An app switcher in the drawer.** Below the volume: the home app's own pages and every app you installed, in a row
+  that scrolls sideways. Tap one and it opens; the app you came from stays on the screen until the new one is up.
+- **A home app made for the Echo, with Home Assistant set up from Echo Local.** The settings page's Screen page or
+  Echo Local's new Screen tab in Home Assistant's sidebar pick the home app (the last choice counts); an app made for
+  the Echo (docs/screen-apps.md; Echo-Wall is one) gets Home Assistant's address and a login of its own, the pages to
+  offer in the drawer, and may draw a request's words and a ringing timer or alarm itself.
+- **A timer or an alarm ringing over an app shows.** The face with its Stop comes over the app until nothing rings,
+  then the app is back (not over an app that draws the ring itself).
+
 - **Alarms on the Echo.** Home Assistant has timers but no alarms; now the Echo keeps its own, and they ring by
   themselves, with or without Home Assistant. Ask for them: "<wake word>, set an alarm for 7 AM", "wake me up at 6:30
   tomorrow", "set an alarm for 6:45 on weekdays", "wake me up in 20 minutes", "what alarms do I have", "change my

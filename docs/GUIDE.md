@@ -461,12 +461,21 @@ satellite of its own has to run without its microphone (as a display) while hass
   room. A request to the assistant, a ringing timer or a Drop In bring the face back from the music.
 - **The drawer**: pull down from the top edge of the screen, whatever shows, as on Amazon's own Echo Show. In it:
   **Home** (the home app), **Face** (where the home app is another), **Music**, **Do not disturb**, **Screen off** (a
-  touch wakes it), what plays (tap it for the music) and the Echo's volume. Over an app, start the pull on the thin
-  black strip along the top of the screen: the app never gets that touch, so it does not scroll or refresh. Pulled over
-  an app, the drawer shows on a picture of it; close it (tap below it, or push it up) and the app is back as it was.
-- **The home app**: the settings page's **Screen** page picks what the Echo shows at start and brings back when it
-  ends or crashes (three times a minute at most), but not while you have the face or the music open: Kiosk Satellite
-  until you pick another (if it is installed), the face, or any app you installed. A new choice applies at once.
+  touch wakes it), what plays (tap it for the music), the Echo's volume, and below, the **app switcher**: the home
+  app's own pages (Echo-Wall's Home, a Home Assistant dashboard, a web page of yours, as Echo Local names them) and every app
+  you installed (swipe the row sideways when there are many). Over an app, pull from the middle of the top edge: the
+  app never gets that swipe, so it does not scroll or refresh, while a tap there, or a swipe sideways, is still the
+  app's. hassmic holds a touch that starts there back from the app for a moment (a tap goes on as you lift your
+  finger) until it is clear whether it is a pull; apps keep the whole screen. Pulled over an app, the drawer shows on
+  a picture of it; close it (tap below it, or push it up) and the app is back as it was.
+- **A timer or an alarm ringing over an app** brings the face with its **Stop** over it, and the app comes back once
+  nothing rings, unless the app draws the ring itself (Echo-Wall does: it says so to the Echo, docs/screen-apps.md).
+- **The home app**: the settings page's **Screen** page (or Echo Local in Home Assistant, below) picks what the Echo
+  shows at start and brings back when it ends or crashes (three times a minute at most), but not while you have the
+  face or the music open: Kiosk Satellite until you pick another (if it is installed), the face, or any app you
+  installed (Echo-Wall, Home Assistant's own app, a browser). A new choice applies at once; the last one made, on the
+  page or in Home Assistant, counts. An app made for hassmic (Echo-Wall) also gets Home Assistant's address and a
+  login of its own from the Echo, and opens the screen picked in the drawer.
 - **Back**: over an app, swipe along the bottom edge (the light band), left or right.
 
 ### Music Assistant on the screen
@@ -557,6 +566,34 @@ volume keys together) and Submit. It adds:
 Home Assistant 2026 keeps each integration's devices apart, so the Echo shows as two devices with the same name (and
 MAC): the esphome one and hassmic's. Should the Echo forget Home Assistant (a factory reset, its login revoked on the
 settings page), Home Assistant raises a repair: Submit, press the button.
+
+### Home Assistant on the screen
+
+An Echo Show can show Home Assistant itself, through its **home app**. Any Android app can be the home app; one made
+for hassmic speaks a small contract with the Echo ([docs/screen-apps.md](screen-apps.md)): it gets Home Assistant's
+address and a login of its own from the Echo, the pages it should offer, and what to draw (a request's words, a
+ringing alarm) if it would rather draw them in its own look. **Echo-Wall** ([Nt-f/Echo-Wall](https://github.com/Nt-f/Echo-Wall),
+Flutter, an app of its own with a Home Assistant integration of its own) is one: frosted-glass cards over a photo,
+a page per room, a lock screen with the time and the next alarm; its README says how to install it. Kiosk Satellite
+(Home Assistant's dashboards in a browser of its own) is the other choice, and it is set up by the guided setup.
+
+It is set up from Home Assistant, in the Echo Local integration (the one for the Echo's alarms): **Echo Local** in the
+sidebar › the Echo › *Screen* (or *Settings › Devices & services › Echo Local › Configure*). Pick the **App** (the
+same choice as the settings page's Screen page), switch on **Connect it to Home Assistant**, and pick its **Pages in
+the drawer**: its own Home, a Home Assistant dashboard, a clock, a web page of yours (the drawer offers them by name,
+in its row of apps; music is the drawer's own **Music**, the Echo's Music Assistant player). The Echo has no keyboard
+to log in with, so the integration makes a Home Assistant user for it ("Echo Show 5 … kiosk": local network only,
+not an administrator unless you tick that) and hands the Echo a token of it, sealed for that Echo on the way; only
+the home app gets it, and deleting the integration's entry deletes the user. A line at the top of the tab says when
+Home Assistant last sent this to the Echo, or why it could not; **Send to the Echo again** sends it now with a fresh
+login. An Echo Local entry added anew (after removing the old one) takes over the screen the Echo shows by itself and
+sends it with a login of its own. With Echo-Wall as the app and its integration installed, a *Home* tab beside
+*Screen* arranges its Home (Echo-Wall's own panel).
+
+A ringing timer or alarm shows over the home app as it does over any app (the face with Stop), unless the app draws it
+itself (Echo-Wall draws a request's words and a ring in its own look; a tap on its ring snoozes, a hold stops). The
+Echo reaches local addresses only, so Home Assistant's address for it is its local one (the Screen tab shows which;
+Home Assistant Cloud's is not reachable from the Echo).
 
 ## Music
 

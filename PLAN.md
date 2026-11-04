@@ -2281,6 +2281,21 @@ Run in this order. Each step says what it proves.
       (no merge by MAC any more): the card finds "Alarm ringing" through the device with the same MAC.  `/api/hello`
       has "mac".  tests/ha_real_alarms.py in a real HA 2026.10.1 (CI's HA job).
       Open: reminders; alarm sentences in other languages.
+- [x] The home app contract, the drawer's app switcher and the touch gate (2026-11-03).  `kiosk.c`: the home app
+      (screen.c's choice) gets /kiosk/config (HA address, a token Echo Local made, its pages, its settings) and
+      /kiosk/state (words, ring, next alarm; long poll), /kiosk/ring/snooze|stop, only from 127.0.0.1 and its uid
+      (/proc/net/tcp6); what it draws itself ("claim" lines) and its pages' names ("screens") go to the UI.  Launched
+      by the SCREEN intent (android.c `launch_contract`: home:, screen:<name>, contract:).  A ring over an app that does
+      not claim it brings the face (scene.c `ring_over_app`), the app back after.  The touch gate (`touchgate.c`, a
+      thread of touch.c): the panel grabbed (EVIOCGRAB), every event written on to a uinput copy with the panel's name
+      and ids (its /dev/input node checked before the grab, so Android is never left without a touch screen); a touch
+      that starts within 10 % of the top edge in its middle 80 % held until it is a pull (5 % inward, more than twice
+      its sideways movement: the drawer's alone, told to the scene from y -1) or not (lift, 3 % sideways, a second
+      finger, 300 ms at rest, 600 ms at most: the app's from its start); the grip's 16 rows only without uinput
+      (HMUI_TOUCHGATE=0).  The drawer's row: the home app's pages, then the owner's apps.  Echo Local's Screen tab
+      and options flow (kiosk.py: a user and a long-lived token per Echo, sealed for it), tests/ha_real_kiosk.py,
+      tests/ha_real_panel.py (headless Chrome, laptop and phone widths).  Tried on an Echo Show 5: the drawer over an
+      app from the top's middle with no event reaching Android; taps there reach the app.
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
 - [x] Drop In between Echos (2026-10-08, asked by a user with ten Echos who used Alexa's as an intercom). `dropin.c`:
       calls signed on the arbitration network (new arb type `T_MSG`, `arb_tell`, broadcast like the rest, repeated:

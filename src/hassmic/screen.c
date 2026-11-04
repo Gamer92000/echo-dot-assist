@@ -81,6 +81,8 @@ static int cvol, cmuted, cshuffle = -1; static char cmds[256], crepeat[8]; stati
 static uint8_t *art; static size_t artn; static unsigned art_gen, art_sent;
 static int music; static unsigned gone_gen, gone_sent;
 static char home[128]; static int home_set, home_told; static unsigned home_gen, home_sent;   /* told: this UI has it */
+/* the home app's claims (kiosk.c: what it draws itself while in front) and its screens' names (the drawer's row) */
+static char claim_pkg[128], scr_names[400]; static int claim_mask; static unsigned claim_gen, claim_sent, scr_gen, scr_sent;
 static int started;
 static atomic_uint ui_gen, ui_dead;
 static atomic_int ui_width;
@@ -259,6 +261,31 @@ static int pkg_ok(const char *pkg)
 {
     for (const char *c = pkg; *c; c++) if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '.' || *c == '_')) return 0;
     return strlen(pkg) < sizeof home;
+}
+
+/* the home app in effect: the one chosen, else Kiosk Satellite where installed; 0 and its package, -1 none (the face) */
+int screen_home(char *out, size_t cap)
+{
+    pthread_mutex_lock(&lock);
+    const char *h = home_set ? home : kiosk_installed() ? KIOSK_PKG : "";
+    snprintf(out, cap, "%s", h);
+    pthread_mutex_unlock(&lock);
+    return out[0] ? 0 : -1;
+}
+
+void screen_claim(const char *pkg, int mask)
+{
+    if (!pkg || !pkg_ok(pkg)) return;
+    pthread_mutex_lock(&lock);
+    snprintf(claim_pkg, sizeof claim_pkg, "%s", pkg); claim_mask = mask; claim_gen++; kick();
+    pthread_mutex_unlock(&lock);
+}
+
+void screen_screens(const char *names)
+{
+    pthread_mutex_lock(&lock);
+    snprintf(scr_names, sizeof scr_names, "%s", names ? names : ""); scr_gen++; kick();
+    pthread_mutex_unlock(&lock);
 }
 
 /* the home app from the page: a package, "" the face, NULL none chosen (Kiosk Satellite where installed); the UI
@@ -645,7 +672,7 @@ static void *writer(void *arg)
             band = want; up_at = mono_ms(); fails++; again++;
             pthread_mutex_lock(&lock);                          /* all of it again */
             for (int i = 0; i < npats; i++) { pats[i].told = pats[i].came = 0; pats[i].sent = pats[i].on ? pats[i].gen - 1 : pats[i].gen; }
-            tz_sent = meta_sent = prog_sent = ctl_sent = art_sent = gone_sent = band_sent = 0; home_told = 0;
+            tz_sent = meta_sent = prog_sent = ctl_sent = art_sent = gone_sent = band_sent = 0; home_told = 0; claim_sent = claim_gen - 1; scr_sent = scr_gen - 1;
             if (!music) meta_sent = meta_gen, prog_sent = prog_gen, ctl_sent = ctl_gen;
             if (!music && !artn) art_sent = art_gen;              /* (a cover before any metadata: told too) */
             fifo.n = 0; ui_up = 1;                                /* answers to the last UI's requests: not this one's */
@@ -671,6 +698,8 @@ static void *writer(void *arg)
         pthread_mutex_lock(&lock);
         dirty = 0;                                               /* (what changes from here on: looked at again at once) */
         if (home_sent != home_gen || !home_told) { put(&o, "home %s", home_set ? home : "-"); home_sent = home_gen; home_told = 1; }
+        if (claim_sent != claim_gen) { if (claim_pkg[0]) put(&o, "claim %s %d", claim_pkg, claim_mask); claim_sent = claim_gen; }
+        if (scr_sent != scr_gen) { put(&o, "screens %s", scr_names); scr_sent = scr_gen; }
         if (tz_sent != tz_gen) { if (tz[0]) put(&o, "tz %s", tz); tz_sent = tz_gen; }
         /* with how long ago it came on: a new UI ends the timed ones (an error's flash, which nothing unsets) by
          * themselves; one that came and went since the last write: on, then off */
