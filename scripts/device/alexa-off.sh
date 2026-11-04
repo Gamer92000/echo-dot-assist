@@ -17,11 +17,13 @@ PKGS="$ALEXA_PACKAGES $SETUP_PACKAGES $UPDATE_PACKAGES"
 # all of it pm, settings and wpa_cli below), and at every start but the first there is nothing to do.  So the package
 # manager's own files first (plain XML up to Android 11): a package not in packages.xml is not installed, one with
 # enabled 2/3/4 in package-restrictions.xml is what "pm list packages -d" calls disabled.  Absence only counts when
-# packages.xml has "android" in it (a file half written, or another format, says nothing).  Anything not shown done
-# there goes to pm as before: the files can only save calls, never one that is needed.
+# packages.xml ends in </packages>: the package manager writes it again in place after many a change, and a file half
+# written lacks packages without saying so ("android" is a quarter of the way in on checkers, Alexa's updated apps in
+# /data/app after it); another format says nothing either.  Anything not shown done there goes to pm as before: the
+# files can only save calls, never one that is needed.
 PM=/data/system/packages.xml PMR=/data/system/users/0/package-restrictions.xml
 pm_done() {
-    grep -q '<package name="android"' $PM 2>/dev/null || return 1
+    grep -q '^</packages>' $PM 2>/dev/null || return 1
     for p in $PKGS; do
         case "$p" in */*) grep -qx "$p" $DISABLED 2>/dev/null && continue; return 1;; esac
         grep -q "<package name=\"$p\"" $PM || continue
