@@ -7,6 +7,14 @@ What changed for people using the Echo, newest first. Details and measurements a
 - **No more ticks in music.** Music Assistant's music had a small tick several times a second on the Echo Show 5
   while the Echo kept it in sync, most noticeable in quiet passages and while it listens; it is now kept in sync
   without a cut. And the music no longer clicks as it is turned down for a request and back up after: it glides.
+- **Echo Shows: the screen's face comes up right after the install** (issue #122). Installed by the setup, the
+  screen's own UI never started: the screen stayed black but for the light band, until the first update arrived.
+  Android lets the screen's program load its library only from a few folders, and the system partition, where the
+  install puts hassmic, is not one of them (updates live in `/data`, which is); hassmic now tells it where to look,
+  in a way Android does not ignore. Seen on an Echo Show 5 2nd gen, checked on an Echo Show 5.
+- **Echo Show 5 and Show 5 2nd gen: the screen at a fixed brightness**, as on the Show 8s. Android's automatic
+  brightness took the screen down to almost nothing in a dim room. Where Kiosk Satellite is installed, it sets the
+  brightness, as before: its own adaptive brightness or the level chosen in it (on every Echo Show).
 
 ## 2026-11-03
 

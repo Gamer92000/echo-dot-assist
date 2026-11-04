@@ -414,7 +414,12 @@ setup; what was checked on the PC only says so.
   Android (the app gets it too, as a drag), hassmic's home activity is started at once so the next touches are ours,
   and SurfaceControl.screenshot(II) (static, in 8149's framework; the panel as mounted, 480x960) is turned for under
   the drawer as touches are turned. Screen off: IPowerManager.goToSleep(J,I,I) with the power button's reason 4; a
-  touch while off: wakeUp(J,String,String). On the device (first round): drawing, fonts, the switcher with icons, the
+  touch while off: wakeUp(J,String,String). screen.dex's `System.load` may open libhmui.so only from `java.library.path`
+  (app_process: `LD_LIBRARY_PATH`), `/data` and `/mnt/expand`: libnativeloader's isolated namespace for a class loader
+  ApplicationLoaders did not make. So `screen.c` puts the library's folder on `LD_LIBRARY_PATH`; without it the copy on
+  `/system/hassmic` fails with "is not accessible for the namespace" (issue #122, cronos). And the child's real group
+  made its effective one first: hassmic's are apart (`runas -r 3990`), which makes the exec AT_SECURE, and bionic's
+  linker then ignores `LD_LIBRARY_PATH` (the error's `ld_library_paths=""`). On the device (first round): drawing, fonts, the switcher with icons, the
   music view with Music Assistant, the band. Open: everything of the second round, Back and the home-app relaunch.
 - [x] Amazon's WebView stays (`STOCK_APPS_OUT` no longer lists `app/AmazonWebView`): `config_webview_packages` lists
   `com.amazon.webview.chromium` (available by default) and `com.android.webview` (fallback, not installed). Back on

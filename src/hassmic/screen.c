@@ -357,12 +357,23 @@ static pid_t ui_start(int band, int *in, int *out)
     static int told;
     if (!fake && (access(dex, R_OK) || access(lib, R_OK))) { if (!told++) fprintf(stderr, "screen: %s or %s missing, no screen UI\n", dex, lib); return -1; }
     snprintf(cp, sizeof cp, "CLASSPATH=%s", dex); snprintf(bs, sizeof bs, "HMUI_BAND=%d", band);
+    /* libhmui.so's folder on the library path: Android 7's class loader namespace (libnativeloader) lets System.load
+     * open only /data, /mnt/expand and java.library.path, which app_process takes from LD_LIBRARY_PATH.  Installed in
+     * /system/hassmic, without it: "dlopen failed: library ... is not accessible for the namespace" (cronos, 2026-11-04) */
+    char lp[PATH_MAX + 20]; snprintf(lp, sizeof lp, "LD_LIBRARY_PATH=%s", lib);
+    char *slash = strrchr(lp, '/'); if (slash && slash > lp + 16) *slash = '\0';
+    /* ...and the child's real group made its effective one first, as main.c's child_ids: runas -r leaves hassmic real
+     * group 3990 and effective system, the kernel makes an exec with the two apart AT_SECURE (cap_bprm_secureexec), and
+     * bionic's linker then drops LD_LIBRARY_PATH: java.library.path empty, /system/hassmic refused all the same
+     * (checkers, 2026-11-04: AT_SECURE 1 in the UI's auxv, ld_library_paths="").  Our copies in /data never needed it */
+    gid_t eg = getegid();
     extern char **environ;
     size_t ne = 0; while (environ[ne]) ne++;
-    char **envp = malloc((ne + 3) * sizeof *envp);
+    char **envp = malloc((ne + 4) * sizeof *envp);
     if (!envp) return -1;
-    size_t m = 0; envp[m++] = cp; envp[m++] = bs;
-    for (size_t i = 0; i < ne; i++) if (strncmp(environ[i], "CLASSPATH=", 10) && strncmp(environ[i], "HMUI_BAND=", 10)) envp[m++] = environ[i];
+    size_t m = 0; envp[m++] = cp; envp[m++] = bs; envp[m++] = lp;
+    for (size_t i = 0; i < ne; i++) if (strncmp(environ[i], "CLASSPATH=", 10) && strncmp(environ[i], "HMUI_BAND=", 10) &&
+                                        strncmp(environ[i], "LD_LIBRARY_PATH=", 16)) envp[m++] = environ[i];
     envp[m] = NULL;
     long maxfd = sysconf(_SC_OPEN_MAX);
     if (maxfd < 0 || maxfd > 65536) maxfd = 65536;
@@ -376,6 +387,7 @@ static pid_t ui_start(int band, int *in, int *out)
         int i = fcntl(pin[0], F_DUPFD, 3), o = fcntl(pout[1], F_DUPFD, 3);   /* as ring_band.c: never a dup2 onto itself */
         if (i < 0 || o < 0 || dup2(i, 0) < 0 || dup2(o, 1) < 0) _exit(127);
         for (long d = 3; d < maxfd; d++) close((int)d);          /* none of hassmic's sockets in the VM; stderr: the log */
+        setregid(eg, eg);                                         /* (a failure: the UI from /data still loads) */
         execve(prog, argv_, envp);
         _exit(127);
     }
