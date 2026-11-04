@@ -4,11 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-04
 
-- **Echo Show 5, Show 5 2nd gen and Show 8: the screen turns off on time.** hassmic sets how soon the
+- **Echo Show 5, Show 5 2nd gen and Show 8 (1st gen): the screen turns off on time.** hassmic sets how soon the
   screen turns off (5 minutes, 1 minute while muted or on Do not disturb, as stock) with Android's `settings`, which
   on these Echos is a shell script without a `#!` line: started directly it failed, and the setting was never made.
-  hassmic now runs such a script through the shell, as a shell would. A tool that hangs no longer holds up the part
-  of hassmic that asked (it waits 20 s at most), and what a tool prints as an error now reaches the log.
+  hassmic now runs such a script through the shell, as a shell would. A tool that hangs now holds up the part of
+  hassmic that asked for 20 seconds at most and is then stopped, and what a tool prints as an error reaches the log.
 - **The Echo Shows start sooner** (the Echo Show 5 about 15 seconds). Turning Alexa off at each start no longer asks
   Android questions it already knows the answers to (the Echo Show 5 took 16 of its 41 seconds there).
 - **No more ticks in music.** Music Assistant's music had a small tick several times a second on the Echo Show 5,

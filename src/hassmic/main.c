@@ -323,8 +323,11 @@ static void run_output(char *const argv[], char *buf, size_t n)
     if (pipe2(p, O_CLOEXEC)) return;
     pid_t pid = fork();
     if (pid == 0) {                     /* not popen: its shell would undo child_ids() */
+        setpgid(0, 0);                  /* a group of its own, for the kill below */
         child_ids();
-        dup2(p[1], 1);                  /* errors (stderr) reach the log, as run_argv's do */
+        /* errors (stderr) reach the log, as run_argv's do.  A pipe end that is 1 itself (only with stdout closed at
+         * start) keeps its close-on-exec through dup2: cleared by hand */
+        if (p[1] == 1) fcntl(1, F_SETFD, 0); else dup2(p[1], 1);
         exec_any(argv);
         /* the log says it could not; write() only: the child of a threaded process may take no lock (snprintf,
          * strerror) that another thread held at the fork */
@@ -333,15 +336,16 @@ static void run_output(char *const argv[], char *buf, size_t n)
     }
     close(p[1]);
     if (pid < 0) { fprintf(stderr, "run: %s: no fork (%s)\n", argv[0], strerror(errno)); close(p[0]); return; }
-    /* 20 s at most, whatever a tool does: the callers are threads that must go on (volume, the front end's scores,
-     * Amazon's login) */
+    /* 20 s at most per tool, whatever it does: the callers are threads that must go on (volume, the front end's
+     * scores, Amazon's login); one that runs several waits for each */
     struct timespec t0; clock_gettime(CLOCK_MONOTONIC, &t0);
     int late = 0;
     for (;;) {
         struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
         int left = 20000 - (int)((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000);
         struct pollfd pf = { p[0], POLLIN, 0 };
-        if (len + 1 >= n) break;        /* cut: closing the pipe ends a tool that writes on (SIGPIPE) */
+        if (len + 1 >= n) break;        /* cut: what it writes on fails with EPIPE (SIGPIPE is ignored, here and so in
+                                           it); it ends as it would, and only a hang is killed */
         if (left <= 0) { late = 1; break; }
         int k = poll(&pf, 1, left);
         if (k < 0 && errno == EINTR) continue;
@@ -354,13 +358,16 @@ static void run_output(char *const argv[], char *buf, size_t n)
     }
     buf[len] = 0;
     close(p[0]);                        /* SIGCHLD is ignored: nothing to wait for */
-    /* a tool that hangs would stay for good, one more each call.  Only while waitpid says it is our child still
-     * running: SIGCHLD is ignored, so one that ended is gone at once and its pid free for anyone (a thread of ours
-     * too).  What it started (sh -c's) stays, in hassmic's process group, which init's stop ends */
+    /* A tool that hangs would stay for good, one more each call: its process group goes, with what it started (sh -c's
+     * lipc tools: afe_arbitration, each wake word round).  By pid, safely: while a group has a member Linux gives its
+     * number to no new process, and an empty one is ESRCH.  Where setpgid was refused there is no such group: then the
+     * child alone, and only while waitpid says it is ours and running (SIGCHLD is ignored: one that ended is gone at
+     * once, its pid free for anyone, a thread of ours too).  Left: a pid taken again in the instant between waitpid
+     * and kill, and a tool still hanging when hassmic stops (its own group: init's stop misses it) */
     if (late) {
-        int st, alive = waitpid(pid, &st, WNOHANG) == 0;
-        if (alive) kill(pid, SIGKILL);
-        fprintf(stderr, "run: %s: no end after 20 s%s\n", argv[0], alive ? ", stopped" : " (its pipe held by what it started)");
+        int st, stopped = kill(-pid, SIGKILL) == 0;
+        if (!stopped && waitpid(pid, &st, WNOHANG) == 0) stopped = kill(pid, SIGKILL) == 0;
+        fprintf(stderr, "run: %s: no end after 20 s%s\n", argv[0], stopped ? ", stopped" : " (its pipe held by what it started)");
     }
 }
 
