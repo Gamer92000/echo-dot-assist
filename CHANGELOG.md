@@ -2,6 +2,13 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-04
+
+- **The Echo Show's screen timeout and brightness settings take effect.** hassmic runs Android's `settings`, `am`
+  and `pm`, which are shell scripts without a `#!` line; started directly they failed, and every `settings put` had
+  done nothing. They now run through the shell. A tool that never ends no longer stalls the thread that asked (20 s
+  at most), and what a tool prints as an error reaches the log.
+
 ## 2026-11-03
 
 - **Uninstalling from an Echo Show no longer leaves "OOBE has stopped" on the screen.** The install takes Amazon's apps

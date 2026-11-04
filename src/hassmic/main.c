@@ -19,6 +19,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <limits.h>
 #include <math.h>
 #include <netinet/in.h>
@@ -279,13 +280,28 @@ static atomic_int click_q16 = 65536;
  * (net.c); a shell would make it the effective group, and AIPC and the mixer refuse that. */
 static void child_ids(void) { gid_t e = getegid(); setregid(e, e); }
 
+/* execv, and a script without "#!" (Android's /system/bin/settings, am, pm are such: "# Script to start ...") through
+ * the shell, as a shell runs them: execv alone fails with ENOEXEC, and every `settings put` hassmic made had done
+ * nothing (the screen's timeout and brightness, 2026-11-02).  In the child: no allocation */
+static void exec_any(char *const argv[])
+{
+    execv(argv[0], argv);
+    if (errno == ENOEXEC) {
+        char *a[34]; int n = 0;
+        a[n++] = "/system/bin/sh";
+        for (int i = 0; argv[i] && n < 33; i++) a[n++] = argv[i];
+        a[n] = NULL;
+        execv(a[0], a);
+    }
+}
+
 static void run_argv(char *const argv[])
 {
     if (fork() == 0) {                  /* bionic API 24 has no posix_spawn; SIGCHLD is ignored: no zombie */
         child_ids();
         int nul = open("/dev/null", O_WRONLY);          /* ledctrl and audio_manager_set_prop chat on stdout: two log lines */
         if (nul >= 0) dup2(nul, 1);                     /* per LED change otherwise.  Errors (stderr) still reach the log */
-        execv(argv[0], argv);
+        exec_any(argv);
         _exit(127);
     }
 }
@@ -298,17 +314,38 @@ static void run_output(char *const argv[], char *buf, size_t n)
 {
     int p[2]; size_t len = 0; ssize_t r;
     buf[0] = 0;
+    /* close-on-exec: a child another thread starts meanwhile (the band's renderer lives as long as hassmic) would hold
+     * the write end, and this read would never see its end (the screen's timeout thread stuck in its 5 min check,
+     * 2026-11-02); dup2 onto 1 below clears the flag for this child alone */
     if (pipe(p)) return;
-    if (fork() == 0) {                  /* not popen: its shell would undo child_ids() */
+    fcntl(p[0], F_SETFD, FD_CLOEXEC); fcntl(p[1], F_SETFD, FD_CLOEXEC);
+    pid_t pid = fork();
+    if (pid == 0) {                     /* not popen: its shell would undo child_ids() */
         child_ids();
-        int nul = open("/dev/null", O_WRONLY);
-        dup2(p[1], 1); if (nul >= 0) dup2(nul, 2);
+        dup2(p[1], 1);                  /* errors (stderr) reach the log, as run_argv's do */
         close(p[0]); close(p[1]);
-        execv(argv[0], argv);
+        exec_any(argv);
+        char m[200]; int k = snprintf(m, sizeof m, "run: %s: %s\n", argv[0], strerror(errno));   /* the log says why */
+        if (k > 0) { ssize_t w = write(2, m, (size_t)k); (void)w; }
         _exit(127);
     }
+    if (pid < 0) fprintf(stderr, "run: %s: no fork (%s)\n", argv[0], strerror(errno));
     close(p[1]);
-    while (len + 1 < n && ((r = read(p[0], buf + len, n - 1 - len)) > 0 || (r < 0 && errno == EINTR))) if (r > 0) len += (size_t)r;
+    /* and 20 s at most, whatever a tool does: the callers are threads that must go on */
+    struct timespec t0; clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (;;) {
+        struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+        int left = 20000 - (int)((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000);
+        struct pollfd pf = { p[0], POLLIN, 0 };
+        if (left <= 0 || len + 1 >= n) break;
+        int k = poll(&pf, 1, left);
+        if (k < 0 && errno == EINTR) continue;
+        if (k <= 0) break;
+        r = read(p[0], buf + len, n - 1 - len);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) break;
+        len += (size_t)r;
+    }
     buf[len] = 0;
     close(p[0]);                        /* SIGCHLD is ignored: nothing to wait for */
 }
