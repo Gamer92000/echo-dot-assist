@@ -584,6 +584,12 @@ int main(int argc, char **argv)
     msg("home org.example.app01"); run(50);
     assert(nlaunched == nl + 1 && strstr(launched[nl], "org.example.app01/"));
     scene_top(S, "org.example.app01", now); run(100); assert(!scene_visible(S));
+    /* the drawer's Home from the Music view: the music stays up while the home app comes (no moment of the face),
+     * the face is what shows after it, once it is in front */
+    go_home(S, V_MUSIC); scene_top(S, UI_HOME_PKG, now); run(300); assert(scene_visible(S) && S->view == V_MUSIC);
+    nl = nlaunched; pull_drawer(); run(300); tap(66, 60); run(600);
+    assert(nlaunched == nl + 1 && strstr(launched[nl], "org.example.app01/") && S->view == V_MUSIC);
+    scene_top(S, "org.example.app01", now); run(100); assert(!scene_visible(S) && S->view == V_FACE);
     /* over the app: a pull from the app's own top is the app's; from the grip above it, the drawer's */
     nl = nlaunched;
     drag(W / 2, 4, W / 2, 300, 12, 16); run(300);

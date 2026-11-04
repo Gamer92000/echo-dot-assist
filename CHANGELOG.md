@@ -19,6 +19,8 @@ What changed for people using the Echo, newest first. Details and measurements a
   swipe up from anywhere on it, and a short push or a light flick is enough.
 - **An app switcher in the drawer.** Below the volume: the home app's own pages and every app you installed, in a row
   that scrolls sideways. Tap one and it opens; the app you came from stays on the screen until the new one is up.
+- **Going from the Music view to the home app no longer stops at the face.** Home in the drawer pulled over the
+  Echo's own Music view showed the face's eyes for a moment before the home app came up; the music stays until it does.
 - **A home app made for the Echo, with Home Assistant set up from Echo Local.** The settings page's Screen page or
   Echo Local's new Screen tab in Home Assistant's sidebar pick the home app (the last choice counts); an app made for
   the Echo (docs/screen-apps.md; Echo-Wall is one) gets Home Assistant's address and a login of its own, the pages to

@@ -394,7 +394,7 @@ void go_home(struct scene *s, int view)
         if (s->p->launch) s->p->launch(s->ctx, NULL, NULL);    /* grace, and an app that comes takes the screen (first: */
     }                                                           /* a launch that fails at once ends it) */
     s->leaving_until = 0;
-    s->view = view;
+    s->view = view; s->face_after = 0;
 }
 
 void launch(struct scene *s, const char *pkg, const char *cls)
@@ -413,7 +413,7 @@ void ask_own(struct scene *s) { s->own_asked = 1; home_new = 0; }
 void scene_launch_failed(struct scene *s, const char *pkg, long long now)
 {
     s->now = now;
-    if (eq(s->leaving_pkg, pkg ? pkg : UI_HOME_PKG)) s->leaving_until = 0;
+    if (eq(s->leaving_pkg, pkg ? pkg : UI_HOME_PKG)) { s->leaving_until = 0; s->face_after = 0; }
     if (!pkg && s->want_home_until) {                           /* our own did not start: the app keeps the screen, */
         s->want_home_until = 0;                                 /* and a drawer pulled over it goes */
         if (s->dr.from_app && drawer_open(s)) { drawer_close_now(s); s->edge = 0; s->pressed = 0; scene_backdrop(s, NULL, 0, 0); }
@@ -438,6 +438,7 @@ void scene_top(struct scene *s, const char *pkg, long long now)
     if (eq(pkg, s->top)) return;
     snprintf(s->top, sizeof s->top, "%s", pkg);
     if (!is_home(pkg)) {                                        /* the app is in front: what held its place goes */
+        if (s->face_after) { s->view = V_FACE; s->face_after = 0; }
         s->leaving_until = 0;
         if (eq(pkg, home_app(s))) s->own_asked = 0;             /* (the home app back: it comes back again after this) */
         if (eq(pkg, home_app(s))) { s->home_broken = 0; s->home_retry_at = 0; s->home_retry_ms = 0; }           /* (it starts after all: an update had it away) */

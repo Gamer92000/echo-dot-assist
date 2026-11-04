@@ -154,7 +154,7 @@ struct scene {
      * 2 a ring), its screens' names (the drawer's row), and the app a ring took the screen from (back after it) */
     char claim_pkg[96], screens[400], ring_from[96]; int claim_mask;
     /* view */
-    int view, screen_on; char top[96]; long long now, last, want_home_until, relaunch[3];
+    int view, face_after, screen_on; char top[96];   /* face_after: the face once the app launched is in front */ long long now, last, want_home_until, relaunch[3];
     /* an app was launched: the last frame stays (the app's picture under the drawer, or our own screen) until the
      * app is in front, so that neither the face nor hassmic's black home activity shows in between */
     long long leaving_until; int leaving_drawn; char leaving_pkg[96]; int home_broken;   /* home_broken: it did not start */

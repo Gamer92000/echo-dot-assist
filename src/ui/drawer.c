@@ -90,7 +90,9 @@ static void drawer_go(struct scene *s, const char *pkg, const char *how)
     drawer_close(s, 1);
     if (d->from_app && eq(pkg, d->from) && !how) return;
     d->go = 1; snprintf(d->go_pkg, sizeof d->go_pkg, "%s", pkg); snprintf(d->go_cls, sizeof d->go_cls, "%s", how ? how : "");
-    s->view = V_FACE;                                           /* what shows when that app is gone again */
+    /* what shows when that app is gone again: the face, but only once it is in front; until then the frame left up is
+     * the one under the drawer (the Music view's, say), not a moment of the face's eyes */
+    s->face_after = 1;
     s->own_asked = 0;                                           /* (the home app asked for: back when it leaves, tried again) */
     /* pulled over an app: its picture stays until the chosen one is in front (scene.c leaving_until), as Android
      * switches apps; ours (the face) would show for the second the app takes to come.  Over our own screen: ours */
