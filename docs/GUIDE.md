@@ -550,8 +550,8 @@ satellite of its own has to run without its microphone (as a display) while hass
   disturb, orange with a **Stop** button while a timer rings, green during a Drop In (**Answer** and **Decline** when
   one rings, **End** during a call), orange while the Echo waits to be added to Home Assistant. Tap the eyes and they
   smile. Below them: the clock, in Home Assistant's time zone (12-hour where the Echo's language is US, Canadian or
-  Australian English), or what Music Assistant plays, with play/pause; tap it for the music. A request to the
-  assistant, a ringing timer or a Drop In bring the face back from the music.
+  Australian English). What Music Assistant plays sits in a card in the bottom right corner, with play/pause; tap it
+  for the music. A request to the assistant, a ringing timer or a Drop In bring the face back from the music.
 - **Music on the screen** (Screen page, "Music on the screen while it plays", off by default): while a track from Music
   Assistant plays, the Playing tab (the big cover) shows instead, until the music stops. **In place of the face** replaces
   only the face: an app in front (Kiosk Satellite, a dashboard) stays. **In place of the home app too** also comes over the
@@ -567,7 +567,7 @@ satellite of its own has to run without its microphone (as a display) while hass
   own: **Screen sleeps after** (5 minutes), 1 minute with the mic off or in Do not disturb (the clock then says so on a
   line under it). Until then the face shows as always; a touch on the clock brings it back (that touch does nothing
   else), and so does anything the Echo does: a request, a ringing timer (with its **Stop**), a Drop In, the volume,
-  music starting. Music playing shows its bar under the clock. With an app or the music page in front the screen goes dark
+  music starting. Music playing shows its card in the bottom right corner. With an app or the music page in front the screen goes dark
   as before.
   Brightness follows the Brightness card: **Adaptive brightness** dims the clock at night.
 - **The drawer**: pull down from the top edge of the screen, whatever shows, as on Amazon's own Echo Show. In it:
