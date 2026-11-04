@@ -519,6 +519,19 @@ and the action button pauses and resumes.
   ticked in the Echo's ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure). Without it
   you hear the chime only. "Bluetooth announcements" on the settings page turns both off and picks their language.
 
+### Even volume steps
+
+Each point of the volume is the same step, wherever it is set from (Home Assistant, Music Assistant, the buttons, the
+page): 0.5 dB a point, 5 dB a press of the volume buttons, from 1 (about 50 dB under full, quiet but heard) to 100
+(full, as before); 0 is silent. A stock Echo's steps are uneven: the Echo Show 5 has 31 volume steps of its own for
+the 100 points (three or four points play the same) and puts 46 dB in the bottom half and 20 in the top; the Echo
+Dot 2 gains 1 dB from 60 to 70 and 10 from 90 to 100. The Echo sets its own volume to the nearest step above, by its
+measured curve, and turns the sound down the rest of the way itself; on these Echos, whose speakers play 16-bit
+audio, that loses nothing. Low volumes are louder than on a stock Echo (an Echo Show 5's 10 is 45.5 dB under full
+instead of 51) and middle ones somewhat quieter (50 is 25 dB under full instead of 20 to 22). "Even
+volume steps" (Sound page, Speaker card; exported) switched off brings the Echo's own steps back. A Bluetooth
+speaker that sets its own volume is set to the number as before. On by default.
+
 ### Separate volumes
 
 The settings page's Volume card (Sound) sets the Echo's volume, the same one as the volume buttons and Home
@@ -540,7 +553,7 @@ the music: the media player's volume and the volume buttons change both. Home As
 Copying settings to another Echo (Export, Compare & copy) takes the switches and the offsets, never a volume itself:
 like the Echo's volume, that is for the room it is in.
 
-The same number sounds the same on every slider, and as that volume on a stock Echo (measured on an Echo Dot 2,
+The same number sounds the same on every slider, and (with [even volume steps](#even-volume-steps) off) as that volume on a stock Echo (measured on an Echo Dot 2,
 within 0.3 dB, and on an Echo Show 5, whose volume steps are its own: its top end is much flatter and its bottom end
 steeper than the Dot's; the other models use the Dot's until someone measures theirs with `tools/vol-curve.py`). The volume buttons change what is playing: a Drop In call, a reply (the ring shows the steps in cyan),
 a ringing timer, otherwise the music. On a Bluetooth speaker that sets its own volume (absolute volume) the speaker is

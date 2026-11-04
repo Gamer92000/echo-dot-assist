@@ -68,7 +68,8 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
-          CALL_LINK, CALL_LEVEL, CALL_OFFSET, NSET };
+          CALL_LINK, CALL_LEVEL, CALL_OFFSET,
+          VOL_EVEN, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
  * listed()); everything else here is on the settings page only, except what Home Assistant always shows (wake sound,
@@ -166,6 +167,8 @@ static const struct setting table[NSET] = {
      * number leaves Home Assistant, the media player's volume moves it.  Exported: the switches and the offsets, how
      * the volumes relate; not a kind's own volume, which like the volume is for the room it is in */
     [VOL_SPLIT]   = { "separate_volumes", "Separate volumes", "Sound", NULL, S_BOOL, 0, 1, 1, 1 },
+    /* main.c vol_even: what each volume sounds like, so exported (two Echos of a room at one number sound alike) */
+    [VOL_EVEN]    = { "even_volume", "Even volume steps", "Sound", NULL, S_BOOL, 0, 1, 1, 0 },
     [ASSIST_LINK] = { "assistant_volume_linked", "Voice replies follow the music volume", "Sound", NULL, S_BOOL, 0, 1, 1, 1 },
     [ASSIST_LEVEL] = { "assistant_volume", "Voice replies volume", "Sound", "%", S_INT, 0, 100, 0, 0 },
     [ASSIST_OFFSET] = { "assistant_volume_offset", "Voice replies above the music", "Sound", NULL, S_INT, -VOL_OFFSET_MAX, VOL_OFFSET_MAX, 1, 0 },
@@ -302,6 +305,7 @@ int settings_get(const struct setting *s)
     case SPK_GAIN: return spkgain_get();
     case VOLUME: return core_volume();
     case VOL_SPLIT: return core_separate_volumes(-1);
+    case VOL_EVEN: return core_even_volume(-1);
     case ASSIST_LINK: case SOUNDS_LINK: case TIMER_LINK: case CALL_LINK: return core_kind_linked((int)(s - table - ASSIST_LINK) / 3, -1);
     case ASSIST_LEVEL: case SOUNDS_LEVEL: case TIMER_LEVEL: case CALL_LEVEL: return core_kind_volume((int)(s - table - ASSIST_LINK) / 3, -1);
     case ASSIST_OFFSET: case SOUNDS_OFFSET: case TIMER_OFFSET: case CALL_OFFSET: return core_kind_offset((int)(s - table - ASSIST_LINK) / 3);
@@ -366,6 +370,7 @@ static void put(enum id i, int v)
     case SPK_GAIN: spkgain_set(v); break;
     case VOLUME: core_set_volume(v); break;
     case VOL_SPLIT: core_separate_volumes(v); break;
+    case VOL_EVEN: core_even_volume(v); break;
     case ASSIST_LINK: case SOUNDS_LINK: case TIMER_LINK: case CALL_LINK: core_kind_linked((i - ASSIST_LINK) / 3, v); break;
     case ASSIST_LEVEL: case SOUNDS_LEVEL: case TIMER_LEVEL: case CALL_LEVEL: core_kind_volume((i - ASSIST_LINK) / 3, v); break;
     case ASSIST_OFFSET: case SOUNDS_OFFSET: case TIMER_OFFSET: case CALL_OFFSET: core_set_kind_offset((i - ASSIST_LINK) / 3, v); break;

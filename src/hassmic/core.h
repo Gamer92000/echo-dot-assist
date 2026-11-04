@@ -108,6 +108,7 @@ void core_set_volume(int percent);
 enum { VOL_ASSISTANT, VOL_SOUNDS, VOL_TIMERS, VOL_CALLS, VOL_KINDS };
 #define VOL_OFFSET_MAX 100
 int  core_separate_volumes(int set);
+int  core_even_volume(int set);           /* setting even_volume: the same dB per point (main.c vol_even) */
 int  core_kind_volume(int kind, int set);
 int  core_kind_linked(int kind, int set);
 int  core_kind_offset(int kind);

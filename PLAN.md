@@ -2749,6 +2749,21 @@ Run in this order. Each step says what it proves.
       `run-satellite`, so `core_link_pause` marks it and no ring shows (`fake_ha.py`).  HA started with the switch on
       does not connect at all, which here reads as no link: the ring shows.
       Open: a sound as well; left out until someone asks.
+- [x] Even volume steps (2026-11-02, asked on an Echo Show 5: "why does the volume sound so non linear"; setting
+      `even_volume`, on by default, exported).  The Show's music stream index is Android's DEFAULT_MEDIA_VOLUME_CURVE
+      (dumpsys media.audio_policy: (1,-58 dB) (20,-40) (60,-17) (100,0), applied in AudioFlinger in float) over 31
+      indices: hassmic's (30 v + 50) / 100 put 3-4 points on one index (45, 46, 47 -> 14), and the measured curve
+      (board.c) has 46 dB under 50 and 20 above.  Now want_db(v) = -50 dB * (100 - v) / 99 (0 silent), the
+      stream at board_vol_at(): the lowest point of the measured curve at least that loud (the Show's points are
+      the indices played, so exact), our PCM gain for the rest (mix_gain; <= 8.8 dB on the Show, 10 on the Dot 2's
+      curve at the top).  No cost: the Show's primary output is AUDIO_FORMAT_PCM_16_BIT 48 kHz stereo
+      (audio_policy_configuration.xml mixPort "primary output"; dumpsys media.audio_flinger: HAL format pcm16,
+      processing pcmfloat), so attenuating 16-bit before it rounds at the same floor.  For the same reason 24-bit
+      Sendspin was not taken up: the output is 16-bit, MA's 24 -> 16 would only move to the Echo.  MainVolume is
+      then not the volume (as with separate volumes): state/volume.music keeps it, written at the first start
+      straight from MainVolume (an update keeps the number).  Echo Show 5 (2026-11-02, the update pushed): 45 kept,
+      index 14 -> 11; keys 0..100 gave indices 0, 5, 8, 8, 11, 12, 15, 20, 23, 26, 30 as the curve says.  Not
+      measured by ear or mic (no Dot beside it for tools/vol-curve.py).  The Dot 3's curve is still the Dot 2's.
 - [x] Volumes per kind of audio (GitHub issue #32: several Dot 3 and a Dot 2; one volume for media and one for the
       assistant, the wake sound on a slider of its own).  Built 2026-10-17, after two tries the owner rejected.
       First: categories linked to the main volume with offsets (replies in volume points, sounds in dB under it,
