@@ -325,8 +325,9 @@ static void run_output(char *const argv[], char *buf, size_t n)
         dup2(p[1], 1);                  /* errors (stderr) reach the log, as run_argv's do */
         close(p[0]); close(p[1]);
         exec_any(argv);
-        char m[200]; int k = snprintf(m, sizeof m, "run: %s: %s\n", argv[0], strerror(errno));   /* the log says why */
-        if (k > 0) { ssize_t w = write(2, m, (size_t)k); (void)w; }
+        /* the log says it could not; write() only: the child of a threaded process may take no lock (snprintf,
+         * strerror) that another thread held at the fork */
+        ssize_t w = write(2, "run: ", 5); w = write(2, argv[0], strlen(argv[0])); w = write(2, ": cannot be run\n", 16); (void)w;
         _exit(127);
     }
     if (pid < 0) fprintf(stderr, "run: %s: no fork (%s)\n", argv[0], strerror(errno));
