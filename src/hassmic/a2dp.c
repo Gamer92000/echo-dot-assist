@@ -605,7 +605,14 @@ static void *player(void *arg)
             if (bt_open(rr, 2)) { usleep(200000); continue; }
             open = 1; rate = rr; fprintf(stderr, "a2dp: output open, %u Hz\n", rr);
         }
-        if (core_state() != IDLE) for (size_t i = 0; i < 2 * out; i++) buf[i] /= 6;     /* duck under the voice assistant */
+        {   /* duck under the voice assistant: down to a sixth, glided over ~30 ms (a step at a block's edge clicked) */
+            static float g = 1; float target = core_state() != IDLE ? 1.0f / 6 : 1, k = 1.0f / (0.030f * rr);
+            if (g != 1 || target != 1)
+                for (size_t i = 0; i < out; i++) {
+                    g += (target - g) * k; if (fabsf(g - target) < 1e-4f) g = target;
+                    buf[2 * i] = (int16_t)lrintf(buf[2 * i] * g); buf[2 * i + 1] = (int16_t)lrintf(buf[2 * i + 1] * g);
+                }
+        }
         while (bt_queued_us() > MIXER_US) usleep(5000);
         for (size_t i = 0; i < 2 * out; i++) { int v = buf[i] < 0 ? -buf[i] : buf[i]; if (v > peak) peak = v; }
         if (bt_write(buf, out * 4) < 0) fprintf(stderr, "a2dp: mixer write failed\n");

@@ -173,9 +173,48 @@ static void q_push(long long ts, const uint8_t *pcm, size_t len)
     pthread_mutex_unlock(&q_lock);
 }
 
+/* A chunk played `n` frames longer (n > 0: we are early) or shorter: the whole chunk resampled by linear interpolation,
+ * 0.5 % at the most (6 frames in a 25 ms chunk), which nobody hears.  Skipping or repeating the frames in one place, as
+ * this did before, put a step in the waveform each time: a tick in quiet music, several a second on an Echo Show 5,
+ * whose output clock runs ~350 ppm off (2026-11-02: "nudged -170 frames" every 10 s).  Returns the frames in *out
+ * (malloc'd; NULL: play the chunk as it is) */
+static int16_t *stretch(const int16_t *in, size_t frames, int n, size_t *out_frames)
+{
+    size_t m = (size_t)((long)frames + n);
+    if (frames < 2 || m < 2) return NULL;
+    int16_t *o = malloc(m * FRAME);
+    if (!o) return NULL;
+    for (size_t i = 0; i < m; i++) {
+        double pos = (double)i * (double)(frames - 1) / (double)(m - 1);
+        size_t k = (size_t)pos; double f = pos - (double)k;
+        if (k >= frames - 1) { k = frames - 2; f = 1; }
+        for (int ch = 0; ch < CHANNELS; ch++) {
+            double v = in[k * CHANNELS + ch] * (1 - f) + in[(k + 1) * CHANNELS + ch] * f;
+            o[i * CHANNELS + ch] = (int16_t)lrint(v);
+        }
+    }
+    *out_frames = m;
+    return o;
+}
+
+/* The music under the voice assistant: down to a sixth (-15.6 dB) while a request runs, glided over ~30 ms each way,
+ * frame by frame.  It used to be a sixth from one 25 ms chunk to the next: a click as listening started and ended */
+#define DUCK 0.1667f
+static void duck(int16_t *s, size_t frames, float *g, float target)
+{
+    const float k = 1.0f / (0.030f * RATE);                     /* a time constant of 30 ms */
+    if (*g == 1 && target == 1) return;                         /* nothing ducked: the samples as they are */
+    for (size_t i = 0; i < frames; i++) {
+        *g += (target - *g) * k;
+        if (fabsf(*g - target) < 1e-4f) *g = target;
+        for (int ch = 0; ch < CHANNELS; ch++) s[i * CHANNELS + ch] = (int16_t)lrintf(s[i * CHANNELS + ch] * *g);
+    }
+}
+
 static void *player_thread(void *arg)
 {
     static int16_t silence[RATE / 100 * CHANNELS]; int open = 0; double smooth = 0; long long stat_t = 0; long adj_total = 0;
+    float duck_g = 1;
     (void)arg;
     for (;;) {
         pthread_mutex_lock(&q_lock);
@@ -199,7 +238,7 @@ static void *player_thread(void *arg)
 
         while (music_queued_us() > MIXER_TARGET_US && atomic_load(&stream_on)) usleep(5000);
 
-        uint8_t *pcm = c->pcm; size_t len = c->len;
+        uint8_t *pcm = c->pcm; size_t len = c->len; int16_t *stretched = NULL;
         long long due = tf_client_time(c->ts) - atomic_load(&static_delay_ms) * 1000LL;
         long long err = due - (raw_us() + music_queued_us() + out_latency_us());       /* > 0: we are early */
         if (atomic_exchange(&snap_next, 0) || llabs(err) > SNAP_US) {
@@ -218,15 +257,17 @@ static void *player_thread(void *arg)
         } else {
             smooth = 0.9 * smooth + 0.1 * (double)err;
             if (fabs(smooth) > 400) {                                                           /* nudge: at most 6 frames per 25 ms chunk */
-                int n = (int)fmin(6, fmax(1, fabs(smooth) * RATE / 1e6));
-                if (smooth > 0) { for (int i = 0; i < n; i++) music_write(pcm, FRAME); adj_total += n; }       /* early: repeat a frame */
-                else if (len > (size_t)n * FRAME) { pcm += n * FRAME; len -= n * FRAME; adj_total -= n; }     /* late: skip frames */
-                smooth -= (smooth > 0 ? 1 : -1) * n * 1e6 / RATE;
+                int n = (int)fmin(6, fmax(1, fabs(smooth) * RATE / 1e6)), d = smooth > 0 ? n : -n; size_t m;
+                if ((stretched = stretch((const int16_t *)pcm, len / FRAME, d, &m))) {         /* early: longer, late: shorter */
+                    pcm = (uint8_t *)stretched; len = m * FRAME; adj_total += d;
+                    smooth -= d * 1e6 / RATE;
+                }
             }
         }
         if (atomic_load(&player_muted)) memset(pcm, 0, len);
-        else if (core_state() != IDLE) { int16_t *s = (int16_t *)pcm; for (size_t i = 0; i < len / 2; i++) s[i] /= 6; }    /* duck under the voice assistant */
+        else duck((int16_t *)pcm, len / FRAME, &duck_g, core_state() != IDLE ? DUCK : 1);        /* under the voice assistant */
         music_write(pcm, len);
+        free(stretched);
         if (raw_us() - stat_t > 10000000) {
             double e; tf_synced(&e); stat_t = raw_us();
             fprintf(stderr, "sendspin: sync err %+.2f ms, clock ±%.2f ms, queued %zu KB, nudged %+ld frames\n", smooth / 1000, e / 1000, q_bytes / 1024, adj_total);

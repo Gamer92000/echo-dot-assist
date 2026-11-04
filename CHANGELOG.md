@@ -2,6 +2,12 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-04
+
+- **No more ticks in music.** Music Assistant's music had a small tick several times a second on the Echo Show 5
+  while the Echo kept it in sync, most noticeable in quiet passages and while it listens; it is now kept in sync
+  without a cut. And the music no longer clicks as it is turned down for a request and back up after: it glides.
+
 ## 2026-11-03
 
 - **Uninstalling from an Echo Show no longer leaves "OOBE has stopped" on the screen.** The install takes Amazon's apps
