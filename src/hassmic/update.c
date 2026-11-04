@@ -39,7 +39,10 @@
 #else
 #define CURRENT VERSION "+" BUILD
 #endif
+#ifndef REPO                            /* the Makefile's UPDATE_REPO: the GitHub repository of the build's origin, so a fork's
+                                         * Echos update from the fork's releases, signed with its own key */
 #define REPO "Gamer92000/echo-dot-assist"
+#endif
 #define MAX_BUNDLE (16u << 20)          /* as for a push (ota.c) */
 #define FIRST_LOOK 60                   /* s after start: the network may not be up before */
 #define INTERVAL (6 * 3600)

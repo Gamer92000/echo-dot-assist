@@ -2,6 +2,13 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-04
+
+- **A fork's own builds update from the fork.** Online updates look for releases in the GitHub repository the build
+  was made from (its `origin`; CI's checkout: the repository the workflow runs in), so an Echo running a fork's build
+  is no longer offered upstream's releases, which would replace the fork (and fail its key). Upstream's builds look
+  where they always did. `make UPDATE_REPO=owner/repo` picks one by hand.
+
 ## 2026-11-03
 
 - **Uninstalling from an Echo Show no longer leaves "OOBE has stopped" on the screen.** The install takes Amazon's apps

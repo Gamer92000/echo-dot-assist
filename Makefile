@@ -31,7 +31,10 @@ BUILD_TIME := $(shell LC_ALL=C git log -1 --format=%cd --date=format:'%b %e %Y %
 # Assistant compares it as numbers.  A build CI publishes (RELEASE=1) reports just that; any other reports
 # VERSION+BUILD (git describe), which online updates take for that version.
 VERSION := $(shell TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y.%m.%d.%H%M%S 2>/dev/null || echo 0)
-DEFS    := -DVERSION='"$(VERSION)"' -DBUILD='"$(BUILD)"' -DBUILD_TIME='"$(BUILD_TIME)"' $(if $(RELEASE),-DRELEASE)
+# Where online updates come from (update.c): the GitHub repository this clone's origin is (CI's checkout: the repository
+# the workflow runs in), so a fork's Echos take the fork's releases; upstream's when there is no GitHub origin
+UPDATE_REPO ?= $(or $(shell git remote get-url origin 2>/dev/null | sed -nE 's#^(https://|git@)github\.com[:/]([^/]+/[^/.]+)(\.git)?/?$$#\2#p'),Gamer92000/echo-dot-assist)
+DEFS    := -DVERSION='"$(VERSION)"' -DBUILD='"$(BUILD)"' -DBUILD_TIME='"$(BUILD_TIME)"' -DREPO='"$(UPDATE_REPO)"' $(if $(RELEASE),-DRELEASE)
 CFLAGS  := -O2 -Wall -Wextra -fPIE -Isrc/include $(DEFS)
 LDFLAGS := -pie -fuse-ld=lld -Wl,--allow-shlib-undefined -Wl,--unresolved-symbols=ignore-in-shared-libs
 STOCK_LIBS = $(addprefix $(STOCK)/,$(filter $(LIBS),$(1)))
