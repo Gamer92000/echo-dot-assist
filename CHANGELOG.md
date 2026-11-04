@@ -2,6 +2,11 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-04
+
+- **The Echo Show starts about 15 seconds sooner.** Turning Alexa off at each start no longer asks Android
+  questions it already knows the answers to (the Echo Show 5 took 16 of its 41 seconds there).
+
 ## 2026-11-03
 
 - **Uninstalling from an Echo Show no longer leaves "OOBE has stopped" on the screen.** The install takes Amazon's apps

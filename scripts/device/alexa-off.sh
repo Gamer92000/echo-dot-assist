@@ -13,7 +13,22 @@ for s in $ALEXA_SERVICES $UPDATE_SERVICES $UPDATE_ONDEMAND; do stop $s; done
 # 2026-10-15; a package the firmware lacks cost that call at every start), then pm only for what is there to disable
 DISABLED=/data/local/hassmic/alexa-disabled
 PKGS="$ALEXA_PACKAGES $SETUP_PACKAGES $UPDATE_PACKAGES"
-if [ -n "$(echo $PKGS)" ] && command -v pm > /dev/null; then
+# Even those two calls are ~2 s each on an Echo Show 5 (checkers, 2026-11-02: alexa-off.sh took 16 s of a 41 s boot,
+# all of it pm, settings and wpa_cli below), and at every start but the first there is nothing to do.  So the package
+# manager's own files first (plain XML up to Android 11): a package not in packages.xml is not installed, one with
+# enabled 2/3/4 in package-restrictions.xml is what "pm list packages -d" calls disabled.  Absence only counts when
+# packages.xml has "android" in it (a file half written, or another format, says nothing).  Anything not shown done
+# there goes to pm as before: the files can only save calls, never one that is needed.
+PM=/data/system/packages.xml PMR=/data/system/users/0/package-restrictions.xml
+pm_done() {
+    grep -q '<package name="android"' $PM 2>/dev/null || return 1
+    for p in $PKGS; do
+        case "$p" in */*) grep -qx "$p" $DISABLED 2>/dev/null && continue; return 1;; esac
+        grep -q "<package name=\"$p\"" $PM || continue
+        grep "<pkg name=\"$p\"" $PMR 2>/dev/null | grep -q 'enabled="[234]"' || return 1
+    done
+}
+if [ -n "$(echo $PKGS)" ] && command -v pm > /dev/null && ! pm_done; then
     NL='
 '
     off=$(pm list packages -d 2>/dev/null | tr -d '\r') all=
@@ -41,6 +56,9 @@ if command -v settings > /dev/null; then
     want=; [ -n "$(echo $SETUP_PACKAGES)" ] && want="global/device_provisioned=1 secure/user_setup_complete=1"
     for t in $want $ANDROID_SETTINGS; do
         ns=${t%%/*} kv=${t#*/}; k=${kv%%=*} val=${kv#*=}
+        # SettingsProvider's own file first (plain XML up to Android 11; it writes within 200 ms of a change): already
+        # the value, no Java call (~2 s each, checkers).  Anything else asks settings as before
+        grep -q "name=\"$k\" value=\"$val\"" /data/system/users/0/settings_$ns.xml 2>/dev/null && continue
         v=$(settings get $ns $k 2>/dev/null | tr -d '\r')
         [ "$v" = "$val" ] && continue
         grep -q "^$ns $k " $SETTINGS 2>/dev/null || echo "$ns $k ${v:-null}" >> $SETTINGS
@@ -62,7 +80,8 @@ for s in $SETUP_SERVICES; do stop $s; done
 command -v ledctrl > /dev/null && { ledctrl -c >/dev/null; ledctrl -u setup-mode >/dev/null; }
 # oobed leaves a Wi-Fi Direct group up for the Alexa app (p2p-p2p0-0 + dnsmasq).  wpa_supplicant itself must stay: it also runs wlan0.
 # Bounded: on an Echo Show with no group up, wpa_cli once waited on p2p0's socket for good (2026-10-13), and with it the
-# satellite's start, hassmic never started.
-timeout 5 wpa_cli -p $WPA_SOCKETS -i p2p0 p2p_group_remove p2p-p2p0-0 >/dev/null 2>&1
+# satellite's start, hassmic never started.  Only when the group is there: without one the call still took 7 s
+# (checkers, 2026-11-02), at every start.
+[ -d /sys/class/net/p2p-p2p0-0 ] && timeout 5 wpa_cli -p $WPA_SOCKETS -i p2p0 p2p_group_remove p2p-p2p0-0 >/dev/null 2>&1
 sleep 1
 getprop | grep -E "init.svc.($(echo $ALEXA_SERVICES $UPDATE_SERVICES $UPDATE_ONDEMAND mixer shmd ledcontroller | tr ' ' '|'))\]"
