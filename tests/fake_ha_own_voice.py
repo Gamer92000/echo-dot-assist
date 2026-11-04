@@ -99,6 +99,25 @@ async def main(e):
     check(not [p for p in esphome_common.requested if "own1" in p], "streamed: the reply's URL never fetched")
     check(log().count("speech: \"" + s3) == 1 and log().count("speech: \"" + full) == 0, "streamed: the whole text not said again at the TTS start")
 
+    # 1b. a streamed reply that asks back (continue_conversation, sent while it still plays): the next run starts only
+    # after its last sentence
+    q1, q2 = "I can do that.", "Which room do you mean?"
+    await thinking("own1b")
+    before = played()
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_INTENT_PROGRESS, {"tts_start_streaming": "1"}); await sync(cli)
+    c = await tts_client()
+    await c.write_event(SynthesizeStart().event()); await c.write_event(SynthesizeChunk(text=f"{q1} {q2}").event())
+    await c.write_event(SynthesizeStop().event())
+    got = await tts_answer(c); await c.disconnect()
+    va.started.clear()
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_INTENT_END, {"conversation_id": "x", "continue_conversation": "1"})
+    end_run("own1b", f"{q1} {q2}")
+    check(await until(va.started.is_set, 5), "follow-up: the next run starts")
+    at_start = played() - before
+    check(at_start == (len(q1) + len(q2)) * BPC, f"follow-up: ...after the whole reply ({at_start} of {(len(q1) + len(q2)) * BPC} bytes)")
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_ERROR, {"code": "x", "message": "end of test pipeline"}); await sync(cli)
+    await asyncio.sleep(0.3)
+
     # 2. a reply Home Assistant does not stream: said whole at the TTS start, the synthesis after it made for HA
     short = "Done, the light is on."
     await thinking("own2")
