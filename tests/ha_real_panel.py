@@ -24,7 +24,7 @@ EW = "io.github.nt_f.echowall"
 
 
 # Echo-Wall's integration (Nt-f/Echo-Wall, a repo of its own), for the Home tab: where it is checked out beside this one
-EW_INT = os.environ.get("HASSMIC_ECHO_WALL") or next((p for p in (os.path.join(hr.ROOT, "..", d, "custom_components", "echo_wall")
+EW_INT = "" if os.environ.get("HASSMIC_ECHO_WALL") == "none" else os.environ.get("HASSMIC_ECHO_WALL") or next((p for p in (os.path.join(hr.ROOT, "..", d, "custom_components", "echo_wall")
                                                               for d in ("Echo-Wall", "hassmic-homeview")) if os.path.isdir(p)), "")
 
 
@@ -340,7 +340,8 @@ async def run(tmp):
             out = await browser(session, admin_tok, os.path.join(hr.ROOT, "build", "test-logs", "panel.png"))
             if out is not None:
                 check(out.get("echos") == ["Echo Show 5 a1b2c3"] and any("Screen on" in x and "Echo-Wall" in x for x in out.get("sub", []))
-                      and out.get("tabs") == ["Screen"] + (["Home"] if EW_INT else []) + (["Apps"] if HAVE_APPS else []),
+                      # Home: the home app is Echo-Wall (its panel embedded, or the way to it in HACS where it is missing)
+                      and out.get("tabs") == ["Screen", "Home"] + (["Apps"] if HAVE_APPS else []),
                       f"the panel: the Echo, its screen on with Echo-Wall, the Screen and Apps tabs ({out.get('echos')}, {out.get('sub')}, {out.get('tabs')})")
                 scr = out.get("screen") or {}
                 check("Connect it to Home Assistant" in scr.get("rows", []) and "Sent to the Echo" in scr.get("push", ""),
