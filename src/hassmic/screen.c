@@ -357,12 +357,18 @@ static pid_t ui_start(int band, int *in, int *out)
     static int told;
     if (!fake && (access(dex, R_OK) || access(lib, R_OK))) { if (!told++) fprintf(stderr, "screen: %s or %s missing, no screen UI\n", dex, lib); return -1; }
     snprintf(cp, sizeof cp, "CLASSPATH=%s", dex); snprintf(bs, sizeof bs, "HMUI_BAND=%d", band);
+    /* libhmui.so's folder on the library path: Android 7's class loader namespace (libnativeloader) lets System.load
+     * open only /data, /mnt/expand and java.library.path, which app_process takes from LD_LIBRARY_PATH.  Installed in
+     * /system/hassmic, without it: "dlopen failed: library ... is not accessible for the namespace" (cronos, 2026-11-04) */
+    char lp[PATH_MAX + 20]; snprintf(lp, sizeof lp, "LD_LIBRARY_PATH=%s", lib);
+    char *slash = strrchr(lp, '/'); if (slash && slash > lp + 16) *slash = '\0';
     extern char **environ;
     size_t ne = 0; while (environ[ne]) ne++;
-    char **envp = malloc((ne + 3) * sizeof *envp);
+    char **envp = malloc((ne + 4) * sizeof *envp);
     if (!envp) return -1;
-    size_t m = 0; envp[m++] = cp; envp[m++] = bs;
-    for (size_t i = 0; i < ne; i++) if (strncmp(environ[i], "CLASSPATH=", 10) && strncmp(environ[i], "HMUI_BAND=", 10)) envp[m++] = environ[i];
+    size_t m = 0; envp[m++] = cp; envp[m++] = bs; envp[m++] = lp;
+    for (size_t i = 0; i < ne; i++) if (strncmp(environ[i], "CLASSPATH=", 10) && strncmp(environ[i], "HMUI_BAND=", 10) &&
+                                        strncmp(environ[i], "LD_LIBRARY_PATH=", 16)) envp[m++] = environ[i];
     envp[m] = NULL;
     long maxfd = sysconf(_SC_OPEN_MAX);
     if (maxfd < 0 || maxfd > 65536) maxfd = 65536;
