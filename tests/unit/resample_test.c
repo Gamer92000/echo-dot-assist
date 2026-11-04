@@ -33,7 +33,7 @@ static void resampler(void)
 {
     const size_t N = 2 * R;
     int16_t *in = malloc(N * 4), *a = malloc(rs_out_max(N) * 4), *b = malloc(rs_out_max(N) * 4);
-    for (size_t i = 0; i < 2 * N; i++) in[i] = (int16_t)(rnd(65536) - 32768);
+    for (size_t i = 0; i < 2 * N; i++) in[i] = (int16_t)((int)rnd(65536) - 32768);
 
     size_t n = run(in, N, 1, 3000, a);
     check(n == N - 2 && !memcmp(a, in, n * 4), "step 1 from a reset: every frame as it is (the last two wait for more)");
@@ -61,6 +61,24 @@ static void resampler(void)
         double bound = hz == 1000 ? 2 : amp * 0.04;     /* 1 kHz: rounding; 8 kHz: the cubic's own error, -28 dB */
         snprintf(what, sizeof what, "%d Hz at +350 ppm: within %.0f of the true sine (%.1f, %.1f dB under it)", hz, bound, worst, 20 * log10(worst / amp));
         check(worst <= bound && n >= (size_t)(N / step) - 3 && n <= (size_t)(N / step) + 1, what);
+    }
+
+    /* a step of its own per call, as the Bluetooth sink's (10 ms blocks, up to 0.4 % off): each frame out where the
+     * steps put it (the first of a call one of the call before's step on from the last) */
+    {
+        struct resampler rs; rs_reset(&rs);
+        double amp = 16000, p = 0, worst = 0; size_t done = 0;
+        for (size_t i = 0; i < N; i++) in[2 * i] = in[2 * i + 1] = (int16_t)lrint(amp * sin(2 * M_PI * 1000 * (double)i / R));
+        for (int k = 0; done + 480 <= N; k++, done += 480) {
+            double step = 1 + 0.004 * sin(2 * M_PI * k / 500);
+            size_t m = rs_run(&rs, in + done * 2, 480, step, a);
+            for (size_t j = 0; j < m; j++, p += step) {
+                double d = fabs(a[2 * j] - amp * sin(2 * M_PI * 1000 * p / R));
+                if (d > worst) worst = d;
+            }
+        }
+        char what[120]; snprintf(what, sizeof what, "a step changing per call: 1 kHz within 2 of the true sine (%.1f)", worst);
+        check(worst <= 2, what);
     }
 
     /* rs_lag: with a constant step from a reset, the next frame out is the input's frame (frames out) * step */
@@ -135,9 +153,29 @@ static void servo(double ppm)
     check(fabs(rate - ppm) <= 0.05 * fabs(ppm) + 10 && hi - lo < 0.004 && far < 0.010 && noise < 600 && worst_jump < 3e-4, what);
 }
 
+/* music_duck: down to a sixth with a time constant of 30 ms, no step a click would be, exactly there and back */
+static void duck(void)
+{
+    static int16_t s[R * 2]; float g = 1; int smooth = 1, prev = 16000;
+    for (size_t i = 0; i < R * 2; i++) s[i] = 16000;
+    music_duck(s, R / 2, R, &g, DUCK);                                  /* 500 ms down */
+    for (size_t i = 0; i < R / 2; i++) { if (abs(s[2 * i] - prev) > 12) smooth = 0; prev = s[2 * i]; }
+    double at30 = s[2 * (R * 30 / 1000 - 1)] / 16000.0, want = DUCK + (1 - DUCK) * exp(-1);
+    check(fabs(at30 - want) < 0.01 && g == DUCK && s[R - 2] == (int16_t)lrintf(16000 * DUCK),
+          "music_duck: 30 ms in at 1/e of the way, at a sixth exactly after 500 ms");
+    music_duck(s + R, R / 2, R, &g, 1);                                 /* and back up */
+    prev = s[R - 2];
+    for (size_t i = R / 2; i < R; i++) { if (abs(s[2 * i] - prev) > 12) smooth = 0; prev = s[2 * i]; }
+    check(smooth, "music_duck: no frame more than 12 of 16000 from the last (a step clicked)");
+    int16_t t[4] = { 123, -456, 32767, -32768 };
+    music_duck(t, 2, R, &g, 1);
+    check(g == 1 && t[0] == 123 && t[1] == -456 && t[2] == 32767 && t[3] == -32768, "music_duck: back at 1, the samples left as they are");
+}
+
 int main(void)
 {
     resampler();
+    duck();
     servo(-350); servo(350); servo(0); servo(-1500);
     return fails ? 1 : 0;
 }

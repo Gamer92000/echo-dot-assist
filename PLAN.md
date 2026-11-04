@@ -647,16 +647,18 @@ Run in this order. Each step says what it proves.
       ~0.36 s. Now the rate follows the drift (`resample.c`): a PI servo (error averaged over 0.25 s, Kp 0.2/s, Ki
       Kp²/4, critically damped; drift held to ±2000 ppm, rate to ±0.5 %) steers a stereo cubic (Catmull-Rom) resampler
       that carries its position and last frames across chunks; the error counts where the next frame out lies
-      (`rs_lag`). The drift learnt is kept across snaps and streams. A model of the Show 5's queue (20 ms slots,
+      (`rs_lag`). The drift learnt is kept across snaps and streams, one per route (the Echo's speaker, a Bluetooth
+      one: another clock). The Bluetooth sink (a phone playing here) resamples through it too (was linear). A model of the Show 5's queue (20 ms slots,
       polled every 5 ms, 5 ms of jitter) against the old loop, 180 s: the error's swing 5.3 → 2 ms, 0.5 % rate jumps
       6/s (even at 0 ppm: the noise crossed the 400 us threshold) → none, the rate's noise ~280 ppm rms below 1 Hz
       (0.5 cent); the drift is learnt within a minute (20 s the Show 5's way). The cubic: 1 kHz within rounding,
       8 kHz -32 dB under the sine (linear dips 8 kHz by 1.3 dB at half-frame phases). Log every 10 s: `rate +350 ppm
-      (output clock -350)`, and every snap past 20 ms as `resynced`. Ducking glides over 30 ms (Sendspin and the A2DP
-      sink; a step at a block's edge clicked). `make unit-resample` (the resampler, the servo against the queue model
-      at ±350, 0, -1500 ppm), `tests/fake_ma_sendspin.py` with `HASSMIC_FAKE_MUSIC_PPM=-500` (`audio_file.c`'s buffer
+      (output clock -350)` (the rate's mean over those 10 s), and every snap past 20 ms as `resynced`. Ducking glides over 30 ms (Sendspin and the A2DP
+      sink; a step at a block's edge clicked). `make unit-resample` (the resampler, a step changing per call as
+      the sink's, the servo against the queue model at ±350, 0, -1500 ppm), `tests/fake_ma_sendspin.py` with `HASSMIC_FAKE_MUSIC_PPM=-500` (`audio_file.c`'s buffer
       drains that much slower): the tone's phase step 0.000 rad (the nudging: 0.232; limit 0.03, was 0.3), no resync.
-      Not yet on the device: the Show 5's log of rate and drift, and the measured queue's real noise
+      Not yet on the device: the Show 5's log of rate and drift, and the measured queue's real noise; the sink's
+      resampler only in the unit test (no PC test reaches the sink)
 - [x] mDNS: init's `avahi-daemon` runs in SELinux domain `avahi-daemon`, which is denied read on `/data/misc/avahi/services`
       (so nothing was ever published, also not for Wyoming). `magiskpolicy` cannot parse a rule for a type with a hyphen →
       `boot.sh`/`run.sh` stop the init service and start avahi themselves in the `su` domain. Verified: answers queries from the PC.

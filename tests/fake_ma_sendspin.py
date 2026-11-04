@@ -95,7 +95,7 @@ def player(state, port, http, env, web=0):
 async def paired(env, state):
     music = env["HASSMIC_MUSIC"]
     # the output's clock 500 ppm slow (the Echo Show 5's is ~350): followed by the rate, no frame skipped or repeated,
-    # which the continuity check below sees (6 frames nudged at once were a phase step of 0.35 rad)
+    # which the continuity check below sees (6 frames nudged at once measured 0.23 rad)
     env = dict(env, HASSMIC_FAKE_MUSIC_PPM="-500")
     open(os.path.join(state, "sendspin.unpaired"), "w").write("1")     # unpaired access switched on for this part
     mreq = os.path.join(state, "mdns")                  # root's cue to restart avahi (main.sh netwatch)

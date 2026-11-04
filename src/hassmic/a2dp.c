@@ -42,6 +42,7 @@
 #include "core.h"
 #include "hci.h"
 #include "a2dp_codec.h"
+#include "resample.h"
 #include "statefile.h"
 
 #define MAX_LINKS 3                     /* a phone playing to us, the speaker we play to, one more */
@@ -551,10 +552,12 @@ static void ring_push(const int16_t *pcm, unsigned frames, unsigned ch, unsigned
 static void *player(void *arg)
 {
     enum { MAXCHUNK = 48000 * CHUNK_MS / 1000 };
-    int16_t buf[MAXCHUNK * 2], in[(MAXCHUNK + 8) * 2], prev[2] = { 0, 0 };
+    int16_t buf[RS_OUT_MAX(MAXCHUNK + 7) * 2], in[(MAXCHUNK + 8) * 2];
     unsigned rate = 0; int open = 0, primed = 0, peak = 0; long long quiet = 0, stat = 0;
     double avg = 0, base = 1, acc = 0;                  /* buffer level (ms); drift estimate; fractional input frames */
+    struct resampler rs; float duck_g = 1;
     (void)arg;
+    rs_reset(&rs);
     for (;;) {
         pthread_mutex_lock(&r_lock);
         long wait_ns = open || atomic_load(&streaming) ? 20000000 : 500000000;
@@ -573,49 +576,36 @@ static void *player(void *arg)
             }
             continue;
         }
-        if (!primed) { primed = 1; avg = PREBUF_MS; acc = 0; prev[0] = ring[r_head * 2]; prev[1] = ring[r_head * 2 + 1]; }
+        if (!primed) { primed = 1; avg = PREBUF_MS; acc = 0; rs_reset(&rs); }
         quiet = 0;
         /* The source's clock against the mixer's (a phone was 0.2 % fast): play the input slightly faster or slower,
-         * resampled linearly, so the buffer stays near PREBUF_MS.  base follows the long-term drift, the error term the
-         * rest; both stay far below audible pitch changes. */
+         * resampled (resample.h: cubic, its position carried from block to block; linear dipped the treble by up to
+         * 1.3 dB at 8 kHz every few hundred frames at that drift), so the buffer stays near PREBUF_MS.  base follows the
+         * long-term drift, the error term the rest; both stay far below audible pitch changes. */
         avg = 0.98 * avg + 0.02 * ((double)have * 1000 / rr);
         double err = avg - PREBUF_MS, ratio;
         base += err * 1e-7; base = base < 0.99 ? 0.99 : base > 1.01 ? 1.01 : base;
         ratio = base + (err < -100 ? -100 : err > 100 ? 100 : err) * 2e-5;
         acc += chunk * ratio;
-        size_t n = (size_t)acc, out = chunk;
+        size_t n = (size_t)acc;                             /* input frames for a block of `chunk` out */
         if (n > MAXCHUNK + 7) n = MAXCHUNK + 7;
-        if (n > have) { n = have; out = (size_t)(n / ratio); acc = 0; if (!out) out = 1; } else acc -= n;
+        if (n > have) { n = have; acc = 0; } else acc -= n;
         for (size_t i = 0; i < n; i++) { size_t at = (r_head + i) % RING_FRAMES * 2; in[2 * i] = ring[at]; in[2 * i + 1] = ring[at + 1]; }
         r_head = (r_head + n) % RING_FRAMES; r_count -= n;
-        for (size_t j = 0; j < out; j++) {                  /* position in the input, prev being index -1 */
-            double pos = -1 + (j + 1) * (double)n / out; long i0 = (long)floor(pos); double f = pos - i0;
-            for (int c = 0; c < 2; c++) {
-                double x0 = i0 < 0 ? prev[c] : in[2 * i0 + c], x1 = in[2 * (i0 + 1 < (long)n ? i0 + 1 : (long)n - 1) + c];
-                buf[2 * j + c] = (int16_t)lrint(x0 + (x1 - x0) * f);
-            }
-        }
-        if (n) { prev[0] = in[2 * n - 2]; prev[1] = in[2 * n - 1]; }
         long dropped = r_dropped; r_dropped = 0;
         pthread_mutex_unlock(&r_lock);
         if (dropped) fprintf(stderr, "a2dp: buffer full, %ld frames dropped\n", dropped);
+        size_t out = rs_run(&rs, in, n, ratio, buf);       /* about chunk: n / ratio, give or take the frames held back */
 
         if (open && rate != rr) { bt_close(); open = 0; }
         if (!open) {
             if (bt_open(rr, 2)) { usleep(200000); continue; }
             open = 1; rate = rr; fprintf(stderr, "a2dp: output open, %u Hz\n", rr);
         }
-        {   /* duck under the voice assistant: down to a sixth, glided over ~30 ms (a step at a block's edge clicked) */
-            static float g = 1; float target = core_state() != IDLE ? 1.0f / 6 : 1, k = 1.0f / (0.030f * rr);
-            if (g != 1 || target != 1)
-                for (size_t i = 0; i < out; i++) {
-                    g += (target - g) * k; if (fabsf(g - target) < 1e-4f) g = target;
-                    buf[2 * i] = (int16_t)lrintf(buf[2 * i] * g); buf[2 * i + 1] = (int16_t)lrintf(buf[2 * i + 1] * g);
-                }
-        }
+        music_duck(buf, out, rr, &duck_g, core_state() != IDLE ? DUCK : 1);       /* under the voice assistant */
         while (bt_queued_us() > MIXER_US) usleep(5000);
         for (size_t i = 0; i < 2 * out; i++) { int v = buf[i] < 0 ? -buf[i] : buf[i]; if (v > peak) peak = v; }
-        if (bt_write(buf, out * 4) < 0) fprintf(stderr, "a2dp: mixer write failed\n");
+        if (out && bt_write(buf, out * 4) < 0) fprintf(stderr, "a2dp: mixer write failed\n");   /* 0: a frame or two held back */
         if (ms() - stat > 60000 && atomic_load(&streaming)) {     /* peak: whether the source sends more than silence */
             stat = ms();
             fprintf(stderr, "a2dp: buffer %.0f ms, source clock %+.0f ppm, peak %.0f dBFS; packets: longest gap %d ms, %d gaps > 100 ms; ran dry %d times\n",

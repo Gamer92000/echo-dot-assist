@@ -175,27 +175,13 @@ static void q_push(long long ts, const uint8_t *pcm, size_t len)
     pthread_mutex_unlock(&q_lock);
 }
 
-/* The music under the voice assistant: down to a sixth (-15.6 dB) while a request runs, glided over ~30 ms each way,
- * frame by frame.  It used to be a sixth from one 25 ms chunk to the next: a click as listening started and ended */
-#define DUCK 0.1667f
-static void duck(int16_t *s, size_t frames, float *g, float target)
-{
-    const float k = 1.0f / (0.030f * RATE);                     /* a time constant of 30 ms */
-    if (*g == 1 && target == 1) return;                         /* nothing ducked: the samples as they are */
-    for (size_t i = 0; i < frames; i++) {
-        *g += (target - *g) * k;
-        if (fabsf(*g - target) < 1e-4f) *g = target;
-        for (int ch = 0; ch < CHANNELS; ch++) s[i * CHANNELS + ch] = (int16_t)lrintf(s[i * CHANNELS + ch] * *g);
-    }
-}
-
 /* Each chunk is due at its timestamp.  A snap (the start, an underrun, a new delay, an error past SNAP_US) pads with
  * silence or drops the chunk's late part; in between the music plays at a rate of its own, which the sync error steers
  * (resample.h): an output clock that is off, as the Echo Show 5's, is followed without a frame skipped or repeated. */
 static void *player_thread(void *arg)
 {
-    static int16_t silence[RATE / 100 * CHANNELS]; int open = 0; long long stat_t = 0; int resyncs = 0;
-    float duck_g = 1; double step = 1;
+    static int16_t silence[RATE / 100 * CHANNELS]; int open = 0; long long stat_t = 0; int resyncs = 0, routed = -1;
+    float duck_g = 1; double step = 1, rate_sum = 0, drift_of[2] = { 0, 0 }; long rate_n = 0;   /* rate_sum: the log's mean */
     struct resampler rs; struct rate_servo servo = { 0, 0 };    /* the drift kept across streams: the same output clock */
     int16_t *out = NULL; size_t out_cap = 0;
     (void)arg;
@@ -222,6 +208,12 @@ static void *player_thread(void *arg)
 
         while (music_queued_us() > MIXER_TARGET_US && atomic_load(&stream_on)) usleep(5000);
 
+        /* On a Bluetooth speaker the output's clock is the speaker's: a drift learnt per route, the Echo's back after it */
+        int route = btout_routed() != 0;
+        if (route != routed) {
+            if (routed >= 0) drift_of[routed] = servo.drift;
+            routed = route; servo.drift = drift_of[route];
+        }
         const uint8_t *pcm = c->pcm; size_t len = c->len;
         long long due = tf_client_time(c->ts) - atomic_load(&static_delay_ms) * 1000LL, at = raw_us() + music_queued_us() + out_latency_us();
         /* > 0: we are early.  The next frame out is still one of the chunk before's (what the resampler looks ahead) */
@@ -252,12 +244,14 @@ static void *player_thread(void *arg)
         }
         n = rs_run(&rs, (const int16_t *)pcm, frames, step, out);
         if (atomic_load(&player_muted)) memset(out, 0, n * FRAME);
-        else duck(out, n, &duck_g, core_state() != IDLE ? DUCK : 1);                     /* under the voice assistant */
+        else music_duck(out, n, RATE, &duck_g, core_state() != IDLE ? DUCK : 1);          /* under the voice assistant */
         music_write(out, n * FRAME);
+        rate_sum += step - 1; rate_n++;
         if (raw_us() - stat_t > 10000000) {
             double e; tf_synced(&e); stat_t = raw_us();
             fprintf(stderr, "sendspin: sync err %+.2f ms, clock ±%.2f ms, queued %zu KB, rate %+.0f ppm (output clock %+.0f), %d resyncs\n",
-                    servo.smooth * 1e3, e / 1000, q_bytes / 1024, (step - 1) * 1e6, servo.drift * 1e6, resyncs);
+                    servo.smooth * 1e3, e / 1000, q_bytes / 1024, rate_sum / rate_n * 1e6, servo.drift * 1e6, resyncs);
+            rate_sum = 0; rate_n = 0;
         }
         free(c);
     }

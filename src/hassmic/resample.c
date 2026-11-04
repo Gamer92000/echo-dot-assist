@@ -5,8 +5,7 @@
 
 void rs_reset(struct resampler *r) { memset(r, 0, sizeof *r); }
 
-/* step >= 0.98: frames / 0.98 + 1, rounded up */
-size_t rs_out_max(size_t frames) { return frames + frames / 48 + 4; }
+size_t rs_out_max(size_t frames) { return RS_OUT_MAX(frames); }
 
 double rs_lag(const struct resampler *r) { return r->nhist ? r->pos - r->nhist : 0; }
 
@@ -61,3 +60,14 @@ double rate_servo(struct rate_servo *s, double err_us, double dt)
 }
 
 double rate_servo_snap(struct rate_servo *s) { s->smooth = 0; return 1 - s->drift; }
+
+void music_duck(int16_t *s, size_t frames, unsigned rate, float *g, float target)
+{
+    const float k = 1.0f / (0.030f * (float)rate);
+    if (*g == 1 && target == 1) return;
+    for (size_t i = 0; i < frames; i++) {
+        *g += (target - *g) * k;
+        if (fabsf(*g - target) < 1e-4f) *g = target;                /* there: exactly, so 1 leaves the samples alone */
+        s[2 * i] = (int16_t)lrintf(s[2 * i] * *g); s[2 * i + 1] = (int16_t)lrintf(s[2 * i + 1] * *g);
+    }
+}

@@ -1,4 +1,6 @@
 /*
+ * The music's PCM on its way out (sendspin.c, a2dp.c's sink): its rate, and its duck under the voice assistant.
+ *
  * Music played a hair faster or slower than it came, to stay in step with a clock that is not the output's (sendspin.c:
  * the server's schedule).  An output clock off by a constant (the Echo Show 5's: ~350 ppm, 2026-11-02) needs a constant
  * rate; corrected by frames skipped or repeated at one point it ticked several times a second, squeezed into one chunk
@@ -17,15 +19,23 @@
  * interpolation looks two ahead): rs_lag says how far back the next frame out lies. */
 struct resampler { int16_t hist[3 * 2]; int nhist; double pos; };
 void   rs_reset(struct resampler *r);
-size_t rs_out_max(size_t frames);                                          /* the most frames rs_run makes of `frames` */
+#define RS_OUT_MAX(frames) ((frames) + (frames) / 48 + 4)                 /* the most frames rs_run makes of `frames`: */
+size_t rs_out_max(size_t frames);                                          /* frames / 0.98 + 1, rounded up */
 size_t rs_run(struct resampler *r, const int16_t *in, size_t frames, double step, int16_t *out);
 double rs_lag(const struct resampler *r);       /* the next frame out against the next input's first, in input frames:
                                                    -2 < lag <= 0, 0 after a reset */
 
 /* The rate from the sync error, a PI loop.  The error is read through the output's queue, which the Echo Shows count
  * in 20 ms slots, polled every 5 ms: noise of a few ms per chunk, averaged over SERVO_SMOOTH_S first.  `drift` is what
- * the integral learnt of the clocks' difference; it is kept across snaps and streams (same output, same clock). */
+ * the integral learnt of the clocks' difference; it is kept across snaps and streams (same output, same clock;
+ * sendspin.c keeps one per route: the Echo's speaker, a Bluetooth one). */
 struct rate_servo { double smooth, drift; };
 double rate_servo(struct rate_servo *s, double err_us, double dt_s);   /* err_us > 0: early.  Returns the step */
 double rate_servo_snap(struct rate_servo *s);   /* after a jump in the schedule: the error starts from 0; the step */
+
+/* Stereo s16 turned down to DUCK (a sixth, -15.6 dB) while a request runs, glided into and out of with a time constant
+ * of 30 ms, frame by frame: a step from one block to the next clicked as listening started and ended.  *g is the
+ * stream's gain now (start at 1); at 1 and target 1 the samples are left as they are. */
+#define DUCK (1.0f / 6)
+void   music_duck(int16_t *s, size_t frames, unsigned rate, float *g, float target);
 #endif
