@@ -2944,8 +2944,9 @@ Run in this order. Each step says what it proves.
       Home Assistant adopted it and works (the tester).  Screen UI (2026-11-03): `SCREEN` in device.mk, libhmui.so in its
       build and bundle; the JNI table found on cronos' own boot class path (`make unit-screen` checks every model with
       `SCREEN` against its unpacked firmware; framework.jar is checkers' byte for byte), display and touch as checkers'
-      (960 x 480, rotation 1, goodix-ts).  Not yet: the speaker gain by ear, Wi-Fi motion, DHA version / Download from
-      Amazon, Bluetooth, the screen UI on the Echo.
+      (960 x 480, rotation 1, goodix-ts).  On the Echo (2026-11-04, issue #122 below): the face, the clock and the
+      drawer handle, once its library loaded.  Not yet: the speaker gain by ear, Wi-Fi motion, DHA version / Download
+      from Amazon, Bluetooth, the rest of the screen UI (touches, drawer, music).
 - [~] Echo Show 8 2nd gen (`athena`, 2026-10-14; `docs/re-athena.md`).  A different platform from crown: MT8183, Android 9
       (Treble, enforcing SELinux, policy in `/vendor/etc/selinux/precompiled_sepolicy`), kernel 4.4.146, Fire OS 7574.1
       (PS75741.7080N; build 7077's probe libraries are byte-identical).  Rooted by saiyaku-athena's zip (system and vendor
@@ -3157,3 +3158,24 @@ Run in this order. Each step says what it proves.
       `$STAGE/ok`: `on_echo` reads an answer.  `tests/unit/uninstall_boot_test.sh` (14 cases; the TWRP probe and the
       5 min bound each fail it when broken).  Open: athena and cupcake (`install-system.sh`, STOCK_APPS_OUT too) only
       print that a wipe is needed; whether their uninstall shows the same crashes is not seen.
+- [~] Echo Shows' screen UI from the system partition (issue #122, PR #123, 2026-11-04, M0ebiu5's cronos, main at
+      5fb7c70): installed by the guided setup, the UI's app_process died at every start and hassmic started it again;
+      only the band showed.  logcat: `UnsatisfiedLinkError: dlopen failed: library "/system/hassmic/libhmui.so" needed
+      or dlopened by "/system/lib/libnativeloader.so" is not accessible for the namespace "classloader-namespace"`.
+      app_process's system class loader is not one ApplicationLoaders made, so libnativeloader gives it an isolated
+      namespace whose permitted paths are `java.library.path` (ART takes it from `LD_LIBRARY_PATH`) plus `/data` and
+      `/mnt/expand`; screen.dex's `System.load` of `/system/hassmic/libhmui.so` is outside them.  Unseen until now
+      because every copy that runs from `/data` loads it: deploy.sh's `/data/local/hassmic`, and every pushed or
+      online update (`ota/current`, boot.sh); a Show is black from its install until its first update.  `ui_start`
+      now puts libhmui.so's folder on `LD_LIBRARY_PATH` (replacing an inherited one: nothing of ours sets it), as it
+      sets `CLASSPATH` and `HMUI_BAND`; `/system/hassmic` holds no other library, so app_process's own resolve as
+      before.  Checked on the cronos as root with the installed files: `CLASSPATH=/system/hassmic/screen.dex
+      HMUI_BAND=10 app_process / Screen /system/hassmic/libhmui.so` fails so, and loads (exit 0 at EOF) with
+      `LD_LIBRARY_PATH=/system/hassmic`.  The fixed build pushed (`ota-push.sh`, self test passed): face, clock,
+      drawer handle, no linker errors; that copy runs from `ota/current`, so it shows the UI working on cronos, not
+      the fix itself.  Build for cronos clean (`-Wall -Wextra`), `tests/fake_screen.py` 51 ok (the reporter).
+      Open: the factory copy with it on an Echo (installed fresh, or `ota/current` gone); checkers and crown (Android
+      7.1, the same libnativeloader) and athena (Android 9: AOSP's does the same for class loaders it did not make).
+      Seen there too: Android's auto brightness with `als_ps/lux` at 4-6 held the backlight at 5/255, the screen as
+      good as off until `screen_brightness_mode 0`.  athena and crown set `screen_brightness_mode=0` in
+      `ANDROID_SETTINGS`; checkers and cronos do not.

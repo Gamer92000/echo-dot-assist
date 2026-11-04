@@ -2,6 +2,14 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-04
+
+- **Echo Shows: the screen's face comes up right after the install** (issue #122). Installed by the setup, the
+  screen's own UI never started: the screen stayed black but for the light band, until the first update arrived.
+  Android lets the screen's program load its library only from a few folders, and the system partition, where the
+  install puts hassmic, is not one of them (updates live in `/data`, which is); hassmic now tells it where to look.
+  Seen on an Echo Show 5 2nd gen.
+
 ## 2026-11-03
 
 - **Uninstalling from an Echo Show no longer leaves "OOBE has stopped" on the screen.** The install takes Amazon's apps
