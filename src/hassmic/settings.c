@@ -19,6 +19,7 @@
 #include "statefile.h"
 #include "ring.h"
 #include "alarms.h"
+#include "speech.h"
 #include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
@@ -69,7 +70,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, VOICE, OWN_VOICE, ERR_SPEECH, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
@@ -109,6 +110,12 @@ static const struct setting table[NSET] = {
     [TIMER_SOUND] = { "timer_sound", "Timer sound", "Voice", NULL, S_CHOICE, 0, 0, 1, 0 },
     [TIMER_STOP_ANY] = { "timer_stop_any", "Any request stops a ringing timer", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     [STOP_ENDS]   = { "stop_ends_listening", "Stop after the wake word ends listening", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* speech_ivona.c: which of the installed voices the Echo speaks with; not exported (what is installed is this Echo's) */
+    [VOICE]       = { "voice", "The Echo's voice", "Voice", NULL, S_CHOICE, 0, 0, 0, 0 },
+    /* main.c core_reply_local: Home Assistant's replies in the Echo's own voice (speech.h), where one is installed */
+    [OWN_VOICE]   = { "own_voice_replies", "Replies in the Echo's own voice", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* main.c core_error_say: what went wrong, said (errsay.h) */
+    [ERR_SPEECH]  = { "error_speech", "Say what went wrong", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     /* main.c: the request's audio from the wake word on (replay_whole); not with Home Assistant's wake word */
     [WAKE_IN_REQ] = { "wake_word_in_request", "Wake word in the request", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     /* micend.c, issue #66: ESPHome only (Wyoming has no end of audio here) */
@@ -205,6 +212,7 @@ static int present(enum id i)
     switch (i) {
     case BT_ANNOUNCE: case BT_LANG: case BT_AUDIO: case BT_SPEAKER: case BT_OUT_DELAY: case BT_OUT_AWAKE: case BT_OUT_STAY: return ble_present();
     case WHISPER: return core_whisper_model();
+    case OWN_VOICE: case ERR_SPEECH: case VOICE: return core_own_voice_present();
     case SOUND: return sound_model() != SOUND_NONE;               /* the firmware has one on every model so far */
     case LIGHT_SENSOR: return core_lux() == core_lux();          /* a light sensor: not NAN */
     case LED_AUTO: return core_led_has_auto();
@@ -255,6 +263,7 @@ int settings_choices(const struct setting *s, const char *const **names)
     case ALARM_SOUND: *names = timer_sounds; return 4;
     case ALARM_KEYS: *names = alarm_keys; return 2;
     case CLOCK_FMT: *names = clock_formats; return 3;
+    case VOICE: return speech_voices(names);
     default: *names = NULL; return 0;
     }
 }
@@ -289,6 +298,9 @@ int settings_get(const struct setting *s)
     case TIMER_SOUND: return core_timer_sound(-1);
     case TIMER_STOP_ANY: return core_timer_stop_any(-1);
     case STOP_ENDS: return core_stop_ends_listening(-1);
+    case VOICE: return speech_voice_index();
+    case OWN_VOICE: return core_own_voice(-1);
+    case ERR_SPEECH: return core_error_speech(-1);
     case WAKE_IN_REQ: return core_wake_in_request(-1);
     case END_REQ: return core_end_of_request(-1);
     case BT_ANNOUNCE: return core_bt_announce(-1);
@@ -362,6 +374,9 @@ static void put(enum id i, int v)
     case TIMER_SOUND: core_timer_sound(v); break;              /* refused without its file: settings_set says so */
     case TIMER_STOP_ANY: core_timer_stop_any(v); break;
     case STOP_ENDS: core_stop_ends_listening(v); break;
+    case VOICE: speech_voice_select(v); break;
+    case OWN_VOICE: core_own_voice(v); break;
+    case ERR_SPEECH: core_error_speech(v); break;
     case WAKE_IN_REQ: core_wake_in_request(v); break;
     case END_REQ: core_end_of_request(v); break;
     case BT_ANNOUNCE: core_bt_announce(v); break;

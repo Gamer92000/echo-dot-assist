@@ -2307,6 +2307,14 @@ Run in this order. Each step says what it proves.
       sources only, never below 1024.  The settings page's Screen page: the Apps card; Echo
       Local: apps.py, the panel's Apps tab, the action install_apk.  tests/fake_web_apps.py, tests/unit/apps_test.c,
       tests/unit/lockdown_test.py (the rules as they would load, against stand-in tables).
+- [x] The Echo's own voice (2026-11-02, checkers): Fire OS's Ivona engine driven through its app's JNI glue
+      (`libttsivona.so`) with a JNIEnv of our own (`speech_ivona.c`, dlopen'd; device.mk SPEECH, else speech_none.c),
+      voices from `/data/securedStorageLocation/com.amazon.providers.contentsupport/tts/ivona/` (docs/re-ivona.md:
+      DAVS refuses the Show 5's device type, the image's contentsupport.json names public S3 packs;
+      tools/davs-fetch.py tts).  Sentences go through the playback queue as replies do (Q_SPEECH, Q_REPLY: barge-in and
+      "stop" cut them).  `errsay.c`: Home Assistant's pipeline error codes and messages as sentences (setting
+      error_speech; tests/unit/errsay_test.c).  own_voice_replies: the reply's text at EV_TTS_START, Home Assistant's
+      audio not fetched.  `wyoming_tts.c`: a Wyoming TTS server on 16710 (mDNS-announced) for Home Assistant.
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
 - [x] Drop In between Echos (2026-10-08, asked by a user with ten Echos who used Alexa's as an intercom). `dropin.c`:
       calls signed on the arbitration network (new arb type `T_MSG`, `arb_tell`, broadcast like the rest, repeated:

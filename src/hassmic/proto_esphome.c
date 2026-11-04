@@ -73,6 +73,8 @@
 #include <time.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include "speech.h"
+#include "wyoming_tts.h"
 #include "a2dp.h"
 #include "adbwifi.h"
 #include "alarms.h"
@@ -286,6 +288,8 @@ static void print_mdns_to(FILE *f)
 {
     char ss[512] = "";
     if (core_sendspin_port) sendspin_mdns(core_sendspin_port, ss, sizeof ss);
+    if (speech_installed() && strlen(ss) + 80 < sizeof ss)      /* Home Assistant's Wyoming integration finds the voice */
+        snprintf(ss + strlen(ss), sizeof ss - strlen(ss), "  <service><type>_wyoming._tcp</type><port>%d</port></service>\n", WYTTS_PORT);
     fprintf(f, "<?xml version=\"1.0\" standalone='no'?>\n<!DOCTYPE service-group SYSTEM \"avahi-service.dtd\">\n"
             "<service-group>\n  <name>%s</name>\n  <service><type>_esphomelib._tcp</type><port>%d</port>\n"
             "    <txt-record>mac=%s</txt-record><txt-record>friendly_name=%s</txt-record><txt-record>version=2025.5.0</txt-record>\n"
@@ -1382,7 +1386,7 @@ static void mute_changed(int muted) { (void)muted; send_setting(KEY_MUTE); setti
 static void wake_event(const char *event);
 static void on_event(const unsigned char *p, const unsigned char *end)
 {
-    struct pbf f, g; unsigned type = 0; char key[48], val[1024], text[512] = "", said[1024] = "", code[48] = ""; int cont = 0, stream_now = 0;
+    struct pbf f, g; unsigned type = 0; char key[48], val[1024], text[512] = "", said[1024] = "", code[48] = "", msg[512] = ""; int cont = 0, stream_now = 0;
     while (pb_next(&p, end, &f)) {
         if (f.field == 1) type = f.v;
         else if (f.field == 2 && f.wire == 2) {
@@ -1390,6 +1394,7 @@ static void on_event(const unsigned char *p, const unsigned char *end)
             while (pb_next(&q, f.data + f.len, &g)) { if (g.field == 1 && g.data) pbf_str(&g, key, sizeof key); else if (g.field == 2 && g.data) pbf_str(&g, val, sizeof val); }
             if (!strcmp(key, "text") || !strcmp(key, "message") || !strcmp(key, "code")) snprintf(text + strlen(text), sizeof text - strlen(text), "%s ", val);
             if (!strcmp(key, "code")) snprintf(code, sizeof code, "%s", val);
+            if (!strcmp(key, "message")) snprintf(msg, sizeof msg, "%s", val);
             if (!strcmp(key, "text")) snprintf(said, sizeof said, "%s", val);    /* whole: text holds 512 bytes of all three */
             if (!strcmp(key, "continue_conversation") && !strcmp(val, "1")) cont = 1;
             if (!strcmp(key, "tts_start_streaming") && !strcmp(val, "1")) stream_now = 1;
@@ -1416,11 +1421,14 @@ static void on_event(const unsigned char *p, const unsigned char *end)
         if (core_transcript(text)) break;                   /* "stop" to a ring or music: the run is cancelled */
         core_mic_off(); if (core_state() == LISTENING) core_set_state(THINKING); break;
     case EV_INTENT_END: if (cont) core_restart_after(); break;
-    case EV_TTS_START:  fprintf(stderr, "reply: %s\n", text); break;
+    case EV_TTS_START:  fprintf(stderr, "reply: %s\n", text);
+        if (!tts_expected && core_reply_local(said)) { tts_expected = 2; core_mic_off(); }    /* 2: HA's audio not wanted */
+        break;
     case EV_INTENT_PROGRESS: if (!stream_now) break;    /* streaming TTS: the URL from RUN_START can be fetched already */
         /* fall through */
     case EV_TTS_END:
         if (!tts_expected && tts_url[0]) { tts_expected = 1; core_mic_off(); media_start("", tts_url, 1, 0, 1, 0); }
+        else if (tts_expected == 2 && type == EV_TTS_END) fprintf(stderr, "reply: Home Assistant's audio not fetched (own voice)\n");
         break;
     case EV_RUN_END:    if (!tts_expected && core_state() != SPEAKING) core_pipeline_finish(); break;
     case EV_ERROR:
@@ -1432,7 +1440,7 @@ static void on_event(const unsigned char *p, const unsigned char *end)
         }
         /* nothing said: no failure to show (core_no_speech) */
         if (!strcmp(code, "stt-no-text-recognized")) { fprintf(stderr, "pipeline: nothing said\n"); core_no_speech(); break; }
-        fprintf(stderr, "pipeline error: %s\n", text); core_error(); break;
+        fprintf(stderr, "pipeline error: %s\n", text); core_error(); core_error_say(code, msg); break;
     }
 }
 
@@ -1704,7 +1712,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         core_link(1, sub);
     } break;
     case VA_RESPONSE:
-        while (pb_next(&p, end, &f)) if (f.field == 2 && f.v) { fprintf(stderr, "pipeline refused\n"); core_error(); }
+        while (pb_next(&p, end, &f)) if (f.field == 2 && f.v) { fprintf(stderr, "pipeline refused\n"); core_error(); core_error_say("refused", NULL); }
         break;
     case VA_EVENT:         on_event(p, end); break;
     case VA_TIMER_EVENT:   on_timer(p, end); break;

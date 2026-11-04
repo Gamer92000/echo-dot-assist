@@ -72,6 +72,9 @@
 #include "sounds.h"
 #include "sound.h"
 #include "whisper.h"
+#include "speech.h"
+#include "wyoming_tts.h"
+#include "errsay.h"
 #include "settings.h"
 #include "web.h"
 #include "board.h"
@@ -798,6 +801,7 @@ int core_end_of_request(int set) { if (set >= 0 && set < MICEND_MODES) end_mode 
 int core_stop_ends_listening(int set) { if (set >= 0) stop_ends = set != 0; return stop_ends; }
 
 int core_bt_announce(int set) { if (set >= 0) use_bt_announce = set; return use_bt_announce; }
+static int speech_local(const char *text, const char *lang);
 
 /* Models whose controller does not answer to our bring-up yet (biscuit's MT8163 combo) run with -B: no A2DP sink, no
  * Bluetooth proxy; the stock stack may keep the radio. */
@@ -810,7 +814,11 @@ void core_bt_device(const char *name, int on)
     pthread_mutex_lock(&core_lock);
     if (use_bt_announce) {
         sound_request(on ? SND_BT_ON : SND_BT_OFF);
-        if (connected && proto->bt_device) proto->bt_device(name, on);
+        const struct bt_lang *l = settings_bt_lang(); char t[160];
+        if (*name) snprintf(t, sizeof t, on ? l->on : l->off, name);
+        else snprintf(t, sizeof t, "%s", on ? l->on_any : l->off_any);
+        if (speech_local(t, l->code)) ;              /* the Echo's own voice speaks the language: no Home Assistant needed */
+        else if (connected && proto->bt_device) proto->bt_device(name, on);
     }
     pthread_mutex_unlock(&core_lock);
 }
@@ -1181,6 +1189,7 @@ static void trigger(int touch, uint64_t from)
             fprintf(stderr, "%s: %s, nothing started\n", touch ? "button" : "wake word",
                     connected ? "a client is linked, no voice assistant running" : "no Home Assistant link");
             led("-s", "anim_start_error_short");
+            core_error_say(connected ? "no-assistant" : "no-link", NULL);
         }
     } else if (state == IDLE && !touch && stopped_now()) {
         fprintf(stderr, "stop: came during the round, nothing started\n");
@@ -1950,6 +1959,9 @@ static void on_pair(void)
 
 struct item { struct item *next; int kind, media; unsigned rate, ch; size_t len; unsigned char data[]; };   /* media: Q_START */
 enum { Q_START, Q_DATA, Q_STOP };
+#define Q_SPEECH 2                           /* media of the Echo's own voice (speech.h): a reply's volume, no pipeline */
+#define Q_REPLY 3                            /* the same voice saying Home Assistant's reply: ends the run as its audio does */
+static int speech_state;                     /* core_lock: the Echo's own voice set SPEAKING (it was IDLE) */
 static void tts_kind(int media);
 
 static pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -1984,13 +1996,14 @@ static void *playback_thread(void *arg)
 
         if (atomic_load(&flush_playback) && it->kind != Q_STOP) {
             if (open) { play_close(0); open = 0; }
+            if (it->media == Q_SPEECH || it->media == Q_REPLY) speech_cancel();   /* the rest of the Echo's own sentence too */
             free(it);
             continue;
         }
         switch (it->kind) {
         case Q_START:
             if (open) play_close(1);        /* e.g. announcement chime followed by the message */
-            tts_kind(it->media);            /* the TTS stream's volume for what comes now */
+            tts_kind(it->media >= Q_SPEECH ? 0 : it->media);   /* the TTS stream's volume for what comes now */
             open = play_open(it->rate, it->ch) == 0;
             if (open) { atomic_store(&tts_on, 1); playback_hint(); }
             if (!open) fprintf(stderr, "play: open %u Hz x%u failed\n", it->rate, it->ch);
@@ -2008,8 +2021,12 @@ static void *playback_thread(void *arg)
             atomic_store(&tts_on, 0); playback_hint();
             atomic_store(&flush_playback, 0);
             pthread_mutex_lock(&core_lock);
-            if (proto->played) proto->played();      /* also without a client: modules reset their state here */
-            core_pipeline_finish();
+            if (it->media == Q_SPEECH) {             /* the Echo's own voice: nothing of Home Assistant's ended */
+                if (speech_state) { speech_state = 0; core_pipeline_finish(); }     /* a barge-in starts its run here */
+            } else {
+                if (proto->played) proto->played();  /* also without a client: modules reset their state here */
+                core_pipeline_finish();
+            }
             pthread_mutex_unlock(&core_lock);
             break;
         }
@@ -2030,6 +2047,58 @@ void core_tts_data(const void *pcm, size_t len) { if (!atomic_load(&flush_playba
 void core_tts_end(void) { q_push(Q_STOP, 0, 0, 0, NULL, 0); }
 int  core_tts_flushing(void) { return atomic_load(&flush_playback); }
 void core_tts_flush(void) { atomic_store(&flush_playback, 1); }
+
+/* The Echo's own voice (speech.h): its sentences go through the same queue as Home Assistant's replies, behind what
+ * is queued, at the replies' volume; a wake word cuts them as it cuts a reply (barge-in), "stop" too.  It shows as
+ * SPEAKING only when nothing else ran: a sentence during a request leaves the request's state alone. */
+static atomic_int speech_reply_on;                  /* the sentence being made is Home Assistant's reply */
+static void speech_begin(unsigned rate, int reply)
+{
+    pthread_mutex_lock(&core_lock);
+    if (reply) { atomic_store(&streaming, 0); mic_stopped(); core_set_state(SPEAKING); }   /* as core_tts_begin */
+    else if (state == IDLE) { speech_state = 1; core_set_state(SPEAKING); }
+    pthread_mutex_unlock(&core_lock);
+    atomic_store(&speech_reply_on, reply);
+    q_push(Q_START, reply ? Q_REPLY : Q_SPEECH, rate, 1, NULL, 0);
+}
+static void speech_data(const void *pcm, unsigned len)
+{ if (!atomic_load(&flush_playback)) q_push(Q_DATA, atomic_load(&speech_reply_on) ? Q_REPLY : Q_SPEECH, 0, 0, pcm, len); }
+static void speech_end(int reply) { q_push(Q_STOP, reply ? 0 : Q_SPEECH, 0, 0, NULL, 0); }   /* a reply's: played(), the run ends */
+
+/* Setting own_voice_replies: Home Assistant's replies said by the Echo's own voice from their text (the TTS start
+ * event), its audio left unfetched: no TTS engine in Home Assistant needed, and the reply starts ~0.2 s after the
+ * text instead of after Home Assistant's TTS and the download.  Lock held */
+static int own_voice_replies;
+int core_own_voice(int set) { if (set >= 0) own_voice_replies = set != 0; return own_voice_replies; }
+int core_own_voice_present(void) { return speech_installed(); }
+/* Setting error_speech (on): a failure said in words by the Echo's own voice (errsay.h), as stock Alexa did ("Sorry,
+ * something went wrong."), beside the red ring.  Lock held or not */
+static int error_speech = 1;
+int core_error_speech(int set) { if (set >= 0) error_speech = set != 0; return error_speech; }
+void core_error_say(const char *code, const char *message)
+{
+    char s[300];
+    if (!error_speech || core_muted() || dnd) return;
+    errsay_sentence(code, message, s, sizeof s);
+    if (s[0] && speech_local(s, "en")) fprintf(stderr, "error said: %s\n", s);
+}
+
+int core_reply_local(const char *text)
+{
+    if (!own_voice_replies || !speech_ready() || !text || !*text) return 0;
+    if (speech_say(text, 1)) return 0;
+    fprintf(stderr, "reply: said by the Echo's own voice (%s)\n", speech_voice());
+    return 1;
+}
+static const struct speech_out speech_core = { speech_begin, speech_data, speech_end };
+
+/* Says TEXT with the Echo's own voice where it has one that speaks LANG ("en", "de"; NULL: any).  1 = it does */
+static int speech_local(const char *text, const char *lang)
+{
+    const char *l = speech_language();
+    if (!speech_ready() || (lang && strncmp(l, lang, strlen(lang)))) return 0;
+    return speech_say(text, 0) == 0;
+}
 
 size_t core_tts_queued(void)
 {
@@ -2216,6 +2285,7 @@ void core_alarm_stop(const char *why)
 static void alarm_say(const char *text)
 {
     fprintf(stderr, "alarms: \"%s\"\n", text);
+    if (speech_local(text, "en")) return;            /* the sentences are English (alarms_command) */
     if (connected && proto->say) proto->say(text);
 }
 
@@ -3450,6 +3520,7 @@ static void *capture_thread(void *arg)
         if (core_local_wake && (state == LISTENING || state == THINKING) && time(NULL) - state_since > PIPELINE_TIMEOUT) {
             fprintf(stderr, "pipeline timeout\n");
             core_pipeline_finish();
+            core_error_say("timeout", NULL);
         }
         pthread_mutex_unlock(&core_lock);
     }
@@ -3584,6 +3655,8 @@ int main(int argc, char **argv)
     pthread_mutex_lock(&core_lock); core_timer_sound_default(); settings_load(); settings_preset(); pthread_mutex_unlock(&core_lock);    /* whatever the protocol */
     static const struct alarms_hooks alarm_hooks = { core_alarm_ring, core_alarms_changed };
     alarms_start(&alarm_hooks);                               /* the Echo's own alarms (alarms.h), whatever the protocol */
+    speech_start(&speech_core);                               /* the Echo's own voice (speech.h), where it has one */
+    wytts_start(WYTTS_PORT);                                  /* and Home Assistant's text to speech on it (wyoming_tts.h) */
     davs_start();                                             /* Amazon login for artifact downloads (settings page) */
     static const struct web_hooks web_hooks = { web_attention, web_approved };
     if (core_web_port && web_start(core_web_port, &web_hooks)) { fprintf(stderr, "web: not available\n"); core_web_port = 0; }

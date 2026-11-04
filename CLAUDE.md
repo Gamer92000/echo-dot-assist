@@ -294,6 +294,12 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Sound packs** (`soundpack.c`, `soundpack.h`): sets of the Sounds card's sounds in `state/sound-packs/<id>/` (`name`,
   `<sound>.wav`), `/api/sound-pack`, page `packsCard`, a `.soundpack` file = a tar of `pack.json` + WAVs (`web/tar.js`).
   A pack is a whole set; 16 packs, 30 MB, 32 MB left on the partition (`HASSMIC_SOUNDPACK_MAX`, `_FREE_MIN` for tests).
+- **The Echo's own voice (`speech.h`)**: `speech_ivona.c` (Fire OS's offline Ivona engine through its app's JNI glue,
+  dlopen'd, with a JNIEnv of our own; device.mk `SPEECH`, checkers; docs/re-ivona.md) or `speech_none.c`.  Its
+  sentences go through the playback queue as replies (main.c `Q_SPEECH`/`Q_REPLY`, `speech_local`): failures said
+  (`errsay.c`, setting `error_speech`), Home Assistant's replies from their text (`own_voice_replies`,
+  `core_reply_local`), alarm answers, Bluetooth announcements; `wyoming_tts.c` serves it to Home Assistant as Wyoming
+  text to speech on 16710.
 - **Whisper detection (`whisper.h`)**: `whisper_pryon.c` (libpryon `WhisperApi_*`, one detector per request fed from the
   start of streaming, end of utterance on HA's VAD end (`core_mic_off`), result into the ESPHome binary sensor "Last
   request whispered" before STT ends, for the agent's prompt template; `docs/re-whisper.md`) or `whisper_none.c` (host
@@ -658,7 +664,7 @@ stock behaviour. `scripts/device/` holds on-device helpers (`lockdown.sh` firewa
 
 Firewall invariant: Amazon's daemons may only reach local addresses; hassmic itself may reach any address (it fetches
 TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get out. Inbound TCP and UDP are only admitted on
-16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 OTA, 28931 settings page, UDP 28930 arbitration)
+16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 16710 the Echo's own voice over Wyoming (Echo Shows with one), 28928 Sendspin, 28929 OTA, 28931 settings page, UDP 28930 arbitration)
 must stay in that range (UDP 28932 Drop In too). Exceptions: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
 `state/config` says `arbitration_mode=kiosk` (`kiosk_state`), and, where device.conf has `KIOSK_PACKAGE` (and the board `kiosk`, for the settings), the app's own TCP 2324 and 6053 from private addresses while it is installed; its uid may also reach the internet unless `kiosk_internet` is off (`KSUID`); and on the Shows the ports of any other app of the owner's whose
 "Open ports" is on (`state/apps` `lan <package>`, `lockdown.sh` `lan_ports`/`rules_in`: chain `hassmic_in`, the app's uid's

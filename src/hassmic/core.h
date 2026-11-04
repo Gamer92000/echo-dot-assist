@@ -100,6 +100,11 @@ int  core_wake_sound(int set);                   /* same convention: the wake so
 int  core_sound_on(int s, int set);              /* sounds.h's sound has its switch on: set 0/1, or -1 to only read */
 int  core_wake_in_request(int set);              /* the request's audio from the wake word on, not after it; -1 reads */
 int  core_end_of_request(int set);               /* the end of a request heard on the Echo (micend.h: MICEND_*), -1 reads */
+int  core_own_voice(int set);                    /* own_voice_replies (main.c core_reply_local), -1 reads */
+int  core_own_voice_present(void);               /* a voice of the Echo's own is installed (speech.h) */
+int  core_reply_local(const char *text);
+int  core_error_speech(int set);                 /* error_speech: failures said by the Echo's own voice, -1 reads */
+void core_error_say(const char *code, const char *message);   /* the failure in words (errsay.h), where it can speak */         /* lock held: 1 = the Echo's own voice says this reply, end and all */
 int  core_stop_ends_listening(int set);          /* "<wake word>, stop" also ends listening (main.c stop_word), -1 reads */
 int  core_bt_announce(int set);                  /* same: chime and "Connected to <name>" when a phone connects */
 int  core_bluetooth(int set);                   /* same; -B on the command line: leave the radio to the stock stack */

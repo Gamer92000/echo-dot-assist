@@ -12,6 +12,14 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-04
 
+- **The Echo's own voice (Echo Show 5).** Fire OS's offline voice engine (Ivona, which its image carries without a
+  voice) speaks on the Echo once a voice is installed (`tools/davs-fetch.py tts` fetches one; docs/re-ivona.md). With
+  it the Echo says **what went wrong** when a request fails, as stock Alexa did, instead of only a red light ("Sorry,
+  I couldn't reach Oh lama.", "I'm having trouble connecting to Home Assistant."); it can speak **Home Assistant's
+  replies itself** from their text, a fifth of a second after the answer and with no text-to-speech engine needed
+  ("Replies in the Echo's own voice", off by default); alarm answers and Bluetooth announcements use it too; and Home
+  Assistant finds it as a Wyoming text-to-speech service. "The Echo's voice" picks among the installed ones.
+
 - **Apps on the Echo Show, installed from the settings page or Home Assistant.** The settings page's Screen page and
   Echo Local's new Apps tab list the Android apps you installed beside the home app (NewPipe, say), remove them, and
   install new ones from an APK on your computer or on Home Assistant (also the action "Install app"). Each shows in

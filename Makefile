@@ -10,6 +10,9 @@ include devices/$(DEVICE)/device.mk
 RING    ?= src/hassmic/ring.c
 # a screen's UI (screen.h): screen.c runs src/ui/ (libhmui.so, loaded by scripts/device/screen.dex) where there is one
 SCREEN  ?= src/hassmic/screen_none.c
+# the Echo's own voice (speech.h): Fire OS's offline engine where the firmware has its app (device.mk), else none.
+# The device binary only: the PC and qemu builds have no engine (and no jni.h)
+SPEECH  ?= src/hassmic/speech_none.c
 
 NDK     ?= $(CURDIR)/toolchain/android-ndk-r21e
 CC      := $(NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/$(TARGET)-clang
@@ -201,7 +204,7 @@ SOUND := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/sound_pryon.c,src/hass
 WHISPER := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/hassmic/whisper_none.c)
 
 RNNOISE := $(addprefix src/third_party/rnnoise/,denoise.c rnn.c rnn_data.c pitch.c kiss_fft.c celt_lpc.c)
-HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) $(SCREEN) src/hassmic/kiosk.c src/hassmic/apps.c src/hassmic/alarms.c src/hassmic/ringdesign.c src/hassmic/ledq.c \
+HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/wyoming_tts.c src/hassmic/errsay.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) $(SCREEN) src/hassmic/kiosk.c src/hassmic/apps.c src/hassmic/alarms.c src/hassmic/ringdesign.c src/hassmic/ledq.c \
            src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
            src/hassmic/wake.c src/hassmic/wake_mww.c src/hassmic/mww_features.c src/hassmic/mww_model.c src/hassmic/mww_store.c \
            src/third_party/monocypher.c src/third_party/freeaptx.c $(RNNOISE)
@@ -215,22 +218,22 @@ build/web_assets.c: tools/embed.py $(foreach w,$(WEB),$(firstword $(subst :, ,$(
 
 # SYSLIBS (device.mk): NDK system libraries a backend needs beside the stock ones (-lOpenSLES on checkers): they come
 # with the NDK, so no stubs are needed for them.
-$(OUT)/hassmic: $(HASSMIC) $(BOARD) $(AUDIO) $(WAKE) $(SOUND) $(WHISPER) $(HASSMIC_H) $(addprefix $(STOCK)/,$(LIBS))
+$(OUT)/hassmic: $(HASSMIC) $(BOARD) $(AUDIO) $(WAKE) $(SOUND) $(WHISPER) $(SPEECH) $(HASSMIC_H) $(addprefix $(STOCK)/,$(LIBS))
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -Isrc/hassmic $(filter %.c,$^) -o $@ $(LDFLAGS) -lm -ldl $(SYSLIBS) $(addprefix $(STOCK)/,$(LIBS))
 
 # PC build for protocol tests: file audio backend, no wake word (SIGUSR1 triggers), fake sound and whisper detection, identity of $(DEVICE).
-build/hassmic-host: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c src/hassmic/wake_none.c src/hassmic/sound_none.c src/hassmic/whisper_none.c $(HASSMIC_H) build/.device
+build/hassmic-host: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c src/hassmic/wake_none.c src/hassmic/sound_none.c src/hassmic/whisper_none.c src/hassmic/speech_none.c $(HASSMIC_H) build/.device
 	@mkdir -p build
 	cc -O2 -Wall -Wextra $(DEFS) -Isrc/include -Isrc/hassmic $(filter %.c,$^) -o $@ -lpthread -lm -ldl -lopus -lz
 
 # The same with a screen whatever $(DEVICE) has (screen.c, the band): tests/fake_screen.py, with a stand-in UI.
-build/hassmic-host-screen: $(filter-out $(RING) $(SCREEN),$(HASSMIC)) src/hassmic/ring_band.c src/hassmic/screen.c $(BOARD) src/hassmic/audio_file.c src/hassmic/wake_none.c src/hassmic/sound_none.c src/hassmic/whisper_none.c $(HASSMIC_H) build/.device
+build/hassmic-host-screen: $(filter-out $(RING) $(SCREEN),$(HASSMIC)) src/hassmic/ring_band.c src/hassmic/screen.c $(BOARD) src/hassmic/audio_file.c src/hassmic/wake_none.c src/hassmic/sound_none.c src/hassmic/whisper_none.c src/hassmic/speech_none.c $(HASSMIC_H) build/.device
 	@mkdir -p build
 	cc -O2 -Wall -Wextra $(DEFS) -Isrc/include -Isrc/hassmic $(filter %.c,$^) -o $@ -lpthread -lm -ldl -lopus -lz
 
 # ARM build with file audio but the device's wake word engine, for running under qemu-arm (tools/qrun.sh).
-$(OUT)/hassmic-qemu: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c $(WAKE) $(SOUND) $(WHISPER) $(HASSMIC_H) $(call STOCK_LIBS,libpryon.so libopus.so libz.so)
+$(OUT)/hassmic-qemu: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c $(WAKE) $(SOUND) $(WHISPER) src/hassmic/speech_none.c $(HASSMIC_H) $(call STOCK_LIBS,libpryon.so libopus.so libz.so)
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -Isrc/hassmic $(filter %.c,$^) -o $@ $(LDFLAGS) -lm -ldl $(call STOCK_LIBS,libpryon.so libopus.so libz.so)
 
@@ -242,10 +245,16 @@ UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.
 UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
 	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk alarms \
 	screen ui touch json uninstall_boot resample fork_release
+UNIT_TESTS += errsay
 UNIT_TESTS += apps
 UNIT_TESTS += lockdown
 UNIT_TESTS += touchgate
 unit: $(addprefix unit-,$(UNIT_TESTS))
+
+# errsay.c: Home Assistant's pipeline errors as the sentences the Echo says
+unit-errsay:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/errsay_test.c src/hassmic/errsay.c -o build/errsay_test && build/errsay_test
 unit-hash:
 	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic -Isrc/include tests/unit/hash_test.c $(UNIT) -lpthread -o build/hash_test && build/hash_test

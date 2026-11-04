@@ -142,6 +142,25 @@ System) off takes any certificate, but then anyone on your network could slip th
         message: "Timer {{ states('sensor.kitchen_echo_ringing_timers') }} is ringing in the kitchen"
   ```
 
+### The Echo's own voice
+
+On an Echo Show 5, hassmic can speak with Fire OS's offline voice engine (Ivona), which the firmware carries without a
+voice: `tools/davs-fetch.py tts [voice|list]` fetches one from Amazon (public, no login: Nina, American English, is
+289 MB) and [docs/re-ivona.md](re-ivona.md) says where it goes on the Echo. Once one is there (the Voice settings show
+these only then):
+
+- **Say what went wrong** (on): a failed request is answered in words beside the red light, naming the part that
+  failed and, when Home Assistant names it, the service and how ("Sorry, I couldn't reach Oh lama.", "Sorry, Open A I
+  took too long to answer."); also when the wake word is heard while Home Assistant is not connected, or it does not
+  answer within 30 seconds. Quiet while muted or in Do not disturb.
+- **Replies in the Echo's own voice** (off): Home Assistant's replies spoken on the Echo from their text instead of
+  the audio of Home Assistant's text to speech: they start sooner (a fifth of a second after Home Assistant has the
+  answer) and need no text-to-speech engine. English voices read other languages with an English accent; replies an
+  AI agent streams while still writing play as before.
+- **The Echo's voice**: which installed voice speaks (about 5 s to switch). Alarm answers and Bluetooth
+  announcements use it too, and Home Assistant's Wyoming integration finds it (port 16710) as a text-to-speech
+  service for any automation.
+
 ## Wake word
 
 Three engines, picked under "Wake word" on the [settings page](#settings-page):
