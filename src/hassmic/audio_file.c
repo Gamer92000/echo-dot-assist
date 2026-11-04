@@ -112,8 +112,11 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
     if (ms < len) fprintf(stderr, "earcon: cut at %ld ms\n", ms);       /* for the tests: what stopped it stopped it at once */
 }
 
-/* Music streams on the PC: files, written at real-time speed through a modelled 200 ms device buffer. */
-struct stream { FILE *f; unsigned bps; long long t0, written; };
+/* Music streams on the PC: files, written at real-time speed through a modelled 200 ms device buffer.  The music's
+ * buffer drains HASSMIC_FAKE_MUSIC_PPM faster (or slower: < 0) than real time: an output clock that is off, as the
+ * Echo Show 5's (~350 ppm), for Sendspin's sync; HASSMIC_FAKE_MUSIC_BURST_MS of it vanish from the queue at once as it
+ * starts and stay hidden: AudioTrack's buffer behind audio_android.c's slots (the Show 5's: ~137 ms). */
+struct stream { FILE *f; unsigned bps; long long t0, written; double speed; long long burst_us; };
 static struct stream music, bt, voip;
 static long long raw_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC_RAW, &ts); return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000; }
 
@@ -128,9 +131,9 @@ static int s_open(struct stream *s, const char *env, const char *def, unsigned r
 static long long s_queued_us(struct stream *s)
 {
     if (!s->f || !s->t0) return 0;
-    long long q = s->written * 1000000 / s->bps - (raw_us() - s->t0);
-    if (q < 0) { s->t0 = 0; s->written = 0; q = 0; }
-    return q;
+    long long played = (long long)((double)(raw_us() - s->t0) * (s->speed ? s->speed : 1)), q = s->written * 1000000 / s->bps - played;
+    if (q < 0) { s->t0 = 0; s->written = 0; q = 0; }            /* ran dry */
+    return q > s->burst_us ? q - s->burst_us : 0;              /* what the track holds is not seen */
 }
 
 static int s_write_raw(struct stream *s, const void *data, size_t len);
@@ -176,7 +179,15 @@ static int s_write_raw(struct stream *s, const void *data, size_t len)
 
 static void s_close(struct stream *s) { if (s->f) fclose(s->f); s->f = NULL; }
 
-int       music_open(unsigned rate, unsigned channels) { return s_open(&music, "HASSMIC_MUSIC", "/tmp/hassmic_music.raw", rate, channels); }
+int       music_open(unsigned rate, unsigned channels)
+{
+    const char *ppm = getenv("HASSMIC_FAKE_MUSIC_PPM"), *burst = getenv("HASSMIC_FAKE_MUSIC_BURST_MS");
+    int r = s_open(&music, "HASSMIC_MUSIC", "/tmp/hassmic_music.raw", rate, channels);
+    music.speed = ppm ? 1 + atof(ppm) * 1e-6 : 1;
+    music.burst_us = burst ? atoll(burst) * 1000 : 0;
+    return r;
+}
+long long music_prime_us(void) { return music.burst_us ? 150000 : 0; }   /* as audio_android.c's, where there is a burst */
 long long music_queued_us(void) { return s_queued_us(&music); }
 int       music_write(const void *data, size_t len) { return s_write(&music, data, len); }
 void      music_close(void) { s_close(&music); }

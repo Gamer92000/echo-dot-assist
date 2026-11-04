@@ -23,7 +23,8 @@
  *               has to pair with the token first; the Sentinel session still carries that pairing.
  *   servers     every Sendspin server on the LAN dials us; one connection is admitted, ranked by declared activity
  *   sync        two-state Kalman filter on client/time exchanges; chunks are written to the mixer so that their first
- *               frame leaves the speaker at the server's timestamp (hard snap at start, then whole-frame drop/duplicate)
+ *               frame leaves the speaker at the server's timestamp (hard snap at start, then a rate of the music's own,
+ *               steered by the error: resample.h)
  */
 #include "sendspin.h"
 #include <ctype.h>
@@ -47,6 +48,7 @@
 #include "hash.h"
 #include "netio.h"
 #include "noise.h"
+#include "resample.h"
 #include "screen.h"
 #include "mass.h"
 #include "ws.h"
@@ -69,7 +71,7 @@ void opus_decoder_destroy(OpusDecoder *st);
 #define QUEUE_MAX (8u << 20)            /* decoded PCM we hold: the server's 30 s horizon plus margin */
 #define LEAD_MS 300                     /* required_lead_time_ms and min_buffer_ms we report */
 #define MIXER_TARGET_US 120000          /* keep about this much queued in the mixer: reacts fast to stop / duck / volume */
-#define SNAP_US 20000                   /* beyond this error: one-shot resync instead of frame nudging */
+#define SNAP_US 20000                   /* beyond this error: one-shot resync instead of the rate catching up */
 
 static int port; static const char *state_dir = "/data/local/hassmic/state";
 static uint8_t id_priv[32], id_pub[32]; static char client_id[48];
@@ -173,10 +175,63 @@ static void q_push(long long ts, const uint8_t *pcm, size_t len)
     pthread_mutex_unlock(&q_lock);
 }
 
+static int load_file(const char *name, void *buf, size_t len);
+static void save_file(const char *name, const void *buf, size_t len);
+
+/* The drift learnt per route (resample.h), in state/sendspin.drift as "<Echo's ppm> <Bluetooth speaker's ppm>": learnt
+ * again from nothing it took 20-60 s after every restart and update, a few ms off the other players meanwhile.  Saved
+ * when the output closes and every 10 min while it plays, and only once it moved by 5 ppm: the flash spared. */
+static void drift_load(double d[2])
+{
+    char buf[64]; int r = load_file("sendspin.drift", buf, sizeof buf - 1); double a, b;
+    buf[r > 0 ? r : 0] = 0; d[0] = d[1] = 0;
+    if (sscanf(buf, "%lf %lf", &a, &b) == 2 && fabs(a) <= RATE_DRIFT_MAX * 1e6 && fabs(b) <= RATE_DRIFT_MAX * 1e6) {
+        d[0] = a * 1e-6; d[1] = b * 1e-6;
+        fprintf(stderr, "sendspin: output clock as learnt before: %+.1f ppm (Echo), %+.1f (Bluetooth speaker)\n", a, b);
+    }
+}
+static void drift_save(const double d[2], double kept[2])
+{
+    if (fabs(d[0] - kept[0]) < 5e-6 && fabs(d[1] - kept[1]) < 5e-6) return;
+    char buf[64]; int n = snprintf(buf, sizeof buf, "%.1f %.1f\n", d[0] * 1e6, d[1] * 1e6);
+    save_file("sendspin.drift", buf, (size_t)n); kept[0] = d[0]; kept[1] = d[1];
+}
+
+/* A fresh output: silence first (music_prime_us), then wait until the player took it, so the first chunk is timed against
+ * the queue it will play behind.  On the Echo Shows AudioTrack takes its buffer's worth at once as it starts (the Show
+ * 5's ~137 ms), which the queue leaves out from then on: timed before that, every stream's second chunk came 135-139 ms
+ * early, a resync with that much silence after the first 25 ms of music (2026-11-04).  Done once the queue fell by
+ * 100 ms, and 30 ms after that: the burst comes in one go.  The log says how much of it went at once, for other models. */
+static void prime_output(void)
+{
+    static const int16_t zero[RATE / 50 * CHANNELS];           /* 20 ms: a slot of audio_android.c's each */
+    long long p = music_prime_us();
+    if (p <= 0) return;
+    for (long long f = p * RATE / 1000000; f > 0; ) { size_t n = f > RATE / 50 ? RATE / 50 : (size_t)f; music_write(zero, n * FRAME); f -= n; }
+    long long t0 = raw_us(), first = 0, q;
+    while ((q = music_queued_us()) > p - 100000 && raw_us() - t0 < 1000000 && atomic_load(&stream_on)) {
+        if (!first && q < p) first = raw_us();
+        usleep(5000);
+    }
+    if (!first) first = raw_us();
+    usleep(30000);
+    q = music_queued_us();
+    long long at_once = p - q - (raw_us() - first);
+    fprintf(stderr, "sendspin: output primed with %lld ms of silence, %lld ms of it taken at once\n", p / 1000, at_once > 0 ? at_once / 1000 : 0);
+}
+
+/* Each chunk is due at its timestamp.  A snap (the start, an underrun, a new delay, an error past SNAP_US) pads with
+ * silence or drops the chunk's late part; in between the music plays at a rate of its own, which the sync error steers
+ * (resample.h): an output clock that is off, as the Echo Show 5's, is followed without a frame skipped or repeated. */
 static void *player_thread(void *arg)
 {
-    static int16_t silence[RATE / 100 * CHANNELS]; int open = 0; double smooth = 0; long long stat_t = 0; long adj_total = 0;
+    static int16_t silence[RATE / 50 * CHANNELS]; int open = 0; long long stat_t = 0; int resyncs = 0, routed = -1, stats = 0;
+    float duck_g = 1; double step = 1, rate_sum = 0, drift_of[2], drift_kept[2]; long rate_n = 0;   /* rate_sum: the log's mean */
+    struct resampler rs; struct rate_servo servo = { 0 };    /* the drift kept across streams: the same output clock */
+    int16_t *out = NULL; size_t out_cap = 0;
     (void)arg;
+    rs_reset(&rs);
+    drift_load(drift_of); memcpy(drift_kept, drift_of, sizeof drift_kept);
     for (;;) {
         pthread_mutex_lock(&q_lock);
         while (!q_head && atomic_load(&stream_on)) {
@@ -189,47 +244,71 @@ static void *player_thread(void *arg)
 
         if (!atomic_load(&stream_on)) {
             if (c) free(c);
-            if (open) { music_close(); open = 0; fprintf(stderr, "sendspin: output closed\n"); }
+            if (open) {
+                music_close(); open = 0; fprintf(stderr, "sendspin: output closed\n");
+                if (routed >= 0) { drift_of[routed] = servo.drift; drift_save(drift_of, drift_kept); }
+            }
             usleep(20000);
             continue;
         }
         if (!c) continue;
         if (!tf_synced(NULL)) { free(c); continue; }
-        if (!open) { if (music_open(RATE, CHANNELS)) { free(c); usleep(200000); continue; } open = 1; atomic_store(&snap_next, 1); smooth = 0; }
+        if (!open) { if (music_open(RATE, CHANNELS)) { free(c); usleep(200000); continue; } open = 1; atomic_store(&snap_next, 1); prime_output(); }
 
         while (music_queued_us() > MIXER_TARGET_US && atomic_load(&stream_on)) usleep(5000);
 
-        uint8_t *pcm = c->pcm; size_t len = c->len;
-        long long due = tf_client_time(c->ts) - atomic_load(&static_delay_ms) * 1000LL;
-        long long err = due - (raw_us() + music_queued_us() + out_latency_us());       /* > 0: we are early */
-        if (atomic_exchange(&snap_next, 0) || llabs(err) > SNAP_US) {
+        /* On a Bluetooth speaker the output's clock is the speaker's: a drift learnt per route, the Echo's back after it */
+        int route = btout_routed() != 0;
+        if (route != routed) {
+            if (routed >= 0) drift_of[routed] = servo.drift;
+            routed = route; servo.drift = drift_of[route];
+        }
+        const uint8_t *pcm = c->pcm; size_t len = c->len;
+        long long due = tf_client_time(c->ts) - atomic_load(&static_delay_ms) * 1000LL, at = raw_us() + music_queued_us() + out_latency_us();
+        /* > 0: we are early.  The next frame out is still one of the chunk before's (what the resampler looks ahead) */
+        long long err = due + llround(rs_lag(&rs) * 1e6 / RATE) - at;
+        int fresh = atomic_exchange(&snap_next, 0);
+        if (fresh || llabs(err) > SNAP_US) {
+            if (!fresh) { resyncs++; fprintf(stderr, "sendspin: %+.1f ms off the schedule, resynced\n", err / 1000.0); }
+            err = due - at;                                                             /* from this chunk's first frame */
             if (err > 0) {
-                while (err > 200000 && atomic_load(&stream_on)) { usleep(20000); err = due - (raw_us() + music_queued_us() + out_latency_us()); }
-                for (long long frames = err * RATE / 1000000; frames > 0; ) {
-                    size_t n = frames > RATE / 100 ? RATE / 100 : (size_t)frames;
-                    music_write(silence, n * FRAME); frames -= n;
+                /* silence until the chunk is due, 20 ms at a time as it plays, the error read again before each: left
+                 * to run dry while it waited (it used to, down to the last 200 ms), the Shows' AudioTrack emptied and
+                 * took its buffer's worth at once again from the next writes, after the chunk was timed (prime_output) */
+                for (long long q; atomic_load(&stream_on); ) {
+                    q = music_queued_us(); err = due - (raw_us() + q + out_latency_us());
+                    long long f = err * RATE / 1000000;
+                    if (f <= 0) break;
+                    if (q > MIXER_TARGET_US) { usleep(5000); continue; }
+                    music_write(silence, (size_t)(f > RATE / 50 ? RATE / 50 : f) * FRAME);
                 }
             } else {
                 size_t drop = (size_t)(-err * RATE / 1000000) * FRAME;
                 if (drop >= len) { free(c); atomic_store(&snap_next, 1); continue; }             /* whole chunk is late */
                 pcm += drop; len -= drop;
             }
-            smooth = 0;
-        } else {
-            smooth = 0.9 * smooth + 0.1 * (double)err;
-            if (fabs(smooth) > 400) {                                                           /* nudge: at most 6 frames per 25 ms chunk */
-                int n = (int)fmin(6, fmax(1, fabs(smooth) * RATE / 1e6));
-                if (smooth > 0) { for (int i = 0; i < n; i++) music_write(pcm, FRAME); adj_total += n; }       /* early: repeat a frame */
-                else if (len > (size_t)n * FRAME) { pcm += n * FRAME; len -= n * FRAME; adj_total -= n; }     /* late: skip frames */
-                smooth -= (smooth > 0 ? 1 : -1) * n * 1e6 / RATE;
-            }
+            rs_reset(&rs); step = rate_servo_snap(&servo);
+        } else step = rate_servo(&servo, (double)err, (double)(len / FRAME) / RATE);
+
+        size_t frames = len / FRAME, room = rs_out_max(frames), n;
+        if (room > out_cap) {
+            int16_t *o = realloc(out, room * FRAME);
+            if (!o) { free(c); atomic_store(&snap_next, 1); continue; }
+            out = o; out_cap = room;
         }
-        if (atomic_load(&player_muted)) memset(pcm, 0, len);
-        else if (core_state() != IDLE) { int16_t *s = (int16_t *)pcm; for (size_t i = 0; i < len / 2; i++) s[i] /= 6; }    /* duck under the voice assistant */
-        music_write(pcm, len);
+        n = rs_run(&rs, (const int16_t *)pcm, frames, step, out);
+        if (atomic_load(&player_muted)) memset(out, 0, n * FRAME);
+        else music_duck(out, n, RATE, &duck_g, core_state() != IDLE ? DUCK : 1);          /* under the voice assistant */
+        music_write(out, n * FRAME);
+        rate_sum += step - 1; rate_n++;
         if (raw_us() - stat_t > 10000000) {
             double e; tf_synced(&e); stat_t = raw_us();
-            fprintf(stderr, "sendspin: sync err %+.2f ms, clock ±%.2f ms, queued %zu KB, nudged %+ld frames\n", smooth / 1000, e / 1000, q_bytes / 1024, adj_total);
+            /* the rate: what the music plays at, the output's clock (the error's share of it besides: the queue's slots
+             * read skewed); integral: what was learnt of it, kept */
+            fprintf(stderr, "sendspin: sync err %+.2f ms, clock ±%.2f ms, queued %zu KB, rate %+.0f ppm (integral %+.0f), %d resyncs\n",
+                    servo.smooth * 1e3, e / 1000, q_bytes / 1024, rate_sum / rate_n * 1e6, servo.drift * 1e6, resyncs);
+            rate_sum = 0; rate_n = 0;
+            if (++stats % 60 == 0) { drift_of[routed] = servo.drift; drift_save(drift_of, drift_kept); }      /* 10 min */
         }
         free(c);
     }
