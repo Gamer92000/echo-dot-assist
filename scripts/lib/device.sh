@@ -38,7 +38,7 @@ device_load() {
 # key they are signed with, which every bundle and install carries), as the Makefile reads them: keys/release.conf, or a
 # fork's own secrets/fork.conf (scripts/fork-release.sh)
 release_load() {
-    local _f
+    local _f _bad
     for _f in keys/release.conf secrets/fork.conf; do
         [ -f $_f ] || continue
         # the lines as written: make keeps quotes that sh drops, and reads NAME = value, which sh runs as a command

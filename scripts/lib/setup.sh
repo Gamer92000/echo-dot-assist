@@ -13,7 +13,9 @@ LOG=${LOG:-/dev/null}
 # kept offering to install it again
 case :$PATH: in *:/usr/sbin:*) ;; *) PATH=$PATH:/usr/sbin:/sbin;; esac
 SPIN=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
-_f=0 TASK_PID=
+# the frame counter's name is its own: the libraries sourced beside this one loop over _f, and release_load's left
+# "secrets/fork.conf" in it, which the spinner's arithmetic stopped setup on (#129)
+_spin=0 TASK_PID=
 
 say()  { printf '  %s\n' "$*"; }
 info() { printf '  %s%s%s\n' "$DIM" "$*" "$N"; }
@@ -49,7 +51,7 @@ _tick() {
     [ -n "$TTY" ] || return 0
     printf '\e[?25l'
     local e=$((SECONDS - $2))
-    printf '\r\e[K  %s%s%s %s%s%s%s' "$CYN" "${SPIN[_f++ % 10]}" "$N" "$1" "$DIM" \
+    printf '\r\e[K  %s%s%s %s%s%s%s' "$CYN" "${SPIN[_spin++ % 10]}" "$N" "$1" "$DIM" \
         "$([ $e -ge 3 ] && printf '  %s' "$(_dur $e)")${3:+  · $3}" "$N"
 }
 
