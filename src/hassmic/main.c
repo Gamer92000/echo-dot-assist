@@ -15,6 +15,7 @@
  *
  * Default ports 26053 (ESPHome) and 16700 (Wyoming): the stock firewall only admits inbound TCP 16384-32767.
  */
+#define _GNU_SOURCE                     /* pipe2 on glibc (the PC builds) */
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -24,6 +25,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
+#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -34,6 +36,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #ifdef __ANDROID__
 #include <sys/system_properties.h>
 #endif
@@ -279,13 +282,28 @@ static atomic_int click_q16 = 65536;
  * (net.c); a shell would make it the effective group, and AIPC and the mixer refuse that. */
 static void child_ids(void) { gid_t e = getegid(); setregid(e, e); }
 
+/* execv, and a script without "#!" through the shell, as a shell runs it: execv alone fails with ENOEXEC.  Android 7's
+ * /system/bin/settings and pm are such ("# Script to start ..."; checkers, crown, cronos, cupcake; athena's Android 9
+ * ones and every am have "#!"): the band's `settings put system screen_off_timeout` had never been made there (seen
+ * on an Echo Show 5, 2026-11-02).  In the child: no allocation; an argv too long for the copy is not run cut short */
+static void exec_any(char *const argv[])
+{
+    execv(argv[0], argv);
+    if (errno != ENOEXEC) return;
+    char *a[34]; int n = 0;
+    a[n++] = "/system/bin/sh";
+    for (int i = 0; argv[i]; i++) { if (n == 33) return; a[n++] = argv[i]; }
+    a[n] = NULL;
+    execv(a[0], a);
+}
+
 static void run_argv(char *const argv[])
 {
     if (fork() == 0) {                  /* bionic API 24 has no posix_spawn; SIGCHLD is ignored: no zombie */
         child_ids();
         int nul = open("/dev/null", O_WRONLY);          /* ledctrl and audio_manager_set_prop chat on stdout: two log lines */
         if (nul >= 0) dup2(nul, 1);                     /* per LED change otherwise.  Errors (stderr) still reach the log */
-        execv(argv[0], argv);
+        exec_any(argv);
         _exit(127);
     }
 }
@@ -298,19 +316,59 @@ static void run_output(char *const argv[], char *buf, size_t n)
 {
     int p[2]; size_t len = 0; ssize_t r;
     buf[0] = 0;
-    if (pipe(p)) return;
-    if (fork() == 0) {                  /* not popen: its shell would undo child_ids() */
+    /* close-on-exec from the start (pipe2: no window for another thread's fork): every child forked meanwhile
+     * (run_argv's, ledq's ledctrl, artifacts' pryon_test, another run_output's) held the write end as long as it ran,
+     * and this read waited for it too.  dup2 onto 1 below clears the flag for this child alone.  The band's renderer
+     * and the screen UI close all but their own pipes before exec */
+    if (pipe2(p, O_CLOEXEC)) return;
+    pid_t pid = fork();
+    if (pid == 0) {                     /* not popen: its shell would undo child_ids() */
+        setpgid(0, 0);                  /* a group of its own, for the kill below */
         child_ids();
-        int nul = open("/dev/null", O_WRONLY);
-        dup2(p[1], 1); if (nul >= 0) dup2(nul, 2);
-        close(p[0]); close(p[1]);
-        execv(argv[0], argv);
+        /* errors (stderr) reach the log, as run_argv's do.  A pipe end that is 1 itself (only with stdout closed at
+         * start) keeps its close-on-exec through dup2: cleared by hand */
+        if (p[1] == 1) fcntl(1, F_SETFD, 0); else dup2(p[1], 1);
+        exec_any(argv);
+        /* the log says it could not; write() only: the child of a threaded process may take no lock (snprintf,
+         * strerror) that another thread held at the fork */
+        ssize_t w = write(2, "run: ", 5); w = write(2, argv[0], strlen(argv[0])); w = write(2, ": cannot be run\n", 16); (void)w;
         _exit(127);
     }
     close(p[1]);
-    while (len + 1 < n && ((r = read(p[0], buf + len, n - 1 - len)) > 0 || (r < 0 && errno == EINTR))) if (r > 0) len += (size_t)r;
+    if (pid < 0) { fprintf(stderr, "run: %s: no fork (%s)\n", argv[0], strerror(errno)); close(p[0]); return; }
+    /* 20 s at most per tool, whatever it does: the callers are threads that must go on (volume, the front end's
+     * scores, Amazon's login); one that runs several waits for each */
+    struct timespec t0; clock_gettime(CLOCK_MONOTONIC, &t0);
+    int late = 0;
+    for (;;) {
+        struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+        int left = 20000 - (int)((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000);
+        struct pollfd pf = { p[0], POLLIN, 0 };
+        if (len + 1 >= n) break;        /* cut: what it writes on fails with EPIPE (SIGPIPE is ignored, here and so in
+                                           it); it ends as it would, and only a hang is killed */
+        if (left <= 0) { late = 1; break; }
+        int k = poll(&pf, 1, left);
+        if (k < 0 && errno == EINTR) continue;
+        if (k == 0) { late = 1; break; }
+        if (k < 0) break;
+        r = read(p[0], buf + len, n - 1 - len);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) break;
+        len += (size_t)r;
+    }
     buf[len] = 0;
     close(p[0]);                        /* SIGCHLD is ignored: nothing to wait for */
+    /* A tool that hangs would stay for good, one more each call: its process group goes, with what it started (sh -c's
+     * lipc tools: afe_arbitration, each wake word round).  By pid, safely: while a group has a member Linux gives its
+     * number to no new process, and an empty one is ESRCH.  Where setpgid was refused there is no such group: then the
+     * child alone, and only while waitpid says it is ours and running (SIGCHLD is ignored: one that ended is gone at
+     * once, its pid free for anyone, a thread of ours too).  Left: a pid taken again in the instant between waitpid
+     * and kill, and a tool still hanging when hassmic stops (its own group: init's stop misses it) */
+    if (late) {
+        int st, stopped = kill(-pid, SIGKILL) == 0;
+        if (!stopped && waitpid(pid, &st, WNOHANG) == 0) stopped = kill(pid, SIGKILL) == 0;
+        fprintf(stderr, "run: %s: no end after 20 s%s\n", argv[0], stopped ? ", stopped" : " (its pipe held by what it started)");
+    }
 }
 
 /* What ring.c plays: through ledctrl one at a time, in order (ledq.c says why), or into HASSMIC_FAKE_LED's file for

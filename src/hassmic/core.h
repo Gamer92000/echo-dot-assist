@@ -200,5 +200,6 @@ void   core_dropin_listen(int on);                          /* the front end's l
 const char *core_dropin_refusal(int incoming);
 void   core_spawn(char *const argv[]);                      /* the same, without waiting for it or its output */
 void   core_run(char *const argv[], char *out, size_t n);   /* runs a stock tool the way the core does, until it closes its
-                                                               stdout, which lands in out (any thread, not the lock) */
+                                                               stdout, which lands in out, or 20 s have passed (then it is
+                                                               killed; any thread, not the lock) */
 #endif
