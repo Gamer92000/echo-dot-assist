@@ -87,6 +87,7 @@ void core_mic_level(int dbfs);                  /* speech level the pipeline get
 int  core_wake_sound_removal(int set);           /* our sounds taken out of what the pipeline gets (earsup.h), -1 reads */
 int  core_mic_denoise(int set);                 /* noise reduction on what the pipeline gets (micdenoise.h): 0 off .. 3 high, -1 reads */
 void core_pipeline_finish(void);
+int  core_follow_up(void);                       /* the pipeline being started answers a question: no wake word stage, even with -w remote */
 void core_restart_after(void);                  /* start another pipeline once the current one has finished */
 int  core_wake_run_ended(int failed);            /* lock held: a run ended during a reply; 1: the one that only listened for the wake word */
 void core_run_over(void);                        /* lock held: the run has ended while its reply is (about to be) spoken; with -w remote the wake word may cut it */
