@@ -31,6 +31,14 @@ The guided way: `scripts/setup.sh donut` runs these same steps and checks each o
 
 Plan an evening. Steps 1–2 are the risky ones and are not this project's work: read the [XDA thread][xda] in full first.
 
+> **Warning: the unlock can leave the Echo unusable** ([issue #112][i112]). **Echos that were updated recently may
+> become unusable. The full extent is currently unknown.** On two Echos `kamakiri` ran through without an error, yet
+> the Echo came back locked (a green ring instead of the rainbow; `fastboot-step.sh` fails with
+> `the command you input is restricted on locked hw`), and no way to finish the unlock or undo it has been found:
+> neither has worked since. It is not known yet which Echos or firmware versions are affected, nor whether any unlock
+> is safe now. While the issue is open, do not unlock an Echo you want to keep. `scripts/setup.sh donut` asks before
+> it unlocks.
+
 > **Never let the Echo go online with Amazon on the way.** It would update itself, and an update can close the hole the
 > unlock uses. Do not set it up with the Alexa app, except in the guarded way described under
 > [another wake word](#3-optional-another-wake-word).
@@ -282,3 +290,4 @@ Suomi, Polski): set it to the language of the Echo's assistant in Home Assistant
 Assistant does not tell the Echo which language its assistant uses, so this cannot follow it by itself.
 
 [xda]: https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/
+[i112]: https://github.com/Gamer92000/echo-dot-assist/issues/112

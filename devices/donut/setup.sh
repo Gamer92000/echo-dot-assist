@@ -4,6 +4,7 @@
 # first whether its result is there already, so a rerun (or work done by hand) passes through quietly.
 
 XDA=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/
+LOCKED_ISSUE=https://github.com/Gamer92000/echo-dot-assist/issues/112
 FTVDB=https://ftvdb.com/echo/firmware/com.amazon.donut.android.os/f7cd5f3b6d6bfa59e5ba6a6779285c34-13222529668-fire-os-6574-1-ns65741-8138-2026-08-31/
 KAMAKIRI=kamakiri-donut-v1.0.0.zip
 KAMAKIRI_SHA256=4d2bb52eaf661f6616aa4268584d44cf9155c1328c34bfcba01a6558f942b738
@@ -89,6 +90,22 @@ step_unlock() {
         wait_adb recovery; return
     fi
     [ -n "$WINDOWS" ] && { unlock_elsewhere; [ -n "$DRY" ]; return; }       # Windows: on adb at the start (setup.sh), not now
+    # issue #112 (2026-11-04/05): on two Echos kamakiri ran through without an error, but kaeru never stayed in expdb
+    # (its write "did not read back", the partition zeros after) and the Echo came back in locked fastboot (green ring,
+    # "restricted on locked hw"), with no way on from there found yet.  One had worked until it was opened, so a dying
+    # eMMC does not explain it alone; Echos Amazon updated recently look at risk, how far it reaches is not known.
+    # Asked once a run, before anything reaches the Echo; a dry run goes on.
+    if [ -z "$UNLOCK_RISK_OK" ]; then
+        warn "${B}Warning: the unlock can leave this Echo unusable (issue #112).$N"
+        warn "${B}Echos that were updated recently may become unusable. The full extent is currently unknown.$N"
+        info "  On two Echos kamakiri ran through without an error, yet the Echo came back locked (a green ring, no"
+        info "  rainbow), and no way to finish the unlock or undo it has been found: neither has worked since."
+        info "  It is not known yet which Echos or firmware versions are affected, nor whether any unlock is safe now."
+        info "  Read $LOCKED_ISSUE first. While it is open, do not unlock an Echo you want to keep."
+        ask "Unlock this Echo anyway?" n || [ -n "$DRY" ] ||
+            { info "Nothing was written to the Echo. Quit (q) and run scripts/setup.sh $DEVICE later: progress is kept."; return 1; }
+        UNLOCK_RISK_OK=1
+    fi
     local kdir
     [ -d $FW/kamakiri ] || task "Unpacking kamakiri" unzip -q $FW/$KAMAKIRI -d $FW/kamakiri || return 1
     # the zip may keep its scripts in a folder of their own: run them from wherever bootrom-step.sh landed
@@ -109,7 +126,12 @@ step_unlock() {
         bash -o pipefail -c "./bootrom-step.sh 2>&1 | tee -a '$LOG'" || return 1
     waitfor "Waiting for hacked fastboot (rainbow ring)|Hacked fastboot" '[ -n "$(fastboot devices)" ]' \
         "No rainbow? Unplug everything and try this step again." || return 1
-    task "Flashing TWRP" in_dir "$kdir" ./fastboot-step.sh || return 1
+    # green ring instead of the rainbow: the stock LK answers fastboot too, and refuses the write.  Running the unlock
+    # again did not help in issue #112, so this points there first.
+    task "Flashing TWRP" in_dir "$kdir" ./fastboot-step.sh || {
+        tail -n 20 "$LOG" 2>/dev/null | grep -q 'restricted on locked hw' &&
+            warn "The Echo's fastboot is still locked, as in issue #112. Read $LOCKED_ISSUE before running the unlock again."
+        return 1; }
     wait_adb recovery
 }
 

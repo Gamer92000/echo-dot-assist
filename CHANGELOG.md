@@ -2,6 +2,14 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-05
+
+- **Echo Dot 3: the unlock can leave the Echo unusable; the setup now warns before it.** On two Echo Dot 3s the
+  unlock (kamakiri) ran through without an error, yet left the Echo locked and unusable, and no way on from there has
+  been found (issue #112). Echos that were updated recently may become unusable; the full extent is currently unknown.
+  Until the cause is known, the setup says so and asks before it unlocks; the default answer is not to. If fastboot
+  turns out locked after the unlock, it points to the issue before anyone runs the unlock again.
+
 ## 2026-11-04
 
 - **Echo Show 5, Show 5 2nd gen and Show 8 (1st gen): the screen turns off on time.** hassmic sets how soon the
