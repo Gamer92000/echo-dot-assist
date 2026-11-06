@@ -4,50 +4,79 @@
 //   type: custom:echo-local-call-card
 //   entity: camera.echo_show_5_5695c4_camera      # Echo Local's camera entity of that Echo
 //
-// The picture: H.264 through WebCodecs (Chrome, Edge, Safari 16.4+, the Companion app's WebView), drawn on a canvas as
-// it comes: a few hundred ms behind, where HLS is seconds.  Sound: 16 kHz PCM both ways through AudioWorklets.  The
-// microphone needs a secure page (https, or the app); without one the call is listen-only and says so.
-const WORKLET = `
-// The Echo's frames, behind a jitter buffer: they come over TCP through Home Assistant, beside the picture's key frames,
-// in bursts.  Played the moment each came (the first version), every late frame was a hole: the wave cut to zero and
-// back, a pop, many a second.  So: PRE frames (60 ms) before it plays; when it runs dry it fades out over FADE samples
-// and waits for PRE again, then fades in; more than MAX waiting (the two clocks drift, a stall caught up) drops one
-// frame at a time, crossfaded, never a jump of hundreds of ms.
-class Player extends AudioWorkletProcessor {
-  constructor() { super(); this.q = []; this.cur = null; this.at = 0; this.g = 0; this.on = false; this.last = 0;
-    this.port.onmessage = (e) => { this.q.push(e.data); }; }
-  next() {                                               // the next frame; one dropped, crossfaded, when too many wait
-    let f = this.q.shift() || null;
-    if (f && this.q.length > MAX) {
-      const n = this.q.shift(), x = new Int16Array(f.length);
-      for (let i = 0; i < f.length; i++) { const t = i / f.length; x[i] = f[i] * (1 - t) + n[i] * t; }
-      f = x;
+// The picture: H.264 through WebCodecs (Chrome, Edge, Firefox 130+, Safari 16.4+, the Companion app's WebView), drawn on
+// a canvas as it comes: a few hundred ms behind, where HLS is seconds.  Sound: 16 kHz PCM both ways, through
+// AudioWorklets (a ScriptProcessor where there are none).  WebCodecs and the microphone need a secure page (https, or
+// the app); over plain http the call is the Echo's sound only and says so.
+// The sound's two ends, as plain classes: run in an AudioWorklet where there is one, else on the page's own thread
+// through a ScriptProcessorNode.  AudioWorklet exists only on secure pages: over plain http Firefox and Chrome both
+// leave ctx.audioWorklet undefined ("No sound here: can't access property addModule"), so the Echo's side would not
+// play at all.  The context runs at the browser's own rate and these resample to the call's 16 kHz: Firefox refuses to
+// connect a microphone to a context of another rate (NotSupportedError), the call was listen-only there.
+function core() {
+  // The Echo's frames, behind a jitter buffer: they come over TCP through Home Assistant, beside the picture's key
+  // frames, in bursts.  Played the moment each came (the first version), every late frame was a hole: the wave cut to
+  // zero and back, a pop, many a second.  So: PRE frames (60 ms) before it plays; when it runs dry it fades out over
+  // FADE and waits for PRE again, then fades in; more than MAX waiting (the two clocks drift, a stall caught up) drops
+  // one frame at a time, crossfaded, never a jump of hundreds of ms.  16 kHz up to the output's rate: linear.
+  const PRE = 3, MAX = 8, FADE = 80;                     // frames (20 ms), frames, samples at 16 kHz (5 ms)
+  class PlayerCore {
+    constructor(rate) { this.q = []; this.cur = null; this.at = 0; this.g = 0; this.on = false;
+      this.step = 16000 / rate; this.ph = 0; this.prev = 0; this.last = 0; this.dg = 1 / (FADE / this.step); }
+    push(f) { this.q.push(f); }
+    next() {                                             // the next frame; one dropped, crossfaded, when too many wait
+      let f = this.q.shift() || null;
+      if (f && this.q.length > MAX) {
+        const n = this.q.shift(), x = new Int16Array(f.length);
+        for (let i = 0; i < f.length; i++) { const t = i / f.length; x[i] = f[i] * (1 - t) + n[i] * t; }
+        f = x;
+      }
+      return f;
     }
-    return f;
-  }
-  process(_, outs) {
-    const o = outs[0][0];
-    if (!this.on && this.q.length >= PRE) this.on = true;
-    for (let i = 0; i < o.length; i++) {
-      if (this.on && (!this.cur || this.at >= this.cur.length)) { this.cur = this.next(); this.at = 0; if (!this.cur) this.on = false; }
-      if (this.on) { this.g = Math.min(1, this.g + 1 / FADE); this.last = this.cur[this.at++] / 32768; }
-      else this.g = Math.max(0, this.g - 1 / FADE);     // dry: the last sample fades out, no step to zero
-      o[i] = this.last * this.g;
+    fill(o) {
+      if (!this.on && this.q.length >= PRE) this.on = true;
+      for (let i = 0; i < o.length; i++) {
+        if (this.on) {
+          this.ph += this.step;
+          while (this.ph >= 1) {                         // the next 16 kHz sample is due
+            if (!this.cur || this.at >= this.cur.length) { this.cur = this.next(); this.at = 0; }
+            if (!this.cur) { this.on = false; this.prev = this.last; this.ph = 0; break; }
+            this.prev = this.last; this.last = this.cur[this.at++] / 32768; this.ph -= 1;
+          }
+        }
+        // dry: the last sample fades out, no step to zero
+        this.g = this.on ? Math.min(1, this.g + this.dg) : Math.max(0, this.g - this.dg);
+        o[i] = (this.prev + (this.last - this.prev) * this.ph) * this.g;
+      }
     }
-    return true;
   }
+  // this side's microphone in 20 ms frames of 16 kHz: each output sample the mean of the input samples since the last
+  // (3 at 48 kHz): a crude low-pass, enough for a voice the browser already cleaned up
+  class MicCore {
+    constructor(rate, out) { this.buf = new Int16Array(320); this.n = 0; this.step = 16000 / rate; this.ph = 0;
+      this.acc = 0; this.k = 0; this.out = out; }
+    feed(x) {
+      for (let i = 0; i < x.length; i++) {
+        this.acc += x[i]; this.k++; this.ph += this.step;
+        if (this.ph < 1) continue;
+        this.ph -= 1;
+        this.buf[this.n++] = Math.max(-32768, Math.min(32767, Math.round(this.acc / this.k * 32767)));
+        this.acc = 0; this.k = 0;
+        if (this.n === 320) { this.out(this.buf.buffer.slice(0)); this.n = 0; }
+      }
+    }
+  }
+  return { PlayerCore, MicCore };
 }
-const PRE = 3, MAX = 8, FADE = 80;                       // frames (20 ms), frames, samples (5 ms at 16 kHz)
-class Mic extends AudioWorkletProcessor {                // this side's microphone, in 20 ms frames
-  constructor() { super(); this.buf = new Int16Array(320); this.n = 0; }
-  process(ins) {
-    const x = ins[0] && ins[0][0];
-    if (x) for (let i = 0; i < x.length; i++) {
-      this.buf[this.n++] = Math.max(-32768, Math.min(32767, Math.round(x[i] * 32767)));
-      if (this.n === 320) { this.port.postMessage(this.buf.buffer.slice(0)); this.n = 0; }
-    }
-    return true;
-  }
+const WORKLET = `
+const { PlayerCore, MicCore } = (${core.toString()})();
+class Player extends AudioWorkletProcessor {
+  constructor() { super(); this.c = new PlayerCore(sampleRate); this.port.onmessage = (e) => this.c.push(e.data); }
+  process(_, outs) { this.c.fill(outs[0][0]); return true; }
+}
+class Mic extends AudioWorkletProcessor {
+  constructor() { super(); this.c = new MicCore(sampleRate, (b) => this.port.postMessage(b)); }
+  process(ins) { const x = ins[0] && ins[0][0]; if (x) this.c.feed(x); return true; }
 }
 registerProcessor('echo-local-player', Player);
 registerProcessor('echo-local-mic', Mic);
@@ -186,21 +215,38 @@ class EchoLocalCallCard extends HTMLElement {
     if (this.ws) return;
     this.live(true); this.setMuted(true); this.say('Calling…');
     try {
-      this.ctx = new AudioContext({ sampleRate: 16000 });
-      await this.ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' })));
-      this.player = new AudioWorkletNode(this.ctx, 'echo-local-player');
-      this.player.connect(this.ctx.destination);
+      this.ctx = new AudioContext();
+      if (this.ctx.audioWorklet) {
+        await this.ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' })));
+        const n = new AudioWorkletNode(this.ctx, 'echo-local-player');
+        this.player = { push: (f) => n.port.postMessage(f) };
+        n.connect(this.ctx.destination);
+      } else {                                                   // plain http: no worklets, the page's own thread
+        const { PlayerCore } = core(), c = new PlayerCore(this.ctx.sampleRate), n = this.ctx.createScriptProcessor(1024, 0, 1);
+        n.onaudioprocess = (e) => c.fill(e.outputBuffer.getChannelData(0));
+        this.player = { push: (f) => c.push(f) };
+        n.connect(this.ctx.destination); this.nodes = [n];
+      }
     } catch (e) { this.stop('No sound here: ' + e.message); return; }
     this.mic = null;
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
       try {
         this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
         const src = this.ctx.createMediaStreamSource(this.stream);
-        this.mic = new AudioWorkletNode(this.ctx, 'echo-local-mic');
-        this.mic.port.onmessage = (e) => this.send(e.data);
+        if (this.ctx.audioWorklet) {
+          this.mic = new AudioWorkletNode(this.ctx, 'echo-local-mic');
+          this.mic.port.onmessage = (e) => this.send(e.data);
+        } else {
+          const { MicCore } = core(), c = new MicCore(this.ctx.sampleRate, (b) => this.send(b));
+          this.mic = this.ctx.createScriptProcessor(1024, 1, 1);
+          this.mic.onaudioprocess = (e) => c.feed(e.inputBuffer.getChannelData(0));
+          this.mic.connect(this.ctx.destination);                // it runs only when connected; its output is silence
+        }
         src.connect(this.mic);
       } catch (e) { this.listenOnly = 'Your microphone is off for this page (' + e.name + '): listening only'; }
-    } else this.listenOnly = 'Listening only: the microphone needs Home Assistant over https or the app';
+    } else if (!window.isSecureContext)
+      this.listenOnly = 'Plain http: the Echo\'s sound only. Its picture and your microphone need Home Assistant over https, or the app';
+    else this.listenOnly = 'This browser has no microphone for the page: listening only';
     if (!this.mic) this.$.mute.hidden = true;                    // listening only: nothing to switch
     if (!this.mic) this.keep = setInterval(() => this.send(new ArrayBuffer(640)), 20);   // silence: the call's keepalive
     this.decoderStart();
@@ -225,13 +271,13 @@ class EchoLocalCallCard extends HTMLElement {
       if (m.state) {
         this.state = m.state;
         if (m.state === 'ringing') { this.rang = true; this.$.canvas.classList.remove('frost'); this.say('Ringing: someone presses the button on the Echo…'); }
-        else if (m.state === 'connected') this.say(this.listenOnly || (this.gotPicture ? '' : 'Connected: no picture (the Echo\'s camera is off or covered)'));
+        else if (m.state === 'connected') this.say(this.listenOnly || this.noVideo || (this.gotPicture ? '' : 'Connected: no picture (the Echo\'s camera is off or covered)'));
         else if (m.state === 'idle') this.ended = 'The call ended';
       }
       return;
     }
     const b = new Uint8Array(d);
-    if (b[0] === 65) this.player.port.postMessage(new Int16Array(d.slice(1)));            // 'A'
+    if (b[0] === 65) this.player.push(new Int16Array(d.slice(1)));            // 'A'
     else if (b[0] === 86) this.picture(b[1], new DataView(d).getBigUint64(2, true), b.subarray(10));   // 'V'
   }
 
@@ -275,7 +321,7 @@ class EchoLocalCallCard extends HTMLElement {
     if (this.decoder && this.decoder.state !== 'closed') this.decoder.close();
     if (this.ctx) this.ctx.close();
     clearTimeout(this.frostTimer); this.$.canvas.classList.remove('frost');
-    this.stream = this.ctx = this.decoder = this.mic = null; this.keyed = false; this.state = ''; this.ended = ''; this.listenOnly = '';
+    this.stream = this.ctx = this.decoder = this.mic = this.player = this.noVideo = null; this.nodes = []; this.keyed = false; this.state = ''; this.ended = ''; this.listenOnly = '';
     this.live(false);
     this.say(why || 'Drop In to see and talk to the Echo');
   }

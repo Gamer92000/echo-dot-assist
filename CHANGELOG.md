@@ -4,6 +4,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-05
 
+- **The Drop In card over plain http** (Home Assistant opened as `http://`, Firefox and Chrome alike) said "No sound
+  here" and played nothing. It now plays the Echo's sound and says that the picture and your microphone need Home
+  Assistant over https or the app (browsers allow neither on an http page). **Your microphone in Firefox** works
+  in the card now; before, a call from Firefox was listen-only even over https. Echo Local 2026.11.22.
 - **Echo Dot 3: the unlock can leave the Echo unusable; the setup now warns before it.** On two Echo Dot 3s the
   unlock (kamakiri) ran through without an error, yet left the Echo locked and unusable, and no way on from there has
   been found (issue #112). Echos that were updated recently may become unusable; the full extent is currently unknown.

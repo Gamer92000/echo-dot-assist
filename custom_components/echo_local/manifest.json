@@ -9,6 +9,6 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/Gamer92000/echo-dot-assist/issues",
   "requirements": [],
-  "version": "2026.11.21",
+  "version": "2026.11.22",
   "zeroconf": [{ "type": "_esphomelib._tcp.local.", "properties": { "platform": "hassmic" } }]
 }

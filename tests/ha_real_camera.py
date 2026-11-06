@@ -147,6 +147,10 @@ async def run(tmp):
                 check(r.get("frost") == [True, False], f"the Echo's picture frosted at first (it did not ring), clear 3 s on ({r.get('frost')})")
                 check(r.get("hung"), "Hang up in the card: the call ends on the Echo")
                 check(r.get("video_stopped"), "and the Echo's player goes with it")
+                pl = r.get("plain") or {}
+                check(pl.get("state") == "connected" and pl.get("frames", 0) > 20 and 0.2 < pl.get("peak", 0) < 0.3 and "https" in pl.get("msg", "") and pl.get("mute_hidden"),
+                      f"as a plain http page (no AudioWorklet, WebCodecs, microphone): the Echo's sound through a ScriptProcessor, the card says why only that ({pl})")
+                check(r.get("plain_hung"), "and that call hung up too")
 
             await c.ws(type="call_service", domain="camera", service="turn_off", target={"entity_id": eid})
             async def off(): return setting() == "camera=off"
@@ -244,6 +248,31 @@ async def card_in_chrome(session, token, eid, echo, vidlog):
             import fake_video
             return os.path.exists(vidlog) and fake_video.gone(vidlog)
         out["video_stopped"] = await hr.until(vstop, 5)
+        # a second call as a page over plain http sees it: no AudioWorklet, no WebCodecs, no microphone (the test's page
+        # is 127.0.0.1, a secure context, so they are taken away by hand).  The Echo's sound through the
+        # ScriptProcessor fallback, and the card says what is missing (the first version failed with "No sound here")
+        n0 = echo.text().count("Home Assistant went") + echo.text().count("Home Assistant hung up")
+        out["plain"] = await js(f"""(async () => {{
+            for (const k of ['audioWorklet']) Object.defineProperty(BaseAudioContext.prototype, k, {{ get: () => undefined }});
+            delete window.VideoDecoder; Object.defineProperty(navigator, 'mediaDevices', {{ value: undefined }});
+            Object.defineProperty(window, 'isSecureContext', {{ value: false }});
+            const c = window._card; await c.start();
+            if (!c.ws) return {{ msg: c.shadowRoot.querySelector('.msg').textContent }};
+            let peak = 0, runs = 0, frames = 0, inpeak = 0; const n = c.nodes[0], f = n.onaudioprocess, push = c.player.push;
+            n.onaudioprocess = (e) => {{ f(e); runs++; for (const v of e.outputBuffer.getChannelData(0)) peak = Math.max(peak, Math.abs(v)); }};
+            // the stand-in Echo's call sound is silence: each of its frames, as it comes, swapped for a 440 Hz tone
+            let t = 0;
+            c.player.push = (x) => {{ frames++; for (const v of x) inpeak = Math.max(inpeak, Math.abs(v));
+                const y = new Int16Array(x.length); for (let i = 0; i < y.length; i++, t++) y[i] = 8000 * Math.sin(2 * Math.PI * 440 * t / 16000);
+                push(y); }};
+            for (let i = 0; i < 50 && c.state !== 'connected'; i++) await new Promise(r => setTimeout(r, 100));
+            await new Promise(r => setTimeout(r, 1500));
+            const r = {{ state: c.state, peak, runs, frames, inpeak, rate: c.ctx.sampleRate, msg: c.shadowRoot.querySelector('.msg').textContent,
+                         mute_hidden: c.shadowRoot.querySelector('.mute').hidden }};
+            c.stop(''); return r;
+        }})()""")
+        async def hung2(): return echo.text().count("Home Assistant went") + echo.text().count("Home Assistant hung up") >= n0 + 2
+        out["plain_hung"] = await hr.until(hung2, 5)
         return out
     finally:
         proc.terminate()

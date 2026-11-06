@@ -394,9 +394,10 @@ entity) and press **Drop In**.
   Show 5 so far) sends this device's camera to the Echo, full screen there, your own picture small in the card's
   corner. Off at the start of every call. Needs a browser that encodes H.264 with WebCodecs (Chrome, Edge, Safari,
   the Companion app); the card says so where it cannot.
-- **Your microphone** needs Home Assistant opened over https (Nabu Casa, a proxy with a certificate) or in the
-  Companion app; otherwise the call is listen-only and the card says so. The picture needs a browser with WebCodecs
-  (Chrome, Edge, Safari 16.4 and later, the Companion app).
+- **Your microphone and the Echo's picture** need Home Assistant opened over https (Nabu Casa, a proxy with a
+  certificate) or in the Companion app: browsers allow neither on a plain http page. There the call is the Echo's
+  sound only, and the card says so. The picture needs a browser with WebCodecs (Chrome, Edge, Firefox 130 and later,
+  Safari 16.4 and later, the Companion app).
 - **Who may call**: anyone logged in to Home Assistant who sees the dashboard; not the Echos' own screens (the kiosk
   users Echo Local makes). The call goes encrypted between Home Assistant and the Echo.
 

@@ -36,9 +36,11 @@ replaces watching the camera entity for live use (HLS: seconds behind, and no cl
 - **Echo Local**: a `HomeAssistantView` with a websocket at `/api/echo_local/call/<entry>`, opened with a signed path
   (`auth/sign_path`), so only a logged-in user of Home Assistant reaches it; it opens `/api/call` on the Echo and
   passes frames both ways.
-- **Card**: H.264 through WebCodecs (Chrome, Edge, Safari 16.4+, the Companion app's WebView), PCM through an
-  AudioWorklet; getUserMedia needs HTTPS or localhost (Home Assistant's frontend usually is: Nabu Casa, a proxy,
-  or the app).
+- **Card**: H.264 through WebCodecs (Chrome, Edge, Firefox 130+, Safari 16.4+, the Companion app's WebView), PCM
+  through an AudioWorklet at the browser's own rate, resampled to and from 16 kHz in it (Firefox refuses to connect a
+  microphone to a context of another rate).  AudioWorklet, WebCodecs and getUserMedia all need a secure page (HTTPS
+  or localhost: Nabu Casa, a proxy, or the app); over plain http the card falls back to a ScriptProcessorNode for the
+  Echo's sound and says that the picture and the microphone need https.
 
 ## The browser's camera on the Echo's screen (step 4)
 
