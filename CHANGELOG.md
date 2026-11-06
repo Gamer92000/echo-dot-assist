@@ -16,6 +16,10 @@ What changed for people using the Echo, newest first. Details and measurements a
   boot, for example) left Android thinking it was still held until hassmic restarted: volume down kept turning the
   volume to 0 and undid every attempt to raise it (issue #140). The Echo now takes over the keys only
   once every key is up.
+- **"Noise reduction" says what it costs.** Measured on an Echo Dot 2 in a kitchen (issue #131): besides the
+  background, it turns down the hiss of consonants, and every speech-to-text tried understood more with it off than
+  on medium. The setting's description and the guide now say so, and to leave it off (as it is by default) unless a
+  loud, steady noise drowns your commands.
 
 ## 2026-11-06
 
