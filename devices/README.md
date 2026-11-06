@@ -23,7 +23,7 @@ and refuse a mismatch. Every Echo on Fire OS or Vega OS, with or without a direc
 | File | Used by | What |
 |---|---|---|
 | `device.mk` | `Makefile` | compiler target (NDK API level), audio and wake word backends, stock libraries to link against; optionally the Wi-Fi motion kernel module (`KMOD`) and its kernel (`KVER`, `KARCH`, `KCROSS`, `KCONFIG`: the kernel's own config (IKCONFIG of `boot.img`) in the model's directory, or `KFRAG`: a fragment where the kernel has none, `KCFLAGS`; and what `make kernel-tools` downloads for it: `KSRC_URL`, `KSRC_SHA256`, `KCC_URL`, `KCC_DIGEST`, unless the Makefile's 3.18 defaults fit) |
-| `board.c` | `hassmic` (linked in) | `struct board` from `src/hassmic/board.h`: identity towards Home Assistant, the codename (names the model's bundle in a release), input devices, mute latch, Bluetooth device node and address, stock wake word and earcon paths, thermal zone, light sensor, LED volume steps, the ALSA control a "Speaker gain" may raise, its stock value and steps per dB (or per `speaker_gain_db` dB where a step is not a whole dB) (`audio_device.xml` or `mixer_paths.xml` of the firmware, or the kernel's control tables where the firmware leaves it alone) |
+| `board.c` | `hassmic` (linked in) | `struct board` from `src/hassmic/board.h`: identity towards Home Assistant, the codename (names the model's bundle in a release), input devices, mute latch, Bluetooth device node and address, stock wake word and earcon paths, thermal zone, light sensor, LED volume steps, the speaker's volume curve (`volume_curve`, required: below), the ALSA control a "Speaker gain" may raise, its stock value and steps per dB (or per `speaker_gain_db` dB where a step is not a whole dB) (`audio_device.xml` or `mixer_paths.xml` of the firmware, or the kernel's control tables where the firmware leaves it alone) |
 | `device.conf` | PC scripts (`scripts/lib/device.sh`) and, shipped next to them, the scripts on the Echo | product and firmware id, firmware file and checksum, files to compare in `probe.sh`, install method, the daemon's user and groups, names of the stock services to stop; `KMOD`/`KMOD_ARGS` for `main.sh` to load the Wi-Fi motion module; Android models (`ANDROID=1`: Android's framework runs, so the scripts ship and use `wifictl.dex`; independent of `INSTALL`; `ringbar.dex` goes with `SCREEN_BAND`): `ALEXA_PACKAGES`/`SETUP_PACKAGES` (`pm disable`, `package/class` for one component) and `STOCK_APPS_OUT` (folders under `/system` that `sysinstall.sh` takes off the partition) |
 | `stubs/*.syms` | `make STUBS=1` (CI) | per stock library in `LIBS`, the symbols our binaries need of it, written by `tools/mkstubs.sh` from the firmware: stand-ins to link against without it |
 | `hassmic.rc` | `install-system.sh` → `/system/etc/init/` | init services, and the trigger that starts the satellite once the audio stack is up |
@@ -78,6 +78,8 @@ Rough order. Each step is safe to stop at.
      `/sys/class/thermal/thermal_zone*/type` and the Bluetooth device node and its owner. Check the wake word manifest
      and the earcons in the firmware. `light_sensor`: the lux files in `strings` of
      `/system/lib/libacehal_ambientLightSensor.so`, in its order, and `cat` the one that exists on the Echo.
+     `volume_curve`: see [Volume curve](#volume-curve); until it is measured, `board_vol_dot2` with the comment the
+     other models have.
    - `device.mk`: API level from `ro.build.version.sdk`. If the model has Amazon's `mixer` (`libmixerAPI.so`) and
      `libpryon.so`, the existing backends should work once `probe.sh`, `mixcap` and `pryon_test` agree. If not, write a
      new `audio_*.c` or `wake_*.c` behind `audio.h` / `wake.h` and name it here.
@@ -100,7 +102,34 @@ Rough order. Each step is safe to stop at.
    `install` (`install_satellite`); models come later from the settings page. Try it with `scripts/setup.sh <codename> --dry-run`.
 6. `tools/mkstubs.sh <codename>` for the stub lists, and the codename in the build matrix of
    `.github/workflows/build.yml`: CI builds and publishes the model's bundle from then on.
-7. Add the model to the table above, to `MODELS.md`, to the root `README.md` and to `CHANGELOG.md`.
+7. **Measure the volume curve** and put it into `board.c` (below). A model is not finished while the Echo Dot 2's
+   stands in for it.
+8. Add the model to the table above, to `MODELS.md`, to the root `README.md` and to `CHANGELOG.md`.
+
+### Volume curve
+
+**Every model must have its own volume curve**, measured on that model: `volume_curve` in `board.c`, dB under volume
+100 at volumes 0..100. Each Echo turns the volume up in its own way (Android's media curve on the Shows, the mixer plus
+libasp's boost above 80 on the Dots), and hassmic depends on knowing how: even volume steps put the Echo's own volume on
+the curve's points and take the rest off in its own audio, and separate volumes turn each kind down by it. A wrong
+curve makes the steps uneven and the kinds disagree with each other.
+
+The field is never NULL. Until the curve is measured, a model points it at `board_vol_dot2` (the Echo Dot 2's, in
+`src/hassmic/volcurve.c`) under the comment `volume curve not measured on this model yet: the Echo Dot 2's stands
+in`. `make unit-volcurve` checks every model's curve and prints a `todo` line for each one where the Dot 2's still
+stands in. The stand-in is there so a model can be merged before anyone has measured it, not to leave it that way:
+a new model comes with its own curve where it can, and otherwise with an entry in `PLAN.md` saying it is missing.
+
+How to measure:
+
+- Android Echos (the Shows; the Echo Input through a speaker on its line out): `tools/vol-curve.py`. It steps the music stream's index under a steady
+  multi-tone and listens with a Dot's micRaw beside it. Checkers' curve in its `board.c` was made this way.
+- Echos with Amazon's mixer (the Dots, the Echo 2): a -30 dBFS tone through `mixplay`, recorded in micRaw with
+  `mixcap` at each volume, hassmic stopped (`docs/re-platform.md`, the Echo Dot 2's). libasp's own volume adds to the
+  top end, so measure through the speaker, not the mixer alone.
+
+Put a point at 0 and at 100, each `at` above the last and never quieter than the one before (the unit test checks
+this). A point every 5 or 10 is enough. Write down in the comment above it when, how and on what it was measured.
 
 Shared code stays free of `#ifdef DEVICE_...`. When a model needs more than a different value, add a field to
 `struct board`, a variable to `device.conf`, or a backend, and give `donut` its current behaviour there.

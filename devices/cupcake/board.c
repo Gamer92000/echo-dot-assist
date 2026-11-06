@@ -40,5 +40,7 @@ const struct board board = {
      * listening ring lights only the first (active-start), so that one is what shows */
     .ring_leds = 1,
     /* No speaker: a 3.5 mm line out (the MT8167's own codec) and Bluetooth.  No amplifier to raise; the volume is
-     * Android's music stream (audio_android.c), whose curve nobody measured here: the Dot 2's (volume_curve NULL) */
+     * Android's music stream (audio_android.c), whose curve is not measured on this model yet: the Echo Dot 2's
+     * stands in (devices/README.md: how to measure) */
+    .volume_curve = board_vol_dot2,
 };

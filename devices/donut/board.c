@@ -23,6 +23,8 @@ const struct board board = {
     .thermal_type = "mtktscpu",
     .light_sensor = { "/sys/bus/i2c/devices/0-0039/iio:device0/calibrated_lux" },  /* TSL2572 (IIO), als_donut_puffin_facade */
     .volume_steps = 30,
+    /* volume curve not measured on this model yet: the Echo Dot 2's stands in (devices/README.md: how to measure) */
+    .volume_curve = board_vol_dot2,
     /* TI TAS2770 amplifier at 2-0044: AMP_LEVEL (reg 0x03), 0..20 = 11..21 dBV full-scale output in 0.5 dB steps.  16 from
      * boot on, never written by the firmware (2026-10-11, spkgain.c): +2 dB is all it has */
     .speaker_gain = "DAC Playback Volume",

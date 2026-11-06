@@ -2764,6 +2764,12 @@ Run in this order. Each step says what it proves.
       straight from MainVolume (an update keeps the number).  Echo Show 5 (2026-11-02, the update pushed): 45 kept,
       index 14 -> 11; keys 0..100 gave indices 0, 5, 8, 8, 11, 12, 15, 20, 23, 26, 30 as the curve says.  Not
       measured by ear or mic (no Dot beside it for tools/vol-curve.py).  The Dot 3's curve is still the Dot 2's.
+- [ ] A volume curve of its own for every model (2026-11-06; even volume steps lean on it as separate volumes do).
+      `board.volume_curve` is required now: each board.c names one, `board_vol_dot2` (volcurve.c, measured on the Dot 2)
+      standing in where none is measured, and `make unit-volcurve` prints a `todo` line per such model;
+      devices/README.md "Volume curve" makes it part of porting.  Measured: biscuit (2026-10-17), checkers (2026-10-27).
+      Still the stand-in: donut, radar (mixer: a tone in micRaw per volume), crown, cronos, athena, cupcake
+      (tools/vol-curve.py; cupcake through a speaker on its line out).
 - [x] Volumes per kind of audio (GitHub issue #32: several Dot 3 and a Dot 2; one volume for media and one for the
       assistant, the wake sound on a slider of its own).  Built 2026-10-17, after two tries the owner rejected.
       First: categories linked to the main volume with offsets (replies in volume points, sounds in dB under it,

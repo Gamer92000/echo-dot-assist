@@ -51,9 +51,10 @@ struct board {
      * 0: a ring of them all */
     int ring_leds;
     /* The speaker's volume curve: dB under volume 100 at volumes 0..100, each `at` above the last (tests/unit/volcurve_test.c
-     * checks it: the same one twice divides by 0), {-1} after the last (volcurve.c:
-     * separate volumes turn each kind down by it).  NULL: the Echo Dot 2's, measured there and taken where nobody has
-     * measured (tools/vol-curve.py measures an Android Echo's with a Dot beside it) */
+     * checks it: the same one twice divides by 0), {-1} after the last (volcurve.c: separate volumes turn each kind down
+     * by it, even volume steps put the mixer on its points).  Required, never NULL: every model has its own, measured on
+     * it (tools/vol-curve.py measures an Android Echo's with a Dot beside it).  Until someone has, board_vol_dot2 stands
+     * in, with a comment saying so; make unit-volcurve lists the models where it still does (devices/README.md) */
     const struct board_vol { int at; float db; } *volume_curve;
 
     /* speaker gain (spkgain.c): an ALSA control of card 0 that sets the speaker amplifier's analog gain, which the
@@ -73,7 +74,9 @@ struct board {
 };
 
 extern const struct board board;
-/* volcurve.c: the curve at volume v (clamped to 0..100): dB under volume 100, board.volume_curve's or the Echo Dot 2's */
+/* volcurve.c: the Echo Dot 2's curve, measured there; the stand-in for a model whose own is not measured yet */
+extern const struct board_vol board_vol_dot2[];
+/* volcurve.c: board.volume_curve at volume v (clamped to 0..100): dB under volume 100 */
 float board_vol_db(int v);
 int   board_vol_at(float db);           /* the lowest of the curve's points at least that loud (volcurve.c) */
 #endif
