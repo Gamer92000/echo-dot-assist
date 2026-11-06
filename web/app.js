@@ -204,14 +204,14 @@ const PAGES = [
   { id: 'models', title: 'Models', icon: 'box', nav: 'All your Echos', always: true, intro: 'Amazon\'s extra wake words and models, microWakeWord\'s models and your light ring designs: fetched, copied between Echos, kept on file.' },
   { id: 'system', title: 'System', icon: 'sliders', nav: 'This Echo\'s system', groups: ['System'], always: true, intro: 'This Echo\'s name and network, updates, backups and troubleshooting.' },
 ];
-const MOVED = { light_band: 'screen', arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
+const MOVED = { light_band: 'screen', screen_text: 'screen', screen_text_seconds: 'screen', screen_timers: 'screen', arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
 // The cards of a settings page: [title, settings...].  A setting not named here (a new one, or a model's own) comes
 // last, in a card of its own, so nothing is ever lost from the page
 const LAYOUT = {
   voice: [['Microphone', 'mic_level', 'noise_reduction'], ['Mute and wake sound removal', 'mute', 'do_not_disturb', 'wake_sound_removal'],
           ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any']],
   wake: [['Engine', 'wake_engine'], ['How it hears you', 'speech_language', 'wake_word_adaptation']],
-  lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band'], ['Screen', 'screen_text', 'screen_text_seconds', 'screen_timers']],
+  lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band']],
 };
 
 // help: what it does, in the user's terms.  ha: also in Home Assistant (true), or for features the entities it adds.
@@ -1159,7 +1159,11 @@ const PAGE_BUILD = {
     el.append(flow(cards));
   },
   lights: (el, list) => { el.append(flow(settingCards(list, 'lights'))); buildRing(el); },
-  screen: (el, list) => el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.map(settingRow))])),   // ring.js: the designs and where they show
+  screen: (el, list) => {                          // ring.js: the designs and where they show
+    const words = ['screen_text', 'screen_text_seconds', 'screen_timers'], mine = list.filter((s) => words.includes(s.name));
+    el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.filter((s) => !mine.includes(s)).map(settingRow)),
+      mine.length ? titled('Words and timers', mine.map(settingRow)) : null].filter(Boolean)));
+  },
   media: (el, list) => {
     const parent = (k) => (HELP[k.name] || {}).parent, plain = list.filter((x) => !x.feature && !parent(x));
     const music = plain.filter((x) => x.group === 'Music'), bt = plain.filter((x) => x.group !== 'Music');

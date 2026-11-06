@@ -609,7 +609,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   PC: `HASSMIC_FAKE_BAND` (a program speaking ringbar's protocol), `tests/unit/ring_band_test.c` (designs too, a restart
   on the same state included); `tests/unit/band_map_test.py` holds web/ring.js's band drawing to ring_band.c's, pixel
   for pixel (node).  The band's height comes from `state/config` before `ring_start` (`settings_peek`).
-  Text layer (setting `screen_text`, off): `ring_text` (ring.h; core_set_state: a run from idle clears, idle starts the
+  Text layer (setting `screen_text`, off; with `screen_text_seconds` and `screen_timers` on the page's Screen page,
+  card "Words and timers", by `MOVED` as `light_band`): `ring_text` (ring.h; core_set_state: a run from idle clears, idle starts the
   hold, `screen_text_seconds` (8, 0 until the next run); proto_esphome STT end / TTS start, proto_wyoming's transcript;
   a "stop" carried out here is never shown: proto_esphome shows the transcript only after `core_transcript` passed it,
   `stop_word` clears what it ended) -> `text_thread`, a second ringbar.dex in
