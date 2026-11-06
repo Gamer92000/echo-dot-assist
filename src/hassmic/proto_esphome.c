@@ -1329,8 +1329,9 @@ static void on_event(const unsigned char *p, const unsigned char *end)
     case EV_TTS_END:
         if (!tts_expected && tts_url[0]) { tts_expected = 1; core_mic_off(); media_start("", tts_url, 1, 0, 1, 0); }
         break;
-    case EV_RUN_END:    if (!tts_expected && core_state() != SPEAKING) core_pipeline_finish(); break;
+    case EV_RUN_END:    if (!tts_expected && core_state() != SPEAKING) core_pipeline_finish(); else core_run_over(); break;
     case EV_ERROR:
+        if (core_wake_run_ended()) { fprintf(stderr, "pipeline: wake word run ended (%s)\n", code); break; }
         tts_expected = 0;
         /* Another satellite reported the same wake word first (Home Assistant takes the first per phrase in 2 s): not
          * this Echo's turn, and nothing went wrong, so no error ring */

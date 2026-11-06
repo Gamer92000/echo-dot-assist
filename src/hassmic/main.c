@@ -736,8 +736,13 @@ static void lead_in(void)
         proto->audio(zero, (size_t)(left < 1024 ? left : 1024) * sizeof zero[0]);
 }
 
+static int run_over;                                /* lock held: Home Assistant ended the run whose reply is still being spoken */
+static void mic_stopped(void);
+static int wake_cont;                               /* lock held: the wake word came during the reply; its run goes on as the request once playback is cut */
+static int wake_wait;                               /* lock held: the run now open only listens for the wake word during a reply */
 static void pipeline_start(uint64_t from)    /* from: where the wake word that starts it ended, 0: not a wake word */
 {
+    run_over = 0; wake_wait = 0; wake_cont = 0;
     quiet_abort = 0;
     mic_fresh = 1;
     replay_from = from;
@@ -776,11 +781,49 @@ static void wake_tell(const char *event)       /* any thread but the lock's hold
 void core_remote_wake(void)
 {
     if (core_local_wake || !atomic_load(&streaming)) return;
+    if (state == SPEAKING) {                            /* during a reply (wake_listen): cut it; this run goes on as the request, so the words
+                                                         * Home Assistant buffered after the wake word are not lost (core_pipeline_finish) */
+        if (!wake_cont && !atomic_load(&flush_playback)) {
+            fprintf(stderr, "barge-in\n");
+            wake_told("detected");
+            wake_cut_ms = mono_ms();
+            wake_cont = 1;
+            atomic_store(&flush_playback, 1);
+        }
+        return;
+    }
     run_wake = 1;
     wake_told("detected");
     sound_request(SND_WAKE);
     listening(1);
     core_set_state(LISTENING);
+}
+
+/* Lock held.  Wake word at Home Assistant: once its run is over and the reply plays, a new run (wake word stage) listens
+ * to the mic, so the wake word cuts the reply as it does with a local one (core_remote_wake).  Not before the run is
+ * over: Home Assistant cancels the running pipeline when another starts, and would cut a reply still being generated.
+ * The reply is in the mic too: the front end's echo canceller is what keeps it out of Home Assistant's detection. */
+static void wake_listen(void)
+{
+    if (core_local_wake || !run_over || state != SPEAKING || atomic_load(&streaming) || !connected || !satellite_running) return;
+    pipeline_start(0);
+    wake_wait = 1;
+}
+
+/* Lock held.  The run that listened for the wake word during a reply ended (error, nothing heard) before a wake word:
+ * not the reply's end.  Returns 1 if that was the case; the mic stops going to it and its RUN_END starts the next. */
+int core_wake_run_ended(void)
+{
+    if (!wake_wait || state != SPEAKING) return 0;
+    atomic_store(&streaming, 0); mic_stopped();
+    wake_wait = 0; wake_cont = 0;
+    return 1;
+}
+
+void core_run_over(void)
+{
+    run_over = 1;
+    wake_listen();
 }
 
 int core_wake_sound(int set) { if (set >= 0) use_earcon = set; return use_earcon; }
@@ -1067,7 +1110,21 @@ void core_restart_after(void) { barge_in = 1; barge_from = 0; }
 
 void core_pipeline_finish(void)
 {
-    if (atomic_exchange(&streaming, 0) && connected && proto->stop) proto->stop();
+    if (wake_cont) {            /* the reply is cut for a wake word Home Assistant heard: its run is the request, still open */
+        wake_cont = 0;
+        if (atomic_load(&streaming) && connected && satellite_running) {
+            wake_wait = 0; run_wake = 1;
+            sound_request(SND_WAKE);
+            listening(1);
+            core_set_state(LISTENING);
+            return;
+        }
+    }
+    if (atomic_exchange(&streaming, 0) && connected) {
+        /* a run that only listened for the wake word is aborted, not ended: a stale error from it must not reach the next */
+        if (wake_wait && proto->cancel) proto->cancel();
+        else if (proto->stop) proto->stop();
+    }
     mic_stopped();
     core_set_state(IDLE);
     if (mono_ms() - last_wake_ms > 3000) wake_reset();      /* a reset puts the engine back to sleep: "<wake word>, stop" would lose its "stop" */
@@ -2003,8 +2060,8 @@ static void *playback_thread(void *arg)
         case Q_STOP:
             if (open) { play_close(1); open = 0; }
             atomic_store(&tts_on, 0); playback_hint();
-            atomic_store(&flush_playback, 0);
             pthread_mutex_lock(&core_lock);
+            atomic_store(&flush_playback, 0);       /* under the lock: a wake word between would cut the next reply */
             if (proto->played) proto->played();      /* also without a client: modules reset their state here */
             core_pipeline_finish();
             pthread_mutex_unlock(&core_lock);
@@ -2017,10 +2074,10 @@ static void *playback_thread(void *arg)
 
 void core_tts_begin(unsigned rate, unsigned channels, int media)
 {
-    atomic_store(&streaming, 0);
-    mic_stopped();
+    if (!wake_wait) { atomic_store(&streaming, 0); mic_stopped(); }     /* wake_wait: a chime and then the message */
     core_set_state(SPEAKING);
     q_push(Q_START, media, rate, channels, NULL, 0);
+    wake_listen();
 }
 
 void core_tts_data(const void *pcm, size_t len) { if (!atomic_load(&flush_playback)) q_push(Q_DATA, 0, 0, 0, pcm, len); }

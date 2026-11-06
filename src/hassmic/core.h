@@ -85,6 +85,8 @@ int  core_wake_sound_removal(int set);           /* our sounds taken out of what
 int  core_mic_denoise(int set);                 /* noise reduction on what the pipeline gets (micdenoise.h): 0 off .. 3 high, -1 reads */
 void core_pipeline_finish(void);
 void core_restart_after(void);                  /* start another pipeline once the current one has finished */
+int  core_wake_run_ended(void);                  /* lock held: the wake-only run during a reply ended without a wake word (1) */
+void core_run_over(void);                        /* lock held: the run has ended while its reply is (about to be) spoken; with -w remote the wake word may cut it */
 void core_error(void);
 /* Home Assistant heard no request (stt-no-text-recognized): the turn ends quietly, without core_error's ring */
 void core_no_speech(void);
