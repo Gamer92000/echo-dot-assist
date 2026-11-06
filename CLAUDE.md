@@ -53,6 +53,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ha_esphome_features.py #   sound detection (HASSMIC_FAKE_SOUND_WINDOW: 3 s windows), Wi-Fi motion
 .venv/bin/python tests/fake_ha_esphome_buttons.py  #   runs cancelled while HA thinks or streams, the "Button" event entity
 .venv/bin/python tests/fake_ha_esphome_address.py  #   a new address: links closed, mDNS announced again
+.venv/bin/python tests/fake_ha_alarms.py      # the Echo's own alarms: requests answered on the Echo and announced, HA's
+                                             # entities and actions, a ring on the moved clock, snooze, stop, the page
 .venv/bin/python tests/fake_ha_end.py         # the end of a request heard on the Echo (micend.c): a talker, dishes as loud
                                              # (no speech in the front end's records written into the capture), quieter
                                              # voices on another pitch; end of audio, not an abort; the gain left alone;
@@ -69,6 +71,13 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # actions and template engine: renamed ids, other devices, failures, replies
 .venv/bin/python tests/ha_real_end.py         # the Echo's end of audio in a real Home Assistant (stand-in STT and TTS as a
                                              # custom component): HA's STT stream ends with it, intent and reply follow
+.venv/bin/python tests/ha_real_alarms.py      # custom_components/echo_local (alarms integration and card) in a real HA
+.venv/bin/python tests/ha_real_own_voice.py   # Echo Local's "Replies in the Echo's own voice" switch in a real HA (HASSMIC_FAKE_SPEECH)
+.venv/bin/python tests/ha_real_kiosk.py       # the Echo Show's kiosk set up from the integration: user, token, screens
+.venv/bin/python tests/ha_real_panel.py       # the sidebar panel (panel.py, apps.py): the Echos, the screen's options set
+                                             # and pushed, the kiosk user kept out, the Echo Show's apps (upload, install,
+                                             # remove), adopt, the panel's Screen and Apps tabs in headless Chrome
+                                             # (build/test-logs/panel*.png)
 .venv/bin/python tests/ha_real_dropin.py      # the blueprint in a real Home Assistant (build/ha-venv, made by --setup;
                                              # skips without it) with four Echos, one the released build: replies, timing.
                                              # All of it in an `unshare -rn` namespace with only lo
@@ -79,6 +88,10 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # 500 ppm slow (HASSMIC_FAKE_MUSIC_PPM) and AudioTrack's burst at the
                                              # start (HASSMIC_FAKE_MUSIC_BURST_MS), followed without a phase step
 .venv/bin/python tests/fake_ha_stop_word.py   # "<wake word>, stop" between two Echos: the drop cancelled, stop_ends_listening
+.venv/bin/python tests/fake_ha_own_voice.py   # replies in the Echo's own voice: streamed ones sentence by sentence (Wyoming
+                                             # synthesize-start/-chunk/-stop on 16710), HA's audio silence and never
+                                             # fetched, the run ended by the last sentence, learning, stop/barge-in
+                                             # (HASSMIC_FAKE_SPEECH=1: speech_none.c a stand-in voice)
 .venv/bin/python tests/fake_screen.py [--legacy]  # the Echo Show's screen UI as hassmic feeds it (stand-in UI): Sendspin
                                              # metadata/artwork (1.0's transfer, scheduled; --legacy: 9.1.1's), the band,
                                              # commands, home app, restarts
@@ -263,9 +276,35 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (host build, `HASSMIC_FAKE_SOUND`; `HASSMIC_FAKE_SOUND_MODEL` names the model, `broken` fails to load). `sound_model()`
   says which model it takes, for the page; a start that fails switches the setting off via `settings_set` and sets
   `core_sound_failed()` (page warning). Picked in the Makefile from the wake word backend.
+- **Alarms** (`alarms.c`, `alarms.h`): the Echo's own, in `state/alarms`, rung on local time by a clock thread through
+  the timers' ring (main.c `core_alarm_ring`, `ringing[].alarm`; `core_alarm_snooze`, `core_alarm_stop` dismisses a
+  once alarm); settings `alarm_*`, `clock_format`, feature `alarms` (HA's entities: "Next alarm" timestamp, "Alarms",
+  "Alarm ringing", "Snooze alarm", event "Alarm" `core_alarm_events`, actions `set_alarm`/`delete_alarm`).  Spoken
+  requests (`alarms_command`, English) are answered in main.c `alarm_request` from `core_transcript`, the run
+  cancelled, the answer through `proto->say` (assist_satellite.announce, the Bluetooth announcements' queue).  A
+  volume key snoozes (`alarm_keys`), a ring starts quiet (`alarm_ramp`).  Page: "Clock & alarms", `/api/alarms`.
+  `HASSMIC_FAKE_CLOCK_OFFSET` (seconds, or a file holding them) moves the Echo's clock for tests (`alarms_now`).
+  Unanswered, an alarm gets louder (`alarm_louder`, `alarm_boost` lifts `loudest()`).  `custom_components/echo_local` is
+  a Home Assistant integration over the settings page API (a switch per alarm, services, the card in `frontend/`);
+  tests/ha_real_alarms.py.  Spoken media requests about what this Echo plays ("pause", "next", "volume 5") are
+  `media_request` in core_transcript (sendspin_voice, a2dp_voice).
+- **Home app contract** (`kiosk.c`, `kiosk.h`, docs/screen-apps.md): the home app (screen.c's choice,
+  `state/screen_home`; Echo Local's `app` line sets it too, the last one counts; an old `state/kiosk` `app` becomes it
+  where none was chosen) gets `GET /kiosk/config[/front[/draws/<words,ring>]|/back]` (HA address, a token Echo Local made,
+  its screens and settings; `state/kiosk` 0600 from the signed `POST /api/kiosk`, token sealed) and `/kiosk/state[/<v>]`
+  (words, ring, next alarm; long poll), `/kiosk/ring/snooze|stop` (its ring tapped or held: `core_ring_tap`), only from
+  127.0.0.1 and its uid (`kiosk_peer_ok`: /proc/net/tcp6).  Its claims
+  go to the UI (`screen_claim` -> "claim <pkg> <mask>"); its screens' names too ("screens", the drawer's row).
+  Echo Local: `custom_components/echo_local/kiosk.py` (user + token per Echo, options flow), `tests/ha_real_kiosk.py`.
 - **Sound packs** (`soundpack.c`, `soundpack.h`): sets of the Sounds card's sounds in `state/sound-packs/<id>/` (`name`,
   `<sound>.wav`), `/api/sound-pack`, page `packsCard`, a `.soundpack` file = a tar of `pack.json` + WAVs (`web/tar.js`).
   A pack is a whole set; 16 packs, 30 MB, 32 MB left on the partition (`HASSMIC_SOUNDPACK_MAX`, `_FREE_MIN` for tests).
+- **The Echo's own voice (`speech.h`)**: `speech_ivona.c` (Fire OS's offline Ivona engine through its app's JNI glue,
+  dlopen'd, with a JNIEnv of our own; device.mk `SPEECH`, checkers; docs/re-ivona.md) or `speech_none.c`.  Its
+  sentences go through the playback queue as replies (main.c `Q_SPEECH`/`Q_REPLY`, `speech_local`): failures said
+  (`errsay.c`, setting `error_speech`), Home Assistant's replies from their text (`own_voice_replies`,
+  `core_reply_local`), alarm answers, Bluetooth announcements; `wyoming_tts.c` serves it to Home Assistant as Wyoming
+  text to speech on 16710.
 - **Whisper detection (`whisper.h`)**: `whisper_pryon.c` (libpryon `WhisperApi_*`, one detector per request fed from the
   start of streaming, end of utterance on HA's VAD end (`core_mic_off`), result into the ESPHome binary sensor "Last
   request whispered" before STT ends, for the agent's prompt template; `docs/re-whisper.md`) or `whisper_none.c` (host
@@ -579,8 +618,14 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `SCREEN` model's unpacked firmware for what its SDK resolves; `tools/dexasm.py` reads Android 7's oat and Android
   9's compact dex in vdex, hidden API bits off; images
   decoded on a thread of their own); layer shown only while hassmic's home activity is in front (getTasks polled);
-  touches from evdev beside Android (`touch.c`: the panel's node, lowest event number, system_server's uinput
-  `amazon_touch` last; protocol B, the first finger followed; `tests/unit/touch_test.c`).  The band runs in the same process (`ring_band.c` -> `screen_band`, one row a
+  touches from evdev (`touch.c`: the panel's node, lowest event number, system_server's uinput `amazon_touch` last;
+  protocol B, the first finger followed; `tests/unit/touch_test.c`) through the touch gate (`touchgate.c`, a thread of
+  `touch.c`: the panel grabbed, a uinput copy for Android, a touch at the top's middle held from the app until it is a
+  pull, then the drawer's alone, sent to the scene from y -1; marks `TOUCH_MARK` before each report on the socket;
+  `tests/unit/touchgate_test.c`; `HMUI_TOUCHGATE=0` off; without the gate the grip's 16 rows).  The drawer's row:
+  the home app's screens ("screen:<name>") and the owner's apps; the home app started by the SCREEN action
+  (`launch_contract`, cls "home:", "screen:<name>", "contract:"); a ring over an app that does not claim it brings
+  the face (`ring_over_app`), the app back after.  The band runs in the same process (`ring_band.c` -> `screen_band`, one row a
   frame; ringbar.dex only without the UI and in tests).  `screen.c` keeps state by generation and one writer thread
   sends what changed (callers hold `core_lock`: never block on the pipe), plus mass.c's lines from a FIFO (8 MB, a
   new UI drops it and `mass_replay` tells the state again); hassmic's pid in a file's name while a UI is meant to run
@@ -624,9 +669,11 @@ stock behaviour. `scripts/device/` holds on-device helpers (`lockdown.sh` firewa
 
 Firewall invariant: Amazon's daemons may only reach local addresses; hassmic itself may reach any address (it fetches
 TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get out. Inbound TCP and UDP are only admitted on
-16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 OTA, 28931 settings page, UDP 28930 arbitration)
+16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 16710 the Echo's own voice over Wyoming (Echo Shows with one), 28928 Sendspin, 28929 OTA, 28931 settings page, UDP 28930 arbitration)
 must stay in that range (UDP 28932 Drop In too). Exceptions: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
-`state/config` says `arbitration_mode=kiosk` (`kiosk_state`), and, where device.conf has `KIOSK_PACKAGE` (and the board `kiosk`, for the settings), the app's own TCP 2324 and 6053 from private addresses while it is installed; its uid may also reach the internet unless `kiosk_internet` is off (`KSUID`). Ping (ICMP echo request) is admitted from the private
+`state/config` says `arbitration_mode=kiosk` (`kiosk_state`), and, where device.conf has `KIOSK_PACKAGE` (and the board `kiosk`, for the settings), the app's own TCP 2324 and 6053 from private addresses while it is installed; its uid may also reach the internet unless `kiosk_internet` is off (`KSUID`); and on the Shows the ports of any other app of the owner's whose
+"Open ports" is on (`state/apps` `lan <package>`, `lockdown.sh` `lan_ports`/`rules_in`: chain `hassmic_in`, the app's uid's
+listening TCP and bound UDP sockets from `/proc/net`, from private and link-local sources only; issue #109). Ping (ICMP echo request) is admitted from the private
 and link-local ranges of `LOCAL4` only. A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`
 prints it.
 

@@ -49,6 +49,9 @@ struct proto {
     void (*wake)(const char *event);            /* may be NULL: the wake word heard (core_wake_events) */
     void (*end)(void);                          /* may be NULL: the Echo heard the request end (micend.h): end of audio,
                                                  * the server goes on with what it has (stop() aborts the run) */
+    void (*alarms_changed)(void);               /* may be NULL: the Echo's alarms (alarms.h) or the next one changed */
+    void (*alarm)(const char *event);           /* may be NULL: an alarm rang, was snoozed, stopped, set... (core_alarm_events) */
+    void (*say)(const char *text);              /* may be NULL: have the server speak this on the Echo (an alarm request's answer) */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
@@ -97,6 +100,24 @@ int  core_wake_sound(int set);                   /* same convention: the wake so
 int  core_sound_on(int s, int set);              /* sounds.h's sound has its switch on: set 0/1, or -1 to only read */
 int  core_wake_in_request(int set);              /* the request's audio from the wake word on, not after it; -1 reads */
 int  core_end_of_request(int set);               /* the end of a request heard on the Echo (micend.h: MICEND_*), -1 reads */
+int  core_own_voice(int set);                    /* own_voice_replies (main.c core_reply_local), -1 reads */
+int  core_own_voice_present(void);               /* a voice of the Echo's own is installed (speech.h) */
+int  core_reply_local(const char *text);         /* lock held: 1 = the Echo's own voice says this whole reply, end and all */
+/* A reply Home Assistant streams (main.c, "Setting own_voice_replies").  Lock held: tts_start_streaming came; 1 = the
+ * core says the reply (do not fetch its URL), 0 = fetch and play it as before.  At its TTS start: 1 = said (sentence
+ * by sentence, or now whole: its end ends the run), 0 = nothing says it (end the run as without a reply) */
+int  core_reply_stream(void);
+int  core_reply_streamed(const char *text);
+/* The Echo's own Wyoming TTS server (wyoming_tts.c), lock not held.  A synthesis began: 1 = it is this run's streamed
+ * reply, hand its sentences to core_reply_part and give Home Assistant silence; 2 = this run's reply, said already:
+ * silence only; 0 = someone else's, render it; -1 = may be this run's reply whose event is still on its way: ask again
+ * shortly (and take 0 after a while).  core_reply_part: 0 queued, 1 the voice is busy (again shortly), -1 the reply is
+ * gone (cut, a new run): say nothing more.  core_reply_final: the synthesis ended (or its link did) */
+int  core_reply_claim(void);
+int  core_reply_part(const char *text);
+void core_reply_final(void);
+int  core_error_speech(int set);                 /* error_speech: failures said by the Echo's own voice, -1 reads */
+void core_error_say(const char *code, const char *message);   /* the failure in words (errsay.h), where it can speak */
 int  core_stop_ends_listening(int set);          /* "<wake word>, stop" also ends listening (main.c stop_word), -1 reads */
 int  core_bt_announce(int set);                  /* same: chime and "Connected to <name>" when a phone connects */
 int  core_bluetooth(int set);                   /* same; -B on the command line: leave the radio to the stock stack */
@@ -108,6 +129,7 @@ void core_set_volume(int percent);
 enum { VOL_ASSISTANT, VOL_SOUNDS, VOL_TIMERS, VOL_CALLS, VOL_KINDS };
 #define VOL_OFFSET_MAX 100
 int  core_separate_volumes(int set);
+int  core_even_volume(int set);           /* setting even_volume: the same dB per point (main.c vol_even) */
 int  core_kind_volume(int kind, int set);
 int  core_kind_linked(int kind, int set);
 int  core_kind_offset(int kind);
@@ -172,7 +194,21 @@ size_t core_tts_queued(void);                               /* bytes not yet pla
  * wake word alone) or the ring time (core_timer_ring) is up */
 void   core_timer_finished(const char *id, const char *name, unsigned total);
 void   core_timer_cancelled(const char *id);
-void   core_alarm_stop(const char *why);                    /* every ringing timer; why: for the log */
+void   core_alarm_stop(const char *why);                    /* every ringing timer and alarm; why: for the log */
+/* The Echo's own alarms (alarms.h) ring with the timers.  Snooze (lock held): the alarms ringing come back in their
+ * snooze time, timers ringing with them stop; 0 if no alarm rang */
+int    core_alarm_snooze(const char *why);
+void   core_ring_tap(int stop);                               /* not the lock: the home app's ring tapped (snooze, a timer
+                                                                 stopped) or held (stop) */
+int    core_alarm_ringing(void);                            /* no lock needed: an alarm (not only timers) rings */
+/* their settings (lock held): CORE_ALARM_RING minutes a ring lasts (0 until stopped), _SNOOZE minutes, _RAMP seconds to
+ * full volume, _LOUDER points of volume a minute it gets louder after that (0: never), _KEYS 0 the volume keys snooze / 1 they set the volume, _VOICE answer alarm requests here, _SOUND a
+ * TIMER_SOUND_* (refused without its file).  set INT_MIN (or < 0 for the sound) reads */
+enum { CORE_ALARM_RING, CORE_ALARM_SNOOZE, CORE_ALARM_RAMP, CORE_ALARM_KEYS, CORE_ALARM_VOICE, CORE_ALARM_SOUND, CORE_ALARM_LOUDER };
+int    core_alarm_setting(int which, int set);
+void   core_alarms_changed(void);                           /* any thread, any lock: the alarms' list or their wording changed */
+extern const char *const core_alarm_events[];               /* the "Alarm" event entity's types */
+extern const int core_alarm_nevents;
 int    core_transcript(const char *text);                   /* speech to text's result: 1 if it stopped a ring ("stop",
                                                                or anything with core_timer_stop_any), a Drop In or music
                                                                ("stop"); run cancelled: drop the rest of it */

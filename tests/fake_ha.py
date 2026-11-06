@@ -39,6 +39,7 @@ async def main():
         cmd = [f"{ROOT}/tools/qrun.sh", "-t", "120", f"{ROOT}/build/{os.environ.get('DEVICE', 'donut')}/hassmic-qemu", "-P", "wyoming"]
     else:
         env["HASSMIC_STATE"] = tempfile.mkdtemp()                  # state/adopted: without it the Echo stays in its setup
+        with open(os.path.join(env["HASSMIC_STATE"], "config"), "w") as f: f.write("even_volume=off\n")   # TTS compared as sent: no volume gain
         cmd = [f"{ROOT}/build/hassmic-host", "-P", "wyoming"]
     proc = subprocess.Popen(cmd + ["-p", str(PORT), "-n", "Test Dot"], env=env, start_new_session=True)
     try:

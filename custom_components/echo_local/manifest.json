@@ -1,0 +1,14 @@
+{
+  "domain": "echo_local",
+  "name": "Echo Local",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": ["http", "frontend", "panel_custom", "websocket_api"],
+  "documentation": "https://github.com/Gamer92000/echo-dot-assist/blob/main/docs/GUIDE.md#clock-and-alarms",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/Gamer92000/echo-dot-assist/issues",
+  "requirements": [],
+  "version": "2026.11.15",
+  "zeroconf": [{ "type": "_esphomelib._tcp.local.", "properties": { "platform": "hassmic" } }]
+}

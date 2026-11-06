@@ -260,7 +260,9 @@ async def run(tmp, old):
     hall = Echo(tmp, "Echo Dot 3 7a8b9c", "02:00:00:7a:8b:9c", 26193, net, new)
     echos = (office, kitchen, guest, hall)
     halog = open(os.path.join(tmp, "ha.log"), "w")
-    hass = subprocess.Popen([HA_PY, "-m", "homeassistant", "-c", conf, "--skip-pip"], stdout=halog, stderr=subprocess.STDOUT)
+    hass = subprocess.Popen([HA_PY, "-m", "homeassistant", "-c", conf, "--skip-pip"], stdout=halog, stderr=subprocess.STDOUT,
+                            cwd=conf)       # not the repository: python -m puts the working directory on sys.path, and its
+                                            # custom_components/ (hassmic's integration) would hide the config's
     for e in echos: e.start()
     try:
         async with aiohttp.ClientSession() as session:

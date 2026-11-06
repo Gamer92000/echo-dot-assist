@@ -46,7 +46,7 @@ class Echo:
         self.voip = os.path.join(self.state, "voip.raw")
         self.api_key = base64.b64encode(os.urandom(32)).decode()
         with open(os.path.join(self.state, "api_key"), "w") as f: f.write(self.api_key + "\n")
-        with open(os.path.join(self.state, "config"), "w") as f: f.write(config)
+        with open(os.path.join(self.state, "config"), "w") as f: f.write("even_volume=off\n" + config)   # full scale: the calls' audio compared as sent
         self.keys = os.path.join(self.state, "keypad"); os.mkfifo(self.keys)
         self.keypad = os.open(self.keys, os.O_RDWR)    # opened first: hassmic's open() would wait for a writer
         if net:                                         # a member already: the network's id and key

@@ -2254,8 +2254,67 @@ Run in this order. Each step says what it proves.
       white) LEDs 11 40, 0 dark, 1 green, 2 dark, 3 blue, 4 404040; HA's green then one colour at 75 %.  Identify
       over a 50 % fill: the rainbow 0.12 s after the press, the fill back at 10.3 s.  No ledctrl errors.
       Open: the Dot 3 (its system partition's room; no system image of it here) and the Echo 2.
-- [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
-      reminders (HA has timers only).
+- [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): reminders (HA has timers
+      only).  The offline alarm clock: done (2026-11-02, below).
+- [x] Alarms of the Echo's own (2026-11-02).  `alarms.c`: state/alarms (statefile), a clock thread on local time
+      (localtime/mktime: bionic's persist.sys.timezone; DST by mktime's tm_isdst -1: 2:30 on the spring-forward day
+      rings at 3:30, checked in tests/unit/alarms_test.c), `fired` kept so a restart never rings one twice and one
+      missed by up to 5 min still rings, a clock step > 120 s is a clock set (no burst of alarms); none before
+      alarms_clock_ok.  English request parser (`alarms_command`: set/change/delete/delete all/list/snooze; digits,
+      "seven thirty", "half past", "quarter to", "in an hour and a half", weekdays, "every monday and friday"; an alarm
+      system's words excluded) answered in main.c `alarm_request` from `core_transcript` (run cancelled as a stop), the
+      answer through `proto->say` = assist_satellite.announce on the Bluetooth announcements' queue.  Ringing through
+      the timers' ring (`ringing[].alarm`), own sound/ring time/snooze, a volume ramp (a fifth of the timer gain up to
+      it over alarm_ramp_s), snooze by volume key (`alarm_keys`), "snooze", HA's button.  Escalation (`alarm_louder`,
+      points/min past the ramp up to 100: `alarm_boost`, a volume like a kind's, so `loudest()` lifts the mixer and
+      `mix_gain` keeps the rest where they were; `stream_owns_volume` off meanwhile; main.c `alarm_escalate` every
+      200 ms).  ESPHome: "Next alarm" (text sensor, device_class timestamp; missing_state for none), "Alarms", "Alarm
+      ringing", "Snooze alarm", event "Alarm", actions set_alarm/delete_alarm (any client: no microphone involved).
+      tests/fake_ha_alarms.py moves the Echo's clock through HASSMIC_FAKE_CLOCK_OFFSET (a file).
+      `media_request` (core_transcript): pause/resume/next/previous (sendspin_voice: controller commands the server
+      offers; a2dp_voice: AVRCP play, forward, backward) and the volume, only for what this Echo plays (log 2026-11-02
+      05:06: "Pause." over Sendspin got "which device?" from HA).
+      `custom_components/echo_local`: config flow (address or zeroconf on _esphomelib platform=hassmic; login by the
+      button like a browser, X25519/BLAKE2b as tests/webclient.py; reauth behind a Submit, so the Echo lights up only
+      when someone is there), coordinator polling /api/alarms every 30 s, a switch per alarm, services, the card
+      (frontend/, vanilla custom element, served and add_extra_js_url'd).  HA 2026.10 keeps devices per config entry
+      (no merge by MAC any more): the card finds "Alarm ringing" through the device with the same MAC.  `/api/hello`
+      has "mac".  tests/ha_real_alarms.py in a real HA 2026.10.1 (CI's HA job).
+      Open: reminders; alarm sentences in other languages.
+- [x] The home app contract, the drawer's app switcher and the touch gate (2026-11-03).  `kiosk.c`: the home app
+      (screen.c's choice) gets /kiosk/config (HA address, a token Echo Local made, its pages, its settings) and
+      /kiosk/state (words, ring, next alarm; long poll), /kiosk/ring/snooze|stop, only from 127.0.0.1 and its uid
+      (/proc/net/tcp6); what it draws itself ("claim" lines) and its pages' names ("screens") go to the UI.  Launched
+      by the SCREEN intent (android.c `launch_contract`: home:, screen:<name>, contract:).  A ring over an app that does
+      not claim it brings the face (scene.c `ring_over_app`), the app back after.  The touch gate (`touchgate.c`, a
+      thread of touch.c): the panel grabbed (EVIOCGRAB), every event written on to a uinput copy with the panel's name
+      and ids (its /dev/input node checked before the grab, so Android is never left without a touch screen); a touch
+      that starts within 10 % of the top edge in its middle 80 % held until it is a pull (5 % inward, more than twice
+      its sideways movement: the drawer's alone, told to the scene from y -1) or not (lift, 3 % sideways, a second
+      finger, 300 ms at rest, 600 ms at most: the app's from its start); the grip's 16 rows only without uinput
+      (HMUI_TOUCHGATE=0).  The drawer's row: the home app's pages, then the owner's apps.  Echo Local's Screen tab
+      and options flow (kiosk.py: a user and a long-lived token per Echo, sealed for it), tests/ha_real_kiosk.py,
+      tests/ha_real_panel.py (headless Chrome, laptop and phone widths).  Tried on an Echo Show 5: the drawer over an
+      app from the top's middle with no event reaching Android; taps there reach the app.
+- [x] The owner's apps on an Echo Show (2026-11-03; issue #109).  `apps.c`: the installed ones from packages.xml
+      (an app in /data/app, no shared uid, no update of a system app), `state/apps` lines "net <package>" (may reach the
+      internet) and "lan <package>" (may be reached from the home network); an APK sent in pieces (`/api/apps/apk/<off>`,
+      262144 bytes each) into state/apps-staged.apk, checked whole (size, BLAKE2b) and handed to root
+      (`state/apps-request`), whose `scripts/device/apps.sh` installs it with pm as the daemon's user reads it (runas),
+      or removes an app; never the home app (state/screen_home) nor one of Amazon's.  `lockdown.sh`: `app_uids` (each
+      package checked again against PackageManager's record) let out by uid in `hassmic_out`; `hassmic_in`, the
+      app's listening TCP and bound UDP sockets from /proc/net (followed when they move), from private and link-local
+      sources only, never below 1024.  The settings page's Screen page: the Apps card; Echo
+      Local: apps.py, the panel's Apps tab, the action install_apk.  tests/fake_web_apps.py, tests/unit/apps_test.c,
+      tests/unit/lockdown_test.py (the rules as they would load, against stand-in tables).
+- [x] The Echo's own voice (2026-11-02, checkers): Fire OS's Ivona engine driven through its app's JNI glue
+      (`libttsivona.so`) with a JNIEnv of our own (`speech_ivona.c`, dlopen'd; device.mk SPEECH, else speech_none.c),
+      voices from `/data/securedStorageLocation/com.amazon.providers.contentsupport/tts/ivona/` (docs/re-ivona.md:
+      DAVS refuses the Show 5's device type, the image's contentsupport.json names public S3 packs;
+      tools/davs-fetch.py tts).  Sentences go through the playback queue as replies do (Q_SPEECH, Q_REPLY: barge-in and
+      "stop" cut them).  `errsay.c`: Home Assistant's pipeline error codes and messages as sentences (setting
+      error_speech; tests/unit/errsay_test.c).  own_voice_replies: the reply's text at EV_TTS_START, Home Assistant's
+      audio not fetched.  `wyoming_tts.c`: a Wyoming TTS server on 16710 (mDNS-announced) for Home Assistant.
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
 - [x] Drop In between Echos (2026-10-08, asked by a user with ten Echos who used Alexa's as an intercom). `dropin.c`:
       calls signed on the arbitration network (new arb type `T_MSG`, `arb_tell`, broadcast like the rest, repeated:
@@ -2749,6 +2808,21 @@ Run in this order. Each step says what it proves.
       `run-satellite`, so `core_link_pause` marks it and no ring shows (`fake_ha.py`).  HA started with the switch on
       does not connect at all, which here reads as no link: the ring shows.
       Open: a sound as well; left out until someone asks.
+- [x] Even volume steps (2026-11-02, asked on an Echo Show 5: "why does the volume sound so non linear"; setting
+      `even_volume`, on by default, exported).  The Show's music stream index is Android's DEFAULT_MEDIA_VOLUME_CURVE
+      (dumpsys media.audio_policy: (1,-58 dB) (20,-40) (60,-17) (100,0), applied in AudioFlinger in float) over 31
+      indices: hassmic's (30 v + 50) / 100 put 3-4 points on one index (45, 46, 47 -> 14), and the measured curve
+      (board.c) has 46 dB under 50 and 20 above.  Now want_db(v) = -50 dB * (100 - v) / 99 (0 silent), the
+      stream at board_vol_at(): the lowest point of the measured curve at least that loud (the Show's points are
+      the indices played, so exact), our PCM gain for the rest (mix_gain; <= 8.8 dB on the Show, 10 on the Dot 2's
+      curve at the top).  No cost: the Show's primary output is AUDIO_FORMAT_PCM_16_BIT 48 kHz stereo
+      (audio_policy_configuration.xml mixPort "primary output"; dumpsys media.audio_flinger: HAL format pcm16,
+      processing pcmfloat), so attenuating 16-bit before it rounds at the same floor.  For the same reason 24-bit
+      Sendspin was not taken up: the output is 16-bit, MA's 24 -> 16 would only move to the Echo.  MainVolume is
+      then not the volume (as with separate volumes): state/volume.music keeps it, written at the first start
+      straight from MainVolume (an update keeps the number).  Echo Show 5 (2026-11-02, the update pushed): 45 kept,
+      index 14 -> 11; keys 0..100 gave indices 0, 5, 8, 8, 11, 12, 15, 20, 23, 26, 30 as the curve says.  Not
+      measured by ear or mic (no Dot beside it for tools/vol-curve.py).  The Dot 3's curve is still the Dot 2's.
 - [x] Volumes per kind of audio (GitHub issue #32: several Dot 3 and a Dot 2; one volume for media and one for the
       assistant, the wake sound on a slider of its own).  Built 2026-10-17, after two tries the owner rejected.
       First: categories linked to the main volume with offsets (replies in volume points, sounds in dB under it,
@@ -3246,3 +3320,25 @@ Run in this order. Each step says what it proves.
       in place, and "android" is at line 1381 of 3339 with Alexa's `/data/app` updates after it), `wpa_cli` only when
       `/sys/class/net/p2p-p2p0-0` exists; anything not shown done goes to pm/settings as before.  `pm_done` checked
       against fake files (whole, cut off, enabled, no restriction entry, component not noted, state 4).
+- [~] Streamed replies in the Echo's own voice (2026-11-04; setting `own_voice_replies`).  `wyoming_tts.c` offers
+      `supports_synthesize_streaming`: Home Assistant (wyoming/tts.py of 2026.10) then sends every synthesis as
+      synthesize-start, -chunk (as the LLM writes), the whole text as "synthesize" (ignored inside a stream), -stop, and
+      reads until synthesize-stopped (one audio-start for its WAV header, audio-stop ignored).  The text is cut into
+      sentences (`wytts_sentence`: . ! ? before white space, line breaks; not after 1-2 digits, single letters, short
+      abbreviations; 400 bytes without an end cut at a space; `make unit-wytts`), each made as soon as complete.  While
+      this Echo's run waits for a streamed reply (`tts_start_streaming`, main.c `own_st` OWN_STREAM) the synthesis is
+      claimed (`core_reply_claim`): each sentence said at once (`core_reply_part`, tag `SPEECH_PART` + the reply's
+      number), Home Assistant gets 100 ms of silence (streamed results are not in its file cache: ulid key).  Only the
+      last sentence ends the run (`own_parts`, `own_final`: part_stop/part_done in the playback thread; consecutive
+      sentences stay in one open stream); a cut (barge-in, "stop", media stop: `playback_cut`) ends it at once, a new
+      run or an error drops it (`own_reset`).  Findings in HA 2026.10's source (build/ha-venv): the pipeline streams to
+      a TTS only when the engine says it takes streamed text (`tts_stream.supports_streaming_input`); its TTS runs from
+      a background task set off by `async_set_message[_stream]`, whether anyone fetches the URL or not, so the Echo
+      never fetches a reply with own voice on (no fetch-and-discard); a reply HA does not stream comes to the server
+      too (a one-chunk stream after the TTS start event) and is made as before (that one is file-cached by text).
+      Learning: a streamed run whose synthesis never came by the TTS start = the pipeline's TTS is elsewhere
+      (`own_elsewhere`): the TTS start says the whole text, later streamed runs claim nothing, every 20th
+      (`OWN_RECHECK`) looks again.  Measured before (Show 5): a 129-character reply's first byte 855 ms after the text
+      through HA's MP3.  `tests/fake_ha_own_voice.py` with a stand-in voice (`HASSMIC_FAKE_SPEECH`, speech_none.c).
+      Open: the first sentence's latency on the Show 5 with a real LLM; the clash with a tts.speak to the same TTS
+      entity during a streamed reply (taken for the reply: documented, not seen).

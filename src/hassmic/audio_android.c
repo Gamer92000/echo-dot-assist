@@ -14,6 +14,7 @@
  *    (which records 1999 and 2999 itself) must be disabled first;
  *  - the preset: VOICE_RECOGNITION is the closest OpenSL ES has to stock's HOTWORD source, both pick the ASR pipeline
  *    (getAspPipelineType in the HAL); HOTWORD itself is not reachable from OpenSL ES. */
+#include "resample.h"
 #include "audio.h"
 #include "core.h"
 #include "afe_parcel.h"
@@ -190,19 +191,13 @@ void audio_music_gain(float g) { atomic_store(&music_q16, q16(g)); }
 void audio_tts_gain(float g) { atomic_store(&tts_q16, q16(g)); }
 void audio_call_gain(float g) { atomic_store(&call_q16, q16(g)); }
 
-/* whole samples from every writer (audio_mixer.c's copy_gain says why); a lone odd byte passes unscaled */
-static void copy_gain(char *dst, const char *src, size_t n, int q)
-{
-    if (q >= 65536) { memcpy(dst, src, n); return; }
-    for (size_t i = 0; i + 1 < n; i += 2) {
-        short v; memcpy(&v, src + i, 2); v = (short)((v * q + 32768) >> 16); memcpy(dst + i, &v, 2);   /* rounded */
-    }
-    if (n & 1) dst[n - 1] = src[n - 1];
-}
+/* whole samples from every writer (audio_mixer.c says why), at a gain that glides (resample.c gain_glide) */
+static float gain_of(atomic_int *q) { return q ? (float)atomic_load(q) / 65536 : 1; }
 
 struct pstream {
     SLObjectItf obj; SLPlayItf play; SLAndroidSimpleBufferQueueItf q;
     atomic_int *gain;                           /* audio_*_gain's for this stream; NULL: none (earcons: main.c scales them) */
+    float g;                                    /* the gain now, gliding towards *gain's */
     pthread_mutex_t lock; pthread_cond_t cond;
     unsigned bps, slot, busy, next;             /* bytes per second, slot size, slots with the player, next free slot */
     unsigned head, lens[PLAY_NBUF];             /* the oldest slot with the player, and each slot's bytes */
@@ -484,7 +479,7 @@ static int s_open(struct pstream *s, unsigned rate, unsigned channels, SLint32 s
     s->slot = s->bps / 50 & ~3u;
     s->buf = malloc((size_t)s->slot * PLAY_NBUF);
     if (!s->buf) { (*s->obj)->Destroy(s->obj); s->obj = NULL; return -1; }
-    s->busy = s->next = s->head = 0; s->written = s->consumed = 0; s->last_cb = now_ms();
+    s->busy = s->next = s->head = 0; s->written = s->consumed = 0; s->last_cb = now_ms(); s->g = gain_of(s->gain);
     (*s->play)->SetPlayState(s->play, SL_PLAYSTATE_PLAYING);
     return 0;
 }
@@ -505,7 +500,7 @@ static int s_write(struct pstream *s, const void *data, size_t len)
             }
         }
         char *slot = s->buf + (size_t)s->next * s->slot;
-        copy_gain(slot, p, n, s->gain ? atomic_load(s->gain) : 65536);
+        gain_glide(slot, p, n, s->bps / 2, &s->g, gain_of(s->gain));
         if ((*s->q)->Enqueue(s->q, slot, n) != SL_RESULT_SUCCESS) { pthread_mutex_unlock(&s->lock); return -1; }
         atomic_store(&last_out, now_ms());
         s->lens[s->next] = n; s->busy++; s->next = (s->next + 1) % PLAY_NBUF; s->written += n;
