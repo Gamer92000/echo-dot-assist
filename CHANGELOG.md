@@ -102,7 +102,7 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-03
 
-- **Echo Show: what you said and the reply on the screen.** "Speech on screen" (settings page, Lights; off by default)
+- **Echo Show: what you said and the reply on the screen.** "Speech on screen" (settings page, Screen; off by default)
   shows your words and the assistant's answer in large letters on the screen, as Alexa's own screens do, in the Echo's
   own font. They fade 8 seconds after the answer ("Speech stays for": any number of seconds, or until the next
   request). A "stop" the Echo carries out itself (a ringing timer, music, "Stop after the wake word ends listening") is

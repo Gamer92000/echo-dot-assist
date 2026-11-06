@@ -205,14 +205,16 @@ const PAGES = [
   { id: 'system', title: 'System', icon: 'sliders', nav: 'This Echo\'s system', groups: ['System'], always: true, intro: 'This Echo\'s name and network, updates, backups and troubleshooting.' },
 ];
 const BRIGHTNESS = ['screen_brightness_auto', 'screen_brightness', 'screen_brightness_adjust'];      // the Show's backlight
-const MOVED = { light_band: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen', arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
+const WORDS = ['screen_text', 'screen_text_seconds', 'screen_timers'];            // ring_band.c's text layer
+const MOVED = { light_band: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen',
+  screen_text: 'screen', screen_text_seconds: 'screen', screen_timers: 'screen', arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
 // The cards of a settings page: [title, settings...].  A setting not named here (a new one, or a model's own) comes
 // last, in a card of its own, so nothing is ever lost from the page
 const LAYOUT = {
   voice: [['Microphone', 'mic_level', 'noise_reduction'], ['Mute and wake sound removal', 'mute', 'do_not_disturb', 'wake_sound_removal'],
           ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any']],
   wake: [['Engine', 'wake_engine'], ['How it hears you', 'speech_language', 'wake_word_adaptation']],
-  lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band'], ['Screen', ...BRIGHTNESS, 'screen_text', 'screen_text_seconds', 'screen_timers']],
+  lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band'], ['Screen', ...BRIGHTNESS]],
 };
 
 // help: what it does, in the user's terms.  ha: also in Home Assistant (true), or for features the entities it adds.
@@ -1169,9 +1171,10 @@ const PAGE_BUILD = {
   },
   lights: (el, list) => { el.append(flow(settingCards(list, 'lights'))); buildRing(el); },
   screen: (el, list) => {      // ring.js: the designs and where they show
-    const bright = list.filter((s) => BRIGHTNESS.includes(s.name));
-    el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.filter((s) => !bright.includes(s)).map(settingRow)),
-      bright.length ? titled('Brightness', bright.map(settingRow)) : null].filter(Boolean)));
+    const bright = list.filter((s) => BRIGHTNESS.includes(s.name)), words = list.filter((s) => WORDS.includes(s.name));
+    el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.filter((s) => !bright.includes(s) && !words.includes(s)).map(settingRow)),
+      bright.length ? titled('Brightness', bright.map(settingRow)) : null,
+      words.length ? titled('Words and timers', words.map(settingRow)) : null].filter(Boolean)));
   },
   media: (el, list) => {
     const parent = (k) => (HELP[k.name] || {}).parent, plain = list.filter((x) => !x.feature && !parent(x));
