@@ -50,7 +50,7 @@ exactly as checkers' `getAspPipelineType`: 6 VOICE_RECOGNITION and 1999 HOTWORD 
 
 - **No speaker.** The output is the MT8167's own codec on the 3.5 mm jack (and Bluetooth); no amplifier in the DTB, so no
   `speaker_gain`. The volume is Android's music stream as on the Shows; its curve on the line out was not measured
-  (`volume_curve` NULL: the Dot 2's).
+  (`volume_curve = board_vol_dot2`: the Dot 2's as a stand-in).
 - `audiosignalprocessor` (`com.amazon.asp.IAudioSignalProcessor`, `audioserver_service`) and `amazon.security.dha`
   (`fireos.dha.IFireOsDha`, `fireos-dha` as keystore with drmrpc; HAL `amzn_dha.mt8167.so`, no `libacehal_dha.so`) are
   registered under checkers' names: `afe_parcel.c` and `dha.c`'s service path apply. Which DHA version it answers

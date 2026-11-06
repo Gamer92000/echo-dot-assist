@@ -33,6 +33,8 @@ const struct board board = {
      * bus but has no driver bound here: another hardware revision */
     .light_sensor = { "/sys/bus/i2c/devices/0-0029/iio:device0/calibrated_lux", "/sys/bus/i2c/devices/0-0039/als_calibrated_lux" },
     .volume_steps = 30,                                             /* volume_step-01..30 in led-resources */
+    /* volume curve not measured on this model yet: the Echo Dot 2's stands in (devices/README.md: how to measure) */
+    .volume_curve = board_vol_dot2,
     /* as biscuit's: the firmware's audio_device.xml sets the same control to 6 for the speaker, 11 for the 3.5 mm jack
      * (from the firmware only, not tried on an Echo 2) */
     .speaker_gain = "HP Driver Gain Volume",

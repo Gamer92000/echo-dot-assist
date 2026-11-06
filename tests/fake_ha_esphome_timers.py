@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Home Assistant's side of the ESPHome native API against build/hassmic-host (tests/esphome_common.py), part two:
-timers ringing and what stops them, a new run after an error, encryption provisioned by Home Assistant (key, mDNS,
+timers ringing and what stops them, a new run after an error, the timer that runs next, encryption provisioned by Home Assistant (key, mDNS,
 refusals, clearing), the time and zone over the keyed link, noise reduction, LED brightness and the light sensor."""
 import asyncio, base64, os, re, signal, time
+from datetime import datetime
 from aioesphomeapi import NumberState, SwitchState, TextSensorInfo, TextSensorState, BinarySensorInfo, BinarySensorState, SensorInfo, SensorState
 from aioesphomeapi import APIClient, MediaPlayerCommand, VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm, ZERO_NOISE_PSK
 from aioesphomeapi.core import InvalidEncryptionKeyAPIError, RequiresEncryptionAPIError
@@ -152,6 +153,60 @@ async def main(e):
     started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
     check(True, "new pipeline after an error")
     cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+
+    # Running timers, for a display elsewhere (an Assist timer is no entity): "Next timer" is when the one that ends
+    # first ends, beside its name and the length it was set for; unknown while none runs, paused ones left out
+    nxt, nname, nlen = by.get("next_timer"), by.get("next_timer_name"), by.get("next_timer_length")
+    check(isinstance(nxt, TextSensorInfo) and nxt.device_class == "timestamp" and isinstance(nname, TextSensorInfo)
+          and isinstance(nlen, SensorInfo) and nlen.device_class == "duration" and nlen.unit_of_measurement == "s"
+          and not int(nxt.entity_category) and not int(nname.entity_category) and not int(nlen.entity_category),
+          "next timer entities listed, on dashboards: a timestamp, a name, a length in seconds")
+    latest = lambda k, t: ([x for x in states if isinstance(x, t) and x.key == k] or [None])[-1]
+    def upcoming():                     # (seconds until it ends, name, length), or None while unknown
+        e, n, l = latest(nxt.key, TextSensorState), latest(nname.key, TextSensorState), latest(nlen.key, SensorState)
+        if e is None or n is None or l is None: return "not sent"
+        if e.missing_state or n.missing_state or l.missing_state: return None if e.missing_state == n.missing_state == l.missing_state else "mixed"
+        return round(datetime.fromisoformat(e.state).timestamp() - time.time()), n.state, l.state
+    near = lambda left, name, total: (lambda u: isinstance(u, tuple) and abs(u[0] - left) <= 2 and u[1:] == (name, total))(upcoming())
+    check(upcoming() is None, f"no timer: the next one unknown: {upcoming()}")
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_STARTED, "t20", "pasta", 600, 600, True)
+    await until(lambda: near(600, "pasta", 600))
+    check(near(600, "pasta", 600), f"a timer started: it ends in 10 min, named, its length: {upcoming()}")
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_STARTED, "t21", "", 120, 120, True)
+    await until(lambda: near(120, "", 120))
+    check(near(120, "", 120), f"a shorter one started beside it is next, without a name: {upcoming()}")
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_UPDATED, "t21", "", 120, 100, False)
+    await until(lambda: near(600, "pasta", 600))
+    check(near(600, "pasta", 600), f"paused, it is left out: the other is next: {upcoming()}")
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_UPDATED, "t21", "", 120, 100, True)
+    await until(lambda: near(100, "", 120))
+    check(near(100, "", 120), f"resumed, it ends with what was left when it paused: {upcoming()}")
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_UPDATED, "t20", "pasta", 600, 60, True)
+    await until(lambda: near(60, "pasta", 600))
+    check(near(60, "pasta", 600), f"time taken off the other makes it next, its length as it was set: {upcoming()}")
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_CANCELLED, "t20", "pasta", 600, 50, True)
+    await until(lambda: near(100, "", 120))
+    check(near(100, "", 120) and ringing() == (False, ""), f"cancelled: the other is next, nothing rings: {upcoming()}, {ringing()}")
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t21", "", 120, 0, False)
+    await until(lambda: upcoming() is None and ringing() == (True, "2 min"))
+    check(upcoming() is None and ringing() == (True, "2 min"), f"finished: it rings, none runs: {upcoming()}, {ringing()}")
+    proc.send_signal(signal.SIGUSR2); await until(lambda: ringing() == (False, ""))     # the button stops it
+    # one Home Assistant never finishes (it restarted and forgot it) goes 10 s after its end
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_STARTED, "t22", "lost", 60, 1, True)
+    await until(lambda: near(1, "lost", 60))
+    check(near(1, "lost", 60), f"a timer about to end is next: {upcoming()}")
+    t0 = time.monotonic(); await until(lambda: upcoming() is None, 17)
+    check(upcoming() is None and 9 < time.monotonic() - t0 < 15 and ringing() == (False, ""),
+          f"never finished: forgotten 10 s after its end, without a ring: {upcoming()} after {time.monotonic() - t0:.1f} s")
+    # a full table (8) makes room with a paused one, never with the one that ends first, though it is the oldest
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_STARTED, "t30", "soon", 300, 300, True)
+    for i in range(7): cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_STARTED, f"t3{i + 1}", f"p{i}", 900, 900, False)
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_STARTED, "t38", "later", 600, 600, True)
+    await sync(cli)
+    check(near(300, "soon", 300), f"a ninth timer: a paused one makes room, the next stays: {upcoming()}")
+    for i in range(9): cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_CANCELLED, f"t3{i}", "", 0, 0, False)
+    await until(lambda: upcoming() is None)
+    check(upcoming() is None, f"all cancelled: none runs: {upcoming()}")
 
     # Encryption, in the order Home Assistant runs it: plaintext connection, DeviceInfo says "supported, provisionable",
     # key sent over a zero-PSK Noise connection, then only that key gets in.

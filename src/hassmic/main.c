@@ -2112,6 +2112,78 @@ static atomic_llong preview_until;
 #define PREVIEW_MS 10000
 static const enum sound timer_sounds[] = { [TIMER_SOUND_TIMER] = SND_TIMER, [TIMER_SOUND_ALARM] = SND_ALARM, [TIMER_SOUND_CUSTOM] = SND_CUSTOM };
 
+/* Timers that run (core_timer_running): Home Assistant tells a satellite of each of its timers as it starts and changes,
+ * with the seconds left, and nobody else (an Assist timer is no entity), so the Echo is where they can be read.  The end
+ * is kept on the monotonic clock: Home Assistant's time moves the wall clock under it (clock.c).  One Home Assistant
+ * never finished (it restarted: its timers live in memory only) goes TIMER_STALE_MS after its end, from the earcon
+ * thread (timers_prune); a paused one stays until it is resumed or cancelled, or the table is full: the oldest paused
+ * one goes first (one Home Assistant forgot while paused would hold a slot for good), else the oldest */
+#define RUNNING_MAX 8
+#define TIMER_STALE_MS 10000
+static struct { char id[40], name[64]; unsigned total; int active; long long end, left; } running[RUNNING_MAX];  /* lock held */
+static int nrunning;                                            /* lock held; end: mono_ms (active), left: ms (paused) */
+static atomic_llong timers_stale_at = LLONG_MAX;                /* mono_ms the first active one is overdue */
+
+static void running_drop(int i)         /* lock held */
+{
+    memmove(running + i, running + i + 1, sizeof running[0] * (size_t)(nrunning - i - 1));
+    nrunning--;
+}
+
+static int running_find(const char *id) /* lock held: its index, or -1 */
+{
+    for (int i = 0; i < nrunning; i++) if (!strcmp(running[i].id, id)) return i;
+    return -1;
+}
+
+static void running_stale_at(void)      /* lock held */
+{
+    long long at = LLONG_MAX;
+    for (int i = 0; i < nrunning; i++) if (running[i].active && running[i].end + TIMER_STALE_MS < at) at = running[i].end + TIMER_STALE_MS;
+    atomic_store(&timers_stale_at, at);
+}
+
+void core_timer_running(const char *id, const char *name, unsigned total, unsigned left, int active)
+{
+    int i = running_find(id);
+    if (i < 0) {
+        if (nrunning == RUNNING_MAX) {
+            int old = 0;
+            while (old < nrunning && running[old].active) old++;
+            running_drop(old < nrunning ? old : 0);
+        }
+        i = nrunning++;
+        snprintf(running[i].id, sizeof running[i].id, "%s", id);
+    }
+    snprintf(running[i].name, sizeof running[i].name, "%s", name);
+    running[i].total = total; running[i].active = active;
+    running[i].left = left * 1000LL; running[i].end = mono_ms() + running[i].left;
+    running_stale_at();
+    if (connected && proto->timers_changed) proto->timers_changed();
+}
+
+int core_timer_next(char *name, size_t cap, unsigned *total, long long *left_ms)
+{
+    int best = -1; long long now = mono_ms();
+    for (int i = 0; i < nrunning; i++) if (running[i].active && (best < 0 || running[i].end < running[best].end)) best = i;
+    if (best < 0) return 0;
+    if (cap) snprintf(name, cap, "%s", running[best].name);
+    if (total) *total = running[best].total;
+    if (left_ms) *left_ms = running[best].end > now ? running[best].end - now : 0;
+    return 1;
+}
+
+static void timers_prune(void)          /* lock held */
+{
+    int gone = 0; long long now = mono_ms();
+    for (int i = 0; i < nrunning; ) if (running[i].active && running[i].end + TIMER_STALE_MS <= now) {
+        fprintf(stderr, "timer: %s never finished, forgotten\n", running[i].name[0] ? running[i].name : running[i].id);
+        running_drop(i); gone = 1;
+    } else i++;
+    running_stale_at();
+    if (gone && connected && proto->timers_changed) proto->timers_changed();
+}
+
 static void alarm_set(int on)          /* lock held */
 {
     if (atomic_exchange(&alarm_on, on) == on) return;
@@ -2125,7 +2197,9 @@ static void alarm_set(int on)          /* lock held */
 
 void core_timer_finished(const char *id, const char *name, unsigned total)
 {
-    int i = 0; unsigned h = total / 3600, m = total % 3600 / 60;
+    int i = running_find(id); unsigned h = total / 3600, m = total % 3600 / 60;
+    if (i >= 0) { running_drop(i); running_stale_at(); }
+    i = 0;
     while (i < nringing && strcmp(ringing[i].id, id)) i++;
     if (i == RINGING_MAX) { memmove(ringing, ringing + 1, sizeof ringing[0] * --i); nringing = i; }    /* the oldest goes */
     if (i == nringing) nringing++;
@@ -2144,6 +2218,11 @@ void core_timer_finished(const char *id, const char *name, unsigned total)
 
 void core_timer_cancelled(const char *id)
 {
+    int r = running_find(id);
+    if (r >= 0) {
+        running_drop(r); running_stale_at();
+        if (connected && proto->timers_changed) proto->timers_changed();
+    }
     for (int i = 0; i < nringing; i++) if (!strcmp(ringing[i].id, id)) {
         memmove(ringing + i, ringing + i + 1, sizeof ringing[0] * (size_t)(nringing - i - 1));
         if (!--nringing) alarm_set(0);
@@ -2349,6 +2428,9 @@ static void *earcon_thread(void *arg)
         beep[i] = (short)(BEEP_PEAK * env * sin(2 * M_PI * f * i / RATE));
     }
     for (;;) {
+        if (mono_ms() > atomic_load(&timers_stale_at)) {               /* a timer Home Assistant forgot; first: a Drop In's ring continues */
+            pthread_mutex_lock(&core_lock); timers_prune(); pthread_mutex_unlock(&core_lock);
+        }
         /* Amazon's own sounds where the image has them; the generated blip stands in for the wake and touch sounds otherwise */
         for (int p = atomic_exchange(&sounds_pending, 0), s = 0; p && s < SND_COUNT; s++) {
             const short *pcm; size_t n; unsigned rate;
@@ -2490,6 +2572,20 @@ static int read_volume(void) { return vol_read(VOL_MAIN, 40); }
  * follow it by default, as they did before they had a volume (the Voip stream follows MainVolume; its curve is taken
  * to be the Music stream's, docs/re-platform.md). */
 static int vol_split;                        /* under lock */
+/* Even volume steps (setting even_volume): off, a volume plays where the Echo's own curve puts it, as stock, which is
+ * anything but even: the Echo Show 5's (Android's media curve, applied digitally in AudioFlinger) has 46 dB in the
+ * bottom half and 20 in the top, and its 31 indices take 3 or 4 of our points each, so a slider moved by a point
+ * often does nothing (45, 46 and 47 all play index 14); the Dot 2's gains 1 dB from 60 to 70 and 10 from 90 to 100
+ * (volcurve.c).  On, each point is the same number of dB (EVEN_FLOOR_DB at 1 up to 0 dB at 100: 5 dB a press of the
+ * keys; 0 silent): the mixer (the Show's index) goes to the lowest point of the measured curve at least that loud
+ * (board_vol_at, so what it plays there is what was measured) and our PCM takes off the rest, at most the gap
+ * between two points (8.8 dB at the Show's bottom, 10 at the Dot's top).  That costs nothing on these Echos: their
+ * outputs are 16-bit (the Show's primary output is AUDIO_FORMAT_PCM_16_BIT at 48 kHz), and turning 16-bit audio down
+ * before the mixer rounds at the same -96 dBFS floor the output's own quantisation has.  So MainVolume is not the
+ * volume here either, as with separate volumes (stream_owns_volume).  A Bluetooth speaker with absolute volume sets
+ * its own loudness from the number, as before.  On by default; off gives stock's curve back. */
+static int vol_even = 1;                     /* under lock; on by default */
+#define EVEN_FLOOR_DB (-50.0f)
 static struct { int level, linked, offset; } kinds[VOL_KINDS] = { { 40, 0, 0 }, { 40, 0, 0 }, { 40, 0, 0 }, { 40, 1, 0 } };   /* under lock */
 static int tts_media;                        /* under lock: the TTS stream plays Home Assistant's media */
 static int tts_written = -1, main_written = -1;     /* under lock: TTSVolume and MainVolume as we last set them */
@@ -2502,6 +2598,12 @@ static int clamp_offset(int v) { return v < -VOL_OFFSET_MAX ? -VOL_OFFSET_MAX : 
 
 static float vol_db(int v) { return board_vol_db(v); }      /* the Echo's volume curve (volcurve.c) */
 
+/* lock held: what volume v should sound like, dB under full: the Echo's curve, or even steps */
+static float want_db(int v) { return !vol_even ? vol_db(v) : v <= 0 ? -INFINITY : EVEN_FLOOR_DB * (100 - v) / 99; }
+
+/* lock held: MainVolume (the Show's index) is the volume, as stock; else ours is kept in state/volume.music */
+static int stream_owns_volume(void) { return !vol_split && !vol_even; }
+
 /* lock held: what a kind (VOL_*) plays at now, its own volume or the music's moved by its offset */
 static int kind_volume(int k) { return kinds[k].linked ? clamp100(core_volume() + kinds[k].offset) : kinds[k].level; }
 
@@ -2509,20 +2611,33 @@ static int kind_volume(int k) { return kinds[k].linked ? clamp100(core_volume() 
 static int loudest(void)
 {
     int v = core_volume();
-    if (!vol_split) return v;
-    for (int k = 0; k < VOL_KINDS; k++)       /* a call's volume only while one is on: no hidden loud one moves the rest */
-        if ((k != VOL_CALLS || atomic_load(&dropin_live)) && kind_volume(k) > v) v = kind_volume(k);
+    if (vol_split)
+        for (int k = 0; k < VOL_KINDS; k++)   /* a call's volume only while one is on: no hidden loud one moves the rest */
+            if ((k != VOL_CALLS || atomic_load(&dropin_live)) && kind_volume(k) > v) v = kind_volume(k);
     return v;
 }
 
-/* lock held: what MainVolume and TTSVolume both are now: the loudest, or full scale for a speaker that sets the volume */
-static int mix_target(void) { return speaker_mode == SPEAKER_ABSOLUTE ? 100 : loudest(); }
+/* lock held: what MainVolume and TTSVolume both are now: the loudest (with even steps the curve's point at least as
+ * loud as it should sound), or full scale for a speaker that sets the volume */
+static int mix_target(void)
+{
+    if (speaker_mode == SPEAKER_ABSOLUTE) return 100;
+    return vol_even ? board_vol_at(want_db(loudest())) : loudest();
+}
+
+/* lock held: a kind's volume, the volume itself while they are not separate */
+static int kind_now(int k)
+{
+    return vol_split ? kind_volume(k) : core_volume();
+}
 
 /* lock held: what audio for volume v is multiplied by: 1 at the mixer's own, 0 at volume 0 */
 static float mix_gain(int v)
 {
-    if (!vol_split) return 1;
-    return v <= 0 ? 0 : powf(10.0f, (vol_db(v) - vol_db(loudest())) / 20.0f);
+    if (stream_owns_volume()) return 1;
+    if (v <= 0) return 0;
+    if (vol_even && speaker_mode != SPEAKER_ABSOLUTE) return powf(10.0f, (want_db(v) - vol_db(mix_target())) / 20.0f);
+    return powf(10.0f, (vol_db(v) - vol_db(loudest())) / 20.0f);
 }
 
 static void mix_apply(void)                  /* lock held: the mixer's volumes and our gains, as they should be now */
@@ -2536,10 +2651,10 @@ static void mix_apply(void)                  /* lock held: the mixer's volumes a
     spk_was = spk;
     a2dp_speaker_volume(loudest());
     audio_music_gain(mix_gain(core_volume()));
-    audio_tts_gain(mix_gain(tts_media ? core_volume() : kind_volume(VOL_ASSISTANT)));
-    atomic_store(&sounds_q16, (int)lroundf(mix_gain(kind_volume(VOL_SOUNDS)) * 65536));
-    atomic_store(&timers_q16, (int)lroundf(mix_gain(kind_volume(VOL_TIMERS)) * 65536));
-    audio_call_gain(mix_gain(kind_volume(VOL_CALLS)));
+    audio_tts_gain(mix_gain(tts_media ? core_volume() : kind_now(VOL_ASSISTANT)));
+    atomic_store(&sounds_q16, (int)lroundf(mix_gain(kind_now(VOL_SOUNDS)) * 65536));
+    atomic_store(&timers_q16, (int)lroundf(mix_gain(kind_now(VOL_TIMERS)) * 65536));
+    audio_call_gain(mix_gain(kind_now(VOL_CALLS)));
 }
 
 static void tts_kind(int media)              /* the playback thread, at each start of the TTS stream */
@@ -2550,8 +2665,8 @@ static void tts_kind(int media)              /* the playback thread, at each sta
     pthread_mutex_unlock(&core_lock);
 }
 
-/* The music volume while the volumes are separate: MainVolume is then the loudest of three and says nothing about it,
- * so it is kept here (and read at start instead of MainVolume) */
+/* The music volume while the volumes are separate or the steps even: MainVolume is then the loudest of three, or a
+ * point of the curve, and says nothing about it, so it is kept here (and read at start instead of MainVolume) */
 static const char *music_volume_path(void)
 {
     static char p[256]; const char *d = getenv("HASSMIC_STATE");
@@ -2561,8 +2676,8 @@ static const char *music_volume_path(void)
 static int music_dirty;                      /* under lock: volume.music to be written (music_volume_write) */
 static void music_volume_keep(void)          /* lock held */
 {
-    music_dirty = vol_split;
-    if (!vol_split) unlink(music_volume_path());
+    music_dirty = !stream_owns_volume();
+    if (stream_owns_volume()) unlink(music_volume_path());
 }
 
 /* volume_sync's thread, outside the lock: a write with its fsyncs takes tens of ms on the flash, and the volume moves
@@ -2578,7 +2693,7 @@ static void music_volume_write(void)
     snprintf(t, sizeof t, "%d\n", v);
     statefile_write(music_volume_path(), 0644, t, strlen(t));
     pthread_mutex_lock(&core_lock);
-    if (!vol_split) unlink(music_volume_path());        /* switched off meanwhile */
+    if (stream_owns_volume()) unlink(music_volume_path());      /* switched off meanwhile */
     pthread_mutex_unlock(&core_lock);
 }
 
@@ -2593,6 +2708,17 @@ int core_separate_volumes(int set)
         mix_apply();
     }
     return vol_split;
+}
+
+int core_even_volume(int set)
+{
+    if (set >= 0 && (set != 0) != vol_even) {
+        vol_even = set != 0;
+        if (stream_owns_volume() || speaker_mode == SPEAKER_NONE) music_volume_keep();
+        mix_apply();
+        fprintf(stderr, "volume: even steps %s, mixer at %d\n", vol_even ? "on" : "off", mix_target());
+    }
+    return vol_even;
 }
 int core_kind_volume(int k, int set) { if (set >= 0) { kinds[k].level = clamp100(set); mix_apply(); } return kinds[k].level; }
 int core_kind_linked(int k, int set)
@@ -2650,17 +2776,23 @@ static const char *own_volume_path(void)
 int core_volume(void)
 {
     if (volume < 0) {                        /* whatever it was left at: in line now */
-        /* volume.music only while state/config says the volumes are separate (this may run before settings_load): a
-         * hand edit or an older build (a fallback after an update) leaves the file behind with the setting gone, and
-         * the volume moved since is MainVolume's */
-        char sv[8]; int split = !settings_peek("separate_volumes", sv, sizeof sv) && !strcmp(sv, "on");
+        /* volume.music only while state/config says the volumes are separate or the steps even (this may run before
+         * settings_load): a hand edit or an older build (a fallback after an update) leaves the file behind with the
+         * setting gone, and the volume moved since is MainVolume's */
+        char sv[8], ev[8]; int split = (!settings_peek("separate_volumes", sv, sizeof sv) && !strcmp(sv, "on")) ||
+                                       settings_peek("even_volume", ev, sizeof ev) || strcmp(ev, "off");     /* on unless off */
         FILE *f = fopen(own_volume_path(), "r"), *m = split ? fopen(music_volume_path(), "r") : NULL; int v;
-        if (!split && !unlink(music_volume_path())) fprintf(stderr, "volume: state/volume.music left over, the volumes are not separate\n");
+        if (!split && !unlink(music_volume_path())) fprintf(stderr, "volume: state/volume.music left over, the volumes are not separate, the steps not even\n");
         if (f && fscanf(f, "%d", &v) == 1 && v >= 0 && v <= 100) {
             volume = v;
             fprintf(stderr, "volume: %d (the Echo's own, set aside for a Bluetooth speaker)\n", volume);
         } else if (m && fscanf(m, "%d", &v) == 1 && v >= 0 && v <= 100) volume = v;     /* separate volumes */
-        else volume = read_volume();
+        else {
+            volume = read_volume();
+            /* MainVolume is still the volume (the first start with even steps, on by default after an update): kept
+             * at once, before mix_apply below makes it a point of the curve that a restart would take for the volume */
+            if (split) { char t[8]; snprintf(t, sizeof t, "%d\n", volume); statefile_write(music_volume_path(), 0644, t, strlen(t)); }
+        }
         if (f) fclose(f);
         if (m) fclose(m);
         unlink(own_volume_path());
@@ -2678,7 +2810,7 @@ void core_speaker(int mode, int pct)
         echo_own_volume = was;
         FILE *f = fopen(own_volume_path(), "w"); if (f) { fprintf(f, "%d\n", was); fclose(f); }
     }
-    if (mode == SPEAKER_NONE) { volume = echo_own_volume; if (vol_split) music_volume_keep(); }
+    if (mode == SPEAKER_NONE) { volume = echo_own_volume; if (!stream_owns_volume()) music_volume_keep(); }
     else if (mode == SPEAKER_ABSOLUTE) volume = pct < 0 ? 0 : pct > 100 ? 100 : pct;
     speaker_mode = mode;
     mix_apply();
@@ -2710,7 +2842,7 @@ static void volume_led(int v, int assistant)
 void core_set_volume(int v)
 {
     volume = clamp100(v);
-    if (vol_split && speaker_mode == SPEAKER_NONE) music_volume_keep();
+    if (!stream_owns_volume() && speaker_mode == SPEAKER_NONE) music_volume_keep();
     mix_apply();
     volume_led(volume, 0);
     fprintf(stderr, "volume: %d\n", volume);
@@ -2877,14 +3009,14 @@ static void volume_sync(void)
     if (speaker_mode == SPEAKER_ABSOLUTE) {                         /* 100 is ours: only a stray TTSVolume to mend */
         if (main_v == 100 && tts_v != 100) { tts_written = -1; mix_apply(); }
     } else if (volume == cur && mix_target() == want) {           /* nobody set it meanwhile */
-        if (main_v != want && !vol_split) {                         /* MainVolume is the volume: the user's wish */
+        if (main_v != want && stream_owns_volume()) {               /* MainVolume is the volume: the user's wish */
             volume = main_written = main_v;
             fprintf(stderr, "volume: %d (changed outside)\n", volume);
             if (connected && proto->volume_changed) proto->volume_changed(volume);
             if (core_sendspin_port) sendspin_volume_changed(volume);
             a2dp_volume_changed(volume);
         } else if (main_v != want) {                                /* the loudest of three: ours again */
-            fprintf(stderr, "volume: MainVolume %d changed outside, %d again (separate volumes)\n", main_v, want);
+            fprintf(stderr, "volume: MainVolume %d changed outside, %d again (%s)\n", main_v, want, vol_split ? "separate volumes" : "even steps");
             main_written = -1;
         }
         if (tts_v != mix_target()) tts_written = -1;               /* set by someone else: ours again */

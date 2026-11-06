@@ -350,7 +350,7 @@ unit-lux:
 unit-ring_band:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ring_band_test.c src/hassmic/ring_band.c src/hassmic/screen_none.c src/hassmic/ringdesign.c src/hassmic/statefile.c -lm -lpthread -o build/ring_band_test && build/ring_band_test
-# volcurve.c with each model's board.c: the curve where it was measured, the Dot 2's elsewhere
+# volcurve.c with each model's board.c: each names its curve, measured on it or the Dot 2's as a stand-in (a todo line)
 unit-volcurve:
 	@mkdir -p build
 	for d in $(patsubst devices/%/board.c,%,$(wildcard devices/*/board.c)); do \
@@ -367,9 +367,9 @@ unit-sounds:
 	@mkdir -p build
 	python3 tests/unit/sounds_zip.py build/sounds_dir build/sounds_test.zip
 	cc -O2 -Wall -Wextra -DSYNTH -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c -o build/sounds_test && build/sounds_test synth build/sounds_dir build/sounds_test.zip
-	if [ -d firmware/checkers/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c devices/checkers/board.c -o build/sounds_checkers && HASSMIC_EARCON_ROOT=firmware/checkers/rootfs build/sounds_checkers; else echo "sounds: firmware/checkers not unpacked, its apps' sounds skipped"; fi
-	if [ -d firmware/cronos/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c devices/cronos/board.c -o build/sounds_cronos && HASSMIC_EARCON_ROOT=firmware/cronos/rootfs build/sounds_cronos; else echo "sounds: firmware/cronos not unpacked, its apps' sounds skipped"; fi
-	if [ -d firmware/athena/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c devices/athena/board.c -o build/sounds_athena && HASSMIC_EARCON_ROOT=firmware/athena/rootfs build/sounds_athena; else echo "sounds: firmware/athena not unpacked, its apps' sounds skipped"; fi
+	if [ -d firmware/checkers/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c src/hassmic/volcurve.c devices/checkers/board.c -o build/sounds_checkers && HASSMIC_EARCON_ROOT=firmware/checkers/rootfs build/sounds_checkers; else echo "sounds: firmware/checkers not unpacked, its apps' sounds skipped"; fi
+	if [ -d firmware/cronos/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c src/hassmic/volcurve.c devices/cronos/board.c -o build/sounds_cronos && HASSMIC_EARCON_ROOT=firmware/cronos/rootfs build/sounds_cronos; else echo "sounds: firmware/cronos not unpacked, its apps' sounds skipped"; fi
+	if [ -d firmware/athena/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c src/hassmic/volcurve.c devices/athena/board.c -o build/sounds_athena && HASSMIC_EARCON_ROOT=firmware/athena/rootfs build/sounds_athena; else echo "sounds: firmware/athena not unpacked, its apps' sounds skipped"; fi
 # the dex programs against each model's own firmware that runs them, where it is unpacked here (CI: the dex only):
 # wifictl.dex where Android's framework runs (device.conf ANDROID), ringbar.dex with the band (SCREEN_BAND)
 frameworks = $(foreach m,$(patsubst devices/%/device.conf,%,$(shell grep -l '^$(1)' devices/*/device.conf)),$(if $(wildcard firmware/$(m)/rootfs/system/framework),--framework=firmware/$(m)/rootfs))

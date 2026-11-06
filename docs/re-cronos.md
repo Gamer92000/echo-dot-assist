@@ -82,7 +82,7 @@ Volume A` 127 of 0..127).
 ## The rest
 
 - Not tried on this Echo: the light ring designs on the band (`ring_band.c`, as on checkers, where they are), and its
-  volume curve: separate volumes take the Echo Dot 2's (`board.volume_curve` unset) until `tools/vol-curve.py` has
+  volume curve: separate volumes take the Echo Dot 2's (`board.volume_curve = board_vol_dot2`, the stand-in) until `tools/vol-curve.py` has
   measured it. Likely checkers' (the same build and amplifier family), not assumed.
 
 - Screen UI (2026-11-03, on the PC only): built as on checkers (`device.mk` `SCREEN`). The framework is checkers' (the

@@ -141,6 +141,21 @@ System) off takes any certificate, but then anyone on your network could slip th
       data:
         message: "Timer {{ states('sensor.kitchen_echo_ringing_timers') }} is ringing in the kitchen"
   ```
+- Running timers show up in Home Assistant too. A timer you set by voice is Home Assistant's own (Assist keeps it),
+  but it is no entity there: Home Assistant only tells the Echo that set it. So the Echo passes it on as three sensors:
+  "Next timer" is when the running timer that ends first ends (a timestamp), "Next timer name" its name (empty for
+  "set a timer for 5 minutes") and "Next timer length" the length it was set for, in seconds (time added or taken off
+  later does not change it). They follow the timer as it starts, pauses, resumes, gets time added or taken off, is
+  cancelled or rings; while none runs they are unknown. A paused timer is left out, so with only paused ones they are
+  unknown too. Should Home Assistant restart while a timer runs, it forgets the timer and never rings it; the Echo drops
+  it 10 seconds after its end. As a timestamp, "Next timer" stays put while the timer runs, so a countdown on a
+  dashboard or another device costs no update per second:
+
+  ```yaml
+  # seconds left on the kitchen's next timer, for a template sensor or a display
+  "{{ (as_timestamp(states('sensor.kitchen_echo_next_timer')) - now().timestamp()) | round(0) | int(0) if
+      has_value('sensor.kitchen_echo_next_timer') else 0 }}"
+  ```
 
 ## Wake word
 
@@ -519,6 +534,19 @@ and the action button pauses and resumes.
   ticked in the Echo's ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure). Without it
   you hear the chime only. "Bluetooth announcements" on the settings page turns both off and picks their language.
 
+### Even volume steps
+
+Each point of the volume is the same step, wherever it is set from (Home Assistant, Music Assistant, the buttons, the
+page): 0.5 dB a point, 5 dB a press of the volume buttons, from 1 (about 50 dB under full, quiet but heard) to 100
+(full, as before); 0 is silent. A stock Echo's steps are uneven: the Echo Show 5 has 31 volume steps of its own for
+the 100 points (three or four points play the same) and puts 46 dB in the bottom half and 20 in the top; the Echo
+Dot 2 gains 1 dB from 60 to 70 and 10 from 90 to 100. The Echo sets its own volume to the nearest step above, by its
+measured curve, and turns the sound down the rest of the way itself; on these Echos, whose speakers play 16-bit
+audio, that loses nothing. Low volumes are louder than on a stock Echo (an Echo Show 5's 10 is 45.5 dB under full
+instead of 51) and middle ones somewhat quieter (50 is 25 dB under full instead of 20 to 22). "Even
+volume steps" (Sound page, Speaker card; exported) switched off brings the Echo's own steps back. A Bluetooth
+speaker that sets its own volume is set to the number as before. On by default.
+
 ### Separate volumes
 
 The settings page's Volume card (Sound) sets the Echo's volume, the same one as the volume buttons and Home
@@ -540,7 +568,7 @@ the music: the media player's volume and the volume buttons change both. Home As
 Copying settings to another Echo (Export, Compare & copy) takes the switches and the offsets, never a volume itself:
 like the Echo's volume, that is for the room it is in.
 
-The same number sounds the same on every slider, and as that volume on a stock Echo (measured on an Echo Dot 2,
+The same number sounds the same on every slider, and (with [even volume steps](#even-volume-steps) off) as that volume on a stock Echo (measured on an Echo Dot 2,
 within 0.3 dB, and on an Echo Show 5, whose volume steps are its own: its top end is much flatter and its bottom end
 steeper than the Dot's; the other models use the Dot's until someone measures theirs with `tools/vol-curve.py`). The volume buttons change what is playing: a Drop In call, a reply (the ring shows the steps in cyan),
 a ringing timer, otherwise the music. On a Bluetooth speaker that sets its own volume (absolute volume) the speaker is
@@ -601,6 +629,7 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 | LED auto brightness, LED brightness | a level holds the ring there and switches the automatic off (Echo Show 5: the band's brightness, no automatic) |
 | Timer ringing, Ringing timers | on while a finished timer rings; their names (diagnostic), see [Voice](#voice) |
 | Stop ringing | button: ends a ringing timer and nothing else |
+| Next timer, Next timer name, Next timer length | the running timer that ends first: when (timestamp), its name, the length it was set for (s); unknown while none runs, see [Voice](#voice) |
 | Button | event: each press and 1 s hold of the action and volume buttons, see [Buttons and light ring](#buttons-and-light-ring) |
 | Light ring | light: colour, brightness, effects; the Echo's own lights first, see [Buttons and light ring](#buttons-and-light-ring) |
 | Firmware | update entity, see [Updating](../README.md#updating) |

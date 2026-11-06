@@ -111,7 +111,7 @@ for the uninstall. Init loads the patched file at boot (the plat-and-mapping sha
 - Not confirmed on this Echo: Improv, the factory reset, `--uninstall` and the online update
   check.
 - The speaker's volume curve (TAS5805m digital volume, no dB table: 0.5 dB a step assumed), and with it separate
-  volumes' (`board.volume_curve` unset: the Echo Dot 2's) until `tools/vol-curve.py` has measured it.
+  volumes' (`board.volume_curve = board_vol_dot2`: the Echo Dot 2's as a stand-in) until `tools/vol-curve.py` has measured it.
 - The light ring designs on the band (`ring_band.c`, as on checkers, where they are): not tried here.
 - The screen UI on the Echo (below).
 

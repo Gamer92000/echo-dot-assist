@@ -49,7 +49,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ha_esphome.py     # ESPHome native API, as Home Assistant: entities, settings, voice assistant,
                                              # replies, announcements (HTTP, HTTPS); the rest of the API in five parts
                                              # (shared setup tests/esphome_common.py), each with an Echo of its own:
-.venv/bin/python tests/fake_ha_esphome_timers.py   #   timers, encryption, clock and zone, noise reduction, LEDs, light sensor
+.venv/bin/python tests/fake_ha_esphome_timers.py   #   timers (ringing, the next running), encryption, clock and zone, noise
+                                                   #   reduction, LEDs, light sensor
 .venv/bin/python tests/fake_ha_esphome_features.py #   sound detection (HASSMIC_FAKE_SOUND_WINDOW: 3 s windows), Wi-Fi motion
 .venv/bin/python tests/fake_ha_esphome_buttons.py  #   runs cancelled while HA thinks or streams, the "Button" event entity
 .venv/bin/python tests/fake_ha_esphome_address.py  #   a new address: links closed, mDNS announced again
@@ -184,7 +185,10 @@ stops and names the sysctl, which the setup's `qemu_arm` asks to set).
 `devices/<codename>/` holds everything model-specific; porting guide in `devices/README.md`:
 - `device.mk`: NDK target, audio/wake backends, stock libs to link (included by the Makefile).
 - `board.c`: `struct board` (`src/hassmic/board.h`): HA identity, keypad/mute-latch/BT device paths, stock wake word
-  and earcon paths, thermal zone, LED volume steps, speaker gain control. Linked into every hassmic build, host builds included.
+  and earcon paths, thermal zone, LED volume steps, volume curve, speaker gain control. Linked into every hassmic build, host builds included.
+  `volume_curve` is required and every model must have its own, measured on it (`devices/README.md` "Volume curve");
+  until then `board_vol_dot2` stands in under a comment saying so, and `make unit-volcurve` prints a `todo` per such
+  model. A new model comes with its own curve or a `PLAN.md` entry saying it is missing.
 - `device.conf`: shell vars (product/firmware id, probe files, `INSTALL` method, daemon user/groups, stock service
   names). Sourced by PC scripts and shipped to the Echo next to `main.sh`/`lockdown.sh`/`alexa-off.sh`; push bundles
   carry it, and `main.sh` refuses a bundle whose `PRODUCT` is not the Echo's.
@@ -204,14 +208,17 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   timerDefault; the blip where the firmware has none), its alarm tone, the blip at the same loudness (`BEEP_PEAK`,
   -16.5 LUFS), or the page's upload `state/timer_sound.wav`, which the browser converts to 48 kHz mono WAV and offers
   to bring to that loudness (`web/loudness.js`, BS.1770; `tests/unit/web_loudness_test.py`): the Echo only checks the
-  format; looped by `play_earcon_while`, cut by any stop, a pipeline or our sounds; issue #63), mute (hardware latch
+  format; looped by `play_earcon_while`, cut by any stop, a pipeline or our sounds; issue #63; running timers from
+  HA's started/updated events kept by id with their end on the monotonic clock, `core_timer_next` the active one
+  ending first for the "Next timer" entities, a timer HA never finished dropped `TIMER_STALE_MS` after its end by the
+  earcon thread), mute (hardware latch
   that software can set but never clear, plus a soft mute from HA), volume, LED ring, earcons (one's own in place of
   stock's: `state/sounds/<id>.wav`, sounds.c `sound_own_*`, the page's Sounds card), wake word threshold hints.
   Separate volumes (setting `separate_volumes`, issue #32):
   music (`volume`), replies, sounds, timers, Drop In calls at volumes of their own or each following the music's +- an offset in
   points (`<kind>_linked`/`_offset`; linked, its HA number is unlisted); MainVolume and TTSVolume both at the loudest
   (libasp's own volume, which boosts the top end, follows the last of them set), each kind turned down in its PCM by
-  the measured curve (`volcurve.c`: `board.volume_curve`, the Dot 2's where none, `tests/unit/volcurve_test.c` per model; `audio_music_gain`, `audio_tts_gain`, the earcon thread); HA's `play_media` is music
+  the model's curve (`volcurve.c`: `board.volume_curve`, the Dot 2's `board_vol_dot2` standing in where not measured yet, `tests/unit/volcurve_test.c` per model; `audio_music_gain`, `audio_tts_gain`, the earcon thread); HA's `play_media` is music
   though on the TTS stream (`core_tts_begin`'s `media`, `tts_kind`). docs/re-platform.md has the measurements. The front end is told when a command is spoken (`listening()`:
   without it its cancellers remove the talker after 1.5 s). `earsup.c` (wake sound removal: our own UI sounds taken back
   out of the pipeline's audio by a residual echo suppressor keyed to the PCM we play; experimental, setting
@@ -443,8 +450,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `artifact-install.sh migrate` (main.sh, every satellite start): wake word folders under the short name (`echo-de`,
   from installs by hand) renamed to artifacts.sh's (`echo-de-DE`) where the language has one region; `state/wake_word`
   follows.
-- **Clock and log stamps** (`clock.c`): `proto_esphome.c` asks HA for the time (GetTimeRequest) on keyed links (on
-  subscribe, then every 6 h on pings); `clock_from_ha` leaves `<epoch> <boottime s.cs>` in `state/clock`, root's
+- **Clock and log stamps** (`clock.c`): `proto_esphome.c` asks HA for the time (GetTimeRequest) on every link (on
+  subscribe, then every 6 h on pings; the clock takes keyed links' answers only, any does for "Next timer"'s end,
+  `ha_time`); `clock_from_ha` leaves `<epoch> <boottime s.cs>` in `state/clock`, root's
   `main.sh` `clock_set` (netwatch) sets clock + RTC and `hassmic.clock.synced`. `clock_log_start()` (first in `main()`
   after options) turns stderr/stdout into a pipe to a double-forked reader that stamps lines and drops known Amazon
   noise; it ignores hassmic's signals and ends at EOF. Never make it hassmic's direct child (Amazon's DHA module waits
