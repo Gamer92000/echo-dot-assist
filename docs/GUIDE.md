@@ -142,6 +142,33 @@ System) off takes any certificate, but then anyone on your network could slip th
         message: "Timer {{ states('sensor.kitchen_echo_ringing_timers') }} is ringing in the kitchen"
   ```
 
+### The Echo's own voice
+
+On an Echo Show 5, hassmic can speak with Fire OS's offline voice engine (Ivona), which the firmware carries without a
+voice: `tools/davs-fetch.py tts [voice|list]` fetches one from Amazon (public, no login: Nina, American English, is
+289 MB) and [docs/re-ivona.md](re-ivona.md) says where it goes on the Echo. Once one is there (the Voice settings show
+these only then):
+
+- **Say what went wrong** (on): a failed request is answered in words beside the red light, naming the part that
+  failed and, when Home Assistant names it, the service and how ("Sorry, I couldn't reach Oh lama.", "Sorry, Open A I
+  took too long to answer."); also when the wake word is heard while Home Assistant is not connected, or it does not
+  answer within 30 seconds. Quiet while muted or in Do not disturb.
+- **Replies in the Echo's own voice** (off): Home Assistant's replies spoken on the Echo from their text instead of
+  the audio of Home Assistant's text to speech, which is never downloaded: they start sooner (a fifth of a second
+  after Home Assistant has the answer) and need no text-to-speech engine. English voices read other languages with an
+  English accent. A long AI answer that Home Assistant streams: with the Echo as the voice assistant's text-to-speech,
+  each sentence is said the moment the AI has written it, so the answer starts while the rest is still being written;
+  with another text-to-speech (Piper, a cloud), the Echo says the whole answer once it is complete. The Echo learns
+  which it is after one such answer, and looks again every 20th, so after switching the text-to-speech to the Echo it
+  may take up to 20 long answers until they are spoken sentence by sentence. "Alexa, stop", the wake word and the
+  action button cut a streamed answer as any other; the rest of it is not said. Rarely, a `tts.speak` with the Echo's
+  voice for another speaker sent in the moment an answer starts streaming is said here instead, and that answer is
+  said whole at its end.
+- **The Echo's voice**: which installed voice speaks (about 5 s to switch). Alarm answers and Bluetooth
+  announcements use it too, and Home Assistant's Wyoming integration finds it (port 16710) as a text-to-speech
+  service, for the voice assistant and for `tts.speak` to any speaker; it takes text as it is written, each sentence
+  made as soon as it is complete.
+
 ## Wake word
 
 Three engines, picked under "Wake word" on the [settings page](#settings-page):
@@ -325,10 +352,54 @@ Calls are refused with do not disturb on, with the microphones off, or with anot
 Home Assistant say why. The sound goes straight between the two Echos (UDP 28932, Opus, encrypted): no cloud, no Home
 Assistant in between.
 
+**Video between Echo Shows.** A call between two Echo Shows carries each one's camera to the other's screen, full
+screen, while that Show's **Camera: Home Assistant and video calls** setting is on and its lens open (its red dot
+shows while it sends). The camera serves one at a time: while a call has it, Home Assistant's live view of that Echo
+waits, and a call started while someone watches the live view gets its picture once they stop. An Echo without a screen is never sent a picture, and nothing changes for calls with a Dot. A lost bit of
+the picture on the way freezes it until the next whole picture comes (at most a second). The picture goes when the
+call ends, however it ends.
+- **Frosted at first**: the Show that drops in sees the other one's picture blurred for its first 3 seconds, clearing
+  over the next, unless that Show rang and someone answered it with its button. Whoever is dropped in on has a
+  moment before they are seen, as with Amazon's Drop In.
+- **Your own picture** is small in the bottom right corner while your Show sends its camera, mirrored as a mirror is:
+  it is what the other side gets.
+
 **Echo.** The Echo puts Amazon's audio front end into its call mode, whose echo canceller works on the other side's
 voice. What it leaves would still come back to the other Echo, so an Echo sends its room only while someone there
 talks; while the other side talks it is turned down 25 dB. Two people talking at the same time work only if the
 one here is clearly louder than the echo of the other: as on a speakerphone, take turns.
+Whether someone here talks is decided by a speech detector (RNNoise), not by loudness: the Echo Show's microphone puts
+speech from across the room at its room's own noise level. **Quiet between words in calls** (settings page, under Drop
+In) sets how far the microphone goes down between them: Full (25 dB, the default), Light (10 dB: a little of the room's
+hiss in the pauses), or Off (the room all along, and the other side may hear itself faintly). It takes effect at once,
+in a running call too.
+
+### Drop In from Home Assistant (Echo Show)
+
+From a dashboard, with the Echo Local integration: the Echo Show's picture and sound in the browser, your
+microphone on the Echo. Add the card **Echo Drop In** (`type: custom:echo-local-call-card`, `entity:` the Echo's camera
+entity) and press **Drop In**.
+
+- **The Echo takes it like a Drop In from another Echo**: at once, or ringing until someone presses its button
+  ("Drop In answers"); Do not disturb, the microphone button and Drop In off refuse it. Its button, "stop" or "hang
+  up" ends it, as does **Hang up** in the card.
+- **The picture** comes while "Camera: Home Assistant and video calls" is on and the lens is open, with the red dot on the Echo's
+  screen; without it the call has sound only. A few hundred ms behind (the browser decodes the Echo's video itself),
+  where the camera entity's live view runs seconds behind. Frosted for its first 3 seconds unless the Echo rang and
+  was answered with its button, as between Shows; the Echo shows your picture as it comes (you called), and its own
+  small in its corner while it sends.
+- **Your microphone starts muted** in every call: the button over the picture (bottom left) turns it on and off, so
+  nothing of your room reaches the Echo until you press it.
+- **Your camera on the Echo's screen**: the **Camera** button beside it (Echo Shows that show a call's picture: the
+  Show 5 so far) sends this device's camera to the Echo, full screen there, your own picture small in the card's
+  corner. Off at the start of every call. Needs a browser that encodes H.264 with WebCodecs (Chrome, Edge, Safari,
+  the Companion app); the card says so where it cannot.
+- **Your microphone and the Echo's picture** need Home Assistant opened over https (Nabu Casa, a proxy with a
+  certificate) or in the Companion app: browsers allow neither on a plain http page. There the call is the Echo's
+  sound only, and the card says so. The picture needs a browser with WebCodecs (Chrome, Edge, Firefox 130 and later,
+  Safari 16.4 and later, the Companion app).
+- **Who may call**: anyone logged in to Home Assistant who sees the dashboard; not the Echos' own screens (the kiosk
+  users Echo Local makes). The call goes encrypted between Home Assistant and the Echo.
 
 ## Buttons and light ring
 
@@ -461,12 +532,21 @@ satellite of its own has to run without its microphone (as a display) while hass
   room. A request to the assistant, a ringing timer or a Drop In bring the face back from the music.
 - **The drawer**: pull down from the top edge of the screen, whatever shows, as on Amazon's own Echo Show. In it:
   **Home** (the home app), **Face** (where the home app is another), **Music**, **Do not disturb**, **Screen off** (a
-  touch wakes it), what plays (tap it for the music) and the Echo's volume. Over an app, start the pull on the thin
-  black strip along the top of the screen: the app never gets that touch, so it does not scroll or refresh. Pulled over
-  an app, the drawer shows on a picture of it; close it (tap below it, or push it up) and the app is back as it was.
-- **The home app**: the settings page's **Screen** page picks what the Echo shows at start and brings back when it
-  ends or crashes (three times a minute at most), but not while you have the face or the music open: Kiosk Satellite
-  until you pick another (if it is installed), the face, or any app you installed. A new choice applies at once.
+  touch wakes it), what plays (tap it for the music), the Echo's volume, and below, the **app switcher**: the home
+  app's own pages (Echo-Wall's Home, a Home Assistant dashboard, a web page of yours, as Echo Local names them) and every app
+  you installed (swipe the row sideways when there are many). Over an app, pull from the middle of the top edge: the
+  app never gets that swipe, so it does not scroll or refresh, while a tap there, or a swipe sideways, is still the
+  app's. hassmic holds a touch that starts there back from the app for a moment (a tap goes on as you lift your
+  finger) until it is clear whether it is a pull; apps keep the whole screen. Pulled over an app, the drawer shows on
+  a picture of it; close it (tap below it, or push it up) and the app is back as it was.
+- **A timer or an alarm ringing over an app** brings the face with its **Stop** over it, and the app comes back once
+  nothing rings, unless the app draws the ring itself (Echo-Wall does: it says so to the Echo, docs/screen-apps.md).
+- **The home app**: the settings page's **Screen** page (or Echo Local in Home Assistant, below) picks what the Echo
+  shows at start and brings back when it ends or crashes (three times a minute at most), but not while you have the
+  face or the music open: Kiosk Satellite until you pick another (if it is installed), the face, or any app you
+  installed (Echo-Wall, Home Assistant's own app, a browser). A new choice applies at once; the last one made, on the
+  page or in Home Assistant, counts. An app made for hassmic (Echo-Wall) also gets Home Assistant's address and a
+  login of its own from the Echo, and opens the screen picked in the drawer.
 - **Back**: over an app, swipe along the bottom edge (the light band), left or right.
 
 ### Music Assistant on the screen
@@ -498,7 +578,114 @@ address, left empty, is taken from the Music Assistant that plays on the Echo wh
 the token only ever goes there, so a Music Assistant that moves needs **Connect…** again (or its address given).
 Until then those tabs say how to connect.
 
+## Clock and alarms
+
+**Alarms** ring on the Echo itself, on its own clock (which Home Assistant sets; until it has, none rings), with or
+without Home Assistant. Home Assistant has no alarms of its own.
+
+- **By voice** ("Answer alarm requests on the Echo", on by default): "<wake word>, set an alarm for 7 AM", "wake me up
+  at 6:30 tomorrow", "set an alarm for quarter to 8", "set an alarm for 6:45 on weekdays", "wake me up every day at
+  7", "set an alarm every Monday and Friday at 5:30", "wake me up in 20 minutes", "what alarms do I have", "when is my
+  alarm", "change my alarm to 6:30" (the next one, its days kept), "cancel my alarm" (the next one), "cancel the 7 AM alarm",
+  "cancel all alarms". A time without AM or PM is
+  the next time it comes ("7" said at 2 PM is 7 PM today), with a day said the morning. The Echo answers these itself
+  and Home Assistant never sees them; the answer is spoken through `assist_satellite.announce`, which needs "Allow the
+  device to perform Home Assistant actions" ticked in the device's options in Home Assistant, and shows on an Echo
+  Show's screen. English sentences; "snooze" and "stop" in any case. Requests about an alarm system ("disarm the
+  alarm", "arm the alarm system", "the smoke alarm") stay Home Assistant's.
+- **On the settings page** ("Clock & alarms"): the list, Add, Edit (time, the days it repeats on, a label), a switch to
+  turn one off, Delete; Snooze and Stop while one rings.
+- **From Home Assistant** ("Alarms" in Features is on by default): `esphome.<node>_set_alarm` (time "07:30", "7:30
+  pm" or "in 20 minutes"; days "weekdays", "weekends", "daily", "mon, fri" or empty for once; a label) and
+  `esphome.<node>_delete_alarm` (which: "next", "all", its id or its time), for automations and AI agents' tools.
+  Entities: "Next alarm" (a timestamp: a dashboard counts down to it, a trigger "10 minutes before" turns the lights
+  on), "Alarms" (the list), "Alarm ringing", the button "Snooze alarm", and the event entity "Alarm" with the types
+  `ringing`, `snoozed`, `stopped`, `rang_out`, `set`, `deleted`, `not_understood`. "Stop ringing" stops alarms too.
+
+A ringing alarm:
+
+| | Snooze | Stop |
+|---|---|---|
+| Voice | "<wake word>, snooze" | "<wake word>, stop", "cancel the alarm" |
+| Echo Dot | a volume key ("Volume keys while an alarm rings": Snooze) | the action button |
+| Echo Show | a volume key | both volume keys together, **Stop** on the screen |
+| Home Assistant | "Snooze alarm" | "Stop ringing", the media player's stop |
+
+It plays "Alarm sound" (Alexa's alarm tone; Alexa's timer tone, the beep, or the sound uploaded for timers), starts at
+a fifth of the timer volume and comes up to it over "Alarms start quietly" (30 s), then, while nobody answers it, keeps
+getting louder by "Unanswered alarms get louder" (10 points of volume a minute) up to the loudest the Echo plays
+(music and replies keep their own volume meanwhile, and everything is as before once it is stopped or snoozed). It
+rings for "Alarms ring for" (10 min; all the way left: until stopped) and snoozes for "Snooze" (9 min). It rings in Do not disturb too. A once alarm
+that was stopped or rang out turns itself off; a repeating one goes on to its next day. One missed by a restart (an
+update) less than 5 minutes ago still rings after it. "Clock": 7:30 AM or 07:30, automatic by the time zone.
+
+**The Home Assistant integration and card.** The esphome integration shows "Next alarm" and the rest; to see every
+alarm and change them from Home Assistant, add the Echo Local integration (`custom_components/echo_local` of this
+repository): copy that folder into Home Assistant's `config/custom_components/` (or add this repository to HACS as a
+custom repository of type Integration), restart Home Assistant, then Settings → Devices & services → Add integration →
+"Echo Local" (or Configure on the Echo it found by itself). Give the Echo's address; Home Assistant then
+waits for the Echo to let it in, as a browser on its settings page does: press the action button (an Echo Show: both
+volume keys together) and Submit. It adds:
+
+- a switch per alarm (on: it rings; off: kept), with its time, days, label and next ring as attributes;
+- the actions `echo_local.add_alarm` (time, days, label), `echo_local.edit_alarm` and `echo_local.delete_alarm` (on an alarm's
+  switch), `echo_local.snooze` and `echo_local.stop`;
+- the dashboard card "Echo alarms" (`type: custom:echo-local-alarms-card`, `device_id:` the Echo, optional `title:`), loaded
+  by the integration itself: the alarms with their switches, tap one to change its time, days and label or delete
+  it, "Add alarm", and Snooze and Stop while one rings.
+
+Home Assistant 2026 keeps each integration's devices apart, so the Echo shows as two devices with the same name (and
+MAC): the esphome one and hassmic's. Should the Echo forget Home Assistant (a factory reset, its login revoked on the
+settings page), Home Assistant raises a repair: Submit, press the button.
+
+### Home Assistant on the screen
+
+An Echo Show can show Home Assistant itself, through its **home app**. Any Android app can be the home app; one made
+for hassmic speaks a small contract with the Echo ([docs/screen-apps.md](screen-apps.md)): it gets Home Assistant's
+address and a login of its own from the Echo, the pages it should offer, and what to draw (a request's words, a
+ringing alarm) if it would rather draw them in its own look. **Echo-Wall** ([Nt-f/Echo-Wall](https://github.com/Nt-f/Echo-Wall),
+Flutter, an app of its own with a Home Assistant integration of its own) is one: frosted-glass cards over a photo,
+a page per room, a lock screen with the time and the next alarm; its README says how to install it, or
+Echo Local's *Screen* tab installs it (below). Kiosk Satellite
+(Home Assistant's dashboards in a browser of its own) is the other choice, and it is set up by the guided setup.
+
+It is set up from Home Assistant, in the Echo Local integration (the one for the Echo's alarms): **Echo Local** in the
+sidebar › the Echo › *Screen* (or *Settings › Devices & services › Echo Local › Configure*). Pick the **App** (the
+same choice as the settings page's Screen page; Echo-Wall picked but not on the Echo yet: **Install Echo-Wall**
+fetches its newest release from GitHub through Home Assistant and installs it, the Echo itself staying off the
+internet), switch on **Connect it to Home Assistant**, and pick its **Pages in
+the drawer**: its own Home, a Home Assistant dashboard, a clock, a web page of yours (the drawer offers them by name,
+in its row of apps; music is the drawer's own **Music**, the Echo's Music Assistant player). The Echo has no keyboard
+to log in with, so the integration makes a Home Assistant user for it ("Echo Show 5 … kiosk": local network only,
+not an administrator unless you tick that) and hands the Echo a token of it, sealed for that Echo on the way; only
+the home app gets it, and deleting the integration's entry deletes the user. A line at the top of the tab says when
+Home Assistant last sent this to the Echo, or why it could not; **Send to the Echo again** sends it now with a fresh
+login. An Echo Local entry added anew (after removing the old one) takes over the screen the Echo shows by itself and
+sends it with a login of its own. With Echo-Wall as the app and its integration installed, a *Home* tab beside
+*Screen* arranges its Home (Echo-Wall's own panel).
+
+**Apps** (Echo Shows): the settings page's Screen page and Echo Local's *Apps* tab list the Android apps you
+installed beside the home app (a YouTube client such as NewPipe), each with an **Internet** switch (the Echo keeps
+every app off the internet until you allow it), an **Open ports** switch (the Echo keeps everything on your network
+away from an app until you allow it; then only the ports that app listens on, from your own network: a DLNA renderer
+that phones play to, a cast receiver) and **Remove**. **Add an app**: an APK from your computer, or a file Home
+Assistant can read (`/config/www/app.apk`); it must be built for 32-bit ARM (armeabi-v7a) and Android 7.1 on the Echo
+Show 5; Android's reason is shown when it refuses one. The action `echo_local.install_apk` (device, path) does the same
+from an automation. New apps show in the drawer's row by themselves. Where the Echo has no working keyboard, the home
+app's (Echo-Wall ships one) becomes the one in use.
+
+A ringing timer or alarm shows over the home app as it does over any app (the face with Stop), unless the app draws it
+itself (Echo-Wall draws a request's words and a ring in its own look; a tap on its ring snoozes, a hold stops). The
+Echo reaches local addresses only, so Home Assistant's address for it is its local one (the Screen tab shows which;
+Home Assistant Cloud's is not reachable from the Echo).
+
 ## Music
+
+Said to an Echo that plays music itself (Music Assistant or a phone), "pause", "resume", "next", "previous",
+"volume up", "louder", "quieter" and "set the volume to 5" (Alexa's 0 to 10; "volume 45" is 45 %) are carried out on
+that Echo at once, without Home Assistant, which otherwise only knows the player by the satellite's area and asks
+which one. Volume requests always set this Echo's volume. What the Echo does not play itself ("pause" with the TV on)
+stays Home Assistant's. While the Echo listens, its music is turned down to a sixth, gliding over 30 ms each way.
 
 One source at a time, the newest wins: a phone starting over Bluetooth pauses Music Assistant (the whole group), Music
 Assistant starting on the Echo pauses the phone. The voice assistant ducks both. "<wake word>, stop" pauses either,
@@ -518,6 +705,19 @@ and the action button pauses and resumes.
   <phone>": Home Assistant speaks those words, and only once "Allow the device to perform Home Assistant actions" is
   ticked in the Echo's ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure). Without it
   you hear the chime only. "Bluetooth announcements" on the settings page turns both off and picks their language.
+
+### Even volume steps
+
+Each point of the volume is the same step, wherever it is set from (Home Assistant, Music Assistant, the buttons, the
+page): 0.5 dB a point, 5 dB a press of the volume buttons, from 1 (about 50 dB under full, quiet but heard) to 100
+(full, as before); 0 is silent. A stock Echo's steps are uneven: the Echo Show 5 has 31 volume steps of its own for
+the 100 points (three or four points play the same) and puts 46 dB in the bottom half and 20 in the top; the Echo
+Dot 2 gains 1 dB from 60 to 70 and 10 from 90 to 100. The Echo sets its own volume to the nearest step above, by its
+measured curve, and turns the sound down the rest of the way itself; on these Echos, whose speakers play 16-bit
+audio, that loses nothing. Low volumes are louder than on a stock Echo (an Echo Show 5's 10 is 45.5 dB under full
+instead of 51) and middle ones somewhat quieter (50 is 25 dB under full instead of 20 to 22). "Even
+volume steps" (Sound page, Speaker card; exported) switched off brings the Echo's own steps back. A Bluetooth
+speaker that sets its own volume is set to the number as before. On by default.
 
 ### Separate volumes
 
@@ -540,7 +740,7 @@ the music: the media player's volume and the volume buttons change both. Home As
 Copying settings to another Echo (Export, Compare & copy) takes the switches and the offsets, never a volume itself:
 like the Echo's volume, that is for the room it is in.
 
-The same number sounds the same on every slider, and as that volume on a stock Echo (measured on an Echo Dot 2,
+The same number sounds the same on every slider, and (with [even volume steps](#even-volume-steps) off) as that volume on a stock Echo (measured on an Echo Dot 2,
 within 0.3 dB, and on an Echo Show 5, whose volume steps are its own: its top end is much flatter and its bottom end
 steeper than the Dot's; the other models use the Dot's until someone measures theirs with `tools/vol-curve.py`). The volume buttons change what is playing: a Drop In call, a reply (the ring shows the steps in cyan),
 a ringing timer, otherwise the music. On a Bluetooth speaker that sets its own volume (absolute volume) the speaker is
@@ -751,6 +951,35 @@ change counts. Tried in one flat for a few minutes and one night, where it mostl
 - **Through a kernel module of ours**: the Wi-Fi drivers do not report what this needs. Loaded only once you switch it
   on (within 10 s), then until the Echo restarts.
 - ESPHome only. It does not use the microphones; muting does not stop it.
+
+## Camera (Echo Show)
+
+Off by default. The Echo Show 5's camera as a camera in Home Assistant: live on dashboards, recordings, stills. Live
+view comes as HLS from Home Assistant's own stream integration (tested); WebRTC through its built-in go2rtc should
+work the same way, but nobody has tried it yet. It comes through the **Echo Local** integration (the same that brings the
+alarms and the screen's setup), not the ESPHome one, and only to it.
+
+- **Switch it on** under **Features** on the settings page ("Camera: Home Assistant and video calls"), or with the camera entity's
+  own on/off in Home Assistant. Echo Local adds the entity once its Echo has a camera; it is "idle" until someone looks.
+- **It runs only while someone looks**: a dashboard showing it live, a recording, a still. The Echo starts the camera
+  for them (about 2 s to the first picture) and stops it 10 s after the last one went.
+- **A red dot in the top right corner of the screen** shows while the camera sends pictures, over any app. The camera
+  cannot send without it: the dot belongs to the process that drives the camera.
+- **The lens cover** stops it at once, whatever is switched on; the entity says "lens covered" meanwhile. The
+  microphone button does **not** turn the camera off.
+- **Encrypted to Home Assistant alone**: the video is sealed with the key Echo Local shares with this Echo (the one the
+  action button approved). Nothing else on your network can watch, nor start the camera. Inside Home Assistant it is
+  handed on as plain video on 127.0.0.1 only; a go2rtc of your own on another machine cannot reach that.
+- **What it costs**: 1280x720 at 15 frames a second (fewer in a dark room), about 1 Mbit/s of Wi-Fi while it runs.
+  The Echo's hardware encodes it: 1 % of the processor for the camera and 1.5 % for hassmic sending it, measured on an
+  Echo Show 5.
+- A dashboard card that shows the camera's picture asks for a still every 10 s, which keeps the camera on as long as
+  the dashboard is open.
+- **One app at a time has the camera**: while another one holds it (Kiosk Satellite with "Kiosk Satellite camera" on,
+  say), a stream ends at once; the camera entity's `last_error` and the Echo's log say so.
+- Not in an export, so "make like this Echo" never switches a camera on elsewhere.
+
+Why Echo Local and not ESPHome's camera entity, which would have needed no integration: [docs/camera.md](camera.md).
 
 ## Settings page
 

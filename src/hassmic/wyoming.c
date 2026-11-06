@@ -44,8 +44,20 @@ int wy_read(struct wy_reader *r, struct wy_event *ev)
     wy_json_int(ev->json, "data_length", &data_len);
     wy_json_int(ev->json, "payload_length", &payload_len);
     if (data_len < 0 || payload_len < 0 || payload_len > WY_MAX_PAYLOAD) return -1;
+    ev->data_dropped = 0;
+    if (data_len && len + 1 + data_len >= WY_MAX_JSON) {
+        /* Home Assistant's whole-text "synthesize" beside a streamed one (its tts.py, for older servers) carries the
+         * whole reply, \u escaped: an LLM's long one passes 8 KB.  Skipped, the link goes on */
+        char skip[512];
+        for (long left = data_len; left > 0; ) {
+            size_t n = left < (long)sizeof skip ? (size_t)left : sizeof skip;
+            int rc = read_n(r->fd, skip, n);
+            if (rc <= 0) return rc;
+            left -= (long)n;
+        }
+        ev->data_dropped = 1; data_len = 0;
+    }
     if (data_len) {
-        if (len + 1 + data_len >= WY_MAX_JSON) return -1;
         ev->json[len++] = '\n';
         int rc = read_n(r->fd, ev->json + len, data_len);
         if (rc <= 0) return rc;

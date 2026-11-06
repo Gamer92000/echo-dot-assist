@@ -254,6 +254,7 @@ int main(int argc, char **argv)
     setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
     fb = calloc((size_t)W * H, 4);
     sc = scene_new(W, H, BAND, &plat, NULL, now);
+    t_apps(NULL);                                   /* the apps, as android.c lists them at start (the drawer's row) */
     scene_top(sc, UI_HOME_PKG, now);
     line("name Echo Show 5 fdd111"); line("home -"); line("web http://192.168.1.40:28931"); line("ev 40");
     run(500); png("face");

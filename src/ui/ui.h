@@ -55,7 +55,7 @@
 enum {
     A_NONE,
     A_POKE = 1, A_PLAYPAUSE, A_TOMUSIC, A_ANSWER, A_HANGUP, A_TIMERSTOP,               /* face.c */
-    A_DR_SHADE = 100, A_DR_HOME, A_DR_MUSIC, A_DR_DND, A_DR_SLEEP, A_DR_VOL, A_DR_PLAY, A_DR_NOW, A_DR_FACE,  /* drawer.c */
+    A_DR_SHADE = 100, A_DR_HOME, A_DR_MUSIC, A_DR_DND, A_DR_SLEEP, A_DR_VOL, A_DR_PLAY, A_DR_NOW, A_DR_FACE, A_DR_APP, A_DR_SCREEN,  /* drawer.c */
     A_M_TAB = 200, A_M_HOME, A_M_PLAY, A_M_PREV, A_M_NEXT, A_M_SHUFFLE, A_M_REPEAT, A_M_SEEK, A_M_VOL,  /* music.c */
     A_M_CAT, A_M_ITEM, A_M_BACK, A_M_DPLAY, A_M_DSHUF, A_M_DADD, A_M_DRADIO, A_M_QITEM, A_M_QDEL, A_M_QCLEAR,
     A_M_FIELD, A_M_KEY, A_M_CLEARQ, A_M_KBHIDE, A_M_SPK, A_M_SPKVOL, A_M_GVOL, A_M_LEAVE, A_M_SHEET, A_M_SHADE,
@@ -119,8 +119,10 @@ struct music {
 struct face { struct anim ew, lh, rh, gx, gy, mw, mh, ma, cr, cg, cb, br; long long blink_at, sacc_at, poke_at; float sgx, sgy, pokex; };
 /* pos 0 closed .. 1 open, t where it goes; pulling: a finger has it (grab: where on it); from_app: pulled over an app
  * (from), the picture of it under the drawer */
-struct drawer { float pos, t, grab, vy; long long ty; int pulling, from_app, go; char from[96], go_pkg[96];
-                long long vol_sent_at; int vol_drag; float vol_frac; };
+struct drawer { float pos, t, grab, vy; long long ty; int pulling, from_app, go, was_open;   /* was_open: the pull began on it open */ char from[96], go_pkg[96];
+                long long vol_sent_at; int vol_drag; float vol_frac;
+                struct scroller apps;                          /* the apps row, along */
+                char go_cls[80]; };                            /* how go_pkg is started (scene.h's launch: home:, screen:<name>) */
 
 /* ---------------------------------------------------------------- the scene */
 
@@ -148,8 +150,11 @@ struct scene {
     struct ui_image art; uint32_t art_avg;
     /* apps */
     struct ui_app *apps; int napps;
+    /* the home app's side of the contract (hassmic's kiosk.c): what it draws itself while in front (claim: 1 words,
+     * 2 a ring), its screens' names (the drawer's row), and the app a ring took the screen from (back after it) */
+    char claim_pkg[96], screens[400], ring_from[96]; int claim_mask;
     /* view */
-    int view, screen_on; char top[96]; long long now, last, want_home_until, relaunch[3];
+    int view, face_after, screen_on; char top[96];   /* face_after: the face once the app launched is in front */ long long now, last, want_home_until, relaunch[3];
     /* an app was launched: the last frame stays (the app's picture under the drawer, or our own screen) until the
      * app is in front, so that neither the face nor hassmic's black home activity shows in between */
     long long leaving_until; int leaving_drawn; char leaving_pkg[96]; int home_broken;   /* home_broken: it did not start */

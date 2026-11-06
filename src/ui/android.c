@@ -66,6 +66,7 @@
  * (checkers, 2026-11-02).  16 rows: 2 mm on the Show 5 and the Show 8 (195 and 189 ppi); a finger's swipe from the
  * bezel lands in them.  Ours to draw: black, a short handle in the middle */
 #define GRIP       16
+static int grip = GRIP;                 /* the grip's rows: 0 while the touch gate holds a pull from the apps (touch.h) */
 #define ICON_PX    96
 #define ART_MAX    (4 << 20)
 
@@ -78,7 +79,7 @@ static jclass c_rect, c_session, c_sc, c_surface, c_sm, c_pm_stub, c_amn, c_list
               c_bfactory, c_im, c_keyevent, c_clock, c_dmg, c_wm_stub, c_scb;
 static jmethodID m_below, m_rect, m_sleep, m_wake, m_bmp_copy, m_session, m_sc_init, m_open, m_close, m_layer, m_pos, m_show, m_hide, m_surface, m_copy,
                  m_service, m_pm_as, m_interactive, m_amn_default, m_tasks, m_start, m_size, m_get, m_cn_pkg,
-                 m_intent0, m_intent, m_cat, m_classname, m_package, m_flags, m_ipm_as, m_query, m_plist_get,
+                 m_intent0, m_intent, m_cat, m_classname, m_package, m_flags, m_extra_s, m_extra_b, m_ipm_as, m_query, m_plist_get,
                  m_tostring, m_am_init, m_am_add, m_am_close, m_res_system, m_res_dm, m_res_cfg, m_res_init,
                  m_res_text, m_res_draw, m_dr_bounds, m_dr_draw, m_bmp_create, m_bmp_crop, m_bmp_scale, m_bmp_recycle,
                  m_bmp_w, m_bmp_h, m_canvas, m_drawtext, m_tpaint, m_textsize, m_settf, m_measure, m_metrics,
@@ -144,6 +145,8 @@ static const struct { jmethodID *v; const char *c, *n, *s; int st, from, to; } m
     J(m_classname, "android/content/Intent", "setClassName", "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;", 0),
     J(m_package, "android/content/Intent", "setPackage", "(Ljava/lang/String;)Landroid/content/Intent;", 0),
     J(m_flags, "android/content/Intent", "addFlags", "(I)Landroid/content/Intent;", 0),
+    J(m_extra_s, "android/content/Intent", "putExtra", "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;", 0),
+    J(m_extra_b, "android/content/Intent", "putExtra", "(Ljava/lang/String;Z)Landroid/content/Intent;", 0),
     J(m_ipm_as, "android/content/pm/IPackageManager$Stub", "asInterface", "(Landroid/os/IBinder;)Landroid/content/pm/IPackageManager;", 1),
     J(m_query, "android/content/pm/IPackageManager", "queryIntentActivities", "(Landroid/content/Intent;Ljava/lang/String;II)Landroid/content/pm/ParceledListSlice;", 0),
     J(m_plist_get, "android/content/pm/ParceledListSlice", "getList", "()Ljava/util/List;", 0),
@@ -371,6 +374,17 @@ static jobject package_manager(JNIEnv *env)
     return failed(env, "package manager") ? NULL : pm;
 }
 
+/* the activities for an action and category, of one package or all: a List of ResolveInfo */
+static jobject resolve_all(JNIEnv *env, jobject pm, const char *pkg, const char *action, const char *cat)
+{
+    jobject i = (*env)->NewObject(env, c_intent, m_intent, (*env)->NewStringUTF(env, action));
+    (*env)->CallObjectMethod(env, i, m_cat, (*env)->NewStringUTF(env, cat));
+    if (pkg) (*env)->CallObjectMethod(env, i, m_package, (*env)->NewStringUTF(env, pkg));
+    jobject sl = (*env)->CallObjectMethod(env, pm, m_query, i, NULL, 0, 0);
+    jobject l = sl ? (*env)->CallObjectMethod(env, sl, m_plist_get) : NULL;
+    return failed(env, "queryIntentActivities") ? NULL : l;
+}
+
 /* the launcher activities, of one package or all: a List of ResolveInfo */
 static jobject launchers(JNIEnv *env, jobject pm, const char *pkg)
 {
@@ -385,11 +399,40 @@ static jobject launchers(JNIEnv *env, jobject pm, const char *pkg)
 static struct scene *the_scene;
 static int screen_on_ = 1;                                      /* poll_front's last look */
 
+/* The screen-app contract (docs/screen-apps.md): an app made for hassmic declares the action SCREEN and is started by
+ * it, with an extra that says what to show: "home" (the drawer's Home) or "screen" (one of its screens by name).
+ * cls "home:", "screen:<name>" or "contract:" (no extra: the home app back after it went) asks for that; an app
+ * without the action is started as launchers start it */
+#define SCREEN_ACTION "io.github.gamer92000.echodotassist.action.SCREEN"
+static int launch_contract(JNIEnv *env, jobject am, const char *pkg, const char *how)
+{
+    jobject pm = package_manager(env), l = pm ? resolve_all(env, pm, pkg, SCREEN_ACTION, "android.intent.category.DEFAULT") : NULL;
+    if (!l || (*env)->CallIntMethod(env, l, m_size) <= 0) return -1;
+    char c[200] = "";
+    jobject ri = (*env)->CallObjectMethod(env, l, m_get, 0), ai = (*env)->GetObjectField(env, ri, f_ri_ai);
+    cstr(env, (*env)->GetObjectField(env, ai, f_pi_name), c, sizeof c);
+    if (!c[0]) return -1;
+    jobject i = (*env)->NewObject(env, c_intent, m_intent, (*env)->NewStringUTF(env, SCREEN_ACTION));
+    (*env)->CallObjectMethod(env, i, m_classname, (*env)->NewStringUTF(env, pkg), (*env)->NewStringUTF(env, c));
+    if (!strcmp(how, "home:")) (*env)->CallObjectMethod(env, i, m_extra_b, (*env)->NewStringUTF(env, "home"), (jboolean)JNI_TRUE);
+    else if (!strncmp(how, "screen:", 7)) (*env)->CallObjectMethod(env, i, m_extra_s, (*env)->NewStringUTF(env, "screen"), (*env)->NewStringUTF(env, how + 7));
+    (*env)->CallObjectMethod(env, i, m_flags, (jint)0x10000000);   /* NEW_TASK; the app's singleTask keeps one copy */
+    jint r = (*env)->CallIntMethod(env, am, m_start, NULL, NULL, i, NULL, NULL, NULL, 0, 0, NULL, NULL, 0);
+    if (failed(env, "startActivityAsUser (SCREEN)") || r < 0) return -1;
+    return 0;
+}
+
 static void p_launch(void *ctx, const char *pkg, const char *cls)
 {
     (void)ctx; JNIEnv *env = ui_env;
     if ((*env)->PushLocalFrame(env, 32)) return;
     char c[200] = "";
+    if (pkg && cls && (!strcmp(cls, "home:") || !strcmp(cls, "contract:") || !strncmp(cls, "screen:", 7))) {
+        jobject am = activity_manager(env);
+        if (am && !launch_contract(env, am, pkg, cls)) goto out;
+        (*env)->ExceptionClear(env);
+        cls = NULL;                                              /* not made for hassmic: as launchers start it */
+    }
     if (pkg && (!cls || !cls[0])) {                              /* the package's own launcher activity */
         jobject pm = package_manager(env), l = pm ? launchers(env, pm, pkg) : NULL;
         if (l && (*env)->CallIntMethod(env, l, m_size) > 0) {
@@ -709,7 +752,7 @@ static void p_screenshot(void *ctx)
     if (px) {
         for (int y = 0; y < layer_h; y++)
             for (int x = 0; x < disp_w; x++) {
-                int ax, ay, ly = y + GRIP;                       /* the natural panel's pixel for (x, y) of the layer */
+                int ax, ay, ly = y + grip;                       /* the natural panel's pixel for (x, y) of the layer */
                 switch (disp_rot) {
                 case 1: ax = nw - 1 - ly; ay = x; break;
                 case 2: ax = nw - 1 - x; ay = nh - 1 - ly; break;
@@ -938,12 +981,20 @@ static void *ui_main(void *arg)
      * an app that turns it (Kiosk Satellite can, docs/kiosk-satellite.md) is turned back by root's kiosk_tick within
      * 10 s, meanwhile the grip, the band's Back and the drawer map as in landscape */
     int W = (*env)->GetIntField(env, di, f_di_w), H = (*env)->GetIntField(env, di, f_di_h), rot = (*env)->GetIntField(env, di, f_di_rot);
-    int h = H - band - GRIP;
+    /* the touch screen first: through the gate (touch.h), a pull from the top over an app is the drawer's alone with no
+     * rows taken from the apps for it; where the gate does not come up (no uinput, HMUI_TOUCHGATE=0), the grip */
+    const char *tg = getenv("HMUI_TOUCHGATE");
+    struct touch t = { .rot = rot, .W = W, .H = H, .gate = !tg || strcmp(tg, "0"), .screen_on = &screen_on_, .interactive = interactive, .wake = touch_wake };
+    char tn[160];
+    int topen = touch_open(&t, tn, sizeof tn);
+    if (topen >= 0 && t.gate) grip = 0;
+    t.grip = grip;
+    int h = H - band - grip;
     disp_w = W; disp_h = H; disp_rot = rot; layer_h = h;
-    if (W <= 0 || h <= 0 || layer_make(env, &screen_l, "hassmic-screen", W, h, GRIP, LAYER)) { say("no layer"); exit(5); }
-    overscan(env, rot, band, GRIP);                             /* band 0: none along the bottom */
-    if (band > 0 && layer_make(env, &band_l, "hassmic-band", W, band, GRIP + h, BAND_LAYER)) say("no band layer");
-    if (layer_make(env, &grip_l, "hassmic-grip", W, GRIP, 0, BAND_LAYER)) say("no grip layer"); else grip_draw(env, 0);
+    if (W <= 0 || h <= 0 || layer_make(env, &screen_l, "hassmic-screen", W, h, grip, LAYER)) { say("no layer"); exit(5); }
+    overscan(env, rot, band, grip);                             /* band 0: none along the bottom; grip 0: none at the top */
+    if (band > 0 && layer_make(env, &band_l, "hassmic-band", W, band, grip + h, BAND_LAYER)) say("no band layer");
+    if (grip && layer_make(env, &grip_l, "hassmic-grip", W, grip, 0, BAND_LAYER)) say("no grip layer"); else if (grip) grip_draw(env, 0);
     jobject tf = (*env)->GetStaticObjectField(env, c_typeface, f_tf_default);
     typeface[0] = (*env)->NewGlobalRef(env, tf);
     typeface[1] = (*env)->NewGlobalRef(env, (*env)->CallStaticObjectMethod(env, c_typeface, m_tf_create, tf, 1));   /* BOLD */
@@ -952,10 +1003,8 @@ static void *ui_main(void *arg)
     if (pipe(wake_pipe)) exit(6);
     fcntl(wake_pipe[0], F_SETFL, O_NONBLOCK);
 
-    struct touch t = { .rot = rot, .W = W, .H = H, .grip = GRIP, .screen_on = &screen_on_, .interactive = interactive, .wake = touch_wake };
-    char tn[160];
-    if (touch_open(&t, tn, sizeof tn) >= 0) {
-        say("touch: %s, x %d..%d, y %d..%d", tn, t.xmin, t.xmax, t.ymin, t.ymax);
+    if (topen >= 0) {
+        say("touch: %s, x %d..%d, y %d..%d%s", tn, t.xmin, t.xmax, t.ymin, t.ymax, t.gate ? ", through the gate (a pull from the top is the drawer's)" : "");
         /* touch_map takes the ranges as the natural panel's, as InputReader does; a driver that turned them already
          * (MediaTek's TOUCHSCREEN_PHYSICAL_ROTATION_WITH_LCM, the Show 8 1st gen's LCM at 90) would land every tap
          * turned: said, for the log to tell (no model seen so yet) */
@@ -970,7 +1019,7 @@ static void *ui_main(void *arg)
     __system_property_get("persist.sys.locale", loc);
     if (!strncmp(loc, "en-US", 5) || !strncmp(loc, "en-CA", 5) || !strncmp(loc, "en-AU", 5)) scene_msg(s, "h12 1", mono_ms());
     printf("ready %d %d\n", W, h); fflush(stdout);
-    say("screen: %dx%d between a grip of %d and a band of %d, rotation %d", W, h, GRIP, band, rot);
+    say("screen: %dx%d between a grip of %d and a band of %d, rotation %d", W, h, grip, band, rot);
     if (W < H)                                                  /* (taken for good, above: until the UI starts again) */
         say("screen: portrait at start: the layout is made for landscape and stays small until the UI starts again");
     p_apps(NULL);                                               /* the page's home app choice: the apps at once */
@@ -982,6 +1031,7 @@ static void *ui_main(void *arg)
         /* the activity in front: often while one asked for is on its way (our last frame stands in for it till then) */
         if (now >= next_front) { poll_front(env, s, amgr); next_front = now + (scene_waiting(s) ? 150 : !screen_on_ && now < wake_watch ? 100 : shown == 1 ? 1000 : 500); }
         int vis = scene_visible(s);
+        touch_gate_hold(!vis && screen_on_ && !scene_drawer(s));   /* an app in front: its top's middle held for a pull */
         int next = -1;
         struct rect d = scene_prepare(s, now, &next);
         if (!rect_empty(d)) {
@@ -1089,3 +1139,4 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *v, void *reserved)
     pthread_detach(t);
     return JNI_VERSION_1_6;
 }
+

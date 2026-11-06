@@ -136,6 +136,7 @@ const ICONS = {
   unlock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.5-2"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
+  alarm: '<circle cx="12" cy="13" r="7.5"/><path d="M12 9.5V13l2.5 2M3.5 5.5l3-2.5M20.5 5.5l-3-2.5"/>',
 };
 const icon = (n) => h('span', { html: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`, style: 'display:inline-flex' });
 
@@ -195,6 +196,7 @@ const PAGES = [
   { id: 'voice', title: 'Voice', icon: 'mic', nav: 'This Echo', groups: ['Voice'], intro: 'How the Echo hears you, and how it sounds when it does.' },
   { id: 'wake', title: 'Wake word', icon: 'ear', nav: 'This Echo', groups: ['Wake word'], intro: 'Which engine listens for the wake word. Home Assistant picks the wake word itself, from the engine\'s list (the satellite\'s "Wake word" select), and a second one in "Wake word 2" if you like: each starts its own assistant ("Assistant", "Assistant 2").' },
   { id: 'sound', title: 'Sound', icon: 'speaker', nav: 'This Echo', groups: ['Sound'], intro: 'How the Echo\'s speaker sounds. The equalizer is Amazon\'s own, applied to everything the Echo plays: replies, timers, music, Bluetooth.' },
+  { id: 'clock', title: 'Clock & alarms', icon: 'alarm', nav: 'This Echo', groups: ['Alarms'], intro: 'Alarms that ring on this Echo by themselves, set here, by voice or from Home Assistant, and on an Echo with a screen what it shows: the clock, what you said and the answer.' },
   { id: 'lights', title: 'Lights', icon: 'sun', nav: 'This Echo', groups: ['Lights'], intro: 'The light ring. It shows listening, thinking, speaking, errors and mute whatever you set here.' },
   { id: 'screen', title: 'Screen', icon: 'screen', nav: 'This Echo', when: () => !!state.screen, intro: 'The Echo Show\'s screen: what it shows when nothing else does, and the band of light along its bottom. Pull down from the top edge of the screen for the drawer: home, the face, music, Do not disturb, screen off and the volume.' },
   { id: 'media', title: 'Music & Bluetooth', icon: 'music', nav: 'This Echo', groups: ['Music', 'Bluetooth'], intro: 'Music Assistant plays on the Echo as a Sendspin player, phones play on it over Bluetooth, and it can play on a Bluetooth speaker itself.' },
@@ -209,9 +211,10 @@ const MOVED = { light_band: 'screen', arbitration: 'echos', bluetooth_audio: 'me
 // last, in a card of its own, so nothing is ever lost from the page
 const LAYOUT = {
   voice: [['Microphone', 'mic_level', 'noise_reduction'], ['Mute and wake sound removal', 'mute', 'do_not_disturb', 'wake_sound_removal'],
-          ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any']],
+          ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening', 'voice', 'own_voice_replies', 'error_speech'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any']],
   wake: [['Engine', 'wake_engine'], ['How it hears you', 'speech_language', 'wake_word_adaptation']],
   lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band']],
+  clock: [['Ringing', 'alarm_sound', 'alarm_ring', 'alarm_snooze', 'alarm_ramp', 'alarm_louder', 'alarm_keys'], ['Asking for them', 'alarm_voice', 'clock_format', 'alarms']],
 };
 
 // help: what it does, in the user's terms.  ha: also in Home Assistant (true), or for features the entities it adds.
@@ -236,10 +239,24 @@ const HELP = {
     status: () => timerSoundBox().el },
   wake_word_in_request: { help: 'Sends the wake word to Home Assistant too: speech-to-text hears "Alexa, turn on the light" instead of "turn on the light". Speech-to-text then gets the whole sentence: nothing of your first word can be cut off, and no stray end of the wake word turns up in front of the command. Meant for an AI (LLM) conversation agent, which takes the sentence either way. Home Assistant\'s built-in sentences may not recognise a command with the wake word in front; with "Prefer handling commands locally" such commands then go to the agent. "<wake word>, stop" still stops a ringing timer or music, and the wake word with nothing after it still ends quietly. No effect with Home Assistant\'s wake word engine. Off by default.' },
   end_of_request: { tag: 'Experimental', help: 'Lets the Echo end a request once the person who said the wake word stops talking, not when the room goes quiet. Home Assistant ends a request on silence, so with others talking in the room it stays open and speech-to-text writes down their words after your command. The Echo knows how loud you said the wake word: quieter voices (from about 17, 14 or 11 dB under yours) no longer keep the request open, and on the Echo Dots Amazon\'s own speech detector keeps the dishes or a kettle from doing so. Relaxed waits 1.25 s after you stop, Normal 0.7 s, Aggressive 0.45 s and lets in the least of the others. It cannot tell a voice as loud as yours, and if you turn away or drop your voice mid-sentence it may end too soon: start with Relaxed. Home Assistant\'s own end still applies, so a request never runs longer than before. ESPHome only. Off by default.' },
+  voice: { help: 'Which of Amazon\'s offline voices the Echo speaks with, of those installed on it: its replies (with "Replies in the Echo\'s own voice"), what went wrong, alarm answers, Bluetooth announcements, and Home Assistant\'s text-to-speech through the Echo\'s Wyoming voice. They are Ivona\'s voices, the engine Fire OS speaks with offline, each recorded from one speaker: Nina (American English) now and then hiccups where a word starts, Evelyn (Canadian English) joins her words more smoothly. Changing it takes about 5 seconds, while which the Echo\'s voice is silent. Nina by default where she is installed.' },
+  own_voice_replies: { help: 'Home Assistant\'s replies are spoken on the Echo by its own voice, Amazon\'s offline voice (the one picked under "The Echo\'s voice"), from the text of the reply, instead of the audio of Home Assistant\'s text-to-speech. The reply starts sooner (a fifth of a second after Home Assistant has the answer, nothing to download) and needs no text-to-speech engine in Home Assistant, though the voice assistant still names one. The voice speaks English: replies in other languages come out with an English accent. Replies an AI agent streams while it is still writing them: when the voice assistant\'s text-to-speech is this Echo\'s own voice (its Wyoming server, "hassmic"), each sentence is spoken the moment it is complete, so a long answer starts while the AI still writes the rest. With another text-to-speech (Piper, a cloud) the Echo says the whole reply once the AI has finished it. The Echo learns which of the two it is: after a streamed reply that did not come to it, it takes what comes to its voice meanwhile for other speakers\' and says replies whole; every 20th streamed reply it looks again, so after you switch the text-to-speech to the Echo it may take up to 20 replies until they are spoken sentence by sentence. Only shown where a voice is installed. Off by default.' },
+  error_speech: { help: 'When a request fails, the Echo says why in its own voice, as stock Alexa did, beside the red light: which part failed (speech to text, the assistant, text to speech) and, when Home Assistant names it, which service and how ("Sorry, I couldn\'t reach Oh lama.", "Sorry, Open A I took too long to answer."). Also when the wake word is heard while Home Assistant is not connected ("I\'m having trouble connecting to Home Assistant. I\'ll keep trying.") or Home Assistant does not answer within 30 seconds. Quiet while muted or in do not disturb. Only shown where a voice is installed. On by default.' },
   stop_ends_listening: { help: 'Makes "<wake word>, stop" mean "be quiet". An Echo that woke up by mistake (the TV, someone talking in the room) listens for up to 15 seconds, and Home Assistant carries out whatever it heard. With this on, "<wake word>, stop" ends that at once: the Echo stops listening and nothing of it reaches Home Assistant, and when it hears both words together it does not start at all. A ringing timer, a reply, a Drop In call and music on this Echo stop as before. The cost: "<wake word>, stop the timer" no longer reaches Home Assistant (say "<wake word>, cancel the timer"), media Home Assistant plays elsewhere is paused with "<wake word>, pause" instead, and now and then the engine hears "stop" in a short command (about 2 in 350): that command is lost, say it again. Off by default.' },
   timer_stop_any: { help: 'While a timer rings, whatever you say after the wake word stops it. That goes for any language and however you put it ("Alexa, stop the timer", "Alexa, Ruhe"). Without it only "stop" does, and "stop the timer" goes to Home Assistant, which has forgotten the finished timer and says none is running. The cost: a question during a ring ("how long is left on the pasta timer?") is not answered, it only stops the ring. Off by default.' },
   equalizer_bass: { ha: true }, equalizer_mid: { ha: true }, equalizer_treble: { ha: true },
+  alarms: { ha: true, help: 'Lists the alarms in Home Assistant: "Next alarm" (a time: a dashboard counts down to it, an automation can turn the lights on 10 minutes before), "Alarms" (all of them), "Alarm ringing", the button "Snooze alarm", the event entity "Alarm" (ringing, snoozed, stopped, rang out, set, deleted), and the actions esphome.<node>_set_alarm and _delete_alarm for automations and AI agents. The alarms ring on the Echo either way, without Home Assistant. On by default.' },
+  alarm_voice: { help: 'Requests about alarms are answered by the Echo itself: "<wake word>, set an alarm for 7 AM", "wake me up at 6:30 tomorrow", "set an alarm for 6:45 on weekdays", "wake me up in 20 minutes", "cancel my alarm", "cancel the 7 AM alarm", "cancel all alarms", "what alarms do I have". Home Assistant has no alarms, so without this its assistant would not understand them. The answer is spoken by Home Assistant (the device\'s "Allow the device to perform Home Assistant actions" must be ticked) and shows on the screen. English sentences; "snooze" and "stop" work in any case. On by default.' },
+  alarm_sound: { help: 'What an alarm plays. Alexa alarm (the default) and Alexa timer: Amazon\'s own tones from the Echo\'s firmware. Beep: a short triple beep. Your own: the sound uploaded for timers (Voice, Timers).',
+    unavailable: (c) => (c === 'custom' ? !((state.timer_sound || {}).custom_ms > 0) : c !== 'beep' && !((state.timer_sound || {}).present || []).includes(c)) },
+  alarm_ring: { help: 'How long an alarm rings when nobody stops or snoozes it. All the way left: until someone does. A once alarm that rang out is switched off, as one stopped. Default 10 min.' },
+  alarm_snooze: { help: 'How long a snooze lasts: "<wake word>, snooze", a volume key, a tap on the screen, or "Snooze alarm" in Home Assistant. Default 9 min, as on a stock Echo.' },
+  alarm_ramp: { step: 5, help: 'An alarm starts at a fifth of the timer volume and comes up to it over this time, a loop of its sound at a time. All the way left: at full volume from the start. Default 30 s.' },
+  alarm_louder: { step: 5, help: 'After it has come up to the timer volume, an alarm nobody answers keeps getting louder by this many points of volume a minute, up to the loudest the Echo plays: for heavy sleepers. Everything else (music, replies) keeps its own volume meanwhile, and the volume is back as it was once the alarm is stopped or snoozed. All the way left: it stays at the timer volume. Default 10 a minute.' },
+  alarm_keys: { help: 'While an alarm rings, a press of a volume key snoozes it (the Echo Show has no action button, and a press is the easiest thing to find half asleep), or changes the ring\'s volume as it does for timers. The action button (on an Echo Show: both volume keys together) always stops it.' },
+  clock_format: { help: 'How the Echo says and shows times: 7:30 AM or 07:30. Automatic: 12 hours in the Americas, Australia, New Zealand, India and a few others (by the time zone Home Assistant gave the Echo), 24 hours elsewhere.' },
   speaker_gain: { help: 'Makes the Echo\'s own speaker louder at every volume, for an Echo that is too quiet at full volume. It raises the amplifier stage in front of the speaker, which a stock Echo leaves at +0 dB (an Echo Dot 3\'s amplifier has only 2 dB more to give; an Echo Show 5 goes in steps of 1.5 dB, the nearest one to what you pick). Owners of an Echo Dot 2 heard +6 dB loud and clean at full volume; above that, loud music near full volume can distort, and a speaker that plays distorted for long can be damaged. Raise it a step at a time and turn it down at the first crackle. The 3.5 mm jack and Bluetooth speakers are not affected. An Echo Show 8 (1st gen) is loud already at +0 dB and goes down to −6 dB for that; a 2nd gen goes up to +9 dB, below where its amplifier distorts. Default +0 dB.' },
+  even_volume: { help: 'Makes every step of the volume the same: each point is 0.5 dB, each press of the volume buttons 5 dB, from 1 (quiet, about 50 dB under full) to 100 (as loud as before). Without it the Echo plays a volume as a stock Echo does, where most of the change happens at one end: on an Echo Show the bottom half covers more than twice the range of the top half, and a step of one point often does nothing at all. The Echo keeps its own volume setting at the nearest step above, and turns the sound down the rest of the way itself. 0 is silent either way. A Bluetooth speaker that sets its own volume still does. Exported with the settings. On by default.' },
   led_auto_brightness: { ha: true, help: 'The ring dims and brightens with the room, from the Echo\'s light sensor and Amazon\'s own curve, as on a stock Echo.' },
   led_brightness: { ha: true, help: 'A fixed brightness for the ring. Setting one turns auto brightness off.' },
   ring_rotation: { ha: true, help: 'Where the light ring\'s fill starts. Home Assistant\'s "Light ring fill" lights that share of the ring in the light\'s colour, for a timer\'s or a washing machine\'s progress or a battery; it fills the way the volume does, from where the volume starts. Turn the start by this many LEDs, so it starts where you want it to for how the Echo stands. Only where the Echo has room for each LED\'s own animations (Home Assistant then lists "Light ring fill"). Default 0.' },
@@ -373,6 +390,13 @@ const HELP = {
   request_text: { icon: 'whisper', ha: ['Last heard', 'Last reply'], help: 'Two text sensors in Home Assistant: what speech-to-text understood of your last request, and what the assistant answered. For a dashboard beside the Echo, or an automation on a word it keeps mishearing. Both are cleared when a new request starts, so saying the same thing twice still counts as a change. Home Assistant takes at most 255 characters per state: a longer reply ends in "…".',
     note: 'Home Assistant keeps every request and reply in its history while this is on.' },
   whisper_detection: { icon: 'whisper', ha: ['Last request whispered'], help: 'Tells whether your last request was whispered, before speech-to-text finishes. Use it in your conversation agent\'s prompt to have it answer quietly.' },
+  camera: { icon: 'eye', ha: ['Camera (Echo Local)'], help: 'The Echo\'s camera as a camera in Home Assistant, for dashboards and recordings. It needs the Echo Local integration: the video goes to Home Assistant alone, encrypted with the key the integration shares with this Echo, never to anything else on your network. The same switch lets this Echo send its picture in a Drop In: to the dashboard\'s Drop In card, and to another Echo Show that drops in or is dropped in on (it shows it full screen). The camera runs only while someone in Home Assistant looks or a call has the picture, and a red dot in the corner of the screen shows meanwhile, over any app. One at a time: while a call has the camera, Home Assistant\'s live view waits, and the other way round. Close the lens cover and it stops at once, whatever is switched on here. The microphone button does not cover the camera.',
+    note: 'A dashboard card that shows the camera\'s picture keeps the camera on as long as the dashboard is open.',
+    status: () => {
+      const c = state.camera; if (!c || !c.on) return null;
+      if (c.covered === 1) return h('p', { class: 'f-model' }, 'The lens cover is closed: no picture until you open it.');
+      return c.streaming ? h('p', { class: 'f-model' }, icon('eye'), h('span', {}, 'Home Assistant is watching now.')) : null;
+    } },
   wifi_motion: { icon: 'wifi', tag: 'Experimental', ha: ['Wi-Fi motion', 'Wi-Fi motion sensitivity'], help: 'A motion sensor without extra hardware. Someone walking between the Echo and your Wi-Fi router changes how the Echo receives the router. It shows motion, not presence, sees best along that path, and other Wi-Fi traffic can set it off.' },
   wifi_motion_sensitivity: { parent: 'wifi_motion', help: 'How much the signal has to change to count as motion. Higher catches more, with more false alarms.' },
   light_sensor: { icon: 'sun', ha: ['Illuminance'], help: 'The room\'s light in lux from the Echo\'s light sensor, for automations. With this on, "LED brightness" in Home Assistant also follows the ring while auto brightness moves it, which puts an entry in its logbook every few minutes. Off, auto brightness works the same; Home Assistant only sees the levels you set.' },
@@ -385,6 +409,7 @@ const HELP = {
   drop_in: { icon: 'talk', ha: ['Drop In', 'Drop In with', 'End Drop In', 'the action drop_in'], help: 'Talk between two of your Echos, as Alexa\'s Drop In. One Echo calls another (the ones on the Echos page), and both hear each other. Start it from Home Assistant (the action drop_in, or by voice with the "Drop In" blueprint: "drop in kitchen") or with the Drop In button of an Echo on the Echos page. End it with the action button, "<wake word>, stop" or "hang up", on either Echo. Off: this Echo neither calls nor can be called. Only your own Echos can call it (the Echo network\'s key), never with do not disturb on or the microphones off. The ring shows green while a call runs.',
     note: 'An Echo that is called opens its microphone at once, unless it is set to answer with the button below.' },
   drop_in_answer: { parent: 'drop_in', help: 'At once: a call connects straight away, with a chime, as Alexa\'s Drop In does. After the action button: the Echo rings for 30 s, and only a press of its action button connects; nobody can listen into a room where nobody is.' },
+  drop_in_gate: { parent: 'drop_in', help: 'In a call this Echo\'s microphone is turned down while nobody near it talks, and up again the moment someone does (a speech detector decides). It keeps two things from the other side: the hiss of this room, lifted with the gain speech needs, and their own voice coming back from this Echo\'s speaker. Full: down by 25 dB, as before. Light: by 10 dB, for a quiet room; a little hiss in the pauses. Off: never; the room\'s hiss all along, and the other side may hear itself faintly, unless they wear headphones. Takes effect at once, also in a call.' },
   bluetooth_speaker: { icon: 'box', ha: ['Bluetooth speaker search', 'Play on Bluetooth speaker', 'Bluetooth speaker', 'Bluetooth speaker delay'], help: 'Plays everything (replies, timers, music) on a Bluetooth speaker instead of the Echo\'s own. Put the speaker in pairing mode near the Echo and switch on "Bluetooth speaker search" in Home Assistant: the Echo pairs with the strongest one it hears.' },
   // volume, separate_volumes and the kinds' volumes, links and offsets: the Volume card has their words (buildVolumes)
   // not a setting: the System card's Restart button (main.c core_reboot)
@@ -408,10 +433,14 @@ const SUB = {
   wake_word_in_request: 'Speech-to-text hears the wake word too',
   end_of_request: 'A request ends when you stop, not when the room is quiet',
   stop_ends_listening: '"<wake word>, stop" cancels a false wake',
+  voice: 'Which offline voice speaks',
+  own_voice_replies: 'Home Assistant\'s replies in the Echo\'s own voice',
+  error_speech: 'Says what went wrong instead of only a red light',
   timer_ring: 'How long a finished timer rings',
   timer_sound: 'What a finished timer plays',
   timer_stop_any: 'Anything said after the wake word stops the ring',
   speaker_gain: 'For an Echo too quiet at full volume',
+  even_volume: 'Each volume step as big as the next',
   led_auto_brightness: 'Follows the room\'s light, as on a stock Echo',
   led_brightness: 'A fixed level; turns auto brightness off',
   ring_rotation: 'Where "Light ring fill" starts',
@@ -436,6 +465,7 @@ const SUB = {
   wake_events: 'An event each time this Echo hears its wake word',
   request_text: 'What was heard and answered, as two text sensors',
   whisper_detection: 'Tells Home Assistant when a request was whispered',
+  camera: 'The Echo\'s camera in Home Assistant and in video calls',
   wifi_motion: 'A motion sensor from changes in the Wi-Fi signal',
   wifi_motion_sensitivity: 'Higher catches more, with more false alarms',
   light_sensor: 'The room\'s light in lux, for automations',
@@ -445,7 +475,17 @@ const SUB = {
   bluetooth_speaker_keep_awake: 'For speakers that cut off the first word',
   bluetooth_speaker_stay_connected: 'Switching it on again is quick',
   drop_in: 'Talk between two of your Echos',
+  alarms: 'Next alarm, the list and snooze as entities',
+  alarm_voice: '"Wake me up at 6:30", "cancel my alarm"',
+  alarm_sound: 'What a ringing alarm plays',
+  alarm_ring: 'How long an alarm rings',
+  alarm_snooze: 'How long a snooze lasts',
+  alarm_ramp: 'Gentle: starts quiet, comes up to full',
+  alarm_louder: 'Unanswered, it keeps getting louder',
+  alarm_keys: 'Snooze with a volume key, or change the volume',
+  clock_format: '7:30 AM or 07:30',
   drop_in_answer: 'How a call connects',
+  drop_in_gate: 'The microphone between your words',
 };
 const CHOICE_NAMES = {
   wake_engine: { amazon: 'Amazon', microwakeword: 'microWakeWord', homeassistant: 'Home Assistant' },
@@ -454,7 +494,15 @@ const CHOICE_NAMES = {
   noise_reduction: { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' },
   online_updates: { off: 'Off', beta: 'Beta', release: 'Release' },
   drop_in_answer: { auto: 'At once', ask: 'After the action button' },
+  drop_in_gate: { full: 'Full: quiet between words', light: 'Light', off: 'Off: always open' },
   timer_sound: { beep: 'Beep', timer: 'Alexa timer', alarm: 'Alexa alarm', custom: 'Your own' },
+  alarm_sound: { beep: 'Beep', timer: 'Alexa timer', alarm: 'Alexa alarm', custom: 'Your own (the timer\'s upload)' },
+  alarm_keys: { snooze: 'Snooze', volume: 'Volume' },
+  voice: { nina: 'Nina (US)', evelyn: 'Evelyn (Canada)', abbey: 'Abbey (UK)', ella: 'Ella (Australia)', ira: 'Ira (India)',
+           silke: 'Silke (German)', chloe: 'Chloé (French)', charlotte: 'Charlotte (French, Canada)', giulia: 'Giulia (Italian)',
+           alicia: 'Alicia (Spanish)', fernanda: 'Fernanda (Spanish, Mexico)', candela: 'Candela (Spanish, US)',
+           mariana: 'Mariana (Portuguese, Brazil)', yumiko: 'Yumiko (Japanese)', sara: 'Sara (Arabic)' },
+  clock_format: { auto: 'Automatic', '12h': '12 hours', '24h': '24 hours' },
   end_of_request: { off: 'Off', relaxed: 'Relaxed', normal: 'Normal', aggressive: 'Aggressive' },
   bluetooth_announcement_language: { en: 'English', de: 'Deutsch', fr: 'Français', es: 'Español', it: 'Italiano', pt: 'Português', nl: 'Nederlands',
     sv: 'Svenska', da: 'Dansk', nb: 'Norsk', fi: 'Suomi', pl: 'Polski' },
@@ -463,6 +511,10 @@ const settingValueIndex = (name) => { const s = state.settings.find((x) => x.nam
 const settingValue = (name) => { const s = state.settings.find((x) => x.name === name); return s ? (s.type === 'choice' ? s.choices[s.value] : s.value) : undefined; };
 const label = (s) => { const t = s.label.replace(/ \(experimental\)$/, '').replace(/^Equalizer /, '').replace(' with other Echos', ''); return t[0].toUpperCase() + t.slice(1); };
 const fmt = (s, v) => {
+  if (s.name === 'alarm_ring' && !v) return 'until stopped';
+  if (s.name === 'alarm_ramp' && !v) return 'off';
+  if (s.name === 'alarm_louder') return v ? `+${v} a minute` : 'off';
+  if (s.unit === 'h') return `${String(v).padStart(2, '0')}:00`;
   if (s.name === 'timer_ring') return !v ? 'until stopped' : v < 60 ? `${v} s` : `${Math.floor(v / 60)} min${v % 60 ? ` ${v % 60} s` : ''}`;
   if (s.unit === 'dB') return `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v)} dB`;
   if (s.unit === 'dBFS') return `${v < 0 ? '−' : ''}${Math.abs(v)} dBFS`;
@@ -835,6 +887,180 @@ function soundTile(snd) {
   return tile;
 }
 
+// ---------------------------------------------------------------- Clock & alarms: the Echo's own alarms (alarms.c)
+
+const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const WEEK = [1, 2, 3, 4, 5, 6, 0];                          // Monday first, as the Echo says them
+let alarmBox = null, alarmHead = null, alarmData = null;
+
+function alarmsCard() {
+  alarmBox = h('div', { class: 'alarm-list' });
+  alarmHead = h('div', { class: 'ringd-headbtns' });
+  const card = h('div', { class: 'card', id: 'alarms' },
+    cardHead('Alarms', 'They ring on this Echo by themselves, with or without Home Assistant', 'alarm', alarmHead,
+      'Set them here, by voice ("<wake word>, wake me up at 6:30", "set an alarm for 7 on weekdays", "cancel my alarm", "what alarms do I have") or from Home Assistant (the action esphome.<node>_set_alarm). A ringing alarm stops with "<wake word>, stop", the action button (Echo Show: both volume keys), a long press on the screen or "Stop ringing" in Home Assistant; it snoozes with "<wake word>, snooze", a volume key, a tap on the screen or "Snooze alarm". They ring on the Echo\'s clock, which Home Assistant sets: until it has, none rings.'),
+    alarmBox);
+  loadAlarms().catch(() => {});
+  return card;
+}
+
+async function loadAlarms() {
+  try { alarmData = await (await echo.call('GET', '/api/alarms')).json(); renderAlarms(); }
+  catch (e) { alarmBox.replaceChildren(h('p', { class: 'help' }, errText(e))); }
+}
+
+const alarmDo = (fn) => fn().catch((e) => toast(errText(e))).finally(() => loadAlarms());
+const alarmTime = (a, h24) => h24 ? `${String(a.hour).padStart(2, '0')}:${String(a.min).padStart(2, '0')}`
+  : `${a.hour % 12 || 12}:${String(a.min).padStart(2, '0')}`;
+const alarmLine = (a) => `${a.id} ${a.hour} ${a.min} ${a.days} ${a.enabled ? 1 : 0} ${a.label || ''}`;
+
+function renderAlarms() {
+  const d = alarmData, h24 = d.h24;
+  const add = h('button', { class: 'small primary', disabled: d.alarms.length >= d.max ? '' : null, onclick: () => alarmEdit(null) }, icon('plus'), ' Add');
+  const ring = d.ringing ? [h('button', { class: 'small', onclick: () => alarmDo(() => echo.call('POST', '/api/alarms/snooze')) }, 'Snooze'),
+    h('button', { class: 'small danger', onclick: () => alarmDo(() => echo.call('POST', '/api/alarms/stop')) }, 'Stop')] : [];
+  alarmHead.replaceChildren(...ring, add);       // native: every argument a node
+  const rows = d.alarms.map((a) => {
+    const sw = h('input', { type: 'checkbox', role: 'switch', 'aria-label': 'On', onchange: () => alarmDo(() => echo.call('POST', '/api/alarms/put', alarmLine({ ...a, enabled: sw.checked }))) });
+    sw.checked = a.enabled;
+    const when = a.snoozed ? `snoozed until ${new Date(a.snoozed * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: !h24 })}` : a.text;
+    return h('div', { class: 'alarm-row' + (a.enabled ? '' : ' off') },
+      h('div', { class: 'alarm-time' }, alarmTime(a, h24), h24 ? null : h('small', {}, a.hour < 12 ? ' AM' : ' PM')),
+      h('div', { class: 'grow' }, h('div', { class: 'alarm-what' }, a.label || (a.days ? 'Alarm' : 'Once')), h('p', { class: 'help' }, a.enabled ? when : 'Off')),
+      h('button', { class: 'icon-btn', title: 'Edit', 'aria-label': 'Edit', onclick: () => alarmEdit(a) }, icon('pen')),
+      h('button', { class: 'icon-btn', title: 'Delete', 'aria-label': 'Delete', onclick: () => alarmDo(() => echo.call('POST', `/api/alarms/${a.id}/delete`)) }, icon('trash')),
+      h('label', { class: 'switch' }, sw, h('span')));
+  });
+  alarmBox.replaceChildren(...[
+    d.clock_ok ? null : h('p', { class: 'row-warn' }, icon('warn'), ' The Echo\'s clock is not set yet: alarms ring once Home Assistant has set it.'),
+    ...(rows.length ? rows : [empty('alarm', act('No alarms yet. Add one here, or say "<wake word>, set an alarm for 7 AM".'))])].filter(Boolean));
+}
+
+// one alarm's dialog: its time, the days it repeats on (none: once, the next time it comes), a label
+function alarmEdit(a) {
+  const v = a || { id: 0, hour: 7, min: 0, days: 0, enabled: true, label: '' };
+  const time = h('input', { type: 'time', id: 'al-time', required: '', value: `${String(v.hour).padStart(2, '0')}:${String(v.min).padStart(2, '0')}` });
+  const days = WEEK.map((wd) => { const c = h('input', { type: 'checkbox', value: String(wd) }); c.checked = !!(v.days & 1 << wd); return h('label', { class: 'day-chip' }, c, h('span', {}, DAY_SHORT[wd])); });
+  const lab = h('input', { type: 'text', id: 'al-label', maxlength: '47', value: v.label || '', placeholder: 'Work, Gym, …' });
+  const preset = (mask) => days.forEach((l, i) => { l.firstChild.checked = !!(mask & 1 << WEEK[i]); });
+  const msg = h('p', { class: 'help ask-msg' });
+  const dlg = h('dialog', { class: 'modal ask', 'aria-labelledby': 'al-title' },
+    h('div', { class: 'modal-head' }, h('h2', { id: 'al-title' }, a ? 'Edit alarm' : 'New alarm'),
+      h('button', { type: 'button', class: 'icon-btn', title: 'Close', 'aria-label': 'Close', onclick: () => dlg.close() }, icon('x'))),
+    h('form', { method: 'dialog', class: 'ask-form', onsubmit: async (e) => {
+      e.preventDefault();
+      const [hh, mm] = time.value.split(':').map(Number);
+      if (!(hh >= 0 && hh < 24 && mm >= 0 && mm < 60)) { msg.textContent = 'Pick a time.'; return; }
+      const mask = days.reduce((m, l) => m | (l.firstChild.checked ? 1 << Number(l.firstChild.value) : 0), 0);
+      dlg.close();
+      alarmDo(() => echo.call('POST', '/api/alarms/put', alarmLine({ id: v.id, hour: hh, min: mm, days: mask, enabled: true, label: lab.value.replace(/[\r\n]/g, ' ').trim() })));
+    } },
+      h('div', { class: 'modal-body' },
+        h('div', { class: 'field' }, h('label', { for: 'al-time' }, 'Time'), time),
+        h('div', { class: 'field' }, h('label', {}, 'Repeat'), h('div', { class: 'day-chips' }, days),
+          h('div', { class: 'day-presets' }, [['Once', 0], ['Weekdays', 62], ['Weekends', 65], ['Every day', 127]].map(([t, m]) => h('button', { type: 'button', class: 'small', onclick: () => preset(m) }, t))),
+          h('p', { class: 'help' }, 'No day ticked: once, the next time it comes.')),
+        h('div', { class: 'field' }, h('label', { for: 'al-label' }, 'Label'), lab), msg),
+      h('div', { class: 'modal-foot' }, h('button', { type: 'button', onclick: () => dlg.close() }, 'Cancel'), h('button', { type: 'submit', class: 'primary' }, 'Save'))));
+  dlg.onclose = () => dlg.remove();
+  document.body.append(dlg);
+  dlg.showModal();
+  time.focus();
+}
+
+// ---------------------------------------------------------------- Clock & screen: the owner's apps (apps.c)
+
+// Apps installed beside the screen app (a YouTube client): its Home and switcher list them by themselves, but the
+// Echo's firewall keeps everything except hassmic off the internet, so each is let out here (root's lockdown.sh reads
+// the list and checks every name again).  Added from an APK file here or from the Echo Local integration (the same API:
+// pieces, then install, which root's apps.sh does with Android's pm).  Only on an Echo with Android: elsewhere the
+// card stays hidden
+const APK_PIECE = 262144;                                    // apps.h APPS_CHUNK
+let appsBox = null, appsMsg = null, appsBusy = false;
+function appsCard() {
+  appsBox = h('div'); appsMsg = h('p', { class: 'help' });
+  const file = h('input', { type: 'file', accept: '.apk,application/vnd.android.package-archive', class: 'hidden' });
+  const card = h('div', { class: 'card hidden', id: 'apps' },
+    cardHead('Apps', 'Apps you installed beside the screen app', 'box', h('div', { class: 'ringd-headbtns' },
+      h('button', { class: 'small', onclick: () => file.click() }, icon('up'), 'Add app…'), file),
+      'An app added here (an APK file: a 32-bit ARM build, armeabi-v7a, for Android 7.1) appears on the screen app\'s Home and in its switcher by itself; pull down from the middle of the top edge for the bar of apps and Home. The Echo\'s firewall keeps everything but hassmic on your own network, so an app reaches the internet only once its Internet switch is on here, and nothing on your network can reach an app until its Network switch is on (then only the ports that app itself listens on, from your own network: a DLNA renderer, a cast receiver). Amazon\'s own apps can never be. The Echo Local integration in Home Assistant can add and remove apps too.'),
+    appsBox, appsMsg);
+  file.onchange = () => { const f = file.files[0]; file.value = ''; if (f) apkAdd(f, card); };
+  loadApps(card).catch(() => {});
+  return card;
+}
+
+const apkState = (i) => i.state === 'ok' ? (i.package ? `Done: ${i.package}` : 'Done.') : i.state === 'failed' ? `Not done: ${i.error || 'Android refused it'}` : '';
+
+async function loadApps(card) {
+  const d = await (await echo.call('GET', '/api/apps')).json();
+  if (d.none) return d;
+  card.classList.remove('hidden');
+  const rows = d.apps.map((a) => {
+    // two switches: the internet (out) and the home network (in: issue #109, a DLNA renderer, a cast receiver)
+    const toggle = (kind, label, on) => {
+      const sw = h('input', { type: 'checkbox', role: 'switch', 'aria-label': `${label} for ${a.package}`, onchange: async () => {
+        try { await echo.call('POST', '/api/apps', `${kind} ${a.package} ${sw.checked ? 1 : 0}`); await loadApps(card); }
+        catch (e) { sw.checked = !sw.checked; toast(errText(e)); }
+      } });
+      sw.checked = on;
+      return h('label', { class: 'switch', title: label }, sw, h('span'));
+    };
+    const del = h('button', { class: 'icon-btn', title: 'Remove', 'aria-label': `Remove ${a.package}`, onclick: () => apkRemove(a.package, card) }, icon('trash'));
+    const what = [a.net ? 'may reach the internet' : 'kept off the internet', a.lan ? 'its ports open to your network' : 'its ports closed'].join(', ');
+    return infoRow(a.package, `${what[0].toUpperCase()}${what.slice(1)} · version ${a.version}`, null,
+      [del, h('span', { class: 'help' }, 'Internet'), toggle('net', 'Internet', a.net), h('span', { class: 'help' }, 'Open ports'), toggle('lan', 'Open ports: devices on your network may connect to this app', a.lan)]);
+  });
+  appsBox.replaceChildren(...(rows.length ? rows : [h('p', { class: 'help' }, 'No apps installed yet.')]));
+  if (!appsBusy) appsMsg.textContent = apkState(d.install || {});
+  return d;
+}
+
+// root installs or removes in the background (5 to 30 s): asked until it says
+async function apkWait(card) {
+  for (let i = 0; i < 90; i++) {
+    await sleep(1000);
+    const d = await loadApps(card);
+    const st = (d.install || {}).state;
+    if (st === 'ok' || st === 'failed') return d.install;
+  }
+  throw new Error('no answer from the Echo within 90 s');
+}
+
+async function apkAdd(f, card) {
+  if (appsBusy) return;
+  if (f.size > 200 * 1048576) { toast(`${f.name}: an APK of 200 MB at most`); return; }
+  appsBusy = true;
+  try {
+    appsMsg.textContent = `Reading ${f.name}…`;
+    const all = new Uint8Array(await f.arrayBuffer());
+    if (all[0] !== 0x50 || all[1] !== 0x4b) throw new Error(`${f.name} is not an APK (no zip)`);
+    appsMsg.textContent = 'Checking it…'; await sleep(30);
+    const digest = hex(blake2b(32, null, all));
+    for (let off = 0; off < all.length; off += APK_PIECE) {
+      appsMsg.textContent = `Sending ${f.name}: ${Math.floor(off * 100 / all.length)} %`;
+      await echo.call('POST', `/api/apps/apk/${off}`, all.subarray(off, off + APK_PIECE));
+    }
+    appsMsg.textContent = 'Installing… (up to half a minute)';
+    await echo.call('POST', '/api/apps/apk/install', `${all.length} ${digest}`);
+    const r = await apkWait(card);
+    appsMsg.textContent = apkState(r);
+    if (r.state === 'ok') toast(r.package ? `${r.package} installed: switch on its internet below if it needs it` : 'Installed');
+  } catch (e) { appsMsg.textContent = ''; toast(errText(e)); }
+  appsBusy = false;
+}
+
+async function apkRemove(pkg, card) {
+  if (appsBusy || !await ask({ title: `Remove ${pkg}?`, ok: 'Remove', danger: true, body: 'The app and everything it keeps on this Echo are deleted.' })) return;
+  appsBusy = true;
+  try {
+    appsMsg.textContent = `Removing ${pkg}…`;
+    await echo.call('POST', '/api/apps/uninstall', pkg);
+    appsMsg.textContent = apkState(await apkWait(card));
+  } catch (e) { appsMsg.textContent = ''; toast(errText(e)); }
+  appsBusy = false;
+}
+
 function soundsCard() {
   sndCtl = { tiles: new Map(), all: h('button', { class: 'small', onclick: () => soundsAll(sndCtl.all.dataset.to) }) };
   const have = new Map((state.sounds || []).map((s) => [s.id, s]));
@@ -1153,7 +1379,8 @@ const PAGE_BUILD = {
     el.append(flow(cards));
   },
   lights: (el, list) => { el.append(flow(settingCards(list, 'lights'))); buildRing(el); },
-  screen: (el, list) => el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.map(settingRow))])),   // ring.js: the designs and where they show
+  screen: (el, list) => el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.map(settingRow)), appsCard()])),   // the home app, then the owner's apps
+  clock: (el, list) => { el.append(h('div', { class: 'alarms-wrap' }, alarmsCard())); el.append(flow(settingCards(list, 'clock'))); },
   media: (el, list) => {
     const parent = (k) => (HELP[k.name] || {}).parent, plain = list.filter((x) => !x.feature && !parent(x));
     const music = plain.filter((x) => x.group === 'Music'), bt = plain.filter((x) => x.group !== 'Music');
@@ -1407,6 +1634,7 @@ function render() {
   for (const s of state.settings) { const c = controls.get(s.name); if (c) c.update(s); }
   for (const q of quick) { const s = state.settings.find((x) => x.name === q.name); if (s) q.update(s); }
   renderTop(); renderAttention(); renderNetwork(); renderDevices(); renderSystem(); renderWake(); renderSounds(); if (massCtl) massCtl.paint(); if (homeCtl) homeCtl.paint();
+  if (alarmBox && !fresh && curPage === 'clock') loadAlarms().catch(() => {});      // rung, snoozed, set by voice meanwhile
   if (fresh) route();                   // after the controls: cards are placed by their height, with what is hidden hidden
 }
 

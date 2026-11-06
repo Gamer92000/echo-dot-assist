@@ -12,7 +12,9 @@
  *   accept   callee -> caller   its audio port and ephemeral key: both sides derive the call's key, audio flows
  *   refuse   callee -> caller   with a reason (busy, Drop In off, do not disturb, muted, not answered)
  *   bye      either             sent three times
- * payload: kind call_id[8] port[2] epk[32] len reason[len]
+ * payload: kind call_id[8] port[2] epk[32] len reason[len] [caps]
+ * caps (invite, accept; older builds send none and ignore it): CAP_SHOWS this Echo puts the other side's picture on its
+ * screen (video.c), CAP_SENDS it has a camera.  A picture goes only to an Echo that said CAP_SHOWS.
  * The call's key: BLAKE2b keyed with a key every member derives from K, over the X25519 of the two ephemeral keys, the
  * call id and both ids.  Recorded calls stay closed to whoever gets K later.
  *
@@ -22,9 +24,23 @@
  * stream is the call's keepalive, LOST_MS without one ends it.  The other side's address comes from its message, then
  * from its authenticated audio (an address that changed mid-call follows).
  *
+ * Video (Echo Shows, docs/video-dropin.md): the camera's H.264 (camera.c's stream, the red dot on while it sends) to an
+ * Echo that shows it, over the same UDP port and key, while the setting "camera" is on and the lens open:
+ *   "HMV1" call_id[8] dir vseq[4] enc(frame u32, frag u8, nfrag u8, type u8, pts u64 LE, data) mac[16]
+ * nonce = call_id dir vseq 'V' (byte 13: audio's nonces have it 0).  A frame in up to VFRAG_MAX fragments of VFRAG;
+ * the codec config goes inline ahead of every key frame, so a lost one costs at most a second (the encoder's key
+ * frame interval).  The receiver puts together one frame at a time: a newer frame's fragment drops the one unfinished,
+ * and after a loss only a key frame starts the picture again (no broken pictures).
+ *
+ * From Home Assistant (docs/video-dropin.md): the Echo Local integration calls over the settings page's connection
+ * (web.c GET /api/call), and that connection is the far end: no arb messages, no UDP; frames go to it and come from it
+ * as 16 kHz PCM (the channel is sealed by web.c) instead of Opus.  The rest is a call from another Echo's: refusals
+ * (Drop In off, do not disturb, muted, busy), ringing (ask) or at once, the gate and gain, the Voip playout, the core's
+ * call face and sounds, the action button and "hang up".  Its peer is "home-assistant".
+ *
  * Mic: micAsr, what the pipeline gets.  Playback on the mixer's Voip stream, which puts the front end in its call mode
  * (audio.h).  The front end's listening mode only while this side talks (main.c core_dropin_listen says why): its level
- * NEAR_DB over the room's floor and, while the far end plays, over the echo to expect; on with the first such frame,
+ * RNNoise hears speech (VAD_ON) and, while the far end plays, its level is over the echo to expect; on with the first such frame,
  * off LISTEN_HANG_MS after the last.  What the echo canceller leaves of the far end would come back to the other side
  * as an echo, so an echo suppressor here ducks the mic by SUPPRESS_DB while the far end plays, unless this side is
  * clearly louder than the echo has been for DOUBLE_TALK_N frames in a row (double talk passes): the echo's level against
@@ -38,6 +54,9 @@
 #include "arb.h"
 #include "audio.h"
 #include "core.h"
+#include "micdenoise.h"
+#include "video.h"
+#include "camera.h"
 #include "micgain.h"
 #include "ws.h"
 #include "../third_party/monocypher.h"
@@ -71,6 +90,8 @@ enum { OPUS_APPLICATION_VOIP = 2048, OPUS_SET_BITRATE = 4002, OPUS_SET_COMPLEXIT
 #define RATE        16000
 #define FRAME       320                 /* 20 ms */
 #define MAXPKT      400                 /* an Opus frame at 24 kbit/s is ~60 bytes */
+#define SLOT        (FRAME * 2)         /* a jitter buffer slot: an Opus frame, or a PCM one from Home Assistant */
+#define HAQ         16                  /* frames for Home Assistant waiting for web.c (320 ms) */
 #define BITRATE     24000               /* wideband speech; FEC rides inside it */
 #define LOSS_PERC   10                  /* what the encoder plans FEC for: Wi-Fi, no retries on a busy channel */
 #define INVITE_MS   250
@@ -96,15 +117,23 @@ static int answer_ms = ANSWER_MS, lost_ms = LOST_MS;
 #define ECHO_MS     600
 #define FAR_DB      -55.0f              /* the far end talks */
 #define SUPPRESS_DB -25.0f              /* the room, and the echo, while this side does not talk */
+/* The setting drop_in_gate: "light" ducks by this much instead, "off" not at all.  What that costs: the room's floor goes
+ * out with the speech gain (the Echo Show 5's -69 dBFS at +33 dB is -36 dBFS of hiss under the whole call, RNNoise's 12 dB
+ * off it included), and what the echo canceller leaves of the far end goes back to it.  For a quiet room, or a call
+ * from a browser with headphones on */
+#define GATE_LIGHT_DB -10.0f
 #define SUPPRESS_OWN_DB -40.0f          /* our own sounds (the connect chime came back at -50 dBFS ducked by 25) */
 #define DOUBLE_TALK_DB 6.0f             /* the near end this much over the echo estimate passes... */
 #define DOUBLE_TALK_N 3                 /* ...for this many frames in a row: an echo's onset is shorter */
-#define NEAR_DB     9.0f                /* this side talks: this far over the room's floor */
-/* ...and at least this loud in micAsr.  An empty room's floor is -74 dBFS: sounds of -65..-70 passed NEAR_DB, opened the
- * gate and got the speech gain (+24 dB) put on them: the far Echo sent -40..-54 dBFS of amplified room noise, which the
- * other end took for the far end talking (wake word ignored, its listening mode never on: STT heard nothing; trace of a
- * call with an empty master bedroom, 2026-10-15).  Quiet speech in micAsr is -55 and up */
-#define NEAR_MIN_DB -58.0f
+/* This side talks: RNNoise's speech probability (micdenoise.h, an instance per call) over VAD_ON.  Before, by the level:
+ * 9 dB over the room's floor and over -58 dBFS, which an empty room's sounds of -65..-70 had passed on a Dot (trace of
+ * 2026-10-15: amplified room noise the other end took for talking).  On the Echo Show 5 that line is where speech is:
+ * its capture puts a wake word at -60..-70 dBFS over a room at -69, room noise peaks at -58..-61, and the gate stayed
+ * shut for 95 % of a call (trace of a call from Home Assistant, 2026-11-04: only speech into the Echo came through).
+ * The corpus at the Show's levels over noise at -69 (speech frames passed / noise frames passed): RNNoise at 0.7
+ * 80/1.1 % at -50 dBFS, 79/0.7 % at -60, 74/1.2 % at -66; the level rule 58/3.2 %, 11/3.6 %, 0/1.3 % */
+#define VAD_ON      0.7f
+#define DENOISE_DB  12.0f               /* what RNNoise takes off the room at most: micdenoise.c's strongest by ear */
 /* The far end talks when it plays this far over its own floor (what it sent in its pauses: the noise of its room
  * after its gain, -88..-38 dBFS in that call), and over FAR_DB: an older build on the other side still sends that noise */
 #define FAR_OVER_DB 25.0f
@@ -113,8 +142,26 @@ static int answer_ms = ANSWER_MS, lost_ms = LOST_MS;
  * 2026-10-08).  A reply 0.5 s after the other side stops passes at -48 dBFS in micAsr, a quiet one after a second */
 #define FAR_FALL    0.4f
 #define LISTEN_HANG_MS 1500
+/* A high-pass ahead of everything in the call (RNNoise, levels, gain, what goes out): 4th-order Butterworth at 200 Hz,
+ * -18 dB at 120 Hz.  The Echo Show 5's front end passes everything over 80 Hz (AFE.cfg's HPF), and a mains hum came
+ * through it: 109..125 Hz, the room at -59 dBFS with it, -69 without (high-passed at 200 Hz), coming and going within
+ * minutes.  A talker at normal voice there is -63 dBFS over 200 Hz (2026-11-05, 25 s recorded), so the gain at its
+ * +36 dB top sent the hum out at -23 dBFS and the voice at -27: what Home Assistant heard was mostly hum, and the gain
+ * learnt the hum's level as the talker's.  Under 200 Hz a call loses only a low voice's fundamental (telephony cuts at
+ * 300); RNNoise's speech frames (corpus, 0.7) 90 -> 86 % at -55 dBFS over the hum */
+#define HPF_HZ      200.0
 
 enum { M_INVITE = 1, M_ACCEPT, M_RINGING, M_REFUSE, M_BYE };
+enum { CAP_SHOWS = 1, CAP_SENDS = 2 };
+#define VFRAG     1150                  /* a fragment's data: 1150 + 15 + 17 + 16 + UDP/IP stays under 1280 */
+#define VFRAG_MAX 255
+#define VFRAME_MAX (VFRAG * VFRAG_MAX)
+/* The frosted start, as stock's Drop In: the caller sees the picture of an Echo that did not ring blurred for this
+ * long (video.c, cam.c's HMCAM_BLUR_MS: 3 s frosted, the last second clearing), so whoever is dropped in on has a
+ * moment before they are seen; a call answered by a press is seen at once */
+#define FROST_MS  4000
+#define CALL_KBPS 1000                  /* the camera in a call between Echos (the integration's stream: 1500): unmeasured
+                                         * on two Shows at once; every fragment of a key frame must arrive */
 const char *const dropin_states[4] = { "idle", "calling", "ringing", "connected" };
 const char *const dropin_results[DROPIN_NRESULTS] = { "connected", "ringing", "busy", "do_not_disturb", "microphones_off", "drop_in_off",
                                                       "declined", "not_answered", "no_answer", "not_found", "busy_here",
@@ -124,11 +171,14 @@ static pthread_mutex_t dl = PTHREAD_MUTEX_INITIALIZER;   /* everything below; ta
 static pthread_cond_t live_cond = PTHREAD_COND_INITIALIZER;
 static atomic_int notify;                                 /* the loop tells the core (core_dropin): callers may hold core_lock */
 static int sock = -1, running, enabled = 1, ask;
+static atomic_int gate_mode;                             /* drop_in_gate: read on the capture thread, per frame */
 static uint16_t my_port;
 static uint8_t self_id[8];
 static struct {
     int state, outgoing, gen, keyed, rang;              /* gen: one per call; rang: the callee said it rings */
     int invited;                                        /* the first invite went out (once the core knew: tell_core) */
+    int ha;                                             /* the far end is Home Assistant (web.c's channel), not an Echo */
+    uint32_t ha_seq;                                    /* its frames in, numbered here */
     uint8_t id[8], peer[8];
     char node[64];
     uint32_t ip; uint16_t port;                         /* the other Echo's audio address (network byte order ip) */
@@ -137,13 +187,17 @@ static struct {
     uint32_t tx_seq;
     unsigned rx, lost, late, played;                    /* frames in; played without their packet; arrived after their turn */
     long long gap_max, arr_at;                          /* the longest wait between two packets, ms */
+    int peer_caps;                                      /* what the other Echo said it can (CAP_*), 0 an older build */
+    uint32_t vtx_seq; unsigned vframes_in, vframes_out, vbroken;
 } c;
 static uint32_t play_next;                              /* the playout's next frame, for counting late ones */
 static struct { int left; long long at; uint8_t to[8]; uint8_t p[ARB_MSG_MAX]; size_t n; } bye;
 /* Calls that ended: an invite the caller repeated before it heard of the end (a decline, a hang-up while it rang) must
  * not start the call again */
 static uint8_t ended[4][8]; static unsigned ended_n;
-static struct slot { uint32_t seq; int len; uint8_t d[MAXPKT]; } jb[JB];
+static struct slot { uint32_t seq; int len; uint8_t d[SLOT]; } jb[JB];
+static int16_t ha_out[HAQ][FRAME]; static unsigned ha_out_in, ha_out_out;   /* to Home Assistant (dl) */
+static unsigned ha_out_lost;                            /* frames the channel fell behind on: dropped, oldest first */
 static uint32_t jb_hi, jb_lo; static int jb_any;      /* the newest frame in, the first of the call */
 static struct { long long t; float db; } ref[REF_N];
 static unsigned ref_n;
@@ -160,6 +214,32 @@ static long long now_ms(void)
 {
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static struct { float b0, b1, b2, a1, a2, x1, x2, y1, y2; } hpf[2];   /* the capture thread's: two biquads */
+
+static void hpf_reset(void)
+{
+    static const double q[2] = { 0.54119610, 1.30656296 };              /* Butterworth's 4th order as two sections */
+    double w = 2 * M_PI * HPF_HZ / RATE, c = cos(w);
+    for (int k = 0; k < 2; k++) {
+        double al = sin(w) / (2 * q[k]), a0 = 1 + al;
+        hpf[k].b0 = (float)((1 + c) / 2 / a0); hpf[k].b1 = (float)(-(1 + c) / a0); hpf[k].b2 = hpf[k].b0;
+        hpf[k].a1 = (float)(-2 * c / a0); hpf[k].a2 = (float)((1 - al) / a0);
+        hpf[k].x1 = hpf[k].x2 = hpf[k].y1 = hpf[k].y2 = 0;
+    }
+}
+
+static void hpf_run(const int16_t *in, int16_t *out, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        float v = in[i];
+        for (int k = 0; k < 2; k++) {
+            float y = hpf[k].b0 * v + hpf[k].b1 * hpf[k].x1 + hpf[k].b2 * hpf[k].x2 - hpf[k].a1 * hpf[k].y1 - hpf[k].a2 * hpf[k].y2;
+            hpf[k].x2 = hpf[k].x1; hpf[k].x1 = v; hpf[k].y2 = hpf[k].y1; hpf[k].y1 = y; v = y;
+        }
+        out[i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : lrintf(v));
+    }
 }
 
 static float level_db(const int16_t *s, size_t n)
@@ -204,6 +284,7 @@ static size_t msg(uint8_t *p, int kind, const char *reason)
     memcpy(p + n, c.epk, 32); n += 32;
     p[n++] = (uint8_t)l;
     if (l) { memcpy(p + n, reason, l); n += l; }
+    if (kind == M_INVITE || kind == M_ACCEPT) p[n++] = (uint8_t)((video_present() ? CAP_SHOWS : 0) | (camera_present() ? CAP_SENDS : 0));
     return n;
 }
 
@@ -243,6 +324,7 @@ static void go_live(long long now)
     c.state = DROPIN_LIVE; c.live_at = c.rx_at = now; c.tx_seq = 0; c.rx = c.lost = c.late = c.played = 0; c.gap_max = c.arr_at = 0; play_next = 0;
     memset(jb, 0, sizeof jb); jb_any = 0; ref_n = 0; memset(ref, 0, sizeof ref);
     fprintf(stderr, "drop in: connected with %s\n", c.node);
+    if (c.outgoing && !c.rang && !c.ha) video_blur(c.gen, FROST_MS);
     pthread_cond_broadcast(&live_cond);
 }
 
@@ -250,12 +332,16 @@ static void go_live(long long now)
 static void end_call(const char *why, int tell, int result)
 {
     if (c.state == DROPIN_IDLE) return;
+    video_stop(c.gen);                                  /* the other side's picture goes with the call, every way it ends */
     ev_push(DROPIN_IDLE, "", c.outgoing, c.state == DROPIN_CALLING && c.outgoing ? result : -1, 0);
     if (c.state == DROPIN_LIVE) fprintf(stderr, "drop in: ended with %s after %lld s (%s); %u frames in, %u played, %u of them missing "
                                         "(%u came too late), longest gap %lld ms\n", c.node, (now_ms() - c.live_at) / 1000, why, c.rx, c.played,
                                         c.lost, c.late, c.gap_max);
+    if (c.state == DROPIN_LIVE && c.ha) fprintf(stderr, "drop in: %u frames of the mic dropped on the way to Home Assistant\n", ha_out_lost);
+    if (c.state == DROPIN_LIVE && !c.ha && (c.vframes_in || c.vframes_out))
+        fprintf(stderr, "drop in: pictures: %u sent, %u shown, %u lost on the way\n", c.vframes_out, c.vframes_in, c.vbroken);
     else fprintf(stderr, "drop in: %s %s: %s\n", c.outgoing ? "call to" : "call from", c.node, why);
-    if (tell) {
+    if (tell && !c.ha) {
         bye.n = msg(bye.p, M_BYE, why); memcpy(bye.to, c.peer, 8);
         arb_tell(bye.to, bye.p, bye.n); bye.left = 2; bye.at = now_ms();
     }
@@ -268,7 +354,9 @@ static void end_call(const char *why, int tell, int result)
 static void fresh_call(const uint8_t peer[8], const char *node, uint32_t ip, int outgoing)
 {
     memset(&c.id, 0, sizeof c.id);
-    c.outgoing = outgoing; c.gen++; c.keyed = 0; c.rang = 0; c.invited = 0;
+    c.outgoing = outgoing; c.gen++; c.keyed = 0; c.rang = 0; c.invited = 0; c.ha = 0; c.ha_seq = 0;
+    c.peer_caps = 0; c.vtx_seq = 0; c.vframes_in = c.vframes_out = c.vbroken = 0;
+    ha_out_in = ha_out_out = ha_out_lost = 0;
     memcpy(c.peer, peer, 8); snprintf(c.node, sizeof c.node, "%s", node); c.ip = ip; c.port = 0;
     ws_random(c.esk, 32); crypto_x25519_public_key(c.epk, c.esk);
     c.since = c.sig_at = now_ms();
@@ -310,6 +398,12 @@ int dropin_enable(int set)
     int r = enabled;
     pthread_mutex_unlock(&dl);
     return r;
+}
+
+int dropin_gate(int set)
+{
+    if (set >= 0 && set <= 2) gate_mode = set;
+    return gate_mode;
 }
 
 int dropin_ask(int set)
@@ -367,14 +461,14 @@ int dropin_call(const char *target, char *err, size_t errsz)
 void dropin_hangup(const char *why)
 {
     pthread_mutex_lock(&dl);
-    if (c.state == DROPIN_RINGING) { send_msg(M_REFUSE, "declined"); end_call(why, 0, -1); }
+    if (c.state == DROPIN_RINGING) { if (!c.ha) send_msg(M_REFUSE, "declined"); end_call(why, 0, -1); }
     else end_call(why, c.state != DROPIN_CALLING || c.invited, DROPIN_R_CANCELLED);    /* no bye for an invite never sent */
     pthread_mutex_unlock(&dl);
 }
 
 static void answer(void)              /* dl held: the callee takes a ringing call */
 {
-    send_msg(M_ACCEPT, NULL);
+    if (!c.ha) send_msg(M_ACCEPT, NULL);
     go_live(now_ms());
 }
 
@@ -403,6 +497,7 @@ void dropin_message(const unsigned char from[8], const char *node, unsigned ip, 
     if (n < 44 || n < (size_t)44 + p[43]) return;
     kind = p[0]; memcpy(id, p + 1, 8); port = p[9] | p[10] << 8; memcpy(epk, p + 11, 32);
     snprintf(reason, sizeof reason, "%.*s", p[43], (const char *)p + 44);
+    int caps = n > (size_t)44 + p[43] ? p[44 + p[43]] : 0;
     for (char *q = reason; *q; q++) if ((unsigned char)*q < 0x20) *q = ' ';
     /* before dl: core_lock comes first */
     const char *no = kind == M_INVITE ? core_dropin_refusal(1) : NULL;
@@ -425,7 +520,7 @@ void dropin_message(const unsigned char from[8], const char *node, unsigned ip, 
             break;
         }
         fresh_call(from, node, ip, 0);
-        memcpy(c.id, id, 8); c.port = htons((uint16_t)port);
+        memcpy(c.id, id, 8); c.port = htons((uint16_t)port); c.peer_caps = caps;
         if (derive(epk)) { send_to(from, id, M_REFUSE, "no key"); c.state = DROPIN_IDLE; break; }
         if (ask) { c.state = DROPIN_RINGING; ev_push(DROPIN_RINGING, c.node, 0, -1, 0);
                    fprintf(stderr, "drop in: %s calls, ringing until the action button\n", node); send_msg(M_RINGING, NULL); }
@@ -439,7 +534,7 @@ void dropin_message(const unsigned char from[8], const char *node, unsigned ip, 
         break;
     case M_ACCEPT:
         if (!same || !c.outgoing || c.state != DROPIN_CALLING) break;
-        c.port = htons((uint16_t)port); c.ip = ip;
+        c.port = htons((uint16_t)port); c.ip = ip; c.peer_caps = caps;
         if (!port || derive(epk)) { end_call("no key", 1, DROPIN_R_FAILED); break; }
         go_live(now);
         break;
@@ -457,12 +552,78 @@ void dropin_message(const unsigned char from[8], const char *node, unsigned ip, 
     crypto_wipe(epk, sizeof epk);
 }
 
+/* ---------------------------------------------------------------- Home Assistant as the far end (web.c /api/call) */
+
+int dropin_ha_begin(char *err, size_t errsz)
+{
+    if (!running) { snprintf(err, errsz, "Drop In is not running on this Echo"); return -1; }
+    const char *no = core_dropin_refusal(1);                /* before dl: core_lock comes first */
+    uint8_t none[8] = { 0 }; int gen = -1;
+    pthread_mutex_lock(&dl);
+    if (!enabled) snprintf(err, errsz, "Drop In is off there");
+    else if (no) snprintf(err, errsz, "%s", no);
+    else if (c.state) snprintf(err, errsz, "busy in another Drop In");
+    else {
+        fresh_call(none, "home-assistant", 0, 0);
+        c.ha = 1; c.keyed = 1; ws_random(c.id, 8);
+        gen = c.gen;
+        if (ask) { c.state = DROPIN_RINGING; ev_push(DROPIN_RINGING, c.node, 0, -1, 0);
+                   fprintf(stderr, "drop in: Home Assistant calls, ringing until the action button\n"); }
+        else { fprintf(stderr, "drop in: Home Assistant drops in\n"); answer(); }
+    }
+    if (gen < 0) fprintf(stderr, "drop in: call from Home Assistant refused: %s\n", err);
+    pthread_mutex_unlock(&dl);
+    return gen;
+}
+
+int dropin_ha_state(int gen)
+{
+    pthread_mutex_lock(&dl);
+    int st = c.ha && c.gen == gen ? c.state : DROPIN_IDLE;
+    pthread_mutex_unlock(&dl);
+    return st;
+}
+
+int dropin_ha_out(int gen, int16_t pcm[320])
+{
+    int r = 0;
+    pthread_mutex_lock(&dl);
+    if (c.ha && c.gen == gen && ha_out_out != ha_out_in) { memcpy(pcm, ha_out[ha_out_out++ % HAQ], FRAME * 2); r = 1; }
+    pthread_mutex_unlock(&dl);
+    return r;
+}
+
+void dropin_ha_in(int gen, const int16_t pcm[320])
+{
+    pthread_mutex_lock(&dl);
+    if (c.ha && c.gen == gen && c.state == DROPIN_LIVE) {
+        uint32_t seq = c.ha_seq++;
+        struct slot *sl = &jb[seq % JB];
+        memcpy(sl->d, pcm, SLOT); sl->seq = seq; sl->len = SLOT;
+        if (!jb_any || (int32_t)(seq - jb_hi) > 0) jb_hi = seq;
+        if (!jb_any || (int32_t)(seq - jb_lo) < 0) jb_lo = seq;
+        long long now = now_ms();
+        if (c.arr_at && now - c.arr_at > c.gap_max) c.gap_max = now - c.arr_at;
+        if (jb_any && (int32_t)(seq - play_next) < 0) c.late++;
+        jb_any = 1; c.rx++; c.rx_at = c.arr_at = now;
+    } else if (c.ha && c.gen == gen) c.rx_at = now_ms();    /* (ringing: it is still there) */
+    pthread_mutex_unlock(&dl);
+}
+
+void dropin_ha_end(int gen, const char *why)
+{
+    pthread_mutex_lock(&dl);
+    if (c.ha && c.gen == gen) end_call(why, 0, -1);
+    pthread_mutex_unlock(&dl);
+}
+
 /* ---------------------------------------------------------------- audio out: the mic */
 
 /* The echo suppressor's and the gain's state, and the encoder: the capture thread's own */
 static OpusEncoder *enc;
 static int enc_gen = -1;
 static struct micgain gain;
+static struct micdenoise *dn;           /* the call's RNNoise: its speech probability, and the audio that goes out */
 static float es_c, es_g;                /* echo against what we play, dB (peak held); the gain applied, linear */
 static int dt_n;                        /* frames in a row over the echo estimate */
 static float far_hold;                  /* what we play, held: falls FAR_FALL dB a frame */
@@ -503,10 +664,10 @@ int dropin_far_talking(void)
 
 static void send_frame(const int16_t *pcm, int own)
 {
-    uint8_t pkt[17 + MAXPKT + 16], op[MAXPKT], nonce[24] = { 0 }, key[32]; struct sockaddr_in to; int gen;
+    uint8_t pkt[17 + MAXPKT + 16], op[MAXPKT], nonce[24] = { 0 }, key[32]; struct sockaddr_in to; int gen, ha;
     pthread_mutex_lock(&dl);
-    if (c.state != DROPIN_LIVE || !c.keyed || !c.port) { pthread_mutex_unlock(&dl); return; }
-    gen = c.gen;
+    if (c.state != DROPIN_LIVE || !c.keyed || (!c.ha && !c.port)) { pthread_mutex_unlock(&dl); return; }
+    gen = c.gen; ha = c.ha;
     float far = far_db(now_ms()), ffloor = far_floor;
     memcpy(key, c.key, 32);
     memcpy(pkt, "HMD1", 4); memcpy(pkt + 4, c.id, 8); pkt[12] = (uint8_t)!c.outgoing;
@@ -523,13 +684,28 @@ static void send_frame(const int16_t *pcm, int own)
         opus_encoder_ctl(enc, OPUS_SET_BITRATE, BITRATE); opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC, 1);
         opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC, LOSS_PERC); opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY, 5);
         opus_encoder_ctl(enc, OPUS_SET_SIGNAL, OPUS_SIGNAL_VOICE);
-        micgain_init(&gain, MICGAIN_LEVEL); micgain_start(&gain, 1);
+        /* The talker's level to start from: the last wake word's, as the pipeline does.  micgain's default (-50 dBFS,
+         * +24 dB) is a Dot's; the Echo Show 5 puts a talker at -60 dBFS (its wake words for three days, 2026-11-02..04),
+         * so every call went out 10 dB quiet until the gain had learnt from speech, which it does only on the frames
+         * RNNoise is sure of (a third of a talker's at that level).  Too low a guess costs nothing: the gain falls at once
+         * on louder speech, and the gate holds the room down meanwhile */
+        float kdb = core_keyword_db();
+        micgain_init(&gain, MICGAIN_LEVEL); micgain_start(&gain, kdb <= 0 && kdb > -80 ? kdb : 1);
+        if (dn) md_reset(dn, DENOISE_DB); else dn = md_new(DENOISE_DB);
         es_c = -30; es_g = 1; dt_n = 0; far_hold = -100; floor_db = -70; near_until = 0; listen_on = 0; listen_at = 0; enc_gen = gen;
+        hpf_reset();
     }
-    int16_t f[FRAME];
-    memcpy(f, pcm, sizeof f);
+    int16_t f[FRAME], hp[FRAME];
+    hpf_run(pcm, hp, FRAME); pcm = hp;                 /* the hum out first (HPF_HZ says why) */
+    float m = level_db(pcm, FRAME), target = 1, vad = 0; long long now = now_ms(); int farend, near;
+    /* RNNoise in its two 10 ms frames: the louder one's probability (a syllable's onset in either opens it); its output
+     * goes out, 12 ms behind, which nothing here needs to know: the levels below are the mic's own */
+    if (dn) for (int h = 0; h < FRAME; h += MICDENOISE_FRAME) {
+        int16_t o[MICDENOISE_FRAME * 2];
+        if (md_run(dn, pcm + h, MICDENOISE_FRAME, o) == MICDENOISE_FRAME) memcpy(f + h, o, sizeof o / 2); else memcpy(f + h, pcm + h, sizeof o / 2);
+        if (md_speech(dn) > vad) vad = md_speech(dn);
+    } else memcpy(f, pcm, sizeof f);
     /* echo suppression: the far end talks and the mic is not clearly louder than its echo has been */
-    float m = level_db(f, FRAME), target = 1; long long now = now_ms(); int farend, near;
     far_hold = far > far_hold - FAR_FALL ? far : far_hold - FAR_FALL;
     farend = far_voice(far_hold, ffloor);
     int over = farend && m >= far_hold + es_c + DOUBLE_TALK_DB;
@@ -541,14 +717,16 @@ static void send_frame(const int16_t *pcm, int own)
         if (es_c > 0) es_c = 0;
     }
     floor_db = m < floor_db ? (m > -90 ? m : -90) : floor_db + 0.03f;     /* drops at once, rises 1.5 dB/s */
-    near = !own && m > floor_db + NEAR_DB && m > NEAR_MIN_DB && (!farend || dt_n >= DOUBLE_TALK_N);
+    near = !own && vad >= VAD_ON && (!farend || dt_n >= DOUBLE_TALK_N);
     /* A gate: open while this side talks (and LISTEN_HANG_MS after, unless the far end plays), else ducked.  Ducked only
      * while the far end played (the first try), the gain lifted the room in its pauses from -72 to -48 dBFS while the
      * rest went out at -70: hiss that came and went with every sentence of the other side (2026-10-08) */
-    if (own) target = powf(10, SUPPRESS_OWN_DB / 20);
-    else if (!near && (farend || now >= near_until)) target = powf(10, SUPPRESS_DB / 20);
+    int gm = gate_mode;
+    if (own) target = powf(10, SUPPRESS_OWN_DB / 20);                  /* our own sounds go down whatever drop_in_gate says */
+    else if (gm != 2 && !near && (farend || now >= near_until)) target = powf(10, (gm == 1 ? GATE_LIGHT_DB : SUPPRESS_DB) / 20);
     /* the gain first: after the ducking it would give the 25 dB back (+24 dB at micAsr's level, measured) */
     gain.hold = own || farend;                          /* the talker's level is learnt while the other side is quiet */
+    gain.speech = near;                                 /* ...and from speech only: a room's noise is no quiet talker */
     micgain_run(&gain, f, f, FRAME);
     float step = (target - es_g) / FRAME;              /* within a frame: a word's onset is not cut */
     for (int i = 0; i < FRAME; i++) { if ((step < 0 && es_g > target) || (step > 0 && es_g < target)) es_g += step; f[i] = (int16_t)(f[i] * es_g); }
@@ -556,9 +734,20 @@ static void send_frame(const int16_t *pcm, int own)
     int want = now < near_until;
     if (want != listen_on && now - listen_at >= 250) { listen_on = want; listen_at = now; core_dropin_listen(want); }
     /* HASSMIC_DROPIN_TRACE=<file>: the gate's inputs and decisions per frame, for tuning on a device (export it in
-     * hassmic.conf): ms, mic dB, far dB, echo estimate, floor, this side talks, own sound, double talk run, gate, gain */
+     * hassmic.conf): ms, mic dB, far dB, echo estimate, floor, this side talks, own sound, double talk run, gate, gain,
+     * RNNoise's speech probability */
     { static FILE *tr; if (!tr && getenv("HASSMIC_DROPIN_TRACE")) tr = fopen(getenv("HASSMIC_DROPIN_TRACE"), "w");
-      if (tr) { fprintf(tr, "%lld %.1f %.1f %.1f %.1f %d %d %d %.2f %.1f\n", now, m, far, es_c, floor_db, near, own, dt_n, target, gain.gain_db); fflush(tr); } }
+      if (tr) { fprintf(tr, "%lld %.1f %.1f %.1f %.1f %d %d %d %.2f %.1f %.2f\n", now, m, far, es_c, floor_db, near, own, dt_n, target, gain.gain_db, vad); fflush(tr); } }
+    if (ha) {                                           /* to web.c's channel, as PCM: the oldest goes when it lags */
+        crypto_wipe(key, sizeof key);
+        pthread_mutex_lock(&dl);
+        if (c.gen == gen && c.state == DROPIN_LIVE) {
+            if (ha_out_in - ha_out_out >= HAQ) { ha_out_out++; ha_out_lost++; }
+            memcpy(ha_out[ha_out_in++ % HAQ], f, sizeof f);
+        }
+        pthread_mutex_unlock(&dl);
+        return;
+    }
     int32_t len = opus_encode(enc, f, FRAME, op, sizeof op);
     if (len <= 0) { crypto_wipe(key, sizeof key); return; }
     memcpy(nonce, pkt + 4, 13);
@@ -612,7 +801,7 @@ static void *playout(void *arg)
     for (;;) {
         pthread_mutex_lock(&dl);
         while (c.state != DROPIN_LIVE) pthread_cond_wait(&live_cond, &dl);
-        int gen = c.gen; long long t0 = now_ms();
+        int gen = c.gen, ha = c.ha; long long t0 = now_ms();
         far_floor = -70;
         pthread_mutex_unlock(&dl);
         int e = 0, open = voip_open(RATE, 1) == 0, started = 0, missing = 0, skipped = 0, stretched = 0;
@@ -621,7 +810,7 @@ static void *playout(void *arg)
         if (!dec) fprintf(stderr, "drop in: no Opus decoder (%d)\n", e);
         uint32_t next = 0;
         for (;;) {
-            uint8_t pkt[MAXPKT]; int len = 0, fec = 0; int16_t pcm[FRAME];
+            uint8_t pkt[SLOT]; int len = 0, fec = 0; int16_t pcm[FRAME];
             while (open && voip_queued_us() > QUEUE_US) usleep(4000);
             pthread_mutex_lock(&dl);
             if (c.state != DROPIN_LIVE || c.gen != gen) { pthread_mutex_unlock(&dl); break; }
@@ -631,7 +820,7 @@ static void *playout(void *arg)
                 struct slot *s = &jb[next % JB], *s1 = &jb[(next + 1) % JB];
                 if (s->len && s->seq == next) { len = s->len; memcpy(pkt, s->d, (size_t)len); }
                 else if ((int32_t)(jb_hi - next) <= 0) stretched++;         /* nothing newer yet: wait, concealing */
-                else if (s1->len && s1->seq == next + 1) { len = s1->len; memcpy(pkt, s1->d, (size_t)len); fec = 1; }
+                else if (!ha && s1->len && s1->seq == next + 1) { len = s1->len; memcpy(pkt, s1->d, (size_t)len); fec = 1; }
                 if (len || (int32_t)(jb_hi - next) > 0) {                  /* played, or lost for good: on to the next */
                     if (!len || fec) c.lost++;
                     s->len = 0;
@@ -640,7 +829,8 @@ static void *playout(void *arg)
             }
             pthread_mutex_unlock(&dl);
             int got = 0;
-            if (dec && len) got = opus_decode(dec, pkt, len, pcm, FRAME, fec);
+            if (ha) { if (len == SLOT) { memcpy(pcm, pkt, SLOT); got = FRAME; } }      /* PCM from Home Assistant: no codec */
+            else if (dec && len) got = opus_decode(dec, pkt, len, pcm, FRAME, fec);
             else if (dec && started && missing < PLC_FRAMES) got = opus_decode(dec, NULL, 0, pcm, FRAME, 0);
             missing = len ? 0 : missing + 1;
             if (got != FRAME) memset(pcm, 0, sizeof pcm);
@@ -675,8 +865,8 @@ static void tick(void)
         else if (now - c.sig_at >= (c.rang ? 1000 : INVITE_MS)) { c.sig_at = now; send_msg(M_INVITE, NULL); }
         break;
     case DROPIN_RINGING:
-        if (now - c.since > RING_MS) { send_msg(M_REFUSE, "not answered"); end_call("not answered", 0, -1); }
-        else if (now - c.sig_at > CALLER_MS) end_call("the caller gave up", 0, -1);
+        if (now - c.since > RING_MS) { if (!c.ha) send_msg(M_REFUSE, "not answered"); end_call("not answered", 0, -1); }
+        else if (!c.ha && now - c.sig_at > CALLER_MS) end_call("the caller gave up", 0, -1);   /* (HA: its channel's end) */
         break;
     case DROPIN_LIVE:
         if (now - c.rx_at > lost_ms) {
@@ -689,6 +879,119 @@ static void tick(void)
     pthread_mutex_unlock(&dl);
 }
 
+/* ---------------------------------------------------------------- video between Echo Shows */
+
+/* The call's picture in: one frame put together at a time (the loop thread's own state) */
+static struct { uint32_t id; int n, got, type, any, need_key; long long pts; size_t len; uint8_t have[VFRAG_MAX]; } vin;
+static uint8_t vbuf[VFRAME_MAX];
+
+static void on_video(const uint8_t *p, size_t n)
+{
+    uint8_t nonce[24] = { 0 }, pt[15 + VFRAG];
+    if (n < 17 + 15 + 1 + 16 || n > 17 + 15 + VFRAG + 16) return;
+    /* HASSMIC_DROPIN_VIDEO_LOSS=<n>: every n-th fragment dropped here, for the PC's test of the picture's recovery */
+    { static int every = -1, k; if (every < 0) every = getenv("HASSMIC_DROPIN_VIDEO_LOSS") ? atoi(getenv("HASSMIC_DROPIN_VIDEO_LOSS")) : 0;
+      if (every > 0 && ++k % every == 0) return; }
+    pthread_mutex_lock(&dl);
+    if (c.state != DROPIN_LIVE || !c.keyed || c.ha || memcmp(p + 4, c.id, 8) || p[12] != (uint8_t)c.outgoing) { pthread_mutex_unlock(&dl); return; }
+    memcpy(nonce, p + 4, 13); nonce[13] = 'V';
+    if (crypto_aead_unlock(pt, p + n - 16, c.key, nonce, p, 17, p + 17, n - 17 - 16)) { pthread_mutex_unlock(&dl); return; }
+    int gen = c.gen;
+    pthread_mutex_unlock(&dl);
+    static int vin_gen = -1;
+    if (gen != vin_gen) { memset(&vin, 0, sizeof vin); vin.need_key = 1; vin_gen = gen; }   /* a new call: from a key frame */
+    size_t dl_ = n - 17 - 16 - 15;
+    uint32_t id = (uint32_t)pt[0] | (uint32_t)pt[1] << 8 | (uint32_t)pt[2] << 16 | (uint32_t)pt[3] << 24;
+    int frag = pt[4], nf = pt[5], type = pt[6];
+    long long pts = 0; for (int i = 0; i < 8; i++) pts |= (long long)pt[7 + i] << (8 * i);
+    if (!nf || frag >= nf || (type != CAM_KEY && type != CAM_FRAME)) return;
+    if (!vin.any || id != vin.id) {
+        if (vin.any && (int32_t)(id - vin.id) < 0) return;                 /* a late fragment of an older frame */
+        if (vin.any && vin.got < vin.n) { vin.need_key = 1; pthread_mutex_lock(&dl); c.vbroken++; pthread_mutex_unlock(&dl); }
+        if (vin.any && (uint32_t)(id - vin.id) > 1 && !vin.need_key) { vin.need_key = 1; pthread_mutex_lock(&dl); c.vbroken++; pthread_mutex_unlock(&dl); }
+        vin.id = id; vin.n = nf; vin.got = 0; vin.type = type; vin.pts = pts; vin.len = 0; vin.any = 1;
+        memset(vin.have, 0, sizeof vin.have);
+    }
+    if (nf != vin.n || vin.have[frag]) return;
+    vin.have[frag] = 1; vin.got++;
+    memcpy(vbuf + (size_t)frag * VFRAG, pt + 15, dl_);
+    if (frag == nf - 1) vin.len = (size_t)frag * VFRAG + dl_;          /* the last fragment's size gives the frame's */
+    if (vin.got < vin.n) return;
+    if (vin.type == CAM_KEY) vin.need_key = 0;
+    if (vin.need_key) return;                                           /* a delta after a loss: wait for a key frame */
+    video_show(gen, vin.type, vin.pts, vbuf, vin.len);
+    pthread_mutex_lock(&dl); if (c.gen == gen) c.vframes_in++; pthread_mutex_unlock(&dl);
+}
+
+/* The call's picture out: the camera's stream while the call is live, the other Echo shows pictures, the setting is
+ * on and the lens open; tried again every 2 s (the setting switched on, the lens opened, a stream that had the camera) */
+static void *video_sender(void *arg)
+{
+    (void)arg;
+    static uint8_t config[4096]; size_t config_n = 0;
+    for (;;) {
+        pthread_mutex_lock(&dl);
+        while (c.state != DROPIN_LIVE || c.ha || !(c.peer_caps & CAP_SHOWS)) pthread_cond_wait(&live_cond, &dl);
+        int gen = c.gen;
+        pthread_mutex_unlock(&dl);
+        const char *why = "";
+        int cam = camera_present() ? camera_begin_call(&why, CALL_KBPS) : -1;
+        if (cam < 0) {
+            if (strcmp(why, "off") && strcmp(why, "covered") && strcmp(why, "absent") && why[0]) fprintf(stderr, "drop in: no picture in the call: %s\n", why);
+            for (int i = 0; i < 20; i++) {                               /* 2 s, or the call's end */
+                usleep(100000);
+                pthread_mutex_lock(&dl); int same = c.state == DROPIN_LIVE && c.gen == gen; pthread_mutex_unlock(&dl);
+                if (!same) break;
+            }
+            continue;
+        }
+        fprintf(stderr, "drop in: the camera's picture to the other Echo\n");
+        uint32_t fid = 0; config_n = 0;
+        for (;;) {
+            int t; long long pts; uint8_t *d = NULL; size_t len;
+            int g = camera_next(cam, &t, &pts, &d, &len, 200);
+            pthread_mutex_lock(&dl);
+            int same = c.state == DROPIN_LIVE && c.gen == gen && c.keyed;
+            uint8_t key[32], hdr[17]; struct sockaddr_in to;
+            if (same) {
+                memcpy(key, c.key, 32);
+                memcpy(hdr, "HMV1", 4); memcpy(hdr + 4, c.id, 8); hdr[12] = (uint8_t)!c.outgoing;
+                memset(&to, 0, sizeof to); to.sin_family = AF_INET; to.sin_addr.s_addr = c.ip; to.sin_port = c.port;
+            }
+            pthread_mutex_unlock(&dl);
+            if (!same || g < 0) { free(d); if (same) crypto_wipe(key, sizeof key); break; }
+            if (g == 0) { crypto_wipe(key, sizeof key); continue; }
+            video_self(gen, t, pts, d, len);                             /* what leaves, in this screen's corner */
+            if (t == CAM_CONFIG) { if (len <= sizeof config) { memcpy(config, d, len); config_n = len; } free(d); crypto_wipe(key, sizeof key); continue; }
+            /* the config ahead of every key frame: the receiver's decoder needs nothing else to start */
+            size_t total = len + (t == CAM_KEY ? config_n : 0);
+            if (total > VFRAME_MAX) { free(d); crypto_wipe(key, sizeof key); continue; }
+            uint8_t *f = d;
+            if (t == CAM_KEY && config_n) { f = malloc(total); if (!f) { free(d); crypto_wipe(key, sizeof key); continue; } memcpy(f, config, config_n); memcpy(f + config_n, d, len); }
+            int nf = (int)((total + VFRAG - 1) / VFRAG); fid++;
+            for (int i = 0; i < nf; i++) {
+                uint8_t pkt[17 + 15 + VFRAG + 16], pt[15 + VFRAG], nonce[24] = { 0 };
+                size_t off = (size_t)i * VFRAG, k = total - off < VFRAG ? total - off : VFRAG;
+                pthread_mutex_lock(&dl); uint32_t vs = c.vtx_seq++; pthread_mutex_unlock(&dl);
+                memcpy(pkt, hdr, 13); for (int b = 0; b < 4; b++) pkt[13 + b] = (uint8_t)(vs >> 8 * b);
+                for (int b = 0; b < 4; b++) pt[b] = (uint8_t)(fid >> 8 * b);
+                pt[4] = (uint8_t)i; pt[5] = (uint8_t)nf; pt[6] = (uint8_t)t;
+                for (int b = 0; b < 8; b++) pt[7 + b] = (uint8_t)((unsigned long long)pts >> 8 * b);
+                memcpy(pt + 15, f + off, k);
+                memcpy(nonce, pkt + 4, 13); nonce[13] = 'V';
+                crypto_aead_lock(pkt + 17, pkt + 17 + 15 + k, key, nonce, pkt, 17, pt, 15 + k);
+                if (sendto(sock, pkt, 17 + 15 + k + 16, 0, (struct sockaddr *)&to, sizeof to) < 0 && errno != EAGAIN) break;
+            }
+            pthread_mutex_lock(&dl); if (c.gen == gen) c.vframes_out++; pthread_mutex_unlock(&dl);
+            if (f != d) free(f);
+            free(d); crypto_wipe(key, sizeof key);
+        }
+        camera_end(cam);
+        video_self_stop(gen);                                            /* (the call's end stops it too) */
+    }
+    return NULL;
+}
+
 static void *loop(void *arg)
 {
     uint8_t buf[1500];
@@ -696,7 +999,7 @@ static void *loop(void *arg)
     for (;;) {
         struct pollfd pf = { sock, POLLIN, 0 }; struct sockaddr_in from; socklen_t fl = sizeof from; ssize_t n;
         if (poll(&pf, 1, 20) > 0 && (pf.revents & POLLIN) && (n = recvfrom(sock, buf, sizeof buf, 0, (struct sockaddr *)&from, &fl)) > 0)
-            on_audio(buf, (size_t)n, &from);
+            { if (n >= 4 && !memcmp(buf, "HMV1", 4)) on_video(buf, (size_t)n); else on_audio(buf, (size_t)n, &from); }
         if (atomic_exchange(&notify, 0)) tell_core();
         tick();
     }
@@ -719,6 +1022,7 @@ int dropin_start(int port)
     if (pthread_create(&t, NULL, loop, NULL)) { running = 0; return -1; }
     pthread_detach(t);
     if (!pthread_create(&t, NULL, playout, NULL)) pthread_detach(t);
+    if (camera_present() && !pthread_create(&t, NULL, video_sender, NULL)) pthread_detach(t);
     fprintf(stderr, "drop in: port %d\n", port);
     return 0;
 }

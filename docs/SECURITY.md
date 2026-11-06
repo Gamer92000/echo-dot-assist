@@ -7,9 +7,10 @@ What protects an Echo running hassmic, and where that ends. Nobody has audited a
 
 | Direction | What gets through |
 |---|---|
-| **Out** | Amazon's daemons: local addresses only, plus DNS to the servers DHCP hands out. `otad` and `ace_otad` (firmware updates): never. hassmic itself: anywhere, to fetch replies and music from where Home Assistant or Music Assistant point it. On the screen models the Kiosk Satellite app too, while "Kiosk Satellite internet access" is on (default; one rule for that app's uid, nothing else of Amazon's or the system's gets out through it). |
-| **In, TCP** | 16384–32767 only: 26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 updates, 28931 settings page; on the screen models that name a Kiosk Satellite package (`KIOSK_PACKAGE`), also 2324 (the app's remote administration) and 6053 (its ESPHome API), from private addresses only |
+| **Out** | Amazon's daemons: local addresses only, plus DNS to the servers DHCP hands out. `otad` and `ace_otad` (firmware updates): never. hassmic itself: anywhere, to fetch replies and music from where Home Assistant or Music Assistant point it. On the screen models the Kiosk Satellite app too, while "Kiosk Satellite internet access" is on (default; one rule for that app's uid, nothing else of Amazon's or the system's gets out through it). Any other app you installed on an Echo Show: local addresses only, until you switch its **Internet** on (settings page or Echo Local's Apps tab); Amazon's apps never. |
+| **In, TCP** | 16384–32767 only: 26053 ESPHome, 16700 Wyoming, 16710 the Echo's own voice (Wyoming text to speech, where one is installed), 28928 Sendspin, 28929 updates, 28931 settings page; on the screen models that name a Kiosk Satellite package (`KIOSK_PACKAGE`), also 2324 (the app's remote administration) and 6053 (its ESPHome API), from private addresses only; and the ports an app you installed listens on while its **Open ports** switch is on, from private and link-local addresses only (issue #109) |
 | **In, UDP** | 16384–32767 only (28930: arbitration between Echos, 28932: Drop In audio), and 2330 only while arbitration is in Kiosk Satellite mode (their fixed port) |
+| **In, an app's own ports** | Echo Shows: none, until you switch an app's **Open ports** on; then the TCP ports it listens on and the UDP ports it holds (a DLNA renderer's, its SSDP 1900), from private and link-local addresses only, found by the app's uid in the kernel's socket tables and followed when they move (issue #109). Never below 1024, never an Amazon app's. |
 | **In, ICMP** | ping (echo request) from private and link-local addresses only; answers to the Echo's own traffic |
 
 **Kiosk Satellite**, where you install it, is an app you trust like adb. Its update helper runs the app's own code as the shell user, every few minutes, so the app and each update of it can do what an adb shell can, `pm grant` included. It also gets storage and location without asking. The "microphone" and "camera" switches are Android's permissions, no wall against the app itself. Setup and `scripts/kiosk-install.sh` check who signed the APK against a pinned certificate on the PC, before it reaches the Echo; a copy you install by hand and the app's own updates are not checked by this project. The helper's provider is exported with no manifest permission, so another app on the Echo might reach it: install nothing else you do not trust. Ports 2324 and 6053 are open only while the app is installed. Its page on 2324 asks for a login once the app's remote admin password is set (seen on 2026.10.45): set one. Beyond that its pages are the app's own, and this project has not reviewed them.
@@ -63,6 +64,33 @@ an approved browser. Each call gets its own key from a fresh key exchange betwee
 closed even to someone who gets the network key later. The audio goes straight between the two Echos and nowhere else.
 Do not disturb and the microphone switches refuse calls; "Drop In answers: after the action button" makes every call
 wait for a press on the Echo called; "Drop In" off stops calls both ways.
+
+## Camera
+
+The Echo Show's camera ([guide](GUIDE.md#camera-echo-show), [design](camera.md)) is off by default, and only an
+approved client of the settings page can switch it on or watch: in practice the Echo Local integration, approved with
+the action button like a browser. A stream is a signed request with a fresh counter, so a recorded one does not start
+the camera again; the video is encrypted and authenticated (ChaCha20-Poly1305) with a key of that stream's, derived
+from the key that client shares with the Echo, so others on the network see only its size and timing. One viewer at a
+time: a second client asking meanwhile is refused rather than handed the camera. While pictures leave the Echo a red
+dot shows in the screen's corner, drawn by the process that drives the camera, over every app. The lens cover stops
+the camera at once (the Echo reads its switch, the image would be dark anyway); the microphone button does not.
+
+Inside Home Assistant, Echo Local hands the video on in the clear on 127.0.0.1, at a URL with a random token made at
+each start: other programs on the Home Assistant machine that learn that URL (its add-ons with host networking, say)
+can watch while it runs. Any approved browser of the settings page can switch the camera on as well: revoke the
+logins you no longer use (System page).
+
+Drop In from Home Assistant (Echo Show, Echo Local's call card): the call is a signed request of the Echo Local
+integration with a fresh counter, then sealed both ways with keys of that call and direction; the picture only with the
+camera setting on, under the red dot. In Home Assistant the card reaches the call only through a signed path, as a
+logged-in user who is not one of the Echos' kiosk users.
+
+A call's picture the other way, onto an Echo Show's screen: from a browser only when its user presses the card's
+Camera button (off at the start of every call), sealed on the call's channel like its sound; between two Echo Shows
+only while the sending Show's camera setting is on and its lens open, under its red dot, encrypted with the call's own
+key on the call's UDP port (no new port), and only to an Echo that said it shows pictures. The receiving Echo shows it
+only during the call: every end of a call removes it, and the player hides it by itself 3 s after the last frame.
 
 ## Arbitration between Echos
 

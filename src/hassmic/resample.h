@@ -40,4 +40,11 @@ double rate_servo_snap(struct rate_servo *s);   /* after a jump in the schedule:
  * stream's gain now (start at 1); at 1 and target 1 the samples are left as they are. */
 #define DUCK (1.0f / 6)
 void   music_duck(int16_t *s, size_t frames, unsigned rate, float *g, float target);
+
+/* s16 bytes copied at a gain glided towards target with the duck's 30 ms time constant, sample by sample (`per_s`:
+ * samples a second, rate x channels; the buffers the backends get are cut at whole samples, not frames): a volume made
+ * in the PCM (even volume steps, separate volumes; audio_*_gain) stepped from one buffer to the next, a click on the
+ * Echo, and the phase jump tests/fake_ma_sendspin.py found in a tone (0.049 rad, a volume change in it).  *g is the
+ * stream's gain now: the target when it opens.  At 1 and target 1 a plain copy; a lone odd byte passes as it is. */
+void   gain_glide(char *dst, const char *src, size_t bytes, unsigned per_s, float *g, float target);
 #endif

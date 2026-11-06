@@ -788,7 +788,7 @@ static void media_rx(const unsigned char *p, size_t n)
 enum { AVC_CONTROL = 0x00, AVC_STATUS = 0x01, AVC_NOTIFY = 0x03, AVC_NOT_IMPLEMENTED = 0x08, AVC_ACCEPTED, AVC_REJECTED, AVC_STABLE = 0x0c,
        AVC_CHANGED, AVC_INTERIM = 0x0f };
 enum { AVC_VENDOR = 0x00, AVC_UNIT_INFO = 0x30, AVC_SUBUNIT_INFO, AVC_PASS_THROUGH = 0x7c };
-enum { PDU_GET_CAPS = 0x10, PDU_REGISTER = 0x31, PDU_SET_VOLUME = 0x50, EVENT_VOLUME = 0x0d, KEY_PLAY = 0x44, KEY_PAUSE = 0x46 };
+enum { PDU_GET_CAPS = 0x10, PDU_REGISTER = 0x31, PDU_SET_VOLUME = 0x50, EVENT_VOLUME = 0x0d, KEY_PLAY = 0x44, KEY_PAUSE = 0x46, KEY_FORWARD = 0x4b, KEY_BACKWARD = 0x4c };
 #define PANEL 0x48                                      /* subunit type panel (9), ID 0 */
 
 static atomic_int echo_volume = -1, vol_dirty, key_req, avrcp_links;
@@ -951,7 +951,8 @@ static void avrcp_upkeep(void)
             unsigned char a[5] = { AVC_CONTROL, PANEL, AVC_PASS_THROUGH, key | (release ? 0x80 : 0), 0 };
             avctp_send(l, l->av_label++ & 15, 0, a, 5);
         }
-        fprintf(stderr, "a2dp: %012llx: %s\n", (unsigned long long)l->addr, key == KEY_PLAY ? "play" : "pause");
+        fprintf(stderr, "a2dp: %012llx: %s\n", (unsigned long long)l->addr,
+                key == KEY_PLAY ? "play" : key == KEY_PAUSE ? "pause" : key == KEY_FORWARD ? "next" : "previous");
     }
     if (atomic_exchange(&vol_dirty, 0)) for (int i = 0; i < MAX_LINKS; i++) {
         l = &links[i]; int pct = volume_now();
@@ -1683,6 +1684,18 @@ int a2dp_setup(void)
 void a2dp_pair(int on) { atomic_store(&pair_req, on != 0); hci_poke(); }
 void a2dp_volume_changed(int percent) { atomic_store(&echo_volume, percent); atomic_store(&vol_dirty, 1); hci_poke(); }
 void a2dp_speaker_volume(int percent) { if (atomic_exchange(&out_volume, percent) != percent) hci_poke(); }
+
+/* A request spoken to the Echo about the phone playing on it (main.c media_request): 'r' play again (it is paused),
+ * 'n' next, 'p' previous (it plays).  1: sent over AVRCP */
+int a2dp_voice(char what)
+{
+    if (!atomic_load(&avrcp_links)) return 0;
+    int playing = atomic_load(&streaming) && !atomic_load(&yielded);
+    if (what == 'r' ? playing : !playing) return 0;
+    atomic_store(&button_paused_at, 0);
+    atomic_store(&key_req, what == 'r' ? KEY_PLAY : what == 'n' ? KEY_FORWARD : KEY_BACKWARD); hci_poke();
+    return 1;
+}
 
 int a2dp_button(int resume)
 {

@@ -41,6 +41,8 @@
 #include <sys/system_properties.h>
 #endif
 #include "audio.h"
+#include "alarms.h"
+#include "kiosk.h"
 #include "a2dp.h"
 #include "arb.h"
 #include "ble.h"
@@ -70,6 +72,9 @@
 #include "sounds.h"
 #include "sound.h"
 #include "whisper.h"
+#include "speech.h"
+#include "wyoming_tts.h"
+#include "errsay.h"
 #include "settings.h"
 #include "web.h"
 #include "board.h"
@@ -413,6 +418,7 @@ void core_set_state(enum state s)
     led_for(state, s);
     state = s; state_since = time(NULL);
     atomic_store(&busy, s != IDLE);
+    kiosk_run(s != IDLE);                           /* a request's words, for a home app that draws them (kiosk.h) */
 }
 
 static long long mono_ms(void);
@@ -736,6 +742,8 @@ static void lead_in(void)
         proto->audio(zero, (size_t)(left < 1024 ? left : 1024) * sizeof zero[0]);
 }
 
+static void own_reset(void);                 /* the Echo's own voice saying a streamed reply: below, at the playback queue */
+static void playback_cut(void);
 static void pipeline_start(uint64_t from)    /* from: where the wake word that starts it ended, 0: not a wake word */
 {
     quiet_abort = 0;
@@ -747,6 +755,7 @@ static void pipeline_start(uint64_t from)    /* from: where the wake word that s
      * end ended this one before any audio went out (heard_end in the capture thread) */
     micend_start(&mic_end, MICEND_OFF, 0, 0, NULL);
     run_wake = from != 0;
+    own_reset();
     proto->start();
     atomic_store(&streaming, 1);
     if (core_local_wake) lead_in();                 /* ahead of the capture thread's first block: it needs the lock */
@@ -795,6 +804,7 @@ int core_end_of_request(int set) { if (set >= 0 && set < MICEND_MODES) end_mode 
 int core_stop_ends_listening(int set) { if (set >= 0) stop_ends = set != 0; return stop_ends; }
 
 int core_bt_announce(int set) { if (set >= 0) use_bt_announce = set; return use_bt_announce; }
+static int speech_local(const char *text, const char *lang);
 
 /* Models whose controller does not answer to our bring-up yet (biscuit's MT8163 combo) run with -B: no A2DP sink, no
  * Bluetooth proxy; the stock stack may keep the radio. */
@@ -807,7 +817,11 @@ void core_bt_device(const char *name, int on)
     pthread_mutex_lock(&core_lock);
     if (use_bt_announce) {
         sound_request(on ? SND_BT_ON : SND_BT_OFF);
-        if (connected && proto->bt_device) proto->bt_device(name, on);
+        const struct bt_lang *l = settings_bt_lang(); char t[160];
+        if (*name) snprintf(t, sizeof t, on ? l->on : l->off, name);
+        else snprintf(t, sizeof t, "%s", on ? l->on_any : l->off_any);
+        if (speech_local(t, l->code)) ;              /* the Echo's own voice speaks the language: no Home Assistant needed */
+        else if (connected && proto->bt_device) proto->bt_device(name, on);
     }
     pthread_mutex_unlock(&core_lock);
 }
@@ -916,6 +930,13 @@ void core_dropin_listen(int on)
     pthread_mutex_lock(&core_lock);
     if (on != listen_call && (!on || atomic_load(&dropin_live))) { listen_call = on; listening_apply(); }
     pthread_mutex_unlock(&core_lock);
+}
+
+/* Not the lock.  The last wake word's level in micAsr (1: none heard since the start): Drop In's gain starts from it */
+float core_keyword_db(void)
+{
+    pthread_mutex_lock(&core_lock); float r = keyword_db; pthread_mutex_unlock(&core_lock);
+    return r;
 }
 
 /* Any lock or none (dropin_call runs under core_lock from Home Assistant): plain reads of flags */
@@ -1067,6 +1088,7 @@ void core_restart_after(void) { barge_in = 1; barge_from = 0; }
 
 void core_pipeline_finish(void)
 {
+    own_reset();
     if (atomic_exchange(&streaming, 0) && connected && proto->stop) proto->stop();
     mic_stopped();
     core_set_state(IDLE);
@@ -1178,6 +1200,7 @@ static void trigger(int touch, uint64_t from)
             fprintf(stderr, "%s: %s, nothing started\n", touch ? "button" : "wake word",
                     connected ? "a client is linked, no voice assistant running" : "no Home Assistant link");
             led("-s", "anim_start_error_short");
+            core_error_say(connected ? "no-assistant" : "no-link", NULL);
         }
     } else if (state == IDLE && !touch && stopped_now()) {
         fprintf(stderr, "stop: came during the round, nothing started\n");
@@ -1191,13 +1214,13 @@ static void trigger(int touch, uint64_t from)
          * cut as stop_word would have cut it, and no run follows */
         fprintf(stderr, "stop: came during the round, reply cut\n");
         barge_in = 0;
-        atomic_store(&flush_playback, 1);
+        playback_cut();
     } else if (state == SPEAKING && !atomic_load(&flush_playback)) {       /* not already being cut.  barge_in alone does not
                                                                              * say that: continue-conversation sets it too */
         fprintf(stderr, "barge-in\n");
         wake_cut_ms = mono_ms();
         barge_in = 1; barge_from = from;
-        atomic_store(&flush_playback, 1);   /* playback thread drops TTS up to audio-stop, then we restart */
+        playback_cut();                     /* playback thread drops TTS up to audio-stop, then we restart */
     }
     pthread_mutex_unlock(&core_lock);
 }
@@ -1242,7 +1265,7 @@ static void stop_word(void)
         fprintf(stderr, "stop: reply cut\n");
         barge_in = 0;
         atomic_fetch_and(&sounds_pending, ~(1 << SND_WAKE | 1 << SND_TOUCH));
-        atomic_store(&flush_playback, 1);
+        playback_cut();
     } else if (state == LISTENING && mono_ms() - wake_cut_ms < 4000) {
         fprintf(stderr, "stop: pipeline dropped\n");
         stop_cut = 1;                       /* a wake word whose round still runs (heard while this listened) opens none */
@@ -1947,7 +1970,13 @@ static void on_pair(void)
 
 struct item { struct item *next; int kind, media; unsigned rate, ch; size_t len; unsigned char data[]; };   /* media: Q_START */
 enum { Q_START, Q_DATA, Q_STOP };
+#define Q_SPEECH 2                           /* media of the Echo's own voice (speech.h): a reply's volume, no pipeline */
+#define Q_REPLY 3                            /* the same voice saying Home Assistant's reply: ends the run as its audio does */
+#define Q_PART 4                             /* Q_STOP of one sentence of a streamed reply (rate: its generation) */
+static int speech_state;                     /* core_lock: the Echo's own voice set SPEAKING (it was IDLE) */
 static void tts_kind(int media);
+static int part_stop(unsigned gen, int flushed);
+static void part_done(unsigned gen, int flushed);
 
 static pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t q_cond = PTHREAD_COND_INITIALIZER;
@@ -1969,7 +1998,8 @@ static void q_push(int kind, int media, unsigned rate, unsigned ch, const void *
 
 static void *playback_thread(void *arg)
 {
-    int open = 0;
+    int open = 0, cont = 0;                 /* cont: a streamed reply's next sentence goes on in the open stream */
+    unsigned open_rate = 0, open_ch = 0;
     (void)arg;
     for (;;) {
         pthread_mutex_lock(&q_lock);
@@ -1981,13 +2011,20 @@ static void *playback_thread(void *arg)
 
         if (atomic_load(&flush_playback) && it->kind != Q_STOP) {
             if (open) { play_close(0); open = 0; }
+            cont = 0;
+            if (it->media == Q_SPEECH || it->media == Q_REPLY) speech_cancel();   /* the rest of the Echo's own sentence too */
             free(it);
             continue;
         }
         switch (it->kind) {
         case Q_START:
+            /* The sentences of a streamed reply (Q_PART) follow each other in one stream: closed and opened again
+             * between them, the mixer's stream would drain and start again for every sentence */
+            if (cont && open && it->media == Q_REPLY && it->rate == open_rate && it->ch == open_ch) { cont = 0; break; }
+            cont = 0;
             if (open) play_close(1);        /* e.g. announcement chime followed by the message */
-            tts_kind(it->media);            /* the TTS stream's volume for what comes now */
+            open_rate = it->rate; open_ch = it->ch;
+            tts_kind(it->media >= Q_SPEECH ? 0 : it->media);   /* the TTS stream's volume for what comes now */
             open = play_open(it->rate, it->ch) == 0;
             if (open) { atomic_store(&tts_on, 1); playback_hint(); }
             if (!open) fprintf(stderr, "play: open %u Hz x%u failed\n", it->rate, it->ch);
@@ -2001,12 +2038,31 @@ static void *playback_thread(void *arg)
             if (open && play_write(it->data, it->len) < 0) { play_close(0); open = 0; }
             break;
         case Q_STOP:
+            if (it->media == Q_PART) {                    /* one sentence of a streamed reply: the run ends only after the last */
+                int flushed = atomic_exchange(&flush_playback, 0);
+                pthread_mutex_lock(&core_lock);
+                int more = part_stop(it->rate, flushed);     /* 1: the reply goes on, its next sentence is queued */
+                pthread_mutex_unlock(&core_lock);
+                if (more && open) { cont = 1; break; }
+                if (open) { play_close(1); open = 0; }
+                cont = 0;
+                atomic_store(&tts_on, 0); playback_hint();
+                pthread_mutex_lock(&core_lock);
+                part_done(it->rate, flushed);
+                pthread_mutex_unlock(&core_lock);
+                break;
+            }
             if (open) { play_close(1); open = 0; }
+            cont = 0;
             atomic_store(&tts_on, 0); playback_hint();
             atomic_store(&flush_playback, 0);
             pthread_mutex_lock(&core_lock);
-            if (proto->played) proto->played();      /* also without a client: modules reset their state here */
-            core_pipeline_finish();
+            if (it->media == Q_SPEECH) {             /* the Echo's own voice: nothing of Home Assistant's ended */
+                if (speech_state) { speech_state = 0; core_pipeline_finish(); }     /* a barge-in starts its run here */
+            } else {
+                if (proto->played) proto->played();  /* also without a client: modules reset their state here */
+                core_pipeline_finish();
+            }
             pthread_mutex_unlock(&core_lock);
             break;
         }
@@ -2026,7 +2082,204 @@ void core_tts_begin(unsigned rate, unsigned channels, int media)
 void core_tts_data(const void *pcm, size_t len) { if (!atomic_load(&flush_playback)) q_push(Q_DATA, 0, 0, 0, pcm, len); }
 void core_tts_end(void) { q_push(Q_STOP, 0, 0, 0, NULL, 0); }
 int  core_tts_flushing(void) { return atomic_load(&flush_playback); }
-void core_tts_flush(void) { atomic_store(&flush_playback, 1); }
+void core_tts_flush(void) { playback_cut(); }
+
+/* Setting own_voice_replies: Home Assistant's replies said by the Echo's own voice from their text, its audio left
+ * unfetched: no TTS engine in Home Assistant needed, and the reply starts ~0.2 s after the text instead of after Home
+ * Assistant's TTS and the download.  Two ways the text comes:
+ *   - whole, in the TTS start event (core_reply_local): replies Home Assistant does not stream (intents, an LLM's
+ *     under 60 characters, any TTS engine that takes no streamed text);
+ *   - sentence by sentence, when the pipeline's TTS is this Echo's own Wyoming server (wyoming_tts.c) and the agent
+ *     streams (an LLM's reply past 60 characters: assist_pipeline's STREAM_RESPONSE_CHARS, tts_start_streaming).  Home
+ *     Assistant then sends the reply's text to that server as the LLM writes it, and the server hands each sentence
+ *     here (core_reply_part) to be said at once: the first sentence plays while the LLM still writes the rest, where
+ *     the TTS start event comes only after the last word (a 129-character reply: first audio 855 ms after the text
+ *     through Home Assistant's MP3 and the download, 2026-11-04).  Home Assistant gets 100 ms of silence for it.
+ * Which synthesis is this run's reply (core_reply_claim): the one that comes to the Echo's own server while its run
+ * waits for a streamed reply (own_st OWN_STREAM, from Home Assistant's tts_start_streaming on).  Home Assistant opens
+ * it right after that event (default_pipeline.py: the event, then tts_stream.async_set_message_stream, whose
+ * background task connects), so it cannot be told apart from a tts.speak another automation sends to the same TTS
+ * entity in that moment: that one would be said here and its own speaker would get the silence, and this reply be
+ * rendered for Home Assistant and said whole at the TTS start.  Rare, and nothing is lost but the right speaker.
+ * Where the pipeline's TTS is not this Echo (Piper, a cloud) nothing comes, and the TTS start says the whole text
+ * (core_reply_streamed): the reply is never fetched once own voice is on, since Home Assistant runs its TTS from its
+ * own background task whether anyone fetches the URL or not (tts/__init__.py async_cache_message_stream_in_memory).
+ * That is learnt (own_elsewhere): after a streamed run whose synthesis never came, the next ones expect none and
+ * claim nothing, a tts.speak elsewhere is never taken for the reply; every OWN_RECHECK-th streamed run looks again, in
+ * case the pipeline's TTS was switched to this Echo.  Lock held where not said otherwise */
+static int own_voice_replies;
+int core_own_voice(int set) { if (set >= 0) own_voice_replies = set != 0; return own_voice_replies; }
+int core_own_voice_present(void) { return speech_installed(); }
+
+enum { OWN_NONE, OWN_STREAM, OWN_CLAIMED, OWN_SAID };
+#define OWN_RECHECK 20                      /* streamed runs between two looks for a synthesis while it comes elsewhere */
+static int own_st;                          /* this run's reply: OWN_* */
+static int own_streamed;                    /* this run's reply is streamed (tts_start_streaming came) */
+static unsigned own_gen;                    /* the claimed reply's number, in its sentences' tags (SPEECH_PART + n) */
+static int own_parts;                       /* its sentences handed to the voice whose end has not been played */
+static int own_final;                       /* its synthesis ended: no sentence comes after those handed over */
+static int own_done;                        /* its end is done: played() and the run's end called, or the reply dropped */
+static int own_elsewhere, own_skipped;      /* learnt: the pipeline's TTS is not this Echo; streamed runs since */
+
+static int part_current(unsigned gen) { return own_st == OWN_CLAIMED && gen == own_gen && !own_done; }
+
+/* the claimed reply is over: Home Assistant's run ends as after its own audio (played(), then the run's end) */
+static void own_end(void)
+{
+    own_done = 1;
+    if (proto->played) proto->played();
+    core_pipeline_finish();
+}
+
+/* the playback thread, at a streamed reply's sentence's end.  1: more of the reply is queued after it */
+static int part_stop(unsigned gen, int flushed)
+{
+    if (!part_current(gen)) return 0;
+    if (own_parts > 0) own_parts--;
+    return !flushed && own_parts > 0;
+}
+/* ...after its audio is out: the last sentence of a finished synthesis ends the run, a cut one (barge-in, "stop", Home
+ * Assistant's media stop) at once.  One whose reply is gone is the Echo's own sentence (Q_SPEECH) */
+static void part_done(unsigned gen, int flushed)
+{
+    if (part_current(gen)) { if (flushed || (own_final && !own_parts)) own_end(); }
+    else if (speech_state) { speech_state = 0; core_pipeline_finish(); }
+}
+
+/* A run starts or ends: a reply claimed and still going is dropped (its sentences already queued end as the Echo's own) */
+static void own_reset(void)
+{
+    if (own_st == OWN_CLAIMED && !own_done) { own_done = 1; if (own_parts) speech_cancel(); }
+    own_st = OWN_NONE; own_streamed = 0;
+}
+
+/* The playback is being cut (flush_playback set): with nothing of a claimed reply queued (the LLM still writing),
+ * no sentence's end would come to end it: one is queued for it */
+static void own_cut(void)
+{
+    if (own_st != OWN_CLAIMED || own_done) return;
+    if (own_parts) speech_cancel();
+    else q_push(Q_STOP, Q_PART, own_gen, 0, NULL, 0);
+}
+static void playback_cut(void) { atomic_store(&flush_playback, 1); own_cut(); }
+
+int core_reply_stream(void)
+{
+    if (!own_voice_replies || !speech_ready()) return 0;
+    own_streamed = 1;
+    if (own_st == OWN_NONE && (!own_elsewhere || ++own_skipped % OWN_RECHECK == 0)) own_st = OWN_STREAM;
+    fprintf(stderr, "reply: streamed, %s\n", own_st == OWN_STREAM ? "waiting for its sentences on the Echo's own voice"
+                                                                  : "said whole at its end (the pipeline's TTS is elsewhere)");
+    return 1;
+}
+
+int core_reply_streamed(const char *text)
+{
+    if (own_st == OWN_CLAIMED) {
+        if (own_done) return 0;
+        fprintf(stderr, "reply: said sentence by sentence (%d sentences still to play)\n", own_parts);
+        return 1;
+    }
+    if (own_st == OWN_STREAM) {              /* nothing came: the pipeline's TTS is elsewhere */
+        if (!own_elsewhere) fprintf(stderr, "reply: no streamed synthesis came to the Echo's voice, the pipeline's TTS is elsewhere\n");
+        own_elsewhere = 1; own_skipped = 0;
+    }
+    if (!text || !*text || speech_say(text, 1)) { own_st = OWN_NONE; return 0; }
+    own_st = OWN_SAID;
+    fprintf(stderr, "reply: said whole by the Echo's own voice (%s)\n", speech_voice());
+    return 1;
+}
+
+int core_reply_local(const char *text)
+{
+    if (!own_voice_replies || !speech_ready() || !text || !*text) return 0;
+    if (speech_say(text, 1)) return 0;
+    own_st = OWN_SAID;
+    fprintf(stderr, "reply: said by the Echo's own voice (%s)\n", speech_voice());
+    return 1;
+}
+
+int core_reply_claim(void)
+{
+    int r = 0;
+    pthread_mutex_lock(&core_lock);
+    if (!own_voice_replies) r = 0;
+    else if (own_st == OWN_STREAM) {
+        own_st = OWN_CLAIMED; own_gen++; own_parts = 0; own_final = 0; own_done = 0;
+        if (own_elsewhere) fprintf(stderr, "reply: the pipeline's TTS is this Echo again\n");
+        own_elsewhere = 0; own_skipped = 0;
+        r = 1;
+    } else if (own_st == OWN_SAID) r = own_streamed ? 2 : 0;    /* a streamed one, said whole: Home Assistant's copy is not cached */
+    else if (own_st == OWN_NONE && state == THINKING && speech_ready() && !own_streamed) r = -1;  /* its event may be behind it */
+    pthread_mutex_unlock(&core_lock);
+    return r;
+}
+
+int core_reply_part(const char *text)
+{
+    int r;
+    pthread_mutex_lock(&core_lock);
+    if (own_st != OWN_CLAIMED || own_done) r = -1;
+    else if (speech_say(text, SPEECH_PART + (int)own_gen)) r = 1;     /* the voice's queue is full: again in a moment */
+    else { own_parts++; r = 0; }
+    pthread_mutex_unlock(&core_lock);
+    return r;
+}
+
+void core_reply_final(void)
+{
+    pthread_mutex_lock(&core_lock);
+    if (own_st == OWN_CLAIMED && !own_done) {
+        own_final = 1;
+        if (!own_parts) own_end();          /* the last sentence played already, or none came */
+    }
+    pthread_mutex_unlock(&core_lock);
+}
+
+/* The Echo's own voice (speech.h): its sentences go through the same queue as Home Assistant's replies, behind what
+ * is queued, at the replies' volume; a wake word cuts them as it cuts a reply (barge-in), "stop" too.  It shows as
+ * SPEAKING only when nothing else ran: a sentence during a request leaves the request's state alone.  A sentence of a
+ * streamed reply that is gone (cut, a new run) is one of the Echo's own */
+static atomic_int speech_reply_on;                  /* the sentence being made is Home Assistant's reply */
+static void speech_begin(unsigned rate, int tag)
+{
+    pthread_mutex_lock(&core_lock);
+    if (tag >= SPEECH_PART && !part_current((unsigned)(tag - SPEECH_PART))) tag = 0;
+    if (tag) { atomic_store(&streaming, 0); mic_stopped(); core_set_state(SPEAKING); }   /* as core_tts_begin */
+    else if (state == IDLE) { speech_state = 1; core_set_state(SPEAKING); }
+    pthread_mutex_unlock(&core_lock);
+    atomic_store(&speech_reply_on, tag != 0);
+    q_push(Q_START, tag ? Q_REPLY : Q_SPEECH, rate, 1, NULL, 0);
+}
+static void speech_data(const void *pcm, unsigned len)
+{ if (!atomic_load(&flush_playback)) q_push(Q_DATA, atomic_load(&speech_reply_on) ? Q_REPLY : Q_SPEECH, 0, 0, pcm, len); }
+static void speech_end(int tag)                     /* a whole reply's: played(), the run ends; a part's: part_done */
+{
+    if (tag >= SPEECH_PART) q_push(Q_STOP, Q_PART, (unsigned)(tag - SPEECH_PART), 0, NULL, 0);
+    else q_push(Q_STOP, tag ? 0 : Q_SPEECH, 0, 0, NULL, 0);
+}
+
+/* Setting error_speech (on): a failure said in words by the Echo's own voice (errsay.h), as stock Alexa did ("Sorry,
+ * something went wrong."), beside the red ring.  Lock held or not */
+static int error_speech = 1;
+int core_error_speech(int set) { if (set >= 0) error_speech = set != 0; return error_speech; }
+void core_error_say(const char *code, const char *message)
+{
+    char s[300];
+    if (!error_speech || core_muted() || dnd) return;
+    errsay_sentence(code, message, s, sizeof s);
+    if (s[0] && speech_local(s, "en")) fprintf(stderr, "error said: %s\n", s);
+}
+
+static const struct speech_out speech_core = { speech_begin, speech_data, speech_end };
+
+/* Says TEXT with the Echo's own voice where it has one that speaks LANG ("en", "de"; NULL: any).  1 = it does */
+static int speech_local(const char *text, const char *lang)
+{
+    const char *l = speech_language();
+    if (!speech_ready() || (lang && strncmp(l, lang, strlen(lang)))) return 0;
+    return speech_say(text, 0) == 0;
+}
 
 size_t core_tts_queued(void)
 {
@@ -2044,7 +2297,8 @@ static long long mono_ms(void);
  * still runs, and must not silence the others.  One ring for all of them; each new one gives the ring its full time
  * again; one press stops them all (the Echo cannot ask which).  Home Assistant sees "Timer ringing" and their names. */
 #define RINGING_MAX 4
-static struct { char id[40], name[64]; } ringing[RINGING_MAX];  /* lock held: in the order they finished */
+static struct { char id[40], name[64]; int alarm; } ringing[RINGING_MAX];  /* lock held: in the order they finished;
+                                                                            * alarm: alarms.c's id, 0 for a timer */
 static int nringing, timer_ring_s = 60, timer_stop_any;         /* lock held */
 static atomic_llong alarm_until;                                /* mono_ms the ring ends; LLONG_MAX: until stopped */
 /* What rings (issue #63): stock's timer tone (the default, where the firmware has it: core_timer_sound_default), its
@@ -2054,6 +2308,29 @@ static atomic_int timer_sound = TIMER_SOUND_BEEP, preview;
 static atomic_llong preview_until;
 #define PREVIEW_MS 10000
 static const enum sound timer_sounds[] = { [TIMER_SOUND_TIMER] = SND_TIMER, [TIMER_SOUND_ALARM] = SND_ALARM, [TIMER_SOUND_CUSTOM] = SND_CUSTOM };
+/* The Echo's own alarms (alarms.c) ring as timers do, with a sound, a ring time, a snooze of their own, and a start
+ * quieter than the timer volume that comes up over alarm_ramp_s (a wake-up alarm at full volume is a shock) */
+static atomic_int alarm_kind;                                   /* an alarm is among the ringing: its sound */
+static atomic_int alarm_sound = TIMER_SOUND_ALARM;
+static atomic_llong alarm_started;                              /* mono_ms the ring began (the ramp) */
+static int alarm_ring_min = 10, alarm_snooze_min = 9, alarm_ramp_s = 30, alarm_keys = 0, alarm_voice = 1;   /* lock held */
+/* Past the ramp an alarm nobody answers keeps getting louder, alarm_louder points of volume a minute up to 100, as a
+ * heavy sleeper's alarm clock does: alarm_boost is that volume while it is above the timers' own (-1: none).  It is a
+ * volume like a kind's, so loudest() lifts the mixer for it and everything else keeps its own level */
+static int alarm_louder = 10, alarm_boost = -1;                 /* lock held */
+static atomic_int alarms_dirty;                                 /* alarms.c changed its list: told from volume_led_thread */
+/* "Alarm" in Home Assistant: what automations trigger on (lights up with the alarm, the blinds when it is stopped).
+ * Types stay as they are; a new one is a new type */
+const char *const core_alarm_events[] = { "ringing", "snoozed", "stopped", "rang_out", "set", "deleted", "not_understood" };
+const int core_alarm_nevents = sizeof core_alarm_events / sizeof core_alarm_events[0];
+void core_alarms_changed(void) { atomic_store(&alarms_dirty, 1); }      /* alarms.c, settings: any thread, any lock */
+static void alarm_event(const char *e) { if (connected && proto->alarm) proto->alarm(e); }   /* lock held */
+static void ringing_shown(void)                                 /* lock held: the screen's ring line */
+{
+    char t[160]; size_t n = 0; t[0] = 0;
+    for (int i = 0; i < nringing && n < sizeof t; i++) n += (size_t)snprintf(t + n, sizeof t - n, "%s%s", i ? ", " : "", ringing[i].name);
+    kiosk_ringing(nringing ? t : NULL);             /* for a home app that draws the ring (kiosk.h) */
+}
 
 static void alarm_set(int on)          /* lock held */
 {
@@ -2064,6 +2341,8 @@ static void alarm_set(int on)          /* lock held */
      * ("not in map"), and the ring stayed dark */
     led(on ? "-s" : "-u", "ready-timer");
     playback_hint();
+    if (on) atomic_store(&alarm_started, mono_ms());
+    else atomic_store(&alarm_kind, 0);
 }
 
 void core_timer_finished(const char *id, const char *name, unsigned total)
@@ -2080,9 +2359,74 @@ void core_timer_finished(const char *id, const char *name, unsigned total)
     else if (h) snprintf(ringing[i].name, sizeof ringing[i].name, "%u h", h);
     else snprintf(ringing[i].name, sizeof ringing[i].name, "%u min", m);
     atomic_store(&alarm_until, timer_ring_s ? mono_ms() + timer_ring_s * 1000LL : LLONG_MAX);
+    ringing[i].alarm = 0;
     fprintf(stderr, "alarm: %s rings (%d ringing)\n", ringing[i].name, nringing);
     alarm_set(1);
+    ringing_shown();
     if (connected && proto->timers_changed) proto->timers_changed();
+}
+
+/* An alarm of the Echo's own is due (alarms.c's thread, no lock).  It rings as a finished timer does, in Do not disturb
+ * too (a wake-up alarm is the point of it), for alarm_ring_min, and goes in the list beside the timers */
+static void core_alarm_ring(int id, const char *what)
+{
+    pthread_mutex_lock(&core_lock);
+    char rid[40]; snprintf(rid, sizeof rid, "alarm-%d", id);
+    int i = 0;
+    while (i < nringing && strcmp(ringing[i].id, rid)) i++;
+    if (i == RINGING_MAX) { memmove(ringing, ringing + 1, sizeof ringing[0] * --i); nringing = i; }
+    if (i == nringing) nringing++;
+    snprintf(ringing[i].id, sizeof ringing[i].id, "%s", rid);
+    snprintf(ringing[i].name, sizeof ringing[i].name, "Alarm %s", what);
+    ringing[i].alarm = id;
+    long long until = alarm_ring_min ? mono_ms() + alarm_ring_min * 60000LL : LLONG_MAX, was = atomic_load(&alarm_until);
+    if (!atomic_load(&alarm_on) || until > was) atomic_store(&alarm_until, until);
+    atomic_store(&alarm_kind, 1);
+    fprintf(stderr, "alarm: alarm %d (%s) rings (%d ringing)\n", id, what, nringing);
+    alarm_set(1);
+    ringing_shown();
+    if (connected && proto->timers_changed) proto->timers_changed();
+    alarm_event("ringing");
+    pthread_mutex_unlock(&core_lock);
+}
+
+/* Lock held.  Snooze: every alarm ringing comes back in alarm_snooze_min, the timers ringing with them stop.  0: no
+ * alarm rang (nothing changed) */
+int core_alarm_ringing(void) { return atomic_load(&alarm_on) && atomic_load(&alarm_kind); }
+
+int core_alarm_snooze(const char *why)
+{
+    int any = 0;
+    for (int i = 0; i < nringing; i++) any |= ringing[i].alarm > 0;
+    if (!any || !atomic_load(&alarm_on)) return 0;
+    fprintf(stderr, "alarm: snoozed for %d min (%s)\n", alarm_snooze_min, why);
+    for (int i = 0; i < nringing; i++) if (ringing[i].alarm > 0) alarms_ended(ringing[i].alarm, alarm_snooze_min);
+    nringing = 0;
+    alarm_set(0);
+    ringing_shown();
+    if (connected && proto->timers_changed) proto->timers_changed();
+    alarm_event("snoozed");
+    return 1;
+}
+
+/* the home app's ring, tapped (snooze an alarm, stop a timer) or held (stop): GET /kiosk/ring/snooze|stop (kiosk.h),
+ * since an app that draws the ring itself is where the finger is.  Not the lock */
+void core_ring_tap(int stop)
+{
+    pthread_mutex_lock(&core_lock);
+    if (atomic_load(&alarm_on) && (stop || !core_alarm_snooze("the home app's ring tapped"))) core_alarm_stop(stop ? "the home app's ring held" : "the home app's ring tapped");
+    pthread_mutex_unlock(&core_lock);
+}
+int core_alarm_setting(int which, int set)
+{
+    int *v[] = { &alarm_ring_min, &alarm_snooze_min, &alarm_ramp_s, &alarm_keys, &alarm_voice, NULL, &alarm_louder };
+    if (which == CORE_ALARM_SOUND) {
+        if (set >= 0 && set <= TIMER_SOUND_CUSTOM && (set == TIMER_SOUND_BEEP || sound_present(timer_sounds[set]))) atomic_store(&alarm_sound, set);
+        return atomic_load(&alarm_sound);
+    }
+    if (which < 0 || which >= (int)(sizeof v / sizeof *v) || !v[which]) return 0;
+    if (set != INT_MIN) *v[which] = set;
+    return *v[which];
 }
 
 void core_timer_cancelled(const char *id)
@@ -2090,6 +2434,7 @@ void core_timer_cancelled(const char *id)
     for (int i = 0; i < nringing; i++) if (!strcmp(ringing[i].id, id)) {
         memmove(ringing + i, ringing + i + 1, sizeof ringing[0] * (size_t)(nringing - i - 1));
         if (!--nringing) alarm_set(0);
+        ringing_shown();
         if (connected && proto->timers_changed) proto->timers_changed();
         return;
     }
@@ -2099,9 +2444,13 @@ void core_alarm_stop(const char *why)
 {
     if (!atomic_load(&alarm_on)) return;
     fprintf(stderr, "alarm: off (%s)\n", why);
+    int alarms = 0;
+    for (int i = 0; i < nringing; i++) if (ringing[i].alarm > 0) { alarms_ended(ringing[i].alarm, 0); alarms++; }   /* once: off */
     nringing = 0;
     alarm_set(0);
+    ringing_shown();
     if (connected && proto->timers_changed) proto->timers_changed();
+    if (alarms) alarm_event(!strcmp(why, "rang out") ? "rang_out" : "stopped");
 }
 
 /* "<wake word>, stop" with an engine that has no "stop" keyword (microWakeWord, Home Assistant's): the transcript is the
@@ -2112,6 +2461,170 @@ void core_alarm_stop(const char *why)
  * went to Home Assistant, which answered "no timer is running" while it rang on (issue #21): with timer_stop_any any
  * recognised speech stops the ring, as EchoMuse does, whatever the language and however the ring garbled it; then a
  * question during a ring is not answered */
+/* Lock held.  The answer to an alarm request: on the screen, and spoken by Home Assistant (assist_satellite.announce,
+ * which needs "Allow the device to perform Home Assistant actions"; without it the screen and the "Alarm" event say it) */
+static void alarm_say(const char *text)
+{
+    fprintf(stderr, "alarms: \"%s\"\n", text);
+    if (speech_local(text, "en")) return;            /* the sentences are English (alarms_command) */
+    if (connected && proto->say) proto->say(text);
+}
+
+/* Lock held.  An alarm request heard by speech to text (alarms_command), answered here: Home Assistant has no alarms.
+ * 1: it was one (the run is cancelled by the caller), 0: Home Assistant's to answer */
+static int is_one(const char *w, const char *const *list, size_t n) { for (size_t i = 0; i < n; i++) if (!strcmp(w, list[i])) return 1; return 0; }
+
+static int alarm_request(const char *text)
+{
+    struct alarm a, l[ALARMS_MAX]; int timed, h24 = alarms_h24(); char t[96], r[256];
+    time_t now = alarms_now();
+    enum alarm_cmd c = alarms_command(text, now, &a, &timed);
+    if (c == ALARM_CMD_NONE) return 0;
+    if (c == ALARM_CMD_SNOOZE) {
+        if (core_alarm_snooze("said snooze")) { snprintf(r, sizeof r, "Snoozing for %d minutes.", alarm_snooze_min); alarm_say(r); }
+        else if (atomic_load(&alarm_on)) core_alarm_stop("said snooze to a timer");      /* a timer has no snooze: it stops */
+        else alarm_say("No alarm is ringing.");
+        return 1;
+    }
+    /* "cancel the alarm", "turn off the alarm" while one rings: that ring, as "stop" */
+    if (atomic_load(&alarm_on) && atomic_load(&alarm_kind) && (c == ALARM_CMD_DELETE && !timed)) { core_alarm_stop("said cancel the alarm"); return 1; }
+    if (!alarm_voice) return 0;
+    int n = alarms_list(l, ALARMS_MAX), on = 0;
+    for (int i = 0; i < n; i++) on += l[i].enabled;
+    switch (c) {
+    case ALARM_CMD_SET:
+    set:
+        if (!timed) { alarm_say("Sorry, I didn't catch the time for the alarm."); alarm_event("not_understood"); return 1; }
+        for (int i = 0; i < n; i++)                                 /* the same one again: switched on, not twice */
+            if (l[i].hour == a.hour && l[i].min == a.min && l[i].days == a.days && (a.days || l[i].once == a.once)) {
+                l[i].enabled = 1; alarms_put(&l[i]); alarms_format(&l[i], now, h24, t, sizeof t);
+                snprintf(r, sizeof r, "You have an alarm for %s.", t); alarm_say(r); alarm_event("set"); return 1;
+            }
+        if (alarms_put(&a) < 0) { snprintf(r, sizeof r, "You have %d alarms already, the most this Echo keeps.", ALARMS_MAX); alarm_say(r); return 1; }
+        alarms_format(&a, now, h24, t, sizeof t);
+        snprintf(r, sizeof r, "Alarm set for %s.%s", t, alarms_clock_ok() ? "" : " The clock isn't set yet: it rings once Home Assistant sets it.");
+        alarm_say(r); alarm_event("set");
+        return 1;
+    case ALARM_CMD_CHANGE: {                                        /* the next to ring (or the only one) to that time */
+        int pick = -1; time_t best = 0;
+        for (int i = 0; i < n; i++) {
+            time_t w = alarms_next_at(&l[i], now);
+            if (l[i].enabled && w && (!best || w < best)) { best = w; pick = i; }
+        }
+        if (pick < 0 && n == 1) pick = 0;                           /* one, switched off: that one */
+        if (pick < 0) goto set;                                     /* none: as "set" */
+        struct alarm b = l[pick];
+        b.hour = a.hour; b.min = a.min; b.enabled = 1; b.snoozed = 0;
+        if (a.days) b.days = a.days;                                /* "... to 7 on weekdays" */
+        if (!b.days) b.once = a.once;                               /* a once alarm: the next time that time comes */
+        alarms_put(&b); alarms_format(&b, now, h24, t, sizeof t);
+        snprintf(r, sizeof r, "Your alarm is now set for %s.", t); alarm_say(r); alarm_event("set");
+        return 1; }
+    case ALARM_CMD_DELETE: {
+        int pick = -1; time_t best = 0;
+        for (int i = 0; i < n; i++) {
+            if (!l[i].enabled) continue;
+            /* one named by its time: as said, else the other half of the day ("cancel the 7 alarm" for 7 PM) */
+            if (timed && !(l[i].hour == a.hour && l[i].min == a.min)) continue;
+            time_t w = alarms_next_at(&l[i], now);
+            if (w && (!best || w < best)) { best = w; pick = i; }
+        }
+        if (timed && pick < 0) for (int i = 0; i < n; i++) if (l[i].enabled && l[i].hour == (a.hour + 12) % 24 && l[i].min == a.min) pick = i;
+        if (pick < 0) {
+            if (timed) { alarms_time_text(a.hour, a.min, h24, t, sizeof t); snprintf(r, sizeof r, "You have no alarm for %s.", t); }
+            else snprintf(r, sizeof r, "You have no alarms.");
+            alarm_say(r); return 1;
+        }
+        alarms_format(&l[pick], now, h24, t, sizeof t);
+        alarms_delete(l[pick].id);
+        snprintf(r, sizeof r, "Your alarm for %s is cancelled.", t); alarm_say(r); alarm_event("deleted");
+        return 1; }
+    case ALARM_CMD_DELETE_ALL: {
+        int k = alarms_delete_all();
+        if (!k) alarm_say("You have no alarms.");
+        else { snprintf(r, sizeof r, k == 1 ? "Your alarm is cancelled." : "All %d alarms are cancelled.", k); alarm_say(r); alarm_event("deleted"); }
+        return 1; }
+    case ALARM_CMD_LIST: {
+        struct alarm nx; time_t w = alarms_next(&nx);
+        if (!on || !w) { alarm_say("You have no alarms."); return 1; }
+        if (nx.snoozed == w) {
+            struct tm tm; localtime_r(&w, &tm); alarms_time_text(tm.tm_hour, tm.tm_min, h24, t, sizeof t);
+            snprintf(r, sizeof r, "Your alarm is snoozed until %s.", t); alarm_say(r); return 1;
+        }
+        alarms_format(&nx, now, h24, t, sizeof t);
+        if (on == 1) snprintf(r, sizeof r, "Your alarm is set for %s.", t);
+        else {
+            size_t k = (size_t)snprintf(r, sizeof r, "You have %d alarms: ", on); int said = 0;
+            for (int i = 0; i < n && k < sizeof r; i++) if (l[i].enabled) {
+                char one[96]; alarms_format(&l[i], now, h24, one, sizeof one);
+                said++;
+                k += (size_t)snprintf(r + k, sizeof r - k, "%s%s", said == 1 ? "" : said == on ? " and " : ", ", one);
+            }
+            if (k < sizeof r) snprintf(r + k, sizeof r - k, ".");
+        }
+        alarm_say(r);
+        return 1; }
+    default: return 0;
+    }
+}
+
+/* Lock held.  A media request said to this Echo about what this Echo plays: "pause", "resume", "next", "previous",
+ * "volume up", "louder", "set the volume to 5".  Home Assistant's intents know which player only by the satellite's
+ * area, and asked an Echo with music on it which one ("pause" heard over Sendspin music: "which media player?"), or
+ * paused another in the room.  Here it is this Echo's own: answered at once, no run.  What this Echo does not play
+ * (nothing, or the TV in the room) stays Home Assistant's.  w: the words, lower case, without spaces and punctuation.
+ * 1: done (the caller cancels the run) */
+static int media_request(const char *w)
+{
+    static const char *const pause_[] = { "pause", "pausethemusic", "pausemusic", "pauseit", "pausethis", "pausethesong", "pauseplayback" };
+    static const char *const resume[] = { "resume", "resumethemusic", "resumemusic", "resumeplayback", "continue", "continueplaying",
+                                          "keepplaying", "unpause", "play", "playmusic", "playagain", "startthemusicagain" };
+    static const char *const next[] = { "next", "nextsong", "nexttrack", "skip", "skipit", "skipthis", "skipthissong", "skipsong",
+                                        "skiptrack", "skipthetrack", "playthenextsong", "playnext" };
+    static const char *const prev[] = { "previous", "previoussong", "previoustrack", "goback", "back", "lastsong", "playtheprevioussong",
+                                        "playthelastsongagain", "playprevious" };
+    static const char *const up[] = { "volumeup", "louder", "turnitup", "turnup", "turnupthevolume", "turnthevolumeup", "raisethevolume",
+                                      "increasethevolume", "speakup" };
+    static const char *const down[] = { "volumedown", "quieter", "softer", "turnitdown", "turndown", "turndownthevolume",
+                                        "turnthevolumedown", "lowerthevolume", "decreasethevolume" };
+#define IS(list) is_one(w, list, sizeof list / sizeof *list)
+    int playing = atomic_load(&music_on) != 0, recent = music_stopped_ms && mono_ms() - music_stopped_ms < 30 * 60000LL;
+    if (IS(pause_)) {
+        if (!playing || !music_stop()) return 0;
+        fprintf(stderr, "said pause: this Echo's music paused\n");
+        return 1;
+    }
+    if (IS(resume)) {
+        if (playing || !((core_sendspin_port && sendspin_voice("play")) || a2dp_voice('r'))) return 0;
+        (void)recent;
+        fprintf(stderr, "said resume: this Echo's music again\n");
+        return 1;
+    }
+    if (IS(next) || IS(prev)) {
+        int n = IS(next);
+        if (!playing || !((core_sendspin_port && sendspin_voice(n ? "next" : "previous")) || a2dp_voice(n ? 'n' : 'p'))) return 0;
+        return 1;
+    }
+    /* the volume: this Echo's whatever plays, as its keys; "volume 5" is 50 (Alexa's 0..10), "volume 45" 45 */
+    int dir = IS(up) ? 1 : IS(down) ? -1 : 0, to = -1; const char *d = w;
+    if (!dir) {
+        static const char *const pre[] = { "setthevolumeto", "setvolumeto", "volumeto", "changethevolumeto", "volume", "setthevolume", "turnthevolumeto" };
+        for (size_t i = 0; i < sizeof pre / sizeof *pre && to < 0; i++) {
+            size_t k = strlen(pre[i]);
+            if (strncmp(w, pre[i], k)) continue;
+            d = w + k;
+            if (*d && strspn(d, "0123456789") == strlen(d) && strlen(d) <= 3) { int v = atoi(d); to = v <= 10 ? v * 10 : v > 100 ? -1 : v; }
+            else if (!strcmp(d, "percent")) to = -1;
+        }
+        if (to < 0) return 0;
+    }
+    int now = core_volume();
+    core_set_volume(dir ? (now + 5) / 10 * 10 + dir * 10 : to);
+    fprintf(stderr, "said volume: %d -> %d\n", now, core_volume());
+    return 1;
+#undef IS
+}
+
 int core_transcript(const char *text)
 {
     static const char *const stops[] = { "stop", "stopp", "stoppen", "stoppa", "halt", "arrête", "arrete", "basta", "para", "pare" };
@@ -2149,6 +2662,11 @@ int core_transcript(const char *text)
     }
     int hit = 0;
     for (size_t i = 0; i < sizeof stops / sizeof stops[0]; i++) hit |= !strcmp(w, stops[i]);
+    if (!hit && (alarm_request(text) || media_request(w))) {        /* alarms (alarms.h), this Echo's music: answered here */
+        if (connected && proto->cancel) { barge_in = 0; atomic_store(&streaming, 0); proto->cancel(); quiet_abort = 1; }
+        core_pipeline_finish();
+        return 1;
+    }
     if (atomic_load(&alarm_on)) {
         if (!hit && !(timer_stop_any && w[0])) return 0;
         core_alarm_stop(hit ? "said stop" : "a request during the ring");
@@ -2182,7 +2700,11 @@ int core_timer_sound(int set)
     return atomic_load(&timer_sound);
 }
 
-void core_timer_sound_default(void) { if (core_timer_sound(TIMER_SOUND_TIMER) != TIMER_SOUND_TIMER) core_timer_sound(TIMER_SOUND_BEEP); }
+void core_timer_sound_default(void)
+{
+    if (core_timer_sound(TIMER_SOUND_TIMER) != TIMER_SOUND_TIMER) core_timer_sound(TIMER_SOUND_BEEP);
+    if (core_alarm_setting(CORE_ALARM_SOUND, TIMER_SOUND_ALARM) != TIMER_SOUND_ALARM) core_alarm_setting(CORE_ALARM_SOUND, TIMER_SOUND_BEEP);
+}
 
 void core_timer_sound_preview(void) { atomic_store(&preview, 1); }
 
@@ -2325,9 +2847,14 @@ static void *earcon_thread(void *arg)
                 if (mono_ms() > atomic_load(&alarm_until)) core_alarm_stop("rang out");     /* not a timer that just came */
                 pthread_mutex_unlock(&core_lock);
             } else if (!atomic_load(&busy)) {
-                int ts = atomic_load(&timer_sound); const short *pcm = beep; size_t n = N; unsigned rate = RATE;
+                int al = !pv && atomic_load(&alarm_kind);
+                int ts = atomic_load(al ? &alarm_sound : &timer_sound); const short *pcm = beep; size_t n = N; unsigned rate = RATE;
                 if (ts != TIMER_SOUND_BEEP && !sound_get(timer_sounds[ts], &pcm, &n, &rate)) { pcm = beep; n = N; rate = RATE; }  /* gone: the blip */
-                short *quiet = scaled(pcm, n, atomic_load(&timers_q16));
+                /* an alarm starts at a fifth of the timer volume's gain and comes up to it over alarm_ramp_s, a loop of
+                 * its sound at a time */
+                int q = atomic_load(&timers_q16), ramp = alarm_ramp_s;
+                if (al && ramp > 0) { float k = (float)(mono_ms() - atomic_load(&alarm_started)) / (ramp * 1000.0f); q = (int)(q * (0.2f + 0.8f * (k < 1 ? k : 1))); }
+                short *quiet = scaled(pcm, n, q);
                 if (pv) { atomic_store(&preview_until, mono_ms() + PREVIEW_MS); atomic_store(&earcon_sounding, 1); sound_start(); }
                 if (pcm != beep) play_earcon_while(quiet ? quiet : pcm, n, rate, pv ? preview_go : alarm_go);
                 else for (int k = 0; k < 3; k++) play_earcon(quiet ? quiet : beep, N, RATE);
@@ -2433,6 +2960,20 @@ static int read_volume(void) { return vol_read(VOL_MAIN, 40); }
  * follow it by default, as they did before they had a volume (the Voip stream follows MainVolume; its curve is taken
  * to be the Music stream's, docs/re-platform.md). */
 static int vol_split;                        /* under lock */
+/* Even volume steps (setting even_volume): off, a volume plays where the Echo's own curve puts it, as stock, which is
+ * anything but even: the Echo Show 5's (Android's media curve, applied digitally in AudioFlinger) has 46 dB in the
+ * bottom half and 20 in the top, and its 31 indices take 3 or 4 of our points each, so a slider moved by a point
+ * often does nothing (45, 46 and 47 all play index 14); the Dot 2's gains 1 dB from 60 to 70 and 10 from 90 to 100
+ * (volcurve.c).  On, each point is the same number of dB (EVEN_FLOOR_DB at 1 up to 0 dB at 100: 5 dB a press of the
+ * keys; 0 silent): the mixer (the Show's index) goes to the lowest point of the measured curve at least that loud
+ * (board_vol_at, so what it plays there is what was measured) and our PCM takes off the rest, at most the gap
+ * between two points (8.8 dB at the Show's bottom, 10 at the Dot's top).  That costs nothing on these Echos: their
+ * outputs are 16-bit (the Show's primary output is AUDIO_FORMAT_PCM_16_BIT at 48 kHz), and turning 16-bit audio down
+ * before the mixer rounds at the same -96 dBFS floor the output's own quantisation has.  So MainVolume is not the
+ * volume here either, as with separate volumes (stream_owns_volume).  A Bluetooth speaker with absolute volume sets
+ * its own loudness from the number, as before.  On by default; off gives stock's curve back. */
+static int vol_even = 1;                     /* under lock; on by default */
+#define EVEN_FLOOR_DB (-50.0f)
 static struct { int level, linked, offset; } kinds[VOL_KINDS] = { { 40, 0, 0 }, { 40, 0, 0 }, { 40, 0, 0 }, { 40, 1, 0 } };   /* under lock */
 static int tts_media;                        /* under lock: the TTS stream plays Home Assistant's media */
 static int tts_written = -1, main_written = -1;     /* under lock: TTSVolume and MainVolume as we last set them */
@@ -2445,6 +2986,12 @@ static int clamp_offset(int v) { return v < -VOL_OFFSET_MAX ? -VOL_OFFSET_MAX : 
 
 static float vol_db(int v) { return board_vol_db(v); }      /* the Echo's volume curve (volcurve.c) */
 
+/* lock held: what volume v should sound like, dB under full: the Echo's curve, or even steps */
+static float want_db(int v) { return !vol_even ? vol_db(v) : v <= 0 ? -INFINITY : EVEN_FLOOR_DB * (100 - v) / 99; }
+
+/* lock held: MainVolume (the Show's index) is the volume, as stock; else ours is kept in state/volume.music */
+static int stream_owns_volume(void) { return !vol_split && !vol_even && alarm_boost < 0; }
+
 /* lock held: what a kind (VOL_*) plays at now, its own volume or the music's moved by its offset */
 static int kind_volume(int k) { return kinds[k].linked ? clamp100(core_volume() + kinds[k].offset) : kinds[k].level; }
 
@@ -2452,20 +2999,34 @@ static int kind_volume(int k) { return kinds[k].linked ? clamp100(core_volume() 
 static int loudest(void)
 {
     int v = core_volume();
-    if (!vol_split) return v;
-    for (int k = 0; k < VOL_KINDS; k++)       /* a call's volume only while one is on: no hidden loud one moves the rest */
-        if ((k != VOL_CALLS || atomic_load(&dropin_live)) && kind_volume(k) > v) v = kind_volume(k);
-    return v;
+    if (vol_split)
+        for (int k = 0; k < VOL_KINDS; k++)   /* a call's volume only while one is on: no hidden loud one moves the rest */
+            if ((k != VOL_CALLS || atomic_load(&dropin_live)) && kind_volume(k) > v) v = kind_volume(k);
+    return alarm_boost > v ? alarm_boost : v; /* an alarm getting louder */
 }
 
-/* lock held: what MainVolume and TTSVolume both are now: the loudest, or full scale for a speaker that sets the volume */
-static int mix_target(void) { return speaker_mode == SPEAKER_ABSOLUTE ? 100 : loudest(); }
+/* lock held: what MainVolume and TTSVolume both are now: the loudest (with even steps the curve's point at least as
+ * loud as it should sound), or full scale for a speaker that sets the volume */
+static int mix_target(void)
+{
+    if (speaker_mode == SPEAKER_ABSOLUTE) return 100;
+    return vol_even ? board_vol_at(want_db(loudest())) : loudest();
+}
+
+/* lock held: a kind's volume, the volume itself while they are not separate */
+static int kind_now(int k)
+{
+    int v = vol_split ? kind_volume(k) : core_volume();
+    return k == VOL_TIMERS && alarm_boost > v ? alarm_boost : v;
+}
 
 /* lock held: what audio for volume v is multiplied by: 1 at the mixer's own, 0 at volume 0 */
 static float mix_gain(int v)
 {
-    if (!vol_split) return 1;
-    return v <= 0 ? 0 : powf(10.0f, (vol_db(v) - vol_db(loudest())) / 20.0f);
+    if (stream_owns_volume()) return 1;
+    if (v <= 0) return 0;
+    if (vol_even && speaker_mode != SPEAKER_ABSOLUTE) return powf(10.0f, (want_db(v) - vol_db(mix_target())) / 20.0f);
+    return powf(10.0f, (vol_db(v) - vol_db(loudest())) / 20.0f);
 }
 
 static void mix_apply(void)                  /* lock held: the mixer's volumes and our gains, as they should be now */
@@ -2479,10 +3040,31 @@ static void mix_apply(void)                  /* lock held: the mixer's volumes a
     spk_was = spk;
     a2dp_speaker_volume(loudest());
     audio_music_gain(mix_gain(core_volume()));
-    audio_tts_gain(mix_gain(tts_media ? core_volume() : kind_volume(VOL_ASSISTANT)));
-    atomic_store(&sounds_q16, (int)lroundf(mix_gain(kind_volume(VOL_SOUNDS)) * 65536));
-    atomic_store(&timers_q16, (int)lroundf(mix_gain(kind_volume(VOL_TIMERS)) * 65536));
-    audio_call_gain(mix_gain(kind_volume(VOL_CALLS)));
+    audio_tts_gain(mix_gain(tts_media ? core_volume() : kind_now(VOL_ASSISTANT)));
+    atomic_store(&sounds_q16, (int)lroundf(mix_gain(kind_now(VOL_SOUNDS)) * 65536));
+    atomic_store(&timers_q16, (int)lroundf(mix_gain(kind_now(VOL_TIMERS)) * 65536));
+    audio_call_gain(mix_gain(kind_now(VOL_CALLS)));
+}
+
+/* volume_led_thread, every 200 ms: an alarm of the Echo's own that rings past its ramp gets alarm_louder points a minute
+ * louder than the timers' volume, up to 100; the ring over, the volumes are as before */
+static void alarm_escalate(void)
+{
+    pthread_mutex_lock(&core_lock);
+    int boost = -1, was = alarm_boost;
+    if (alarm_louder > 0 && core_alarm_ringing()) {
+        long long past = mono_ms() - atomic_load(&alarm_started) - alarm_ramp_s * 1000LL;
+        alarm_boost = -1; int base = kind_now(VOL_TIMERS); alarm_boost = was;      /* the timers' own volume */
+        if (past > 0) { long long up = (long long)alarm_louder * past / 60000; boost = base + up > 100 ? 100 : base + (int)up; }
+        if (boost <= base) boost = -1;
+    }
+    if (boost != was) {
+        if (boost >= 0 && (was < 0 || boost / 10 != was / 10)) fprintf(stderr, "alarm: louder, at %d\n", boost);
+        if (boost < 0 && was >= 0) fprintf(stderr, "alarm: volume back\n");
+        alarm_boost = boost;
+        mix_apply();
+    }
+    pthread_mutex_unlock(&core_lock);
 }
 
 static void tts_kind(int media)              /* the playback thread, at each start of the TTS stream */
@@ -2493,8 +3075,8 @@ static void tts_kind(int media)              /* the playback thread, at each sta
     pthread_mutex_unlock(&core_lock);
 }
 
-/* The music volume while the volumes are separate: MainVolume is then the loudest of three and says nothing about it,
- * so it is kept here (and read at start instead of MainVolume) */
+/* The music volume while the volumes are separate or the steps even: MainVolume is then the loudest of three, or a
+ * point of the curve, and says nothing about it, so it is kept here (and read at start instead of MainVolume) */
 static const char *music_volume_path(void)
 {
     static char p[256]; const char *d = getenv("HASSMIC_STATE");
@@ -2504,8 +3086,8 @@ static const char *music_volume_path(void)
 static int music_dirty;                      /* under lock: volume.music to be written (music_volume_write) */
 static void music_volume_keep(void)          /* lock held */
 {
-    music_dirty = vol_split;
-    if (!vol_split) unlink(music_volume_path());
+    music_dirty = !stream_owns_volume();
+    if (stream_owns_volume()) unlink(music_volume_path());
 }
 
 /* volume_sync's thread, outside the lock: a write with its fsyncs takes tens of ms on the flash, and the volume moves
@@ -2521,7 +3103,7 @@ static void music_volume_write(void)
     snprintf(t, sizeof t, "%d\n", v);
     statefile_write(music_volume_path(), 0644, t, strlen(t));
     pthread_mutex_lock(&core_lock);
-    if (!vol_split) unlink(music_volume_path());        /* switched off meanwhile */
+    if (stream_owns_volume()) unlink(music_volume_path());      /* switched off meanwhile */
     pthread_mutex_unlock(&core_lock);
 }
 
@@ -2536,6 +3118,17 @@ int core_separate_volumes(int set)
         mix_apply();
     }
     return vol_split;
+}
+
+int core_even_volume(int set)
+{
+    if (set >= 0 && (set != 0) != vol_even) {
+        vol_even = set != 0;
+        if (stream_owns_volume() || speaker_mode == SPEAKER_NONE) music_volume_keep();
+        mix_apply();
+        fprintf(stderr, "volume: even steps %s, mixer at %d\n", vol_even ? "on" : "off", mix_target());
+    }
+    return vol_even;
 }
 int core_kind_volume(int k, int set) { if (set >= 0) { kinds[k].level = clamp100(set); mix_apply(); } return kinds[k].level; }
 int core_kind_linked(int k, int set)
@@ -2593,17 +3186,23 @@ static const char *own_volume_path(void)
 int core_volume(void)
 {
     if (volume < 0) {                        /* whatever it was left at: in line now */
-        /* volume.music only while state/config says the volumes are separate (this may run before settings_load): a
-         * hand edit or an older build (a fallback after an update) leaves the file behind with the setting gone, and
-         * the volume moved since is MainVolume's */
-        char sv[8]; int split = !settings_peek("separate_volumes", sv, sizeof sv) && !strcmp(sv, "on");
+        /* volume.music only while state/config says the volumes are separate or the steps even (this may run before
+         * settings_load): a hand edit or an older build (a fallback after an update) leaves the file behind with the
+         * setting gone, and the volume moved since is MainVolume's */
+        char sv[8], ev[8]; int split = (!settings_peek("separate_volumes", sv, sizeof sv) && !strcmp(sv, "on")) ||
+                                       settings_peek("even_volume", ev, sizeof ev) || strcmp(ev, "off");     /* on unless off */
         FILE *f = fopen(own_volume_path(), "r"), *m = split ? fopen(music_volume_path(), "r") : NULL; int v;
-        if (!split && !unlink(music_volume_path())) fprintf(stderr, "volume: state/volume.music left over, the volumes are not separate\n");
+        if (!split && !unlink(music_volume_path())) fprintf(stderr, "volume: state/volume.music left over, the volumes are not separate, the steps not even\n");
         if (f && fscanf(f, "%d", &v) == 1 && v >= 0 && v <= 100) {
             volume = v;
             fprintf(stderr, "volume: %d (the Echo's own, set aside for a Bluetooth speaker)\n", volume);
         } else if (m && fscanf(m, "%d", &v) == 1 && v >= 0 && v <= 100) volume = v;     /* separate volumes */
-        else volume = read_volume();
+        else {
+            volume = read_volume();
+            /* MainVolume is still the volume (the first start with even steps, on by default after an update): kept
+             * at once, before mix_apply below makes it a point of the curve that a restart would take for the volume */
+            if (split) { char t[8]; snprintf(t, sizeof t, "%d\n", volume); statefile_write(music_volume_path(), 0644, t, strlen(t)); }
+        }
         if (f) fclose(f);
         if (m) fclose(m);
         unlink(own_volume_path());
@@ -2621,7 +3220,7 @@ void core_speaker(int mode, int pct)
         echo_own_volume = was;
         FILE *f = fopen(own_volume_path(), "w"); if (f) { fprintf(f, "%d\n", was); fclose(f); }
     }
-    if (mode == SPEAKER_NONE) { volume = echo_own_volume; if (vol_split) music_volume_keep(); }
+    if (mode == SPEAKER_NONE) { volume = echo_own_volume; if (!stream_owns_volume()) music_volume_keep(); }
     else if (mode == SPEAKER_ABSOLUTE) volume = pct < 0 ? 0 : pct > 100 ? 100 : pct;
     speaker_mode = mode;
     mix_apply();
@@ -2653,7 +3252,7 @@ static void volume_led(int v, int assistant)
 void core_set_volume(int v)
 {
     volume = clamp100(v);
-    if (vol_split && speaker_mode == SPEAKER_NONE) music_volume_keep();
+    if (!stream_owns_volume() && speaker_mode == SPEAKER_NONE) music_volume_keep();
     mix_apply();
     volume_led(volume, 0);
     fprintf(stderr, "volume: %d\n", volume);
@@ -2820,14 +3419,14 @@ static void volume_sync(void)
     if (speaker_mode == SPEAKER_ABSOLUTE) {                         /* 100 is ours: only a stray TTSVolume to mend */
         if (main_v == 100 && tts_v != 100) { tts_written = -1; mix_apply(); }
     } else if (volume == cur && mix_target() == want) {           /* nobody set it meanwhile */
-        if (main_v != want && !vol_split) {                         /* MainVolume is the volume: the user's wish */
+        if (main_v != want && stream_owns_volume()) {               /* MainVolume is the volume: the user's wish */
             volume = main_written = main_v;
             fprintf(stderr, "volume: %d (changed outside)\n", volume);
             if (connected && proto->volume_changed) proto->volume_changed(volume);
             if (core_sendspin_port) sendspin_volume_changed(volume);
             a2dp_volume_changed(volume);
         } else if (main_v != want) {                                /* the loudest of three: ours again */
-            fprintf(stderr, "volume: MainVolume %d changed outside, %d again (separate volumes)\n", main_v, want);
+            fprintf(stderr, "volume: MainVolume %d changed outside, %d again (%s)\n", main_v, want, vol_split ? "separate volumes" : "even steps");
             main_written = -1;
         }
         if (tts_v != mix_target()) tts_written = -1;               /* set by someone else: ours again */
@@ -2860,6 +3459,12 @@ static void on_volume(int dir)
 {
     if (!use_volume) return;
     pthread_mutex_lock(&core_lock);
+    /* an alarm of the Echo's own rings: a volume key snoozes it, the Echo Show's nearest to stock's touch "Snooze"
+     * (alarm_keys 0; 1 keeps them for the volume) */
+    if (!alarm_keys && atomic_load(&alarm_on) && atomic_load(&alarm_kind) && core_alarm_snooze("volume key")) {
+        pthread_mutex_unlock(&core_lock);
+        return;
+    }
     /* separate volumes: what plays now, a Drop In call, a reply (not Home Assistant's media) or a ringing timer, else
      * the music; one that follows the music moves with it */
     int k = !vol_split ? -1 : atomic_load(&dropin_live) ? VOL_CALLS : atomic_load(&tts_on) && !tts_media ? VOL_ASSISTANT
@@ -2895,6 +3500,11 @@ static void *volume_led_thread(void *arg)
         if (at && mono_ms() >= at && atomic_compare_exchange_strong(&identify_until, &at, 0)) led("-u", "zzz_rainbow");
         ring_tick();
         if (tick % 5 == 0) rd_tick();               /* root's answer to designs applied on the settings page */
+        alarm_escalate();                           /* an unanswered alarm gets louder */
+        if (atomic_exchange(&alarms_dirty, 0)) {    /* alarms.c's list changed: Home Assistant's sensors, the screen */
+            pthread_mutex_lock(&core_lock); if (connected && proto->alarms_changed) proto->alarms_changed(); pthread_mutex_unlock(&core_lock);
+            kiosk_changed();                        /* the next alarm, for a home app's clock */
+        }
         usleep(200000);
     }
     return NULL;
@@ -3091,6 +3701,7 @@ static void *capture_thread(void *arg)
         if (core_local_wake && (state == LISTENING || state == THINKING) && time(NULL) - state_since > PIPELINE_TIMEOUT) {
             fprintf(stderr, "pipeline timeout\n");
             core_pipeline_finish();
+            core_error_say("timeout", NULL);
         }
         pthread_mutex_unlock(&core_lock);
     }
@@ -3167,6 +3778,7 @@ int main(int argc, char **argv)
       if (!settings_peek("light_band", rows, sizeof rows)) ring_band_rows(atoi(rows)); }
     ring_start(led_run, ring_reloaded);
     rd_start();                         /* designs asked for before this start: still installing, or back */
+    kiosk_load();                                             /* the home app's config (kiosk.h), set from Home Assistant */
     screen_start();                                 /* a model with a screen: its UI process (screen.h) */
     audio_earcon_started = earcon_started;
     led("-u", "scone-setup");           /* a restart inside the pairing window: the window is gone, its chaser would loop on */
@@ -3222,6 +3834,10 @@ int main(int argc, char **argv)
     if (use_bt) improv_start(&improv_hooks);                 /* setup over Bluetooth, when there is no network (improv.c) */
     if (ota_port) ota_start(ota_port);
     pthread_mutex_lock(&core_lock); core_timer_sound_default(); settings_load(); settings_preset(); pthread_mutex_unlock(&core_lock);    /* whatever the protocol */
+    static const struct alarms_hooks alarm_hooks = { core_alarm_ring, core_alarms_changed };
+    alarms_start(&alarm_hooks);                               /* the Echo's own alarms (alarms.h), whatever the protocol */
+    speech_start(&speech_core);                               /* the Echo's own voice (speech.h), where it has one */
+    wytts_start(WYTTS_PORT);                                  /* and Home Assistant's text to speech on it (wyoming_tts.h) */
     davs_start();                                             /* Amazon login for artifact downloads (settings page) */
     static const struct web_hooks web_hooks = { web_attention, web_approved };
     if (core_web_port && web_start(core_web_port, &web_hooks)) { fprintf(stderr, "web: not available\n"); core_web_port = 0; }

@@ -12,5 +12,6 @@ adb push $(ls $OUT/mixcap $OUT/mixplay $OUT/pryon_test 2>/dev/null) $OUT/hassmic
 adb push wakealign/*.wa wakealign/*.was $D/ >/dev/null
 [ -n "$ANDROID" ] && adb push scripts/device/wifictl.dex ${SCREEN_BAND:+scripts/device/ringbar.dex} $D/ >/dev/null
 [ -f $OUT/libhmui.so ] && adb push $OUT/libhmui.so scripts/device/screen.dex $D/ >/dev/null
+[ -f $OUT/libhmcam.so ] && adb push $OUT/libhmcam.so $D/ >/dev/null
 adb shell "chmod 755 $D/*"
 echo "pushed $DEVICE build to $D"

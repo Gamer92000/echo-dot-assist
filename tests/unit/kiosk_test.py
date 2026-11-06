@@ -90,10 +90,11 @@ a = [x for x in sys.argv[1:] if x not in ("-w", "--noflush")]
 if sys.argv[0].endswith("-restore"):
     for l in sys.stdin.read().split("\n"):
         if l.startswith(":hassmic_out"): s["chains"] = ["hassmic_out"]; cmd(["-F", "hassmic_out"])
+        elif l.startswith(":hassmic_in"): s["chains"].append("hassmic_in"); cmd(["-F", "hassmic_in"])     # the owner's apps' ports (issue #109)
         elif l.startswith(":INPUT"): s["pol"] = l.split()[1]
         elif l[:2] in ("-A", "-D", "-I"): cmd(l.split())
 elif a[:1] == ["-S"]:
-    if a[1:] == ["hassmic_out"]: print("\n".join(["-N hassmic_out"] + [r for r in s["rules"] if r.startswith("-A hassmic_out ")]))
+    if a[1:2] in (["hassmic_out"], ["hassmic_in"]): print("\n".join(["-N " + a[1]] + [r for r in s["rules"] if r.startswith("-A " + a[1] + " ")]))
     elif a[1:] == ["OUTPUT"]: print("\n".join(["-P OUTPUT ACCEPT"] + [r for r in s["rules"] if r.startswith("-A OUTPUT ")]))
     else: print("\n".join(["-P INPUT " + s["pol"]] + s["rules"]))
     sys.exit(0)

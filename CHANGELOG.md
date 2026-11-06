@@ -4,6 +4,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-05
 
+- **The Drop In card over plain http** (Home Assistant opened as `http://`, Firefox and Chrome alike) said "No sound
+  here" and played nothing. It now plays the Echo's sound and says that the picture and your microphone need Home
+  Assistant over https or the app (browsers allow neither on an http page). **Your microphone in Firefox** works
+  in the card now; before, a call from Firefox was listen-only even over https. Echo Local 2026.11.22.
 - **Echo Dot 3: the unlock can leave the Echo unusable; the setup now warns before it.** On two Echo Dot 3s the
   unlock (kamakiri) ran through without an error, yet left the Echo locked and unusable, and no way on from there has
   been found (issue #112). Echos that were updated recently may become unusable; the full extent is currently unknown.
@@ -12,6 +16,113 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-04
 
+- **Drop In: you are heard at a normal voice from the first word** (Echo Show especially): a call started the Echo's
+  microphone gain from a Dot's level, 10 dB under what an Echo Show 5 needs, and it caught up only slowly. It now
+  starts from your last wake word's level. A low hum in the room (mains, a fridge: under 200 Hz) is taken out of the
+  call's sound first: on an Echo Show 5 it came out louder than the voice. **A phone's camera in the Drop In card** reached the Echo Show on its side;
+  it is upright now, and a phone held upright shows whole with bars beside it. **The settings page** was blank after
+  the last update (a typo in the camera's help text). Echo Local 2026.11.21.
+- **Drop In with video starts frosted, as Amazon's does** (Echo Show): when you drop in on an Echo Show that did not
+  ring, its picture is blurred for the first 3 seconds and clears over the next one, so whoever is there has a moment
+  before they are seen. On a Show and in the Drop In card alike; a call answered with the button is seen at once.
+  **Your own picture** is now small in the Show's bottom right corner (mirrored) while it sends its camera in a call.
+  Echo Local 2026.11.20.
+- **Video in Drop In** (Echo Show): a call between two Echo Shows shows each one's camera on the other's screen, while
+  its camera setting is on. From a dashboard, the Drop In card's new **Camera** button (off at the start of every
+  call) puts your camera on the Echo Show's screen. Echo Local 2026.11.20.
+- **Quiet between words in calls** (settings page, under Drop In): how far the Echo's microphone goes down in a call
+  while nobody near it talks. Full (as before), Light, or Off to hear the room all along.
+- **Drop In hears you from across the room on the Echo Show**: whether you are talking is now decided by a speech
+  detector (RNNoise) instead of by loudness. The Show's microphone puts speech at the level of its room's noise, so
+  only speech right into the Echo got through, in calls from Home Assistant and from other Echos alike. The noise of
+  the room is also taken down by up to 12 dB in calls.
+- **Drop In from Home Assistant sounds smoother**: the card buffers the Echo's sound briefly (60 ms) and fades over
+  gaps, where every late bit of audio was a pop. Your microphone starts **muted** in every call, with its button over
+  the picture. On the Echo, room noise no longer teaches the call's gain a "quiet talker", which lifted the next
+  sound in the room louder than speech. Echo Local 2026.11.19.
+- **Echo Local's cards in Firefox**: the alarm card and the Drop In card said "Configuration error" on every reload
+  of a dashboard in Firefox (the first load was fine; Chrome and the app were never affected). Echo Local 2026.11.18.
+- **Drop In on an Echo Show from a Home Assistant dashboard**: the card **Echo Drop In** (Echo Local) shows the Echo's
+  picture and plays its sound in the browser, and your microphone talks on the Echo, a few hundred ms behind. The
+  Echo answers it like a Drop In from another Echo. [The guide](docs/GUIDE.md#drop-in-from-home-assistant-echo-show).
+- **The Echo Show 5's camera in Home Assistant**, through the Echo Local integration: live on dashboards, recordings,
+  stills. Off by default (Features on the settings page, or the camera's own switch in Home Assistant). It runs only
+  while someone looks, a red dot in the screen's corner shows meanwhile, the lens cover stops it, and the video goes
+  encrypted to Home Assistant alone. [The guide](docs/GUIDE.md#camera-echo-show) has the rest.
+
+- **The Echo's own voice (Echo Show 5).** Fire OS's offline voice engine (Ivona, which its image carries without a
+  voice) speaks on the Echo once a voice is installed (`tools/davs-fetch.py tts` fetches one; docs/re-ivona.md). With
+  it the Echo says **what went wrong** when a request fails, as stock Alexa did, instead of only a red light ("Sorry,
+  I couldn't reach Oh lama.", "I'm having trouble connecting to Home Assistant."); it can speak **Home Assistant's
+  replies itself** from their text, a fifth of a second after the answer and with no text-to-speech engine needed
+  ("Replies in the Echo's own voice", off by default); alarm answers and Bluetooth announcements use it too; and Home
+  Assistant finds it as a Wyoming text-to-speech service. "The Echo's voice" picks among the installed ones.
+- **Long AI replies start sooner in the Echo's own voice** (Echo Show with Amazon's voice installed, "Replies in the
+  Echo's own voice" on): when your voice assistant's text-to-speech is the Echo itself ("hassmic" in Home Assistant's
+  Wyoming integration), the Echo now says each sentence of an AI's reply as soon as it is written, instead of waiting
+  for the whole answer and then downloading it from Home Assistant. With another text-to-speech the Echo says the
+  whole reply in its own voice once it is complete, and no longer downloads Home Assistant's audio for it. Others
+  using the Echo's voice (tts.speak to other speakers) get their sentences as they come too.
+- **"Replies in the Echo's own voice" from Home Assistant**: Echo Local adds a switch for it on
+  each Echo that has a voice of its own, so you no longer need the Echo's settings page to turn it on.
+
+- **Apps on the Echo Show, installed from the settings page or Home Assistant.** The settings page's Screen page and
+  Echo Local's new Apps tab list the Android apps you installed beside the home app (NewPipe, say), remove them, and
+  install new ones from an APK on your computer or on Home Assistant (also the action "Install app"). Each shows in
+  the drawer's row. Every app stays off the internet until you switch its **Internet** on.
+- **Install Echo-Wall from Echo Local.** With Echo-Wall picked as an Echo Show's home app but not on it yet, the Screen
+  tab offers **Install Echo-Wall**: Home Assistant downloads its newest release from GitHub and installs it on the Echo
+  (the Echo itself stays off the internet); the Apps tab shows how it goes.
+- **An app on the Echo Show can be reached from your network** (issue #109): each app has an **Open ports** switch
+  beside its Internet one. On, the firewall admits the ports that app listens on, from your own network only, and
+  follows them when the app moves to another one: Kiosk Satellite's DLNA renderer (its port and SSDP discovery on
+  1900) works, as does any other app that phones or media servers talk to. Off by default.
+
+- **The drawer, pulled over an app, never reaches the app below.** It no longer needs the black strip along the top
+  over an app: the Echo holds a touch that starts along the top edge's middle (80 % of it, up to a fingertip below
+  the edge) back from the app until it is clear whether it is a pull (a tap there goes on to the app as you lift your
+  finger), so apps have the whole screen and none of them scrolls or refreshes under a pull. The drawer shuts with a
+  swipe up from anywhere on it, and a short push or a light flick is enough.
+- **An app switcher in the drawer.** Below the volume: the home app's own pages and every app you installed, in a row
+  that scrolls sideways. Tap one and it opens; the app you came from stays on the screen until the new one is up.
+- **Going from the Music view to the home app no longer stops at the face.** Home in the drawer pulled over the
+  Echo's own Music view showed the face's eyes for a moment before the home app came up; the music stays until it does.
+- **A home app made for the Echo, with Home Assistant set up from Echo Local.** The settings page's Screen page or
+  Echo Local's new Screen tab in Home Assistant's sidebar pick the home app (the last choice counts); an app made for
+  the Echo (docs/screen-apps.md; Echo-Wall is one) gets Home Assistant's address and a login of its own, the pages to
+  offer in the drawer, and may draw a request's words and a ringing timer or alarm itself.
+- **A timer or an alarm ringing over an app shows.** The face with its Stop comes over the app until nothing rings,
+  then the app is back (not over an app that draws the ring itself).
+
+- **Alarms on the Echo.** Home Assistant has timers but no alarms; now the Echo keeps its own, and they ring by
+  themselves, with or without Home Assistant. Ask for them: "<wake word>, set an alarm for 7 AM", "wake me up at 6:30
+  tomorrow", "set an alarm for 6:45 on weekdays", "wake me up in 20 minutes", "what alarms do I have", "change my
+  alarm to 6:30", "cancel my alarm", "cancel all alarms". The Echo answers these itself (Home Assistant speaks the
+  answer; tick "Allow the device to perform Home Assistant actions" in the device's options). A ringing alarm snoozes
+  with "<wake word>, snooze" or a volume key, and stops with "<wake word>, stop", the action button (both volume keys
+  on an Echo Show) or Stop on the screen. It starts quietly and comes up to the timer volume over 30 seconds, then,
+  unanswered, keeps getting louder (10 points a minute); it plays Alexa's alarm tone, rings for 10 minutes at most and
+  snoozes for 9 (all on the settings page's new "Clock & alarms" page, which also lists, adds, edits and deletes
+  alarms). In Home Assistant: "Next alarm" (a time: a dashboard counts down to it, an automation can turn on the
+  lights 10 minutes before), "Alarms", "Alarm ringing", "Snooze alarm", an "Alarm" event entity (ringing, snoozed,
+  stopped, ...) and the actions `set_alarm` and `delete_alarm` for automations and AI agents. English sentences for now.
+- **Your alarms in Home Assistant, with a card.** A Home Assistant integration, Echo Local
+  (`custom_components/echo_local`, installable from this repository with HACS): a switch per alarm, actions to add,
+  change and delete them, and a dashboard card "Echo alarms" that lists them like the Alexa app (switch, tap to change
+  time, days and label, Add, Snooze, Stop). Home Assistant is let in with a press of the Echo's button, as a browser
+  is. See the guide's "Clock and alarms".
+- **"Pause" knows which Echo you mean.** "Pause", "resume", "next", "previous", "volume up", "louder" and "set the
+  volume to 5" said to an Echo that is playing music are carried out on that Echo, rather than Home Assistant asking
+  which media player.
+
+- **Even volume steps.** Every point of the volume is now the same step: 0.5 dB a point, 5 dB a press of the volume
+  buttons, from 1 (about 50 dB under full) to 100 (as loud as before). The Echos' own volume puts most of the change at
+  one end: on an Echo Show 5 the bottom half covers 46 dB and the top half 20, and since it has only 31 steps for 100
+  points, a slider moved by one point often changed nothing; on an Echo Dot, 60 to 70 was 1 dB and 90 to 100 was 10.
+  Low volumes are louder than before (on an Echo Show 5, 5 and 10 were 60 and 51 dB under full, now 47.5 and 45.5) and
+  middle ones somewhat quieter (50 is 25 dB under full, where it was 20 to 22). Your volume stays
+  at its number through the update. "Even volume steps" on the settings page (Sound, Speaker) brings the Echo's own
+  steps back. On by default.
 - **Echo Show 5, Show 5 2nd gen and Show 8 (1st gen): the screen turns off on time.** hassmic sets how soon the
   screen turns off (5 minutes, 1 minute while muted or on Do not disturb, as stock) with Android's `settings`, which
   on these Echos is a shell script without a `#!` line: started directly it failed, and the setting was never made.

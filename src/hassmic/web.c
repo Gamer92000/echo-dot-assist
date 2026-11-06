@@ -43,9 +43,13 @@
  */
 #include "web.h"
 #include "core.h"
+#include "alarms.h"
+#include "apps.h"
+#include "kiosk.h"
 #include "adbwifi.h"
 #include "arb.h"
 #include "dropin.h"
+#include "video.h"
 #include "artifacts.h"
 #include "board.h"
 #include "davs.h"
@@ -66,9 +70,11 @@
 #include <ctype.h>
 #include "mass.h"
 #include "screen.h"
+#include "camera.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdarg.h>
@@ -291,17 +297,20 @@ static int send_all(int fd, const void *p, size_t n)
     return 0;
 }
 
-static void respond(int fd, int code, const char *type, const char *extra, const void *body, size_t len)
+/* cors 0: no Access-Control headers, so that no page's script may read the answer (the kiosk's config: the token) */
+static void respond_c(int fd, int cors, int code, const char *type, const char *extra, const void *body, size_t len)
 {
     char h[1024];
     const char *msg = code == 200 ? "OK" : code == 204 ? "No Content" : code == 400 ? "Bad Request" : code == 401 ? "Unauthorized"
                     : code == 404 ? "Not Found" : code == 409 ? "Conflict" : code == 413 ? "Payload Too Large" : code == 503 ? "Service Unavailable" : "Error";
     int n = snprintf(h, sizeof h, "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\nConnection: close\r\nCache-Control: no-store\r\n"
-                     "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: X-HM-Pub, X-HM-Ctr, X-HM-Mac, Content-Type\r\n"
-                     "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Private-Network: true\r\n%s\r\n",
-                     code, msg, type, len, extra ? extra : "");
+                     "%s%s\r\n", code, msg, type, len,
+                     cors ? "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: X-HM-Pub, X-HM-Ctr, X-HM-Mac, Content-Type\r\n"
+                            "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Private-Network: true\r\n" : "",
+                     extra ? extra : "");
     if (send_all(fd, h, (size_t)n) == 0 && len) send_all(fd, body, len);
 }
+static void respond(int fd, int code, const char *type, const char *extra, const void *body, size_t len) { respond_c(fd, 1, code, type, extra, body, len); }
 
 static void respond_json(int fd, int code, const char *json) { respond(fd, code, "application/json", NULL, json, strlen(json)); }
 
@@ -377,6 +386,7 @@ static int read_request(int fd, struct req *r)
      * everything else is a few lines */
     long max = !strncmp(r->path, "/api/artifact/chunk/", 20) ? ART_CHUNK_MAX : !strncmp(r->path, "/api/mww/add/", 13) ? MWW_MODEL_MAX + 16384
              : !strncmp(r->path, "/api/ring/design/", 17) ? RD_TEXT_MAX
+             : !strncmp(r->path, "/api/apps/apk/", 14) ? APPS_CHUNK
              : !strcmp(r->path, "/api/timer-sound") || !strncmp(r->path, "/api/sound/", 11) || !strncmp(r->path, "/api/sound-pack/", 16) ? SOUND_CUSTOM_MAX : MAX_BODY;
     if (cl < 0 || (cl > MAX_BODY && (cl > max || !approved_key(r->pub)))) return -2;
     if (!(r->body = malloc((size_t)cl + 1))) return -1;
@@ -441,6 +451,12 @@ static size_t hello_json(char *o, size_t cap, int members)
                          name, node, board.model, board.codename, VERSION, p, start_id, core_web_port);
     /* no action button (board.action_combo): the page names what stands in for it */
     if (board.action_combo && n < cap) n += (size_t)snprintf(o + n, cap - n, ",\"action\":\"volume_keys\"");
+    /* the Wi-Fi MAC, which ESPHome's mDNS says anyway: the Home Assistant integration (custom_components/echo_local) puts its
+     * entities on the device the esphome integration made, which Home Assistant keys on it */
+    { char m[24] = ""; FILE *f = fopen(getenv("HASSMIC_MAC_FILE") ? getenv("HASSMIC_MAC_FILE") : "/sys/class/net/wlan0/address", "r");
+      if (f) { if (fscanf(f, "%17s", m) != 1) m[0] = 0; fclose(f); }
+      for (char *c = m; *c; c++) if (!isxdigit((unsigned char)*c) && *c != ':') { m[0] = 0; break; }
+      if (m[0] && n < cap) n += (size_t)snprintf(o + n, cap - n, ",\"mac\":\"%s\"", m); }
     if (members && n < cap) { n += (size_t)snprintf(o + n, cap - n, ",\"members\":"); if (n < cap) n += arb_members_json(o + n, cap - n); }
     if (n < cap) n += (size_t)snprintf(o + n, cap - n, "}");
     return n < cap ? n : cap - 1;
@@ -523,6 +539,7 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
         n = app(o, n, cap, ",\"dropin\":{\"state\":\"%s\",\"peer\":\"%s\",\"result\":\"%s\",\"attempt\":%u}",
                               dropin_states[st], peer, res >= 0 ? dropin_results[res] : "", at); }   /* peer: a node, [a-z0-9-] */
     n = app(o, n, cap, ",\"wifi\":"); n += wifi_current_json(o + n, cap - n);
+    if (camera_present()) { n = app(o, n, cap, ",\"camera\":"); n += camera_json(o + n, cap - n); }
     if (screen_present()) {                                       /* the screen: its home app, its music pages */
         n = app(o, n, cap, ",\"screen\":"); n += screen_status_json(o + n, cap - n);
         n = app(o, n, cap, ",\"mass\":"); n += mass_status_json(o + n, cap - n);
@@ -652,6 +669,164 @@ static void sound_api(int fd, struct req *r)
  * /api/sound-pack/<id>/apply      POST  its sounds in use, Alexa's where it has none
  * /api/sound-pack/<id>/delete     POST
  * Signed.  Not in exports, as the sounds. */
+/* The home app's config and claims (kiosk.h): Home Assistant's integration sets it up, the home app reads it.
+ * /api/kiosk         GET   the config without the token (signed)
+ *                    POST  "key value" lines (kiosk.c), "token <sealed hex>" sealed with K as a Wi-Fi password is
+ * /kiosk/config[/front[/draws[/<list>]]|/back]  GET  for the home app alone: from 127.0.0.1 and its uid, the token
+ *                    in it; front/back: its activity is resumed or paused; draws: what it draws itself while in front
+ * /kiosk/state[/<v>] GET  what to draw (a request's words, a ring, the next alarm), a long poll with <v> */
+static int from_loopback(int fd)
+{
+    struct sockaddr_storage a; socklen_t n = sizeof a;
+    if (getpeername(fd, (struct sockaddr *)&a, &n)) return 0;
+    if (a.ss_family == AF_INET) return ((struct sockaddr_in *)&a)->sin_addr.s_addr == htonl(INADDR_LOOPBACK);
+    if (a.ss_family == AF_INET6) {
+        const struct in6_addr *x = &((struct sockaddr_in6 *)&a)->sin6_addr;
+        static const uint8_t mapped[16] = { 0,0,0,0,0,0,0,0,0,0,0xff,0xff,127,0,0,1 };
+        return IN6_IS_ADDR_LOOPBACK(x) || !memcmp(x->s6_addr, mapped, 16);
+    }
+    return 0;
+}
+
+static int unseal(const struct req *r, const uint8_t *in, size_t n, uint8_t *out);
+
+static void kiosk_api(int fd, struct req *r)
+{
+    int write = !strcmp(r->method, "POST");
+    if (!signed_ok(r, write)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    if (!write) {
+        size_t n; char *j = kiosk_json(0, &n);
+        if (!j) { respond_sjson(fd, r, 503, "{\"error\":\"out of memory\"}"); return; }
+        respond_s(fd, r, 200, "application/json", NULL, j, n); free(j); return;
+    }
+    /* the token's line unsealed in place of its sealed one; "sealed <hex>": lines sealed together (the token and the
+     * screen app's settings, some of them secrets: one key stream for all of it, never one per line); every other
+     * line as it came */
+    size_t cap = r->blen + 4096; char *t = malloc(cap), err[160], ej[200], o[260]; size_t n = 0;
+    if (!t) { respond_sjson(fd, r, 503, "{\"error\":\"out of memory\"}"); return; }
+    const char *p = r->body ? r->body : "";
+    while (*p) {
+        const char *e = strchr(p, '\n'); size_t len = e ? (size_t)(e - p) : strlen(p);
+        if (len > 6 && !strncmp(p, "token ", 6)) {
+            uint8_t sealed[256], plain[257]; char h[520]; int sl;
+            snprintf(h, sizeof h, "%.*s", (int)(len - 6), p + 6); h[strcspn(h, "\r")] = 0;
+            if (strcmp(h, "-")) {
+                if ((sl = unhex_any(sealed, sizeof sealed, h)) < 0 || unseal(r, sealed, (size_t)sl, plain)) {
+                    free(t); respond_sjson(fd, r, 400, "{\"error\":\"token: not sealed for this Echo\"}"); return;
+                }
+                plain[sl] = 0;
+                n += (size_t)snprintf(t + n, cap - n, "token %s\n", (char *)plain);
+                crypto_wipe(plain, sizeof plain);
+            }
+        } else if (len > 7 && !strncmp(p, "sealed ", 7)) {
+            static uint8_t sealed[2048], plain[2049]; static char h[4100]; int sl;
+            snprintf(h, sizeof h, "%.*s", (int)(len - 7), p + 7); h[strcspn(h, "\r")] = 0;
+            if ((sl = unhex_any(sealed, sizeof sealed, h)) < 0 || unseal(r, sealed, (size_t)sl, plain)) {
+                free(t); respond_sjson(fd, r, 400, "{\"error\":\"sealed: not sealed for this Echo\"}"); return;
+            }
+            plain[sl] = 0;
+            n += (size_t)snprintf(t + n, cap - n, "%s\n", (char *)plain);
+            crypto_wipe(plain, sizeof plain);
+        } else n += (size_t)snprintf(t + n, cap - n, "%.*s\n", (int)len, p);
+        p = e ? e + 1 : p + len;
+    }
+    int bad = kiosk_store(t, err, sizeof err);
+    crypto_wipe(t, cap); free(t);
+    if (bad) { jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej); respond_sjson(fd, r, 400, o); return; }
+    respond_sjson(fd, r, 200, "{\"ok\":true}");
+}
+
+/* The owner's apps (apps.h): GET /api/apps the installed ones, which may reach the internet and how the last install
+ * or removal went; POST "net <package> 0|1" (the internet) or "lan <package> 0|1" (reachable from the home network).  POST /api/apps/apk/<offset> a piece of an APK (APPS_CHUNK at most, in
+ * order), /api/apps/apk/install "<size> <BLAKE2b-256 hex>", /api/apps/uninstall "<package>": root's apps.sh does them,
+ * GET /api/apps says when (install.state).  An approved client only (this page, the Echo Local integration): an app
+ * runs code on the Echo, and the internet switch opens the firewall for it */
+static void apps_api(int fd, struct req *r)
+{
+    int write = !strcmp(r->method, "POST");
+    if (!signed_ok(r, write)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    const char *sub = r->path + 9;
+    if (write && !strncmp(sub, "/apk/", 5)) {
+        int e;
+        if (!strcmp(sub + 5, "install")) {
+            long size = 0; char hex[80] = "";
+            if (!r->body || sscanf(r->body, "%ld %79s", &size, hex) != 2) { respond_sjson(fd, r, 400, "{\"error\":\"<size> <blake2b hex>\"}"); return; }
+            e = apps_install(size, hex);
+            if (e == -1) { respond_sjson(fd, r, 400, "{\"error\":\"not the APK that was sent: size or digest differ\"}"); return; }
+        } else {
+            char *end; long off = strtol(sub + 5, &end, 10);
+            if (*end || end == sub + 5) { respond_sjson(fd, r, 404, "{\"error\":\"not found\"}"); return; }
+            e = apps_chunk(off, r->body ? r->body : "", r->blen);
+            if (e == -1) { respond_sjson(fd, r, 409, "{\"error\":\"not where the APK ends\"}"); return; }
+            if (e == -2) { respond_sjson(fd, r, 413, "{\"error\":\"an APK of 200 MB at most\"}"); return; }
+        }
+        if (e == -2) respond_sjson(fd, r, 409, "{\"error\":\"an install or removal is under way\"}");
+        else if (e) respond_sjson(fd, r, 500, "{\"error\":\"cannot write the APK\"}");
+        else respond_sjson(fd, r, 200, "{\"ok\":true}");
+        return;
+    }
+    if (write && !strcmp(sub, "/uninstall")) {
+        char pkg[160] = "";
+        if (r->body) sscanf(r->body, "%159s", pkg);
+        int e = apps_uninstall(pkg);
+        if (e == -1) respond_sjson(fd, r, 400, "{\"error\":\"not an app installed on this Echo\"}");
+        else if (e == -2) respond_sjson(fd, r, 409, "{\"error\":\"an install or removal is under way\"}");
+        else if (e) respond_sjson(fd, r, 500, "{\"error\":\"cannot write the request\"}");
+        else respond_sjson(fd, r, 200, "{\"ok\":true}");
+        return;
+    }
+    if (*sub) { respond_sjson(fd, r, 404, "{\"error\":\"not found\"}"); return; }
+    if (!write) {
+        size_t n; char *j = apps_json(&n);
+        if (!j) { respond_sjson(fd, r, 200, "{\"apps\":[],\"none\":true}"); return; }    /* no Android here */
+        respond_s(fd, r, 200, "application/json", NULL, j, n); free(j); return;
+    }
+    char pkg[160]; int on = -1;
+    char kind[4] = "";
+    if (!r->body || sscanf(r->body, "%3s %159s %d", kind, pkg, &on) != 3 || (strcmp(kind, "net") && strcmp(kind, "lan")) || (on != 0 && on != 1)) {
+        respond_sjson(fd, r, 400, "{\"error\":\"net|lan <package> 0|1\"}"); return;
+    }
+    int e = kind[0] == 'n' ? apps_set_net(pkg, on) : apps_set_lan(pkg, on);
+    if (e == -1) respond_sjson(fd, r, 400, "{\"error\":\"not an app installed on this Echo\"}");
+    else if (e) respond_sjson(fd, r, 500, "{\"error\":\"cannot write state/apps\"}");
+    else respond_sjson(fd, r, 200, "{\"ok\":true}");
+}
+
+/* The Echo's own alarms (alarms.h): GET /api/alarms the list; POST /api/alarms/put "id hour min days enabled label" (id 0
+ * adds one), /api/alarms/<id>/delete, /api/alarms/snooze, /api/alarms/stop (what rings now) */
+static void alarms_api(int fd, struct req *r)
+{
+    char err[160] = "", o[260], ej[200]; int get = !strcmp(r->method, "GET");
+    if (!signed_ok(r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    const char *p = r->path + 11;
+    if (!*p && get) {
+        size_t n = 0; char *j = alarms_json(&n), *o2;
+        if (!j || n < 2) { free(j); respond_sjson(fd, r, 500, "{\"error\":\"out of memory\"}"); return; }
+        /* what rings now is the core's: in front of alarms.c's own */
+        pthread_mutex_lock(&core_lock); int rang = core_alarm_ringing() || core_timers_ringing(NULL, 0); pthread_mutex_unlock(&core_lock);
+        if (asprintf(&o2, "{\"ringing\":%s,%s", rang ? "true" : "false", j + 1) < 0) { free(j); respond_sjson(fd, r, 500, "{\"error\":\"out of memory\"}"); return; }
+        respond_s(fd, r, 200, "application/json", NULL, o2, strlen(o2)); free(o2); free(j); return;
+    }
+    if (get) { respond_sjson(fd, r, 405, "{\"error\":\"POST\"}"); return; }
+    if (!strcmp(p, "/put")) {
+        char line[160]; snprintf(line, sizeof line, "%.*s", (int)(r->blen < sizeof line - 1 ? r->blen : sizeof line - 1), r->body ? r->body : "");
+        if (!alarms_put_text(line, err, sizeof err)) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
+    } else if (!strcmp(p, "/snooze") || !strcmp(p, "/stop")) {
+        pthread_mutex_lock(&core_lock);
+        int rang = core_alarm_ringing() || core_timers_ringing(NULL, 0);
+        if (p[1] == 's' && p[2] == 'n') { if (!core_alarm_snooze("settings page")) core_alarm_stop("settings page"); }
+        else core_alarm_stop("settings page");
+        pthread_mutex_unlock(&core_lock);
+        respond_sjson(fd, r, 200, rang ? "{\"ok\":true}" : "{\"ok\":false}"); return;
+    } else {
+        char *end; long id = *p == '/' ? strtol(p + 1, &end, 10) : 0;
+        if (id > 0 && !strcmp(end, "/delete")) { if (!alarms_delete((int)id)) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; } snprintf(err, sizeof err, "no alarm %ld", id); }
+        else snprintf(err, sizeof err, "not found");
+    }
+    jesc(ej, sizeof ej, err[0] ? err : "refused"); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
+    respond_sjson(fd, r, 400, o);
+}
+
 static void sound_pack_api(int fd, struct req *r)
 {
     char err[200] = "", o[300], ej[260]; int rc = -1, get = !strcmp(r->method, "GET");
@@ -1039,6 +1214,208 @@ static void log_api(int fd, struct req *r)
     free(t);
 }
 
+/* The camera's H.264 (camera.h, docs/camera.md), for the Echo Local integration: a signed GET, then records until the
+ * stream ends or the viewer goes.  The body has no end, so no X-HM-Mac over it (respond_s): the answer's head is signed
+ * over the server's nonce instead, and every record is sealed with a key of this stream's,
+ *     SK = BLAKE2b-256 keyed with K over "hassmic camera 1\n" <counter> "\n" <nonce, 16 bytes>
+ * as ChaCha20-Poly1305 (IETF, noise.c's nonce: 4 zero bytes, the record's number as 8 little-endian ones):
+ *     length u32 LE (of what follows) | ciphertext | tag 16      the length as associated data
+ *     plaintext: type u8 (camera.h CAM_*) | pts u64 LE (us) | H.264 (Annex B)
+ * The video is K's alone on the LAN; the signed request (fresh counter) is what lets the camera on.  A failed send is
+ * the viewer gone: the camera stops with it. */
+static void camera_api(int fd, const struct req *r)
+{
+    uint8_t pub[32], k[32], sk[32], nonce[16], mac[16]; char nh[33], mh[33], h[600]; const char *why = "";
+    crypto_blake2b_ctx ctx; int bad;
+    if (!signed_ok(r, 0) || unhex(pub, r->pub, 32)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    int id = camera_begin(&why);
+    if (id < 0) { char o[64]; snprintf(o, sizeof o, "{\"error\":\"%s\"}", why); respond_sjson(fd, r, 409, o); return; }
+    pthread_mutex_lock(&lk); bad = session_key(k, pub); pthread_mutex_unlock(&lk);
+    if (bad) { camera_end(id); respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    ws_random(nonce, sizeof nonce); hex(nh, nonce, 16);
+    crypto_blake2b_keyed_init(&ctx, 32, k, 32);
+    crypto_blake2b_update(&ctx, (const uint8_t *)"hassmic camera 1\n", 17);
+    crypto_blake2b_update(&ctx, (const uint8_t *)r->ctr, strlen(r->ctr)); crypto_blake2b_update(&ctx, (const uint8_t *)"\n", 1);
+    crypto_blake2b_update(&ctx, nonce, 16);
+    crypto_blake2b_final(&ctx, sk);
+    crypto_blake2b_keyed_init(&ctx, 16, k, 32);                 /* the head: respond_s's MAC, the nonce as its body */
+    crypto_blake2b_update(&ctx, (const uint8_t *)"RESP\n", 5);
+    crypto_blake2b_update(&ctx, (const uint8_t *)r->ctr, strlen(r->ctr)); crypto_blake2b_update(&ctx, (const uint8_t *)"\n", 1);
+    crypto_blake2b_update(&ctx, (const uint8_t *)nh, 32);
+    crypto_blake2b_final(&ctx, mac); crypto_wipe(k, sizeof k); hex(mh, mac, 16);
+    int hn = snprintf(h, sizeof h, "HTTP/1.1 200 OK\r\nContent-Type: application/x-hassmic-camera\r\nConnection: close\r\nCache-Control: no-store\r\n"
+                      "X-HM-Nonce: %s\r\nX-HM-Mac: %s\r\n\r\n", nh, mh);
+    int t; long long pts; uint8_t *d = NULL; size_t len; unsigned long long seq = 0; int sent = 0;
+    if (send_all(fd, h, (size_t)hn)) goto done;
+    for (;;) {
+        int g = camera_next(id, &t, &pts, &d, &len, 1000);
+        if (g < 0) break;
+        if (!g) continue;
+        size_t pl = 9 + len, rl = 4 + pl + 16; uint8_t *rec = malloc(rl), *pt = malloc(pl);
+        if (!rec || !pt) { free(rec); free(pt); free(d); break; }
+        pt[0] = (uint8_t)t;
+        for (int i = 0; i < 8; i++) pt[1 + i] = (uint8_t)((unsigned long long)pts >> (8 * i));
+        memcpy(pt + 9, d, len); free(d); d = NULL;
+        for (int i = 0; i < 4; i++) rec[i] = (uint8_t)((pl + 16) >> (8 * i));
+        uint8_t n12[12] = { 0 }; crypto_aead_ctx a;
+        for (int i = 0; i < 8; i++) n12[4 + i] = (uint8_t)(seq >> (8 * i));
+        crypto_aead_init_ietf(&a, sk, n12);
+        crypto_aead_write(&a, rec + 4, rec + 4 + pl, rec, 4, pt, pl);
+        crypto_wipe(&a, sizeof a); seq++;
+        int f = send_all(fd, rec, rl);
+        free(rec); free(pt);
+        if (f) break;
+        sent++;
+    }
+done:
+    crypto_wipe(sk, sizeof sk);
+    camera_end(id);
+    fprintf(stderr, "web: camera stream closed after %d records\n", sent);
+}
+
+/* A Drop In from Home Assistant (dropin.h dropin_ha_*, docs/video-dropin.md): a signed GET from the Echo Local
+ * integration, then this connection is the call, both ways, as the camera stream's records: the head signed over the
+ * server's nonce, each record sealed with ChaCha20-Poly1305 (noise.c's nonce layout, the record's number per
+ * direction, its length as associated data) under a key of this call's and direction's,
+ *     SK = BLAKE2b-256 keyed with K over "hassmic call 1 <down|up>\n" <counter> "\n" <nonce, 16 bytes>
+ * down (Echo -> Home Assistant):  'S' <state: dropin_states[]>            on every change; "idle" last
+ *                                  'A' <320 samples s16le, 16 kHz>          this side's mic, through Drop In's gate and gain
+ *                                  'V' <type u8> <pts u64 LE, us> <H.264>   the camera (camera.h's records) while the call is
+ *                                                                           connected, the setting "camera" is on and the lens
+ *                                                                           open: one viewer, as a stream; the red dot shows
+ * up (Home Assistant -> Echo):    'A' <320 samples s16le>                  to play; sent all along, silence too: the
+ *                                                                           stream is the call's keepalive (LOST_MS)
+ *                                  'V' <type u8> <pts u64 LE, us> <H.264>   the browser's camera, for this screen (video.c;
+ *                                                                           ignored where there is no player); a record up
+ *                                                                           to CALL_UP_MAX
+ *                                  'H'                                      hung up
+ * The connection's end hangs up as well. */
+#define CALL_REC_MAX 4096
+#define CALL_UP_MAX  (512 << 10)        /* a browser's key frame: WebCodecs at 640x360 makes 20-40 kB; room for more */
+static int call_seal(int fd, const uint8_t sk[32], unsigned long long *seq, uint8_t type, const void *p, size_t n)
+{
+    uint8_t small[4 + 1 + CALL_REC_MAX + 16], n12[12] = { 0 }; crypto_aead_ctx a;
+    size_t pl = 1 + n;
+    uint8_t *rec = 4 + pl + 16 <= sizeof small ? small : malloc(4 + pl + 16);      /* a key frame: tens of kB */
+    if (!rec) return -1;
+    uint8_t *pt = rec + 4;                              /* sealed in place: crypto_aead_write takes the same buffer */
+    pt[0] = type; if (n) memcpy(pt + 1, p, n);
+    for (int i = 0; i < 4; i++) rec[i] = (uint8_t)((pl + 16) >> (8 * i));
+    for (int i = 0; i < 8; i++) n12[4 + i] = (uint8_t)(*seq >> (8 * i));
+    crypto_aead_init_ietf(&a, sk, n12);
+    crypto_aead_write(&a, rec + 4, rec + 4 + pl, rec, 4, pt, pl);
+    crypto_wipe(&a, sizeof a); (*seq)++;
+    int r = send_all(fd, rec, 4 + pl + 16);
+    if (rec != small) free(rec);
+    return r;
+}
+
+static void call_key(uint8_t out[32], const uint8_t k[32], const char *dir, const char *ctr, const uint8_t nonce[16])
+{
+    crypto_blake2b_ctx ctx; char lb[32];
+    int l = snprintf(lb, sizeof lb, "hassmic call 1 %s\n", dir);
+    crypto_blake2b_keyed_init(&ctx, 32, k, 32);
+    crypto_blake2b_update(&ctx, (const uint8_t *)lb, (size_t)l);
+    crypto_blake2b_update(&ctx, (const uint8_t *)ctr, strlen(ctr)); crypto_blake2b_update(&ctx, (const uint8_t *)"\n", 1);
+    crypto_blake2b_update(&ctx, nonce, 16);
+    crypto_blake2b_final(&ctx, out);
+}
+
+static void call_api(int fd, const struct req *r)
+{
+    uint8_t pub[32], k[32], down[32], up[32], nonce[16], mac[16]; char nh[33], mh[33], h[600], why[96] = "";
+    crypto_blake2b_ctx ctx; int bad;
+    if (!signed_ok(r, 0) || unhex(pub, r->pub, 32)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    pthread_mutex_lock(&lk); bad = session_key(k, pub); pthread_mutex_unlock(&lk);
+    if (bad) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    int gen = dropin_ha_begin(why, sizeof why);
+    if (gen < 0) { char o[160], w[100]; jesc(w, sizeof w, why); snprintf(o, sizeof o, "{\"error\":\"%s\"}", w); respond_sjson(fd, r, 409, o); crypto_wipe(k, sizeof k); return; }
+    ws_random(nonce, sizeof nonce); hex(nh, nonce, 16);
+    call_key(down, k, "down", r->ctr, nonce); call_key(up, k, "up", r->ctr, nonce);
+    crypto_blake2b_keyed_init(&ctx, 16, k, 32);
+    crypto_blake2b_update(&ctx, (const uint8_t *)"RESP\n", 5);
+    crypto_blake2b_update(&ctx, (const uint8_t *)r->ctr, strlen(r->ctr)); crypto_blake2b_update(&ctx, (const uint8_t *)"\n", 1);
+    crypto_blake2b_update(&ctx, (const uint8_t *)nh, 32);
+    crypto_blake2b_final(&ctx, mac); crypto_wipe(k, sizeof k); hex(mh, mac, 16);
+    int hn = snprintf(h, sizeof h, "HTTP/1.1 200 OK\r\nContent-Type: application/x-hassmic-call\r\nConnection: close\r\nCache-Control: no-store\r\n"
+                      "X-HM-Nonce: %s\r\nX-HM-Mac: %s\r\n\r\n", nh, mh);
+    const char *end = "Home Assistant went";
+    unsigned long long dseq = 0, useq = 0; int last = -1, frames_in = 0, frames_out = 0, cam = -1, pictures = 0; long long cam_try = 0;
+    static uint8_t in[4 + 1 + CALL_UP_MAX + 16 + 8192]; size_t have = 0;   /* (one call at a time: dropin_ha_begin) */
+    static uint8_t pt[1 + CALL_UP_MAX];
+    int videos_in = 0;
+    if (send_all(fd, h, (size_t)hn)) goto done;
+    for (;;) {
+        int st = dropin_ha_state(gen);
+        if (st != last) { last = st; if (call_seal(fd, down, &dseq, 'S', dropin_states[st], strlen(dropin_states[st]))) break; }
+        if (st == DROPIN_IDLE) { end = NULL; break; }             /* ended here: the Echo's button, "hang up", lost */
+        int16_t pcm[320]; int fail = 0;
+        while (dropin_ha_out(gen, pcm)) { if (call_seal(fd, down, &dseq, 'A', pcm, sizeof pcm)) { fail = 1; break; } frames_out++; }
+        if (fail) break;
+        /* the picture: while connected, tried again every 2 s (the setting switched on, the lens opened, a stream that
+         * had the camera over) */
+        if (st == DROPIN_LIVE && cam < 0 && now_ms() - cam_try > 2000) {
+            const char *cw = ""; cam_try = now_ms();
+            if (camera_present() && (cam = camera_begin(&cw)) < 0 && strcmp(cw, "off") && strcmp(cw, "covered")) fprintf(stderr, "web: no picture in the call: %s\n", cw);
+        }
+        while (cam > 0) {
+            int t; long long pts; uint8_t *d = NULL; size_t len;
+            int g = camera_next(cam, &t, &pts, &d, &len, 0);
+            if (g < 0) { camera_end(cam); cam = -1; cam_try = now_ms(); video_self_stop(gen); break; }
+            if (!g) break;
+            video_self(gen, t, pts, d, len);                       /* what leaves, in this screen's corner */
+            uint8_t *v = malloc(9 + len);
+            if (v) {
+                v[0] = (uint8_t)t; for (int i = 0; i < 8; i++) v[1 + i] = (uint8_t)((unsigned long long)pts >> (8 * i));
+                memcpy(v + 9, d, len);
+                if (call_seal(fd, down, &dseq, 'V', v, 9 + len)) fail = 1; else pictures++;
+                free(v);
+            }
+            free(d);
+            if (fail) break;
+        }
+        if (fail) break;
+        struct pollfd q = { fd, POLLIN, 0 };
+        int k2 = poll(&q, 1, 10);
+        if (k2 < 0 && errno != EINTR) break;
+        if (k2 <= 0) continue;
+        ssize_t got = recv(fd, in + have, sizeof in - have, MSG_DONTWAIT);
+        if (got == 0) break;
+        if (got < 0) { if (errno == EAGAIN || errno == EINTR) continue; break; }
+        have += (size_t)got;
+        size_t at = 0;
+        while (have - at >= 4) {
+            uint32_t n = (uint32_t)in[at] | (uint32_t)in[at + 1] << 8 | (uint32_t)in[at + 2] << 16 | (uint32_t)in[at + 3] << 24;
+            if (n < 1 + 16 || n > 1 + CALL_UP_MAX + 16) { fail = 1; break; }
+            if (have - at < 4 + n) break;
+            uint8_t n12[12] = { 0 }; crypto_aead_ctx a;
+            for (int i = 0; i < 8; i++) n12[4 + i] = (uint8_t)(useq >> (8 * i));
+            crypto_aead_init_ietf(&a, up, n12);
+            int ok = !crypto_aead_read(&a, pt, in + at + 4 + n - 16, in + at, 4, in + at + 4, n - 16);
+            crypto_wipe(&a, sizeof a);
+            if (!ok) { fprintf(stderr, "web: a call record not sealed by Home Assistant\n"); fail = 1; break; }
+            useq++;
+            size_t pl = n - 16;
+            if (pt[0] == 'A' && pl == 1 + 640) { int16_t f[320]; memcpy(f, pt + 1, 640); dropin_ha_in(gen, f); frames_in++; }
+            else if (pt[0] == 'V' && pl > 1 + 9 && pt[1] >= 1 && pt[1] <= 3 && dropin_ha_state(gen) == DROPIN_LIVE) {
+                long long pts = 0; for (int i = 0; i < 8; i++) pts |= (long long)pt[2 + i] << (8 * i);
+                video_show(gen, pt[1], pts, pt + 10, pl - 10); videos_in++;
+            }
+            else if (pt[0] == 'H') { end = "Home Assistant hung up"; fail = 1; break; }
+            at += 4 + n;
+        }
+        if (fail) break;
+        memmove(in, in + at, have - at); have -= at;
+    }
+done:
+    if (cam > 0) camera_end(cam);
+    if (end) dropin_ha_end(gen, end);
+    if (dropin_ha_state(gen) == DROPIN_IDLE && last != DROPIN_IDLE) call_seal(fd, down, &dseq, 'S', "idle", 4);   /* (it may hear it) */
+    crypto_wipe(down, sizeof down); crypto_wipe(up, sizeof up);
+    video_stop(gen);
+    fprintf(stderr, "web: call from Home Assistant closed: %d frames in, %d out, %d pictures, %d of the browser's\n", frames_in, frames_out, pictures, videos_in);
+}
+
 /* Online updates come from GitHub: a line of BODY that switches them on (from off) counts only once this Echo reached
  * it (update_probe), else it is turned into a comment and WHY says what failed.  Imports go the same way.  Before
  * core_lock: the probe takes up to 15 s. */
@@ -1064,7 +1441,34 @@ static void handle(int fd)
     if ((e = read_request(fd, &r))) { if (e == -2) respond_json(fd, 413, "{\"error\":\"too large\"}"); return; }
     char *q = strchr(r.path, '?'); if (q) *q = 0;       /* no query strings in what we serve */
 
-    if (!strcmp(r.method, "OPTIONS")) respond(fd, 204, "text/plain", NULL, NULL, 0);
+    if (!strcmp(r.method, "OPTIONS")) respond_c(fd, strncmp(r.path, "/kiosk/", 7) != 0, 204, "text/plain", NULL, NULL, 0);
+    else if (!strcmp(r.method, "GET") && !strncmp(r.path, "/kiosk/state", 12)) {
+        /* what the screen shows, for the home app that draws it itself: /kiosk/state/<v> waits up to 25 s for a
+         * version other than v (a long poll: words appear at once), /kiosk/state answers now */
+        if (!from_loopback(fd) || !kiosk_peer_ok(fd)) respond_c(fd, 0, 404, "application/json", NULL, "{}", 2);
+        else {
+            if (r.path[12] == '/') { char *e; unsigned long v = strtoul(r.path + 13, &e, 10); if (!*e) kiosk_state_wait((unsigned)v, 25000); }
+            char o[8000]; size_t n = kiosk_state_json(o, sizeof o);
+            respond_c(fd, 0, 200, "application/json", NULL, o, n < sizeof o ? n : sizeof o - 1);
+        }
+    }
+    else if (!strcmp(r.method, "GET") && (!strcmp(r.path, "/kiosk/ring/snooze") || !strcmp(r.path, "/kiosk/ring/stop"))) {
+        /* the home app draws the ring (its claim) and the finger is on it: a tap snoozes an alarm (stops a timer), a
+         * hold stops (core_ring_tap).  Its uid only, as the config */
+        if (!from_loopback(fd) || !kiosk_peer_ok(fd)) respond_c(fd, 0, 404, "application/json", NULL, "{}", 2);
+        else { core_ring_tap(!strcmp(r.path + 12, "stop")); respond_c(fd, 0, 200, "application/json", NULL, "{}", 2); }
+    }
+    else if (!strcmp(r.method, "GET") && !strncmp(r.path, "/kiosk/config", 13)) {
+        /* the token's way to the app: only from this Echo, and with no CORS headers: the pages the app shows run here
+         * and must not read it */
+        if (!from_loopback(fd) || !kiosk_peer_ok(fd)) respond_c(fd, 0, 404, "application/json", NULL, "{}", 2);
+        else {
+            const char *t = r.path + 13;
+            if (!strncmp(t, "/front", 6)) kiosk_polled(1, kiosk_draws_parse(t + 6)); else if (!strncmp(t, "/back", 5)) kiosk_polled(0, 0);
+            size_t n; char *j = kiosk_json(1, &n);
+            if (j) { respond_c(fd, 0, 200, "application/json", NULL, j, n); free(j); } else respond_c(fd, 0, 503, "application/json", NULL, "{}", 2);
+        }
+    }
     else if (!strcmp(r.method, "GET") && strncmp(r.path, "/api/", 5)) {
         int found = 0;
         for (int i = 0; i < web_nassets; i++) if (!strcmp(web_assets[i].path, r.path)) {
@@ -1162,7 +1566,17 @@ static void handle(int fd)
     else if (!strncmp(r.path, "/api/timer-sound", 16)) timer_sound_api(fd, &r);
     else if (!strncmp(r.path, "/api/sound/", 11)) sound_api(fd, &r);
     else if (!strncmp(r.path, "/api/sound-pack", 15)) sound_pack_api(fd, &r);
+    else if (!strncmp(r.path, "/api/alarms", 11)) alarms_api(fd, &r);
+    else if (!strcmp(r.path, "/api/kiosk")) kiosk_api(fd, &r);
+    else if (!strcmp(r.path, "/api/apps") || !strncmp(r.path, "/api/apps/", 10)) apps_api(fd, &r);
     else if (!strcmp(r.method, "GET") && !strncmp(r.path, "/api/log/", 9)) log_api(fd, &r);
+    else if (!strcmp(r.method, "GET") && !strcmp(r.path, "/api/camera/stream")) camera_api(fd, &r);
+    else if (!strcmp(r.method, "GET") && !strcmp(r.path, "/api/call")) call_api(fd, &r);
+    else if (!strcmp(r.method, "GET") && !strcmp(r.path, "/api/camera")) {     /* what the integration's entity shows */
+        char o[128];
+        if (!signed_ok(&r, 0)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
+        camera_json(o, sizeof o); respond_sjson(fd, &r, 200, o);
+    }
     else respond_json(fd, 404, "{\"error\":\"not found\"}");
     free(r.body);
 }
