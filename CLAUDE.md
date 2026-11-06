@@ -184,7 +184,10 @@ stops and names the sysctl, which the setup's `qemu_arm` asks to set).
 `devices/<codename>/` holds everything model-specific; porting guide in `devices/README.md`:
 - `device.mk`: NDK target, audio/wake backends, stock libs to link (included by the Makefile).
 - `board.c`: `struct board` (`src/hassmic/board.h`): HA identity, keypad/mute-latch/BT device paths, stock wake word
-  and earcon paths, thermal zone, LED volume steps, speaker gain control. Linked into every hassmic build, host builds included.
+  and earcon paths, thermal zone, LED volume steps, volume curve, speaker gain control. Linked into every hassmic build, host builds included.
+  `volume_curve` is required and every model must have its own, measured on it (`devices/README.md` "Volume curve");
+  until then `board_vol_dot2` stands in under a comment saying so, and `make unit-volcurve` prints a `todo` per such
+  model. A new model comes with its own curve or a `PLAN.md` entry saying it is missing.
 - `device.conf`: shell vars (product/firmware id, probe files, `INSTALL` method, daemon user/groups, stock service
   names). Sourced by PC scripts and shipped to the Echo next to `main.sh`/`lockdown.sh`/`alexa-off.sh`; push bundles
   carry it, and `main.sh` refuses a bundle whose `PRODUCT` is not the Echo's.
@@ -211,7 +214,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   music (`volume`), replies, sounds, timers, Drop In calls at volumes of their own or each following the music's +- an offset in
   points (`<kind>_linked`/`_offset`; linked, its HA number is unlisted); MainVolume and TTSVolume both at the loudest
   (libasp's own volume, which boosts the top end, follows the last of them set), each kind turned down in its PCM by
-  the measured curve (`volcurve.c`: `board.volume_curve`, the Dot 2's where none, `tests/unit/volcurve_test.c` per model; `audio_music_gain`, `audio_tts_gain`, the earcon thread); HA's `play_media` is music
+  the model's curve (`volcurve.c`: `board.volume_curve`, the Dot 2's `board_vol_dot2` standing in where not measured yet, `tests/unit/volcurve_test.c` per model; `audio_music_gain`, `audio_tts_gain`, the earcon thread); HA's `play_media` is music
   though on the TTS stream (`core_tts_begin`'s `media`, `tts_kind`). docs/re-platform.md has the measurements. The front end is told when a command is spoken (`listening()`:
   without it its cancellers remove the talker after 1.5 s). `earsup.c` (wake sound removal: our own UI sounds taken back
   out of the pipeline's audio by a residual echo suppressor keyed to the PCM we play; experimental, setting

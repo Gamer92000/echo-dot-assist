@@ -12,6 +12,14 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-04
 
+- **Even volume steps.** Every point of the volume is now the same step: 0.5 dB a point, 5 dB a press of the volume
+  buttons, from 1 (about 50 dB under full) to 100 (as loud as before). The Echos' own volume puts most of the change at
+  one end: on an Echo Show 5 the bottom half covers 46 dB and the top half 20, and since it has only 31 steps for 100
+  points, a slider moved by one point often changed nothing; on an Echo Dot, 60 to 70 was 1 dB and 90 to 100 was 10.
+  Low volumes are louder than before (on an Echo Show 5, 5 and 10 were 60 and 51 dB under full, now 47.5 and 45.5) and
+  middle ones somewhat quieter (50 is 25 dB under full, where it was 20 to 22). Your volume stays
+  at its number through the update. "Even volume steps" on the settings page (Sound, Speaker) brings the Echo's own
+  steps back. On by default.
 - **Echo Show 5, Show 5 2nd gen and Show 8 (1st gen): the screen turns off on time.** hassmic sets how soon the
   screen turns off (5 minutes, 1 minute while muted or on Do not disturb, as stock) with Android's `settings`, which
   on these Echos is a shell script without a `#!` line: started directly it failed, and the setting was never made.

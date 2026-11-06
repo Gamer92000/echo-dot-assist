@@ -73,6 +73,8 @@ const struct board board = {
      * this driver's name is. */
     .light_sensor = { "tcs3400:/sys/devices/virtual/input" },
     .volume_steps = 100,                                            /* the light band (ring_band.c) shows the level in % */
+    /* volume curve not measured on this model yet: the Echo Dot 2's stands in (devices/README.md: how to measure) */
+    .volume_curve = board_vol_dot2,
     /* TI TAS5805m amplifier: its "Master TAS5805m Playback Volume" is a digital volume, 0..158, 100 at boot, no dB table
      * (0.5 dB steps assumed: the chip's own).  Listened to with music at full volume, 2026-10-15: 115 and 120 clean, 122
      * clean, 130 distorted ("gross"); a rap track's bass then clipped at 122, so 118 is the limit: +9 dB on that assumption.  The

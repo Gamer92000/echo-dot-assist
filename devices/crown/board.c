@@ -67,6 +67,8 @@ const struct board board = {
      * /data/als_cal_data.bin, ir switches ALS off until a reboot (docs/re-checkers.md; the same driver on crown, docs/re-crown.md). */
     .light_sensor = { "/sys/bus/platform/drivers/als_ps/lux" },
     .volume_steps = 100,                                            /* the light band (ring_band.c) shows the level in % */
+    /* volume curve not measured on this model yet: the Echo Dot 2's stands in (devices/README.md: how to measure) */
+    .volume_curve = board_vol_dot2,
     /* Realtek RT5616: its line out feeds the speaker amplifier.  0..39 = -46.5..+12 dB, 1.5 dB a step (the kernel's
      * tables); the HAL's initial settings in /system/etc/audio_device.xml set 30, -1.5 dB (the Echo Show 8 reads 30 30
      * from tinymix, 2026-10-13); verify that nothing writes it later */

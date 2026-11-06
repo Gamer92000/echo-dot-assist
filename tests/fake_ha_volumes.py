@@ -4,7 +4,8 @@
 Home Assistant's media at the music volume although it plays on the same stream, the volume keys on what plays, the
 numbers in Home Assistant, the quieter ones turned down in their PCM, kinds that follow the music some points above or
 below it, a restart, a Bluetooth speaker (HASSMIC_FAKE_SPEAKER), the page and exports, and everything as before with the
-feature off."""
+feature off.  Even volume steps (on by default; every other part runs with them off, on the Echo's own curve): the same
+dB per point, the mixer at the curve's point just above, the rest in our PCM, the volume kept beside it."""
 import asyncio, contextvars, io, json, math, os, re, signal, socket, struct, subprocess, sys, tempfile, threading, traceback, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from aioesphomeapi import VoiceAssistantEventType as Ev, APIClient, MediaPlayerInfo, MediaPlayerEntityState, MediaPlayerState, NumberInfo, NumberState
@@ -60,6 +61,7 @@ class Echo:
         else:
             self.tmp = tempfile.mkdtemp(); self.state = os.path.join(self.tmp, "state"); self.mixer = os.path.join(self.tmp, "mixer")
             os.makedirs(self.state); os.makedirs(self.mixer)
+            if "even_volume" not in config: config = "even_volume=off\n" + config      # the Echo's own curve: part_even has the steps
             with open(os.path.join(self.state, "config"), "w") as f: f.write(config)
             with open(os.path.join(self.state, "adopted"), "w") as f: f.write("ha\n")
             self.prop("MainVolume", 40); self.prop("TTSVolume", 40)
@@ -463,6 +465,66 @@ async def part_speaker(url, full):
     finally:
         echo.stop()
 
+# even steps (main.c want_db, EVEN_FLOOR_DB): dB under full at volume v, and the curve's points (the Dot 2's, the host
+# build's) the mixer goes to
+even = lambda v: -50.0 * (100 - v) / 99
+pts = {0: -60.0, 5: -47.3, 10: -40.6, **db}
+def at(v):                                              # 0: silent, the mixer at 0
+    return 0 if v <= 0 else min(u for u in pts if pts[u] >= even(v) - 1e-6)
+
+
+async def part_even(url, full):
+    gain = lambda what: float(re.findall(rf"audio: {what} gain ([0-9.]+)", echo.text())[-1]) if f"{what} gain" in echo.text() else 1.0
+    want = lambda v: 10 ** ((even(v) - pts[at(v)]) / 20)
+    # The first start with even steps (on by default after an update): MainVolume's 40 is the volume, kept in
+    # volume.music before the mixer moves to the point above even(40) = -30.3 dB (40, -26.5) and the music 3.8 dB under it
+    echo = Echo(6, "even_volume=on\n")
+    try:
+        c = await echo.connect()
+        mp = next(e for e in echo.ents if isinstance(e, MediaPlayerInfo))
+        await until(lambda: near(gain("music"), want(40)))
+        mp_state = [x for x in echo.states if hasattr(x, "volume")]
+        check(echo.music_file() == "40" and mp_state and abs(mp_state[-1].volume - 0.4) < 0.01,
+              f"even: the first start keeps MainVolume's 40 as the volume ({echo.music_file()}, {mp_state[-1].volume if mp_state else None})")
+        check(echo.prop("MainVolume") == at(40) == 40 and echo.prop("TTSVolume") == 40 and near(gain("music"), want(40)) and near(gain("tts"), want(40)),
+              f"  the mixer at the curve's 40, music and replies {even(40):.1f} dB under full ({gain('music'):.3f}, want {want(40):.3f})")
+        snd = await wake_sound_peak(echo, c)
+        w = (await full) * 10 ** ((even(40) - pts[40]) / 20)
+        check(snd is not None and abs(snd - w) <= 3, f"  the wake sound turned down with them ({snd}, want {w:.0f})")
+        # each point its own loudness: 46 and 47 (one index on the Show, one mixer volume here) differ by 0.5 dB
+        seen = {}
+        for v in (46, 47, 55, 100, 0):
+            c.media_player_command(mp.key, volume=v / 100)
+            ok = await until(lambda: echo.prop("MainVolume") == at(v) and near(gain("music"), want(v) if v else 0.0))
+            seen[v] = (echo.prop("MainVolume"), round(gain("music"), 3), ok)
+        check(all(x[2] for x in seen.values()), f"  each volume: the mixer at the point above, the rest in the PCM ({seen})")
+        check(seen[46][0] == seen[47][0] and abs(20 * math.log10(seen[47][1] / seen[46][1]) - 0.505) < 0.05,
+              "  46 and 47 at one mixer volume, 0.5 dB apart in the PCM")
+        check(seen[100][:2] == (100, 1.0) and seen[0][:2] == (0, 0.0), "  100 at full, 0 silent")
+        c.media_player_command(mp.key, volume=0.55)
+        await until(lambda: echo.music_file() == "55" and echo.prop("MainVolume") == 50)
+        check(echo.music_file() == "55" and echo.prop("MainVolume") == 50, f"  55 kept as the volume, the mixer at 50 ({echo.music_file()})")
+        await c.disconnect()
+    finally:
+        echo.stop()
+    echo = Echo(6, None, again=echo)
+    try:
+        c = await echo.connect()
+        await until(lambda: near(gain("music"), want(55)))
+        mp_state = [x for x in echo.states if hasattr(x, "volume")]
+        check(mp_state and abs(mp_state[-1].volume - 0.55) < 0.01 and echo.prop("MainVolume") == 50 and near(gain("music"), want(55)),
+              f"restarted: 55 from volume.music, not MainVolume's 50 ({mp_state[-1].volume if mp_state else None}, {gain('music'):.3f})")
+        b = echo.page()
+        b.set(even_volume="off")
+        await until(lambda: echo.prop("MainVolume") == 55 and gain("music") == 1.0)
+        check(echo.prop("MainVolume") == 55 and echo.prop("TTSVolume") == 55 and gain("music") == 1.0 and echo.music_file() is None
+              and echo.config().get("even_volume") == "off",
+              f"off from the page: the mixer at the volume, as stock, volume.music gone ({echo.prop('MainVolume')}, {echo.music_file()})")
+        await c.disconnect()
+    finally:
+        echo.stop()
+
+
 async def main():
     httpd = ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -477,7 +539,7 @@ async def main():
         finally:
             if f is part_off and not full.done(): full.set_result(None)       # failed before: the others fail, not wait
         return lines
-    for lines in await asyncio.gather(*(part(f) for f in (part_off, part_separate, part_linked, part_imported, part_restart, part_speaker))):
+    for lines in await asyncio.gather(*(part(f) for f in (part_off, part_separate, part_linked, part_imported, part_restart, part_speaker, part_even))):
         print("\n".join(lines))
 
     httpd.shutdown()
