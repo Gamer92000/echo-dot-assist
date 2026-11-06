@@ -498,7 +498,73 @@ address, left empty, is taken from the Music Assistant that plays on the Echo wh
 the token only ever goes there, so a Music Assistant that moves needs **Connect…** again (or its address given).
 Until then those tabs say how to connect.
 
+## Clock and alarms
+
+**Alarms** ring on the Echo itself, on its own clock (which Home Assistant sets; until it has, none rings), with or
+without Home Assistant. Home Assistant has no alarms of its own.
+
+- **By voice** ("Answer alarm requests on the Echo", on by default): "<wake word>, set an alarm for 7 AM", "wake me up
+  at 6:30 tomorrow", "set an alarm for quarter to 8", "set an alarm for 6:45 on weekdays", "wake me up every day at
+  7", "set an alarm every Monday and Friday at 5:30", "wake me up in 20 minutes", "what alarms do I have", "when is my
+  alarm", "change my alarm to 6:30" (the next one, its days kept), "cancel my alarm" (the next one), "cancel the 7 AM alarm",
+  "cancel all alarms". A time without AM or PM is
+  the next time it comes ("7" said at 2 PM is 7 PM today), with a day said the morning. The Echo answers these itself
+  and Home Assistant never sees them; the answer is spoken through `assist_satellite.announce`, which needs "Allow the
+  device to perform Home Assistant actions" ticked in the device's options in Home Assistant, and shows on an Echo
+  Show's screen. English sentences; "snooze" and "stop" in any case. Requests about an alarm system ("disarm the
+  alarm", "arm the alarm system", "the smoke alarm") stay Home Assistant's.
+- **On the settings page** ("Clock & alarms"): the list, Add, Edit (time, the days it repeats on, a label), a switch to
+  turn one off, Delete; Snooze and Stop while one rings.
+- **From Home Assistant** ("Alarms" in Features is on by default): `esphome.<node>_set_alarm` (time "07:30", "7:30
+  pm" or "in 20 minutes"; days "weekdays", "weekends", "daily", "mon, fri" or empty for once; a label) and
+  `esphome.<node>_delete_alarm` (which: "next", "all", its id or its time), for automations and AI agents' tools.
+  Entities: "Next alarm" (a timestamp: a dashboard counts down to it, a trigger "10 minutes before" turns the lights
+  on), "Alarms" (the list), "Alarm ringing", the button "Snooze alarm", and the event entity "Alarm" with the types
+  `ringing`, `snoozed`, `stopped`, `rang_out`, `set`, `deleted`, `not_understood`. "Stop ringing" stops alarms too.
+
+A ringing alarm:
+
+| | Snooze | Stop |
+|---|---|---|
+| Voice | "<wake word>, snooze" | "<wake word>, stop", "cancel the alarm" |
+| Echo Dot | a volume key ("Volume keys while an alarm rings": Snooze) | the action button |
+| Echo Show | a volume key | both volume keys together, **Stop** on the screen |
+| Home Assistant | "Snooze alarm" | "Stop ringing", the media player's stop |
+
+It plays "Alarm sound" (Alexa's alarm tone; Alexa's timer tone, the beep, or the sound uploaded for timers), starts at
+a fifth of the timer volume and comes up to it over "Alarms start quietly" (30 s), then, while nobody answers it, keeps
+getting louder by "Unanswered alarms get louder" (10 points of volume a minute) up to the loudest the Echo plays
+(music and replies keep their own volume meanwhile, and everything is as before once it is stopped or snoozed). It
+rings for "Alarms ring for" (10 min; all the way left: until stopped) and snoozes for "Snooze" (9 min). It rings in Do not disturb too. A once alarm
+that was stopped or rang out turns itself off; a repeating one goes on to its next day. One missed by a restart (an
+update) less than 5 minutes ago still rings after it. "Clock": 7:30 AM or 07:30, automatic by the time zone.
+
+**The Home Assistant integration and card.** The esphome integration shows "Next alarm" and the rest; to see every
+alarm and change them from Home Assistant, add the Echo Local integration (`custom_components/echo_local` of this
+repository): copy that folder into Home Assistant's `config/custom_components/` (or add this repository to HACS as a
+custom repository of type Integration), restart Home Assistant, then Settings → Devices & services → Add integration →
+"Echo Local" (or Configure on the Echo it found by itself). Give the Echo's address; Home Assistant then
+waits for the Echo to let it in, as a browser on its settings page does: press the action button (an Echo Show: both
+volume keys together) and Submit. It adds:
+
+- a switch per alarm (on: it rings; off: kept), with its time, days, label and next ring as attributes;
+- the actions `echo_local.add_alarm` (time, days, label), `echo_local.edit_alarm` and `echo_local.delete_alarm` (on an alarm's
+  switch), `echo_local.snooze` and `echo_local.stop`;
+- the dashboard card "Echo alarms" (`type: custom:echo-local-alarms-card`, `device_id:` the Echo, optional `title:`), loaded
+  by the integration itself: the alarms with their switches, tap one to change its time, days and label or delete
+  it, "Add alarm", and Snooze and Stop while one rings.
+
+Home Assistant 2026 keeps each integration's devices apart, so the Echo shows as two devices with the same name (and
+MAC): the esphome one and hassmic's. Should the Echo forget Home Assistant (a factory reset, its login revoked on the
+settings page), Home Assistant raises a repair: Submit, press the button.
+
 ## Music
+
+Said to an Echo that plays music itself (Music Assistant or a phone), "pause", "resume", "next", "previous",
+"volume up", "louder", "quieter" and "set the volume to 5" (Alexa's 0 to 10; "volume 45" is 45 %) are carried out on
+that Echo at once, without Home Assistant, which otherwise only knows the player by the satellite's area and asks
+which one. Volume requests always set this Echo's volume. What the Echo does not play itself ("pause" with the TV on)
+stays Home Assistant's. While the Echo listens, its music is turned down to a sixth, gliding over 30 ms each way.
 
 One source at a time, the newest wins: a phone starting over Bluetooth pauses Music Assistant (the whole group), Music
 Assistant starting on the Echo pauses the phone. The voice assistant ducks both. "<wake word>, stop" pauses either,
@@ -518,6 +584,19 @@ and the action button pauses and resumes.
   <phone>": Home Assistant speaks those words, and only once "Allow the device to perform Home Assistant actions" is
   ticked in the Echo's ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure). Without it
   you hear the chime only. "Bluetooth announcements" on the settings page turns both off and picks their language.
+
+### Even volume steps
+
+Each point of the volume is the same step, wherever it is set from (Home Assistant, Music Assistant, the buttons, the
+page): 0.5 dB a point, 5 dB a press of the volume buttons, from 1 (about 50 dB under full, quiet but heard) to 100
+(full, as before); 0 is silent. A stock Echo's steps are uneven: the Echo Show 5 has 31 volume steps of its own for
+the 100 points (three or four points play the same) and puts 46 dB in the bottom half and 20 in the top; the Echo
+Dot 2 gains 1 dB from 60 to 70 and 10 from 90 to 100. The Echo sets its own volume to the nearest step above, by its
+measured curve, and turns the sound down the rest of the way itself; on these Echos, whose speakers play 16-bit
+audio, that loses nothing. Low volumes are louder than on a stock Echo (an Echo Show 5's 10 is 45.5 dB under full
+instead of 51) and middle ones somewhat quieter (50 is 25 dB under full instead of 20 to 22). "Even
+volume steps" (Sound page, Speaker card; exported) switched off brings the Echo's own steps back. A Bluetooth
+speaker that sets its own volume is set to the number as before. On by default.
 
 ### Separate volumes
 
@@ -540,7 +619,7 @@ the music: the media player's volume and the volume buttons change both. Home As
 Copying settings to another Echo (Export, Compare & copy) takes the switches and the offsets, never a volume itself:
 like the Echo's volume, that is for the room it is in.
 
-The same number sounds the same on every slider, and as that volume on a stock Echo (measured on an Echo Dot 2,
+The same number sounds the same on every slider, and (with [even volume steps](#even-volume-steps) off) as that volume on a stock Echo (measured on an Echo Dot 2,
 within 0.3 dB, and on an Echo Show 5, whose volume steps are its own: its top end is much flatter and its bottom end
 steeper than the Dot's; the other models use the Dot's until someone measures theirs with `tools/vol-curve.py`). The volume buttons change what is playing: a Drop In call, a reply (the ring shows the steps in cyan),
 a ringing timer, otherwise the music. On a Bluetooth speaker that sets its own volume (absolute volume) the speaker is

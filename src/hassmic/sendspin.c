@@ -1245,6 +1245,25 @@ int sendspin_button(void)
     return used;
 }
 
+/* A request spoken to the Echo about the group it plays in (main.c media_request): "play" (resume: only while the group
+ * does not play), "next", "previous" (only while it plays), each only when the server offers it.  1: sent */
+int sendspin_voice(const char *cmd)
+{
+    int used = 0; char q[24];
+    snprintf(q, sizeof q, "\"%s\"", cmd);
+    pthread_mutex_lock(&adm_lock);
+    struct session *s = admitted;
+    if (s && s->activated && s->controller_active && strstr(s->ctl_commands, q)
+        && (!strcmp(cmd, "play") ? !(s->group_playing && atomic_load(&stream_on)) : s->group_playing)) {
+        char j[160]; snprintf(j, sizeof j, "{\"type\":\"client/command\",\"payload\":{\"controller\":{\"command\":\"%s\"}}}", cmd);
+        used = send_json(s, "%s", j) == 0;
+        if (used && !strcmp(cmd, "play")) paused_by_button_at = 0;
+    }
+    pthread_mutex_unlock(&adm_lock);
+    if (used) fprintf(stderr, "sendspin: said %s\n", cmd);
+    return used;
+}
+
 /* "<wake word>, stop": pause as the button does, and the button resumes it */
 int sendspin_stop(void)
 {

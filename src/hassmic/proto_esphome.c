@@ -46,6 +46,11 @@
  *                    of the network (dropin.c); "Drop In" says idle / calling / ringing / connected, "Drop In with"
  *                    whom, the button "End Drop In" hangs up, the event entity "Drop In result" says what came of each
  *                    call this Echo made (dropin_results).  Listed while the feature is on
+ *   alarms           the Echo's own (alarms.h): "Next alarm" (a timestamp), "Alarms" (the list), "Alarm ringing", the
+ *                    button "Snooze alarm", the event entity "Alarm" (ringing, snoozed, stopped, ...), the actions
+ *                    "set_alarm" (time, days, label) and "delete_alarm" (which).  Listed while the feature is on.  An
+ *                    alarm request answered on the Echo is spoken through assist_satellite.announce, as the
+ *                    Bluetooth announcements are (say)
  *   volumes          the media player's volume is the music's (Home Assistant's media too); with separate volumes the
  *                    numbers "Assistant volume", "Sounds volume", "Timer volume" and "Call volume" (with Drop In) hold
  *                    the others (main.c), each only while that kind has a volume of its own rather than following the
@@ -70,6 +75,7 @@
 #include <arpa/inet.h>
 #include "a2dp.h"
 #include "adbwifi.h"
+#include "alarms.h"
 #include "arb.h"
 #include "dropin.h"
 #include "settings.h"
@@ -129,7 +135,8 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF, KEY_WEB_URL, KEY_IDENTIFY, KEY_RESET,
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
        KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON, KEY_LIGHT, KEY_ASSIST_VOLUME, KEY_SOUNDS_VOLUME, KEY_TIMER_VOLUME,
-       KEY_CALL_VOLUME, KEY_WAKE, KEY_RING_FILL, KEY_RING_ROTATION, KEY_RING_LEDS, KEY_LAST_HEARD, KEY_LAST_REPLY };
+       KEY_CALL_VOLUME, KEY_WAKE, KEY_RING_FILL, KEY_RING_ROTATION, KEY_RING_LEDS, KEY_LAST_HEARD, KEY_LAST_REPLY,
+       KEY_NEXT_ALARM, KEY_ALARM_LIST, KEY_ALARM_RINGING, KEY_ALARM_SNOOZE, KEY_ALARM_EVENT, KEY_ALARM_SET, KEY_ALARM_DELETE };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -390,6 +397,17 @@ static void send_setting(int key)       /* lock held */
         pb_fixed32(&t, 1, key); pb_str(&t, 2, names); send_state(TEXT_SENSOR_STATE, &t); } break;
     case KEY_DROPIN_STATE: case KEY_DROPIN_PEER: { PB(t, 128); char peer[64]; int st = dropin_status(peer, sizeof peer);
         pb_fixed32(&t, 1, key); pb_str(&t, 2, key == KEY_DROPIN_STATE ? dropin_states[st] : peer); send_state(TEXT_SENSOR_STATE, &t); } break;
+    case KEY_NEXT_ALARM: {              /* a timestamp: ISO 8601 with the zone's offset; none: missing state (unknown) */
+        PB(t, 96); char iso[40] = ""; time_t nx = alarms_next(NULL); struct tm tm;
+        if (nx && localtime_r(&nx, &tm)) {
+            strftime(iso, sizeof iso, "%Y-%m-%dT%H:%M:%S%z", &tm);
+            size_t n = strlen(iso); if (n > 2) { memmove(iso + n - 1, iso + n - 2, 3); iso[n - 2] = ':'; }   /* +0100 -> +01:00 */
+        }
+        pb_fixed32(&t, 1, key); pb_str(&t, 2, iso); pb_uint(&t, 3, !iso[0]); send_state(TEXT_SENSOR_STATE, &t); } break;
+    case KEY_ALARM_LIST: { PB(t, sizeof last_heard + 16); char all[600], cut[STATE_CHARS * 4 + 4];
+        alarms_summary(all, sizeof all, alarms_h24()); state_text(cut, sizeof cut, all);
+        pb_fixed32(&t, 1, key); pb_str(&t, 2, cut); send_state(TEXT_SENSOR_STATE, &t); } break;
+    case KEY_ALARM_RINGING: pb_uint(&b, 2, core_alarm_ringing()); send_state(BINARY_SENSOR_STATE, &b); break;
     case KEY_LAST_HEARD: case KEY_LAST_REPLY: { PB(t, sizeof last_heard + 16);
         pb_fixed32(&t, 1, key); pb_str(&t, 2, key == KEY_LAST_HEARD ? last_heard : last_reply); send_state(TEXT_SENSOR_STATE, &t); } break;
     case KEY_LIGHT: {
@@ -553,6 +571,8 @@ static int listed(int key)
     case KEY_SOUND: return settings_on("sound_detection");
     case KEY_WAKE: return settings_on("wake_events");
     case KEY_LAST_HEARD: case KEY_LAST_REPLY: return settings_on("request_text");
+    case KEY_NEXT_ALARM: case KEY_ALARM_LIST: case KEY_ALARM_RINGING: case KEY_ALARM_SNOOZE: case KEY_ALARM_EVENT: case KEY_ALARM_SET: case KEY_ALARM_DELETE:
+        return settings_on("alarms");
     case KEY_BT_PAIRING: return ble_present() && settings_on("bluetooth_audio");
     case KEY_BT_OUT_SEARCH: case KEY_BT_OUT: case KEY_BT_OUT_STATUS: case KEY_BT_OUT_DELAY: return ble_present() && settings_on("bluetooth_speaker");
     case KEY_ARB_PEERS: return arb_running() && settings_on("arbitration");
@@ -660,6 +680,31 @@ static void send_setting_entities(void)
      * player plays, so an automation had to start the music again */
     { PB(b, 128); pb_str(&b, 1, "stop_ringing"); pb_fixed32(&b, 2, KEY_TIMER_STOP); pb_str(&b, 3, "Stop ringing");
       pb_str(&b, 5, "mdi:timer-off-outline"); send_msg(LIST_BUTTON, &b); }
+    /* The Echo's own alarms (alarms.h): "Next alarm" a timestamp sensor (dashboards count down to it, automations
+     * trigger before it: the lights 10 min ahead), the list, ringing, snooze, what happened, and the actions to set
+     * and delete them (esphome.<node>_set_alarm: time "07:30" or "7:30 am", days "weekdays" / "mon, wed" / "" once,
+     * label; esphome.<node>_delete_alarm: which "next", "all", an id or a time) */
+    if (listed(KEY_NEXT_ALARM)) {
+        { PB(b, 128); pb_str(&b, 1, "next_alarm"); pb_fixed32(&b, 2, KEY_NEXT_ALARM); pb_str(&b, 3, "Next alarm");
+          pb_str(&b, 5, "mdi:alarm"); pb_str(&b, 8, "timestamp"); send_msg(LIST_TEXT_SENSOR, &b); }
+        { PB(b, 128); pb_str(&b, 1, "alarms"); pb_fixed32(&b, 2, KEY_ALARM_LIST); pb_str(&b, 3, "Alarms");
+          pb_str(&b, 5, "mdi:alarm-multiple"); send_msg(LIST_TEXT_SENSOR, &b); }
+        { PB(b, 128); pb_str(&b, 1, "alarm_ringing"); pb_fixed32(&b, 2, KEY_ALARM_RINGING); pb_str(&b, 3, "Alarm ringing");
+          pb_str(&b, 8, "mdi:alarm-light"); send_msg(LIST_BINARY_SENSOR, &b); }
+        { PB(b, 128); pb_str(&b, 1, "snooze_alarm"); pb_fixed32(&b, 2, KEY_ALARM_SNOOZE); pb_str(&b, 3, "Snooze alarm");
+          pb_str(&b, 5, "mdi:alarm-snooze"); send_msg(LIST_BUTTON, &b); }
+        { PB(b, 384); pb_str(&b, 1, "alarm"); pb_fixed32(&b, 2, KEY_ALARM_EVENT); pb_str(&b, 3, "Alarm"); pb_str(&b, 5, "mdi:alarm-bell");
+          for (int i = 0; i < core_alarm_nevents; i++) pb_str(&b, 9, core_alarm_events[i]);
+          send_msg(LIST_EVENT, &b); }
+        { PB(b, 256); PB(a, 48); pb_str(&b, 1, "set_alarm"); pb_fixed32(&b, 2, KEY_ALARM_SET);
+          pb_str(&a, 1, "time"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
+          a.n = 0; pb_str(&a, 1, "days"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
+          a.n = 0; pb_str(&a, 1, "label"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
+          pb_str(&b, 5, "Set an alarm on the Echo: time \"07:30\", \"7:30 pm\" or \"in 20 minutes\"; days \"weekdays\", \"weekends\", \"daily\", \"mon, fri\" or empty for once"); send_msg(LIST_SERVICE, &b); }
+        { PB(b, 256); PB(a, 48); pb_str(&b, 1, "delete_alarm"); pb_fixed32(&b, 2, KEY_ALARM_DELETE);
+          pb_str(&a, 1, "which"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
+          pb_str(&b, 5, "Delete an alarm on the Echo: \"next\", \"all\", its id, or its time (\"07:30\")"); send_msg(LIST_SERVICE, &b); }
+    }
     /* Drop In (dropin.c): "Drop In with" first, so a trigger on "Drop In" finds it set */
     if (listed(KEY_DROPIN_SERVICE)) {
         { PB(b, 256); PB(a, 48); pb_str(&b, 1, "drop_in"); pb_fixed32(&b, 2, KEY_DROPIN_SERVICE);
@@ -1173,7 +1218,7 @@ static void pb_map(struct pb *b, int f, const char *k, const char *v)      /* Ho
  * reconnecting during "Disconnected from ..."), and still for a moment after our "finished", until its announce call
  * has unwound.  So one request at a time, latest wins: the next goes 1 s after the previous announcement ended, or
  * 15 s after its request if none came (Home Assistant dropped it), and not at all once 30 s old. */
-static char bt_next[160];               /* lock held: waiting to be asked */
+static char bt_next[320];               /* lock held: waiting to be asked */
 static long long bt_next_ms, bt_asked_ms, bt_free_ms;   /* lock held: queued at; last request out, no end yet (0: none); not before */
 
 static long long now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
@@ -1192,7 +1237,7 @@ static void bt_ask(const char *msg)
                                                        the announce schema takes a real bool only: a template renders one */
     for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].actions) { send_to(clients[i].fd, HA_ACTION, &b); n++; }
     if (n) bt_asked_ms = now_ms();
-    fprintf(stderr, "bluetooth: \"%s\" %s\n", msg, n ? "asked of Home Assistant" : "not spoken: no client takes actions");
+    fprintf(stderr, "announce: \"%s\" %s\n", msg, n ? "asked of Home Assistant" : "not spoken: no client takes actions");
 }
 
 static void bt_try(void)                /* lock held */
@@ -1223,6 +1268,51 @@ static void bt_device(const char *name, int on)
 }
 
 static void announce_done(void) { bt_asked_ms = 0; bt_free_ms = now_ms() + 1000; }
+
+static void alarm_ev(const char *event);
+/* An answer of the Echo's own (an alarm request): spoken as the Bluetooth announcements are, the same queue */
+static void say(const char *text)
+{
+    static int started;
+    if (!started) { pthread_t t; started = !pthread_create(&t, NULL, bt_thread, NULL); if (started) pthread_detach(t); }
+    snprintf(bt_next, sizeof bt_next, "%s", text);
+    bt_next_ms = now_ms();
+    /* asked a second after the run it answers was cancelled (core_transcript cancels it after this): Home Assistant
+     * refuses an announcement while that run's call still unwinds, as after an announcement's end */
+    if (bt_free_ms < bt_next_ms + 1000) bt_free_ms = bt_next_ms + 1000;
+    bt_try();
+}
+
+/* esphome.<node>_set_alarm (lock held): time as alarms_parse reads it ("07:30", "07:30:00" from a time selector, "7 pm",
+ * "in 20 minutes"), days as alarms_days_parse ("" once), a label.  What came of it is the "Alarm" event: set or
+ * not_understood */
+static void alarm_action_set(const char *time_s, const char *days_s, const char *label)
+{
+    struct alarm a; time_t now = alarms_now();
+    int days = alarms_days_parse(days_s);
+    if (alarms_parse(time_s, now, &a) || days < 0) {
+        fprintf(stderr, "alarms: set_alarm: \"%s\" \"%s\" is not a time and days\n", time_s, days_s);
+        alarm_ev("not_understood");
+        return;
+    }
+    if (days) { a.days = days; a.once = 0; }
+    snprintf(a.label, sizeof a.label, "%.*s", (int)sizeof a.label - 1, label);
+    if (alarms_put(&a) < 0) { fprintf(stderr, "alarms: set_alarm: %d alarms already\n", ALARMS_MAX); alarm_ev("not_understood"); return; }
+    alarm_ev("set");
+}
+
+static void alarm_action_delete(const char *which)
+{
+    struct alarm l[ALARMS_MAX], a; int n = alarms_list(l, ALARMS_MAX), done = 0, ht; char *e; long id = strtol(which, &e, 10);
+    time_t now = alarms_now();
+    if (!strcasecmp(which, "all")) done = alarms_delete_all() > 0;
+    else if (!strcasecmp(which, "next") || !which[0]) { struct alarm nx; if (alarms_next(&nx)) done = !alarms_delete(nx.id); }
+    else if (*which && !*e) done = !alarms_delete((int)id);
+    else if (!alarms_parse(which, now, &a)) { for (int i = 0; i < n; i++) if (l[i].hour == a.hour && l[i].min == a.min) done |= !alarms_delete(l[i].id); }
+    (void)ht;
+    if (!done) fprintf(stderr, "alarms: delete_alarm: no alarm \"%s\"\n", which);
+    else alarm_ev("deleted");
+}
 
 static void start(void)
 {
@@ -1466,7 +1556,7 @@ static void send_all_settings(void)
         send_setting(KEY_BT_OUT_SEARCH); send_setting(KEY_BT_OUT); send_setting(KEY_BT_OUT_STATUS); send_setting(KEY_BT_OUT_DELAY);
         for (int k = KEY_WIFI_MOTION_ON; k <= KEY_WIFI_MOTION_SENS; k++) send_setting(k);
         send_setting(KEY_UPDATE); send_setting(KEY_WHISPERED);
-        send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING);
+        send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING); send_setting(KEY_NEXT_ALARM); send_setting(KEY_ALARM_LIST); send_setting(KEY_ALARM_RINGING);
         send_setting(KEY_DROPIN_PEER); send_setting(KEY_DROPIN_STATE);
         send_setting(KEY_LAST_HEARD); send_setting(KEY_LAST_REPLY);
         send_setting(KEY_ASSIST_VOLUME); send_setting(KEY_SOUNDS_VOLUME); send_setting(KEY_TIMER_VOLUME); send_setting(KEY_CALL_VOLUME);
@@ -1542,6 +1632,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         while (pb_next(&p, end, &f)) if (f.field == 1 && f.v == KEY_IDENTIFY) core_identify(); else if (f.field == 1 && f.v == KEY_RESET) core_reset("Home Assistant's button");
                                        else if (f.field == 1 && f.v == KEY_RESTART) core_reboot("Home Assistant's button");
             else if (f.field == 1 && f.v == KEY_TIMER_STOP) core_alarm_stop("Home Assistant's button");
+            else if (f.field == 1 && f.v == KEY_ALARM_SNOOZE && listed(KEY_ALARM_SNOOZE)) core_alarm_snooze("Home Assistant's button");
             else if (f.field == 1 && f.v == KEY_DROPIN_END && listed(KEY_DROPIN_END)) dropin_hangup("Home Assistant's button");
         break; }
     case UPDATE_COMMAND: {
@@ -1566,10 +1657,10 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         arb_ha_state(ent, st);
     } break;
     case EXECUTE_SERVICE: {
-        unsigned key = 0; int argn = 0, nc = 0; char args[2][256] = { "", "" }, colors[RING_LEDS_MAX][16]; struct pbf g;
+        unsigned key = 0; int argn = 0, nc = 0; char args[3][256] = { "", "", "" }, colors[RING_LEDS_MAX][16]; struct pbf g;
         while (pb_next(&p, end, &f)) {
             if (f.field == 1) key = (unsigned)f.v;
-            else if (f.field == 2 && f.data && argn < 2) {
+            else if (f.field == 2 && f.data && argn < 3) {
                 const unsigned char *q = f.data;
                 while (pb_next(&q, f.data + f.len, &g)) {
                     if (g.field == 4 && g.data) pbf_str(&g, args[argn], sizeof args[argn]);
@@ -1579,6 +1670,12 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
             }
         }
         if (key == KEY_RING_LEDS && listed(KEY_RING_LEDS)) { ring_leds_from(colors, nc); break; }
+        /* alarms from Home Assistant (automations, an LLM's tools).  Any client: an alarm opens no microphone (Drop In
+         * takes the keyed link only), and once Home Assistant set a key no other client gets in anyway */
+        if ((key == KEY_ALARM_SET || key == KEY_ALARM_DELETE) && listed(key)) {
+            if (key == KEY_ALARM_SET) alarm_action_set(args[0], args[1], args[2]); else alarm_action_delete(args[0]);
+            break;
+        }
         /* Drop In from Home Assistant (an automation, the voice blueprint): it may open another Echo's microphone, so
          * only over the keyed link too */
         if (key == KEY_DROPIN_SERVICE && listed(KEY_DROPIN_SERVICE)) {
@@ -1808,7 +1905,14 @@ static void wake_event(const char *event)       /* lock held */
 }
 
 static void whispered(int on) { (void)on; send_setting(KEY_WHISPERED); }   /* lock held */
-static void timers_changed(void) { send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING); }   /* lock held: names first */
+static void alarms_changed(void) { send_setting(KEY_NEXT_ALARM); send_setting(KEY_ALARM_LIST); }    /* lock held */
+static void alarm_ev(const char *event)         /* lock held */
+{
+    PB(b, 64); pb_fixed32(&b, 1, KEY_ALARM_EVENT); pb_str(&b, 2, event);
+    send_setting(KEY_ALARM_RINGING);
+    if (listed(KEY_ALARM_EVENT)) send_state(EVENT, &b);
+}
+static void timers_changed(void) { send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING); send_setting(KEY_ALARM_RINGING); }   /* lock held: names first */
 /* lock held: whom first.  Each state as dropin.c's loop passed it, not the one it is in now: a refusal that came at once
  * still shows calling, then idle */
 static void dropin_changed(int st, const char *peer)
@@ -1828,4 +1932,5 @@ static void dropin_result(const char *result)   /* lock held */
 
 const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, cancel, played, volume_changed, mute_changed, print_mdns, bt_device,
                                      arb_send, arb_changed, sound, whispered, arb_request, settings_changed, entities_changed, arb_scan,
-                                     timers_changed, dropin_changed, dropin_result, button, wake_event, end_audio };
+                                     timers_changed, dropin_changed, dropin_result, button, wake_event, end_audio,
+                                     alarms_changed, alarm_ev, say };

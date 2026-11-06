@@ -1,0 +1,55 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Add an Echo running hassmic",
+        "description": "Its address on your network (the settings page's, without the port). Home Assistant then asks the Echo to let it in.",
+        "data": { "host": "Address", "port": "Settings page port" }
+      },
+      "reauth_confirm": { "title": "Let Home Assistant in again", "description": "{name} no longer knows Home Assistant (a factory reset, or its login revoked on the settings page). Submit, then press the button on the Echo." },
+      "confirm": { "title": "{name}", "description": "Add the alarms of {name}? You will press a button on it next." },
+      "approve": {
+        "title": "Press the button on {name}",
+        "description": "{name} now waits for Home Assistant to be let in, as a browser is let into its settings page: press {button} within a minute, then Submit."
+      }
+    },
+    "error": {
+      "cannot_connect": "The Echo did not answer at that address.",
+      "not_approved": "Not let in yet: press the button on the Echo, then Submit again.",
+      "refused": "The Echo turned the request down (another login at the same moment?). It asks again now: press the button, then Submit."
+    },
+    "abort": {
+      "already_configured": "This Echo is added already.",
+      "cannot_connect": "The Echo did not answer.",
+      "not_hassmic": "Not an Echo running hassmic.",
+      "reauth_successful": "Home Assistant is let in again."
+    }
+  },
+  "services": {
+    "add_alarm": {
+      "name": "Add alarm",
+      "description": "Adds an alarm to an Echo running hassmic. It rings on the Echo, with or without Home Assistant.",
+      "fields": {
+        "device_id": { "name": "Echo", "description": "Which Echo (not needed with only one)." },
+        "time": { "name": "Time", "description": "When it rings." },
+        "days": { "name": "Days", "description": "Days it repeats on (mon, tue, ...); none: once, the next time it comes." },
+        "label": { "name": "Label", "description": "What it is for: shown and announced instead of the time." },
+        "enabled": { "name": "On", "description": "Off: kept, but it does not ring." }
+      }
+    },
+    "edit_alarm": {
+      "name": "Edit alarm",
+      "description": "Changes an alarm (its switch entity). An edited alarm is switched on unless you say otherwise.",
+      "fields": {
+        "time": { "name": "Time", "description": "When it rings." },
+        "days": { "name": "Days", "description": "Days it repeats on; an empty list: once." },
+        "label": { "name": "Label", "description": "What it is for." },
+        "enabled": { "name": "On", "description": "Off: kept, but it does not ring." }
+      }
+    },
+    "delete_alarm": { "name": "Delete alarm", "description": "Deletes an alarm (its switch entity) from the Echo." },
+    "snooze": { "name": "Snooze", "description": "Snoozes the alarm ringing on an Echo.", "fields": { "device_id": { "name": "Echo", "description": "Which Echo." } } },
+    "stop": { "name": "Stop", "description": "Stops what rings on an Echo, alarms and timers.", "fields": { "device_id": { "name": "Echo", "description": "Which Echo." } } }
+  }
+}

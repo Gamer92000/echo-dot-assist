@@ -27,7 +27,17 @@ int main(void)
         check(n >= 2 && board.volume_curve[0].at == 0 && board.volume_curve[n - 1].at == 100, "its points from 0 to 100, the end marked");
         check(at_points, "each point where it says");
     }
+    {   /* board_vol_at: a point of the curve, at least that loud, and the lowest such */
+        int ok = 1;
+        for (float db = -70; db <= 0.01f; db += 0.25f) {
+            int u = board_vol_at(db), lower = 0;
+            for (int w = 0; w < u; w++) if (board_vol_db(w) >= db && (!board.volume_curve || w % 5 == 0)) lower = 1;
+            if (board_vol_db(u) < db - 0.001f || u < 0 || u > 100 || (lower && board.volume_curve)) ok = 0;
+        }
+        check(ok && board_vol_at(-1000) == 0 && board_vol_at(0) == 100 && board_vol_at(5) == 100, "board_vol_at: the lowest point at least that loud");
+    }
     if (!strcmp(board.codename, "checkers")) {
+        check(board_vol_at(-20.0f) == 50 && board_vol_at(-19.7f) == 50 && board_vol_at(-19.6f) == 55, "the Show's: -20 dB at 50");
         check(near(board_vol_db(7), -60 + (-51.2f + 60) * 2 / 5), "volume 7: straight between 5 and 10");
         check(near(board_vol_db(30), -31.8f) && near(board_vol_db(90), -4.0f), "the Show's own: 30 at index 9, 90 at index 27");
     }

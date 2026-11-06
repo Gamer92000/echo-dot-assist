@@ -19,3 +19,13 @@ float board_vol_db(int v)
     while (c[i].at < v && c[i + 1].at >= 0) i++;                /* {-1} after the last point */
     return c[i - 1].db + (c[i].db - c[i - 1].db) * (v - c[i - 1].at) / (c[i].at - c[i - 1].at);
 }
+
+/* the lowest volume the Echo plays at least `db` at (Even volume steps, main.c): one of the curve's own points, where
+ * it was measured (on the Show each point is the very index played; between two the interpolation is only within 1 dB
+ * of it), so what is left over to take off in our PCM is exact */
+int board_vol_at(float db)
+{
+    const struct board_vol *c = board.volume_curve ? board.volume_curve : dot2_curve;
+    for (; c[1].at >= 0; c++) if (c->db >= db) return c->at;
+    return c->at;                                               /* the last: 100, 0 dB */
+}

@@ -36,11 +36,19 @@ def wav(rate, channels, seconds, level):
     return b.getvalue()
 
 
+
+def stock_curve(state):
+    """the Echo's own volume curve, not even steps (on by default): this test's sounds play at full scale, unscaled"""
+    p = os.path.join(state, "config")
+    if "even_volume=" not in (open(p).read() if os.path.exists(p) else ""):
+        with open(p, "a") as f: f.write("even_volume=off\n")
+
 class Echo:
     def __init__(self, tmp, **extra):
         self.tmp, self.state = tmp, os.path.join(tmp, "state")
         os.makedirs(self.state, exist_ok=True)
         if not os.path.exists(os.path.join(self.state, "adopted")): open(os.path.join(self.state, "adopted"), "w").write("ha\n")
+        stock_curve(self.state)                                 # levels here are full scale: fake_ha_volumes.py has even steps
         earcons = os.path.join(tmp, "earcons") + "/"     # Alexa's wake sound (0.65 s, as donut's) and incoming ringtone only
         os.makedirs(earcons, exist_ok=True)
         open(earcons + "ui_wakesound.wav", "wb").write(wav(48000, 1, 0.65, WAKE_PEAK))

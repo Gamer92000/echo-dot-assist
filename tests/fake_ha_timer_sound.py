@@ -37,12 +37,20 @@ def wav(rate, channels, seconds, level):
     return b.getvalue()
 
 
+
+def stock_curve(state):
+    """the Echo's own volume curve, not even steps (on by default): this test's sounds play at full scale, unscaled"""
+    p = os.path.join(state, "config")
+    if "even_volume=" not in (open(p).read() if os.path.exists(p) else ""):
+        with open(p, "a") as f: f.write("even_volume=off\n")
+
 class Echo:
     def __init__(self, tmp, stock=True):
         """stock: the firmware has the timer tone"""
         self.tmp, self.state = tmp, os.path.join(tmp, "state")
         os.makedirs(self.state, exist_ok=True)
         if not os.path.exists(os.path.join(self.state, "adopted")): open(os.path.join(self.state, "adopted"), "w").write("ha\n")
+        stock_curve(self.state)                                 # levels here are full scale: fake_ha_volumes.py has even steps
         earcons = os.path.join(tmp, "earcons") + "/"
         os.makedirs(earcons, exist_ok=True)              # stock's timer tone, 1 s; no alarm tone on this "firmware"
         if stock: open(earcons + "system_alerts_melodic_02.wav", "wb").write(wav(48000, 1, 1.0, TIMER_PEAK))
