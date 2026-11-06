@@ -235,8 +235,14 @@ class EchoLocalAlarmsCardEditor extends HTMLElement {
   }
 }
 
-if (!customElements.get('echo-local-alarms-card')) customElements.define('echo-local-alarms-card', EchoLocalAlarmsCard);
-if (!customElements.get('echo-local-alarms-card-editor')) customElements.define('echo-local-alarms-card-editor', EchoLocalAlarmsCardEditor);
+// Defined once Home Assistant's own root element is, through whatever window.customElements is by then: where the
+// browser has no scoped registries (Firefox 157), Home Assistant's frontend puts a polyfill in its place, and a card
+// that defined itself before that (a reload: this file from memory, evaluated ahead of HA's core) is in the browser's
+// own registry, which Home Assistant no longer asks: "Custom element doesn't exist" on every reload, the first load fine.
+customElements.whenDefined('home-assistant').then(() => {
+  if (!window.customElements.get('echo-local-alarms-card')) window.customElements.define('echo-local-alarms-card', EchoLocalAlarmsCard);
+  if (!window.customElements.get('echo-local-alarms-card-editor')) window.customElements.define('echo-local-alarms-card-editor', EchoLocalAlarmsCardEditor);
+});
 window.customCards = window.customCards || [];
 if (!window.customCards.some((c) => c.type === 'echo-local-alarms-card'))
   window.customCards.push({ type: 'echo-local-alarms-card', name: 'Echo alarms', description: 'The alarms of an Echo running hassmic: switch, change, add, snooze.', preview: false });
