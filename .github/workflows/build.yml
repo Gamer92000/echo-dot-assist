@@ -268,6 +268,18 @@ jobs:
         env:
           HASSMIC_HA_REQUIRED: '1'
         run: .venv/bin/python tests/ha_real_end.py
+      - name: The Home Assistant integration (custom_components/echo_local) in Home Assistant
+        env:
+          HASSMIC_HA_REQUIRED: '1'
+        run: .venv/bin/python tests/ha_real_alarms.py
+      - name: The Echo Show's kiosk set up from Home Assistant, its wall panel
+        env:
+          HASSMIC_HA_REQUIRED: '1'
+        run: .venv/bin/python tests/ha_real_kiosk.py
+      - name: The Echo Local sidebar panel in Home Assistant (the screen's options, the Echo Show's apps)
+        env:
+          HASSMIC_HA_REQUIRED: '1'
+        run: .venv/bin/python tests/ha_real_panel.py
 
   release:
     needs: [version, build, test]

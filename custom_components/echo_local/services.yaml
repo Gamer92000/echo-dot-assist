@@ -1,0 +1,73 @@
+add_alarm:
+  fields:
+    device_id:
+      selector:
+        device:
+          integration: echo_local
+    time:
+      required: true
+      example: "07:30:00"
+      selector:
+        time:
+    days:
+      example: '["mon", "tue", "wed", "thu", "fri"]'
+      selector:
+        select:
+          multiple: true
+          options: [mon, tue, wed, thu, fri, sat, sun]
+    label:
+      selector:
+        text:
+    enabled:
+      default: true
+      selector:
+        boolean:
+edit_alarm:
+  target:
+    entity:
+      integration: echo_local
+      domain: switch
+  fields:
+    time:
+      selector:
+        time:
+    days:
+      selector:
+        select:
+          multiple: true
+          options: [mon, tue, wed, thu, fri, sat, sun]
+    label:
+      selector:
+        text:
+    enabled:
+      selector:
+        boolean:
+delete_alarm:
+  target:
+    entity:
+      integration: echo_local
+      domain: switch
+snooze:
+  fields:
+    device_id:
+      selector:
+        device:
+          integration: echo_local
+stop:
+  fields:
+    device_id:
+      selector:
+        device:
+          integration: echo_local
+install_apk:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: echo_local
+    path:
+      required: true
+      example: /config/www/newpipe.apk
+      selector:
+        text:

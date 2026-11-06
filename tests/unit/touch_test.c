@@ -4,6 +4,7 @@
  * a tap of its own where it lifts); a touch that wakes the screen (none of it, nor of its other fingers, a touch) */
 #include "../../src/ui/touch.h"
 #include "../../src/ui/scene.h"
+#include "../../src/ui/touchgate.h"
 #include <assert.h>
 #include <fcntl.h>
 #include <linux/input.h>
@@ -98,6 +99,24 @@ int main(void)
     /* and after it all is as before */
     at_start(); down(0, 13, 100, 216); syn(&t); up(0); syn(&t);
     assert(!strcmp(seen(), "D100,200 U100,200"));
+    /* through the gate (touchgate.h): its word before each report.  A touch it holds from the app at the top is none
+     * of the scene's, and a pull from there the drawer's, from above the layer's top (as the grip's rows were) */
+    t.grip = 0;
+    at_start(); down(0, 30, 480, 16); ev(TOUCH_MARK, TG_HOLD, 0); syn(&t); move(0, 482, 40); ev(TOUCH_MARK, TG_HOLD, 0); syn(&t);
+    assert(!strcmp(seen(), ""));
+    move(0, 484, 80); ev(TOUCH_MARK, TG_SWALLOW, 1); syn(&t);
+    assert(!strcmp(seen(), "D480,-1 M484,80"));
+    move(0, 486, 200); ev(TOUCH_MARK, TG_SWALLOW, 0); syn(&t); up(0); ev(TOUCH_MARK, TG_IDLE, 0); syn(&t);
+    assert(!strcmp(seen(), "M486,200 U486,200"));
+    /* held and then handed to the app (a tap there, a swipe sideways): never the scene's */
+    at_start(); down(0, 31, 480, 16); ev(TOUCH_MARK, TG_HOLD, 0); syn(&t); up(0); ev(TOUCH_MARK, TG_IDLE, 0); syn(&t);
+    assert(!strcmp(seen(), ""));
+    at_start(); down(0, 32, 480, 16); ev(TOUCH_MARK, TG_HOLD, 0); syn(&t); move(0, 540, 20); ev(TOUCH_MARK, TG_PASS, 0); syn(&t);
+    move(0, 600, 20); ev(TOUCH_MARK, TG_PASS, 0); syn(&t); up(0); ev(TOUCH_MARK, TG_IDLE, 0); syn(&t);
+    assert(!strcmp(seen(), ""));
+    /* and a touch the gate let through at once is the scene's as ever */
+    at_start(); down(0, 33, 100, 300); ev(TOUCH_MARK, TG_PASS, 0); syn(&t); up(0); ev(TOUCH_MARK, TG_IDLE, 0); syn(&t);
+    assert(!strcmp(seen(), "D100,300 U100,300"));
     printf("touch_test: ok\n");
     return 0;
 }

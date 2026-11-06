@@ -374,6 +374,42 @@ kiosk_helper() {
 }
 # <<< kiosk
 
+# The home app (screen.c's choice, state/screen_home; docs/screen-apps.md), Android models.  The Echo has no keyboard
+# of its own (Fire OS's went with Amazon's apps; the guided setup installs Simple Keyboard, docs/screen-apps.md): where
+# the one in use is gone, the home app's, if it ships one (Echo-Wall's EchoKeyboard), is enabled and made the one in
+# use.  Looked at when the home app changes, else every 10 min (ime and settings are Java: a second each).
+home_seen= home_n=0
+home_tick() {
+    [ "$(getprop sys.boot_completed)" = 1 ] || return 0
+    fi
+    # the screen's rotation, whatever app is the home app (kiosk_tick's watch runs only with Kiosk Satellite there):
+    # after an app's reinstall the Show 5 came up in portrait with auto-rotate on, Echo-Wall drawn sideways
+    # (2026-11-04); dumpsys window policy: 20 ms, settings only when it is wrong
+    if [ -n "$KIOSK_ROTATION" ]; then
+        case "$(dumpsys window policy 2>/dev/null | grep mCurrentRotation)" in
+        ""|*"mCurrentRotation=$KIOSK_ROTATION"*) ;;
+        *)  settings put system accelerometer_rotation 0
+            settings put system user_rotation $KIOSK_ROTATION
+            echo "home app: the screen back to its rotation ($KIOSK_ROTATION)";;
+        esac
+    fi
+    h=$(head -1 /data/local/hassmic/state/screen_home 2>/dev/null)
+    case "$h" in ''|*[!A-Za-z0-9_.]*) home_seen=; return 0;; esac
+    if [ "$h" = "$home_seen" ] && [ $home_n -gt 0 ]; then home_n=$((home_n - 1)); return 0; fi
+    home_seen=$h home_n=60
+    ime=$(ime list -a -s 2>/dev/null | grep -m1 "^$h/")
+    [ -n "$ime" ] || return 0
+    cur=$(settings get secure default_input_method 2>/dev/null)
+    [ "$cur" = "$ime" ] && return 0
+    case "$cur" in ''|null) ;; *) ime list -a -s 2>/dev/null | grep -qxF "$cur" && return 0;; esac   # one that works: kept
+    ime enable $ime > /dev/null 2>&1
+    if ime set $ime > /dev/null 2>&1; then echo "home app: its keyboard $ime is the Echo's"; else echo "home app: its keyboard $ime could not be set"; fi
+}
+home_helper() {
+    [ "$ANDROID" = 1 ] || return 0
+    while :; do home_tick; sleep 10; done
+}
+
 # wpa_supplicant's socket for the interface, else its global one, as wifi.sh's W(): a "reconfigure" takes the interface's
 # socket away until wpa_supplicant restarts (Dot 2, 2026-10-07)
 wpa() { if [ -S $WPA_SOCKETS/$WLAN ]; then wpa_cli -i $WLAN -p $WPA_SOCKETS "$@"; else wpa_cli -g@android:wpa_$WLAN IFNAME=$WLAN "$@"; fi 2>/dev/null; }
@@ -501,6 +537,12 @@ ota_watch() {
             say "== light ring designs: $LEDS${LEDWHY:+ ($LEDWHY)}"
         fi
         rm -f $LEDNEW.req
+        # Apps from the settings page or Home Assistant (src/hassmic/apps.c): an APK installed or an app removed by pm, 5 to
+        # 30 s, so in the background, one at a time (apps.sh's lock)
+        if [ -f /data/local/hassmic/state/apps-request ] && [ ! -d /data/local/hassmic/apps/lock ] && [ -f $D/apps.sh ]; then
+            READ_AS="$D/runas $DAEMON_USER $DAEMON_GROUPS" sh $D/apps.sh take 2>&1 | stamped &
+            sleep 1                                     # its lock taken before the next look
+        fi
         # Wi-Fi from the settings page (src/hassmic/wifi.c): a scan, or a switch to another network, which takes up to two
         # minutes; so in the background, one at a time (wifi.sh's lock), and a request waits while one runs
         if [ -f /data/local/hassmic/state/wifi-request ] && [ ! -d $WIFI/lock ] && [ -f $D/wifi.sh ]; then
@@ -686,6 +728,7 @@ satellite)
     export HASSMIC_RELEASE_PUB=$(release_pub)
     netwatch 2>&1 | stamped >> $LOG &
     kiosk_helper 2>&1 | stamped >> $LOG &
+    home_helper 2>&1 | stamped >> $LOG &
     kiosk_perm_sync 2>&1 | stamped >> $LOG &
     # mDNS through the stock avahi-daemon: hassmic prints the service file for its protocol, name and MAC address.
     # The MAC in it is how Home Assistant tells devices apart.  On radar wlan0 appears only later in the boot, hassmic

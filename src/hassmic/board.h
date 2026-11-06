@@ -75,4 +75,5 @@ struct board {
 extern const struct board board;
 /* volcurve.c: the curve at volume v (clamped to 0..100): dB under volume 100, board.volume_curve's or the Echo Dot 2's */
 float board_vol_db(int v);
+int   board_vol_at(float db);           /* the lowest of the curve's points at least that loud (volcurve.c) */
 #endif

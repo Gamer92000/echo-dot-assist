@@ -2,6 +2,7 @@
  * speed; playback is appended to $HASSMIC_PLAY (default /tmp/hassmic_play.raw).
  * HASSMIC_FAKE_ECHO=<ms>:<dB>: our sounds come back in the capture <ms> after they start, <dB> under their level, with
  * two reflections: what Amazon's echo canceller leaves of them on an Echo (earsup.h). */
+#include "resample.h"
 #include "audio.h"
 #include <math.h>
 #include <pthread.h>
@@ -116,7 +117,7 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
  * buffer drains HASSMIC_FAKE_MUSIC_PPM faster (or slower: < 0) than real time: an output clock that is off, as the
  * Echo Show 5's (~350 ppm), for Sendspin's sync; HASSMIC_FAKE_MUSIC_BURST_MS of it vanish from the queue at once as it
  * starts and stay hidden: AudioTrack's buffer behind audio_android.c's slots (the Show 5's: ~137 ms). */
-struct stream { FILE *f; unsigned bps; long long t0, written; double speed; long long burst_us; };
+struct stream { FILE *f; unsigned bps; long long t0, written; double speed; long long burst_us; float g; };   /* g: the gain now (gliding) */
 static struct stream music, bt, voip;
 static long long raw_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC_RAW, &ts); return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000; }
 
@@ -124,7 +125,7 @@ static int s_open(struct stream *s, const char *env, const char *def, unsigned r
 {
     const char *p = getenv(env);
     s->f = fopen(p ? p : def, "ab");
-    s->bps = rate * channels * 2; s->t0 = 0; s->written = 0;
+    s->bps = rate * channels * 2; s->t0 = 0; s->written = 0; s->g = -1;      /* -1: the gain of the first write */
     return s->f ? 0 : -1;
 }
 
@@ -154,17 +155,16 @@ void audio_call_gain(float g)
 static int s_write(struct stream *s, const void *data, size_t len)
 {
     if (!s->f) return -1;
-    short buf[4096]; float gain = s == &voip ? call_gain : music_gain;
-    if (gain < 0.9995f) {
-        for (size_t off = 0; off < len; ) {
-            size_t n = len - off < sizeof buf ? len - off : sizeof buf;
-            for (size_t i = 0; i < n / 2; i++) { short v; memcpy(&v, (const char *)data + off + 2 * i, 2); buf[i] = (short)lrintf(v * gain); }
-            if (s_write_raw(s, buf, n)) return -1;
-            off += n;
-        }
-        return 0;
+    char buf[8192]; float gain = s == &voip ? call_gain : music_gain;
+    if (s->g < 0) s->g = gain;
+    if (s->g == 1 && gain == 1) return s_write_raw(s, data, len);
+    for (size_t off = 0; off < len; ) {                          /* as the mixer would get it: gliding (resample.c) */
+        size_t n = len - off < sizeof buf ? len - off : sizeof buf;
+        gain_glide(buf, (const char *)data + off, n, s->bps / 2, &s->g, gain);
+        if (s_write_raw(s, buf, n)) return -1;
+        off += n;
     }
-    return s_write_raw(s, data, len);
+    return 0;
 }
 
 static int s_write_raw(struct stream *s, const void *data, size_t len)
