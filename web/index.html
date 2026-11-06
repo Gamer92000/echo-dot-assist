@@ -526,6 +526,23 @@ dialog.modal.file-pick { width: min(620px, calc(100% - 24px)); }
 .stepper li.done { color: var(--muted); }
 .stepper li.done::before { content: "✓"; background: var(--ok-soft); border-color: transparent; color: var(--ok); }
 .field { display: grid; gap: 6px; justify-items: start; }
+.alarms-wrap { margin-bottom: 16px; }
+.alarm-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.alarm-row:first-child { border-top: 0; }
+.alarm-row .grow { flex: 1; min-width: 0; }
+.alarm-row .help { margin: 2px 0 0; }
+.alarm-time { font-size: 28px; font-weight: 300; font-variant-numeric: tabular-nums; min-width: 4.6em; }
+.alarm-time small { font-size: 13px; color: var(--muted); font-weight: 600; }
+.alarm-what { font-weight: 600; }
+.alarm-row.off .alarm-time, .alarm-row.off .alarm-what { opacity: .45; }
+.day-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.day-chip { position: relative; }
+.day-chip input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.day-chip span { display: inline-block; padding: 6px 10px; border: 1px solid var(--line-2); border-radius: 999px; font-size: 13px; }
+.day-chip input:checked + span { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.day-chip input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.day-presets { display: flex; gap: 6px; flex-wrap: wrap; }
+.field input[type=time] { font-size: 20px; padding: 6px 10px; }
 .field label { font-size: 13px; font-weight: 600; }
 .field select { min-width: 220px; }
 .field .help { margin: 0; }

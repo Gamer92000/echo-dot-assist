@@ -36,6 +36,7 @@ TESTS = [
     ("esphome", [PY, "tests/fake_ha_esphome.py"]),
     ("esphome-buttons", [PY, "tests/fake_ha_esphome_buttons.py"]),
     ("esphome-timers", [PY, "tests/fake_ha_esphome_timers.py"]),
+    ("alarms", [PY, "tests/fake_ha_alarms.py"]),
     ("end-of-request", [PY, "tests/fake_ha_end.py"]),
     ("wakealign", [PY, "tests/fake_ha_wakealign.py"]),
     ("sendspin", [PY, "tests/fake_ma_sendspin.py"]),

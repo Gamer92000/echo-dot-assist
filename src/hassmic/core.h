@@ -49,6 +49,9 @@ struct proto {
     void (*wake)(const char *event);            /* may be NULL: the wake word heard (core_wake_events) */
     void (*end)(void);                          /* may be NULL: the Echo heard the request end (micend.h): end of audio,
                                                  * the server goes on with what it has (stop() aborts the run) */
+    void (*alarms_changed)(void);               /* may be NULL: the Echo's alarms (alarms.h) or the next one changed */
+    void (*alarm)(const char *event);           /* may be NULL: an alarm rang, was snoozed, stopped, set... (core_alarm_events) */
+    void (*say)(const char *text);              /* may be NULL: have the server speak this on the Echo (an alarm request's answer) */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
@@ -108,6 +111,7 @@ void core_set_volume(int percent);
 enum { VOL_ASSISTANT, VOL_SOUNDS, VOL_TIMERS, VOL_CALLS, VOL_KINDS };
 #define VOL_OFFSET_MAX 100
 int  core_separate_volumes(int set);
+int  core_even_volume(int set);           /* setting even_volume: the same dB per point (main.c vol_even) */
 int  core_kind_volume(int kind, int set);
 int  core_kind_linked(int kind, int set);
 int  core_kind_offset(int kind);
@@ -172,7 +176,21 @@ size_t core_tts_queued(void);                               /* bytes not yet pla
  * wake word alone) or the ring time (core_timer_ring) is up */
 void   core_timer_finished(const char *id, const char *name, unsigned total);
 void   core_timer_cancelled(const char *id);
-void   core_alarm_stop(const char *why);                    /* every ringing timer; why: for the log */
+void   core_alarm_stop(const char *why);                    /* every ringing timer and alarm; why: for the log */
+/* The Echo's own alarms (alarms.h) ring with the timers.  Snooze (lock held): the alarms ringing come back in their
+ * snooze time, timers ringing with them stop; 0 if no alarm rang */
+int    core_alarm_snooze(const char *why);
+void   core_ring_tap(int stop);                               /* not the lock: the home app's ring tapped (snooze, a timer
+                                                                 stopped) or held (stop) */
+int    core_alarm_ringing(void);                            /* no lock needed: an alarm (not only timers) rings */
+/* their settings (lock held): CORE_ALARM_RING minutes a ring lasts (0 until stopped), _SNOOZE minutes, _RAMP seconds to
+ * full volume, _LOUDER points of volume a minute it gets louder after that (0: never), _KEYS 0 the volume keys snooze / 1 they set the volume, _VOICE answer alarm requests here, _SOUND a
+ * TIMER_SOUND_* (refused without its file).  set INT_MIN (or < 0 for the sound) reads */
+enum { CORE_ALARM_RING, CORE_ALARM_SNOOZE, CORE_ALARM_RAMP, CORE_ALARM_KEYS, CORE_ALARM_VOICE, CORE_ALARM_SOUND, CORE_ALARM_LOUDER };
+int    core_alarm_setting(int which, int set);
+void   core_alarms_changed(void);                           /* any thread, any lock: the alarms' list or their wording changed */
+extern const char *const core_alarm_events[];               /* the "Alarm" event entity's types */
+extern const int core_alarm_nevents;
 int    core_transcript(const char *text);                   /* speech to text's result: 1 if it stopped a ring ("stop",
                                                                or anything with core_timer_stop_any), a Drop In or music
                                                                ("stop"); run cancelled: drop the rest of it */

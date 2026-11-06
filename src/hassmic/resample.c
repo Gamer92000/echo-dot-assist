@@ -68,6 +68,19 @@ double rate_servo(struct rate_servo *s, double err_us, double dt)
 
 double rate_servo_snap(struct rate_servo *s) { s->smooth = 0; s->hold = SERVO_HOLD_S; return 1 - s->drift; }
 
+void gain_glide(char *dst, const char *src, size_t bytes, unsigned per_s, float *g, float target)
+{
+    if (*g == 1 && target == 1) { memcpy(dst, src, bytes); return; }
+    const float k = 1.0f / (0.030f * (float)(per_s ? per_s : 96000));
+    for (size_t i = 0; i + 1 < bytes; i += 2) {
+        if (*g != target) { *g += (target - *g) * k; if (fabsf(*g - target) < 1e-4f) *g = target; }
+        int16_t v; memcpy(&v, src + i, 2);
+        long x = lrintf(v * *g); v = (int16_t)(x > 32767 ? 32767 : x < -32768 ? -32768 : x);
+        memcpy(dst + i, &v, 2);
+    }
+    if (bytes & 1) dst[bytes - 1] = src[bytes - 1];
+}
+
 void music_duck(int16_t *s, size_t frames, unsigned rate, float *g, float target)
 {
     const float k = 1.0f / (0.030f * (float)rate);

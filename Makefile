@@ -157,7 +157,7 @@ $(OUT)/runas: src/tools/runas.c
 # The screen UI (src/ui/, scene.h): a JNI library for app_process, against the NDK's libandroid (ANativeWindow) and
 # libjnigraphics (AndroidBitmap); nothing of the firmware's.  The scene alone is make unit's ui_test on the PC.
 UI_SCENE := src/ui/scene.c src/ui/widgets.c src/ui/face.c src/ui/drawer.c src/ui/music.c src/ui/gfx.c
-UI := src/ui/android.c src/ui/touch.c $(UI_SCENE)
+UI := src/ui/android.c src/ui/touch.c src/ui/touchgate.c $(UI_SCENE)
 $(OUT)/libhmui.so: $(UI) src/ui/scene.h src/ui/ui.h src/ui/gfx.h build/.build-id
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -fPIC -shared -Isrc/ui $(UI) -o $@ -fuse-ld=lld -Wl,--no-undefined -Wl,-soname,libhmui.so -landroid -ljnigraphics -lm
@@ -201,7 +201,7 @@ SOUND := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/sound_pryon.c,src/hass
 WHISPER := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/hassmic/whisper_none.c)
 
 RNNOISE := $(addprefix src/third_party/rnnoise/,denoise.c rnn.c rnn_data.c pitch.c kiss_fft.c celt_lpc.c)
-HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) $(SCREEN) src/hassmic/ringdesign.c src/hassmic/ledq.c \
+HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) $(SCREEN) src/hassmic/kiosk.c src/hassmic/alarms.c src/hassmic/ringdesign.c src/hassmic/ledq.c \
            src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
            src/hassmic/wake.c src/hassmic/wake_mww.c src/hassmic/mww_features.c src/hassmic/mww_model.c src/hassmic/mww_store.c \
            src/third_party/monocypher.c src/third_party/freeaptx.c $(RNNOISE)
@@ -240,8 +240,9 @@ host: build/hassmic-host build/hassmic-host-screen $(OUT)/hassmic-qemu build/ota
 UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/third_party/monocypher.c
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
-	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk \
+	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk alarms \
 	screen ui touch json uninstall_boot resample fork_release
+UNIT_TESTS += touchgate
 unit: $(addprefix unit-,$(UNIT_TESTS))
 unit-hash:
 	@mkdir -p build
@@ -350,6 +351,10 @@ unit-lux:
 unit-ring_band:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ring_band_test.c src/hassmic/ring_band.c src/hassmic/screen_none.c src/hassmic/ringdesign.c src/hassmic/statefile.c -lm -lpthread -o build/ring_band_test && build/ring_band_test
+# alarms.c: requests read, when alarms ring (DST), how they are said, state/alarms
+unit-alarms:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/alarms_test.c src/hassmic/alarms.c src/hassmic/statefile.c -lpthread -o build/alarms_test && build/alarms_test
 # volcurve.c with each model's board.c: the curve where it was measured, the Dot 2's elsewhere
 unit-volcurve:
 	@mkdir -p build
@@ -393,9 +398,13 @@ unit-json:
 unit-ui:
 	@mkdir -p build
 	cc -O2 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all tests/unit/ui_test.c $(UI_SCENE) -lm -o build/ui_test && build/ui_test
+# touchgate.c (src/ui): touches held, handed on, swallowed as the drawer's pull
+unit-touchgate:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/ui tests/unit/touchgate_test.c src/ui/touchgate.c -o build/touchgate_test && build/touchgate_test
 unit-touch:
 	@mkdir -p build
-	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all tests/unit/touch_test.c src/ui/touch.c -o build/touch_test && build/touch_test
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all tests/unit/touch_test.c src/ui/touch.c src/ui/touchgate.c -lpthread -o build/touch_test && build/touch_test
 
 # what the daemon reports, and what bundles are called (ota-push.sh, CI)
 version:

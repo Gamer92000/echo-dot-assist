@@ -10,7 +10,7 @@
 #include <strings.h>
 #include <time.h>
 
-#define EDGE_TOP   22                   /* the top edge's grip, in units: a pull from there is the drawer's */
+#define EDGE_TOP   48                   /* the top edge's grip, in units: a pull from there is the drawer's (a fingertip below the edge, not only its very top) */
 #define BACK_PX    140                  /* along the band: Back */
 #define FLING_TAU  325.0f               /* a fling slows as Android's scrollers do: e^(-t/325 ms) */
 
@@ -394,7 +394,7 @@ void go_home(struct scene *s, int view)
         if (s->p->launch) s->p->launch(s->ctx, NULL, NULL);    /* grace, and an app that comes takes the screen (first: */
     }                                                           /* a launch that fails at once ends it) */
     s->leaving_until = 0;
-    s->view = view;
+    s->view = view; s->face_after = 0;
 }
 
 void launch(struct scene *s, const char *pkg, const char *cls)
@@ -413,7 +413,7 @@ void ask_own(struct scene *s) { s->own_asked = 1; home_new = 0; }
 void scene_launch_failed(struct scene *s, const char *pkg, long long now)
 {
     s->now = now;
-    if (eq(s->leaving_pkg, pkg ? pkg : UI_HOME_PKG)) s->leaving_until = 0;
+    if (eq(s->leaving_pkg, pkg ? pkg : UI_HOME_PKG)) { s->leaving_until = 0; s->face_after = 0; }
     if (!pkg && s->want_home_until) {                           /* our own did not start: the app keeps the screen, */
         s->want_home_until = 0;                                 /* and a drawer pulled over it goes */
         if (s->dr.from_app && drawer_open(s)) { drawer_close_now(s); s->edge = 0; s->pressed = 0; scene_backdrop(s, NULL, 0, 0); }
@@ -438,6 +438,7 @@ void scene_top(struct scene *s, const char *pkg, long long now)
     if (eq(pkg, s->top)) return;
     snprintf(s->top, sizeof s->top, "%s", pkg);
     if (!is_home(pkg)) {                                        /* the app is in front: what held its place goes */
+        if (s->face_after) { s->view = V_FACE; s->face_after = 0; }
         s->leaving_until = 0;
         if (eq(pkg, home_app(s))) s->own_asked = 0;             /* (the home app back: it comes back again after this) */
         if (eq(pkg, home_app(s))) { s->home_broken = 0; s->home_retry_at = 0; s->home_retry_ms = 0; }           /* (it starts after all: an update had it away) */
@@ -454,7 +455,7 @@ void scene_top(struct scene *s, const char *pkg, long long now)
     if (!was_home && h[0] && !s->home_broken && !s->own_asked && now >= s->want_home_until && now >= s->leaving_until && !drawer_open(s)) {   /* (not over an app on its way) */
         if (now - s->relaunch[2] > 60000) {
             s->relaunch[2] = s->relaunch[1]; s->relaunch[1] = s->relaunch[0]; s->relaunch[0] = now;
-            launch(s, h, NULL);
+            launch(s, h, "contract:");
         } else {                                                /* the face meanwhile; again once a minute is past */
             send(s, "log %s keeps leaving: the face stays a while", h);
             if (!s->home_retry_at) s->home_retry_at = s->relaunch[2] + 60001;
@@ -578,8 +579,9 @@ void scene_touch(struct scene *s, int ev, int x, int y, long long now)
             return;
         }
         if (s->dragging) { act(s, s->pact, s->parg, EV_DRAG); return; }
-        /* up on the open drawer, not along its apps: it goes with the finger */
-        if (drawer_open(s) && !s->sc_drag && dy < -TAP_PX && abs(dy) > abs(dx) && (!s->sc || s->sc->axis)) {
+        /* up on the open drawer, from anywhere on it or under it (its apps row too: along it the row scrolls, up it
+         * shuts): it goes with the finger */
+        if (drawer_open(s) && !s->sc_drag && dy < -TAP_PX && abs(dy) > abs(dx) && (!s->sc || !s->sc->axis)) {
             s->edge = 1; s->pressed = 0; drawer_pull(s, s->y0, TOUCH_DOWN); drawer_pull(s, y, TOUCH_MOVE);
             return;
         }
@@ -686,7 +688,7 @@ struct rect scene_prepare(struct scene *s, long long now, int *next_ms)
         if (h[0] && is_home(s->top) && !s->own_asked) {
             if (!drawer_open(s) && !on_its_way(s) && now >= s->want_home_until) {
                 s->relaunch[2] = s->relaunch[1]; s->relaunch[1] = s->relaunch[0]; s->relaunch[0] = now;
-                launch(s, h, NULL);
+                launch(s, h, "contract:");
             } else s->home_retry_at = now + 1000;               /* (not now: the drawer out, an app on its way: soon) */
         }
         if (s->home_broken && !s->home_retry_at) {             /* (not set again by a launch that failed at once) */
@@ -790,7 +792,7 @@ static void home_apply(struct scene *s)
     if (drawer_open(s)) return;
     const char *h = home_app(s);
     home_new = 0; s->own_asked = 0;                             /* (a new choice: its app, and back when it leaves) */
-    if (h[0] && !eq(s->top, h)) launch(s, h, NULL);
+    if (h[0] && !eq(s->top, h)) launch(s, h, "contract:");
     else if (!h[0] && !is_home(s->top)) go_home(s, V_FACE);
 }
 
@@ -798,8 +800,29 @@ static void start_home(struct scene *s)
 {
     const char *h = home_app(s);
     if (h[0] && is_home(s->top) && !drawer_open(s) && s->view == V_FACE) {   /* at start: the home app first */
-        s->relaunch[0] = s->now; launch(s, h, NULL);
+        s->relaunch[0] = s->now; launch(s, h, "contract:");
     }
+}
+
+/* A timer or an alarm rings while an app is in front: the face, with its Stop, over it, unless that app draws the ring
+ * itself (it claims it: hassmic's kiosk.c), and the app back once nothing rings.  Without this nothing on the screen
+ * would say what rings (our layer shows only over our own home) */
+static void ring_over_app(struct scene *s)
+{
+    if (scene_visible(s) || is_home(s->top) || s->ring_from[0]) return;
+    if (eq(s->top, s->claim_pkg) && (s->claim_mask & 2)) return;
+    snprintf(s->ring_from, sizeof s->ring_from, "%s", s->top);
+    if (drawer_open(s)) drawer_close_now(s);
+    go_home(s, V_FACE);
+    s->own_asked = 1;                                          /* (the home app not brought back over the ring) */
+}
+
+static void ring_done(struct scene *s)
+{
+    if (!s->ring_from[0]) return;
+    char app[96]; snprintf(app, sizeof app, "%s", s->ring_from); s->ring_from[0] = 0;
+    /* still on the face it brought (nothing else asked for meanwhile): back to the app it took the screen from */
+    if (is_home(s->top) && s->view == V_FACE && !drawer_open(s)) { s->own_asked = 0; launch(s, app, eq(app, home_app(s)) ? "contract:" : NULL); }
 }
 
 void scene_msg(struct scene *s, const char *line, long long now)
@@ -832,7 +855,17 @@ void scene_msg(struct scene *s, const char *line, long long now)
         if (!eq(was, home_app(s))) { s->home_broken = 0; s->home_retry_at = 0; s->home_retry_ms = 0; }
         if (home_known && !home_chosen && !eq(was, home_app(s))) { home_new = 1; home_apply(s); }
     }
-    else if (eq(cmd, "timers")) snprintf(s->timers, sizeof s->timers, "%s", a);
+    else if (eq(cmd, "timers")) {
+        int was = s->timers[0] != 0;
+        snprintf(s->timers, sizeof s->timers, "%s", a);
+        if (s->timers[0] && !was) ring_over_app(s);
+        else if (!s->timers[0] && was) ring_done(s);
+    }
+    else if (eq(cmd, "claim")) {                               /* the home app: what it draws itself while in front */
+        char pkg[96] = ""; int m = 0;
+        if (sscanf(a, "%95s %d", pkg, &m) == 2) { snprintf(s->claim_pkg, sizeof s->claim_pkg, "%s", pkg); s->claim_mask = m; }
+    }
+    else if (eq(cmd, "screens")) snprintf(s->screens, sizeof s->screens, "%s", a);   /* its screens' names, tab-separated */
     else if (eq(cmd, "peer")) snprintf(s->peer, sizeof s->peer, "%s", a);
     else if (eq(cmd, "tz")) { if (a[0]) setenv("TZ", a, 1); else unsetenv("TZ"); tzset(); }
     else if (eq(cmd, "ping")) send(s, "pong %.20s", a);             /* hassmic: this UI's main loop goes on */
