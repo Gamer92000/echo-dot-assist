@@ -141,6 +141,21 @@ System) off takes any certificate, but then anyone on your network could slip th
       data:
         message: "Timer {{ states('sensor.kitchen_echo_ringing_timers') }} is ringing in the kitchen"
   ```
+- Running timers show up in Home Assistant too. A timer you set by voice is Home Assistant's own (Assist keeps it),
+  but it is no entity there: Home Assistant only tells the Echo that set it. So the Echo passes it on as three sensors:
+  "Next timer" is when the running timer that ends first ends (a timestamp), "Next timer name" its name (empty for
+  "set a timer for 5 minutes") and "Next timer length" the length it was set for, in seconds (time added or taken off
+  later does not change it). They follow the timer as it starts, pauses, resumes, gets time added or taken off, is
+  cancelled or rings; while none runs they are unknown. A paused timer is left out, so with only paused ones they are
+  unknown too. Should Home Assistant restart while a timer runs, it forgets the timer and never rings it; the Echo drops
+  it 10 seconds after its end. As a timestamp, "Next timer" stays put while the timer runs, so a countdown on a
+  dashboard or another device costs no update per second:
+
+  ```yaml
+  # seconds left on the kitchen's next timer, for a template sensor or a display
+  "{{ (as_timestamp(states('sensor.kitchen_echo_next_timer')) - now().timestamp()) | round(0) | int(0) if
+      has_value('sensor.kitchen_echo_next_timer') else 0 }}"
+  ```
 
 ## Wake word
 
@@ -614,6 +629,7 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 | LED auto brightness, LED brightness | a level holds the ring there and switches the automatic off (Echo Show 5: the band's brightness, no automatic) |
 | Timer ringing, Ringing timers | on while a finished timer rings; their names (diagnostic), see [Voice](#voice) |
 | Stop ringing | button: ends a ringing timer and nothing else |
+| Next timer, Next timer name, Next timer length | the running timer that ends first: when (timestamp), its name, the length it was set for (s); unknown while none runs, see [Voice](#voice) |
 | Button | event: each press and 1 s hold of the action and volume buttons, see [Buttons and light ring](#buttons-and-light-ring) |
 | Light ring | light: colour, brightness, effects; the Echo's own lights first, see [Buttons and light ring](#buttons-and-light-ring) |
 | Firmware | update entity, see [Updating](../README.md#updating) |

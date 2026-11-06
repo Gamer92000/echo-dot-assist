@@ -21,7 +21,8 @@
  *                    (ring.h); listed where root installed the ring's animations
  *   timers           finished timers ring (core_timer_finished); "Timer ringing" and "Ringing timers" (their names)
  *                    say so until stopped or rung out, for automations; the button "Stop ringing" and the media
- *                    player's stop stop them
+ *                    player's stop stop them.  "Next timer" (when the one that ends first ends), "Next timer name" and
+ *                    "Next timer length" show a running one elsewhere (core_timer_next): Assist timers are no entities
  *   do not disturb   a switch; announcements are dropped while it is on
  *   arbitration      "Join arbitration network" switch and "Arbitration peers"; the action "arbitration_key" (Home
  *                    Assistant names it esphome.<node>_arbitration_key) through which other Echos hand over their
@@ -129,7 +130,8 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF, KEY_WEB_URL, KEY_IDENTIFY, KEY_RESET,
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
        KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON, KEY_LIGHT, KEY_ASSIST_VOLUME, KEY_SOUNDS_VOLUME, KEY_TIMER_VOLUME,
-       KEY_CALL_VOLUME, KEY_WAKE, KEY_RING_FILL, KEY_RING_ROTATION, KEY_RING_LEDS, KEY_LAST_HEARD, KEY_LAST_REPLY };
+       KEY_CALL_VOLUME, KEY_WAKE, KEY_RING_FILL, KEY_RING_ROTATION, KEY_RING_LEDS, KEY_LAST_HEARD, KEY_LAST_REPLY,
+       KEY_NEXT_TIMER, KEY_NEXT_TIMER_NAME, KEY_NEXT_TIMER_LENGTH };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -356,6 +358,32 @@ static void state_text(char *out, size_t cap, const char *s)
 /* what the text sensors say (lock held); set only while they are listed, so a switch on shows nothing from before */
 static char last_heard[STATE_CHARS * 4 + 4], last_reply[STATE_CHARS * 4 + 4];
 
+/* Home Assistant's time as an offset to now_ms (GET_TIME_RESP): "Next timer" is a time of day, and the Echo's own clock
+ * is wrong until root has set it from that answer (clock.c), then jumps, or never set where the link has no key (the
+ * clock takes keyed answers only; a timer's end goes back to the Home Assistant that said the time, so any link's
+ * answer does for it).  Before any answer: the Echo's clock */
+static long long ha_wall_off;
+static int ha_wall_set;
+static long long now_ms(void);
+static int ha_time(uint32_t epoch)      /* lock held: 1 when "Next timer" moves with it */
+{
+    long long off = epoch * 1000LL - now_ms();
+    /* whole seconds, read at another moment each time: a second either way is no news, and sent it would fire every
+     * automation on "Next timer" again (subscribe, every 6 h) */
+    if (ha_wall_set && llabs(off - ha_wall_off) < 2000) return 0;
+    ha_wall_off = off; ha_wall_set = 1;
+    return 1;
+}
+static void timer_end_text(char *out, size_t cap, long long left_ms)    /* lock held: "2026-11-04T10:15:30+00:00" */
+{
+    long long wall;
+    if (ha_wall_set) wall = now_ms() + ha_wall_off;
+    else { struct timespec t; clock_gettime(CLOCK_REALTIME, &t); wall = (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
+    time_t s = (time_t)((wall + left_ms + 500) / 1000); struct tm tm;
+    gmtime_r(&s, &tm);
+    strftime(out, cap, "%Y-%m-%dT%H:%M:%S+00:00", &tm);
+}
+
 static int listed(int key);
 static void send_setting(int key)       /* lock held */
 {
@@ -388,6 +416,13 @@ static void send_setting(int key)       /* lock held */
     case KEY_TIMER_RINGING: pb_uint(&b, 2, core_timers_ringing(NULL, 0) > 0); send_state(BINARY_SENSOR_STATE, &b); break;
     case KEY_TIMER_NAMES: { PB(t, 320); char names[288]; core_timers_ringing(names, sizeof names);
         pb_fixed32(&t, 1, key); pb_str(&t, 2, names); send_state(TEXT_SENSOR_STATE, &t); } break;
+    case KEY_NEXT_TIMER: case KEY_NEXT_TIMER_NAME: {    /* unknown while none runs (paused ones do not) */
+        PB(t, 128); char tname[64], end[32] = ""; long long left; int on = core_timer_next(tname, sizeof tname, NULL, &left);
+        if (on && key == KEY_NEXT_TIMER) timer_end_text(end, sizeof end, left);
+        pb_fixed32(&t, 1, key); pb_str(&t, 2, !on ? "" : key == KEY_NEXT_TIMER ? end : tname); pb_uint(&t, 3, !on);
+        send_state(TEXT_SENSOR_STATE, &t); } break;
+    case KEY_NEXT_TIMER_LENGTH: { unsigned total = 0; int on = core_timer_next(NULL, 0, &total, NULL);
+        pb_float(&b, 2, (float)total); pb_uint(&b, 3, !on); send_state(SENSOR_STATE, &b); } break;
     case KEY_DROPIN_STATE: case KEY_DROPIN_PEER: { PB(t, 128); char peer[64]; int st = dropin_status(peer, sizeof peer);
         pb_fixed32(&t, 1, key); pb_str(&t, 2, key == KEY_DROPIN_STATE ? dropin_states[st] : peer); send_state(TEXT_SENSOR_STATE, &t); } break;
     case KEY_LAST_HEARD: case KEY_LAST_REPLY: { PB(t, sizeof last_heard + 16);
@@ -656,6 +691,17 @@ static void send_setting_entities(void)
       pb_str(&b, 8, "mdi:timer-alert"); send_msg(LIST_BINARY_SENSOR, &b); }
     { PB(b, 128); pb_str(&b, 1, "ringing_timers"); pb_fixed32(&b, 2, KEY_TIMER_NAMES); pb_str(&b, 3, "Ringing timers");
       pb_str(&b, 5, "mdi:timer-outline"); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
+    /* The running timer that ends first, for a display elsewhere (an Assist timer is no entity): when it ends (a
+     * timestamp, so the countdown is "{{ as_timestamp(states('sensor.<node>_next_timer')) - now().timestamp() }}" and
+     * nothing has to be sent each second), its name ("" for "a timer for 5 minutes") and the length it was set for (a
+     * progress ring).  Unknown while none runs; paused ones are left out.  Name and length before the end, so a
+     * trigger on "Next timer" finds them set */
+    { PB(b, 128); pb_str(&b, 1, "next_timer_name"); pb_fixed32(&b, 2, KEY_NEXT_TIMER_NAME); pb_str(&b, 3, "Next timer name");
+      pb_str(&b, 5, "mdi:timer-outline"); send_msg(LIST_TEXT_SENSOR, &b); }
+    { PB(b, 128); pb_str(&b, 1, "next_timer_length"); pb_fixed32(&b, 2, KEY_NEXT_TIMER_LENGTH); pb_str(&b, 3, "Next timer length");
+      pb_str(&b, 5, "mdi:timer-cog-outline"); pb_str(&b, 6, "s"); pb_uint(&b, 7, 0); pb_str(&b, 9, "duration"); send_msg(LIST_SENSOR, &b); }
+    { PB(b, 128); pb_str(&b, 1, "next_timer"); pb_fixed32(&b, 2, KEY_NEXT_TIMER); pb_str(&b, 3, "Next timer");
+      pb_str(&b, 5, "mdi:timer-sand"); pb_str(&b, 8, "timestamp"); send_msg(LIST_TEXT_SENSOR, &b); }
     /* ends the ring and nothing else (issue #21): the media player's stop does too, but it also stops what the media
      * player plays, so an automation had to start the music again */
     { PB(b, 128); pb_str(&b, 1, "stop_ringing"); pb_fixed32(&b, 2, KEY_TIMER_STOP); pb_str(&b, 3, "Stop ringing");
@@ -1345,14 +1391,17 @@ static void on_event(const unsigned char *p, const unsigned char *end)
 
 static void on_timer(const unsigned char *p, const unsigned char *end)
 {
-    struct pbf f; unsigned type = 0, total = 0; char tname[64] = "", id[40] = "";
+    struct pbf f; unsigned type = 0, total = 0, left = 0, active = 0; char tname[64] = "", id[40] = "";
     while (pb_next(&p, end, &f)) {
         if (f.field == 1) type = f.v; else if (f.field == 2 && f.data) pbf_str(&f, id, sizeof id);
         else if (f.field == 3 && f.data) pbf_str(&f, tname, sizeof tname); else if (f.field == 4) total = f.v;
+        else if (f.field == 5) left = f.v; else if (f.field == 6) active = f.v != 0;
     }
     static const char *const names[] = { "started", "updated", "cancelled", "finished" };
-    fprintf(stderr, "timer %s: %s (%u s)\n", type < 4 ? names[type] : "?", tname, total);
+    if (type < 2) fprintf(stderr, "timer %s: %s (%u s, %u s left%s)\n", names[type], tname, total, left, active ? "" : ", paused");
+    else fprintf(stderr, "timer %s: %s (%u s)\n", type < 4 ? names[type] : "?", tname, total);
     if (type == 3) core_timer_finished(id, tname, total); else if (type == 2) core_timer_cancelled(id);
+    else if (type < 2) core_timer_running(id, tname, total, left, active);
 }
 
 static void on_announce(const unsigned char *p, const unsigned char *end)
@@ -1467,6 +1516,7 @@ static void send_all_settings(void)
         for (int k = KEY_WIFI_MOTION_ON; k <= KEY_WIFI_MOTION_SENS; k++) send_setting(k);
         send_setting(KEY_UPDATE); send_setting(KEY_WHISPERED);
         send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING);
+        send_setting(KEY_NEXT_TIMER_NAME); send_setting(KEY_NEXT_TIMER_LENGTH); send_setting(KEY_NEXT_TIMER);
         send_setting(KEY_DROPIN_PEER); send_setting(KEY_DROPIN_STATE);
         send_setting(KEY_LAST_HEARD); send_setting(KEY_LAST_REPLY);
         send_setting(KEY_ASSIST_VOLUME); send_setting(KEY_SOUNDS_VOLUME); send_setting(KEY_TIMER_VOLUME); send_setting(KEY_CALL_VOLUME);
@@ -1492,10 +1542,9 @@ static long long time_asked;
 static void ask_time(int c, int force)
 {
     static int told;
-    if (c < 0 || !clients[c].keyed) {
-        if (!have_key && !told++) fprintf(stderr, "clock: not asking Home Assistant for the time: it has not given this Echo an encryption key\n");
-        return;
-    }
+    if (c < 0) return;
+    if (!clients[c].keyed && !have_key && !told++)      /* asked all the same: a timer's end (ha_time) */
+        fprintf(stderr, "clock: Home Assistant's time not set as the clock: it has not given this Echo an encryption key\n");
     if (!force && time_asked && now_ms() - time_asked < TIME_ASK_MS) return;
     time_asked = now_ms();
     send_msg(GET_TIME_REQ, NULL);
@@ -1534,6 +1583,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
             else if (f.field == 2 && f.wire == 2) pbf_str(&f, tz, sizeof tz);
         }
         if (c >= 0 && clients[c].keyed && epoch) { clock_from_ha(epoch); clock_zone_from_ha(tz); }
+        if (c >= 0 && epoch && ha_time(epoch) && core_timer_next(NULL, 0, NULL, NULL)) send_setting(KEY_NEXT_TIMER);
         if (c >= 0 && clients[c].keyed && tz[0]) screen_tz(tz);
     } break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
@@ -1808,7 +1858,11 @@ static void wake_event(const char *event)       /* lock held */
 }
 
 static void whispered(int on) { (void)on; send_setting(KEY_WHISPERED); }   /* lock held */
-static void timers_changed(void) { send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING); }   /* lock held: names first */
+static void timers_changed(void)        /* lock held: names first, the next timer's end last */
+{
+    send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING);
+    send_setting(KEY_NEXT_TIMER_NAME); send_setting(KEY_NEXT_TIMER_LENGTH); send_setting(KEY_NEXT_TIMER);
+}
 /* lock held: whom first.  Each state as dropin.c's loop passed it, not the one it is in now: a refusal that came at once
  * still shows calling, then idle */
 static void dropin_changed(int st, const char *peer)

@@ -112,6 +112,7 @@ dozen daemons phone home within seconds.
       (router-side only)
 - [x] **(device)** Persistent: rules in `/system/bin/debug_firewall.sh` (stock `firewall.sh` runs it after its own flush) plus init service for `lockdown.sh watch` — solved differently: init service `hassmic_fw` runs `lockdown.sh watch` from `on boot`
 - [ ] Clock: no NTP once locked down. Nothing in hassmic needs wall-clock time (timers are Home Assistant's, hassmic only rings;
+      "Next timer" takes HA's time, not the Echo's clock;
       the log carries no timestamps). Only if timestamps in `boot.log` are ever wanted: point `sntp` at the router
 
 ## Phase 3 — First contact **(device)**
@@ -2058,6 +2059,23 @@ Run in this order. Each step says what it proves.
       ring, 10 s at most. Tests: fake_ha_timer_sound.py, unit-sounds (format checks, a replaced upload read again,
       the Show models' tones decode), unit-web_loudness (loudness.js against BS.1770 in Python; `BEEP_PEAK` at
       `TS_LUFS`; matching quiet, loud and peaky clips, the limiter never over -1 dBFS). Open (device): heard on a Dot 3 and a Show.
+      Running timers (2026-11-04, for a countdown on another device): an Assist timer has no entity in HA, and HA
+      sends its events only to the satellite that started it (ESPHome `VoiceAssistantTimerEventResponse` 115: type
+      0 started / 1 updated / 2 cancelled / 3 finished, id, name, `total_seconds` = the length it was created with,
+      `seconds_left`, `is_active`; HA esphome `assist_satellite.py` `handle_timer_event`), so the Echo republishes them. `main.c` keeps up to 8
+      by id from started/updated (end = `mono_ms` + left; paused: left kept; full: the oldest paused one goes, else
+      the oldest), drops them on cancelled/finished, and `core_timer_next` gives the active one that ends first. A timer HA never finishes (HA restarted: its timers live
+      in memory only) goes `TIMER_STALE_MS` (10 s) after its end, checked by the earcon thread (`timers_stale_at`).
+      ESPHome: "Next timer" (`next_timer`, text sensor, device class timestamp: HA's ESPHome text sensor parses ISO
+      8601; a float sensor would round a 2026 epoch to 128 s), "Next timer name" (text, "" when unnamed), "Next timer
+      length" (sensor, s, duration), all missing_state while none runs, name and length before the end. The end is
+      `now_ms` + HA's time as an offset (`ha_time` in proto_esphome.c: the Echo's own clock is wrong until root has set
+      it, and jumps then), the Echo's clock before any answer. The time is asked on links without a key too: the clock
+      takes keyed answers only, the timer's end goes back to the HA that said it. The offset moves only by 2 s or
+      more (whole seconds read at another moment, on subscribe and every 6 h: a second either way would be a new
+      state and fire automations on "Next timer" again). Wyoming unchanged (no timers there). fake_ha_esphome_timers:
+      two at once, pause, resume, time taken off, cancel, finish (rings, next unknown), one never finished forgotten
+      after 10 s, a ninth timer pushing out a paused one and not the next. Open (device): with real HA and "set a timer".
 - [x] Sounds of one's own in place of stock's (2026-11-01, asked by a Dot 3 user who renamed the assistant): every
       `enum sound` from SND_WAKE to SND_RING_OUT (13: not the timer and alarm tones, which `timer_sound` picks) by an id
       of `sounds.c` (`wake`, `ring_in`, ...; stored as file names: keep them). `state/sounds/<id>.wav`, the timer

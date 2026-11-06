@@ -41,6 +41,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 - **Echo Show 5 and Show 5 2nd gen: the screen at a fixed brightness**, as on the Show 8s. Android's automatic
   brightness took the screen down to almost nothing in a dim room. Where Kiosk Satellite is installed, it sets the
   brightness, as before: its own adaptive brightness or the level chosen in it (on every Echo Show).
+- **Running timers in Home Assistant.** A timer set by voice is Home Assistant's, but no entity: only the Echo that set
+  it hears of it, and the Echo used to wait until it rang. Now "Next timer" (when the running timer that ends first
+  ends, a timestamp), "Next timer name" and "Next timer length" follow it as it starts, pauses, resumes, gets time
+  added, is cancelled or rings, so a dashboard, another speaker or a display elsewhere in the house can count it down
+  ([Voice](docs/GUIDE.md#voice)). Paused timers are left out; with none running they are unknown.
 
 ## 2026-11-03
 

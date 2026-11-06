@@ -49,7 +49,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ha_esphome.py     # ESPHome native API, as Home Assistant: entities, settings, voice assistant,
                                              # replies, announcements (HTTP, HTTPS); the rest of the API in five parts
                                              # (shared setup tests/esphome_common.py), each with an Echo of its own:
-.venv/bin/python tests/fake_ha_esphome_timers.py   #   timers, encryption, clock and zone, noise reduction, LEDs, light sensor
+.venv/bin/python tests/fake_ha_esphome_timers.py   #   timers (ringing, the next running), encryption, clock and zone, noise
+                                                   #   reduction, LEDs, light sensor
 .venv/bin/python tests/fake_ha_esphome_features.py #   sound detection (HASSMIC_FAKE_SOUND_WINDOW: 3 s windows), Wi-Fi motion
 .venv/bin/python tests/fake_ha_esphome_buttons.py  #   runs cancelled while HA thinks or streams, the "Button" event entity
 .venv/bin/python tests/fake_ha_esphome_address.py  #   a new address: links closed, mDNS announced again
@@ -207,7 +208,10 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   timerDefault; the blip where the firmware has none), its alarm tone, the blip at the same loudness (`BEEP_PEAK`,
   -16.5 LUFS), or the page's upload `state/timer_sound.wav`, which the browser converts to 48 kHz mono WAV and offers
   to bring to that loudness (`web/loudness.js`, BS.1770; `tests/unit/web_loudness_test.py`): the Echo only checks the
-  format; looped by `play_earcon_while`, cut by any stop, a pipeline or our sounds; issue #63), mute (hardware latch
+  format; looped by `play_earcon_while`, cut by any stop, a pipeline or our sounds; issue #63; running timers from
+  HA's started/updated events kept by id with their end on the monotonic clock, `core_timer_next` the active one
+  ending first for the "Next timer" entities, a timer HA never finished dropped `TIMER_STALE_MS` after its end by the
+  earcon thread), mute (hardware latch
   that software can set but never clear, plus a soft mute from HA), volume, LED ring, earcons (one's own in place of
   stock's: `state/sounds/<id>.wav`, sounds.c `sound_own_*`, the page's Sounds card), wake word threshold hints.
   Separate volumes (setting `separate_volumes`, issue #32):
@@ -446,8 +450,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `artifact-install.sh migrate` (main.sh, every satellite start): wake word folders under the short name (`echo-de`,
   from installs by hand) renamed to artifacts.sh's (`echo-de-DE`) where the language has one region; `state/wake_word`
   follows.
-- **Clock and log stamps** (`clock.c`): `proto_esphome.c` asks HA for the time (GetTimeRequest) on keyed links (on
-  subscribe, then every 6 h on pings); `clock_from_ha` leaves `<epoch> <boottime s.cs>` in `state/clock`, root's
+- **Clock and log stamps** (`clock.c`): `proto_esphome.c` asks HA for the time (GetTimeRequest) on every link (on
+  subscribe, then every 6 h on pings; the clock takes keyed links' answers only, any does for "Next timer"'s end,
+  `ha_time`); `clock_from_ha` leaves `<epoch> <boottime s.cs>` in `state/clock`, root's
   `main.sh` `clock_set` (netwatch) sets clock + RTC and `hassmic.clock.synced`. `clock_log_start()` (first in `main()`
   after options) turns stderr/stdout into a pipe to a double-forked reader that stamps lines and drops known Amazon
   noise; it ignores hassmic's signals and ends at EOF. Never make it hassmic's direct child (Amazon's DHA module waits
