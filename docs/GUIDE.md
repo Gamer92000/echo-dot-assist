@@ -417,6 +417,7 @@ Beyond the README's two figures:
   the side that faces the talker in the middle, never turned (the settings page draws and edits them that way on
   these models, and Apply shows them at once). A design made on a Dot works on the band and the other way round;
   the designer's Ring / Band switch shows a design either way on any Echo.
+  Your words, the reply and timers can show on the screen too: [The screen](#the-screen-echo-show), "Words and timers".
   The volume of voice replies shows in cyan, as on the Dots. The screen wakes for the band and sleeps 5 minutes after the last light (1 minute with
   the microphones off or in Do not disturb).
 - **Microphone off** plays Alexa's own sounds. A switch that is already off when hassmic starts is shown, not announced.
@@ -468,6 +469,16 @@ satellite of its own has to run without its microphone (as a display) while hass
   ends or crashes (three times a minute at most), but not while you have the face or the music open: Kiosk Satellite
   until you pick another (if it is installed), the face, or any app you installed. A new choice applies at once.
 - **Back**: over an app, swipe along the bottom edge (the light band), left or right.
+- **Words and timers** (the settings page's Screen page, both off by default), over whatever the screen shows, the face
+  or an app:
+  **Speech on screen**: what you said and the assistant's reply in large letters, your words smaller and grey above the
+  reply in white, as large as they fit. They come as speech-to-text and the reply do, stay while the Echo answers and 8
+  seconds after ("Speech stays for", 0 until the next request), then fade; the next request takes them away. With
+  Wyoming only your words show.
+  **Timers on screen**: the timers set on this Echo, each its name (or its length) over its time left in large digits
+  with its unit ("4:59 min", "1:02:05 h", "45 s") and a bar of what is left, the one that ends first on top, a paused
+  one grey. A ringing timer shows in orange and pulses until it is stopped. The screen stays on while timers show; your
+  words and the reply go before them while they show.
 
 ### Music Assistant on the screen
 

@@ -411,6 +411,9 @@ void core_set_state(enum state s)
      * "ready-timer-short" once on FOCUS_ENTERED_BACKGROUND, then the pipeline's own patterns cover "ready-timer" */
     if (state == IDLE && atomic_load(&alarm_on)) led("-s", "ready-timer-short");
     led_for(state, s);
+    /* the screen's text (ring_band.c): a request from idle takes the last one's words away, idle lets them fade */
+    if (state == IDLE) ring_text(RING_TEXT_RUN, NULL);
+    else if (s == IDLE) ring_text(RING_TEXT_IDLE, NULL);
     state = s; state_since = time(NULL);
     atomic_store(&busy, s != IDLE);
 }
@@ -1232,7 +1235,7 @@ static int music_stop(void)
  * ended something (stop_cut, stopped_now), as the drop above would, or with stop_ends_listening. */
 static void stop_word(void)
 {
-    int ended = 0;
+    int ended = 0, paused = 0;
     if (dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE) { dropin_hangup("stop"); ended = 1; }   /* and the pipeline its wake word opened */
     pthread_mutex_lock(&core_lock);
     stop_ms = mono_ms();
@@ -1257,13 +1260,17 @@ static void stop_word(void)
         else { barge_in = 0; core_pipeline_finish(); quiet_abort = 1; }
     } else {
         int quiet = state == LISTENING && stop_ends && stop_heard() && connected && proto->cancel;
-        if (!ended && atomic_load(&music_on) && music_stop()) fprintf(stderr, "stop: music paused%s\n", quiet ? "" : ", the pipeline goes on");
+        if (!ended && atomic_load(&music_on) && music_stop()) { paused = 1; fprintf(stderr, "stop: music paused%s\n", quiet ? "" : ", the pipeline goes on"); }
         if (quiet) {                                            /* as the button: nothing of the run is carried out */
             fprintf(stderr, "stop: listening ended\n");
             atomic_fetch_and(&sounds_pending, ~(1 << SND_WAKE | 1 << SND_TOUCH));
             quiet_cancel();
+            ended = 1;
         }
     }
+    /* the screen's words go with what the "stop" ended: the reply it cut, the run it dropped or ended (stop_ends_listening),
+     * the ring or the music it stopped.  The transcript of that "stop", if one still comes, is not shown (core_transcript) */
+    if (ended || stop_cut || paused) ring_text(RING_TEXT_RUN, NULL);
     pthread_mutex_unlock(&core_lock);
 }
 
@@ -2066,6 +2073,14 @@ static void alarm_set(int on)          /* lock held */
     playback_hint();
 }
 
+/* lock held: what rings, to the screen's text layer (ring_band.c) */
+static void ringing_shown(void)
+{
+    char names[288];
+    core_timers_ringing(names, sizeof names);
+    ring_timers_ringing(names);
+}
+
 void core_timer_finished(const char *id, const char *name, unsigned total)
 {
     int i = 0; unsigned h = total / 3600, m = total % 3600 / 60;
@@ -2082,6 +2097,7 @@ void core_timer_finished(const char *id, const char *name, unsigned total)
     atomic_store(&alarm_until, timer_ring_s ? mono_ms() + timer_ring_s * 1000LL : LLONG_MAX);
     fprintf(stderr, "alarm: %s rings (%d ringing)\n", ringing[i].name, nringing);
     alarm_set(1);
+    ringing_shown();
     if (connected && proto->timers_changed) proto->timers_changed();
 }
 
@@ -2090,6 +2106,7 @@ void core_timer_cancelled(const char *id)
     for (int i = 0; i < nringing; i++) if (!strcmp(ringing[i].id, id)) {
         memmove(ringing + i, ringing + i + 1, sizeof ringing[0] * (size_t)(nringing - i - 1));
         if (!--nringing) alarm_set(0);
+        ringing_shown();
         if (connected && proto->timers_changed) proto->timers_changed();
         return;
     }
@@ -2101,6 +2118,7 @@ void core_alarm_stop(const char *why)
     fprintf(stderr, "alarm: off (%s)\n", why);
     nringing = 0;
     alarm_set(0);
+    ringing_shown();
     if (connected && proto->timers_changed) proto->timers_changed();
 }
 

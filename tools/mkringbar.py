@@ -126,22 +126,23 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dexasm import (Code, Program, AGET_OBJ, APUT_OBJ, VIRT, DIRECT, STATIC, STATIC_RANGE,  # noqa: E402
-                    ADD8, MUL8, SUB, MUL, ADD, IFGE, IFEQZ, IFNEZ, IFLTZ,
+                    ADD8, MUL8, SUB, MUL, ADD, IFGE, IFEQZ, IFNEZ, IFLTZ, DIV8,
                     SB, STR, CLS, OBJ, MTH, INTG, ISTRM, CLSARR, STRARR, OBJARR, BYTES, INTS)
 import dexasm                                                  # noqa: E402
 
 ME = "LRingbar;"
-OPAQUE, HIDDEN = -1, 4                    # PixelFormat.OPAQUE, SurfaceControl.HIDDEN (--framework checks both)
+OPAQUE, TRANSLUCENT, HIDDEN = -1, -3, 4     # PixelFormat.OPAQUE/TRANSLUCENT, SurfaceControl.HIDDEN (--framework checks them)
 LAYER = 2000000000                        # above every window (type layer x 10000 + 1000) and the boot animation (2^30)
-NAME = "hassmic-band"                     # the layer's name in dumpsys SurfaceFlinger
+NAME = "hassmic-band"                     # the layer's name in dumpsys SurfaceFlinger (the text layer's too)
 
 # the class's own methods: (name, params, return)
 SELF = [
     ("main",  (STRARR,), "V"),
     ("overscan", (OBJ, "I", "I"), "V"),
-    ("create", ("I", "I", "I"), OBJ),
-    ("surface", (OBJ, "I"), OBJ),
-    ("loop",  (OBJ, "I", "I"), "V"),
+    ("create", ("I", "I", "I", "I"), OBJ),
+    ("surface", (OBJ, "I", "I"), OBJ),
+    ("loop",  (OBJ, "I", "I", "I"), "V"),
+    ("srcpaint", (), OBJ),
     ("full",  (ISTRM, BYTES), "Z"),
     ("meth",  (STR, STR, STRARR), MTH),
     ("cls",   (STR,), CLS),
@@ -162,8 +163,8 @@ def emit():
     m = []
 
     def main():
-        # a=0 h=1 t=2..5 wm=6 di=7 w=8 dh=9 rot=10 s=11 n=12
-        c = Code(13, 1)
+        # a=0 h=1 t=2..5 wm=6 di=7 w=8 dh=9 rot=10 s=11 n=12 fmt=13 layer=14 alpha=15
+        c = Code(16, 1)
         c.aget_at(2, 0, 0)
         c.invoke(STATIC, "int.parse", [2]); c.move_result(1)
         c.const_string(2, "android.os.ServiceManager"); c.const_string(3, "getService")
@@ -179,16 +180,29 @@ def emit():
         c.invoke(STATIC, "w1", [2, 3, 4, 5]); c.move_result(7, True)
         for f, v in (("logicalWidth", 8), ("logicalHeight", 9), ("rotation", 10)):
             c.const_string(2, f); c.invoke(STATIC, "fint", [7, 2]); c.move_result(v)
+        c.ifz(IFLTZ, 1, "text")                               # -p: the text layer, p % of the screen's height
         c.invoke(STATIC, "overscan", [6, 10, 1])
         c.ifz(IFNEZ, 1, "on")
+        c.label("off")
         c.const_string(2, "off"); c.invoke(STATIC, "out", [2])
         c.ret_void()
         c.label("on")
         c.binop(SUB, 9, 9, 1)                                 # y = dh - h: the band's top row
+        c.lit(13, OPAQUE); c.lit(14, LAYER); c.const_4(15, 0)
+        c.goto_("go")
+        # the text layer: no overscan (the apps keep the screen), see-through, just under the band, standing on the
+        # screen's bottom as the band does (the band covers its last rows)
+        c.label("text")
+        c.const_4(2, 0); c.binop(SUB, 1, 2, 1)                # p = -h
+        c.binop(MUL, 1, 9, 1); c.binop_lit8(DIV8, 1, 1, 100)  # its rows: dh * p / 100
+        c.ifz(IFEQZ, 1, "off")
+        c.binop(SUB, 9, 9, 1)
+        c.lit(13, TRANSLUCENT); c.lit(14, LAYER - 1); c.const_4(15, 1)
+        c.label("go")
         c.array_length(12, 0)                                 # argv's length: 2 = "builder", SurfaceControl.Builder (Android 8+)
-        c.invoke(STATIC, "create", [8, 1, 12]); c.move_result(11, True)    # the SurfaceControl, which must outlive the loop:
-        c.invoke(STATIC, "surface", [11, 9]); c.move_result(12, True)      # its finalizer releases the layer (Android 9: a GC
-                                                                          # every ~55 s took the band away, 2026-10-14)
+        c.invoke(STATIC, "create", [8, 1, 12, 13]); c.move_result(11, True)  # the SurfaceControl, which must outlive the loop:
+        c.invoke(STATIC, "surface", [11, 9, 14]); c.move_result(12, True)    # its finalizer releases the layer (Android 9: a GC
+                                                                            # every ~55 s took the band away, 2026-10-14)
         c.new_instance(2, SB); c.invoke(DIRECT, "SB.new", [2])
         c.const_string(3, "ready "); c.invoke(VIRT, "SB.appendO", [2, 3])
         c.invoke(VIRT, "SB.appendI", [2, 8])
@@ -196,7 +210,7 @@ def emit():
         c.invoke(VIRT, "SB.appendI", [2, 1])
         c.invoke(VIRT, "SB.to", [2]); c.move_result(2, True)
         c.invoke(STATIC, "out", [2])
-        c.invoke(STATIC, "loop", [12, 8, 1])
+        c.invoke(STATIC, "loop", [12, 8, 1, 15])
         c.invoke(VIRT, "obj.getcls", [11]); c.move_result(2, True)         # a use of it after the loop: live all along
         c.ret_void()
         m.append(("main", c))
@@ -226,128 +240,153 @@ def emit():
         m.append(("overscan", c))
 
     def create():
-        # w=0 h=1 n=2 scc=3 ssc=4 session=5 sc=6 t=7 cs=8 as=9 k=10
-        c = Code(11, 3)
-        c.const_string(7, "android.view.SurfaceControl")
-        c.invoke(STATIC, "cls.forName", [7]); c.move_result(3, True)
-        c.const_string(7, "android.view.SurfaceSession")
-        c.invoke(STATIC, "cls.forName", [7]); c.move_result(4, True)
-        c.invoke(VIRT, "cls.newi", [4]); c.move_result(5, True)
-        c.const_4(7, 2)
-        c.if2(IFGE, 2, 7, "builder")
+        # w=0 h=1 n=2 fmt=3 scc=4 ssc=5 session=6 sc=7 t=8 cs=9 as=10 k=11
+        c = Code(12, 4)
+        c.const_string(8, "android.view.SurfaceControl")
+        c.invoke(STATIC, "cls.forName", [8]); c.move_result(4, True)
+        c.const_string(8, "android.view.SurfaceSession")
+        c.invoke(STATIC, "cls.forName", [8]); c.move_result(5, True)
+        c.invoke(VIRT, "cls.newi", [5]); c.move_result(6, True)
+        c.const_4(8, 2)
+        c.if2(IFGE, 2, 8, "builder")
         # Android 7: new SurfaceControl(session, name, w, h, format, flags)
-        c.const_4(10, 6); c.new_array(8, 10, CLSARR); c.new_array(9, 10, OBJARR)
-        c.const_4(10, 0); c.aput(4, 8, 10, APUT_OBJ)
-        c.const_string(7, "java.lang.String"); c.invoke(STATIC, "cls.forName", [7]); c.move_result(7, True)
-        c.const_4(10, 1); c.aput(7, 8, 10, APUT_OBJ)
-        c.sget_obj(7, "int.TYPE")
+        c.const_4(11, 6); c.new_array(9, 11, CLSARR); c.new_array(10, 11, OBJARR)
+        c.const_4(11, 0); c.aput(5, 9, 11, APUT_OBJ)
+        c.const_string(8, "java.lang.String"); c.invoke(STATIC, "cls.forName", [8]); c.move_result(8, True)
+        c.const_4(11, 1); c.aput(8, 9, 11, APUT_OBJ)
+        c.sget_obj(8, "int.TYPE")
         for k in (2, 3, 4, 5):
-            c.const_4(10, k); c.aput(7, 8, 10, APUT_OBJ)
-        c.const_4(10, 0); c.aput(5, 9, 10, APUT_OBJ)
-        c.const_string(7, NAME); c.const_4(10, 1); c.aput(7, 9, 10, APUT_OBJ)
-        for k, v in ((2, 0), (3, 1)):                         # width, height: the parameters
-            c.invoke(STATIC, "int.value", [v]); c.move_result(7, True)
-            c.const_4(10, k); c.aput(7, 9, 10, APUT_OBJ)
-        for k, n in ((4, OPAQUE), (5, HIDDEN)):               # format, flags
-            c.lit(7, n); c.invoke(STATIC, "int.value", [7]); c.move_result(7, True)
-            c.const_4(10, k); c.aput(7, 9, 10, APUT_OBJ)
-        c.invoke(VIRT, "cls.getc", [3, 8]); c.move_result(7, True)
-        c.invoke(VIRT, "ctor.newi", [7, 9]); c.move_result(6, True)
-        c.ret(6, True)
+            c.const_4(11, k); c.aput(8, 9, 11, APUT_OBJ)
+        c.const_4(11, 0); c.aput(6, 10, 11, APUT_OBJ)
+        c.const_string(8, NAME); c.const_4(11, 1); c.aput(8, 10, 11, APUT_OBJ)
+        for k, v in ((2, 0), (3, 1), (4, 3)):                 # width, height, format: the parameters
+            c.invoke(STATIC, "int.value", [v]); c.move_result(8, True)
+            c.const_4(11, k); c.aput(8, 10, 11, APUT_OBJ)
+        c.lit(8, HIDDEN); c.invoke(STATIC, "int.value", [8]); c.move_result(8, True)    # flags
+        c.const_4(11, 5); c.aput(8, 10, 11, APUT_OBJ)
+        c.invoke(VIRT, "cls.getc", [4, 9]); c.move_result(8, True)
+        c.invoke(VIRT, "ctor.newi", [8, 10]); c.move_result(7, True)
+        c.ret(7, True)
         # Android 9: the constructor is gone; new SurfaceControl.Builder(session).setName().setSize().setFormat()
         # .setFlags().build() (each setter returns the builder)
         c.label("builder")
-        c.const_string(7, "android.view.SurfaceControl$Builder")
-        c.invoke(STATIC, "cls.forName", [7]); c.move_result(3, True)      # scc: the Builder class from here on
-        c.const_4(10, 1); c.new_array(8, 10, CLSARR); c.new_array(9, 10, OBJARR)
-        c.const_4(10, 0); c.aput(4, 8, 10, APUT_OBJ); c.aput(5, 9, 10, APUT_OBJ)
-        c.invoke(VIRT, "cls.getc", [3, 8]); c.move_result(7, True)
-        c.invoke(VIRT, "ctor.newi", [7, 9]); c.move_result(6, True)       # sc: the builder
-        c.const_string(7, "setName"); c.const_string(8, "java.lang.String"); c.const_string(9, NAME)
-        c.invoke(STATIC, "w1", [6, 7, 8, 9]); c.move_result(6, True)
-        c.invoke(STATIC, "int.value", [0]); c.move_result(8, True)       # w2(builder, "setSize", "int", "int", w, h):
-        c.invoke(STATIC, "int.value", [1]); c.move_result(9, True)       # six consecutive registers, 4..9
-        c.move(4, 6, True)
-        c.const_string(5, "setSize"); c.const_string(6, "int"); c.const_string(7, "int")
-        c.invoke_range(STATIC_RANGE, "w2", 4, 6); c.move_result(6, True)
-        for name, v in (("setFormat", OPAQUE), ("setFlags", HIDDEN)):
-            c.const_string(7, name); c.const_string(8, "int")
-            c.lit(9, v); c.invoke(STATIC, "int.value", [9]); c.move_result(9, True)
-            c.invoke(STATIC, "w1", [6, 7, 8, 9]); c.move_result(6, True)
-        c.const_string(7, "build"); c.invoke(STATIC, "os", [6, 7]); c.move_result(6, True)
-        c.ret(6, True)
+        c.const_string(8, "android.view.SurfaceControl$Builder")
+        c.invoke(STATIC, "cls.forName", [8]); c.move_result(4, True)      # scc: the Builder class from here on
+        c.const_4(11, 1); c.new_array(9, 11, CLSARR); c.new_array(10, 11, OBJARR)
+        c.const_4(11, 0); c.aput(5, 9, 11, APUT_OBJ); c.aput(6, 10, 11, APUT_OBJ)
+        c.invoke(VIRT, "cls.getc", [4, 9]); c.move_result(8, True)
+        c.invoke(VIRT, "ctor.newi", [8, 10]); c.move_result(7, True)       # sc: the builder
+        c.const_string(8, "setName"); c.const_string(9, "java.lang.String"); c.const_string(10, NAME)
+        c.invoke(STATIC, "w1", [7, 8, 9, 10]); c.move_result(7, True)
+        c.invoke(STATIC, "int.value", [0]); c.move_result(9, True)       # w2(builder, "setSize", "int", "int", w, h):
+        c.invoke(STATIC, "int.value", [1]); c.move_result(10, True)      # six consecutive registers, 5..10
+        c.move(5, 7, True)
+        c.const_string(6, "setSize"); c.const_string(7, "int"); c.const_string(8, "int")
+        c.invoke_range(STATIC_RANGE, "w2", 5, 6); c.move_result(7, True)
+        c.const_string(8, "setFormat"); c.const_string(9, "int")
+        c.invoke(STATIC, "int.value", [3]); c.move_result(10, True)
+        c.invoke(STATIC, "w1", [7, 8, 9, 10]); c.move_result(7, True)
+        c.const_string(8, "setFlags"); c.const_string(9, "int")
+        c.lit(10, HIDDEN); c.invoke(STATIC, "int.value", [10]); c.move_result(10, True)
+        c.invoke(STATIC, "w1", [7, 8, 9, 10]); c.move_result(7, True)
+        c.const_string(8, "build"); c.invoke(STATIC, "os", [7, 8]); c.move_result(7, True)
+        c.ret(7, True)
         m.append(("create", c))
 
     def surface():
-        # sc=0 y=1 t=2 cs=3 as=4 s=5; w2's arguments 6..11
-        c = Code(12, 2)
-        c.const_string(2, "android.view.SurfaceControl")
-        c.const_string(3, "openTransaction"); c.invoke(STATIC, "sinv0", [2, 3])
-        c.const_string(3, "setLayer"); c.const_string(4, "int")
-        c.lit(5, LAYER); c.invoke(STATIC, "int.value", [5]); c.move_result(5, True)
-        c.invoke(STATIC, "w1", [0, 3, 4, 5])
-        c.move(6, 0, True); c.const_string(7, "setPosition")
-        c.const_string(8, "float"); c.const_string(9, "float")
-        c.const_string(10, "0"); c.invoke(STATIC, "float.value", [10]); c.move_result(10, True)
-        c.invoke(STATIC, "int.value", [1]); c.move_result(11, True)
-        c.invoke(STATIC, "str.valueO", [11]); c.move_result(11, True)
-        c.invoke(STATIC, "float.value", [11]); c.move_result(11, True)
-        c.invoke_range(STATIC_RANGE, "w2", 6, 6)
-        c.const_string(3, "show"); c.invoke(STATIC, "os", [0, 3])
-        c.const_string(3, "closeTransaction"); c.invoke(STATIC, "sinv0", [2, 3])
-        c.const_string(3, "android.view.Surface")
-        c.invoke(STATIC, "cls.forName", [3]); c.move_result(3, True)
-        c.invoke(VIRT, "cls.newi", [3]); c.move_result(3, True)
-        c.const_string(4, "copyFrom"); c.const_string(5, "android.view.SurfaceControl")
-        c.invoke(STATIC, "w1", [3, 4, 5, 0])
-        c.ret(3, True)
+        # sc=0 y=1 layer=2 t=3 cs=4 as=5 s=6; w2's arguments 7..12
+        c = Code(13, 3)
+        c.const_string(3, "android.view.SurfaceControl")
+        c.const_string(4, "openTransaction"); c.invoke(STATIC, "sinv0", [3, 4])
+        c.const_string(4, "setLayer"); c.const_string(5, "int")
+        c.invoke(STATIC, "int.value", [2]); c.move_result(6, True)
+        c.invoke(STATIC, "w1", [0, 4, 5, 6])
+        c.move(7, 0, True); c.const_string(8, "setPosition")
+        c.const_string(9, "float"); c.const_string(10, "float")
+        c.const_string(11, "0"); c.invoke(STATIC, "float.value", [11]); c.move_result(11, True)
+        c.invoke(STATIC, "int.value", [1]); c.move_result(12, True)
+        c.invoke(STATIC, "str.valueO", [12]); c.move_result(12, True)
+        c.invoke(STATIC, "float.value", [12]); c.move_result(12, True)
+        c.invoke_range(STATIC_RANGE, "w2", 7, 6)
+        c.const_string(4, "show"); c.invoke(STATIC, "os", [0, 4])
+        c.const_string(4, "closeTransaction"); c.invoke(STATIC, "sinv0", [3, 4])
+        c.const_string(4, "android.view.Surface")
+        c.invoke(STATIC, "cls.forName", [4]); c.move_result(4, True)
+        c.invoke(VIRT, "cls.newi", [4]); c.move_result(4, True)
+        c.const_string(5, "copyFrom"); c.const_string(6, "android.view.SurfaceControl")
+        c.invoke(STATIC, "w1", [4, 5, 6, 0])
+        c.ret(4, True)
         m.append(("surface", c))
 
     def loop():
-        # s=0 w=1 h=2 lock=3 post=4 draw=5 in=6 buf=7 px=8 la=9 da=10 c=11 t=12 k=13 x=14
-        c = Code(15, 3)
+        # s=0 w=1 h=2 alpha=3 lock=4 post=5 draw=6 in=7 buf=8 px=9 la=10 da=11 c=12 t=13 k=14 x=15
+        c = Code(16, 4)
 
         def meth(dst, cls, name, ps):
-            c.lit(13, len(ps)); c.new_array(12, 13, STRARR)
+            c.lit(14, len(ps)); c.new_array(13, 14, STRARR)
             for i, p in enumerate(ps):
-                c.const_string(14, p); c.lit(13, i); c.aput(14, 12, 13, APUT_OBJ)
-            c.const_string(13, cls); c.const_string(14, name)
-            c.invoke(STATIC, "meth", [13, 14, 12]); c.move_result(dst, True)
-        meth(3, "android.view.Surface", "lockCanvas", ("android.graphics.Rect",))
-        meth(4, "android.view.Surface", "unlockCanvasAndPost", ("android.graphics.Canvas",))
-        meth(5, "android.graphics.Canvas", "drawBitmap", DRAW)
-        c.sget_obj(6, "sys.in")
-        c.binop(MUL, 13, 1, 2)                                # w * h pixels
-        c.new_array(8, 13, INTS)
-        c.binop_lit8(MUL8, 13, 13, 4)                         # 4 bytes each
-        c.new_array(7, 13, BYTES)
-        c.const_4(13, 1); c.new_array(9, 13, OBJARR)          # { null }: lockCanvas(null), the whole surface
-        c.lit(13, len(DRAW)); c.new_array(10, 13, OBJARR)     # drawArgs; [8], the Paint, stays null
-        c.const_4(13, 0); c.aput(8, 10, 13, APUT_OBJ)         # colors
-        c.const_4(12, 0); c.invoke(STATIC, "int.value", [12]); c.move_result(12, True)
+                c.const_string(15, p); c.lit(14, i); c.aput(15, 13, 14, APUT_OBJ)
+            c.const_string(14, cls); c.const_string(15, name)
+            c.invoke(STATIC, "meth", [14, 15, 13]); c.move_result(dst, True)
+        meth(4, "android.view.Surface", "lockCanvas", ("android.graphics.Rect",))
+        meth(5, "android.view.Surface", "unlockCanvasAndPost", ("android.graphics.Canvas",))
+        meth(6, "android.graphics.Canvas", "drawBitmap", DRAW)
+        c.sget_obj(7, "sys.in")
+        c.binop(MUL, 14, 1, 2)                                # w * h pixels
+        c.new_array(9, 14, INTS)
+        c.binop_lit8(MUL8, 14, 14, 4)                         # 4 bytes each
+        c.new_array(8, 14, BYTES)
+        c.const_4(14, 1); c.new_array(10, 14, OBJARR)         # { null }: lockCanvas(null), the whole surface
+        c.lit(14, len(DRAW)); c.new_array(11, 14, OBJARR)     # drawArgs; [8], the Paint, null for the band
+        c.const_4(14, 0); c.aput(9, 11, 14, APUT_OBJ)         # colors
+        c.const_4(13, 0); c.invoke(STATIC, "int.value", [13]); c.move_result(13, True)
         for k in (1, 3, 4):                                   # offset, x, y
-            c.const_4(13, k); c.aput(12, 10, 13, APUT_OBJ)
-        c.invoke(STATIC, "int.value", [1]); c.move_result(12, True)
+            c.const_4(14, k); c.aput(13, 11, 14, APUT_OBJ)
+        c.invoke(STATIC, "int.value", [1]); c.move_result(13, True)
         for k in (2, 5):                                      # stride, width
-            c.const_4(13, k); c.aput(12, 10, 13, APUT_OBJ)
-        c.invoke(STATIC, "int.value", [2]); c.move_result(12, True)
-        c.const_4(13, 6); c.aput(12, 10, 13, APUT_OBJ)        # height
-        c.sget_obj(12, "bool.F"); c.const_4(13, 7); c.aput(12, 10, 13, APUT_OBJ)    # hasAlpha: the band is opaque
+            c.const_4(14, k); c.aput(13, 11, 14, APUT_OBJ)
+        c.invoke(STATIC, "int.value", [2]); c.move_result(13, True)
+        c.const_4(14, 6); c.aput(13, 11, 14, APUT_OBJ)        # height
+        c.sget_obj(13, "bool.F"); c.const_4(14, 7); c.aput(13, 11, 14, APUT_OBJ)    # hasAlpha: the band is opaque
+        c.ifz(IFEQZ, 3, "frame")
+        # the text layer: its pixels have alpha, and each frame replaces the last one whole (Paint in SRC mode), the
+        # see-through parts too; over (the default) they would keep what the buffer showed before
+        c.sget_obj(13, "bool.T"); c.const_4(14, 7); c.aput(13, 11, 14, APUT_OBJ)
+        c.invoke(STATIC, "srcpaint", []); c.move_result(13, True)
+        c.lit(14, 8); c.aput(13, 11, 14, APUT_OBJ)
         c.label("frame")
-        c.invoke(STATIC, "full", [6, 7]); c.move_result(12)
-        c.ifz(IFNEZ, 12, "draw")
+        c.invoke(STATIC, "full", [7, 8]); c.move_result(13)
+        c.ifz(IFNEZ, 13, "draw")
         c.ret_void()                                          # end of stdin
         c.label("draw")
-        c.invoke(STATIC, "bb.wrap", [7]); c.move_result(12, True)
-        c.sget_obj(13, "order.LE"); c.invoke(VIRT, "bb.order", [12, 13]); c.move_result(12, True)
-        c.invoke(VIRT, "bb.asint", [12]); c.move_result(12, True)
-        c.invoke(VIRT, "ib.get", [12, 8])
-        c.invoke(VIRT, "m.invoke", [3, 0, 9]); c.move_result(11, True)
-        c.invoke(VIRT, "m.invoke", [5, 11, 10])
-        c.const_4(13, 1); c.new_array(12, 13, OBJARR); c.const_4(13, 0); c.aput(11, 12, 13, APUT_OBJ)
-        c.invoke(VIRT, "m.invoke", [4, 0, 12])
+        c.invoke(STATIC, "bb.wrap", [8]); c.move_result(13, True)
+        c.sget_obj(14, "order.LE"); c.invoke(VIRT, "bb.order", [13, 14]); c.move_result(13, True)
+        c.invoke(VIRT, "bb.asint", [13]); c.move_result(13, True)
+        c.invoke(VIRT, "ib.get", [13, 9])
+        c.invoke(VIRT, "m.invoke", [4, 0, 10]); c.move_result(12, True)
+        c.invoke(VIRT, "m.invoke", [6, 12, 11])
+        c.const_4(14, 1); c.new_array(13, 14, OBJARR); c.const_4(14, 0); c.aput(12, 13, 14, APUT_OBJ)
+        c.invoke(VIRT, "m.invoke", [5, 0, 13])
         c.goto_("frame")
         m.append(("loop", c))
+
+    def srcpaint():
+        # new Paint() with setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SRC)).  p=0 k=1 t=2 cs=3 as=4 mode=5 mc=6
+        c = Code(7, 0)
+        c.const_string(2, "android.graphics.Paint"); c.invoke(STATIC, "cls.forName", [2]); c.move_result(1, True)
+        c.invoke(VIRT, "cls.newi", [1]); c.move_result(0, True)
+        c.const_string(2, "android.graphics.PorterDuff$Mode"); c.invoke(STATIC, "cls.forName", [2]); c.move_result(6, True)
+        c.const_string(2, "SRC"); c.invoke(VIRT, "cls.getf", [6, 2]); c.move_result(2, True)
+        c.const_4(5, 0); c.invoke(VIRT, "f.get", [2, 5]); c.move_result(5, True)      # a static field: get(null)
+        c.const_string(2, "android.graphics.PorterDuffXfermode"); c.invoke(STATIC, "cls.forName", [2]); c.move_result(1, True)
+        c.const_4(2, 1); c.new_array(3, 2, CLSARR); c.new_array(4, 2, OBJARR)
+        c.const_4(2, 0); c.aput(6, 3, 2, APUT_OBJ); c.aput(5, 4, 2, APUT_OBJ)
+        c.invoke(VIRT, "cls.getc", [1, 3]); c.move_result(2, True)
+        c.invoke(VIRT, "ctor.newi", [2, 4]); c.move_result(2, True)
+        c.const_string(1, "setXfermode"); c.const_string(3, "android.graphics.Xfermode")
+        c.invoke(STATIC, "w1", [0, 1, 3, 2])
+        c.ret(0, True)
+        m.append(("srcpaint", c))
 
     def full():
         # in=0 buf=1 got=2 len=3 n=4 rest=5
@@ -491,7 +530,7 @@ def emit():
         c.ret_void()
         m.append(("out", c))
 
-    for f in (main, overscan, create, surface, loop, full, meth, cls, inv, sinv, sinv0, w1, w2, os_, fint, out):
+    for f in (main, overscan, create, surface, loop, srcpaint, full, meth, cls, inv, sinv, sinv0, w1, w2, os_, fint, out):
         f()
     return m
 
@@ -527,14 +566,19 @@ REFLECTED = [
     (SURF, "lockCanvas", ["Landroid/graphics/Rect;"], False),
     (SURF, "unlockCanvasAndPost", [CANVAS], False),
     (CANVAS, "drawBitmap", ["[I", "I", "I", "I", "I", "I", "I", "Z", "Landroid/graphics/Paint;"], False),
+    ("Landroid/graphics/Paint;", "<init>", [], False),
+    ("Landroid/graphics/Paint;", "setXfermode", ["Landroid/graphics/Xfermode;"], False),
+    ("Landroid/graphics/PorterDuffXfermode;", "<init>", ["Landroid/graphics/PorterDuff$Mode;"], False),
 ]
 REFLECTED_FIELDS = [
     (DINFO, "logicalWidth", "I"),
     (DINFO, "logicalHeight", "I"),
     (DINFO, "rotation", "I"),
+    ("Landroid/graphics/PorterDuff$Mode;", "SRC", "Landroid/graphics/PorterDuff$Mode;"),
 ]
 CONSTANTS = [
     ("Landroid/graphics/PixelFormat;", "OPAQUE", OPAQUE),
+    ("Landroid/graphics/PixelFormat;", "TRANSLUCENT", TRANSLUCENT),
     (SC, "HIDDEN", HIDDEN),
     (SURF, "ROTATION_0", 0), (SURF, "ROTATION_90", 1), (SURF, "ROTATION_180", 2), (SURF, "ROTATION_270", 3),
 ]

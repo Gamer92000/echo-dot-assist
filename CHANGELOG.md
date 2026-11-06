@@ -36,6 +36,14 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-03
 
+- **Echo Show: what you said and the reply on the screen.** "Speech on screen" (settings page, Screen; off by default)
+  shows your words and the assistant's answer in large letters on the screen, as Alexa's own screens do, in the Echo's
+  own font. They fade 8 seconds after the answer ("Speech stays for": any number of seconds, or until the next
+  request). A "stop" the Echo carries out itself (a ringing timer, music, "Stop after the wake word ends listening") is
+  not shown, and takes what was showing away. Experimental: tried on one Echo Show 5 2nd gen.
+- **Echo Show: timers on the screen.** "Timers on screen" (next to it, off by default) counts running timers down in
+  large digits with their unit ("4:59 min", "1:02:05 h", "45 s") and a bar of what is left, and shows a ringing one in
+  orange, pulsing until it is stopped. The screen stays on while a timer runs.
 - **Uninstalling from an Echo Show no longer leaves "OOBE has stopped" on the screen.** The install takes Amazon's apps
   off the system partition, and Android forgets their data and permissions; put back, Amazon's setup wizard and Alexa's
   speech service crashed in a loop ("OOBE has stopped", "SpeechUI has stopped"). `scripts/install-system.sh

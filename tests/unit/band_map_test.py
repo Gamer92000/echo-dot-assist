@@ -38,7 +38,7 @@ with tempfile.TemporaryDirectory() as tmp:
     src, exe = os.path.join(tmp, "band_map.c"), os.path.join(tmp, "band_map")
     open(src, "w").write(harness)
     subprocess.run(["cc", "-O2", "-w", f"-I{ROOT}/src/hassmic", src, f"{ROOT}/src/hassmic/ringdesign.c", f"{ROOT}/src/hassmic/statefile.c", f"{ROOT}/src/hassmic/screen_none.c",
-                    "-lm", "-lpthread", "-o", exe], check=True)
+                    f"{ROOT}/src/hassmic/textdraw.c", "-lm", "-lpthread", "-o", exe], check=True)
     out = subprocess.run([exe], input=" ".join(str(v) for d in designs for c in d for v in c), capture_output=True, text=True, check=True).stdout
 c_rows = [list(map(int, l.split())) for l in out.split("\n") if l]
 

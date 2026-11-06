@@ -609,6 +609,18 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   PC: `HASSMIC_FAKE_BAND` (a program speaking ringbar's protocol), `tests/unit/ring_band_test.c` (designs too, a restart
   on the same state included); `tests/unit/band_map_test.py` holds web/ring.js's band drawing to ring_band.c's, pixel
   for pixel (node).  The band's height comes from `state/config` before `ring_start` (`settings_peek`).
+  Text layer (setting `screen_text`, off; with `screen_text_seconds` and `screen_timers` on the page's Screen page,
+  card "Words and timers", by `MOVED` as `light_band`): `ring_text` (ring.h; core_set_state: a run from idle clears, idle starts the
+  hold, `screen_text_seconds` (8, 0 until the next run); proto_esphome STT end / TTS start, proto_wyoming's transcript;
+  a "stop" carried out here is never shown: proto_esphome shows the transcript only after `core_transcript` passed it,
+  `stop_word` clears what it ended) -> `text_thread`, a second ringbar.dex in
+  its text mode (`-100`: no overscan, TRANSLUCENT, the screen's height, layer just under the band, frames drawn through a
+  Paint in SRC mode) fed pictures `textdraw.c` makes (stb_truetype, `/system/fonts` Amazon Ember, else Roboto; drawn on
+  a change, faded by alpha).  PC: `HASSMIC_FONTS`/`HASSMIC_FONT`, `tests/unit/textdraw_test.c` (build/textdraw_*.ppm).
+  Timers on it (setting `screen_timers`, off): `ring_timer`/`ring_timer_gone` from proto_esphome's timer events
+  (started/updated carry seconds left and is_active: counted down here), `ring_timers_ringing` from main.c's ringing
+  list (`ringing_shown`); one picture at a time: words, else what rings (pulsing), else running timers (`textdraw_timers`,
+  once a second); while timers show `screen_hold` sets the screen's timeout to a day.
 - `src/include/`: headers for the reversed Amazon libraries (`mixer_api.h`, `pryon_api.h`, `aipc_api.h`) and `netio.h`.
 - `src/tools/`: standalone device tools (`mixcap`, `mixplay`, `slplay` (the Android models' mixplay: OpenSL ES on the music stream), `pryon_test`, `aed_test`, `latency`, `runas` — AIPC refuses uid 0 and
   the image has no `su`; `curlspy`, `hciscan`, `a2dpprobe`, `dha_test` not in `all`).
