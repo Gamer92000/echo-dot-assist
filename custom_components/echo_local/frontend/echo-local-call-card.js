@@ -76,7 +76,10 @@ class EchoLocalCallCard extends HTMLElement {
       <style>
         ha-card { overflow: hidden; }
         .v { position: relative; background: #000; aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center; }
-        canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
+        canvas { width: 100%; height: 100%; object-fit: contain; display: block; transition: filter 1s linear; }
+        /* the frosted start, as stock's Drop In: an Echo that did not ring is seen blurred for its first seconds (3 s,
+           then 1 s clearing), so whoever is dropped in on has a moment; one that rang and was answered, at once */
+        canvas.frost { filter: blur(28px) brightness(1.08) saturate(.8); transition: none; }
         .msg { position: absolute; color: #ddd; font: 14px var(--paper-font-body1_-_font-family, sans-serif); text-align: center; padding: 0 16px; }
         .bar { display: flex; gap: 8px; align-items: center; padding: 10px 12px; }
         .name { flex: 1; font-weight: 500; }
@@ -84,20 +87,27 @@ class EchoLocalCallCard extends HTMLElement {
         button.end { background: var(--error-color, #c62828); }
         /* the microphone's switch over the picture, bottom left: muted at the start of every call, so nothing of this
            room reaches the Echo until it is pressed */
-        button.mute { position: absolute; left: 12px; bottom: 12px; display: flex; align-items: center; gap: 6px; padding: 8px 14px;
+        .ctl { position: absolute; left: 12px; bottom: 12px; display: flex; gap: 8px; }
+        .ctl button { display: flex; align-items: center; gap: 6px; padding: 8px 14px;
                       background: rgba(0, 0, 0, .6); color: #fff; backdrop-filter: blur(4px); }
-        button.mute.on { background: var(--success-color, #2e7d32); }
-        button.mute ha-icon { --mdc-icon-size: 20px; }
+        .ctl button.on { background: var(--success-color, #2e7d32); }
+        .ctl button ha-icon { --mdc-icon-size: 20px; }
+        /* this side's own picture while it goes to the Echo's screen: top right, mirrored as a mirror is */
+        video.self { position: absolute; right: 10px; top: 10px; width: 22%; border-radius: 8px; transform: scaleX(-1); background: #000; }
+        video.self[hidden] { display: none; }
         button[hidden] { display: none !important; }
       </style>
       <ha-card>
         <div class="v"><canvas width="1280" height="720"></canvas><div class="msg">Drop In to see and talk to ${name}</div>
-          <button class="mute" hidden><ha-icon icon="mdi:microphone-off"></ha-icon><span>Unmute</span></button></div>
+          <video class="self" muted playsinline hidden></video>
+          <div class="ctl"><button class="mute" hidden><ha-icon icon="mdi:microphone-off"></ha-icon><span>Unmute</span></button>
+            <button class="cam" hidden><ha-icon icon="mdi:video-off"></ha-icon><span>Camera</span></button></div></div>
         <div class="bar"><span class="name">${name}</span>
           <button class="go">Drop In</button><button class="end" hidden>Hang up</button></div>
       </ha-card>`;
     const $ = (s) => this.shadowRoot.querySelector(s);
-    this.$ = { canvas: $('canvas'), msg: $('.msg'), go: $('.go'), end: $('.end'), mute: $('.mute') };
+    this.$ = { canvas: $('canvas'), msg: $('.msg'), go: $('.go'), end: $('.end'), mute: $('.mute'), cam: $('.cam'), self: $('video.self') };
+    this.$.cam.onclick = () => (this.enc ? this.camOff() : this.camOn());
     this.$.go.onclick = () => this.start();
     this.$.end.onclick = () => this.stop('');
     this.$.mute.onclick = () => this.setMuted(!this.muted);
@@ -111,7 +121,66 @@ class EchoLocalCallCard extends HTMLElement {
   }
 
   say(t) { this.$.msg.textContent = t; this.$.msg.hidden = !t; }
-  live(on) { this.$.go.hidden = on; this.$.end.hidden = !on; this.$.mute.hidden = !on; }
+  live(on) {
+    this.$.go.hidden = on; this.$.end.hidden = !on; this.$.mute.hidden = !on;
+    // the camera only where the Echo shows a call's picture (an Echo Show with hassmic's video.c: the entity says so)
+    const a = (this._hass.states[this.config.entity] || { attributes: {} }).attributes;
+    this.$.cam.hidden = !on || !a.shows_video;
+  }
+
+  // This side's camera on the Echo's screen: off at the start of every call, as the microphone.  H.264 Baseline in
+  // Annex B through WebCodecs (its key frames carry SPS/PPS: cam.c's player takes them inline), 640x360 at 15 fps,
+  // ~500 kbit/s, a key frame a second (the Echo's player starts at one); frames skipped while the encoder or the
+  // websocket is behind, never queued up behind the call's sound
+  async camOn() {
+    if (!('VideoEncoder' in window) || !('VideoFrame' in window)) { this.say('This browser cannot send its camera (no WebCodecs encoder)'); return; }
+    const cfg = { codec: 'avc1.42E01F', width: 640, height: 360, bitrate: 500000, framerate: 15, latencyMode: 'realtime', avc: { format: 'annexb' } };
+    try {
+      const ok = await VideoEncoder.isConfigSupported(cfg);
+      if (!ok.supported) { this.say('This browser cannot encode H.264 for the Echo'); return; }
+      this.camStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 360, frameRate: 15 } });
+    } catch (e) { this.say('No camera here (' + e.name + ')'); return; }
+    if (!this.ws) { this.camStream.getTracks().forEach((t) => t.stop()); this.camStream = null; return; }   // hung up meanwhile
+    const v = this.$.self; v.srcObject = this.camStream; v.hidden = false; await v.play().catch(() => {});
+    this.enc = new VideoEncoder({
+      output: (chunk) => {
+        if (!this.ws || this.ws.readyState !== 1 || this.state !== 'connected') return;
+        const out = new Uint8Array(10 + chunk.byteLength); out[0] = 86; out[1] = chunk.type === 'key' ? 2 : 3;   // 'V'
+        new DataView(out.buffer).setBigUint64(2, BigInt(Math.max(0, Math.round(chunk.timestamp))), true);
+        chunk.copyTo(out.subarray(10));
+        this.ws.send(out);
+      },
+      error: (e) => { this.say('The camera stopped: ' + e.message); this.camOff(); },
+    });
+    this.enc.configure(cfg);
+    // Each frame drawn upright into the encoder's 640x360 first: a phone's camera hands VideoFrame(video) the sensor's
+    // pixels with the turn only as metadata (WebCodecs' rotation), which the encoder leaves out, so the Echo showed a
+    // phone's picture on its side; drawImage applies it.  A portrait camera goes in whole, with bars beside it.
+    const cv = document.createElement('canvas'); cv.width = cfg.width; cv.height = cfg.height;
+    const g = cv.getContext('2d', { alpha: false });
+    let n = 0; const t0 = performance.now();
+    this.camTimer = setInterval(() => {
+      if (!this.enc || this.enc.state !== 'configured' || v.readyState < 2 || !v.videoWidth) return;
+      if (this.enc.encodeQueueSize > 2 || (this.ws && this.ws.bufferedAmount > 1 << 20)) return;   // behind: skip one
+      const k = Math.min(cv.width / v.videoWidth, cv.height / v.videoHeight), w = v.videoWidth * k, h = v.videoHeight * k;
+      g.fillStyle = '#000'; g.fillRect(0, 0, cv.width, cv.height);
+      g.drawImage(v, (cv.width - w) / 2, (cv.height - h) / 2, w, h);
+      const f = new VideoFrame(cv, { timestamp: Math.round((performance.now() - t0) * 1000) });
+      this.enc.encode(f, { keyFrame: n++ % 15 === 0 }); f.close();
+    }, 1000 / 15);
+    this.$.cam.classList.add('on');
+    this.$.cam.querySelector('ha-icon').setAttribute('icon', 'mdi:video');
+  }
+
+  camOff() {
+    clearInterval(this.camTimer); this.camTimer = null;
+    if (this.enc && this.enc.state !== 'closed') this.enc.close();
+    this.enc = null;
+    if (this.camStream) this.camStream.getTracks().forEach((t) => t.stop());
+    this.camStream = null; this.$.self.srcObject = null; this.$.self.hidden = true;
+    this.$.cam.classList.remove('on');
+    this.$.cam.querySelector('ha-icon').setAttribute('icon', 'mdi:video-off');
+  }
 
   async start() {
     if (this.ws) return;
@@ -155,7 +224,7 @@ class EchoLocalCallCard extends HTMLElement {
       if (m.error) { this.ended = 'The Echo said no: ' + m.error; return; }
       if (m.state) {
         this.state = m.state;
-        if (m.state === 'ringing') this.say('Ringing: someone presses the button on the Echo…');
+        if (m.state === 'ringing') { this.rang = true; this.$.canvas.classList.remove('frost'); this.say('Ringing: someone presses the button on the Echo…'); }
         else if (m.state === 'connected') this.say(this.listenOnly || (this.gotPicture ? '' : 'Connected: no picture (the Echo\'s camera is off or covered)'));
         else if (m.state === 'idle') this.ended = 'The call ended';
       }
@@ -167,14 +236,19 @@ class EchoLocalCallCard extends HTMLElement {
   }
 
   decoderStart() {
-    this.config_ = null; this.gotPicture = false;
+    this.config_ = null; this.gotPicture = false; this.rang = false;
+    this.$.canvas.classList.add('frost');                        // until it rings, or 3 s after the first picture
     if (!('VideoDecoder' in window)) { this.noVideo = 'This browser cannot show the picture (no WebCodecs)'; return; }
     const g = this.$.canvas.getContext('2d');
     this.decoder = new VideoDecoder({
       output: (f) => {
         if (this.$.canvas.width !== f.displayWidth) { this.$.canvas.width = f.displayWidth; this.$.canvas.height = f.displayHeight; }
         g.drawImage(f, 0, 0); f.close();
-        if (!this.gotPicture) { this.gotPicture = true; this.say(this.listenOnly || ''); }
+        if (!this.gotPicture) {
+          this.gotPicture = true; this.say(this.listenOnly || '');
+          clearTimeout(this.frostTimer);
+          if (!this.rang) this.frostTimer = setTimeout(() => this.$.canvas.classList.remove('frost'), 3000);
+        }
       },
       error: (e) => { this.noVideo = 'The picture failed: ' + e.message; },
     });
@@ -196,9 +270,11 @@ class EchoLocalCallCard extends HTMLElement {
     const ws = this.ws; this.ws = null;
     if (ws) { try { if (ws.readyState === 1) ws.send(JSON.stringify({ hangup: true })); ws.close(); } catch (e) { /* gone */ } }
     clearInterval(this.keep);
+    this.camOff();
     if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
     if (this.decoder && this.decoder.state !== 'closed') this.decoder.close();
     if (this.ctx) this.ctx.close();
+    clearTimeout(this.frostTimer); this.$.canvas.classList.remove('frost');
     this.stream = this.ctx = this.decoder = this.mic = null; this.keyed = false; this.state = ''; this.ended = ''; this.listenOnly = '';
     this.live(false);
     this.say(why || 'Drop In to see and talk to the Echo');

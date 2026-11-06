@@ -233,6 +233,7 @@ void   core_bt_pairing(int on);                             /* the Bluetooth spe
 void   core_dropin(int state, const char *peer, int outgoing);
 void   core_dropin_result(int result, const char *peer, int here);
 void   core_dropin_listen(int on);                          /* the front end's listening mode: this side of a call talks */
+float  core_keyword_db(void);                               /* the last wake word's level, dBFS (1: none yet); not the lock */
 const char *core_dropin_refusal(int incoming);
 void   core_spawn(char *const argv[]);                      /* the same, without waiting for it or its output */
 void   core_run(char *const argv[], char *out, size_t n);   /* runs a stock tool the way the core does, until it closes its

@@ -21,6 +21,10 @@ size_t camera_json(char *o, size_t cap);        /* {"present":..,"on":..,"covere
  * camera_next: the next record into *data (malloc'd, the caller frees), its type and pts; 1 one, 0 nothing within
  * wait_ms, -1 the stream ended (the child stopped, the setting went off, the lens was covered).  camera_end: stops it. */
 int  camera_begin(const char **why);
+int  camera_begin_call(const char **why, int kbps);     /* the same at kbps (dropin.c: a call between Echos), 0 cam.c's */
 int  camera_next(int id, int *type, long long *pts_us, uint8_t **data, size_t *len, int wait_ms);
 void camera_end(int id);
+/* video.c: cam.c's play mode as a child (records on *in, the other side's picture on this screen), or -1 */
+#include <sys/types.h>
+pid_t camera_player(int *in, int self, int blur_ms);   /* self: the corner's, mirrored; blur_ms: frosted at first */
 #endif

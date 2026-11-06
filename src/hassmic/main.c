@@ -932,6 +932,13 @@ void core_dropin_listen(int on)
     pthread_mutex_unlock(&core_lock);
 }
 
+/* Not the lock.  The last wake word's level in micAsr (1: none heard since the start): Drop In's gain starts from it */
+float core_keyword_db(void)
+{
+    pthread_mutex_lock(&core_lock); float r = keyword_db; pthread_mutex_unlock(&core_lock);
+    return r;
+}
+
 /* Any lock or none (dropin_call runs under core_lock from Home Assistant): plain reads of flags */
 const char *core_dropin_refusal(int incoming)
 {

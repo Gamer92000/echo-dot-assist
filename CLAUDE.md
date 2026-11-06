@@ -68,6 +68,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # (_join, _rounds, _kiosk, _window, _afe.py beside it; tests/arbecho.py)
 .venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer,
                                              # the ringtone at the sounds volume (HASSMIC_EARCONS: stand-in stock sounds)
+.venv/bin/python tests/fake_ha_dropin_video.py # video between Echo Shows (dropin.c "HMV1", video.c; stand-in camera and
+                                             # player, tests/fake_video.py): key frames first, none to a Dot, losses
 .venv/bin/python tests/blueprint_dropin.py    # the Drop In voice blueprint against stand-ins of HA's registries, states,
                                              # actions and template engine: renamed ids, other devices, failures, replies
 .venv/bin/python tests/ha_real_end.py         # the Echo's end of audio in a real Home Assistant (stand-in STT and TTS as a
@@ -412,6 +414,13 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   and direction) is the far end, `dropin_ha_*`: PCM 16 kHz 20 ms frames instead of Opus/UDP, no arb messages, peer
   "home-assistant", the camera's records ('V') while connected with the camera on; Echo Local's `api.py` `Echo.drop_in()`
   / `EchoCall`, `call.py` (the card's websocket, signed path), `frontend/echo-local-call-card.js` (WebCodecs, AudioWorklets).
+  The gate and the gain go by RNNoise's speech probability (a `micdenoise.c` instance per call: the Show's mic puts
+  speech at its room's level), setting `drop_in_gate` (full/light/off).  Video: a caps byte after the reason on
+  invite/accept (`CAP_SHOWS`, `CAP_SENDS`; none from older builds), "HMV1" fragments on the call's UDP and key
+  (`video_sender` at `CALL_KBPS`, config inline per key frame; `on_video` one frame at a time, a key frame after a
+  loss), the browser's camera up as 'V' records (web.c `CALL_UP_MAX`); both into `video.c` (a queue and a writer
+  thread to cam.c's play mode; `video_stop` in every `end_call`); the records that leave also to a self-view (`video_self`: a second player,
+  `HMCAM_SELF`), and the caller frosts an Echo that did not ring (`video_blur`, `FROST_MS`; the card by its states).
 - **Bluetooth**: `ble.c`/`ble_crypto.c` talk raw HCI (`hci.h`) to the controller for the HA Bluetooth proxy (scan, GATT,
   Just Works pairing); Amazon's `btmanagerd` is stopped. A2DP shares the controller; scanning pauses while a phone plays,
   and for 1 s from a wake word round (`ble_quiet` in `main.c` `wake_heard`): the scan's share of the antenna costs
@@ -670,6 +679,11 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   127.0.0.1 with a token per start, one upstream for every viewer, 10 s linger; stills through HA's ffmpeg),
   `tsmux.py` (MPEG-TS with the Echo's pts).  PC: `HASSMIC_FAKE_CAMERA` (a program writing cam.c's records),
   `HASSMIC_FAKE_LENS` (a file, "1" covered).
+  The other side's picture in a call: cam.c `HMCAM_MODE=play` (records on stdin, MediaCodec's decoder into a
+  SurfaceTexture drawn by GLES 2 into a layer at `VIDEO_LAYER`, under the band: crop to fill, `HMCAM_SELF` mirrored in
+  a corner, `HMCAM_BLUR_MS` frosted; `HMCAM_GL=0` the decoder straight into the layer; gone on stdin's end, 3 s idle
+  or a kill), started by `video.c` through camera.c
+  `camera_player`; PC: `HASSMIC_FAKE_VIDEO` (tests/fake_video.py; `FAKE_VIDEO_LOG`, `FAKE_VIDEO_DUMP`).
 - **Light band** (`ring_band.c`, the Echo Show's `RING` in device.mk instead of `ring.c`): the same `ring.h` drawn as a
   band along the bottom of the screen, every pattern as the Dots' ring unrolled (12 virtual LEDs blended across the
   width, the talker's side in the middle; never turned: the Show's beam says too little, docs/re-checkers.md) plus

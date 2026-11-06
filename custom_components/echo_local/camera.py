@@ -197,6 +197,8 @@ class EchoCamera(CoordinatorEntity[EchoLocalCoordinator], Camera):
     @property
     def extra_state_attributes(self) -> dict:
         a = {"lens_covered": self._cam.get("covered") == 1}
+        # a Drop In's picture from this side goes on the Echo's screen (hassmic's video.c): the call card offers its camera
+        a["shows_video"] = bool(self._cam.get("shows_video"))
         if self.feed.error:
             a["last_error"] = self.feed.error
         return a

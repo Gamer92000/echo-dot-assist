@@ -52,6 +52,7 @@ TESTS = [
     ("sounds", [PY, "tests/fake_web_sounds.py"]),
     ("improv", [PY, "tests/fake_improv.py"]),
     ("dropin", [PY, "tests/fake_ha_dropin.py"]),
+    ("dropin-video", [PY, "tests/fake_ha_dropin_video.py"]),
     ("unit", ["make", "-s", "-j4", "unit"]),
     ("mww", [PY, "tests/fake_web_mww.py"]),
     ("web", [PY, "tests/fake_web.py"]),

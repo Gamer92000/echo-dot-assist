@@ -49,6 +49,7 @@
 #include "adbwifi.h"
 #include "arb.h"
 #include "dropin.h"
+#include "video.h"
 #include "artifacts.h"
 #include "board.h"
 #include "davs.h"
@@ -1284,9 +1285,13 @@ done:
  *                                                                           open: one viewer, as a stream; the red dot shows
  * up (Home Assistant -> Echo):    'A' <320 samples s16le>                  to play; sent all along, silence too: the
  *                                                                           stream is the call's keepalive (LOST_MS)
+ *                                  'V' <type u8> <pts u64 LE, us> <H.264>   the browser's camera, for this screen (video.c;
+ *                                                                           ignored where there is no player); a record up
+ *                                                                           to CALL_UP_MAX
  *                                  'H'                                      hung up
  * The connection's end hangs up as well. */
 #define CALL_REC_MAX 4096
+#define CALL_UP_MAX  (512 << 10)        /* a browser's key frame: WebCodecs at 640x360 makes 20-40 kB; room for more */
 static int call_seal(int fd, const uint8_t sk[32], unsigned long long *seq, uint8_t type, const void *p, size_t n)
 {
     uint8_t small[4 + 1 + CALL_REC_MAX + 16], n12[12] = { 0 }; crypto_aead_ctx a;
@@ -1336,7 +1341,9 @@ static void call_api(int fd, const struct req *r)
                       "X-HM-Nonce: %s\r\nX-HM-Mac: %s\r\n\r\n", nh, mh);
     const char *end = "Home Assistant went";
     unsigned long long dseq = 0, useq = 0; int last = -1, frames_in = 0, frames_out = 0, cam = -1, pictures = 0; long long cam_try = 0;
-    static uint8_t in[2 * (4 + 1 + CALL_REC_MAX + 16)]; size_t have = 0;   /* (one call at a time: dropin_ha_begin) */
+    static uint8_t in[4 + 1 + CALL_UP_MAX + 16 + 8192]; size_t have = 0;   /* (one call at a time: dropin_ha_begin) */
+    static uint8_t pt[1 + CALL_UP_MAX];
+    int videos_in = 0;
     if (send_all(fd, h, (size_t)hn)) goto done;
     for (;;) {
         int st = dropin_ha_state(gen);
@@ -1354,8 +1361,9 @@ static void call_api(int fd, const struct req *r)
         while (cam > 0) {
             int t; long long pts; uint8_t *d = NULL; size_t len;
             int g = camera_next(cam, &t, &pts, &d, &len, 0);
-            if (g < 0) { camera_end(cam); cam = -1; cam_try = now_ms(); break; }
+            if (g < 0) { camera_end(cam); cam = -1; cam_try = now_ms(); video_self_stop(gen); break; }
             if (!g) break;
+            video_self(gen, t, pts, d, len);                       /* what leaves, in this screen's corner */
             uint8_t *v = malloc(9 + len);
             if (v) {
                 v[0] = (uint8_t)t; for (int i = 0; i < 8; i++) v[1 + i] = (uint8_t)((unsigned long long)pts >> (8 * i));
@@ -1378,9 +1386,9 @@ static void call_api(int fd, const struct req *r)
         size_t at = 0;
         while (have - at >= 4) {
             uint32_t n = (uint32_t)in[at] | (uint32_t)in[at + 1] << 8 | (uint32_t)in[at + 2] << 16 | (uint32_t)in[at + 3] << 24;
-            if (n < 1 + 16 || n > 1 + CALL_REC_MAX + 16) { fail = 1; break; }
+            if (n < 1 + 16 || n > 1 + CALL_UP_MAX + 16) { fail = 1; break; }
             if (have - at < 4 + n) break;
-            uint8_t pt[1 + CALL_REC_MAX], n12[12] = { 0 }; crypto_aead_ctx a;
+            uint8_t n12[12] = { 0 }; crypto_aead_ctx a;
             for (int i = 0; i < 8; i++) n12[4 + i] = (uint8_t)(useq >> (8 * i));
             crypto_aead_init_ietf(&a, up, n12);
             int ok = !crypto_aead_read(&a, pt, in + at + 4 + n - 16, in + at, 4, in + at + 4, n - 16);
@@ -1389,6 +1397,10 @@ static void call_api(int fd, const struct req *r)
             useq++;
             size_t pl = n - 16;
             if (pt[0] == 'A' && pl == 1 + 640) { int16_t f[320]; memcpy(f, pt + 1, 640); dropin_ha_in(gen, f); frames_in++; }
+            else if (pt[0] == 'V' && pl > 1 + 9 && pt[1] >= 1 && pt[1] <= 3 && dropin_ha_state(gen) == DROPIN_LIVE) {
+                long long pts = 0; for (int i = 0; i < 8; i++) pts |= (long long)pt[2 + i] << (8 * i);
+                video_show(gen, pt[1], pts, pt + 10, pl - 10); videos_in++;
+            }
             else if (pt[0] == 'H') { end = "Home Assistant hung up"; fail = 1; break; }
             at += 4 + n;
         }
@@ -1400,7 +1412,8 @@ done:
     if (end) dropin_ha_end(gen, end);
     if (dropin_ha_state(gen) == DROPIN_IDLE && last != DROPIN_IDLE) call_seal(fd, down, &dseq, 'S', "idle", 4);   /* (it may hear it) */
     crypto_wipe(down, sizeof down); crypto_wipe(up, sizeof up);
-    fprintf(stderr, "web: call from Home Assistant closed: %d frames in, %d out, %d pictures\n", frames_in, frames_out, pictures);
+    video_stop(gen);
+    fprintf(stderr, "web: call from Home Assistant closed: %d frames in, %d out, %d pictures, %d of the browser's\n", frames_in, frames_out, pictures, videos_in);
 }
 
 /* Online updates come from GitHub: a line of BODY that switches them on (from off) counts only once this Echo reached

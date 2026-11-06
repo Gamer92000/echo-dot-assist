@@ -12,6 +12,20 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-04
 
+- **Drop In: you are heard at a normal voice from the first word** (Echo Show especially): a call started the Echo's
+  microphone gain from a Dot's level, 10 dB under what an Echo Show 5 needs, and it caught up only slowly. It now
+  starts from your last wake word's level. A low hum in the room (mains, a fridge: under 200 Hz) is taken out of the
+  call's sound first: on an Echo Show 5 it came out louder than the voice. **A phone's camera in the Drop In card** reached the Echo Show on its side;
+  it is upright now, and a phone held upright shows whole with bars beside it. **The settings page** was blank after
+  the last update (a typo in the camera's help text). Echo Local 2026.11.21.
+- **Drop In with video starts frosted, as Amazon's does** (Echo Show): when you drop in on an Echo Show that did not
+  ring, its picture is blurred for the first 3 seconds and clears over the next one, so whoever is there has a moment
+  before they are seen. On a Show and in the Drop In card alike; a call answered with the button is seen at once.
+  **Your own picture** is now small in the Show's bottom right corner (mirrored) while it sends its camera in a call.
+  Echo Local 2026.11.20.
+- **Video in Drop In** (Echo Show): a call between two Echo Shows shows each one's camera on the other's screen, while
+  its camera setting is on. From a dashboard, the Drop In card's new **Camera** button (off at the start of every
+  call) puts your camera on the Echo Show's screen. Echo Local 2026.11.20.
 - **Quiet between words in calls** (settings page, under Drop In): how far the Echo's microphone goes down in a call
   while nobody near it talks. Full (as before), Light, or Off to hear the room all along.
 - **Drop In hears you from across the room on the Echo Show**: whether you are talking is now decided by a speech

@@ -69,7 +69,7 @@ async def main():
             echo = api.Echo(s, "127.0.0.1", WEB, b.sk.private_bytes_raw().hex())
             await echo.get_hello()
             cam = await echo.camera()
-            check(cam == {"present": 1, "on": 0, "covered": 0, "streaming": 0}, f"GET /api/camera: there, off by default: {cam}")
+            check(cam == {"present": 1, "on": 0, "covered": 0, "streaming": 0, "shows_video": 0}, f"GET /api/camera: there, off by default, no player for a call's picture without one: {cam}")
             st = json.loads(b.call("GET", "/api/state")[2])
             check(st.get("camera", {}).get("present") == 1 and any(x["name"] == "camera" for x in st["settings"]),
                   "the page's state has the camera and its setting")

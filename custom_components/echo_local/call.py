@@ -9,9 +9,11 @@ To the card:   text {"state": "ringing" | "connected" | "idle"} and {"error": "<
                binary b"A" + 640 bytes (20 ms of 16 kHz s16le: the Echo's microphone, through Drop In's gate)
                binary b"V" + type u8 + pts u64 LE (us) + H.264 Annex B (camera.h's records: 1 config, 2 key, 3 frame)
 From it:       binary b"A" + 640 bytes (its microphone, or silence: sent all along, the call's keepalive)
+               binary b"V" + type u8 + pts u64 LE (us) + H.264 Annex B (its camera, WebCodecs; key frames with SPS/PPS)
+                      for the Echo Show's screen (the camera entity's shows_video): passed on as it comes
                text {"hangup": true}
 
-Video and sound go to the browser as the Echo made them; nothing is kept here."""
+Video and sound go through as they were made, both ways; nothing is kept here."""
 from __future__ import annotations
 
 import asyncio
@@ -78,6 +80,8 @@ class CallView(HomeAssistantView):
             async for m in ws:
                 if m.type == WSMsgType.BINARY and m.data[:1] == b"A" and len(m.data) == 1 + 640:
                     await call.audio(m.data[1:])
+                elif m.type == WSMsgType.BINARY and m.data[:1] == b"V" and len(m.data) > 10:
+                    await call.video(m.data[1], struct.unpack_from("<Q", m.data, 2)[0], m.data[10:])
                 elif m.type == WSMsgType.TEXT:
                     try:
                         if json.loads(m.data).get("hangup"):

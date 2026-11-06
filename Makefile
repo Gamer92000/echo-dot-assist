@@ -169,7 +169,7 @@ $(OUT)/libhmui.so: $(UI) src/ui/scene.h src/ui/ui.h src/ui/gfx.h build/.build-id
 # loaded by the same screen.dex; device.mk CAMERA where the board has one
 $(OUT)/libhmcam.so: src/cam/cam.c build/.build-id
 	@mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -fPIC -shared $< -o $@ -fuse-ld=lld -Wl,--no-undefined -Wl,-soname,libhmcam.so -landroid
+	$(CC) $(CFLAGS) -fPIC -shared $< -o $@ -fuse-ld=lld -Wl,--no-undefined -Wl,-soname,libhmcam.so -landroid -lEGL -lGLESv2
 
 # not part of "all": raw HCI probe on the Bluetooth controller (stop btmanagerd first, see the file)
 $(OUT)/hciscan: src/tools/hciscan.c
@@ -211,7 +211,7 @@ WHISPER := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/
 
 RNNOISE := $(addprefix src/third_party/rnnoise/,denoise.c rnn.c rnn_data.c pitch.c kiss_fft.c celt_lpc.c)
 HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/wyoming_tts.c src/hassmic/errsay.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) $(SCREEN) src/hassmic/kiosk.c src/hassmic/apps.c src/hassmic/alarms.c src/hassmic/ringdesign.c src/hassmic/ledq.c \
-           src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/camera.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
+           src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/camera.c src/hassmic/video.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
            src/hassmic/wake.c src/hassmic/wake_mww.c src/hassmic/mww_features.c src/hassmic/mww_model.c src/hassmic/mww_store.c \
            src/third_party/monocypher.c src/third_party/freeaptx.c $(RNNOISE)
 HASSMIC_H := $(wildcard src/hassmic/*.h src/include/*.h) build/.build-id
@@ -256,6 +256,7 @@ UNIT_TESTS += apps
 UNIT_TESTS += lockdown
 UNIT_TESTS += touchgate
 UNIT_TESTS += wytts
+UNIT_TESTS += web_syntax
 unit: $(addprefix unit-,$(UNIT_TESTS))
 
 # errsay.c: Home Assistant's pipeline errors as the sentences the Echo says
@@ -334,6 +335,10 @@ unit-a2dp_codecs:
 	cc -O2 -Wall -Isrc/hassmic tests/unit/a2dp_codecs_test.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/third_party/freeaptx.c -lm -ldl -lopus -o build/a2dp_codecs_test && build/a2dp_codecs_test
 unit-sbc:
 	if command -v sbcenc >/dev/null; then tests/unit/sbc_ref.sh; else echo "sbc: sbcenc/sbcdec (package sbc) missing, skipped"; fi
+# every script of the page parses: one stray quote in a help text and the page is blank (app.js, 2026-11-04)
+unit-web_syntax:
+	if command -v node >/dev/null; then for f in web/*.js; do node --check $$f || exit 1; done; elif [ -n "$$CI" ]; then echo "web syntax: node missing"; exit 1; else echo "web syntax: node missing, skipped"; fi
+
 unit-web_crypto:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_crypto_test.py; elif [ -n "$$CI" ]; then echo "web crypto: node missing"; exit 1; else echo "web crypto: node missing, skipped"; fi
 unit-kiosk:

@@ -22,7 +22,9 @@ async def run(tmp):
     hls = subprocess.run([hr.HA_PY, "-c", "import av"], capture_output=True).returncode == 0
     if hls: open(os.path.join(conf, "configuration.yaml"), "a").write("stream:\n")     # HLS, as default_config has it
     camlog = os.path.join(tmp, "camera.log")
-    os.environ.update(HASSMIC_FAKE_CAMERA=os.path.join(hr.ROOT, "tests", "fake_camera.py"), FAKE_CAMERA_LOG=camlog)
+    vidlog = os.path.join(tmp, "video.log")
+    os.environ.update(HASSMIC_FAKE_CAMERA=os.path.join(hr.ROOT, "tests", "fake_camera.py"), FAKE_CAMERA_LOG=camlog,
+                      HASSMIC_FAKE_VIDEO=os.path.join(hr.ROOT, "tests", "fake_video.py"), FAKE_VIDEO_LOG=vidlog)
     net = f"{int.from_bytes(os.urandom(8), 'little') | 1:016x} " + base64.b64encode(os.urandom(32)).decode()
     echo = hr.Echo(tmp, "Echo Show 5 c4c4c4", "02:00:00:c4:c4:c4", 26190, net, os.path.join(hr.ROOT, "build", "hassmic-host"))
     halog = open(os.path.join(tmp, "ha.log"), "w")
@@ -55,6 +57,7 @@ async def run(tmp):
             check(len(alarms_dev) == 1, f"on the Echo's device ({eid})")
             st = await c.get(f"/api/states/{eid}")
             check(st.get("state") == "idle" and st.get("attributes", {}).get("lens_covered") is False, f"there and idle: {st.get('state')} {st.get('attributes')}")
+            check(st.get("attributes", {}).get("shows_video") is True, "it shows a call's picture (shows_video): the card offers its camera")
 
             async def still():
                 async with session.get(f"{hr.HA}/api/camera_proxy/{eid}", headers=c.h, timeout=aiohttp.ClientTimeout(total=30)) as r:
@@ -131,14 +134,19 @@ async def run(tmp):
             async with session.get(f"{hr.HA}/echo_local/echo-local-call-card.js") as r:
                 check(r.status == 200 and "echo-local-call-card" in await r.text(), "the call card is served")
 
-            r = await card_in_chrome(session, c.h["Authorization"][7:], eid, echo)
+            r = await card_in_chrome(session, c.h["Authorization"][7:], eid, echo, vidlog)
             if r is not None:
                 check(r.get("state") == "connected" and r.get("picture") and r.get("lit", 0) > 1000,
                       f"the card in Chrome: connected, the Echo's picture drawn through WebCodecs ({r})")
                 check(r.get("muted") and r.get("mute_shown") and r.get("muted_peak", 1) < 50,
                       f"the microphone muted at the start, its button over the picture: nothing played on the Echo (peak {r.get('muted_peak')})")
                 check(r.get("unmuted") and r.get("voip_peak", 0) > 1000, f"unmuted, the browser's microphone (Chrome's fake one, a beep) plays on the Echo: peak {r.get('voip_peak')}")
+                check(r.get("cam_hidden_without") and r.get("cam_shown"), f"the camera button: only where the Echo shows the picture ({r.get('cam_hidden_without')}, {r.get('cam_shown')})")
+                check(r.get("video_recs", 0) >= 10 and r.get("video_first") == "2",
+                      f"the browser's camera (Chrome's fake one) through WebCodecs to the Echo's screen: {r.get('video_recs')} records, the first a key frame ({r.get('video_first')}), {r.get('cam_msg')!r}")
+                check(r.get("frost") == [True, False], f"the Echo's picture frosted at first (it did not ring), clear 3 s on ({r.get('frost')})")
                 check(r.get("hung"), "Hang up in the card: the call ends on the Echo")
+                check(r.get("video_stopped"), "and the Echo's player goes with it")
 
             await c.ws(type="call_service", domain="camera", service="turn_off", target={"entity_id": eid})
             async def off(): return setting() == "camera=off"
@@ -155,7 +163,7 @@ async def run(tmp):
             print("--- Home Assistant log tail\n" + "".join(open(os.path.join(tmp, "ha.log"), errors="replace").readlines()[-60:]))
 
 
-async def card_in_chrome(session, token, eid, echo):
+async def card_in_chrome(session, token, eid, echo, vidlog):
     """echo-local-call-card in headless Chrome (a fake camera and microphone for the page, ours for the Echo): a call,
     what it shows and what the Echo plays, then Hang up.  None without Chrome"""
     chrome = shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser")
@@ -204,6 +212,7 @@ async def card_in_chrome(session, token, eid, echo):
             c.hass = window._hass; document.body.appendChild(c); window._card = c;
             await c.start();
             for (let i = 0; i < 80 && !c.gotPicture; i++) await new Promise(r => setTimeout(r, 100));
+            window._frost0 = c.shadowRoot.querySelector('canvas').classList.contains('frost');
             await new Promise(r => setTimeout(r, 1500));
             const cv = c.shadowRoot.querySelector('canvas'), d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
             let lit = 0; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 120) lit++;
@@ -219,9 +228,22 @@ async def card_in_chrome(session, token, eid, echo):
         out["unmuted"] = await js("!window._card.muted")
         v2 = os.path.getsize(voip) if os.path.exists(voip) else 0
         out["voip_peak"] = peak(v1, v2)
+        # the camera: hidden while the entity does not say shows_video, then on (Chrome's fake camera)
+        out["cam_hidden_without"] = await js("window._card.shadowRoot.querySelector('.cam').hidden")
+        out["cam_shown"] = await js(f"""(async () => {{ window._hass.states[{json.dumps(eid)}] = {{ attributes: {{ shows_video: true }} }};
+            window._card.live(true); const b = window._card.shadowRoot.querySelector('.cam');
+            const shown = !b.hidden; b.click(); await new Promise(r => setTimeout(r, 3000)); return shown; }})()""")
+        out["cam_msg"] = await js("window._card.shadowRoot.querySelector('.msg').textContent")
+        out["frost"] = await js("[window._frost0, window._card.shadowRoot.querySelector('canvas').classList.contains('frost')]")
+        recs = [l.split() for l in open(vidlog).read().splitlines() if l.startswith("rec")] if os.path.exists(vidlog) else []
+        out["video_recs"], out["video_first"] = len(recs), recs[0][1] if recs else None
         await js("window._card.stop('')")
         async def hung(): return echo.text().count("Home Assistant went") + echo.text().count("Home Assistant hung up") >= 2
         out["hung"] = await hr.until(hung, 5)
+        async def vstop():
+            import fake_video
+            return os.path.exists(vidlog) and fake_video.gone(vidlog)
+        out["video_stopped"] = await hr.until(vstop, 5)
         return out
     finally:
         proc.terminate()

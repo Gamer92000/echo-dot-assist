@@ -317,7 +317,7 @@ class Echo:
 
 class EchoCall:
     """One call (web.c call_api): recv() the Echo's records, ('S', state), ('A', 640 bytes of 16 kHz s16le) and
-    ('V', (type, pts us, H.264)) while the camera is on, None at the end; audio() a frame to play there (20 ms, sent all along: the call's keepalive); hangup()."""
+    ('V', (type, pts us, H.264)) while the camera is on, None at the end; audio() a frame to play there (20 ms, sent all along: the call's keepalive); video() this side's picture for its screen; hangup()."""
     FRAME = 640
 
     def __init__(self, reader, writer, down: bytes, up: bytes):
@@ -357,6 +357,17 @@ class EchoCall:
             raise ValueError("a frame is 320 samples")
         self._send(b"A", pcm)
         await self.writer.drain()
+
+    VIDEO_MAX = 512 << 10                               # web.c CALL_UP_MAX: a record longer ends the call there
+
+    async def video(self, typ: int, pts_us: int, data: bytes) -> bool:
+        """a record of this side's picture (camera.h's types: 1 config, 2 key, 3 frame, H.264 Annex B) for the Echo's
+        screen; False when it is too long to go (a frame of a browser's camera that big is dropped, not the call)"""
+        if not 1 <= typ <= 3 or len(data) > self.VIDEO_MAX - 9:
+            return False
+        self._send(b"V", bytes([typ]) + struct.pack("<Q", pts_us & (2**64 - 1)) + data)
+        await self.writer.drain()
+        return True
 
     async def hangup(self) -> None:
         try:

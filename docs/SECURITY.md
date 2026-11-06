@@ -86,6 +86,12 @@ integration with a fresh counter, then sealed both ways with keys of that call a
 camera setting on, under the red dot. In Home Assistant the card reaches the call only through a signed path, as a
 logged-in user who is not one of the Echos' kiosk users.
 
+A call's picture the other way, onto an Echo Show's screen: from a browser only when its user presses the card's
+Camera button (off at the start of every call), sealed on the call's channel like its sound; between two Echo Shows
+only while the sending Show's camera setting is on and its lens open, under its red dot, encrypted with the call's own
+key on the call's UDP port (no new port), and only to an Echo that said it shows pictures. The receiving Echo shows it
+only during the call: every end of a call removes it, and the player hides it by itself 3 s after the last frame.
+
 ## Arbitration between Echos
 
 An Echo takes the network key only from an Echo Home Assistant vouches for, from Home Assistant over its encrypted API

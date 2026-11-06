@@ -28,6 +28,9 @@
  * Without the dot nothing is sent: a step of it that fails ends the process (an SDK with SurfaceControl.Builder only,
  * Android 9 on athena, would otherwise stream unseen).  The screen is woken with it and kept on (awake()).
  * HMCAM_DOT=0 would leave it off: camera.c always sets 1 and drops any HMCAM_DOT it inherited. */
+#include <EGL/egl.h>
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <errno.h>
@@ -36,6 +39,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -180,6 +184,342 @@ static void awake(int first)
 
 /* ---------------------------------------------------------------- camera and encoder */
 
+/* ---------------------------------------------------------------- a call's picture (HMCAM_MODE=play) */
+
+/* A Drop In's picture on this screen: hassmic's video.c runs this mode as its child while a call has video and writes
+ * the same records to its stdin as the stream mode writes to stdout.  No camera is opened.  Two kinds (video.c):
+ *   the other side's (an Echo Show's camera, or a browser's through Echo Local): a SurfaceFlinger layer of the
+ *     screen's size, cropped to fill it (16:9 on the Show 5's 2:1), under the band (the call's animation stays on it)
+ *     and over the UI's layer and every app; HMCAM_BLUR_MS > 0: frosted for that long from the first picture, the
+ *     last second clearing (the caller's screen when the Echo called did not ring: stock's Drop In does the same);
+ *   HMCAM_SELF=1, this Show's own (decoded from the records that leave it): a quarter of the width in the bottom
+ *     right corner, over the other side's, mirrored as a mirror is.
+ * The codec's config comes either as a record of its own (type 1, as MediaCodec's encoder gives it) or inline ahead of
+ * a key frame (a browser's WebCodecs in Annex B); delta frames before the first key frame are dropped.
+ *
+ * Drawn through GLES 2: MediaCodec's H.264 decoder (the MT8163's own) into a SurfaceTexture, a quad on the layer's
+ * EGL surface that crops to fill, mirrors and frosts (the picture drawn small into FROST_DIV times smaller texture,
+ * 16 taps a texel, then up again through 9 taps: shapes and colours, no faces).  Without GL (EGL refused, an SDK
+ * without these constructors): the decoder straight into the layer as before, and a frosted picture stays hidden for
+ * its frost instead: never seen sharp before it would have cleared.
+ *
+ * The picture must never outlive the call (a frozen face on someone's Show): stdin's end, or PLAY_IDLE_MS without a
+ * frame, hides the layer and ends the process; the layer is this process's, so a kill takes it too.  stdout: nothing.
+ * Exit status: 0 stdin ended, 2 no VM, 4 no decoder or layer, 5 no frames for PLAY_IDLE_MS. */
+#define VIDEO_LAYER  1999995000         /* between the UI's 1999990000 and the band's 2000000000 (src/ui/android.c) */
+#define SELF_LAYER   (VIDEO_LAYER + 1)
+#define PLAY_IDLE_MS 3000
+#define PLAY_MAX     (4 << 20)          /* a record's largest: a key frame of 1080p at a high rate is some 300 KB */
+#define FROST_DIV    24                 /* the frosted picture: 40x20 on the Show 5's 960x480 */
+#define FROST_FADE   1000               /* ms: the frost's last, clearing */
+#define SELF_MARGIN  16
+#define SELF_BOTTOM  40                 /* px above the bottom: clear of the band */
+
+static int read_full(uint8_t *p, size_t n, int wait_ms)
+{
+    while (n) {
+        struct pollfd q = { 0, POLLIN, 0 };
+        int k = poll(&q, 1, wait_ms);
+        if (k == 0) return 1;                                  /* nothing for wait_ms */
+        if (k < 0) { if (errno == EINTR) continue; return -1; }
+        ssize_t r = read(0, p, n);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) return -1;
+        p += r; n -= (size_t)r; wait_ms = PLAY_IDLE_MS;        /* a record begun is read to its end */
+    }
+    return 0;
+}
+
+/* ---- GL: decoder -> SurfaceTexture -> crop, mirror, frost -> the layer */
+static const char VS[] =
+    "attribute vec2 a; uniform vec2 sc; uniform float mir; varying vec2 t; varying vec2 u;\n"
+    "void main() { u = a * 0.5 + 0.5; t = 0.5 + (u - 0.5) * sc; if (mir > 0.5) t.x = 1.0 - t.x; gl_Position = vec4(a, 0.0, 1.0); }\n";
+static const char FS_DOWN[] =                   /* into the small texture: 16 taps over each of its texels */
+    "#extension GL_OES_EGL_image_external : require\n"
+    "precision mediump float; uniform samplerExternalOES s; uniform mat4 st; uniform vec2 d; varying vec2 t;\n"
+    "void main() { vec4 c = vec4(0.0);\n"
+    "  for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++)\n"
+    "    c += texture2D(s, (st * vec4(t + (vec2(float(i), float(j)) - 1.5) * d, 0.0, 1.0)).xy);\n"
+    "  gl_FragColor = c / 16.0; }\n";
+static const char FS_SHOW[] =                   /* on the layer: sharp, or frosted by k (1 frosted .. 0 sharp) */
+    "#extension GL_OES_EGL_image_external : require\n"
+    "precision mediump float; uniform samplerExternalOES s; uniform sampler2D b; uniform mat4 st; uniform vec2 bp;\n"
+    "uniform float k; varying vec2 t; varying vec2 u;\n"
+    "void main() { vec3 c = texture2D(s, (st * vec4(t, 0.0, 1.0)).xy).rgb;\n"
+    "  if (k > 0.0) { vec3 f = vec3(0.0);\n"
+    "    for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++)\n"
+    "      f += texture2D(b, u + vec2(float(i), float(j)) * bp).rgb * ((i == 0 ? 2.0 : 1.0) * (j == 0 ? 2.0 : 1.0));\n"
+    "    f = mix(f / 16.0, vec3(0.85), 0.15);\n"
+    "    c = mix(c, f, k); }\n"
+    "  gl_FragColor = vec4(c, 1.0); }\n";
+
+struct gl {
+    EGLDisplay dpy; EGLSurface sf; EGLContext cx; ANativeWindow *win;
+    GLuint oes, small, fbo, p_down, p_show; int fw, fh, W, H;
+    jobject st, ssurf; jmethodID upd, mat, ts; jfloatArray m;
+};
+
+static GLuint shader(GLenum kind, const char *src)
+{
+    GLuint s = glCreateShader(kind); GLint ok = 0;
+    glShaderSource(s, 1, &src, NULL); glCompileShader(s); glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+    if (!ok) { char l[512] = ""; glGetShaderInfoLog(s, sizeof l, NULL, l); say("GL shader: %s", l); glDeleteShader(s); return 0; }
+    return s;
+}
+
+static GLuint program(const char *fs)
+{
+    GLuint v = shader(GL_VERTEX_SHADER, VS), f = shader(GL_FRAGMENT_SHADER, fs), p; GLint ok = 0;
+    if (!v || !f) return 0;
+    p = glCreateProgram(); glAttachShader(p, v); glAttachShader(p, f); glBindAttribLocation(p, 0, "a"); glLinkProgram(p);
+    glGetProgramiv(p, GL_LINK_STATUS, &ok);
+    if (!ok) { say("GL program did not link"); return 0; }
+    return p;
+}
+
+static void gl_end(struct gl *g)
+{
+    if (g->dpy != EGL_NO_DISPLAY) {
+        eglMakeCurrent(g->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        if (g->sf != EGL_NO_SURFACE) eglDestroySurface(g->dpy, g->sf);
+        if (g->cx != EGL_NO_CONTEXT) eglDestroyContext(g->dpy, g->cx);
+        eglTerminate(g->dpy);
+    }
+    if (g->win) ANativeWindow_release(g->win);
+    g->dpy = EGL_NO_DISPLAY; g->sf = EGL_NO_SURFACE; g->cx = EGL_NO_CONTEXT; g->win = NULL;
+}
+
+/* 0 ready: g->ssurf is the decoder's surface */
+static int gl_begin(struct gl *g, jobject surf, int W, int H)
+{
+    g->dpy = EGL_NO_DISPLAY; g->sf = EGL_NO_SURFACE; g->cx = EGL_NO_CONTEXT; g->W = W; g->H = H;
+    if (!(g->win = ANativeWindow_fromSurface(e, surf))) { say("GL: no window"); return -1; }
+    g->dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (g->dpy == EGL_NO_DISPLAY || !eglInitialize(g->dpy, NULL, NULL)) { say("GL: no display"); g->dpy = EGL_NO_DISPLAY; return -1; }
+    const EGLint ca[] = { EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+                          EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_NONE };
+    const EGLint xa[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
+    EGLConfig cfg; EGLint n = 0;
+    if (!eglChooseConfig(g->dpy, ca, &cfg, 1, &n) || n < 1) { say("GL: no config"); return -1; }
+    if ((g->cx = eglCreateContext(g->dpy, cfg, EGL_NO_CONTEXT, xa)) == EGL_NO_CONTEXT) { say("GL: no context (0x%x)", eglGetError()); return -1; }
+    if ((g->sf = eglCreateWindowSurface(g->dpy, cfg, g->win, NULL)) == EGL_NO_SURFACE) { say("GL: no surface (0x%x)", eglGetError()); return -1; }
+    if (!eglMakeCurrent(g->dpy, g->sf, g->sf, g->cx)) { say("GL: not current (0x%x)", eglGetError()); return -1; }
+    if (!(g->p_down = program(FS_DOWN)) || !(g->p_show = program(FS_SHOW))) return -1;
+    g->fw = W / FROST_DIV > 8 ? W / FROST_DIV : 8; g->fh = H / FROST_DIV > 8 ? H / FROST_DIV : 8;
+    glGenTextures(1, &g->oes); glBindTexture(GL_TEXTURE_EXTERNAL_OES, g->oes);
+    glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenTextures(1, &g->small); glBindTexture(GL_TEXTURE_2D, g->small);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, g->fw, g->fh, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenFramebuffers(1, &g->fbo); glBindFramebuffer(GL_FRAMEBUFFER, g->fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g->small, 0);
+    int fb_ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (!fb_ok || glGetError() != GL_NO_ERROR) { say("GL: no frost texture"); return -1; }
+
+    jclass stc = (*e)->FindClass(e, "android/graphics/SurfaceTexture"), sfc = (*e)->FindClass(e, "android/view/Surface");
+    if (failed("SurfaceTexture class")) return -1;
+    jobject st = (*e)->NewObject(e, stc, (*e)->GetMethodID(e, stc, "<init>", "(I)V"), (jint)g->oes);
+    if (failed("SurfaceTexture") || !st) return -1;
+    jobject ss = (*e)->NewObject(e, sfc, (*e)->GetMethodID(e, sfc, "<init>", "(Landroid/graphics/SurfaceTexture;)V"), st);
+    if (failed("Surface(SurfaceTexture)") || !ss) return -1;
+    g->st = (*e)->NewGlobalRef(e, st); g->ssurf = (*e)->NewGlobalRef(e, ss);
+    g->upd = (*e)->GetMethodID(e, stc, "updateTexImage", "()V"); g->mat = (*e)->GetMethodID(e, stc, "getTransformMatrix", "([F)V");
+    g->ts = (*e)->GetMethodID(e, stc, "getTimestamp", "()J");
+    jfloatArray m = (*e)->NewFloatArray(e, 16);
+    if (failed("SurfaceTexture methods") || !m) return -1;
+    g->m = (*e)->NewGlobalRef(e, m);
+    return 0;
+}
+
+/* the decoder's newest frame (released for rendering just before) onto the layer; k 1 frosted .. 0 sharp.
+ * 1 drawn, 0 no new frame within 40 ms, -1 failed */
+static int gl_draw(struct gl *g, long long *last_ts, float sx, float sy, int mirror, float k)
+{
+    long long t0 = now_ms(); jlong ts = *last_ts;
+    for (;;) {                                  /* the frame reaches the SurfaceTexture a moment after its release */
+        (*e)->CallVoidMethod(e, g->st, g->upd);
+        if (failed("updateTexImage")) return -1;
+        ts = (*e)->CallLongMethod(e, g->st, g->ts);
+        if (ts != *last_ts) break;
+        if (now_ms() - t0 > 40) return 0;
+        usleep(2000);
+    }
+    *last_ts = ts;
+    float m[16];
+    (*e)->CallVoidMethod(e, g->st, g->mat, g->m); if (failed("getTransformMatrix")) return -1;
+    (*e)->GetFloatArrayRegion(e, g->m, 0, 16, m);
+    static const float quad[] = { -1, -1, 1, -1, -1, 1, 1, 1 };
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad); glEnableVertexAttribArray(0);
+    glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_EXTERNAL_OES, g->oes);
+    if (k > 0) {
+        glBindFramebuffer(GL_FRAMEBUFFER, g->fbo); glViewport(0, 0, g->fw, g->fh);
+        glUseProgram(g->p_down);
+        glUniform1i(glGetUniformLocation(g->p_down, "s"), 0);
+        glUniformMatrix4fv(glGetUniformLocation(g->p_down, "st"), 1, GL_FALSE, m);
+        glUniform2f(glGetUniformLocation(g->p_down, "sc"), sx, sy);
+        glUniform1f(glGetUniformLocation(g->p_down, "mir"), (float)mirror);
+        glUniform2f(glGetUniformLocation(g->p_down, "d"), sx / (float)g->fw / 4.0f, sy / (float)g->fh / 4.0f);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+    glViewport(0, 0, g->W, g->H);
+    glUseProgram(g->p_show);
+    glUniform1i(glGetUniformLocation(g->p_show, "s"), 0);
+    glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, g->small);
+    glUniform1i(glGetUniformLocation(g->p_show, "b"), 1);
+    glUniformMatrix4fv(glGetUniformLocation(g->p_show, "st"), 1, GL_FALSE, m);
+    glUniform2f(glGetUniformLocation(g->p_show, "sc"), sx, sy);
+    glUniform1f(glGetUniformLocation(g->p_show, "mir"), (float)mirror);
+    glUniform2f(glGetUniformLocation(g->p_show, "bp"), 1.0f / (float)g->fw, 1.0f / (float)g->fh);
+    glUniform1f(glGetUniformLocation(g->p_show, "k"), k);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    if (!eglSwapBuffers(g->dpy, g->sf)) { say("GL: swap failed (0x%x)", eglGetError()); return -1; }
+    return 1;
+}
+
+static int play(void)
+{
+    jclass scc = (*e)->FindClass(e, "android/view/SurfaceControl"), ssc = (*e)->FindClass(e, "android/view/SurfaceSession"),
+           sfc = (*e)->FindClass(e, "android/view/Surface"), dmc = (*e)->FindClass(e, "android/hardware/display/DisplayManagerGlobal"),
+           dic = (*e)->FindClass(e, "android/view/DisplayInfo"), mfc = (*e)->FindClass(e, "android/media/MediaFormat"),
+           mcc = (*e)->FindClass(e, "android/media/MediaCodec"), bic = (*e)->FindClass(e, "android/media/MediaCodec$BufferInfo");
+    if (failed("play classes")) return 4;
+    int self = env_int("HMCAM_SELF", 0) == 1, blur_ms = self ? 0 : env_int("HMCAM_BLUR_MS", 0);
+    jobject dm = (*e)->CallStaticObjectMethod(e, dmc, (*e)->GetStaticMethodID(e, dmc, "getInstance", "()Landroid/hardware/display/DisplayManagerGlobal;"));
+    jobject di = !failed("display") && dm ? (*e)->CallObjectMethod(e, dm, (*e)->GetMethodID(e, dmc, "getDisplayInfo", "(I)Landroid/view/DisplayInfo;"), 0) : NULL;
+    if (failed("getDisplayInfo") || !di) return 4;
+    int SW = (*e)->GetIntField(e, di, (*e)->GetFieldID(e, dic, "logicalWidth", "I")), SH = (*e)->GetIntField(e, di, (*e)->GetFieldID(e, dic, "logicalHeight", "I"));
+    int W = SW, H = SH, X = 0, Y = 0;
+    if (self) { W = (SW / 4) & ~1; H = (W * 9 / 16) & ~1; X = SW - W - SELF_MARGIN; Y = SH - H - SELF_BOTTOM; }
+    jobject ss = (*e)->NewObject(e, ssc, (*e)->GetMethodID(e, ssc, "<init>", "()V"));
+    jmethodID init = failed("SurfaceSession") ? NULL : (*e)->GetMethodID(e, scc, "<init>", "(Landroid/view/SurfaceSession;Ljava/lang/String;IIII)V");
+    if (failed("SurfaceControl(): this SDK has the Builder only") || !init || !ss) return 4;
+    jobject sc = (*e)->NewObject(e, scc, init, ss, (*e)->NewStringUTF(e, self ? "hassmic-call-self" : "hassmic-call-video"), W, H, -1 /* OPAQUE */, 4 /* HIDDEN */);
+    if (failed("SurfaceControl") || !sc) return 4;
+    jobject surf = (*e)->NewObject(e, sfc, (*e)->GetMethodID(e, sfc, "<init>", "()V"));
+    if (failed("Surface") || !surf) return 4;
+    (*e)->CallVoidMethod(e, surf, (*e)->GetMethodID(e, sfc, "copyFrom", "(Landroid/view/SurfaceControl;)V"), sc);
+    if (failed("copyFrom")) return 4;
+    jmethodID op = (*e)->GetStaticMethodID(e, scc, "openTransaction", "()V"), cl = (*e)->GetStaticMethodID(e, scc, "closeTransaction", "()V"),
+              m_show = (*e)->GetMethodID(e, scc, "show", "()V"), m_hide = (*e)->GetMethodID(e, scc, "hide", "()V");
+    (*e)->CallStaticVoidMethod(e, scc, op);
+    if (!failed("openTransaction")) {
+        (*e)->CallVoidMethod(e, sc, (*e)->GetMethodID(e, scc, "setLayer", "(I)V"), self ? SELF_LAYER : VIDEO_LAYER); failed("setLayer");
+        (*e)->CallVoidMethod(e, sc, (*e)->GetMethodID(e, scc, "setPosition", "(FF)V"), (float)X, (float)Y); failed("setPosition");
+        (*e)->CallStaticVoidMethod(e, scc, cl); failed("closeTransaction");
+    }
+
+    struct gl g; memset(&g, 0, sizeof g);
+    int gl = getenv("HMCAM_GL") && !strcmp(getenv("HMCAM_GL"), "0") ? 0 : !gl_begin(&g, surf, W, H);
+    if (!gl) { gl_end(&g); say("no GL: the picture straight from the decoder%s", blur_ms ? ", hidden while it would be frosted" : self ? ", not mirrored" : ""); }
+
+    jstring avc = (*e)->NewStringUTF(e, "video/avc");
+    jobject fmt = (*e)->CallStaticObjectMethod(e, mfc, (*e)->GetStaticMethodID(e, mfc, "createVideoFormat", "(Ljava/lang/String;II)Landroid/media/MediaFormat;"), avc, 1280, 720);
+    if (failed("createVideoFormat") || !fmt) return 4;
+    (*e)->CallVoidMethod(e, fmt, (*e)->GetMethodID(e, mfc, "setInteger", "(Ljava/lang/String;I)V"), (*e)->NewStringUTF(e, "max-input-size"), PLAY_MAX);
+    if (failed("max-input-size")) return 4;
+    jobject codec = (*e)->CallStaticObjectMethod(e, mcc, (*e)->GetStaticMethodID(e, mcc, "createDecoderByType", "(Ljava/lang/String;)Landroid/media/MediaCodec;"), avc);
+    if (failed("createDecoderByType") || !codec) return 4;
+    (*e)->CallVoidMethod(e, codec, (*e)->GetMethodID(e, mcc, "configure", "(Landroid/media/MediaFormat;Landroid/view/Surface;Landroid/media/MediaCrypto;I)V"), fmt, gl ? g.ssurf : surf, NULL, 0);
+    if (failed("configure")) return 4;
+    if (!gl) { (*e)->CallVoidMethod(e, codec, (*e)->GetMethodID(e, mcc, "setVideoScalingMode", "(I)V"), 2 /* SCALE_TO_FIT_WITH_CROPPING */);
+               failed("setVideoScalingMode"); }                /* stretched then, not fatal */
+    (*e)->CallVoidMethod(e, codec, (*e)->GetMethodID(e, mcc, "start", "()V"));
+    if (failed("MediaCodec.start")) return 4;
+    jmethodID deqi = (*e)->GetMethodID(e, mcc, "dequeueInputBuffer", "(J)I"), gib = (*e)->GetMethodID(e, mcc, "getInputBuffer", "(I)Ljava/nio/ByteBuffer;"),
+              qib = (*e)->GetMethodID(e, mcc, "queueInputBuffer", "(IIIJI)V"),
+              deqo = (*e)->GetMethodID(e, mcc, "dequeueOutputBuffer", "(Landroid/media/MediaCodec$BufferInfo;J)I"),
+              rel = (*e)->GetMethodID(e, mcc, "releaseOutputBuffer", "(IZ)V"),
+              gof = (*e)->GetMethodID(e, mcc, "getOutputFormat", "()Landroid/media/MediaFormat;"),
+              gi = (*e)->GetMethodID(e, mfc, "getInteger", "(Ljava/lang/String;)I"), ck = (*e)->GetMethodID(e, mfc, "containsKey", "(Ljava/lang/String;)Z");
+    jobject bi = (*e)->NewObject(e, bic, (*e)->GetMethodID(e, bic, "<init>", "()V"));
+    if (failed("codec methods") || !bi) return 4;
+    say("playing %s on %dx%d at %d,%d%s%s", self ? "this Show's own picture" : "the other side's picture", W, H, X, Y,
+        gl ? " through GL" : "", blur_ms ? ", frosted at first" : "");
+
+    static uint8_t buf[PLAY_MAX];
+    int rc = 0, keyed = 0, shown = 0; long in = 0, out = 0, dropped = 0; long long t0 = now_ms(), kept = 0, first_at = 0, last_ts = -1;
+    float sx = 1, sy = 1;                                       /* crop to fill, from the decoder's size */
+    for (;;) {
+        uint8_t h[20];
+        int r = read_full(h, sizeof h, PLAY_IDLE_MS);
+        if (r < 0) break;                                       /* stdin ended: the call's picture is over */
+        if (r > 0) { say("no picture for %d s: hidden", PLAY_IDLE_MS / 1000); rc = 5; break; }
+        uint32_t n = (uint32_t)h[8] | (uint32_t)h[9] << 8 | (uint32_t)h[10] << 16 | (uint32_t)h[11] << 24;
+        long long pts = 0; for (int i = 0; i < 8; i++) pts |= (long long)h[12 + i] << (8 * i);
+        if (memcmp(h, "HMCV", 4) || n > PLAY_MAX) { say("not a record"); rc = 4; break; }
+        if (read_full(buf, n, PLAY_IDLE_MS)) break;
+        int type = h[4];
+        if (type == 2) keyed = 1;
+        if (type == 3 && !keyed) { dropped++; continue; }       /* from a key frame on */
+        jint i = (*e)->CallIntMethod(e, codec, deqi, (jlong)50000);
+        if (failed("dequeueInputBuffer")) { rc = 4; break; }
+        if (i < 0) { dropped++; if (type != 1) keyed = 0; continue; }   /* the decoder is behind: the next key frame */
+        jobject bb = (*e)->CallObjectMethod(e, codec, gib, i);
+        uint8_t *p = !failed("getInputBuffer") && bb ? (*e)->GetDirectBufferAddress(e, bb) : NULL;
+        jlong cap = p ? (*e)->GetDirectBufferCapacity(e, bb) : 0;
+        if (!p || cap < (jlong)n) { say("an input buffer of %lld for %u bytes", (long long)cap, n); rc = 4; break; }
+        memcpy(p, buf, n);
+        (*e)->DeleteLocalRef(e, bb);
+        (*e)->CallVoidMethod(e, codec, qib, i, 0, (jint)n, (jlong)pts, type == 1 ? 2 /* BUFFER_FLAG_CODEC_CONFIG */ : 0);
+        if (failed("queueInputBuffer")) { rc = 4; break; }
+        in++;
+        int drawn = 0;
+        for (;;) {                                              /* what is decoded, on the screen at once */
+            jint o = (*e)->CallIntMethod(e, codec, deqo, bi, (jlong)0);
+            if (failed("dequeueOutputBuffer")) { rc = 4; goto done; }
+            if (o == -2 && gl) {                                /* the decoder's size: crop to fill the layer */
+                jobject of = (*e)->CallObjectMethod(e, codec, gof);
+                if (!failed("getOutputFormat") && of) {
+                    #define KEY(k) (*e)->NewStringUTF(e, k)
+                    int vw = (*e)->CallIntMethod(e, of, gi, KEY("width")), vh = (*e)->CallIntMethod(e, of, gi, KEY("height"));
+                    if (!failed("format size") && (*e)->CallBooleanMethod(e, of, ck, KEY("crop-right")) && !failed("crop")) {
+                        vw = (*e)->CallIntMethod(e, of, gi, KEY("crop-right")) - (*e)->CallIntMethod(e, of, gi, KEY("crop-left")) + 1;
+                        vh = (*e)->CallIntMethod(e, of, gi, KEY("crop-bottom")) - (*e)->CallIntMethod(e, of, gi, KEY("crop-top")) + 1;
+                        failed("crop size");
+                    }
+                    #undef KEY
+                    if (vw > 0 && vh > 0) {
+                        float va = (float)vw / (float)vh, la = (float)W / (float)H;
+                        if (va > la) { sx = la / va; sy = 1; } else { sx = 1; sy = va / la; }
+                        say("the picture is %dx%d", vw, vh);
+                    }
+                }
+                continue;
+            }
+            if (o < 0) break;                                   /* -1 none yet, -3 buffers */
+            (*e)->CallVoidMethod(e, codec, rel, o, JNI_TRUE);
+            if (failed("releaseOutputBuffer")) { rc = 4; goto done; }
+            if (gl) {
+                long long at = first_at ? now_ms() - first_at : 0;
+                float k = blur_ms <= 0 ? 0 : at >= blur_ms ? 0 : at <= blur_ms - FROST_FADE ? 1 : (float)(blur_ms - at) / FROST_FADE;
+                int d = gl_draw(&g, &last_ts, sx, sy, self, k);
+                if (d < 0) { rc = 4; goto done; }
+                drawn |= d;
+            } else drawn = 1;
+            if (!out++) { say("first picture %lld ms after the start", now_ms() - t0); first_at = now_ms(); }
+        }
+        /* shown once there is a picture: no black flash; without GL a frosted one only once its frost is over */
+        if (out && drawn && !shown && (gl || !blur_ms || now_ms() - first_at >= blur_ms)) {
+            (*e)->CallStaticVoidMethod(e, scc, op);
+            if (!failed("openTransaction")) { (*e)->CallVoidMethod(e, sc, m_show); failed("show"); (*e)->CallStaticVoidMethod(e, scc, cl); failed("closeTransaction"); }
+            shown = 1; awake(1); kept = now_ms();
+        }
+        if (shown && now_ms() - kept >= 10000) { awake(0); kept = now_ms(); }
+    }
+done:
+    (*e)->CallStaticVoidMethod(e, scc, op);
+    if (!failed("openTransaction")) { (*e)->CallVoidMethod(e, sc, m_hide); failed("hide"); (*e)->CallStaticVoidMethod(e, scc, cl); failed("closeTransaction"); }
+    (*e)->CallVoidMethod(e, codec, (*e)->GetMethodID(e, mcc, "stop", "()V")); failed("MediaCodec.stop");
+    (*e)->CallVoidMethod(e, codec, (*e)->GetMethodID(e, mcc, "release", "()V")); failed("MediaCodec.release");
+    if (gl) gl_end(&g);
+    say("picture ended: %ld records in, %ld pictures shown, %ld dropped", in, out, dropped);
+    return rc;
+}
+
 static void *run(void *arg)
 {
     (void)arg; int rc = 3;
@@ -188,6 +528,7 @@ static void *run(void *arg)
     if ((*vm)->AttachCurrentThread(vm, &e, NULL)) exit(2);
     signal(SIGPIPE, SIG_IGN);                   /* hassmic gone: write() fails, the camera is let go below */
     int W = env_int("HMCAM_W", 1280), H = env_int("HMCAM_H", 720), fps = env_int("HMCAM_FPS", 15), kbps = env_int("HMCAM_KBPS", 1500);
+    if (getenv("HMCAM_MODE") && !strcmp(getenv("HMCAM_MODE"), "play")) { rc = play(); say("stopped (%d)", rc); exit(rc); }
 
     jclass lc = (*e)->FindClass(e, "android/os/Looper");
     if (failed("Looper")) exit(2);
