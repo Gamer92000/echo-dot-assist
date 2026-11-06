@@ -18,6 +18,7 @@
 #include "audio.h"
 #include "core.h"
 #include "afe_parcel.h"
+#include "board.h"
 #include "btout.h"
 #include "statefile.h"
 #include <stdatomic.h>
@@ -593,9 +594,11 @@ void (*audio_earcon_started)(unsigned lead_ms);
 
 /* The output is closed after ~3 s without audio and opening it takes ~170 ms (AudioALSAPlaybackHandlerNormal: open
  * pcm 27.644 -> 27.811) plus the speaker amplifier switching on: the 120 ms wake blip, written to a cold output, was
- * never heard (2026-10-14; the 0.5 s mute sounds were, clipped).  A cold earcon starts after this much silence. */
+ * never heard (2026-10-14; the 0.5 s mute sounds were, clipped).  A cold earcon starts after board.cold_lead_ms of
+ * silence, LEAD_MS where the model sets none; the buffer holds LEAD_MAX_MS at 48 kHz and a larger value is cut to it. */
 #define COLD_MS 2500
 #define LEAD_MS 350
+#define LEAD_MAX_MS 1000
 
 void play_earcon(const short *pcm, size_t samples, unsigned rate) { play_earcon_while(pcm, samples, rate, always); }
 void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go)(void))
@@ -609,10 +612,11 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
     size_t len = samples * 2;
     unsigned lead_ms = 0;
     if (now_ms() - atomic_load(&last_out) > COLD_MS) {
-        static short lead[48000 * LEAD_MS / 1000];
-        size_t n = (size_t)rate * LEAD_MS / 1000 < sizeof lead / 2 ? (size_t)rate * LEAD_MS / 1000 : sizeof lead / 2;
+        static short lead[48000 * LEAD_MAX_MS / 1000];
+        unsigned ms = board.cold_lead_ms <= 0 ? LEAD_MS : board.cold_lead_ms > LEAD_MAX_MS ? LEAD_MAX_MS : (unsigned)board.cold_lead_ms;
+        size_t n = (size_t)rate * ms / 1000 < sizeof lead / 2 ? (size_t)rate * ms / 1000 : sizeof lead / 2;
         if (s_write(&earcon, lead, n * 2) == 0) lead_ms = (unsigned)(n * 1000 / rate);
-        end += LEAD_MS;
+        end += ms;
     }
     while (len && go()) {
         size_t n = len < earcon.slot ? len : earcon.slot;

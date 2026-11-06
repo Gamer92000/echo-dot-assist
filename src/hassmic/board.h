@@ -56,6 +56,11 @@ struct board {
      * it (tools/vol-curve.py measures an Android Echo's with a Dot beside it).  Until someone has, board_vol_dot2 stands
      * in, with a comment saying so; make unit-volcurve lists the models where it still does (devices/README.md) */
     const struct board_vol { int at; float db; } *volume_curve;
+    /* silence played ahead of a sound on a cold output (audio_android.c: nothing of ours played for 2.5 s), ms; 0: 350,
+     * at most 1000.  The output opens and the amplifier unmutes while the first of it goes by: the Echo Show 8's 120 ms
+     * wake blip, written cold, was never heard (2026-10-14, #45).  athena's sounds came whole with 200 by ear (#34,
+     * 2026-10-15): set per model after a listen on it */
+    int cold_lead_ms;
 
     /* speaker gain (spkgain.c): an ALSA control of card 0 that sets the speaker amplifier's analog gain, which the
      * settings page may raise; NULL: none.  stock: what the speaker plays at on a stock Echo (what the audio HAL's

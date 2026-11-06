@@ -3013,7 +3013,9 @@ Run in this order. Each step says what it proves.
       `audio_android.c` lead-in of 350 ms after 2.5 s without audio (`COLD_MS`, `LEAD_MS`); the blip after it to be
       confirmed by ear (a longer sound of our own was heard after it, 2026-10-15).  2026-10-17: the lead-in
       reached earsup as part of the echo delay (85 ms + 350 > `D_MAX` 400 ms): `audio_earcon_started(lead_ms)` moves its
-      start past it.
+      start past it.  2026-11-06 (GitHub issue #75): the lead-in is `board.cold_lead_ms` (0: `LEAD_MS` 350, at most
+      `LEAD_MAX_MS` 1000), so a model can have less after a listen (athena sounded whole with 200 by ear, #34); every
+      model still has 350, none listened to yet.
       Screen UI (2026-11-03, PC only): `SCREEN` in device.mk; the JNI table found on NS6570's boot class path as is;
       1280 x 800 at rotation 1 (`user_rotation`; `ro.sf.hwrotation` 90 only MediaTek's hwcomposer and magd read, below
       Android: the band laid out by DisplayInfo was right), FocalTech touch; the layout
@@ -3077,7 +3079,7 @@ Run in this order. Each step says what it proves.
       volume: 115, 120 and 122 clean on a radio stream, 130 distorted, a rap track's bass clipped at 122, so
       `speaker_gain_limit` 118 and `speaker_gain_steps` 2 (0.5 dB assumed) = up to +9 dB.  The audio HAL did not rewrite it
       after a voice reply or at a change of the setting.  Sounds: a cold output = ~575 ms until the HAL pulls the first
-      buffer (the amplifier unmuting) + `LEAD_MS` (350, as crown).
+      buffer (the amplifier unmuting) + `board.cold_lead_ms` (350 by default, as crown).
       Mute button: `gpio-privacy` reports the latch 1.23/1.29 s after a press that mutes, 0.28 s unmuting
       (`enable-gpio-toggle-duration` 1000 ms); `board.privacy_button` (`gpio-privacy-button`, not grabbed) shows the press at
       once, the latch confirms it within `privacy_settle_ms` (2000) or it is taken back (`buttons_privacy_test`).
