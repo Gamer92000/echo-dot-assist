@@ -18,7 +18,7 @@ python3 scripts/otatool.py pack "$1" "$2" $OUT/hassmic.bundle \
     scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh scripts/device/artifact-install.sh scripts/device/apps.sh scripts/device/wifi.sh \
     $([ -z "$HOME_APK" ] || echo scripts/device/$HOME_APK:644) \
     $([ -n "$ANDROID" ] && echo scripts/device/wifictl.dex:644) $([ -n "$SCREEN_BAND" ] && echo scripts/device/ringbar.dex:644) \
-    $([ ! -f $OUT/libhmui.so ] || echo $OUT/libhmui.so:644 scripts/device/screen.dex:644)
+    $([ ! -f $OUT/libhmui.so ] || echo $OUT/libhmui.so:644 scripts/device/screen.dex:644) $([ ! -f $OUT/libhmcam.so ] || echo $OUT/libhmcam.so:644)
 # wifictl: WifiService's client (wifi.sh), Android models only (device.conf ANDROID); ringbar: the light band's renderer
 # (ring_band.c, SCREEN_BAND); HOME_APK: the home screen (sysinstall.sh); libhmui.so + screen.dex: the screen's UI
 # (screen.c), where the model has one (device.mk SCREEN)

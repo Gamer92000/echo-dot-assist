@@ -12,6 +12,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-04
 
+- **The Echo Show 5's camera in Home Assistant**, through the Echo Local integration: live on dashboards, recordings,
+  stills. Off by default (Features on the settings page, or the camera's own switch in Home Assistant). It runs only
+  while someone looks, a red dot in the screen's corner shows meanwhile, the lens cover stops it, and the video goes
+  encrypted to Home Assistant alone. [The guide](docs/GUIDE.md#camera-echo-show) has the rest.
+
 - **The Echo's own voice (Echo Show 5).** Fire OS's offline voice engine (Ivona, which its image carries without a
   voice) speaks on the Echo once a voice is installed (`tools/davs-fetch.py tts` fetches one; docs/re-ivona.md). With
   it the Echo says **what went wrong** when a request fails, as stock Alexa did, instead of only a red light ("Sorry,

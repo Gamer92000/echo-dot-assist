@@ -30,7 +30,8 @@ HA_PORT, ARB = 18123, 28996
 HA = f"http://127.0.0.1:{HA_PORT}"
 # what Home Assistant sets up here besides what it always does (bootstrap.py); their requirements go into the venv
 CONFIGURED = ["api", "config", "onboarding", "conversation", "automation", "esphome", "assist_satellite",
-              "google_translate"]                     # onboarding sets up its TTS
+              "google_translate",                     # onboarding sets up its TTS
+              "stream"]                               # tests/ha_real_camera.py: HLS of Echo Local's camera (PyAV)
 
 
 def check(cond, what):

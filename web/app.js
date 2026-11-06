@@ -390,6 +390,13 @@ const HELP = {
   request_text: { icon: 'whisper', ha: ['Last heard', 'Last reply'], help: 'Two text sensors in Home Assistant: what speech-to-text understood of your last request, and what the assistant answered. For a dashboard beside the Echo, or an automation on a word it keeps mishearing. Both are cleared when a new request starts, so saying the same thing twice still counts as a change. Home Assistant takes at most 255 characters per state: a longer reply ends in "…".',
     note: 'Home Assistant keeps every request and reply in its history while this is on.' },
   whisper_detection: { icon: 'whisper', ha: ['Last request whispered'], help: 'Tells whether your last request was whispered, before speech-to-text finishes. Use it in your conversation agent\'s prompt to have it answer quietly.' },
+  camera: { icon: 'eye', ha: ['Camera (Echo Local)'], help: 'The Echo\'s camera as a camera in Home Assistant, for dashboards and recordings. It needs the Echo Local integration: the video goes to Home Assistant alone, encrypted with the key the integration shares with this Echo, never to anything else on your network. The camera runs only while someone in Home Assistant looks, and a red dot in the corner of the screen shows meanwhile, over any app. Close the lens cover and it stops at once, whatever is switched on here. The microphone button does not cover the camera.',
+    note: 'A dashboard card that shows the camera\'s picture keeps the camera on as long as the dashboard is open.',
+    status: () => {
+      const c = state.camera; if (!c || !c.on) return null;
+      if (c.covered === 1) return h('p', { class: 'f-model' }, 'The lens cover is closed: no picture until you open it.');
+      return c.streaming ? h('p', { class: 'f-model' }, icon('eye'), h('span', {}, 'Home Assistant is watching now.')) : null;
+    } },
   wifi_motion: { icon: 'wifi', tag: 'Experimental', ha: ['Wi-Fi motion', 'Wi-Fi motion sensitivity'], help: 'A motion sensor without extra hardware. Someone walking between the Echo and your Wi-Fi router changes how the Echo receives the router. It shows motion, not presence, sees best along that path, and other Wi-Fi traffic can set it off.' },
   wifi_motion_sensitivity: { parent: 'wifi_motion', help: 'How much the signal has to change to count as motion. Higher catches more, with more false alarms.' },
   light_sensor: { icon: 'sun', ha: ['Illuminance'], help: 'The room\'s light in lux from the Echo\'s light sensor, for automations. With this on, "LED brightness" in Home Assistant also follows the ring while auto brightness moves it, which puts an entry in its logbook every few minutes. Off, auto brightness works the same; Home Assistant only sees the levels you set.' },
@@ -457,6 +464,7 @@ const SUB = {
   wake_events: 'An event each time this Echo hears its wake word',
   request_text: 'What was heard and answered, as two text sensors',
   whisper_detection: 'Tells Home Assistant when a request was whispered',
+  camera: 'The Echo\'s camera in Home Assistant, through Echo Local',
   wifi_motion: 'A motion sensor from changes in the Wi-Fi signal',
   wifi_motion_sensitivity: 'Higher catches more, with more false alarms',
   light_sensor: 'The room\'s light in lux, for automations',

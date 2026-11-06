@@ -184,6 +184,7 @@ jobs:
             build/${{ matrix.device }}/pryon_test
             build/${{ matrix.device }}/*.ko
             build/${{ matrix.device }}/libhmui.so
+            build/${{ matrix.device }}/libhmcam.so
           if-no-files-found: error
 
   test:

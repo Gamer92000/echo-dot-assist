@@ -1,17 +1,26 @@
 """The Echo's settings page API (src/hassmic/web.c), as a browser speaks it: an X25519 key approved once with the Echo's
 action button, every request and answer signed with BLAKE2b keyed from the shared secret.  Plain HTTP on the LAN
-(port 28931); nothing secret ever travels, the signatures keep others from acting or answering in the Echo's name."""
+(port 28931); nothing secret ever travels, the signatures keep others from acting or answering in the Echo's name.
+The camera's video is the exception, and it travels sealed with a key of its stream's (camera_stream)."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import struct
 import time
+from collections.abc import AsyncIterator
 
 import aiohttp
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
 
 DEFAULT_PORT = 28931
+# camera.h's record types
+CAM_CONFIG, CAM_KEY, CAM_FRAME = 1, 2, 3
+CAM_REC_MAX = 4 << 20
 
 
 class EchoError(Exception):
@@ -201,3 +210,65 @@ class Echo:
                 k, _, v = line.partition("=")
                 out[k.strip()] = v.strip()
         return out
+
+    # ---------------------------------------------------------------- the camera (camera.h, docs/camera.md)
+
+    async def camera(self) -> dict:
+        """{"present", "on", "covered", "streaming"}: present 0 where the Echo has none (an Echo Dot); 404 from older builds"""
+        return json.loads(await self.call("GET", "/api/camera"))
+
+    def _signed_headers(self, method: str, path: str) -> tuple[int, dict]:
+        ctr = self._counter()
+        mac = hashlib.blake2b(f"{method}\n{path}\n{ctr}\n".encode(), key=self.k, digest_size=16).hexdigest()
+        return ctr, {"X-HM-Pub": self.pub.hex(), "X-HM-Ctr": str(ctr), "X-HM-Mac": mac}
+
+    async def camera_stream(self) -> AsyncIterator[tuple[int, int, bytes]]:
+        """(type, pts in us, H.264 in Annex B) until the Echo ends the stream (the camera switched off, the lens
+        covered, the process gone) or the caller stops iterating.  web.c camera_api: the head signed over the server's
+        nonce, every record sealed with SK = BLAKE2b-256 keyed with K over "hassmic camera 1\n" ctr "\n" nonce, as
+        ChaCha20-Poly1305 with noise.c's nonce (4 zero bytes, the record's number, 8 little-endian ones) and the
+        record's length as associated data.  EchoError("busy") when another viewer has it, ("off"), ("covered")."""
+        if self.k is None:
+            await self.get_hello()
+        ctr, headers = self._signed_headers("GET", "/api/camera/stream")
+        try:
+            r = await self.session.get(self.base + "/api/camera/stream", headers=headers,
+                                       timeout=aiohttp.ClientTimeout(total=None, connect=10, sock_read=15))
+        except (aiohttp.ClientError, TimeoutError) as e:
+            raise EchoError(f"{self.host}: {e}") from e
+        try:
+            if r.status != 200:
+                data = await r.read()
+                if r.status == 401:
+                    raise EchoAuthError(f"{self.host}: not logged in")
+                try:
+                    why = json.loads(data).get("error", "")
+                except ValueError:
+                    why = ""
+                raise EchoError(why or f"/api/camera/stream: {r.status}")
+            nonce = r.headers.get("X-HM-Nonce", "")
+            want = hashlib.blake2b(f"RESP\n{ctr}\n".encode() + nonce.encode(), key=self.k, digest_size=16).hexdigest()
+            if len(nonce) != 32 or r.headers.get("X-HM-Mac") != want:
+                raise EchoError(f"{self.host}: a camera stream without the Echo's signature")
+            sk = hashlib.blake2b(f"hassmic camera 1\n{ctr}\n".encode() + bytes.fromhex(nonce), key=self.k, digest_size=32).digest()
+            aead, seq = ChaCha20Poly1305(sk), 0
+            while True:
+                try:
+                    head = await r.content.readexactly(4)
+                except asyncio.IncompleteReadError:
+                    return                                  # the Echo ended it
+                n = struct.unpack("<I", head)[0]
+                if n < 9 + 16 or n > CAM_REC_MAX:
+                    raise EchoError(f"{self.host}: a camera record of {n} bytes")
+                try:
+                    pt = aead.decrypt(b"\0\0\0\0" + struct.pack("<Q", seq), await r.content.readexactly(n), head)
+                except InvalidTag as e:
+                    raise EchoError(f"{self.host}: a camera record not sealed by the Echo") from e
+                except asyncio.IncompleteReadError:
+                    return
+                seq += 1
+                yield pt[0], struct.unpack_from("<Q", pt, 1)[0], pt[9:]
+        except (aiohttp.ClientError, TimeoutError) as e:
+            raise EchoError(f"{self.host}: {e}") from e
+        finally:
+            r.close()

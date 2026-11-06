@@ -1,4 +1,5 @@
 #include "buttons.h"
+#include "camera.h"
 #include "board.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -139,6 +140,8 @@ static void *reader(void *arg)
             if (r == 0 || (r < 0 && errno == EINTR)) continue;             /* woke for a stage: looked at above */
         }
         if (read(rfd, &ev, sizeof ev) != sizeof ev) break;
+        /* the Echo Show's lens cover (gpio-keys, grabbed: Android never sees it), docs/camera.md */
+        if (ev.type == EV_SW && ev.code == SW_CAMERA_LENS_COVER) { camera_lens(ev.value != 0); continue; }
         if (ev.type != EV_KEY) continue;
         now = now_ms();
         switch (ev.code) {
@@ -236,6 +239,15 @@ static void grab(int fd, const char *dev)
     else if (board.grab_keys) fprintf(stderr, "buttons: %s grabbed: its keys reach nothing else\n", dev);
 }
 
+/* The lens cover's state at start, where the keypad has the switch (EVIOCGSW); changes come as EV_SW events */
+static void lens_state(int fd)
+{
+    unsigned long bits[(SW_MAX + 8 * sizeof(long)) / (8 * sizeof(long))] = { 0 }, sw[sizeof bits / sizeof bits[0]] = { 0 };
+    const size_t L = 8 * sizeof(long);
+    if (ioctl(fd, EVIOCGBIT(EV_SW, sizeof bits), bits) < 0 || !(bits[SW_CAMERA_LENS_COVER / L] >> (SW_CAMERA_LENS_COVER % L) & 1)) return;
+    if (ioctl(fd, EVIOCGSW(sizeof sw), sw) >= 0) camera_lens(sw[SW_CAMERA_LENS_COVER / L] >> (SW_CAMERA_LENS_COVER % L) & 1);
+}
+
 int buttons_start(const char *device, const struct button_handler *h)
 {
     pthread_t t; int pfd, f2;
@@ -245,6 +257,7 @@ int buttons_start(const char *device, const struct button_handler *h)
     int f1 = open_input(device);
     if (f1 < 0) return -1;
     grab(f1, device);
+    lens_state(f1);
     if (board.keypad2 && (f2 = open_input(board.keypad2)) >= 0) {   /* keys split over two nodes (biscuit) */
         grab(f2, board.keypad2);
         if (pthread_create(&t, NULL, reader, (void *)(long)f2)) close(f2);

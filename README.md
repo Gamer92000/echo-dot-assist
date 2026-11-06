@@ -65,6 +65,7 @@ with a clock (36EBT3) is another model, and not supported. Every other Echo, and
 | Sound detection (smoke alarm, glass, …) | Alexa Guard, checked in the cloud | [on the Echo](docs/GUIDE.md#sound-detection), less reliable |
 | Whisper detection                       | answers in a whisper           | [a sensor](docs/GUIDE.md#whisper-detection) for your conversation agent |
 | Motion sensor                           | –                              | [from the Wi-Fi signal](docs/GUIDE.md#wi-fi-motion), experimental |
+| Echo Show's camera in Home Assistant    | Alexa app (Home Monitoring)    | [live, encrypted, only while watched](docs/GUIDE.md#camera-echo-show) (Echo Local) |
 | Wi-Fi setup from a phone                | Alexa app                      | [Home Assistant app](docs/GUIDE.md#setting-up-from-a-phone) |
 | Talks to Amazon                         | always                         | **never** (firewalled)                                |
 | Updates                                 | from Amazon, automatic         | [signed](#updating): from your PC, or from Home Assistant |

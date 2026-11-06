@@ -8,6 +8,7 @@
 
 struct board {
     int kiosk;                      /* device.conf has KIOSK_PACKAGE: the Kiosk Satellite settings exist */
+    int camera;                     /* a camera hassmic streams (camera.h; device.mk CAMERA builds libhmcam.so) */
     /* identity towards Home Assistant and Music Assistant */
     const char *model;              /* ESPHome device info "model", Wyoming description */
     const char *project;            /* ESPHome "project_name" */

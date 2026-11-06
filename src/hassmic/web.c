@@ -69,6 +69,7 @@
 #include <ctype.h>
 #include "mass.h"
 #include "screen.h"
+#include "camera.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
@@ -536,6 +537,7 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
         n = app(o, n, cap, ",\"dropin\":{\"state\":\"%s\",\"peer\":\"%s\",\"result\":\"%s\",\"attempt\":%u}",
                               dropin_states[st], peer, res >= 0 ? dropin_results[res] : "", at); }   /* peer: a node, [a-z0-9-] */
     n = app(o, n, cap, ",\"wifi\":"); n += wifi_current_json(o + n, cap - n);
+    if (camera_present()) { n = app(o, n, cap, ",\"camera\":"); n += camera_json(o + n, cap - n); }
     if (screen_present()) {                                       /* the screen: its home app, its music pages */
         n = app(o, n, cap, ",\"screen\":"); n += screen_status_json(o + n, cap - n);
         n = app(o, n, cap, ",\"mass\":"); n += mass_status_json(o + n, cap - n);
@@ -1210,6 +1212,65 @@ static void log_api(int fd, struct req *r)
     free(t);
 }
 
+/* The camera's H.264 (camera.h, docs/camera.md), for the Echo Local integration: a signed GET, then records until the
+ * stream ends or the viewer goes.  The body has no end, so no X-HM-Mac over it (respond_s): the answer's head is signed
+ * over the server's nonce instead, and every record is sealed with a key of this stream's,
+ *     SK = BLAKE2b-256 keyed with K over "hassmic camera 1\n" <counter> "\n" <nonce, 16 bytes>
+ * as ChaCha20-Poly1305 (IETF, noise.c's nonce: 4 zero bytes, the record's number as 8 little-endian ones):
+ *     length u32 LE (of what follows) | ciphertext | tag 16      the length as associated data
+ *     plaintext: type u8 (camera.h CAM_*) | pts u64 LE (us) | H.264 (Annex B)
+ * The video is K's alone on the LAN; the signed request (fresh counter) is what lets the camera on.  A failed send is
+ * the viewer gone: the camera stops with it. */
+static void camera_api(int fd, const struct req *r)
+{
+    uint8_t pub[32], k[32], sk[32], nonce[16], mac[16]; char nh[33], mh[33], h[600]; const char *why = "";
+    crypto_blake2b_ctx ctx; int bad;
+    if (!signed_ok(r, 0) || unhex(pub, r->pub, 32)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    int id = camera_begin(&why);
+    if (id < 0) { char o[64]; snprintf(o, sizeof o, "{\"error\":\"%s\"}", why); respond_sjson(fd, r, 409, o); return; }
+    pthread_mutex_lock(&lk); bad = session_key(k, pub); pthread_mutex_unlock(&lk);
+    if (bad) { camera_end(id); respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    ws_random(nonce, sizeof nonce); hex(nh, nonce, 16);
+    crypto_blake2b_keyed_init(&ctx, 32, k, 32);
+    crypto_blake2b_update(&ctx, (const uint8_t *)"hassmic camera 1\n", 17);
+    crypto_blake2b_update(&ctx, (const uint8_t *)r->ctr, strlen(r->ctr)); crypto_blake2b_update(&ctx, (const uint8_t *)"\n", 1);
+    crypto_blake2b_update(&ctx, nonce, 16);
+    crypto_blake2b_final(&ctx, sk);
+    crypto_blake2b_keyed_init(&ctx, 16, k, 32);                 /* the head: respond_s's MAC, the nonce as its body */
+    crypto_blake2b_update(&ctx, (const uint8_t *)"RESP\n", 5);
+    crypto_blake2b_update(&ctx, (const uint8_t *)r->ctr, strlen(r->ctr)); crypto_blake2b_update(&ctx, (const uint8_t *)"\n", 1);
+    crypto_blake2b_update(&ctx, (const uint8_t *)nh, 32);
+    crypto_blake2b_final(&ctx, mac); crypto_wipe(k, sizeof k); hex(mh, mac, 16);
+    int hn = snprintf(h, sizeof h, "HTTP/1.1 200 OK\r\nContent-Type: application/x-hassmic-camera\r\nConnection: close\r\nCache-Control: no-store\r\n"
+                      "X-HM-Nonce: %s\r\nX-HM-Mac: %s\r\n\r\n", nh, mh);
+    int t; long long pts; uint8_t *d = NULL; size_t len; unsigned long long seq = 0; int sent = 0;
+    if (send_all(fd, h, (size_t)hn)) goto done;
+    for (;;) {
+        int g = camera_next(id, &t, &pts, &d, &len, 1000);
+        if (g < 0) break;
+        if (!g) continue;
+        size_t pl = 9 + len, rl = 4 + pl + 16; uint8_t *rec = malloc(rl), *pt = malloc(pl);
+        if (!rec || !pt) { free(rec); free(pt); free(d); break; }
+        pt[0] = (uint8_t)t;
+        for (int i = 0; i < 8; i++) pt[1 + i] = (uint8_t)((unsigned long long)pts >> (8 * i));
+        memcpy(pt + 9, d, len); free(d); d = NULL;
+        for (int i = 0; i < 4; i++) rec[i] = (uint8_t)((pl + 16) >> (8 * i));
+        uint8_t n12[12] = { 0 }; crypto_aead_ctx a;
+        for (int i = 0; i < 8; i++) n12[4 + i] = (uint8_t)(seq >> (8 * i));
+        crypto_aead_init_ietf(&a, sk, n12);
+        crypto_aead_write(&a, rec + 4, rec + 4 + pl, rec, 4, pt, pl);
+        crypto_wipe(&a, sizeof a); seq++;
+        int f = send_all(fd, rec, rl);
+        free(rec); free(pt);
+        if (f) break;
+        sent++;
+    }
+done:
+    crypto_wipe(sk, sizeof sk);
+    camera_end(id);
+    fprintf(stderr, "web: camera stream closed after %d records\n", sent);
+}
+
 /* Online updates come from GitHub: a line of BODY that switches them on (from off) counts only once this Echo reached
  * it (update_probe), else it is turned into a comment and WHY says what failed.  Imports go the same way.  Before
  * core_lock: the probe takes up to 15 s. */
@@ -1364,6 +1425,12 @@ static void handle(int fd)
     else if (!strcmp(r.path, "/api/kiosk")) kiosk_api(fd, &r);
     else if (!strcmp(r.path, "/api/apps") || !strncmp(r.path, "/api/apps/", 10)) apps_api(fd, &r);
     else if (!strcmp(r.method, "GET") && !strncmp(r.path, "/api/log/", 9)) log_api(fd, &r);
+    else if (!strcmp(r.method, "GET") && !strcmp(r.path, "/api/camera/stream")) camera_api(fd, &r);
+    else if (!strcmp(r.method, "GET") && !strcmp(r.path, "/api/camera")) {     /* what the integration's entity shows */
+        char o[128];
+        if (!signed_ok(&r, 0)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
+        camera_json(o, sizeof o); respond_sjson(fd, &r, 200, o);
+    }
     else respond_json(fd, 404, "{\"error\":\"not found\"}");
     free(r.body);
 }

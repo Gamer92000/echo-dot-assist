@@ -1,7 +1,8 @@
 /* buttons.c on a board without an action button (board.action_combo, checkers): both volume keys pressed together and
  * let go quickly are the action button's press; held 2 s they pair; one after the other they are volume steps (on
  * release, with an event each for Home Assistant), pressed far apart or held they are neither.  A pair is never a volume
- * step or an event of its own.  Events through a FIFO, as the keypad would deliver them.
+ * step or an event of its own.  The Echo Show's lens cover (EV_SW SW_CAMERA_LENS_COVER on the same keypad) goes to the
+ * camera (camera.h camera_lens).  Events through a FIFO, as the keypad would deliver them.
  *   buttons_test FIFO */
 #include "board.h"
 #include "buttons.h"
@@ -20,12 +21,20 @@ static void on_pair(void) { pairs++; }
 static void on_volume(int d) { if (d > 0) ups++; else downs++; }
 static void on_mute(int m) { (void)m; }
 static void on_event(int button, int hold) { (void)button; (void)hold; events++; }
+static atomic_int lens = -1, lens_calls;
+void camera_lens(int covered) { lens = covered; lens_calls++; }    /* camera.c's, which this test does not link */
 
 static int fd, fails;
 static void key(int code, int value)
 {
     struct input_event ev; memset(&ev, 0, sizeof ev);
     ev.type = EV_KEY; ev.code = code; ev.value = value;
+    if (write(fd, &ev, sizeof ev) != sizeof ev) perror("write");
+}
+static void sw(int code, int value)
+{
+    struct input_event ev; memset(&ev, 0, sizeof ev);
+    ev.type = EV_SW; ev.code = code; ev.value = value;
     if (write(fd, &ev, sizeof ev) != sizeof ev) perror("write");
 }
 static void check(int ok, const char *what) { printf("%s %s\n", ok ? "ok  " : "FAIL", what); if (!ok) fails++; }
@@ -67,5 +76,10 @@ int main(int argc, char **argv)
     key(KEY_VOLUMEUP, 0); key(KEY_VOLUMEDOWN, 0); settle();
     check(actions == 2 && pairs == 1, "held 1.3 s without repeats: neither");
     unlink(argv[1]);
+    int a0 = actions, e0 = events;
+    sw(SW_CAMERA_LENS_COVER, 1); settle();
+    check(lens == 1 && lens_calls == 1 && actions == a0 && events == e0, "the lens cover closed: the camera told, no key");
+    sw(SW_CAMERA_LENS_COVER, 0); settle();
+    check(lens == 0 && lens_calls == 2, "and opened again");
     return fails ? 1 : 0;
 }

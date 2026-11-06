@@ -67,6 +67,7 @@ FILES="$OUT/hassmic $OUT/runas $(ls $OUT/mixcap $OUT/mixplay $OUT/pryon_test $OU
 [ -n "$ANDROID" ] && FILES="$FILES scripts/device/wifictl.dex ${SCREEN_BAND:+scripts/device/ringbar.dex} ${HOME_APK:+scripts/device/$HOME_APK}"
 # the screen's UI where the model has one (device.mk SCREEN: the build made libhmui.so), as bundle.sh ships it
 [ ! -f $OUT/libhmui.so ] || FILES="$FILES $OUT/libhmui.so scripts/device/screen.dex"
+[ ! -f $OUT/libhmcam.so ] || FILES="$FILES $OUT/libhmcam.so"      # the camera (docs/camera.md), with screen.dex
 
 if [ -z "$TWRP" ]; then
     t "rm -rf $STAGE; mkdir -p $STAGE"

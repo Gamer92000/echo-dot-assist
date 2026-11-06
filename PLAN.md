@@ -3342,3 +3342,32 @@ Run in this order. Each step says what it proves.
       through HA's MP3.  `tests/fake_ha_own_voice.py` with a stand-in voice (`HASSMIC_FAKE_SPEECH`, speech_none.c).
       Open: the first sentence's latency on the Show 5 with a real LLM; the clash with a tts.speak to the same TTS
       entity during a streamed reply (taken for the reply: documented, not seen).
+- [x] The Echo Show's camera in Home Assistant through Echo Local (2026-11-04, checkers; docs/camera.md has the why).
+      `src/cam/cam.c` = `libhmcam.so`, loaded by `screen.dex` in an app_process of its own, hassmic's child only while
+      a stream runs (`camera.c`).  Camera1 by hand (package-private `Camera()`, an `EventHandler` on a Looper of the
+      thread, `native_setup(..., -2, "android")`: `Camera.open()` takes the package from ActivityThread, null in
+      app_process, and native_setup's GetStringChars aborts on null; "android" is uid system's, which AppOps wants);
+      preview straight into MediaCodec's input surface (`setPreviewSurface`, hidden), 1280x720 Baseline, 15 fps asked,
+      1.5 Mbit/s, a key frame a second.  Measured on checkers: native_setup 0.1-0.4 s, startPreview 0.2-0.4 s, first
+      H.264 0.5 s after it; 1.9-2.0 s from the request to the first record with the VM; ~1.04 Mbit/s and 10 fps in a
+      dark room (the HAL's exposure: the (15000,15000) range did not hold it at 15); hassmic 26.5 -> 28 % of a core
+      while it streams (sealing, copying), the camera process 1 %, load average 8.9 unchanged.  The stream is web.c's
+      `GET /api/camera/stream` on the settings page's port (no new port, no firewall change): signed request, head
+      signed over a server nonce, records sealed ChaCha20-Poly1305 with a key of the stream's.  One viewer (a second:
+      409 busy).  The lens cover: `SW_CAMERA_LENS_COVER` on gpio-keys (`getevent -lp`), read by `EVIOCGSW` at start and
+      as events (buttons.c `lens_state`), stops a stream.  The red dot: a SurfaceFlinger layer of the camera process
+      over the band's (2000000001), there before the first frame and gone with the process (hassmic always
+      starts it with `HMCAM_DOT=1`).  Echo Local: `camera.py` (relay on 127.0.0.1, one upstream for every
+      viewer, 10 s linger), `tsmux.py` (MPEG-TS with the Echo's pts: raw Annex B played at 25 fps in HA's stream),
+      stills through HA's ffmpeg.  `tests/fake_web_camera.py` (stand-in camera `tests/fake_camera.py`,
+      `testdata/camera_testsrc.h264`), `tests/ha_real_camera.py` (HA 2026.10.1: entity, on/off, a JPEG still from the
+      Echo's H.264).
+      HLS through HA's stream (PyAV 19, in build/ha-venv now: `stream` among --setup's integrations): parts of 0.93 s.
+      The dot fails closed (a step of it that fails ends the camera process, status 6) and wakes the screen
+      (IPowerManager wakeUp, userActivity every 10 s): seen OFF -> ON with the dot on checkers.
+      Open: WebRTC through go2rtc (not run here); the lens cover moved by hand (only its open state read so far); the
+      other Shows (`board.camera` 0 until tried); wake word detection while it streams measured only as CPU.
+      Found meanwhile on the same Show: `/dev/null` had become a regular file (0 bytes, `u:object_r:device:s0`, by
+      05:18 UTC; not hassmic's doing as far as the code goes: nothing renames onto it), and zygote aborted every app
+      start ("Failed to open /dev/null", Echo-Wall "keeps stopping"); `mknod -m 666 /dev/null c 1 3` + `chcon
+      u:object_r:null_device:s0` fixed it.  Cause open.

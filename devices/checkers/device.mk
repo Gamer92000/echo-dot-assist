@@ -11,6 +11,8 @@ LIBS    := libpryon.so libopus.so libz.so
 RING    := src/hassmic/ring_band.c
 # A screen: hassmic's fallback UI on it (a face, Music Assistant, an app switcher), src/ui/ in a process of its own
 SCREEN  := src/hassmic/screen.c
+# A camera (front, 1280x720): libhmcam.so streams it to the Echo Local integration (docs/camera.md)
+CAMERA  := 1
 # the Echo's own voice: Fire OS's offline Ivona engine through its app's JNI glue, dlopen'd (docs/re-ivona.md)
 SPEECH  := src/hassmic/speech_ivona.c
 # NDK system libraries the backend needs (not stock: no stubs for them)

@@ -908,6 +908,35 @@ change counts. Tried in one flat for a few minutes and one night, where it mostl
   on (within 10 s), then until the Echo restarts.
 - ESPHome only. It does not use the microphones; muting does not stop it.
 
+## Camera (Echo Show)
+
+Off by default. The Echo Show 5's camera as a camera in Home Assistant: live on dashboards, recordings, stills. Live
+view comes as HLS from Home Assistant's own stream integration (tested); WebRTC through its built-in go2rtc should
+work the same way, but nobody has tried it yet. It comes through the **Echo Local** integration (the same that brings the
+alarms and the screen's setup), not the ESPHome one, and only to it.
+
+- **Switch it on** under **Features** on the settings page ("Camera in Home Assistant"), or with the camera entity's
+  own on/off in Home Assistant. Echo Local adds the entity once its Echo has a camera; it is "idle" until someone looks.
+- **It runs only while someone looks**: a dashboard showing it live, a recording, a still. The Echo starts the camera
+  for them (about 2 s to the first picture) and stops it 10 s after the last one went.
+- **A red dot in the top right corner of the screen** shows while the camera sends pictures, over any app. The camera
+  cannot send without it: the dot belongs to the process that drives the camera.
+- **The lens cover** stops it at once, whatever is switched on; the entity says "lens covered" meanwhile. The
+  microphone button does **not** turn the camera off.
+- **Encrypted to Home Assistant alone**: the video is sealed with the key Echo Local shares with this Echo (the one the
+  action button approved). Nothing else on your network can watch, nor start the camera. Inside Home Assistant it is
+  handed on as plain video on 127.0.0.1 only; a go2rtc of your own on another machine cannot reach that.
+- **What it costs**: 1280x720 at 15 frames a second (fewer in a dark room), about 1 Mbit/s of Wi-Fi while it runs.
+  The Echo's hardware encodes it: 1 % of the processor for the camera and 1.5 % for hassmic sending it, measured on an
+  Echo Show 5.
+- A dashboard card that shows the camera's picture asks for a still every 10 s, which keeps the camera on as long as
+  the dashboard is open.
+- **One app at a time has the camera**: while another one holds it (Kiosk Satellite with "Kiosk Satellite camera" on,
+  say), a stream ends at once; the camera entity's `last_error` and the Echo's log say so.
+- Not in an export, so "make like this Echo" never switches a camera on elsewhere.
+
+Why Echo Local and not ESPHome's camera entity, which would have needed no integration: [docs/camera.md](camera.md).
+
 ## Settings page
 
 Works in Wyoming mode too; the "Web UI address" entity shows the address.

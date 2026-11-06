@@ -15,7 +15,7 @@ Docs: `README.md` (short user-facing overview with figures; every feature in det
 `scripts/setup.sh`; every Echo on Fire OS or Vega OS and its status in `devices/MODELS.md`), `DEVELOPMENT.md` (architecture, layout, tests, contributing), `PLAN.md` (phases, open issues, every measurement), `CHANGELOG.md`
 (user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-vad.md`, `re-a2dp-source.md`, `re-davs-login.md`, `wake-word-end.md` (where the request starts after the wake word: measurements on the speech
 corpus, tables generated into `wake-word-end/`), `re-checkers.md`, `re-athena.md`,
-`sendspin-digest.md`, `kiosk-satellite.md`: Kiosk Satellite next to hassmic on the Shows).
+`sendspin-digest.md`, `kiosk-satellite.md`: Kiosk Satellite next to hassmic on the Shows, `camera.md`: the Shows' camera through Echo Local, H.264 relayed encrypted, and why not ESPHome's camera).
 
 ## Build and test
 
@@ -102,6 +102,11 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_web_ring.py       # light ring designs: library, assignments, apply with the test as root,
                                              # the turned files -G makes, what plays, root failing, caps
 .venv/bin/python tests/fake_web_wifi.py       # Wi-Fi switch: sealed password, PSK, root's wifi.sh against a fake wpa_cli
+.venv/bin/python tests/fake_web_camera.py     # the camera (camera.c, GET /api/camera/stream) with a stand-in camera
+                                             # (tests/fake_camera.py): sealed records through Echo Local's api.py and
+                                             # tsmux.py, one viewer, refusals, the lens, the setting, not exported
+.venv/bin/python tests/ha_real_camera.py      # Echo Local's camera entity in a real HA: on/off, a still from the H.264,
+                                             # live view as HLS (PyAV: --setup installs stream's requirements)
 .venv/bin/python tests/fake_wifi_join.py      # checkers' setup join (wifi-join.sh) through a fake adb and WifiService
 .venv/bin/python tests/fake_web_mww.py        # microWakeWord: models added/edited/deleted from the page, engine switch,
                                              # real detections on testdata/alexa_espeak.raw, copy as an artifact
@@ -644,6 +649,18 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (group/ungroup where unknown), images from `/imageproxy/<proxy_id>?size=` (80/160/256/512, `fmt=jpeg`, the token
   along).  `json.c` is a token reader (no DOM copies, depth 64; `tests/unit/json_test.c` fuzzes it).
   `tests/fake_ma_api.py`: a stand-in MA server.
+- **Camera** (`camera.c`, `camera.h`, `src/cam/cam.c` = `libhmcam.so`; docs/camera.md): the Echo Show's camera to Echo
+  Local only (not ESPHome's MJPEG camera: why in docs/camera.md).  cam.c runs in an app_process of its own (screen.dex
+  loads it as libhmui.so), hassmic's child only while a stream runs: Camera1 opened by hand through JNI (`native_setup`
+  with package "android": app_process has no ActivityThread), preview into MediaCodec's input surface, records (20 byte
+  header "HMCV", type, length, pts) on stdout, stdin's end stops it; a red dot layer while pictures leave
+  (`HMCAM_DOT`).  `camera.c`: one viewer (a second is "busy"), setting `camera` (Features, off, not exported), the lens
+  cover (`camera_lens` from buttons.c: `SW_CAMERA_LENS_COVER`, `EVIOCGSW` at start) stops it; `board.camera` + device.mk
+  `CAMERA`.  web.c `GET /api/camera` (state) and `GET /api/camera/stream`: signed, the head signed over a nonce, records
+  sealed ChaCha20-Poly1305 with SK from K, counter and nonce.  Echo Local: `api.py` `camera_stream`, `camera.py` (relay on
+  127.0.0.1 with a token per start, one upstream for every viewer, 10 s linger; stills through HA's ffmpeg),
+  `tsmux.py` (MPEG-TS with the Echo's pts).  PC: `HASSMIC_FAKE_CAMERA` (a program writing cam.c's records),
+  `HASSMIC_FAKE_LENS` (a file, "1" covered).
 - **Light band** (`ring_band.c`, the Echo Show's `RING` in device.mk instead of `ring.c`): the same `ring.h` drawn as a
   band along the bottom of the screen, every pattern as the Dots' ring unrolled (12 virtual LEDs blended across the
   width, the talker's side in the middle; never turned: the Show's beam says too little, docs/re-checkers.md) plus

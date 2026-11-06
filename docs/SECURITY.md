@@ -65,6 +65,22 @@ closed even to someone who gets the network key later. The audio goes straight b
 Do not disturb and the microphone switches refuse calls; "Drop In answers: after the action button" makes every call
 wait for a press on the Echo called; "Drop In" off stops calls both ways.
 
+## Camera
+
+The Echo Show's camera ([guide](GUIDE.md#camera-echo-show), [design](camera.md)) is off by default, and only an
+approved client of the settings page can switch it on or watch: in practice the Echo Local integration, approved with
+the action button like a browser. A stream is a signed request with a fresh counter, so a recorded one does not start
+the camera again; the video is encrypted and authenticated (ChaCha20-Poly1305) with a key of that stream's, derived
+from the key that client shares with the Echo, so others on the network see only its size and timing. One viewer at a
+time: a second client asking meanwhile is refused rather than handed the camera. While pictures leave the Echo a red
+dot shows in the screen's corner, drawn by the process that drives the camera, over every app. The lens cover stops
+the camera at once (the Echo reads its switch, the image would be dark anyway); the microphone button does not.
+
+Inside Home Assistant, Echo Local hands the video on in the clear on 127.0.0.1, at a URL with a random token made at
+each start: other programs on the Home Assistant machine that learn that URL (its add-ons with host networking, say)
+can watch while it runs. Any approved browser of the settings page can switch the camera on as well: revoke the
+logins you no longer use (System page).
+
 ## Arbitration between Echos
 
 An Echo takes the network key only from an Echo Home Assistant vouches for, from Home Assistant over its encrypted API

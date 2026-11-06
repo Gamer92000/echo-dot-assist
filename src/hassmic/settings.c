@@ -1,3 +1,4 @@
+#include "camera.h"
 #include "settings.h"
 #include "board.h"
 #include "core.h"
@@ -71,7 +72,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 /* ---------------------------------------------------------------- the table */
 
 enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, VOICE, OWN_VOICE, ERR_SPEECH, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
-          WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
+          WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, CAMERA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
           ALARMS, ALARM_VOICE, ALARM_SOUND, ALARM_RING, ALARM_SNOOZE, ALARM_RAMP, ALARM_LOUDER, ALARM_KEYS, CLOCK_FMT,
@@ -164,6 +165,9 @@ static const struct setting table[NSET] = {
      * it lets an app record, so one Echo does not hand it to another) */
     [KIOSK_MIC]   = { "kiosk_mic", "Kiosk Satellite microphone", "System", NULL, S_BOOL, 0, 1, 0, 0 },
     [KIOSK_CAM]   = { "kiosk_camera", "Kiosk Satellite camera", "System", NULL, S_BOOL, 0, 1, 0, 0 },
+    /* camera.c: the Echo Show's camera to the Echo Local integration (docs/camera.md).  Not exported: a camera is
+     * switched on for one Echo in one room, never by "make like this Echo" */
+    [CAMERA]      = { "camera", "Camera in Home Assistant", "Features", NULL, S_BOOL, 0, 1, 0, 0 },
     [SS_UNPAIRED] = { "sendspin_unpaired", "Music Assistant without pairing", "Music", NULL, S_BOOL, 0, 1, 1, 0 },
     [EQ_BASS]     = { "equalizer_bass", "Equalizer bass", "Sound", "dB", S_INT, -6, 6, 1, 0 },
     [EQ_MID]      = { "equalizer_mid", "Equalizer mid", "Sound", "dB", S_INT, -6, 6, 1, 0 },
@@ -223,6 +227,7 @@ static int present(enum id i)
     case SPK_GAIN: return spkgain_present();
     case BAND: return ring_band_rows(-1) >= 0;
     case KIOSK_NET: case KIOSK_MIC: case KIOSK_CAM: return board.kiosk;
+    case CAMERA: return camera_present();
     case RING_ROT: return ring_band_rows(-1) < 0;                 /* LEDs to turn: the Dots' ring, not the band */
     default: return 1;
     }
@@ -321,6 +326,7 @@ int settings_get(const struct setting *s)
     case KIOSK_NET: return kiosk_net;
     case KIOSK_MIC: return kiosk_mic;
     case KIOSK_CAM: return kiosk_cam;
+    case CAMERA: return camera_enable(-1);
     case SS_UNPAIRED: return sendspin_unpaired(-1);
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: return core_eq((int)(s - table) - EQ_BASS);
     case BT_AUDIO: return bt_audio;
@@ -397,6 +403,7 @@ static void put(enum id i, int v)
     case KIOSK_NET: kiosk_net = v; break;
     case KIOSK_MIC: kiosk_mic = v; break;
     case KIOSK_CAM: kiosk_cam = v; break;
+    case CAMERA: camera_enable(v); break;
     case SS_UNPAIRED: sendspin_unpaired(v); break;              /* sendspin.c keeps it */
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: core_set_eq(i - EQ_BASS, v); break;     /* the mixer keeps it */
     case BT_AUDIO: bt_audio = v; if (!v) a2dp_pair(0); break;                        /* paired phones still connect */

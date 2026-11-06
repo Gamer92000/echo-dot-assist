@@ -15,6 +15,7 @@
 #define STATE  "build/buttons_privacy.state"
 #define BUTTON "build/buttons_privacy.button"
 const struct board board = { .privacy_state = STATE, .privacy_latch = 1, .privacy_button = BUTTON, .privacy_settle_ms = 1500 };
+void camera_lens(int covered) { (void)covered; }          /* camera.c's (buttons.c tells it the lens cover) */
 static atomic_int reports, last = -1;
 static void on_mute(int m) { reports++; last = m; }
 
