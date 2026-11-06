@@ -356,6 +356,31 @@ Assistant in between.
 voice. What it leaves would still come back to the other Echo, so an Echo sends its room only while someone there
 talks; while the other side talks it is turned down 25 dB. Two people talking at the same time work only if the
 one here is clearly louder than the echo of the other: as on a speakerphone, take turns.
+Whether someone here talks is decided by a speech detector (RNNoise), not by loudness: the Echo Show's microphone puts
+speech from across the room at its room's own noise level. **Quiet between words in calls** (settings page, under Drop
+In) sets how far the microphone goes down between them: Full (25 dB, the default), Light (10 dB: a little of the room's
+hiss in the pauses), or Off (the room all along, and the other side may hear itself faintly). It takes effect at once,
+in a running call too.
+
+### Drop In from Home Assistant (Echo Show)
+
+From a dashboard, with the Echo Local integration: the Echo Show's picture and sound in the browser, your
+microphone on the Echo. Add the card **Echo Drop In** (`type: custom:echo-local-call-card`, `entity:` the Echo's camera
+entity) and press **Drop In**.
+
+- **The Echo takes it like a Drop In from another Echo**: at once, or ringing until someone presses its button
+  ("Drop In answers"); Do not disturb, the microphone button and Drop In off refuse it. Its button, "stop" or "hang
+  up" ends it, as does **Hang up** in the card.
+- **The picture** comes while "Camera in Home Assistant" is on and the lens is open, with the red dot on the Echo's
+  screen; without it the call has sound only. A few hundred ms behind (the browser decodes the Echo's video itself),
+  where the camera entity's live view runs seconds behind.
+- **Your microphone starts muted** in every call: the button over the picture (bottom left) turns it on and off, so
+  nothing of your room reaches the Echo until you press it.
+- **Your microphone** needs Home Assistant opened over https (Nabu Casa, a proxy with a certificate) or in the
+  Companion app; otherwise the call is listen-only and the card says so. The picture needs a browser with WebCodecs
+  (Chrome, Edge, Safari 16.4 and later, the Companion app).
+- **Who may call**: anyone logged in to Home Assistant who sees the dashboard; not the Echos' own screens (the kiosk
+  users Echo Local makes). The call goes encrypted between Home Assistant and the Echo.
 
 ## Buttons and light ring
 

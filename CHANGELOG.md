@@ -12,6 +12,21 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-04
 
+- **Quiet between words in calls** (settings page, under Drop In): how far the Echo's microphone goes down in a call
+  while nobody near it talks. Full (as before), Light, or Off to hear the room all along.
+- **Drop In hears you from across the room on the Echo Show**: whether you are talking is now decided by a speech
+  detector (RNNoise) instead of by loudness. The Show's microphone puts speech at the level of its room's noise, so
+  only speech right into the Echo got through, in calls from Home Assistant and from other Echos alike. The noise of
+  the room is also taken down by up to 12 dB in calls.
+- **Drop In from Home Assistant sounds smoother**: the card buffers the Echo's sound briefly (60 ms) and fades over
+  gaps, where every late bit of audio was a pop. Your microphone starts **muted** in every call, with its button over
+  the picture. On the Echo, room noise no longer teaches the call's gain a "quiet talker", which lifted the next
+  sound in the room louder than speech. Echo Local 2026.11.19.
+- **Echo Local's cards in Firefox**: the alarm card and the Drop In card said "Configuration error" on every reload
+  of a dashboard in Firefox (the first load was fine; Chrome and the app were never affected). Echo Local 2026.11.18.
+- **Drop In on an Echo Show from a Home Assistant dashboard**: the card **Echo Drop In** (Echo Local) shows the Echo's
+  picture and plays its sound in the browser, and your microphone talks on the Echo, a few hundred ms behind. The
+  Echo answers it like a Drop In from another Echo. [The guide](docs/GUIDE.md#drop-in-from-home-assistant-echo-show).
 - **The Echo Show 5's camera in Home Assistant**, through the Echo Local integration: live on dashboards, recordings,
   stills. Off by default (Features on the settings page, or the camera's own switch in Home Assistant). It runs only
   while someone looks, a red dot in the screen's corner shows meanwhile, the lens cover stops it, and the video goes

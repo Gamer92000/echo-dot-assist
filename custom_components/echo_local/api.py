@@ -272,3 +272,99 @@ class Echo:
             raise EchoError(f"{self.host}: {e}") from e
         finally:
             r.close()
+
+    # ---------------------------------------------------------------- Drop In from Home Assistant (docs/video-dropin.md)
+
+    async def drop_in(self) -> "EchoCall":
+        """web.c GET /api/call: the connection becomes the call.  A plain socket, since aiohttp does not write into a
+        request whose answer it reads.  EchoError with the Echo's words when it refuses (busy, do not disturb, ...)."""
+        if self.k is None:
+            await self.get_hello()
+        ctr, headers = self._signed_headers("GET", "/api/call")
+        try:
+            reader, writer = await asyncio.wait_for(asyncio.open_connection(self.host, self.port), 10)
+            writer.write((f"GET /api/call HTTP/1.1\r\nHost: {self.host}:{self.port}\r\nContent-Length: 0\r\n" +
+                          "".join(f"{k}: {v}\r\n" for k, v in headers.items()) + "\r\n").encode())
+            await writer.drain()
+            head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 15)
+        except (OSError, TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError) as e:
+            raise EchoError(f"{self.host}: {e}") from e
+        lines = head.decode(errors="replace").split("\r\n")
+        status = int(lines[0].split()[1]) if len(lines[0].split()) > 1 else 0
+        h = {k.strip().lower(): v.strip() for k, _, v in (l.partition(":") for l in lines[1:] if ":" in l)}
+        if status != 200:
+            body = b""
+            try:
+                body = await asyncio.wait_for(reader.readexactly(int(h.get("content-length", "0"))), 5)
+            except (asyncio.IncompleteReadError, TimeoutError, ValueError):
+                pass
+            writer.close()
+            if status == 401:
+                raise EchoAuthError(f"{self.host}: not logged in")
+            try:
+                why = json.loads(body).get("error", "")
+            except ValueError:
+                why = ""
+            raise EchoError(why or f"/api/call: {status}")
+        nonce = h.get("x-hm-nonce", "")
+        want = hashlib.blake2b(f"RESP\n{ctr}\n".encode() + nonce.encode(), key=self.k, digest_size=16).hexdigest()
+        if len(nonce) != 32 or h.get("x-hm-mac") != want:
+            writer.close()
+            raise EchoError(f"{self.host}: a call without the Echo's signature")
+        key = lambda d: hashlib.blake2b(f"hassmic call 1 {d}\n{ctr}\n".encode() + bytes.fromhex(nonce), key=self.k, digest_size=32).digest()
+        return EchoCall(reader, writer, key("down"), key("up"))
+
+
+class EchoCall:
+    """One call (web.c call_api): recv() the Echo's records, ('S', state), ('A', 640 bytes of 16 kHz s16le) and
+    ('V', (type, pts us, H.264)) while the camera is on, None at the end; audio() a frame to play there (20 ms, sent all along: the call's keepalive); hangup()."""
+    FRAME = 640
+
+    def __init__(self, reader, writer, down: bytes, up: bytes):
+        self.reader, self.writer = reader, writer
+        self._down, self._up = ChaCha20Poly1305(down), ChaCha20Poly1305(up)
+        self._dseq = self._useq = 0
+        self.state = ""
+
+    async def recv(self):
+        try:
+            head = await self.reader.readexactly(4)
+            n = struct.unpack("<I", head)[0]
+            if n < 1 + 16 or n > CAM_REC_MAX + 32:          # ('V': a key frame, tens of kB)
+                raise EchoError(f"a call record of {n} bytes")
+            pt = self._down.decrypt(b"\0\0\0\0" + struct.pack("<Q", self._dseq), await self.reader.readexactly(n), head)
+        except (asyncio.IncompleteReadError, ConnectionError):
+            return None
+        except InvalidTag as e:
+            raise EchoError("a call record not sealed by the Echo") from e
+        self._dseq += 1
+        t = chr(pt[0])
+        if t == "S":
+            self.state = pt[1:].decode(errors="replace")
+            return ("S", self.state)
+        if t == "V" and len(pt) >= 10:
+            return ("V", (pt[1], struct.unpack_from("<Q", pt, 2)[0], pt[10:]))
+        return (t, pt[1:])
+
+    def _send(self, t: bytes, p: bytes = b"") -> None:
+        pt = t + p
+        head = struct.pack("<I", len(pt) + 16)
+        self.writer.write(head + self._up.encrypt(b"\0\0\0\0" + struct.pack("<Q", self._useq), pt, head))
+        self._useq += 1
+
+    async def audio(self, pcm: bytes) -> None:
+        if len(pcm) != self.FRAME:
+            raise ValueError("a frame is 320 samples")
+        self._send(b"A", pcm)
+        await self.writer.drain()
+
+    async def hangup(self) -> None:
+        try:
+            self._send(b"H")
+            await self.writer.drain()
+        except ConnectionError:
+            pass
+        self.close()
+
+    def close(self) -> None:
+        self.writer.close()

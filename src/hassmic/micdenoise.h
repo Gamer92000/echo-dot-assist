@@ -17,4 +17,13 @@ void micdenoise_reset(float max_db);
  * can be 0; out must hold n + MICDENOISE_FRAME.  out == NULL: only listen (to settle on the room before a command). */
 size_t micdenoise_run(const int16_t *in, size_t n, int16_t *out);
 float micdenoise_speech(void);          /* RNNoise's speech probability of the last frame, 0..1 */
+
+/* The same as an instance of its own (the functions above are the voice pipeline's): Drop In's mic, its gate deciding by
+ * the speech probability (dropin.c says why) */
+struct micdenoise;
+struct micdenoise *md_new(float max_db);
+void md_reset(struct micdenoise *d, float max_db);
+size_t md_run(struct micdenoise *d, const int16_t *in, size_t n, int16_t *out);
+float md_speech(const struct micdenoise *d);
+void md_free(struct micdenoise *d);
 #endif

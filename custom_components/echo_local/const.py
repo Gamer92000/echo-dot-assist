@@ -5,6 +5,7 @@ CONF_NODE = "node"
 CONF_MAC = "mac"
 SCAN_INTERVAL_S = 30
 CARD_URL = "/echo_local/echo-local-alarms-card.js"
+CALL_CARD_URL = "/echo_local/echo-local-call-card.js"     # Drop In from a dashboard (call.py)
 PANEL_PATH = "echo-local"                    # the sidebar panel (frontend/panel.js): /echo-local
 PANEL_URL = "/echo_local/panel.js"
 

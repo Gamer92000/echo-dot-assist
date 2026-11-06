@@ -13,6 +13,8 @@
  * noise, 2026-09-30): artefacts at 18 dB, fine at 6, 9 and 12, which became the three strengths. */
 #include "micdenoise.h"
 #include <math.h>
+#include <pthread.h>
+#include <stdlib.h>
 #include <string.h>
 #include "../third_party/rnnoise/rnnoise.h"
 
@@ -20,13 +22,17 @@
 #define F48 (MICDENOISE_FRAME * UP)
 #define TAPS 96                         /* low-pass at 48 kHz: pass to 7 kHz, -60 dB from 9 kHz (Blackman) */
 
-static float lp[TAPS];
-static float up_hist[TAPS / UP - 1];    /* the last input samples: the zero-stuffed signal only has every third */
-static float down_hist[TAPS - 1];
-static float dry[F48];                  /* the frame RNNoise was given before this one: what its output belongs to */
-static int16_t pend[MICDENOISE_FRAME]; static size_t npend;
-static DenoiseState *st;
-static float speech, keep;              /* keep: how much of the input stays, 10^(-cap / 20) */
+static float lp[TAPS];                  /* the same for every instance (init, once) */
+
+struct micdenoise {
+    float up_hist[TAPS / UP - 1];       /* the last input samples: the zero-stuffed signal only has every third */
+    float down_hist[TAPS - 1];
+    float dry[F48];                     /* the frame RNNoise was given before this one: what its output belongs to */
+    int16_t pend[MICDENOISE_FRAME]; size_t npend;
+    DenoiseState *st;
+    float speech, keep;                 /* keep: how much of the input stays, 10^(-cap / 20) */
+};
+static struct micdenoise pipe;          /* the voice pipeline's (micdenoise_reset/_run/_speech); Drop In has its own */
 
 static void init(void)
 {
@@ -40,25 +46,42 @@ static void init(void)
     for (int i = 0; i < TAPS; i++) lp[i] = (float)(lp[i] / sum);
 }
 
-void micdenoise_reset(float max_db)
+void md_reset(struct micdenoise *d, float max_db)
 {
-    keep = powf(10.0f, -max_db / 20.0f);
-    if (!lp[TAPS / 2]) init();
-    if (st) rnnoise_destroy(st);        /* rnnoise_init on a used state would leak its three buffers */
-    st = rnnoise_create(NULL);
-    memset(up_hist, 0, sizeof up_hist); memset(down_hist, 0, sizeof down_hist); memset(dry, 0, sizeof dry);
-    npend = 0; speech = 0;
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, init);          /* the pipeline's and Drop In's threads: whichever comes first */
+    d->keep = powf(10.0f, -max_db / 20.0f);
+    if (d->st) rnnoise_destroy(d->st);  /* rnnoise_init on a used state would leak its three buffers */
+    d->st = rnnoise_create(NULL);
+    memset(d->up_hist, 0, sizeof d->up_hist); memset(d->down_hist, 0, sizeof d->down_hist); memset(d->dry, 0, sizeof d->dry);
+    d->npend = 0; d->speech = 0;
 }
 
-float micdenoise_speech(void) { return speech; }
+struct micdenoise *md_new(float max_db)
+{
+    struct micdenoise *d = calloc(1, sizeof *d);
+    if (d) md_reset(d, max_db);
+    return d;
+}
 
-static void frame(const int16_t *in, int16_t *out)
+void md_free(struct micdenoise *d)
+{
+    if (!d) return;
+    if (d->st) rnnoise_destroy(d->st);
+    free(d);
+}
+
+float md_speech(const struct micdenoise *d) { return d->speech; }
+void micdenoise_reset(float max_db) { md_reset(&pipe, max_db); }
+float micdenoise_speech(void) { return md_speech(&pipe); }
+
+static void frame(struct micdenoise *d, const int16_t *in, int16_t *out)
 {
     enum { H = TAPS / UP - 1 };
     float x[H + MICDENOISE_FRAME], a[F48], b[TAPS - 1 + F48];
-    memcpy(x, up_hist, sizeof up_hist);
+    memcpy(x, d->up_hist, sizeof d->up_hist);
     for (int i = 0; i < MICDENOISE_FRAME; i++) x[H + i] = in[i];
-    memcpy(up_hist, x + MICDENOISE_FRAME, sizeof up_hist);
+    memcpy(d->up_hist, x + MICDENOISE_FRAME, sizeof d->up_hist);
     /* up: output sample 3 i + p is the sum over the input samples that fall under the filter, taps p, p + 3, ... */
     for (int i = 0; i < MICDENOISE_FRAME; i++)
         for (int p = 0; p < UP; p++) {
@@ -66,11 +89,11 @@ static void frame(const int16_t *in, int16_t *out)
             for (int k = 0; k <= H; k++) s += lp[p + UP * k] * x[H + i - k];
             a[UP * i + p] = s * UP;
         }
-    memcpy(b, down_hist, sizeof down_hist);
-    speech = rnnoise_process_frame(st, b + TAPS - 1, a);
-    for (int i = 0; i < F48; i++) b[TAPS - 1 + i] = b[TAPS - 1 + i] * (1 - keep) + dry[i] * keep;
-    memcpy(dry, a, sizeof dry);
-    memcpy(down_hist, b + F48, sizeof down_hist);
+    memcpy(b, d->down_hist, sizeof d->down_hist);
+    d->speech = rnnoise_process_frame(d->st, b + TAPS - 1, a);
+    for (int i = 0; i < F48; i++) b[TAPS - 1 + i] = b[TAPS - 1 + i] * (1 - d->keep) + d->dry[i] * d->keep;
+    memcpy(d->dry, a, sizeof d->dry);
+    memcpy(d->down_hist, b + F48, sizeof d->down_hist);
     if (!out) return;
     for (int i = 0; i < MICDENOISE_FRAME; i++) {
         float s = 0;
@@ -79,17 +102,19 @@ static void frame(const int16_t *in, int16_t *out)
     }
 }
 
-size_t micdenoise_run(const int16_t *in, size_t n, int16_t *out)
+size_t md_run(struct micdenoise *d, const int16_t *in, size_t n, int16_t *out)
 {
     size_t made = 0;
-    if (!st) micdenoise_reset(12);
+    if (!d->st) md_reset(d, 12);
     while (n) {
-        size_t k = MICDENOISE_FRAME - npend; if (k > n) k = n;
-        memcpy(pend + npend, in, k * sizeof *in);
-        npend += k; in += k; n -= k;
-        if (npend < MICDENOISE_FRAME) break;
-        frame(pend, out ? out + made : NULL);
-        made += MICDENOISE_FRAME; npend = 0;
+        size_t k = MICDENOISE_FRAME - d->npend; if (k > n) k = n;
+        memcpy(d->pend + d->npend, in, k * sizeof *in);
+        d->npend += k; in += k; n -= k;
+        if (d->npend < MICDENOISE_FRAME) break;
+        frame(d, d->pend, out ? out + made : NULL);
+        made += MICDENOISE_FRAME; d->npend = 0;
     }
     return out ? made : 0;
 }
+
+size_t micdenoise_run(const int16_t *in, size_t n, int16_t *out) { return md_run(&pipe, in, n, out); }

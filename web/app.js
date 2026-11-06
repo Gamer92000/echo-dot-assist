@@ -409,6 +409,7 @@ const HELP = {
   drop_in: { icon: 'talk', ha: ['Drop In', 'Drop In with', 'End Drop In', 'the action drop_in'], help: 'Talk between two of your Echos, as Alexa\'s Drop In. One Echo calls another (the ones on the Echos page), and both hear each other. Start it from Home Assistant (the action drop_in, or by voice with the "Drop In" blueprint: "drop in kitchen") or with the Drop In button of an Echo on the Echos page. End it with the action button, "<wake word>, stop" or "hang up", on either Echo. Off: this Echo neither calls nor can be called. Only your own Echos can call it (the Echo network\'s key), never with do not disturb on or the microphones off. The ring shows green while a call runs.',
     note: 'An Echo that is called opens its microphone at once, unless it is set to answer with the button below.' },
   drop_in_answer: { parent: 'drop_in', help: 'At once: a call connects straight away, with a chime, as Alexa\'s Drop In does. After the action button: the Echo rings for 30 s, and only a press of its action button connects; nobody can listen into a room where nobody is.' },
+  drop_in_gate: { parent: 'drop_in', help: 'In a call this Echo\'s microphone is turned down while nobody near it talks, and up again the moment someone does (a speech detector decides). It keeps two things from the other side: the hiss of this room, lifted with the gain speech needs, and their own voice coming back from this Echo\'s speaker. Full: down by 25 dB, as before. Light: by 10 dB, for a quiet room; a little hiss in the pauses. Off: never; the room\'s hiss all along, and the other side may hear itself faintly, unless they wear headphones. Takes effect at once, also in a call.' },
   bluetooth_speaker: { icon: 'box', ha: ['Bluetooth speaker search', 'Play on Bluetooth speaker', 'Bluetooth speaker', 'Bluetooth speaker delay'], help: 'Plays everything (replies, timers, music) on a Bluetooth speaker instead of the Echo\'s own. Put the speaker in pairing mode near the Echo and switch on "Bluetooth speaker search" in Home Assistant: the Echo pairs with the strongest one it hears.' },
   // volume, separate_volumes and the kinds' volumes, links and offsets: the Volume card has their words (buildVolumes)
   // not a setting: the System card's Restart button (main.c core_reboot)
@@ -484,6 +485,7 @@ const SUB = {
   alarm_keys: 'Snooze with a volume key, or change the volume',
   clock_format: '7:30 AM or 07:30',
   drop_in_answer: 'How a call connects',
+  drop_in_gate: 'The microphone between your words',
 };
 const CHOICE_NAMES = {
   wake_engine: { amazon: 'Amazon', microwakeword: 'microWakeWord', homeassistant: 'Home Assistant' },
@@ -492,6 +494,7 @@ const CHOICE_NAMES = {
   noise_reduction: { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' },
   online_updates: { off: 'Off', beta: 'Beta', release: 'Release' },
   drop_in_answer: { auto: 'At once', ask: 'After the action button' },
+  drop_in_gate: { full: 'Full: quiet between words', light: 'Light', off: 'Off: always open' },
   timer_sound: { beep: 'Beep', timer: 'Alexa timer', alarm: 'Alexa alarm', custom: 'Your own' },
   alarm_sound: { beep: 'Beep', timer: 'Alexa timer', alarm: 'Alexa alarm', custom: 'Your own (the timer\'s upload)' },
   alarm_keys: { snooze: 'Snooze', volume: 'Volume' },

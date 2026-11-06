@@ -3371,3 +3371,13 @@ Run in this order. Each step says what it proves.
       05:18 UTC; not hassmic's doing as far as the code goes: nothing renames onto it), and zygote aborted every app
       start ("Failed to open /dev/null", Echo-Wall "keeps stopping"); `mknod -m 666 /dev/null c 1 3` + `chcon
       u:object_r:null_device:s0` fixed it.  Cause open.
+- [~] Drop In from Home Assistant (2026-11-04; docs/video-dropin.md).  The Echo: web.c `GET /api/call` is a Drop In's
+      far end (dropin.c `dropin_ha_*`, peer "home-assistant"): 16 kHz PCM 20 ms frames both ways instead of Opus/UDP,
+      records sealed with keys per call and direction, the camera's records ('V') while connected with the camera
+      setting on (one viewer, the dot).  Echo Local: `call.py` (a websocket view, signed path, kiosk users refused),
+      `frontend/echo-local-call-card.js` (WebCodecs H.264 onto a canvas, AudioWorklets at 16 kHz both ways, listen-only
+      without a secure page).  `tests/fake_web_call.py` (refusals, ringing, hang-ups, lost, the picture),
+      `tests/ha_real_camera.py` (the websocket in HA 2026.10.1, the card in headless Chrome: picture drawn, Chrome's
+      fake microphone at peak 20026 on the Echo's Voip stream, Hang up).  Open: on the Show with people on both ends
+      (the echo canceller in call mode against a browser's sound, the latency measured); the browser's camera on the
+      Echo's screen.

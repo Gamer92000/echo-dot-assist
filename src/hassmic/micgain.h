@@ -30,6 +30,8 @@ struct micgain {
                                          * talker's (micend.h): they neither feed its level nor lift the gain.  Else
                                          * other voices alone in the room are brought up to speech level within 2 s
                                          * (12 dB/s), a talker's 20 dB under too (tests/fake_ha_end.py).  -1000: all */
+    int speech;                         /* set by the caller: 1 the talker speaks, 0 not (a detector's: Drop In's RNNoise),
+                                         * in place of "9 dB over the floor"; -1 (micgain_init's): by the level */
 };
 
 void micgain_init(struct micgain *g, int level);

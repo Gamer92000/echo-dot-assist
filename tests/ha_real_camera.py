@@ -7,7 +7,7 @@ linger; camera.turn_off switches it off on the Echo and stills stop.
 
 Same isolation and Home Assistant as tests/ha_real_dropin.py (its helpers; build/ha-venv from its --setup).  Needs
 ffmpeg on the PC (Home Assistant's ffmpeg integration runs it for stills): skipped without."""
-import asyncio, base64, os, re, shutil, signal, subprocess, sys, tempfile
+import asyncio, base64, json, os, re, shutil, signal, subprocess, sys, tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ha_real_dropin as hr
@@ -102,6 +102,44 @@ async def run(tmp):
             else:
                 print("skip live view: no PyAV in build/ha-venv (tests/ha_real_dropin.py --setup installs it)")
 
+            # Drop In from a dashboard (call.py): the card's websocket, opened with a signed path, as the card opens it
+            sp = await c.ws(type="auth/sign_path", path=f"/api/echo_local/call/{eid}", expires=30)
+            n0 = starts()
+            async with session.ws_connect(f"{hr.HA}{sp['path']}") as w:
+                got, audio, video, sent = [], 0, [], 0
+                t0 = asyncio.get_running_loop().time()
+                async def feed():
+                    nonlocal sent
+                    while True:
+                        await w.send_bytes(b"A" + bytes(640)); sent += 1; await asyncio.sleep(0.02)
+                fd = asyncio.ensure_future(feed())
+                while asyncio.get_running_loop().time() - t0 < 4:
+                    try: m = await asyncio.wait_for(w.receive(), 1)
+                    except TimeoutError: continue
+                    if m.type == aiohttp.WSMsgType.TEXT: got.append(json.loads(m.data))
+                    elif m.type == aiohttp.WSMsgType.BINARY and m.data[:1] == b"A": audio += 1
+                    elif m.type == aiohttp.WSMsgType.BINARY and m.data[:1] == b"V": video.append(m.data[1])
+                    else: break
+                await w.send_str(json.dumps({"hangup": True}))
+                fd.cancel()
+            check(got[:1] == [{"state": "connected"}] and audio > 100 and video[:1] == [1] and 2 in video,
+                  f"Drop In from the card's websocket: connected, the Echo's sound ({audio} frames) and picture ({len(video)} records)")
+            async def hung(): return "Home Assistant hung up" in echo.text()
+            check(await hr.until(hung, 5) and await hr.until(lambda: _ended(starts, stops), 5), "hung up from the card: the call ends on the Echo, the camera too")
+            async with session.get(f"{hr.HA}/api/echo_local/call/{eid}") as r:
+                check(r.status == 401, f"the call's websocket without a signed path: 401 ({r.status})")
+            async with session.get(f"{hr.HA}/echo_local/echo-local-call-card.js") as r:
+                check(r.status == 200 and "echo-local-call-card" in await r.text(), "the call card is served")
+
+            r = await card_in_chrome(session, c.h["Authorization"][7:], eid, echo)
+            if r is not None:
+                check(r.get("state") == "connected" and r.get("picture") and r.get("lit", 0) > 1000,
+                      f"the card in Chrome: connected, the Echo's picture drawn through WebCodecs ({r})")
+                check(r.get("muted") and r.get("mute_shown") and r.get("muted_peak", 1) < 50,
+                      f"the microphone muted at the start, its button over the picture: nothing played on the Echo (peak {r.get('muted_peak')})")
+                check(r.get("unmuted") and r.get("voip_peak", 0) > 1000, f"unmuted, the browser's microphone (Chrome's fake one, a beep) plays on the Echo: peak {r.get('voip_peak')}")
+                check(r.get("hung"), "Hang up in the card: the call ends on the Echo")
+
             await c.ws(type="call_service", domain="camera", service="turn_off", target={"entity_id": eid})
             async def off(): return setting() == "camera=off"
             check(await hr.until(off, 10), "camera.turn_off: the setting off on the Echo")
@@ -115,6 +153,84 @@ async def run(tmp):
         if check.failed:
             print("--- Echo log tail\n" + "".join(echo.text().splitlines(True)[-30:]))
             print("--- Home Assistant log tail\n" + "".join(open(os.path.join(tmp, "ha.log"), errors="replace").readlines()[-60:]))
+
+
+async def card_in_chrome(session, token, eid, echo):
+    """echo-local-call-card in headless Chrome (a fake camera and microphone for the page, ours for the Echo): a call,
+    what it shows and what the Echo plays, then Hang up.  None without Chrome"""
+    chrome = shutil.which("google-chrome") or shutil.which("chromium") or shutil.which("chromium-browser")
+    if not chrome:
+        print("note: no Chrome here, the call card is not tried"); return None
+    prof = tempfile.mkdtemp(prefix="call-chrome-")
+    proc = subprocess.Popen([chrome, "--headless=new", "--no-sandbox", "--remote-debugging-port=9335", f"--user-data-dir={prof}",
+                             "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", "--autoplay-policy=no-user-gesture-required",
+                             "about:blank"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        for _ in range(100):
+            try:
+                async with session.get("http://127.0.0.1:9335/json") as r:
+                    tabs = await r.json(); break
+            except Exception: await asyncio.sleep(0.2)
+        page = next(t for t in tabs if t.get("type") == "page")
+        ws = await session.ws_connect(page["webSocketDebuggerUrl"], max_msg_size=0)
+        n = [0]
+        async def cdp(method, **params):
+            n[0] += 1; i = n[0]
+            await ws.send_json({"id": i, "method": method, "params": params})
+            while True:
+                m = await ws.receive_json()
+                if m.get("id") == i: return m.get("result", m.get("error"))
+        async def js(expr):
+            r = await cdp("Runtime.evaluate", expression=expr, returnByValue=True, awaitPromise=True)
+            if r and r.get("exceptionDetails"): return {"error": json.dumps(r["exceptionDetails"])[:400]}
+            return (r.get("result") or {}).get("value")
+        await cdp("Page.enable"); await cdp("Runtime.enable")
+        await cdp("Page.navigate", url=f"{hr.HA}/echo_local/call-test-404"); await asyncio.sleep(1)
+        # the card needs of hass only callWS (auth/sign_path) and states: Home Assistant's own websocket, from the
+        # page's origin (the card's websocket URL is relative to it)
+        await js(f"""(async () => {{
+            const ws = new WebSocket(location.origin.replace('http', 'ws') + '/api/websocket'); let id = 0; const wait = {{}};
+            await new Promise((ok) => {{ ws.onmessage = (e) => {{ const m = JSON.parse(e.data);
+                if (m.type === 'auth_required') ws.send(JSON.stringify({{ type: 'auth', access_token: {json.dumps(token)} }}));
+                else if (m.type === 'auth_ok') ok();
+                else if (m.id && wait[m.id]) {{ wait[m.id](m.result); delete wait[m.id]; }} }}; }});
+            window._hass = {{ states: {{}}, callWS: (msg) => new Promise((ok) => {{ id++; wait[id] = ok; ws.send(JSON.stringify({{ ...msg, id }})); }}) }};
+            customElements.define('home-assistant', class extends HTMLElement {{}});   // the card defines itself after HA's root
+            await import('/echo_local/echo-local-call-card.js'); await customElements.whenDefined('echo-local-call-card');
+        }})()""")
+        voip = os.path.join(echo.state, "voip.raw"); v0 = os.path.getsize(voip) if os.path.exists(voip) else 0
+        out = await js(f"""(async () => {{
+            const c = document.createElement('echo-local-call-card'); c.setConfig({{ entity: {json.dumps(eid)} }});
+            c.hass = window._hass; document.body.appendChild(c); window._card = c;
+            await c.start();
+            for (let i = 0; i < 80 && !c.gotPicture; i++) await new Promise(r => setTimeout(r, 100));
+            await new Promise(r => setTimeout(r, 1500));
+            const cv = c.shadowRoot.querySelector('canvas'), d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+            let lit = 0; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 120) lit++;
+            const m = c.shadowRoot.querySelector('.mute');
+            return {{ state: c.state, picture: c.gotPicture, lit, w: cv.width, msg: c.shadowRoot.querySelector('.msg').textContent, listen: c.listenOnly || '',
+                      muted: c.muted, mute_shown: !m.hidden && getComputedStyle(m).display !== 'none' }};
+        }})()""") or {}
+        import array
+        def peak(a, b): return max((abs(x) for x in array.array("h", open(voip, "rb").read()[a:b][: (b - a) // 2 * 2])), default=0) if os.path.exists(voip) else 0
+        v1 = os.path.getsize(voip) if os.path.exists(voip) else 0
+        out["muted_peak"] = peak(v0, v1)                # muted at the start: the Echo plays nothing of the browser
+        await js("(async () => { window._card.shadowRoot.querySelector('.mute').click(); await new Promise(r => setTimeout(r, 1500)); })()")
+        out["unmuted"] = await js("!window._card.muted")
+        v2 = os.path.getsize(voip) if os.path.exists(voip) else 0
+        out["voip_peak"] = peak(v1, v2)
+        await js("window._card.stop('')")
+        async def hung(): return echo.text().count("Home Assistant went") + echo.text().count("Home Assistant hung up") >= 2
+        out["hung"] = await hr.until(hung, 5)
+        return out
+    finally:
+        proc.terminate()
+        try: proc.wait(5)
+        except subprocess.TimeoutExpired: proc.kill()
+        shutil.rmtree(prof, ignore_errors=True)
+
+
+async def _ended(starts, stops): return stops() == starts()
 
 
 def main():

@@ -32,6 +32,7 @@ static const char *const denoise_values[4] = { "off", "low", "medium", "high" };
 static const char *const arb_modes[2] = { "hassmic", "kiosk" };            /* ARB_HASSMIC, ARB_KIOSK */
 static const char *const wake_engines[3] = { "amazon", "microwakeword", "homeassistant" };  /* WAKE_AMAZON, WAKE_MWW, WAKE_HA */
 static const char *const dropin_answers[2] = { "auto", "ask" };          /* dropin_ask() 0, 1 */
+static const char *const dropin_gates[3] = { "full", "light", "off" };    /* dropin_gate() 0, 1, 2 */
 static const char *const timer_sounds[4] = { "timer", "alarm", "beep", "custom" };    /* TIMER_SOUND_* */
 static const char *const clock_formats[3] = { "auto", "12h", "24h" };      /* alarms_clock_format */
 static const char *const alarm_keys[2] = { "snooze", "volume" };             /* CORE_ALARM_KEYS */
@@ -72,7 +73,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 /* ---------------------------------------------------------------- the table */
 
 enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, VOICE, OWN_VOICE, ERR_SPEECH, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
-          WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, CAMERA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
+          WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, DROPIN_GATE, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, CAMERA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
           ALARMS, ALARM_VOICE, ALARM_SOUND, ALARM_RING, ALARM_SNOOZE, ALARM_RAMP, ALARM_LOUDER, ALARM_KEYS, CLOCK_FMT,
@@ -156,6 +157,7 @@ static const struct setting table[NSET] = {
     /* dropin.c keeps them in memory, state/config on disk */
     [DROPIN]      = { "drop_in", "Drop In", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [DROPIN_ANSWER] = { "drop_in_answer", "Drop In answers", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
+    [DROPIN_GATE] = { "drop_in_gate", "Quiet between words in calls", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
     [UPDATES]     = { "online_updates", "Online updates", "System", NULL, S_CHOICE, 0, 0, 1, 0 },
     /* https.c keeps it: media from a Home Assistant that serves HTTPS itself (issue #30) */
     [HTTPS_VERIFY] = { "https_verify", "Check HTTPS certificates", "System", NULL, S_BOOL, 0, 1, 1, 0 },
@@ -222,7 +224,7 @@ static int present(enum id i)
     case LED_AUTO: return core_led_has_auto();
     case WIFI_MOTION: case WIFI_SENS: return wifimotion_present();
     case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: return arb_running();
-    case DROPIN: case DROPIN_ANSWER: return dropin_running();
+    case DROPIN: case DROPIN_ANSWER: case DROPIN_GATE: return dropin_running();
     case SS_UNPAIRED: return core_sendspin_port != 0;
     case SPK_GAIN: return spkgain_present();
     case BAND: return ring_band_rows(-1) >= 0;
@@ -263,6 +265,7 @@ int settings_choices(const struct setting *s, const char *const **names)
     case WAKE_ENGINE: *names = wake_engines; return 3;
     case SPEECH_LANG: *names = speech_langs; return 6;
     case DROPIN_ANSWER: *names = dropin_answers; return 2;
+    case DROPIN_GATE: *names = dropin_gates; return 3;
     case TIMER_SOUND: *names = timer_sounds; return 4;
     case END_REQ: *names = micend_names; return MICEND_MODES;
     case ALARM_SOUND: *names = timer_sounds; return 4;
@@ -340,6 +343,7 @@ int settings_get(const struct setting *s)
     case REQUEST_TEXT: return request_text;
     case DROPIN: return dropin_enable(-1);
     case DROPIN_ANSWER: return dropin_ask(-1);
+    case DROPIN_GATE: return dropin_gate(-1);
     case SPK_GAIN: return spkgain_get();
     case VOLUME: return core_volume();
     case VOL_SPLIT: return core_separate_volumes(-1);
@@ -418,6 +422,7 @@ static void put(enum id i, int v)
     case BT_OUT_STAY: bt_stay = v; a2dp_out_stay(v && bt_speaker); break;
     case DROPIN: dropin_enable(v); break;
     case DROPIN_ANSWER: dropin_ask(v); break;
+    case DROPIN_GATE: dropin_gate(v); break;
     case SPK_GAIN: spkgain_set(v); break;
     case VOLUME: core_set_volume(v); break;
     case VOL_SPLIT: core_separate_volumes(v); break;

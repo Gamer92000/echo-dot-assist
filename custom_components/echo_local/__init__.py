@@ -23,8 +23,8 @@ from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import DEFAULT_PORT, Echo, EchoAuthError, EchoError
-from . import apps, kiosk, panel
-from .const import CARD_URL, CONF_KEY, DAY_KEYS, DOMAIN, PANEL_PATH, PANEL_URL, SCAN_INTERVAL_S
+from . import apps, call, kiosk, panel
+from .const import CALL_CARD_URL, CARD_URL, CONF_KEY, DAY_KEYS, DOMAIN, PANEL_PATH, PANEL_URL, SCAN_INTERVAL_S
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.SWITCH, Platform.CAMERA]
@@ -103,9 +103,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # the dashboard card, served from here and loaded on every dashboard
     await panel.async_setup(hass)         # the sidebar panel's commands: the Echos, their screen's setup
     await apps.async_setup(hass)          # the owner's Android apps on an Echo Show: list, internet, add, remove
+    await call.async_setup(hass)          # Drop In from a dashboard: the call card's websocket (call.py)
     fe = Path(__file__).parent / "frontend"
     # the card and the panel: no login to fetch them (only code), the panel's data then over the websocket with its login
     await hass.http.async_register_static_paths([StaticPathConfig(CARD_URL, str(fe / "echo-local-alarms-card.js"), False),
+                                                 StaticPathConfig(CALL_CARD_URL, str(fe / "echo-local-call-card.js"), False),
                                                  StaticPathConfig(PANEL_URL, str(fe / "panel.js"), False)])
     # the sidebar's "Echo Local": every Echo Show's screen (which pages, which app) and its Android apps (frontend/panel.js);
     # administrators only, as the options it changes are.  A home screen app arranges its Home itself (Echo-Wall: its
@@ -117,6 +119,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     from homeassistant.components.frontend import add_extra_js_url
     add_extra_js_url(hass, CARD_URL)
     add_extra_js_url(hass, CARD_URL, es5=True)      # the legacy build too (older browsers); defined once either way
+    add_extra_js_url(hass, CALL_CARD_URL)           # (WebCodecs and AudioWorklets: no legacy browser has them)
 
     def coordinator_of(call: ServiceCall) -> EchoLocalCoordinator:
         """the Echo a call names by its device; the only one when there is one"""

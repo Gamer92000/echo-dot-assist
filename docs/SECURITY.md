@@ -81,6 +81,11 @@ each start: other programs on the Home Assistant machine that learn that URL (it
 can watch while it runs. Any approved browser of the settings page can switch the camera on as well: revoke the
 logins you no longer use (System page).
 
+Drop In from Home Assistant (Echo Show, Echo Local's call card): the call is a signed request of the Echo Local
+integration with a fresh counter, then sealed both ways with keys of that call and direction; the picture only with the
+camera setting on, under the red dot. In Home Assistant the card reaches the call only through a signed path, as a
+logged-in user who is not one of the Echos' kiosk users.
+
 ## Arbitration between Echos
 
 An Echo takes the network key only from an Echo Home Assistant vouches for, from Home Assistant over its encrypted API
