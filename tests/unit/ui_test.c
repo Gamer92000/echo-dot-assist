@@ -213,6 +213,7 @@ static void hit_mid(int act, int arg, int *x, int *y)
     }
     fprintf(stderr, "no hit %d\n", act); exit(1);
 }
+static void tap_hit(int act) { int x, y; hit_mid(act, -1, &x, &y); tap(x, y); }   /* where it is drawn now (the face's music card) */
 static int tab_y(int t) { return (int)(76 + (t + 0.5f) * (H - 76) / 5); }   /* the rail, music.c's layout */
 
 int main(int argc, char **argv)
@@ -270,23 +271,23 @@ int main(int argc, char **argv)
     for (int y = 0; y < 400; y++) for (int x = 0; x < 400; x++) art[y * 400 + x] = 0xFF000000u | (uint32_t)(x * 255 / 400) << 16 | (uint32_t)(y * 255 / 400) | 0x4000;
     scene_art(S, art, 400, 400);
     run(400); ppm("face_music", inc);
-    tap((int)(0.78f * W) - 37, (int)(0.87f * H));                 /* the bottom line's play/pause */
+    tap_hit(A_PLAYPAUSE);                 /* the music card's play/pause */
     assert(sent_has("cmd pause"));
     /* shown at once: an older word from Sendspin does not flip it back, its own confirms it; a tap it never agrees
      * with goes back to what it said, after 2.5 s */
     assert(S->mstate == 2);
     msg("mp 1 62000 354000 1000"); run(100); assert(S->mstate == 2);
     msg("mp 2 62100 354000 1000"); run(100); assert(S->mstate == 2);
-    nsent = 0; tap((int)(0.78f * W) - 37, (int)(0.87f * H));
+    nsent = 0; tap_hit(A_PLAYPAUSE);
     assert(sent_has("cmd play") && S->mstate == 1);
     run(2000); assert(S->mstate == 1);
     run(700); assert(S->mstate == 2 && music_pos(S) == 62100);
     msg("mp 1 62100 354000 1000"); run(100);
     /* pause, then play at once: a word older than both that agrees with the play, then the pause's answer: still play */
-    tap((int)(0.78f * W) - 37, (int)(0.87f * H)); run(300); tap((int)(0.78f * W) - 37, (int)(0.87f * H)); assert(S->mstate == 1);
+    tap_hit(A_PLAYPAUSE); run(300); tap_hit(A_PLAYPAUSE); assert(S->mstate == 1);
     msg("mp 1 62200 354000 1000"); run(50); msg("mp 2 62300 354000 1000"); run(100); assert(S->mstate == 1);
     msg("mp 1 62300 354000 1000"); run(2600); assert(S->mstate == 1);
-    tap(W / 2, (int)(0.87f * H)); run(1500); ppm("music_now", inc);
+    tap_hit(A_TOMUSIC); run(1500); ppm("music_now", inc);
     nsent = 0;
     { int x, y; hit_mid(A_M_NEXT, -1, &x, &y); tap(x, y); } run(100);   /* next: 4th of 5 buttons right of the cover */
     assert(sent_has("cmd next"));
