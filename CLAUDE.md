@@ -439,8 +439,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `artifact-install.sh migrate` (main.sh, every satellite start): wake word folders under the short name (`echo-de`,
   from installs by hand) renamed to artifacts.sh's (`echo-de-DE`) where the language has one region; `state/wake_word`
   follows.
-- **Clock and log stamps** (`clock.c`): `proto_esphome.c` asks HA for the time (GetTimeRequest) on keyed links (on
-  subscribe, then every 6 h on pings); `clock_from_ha` leaves `<epoch> <boottime s.cs>` in `state/clock`, root's
+- **Clock and log stamps** (`clock.c`): `proto_esphome.c` asks HA for the time (GetTimeRequest) on every link (on
+  subscribe, then every 6 h on pings; the clock takes keyed links' answers only, any does for "Next timer"'s end,
+  `ha_time`); `clock_from_ha` leaves `<epoch> <boottime s.cs>` in `state/clock`, root's
   `main.sh` `clock_set` (netwatch) sets clock + RTC and `hassmic.clock.synced`. `clock_log_start()` (first in `main()`
   after options) turns stderr/stdout into a pipe to a double-forked reader that stamps lines and drops known Amazon
   noise; it ignores hassmic's signals and ends at EOF. Never make it hassmic's direct child (Amazon's DHA module waits

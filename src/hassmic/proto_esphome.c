@@ -358,15 +358,26 @@ static void state_text(char *out, size_t cap, const char *s)
 /* what the text sensors say (lock held); set only while they are listed, so a switch on shows nothing from before */
 static char last_heard[STATE_CHARS * 4 + 4], last_reply[STATE_CHARS * 4 + 4];
 
-/* The time Home Assistant last said (GET_TIME_RESP) and now_ms then: "Next timer" is a time of day, and the Echo's own
- * clock is wrong until root has set it from that answer (clock.c), then jumps.  Before any answer: the Echo's clock */
-static uint32_t ha_epoch;
-static long long ha_epoch_at;
+/* Home Assistant's time as an offset to now_ms (GET_TIME_RESP): "Next timer" is a time of day, and the Echo's own clock
+ * is wrong until root has set it from that answer (clock.c), then jumps, or never set where the link has no key (the
+ * clock takes keyed answers only; a timer's end goes back to the Home Assistant that said the time, so any link's
+ * answer does for it).  Before any answer: the Echo's clock */
+static long long ha_wall_off;
+static int ha_wall_set;
 static long long now_ms(void);
+static int ha_time(uint32_t epoch)      /* lock held: 1 when "Next timer" moves with it */
+{
+    long long off = epoch * 1000LL - now_ms();
+    /* whole seconds, read at another moment each time: a second either way is no news, and sent it would fire every
+     * automation on "Next timer" again (subscribe, every 6 h) */
+    if (ha_wall_set && llabs(off - ha_wall_off) < 2000) return 0;
+    ha_wall_off = off; ha_wall_set = 1;
+    return 1;
+}
 static void timer_end_text(char *out, size_t cap, long long left_ms)    /* lock held: "2026-11-04T10:15:30+00:00" */
 {
     long long wall;
-    if (ha_epoch) wall = ha_epoch * 1000LL + (now_ms() - ha_epoch_at);
+    if (ha_wall_set) wall = now_ms() + ha_wall_off;
     else { struct timespec t; clock_gettime(CLOCK_REALTIME, &t); wall = (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
     time_t s = (time_t)((wall + left_ms + 500) / 1000); struct tm tm;
     gmtime_r(&s, &tm);
@@ -1531,10 +1542,9 @@ static long long time_asked;
 static void ask_time(int c, int force)
 {
     static int told;
-    if (c < 0 || !clients[c].keyed) {
-        if (!have_key && !told++) fprintf(stderr, "clock: not asking Home Assistant for the time: it has not given this Echo an encryption key\n");
-        return;
-    }
+    if (c < 0) return;
+    if (!clients[c].keyed && !have_key && !told++)      /* asked all the same: a timer's end (ha_time) */
+        fprintf(stderr, "clock: Home Assistant's time not set as the clock: it has not given this Echo an encryption key\n");
     if (!force && time_asked && now_ms() - time_asked < TIME_ASK_MS) return;
     time_asked = now_ms();
     send_msg(GET_TIME_REQ, NULL);
@@ -1572,10 +1582,8 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
             if (f.field == 1 && f.wire == 5) epoch = (uint32_t)f.v;
             else if (f.field == 2 && f.wire == 2) pbf_str(&f, tz, sizeof tz);
         }
-        if (c >= 0 && clients[c].keyed && epoch) {
-            clock_from_ha(epoch); clock_zone_from_ha(tz);
-            ha_epoch = epoch; ha_epoch_at = now_ms(); send_setting(KEY_NEXT_TIMER);     /* a clock that was wrong */
-        }
+        if (c >= 0 && clients[c].keyed && epoch) { clock_from_ha(epoch); clock_zone_from_ha(tz); }
+        if (c >= 0 && epoch && ha_time(epoch) && core_timer_next(NULL, 0, NULL, NULL)) send_setting(KEY_NEXT_TIMER);
         if (c >= 0 && clients[c].keyed && tz[0]) screen_tz(tz);
     } break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;

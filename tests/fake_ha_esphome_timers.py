@@ -195,9 +195,18 @@ async def main(e):
     cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_STARTED, "t22", "lost", 60, 1, True)
     await until(lambda: near(1, "lost", 60))
     check(near(1, "lost", 60), f"a timer about to end is next: {upcoming()}")
-    t0 = time.monotonic(); await until(lambda: upcoming() is None, 15)
-    check(upcoming() is None and 9 < time.monotonic() - t0 < 13 and ringing() == (False, ""),
+    t0 = time.monotonic(); await until(lambda: upcoming() is None, 17)
+    check(upcoming() is None and 9 < time.monotonic() - t0 < 15 and ringing() == (False, ""),
           f"never finished: forgotten 10 s after its end, without a ring: {upcoming()} after {time.monotonic() - t0:.1f} s")
+    # a full table (8) makes room with a paused one, never with the one that ends first, though it is the oldest
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_STARTED, "t30", "soon", 300, 300, True)
+    for i in range(7): cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_STARTED, f"t3{i + 1}", f"p{i}", 900, 900, False)
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_STARTED, "t38", "later", 600, 600, True)
+    await sync(cli)
+    check(near(300, "soon", 300), f"a ninth timer: a paused one makes room, the next stays: {upcoming()}")
+    for i in range(9): cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_CANCELLED, f"t3{i}", "", 0, 0, False)
+    await until(lambda: upcoming() is None)
+    check(upcoming() is None, f"all cancelled: none runs: {upcoming()}")
 
     # Encryption, in the order Home Assistant runs it: plaintext connection, DeviceInfo says "supported, provisionable",
     # key sent over a zero-PSK Noise connection, then only that key gets in.

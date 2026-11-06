@@ -2018,16 +2018,19 @@ Run in this order. Each step says what it proves.
       sends its events only to the satellite that started it (ESPHome `VoiceAssistantTimerEventResponse` 115: type
       0 started / 1 updated / 2 cancelled / 3 finished, id, name, `total_seconds` = the length it was created with,
       `seconds_left`, `is_active`; HA esphome `assist_satellite.py` `handle_timer_event`), so the Echo republishes them. `main.c` keeps up to 8
-      by id from started/updated (end = `mono_ms` + left; paused: left kept), drops them on cancelled/finished, and
-      `core_timer_next` gives the active one that ends first. A timer HA never finishes (HA restarted: its timers live
+      by id from started/updated (end = `mono_ms` + left; paused: left kept; full: the oldest paused one goes, else
+      the oldest), drops them on cancelled/finished, and `core_timer_next` gives the active one that ends first. A timer HA never finishes (HA restarted: its timers live
       in memory only) goes `TIMER_STALE_MS` (10 s) after its end, checked by the earcon thread (`timers_stale_at`).
       ESPHome: "Next timer" (`next_timer`, text sensor, device class timestamp: HA's ESPHome text sensor parses ISO
       8601; a float sensor would round a 2026 epoch to 128 s), "Next timer name" (text, "" when unnamed), "Next timer
       length" (sensor, s, duration), all missing_state while none runs, name and length before the end. The end is
-      wall time from HA's last GetTimeResponse plus `now_ms` since (the Echo's own clock until root has set it, and
-      it jumps then; `ha_epoch` in proto_esphome.c), the Echo's clock before any answer. Wyoming unchanged (no timers
-      there). fake_ha_esphome_timers: two at once, pause, resume, time taken off, cancel, finish (rings, next
-      unknown), one never finished forgotten after 10 s. Open (device): with real HA and "set a timer".
+      `now_ms` + HA's time as an offset (`ha_time` in proto_esphome.c: the Echo's own clock is wrong until root has set
+      it, and jumps then), the Echo's clock before any answer. The time is asked on links without a key too: the clock
+      takes keyed answers only, the timer's end goes back to the HA that said it. The offset moves only by 2 s or
+      more (whole seconds read at another moment, on subscribe and every 6 h: a second either way would be a new
+      state and fire automations on "Next timer" again). Wyoming unchanged (no timers there). fake_ha_esphome_timers:
+      two at once, pause, resume, time taken off, cancel, finish (rings, next unknown), one never finished forgotten
+      after 10 s, a ninth timer pushing out a paused one and not the next. Open (device): with real HA and "set a timer".
 - [x] Sounds of one's own in place of stock's (2026-11-01, asked by a Dot 3 user who renamed the assistant): every
       `enum sound` from SND_WAKE to SND_RING_OUT (13: not the timer and alarm tones, which `timer_sound` picks) by an id
       of `sounds.c` (`wake`, `ring_in`, ...; stored as file names: keep them). `state/sounds/<id>.wav`, the timer

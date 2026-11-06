@@ -2001,7 +2001,8 @@ static const enum sound timer_sounds[] = { [TIMER_SOUND_TIMER] = SND_TIMER, [TIM
  * with the seconds left, and nobody else (an Assist timer is no entity), so the Echo is where they can be read.  The end
  * is kept on the monotonic clock: Home Assistant's time moves the wall clock under it (clock.c).  One Home Assistant
  * never finished (it restarted: its timers live in memory only) goes TIMER_STALE_MS after its end, from the earcon
- * thread (timers_prune); a paused one stays until it is resumed, cancelled or pushed out by newer ones */
+ * thread (timers_prune); a paused one stays until it is resumed or cancelled, or the table is full: the oldest paused
+ * one goes first (one Home Assistant forgot while paused would hold a slot for good), else the oldest */
 #define RUNNING_MAX 8
 #define TIMER_STALE_MS 10000
 static struct { char id[40], name[64]; unsigned total; int active; long long end, left; } running[RUNNING_MAX];  /* lock held */
@@ -2031,7 +2032,11 @@ void core_timer_running(const char *id, const char *name, unsigned total, unsign
 {
     int i = running_find(id);
     if (i < 0) {
-        if (nrunning == RUNNING_MAX) running_drop(0);           /* the oldest goes */
+        if (nrunning == RUNNING_MAX) {
+            int old = 0;
+            while (old < nrunning && running[old].active) old++;
+            running_drop(old < nrunning ? old : 0);
+        }
         i = nrunning++;
         snprintf(running[i].id, sizeof running[i].id, "%s", id);
     }
@@ -2308,6 +2313,9 @@ static void *earcon_thread(void *arg)
         beep[i] = (short)(BEEP_PEAK * env * sin(2 * M_PI * f * i / RATE));
     }
     for (;;) {
+        if (mono_ms() > atomic_load(&timers_stale_at)) {               /* a timer Home Assistant forgot; first: a Drop In's ring continues */
+            pthread_mutex_lock(&core_lock); timers_prune(); pthread_mutex_unlock(&core_lock);
+        }
         /* Amazon's own sounds where the image has them; the generated blip stands in for the wake and touch sounds otherwise */
         for (int p = atomic_exchange(&sounds_pending, 0), s = 0; p && s < SND_COUNT; s++) {
             const short *pcm; size_t n; unsigned rate;
@@ -2334,9 +2342,6 @@ static void *earcon_thread(void *arg)
           if (r >= 0 && mono_ms() >= atomic_load(&dropin_ring_at) && sound_get((enum sound)r, &pcm, &n, &rate)) {
               short *quiet = scaled(pcm, n, atomic_load(&sounds_q16));     /* one of our sounds: at their volume */
               ring_sound = r; play_earcon_while(quiet ? quiet : pcm, n, rate, ring_go); free(quiet); sound_played((enum sound)r); usleep(300000); continue; } }
-        if (mono_ms() > atomic_load(&timers_stale_at)) {               /* a timer Home Assistant forgot */
-            pthread_mutex_lock(&core_lock); timers_prune(); pthread_mutex_unlock(&core_lock);
-        }
         int pv = atomic_exchange(&preview, 0) && !atomic_load(&alarm_on);   /* none during a ring, nor after it */
         if (atomic_load(&alarm_on) || pv) {             /* timer finished: its sound, or a triple blip every 1.2 s, until the ring time */
             if (!pv && mono_ms() > atomic_load(&alarm_until)) {
