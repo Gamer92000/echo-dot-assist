@@ -16,6 +16,10 @@ What changed for people using the Echo, newest first. Details and measurements a
   boot, for example) left Android thinking it was still held until hassmic restarted: volume down kept turning the
   volume to 0 and undid every attempt to raise it (issue #140). The Echo now takes over the keys only
   once every key is up.
+- **Debug access: revoking the browser that asked for it withdraws the request.** While Debug access waited for the
+  action button, revoking that browser's login on the settings page left the request waiting: the page still said so,
+  and the next press of the button opened adb over Wi-Fi for 30 minutes. Now the request goes with the login, and
+  that press does what the button does otherwise.
 
 ## 2026-11-06
 

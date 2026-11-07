@@ -3,7 +3,7 @@
 X25519 and BLAKE2b from Python's libraries, not web/crypto.js), plus Home Assistant (aioesphomeapi) watching the same
 Echo.  Login by the action button (SIGUSR2), signed reads and writes, replays and forged signatures, two logins at once,
 export and import, the settings file from before names, the speaker gain, features (entities in Home Assistant only while on), adb with
-a press of its own, revoking; a login left waiting runs out by itself, and a restart clears its ring and names a new start."""
+a press of its own (a request withdrawn by "off" or a revoke), revoking; a login left waiting runs out by itself, and a restart clears its ring and names a new start."""
 import asyncio, gzip, json, os, re, signal, subprocess, sys, tempfile, time
 from aioesphomeapi import APIClient
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -205,6 +205,23 @@ async def main():
         b.call("POST", "/api/adb", b"off"); await asyncio.sleep(0.3)
         check(not os.path.exists(adb_req) or open(adb_req).read().strip() in ("0", "close", ""), "closed again")
         check(x.call("POST", "/api/adb", b"on")[0] == 401, "adb from a browser never approved: refused")
+        # a request that waits goes with "off", and with the login of the browser that asked: the next press opened adb
+        # for 30 minutes all the same, and the page went on saying it waited for the button
+        c = Browser(WEB)
+        check(c.login_with_button(proc), "a second browser logged in")
+        r1, r2 = json.loads(c.call("POST", "/api/adb", b"on")[2]), json.loads(c.call("POST", "/api/adb", b"off")[2])
+        os.remove(adb_req)                                              # "off" asked root to close: taken
+        await until(lambda: "adb request withdrawn" in open(log).read())
+        check(r1["adb"] == "waiting" and r2["adb"] == "closed" and not b.state()["adb"]["waiting"] and "adb request withdrawn" in open(log).read(),
+              "adb asked, then \"off\" before the press: the request withdrawn, the page no longer waits")
+        proc.send_signal(signal.SIGUSR2); await until(lambda: os.path.exists(adb_req), 1)
+        check(not os.path.exists(adb_req), "...and the next press asks root for nothing")
+        r1 = json.loads(c.call("POST", "/api/adb", b"on")[2])
+        r2 = json.loads(b.call("POST", "/api/revoke", c.pub.hex().encode())[2])
+        check(r1["adb"] == "waiting" and r2.get("revoked") is True and not b.state()["adb"]["waiting"],
+              "adb asked, then that browser's login revoked: the request withdrawn as well")
+        proc.send_signal(signal.SIGUSR2); await until(lambda: os.path.exists(adb_req), 1)
+        check(not os.path.exists(adb_req), "...and the next press asks root for nothing")
 
         # export / import
         st, h, text = b.call("GET", "/api/export"); text = text.decode()

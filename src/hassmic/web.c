@@ -19,7 +19,8 @@
  *   the target's web key, the browser's key, the nonce and its own name with a key every member derives from K
  *   (arb_web_key); the target checks that with its own copy, uses the nonce up, and approves the browser.  Outside the
  *   network it is the button again.  adb still takes the button of that very Echo.
- *   adb over Wi-Fi (a root shell for the network) takes a press of its own: POST /api/adb "on" waits like a login.
+ *   adb over Wi-Fi (a root shell for the network) takes a press of its own: POST /api/adb "on" waits like a login;
+ *   "off", or the asking browser's login revoked, withdraws it before the press.
  *   Artifacts (artifacts.c): listed, read and written in pieces over signed requests, so a page logged in to two Echos
  *   copies models from one to the other; root installs them.
  *   microWakeWord's models (mww_store.c): listed, added (uploaded whole, checked by loading them), renamed, tuned,
@@ -216,12 +217,24 @@ static void login_expire(long long now)     /* lk held */
     }
 }
 
+/* An adb request that waits goes once adb is closed or the browser that asked is let go: left waiting, the next press
+ * opened adb for 30 min against the owner's last word, and the page kept saying it waited (lk held) */
+static void adb_withdraw(const char *why)
+{
+    login.state = 3; fprintf(stderr, "web: adb request withdrawn (%s)\n", why);
+    if (hooks->attention) hooks->attention(0);
+}
+
 int web_approve(void)
 {
     int r = 0;
     pthread_mutex_lock(&lk);
     login_expire(now_ms());
-    if (login.state == 1 && login.kind == W_ADB) {
+    /* the browser that asked pushed out of clients[] meanwhile: logins through other Echos take no press */
+    if (login.state == 1 && login.kind == W_ADB && !client_of(login.pub)) {
+        adb_withdraw("its browser is no longer let in");
+        if (hooks->approved) hooks->approved(0);        /* the press goes on to the assistant, as after one that ran out */
+    } else if (login.state == 1 && login.kind == W_ADB) {
         login.state = 2; r = 2;
         fprintf(stderr, "web: adb over Wi-Fi approved with the button\n");
         if (hooks->attention) hooks->attention(0);
@@ -242,7 +255,12 @@ int web_approve(void)
 static const char *adb_ask(const uint8_t pub[32], int on)
 {
     const char *r; long long now = now_ms();
-    if (!on) { adbwifi_ask(0); return "closed"; }
+    if (!on) {
+        pthread_mutex_lock(&lk);
+        if (login.state == 1 && login.kind == W_ADB) adb_withdraw("closed");
+        pthread_mutex_unlock(&lk);
+        adbwifi_ask(0); return "closed";
+    }
     pthread_mutex_lock(&lk);
     login_expire(now);
     if (login.state == 1 && login.kind == W_ADB && !memcmp(login.pub, pub, 32)) r = "waiting";
@@ -1148,6 +1166,7 @@ static void handle(int fd)
             memmove(clients + i, clients + i + 1, sizeof clients[0] * (size_t)(nclients - i - 1)); nclients--; found = 1; break;
         }
         if (found) save_clients();
+        if (login.state == 1 && login.kind == W_ADB && !memcmp(login.pub, who, 32)) adb_withdraw("its browser's login revoked");
         pthread_mutex_unlock(&lk);
         fprintf(stderr, "web: a browser's login %s\n", found ? "revoked" : "to revoke not found");
         respond_sjson(fd, &r, 200, found ? "{\"revoked\":true}" : "{\"revoked\":false}");
