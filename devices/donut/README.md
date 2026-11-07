@@ -70,6 +70,12 @@ The Echo Dot 3 has no USB socket; its USB data lines end on test pads on the mai
 a USB cable soldered to those pads. How to open the case: the guides linked under "Requirements" in the
 [XDA thread][xda].
 
+> [!TIP]
+> **Solderless option: pogo pin holder**
+>
+> A 3D printable holder that presses three pogo pins onto TM3 / TM4 / TM5, so no soldering is needed: [Printables: Echo Dot 3 (donut) Pogo Pin Holder](https://www.printables.com/model/1904685-echo-dot-3-donut-pogo-pin-holder-for-tm3-tm4-tm5-s)
+>
+
 | USB cable wire | Pad on the Echo's board |
 |---|---|
 | black (GND) | TM3, or any other ground (the metal shield/case works too) |
