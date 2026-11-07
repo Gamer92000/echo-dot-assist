@@ -2,6 +2,13 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-07
+
+- **Echo Shows: a key held while the Echo starts no longer sticks.** Holding a key while hassmic started (during
+  boot, for example) left Android thinking it was still held until hassmic restarted: volume down kept turning the
+  volume to 0 and undid every attempt to raise it (issue #140). The Echo now takes over the keys only
+  once every key is up.
+
 ## 2026-11-06
 
 - **Wake word in Home Assistant: saying it while the Echo talks now interrupts the reply.** Until now this worked

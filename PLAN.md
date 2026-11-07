@@ -3295,3 +3295,22 @@ Run in this order. Each step says what it proves.
       in place, and "android" is at line 1381 of 3339 with Alexa's `/data/app` updates after it), `wpa_cli` only when
       `/sys/class/net/p2p-p2p0-0` exists; anything not shown done goes to pm/settings as before.  `pm_done` checked
       against fake files (whole, cut off, enabled, no restriction entry, component not noted, state 4).
+- [x] Echo Shows: a key held while hassmic starts was repeated by Android for good (issue #140, 2026-11-07, malammar's
+      Echo Show 5: volume down held during boot, the volume went to 0 and every attempt to raise it was undone at once,
+      until hassmic restarted).  `board.grab_keys` took EVIOCGRAB at once: Android had read the key-down, the key-up
+      reached hassmic alone, and InputDispatcher repeats the key it thinks held every 50 ms.  The kernel sends no
+      key-ups to the other readers on a grab, and none can be given to Android afterwards (a uinput key-up would be
+      another device's), so the grab waits for every key to be up (`EVIOCGKEY`), in each reader's thread (startup goes
+      on; keypad and privacy device each), with no time limit: a limit only brings the endless repeat back for a key held
+      longer, and until the grab the keys are Android's as on stock.  Events read before the grab are dropped (Android
+      had them).  Looked at again right after the grab: a key that went down between look and grab reached Android
+      too, so the grab is let go until it is up.  `tests/unit/buttons_grab_test.c` (EVIOCGKEY/EVIOCGRAB faked per
+      FIFO with `--wrap=ioctl`: keypad and privacy device, the race, a device without EVIOCGKEY grabbed at once; on the
+      old code 6 of its 7 checks fail).  The log says how long the grab waited, so a stuck key shows there.  On the
+      Echo Show 5 (checkers, 2026-11-07): holding a key through boot cannot test it, since MediaTek's kernel
+      long-press reset (`long_press_restart`, PMIC LPRST; `reboot: Restarting system with command 'enter_kpoc'`, boot
+      reason `wdt`) restarts the Show at ~17 s of a held key, before hassmic starts (~27 s).  Instead hassmic stopped,
+      volume down held by `sendevent` on gpio-keys (event6; the PMIC never sees it), hassmic started: Android drove the
+      speaker index 12 -> 0, the log said "key 114 is down", the key let go 3.5 s later "grabbed after 3533 ms";
+      the index set back to 12 stayed there (no repeat).  Muted (`amazon-gating/state` 1),
+      hassmic restarted: `gating` grabbed at once, so the gating driver does not hold KEY_POWER down while muted.

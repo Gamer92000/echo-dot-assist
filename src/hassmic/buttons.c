@@ -113,11 +113,17 @@ static void *latch_poll(void *arg)
     return NULL;
 }
 
+/* An input device a reader takes over: grabbed by the reader itself (grab() may wait), named for the log */
+struct input { int fd; const char *dev; };
+static struct input keypads[2], privacy;
+static void grab(const struct input *in);
+
 static void *reader(void *arg)
 {
-    int rfd = (int)(long)arg;
+    const struct input *in = arg; int rfd = in->fd;
     struct input_event ev; long long action_down = 0, vol_down[2] = { 0, 0 }; int combo_done = 0, held = 0;
     int action_told = 0, vol_told[2] = { 0, 0 };   /* this press went to handler.event already, or must not (a pair) */
+    grab(in);
     for (;;) {
         /* Keys held: their stages are due by the clock, not by events.  The keys repeat only as long as acebuttond's
          * configuration says, not something to count on */
@@ -199,7 +205,11 @@ static void *reader(void *arg)
  * its own input device.  Whatever event arrives there, the truth is the sysfs state. */
 static void *privacy_reader(void *arg)
 {
-    struct input_event ev; int pfd = (int)(long)arg;
+    struct input_event ev; int pfd = privacy.fd;
+    (void)arg;
+    /* grabbed as well: the Echo Show's gating device reports KEY_POWER, and Android's framework played a stock sound
+     * (a fallback ringtone, at the ring stream's level) for every press when it got the key (2026-10-13) */
+    grab(&privacy);
     while (read(pfd, &ev, sizeof ev) == sizeof ev) {
         if (ev.type == EV_SYN) continue;
         usleep(50000);
@@ -229,11 +239,54 @@ static int open_input(const char *spec)
     return -1;
 }
 
-/* board.grab_keys: the keys are ours alone.  A grab is the input device's, so it ends with our process. */
-static void grab(int fd, const char *dev)
+/* The code of a key of the device that is down now (EVIOCGKEY), 0 if none is, -1 if it cannot say (not an input device:
+ * the tests' FIFOs) */
+static int key_down(int fd)
 {
-    if (board.grab_keys && ioctl(fd, EVIOCGRAB, 1) < 0) perror("buttons: EVIOCGRAB");
-    else if (board.grab_keys) fprintf(stderr, "buttons: %s grabbed: its keys reach nothing else\n", dev);
+    unsigned char keys[KEY_MAX / 8 + 1];
+    memset(keys, 0, sizeof keys);
+    if (ioctl(fd, EVIOCGKEY(sizeof keys), keys) < 0) return -1;
+    for (int i = 0; i < (int)sizeof keys; i++) if (keys[i]) return i * 8 + __builtin_ctz(keys[i]);
+    return 0;
+}
+
+/* the events waiting to be read: from before the grab, so Android had them as well.  A latch change among them
+ * (SW_MUTE_DEVICE on athena and cronos) is still seen: latch_poll reads the state every second */
+static void drain(int fd)
+{
+    struct input_event ev; struct pollfd p = { fd, POLLIN, 0 };
+    while (poll(&p, 1, 0) > 0 && (p.revents & POLLIN) && read(fd, &ev, sizeof ev) == sizeof ev) {}
+}
+
+/* board.grab_keys: the keys are ours alone.  A grab is the input device's, so it ends with our process.  Never with a
+ * key down (issue #140): Android saw it go down, its key-up would reach us alone, and Android's input dispatcher
+ * repeats a key it thinks held every 50 ms for as long as the grab lasts (volume down held while an Echo Show 5
+ * started: the volume went to 0 and stayed there).  So the grab waits for every key to be up, however long, in the
+ * reader's thread: until then the keys are Android's as on stock, and nothing read meanwhile is acted on.  A time limit
+ * would only bring the endless repeat back for a key held longer.  Looked at again once grabbed: a key that went down
+ * between the look and the grab reached Android too, so the grab is let go until it is up (a key-up without its
+ * down, which may still reach us, is ignored by the readers; a whole press inside those two ioctls is not possible). */
+static void grab(const struct input *in)
+{
+    if (!board.grab_keys) return;
+    long long waited = 0;
+    for (;;) {
+        drain(in->fd);
+        int k = key_down(in->fd);
+        if (k <= 0) {                                           /* -1: grabbed as it is, as before */
+            if (ioctl(in->fd, EVIOCGRAB, 1) < 0) { perror("buttons: EVIOCGRAB"); return; }
+            if ((k = key_down(in->fd)) <= 0) break;
+            if (ioctl(in->fd, EVIOCGRAB, 0) < 0) perror("buttons: EVIOCGRAB 0");
+        }
+        if (!waited) {
+            waited = now_ms();
+            fprintf(stderr, "buttons: %s: key %d is down, grabbed once every key is up (Android has them until then)\n", in->dev, k);
+        }
+        struct pollfd p = { in->fd, POLLIN, 0 };
+        poll(&p, 1, 1000);                                      /* its key-up, else another look in a second */
+    }
+    if (waited) fprintf(stderr, "buttons: %s grabbed after %lld ms of a key down: its keys reach nothing else\n", in->dev, now_ms() - waited);
+    else fprintf(stderr, "buttons: %s grabbed: its keys reach nothing else\n", in->dev);
 }
 
 int buttons_start(const char *device, const struct button_handler *h)
@@ -244,10 +297,10 @@ int buttons_start(const char *device, const struct button_handler *h)
     if (times) sscanf(times, "%d %d", &HOLD_WARN_MS, &HOLD_RESET_MS);
     int f1 = open_input(device);
     if (f1 < 0) return -1;
-    grab(f1, device);
+    keypads[0] = (struct input){ f1, device };
     if (board.keypad2 && (f2 = open_input(board.keypad2)) >= 0) {   /* keys split over two nodes (biscuit) */
-        grab(f2, board.keypad2);
-        if (pthread_create(&t, NULL, reader, (void *)(long)f2)) close(f2);
+        keypads[1] = (struct input){ f2, board.keypad2 };
+        if (pthread_create(&t, NULL, reader, &keypads[1])) close(f2);
         else pthread_detach(t);
     } else if (board.keypad2) {
         fprintf(stderr, "buttons: %s not available, its keys go unnoticed\n", board.keypad2);
@@ -266,11 +319,9 @@ int buttons_start(const char *device, const struct button_handler *h)
     }
     if (!board.privacy_input) pfd = -1;
     else if ((pfd = open_input(board.privacy_input)) < 0) fprintf(stderr, "buttons: %s not available, mute button changes go unnoticed\n", board.privacy_input);
-    /* grabbed as well: the Echo Show's gating device reports KEY_POWER, and Android's framework played a stock sound
-     * (a fallback ringtone, at the ring stream's level) for every press when it got the key (2026-10-13) */
-    else if (grab(pfd, board.privacy_input), pthread_create(&t, NULL, privacy_reader, (void *)(long)pfd)) close(pfd);
+    else if (privacy = (struct input){ pfd, board.privacy_input }, pthread_create(&t, NULL, privacy_reader, NULL)) close(pfd);
     else pthread_detach(t);
-    if (pthread_create(&t, NULL, reader, (void *)(long)f1)) return -1;
+    if (pthread_create(&t, NULL, reader, &keypads[0])) return -1;
     pthread_detach(t);
     return 0;
 }
