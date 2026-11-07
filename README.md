@@ -101,7 +101,9 @@ by side to copy settings and wake words between them, the log. A press of the ac
 
 - A [supported Echo](#supported-echos), and a USB way into it (its page says what: a cable, or wires).
 - A **Linux PC**, running Linux on the machine itself (not macOS, not a VM or WSL: the unlock needs direct USB; a live
-  USB stick works), with `adb`, `fastboot`, `python3`, `make`, `unzip`, `debugfs` (e2fsprogs), ~5 GB free disk.
+  USB stick works), with `adb`, `fastboot`, `python3`, `make`, `unzip`, `debugfs` (e2fsprogs), and free disk:
+  about 7 GB for an Echo Show (a 16 GB stick), under 1 GB for the others, 5 GB more to build here instead of taking
+  GitHub's build (8 for an Echo Input). On a live USB stick the session's own disk is RAM: keep the repository on a drive.
   The setup offers to install what is missing. An **Echo Dot 2**, or any Echo that is **unlocked already**, can also
   be set up from **Windows**: Git Bash (Git for Windows, with its `unzip` and `curl`), `adb` (platform-tools) and
   `python3`; for the Dot 2's unlock also `fastboot`, [uv](https://docs.astral.sh/uv/) and

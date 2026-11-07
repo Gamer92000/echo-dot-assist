@@ -37,6 +37,9 @@ NOTES=(
 # probe files and the build look for it.
 rootfs() {
     [ -e $FW/rootfs/system/bin/linker ] && [ -e $FW/rootfs/system/vendor/lib/libasp.so ] && return 0
+    # the .br files (1.1 GB), system's .dat and image (2.2 GB each), vendor's (0.2): 5.9 GB at once; the rootfs (2.3)
+    # comes after the first two are gone
+    need_space 6000 "Unpacking the firmware" || return 1
     task "Unpacking the firmware (1 GB, a few minutes)" sh -c "set -e; mkdir -p $FW/ota $FW/images $FW/rootfs
         unzip -o -q $FW/$FIRMWARE_FILE system.new.dat.br system.transfer.list vendor.new.dat.br vendor.transfer.list boot.img -d $FW/ota
         for p in system vendor; do
@@ -53,10 +56,10 @@ rootfs() {
 step_tools() {
     command -v curl > /dev/null || need_tools curl || return 1
     build_mode
+    space_ahead 7000
     local unlock=; rooted_already || unlock="pyserial"          # saiyaku talks to the Echo's serial port
     if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb unzip brotli python3 debugfs curl sha256sum $unlock || return 1; return 0; fi
     need_tools adb unzip brotli python3 make cc debugfs curl sha256sum bc xz $unlock || return 1
-    [ "$(df -Pk . | awk 'NR == 2 { print $4 }')" -gt 8000000 ] || warn "less than 8 GB free here; the NDK, firmware and images need about that"
 }
 
 step_files() {
@@ -70,6 +73,7 @@ step_files() {
     [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
     if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
         mkdir -p toolchain
+        need_space $NDK_MB "The Android NDK" || return 1
         TASK_NOTE="du -h toolchain/ndk.zip | cut -f1" task "Downloading Android NDK r21e (1 GB)" curl -fsSL -o toolchain/ndk.zip $NDK_URL &&
             task "Unpacking the NDK" unzip -q -o toolchain/ndk.zip -d toolchain && rm -f toolchain/ndk.zip || return 1
     fi

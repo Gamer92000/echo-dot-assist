@@ -441,8 +441,27 @@ build_mode() {
         menu m "Use it (recommended): nothing to compile" "Build it here (Android NDK, 1 GB, and a compiler)"
         [ "$m" = 0 ] && m=prebuilt || m=source
     else
-        info "no release build of this commit on GitHub (changes here, or not published yet): it is built here"
         m=source
+        # a clean checkout between two releases went on to the NDK without a word, which filled a live USB session's
+        # RAM disk (issue #132): the newest release is offered first, by its tag (checked out by hand: this script is
+        # read as it runs), where it has this model's bundle (a model newer than it has none).  A ranged GET, not HEAD:
+        # the download's redirect is signed for GET
+        if [ -n "$TTY" ] && _clean && t=$(git tag -l 'v*' --sort=-creatordate | head -1) && [ -n "$t" ] &&
+            curl -fsL --max-time 20 -r 0-0 -o /dev/null \
+                "https://github.com/$UPDATE_REPO/releases/download/$t/hassmic-$DEVICE.bundle" 2>/dev/null; then
+            info "no release build of this commit on GitHub (not published yet: CI takes a few minutes after a push)"
+            ok "the newest release, $t, has one"
+            menu m "Stop here and take $t (recommended): nothing to compile" "Build it here (Android NDK, 1 GB, and a compiler)"
+            if [ "$m" = 0 ]; then
+                tell "Take the release build" "git checkout $t" "scripts/setup.sh $DEVICE" \
+                    "Its setup goes on where this one stopped. It is that release's setup too: what changed here since" \
+                    "is left out, the Echo's side and the PC's (git log $t..main says what)."
+                exit 0
+            fi
+            m=source
+        else
+            info "no release build of this commit on GitHub (changes here, or not published yet): it is built here"
+        fi
     fi
     [ -n "$DRY" ] || echo $m > $OUT/setup.build
     # the NDK is an x86_64 program: a Raspberry Pi 4 built with it under qemu-user's binfmt in ~15 min (2026-10-26)
@@ -451,6 +470,29 @@ build_mode() {
     build_mode_set $m
 }
 build_mode_set() { BUILD_MODE=$1; if [ "$1" = prebuilt ]; then export PREBUILT=1; else export PREBUILT=0; fi; }
+
+# Disk space, on the disk under the repository (firmware/, toolchain/ and build/ are in it).  A live USB session's own
+# disk is RAM, about 7 GB on a tester's PC (issue #132): the NDK broke off there with "write error (disk full?)", and a
+# Show's firmware, 6.7 GB at its peak, only fit an 8 GB stick with the .bin moved out.
+NDK_MB=5200                         # r21e: the 1 GB zip, unpacked beside it into 4 GB
+free_mb() { df -Pk . | awk 'NR == 2 { print int($4 / 1000) }'; }
+# need_space MB WHAT: before a step fills the disk, rather than a write error in the middle of it
+need_space() {
+    [ -n "$DRY" ] || [ "$(free_mb)" -ge "$1" ] && return 0
+    fail "$2 needs about $(( ($1 + 999) / 1000 )) GB free here, and there are $(df -Ph . | awk 'NR == 2 { print $4 }')"
+    info "Make room, or move this folder to a bigger drive (on a live USB not the session's own disk: that is RAM), then try again."
+    return 1
+}
+# space_ahead MB [MB_IMG]: said once at the start, what the setup is still to unpack here: MB of firmware (until its
+# libraries are there; MB_IMG once the system image is) and, built here, the NDK.  A warning only: the steps that take
+# it check again (need_space).
+space_ahead() {
+    local mb=0
+    if [ -d $FW/rootfs/system/lib ]; then :; elif [ -n "$2" ] && [ -f $FW/images/system.img ]; then mb=$2; else mb=$1; fi
+    [ "$BUILD_MODE" = prebuilt ] || [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ] || mb=$((mb + NDK_MB))
+    [ -n "$DRY" ] || [ "$(free_mb)" -ge $mb ] ||
+        warn "less than $(( (mb + 999) / 1000 )) GB free here ($(df -Ph . | awk 'NR == 2 { print $4 }')): what this setup unpacks takes about that"
+}
 
 # bootroot_unpack: boot-root's magiskpolicy, which install-system.sh patches the policy with (device.conf SEPOLICY_TOOL).
 # Checked by that file, not the folder: an unzip that broke off (WSL) left the folder, the retry passed, and the install
@@ -598,6 +640,43 @@ unlock_wait_twrp() {
         "Nothing yet? Unplug the Echo's power and plug it back in." 90 300 && return 0
     [ -n "$WAIT_ABORT" ] &&
         fail "the unlock did not take (the Echo is still in fastboot): its LK build is likely newer than $AMONET can unlock. Unplug the power and plug it back in: it boots the original software again"
+    return 1
+}
+
+# amazon_usb: the USB devices with Amazon's vendor id, as "<sysfs name> <devnum>" (a new devnum: enumerated again)
+amazon_usb() {
+    local d
+    for d in /sys/bus/usb/devices/*; do
+        [ "$(cat $d/idVendor 2>/dev/null)" = 1949 ] && echo "${d##*/} $(cat $d/devnum 2>/dev/null)"
+    done
+}
+
+# show_wait_twrp USB: after amonet's fastbrick on a Show, until TWRP is up.  fastbrick.sh says "Exploit most likely
+# successful!" whatever came of it, and a tester's Echo Show 5 went back to Amazon's setup screen instead (issue #132,
+# fastboot's unlock_status false; the next run unlocked it, TWRP coming up by itself).  Their USB ids tell the two
+# apart: amonet's TWRP is 18d1:d001 (checkers' twrp.img, TWRP's default; crown's and cronos' not seen), Fire OS 1949
+# (Amazon), fastboot 0bb4:0c01.  An installed Show 5 on reboots, 2026-11-07: to recovery the preloader 0e8d:2000, then
+# TWRP 18d1:d001 and 18d1:4ee2, never 1949 (TWRP on adb in 21 s); back the preloader, then Fire OS 1949:0178 (0171
+# without adb, the tester's), caught 17 s after the reboot.  So an Amazon device that was not on USB as fastbrick
+# started (USB: amazon_usb then, with devnum: an Echo plugged in on Fire OS before it enumerates again) is the Echo in
+# Fire OS, which has no adb.
+# Fastbrick's payload goes on writing on the Echo after fastboot returned ("DO NOT INTERRUPT", up to 5 min): no
+# hint to pull the power before that, and one that boots TWRP after it (Volume up held).  A power cycle on Fire OS
+# still says the unlock failed when it did not, hence a test first: Volume up held at power-on starts TWRP on an
+# unlocked Echo and Amazon's recovery (a red triangle) on a locked one, as the tester saw (unlock_status false).
+show_wait_twrp() {
+    local usb0=$1
+    pick_serial
+    waitfor "Waiting for TWRP|TWRP is up" \
+        'adb_is recovery || { [ -n "$(amazon_usb | grep -vxF -e "$usb0" -e "")" ] && WAIT_ABORT=1; false; }' \
+        "Nothing after 6 min? Unplug the Echo's power and plug it back in with Volume up held: that starts TWRP." 360 900 &&
+        return 0
+    [ -n "$WAIT_ABORT" ] || return 1
+    fail "the Echo started its own software (Amazon's setup on its screen), not TWRP: as a rule the unlock did not take"
+    tell "To be sure: unplug the Echo's power and plug it back in with Volume up held" \
+        "TWRP comes up: the unlock did take. Run this step again; it goes on from TWRP." \
+        "A red triangle (Amazon's recovery): it did not. Nothing is lost: unplug the power, run this step again." \
+        "(Another Amazon device plugged into this PC meanwhile, a Kindle or an Echo, looks the same: unplug it.)"
     return 1
 }
 

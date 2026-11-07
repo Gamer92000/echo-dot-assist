@@ -43,7 +43,7 @@ step_tools() {
     { rooted_already || [ -n "$WINDOWS" ]; } && unlock=python3      # no unlock here: python3 only for otatool.py
     if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip curl sha256sum || return 1; return 0; fi
     need_tools adb $unlock make cc unzip debugfs curl sha256sum bc xz || return 1
-    [ "$(df -Pk . | awk 'NR == 2 { print $4 }')" -gt 5000000 ] || warn "less than 5 GB free here; the NDK and firmware need about that"
+    space_ahead 3000
 }
 
 step_files() {
@@ -55,6 +55,7 @@ step_files() {
     [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
     if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
         mkdir -p toolchain
+        need_space $NDK_MB "The Android NDK" || return 1
         TASK_NOTE="du -h toolchain/ndk.zip | cut -f1" task "Downloading Android NDK r21e (1 GB)" curl -fsSL -o toolchain/ndk.zip $NDK_URL &&
             task "Unpacking the NDK" unzip -q -o toolchain/ndk.zip -d toolchain && rm -f toolchain/ndk.zip || return 1
     fi

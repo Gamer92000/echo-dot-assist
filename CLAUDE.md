@@ -518,9 +518,10 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   needs no compiler for it; `tests/otatool_test.sh` holds the two byte for byte to each other, and CI verifies every
   bundle with both. `scripts/bundle.sh` packs (ota-push.sh and CI).
 - **Prebuilt** (`scripts/lib/build.sh`, `build_binaries`): deploy/install-system/ota-push/setup take the device binaries
-  from the release CI published of HEAD (tag `v<commit time>[-beta]` pointing at HEAD, clean tree; else the newest
-  release tag before HEAD when nothing since touches a bundle, `_bundle_free`: CI publishes no beta of such commits,
-  issue #106; bundle verified against `keys/release.pub`, marked `build/<codename>/PREBUILT`) where there is no NDK,
+  from the release CI published of HEAD (tag `v<commit time>[-beta]` pointing at HEAD, clean tree; else the release
+  CI found HEAD's bundles alike to, `_ci_same`: its build run on HEAD passed with "Publish" skipped, the newest
+  release published before its "Anything new" step ended, issue #132; else, CI not done, the newest release tag before HEAD when nothing since touches a bundle,
+  `_bundle_free`: CI publishes no beta of such commits, issue #106; bundle verified against `keys/release.pub`, marked `build/<codename>/PREBUILT`) where there is no NDK,
   or with `PREBUILT=1`;
   `PREBUILT=0` always builds. `scripts/probe.sh` compares with `devices/<codename>/probe.md5`, not the unpacked firmware.
 - **Online updates** (`update.c`): "Online updates" on the settings page (off default / beta / release, `state/config`) and an

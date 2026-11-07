@@ -33,17 +33,49 @@ _bundle_free() {
     done
 }
 
+# _ci_same COMMIT: the release CI found COMMIT's bundles the same as.  A build workflow that ran on its push and passed
+# without publishing (no tag of it) compared every model's content ID with the newest release's in its release job's
+# step "Anything new" (gh release list's first: the newest by created_at, which GitHub sets to the tag commit's time)
+# and found them all alike; that release is the newest one published before that step ended.  Not before the run
+# ended: a release from the other branch can come out in between.  Exact where _bundle_free guesses: #129 changed
+# scripts/lib/device.sh, which bundle.sh uses and so counts as the Echo's, and was left without a build (#132).
+# Releases go through stdin: their notes outgrow argv.  60 API calls an hour without a login; past them, the 403 is a
+# "no" and _bundle_free has its say.
+_ci_same() {
+    _u=$(curl -fsS --max-time 20 "https://api.github.com/repos/$UPDATE_REPO/actions/runs?head_sha=$1&event=push&status=success" 2>/dev/null |
+        python3 -c '
+import json, sys
+runs = [r for r in json.load(sys.stdin)["workflow_runs"]
+        if r["path"] == ".github/workflows/build.yml" and r["conclusion"] == "success"]
+print(min(runs, key=lambda r: r["created_at"])["jobs_url"])' 2>/dev/null) || return 1
+    # only where its step "Publish" was skipped: a commit that did publish was found different from that release.  A
+    # release job skipped (its tag there already) has no steps: no answer
+    _e=$(curl -fsS --max-time 20 "$_u" 2>/dev/null | python3 -c '
+import json, sys
+job = [j for j in json.load(sys.stdin)["jobs"] if j["name"] == "release"][0]
+step = {s["name"]: s for s in job["steps"]}
+step["Publish"]["conclusion"] == "skipped" and step["Anything new"]["conclusion"] == "success" or sys.exit(1)
+print(step["Anything new"]["completed_at"])' 2>/dev/null) || return 1
+    curl -fsS --max-time 20 "https://api.github.com/repos/$UPDATE_REPO/releases?per_page=30" 2>/dev/null | python3 -c '
+import json, sys
+before = [r for r in json.load(sys.stdin) if not r["draft"] and r["published_at"] and r["published_at"] <= sys.argv[1]]
+before or sys.exit(1)
+print(max(before, key=lambda r: r["created_at"])["tag_name"])' "$_e" 2>/dev/null
+}
+
 # prebuilt_tag: the release of HEAD.  CI tags v<commit time, UTC> (-beta from main) on the commit it built.  It
 # publishes no beta of a commit that changes nothing on the Echos (scripts/content-id.sh: docs, tests, the PC's
-# scripts), so failing that, the newest release tag before HEAD, when nothing after it touches a bundle (issue #106: a
-# README commit on top of main left Windows, which builds nothing, no release to take).  Fails for a tree with changes,
-# a commit not pushed, CI not done yet, or no git checkout.
+# scripts), so failing that, the release CI compared it with (_ci_same), and before CI is done, the newest release tag
+# before HEAD when nothing after it touches a bundle (issue #106: a README commit on top of main left Windows, which
+# builds nothing, no release to take).  Fails for a tree with changes, a commit not pushed, CI not done yet with a
+# change to the Echo's files, or no git checkout.
 prebuilt_tag() {
     _clean || return 1
     _h=$(_head) _v=$(_vhead)
     for _t in v$_v-beta v$_v; do
         [ "$(_gh_tag $_t)" = "$_h" ] && { echo "$_t"; return 0; }
     done
+    _t=$(_ci_same $_h) && [ -n "$_t" ] && { echo "$_t"; return 0; }
     # --no-renames: a file moved out of src/ into docs/ is listed under both names
     _t=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2>/dev/null) && _c=$(git rev-parse "$_t^{commit}") &&
         _bundle_free $(git diff --name-only --no-renames $_c HEAD) && [ "$(_gh_tag $_t)" = "$_c" ] &&

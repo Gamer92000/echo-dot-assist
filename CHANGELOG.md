@@ -4,6 +4,14 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-07
 
+- **Setup: fewer dead ends on an Echo Show (issue #132).** When the unlock does not take and the Echo starts its own
+  software again, the setup now says so and offers to run the step again, instead of waiting for TWRP forever. It
+  names the right buttons for fastboot (Volume down, Volume up and Mute; it said the camera shutter). It checks free
+  disk space before the big downloads and unpacks instead of breaking off with "disk full", and the README gives the
+  real figures (an Echo Show needs about 7 GB). On a commit GitHub published no build of, it no longer downloads the
+  1 GB Android NDK without asking: it takes the release with the same Echo software where CI found one, or offers
+  the newest release first.
+
 - **Echo Shows: a key held while the Echo starts no longer sticks.** Holding a key while hassmic started (during
   boot, for example) left Android thinking it was still held until hassmic restarted: volume down kept turning the
   volume to 0 and undid every attempt to raise it (issue #140). The Echo now takes over the keys only
