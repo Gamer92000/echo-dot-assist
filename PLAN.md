@@ -177,6 +177,16 @@ Run in this order. Each step says what it proves.
       reply), so neither the mixer nor the AEC is in the way. It was ignored because `barge_in` doubled as "already being cut" and as
       "continue conversation", which HA sets for every reply ending in a question. Fixed (cut is now keyed on `flush_playback`), test
       added that fails on the old core. Installed; user: "perfect now" (log: wake → barge-in → listening during a reply)
+- [x] Barge-in with the wake word at Home Assistant (`-w remote`, PR #134, 2026-11-06): nothing listened during a reply, only the
+      button cut it. Once the reply's run has ended (`RUN_END`; earlier would cancel it: HA's ESPHome satellite cancels the running
+      pipeline on a new start), `wake_listen` opens a run for the wake word stage beside the reply; its `WAKE_WORD_END` cuts the reply
+      and the same run goes on as the request (HA keeps the audio after the word), listening at once: STT_START, VAD end and RUN_END
+      can all come before the cut's Q_STOP, which `wake_cut` then swallows. `reply_cut` shuts the fetch's socket (a streamed reply's
+      next chunk can be 15 s away). A wake-only run that ends is asked for again; one that fails too (its late events dropped as
+      cancelled), 3 failures per reply at most. HA checks duplicate wake-ups before WAKE_WORD_END (`accept_wake_word`), so an Echo
+      that loses that check never cuts its reply. "Last heard"/"Last reply" now clear at WAKE_END with remote wake (the idle run's
+      RUN_START blanked them right after every reply), and a bare "stop" within 10 s of a cut cancels the run (`core_transcript`,
+      no "stop" keyword at HA). Verified by the author on a Dot 2 with HA 2026.11; `tests/fake_ha_remote_bargein.py`
 - [ ] Wake-word accuracy at distance and with music playing: ten tries from across the room, count `wake:` lines in `boot.log`,
       once in silence, once with Music Assistant playing (threshold hints are in place, see "Stop" below)
 - [~] Wake word "Echo": firmware ships only `ALEXA` (+`STOP`) in `words.shrunk.txt`. Stock gets other keywords from DAVS (cloud) into

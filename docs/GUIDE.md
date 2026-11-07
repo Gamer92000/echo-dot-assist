@@ -95,7 +95,7 @@ System) off takes any certificate, but then anyone on your network could slip th
   resumes it), without waiting for speech-to-text to catch the word over the music. What you say after it still goes
   to Home Assistant ("Alexa, stop the timer"); a bare "stop" does not. When Amazon's model misses the "stop", or with
   microWakeWord or Home Assistant's wake word (no "stop" keyword), a request that is only "stop" does the same: the
-  music pauses and Home Assistant gets no request. A phone without remote control (AVRCP) goes silent instead, until
+  music pauses and Home Assistant gets no request; right after the wake word cut a reply, the reply stays ended. A phone without remote control (AVRCP) goes silent instead, until
   it starts playing again; the button cannot resume it.
   When "stop" ends something (a ringing timer, a Drop In call, a reply, a request still being worked on), the Echo
   does not listen afterwards, also when it comes while several Echos are still deciding which one answers.
@@ -215,8 +215,12 @@ listens: openWakeWord, with your own models too. The page's dialog walks through
 3. "Add streaming wake word" on the assistant, and that assistant on the Echo's device page.
 
 When Home Assistant hears the wake word, the Echo answers as on its own: the sound, the ring, the front end held on the
-talker until the command ends. It costs arbitration between Echos, "<wake word>, stop", the extra sensitivity while
-playing, everything while Home Assistant is down, and likely some reliability. Switching to or from it restarts the
+talker until the command ends. During a reply too: once Home Assistant has finished it, the Echo has it listen for the
+wake word again while the reply plays, so saying it cuts the reply and what follows is the next request (ESPHome only;
+with Wyoming the button cuts a reply). That relies on the Echo's echo canceller keeping its own voice out of the
+microphone, so over a loud reply the wake word may be missed. "<wake word>, stop" right then ends the reply and nothing
+goes to the assistant. It costs arbitration between Echos, the "stop" keyword (a bare "stop" in the transcript stands
+in, a moment later), the extra sensitivity while playing, everything while Home Assistant is down, and likely some reliability. Switching to or from it restarts the
 satellite for a few seconds. `-w remote` in [`ARGS`](#hassmicconf) does the same, and then the page cannot change it.
 
 ## Several Echos
@@ -950,6 +954,7 @@ for 30 minutes:
 | | ESPHome (default) | Wyoming |
 |---|---|---|
 | Voice, wake word on the Echo or in Home Assistant, interrupt | ✅ | ✅ |
+| Interrupting a reply with Home Assistant's wake word | ✅ | ❌ (the button) |
 | Buttons, light ring, hardware mute | ✅ | ✅ |
 | Music Assistant (Sendspin) | ✅ | ✅ |
 | Only the nearest Echo answers | ✅ | ❌ |

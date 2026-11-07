@@ -50,6 +50,8 @@ struct proto {
     void (*wake)(const char *event);            /* may be NULL: the wake word heard (core_wake_events) */
     void (*end)(void);                          /* may be NULL: the Echo heard the request end (micend.h): end of audio,
                                                  * the server goes on with what it has (stop() aborts the run) */
+    void (*reply_cut)(void);                    /* may be NULL: the reply playing is cut (flush) while the run goes on: stop
+                                                 * fetching it now, not at the server's next chunk */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
@@ -86,7 +88,7 @@ int  core_wake_sound_removal(int set);           /* our sounds taken out of what
 int  core_mic_denoise(int set);                 /* noise reduction on what the pipeline gets (micdenoise.h): 0 off .. 3 high, -1 reads */
 void core_pipeline_finish(void);
 void core_restart_after(void);                  /* start another pipeline once the current one has finished */
-int  core_wake_run_ended(void);                  /* lock held: the wake-only run during a reply ended without a wake word (1) */
+int  core_wake_run_ended(int failed);            /* lock held: a run ended during a reply; 1: the one that only listened for the wake word */
 void core_run_over(void);                        /* lock held: the run has ended while its reply is (about to be) spoken; with -w remote the wake word may cut it */
 void core_error(void);
 /* Home Assistant heard no request (stt-no-text-recognized): the turn ends quietly, without core_error's ring */
@@ -168,6 +170,7 @@ extern const int core_wake_nevents;
 void   core_tts_begin(unsigned rate, unsigned channels, int media);
 void   core_tts_data(const void *pcm, size_t len);
 void   core_tts_end(void);                                  /* drains, then played() and core_pipeline_finish() */
+void   core_tts_abandoned(void);                            /* lock held: a reply that began ends without core_tts_end() */
 int    core_tts_flushing(void);                             /* barge-in: drop audio until core_tts_end() */
 void   core_tts_flush(void);
 size_t core_tts_queued(void);                               /* bytes not yet played: for back pressure */

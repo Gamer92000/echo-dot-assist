@@ -738,11 +738,14 @@ static void lead_in(void)
 
 static int run_over;                                /* lock held: Home Assistant ended the run whose reply is still being spoken */
 static void mic_stopped(void);
-static int wake_cont;                               /* lock held: the wake word came during the reply; its run goes on as the request once playback is cut */
 static int wake_wait;                               /* lock held: the run now open only listens for the wake word during a reply */
+/* lock held: the reply is being cut for the wake word Home Assistant heard, whose run goes on as the request: the cut's
+ * Q_STOP ends nothing.  Not cleared by a new run: that Q_STOP may come after the request has ended and the next begun */
+static int wake_cut;
+static int wake_fails;                              /* lock held: wake word runs Home Assistant failed during this reply */
 static void pipeline_start(uint64_t from)    /* from: where the wake word that starts it ended, 0: not a wake word */
 {
-    run_over = 0; wake_wait = 0; wake_cont = 0;
+    run_over = 0; wake_wait = 0;
     quiet_abort = 0;
     mic_fresh = 1;
     replay_from = from;
@@ -781,16 +784,17 @@ static void wake_tell(const char *event)       /* any thread but the lock's hold
 void core_remote_wake(void)
 {
     if (core_local_wake || !atomic_load(&streaming)) return;
-    if (state == SPEAKING) {                            /* during a reply (wake_listen): cut it; this run goes on as the request, so the words
-                                                         * Home Assistant buffered after the wake word are not lost (core_pipeline_finish) */
-        if (!wake_cont && !atomic_load(&flush_playback)) {
-            fprintf(stderr, "barge-in\n");
-            wake_told("detected");
-            wake_cut_ms = mono_ms();
-            wake_cont = 1;
-            atomic_store(&flush_playback, 1);
-        }
-        return;
+    if (state == SPEAKING) {
+        /* During a reply (wake_listen): cut it.  This run goes on as the request, so the words Home Assistant buffered
+         * after the wake word are not lost, and it listens from now on, not once playback has stopped: Home Assistant's
+         * STT_START, VAD end and RUN_END may all come before the cut's Q_STOP, and have to find the request's states.
+         * The reply's follow-up (continue_conversation) or a button that was cutting it already: this is the request now */
+        fprintf(stderr, "barge-in\n");
+        wake_cut_ms = mono_ms();
+        wake_cut = 1; wake_wait = 0;
+        barge_in = 0; barge_from = 0;
+        atomic_store(&flush_playback, 1);
+        if (proto->reply_cut) proto->reply_cut();
     }
     run_wake = 1;
     wake_told("detected");
@@ -802,21 +806,28 @@ void core_remote_wake(void)
 /* Lock held.  Wake word at Home Assistant: once its run is over and the reply plays, a new run (wake word stage) listens
  * to the mic, so the wake word cuts the reply as it does with a local one (core_remote_wake).  Not before the run is
  * over: Home Assistant cancels the running pipeline when another starts, and would cut a reply still being generated.
- * The reply is in the mic too: the front end's echo canceller is what keeps it out of Home Assistant's detection. */
+ * The reply is in the mic too: the front end's echo canceller is what keeps it out of Home Assistant's detection.
+ * Not while the reply is being cut already (the button, Home Assistant's media stop): its Q_STOP would end the run again.
+ * After 3 failed in one reply, none: a Home Assistant that fails each at once (its wake word engine gone) would have
+ * them start and fail at network speed for as long as the reply plays; the button still cuts it */
+#define WAKE_FAILS_MAX 3
 static void wake_listen(void)
 {
-    if (core_local_wake || !run_over || state != SPEAKING || atomic_load(&streaming) || !connected || !satellite_running) return;
+    if (core_local_wake || !run_over || state != SPEAKING || atomic_load(&streaming) || atomic_load(&flush_playback) ||
+        wake_fails >= WAKE_FAILS_MAX || !connected || !satellite_running) return;
     pipeline_start(0);
     wake_wait = 1;
 }
 
-/* Lock held.  The run that listened for the wake word during a reply ended (error, nothing heard) before a wake word:
- * not the reply's end.  Returns 1 if that was the case; the mic stops going to it and its RUN_END starts the next. */
-int core_wake_run_ended(void)
+/* Lock held.  A run ended while the reply plays (failed: by an error, or by a RUN_END without a wake word, which Home
+ * Assistant has no reason for either).  If it is the one that listened for the wake word (wake_listen), not the reply's:
+ * the mic stops going to it, and core_run_over asks for the next.  1: it was that one */
+int core_wake_run_ended(int failed)
 {
     if (!wake_wait || state != SPEAKING) return 0;
     atomic_store(&streaming, 0); mic_stopped();
-    wake_wait = 0; wake_cont = 0;
+    wake_wait = 0;
+    if (failed && ++wake_fails == WAKE_FAILS_MAX) fprintf(stderr, "wake word: %d runs failed during the reply, only the button cuts it\n", WAKE_FAILS_MAX);
     return 1;
 }
 
@@ -1110,16 +1121,7 @@ void core_restart_after(void) { barge_in = 1; barge_from = 0; }
 
 void core_pipeline_finish(void)
 {
-    if (wake_cont) {            /* the reply is cut for a wake word Home Assistant heard: its run is the request, still open */
-        wake_cont = 0;
-        if (atomic_load(&streaming) && connected && satellite_running) {
-            wake_wait = 0; run_wake = 1;
-            sound_request(SND_WAKE);
-            listening(1);
-            core_set_state(LISTENING);
-            return;
-        }
-    }
+    wake_fails = 0;
     if (atomic_exchange(&streaming, 0) && connected) {
         /* a run that only listened for the wake word is aborted, not ended: a stale error from it must not reach the next */
         if (wake_wait && proto->cancel) proto->cancel();
@@ -2063,7 +2065,8 @@ static void *playback_thread(void *arg)
             pthread_mutex_lock(&core_lock);
             atomic_store(&flush_playback, 0);       /* under the lock: a wake word between would cut the next reply */
             if (proto->played) proto->played();      /* also without a client: modules reset their state here */
-            core_pipeline_finish();
+            if (wake_cut) wake_cut = 0;              /* cut for Home Assistant's wake word: its run is the request (core_remote_wake) */
+            else core_pipeline_finish();
             pthread_mutex_unlock(&core_lock);
             break;
         }
@@ -2082,6 +2085,9 @@ void core_tts_begin(unsigned rate, unsigned channels, int media)
 
 void core_tts_data(const void *pcm, size_t len) { if (!atomic_load(&flush_playback)) q_push(Q_DATA, 0, 0, 0, pcm, len); }
 void core_tts_end(void) { q_push(Q_STOP, 0, 0, 0, NULL, 0); }
+/* lock held.  cancel() let go of a fetch after its audio began: no Q_STOP of its own follows (one would end the run
+ * that cancelled it, or close the next reply), so none is left to swallow for the wake word's cut either */
+void core_tts_abandoned(void) { wake_cut = 0; }
 int  core_tts_flushing(void) { return atomic_load(&flush_playback); }
 void core_tts_flush(void) { atomic_store(&flush_playback, 1); }
 
@@ -2289,9 +2295,12 @@ int core_transcript(const char *text)
         if (!hit && !(timer_stop_any && w[0])) return 0;
         core_alarm_stop(hit ? "said stop" : "a request during the ring");
     } else {
-        /* 10 s: the keyword's pipeline ends at Home Assistant's end of speech, a few seconds on */
-        if (!hit || !(music_stop() || (music_stopped_ms && mono_ms() - music_stopped_ms < 10000))) return 0;
-        fprintf(stderr, "said stop: music paused, run cancelled\n");
+        /* 10 s: the keyword's pipeline ends at Home Assistant's end of speech, a few seconds on.  A reply or request the
+         * wake word just cut is what the "stop" was for: Home Assistant's wake word has no "stop" keyword (stop_word),
+         * and Amazon's can miss it, so "<wake word>, stop" during a reply arrives here as a request */
+        int cut = hit && mono_ms() - wake_cut_ms < 10000;
+        if (!hit || !(cut || music_stop() || (music_stopped_ms && mono_ms() - music_stopped_ms < 10000))) return 0;
+        fprintf(stderr, "said stop: %s, run cancelled\n", cut ? "what the wake word cut stays ended" : "music paused");
     }
     if (connected && proto->cancel) { barge_in = 0; atomic_store(&streaming, 0); proto->cancel(); quiet_abort = 1; }
     core_pipeline_finish();
