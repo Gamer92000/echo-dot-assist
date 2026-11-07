@@ -275,15 +275,20 @@ static const char *adb_ask(const uint8_t pub[32], int on)
     return r;
 }
 
-/* "approved", "waiting", "refused" */
+/* "approved", "waiting", "refused".  Approved is what clients[] says: the old record said it to a key revoked or pushed
+ * out since, and the page showed "Logged in" over 401s.  A login that ran out or collided is told once, then the next
+ * ask from that key starts anew: the record stayed until another key asked, and the page keeps one key, so its "Try
+ * again" was refused at once, with nothing on the ring for the button */
 static const char *login_ask(const uint8_t pub[32], const char *label)
 {
     const char *r; long long now = now_ms();
     pthread_mutex_lock(&lk);
     login_expire(now);
     if (client_of(pub)) r = "approved";
-    else if (login.state && login.kind == W_LOGIN && !memcmp(login.pub, pub, 32)) r = login.state == 1 ? "waiting" : login.state == 2 ? "approved" : "refused";
-    else if (login.state == 1) {                /* two at once: neither */
+    else if ((login.state == 1 || login.state == 3) && login.kind == W_LOGIN && !memcmp(login.pub, pub, 32)) {
+        r = login.state == 1 ? "waiting" : "refused";
+        if (login.state == 3) login.state = 0;
+    } else if (login.state == 1) {              /* two at once: neither */
         login.state = 3; r = "refused";
         fprintf(stderr, "web: two logins at once, both refused\n");
         if (hooks->attention) hooks->attention(0);

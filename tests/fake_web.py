@@ -3,7 +3,8 @@
 X25519 and BLAKE2b from Python's libraries, not web/crypto.js), plus Home Assistant (aioesphomeapi) watching the same
 Echo.  Login by the action button (SIGUSR2), signed reads and writes, replays and forged signatures, two logins at once,
 export and import, the settings file from before names, the speaker gain, features (entities in Home Assistant only while on), adb with
-a press of its own (a request withdrawn by "off" or a revoke), revoking; a login left waiting runs out by itself, and a restart clears its ring and names a new start."""
+a press of its own (a request withdrawn by "off" or a revoke), revoking; a login left waiting runs out by itself (asked again,
+a new one waits), and a restart clears its ring and names a new start."""
 import asyncio, gzip, json, os, re, signal, subprocess, sys, tempfile, time
 from aioesphomeapi import APIClient
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -281,6 +282,11 @@ async def main():
         check(y.call("GET", "/api/state")[0] == 401 and z.call("GET", "/api/state")[0] == 401, "and the button approves neither")
 
         # revoke
+        w = Browser(WEB)
+        check(w.login_with_button(proc), "another browser logged in")
+        check(json.loads(b.call("POST", "/api/revoke", w.pub.hex().encode())[2]).get("revoked") is True and w.call("GET", "/api/state")[0] == 401,
+              "revoke another browser: refused from then on")
+        check(w.login() == "waiting", "...and when it asks to log in again, it waits for the button (it was told \"approved\", and kept out)")
         check(json.loads(b.call("POST", "/api/revoke", b.pub.hex().encode())[2]).get("revoked") is True, "revoke this browser")
         check(b.call("GET", "/api/state")[0] == 401, "revoked: refused")
         try: await ha.disconnect()
@@ -315,6 +321,9 @@ async def login_runs_out():
         check("-u authenticated_setup_mode" in lines() and "login ran out without the button" in open(log).read(),
               "the page went away: the login runs out by itself, the ring off, with nothing asking")
         check(b.login() == "refused", "...and the browser is told so when it asks again")
+        check(b.login() == "waiting", "asked once more (the page's Try again): a new login waits (it was refused at once until another key asked)")
+        proc.send_signal(signal.SIGUSR2); await until(lambda: "login approved" in open(log).read())
+        check(b.login() == "approved", "...and the button approves it")
         proc.terminate(); proc.wait(); proc = run(); wait_port(PORT2, WEB2)
         again = Browser(WEB2).hello.get("start")
         check(again and first and again != first, f"restarted: /api/hello names another start ({first} -> {again})")
