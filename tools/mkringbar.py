@@ -40,9 +40,14 @@ throws ends the process, and hassmic sees its stdout close.  The Java source it 
             int w = fint(di, "logicalWidth"), dh = fint(di, "logicalHeight");
             overscan(wm, fint(di, "rotation"), h);
             if (h == 0) { out("off"); return; }                 // the band switched off: overscan reset, done
-            Object s = surface(w, h, dh - h);
+            Object sc = create(w, h, a.length);                 // a[1] = "builder": SurfaceControl.Builder (Android 8+)
+            Object s = surface(sc, dh - h);
             out(new StringBuilder().append("ready ").append(w).append(" ").append(h).toString());
             loop(s, w, h);
+            sc.getClass();          // the SurfaceControl must stay reachable as long as the layer is wanted: its
+                                    // finalizer releases the layer, and the Surface copied from it does not hold it
+                                    // (Android 9: a GC every ~55 s took the band away, lockCanvas threw, 2026-10-14).
+                                    // A use after the loop keeps it live all along, as a static field would.
         }
         static void overscan(Object wm, int rot, int h) {     // (display 0, left, top, right, bottom)
             String[] ps = new String[5]; Object[] as = new Object[5];
@@ -50,15 +55,28 @@ throws ends the process, and hassmic sees its stdout close.  The Java source it 
             as[rot == 0 ? 4 : rot] = Integer.valueOf(h);      // the natural side at the bottom now
             inv(wm, "setOverscan", ps, as);
         }
-        static Object surface(int w, int h, int y) {
-            Class scc = Class.forName("android.view.SurfaceControl");
+        static Object create(int w, int h, int n) {
             Class ssc = Class.forName("android.view.SurfaceSession");
-            Object session = ssc.newInstance();
-            Class[] cs = { ssc, Class.forName("java.lang.String"),
-                           Integer.TYPE, Integer.TYPE, Integer.TYPE, Integer.TYPE };
-            Object[] as = { session, "hassmic-band", Integer.valueOf(w), Integer.valueOf(h),
-                            Integer.valueOf(-1) /* PixelFormat.OPAQUE */, Integer.valueOf(4) /* HIDDEN */ };
-            Object sc = scc.getConstructor(cs).newInstance(as);
+            Object session = ssc.newInstance();     // a local is enough: its finalizer only drops a reference to the
+                                                    // native SurfaceComposerClient, which the native SurfaceControl
+                                                    // holds too (AOSP 7 and 9); the layer goes with the control alone
+            if (n < 2) {                            // Android 7: new SurfaceControl(session, name, w, h, format, flags)
+                Class[] cs = { ssc, Class.forName("java.lang.String"),
+                               Integer.TYPE, Integer.TYPE, Integer.TYPE, Integer.TYPE };
+                Object[] as = { session, "hassmic-band", Integer.valueOf(w), Integer.valueOf(h),
+                                Integer.valueOf(-1) /* PixelFormat.OPAQUE */, Integer.valueOf(4) /* HIDDEN */ };
+                return Class.forName("android.view.SurfaceControl").getConstructor(cs).newInstance(as);
+            }
+            // Android 9: the constructor is gone; each setter returns the builder
+            Object b = Class.forName("android.view.SurfaceControl$Builder")
+                           .getConstructor(new Class[]{ ssc }).newInstance(new Object[]{ session });
+            b = w1(b, "setName", "java.lang.String", "hassmic-band");
+            b = w2(b, "setSize", "int", "int", Integer.valueOf(w), Integer.valueOf(h));
+            b = w1(b, "setFormat", "int", Integer.valueOf(-1));
+            b = w1(b, "setFlags", "int", Integer.valueOf(4));
+            return os(b, "build");
+        }
+        static Object surface(Object sc, int y) {
             sinv0("android.view.SurfaceControl", "openTransaction");
             w1(sc, "setLayer", "int", Integer.valueOf(2000000000));        // above every window
             w2(sc, "setPosition", "float", "float", Float.valueOf("0"),
