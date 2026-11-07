@@ -80,6 +80,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # 500 ppm slow (HASSMIC_FAKE_MUSIC_PPM) and AudioTrack's burst at the
                                              # start (HASSMIC_FAKE_MUSIC_BURST_MS), followed without a phase step
 .venv/bin/python tests/fake_ha_stop_word.py   # "<wake word>, stop" between two Echos: the drop cancelled, stop_ends_listening
+.venv/bin/python tests/fake_ha_remote_bargein.py  # -w remote: a wake word run beside each reply, its wake word cuts the reply and
+                                             # goes on as the request, "stop" after it, failed runs asked for again (3 at most)
 .venv/bin/python tests/fake_screen.py [--legacy]  # the Echo Show's screen UI as hassmic feeds it (stand-in UI): Sendspin
                                              # metadata/artwork (1.0's transfer, scheduled; --legacy: 9.1.1's), the band,
                                              # commands, home app, restarts

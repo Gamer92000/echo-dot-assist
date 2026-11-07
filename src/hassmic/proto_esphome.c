@@ -999,6 +999,7 @@ static void *media_thread(void *arg)
     }
     pthread_mutex_lock(&core_lock);
     if (job->aborted) {                 /* cancel() has let go of it: a new run and its reply may be under way already */
+        if (began) core_tts_abandoned();
         pthread_mutex_unlock(&core_lock);
         free(job);
         return NULL;
@@ -1321,6 +1322,14 @@ static void cancel(void)
     }
 }
 
+/* The wake word cut the reply and its run goes on as the request (main.c core_remote_wake).  The fetch ends on the flush
+ * only after its read: a streamed reply's next chunk can be seconds away (SO_RCVTIMEO 15 s), and the cut's Q_STOP with
+ * it, meanwhile no other reply can start (media_busy).  Its socket shut, as cancel() does, it ends at once */
+static void reply_cut(void)
+{
+    if (media_cur && media_cur->fd >= 0) shutdown(media_cur->fd, SHUT_RDWR);
+}
+
 static void played(void)
 {
     if (announcing) { PB(b, 8); pb_uint(&b, 1, 1); send_va(VA_ANNOUNCE_FINISHED, &b); announcing = 0; announce_done(); }
@@ -1355,9 +1364,11 @@ static void on_event(const unsigned char *p, const unsigned char *end)
      * start is the new run's (one refused before it starts has no RUN_START) */
     if (cancelled == 1 || (cancelled == 2 && type != EV_RUN_START && type != EV_ERROR)) return;
     if (type == EV_RUN_START || type == EV_ERROR) cancelled = 0;
-    /* "Last heard" and "Last reply": a new run clears both, so the same request said twice is a change Home Assistant
-     * records (it drops a state equal to the last) */
-    if (listed(KEY_LAST_HEARD) && (type == EV_RUN_START || type == EV_STT_END || type == EV_TTS_START)) {
+    /* "Last heard" and "Last reply": a new request clears both, so the same request said twice is a change Home Assistant
+     * records (it drops a state equal to the last).  With the wake word at Home Assistant a run is open long before anyone
+     * speaks, and one listens beside each reply (main.c wake_listen): there the request starts at the wake word */
+    int fresh = core_local_wake ? type == EV_RUN_START : type == EV_WAKE_END;
+    if (listed(KEY_LAST_HEARD) && (fresh || type == EV_STT_END || type == EV_TTS_START)) {
         if (type != EV_TTS_START) { state_text(last_heard, sizeof last_heard, type == EV_STT_END ? said : ""); send_setting(KEY_LAST_HEARD); }
         if (type != EV_STT_END) { state_text(last_reply, sizeof last_reply, type == EV_TTS_START ? said : ""); send_setting(KEY_LAST_REPLY); }
     }
@@ -1375,8 +1386,19 @@ static void on_event(const unsigned char *p, const unsigned char *end)
     case EV_TTS_END:
         if (!tts_expected && tts_url[0]) { tts_expected = 1; core_mic_off(); media_start("", tts_url, 1, 0, 1, 0); }
         break;
-    case EV_RUN_END:    if (!tts_expected && core_state() != SPEAKING) core_pipeline_finish(); break;
+    case EV_RUN_END:
+        if (!tts_expected && core_state() != SPEAKING) core_pipeline_finish();
+        else { core_wake_run_ended(1); core_run_over(); }       /* the reply's run, or one beside it that only listened */
+        break;
     case EV_ERROR:
+        /* the run that only listened for the wake word during the reply failed: the next one is asked for now, and what
+         * Home Assistant still sends for this one (its RUN_END) is dropped (cancelled: until that one's RUN_START).
+         * Another satellite took the wake word (HA checks before WAKE_WORD_END): no failure, this reply goes on */
+        if (core_wake_run_ended(strcmp(code, "duplicate_wake_up_detected") != 0)) {
+            if (strcmp(code, "duplicate_wake_up_detected")) fprintf(stderr, "pipeline: wake word run ended (%s)\n", code);
+            else { fprintf(stderr, "pipeline: another satellite answers, the reply goes on\n"); wake_event("answered_elsewhere"); }
+            cancelled = 1; core_run_over(); break;
+        }
         tts_expected = 0;
         /* Another satellite reported the same wake word first (Home Assistant takes the first per phrase in 2 s): not
          * this Echo's turn, and nothing went wrong, so no error ring */
@@ -1882,4 +1904,4 @@ static void dropin_result(const char *result)   /* lock held */
 
 const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, cancel, played, volume_changed, mute_changed, print_mdns, bt_device,
                                      arb_send, arb_changed, sound, whispered, arb_request, settings_changed, entities_changed, arb_scan,
-                                     timers_changed, dropin_changed, dropin_result, button, wake_event, end_audio };
+                                     timers_changed, dropin_changed, dropin_result, button, wake_event, end_audio, reply_cut };

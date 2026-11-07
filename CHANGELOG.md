@@ -2,6 +2,18 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-06
+
+- **Wake word in Home Assistant: saying it while the Echo talks now interrupts the reply.** Until now this worked
+  only with the Echo's own wake word. Once Home Assistant has finished a reply, the Echo asks it to listen for the
+  wake word again while the reply is still playing; when Home Assistant hears it, the reply stops and the Echo
+  listens for your next request. It relies on the Echo cancelling its own voice from the microphone, so a loud
+  reply may be missed; the button still always works. "Okay Nabu, stop" during a reply now ends it without a request
+  going to the assistant, as "Alexa, stop" does with the Echo's own wake word.
+- **Wake word in Home Assistant: "Last heard" and "Last reply" keep what was said.** Both went blank as soon as a
+  reply ended, because the Echo starts listening for the wake word again at once; now they clear when the next
+  request begins.
+
 ## 2026-11-05
 
 - **Echo Dot 3: the unlock can leave the Echo unusable; the setup now warns before it.** On two Echo Dot 3s the
