@@ -241,7 +241,7 @@ UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
 	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk \
-	screen ui touch json uninstall_boot resample fork_release
+	screen ui touch json pb uninstall_boot resample fork_release
 unit: $(addprefix unit-,$(UNIT_TESTS))
 unit-hash:
 	@mkdir -p build
@@ -393,6 +393,10 @@ build/uishot: tools/uishot.c $(UI_SCENE) src/ui/scene.h src/ui/ui.h src/ui/gfx.h
 unit-json:
 	@mkdir -p build
 	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all tests/unit/json_test.c src/hassmic/json.c -o build/json_test && build/json_test
+# the ESPHome API's protobuf reader (pb.h) on what anyone on the network may send
+unit-pb:
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/hassmic tests/unit/pb_test.c -o build/pb_test && build/pb_test
 unit-ui:
 	@mkdir -p build
 	cc -O2 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all tests/unit/ui_test.c $(UI_SCENE) -lm -o build/ui_test && build/ui_test

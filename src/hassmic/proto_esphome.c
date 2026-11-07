@@ -83,6 +83,7 @@
 #include "hash.h"
 #include "https.h"
 #include "noise.h"
+#include "pb.h"
 #include "sendspin.h"
 #include "clock.h"
 #include "update.h"
@@ -153,46 +154,7 @@ static void announce_done(void);
 static atomic_int media_busy;
 static struct media_job *media_cur;    /* lock held: the job holding media_busy, for cancel() */
 
-/* ---------------------------------------------------------------- protobuf */
-
-struct pb { unsigned char *p; size_t n, cap; };
-
-static void pb_raw(struct pb *b, const void *d, size_t n) { if (b->n + n <= b->cap) { memcpy(b->p + b->n, d, n); b->n += n; } }
-static void pb_varint(struct pb *b, uint64_t v) { unsigned char c; do { c = v & 0x7f; v >>= 7; if (v) c |= 0x80; pb_raw(b, &c, 1); } while (v); }
-static void pb_uint(struct pb *b, int f, uint64_t v) { if (v) { pb_varint(b, f << 3); pb_varint(b, v); } }
-static void pb_bytes(struct pb *b, int f, const void *d, size_t n) { if (n) { pb_varint(b, f << 3 | 2); pb_varint(b, n); pb_raw(b, d, n); } }
-static void pb_str(struct pb *b, int f, const char *s) { pb_bytes(b, f, s, strlen(s)); }
-static void pb_sint(struct pb *b, int f, int32_t v) { pb_uint(b, f, (uint32_t)v << 1 ^ (uint32_t)(v >> 31)); }   /* zigzag */
-static void pb_fixed32(struct pb *b, int f, uint32_t v) { pb_varint(b, f << 3 | 5); pb_raw(b, &v, 4); }      /* little endian host */
-static void pb_float(struct pb *b, int f, float v) { uint32_t u; memcpy(&u, &v, 4); pb_fixed32(b, f, u); }
-
-struct pbf { unsigned field, wire; uint64_t v; const unsigned char *data; size_t len; };
-
-static int pb_next(const unsigned char **p, const unsigned char *end, struct pbf *f)
-{
-    uint64_t k = 0, v = 0; int sh = 0;
-    if (*p >= end) return 0;
-    while (*p < end) { unsigned char c = *(*p)++; k |= (uint64_t)(c & 0x7f) << sh; sh += 7; if (!(c & 0x80)) break; }
-    f->field = k >> 3; f->wire = k & 7; f->v = 0; f->data = NULL; f->len = 0;
-    switch (f->wire) {
-    case 0: for (sh = 0; *p < end;) { unsigned char c = *(*p)++; v |= (uint64_t)(c & 0x7f) << sh; sh += 7; if (!(c & 0x80)) break; } f->v = v; break;
-    case 1: if (end - *p < 8) return 0; *p += 8; break;
-    case 2:
-        for (sh = 0; *p < end;) { unsigned char c = *(*p)++; v |= (uint64_t)(c & 0x7f) << sh; sh += 7; if (!(c & 0x80)) break; }
-        if ((uint64_t)(end - *p) < v) return 0;
-        f->data = *p; f->len = v; *p += v;
-        break;
-    case 5: if (end - *p < 4) return 0; { uint32_t u; memcpy(&u, *p, 4); f->v = u; } *p += 4; break;
-    default: return 0;
-    }
-    return 1;
-}
-
-static void pbf_str(const struct pbf *f, char *out, size_t outsz)
-{
-    size_t n = f->len < outsz - 1 ? f->len : outsz - 1;
-    memcpy(out, f->data, n); out[n] = 0;
-}
+/* ---------------------------------------------------------------- framing (the messages' protobuf: pb.h) */
 
 static int client_of(int fd)            /* lock held */
 {
