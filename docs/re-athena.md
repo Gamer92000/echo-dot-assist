@@ -99,7 +99,7 @@ for the uninstall. Init loads the patched file at boot (the plat-and-mapping sha
 - **The band's renderer** died at a GC (fixed above) and once at start (`lockCanvas` while the home activity came up,
   ~74 s): hassmic restarts it by itself.
 - **Sounds**: the first OpenSL ES player after idle takes about 575 ms before the HAL pulls its first buffer (the TAS5805m
-  unmutes: `tas5805m_mute(): triggered unmute mode` in the kernel log), then `LEAD_MS` of silence (re-crown.md "Sounds").
+  unmutes: `tas5805m_mute(): triggered unmute mode` in the kernel log), then the lead-in's silence (`board.cold_lead_ms`) (re-crown.md "Sounds").
   With the experimental wake sound removal on, Home Assistant often ended the command before it was spoken (2026-10-15):
   leave it off here.
 - **Timing**: hassmic up 22 s after the kernel starts (satellite start 17.9 s, self test 22.7 s). Steady: the audio HAL

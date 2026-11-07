@@ -439,8 +439,10 @@ Beyond the README's two figures:
   The volume of voice replies shows in cyan, as on the Dots. The screen wakes for the band and sleeps 5 minutes after the last light (1 minute with
   the microphones off or in Do not disturb).
 - **Microphone off** plays Alexa's own sounds. A switch that is already off when hassmic starts is shown, not announced.
-- **Wake sound**: Alexa's own where the firmware has it; the Echo Show 8 1st gen has none and plays hassmic's short blip. On the
-  Echo Show a sound after a pause starts 0.35 s late: the speaker takes that long to switch on and swallowed the start.
+- **Wake sound**: Alexa's own where the firmware has it; the Echo Show 8 1st gen has none and plays hassmic's short blip
+  (or one of your own: "Your own sounds", below). On the Echo Show 8 (1st and 2nd gen), the Show 5 2nd gen and the Echo Input a sound
+  after a pause starts 0.35 s late: the speaker takes that long to switch on and swallowed the start. The Echo Show 5
+  1st gen loses nothing and plays it at once.
 - **Your own sounds**: the settings page's "Sounds" card (Voice) replaces any of the Echo's sounds with one of yours:
   the wake sound, the action button, microphone off and on, the volume keys, Bluetooth connected and disconnected,
   Identify, and Drop In's chimes and ringtones (the timer's sound is "Timer sound", above). "Upload…" takes any file

@@ -647,7 +647,8 @@ DEVELOPMENT.md "Speech corpus"): checked by STT, words timed by MFA; look there 
 aligner, adapted) and `tools/vad_leadin.py` HA's VAD with and without the lead-in (build/ha-venv).
 `tools/` is PC-side reverse-engineering and firmware tooling (`payload_dump.py`, Thumb disassembly helpers,
 `davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator, `vol-curve.py`: an Android Echo's
-volume curve with a Dot's micRaw beside it, for `board.volume_curve`).
+volume curve with a Dot's micRaw beside it, for `board.volume_curve`; `cold-lead.py`: what a sound loses on a closed
+output, a PC microphone beside it, for `board.cold_lead_ms`).
 
 ## Conventions
 
