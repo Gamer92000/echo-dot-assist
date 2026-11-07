@@ -1276,7 +1276,7 @@ static void start(void)
     PB(b, 96);
     tts_expected = 0; tts_url[0] = 0; if (cancelled) cancelled = 2;
     pb_uint(&b, 1, 1);                                  /* start */
-    pb_uint(&b, 3, core_local_wake ? 1 : 3);            /* flags: USE_VAD, plus USE_WAKE_WORD when detection is remote */
+    pb_uint(&b, 3, (core_local_wake || core_follow_up()) ? 1 : 3);   /* flags: USE_VAD, plus USE_WAKE_WORD when detection is remote (not for a follow-up) */
     /* audio settings: neutral.  Home Assistant ignores them today; the gain is applied here (micgain.h), and absent they
      * would read as volume multiplier 0 should it ever start using them */
     { PB(as, 8); pb_float(&as, 3, 1.0f); pb_varint(&b, 4 << 3 | 2); pb_varint(&b, as.n); pb_raw(&b, as.p, as.n); }

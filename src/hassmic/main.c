@@ -743,6 +743,7 @@ static int wake_wait;                               /* lock held: the run now op
  * Q_STOP ends nothing.  Not cleared by a new run: that Q_STOP may come after the request has ended and the next begun */
 static int wake_cut;
 static int wake_fails;                              /* lock held: wake word runs Home Assistant failed during this reply */
+static int follow_up;                               /* lock held: the pipeline now starting is a follow-up to a question */
 static void pipeline_start(uint64_t from)    /* from: where the wake word that starts it ended, 0: not a wake word */
 {
     run_over = 0; wake_wait = 0;
@@ -757,9 +758,10 @@ static void pipeline_start(uint64_t from)    /* from: where the wake word that s
     run_wake = from != 0;
     proto->start();
     atomic_store(&streaming, 1);
-    if (core_local_wake) lead_in();                 /* ahead of the capture thread's first block: it needs the lock */
-    listening(core_local_wake);
-    if (core_local_wake) core_set_state(LISTENING);
+    int listen_now = core_local_wake || follow_up;      /* remote wake: a follow-up has no wake word to wait for */
+    if (listen_now) lead_in();                 /* ahead of the capture thread's first block: it needs the lock */
+    listening(listen_now);
+    if (listen_now) core_set_state(LISTENING);
 }
 
 /* Home Assistant's "Wake word" event entity (issue #48), listed while the feature is on (proto_esphome.c): every wake
@@ -1117,6 +1119,7 @@ static void heard_end(void)
     if (state == LISTENING) core_set_state(THINKING);
 }
 
+int core_follow_up(void) { return follow_up; }
 void core_restart_after(void) { barge_in = 1; barge_from = 0; }
 
 void core_pipeline_finish(void)
@@ -1134,8 +1137,10 @@ void core_pipeline_finish(void)
     if ((barge_in || !core_local_wake) && satellite_running && connected) {
         if (barge_in) sound_request(SND_WAKE);
         uint64_t from = barge_in ? barge_from : 0;      /* what was said after the wake word while the reply was cut */
+        follow_up = barge_in && !core_local_wake;
         barge_in = 0; barge_from = 0;
         pipeline_start(from);
+        follow_up = 0;
     }
 }
 
@@ -3286,7 +3291,7 @@ static void *capture_thread(void *arg)
         if (arb_due && (mono_ms() >= arb_due || arb_settled())) { arb_due = 0; if (arb_decide()) answer(arb_from); else { afe_done(); wake_tell("answered_elsewhere"); } }    /* after this block went out live */
 
         pthread_mutex_lock(&core_lock);
-        if (core_local_wake && (state == LISTENING || state == THINKING) && time(NULL) - state_since > PIPELINE_TIMEOUT) {
+        if ((state == LISTENING || state == THINKING) && time(NULL) - state_since > PIPELINE_TIMEOUT) {
             fprintf(stderr, "pipeline timeout\n");
             core_pipeline_finish();
         }
