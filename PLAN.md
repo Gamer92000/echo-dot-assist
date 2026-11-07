@@ -2565,6 +2565,26 @@ Run in this order. Each step says what it proves.
       namespaces it asks for the sysctl qrun.sh names (`qrun.sh --userns`: AppArmor's, or Debian's
       unprivileged_userns_clone).  qrun.sh no longer runs without the namespace (the PR's low-PID snapshot: Ubuntu's
       pid_max is 4194304) but says why; install-boot.sh shows it.  Not tried: any of it on a device, the setup on a Pi.
+- [~] Echo Show audio from #45 (2026-11-07, GitHub issue #75).  The cold output's lead-in is a board field,
+      `board.cold_lead_ms` (0: 350 ms, not measured; -1: none), in place of `audio_android.c`'s `LEAD_MS`, not the
+      `state/lead_ms` file #34 tried.  `tools/cold-lead.py` measures it: slplay plays silence of the lead-in, a 500 ms
+      1 kHz tone, 300 ms of silence and the same tone after 4-30 s without audio, a PC microphone records it, and the
+      first tone (cold) is held to the second (warm): length within 10 dB of its level in the tone's band (a biquad at
+      1 kHz), 2 ms blocks; a B not ~490 ms long is a noise in the room, not counted.  The rise to -3 dB is shown only:
+      the room's noise moved it 14 -> 26 ms on both tones.
+      The Echo's own microphones cannot (no micRaw on the Shows, the processed stream cancels the playback), and the
+      tone against its own copy needs no shared clock.  A cut of 100 ms put into a recording reads as 92 ms lost.
+      checkers (2026-11-07, a Lewitt mic ~1 m away, 50 dB over the room, AudioFlinger in standby before each play):
+      no lead-in, waits 4, 8, 10, 15, 30, 30 s: A 488 ms like B, -3 dB at 12-14 ms like B, lost 0; 350 ms the same; in
+      the band, a noisier room: 5, 10, 20 s, lost 0, 2, 0 ms
+      -> `cold_lead_ms = -1`: the wake blip 350 ms sooner after a pause.  earsup without the lead-in: the open's time
+      is now in the echo delay it searches (up to `D_MAX` 400 ms); checkers' logcat: createTrack 2979.140, openPcmDriver
+      .145-.191, first write .196: +56 ms, the echo ~140 ms after `audio_earcon_started`.  Open: crown (where the blip was not heard),
+      athena (#34: 200 ms by ear sounded whole; its HAL pulls the first buffer ~575 ms after a cold open), cronos,
+      cupcake (a line out, no amplifier) keep 350 until measured; not tried with hassmic's own player on the device
+      (slplay is the same OpenSL ES music stream).  The wake sound of our own (#33's 0.5 s chime where the firmware
+      has none): dropped.  The Sounds card plays any upload as the wake sound on every model since 2026-11-02 (#87),
+      and a built-in chime would only change the default on the Show 8 1st gen, at 0.4 s more over the request's start.
 - [x] Setup on Windows, what it found (2026-10-19, GitHub issue #49: a Dot 2 through `step_*` one at a time from
       Git Bash).  (1) The first `lockdown.sh` over adb after a boot ended with exit 255 and nothing loaded: stock sets
       `service.adb.tcp.port` 5555 at boot, `adb_gate` closed it and restarted adbd at once, which ended the adb shell
@@ -3010,7 +3030,7 @@ Run in this order. Each step says what it proves.
       by itself 20-80 s later (12 s 0, 16 s 2, 17 s 1, released 36 s in one boot, 50 s and 83 s in two): hassmic up
       at 40-64 s caught it and played "mics off" -> `mute_latch(1, 0)` shows it quietly.  No wake sound was heard: the
       output's open takes ~170 ms plus the amplifier (logcat, AudioALSAPlaybackHandlerNormal), the blip is 120 ms ->
-      `audio_android.c` lead-in of 350 ms after 2.5 s without audio (`COLD_MS`, `LEAD_MS`); the blip after it to be
+      `audio_android.c` lead-in of 350 ms after 2.5 s without audio (`COLD_MS`, now `board.cold_lead_ms`); the blip after it to be
       confirmed by ear (a longer sound of our own was heard after it, 2026-10-15).  2026-10-17: the lead-in
       reached earsup as part of the echo delay (85 ms + 350 > `D_MAX` 400 ms): `audio_earcon_started(lead_ms)` moves its
       start past it.
@@ -3077,7 +3097,7 @@ Run in this order. Each step says what it proves.
       volume: 115, 120 and 122 clean on a radio stream, 130 distorted, a rap track's bass clipped at 122, so
       `speaker_gain_limit` 118 and `speaker_gain_steps` 2 (0.5 dB assumed) = up to +9 dB.  The audio HAL did not rewrite it
       after a voice reply or at a change of the setting.  Sounds: a cold output = ~575 ms until the HAL pulls the first
-      buffer (the amplifier unmuting) + `LEAD_MS` (350, as crown).
+      buffer (the amplifier unmuting) + the lead-in (`board.cold_lead_ms`: 350, as crown).
       Mute button: `gpio-privacy` reports the latch 1.23/1.29 s after a press that mutes, 0.28 s unmuting
       (`enable-gpio-toggle-duration` 1000 ms); `board.privacy_button` (`gpio-privacy-button`, not grabbed) shows the press at
       once, the latch confirms it within `privacy_settle_ms` (2000) or it is taken back (`buttons_privacy_test`).

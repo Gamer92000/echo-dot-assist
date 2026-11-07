@@ -8,6 +8,11 @@ What changed for people using the Echo, newest first. Details and measurements a
   is not there a minute after it was flashed, the setup now says to unplug the power and hold only Volume up (+) while
   plugging it back in, which starts TWRP, instead of only saying to replug the power.
 
+- **Echo Show 5 (1st gen): the wake sound right away after a pause.** After a few seconds of quiet, the Echo Shows waited 0.35 s
+  before every sound, because the Echo Show 8's speaker swallowed the start of the first one while it switched on.
+  Measured on an Echo Show 5 1st gen, it loses nothing, so it now plays at once. The other Shows keep the wait until someone
+  measures theirs (issue #75).
+
 - **Setup: fewer dead ends on an Echo Show (issue #132).** When the unlock does not take and the Echo starts its own
   software again, the setup now says so and offers to run the step again, instead of waiting for TWRP forever. It
   names the right buttons for fastboot (Volume down, Volume up and Mute; it said the camera shutter). It checks free
