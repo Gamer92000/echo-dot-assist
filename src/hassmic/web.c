@@ -76,6 +76,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <time.h>
@@ -1064,15 +1065,18 @@ static void log_api(int fd, struct req *r)
 
 /* Online updates come from GitHub: a line of BODY that switches them on (from off) counts only once this Echo reached
  * it (update_probe), else it is turned into a comment and WHY says what failed.  Imports go the same way.  Before
- * core_lock: the probe takes up to 15 s. */
+ * core_lock: the probe takes up to 15 s.  Lines are read as settings_apply_text reads them (any white space ahead of
+ * the name, up to a \r, which ends its line; the choice in any case, as settings.c parse() takes it): "Beta" passed
+ * this gate untouched and switched updates on without the probe. */
 static void updates_gate(char *body, char *why, size_t cap)
 {
     why[0] = 0;
     for (char *p = body; *p; ) {
-        size_t l = strcspn(p, "\n"); char *k = p + strspn(p, " \t"), v[16];
+        size_t l = strcspn(p, "\n"); char *k = p, v[16];
+        while (k < p + l && *k != '\r' && isspace((unsigned char)*k)) k++;
         if (!strncmp(k, "online_updates=", 15)) {
             snprintf(v, sizeof v, "%.*s", (int)strcspn(k + 15, "\r\n"), k + 15);
-            int on = !strcmp(v, update_channels[UPDATE_BETA]) || !strcmp(v, update_channels[UPDATE_RELEASE]);
+            int on = !strcasecmp(v, update_channels[UPDATE_BETA]) || !strcasecmp(v, update_channels[UPDATE_RELEASE]);
             if (on && update_channel(-1) == UPDATE_OFF && (why[0] || update_probe(why, cap))) *k = '#';
         }
         p += l + (p[l] == '\n');

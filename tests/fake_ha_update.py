@@ -140,6 +140,8 @@ async def main():
         r = page.set(online_updates="beta")
         check(chan() == "off" and r.get("github_unreachable") and "GitHub cannot be reached" in r.get("errors", ""),
               f"GitHub not reachable: stays off, the page is told why: {r}")
+        r = page.set(online_updates="Beta")                 # a hand-edited import: the settings take any case
+        check(chan() == "off" and r.get("github_unreachable"), f"the same in capitals: stays off as well (it went on unchecked): {r}")
         r = page.set(wake_sound="on", online_updates="release")
         check(chan() == "off" and r.get("applied") == 1 and r.get("github_unreachable"), f"import with GitHub out of reach: the rest applied: {r}")
         check("online_updates=off" in open(os.path.join(state, "config")).read() or "online_updates" not in open(os.path.join(state, "config")).read(),
