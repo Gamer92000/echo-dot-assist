@@ -4,9 +4,10 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-07
 
-- **Setup on an Echo Dot 3: a clearer hint when TWRP does not come up after the unlock.** If TWRP (the white ring)
-  is not there a minute after it was flashed, the setup now says to unplug the power and hold only Volume up (+) while
-  plugging it back in, which starts TWRP, instead of only saying to replug the power.
+- **Setup on an Echo Dot 3: a clearer hint when TWRP does not come up.** If TWRP (the white ring) is not there a
+  minute after the unlock flashed it, or after any later restart into it, the setup now says to unplug the power and
+  hold only Volume up (+) while plugging it back in, which starts TWRP. It used to say only to replug the power, which
+  can start the Echo's own software instead.
 
 - **Echo Show 5 (1st gen): the wake sound right away after a pause.** After a few seconds of quiet, the Echo Shows waited 0.35 s
   before every sound, because the Echo Show 8's speaker swallowed the start of the first one while it switched on.

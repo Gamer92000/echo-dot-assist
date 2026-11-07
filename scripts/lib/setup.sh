@@ -617,13 +617,16 @@ adb_is() {
     [ "$s" = "$1" ]
 }
 
-# wait_adb device|recovery: until the Echo is on adb in that state
+# wait_adb device|recovery [hint]: until the Echo is on adb in that state; hint: what to do when nothing came in a
+# minute, in place of the replug every model has
 wait_adb() {
+    local hint="Nothing yet? Unplug the Echo's power and plug it back in."   # not in ${2:-...}: bash quotes on its '
     pick_serial
     case $1 in
-    recovery) waitfor "Waiting for TWRP (white ring)|TWRP is up" "adb_is recovery" "Nothing yet? Unplug the Echo's power and plug it back in.";;
+    recovery) waitfor "Waiting for TWRP (white ring)|TWRP is up" "adb_is recovery" "${2:-$hint}";;
     # an unlocked Echo shows fastboot as a rainbow, not the green of a stock one: people looking for green missed it
-    *) waitfor "Waiting for the Echo to boot|Echo is up" "adb_is device" "Nothing yet? Unplug the Echo's power and plug it back in. Rainbow ring? That is fastboot on an unlocked Echo: fastboot reboot.";;
+    *) waitfor "Waiting for the Echo to boot|Echo is up" "adb_is device" \
+           "${2:-$hint Rainbow ring? That is fastboot on an unlocked Echo: fastboot reboot.}";;
     esac
 }
 
