@@ -133,7 +133,10 @@ step_unlock() {
         tail -n 20 "$LOG" 2>/dev/null | grep -q 'restricted on locked hw' &&
             warn "The Echo's fastboot is still locked, as in issue #112. Read $LOCKED_ISSUE before running the unlock again."
         return 1; }
-    wait_adb recovery
+    # after the flash the Echo may come back to Fire OS instead of TWRP: Volume up held at power-on starts TWRP
+    pick_serial
+    waitfor "Waiting for TWRP (white ring)|TWRP is up" "adb_is recovery" \
+        "Nothing yet? Unplug the Echo's power and this time hold Volume up (+) button while plugging power back in."
 }
 
 step_flash() {
