@@ -604,8 +604,9 @@ Run in this order. Each step says what it proves.
       voice assistant. `tests/fake_ma_sendspin.py` against the reference server: 9/9 (4.000 s of 4.000 s played, no discontinuity,
       clock ±0.07 ms). `make unit`: WebSocket vs aiohttp, Noise vs python noiseprotocol, hash vectors. WebSocket frames written
       by hand too (2026-11-07; aiohttp never fragments): fragments with a ping, a pong or a close among them, a message over
-      4 MB in fragments (read to its end, its first 256 bytes kept, return 2), a ping over 125 bytes or a frame over 64 MB
-      ending the connection; the 64 MB limit is a frame's, 68 MB in frames of 4 MB is read through like 4.2 MB.
+      4 MB in fragments (read to its end, its first 256 bytes kept, return 2; one crossing 4 MB only in a later fragment kept
+      all that came before it, up to 4 MB, until the test showed it), a ping over 125 bytes or a frame over 64 MB ending
+      the connection; the 64 MB limit is a frame's, 68 MB in frames of 4 MB is read through like 4.2 MB.
       **Real Music Assistant 2026-09-21:** MA found the Echo by mDNS, dialled 28928 over its IoT-VLAN interface (no router rule),
       admitted it unpaired without an extra step, music plays; sync err ≈ +0.3 ms vs schedule, clock ±0.27 ms over Wi-Fi, 2 MB buffer
       full, 30 frames nudged in the first minute, hassmic 8 % CPU. Output latency measured with `src/tools/latency.c` (clicks in

@@ -61,6 +61,10 @@ async def main():
     assert await recv(r) == (10, b"ping 2") and await recv(r) == (1, b"over 2 256") and await recv(r) == (2, msg[:256])
     w.write(frame(1, b"after")); assert await recv(r) == (1, b"after")
     print("4.2 MB in fragments, a ping among them: return 2 with its first 256 bytes, the next message as usual: ok")
+    # crossing 4 MB only in its second fragment, after 3 MB: the same 256 bytes, not all that came before
+    w.write(frame(2, msg[:3000000], 0) + frame(0, msg[3000000:]))
+    assert await recv(r) == (1, b"over 2 256") and await recv(r) == (2, msg[:256])
+    print("4.2 MB crossing 4 MB in its second fragment: its first 256 bytes too: ok")
     # the 64 MB refusal weighs one frame (and what is kept), not the message: 68 MB in 17 frames of 4 MB is read to its
     # end like 4.2 MB, only its head in memory (zero mask keys: the payload as written)
     w.write(frame(2, msg[:100], 0))
