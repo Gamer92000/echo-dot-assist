@@ -16,6 +16,11 @@ What changed for people using the Echo, newest first. Details and measurements a
   boot, for example) left Android thinking it was still held until hassmic restarted: volume down kept turning the
   volume to 0 and undid every attempt to raise it (issue #140). The Echo now takes over the keys only
   once every key is up.
+- **Echo Shows: a setting for how bright the face stays in the dark** (issue #126). The face, its words and the clock
+  dim with the room's light: to 35 % in the dark, at full brightness from about 30 lux. On an Echo Show 5 2nd gen the
+  light sensor reads low (a median of 3 lux over a day in normally lit rooms), so the face sat at about half brightness
+  most of the time. "Face brightness in the dark" on the settings page's Screen page sets how far it dims: 35 % as
+  before, 100 % never dims it. Home Assistant has it as a number too, so an automation can dim the face at bedtime only.
 
 ## 2026-11-06
 

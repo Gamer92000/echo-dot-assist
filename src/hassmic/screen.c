@@ -74,6 +74,7 @@ static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
 static struct { char name[48]; int on, told, came; unsigned gen, sent; long long at; } pats[NPAT];
 static int npats;
 static atomic_int level_db = -1000;
+static atomic_int face_dark = 35;                               /* percent at 0 lux (settings.c face_min_brightness) */
 static char tz[160]; static unsigned tz_gen, tz_sent;
 static char title[256], artist[256], album[256]; static unsigned meta_gen, meta_sent;
 static int mstate, mspeed = 1000; static long long mpos, mpos_at, mdur; static unsigned prog_gen, prog_sent;
@@ -160,6 +161,7 @@ void screen_led(const char *op, const char *pattern)
 }
 
 void screen_level(int dbfs10) { atomic_store(&level_db, dbfs10); }
+int screen_face_dark(int percent) { if (percent >= 0) atomic_store(&face_dark, percent); return atomic_load(&face_dark); }
 
 void screen_tz(const char *posix_tz)
 {
@@ -319,10 +321,11 @@ static const char *next_to_me(const char *file, char *buf, size_t n)
     return buf;
 }
 
-int screen_ui(void)
+/* the UI's files here, given up or not: what is kept for it (settings.c face_min_brightness, its Home Assistant number)
+ * stays listed while it is given up, or the next save would drop it and hassmic's next start forget it */
+int screen_installed(void)
 {
     static atomic_int have = -1;                                  /* looked once: an update restarts hassmic */
-    if (atomic_load(&gave_up)) return 0;
     if (atomic_load(&have) < 0) {
         char dex[PATH_MAX], lib[PATH_MAX];
         atomic_store(&have, getenv("HASSMIC_SCREEN") ? 1 : !access(next_to_me("screen.dex", dex, sizeof dex), R_OK) &&
@@ -330,6 +333,8 @@ int screen_ui(void)
     }
     return atomic_load(&have);
 }
+
+int screen_ui(void) { return !atomic_load(&gave_up) && screen_installed(); }
 
 /* The UI's pid for root's kiosk_tick (main.sh): in the name of an empty file, state/screen-ui.<pid>, which root reads
  * by listing the folder; it never opens a file of ours there (one swapped for a link or a fifo between its look and
@@ -564,7 +569,7 @@ static void web_url(char *out, size_t n)
     freeifaddrs(ifa);
 }
 
-static struct { int mute, dnd, oobe, lux, evol, kiosk; char timers[300], peer[64], web[96]; } now_s, sent_s;
+static struct { int mute, dnd, oobe, lux, dark, evol, kiosk; char timers[300], peer[64], web[96]; } now_s, sent_s;
 
 static void read_core(int slow)
 {
@@ -575,6 +580,7 @@ static void read_core(int slow)
     pthread_mutex_unlock(&core_lock);
     now_s.oobe = core_oobe();
     float lx = core_lux(); now_s.lux = isnan(lx) ? -1 : (int)lroundf(lx);
+    now_s.dark = atomic_load(&face_dark);
     clean(now_s.timers, sizeof now_s.timers, names);
     if (!dropin_running() || dropin_status(peer, sizeof peer) == DROPIN_IDLE) peer[0] = 0;   /* a call over: no peer */
     clean(now_s.peer, sizeof now_s.peer, peer);
@@ -704,6 +710,7 @@ static void *writer(void *arg)
         if (now_s.evol != sent_s.evol) put(&o, "ev %d", now_s.evol);
         if (now_s.lux != sent_s.lux && (sent_s.lux < 0 || abs(now_s.lux - sent_s.lux) > sent_s.lux / 8)) put(&o, "lux %d", now_s.lux);
         else now_s.lux = sent_s.lux;
+        if (now_s.dark != sent_s.dark) put(&o, "dark %d", now_s.dark);
         if (strcmp(now_s.timers, sent_s.timers)) put(&o, "timers %s", now_s.timers);
         if (strcmp(now_s.peer, sent_s.peer)) put(&o, "peer %s", now_s.peer);
         sent_s = now_s;

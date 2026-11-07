@@ -196,7 +196,7 @@ const PAGES = [
   { id: 'wake', title: 'Wake word', icon: 'ear', nav: 'This Echo', groups: ['Wake word'], intro: 'Which engine listens for the wake word. Home Assistant picks the wake word itself, from the engine\'s list (the satellite\'s "Wake word" select), and a second one in "Wake word 2" if you like: each starts its own assistant ("Assistant", "Assistant 2").' },
   { id: 'sound', title: 'Sound', icon: 'speaker', nav: 'This Echo', groups: ['Sound'], intro: 'How the Echo\'s speaker sounds. The equalizer is Amazon\'s own, applied to everything the Echo plays: replies, timers, music, Bluetooth.' },
   { id: 'lights', title: 'Lights', icon: 'sun', nav: 'This Echo', groups: ['Lights'], intro: 'The light ring. It shows listening, thinking, speaking, errors and mute whatever you set here.' },
-  { id: 'screen', title: 'Screen', icon: 'screen', nav: 'This Echo', when: () => !!state.screen, intro: 'The Echo Show\'s screen: what it shows when nothing else does, and the band of light along its bottom. Pull down from the top edge of the screen for the drawer: home, the face, music, Do not disturb, screen off and the volume.' },
+  { id: 'screen', title: 'Screen', icon: 'screen', nav: 'This Echo', when: () => !!state.screen, intro: 'The Echo Show\'s screen: what it shows when nothing else does, how bright its face stays in the dark, and the band of light along its bottom. Pull down from the top edge of the screen for the drawer: home, the face, music, Do not disturb, screen off and the volume.' },
   { id: 'media', title: 'Music & Bluetooth', icon: 'music', nav: 'This Echo', groups: ['Music', 'Bluetooth'], intro: 'Music Assistant plays on the Echo as a Sendspin player, phones play on it over Bluetooth, and it can play on a Bluetooth speaker itself.' },
   { id: 'features', title: 'Features', icon: 'sparkle', nav: 'This Echo', groups: ['Features'], intro: 'Optional extras. While a feature is on, its entities are in Home Assistant; switched off, they are removed there. Home Assistant reconnects for a moment when you switch one.' },
   { id: 'echos', title: 'Echos', icon: 'net', nav: 'All your Echos', always: true, intro: 'Your Echos find each other on the local network and share a key, so nothing else on the network can join them or silence them. This runs with arbitration off too: it is also how this page finds your other Echos.' },
@@ -204,7 +204,7 @@ const PAGES = [
   { id: 'models', title: 'Models', icon: 'box', nav: 'All your Echos', always: true, intro: 'Amazon\'s extra wake words and models, microWakeWord\'s models and your light ring designs: fetched, copied between Echos, kept on file.' },
   { id: 'system', title: 'System', icon: 'sliders', nav: 'This Echo\'s system', groups: ['System'], always: true, intro: 'This Echo\'s name and network, updates, backups and troubleshooting.' },
 ];
-const MOVED = { light_band: 'screen', arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
+const MOVED = { light_band: 'screen', face_min_brightness: 'screen', arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
 // The cards of a settings page: [title, settings...].  A setting not named here (a new one, or a model's own) comes
 // last, in a card of its own, so nothing is ever lost from the page
 const LAYOUT = {
@@ -245,6 +245,7 @@ const HELP = {
   led_brightness: { ha: true, help: 'A fixed brightness for the ring. Setting one turns auto brightness off.' },
   ring_rotation: { ha: true, help: 'Where the light ring\'s fill starts. Home Assistant\'s "Light ring fill" lights that share of the ring in the light\'s colour, for a timer\'s or a washing machine\'s progress or a battery; it fills the way the volume does, from where the volume starts. Turn the start by this many LEDs, so it starts where you want it to for how the Echo stands. Only where the Echo has room for each LED\'s own animations (Home Assistant then lists "Light ring fill"). Default 0.' },
   light_band: { help: 'The Echo Show has no light ring: it shows the ring\'s lights as a band along the bottom of the screen, as Alexa did. That is listening, thinking, mic off, calls, volume, timers and Home Assistant\'s "Light ring". This many pixels at the bottom are kept for it, so an app on the screen never has the band over it. 0 gives the whole screen to the apps and shows no band. Default 10, stock\'s line.' },
+  face_min_brightness: { ha: true, help: 'How bright the face stays in a dark room. Its eyes, words and clock follow the Echo\'s light sensor: this much with no light, full brightness from about 30 lux (a lit room), and in between as the room gets lighter. Some Echos\' sensors read low (an Echo Show 5 2nd gen read 1 to 19 lux all day in a normally lit room), so the face stayed dim: raise this. 100 never dims the face; 10 is the lowest, where the clock and the words under the eyes (Answer, Stop) can still just be seen in a dark room. The screen\'s backlight and the light band are not affected. Home Assistant has it too, for an automation that dims the face only at bedtime. Default 35 %.' },
   bluetooth_announcements: { help: 'Says "Connected to …" and "Disconnected from …" when a phone connects, in your voice assistant\'s voice, after the chime. Home Assistant speaks the words, and only once "Allow the device to perform Home Assistant actions" is ticked in this Echo\'s ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure); without it there is the chime only.' },
   bluetooth_announcement_language: { help: 'The language of those sentences. Home Assistant does not tell the Echo which language your voice assistant speaks, so pick the one that matches its voice.' },
   sendspin_unpaired: { help: 'Lets any Music Assistant server on the network play here without pairing. Off: only a server given this Echo\'s "Sendspin pairing token" (a diagnostic entity in Home Assistant) may play.' },
@@ -417,6 +418,7 @@ const SUB = {
   led_auto_brightness: 'Follows the room\'s light, as on a stock Echo',
   led_brightness: 'A fixed level; turns auto brightness off',
   ring_rotation: 'Where "Light ring fill" starts',
+  face_min_brightness: 'How bright the face stays in a dark room',
   light_band: 'Pixels kept for the band along the bottom of the screen',
   bluetooth_announcements: 'Says when a phone connects or disconnects',
   bluetooth_announcement_language: 'The language of those sentences',

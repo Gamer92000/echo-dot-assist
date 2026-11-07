@@ -16,6 +16,7 @@
  *     album, the action sheet, the keyboard's search, the speakers' group and volumes (a swipe across a slider is not
  *     the slider's, a tap on it is), the queue asked again in place, the setup card without the API
  *   - the messages to hassmic: play/pause/next/seek/volume, mplay, mq, mg, mv, Drop In, timer stop, vol, dnd
+ *   - the face in the dark: as it always was unless told otherwise, down to the setting's floor (issue #126)
  * and how long frames take (on the PC: the Echo Show's A53 is roughly 10x slower).
  *   ui_test [dir]     also writes the frames named as PPM into dir
  */
@@ -740,6 +741,26 @@ int main(int argc, char **argv)
                          msg("name Echo"); msg("home -"); run(300); } while (0)
     /* a light sensor's word that is no number: no nan in the face's brightness (frames for ever, colours undefined) */
     FRESH(); msg("lux nan"); run(500); assert(isfinite(S->lux) && isfinite(S->face.br.v));
+    /* the face in the dark (issue #126): not told, and told the default, exactly as before the setting (face.c's old
+     * line: 0.35 at 0 lux, full from 30); 100 never dims it, 10 (the setting's least) is 0.1, 0 (the line's own range)
+     * lets it go dark; clamped; no sensor (-1): full */
+    FRESH();
+    { static const int lx[] = { 0, 1, 3, 14, 29, 30, 250 };
+      for (int told = 0; told < 2; told++) {
+          if (told) msg("dark 35");
+          for (size_t i = 0; i < sizeof lx / sizeof *lx; i++) {
+              char l[16]; snprintf(l, sizeof l, "lux %d", lx[i]); msg(l); run(50);
+              assert(S->face.br.t == clampf(0.35f + 0.65f * log10f(1 + (float)lx[i]) / log10f(31), 0.35f, 1));
+          }
+      }
+      msg("lux 0"); msg("dark 100"); run(50); assert(S->face.br.t == 1);
+      msg("lux 3"); run(50); assert(S->face.br.t == 1);
+      msg("dark 10"); msg("lux 0"); run(50); assert(S->face.br.t == 10 / 100.0f);
+      msg("dark 0"); run(50); assert(S->face.br.t == 0);
+      msg("lux 30"); run(50); assert(S->face.br.t == 1);
+      msg("dark 250"); msg("lux 0"); run(50); assert(S->dark == 100 && S->face.br.t == 1);
+      msg("dark -5"); run(50); assert(S->dark == 0 && S->face.br.t == 0);
+      msg("lux -1"); run(50); assert(S->face.br.t == 1); }
     /* pulled over an app that keeps the front (our home never comes), the finger held on: one pull, not one every 3 s */
     FRESH(); msg("home org.example.app"); run(100); scene_top(S, "org.example.app", now); run(5000);
     { int sh = shots_asked; scene_touch(S, TOUCH_DOWN, W / 2, -8, now);

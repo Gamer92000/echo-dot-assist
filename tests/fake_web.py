@@ -107,6 +107,8 @@ async def main():
               f"Home Assistant lists the lean set only: {sorted(set(by))}")
         check("sound" in by and "last_request_whispered" in by and "arbitration_peers" in by and "arbitration_key" in by,
               "features that are on: their entities (sound, whisper, arbitration)")
+        check("face_min_brightness" not in names and "face_brightness_in_the_dark" not in by,
+              "no screen (a Dot): no face brightness, neither on the page nor in Home Assistant (tests/fake_screen.py has it)")
         r = b.set(mic_level=-30, wake_sound="off"); await until(lambda: states.get(by["wake_sound"].key) is False)
         check(r.get("applied") == 2 and cfg().get("mic_level") == "-30" and cfg().get("wake_sound") == "off", f"set two, saved: {r}")
         check(states.get(by["wake_sound"].key) is False, f"Home Assistant shows it at once: {states.get(by['wake_sound'].key)}")

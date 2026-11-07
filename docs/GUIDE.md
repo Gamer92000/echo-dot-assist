@@ -477,7 +477,9 @@ satellite of its own has to run without its microphone (as a display) while hass
   one rings, **End** during a call), orange while the Echo waits to be added to Home Assistant. Tap the eyes and they
   smile. Below them: the clock, in Home Assistant's time zone (12-hour where the Echo's language is US, Canadian or
   Australian English), or what Music Assistant plays, with play/pause; tap it for the music. The face dims in a dark
-  room. A request to the assistant, a ringing timer or a Drop In bring the face back from the music.
+  room, to 35 % with no light and full from about 30 lux; **Face brightness in the dark** on the Screen page (a number
+  in Home Assistant too) sets how far: 10 % at the least, and 100 never dims it. A request to the assistant, a ringing
+  timer or a Drop In bring the face back from the music.
 - **The drawer**: pull down from the top edge of the screen, whatever shows, as on Amazon's own Echo Show. In it:
   **Home** (the home app), **Face** (where the home app is another), **Music**, **Do not disturb**, **Screen off** (a
   touch wakes it), what plays (tap it for the music) and the Echo's volume. Over an app, start the pull on the thin
@@ -631,6 +633,7 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 | Wake sound | the wake sound only, on or off; off keeps the one you chose |
 | Equalizer | bass, mid, treble, −6 to +6 dB, Amazon's own, on everything the Echo plays |
 | LED auto brightness, LED brightness | a level holds the ring there and switches the automatic off (Echo Show 5: the band's brightness, no automatic) |
+| Face brightness in the dark | Echo Shows: how bright the screen's face stays with no light, 10 to 100 % (default 35, 100: never dimmed), see [The screen](#the-screen-echo-show) |
 | Timer ringing, Ringing timers | on while a finished timer rings; their names (diagnostic), see [Voice](#voice) |
 | Stop ringing | button: ends a ringing timer and nothing else |
 | Next timer, Next timer name, Next timer length | the running timer that ends first: when (timestamp), its name, the length it was set for (s); unknown while none runs, see [Voice](#voice) |

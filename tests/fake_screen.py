@@ -15,6 +15,9 @@ Assistant up to 2.10.6, from build/aiosendspin-9.1.1 as tests/fake_ma_sendspin.p
     ahead shows at its time, one cancelled (replaced, or with none in its place) never; a cover gone clears it
   - the UI's commands reach the group's controller: next, volume
   - the light band (ring_band.c) goes to the same process: "band <w>" + one row of pixels, the setup spinner's orange
+  - the face's brightness in the dark (issue #126): 35 at start, as before the setting; set on the settings page it
+    reaches the UI and the export, Home Assistant's number shows it and sets it, a UI started again gets it; a UI given
+    up keeps it (the number, and the line in a save)
   - the home app is the page's (tests/fake_ma_api.py), never the UI's word; a UI that dies is started again and gets
     everything anew (after a wait, up less than a minute), so is one alive that takes nothing for 10 s, or does not say
     "ready" in its time (killed; a late "ready" is not the next one's); hassmic's pid for root's kiosk_tick all along,
@@ -64,13 +67,17 @@ if LEGACY:
     sys.path.insert(0, LIB9)
 
 from PIL import Image
+from aioesphomeapi import APIClient
 from aiosendspin.noise import Identity, InMemoryServerPairingStore
 from aiosendspin.models.types import MediaCommand
 if not LEGACY: from aiosendspin.models.types import ArtworkSource
 from aiosendspin.server import SendspinServer, ClientAddedEvent
 from aiosendspin.server.roles.metadata.state import Metadata
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from webclient import Browser, wait_port
 
 PORT = 16968
+WEB = 16977                                              # the settings page
 
 
 def check(cond, what):
@@ -115,7 +122,7 @@ async def main():
     env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_MUSIC=os.path.join(state, "music.raw"), HASSMIC_SETTINGS=os.path.join(state, "settings"),
                HASSMIC_SCREEN=runner, FAKE_UI_LOG=log, FAKE_UI_FIFO=fifo, HASSMIC_SCREEN_READY_MS="5000",
                HASSMIC_SCREEN_HUNG_MS="2000", HASSMIC_SCREEN_STAYED_MS="20000")
-    proc = subprocess.Popen([f"{ROOT}/build/hassmic-host-screen", "-p", "16969", "-z", str(PORT), "-L", "-W", "0", "-o", "0"], env=env)
+    proc = subprocess.Popen([f"{ROOT}/build/hassmic-host-screen", "-p", "16969", "-z", str(PORT), "-L", "-W", str(WEB), "-o", "0"], env=env)
     # beside it, an Echo whose UI ends as soon as it starts: given up after 8 (waits of 20 ms here, doubling), the band
     # its own renderer's, no more pid for root's kiosk_tick (it opens the app now)
     gstate = tempfile.mkdtemp(); gui = os.path.join(gstate, "ui.sh")
@@ -125,6 +132,7 @@ async def main():
     msrv = await asyncio.start_server(mrecord, "127.0.0.1", 18097)
     mf = os.path.join(gstate, "mass"); open(mf, "w").write("url=http://127.0.0.1:18097\ntoken=t0ken\n"); os.chmod(mf, 0o600)
     open(gui, "w").write("#!/bin/sh\necho 'ready 960 470'\nsleep 0.6\n"); os.chmod(gui, 0o755)   # (up, then gone: its pid for root a moment)
+    open(os.path.join(gstate, "config"), "w").write("face_min_brightness=80\n")        # (kept for its UI, given up or not)
     gproc = subprocess.Popen([f"{ROOT}/build/hassmic-host-screen", "-p", "16973", "-z", "16974", "-L", "-W", "0", "-o", "0", "-a", "0", "-i", "0"],
                              env=dict(env, HASSMIC_STATE=gstate, HASSMIC_MUSIC=os.path.join(gstate, "music.raw"), HASSMIC_SETTINGS=os.path.join(gstate, "settings"),
                                       HASSMIC_SCREEN=gui, HASSMIC_SCREEN_WAIT_MS="20"), stderr=subprocess.PIPE, text=True, errors="replace")
@@ -158,6 +166,8 @@ async def main():
         for want in ("act the action button", "home -", "oobe 1"):
             check(want in got, f"at start: {want!r}")
         check(any(isinstance(l, str) and re.fullmatch(r"p\+ setup-mode \d+", l) for l in got), "at start: the setup pattern, with how long ago it came on")
+        await until(lambda: "dark 35" in lines(log), 5)
+        check("dark 35" in lines(log), "at start: the face's brightness in the dark, 35 % (as before it was a setting)")
         await until(lambda: any(isinstance(l, tuple) and l[0] == "BAND" for l in lines(log)), 5)
         rows = [l[1] for l in lines(log) if isinstance(l, tuple) and l[0] == "BAND"]
         px = [(r[4 * x + 2], r[4 * x + 1], r[4 * x]) for r in rows for x in range(len(r) // 4)]
@@ -269,6 +279,47 @@ async def main():
               f"seek to 1:30 from the screen, past how far the server seeks: that far: {seek} ({offered})")
         check(any("Repeat" in n for n in names) and any("Shuffle" in n for n in names), f"repeat and shuffle from the screen: {names}")
 
+        # the face in the dark (issue #126) from the settings page: to the UI and into the export; Home Assistant's number
+        # shows it and sets it (saved, on the page too), and follows the page while connected; the UI started again
+        # below gets it
+        wait_port(WEB)
+        b = await asyncio.to_thread(Browser, WEB)
+        check(await asyncio.to_thread(b.login_with_button, proc), "the page: logged in with the action button")
+        face = lambda: next((x for x in (b.state() or {}).get("settings", []) if x["name"] == "face_min_brightness"), {})
+        darks = lambda: [l for l in lines(log) if isinstance(l, str) and l.startswith("dark ")]
+        s = await asyncio.to_thread(face)
+        check(s.get("value") == 35 and (s.get("min"), s.get("max"), s.get("unit")) == (10, 100, "%") and s.get("export"),
+              f"on the page: \"{s.get('label')}\", 35 % of 10..100, exported: {s}")
+        r = await asyncio.to_thread(b.set, face_min_brightness=80)
+        await until(lambda: darks()[-1:] == ["dark 80"], 5)
+        check(darks()[-1:] == ["dark 80"], f"80 on the page: to the UI ({r})")
+        r = await asyncio.to_thread(b.set, face_min_brightness=5)
+        check(r.get("applied") == 0 and (await asyncio.to_thread(face)).get("value") == 80, f"5 on the page: refused, under the least ({r})")
+        st, _, ex = await asyncio.to_thread(b.call, "GET", "/api/export")
+        check(st == 200 and "face_min_brightness=80" in ex.decode().splitlines(), "and in the export")
+        ha = APIClient("127.0.0.1", 16969, None); await ha.connect(login=True)
+        ents, _ = await ha.list_entities_services(); hs = {}
+        ha.subscribe_states(lambda x: hs.__setitem__(x.key, getattr(x, "state", None)))
+        num = next((e for e in ents if e.object_id == "face_brightness_in_the_dark"), None)
+        await until(lambda: num and hs.get(num.key) == 80, 5)
+        check(num and (num.name, num.min_value, num.max_value, num.unit_of_measurement) == ("Face brightness in the dark", 10, 100, "%")
+              and hs.get(num.key) == 80, f"Home Assistant: a number, at 80 ({num})")
+        if num:
+            ha.number_command(num.key, 20)
+            await until(lambda: darks()[-1:] == ["dark 20"] and hs.get(num.key) == 20, 5)
+            s = await asyncio.to_thread(face)
+            saved = "face_min_brightness=20\n" in open(os.path.join(state, "config")).read()
+            check(darks()[-1:] == ["dark 20"] and hs.get(num.key) == 20 and s.get("value") == 20 and saved,
+                  f"20 from Home Assistant: to the UI, shown back, on the page, saved ({s.get('value')}, {saved})")
+            ha.number_command(num.key, 5)
+            await until(lambda: darks()[-1:] == ["dark 10"] and hs.get(num.key) == 10, 5)
+            check(darks()[-1:] == ["dark 10"] and hs.get(num.key) == 10, f"5 from Home Assistant: 10, the least ({darks()[-1:]}, {hs.get(num.key)})")
+        await asyncio.to_thread(b.set, face_min_brightness=80)
+        await until(lambda: darks()[-1:] == ["dark 80"] and num and hs.get(num.key) == 80, 5)
+        check(darks()[-1:] == ["dark 80"] and num and hs.get(num.key) == 80,
+              f"80 on the page again: to the UI, and to Home Assistant while it is connected ({hs.get(num.key) if num else None})")
+        await ha.disconnect()
+
         # the UI dies: started again, everything anew (a "home" from it is no command: the page picks the home app)
         say("home org.example.kiosk"); await asyncio.sleep(0.5)
         check(not os.path.exists(os.path.join(state, "screen_home")), "the UI does not pick the home app")
@@ -277,7 +328,7 @@ async def main():
         await until(lambda: any(isinstance(l, tuple) and l[0] == "IMAGE" for l in lines(log)), 8)
         got = lines(log)
         check(any(isinstance(l, str) and l.startswith("#start") for l in got), "the UI is started again")
-        for want in ("home -", "mt Hunter\tBjörk\tHomogenic"):
+        for want in ("home -", "mt Hunter\tBjörk\tHomogenic", "dark 80"):
             check(want in got, f"and gets {want!r} again")
         ago = [int(l.split()[2]) for l in got if isinstance(l, str) and l.startswith("p+ setup-mode ")]
         check(ago and ago[-1] >= 1000, f"and the setup pattern again, on for a while: {ago} ms")
@@ -374,6 +425,20 @@ async def main():
         late = [t - gave_at[0] for t in mconns if gave_at and t > gave_at[0] + 1]
         check(gave_at and mconns and mconns[0] < gave_at[0] and not late,
               f"and no Music Assistant session for a UI that is not there: none after ({len(mconns)} before, {len(late)} after)")
+        # what is kept for that UI stays while it is given up (issue #126): its face's brightness in the dark, listed in
+        # Home Assistant and in the config that a save writes anew (mute from Home Assistant), for hassmic's next start
+        gha = APIClient("127.0.0.1", 16973, None); await gha.connect(login=True)
+        gents, _ = await gha.list_entities_services(); gby = {e.object_id: e for e in gents}; gs = {}
+        gha.subscribe_states(lambda x: gs.__setitem__(x.key, getattr(x, "state", None)))
+        gnum = gby.get("face_brightness_in_the_dark")
+        await until(lambda: gnum and gs.get(gnum.key) == 80, 5)
+        gha.switch_command(gby["mute"].key, True)
+        gcfg = lambda: open(os.path.join(gstate, "config")).read().splitlines()
+        await until(lambda: "mute=on" in gcfg(), 5)
+        check(gnum and gs.get(gnum.key) == 80 and "mute=on" in gcfg() and "face_min_brightness=80" in gcfg(),
+              f"and what is kept for it stays: the face's brightness in the dark, in Home Assistant and in a save after "
+              f"({gs.get(gnum.key) if gnum else None}, {[l for l in gcfg() if l.startswith(('mute=', 'face_'))]})")
+        await gha.disconnect()
         msrv.close()
         await until(lambda: any("given up" in l for l in hlog), 30)
         hung = sum("takes nothing (hung)" in l for l in hlog)

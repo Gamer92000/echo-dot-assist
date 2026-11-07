@@ -131,7 +131,7 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
        KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON, KEY_LIGHT, KEY_ASSIST_VOLUME, KEY_SOUNDS_VOLUME, KEY_TIMER_VOLUME,
        KEY_CALL_VOLUME, KEY_WAKE, KEY_RING_FILL, KEY_RING_ROTATION, KEY_RING_LEDS, KEY_LAST_HEARD, KEY_LAST_REPLY,
-       KEY_NEXT_TIMER, KEY_NEXT_TIMER_NAME, KEY_NEXT_TIMER_LENGTH };
+       KEY_NEXT_TIMER, KEY_NEXT_TIMER_NAME, KEY_NEXT_TIMER_LENGTH, KEY_FACE_DARK };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -435,6 +435,7 @@ static void send_setting(int key)       /* lock held */
     } break;
     case KEY_RING_FILL: { struct ring_light l; ring_light_get(&l); pb_float(&b, 2, l.fill); send_state(NUMBER_STATE, &b); } break;
     case KEY_RING_ROTATION: pb_float(&b, 2, ring_rotation(-1)); send_state(NUMBER_STATE, &b); break;
+    case KEY_FACE_DARK: pb_float(&b, 2, screen_face_dark(-1)); send_state(NUMBER_STATE, &b); break;
     case KEY_LED_AUTO: if (have_auto) { pb_uint(&b, 2, core_led_auto(-1)); send_state(SWITCH_STATE, &b); } break;
     case KEY_ASSIST_VOLUME: case KEY_SOUNDS_VOLUME: case KEY_TIMER_VOLUME: case KEY_CALL_VOLUME:     /* VOL_* order */
         pb_float(&b, 2, core_kind_volume(key - KEY_ASSIST_VOLUME, -1)); send_state(NUMBER_STATE, &b); break;
@@ -530,7 +531,7 @@ static void send_light_states(void)     /* lock held */
     if (listed(KEY_LUX)) { sent_lux = core_lux(); sent_at = time(NULL); send_sensor(KEY_LUX, sent_lux); }
     sent_level = core_led_brightness(-1); level_at = time(NULL);
     send_setting(KEY_LED_AUTO); send_setting(KEY_LED_BRIGHTNESS); send_setting(KEY_LIGHT);
-    send_setting(KEY_RING_FILL); send_setting(KEY_RING_ROTATION);
+    send_setting(KEY_RING_FILL); send_setting(KEY_RING_ROTATION); send_setting(KEY_FACE_DARK);
 }
 
 static void send_light_entities(void)
@@ -563,6 +564,11 @@ static void send_light_entities(void)
     { PB(b, 160); pb_str(&b, 1, "led_brightness"); pb_fixed32(&b, 2, KEY_LED_BRIGHTNESS); pb_str(&b, 3, "LED brightness");
       pb_str(&b, 5, "mdi:brightness-6"); pb_float(&b, 6, 0); pb_float(&b, 7, 100); pb_float(&b, 8, 1); pb_uint(&b, 10, 1);
       pb_str(&b, 11, "%"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
+    /* the screen's face in a dark room (settings.c face_min_brightness), for an automation that dims it at bedtime only
+     * (issue #126) */
+    if (listed(KEY_FACE_DARK)) { PB(b, 192); pb_str(&b, 1, "face_brightness_in_the_dark"); pb_fixed32(&b, 2, KEY_FACE_DARK);
+      pb_str(&b, 3, "Face brightness in the dark"); pb_str(&b, 5, "mdi:brightness-4"); pb_float(&b, 6, 10); pb_float(&b, 7, 100);
+      pb_float(&b, 8, 1); pb_uint(&b, 10, 1); pb_str(&b, 11, "%"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
     /* separate volumes (main.c): the three beside the media player's, which is the music's; no entity category, controls
      * like the media player's volume */
     static const char *const vol_ids[VOL_KINDS] = { "assistant_volume", "sounds_volume", "timer_volume", "call_volume" };
@@ -576,9 +582,9 @@ static void send_light_entities(void)
 }
 
 /* What Home Assistant lists.  Always: media player, identify, factory reset, mute, do not disturb, wake sound, LEDs, buttons, equalizer, firmware, the
- * Sendspin token (a secret: never on the plain-HTTP settings page).  A feature's entities only while it is on
- * (settings.c, switched on the settings page; switching one has Home Assistant read the list again).  Everything else
- * is on the settings page only.  States go out only for what is listed. */
+ * Sendspin token (a secret: never on the plain-HTTP settings page), on a screen the face's brightness in the dark.  A
+ * feature's entities only while it is on (settings.c, switched on the settings page; switching one has Home Assistant
+ * read the list again).  Everything else is on the settings page only.  States go out only for what is listed. */
 static int listed(int key)
 {
     switch (key) {
@@ -598,6 +604,7 @@ static int listed(int key)
     case KEY_LUX: return have_light && settings_on("light_sensor");
     case KEY_LIGHT: return ring_custom();
     case KEY_RING_FILL: case KEY_RING_ROTATION: case KEY_RING_LEDS: return ring_per_led();
+    case KEY_FACE_DARK: return screen_installed();  /* given up too: an automation's entity stays, as the setting */
     case KEY_CALL_VOLUME: if (!(dropin_running() && settings_on("drop_in"))) return 0;    /* calls only with Drop In */
         /* fall through */
     case KEY_ASSIST_VOLUME: case KEY_SOUNDS_VOLUME: case KEY_TIMER_VOLUME:       /* one that follows the music has none */
@@ -802,6 +809,10 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     else if (type == NUMBER_COMMAND && key == KEY_RING_ROTATION && listed(key)) {              /* saved, shown: settings.c */
         char v[8], e[80]; snprintf(v, sizeof v, "%d", num < 0 ? 0 : (int)lroundf(num));
         settings_set("ring_rotation", v, e, sizeof e); return;
+    }
+    else if (type == NUMBER_COMMAND && key == KEY_FACE_DARK && listed(key)) {                  /* saved, shown: settings.c */
+        char v[8], e[80]; snprintf(v, sizeof v, "%d", num < 10 ? 10 : num > 100 ? 100 : (int)lroundf(num));
+        settings_set("face_min_brightness", v, e, sizeof e); return;
     }
     else if (type == NUMBER_COMMAND && key >= KEY_EQ_BASS && key <= KEY_EQ_TREBLE) {           /* the mixer keeps it, not our file */
         core_set_eq(key - KEY_EQ_BASS, (int)lroundf(num)); send_setting(key); return;

@@ -6,10 +6,12 @@
 #include <stddef.h>
 
 int  screen_present(void);                               /* this model has one: Sendspin asks for metadata and artwork */
+int  screen_installed(void);                             /* its UI's files here, given up or not: settings kept for it */
 void screen_start(void);
 void screen_led(const char *op, const char *pattern);    /* main.c led(): the core's patterns, "-s" on, "-u" off */
 void screen_level(int dbfs10);                           /* the talker (listening) or the reply (speaking), dBFS x 10 */
 void screen_tz(const char *posix_tz);                    /* Home Assistant's time zone (GetTimeResponse) */
+int  screen_face_dark(int percent);                      /* the face's brightness at 0 lux (settings.c); -1 reads */
 /* Sendspin (Music Assistant): what the group plays, and what its controller allows.  state: 0 stopped, 1 playing,
  * 2 paused; pos_ms where it is now; speed x1000 */
 void screen_music_meta(const char *title, const char *artist, const char *album);

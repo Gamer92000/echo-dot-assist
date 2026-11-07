@@ -102,10 +102,13 @@ static uint32_t hue(float h)
     }
 }
 
-static float night(const struct scene *s)                     /* dimmer in the dark: 0.35 at 0 lux, 1 from 30 lux */
+/* dimmer in the dark: the setting's floor at 0 lux (0.35 unless told), 1 from 30 lux, on a log curve between (an Echo
+ * Show 5 2nd gen's sensor reads a median 3 lux in lit rooms: 0.61 at the default, issue #126) */
+static float night(const struct scene *s)
 {
+    float lo = s->dark / 100.0f;
     if (s->lux < 0) return 1;
-    return clampf(0.35f + 0.65f * log10f(1 + s->lux) / log10f(31), 0.35f, 1);
+    return clampf(lo + (1 - lo) * log10f(1 + s->lux) / log10f(31), lo, 1);
 }
 
 static void clock_text(struct scene *s, char *out, size_t n)

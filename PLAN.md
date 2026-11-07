@@ -3314,3 +3314,21 @@ Run in this order. Each step says what it proves.
       speaker index 12 -> 0, the log said "key 114 is down", the key let go 3.5 s later "grabbed after 3533 ms";
       the index set back to 12 stayed there (no repeat).  Muted (`amazon-gating/state` 1),
       hassmic restarted: `gating` grabbed at once, so the gating driver does not hold KEY_POWER down while muted.
+- [~] Echo Shows: the face in the dark (issue #126, 2026-11-06, MWolf1911's cronos on v2026.11.03.224227-beta): `night()`
+      (`src/ui/face.c`) scales the face, its captions and the clock from 0.35 at 0 lux to 1 at 30 lux (log10 between),
+      and that cronos' Illuminance entity read hourly medians of 1-3 lux in the morning, 14-19 at noon and 1 in the
+      evening in normally lit rooms (median 3 over a day: 0.61), never 30 for an hour.  Setting `face_min_brightness`
+      ("Face brightness in the dark", percent, 10-100, exported; only where `screen_installed()`, the UI's files, not
+      `screen_present()`, which turns 0 once the UI is given up: the next save then dropped the line, back to 35 at the
+      next start, and Home Assistant deleted the number; on the page's Screen page by `MOVED` as `light_band`): the
+      floor at 0 lux, the curve and its 30 lux end kept.  35 is the old line to the bit (`ui_test.c` against the old
+      expression at 0-250 lux; uishot's every view the same as before, the face at 0 and 3 lux included: eyes'
+      brightest 81 and 143 of 233), 100 never dims (233 at 0 lux), 70: 163.  10 at the least: at 0 the clock and the
+      words under the eyes (Answer, Stop) went black with the eyes (uishot with `lux 0` and `dark <n>` sent to it,
+      settled 3 s, Arial for Roboto: the clock's brightest 60 of 255 at 35, 17 at 10, 0 at 0, 171 undimmed; the eyes'
+      89, 26, 0 and 255).  screen.c keeps it (`screen_face_dark`) and sends `dark <n>` with the state it reads each
+      second, again to a UI started anew; Home Assistant's number "Face brightness in the dark" (config, slider) as
+      `ring_rotation`'s, through `settings_set`, for an automation that dims the face at bedtime.  Not touched: the
+      backlight (`screen_brightness` 120 from `alexa-off.sh`), the band (LED brightness), the drawer and the music
+      pages (never dimmed).  `tests/fake_screen.py`: page -> UI, export, HA both ways, a restarted UI, one given up
+      (the number, a save), under 10 refused; `fake_web.py`: none without a screen.  Open: on the Echo.

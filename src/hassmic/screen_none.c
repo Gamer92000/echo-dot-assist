@@ -2,10 +2,12 @@
 #include "screen.h"
 
 int  screen_present(void) { return 0; }
+int  screen_installed(void) { return 0; }
 void screen_start(void) {}
 void screen_led(const char *op, const char *pattern) { (void)op; (void)pattern; }
 void screen_level(int dbfs10) { (void)dbfs10; }
 void screen_tz(const char *posix_tz) { (void)posix_tz; }
+int  screen_face_dark(int percent) { (void)percent; return -1; }
 void screen_music_meta(const char *title, const char *artist, const char *album) { (void)title; (void)artist; (void)album; }
 void screen_music_progress(int state, long long pos_ms, long long dur_ms, int speed) { (void)state; (void)pos_ms; (void)dur_ms; (void)speed; }
 void screen_music_controller(int volume, int muted, const char *commands, const char *repeat, int shuffle) { (void)volume; (void)muted; (void)commands; (void)repeat; (void)shuffle; }

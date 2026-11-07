@@ -386,7 +386,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   deletes what is gone (registry included). HA always has: media player, mute, DND, wake sound, LEDs, EQ, firmware,
   Web UI address, Sendspin token (a secret: never on the page), Identify, Light ring (where root installed `ring.c`'s
   set), Button (event entity: presses and 1 s holds, `core_button_events`, from `buttons.c` `event` and `on_action`;
-  types stable, automations use them). The rest is page-only; diagnostics too (`diag.c`).
+  types stable, automations use them), on a screen the face's brightness in the dark (`face_min_brightness`). The rest
+  is page-only; diagnostics too (`diag.c`).
 - **Settings page** (`web.c`, `web/`): HTTP on 28931 (`-W`), files of `web/` gzip'd into the binary by `tools/embed.py`
   (`build/web_assets.c`). Login: the browser's X25519 key waits for the action button (`web_approve()` first in
   `on_action`; ring `authenticated_setup_mode`), approved keys in `state/web_clients`, Echo key `state/web_key`.
@@ -577,7 +578,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   app; an app launched leaves the last frame up (`leaving_until`, the app's picture under the drawer) until it is in
   front, polled every 150 ms meanwhile (`scene_waiting`); frames only while something moves),
   `widgets.c` (icons drawn from shapes, buttons, sliders, keyboard, action sheet, toast), `face.c` (the face for the
-  core's patterns, mouth on the reply's level, clock with HA's tz, bottom line), `drawer.c` (pulled from the top over
+  core's patterns, mouth on the reply's level, clock with HA's tz, bottom line; dimmed by the light sensor from 30 lux
+  down to setting `face_min_brightness` at 0, `night()`, issue #126), `drawer.c` (pulled from the top over
   anything: over an app a SurfaceControl.screenshot under it and hassmic's home activity brought up, closed with
   nothing chosen it relaunches that app; Home, Face, Music, DND, Screen off, what plays, volume; no apps), `music.c` (rail: Playing from Sendspin's metadata/artwork/controller, Queue, Library with
   drill-down, Search with the keyboard, Speakers with groups and volumes; lists by "ml" requests, pages of 60).  The
