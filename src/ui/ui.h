@@ -138,7 +138,7 @@ struct scene {
     struct scroller *prev[NSCROLL]; int nprev;          /* the last frame's: one not drawn again stops (its fling) */
     /* the satellite */
     struct { long long at; int on; } pat[32];
-    int level, mute, dnd, oobe, h12, evol; float lux;
+    int level, mute, dnd, oobe, h12, evol;
     char name[64], timers[256], peer[64], home[96], act[64], web[96];
     /* music as Sendspin tells it (scene.h: mt, mp, mc, art) */
     int music, mstate, mspeed, mvol, mmuted, mrepeat, mshuffle; long long mpos, mdur, mpos_at;

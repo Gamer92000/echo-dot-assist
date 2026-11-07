@@ -822,7 +822,6 @@ void scene_msg(struct scene *s, const char *line, long long now)
     else if (eq(cmd, "dnd")) s->dnd = atoi(a);
     else if (eq(cmd, "oobe")) s->oobe = atoi(a);
     else if (eq(cmd, "h12")) s->h12 = atoi(a);
-    else if (eq(cmd, "lux")) s->lux = (float)atoi(a);              /* (whole lux, as hassmic sends them: no nan) */
     else if (eq(cmd, "name")) snprintf(s->name, sizeof s->name, "%s", a);
     else if (eq(cmd, "act")) snprintf(s->act, sizeof s->act, "%s", a);
     else if (eq(cmd, "web")) snprintf(s->web, sizeof s->web, "%s", a);
@@ -885,7 +884,7 @@ struct scene *scene_new(int w, int h, int band, const struct ui_platform *p, voi
     s->p = p; s->ctx = ctx; kiosk[0] = 0; home_chosen = home_known = home_new = 0;
     scene_resize(s, w, h, band);
     s->rnd = 0x9E3779B9u ^ (unsigned)now; if (!s->rnd) s->rnd = 1;
-    s->lux = -1; s->screen_on = 1; s->pressed = 0; s->view = V_FACE; s->evol = -1;
+    s->screen_on = 1; s->pressed = 0; s->view = V_FACE; s->evol = -1;
     for (int i = 0; i < 3; i++) s->relaunch[i] = -3600000;     /* none yet (the clock may be under a minute) */
     s->now = s->last = 0;
     face_init(s, now);

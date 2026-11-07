@@ -26,7 +26,7 @@ def tool(bin_, name, body):
 
 def moved(text, tmp):
     return (text.replace("/data/local/hassmic", tmp + "/hassmic").replace("/data/local/tmp", tmp + "/ltmp")
-            .replace("/data/system", tmp + "/system").replace("/data/app", tmp + "/app"))
+            .replace("/data/system", tmp + "/system").replace("/data/app", tmp + "/app").replace("/data/data", tmp + "/appdata"))
 
 
 def lockdown(tmp, conf, config, pkglist):
@@ -168,11 +168,13 @@ window) [ "$2" = policy ] && cat {tmp}/rotation;;
         tool(self.bin, "settings", f'echo "settings $*" >> {self.log}')
         self.rotation(1)
         tool(self.bin, "getprop", "echo 1")
+        tool(self.bin, "am", f'echo "am $*" >> {self.log}')
+        tool(self.bin, "stat", 'echo " u0_a154"')                      # the app's folder's owner (stat -c %U)
         tool(self.bin, "sleep", "exit 0")
         tool(tmp, "runas", 'shift 2; exec "$@"')
         t = open(ROOT + "/scripts/system/main.sh").read()
         block = t[t.index("# >>> kiosk"):t.index("# <<< kiosk")]
-        self.block = f"D={tmp}\nKIOSK_PACKAGE={PKG}\nKIOSK_ROTATION=1\n" + moved(block, tmp)
+        self.block = f"D={tmp}\nKIOSK_PACKAGE={PKG}\nKIOSK_ROTATION=1\nBACKLIGHT=1\n" + moved(block, tmp)
 
     def top(self, what):
         with open(self.tmp + "/top", "w") as f: f.write(f"    mResumedActivity: ActivityRecord{{1 u0 {what} t1}}\n")
@@ -254,6 +256,50 @@ with tempfile.TemporaryDirectory() as tmp:
     e.top(PKG + "/.MainActivity")
     o, c = e.ticks("t; t")
     check("no new grants while the install is the same", c.count("SYSTEM_ALERT_WINDOW") == 1, c)
+
+    # its own adaptive brightness off (issue #126): as its user, the app stopped first (it reads them at its start)
+    prefs = f"{tmp}/appdata/{PKG}/shared_prefs/FlutterSharedPreferences.xml"; os.makedirs(os.path.dirname(prefs), exist_ok=True)
+    OFF = '    <boolean name="flutter.ks.screen.adaptive_brightness" value="false" />'
+    def put_prefs(body):
+        if os.path.exists(prefs): os.chmod(prefs, 0o644)
+        with open(prefs, "w") as f: f.write("<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n<map>\n" + body + "</map>\n")
+    put_prefs('    <string name="flutter.ks.x">a</string>\n    <boolean name="flutter.ks.screen.adaptive_brightness" value="true" />\n    <long name="flutter.ks.y" value="-1" />\n')
+    o, c = e.ticks("t")
+    p = open(prefs).read()
+    check("the app's adaptive brightness on: stopped, switched off, the rest kept", f"am force-stop {PKG}" in c and OFF in p and "value=\"true\"" not in p
+          and 'name="flutter.ks.x">a<' in p and 'name="flutter.ks.y" value="-1"' in p and p.endswith("</map>\n") and "switched off" in o, p + c + o)
+    o, c = e.ticks("t; t")
+    check("off already: the app left alone", "am " not in c and "adaptive" not in o, c + o)
+    put_prefs('    <string name="flutter.ks.x">a</string>\n')
+    o, c = e.ticks("t")
+    check("no such key yet (a new install): added", f"am force-stop {PKG}" in c and OFF in open(prefs).read() and open(prefs).read().endswith("</map>\n"), open(prefs).read() + c)
+    with open(prefs, "w") as f: f.write("<map>\n    <boolean name=\"flutter.ks.screen.adaptive_brightness\" value=\"true\" />\n")
+    o, c = e.ticks("t")
+    check("a file being written (no </map>): not now", "am " not in c, c)
+    put_prefs('    <boolean name="flutter.ks.screen.adaptive_brightness" value="true" />\n'); os.chmod(prefs, 0o444)
+    o, c = e.ticks("t; t; t")
+    check("cannot be written: the app stopped once, said once", c.count("am force-stop") == 1 and o.count("could not be switched off") == 1, c + o)
+    os.chmod(prefs, 0o644)
+    put_prefs('    <boolean name="flutter.ks.screen.adaptive_brightness" value="true" />\n')
+    with open(prefs + ".bak", "w") as f: f.write("<map>\n    <boolean name=\"flutter.ks.screen.adaptive_brightness\" value=\"true\" />\n</map>\n")
+    e.ticks("kiosk_bfail=; t")
+    check("a .bak beside it (Android would take it) goes with the write", not os.path.exists(prefs + ".bak") and OFF in open(prefs).read(), os.listdir(os.path.dirname(prefs)))
+    put_prefs('    <boolean name="flutter.ks.screen.adaptive_brightness" value="true" />\n')
+    tool(tmp, "runas", 'echo "runas: unknown group $2" >&2; exit 1')
+    o, c = e.ticks("kiosk_bfail=; t; t")
+    check("runas failing: not taken for work to do, the app not stopped, said once", "am " not in c and o.count("could not be looked at") == 1, c + o)
+    tool(tmp, "runas", 'shift 2; exec "$@"')
+    tool(e.bin, "stat", 'echo " u0_a1*"')
+    o, c = e.ticks("t")
+    check("an owner that is no plain app user's name: left alone", "am " not in c, c)
+    tool(e.bin, "stat", 'echo " u0_a154"')
+    put_prefs(OFF + "\n")
+    with open(prefs + ".bak", "w") as f: f.write("<map>\n</map>\n")
+    o, c = e.ticks("kiosk_bfail=; t")
+    check("off, but a .bak beside it: written again, the .bak gone", f"am force-stop {PKG}" in c and not os.path.exists(prefs + ".bak"), c)
+    o, c = e.ticks(f"BACKLIGHT=; t")
+    check("a model without the backlight settings: left alone", "am " not in c, c)
+    put_prefs(OFF + "\n")
 
     o, c = e.ticks(f"t; t; rmdir {tmp}/app/{PKG}-1; mkdir {tmp}/app/{PKG}-2; t")
     check("a reinstall is granted again without a boot", c.count("SYSTEM_ALERT_WINDOW") == 2, c)

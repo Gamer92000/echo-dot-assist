@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Home Assistant's side of the ESPHome native API against build/hassmic-host (tests/esphome_common.py), part two:
 timers ringing and what stops them, a new run after an error, the timer that runs next, encryption provisioned by Home Assistant (key, mDNS,
-refusals, clearing), the time and zone over the keyed link, noise reduction, LED brightness and the light sensor."""
+refusals, clearing), the time and zone over the keyed link, noise reduction, LED brightness, the light sensor and the
+Echo Show's screen brightness (HASSMIC_FAKE_BACKLIGHT: a model with one)."""
 import asyncio, base64, os, re, signal, time
 from datetime import datetime
-from aioesphomeapi import NumberState, SwitchState, TextSensorInfo, TextSensorState, BinarySensorInfo, BinarySensorState, SensorInfo, SensorState
+from aioesphomeapi import NumberInfo, NumberState, SwitchInfo, SwitchState, TextSensorInfo, TextSensorState, BinarySensorInfo, BinarySensorState, SensorInfo, SensorState
 from aioesphomeapi import APIClient, MediaPlayerCommand, VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm, ZERO_NOISE_PSK
 from aioesphomeapi.core import InvalidEncryptionKeyAPIError, RequiresEncryptionAPIError
 from esphome_common import check, until, sync, peak, speech, home_assistant, run
@@ -312,4 +313,28 @@ async def main(e):
     sent = [x.state for x in st3 if isinstance(x, SensorState) and x.key == lux.key]
     check(sent == [67, 150], f"illuminance from the sensor file, sent on a real change, not on flicker: {sent}")
 
-run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT))
+    # The Echo Show's backlight (issue #126): stock's "Adaptive brightness", the level without it, the curve's adjustment
+    # with it.  Into state/config, which root's main.sh backlight sets as Android's settings (tests/unit/backlight_test.py)
+    sa, sl, sj = (cby.get(k) for k in ("adaptive_brightness", "screen_brightness", "adaptive_brightness_adjustment"))
+    check(isinstance(sa, SwitchInfo) and isinstance(sl, NumberInfo) and (sl.min_value, sl.max_value) == (1, 100) and sl.unit_of_measurement == "%"
+          and isinstance(sj, NumberInfo) and (sj.min_value, sj.max_value) == (-100, 100), "screen brightness entities listed")
+    await until(lambda: last3(sl.key, NumberState) is not None and last3(sj.key, NumberState) is not None)
+    check((last3(sa.key, SwitchState), last3(sl.key, NumberState), last3(sj.key, NumberState)) == (False, 47, 0),
+          "manual at 47 % by default (setting 120, what the Shows ran at)")
+    c.switch_command(sa.key, True); c.number_command(sj.key, 35); c.number_command(sl.key, 150)
+    await until(lambda: conf().get("screen_brightness_auto") == "on" and conf().get("screen_brightness_adjust") == "35"
+                and conf().get("screen_brightness") == "100")
+    check((conf().get("screen_brightness_auto"), conf().get("screen_brightness_adjust"), conf().get("screen_brightness")) == ("on", "35", "100"),
+          f"Home Assistant's commands in the settings file for root, the level clamped: {conf()}")
+    await until(lambda: last3(sl.key, NumberState) == 100)
+    check((last3(sa.key, SwitchState), last3(sl.key, NumberState), last3(sj.key, NumberState)) == (True, 100, 35), "and shown back")
+    c.number_command(sl.key, 0)
+    await until(lambda: conf().get("screen_brightness") == "1")
+    check(conf().get("screen_brightness") == "1", "a level of 0 from Home Assistant is 1 %: never a black screen")
+    page.set(screen_brightness_auto="off")
+    await until(lambda: last3(sa.key, SwitchState) is False)
+    check(last3(sa.key, SwitchState) is False and conf().get("screen_brightness_auto") == "off", "switched off on the page: Home Assistant follows")
+    ps = {x["name"]: x for x in page.state()["settings"]}
+    check(all(k in ps for k in ("screen_brightness_auto", "screen_brightness", "screen_brightness_adjust")), "on the settings page")
+
+run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT), {"HASSMIC_FAKE_BACKLIGHT": "1"})

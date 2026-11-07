@@ -131,7 +131,7 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
        KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON, KEY_LIGHT, KEY_ASSIST_VOLUME, KEY_SOUNDS_VOLUME, KEY_TIMER_VOLUME,
        KEY_CALL_VOLUME, KEY_WAKE, KEY_RING_FILL, KEY_RING_ROTATION, KEY_RING_LEDS, KEY_LAST_HEARD, KEY_LAST_REPLY,
-       KEY_NEXT_TIMER, KEY_NEXT_TIMER_NAME, KEY_NEXT_TIMER_LENGTH };
+       KEY_NEXT_TIMER, KEY_NEXT_TIMER_NAME, KEY_NEXT_TIMER_LENGTH, KEY_SCR_AUTO, KEY_SCR_LEVEL, KEY_SCR_ADJUST };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -439,6 +439,10 @@ static void send_setting(int key)       /* lock held */
     case KEY_ASSIST_VOLUME: case KEY_SOUNDS_VOLUME: case KEY_TIMER_VOLUME: case KEY_CALL_VOLUME:     /* VOL_* order */
         pb_float(&b, 2, core_kind_volume(key - KEY_ASSIST_VOLUME, -1)); send_state(NUMBER_STATE, &b); break;
     case KEY_LED_BRIGHTNESS: { int v = core_led_brightness(-1); if (v >= 0) { pb_float(&b, 2, v); send_state(NUMBER_STATE, &b); } } break;
+    case KEY_SCR_AUTO: pb_uint(&b, 2, settings_on("screen_brightness_auto")); send_state(SWITCH_STATE, &b); break;
+    case KEY_SCR_LEVEL: case KEY_SCR_ADJUST:
+        pb_float(&b, 2, settings_get(settings_find(key == KEY_SCR_LEVEL ? "screen_brightness" : "screen_brightness_adjust")));
+        send_state(NUMBER_STATE, &b); break;
     case KEY_BT_OUT_SEARCH: if (ble_present()) { pb_uint(&b, 2, a2dp_out_searching()); send_state(SWITCH_STATE, &b); } break;
     case KEY_BT_OUT: if (ble_present()) { pb_uint(&b, 2, a2dp_out_enabled()); send_state(SWITCH_STATE, &b); } break;
     case KEY_BT_OUT_DELAY: if (ble_present()) { pb_float(&b, 2, a2dp_out_delay(-1)); send_state(NUMBER_STATE, &b); } break;
@@ -531,6 +535,7 @@ static void send_light_states(void)     /* lock held */
     sent_level = core_led_brightness(-1); level_at = time(NULL);
     send_setting(KEY_LED_AUTO); send_setting(KEY_LED_BRIGHTNESS); send_setting(KEY_LIGHT);
     send_setting(KEY_RING_FILL); send_setting(KEY_RING_ROTATION);
+    send_setting(KEY_SCR_AUTO); send_setting(KEY_SCR_LEVEL); send_setting(KEY_SCR_ADJUST);
 }
 
 static void send_light_entities(void)
@@ -563,6 +568,18 @@ static void send_light_entities(void)
     { PB(b, 160); pb_str(&b, 1, "led_brightness"); pb_fixed32(&b, 2, KEY_LED_BRIGHTNESS); pb_str(&b, 3, "LED brightness");
       pb_str(&b, 5, "mdi:brightness-6"); pb_float(&b, 6, 0); pb_float(&b, 7, 100); pb_float(&b, 8, 1); pb_uint(&b, 10, 1);
       pb_str(&b, 11, "%"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
+    /* the Echo Show's backlight as stock's Display settings: adaptive (Amazon's lux curve, shifted by the adjustment) or
+     * a level of its own (settings.c backlight_auto; root's main.sh sets Android's settings from state/config) */
+    if (listed(KEY_SCR_AUTO)) {
+        { PB(b, 160); pb_str(&b, 1, "adaptive_brightness"); pb_fixed32(&b, 2, KEY_SCR_AUTO); pb_str(&b, 3, "Adaptive brightness");
+          pb_str(&b, 5, "mdi:brightness-auto"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
+        { PB(b, 160); pb_str(&b, 1, "screen_brightness"); pb_fixed32(&b, 2, KEY_SCR_LEVEL); pb_str(&b, 3, "Screen brightness");
+          pb_str(&b, 5, "mdi:brightness-6"); pb_float(&b, 6, 1); pb_float(&b, 7, 100); pb_float(&b, 8, 1); pb_uint(&b, 10, 1);
+          pb_str(&b, 11, "%"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
+        { PB(b, 160); pb_str(&b, 1, "adaptive_brightness_adjustment"); pb_fixed32(&b, 2, KEY_SCR_ADJUST);
+          pb_str(&b, 3, "Adaptive brightness adjustment"); pb_str(&b, 5, "mdi:brightness-percent"); pb_float(&b, 6, -100);
+          pb_float(&b, 7, 100); pb_float(&b, 8, 1); pb_uint(&b, 10, 1); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
+    }
     /* separate volumes (main.c): the three beside the media player's, which is the music's; no entity category, controls
      * like the media player's volume */
     static const char *const vol_ids[VOL_KINDS] = { "assistant_volume", "sounds_volume", "timer_volume", "call_volume" };
@@ -595,6 +612,7 @@ static int listed(int key)
     case KEY_WHISPERED: return core_whisper_model() && settings_on("whisper_detection");
     case KEY_WIFI_MOTION: case KEY_WIFI_MOTION_SENS: return wifimotion_present() && settings_on("wifi_motion");
     case KEY_LED_AUTO: return have_auto;
+    case KEY_SCR_AUTO: case KEY_SCR_LEVEL: case KEY_SCR_ADJUST: return settings_find("screen_brightness_auto") != NULL;
     case KEY_LUX: return have_light && settings_on("light_sensor");
     case KEY_LIGHT: return ring_custom();
     case KEY_RING_FILL: case KEY_RING_ROTATION: case KEY_RING_LEDS: return ring_per_led();
@@ -789,6 +807,14 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     }
     else if (type == NUMBER_COMMAND && key == KEY_LED_BRIGHTNESS) {                  /* a level of its own: auto off, or it moves */
         core_led_brightness(num < 0 ? 0 : (int)lroundf(num)); settings_save(); send_setting(KEY_LED_AUTO); send_setting(key); return;
+    }
+    else if (type == SWITCH_COMMAND && key == KEY_SCR_AUTO && listed(key)) {                  /* saved, shown: settings.c */
+        char e[80]; settings_set("screen_brightness_auto", on ? "on" : "off", e, sizeof e); return;
+    }
+    else if (type == NUMBER_COMMAND && (key == KEY_SCR_LEVEL || key == KEY_SCR_ADJUST) && listed(key)) {
+        int lo = key == KEY_SCR_LEVEL ? 1 : -100, n = (int)lroundf(num); char v[8], e[80];
+        snprintf(v, sizeof v, "%d", n < lo ? lo : n > 100 ? 100 : n);
+        settings_set(key == KEY_SCR_LEVEL ? "screen_brightness" : "screen_brightness_adjust", v, e, sizeof e); return;
     }
     else if (type == NUMBER_COMMAND && key >= KEY_ASSIST_VOLUME && key <= KEY_CALL_VOLUME && listed(key)) {   /* saved, shown: settings.c */
         static const char *const names[] = { "assistant_volume", "sounds_volume", "timer_volume", "call_volume" };

@@ -4,6 +4,14 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-07
 
+- **Echo Shows: screen brightness as on a stock Echo Show (issue #126).** The screen's brightness is now a setting,
+  on the settings page's Screen page and in Home Assistant: **Screen brightness** (one level, 47 % by default, what the
+  Shows ran at before), or **Adaptive brightness**, Amazon's own following of the room's light, with **Adaptive
+  brightness adjustment** to make it brighter or dimmer, as the slider on a stock Echo Show does. The face no longer
+  dims on top of that in a dim room: it was at half brightness most of the day where the light sensor reads low.
+  With Kiosk Satellite installed, the Echo switches off the app's own adaptive brightness, which kept overriding these
+  settings: the app restarts once for it.
+
 - **Setup on an Echo Dot 3: a clearer hint when TWRP does not come up.** If TWRP (the white ring) is not there a
   minute after the unlock flashed it, or after any later restart into it, the setup now says to unplug the power and
   hold only Volume up (+) while plugging it back in, which starts TWRP. It used to say only to replug the power, which

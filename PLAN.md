@@ -3307,7 +3307,7 @@ Run in this order. Each step says what it proves.
       sensor while the mode is manual (120 to 155 at 20 to 45 lux within seconds), or a level of its own with that
       off; ours at each satellite start only fought it, so `alexa-off.sh` leaves the level alone while the app's
       folder is in `/data/app` (the mode stays manual: its adaptive brightness runs under it).  Open: 120 by eye in
-      daylight (33/255; stock ran at 238).
+      daylight (33/255; stock ran at 238).  Since issue #126 a setting (below).
       Boot time (2026-11-02, Show 5, PR #114): `alexa-off.sh` took 16 s of a 41 s boot at a start with nothing left to
       do, all of it Java: `pm list packages -d` and `pm list packages` ~2 s each, a `settings get` ~2 s per
       `ANDROID_SETTINGS` entry, `wpa_cli p2p_group_remove` 7 s with no group up.  Now the package manager's and
@@ -3334,3 +3334,35 @@ Run in this order. Each step says what it proves.
       speaker index 12 -> 0, the log said "key 114 is down", the key let go 3.5 s later "grabbed after 3533 ms";
       the index set back to 12 stayed there (no repeat).  Muted (`amazon-gating/state` 1),
       hassmic restarted: `gating` grabbed at once, so the gating driver does not hold KEY_POWER down while muted.
+- [~] Echo Shows' screen brightness as stock's (issue #126, 2026-11-07, MWolf1911's cronos: hourly medians of
+      `als_ps/lux` 1-19 lux over a day, median 3, never 30; the face's own dimming, 0.35 at 0 lux to 1 from 30 lux, at
+      48-61 % mornings and evenings, on a backlight at 33/255).  Stock has no brightness code of its own: KnightSettings'
+      "Adaptive brightness" writes `screen_brightness_mode`, its slider `screen_brightness`, or with adaptive on
+      `screen_auto_brightness_adj` (strings in its dex, as SystemUI's BrightnessController); Android's
+      AutomaticBrightnessController does the rest on framework-res's curve (cronos, checkers alike from 25 lux;
+      `config_autoBrightnessLevels` 1..20, 25, 30, 40 .. 650 lux, `config_autoBrightnessLcdBacklightValues` cronos 4 4
+      4 4 4 5 6 7 8 11 13 17 20 24 30 35 42 48 55 63 74 117 155 184 204 216 222 226 230 ... 250, checkers 1 1 1 1 1 2
+      3 ... 63 93 117 ...; `config_autoBrightnessAdjustmentMaxGamma` 7.0, so +1 makes setting 4 = 141 by Android 7's (v/255)^(7^-adj), what
+      manual 55 % gives (computed, not measured); debounce 4 s
+      up, 5 s down).  The reporter's 1-3 lux would get setting 4 on stock too: darker than our 120, hence manual stays
+      the default.  Now: settings `screen_brightness_auto` (off), `screen_brightness` (47 % = 120),
+      `screen_brightness_adjust` (-100..100 = -1..1), `board.backlight` and device.conf `BACKLIGHT` on the four Shows
+      (`backlight_test.py` holds them to each other and to `SCREEN`), HA's "Adaptive brightness", "Screen brightness",
+      "Adaptive brightness adjustment" (config); root's `main.sh backlight` reads `state/config` every 2 s and sets
+      Android's settings (only what differs: SettingsProvider's XML first; stock's values into `alexa-settings` for
+      `alexa-on.sh`; values not a short whole number taken as the default); `ANDROID_SETTINGS` no longer has the
+      brightness.  Kiosk Satellite (checkers, 2026-11-07, this build pushed): its adaptive brightness
+      (`flutter.ks.screen.adaptive_brightness`, true) set `screen_brightness_mode` back to 0 three seconds after root set
+      1 (SettingsProvider's file names the writer: `package="me.jxl.kiosk_satellite"`) and kept writing the level (107 to
+      137 at 43 lux).  So root switches it off: `main.sh kiosk_brightness`, each kiosk tick a grep as the app's user
+      (runas `u0_a154`: the file and its folder are the app's, a link or FIFO there reaches nothing more), when on or
+      missing `am force-stop`, the key written in place (label kept), the app opened again as ever.  By hand first: the
+      app came back with it off and wrote no level in a minute (its `default_brightness` 0.9 never), adaptive then held
+      (mode 1 for 46 s, `dumpsys display` mAmbientLux 44 -> mScreenAutoBrightness 193 = lcd-backlight 193, the spline as
+      framework-res).  With that, no exception for the app in `backlight`; anything else that changes the brightness is
+      set back three times at most until the setting changes (never a fight).  Lights off with adaptive on (checkers, 19:41): lux 44 -> 3,
+      `mScreenAutoBrightness` 4 then 1, lcd-backlight 203 held 5 s (darkening debounce) then down ~10 a second (62 after
+      14 s): Android's own ramp, as stock.  The face's `night()` is gone, and with it the `lux` line to the UI.  Tests: `tests/unit/backlight_test.py`
+      (the block in `sh` with a stand-in `settings`), `fake_ha_esphome_timers.py` (`HASSMIC_FAKE_BACKLIGHT`: entities,
+      commands, page), `fake_ha_esphome.py` (none on a Dot).  **Open:** Android 9's (athena, crown) curve not read, nor
+      tried there; the adjustment's effect on the backlight not measured; Kiosk Satellite's switch on cronos/crown/athena.

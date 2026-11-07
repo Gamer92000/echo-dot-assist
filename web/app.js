@@ -204,14 +204,15 @@ const PAGES = [
   { id: 'models', title: 'Models', icon: 'box', nav: 'All your Echos', always: true, intro: 'Amazon\'s extra wake words and models, microWakeWord\'s models and your light ring designs: fetched, copied between Echos, kept on file.' },
   { id: 'system', title: 'System', icon: 'sliders', nav: 'This Echo\'s system', groups: ['System'], always: true, intro: 'This Echo\'s name and network, updates, backups and troubleshooting.' },
 ];
-const MOVED = { light_band: 'screen', arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
+const BRIGHTNESS = ['screen_brightness_auto', 'screen_brightness', 'screen_brightness_adjust'];      // the Show's backlight
+const MOVED = { light_band: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen', arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
 // The cards of a settings page: [title, settings...].  A setting not named here (a new one, or a model's own) comes
 // last, in a card of its own, so nothing is ever lost from the page
 const LAYOUT = {
   voice: [['Microphone', 'mic_level', 'noise_reduction'], ['Mute and wake sound removal', 'mute', 'do_not_disturb', 'wake_sound_removal'],
           ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any']],
   wake: [['Engine', 'wake_engine'], ['How it hears you', 'speech_language', 'wake_word_adaptation']],
-  lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band']],
+  lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band'], ['Screen', ...BRIGHTNESS]],
 };
 
 // help: what it does, in the user's terms.  ha: also in Home Assistant (true), or for features the entities it adds.
@@ -243,6 +244,9 @@ const HELP = {
   even_volume: { help: 'Makes every step of the volume the same: each point is 0.5 dB, each press of the volume buttons 5 dB, from 1 (quiet, about 50 dB under full) to 100 (as loud as before). Without it the Echo plays a volume as a stock Echo does, where most of the change happens at one end: on an Echo Show the bottom half covers more than twice the range of the top half, and a step of one point often does nothing at all. The Echo keeps its own volume setting at the nearest step above, and turns the sound down the rest of the way itself. 0 is silent either way. A Bluetooth speaker that sets its own volume still does. Exported with the settings. On by default.' },
   led_auto_brightness: { ha: true, help: 'The ring dims and brightens with the room, from the Echo\'s light sensor and Amazon\'s own curve, as on a stock Echo.' },
   led_brightness: { ha: true, help: 'A fixed brightness for the ring. Setting one turns auto brightness off.' },
+  screen_brightness_auto: { ha: true, help: 'The screen dims and brightens with the room, on Amazon\'s own curve from the Echo\'s light sensor, as "Adaptive brightness" on a stock Echo Show does. That curve is dark: under about 5 lux the screen is barely lit, and it is near full brightness only from about 100 lux. If it is too dim for you, raise "Adaptive brightness adjustment", as you would move the slider on a stock Echo Show. Off by default: the screen stays at "Screen brightness".' },
+  screen_brightness: { ha: true, help: 'How bright the screen is with adaptive brightness off. Default 47 %, what the Echo ran at before this setting existed. With Kiosk Satellite installed, the Echo switches off the app\'s own adaptive brightness, so these settings set the screen.' },
+  screen_brightness_adjust: { ha: true, help: 'With adaptive brightness on: Amazon\'s curve brighter (up to +100) or dimmer (down to −100), as the brightness slider moves it on a stock Echo Show in adaptive mode. At +100 a dark room\'s near-black screen is about as bright as 55 % without adaptive. 0 is Amazon\'s curve as it is.' },
   ring_rotation: { ha: true, help: 'Where the light ring\'s fill starts. Home Assistant\'s "Light ring fill" lights that share of the ring in the light\'s colour, for a timer\'s or a washing machine\'s progress or a battery; it fills the way the volume does, from where the volume starts. Turn the start by this many LEDs, so it starts where you want it to for how the Echo stands. Only where the Echo has room for each LED\'s own animations (Home Assistant then lists "Light ring fill"). Default 0.' },
   light_band: { help: 'The Echo Show has no light ring: it shows the ring\'s lights as a band along the bottom of the screen, as Alexa did. That is listening, thinking, mic off, calls, volume, timers and Home Assistant\'s "Light ring". This many pixels at the bottom are kept for it, so an app on the screen never has the band over it. 0 gives the whole screen to the apps and shows no band. Default 10, stock\'s line.' },
   bluetooth_announcements: { help: 'Says "Connected to …" and "Disconnected from …" when a phone connects, in your voice assistant\'s voice, after the chime. Home Assistant speaks the words, and only once "Allow the device to perform Home Assistant actions" is ticked in this Echo\'s ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure); without it there is the chime only.' },
@@ -416,6 +420,9 @@ const SUB = {
   even_volume: 'Each volume step as big as the next',
   led_auto_brightness: 'Follows the room\'s light, as on a stock Echo',
   led_brightness: 'A fixed level; turns auto brightness off',
+  screen_brightness_auto: 'Follows the room\'s light, as on a stock Echo Show',
+  screen_brightness: 'The level with adaptive brightness off',
+  screen_brightness_adjust: 'Brighter or dimmer than Amazon\'s curve, with adaptive on',
   ring_rotation: 'Where "Light ring fill" starts',
   light_band: 'Pixels kept for the band along the bottom of the screen',
   bluetooth_announcements: 'Says when a phone connects or disconnects',
@@ -1155,7 +1162,11 @@ const PAGE_BUILD = {
     el.append(flow(cards));
   },
   lights: (el, list) => { el.append(flow(settingCards(list, 'lights'))); buildRing(el); },
-  screen: (el, list) => el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.map(settingRow))])),   // ring.js: the designs and where they show
+  screen: (el, list) => {      // ring.js: the designs and where they show
+    const bright = list.filter((s) => BRIGHTNESS.includes(s.name));
+    el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.filter((s) => !bright.includes(s)).map(settingRow)),
+      bright.length ? titled('Brightness', bright.map(settingRow)) : null].filter(Boolean)));
+  },
   media: (el, list) => {
     const parent = (k) => (HELP[k.name] || {}).parent, plain = list.filter((x) => !x.feature && !parent(x));
     const music = plain.filter((x) => x.group === 'Music'), bt = plain.filter((x) => x.group !== 'Music');

@@ -102,12 +102,6 @@ static uint32_t hue(float h)
     }
 }
 
-static float night(const struct scene *s)                     /* dimmer in the dark: 0.35 at 0 lux, 1 from 30 lux */
-{
-    if (s->lux < 0) return 1;
-    return clampf(0.35f + 0.65f * log10f(1 + s->lux) / log10f(31), 0.35f, 1);
-}
-
 static void clock_text(struct scene *s, char *out, size_t n)
 {
     time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm);
@@ -116,7 +110,7 @@ static void clock_text(struct scene *s, char *out, size_t n)
 }
 
 /* the eyes and the mouth; returns whether anything still moves */
-static int eyes(struct scene *s, int m, float dt, float br)
+static int eyes(struct scene *s, int m, float dt)
 {
     float w = s->w, h = s->h, t = (float)(s->now % 600000);
     float ew = 1, lh = 1, rh = 1, gx = 0, gy = 0, mouth = 0, k = 1; uint32_t col = 0xDCEBFF;
@@ -159,7 +153,7 @@ static int eyes(struct scene *s, int m, float dt, float br)
     }
     struct face *f = &s->face;
     f->ew.t = ew; f->lh.t = lh * bl; f->rh.t = rh * bl; f->gx.t = gx; f->gy.t = gy;
-    f->cr.t = (col >> 16 & 255); f->cg.t = (col >> 8 & 255); f->cb.t = (col & 255); f->br.t = k * br;
+    f->cr.t = (col >> 16 & 255); f->cg.t = (col >> 8 & 255); f->cb.t = (col & 255); f->br.t = k;
     f->mw.t = mouth ? 0.7f + 0.6f * lv : 0.5f; f->mh.t = mouth ? 0.15f + lv : 0; f->ma.t = mouth;
     moving |= ease(&f->ew, dt, 90) | ease(&f->lh, dt, bl < 1 ? 20 : 70) | ease(&f->rh, dt, bl < 1 ? 20 : 70);
     moving |= ease(&f->gx, dt, 70) | ease(&f->gy, dt, 70) | ease(&f->br, dt, 200);
@@ -189,10 +183,10 @@ static void pill(struct scene *s, int id, float cx, float cy, float w, const cha
     hit(s, cx - w / 2 - U(8), cy - h / 2 - U(8), cx + w / 2 + U(8), cy + h / 2 + U(8), act, 0);
 }
 
-static void caption(struct scene *s, int m, float br, int *used)
+static void caption(struct scene *s, int m, int *used)
 {
     float w = s->w, h = s->h, y = 0.8f * h, px = U(30); char buf[300] = "";
-    uint32_t c = gfx_scale(FG, br);
+    uint32_t c = FG;
     *used = 1;
     switch (m) {
     case M_TIMER:
@@ -209,8 +203,8 @@ static void caption(struct scene *s, int m, float br, int *used)
         text(s, ID_FACE + 10, buf, px, 1, 0.5f * w, 0.3f * w, y - U(15), 1, c, 255);
         pill(s, ID_FACE + 60, 0.75f * w, y, 0.2f * w, "End", RED, A_HANGUP);
         break;
-    case M_MUTE: text(s, ID_FACE + 10, "Microphone off", px, 0, 0.8f * w, w / 2, y - U(15), 1, gfx_scale(RED, br), 255); break;
-    case M_DND: text(s, ID_FACE + 10, "Do not disturb", px, 0, 0.8f * w, w / 2, y - U(15), 1, gfx_scale(VIOLET, br * 0.8f), 255); break;
+    case M_MUTE: text(s, ID_FACE + 10, "Microphone off", px, 0, 0.8f * w, w / 2, y - U(15), 1, RED, 255); break;
+    case M_DND: text(s, ID_FACE + 10, "Do not disturb", px, 0, 0.8f * w, w / 2, y - U(15), 1, gfx_scale(VIOLET, 0.8f), 255); break;
     case M_SETUP:
         snprintf(buf, sizeof buf, "Add %s in Home Assistant", s->name[0] ? s->name : "me");
         text(s, ID_FACE + 10, buf, px, 0, 0.9f * w, w / 2, y - U(15), 1, c, 255);
@@ -227,7 +221,7 @@ static void caption(struct scene *s, int m, float br, int *used)
 }
 
 /* the face's bottom line: the track playing, with its own play/pause; a tap anywhere else on it opens the music */
-static void miniplayer(struct scene *s, float br)
+static void miniplayer(struct scene *s)
 {
     float w = s->w, h = s->h, y0 = 0.79f * h, y1 = 0.95f * h, x0 = 0.22f * w, x1 = 0.78f * w, ph = y1 - y0;
     rrect(s, ID_FACE + 30, x0, y0, x1, y1, ph / 2, pressed(s, A_TOMUSIC, 0) ? 0x2A2E35 : DARK, 255);
@@ -237,8 +231,8 @@ static void miniplayer(struct scene *s, float br)
         icon(s, ID_FACE + 32, IC_NOTE, x0 + U(6) + a / 2, y0 + ph / 2, a * 0.32f, DIM, 0x30343B);
     }
     float tx = x0 + U(18) + a, tw = x1 - tx - ph - U(8);
-    text(s, ID_FACE + 35, s->title[0] ? s->title : "Music Assistant", U(23), 1, tw, tx, y0 + U(8), 0, gfx_scale(FG, br), 255);
-    text(s, ID_FACE + 36, s->artist, U(19), 0, tw, tx, y0 + U(34), 0, gfx_scale(DIM, br), 255);
+    text(s, ID_FACE + 35, s->title[0] ? s->title : "Music Assistant", U(23), 1, tw, tx, y0 + U(8), 0, FG, 255);
+    text(s, ID_FACE + 36, s->artist, U(19), 0, tw, tx, y0 + U(34), 0, DIM, 255);
     hit(s, x0, y0, x1 - ph, y1, A_TOMUSIC, 0);
     if (can(s, s->mstate == 1 ? "pause" : "play")) {
         float bx = x1 - ph / 2, by = (y0 + y1) / 2;
@@ -250,15 +244,17 @@ static void miniplayer(struct scene *s, float br)
 
 int face_view(struct scene *s, float dt)
 {
-    int m = face_mode(s), used = 0, moving; float br = night(s);
+    /* Full brightness whatever the room: the backlight dims as stock's does (screen_brightness_auto, main.sh
+     * backlight), and dimming the face under it as well left it at half in lit rooms (issue #126) */
+    int m = face_mode(s), used = 0, moving;
     char clk[16];
     fill(s, ID_FACE, (struct rect){ 0, 0, s->w, s->h }, BG);
-    moving = eyes(s, m, dt, br);
-    caption(s, m, br, &used);
+    moving = eyes(s, m, dt);
+    caption(s, m, &used);
     clock_text(s, clk, sizeof clk);
-    if (!used && s->music && (s->title[0] || s->mstate)) miniplayer(s, br), used = 1;
-    if (used) text(s, ID_FACE + 20, clk, U(33), 0, s->w, s->w - U(28), U(14), 2, gfx_scale(DIM, br), 255);
-    else text(s, ID_FACE + 20, clk, U(47), 0, s->w, s->w / 2.0f, 0.83f * s->h, 1, gfx_scale(DIM, br), 255);
+    if (!used && s->music && (s->title[0] || s->mstate)) miniplayer(s), used = 1;
+    if (used) text(s, ID_FACE + 20, clk, U(33), 0, s->w, s->w - U(28), U(14), 2, DIM, 255);
+    else text(s, ID_FACE + 20, clk, U(47), 0, s->w, s->w / 2.0f, 0.83f * s->h, 1, DIM, 255);
     if (s->face.poke_at && s->now - s->face.poke_at < POKE_MS + 400) moving = 1;
     return moving;
 }

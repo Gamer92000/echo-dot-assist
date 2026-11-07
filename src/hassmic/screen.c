@@ -564,7 +564,7 @@ static void web_url(char *out, size_t n)
     freeifaddrs(ifa);
 }
 
-static struct { int mute, dnd, oobe, lux, evol, kiosk; char timers[300], peer[64], web[96]; } now_s, sent_s;
+static struct { int mute, dnd, oobe, evol, kiosk; char timers[300], peer[64], web[96]; } now_s, sent_s;
 
 static void read_core(int slow)
 {
@@ -574,7 +574,6 @@ static void read_core(int slow)
     if (core_timers_ringing(names, sizeof names) <= 0) names[0] = 0;
     pthread_mutex_unlock(&core_lock);
     now_s.oobe = core_oobe();
-    float lx = core_lux(); now_s.lux = isnan(lx) ? -1 : (int)lroundf(lx);
     clean(now_s.timers, sizeof now_s.timers, names);
     if (!dropin_running() || dropin_status(peer, sizeof peer) == DROPIN_IDLE) peer[0] = 0;   /* a call over: no peer */
     clean(now_s.peer, sizeof now_s.peer, peer);
@@ -702,8 +701,6 @@ static void *writer(void *arg)
         if (now_s.dnd != sent_s.dnd) put(&o, "dnd %d", now_s.dnd);
         if (now_s.oobe != sent_s.oobe) put(&o, "oobe %d", now_s.oobe);
         if (now_s.evol != sent_s.evol) put(&o, "ev %d", now_s.evol);
-        if (now_s.lux != sent_s.lux && (sent_s.lux < 0 || abs(now_s.lux - sent_s.lux) > sent_s.lux / 8)) put(&o, "lux %d", now_s.lux);
-        else now_s.lux = sent_s.lux;
         if (strcmp(now_s.timers, sent_s.timers)) put(&o, "timers %s", now_s.timers);
         if (strcmp(now_s.peer, sent_s.peer)) put(&o, "peer %s", now_s.peer);
         sent_s = now_s;
