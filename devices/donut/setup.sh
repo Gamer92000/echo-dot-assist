@@ -10,6 +10,8 @@ KAMAKIRI=kamakiri-donut-v1.0.0.zip
 KAMAKIRI_SHA256=4d2bb52eaf661f6616aa4268584d44cf9155c1328c34bfcba01a6558f942b738
 BOOTROOT=boot-root.zip
 BOOTROOT_SHA256=de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0
+# a replug alone may start Fire OS, not TWRP (PR #142): Volume up held while the power goes in starts the recovery
+TWRP_HINT="Nothing yet? Unplug the Echo's power, then hold only Volume up (+) while plugging it back in: that starts TWRP."
 NDK=toolchain/android-ndk-r21e
 NDK_URL=https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip
 
@@ -88,7 +90,7 @@ step_unlock() {
     if [ -z "$DRY" ] && adb_is device; then
         ok "unlocked already"
         task "Restarting into TWRP" adb reboot recovery || return 1
-        wait_adb recovery; return
+        wait_adb recovery "$TWRP_HINT"; return
     fi
     [ -n "$WINDOWS" ] && { unlock_elsewhere; [ -n "$DRY" ]; return; }       # Windows: on adb at the start (setup.sh), not now
     # issue #112 (2026-11-04/05): on two Echos kamakiri ran through without an error, but kaeru never stayed in expdb
@@ -133,12 +135,12 @@ step_unlock() {
         tail -n 20 "$LOG" 2>/dev/null | grep -q 'restricted on locked hw' &&
             warn "The Echo's fastboot is still locked, as in issue #112. Read $LOCKED_ISSUE before running the unlock again."
         return 1; }
-    wait_adb recovery
+    wait_adb recovery "$TWRP_HINT"
 }
 
 step_flash() {
     local s0 s1 s2
-    wait_adb recovery || return 1
+    wait_adb recovery "$TWRP_HINT" || return 1
     twrp_check || return 1
     task "Wiping cache and data" adb shell 'twrp wipe cache && twrp wipe data' || return 1
     task "Copying the firmware to the Echo" adb push $FW/$FIRMWARE_FILE /sdcard/update.zip || return 1
@@ -149,7 +151,7 @@ step_flash() {
     [ -n "$DRY" ] || { s1=$(slot); [ "$s1" != "$s0" ] || { fail "active slot is still $s0 after the install; stop here ($DDIR/README.md, step 1)"; return 1; }; }
     task "Restarting TWRP" adb reboot recovery || return 1
     [ -n "$DRY" ] || sleep 5
-    wait_adb recovery || return 1
+    wait_adb recovery "$TWRP_HINT" || return 1
     task "Flashing the second slot" adb shell twrp install /sdcard/update.zip || return 1
     [ -n "$DRY" ] || { s2=$(slot); [ "$s2" != "$s1" ] || { fail "the second install went into slot $s1 again"; return 1; }; }
     task "Restarting TWRP" adb reboot recovery
@@ -157,7 +159,7 @@ step_flash() {
 
 step_root() {
     [ -z "$DRY" ] && adb_is device && [ "$(ashell id -u)" = 0 ] && { ok "root adb already"; return 0; }
-    wait_adb recovery || return 1
+    wait_adb recovery "$TWRP_HINT" || return 1
     task "Installing boot-root" sh -c "adb push $FW/$BOOTROOT /sdcard/ && adb shell twrp install /sdcard/$BOOTROOT" || return 1
     task "Rebooting into Fire OS" adb reboot || return 1
     [ -n "$DRY" ] || sleep 5
