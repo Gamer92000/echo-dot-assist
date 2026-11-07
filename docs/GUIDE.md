@@ -842,7 +842,9 @@ Nothing changes until you press Apply.
   or got from someone you trust: a model runs inside the Echo.
 
 **Export / Import**: `hassmic-settings.conf` (name=value lines, without name, keys and pairings). Import applies it to
-this Echo or another, or use it as a preset for the next install (`scripts/setup.sh --preset <file>`).
+this Echo or another, or use it as a preset for the next install (`scripts/setup.sh --preset <file>`). A file from
+before the sounds had their own switches (a version older than 2026.11.02 in its first line) with the wake sound off
+turns the action button, microphone and volume sounds off too, as that switch did then.
 
 **Identify** (at the foot of the menu, and beside each Echo in the lists; also a button in Home Assistant): a rainbow on the ring
 for 10 s and stock's setup sound, to tell which Echo is which.

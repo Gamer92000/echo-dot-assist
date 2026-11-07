@@ -16,6 +16,11 @@ What changed for people using the Echo, newest first. Details and measurements a
   boot, for example) left Android thinking it was still held until hassmic restarted: volume down kept turning the
   volume to 0 and undid every attempt to raise it (issue #140). The Echo now takes over the keys only
   once every key is up.
+- **A settings file from before the sounds had their own switches keeps the Echo as quiet as it was.** In a file
+  exported before then (its first line names a version older than 2026.11.02), "Wake sound" off also stood for the
+  action button, microphone and volume sounds. Imported on the settings page or given to `scripts/setup.sh --preset`,
+  it turned only the wake sound off; now those sounds go off with it, as they already did for an Echo that had it off
+  when it updated. Bluetooth's sounds stay on: that switch never covered them.
 
 ## 2026-11-06
 
