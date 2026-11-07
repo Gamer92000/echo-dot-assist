@@ -8,6 +8,7 @@
 #include "board.h"
 #include "buttons.h"
 #include <fcntl.h>
+#include <limits.h>
 #include <linux/input.h>
 #include <stdarg.h>
 #include <stdatomic.h>
@@ -37,7 +38,7 @@ static struct fake keypad, privacy;
 
 static struct fake *fake_of(int fd)
 {
-    char link[32], path[256], want[256]; ssize_t n;
+    char link[32], path[PATH_MAX], want[PATH_MAX]; ssize_t n;      /* PATH_MAX: realpath's, fortified, aborts on less */
     snprintf(link, sizeof link, "/proc/self/fd/%d", fd);
     if ((n = readlink(link, path, sizeof path - 1)) < 0) return NULL;
     path[n] = 0;
