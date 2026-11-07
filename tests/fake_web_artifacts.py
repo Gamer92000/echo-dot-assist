@@ -126,12 +126,18 @@ def main():
         pb.call("POST", "/api/artifact/begin", f"whisper {by['whisper']['digest']}\nHCLG.fst 10\n".encode())
         st, _, data = pb.call("POST", "/api/artifact/chunk/whisper/HCLG.fst/5", b"x" * 6)
         check(st == 400 and b"past the end" in data, "a piece past the end of its file: refused")
+        st, _, data = pb.call("POST", "/api/artifact/chunk/whisper/HCLG.fst/9223372036854775807", b"x")
+        check(st == 400 and b"past the end" in data, f"a piece whose end is past what a long holds: past the end too: {data}")
         st, _, data = pb.call("POST", "/api/artifact/commit/whisper")
         check(st == 400 and b"incomplete" in data, "commit with a file not whole: refused")
         st, r = copy(pa, pb, by["whisper"])
         check(st == 200, f"the whisper model with its folder copied: {r}")
         st, _, data = pb.call("POST", "/api/artifact/begin", b"wake:echo-en-US " + b"0" * 64 + b"\na/b/c/x 10\n")
         check(st == 400, f"a file three folders down: refused: {data}")
+        # sizes that add up past what a long holds wrapped below the cap and the free space check (on the Echos, whose
+        # long has 32 bits, two files of 2 GB did; here two of 2^62)
+        st, _, data = pb.call("POST", "/api/artifact/begin", b"wake:echo-en-US " + b"0" * 64 + b"\na.bin 4611686018427387904\nb.bin 4611686018427387904\n")
+        check(st == 400 and b"too big" in data, f"sizes whose sum is past what a long holds: too big: {data}")
         check(sorted(arts(pb)["staged"]) == ["sound", "wake.echo-de-DE", "whisper"], f"ready to install: {arts(pb)['staged']}")
 
         # install: hassmic names them for root; root's installer puts them in place

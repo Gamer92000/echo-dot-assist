@@ -307,9 +307,12 @@ int art_begin(const char *spec, char *err, size_t errsz)
         if (!line[0]) continue;
         if (sscanf(line, "%159s %ld", name, &size) != 2 || !good_path(name) || size < 0 || n == MAX_FILES) { snprintf(err, errsz, "bad file list"); return -1; }
         for (int i = 0; i < n; i++) if (!strcmp(f[i].name, name)) { snprintf(err, errsz, "a file twice"); return -1; }
+        /* checked before the sum: long has 32 bits on the Echos, so two files of 2 GB wrapped it below the cap and the
+         * space check below.  total stays <= MAX_TOTAL, and 2 * total + MARGIN fits */
+        if (size > MAX_TOTAL - total) { snprintf(err, errsz, "too big"); return -1; }
         snprintf(f[n].name, sizeof f[n].name, "%.127s", name); f[n].size = size; total += size; n++;   /* good_path: <= MAX_NAME */
     }
-    if (!n || total > MAX_TOTAL) { snprintf(err, errsz, n ? "too big" : "no files"); return -1; }
+    if (!n) { snprintf(err, errsz, "no files"); return -1; }
     pthread_mutex_lock(&lk);
     unstage(stage);
     long fr = free_bytes();
@@ -349,7 +352,8 @@ int art_chunk(const char *id, const char *file, long off, const void *data, size
     pthread_mutex_unlock(&lk);
     for (i = 0; i < n && strcmp(f[i].name, file); i++) ;
     if (n < 0 || i == n) { snprintf(err, errsz, "not being received"); return -1; }
-    if (off < 0 || off + (long)len > f[i].size) { snprintf(err, errsz, "past the end of %s", file); return -1; }
+    /* as art_read, never off + len: an offset near LONG_MAX wrapped it (len: at most ART_CHUNK_MAX, web.c's limit) */
+    if (off < 0 || off > f[i].size || (long)len > f[i].size - off) { snprintf(err, errsz, "past the end of %s", file); return -1; }
     snprintf(p, sizeof p, "%s/%s", stage, file);
     if ((fd = open(p, O_WRONLY | O_NOFOLLOW)) < 0) { snprintf(err, errsz, "not being received"); return -1; }
     ssize_t w = pwrite(fd, data, len, off);
