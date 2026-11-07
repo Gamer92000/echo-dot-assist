@@ -136,7 +136,7 @@ step_unlock() {
     # after the flash the Echo may come back to Fire OS instead of TWRP: Volume up held at power-on starts TWRP
     pick_serial
     waitfor "Waiting for TWRP (white ring)|TWRP is up" "adb_is recovery" \
-        "Nothing yet? Unplug the Echo's power and this time hold Volume up (+) button while plugging power back in."
+        "Nothing yet? Unplug the Echo's power and this time only hold Volume up (+) button while plugging power back in."
 }
 
 step_flash() {

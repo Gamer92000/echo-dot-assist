@@ -5,7 +5,7 @@ What changed for people using the Echo, newest first. Details and measurements a
 ## 2026-11-07
 
 - **Setup on an Echo Dot 3: a clearer hint when TWRP does not come up after the unlock.** If TWRP (the white ring)
-  is not there a minute after it was flashed, the setup now says to unplug the power and hold Volume up (+) while
+  is not there a minute after it was flashed, the setup now says to unplug the power and hold only Volume up (+) while
   plugging it back in, which starts TWRP, instead of only saying to replug the power.
 
 - **Setup: fewer dead ends on an Echo Show (issue #132).** When the unlock does not take and the Echo starts its own

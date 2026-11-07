@@ -100,7 +100,7 @@ K=$(dirname "$(find firmware/donut/kamakiri -name bootrom-step.sh)")   # the zip
 (cd "$K" && ./bootrom-step.sh)    # start it, then: USB cable into the PC, hold the action (dot) button, plug in the
                                   # Echo's power adapter, keep holding until it asks for Enter
 (cd "$K" && ./fastboot-step.sh)   # when the ring shows a rotating rainbow; ends in TWRP (white ring;
-                                  # none within a minute: unplug the power, hold Volume up while plugging it back in)
+                                  # none within a minute: unplug the power, hold only Volume up while plugging it back in)
 ```
 
 Flash the firmware into both A/B slots, then root:
