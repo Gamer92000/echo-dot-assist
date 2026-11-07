@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Plays Home Assistant's side of the ESPHome native API against build/hassmic-host (tests/esphome_common.py): device
 info, entities and settings, the voice assistant (mic stream, wake words, replies, a second client, barge-in, "stop",
-streaming TTS), announcements over HTTP and HTTPS, do not disturb, volume, mute.  The rest of the API in
-fake_ha_esphome_{timers,features,buttons,address}.py."""
+streaming TTS), announcements over HTTP and HTTPS, do not disturb, volume, a media stop before the audio, mute.  The
+rest of the API in fake_ha_esphome_{timers,features,buttons,address}.py."""
 import asyncio, os, signal, subprocess
 from aioesphomeapi import SwitchInfo, NumberInfo, NumberState, SwitchState, TextSensorInfo, TextSensorState, SensorInfo
-from aioesphomeapi import APIClient, MediaPlayerInfo, MediaPlayerEntityState, VoiceAssistantEventType as Ev, BinarySensorInfo, BinarySensorState
+from aioesphomeapi import APIClient, MediaPlayerInfo, MediaPlayerEntityState, MediaPlayerCommand, VoiceAssistantEventType as Ev, BinarySensorInfo, BinarySensorState
 from esphome_common import ROOT, LEAD_IN, check, until, sync, peak, speech, settled, run
 
 PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT = 16953, 16954, 16955, 16966, 16967
@@ -309,6 +309,21 @@ async def main(e):
     cli.media_player_command(mp[0].key, volume=0.3)
     await until(lambda: any(isinstance(s, MediaPlayerEntityState) and abs(s.volume - 0.3) < 0.01 for s in states))
     check(any(isinstance(s, MediaPlayerEntityState) and abs(s.volume - 0.3) < 0.01 for s in states), "volume command reflected in state")
+
+    # The media player's stop before any audio came: media_stop right after tts.speak or play_media, while Home
+    # Assistant still renders the TTS, which then fails or comes as MP3.  That one plays nothing, and the next plays (the
+    # stop used to stay pending: every reply, announcement and media after it was dropped until hassmic restarted)
+    mpstate = lambda: [int(s.state) for s in states if isinstance(s, MediaPlayerEntityState)][-1]
+    for what in ("slow/missing.wav", "slow.mp3"):
+        start = os.path.getsize(play)
+        cli.media_player_command(mp[0].key, media_url=f"http://127.0.0.1:{HTTP_PORT}/{what}"); await sync(cli)
+        await asyncio.sleep(0.3); cli.media_player_command(mp[0].key, command=MediaPlayerCommand.STOP)
+        await until(lambda: mpstate() == 1)                                 # idle: that fetch has ended
+        early = os.path.getsize(play) - start
+        cli.media_player_command(mp[0].key, media_url=f"http://127.0.0.1:{HTTP_PORT}/a.wav")
+        await until(lambda: os.path.getsize(play) - start >= 48000)
+        check(early == 0 and os.path.getsize(play) - start == 48000,
+              f"media stop while /{what} is still on its way: it plays nothing ({early} bytes), the next media plays ({os.path.getsize(play) - start - early} bytes)")
 
     cli.switch_command(by["mute"].key, True); await until(lambda: last(by["mute"].key, SwitchState) is True)
     started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.sleep(0.6)

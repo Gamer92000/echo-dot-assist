@@ -865,6 +865,8 @@ static void on_light(const unsigned char *p, const unsigned char *end)      /* l
 struct media_job {
     char url[2][1024]; int announce, start_conversation, media;     /* media: play_media, at the main volume */
     int fd, aborted;                    /* lock held.  aborted: its run was cancelled; it plays nothing and touches no state */
+    int began, stopped;                 /* lock held.  began: its audio is queued (tts_begin).  stopped: the media player's
+                                         * stop came before that; it plays nothing and ends as a failed fetch */
 };
 
 static void send_mp_state(void)         /* lock held */
@@ -908,11 +910,11 @@ static int http_get(const char *url)    /* returns a socket positioned at the bo
     return http_get_host(host, port, path ? path : "/");
 }
 
-static int tts_begin(struct media_job *job, unsigned rate, unsigned ch)    /* -1: cancelled, the reply must not play */
+static int tts_begin(struct media_job *job, unsigned rate, unsigned ch)    /* -1: cancelled or stopped, it must not play */
 {
     pthread_mutex_lock(&core_lock);
-    int ok = !job->aborted;
-    if (ok) core_tts_begin(rate, ch, job->media);
+    int ok = !job->aborted && !job->stopped;
+    if (ok) { job->began = 1; core_tts_begin(rate, ch, job->media); }
     pthread_mutex_unlock(&core_lock);
     return ok ? 0 : -1;
 }
@@ -989,10 +991,11 @@ static void *media_thread(void *arg)
 {
     struct media_job *job = arg; int ok = 0, began = 0;
     for (int i = 0; i < 2; i++) {
-        if (!job->url[i][0] || core_tts_flushing()) continue;
+        pthread_mutex_lock(&core_lock); int stopped = job->stopped; pthread_mutex_unlock(&core_lock);
+        if (!job->url[i][0] || stopped || core_tts_flushing()) continue;
         int fd = http_get(job->url[i]);
         if (fd < 0) continue;
-        pthread_mutex_lock(&core_lock); job->fd = fd; int gone = job->aborted; pthread_mutex_unlock(&core_lock);
+        pthread_mutex_lock(&core_lock); job->fd = fd; int gone = job->aborted || job->stopped; pthread_mutex_unlock(&core_lock);
         if (!gone && play_url(job, fd) == 0) { began = 1; if (i == 1) ok = 1; }
         pthread_mutex_lock(&core_lock); job->fd = -1; pthread_mutex_unlock(&core_lock);
         close(fd);
@@ -1455,7 +1458,15 @@ static void on_mp_command(const unsigned char *p, const unsigned char *end)
         case 9: announcement = f.v != 0; break;        /* tts.speak and play_media's announce: speech, not music */
     }
     if (has_vol) core_set_volume((int)(vol * 100 + 0.5f));
-    if (has_cmd && cmd == MP_CMD_STOP && media_playing) core_tts_flush();
+    /* The flush drops what is queued up to the job's Q_STOP, which clears it (main.c playback_thread).  A job whose audio
+     * has not begun (the fetch still waits on Home Assistant rendering the TTS) queues none when it then fails or is MP3
+     * (play_mp3 does not start under a flush): the flush stayed set and dropped every reply, announcement and media
+     * after it until hassmic restarted.  Such a job is stopped instead, its socket shut as reply_cut() does, and ends as
+     * a failed fetch */
+    if (has_cmd && cmd == MP_CMD_STOP && media_playing) {
+        if (media_cur && !media_cur->began) { media_cur->stopped = 1; if (media_cur->fd >= 0) shutdown(media_cur->fd, SHUT_RDWR); }
+        else core_tts_flush();
+    }
     if (has_cmd && cmd == MP_CMD_STOP) core_alarm_stop("media player stop");     /* as "Stop ringing" does, for automations */
     if (has_url && url[0]) media_start("", url, 0, 0, 0, !announcement);
     if (has_cmd && !has_url) send_mp_state();

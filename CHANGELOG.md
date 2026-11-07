@@ -16,6 +16,11 @@ What changed for people using the Echo, newest first. Details and measurements a
   boot, for example) left Android thinking it was still held until hassmic restarted: volume down kept turning the
   volume to 0 and undid every attempt to raise it (issue #140). The Echo now takes over the keys only
   once every key is up.
+- **A stop from Home Assistant before the sound starts no longer leaves the Echo silent.** When the media player's
+  stop came while the Echo was still waiting for what to play (a `media_stop` right after `tts.speak` or a
+  `play_media`, or during a reply Home Assistant was still preparing), and that then failed to load or was an MP3,
+  the Echo played no reply, announcement or media again until hassmic restarted. Now the stop only cancels what was
+  on its way.
 
 ## 2026-11-06
 
