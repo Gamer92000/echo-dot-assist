@@ -42,7 +42,7 @@ static long rank(const char *nm, long num) { return (strcmp(nm, "amazon_touch") 
 int touch_open(struct touch *t, char *name, int n)
 {
     DIR *d = opendir("/dev/input"); struct dirent *e; long best = -1;
-    t->fd = -1; if (n > 0) name[0] = 0;
+    t->fd = -1; t->grabbed = 0; if (n > 0) name[0] = 0;
     while (d && (e = readdir(d))) {
         char p[300], nm[64] = "", *end; struct input_absinfo ax, ay;
         if (strncmp(e->d_name, "event", 5)) continue;
@@ -121,10 +121,28 @@ static void touch_resync(struct touch *t)
     for (int k = 0; k < TOUCH_SLOTS; k++) if (t->id[k] < 0) t->later &= ~(1 << k);
 }
 
+int touch_fingers(const struct touch *t)
+{
+    int n = 0;
+    for (int k = 0; k < TOUCH_SLOTS; k++) n += t->id[k] >= 0;
+    return n;
+}
+
+/* A grab begun or ended with a finger down would leave Android half a touch (a down never lifted, or a lift it never
+ * saw the down of): the caller does it only with none (touch_fingers).  The kernel lets go of it when the fd closes,
+ * so a UI that dies or is killed as hung never leaves the panel taken */
+int touch_grab(struct touch *t, int on)
+{
+    if (t->fd < 0) return -1;
+    if (ioctl(t->fd, EVIOCGRAB, on ? 1 : 0) < 0) return -1;
+    t->grabbed = !!on;
+    return 0;
+}
+
 void touch_gone(struct touch *t, struct scene *s, long long now)
 {
     if (t->fd >= 0) close(t->fd);
-    t->fd = -1;
+    t->fd = -1; t->grabbed = 0;
     if (t->p >= 0 && !t->waking) { int x, y; touch_map(t, t->x[t->p], t->y[t->p], &x, &y); scene_touch(s, TOUCH_UP, x, y - t->grip, now); }
     t->p = -1;
 }

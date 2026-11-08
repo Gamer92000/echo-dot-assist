@@ -85,6 +85,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_screen.py [--legacy]  # the Echo Show's screen UI as hassmic feeds it (stand-in UI): Sendspin
                                              # metadata/artwork (1.0's transfer, scheduled; --legacy: 9.1.1's), the band,
                                              # commands, home app, restarts
+.venv/bin/python tests/fake_screen_words.py  # words and timers on the Show's screen (issue #104), as screen.c tells the
+                                             # UI: settings, transcript and reply, a "stop" never shown, timers
 .venv/bin/python tests/fake_ma_api.py         # Music Assistant's API for the screen (mass.c) against a stand-in server:
                                              # the page's sealed token, auth, players, queue, lists, commands, images
 .venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step
@@ -599,6 +601,21 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   root's `kiosk_tick` leave opening the app to the UI.  PC: `tests/unit/ui_test.c` (every incremental frame == the full one,
   gestures, commands), `tools/uishot.c` (`make build/uishot`: every view as PNG with the firmware's Roboto, FreeType),
   `HASSMIC_SCREEN` (a stand-in UI).
+  Words and timers (`src/ui/words.c`, issue #104; settings `screen_text` "Speech on screen", `screen_text_seconds`
+  (8, 0 until the next request), `screen_timers`, all off, the page's Screen page, card "Words and timers"): what was
+  said, the reply and the timers on a fourth layer of the UI process (`hassmic-words`, TRANSLUCENT, over the UI's and
+  every window, under the band; hidden while the drawer is out), drawn only on a change (a timer: once a second), faded
+  and pulsed by `SurfaceControl.setAlpha`; text by the platform (`p_text`, wrapped by `p_measure`).  hassmic's side in
+  `screen.c` (`screen_words`: `core_set_state` clears on a run from idle and marks idle, proto_esphome's STT end only
+  after `core_transcript` passed it, TTS start; proto_wyoming's transcript; `stop_word` clears what it ended; nothing
+  kept while off), lines `wo`/`wh`/`wr`/`ws`/`tl` (scene.h); the timers are the core's (`core_timers_running`,
+  `screen_timers_changed`), ringing ones the face's `timers`; `screen_keep_on` holds the screen on (ring_band.c's
+  timeout) while timers show.  Touch: over our own screen the scene gives the layer the touches while it shows
+  (`scene_touch` `wtap`, `words_tap`, only once faded in past half: words away + "words clear" to hassmic, timers
+  hidden until the next "tl" + "timers hide", which lets the screen sleep until they change, Stop -> "timer stop");
+  over an app the platform grabs the panel for them (`EVIOCGRAB`, `touch_grab`, `scene_words_wants_grab`; taken and given
+  back with no finger down; the kernel lets go when the UI dies), else (no grab: `wd.grab` -1) a ring there brings our
+  screen up (`ring_from`, `own_asked` kept and given back after, asked again every 10 s) and the app back after.  Tests: `ui_test.c`, `tests/fake_screen_words.py`, `build/uishot` (words*, timer*).
 - **Music Assistant's API** (`mass.c`, `mass.h`, `json.c`): the screen's library, search, queue and speakers over
   MA's own websocket (`/ws`, port 8095; the page's URL, or with none given the Sendspin server's address pinned when the
   token is saved: a token only ever goes to that address, `mass_peer` merely suggests one, from sessions whose player
@@ -620,18 +637,6 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   PC: `HASSMIC_FAKE_BAND` (a program speaking ringbar's protocol), `tests/unit/ring_band_test.c` (designs too, a restart
   on the same state included); `tests/unit/band_map_test.py` holds web/ring.js's band drawing to ring_band.c's, pixel
   for pixel (node).  The band's height comes from `state/config` before `ring_start` (`settings_peek`).
-  Text layer (setting `screen_text`, off; with `screen_text_seconds` and `screen_timers` on the page's Screen page,
-  card "Words and timers", by `MOVED` as `light_band`): `ring_text` (ring.h; core_set_state: a run from idle clears, idle starts the
-  hold, `screen_text_seconds` (8, 0 until the next run); proto_esphome STT end / TTS start, proto_wyoming's transcript;
-  a "stop" carried out here is never shown: proto_esphome shows the transcript only after `core_transcript` passed it,
-  `stop_word` clears what it ended) -> `text_thread`, a second ringbar.dex in
-  its text mode (`-100`: no overscan, TRANSLUCENT, the screen's height, layer just under the band, frames drawn through a
-  Paint in SRC mode) fed pictures `textdraw.c` makes (stb_truetype, `/system/fonts` Amazon Ember, else Roboto; drawn on
-  a change, faded by alpha).  PC: `HASSMIC_FONTS`/`HASSMIC_FONT`, `tests/unit/textdraw_test.c` (build/textdraw_*.ppm).
-  Timers on it (setting `screen_timers`, off): `ring_timer`/`ring_timer_gone` from proto_esphome's timer events
-  (started/updated carry seconds left and is_active: counted down here), `ring_timers_ringing` from main.c's ringing
-  list (`ringing_shown`); one picture at a time: words, else what rings (pulsing), else running timers (`textdraw_timers`,
-  once a second); while timers show `screen_hold` sets the screen's timeout to a day.
 - `src/include/`: headers for the reversed Amazon libraries (`mixer_api.h`, `pryon_api.h`, `aipc_api.h`) and `netio.h`.
 - `src/tools/`: standalone device tools (`mixcap`, `mixplay`, `slplay` (the Android models' mixplay: OpenSL ES on the music stream), `pryon_test`, `aed_test`, `latency`, `runas` — AIPC refuses uid 0 and
   the image has no `su`; `curlspy`, `hciscan`, `a2dpprobe`, `dha_test` not in `all`).

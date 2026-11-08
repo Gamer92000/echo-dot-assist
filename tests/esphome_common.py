@@ -168,7 +168,7 @@ class Echo:
     """build/hassmic-host as the tests know it: its state in a temp directory, a settings file from before the mic
     level, installed wake word models, a keypad (a FIFO), the light sensor and Wi-Fi driver's files, the settings page
     logged in"""
-    def __init__(self, ports, extra_env=None, log=False):
+    def __init__(self, ports, extra_env=None, log=False, binary="hassmic-host"):
         self.PORT, self.HTTP_PORT, self.WEB, self.HTTPS_PORT, self.SELF_PORT = ports
         self.play = tempfile.mktemp(suffix=".raw"); open(self.play, "wb").close()   # its size is polled before the first reply
         self.settings = tempfile.mktemp(suffix=".settings")
@@ -199,7 +199,7 @@ class Echo:
         self.keypad = os.open(keys, os.O_RDWR)                   # opened first: hassmic's open() would wait for a writer
         # log: what it writes into a file (log()) rather than this test's output, which gets its last lines on a failure
         self.logpath = os.path.join(state, "hassmic.log") if log else None
-        self.proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(self.PORT), "-n", "Echo Dot", "-L", "-W", str(self.WEB), "-b", keys],
+        self.proc = subprocess.Popen([f"{ROOT}/build/{binary}", "-P", "esphome", "-p", str(self.PORT), "-n", "Echo Dot", "-L", "-W", str(self.WEB), "-b", keys],
                                      env=env, stderr=open(self.logpath, "w") if log else None)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", self.HTTP_PORT), Handler)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
@@ -223,12 +223,13 @@ class Echo:
             if os.path.exists(f): os.unlink(f)
 
 
-def run(main, ports, extra_env=None, log=False):
-    """main(e) against a fresh Echo; prints the verdict and exits with it (log: Echo's log(), its end printed on a failure)"""
+def run(main, ports, extra_env=None, log=False, binary="hassmic-host"):
+    """main(e) against a fresh Echo; prints the verdict and exits with it (log: Echo's log(), its end printed on a failure;
+    binary: build/hassmic-host-screen for a model with a screen)"""
     e = None
     async def go():
         nonlocal e
-        e = Echo(ports, extra_env, log)
+        e = Echo(ports, extra_env, log, binary)
         await until(lambda: port_open(e.PORT) and port_open(e.WEB))
         try:
             e.page = Browser(e.WEB)                         # the settings page: what is no longer in Home Assistant

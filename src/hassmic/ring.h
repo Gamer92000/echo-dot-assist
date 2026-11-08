@@ -71,24 +71,4 @@ int  ring_rotation(int set);                /* LEDs the fill's start is turned b
  * all the apps'); -1 where the ring is LEDs.  set < 0 reads. */
 void ring_level(int dbfs10);
 int  ring_band_rows(int set);
-
-/* What was said and Home Assistant's reply, as text over the screen above the band (ring_band.c; the Dots: nothing).
- * RING_TEXT_RUN: a request starts (the last one's text goes), _HEARD: what was said (the reply goes too: a follow-up),
- * _REPLY: the reply, _IDLE: the satellite is idle again (the text stays a while, then fades).  Any thread, core_lock or
- * not: it only takes the band's own lock.  ring_text_on: the setting "Speech on screen", -1 where there is no screen;
- * set < 0 reads */
-enum { RING_TEXT_RUN, RING_TEXT_HEARD, RING_TEXT_REPLY, RING_TEXT_IDLE };
-void ring_text(int what, const char *text);
-int  ring_text_on(int set);
-/* the setting "Speech stays for": seconds the words stay after the satellite is idle again, 0 until the next request;
- * -1 where there is no screen; set < 0 reads */
-int  ring_text_hold(int set);
-/* Timers on the screen (the same layer, below the words): ring_timer, one running as Home Assistant last told it (started
- * or updated: seconds left, paused or not; name "" for none), ring_timer_gone (cancelled or finished), and
- * ring_timers_ringing, what rings now ("tea, 5 min" as core_timers_ringing makes it; "" when nothing does).  Any thread,
- * as ring_text.  ring_timers_on: the setting "Timers on screen", as ring_text_on */
-void ring_timer(const char *id, const char *name, int total, int left, int active);
-void ring_timer_gone(const char *id);
-void ring_timers_ringing(const char *names);
-int  ring_timers_on(int set);
 #endif

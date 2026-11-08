@@ -33,7 +33,6 @@
 #include "core.h"
 #include "ringdesign.h"
 #include "screen.h"
-#include "textdraw.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -58,9 +57,10 @@ enum { E_NONE, E_PULSE, E_SPIN, E_BLINK, E_RAINBOW };
 #define FRAME_MS     33                 /* 30 frames a second while something moves */
 #define MAX_W        2048
 #define MAX_ROWS     40
-#define MAX_TEXT_ROWS 1200              /* the text layer's: the tallest Show's screen and then some */
 #define TIMEOUT_MS   300000             /* stock's screen_off_timeout_standard (Arcus default) */
 #define QUIET_MS     60000              /* stock's _dnd and _privacy */
+#define HOLD_MS      86400000           /* timers on the screen (screen_keep_on): a timer across the room is what the
+                                           screen is for then */
 #define WAKE_EVERY   2000               /* the power calls at most this often (a process each) */
 
 struct rgb { float r, g, b; };
@@ -213,13 +213,10 @@ static void draw(int p, struct rgb *led, long long t, int arg, float loudness)
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
-static pthread_cond_t tcv = PTHREAD_COND_INITIALIZER;   /* the text layer's thread: text, setting, band height */
 static struct { long long at; int arg, on, ms; } act[P_COUNT];     /* ms: how long it shows (pats', or its design's) */
 static struct ring_light light = { .on = 0, .brightness = 1, .color_brightness = 1, .r = 1, .g = 1, .b = 1, .effect = E_NONE, .fill = 100 }, flash;
 static long long flash_until;
 static int rows = 10, wake_req, started;
-static atomic_int screen_hold;          /* timers show on the text layer: the screen stays on (band thread) */
-#define HOLD_MS      86400000           /* the screen's timeout meanwhile: a day */
 
 static int find(const char *pattern, int *arg)
 {
@@ -467,11 +464,10 @@ static int builder_api(void)
 
 /* the renderer for `n` rows: its stdin in *in (VIA_SCREEN: the screen UI), the band's width in *w (0: band off).  0, 1
  * off with the screen UI's overscan, or -1 when it did not come up, -2 the screen UI not up yet (asked again a second
- * later: the thread goes on meanwhile).  n = -p: the text layer, p % of the screen's height, its rows in *h: always a
- * ringbar.dex of its own (the screen UI draws the band only), its layer under the band's and the UI's */
-static int ringbar(int n, int *in, int *w, int *h)
+ * later: the thread goes on meanwhile) */
+static int ringbar(int n, int *in, int *w)
 {
-    if (n >= 0 && !getenv("HASSMIC_FAKE_BAND") && screen_ui()) {   /* the screen UI draws it: its width once it is up */
+    if (!getenv("HASSMIC_FAKE_BAND") && screen_ui()) {       /* the screen UI draws it: its width once it is up */
         if (!n) { *in = -1; *w = 0; return 1; }               /* (it resets the overscan itself, started anew) */
         for (int i = 0; i < 10 && !(*w = screen_width()); i++) usleep(100000);
         if (!*w) return -2;
@@ -534,12 +530,12 @@ static int ringbar(int n, int *in, int *w, int *h)
     line[k] = 0; close(pout[0]);
     int ww = 0, hh = 0;
     if (!strcmp(line, "off") && !n) { close(pin[1]); *w = 0; *in = -1; return 0; }
-    if (sscanf(line, "ready %d %d", &ww, &hh) != 2 || ww <= 0 || ww > MAX_W || (n >= 0 ? hh != n : hh <= 0 || hh > MAX_TEXT_ROWS)) {
+    if (sscanf(line, "ready %d %d", &ww, &hh) != 2 || ww <= 0 || ww > MAX_W || hh != n) {
         fprintf(stderr, "band: the renderer did not come up (%s): %s\n", line[0] ? line : "no answer", dex);
         close(pin[1]); return -1;
     }
-    *in = pin[1]; *w = ww; if (h) *h = hh;
-    fprintf(stderr, n >= 0 ? "band: %d x %d at the bottom of the screen\n" : "text: %d x %d over the screen\n", ww, hh);
+    *in = pin[1]; *w = ww;
+    fprintf(stderr, "band: %d x %d at the bottom of the screen\n", ww, hh);
     return 0;
 }
 
@@ -577,7 +573,7 @@ static void *band_thread(void *arg)
         long long now = now_ms();
         if (now >= next_check) {                    /* stock's screen timeouts by what the Echo is doing (first: also
                                                        while a renderer is awaited) */
-            int t = atomic_load(&screen_hold) ? HOLD_MS : core_muted() || core_dnd(-1) ? QUIET_MS : TIMEOUT_MS;
+            int t = screen_keep_on() ? HOLD_MS : core_muted() || core_dnd(-1) ? QUIET_MS : TIMEOUT_MS;
             if (t != timeout) { timeout = t; screen_timeout(t); }
             next_check = now + 1000;
         }
@@ -585,7 +581,7 @@ static void *band_thread(void *arg)
         if (want != have_rows) {                    /* (re)start the renderer for the rows set */
             if (fd >= 0) close(fd);                 /* it ends at the end of its input; the layer goes with it */
             fd = -1; w = 0; sent = 0;
-            int rc = ringbar(want, &fd, &w, NULL);
+            int rc = ringbar(want, &fd, &w);
             if (rc == -2) {                         /* the screen UI on its way (screen.c gives it 30 s): soon again */
                 if (!waited++) fprintf(stderr, "band: waiting for the screen UI\n");
                 pthread_mutex_lock(&lock);
@@ -665,242 +661,6 @@ static void *band_thread(void *arg)
     return NULL;
 }
 
-/* ---------------------------------------------------------------- the text layer
- * What was said and the reply (ring.h ring_text), and the timers (ring_timer), drawn by textdraw.c and shown by a second
- * ringbar.dex in its text mode ("-100"): see-through, the whole screen's height, layered just under the band, whose rows
- * it leaves clear.  A process of its own, so the band's 30 frames a second never queue behind a frame of a megabyte or
- * two; started with either setting and kept while one is on (ART takes ~1 s to start, about what speech to text takes).
- * One picture at a time: the words while they show, else what rings, else the running timers.  Drawn on a change only (a
- * running timer: once a second); fading scales its alpha.  Words come at once and go 8 s ("Speech stays for") after the
- * satellite is idle again, a new request takes the last one's words away at once; a ringing timer pulses.  While timers show, the screen
- * stays on (the band thread's timeout): a timer across the room is what the screen is for then. */
-#define TEXT_PCT      100              /* the whole screen above the band: 55 % was small (cronos, 2026-11-03) */
-#define FADE_IN_MS    200
-#define FADE_OUT_MS   600
-#define TEXT_FRAME_MS 50                /* 20 frames a second while it fades */
-#define PULSE_MS      600               /* a ringing timer: bright and dim by turns */
-#define PULSE_LOW     0.45f
-#define TIMERS_MAX    6
-
-static int text_on, timers_on, text_gen, text_idle, text_hold_s = 8;    /* lock; text_hold_s: "Speech stays for", 0 till the next */
-static long long text_idle_at;
-static char text_heard[600], text_reply[1100], timer_ringing[288];
-struct shown_timer { char id[40], name[64]; int total, left, active; long long at; };
-static struct shown_timer timers[TIMERS_MAX];
-static int ntimers;
-
-void ring_text(int what, const char *text)
-{
-    pthread_mutex_lock(&lock);
-    if (what == RING_TEXT_RUN) { text_heard[0] = text_reply[0] = 0; text_idle = 0; text_gen++; }
-    else if (what == RING_TEXT_HEARD) {             /* a follow-up's words: the last reply goes with the last words */
-        snprintf(text_heard, sizeof text_heard, "%s", text ? text : ""); text_reply[0] = 0; text_idle = 0; text_gen++;
-    } else if (what == RING_TEXT_REPLY) { snprintf(text_reply, sizeof text_reply, "%s", text ? text : ""); text_idle = 0; text_gen++; }
-    else if (what == RING_TEXT_IDLE && !text_idle) { text_idle = 1; text_idle_at = now_ms(); }
-    if (text_on && what != RING_TEXT_IDLE && text && *text) { wake_req = 1; pthread_cond_broadcast(&cv); }  /* the screen on */
-    pthread_cond_broadcast(&tcv);
-    pthread_mutex_unlock(&lock);
-}
-
-int ring_text_on(int set)
-{
-    pthread_mutex_lock(&lock);
-    if (set >= 0 && !!set != text_on) { text_on = !!set; text_gen++; pthread_cond_broadcast(&tcv); }
-    int r = text_on;
-    pthread_mutex_unlock(&lock);
-    return r;
-}
-
-int ring_text_hold(int set)
-{
-    pthread_mutex_lock(&lock);
-    if (set >= 0 && set != text_hold_s) { text_hold_s = set; text_gen++; pthread_cond_broadcast(&tcv); }
-    int r = text_hold_s;
-    pthread_mutex_unlock(&lock);
-    return r;
-}
-
-int ring_timers_on(int set)
-{
-    pthread_mutex_lock(&lock);
-    if (set >= 0 && !!set != timers_on) { timers_on = !!set; text_gen++; pthread_cond_broadcast(&tcv); }
-    int r = timers_on;
-    pthread_mutex_unlock(&lock);
-    return r;
-}
-
-/* lock held: a change the screen shows, woken for it */
-static void timers_changed(int wake)
-{
-    text_gen++;
-    if (timers_on && wake) { wake_req = 1; pthread_cond_broadcast(&cv); }
-    pthread_cond_broadcast(&tcv);
-}
-
-void ring_timer(const char *id, const char *name, int total, int left, int active)
-{
-    pthread_mutex_lock(&lock);
-    int i = 0;
-    while (i < ntimers && strcmp(timers[i].id, id)) i++;
-    if (i == TIMERS_MAX) { memmove(timers, timers + 1, sizeof timers[0] * --i); ntimers = i; }     /* the oldest goes */
-    int added = i == ntimers;
-    if (added) ntimers++;
-    struct shown_timer *t = &timers[i];
-    snprintf(t->id, sizeof t->id, "%s", id);
-    /* "a timer for 5 minutes" has no name: its length stands in, as core_timer_finished words it */
-    unsigned h = (unsigned)total / 3600, m = (unsigned)total % 3600 / 60;
-    if (name && name[0]) snprintf(t->name, sizeof t->name, "%s", name);
-    else if (total % 60 || !total) snprintf(t->name, sizeof t->name, "%d s", total);
-    else if (h && m) snprintf(t->name, sizeof t->name, "%u h %u min", h, m);
-    else if (h) snprintf(t->name, sizeof t->name, "%u h", h);
-    else snprintf(t->name, sizeof t->name, "%u min", m);
-    t->total = total; t->left = left; t->active = active; t->at = now_ms();
-    timers_changed(added);
-    pthread_mutex_unlock(&lock);
-}
-
-void ring_timer_gone(const char *id)
-{
-    pthread_mutex_lock(&lock);
-    for (int i = 0; i < ntimers; i++) if (!strcmp(timers[i].id, id)) {
-        memmove(timers + i, timers + i + 1, sizeof timers[0] * (size_t)(ntimers - i - 1));
-        ntimers--;
-        timers_changed(0);
-        break;
-    }
-    pthread_mutex_unlock(&lock);
-}
-
-void ring_timers_ringing(const char *names)
-{
-    pthread_mutex_lock(&lock);
-    if (strcmp(timer_ringing, names ? names : "")) {
-        snprintf(timer_ringing, sizeof timer_ringing, "%s", names ? names : "");
-        timers_changed(timer_ringing[0] != 0);
-    }
-    pthread_mutex_unlock(&lock);
-}
-
-/* the picture at alpha a (0..1) to the renderer: each pixel's own alpha scaled.  0, or -1 when it is gone */
-static int send_text(int fd, const uint32_t *px, uint8_t *buf, int w, int h, float a)
-{
-    size_t n = (size_t)w * h;
-    for (size_t i = 0; i < n; i++) {
-        uint32_t p = px[i]; uint8_t *b = buf + 4 * i;          /* 0xAARRGGBB, little-endian */
-        b[0] = (uint8_t)(p & 255); b[1] = (uint8_t)(p >> 8 & 255); b[2] = (uint8_t)(p >> 16 & 255);
-        b[3] = (uint8_t)lroundf((p >> 24) * a);
-    }
-    for (size_t off = 0, len = n * 4; off < len; ) {
-        ssize_t r = write(fd, buf + off, len - off);
-        if (r < 0 && errno == EINTR) continue;
-        if (r <= 0) return -1;
-        off += (size_t)r;
-    }
-    return 0;
-}
-
-static int by_left(const void *a, const void *b)
-{
-    const struct textdraw_timer *x = a, *y = b;
-    return x->left - y->left;
-}
-
-enum { SHOW_NONE, SHOW_WORDS, SHOW_RING, SHOW_TIMERS };
-
-static void *text_thread(void *arg)
-{
-    (void)arg;
-    int fd = -1, w = 0, h = 0, gen = -1, kept = -1, shown = SHOW_NONE, shown_sec = -1, fails = 0, held = 0;
-    uint32_t *px = NULL; uint8_t *buf = NULL;
-    float alpha = 0, sent = -1;
-    long long last = now_ms();
-    static char heard[sizeof text_heard], reply[sizeof text_reply], ring[sizeof timer_ringing];
-    static struct shown_timer tm[TIMERS_MAX];
-    for (;;) {
-        pthread_mutex_lock(&lock);
-        while (!text_on && !timers_on && fd < 0) pthread_cond_wait(&tcv, &lock);
-        int words_on = text_on, tim_on = timers_on, g = text_gen, keep = rows, idle = text_idle, n = ntimers;
-        long long hold = text_hold_s ? text_hold_s * 1000LL : LLONG_MAX / 2;    /* 0: until the next request */
-        long long idle_at = text_idle_at;
-        memcpy(heard, text_heard, sizeof heard); memcpy(reply, text_reply, sizeof reply);
-        memcpy(ring, timer_ringing, sizeof ring); memcpy(tm, timers, sizeof tm);
-        pthread_mutex_unlock(&lock);
-        if (!words_on && !tim_on) {                 /* both off: the renderer ends at the end of its input */
-            close(fd); fd = -1; free(px); free(buf); px = NULL; buf = NULL;
-            gen = kept = shown_sec = -1; shown = SHOW_NONE; alpha = 0; sent = -1;
-            if (held) { atomic_store(&screen_hold, 0); held = 0; }
-            fprintf(stderr, "text: off\n");
-            continue;
-        }
-        if (fd < 0) {
-            if (textdraw_init() < 0 || ringbar(-TEXT_PCT, &fd, &w, &h) < 0) {
-                if (!fails++) fprintf(stderr, "text: no renderer, trying again every 30 s\n");
-                pthread_mutex_lock(&lock);
-                struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 30;
-                if (text_on || timers_on) pthread_cond_timedwait(&tcv, &lock, &ts);
-                pthread_mutex_unlock(&lock);
-                continue;
-            }
-            fails = 0;
-            px = malloc((size_t)w * h * 4); buf = malloc((size_t)w * h * 4);
-            if (!px || !buf) { fprintf(stderr, "text: no memory for %d x %d\n", w, h); close(fd); fd = -1; sleep(30); continue; }
-            gen = kept = shown_sec = -1; shown = SHOW_NONE; sent = -1;
-        }
-        long long now = now_ms();
-        int words = words_on && (heard[0] || reply[0]) && (!idle || now - idle_at < hold);
-        int show = words ? SHOW_WORDS : tim_on && ring[0] ? SHOW_RING : tim_on && n ? SHOW_TIMERS : SHOW_NONE;
-        int sec = show == SHOW_TIMERS ? (int)(now / 1000) : -1;    /* a running timer: a new picture each second */
-        if (show != SHOW_NONE && (show != shown || g != gen || keep != kept || sec != shown_sec)) {
-            if (show == SHOW_WORDS) textdraw_render(px, w, h, keep, heard, reply);
-            else if (show == SHOW_RING) {
-                struct textdraw_timer t = { ring, 0, 0, 1 };
-                textdraw_timers(px, w, h, keep, &t, 1, 1);
-            } else {
-                struct textdraw_timer t[TIMERS_MAX];
-                for (int i = 0; i < n; i++) {           /* counted down here from what Home Assistant last said */
-                    int left = tm[i].active ? tm[i].left - (int)((now - tm[i].at) / 1000) : tm[i].left;
-                    t[i] = (struct textdraw_timer){ tm[i].name, left < 0 ? 0 : left, tm[i].total, tm[i].active };
-                }
-                qsort(t, (size_t)n, sizeof t[0], by_left);     /* the one that ends first on top */
-                textdraw_timers(px, w, h, keep, t, n, 0);
-            }
-            gen = g; kept = keep; shown_sec = sec; sent = -1;
-        }
-        if (show == SHOW_NONE && shown == SHOW_WORDS && !heard[0] && !reply[0]) alpha = 0;     /* a new request: at once */
-        shown = show;
-        float target = show == SHOW_NONE ? 0 : show == SHOW_RING && now / PULSE_MS % 2 ? PULSE_LOW : 1;
-        float dt = (float)(now - last); last = now;
-        if (dt > 2 * TEXT_FRAME_MS) dt = TEXT_FRAME_MS;  /* a fade starts from where it was, not from the last wait */
-        if (alpha < target) alpha = fminf(target, alpha + dt / FADE_IN_MS);
-        else if (alpha > target) alpha = fmaxf(target, alpha - dt / FADE_OUT_MS);
-        if (alpha != sent) {
-            if (send_text(fd, px, buf, w, h, alpha) < 0) {
-                fprintf(stderr, "text: the renderer is gone, starting it again\n");
-                close(fd); fd = -1; free(px); free(buf); px = NULL; buf = NULL; sleep(1); continue;
-            }
-            sent = alpha;
-        }
-        int awake = show == SHOW_RING || show == SHOW_TIMERS;
-        if (awake != held) { atomic_store(&screen_hold, awake); held = awake; }
-        pthread_mutex_lock(&lock);
-        if (text_gen == g && rows == keep && text_idle == idle) {
-            long long ms = alpha != target ? TEXT_FRAME_MS                       /* fading */
-                         : show == SHOW_RING ? PULSE_MS - now % PULSE_MS        /* the next pulse */
-                         : show == SHOW_TIMERS ? 1000 - now % 1000              /* the next second */
-                         : show == SHOW_WORDS && idle && text_hold_s ? idle_at + hold - now    /* until the words go */
-                         : -1;                                                  /* until something changes */
-            if (ms >= 0) {
-                struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
-                ts.tv_sec += ms / 1000; ts.tv_nsec += (ms % 1000) * 1000000L;
-                if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
-                pthread_cond_timedwait(&tcv, &lock, &ts);
-            } else pthread_cond_wait(&tcv, &lock);
-        }
-        pthread_mutex_unlock(&lock);
-    }
-    return NULL;
-}
-
 /* ---------------------------------------------------------------- ring.h */
 
 int ring_generate(const char *dir) { (void)dir; fprintf(stderr, "ring: no LED ring on this model (the band is drawn at run time)\n"); return 1; }
@@ -920,8 +680,6 @@ void ring_start(void (*run)(const char *op, const char *name), void (*reloaded)(
         return;
     }
     pthread_detach(t);
-    if (pthread_create(&t, NULL, text_thread, NULL)) fprintf(stderr, "text: no thread\n");
-    else pthread_detach(t);
 }
 
 int ring_custom(void) { return 1; }                 /* Home Assistant's light: drawn here, any colour */
@@ -1027,7 +785,7 @@ void ring_level(int dbfs10) { atomic_store(&level_db, dbfs10); }
 int ring_band_rows(int set)
 {
     pthread_mutex_lock(&lock);
-    if (set >= 0) { rows = set > MAX_ROWS ? MAX_ROWS : set; pthread_cond_signal(&cv); pthread_cond_broadcast(&tcv); }
+    if (set >= 0) { rows = set > MAX_ROWS ? MAX_ROWS : set; pthread_cond_signal(&cv); }
     int r = rows;
     pthread_mutex_unlock(&lock);
     return r;

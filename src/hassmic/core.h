@@ -187,6 +187,11 @@ void   core_timer_cancelled(const char *id);
  * "a timer for 5 minutes"); 0 when none runs */
 void   core_timer_running(const char *id, const char *name, unsigned total, unsigned left, int active);
 int    core_timer_next(char *name, size_t cap, unsigned *total, long long *left_ms);
+/* every running timer (lock held), up to max, for the screen (screen.c): its name, or its length where it has none
+ * ("5 min", as a ringing one is called), its length, paused or not, and its end on the monotonic clock (ms, active)
+ * or what is left (paused).  The count */
+struct core_timer { char name[64]; unsigned total; int active; long long end_ms, left_ms; };
+int    core_timers_running(struct core_timer *t, int max);
 void   core_alarm_stop(const char *why);                    /* every ringing timer; why: for the log */
 int    core_transcript(const char *text);                   /* speech to text's result: 1 if it stopped a ring ("stop",
                                                                or anything with core_timer_stop_any), a Drop In or music

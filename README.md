@@ -60,7 +60,7 @@ with a clock (36EBT3) is another model, and not supported. Every other Echo, and
 | Do not disturb, equalizer, ring brightness | Alexa app                   | [entities in Home Assistant](docs/GUIDE.md#in-home-assistant) |
 | Buttons and light ring in automations   | –                              | [an event and a light in Home Assistant](docs/GUIDE.md#buttons-and-light-ring) |
 | Light ring animations of your own       | –                              | [drawn on the settings page](docs/GUIDE.md#buttons-and-light-ring), for each of the Echo's |
-| Echo Show: your words, the reply and timers on screen | Alexa's screens | [large letters over the screen](docs/GUIDE.md#buttons-and-light-ring), experimental |
+| Echo Show: your words, the reply and timers on screen | Alexa's screens | [large letters over the screen](docs/GUIDE.md#the-screen-echo-show), experimental |
 | Louder speaker (Echo Dot 2, Echo 2, Echo Dot 3) | –                      | [up to +12 dB](docs/GUIDE.md#settings-page) on the settings page (Echo Dot 3: +2 dB) |
 | Sound detection (smoke alarm, glass, …) | Alexa Guard, checked in the cloud | [on the Echo](docs/GUIDE.md#sound-detection), less reliable |
 | Whisper detection                       | answers in a whisper           | [a sensor](docs/GUIDE.md#whisper-detection) for your conversation agent |
@@ -230,8 +230,8 @@ install only with a valid signature. The whole model, including what it does not
 
 [MIT](LICENSE), for everything written here. `src/third_party/` keeps its own licences, stated in each file: monocypher
 (BSD-2-Clause OR CC0-1.0), `dr_flac.h` (public domain or MIT-0), `minimp3.h` (CC0-1.0), `rnnoise/` (BSD-3-Clause,
-`COPYING` beside it), `stb_truetype.h` (public domain or MIT), `freeaptx.c`/`.h` (LGPL-2.1-or-later; linked statically,
-and everything needed to rebuild and relink it is in this repository).
+`COPYING` beside it), `freeaptx.c`/`.h` (LGPL-2.1-or-later; linked statically, and everything needed to rebuild and
+relink it is in this repository).
 
 Nothing of Amazon's is in this repository or covered by this licence: firmware, libraries and wake word models come
 from your own device and stay Amazon's. Not affiliated with or endorsed by Amazon, Home Assistant or Music Assistant;

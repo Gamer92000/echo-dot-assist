@@ -411,9 +411,9 @@ void core_set_state(enum state s)
      * "ready-timer-short" once on FOCUS_ENTERED_BACKGROUND, then the pipeline's own patterns cover "ready-timer" */
     if (state == IDLE && atomic_load(&alarm_on)) led("-s", "ready-timer-short");
     led_for(state, s);
-    /* the screen's text (ring_band.c): a request from idle takes the last one's words away, idle lets them fade */
-    if (state == IDLE) ring_text(RING_TEXT_RUN, NULL);
-    else if (s == IDLE) ring_text(RING_TEXT_IDLE, NULL);
+    /* the words on the screen (screen.c): a request from idle takes the last one's away, idle lets them fade */
+    if (state == IDLE) screen_words(SCREEN_WORDS_RUN, NULL);
+    else if (s == IDLE) screen_words(SCREEN_WORDS_IDLE, NULL);
     state = s; state_since = time(NULL);
     atomic_store(&busy, s != IDLE);
 }
@@ -1334,7 +1334,7 @@ static void stop_word(void)
     }
     /* the screen's words go with what the "stop" ended: the reply it cut, the run it dropped or ended (stop_ends_listening),
      * the ring or the music it stopped.  The transcript of that "stop", if one still comes, is not shown (core_transcript) */
-    if (ended || stop_cut || paused) ring_text(RING_TEXT_RUN, NULL);
+    if (ended || stop_cut || paused) screen_words(SCREEN_WORDS_RUN, NULL);
     pthread_mutex_unlock(&core_lock);
 }
 
@@ -2177,7 +2177,30 @@ void core_timer_running(const char *id, const char *name, unsigned total, unsign
     running[i].total = total; running[i].active = active;
     running[i].left = left * 1000LL; running[i].end = mono_ms() + running[i].left;
     running_stale_at();
+    screen_timers_changed();
     if (connected && proto->timers_changed) proto->timers_changed();
+}
+
+/* "set a timer for 5 minutes" has no name: its length stands in (the ringing sensor, the screen) */
+static void timer_label(char *out, size_t cap, const char *name, unsigned total)
+{
+    unsigned h = total / 3600, m = total % 3600 / 60;
+    if (name[0]) snprintf(out, cap, "%s", name);
+    else if (total % 60 || !total) snprintf(out, cap, "%u s", total);
+    else if (h && m) snprintf(out, cap, "%u h %u min", h, m);
+    else if (h) snprintf(out, cap, "%u h", h);
+    else snprintf(out, cap, "%u min", m);
+}
+
+int core_timers_running(struct core_timer *t, int max)
+{
+    int n = 0;
+    for (int i = 0; i < nrunning && n < max; i++, n++) {
+        timer_label(t[n].name, sizeof t[n].name, running[i].name, running[i].total);
+        t[n].total = running[i].total; t[n].active = running[i].active;
+        t[n].end_ms = running[i].active ? running[i].end : 0; t[n].left_ms = running[i].active ? 0 : running[i].left;
+    }
+    return n;
 }
 
 int core_timer_next(char *name, size_t cap, unsigned *total, long long *left_ms)
@@ -2199,6 +2222,7 @@ static void timers_prune(void)          /* lock held */
         running_drop(i); gone = 1;
     } else i++;
     running_stale_at();
+    if (gone) screen_timers_changed();
     if (gone && connected && proto->timers_changed) proto->timers_changed();
 }
 
@@ -2213,33 +2237,20 @@ static void alarm_set(int on)          /* lock held */
     playback_hint();
 }
 
-/* lock held: what rings, to the screen's text layer (ring_band.c) */
-static void ringing_shown(void)
-{
-    char names[288];
-    core_timers_ringing(names, sizeof names);
-    ring_timers_ringing(names);
-}
-
 void core_timer_finished(const char *id, const char *name, unsigned total)
 {
-    int i = running_find(id); unsigned h = total / 3600, m = total % 3600 / 60;
+    int i = running_find(id);
     if (i >= 0) { running_drop(i); running_stale_at(); }
     i = 0;
     while (i < nringing && strcmp(ringing[i].id, id)) i++;
     if (i == RINGING_MAX) { memmove(ringing, ringing + 1, sizeof ringing[0] * --i); nringing = i; }    /* the oldest goes */
     if (i == nringing) nringing++;
     snprintf(ringing[i].id, sizeof ringing[i].id, "%s", id);
-    /* "set a timer for 5 minutes" has no name: its length stands in, so the sensor is never blank while it rings */
-    if (name[0]) snprintf(ringing[i].name, sizeof ringing[i].name, "%s", name);
-    else if (total % 60 || !total) snprintf(ringing[i].name, sizeof ringing[i].name, "%u s", total);
-    else if (h && m) snprintf(ringing[i].name, sizeof ringing[i].name, "%u h %u min", h, m);
-    else if (h) snprintf(ringing[i].name, sizeof ringing[i].name, "%u h", h);
-    else snprintf(ringing[i].name, sizeof ringing[i].name, "%u min", m);
+    timer_label(ringing[i].name, sizeof ringing[i].name, name, total);   /* never blank while it rings */
     atomic_store(&alarm_until, timer_ring_s ? mono_ms() + timer_ring_s * 1000LL : LLONG_MAX);
     fprintf(stderr, "alarm: %s rings (%d ringing)\n", ringing[i].name, nringing);
     alarm_set(1);
-    ringing_shown();
+    screen_timers_changed();
     if (connected && proto->timers_changed) proto->timers_changed();
 }
 
@@ -2248,12 +2259,13 @@ void core_timer_cancelled(const char *id)
     int r = running_find(id);
     if (r >= 0) {
         running_drop(r); running_stale_at();
+        screen_timers_changed();
         if (connected && proto->timers_changed) proto->timers_changed();
     }
     for (int i = 0; i < nringing; i++) if (!strcmp(ringing[i].id, id)) {
         memmove(ringing + i, ringing + i + 1, sizeof ringing[0] * (size_t)(nringing - i - 1));
         if (!--nringing) alarm_set(0);
-        ringing_shown();
+        screen_timers_changed();
         if (connected && proto->timers_changed) proto->timers_changed();
         return;
     }
@@ -2265,7 +2277,7 @@ void core_alarm_stop(const char *why)
     fprintf(stderr, "alarm: off (%s)\n", why);
     nringing = 0;
     alarm_set(0);
-    ringing_shown();
+    screen_timers_changed();
     if (connected && proto->timers_changed) proto->timers_changed();
 }
 
