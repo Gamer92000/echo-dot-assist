@@ -611,7 +611,11 @@ Run in this order. Each step says what it proves.
       KKpsk2 responder (`noise.c`, Monocypher), Sentinel PSK + unpaired access (operator approves in MA), player@v1 PCM 48k stereo,
       Kalman clock filter, scheduler (hard snap, then a rate of its own steered by the error, `resample.c`; ≤6 frames/chunk nudging until 2026-11-04), volume/mute/static delay, ducking under the
       voice assistant. `tests/fake_ma_sendspin.py` against the reference server: 9/9 (4.000 s of 4.000 s played, no discontinuity,
-      clock ±0.07 ms). `make unit`: WebSocket vs aiohttp, Noise vs python noiseprotocol, hash vectors.
+      clock ±0.07 ms). `make unit`: WebSocket vs aiohttp, Noise vs python noiseprotocol, hash vectors. WebSocket frames written
+      by hand too (2026-11-07; aiohttp never fragments): fragments with a ping, a pong or a close among them, a message over
+      4 MB in fragments (read to its end, its first 256 bytes kept, return 2; one crossing 4 MB only in a later fragment kept
+      all that came before it, up to 4 MB, until the test showed it), a ping over 125 bytes or a frame over 64 MB ending
+      the connection; the 64 MB limit is a frame's, 68 MB in frames of 4 MB is read through like 4.2 MB.
       **Real Music Assistant 2026-09-21:** MA found the Echo by mDNS, dialled 28928 over its IoT-VLAN interface (no router rule),
       admitted it unpaired without an extra step, music plays; sync err ≈ +0.3 ms vs schedule, clock ±0.27 ms over Wi-Fi, 2 MB buffer
       full, 30 frames nudged in the first minute, hassmic 8 % CPU. Output latency measured with `src/tools/latency.c` (clicks in
@@ -658,7 +662,8 @@ Run in this order. Each step says what it proves.
       against aiosendspin 10.2.1 and 34/34 with `--legacy` against 9.1.1 (`build/aiosendspin-9.1.1`, hash-pinned wheel made by
       `--setup`, which `tests/run.py` runs), both servers strict (`allow_noncompliant_clients=False`), plus a delay command
       now; `CODEC=opus` and `CODEC=pcm` pass too. Not done: time sync in bursts of 8 (spec since 2026-10-21, after 10.2.1).
-      Not exercised: fragments (the library fragments only beyond 65518 bytes), a volume change during a re-handshake.
+      Not exercised: Sendspin's fragments (the library fragments only beyond 65518 bytes; WebSocket continuation frames are,
+      `make unit-ws`), a volume change during a re-handshake.
       Not yet against a real MA 2.10.8
       **In sync without a cut (2026-11-04, PR #113).** The Echo Show 5's output clock runs ~350 ppm slow against the
       system clock (its log: "nudged -170 frames" every 10 s, 2026-11-02): the frames skipped to catch up, up to 6 at one
