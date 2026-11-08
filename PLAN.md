@@ -2282,8 +2282,29 @@ Run in this order. Each step says what it proves.
       white) LEDs 11 40, 0 dark, 1 green, 2 dark, 3 blue, 4 404040; HA's green then one colour at 75 %.  Identify
       over a 50 % fill: the rainbow 0.12 s after the press, the fill back at 10.3 s.  No ledctrl errors.
       Open: the Dot 3 (its system partition's room; no system image of it here) and the Echo 2.
-- [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
-      reminders (HA has timers only).
+- [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): reminders (HA has timers
+      only).  The offline alarm clock: done (2026-11-02, below).
+- [x] Alarms of the Echo's own (2026-11-02).  `alarms.c`: state/alarms (statefile), a clock thread on local time
+      (localtime/mktime: bionic's persist.sys.timezone; DST by mktime's tm_isdst -1: 2:30 on the spring-forward day
+      rings at 3:30, checked in tests/unit/alarms_test.c), `fired` kept so a restart never rings one twice and one
+      missed by up to 5 min still rings, a clock step > 120 s is a clock set (no burst of alarms); none before
+      alarms_clock_ok.  English request parser (`alarms_command`: set/change/delete/delete all/list/snooze; digits,
+      "seven thirty", "half past", "quarter to", "in an hour and a half", weekdays, "every monday and friday"; an alarm
+      system's words excluded) answered in main.c `alarm_request` from `core_transcript` (run cancelled as a stop), the
+      answer through `proto->say` = assist_satellite.announce on the Bluetooth announcements' queue.  Ringing through
+      the timers' ring (`ringing[].alarm`), own sound/ring time/snooze, a volume ramp (a fifth of the timer gain up to
+      it over alarm_ramp_s), snooze by volume key (`alarm_keys`), "snooze", HA's button.  Escalation (`alarm_louder`,
+      points/min past the ramp up to 100: `alarm_boost`, a volume like a kind's, so `loudest()` lifts the mixer and
+      `mix_gain` keeps the rest where they were; `stream_owns_volume` off meanwhile; main.c `alarm_escalate` every
+      200 ms).  ESPHome: "Next alarm" (text sensor, device_class timestamp; missing_state for none), "Alarms", "Alarm
+      ringing", "Snooze alarm", event "Alarm", actions set_alarm/delete_alarm (keyed link only, as Drop In: review on #118).
+      tests/fake_ha_alarms.py moves the Echo's clock through HASSMIC_FAKE_CLOCK_OFFSET (a file).
+      Defaults after the review on #118: `alarm_louder` 0 (off), `alarm_voice` off (without "perform actions" a Dot
+      cancelled HA's run and said nothing); snooze leaves timers ringing with the alarm ringing; a question is about
+      the Echo's alarms only with "my", "alarms", "next" or "do I have".
+      Spoken media requests ("pause", "next" for what this Echo plays) left out: STT ambiguity on bare words; only as
+      a PR of their own, behind a setting, off, multilingual.
+      Open: reminders; alarm sentences in other languages.
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
 - [x] Drop In between Echos (2026-10-08, asked by a user with ten Echos who used Alexa's as an intercom). `dropin.c`:
       calls signed on the arbitration network (new arb type `T_MSG`, `arb_tell`, broadcast like the rest, repeated:

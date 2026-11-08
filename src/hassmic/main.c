@@ -41,6 +41,7 @@
 #include <sys/system_properties.h>
 #endif
 #include "audio.h"
+#include "alarms.h"
 #include "a2dp.h"
 #include "arb.h"
 #include "ble.h"
@@ -2107,7 +2108,8 @@ static long long mono_ms(void);
  * still runs, and must not silence the others.  One ring for all of them; each new one gives the ring its full time
  * again; one press stops them all (the Echo cannot ask which).  Home Assistant sees "Timer ringing" and their names. */
 #define RINGING_MAX 4
-static struct { char id[40], name[64]; } ringing[RINGING_MAX];  /* lock held: in the order they finished */
+static struct { char id[40], name[64]; int alarm; } ringing[RINGING_MAX];  /* lock held: in the order they finished;
+                                                                            * alarm: alarms.c's id, 0 for a timer */
 static int nringing, timer_ring_s = 60, timer_stop_any;         /* lock held */
 static atomic_llong alarm_until;                                /* mono_ms the ring ends; LLONG_MAX: until stopped */
 /* What rings (issue #63): stock's timer tone (the default, where the firmware has it: core_timer_sound_default), its
@@ -2117,6 +2119,25 @@ static atomic_int timer_sound = TIMER_SOUND_BEEP, preview;
 static atomic_llong preview_until;
 #define PREVIEW_MS 10000
 static const enum sound timer_sounds[] = { [TIMER_SOUND_TIMER] = SND_TIMER, [TIMER_SOUND_ALARM] = SND_ALARM, [TIMER_SOUND_CUSTOM] = SND_CUSTOM };
+/* The Echo's own alarms (alarms.c) ring as timers do, with a sound, a ring time, a snooze of their own, and a start
+ * quieter than the timer volume that comes up over alarm_ramp_s (a wake-up alarm at full volume is a shock) */
+static atomic_int alarm_kind;                                   /* an alarm is among the ringing: its sound */
+static atomic_int alarm_sound = TIMER_SOUND_ALARM;
+static atomic_llong alarm_started;                              /* mono_ms the ring began (the ramp) */
+static int alarm_ring_min = 10, alarm_snooze_min = 9, alarm_ramp_s = 30, alarm_keys = 0, alarm_voice = 0;   /* lock held */
+/* alarm_voice off by default: the answer goes out through assist_satellite.announce, which Home Assistant runs only with
+ * "Allow the device to perform Home Assistant actions"; without it the run is cancelled and nothing is said.  English only */
+/* Past the ramp an alarm nobody answers may keep getting louder, alarm_louder points of volume a minute up to 100, as a
+ * heavy sleeper's alarm clock does: alarm_boost is that volume while it is above the timers' own (-1: none).  It is a
+ * volume like a kind's, so loudest() lifts the mixer for it and everything else keeps its own level */
+static int alarm_louder = 0, alarm_boost = -1;  /* off by default: */                 /* lock held */
+static atomic_int alarms_dirty;                                 /* alarms.c changed its list: told from volume_led_thread */
+/* "Alarm" in Home Assistant: what automations trigger on (lights up with the alarm, the blinds when it is stopped).
+ * Types stay as they are; a new one is a new type */
+const char *const core_alarm_events[] = { "ringing", "snoozed", "stopped", "rang_out", "set", "deleted", "not_understood" };
+const int core_alarm_nevents = sizeof core_alarm_events / sizeof core_alarm_events[0];
+void core_alarms_changed(void) { atomic_store(&alarms_dirty, 1); }      /* alarms.c, settings: any thread, any lock */
+static void alarm_event(const char *e) { if (connected && proto->alarm) proto->alarm(e); }   /* lock held */
 
 /* Timers that run (core_timer_running): Home Assistant tells a satellite of each of its timers as it starts and changes,
  * with the seconds left, and nobody else (an Assist timer is no entity), so the Echo is where they can be read.  The end
@@ -2199,6 +2220,8 @@ static void alarm_set(int on)          /* lock held */
      * ("not in map"), and the ring stayed dark */
     led(on ? "-s" : "-u", "ready-timer");
     playback_hint();
+    if (on) atomic_store(&alarm_started, mono_ms());
+    else atomic_store(&alarm_kind, 0);
 }
 
 void core_timer_finished(const char *id, const char *name, unsigned total)
@@ -2217,9 +2240,69 @@ void core_timer_finished(const char *id, const char *name, unsigned total)
     else if (h) snprintf(ringing[i].name, sizeof ringing[i].name, "%u h", h);
     else snprintf(ringing[i].name, sizeof ringing[i].name, "%u min", m);
     atomic_store(&alarm_until, timer_ring_s ? mono_ms() + timer_ring_s * 1000LL : LLONG_MAX);
+    ringing[i].alarm = 0;
     fprintf(stderr, "alarm: %s rings (%d ringing)\n", ringing[i].name, nringing);
     alarm_set(1);
     if (connected && proto->timers_changed) proto->timers_changed();
+}
+
+/* An alarm of the Echo's own is due (alarms.c's thread, no lock).  It rings as a finished timer does, in Do not disturb
+ * too (a wake-up alarm is the point of it), for alarm_ring_min, and goes in the list beside the timers */
+static void core_alarm_ring(int id, const char *what)
+{
+    pthread_mutex_lock(&core_lock);
+    char rid[40]; snprintf(rid, sizeof rid, "alarm-%d", id);
+    int i = 0;
+    while (i < nringing && strcmp(ringing[i].id, rid)) i++;
+    if (i == RINGING_MAX) { memmove(ringing, ringing + 1, sizeof ringing[0] * --i); nringing = i; }
+    if (i == nringing) nringing++;
+    snprintf(ringing[i].id, sizeof ringing[i].id, "%s", rid);
+    snprintf(ringing[i].name, sizeof ringing[i].name, "Alarm %s", what);
+    ringing[i].alarm = id;
+    long long until = alarm_ring_min ? mono_ms() + alarm_ring_min * 60000LL : LLONG_MAX, was = atomic_load(&alarm_until);
+    if (!atomic_load(&alarm_on) || until > was) atomic_store(&alarm_until, until);
+    atomic_store(&alarm_kind, 1);
+    fprintf(stderr, "alarm: alarm %d (%s) rings (%d ringing)\n", id, what, nringing);
+    alarm_set(1);
+    if (connected && proto->timers_changed) proto->timers_changed();
+    alarm_event("ringing");
+    pthread_mutex_unlock(&core_lock);
+}
+
+/* Lock held.  Snooze: every alarm ringing comes back in alarm_snooze_min, timers ringing with them ring on.  0: no
+ * alarm rang (nothing changed) */
+int core_alarm_ringing(void) { return atomic_load(&alarm_on) && atomic_load(&alarm_kind); }
+
+int core_alarm_snooze(const char *why)
+{
+    int any = 0;
+    for (int i = 0; i < nringing; i++) any |= ringing[i].alarm > 0;
+    if (!any || !atomic_load(&alarm_on)) return 0;
+    fprintf(stderr, "alarm: snoozed for %d min (%s)\n", alarm_snooze_min, why);
+    /* only the alarms: a timer ringing with them is not theirs to snooze, it rings on until stopped (or its ring time) */
+    int k = 0;
+    for (int i = 0; i < nringing; i++) {
+        if (ringing[i].alarm > 0) alarms_ended(ringing[i].alarm, alarm_snooze_min);
+        else ringing[k++] = ringing[i];
+    }
+    nringing = k;
+    if (!nringing) alarm_set(0);
+    else atomic_store(&alarm_kind, 0);              /* the timers' sound from the next loop on (alarm_go), no ramp */
+    if (connected && proto->timers_changed) proto->timers_changed();
+    alarm_event("snoozed");
+    return 1;
+}
+
+int core_alarm_setting(int which, int set)
+{
+    int *v[] = { &alarm_ring_min, &alarm_snooze_min, &alarm_ramp_s, &alarm_keys, &alarm_voice, NULL, &alarm_louder };
+    if (which == CORE_ALARM_SOUND) {
+        if (set >= 0 && set <= TIMER_SOUND_CUSTOM && (set == TIMER_SOUND_BEEP || sound_present(timer_sounds[set]))) atomic_store(&alarm_sound, set);
+        return atomic_load(&alarm_sound);
+    }
+    if (which < 0 || which >= (int)(sizeof v / sizeof *v) || !v[which]) return 0;
+    if (set != INT_MIN) *v[which] = set;
+    return *v[which];
 }
 
 void core_timer_cancelled(const char *id)
@@ -2241,9 +2324,12 @@ void core_alarm_stop(const char *why)
 {
     if (!atomic_load(&alarm_on)) return;
     fprintf(stderr, "alarm: off (%s)\n", why);
+    int alarms = 0;
+    for (int i = 0; i < nringing; i++) if (ringing[i].alarm > 0) { alarms_ended(ringing[i].alarm, 0); alarms++; }   /* once: off */
     nringing = 0;
     alarm_set(0);
     if (connected && proto->timers_changed) proto->timers_changed();
+    if (alarms) alarm_event(!strcmp(why, "rang out") ? "rang_out" : "stopped");
 }
 
 /* "<wake word>, stop" with an engine that has no "stop" keyword (microWakeWord, Home Assistant's): the transcript is the
@@ -2254,6 +2340,111 @@ void core_alarm_stop(const char *why)
  * went to Home Assistant, which answered "no timer is running" while it rang on (issue #21): with timer_stop_any any
  * recognised speech stops the ring, as EchoMuse does, whatever the language and however the ring garbled it; then a
  * question during a ring is not answered */
+/* Lock held.  The answer to an alarm request: on the screen, and spoken by Home Assistant (assist_satellite.announce,
+ * which needs "Allow the device to perform Home Assistant actions"; without it the screen and the "Alarm" event say it) */
+static void alarm_say(const char *text)
+{
+    fprintf(stderr, "alarms: \"%s\"\n", text);
+    if (connected && proto->say) proto->say(text);
+}
+
+/* Lock held.  An alarm request heard by speech to text (alarms_command), answered here: Home Assistant has no alarms.
+ * 1: it was one (the run is cancelled by the caller), 0: Home Assistant's to answer */
+
+static int alarm_request(const char *text)
+{
+    struct alarm a, l[ALARMS_MAX]; int timed, h24 = alarms_h24(); char t[96], r[256];
+    time_t now = alarms_now();
+    enum alarm_cmd c = alarms_command(text, now, &a, &timed);
+    if (c == ALARM_CMD_NONE) return 0;
+    if (c == ALARM_CMD_SNOOZE) {
+        if (core_alarm_snooze("said snooze")) { snprintf(r, sizeof r, "Snoozing for %d minutes.", alarm_snooze_min); alarm_say(r); }
+        else if (atomic_load(&alarm_on)) core_alarm_stop("said snooze to a timer");      /* a timer has no snooze: it stops */
+        else alarm_say("No alarm is ringing.");
+        return 1;
+    }
+    /* "cancel the alarm", "turn off the alarm" while one rings: that ring, as "stop" */
+    if (atomic_load(&alarm_on) && atomic_load(&alarm_kind) && (c == ALARM_CMD_DELETE && !timed)) { core_alarm_stop("said cancel the alarm"); return 1; }
+    if (!alarm_voice) return 0;
+    int n = alarms_list(l, ALARMS_MAX), on = 0;
+    for (int i = 0; i < n; i++) on += l[i].enabled;
+    switch (c) {
+    case ALARM_CMD_SET:
+    set:
+        if (!timed) { alarm_say("Sorry, I didn't catch the time for the alarm."); alarm_event("not_understood"); return 1; }
+        for (int i = 0; i < n; i++)                                 /* the same one again: switched on, not twice */
+            if (l[i].hour == a.hour && l[i].min == a.min && l[i].days == a.days && (a.days || l[i].once == a.once)) {
+                l[i].enabled = 1; alarms_put(&l[i]); alarms_format(&l[i], now, h24, t, sizeof t);
+                snprintf(r, sizeof r, "You have an alarm for %s.", t); alarm_say(r); alarm_event("set"); return 1;
+            }
+        if (alarms_put(&a) < 0) { snprintf(r, sizeof r, "You have %d alarms already, the most this Echo keeps.", ALARMS_MAX); alarm_say(r); return 1; }
+        alarms_format(&a, now, h24, t, sizeof t);
+        snprintf(r, sizeof r, "Alarm set for %s.%s", t, alarms_clock_ok() ? "" : " The clock isn't set yet: it rings once Home Assistant sets it.");
+        alarm_say(r); alarm_event("set");
+        return 1;
+    case ALARM_CMD_CHANGE: {                                        /* the next to ring (or the only one) to that time */
+        int pick = -1; time_t best = 0;
+        for (int i = 0; i < n; i++) {
+            time_t w = alarms_next_at(&l[i], now);
+            if (l[i].enabled && w && (!best || w < best)) { best = w; pick = i; }
+        }
+        if (pick < 0 && n == 1) pick = 0;                           /* one, switched off: that one */
+        if (pick < 0) goto set;                                     /* none: as "set" */
+        struct alarm b = l[pick];
+        b.hour = a.hour; b.min = a.min; b.enabled = 1; b.snoozed = 0;
+        if (a.days) b.days = a.days;                                /* "... to 7 on weekdays" */
+        if (!b.days) b.once = a.once;                               /* a once alarm: the next time that time comes */
+        alarms_put(&b); alarms_format(&b, now, h24, t, sizeof t);
+        snprintf(r, sizeof r, "Your alarm is now set for %s.", t); alarm_say(r); alarm_event("set");
+        return 1; }
+    case ALARM_CMD_DELETE: {
+        int pick = -1; time_t best = 0;
+        for (int i = 0; i < n; i++) {
+            if (!l[i].enabled) continue;
+            /* one named by its time: as said, else the other half of the day ("cancel the 7 alarm" for 7 PM) */
+            if (timed && !(l[i].hour == a.hour && l[i].min == a.min)) continue;
+            time_t w = alarms_next_at(&l[i], now);
+            if (w && (!best || w < best)) { best = w; pick = i; }
+        }
+        if (timed && pick < 0) for (int i = 0; i < n; i++) if (l[i].enabled && l[i].hour == (a.hour + 12) % 24 && l[i].min == a.min) pick = i;
+        if (pick < 0) {
+            if (timed) { alarms_time_text(a.hour, a.min, h24, t, sizeof t); snprintf(r, sizeof r, "You have no alarm for %s.", t); }
+            else snprintf(r, sizeof r, "You have no alarms.");
+            alarm_say(r); return 1;
+        }
+        alarms_format(&l[pick], now, h24, t, sizeof t);
+        alarms_delete(l[pick].id);
+        snprintf(r, sizeof r, "Your alarm for %s is cancelled.", t); alarm_say(r); alarm_event("deleted");
+        return 1; }
+    case ALARM_CMD_DELETE_ALL: {
+        int k = alarms_delete_all();
+        if (!k) alarm_say("You have no alarms.");
+        else { snprintf(r, sizeof r, k == 1 ? "Your alarm is cancelled." : "All %d alarms are cancelled.", k); alarm_say(r); alarm_event("deleted"); }
+        return 1; }
+    case ALARM_CMD_LIST: {
+        struct alarm nx; time_t w = alarms_next(&nx);
+        if (!on || !w) { alarm_say("You have no alarms."); return 1; }
+        if (nx.snoozed == w) {
+            struct tm tm; localtime_r(&w, &tm); alarms_time_text(tm.tm_hour, tm.tm_min, h24, t, sizeof t);
+            snprintf(r, sizeof r, "Your alarm is snoozed until %s.", t); alarm_say(r); return 1;
+        }
+        alarms_format(&nx, now, h24, t, sizeof t);
+        if (on == 1) snprintf(r, sizeof r, "Your alarm is set for %s.", t);
+        else {
+            size_t k = (size_t)snprintf(r, sizeof r, "You have %d alarms: ", on); int said = 0;
+            for (int i = 0; i < n && k < sizeof r; i++) if (l[i].enabled) {
+                char one[96]; alarms_format(&l[i], now, h24, one, sizeof one);
+                said++;
+                k += (size_t)snprintf(r + k, sizeof r - k, "%s%s", said == 1 ? "" : said == on ? " and " : ", ", one);
+            }
+            if (k < sizeof r) snprintf(r + k, sizeof r - k, ".");
+        }
+        alarm_say(r);
+        return 1; }
+    default: return 0;
+    }
+}
+
 int core_transcript(const char *text)
 {
     static const char *const stops[] = { "stop", "stopp", "stoppen", "stoppa", "halt", "arrête", "arrete", "basta", "para", "pare" };
@@ -2291,6 +2482,11 @@ int core_transcript(const char *text)
     }
     int hit = 0;
     for (size_t i = 0; i < sizeof stops / sizeof stops[0]; i++) hit |= !strcmp(w, stops[i]);
+    if (!hit && alarm_request(text)) {        /* the Echo's own alarms (alarms.h): answered here */
+        if (connected && proto->cancel) { barge_in = 0; atomic_store(&streaming, 0); proto->cancel(); quiet_abort = 1; }
+        core_pipeline_finish();
+        return 1;
+    }
     if (atomic_load(&alarm_on)) {
         if (!hit && !(timer_stop_any && w[0])) return 0;
         core_alarm_stop(hit ? "said stop" : "a request during the ring");
@@ -2327,7 +2523,11 @@ int core_timer_sound(int set)
     return atomic_load(&timer_sound);
 }
 
-void core_timer_sound_default(void) { if (core_timer_sound(TIMER_SOUND_TIMER) != TIMER_SOUND_TIMER) core_timer_sound(TIMER_SOUND_BEEP); }
+void core_timer_sound_default(void)
+{
+    if (core_timer_sound(TIMER_SOUND_TIMER) != TIMER_SOUND_TIMER) core_timer_sound(TIMER_SOUND_BEEP);
+    if (core_alarm_setting(CORE_ALARM_SOUND, TIMER_SOUND_ALARM) != TIMER_SOUND_ALARM) core_alarm_setting(CORE_ALARM_SOUND, TIMER_SOUND_BEEP);
+}
 
 void core_timer_sound_preview(void) { atomic_store(&preview, 1); }
 
@@ -2395,9 +2595,10 @@ static int ring_sound;
 static int ring_go(void) { return atomic_load(&dropin_ring) == ring_sound && !atomic_load(&sounds_pending); }
 /* a timer's sound plays on until it is stopped or rings out, and gives way to a pipeline (speech to text must hear the
  * user, not the ring), our other sounds and a Drop In's ring; then it starts again from the top */
+static atomic_int ring_kind;                    /* alarm_kind when the loop playing began: a snooze that leaves a timer ends it */
 static int alarm_go(void)
 {
-    return atomic_load(&alarm_on) && mono_ms() <= atomic_load(&alarm_until) && !atomic_load(&busy) && !atomic_load(&sounds_pending)
+    return atomic_load(&alarm_on) && atomic_load(&alarm_kind) == atomic_load(&ring_kind) && mono_ms() <= atomic_load(&alarm_until) && !atomic_load(&busy) && !atomic_load(&sounds_pending)
            && atomic_load(&dropin_ring) < 0;
 }
 static int preview_go(void)
@@ -2473,10 +2674,16 @@ static void *earcon_thread(void *arg)
                 if (mono_ms() > atomic_load(&alarm_until)) core_alarm_stop("rang out");     /* not a timer that just came */
                 pthread_mutex_unlock(&core_lock);
             } else if (!atomic_load(&busy)) {
-                int ts = atomic_load(&timer_sound); const short *pcm = beep; size_t n = N; unsigned rate = RATE;
+                int al = !pv && atomic_load(&alarm_kind);
+                int ts = atomic_load(al ? &alarm_sound : &timer_sound); const short *pcm = beep; size_t n = N; unsigned rate = RATE;
                 if (ts != TIMER_SOUND_BEEP && !sound_get(timer_sounds[ts], &pcm, &n, &rate)) { pcm = beep; n = N; rate = RATE; }  /* gone: the blip */
-                short *quiet = scaled(pcm, n, atomic_load(&timers_q16));
+                /* an alarm starts at a fifth of the timer volume's gain and comes up to it over alarm_ramp_s, a loop of
+                 * its sound at a time */
+                int q = atomic_load(&timers_q16), ramp = alarm_ramp_s;
+                if (al && ramp > 0) { float k = (float)(mono_ms() - atomic_load(&alarm_started)) / (ramp * 1000.0f); q = (int)(q * (0.2f + 0.8f * (k < 1 ? k : 1))); }
+                short *quiet = scaled(pcm, n, q);
                 if (pv) { atomic_store(&preview_until, mono_ms() + PREVIEW_MS); atomic_store(&earcon_sounding, 1); sound_start(); }
+                atomic_store(&ring_kind, al);
                 if (pcm != beep) play_earcon_while(quiet ? quiet : pcm, n, rate, pv ? preview_go : alarm_go);
                 else for (int k = 0; k < 3; k++) play_earcon(quiet ? quiet : beep, N, RATE);
                 free(quiet);
@@ -2611,7 +2818,7 @@ static float vol_db(int v) { return board_vol_db(v); }      /* the Echo's volume
 static float want_db(int v) { return !vol_even ? vol_db(v) : v <= 0 ? -INFINITY : EVEN_FLOOR_DB * (100 - v) / 99; }
 
 /* lock held: MainVolume (the Show's index) is the volume, as stock; else ours is kept in state/volume.music */
-static int stream_owns_volume(void) { return !vol_split && !vol_even; }
+static int stream_owns_volume(void) { return !vol_split && !vol_even && alarm_boost < 0; }
 
 /* lock held: what a kind (VOL_*) plays at now, its own volume or the music's moved by its offset */
 static int kind_volume(int k) { return kinds[k].linked ? clamp100(core_volume() + kinds[k].offset) : kinds[k].level; }
@@ -2623,7 +2830,7 @@ static int loudest(void)
     if (vol_split)
         for (int k = 0; k < VOL_KINDS; k++)   /* a call's volume only while one is on: no hidden loud one moves the rest */
             if ((k != VOL_CALLS || atomic_load(&dropin_live)) && kind_volume(k) > v) v = kind_volume(k);
-    return v;
+    return alarm_boost > v ? alarm_boost : v; /* an alarm getting louder */
 }
 
 /* lock held: what MainVolume and TTSVolume both are now: the loudest (with even steps the curve's point at least as
@@ -2637,7 +2844,8 @@ static int mix_target(void)
 /* lock held: a kind's volume, the volume itself while they are not separate */
 static int kind_now(int k)
 {
-    return vol_split ? kind_volume(k) : core_volume();
+    int v = vol_split ? kind_volume(k) : core_volume();
+    return k == VOL_TIMERS && alarm_boost > v ? alarm_boost : v;
 }
 
 /* lock held: what audio for volume v is multiplied by: 1 at the mixer's own, 0 at volume 0 */
@@ -2664,6 +2872,27 @@ static void mix_apply(void)                  /* lock held: the mixer's volumes a
     atomic_store(&sounds_q16, (int)lroundf(mix_gain(kind_now(VOL_SOUNDS)) * 65536));
     atomic_store(&timers_q16, (int)lroundf(mix_gain(kind_now(VOL_TIMERS)) * 65536));
     audio_call_gain(mix_gain(kind_now(VOL_CALLS)));
+}
+
+/* volume_led_thread, every 200 ms: an alarm of the Echo's own that rings past its ramp gets alarm_louder points a minute
+ * louder than the timers' volume, up to 100; the ring over, the volumes are as before */
+static void alarm_escalate(void)
+{
+    pthread_mutex_lock(&core_lock);
+    int boost = -1, was = alarm_boost;
+    if (alarm_louder > 0 && core_alarm_ringing()) {
+        long long past = mono_ms() - atomic_load(&alarm_started) - alarm_ramp_s * 1000LL;
+        alarm_boost = -1; int base = kind_now(VOL_TIMERS); alarm_boost = was;      /* the timers' own volume */
+        if (past > 0) { long long up = (long long)alarm_louder * past / 60000; boost = base + up > 100 ? 100 : base + (int)up; }
+        if (boost <= base) boost = -1;
+    }
+    if (boost != was) {
+        if (boost >= 0 && (was < 0 || boost / 10 != was / 10)) fprintf(stderr, "alarm: louder, at %d\n", boost);
+        if (boost < 0 && was >= 0) fprintf(stderr, "alarm: volume back\n");
+        alarm_boost = boost;
+        mix_apply();
+    }
+    pthread_mutex_unlock(&core_lock);
 }
 
 static void tts_kind(int media)              /* the playback thread, at each start of the TTS stream */
@@ -3058,6 +3287,12 @@ static void on_volume(int dir)
 {
     if (!use_volume) return;
     pthread_mutex_lock(&core_lock);
+    /* an alarm of the Echo's own rings: a volume key snoozes it, the Echo Show's nearest to stock's touch "Snooze"
+     * (alarm_keys 0; 1 keeps them for the volume) */
+    if (!alarm_keys && atomic_load(&alarm_on) && atomic_load(&alarm_kind) && core_alarm_snooze("volume key")) {
+        pthread_mutex_unlock(&core_lock);
+        return;
+    }
     /* separate volumes: what plays now, a Drop In call, a reply (not Home Assistant's media) or a ringing timer, else
      * the music; one that follows the music moves with it */
     int k = !vol_split ? -1 : atomic_load(&dropin_live) ? VOL_CALLS : atomic_load(&tts_on) && !tts_media ? VOL_ASSISTANT
@@ -3093,6 +3328,10 @@ static void *volume_led_thread(void *arg)
         if (at && mono_ms() >= at && atomic_compare_exchange_strong(&identify_until, &at, 0)) led("-u", "zzz_rainbow");
         ring_tick();
         if (tick % 5 == 0) rd_tick();               /* root's answer to designs applied on the settings page */
+        alarm_escalate();                           /* an unanswered alarm gets louder */
+        if (atomic_exchange(&alarms_dirty, 0)) {    /* alarms.c's list changed: Home Assistant's sensors, the screen */
+            pthread_mutex_lock(&core_lock); if (connected && proto->alarms_changed) proto->alarms_changed(); pthread_mutex_unlock(&core_lock);
+        }
         usleep(200000);
     }
     return NULL;
@@ -3420,6 +3659,8 @@ int main(int argc, char **argv)
     if (use_bt) improv_start(&improv_hooks);                 /* setup over Bluetooth, when there is no network (improv.c) */
     if (ota_port) ota_start(ota_port);
     pthread_mutex_lock(&core_lock); core_timer_sound_default(); settings_load(); settings_preset(); pthread_mutex_unlock(&core_lock);    /* whatever the protocol */
+    static const struct alarms_hooks alarm_hooks = { core_alarm_ring, core_alarms_changed };
+    alarms_start(&alarm_hooks);                               /* the Echo's own alarms (alarms.h), whatever the protocol */
     davs_start();                                             /* Amazon login for artifact downloads (settings page) */
     static const struct web_hooks web_hooks = { web_attention, web_approved };
     if (core_web_port && web_start(core_web_port, &web_hooks)) { fprintf(stderr, "web: not available\n"); core_web_port = 0; }

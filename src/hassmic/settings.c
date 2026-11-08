@@ -18,6 +18,7 @@
 #include "wifimotion.h"
 #include "statefile.h"
 #include "ring.h"
+#include "alarms.h"
 #include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
@@ -30,6 +31,9 @@ static const char *const arb_modes[2] = { "hassmic", "kiosk" };            /* AR
 static const char *const wake_engines[3] = { "amazon", "microwakeword", "homeassistant" };  /* WAKE_AMAZON, WAKE_MWW, WAKE_HA */
 static const char *const dropin_answers[2] = { "auto", "ask" };          /* dropin_ask() 0, 1 */
 static const char *const timer_sounds[4] = { "timer", "alarm", "beep", "custom" };    /* TIMER_SOUND_* */
+static const char *const clock_formats[3] = { "auto", "12h", "24h" };      /* alarms_clock_format */
+static const char *const alarm_keys[2] = { "snooze", "volume" };             /* CORE_ALARM_KEYS */
+static int alarms_feature = 1;                          /* the alarms' entities in Home Assistant (they ring either way) */
 static const char *const speech_langs[6] = { "auto", "de", "en", "fr", "es", "ja" };
 static int speech_lang, wake_adapt = 1;
 
@@ -74,6 +78,7 @@ enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, 
           WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
+          ALARMS, ALARM_VOICE, ALARM_SOUND, ALARM_RING, ALARM_SNOOZE, ALARM_RAMP, ALARM_LOUDER, ALARM_KEYS, CLOCK_FMT,
           VOL_EVEN, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
@@ -191,6 +196,18 @@ static const struct setting table[NSET] = {
     [CALL_LINK]   = { "call_volume_linked", "Calls follow the music volume", "Sound", NULL, S_BOOL, 0, 1, 1, 1 },
     [CALL_LEVEL]  = { "call_volume", "Call volume", "Sound", "%", S_INT, 0, 100, 0, 0 },
     [CALL_OFFSET] = { "call_volume_offset", "Calls above the music", "Sound", NULL, S_INT, -VOL_OFFSET_MAX, VOL_OFFSET_MAX, 1, 0 },
+    /* The Echo's own alarms (alarms.h, main.c core_alarm_*): they ring whatever "alarms" is; the switch lists their
+     * entities in Home Assistant (next alarm, the list, ringing, the event, snooze, the actions).  The alarms themselves
+     * are state/alarms', not an export's: they are this Echo's room's */
+    [ALARMS]      = { "alarms", "Alarms", "Alarms", NULL, S_BOOL, 0, 1, 1, 1 },
+    [ALARM_VOICE] = { "alarm_voice", "Answer alarm requests on the Echo", "Alarms", NULL, S_BOOL, 0, 1, 1, 0 },
+    [ALARM_SOUND] = { "alarm_sound", "Alarm sound", "Alarms", NULL, S_CHOICE, 0, 0, 1, 0 },
+    [ALARM_RING]  = { "alarm_ring", "Alarms ring for", "Alarms", "min", S_INT, 0, 60, 1, 0 },        /* 0: until stopped */
+    [ALARM_SNOOZE] = { "alarm_snooze", "Snooze", "Alarms", "min", S_INT, 1, 30, 1, 0 },
+    [ALARM_RAMP]  = { "alarm_ramp", "Alarms start quietly", "Alarms", "s", S_INT, 0, 120, 1, 0 },
+    [ALARM_LOUDER] = { "alarm_louder", "Unanswered alarms get louder", "Alarms", "/min", S_INT, 0, 50, 1, 0 },
+    [ALARM_KEYS]  = { "alarm_keys", "Volume keys while an alarm rings", "Alarms", NULL, S_CHOICE, 0, 0, 1, 0 },
+    [CLOCK_FMT]   = { "clock_format", "Clock", "Alarms", NULL, S_CHOICE, 0, 0, 1, 0 },
 };
 
 static int present(enum id i)
@@ -246,6 +263,9 @@ int settings_choices(const struct setting *s, const char *const **names)
     case DROPIN_ANSWER: *names = dropin_answers; return 2;
     case TIMER_SOUND: *names = timer_sounds; return 4;
     case END_REQ: *names = micend_names; return MICEND_MODES;
+    case ALARM_SOUND: *names = timer_sounds; return 4;
+    case ALARM_KEYS: *names = alarm_keys; return 2;
+    case CLOCK_FMT: *names = clock_formats; return 3;
     default: *names = NULL; return 0;
     }
 }
@@ -324,6 +344,15 @@ int settings_get(const struct setting *s)
     case SCR_AUTO: return backlight_auto;
     case SCR_LEVEL: return backlight_level;
     case SCR_ADJUST: return backlight_adjust;
+    case ALARMS: return alarms_feature;
+    case ALARM_VOICE: return core_alarm_setting(CORE_ALARM_VOICE, INT_MIN);
+    case ALARM_SOUND: return core_alarm_setting(CORE_ALARM_SOUND, -1);
+    case ALARM_RING: return core_alarm_setting(CORE_ALARM_RING, INT_MIN);
+    case ALARM_SNOOZE: return core_alarm_setting(CORE_ALARM_SNOOZE, INT_MIN);
+    case ALARM_RAMP: return core_alarm_setting(CORE_ALARM_RAMP, INT_MIN);
+    case ALARM_KEYS: return core_alarm_setting(CORE_ALARM_KEYS, INT_MIN);
+    case ALARM_LOUDER: return core_alarm_setting(CORE_ALARM_LOUDER, INT_MIN);
+    case CLOCK_FMT: return alarms_clock_format(-1);
     default: return 0;
     }
 }
@@ -392,6 +421,15 @@ static void put(enum id i, int v)
     case SCR_AUTO: backlight_auto = v; break;                   /* root's main.sh sees state/config change */
     case SCR_LEVEL: backlight_level = v; break;
     case SCR_ADJUST: backlight_adjust = v; break;
+    case ALARMS: alarms_feature = v; break;
+    case ALARM_VOICE: core_alarm_setting(CORE_ALARM_VOICE, v); break;
+    case ALARM_SOUND: core_alarm_setting(CORE_ALARM_SOUND, v); break;       /* refused without its file: settings_set says so */
+    case ALARM_RING: core_alarm_setting(CORE_ALARM_RING, v); break;
+    case ALARM_SNOOZE: core_alarm_setting(CORE_ALARM_SNOOZE, v); break;
+    case ALARM_RAMP: core_alarm_setting(CORE_ALARM_RAMP, v); break;
+    case ALARM_KEYS: core_alarm_setting(CORE_ALARM_KEYS, v); break;
+    case ALARM_LOUDER: core_alarm_setting(CORE_ALARM_LOUDER, v); break;
+    case CLOCK_FMT: alarms_clock_format(v); core_alarms_changed(); break;
     default: break;
     }
 }
@@ -585,7 +623,7 @@ int settings_set(const char *name, const char *value, char *err, size_t errsz)
     int was = settings_get(s);
     put((enum id)(s - table), v);
     if (s - table == WAKE_ENGINE && settings_get(s) != v) { snprintf(err, errsz, "%s: %s", name, core_wake_refused()); return -1; }
-    if (s - table == TIMER_SOUND && settings_get(s) != v) {
+    if ((s - table == TIMER_SOUND || s - table == ALARM_SOUND) && settings_get(s) != v) {
         snprintf(err, errsz, "%s: %s", name, v == TIMER_SOUND_CUSTOM ? "no sound of its own on this Echo: upload one on its page first"
                                                                     : "this Echo's firmware has no such sound");
         return -1;

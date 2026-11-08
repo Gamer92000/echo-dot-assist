@@ -526,7 +526,55 @@ address, left empty, is taken from the Music Assistant that plays on the Echo wh
 the token only ever goes there, so a Music Assistant that moves needs **Connect…** again (or its address given).
 Until then those tabs say how to connect.
 
+## Clock and alarms
+
+**Alarms** ring on the Echo itself, on its own clock (which Home Assistant sets; until it has, none rings), with or
+without Home Assistant. Home Assistant has no alarms of its own.
+
+- **By voice** ("Answer alarm requests on the Echo", off by default; switch it on on the settings page): "<wake word>, set an alarm for 7 AM", "wake me up
+  at 6:30 tomorrow", "set an alarm for quarter to 8", "set an alarm for 6:45 on weekdays", "wake me up every day at
+  7", "set an alarm every Monday and Friday at 5:30", "wake me up in 20 minutes", "what alarms do I have", "when is my
+  alarm", "change my alarm to 6:30" (the next one, its days kept), "cancel my alarm" (the next one), "cancel the 7 AM alarm",
+  "cancel all alarms". A time without AM or PM is
+  the next time it comes ("7" said at 2 PM is 7 PM today), with a day said the morning. The Echo answers these itself
+  and Home Assistant never sees them; the answer is spoken through `assist_satellite.announce`, which needs "Allow the
+  device to perform Home Assistant actions" ticked in the device's options in Home Assistant, and shows on an Echo
+  Show's screen. Without that permission the Echo would cancel the run and say nothing, which is why it is off by default.
+  English sentences; "snooze" and "stop" in any case. Requests about an alarm system ("disarm the alarm", "arm the
+  alarm system", "is the alarm on", "the smoke alarm") stay Home Assistant's.
+- **On the settings page** ("Clock & alarms"): the list, Add, Edit (time, the days it repeats on, a label), a switch to
+  turn one off, Delete; Snooze and Stop while one rings.
+- **From Home Assistant** ("Alarms" in Features is on by default): `esphome.<node>_set_alarm` (time "07:30", "7:30
+  pm" or "in 20 minutes"; days "weekdays", "weekends", "daily", "mon, fri" or empty for once; a label) and
+  `esphome.<node>_delete_alarm` (which: "next", "all", its id or its time), for automations and AI agents' tools.
+  Like Drop In, the actions are taken only from the Home Assistant that holds the Echo's encryption key.
+  Entities: "Next alarm" (a timestamp: a dashboard counts down to it, a trigger "10 minutes before" turns the lights
+  on), "Alarms" (the list), "Alarm ringing", the button "Snooze alarm", and the event entity "Alarm" with the types
+  `ringing`, `snoozed`, `stopped`, `rang_out`, `set`, `deleted`, `not_understood`. "Stop ringing" stops alarms too.
+
+A ringing alarm:
+
+| | Snooze | Stop |
+|---|---|---|
+| Voice | "<wake word>, snooze" | "<wake word>, stop", "cancel the alarm" |
+| Echo Dot | a volume key ("Volume keys while an alarm rings": Snooze) | the action button |
+| Echo Show | a volume key | both volume keys together, **Stop** on the screen |
+| Home Assistant | "Snooze alarm" | "Stop ringing", the media player's stop |
+
+Snooze snoozes the alarms only: a timer that rings along with one keeps ringing until it is stopped.
+
+It plays "Alarm sound" (Alexa's alarm tone; Alexa's timer tone, the beep, or the sound uploaded for timers), starts at
+a fifth of the timer volume and comes up to it over "Alarms start quietly" (30 s), and stays there. For heavy sleepers,
+"Unanswered alarms get louder" (off by default) adds that many points of volume a minute while nobody answers it, up
+to the loudest the Echo plays (music and replies keep their own volume meanwhile, and everything is as before once it
+is stopped or snoozed). It
+rings for "Alarms ring for" (10 min; all the way left: until stopped) and snoozes for "Snooze" (9 min). It rings in Do not disturb too. A once alarm
+that was stopped or rang out turns itself off; a repeating one goes on to its next day. One missed by a restart (an
+update) less than 5 minutes ago still rings after it. "Clock": 7:30 AM or 07:30, automatic by the time zone.
+
 ## Music
+
+While the Echo listens, its music is turned down to a sixth, gliding over 30 ms each way.
 
 One source at a time, the newest wins: a phone starting over Bluetooth pauses Music Assistant (the whole group), Music
 Assistant starting on the Echo pauses the phone. The voice assistant ducks both. "<wake word>, stop" pauses either,

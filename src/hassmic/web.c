@@ -43,6 +43,7 @@
  */
 #include "web.h"
 #include "core.h"
+#include "alarms.h"
 #include "adbwifi.h"
 #include "arb.h"
 #include "dropin.h"
@@ -652,6 +653,41 @@ static void sound_api(int fd, struct req *r)
  * /api/sound-pack/<id>/apply      POST  its sounds in use, Alexa's where it has none
  * /api/sound-pack/<id>/delete     POST
  * Signed.  Not in exports, as the sounds. */
+/* The Echo's own alarms (alarms.h): GET /api/alarms the list; POST /api/alarms/put "id hour min days enabled label" (id 0
+ * adds one), /api/alarms/<id>/delete, /api/alarms/snooze, /api/alarms/stop (what rings now) */
+static void alarms_api(int fd, struct req *r)
+{
+    char err[160] = "", o[260], ej[200]; int get = !strcmp(r->method, "GET");
+    if (!signed_ok(r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    const char *p = r->path + 11;
+    if (!*p && get) {
+        size_t n = 0; char *j = alarms_json(&n), *o2;
+        if (!j || n < 2) { free(j); respond_sjson(fd, r, 500, "{\"error\":\"out of memory\"}"); return; }
+        /* what rings now is the core's: in front of alarms.c's own */
+        pthread_mutex_lock(&core_lock); int rang = core_alarm_ringing() || core_timers_ringing(NULL, 0); pthread_mutex_unlock(&core_lock);
+        if (asprintf(&o2, "{\"ringing\":%s,%s", rang ? "true" : "false", j + 1) < 0) { free(j); respond_sjson(fd, r, 500, "{\"error\":\"out of memory\"}"); return; }
+        respond_s(fd, r, 200, "application/json", NULL, o2, strlen(o2)); free(o2); free(j); return;
+    }
+    if (get) { respond_sjson(fd, r, 405, "{\"error\":\"POST\"}"); return; }
+    if (!strcmp(p, "/put")) {
+        char line[160]; snprintf(line, sizeof line, "%.*s", (int)(r->blen < sizeof line - 1 ? r->blen : sizeof line - 1), r->body ? r->body : "");
+        if (!alarms_put_text(line, err, sizeof err)) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
+    } else if (!strcmp(p, "/snooze") || !strcmp(p, "/stop")) {
+        pthread_mutex_lock(&core_lock);
+        int rang = core_alarm_ringing() || core_timers_ringing(NULL, 0);
+        if (p[1] == 's' && p[2] == 'n') { if (!core_alarm_snooze("settings page")) core_alarm_stop("settings page"); }
+        else core_alarm_stop("settings page");
+        pthread_mutex_unlock(&core_lock);
+        respond_sjson(fd, r, 200, rang ? "{\"ok\":true}" : "{\"ok\":false}"); return;
+    } else {
+        char *end; long id = *p == '/' ? strtol(p + 1, &end, 10) : 0;
+        if (id > 0 && !strcmp(end, "/delete")) { if (!alarms_delete((int)id)) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; } snprintf(err, sizeof err, "no alarm %ld", id); }
+        else snprintf(err, sizeof err, "not found");
+    }
+    jesc(ej, sizeof ej, err[0] ? err : "refused"); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
+    respond_sjson(fd, r, 400, o);
+}
+
 static void sound_pack_api(int fd, struct req *r)
 {
     char err[200] = "", o[300], ej[260]; int rc = -1, get = !strcmp(r->method, "GET");
@@ -1162,6 +1198,7 @@ static void handle(int fd)
     else if (!strncmp(r.path, "/api/timer-sound", 16)) timer_sound_api(fd, &r);
     else if (!strncmp(r.path, "/api/sound/", 11)) sound_api(fd, &r);
     else if (!strncmp(r.path, "/api/sound-pack", 15)) sound_pack_api(fd, &r);
+    else if (!strncmp(r.path, "/api/alarms", 11)) alarms_api(fd, &r);
     else if (!strcmp(r.method, "GET") && !strncmp(r.path, "/api/log/", 9)) log_api(fd, &r);
     else respond_json(fd, 404, "{\"error\":\"not found\"}");
     free(r.body);

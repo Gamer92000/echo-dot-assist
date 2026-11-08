@@ -52,6 +52,9 @@ struct proto {
                                                  * the server goes on with what it has (stop() aborts the run) */
     void (*reply_cut)(void);                    /* may be NULL: the reply playing is cut (flush) while the run goes on: stop
                                                  * fetching it now, not at the server's next chunk */
+    void (*alarms_changed)(void);               /* may be NULL: the Echo's alarms (alarms.h) or the next one changed */
+    void (*alarm)(const char *event);           /* may be NULL: an alarm rang, was snoozed, stopped, set... (core_alarm_events) */
+    void (*say)(const char *text);              /* may be NULL: have the server speak this on the Echo (an alarm request's answer) */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
@@ -186,7 +189,19 @@ void   core_timer_cancelled(const char *id);
  * "a timer for 5 minutes"); 0 when none runs */
 void   core_timer_running(const char *id, const char *name, unsigned total, unsigned left, int active);
 int    core_timer_next(char *name, size_t cap, unsigned *total, long long *left_ms);
-void   core_alarm_stop(const char *why);                    /* every ringing timer; why: for the log */
+void   core_alarm_stop(const char *why);                    /* every ringing timer and alarm; why: for the log */
+/* The Echo's own alarms (alarms.h) ring with the timers.  Snooze (lock held): the alarms ringing come back in their
+ * snooze time, timers ringing with them ring on; 0 if no alarm rang */
+int    core_alarm_snooze(const char *why);
+int    core_alarm_ringing(void);                            /* no lock needed: an alarm (not only timers) rings */
+/* their settings (lock held): CORE_ALARM_RING minutes a ring lasts (0 until stopped), _SNOOZE minutes, _RAMP seconds to
+ * full volume, _LOUDER points of volume a minute it gets louder after that (0, the default: never), _KEYS 0 the volume keys snooze / 1 they set the volume, _VOICE answer alarm requests here, _SOUND a
+ * TIMER_SOUND_* (refused without its file).  set INT_MIN (or < 0 for the sound) reads */
+enum { CORE_ALARM_RING, CORE_ALARM_SNOOZE, CORE_ALARM_RAMP, CORE_ALARM_KEYS, CORE_ALARM_VOICE, CORE_ALARM_SOUND, CORE_ALARM_LOUDER };
+int    core_alarm_setting(int which, int set);
+void   core_alarms_changed(void);                           /* any thread, any lock: the alarms' list or their wording changed */
+extern const char *const core_alarm_events[];               /* the "Alarm" event entity's types */
+extern const int core_alarm_nevents;
 int    core_transcript(const char *text);                   /* speech to text's result: 1 if it stopped a ring ("stop",
                                                                or anything with core_timer_stop_any), a Drop In or music
                                                                ("stop"); run cancelled: drop the rest of it */

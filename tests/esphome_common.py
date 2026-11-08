@@ -151,9 +151,9 @@ def assistant(cli):
     return va
 
 
-async def home_assistant(e):
-    """Home Assistant connected in plaintext: entities listed, states and the voice assistant subscribed"""
-    cli = APIClient("127.0.0.1", e.PORT, None)
+async def home_assistant(e, psk=None):
+    """Home Assistant connected in plaintext (psk: with that key): entities listed, states and the voice assistant subscribed"""
+    cli = APIClient("127.0.0.1", e.PORT, None, noise_psk=psk)
     await cli.connect(login=True)
     entities, _ = await cli.list_entities_services()
     states = []; cli.subscribe_states(states.append)
