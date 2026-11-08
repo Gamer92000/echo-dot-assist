@@ -3052,6 +3052,21 @@ Run in this order. Each step says what it proves.
       1280 x 800 at rotation 1 (`user_rotation`; `ro.sf.hwrotation` 90 only MediaTek's hwcomposer and magd read, below
       Android: the band laid out by DisplayInfo was right), FocalTech touch; the layout
       drawn at 1280 x 774 by uishot (docs/re-crown.md "Screen UI").  Not yet on the Echo.
+- [~] Echo Show: speech on screen (2026-11-03, PR #104 by taucher4000).  What was said, the reply and the timers, as
+      stock's Alexa screens and Kiosk Satellite show them.  The PR's first form drew with stb_truetype in hassmic and
+      showed it through a second ringbar.dex in a text mode, one layer over the screen UI's (drawer and music under the
+      shade), whole frames through the pipe (1.8 MB on the Show 5, 20 a second while a ringing timer pulsed, about
+      36 MB/s).  Moved into the screen UI (2026-11-08): `src/ui/words.c` on a fourth layer of the UI process
+      (`hassmic-words`, TRANSLUCENT, between the UI's and the band's, hidden while the drawer is out), the platform's
+      text (Skia, the system font, every script it covers), drawn on a change only (a running timer once a second),
+      fades and the pulse by `SurfaceControl.setAlpha` (on every Show's boot class path, `make unit-screen`); hassmic
+      tells it lines (`wo`, `wh`, `wr`, `ws`, `tl`); the timers are the core's own list.  Seen by the PR on the first
+      cronos (2026-11-03): a strip of 55 % at the bottom with the reply at 15 % of it was small and cut short with the
+      screen black above it -> the whole layer, the reply 14 % of its height down to 7.5 %, as many lines as fit, in
+      the middle; "stop" showed after stop_ends_listening had ended the run -> the transcript goes to the screen only
+      after `core_transcript`, and `stop_word` clears what it ended.  Checked on the PC: `ui_test` (fades, hold, the
+      drawer, timers by the second, the pulse by alpha only, a reply too long, broken UTF-8, under ASan/UBSan),
+      `tests/fake_screen_words.py`, `build/uishot`.  Open: the moved form not yet on an Echo.
 - [~] Echo Show 5 2nd gen (`cronos`, 2026-10-26; `docs/re-cronos.md`).  checkers' platform and its pinned build: Fire OS
       6574.1 NS65741/8149 (same `ro.build.version.incremental`, cronos' own image), kernel 4.9.77 (20 config lines from
       checkers', 74 from crown's), `libpryon.so` byte-identical to checkers', stubs identical in symbols and order,

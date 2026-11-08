@@ -10,6 +10,7 @@
 #include "micend.h"
 #include "micgain.h"
 #include "ring.h"
+#include "screen.h"
 #include "sendspin.h"
 #include "sound.h"
 #include "sounds.h"
@@ -17,7 +18,6 @@
 #include "update.h"
 #include "wifimotion.h"
 #include "statefile.h"
-#include "ring.h"
 #include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
@@ -70,7 +70,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
@@ -126,6 +126,13 @@ static const struct setting table[NSET] = {
     [SCR_AUTO]    = { "screen_brightness_auto", "Adaptive brightness", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
     [SCR_LEVEL]   = { "screen_brightness", "Screen brightness", "Lights", "%", S_INT, 1, 100, 1, 0 },
     [SCR_ADJUST]  = { "screen_brightness_adjust", "Adaptive brightness adjustment", "Lights", NULL, S_INT, -100, 100, 1, 0 },
+    /* screen.c, the UI's words.c: what was said and the reply over the screen.  Off: words people say are shown only
+     * where someone wants them shown */
+    [SCREEN_TEXT] = { "screen_text", "Speech on screen", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* how long the words stay once the Echo is idle again; 0 until the next request */
+    [SCREEN_HOLD] = { "screen_text_seconds", "Speech stays for", "Lights", "s", S_INT, 0, 120, 1, 0 },
+    /* running timers counted down, a ringing one pulsing, on the same layer */
+    [SCREEN_TIMERS] = { "screen_timers", "Timers on screen", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
     [ARB]         = { "arbitration", "Wake word arbitration with other Echos", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* arb.c keeps them in memory, state/config on disk: lockdown.sh admits Kiosk Satellite's port by it */
     [ARB_MODE]    = { "arbitration_mode", "Arbitration mode", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
@@ -209,6 +216,9 @@ static int present(enum id i)
     case BAND: return ring_band_rows(-1) >= 0;
     case KIOSK_NET: case KIOSK_MIC: case KIOSK_CAM: return board.kiosk;
     case SCR_AUTO: case SCR_LEVEL: case SCR_ADJUST: return board.backlight || getenv("HASSMIC_FAKE_BACKLIGHT");   /* tests */
+    case SCREEN_TEXT: return screen_words_on(-1) >= 0;
+    case SCREEN_HOLD: return screen_words_hold(-1) >= 0;
+    case SCREEN_TIMERS: return screen_timers_on(-1) >= 0;
     case RING_ROT: return ring_band_rows(-1) < 0;                 /* LEDs to turn: the Dots' ring, not the band */
     default: return 1;
     }
@@ -324,6 +334,9 @@ int settings_get(const struct setting *s)
     case SCR_AUTO: return backlight_auto;
     case SCR_LEVEL: return backlight_level;
     case SCR_ADJUST: return backlight_adjust;
+    case SCREEN_TEXT: return screen_words_on(-1);
+    case SCREEN_HOLD: return screen_words_hold(-1);
+    case SCREEN_TIMERS: return screen_timers_on(-1);
     default: return 0;
     }
 }
@@ -392,6 +405,9 @@ static void put(enum id i, int v)
     case SCR_AUTO: backlight_auto = v; break;                   /* root's main.sh sees state/config change */
     case SCR_LEVEL: backlight_level = v; break;
     case SCR_ADJUST: backlight_adjust = v; break;
+    case SCREEN_TEXT: screen_words_on(v); break;
+    case SCREEN_HOLD: screen_words_hold(v); break;
+    case SCREEN_TIMERS: screen_timers_on(v); break;
     default: break;
     }
 }

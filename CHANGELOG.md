@@ -2,6 +2,20 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-09
+
+- **Echo Show: what you said and the reply on the screen.** "Speech on screen" (settings page, Screen; off by default)
+  shows your words and the assistant's answer in large letters over whatever the screen shows: the face, the music, or
+  an app such as Kiosk Satellite (not over the pulled-down menu). They fade 8 seconds after the answer ("Speech stays
+  for": any number of seconds, or until the next request). A "stop" the Echo carries out itself (a ringing timer,
+  music, "Stop after the wake word ends listening") is not shown, and takes what was showing away. Experimental.
+  Thanks to taucher4000, who wrote it and tried it on an Echo Show 5 2nd gen.
+- **Echo Show: timers on the screen.** "Timers on screen" (next to it, off by default) counts running timers down in
+  large digits with their unit ("4:59 min", "1:02:05 h", "45 s") and a bar of what is left, and shows a ringing one in
+  orange, pulsing until it is stopped, with a Stop button. The screen stays on while a timer runs.
+- **Echo Show: words and timers by touch.** A tap takes the words away, hides the timers until the next change, and
+  Stop stops a ringing timer, over an app too: while they show, the app gets none of those touches.
+
 ## 2026-11-08
 
 - **Wake word in Home Assistant: answering a question now works.** When the assistant asked something back

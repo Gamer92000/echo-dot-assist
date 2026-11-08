@@ -59,6 +59,8 @@ enum { E_NONE, E_PULSE, E_SPIN, E_BLINK, E_RAINBOW };
 #define MAX_ROWS     40
 #define TIMEOUT_MS   300000             /* stock's screen_off_timeout_standard (Arcus default) */
 #define QUIET_MS     60000              /* stock's _dnd and _privacy */
+#define HOLD_MS      86400000           /* timers on the screen (screen_keep_on): a timer across the room is what the
+                                           screen is for then */
 #define WAKE_EVERY   2000               /* the power calls at most this often (a process each) */
 
 struct rgb { float r, g, b; };
@@ -571,7 +573,7 @@ static void *band_thread(void *arg)
         long long now = now_ms();
         if (now >= next_check) {                    /* stock's screen timeouts by what the Echo is doing (first: also
                                                        while a renderer is awaited) */
-            int t = core_muted() || core_dnd(-1) ? QUIET_MS : TIMEOUT_MS;
+            int t = screen_keep_on() ? HOLD_MS : core_muted() || core_dnd(-1) ? QUIET_MS : TIMEOUT_MS;
             if (t != timeout) { timeout = t; screen_timeout(t); }
             next_check = now + 1000;
         }
