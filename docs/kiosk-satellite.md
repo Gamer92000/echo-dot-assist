@@ -43,7 +43,7 @@ starts again. hassmic gone (its pid with it), or the UI given up: `kiosk_tick` o
 | Permission | Why |
 |---|---|
 | `ACCESS_COARSE_LOCATION`, `ACCESS_FINE_LOCATION`, `READ/WRITE_EXTERNAL_STORAGE` (runtime, `pm grant`) | dashboards that use them, the app's settings and downloads; nobody is there to answer a dialog |
-| `SYSTEM_ALERT_WINDOW`, `WRITE_SETTINGS`, `GET_USAGE_STATS`, `REQUEST_INSTALL_PACKAGES` (app ops, `appops set ... allow`) | overlays, screen brightness and timeout (`alexa-off.sh` leaves the brightness level to it while it is installed, the manual mode set), the foreground check, installing its own updates |
+| `SYSTEM_ALERT_WINDOW`, `WRITE_SETTINGS`, `GET_USAGE_STATS`, `REQUEST_INSTALL_PACKAGES` (app ops, `appops set ... allow`) | overlays, screen brightness and timeout (its own adaptive brightness is switched off by root's `main.sh` `kiosk_brightness`: the Echo's brightness settings set the screen, issue #126), the foreground check, installing its own updates |
 | `dumpsys deviceidle whitelist +<pkg>`, `dpm set-active-admin <pkg>/.KioskAdminReceiver` | no doze for the dashboard and its ESPHome server; the device admin is what lets it turn the screen off (force-lock: the only policy `dumpsys device_policy` lists on 2026.10.45, checkers; a later version could ask for more) |
 | **`RECORD_AUDIO` denied** (`pm revoke` + `appops set ... deny`) unless the setting `kiosk_mic` is on (below) | hassmic owns the microphone and the wake word; the app would hear the wake sound and replies, and its own voice assistant is off |
 | **`CAMERA` denied** the same way unless the setting `kiosk_camera` is on | a camera is not something to hand out because a dashboard might want it |

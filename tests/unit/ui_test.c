@@ -738,8 +738,6 @@ int main(int argc, char **argv)
     #define FRESH() do { scene_free(S); nsent = nlaunched = 0; queue_total = 8; fail_lists = no_totals = 0; queue_gone = -1; hold_answers = 0; \
                          S = scene_new(W, H, BAND, &plat, NULL, now); scene_top(S, UI_HOME_PKG, now); \
                          msg("name Echo"); msg("home -"); run(300); } while (0)
-    /* a light sensor's word that is no number: no nan in the face's brightness (frames for ever, colours undefined) */
-    FRESH(); msg("lux nan"); run(500); assert(isfinite(S->lux) && isfinite(S->face.br.v));
     /* pulled over an app that keeps the front (our home never comes), the finger held on: one pull, not one every 3 s */
     FRESH(); msg("home org.example.app"); run(100); scene_top(S, "org.example.app", now); run(5000);
     { int sh = shots_asked; scene_touch(S, TOUCH_DOWN, W / 2, -8, now);

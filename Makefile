@@ -240,7 +240,7 @@ host: build/hassmic-host build/hassmic-host-screen $(OUT)/hassmic-qemu build/ota
 UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/third_party/monocypher.c
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
-	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk \
+	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk backlight \
 	screen ui touch json uninstall_boot resample fork_release
 unit: $(addprefix unit-,$(UNIT_TESTS))
 unit-hash:
@@ -307,6 +307,8 @@ unit-web_crypto:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_crypto_test.py; elif [ -n "$$CI" ]; then echo "web crypto: node missing"; exit 1; else echo "web crypto: node missing, skipped"; fi
 unit-kiosk:
 	.venv/bin/python tests/unit/kiosk_test.py
+unit-backlight:
+	.venv/bin/python tests/unit/backlight_test.py
 unit-web_soundpack:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_soundpack_test.py; else echo "web sound pack: node missing, skipped"; fi
 
@@ -341,6 +343,9 @@ unit-buttons:
 unit-buttons_privacy:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/buttons_privacy_test.c src/hassmic/buttons.c -lpthread -o build/buttons_privacy_test && build/buttons_privacy_test build/buttons_privacy.fifo
+unit-buttons_grab:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/buttons_grab_test.c src/hassmic/buttons.c -Wl,--wrap=ioctl -lpthread -o build/buttons_grab_test && build/buttons_grab_test build/buttons_grab.fifo && build/buttons_grab_test build/buttons_grab.fifo nokey
 unit-afe_parcel:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/afe_parcel_test.c src/hassmic/afe_parcel.c -o build/afe_parcel_test && build/afe_parcel_test

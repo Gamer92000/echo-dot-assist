@@ -77,13 +77,17 @@ adbd() {
 # debugfs exits 0 whatever happens and rdump does not create its target (issue #4): the result is checked by hand.
 rootfs() {
     [ -e $FW/rootfs/system/bin/linker ] && return 0
-    system_img || return 1
+    system_img && need_space 2500 "Unpacking the firmware" || return 1
     task "Unpacking the firmware" sh -c "mkdir -p $FW/rootfs/system &&
         debugfs -R 'rdump / $FW/rootfs/system' $FW/images/system.img && [ -e $FW/rootfs/system/bin/linker ]"
 }
 # The system partition's image, from the firmware's block OTA (system.new.dat), checked against SYSTEM_IMG_SHA256
 system_img() {
-    [ -f $FW/images/system.img ] || task "Unpacking the system image" sh -c "unzip -o -q $FW/$FIRMWARE_FILE system.new.dat system.transfer.list -d $FW &&
+    [ -f $FW/images/system.img ] && return 0
+    # system.new.dat (2.57-2.64 GB in checkers', crown's and cronos' .bin) and the image made from it (2.4 GB of
+    # data) side by side, until the first goes
+    need_space 5500 "Unpacking the system image" || return 1
+    task "Unpacking the system image" sh -c "unzip -o -q $FW/$FIRMWARE_FILE system.new.dat system.transfer.list -d $FW &&
         mkdir -p $FW/images && python3 tools/sdat2img.py $FW/system.transfer.list $FW/system.new.dat $FW/images/system.img &&
         rm -f $FW/system.new.dat $FW/system.transfer.list" || return 1
 }
@@ -91,11 +95,11 @@ system_img() {
 step_tools() {
     command -v curl > /dev/null || need_tools curl || return 1
     build_mode
+    space_ahead 7000 2500                 # the .bin, system.new.dat and the image; then the rootfs
     local unlock="fastboot python3"
     rooted_already && unlock=python3
     if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip debugfs sqlite3 curl sha256sum || return 1; return 0; fi
     need_tools adb $unlock unzip make cc debugfs sqlite3 curl sha256sum bc xz || return 1
-    [ "$(df -Pk . | awk 'NR == 2 { print $4 }')" -gt 5000000 ] || warn "less than 5 GB free here; the NDK and firmware need about that"
 }
 
 step_files() {
@@ -113,6 +117,7 @@ step_files() {
     [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
     if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
         mkdir -p toolchain
+        need_space $NDK_MB "The Android NDK" || return 1
         TASK_NOTE="du -h toolchain/ndk.zip | cut -f1" task "Downloading Android NDK r21e (1 GB)" curl -fsSL -o toolchain/ndk.zip $NDK_URL &&
             task "Unpacking the NDK" unzip -q -o toolchain/ndk.zip -d toolchain && rm -f toolchain/ndk.zip || return 1
     fi
@@ -148,7 +153,7 @@ step_unlock() {
         twrp_screen; wait_adb recovery; return
     fi
     [ -x $FW/amonet/fastbrick.sh ] || task "Unpacking amonet" unzip -q -o $FW/$AMONET -d $FW || return 1
-    tell "On the Echo, hold all three buttons (both volume keys and the camera shutter)" \
+    tell "On the Echo, hold all three buttons: Volume down, Volume up and Mute (the microphone button)" \
         "Keep them held until its screen says \"=> FASTBOOT mode...\", then let go" \
         "Plug the micro-USB cable into the Echo." \
         "" \
@@ -181,7 +186,7 @@ step_unlock() {
         fi
     fi
     # in the foreground: it asks to type YES, and for a key press at the end
-    local mark; mark=$(stat -c %s "$LOG" 2>/dev/null || echo 0)
+    local mark usb0; mark=$(stat -c %s "$LOG" 2>/dev/null || echo 0); usb0=$(amazon_usb)
     live "Unlocking with amonet's fastbrick" in_dir $FW/amonet env PYTHONUNBUFFERED=1 \
         bash -o pipefail -c "./fastbrick.sh 2>&1 | tee -a '$LOG'" || return 1
     # fastbrick.sh exits 0 when its prompt gets anything but YES ("Aborting.", nothing sent), as it does for an Echo
@@ -192,7 +197,8 @@ step_unlock() {
         return 1
     fi
     twrp_screen
-    wait_adb recovery || { fail "no TWRP on adb; $DDIR/README.md, step by step, then try again"; return 1; }
+    # gives up when the Echo came back in Fire OS instead (issue #132)
+    show_wait_twrp "$usb0" || { [ -n "$WAIT_ABORT" ] || fail "no TWRP on adb; $DDIR/README.md, step by step, then try again"; return 1; }
     warn "Leave the Echo in TWRP for now: stock Fire OS has no adb."
 }
 

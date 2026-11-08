@@ -33,7 +33,7 @@
  *   p+ <pattern> <ms>, p- <pattern>    the core's patterns as the light ring has them (main.c led()), on (that long
  *                                  ago: to a new UI, what is on; the timed ones end by themselves) and off
  *   lv <0..100>                    the talker's (listening) or the reply's (speaking) level
- *   mute <0|1>, dnd <0|1>, oobe <0|1>, lux <lux>, name <text>, tz <POSIX TZ>, act <text>
+ *   mute <0|1>, dnd <0|1>, oobe <0|1>, name <text>, tz <POSIX TZ>, act <text>
  *   h12 <0|1>                      (the platform's: android.c from the locale)
  *   ev <0..100>                    the Echo's volume, whenever it changes (the drawer's slider; the band shows the keys')
  *   timers <names>                 ringing timers ("" none);  peer <name>: the other side of a Drop In

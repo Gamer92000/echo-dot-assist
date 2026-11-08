@@ -2565,6 +2565,26 @@ Run in this order. Each step says what it proves.
       namespaces it asks for the sysctl qrun.sh names (`qrun.sh --userns`: AppArmor's, or Debian's
       unprivileged_userns_clone).  qrun.sh no longer runs without the namespace (the PR's low-PID snapshot: Ubuntu's
       pid_max is 4194304) but says why; install-boot.sh shows it.  Not tried: any of it on a device, the setup on a Pi.
+- [~] Echo Show audio from #45 (2026-11-07, GitHub issue #75).  The cold output's lead-in is a board field,
+      `board.cold_lead_ms` (0: 350 ms, not measured; -1: none), in place of `audio_android.c`'s `LEAD_MS`, not the
+      `state/lead_ms` file #34 tried.  `tools/cold-lead.py` measures it: slplay plays silence of the lead-in, a 500 ms
+      1 kHz tone, 300 ms of silence and the same tone after 4-30 s without audio, a PC microphone records it, and the
+      first tone (cold) is held to the second (warm): length within 10 dB of its level in the tone's band (a biquad at
+      1 kHz), 2 ms blocks; a B not ~490 ms long is a noise in the room, not counted.  The rise to -3 dB is shown only:
+      the room's noise moved it 14 -> 26 ms on both tones.
+      The Echo's own microphones cannot (no micRaw on the Shows, the processed stream cancels the playback), and the
+      tone against its own copy needs no shared clock.  A cut of 100 ms put into a recording reads as 92 ms lost.
+      checkers (2026-11-07, a Lewitt mic ~1 m away, 50 dB over the room, AudioFlinger in standby before each play):
+      no lead-in, waits 4, 8, 10, 15, 30, 30 s: A 488 ms like B, -3 dB at 12-14 ms like B, lost 0; 350 ms the same; in
+      the band, a noisier room: 5, 10, 20 s, lost 0, 2, 0 ms
+      -> `cold_lead_ms = -1`: the wake blip 350 ms sooner after a pause.  earsup without the lead-in: the open's time
+      is now in the echo delay it searches (up to `D_MAX` 400 ms); checkers' logcat: createTrack 2979.140, openPcmDriver
+      .145-.191, first write .196: +56 ms, the echo ~140 ms after `audio_earcon_started`.  Open: crown (where the blip was not heard),
+      athena (#34: 200 ms by ear sounded whole; its HAL pulls the first buffer ~575 ms after a cold open), cronos,
+      cupcake (a line out, no amplifier) keep 350 until measured; not tried with hassmic's own player on the device
+      (slplay is the same OpenSL ES music stream).  The wake sound of our own (#33's 0.5 s chime where the firmware
+      has none): dropped.  The Sounds card plays any upload as the wake sound on every model since 2026-11-02 (#87),
+      and a built-in chime would only change the default on the Show 8 1st gen, at 0.4 s more over the request's start.
 - [x] Setup on Windows, what it found (2026-10-19, GitHub issue #49: a Dot 2 through `step_*` one at a time from
       Git Bash).  (1) The first `lockdown.sh` over adb after a boot ended with exit 255 and nothing loaded: stock sets
       `service.adb.tcp.port` 5555 at boot, `adb_gate` closed it and restarted adbd at once, which ended the adb shell
@@ -3010,7 +3030,7 @@ Run in this order. Each step says what it proves.
       by itself 20-80 s later (12 s 0, 16 s 2, 17 s 1, released 36 s in one boot, 50 s and 83 s in two): hassmic up
       at 40-64 s caught it and played "mics off" -> `mute_latch(1, 0)` shows it quietly.  No wake sound was heard: the
       output's open takes ~170 ms plus the amplifier (logcat, AudioALSAPlaybackHandlerNormal), the blip is 120 ms ->
-      `audio_android.c` lead-in of 350 ms after 2.5 s without audio (`COLD_MS`, `LEAD_MS`); the blip after it to be
+      `audio_android.c` lead-in of 350 ms after 2.5 s without audio (`COLD_MS`, now `board.cold_lead_ms`); the blip after it to be
       confirmed by ear (a longer sound of our own was heard after it, 2026-10-15).  2026-10-17: the lead-in
       reached earsup as part of the echo delay (85 ms + 350 > `D_MAX` 400 ms): `audio_earcon_started(lead_ms)` moves its
       start past it.
@@ -3077,7 +3097,7 @@ Run in this order. Each step says what it proves.
       volume: 115, 120 and 122 clean on a radio stream, 130 distorted, a rap track's bass clipped at 122, so
       `speaker_gain_limit` 118 and `speaker_gain_steps` 2 (0.5 dB assumed) = up to +9 dB.  The audio HAL did not rewrite it
       after a voice reply or at a change of the setting.  Sounds: a cold output = ~575 ms until the HAL pulls the first
-      buffer (the amplifier unmuting) + `LEAD_MS` (350, as crown).
+      buffer (the amplifier unmuting) + the lead-in (`board.cold_lead_ms`: 350, as crown).
       Mute button: `gpio-privacy` reports the latch 1.23/1.29 s after a press that mutes, 0.28 s unmuting
       (`enable-gpio-toggle-duration` 1000 ms); `board.privacy_button` (`gpio-privacy-button`, not grabbed) shows the press at
       once, the latch confirms it within `privacy_settle_ms` (2000) or it is taken back (`buttons_privacy_test`).
@@ -3287,7 +3307,7 @@ Run in this order. Each step says what it proves.
       sensor while the mode is manual (120 to 155 at 20 to 45 lux within seconds), or a level of its own with that
       off; ours at each satellite start only fought it, so `alexa-off.sh` leaves the level alone while the app's
       folder is in `/data/app` (the mode stays manual: its adaptive brightness runs under it).  Open: 120 by eye in
-      daylight (33/255; stock ran at 238).
+      daylight (33/255; stock ran at 238).  Since issue #126 a setting (below).
       Boot time (2026-11-02, Show 5, PR #114): `alexa-off.sh` took 16 s of a 41 s boot at a start with nothing left to
       do, all of it Java: `pm list packages -d` and `pm list packages` ~2 s each, a `settings get` ~2 s per
       `ANDROID_SETTINGS` entry, `wpa_cli p2p_group_remove` 7 s with no group up.  Now the package manager's and
@@ -3295,3 +3315,54 @@ Run in this order. Each step says what it proves.
       in place, and "android" is at line 1381 of 3339 with Alexa's `/data/app` updates after it), `wpa_cli` only when
       `/sys/class/net/p2p-p2p0-0` exists; anything not shown done goes to pm/settings as before.  `pm_done` checked
       against fake files (whole, cut off, enabled, no restriction entry, component not noted, state 4).
+- [x] Echo Shows: a key held while hassmic starts was repeated by Android for good (issue #140, 2026-11-07, malammar's
+      Echo Show 5: volume down held during boot, the volume went to 0 and every attempt to raise it was undone at once,
+      until hassmic restarted).  `board.grab_keys` took EVIOCGRAB at once: Android had read the key-down, the key-up
+      reached hassmic alone, and InputDispatcher repeats the key it thinks held every 50 ms.  The kernel sends no
+      key-ups to the other readers on a grab, and none can be given to Android afterwards (a uinput key-up would be
+      another device's), so the grab waits for every key to be up (`EVIOCGKEY`), in each reader's thread (startup goes
+      on; keypad and privacy device each), with no time limit: a limit only brings the endless repeat back for a key held
+      longer, and until the grab the keys are Android's as on stock.  Events read before the grab are dropped (Android
+      had them).  Looked at again right after the grab: a key that went down between look and grab reached Android
+      too, so the grab is let go until it is up.  `tests/unit/buttons_grab_test.c` (EVIOCGKEY/EVIOCGRAB faked per
+      FIFO with `--wrap=ioctl`: keypad and privacy device, the race, a device without EVIOCGKEY grabbed at once; on the
+      old code 6 of its 7 checks fail).  The log says how long the grab waited, so a stuck key shows there.  On the
+      Echo Show 5 (checkers, 2026-11-07): holding a key through boot cannot test it, since MediaTek's kernel
+      long-press reset (`long_press_restart`, PMIC LPRST; `reboot: Restarting system with command 'enter_kpoc'`, boot
+      reason `wdt`) restarts the Show at ~17 s of a held key, before hassmic starts (~27 s).  Instead hassmic stopped,
+      volume down held by `sendevent` on gpio-keys (event6; the PMIC never sees it), hassmic started: Android drove the
+      speaker index 12 -> 0, the log said "key 114 is down", the key let go 3.5 s later "grabbed after 3533 ms";
+      the index set back to 12 stayed there (no repeat).  Muted (`amazon-gating/state` 1),
+      hassmic restarted: `gating` grabbed at once, so the gating driver does not hold KEY_POWER down while muted.
+- [~] Echo Shows' screen brightness as stock's (issue #126, 2026-11-07, MWolf1911's cronos: hourly medians of
+      `als_ps/lux` 1-19 lux over a day, median 3, never 30; the face's own dimming, 0.35 at 0 lux to 1 from 30 lux, at
+      48-61 % mornings and evenings, on a backlight at 33/255).  Stock has no brightness code of its own: KnightSettings'
+      "Adaptive brightness" writes `screen_brightness_mode`, its slider `screen_brightness`, or with adaptive on
+      `screen_auto_brightness_adj` (strings in its dex, as SystemUI's BrightnessController); Android's
+      AutomaticBrightnessController does the rest on framework-res's curve (cronos, checkers alike from 25 lux;
+      `config_autoBrightnessLevels` 1..20, 25, 30, 40 .. 650 lux, `config_autoBrightnessLcdBacklightValues` cronos 4 4
+      4 4 4 5 6 7 8 11 13 17 20 24 30 35 42 48 55 63 74 117 155 184 204 216 222 226 230 ... 250, checkers 1 1 1 1 1 2
+      3 ... 63 93 117 ...; `config_autoBrightnessAdjustmentMaxGamma` 7.0, so +1 makes setting 4 = 141 by Android 7's (v/255)^(7^-adj), what
+      manual 55 % gives (computed, not measured); debounce 4 s
+      up, 5 s down).  The reporter's 1-3 lux would get setting 4 on stock too: darker than our 120, hence manual stays
+      the default.  Now: settings `screen_brightness_auto` (off), `screen_brightness` (47 % = 120),
+      `screen_brightness_adjust` (-100..100 = -1..1), `board.backlight` and device.conf `BACKLIGHT` on the four Shows
+      (`backlight_test.py` holds them to each other and to `SCREEN`), HA's "Adaptive brightness", "Screen brightness",
+      "Adaptive brightness adjustment" (config); root's `main.sh backlight` reads `state/config` every 2 s and sets
+      Android's settings (only what differs: SettingsProvider's XML first; stock's values into `alexa-settings` for
+      `alexa-on.sh`; values not a short whole number taken as the default); `ANDROID_SETTINGS` no longer has the
+      brightness.  Kiosk Satellite (checkers, 2026-11-07, this build pushed): its adaptive brightness
+      (`flutter.ks.screen.adaptive_brightness`, true) set `screen_brightness_mode` back to 0 three seconds after root set
+      1 (SettingsProvider's file names the writer: `package="me.jxl.kiosk_satellite"`) and kept writing the level (107 to
+      137 at 43 lux).  So root switches it off: `main.sh kiosk_brightness`, each kiosk tick a grep as the app's user
+      (runas `u0_a154`: the file and its folder are the app's, a link or FIFO there reaches nothing more), when on or
+      missing `am force-stop`, the key written in place (label kept), the app opened again as ever.  By hand first: the
+      app came back with it off and wrote no level in a minute (its `default_brightness` 0.9 never), adaptive then held
+      (mode 1 for 46 s, `dumpsys display` mAmbientLux 44 -> mScreenAutoBrightness 193 = lcd-backlight 193, the spline as
+      framework-res).  With that, no exception for the app in `backlight`; anything else that changes the brightness is
+      set back three times at most until the setting changes (never a fight).  Lights off with adaptive on (checkers, 19:41): lux 44 -> 3,
+      `mScreenAutoBrightness` 4 then 1, lcd-backlight 203 held 5 s (darkening debounce) then down ~10 a second (62 after
+      14 s): Android's own ramp, as stock.  The face's `night()` is gone, and with it the `lux` line to the UI.  Tests: `tests/unit/backlight_test.py`
+      (the block in `sh` with a stand-in `settings`), `fake_ha_esphome_timers.py` (`HASSMIC_FAKE_BACKLIGHT`: entities,
+      commands, page), `fake_ha_esphome.py` (none on a Dot).  **Open:** Android 9's (athena, crown) curve not read, nor
+      tried there; the adjustment's effect on the backlight not measured; Kiosk Satellite's switch on cronos/crown/athena.

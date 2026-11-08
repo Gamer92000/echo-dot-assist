@@ -38,6 +38,7 @@ const struct board board = {
     .project = "hassmic.echo-show-8-2nd-gen",
     .product = "Echo Show 8 2nd gen (hassmic)",
     .kiosk = 1,
+    .backlight = 1,
     .default_name = "Echo Show 8 2nd gen",                          /* + MAC; slug = the project's model */
     .codename = "athena",
 

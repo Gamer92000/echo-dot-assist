@@ -56,17 +56,12 @@ fi
 # (checkers after a wipe: both 0, Amazon's com.amazon.ds2.oobe.efd in front, 2026-10-13).  What they were is written
 # down (SETTINGS, "namespace key value"): alexa-on.sh puts it back, and the wizard with it.
 # The same way, ANDROID_SETTINGS of device.conf ("namespace/key=value" each): Android's own settings for a satellite.
-# The brightness level is left to Kiosk Satellite while it is installed: it writes it itself (WRITE_SETTINGS, main.sh
-# kiosk_grants), from the light sensor by default (120 to 155 at 20 to 45 lux within seconds, checkers 2026-11-04) or
-# at a level of its own, and ours would only fight it at each start.  The manual mode stays: its adaptive brightness
-# runs under it.  The app's folder, as kiosk_tick looks: pm is a whole runtime.
+# The brightness is the user's setting, not one of these: main.sh backlight.
 SETTINGS=/data/local/hassmic/alexa-settings
 if command -v settings > /dev/null; then
     want=; [ -n "$(echo $SETUP_PACKAGES)" ] && want="global/device_provisioned=1 secure/user_setup_complete=1"
-    kiosk=; [ -n "$KIOSK_PACKAGE" ] && [ -n "$(ls -d /data/app/$KIOSK_PACKAGE-* 2>/dev/null)" ] && kiosk=1
     for t in $want $ANDROID_SETTINGS; do
         ns=${t%%/*} kv=${t#*/}; k=${kv%%=*} val=${kv#*=}
-        [ -n "$kiosk" ] && [ "$ns/$k" = system/screen_brightness ] && continue
         # SettingsProvider's own file first (plain XML up to Android 11; it writes within 200 ms of a change): already
         # the value, no Java call (~2 s each, checkers).  Anything else asks settings as before
         grep -qF "name=\"$k\" value=\"$val\"" /data/system/users/0/settings_$ns.xml 2>/dev/null && continue

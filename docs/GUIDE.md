@@ -439,8 +439,10 @@ Beyond the README's two figures:
   The volume of voice replies shows in cyan, as on the Dots. The screen wakes for the band and sleeps 5 minutes after the last light (1 minute with
   the microphones off or in Do not disturb).
 - **Microphone off** plays Alexa's own sounds. A switch that is already off when hassmic starts is shown, not announced.
-- **Wake sound**: Alexa's own where the firmware has it; the Echo Show 8 1st gen has none and plays hassmic's short blip. On the
-  Echo Show a sound after a pause starts 0.35 s late: the speaker takes that long to switch on and swallowed the start.
+- **Wake sound**: Alexa's own where the firmware has it; the Echo Show 8 1st gen has none and plays hassmic's short blip
+  (or one of your own: "Your own sounds", below). On the Echo Show 8 (1st and 2nd gen), the Show 5 2nd gen and the Echo Input a sound
+  after a pause starts 0.35 s late: the speaker takes that long to switch on and swallowed the start. The Echo Show 5
+  1st gen loses nothing and plays it at once.
 - **Your own sounds**: the settings page's "Sounds" card (Voice) replaces any of the Echo's sounds with one of yours:
   the wake sound, the action button, microphone off and on, the volume keys, Bluetooth connected and disconnected,
   Identify, and Drop In's chimes and ringtones (the timer's sound is "Timer sound", above). "Upload…" takes any file
@@ -476,8 +478,8 @@ satellite of its own has to run without its microphone (as a display) while hass
   disturb, orange with a **Stop** button while a timer rings, green during a Drop In (**Answer** and **Decline** when
   one rings, **End** during a call), orange while the Echo waits to be added to Home Assistant. Tap the eyes and they
   smile. Below them: the clock, in Home Assistant's time zone (12-hour where the Echo's language is US, Canadian or
-  Australian English), or what Music Assistant plays, with play/pause; tap it for the music. The face dims in a dark
-  room. A request to the assistant, a ringing timer or a Drop In bring the face back from the music.
+  Australian English), or what Music Assistant plays, with play/pause; tap it for the music. A request to the
+  assistant, a ringing timer or a Drop In bring the face back from the music.
 - **The drawer**: pull down from the top edge of the screen, whatever shows, as on Amazon's own Echo Show. In it:
   **Home** (the home app), **Face** (where the home app is another), **Music**, **Do not disturb**, **Screen off** (a
   touch wakes it), what plays (tap it for the music) and the Echo's volume. Over an app, start the pull on the thin
@@ -487,6 +489,13 @@ satellite of its own has to run without its microphone (as a display) while hass
   ends or crashes (three times a minute at most), but not while you have the face or the music open: Kiosk Satellite
   until you pick another (if it is installed), the face, or any app you installed. A new choice applies at once.
 - **Back**: over an app, swipe along the bottom edge (the light band), left or right.
+- **Brightness**: the settings page's **Screen** page and Home Assistant set it as a stock Echo Show's Display
+  settings do. **Screen brightness** holds one level, 47 % by default (what the Echo ran at before). **Adaptive
+  brightness** follows the room's light on Amazon's own curve, which is dark: under about 5 lux the screen is barely lit,
+  and it is near full brightness only from about 100 lux. **Adaptive brightness adjustment** moves that curve brighter (up
+  to +100) or dimmer (down to −100), as the stock slider does with adaptive on. With Kiosk Satellite installed, the Echo
+  switches off the app's own adaptive brightness (stopping the app for a moment), so these settings set the screen; switched
+  on again in the app, it goes off again within seconds.
 
 ### Music Assistant on the screen
 
@@ -631,6 +640,7 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 | Wake sound | the wake sound only, on or off; off keeps the one you chose |
 | Equalizer | bass, mid, treble, −6 to +6 dB, Amazon's own, on everything the Echo plays |
 | LED auto brightness, LED brightness | a level holds the ring there and switches the automatic off (Echo Show 5: the band's brightness, no automatic) |
+| Adaptive brightness, Screen brightness, Adaptive brightness adjustment | Echo Show: the screen's backlight, see [The screen](#the-screen-echo-show) |
 | Timer ringing, Ringing timers | on while a finished timer rings; their names (diagnostic), see [Voice](#voice) |
 | Stop ringing | button: ends a ringing timer and nothing else |
 | Next timer, Next timer name, Next timer length | the running timer that ends first: when (timestamp), its name, the length it was set for (s); unknown while none runs, see [Voice](#voice) |
@@ -699,6 +709,8 @@ network. Then:
 - It gets storage, location, overlay, settings, usage stats and device admin without asking, since nobody is there to
   answer. Its web page (port 2324) and its Home Assistant API (port 6053) are reachable from private addresses.
   Its updates install by themselves.
+- Its own adaptive brightness is switched off: the Echo's brightness settings set the screen
+  ([The screen](#the-screen-echo-show)).
 - Three rows appear on the settings page under System, once the app is installed:
   - **Internet access** (on): only that app gets out, for its updates and outside pages. Off: your network only.
   - **Microphone** (off): for a plugin that talks, such as a doorbell. In the plugin pick "Voice communication": "Automatic"
