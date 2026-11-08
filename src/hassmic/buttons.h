@@ -14,9 +14,13 @@ struct button_handler {
      * before that (hold 0); never while both volume keys are down (pair).  The short press of the action button is
      * action() above, which tells it on itself: a press that approves a login is not a press for Home Assistant */
     void (*event)(int key, int hold);
+    /* may be NULL: the action button pressed 2 or 3 times (n), each press short and the next within MULTI_MS of the last,
+     * while buttons_multi_press() is on; a single press is action() then, MULTI_MS late */
+    void (*multi)(int n);
 };
 
 /* Starts a reader thread.  Returns -1 if the input device cannot be opened (PC build: always). */
 int  buttons_start(const char *device, const struct button_handler *h);
+int  buttons_multi_press(int set);      /* -1 reads; 1 counts double and triple presses of the action button (setting multi_press) */
 int  buttons_muted(void);               /* current privacy state, 0 if unknown */
 #endif

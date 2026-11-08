@@ -46,6 +46,7 @@
 #include "btout.h"
 #include "core.h"
 #include "hash.h"
+#include "settings.h"
 #include "netio.h"
 #include "noise.h"
 #include "resample.h"
@@ -298,7 +299,7 @@ static void *player_thread(void *arg)
         }
         n = rs_run(&rs, (const int16_t *)pcm, frames, step, out);
         if (atomic_load(&player_muted)) memset(out, 0, n * FRAME);
-        else music_duck(out, n, RATE, &duck_g, core_state() != IDLE ? DUCK : 1);          /* under the voice assistant */
+        else music_duck(out, n, RATE, &duck_g, core_state() != IDLE ? settings_duck_gain() : 1);          /* under the voice assistant */
         music_write(out, n * FRAME);
         rate_sum += step - 1; rate_n++;
         if (raw_us() - stat_t > 10000000) {
@@ -1242,6 +1243,19 @@ int sendspin_button(void)
     }
     pthread_mutex_unlock(&adm_lock);
     if (used) fprintf(stderr, "sendspin: button -> %s\n", paused_by_button_at ? "pause" : "play");
+    return used;
+}
+
+/* the action button pressed twice or three times: next / previous track of what plays */
+int sendspin_skip(int dir)
+{
+    int used = 0;
+    pthread_mutex_lock(&adm_lock);
+    struct session *s = admitted;
+    if (s && s->activated && s->controller_active && s->group_playing && atomic_load(&stream_on) && strstr(s->ctl_commands, dir > 0 ? "\"next\"" : "\"previous\""))
+        used = send_json(s, "{\"type\":\"client/command\",\"payload\":{\"controller\":{\"command\":\"%s\"}}}", dir > 0 ? "next" : "previous") == 0;
+    pthread_mutex_unlock(&adm_lock);
+    if (used) fprintf(stderr, "sendspin: button -> %s\n", dir > 0 ? "next" : "previous");
     return used;
 }
 

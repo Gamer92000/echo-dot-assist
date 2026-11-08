@@ -2526,6 +2526,19 @@ static void on_action(void)
     atomic_store(&trigger_pending, 2);                  /* 2: touch */
 }
 
+/* Action button pressed twice (next) or three times (previous), setting multi_press: skips on what plays (a phone over
+ * Bluetooth first, then Sendspin, as the single press pauses); with nothing to skip, or the assistant busy, it is a
+ * single press, as without the setting.  Home Assistant's "Button" event hears the single press only */
+static void on_multi(int n)
+{
+    int dir = n == 2 ? 1 : -1;
+    pthread_mutex_lock(&core_lock);
+    int busy = state == LISTENING || state == THINKING;
+    pthread_mutex_unlock(&core_lock);
+    if (!busy && !(dropin_running() && atomic_load(&dropin_live)) && (a2dp_skip(dir) || (core_sendspin_port && sendspin_skip(dir)))) return;
+    on_action();
+}
+
 /* Action button held: at 5 s the ring warns, at 10 s everything is forgotten (core_reset).  acebuttond still sees the
  * button: its 5 s hold starts Amazon's setup, whose services are stopped (nothing happens, checked: PLAN.md), and its
  * 21 s hold is Amazon's factory reset, which the reset here comes long before. */
@@ -3411,7 +3424,7 @@ int main(int argc, char **argv)
     pthread_create(&ear_t, NULL, earcon_thread, NULL);
     { pthread_t vol_t; pthread_create(&vol_t, NULL, volume_led_thread, NULL); pthread_detach(vol_t); }
 
-    static const struct button_handler buttons = { on_action, on_mute, on_volume, on_pair, on_hold, button_event };
+    static const struct button_handler buttons = { on_action, on_mute, on_volume, on_pair, on_hold, button_event, on_multi };
     if (buttons_start(input, &buttons) < 0) fprintf(stderr, "buttons: %s not available\n", input);
     /* The latch is no press at start: on the Echo Show 8 it comes up on (the mics are cut, stock's system server plays
      * its privacy sound) and it lets go by itself 20-80 s after power on (nothing in userspace writes it).  hassmic,

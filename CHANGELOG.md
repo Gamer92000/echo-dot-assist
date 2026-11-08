@@ -100,6 +100,16 @@ What changed for people using the Echo, newest first. Details and measurements a
   added, is cancelled or rings, so a dashboard, another speaker or a display elsewhere in the house can count it down
   ([Voice](docs/GUIDE.md#voice)). Paused timers are left out; with none running they are unknown.
 
+- **Double and triple press of the action button skip tracks.** New setting "Double and triple press of the action button"
+  (Voice page, `multi_press`, off by default): twice is next, three times previous, for Music Assistant and for a phone
+  over Bluetooth (AVRCP). With nothing playing it is a single press. While it is on, a single press waits 450 ms to see
+  whether more follow. Home Assistant's "Button" event fires for single presses only.
+
+- **Music ducking has a depth you can set.** While the assistant listens, thinks or speaks, music from Music Assistant
+  and from a phone over Bluetooth was always turned down by the same 15.6 dB (to a sixth), which over loud music or an
+  audiobook can leave too little of your voice for speech-to-text. The setting "Music ducking" (Sound page, `music_duck`,
+  0 to 60 dB, default 16 dB: as before) sets how far; 0 turns ducking off.
+
 ## 2026-11-03
 
 - **Uninstalling from an Echo Show no longer leaves "OOBE has stopped" on the screen.** The install takes Amazon's apps
