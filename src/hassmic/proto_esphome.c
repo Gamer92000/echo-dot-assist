@@ -147,6 +147,8 @@ static __thread int reply_fd = -1;      /* the client whose request this thread 
 static int cancelled;                   /* lock held: the user cancelled the run; its events are dropped.  2: a new run
                                          * was asked for, whose RUN_START ends that (TCP keeps the order) */
 static int tts_expected;                /* lock held: the reply is being fetched or played; RUN_END must not end the pipeline */
+static int stt_run;                     /* lock held: the run asked for starts at STT (local wake word, a follow-up): the
+                                         * request begins at its RUN_START, not at a WAKE_WORD_END it never gets */
 static char tts_url[1024];              /* lock held: reply URL of the running pipeline (known from RUN_START with streaming TTS) */
 static int announcing, media_playing;   /* lock held */
 static void announce_done(void);
@@ -1302,7 +1304,8 @@ static void start(void)
     PB(b, 96);
     tts_expected = 0; tts_url[0] = 0; if (cancelled) cancelled = 2;
     pb_uint(&b, 1, 1);                                  /* start */
-    pb_uint(&b, 3, (core_local_wake || core_follow_up()) ? 1 : 3);   /* flags: USE_VAD, plus USE_WAKE_WORD when detection is remote (not for a follow-up) */
+    stt_run = core_local_wake || core_follow_up();
+    pb_uint(&b, 3, stt_run ? 1 : 3);                    /* flags: USE_VAD, plus USE_WAKE_WORD when detection is remote (not for a follow-up) */
     /* audio settings: neutral.  Home Assistant ignores them today; the gain is applied here (micgain.h), and absent they
      * would read as volume multiplier 0 should it ever start using them */
     { PB(as, 8); pb_float(&as, 3, 1.0f); pb_varint(&b, 4 << 3 | 2); pb_varint(&b, as.n); pb_raw(&b, as.p, as.n); }
@@ -1392,8 +1395,9 @@ static void on_event(const unsigned char *p, const unsigned char *end)
     if (type == EV_RUN_START || type == EV_ERROR) cancelled = 0;
     /* "Last heard" and "Last reply": a new request clears both, so the same request said twice is a change Home Assistant
      * records (it drops a state equal to the last).  With the wake word at Home Assistant a run is open long before anyone
-     * speaks, and one listens beside each reply (main.c wake_listen): there the request starts at the wake word */
-    int fresh = core_local_wake ? type == EV_RUN_START : type == EV_WAKE_END;
+     * speaks, and one listens beside each reply (main.c wake_listen): there the request starts at the wake word.  A
+     * follow-up to a question has no wake word stage, so it starts at RUN_START there too */
+    int fresh = stt_run ? type == EV_RUN_START : type == EV_WAKE_END;
     if (listed(KEY_LAST_HEARD) && (fresh || type == EV_STT_END || type == EV_TTS_START)) {
         if (type != EV_TTS_START) { state_text(last_heard, sizeof last_heard, type == EV_STT_END ? said : ""); send_setting(KEY_LAST_HEARD); }
         if (type != EV_STT_END) { state_text(last_reply, sizeof last_reply, type == EV_TTS_START ? said : ""); send_setting(KEY_LAST_REPLY); }

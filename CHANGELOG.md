@@ -4,10 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-08
 
-- **Wake word in Home Assistant: answering a question works again.** When the assistant asked something back
+- **Wake word in Home Assistant: answering a question now works.** When the assistant asked something back
   ("which light?"), the Echo opened the microphone but asked Home Assistant to wait for a wake word first, so the
   answer was ignored. A follow-up question now goes without that wait, as with the Echo's own wake word, and the
-  Echo shows it is listening.
+  Echo shows it is listening. The same for the action button while a reply plays: what is said after it is the
+  request.
 
 ## 2026-11-07
 
