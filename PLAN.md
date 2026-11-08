@@ -187,6 +187,15 @@ Run in this order. Each step says what it proves.
       that loses that check never cuts its reply. "Last heard"/"Last reply" now clear at WAKE_END with remote wake (the idle run's
       RUN_START blanked them right after every reply), and a bare "stop" within 10 s of a cut cancels the run (`core_transcript`,
       no "stop" keyword at HA). Verified by the author on a Dot 2 with HA 2026.11; `tests/fake_ha_remote_bargein.py`
+- [x] Follow-ups with the wake word at Home Assistant (`-w remote`, PR #128, 2026-11-08): the run after a reply with
+      `continue_conversation` (or `start_conversation`, or the button cutting a reply: all through `barge_in`) asked for the wake
+      word stage again (flags 3), so HA waited for a wake word and dropped the answer. `core_pipeline_finish` marks it
+      `follow_up` while `pipeline_start` runs: flags 1, the lead-in, listening mode and LISTENING, as with a local wake word.
+      Such a run has no WAKE_WORD_END, so "Last heard"/"Last reply" clear at its RUN_START (`stt_run` in proto_esphome.c). The
+      30 s pipeline timeout now covers remote runs too (one waiting for the wake word stays IDLE, so it is never timed out).
+      Verified by the author on a Dot 2; `tests/fake_ha_remote_followup.py` (fails on the old core: flags [3, 3, 3]).
+      Seen meanwhile, not fixed: with `-w remote` an ERROR outside a reply (e.g. nothing said) ends the run and asks for the
+      next, then its RUN_END finds that new run and asks again: two starts, HA cancels the first
 - [ ] Wake-word accuracy at distance and with music playing: ten tries from across the room, count `wake:` lines in `boot.log`,
       once in silence, once with Music Assistant playing (threshold hints are in place, see "Stop" below)
 - [~] Wake word "Echo": firmware ships only `ALEXA` (+`STOP`) in `words.shrunk.txt`. Stock gets other keywords from DAVS (cloud) into

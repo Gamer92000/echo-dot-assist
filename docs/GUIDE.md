@@ -58,7 +58,8 @@ System) off takes any certificate, but then anyone on your network could slip th
   text (Parakeet) found no words at all in audio that opens mid-word. So every request the Echo starts (wake word,
   button, a follow-up question) opens with 0.8 s of silence. It goes out at once, so nothing waits for it; Home
   Assistant's debug recordings start with it. Not with Home Assistant's own wake word engine, which listens all the
-  time.
+  time, except for a follow-up question or the action button cutting a reply: those have no wake word to wait for, so
+  they get the silence too.
 
 - **The wake word in the request** ("Wake word in the request" on the [settings page](#settings-page), Voice, off by
   default): Home Assistant gets the audio from just before the wake word on, so speech to text hears "Alexa, turn on
