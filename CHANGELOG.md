@@ -12,6 +12,18 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-07
 
+- **Alarms on the Echo.** Home Assistant has timers but no alarms; now the Echo keeps its own, and they ring by
+  themselves, with or without Home Assistant. Set them on the settings page's new "Clock & alarms" page (list, add,
+  edit, delete, snooze, stop) or from Home Assistant: "Next alarm" (a time: a dashboard counts down to it, an
+  automation can turn on the lights 10 minutes before), "Alarms", "Alarm ringing", "Snooze alarm", an "Alarm" event
+  entity (ringing, snoozed, stopped, ...) and the actions `set_alarm` and `delete_alarm` for automations and AI agents.
+  A ringing alarm snoozes with "<wake word>, snooze" or a volume key, and stops with "<wake word>, stop", the action
+  button (both volume keys on an Echo Show) or Stop on the screen; a timer ringing along with it keeps ringing. It
+  starts quietly and comes up to the timer volume over 30 seconds, plays Alexa's alarm tone, rings for 10 minutes at
+  most and snoozes for 9. Two things are there but off: "Unanswered alarms get louder" (for heavy sleepers) and
+  "Answer alarm requests on the Echo" ("<wake word>, wake me up at 6:30", English only; the answer needs "Allow the
+  device to perform Home Assistant actions").
+
 - **Echo Shows: screen brightness as on a stock Echo Show (issue #126).** The screen's brightness is now a setting,
   on the settings page's Screen page and in Home Assistant: **Screen brightness** (one level, 47 % by default, what the
   Shows ran at before), or **Adaptive brightness**, Amazon's own following of the room's light, with **Adaptive

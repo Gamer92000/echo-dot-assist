@@ -54,6 +54,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ha_esphome_features.py #   sound detection (HASSMIC_FAKE_SOUND_WINDOW: 3 s windows), Wi-Fi motion
 .venv/bin/python tests/fake_ha_esphome_buttons.py  #   runs cancelled while HA thinks or streams, the "Button" event entity
 .venv/bin/python tests/fake_ha_esphome_address.py  #   a new address: links closed, mDNS announced again
+.venv/bin/python tests/fake_ha_alarms.py      # the Echo's own alarms: requests answered on the Echo and announced, HA's
+                                             # entities and actions, a ring on the moved clock, snooze, stop, the page
 .venv/bin/python tests/fake_ha_end.py         # the end of a request heard on the Echo (micend.c): a talker, dishes as loud
                                              # (no speech in the front end's records written into the capture), quieter
                                              # voices on another pitch; end of audio, not an abort; the gain left alone;
@@ -272,6 +274,18 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (host build, `HASSMIC_FAKE_SOUND`; `HASSMIC_FAKE_SOUND_MODEL` names the model, `broken` fails to load). `sound_model()`
   says which model it takes, for the page; a start that fails switches the setting off via `settings_set` and sets
   `core_sound_failed()` (page warning). Picked in the Makefile from the wake word backend.
+- **Alarms** (`alarms.c`, `alarms.h`): the Echo's own, in `state/alarms`, rung on local time by a clock thread through
+  the timers' ring (main.c `core_alarm_ring`, `ringing[].alarm`; `core_alarm_snooze`, `core_alarm_stop` dismisses a
+  once alarm); settings `alarm_*`, `clock_format`, feature `alarms` (HA's entities: "Next alarm" timestamp, "Alarms",
+  "Alarm ringing", "Snooze alarm", event "Alarm" `core_alarm_events`, actions `set_alarm`/`delete_alarm`).  Spoken
+  requests (`alarms_command`, English; a question only with "my", "alarms", "next", "do I have": "is the alarm on" is
+  an alarm panel's) are answered in main.c `alarm_request` from `core_transcript`, the run
+  cancelled, the answer through `proto->say` (assist_satellite.announce, the Bluetooth announcements' queue).  A
+  volume key snoozes (`alarm_keys`), a ring starts quiet (`alarm_ramp`).  Page: "Clock & alarms", `/api/alarms`.
+  `HASSMIC_FAKE_CLOCK_OFFSET` (seconds, or a file holding them) moves the Echo's clock for tests (`alarms_now`).
+  Unanswered, an alarm may get louder (`alarm_louder`, off by default; `alarm_boost` lifts `loudest()`).  Spoken requests
+  (`alarm_voice`) off by default: the answer needs HA's "perform actions".  `set_alarm`/`delete_alarm` only over the
+  keyed link, as Drop In.  Snooze snoozes the alarms only; timers ringing with them ring on.
 - **Sound packs** (`soundpack.c`, `soundpack.h`): sets of the Sounds card's sounds in `state/sound-packs/<id>/` (`name`,
   `<sound>.wav`), `/api/sound-pack`, page `packsCard`, a `.soundpack` file = a tar of `pack.json` + WAVs (`web/tar.js`).
   A pack is a whole set; 16 packs, 30 MB, 32 MB left on the partition (`HASSMIC_SOUNDPACK_MAX`, `_FREE_MIN` for tests).
