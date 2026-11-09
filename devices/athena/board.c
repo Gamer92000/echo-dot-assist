@@ -39,6 +39,7 @@ const struct board board = {
     .product = "Echo Show 8 2nd gen (hassmic)",
     .kiosk = 1,
     .backlight = 1,
+    .adaptive_colour = 1,                                           /* verified ambientdisplayinfo + adaptive_color feature */
     .default_name = "Echo Show 8 2nd gen",                          /* + MAC; slug = the project's model */
     .codename = "athena",
 

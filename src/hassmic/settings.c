@@ -68,13 +68,30 @@ static int request_text;                                /* off: what people say 
  * by root's main.sh backlight from state/config.  Off and 47 % (setting 120 of 255) by default: what every Show ran at
  * since stock's curve held a dim room's backlight at 5/255 (issue #126, PLAN.md) */
 static int backlight_auto, backlight_level = 47, backlight_adjust;
+/* The Echo Show 8 2nd gen's "Adaptive Color" (stock's Display settings, issue #162): the screen's white follows the
+ * room's light, yellow at night.  Applied by root's main.sh backlight through the binder service ambientdisplayinfo.
+ * Off by default: dashboard colours stay constant.  The requested value is saved separately from root's readback,
+ * so a failed Binder call cannot look successful or change the preference when another setting is saved */
+static int adaptive_colour, loading_preset;
 
 static const char *state_dir(void) { const char *e = getenv("HASSMIC_STATE"); return e ? e : "/data/local/hassmic/state"; }
 static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "%s/%s", state_dir(), file); }
 
+static int colour_supported(void) { return board.adaptive_colour || getenv("HASSMIC_FAKE_ADAPTIVE_COLOUR"); }
+
+static int colour_actual(void)
+{
+    const char *p = getenv("HASSMIC_FAKE_ADAPTIVE_COLOUR");
+    if (!colour_supported()) return -1;
+    FILE *f = fopen(p ? p : "/data/local/hassmic/adaptive-colour", "r");
+    if (!f) return -1;
+    char v[8]; int n = fread(v, 1, sizeof v, f); fclose(f);
+    return n == 2 && v[1] == '\n' && (v[0] == '0' || v[0] == '1') ? v[0] - '0' : -1;
+}
+
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
@@ -132,6 +149,7 @@ static const struct setting table[NSET] = {
     [SCR_AUTO]    = { "screen_brightness_auto", "Adaptive brightness", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
     [SCR_LEVEL]   = { "screen_brightness", "Screen brightness", "Lights", "%", S_INT, 1, 100, 1, 0 },
     [SCR_ADJUST]  = { "screen_brightness_adjust", "Adaptive brightness adjustment", "Lights", NULL, S_INT, -100, 100, 1, 0 },
+    [SCR_COLOUR]  = { "screen_adaptive_colour", "Adaptive colour", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },     /* adaptive_colour above */
     /* screen.c, the UI's words.c: what was said and the reply over the screen.  Off: words people say are shown only
      * where someone wants them shown */
     [SCREEN_TEXT] = { "screen_text", "Speech on screen", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
@@ -229,6 +247,7 @@ static int present(enum id i)
     case BAND: return ring_band_rows(-1) >= 0;
     case KIOSK_NET: case KIOSK_MIC: case KIOSK_CAM: return board.kiosk;
     case SCR_AUTO: case SCR_LEVEL: case SCR_ADJUST: return board.backlight || getenv("HASSMIC_FAKE_BACKLIGHT");   /* tests */
+    case SCR_COLOUR: return colour_actual() >= 0;
     case SCREEN_TEXT: return screen_words_on(-1) >= 0;
     case SCREEN_HOLD: return screen_words_hold(-1) >= 0;
     case SCREEN_TIMERS: return screen_timers_on(-1) >= 0;
@@ -240,9 +259,19 @@ static int present(enum id i)
 float settings_duck_gain(void) { return powf(10.0f, -(float)duck_db / 20.0f); }
 
 static int ids[NSET], nids = -1;
-static void index_table(void) { if (nids < 0) { nids = 0; for (int i = 0; i < NSET; i++) if (present(i)) ids[nids++] = i; } }
+static void index_table(void)
+{
+    /* Root's backlight helper starts beside hassmic: a service discovered after the first page read still appears. */
+    static int colour_present = -1;
+    int colour = present(SCR_COLOUR);
+    if (nids < 0 || colour != colour_present) {
+        colour_present = colour; nids = 0;
+        for (int i = 0; i < NSET; i++) if (i == SCR_COLOUR ? colour : present(i)) ids[nids++] = i;
+    }
+}
 int settings_count(void) { index_table(); return nids; }
-const struct setting *settings_at(int i) { index_table(); return i >= 0 && i < nids ? &table[ids[i]] : NULL; }
+/* settings_count takes a snapshot: root may remove its readback while web.c iterates that count under core_lock. */
+const struct setting *settings_at(int i) { if (nids < 0) index_table(); return i >= 0 && i < nids ? &table[ids[i]] : NULL; }
 const struct setting *settings_find(const char *name)
 {
     index_table();
@@ -352,6 +381,7 @@ int settings_get(const struct setting *s)
     case SCR_AUTO: return backlight_auto;
     case SCR_LEVEL: return backlight_level;
     case SCR_ADJUST: return backlight_adjust;
+    case SCR_COLOUR: { int v = colour_actual(); return v >= 0 ? v : adaptive_colour; }
     case SCREEN_TEXT: return screen_words_on(-1);
     case SCREEN_HOLD: return screen_words_hold(-1);
     case SCREEN_TIMERS: return screen_timers_on(-1);
@@ -426,6 +456,7 @@ static void put(enum id i, int v)
     case SCR_AUTO: backlight_auto = v; break;                   /* root's main.sh sees state/config change */
     case SCR_LEVEL: backlight_level = v; break;
     case SCR_ADJUST: backlight_adjust = v; break;
+    case SCR_COLOUR: adaptive_colour = v; break;                /* main.sh as well */
     case SCREEN_TEXT: screen_words_on(v); break;
     case SCREEN_HOLD: screen_words_hold(v); break;
     case SCREEN_TIMERS: screen_timers_on(v); break;
@@ -478,7 +509,14 @@ void settings_save(void)
     path(p, sizeof p, "config");
     if (statefile_open(&s, p, 0666)) { fprintf(stderr, "settings: cannot write %s.tmp\n", p); return; }
     fprintf(s.f, "# hassmic settings: name=value; the web page and Home Assistant write it\n");
-    for (int i = 0; i < NSET; i++) if (ours(i) && present(i)) { format(&table[i], v, sizeof v); fprintf(s.f, "%s=%s\n", table[i].name, v); }
+    for (int i = 0; i < NSET; i++) if (ours(i)) {
+        /* Keep the requested colour even while the service is down, and never save a video's temporary override. */
+        if (i == SCR_COLOUR) {
+            if (!colour_supported()) continue;
+            snprintf(v, sizeof v, "%s", adaptive_colour ? "on" : "off");
+        } else { if (!present(i)) continue; format(&table[i], v, sizeof v); }
+        fprintf(s.f, "%s=%s\n", table[i].name, v);
+    }
     if (statefile_commit(&s)) fprintf(stderr, "settings: cannot write %s\n", p);
 }
 
@@ -578,7 +616,11 @@ void settings_preset(void)
     if (n < 0 || n > 65536 || !(t = calloc(1, (size_t)n + 1))) { fclose(f); fprintf(stderr, "settings: preset %s unreadable, ignored\n", p); return; }
     if (fread(t, 1, (size_t)n, f) != (size_t)n) n = 0;
     fclose(f);
+    /* Root starts beside us and may still be waiting for Android. A supported preference must survive that gap,
+     * while the page continues to hide the switch until root has a confirmed readback. */
+    loading_preset = 1;
     int k = settings_apply_text(t, err, sizeof err);
+    loading_preset = 0;
     fprintf(stderr, "settings: preset applied, %d setting%s%s%s", k, k == 1 ? "" : "s", err[0] ? "; not taken:\n" : "\n", err);
     free(t);
     if (rename(p, done)) remove(p);                     /* once only, whatever happened */
@@ -624,6 +666,7 @@ int settings_bt_lang_index(int set) { if (set >= 0 && set < bt_lang_count) bt_la
 int settings_set(const char *name, const char *value, char *err, size_t errsz)
 {
     const struct setting *s = settings_find(name); int v;
+    if (!s && loading_preset && colour_supported() && !strcmp(name, table[SCR_COLOUR].name)) s = &table[SCR_COLOUR];
     if (!s) { snprintf(err, errsz, "%s: no such setting on this Echo", name); return -1; }
     if (parse(s, value, &v)) { snprintf(err, errsz, "%s: \"%s\" is not a value it takes", name, value); return -1; }
     int was = settings_get(s);
@@ -635,6 +678,10 @@ int settings_set(const char *name, const char *value, char *err, size_t errsz)
         return -1;
     }
     if (ours((enum id)(s - table))) settings_save();
+    if (s - table == SCR_COLOUR) {
+        char p[300]; path(p, sizeof p, "adaptive-colour-request");
+        if (statefile_write(p, 0666, "", 0)) { snprintf(err, errsz, "%s: could not ask root to apply the setting", name); return -1; }
+    }
     core_settings_changed();
     if (s->feature && was != v) core_entities_changed();          /* Home Assistant reads the list again */
     return 0;
@@ -649,7 +696,8 @@ size_t settings_text(char *out, size_t cap, int export_only)
         if (export_only && !s->export_) continue;
         /* a level fixes it (auto off): with auto on, the level is only what the room made it */
         if (export_only && ids[i] == LED_LEVEL && present(LED_AUTO) && core_led_auto(-1)) continue;
-        format(s, v, sizeof v);
+        if (export_only && ids[i] == SCR_COLOUR) snprintf(v, sizeof v, "%s", adaptive_colour ? "on" : "off");
+        else format(s, v, sizeof v);
         n += (size_t)snprintf(out + n, cap - n, "%s=%s\n", s->name, v);
     }
     return n < cap ? n : cap;

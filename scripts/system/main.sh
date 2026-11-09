@@ -455,6 +455,58 @@ backlight_set() {       # bl_now's three; fails when a setting did not take (the
     if [ $1 = 1 ]; then bl_put screen_auto_brightness_adj $(bl_adj $3) && bl_put screen_brightness_mode 1
     else bl_put screen_brightness_mode 0 && bl_put screen_brightness $((($2 * 255 + 50) / 100)); fi
 }
+# Adaptive colour (device.conf ADAPTIVE_COLOUR: athena; settings.c adaptive_colour, issue #162): stock's Display settings'
+# "Adaptive Color", which warms the screen's white with the room's light, yellow at night.  KnightSettings sets it through
+# AmbientDisplayManager, i.e. the binder service ambientdisplayinfo (com.amazon.android.display.IAmbientDispayService in
+# athena's boot-fosframework.vdex: TRANSACTION_setAmbientToggle = 1, a boolean in and an int back,
+# TRANSACTION_getAmbientToggle = 2, a boolean back), which fosservices' AmazonLedBrightnessControllerService answers
+# over the picture quality HAL and keeps across a reboot (checkAmbientPersistentValue; issue #162's reporter saw it
+# stay off).  Off unless state/config's last line says on.  Set when the setting changes and once at the start, not
+# whenever it differs: that service switches it off itself while a video plays (mIVideoSessionListener, mWasAmbientOn)
+# and back on after, and setting it back meanwhile would fight that.  Stock's value goes into alexa-settings ("service
+# ambientdisplayinfo <0|1>"), for alexa-on.sh.  service is native: no Java call.
+ac_want() {
+    case "$(grep '^screen_adaptive_colour=' /data/local/hassmic/state/config 2>/dev/null | tail -n 1)" in *=on) echo 1;; *) echo 0;; esac
+}
+ac_get() {      # 1 or 0; nothing when the call failed.  Its print: Result: Parcel(00000000 00000001   '........')
+    case "$(service call ambientdisplayinfo 2 2>/dev/null)" in
+    *"Parcel(00000000 00000001 "*) echo 1;; *"Parcel(00000000 00000000 "*) echo 0;;
+    esac
+}
+ac_seen= ac_available= ac_left=0
+ac_report() {     # transient readback, owned by root outside state/: hassmic may read it, but cannot invent success
+    local f=/data/local/hassmic/adaptive-colour
+    if [ -n "$1" ]; then
+        [ "$(cat $f 2>/dev/null)" = "$1" ] || { echo "$1" > $f.tmp && mv -f $f.tmp $f; }
+    else rm -f $f; fi
+}
+colour_tick() {     # a round of the backlight loop: 5 tries for a value, then left until the setting changes
+    local want was w
+    # An explicit page write retries even if the requested value stayed the same (failed set or external override).
+    if [ -f /data/local/hassmic/state/adaptive-colour-request ]; then
+        rm -f /data/local/hassmic/state/adaptive-colour-request
+        ac_left=5
+    fi
+    want=$(ac_want)
+    [ "$want" = "$ac_seen" ] || ac_seen=$want ac_left=5
+    was=$(ac_get)
+    [ -n "$was" ] && [ -z "$ac_available" ] && ac_left=5   # system_server can appear after the first five rounds
+    ac_available=$was
+    ac_report "$was"
+    [ $ac_left -gt 0 ] || return 0
+    w=off; [ $want = 1 ] && w=on
+    if [ -n "$was" ] && [ "$was" != "$want" ]; then
+        grep -q "^service ambientdisplayinfo " /data/local/hassmic/alexa-settings 2>/dev/null ||
+            echo "service ambientdisplayinfo $was" >> /data/local/hassmic/alexa-settings
+        service call ambientdisplayinfo 1 i32 $want > /dev/null 2>&1
+        was=$(ac_get)
+        ac_report "$was"
+        [ "$was" = "$want" ] && echo "adaptive colour: $w"
+    fi
+    if [ "$was" = "$want" ]; then ac_left=0; return 0; fi
+    ac_left=$((ac_left - 1))
+    [ $ac_left = 0 ] && echo "adaptive colour: could not be switched $w (service ambientdisplayinfo), left until the setting changes"
+}
 backlight() {
     [ -n "$BACKLIGHT" ] && command -v settings > /dev/null || return 0
     until [ "$(getprop sys.boot_completed)" = 1 ]; do sleep 2; done
@@ -476,6 +528,7 @@ backlight() {
                 bl_failing=1 fails=$((fails + 1))
             fi
         fi
+        [ -n "$ADAPTIVE_COLOUR" ] && colour_tick
         if [ $fails -ge 10 ]; then sleep 30; else sleep 2; fi
     done
 }
@@ -794,6 +847,7 @@ satellite)
     netwatch 2>&1 | stamped >> $LOG &
     kiosk_helper 2>&1 | stamped >> $LOG &
     kiosk_perm_sync 2>&1 | stamped >> $LOG &
+    rm -f /data/local/hassmic/adaptive-colour       # readback from a previous boot is no proof the service is up now
     backlight 2>&1 | stamped >> $LOG &
     # mDNS through the stock avahi-daemon: hassmic prints the service file for its protocol, name and MAC address.
     # The MAC in it is how Home Assistant tells devices apart.  On radar wlan0 appears only later in the boot, hassmic

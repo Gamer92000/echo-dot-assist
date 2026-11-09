@@ -2,6 +2,15 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-10
+
+- **Echo Show 8 2nd gen: Adaptive colour can be switched off or on from the settings page.** Under **Screen**, the
+  **Brightness and colour** card has the stock display setting that warms the screen's colours with the room's
+  light, often turning a dashboard yellow at night. It is off by default; an explicit choice is kept across restarts.
+  Setup presets keep the choice even before the display service starts. The switch shows the device's confirmed
+  state and appears only while the display service is available. Returning
+  to stock Alexa restores the original setting (issue #162).
+
 ## 2026-11-09
 
 - **A stop from Home Assistant before the sound starts no longer leaves the Echo silent.** When the media player's

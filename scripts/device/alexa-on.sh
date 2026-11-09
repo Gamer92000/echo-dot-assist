@@ -17,11 +17,13 @@ if [ -f $DISABLED ]; then
     if [ -n "$left" ]; then printf '%s\n' $left > $DISABLED; else rm -f $DISABLED; fi
 fi
 [ -n "$WAKE_LOCK" ] && echo "$WAKE_LOCK" > /sys/power/wake_unlock 2>/dev/null
-# The settings alexa-off.sh set ("null": there was none)
+# The settings alexa-off.sh set ("null": there was none); "service ambientdisplayinfo <0|1>" is main.sh's adaptive
+# colour (athena), stock's value put back through the service's setAmbientToggle (transaction 1)
 SETTINGS=/data/local/hassmic/alexa-settings
 if [ -f $SETTINGS ]; then
     while read -r ns k v; do
-        if [ "$v" = null ]; then settings delete $ns $k < /dev/null > /dev/null 2>&1; else settings put $ns $k "$v" < /dev/null; fi
+        if [ "$ns" = service ]; then service call $k 1 i32 "$v" < /dev/null > /dev/null 2>&1
+        elif [ "$v" = null ]; then settings delete $ns $k < /dev/null > /dev/null 2>&1; else settings put $ns $k "$v" < /dev/null; fi
     done < $SETTINGS
     rm -f $SETTINGS
 fi

@@ -10,6 +10,8 @@ struct board {
     int kiosk;                      /* device.conf has KIOSK_PACKAGE: the Kiosk Satellite settings exist */
     int backlight;                  /* a screen whose backlight Android's settings set (screen_brightness*): the Echo Shows;
                                        root's main.sh backlight applies the screen brightness settings */
+    int adaptive_colour;            /* Fire OS's "Adaptive Color" (binder service ambientdisplayinfo, the picture quality HAL):
+                                       athena; root's main.sh backlight applies the setting (device.conf ADAPTIVE_COLOUR) */
     /* identity towards Home Assistant and Music Assistant */
     const char *model;              /* ESPHome device info "model", Wyoming description */
     const char *project;            /* ESPHome "project_name" */

@@ -3477,3 +3477,23 @@ Run in this order. Each step says what it proves.
       (the block in `sh` with a stand-in `settings`), `fake_ha_esphome_timers.py` (`HASSMIC_FAKE_BACKLIGHT`: entities,
       commands, page), `fake_ha_esphome.py` (none on a Dot).  **Open:** Android 9's (athena, crown) curve not read, nor
       tried there; the adjustment's effect on the backlight not measured; Kiosk Satellite's switch on cronos/crown/athena.
+- [x] Echo Show 8 2nd gen adaptive colour (2026-11-10, issue #162): `screen_adaptive_colour` on the settings page's
+      Screen page, off by default. `board.adaptive_colour` and device.conf `ADAPTIVE_COLOUR` enable it on athena.
+      Of the four supported Shows' extracted firmware images checked here, only athena declares
+      `com.amazon.feature.adaptive_color` (`system/etc/permissions/athena_features.xml`) and contains the
+      `ambientdisplayinfo` service/interface in its framework. Checkers, cronos and crown lack both; shared
+      KnightSettings UI strings are not proof of support. This is not an exclusivity claim for all Echo devices:
+      [Amazon lists Adaptive Color on other Show models too](https://digprjsurvey.amazon.com/csad/help/node/GK77UBXXN7X3DBK8).
+      Root's `main.sh backlight` reads `ambientdisplayinfo` transaction 2 and sets transaction 1 with `i32 0|1`, then
+      reads back. The reporter confirmed these transactions and persistence across reboot. The existing partial
+      implementation defaulted to on and showed the requested value even if the service failed; the finished version
+      saves the preference separately and publishes confirmed state in root-owned `/data/local/hassmic/adaptive-colour`.
+      This transient file also gates visibility, including when the service appears after hassmic has started. Failed
+      sets get five attempts per preference change, explicit retry, or service recovery, then a single log message.
+      Explicit page writes create `state/adaptive-colour-request`, consumed by root even for the same preference.
+      Readback continues
+      every backlight round; external changes are shown without fighting Amazon's temporary video override. The
+      original value is kept in `alexa-settings` and restored by `alexa-on.sh`. PC regression coverage: default off,
+      existing off, on/off, failed writes, late/lost service, readback, restore, and the signed settings API's visibility,
+      persistence across restart, and exports. Presets accept the preference before root publishes readback, without
+      exposing an unavailable switch on the page. Physical-device validation of this implementation remains open.

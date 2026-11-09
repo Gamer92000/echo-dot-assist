@@ -5,7 +5,7 @@ Echo.  Login by the action button (SIGUSR2), signed reads and writes, replays an
 export and import, the settings file from before names, the speaker gain, features (entities in Home Assistant only while on), adb with
 a press of its own (a request withdrawn by "off" or a revoke), revoking; a login left waiting runs out by itself (asked again,
 a new one waits), and a restart clears its ring and names a new start."""
-import asyncio, gzip, json, os, re, signal, subprocess, sys, tempfile, time
+import asyncio, gzip, json, os, re, signal, subprocess, sys, tempfile, threading, time
 from aioesphomeapi import APIClient
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webclient import wait_port, Browser, req
@@ -40,14 +40,15 @@ async def ha_connect():
 async def main():
     state = tempfile.mkdtemp()
     with open(os.path.join(state, "settings"), "w") as f: f.write("2 -22 1 0 0 1 0 de 2 1 -1 1 0 5 0\n")   # the file before names
-    with open(os.path.join(state, "preset"), "w") as f: f.write("# from another Echo's page\ndo_not_disturb=on\nno_such_thing=1\n")   # scripts/setup.sh --preset
+    with open(os.path.join(state, "preset"), "w") as f: f.write("# from another Echo's page\ndo_not_disturb=on\nscreen_adaptive_colour=on\nno_such_thing=1\n")   # scripts/setup.sh --preset
     env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(state, "play.raw"),
                HASSMIC_MDNS_FILE=os.path.join(state, "none"), HASSMIC_ARB_ADDR="127.255.255.255", HASSMIC_MODELS=os.path.join(state, "models"),
                HASSMIC_FAKE_WHISPER="1", HASSMIC_ADB_OPEN=os.path.join(state, "adb-open.root"),
                HASSMIC_FAKE_SOUND_MODEL=os.path.join(state, "aed-model"),           # which sound model there is (sound_none.c)
                HASSMIC_LOG=os.path.join(state, "log"),                              # boot.log, for the page's viewer
                HASSMIC_CLOCK_SYNCED="0",                                            # stamps: seconds since boot (clock.c)
-               HASSMIC_FAKE_SPEAKER_GAIN=os.path.join(state, "speaker-gain"))       # an Echo Dot 2's codec control (spkgain.c)
+               HASSMIC_FAKE_SPEAKER_GAIN=os.path.join(state, "speaker-gain"),       # an Echo Dot 2's codec control (spkgain.c)
+               HASSMIC_FAKE_ADAPTIVE_COLOUR=os.path.join(state, "adaptive-colour")) # root's confirmed Binder readback
     with open(os.path.join(state, "speaker-gain"), "w") as f: f.write("6\n")          # stock: what the HAL's speaker path sets
     log = os.path.join(state, "log")
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Web", "-L", "-z", "0", "-o", "0",
@@ -61,7 +62,7 @@ async def main():
               f"the settings file from before names moved to state/config: {c0}")
 
         check(c0.get("do_not_disturb") == "on" and os.path.exists(os.path.join(state, "preset.applied")) and not os.path.exists(os.path.join(state, "preset"))
-              and "preset applied, 1 setting; not taken:" in open(log).read() and "no_such_thing" in open(log).read(),
+              and "preset applied, 2 settings; not taken:" in open(log).read() and "no_such_thing" in open(log).read(),
               "a preset (setup.sh --preset): applied once at start, the unknown line reported, the file kept as preset.applied")
         st, h, body = rq("GET", "/")
         check(st == 200 and h.get("Content-Encoding") == "gzip" and b"<title>Echo settings</title>" in gzip.decompress(body), "the page, gzip'd")
@@ -99,11 +100,68 @@ async def main():
         check({n for n, x in names.items() if x["feature"]} >= {"arbitration", "sound_detection", "whisper_detection"},
               "features: arbitration, sound detection, whisper detection (Bluetooth, Wi-Fi motion: not on this PC)")
 
+        # Adaptive colour (issue #162): root discovers the service beside hassmic and publishes actual readback.
+        colour = os.path.join(state, "adaptive-colour")
+        actual = lambda: next((x for x in b.state()["settings"] if x["name"] == "screen_adaptive_colour"), None)
+        check("screen_adaptive_colour" not in names and cfg().get("screen_adaptive_colour") == "on"
+              and "screen_adaptive_colour: no such setting" not in open(log).read(),
+              "adaptive colour: preset on retained before service discovery, toggle still hidden")
+        check(b.set(screen_adaptive_colour="on").get("applied") == 0, "unavailable adaptive colour: write refused")
+        with open(colour, "w") as f: f.write("0\n")
+        check(actual() is not None and actual()["value"] == 0 and actual()["group"] == "Lights",
+              "service discovered after page load: adaptive colour appears with confirmed off state")
+        r = b.set(screen_adaptive_colour="on")
+        check(r.get("applied") == 1 and cfg().get("screen_adaptive_colour") == "on" and actual()["value"] == 0,
+              "adaptive colour enabled: preference saved; pending or failed Binder write still displays actual off")
+        b.set(mic_level=-22)
+        check(cfg().get("screen_adaptive_colour") == "on", "saving another setting preserves the requested colour while Binder trails")
+        args = proc.args
+        proc.terminate(); proc.wait()
+        proc = subprocess.Popen(args, env=env, stderr=open(log, "a")); wait_port(PORT, WEB)
+        b = Browser(WEB)
+        check(b.login_with_button(proc) and actual()["value"] == 0, "after restart: the toggle still shows confirmed device state")
+        b.set(mic_level=-22)
+        check(cfg().get("screen_adaptive_colour") == "on", "after restart: explicit on preference retained despite off readback")
+        with open(colour, "w") as f: f.write("1\n")
+        check(actual()["value"] == 1, "successful readback: toggle shows on")
+        r = b.set(screen_adaptive_colour="off")
+        check(r.get("applied") == 1 and cfg().get("screen_adaptive_colour") == "off" and actual()["value"] == 1,
+              "adaptive colour disabled: preference saved, toggle waits for readback")
+        os.remove(os.path.join(state, "adaptive-colour-request"))
+        r = b.set(screen_adaptive_colour="off")
+        check(r.get("applied") == 1 and os.path.exists(os.path.join(state, "adaptive-colour-request")),
+              "explicit off again asks root to retry even though the saved preference is unchanged")
+        check("screen_adaptive_colour=off\n" in b.call("GET", "/api/export")[2].decode(),
+              "export keeps the requested colour rather than a temporary device override")
+        with open(colour, "w") as f: f.write("0\n")
+        check(actual()["value"] == 0, "disable readback: toggle shows off")
+        os.remove(colour)
+        b.set(mic_level=-22)
+        check(actual() is None and cfg().get("screen_adaptive_colour") == "off", "service lost: toggle hidden, preference retained")
+        with open(colour, "w") as f: f.write("not a boolean\n")
+        check(actual() is None, "malformed readback: toggle hidden")
+        with open(colour, "w") as f: f.write("0\n")
+
+        # Root can lose the service while one response is serializing its settings. The iteration must stay stable.
+        stop = threading.Event()
+        def flap_colour():
+            while not stop.is_set():
+                os.remove(colour)
+                with open(colour + ".tmp", "w") as f: f.write("0\n")
+                os.replace(colour + ".tmp", colour)
+        flapper = threading.Thread(target=flap_colour); flapper.start()
+        try:
+            snapshots = [[x["name"] for x in b.state()["settings"]] for _ in range(50)]
+            check(all(len(s) == len(set(s)) and "mic_level" in s and "even_volume" in s for s in snapshots),
+                  "service changes during serialization: complete settings snapshots, no duplicates or crash")
+        finally:
+            stop.set(); flapper.join()
+
         # Home Assistant: the lean list, and what the page changes
         ha, by, states = await ha_connect()
         page_only = {"mic_level", "noise_reduction", "sound_detection", "debug_access_adb", "join_arbitration_network", "online_updates",
                      "bluetooth_announcements", "bluetooth_announcement_language", "soc_temperature", "cpu_usage", "wifi_motion_detection",
-                     "speaker_gain"}
+                     "speaker_gain", "screen_adaptive_colour"}
         check(not page_only & set(by) and {"wake_sound", "mute", "do_not_disturb", "firmware", "equalizer_bass", "led_brightness"} <= set(by),
               f"Home Assistant lists the lean set only: {sorted(set(by))}")
         check("sound" in by and "last_request_whispered" in by and "arbitration_peers" in by and "arbitration_key" in by,
@@ -324,6 +382,8 @@ async def login_runs_out():
         check(b.login() == "waiting", "asked once more (the page's Try again): a new login waits (it was refused at once until another key asked)")
         proc.send_signal(signal.SIGUSR2); await until(lambda: "login approved" in open(log).read())
         check(b.login() == "approved", "...and the button approves it")
+        check(all(s["name"] != "screen_adaptive_colour" for s in b.state()["settings"]),
+              "device without adaptive colour: no toggle")
         c = Browser(WEB2)
         check(c.login() == "waiting", "another browser asks")
         await until(lambda: open(log).read().count("login ran out without the button") == 2)

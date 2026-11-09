@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """main.sh's backlight block (issue #126): the Echo Show's brightness settings from state/config into Android's own
-settings, on the PC with a stand-in for `settings`.  Root's script with paths under /data: the text is cut out and those
+settings, on the PC with a stand-in for `settings`; and adaptive colour (issue #162) through a stand-in for `service`.
+Root's script with paths under /data: the text is cut out and those
 paths moved to a temporary folder, as kiosk_test.py does."""
 import os, stat, subprocess, sys, tempfile
 
@@ -30,17 +31,32 @@ put) printf '%s\n' "$4" > "$f"                     # and SettingsProvider's file
 esac
 '''
 
+# service call ambientdisplayinfo 2 (get) | 1 i32 <0|1> (set), printed as Android 9's service does; the state in
+# $T/ambient, every call logged in $T/svc-calls; $T/svc-missing: no such service (system_server not up)
+SERVICE = r'''#!/bin/sh
+echo "$*" >> "$T/svc-calls"
+[ "$1 $2" = "call ambientdisplayinfo" ] || exit 1
+[ -f "$T/svc-missing" ] && { echo "service: Service ambientdisplayinfo does not exist"; exit 0; }
+case "$3" in
+1) [ -f "$T/svc-refuse" ] && { echo "Result: Parcel(00000000 ffffffff   '........')"; exit 0; }
+   [ "$4" = i32 ] && printf '%s\n' "$5" > "$T/ambient"; echo "Result: Parcel(00000000 00000000   '........')";;
+2) echo "Result: Parcel(00000000 0000000$(cat "$T/ambient")   '........')";;
+esac
+'''
+
 text = open(ROOT + "/scripts/system/main.sh").read()
 block = text[text.index("# >>> backlight"):text.index("# <<< backlight")]
 
 
-def run(tmp, config, call, stock=None, xml="", fail=None):
-    """the block sourced, then `call`; returns (store, calls, alexa-settings, output).  fail: {"get"|"put": n} calls fail"""
+def run(tmp, config, call, stock=None, xml="", fail=None, ambient="1", missing=False):
+    """the block sourced, then `call`; returns (store, calls, alexa-settings, output).  fail: {"get"|"put": n} calls fail;
+    ambient: the adaptive colour service's state at the start (svc() reads it and its calls afterwards), missing: none"""
     for d in ("bin", "store", "hassmic/state", "system/users/0", "app"):
         os.makedirs(os.path.join(tmp, d), exist_ok=True)
     for k, n in (fail or {}).items():
         with open(f"{tmp}/fail-{k}", "w") as f: f.write(f"{n}\n")
-    for f in ("calls", "hassmic/alexa-settings", "fail-get", "fail-put"):
+    for f in ("calls", "hassmic/alexa-settings", "hassmic/adaptive-colour", "hassmic/state/adaptive-colour-request",
+              "fail-get", "fail-put", "svc-calls", "svc-missing", "svc-refuse"):
         if f.startswith("fail") and f[5:] in (fail or {}): continue
         if os.path.exists(os.path.join(tmp, f)): os.remove(os.path.join(tmp, f))
     for f in os.listdir(tmp + "/store"): os.remove(os.path.join(tmp, "store", f))
@@ -48,9 +64,12 @@ def run(tmp, config, call, stock=None, xml="", fail=None):
         with open(f"{tmp}/store/system_{k}", "w") as f: f.write(v + "\n")
     with open(tmp + "/hassmic/state/config", "w") as f: f.write(config)
     with open(tmp + "/system/users/0/settings_system.xml", "w") as f: f.write(xml)
-    p = tmp + "/bin/settings"
-    with open(p, "w") as f: f.write(SETTINGS)
-    os.chmod(p, os.stat(p).st_mode | stat.S_IXUSR)
+    with open(tmp + "/ambient", "w") as f: f.write(ambient + "\n")
+    if missing: open(tmp + "/svc-missing", "w").close()
+    for name, body in (("settings", SETTINGS), ("service", SERVICE)):
+        p = f"{tmp}/bin/{name}"
+        with open(p, "w") as f: f.write(body)
+        os.chmod(p, os.stat(p).st_mode | stat.S_IXUSR)
     sh = (block.replace("/data/local/hassmic", tmp + "/hassmic").replace("/data/system", tmp + "/system")
           .replace("/data/app", tmp + "/app"))
     with open(tmp + "/b.sh", "w") as f: f.write(f"KIOSK_PACKAGE={PKG}\n" + sh + "\n" + call + "\n")
@@ -61,6 +80,12 @@ def run(tmp, config, call, stock=None, xml="", fail=None):
     calls = open(tmp + "/calls").read().splitlines() if os.path.exists(tmp + "/calls") else []
     saved = open(tmp + "/hassmic/alexa-settings").read() if os.path.exists(tmp + "/hassmic/alexa-settings") else ""
     return store, calls, saved, o.stdout
+
+
+def svc(tmp):
+    """the adaptive colour service after a run: its state, and the sets it was asked for"""
+    calls = open(tmp + "/svc-calls").read().splitlines() if os.path.exists(tmp + "/svc-calls") else []
+    return open(tmp + "/ambient").read().strip(), [c for c in calls if " ambientdisplayinfo 1 " in c]
 
 
 STOCK = {"screen_brightness_mode": "1", "screen_brightness": "238"}
@@ -145,6 +170,64 @@ with tempfile.TemporaryDirectory() as tmp:
     _, _, saved, _ = run(tmp, "screen_brightness_auto=on\n", START, {})
     check("a key never set before is kept as null (alexa-on.sh deletes it)", "system screen_auto_brightness_adj null" in saved, saved)
 
+    # adaptive colour: the loop's rounds; sleep's second call runs $1, its sixth ends the loop
+    CLOOP = ("getprop() { echo 1; }; n=0; sleep() { n=$((n + 1)); [ $n = 2 ] && { $1; }; [ $n -lt 6 ] || exit 0; }\n"
+             "BACKLIGHT=1; ADAPTIVE_COLOUR=1; backlight")
+    _, _, saved, out = run(tmp, "", CLOOP.replace("$1", ":"), STOCK)
+    check("adaptive colour: off by default, stock's on saved for restore", svc(tmp) == ("0", ["call ambientdisplayinfo 1 i32 0"])
+          and "service ambientdisplayinfo 1\n" in saved and "adaptive colour: off" in out, (svc(tmp), saved, out))
+    check("confirmed readback published for the settings page", open(tmp + "/hassmic/adaptive-colour").read() == "0\n")
+    _, _, saved, out = run(tmp, "", CLOOP.replace("$1", ":"), STOCK, ambient="0")
+    check("already off before upgrade: stays off without a Binder set", svc(tmp) == ("0", []) and "service" not in saved, (svc(tmp), saved, out))
+    _, _, saved, out = run(tmp, "screen_adaptive_colour=off\n", CLOOP.replace("$1", ":"), STOCK)
+    check("adaptive colour off: set once, logged", svc(tmp) == ("0", ["call ambientdisplayinfo 1 i32 0"])
+          and out.count("adaptive colour: off") == 1, (svc(tmp), out))
+    check("stock's value kept for alexa-on.sh", "service ambientdisplayinfo 1\n" in saved, saved)
+    restore = open(ROOT + "/scripts/device/alexa-on.sh").read().split("SETTINGS=", 1)[1].split("# the rows", 1)[0]
+    restore = "SETTINGS=" + restore.replace("/data/local/hassmic", tmp + "/hassmic")
+    with open(tmp + "/restore.sh", "w") as f: f.write(restore)
+    restored = subprocess.run(["sh", tmp + "/restore.sh"], env=dict(os.environ, T=tmp, PATH=tmp + "/bin:" + os.environ["PATH"]), capture_output=True)
+    check("alexa-on.sh restores stock's colour and brightness", restored.returncode == 0 and svc(tmp)[0] == "1"
+          and open(tmp + "/store/system_screen_brightness").read().strip() == "238"
+          and not os.path.exists(tmp + "/hassmic/alexa-settings"), restored.stderr)
+    _, _, _, _ = run(tmp, "screen_adaptive_colour=off\n", CLOOP.replace("$1", ":"), STOCK, ambient="0")
+    check("already off: not set", svc(tmp) == ("0", []), svc(tmp))
+    run(tmp, "screen_adaptive_colour=off\nscreen_adaptive_colour=on\n", CLOOP.replace("$1", ":"), STOCK, ambient="0")
+    check("the last line wins, as hassmic reads it", svc(tmp) == ("1", ["call ambientdisplayinfo 1 i32 1"]), svc(tmp))
+    _, _, saved, out = run(tmp, "screen_adaptive_colour=off\n", CLOOP.replace("$1", "echo screen_adaptive_colour=on >> $T/hassmic/state/config"), STOCK)
+    check("switched on again in the loop: set, logged; stock's value kept once", svc(tmp) == ("1", ["call ambientdisplayinfo 1 i32 0", "call ambientdisplayinfo 1 i32 1"])
+          and out.splitlines() == ["backlight: 47 %", "adaptive colour: off", "adaptive colour: on"] and saved.count("service ") == 1, (svc(tmp), out, saved))
+    run(tmp, "screen_adaptive_colour=off\n", CLOOP.replace("$1", "echo 1 > $T/ambient"), STOCK)
+    check("switched on elsewhere (fosservices after a video): left alone until the setting changes",
+          svc(tmp) == ("1", ["call ambientdisplayinfo 1 i32 0"]), svc(tmp))
+    check("external state change shown by readback", open(tmp + "/hassmic/adaptive-colour").read() == "1\n")
+    run(tmp, "", CLOOP.replace("$1", "echo 1 > $T/ambient; touch $T/hassmic/state/adaptive-colour-request"), STOCK)
+    check("explicit off again after an external change: reapplied, request consumed",
+          svc(tmp) == ("0", ["call ambientdisplayinfo 1 i32 0"] * 2)
+          and not os.path.exists(tmp + "/hassmic/state/adaptive-colour-request"), svc(tmp))
+    MLOOP = ("getprop() { echo 1; }; n=0; sleep() { n=$((n + 1)); [ $n = 8 ] && echo screen_adaptive_colour=on >> $T/hassmic/state/config\n"
+             "  [ $n = 9 ] && rm $T/svc-missing; [ $n -lt 11 ] || exit 0; }\nBACKLIGHT=1; ADAPTIVE_COLOUR=1; backlight")
+    _, _, saved, out = run(tmp, "screen_adaptive_colour=off\n", MLOOP, STOCK, missing=True)
+    gets = open(tmp + "/svc-calls").read().splitlines()
+    check("no service: failure said once, nothing noted; readback recovers when the service appears", gets == ["call ambientdisplayinfo 2"] * 11
+          and out.count("could not be switched off") == 1 and "service" not in saved
+          and svc(tmp) == ("1", []), (gets, out, saved))
+    late = CLOOP.replace("$1", ":").replace("[ $n = 2 ] && { :; };", "[ $n = 7 ] && rm $T/svc-missing;").replace("-lt 6", "-lt 10")
+    run(tmp, "", late, STOCK, missing=True)
+    check("default off applied even if the service starts late", svc(tmp) == ("0", ["call ambientdisplayinfo 1 i32 0"]), svc(tmp))
+    _, _, _, out = run(tmp, "", "touch $T/svc-refuse\n" + CLOOP.replace("$1", ":"), STOCK)
+    check("refused write: five tries, actual state stays on, failure logged once", svc(tmp) == ("1", ["call ambientdisplayinfo 1 i32 0"] * 5)
+          and open(tmp + "/hassmic/adaptive-colour").read() == "1\n" and "adaptive colour: off" not in out
+          and out.count("could not be switched off") == 1, (svc(tmp), out))
+    retry = CLOOP.replace("[ $n = 2 ]", "[ $n = 6 ]").replace("-lt 6", "-lt 9").replace(
+        "$1", "rm $T/svc-refuse; touch $T/hassmic/state/adaptive-colour-request")
+    run(tmp, "", "touch $T/svc-refuse\n" + retry, STOCK)
+    check("failed off can be retried explicitly with the same preference", svc(tmp) == ("0", ["call ambientdisplayinfo 1 i32 0"] * 6), svc(tmp))
+    run(tmp, "", CLOOP.replace("$1", "touch $T/svc-missing"), STOCK)
+    check("service disappears: stale readback removed", not os.path.exists(tmp + "/hassmic/adaptive-colour"))
+    run(tmp, "screen_adaptive_colour=off\n", "getprop() { echo 1; }; n=0; sleep() { n=$((n + 1)); [ $n -lt 4 ] || exit 0; }\nBACKLIGHT=1; backlight", STOCK)
+    check("no ADAPTIVE_COLOUR (every other Show): never asked", not os.path.exists(tmp + "/svc-calls"), svc(tmp))
+
 # board.backlight (the settings) and device.conf's BACKLIGHT (root applying them) say the same; neither without a screen
 for m in sorted(os.listdir(ROOT + "/devices")):
     conf, board, mk = (f"{ROOT}/devices/{m}/{f}" for f in ("device.conf", "board.c", "device.mk"))
@@ -152,5 +235,7 @@ for m in sorted(os.listdir(ROOT + "/devices")):
         a = "\nBACKLIGHT=1" in open(conf).read(); b = ".backlight = 1" in open(board).read()
         scr = "src/hassmic/screen.c" in open(mk).read()
         check(f"{m}: board.backlight and BACKLIGHT agree, with a screen", a == b == scr, f"{a} {b} {scr}")
+        c = "\nADAPTIVE_COLOUR=1" in open(conf).read(); d = ".adaptive_colour = 1" in open(board).read()
+        check(f"{m}: board.adaptive_colour and ADAPTIVE_COLOUR agree, only with a backlight", c == d and (a or not c), f"{c} {d} {a}")
 
 sys.exit(1 if fails else 0)

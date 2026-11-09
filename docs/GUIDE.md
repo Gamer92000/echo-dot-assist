@@ -503,6 +503,12 @@ satellite of its own has to run without its microphone (as a display) while hass
   to +100) or dimmer (down to −100), as the stock slider does with adaptive on. With Kiosk Satellite installed, the Echo
   switches off the app's own adaptive brightness (stopping the app for a moment), so these settings set the screen; switched
   on again in the app, it goes off again within seconds.
+- **Adaptive colour** (Echo Show 8 2nd gen): under **Screen**, **Brightness and colour** also has Amazon's
+  **Adaptive Color** setting. It warms the screen's white with the room's light, which can turn a dashboard yellow
+  at night. It is **off by default**. Switch it on to follow the room's light again; your choice survives a restart.
+  The switch shows the device's confirmed state, so a change can take a few seconds to appear. It is hidden while
+  the display service is unavailable. Amazon can temporarily switch it off during video playback. Returning to
+  stock Alexa restores the original setting.
 - **Words and timers** (the settings page's Screen page, both off by default), over whatever the screen shows: the
   face, the music or an app (Kiosk Satellite too); not over the menu pulled down from the top, which hides them while
   it is out.
