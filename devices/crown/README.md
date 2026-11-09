@@ -16,26 +16,25 @@ Pinned: `update-kindle-crown-NS6570_user_6074_0012383140484.bin`, Fire OS 6.5.7.
 `4b6fb088…ce421` (full value in `device.conf`). Download it from its
 [FTVDB record](https://ftvdb.com/echo/firmware/com.amazon.crown.android.os/90ad1be88b4e7ed9ddb0ef58c8d6200a-12383140484-fire-os-6-5-7-0-ns6570-6074-2025-08-23/).
 The system partition must be exactly this build's: the boot image is made from its `boot.img` and hassmic links
-against its libraries. amonet does not depend on the Fire OS version.
+against its libraries.
 
 ## Unlock (public: amonet-crown)
 
-[`unlock.md`](unlock.md) is the guide from the XDA thread (R0rt1z2). Files into `firmware/crown/` (not in git):
+By hand, as the [XDA
+thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-8-1st-gen-2019-crown.4766687/) (R0rt1z2) says:
+[`unlock.md`](unlock.md). The unlock's own files are the thread's: it says which, kept current with its procedure;
+nothing here downloads or reads them, its `boot-root.zip` included. The files of this project's steps go into
+`firmware/crown/` (not in git):
 
 | File | Source | sha256 |
 |---|---|---|
-| `amonet-crown-v2.0.1.zip` | the XDA thread | `5db974c321ae2f4586f7c51c95b7bdffb61ef85bde05ce7e62f78196a984c24f` |
 | `update-kindle-crown-NS6570_user_6074_0012383140484.bin` | Amazon, link above | `4b6fb088…ce421` |
-| `boot-root.zip` | the XDA thread (one `boot-root.img`, NS6571's); the install takes only its `sbin/adbd` (`ADBD` in `device.conf`) | `d18f8256869820a87527ec08e75ec495362103ed4ad669e946d052f0f705012d` |
-| `magiskpolicy32` | `patch/magiskpolicy32` of donut's `boot-root.zip` ([its README](../donut/README.md)); the guided setup takes it from there | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
+| `magiskpolicy32` | `lib/armeabi-v7a/libmagiskpolicy.so` of `Magisk-v30.7.apk`, [Magisk v30.7](https://github.com/topjohnwu/Magisk/releases/tag/v30.7) (APK `e0d32d2123532860f97123d927b1bb86c4e08e6fd8a48bfc6b5bee0afae9ebd5`); the guided setup fetches it, by hand as in [checkers' README](../checkers/README.md#2-unpack-the-firmware-on-the-pc) | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
+| `adbd` | `sbin/adbd` of Google's Android 7.1.1 emulator image (`system-images;android-25;google_apis;armeabi-v7a` r18; only its ramdisk is read, `scripts/zipmember.py`): a userdebug adbd that goes by `ro.secure`, for root adb in our boot image (`ADBD` in `device.conf`). The guided setup fetches it. Not tried on a Show yet; until 2026-11-09 the XDA boot-root image's (CyanogenMod's) was the tested one | `cc0178051cbf3fa0c7df5c880abd1becf55ce9f35b60ac851aae2edd106a3c18` |
 
-1. With the Echo on its power supply, hold all three buttons until "=> FASTBOOT mode..." shows, connect micro-USB,
-   `./fastbrick.sh` (from the unzipped `amonet/`), type `YES`. **After the 10 s grace period nothing may interrupt it**
-   (up to 5 min): that bricks it for good. It ends in TWRP.
-2. TWRP asks "Keep System Read only?": tap **Keep Read Only**. Nothing of the install writes `/system` from TWRP.
-3. Root: hacked fastboot (the Mute key while it boots, or from TWRP), `fastboot oem flags 61`, `fastboot flash boot
-   boot-root.img`, then `fastboot continue` (not `reboot`: see docs/re-crown.md). adb is root. The guided setup does
-   its own root step from the firmware's `boot.img` instead, so this is only for an Echo that should be rooted by hand.
+**Stop once TWRP shows on the Echo's screen.** TWRP asks "Keep System Read only?": tap **Keep Read Only**. Nothing of
+the install writes `/system` from TWRP. The guided setup does its own root step from the firmware's `boot.img`; an Echo
+that should only be rooted, without the install: as the XDA thread says.
 
 **Never write lk, preloader, tee1/tee2 (tz) or any other bootloader partition.** An install for this model touches
 `system` and `boot` only.
@@ -56,9 +55,9 @@ The guided setup does all of it: `scripts/setup.sh crown` (`--dry-run` walks the
 4. **Lock down, join Wi-Fi, install**: `scripts/wifi-join.sh` after the lockdown (`scripts/device/lockdown.sh`; do not
    join before it: Fire OS would reach Amazon), then `DEVICE=crown scripts/install-system.sh`.
 
-Updating later: `scripts/ota-push.sh <echo-ip>` (`DEVICE=crown`). `scripts/install-system.sh --uninstall` turns Alexa's apps
-back on, takes hassmic off `/system` and wipes cache and data in TWRP (as on [cronos](../cronos/README.md)); all the way back is the firmware `.bin` as a `.zip` in TWRP, or amonet's
-`restore-stock-crown`.
+Updating later: `scripts/ota-push.sh <echo-ip>` (`DEVICE=crown`). `scripts/install-system.sh --uninstall` turns Alexa's
+apps back on, takes hassmic off `/system` and wipes cache and data in TWRP (as on [cronos](../cronos/README.md)); all
+the way back to stock is the XDA thread's.
 
 ## What works and what is open
 

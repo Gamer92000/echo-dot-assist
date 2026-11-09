@@ -24,6 +24,11 @@
  * scene.h), so that the two never fight over what is in front; nor does root open it over the face the user chose while
  * a UI starts again (a new band height, one that hung).  hassmic gone, its pid is too, and root takes over.
  *
+ * Words and timers (screen_words, the UI's words.c; issue #104): what was said, the reply and whether the satellite is
+ * idle again are kept here while "Speech on screen" is on (nothing while it is off) and told on a change; the running
+ * timers are the core's (core_timers_running), read with its state and at once on screen_timers_changed, told when
+ * they change (the UI counts down itself).
+ *
  * HASSMIC_SCREEN=<program>: run that instead (tests), with HMUI_BAND set the same way.
  */
 #ifndef _GNU_SOURCE
@@ -99,6 +104,13 @@ static struct { char *b; size_t n, cap; } fifo;                 /* Music Assista
 /* the launchable apps as the UI listed them at its start: the settings page's choice of home app */
 struct app { char pkg[96], label[64]; int sys; };
 static struct app apps[64], apps_new[64]; static int napps, napps_new;
+/* Words and timers over the screen (screen_words, the UI's words.c): the settings (wo), what was said and the reply with
+ * whether the satellite is idle again and since when (wh, wr, ws); the timers are the core's, read with its state */
+static int words_on, words_hold = 8, timers_show;               /* (lock) */
+static char heard[1000], reply[1000]; static int w_idle; static long long w_idle_at;   /* (lock; a line holds 1023) */
+static unsigned words_gen, words_sent, wo_gen, wo_sent;
+static atomic_int timers_now, keep_on;                          /* a change to read now; timers shown: the screen stays on */
+static atomic_uint hide_req;                                    /* the UI's "timers hide <seq>" + 1: the list of that "tl" */
 
 static long long mono_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000LL + t.tv_nsec / 1000000; }
 
@@ -131,6 +143,19 @@ static void clean(char *out, size_t n, const char *in)          /* control chara
     size_t k = 0;
     for (; in && *in && k + 1 < n; in++) out[k++] = (unsigned char)*in < 0x20 || *in == 0x7F ? ' ' : *in;
     out[k] = 0;
+}
+
+/* as clean, and never ending inside a code point (cut to fit: the UI would draw a broken character) */
+static void clean_cut(char *out, size_t n, const char *in)
+{
+    clean(out, n, in);
+    size_t k = strlen(out);
+    if (!in || strlen(in) <= k || !k) return;
+    size_t j = k - 1;
+    while (j > 0 && ((unsigned char)out[j] & 0xC0) == 0x80) j--;
+    unsigned char c = (unsigned char)out[j];
+    size_t need = c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 1;
+    if (j + need > k) out[j] = 0;
 }
 
 static int dirty;                                               /* (lock) something changed since the writer looked */
@@ -228,6 +253,47 @@ int screen_band(const void *argb, int w)
 }
 
 int screen_width(void) { return atomic_load(&ui_width); }
+
+void screen_words(int what, const char *text)
+{
+    pthread_mutex_lock(&lock);
+    if (words_on) {
+        if (what == SCREEN_WORDS_RUN) { heard[0] = reply[0] = 0; w_idle = 0; words_gen++; }
+        else if (what == SCREEN_WORDS_HEARD) { clean_cut(heard, sizeof heard, text); reply[0] = 0; w_idle = 0; words_gen++; }
+        else if (what == SCREEN_WORDS_REPLY) { clean_cut(reply, sizeof reply, text); w_idle = 0; words_gen++; }
+        else if (what == SCREEN_WORDS_IDLE && !w_idle) { w_idle = 1; w_idle_at = mono_ms(); words_gen++; }
+        kick();
+    }
+    pthread_mutex_unlock(&lock);
+}
+
+/* the three settings: kept here (settings.c's table reads and sets them), told to the UI as one line */
+static int setting(int *v, int set, int lo, int hi)
+{
+    pthread_mutex_lock(&lock);
+    if (set >= 0) {
+        int n = set < lo ? lo : set > hi ? hi : set;
+        if (n != *v) {
+            *v = n; wo_gen++;
+            if (v == &words_on && !n) { heard[0] = reply[0] = 0; w_idle = 0; words_gen++; }   /* off: nothing kept */
+            kick();
+        }
+    }
+    int r = *v;
+    pthread_mutex_unlock(&lock);
+    return r;
+}
+int screen_words_on(int set) { return setting(&words_on, set, 0, 1); }
+int screen_words_hold(int set) { return setting(&words_hold, set, 0, 120); }
+int screen_timers_on(int set) { return setting(&timers_show, set, 0, 1); }
+
+void screen_timers_changed(void)
+{
+    atomic_store(&timers_now, 1);
+    pthread_mutex_lock(&lock); kick(); pthread_mutex_unlock(&lock);
+}
+
+int screen_keep_on(void) { return atomic_load(&keep_on) && !atomic_load(&gave_up); }
 
 static int kiosk_installed(void)
 {
@@ -420,6 +486,8 @@ static void command(char *l)
         dropin_answer();                                          /* a ringing call only: never ends one answered meanwhile */
     } else if (!strcmp(l, "dropin hangup")) dropin_hangup("the screen");
     else if (!strcmp(l, "timer stop")) { pthread_mutex_lock(&core_lock); core_alarm_stop("the screen"); pthread_mutex_unlock(&core_lock); }
+    else if (!strcmp(l, "words clear")) screen_words(SCREEN_WORDS_RUN, NULL);   /* tapped away on the screen */
+    else if (!strncmp(l, "timers hide ", 12)) { atomic_store(&hide_req, (unsigned)strtoul(l + 12, NULL, 10) + 1); screen_timers_changed(); }
     else if (!strncmp(l, "ml ", 3) || !strncmp(l, "mplay ", 6) || !strncmp(l, "mq ", 3) || !strncmp(l, "mg ", 3) || !strncmp(l, "mv ", 3) ||
              !strncmp(l, "mgv ", 4) || !strncmp(l, "mhere ", 6) || !strncmp(l, "img ", 4)) mass_ui(l);
 }
@@ -564,18 +632,34 @@ static void web_url(char *out, size_t n)
     freeifaddrs(ifa);
 }
 
-static struct { int mute, dnd, oobe, lux, evol, kiosk; char timers[300], peer[64], web[96]; } now_s, sent_s;
+#define NTIMERS 8
+static struct { int mute, dnd, oobe, evol, kiosk; char timers[300], peer[64], web[96]; struct core_timer run[NTIMERS]; int nrun; } now_s, sent_s;
+static struct core_timer hidden[NTIMERS]; static int nhidden = -1;   /* (the writer's) the list tapped away: -1 none */
+static unsigned tl_seq;                                         /* (the writer's) the last "tl" sent */
 
 static void read_core(int slow)
 {
     char names[300] = "", peer[64] = "";
+    memset(now_s.run, 0, sizeof now_s.run);                     /* (compared whole: no bytes left of an older name) */
     pthread_mutex_lock(&core_lock);
     now_s.mute = core_muted(); now_s.dnd = core_dnd(-1) > 0; now_s.evol = core_volume();
     if (core_timers_ringing(names, sizeof names) <= 0) names[0] = 0;
+    now_s.nrun = core_timers_running(now_s.run, NTIMERS);
     pthread_mutex_unlock(&core_lock);
     now_s.oobe = core_oobe();
-    float lx = core_lux(); now_s.lux = isnan(lx) ? -1 : (int)lroundf(lx);
     clean(now_s.timers, sizeof now_s.timers, names);
+    for (int i = 0; i < now_s.nrun; i++) { char c[sizeof now_s.run[0].name]; clean(c, sizeof c, now_s.run[i].name); memcpy(now_s.run[i].name, c, sizeof c); }
+    pthread_mutex_lock(&lock);
+    int show = timers_show;
+    pthread_mutex_unlock(&lock);
+    int active = 0;                                             /* (a paused one Home Assistant forgot stays listed: */
+    for (int i = 0; i < now_s.nrun; i++) active |= now_s.run[i].active;   /* the screen is not held on for it) */
+    /* tapped away on the screen: not held on for that list; a change (one more, one gone, a pause) shows it again */
+    /* (the list the UI had when tapped, the last sent; a newer one on its way to it: not hidden, the UI shows that) */
+    unsigned hr = atomic_exchange(&hide_req, 0);
+    if (hr && hr - 1 == tl_seq) { memcpy(hidden, sent_s.run, sizeof hidden); nhidden = sent_s.nrun; }
+    if (nhidden >= 0 && (nhidden != now_s.nrun || memcmp(hidden, now_s.run, sizeof hidden))) nhidden = -1;
+    atomic_store(&keep_on, show && (names[0] || (active && nhidden < 0)));
     if (!dropin_running() || dropin_status(peer, sizeof peer) == DROPIN_IDLE) peer[0] = 0;   /* a call over: no peer */
     clean(now_s.peer, sizeof now_s.peer, peer);
     if (slow) {                                                   /* every 10 s: what changes rarely */
@@ -646,6 +730,8 @@ static void *writer(void *arg)
             pthread_mutex_lock(&lock);                          /* all of it again */
             for (int i = 0; i < npats; i++) { pats[i].told = pats[i].came = 0; pats[i].sent = pats[i].on ? pats[i].gen - 1 : pats[i].gen; }
             tz_sent = meta_sent = prog_sent = ctl_sent = art_sent = gone_sent = band_sent = 0; home_told = 0;
+            words_sent = words_gen - 1; wo_sent = wo_gen - 1;
+            atomic_store(&hide_req, 0); nhidden = -1;             /* (a new UI shows them) */
             if (!music) meta_sent = meta_gen, prog_sent = prog_gen, ctl_sent = ctl_gen;
             if (!music && !artn) art_sent = art_gen;              /* (a cover before any metadata: told too) */
             fifo.n = 0; ui_up = 1;                                /* answers to the last UI's requests: not this one's */
@@ -663,7 +749,9 @@ static void *writer(void *arg)
             continue;
         }
         long long now = mono_ms();
-        if (now >= next_core) { read_core(now >= next_slow); if (now >= next_slow) next_slow = now + 10000; next_core = now + 1000; }
+        if (now >= next_core || atomic_exchange(&timers_now, 0)) {
+            read_core(now >= next_slow); if (now >= next_slow) next_slow = now + 10000; next_core = now + 1000;
+        }
         /* what the UI asks of hassmic's state: before the home app's choice, which goes by Kiosk Satellite */
         if (now_s.kiosk != sent_s.kiosk) put(&o, "kiosk %s", now_s.kiosk ? KIOSK_PKG : "");
         if (strcmp(now_s.web, sent_s.web)) put(&o, "web %s", now_s.web);
@@ -694,6 +782,11 @@ static void *writer(void *arg)
             if (artn && (img = malloc(artn))) { memcpy(img, art, artn); imgn = artn; }
             send_img = 1; art_sent = art_gen;
         }
+        if (wo_sent != wo_gen) { put(&o, "wo %d %d %d", words_on, timers_show, words_hold); wo_sent = wo_gen; }
+        if (words_sent != words_gen) {                          /* (in this order: the UI takes ws as the end of a change) */
+            put(&o, "wh %s", heard); put(&o, "wr %s", reply); put(&o, "ws %lld", w_idle ? now - w_idle_at : -1LL);
+            words_sent = words_gen;
+        }
         if (band_sent != band_gen && band_w) {
             size_t mk = o.n; if (put(&o, "band %d", band_w) || put_bin(&o, band_row, (size_t)band_w * 4)) o.n = mk; else band_sent = band_gen;
         }
@@ -702,10 +795,17 @@ static void *writer(void *arg)
         if (now_s.dnd != sent_s.dnd) put(&o, "dnd %d", now_s.dnd);
         if (now_s.oobe != sent_s.oobe) put(&o, "oobe %d", now_s.oobe);
         if (now_s.evol != sent_s.evol) put(&o, "ev %d", now_s.evol);
-        if (now_s.lux != sent_s.lux && (sent_s.lux < 0 || abs(now_s.lux - sent_s.lux) > sent_s.lux / 8)) put(&o, "lux %d", now_s.lux);
-        else now_s.lux = sent_s.lux;
         if (strcmp(now_s.timers, sent_s.timers)) put(&o, "timers %s", now_s.timers);
         if (strcmp(now_s.peer, sent_s.peer)) put(&o, "peer %s", now_s.peer);
+        if (now_s.nrun != sent_s.nrun || memcmp(now_s.run, sent_s.run, sizeof now_s.run)) {   /* what is left, from now */
+            char l[1000]; size_t n = (size_t)snprintf(l, sizeof l, "tl %d %u", now_s.nrun, ++tl_seq);
+            for (int i = 0; i < now_s.nrun && n < sizeof l; i++) {
+                const struct core_timer *t = &now_s.run[i];
+                long long left = t->active ? t->end_ms - now : t->left_ms;
+                n += (size_t)snprintf(l + n, sizeof l - n, "\t%lld %u %d %s", left < 0 ? 0 : left, t->total, t->active, t->name);
+            }
+            put(&o, "%s", l);
+        }
         sent_s = now_s;
         /* the level: in percent of -50..-20 dBFS (the band's scale), while it changes, 30 times a second at most */
         int db = atomic_load(&level_db), lv = (int)lroundf(fmaxf(0, fminf(100, (db / 10.0f + 50) / 30 * 100)));

@@ -46,6 +46,7 @@ TESTS = [
     ("timer-sound", [PY, "tests/fake_ha_timer_sound.py"]),
     ("sounds", [PY, "tests/fake_web_sounds.py"]),
     ("improv", [PY, "tests/fake_improv.py"]),
+    ("bt-proxy", [PY, "tests/fake_ha_bt_proxy.py"]),
     ("dropin", [PY, "tests/fake_ha_dropin.py"]),
     ("unit", ["make", "-s", "-j4", "unit"]),
     ("mww", [PY, "tests/fake_web_mww.py"]),
@@ -53,6 +54,7 @@ TESTS = [
     ("update", [PY, "tests/fake_ha_update.py"]),
     ("wakesound", [PY, "tests/fake_ha_wakesound.py"]),
     ("remote-bargein", [PY, "tests/fake_ha_remote_bargein.py"]),
+    ("remote-followup", [PY, "tests/fake_ha_remote_followup.py"]),
     ("davs", [PY, "tests/fake_web_davs.py"]),
     ("ota-push", ["sh", "tests/ota_push_test.sh"]),
     ("ring", [PY, "tests/fake_ha_ring.py"]),
@@ -61,6 +63,7 @@ TESTS = [
     ("wyoming", [PY, "tests/fake_ha.py"]),
     ("screen", [PY, "tests/fake_screen.py"]),
     ("screen-9", [PY, "tests/fake_screen.py", "--legacy"]),
+    ("screen-words", [PY, "tests/fake_screen_words.py"]),
     ("ma-api", [PY, "tests/fake_ma_api.py"]),
     ("otatool", ["sh", "tests/otatool_test.sh"]),
 ]

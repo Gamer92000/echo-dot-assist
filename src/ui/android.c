@@ -28,11 +28,17 @@
  *   apps      the launcher activities from IPackageManager, labels and icons from each APK's own resources, on a
  *             thread of their own (a few hundred ms with icons); launched through IActivityManager as `am start` does
  *   front     IActivityManager.getTasks(1) every 0.5 s while the layer is hidden, 1 s while shown (0.85 ms a call)
- *   touch     the touchscreen's evdev node, read beside Android (not grabbed), turned as InputReader turns it
+ *   touch     the touchscreen's evdev node, read beside Android, turned as InputReader turns it; grabbed (EVIOCGRAB)
+ *             only while the words and timers cover an app (words.c), taken and given back with no finger down
  *   Back      a KEYCODE_BACK pair through InputManager.injectInputEvent (uid system has INJECT_EVENTS)
  *   band      the light band (ring_band.c): the window manager's overscan for its rows (every app is laid out above
  *             them; as ringbar.dex did, which this replaces where the UI runs), a layer of its own over everything,
  *             one row per frame from hassmic ("band <w>" + w ARGB pixels), repeated down the band
+ *   words     what was said, the reply and the timers (words.c): a layer of its own the size of ours, TRANSLUCENT,
+ *             over ours and every window, under the band; shown whatever is in front, hidden while the drawer is
+ *             out.  Drawn only when what it shows changes; fades and a ringing timer's pulse are SurfaceControl.setAlpha
+ *             (a transaction, no pixels), so a whole picture (1.8 MB on the Show 5) goes up a few times a request and
+ *             once a second while timers count down
  *
  * Every class, method and field reached through JNI is in the table below (J, F, C; JV, CV those of some Android
  * versions only); tools/mkscreen.py --framework checks it against the firmware's boot class path, as it checks the dex.
@@ -45,6 +51,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <math.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -60,6 +67,7 @@
 
 #define LAYER      1999990000           /* under the band's 2000000000, over every window (type x 10000 + 1000) */
 #define BAND_LAYER 2000000000           /* above every window and ours; the boot animation sits at 2^30 */
+#define WORDS_LAYER 1999995000          /* over ours, under the band's */
 #define ART_PX     400                  /* artwork kept at this size (the music view's), asked of Music Assistant too */
 /* The grip: rows along the top that no app has (overscan, as the band's along the bottom), so that a pull to open the
  * drawer that starts there reaches no app: Kiosk Satellite took one from its own top as its pull to refresh
@@ -76,7 +84,7 @@ static JavaVM *vm;
 static jclass c_rect, c_session, c_sc, c_surface, c_sm, c_pm_stub, c_amn, c_list, c_cn, c_intent, c_ipm_stub, c_plist,
               c_obj, c_am, c_res, c_bitmap, c_config, c_canvas, c_tpaint, c_typeface, c_textutils, c_truncate,
               c_bfactory, c_im, c_keyevent, c_clock, c_dmg, c_wm_stub, c_scb;
-static jmethodID m_below, m_rect, m_sleep, m_wake, m_bmp_copy, m_session, m_sc_init, m_open, m_close, m_layer, m_pos, m_show, m_hide, m_surface, m_copy,
+static jmethodID m_below, m_rect, m_sleep, m_wake, m_bmp_copy, m_session, m_sc_init, m_open, m_close, m_layer, m_pos, m_show, m_hide, m_alpha, m_surface, m_copy,
                  m_service, m_pm_as, m_interactive, m_amn_default, m_tasks, m_start, m_size, m_get, m_cn_pkg,
                  m_intent0, m_intent, m_cat, m_classname, m_package, m_flags, m_ipm_as, m_query, m_plist_get,
                  m_tostring, m_am_init, m_am_add, m_am_close, m_res_system, m_res_dm, m_res_cfg, m_res_init,
@@ -126,6 +134,7 @@ static const struct { jmethodID *v; const char *c, *n, *s; int st, from, to; } m
     J(m_pos, "android/view/SurfaceControl", "setPosition", "(FF)V", 0),
     J(m_show, "android/view/SurfaceControl", "show", "()V", 0),
     J(m_hide, "android/view/SurfaceControl", "hide", "()V", 0),
+    J(m_alpha, "android/view/SurfaceControl", "setAlpha", "(F)V", 0),
     J(m_surface, "android/view/Surface", "<init>", "()V", 0),
     J(m_copy, "android/view/Surface", "copyFrom", "(Landroid/view/SurfaceControl;)V", 0),
     J(m_service, "android/os/ServiceManager", "getService", "(Ljava/lang/String;)Landroid/os/IBinder;", 1),
@@ -348,6 +357,32 @@ out:
     (*env)->ExceptionClear(env);
     (*env)->PopLocalFrame(env, NULL);
     return rc;
+}
+
+/* the width text would have (p_text's paint, uncut): words.c wraps by it, a word at a time and at a few sizes, so the
+ * paint of the last size is kept */
+static int p_measure(void *ctx, const char *s, int px, int bold)
+{
+    (void)ctx; JNIEnv *env = ui_env; int w = 0;
+    static jobject paint; static int p_px = -1, p_bold = -1;
+    if ((*env)->PushLocalFrame(env, 8)) return 0;
+    if (!paint) {
+        jobject p = (*env)->NewObject(env, c_tpaint, m_tpaint, 1 | 128);   /* ANTI_ALIAS | SUBPIXEL_TEXT, as p_text's */
+        if (!failed(env, "TextPaint") && p) paint = (*env)->NewGlobalRef(env, p);
+    }
+    if (paint && (px != p_px || bold != p_bold)) {
+        (*env)->CallVoidMethod(env, paint, m_textsize, (jfloat)(px * 0.8f));
+        (*env)->CallObjectMethod(env, paint, m_settf, typeface[bold ? 1 : 0]);
+        if (failed(env, "typeface")) p_px = -1; else { p_px = px; p_bold = bold; }
+    }
+    jstring js = paint && p_px == px ? jstr(env, s) : NULL;
+    if (js) {
+        float f = (*env)->CallFloatMethod(env, paint, m_measure, js);
+        if (!failed(env, "measureText")) w = (int)(f + 1.5f);
+    }
+    (*env)->ExceptionClear(env);
+    (*env)->PopLocalFrame(env, NULL);
+    return w;
 }
 
 static jobject activity_manager(JNIEnv *env)
@@ -744,7 +779,7 @@ static void p_sleep(void *ctx)
     screen_on_ = 0; scene_screen(the_scene, 0, mono_ms());      /* now, not at poll_front's next look: a touch wakes it */
 }
 
-static const struct ui_platform plat = { p_text, p_launch, p_back, p_send, p_apps, p_image, p_screenshot, p_sleep };
+static const struct ui_platform plat = { p_text, p_launch, p_back, p_send, p_apps, p_image, p_screenshot, p_sleep, p_measure };
 
 /* artwork: JPEG/PNG/BMP bytes -> ART_PX square (the middle of it), the buffer's layout */
 static void art(struct scene *s, const uint8_t *b, size_t n)
@@ -777,11 +812,10 @@ out:
     (*env)->ExceptionClear(env);
     (*env)->PopLocalFrame(env, NULL);
 }
-
 /* ---------------------------------------------------------------- the layers */
 
 struct layer { jobject sc; ANativeWindow *win; int w, h, shown; };
-static struct layer screen_l, band_l, grip_l;
+static struct layer screen_l, band_l, grip_l, words_l;
 static jobject session;
 
 /* (every call checked before the next: one made with an exception pending aborts under CheckJNI) */
@@ -795,7 +829,20 @@ static void layer_show(JNIEnv *env, struct layer *l, int on)
     if (!failed(env, "closeTransaction") && !bad) l->shown = on;
 }
 
-static int layer_make(JNIEnv *env, struct layer *l, const char *name, int w, int h, int y, int z)
+/* the words' layer: shown or hidden, at that opacity, in one transaction */
+static void layer_alpha(JNIEnv *env, struct layer *l, int on, float a)
+{
+    (*env)->CallStaticVoidMethod(env, c_sc, m_open);
+    if (failed(env, "openTransaction")) return;
+    int bad = 0;
+    if (on) { (*env)->CallVoidMethod(env, l->sc, m_alpha, (jfloat)a); bad = failed(env, "setAlpha"); }
+    if (!bad && on != l->shown) { (*env)->CallVoidMethod(env, l->sc, on ? m_show : m_hide); bad = failed(env, on ? "show" : "hide"); }
+    (*env)->CallStaticVoidMethod(env, c_sc, m_close);
+    if (!failed(env, "closeTransaction") && !bad) l->shown = on;
+}
+
+/* opaque: PixelFormat.OPAQUE and RGBX_8888, else TRANSLUCENT and RGBA_8888 (premultiplied) */
+static int layer_make(JNIEnv *env, struct layer *l, const char *name, int w, int h, int y, int z, int opaque)
 {
     if (!session) { jobject s = (*env)->NewObject(env, c_session, m_session); if (failed(env, "SurfaceSession") || !s) return -1; session = (*env)->NewGlobalRef(env, s); }
     jstring nm = (*env)->NewStringUTF(env, name);
@@ -806,11 +853,11 @@ static int layer_make(JNIEnv *env, struct layer *l, const char *name, int w, int
         if (!failed(env, "SurfaceControl.Builder") && b) {
             (*env)->CallObjectMethod(env, b, m_scb_name, nm);
             if (!failed(env, "setName")) (*env)->CallObjectMethod(env, b, m_scb_size, w, h);
-            if (!failed(env, "setSize")) (*env)->CallObjectMethod(env, b, m_scb_format, -1 /* OPAQUE */);
+            if (!failed(env, "setSize")) (*env)->CallObjectMethod(env, b, m_scb_format, opaque ? -1 /* OPAQUE */ : -3 /* TRANSLUCENT */);
             if (!failed(env, "setFormat")) (*env)->CallObjectMethod(env, b, m_scb_flags, 4 /* HIDDEN */);
             if (!failed(env, "setFlags")) c = (*env)->CallObjectMethod(env, b, m_scb_build);
         }
-    } else c = (*env)->NewObject(env, c_sc, m_sc_init, session, nm, w, h, -1 /* OPAQUE */, 4 /* HIDDEN */);
+    } else c = (*env)->NewObject(env, c_sc, m_sc_init, session, nm, w, h, opaque ? -1 : -3, 4 /* HIDDEN */);
     if (failed(env, "SurfaceControl") || !c) return -1;
     l->sc = (*env)->NewGlobalRef(env, c); l->w = w; l->h = h;
     (*env)->CallStaticVoidMethod(env, c_sc, m_open);
@@ -825,7 +872,7 @@ static int layer_make(JNIEnv *env, struct layer *l, const char *name, int w, int
     (*env)->CallVoidMethod(env, surf, m_copy, l->sc);
     if (failed(env, "Surface")) return -1;
     l->win = ANativeWindow_fromSurface(env, surf);
-    if (!l->win || ANativeWindow_setBuffersGeometry(l->win, w, h, WINDOW_FORMAT_RGBX_8888)) return -1;
+    if (!l->win || ANativeWindow_setBuffersGeometry(l->win, w, h, opaque ? WINDOW_FORMAT_RGBX_8888 : WINDOW_FORMAT_RGBA_8888)) return -1;
     return 0;
 }
 
@@ -940,10 +987,11 @@ static void *ui_main(void *arg)
     int W = (*env)->GetIntField(env, di, f_di_w), H = (*env)->GetIntField(env, di, f_di_h), rot = (*env)->GetIntField(env, di, f_di_rot);
     int h = H - band - GRIP;
     disp_w = W; disp_h = H; disp_rot = rot; layer_h = h;
-    if (W <= 0 || h <= 0 || layer_make(env, &screen_l, "hassmic-screen", W, h, GRIP, LAYER)) { say("no layer"); exit(5); }
+    if (W <= 0 || h <= 0 || layer_make(env, &screen_l, "hassmic-screen", W, h, GRIP, LAYER, 1)) { say("no layer"); exit(5); }
     overscan(env, rot, band, GRIP);                             /* band 0: none along the bottom */
-    if (band > 0 && layer_make(env, &band_l, "hassmic-band", W, band, GRIP + h, BAND_LAYER)) say("no band layer");
-    if (layer_make(env, &grip_l, "hassmic-grip", W, GRIP, 0, BAND_LAYER)) say("no grip layer"); else grip_draw(env, 0);
+    if (band > 0 && layer_make(env, &band_l, "hassmic-band", W, band, GRIP + h, BAND_LAYER, 1)) say("no band layer");
+    if (layer_make(env, &grip_l, "hassmic-grip", W, GRIP, 0, BAND_LAYER, 1)) say("no grip layer"); else grip_draw(env, 0);
+    if (layer_make(env, &words_l, "hassmic-words", W, h, GRIP, WORDS_LAYER, 0)) { say("no words layer"); words_l.win = NULL; }
     jobject tf = (*env)->GetStaticObjectField(env, c_typeface, f_tf_default);
     typeface[0] = (*env)->NewGlobalRef(env, tf);
     typeface[1] = (*env)->NewGlobalRef(env, (*env)->CallStaticObjectMethod(env, c_typeface, m_tf_create, tf, 1));   /* BOLD */
@@ -965,6 +1013,7 @@ static void *ui_main(void *arg)
     }
     struct scene *s = scene_new(W, h, band, &plat, NULL, mono_ms());
     the_scene = s;
+    scene_words_grab(s, t.fd >= 0 ? 0 : -1);
     { pthread_t dt; if (!pthread_create(&dt, NULL, decode_thread, NULL)) pthread_detach(dt); }
     char loc[PROP_VALUE_MAX] = "";                              /* 12-hour clock where the locale has it */
     __system_property_get("persist.sys.locale", loc);
@@ -977,6 +1026,7 @@ static void *ui_main(void *arg)
 
     static uint8_t in[ART_MAX + 4096]; size_t have = 0, art_need = 0, band_need = 0, img_need = 0; int shown = -1, img_size = 0; char img_key[40] = "";
     long long next_front = 0, wake_watch = 0, frame_at = 0, hold_t0 = 0, next_hold = 0, next_touch = 0; int holding = 0, grip_as = 0;
+    float words_alpha = -1;
     for (;;) {
         long long now = mono_ms();
         /* the activity in front: often while one asked for is on its way (our last frame stands in for it till then) */
@@ -998,6 +1048,30 @@ static void *ui_main(void *arg)
                 ANativeWindow_unlockAndPost(screen_l.win);
             }
             frame_at = now;
+        }
+        int wnext = -1; float wa = 0;                           /* the words' layer: drawn on a change, its alpha set */
+        int wk = words_l.win ? scene_words(s, now, &wa, &wnext) : 0;
+        if (wk == 2) {
+            ANativeWindow_Buffer buf;
+            if (ANativeWindow_lock(words_l.win, &buf, NULL)) { wk = 0; scene_words_lost(s); }   /* (owed: drawn next time) */
+            else {
+                struct gfx g = { buf.bits, buf.width, buf.height, buf.stride, { 0, 0, buf.width, buf.height } };
+                scene_words_draw(s, &g);
+                ANativeWindow_unlockAndPost(words_l.win);
+            }
+        }
+        if (words_l.win && (wk > 0) != words_l.shown) layer_alpha(env, &words_l, wk > 0, wa);
+        else if (wk > 0 && fabsf(wa - words_alpha) > 0.004f) layer_alpha(env, &words_l, 1, wa);
+        if (wk > 0) words_alpha = wa;
+        if (wnext >= 0 && (next < 0 || wnext < next)) next = wnext;
+        /* the panel to the words while they cover an app (scene.h), back to Android once they go: never mid-touch */
+        if (t.fd >= 0 && !touch_fingers(&t) && scene_words_wants_grab(s) != t.grabbed) {
+            int want = scene_words_wants_grab(s);
+            if (touch_grab(&t, want)) {
+                say("touch: %s refused (%s): a ring over an app brings our screen up instead", want ? "grab" : "let go", strerror(errno));
+                if (!want) { touch_gone(&t, s, now); next_touch = now; }   /* (closed: the kernel lets go of it) */
+                scene_words_grab(s, -1);
+            } else scene_words_grab(s, want);
         }
         int dr = scene_drawer(s);                                /* the grip as the drawer's top while it is out */
         if (dr != grip_as) { grip_draw(env, dr); grip_as = dr; }
@@ -1021,9 +1095,9 @@ static void *ui_main(void *arg)
             images_done(s);
         }
         if (t.fd >= 0 && (p[2].revents & (POLLERR | POLLHUP | POLLNVAL))) {   /* gone: poll would not sleep */
-            say("touch: the device went away"); touch_gone(&t, s, now); next_touch = now + 5000;
+            say("touch: the device went away"); touch_gone(&t, s, now); next_touch = now + 5000; scene_words_grab(s, -1);
         } else if (t.fd >= 0 && p[2].revents) touch_read(&t, s);
-        if (t.fd < 0 && now >= next_touch) { touch_open(&t, NULL, 0); next_touch = now + 5000; }
+        if (t.fd < 0 && now >= next_touch) { if (touch_open(&t, NULL, 0) >= 0) scene_words_grab(s, 0); next_touch = now + 5000; }
         if (p[0].revents) {
             ssize_t r = read(0, in + have, sizeof in - have);
             if (r <= 0) break;                                   /* hassmic is gone: so is the layer */

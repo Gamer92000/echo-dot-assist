@@ -20,8 +20,20 @@ static int HOLD_RESET_MS = 10000;      /* ... and then hassmic's reset (core_res
                                         * HASSMIC_HOLD_TIMES="<warn ms> <reset ms>": tests (tests/fake_improv.py) */
 #define COMBO_MS       2000            /* both volume keys: stock gives that no meaning (acebuttond's are action holds) */
 #define CHORD_MS        400            /* board.action_combo: the two presses this close count as one */
+#define MULTI_MS        450            /* multi press: the next press this soon after the last one belongs to it; a single
+                                        * press waits this long to learn it is one */
+
 
 static struct button_handler handler;
+
+static atomic_int multi_press;
+int buttons_multi_press(int set) { if (set >= 0) atomic_store(&multi_press, set != 0); return atomic_load(&multi_press); }
+
+static void taps_done(int n)           /* n presses in a row: 1 is the press itself, 2 and 3 are the handler's multi */
+{
+    if (n >= 2 && handler.multi) handler.multi(n > 3 ? 3 : n);
+    else if (handler.action) handler.action();
+}
 static int muted_state;                /* latch: what was last reported; no latch: the software toggle */
 static pthread_mutex_t muted_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -124,13 +136,21 @@ static void *reader(void *arg)
     struct input_event ev; long long action_down = 0, vol_down[2] = { 0, 0 }; int combo_done = 0, held = 0;
     int action_told = 0, vol_told[2] = { 0, 0 };   /* this press went to handler.event already, or must not (a pair) */
     grab(in);
+    int taps = 0; long long tap_at = 0;             /* short presses waiting to be told whether more follow (multi press) */
     for (;;) {
         /* Keys held: their stages are due by the clock, not by events.  The keys repeat only as long as acebuttond's
          * configuration says, not something to count on */
         long long now = now_ms(), next = -1;
+        if (taps && !action_down) {
+            if (now >= tap_at + MULTI_MS) { int n = taps; taps = 0; taps_done(n); continue; }
+            next = tap_at + MULTI_MS;
+        }
         if (action_down) {
             long long t = now - action_down;
-            if (!action_told && t >= SHORT_PRESS_MS) { action_told = 1; if (handler.event) handler.event(BUTTON_ACTION, 1); }
+            if (!action_told && t >= SHORT_PRESS_MS) {
+                if (taps) { int n = taps; taps = 0; taps_done(n); }      /* presses, then a hold: the presses first */
+                action_told = 1; if (handler.event) handler.event(BUTTON_ACTION, 1);
+            }
             if (handler.hold && held < 2 && t >= (held ? HOLD_RESET_MS : HOLD_WARN_MS)) { held++; handler.hold(held); }
             if (!action_told) next = action_down + SHORT_PRESS_MS;
             else if (handler.hold && held < 2) next = action_down + (held ? HOLD_RESET_MS : HOLD_WARN_MS);
@@ -151,7 +171,10 @@ static void *reader(void *arg)
         case KEY_HELP:
             if (ev.value == 1) { action_down = now; held = 0; action_told = 0; }
             else if (ev.value == 0) {
-                if (action_down && now - action_down < SHORT_PRESS_MS) { if (handler.action) handler.action(); }
+                if (action_down && now - action_down < SHORT_PRESS_MS) {
+                    if (atomic_load(&multi_press) || taps) { taps++; tap_at = now; if (taps >= 3) { taps = 0; taps_done(3); } }
+                    else if (handler.action) handler.action();
+                }
                 else if (action_down && !action_told && handler.event) handler.event(BUTTON_ACTION, 1);   /* the event came first */
                 if (held == 1 && handler.hold) handler.hold(0);
                 action_down = 0; held = 0;

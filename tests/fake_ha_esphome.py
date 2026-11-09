@@ -51,6 +51,8 @@ async def main(e):
     check(lux is None and pv("light_sensor") == 0
           and isinstance(lauto, SwitchInfo) and isinstance(lbright, NumberInfo) and (lbright.min_value, lbright.max_value) == (0, 100),
           "LED brightness entities listed, the light sensor off by default (no illuminance)")
+    check(not any(k in by for k in ("adaptive_brightness", "screen_brightness", "adaptive_brightness_adjustment"))
+          and "screen_brightness" not in {x["name"] for x in page.state()["settings"]}, "no screen brightness on a model without a screen")
     last = lambda k, t: ([x.state for x in states if isinstance(x, t) and x.key == k] or [None])[-1]
     await until(lambda: last(lbright.key, NumberState) is not None)
     check(last(lauto.key, SwitchState) is True and last(lbright.key, NumberState) == 80,

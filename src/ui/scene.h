@@ -33,7 +33,7 @@
  *   p+ <pattern> <ms>, p- <pattern>    the core's patterns as the light ring has them (main.c led()), on (that long
  *                                  ago: to a new UI, what is on; the timed ones end by themselves) and off
  *   lv <0..100>                    the talker's (listening) or the reply's (speaking) level
- *   mute <0|1>, dnd <0|1>, oobe <0|1>, lux <lux>, name <text>, tz <POSIX TZ>, act <text>
+ *   mute <0|1>, dnd <0|1>, oobe <0|1>, name <text>, tz <POSIX TZ>, act <text>
  *   h12 <0|1>                      (the platform's: android.c from the locale)
  *   ev <0..100>                    the Echo's volume, whenever it changes (the drawer's slider; the band shows the keys')
  *   timers <names>                 ringing timers ("" none);  peer <name>: the other side of a Drop In
@@ -58,9 +58,16 @@
  *   merr <text>                    a command to Music Assistant failed: why (a toast)
  *   img <key> <bytes> <size>       (the platform's: an image asked for, JPEG or PNG, at that size; 0 bytes: none)
  *   ping <n>                       answered "pong <n>" (every 3 s; none within 10 s: the UI is taken for hung, restarted)
+ *   wo <words 0|1> <timers 0|1> <hold s>     the settings "Speech on screen", "Timers on screen", "Speech stays for"
+ *   wh <text>, wr <text>, ws <ms|-1>   what was said, the reply, and how long ago the satellite was idle again (-1: not
+ *                                  yet); sent together, in that order, whenever one changes
+ *   tl <n> <seq>\t<left ms> <total s> <active 0|1> <name>...   the running timers (the name: its length where it has none)
  * To hassmic, on stdout (screen.c acts on them):
  *   cmd <play|pause|next|previous|volume N|mute 0/1|repeat_off|repeat_one|repeat_all|shuffle|unshuffle|seek MS>
  *   dropin answer, dropin hangup, timer stop, vol <0..100>, dnd <0|1>, log <text>, pong <n>
+ *   words clear                    the words tapped away (words.c): gone in hassmic too, a new UI gets none
+ *   timers hide <seq>              the running timers of that "tl" tapped away: the screen not held on for them until
+ *                                  they change
  *   app <package>\t<label>\t<system 0|1> ... apps.    every launchable app, as listed at start (the page's home app choice)
  *   ml <req> <what> <offset> [<arg>]   a list: artists albums playlists tracks radios podcasts audiobooks recent queue,
  *                                  album_tracks artist_albums artist_tracks playlist_tracks podcast_episodes <uri>,
@@ -93,6 +100,8 @@ struct ui_platform {
     void (*image)(void *ctx, const char *key, int px);
     void (*screenshot)(void *ctx);                                 /* what shows now: scene_backdrop follows, or not */
     void (*sleep)(void *ctx);                                      /* the screen off */
+    /* the width text would have, uncut (as text draws it; NULL: text's own width stands in, by drawing it) */
+    int  (*measure)(void *ctx, const char *s, int px, int bold);
 };
 
 enum { TOUCH_DOWN, TOUCH_MOVE, TOUCH_UP };
@@ -121,5 +130,17 @@ int  scene_visible(const struct scene *s);
 struct rect scene_prepare(struct scene *s, long long now, int *next_ms);
 void scene_draw(struct scene *s, struct gfx *g);
 void scene_invalidate(struct scene *s);                        /* everything again (a new buffer) */
+/* The words and timers (words.c): a layer the size of the scene's, see-through, over the scene and every app, under
+ * the band; hidden while the drawer is out.  0: hidden, 1: shown as last drawn, 2: shown, drawn anew first by
+ * scene_words_draw into the whole buffer (RGBA_8888, premultiplied); *alpha the layer's opacity now (fades, a ringing
+ * timer's pulse); *next_ms when to ask again (-1: only after a message).  Call after scene_prepare */
+int  scene_words(struct scene *s, long long now, float *alpha, int *next_ms);
+void scene_words_draw(struct scene *s, struct gfx *g);
+void scene_words_lost(struct scene *s);                         /* not drawn after all (no buffer): drawn the next time */
+/* Over an app the panel is Android's: the words take its touches only while the platform grabs it for them.
+ * scene_words_grab: it can (0), it holds it (1), or it cannot (-1: a ring over an app then brings our screen up for its
+ * Stop instead); scene_words_wants_grab: they cover an app now (taken and given back between touches only) */
+void scene_words_grab(struct scene *s, int state);
+int  scene_words_wants_grab(const struct scene *s);
 void scene_free(struct scene *s);
 #endif

@@ -107,11 +107,12 @@ static void put16(unsigned char *p, unsigned v) { p[0] = v; p[1] = v >> 8; }
 
 /* ---------------------------------------------------------------- requests from other threads */
 
-enum { R_CONNECT, R_DISCONNECT, R_SERVICES, R_READ, R_WRITE, R_PAIR, R_UNPAIR };
+enum { R_CONNECT, R_DISCONNECT, R_DISCONNECT_ALL, R_SERVICES, R_READ, R_WRITE, R_PAIR, R_UNPAIR };
 struct req { struct req *next; int kind; uint64_t addr; unsigned addr_type, handle; int response; size_t len; unsigned char data[]; };
 static pthread_mutex_t qlock = PTHREAD_MUTEX_INITIALIZER;
 static struct req *qhead, **qtail = &qhead;                    /* qlock */
 static uint64_t slot_addr[BLE_MAX_CONN];                       /* qlock: what ble_connections() reports, 0 = free */
+static int connects;                                           /* qlock: R_CONNECTs asked for and not handled yet */
 
 static void poke(void) { if (wake[1] >= 0 && write(wake[1], "", 1) < 0) { /* pipe full: the thread wakes anyway */ } }
 
@@ -1158,10 +1159,12 @@ static int stock_bt_running(void)
 #endif
 }
 
-/* The controller's address, from idme like btmac.sh does; the chip carries the same one. */
+/* The controller's address, from idme like btmac.sh does; the chip carries the same one.  HASSMIC_BT_MAC: idme's file
+ * on the PC (tests) */
 static void read_bdaddr(void)
 {
-    char h[16] = ""; FILE *f = fopen(board.bt_mac, "r");
+    const char *e = getenv("HASSMIC_BT_MAC");
+    char h[16] = ""; FILE *f = fopen(e && *e ? e : board.bt_mac, "r");
     if (f) { if (fscanf(f, "%12s", h) != 1) h[0] = 0; fclose(f); }
     if (strlen(h) == 12)
         snprintf(bdaddr, sizeof bdaddr, "%.2s:%.2s:%.2s:%.2s:%.2s:%.2s", h, h + 2, h + 4, h + 6, h + 8, h + 10);
@@ -1225,6 +1228,16 @@ static void op_queue(struct conn *c, int kind, const struct req *r)
     start_op(c);
 }
 
+/* a proxy link going: not connected yet freed at once, being set up cancelled, up closed.  -1: the controller stopped
+ * answering */
+static int drop(struct conn *c)
+{
+    if (c->state == C_WAIT) { uint64_t a = c->addr; free_conn(c); if (H->connection) H->connection(a, 0, 0, 0); }
+    else if (c->state == C_CONNECTING) { if (!c->cancel) { c->cancel = 1; if (cmd(OP_LE_CONNECT_CANCEL, NULL, 0) < 0) return -1; } }
+    else if (c->state != C_CLOSING) c->close_now = 1;
+    return 0;
+}
+
 /* one request from the queue.  Returns -1 if the controller stopped answering. */
 static int handle_request(struct req *r)
 {
@@ -1237,9 +1250,11 @@ static int handle_request(struct req *r)
         set_slot(c, r->addr);
         break;
     case R_DISCONNECT:
-        if (!c || c->state == C_WAIT) { if (c) free_conn(c); if (H->connection) H->connection(r->addr, 0, 0, 0); break; }
-        if (c->state == C_CONNECTING) { if (!c->cancel) { c->cancel = 1; if (cmd(OP_LE_CONNECT_CANCEL, NULL, 0) < 0) return -1; } }
-        else if (c->state != C_CLOSING) c->close_now = 1;
+        if (!c) { if (H->connection) H->connection(r->addr, 0, 0, 0); break; }
+        if (drop(c) < 0) return -1;
+        break;
+    case R_DISCONNECT_ALL:          /* after every connect queued before it: those have their slots by now */
+        for (int i = 0; i < BLE_MAX_CONN; i++) if (conns[i].state != C_FREE && drop(&conns[i]) < 0) return -1;
         break;
     case R_PAIR:
         if (!c || c->state < C_MTU || c->state == C_CLOSING) { if (H->paired) H->paired(r->addr, 0, HCI_E_UNKNOWN_CONN); break; }
@@ -1378,7 +1393,12 @@ static void *thread(void *arg)
             struct req *r;
             pthread_mutex_lock(&qlock); r = qhead; qhead = NULL; qtail = &qhead; pthread_mutex_unlock(&qlock);
             int bad = 0;
-            while (r) { struct req *n = r->next; if (!bad && handle_request(r) < 0) bad = 1; free(r); r = n; }
+            while (r) {
+                struct req *n = r->next;
+                if (!bad && handle_request(r) < 0) bad = 1;
+                if (r->kind == R_CONNECT) { pthread_mutex_lock(&qlock); connects--; pthread_mutex_unlock(&qlock); }   /* its slot is set */
+                free(r); r = n;
+            }
             if (bad || upkeep() < 0) break;
             /* scanning pauses while a connection is being set up, and while a wake word round listens (ble_quiet): that pause
              * is neither logged nor reported, it is over within a second */
@@ -1436,7 +1456,22 @@ void ble_quiet(int ms)
     if (until > atomic_load(&quiet_until)) atomic_store(&quiet_until, until);
     poke();
 }
-void ble_connect(uint64_t addr, unsigned addr_type) { request(R_CONNECT, addr, addr_type, 0, NULL, 0, 0); }
+void ble_connect(uint64_t addr, unsigned addr_type)
+{
+    pthread_mutex_lock(&qlock); connects++; pthread_mutex_unlock(&qlock);
+    request(R_CONNECT, addr, addr_type, 0, NULL, 0, 0);
+}
+void ble_disconnect_all(void)
+{
+    /* only when there is something to drop: every client leaving calls it.  proto_esphome.c calls this and ble_connect
+     * under core_lock both, so no connect it means to drop can come between the count and the request */
+    int any = 0;
+    pthread_mutex_lock(&qlock);
+    for (int i = 0; i < BLE_MAX_CONN; i++) any |= slot_addr[i] != 0;
+    any |= connects > 0;            /* taken off the queue, its slot not set yet, counts too */
+    pthread_mutex_unlock(&qlock);
+    if (any) request(R_DISCONNECT_ALL, 0, 0, 0, NULL, 0, 0);
+}
 void ble_disconnect(uint64_t addr) { request(R_DISCONNECT, addr, 0, 0, NULL, 0, 0); }
 void ble_services(uint64_t addr) { request(R_SERVICES, addr, 0, 0, NULL, 0, 0); }
 void ble_read(uint64_t addr, unsigned handle) { request(R_READ, addr, 0, handle, NULL, 0, 0); }

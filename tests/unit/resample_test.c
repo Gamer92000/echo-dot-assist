@@ -156,6 +156,7 @@ static void servo(double ppm)
 }
 
 /* music_duck: down to a sixth with a time constant of 30 ms, no step a click would be, exactly there and back */
+#define DUCK (1.0f / 6)                                 /* the old fixed duck; any target does (setting music_duck) */
 static void duck(void)
 {
     static int16_t s[R * 2]; float g = 1; int smooth = 1, prev = 16000;

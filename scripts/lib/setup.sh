@@ -85,7 +85,7 @@ live() {
     if [ -n "$DRY" ]; then printf '  %s· %s  $ %s%s\n' "$DIM" "$label" "$*" "$N"; return 0; fi
     printf '  %s┌ %s%s\n' "$CYN" "$label" "$N"
     ( "$@" ) < /dev/tty; r=$?          # a subshell: CMD may be in_dir, whose cd must not stick
-    # an adb server CMD started (firebreak runs adb) likely holds the terminal: the next adb call starts one without
+    # an adb server CMD started (a CMD that runs adb) likely holds the terminal: the next adb call starts one without
     # it (scripts/setup.sh's stdin, issue #106)
     [ -n "$WINDOWS" ] && adb kill-server > /dev/null 2>&1
     if [ $r = 0 ]; then ok "$label"; else fail "$label"; fi
@@ -303,7 +303,7 @@ need_tools() {
     for t in pacman apt-get dnf; do command -v $t > /dev/null && { mgr=$t; break; }; done
     fail "missing: ${miss[*]}"
     if [ -n "$WINDOWS" ]; then
-        info "unzip, curl and sha256sum come with Git for Windows; adb and fastboot with Android's platform-tools (winget install Google.PlatformTools); python3 from python.org; uvx with uv (winget install astral-sh.uv)."
+        info "unzip, curl and sha256sum come with Git for Windows; adb and fastboot with Android's platform-tools (winget install Google.PlatformTools); python3 from python.org."
         info "Put them on the PATH (open Git Bash again afterwards), then try again."
         return 1
     fi
@@ -494,32 +494,58 @@ space_ahead() {
         warn "less than $(( (mb + 999) / 1000 )) GB free here ($(df -Ph . | awk 'NR == 2 { print $4 }')): what this setup unpacks takes about that"
 }
 
-# bootroot_unpack: boot-root's magiskpolicy, which install-system.sh patches the policy with (device.conf SEPOLICY_TOOL).
-# Checked by that file, not the folder: an unzip that broke off (WSL) left the folder, the retry passed, and the install
-# stopped a step later over the missing tool (issue #10).
-bootroot_unpack() {
-    [ -z "$DRY" ] && [ -f $SEPOLICY_TOOL ] && return 0
-    [ -n "$DRY" ] || rm -rf $FW/boot-root
-    task "Unpacking boot-root" sh -c "unzip -q -o $FW/$BOOTROOT -d $FW/boot-root && [ -f $SEPOLICY_TOOL ]" && return 0
-    [ -f $SEPOLICY_TOOL ] || fail "no $SEPOLICY_TOOL after unpacking $FW/$BOOTROOT"
-    rm -rf $FW/boot-root; return 1
+# Nothing here comes out of the XDA threads' files any more (2026-11-09: their author asks that they are only used by
+# hand, as the threads say; unlock_thread).  The two programs the install took out of boot-root.zip come from where
+# they were made instead, each checked against its own sha256 (a file that broke off is fetched again, issue #10):
+#
+# magiskpolicy_get: magiskpolicy (device.conf SEPOLICY_TOOL), which the install patches the Echo's SELinux policy with:
+# devices/<codename>/sepolicy.rules (init may start our boot service as root; on the Shows adbd may go root too).  From
+# Magisk's own release: v30.7's lib/armeabi-v7a/libmagiskpolicy.so is byte for byte the patch/magiskpolicy32 of the
+# threads' boot-root.zip (Dots' and the Shows', 2026-11-09).  32-bit ARM, bionic: the Dots and athena run it on the Echo
+# (install-system.sh), the Shows on the PC under qemu against the unpacked firmware (install-boot.sh).
+MAGISK_URL=https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk-v30.7.apk
+MAGISK_SHA256=e0d32d2123532860f97123d927b1bb86c4e08e6fd8a48bfc6b5bee0afae9ebd5
+MAGISKPOLICY_SHA256=e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a
+magiskpolicy_get() {
+    local apk=toolchain/Magisk-v30.7.apk
+    [ -z "$DRY" ] && [ -f $SEPOLICY_TOOL ] && [ "$(sha256sum < $SEPOLICY_TOOL | cut -c1-64)" = $MAGISKPOLICY_SHA256 ] &&
+        return 0
+    task "Downloading magiskpolicy (Magisk v30.7, 12 MB)" sh -c "mkdir -p toolchain ${SEPOLICY_TOOL%/*} &&
+        curl -fsSL -o $apk $MAGISK_URL && [ \"\$(sha256sum < $apk | cut -c1-64)\" = $MAGISK_SHA256 ] &&
+        unzip -p $apk lib/armeabi-v7a/libmagiskpolicy.so > $SEPOLICY_TOOL && chmod 755 $SEPOLICY_TOOL &&
+        [ \"\$(sha256sum < $SEPOLICY_TOOL | cut -c1-64)\" = $MAGISKPOLICY_SHA256 ]" || { rm -f $SEPOLICY_TOOL $apk; return 1; }
+    rm -f $apk
+}
+# adbd_get: the Shows' adbd for our root boot image (device.conf ADBD, mkbootroot.py --adbd): Fire OS's own is a user
+# build and never stays root.  A userdebug one, which goes by ro.secure, from Google's own Android 7.1.1 emulator image
+# (system-images;android-25;google_apis;armeabi-v7a r18): static, 32-bit ARM, FunctionFS and /dev/android_adb, the same
+# properties and root_seclabel as the CyanogenMod build the threads' boot-root images carry, which the Shows took
+# before.  Of the 953 MB zip only its ramdisk (1.3 MB) comes over, by HTTP ranges (scripts/zipmember.py).
+ADBD_URL=https://dl.google.com/android/repository/sys-img/google_apis/armeabi-v7a-25_r18.zip
+adbd_get() {
+    [ -z "$DRY" ] && [ -f $ADBD ] && [ "$(sha256sum < $ADBD | cut -c1-64)" = $ADBD_SHA256 ] && return 0
+    task "Downloading adbd (Google's Android 7.1.1 emulator image: its ramdisk, 1.3 MB)" sh -c "mkdir -p ${ADBD%/*} &&
+        python3 scripts/zipmember.py $ADBD_URL armeabi-v7a/ramdisk.img $ADBD --cpio sbin/adbd && chmod 755 $ADBD &&
+        [ \"\$(sha256sum < $ADBD | cut -c1-64)\" = $ADBD_SHA256 ]" || { rm -f $ADBD; return 1; }
 }
 
 # WINDOWS (scripts/setup.sh under Git Bash, issue #49): only an Echo that is unlocked already, i.e. on adb in Fire OS
-# or TWRP (stock Fire OS has no adb).  The unlocks' bootrom and fastboot exploits stay on Linux (setup.sh says why);
-# everything after them is adb, which works there.  unlock_elsewhere says so, with the model's WIN_UNLOCK if it has one.
-# A model with UNLOCK_WINDOWS unlocks on Windows itself (Echo Dot 2: firebreak, devices/biscuit/setup.sh).
+# or TWRP (stock Fire OS has no adb).  The unlock is done by hand, as the model's XDA thread says (unlock_thread says
+# why), and the threads' tools are Linux's; everything after them is adb, which works there.  unlock_elsewhere says so,
+# with the model's WIN_UNLOCK if it has one.  A model with UNLOCK_WINDOWS gets to its step_unlock on Windows from stock
+# (none since firebreak left the Echo Dot 2's, 2026-11-09).
 unlock_elsewhere() {
-    fail "The unlock does not run on Windows: this needs an Echo that is unlocked already, on adb over USB."
+    fail "On Windows this needs an Echo that is unlocked already, on adb over USB."
     info "Unlocked? Plug it in (Fire OS or TWRP, as \"adb devices\" lists it), then try again."
-    info "Not yet: unlock it from Linux on the PC itself (a live USB stick works), then go on here.${WIN_UNLOCK:+ $WIN_UNLOCK}"
+    info "Not yet: unlock it by hand, as its XDA thread says ($XDA), then go on here.${WIN_UNLOCK:+ $WIN_UNLOCK}"
 }
 
 # twrp_check: TWRP 3.7 or newer, before the firmware step wipes anything.  Every unlock here puts 3.7.0_9-0 on the
 # recovery partition (ro.twrp.version in the ramdisks of amonet-biscuit v2.0.0, amonet-radar v1.0.0, amonet-checkers
-# v2.0.1, kamakiri-donut v1.0.0); an Echo unlocked some other way may have an older one, and the TWRP 3.2.3 of amonet
-# v1 (Dots sold unlocked by EchoLocal) cannot install 6574.1 (issue #49), only found out after the wipe.  The property
-# where it is set, else the log's first line ("Starting TWRP %s-%s on ...": version, then the commit).
+# v2.0.1, kamakiri-donut v1.0.0 and v1.1.0: the same twrp-donut.img); an Echo unlocked some other way may have an
+# older one, and the TWRP 3.2.3 of amonet v1 (Dots sold unlocked by EchoLocal) cannot install 6574.1 (issue #49), only
+# found out after the wipe.  The property where it is set, else the log's first line ("Starting TWRP %s-%s on ...":
+# version, then the commit).
 TWRP_MIN=3.7
 twrp_check() {
     local v maj min
@@ -617,66 +643,117 @@ adb_is() {
     [ "$s" = "$1" ]
 }
 
-# wait_adb device|recovery: until the Echo is on adb in that state
+# wait_adb device|recovery [hint]: until the Echo is on adb in that state; hint: what to do when nothing came in a
+# minute, in place of the replug every model has
 wait_adb() {
+    local hint="Nothing yet? Unplug the Echo's power and plug it back in."   # not in ${2:-...}: bash quotes on its '
     pick_serial
     case $1 in
-    recovery) waitfor "Waiting for TWRP (white ring)|TWRP is up" "adb_is recovery" "Nothing yet? Unplug the Echo's power and plug it back in.";;
+    recovery) waitfor "Waiting for TWRP (white ring)|TWRP is up" "adb_is recovery" "${2:-$hint}";;
     # an unlocked Echo shows fastboot as a rainbow, not the green of a stock one: people looking for green missed it
-    *) waitfor "Waiting for the Echo to boot|Echo is up" "adb_is device" "Nothing yet? Unplug the Echo's power and plug it back in. Rainbow ring? That is fastboot on an unlocked Echo: fastboot reboot.";;
+    *) waitfor "Waiting for the Echo to boot|Echo is up" "adb_is device" \
+           "${2:-$hint Rainbow ring? That is fastboot on an unlocked Echo: fastboot reboot.}";;
     esac
 }
 
-# unlock_wait_twrp: after amonet's fastbrick, until TWRP is up (5 min at most).  fastbrick.sh treats its own timeout
-# as success ("Exploit most likely successful!", issue #50): on an LK it cannot exploit, the Echo just sits in
-# fastboot (solid red LED) and TWRP never comes.  On a good unlock fastbrick returns with the Echo out of fastboot, so
-# one still listed there a minute on is a lock that did not open, not a slow boot.  That is said before the "unplug
-# the power" hint (90 s): a power-cycled Echo boots stock, and fastboot can no longer tell what happened.
-unlock_wait_twrp() {
-    local ut0=$SECONDS
+# The unlocks are R0rt1z2's (kamakiri, amonet, saiyaku; the model's XDA thread, $XDA), and their author asks that they
+# are run by hand, as the thread says, never from an installer, a wrapper or a script (kamakiri-donut v1.1.0's LICENSE
+# and README, 2026-11-06).  Which Echos and board revisions one is for, how to get the Echo ready, the timing, what to do
+# when a step stalls and which files go with which revision are the thread's, kept current with its files; a copy here
+# goes stale, and a stalled run reported here never reaches the one who can fix it.  So no setup here runs an unlock
+# or retells its steps (issue #154's framing of amonet's fastbrick went with that, 2026-11-09): unlock_thread names the
+# thread and waits while the person works through it in a terminal of their own, then the step looks at what came of
+# it, the Echo on adb (twrp_or_unlocked).  The same for boot-root, the threads' root zip (root_thread).
+
+# unlock_thread TOOL UNTIL [LINE]...: the unlock by hand, TOOL as $XDA says, until UNTIL ("TWRP is running on the Echo
+# (white ring)"); Enter when done.  Then up to 3 min for the Echo on adb (TWRP, or Fire OS: stock has no adb): an Enter
+# pressed while TWRP still starts must not fail the step, whose retry shows all of this again; none there: where to go
+# on, the thread first, then the model's LINEs (what is known here, as issue #112).  Returns 0 with the Echo on adb.
+unlock_thread() {
+    local tool=$1 until=$2; shift 2
+    todo "Unlock the Echo by hand: $tool, as its XDA thread says" \
+        "$B$XDA$N" \
+        "" \
+        "Open the thread in your browser and follow it from its first post, in a terminal window of its own." \
+        "Which Echos it is for, which files to download, how to get the Echo ready and every command: all of it" \
+        "is there, and kept up to date. This setup does not run $tool and does not repeat its steps: R0rt1z2" \
+        "asks (since kamakiri-donut v1.1.0) that his unlocks are only ever run by hand, as his threads say." \
+        "" \
+        "${B}Stop once $until$N: this setup does the rest." \
+        "Then come back to this window and press Enter: it checks the Echo and goes on from there." \
+        "" \
+        "Stuck, or the Echo does something the thread does not say? Ask in the thread, with what the Echo did," \
+        "in your own words, and the tool's output or log as it is."
     pick_serial
-    waitfor "Waiting for TWRP (white ring)|TWRP is up" \
-        'adb_is recovery || { [ $((SECONDS - ut0)) -ge 60 ] && [ -n "$(fastboot devices 2>/dev/null)" ] && WAIT_ABORT=1; false; }' \
-        "Nothing yet? Unplug the Echo's power and plug it back in." 90 300 && return 0
-    [ -n "$WAIT_ABORT" ] &&
-        fail "the unlock did not take (the Echo is still in fastboot): its LK build is likely newer than $AMONET can unlock. Unplug the power and plug it back in: it boots the original software again"
+    waitfor "Looking for the Echo on adb|The Echo is on adb" 'adb_is recovery || adb_is device' \
+        "Nothing on adb yet. Is TWRP running, with the USB cable to this PC in? Still looking for 2 minutes." 60 180 &&
+        return 0
+    tell "The Echo is not on adb: the unlock is not finished" \
+        "Once $until, it is on adb (the USB cable to this PC plugged in)." \
+        "Go on in the thread, and ask there if it does not say what to do. Then press Enter here to look again." \
+        "$@"
     return 1
 }
 
-# amazon_usb: the USB devices with Amazon's vendor id, as "<sysfs name> <devnum>" (a new devnum: enumerated again)
-amazon_usb() {
-    local d
-    for d in /sys/bus/usb/devices/*; do
-        [ "$(cat $d/idVendor 2>/dev/null)" = 1949 ] && echo "${d##*/} $(cat $d/devnum 2>/dev/null)"
-    done
+# twrp_or_unlocked [HINT] [THEN]: an unlocked Echo is on adb (stock Fire OS has none): in TWRP, 0; or in Fire OS, which
+# the unlock left with TWRP on the recovery partition, restarted into it, 0 once TWRP is up (HINT: how to start TWRP by
+# hand, for wait_adb; THEN: a function run between the restart and the wait, the Shows' twrp_screen).  1: not on adb,
+# the unlock is still to do; 2: on adb, but TWRP did not come up.  A dry run: 1.
+twrp_or_unlocked() {
+    [ -n "$DRY" ] && return 1
+    adb_is recovery && { ok "TWRP is running"; return 0; }
+    adb_is device || return 1
+    ok "unlocked already (Fire OS on adb: stock has none)"
+    task "Restarting into TWRP" adb reboot recovery || return 2
+    [ -n "$2" ] && "$2"
+    wait_adb recovery "$1" || return 2
 }
 
-# show_wait_twrp USB: after amonet's fastbrick on a Show, until TWRP is up.  fastbrick.sh says "Exploit most likely
-# successful!" whatever came of it, and a tester's Echo Show 5 went back to Amazon's setup screen instead (issue #132,
-# fastboot's unlock_status false; the next run unlocked it, TWRP coming up by itself).  Their USB ids tell the two
-# apart: amonet's TWRP is 18d1:d001 (checkers' twrp.img, TWRP's default; crown's and cronos' not seen), Fire OS 1949
-# (Amazon), fastboot 0bb4:0c01.  An installed Show 5 on reboots, 2026-11-07: to recovery the preloader 0e8d:2000, then
-# TWRP 18d1:d001 and 18d1:4ee2, never 1949 (TWRP on adb in 21 s); back the preloader, then Fire OS 1949:0178 (0171
-# without adb, the tester's), caught 17 s after the reboot.  So an Amazon device that was not on USB as fastbrick
-# started (USB: amazon_usb then, with devnum: an Echo plugged in on Fire OS before it enumerates again) is the Echo in
-# Fire OS, which has no adb.
-# Fastbrick's payload goes on writing on the Echo after fastboot returned ("DO NOT INTERRUPT", up to 5 min): no
-# hint to pull the power before that, and one that boots TWRP after it (Volume up held).  A power cycle on Fire OS
-# still says the unlock failed when it did not, hence a test first: Volume up held at power-on starts TWRP on an
-# unlocked Echo and Amazon's recovery (a red triangle) on a locked one, as the tester saw (unlock_status false).
-show_wait_twrp() {
-    local usb0=$1
+# root_thread THREAD [HINT] [LINE]...: the whole root step, boot-root by hand as THREAD says.  boot-root.zip is
+# R0rt1z2's, from the same threads, and installed the way they say, as the unlock is (unlock_thread says why): the
+# thread's current file; the setup neither downloads nor reads it (magiskpolicy_get says where the policy tool comes
+# from).  First the Echo on adb, TWRP or Fire OS, without a time limit: a run of this step
+# again may find it still in Fire OS's first start after boot-root, and waiting for TWRP alone would never end there.
+# Root adb then is the result already; Fire OS without it is restarted into TWRP (HINT: how to start TWRP by hand, for
+# the waits).  Enter when done, then up to 10 min for root adb: the first start after a firmware flash and a wipe takes
+# minutes (the old step waited without a limit); none: where to go on, then the model's LINEs.  Returns 0 with root adb.
+root_adb() { adb_is device && [ "$(ashell id -u)" = 0 ]; }
+root_thread() {
+    # without HINT: stock Fire OS has no adb, and a replug alone starts it again, so TWRP the way the thread starts it
+    local thread=$1 hint=$2 replug="Nothing on adb yet? Fire OS has no adb before boot-root: start TWRP as the thread says."
+    shift 2
     pick_serial
-    waitfor "Waiting for TWRP|TWRP is up" \
-        'adb_is recovery || { [ -n "$(amazon_usb | grep -vxF -e "$usb0" -e "")" ] && WAIT_ABORT=1; false; }' \
-        "Nothing after 6 min? Unplug the Echo's power and plug it back in with Volume up held: that starts TWRP." 360 900 &&
-        return 0
-    [ -n "$WAIT_ABORT" ] || return 1
-    fail "the Echo started its own software (Amazon's setup on its screen), not TWRP: as a rule the unlock did not take"
-    tell "To be sure: unplug the Echo's power and plug it back in with Volume up held" \
-        "TWRP comes up: the unlock did take. Run this step again; it goes on from TWRP." \
-        "A red triangle (Amazon's recovery): it did not. Nothing is lost: unplug the power, run this step again." \
-        "(Another Amazon device plugged into this PC meanwhile, a Kindle or an Echo, looks the same: unplug it.)"
+    if [ -z "$DRY" ]; then
+        root_adb && { ok "root adb already"; return 0; }
+        waitfor "Waiting for the Echo on adb (TWRP or Fire OS)|The Echo is on adb" 'adb_is recovery || adb_is device' \
+            "${hint:-$replug}" 180 || return 1
+        root_adb && { ok "root adb"; return 0; }
+        # Fire OS on adb without root: let a start that is still going finish first (root adb may come at its end)
+        # rather than restart it under the person's hands, then TWRP for boot-root
+        if adb_is device; then
+            waitfor "Waiting for Fire OS to finish starting|Fire OS is up" \
+                '[ "$(ashell getprop sys.boot_completed)" = 1 ] || root_adb' "" 60 300
+            root_adb && { ok "root adb"; return 0; }
+            task "Restarting into TWRP" adb reboot recovery || return 1
+            wait_adb recovery "$hint" || return 1
+        fi
+    fi
+    todo "Root the Echo by hand: boot-root, as the XDA thread says" \
+        "$B$thread$N" \
+        "" \
+        "TWRP is running on the Echo. Install boot-root as the thread says, with the file the thread offers now." \
+        "This setup does not install it, and does not use it: like the unlock, it is done as its thread says." \
+        "" \
+        "${B}Stop once the Echo has started Fire OS again$N. Then press Enter here: it checks for root over adb." \
+        "" \
+        "Stuck, or the Echo does something the thread does not say? Ask in the thread, with what the Echo did," \
+        "in your own words."
+    waitfor "Looking for root adb (Fire OS's first start can take minutes)|adb is root" 'root_adb' \
+        "Still no root adb after 3 minutes. The Echo's ring or screen still busy? Give it time." 180 600 && return 0
+    tell "No root adb: boot-root is not in place yet" \
+        "Once it is installed and Fire OS has started, adb is a root shell (\"adb shell id -u\" says 0)." \
+        "Go on in the thread, and ask there if it does not say what to do. Then press Enter here to look again." \
+        "$@"
     return 1
 }
 

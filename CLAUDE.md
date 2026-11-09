@@ -85,6 +85,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_screen.py [--legacy]  # the Echo Show's screen UI as hassmic feeds it (stand-in UI): Sendspin
                                              # metadata/artwork (1.0's transfer, scheduled; --legacy: 9.1.1's), the band,
                                              # commands, home app, restarts
+.venv/bin/python tests/fake_screen_words.py  # words and timers on the Show's screen (issue #104), as screen.c tells the
+                                             # UI: settings, transcript and reply, a "stop" never shown, timers
 .venv/bin/python tests/fake_ma_api.py         # Music Assistant's API for the screen (mass.c) against a stand-in server:
                                              # the page's sealed token, auth, players, queue, lists, commands, images
 .venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step
@@ -110,6 +112,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # as a WAV, uploads within each sound's length, Play, the wake word, restart
 .venv/bin/python tests/fake_ha_ring.py        # light ring: the animation set from stand-in stock files, HA's light,
                                              # the Echo's own patterns first, the listening ring turned by the beam
+.venv/bin/python tests/fake_ha_bt_proxy.py     # the Bluetooth proxy switched off and on (issue #152): device info, scan,
+                                             # subscriptions, slots and connections refused (fake_improv.py's controller)
 .venv/bin/python tests/fake_improv.py         # setup from a phone: Improv over BLE against a fake controller on a pty
                                              # (HASSMIC_BT_DEV), root's wifi.sh, adoption, factory reset (HA, button hold)
 tests/ota_push_test.sh                        # signed push-update path end to end
@@ -198,7 +202,13 @@ stops and names the sysctl, which the setup's `qemu_arm` asks to set).
 - `stubs/*.syms`: what our binaries need of each stock library (`tools/mkstubs.sh`), for `make STUBS=1` / CI.
 - `README.md` (model facts + install steps by hand) and `setup.sh` (same steps for the guided `scripts/setup.sh`:
   `STEPS` list + `step_<id>` functions using `scripts/lib/setup.sh`; `--dry-run` walks them without running). Keep
-  the two in step.
+  the two in step.  The unlock and boot-root are never run, installed, wrapped or retold by either: they are
+  R0rt1z2's, who asks that they are only run by hand as his XDA thread says (kamakiri-donut v1.1.0's LICENSE);
+  `step_unlock` names the thread (`unlock_thread`), waits for Enter and checks for TWRP on adb (`twrp_or_unlocked`),
+  `step_root` the same for boot-root (`root_thread`, root adb); the README links the thread.  No file of the threads
+  is downloaded, read or copied either: magiskpolicy comes from Magisk v30.7's APK (`magiskpolicy_get`, byte for byte
+  boot-root's old one), the Shows' userdebug adbd from Google's Android 7.1.1 emulator image (`adbd_get`, its ramdisk
+  only, `scripts/zipmember.py`).  Removed 2026-11-09 at his request; do not add any of it back.
 No model `#ifdef`s in shared code: new differences become a board field, a `device.conf` variable or a backend.
 
 ## Architecture
@@ -381,7 +391,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   the equalizer stay where their module keeps them. Loaded in `main()` whatever the protocol. Changes from elsewhere
   reach HA through `proto->settings_changed`. Features (`feature` in the table: arbitration, sound, whisper, Wi-Fi
   motion, light sensor (Illuminance + auto level), wake word events (`wake_events`: the "Wake word" event entity,
-  `core_wake_events`), request text (`request_text`: "Last heard"/"Last reply", cut to HA's 255 characters, `state_text`), Bluetooth audio, Bluetooth speaker, Drop In, separate volumes): their entities are listed only while on (`proto_esphome.c` `listed()`,
+  `core_wake_events`), request text (`request_text`: "Last heard"/"Last reply", cut to HA's 255 characters, `state_text`), Bluetooth proxy (no entities: `proto_esphome.c` `bt_proxy()` gates the device info's proxy fields and
+  every proxy request), Bluetooth audio, Bluetooth speaker, Drop In, separate volumes): their entities are listed only while on (`proto_esphome.c` `listed()`,
   which also gates states); switching one closes the HA links (`proto->entities_changed`), HA re-lists on reconnect and
   deletes what is gone (registry included). HA always has: media player, mute, DND, wake sound, LEDs, EQ, firmware,
   Web UI address, Sendspin token (a secret: never on the page), Identify, Light ring (where root installed `ring.c`'s
@@ -599,6 +610,21 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   root's `kiosk_tick` leave opening the app to the UI.  PC: `tests/unit/ui_test.c` (every incremental frame == the full one,
   gestures, commands), `tools/uishot.c` (`make build/uishot`: every view as PNG with the firmware's Roboto, FreeType),
   `HASSMIC_SCREEN` (a stand-in UI).
+  Words and timers (`src/ui/words.c`, issue #104; settings `screen_text` "Speech on screen", `screen_text_seconds`
+  (8, 0 until the next request), `screen_timers`, all off, the page's Screen page, card "Words and timers"): what was
+  said, the reply and the timers on a fourth layer of the UI process (`hassmic-words`, TRANSLUCENT, over the UI's and
+  every window, under the band; hidden while the drawer is out), drawn only on a change (a timer: once a second), faded
+  and pulsed by `SurfaceControl.setAlpha`; text by the platform (`p_text`, wrapped by `p_measure`).  hassmic's side in
+  `screen.c` (`screen_words`: `core_set_state` clears on a run from idle and marks idle, proto_esphome's STT end only
+  after `core_transcript` passed it, TTS start; proto_wyoming's transcript; `stop_word` clears what it ended; nothing
+  kept while off), lines `wo`/`wh`/`wr`/`ws`/`tl` (scene.h); the timers are the core's (`core_timers_running`,
+  `screen_timers_changed`), ringing ones the face's `timers`; `screen_keep_on` holds the screen on (ring_band.c's
+  timeout) while timers show.  Touch: over our own screen the scene gives the layer the touches while it shows
+  (`scene_touch` `wtap`, `words_tap`, only once faded in past half: words away + "words clear" to hassmic, timers
+  hidden until the next "tl" + "timers hide", which lets the screen sleep until they change, Stop -> "timer stop");
+  over an app the platform grabs the panel for them (`EVIOCGRAB`, `touch_grab`, `scene_words_wants_grab`; taken and given
+  back with no finger down; the kernel lets go when the UI dies), else (no grab: `wd.grab` -1) a ring there brings our
+  screen up (`ring_from`, `own_asked` kept and given back after, asked again every 10 s) and the app back after.  Tests: `ui_test.c`, `tests/fake_screen_words.py`, `build/uishot` (words*, timer*).
 - **Music Assistant's API** (`mass.c`, `mass.h`, `json.c`): the screen's library, search, queue and speakers over
   MA's own websocket (`/ws`, port 8095; the page's URL, or with none given the Sendspin server's address pinned when the
   token is saved: a token only ever goes to that address, `mass_peer` merely suggests one, from sessions whose player
@@ -647,7 +673,8 @@ DEVELOPMENT.md "Speech corpus"): checked by STT, words timed by MFA; look there 
 aligner, adapted) and `tools/vad_leadin.py` HA's VAD with and without the lead-in (build/ha-venv).
 `tools/` is PC-side reverse-engineering and firmware tooling (`payload_dump.py`, Thumb disassembly helpers,
 `davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator, `vol-curve.py`: an Android Echo's
-volume curve with a Dot's micRaw beside it, for `board.volume_curve`).
+volume curve with a Dot's micRaw beside it, for `board.volume_curve`; `cold-lead.py`: what a sound loses on a closed
+output, a PC microphone beside it, for `board.cold_lead_ms`).
 
 ## Conventions
 

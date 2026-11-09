@@ -27,13 +27,13 @@ Model XC56PY. Hardware: MediaTek **MT8163V**. **No USB socket**: like the Dot 3,
 
 XDA thread with the full instructions: [UNLOCK][ROOT][TWRP][UNBRICK] Amazon Echo 2nd Gen / 2017 (radar)
 <https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-2nd-gen-2017-radar.4801290/>. These files go into
-`firmware/radar/` (not in git):
+`firmware/radar/` (not in git); the unlock's and the root's own files (`boot-root.zip`) are the thread's: it says
+which, kept current with its procedure, and nothing here downloads or reads them.
 
 | File | Source | sha256 |
 |---|---|---|
-| `amonet-radar-v1.0.1.zip` | the XDA thread | `22809bc44b9b7b71750c1955bb94a92c965b557d4f9055bb7bbc098b788188a9` |
 | `update-kindle-radar_puffin-NS6572_user_6436_0012718777476.bin` | [FTVDB](https://ftvdb.com/echo/firmware/com.amazon.radar.android.os/17af64ecc5b8f0303daf4e2a37c75b1a-12718777476-fire-os-6-5-7-2-ns6572-6436-2026-03-21/) (build the thread pins) | `976e2761c5bb9e5d3d9a2b1b9bc2f2296b89a5b37057ab1780743aa075f2df48` |
-| `boot-root.zip` | the XDA thread (byte-identical to donut's; its patches find their sites by pattern) | `de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0` |
+| `magiskpolicy32` | `lib/armeabi-v7a/libmagiskpolicy.so` of `Magisk-v30.7.apk`, [Magisk v30.7](https://github.com/topjohnwu/Magisk/releases/tag/v30.7) (APK `e0d32d2123532860f97123d927b1bb86c4e08e6fd8a48bfc6b5bee0afae9ebd5`); `scripts/setup.sh` fetches it itself | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
 
 ### USB access
 
@@ -47,7 +47,7 @@ thread); solder a data-capable USB cable to them, or use a stable three-pin pogo
 | green (D+) | TP15 |
 | red (VCC, 5 V) | **nothing**: leave it unconnected and insulate its end |
 
-The Echo takes its power from its own adapter, which the unlock also needs: fastboot mode is entered by plugging it in.
+The Echo takes its power from its own adapter, not from USB.
 
 Use a cable with a USB-A plug for the PC end. With a USB-C plug there (a cut USB-C to USB-C cable), the PC sees no
 device: a USB-C port switches the connection on only once the plug's CC wire (often yellow) goes to ground through a
@@ -56,19 +56,25 @@ USB-A cable, which needs none.
 
 ### Unlock and flash
 
-One script, as on `biscuit`: unzip the package, run `./fastbrick.sh`, put the Echo into fastboot mode (power adapter
-out, plug it back in while holding the action button •, until the ring shows a **green** LED; an Echo unlocked before shows a rainbow), type `YES` when asked,
-do not interrupt after the 10-second grace period, and it ends in TWRP (white LED). Then, as the thread says: wipe, flash
-the firmware, `adb reboot recovery` (TWRP makes the slot it flashed active, so the second install lands in the other
-one; do not switch back with `bcbtool`, or it goes into the same slot again), flash again, and
-install `boot-root.zip` for root adb. `scripts/setup.sh radar` does all of that.
+Once, first: USB access without sudo (`scripts/setup.sh` does the same).
 
-The exploit needs a payload made for the Echo's LK (bootloader) build: `fastbrick.sh` reads `fastboot getvar
-lk_build_desc` and picks one by `profile.sh`, else the default `fastbrick.img`. v1.0.1 (issue #88) maps
-`59779ca-20220524_183401`, `63cb91b-20221007_073612` (the time in the pinned firmware's `lk.img`) and
-`2c3569d-20260617_051433`; v1.0.0 knew only the first. Its TWRP, LK, preloader and TEE images are v1.0.0's, byte for
-byte. No unlock with v1.0.1 by this project yet. An LK newer than these: the guided setup says so when the Echo is still
-in fastboot a minute after the script; power-cycled, it boots the original software again.
+```sh
+sudo cp scripts/51-echo-unlock.rules /etc/udev/rules.d/ && sudo udevadm control --reload
+```
+
+Unlock the Echo **by hand, as the XDA thread says**, from its first post: which Echos it is for, its files, how to get
+the Echo ready and every command are there, kept up to date. R0rt1z2 asks (since kamakiri-donut v1.1.0) that the unlock
+is only ever run that way, never from an installer or a script, so this page does not repeat its steps and
+`scripts/setup.sh radar` does not run them either: it names the thread, waits for Enter and then checks for TWRP on adb.
+**Stop once TWRP is running (white ring)**: the firmware is this project's step, and boot-root comes after it. Stuck, or
+the Echo does something the thread does not say? Ask in the thread, with what the Echo did, in your own words, and the
+tool's output or log as it is.
+
+Then, as on donut: wipe, flash the firmware, `adb reboot recovery` (TWRP makes the slot it flashed active, so the second
+install lands in the other one; do not switch back with `bcbtool`, or it goes into the same slot again), flash again
+(`scripts/setup.sh radar` does that; by hand: [donut's README](../donut/README.md#1-unlock-flash-stock-firmware-root)).
+Then root by hand: `boot-root.zip` installed from TWRP as the thread says, until Fire OS has started with root adb
+(`adb shell id -u` says 0); the setup waits for Enter and checks.
 
 ## Getting the newest firmware (FTVDB lags; radar's listing stops at 6572)
 

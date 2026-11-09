@@ -5,16 +5,6 @@
 # quietly.
 
 XDA=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-5-1st-gen-2019-checkers.4762900/
-AMONET=amonet-checkers-v2.0.1.zip
-AMONET_SHA256=770324a8ed5ab922c0383f8ba072d70fc0190cc2c879f12f67b8d6cfa3ad30ee
-# donut's boot-root.zip: its patch/magiskpolicy32 is the policy tool (device.conf).  Where donut's setup keeps it (a PC
-# that set up a Dot has it), not in firmware/checkers: boot-root.zip there is checkers' own XDA image (README.md)
-BOOTROOT=firmware/donut/boot-root.zip
-BOOTROOT_SHA256=de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0
-# checkers' own boot-root.zip (the XDA image): its sbin/adbd goes into our boot image (device.conf ADBD)
-XDAROOT=$FW/boot-root.zip
-XDAROOT_SHA256=b2474113a1f3a4a8de6728ff72774761051945641e1a5ffa78ee25c2b19a809e
-DONUT_XDA=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/
 QEMU=toolchain/qemu-arm                     # magiskpolicy runs under it, against the unpacked firmware
 QEMU_URL=https://github.com/multiarch/qemu-user-static/releases/download/v7.2.0-1/qemu-arm-static
 QEMU_SHA256=9f07762a3cd0f8a199cb5471a92402a4765f8e2fcb7fe91a87ee75da9616a806
@@ -42,25 +32,6 @@ NOTES=(
     "Bluetooth: phones play on the Echo and it plays on a speaker; devices seen by Home Assistant's Bluetooth proxy are untried (docs/re-checkers.md)."
 )
 
-sha() { sha256sum < "$1" | cut -c1-64; }
-policy_tool() { [ -f $SEPOLICY_TOOL ] && [ "$(sha $SEPOLICY_TOOL)" = "$SEPOLICY_TOOL_SHA256" ]; }
-# the policy tool, out of donut's boot-root (the files step brought it)
-magiskpolicy() {
-    policy_tool && return 0
-    task "Taking magiskpolicy out of donut's boot-root" sh -c "mkdir -p ${SEPOLICY_TOOL%/*} &&
-        unzip -p $BOOTROOT patch/magiskpolicy32 > $SEPOLICY_TOOL &&
-        [ \"\$(sha256sum < $SEPOLICY_TOOL | cut -c1-64)\" = $SEPOLICY_TOOL_SHA256 ]" || { rm -f $SEPOLICY_TOOL; return 1; }
-}
-adbd_ok() { [ -f $ADBD ] && [ "$(sha $ADBD)" = "$ADBD_SHA256" ]; }
-# the root-capable adbd, out of the XDA image in checkers' boot-root (the files step brings it; a setup that passed
-# that step before it asked for this one asks here)
-adbd() {
-    adbd_ok && return 0
-    need_files $XDAROOT $XDAROOT_SHA256 "boot-root.zip, attachment in $XDA (checkers' own, for its adbd)" || return 1
-    task "Taking adbd out of the XDA boot-root" sh -c "unzip -p $XDAROOT boot-root.img > $FW/boot-root.img &&
-        python3 scripts/mkbootroot.py --extract $FW/boot-root.img sbin/adbd $ADBD && rm -f $FW/boot-root.img &&
-        [ \"\$(sha256sum < $ADBD | cut -c1-64)\" = $ADBD_SHA256 ]" || { rm -f $ADBD $FW/boot-root.img; return 1; }
-}
 # The firmware unpacked, whatever the build mode: the build links against its libraries, and every boot image is
 # made from it (install-boot.sh: qemu runs the policy tool against its linker), at the root step as at the install.
 # debugfs exits 0 whatever happens and rdump does not create its target (issue #4): the result is checked by hand.
@@ -85,6 +56,8 @@ step_tools() {
     command -v curl > /dev/null || need_tools curl || return 1
     build_mode
     space_ahead 7000 2500                 # the .bin, system.new.dat and the image; then the rootfs
+    # fastboot for the root step (install-boot.sh), python3 for otatool.py; what the unlock needs on this PC is the
+    # XDA thread's to say (step_unlock)
     local unlock="fastboot python3"
     rooted_already && unlock=python3
     if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip debugfs sqlite3 curl sha256sum || return 1; return 0; fi
@@ -95,9 +68,7 @@ step_files() {
     local need=()
     # the firmware, rooted Echo or not, built here or not: the boot image is made from its boot.img and policy
     need+=($FW/$FIRMWARE_FILE $FIRMWARE_SHA256 "Fire OS $FIRMWARE_ID, from Amazon: the link is in $DDIR/README.md")
-    rooted_already || need+=($FW/$AMONET $AMONET_SHA256 "attachment in $XDA")
-    adbd_ok || need+=($XDAROOT $XDAROOT_SHA256 "boot-root.zip, attachment in $XDA (checkers' own, for its adbd)")
-    policy_tool || need+=($BOOTROOT $BOOTROOT_SHA256 "boot-root.zip, attachment in $DONUT_XDA (the Echo Dot 3's, for its magiskpolicy; not checkers' own)")
+    # the unlock's files are not asked for here: the XDA thread says which (step_unlock)
     need_files "${need[@]}" || return 1
     # the policy is patched on the PC, under qemu against the unpacked firmware (qemu_arm: scripts/lib/setup.sh)
     qemu_arm || return 1
@@ -132,33 +103,10 @@ twrp_screen() {
 }
 
 step_unlock() {
-    [ -z "$DRY" ] && adb_is recovery && { ok "TWRP is running already"; return 0; }
-    # Fire OS on adb: unlocked before (stock has no adb), and the unlock left TWRP on the recovery partition
-    if [ -z "$DRY" ] && adb_is device; then
-        ok "unlocked already"
-        task "Restarting into TWRP" adb reboot recovery || return 1
-        twrp_screen; wait_adb recovery; return
-    fi
-    [ -x $FW/amonet/fastbrick.sh ] || task "Unpacking amonet" unzip -q -o $FW/$AMONET -d $FW || return 1
-    tell "On the Echo, hold all three buttons: Volume down, Volume up and Mute (the microphone button)" \
-        "Keep them held until its screen says \"=> FASTBOOT mode...\", then let go" \
-        "Plug the micro-USB cable into the Echo." \
-        "" \
-        "${RED}${B}The unlock must not be interrupted once it starts (up to 5 min): that bricks it for good.$N"
-    # in the foreground: it asks to type YES, and for a key press at the end
-    local mark usb0; mark=$(stat -c %s "$LOG" 2>/dev/null || echo 0); usb0=$(amazon_usb)
-    live "Unlocking with amonet's fastbrick" in_dir $FW/amonet env PYTHONUNBUFFERED=1 \
-        bash -o pipefail -c "./fastbrick.sh 2>&1 | tee -a '$LOG'" || return 1
-    # fastbrick.sh exits 0 when its prompt gets anything but YES ("Aborting.", nothing sent), as it does for an Echo
-    # unlocked already: only its output tells them apart.  Read as success, the step waited for a TWRP that never came
-    # (an Echo Show 8, 2026-11-01: "YES\" typed, the Echo back in Fire OS, the step ticked).
-    if [ -z "$DRY" ] && tail -c +$((mark + 1)) "$LOG" | grep -q 'Aborting\.'; then
-        fail "amonet stopped before the unlock: it takes YES, in capitals and nothing else. Nothing on the Echo changed; run this step again."
-        return 1
-    fi
+    twrp_or_unlocked "" twrp_screen; case $? in 0) return 0;; 2) return 1;; esac
+    unlock_thread amonet-checkers "TWRP shows on the Echo's screen" || return 1
     twrp_screen
-    # gives up when the Echo came back in Fire OS instead (issue #132)
-    show_wait_twrp "$usb0" || { [ -n "$WAIT_ABORT" ] || fail "no TWRP on adb; $DDIR/README.md, step by step, then try again"; return 1; }
+    [ -n "$DRY" ] || twrp_or_unlocked || return 1
     warn "Leave the Echo in TWRP for now: stock Fire OS has no adb."
 }
 
@@ -239,7 +187,7 @@ write_system() {
 
 step_root() {
     [ -z "$DRY" ] && adb_is device && [ "$(ashell id -u)" = 0 ] && { ok "root adb already"; return 0; }
-    rootfs && magiskpolicy && adbd || return 1
+    rootfs && magiskpolicy_get && adbd_get || return 1
     # booted, adb as shell: an older boot image of ours (8149's own adbd never stays root) or stock with adb on;
     # install-boot.sh takes it from the running OS as well as from TWRP
     if [ -z "$DRY" ] && adb_is device; then info "adb is not root on the running Echo: its boot image is replaced"
@@ -298,7 +246,7 @@ step_network() {
 }
 
 step_install() {
-    rootfs && magiskpolicy && adbd || return 1        # again: the steps before may have been skipped
+    rootfs && magiskpolicy_get && adbd_get || return 1        # again: the steps before may have been skipped
     install_satellite || return 1
     install_screen_apps
 }

@@ -38,9 +38,9 @@ boot_image() {
     unzip -p $FW/$FIRMWARE_FILE boot.img > $OUT/boot.stock.img
     [ "$(sha $OUT/boot.stock.img)" = "$BOOT_SHA256" ] || die "boot.img in $FIRMWARE_FILE is not the one this was built for"
     [ -f $SEPOLICY_TOOL ] && [ "$(sha $SEPOLICY_TOOL)" = "$SEPOLICY_TOOL_SHA256" ] ||
-        die "no $SEPOLICY_TOOL (or not the pinned one): patch/magiskpolicy32 of donut's boot-root.zip ($DDIR/README.md)"
+        die "no $SEPOLICY_TOOL (or not the pinned one): lib/armeabi-v7a/libmagiskpolicy.so of Magisk v30.7's APK ($DDIR/README.md; scripts/setup.sh fetches it)"
     [ -f $ADBD ] && [ "$(sha $ADBD)" = "$ADBD_SHA256" ] ||
-        die "no $ADBD (or not the pinned one): sbin/adbd of the boot image in the model's own XDA boot-root.zip ($DDIR/README.md)"
+        die "no $ADBD (or not the pinned one): sbin/adbd of Google's Android 7.1.1 emulator image ($DDIR/README.md; scripts/setup.sh fetches it)"
     [ -e $FW/rootfs/system/bin/linker ] || die "$FW/rootfs not unpacked: qemu runs magiskpolicy against its linker ($DDIR/README.md)"
     { command -v qemu-arm > /dev/null || [ -x toolchain/qemu-arm ]; } || die "no qemu-arm (qemu user mode; $DDIR/setup.sh puts one in toolchain/)"
     python3 scripts/mkbootroot.py --extract $OUT/boot.stock.img sepolicy $OUT/sepolicy.stock

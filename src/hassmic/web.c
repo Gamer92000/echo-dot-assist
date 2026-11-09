@@ -1116,7 +1116,7 @@ static void handle(int fd)
     else if (!strcmp(r.method, "GET") && !strcmp(r.path, "/api/export")) {
         char t[4096], head[200]; size_t n;
         if (!signed_ok(&r, 0)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
-        n = (size_t)snprintf(t, sizeof t, "# hassmic settings, exported from %s (%s %s)\n# not in it: the Echo's name, keys, pairings\n", core_name, board.model, VERSION);
+        n = (size_t)snprintf(t, sizeof t, SETTINGS_EXPORT_HEAD "%s (%s %s)\n# not in it: the Echo's name, keys, pairings\n", core_name, board.model, VERSION);
         pthread_mutex_lock(&core_lock); n += settings_text(t + n, sizeof t - n, 1); pthread_mutex_unlock(&core_lock);
         snprintf(head, sizeof head, "Content-Disposition: attachment; filename=\"hassmic-settings.conf\"\r\n");
         respond_s(fd, &r, 200, "text/plain; charset=utf-8", head, t, n);

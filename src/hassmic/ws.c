@@ -147,7 +147,8 @@ int ws_recv(struct ws *w, int *opcode, uint8_t **data, size_t *len)
         if (masked && read_full(w->fd, mask, 4) != 4) return 0;
         if (op >= 8 && n > 125) return -1;                /* a control frame that long is no frame */
         if (op < 8 && (over || n > WS_MAX_MESSAGE || total + n > WS_MAX_MESSAGE)) {   /* too big: read to its end, its head kept */
-            if (n > 16 * (uint64_t)WS_MAX_MESSAGE || total + n > 16 * (uint64_t)WS_MAX_MESSAGE) return -1;   /* (no listing is that) */
+            if (n > 16 * (uint64_t)WS_MAX_MESSAGE || total + n > 16 * (uint64_t)WS_MAX_MESSAGE) return -1;   /* (no frame is that; the message may be any length) */
+            if (total > WS_HEAD) total = WS_HEAD;       /* earlier fragments may have brought up to 4 MB: only the head stays */
             size_t keep = total < WS_HEAD ? WS_HEAD - total : 0; if (keep > n) keep = (size_t)n;
             if (total + keep + 1 > w->cap) { uint8_t *nb = realloc(w->buf, total + keep + 1); if (!nb) return -1; w->buf = nb; w->cap = total + keep + 1; }
             if (keep && read_full(w->fd, w->buf + total, keep) != (ssize_t)keep) return 0;

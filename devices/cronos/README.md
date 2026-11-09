@@ -21,19 +21,20 @@ are not supported until pinned here.
 
 ## Unlock (public: amonet-cronos)
 
-[`unlock.md`](unlock.md) is the guide from the XDA thread (R0rt1z2). Files into `firmware/cronos/` (not in git):
+By hand, as the [XDA
+thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-5-2nd-gen-2021-cronos.4772596/) (R0rt1z2)
+says: [`unlock.md`](unlock.md). The unlock's own files are the thread's: it says which, kept current with its procedure;
+nothing here downloads or reads them, its `boot-root.zip` included. The files of this project's steps go into
+`firmware/cronos/` (not in git):
 
 | File | Source | sha256 |
 |---|---|---|
-| `amonet-cronos-v2.0.1.zip` | the XDA thread; its `lk.bin` and `tz.img` are 8149's | `07a49c8fb2b244330297810b261333ba23976eca5ab3e0d9032f45f4c9847621` |
 | `update-kindle-cronos-NS65741_user_8149_0013222532484.bin` | Amazon, link above | `fa6203b5…f1b09` |
-| `boot-root.zip` | the XDA thread's second post (installed in TWRP there; its `boot.img` is NS6571's); the install takes only `sbin/adbd` out of it (`ADBD` in `device.conf`: checkers' file, `108ba403…`) | `49326e27cc42159b2659604a586855ca0a267f3e064ed42cfa64cd78275e40b3` |
-| `magiskpolicy32` | `patch/magiskpolicy32` of donut's `boot-root.zip` ([its README](../donut/README.md)); the guided setup takes it from there | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
+| `magiskpolicy32` | `lib/armeabi-v7a/libmagiskpolicy.so` of `Magisk-v30.7.apk`, [Magisk v30.7](https://github.com/topjohnwu/Magisk/releases/tag/v30.7) (APK `e0d32d2123532860f97123d927b1bb86c4e08e6fd8a48bfc6b5bee0afae9ebd5`); the guided setup fetches it, by hand as in [checkers' README](../checkers/README.md#2-unpack-the-firmware-on-the-pc) | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
+| `adbd` | `sbin/adbd` of Google's Android 7.1.1 emulator image (`system-images;android-25;google_apis;armeabi-v7a` r18; only its ramdisk is read, `scripts/zipmember.py`): a userdebug adbd that goes by `ro.secure`, for root adb in our boot image (`ADBD` in `device.conf`). The guided setup fetches it. Not tried on a Show yet; until 2026-11-09 the XDA boot-root image's (CyanogenMod's) was the tested one | `cc0178051cbf3fa0c7df5c880abd1becf55ce9f35b60ac851aae2edd106a3c18` |
 
-amonet's `fastbrick.sh` runs its own `bin/fastboot`, an x86_64 Linux program (glibc only), on every 64-bit PC. On an
-aarch64 PC such as a Raspberry Pi it runs only under qemu-user with x86_64 glibc (`qemu-user-binfmt`, `QEMU_LD_PREFIX`):
-try it first with the Echo in fastboot mode, `bin/fastboot getvar product` (reads only), before the unlock. The guided
-setup installs `qemu-user` from the package manager there for the policy tool (its qemu-arm download is x86_64) and,
+On an aarch64 PC such as a Raspberry Pi the guided setup installs `qemu-user` from the package manager for the policy
+tool (its qemu-arm download is x86_64) and,
 on Ubuntu 24.04 and later, asks to allow user namespaces until the next boot (`tools/qrun.sh` needs one). The NDK is
 x86_64 too: take the release's binaries when the setup offers them, else the build runs under `qemu-user-binfmt`
 (about 15 min on a Raspberry Pi 4; docs/re-cronos.md, "First install"). Over ssh the udev step gives the USB devices
@@ -49,7 +50,8 @@ The guided setup does all of it: `scripts/setup.sh cronos` (`--dry-run` walks th
 as checkers':
 
 1. **Unpack the firmware** (below), build: `make DEVICE=cronos` (or `make DEVICE=cronos STUBS=1` without the firmware).
-2. **Unlock** ([`unlock.md`](unlock.md)); the Echo ends in TWRP: tap **Keep Read Only**.
+2. **Unlock** by hand, as the XDA thread says ([`unlock.md`](unlock.md)); stop once TWRP shows on the Echo's screen:
+   tap **Keep Read Only**.
 3. **System partition**: must be 8149's (`ro.build.version.incremental` = `0013222532484` in its `build.prop`). Else write
    `firmware/cronos/images/system.img` (sha256 `78c4c2fa…091669`, 3253731328 bytes) to
    `/dev/block/platform/mtk-msdc.0/11230000.MSDC0/by-name/system` from TWRP and read it back; `setup.sh` does this in
@@ -65,8 +67,8 @@ as checkers':
 Updating later: `DEVICE=cronos scripts/ota-push.sh <echo-ip>`. `scripts/install-system.sh --uninstall` turns Alexa's
 apps back on, takes hassmic off `/system` and wipes cache and data in TWRP (tap **Keep Read Only** when it asks):
 Amazon's apps lost their data and permissions when the install took them off, and without the wipe their setup
-wizard crashes in a loop ("OOBE has stopped"). The Echo then starts at Amazon's setup. All the way back is the firmware `.bin` as a `.zip` in TWRP after a factory
-reset there (amonet v2.0.0 and later), as the thread describes.
+wizard crashes in a loop ("OOBE has stopped"). The Echo then starts at Amazon's setup. All the way back to stock is the
+XDA thread's.
 
 ## What works and what is open
 
@@ -101,7 +103,7 @@ seen so far (open, above). The Echo's settings are on its settings page and in H
 | `kconfig` | the firmware's own IKCONFIG (4.9.77, ARM) |
 | `probe.md5` | from the pinned firmware |
 | `stubs/` | checkers' (the same symbols, in the same order, in this firmware's libraries) |
-| `setup.sh` | checkers' steps with cronos' XDA files, the bootloader check before amonet, the udev step |
+| `setup.sh` | checkers' steps with cronos' XDA files, the udev step |
 
 ## Unpack the firmware
 

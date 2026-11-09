@@ -309,7 +309,43 @@ kiosk_helper_end() {
 # home screen is what shows, the app has ended (setting switched off, crash, its own update) or never opened: no check for
 # its process, which can be up without a screen.  dumpsys: 20 ms on a Show 5.  Half a minute for it to come up, a minute
 # between tries while it does not stay, so an app that cannot start does not fill the log.
-kiosk_seen= kiosk_wait=0 kiosk_failing= kiosk_ask=0 kiosk_norot= kiosk_pm=0
+# The app's own adaptive brightness (on by default) writes screen_brightness from the light sensor every few seconds, and
+# set Android's mode back to manual 3 s after root set it to adaptive (checkers, 2026-11-07): the Echo's brightness
+# settings (backlight below, issue #126) could not hold.  So it goes off, as a person would switch it in the app.  The
+# app reads its preferences only at its start, so it is stopped first, and opened again as ever (kiosk_tick, the screen
+# UI).  Off, it left the brightness alone (watched a minute; its "default brightness" was never written).  The file is
+# the app's, in a folder the app writes: looked at and written as the app's own user (runas), so a link or a FIFO put
+# there reaches only what the app could anyway, and in place (cat >), so it keeps its SELinux label.  A file without the
+# key (a new install, before the app changed it) gets it; one not ending in </map> (being written) waits for the next
+# tick.  Each tick, a fork and a grep: switched on again in the app, it goes off again.
+KIOSK_ADAPTIVE='    <boolean name="flutter.ks.screen.adaptive_brightness" value="false" />'
+# As the app's user: check | write.  The verdict on stdout (done, todo, wait, written), never by exit code: runas's own
+# failures exit 1 too.  Android takes a .bak beside the file as the real one at the app's start (one left by a write
+# the app did not finish), so it goes once the file itself is whole.
+kiosk_prefs() {
+    $D/runas "$1" "$1" sh -c '
+        p=/data/data/$0/shared_prefs/FlutterSharedPreferences.xml
+        [ -f "$p" ] && [ "$(tail -n 1 "$p")" = "</map>" ] || { echo wait; exit 0; }
+        grep -qxF "$1" "$p" && [ ! -e "$p.bak" ] && { echo done; exit 0; }
+        [ "$2" = write ] || { echo todo; exit 0; }
+        { grep -vx "</map>" "$p" | grep -v "name=\"flutter.ks.screen.adaptive_brightness\""; echo "$1"; echo "</map>"; } > "$p.hm" &&
+            cat "$p.hm" > "$p" && rm -f "$p.bak" && echo written; rm -f "$p.hm"' $KIOSK_PACKAGE "$KIOSK_ADAPTIVE" $2 2>/dev/null
+}
+kiosk_brightness() {      # (a write that failed is not tried again for this install: each try stops the app)
+    local u
+    [ "$kiosk_bfail" = "$kiosk_seen" ] && return 0
+    u=$(echo $(stat -c %U /data/data/$KIOSK_PACKAGE 2>/dev/null))       # (toybox pads it: " u0_a154")
+    case "$u" in *[!a-z0-9_]*|'') return 0;; u[0-9]*_a[0-9]*) ;; *) return 0;; esac     # an app's user, nothing else
+    case "$(kiosk_prefs "$u" check)" in
+    todo) ;;
+    "") echo "kiosk satellite: its adaptive brightness could not be looked at (as $u)"; kiosk_bfail=$kiosk_seen; return 0;;
+    *) return 0;;
+    esac
+    am force-stop $KIOSK_PACKAGE > /dev/null 2>&1
+    if [ "$(kiosk_prefs "$u" write)" = written ]; then echo "kiosk satellite: its own adaptive brightness switched off (the Echo's brightness settings set the screen)"
+    else echo "kiosk satellite: its adaptive brightness could not be switched off"; kiosk_bfail=$kiosk_seen; fi
+}
+kiosk_seen= kiosk_bfail= kiosk_wait=0 kiosk_failing= kiosk_ask=0 kiosk_norot= kiosk_pm=0
 kiosk_tick() {
     [ "$(getprop sys.boot_completed)" = 1 ] || return 0
     k=$(ls -d /data/app/$KIOSK_PACKAGE-* 2>/dev/null)
@@ -328,6 +364,7 @@ kiosk_tick() {
         else kiosk_pm=5; fi
     fi
     kiosk_helper_said
+    [ -n "$BACKLIGHT" ] && [ -n "$kiosk_seen" ] && kiosk_brightness
     # The app writes accelerometer_rotation=1, user_rotation=0 about 5 s after it opens.  With no sensor Android keeps the
     # rotation it has, until something makes it look again: after a reinstall the Show 5 went to portrait, band across
     # the middle (2026-11-01).  So on the rotation itself, not the settings the app keeps writing; settings is Java, only then.
@@ -373,6 +410,76 @@ kiosk_helper() {
     while :; do kiosk_tick; sleep 10; done
 }
 # <<< kiosk
+
+# >>> backlight (tests/unit/backlight_test.py runs this block)
+# The Echo Show's backlight (device.conf BACKLIGHT; settings.c backlight_auto, issue #126) as stock's Display settings
+# set it, which are Android's own (KnightSettings: "Adaptive brightness" = screen_brightness_mode, its slider
+# screen_brightness, or with adaptive on screen_auto_brightness_adj): from state/config, screen_brightness_auto on/off,
+# screen_brightness in percent of 255, screen_brightness_adjust -100..100.  Adaptive runs Amazon's lux curve
+# (framework-res config_autoBrightnessLevels, cronos: setting 4 of 255 under 5 lux, 74 at 20, 155 at 30, 230 from 100),
+# which the adjustment bends as stock's slider does (-1..1, gamma up to 7: +1 makes 4 about 141).  Off by default, at
+# 47 % = 120, what every Show ran at before (device.conf).  A key's value from before it was first set here goes into
+# alexa-settings, as alexa-off.sh does, so alexa-on.sh puts stock's back.  Kiosk Satellite's own adaptive brightness is
+# switched off (kiosk_brightness above).  Changed by anything else (an app, a person with adb), the brightness is set
+# again, but three times at most until the settings change: never a fight with something that keeps writing it.
+# settings is Java (~2 s a call on a Show 5): SettingsProvider's file first, and only it each round.
+bl_get() {      # name default min max: state/config's whole number, within min..max; the default where there is none
+    local v
+    v=$(grep "^$1=" /data/local/hassmic/state/config 2>/dev/null | tail -n 1); v=${v#*=}      # (checkers' toybox: -1 is all)
+    case "$v" in ''|-|*[!0-9-]*|?*-*|?????*) v=$2;; esac      # (the daemon's file: digits only, 4 at most)
+    [ "$v" -lt $3 ] && v=$3; [ "$v" -gt $4 ] && v=$4
+    echo $v
+}
+bl_now() {
+    if grep -qx screen_brightness_auto=on /data/local/hassmic/state/config 2>/dev/null; then echo 1; else echo 0; fi
+    bl_get screen_brightness 47 1 100; bl_get screen_brightness_adjust 0 -100 100
+}
+bl_put() {
+    local was
+    grep -qF "name=\"$1\" value=\"$2\"" /data/system/users/0/settings_system.xml 2>/dev/null && return 0
+    # nothing back is a failed call (Java under load), not "unset": noted as null, alexa-on.sh would delete stock's value
+    was=$(settings get system $1 2>/dev/null | tr -d '\r')
+    [ -n "$was" ] || { [ -n "$bl_failing" ] || echo "backlight: $1 could not be read"; return 1; }
+    [ "$was" = "$2" ] && return 0
+    grep -q "^system $1 " /data/local/hassmic/alexa-settings 2>/dev/null || echo "system $1 $was" >> /data/local/hassmic/alexa-settings
+    settings put system $1 "$2" > /dev/null 2>&1 || { [ -n "$bl_failing" ] || echo "backlight: $1 could not be set"; return 1; }
+}
+bl_adj() { local a=${1#-}; a=$((a / 100)).$((a % 100 / 10))$((a % 10)); [ $1 -lt 0 ] && a=-$a; echo $a; }     # -100..100: -1.00..1.00
+bl_ok() {       # bl_now's three: Android's settings have them already (SettingsProvider's file; none to read: say yes)
+    local x=/data/system/users/0/settings_system.xml
+    [ -r $x ] || return 0
+    if [ $1 = 1 ]; then grep -qF 'name="screen_brightness_mode" value="1"' $x && grep -qF "name=\"screen_auto_brightness_adj\" value=\"$(bl_adj $3)\"" $x
+    else grep -qF 'name="screen_brightness_mode" value="0"' $x && grep -qF "name=\"screen_brightness\" value=\"$((($2 * 255 + 50) / 100))\"" $x; fi
+}
+backlight_set() {       # bl_now's three; fails when a setting did not take (the loop tries again)
+    if [ $1 = 1 ]; then bl_put screen_auto_brightness_adj $(bl_adj $3) && bl_put screen_brightness_mode 1
+    else bl_put screen_brightness_mode 0 && bl_put screen_brightness $((($2 * 255 + 50) / 100)); fi
+}
+backlight() {
+    [ -n "$BACKLIGHT" ] && command -v settings > /dev/null || return 0
+    until [ "$(getprop sys.boot_completed)" = 1 ]; do sleep 2; done
+    # A failure is tried again in 2 s, said once a streak (settings down or refused would fill the log, a Java call a
+    # round), and after 10 in a row every 30 s.  Set again after a change from elsewhere: 3 times, then left alone
+    last= bl_failing= fails=0 drifts=0
+    while :; do
+        now=$(echo $(bl_now))
+        if [ "$now" != "$last" ]; then drifts=0; fi
+        if [ "$now" != "$last" ] || { [ $drifts -lt 3 ] && ! bl_ok $now; }; then
+            if backlight_set $now; then          # (a set that failed is no drift: tried again as any failure)
+                [ "$now" = "$last" ] && drifts=$((drifts + 1))
+                set -- $now
+                if [ "$now" = "$last" ]; then echo "backlight: changed elsewhere, set again$([ $drifts = 3 ] && echo "; left to it from now on, until the setting changes")"
+                elif [ $1 = 1 ]; then echo "backlight: adaptive, adjusted $3"
+                else echo "backlight: $2 %"; fi
+                last=$now bl_failing= fails=0
+            else
+                bl_failing=1 fails=$((fails + 1))
+            fi
+        fi
+        if [ $fails -ge 10 ]; then sleep 30; else sleep 2; fi
+    done
+}
+# <<< backlight
 
 # wpa_supplicant's socket for the interface, else its global one, as wifi.sh's W(): a "reconfigure" takes the interface's
 # socket away until wpa_supplicant restarts (Dot 2, 2026-10-07)
@@ -687,6 +794,7 @@ satellite)
     netwatch 2>&1 | stamped >> $LOG &
     kiosk_helper 2>&1 | stamped >> $LOG &
     kiosk_perm_sync 2>&1 | stamped >> $LOG &
+    backlight 2>&1 | stamped >> $LOG &
     # mDNS through the stock avahi-daemon: hassmic prints the service file for its protocol, name and MAC address.
     # The MAC in it is how Home Assistant tells devices apart.  On radar wlan0 appears only later in the boot, hassmic
     # printed its placeholder MAC, and Home Assistant offered the adopted Echo as a new device.  So wait for Wi-Fi

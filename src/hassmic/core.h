@@ -87,6 +87,7 @@ void core_mic_level(int dbfs);                  /* speech level the pipeline get
 int  core_wake_sound_removal(int set);           /* our sounds taken out of what the pipeline gets (earsup.h), -1 reads */
 int  core_mic_denoise(int set);                 /* noise reduction on what the pipeline gets (micdenoise.h): 0 off .. 3 high, -1 reads */
 void core_pipeline_finish(void);
+int  core_follow_up(void);                       /* the pipeline being started answers a question: no wake word stage, even with -w remote */
 void core_restart_after(void);                  /* start another pipeline once the current one has finished */
 int  core_wake_run_ended(int failed);            /* lock held: a run ended during a reply; 1: the one that only listened for the wake word */
 void core_run_over(void);                        /* lock held: the run has ended while its reply is (about to be) spoken; with -w remote the wake word may cut it */
@@ -186,6 +187,11 @@ void   core_timer_cancelled(const char *id);
  * "a timer for 5 minutes"); 0 when none runs */
 void   core_timer_running(const char *id, const char *name, unsigned total, unsigned left, int active);
 int    core_timer_next(char *name, size_t cap, unsigned *total, long long *left_ms);
+/* every running timer (lock held), up to max, for the screen (screen.c): its name, or its length where it has none
+ * ("5 min", as a ringing one is called), its length, paused or not, and its end on the monotonic clock (ms, active)
+ * or what is left (paused).  The count */
+struct core_timer { char name[64]; unsigned total; int active; long long end_ms, left_ms; };
+int    core_timers_running(struct core_timer *t, int max);
 void   core_alarm_stop(const char *why);                    /* every ringing timer; why: for the log */
 int    core_transcript(const char *text);                   /* speech to text's result: 1 if it stopped a ring ("stop",
                                                                or anything with core_timer_stop_any), a Drop In or music

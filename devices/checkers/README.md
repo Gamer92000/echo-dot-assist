@@ -21,8 +21,8 @@ The unlock and install write to the Echo's flash. These rules keep it recoverabl
   Most units have no way back from a broken bootloader: the brick is permanent. Of the partitions, this install writes
   only `boot` and `system` (step 3 also wipes cache and data). Going all the way back to stock is the one exception:
   [below](#going-back-to-stock).
-- **Do not interrupt the unlock.** Once `fastbrick.sh` is past its 10 s grace period, nothing may stop it (it takes
-  up to 5 minutes). An interruption bricks the Echo for good.
+- **The unlock is the [XDA thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-5-1st-gen-2019-checkers.4762900/)'s.** Do it by hand, as the thread says: what must not be
+  interrupted, and when it is over, is there.
 - **In TWRP, always tap "Keep Read Only"** when it asks "Keep System Read only?". A system TWRP has mounted read-write
   no longer passes the stock boot image's checks, and the stock image is your way back while `/system` is untouched.
 - **Do not join Wi-Fi before the lockdown step.** Fire OS would reach Amazon and could update itself, which can close
@@ -34,15 +34,17 @@ The unlock and install write to the Echo's flash. These rules keep it recoverabl
 
 - The Echo Show 5 1st gen, its power supply, and a micro-USB cable.
 - A Linux PC (x86_64 is easiest: the setup downloads the qemu-arm it needs; elsewhere install `qemu-user`).
-- Four files. Save them into `~/Downloads`: the guided setup picks them up from there (or from `firmware/checkers/`,
-  the Echo Dot 3's `boot-root.zip` from `firmware/donut/`) and checks each one's sha256.
+- One file to download yourself: save it into `~/Downloads`, the guided setup picks it up from there (or from
+  `firmware/checkers/`) and checks its sha256. The two programs below it the setup fetches itself.
 
 | File | Where to get it | sha256 |
 |---|---|---|
 | `update-kindle-checkers-NS65741_user_8149_0013222532484.bin` | Amazon's firmware, Fire OS 6574.1 (NS65741/8149), 1372825620 bytes: download it from its [FTVDB record](https://ftvdb.com/echo/firmware/com.amazon.checkers.android.os/2a4c5a8f3af7da963955229bd1431411-13222532484-fire-os-6574-1-ns65741-8149-2026-09-28/) (Amazon's own help pages give only version numbers now). Downloaded and checked 2026-11-01 | `f96fcfa1240f809711fcf855ce7742762437e4f37546153153635c096773cfa3` |
-| `amonet-checkers-v2.0.1.zip` | attachment in the [checkers XDA thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-5-1st-gen-2019-checkers.4762900/#post-90318137) (R0rt1z2) | `770324a8ed5ab922c0383f8ba072d70fc0190cc2c879f12f67b8d6cfa3ad30ee` |
-| `boot-root.zip` (checkers') | attachment in the same thread. Only its `sbin/adbd` is used (sha256 `108ba403…`, `ADBD` in `device.conf`) | `b2474113a1f3a4a8de6728ff72774761051945641e1a5ffa78ee25c2b19a809e` |
-| `boot-root.zip` (the Echo Dot 3's) | attachment in the [donut XDA thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/). Only its `patch/magiskpolicy32` is used (sha256 `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a`). The browser saves the second `boot-root.zip` as `boot-root (1).zip`; the setup tells the two apart by sha256 | `de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0` |
+| `magiskpolicy32` | `lib/armeabi-v7a/libmagiskpolicy.so` of `Magisk-v30.7.apk`, [Magisk v30.7](https://github.com/topjohnwu/Magisk/releases/tag/v30.7) (APK `e0d32d2123532860f97123d927b1bb86c4e08e6fd8a48bfc6b5bee0afae9ebd5`): the policy patch, run on the PC under qemu-arm | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
+| `adbd` | `sbin/adbd` of Google's Android 7.1.1 emulator image (`system-images;android-25;google_apis;armeabi-v7a` r18; only its ramdisk is read, `scripts/zipmember.py`): a userdebug adbd that goes by `ro.secure`, for root adb in our boot image (`ADBD` in `device.conf`). Not tried on a Show yet; until 2026-11-09 the XDA boot-root image's (CyanogenMod's) was the tested one | `cc0178051cbf3fa0c7df5c880abd1becf55ce9f35b60ac851aae2edd106a3c18` |
+
+The unlock's own files are the [XDA thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-5-1st-gen-2019-checkers.4762900/)'s: it says which, kept current with its procedure. Nothing
+here downloads or reads them, its `boot-root.zip` included.
 
 Pin the firmware: the Echo must run exactly build 8149 (`ro.build.version.incremental` 0013222532484). The boot
 image is made from this build's `boot.img`, and hassmic links against its libraries. The XDA post names no version,
@@ -56,34 +58,31 @@ differently. The order differs a little: the setup locks the Echo down and joins
 `scripts/install-system.sh` hands over to `scripts/install-boot.sh` for this model; the guided setup calls the same
 scripts.
 
-### 1. Unlock with amonet
+### 1. Unlock
 
-Follow the XDA thread's instructions. It ends with an unlocked bootloader and TWRP (written to `recovery` and `swdl`).
-Two ways in:
+Unlock the Echo **by hand, as the [XDA
+thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-5-1st-gen-2019-checkers.4762900/) says**, from
+its first post: which Echos it is for, its files, how to get the Echo ready and every command are there, kept up to
+date. R0rt1z2 asks (since kamakiri-donut v1.1.0) that the unlock is only ever run that way, never from an installer or a
+script, so this page does not repeat its steps and `scripts/setup.sh checkers` does not run them either: it names the
+thread, waits for Enter and then checks for TWRP on adb. **Stop once TWRP shows on the Echo's screen**: the system, root
+and install below are this project's. Stuck, or the Echo does something the thread does not say? Ask in the thread, with
+what the Echo did, in your own words, and the tool's output or log as it is.
 
-- **A working Echo (no opening):** run `./fastbrick.sh` (Linux) or `fastbrick.bat`. With the Echo on its power
-  supply, hold all three buttons until "=> FASTBOOT mode..." shows, then connect micro-USB. Type `YES` and follow the
-  screen. Do not interrupt it after the 10 s grace period.
-- **A bricked Echo made in 2019:** open it (power and USB flex stay connected), stop ModemManager, run `sudo
-  ./bootrom-step.sh`, and plug in micro-USB while shorting test point TP30 to ground, until the script says
-  otherwise; then `sudo ./fastboot-step.sh`. Newer revisions have the bootrom's USB download disabled, so this most
-  likely fails on them.
-
-From then on, hold a key while connecting power:
+Once unlocked, a key held while connecting power picks what it boots:
 
 | Hold | Boots into |
 |---|---|
-| Volume down | amonet's hacked fastboot |
+| Volume down | the unlock's hacked fastboot |
 | Volume up | TWRP |
-| Mute + Volume down (USB connected) | preloader USB download for MTKClient ("MT8163 Preloader", maker "PWNED") |
 
-`boot-recovery.sh` and `boot-fastboot.sh` from the zip do the same over USB. In TWRP, adb answers while the screen
-shows; answering "Keep Read Only" restarts TWRP's USB, so adb drops for a few seconds.
+In TWRP, adb answers while the screen shows; answering "Keep Read Only" restarts TWRP's USB, so adb drops for a few
+seconds.
 
 ### 2. Unpack the firmware on the PC
 
 ```sh
-mkdir -p firmware/checkers && mv ~/Downloads/update-kindle-checkers-*.bin ~/Downloads/amonet-checkers-v2.0.1.zip firmware/checkers/
+mkdir -p firmware/checkers && mv ~/Downloads/update-kindle-checkers-*.bin firmware/checkers/
 unzip firmware/checkers/update-kindle-*.bin -d firmware/checkers/
 mkdir -p firmware/checkers/images firmware/checkers/rootfs/system
 mv firmware/checkers/boot.img firmware/checkers/images/
@@ -93,14 +92,16 @@ python3 scripts/mkbootroot.py --cpio firmware/checkers/images/boot.img firmware/
 (cd firmware/checkers/rootfs && cpio -id < ../ramdisk.cpio)
 ```
 
-Then the two tools out of the `boot-root.zip` files. Put checkers' (sha256 `b2474113…`) in `firmware/checkers/` and
-the Echo Dot 3's (`de49cc88…`) in `firmware/donut/boot-root.zip`; check with `sha256sum`, since the browser names the
-second one `boot-root (1).zip`:
+Then the two programs, from where they are made (the guided setup does the same):
 
 ```sh
-unzip -j firmware/donut/boot-root.zip patch/magiskpolicy32 -d firmware/checkers/
-unzip -p firmware/checkers/boot-root.zip boot-root.img > firmware/checkers/boot-root.img
-python3 scripts/mkbootroot.py --extract firmware/checkers/boot-root.img sbin/adbd firmware/checkers/adbd
+curl -fsSL -o toolchain/Magisk-v30.7.apk https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk-v30.7.apk
+sha256sum toolchain/Magisk-v30.7.apk   # e0d32d2123532860f97123d927b1bb86c4e08e6fd8a48bfc6b5bee0afae9ebd5
+unzip -p toolchain/Magisk-v30.7.apk lib/armeabi-v7a/libmagiskpolicy.so > firmware/checkers/magiskpolicy32
+python3 scripts/zipmember.py https://dl.google.com/android/repository/sys-img/google_apis/armeabi-v7a-25_r18.zip \
+    armeabi-v7a/ramdisk.img firmware/checkers/adbd --cpio sbin/adbd
+chmod 755 firmware/checkers/magiskpolicy32 firmware/checkers/adbd
+sha256sum firmware/checkers/magiskpolicy32 firmware/checkers/adbd   # SEPOLICY_TOOL_SHA256 and ADBD_SHA256 in device.conf
 ```
 
 More on the firmware's layout: [docs/re-checkers.md](../../docs/re-checkers.md#unpacking).
@@ -193,18 +194,10 @@ touchscreen and no Alexa app.
 - `scripts/install-system.sh --uninstall` turns Alexa's apps back on, takes hassmic off `/system` and wipes cache and
   data in TWRP (tap **Keep Read Only** when it asks): Amazon's apps come back without their data and default
   permissions otherwise, and their setup wizard crashes in a loop ("OOBE has stopped"). It keeps the root boot image.
-- All the way back is the firmware `.bin` flashed in TWRP (system and boot together), and it is the one step here
-  that goes against the first rule above: its updater script also writes lk, tee1/tee2, the preloader and an MBR.
-  amonet's TWRP renames `by-name/lk` and the other bootloader partitions to `*_real` at start, so the writes by name
-  miss; the preloader's (`mmcblk0boot0`, not by name) is not proven harmless
-  ([docs/re-checkers.md](../../docs/re-checkers.md#what-a-port-needs)). TWRP lists only `.zip` files, and the `.bin`
-  is one:
-  ```sh
-  adb push firmware/checkers/update-kindle-*.bin /sdcard/update.zip   # then check the size: 1372825620
-  adb shell twrp install /sdcard/update.zip                           # or: adb sideload the .bin, no rename
-  ```
-  A copy cut short (seen over MTP) makes TWRP report the zip corrupt. Flashing the amonet zip in TWRP afterwards
-  updates the unlock.
+- All the way back to stock (the firmware with its bootloaders) and unbricking are the
+  [XDA thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-5-1st-gen-2019-checkers.4762900/)'s:
+  as it says. It is the one step that goes against the first rule above: the firmware `.bin`'s updater script also
+  writes lk, tee1/tee2, the preloader and an MBR ([docs/re-checkers.md](../../docs/re-checkers.md#what-a-port-needs)).
 
 ## Troubleshooting
 
