@@ -324,6 +324,11 @@ async def login_runs_out():
         check(b.login() == "waiting", "asked once more (the page's Try again): a new login waits (it was refused at once until another key asked)")
         proc.send_signal(signal.SIGUSR2); await until(lambda: "login approved" in open(log).read())
         check(b.login() == "approved", "...and the button approves it")
+        c = Browser(WEB2)
+        check(c.login() == "waiting", "another browser asks")
+        await until(lambda: open(log).read().count("login ran out without the button") == 2)
+        await asyncio.sleep(3.5)                        # past web.c's REFUSED_MS (3 s) after it ran out, nobody asking meanwhile
+        check(c.login() == "waiting", "asked again long after it ran out (the page opened again): a new login waits, not \"refused\" at once")
         proc.terminate(); proc.wait(); proc = run(); wait_port(PORT2, WEB2)
         again = Browser(WEB2).hello.get("start")
         check(again and first and again != first, f"restarted: /api/hello names another start ({first} -> {again})")

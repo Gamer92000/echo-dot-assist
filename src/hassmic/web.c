@@ -90,6 +90,7 @@ extern const int web_nassets;
 #define MAX_CLIENTS 32               /* a browser has a key per Echo page it opened, and each Echo may know all of them */
 #define MAX_BODY    16384
 static int LOGIN_MS = 60000;        /* a login waits this long for the button (HASSMIC_LOGIN_MS for the tests) */
+#define REFUSED_MS 3000             /* a refused login is told for this long: the page asks every second while it waits */
 
 static const struct web_hooks *hooks;
 static pthread_mutex_t lk = PTHREAD_MUTEX_INITIALIZER;  /* everything below; never held while taking core_lock */
@@ -102,9 +103,10 @@ static uint8_t sk[32], pk[32];
 #define CTR_WINDOW 64
 static struct client { uint8_t pub[32]; unsigned long long ctr, floor, seen[CTR_WINDOW]; int nseen; char label[64]; } clients[MAX_CLIENTS];
 static int nclients;
-/* what waits for the button: a login, or adb for an approved browser.  state: 0 none, 1 waits, 2 approved, 3 refused */
+/* what waits for the button: a login, or adb for an approved browser.  state: 0 none, 1 waits, 2 approved, 3 refused;
+ * at: when it began, end: when it was refused */
 enum { W_LOGIN = 1, W_ADB };
-static struct { uint8_t pub[32]; char label[64]; long long at; int state, kind; } login;
+static struct { uint8_t pub[32]; char label[64]; long long at, end; int state, kind; } login;
 static atomic_int nconn;
 static char start_id[17];           /* new at every start: the page knows a restart from an answer of the old process */
 #define NONCE_MS 120000
@@ -212,7 +214,7 @@ static int voucher(uint8_t out[16], const uint8_t target[32], const uint8_t brow
 static void login_expire(long long now)     /* lk held */
 {
     if (login.state == 1 && now - login.at > LOGIN_MS) {
-        login.state = 3; fprintf(stderr, "web: %s ran out without the button\n", login.kind == W_ADB ? "adb request" : "login");
+        login.state = 3; login.end = now; fprintf(stderr, "web: %s ran out without the button\n", login.kind == W_ADB ? "adb request" : "login");
         if (hooks->attention) hooks->attention(0);
         if (hooks->approved) hooks->approved(0);
     }
@@ -222,7 +224,7 @@ static void login_expire(long long now)     /* lk held */
  * opened adb for 30 min against the owner's last word, and the page kept saying it waited (lk held) */
 static void adb_withdraw(const char *why)
 {
-    login.state = 3; fprintf(stderr, "web: adb request withdrawn (%s)\n", why);
+    login.state = 3; login.end = now_ms(); fprintf(stderr, "web: adb request withdrawn (%s)\n", why);
     if (hooks->attention) hooks->attention(0);
 }
 
@@ -279,18 +281,20 @@ static const char *adb_ask(const uint8_t pub[32], int on)
 /* "approved", "waiting", "refused".  Approved is what clients[] says: the old record said it to a key revoked or pushed
  * out since, and the page showed "Logged in" over 401s.  A login that ran out or collided is told once, then the next
  * ask from that key starts anew: the record stayed until another key asked, and the page keeps one key, so its "Try
- * again" was refused at once, with nothing on the ring for the button */
+ * again" was refused at once, with nothing on the ring for the button.  Told only within REFUSED_MS of the refusal: a
+ * page still asking (web/app.js, every second) hears of it, one opened again later would have been told "Not
+ * approved" at its first click */
 static const char *login_ask(const uint8_t pub[32], const char *label)
 {
     const char *r; long long now = now_ms();
     pthread_mutex_lock(&lk);
     login_expire(now);
     if (client_of(pub)) r = "approved";
-    else if ((login.state == 1 || login.state == 3) && login.kind == W_LOGIN && !memcmp(login.pub, pub, 32)) {
+    else if (login.kind == W_LOGIN && !memcmp(login.pub, pub, 32) && (login.state == 1 || (login.state == 3 && now - login.end <= REFUSED_MS))) {
         r = login.state == 1 ? "waiting" : "refused";
         if (login.state == 3) login.state = 0;
     } else if (login.state == 1) {              /* two at once: neither */
-        login.state = 3; r = "refused";
+        login.state = 3; login.end = now; r = "refused";
         fprintf(stderr, "web: two logins at once, both refused\n");
         if (hooks->attention) hooks->attention(0);
         if (hooks->approved) hooks->approved(0);
