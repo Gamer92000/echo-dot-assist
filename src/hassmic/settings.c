@@ -485,13 +485,19 @@ static int load_old(void)
 }
 
 /* "Wake sound" off used to silence the button, microphone and volume sounds too (never Bluetooth's).  An Echo that had
- * it off stays as quiet: called while its config has none of the sounds' own switches yet */
-static void wake_sound_was_all(void)
+ * it off stays as quiet: called while its config has none of the sounds' own switches yet, and for an export of then
+ * (settings_apply_text).  How many it turned off (those still on) */
+static const enum id wake_sound_covered[] = { SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME };
+static int wake_sound_was_all(void)
 {
-    if (core_wake_sound(-1)) return;
-    static const int s[] = { SND_TOUCH, SND_MICS_OFF, SND_MICS_ON, SND_VOLUME };
-    for (size_t i = 0; i < sizeof s / sizeof *s; i++) core_sound_on(s[i], 0);
-    fprintf(stderr, "settings: \"Wake sound\" was off: the button, microphone and volume sounds now off on their own switches\n");
+    if (core_wake_sound(-1)) return 0;
+    int n = 0;
+    for (size_t i = 0; i < sizeof wake_sound_covered / sizeof *wake_sound_covered; i++) {
+        const int snd = switched_sound(wake_sound_covered[i]);
+        if (core_sound_on(snd, -1)) { core_sound_on(snd, 0); n++; }     /* one already off is no change to count */
+    }
+    if (n) fprintf(stderr, "settings: \"Wake sound\" was off: the button, microphone and volume sounds now off on their own switches\n");
+    return n;
 }
 
 /* the next line of f into buf, as fgets; one longer than buf is skipped whole (its tail, read as a line of its own,
@@ -627,6 +633,36 @@ size_t settings_text(char *out, size_t cap, int export_only)
     return n < cap ? n : cap;
 }
 
+/* past key on the last of text's lines that starts with it (indented or not, as settings_apply_text reads them): what
+ * applying text ends up with.  NULL: none */
+static const char *text_line(const char *text, const char *key)
+{
+    const char *hit = NULL; size_t k = strlen(key);
+    for (const char *p = text; *p; ) {
+        while (isspace((unsigned char)*p)) p++;
+        if (!strncmp(p, key, k)) hit = p + k;
+        p += strcspn(p, "\n"); p += *p == '\n';
+    }
+    return hit;
+}
+
+/* An export from before the sounds had switches of their own (f95d9f9, #87, 2026-11-02): its "Wake sound" off also
+ * stood for the button, microphone and volume sounds, which it has no lines for (exports came with adaa7d8, after
+ * 29c86e0 put those sounds under that switch, so every such export meant all four) */
+static int export_from_before_switches(const char *text)
+{
+    char v[8], key[40]; const char *w; int x;
+    snprintf(key, sizeof key, "%s=", table[WAKE_SOUND].name);
+    if (!text_line(text, SETTINGS_EXPORT_HEAD) || !(w = text_line(text, key))) return 0;
+    snprintf(v, sizeof v, "%.*s", (int)strcspn(w, "\r\n"), w);
+    if (parse(&table[WAKE_SOUND], v, &x) || x) return 0;
+    for (size_t i = 0; i < sizeof wake_sound_covered / sizeof *wake_sound_covered; i++) {
+        snprintf(key, sizeof key, "%s=", table[wake_sound_covered[i]].name);
+        if (text_line(text, key)) return 0;
+    }
+    return 1;
+}
+
 int settings_apply_text(const char *text, char *err, size_t errsz)
 {
     int applied = 0; size_t en = 0;
@@ -645,5 +681,9 @@ int settings_apply_text(const char *text, char *err, size_t errsz)
         if (!settings_set(k, v, e, sizeof e)) applied++;
         else if (en < errsz) en += (size_t)snprintf(err + en, errsz - en, "%s\n", e);
     }
+    /* imported (the page's Import, setup.sh --preset), such an export leaves this Echo as quiet as the one it came from,
+     * as settings_load does for a config of then.  A wake_sound line sent alone (the page's switch, Compare & copy's
+     * changed rows) has no export's first line, and a newer export lists the four */
+    if (export_from_before_switches(text)) { int n = wake_sound_was_all(); if (n) { applied += n; settings_save(); } }
     return applied;
 }

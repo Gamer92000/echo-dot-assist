@@ -2126,8 +2126,14 @@ Run in this order. Each step says what it proves.
       asks them; `use_earcon` had covered four sounds since 29c86e0 by way of one code path, nobody chose it). None for
       Identify and Drop In's (`sound_queue`), nor the login's cue that borrows Bluetooth's. "All off" is one `/api/set`.
       Laid out as the ring designs (full width under the settings cards, groups of tiles), not as `LAYOUT`'s rows.
-      `settings_load`: a config with `wake_sound=off` and no `sound_touch` gets the four off once. Not done for imports:
-      an older export's `wake_sound=off` now means the wake sound alone.
+      `settings_load`: a config with `wake_sound=off` and no `sound_touch` gets the four off once. Imports too
+      (2026-11-07): `settings_apply_text` (the page's Import, `setup.sh --preset`), after its loop, turns them off
+      (those it changed counted in `applied`; saved) for a text with the export's first line (`SETTINGS_EXPORT_HEAD`,
+      unchanged since exports came in adaa7d8, after 29c86e0, so every export without the switches meant all four),
+      `wake_sound=off` and none of the four's lines. A `wake_sound` line on its own (the page's switch, Compare & copy:
+      changed rows, no first line; HA's switch is `core_wake_sound`) and a newer export (it lists them) leave them.
+      Tests: fake_web_sounds.py (an export without them imported, again with them off, a newer one, a line alone, the
+      first as a preset).
 - [x] Buttons as Home Assistant events (2026-10-12, issue #26: a Dot 2 user moved from EchoLocal, whose automations
       stopped an HA-run alarm clock with the action button and used volume holds for next track / play-pause). ESPHome
       event entity "Button" (`button`, KEY_BUTTON, device class `button`, always listed), types `action`,

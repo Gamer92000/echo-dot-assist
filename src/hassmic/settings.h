@@ -48,6 +48,9 @@ int  settings_choices(const struct setting *s, const char *const **names);   /* 
 int  settings_set(const char *name, const char *value, char *err, size_t errsz);
 /* "name=value" lines: every setting (or only the exportable ones); returns the length written (truncated to cap) */
 size_t settings_text(char *out, size_t cap, int export_only);
+/* an export's first line (web.c /api/export), the Echo's name, model and version after it: settings_apply_text tells an
+ * export by it, unchanged since exports came (adaa7d8) */
+#define SETTINGS_EXPORT_HEAD "# hassmic settings, exported from "
 /* Apply "name=value" lines (an export, a preset); # comments and blank lines skipped.  Errors are listed in err, one
  * per line; returns how many settings were applied */
 int  settings_apply_text(const char *text, char *err, size_t errsz);

@@ -21,6 +21,11 @@ What changed for people using the Echo, newest first. Details and measurements a
   orange, pulsing until it is stopped, with a Stop button. The screen stays on while a timer runs.
 - **Echo Show: words and timers by touch.** A tap takes the words away, hides the timers until the next change, and
   Stop stops a ringing timer, over an app too: while they show, the app gets none of those touches.
+- **A settings file from before the sounds had their own switches keeps the Echo as quiet as it was.** In a file
+  exported before then (its first line names a version older than 2026.11.02), "Wake sound" off also stood for the
+  action button, microphone and volume sounds. Imported on the settings page or given to `scripts/setup.sh --preset`,
+  it turned only the wake sound off; now those sounds go off with it, as they already did for an Echo that had it off
+  when it updated. Bluetooth's sounds stay on: that switch never covered them.
 
 ## 2026-11-08
 
