@@ -1,7 +1,7 @@
 /* pb.h: varints of every length written and read back, a field of each wire type, and what is malformed, each message
  * in exactly its own bytes (under ASan/UBSan: no read past them, no shift past 63 bits): a varint cut off at the end,
- * a length past the end, a fixed field cut short, and a varint of 11 bytes as the key, a value or a length (they came
- * from anyone on the network before a key was set: the shift went to 70) */
+ * a length past the end, a fixed field cut short, a varint of 11 bytes as the key, a value or a length (they came
+ * from anyone on the network before a key was set: the shift went to 70), and a field number of 0 or past 2^29 - 1 */
 #include "pb.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,6 +53,13 @@ int main(void)
     check(!first(key11, sizeof key11, &f), "a key of 11 bytes: malformed");
     check(!first(value11, sizeof value11, &f), "a value of 11 bytes: malformed");
     check(!first(len11, sizeof len11, &f), "a length of 11 bytes: malformed");
+    /* field numbers: 1 to 2^29 - 1 (keys as bytes: pb_uint's f << 3 is an int) */
+    static const unsigned char field_top[] = { 0xf8, 0xff, 0xff, 0xff, 0x0f, 0x01 }, field_past[] = { 0x80, 0x80, 0x80, 0x80, 0x10, 0x01 },
+        field_wrap[] = { 0x88, 0x80, 0x80, 0x80, 0x80, 0x01, 0x01 }, field0[] = { 0x00, 0x01 };
+    check(first(field_top, sizeof field_top, &f) && f.field == PB_FIELD_MAX && f.wire == 0 && f.v == 1, "field 2^29 - 1: read back");
+    check(!first(field_past, sizeof field_past, &f), "field 2^29: malformed");
+    check(!first(field_wrap, sizeof field_wrap, &f), "field 2^32 + 1 (would wrap onto 1): malformed");
+    check(!first(field0, sizeof field0, &f), "field 0: malformed");
     free(held);
     printf("%s\n", fails ? "pb: FAILED" : "pb: ok");
     return fails != 0;

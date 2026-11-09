@@ -34,10 +34,15 @@ static inline int pb_uvarint(const unsigned char **p, const unsigned char *end, 
     return 0;
 }
 
+/* Field numbers are 1 to 2^29 - 1, protobuf's own limit: 0 or a larger one is malformed, as its readers take it (a key
+ * past 32 bits would also have wrapped in field onto a small number).  Malformed ends the message there, as every
+ * other malformed field does; such a key used to be skipped as an unknown field */
+#define PB_FIELD_MAX 0x1fffffffu
+
 static inline int pb_next(const unsigned char **p, const unsigned char *end, struct pbf *f)
 {
     uint64_t k, v;
-    if (!pb_uvarint(p, end, &k)) return 0;          /* also the end of the message */
+    if (!pb_uvarint(p, end, &k) || !(k >> 3) || k >> 3 > PB_FIELD_MAX) return 0;      /* also the end of the message */
     f->field = k >> 3; f->wire = k & 7; f->v = 0; f->data = NULL; f->len = 0;
     switch (f->wire) {
     case 0: if (!pb_uvarint(p, end, &v)) return 0; f->v = v; break;
