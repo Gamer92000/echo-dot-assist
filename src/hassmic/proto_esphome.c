@@ -84,6 +84,7 @@
 #include "hash.h"
 #include "https.h"
 #include "noise.h"
+#include "pb.h"
 #include "sendspin.h"
 #include "clock.h"
 #include "update.h"
@@ -156,46 +157,7 @@ static void announce_done(void);
 static atomic_int media_busy;
 static struct media_job *media_cur;    /* lock held: the job holding media_busy, for cancel() */
 
-/* ---------------------------------------------------------------- protobuf */
-
-struct pb { unsigned char *p; size_t n, cap; };
-
-static void pb_raw(struct pb *b, const void *d, size_t n) { if (b->n + n <= b->cap) { memcpy(b->p + b->n, d, n); b->n += n; } }
-static void pb_varint(struct pb *b, uint64_t v) { unsigned char c; do { c = v & 0x7f; v >>= 7; if (v) c |= 0x80; pb_raw(b, &c, 1); } while (v); }
-static void pb_uint(struct pb *b, int f, uint64_t v) { if (v) { pb_varint(b, f << 3); pb_varint(b, v); } }
-static void pb_bytes(struct pb *b, int f, const void *d, size_t n) { if (n) { pb_varint(b, f << 3 | 2); pb_varint(b, n); pb_raw(b, d, n); } }
-static void pb_str(struct pb *b, int f, const char *s) { pb_bytes(b, f, s, strlen(s)); }
-static void pb_sint(struct pb *b, int f, int32_t v) { pb_uint(b, f, (uint32_t)v << 1 ^ (uint32_t)(v >> 31)); }   /* zigzag */
-static void pb_fixed32(struct pb *b, int f, uint32_t v) { pb_varint(b, f << 3 | 5); pb_raw(b, &v, 4); }      /* little endian host */
-static void pb_float(struct pb *b, int f, float v) { uint32_t u; memcpy(&u, &v, 4); pb_fixed32(b, f, u); }
-
-struct pbf { unsigned field, wire; uint64_t v; const unsigned char *data; size_t len; };
-
-static int pb_next(const unsigned char **p, const unsigned char *end, struct pbf *f)
-{
-    uint64_t k = 0, v = 0; int sh = 0;
-    if (*p >= end) return 0;
-    while (*p < end) { unsigned char c = *(*p)++; k |= (uint64_t)(c & 0x7f) << sh; sh += 7; if (!(c & 0x80)) break; }
-    f->field = k >> 3; f->wire = k & 7; f->v = 0; f->data = NULL; f->len = 0;
-    switch (f->wire) {
-    case 0: for (sh = 0; *p < end;) { unsigned char c = *(*p)++; v |= (uint64_t)(c & 0x7f) << sh; sh += 7; if (!(c & 0x80)) break; } f->v = v; break;
-    case 1: if (end - *p < 8) return 0; *p += 8; break;
-    case 2:
-        for (sh = 0; *p < end;) { unsigned char c = *(*p)++; v |= (uint64_t)(c & 0x7f) << sh; sh += 7; if (!(c & 0x80)) break; }
-        if ((uint64_t)(end - *p) < v) return 0;
-        f->data = *p; f->len = v; *p += v;
-        break;
-    case 5: if (end - *p < 4) return 0; { uint32_t u; memcpy(&u, *p, 4); f->v = u; } *p += 4; break;
-    default: return 0;
-    }
-    return 1;
-}
-
-static void pbf_str(const struct pbf *f, char *out, size_t outsz)
-{
-    size_t n = f->len < outsz - 1 ? f->len : outsz - 1;
-    memcpy(out, f->data, n); out[n] = 0;
-}
+/* ---------------------------------------------------------------- framing (the messages' protobuf: pb.h) */
 
 static int client_of(int fd)            /* lock held */
 {
@@ -893,7 +855,10 @@ static void on_light(const unsigned char *p, const unsigned char *end)      /* l
 
 struct media_job {
     char url[2][1024]; int announce, start_conversation, media;     /* media: play_media, at the main volume */
-    int fd, aborted;                    /* lock held.  aborted: its run was cancelled; it plays nothing and touches no state */
+    int fd, aborted;                    /* lock held.  aborted: let go of by cancel() or media_stop_early(), which set
+                                         * the state; the thread queues no more audio (tts_begin refuses, the decoders
+                                         * stop: job_gone) and only calls core_tts_abandoned if its audio had begun */
+    int began;                          /* lock held: its audio is queued (tts_begin) */
 };
 
 static void send_mp_state(void)         /* lock held */
@@ -937,24 +902,35 @@ static int http_get(const char *url)    /* returns a socket positioned at the bo
     return http_get_host(host, port, path ? path : "/");
 }
 
-static int tts_begin(struct media_job *job, unsigned rate, unsigned ch)    /* -1: cancelled, the reply must not play */
+static int tts_begin(struct media_job *job, unsigned rate, unsigned ch)    /* -1: let go of, it must not play */
 {
     pthread_mutex_lock(&core_lock);
     int ok = !job->aborted;
-    if (ok) core_tts_begin(rate, ch, job->media);
+    if (ok) { job->began = 1; core_tts_begin(rate, ch, job->media); }
     pthread_mutex_unlock(&core_lock);
     return ok ? 0 : -1;
 }
 
-static void feed(const void *pcm, size_t len)       /* queue with back pressure */
+/* Let go of: the decoders stop.  A shut socket still hands over what it had buffered, and play_mp3 decodes what it read
+ * ahead (up to 32 KB), which went into the queue after cancel() and before the next run's reply */
+static int job_gone(struct media_job *job)
 {
-    core_tts_data(pcm, len);
-    while (core_tts_queued() > 256 * 1024 && !core_tts_flushing()) usleep(50000);
+    pthread_mutex_lock(&core_lock); int gone = job->aborted; pthread_mutex_unlock(&core_lock);
+    return gone;
 }
 
+static void feed(struct media_job *job, const void *pcm, size_t len)       /* queue with back pressure */
+{
+    if (job_gone(job)) return;          /* let go of while its read waited */
+    core_tts_data(pcm, len);
+    while (core_tts_queued() > 256 * 1024 && !core_tts_flushing() && !job_gone(job)) usleep(50000);
+}
+
+/* The decoders' buffers are each call's own, never static: a job that was let go of (cancel(), media_stop_early()) can
+ * still be reading what its socket had buffered while the next job's thread decodes */
 static int play_wav(struct media_job *job, int fd, const unsigned char *head, size_t have)
 {
-    unsigned char ck[8], fmt[16]; unsigned rate = 0, ch = 0, bits = 0; static unsigned char buf[8192];
+    unsigned char ck[8], fmt[16], buf[8192]; unsigned rate = 0, ch = 0, bits = 0;
     (void)head; (void)have;                             /* the 12 byte RIFF/WAVE header, already consumed */
     for (;;) {
         if (read_full(fd, ck, 8) != 8) return -1;
@@ -970,9 +946,9 @@ static int play_wav(struct media_job *job, int fd, const unsigned char *head, si
     fprintf(stderr, "media: WAV %u Hz x%u\n", rate, ch);
     if (tts_begin(job, rate, ch) < 0) return -1;
     size_t odd = 0;
-    for (ssize_t r; !core_tts_flushing() && (r = read(fd, buf + odd, sizeof buf - odd)) > 0; ) {
+    for (ssize_t r; !core_tts_flushing() && !job_gone(job) && (r = read(fd, buf + odd, sizeof buf - odd)) > 0; ) {
         size_t n = odd + r, use = n & ~(size_t)(2 * ch - 1);        /* whole frames only */
-        feed(buf, use);
+        feed(job, buf, use);
         odd = n - use; memmove(buf, buf + use, odd);
     }
     return 0;
@@ -982,14 +958,16 @@ static int play_wav(struct media_job *job, int fd, const unsigned char *head, si
  * voice pipeline has run), so that has to play too. */
 static int play_mp3(struct media_job *job, int fd, const unsigned char *head, size_t have)
 {
-    static unsigned char in[32768]; static mp3d_sample_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME];
-    static mp3dec_t dec; mp3dec_frame_info_t info; size_t n = have; int began = 0, eof = 0;
+    struct { unsigned char in[32768]; mp3d_sample_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME]; mp3dec_t dec; } *m = malloc(sizeof *m);
+    mp3dec_frame_info_t info; size_t n = have; int began = 0, eof = 0;
+    if (!m) return -1;
+    unsigned char *in = m->in; mp3d_sample_t *pcm = m->pcm;
     memcpy(in, head, have);
-    mp3dec_init(&dec);
-    while (!core_tts_flushing()) {
-        while (!eof && n < sizeof in) { ssize_t r = read(fd, in + n, sizeof in - n); if (r <= 0) eof = 1; else n += r; }
+    mp3dec_init(&m->dec);
+    while (!core_tts_flushing() && !job_gone(job)) {
+        while (!eof && n < sizeof m->in) { ssize_t r = read(fd, in + n, sizeof m->in - n); if (r <= 0) eof = 1; else n += r; }
         if (!n) break;
-        int samples = mp3dec_decode_frame(&dec, in, n, pcm, &info);
+        int samples = mp3dec_decode_frame(&m->dec, in, n, pcm, &info);
         if (!info.frame_bytes) { if (eof) break; n = 0; continue; }     /* no sync in the whole buffer */
         if (samples > 0) {
             if (!began) {
@@ -997,10 +975,11 @@ static int play_mp3(struct media_job *job, int fd, const unsigned char *head, si
                 if (tts_begin(job, info.hz, info.channels) < 0) break;
                 began = 1;
             }
-            feed(pcm, (size_t)samples * info.channels * 2);
+            feed(job, pcm, (size_t)samples * info.channels * 2);
         }
         n -= info.frame_bytes; memmove(in, in + info.frame_bytes, n);
     }
+    free(m);
     if (!began) fprintf(stderr, "media: no MP3 audio found\n");
     return began ? 0 : -1;
 }
@@ -1018,16 +997,17 @@ static void *media_thread(void *arg)
 {
     struct media_job *job = arg; int ok = 0, began = 0;
     for (int i = 0; i < 2; i++) {
-        if (!job->url[i][0] || core_tts_flushing()) continue;
+        pthread_mutex_lock(&core_lock); int gone = job->aborted; pthread_mutex_unlock(&core_lock);
+        if (!job->url[i][0] || gone || core_tts_flushing()) continue;      /* gone: not the message after its chime either */
         int fd = http_get(job->url[i]);
         if (fd < 0) continue;
-        pthread_mutex_lock(&core_lock); job->fd = fd; int gone = job->aborted; pthread_mutex_unlock(&core_lock);
+        pthread_mutex_lock(&core_lock); job->fd = fd; gone = job->aborted; pthread_mutex_unlock(&core_lock);
         if (!gone && play_url(job, fd) == 0) { began = 1; if (i == 1) ok = 1; }
         pthread_mutex_lock(&core_lock); job->fd = -1; pthread_mutex_unlock(&core_lock);
         close(fd);
     }
     pthread_mutex_lock(&core_lock);
-    if (job->aborted) {                 /* cancel() has let go of it: a new run and its reply may be under way already */
+    if (job->aborted) {                 /* let go of: a new run and its reply, or new media, may be under way already */
         if (began) core_tts_abandoned();
         pthread_mutex_unlock(&core_lock);
         free(job);
@@ -1480,6 +1460,25 @@ static void on_announce(const unsigned char *p, const unsigned char *end)
     media_start(pre, media, 1, conv, 0, 0);
 }
 
+/* Lock held.  The media player's stop before the job's audio began (on_mp_command): it is let go of as cancel() does,
+ * and what its failed fetch would have done is done now (announcement not played, player idle, pipeline finished,
+ * media_busy free).  Not left to its thread: http_get returns only once the headers came, which Home Assistant may hold
+ * back while the TTS renders (15 s a read, SO_RCVTIMEO), so there is no socket to shut meanwhile, and media_busy would
+ * refuse what is sent right after the stop.  The thread plays nothing (tts_begin refuses) and touches no state.
+ * A reply's tts_expected stays set until the next run, as after a failed fetch: a TTS_END of this run (the reply was
+ * streamed from INTENT_PROGRESS) must not fetch it again */
+static void media_stop_early(void)
+{
+    struct media_job *job = media_cur;
+    job->aborted = 1;
+    if (job->fd >= 0) shutdown(job->fd, SHUT_RDWR);
+    media_cur = NULL;
+    if (job->announce) { PB(b, 8); pb_uint(&b, 1, 0); send_va(VA_ANNOUNCE_FINISHED, &b); announcing = 0; announce_done(); }
+    media_playing = 0; send_mp_state();
+    core_pipeline_finish();
+    atomic_store(&media_busy, 0);
+}
+
 static void on_mp_command(const unsigned char *p, const unsigned char *end)
 {
     struct pbf f; static char url[1024]; int has_cmd = 0, cmd = 0, has_vol = 0, has_url = 0, announcement = 0; float vol = 0;
@@ -1494,7 +1493,14 @@ static void on_mp_command(const unsigned char *p, const unsigned char *end)
         case 9: announcement = f.v != 0; break;        /* tts.speak and play_media's announce: speech, not music */
     }
     if (has_vol) core_set_volume((int)(vol * 100 + 0.5f));
-    if (has_cmd && cmd == MP_CMD_STOP && media_playing) core_tts_flush();
+    /* The flush drops what is queued up to the job's Q_STOP, which clears it (main.c playback_thread).  A job whose audio
+     * has not begun (the fetch still waits on Home Assistant rendering the TTS) queues none when it then fails or is MP3
+     * (play_mp3 does not start under a flush): the flush stayed set and dropped every reply, announcement and media
+     * after it until hassmic restarted.  Such a job is let go of instead */
+    if (has_cmd && cmd == MP_CMD_STOP && media_playing) {
+        if (media_cur && !media_cur->began) media_stop_early();
+        else core_tts_flush();
+    }
     if (has_cmd && cmd == MP_CMD_STOP) core_alarm_stop("media player stop");     /* as "Stop ringing" does, for automations */
     if (has_url && url[0]) media_start("", url, 0, 0, 0, !announcement);
     if (has_cmd && !has_url) send_mp_state();

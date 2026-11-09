@@ -270,8 +270,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   PC or where a HAL drops the bits (then level only). `core_lock` guards state and client socket writes; `core.h`
   documents per function whether the lock is held.
 - **Protocols (`struct proto` in `core.h`)**: `proto_esphome.c` (ESPHome native API incl. Noise encryption provisioned
-  by HA, voice assistant, media player, timers, settings entities, Bluetooth proxy messages) and `proto_wyoming.c` +
-  `wyoming.c`. Selected with `-P`. The core calls `start/audio/stop/played/...` on the active proto with lock held.
+  by HA, voice assistant, media player, timers, settings entities, Bluetooth proxy messages; its protobuf in `pb.h`,
+  header-only for `tests/unit/pb_test.c` under UBSan) and `proto_wyoming.c` + `wyoming.c`. Selected with `-P`. The
+  core calls `start/audio/stop/played/...` on the active proto with lock held.
 - **Audio backend (`audio.h`)**: `audio_mixer.c` on device (mixer C API: capture, voice/TTS, music, Bluetooth and
   earcon streams mixed by the mixer); `audio_android.c` where there is no mixer (checkers, Echo Show 5; cronos, its 2nd gen; athena, Echo Show 8 2nd gen; cupcake, Echo Input: OpenSL ES over
   AudioRecord/AudioTrack, the front end inside the audio HAL; device.mk `SYSLIBS` links

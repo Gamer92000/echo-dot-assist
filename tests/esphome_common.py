@@ -35,6 +35,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/moved"):            # Home Assistant behind a proxy that redirects
             self.send_response(302); self.send_header("Location", "/a.wav"); self.send_header("Content-Length", "0"); self.end_headers(); return
+        if "slow" in self.path:                         # TTS still rendering: not even a status line for a while
+            time.sleep(1.5)
+        if "missing" in self.path:                      # and then none (a TTS engine that failed, a file gone)
+            self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers(); return
         body = wav_bytes(48000, 3.0 if "s=3" in self.path else 0.5)
         if self.path.endswith(".mp3"):                  # what Home Assistant sends for a TTS announcement before any pipeline ran
             # 1 s of 440 Hz, 24 kHz mono: ffmpeg -bitexact -f lavfi -i sine=frequency=440:duration=1 -ar 24000 -ac 1
