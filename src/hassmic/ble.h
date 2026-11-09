@@ -46,6 +46,7 @@ void ble_scan(int on, int active);      /* wanted state */
 void ble_quiet(int ms);                 /* no scanning for the next ms (longer pauses win): Wi-Fi broadcasts get through */
 void ble_connect(uint64_t addr, unsigned addr_type);   /* -> connection(1, mtu) once the MTU is agreed, or (0, error) */
 void ble_disconnect(uint64_t addr);     /* -> connection(0, 0) */
+void ble_disconnect_all(void);          /* every proxy link, one still queued to connect included (not the peripheral's) */
 void ble_services(uint64_t addr);       /* -> services(), or error(addr, 0, e) */
 void ble_read(uint64_t addr, unsigned handle);         /* characteristic value or descriptor -> read() / error() */
 void ble_pair(uint64_t addr);          /* connected device: Just Works pairing + bond, or encrypt with the bond -> paired() */

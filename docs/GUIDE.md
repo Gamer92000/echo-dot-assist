@@ -654,6 +654,11 @@ name and state.
 Works like an ESPHome `bluetooth_proxy` with `active: true`: scanning, up to 3 connections, "Just Works" pairing only.
 While a phone plays, the proxy stops scanning: the radio cannot do both without the music stuttering.
 
+On by default. "Bluetooth proxy" (settings page, Features) switches it off: the Echo then tells Home Assistant it is no
+proxy, so Home Assistant sets up no scanner for it, and the Echo stops scanning and refuses connections. Disabling the
+Echo's Bluetooth entries in Home Assistant is not enough: the proxy is no entity, and advertisements keep coming.
+Bluetooth audio from phones, the Bluetooth speaker and the setup from a phone (Improv) keep working with it off.
+
 ## In Home Assistant
 
 | Always there | |
@@ -696,6 +701,7 @@ Echo announces itself again after 100 s without Home Assistant, then less and le
 | Request and reply text (off by default) | Last heard (what speech-to-text understood), Last reply (what the assistant answered). Both are cleared when a request starts, so the same request twice is still a change. Home Assistant takes at most 255 characters per state: a longer reply ends in "…". Every request and reply goes into Home Assistant's history while this is on. ESPHome only |
 | [Wi-Fi motion](#wi-fi-motion) | motion sensor, sensitivity |
 | Light sensor (off by default) | Illuminance (the room's light in lux); "LED brightness" then also follows auto brightness, an entry in the logbook every few minutes. Off, it shows only levels you set |
+| [Bluetooth proxy](#bluetooth-proxy) (on by default) | no entities: Home Assistant's Bluetooth scanner for this Echo |
 | Bluetooth audio from phones | Bluetooth pairing |
 | [Playing on a Bluetooth speaker](#playing-on-a-bluetooth-speaker) | Bluetooth speaker search, Play on Bluetooth speaker, Bluetooth speaker, Bluetooth speaker delay |
 | [Separate volumes](#separate-volumes) (off by default, on the Volume card) | Assistant volume, Sounds volume, Timer volume, Call volume (each while it has its own; calls with Drop In) |

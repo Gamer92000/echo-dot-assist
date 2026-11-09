@@ -32,6 +32,7 @@ int  settings_peek(const char *name, char *out, size_t cap);
 int  settings_mic_level(void);
 const char *settings_speech_language(void);    /* "de", "en", ...; "" for automatic (main.c speech_locale) */
 int  settings_on(const char *name);     /* a bool setting's value; 0 if this Echo has no such setting */
+int  settings_bt_proxy(void);           /* "bluetooth_proxy", whether or not the controller was there when the list was made */
 const struct bt_lang *settings_bt_lang(void);
 int  settings_bt_lang_index(int set);   /* -1 reads */
 float settings_duck_gain(void);         /* linear gain music gets while the assistant is not idle (setting music_duck); any thread */

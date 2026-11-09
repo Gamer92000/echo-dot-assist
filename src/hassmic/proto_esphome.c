@@ -27,7 +27,8 @@
  *   arbitration      "Join arbitration network" switch and "Arbitration peers"; the action "arbitration_key" (Home
  *                    Assistant names it esphome.<node>_arbitration_key) through which other Echos hand over their
  *                    network key, and the HomeassistantActionRequest with which this one hands over its own (arb.c)
- *   bluetooth proxy  LE scanning with raw advertisements, GATT connections to up to 3 devices at a time, pairing (ble.c)
+ *   bluetooth proxy  LE scanning with raw advertisements, GATT connections to up to 3 devices at a time, pairing (ble.c);
+ *                    feature bluetooth_proxy, on by default
  *   bluetooth speaker  a switch opens the pairing window (a2dp.c).  The other way, playing to a Bluetooth speaker: a
  *              switch searches for one and pairs it, another plays on it, a text sensor says how it is, a number holds its
  *              latency for Sendspin (a2dp.c, btout.c).  A phone connecting is announced by asking Home
@@ -1075,6 +1076,11 @@ static void media_start(const char *url0, const char *url1, int announce, int st
 
 static int ble_mode = BLE_ACTIVE;       /* lock held */
 
+/* The proxy only while its feature is on (issue #152).  Off, the device info names none and every request of it is
+ * refused; switching it closes the links (entities_changed), and the last client leaving ends the scan and the
+ * connections below, as Home Assistant leaving does */
+static int bt_proxy(void) { return ble_present() && settings_bt_proxy(); }
+
 static int ble_subscribers(void)        /* lock held */
 {
     int n = 0;
@@ -1503,7 +1509,7 @@ static void send_device_info(void)
     pb_str(&b, 6, board.model); pb_str(&b, 8, board.project); pb_str(&b, 9, VERSION);
     pb_str(&b, 12, "Amazon"); pb_str(&b, 13, core_name);
     if (core_web_port) pb_uint(&b, 10, core_web_port); /* webserver_port: HA links the device page to http://<host>:<it> */
-    if (ble_present()) { pb_uint(&b, 11, 5); pb_uint(&b, 15, BLE_FEATURES); pb_str(&b, 18, ble_mac()); }    /* 11: legacy "active connections" */
+    if (bt_proxy()) { pb_uint(&b, 11, 5); pb_uint(&b, 15, BLE_FEATURES); pb_str(&b, 18, ble_mac()); }    /* 11: legacy "active connections" */
     pb_uint(&b, 17, FEAT_VOICE | FEAT_API_AUDIO | FEAT_TIMERS | FEAT_ANNOUNCE | FEAT_START_CONVERSATION);      /* no SPEAKER: see top */
     pb_uint(&b, 19, 1);                                 /* api_encryption_supported */
     pb_uint(&b, 26, !have_key);                         /* api_encryption_provisionable: Home Assistant sets the key */
@@ -1718,19 +1724,20 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case VA_SET_CONFIG:    if (core_local_wake) on_va_set_config(p, end); break;
     case MEDIA_PLAYER_COMMAND: on_mp_command(p, end); break;
     case BLE_SUBSCRIBE: case BLE_UNSUBSCRIBE:
-        if (c < 0 || !ble_present()) break;
+        if (c < 0 || !bt_proxy()) break;
         clients[c].ble = type == BLE_SUBSCRIBE;         /* flags ignored: raw advertisements are all we send */
         ble_update(); if (type == BLE_SUBSCRIBE) send_scanner_state();
         break;
     case BLE_SCANNER_SET_MODE:
+        if (!bt_proxy()) break;
         ble_mode = BLE_PASSIVE;                         /* the zero value: an empty message */
         while (pb_next(&p, end, &f)) if (f.field == 1 && f.v == BLE_ACTIVE) ble_mode = BLE_ACTIVE;
         ble_update(); send_scanner_state();
         break;
-    case BLE_CONN_FREE_REQ: if (c >= 0 && ble_present()) { clients[c].ble_free = 1; send_slots(1); } break;
+    case BLE_CONN_FREE_REQ: if (c >= 0 && bt_proxy()) { clients[c].ble_free = 1; send_slots(1); } break;
     case BLE_DEVICE_REQ: case BLE_SERVICES_REQ: case BLE_READ_REQ: case BLE_READ_DESC_REQ: case BLE_WRITE_REQ:
     case BLE_WRITE_DESC_REQ: case BLE_NOTIFY_REQ:
-        if (ble_present() && c >= 0) { clients[c].ble_user = 1; on_ble_request(type, p, end); }
+        if (bt_proxy() && c >= 0) { clients[c].ble_user = 1; on_ble_request(type, p, end); }
         break;
     case SET_KEY_REQ: {
         /* Without a key: from an encrypted (zero-PSK) connection only, so the key never crosses the network readable.
@@ -1847,9 +1854,10 @@ done:
     clients[slot].fd = -1; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = clients[slot].ha_states = 0; n = 0;
     ble_update();
     if (!ble_subscribers()) {                           /* nobody left to use them */
-        int users = 0; uint64_t a[BLE_MAX_CONN];
+        int users = 0;
         for (int i = 0; i < MAX_CLIENTS; i++) users += clients[i].fd >= 0 && (clients[i].ble_free || clients[i].ble_user);
-        if (!users) for (int i = 0, k = ble_connections(a); i < k; i++) ble_disconnect(a[i]);
+        /* a connect still queued too: ble_connections() lists it only once ble.c's thread took it */
+        if (!users) ble_disconnect_all();
     }
     memset(&clients[slot].tx, 0, sizeof clients[slot].tx); memset(&clients[slot].rx, 0, sizeof clients[slot].rx);
     for (int i = 0; i < MAX_CLIENTS; i++) n += clients[i].fd >= 0;

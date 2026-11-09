@@ -196,6 +196,14 @@ Run in this order. Each step says what it proves.
       Verified by the author on a Dot 2; `tests/fake_ha_remote_followup.py` (fails on the old core: flags [3, 3, 3]).
       Seen meanwhile, not fixed: with `-w remote` an ERROR outside a reply (e.g. nothing said) ends the run and asks for the
       next, then its RUN_END finds that new run and asks again: two starts, HA cancels the first
+- [x] Bluetooth proxy as a feature (issue #152, 2026-11-09): setting `bluetooth_proxy` (Features, on by default, exported).
+      Disabling HA's entities left the scanner: HA subscribes to raw advertisements whenever the device info carries
+      proxy flags. Off: `proto_esphome.c` `bt_proxy()` leaves fields 11, 15 and 18 out of the device info, refuses
+      subscribe, scanner mode, connection slots and GATT requests; switching closes the links (feature), and the last
+      client leaving ends the scan and the connections, now through `ble_disconnect_all` (queued behind the requests:
+      a connect HA asked for that ble.c's thread had not taken yet came up afterwards and stayed, a slot taken for
+      good). ble.c keeps the controller for A2DP, the speaker and Improv. `tests/fake_ha_bt_proxy.py` (fake_improv.py's controller; `HASSMIC_BT_MAC` stands in for idme's
+      `bt_mac_addr` in ble.c). **Open:** not tried on an Echo with a real Home Assistant (whether HA drops the scanner at once).
 - [~] Ducking depth and multi press (2026-11-08): `DUCK` (a sixth, -15.6 dB) was fixed; the setting `music_duck` (0..60 dB, default 16,
       about the old 15.6) is the target of `music_duck()`'s glide in sendspin.c and a2dp.c, read through `settings_duck_gain()` (any thread).
       Reason: over a loud audiobook 15.6 dB left too little voice for STT. Setting `multi_press` (off): the action button pressed

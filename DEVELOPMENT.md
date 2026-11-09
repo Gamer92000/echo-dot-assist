@@ -115,6 +115,7 @@ tests/otatool_test.sh                             # the PC's otatool (Python) ag
                                                  # the Echo's own patterns first, the listening ring turned by the beam
 .venv/bin/python tests/fake_improv.py             # setup from a phone (Improv over BLE) on a fake Bluetooth controller,
                                                  # Wi-Fi through root's wifi.sh, adoption, factory reset
+.venv/bin/python tests/fake_ha_bt_proxy.py        # the Bluetooth proxy switched off and on (issue #152) on that controller
 ```
 
 `tools/qrun.sh [-t secs] <arm-binary> args` runs a device binary on the PC under qemu-arm against

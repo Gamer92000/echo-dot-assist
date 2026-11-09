@@ -4,6 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-09
 
+- **The Bluetooth proxy can be switched off (issue #152).** "Bluetooth proxy" (settings page, Features; on by default,
+  so nothing changes) stops Home Assistant from getting Bluetooth devices through this Echo: the Echo no longer says it
+  is a proxy, stops scanning and takes no connections. Disabling its Bluetooth entries in Home Assistant never did
+  that: advertisements kept arriving. Phones, a Bluetooth speaker and the setup from a phone work either way. Home
+  Assistant reconnects for a moment when you switch it, as with every feature.
 - **Double and triple press of the action button skip tracks.** New setting "Double and triple press of the action button"
   (Voice page, `multi_press`, off by default; not on the Echo Shows, which have no action button): twice is next, three
   times previous, for Music Assistant and for a phone over Bluetooth (AVRCP). Two or three presses act as one single press

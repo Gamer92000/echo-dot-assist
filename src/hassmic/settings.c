@@ -55,6 +55,7 @@ static const char *bt_lang_codes[sizeof bt_langs / sizeof bt_langs[0]];
 static int mic_level = MICGAIN_LEVEL, bt_lang;
 static _Atomic int duck_db = 16;                        /* music_duck: what the music is turned down by while the assistant listens, thinks or speaks (was a fixed 1/6 = 15.6 dB; 16: about that in whole dB) */
 static int bt_audio = 1, bt_speaker, whisper = 1;      /* features kept here; bt_speaker's default: settings_load */
+static int bt_proxy = 1;                                /* on: what every Echo did before the switch came (issue #152) */
 static int light_sensor;                                /* off: auto brightness moved the level in HA's history all day (forum, 2026-10-15) */
 static int kiosk_net = 1;                                 /* lockdown.sh reads it from state/config */
 static int kiosk_mic;                                     /* off: main.sh keeps RECORD_AUDIO from the app; it reads state/config */
@@ -74,7 +75,7 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 /* ---------------------------------------------------------------- the table */
 
 enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
-          WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, VOLUME, VOL_SPLIT,
+          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
           VOL_EVEN, NSET };
@@ -153,6 +154,10 @@ static const struct setting table[NSET] = {
     [WIFI_MOTION] = { "wifi_motion", "Wi-Fi motion (experimental)", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [WIFI_SENS]   = { "wifi_motion_sensitivity", "Wi-Fi motion sensitivity", "Features", NULL, S_INT, WIFIMOTION_SENS_MIN, WIFIMOTION_SENS_MAX, 1, 0 },
     [LIGHT_SENSOR] = { "light_sensor", "Light sensor", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
+    /* proto_esphome.c bt_proxy(): off, the device info names no proxy, so Home Assistant sets up no scanner, and
+     * subscriptions and GATT requests are refused (issue #152).  Disabling the entities in Home Assistant leaves the
+     * scanner running: the proxy is no entity.  Phones, the speaker and Improv keep the controller */
+    [BT_PROXY]    = { "bluetooth_proxy", "Bluetooth proxy", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [BT_AUDIO]    = { "bluetooth_audio", "Bluetooth audio from phones", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [BT_SPEAKER]  = { "bluetooth_speaker", "Play on a Bluetooth speaker", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* what the speaker adds to the Echo's latency, for Sendspin's sync: a2dp.c keeps it (state/bt_speaker), per speaker
@@ -210,7 +215,7 @@ static const struct setting table[NSET] = {
 static int present(enum id i)
 {
     switch (i) {
-    case BT_ANNOUNCE: case BT_LANG: case BT_AUDIO: case BT_SPEAKER: case BT_OUT_DELAY: case BT_OUT_AWAKE: case BT_OUT_STAY: return ble_present();
+    case BT_ANNOUNCE: case BT_LANG: case BT_PROXY: case BT_AUDIO: case BT_SPEAKER: case BT_OUT_DELAY: case BT_OUT_AWAKE: case BT_OUT_STAY: return ble_present();
     case WHISPER: return core_whisper_model();
     case SOUND: return sound_model() != SOUND_NONE;               /* the firmware has one on every model so far */
     case LIGHT_SENSOR: return core_lux() == core_lux();          /* a light sensor: not NAN */
@@ -323,6 +328,7 @@ int settings_get(const struct setting *s)
     case KIOSK_CAM: return kiosk_cam;
     case SS_UNPAIRED: return sendspin_unpaired(-1);
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: return core_eq((int)(s - table) - EQ_BASS);
+    case BT_PROXY: return bt_proxy;
     case BT_AUDIO: return bt_audio;
     case BT_SPEAKER: return bt_speaker;
     case BT_OUT_DELAY: return a2dp_out_delay(-1);
@@ -395,6 +401,7 @@ static void put(enum id i, int v)
     case KIOSK_CAM: kiosk_cam = v; break;
     case SS_UNPAIRED: sendspin_unpaired(v); break;              /* sendspin.c keeps it */
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: core_set_eq(i - EQ_BASS, v); break;     /* the mixer keeps it */
+    case BT_PROXY: bt_proxy = v; break;                    /* the links close (feature): proto_esphome.c ends scan and links */
     case BT_AUDIO: bt_audio = v; if (!v) a2dp_pair(0); break;                        /* paired phones still connect */
     case BT_SPEAKER:                                            /* back on the Echo, and the link goes */
         bt_speaker = v; a2dp_out_stay(bt_stay && v); if (!v && a2dp_out_enabled()) a2dp_out_enable(0); break;
@@ -607,6 +614,7 @@ int settings_peek(const char *name, char *out, size_t cap)
 
 int settings_mic_level(void) { return mic_level; }
 const char *settings_speech_language(void) { return speech_lang > 0 && speech_lang < 6 ? speech_langs[speech_lang] : ""; }
+int settings_bt_proxy(void) { return bt_proxy; }
 int settings_on(const char *name) { const struct setting *s = settings_find(name); return s && s->type == S_BOOL && settings_get(s); }
 const struct bt_lang *settings_bt_lang(void) { return &bt_langs[bt_lang]; }
 int settings_bt_lang_index(int set) { if (set >= 0 && set < bt_lang_count) bt_lang = set; return bt_lang; }

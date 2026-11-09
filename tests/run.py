@@ -46,6 +46,7 @@ TESTS = [
     ("timer-sound", [PY, "tests/fake_ha_timer_sound.py"]),
     ("sounds", [PY, "tests/fake_web_sounds.py"]),
     ("improv", [PY, "tests/fake_improv.py"]),
+    ("bt-proxy", [PY, "tests/fake_ha_bt_proxy.py"]),
     ("dropin", [PY, "tests/fake_ha_dropin.py"]),
     ("unit", ["make", "-s", "-j4", "unit"]),
     ("mww", [PY, "tests/fake_web_mww.py"]),
