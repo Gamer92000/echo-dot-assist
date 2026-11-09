@@ -2669,7 +2669,7 @@ static int vol_split;                        /* under lock */
 static int vol_even; /* Preserve Cube software-volume scale. */
 #else
 static int vol_even = 1;
-#endif                     /* under lock; on by default */
+#endif
 #define EVEN_FLOOR_DB (-50.0f)
 static struct { int level, linked, offset; } kinds[VOL_KINDS] = { { 40, 0, 0 }, { 40, 0, 0 }, { 40, 0, 0 }, { 40, 1, 0 } };   /* under lock */
 static int tts_media;                        /* under lock: the TTS stream plays Home Assistant's media */

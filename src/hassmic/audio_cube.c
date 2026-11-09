@@ -93,7 +93,7 @@ void play_earcon_while(const short *p,size_t n,unsigned r,int(*go)(void)){
     while(n&&go()){size_t k=n>512?512:n;if(write_stream(&ear,p,k*2))break;p+=k;n-=k;}
     close_stream(&ear,n==0);
 }
-/* Fire TV retains its Bluetooth stack. This port only routes to the built-in speaker. */
+/* Fire TV retains its Bluetooth stack. CubeRouting owns speaker/HDMI; raw A2DP routing is not supported. */
 int audio_a2dp_route(int on, uint64_t addr, const char *name) {
     (void)addr; (void)name; return on ? -1 : 0;
 }
