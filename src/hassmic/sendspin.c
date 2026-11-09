@@ -299,7 +299,11 @@ static void *player_thread(void *arg)
         }
         n = rs_run(&rs, (const int16_t *)pcm, frames, step, out);
         if (atomic_load(&player_muted)) memset(out, 0, n * FRAME);
-        else music_duck(out, n, RATE, &duck_g, core_state() != IDLE ? settings_duck_gain() : 1);          /* under the voice assistant */
+        #ifndef CUBE
+        else music_duck(out, n, RATE, &duck_g, core_state() != IDLE ? settings_duck_gain() : 1);
+#else
+        (void)duck_g; /* CubeRouting owns the gain envelope. */
+#endif          /* under the voice assistant */
         music_write(out, n * FRAME);
         rate_sum += step - 1; rate_n++;
         if (raw_us() - stat_t > 10000000) {

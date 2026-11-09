@@ -39,7 +39,7 @@ ifneq ($(words $(UPDATE_REPO))$(findstring ",$(UPDATE_REPO))$(findstring ',$(UPD
 $(error UPDATE_REPO "$(UPDATE_REPO)": owner/name, no quotes or spaces (keys/release.conf, secrets/fork.conf))
 endif
 DEFS    := -DVERSION='"$(VERSION)"' -DBUILD='"$(BUILD)"' -DBUILD_TIME='"$(BUILD_TIME)"' -DREPO='"$(UPDATE_REPO)"' $(if $(RELEASE),-DRELEASE)
-CFLAGS  := -O2 -Wall -Wextra -fPIE -Isrc/include $(DEFS)
+CFLAGS  := -O2 -Wall -Wextra -fPIE -Isrc/include $(DEFS) $(if $(CUBE),-DCUBE=1)
 LDFLAGS := -pie -fuse-ld=lld -Wl,--allow-shlib-undefined -Wl,--unresolved-symbols=ignore-in-shared-libs
 STOCK_LIBS = $(addprefix $(STOCK)/,$(filter $(LIBS),$(1)))
 
@@ -56,6 +56,12 @@ BIN := $(OUT)/hassmic $(OUT)/runas $(OUT)/otatool $(if $(filter %screen.c,$(SCRE
        $(if $(filter libmixerAPI.so,$(LIBS)),$(OUT)/mixcap $(OUT)/mixplay $(OUT)/latency) \
        $(if $(filter -lOpenSLES,$(SYSLIBS)),$(OUT)/slplay) \
        $(if $(filter libpryon.so,$(LIBS)),$(OUT)/pryon_test $(OUT)/aed_test $(OUT)/whisper_test)
+
+# The Fire TV helper and install bundle are built by scripts/cube/build.py.
+# Echo-only diagnostic tools use a different Pryon ABI and are not Cube tools.
+ifneq ($(CUBE),)
+BIN := $(OUT)/hassmic
+endif
 
 .DEFAULT_GOAL := all
 all: $(BIN)
@@ -196,9 +202,9 @@ $(OUT)/whisper_test: src/tools/whisper_test.c src/include/pryon_api.h $(STOCK)/l
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) $(STOCK)/libpryon.so
 
 # Sound detection (sound.h) runs on the same engine as the wake word: a model with Pryon has it, the PC build fakes it.
-SOUND := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/sound_pryon.c,src/hassmic/sound_none.c)
+SOUND := $(if $(CUBE),src/hassmic/sound_none.c,$(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/sound_pryon.c,src/hassmic/sound_none.c))
 # So does whisper detection (whisper.h), with a model from Amazon (scripts/artifacts.sh).
-WHISPER := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/hassmic/whisper_none.c)
+WHISPER := $(if $(CUBE),src/hassmic/whisper_none.c,$(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/hassmic/whisper_none.c))
 
 RNNOISE := $(addprefix src/third_party/rnnoise/,denoise.c rnn.c rnn_data.c pitch.c kiss_fft.c celt_lpc.c)
 HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) $(SCREEN) src/hassmic/ringdesign.c src/hassmic/ledq.c \
@@ -241,7 +247,7 @@ UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
 	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk backlight \
-	screen ui touch json uninstall_boot resample fork_release
+	screen ui touch json uninstall_boot resample fork_release cube_audio cube_routing
 unit: $(addprefix unit-,$(UNIT_TESTS))
 unit-hash:
 	@mkdir -p build
@@ -410,3 +416,17 @@ clean:
 	rm -rf build
 
 .PHONY: all host unit $(addprefix unit-,$(UNIT_TESTS)) version clean kmod-missing kernel-tools FORCE
+
+# Cube adapter with a local fake helper; no Android device or audio output.
+unit-cube_audio:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/cube_audio_test.c src/hassmic/audio_cube.c src/hassmic/statefile.c -lpthread -lm -o build/cube_audio_test && build/cube_audio_test
+
+# Cube-only protocol test executable: never run against a real helper/device.
+build/hassmic-routing-host: $(HASSMIC) devices/gazelle/board.c src/hassmic/audio_cube.c src/hassmic/wake_none.c src/hassmic/sound_none.c src/hassmic/whisper_none.c $(HASSMIC_H)
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -DCUBE=1 $(DEFS) -Isrc/include -Isrc/hassmic $(filter %.c,$^) -o $@ -lpthread -lm -ldl -lopus -lz
+
+unit-cube_routing:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/cube_routing_test.c src/hassmic/audio_cube.c src/hassmic/statefile.c -lpthread -lm -o build/cube_routing_test && build/cube_routing_test

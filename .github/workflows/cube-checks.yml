@@ -1,0 +1,28 @@
+# Host-only checks. No firmware, device credentials or release publishing.
+name: Cube host checks
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Shared Echo and Cube page builders
+        run: |
+          node --check web/app.js
+          node --check web/ring.js
+          node tests/cube_web.js
+      - name: Cube installer validation and rollback
+        run: python3 -m unittest discover -s tests -p test_cube_installer.py
+      - name: Supervisor shell syntax
+        run: sh -n scripts/cube/service.sh
+      - name: Cube audio interface with a local fake helper
+        run: make unit-cube_audio unit-cube_routing
+      - name: Cube routing policy
+        run: |
+          mkdir -p build/cube-policy
+          javac -d build/cube-policy devices/gazelle/CubeRoutePolicy.java tests/CubeRoutePolicyTest.java
+          java -cp build/cube-policy CubeRoutePolicyTest

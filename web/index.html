@@ -720,6 +720,17 @@ button.net-row:hover:not(:disabled) { background: var(--surface-2); }
 .wifi-step { display: flex; gap: 10px; align-items: flex-start; color: var(--muted); padding: 4px 0 14px; font-size: 14px; }
 .wifi-step .spin { margin-top: 3px; }
 
+.cube-bar-states { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; padding: 18px; }
+.cube-bar-state { padding: 14px; border: 1px solid var(--line); border-radius: 12px; }
+.cube-bar-preview { height: 8px; border-radius: 3px; margin: 6px 0 18px; background: linear-gradient(90deg, #002dff, #00efff, #002dff); }
+.cube-bar-preview.think { background: #004cff; animation: cube-bar-pulse 1.8s ease-in-out infinite; }
+.cube-bar-preview.talk { animation: cube-bar-pulse .8s ease-in-out infinite; }
+.cube-bar-preview.end { opacity: .25; }
+.cube-bar-preview.mute, .cube-bar-preview.error { background: #f22; }
+.cube-bar-preview.timer { background: #00afff; animation: cube-bar-pulse 1s infinite; }
+.cube-bar-preview.setup { background: #ff8c00; animation: cube-bar-pulse 2s infinite; }
+@keyframes cube-bar-pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .cube-bar-preview { animation: none !important; } }
 /* ---------------------------------------------------------------- light ring designs (ring.js) */
 /* the ring art is an Echo's top: dark in both themes */
 .ringd-callout { margin: 0 18px 18px; }

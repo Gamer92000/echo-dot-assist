@@ -53,6 +53,9 @@
  *                    the others (main.c), each only while that kind has a volume of its own rather than following the
  *                    music's
  */
+#ifdef CUBE
+#include "cube.h"
+#endif
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -133,6 +136,10 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON, KEY_LIGHT, KEY_ASSIST_VOLUME, KEY_SOUNDS_VOLUME, KEY_TIMER_VOLUME,
        KEY_CALL_VOLUME, KEY_WAKE, KEY_RING_FILL, KEY_RING_ROTATION, KEY_RING_LEDS, KEY_LAST_HEARD, KEY_LAST_REPLY,
        KEY_NEXT_TIMER, KEY_NEXT_TIMER_NAME, KEY_NEXT_TIMER_LENGTH, KEY_SCR_AUTO, KEY_SCR_LEVEL, KEY_SCR_ADJUST };
+#ifdef CUBE
+enum { KEY_CUBE_OUTPUT=1000, KEY_CUBE_VOLUME, KEY_TV_VOLUME, KEY_MUSIC_DUCK,
+       KEY_TV_STATE, KEY_AUDIO_ACTIVE, KEY_AUDIO_FALLBACK, KEY_TV_EVIDENCE, KEY_AUDIO_SELECTED, KEY_CUBE_END };
+#endif
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -394,6 +401,15 @@ static void send_setting(int key)       /* lock held */
     PB(b, 48);
     pb_fixed32(&b, 1, key);
     switch (key) {
+#ifdef CUBE
+    case KEY_CUBE_OUTPUT: pb_str(&b,2,cube_output_modes[cube_route_setting(CUBE_OUTPUT_MODE,-1)]);send_state(SELECT_STATE,&b);break;
+    case KEY_CUBE_VOLUME: case KEY_TV_VOLUME: case KEY_MUSIC_DUCK:
+        pb_float(&b,2,cube_route_setting(key-KEY_CUBE_OUTPUT,-1));send_state(NUMBER_STATE,&b);break;
+    case KEY_TV_STATE: case KEY_AUDIO_ACTIVE: case KEY_AUDIO_FALLBACK: case KEY_TV_EVIDENCE: case KEY_AUDIO_SELECTED: {
+        PB(t,160);char value[112];cube_route_text(key-KEY_TV_STATE,value,sizeof value);
+        pb_fixed32(&t,1,key);pb_str(&t,2,value);send_state(TEXT_SENSOR_STATE,&t);break;
+    }
+#endif
     case KEY_MIC_LEVEL: pb_float(&b, 2, settings_mic_level()); send_state(NUMBER_STATE, &b); break;
     case KEY_MUTE:  pb_uint(&b, 2, core_muted()); send_state(SWITCH_STATE, &b); break;
     case KEY_WAKE_SOUND: pb_uint(&b, 2, core_wake_sound(-1)); send_state(SWITCH_STATE, &b); break;
@@ -516,6 +532,12 @@ static void *light_thread(void *arg)
         pthread_mutex_lock(&core_lock);
         int any = 0, level = core_led_brightness(-1);
         for (int i = 0; i < MAX_CLIENTS; i++) any |= clients[i].fd >= 0 && clients[i].states;
+#ifdef CUBE
+        if(any){
+            static char sent[5][112];
+            for(int i=0;i<5;i++){char value[112];cube_route_text(i,value,sizeof value);if(strcmp(sent[i],value)){snprintf(sent[i],sizeof sent[i],"%s",value);send_setting(KEY_TV_STATE+i);}}
+        }
+#endif
         if (any) {                                              /* a new subscriber gets them from send_light_states */
             float d = fabsf(lux - sent_lux);
             int report = settings_on("light_sensor");
@@ -568,7 +590,7 @@ static void send_light_entities(void)
         { PB(b, 160); pb_str(&b, 1, "led_auto_brightness"); pb_fixed32(&b, 2, KEY_LED_AUTO); pb_str(&b, 3, "LED auto brightness");
           pb_str(&b, 5, "mdi:brightness-auto"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
     }
-    { PB(b, 160); pb_str(&b, 1, "led_brightness"); pb_fixed32(&b, 2, KEY_LED_BRIGHTNESS); pb_str(&b, 3, "LED brightness");
+    if (listed(KEY_LED_BRIGHTNESS)) { PB(b, 160); pb_str(&b, 1, "led_brightness"); pb_fixed32(&b, 2, KEY_LED_BRIGHTNESS); pb_str(&b, 3, "LED brightness");
       pb_str(&b, 5, "mdi:brightness-6"); pb_float(&b, 6, 0); pb_float(&b, 7, 100); pb_float(&b, 8, 1); pb_uint(&b, 10, 1);
       pb_str(&b, 11, "%"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
     /* the Echo Show's backlight as stock's Display settings: adaptive (Amazon's lux curve, shifted by the adjustment) or
@@ -601,6 +623,13 @@ static void send_light_entities(void)
  * is on the settings page only.  States go out only for what is listed. */
 static int listed(int key)
 {
+#ifdef CUBE
+    switch(key) {
+    case KEY_EQ_BASS: case KEY_EQ_MID: case KEY_EQ_TREBLE: case KEY_LED_AUTO:
+    case KEY_LED_BRIGHTNESS: case KEY_UPDATE: case KEY_LIGHT: case KEY_RING_FILL:
+    case KEY_RING_ROTATION: case KEY_RING_LEDS: return 0;
+    }
+#endif
     switch (key) {
     case KEY_MIC_LEVEL: case KEY_DENOISE: case KEY_BT_ANNOUNCE: case KEY_BT_LANG: case KEY_ADB_WIFI: case KEY_ARB_JOIN: case KEY_SS_UNPAIRED:
     case KEY_SOUND_DETECTION: case KEY_WIFI_MOTION_ON: case KEY_SOC_TEMP: case KEY_CPU_USAGE: return 0;
@@ -631,9 +660,19 @@ static int listed(int key)
 
 static void send_setting_entities(void)
 {
+#ifdef CUBE
+    { PB(b,192);pb_str(&b,1,"audio_output");pb_fixed32(&b,2,KEY_CUBE_OUTPUT);pb_str(&b,3,"Audio output");pb_str(&b,5,"mdi:audio-input-stereo-minijack");
+      for(int i=0;i<3;i++)pb_str(&b,6,cube_output_modes[i]);send_msg(LIST_SELECT,&b); }
+    const char *route_labels[]={"Cube output volume","TV output volume","Music level during Assist"};
+    for(int i=0;i<3;i++){PB(b,192);pb_str(&b,1,cube_route_names[i+1]);pb_fixed32(&b,2,KEY_CUBE_VOLUME+i);pb_str(&b,3,route_labels[i]);
+        pb_str(&b,5,"mdi:volume-high");pb_float(&b,6,0);pb_float(&b,7,100);pb_float(&b,8,1);pb_str(&b,11,"%");pb_uint(&b,12,2);send_msg(LIST_NUMBER,&b);}
+    const char *route_ids[]={"detected_tv_state","active_audio_output","audio_routing_fallback","tv_state_evidence","selected_audio_output"};
+    const char *route_texts[]={"Detected TV state","Active audio output","Audio routing fallback","TV state evidence","Selected audio output"};
+    for(int i=0;i<5;i++){PB(b,192);pb_str(&b,1,route_ids[i]);pb_fixed32(&b,2,KEY_TV_STATE+i);pb_str(&b,3,route_texts[i]);pb_str(&b,5,"mdi:television-speaker");send_msg(LIST_TEXT_SENSOR,&b);}
+#endif
     static const char *const eq_ids[] = { "equalizer_bass", "equalizer_mid", "equalizer_treble" };
     static const char *const eq_labels[] = { "Equalizer bass", "Equalizer mid", "Equalizer treble" };   /* sort together in HA */
-    for (int i = 0; i < 3; i++) {       /* like the Alexa app's sliders */
+    for (int i = 0; i < 3; i++) if (listed(KEY_EQ_BASS+i)) {       /* like the Alexa app's sliders */
         PB(b, 192); pb_str(&b, 1, eq_ids[i]); pb_fixed32(&b, 2, KEY_EQ_BASS + i); pb_str(&b, 3, eq_labels[i]); pb_str(&b, 5, "mdi:tune-vertical");
         pb_float(&b, 6, -6); pb_float(&b, 7, 6); pb_float(&b, 8, 1); pb_str(&b, 11, "dB"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b);
     }
@@ -750,14 +789,19 @@ static void send_setting_entities(void)
     if (core_web_port) { PB(b, 128); pb_str(&b, 1, "web_ui_address"); pb_fixed32(&b, 2, KEY_WEB_URL); pb_str(&b, 3, "Web UI address");
       pb_str(&b, 5, "mdi:web"); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
     /* online updates (update.c): the channel is picked on the settings page; the entity says what is new and installs it */
-    { PB(b, 128); pb_str(&b, 1, "firmware"); pb_fixed32(&b, 2, KEY_UPDATE); pb_str(&b, 3, "Firmware");
+    if (listed(KEY_UPDATE)) { PB(b, 128); pb_str(&b, 1, "firmware"); pb_fixed32(&b, 2, KEY_UPDATE); pb_str(&b, 3, "Firmware");
       pb_uint(&b, 7, 1); pb_str(&b, 8, "firmware"); send_msg(LIST_UPDATE, &b); }
     /* which Echo is this: a diagnostic button with HA's "identify" class, as ESPHome's own devices offer */
     { PB(b, 128); pb_str(&b, 1, "identify"); pb_fixed32(&b, 2, KEY_IDENTIFY); pb_str(&b, 3, "Identify");
       pb_uint(&b, 7, 2); pb_str(&b, 8, "identify"); send_msg(LIST_BUTTON, &b); }
     /* ESPHome's factory_reset button: a configuration entity, so no dashboard shows it by itself.  Everything is
      * forgotten, Home Assistant's key and the Wi-Fi networks too (core_reset): the Echo starts its setup again */
-    { PB(b, 128); pb_str(&b, 1, "factory_reset"); pb_fixed32(&b, 2, KEY_RESET); pb_str(&b, 3, "Factory reset");
+    { PB(b, 128); pb_str(&b, 1, "factory_reset"); pb_fixed32(&b, 2, KEY_RESET);
+#ifdef CUBE
+      pb_str(&b, 3, "Reset Cube Assist");
+#else
+      pb_str(&b, 3, "Factory reset");
+#endif
       pb_str(&b, 5, "mdi:restart-alert"); pb_uint(&b, 7, 1); pb_str(&b, 8, "restart"); send_msg(LIST_BUTTON, &b); }
     /* ESPHome's restart button: the whole Echo, as a power cycle (core_reboot) */
     { PB(b, 128); pb_str(&b, 1, "restart"); pb_fixed32(&b, 2, KEY_RESTART); pb_str(&b, 3, "Restart");
@@ -774,6 +818,15 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
         else if (f.field == 2 && f.wire == 0) on = f.v != 0;
         else if (f.field == 2 && f.data) pbf_str(&f, opt, sizeof opt);
     }
+#ifdef CUBE
+    if(key>=KEY_CUBE_OUTPUT&&key<=KEY_MUSIC_DUCK){
+        char value[32],error[96];int field=key-KEY_CUBE_OUTPUT;
+        if(field==0&&type==SELECT_COMMAND)snprintf(value,sizeof value,"%s",opt);
+        else if(field>0&&type==NUMBER_COMMAND&&isfinite(num)&&num>=0&&num<=100)snprintf(value,sizeof value,"%d",(int)lroundf(num));
+        else return;
+        settings_set(cube_route_names[field],value,error,sizeof error);send_setting(key);return;
+    }
+#endif
     if (type == SELECT_COMMAND && key == KEY_DENOISE) { for (int i = 0; i < 4; i++) if (!strcmp(opt, denoise_names[i])) core_mic_denoise(i); }
     else if (type == SELECT_COMMAND && key == KEY_BT_LANG) { for (int i = 0; i < bt_lang_count; i++) if (!strcmp(opt, bt_langs[i].name)) settings_bt_lang_index(i); }
     else if (type == NUMBER_COMMAND && key == KEY_MIC_LEVEL) {
@@ -1568,6 +1621,9 @@ static void on_va_set_config(const unsigned char *p, const unsigned char *end)
 /* lock held: every setting's state, to a client that subscribed (and after the web page changed one) */
 static void send_all_settings(void)
 {
+#ifdef CUBE
+    for(int key=KEY_CUBE_OUTPUT;key<KEY_CUBE_END;key++)send_setting(key);
+#endif
     send_setting(KEY_MIC_LEVEL); send_setting(KEY_DENOISE); send_setting(KEY_MUTE); send_setting(KEY_WAKE_SOUND); send_setting(KEY_BT_PAIRING); send_setting(KEY_BT_ANNOUNCE); send_setting(KEY_DND); send_setting(KEY_SOUND_DETECTION);
         send_setting(KEY_BT_LANG);
         for (int k = KEY_EQ_BASS; k <= KEY_EQ_TREBLE; k++) send_setting(k);

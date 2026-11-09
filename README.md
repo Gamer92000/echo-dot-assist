@@ -236,3 +236,7 @@ relink it is in this repository).
 Nothing of Amazon's is in this repository or covered by this licence: firmware, libraries and wake word models come
 from your own device and stay Amazon's. Not affiliated with or endorsed by Amazon, Home Assistant or Music Assistant;
 "Alexa" and "Echo" are Amazon's trademarks.
+
+## Experimental Fire TV Cube 3 port
+
+An already unlocked and Magisk-rooted Cube (`gazelle`) can use the separate [Cube setup](devices/gazelle/README.md). It retains Fire OS and uses a removable application service. Cube unlocking is outside this project; the Echo installation instructions above remain unchanged.

@@ -363,6 +363,9 @@ void update_start(void (*changed)(void))
 
 int update_channel(int ch)
 {
+#ifdef CUBE
+    (void)ch;return UPDATE_OFF; /* Echo firmware bundles are never applicable to a Cube. */
+#endif
     pthread_mutex_lock(&ulock);
     if (ch >= UPDATE_OFF && ch <= UPDATE_RELEASE && ch != channel) { channel = ch; want_check = 1; pthread_cond_signal(&ucond); }
     ch = channel;
@@ -386,5 +389,9 @@ int update_probe(char *err, size_t cap)
 }
 
 void update_check(void) { pthread_mutex_lock(&ulock); want_check = 1; pthread_cond_signal(&ucond); pthread_mutex_unlock(&ulock); }
-void update_install(void) { pthread_mutex_lock(&ulock); want_install = 1; pthread_cond_signal(&ucond); pthread_mutex_unlock(&ulock); }
+void update_install(void) {
+#ifndef CUBE
+    pthread_mutex_lock(&ulock); want_install = 1; pthread_cond_signal(&ucond); pthread_mutex_unlock(&ulock);
+#endif
+}
 void update_get(struct update_state *s) { pthread_mutex_lock(&ulock); *s = st; pthread_mutex_unlock(&ulock); }

@@ -136,3 +136,7 @@ this). A point every 5 or 10 is enough. Write down in the comment above it when,
 
 Shared code stays free of `#ifdef DEVICE_...`. When a model needs more than a different value, add a field to
 `struct board`, a variable to `device.conf`, or a backend, and give `donut` its current behaviour there.
+
+## Experimental Fire TV Cube 3
+
+See [gazelle](gazelle/README.md) for the separate already-unlocked installer and Android audio helper. Use `scripts/cube/setup.py`; the existing Echo setup, flashing and OTA paths do not install the Cube port. Its full bundle is built with `scripts/cube/build.py`.

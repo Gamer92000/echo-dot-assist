@@ -19,6 +19,10 @@
 #include "wifimotion.h"
 #include "statefile.h"
 #include "buttons.h"
+#include "ring.h"
+#ifdef CUBE
+#include "cube.h"
+#endif
 #include <ctype.h>
 #include <limits.h>
 #include <math.h>
@@ -78,12 +82,18 @@ enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, 
           WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
-          VOL_EVEN, NSET };
+          VOL_EVEN, EXTRA_DUCK, ROUTE_MODE, ROUTE_CUBE_VOL, ROUTE_TV_VOL, ROUTE_DUCK, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
  * listed()); everything else here is on the settings page only, except what Home Assistant always shows (wake sound,
  * mute, do not disturb, LEDs, equalizer). */
 static const struct setting table[NSET] = {
+    [ROUTE_MODE] = { "audio_output", "Audio output", "Audio routing", NULL, S_CHOICE, 0, 0, 0, 0 },
+    [ROUTE_CUBE_VOL] = { "cube_output_volume", "Cube output volume", "Audio routing", "%", S_INT, 0, 100, 0, 0 },
+    [ROUTE_TV_VOL] = { "tv_output_volume", "TV output volume", "Audio routing", "%", S_INT, 0, 100, 0, 0 },
+    [ROUTE_DUCK] = { "music_duck_percent", "Music level during Assist", "Audio routing", "%", S_INT, 0, 100, 0, 0 },
+
+    [EXTRA_DUCK] = { "extra_duck_db", "Extra TV ducking", "Voice", "dB", S_INT, 0, 24, 1, 0 },
     /* main.c keeps it; microWakeWord's models are in state/mww (mww_store.c), not in an export */
     [WAKE_ENGINE] = { "wake_engine", "Wake word engine", "Wake word", NULL, S_CHOICE, 0, 0, 1, 0 },
     /* which language's aligner finds the wake word's end (wakealign.h, main.c align_resolve): the speakers', not the wake
@@ -214,6 +224,12 @@ static const struct setting table[NSET] = {
 
 static int present(enum id i)
 {
+#ifdef CUBE
+    /* These Echo-specific paths are not implemented by the Cube audio adapter. */
+    if(i==DUCK||i==VOL_EVEN||i==UPDATES||i==LED_AUTO||i==LED_LEVEL||i==RING_ROT||i==EQ_BASS||i==EQ_MID||i==EQ_TREBLE)return 0;
+#else
+    if(i==EXTRA_DUCK||i>=ROUTE_MODE)return 0;
+#endif
     switch (i) {
     case BT_ANNOUNCE: case BT_LANG: case BT_PROXY: case BT_AUDIO: case BT_SPEAKER: case BT_OUT_DELAY: case BT_OUT_AWAKE: case BT_OUT_STAY: return ble_present();
     case WHISPER: return core_whisper_model();
@@ -260,6 +276,9 @@ int settings_max(const struct setting *s)
 int settings_choices(const struct setting *s, const char *const **names)
 {
     switch (s - table) {
+#ifdef CUBE
+    case ROUTE_MODE: *names=cube_output_modes;return 3;
+#endif
     case DENOISE: *names = denoise_values; return 4;
     case BT_LANG:
         for (int i = 0; i < bt_lang_count; i++) bt_lang_codes[i] = bt_langs[i].code;
@@ -290,6 +309,10 @@ static int switched_sound(int i)
 int settings_get(const struct setting *s)
 {
     switch (s - table) {
+#ifdef CUBE
+    case ROUTE_MODE: case ROUTE_CUBE_VOL: case ROUTE_TV_VOL: case ROUTE_DUCK: return cube_route_setting((int)(s-table)-ROUTE_MODE,-1);
+    case EXTRA_DUCK: return cube_extra_duck(-1);
+#endif
     case WAKE_ENGINE: return core_wake_engine(-1);
     case SPEECH_LANG: return speech_lang;
     case WAKE_ADAPT: return wake_adapt;
@@ -363,6 +386,10 @@ int settings_get(const struct setting *s)
 static void put(enum id i, int v)
 {
     switch (i) {
+#ifdef CUBE
+    case ROUTE_MODE: case ROUTE_CUBE_VOL: case ROUTE_TV_VOL: case ROUTE_DUCK: cube_route_setting(i-ROUTE_MODE,v); break;
+    case EXTRA_DUCK: cube_extra_duck(v); break;
+#endif
     case WAKE_ENGINE: core_wake_engine(v); break;
     case SPEECH_LANG: speech_lang = v; break;
     case WAKE_ADAPT: wake_adapt = v; break;
