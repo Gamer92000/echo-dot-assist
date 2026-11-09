@@ -132,8 +132,11 @@ to avoid double attenuation. Extra TV ducking separately affects other Fire TV
 apps. KS supplies visuals and should keep its own Sendspin audio disabled when
 Assist is supplying that music.
 
-The shared EDA Sendspin resampler is retained. The Android adapter uses a 200 ms
+The shared EDA Sendspin resampler is retained. The Android adapter requests a 96 ms
 music buffer with audio thread priority, and logs underrun deltas every 10 seconds.
+The buffer must stay below Sendspin's 120 ms queue ceiling: on this API 28 firmware,
+a larger buffer can wait for a full startup buffer while Sendspin waits for the
+playback head to advance. The actual buffer size is logged when a track opens.
 Its queued time is read directly from AudioTrack's playback head; it does not use
 the Echo Show OpenSL slot accounting. The volume curve describes the adapter's
 PCM multiplier, not a measured acoustic response. Source 6 microphone/AFE and

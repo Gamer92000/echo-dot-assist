@@ -96,10 +96,13 @@ public class CubeAudio {
         if(role<1||role>5||rate<8000||rate>96000||(channels!=1&&channels!=2))throw new IOException("invalid playback format");
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO);
         int mask=channels==1?AudioFormat.CHANNEL_OUT_MONO:AudioFormat.CHANNEL_OUT_STEREO;
+        // API 28 can wait for a full buffer before advancing the playback head.
+        // Stay below Sendspin's 120 ms queue ceiling or startup can deadlock.
+        int bufferBytes=role==2 ? (rate*96/1000)*channels*2 : 8192;
         AudioTrack track=new AudioTrack.Builder().setAudioAttributes(new AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY).setContentType(role==2?AudioAttributes.CONTENT_TYPE_MUSIC:AudioAttributes.CONTENT_TYPE_SPEECH).build())
             .setAudioFormat(new AudioFormat.Builder().setSampleRate(rate).setEncoding(AudioFormat.ENCODING_PCM_16BIT).setChannelMask(mask).build())
-            .setBufferSizeInBytes(Math.max(role==2 ? rate*channels*2/5 : 8192,AudioTrack.getMinBufferSize(rate,mask,AudioFormat.ENCODING_PCM_16BIT)))
+            .setBufferSizeInBytes(Math.max(bufferBytes,AudioTrack.getMinBufferSize(rate,mask,AudioFormat.ENCODING_PCM_16BIT)))
             .setTransferMode(AudioTrack.MODE_STREAM).build();
         boolean speech=role==1||role==3||role==5,counted=false;long written=0,lastHead=0,wrap=0;
         try{
