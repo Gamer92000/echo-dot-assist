@@ -15,6 +15,7 @@ public class CubeAudio {
     static Context context;
     static Object asp;static Method aspCommand,isStreamActive;
     static CubeDucking duck;
+    static CubeRouting routing;
     static AudioFocusRequest focus;static HandlerThread focusThread;
     static volatile boolean focusHeld,suppressed,running=true;
     static volatile long busySince;
@@ -27,7 +28,7 @@ public class CubeAudio {
         Looper.prepareMainLooper();Class<?> at=Class.forName("android.app.ActivityThread");
         Object thread=at.getDeclaredMethod("systemMain").invoke(null);
         context=(Context)at.getDeclaredMethod("getSystemContext").invoke(thread);
-        manager=(AudioManager)context.getSystemService(Context.AUDIO_SERVICE);duck=new CubeDucking(manager);
+        manager=(AudioManager)context.getSystemService(Context.AUDIO_SERVICE);duck=new CubeDucking(manager);routing=new CubeRouting(manager,context);
         indicators=new CubeIndicators(context);
         Class<?> ac=Class.forName("com.amazon.asp.AudioSignalProcessor");asp=ac.getDeclaredMethod("getInstance").invoke(null);
         aspCommand=ac.getDeclaredMethod("command",int.class,byte[].class,byte[].class);
@@ -62,9 +63,9 @@ public class CubeAudio {
                 .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
                 .setOnAudioFocusChangeListener(change->{if(change<0)release();},new Handler(focusThread.getLooper())).build();}
         if(manager.requestAudioFocus(focus)!=AudioManager.AUDIOFOCUS_REQUEST_GRANTED)throw new IOException("focus denied");
-        focusHeld=true;busySince=SystemClock.elapsedRealtime();duck.begin();
+        focusHeld=true;busySince=SystemClock.elapsedRealtime();duck.begin();routing.gains();
     }
-    static synchronized void release(){duck.release();if(focusHeld){focusHeld=false;manager.abandonAudioFocusRequest(focus);}}
+    static synchronized void release(){duck.release();if(focusHeld){focusHeld=false;manager.abandonAudioFocusRequest(focus);}if(routing!=null)routing.gains();}
     static synchronized void restore(){
         if(indicators!=null)indicators.clear();
         release();try{flag(146,false);flag(1,false);flag(13,music());}catch(Exception e){log("AFE restore error "+e);}
@@ -93,23 +94,26 @@ public class CubeAudio {
     }
     static void playback(int role,int rate,int channels,DataInputStream in,DataOutputStream out)throws Exception{
         if(role<1||role>5||rate<8000||rate>96000||(channels!=1&&channels!=2))throw new IOException("invalid playback format");
+        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO);
         int mask=channels==1?AudioFormat.CHANNEL_OUT_MONO:AudioFormat.CHANNEL_OUT_STEREO;
         AudioTrack track=new AudioTrack.Builder().setAudioAttributes(new AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY).setContentType(role==2?AudioAttributes.CONTENT_TYPE_MUSIC:AudioAttributes.CONTENT_TYPE_SPEECH).build())
             .setAudioFormat(new AudioFormat.Builder().setSampleRate(rate).setEncoding(AudioFormat.ENCODING_PCM_16BIT).setChannelMask(mask).build())
-            .setBufferSizeInBytes(Math.max(8192,AudioTrack.getMinBufferSize(rate,mask,AudioFormat.ENCODING_PCM_16BIT)))
+            .setBufferSizeInBytes(Math.max(role==2 ? rate*channels*2/5 : 8192,AudioTrack.getMinBufferSize(rate,mask,AudioFormat.ENCODING_PCM_16BIT)))
             .setTransferMode(AudioTrack.MODE_STREAM).build();
         boolean speech=role==1||role==3||role==5,counted=false;long written=0,lastHead=0,wrap=0;
         try{
-            boolean chosen=false;for(AudioDeviceInfo d:manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS))if(d.getType()==AudioDeviceInfo.TYPE_BUILTIN_SPEAKER){chosen=track.setPreferredDevice(d);break;}
-            if(!chosen)throw new IOException("built-in speaker absent");
+            routing.add(track,role);
             if(speech){if(ttsTracks.incrementAndGet()==1)flag(1,true);}else musicTracks.incrementAndGet();counted=true;
-            track.setVolume(1f);track.play();out.writeInt(0);out.flush();
+            track.play();out.writeInt(0);out.flush();
+            log("track role="+role+" session="+track.getAudioSessionId()+" rate="+rate+" buffer_frames="+track.getBufferSizeInFrames());
+            long statsAt=SystemClock.elapsedRealtime(),maxWriteMs=0;int underruns=track.getUnderrunCount();
             byte[] data=new byte[16384];
             while(running){
                 int op=in.readInt();long head=Integer.toUnsignedLong(track.getPlaybackHeadPosition());if(head<lastHead)wrap+=1L<<32;lastHead=head;head+=wrap;
                 if(op==1){int n=in.readInt();if(n<0||n>data.length||n%(channels*2)!=0)throw new IOException("invalid audio block");in.readFully(data,0,n);
-                    int at=0;while(at<n){int k=track.write(data,at,n-at);if(k<=0)throw new IOException("playback write="+k);at+=k;}written+=n/(channels*2);out.writeInt(n);
+                    routing.beforeWrite(track,role);long writeAt=SystemClock.elapsedRealtime();int at=0;while(at<n){int k=track.write(data,at,n-at);if(k<=0)throw new IOException("playback write="+k);at+=k;}written+=n/(channels*2);maxWriteMs=Math.max(maxWriteMs,SystemClock.elapsedRealtime()-writeAt);out.writeInt(n);
+                    long now=SystemClock.elapsedRealtime();if(role==2&&now-statsAt>=10000){int count=track.getUnderrunCount();log("music session="+track.getAudioSessionId()+" underruns="+count+" delta="+(count-underruns)+" max_write_ms="+maxWriteMs+" queued_frames="+Math.max(0,written-Integer.toUnsignedLong(track.getPlaybackHeadPosition())));statsAt=now;underruns=count;maxWriteMs=0;}
                 }else if(op==2){out.writeLong(Math.max(0,written-head)*1000000/rate);
                 }else if(op==3){boolean drain=in.readInt()!=0;long deadline=SystemClock.elapsedRealtime()+3000;
                     while(drain&&head<written&&SystemClock.elapsedRealtime()<deadline){Thread.sleep(10);long h=Integer.toUnsignedLong(track.getPlaybackHeadPosition());if(h<lastHead)wrap+=1L<<32;lastHead=h;head=wrap+h;}
@@ -117,6 +121,7 @@ public class CubeAudio {
                 }else throw new IOException("unknown audio operation");out.flush();
             }
         }finally{
+            routing.remove(track);
             try{track.stop();}finally{track.release();}
             if(counted){if(speech){if(ttsTracks.decrementAndGet()==0)flag(1,false);}else musicTracks.decrementAndGet();}
         }
@@ -147,6 +152,7 @@ public class CubeAudio {
         new CubeDiscovery(context);
         Runtime.getRuntime().addShutdownHook(new Thread(()->{running=false;restore();}));
         new Thread(()->{Boolean previous=null;while(running){try{Thread.sleep(1000);
+            routing.tick();
             if(suppressed){boolean playing=music();if(previous==null||playing!=previous){flag(13,playing);previous=playing;}}
             else previous=null;
             if(focusHeld){duck.update();if(SystemClock.elapsedRealtime()-busySince>65000){flag(146,false);release();log("focus deadline");}}

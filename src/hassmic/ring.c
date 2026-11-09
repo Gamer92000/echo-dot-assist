@@ -27,12 +27,17 @@
  * stock's in their layer.
  * Designs (ringdesign.h, issue #38): what people drew on the settings page in place of stock's patterns, one slot per
  * pattern the core plays.  Each goes into the layer config just before the stock name it replaces, so it waits behind
- * and covers what stock's would; listening's and its end's turned copies go first in layer 4 with stock's turned ones.
+ * and covers what stock's would; listening's and its end's turned copies go first in the layer of stock's
+ * "active-start" (4 on the Dots, 3 on the Echo Input) with stock's turned ones.
+ * One LED instead of a ring (board.ring_leds 1, the Echo Input): its driver shows the first LED of each frame, so
+ * nothing is turned (a turned frame would leave it dark) and there is no LED's own layer (a fill of one LED is the
+ * light itself).
  * Colours are as seen, through the light's gamma.  Made from state/ring-applied, which only changes when the page
  * applies (root then installs the set again and restarts ledcontroller): a design edited meanwhile does not change it.
  */
 #include "ring.h"
 #include "ringdesign.h"
+#include "board.h"
 #include "hash.h"
 #include <ctype.h>
 #include <dlfcn.h>
@@ -350,7 +355,7 @@ static int relayer(struct buf *out, const char *t, int n, const struct buf *perl
     return 0;
 }
 
-/* stock's config with names4 first in layer 4 (stock's "active-start" is there; first: they never wait behind another
+/* stock's config with names4 first in the layer of stock's "active-start" (4 on the Dots; first: they never wait behind another
  * of that layer, as stock's turned pair waits behind none of what hassmic plays with it), names0 last in layer 0 (the
  * light: under everything of stock's) and namesv just before stock's first volume step (the Assistant's steps show
  * as stock's would) */
@@ -361,12 +366,23 @@ static const char *listed_at(const char *stock, const char *name)
     return strstr(stock, q);
 }
 
+/* just after the "[" of the layer that lists `name`, NULL if none does */
+static const char *layer_listing(const char *stock, const char *name)
+{
+    const char *at = listed_at(stock, name), *open, *close;
+    for (int k = 0; at && k < 100; k++) {
+        char key[8]; snprintf(key, sizeof key, "%d", k);
+        if (layer_key(stock, key, &open) && (close = strchr(open, ']')) && open <= at && at < close) return open;
+    }
+    return NULL;
+}
+
 /* ... and each design for a pattern of stock's just before that name (before[i]: names, at[i]: where): it waits behind
  * what stock's waited behind, and covers what stock's covered */
 static int merge_config(struct buf *out, const char *stock, const char *names4, const char *names0, const char *namesv,
                         const char *const *at, const char *const *before, int nbefore)
 {
-    const char *l4 = layer_open(stock, "4"), *l0 = layer_open(stock, "0"), *v1 = strstr(stock, "\"volume_step-");
+    const char *l4 = layer_listing(stock, "active-start"), *l0 = layer_open(stock, "0"), *v1 = strstr(stock, "\"volume_step-");
     if (!l4 || !l0 || strstr(stock, "hassmic_")) return -1;
     const char *e0 = strchr(l0, ']');
     if (!e0) return -1;
@@ -538,7 +554,8 @@ static void build_designs(struct gen *g, const char *stock, struct buf *names4, 
         if (!g->avail[i]) { snprintf(g->why, sizeof g->why, "%s: stock's config has no %s here", sl->id, sl->stock); continue; }
         if (d->leds != n) { snprintf(g->why, sizeof g->why, "%s: drawn for %d LEDs, the ring has %d", sl->id, d->leds, n); continue; }
         b.n = 0; design_anim(&b, d, 0, 0);
-        size_t est = sl->kind == RING_LISTEN ? 2 * (size_t)n * b.n : sl->kind == RING_END ? (size_t)n * b.n : b.n;
+        size_t turns = board.ring_leds == 1 ? 1 : (size_t)n;
+        size_t est = sl->kind == RING_LISTEN ? 2 * turns * b.n : sl->kind == RING_END ? turns * b.n : b.n;
         if (g->design_bytes + est > DESIGN_BYTES_MAX) {
             snprintf(g->why, sizeof g->why, "%s: the designs would be %zu kB on the system partition, %d at most: shorten them",
                      sl->id, (g->design_bytes + est) >> 10, DESIGN_BYTES_MAX >> 10);
@@ -547,7 +564,7 @@ static void build_designs(struct gen *g, const char *stock, struct buf *names4, 
         g->on[i] = 1;
         if (sl->kind == RING_LISTEN || sl->kind == RING_END)
             for (int k = 0; k < (sl->kind == RING_LISTEN ? 2 : 1); k++)
-                for (int t = 0; t < n; t++) {
+                for (int t = 0; t < (int)turns; t++) {                          /* one LED: never turned */
                     b.n = 0;
                     if (k == 0 || d->loop >= 0) design_anim(&b, d, t, k ? d->loop : 0);   /* held: its loop */
                     else {                  /* held, of one played once: over (a black loop finishes) */
@@ -588,6 +605,7 @@ static int build(struct gen *g)
     const char *at[RING_SLOTS_MAX]; int nat = 0;
     struct rd_design ds[RING_SLOTS_MAX]; int ids[RING_SLOTS_MAX];
     memset(before, 0, sizeof before); memset(perled, 0, sizeof perled);
+    if (board.ring_leds == 1) g->noleds = 1;                /* one LED: its own layer would be the light again */
     sha256_init(&g->h);
     sha256_update(&g->h, FORMAT, sizeof FORMAT);
     if (g->noleds) sha256_update(&g->h, "noleds", 7);
@@ -600,7 +618,7 @@ static int build(struct gen *g)
     if (!n) n = 12;
     g->leds = n;
     g->turned = 0;
-    if (start && end && leds_of(end) == n) {
+    if (board.ring_leds != 1 && start && end && leds_of(end) == n) {
         static const char *const kinds[] = { "listen", "hold", "end" };
         int ok = 1;
         for (int k = 0; k < 3 && ok; k++)
@@ -777,6 +795,7 @@ static int beam_now(void)
 {
     static void *h; static int (*get)(void *, const char *, const char *, int *); static int tried;
     const char *fake = getenv("HASSMIC_FAKE_BEAM");
+    if (board.ring_leds == 1) return -1;                    /* one LED: nothing to turn, only turn 0 is made */
     if (fake) { FILE *f = fopen(fake, "r"); int v = -1; if (f) { if (fscanf(f, "%d", &v) != 1) v = -1; fclose(f); } return v; }
     if (!tried) {
         tried = 1;
@@ -956,6 +975,8 @@ int ring_leds(void) { return leds; }
 int ring_custom(void) { return custom; }
 int ring_assistant_steps(void) { return have_assist; }
 int ring_per_led(void) { return have_leds; }
+/* one LED shows a spin as a pulse of its own, twice a second: Pulse is the one meant */
+int ring_effect_listed(int i) { return i >= 0 && i < E_COUNT && !(i == E_SPIN && board.ring_leds == 1); }
 
 /* lock held: the slot that shows PATTERN (stock's name; a volume step: its number in *step), -1 none */
 static int slot_of(const char *pattern, int *step)

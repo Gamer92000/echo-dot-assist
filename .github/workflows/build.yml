@@ -8,6 +8,8 @@
 # The firmware is not public: device binaries link against stand-ins for the stock libraries (make STUBS=1,
 # devices/<codename>/stubs/, tools/mkstubs.sh), which gives the same binaries byte for byte.  Bundles are signed with the
 # release key (secret RELEASE_SIGNING_KEY: base64 of secrets/release.key); Echos check them against keys/release.pub.
+# A fork with releases of its own (scripts/fork-release.sh) has the variable RELEASE_PUBLIC_KEY: its key and repository
+# then go into its builds instead (secrets/fork.conf).
 # The key is a secret of the environment "release", which only main and release may use: only the release job names
 # it, so builds of pull requests and other branches never run with it, and their bundles are signed with a throwaway key.
 # Under nektos/act everything runs except the publishing itself, which only says what it would do.
@@ -62,7 +64,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        device: [donut, biscuit, radar, checkers, crown, cronos, athena]
+        device: [donut, biscuit, radar, checkers, crown, cronos, athena, cupcake]
         include:
           # where Wi-Fi motion's kernel module is built from, for the cache; what is downloaded is pinned in device.mk or
           # the Makefile (make kernel-tools)
@@ -87,10 +89,18 @@ jobs:
           - device: athena
             ksrc: linux-4.4.146
             kcc: arm-eabi-4.8
+          - device: cupcake
+            ksrc: linux-4.4.22
+            kcc: aarch64-linux-android-4.9
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0                # git describe, compiled in
+      # a fork's own release key and repository (scripts/fork-release.sh), compiled in and packed: as the release job's
+      - name: Fork
+        env:
+          RELEASE_PUBLIC_KEY: ${{ vars.RELEASE_PUBLIC_KEY }}
+        run: scripts/fork-release.sh ci
 
       # Under act the toolchains are on a volume shared by the jobs (DEVELOPMENT.md): that is the cache there, and a
       # restore would unpack over a compiler another job is running ("Text file busy").
@@ -152,6 +162,8 @@ jobs:
           for v in build/otatool-host "python3 scripts/otatool.py"; do
               $v verify secrets/throwaway.pub build/${{ matrix.device }}/hassmic.bundle build/${{ matrix.device }}/hassmic.bundle.sig
           done
+          # the bundle's bytes do not depend on the key (the signature is the .sig): the release job's must be this one
+          sha256sum build/${{ matrix.device }}/hassmic.bundle | cut -d' ' -f1 > build/${{ matrix.device }}.bundle-sha256
       # what the bundle holds apart from its version: the release job publishes a beta only when it changed
       - name: Content ID
         run: DEVICE=${{ matrix.device }} scripts/content-id.sh STUBS=1 > build/${{ matrix.device }}.content-id
@@ -162,6 +174,7 @@ jobs:
           name: build-${{ matrix.device }}
           path: |
             build/${{ matrix.device }}.content-id
+            build/${{ matrix.device }}.bundle-sha256
             build/${{ matrix.device }}/hassmic
             build/${{ matrix.device }}/runas
             build/${{ matrix.device }}/otatool
@@ -170,6 +183,7 @@ jobs:
             build/${{ matrix.device }}/mixplay
             build/${{ matrix.device }}/pryon_test
             build/${{ matrix.device }}/*.ko
+            build/${{ matrix.device }}/libhmui.so
           if-no-files-found: error
 
   test:
@@ -197,24 +211,25 @@ jobs:
         timeout-minutes: 5
         run: uv sync --locked           # .venv exactly as uv.lock says; fails if pyproject.toml changed without uv lock
       - name: Build
-        run: make -j"$(nproc)" build/hassmic-host build/otatool-host
+        run: make -j"$(nproc)" build/hassmic-host build/hassmic-host-screen build/otatool-host
       # tests/run.py starts every test at once, each in a network namespace of its own (unshare -rn: the tests' ports
       # and hassmic's defaults would collide); they mostly wait on audio at real time and on hassmic's timers, so the
-      # job takes about as long as the slowest one.  Ubuntu 24.04 lets only programs with an AppArmor profile make user
+      # job takes about as long as the slowest one; one that fails under that load runs again alone (a warning if it
+      # passes then, tests/run.py RETRY_MAX).  Ubuntu 24.04 lets only programs with an AppArmor profile make user
       # namespaces unless this is off
       - name: User namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Tests
         run: .venv/bin/python tests/run.py
       - name: Test logs
-        if: failure()
+        if: failure() || hashFiles('build/test-logs/*.first.log') != ''      # failed, or flaky (tests/run.py)
         uses: actions/upload-artifact@v7
         with:
           name: test-logs
           path: build/test-logs/
 
   # The Drop In voice blueprint in a real Home Assistant (tests/ha_real_dropin.py, which pins its version) against PC
-  # Echos, one of them the released build of a tag.  A job of its own: Home Assistant comes from PyPI with what its
+  # Echos, one of them the released build of a tag; and the end of a request heard on the Echo (tests/ha_real_end.py).  A job of its own: Home Assistant comes from PyPI with what its
   # integrations need (a venv of about 1 GB, made fresh: uv takes a minute), and releases do not wait for it.
   home-assistant:
     runs-on: ubuntu-latest
@@ -249,6 +264,10 @@ jobs:
         env:
           HASSMIC_HA_REQUIRED: '1'      # here a skip is a failure
         run: .venv/bin/python tests/ha_real_dropin.py
+      - name: End of request heard on the Echo, in Home Assistant
+        env:
+          HASSMIC_HA_REQUIRED: '1'
+        run: .venv/bin/python tests/ha_real_end.py
 
   release:
     needs: [version, build, test]
@@ -266,6 +285,10 @@ jobs:
           path: build
           pattern: build-*
           merge-multiple: true          # each holds <device>/ and <device>.content-id: build/ as the build jobs left it
+      - name: Fork
+        env:
+          RELEASE_PUBLIC_KEY: ${{ vars.RELEASE_PUBLIC_KEY }}
+        run: scripts/fork-release.sh ci
       - name: Sign
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
@@ -273,15 +296,23 @@ jobs:
         run: |
           [ -n "$RELEASE_SIGNING_KEY" ] || { echo "::error::secret RELEASE_SIGNING_KEY missing in the environment release"; exit 1; }
           make -s build/otatool-host
+          . scripts/lib/device.sh; release_load      # RELEASE_PUB: keys/release.pub, or a fork's (the step before)
           mkdir -p secrets dist
           (umask 077; echo "$RELEASE_SIGNING_KEY" | base64 -d > secrets/release.key)
           for c in build/*.content-id; do
               d=${c#build/}; d=${d%.content-id}
               DEVICE=$d scripts/bundle.sh secrets/release.key "$VERSION"
+              # bundle.sh leaves out what it does not find (a model without a screen has no libhmui.so), so a file missing
+              # from the artifact's list above went out without a word: every Show's screen UI until 2026-11-03.  The
+              # build job packed the same files at the same version: anything but its bytes is a lost file.
+              [ -s build/$d.bundle-sha256 ] ||
+                  { echo "::error::$d: $d.bundle-sha256 missing from the build artifact"; rm -f secrets/release.key; exit 1; }
+              [ "$(sha256sum build/$d/hassmic.bundle | cut -d' ' -f1)" = "$(cat build/$d.bundle-sha256)" ] ||
+                  { echo "::error::$d: bundle differs from the build job's: a file missing from its artifact"; rm -f secrets/release.key; exit 1; }
               # signed by the PC's otatool (Python): what the Echo's (C) checks must pass too, or nothing is published
               for v in build/otatool-host "python3 scripts/otatool.py"; do
-                  $v verify keys/release.pub build/$d/hassmic.bundle build/$d/hassmic.bundle.sig > /dev/null ||
-                      { echo "::error::$d: bundle does not verify against keys/release.pub ($v): secret and public key differ, or the two otatools do"; rm -f secrets/release.key; exit 1; }
+                  $v verify $RELEASE_PUB build/$d/hassmic.bundle build/$d/hassmic.bundle.sig > /dev/null ||
+                      { echo "::error::$d: bundle does not verify against $RELEASE_PUB ($v): secret and public key differ (a fork: scripts/fork-release.sh), or the two otatools do"; rm -f secrets/release.key; exit 1; }
               done
               cp build/$d/hassmic.bundle dist/hassmic-$d.bundle; cp build/$d/hassmic.bundle.sig dist/hassmic-$d.bundle.sig
               cp $c dist/hassmic-$d.content-id
@@ -322,7 +353,7 @@ jobs:
               echo
               git log --no-merges --format='- %s' ${prev:+$prev..}HEAD | head -40
               echo
-              echo "Install from Home Assistant: the Echo's \"Online updates\" select, then its firmware update entity. Bundles are signed with the release key (keys/release.pub)."
+              echo "Install from Home Assistant: the Echo's \"Online updates\" select, then its firmware update entity. Bundles are signed with this repository's release key."
           } > notes.md
           cat notes.md; ls -l dist
       - name: Publish

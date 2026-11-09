@@ -20,4 +20,9 @@ jobs:
       - name: Supervisor shell syntax
         run: sh -n scripts/cube/service.sh
       - name: Cube audio interface with a local fake helper
-        run: make unit-cube_audio
+        run: make unit-cube_audio unit-cube_routing
+      - name: Cube routing policy
+        run: |
+          mkdir -p build/cube-policy
+          javac -d build/cube-policy devices/gazelle/CubeRoutePolicy.java tests/CubeRoutePolicyTest.java
+          java -cp build/cube-policy CubeRoutePolicyTest

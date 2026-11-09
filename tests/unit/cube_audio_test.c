@@ -44,6 +44,7 @@ static void *helper(void *unused) {
     return NULL;
 }
 int main(void) {
+    assert(music_prime_us() == 0);
     alarm(15); /* Bound any failed IPC assertion or handshake. */
     assert(vol_read(VOL_MAIN, 99) == 40 && vol_read(VOL_TTS, 99) == 40);
     vol_write(VOL_MAIN, 53); vol_write(VOL_TTS, 44); vol_write(VOL_MAIN, 101);

@@ -1,5 +1,6 @@
 #!/system/bin/sh
-# Egress lock: the Echo may talk to local addresses only, never to the internet (Amazon).  Local = private ranges
+# Egress lock: the Echo may talk to local addresses only, never to the internet (Amazon; hassmic's own sockets and, where
+# it is installed, Kiosk Satellite's uid are the exceptions below).  Local = private ranges
 # (RFC 1918), link-local, multicast, DHCP broadcast; IPv6: link-local, unique local, link multicast.  Home Assistant, media
 # URLs, other VLANs of the home network all stay reachable without naming a subnet.
 # Run BEFORE the first Wi-Fi join, and at every boot.
@@ -44,13 +45,39 @@ NL='
 # state/config says arbitration_mode=kiosk, and taken out again when it does not.  hassmic reads nothing there but
 # those claims.  Not in stock-online mode: no hassmic runs then.
 KIOSK_IN="INPUT -i $WLAN -p udp -m udp --dport 2330 -j ACCEPT"
-kiosk_state() { KIOSK=; [ -z "$OTA_ONLY" ] && grep -qx 'arbitration_mode=kiosk' /data/local/hassmic/state/config 2>/dev/null && KIOSK=1; }
+# Kiosk Satellite itself (device.conf KIOSK_PACKAGE, an app of the user's choice) may reach the internet for its own
+# updates and the pages it shows, unless the setting "kiosk_internet" is off: one rule for its uid, nothing else gets out
+# by it (Amazon's daemons have other users and stay local).  Default on: hassmic writes the setting to state/config only
+# once somebody saved it, so "not there" has to mean on (looking for "=on" kept a fresh install's Kiosk Satellite offline).
+# KSUID is empty when the setting is off or it is not installed; KSAPP says it is installed, which is what admits its ports.
+kiosk_state() {
+    KIOSK=; KSUID=; KSAPP=
+    [ -z "$OTA_ONLY" ] || return 0
+    grep -qx 'arbitration_mode=kiosk' /data/local/hassmic/state/config 2>/dev/null && KIOSK=1
+    [ -n "$KIOSK_PACKAGE" ] || return 0
+    u=$(while read -r p i _; do [ "$p" = "$KIOSK_PACKAGE" ] && { echo "$i"; break; }; done < /data/system/packages.list) 2>/dev/null
+    case "$u" in *[!0-9]*) u=;; esac
+    [ -n "$u" ] || return 0
+    KSAPP=1
+    grep -qx 'kiosk_internet=off' /data/local/hassmic/state/config 2>/dev/null || KSUID=$u
+}
+# Its remote administration (its web page and API, TCP 2324) and its ESPHome API (TCP 6053: Home Assistant's ESPHome
+# integration connects to it; hassmic's own is 26053), both outside 16384-32767, from private addresses only, and only
+# with the app installed: what might listen there otherwise is not for the network.
+kiosk_ports() {
+    for d in $LOCAL4; do case $d in 224.*|255.*) continue;; esac
+        for p in 2324 6053; do echo "INPUT -s $d -i $WLAN -p tcp -m tcp --dport $p -j ACCEPT"; done
+    done
+}
 
 HAVE6=; command -v ip6tables > /dev/null && HAVE6=1
 v6off() { for f in /proc/sys/net/ipv6/conf/*/disable_ipv6; do echo 1 > $f || echo "!! IPv6 NOT OFF ($f): take the Echo offline"; done; }
 
-# DNS servers from DHCP (dhcp.<iface>.dnsN) and the system's own (net.dnsN), one per line, sorted
-resolvers() { getprop | sed -nE 's/^\[(dhcp\.[^.]+|net)\.dns[0-9]+\]: \[([^]]+)\]$/\2/p' | sort -u; }
+# DNS servers from DHCP (dhcp.<iface>.dnsN) and the system's own (net.dnsN), one per line, sorted, without a scope.
+# Android 7.1 writes net.dnsN with Java's getHostAddress, which names the interface of a link-local IPv6 resolver the
+# router announces ("fe80::1%wlan0"); ip6tables lists no scope (it refuses the rule, or loads it as fe80::1), so the
+# chain never matched its rules and was loaded again every 5 s (Echo Show 5, issue #100).
+resolvers() { getprop | sed -nE 's/^\[(dhcp\.[^.]+|net)\.dns[0-9]+\]: \[([^]%]+)(%[^]]*)?\]$/\2/p' | sort -u; }
 
 # The updaters' user as a number: UPDATE_UID (a user of the image, Dots), else the uid Android gave the updater app
 # (UPDATE_PACKAGES, checkers: packages.list, "<name> <uid> ...").  Nothing if neither is there: no rule then, and on
@@ -72,6 +99,7 @@ rules() {
         case $d in *:*) [ $1 = iptables ] && continue; d=$d/128;; *) [ $1 = iptables ] || continue; d=$d/32;; esac
         for p in udp tcp; do echo "-A hassmic_out -d $d -p $p -m $p --dport 53 -j RETURN"; done
     done
+    [ -n "$KSUID" ] && echo "-A hassmic_out -m owner --uid-owner $KSUID -j RETURN"
     echo "-A hassmic_out -m owner --gid-owner $NET_GID -j RETURN"
     echo "-A hassmic_out -j DROP"
 }
@@ -99,6 +127,7 @@ keep() {
             case $d in 224.*|255.*) continue;; esac
             echo "-A INPUT -s $d -i $WLAN -p icmp -m icmp --icmp-type 8 -j ACCEPT"
         done
+        [ -z "$KSAPP" ] || kiosk_ports | while read -r r; do echo "-A $r"; done
         if [ -n "$ADB" ]; then echo "-A $ADB_IN"; fi                       # only while adb over Wi-Fi is open (adb_gate)
         # what this model's stock lacks (device.conf FW_KEEP, rules separated by ";"): checkers has no firewall.sh, and
         # nothing else admits the DHCP server's answers once INPUT drops (they come to a broadcast, not as a reply)
@@ -191,6 +220,7 @@ load_once() {
         missing $1 "$all"
         [ -n "$ADB" ] || echo "$all" | while read -r r; do [ "$r" = "-A $ADB_IN" ] && echo "-D $ADB_IN"; done
         [ -n "$KIOSK" ] || echo "$all" | while read -r r; do [ "$r" = "-A $KIOSK_IN" ] && echo "-D $KIOSK_IN"; done
+        [ -n "$KSAPP" ] || kiosk_ports | while read -r r; do case "$NL$all$NL" in *"$NL-A $r$NL"*) echo "-D $r";; esac; done
         echo COMMIT
     )
     echo "$in" | $1-restore -w --noflush
@@ -202,6 +232,7 @@ load_each() {
     $1 -w -F hassmic_out
     rules $1 | while read -r r; do
         $1 -w $r || case "$r" in
+            "-A hassmic_out -m owner --uid-owner $KSUID -j RETURN") echo "!! Kiosk Satellite limited to local addresses ($1)";;
             *uid-owner*) echo "!! OTA GUARD NOT ACTIVE ($1): take the Echo offline";;
             *gid-owner*) echo "!! hassmic limited to local addresses ($1)";;
             *) echo "!! rule not loaded ($1): $r";;
@@ -212,6 +243,7 @@ load_each() {
     missing $1 "$($1 -w -S)" | while read -r r; do $1 -w $r || echo "!! rule not loaded ($1): $r"; done
     [ -n "$ADB" ] || while $1 -w -D $ADB_IN 2>/dev/null; do :; done
     [ -n "$KIOSK" ] || while $1 -w -D $KIOSK_IN 2>/dev/null; do :; done
+    [ -n "$KSAPP" ] || kiosk_ports | while read -r r; do while $1 -w -D $r 2>/dev/null; do :; done; done
     $1 -w -P INPUT DROP
 }
 load() { load_once $1 2>/dev/null || load_once $1 || { echo "!! $1-restore failed twice: loading rule by rule"; load_each $1; }; }
@@ -242,6 +274,7 @@ wrong() {
         m=$(missing $t "$all"); [ -z "$m" ] || { echo "$t: missing:" $m; return 1; }
         [ -n "$ADB" ] || case "$NL$all$NL" in *"$NL-A $ADB_IN$NL"*) echo "$t: port 5555 (adb) admitted"; return 1;; esac
         [ -n "$KIOSK" ] || case "$NL$all$NL" in *"$NL-A $KIOSK_IN$NL"*) echo "$t: port 2330 (Kiosk Satellite) admitted"; return 1;; esac
+        [ -n "$KSAPP" ] || case "$all" in *"--dport 2324 -j ACCEPT"*|*"--dport 6053 -j ACCEPT"*) echo "$t: Kiosk Satellite's ports admitted, no app"; return 1;; esac
     done
     [ -n "$HAVE6" ] || for f in /proc/sys/net/ipv6/conf/*/disable_ipv6; do
         v=; { read v < $f; } 2>/dev/null; [ "$v" = 1 ] || { echo "IPv6 is on (${f%/*})"; return 1; }

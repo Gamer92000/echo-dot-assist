@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 from webclient import wait_port, Browser
+from esphome_common import LEAD_IN
 ARB, KIOSK, BCAST = 28990, 28991, "127.255.255.255"          # KIOSK: stands in for Kiosk Satellite's 2330
 SCALE = 0.1
 def pace(secs): return secs * SCALE                          # one of arb.c's PACE() times, in s here

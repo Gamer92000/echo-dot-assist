@@ -31,7 +31,7 @@ XDA thread with the full instructions: [UNLOCK][ROOT][TWRP][UNBRICK] Amazon Echo
 
 | File | Source | sha256 |
 |---|---|---|
-| `amonet-radar-v1.0.0.zip` | the XDA thread | `ecdb07bc05a508532e5ffed77121592d492b1a91572839e0f17545421f398f1a` |
+| `amonet-radar-v1.0.1.zip` | the XDA thread | `22809bc44b9b7b71750c1955bb94a92c965b557d4f9055bb7bbc098b788188a9` |
 | `update-kindle-radar_puffin-NS6572_user_6436_0012718777476.bin` | [FTVDB](https://ftvdb.com/echo/firmware/com.amazon.radar.android.os/17af64ecc5b8f0303daf4e2a37c75b1a-12718777476-fire-os-6-5-7-2-ns6572-6436-2026-03-21/) (build the thread pins) | `976e2761c5bb9e5d3d9a2b1b9bc2f2296b89a5b37057ab1780743aa075f2df48` |
 | `boot-root.zip` | the XDA thread (byte-identical to donut's; its patches find their sites by pattern) | `de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0` |
 
@@ -57,11 +57,20 @@ USB-A cable, which needs none.
 ### Unlock and flash
 
 One script, as on `biscuit`: unzip the package, run `./fastbrick.sh`, put the Echo into fastboot mode (power adapter
-out, plug it back in while holding the action button •, until the ring shows a **green** LED; an Echo unlocked before shows a rainbow), type `YES` when asked,
-do not interrupt after the 10-second grace period, and it ends in TWRP (white LED). Then, as the thread says: wipe, flash
+out, plug it back in while holding the action button •, until the ring shows a **green** LED; an Echo unlocked before shows a rainbow), type `YES` when asked.
+When it says "DO NOT INTERRUPT IT" and "Press any key to exit...", the PC's part is over: a key only closes the
+script. The Echo goes on by itself for about a minute and ends in TWRP (white LED): **from `YES` until the white ring,
+do not unplug its power or USB cable**, that can brick it. Then, as the thread says: wipe, flash
 the firmware, `adb reboot recovery` (TWRP makes the slot it flashed active, so the second install lands in the other
 one; do not switch back with `bcbtool`, or it goes into the same slot again), flash again, and
 install `boot-root.zip` for root adb. `scripts/setup.sh radar` does all of that.
+
+The exploit needs a payload made for the Echo's LK (bootloader) build: `fastbrick.sh` reads `fastboot getvar
+lk_build_desc` and picks one by `profile.sh`, else the default `fastbrick.img`. v1.0.1 (issue #88) maps
+`59779ca-20220524_183401`, `63cb91b-20221007_073612` (the time in the pinned firmware's `lk.img`) and
+`2c3569d-20260617_051433`; v1.0.0 knew only the first. Its TWRP, LK, preloader and TEE images are v1.0.0's, byte for
+byte. No unlock with v1.0.1 by this project yet. An LK newer than these: the guided setup says so when the Echo is still
+in fastboot a minute after the script; power-cycled, it boots the original software again.
 
 ## Getting the newest firmware (FTVDB lags; radar's listing stops at 6572)
 

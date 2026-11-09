@@ -5,7 +5,7 @@ Home Assistant (aioesphomeapi) watching the wake word list, and real detections:
 Upload with and without a manifest, refusals (not a model, a bad id, a manifest for other features), the engine switch
 (refused without a model), rename, cutoff and window, a second model and the pick, two listening at once (Home
 Assistant's "Wake word 2": "Alexa" heard in the second slot names its run), downloads, a copy as an artifact
-(the Echos section's way), deletes down to none (back to Amazon's engine, saved), and a start with microWakeWord on.
+("Copy models"' way), deletes down to none (back to Amazon's engine, saved), and a start with microWakeWord on.
 Home Assistant's wake word (the stream, as -w remote): the switch asks root for a restart, the restarted satellite
 streams to Home Assistant, which gets no wake words of ours, and its "wake word heard" event is answered as a wake word
 of our own; back again the same way, and nothing to switch while hassmic.conf says -w remote."""
@@ -175,7 +175,7 @@ async def main():
         check(m["active"] == "alexa" and m["second"] is None and open(os.path.join(state, "mww_word")).read().split() == ["alexa"],
               f"back to one: {m['active']}, {m['second']}")
 
-        # copied as an artifact, as the Echos section does from another Echo: begin, pieces, commit; no root, no restart
+        # copied as an artifact, as "Copy models" does from another Echo: begin, pieces, commit; no root, no restart
         st, _, body = b.call("GET", "/api/artifacts")
         arts = {x["id"]: x for x in json.loads(body)["artifacts"]}
         check("mww:alexa" in arts and sorted(f["name"] for f in arts["mww:alexa"]["files"]) == ["manifest.json", "model.tflite"],

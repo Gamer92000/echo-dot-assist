@@ -4,7 +4,7 @@ both hear it (the claims on the wire, the decision, the audio from the wake word
 check, the Echo in a conversation, different wake words, arbitration switched off and on."""
 import asyncio, json, os, re, socket, time
 from aioesphomeapi import VoiceAssistantEventType as Ev
-from arbecho import ARB, Echo, HA, Browser, check, until, start, run
+from arbecho import ARB, LEAD_IN, Echo, HA, Browser, check, until, start, run
 from webclient import req
 
 key = os.urandom(32)
@@ -61,8 +61,9 @@ async def main():
           f"decided once both claims were in, not after the window (500 ms until learned): {b.starts[0] - t0 if b.starts else -1:.2f} s")
     check("another Echo answers" in a.text() and "earcon" not in a.text(), "the other one: no sound")
     # the winner sends from the ring what was said from the wake word's end (128 ms before it was heard on the PC)
-    # through the round (settled within a block or two) up to the next live 50 ms block: 2048 + 0..3200 samples
-    await asyncio.sleep(0.3); ahead = sum(b.chunks[:b.chunks.index(1600)]) if 1600 in b.chunks else None
+    # through the round (settled within a block or two) up to the next live 50 ms block: 2048 + 0..3200 samples, after
+    # the request's 800 ms of silence (main.c lead_in)
+    await asyncio.sleep(0.3); ahead = sum(b.chunks[:b.chunks.index(1600)]) - LEAD_IN if 1600 in b.chunks else None
     check(ahead is not None and 4096 <= ahead <= 4096 + 6400, f"nothing said after the wake word is lost to the round: {ahead} bytes ahead of the live stream")
     b.end_pipeline(); await asyncio.sleep(0.5)
 

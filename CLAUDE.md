@@ -5,15 +5,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 Turns Amazon Echos into Home Assistant voice satellites. Supported so far: Echo Dot 3 (2018, `donut`, Fire OS 6574.1 /
-`donut_puffin` NS65741 only); the repo is laid out for more models (`devices/`, see "Models" below). Amazon's audio front end (`mixer` daemon + `libasp`: AEC, beamforming, mic calibration) and wake word engine
+`donut_puffin` NS65741 only); the repo is laid out for more models (`devices/`, see "Models" below; the Echo Input, `cupcake`: donut's
+platform with the Shows' Android software, one LED, no speaker, running on one, `docs/re-cupcake.md`). Amazon's audio front end (`mixer` daemon + `libasp`: AEC, beamforming, mic calibration) and wake word engine
 (`libpryon.so`) stay; the Alexa client `PuffinApp` is replaced by `hassmic`, a C daemon that is a client of the mixer
 through the reverse-engineered C API of `libmixerAPI.so` and speaks the ESPHome native API (default) or Wyoming.
 
 Docs: `README.md` (short user-facing overview with figures; every feature in detail in `docs/GUIDE.md`, security model in
 `docs/SECURITY.md`; `docs/WINDOWS.md` the Echo Dot 2 from Windows for beginners; figures are CeTZ sources in `docs/img/src/`, rendered light+dark by `tools/figures.sh`; install instructions per model in `devices/<codename>/README.md`, guided by
-`scripts/setup.sh`), `DEVELOPMENT.md` (architecture, layout, tests, contributing), `PLAN.md` (phases, open issues, every measurement), `CHANGELOG.md`
-(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-a2dp-source.md`, `re-davs-login.md`, `re-checkers.md`, `re-athena.md`,
-`sendspin-digest.md`).
+`scripts/setup.sh`; every Echo on Fire OS or Vega OS and its status in `devices/MODELS.md`), `DEVELOPMENT.md` (architecture, layout, tests, contributing), `PLAN.md` (phases, open issues, every measurement), `CHANGELOG.md`
+(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-vad.md`, `re-a2dp-source.md`, `re-davs-login.md`, `wake-word-end.md` (where the request starts after the wake word: measurements on the speech
+corpus, tables generated into `wake-word-end/`), `re-checkers.md`, `re-athena.md`,
+`sendspin-digest.md`, `kiosk-satellite.md`: Kiosk Satellite next to hassmic on the Shows).
 
 ## Build and test
 
@@ -22,11 +24,14 @@ libraries extracted to `firmware/<codename>/rootfs/system/lib`**. Neither the ND
 without them only the host targets build. Extraction steps: `devices/donut/README.md` "2. Unpack the firmware and build".
 
 ```sh
-make [DEVICE=donut]      # ARM binaries into build/donut/ (hassmic, mixcap, mixplay, pryon_test, aed_test, runas, latency, otatool)
+make [DEVICE=donut]      # ARM binaries into build/donut/ (hassmic, mixcap, mixplay, pryon_test, aed_test, runas, latency, otatool;
+                         # libhmui.so where device.mk has SCREEN)
 make DEVICE=donut STUBS=1  # same, without firmware/: links against stand-ins from devices/<codename>/stubs/*.syms (byte-identical)
 make host                # build/hassmic-host (PC: file audio + no wake word, SIGUSR1 triggers wake, SIGTTOU a near miss; board.c of DEVICE),
                          # build/donut/hassmic-qemu (ARM + real Pryon, run via tools/qrun.sh), build/otatool-host (the Echo's
-                         # otatool for the PC, as tests' stand-in for the device side). Needs libopus
+                         # otatool for the PC, as tests' stand-in for the device side), build/hassmic-host-screen (the same
+                         # with screen.c and the band, for tests/fake_screen.py, fake_ma_api.py). Needs libopus
+make build/uishot        # the Echo Show's screen UI as PNG pictures, every view (FreeType; build/uishot <dir>)
 make unit                # C unit tests; ws/noise are checked against Python reference impls in .venv; the Drop In
                          # blueprint (tests/blueprint_dropin.py); one target each (unit-<name>): make -j unit runs them at once
 make build/hassmic-host  # single target
@@ -38,28 +43,52 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 ```sh
 .venv/bin/python tests/run.py [-j N] [name]  # every test below at once (CI's way), each in a network namespace of its
                                              # own (unshare -rn: fixed ports, hassmic's defaults, broadcasts); logs in
-                                             # build/test-logs/, printed for those that fail; -l lists the names
+                                             # build/test-logs/, printed for those that fail; -l lists the names;
+                                             # a failure under that load runs again alone (passing: flaky, a warning
+                                             # and <name>.first.log; --strict: no reruns)
 .venv/bin/python tests/fake_ha_esphome.py     # ESPHome native API, as Home Assistant: entities, settings, voice assistant,
                                              # replies, announcements (HTTP, HTTPS); the rest of the API in five parts
                                              # (shared setup tests/esphome_common.py), each with an Echo of its own:
-.venv/bin/python tests/fake_ha_esphome_timers.py   #   timers, encryption, clock and zone, noise reduction, LEDs, light sensor
+.venv/bin/python tests/fake_ha_esphome_timers.py   #   timers (ringing, the next running), encryption, clock and zone, noise
+                                                   #   reduction, LEDs, light sensor
 .venv/bin/python tests/fake_ha_esphome_features.py #   sound detection (HASSMIC_FAKE_SOUND_WINDOW: 3 s windows), Wi-Fi motion
 .venv/bin/python tests/fake_ha_esphome_buttons.py  #   runs cancelled while HA thinks or streams, the "Button" event entity
 .venv/bin/python tests/fake_ha_esphome_address.py  #   a new address: links closed, mDNS announced again
+.venv/bin/python tests/fake_ha_end.py         # the end of a request heard on the Echo (micend.c): a talker, dishes as loud
+                                             # (no speech in the front end's records written into the capture), quieter
+                                             # voices on another pitch; end of audio, not an abort; the gain left alone;
+                                             # the next request after one (HASSMIC_FAKE_KEYWORD: SIGUSR1's wake word gets
+                                             # a level, so its tail is looked for as on a device)
+.venv/bin/python tests/fake_ha_wakealign.py   # the wake word's end by the aligner (wakealign/): the file per language spoken,
+                                             # one too slow (HASSMIC_FAKE_ALIGN_SLOW) or busy goes by the level, the
+                                             # speaker adaptation in use and saved (a German "Alexa", timed per loop)
 .venv/bin/python tests/fake_ha_arbitration.py # two Echos under one fake HA: wake word arbitration, join paths and security
-                                             # (_join, _rounds, _kiosk, _window.py beside it; tests/arbecho.py)
+                                             # (_join, _rounds, _kiosk, _window, _afe.py beside it; tests/arbecho.py)
 .venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer,
                                              # the ringtone at the sounds volume (HASSMIC_EARCONS: stand-in stock sounds)
 .venv/bin/python tests/blueprint_dropin.py    # the Drop In voice blueprint against stand-ins of HA's registries, states,
                                              # actions and template engine: renamed ids, other devices, failures, replies
+.venv/bin/python tests/ha_real_end.py         # the Echo's end of audio in a real Home Assistant (stand-in STT and TTS as a
+                                             # custom component): HA's STT stream ends with it, intent and reply follow
 .venv/bin/python tests/ha_real_dropin.py      # the blueprint in a real Home Assistant (build/ha-venv, made by --setup;
                                              # skips without it) with four Echos, one the released build: replies, timing.
                                              # All of it in an `unshare -rn` namespace with only lo
 .venv/bin/python tests/fake_ha.py [--qemu]    # Wyoming; --qemu uses the ARM build + stock Pryon model under qemu-arm
 .venv/bin/python tests/fake_ma_sendspin.py [--legacy]  # Sendspin, as Music Assistant 2.10.8 (aiosendspin 10.2.1, Sendspin 1.0;
                                              # --legacy: 9.1.1 of MA <= 2.10.6, build/aiosendspin-9.1.1 from --setup),
-                                             # strict: a deviation MA would only log fails
+                                             # strict: a deviation MA would only log fails; the output's clock
+                                             # 500 ppm slow (HASSMIC_FAKE_MUSIC_PPM) and AudioTrack's burst at the
+                                             # start (HASSMIC_FAKE_MUSIC_BURST_MS), followed without a phase step
 .venv/bin/python tests/fake_ha_stop_word.py   # "<wake word>, stop" between two Echos: the drop cancelled, stop_ends_listening
+.venv/bin/python tests/fake_ha_remote_bargein.py  # -w remote: a wake word run beside each reply, its wake word cuts the reply and
+                                             # goes on as the request, "stop" after it, failed runs asked for again (3 at most)
+.venv/bin/python tests/fake_screen.py [--legacy]  # the Echo Show's screen UI as hassmic feeds it (stand-in UI): Sendspin
+                                             # metadata/artwork (1.0's transfer, scheduled; --legacy: 9.1.1's), the band,
+                                             # commands, home app, restarts
+.venv/bin/python tests/fake_screen_words.py  # words and timers on the Show's screen (issue #104), as screen.c tells the
+                                             # UI: settings, transcript and reply, a "stop" never shown, timers
+.venv/bin/python tests/fake_ma_api.py         # Music Assistant's API for the screen (mass.c) against a stand-in server:
+                                             # the page's sealed token, auth, players, queue, lists, commands, images
 .venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step
 .venv/bin/python tests/fake_web_artifacts.py  # models copied Echo to Echo through the page, root's installer, after a restart
 .venv/bin/python tests/fake_web_ring.py       # light ring designs: library, assignments, apply with the test as root,
@@ -76,8 +105,15 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # loudest, HA's media at the music's, keys on what plays, gains in dB, a
                                              # restart, a Bluetooth speaker, the page, exports (HASSMIC_FAKE_MIXER,
                                              # HASSMIC_FAKE_SPEAKER)
+.venv/bin/python tests/fake_ha_timer_sound.py # the timer's sound (issue #63): stock's tone by default, looped and cut by
+                                             # stops and pipelines, the beep at its level, uploads (the page's WAV only),
+                                             # Play, delete, restart, the beep without the tone
+.venv/bin/python tests/fake_web_sounds.py      # sounds of one's own in place of stock's (Sounds card): the list, stock's
+                                             # as a WAV, uploads within each sound's length, Play, the wake word, restart
 .venv/bin/python tests/fake_ha_ring.py        # light ring: the animation set from stand-in stock files, HA's light,
                                              # the Echo's own patterns first, the listening ring turned by the beam
+.venv/bin/python tests/fake_ha_bt_proxy.py     # the Bluetooth proxy switched off and on (issue #152): device info, scan,
+                                             # subscriptions, slots and connections refused (fake_improv.py's controller)
 .venv/bin/python tests/fake_improv.py         # setup from a phone: Improv over BLE against a fake controller on a pty
                                              # (HASSMIC_BT_DEV), root's wifi.sh, adoption, factory reset (HA, button hold)
 tests/ota_push_test.sh                        # signed push-update path end to end
@@ -91,8 +127,10 @@ changes); version = commit time in UTC, `2026.10.02.091530` (`make version`; loc
 passes `RELEASE=1` for the bare one), bundles `hassmic-<codename>.bundle(.sig)`
 signed in the `release` job only (secret `RELEASE_SIGNING_KEY` of the GitHub environment `release`, main/release only;
 build jobs sign with a throwaway key) with the release key (base64 of `secrets/release.key`; public half `keys/release.pub`,
-shipped in every bundle). `tools/mkstubs.sh` regenerates the stub lists from the firmware and checks byte-identity; rerun it
-when code starts using another stock library function. Builds are reproducible (`BUILD_TIME` = commit time). Test the
+shipped in every bundle; `keys/release.conf` names it and the repository, `UPDATE_REPO`; a fork's own releases:
+`scripts/fork-release.sh`, `secrets/fork.conf` over it, in CI from the variable `RELEASE_PUBLIC_KEY`).
+`tools/mkstubs.sh` regenerates the stub lists from the firmware and checks byte-identity; rerun it when code starts
+using another stock library function. Builds are reproducible (`BUILD_TIME` = commit time). Test the
 workflow with `act push` (publishing is a dry run under act).
 
 One unit test: `make unit-<name>` (`UNIT_TESTS` in the Makefile).
@@ -126,6 +164,8 @@ stops and names the sysctl, which the setup's `qemu_arm` asks to set).
   `INSTALL=running` (athena, Android 9: rooted by saiyaku's zip patching system and vendor in place, no boot image of ours)
   is the in-OS path only, with the policy where `device.conf` `SEPOLICY_FILE` says (`/vendor/etc/selinux/precompiled_sepolicy`,
   `sysinstall.sh` remounts `/vendor` only to write it; `.pre-hassmic` beside it) and the Android extras (dex programs, home APK) as `boot`.
+  Whether Android's framework runs is `device.conf` `ANDROID=1`, not the install method (cupcake: `twrp-ab` and Android):
+  the dex programs, `wifi.sh`'s and `wifi-join.sh`'s WifiService path go by it.
 - Logs: `/data/local/hassmic/boot.log`, each line stamped (`clock.c`: UTC once the clock came from HA, else `boot+<s>`;
   hassmic's own through its reader process `hassmic-log`, which `pidof hassmic` lists too; scripts through `say`/`stamped`
   in `main.sh`). The Echo's mksh is 32-bit and has no awk. Config: `/data/local/hassmic/hassmic.conf` (`PROTO`, `ARGS`, `MODE`,
@@ -140,7 +180,9 @@ stops and names the sysctl, which the setup's `qemu_arm` asks to set).
   artifacts, picked in a menu with a checklist per kind (new ones ticked): wake words, installed from `device-logs/models/`
   after loading each with the Echo's `pryon_test`, and other artifacts (the sound detection model), kept on the PC for tests.
   Downloads come from Amazon in one go (stock-online + Alexa app registration, undone afterwards).
-- `scripts/probe.sh` checks the device's libraries match the analysed firmware. Everything assumes exactly that version.
+- `scripts/probe.sh` checks the device's libraries match the analysed firmware. Everything assumes exactly that version;
+  another build goes in only with every `PROBE_FILES` the same and no build-bound image flashed (`device.sh` `firmware_ok`:
+  not `INSTALL=boot`), or, `INSTALL=running` (athena), after a question (`HASSMIC_FIRMWARE_OK=1`; setup's `firmware_accept`).
 - PC scripts that use adb (`deploy`, `probe`, `install-system`, `capture-test`, `mic-compare`) detect the model from `ro.product.device`
   via `scripts/lib/device.sh`; `ota-push.sh` takes `DEVICE` (default donut). With two Echos on adb set `ANDROID_SERIAL`.
 
@@ -149,7 +191,10 @@ stops and names the sysctl, which the setup's `qemu_arm` asks to set).
 `devices/<codename>/` holds everything model-specific; porting guide in `devices/README.md`:
 - `device.mk`: NDK target, audio/wake backends, stock libs to link (included by the Makefile).
 - `board.c`: `struct board` (`src/hassmic/board.h`): HA identity, keypad/mute-latch/BT device paths, stock wake word
-  and earcon paths, thermal zone, LED volume steps, speaker gain control. Linked into every hassmic build, host builds included.
+  and earcon paths, thermal zone, LED volume steps, volume curve, speaker gain control. Linked into every hassmic build, host builds included.
+  `volume_curve` is required and every model must have its own, measured on it (`devices/README.md` "Volume curve");
+  until then `board_vol_dot2` stands in under a comment saying so, and `make unit-volcurve` prints a `todo` per such
+  model. A new model comes with its own curve or a `PLAN.md` entry saying it is missing.
 - `device.conf`: shell vars (product/firmware id, probe files, `INSTALL` method, daemon user/groups, stock service
   names). Sourced by PC scripts and shipped to the Echo next to `main.sh`/`lockdown.sh`/`alexa-off.sh`; push bundles
   carry it, and `main.sh` refuses a bundle whose `PRODUCT` is not the Echo's.
@@ -165,26 +210,65 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 `src/hassmic/` is one daemon; `main.c` is the satellite core, the rest plug into it through narrow headers:
 
 - **Core (`main.c`, `core.h`)**: state machine `IDLE/LISTENING/THINKING/SPEAKING`, pipeline timeout, TTS queue with
-  barge-in flush, alarms (timers), mute (hardware latch that software can set but never clear, plus a soft mute from HA),
-  volume, LED ring, earcons, wake word threshold hints.  Separate volumes (setting `separate_volumes`, issue #32):
+  barge-in flush, alarms (timers; `timer_sound`: stock's timer tone by default (`sounds.c`, libEarconAdapter's
+  timerDefault; the blip where the firmware has none), its alarm tone, the blip at the same loudness (`BEEP_PEAK`,
+  -16.5 LUFS), or the page's upload `state/timer_sound.wav`, which the browser converts to 48 kHz mono WAV and offers
+  to bring to that loudness (`web/loudness.js`, BS.1770; `tests/unit/web_loudness_test.py`): the Echo only checks the
+  format; looped by `play_earcon_while`, cut by any stop, a pipeline or our sounds; issue #63; running timers from
+  HA's started/updated events kept by id with their end on the monotonic clock, `core_timer_next` the active one
+  ending first for the "Next timer" entities, a timer HA never finished dropped `TIMER_STALE_MS` after its end by the
+  earcon thread), mute (hardware latch
+  that software can set but never clear, plus a soft mute from HA), volume, LED ring, earcons (one's own in place of
+  stock's: `state/sounds/<id>.wav`, sounds.c `sound_own_*`, the page's Sounds card), wake word threshold hints.
+  Separate volumes (setting `separate_volumes`, issue #32):
   music (`volume`), replies, sounds, timers, Drop In calls at volumes of their own or each following the music's +- an offset in
   points (`<kind>_linked`/`_offset`; linked, its HA number is unlisted); MainVolume and TTSVolume both at the loudest
   (libasp's own volume, which boosts the top end, follows the last of them set), each kind turned down in its PCM by
-  the measured curve (`volcurve.c`: `board.volume_curve`, the Dot 2's where none, `tests/unit/volcurve_test.c` per model; `audio_music_gain`, `audio_tts_gain`, the earcon thread); HA's `play_media` is music
+  the model's curve (`volcurve.c`: `board.volume_curve`, the Dot 2's `board_vol_dot2` standing in where not measured yet, `tests/unit/volcurve_test.c` per model; `audio_music_gain`, `audio_tts_gain`, the earcon thread); HA's `play_media` is music
   though on the TTS stream (`core_tts_begin`'s `media`, `tts_kind`). docs/re-platform.md has the measurements. The front end is told when a command is spoken (`listening()`:
   without it its cancellers remove the talker after 1.5 s). `earsup.c` (wake sound removal: our own UI sounds taken back
   out of the pipeline's audio by a residual echo suppressor keyed to the PCM we play; experimental, setting
   `wake_sound_removal`, off by default; holds the audio from the sound until its echo has passed, then releases it at
   once), then `micdenoise.c` (RNNoise, settings page off/low/medium/high, off by default), then
   `micgain.c`: AGC on the mic audio sent to the pipeline (the stock
-  micAsr level is ~30 dB below what STT expects, and HA ignores the ESPHome audio settings); the wake word gets it raw. `core_lock` guards state and client socket writes; `core.h`
+  micAsr level is ~30 dB below what STT expects, and HA ignores the ESPHome audio settings); the wake word gets it raw.
+  After a wake word the stream starts from the ring at the word's end: `wakealign.c` (issues #72, #79) aligns the word's
+  phones (MFA's GMM-HMM, cut down per wake word and spoken language to `<word>-<locale>.wa` (microWakeWord: name slug),
+  its GMMs in `<acoustic model>.was` shared by the words of that model, next to the binary or in `HASSMIC_WAKEALIGN`,
+  picked per detection by `align_resolve`: setting `speech_language`, else the time zone, else the word's own locale
+  (en-US for the firmware's "alexa" and microWakeWord's); en-CA, en-AU, fr-CA take en-US's, en-GB's, fr-FR's files (the
+  same models); made by `tools/wakealign/build.sh` from MFA's pretrained models, in git as `wakealign/` (2.5 MB; CC BY
+  4.0, credited in `wakealign/README.md`); format 3: 16 Gaussians a pdf, float16, a check per GMM) in [Pryon's end - 1.5 s, + 0.5 s],
+  run in `align_thread` (started by `align_ahead`; never on the capture thread, issue #77; the replay waits for
+  `align_done`), taken in [-400 ms, +500 ms] of Pryon's end (it may start before it: Echo, Ziggy, the English models
+  fire after the word); a pause after the word: the replay from its middle (the aligned silence's, or
+  `pause_after`: 80 ms at the room's floor + 6 dB within 200 ms; the corpus: 63 -> 74 % right); speaker adaptation (fMLLR per household and model space, `state/wakealign-<space>.adapt`,
+  setting `wake_word_adaptation`, from 5 requests on, forgetting 0.98 a request); `tools/wakealign/walign.py` is its numpy reference
+  (`tests/unit/wakealign_ref.py`). Without a model (the firmware's English "alexa" so far, microWakeWord):
+  `wordtail.c` (a 100 ms pause 9 dB under the word, waiting up to 500 ms; no pause: never more than a4fe0bd's
+  rule left out, often nothing). With a model and no answer near (rejected, too slow, busy): the same without its
+  pause (`pause_ok` 0, issue #79: a command's "ts" passes for one); `align_thread` logs what the aligner said.
+  Every run HA starts at STT (local wake word, button, follow-ups; not `-w remote`) opens with 800 ms of zeros
+  (`lead_in`, issue #80): HA's microVAD is new per run and blind for its first 760 ms, and Parakeet answers "" to audio
+  that opens mid-word. Tests: `esphome_common.LEAD_IN` bytes ahead of the ring's replay.
+  Setting `wake_word_in_request` (off): the replay from 100 ms ahead of the keyword's begin instead (`replay_whole`,
+  `kw_begin`/`kw_end` of the last detection; mww's begin is its end - 1 s); micend counts from the tail's end
+  (`talker_from`); `core_transcript` drops a leading wake phrase ("Alexa, stop" = "stop"), and the wake word alone
+  ends the run quietly as "nothing said" would have.
+  `micend.c` (setting `end_of_request`, experimental, off; issue #66): the request ends on a pause in the voice of
+  whoever said the wake word (frames within 12/9/6 dB of the keyword's rms, unless Amazon's DNN VAD says 0,
+  1.25/0.7/0.45 s), quieter voices neither keep it open nor lift the gain (`micgain` `talker_min_db`); `proto->end` =
+  end of audio only (`stop()`'s `start = false` is an abort to HA).  The VAD: `afemeta.c` decodes the front end's
+  record in the lowest bit of every 128 micAsr samples (version 3.3; clock, RMS, playback, mute, DNN VAD 2 bits;
+  docs/re-vad.md), `main.c` `ring_speech` reads it from the ring (phase found again after lost samples); none on the
+  PC or where a HAL drops the bits (then level only). `core_lock` guards state and client socket writes; `core.h`
   documents per function whether the lock is held.
 - **Protocols (`struct proto` in `core.h`)**: `proto_esphome.c` (ESPHome native API incl. Noise encryption provisioned
   by HA, voice assistant, media player, timers, settings entities, Bluetooth proxy messages) and `proto_wyoming.c` +
   `wyoming.c`. Selected with `-P`. The core calls `start/audio/stop/played/...` on the active proto with lock held.
 - **Audio backend (`audio.h`)**: `audio_mixer.c` on device (mixer C API: capture, voice/TTS, music, Bluetooth and
-  earcon streams mixed by the mixer); `audio_android.c` where there is no mixer (checkers, Echo Show 5; cronos, its 2nd gen; athena, Echo Show 8 2nd gen: OpenSL ES over
-  AudioRecord/AudioTrack, the front end inside the audio HAL; untried on a device; device.mk `SYSLIBS` links
+  earcon streams mixed by the mixer); `audio_android.c` where there is no mixer (checkers, Echo Show 5; cronos, its 2nd gen; athena, Echo Show 8 2nd gen; cupcake, Echo Input: OpenSL ES over
+  AudioRecord/AudioTrack, the front end inside the audio HAL; device.mk `SYSLIBS` links
   `-lOpenSLES`); `audio_file.c` for PC builds. Swapped at link time in the Makefile.
 - **Sound detection (`sound.h`)**: `sound_pryon.c` (Alexa Guard's model on `libpryon.so`: the firmware's, or Amazon's newest
   from `/data/local/hassmic/aed` (`scripts/artifacts.sh`); a second decoder, off unless HA's
@@ -192,6 +276,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (host build, `HASSMIC_FAKE_SOUND`; `HASSMIC_FAKE_SOUND_MODEL` names the model, `broken` fails to load). `sound_model()`
   says which model it takes, for the page; a start that fails switches the setting off via `settings_set` and sets
   `core_sound_failed()` (page warning). Picked in the Makefile from the wake word backend.
+- **Sound packs** (`soundpack.c`, `soundpack.h`): sets of the Sounds card's sounds in `state/sound-packs/<id>/` (`name`,
+  `<sound>.wav`), `/api/sound-pack`, page `packsCard`, a `.soundpack` file = a tar of `pack.json` + WAVs (`web/tar.js`).
+  A pack is a whole set; 16 packs, 30 MB, 32 MB left on the partition (`HASSMIC_SOUNDPACK_MAX`, `_FREE_MIN` for tests).
 - **Whisper detection (`whisper.h`)**: `whisper_pryon.c` (libpryon `WhisperApi_*`, one detector per request fed from the
   start of streaming, end of utterance on HA's VAD end (`core_mic_off`), result into the ESPHome binary sensor "Last
   request whispered" before STT ends, for the agent's prompt template; `docs/re-whisper.md`) or `whisper_none.c` (host
@@ -220,12 +307,14 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `tests/unit/mww_ref.py` (in `make unit`) checks features and every inference against pymicro-features and TFLite
   BUILTIN_REF on all of pymicro-wakeword's models.
 - **Wake word arbitration (`arb.c`, `arb.h`)**: when several Echos hear the wake word, only the best one answers
-  (stock's ESP, done on the LAN; the score is the front end's own wake word energy ratio, as stock reads it). UDP broadcast on 28930 (beacons at random 20-40 s, a member counts for 5 min: broadcasts get lost; for 40 s after a start or join the beacons carry F_HELLO and every member answers at once; a newcomer asks every 1.2 s for its first 5 s), shared network key; a member hands it to a newcomer (sealed to its X25519 key) only
+  (stock's ESP, done on the LAN; the score is the front end's own wake word energy ratio, as stock reads it, in a
+  thread of its own (`afe_thread`; the capture never waits on it, issue #77: `score_wait` claims once it is in or after
+  `AFE_WAIT_MS`, `afe_late` ends a reading left behind), and only when a round runs (`arb_rounds`); PC: `HASSMIC_FAKE_AFE`). UDP broadcast on 28930 (beacons at random 20-40 s, a member counts for 5 min: broadcasts get lost; for 40 s after a start or join the beacons carry F_HELLO and every member answers at once; a newcomer asks every 1.2 s for its first 5 s), shared network key; a member hands it to a newcomer (sealed to its X25519 key) only
   when Home Assistant vouches for both: each Echo that may be waited for reports the tag `hassmic_<pub hex>` as scanned
   (event `esphome.tag_scanned`: HA fires device events without "perform actions"; `tag.<id>` has no area or device in
   it, unlike every entity id, which HA builds from area, parent device, device and entity name), the other reads
   `tag.hassmic_<pub hex>` (state requests need no permission either) and trusts the key once the scan time changed
-  after its first read; then `T_GIVE` on the LAN, taken outside pairing only from a confirmed Echo. Else, after 30 s,
+  after its first read; then `T_GIVE` on the LAN, taken outside pairing only from a confirmed Echo. Else, 30 s after it was heard with HA's link up (`ha_since`),
   the newcomer's own ESPHome action `esphome.<node>_arbitration_key` (needs "Allow the device to perform Home Assistant
   actions"). Without HA: Volume up + Volume down held 2 s on both (`T_PAIR`/`T_GIVE`, exactly one requester). ESPHome only.
   Window (issue #27): learned per Echo from how late each member's claims come (first claim per member and round, sampled
@@ -247,7 +336,11 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   2 kiosk). The socket belongs to arb's loop thread. `HASSMIC_ARB_SCALE` (tests, `PACE()`): the network's own timers
   (beacons, discovery, tags, handoff, pairing) at that fraction; rounds and the window keep theirs. Page: two cards with pros and cons (`HELP.arbitration_mode.modes`).
 - **Music**: `sendspin.c` (Music Assistant Sendspin player over `ws.c`/`noise.c`/`net.c`/`hash.c`, decodes via
-  `dr_flac`/`minimp3`/libopus). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
+  `dr_flac`/`minimp3`/libopus; in sync by a rate of its own, `resample.c`: a PI servo on the error steering a cubic
+  resampler, never frames skipped or repeated, which ticked on the Show 5's clock 350 ppm off; snap past 20 ms; a drift
+  learnt per route, the Echo's speaker or a Bluetooth one, kept in `state/sendspin.drift`, held 5 s after a snap; a
+  fresh output primed with silence first, `music_prime_us()`: Android's AudioTrack takes its buffer at once as it
+  starts, ~137 ms on the Show 5, which the queue leaves out; the A2DP sink resamples through resample.c too). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
   loaded with dlopen, aptX/aptX HD via `freeaptx`) with AVRCP. Only one music source plays at a time (newest wins). "<wake word>, stop" pauses it when nothing else was
   stopped (`stop_word`, a bare "stop" transcript in `core_transcript`; issue #51), the action button resumes.
   A "stop" that ended what its wake word cut (ring, Drop In, reply, THINKING run) drops that wake word's run: after the
@@ -292,7 +385,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   the equalizer stay where their module keeps them. Loaded in `main()` whatever the protocol. Changes from elsewhere
   reach HA through `proto->settings_changed`. Features (`feature` in the table: arbitration, sound, whisper, Wi-Fi
   motion, light sensor (Illuminance + auto level), wake word events (`wake_events`: the "Wake word" event entity,
-  `core_wake_events`), request text (`request_text`: "Last heard"/"Last reply", cut to HA's 255 characters, `state_text`), Bluetooth audio, Bluetooth speaker, Drop In, separate volumes): their entities are listed only while on (`proto_esphome.c` `listed()`,
+  `core_wake_events`), request text (`request_text`: "Last heard"/"Last reply", cut to HA's 255 characters, `state_text`), Bluetooth proxy (no entities: `proto_esphome.c` `bt_proxy()` gates the device info's proxy fields and
+  every proxy request), Bluetooth audio, Bluetooth speaker, Drop In, separate volumes): their entities are listed only while on (`proto_esphome.c` `listed()`,
   which also gates states); switching one closes the HA links (`proto->entities_changed`), HA re-lists on reconnect and
   deletes what is gone (registry included). HA always has: media player, mute, DND, wake sound, LEDs, EQ, firmware,
   Web UI address, Sendspin token (a secret: never on the page), Identify, Light ring (where root installed `ring.c`'s
@@ -311,7 +405,14 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   adb still needs that Echo's own button.
   Never send secrets: it is plain HTTP.  Log viewer: `GET /api/log/0|1` (signed) sends `boot.log` / `.1` (`HASSMIC_LOG`,
   tail of 2 MB), with the Sendspin pairing token blanked (`log_redact`; `setup.sh` greps it from the log over adb). The page's words (what each setting does, what a feature adds to HA) live in
-  `web/app.js` `HELP`, keyed by setting name: a new setting gets an entry there. Echos section from `arb_status_json`
+  `web/app.js`, keyed by setting name: a new setting gets a line in `SUB` (what it is for, a few words: what a row shows),
+  an entry in `HELP` (the full words, behind the row's ⓘ, `moreOf`), and a place in `LAYOUT` (the cards of a page; one not
+  named comes last in a card of its own, so nothing is lost). Layout: `flow` (cards in as many columns as fit, placed
+  once per column count, by height); a card is one list of rows, all alike (`settingRow`, `infoRow`): never rows side by
+  side, scanning down a card is what makes a setting findable. Pages: `PAGES` (`groups`: which settings;
+  `MOVED`: those that live elsewhere, a parent's children with it), all built at once and hidden, `route()` by
+  `#/<page>[/<setting or element id>]` (`#vouch=` is the login's); `FINDABLE` is what the search finds beside settings.
+  Echos page from `arb_status_json`
   (members with name, IP and whether they arbitrate from their signed beacons, others: in no network / younger / older); other Echos' pages are called cross-origin (CORS `*`,
   the signature counts), each approved once with its own button; "make like this Echo" posts this one's export.
   Name: one, made at start and stored nowhere (`main.c` `name_make`): `board.default_name` (the model: "Echo Dot 3")
@@ -324,8 +425,14 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `state_setup_discovery_beacon`) past the wake sound setting.
   Presets: `scripts/setup.sh --preset <export>` (or asked in `install_satellite`) pushes it to `state/preset`; hassmic
   applies it once at start (`settings_preset`, as an import) and renames it `preset.applied`. `web/crypto.js` (X25519, BLAKE2b; no `crypto.subtle` on plain HTTP) is checked
-  against Python by `tests/unit/web_crypto_test.py` (in `make unit`, needs node). The Echos section copies chosen
-  settings to chosen Echos (a matrix of exports), and models.
+  against Python by `tests/unit/web_crypto_test.py` (in `make unit`, needs node). Compare & copy (`buildCompare`, `drawSync`,
+  `applySettings`) and Copy models (`drawModels`) are one table, `web/matrix.js` `matrixTable`: a row per setting or model
+  (the exports, ring rows included; other models' words from each Echo's `/api/state`, `d.state`), a column per Echo,
+  any cell the source of its row. What is picked is a plan, row -> { from, skip }, by Echo, never by column;
+  `hmmatrix` is pure (`tests/unit/web_matrix_test.py`, node): `groups` (Echos that agree on every row both have,
+  an Echo joining only a group it agrees with all of), `pick`, `skip`, `column`, `changes` (all Apply reads).
+  Past six columns a table narrows and grouping starts on (`grouping`: the stored choice wins); the other Echos are polled
+  only while a page shows them (`othersShown`).
 - **Amazon downloads** (`davs.c` + `dha.c`): the settings page's "Download from Amazon".  `dha.c` builds the device
   attestation token `/auth/register` needs, in the two shapes Amazon's MAPs make: a drvV1 JWT (biscuit, radar; RSA
   keymaster through `libacehal_dha.so`, dlopen'd, needs group drmrpc) or donut's drvV3 token around the dhav2
@@ -350,8 +457,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `artifact-install.sh migrate` (main.sh, every satellite start): wake word folders under the short name (`echo-de`,
   from installs by hand) renamed to artifacts.sh's (`echo-de-DE`) where the language has one region; `state/wake_word`
   follows.
-- **Clock and log stamps** (`clock.c`): `proto_esphome.c` asks HA for the time (GetTimeRequest) on keyed links (on
-  subscribe, then every 6 h on pings); `clock_from_ha` leaves `<epoch> <boottime s.cs>` in `state/clock`, root's
+- **Clock and log stamps** (`clock.c`): `proto_esphome.c` asks HA for the time (GetTimeRequest) on every link (on
+  subscribe, then every 6 h on pings; the clock takes keyed links' answers only, any does for "Next timer"'s end,
+  `ha_time`); `clock_from_ha` leaves `<epoch> <boottime s.cs>` in `state/clock`, root's
   `main.sh` `clock_set` (netwatch) sets clock + RTC and `hassmic.clock.synced`. `clock_log_start()` (first in `main()`
   after options) turns stderr/stdout into a pipe to a double-forked reader that stamps lines and drops known Amazon
   noise; it ignores hassmic's signals and ends at EOF. Never make it hassmic's direct child (Amazon's DHA module waits
@@ -415,8 +523,11 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   needs no compiler for it; `tests/otatool_test.sh` holds the two byte for byte to each other, and CI verifies every
   bundle with both. `scripts/bundle.sh` packs (ota-push.sh and CI).
 - **Prebuilt** (`scripts/lib/build.sh`, `build_binaries`): deploy/install-system/ota-push/setup take the device binaries
-  from the release CI published of HEAD (tag `v<commit time>[-beta]` pointing at HEAD, clean tree; bundle verified
-  against `keys/release.pub`, marked `build/<codename>/PREBUILT`) where there is no NDK, or with `PREBUILT=1`;
+  from the release CI published of HEAD (tag `v<commit time>[-beta]` pointing at HEAD, clean tree; else the release
+  CI found HEAD's bundles alike to, `_ci_same`: its build run on HEAD passed with "Publish" skipped, the newest
+  release published before its "Anything new" step ended, issue #132; else, CI not done, the newest release tag before HEAD when nothing since touches a bundle,
+  `_bundle_free`: CI publishes no beta of such commits, issue #106; bundle verified against `keys/release.pub`, marked `build/<codename>/PREBUILT`) where there is no NDK,
+  or with `PREBUILT=1`;
   `PREBUILT=0` always builds. `scripts/probe.sh` compares with `devices/<codename>/probe.md5`, not the unpacked firmware.
 - **Online updates** (`update.c`): "Online updates" on the settings page (off default / beta / release, `state/config`) and an
   ESPHome update entity; checks GitHub's releases API, downloads `hassmic-<board.codename>.bundle` through the firmware's
@@ -461,6 +572,64 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   sets and unsets queued one behind the other go in one ledctrl (`LEDQ_BATCH`: it takes repeated -s/-u).  The
   beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N` when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
   `HASSMIC_FAKE_BEAM`.
+- **Screen UI** (`src/ui/`, `screen.c`, `screen.h`; device.mk `SCREEN`, else `screen_none.c`; every Show): the
+  Echo Show's own screen, small beside any app (Kiosk Satellite, View Assist...).  `src/ui/ui.h` lists the parts:
+  `scene.c` (display list with a clip per item, diffed by id into one dirty rectangle; text cache by hash; image cache
+  by key and shown size, asked of the platform once; touches: taps, long presses, HIT_DRAG sliders, scrollers with
+  flings and rubber band, a shade's hits block what is under them; the top edge = the drawer once the finger moves
+  down, a tap there is still a tap; over an app only from the grip (y < 0: 16 rows along the top that, like the
+  band's, no app has, overscan; a pull from the app's own top refreshed Kiosk Satellite); the band along = Back over an
+  app; an app launched leaves the last frame up (`leaving_until`, the app's picture under the drawer) until it is in
+  front, polled every 150 ms meanwhile (`scene_waiting`); frames only while something moves),
+  `widgets.c` (icons drawn from shapes, buttons, sliders, keyboard, action sheet, toast), `face.c` (the face for the
+  core's patterns, mouth on the reply's level, clock with HA's tz, bottom line), `drawer.c` (pulled from the top over
+  anything: over an app a SurfaceControl.screenshot under it and hassmic's home activity brought up, closed with
+  nothing chosen it relaunches that app; Home, Face, Music, DND, Screen off, what plays, volume; no apps), `music.c` (rail: Playing from Sendspin's metadata/artwork/controller, Queue, Library with
+  drill-down, Search with the keyboard, Speakers with groups and volumes; lists by "ml" requests, pages of 60).  The
+  home app: the page's Screen page (`POST /api/screen`, `state/screen_home`; the apps the UI listed at start, "app"
+  lines), else Kiosk Satellite where installed ("kiosk", root's `kiosk-app` mark), else the face; a new choice applies
+  at once; relaunched 3x a minute at most, not while our own screen was asked for.  One app_process: `scripts/device/screen.dex`
+  (`tools/mkscreen.py`; `ui_start` puts the library's folder on `LD_LIBRARY_PATH`, else the class loader namespace
+  refuses `/system/hassmic`, and sets the real group to the effective one, else AT_SECURE drops it, issue #122) loads `libhmui.so` (`android.c`: JNI table C/J/F, JV/CV for some SDKs only (Android 9:
+  SurfaceControl.Builder, getTasks(int)), checked by `mkscreen.py --framework`, `make unit-screen` against every
+  `SCREEN` model's unpacked firmware for what its SDK resolves; `tools/dexasm.py` reads Android 7's oat and Android
+  9's compact dex in vdex, hidden API bits off; images
+  decoded on a thread of their own); layer shown only while hassmic's home activity is in front (getTasks polled);
+  touches from evdev beside Android (`touch.c`: the panel's node, lowest event number, system_server's uinput
+  `amazon_touch` last; protocol B, the first finger followed; `tests/unit/touch_test.c`).  The band runs in the same process (`ring_band.c` -> `screen_band`, one row a
+  frame; ringbar.dex only without the UI and in tests).  `screen.c` keeps state by generation and one writer thread
+  sends what changed (callers hold `core_lock`: never block on the pipe), plus mass.c's lines from a FIFO (8 MB, a
+  new UI drops it and `mass_replay` tells the state again); hassmic's pid in a file's name while a UI is meant to run
+  (restarts included, until given up), `state/screen-ui.<pid>` (root lists the folder, never opens it), which makes
+  root's `kiosk_tick` leave opening the app to the UI.  PC: `tests/unit/ui_test.c` (every incremental frame == the full one,
+  gestures, commands), `tools/uishot.c` (`make build/uishot`: every view as PNG with the firmware's Roboto, FreeType),
+  `HASSMIC_SCREEN` (a stand-in UI).
+  Words and timers (`src/ui/words.c`, issue #104; settings `screen_text` "Speech on screen", `screen_text_seconds`
+  (8, 0 until the next request), `screen_timers`, all off, the page's Screen page, card "Words and timers"): what was
+  said, the reply and the timers on a fourth layer of the UI process (`hassmic-words`, TRANSLUCENT, over the UI's and
+  every window, under the band; hidden while the drawer is out), drawn only on a change (a timer: once a second), faded
+  and pulsed by `SurfaceControl.setAlpha`; text by the platform (`p_text`, wrapped by `p_measure`).  hassmic's side in
+  `screen.c` (`screen_words`: `core_set_state` clears on a run from idle and marks idle, proto_esphome's STT end only
+  after `core_transcript` passed it, TTS start; proto_wyoming's transcript; `stop_word` clears what it ended; nothing
+  kept while off), lines `wo`/`wh`/`wr`/`ws`/`tl` (scene.h); the timers are the core's (`core_timers_running`,
+  `screen_timers_changed`), ringing ones the face's `timers`; `screen_keep_on` holds the screen on (ring_band.c's
+  timeout) while timers show.  Touch: over our own screen the scene gives the layer the touches while it shows
+  (`scene_touch` `wtap`, `words_tap`, only once faded in past half: words away + "words clear" to hassmic, timers
+  hidden until the next "tl" + "timers hide", which lets the screen sleep until they change, Stop -> "timer stop");
+  over an app the platform grabs the panel for them (`EVIOCGRAB`, `touch_grab`, `scene_words_wants_grab`; taken and given
+  back with no finger down; the kernel lets go when the UI dies), else (no grab: `wd.grab` -1) a ring there brings our
+  screen up (`ring_from`, `own_asked` kept and given back after, asked again every 10 s) and the app back after.  Tests: `ui_test.c`, `tests/fake_screen_words.py`, `build/uishot` (words*, timer*).
+- **Music Assistant's API** (`mass.c`, `mass.h`, `json.c`): the screen's library, search, queue and speakers over
+  MA's own websocket (`/ws`, port 8095; the page's URL, or with none given the Sendspin server's address pinned when the
+  token is saved: a token only ever goes to that address, `mass_peer` merely suggests one, from sessions whose player
+  role is active; without a token mass.c may look at the suggested one to say what it is); the first
+  message is the server's info, from schema 28 `auth` with a long-lived token (page: `POST /api/mass`, sealed as the
+  Wi-Fi password, `state/mass` 0600, never sent back); events after it.  This Echo = the player whose id is Sendspin's
+  client id (`sendspin_client_id`) or has it as an output protocol; its queue by `get_active_queue`.  Digested into the
+  UI's lines (scene.h: ma, pl, pq, qc, L/I/E, img, merr), `pl` written only when it changes; group with set_members
+  (group/ungroup where unknown), images from `/imageproxy/<proxy_id>?size=` (80/160/256/512, `fmt=jpeg`, the token
+  along).  `json.c` is a token reader (no DOM copies, depth 64; `tests/unit/json_test.c` fuzzes it).
+  `tests/fake_ma_api.py`: a stand-in MA server.
 - **Light band** (`ring_band.c`, the Echo Show's `RING` in device.mk instead of `ring.c`): the same `ring.h` drawn as a
   band along the bottom of the screen, every pattern as the Dots' ring unrolled (12 virtual LEDs blended across the
   width, the talker's side in the middle; never turned: the Show's beam says too little, docs/re-checkers.md) plus
@@ -487,14 +656,19 @@ stock behaviour. `scripts/device/` holds on-device helpers (`lockdown.sh` firewa
 Firewall invariant: Amazon's daemons may only reach local addresses; hassmic itself may reach any address (it fetches
 TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get out. Inbound TCP and UDP are only admitted on
 16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 OTA, 28931 settings page, UDP 28930 arbitration)
-must stay in that range (UDP 28932 Drop In too). Only exception: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
-`state/config` says `arbitration_mode=kiosk` (`kiosk_state`). Ping (ICMP echo request) is admitted from the private
+must stay in that range (UDP 28932 Drop In too). Exceptions: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
+`state/config` says `arbitration_mode=kiosk` (`kiosk_state`), and, where device.conf has `KIOSK_PACKAGE` (and the board `kiosk`, for the settings), the app's own TCP 2324 and 6053 from private addresses while it is installed; its uid may also reach the internet unless `kiosk_internet` is off (`KSUID`). Ping (ICMP echo request) is admitted from the private
 and link-local ranges of `LOCAL4` only. A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`
 prints it.
 
+`tools/speechcorpus/` makes a speech corpus of OmniVoice's designed voices into `testdata/corpus/` (Git LFS, CC BY-NC: its README;
+DEVELOPMENT.md "Speech corpus"): checked by STT, words timed by MFA; look there before making speech for a test.
+`tools/wakealign/corpus_eval.py` measures the replay's start on it (stock Pryon under qemu, the release's rule, the
+aligner, adapted) and `tools/vad_leadin.py` HA's VAD with and without the lead-in (build/ha-venv).
 `tools/` is PC-side reverse-engineering and firmware tooling (`payload_dump.py`, Thumb disassembly helpers,
 `davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator, `vol-curve.py`: an Android Echo's
-volume curve with a Dot's micRaw beside it, for `board.volume_curve`).
+volume curve with a Dot's micRaw beside it, for `board.volume_curve`; `cold-lead.py`: what a sound loses on a closed
+output, a PC microphone beside it, for `board.cold_lead_ms`).
 
 ## Conventions
 

@@ -25,6 +25,7 @@ int  dropin_ask(int set);                       /* "drop_in_answer": 0 connects 
 int  dropin_call(const char *target, char *err, size_t errsz);
 void dropin_hangup(const char *why);            /* ends whatever runs: a call, a ringing one, a call going out */
 int  dropin_button(void);                       /* the action button: answers a ringing call or ends one; 1 if it did */
+int  dropin_answer(void);                       /* the screen's Answer: a ringing call only (one answered meanwhile stays) */
 int  dropin_status(char *peer, size_t cap);     /* DROPIN_*; peer: the other Echo's node ("" when idle) */
 int  dropin_last(unsigned *attempt);            /* the last call's DROPIN_R_* (-1: none yet); attempt counts calls made */
 /* The capture thread: 16 kHz mono micAsr as it comes, while a call runs (muted: zeros).  own: the Echo plays a sound or

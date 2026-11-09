@@ -8,6 +8,8 @@ toolchain/
 build/
 .venv/
 testdata/*.wav
+testdata/corpus/.lock
+testdata/corpus/**/*.tmp
 kamakiri/
 boot-root/
 *.zip
@@ -17,6 +19,7 @@ secrets/
 xda_post.md
 __pycache__/
 *.pyc
+/kiosk-satellite-*.apk
 
-# Cube install archives and locally generated integrity files
+# Cube install archives
 dist/

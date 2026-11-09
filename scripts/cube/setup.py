@@ -21,11 +21,13 @@ def endpoint(value):
 def validate_bundle(path):
     with zipfile.ZipFile(path) as z:
         names=z.namelist()
-        if len(names)!=len(set(names)) or set(names)!=FILES|{'manifest.json'}:raise ValueError('Unexpected bundle contents')
+        if len(names)!=len(set(names)) or not FILES|{'manifest.json'} <= set(names):raise ValueError('Unexpected bundle contents')
+        extras=set(names)-FILES-{'manifest.json'}
+        if len(extras)>128 or any(not re.fullmatch(r'[a-zA-Z0-9_-]+\.wa[s]?',n) and n!='wakealign-LICENSE.txt' for n in extras):raise ValueError('Unexpected bundle resource')
         if any(i.file_size>32*1024*1024 for i in z.infolist()):raise ValueError('Bundle file too large')
         m=json.loads(z.read('manifest.json'))
-        if m.get('format')!=1 or m.get('device')!='gazelle' or set(m.get('files',{}))!=FILES:raise ValueError('Not a Cube Assist gazelle bundle')
-        content={name:z.read(name) for name in FILES}
+        if m.get('format')!=1 or m.get('device')!='gazelle' or set(m.get('files',{}))!=FILES|extras:raise ValueError('Not a Cube Assist gazelle bundle')
+        content={name:z.read(name) for name in FILES|extras}
         for name,data in content.items():
             if hashlib.sha256(data).hexdigest()!=m['files'][name]:raise ValueError('Checksum mismatch: '+name)
         if not content['hassmic'].startswith(b'\x7fELF') or not content['classes.dex'].startswith(b'dex\n'):raise ValueError('Invalid executable format')
@@ -111,7 +113,7 @@ def install(d,bundle,protocol='esphome',trial=False,preset=None):
         d.put((original+'\n').encode(),root+'/original-wake-setting')
         for name,data in files.items():
             dest=root+'/service.sh' if name=='service.sh' else root+'/current/'+name
-            d.put(data,dest,'700' if name!='classes.dex' else '600')
+            d.put(data,dest,'700' if name in ('hassmic','service.sh') else '600')
             if d.shell('sha256sum '+dest).split()[0]!=manifest['files'][name]:raise RuntimeError('Device checksum mismatch: '+name)
         d.put((protocol+'\n').encode(),root+'/protocol')
         if preset_data is not None:d.put(preset_data,root+'/state/preset')
@@ -163,7 +165,9 @@ def guide(d,protocol,interactive=True,trial=False):
     print(f'   Manual player address, if discovery fails: {d.host}:28928. The token is shown below and in HA’s disabled diagnostic entity.')
     print('4. Arbitration: Settings > Arbitration. Join your other EDA devices with the same key, or select the matching Kiosk mode.')
     print('5. With TV speech playing, say “Alexa, what time is it?” Check the bars, ducking, Cube reply and volume recovery.')
-    print('   TV power detection is deferred. All audio output currently uses the Cube speaker.')
+    print('   Choose Auto / Cube speaker / TV in HA or the Audio routing settings page.')
+    print('   Auto falls back to Cube when TV power is unknown. Check the detected state and active output.')
+    print('   Keep KS local Sendspin audio disabled when Assist supplies the same music.')
     if interactive:
         input('\nPress Enter after adding Home Assistant to continue. ')
     root=TRIAL if trial else ROOT

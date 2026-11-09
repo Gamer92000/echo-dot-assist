@@ -14,6 +14,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <time.h>
 
 static int all(int fd,void *buf,size_t n,int writing) {
     char *p=buf;
@@ -81,6 +82,8 @@ int name##_write(const void*d,size_t n){return write_stream(&name,d,n);} \
 long long name##_queued_us(void){return queued(&name);} \
 void name##_close(void){close_stream(&name,0);}
 STREAM_API(music) STREAM_API(bt) STREAM_API(voip)
+/* Direct AudioTrack playback-head accounting; no OpenSL prefill offset. */
+long long music_prime_us(void) { return 0; }
 void (*audio_earcon_started)(unsigned lead_ms);
 static int always(void){return 1;}
 void play_earcon(const short *p,size_t n,unsigned r){play_earcon_while(p,n,r,always);}
@@ -128,4 +131,37 @@ int cube_extra_duck(int value){
     char path[512],data[8];snprintf(path,sizeof path,"%s/extra-duck-db",home);
     if(value>=0&&value<=24){int n=snprintf(data,sizeof data,"%d\n",value);if(statefile_write(path,0600,data,n))return -1;}
     int v=0;FILE*f=fopen(path,"r");if(f){if(fscanf(f,"%d",&v)!=1||v<0||v>24)v=0;fclose(f);}return v;
+}
+
+/* Configuration is shared with the Java helper through atomic files, not slow IPC under core_lock. */
+const char *const cube_route_names[CUBE_ROUTE_SETTINGS]={"audio_output","cube_output_volume","tv_output_volume","music_duck_percent"};
+const char *const cube_output_modes[3]={"Auto","Cube speaker","TV"};
+int cube_route_setting(int field,int value){
+    if(field<0||field>=CUBE_ROUTE_SETTINGS)return -1;
+    const char *home=getenv("HASSMIC_STATE");if(!home)home="/data/local/cube-assist/state";
+    char path[512],data[16];snprintf(path,sizeof path,"%s/%s",home,cube_route_names[field]);
+    int max=field==CUBE_OUTPUT_MODE?2:100;
+    if(value>=0){if(value>max)return -1;int n=snprintf(data,sizeof data,"%d\n",value);if(statefile_write(path,0600,data,n))return -1;}
+    int fallback=field==CUBE_OUTPUT_MODE?0:field==CUBE_MUSIC_DUCK?17:100,v=fallback;
+    FILE*f=fopen(path,"r");if(f){if(fscanf(f,"%d",&v)!=1||v<0||v>max)v=fallback;fclose(f);}return v;
+}
+void cube_route_text(int field,char *out,unsigned cap){
+    const char *home=getenv("CUBE_ASSIST_HOME");if(!home)home="/data/local/cube-assist";
+    char path[512];const char *runtime=getenv("CUBE_ROUTING_STATUS");
+    if(runtime)snprintf(path,sizeof path,"%s",runtime);else snprintf(path,sizeof path,"%s/routing-status",home);
+    long long stamp=0;int state=0,active=0,selected=1,reason=4,source=0,valid=0;
+    FILE*f=fopen(path,"r");if(f){valid=fscanf(f,"%lld %d %d %d %d %d",&stamp,&state,&active,&selected,&reason,&source)==6;fclose(f);}
+    struct timespec t;clock_gettime(CLOCK_BOOTTIME,&t);long long now=(long long)t.tv_sec*1000+t.tv_nsec/1000000;
+    int fresh=valid&&stamp>0&&now>=stamp&&now-stamp<=5000;
+    const char *states[]={"Unknown","On","Off"};
+    const char *actual[]={"Idle","Cube speaker","TV","Switching / unconfirmed","Mixed outputs"};
+    const char *reasons[]={"None","TV state unknown; using Cube","HDMI unavailable; using Cube","HDMI routing failed; using Cube","TV detection stale; Auto uses Cube"};
+    const char *sources[]={"No reliable evidence","Fresh CEC power report","Verified HDMI receiver sense","HDMI disconnected"};
+    const char *value="Unknown";
+    if(field==0)value=fresh&&state>=0&&state<3?states[state]:"Unknown";
+    else if(field==1)value=fresh&&active>=0&&active<5?actual[active]:"Unconfirmed (status stale)";
+    else if(field==2)value=fresh&&reason>=0&&reason<5?reasons[reason]:reasons[4];
+    else if(field==3)value=fresh&&source>=0&&source<4?sources[source]:"Stale";
+    else if(field==4)value=fresh?(selected==2?"TV":"Cube speaker"):"Unknown";
+    snprintf(out,cap,"%s",value);
 }

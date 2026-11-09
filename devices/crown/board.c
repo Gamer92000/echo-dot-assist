@@ -12,6 +12,7 @@
 #define KSUI "/system/priv-app/KnightSystemUI/KnightSystemUI.apk"
 #define KSET "/system/priv-app/KnightSettings/KnightSettings.apk"
 #define COMM "/system/priv-app/com.amazon.comms.multimodaltachyonarm/com.amazon.comms.multimodaltachyonarm.apk"
+#define ALRM "/system/priv-app/com.amazon.alarms/com.amazon.alarms.apk"
 static const struct board_sound sounds[] = {
     { "state_privacy_mode_on", KSUI, "res/raw/kni_controls_privacy_mode_on.mp3" },
     { "state_privacy_mode_off", KSUI, "res/raw/kni_controls_privacy_mode_off.mp3" },
@@ -23,6 +24,9 @@ static const struct board_sound sounds[] = {
     { "comms_call_disconnected", COMM, "res/raw/ful_comms_call_disconnected.mp3" },
     { "comms_call_incoming_ringtone", COMM, "res/raw/ful_comms_call_incoming_ringtone.mp3" },
     { "comms_outbound_ringtone", COMM, "res/raw/ful_comms_outbound_ringtone.mp3" },
+    /* the timer's and the alarm's, as the Dots' (issue #63; verify: in checkers' and athena's alarms app, not looked for in this firmware) */
+    { "system_alerts_melodic_02", ALRM, "res/raw/system_alerts_melodic_02.mp3" },
+    { "system_alerts_melodic_01", ALRM, "res/raw/system_alerts_melodic_01.mp3" },
     { NULL, NULL, NULL },
 };
 
@@ -30,6 +34,8 @@ const struct board board = {
     .model = "Echo Show 8 (crown)",
     .project = "hassmic.echo-show-8",
     .product = "Echo Show 8 (hassmic)",
+    .kiosk = 1,
+    .backlight = 1,
     .default_name = "Echo Show 8",                                 /* + MAC: "Echo Show 8 5695c4"; slug = the project's model */
     .codename = "crown",
 
@@ -62,6 +68,8 @@ const struct board board = {
      * /data/als_cal_data.bin, ir switches ALS off until a reboot (docs/re-checkers.md; the same driver on crown, docs/re-crown.md). */
     .light_sensor = { "/sys/bus/platform/drivers/als_ps/lux" },
     .volume_steps = 100,                                            /* the light band (ring_band.c) shows the level in % */
+    /* volume curve not measured on this model yet: the Echo Dot 2's stands in (devices/README.md: how to measure) */
+    .volume_curve = board_vol_dot2,
     /* Realtek RT5616: its line out feeds the speaker amplifier.  0..39 = -46.5..+12 dB, 1.5 dB a step (the kernel's
      * tables); the HAL's initial settings in /system/etc/audio_device.xml set 30, -1.5 dB (the Echo Show 8 reads 30 30
      * from tinymix, 2026-10-13); verify that nothing writes it later */

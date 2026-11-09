@@ -29,18 +29,20 @@ rules. `DEVICE` picks one (default `donut`). The adb scripts check it against th
 | Path | What |
 |---|---|
 | `devices/` | one directory per Echo model (`donut`, `biscuit`, `radar`): `device.mk`, `board.c`, `device.conf`, `hassmic.rc`, `sepolicy.rules`, `setup.sh`, install instructions |
-| `src/hassmic/` | the daemon: core (capture, wake word, playback, LEDs, buttons), `sound_pryon.c` (optional sound detection, `docs/re-aed.md`), `whisper_pryon.c` (whisper detection with Amazon's model, `docs/re-whisper.md`), `proto_esphome.c`, `proto_wyoming.c`, `arb.c` (wake word arbitration between Echos), `dropin.c` (Drop In: calls between Echos of the arbitration network), `settings.c` (settings by name, `state/config`), `web.c` (the settings page; its files in `web/`), `artifacts.c` (models copied between Echos by the page), `davs.c` (models downloaded from Amazon by the page, with `dha.c` for the device attestation its login needs, `docs/re-davs-login.md`), `earsup.c` (experimental: our own wake sound taken back out of the mic audio sent to the pipeline), `micdenoise.c` (RNNoise on the mic audio sent to the pipeline), `micgain.c` (gain of the mic audio sent to the pipeline), `sendspin.c`, `a2dp.c` (Bluetooth speaker both ways), `btout.c` (playing on a Bluetooth speaker: the mixer's A2DP route, `docs/re-a2dp-source.md`), `ble.c`, push updates (`ota.c`), online updates (`update.c`), `adbwifi.c` (the debug access switch), `improv.c` (setup from a phone: Improv Wi-Fi over `ble.c`'s peripheral role), `netaddr.c` (a new IP address: links over the old one closed, mDNS announced again until Home Assistant is back), `wifimotion.c` (experimental motion sensor from the Wi-Fi driver's receive level), `wake.c` (picks the wake word engine by the model: `wake_pryon.c`, or `wake_mww.c` = microWakeWord with `mww_features.c` (its audio front end), `mww_model.c` (its int8 .tflite models) and `mww_store.c` (its models in `state/mww`, managed by the page)) |
+| `src/hassmic/` | the daemon: core (capture, wake word, playback, LEDs, buttons), `sound_pryon.c` (optional sound detection, `docs/re-aed.md`), `whisper_pryon.c` (whisper detection with Amazon's model, `docs/re-whisper.md`), `proto_esphome.c`, `proto_wyoming.c`, `arb.c` (wake word arbitration between Echos), `dropin.c` (Drop In: calls between Echos of the arbitration network), `settings.c` (settings by name, `state/config`), `web.c` (the settings page; its files in `web/`), `artifacts.c` (models copied between Echos by the page), `davs.c` (models downloaded from Amazon by the page, with `dha.c` for the device attestation its login needs, `docs/re-davs-login.md`), `earsup.c` (experimental: our own wake sound taken back out of the mic audio sent to the pipeline), `micdenoise.c` (RNNoise on the mic audio sent to the pipeline), `micgain.c` (gain of the mic audio sent to the pipeline), `wakealign.c` (where the wake word ends: its phones aligned with a cut-down Montreal Forced Aligner model, `tools/wakealign/`), `wordtail.c` (the same by the level, without a model), `micend.c` (experimental: the end of a request heard on the Echo, by the talker's level and Amazon's VAD), `afemeta.c` (the front end's record in the micAsr samples' lowest bits, `docs/re-vad.md`), `sendspin.c` (kept in sync by a rate of its own: `resample.c`), `mass.c` (Music Assistant's own API for the screen's music pages, `json.c` reads it), `a2dp.c` (Bluetooth speaker both ways), `btout.c` (playing on a Bluetooth speaker: the mixer's A2DP route, `docs/re-a2dp-source.md`), `ble.c`, push updates (`ota.c`), online updates (`update.c`), `adbwifi.c` (the debug access switch), `improv.c` (setup from a phone: Improv Wi-Fi over `ble.c`'s peripheral role), `netaddr.c` (a new IP address: links over the old one closed, mDNS announced again until Home Assistant is back), `wifimotion.c` (experimental motion sensor from the Wi-Fi driver's receive level), `wake.c` (picks the wake word engine by the model: `wake_pryon.c`, or `wake_mww.c` = microWakeWord with `mww_features.c` (its audio front end), `mww_model.c` (its int8 .tflite models) and `mww_store.c` (its models in `state/mww`, managed by the page)) |
+| `src/ui/` | the Echo Show's screen UI, a process of its own (hassmic's `screen.c` starts it; `ui.h` lists the parts): `scene.c` (display list diffed per frame into one dirty rectangle, caches, touches, scrolling), `widgets.c` (icons, buttons, sliders, keyboard), `face.c`, `drawer.c` (pulled from the top edge: home, music, DND, apps), `music.c` (Music Assistant: playing, queue, library, search, speakers), `words.c` (what was said, the reply and the timers on a see-through layer of their own), `gfx.c` (anti-aliased drawing into the gralloc buffer), `android.c` (libhmui.so: JNI for the layers, text, images, apps, the screenshot; loaded by `scripts/device/screen.dex`, `tools/mkscreen.py`), `touch.c` (the touchscreen's evdev node, protocol B; `tests/unit/touch_test.c`); `tools/uishot.c` draws every view on the PC |
 | `src/kmod/` | kernel modules for Wi-Fi motion, hooking the Wi-Fi driver's receive path: `hassmic_rcpi.c` (biscuit, radar), `hassmic_rcpi4m.c` (donut, and checkers as 32-bit ARM); built by `make` when the model's kernel sources and compiler are in `toolchain/`, see below |
 | `src/tools/` | `mixcap`, `mixplay`, `pryon_test`, `aed_test` (stock sound detector, `docs/re-aed.md`), `whisper_test` (whisper detector, `docs/re-whisper.md`), `latency`, `otatool`, `runas` (AIPC refuses uid 0, the image has no `su`), `curlspy`, `hciscan` (raw HCI on `/dev/stpbt`), `a2dpprobe` (stands in for the Bluetooth stack on the mixer's A2DP output) |
 | `src/include/` | C headers for the reversed `libmixerAPI.so` and `libpryon.so` |
+| `wakealign/` | the wake word aligners (`src/hassmic/wakealign.c`), cut out of the Montreal Forced Aligner's models: CC BY 4.0, credited in its README |
 | `src/third_party/` | monocypher 4.0.2, `dr_flac.h`, `minimp3.h`, libfreeaptx 0.2.2, RNNoise 0.1.1 (own licences, see README) |
- `scripts/` | PC side: `setup.sh` (guided install), `artifacts.sh` (Amazon artifacts for an installed Echo: more wake words, the whisper detection model, the newest sound detection model; the old way through the Alexa app, a fallback to the settings page's "Download from Amazon"), `deploy.sh`, `probe.sh`, `capture-test.sh`, `mic-compare.sh` (micRaw against micAsr on a running Echo), `wifi-join.sh`, `install-system.sh`, `ota-push.sh`, `bundle.sh` (packs and signs an update; also CI's), `otatool.py` (bundles on the PC: keys, signing, checking, pushing; the Echo's own is `src/tools/otatool.c`), `mkbootroot.py` (a root `boot.img` from the model's stock one: checkers'), `adb-wifi.sh` (adb over Wi-Fi with the update key); `lib/device.sh` picks the model, `lib/build.sh` builds the Echo's binaries or takes the commit's release build, `lib/setup.sh` has the guided setup's helpers, `lib/artifacts.sh` the logic of `artifacts.sh` |)
+ `scripts/` | PC side: `setup.sh` (guided install), `artifacts.sh` (Amazon artifacts for an installed Echo: more wake words, the whisper detection model, the newest sound detection model; the old way through the Alexa app, a fallback to the settings page's "Download from Amazon"), `deploy.sh`, `probe.sh`, `capture-test.sh`, `mic-compare.sh` (micRaw against micAsr on a running Echo), `wifi-join.sh`, `install-system.sh`, `ota-push.sh`, `bundle.sh` (packs and signs an update; also CI's), `otatool.py` (bundles on the PC: keys, signing, checking, pushing; the Echo's own is `src/tools/otatool.c`), `mkbootroot.py` (a root `boot.img` from the model's stock one: checkers'), `adb-wifi.sh` (adb over Wi-Fi with the update key), `kiosk-install.sh` (Kiosk Satellite on an installed Show); `lib/device.sh` picks the model, `lib/build.sh` builds the Echo's binaries or takes the commit's release build, `lib/setup.sh` has the guided setup's helpers, `lib/twrp.sh` the Echo Shows' wipe in TWRP (setup's and `install-boot.sh --uninstall`'s), `lib/artifacts.sh` the logic of `artifacts.sh`, `lib/kiosk.sh` and `lib/apkcert.py` fetch and check Kiosk Satellite |)
 | `scripts/device/`, `scripts/system/` | run on the Echo, reading the model's `device.conf` next to them; boot integration (`boot.sh`, `main.sh`) |
-| `tools/` | `mkstubs.sh` (stand-ins for the stock libraries, for building without the firmware), OTA payload dumper, Thumb disassembly helpers, `qrun.sh` (device binaries under qemu-arm; a `toolchain/qemu-arm` serves too), `dexasm.py` (a Dalvik assembler, writer, reader and type check, and a check against the firmware's own framework, for our hand-made dex files: no javac or d8 here), `mkwifictl.py` (assembles `scripts/device/wifictl.dex`, checkers' way into WifiService), `mkringbar.py` (`scripts/device/ringbar.dex`, checkers' light band on the screen), `davs-fetch.py` |
+| `tools/` | `mkstubs.sh` (stand-ins for the stock libraries, for building without the firmware), `wakealign/` (the wake word aligners from the Montreal Forced Aligner's models: `build.sh` -> `wakealign/<word>-<locale>.wa` and a `<model>.was` per acoustic model, needs MFA's env), `speechcorpus/` (a speech corpus of designed voices: "Speech corpus" below), OTA payload dumper, Thumb disassembly helpers, `qrun.sh` (device binaries under qemu-arm; a `toolchain/qemu-arm` serves too), `dexasm.py` (a Dalvik assembler, writer, reader and type check, and a check against the firmware's own framework, for our hand-made dex files: no javac or d8 here), `mkwifictl.py` (assembles `scripts/device/wifictl.dex`, checkers' way into WifiService), `mkringbar.py` (`scripts/device/ringbar.dex`, checkers' light band on the screen), `davs-fetch.py` |
 | `docs/` | user guide (`GUIDE.md`), security model (`SECURITY.md`), reverse-engineering notes; `img/src/*.typ` are the README figures (Typst + CeTZ), `tools/figures.sh` renders them to `img/*-light.svg` / `*-dark.svg` |
 | `tests/` | protocol tests against the reference implementations |
 | `blueprints/` | Home Assistant blueprints for features that need an automation (`automation/drop_in.yaml`: Drop In by voice) |
-| `keys/` | `release.pub`: the key online updates are signed with (CI and releases, below) |
+| `keys/` | `release.pub`: the key online updates are signed with; `release.conf`: that key and the repository whose releases they are (CI and releases, below) |
 | `.github/workflows/` | `build.yml`: builds, tests, betas and releases |
 
 ## Build and test
@@ -58,13 +60,15 @@ make unit                                         # C unit tests; microWakeWord 
                                                  # the Drop In blueprint (blueprint_dropin.py); one target each (make
                                                  # unit-<name>, UNIT_TESTS), so make -j unit runs them at once
 .venv/bin/python tests/run.py [-j N] [name ...]  # every PC test below at once (CI), each in a network namespace of its own
-                                                 # (unshare -rn); logs of those that fail, all in build/test-logs/
+                                                 # (unshare -rn); logs of those that fail, all in build/test-logs/;
+                                                 # one that failed with the others runs again alone: passing then, it is
+                                                 # flaky (a warning, <name>.first.log), not a failure; --strict: no reruns
 .venv/bin/python tests/blueprint_dropin.py        # the Drop In blueprint against stand-ins of Home Assistant's registries,
                                                  # states, actions and template engine (also in make unit)
 .venv/bin/python tests/fake_ha_esphome.py         # ESPHome native API, as Home Assistant (aioesphomeapi): entities,
                                                  # settings, voice assistant, replies, announcements (HTTP, HTTPS)
-.venv/bin/python tests/fake_ha_esphome_timers.py  # the same API: timers, encryption, clock and zone, noise reduction, LEDs,
-                                                 # light sensor
+.venv/bin/python tests/fake_ha_esphome_timers.py  # the same API: timers (ringing, and the next one running), encryption,
+                                                 # clock and zone, noise reduction, LEDs, light sensor
 .venv/bin/python tests/fake_ha_esphome_features.py  # sound detection (3 s windows: HASSMIC_FAKE_SOUND_WINDOW), Wi-Fi motion
 .venv/bin/python tests/fake_ha_esphome_buttons.py   # runs cancelled while HA thinks or streams; the "Button" event entity
 .venv/bin/python tests/fake_ha_esphome_address.py   # a new address: links closed, mDNS announced again (netaddr.c)
@@ -90,8 +94,13 @@ make unit                                         # C unit tests; microWakeWord 
                                                  # server strict: a deviation it would only log closes the connection
 .venv/bin/python tests/fake_ma_sendspin.py --legacy  # the same as Music Assistant up to 2.10.6 (aiosendspin 9.1.1, the draft before
                                                  # 1.0) from build/aiosendspin-9.1.1, which --setup makes (tests/run.py does)
+.venv/bin/python tests/fake_ha_wakealign.py       # the wake word's end by the aligner: file per language, too slow or busy
+                                                 # by the level, speaker adaptation in use and saved
 .venv/bin/python tests/fake_ha_stop_word.py       # "<wake word>, stop" between two Echos: a dropped run cancelled, the setting
                                                  # stop_ends_listening off and on (the round, listening, thinking, 4 s)
+.venv/bin/python tests/fake_ma_api.py             # Music Assistant's API for the screen (mass.c) against a stand-in server
+.venv/bin/python tests/fake_screen.py             # the Echo Show's screen: what hassmic tells its UI (build/hassmic-host-screen,
+                                                  # a stand-in UI), Sendspin's metadata and artwork, the band, restarts
 tests/ota_push_test.sh                            # signed push-update path end to end
 tests/otatool_test.sh                             # the PC's otatool (Python) against the Echo's (C)
 .venv/bin/python tests/fake_ha_update.py          # online updates: Home Assistant, GitHub and root's installer in one
@@ -99,10 +108,14 @@ tests/otatool_test.sh                             # the PC's otatool (Python) ag
 .venv/bin/python tests/fake_ha_volumes.py         # separate volumes: four of their own or following the music, media, keys,
                                                  # restart, Bluetooth speaker, page, exports, against the mixer's volumes as
                                                  # files (HASSMIC_FAKE_MIXER, HASSMIC_FAKE_SPEAKER)
+.venv/bin/python tests/fake_ha_timer_sound.py     # the timer's sound: stock's tone (a stand-in) by default, looped and cut
+                                                 # off, the beep at its level, uploads as the page makes them, Play, delete,
+                                                 # a restart (the page's loudness check: tests/unit/web_loudness_test.py)
 .venv/bin/python tests/fake_ha_ring.py            # the light ring: the animation set hassmic -G makes, Home Assistant's light,
                                                  # the Echo's own patterns first, the listening ring turned by the beam
 .venv/bin/python tests/fake_improv.py             # setup from a phone (Improv over BLE) on a fake Bluetooth controller,
                                                  # Wi-Fi through root's wifi.sh, adoption, factory reset
+.venv/bin/python tests/fake_ha_bt_proxy.py        # the Bluetooth proxy switched off and on (issue #152) on that controller
 ```
 
 `tools/qrun.sh [-t secs] <arm-binary> args` runs a device binary on the PC under qemu-arm against
@@ -148,6 +161,29 @@ the arithmetic is RFC 8032's. The Echo keeps the C `otatool` (`src/tools/otatool
 there, so the two are held to each other: `tests/otatool_test.sh` (signatures byte for byte, each one's bundles
 installed by the other), and CI checks every bundle it signs with both before it publishes.
 
+### Speech corpus
+
+For measurements and fixtures with speech in them (the wake word's end, `wakealign.h`; requests cut or held up),
+`testdata/corpus/` has 7393 clips, 4.3 h of speech (500 MB, in Git LFS: `git lfs pull --include "testdata/corpus/**"`
+fetches them; CI does not), made 2026-10-29 by `tools/speechcorpus/run.sh [OUT]` (about 1.5 h on a 16 GB GPU). 30
+voices designed by OmniVoice from a description (gender, age, pitch, whisper, English accents; nobody's voice cloned),
+German, English, French, Spanish, some voices in a second language. Each says the 8 wake words with commands (with a
+comma and without), the wake word alone, "<wake word>, stop" and each command alone; `align.py` adds clips of the wake
+word and the command joined by pauses of known length, which OmniVoice hardly makes by itself. Every clip is checked
+by speech to text (canary-1b-v2; `verify.py` says what it lets through: 7110 pass) and has its words' times from the
+Montreal Forced Aligner, the ground truth. One line per clip in `manifest.jsonl` (`testdata/corpus/README.md` lists
+the fields). Licence: CC BY-NC, as OmniVoice's model, not MIT (the README says why); a fixture cut from it carries
+that along (`testdata/alexa_omnivoice.raw`).
+Measured on it: `tools/wakealign/corpus_eval.py` (where the replay after the wake word starts: stock Pryon under qemu,
+the release's rule, the aligner alone and adapted, against MFA's times; results in `build/corpus-eval/`) and
+`build/ha-venv/bin/python tools/vad_leadin.py` (Home Assistant's own VAD on the commands, with and without the lead-in);
+with `--publish docs/wake-word-end` both write their tables there, described in `docs/wake-word-end.md`.
+
+Making it again needs OmniVoice in `toolchain/omnivoice/venv` (`uv venv -p 3.11`, then `uv pip install
+omnivoice==0.2.1 torch==2.9.1 torchaudio==2.9.1 transformers==5.16.1 num2words`; weights k2-fsa/OmniVoice in
+`toolchain/omnivoice/hf`), MFA 3.4.3 in `toolchain/mfa/` (micromamba env `env`, models in
+`mfa_root/pretrained_models`) and a canary Wyoming server (`verify.py`'s `STT`, the host it reaches).
+
 ## CI and releases
 
 `.github/workflows/build.yml` builds every model, runs the PC tests and publishes the update bundles that online
@@ -162,6 +198,11 @@ A beta is published only when it brings the Echos something: each bundle goes ou
 hashed; builds repeat byte for byte, so a commit that changes only CI, tests or the docs gives the same IDs), and when every
 model's ID equals the newest release's, `main` publishes nothing. Its commits then show in the next beta's notes. A push
 to `release` always publishes.
+
+The release job packs the bundles again from the build jobs' artifacts, signed with the release key, and stops unless each
+is byte for byte the bundle its build job packed and checked (`<codename>.bundle-sha256`; the signature is a file of its
+own, so the key does not change the bundle): `bundle.sh` leaves out what it does not find, and a file missing from the
+artifact's list would otherwise go out without a word.
 
 The version is the commit's time in UTC, `2026.10.02.091530` (`make version`): nothing to bump. Home Assistant
 compares these as calendar versions, so newer is newer across both channels, and a commit published as beta and then
@@ -199,6 +240,30 @@ What the key does not cover, on purpose: root accepts a release-signed bundle th
 updates" is set to (the setting is enforced by hassmic, which only downloads with a channel picked), and an older one
 as well as a newer one (switching from beta back to release relies on that). So a hassmic taken over through the
 network could put an older release back; it could not install code of its own.
+
+**Releases from a fork.** A fork's CI cannot sign with this project's key, so a fork that publishes builds of its own
+signs them with its own key, and its Echos then look for updates in the fork. `keys/release.conf` names the repository
+(`UPDATE_REPO`, compiled into `update.c`, and where `scripts/lib/build.sh` takes prebuilt binaries from) and the key
+(`RELEASE_PUB`, in every bundle and install as `release.pub`); a fork sets both in `secrets/fork.conf`, outside git, so
+its tree stays this one and its branches make pull requests here like any other. Once, on the PC, as an admin of the
+fork:
+
+```sh
+scripts/fork-release.sh me/fork      # key pair and secrets/fork.conf; on GitHub (gh): environment release, its secret, a variable
+```
+
+It makes `secrets/release.key` and `.pub`, and on GitHub the environment `release` (`main` and `release` only) with
+the secret `RELEASE_SIGNING_KEY`, plus the repository variable `RELEASE_PUBLIC_KEY` (the public half, which the build
+jobs need too: they pack the bundles). An environment the fork has already is kept as it is when it admits only chosen
+branches or protected ones, and refused, before anything is written, when it admits every branch (by its setting or a
+pattern like `**`). In CI, `scripts/fork-release.sh ci` writes `secrets/fork.conf` from that variable
+and the repository the workflow runs in; without the variable (this project) it does nothing. Then allow the fork's
+workflows (off in a fork until someone does), protect `main` and `release`, push a commit of your own to `main` (the
+script changes nothing in git; a commit whose tag the fork took from this project is not published again, and a manual
+run never publishes), and put each Echo on a build of the fork once from the PC (`scripts/ota-push.sh` or
+`scripts/setup.sh`): that brings it the fork's key. Back up `secrets/`. A fork without `secrets/fork.conf` builds what
+this project builds, byte for byte, and its Echos take this project's updates. `tests/unit/fork_release_test.sh` runs
+the script against a stand-in `gh`.
 
 **Trying the workflow locally** with [nektos/act](https://github.com/nektos/act): the publishing step only says what it
 would publish under act. The toolchains go on a volume: unpacked inside the job containers (3 GB), act times out
@@ -240,16 +305,21 @@ expires within minutes. Found by preloading `src/tools/curlspy.c` into the stock
 
 ## Contributing
 
-- Each model is supported on exactly one firmware (`FIRMWARE_ID` in its `device.conf`; `donut`: 6574.1). `scripts/probe.sh`
-  checks the device matches, and `install-system.sh` refuses another one.
+- Each model is built for exactly one firmware (`FIRMWARE_ID` in its `device.conf`; `donut`: 6574.1). `scripts/probe.sh`
+  compares the Echo's `PROBE_FILES` with it (the libraries with reverse-engineered interfaces and the audio path; not
+  libopus, libz or what is dlopen'd, whose ABIs are public). Another build, by `install-system.sh`
+  (`device_check_firmware`) and the setup: `INSTALL=boot` never (its boot.img is the pinned build's); `twrp-ab` when
+  every probed file is the same, else refused (the firmware step puts the pinned build back); `running` (athena) when
+  they are the same, else after a question.
 - No model `#ifdef`s in shared code: a new difference becomes a `struct board` field, a `device.conf` variable or a
   backend (see [devices/README.md](devices/README.md)).
 - Feature commits update [CHANGELOG.md](CHANGELOG.md) (user-facing, dated, plain language), [PLAN.md](PLAN.md) (status,
   measurements) and [docs/GUIDE.md](docs/GUIDE.md) when behaviour visible to users changes. The README stays short:
   a row in its table or a figure (`tools/figures.sh` after editing `docs/img/src/`), the detail in the guide.
 - Code comments explain *why*, with device facts and measurements.
-- Every listening port must stay in TCP/UDP 16384–32767: the Echo's firewall admits nothing else inbound. The one
-  exception is Kiosk Satellite's fixed UDP 2330, admitted by `lockdown.sh` only while `arbitration_mode=kiosk`.
+- Every listening port must stay in TCP/UDP 16384–32767: the Echo's firewall admits nothing else inbound. The
+  exceptions are Kiosk Satellite's fixed UDP 2330, admitted by `lockdown.sh` only while `arbitration_mode=kiosk`, and, on
+  the screen models with `KIOSK_PACKAGE`, the app's own TCP 2324 and 6053 from private addresses while it is installed (they are the app's ports, not hassmic's).
 - Proprietary, derived or secret material stays out of git (git-ignored): `firmware/` (per model: stock
   image, unpacked rootfs, unlock zips, `re/` disassembly), `toolchain/`, `build/`, `device-logs/`, `secrets/` (`wifi.conf`, `update.key`, `release.key`), `*.bin`, `*.zip`.
 - Third-party code in `src/third_party/` keeps its own licence.

@@ -15,6 +15,7 @@
  *
  * Default ports 26053 (ESPHome) and 16700 (Wyoming): the stock firewall only admits inbound TCP 16384-32767.
  */
+#define _GNU_SOURCE                     /* pipe2 on glibc (the PC builds) */
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -24,6 +25,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
+#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -34,6 +36,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #ifdef __ANDROID__
 #include <sys/system_properties.h>
 #endif
@@ -49,11 +52,16 @@
 #include "ring.h"
 #include "ringdesign.h"
 #include "ledq.h"
+#include "screen.h"
 #include "davs.h"
 #include "dropin.h"
 #include "micdenoise.h"
 #include "earsup.h"
+#include "afemeta.h"
+#include "micend.h"
 #include "micgain.h"
+#include "wordtail.h"
+#include "wakealign.h"
 #include "netaddr.h"
 #include "netio.h"
 #include "lux.h"
@@ -75,10 +83,13 @@
 #define TTS_RATE         22050      /* assumed when audio-start carries no rate */
 
 static const char *const state_names[] = { "idle", "listening", "thinking", "speaking" };
-static int use_led = 1, use_earcon = 1, use_volume = 1, use_bt_announce = 1, use_bt = 1;
+static int use_led = 1, use_earcon = 1, no_earcons, use_volume = 1, use_bt_announce = 1, use_bt = 1;
+static unsigned sounds_off;               /* bit per sound: its own switch on the Sounds card; SND_WAKE's is use_earcon */
 static atomic_int sounds_pending;
 static void sound_queue(enum sound s) { atomic_fetch_or(&sounds_pending, 1 << s); }                          /* played by the earcon thread */
-static void sound_request(enum sound s) { if (use_earcon) sound_queue(s); }
+/* The sounds with a switch.  Not Identify or Drop In's: the one was asked for, the others say a microphone is open to
+ * someone else; nor what only borrows a Bluetooth sound (web_approved, improv_authorized, arb_paired): those call sound_queue */
+static void sound_request(enum sound s) { if (!no_earcons && (s == SND_WAKE ? use_earcon : !(sounds_off >> s & 1))) sound_queue(s); }
 
 const char *core_name;                  /* name_make(), or -n (the PC) */
 
@@ -219,6 +230,7 @@ static const struct proto *proto = &proto_esphome;
 
 pthread_mutex_t core_lock = PTHREAD_MUTEX_INITIALIZER;
 static int connected, satellite_running;
+static int link_paused;                 /* lock held: Home Assistant told the satellite to pause (core_link_pause) */
 static enum state state;
 static time_t state_since;
 static atomic_int streaming, trigger_pending, button_pending, pair_pending, stop_pending, quit;
@@ -237,16 +249,31 @@ static int barge_in;                                /* under lock: start a new p
                                                       * (wake word during a reply, or the server asked to continue the conversation) */
 static uint64_t barge_from;                         /* under lock: where that wake word ended (ring samples), 0: no wake word */
 static uint64_t replay_from;                        /* under lock: the pipeline just started from a wake word that ended
-                                                      * here; the capture thread sends the ring from there ahead of the live
-                                                      * stream (stream_ring).  0: nothing to send */
+                                                      * here; the capture thread sends the ring from the end of the word's
+                                                      * tail (word_tail_end) ahead of the live stream, which waits until
+                                                      * that is known (stream_ring).  0: nothing to send */
 static struct micgain mic_gain;                     /* under lock: gain of what the pipeline hears (micgain.h) */
 static int mic_fresh;                               /* under lock: a pipeline started, the gain has not seen it yet */
 static float keyword_db = 1;                        /* under lock: rms of the last wake word, dBFS */
+/* Setting wake_word_in_request: the request's audio starts at the wake word, not after it.  Off by default: Home
+ * Assistant's own sentences ("turn on the light") do not take "Alexa, turn on the light"; an LLM agent does, and
+ * speech-to-text gets the whole utterance (nothing of the command cut, no stray end of the word: issue #72) */
+static int wake_in_request;                         /* under lock */
+static uint64_t kw_begin, kw_end;                   /* under lock: the last wake word heard, ring samples (wake engine's) */
+static int kw_slot;                                 /* under lock: its slot (wake_align) */
+static int replay_whole;                            /* under lock: this pipeline's replay starts at kw_begin */
+static uint64_t talker_from;                        /* under lock: where the command starts (the word's tail end), micend */
+static struct micend mic_end;                       /* under lock: the end of the request heard here (micend.h) */
+static int end_mode;                                /* under lock: setting end_of_request, MICEND_* */
 static int mic_denoise;                             /* under lock: noise reduction ahead of the gain (micdenoise.h):
                                                       * 0 off, 1 low, 2 medium, 3 high */
 static long long denoise_ns; static unsigned denoise_frames;   /* under lock: its cost in the running pipeline */
 static atomic_int earcon_sounding;                  /* one of our sounds plays ... */
 static atomic_llong earcon_heard_until;             /* ... and is still in the mic stream until then (mono_ms) */
+/* the last ones as spans of the capture clock in the mic stream (to: LLONG_MAX while it plays), one sound starting
+ * inside the last one's tail going on in its span: a held volume key takes one */
+static struct { atomic_llong from, to; } sound_spans[8];
+static int sound_span, sound_taken;                 /* earcon thread: the newest, the mixer took it */
 static atomic_int sounds_q16 = 65536, timers_q16 = 65536;  /* our sounds' and timers' gain, 1 = 65536 (separate volumes) */
 /* the volume keys' tone: at the volume they just set, as stock's (on_volume).  At the sounds' own it said nothing of the
  * step: with nothing playing the keys seemed to do nothing */
@@ -258,13 +285,28 @@ static atomic_int click_q16 = 65536;
  * (net.c); a shell would make it the effective group, and AIPC and the mixer refuse that. */
 static void child_ids(void) { gid_t e = getegid(); setregid(e, e); }
 
+/* execv, and a script without "#!" through the shell, as a shell runs it: execv alone fails with ENOEXEC.  Android 7's
+ * /system/bin/settings and pm are such ("# Script to start ..."; checkers, crown, cronos, cupcake; athena's Android 9
+ * ones and every am have "#!"): the band's `settings put system screen_off_timeout` had never been made there (seen
+ * on an Echo Show 5, 2026-11-02).  In the child: no allocation; an argv too long for the copy is not run cut short */
+static void exec_any(char *const argv[])
+{
+    execv(argv[0], argv);
+    if (errno != ENOEXEC) return;
+    char *a[34]; int n = 0;
+    a[n++] = "/system/bin/sh";
+    for (int i = 0; argv[i]; i++) { if (n == 33) return; a[n++] = argv[i]; }
+    a[n] = NULL;
+    execv(a[0], a);
+}
+
 static void run_argv(char *const argv[])
 {
     if (fork() == 0) {                  /* bionic API 24 has no posix_spawn; SIGCHLD is ignored: no zombie */
         child_ids();
         int nul = open("/dev/null", O_WRONLY);          /* ledctrl and audio_manager_set_prop chat on stdout: two log lines */
         if (nul >= 0) dup2(nul, 1);                     /* per LED change otherwise.  Errors (stderr) still reach the log */
-        execv(argv[0], argv);
+        exec_any(argv);
         _exit(127);
     }
 }
@@ -277,19 +319,59 @@ static void run_output(char *const argv[], char *buf, size_t n)
 {
     int p[2]; size_t len = 0; ssize_t r;
     buf[0] = 0;
-    if (pipe(p)) return;
-    if (fork() == 0) {                  /* not popen: its shell would undo child_ids() */
+    /* close-on-exec from the start (pipe2: no window for another thread's fork): every child forked meanwhile
+     * (run_argv's, ledq's ledctrl, artifacts' pryon_test, another run_output's) held the write end as long as it ran,
+     * and this read waited for it too.  dup2 onto 1 below clears the flag for this child alone.  The band's renderer
+     * and the screen UI close all but their own pipes before exec */
+    if (pipe2(p, O_CLOEXEC)) return;
+    pid_t pid = fork();
+    if (pid == 0) {                     /* not popen: its shell would undo child_ids() */
+        setpgid(0, 0);                  /* a group of its own, for the kill below */
         child_ids();
-        int nul = open("/dev/null", O_WRONLY);
-        dup2(p[1], 1); if (nul >= 0) dup2(nul, 2);
-        close(p[0]); close(p[1]);
-        execv(argv[0], argv);
+        /* errors (stderr) reach the log, as run_argv's do.  A pipe end that is 1 itself (only with stdout closed at
+         * start) keeps its close-on-exec through dup2: cleared by hand */
+        if (p[1] == 1) fcntl(1, F_SETFD, 0); else dup2(p[1], 1);
+        exec_any(argv);
+        /* the log says it could not; write() only: the child of a threaded process may take no lock (snprintf,
+         * strerror) that another thread held at the fork */
+        ssize_t w = write(2, "run: ", 5); w = write(2, argv[0], strlen(argv[0])); w = write(2, ": cannot be run\n", 16); (void)w;
         _exit(127);
     }
     close(p[1]);
-    while (len + 1 < n && ((r = read(p[0], buf + len, n - 1 - len)) > 0 || (r < 0 && errno == EINTR))) if (r > 0) len += (size_t)r;
+    if (pid < 0) { fprintf(stderr, "run: %s: no fork (%s)\n", argv[0], strerror(errno)); close(p[0]); return; }
+    /* 20 s at most per tool, whatever it does: the callers are threads that must go on (volume, the front end's
+     * scores, Amazon's login); one that runs several waits for each */
+    struct timespec t0; clock_gettime(CLOCK_MONOTONIC, &t0);
+    int late = 0;
+    for (;;) {
+        struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+        int left = 20000 - (int)((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000);
+        struct pollfd pf = { p[0], POLLIN, 0 };
+        if (len + 1 >= n) break;        /* cut: what it writes on fails with EPIPE (SIGPIPE is ignored, here and so in
+                                           it); it ends as it would, and only a hang is killed */
+        if (left <= 0) { late = 1; break; }
+        int k = poll(&pf, 1, left);
+        if (k < 0 && errno == EINTR) continue;
+        if (k == 0) { late = 1; break; }
+        if (k < 0) break;
+        r = read(p[0], buf + len, n - 1 - len);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) break;
+        len += (size_t)r;
+    }
     buf[len] = 0;
     close(p[0]);                        /* SIGCHLD is ignored: nothing to wait for */
+    /* A tool that hangs would stay for good, one more each call: its process group goes, with what it started (sh -c's
+     * lipc tools: afe_arbitration, each wake word round).  By pid, safely: while a group has a member Linux gives its
+     * number to no new process, and an empty one is ESRCH.  Where setpgid was refused there is no such group: then the
+     * child alone, and only while waitpid says it is ours and running (SIGCHLD is ignored: one that ended is gone at
+     * once, its pid free for anyone, a thread of ours too).  Left: a pid taken again in the instant between waitpid
+     * and kill, and a tool still hanging when hassmic stops (its own group: init's stop misses it) */
+    if (late) {
+        int st, stopped = kill(-pid, SIGKILL) == 0;
+        if (!stopped && waitpid(pid, &st, WNOHANG) == 0) stopped = kill(pid, SIGKILL) == 0;
+        fprintf(stderr, "run: %s: no end after 20 s%s\n", argv[0], stopped ? ", stopped" : " (its pipe held by what it started)");
+    }
 }
 
 /* What ring.c plays: through ledctrl one at a time, in order (ledq.c says why), or into HASSMIC_FAKE_LED's file for
@@ -308,6 +390,7 @@ static void led(const char *op, const char *pattern)
 {
     if (!pattern) return;
     if (!strcmp(op, "-s")) ring_set(pattern); else ring_unset(pattern);
+    screen_led(op, pattern);                        /* the face on a screen says the same (screen.h) */
 }
 
 /* "active-start"/"active-end", not the "ca-" ones of uxconfig.json (same look): ledcontroller turns only these two
@@ -345,6 +428,9 @@ void core_set_state(enum state s)
      * "ready-timer-short" once on FOCUS_ENTERED_BACKGROUND, then the pipeline's own patterns cover "ready-timer" */
     if (state == IDLE && atomic_load(&alarm_on)) led("-s", "ready-timer-short");
     led_for(state, s);
+    /* the words on the screen (screen.c): a request from idle takes the last one's away, idle lets them fade */
+    if (state == IDLE) screen_words(SCREEN_WORDS_RUN, NULL);
+    else if (s == IDLE) screen_words(SCREEN_WORDS_IDLE, NULL);
     state = s; state_since = time(NULL);
     atomic_store(&busy, s != IDLE);
 }
@@ -652,16 +738,50 @@ static void listening_apply(void)
 }
 static void listening(int on) { listen_pipe = on; listening_apply(); }
 
+/* Lock held.  Silence ahead of every request Home Assistant starts at speech to text (issue #80; PR #71 had it as a
+ * setting).  Its VAD is a new one per run (assist_pipeline's MicroVadSpeexEnhancer; pymicro-vad 1.0.1 in HA 2026.10.1):
+ * -1 for the first 76 chunks of 10 ms, which the segmenter counts as silence, and speech starts it after 0.3 s over 0.2.
+ * Our stream opens on the command (the ring's replay from the word's tail), so a short one fell into that blindness:
+ * espeak's "on" (0.2 s, -26 dBFS in a -55 dBFS room) started it only with 160 ms or more in front, and a Dot 2 user's
+ * "Alexa lights off" waited for the 15 s timeout (home-assistant/core#175735 has the same with ESPHome satellites:
+ * 800 ms of silence cured it).  Some speech to text wants a lead-in too: Parakeet TDT v2 gave "" for two of that user's
+ * requests, "The lights on." for the same audio with 50-300 ms of silence in front.  The button and follow-ups start
+ * runs as cold, so all of them; not the wake word at the server, whose run streams all the time.  800 ms (the VAD's
+ * 760 and a little), sent at once: nothing waits for it, and STT gets 0.8 s more to listen to */
+#define LEAD_IN_MS 800
+static void lead_in(void)
+{
+    static const int16_t zero[1024];
+    for (int left = LEAD_IN_MS * CAP_RATE / 1000; left > 0; left -= 1024)
+        proto->audio(zero, (size_t)(left < 1024 ? left : 1024) * sizeof zero[0]);
+}
+
+static int run_over;                                /* lock held: Home Assistant ended the run whose reply is still being spoken */
+static void mic_stopped(void);
+static int wake_wait;                               /* lock held: the run now open only listens for the wake word during a reply */
+/* lock held: the reply is being cut for the wake word Home Assistant heard, whose run goes on as the request: the cut's
+ * Q_STOP ends nothing.  Not cleared by a new run: that Q_STOP may come after the request has ended and the next begun */
+static int wake_cut;
+static int wake_fails;                              /* lock held: wake word runs Home Assistant failed during this reply */
+static int follow_up;                               /* lock held: the pipeline now starting is a follow-up to a question */
 static void pipeline_start(uint64_t from)    /* from: where the wake word that starts it ended, 0: not a wake word */
 {
+    run_over = 0; wake_wait = 0;
     quiet_abort = 0;
     mic_fresh = 1;
     replay_from = from;
+    replay_whole = wake_in_request && from && from == kw_end && kw_begin < kw_end;
+    talker_from = 0;
+    /* until the first audio (send_mic: up to 0.5 s while the word's tail is looked for), not the last request's: its
+     * end ended this one before any audio went out (heard_end in the capture thread) */
+    micend_start(&mic_end, MICEND_OFF, 0, 0, NULL);
     run_wake = from != 0;
     proto->start();
     atomic_store(&streaming, 1);
-    listening(core_local_wake);
-    if (core_local_wake) core_set_state(LISTENING);
+    int listen_now = core_local_wake || follow_up;      /* remote wake: a follow-up has no wake word to wait for */
+    if (listen_now) lead_in();                 /* ahead of the capture thread's first block: it needs the lock */
+    listening(listen_now);
+    if (listen_now) core_set_state(LISTENING);
 }
 
 /* Home Assistant's "Wake word" event entity (issue #48), listed while the feature is on (proto_esphome.c): every wake
@@ -686,6 +806,18 @@ static void wake_tell(const char *event)       /* any thread but the lock's hold
 void core_remote_wake(void)
 {
     if (core_local_wake || !atomic_load(&streaming)) return;
+    if (state == SPEAKING) {
+        /* During a reply (wake_listen): cut it.  This run goes on as the request, so the words Home Assistant buffered
+         * after the wake word are not lost, and it listens from now on, not once playback has stopped: Home Assistant's
+         * STT_START, VAD end and RUN_END may all come before the cut's Q_STOP, and have to find the request's states.
+         * The reply's follow-up (continue_conversation) or a button that was cutting it already: this is the request now */
+        fprintf(stderr, "barge-in\n");
+        wake_cut_ms = mono_ms();
+        wake_cut = 1; wake_wait = 0;
+        barge_in = 0; barge_from = 0;
+        atomic_store(&flush_playback, 1);
+        if (proto->reply_cut) proto->reply_cut();
+    }
     run_wake = 1;
     wake_told("detected");
     sound_request(SND_WAKE);
@@ -693,8 +825,49 @@ void core_remote_wake(void)
     core_set_state(LISTENING);
 }
 
-int core_wake_sound(int set) { if (set >= 0) use_earcon = set; return use_earcon; }
+/* Lock held.  Wake word at Home Assistant: once its run is over and the reply plays, a new run (wake word stage) listens
+ * to the mic, so the wake word cuts the reply as it does with a local one (core_remote_wake).  Not before the run is
+ * over: Home Assistant cancels the running pipeline when another starts, and would cut a reply still being generated.
+ * The reply is in the mic too: the front end's echo canceller is what keeps it out of Home Assistant's detection.
+ * Not while the reply is being cut already (the button, Home Assistant's media stop): its Q_STOP would end the run again.
+ * After 3 failed in one reply, none: a Home Assistant that fails each at once (its wake word engine gone) would have
+ * them start and fail at network speed for as long as the reply plays; the button still cuts it */
+#define WAKE_FAILS_MAX 3
+static void wake_listen(void)
+{
+    if (core_local_wake || !run_over || state != SPEAKING || atomic_load(&streaming) || atomic_load(&flush_playback) ||
+        wake_fails >= WAKE_FAILS_MAX || !connected || !satellite_running) return;
+    pipeline_start(0);
+    wake_wait = 1;
+}
 
+/* Lock held.  A run ended while the reply plays (failed: by an error, or by a RUN_END without a wake word, which Home
+ * Assistant has no reason for either).  If it is the one that listened for the wake word (wake_listen), not the reply's:
+ * the mic stops going to it, and core_run_over asks for the next.  1: it was that one */
+int core_wake_run_ended(int failed)
+{
+    if (!wake_wait || state != SPEAKING) return 0;
+    atomic_store(&streaming, 0); mic_stopped();
+    wake_wait = 0;
+    if (failed && ++wake_fails == WAKE_FAILS_MAX) fprintf(stderr, "wake word: %d runs failed during the reply, only the button cuts it\n", WAKE_FAILS_MAX);
+    return 1;
+}
+
+void core_run_over(void)
+{
+    run_over = 1;
+    wake_listen();
+}
+
+int core_wake_sound(int set) { if (set >= 0) use_earcon = set; return use_earcon; }
+int core_sound_on(int s, int set)
+{
+    if (set >= 0) sounds_off = set ? sounds_off & ~(1u << s) : sounds_off | 1u << s;
+    return !(sounds_off >> s & 1);
+}
+
+int core_wake_in_request(int set) { if (set >= 0) wake_in_request = set != 0; return wake_in_request; }
+int core_end_of_request(int set) { if (set >= 0 && set < MICEND_MODES) end_mode = set; return end_mode; }
 int core_stop_ends_listening(int set) { if (set >= 0) stop_ends = set != 0; return stop_ends; }
 
 int core_bt_announce(int set) { if (set >= 0) use_bt_announce = set; return use_bt_announce; }
@@ -709,7 +882,7 @@ void core_bt_device(const char *name, int on)
 {
     pthread_mutex_lock(&core_lock);
     if (use_bt_announce) {
-        sound_queue(on ? SND_BT_ON : SND_BT_OFF);
+        sound_request(on ? SND_BT_ON : SND_BT_OFF);
         if (connected && proto->bt_device) proto->bt_device(name, on);
     }
     pthread_mutex_unlock(&core_lock);
@@ -741,6 +914,10 @@ void core_identify(void)
     sound_queue(SND_IDENTIFY);
     fprintf(stderr, "identify: rainbow for %d s\n", IDENTIFY_MS / 1000);
 }
+
+/* The page's "Play" on its Sounds card: once, at the sounds volume, whatever the wake sound setting says: it was asked for */
+void core_sound_preview(int s) { if (s >= 0 && s < SND_TIMER) sound_queue((enum sound)s); }
+
 int core_dnd(int set)
 {
     if (set >= 0 && set != dnd) {
@@ -936,6 +1113,12 @@ int core_mic_denoise(int set)
 /* lock held.  The mic stream to the pipeline has stopped. */
 static void mic_stopped(void)
 {
+    if (mic_end.mode && !mic_end.ended && mic_end.heard) {     /* for tuning (issue #66) */
+        fprintf(stderr, "end of request: not heard here first (talker heard %d ms, quiet for %d ms", mic_end.heard * 10, mic_end.quiet * 10);
+        if (mic_end.vad_frames) fprintf(stderr, ", Amazon's VAD: no speech in %d of %d loud frames", mic_end.vad_vetoed, mic_end.vad_frames);
+        fprintf(stderr, ")\n");
+        mic_end.mode = MICEND_OFF;
+    }
     listening(0);
     afe_done();
     if (denoise_frames) fprintf(stderr, "denoise: %.1f s of audio took %.0f ms of CPU\n", denoise_frames / 100.0, denoise_ns / 1e6);
@@ -944,11 +1127,29 @@ static void mic_stopped(void)
 
 void core_mic_off(void) { atomic_store(&whisper_eou, 1); atomic_store(&streaming, 0); mic_stopped(); }
 
+/* lock held, capture thread: the talker finished (micend.h).  As Home Assistant's own VAD end, from here */
+static void heard_end(void)
+{
+    fprintf(stderr, "end of request: heard here (talker %.1f dBFS, nothing within %.0f dB of it for %d ms; ",
+            mic_end.talker_db, micend_margin(mic_end.mode), micend_hold_ms(mic_end.mode));
+    if (mic_end.vad_frames) fprintf(stderr, "Amazon's VAD heard no speech in %d of %d loud frames)\n", mic_end.vad_vetoed, mic_end.vad_frames);
+    else fprintf(stderr, "no VAD in the stream)\n");
+    proto->end();
+    core_mic_off();
+    if (state == LISTENING) core_set_state(THINKING);
+}
+
+int core_follow_up(void) { return follow_up; }
 void core_restart_after(void) { barge_in = 1; barge_from = 0; }
 
 void core_pipeline_finish(void)
 {
-    if (atomic_exchange(&streaming, 0) && connected && proto->stop) proto->stop();
+    wake_fails = 0;
+    if (atomic_exchange(&streaming, 0) && connected) {
+        /* a run that only listened for the wake word is aborted, not ended: a stale error from it must not reach the next */
+        if (wake_wait && proto->cancel) proto->cancel();
+        else if (proto->stop) proto->stop();
+    }
     mic_stopped();
     core_set_state(IDLE);
     if (mono_ms() - last_wake_ms > 3000) wake_reset();      /* a reset puts the engine back to sleep: "<wake word>, stop" would lose its "stop" */
@@ -956,21 +1157,31 @@ void core_pipeline_finish(void)
     if ((barge_in || !core_local_wake) && satellite_running && connected) {
         if (barge_in) sound_request(SND_WAKE);
         uint64_t from = barge_in ? barge_from : 0;      /* what was said after the wake word while the reply was cut */
+        follow_up = barge_in && !core_local_wake;
         barge_in = 0; barge_from = 0;
         pipeline_start(from);
+        follow_up = 0;
     }
 }
 
 void core_link(int up, int ready)
 {
     int was = satellite_running;
-    connected = up; satellite_running = up && ready;
+    connected = up; satellite_running = up && ready; link_paused = 0;
 #ifdef CUBE
     if (cube_control(3,satellite_running) < 0) fprintf(stderr,"cube: Alexa wake state update failed\n");
 #endif
     if (satellite_running) adopted();
     if (!satellite_running) core_pipeline_finish();
     else if (!was && !core_local_wake && state == IDLE) pipeline_start(0);
+}
+
+/* Wyoming's pause-satellite: what Home Assistant's mute switch sends, and the link stays open.  Linked and not running
+ * as before run-satellite, but asked for: trigger shows no error */
+void core_link_pause(void)
+{
+    core_link(1, 0);
+    link_paused = 1;
 }
 
 void core_error(void)
@@ -1012,6 +1223,15 @@ static int stop_heard(void) { return heard_ms && stop_ms >= heard_ms && stop_ms 
  * did not hear the wake word).  With stop_ends_listening any "stop" does */
 static int stopped_now(void) { return stop_heard() && (stop_cut || stop_ends); }
 
+/* Lock held.  Whether the wake word or the button, finding nothing to talk to, says so.  Not while muted, here or by Home
+ * Assistant (asked for), not before the Echo was set up (the setup spinner already says it), not over a ringing timer
+ * or a Drop In (their own ring) */
+static int error_shows(void)
+{
+    return !core_muted() && !link_paused && !atomic_load(&oobe) && state == IDLE &&
+           !atomic_load(&alarm_on) && dropin_was == DROPIN_IDLE;
+}
+
 /* touch: the action button rather than the wake word.  from: where the wake word ended on the ring's clock (0: unknown) */
 static void trigger(int touch, uint64_t from)
 {
@@ -1036,7 +1256,16 @@ static void trigger(int touch, uint64_t from)
             pipeline_start(from);
         }
     } else if (!connected || !satellite_running || core_muted()) {
-        /* nothing to talk to, or privacy latch on */
+        /* Nothing to talk to, or privacy latch on.  Without Home Assistant the Echo used to do nothing at all here: no
+         * sound, no ring, no log line, so "it does not listen" during an HA restart or a lost link looked like a deaf
+         * Echo and left nothing to find afterwards.  Unlike nothing said (core_no_speech, issue #48) something did fail
+         * here that the ring can help with, so the error ring shows it.  Linked is no sign of Home Assistant: the
+         * client may be another one (ESPHome's dashboard reading logs) */
+        if (error_shows()) {
+            fprintf(stderr, "%s: %s, nothing started\n", touch ? "button" : "wake word",
+                    connected ? "a client is linked, no voice assistant running" : "no Home Assistant link");
+            led("-s", "anim_start_error_short");
+        }
     } else if (state == IDLE && !touch && stopped_now()) {
         fprintf(stderr, "stop: came during the round, nothing started\n");
     } else if (state == IDLE) {
@@ -1090,7 +1319,7 @@ static int music_stop(void)
  * ended something (stop_cut, stopped_now), as the drop above would, or with stop_ends_listening. */
 static void stop_word(void)
 {
-    int ended = 0;
+    int ended = 0, paused = 0;
     if (dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE) { dropin_hangup("stop"); ended = 1; }   /* and the pipeline its wake word opened */
     pthread_mutex_lock(&core_lock);
     stop_ms = mono_ms();
@@ -1115,13 +1344,17 @@ static void stop_word(void)
         else { barge_in = 0; core_pipeline_finish(); quiet_abort = 1; }
     } else {
         int quiet = state == LISTENING && stop_ends && stop_heard() && connected && proto->cancel;
-        if (!ended && atomic_load(&music_on) && music_stop()) fprintf(stderr, "stop: music paused%s\n", quiet ? "" : ", the pipeline goes on");
+        if (!ended && atomic_load(&music_on) && music_stop()) { paused = 1; fprintf(stderr, "stop: music paused%s\n", quiet ? "" : ", the pipeline goes on"); }
         if (quiet) {                                            /* as the button: nothing of the run is carried out */
             fprintf(stderr, "stop: listening ended\n");
             atomic_fetch_and(&sounds_pending, ~(1 << SND_WAKE | 1 << SND_TOUCH));
             quiet_cancel();
+            ended = 1;
         }
     }
+    /* the screen's words go with what the "stop" ended: the reply it cut, the run it dropped or ended (stop_ends_listening),
+     * the ring or the music it stopped.  The transcript of that "stop", if one still comes, is not shown (core_transcript) */
+    if (ended || stop_cut || paused) screen_words(SCREEN_WORDS_RUN, NULL);
     pthread_mutex_unlock(&core_lock);
 }
 
@@ -1132,7 +1365,8 @@ static void stop_word(void)
  * quiet.  The audio of the window is not lost: the winner sends it from the ring buffer ahead of the live stream.
  * Nor is it without arbitration: Pryon accepts a keyword 116-128 ms after its end (6 accepts in device logs, "samples
  * <begin>-<end> (fed <n>)"), and the live stream starts with the next 50 ms block, so what the talker says right after
- * the wake word would be cut.  Every pipeline a wake word starts sends the ring from the keyword's end (stream_ring). */
+ * the wake word would be cut.  Every pipeline a wake word starts sends the ring from the end of the word's tail, which
+ * comes after the keyword's end (word_tail_end, wordtail.h). */
 
 #define RING_SAMPLES (CAP_RATE * 4)
 static int16_t ring[RING_SAMPLES];                  /* what the wake word engine was fed, by its sample index */
@@ -1146,6 +1380,43 @@ static void ring_put(const int16_t *s, size_t n)
 {
     for (size_t i = 0; i < n; i++) ring[(ring_n + i) % RING_SAMPLES] = s[i];
     ring_n += n;
+}
+
+/* Amazon's front end heard speech in samples [from, to) of the ring (micend.h): its DNN VAD >= 1 in a record of a
+ * 128-sample frame overlapping them (afemeta.h), 0 when none (a veto, so only where the network is sure: inside
+ * commands it dips under 2 for up to 0.44 s, mostly to 1, and aggressive ends after 0.45 s; sounds without words are 0
+ * in 91-100 % of frames, docs/re-vad.md), -1 when the ring has no records there (the PC, an audio
+ * HAL that drops the lowest bits, -w remote: no ring).  Records start every 128 samples from the mixer stream's
+ * start, the ring's 0, until a read loses samples (a stalled micAsr reopened): then the phase is looked for again in
+ * the 128 samples before from.  Capture thread */
+static int meta_phase = -1;
+
+static int ring_meta(uint64_t at, struct afemeta *m)
+{
+    int16_t s[AFEMETA_FRAME];
+    if (at + AFEMETA_FRAME > ring_n || (ring_n > RING_SAMPLES && at < ring_n - RING_SAMPLES)) return 0;
+    for (int i = 0; i < AFEMETA_FRAME; i++) s[i] = ring[(at + i) % RING_SAMPLES];
+    return afemeta_frame(s, m);
+}
+
+static int ring_speech(uint64_t from, uint64_t to)
+{
+    struct afemeta m;
+    for (int tries = 0; tries < 2; tries++) {
+        if (meta_phase >= 0) {
+            int v = -1, lost = 0;
+            for (uint64_t a = from - (from + AFEMETA_FRAME - (uint64_t)meta_phase) % AFEMETA_FRAME; a < to && a + AFEMETA_FRAME <= ring_n; a += AFEMETA_FRAME) {
+                if (!ring_meta(a, &m)) { lost = 1; break; }
+                v = m.vad >= 1 ? 1 : v < 0 ? 0 : v;
+            }
+            if (!lost) return v;
+        }
+        meta_phase = -1;
+        for (uint64_t k = 0; k < AFEMETA_FRAME && k <= from; k++)
+            if (ring_meta(from - k, &m)) { meta_phase = (int)((from - k) % AFEMETA_FRAME); break; }
+        if (meta_phase < 0) return -1;
+    }
+    return -1;
 }
 
 static double ring_power(uint64_t a, uint64_t b)    /* mean square over samples [a, b), as far as the ring still has them */
@@ -1164,20 +1435,19 @@ static double ring_power(uint64_t a, uint64_t b)    /* mean square over samples 
 /* Amazon's own measure of the wake word, which its cloud used to pick the Echo that answers ("ESP"): the energy of the
  * keyword and of the room before it as the front end measures them ("1-mic ESP" in its log).  As stock does it: hand the front end the keyword's place on its clock
  * (wake_afe_times), then read LASP_CMD_REQUEST_ARBITRATION_JSON: {"voiceEnergy":..,"ambientEnergy":..,..}.  Both
- * through lipc's tools: 150 ms (measured), inside the arbitration window of the others, who wait 200 ms and count
- * claims up to a second old.  Their ratio in dB x 100 is a signal to noise like our own score below, so Echos without
- * it (older builds, other front ends) still compare.  Reading it also puts the front end into its utterance state and
- * starts its diagnostics (FINDINGS.md "Listening mode"): afe_done() ends both.  0: not available. */
-static int afe_score(int *score)                    /* capture thread */
+ * through the firmware's tools: 150 ms on the Dots (lipc), 240 and 380 ms on an Echo Show 5 (two service calls; issue
+ * #77), so on a thread of its own (afe_thread).  Their ratio in dB x 100 is a signal to noise like our own score below,
+ * so Echos without it (older builds, other front ends) still compare.  Reading it also puts the front end into its
+ * utterance state and starts its diagnostics (FINDINGS.md "Listening mode"): afe_done() ends both.  0: not available. */
+static int afe_score(long ts, long te, int *score)  /* afe_thread */
 {
-    long ts, te; char buf[512]; const char *v, *a;
-    if (!wake_afe_times(&ts, &te)) return 0;
+    char buf[512]; const char *v, *a; long long t0 = mono_ms();
     if (!afe_arbitration(ts, te, buf, sizeof buf)) return 0;
     if (!(v = strstr(buf, "\"voiceEnergy\":")) || !(a = strstr(buf, "\"ambientEnergy\":"))) return 0;
     atomic_store(&afe_asked, 1);
     double voice = atof(strchr(v, ':') + 1), ambient = atof(strchr(a, ':') + 1);
     *score = (int)lround(1000 * log10((voice + 1) / (ambient + 1)));
-    fprintf(stderr, "wake: front end: voice energy %.0f, ambient %.0f\n", voice, ambient);
+    fprintf(stderr, "wake: front end: voice energy %.0f, ambient %.0f (%lld ms)\n", voice, ambient, mono_ms() - t0);
     return 1;
 }
 
@@ -1188,11 +1458,56 @@ static int wake_score(uint64_t begin, uint64_t end, int simulated)
     uint64_t gap = CAP_RATE / 10, len = CAP_RATE / 2;
     uint64_t ne = begin > gap ? begin - gap : 0, nb = ne > len ? ne - len : 0;
     double w = ring_power(begin, end), n = ring_power(nb, ne), fs = 32768.0 * 32768.0;
-    int own = (int)lround(1000 * log10((w + 1) / (n + 1))), afe;
     fprintf(stderr, "wake: level %.1f dBFS over noise %.1f dBFS\n", 10 * log10((w + 1) / fs), 10 * log10((n + 1) / fs));
-    if (simulated || !afe_score(&afe)) return own;
-    fprintf(stderr, "wake: score %d from the front end (%d from the mic stream)\n", afe, own);
-    return afe;
+    return (int)lround(1000 * log10((w + 1) / (n + 1)));
+}
+
+/* The front end's reading, off the capture thread (issue #77).  On it, the capture stood still for as long as the
+ * reading took, and the Echo Show 5's recorder had 160 ms of blocks to fill meanwhile (audio_android.c CAP_NBUF, then
+ * 8): the rest was lost, a splice 100-250 ms long in the command right after the wake word, which speech-to-text
+ * misheard.  Now the capture goes on into the ring, and the claim goes out once the score is in (score_wait), as late
+ * as before; without it after AFE_WAIT_MS, with the mic stream's score (the others' window until learned is 500 ms,
+ * arb.c).  A reading left behind still puts the front end into its utterance state: afe_late ends that again when no
+ * command came of the wake word.  One at a time: a wake word while one runs goes without (a service call that hangs
+ * costs the score, no longer the capture). */
+#define AFE_WAIT_MS 500
+static atomic_int afe_busy;                         /* a reading runs (afe_thread) */
+static atomic_int afe_got;                          /* its score; INT_MIN: none */
+static long afe_ts, afe_te;                         /* the keyword's place on the front end's clock, set before it starts */
+static long long score_due;                         /* capture thread: the claim waits for the reading until then */
+static struct { uint64_t end; int own, prio; char kw[64]; } pend;   /* capture thread: the wake word that waits */
+static int afe_late;                                /* capture thread: a reading was left behind */
+
+static void *afe_thread(void *arg)
+{
+    int score;
+    (void)arg;
+    atomic_store(&afe_got, afe_score(afe_ts, afe_te, &score) ? score : INT_MIN);
+    atomic_store(&afe_busy, 0);                     /* last: once it is 0, afe_asked says what the reading did */
+    return NULL;
+}
+
+static int afe_start(int simulated)                 /* capture thread: 1 = a reading runs */
+{
+    pthread_t t;
+    if (atomic_load(&afe_busy)) { fprintf(stderr, "wake: the front end's last reading still runs, no score from it\n"); return 0; }
+    /* SIGUSR1's wake word has no place on the front end's clock; on the PC HASSMIC_FAKE_AFE plays one (audio_file.c) */
+    if ((simulated && !getenv("HASSMIC_FAKE_AFE")) || !wake_afe_times(&afe_ts, &afe_te)) return 0;
+    atomic_store(&afe_busy, 1);
+    if (pthread_create(&t, NULL, afe_thread, NULL)) { atomic_store(&afe_busy, 0); return 0; }
+    pthread_detach(t);
+    return 1;
+}
+
+static void afe_late_check(void)                    /* capture thread */
+{
+    if (!afe_late || atomic_load(&afe_busy)) return;
+    afe_late = 0;
+    /* a round or a command still to come ends it itself; under the lock, so that a command starting meanwhile
+     * (pipeline_start, Home Assistant's thread) does not get its utterance state ended */
+    pthread_mutex_lock(&core_lock);
+    if (!arb_due && !atomic_load(&streaming)) afe_done();
+    pthread_mutex_unlock(&core_lock);
 }
 
 /* Kiosk Satellite's measure of a wake word, for arb.c's Kiosk Satellite mode (docs/kiosk-arbitration.md, "Score"): of the
@@ -1238,11 +1553,12 @@ static int kiosk_score(uint64_t end, int simulated)
  * - Our own wake sound is still in the stream after the echo canceller: +21 dB over the floor in micRaw, +4 to +8 dB in
  *   micAsr (4 triggers, 2026-09-30), as loud as a quiet talker.  The gain took it for speech and came down for the
  *   command behind it (-32 instead of -26 dBFS in Home Assistant's recording), so it holds still while a sound plays,
- *   and over audio earsup held back across one. */
-static void send_out(const int16_t *pcm, size_t n, int held_sound)
+ *   and over audio earsup held back across one.  sound: this audio has one in it (sound_in, earsup). */
+static void send_out(const int16_t *pcm, size_t n, int sound)
 {
     static int16_t out[1024 + MICDENOISE_FRAME];
-    mic_gain.hold = held_sound || atomic_load(&sounds_pending) || atomic_load(&earcon_sounding) || mono_ms() < atomic_load(&earcon_heard_until);
+    mic_gain.hold = sound;
+    micend_run(&mic_end, pcm, n, mic_gain.hold);        /* the level as heard, before the gain; heard_end() acts on it */
     while (n) {
         size_t k = n < 1024 ? n : 1024, m = k;
         const int16_t *src = pcm;
@@ -1256,19 +1572,36 @@ static void send_out(const int16_t *pcm, size_t n, int held_sound)
         if (m) {
             micgain_run(&mic_gain, src, out, m); proto->audio(out, m * 2);
             double e = 0; for (size_t i = 0; i < m; i++) e += (double)out[i] * out[i];   /* the band's listening bar */
-            ring_level(e > 0 ? (int)lround(100 * log10(e / m / (32768.0 * 32768.0))) : -1000);
+            int db10 = e > 0 ? (int)lround(100 * log10(e / m / (32768.0 * 32768.0))) : -1000;
+            ring_level(db10); screen_level(db10);
         }
         pcm += k; n -= k;
     }
+}
+
+/* Whether audio has our sound in it, by when it was captured: the replay goes out later than that, so what plays now
+ * says nothing of it.  Held from ahead of a sound, a command said in one breath kept the gain of the quieter wake word
+ * (issue #82, Dot 2: +17..+31 dB), each frame on the peak limit; not held after one that is over (a slow aligner), the
+ * sound fed the talker's level.  A Drop In's ring and a timer's tone are not in it, as before: both stop for a pipeline */
+static int sound_in(uint64_t at, size_t n)
+{
+    for (size_t i = 0; i < sizeof sound_spans / sizeof *sound_spans; i++)
+        if (at < (uint64_t)atomic_load(&sound_spans[i].to) && at + n > (uint64_t)atomic_load(&sound_spans[i].from)) return 1;  /* to first: sound_start */
+    return 0;
 }
 
 static void send_mic(const int16_t *pcm, size_t n, uint64_t at)
 {
     if (mic_fresh) {
         micgain_start(&mic_gain, mono_ms() - last_wake_ms < 3000 ? keyword_db : 1); mic_fresh = 0;
+        mic_gain.limit_stays = 1;                       /* people speak on over the wake sound */
         static const int denoise_db[] = { 0, 6, 9, 12 };
         fprintf(stderr, "mic gain: talker %.1f dBFS, gain %+.1f dB", micgain_talker_db(&mic_gain), mic_gain.gain_db);
         if (mic_denoise) fprintf(stderr, ", noise reduction %d dB", denoise_db[mic_denoise]);
+        micend_start(&mic_end, proto->end ? end_mode : MICEND_OFF, micgain_talker_db(&mic_gain), at, ring_speech);
+        if (talker_from > at) mic_end.from = talker_from;   /* the wake word sent too: not the request's speech yet */
+        mic_gain.talker_min_db = mic_end.mode ? mic_end.talker_db - micend_margin(mic_end.mode) : -1000;   /* nor the gain's */
+        if (mic_end.mode) fprintf(stderr, ", end heard here: %s", micend_names[mic_end.mode]);
         fprintf(stderr, "\n");
         if (mic_denoise) {
             micdenoise_reset(denoise_db[mic_denoise]);
@@ -1285,7 +1618,7 @@ static void send_mic(const int16_t *pcm, size_t n, uint64_t at)
         size_t k = n < 1024 ? n : 1024, m;
         const int16_t *p; int held_sound;
         m = earsup_run(pcm, k, at, &p, &held_sound);
-        if (m) send_out(p, m, held_sound);
+        if (m) send_out(p, m, held_sound || sound_in(at, m));
         pcm += k; n -= k; at += k;
     }
 }
@@ -1302,27 +1635,231 @@ static void stream_ring(uint64_t from, uint64_t to) /* capture thread, lock held
     }
 }
 
-/* Where the replay after a wake word starts (capture thread, lock held).  Pryon's end is where it was sure, not where
- * the voice stopped: a drawn-out "Alexaaa" (children's; forum, 2026-10-19) still sounds after it.  Sent from the
- * ring, that tail came out of STT as "Ja.", and Home Assistant's VAD took the pause after it for the end of the
- * command.  Before the ring (ad224f5) the stream began 120-180 ms after the end and that user had no such trouble.
- * So the 10 ms frames after the end are skipped while they still sound like the word: up to the first one 12 dB under
- * the keyword's level, or the deepest dip before the level rises 3 dB again (a command spoken straight on), at most
- * 200 ms; if neither comes, the quietest frame seen (at worst what was cut before the ring).  The gain starts at the
- * keyword's level (mic_fresh), so a tail left in reaches STT at speech level. */
-static uint64_t word_tail_end(uint64_t end, uint64_t to)
+/* Each slot's wake word aligner (wakealign.h): the file for the word the slot holds in the language spoken here
+ * (align_resolve), next to our binary (scripts/bundle.sh) or in $HASSMIC_WAKEALIGN.  Capture thread: looked up at
+ * every detection, loaded when the file to use changed (the time zone comes from Home Assistant after the start, the
+ * language from the page).  NULL: none for that word, the replay starts by wordtail.h's rule */
+static struct wakealign *wake_align[WAKE_SLOTS];
+static struct core_wake_word align_word[WAKE_SLOTS];        /* capture thread: what each slot holds */
+static char align_file[WAKE_SLOTS][600];                    /* and the file its aligner came from, "" none */
+static int align_stale[WAKE_SLOTS];                         /* capture thread: wake_align[slot] is a word's the slot no
+                                                             * longer holds, kept while a run may use it */
+
+static atomic_int align_busy;                       /* align_thread runs on one of them */
+
+/* wake_open_word (capture thread): the slot holds w now.  The old word's aligner goes at once, unless a run uses it:
+ * then align_resolve frees it when the run is over (waiting here would hold up the capture, issue #77); until then it
+ * is never run (align_ahead resolves first) and word_tail_end goes by the level */
+static void wake_align_load(int slot, const struct core_wake_word *w)
 {
-    const uint64_t frame = CAP_RATE / 100, most = CAP_RATE / 5;
-    if (keyword_db > 0) return end;                 /* no level known (the PC's SIGUSR1) */
-    uint64_t f = end, low_at = end; double low = 1e9;
-    for (; f + frame <= to && f - end < most; f += frame) {
-        double db = 10 * log10(ring_power(f, f + frame) / (32768.0 * 32768.0) + 1e-10);
-        if (db < keyword_db - 12) { low_at = f; break; }
-        if (db > low + 3) break;
-        if (db < low) { low = db; low_at = f; }
+    align_word[slot] = *w; align_file[slot][0] = 0; align_stale[slot] = 0;
+    if (atomic_load(&align_busy)) { align_stale[slot] = 1; return; }
+    wakealign_free(wake_align[slot]); wake_align[slot] = NULL;
+}
+
+/* The language spoken here, as a locale of tools/wakealign/build.sh's: the page's speech_language, else the time zone
+ * Home Assistant gave (clock.c state/timezone; a German speaker's "Alexa" with the English wake word is found far better
+ * with German sounds, settings.c SPEECH_LANG), else the word's own ("computer-en-US"); "" when none of them says.  A
+ * language picked on the page in the zone's variety of it where the zone has one (en in London: en-GB) */
+static void speech_locale(const struct core_wake_word *w, char *out, size_t cap)
+{
+    static const char *const langs[][2] = { { "de", "de-DE" }, { "en", "en-US" }, { "fr", "fr-FR" }, { "es", "es-ES" }, { "ja", "ja-JP" } };
+    static const char *const zones[][2] = {      /* by prefix, the first that matches */
+        { "Europe/Berlin", "de-DE" }, { "Europe/Vienna", "de-DE" }, { "Europe/Zurich", "de-DE" }, { "Europe/Busingen", "de-DE" },
+        { "Europe/Vaduz", "de-DE" }, { "Europe/Paris", "fr-FR" }, { "Europe/Monaco", "fr-FR" }, { "Europe/Madrid", "es-ES" },
+        { "Atlantic/Canary", "es-ES" }, { "America/Mexico_City", "es-MX" }, { "America/Monterrey", "es-MX" }, { "America/Tijuana", "es-MX" },
+        { "America/Cancun", "es-MX" }, { "America/Merida", "es-MX" }, { "America/Chihuahua", "es-MX" }, { "Asia/Tokyo", "ja-JP" },
+        { "Europe/London", "en-GB" }, { "Europe/Dublin", "en-GB" }, { "Australia/", "en-AU" }, { "Asia/Kolkata", "en-IN" },
+        { "Asia/Calcutta", "en-IN" }, { "Canada/", "en-CA" }, { "America/", "en-US" }, { "US/", "en-US" } };
+    const char *l = settings_speech_language(), *zl = NULL; char p[300], zone[96] = ""; FILE *f; size_t ln = strlen(l);
+    out[0] = 0;
+    state_file(p, sizeof p, "timezone");
+    if ((f = fopen(p, "r"))) { if (fscanf(f, "%95s", zone) != 1) zone[0] = 0; fclose(f); }
+    for (size_t i = 0; zone[0] && !zl && i < sizeof zones / sizeof *zones; i++) if (!strncmp(zone, zones[i][0], strlen(zones[i][0]))) zl = zones[i][1];
+    /* a language picked: the zone's variety of it where the zone has one (English in London: en-GB's dictionary) */
+    if (ln && zl && !strncmp(zl, l, ln) && zl[ln] == '-') { snprintf(out, cap, "%s", zl); return; }
+    for (size_t i = 0; ln && i < sizeof langs / sizeof *langs; i++) if (!strcmp(l, langs[i][0])) { snprintf(out, cap, "%s", langs[i][1]); return; }
+    if (zl) { snprintf(out, cap, "%s", zl); return; }
+    const char *dash = strchr(w->id, '-');
+    if (dash && !wake_is_mww(w->manifest)) snprintf(out, cap, "%s", dash + 1);     /* a microWakeWord id is a name, no locale */
+}
+
+static void align_resolve(int slot)                 /* capture thread */
+{
+    /* locales whose words are made of the same models and dictionary as another's (tools/wakealign/build.sh): its files */
+    static const char *const same[][2] = { { "en-CA", "en-US" }, { "en-AU", "en-GB" }, { "fr-CA", "fr-FR" } };
+    char dir[300], loc[16], word[64], cand[2][600]; const char *env = getenv("HASSMIC_WAKEALIGN"); int n = 0;
+    const struct core_wake_word *w = &align_word[slot];
+    if (!w->id[0]) return;
+    if (env) snprintf(dir, sizeof dir, "%s", env);
+    else {
+        char *slash; ssize_t l = readlink("/proc/self/exe", dir, sizeof dir - 1);
+        if (l <= 0) return;
+        dir[l] = 0; if ((slash = strrchr(dir, '/'))) *slash = 0;
     }
-    if (low_at > end) fprintf(stderr, "wake: %llu ms of the word's tail left out\n", (unsigned long long)((low_at - end) * 1000 / CAP_RATE));
-    return low_at;
+    speech_locale(w, loc, sizeof loc);
+    if (wake_is_mww(w->manifest)) {                 /* a microWakeWord model by its name: "Okay Nabu" -> okay_nabu */
+        size_t k = 0;
+        for (const char *c = w->name; *c && k < sizeof word - 1; c++) word[k++] = isalnum((unsigned char)*c) ? (char)tolower((unsigned char)*c) : '_';
+        word[k] = 0;
+    } else snprintf(word, sizeof word, "%.*s", (int)strcspn(w->id, "-"), w->id);      /* Amazon's: "computer-en-US" -> computer */
+    /* the language spoken, else the word's own (the firmware's "alexa" and microWakeWord's are English) */
+    const char *dash = strchr(w->id, '-'), *own = !wake_is_mww(w->manifest) && dash ? dash + 1 : "en-US", *locs[2] = { loc, own };
+    for (int i = 0; i < 2; i++) {
+        const char *l = locs[i];
+        for (size_t k = 0; k < sizeof same / sizeof *same; k++) if (!strcmp(l, same[k][0])) l = same[k][1];
+        if (l[0]) snprintf(cand[n++], sizeof cand[0], "%s/%s-%s.wa", dir, word, l);
+    }
+    const char *pick = "";
+    for (int i = 0; i < n && !*pick; i++) if (!access(cand[i], R_OK)) pick = cand[i];
+    if (!align_stale[slot] && !strcmp(pick, align_file[slot])) return;
+    wakealign_free(wake_align[slot]); wake_align[slot] = NULL; align_stale[slot] = 0;
+    snprintf(align_file[slot], sizeof align_file[slot], "%.599s", pick);
+    if (*pick && (wake_align[slot] = wakealign_load(pick))) fprintf(stderr, "wake: %s aligned by %s (%s spoken)\n", w->id, pick, loc[0] ? loc : "?");
+}
+
+/* The aligner's run, off the capture thread as the front end's reading is (issue #77: on it the capture stood still,
+ * and the Echo Show 5's recorder lost what came meanwhile): 4 ms for the window on the PC, 0.2 s under qemu-arm, and
+ * the speaker adaptation's update after it more again.  The capture goes on into the ring; the replay waits for the
+ * answer (align_done) as it waits for the window.  One run at a time: a wake word while one runs goes by the level.
+ * Speaker adaptation (wakealign.h, setting wake_word_adaptation): one household's statistics per feature space (a
+ * language's models share one), state/wakealign-<space>.adapt, written at most every 10 minutes; the run aligns with
+ * the transform where there is one and falls back to the plain alignment when that finds nothing near Pryon's end, and
+ * what it settled on is added.  Online on the 220 German requests (each with what the ones before taught): 158 ->
+ * 163; on 75 English ones in German voices: 48 -> 53 */
+static uint64_t align_key;                          /* capture thread: the wake word a run was started (or given up) for */
+static uint64_t align_skipped;                      /* capture thread: one that got none (a run busy, no thread): by the level */
+static _Atomic uint64_t align_done;                 /* the one whose answer is in align_at, align_ms (set before it) */
+static int64_t align_at; static long long align_ms;
+static struct { const struct wakealign *wa; int16_t win[WAKEALIGN_BEFORE + WAKEALIGN_AFTER]; size_t n; uint64_t from, end, stop; int adapt; } job;
+/* align_thread's: a household's statistics per feature space in memory (557 KB each), one per acoustic model of
+ * tools/wakealign/build.sh; past that the one used longest ago makes room, saved first */
+#define ADAPT_SPACES 5
+static struct { struct wakealign_adapt *ad; long long saved_ms, used_ms; int saved_at; } adapts[ADAPT_SPACES];
+
+static void adapt_save(int i)                       /* align_thread: adapts[i] to state/, if it learnt since */
+{
+    char name[64], p[300]; struct wakealign_adapt *ad = adapts[i].ad;
+    if (!ad || ad->requests == adapts[i].saved_at) return;
+    snprintf(name, sizeof name, "wakealign-%016llx.adapt", (unsigned long long)ad->space); state_file(p, sizeof p, name);
+    if (!wakealign_adapt_save(ad, p)) { adapts[i].saved_ms = mono_ms(); adapts[i].saved_at = ad->requests; }
+}
+
+static int adapt_for(uint64_t space)                /* align_thread: the slot of the household's statistics in space, -1 */
+{
+    int i, at = -1; char name[64], p[300];
+    if (!space) return -1;
+    for (i = 0; i < ADAPT_SPACES; i++) if (adapts[i].ad && adapts[i].ad->space == space) { adapts[i].used_ms = mono_ms(); return i; }
+    for (i = 0; i < ADAPT_SPACES; i++) {            /* a free slot, else the one used longest ago */
+        if (!adapts[i].ad) { at = i; break; }
+        if (at < 0 || adapts[i].used_ms < adapts[at].used_ms) at = i;
+    }
+    if (adapts[at].ad) { adapt_save(at); free(adapts[at].ad); adapts[at].ad = NULL; }
+    if (!(adapts[at].ad = calloc(1, sizeof *adapts[at].ad))) return -1;
+    struct wakealign_adapt *ad = adapts[at].ad;
+    ad->space = space;
+    snprintf(name, sizeof name, "wakealign-%016llx.adapt", (unsigned long long)space); state_file(p, sizeof p, name);
+    if (!wakealign_adapt_load(ad, p)) fprintf(stderr, "wake: speaker adaptation from %d requests (%s)\n", ad->requests, name);
+    adapts[at].saved_ms = adapts[at].used_ms = mono_ms(); adapts[at].saved_at = ad->requests;
+    return at;
+}
+
+static int align_near(int64_t at) { return at >= (int64_t)job.end - CAP_RATE * 2 / 5 && at <= (int64_t)job.stop; }
+
+static void align_said(char *s, size_t n, long e)   /* e: in the window, -1 none */
+{
+    if (e < 0) snprintf(s, n, "none");
+    else snprintf(s, n, "%+lld ms", ((long long)job.from + e - (long long)job.end) * 1000 / CAP_RATE);
+}
+
+static void *align_thread(void *arg)
+{
+    (void)arg;
+    long long t0 = mono_ms();
+    int slot = job.adapt ? adapt_for(wakealign_space(job.wa)) : -1;
+    struct wakealign_adapt *ad = slot >= 0 ? adapts[slot].ad : NULL;
+    int adapted = 0; long e = -1, by_adapt = -1;
+    /* the word's end against Pryon's in the 220 requests of wakealign.h: 250 ms before to 450 ms after; further off is
+     * a misalignment (the PC's SIGUSR1 has no word there: 1 s before).  Tighter than -400 ms loses words: over 200 ms
+     * of the command cut in 67 of 4586 -> 115 at -250 ms (docs/wake-word-end.md) */
+    if (ad && ad->have) { e = by_adapt = wakealign_end_adapt(job.wa, job.win, job.n, ad, NULL); adapted = e >= 0 && align_near((int64_t)(job.from + (uint64_t)e)); }
+    if (!adapted) e = wakealign_end(job.wa, job.win, job.n);
+    int64_t at = e >= 0 ? (int64_t)(job.from + (uint64_t)e) : -1;
+    align_at = at >= 0 && align_near(at) ? at : -1;
+    if (align_at < 0) {                             /* what it said: issue #79's two on a Dot 2 left no trace of it */
+        char plain[32], adapt[32];
+        align_said(plain, sizeof plain, e); align_said(adapt, sizeof adapt, by_adapt);
+        fprintf(stderr, "wake: the aligner's end, from Pryon's end: %s, with the speaker adaptation %s\n", plain, ad && ad->have ? adapt : "not in use");
+    }
+    /* tests: a CPU too busy for it (word_tail_end's ALIGN_LATE): the ms in that file, read each run */
+    const char *slow = getenv("HASSMIC_FAKE_ALIGN_SLOW"); FILE *sf; int ms = 0;
+    if (slow && (sf = fopen(slow, "r"))) { if (fscanf(sf, "%d", &ms) != 1) ms = 0; fclose(sf); }
+    if (ms > 0) usleep((useconds_t)ms * 1000);
+    align_ms = mono_ms() - t0;
+    atomic_store(&align_done, job.end);             /* the answer is out: the capture thread may go on */
+    if (ad && align_at >= 0) {
+        wakealign_end_adapt(job.wa, job.win, job.n, adapted ? ad : NULL, ad);
+        int had = ad->have; wakealign_estimate(ad);
+        if (ad->have && !had) fprintf(stderr, "wake: speaker adaptation in use (%d requests)\n", ad->requests);
+        if (mono_ms() - adapts[slot].saved_ms > 600000 || ad->requests == WAKEALIGN_ADAPT_MIN) adapt_save(slot);
+    }
+    atomic_store(&align_busy, 0);
+    return NULL;
+}
+
+static void align_ahead(void)                       /* capture thread, before it takes core_lock for the block */
+{
+    pthread_mutex_lock(&core_lock); uint64_t end = replay_from; int slot = kw_slot; float kdb = keyword_db; pthread_mutex_unlock(&core_lock);
+    if (!end || end == align_key || kdb > 0 || slot < 0 || slot >= WAKE_SLOTS) return;
+    if (!atomic_load(&align_busy)) align_resolve(slot);         /* the model for it (never swapped under a run) */
+    if (ring_n < end + WAKEALIGN_AFTER) return;                 /* while the window fills */
+    align_key = end;
+    if (!wake_align[slot]) return;
+    if (atomic_load(&align_busy)) { align_skipped = end; return; }
+    uint64_t from = end > WAKEALIGN_BEFORE ? end - WAKEALIGN_BEFORE : 0, stop = end + WAKEALIGN_AFTER;
+    if (ring_n > RING_SAMPLES && from < ring_n - RING_SAMPLES) from = ring_n - RING_SAMPLES;
+    for (uint64_t i = from; i < stop; i++) job.win[i - from] = ring[i % RING_SAMPLES];
+    job.wa = wake_align[slot]; job.n = (size_t)(stop - from); job.from = from; job.end = end; job.stop = stop;
+    job.adapt = settings_on("wake_word_adaptation");
+    pthread_t t;
+    atomic_store(&align_busy, 1);
+    if (pthread_create(&t, NULL, align_thread, NULL)) { atomic_store(&align_busy, 0); align_skipped = end; return; }
+    pthread_detach(t);
+}
+
+/* Where the replay after a wake word that ended at end starts, from the ring up to to (capture thread, lock held); -1:
+ * not known yet, the stream waits for more.  With an aligner the word's end as aligned in [end - 1.5 s, end + 0.5 s]
+ * (align_ahead), before Pryon's end too (Echo, Ziggy: it fires after the word); else, or when it finds nothing near,
+ * wordtail.h's rule from Pryon's end on.  Both wait for 0.5 s after the end, then the stream catches up from the ring */
+#define ALIGN_LATE CAP_RATE                         /* samples past the aligner's window it is waited for: 1 s */
+static int64_t word_tail_end(uint64_t end, uint64_t to)
+{
+    float db[WORDTAIL_FRAMES]; int n = 0, cut, pause_ok = 1; const char *why = "";
+    if (keyword_db > 0) return (int64_t)end;        /* no level known (the PC's SIGUSR1) */
+    if (kw_slot >= 0 && kw_slot < WAKE_SLOTS && wake_align[kw_slot]) {
+        static uint64_t told;                       /* the wake word the level's reason was logged for */
+        int in = atomic_load(&align_done) == end;
+        /* align_thread's answer not in yet: waited for until ALIGN_LATE past the window (0.2 s under qemu-arm; a CPU
+         * that busy would hold the whole request), then the level, and its answer is not taken any more */
+        if (align_skipped != end && !in && to < end + WAKEALIGN_AFTER + ALIGN_LATE) return -1;
+        if (align_skipped != end && in && align_at >= 0) {
+            if (!replay_whole) fprintf(stderr, "wake: the word ends %+lld ms from Pryon's end (aligned in %lld ms)\n",
+                                       (long long)(align_at - (int64_t)end) * 1000 / CAP_RATE, align_ms);
+            return align_at;
+        }
+        if (told != end) {
+            told = end;
+            fprintf(stderr, "wake: %s, by the level instead\n", align_skipped == end ? "no aligner run for it (one was busy)" :
+                    in ? "the aligner found no end near Pryon's" : "the aligner took over 1 s");
+        }
+        align_skipped = end;
+        pause_ok = 0;
+    }
+    for (; n < WORDTAIL_FRAMES && end + (uint64_t)(n + 1) * WORDTAIL_FRAME <= to; n++)
+        db[n] = 10 * log10(ring_power(end + (uint64_t)n * WORDTAIL_FRAME, end + (uint64_t)(n + 1) * WORDTAIL_FRAME) / (32768.0 * 32768.0) + 1e-10);
+    if ((cut = wordtail_cut(db, n, keyword_db, pause_ok, &why)) < 0) return -1;
+    if (!replay_whole) fprintf(stderr, "wake: %d ms of the word's tail left out (%s)\n", cut * 1000 * WORDTAIL_FRAME / CAP_RATE, why);
+    return (int64_t)(end + (uint64_t)cut * WORDTAIL_FRAME);
 }
 
 static void answer(uint64_t from)                   /* capture thread: act on the wake word that ended at from */
@@ -1331,19 +1868,8 @@ static void answer(uint64_t from)                   /* capture thread: act on th
     if (!atomic_load(&streaming)) afe_done();          /* it stopped a ring, or cut a reply: the pipeline's end follows */
 }
 
-static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* capture thread */
+static void claim(const char *kw, int score, int prio, uint64_t end)   /* capture thread */
 {
-    if (!arb_running()) { trigger(0, end); return; }
-    if (arb_due) return;                            /* the same wake word once more while its round runs */
-    pthread_mutex_lock(&core_lock);
-    int alarm = atomic_load(&alarm_on), can = alarm || (connected && satellite_running && !core_muted()), prio = alarm || state != IDLE ? 2 : 0;
-    pthread_mutex_unlock(&core_lock);
-    if (!can) { trigger(0, end); return; }               /* could not answer: a claim would only silence the Echos that can */
-    /* the one heard: with two wake words, Echos compete per wake word as they do with one each */
-    pthread_mutex_lock(&core_lock); char kw[64]; wake_phrase_bare(kw, sizeof kw); pthread_mutex_unlock(&core_lock);
-    /* Kiosk Satellite mode: their loudness, not the front end's energies (whose 150 ms only the window would pay for) */
-    int score = arb_mode(-1) == ARB_KIOSK ? kiosk_score(end, simulated) : wake_score(begin, end, simulated);
-    if (score == INT_MIN) { fprintf(stderr, "arbitration: less than 3 s heard, answers without a claim\n"); trigger(0, end); return; }
     /* The other Echos' claims are Wi-Fi broadcasts, and the BLE scan's share of the antenna loses them (ble.c): no
      * scanning while this round listens: the wait it took (none when nobody was worth waiting for, arb.c "Rivals"),
      * then the claims of Echos that heard it a little later and the winner's "answers", 1 s at least.  Right after the
@@ -1352,6 +1878,40 @@ static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* captu
     ble_quiet(w + 500 > 1000 ? (int)w + 500 : 1000);
     if (!due) { answer(end); return; }
     arb_due = due; arb_from = end;
+}
+
+static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* capture thread */
+{
+    if (!arb_running()) { trigger(0, end); return; }
+    if (arb_due || score_due) return;               /* the same wake word once more while its round runs */
+    pthread_mutex_lock(&core_lock);
+    int alarm = atomic_load(&alarm_on), can = alarm || (connected && satellite_running && !core_muted()), prio = alarm || state != IDLE ? 2 : 0;
+    pthread_mutex_unlock(&core_lock);
+    if (!can) { trigger(0, end); return; }               /* could not answer: a claim would only silence the Echos that can */
+    /* the one heard: with two wake words, Echos compete per wake word as they do with one each */
+    pthread_mutex_lock(&core_lock); char kw[64]; wake_phrase_bare(kw, sizeof kw); pthread_mutex_unlock(&core_lock);
+    /* Kiosk Satellite mode: their loudness, not the front end's energies (whose time only the window would pay for) */
+    if (arb_mode(-1) == ARB_KIOSK) {
+        int score = kiosk_score(end, simulated);
+        if (score == INT_MIN) { fprintf(stderr, "arbitration: less than 3 s heard, answers without a claim\n"); trigger(0, end); return; }
+        claim(kw, score, prio, end);
+        return;
+    }
+    int own = wake_score(begin, end, simulated);
+    /* the front end's score only for a round: arbitration off, or nobody to ask, and the claim is only a log line */
+    if (!arb_rounds() || !afe_start(simulated)) { claim(kw, own, prio, end); return; }
+    pend.end = end; pend.own = own; pend.prio = prio; snprintf(pend.kw, sizeof pend.kw, "%s", kw);
+    score_due = mono_ms() + AFE_WAIT_MS;
+}
+
+static void score_wait(void)                        /* capture thread, while score_due: the claim once the reading is in */
+{
+    int busy = atomic_load(&afe_busy), afe = busy ? INT_MIN : atomic_load(&afe_got), score = pend.own;
+    if (busy && mono_ms() < score_due) return;
+    score_due = 0;
+    if (afe != INT_MIN) { fprintf(stderr, "wake: score %d from the front end (%d from the mic stream)\n", afe, pend.own); score = afe; }
+    else if (busy) { fprintf(stderr, "wake: no score from the front end within %d ms, the mic stream's goes\n", AFE_WAIT_MS); afe_late = 1; }
+    claim(pend.kw, score, pend.prio, pend.end);
 }
 
 /* The keyword the loaded model answers to (capture thread).  Amazon's en-US sets for "Computer", "Amazon" and "Ziggy"
@@ -1400,7 +1960,9 @@ static int wake_open_word(int slot, const struct core_wake_word *w)
     }
     snprintf(wake_keyword[slot], sizeof wake_keyword[slot], "%s", hit ? kw : "");
     wake_on_miss(on_near_miss);
-    return wake_open(slot, w->manifest, on_wake);
+    int r = wake_open(slot, w->manifest, on_wake);
+    wake_align_load(slot, w);
+    return r;
 }
 
 static void on_wake(int slot, const char *keyword, uint64_t begin, uint64_t end)
@@ -1423,7 +1985,7 @@ static void on_wake(int slot, const char *keyword, uint64_t begin, uint64_t end)
     last_wake_ms = mono_ms();
     atomic_store(&wake_slot_heard, slot);
     { float db = 10 * log10f((ring_power(begin, end) + 1) / (32768.0f * 32768.0f));     /* the talker's level, for the gain */
-      pthread_mutex_lock(&core_lock); keyword_db = db; heard_ms = last_wake_ms; snprintf(wake_phrase, sizeof wake_phrase, "%s", wake_loaded[slot]); pthread_mutex_unlock(&core_lock); }
+      pthread_mutex_lock(&core_lock); keyword_db = db; heard_ms = last_wake_ms; kw_begin = begin; kw_end = end; kw_slot = slot; snprintf(wake_phrase, sizeof wake_phrase, "%s", wake_loaded[slot]); pthread_mutex_unlock(&core_lock); }
     if (!arb_running()) { trigger(0, end); return; }
     pthread_mutex_lock(&core_lock); det_begin = begin; det_end = end; pthread_mutex_unlock(&core_lock);
     atomic_store(&det_pending, 1);                  /* the ring is the capture thread's */
@@ -1522,15 +2084,21 @@ static void *playback_thread(void *arg)
             if (!open) fprintf(stderr, "play: open %u Hz x%u failed\n", it->rate, it->ch);
             break;
         case Q_DATA:
+            if (open) {                     /* the reply's level, for the mouth on a screen (screen.h) */
+                const int16_t *pcm = (const int16_t *)it->data; size_t ns = it->len / 2; double e = 0;
+                for (size_t i = 0; i < ns; i += 4) e += (double)pcm[i] * pcm[i];
+                screen_level(ns >= 4 && e > 0 ? (int)lround(100 * log10(e / (ns / 4) / (32768.0 * 32768.0))) : -1000);
+            }
             if (open && play_write(it->data, it->len) < 0) { play_close(0); open = 0; }
             break;
         case Q_STOP:
             if (open) { play_close(1); open = 0; }
             atomic_store(&tts_on, 0); playback_hint();
-            atomic_store(&flush_playback, 0);
             pthread_mutex_lock(&core_lock);
+            atomic_store(&flush_playback, 0);       /* under the lock: a wake word between would cut the next reply */
             if (proto->played) proto->played();      /* also without a client: modules reset their state here */
-            core_pipeline_finish();
+            if (wake_cut) wake_cut = 0;              /* cut for Home Assistant's wake word: its run is the request (core_remote_wake) */
+            else core_pipeline_finish();
             pthread_mutex_unlock(&core_lock);
             break;
         }
@@ -1541,14 +2109,17 @@ static void *playback_thread(void *arg)
 
 void core_tts_begin(unsigned rate, unsigned channels, int media)
 {
-    atomic_store(&streaming, 0);
-    mic_stopped();
+    if (!wake_wait) { atomic_store(&streaming, 0); mic_stopped(); }     /* wake_wait: a chime and then the message */
     core_set_state(SPEAKING);
     q_push(Q_START, media, rate, channels, NULL, 0);
+    wake_listen();
 }
 
 void core_tts_data(const void *pcm, size_t len) { if (!atomic_load(&flush_playback)) q_push(Q_DATA, 0, 0, 0, pcm, len); }
 void core_tts_end(void) { q_push(Q_STOP, 0, 0, 0, NULL, 0); }
+/* lock held.  cancel() let go of a fetch after its audio began: no Q_STOP of its own follows (one would end the run
+ * that cancelled it, or close the next reply), so none is left to swallow for the wake word's cut either */
+void core_tts_abandoned(void) { wake_cut = 0; }
 int  core_tts_flushing(void) { return atomic_load(&flush_playback); }
 void core_tts_flush(void) { atomic_store(&flush_playback, 1); }
 
@@ -1571,6 +2142,109 @@ static long long mono_ms(void);
 static struct { char id[40], name[64]; } ringing[RINGING_MAX];  /* lock held: in the order they finished */
 static int nringing, timer_ring_s = 60, timer_stop_any;         /* lock held */
 static atomic_llong alarm_until;                                /* mono_ms the ring ends; LLONG_MAX: until stopped */
+/* What rings (issue #63): stock's timer tone (the default, where the firmware has it: core_timer_sound_default), its
+ * alarm tone, the built-in blip, or one uploaded on the page; set with the lock, read by the earcon thread.  The
+ * page's "Play" (preview) rings it once, PREVIEW_MS at most */
+static atomic_int timer_sound = TIMER_SOUND_BEEP, preview;
+static atomic_llong preview_until;
+#define PREVIEW_MS 10000
+static const enum sound timer_sounds[] = { [TIMER_SOUND_TIMER] = SND_TIMER, [TIMER_SOUND_ALARM] = SND_ALARM, [TIMER_SOUND_CUSTOM] = SND_CUSTOM };
+
+/* Timers that run (core_timer_running): Home Assistant tells a satellite of each of its timers as it starts and changes,
+ * with the seconds left, and nobody else (an Assist timer is no entity), so the Echo is where they can be read.  The end
+ * is kept on the monotonic clock: Home Assistant's time moves the wall clock under it (clock.c).  One Home Assistant
+ * never finished (it restarted: its timers live in memory only) goes TIMER_STALE_MS after its end, from the earcon
+ * thread (timers_prune); a paused one stays until it is resumed or cancelled, or the table is full: the oldest paused
+ * one goes first (one Home Assistant forgot while paused would hold a slot for good), else the oldest */
+#define RUNNING_MAX 8
+#define TIMER_STALE_MS 10000
+static struct { char id[40], name[64]; unsigned total; int active; long long end, left; } running[RUNNING_MAX];  /* lock held */
+static int nrunning;                                            /* lock held; end: mono_ms (active), left: ms (paused) */
+static atomic_llong timers_stale_at = LLONG_MAX;                /* mono_ms the first active one is overdue */
+
+static void running_drop(int i)         /* lock held */
+{
+    memmove(running + i, running + i + 1, sizeof running[0] * (size_t)(nrunning - i - 1));
+    nrunning--;
+}
+
+static int running_find(const char *id) /* lock held: its index, or -1 */
+{
+    for (int i = 0; i < nrunning; i++) if (!strcmp(running[i].id, id)) return i;
+    return -1;
+}
+
+static void running_stale_at(void)      /* lock held */
+{
+    long long at = LLONG_MAX;
+    for (int i = 0; i < nrunning; i++) if (running[i].active && running[i].end + TIMER_STALE_MS < at) at = running[i].end + TIMER_STALE_MS;
+    atomic_store(&timers_stale_at, at);
+}
+
+void core_timer_running(const char *id, const char *name, unsigned total, unsigned left, int active)
+{
+    int i = running_find(id);
+    if (i < 0) {
+        if (nrunning == RUNNING_MAX) {
+            int old = 0;
+            while (old < nrunning && running[old].active) old++;
+            running_drop(old < nrunning ? old : 0);
+        }
+        i = nrunning++;
+        snprintf(running[i].id, sizeof running[i].id, "%s", id);
+    }
+    snprintf(running[i].name, sizeof running[i].name, "%s", name);
+    running[i].total = total; running[i].active = active;
+    running[i].left = left * 1000LL; running[i].end = mono_ms() + running[i].left;
+    running_stale_at();
+    screen_timers_changed();
+    if (connected && proto->timers_changed) proto->timers_changed();
+}
+
+/* "set a timer for 5 minutes" has no name: its length stands in (the ringing sensor, the screen) */
+static void timer_label(char *out, size_t cap, const char *name, unsigned total)
+{
+    unsigned h = total / 3600, m = total % 3600 / 60;
+    if (name[0]) snprintf(out, cap, "%s", name);
+    else if (total % 60 || !total) snprintf(out, cap, "%u s", total);
+    else if (h && m) snprintf(out, cap, "%u h %u min", h, m);
+    else if (h) snprintf(out, cap, "%u h", h);
+    else snprintf(out, cap, "%u min", m);
+}
+
+int core_timers_running(struct core_timer *t, int max)
+{
+    int n = 0;
+    for (int i = 0; i < nrunning && n < max; i++, n++) {
+        timer_label(t[n].name, sizeof t[n].name, running[i].name, running[i].total);
+        t[n].total = running[i].total; t[n].active = running[i].active;
+        t[n].end_ms = running[i].active ? running[i].end : 0; t[n].left_ms = running[i].active ? 0 : running[i].left;
+    }
+    return n;
+}
+
+int core_timer_next(char *name, size_t cap, unsigned *total, long long *left_ms)
+{
+    int best = -1; long long now = mono_ms();
+    for (int i = 0; i < nrunning; i++) if (running[i].active && (best < 0 || running[i].end < running[best].end)) best = i;
+    if (best < 0) return 0;
+    if (cap) snprintf(name, cap, "%s", running[best].name);
+    if (total) *total = running[best].total;
+    if (left_ms) *left_ms = running[best].end > now ? running[best].end - now : 0;
+    return 1;
+}
+
+static void timers_prune(void)          /* lock held */
+{
+    int gone = 0; long long now = mono_ms();
+    for (int i = 0; i < nrunning; ) if (running[i].active && running[i].end + TIMER_STALE_MS <= now) {
+        fprintf(stderr, "timer: %s never finished, forgotten\n", running[i].name[0] ? running[i].name : running[i].id);
+        running_drop(i); gone = 1;
+    } else i++;
+    running_stale_at();
+    if (gone) screen_timers_changed();
+    if (gone && connected && proto->timers_changed) proto->timers_changed();
+}
 
 static void alarm_set(int on)          /* lock held */
 {
@@ -1585,28 +2259,33 @@ static void alarm_set(int on)          /* lock held */
 
 void core_timer_finished(const char *id, const char *name, unsigned total)
 {
-    int i = 0; unsigned h = total / 3600, m = total % 3600 / 60;
+    int i = running_find(id);
+    if (i >= 0) { running_drop(i); running_stale_at(); }
+    i = 0;
     while (i < nringing && strcmp(ringing[i].id, id)) i++;
     if (i == RINGING_MAX) { memmove(ringing, ringing + 1, sizeof ringing[0] * --i); nringing = i; }    /* the oldest goes */
     if (i == nringing) nringing++;
     snprintf(ringing[i].id, sizeof ringing[i].id, "%s", id);
-    /* "set a timer for 5 minutes" has no name: its length stands in, so the sensor is never blank while it rings */
-    if (name[0]) snprintf(ringing[i].name, sizeof ringing[i].name, "%s", name);
-    else if (total % 60 || !total) snprintf(ringing[i].name, sizeof ringing[i].name, "%u s", total);
-    else if (h && m) snprintf(ringing[i].name, sizeof ringing[i].name, "%u h %u min", h, m);
-    else if (h) snprintf(ringing[i].name, sizeof ringing[i].name, "%u h", h);
-    else snprintf(ringing[i].name, sizeof ringing[i].name, "%u min", m);
+    timer_label(ringing[i].name, sizeof ringing[i].name, name, total);   /* never blank while it rings */
     atomic_store(&alarm_until, timer_ring_s ? mono_ms() + timer_ring_s * 1000LL : LLONG_MAX);
     fprintf(stderr, "alarm: %s rings (%d ringing)\n", ringing[i].name, nringing);
     alarm_set(1);
+    screen_timers_changed();
     if (connected && proto->timers_changed) proto->timers_changed();
 }
 
 void core_timer_cancelled(const char *id)
 {
+    int r = running_find(id);
+    if (r >= 0) {
+        running_drop(r); running_stale_at();
+        screen_timers_changed();
+        if (connected && proto->timers_changed) proto->timers_changed();
+    }
     for (int i = 0; i < nringing; i++) if (!strcmp(ringing[i].id, id)) {
         memmove(ringing + i, ringing + i + 1, sizeof ringing[0] * (size_t)(nringing - i - 1));
         if (!--nringing) alarm_set(0);
+        screen_timers_changed();
         if (connected && proto->timers_changed) proto->timers_changed();
         return;
     }
@@ -1618,6 +2297,7 @@ void core_alarm_stop(const char *why)
     fprintf(stderr, "alarm: off (%s)\n", why);
     nringing = 0;
     alarm_set(0);
+    screen_timers_changed();
     if (connected && proto->timers_changed) proto->timers_changed();
 }
 
@@ -1636,10 +2316,23 @@ int core_transcript(const char *text)
     static const char *const hangups[] = { "hangup", "endcall", "endthecall", "enddropin", "auflegen", "legauf", "beenden", "anrufbeenden",
                                            "dropinbeenden", "gesprächbeenden", "raccroche", "raccrocher", "cuelga", "colgar",
                                            "riattacca", "riaggancia", "ophangen", "hangop", "legop" };     /* the blueprint's languages */
-    char w[32]; size_t n = 0;
+    char w[32], k[32], kw[64]; size_t n = 0, m = 0;
     for (const char *p = text; *p && n < sizeof w - 1; p++)        /* lower case, without spaces and punctuation */
         if (!strchr(" \t.,!?¡¿\"'", *p)) w[n++] = (char)tolower((unsigned char)*p);
     w[n] = 0;
+    wake_phrase_bare(kw, sizeof kw);                                /* "Echo", not "Echo (de-DE)" */
+    for (const char *p = kw; *p && m < sizeof k - 1; p++)          /* "Alexa, stop" with the wake word sent too */
+        if (!strchr(" \t.,!?¡¿\"'", *p)) k[m++] = (char)tolower((unsigned char)*p);
+    k[m] = 0;
+    if (m && n > m && !strncmp(w, k, m)) memmove(w, w + m, n - m + 1);
+    /* The wake word sent too and nothing after it: without the word Home Assistant would have heard nothing and ended
+     * quietly (core_no_speech).  So here: not speech that stops a ring (timer_stop_any), nor a request for the agent */
+    if (replay_whole && m && n == m && !strcmp(w, k)) {
+        fprintf(stderr, "transcript: the wake word alone, as nothing said\n");
+        if (run_wake) wake_told("no_speech");
+        if (connected && proto->cancel) quiet_cancel(); else core_pipeline_finish();
+        return 1;
+    }
     if (dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE) {
         int hit = 0;
         for (size_t i = 0; i < sizeof stops / sizeof stops[0]; i++) hit |= !strcmp(w, stops[i]);
@@ -1657,9 +2350,12 @@ int core_transcript(const char *text)
         if (!hit && !(timer_stop_any && w[0])) return 0;
         core_alarm_stop(hit ? "said stop" : "a request during the ring");
     } else {
-        /* 10 s: the keyword's pipeline ends at Home Assistant's end of speech, a few seconds on */
-        if (!hit || !(music_stop() || (music_stopped_ms && mono_ms() - music_stopped_ms < 10000))) return 0;
-        fprintf(stderr, "said stop: music paused, run cancelled\n");
+        /* 10 s: the keyword's pipeline ends at Home Assistant's end of speech, a few seconds on.  A reply or request the
+         * wake word just cut is what the "stop" was for: Home Assistant's wake word has no "stop" keyword (stop_word),
+         * and Amazon's can miss it, so "<wake word>, stop" during a reply arrives here as a request */
+        int cut = hit && mono_ms() - wake_cut_ms < 10000;
+        if (!hit || !(cut || music_stop() || (music_stopped_ms && mono_ms() - music_stopped_ms < 10000))) return 0;
+        fprintf(stderr, "said stop: %s, run cancelled\n", cut ? "what the wake word cut stays ended" : "music paused");
     }
     if (connected && proto->cancel) { barge_in = 0; atomic_store(&streaming, 0); proto->cancel(); quiet_abort = 1; }
     core_pipeline_finish();
@@ -1679,6 +2375,16 @@ int core_timer_ring(int set)
     if (set >= 0) timer_ring_s = set;
     return timer_ring_s;
 }
+
+int core_timer_sound(int set)
+{
+    if (set >= 0 && set <= TIMER_SOUND_CUSTOM && (set == TIMER_SOUND_BEEP || sound_present(timer_sounds[set]))) atomic_store(&timer_sound, set);
+    return atomic_load(&timer_sound);
+}
+
+void core_timer_sound_default(void) { if (core_timer_sound(TIMER_SOUND_TIMER) != TIMER_SOUND_TIMER) core_timer_sound(TIMER_SOUND_BEEP); }
+
+void core_timer_sound_preview(void) { atomic_store(&preview, 1); }
 
 int core_timer_stop_any(int set)
 {
@@ -1700,8 +2406,34 @@ void core_music(int source, int on)
     if (!was != !atomic_load(&music_on)) playback_hint();
 }
 
+#define SOUND_TO_MIC (CAP_RATE * 85 / 1000)         /* speaker to mic stream (2026-09-30) */
+static void sound_start(void)                       /* earcon thread: a sound goes to the mixer */
+{
+    long long from = (long long)(cap_clock() + SOUND_TO_MIC);
+    sound_taken = from <= atomic_load(&sound_spans[sound_span].to);     /* its span goes on: from stays */
+    if (!sound_taken) {
+        sound_span = (sound_span + 1) % (int)(sizeof sound_spans / sizeof *sound_spans);
+        atomic_store(&sound_spans[sound_span].to, 0);   /* empty first: sound_in never pairs the old from with to below */
+        atomic_store(&sound_spans[sound_span].from, from);
+    }
+    atomic_store(&sound_spans[sound_span].to, LLONG_MAX);
+}
+static void sound_over(void)                        /* earcon thread: it played; the room's tail goes on for a while */
+{
+    atomic_store(&sound_spans[sound_span].to, (long long)(cap_clock() + CAP_RATE / 4));
+}
+
 /* the earcon thread: the mixer took a sound, which plays after lead_ms of silence (audio.h) */
-static void earcon_started(unsigned lead_ms) { earsup_started(cap_clock() + (uint64_t)lead_ms * CAP_RATE / 1000); }
+static void earcon_started(unsigned lead_ms)
+{
+    uint64_t now = cap_clock() + (uint64_t)lead_ms * CAP_RATE / 1000;
+    /* a ring's or a timer's tone comes here too: no span; the preview's three blips one span: from the first */
+    if (atomic_load(&sound_spans[sound_span].to) == LLONG_MAX && !sound_taken) {
+        sound_taken = 1;
+        atomic_store(&sound_spans[sound_span].from, (long long)(now + SOUND_TO_MIC));
+    }
+    earsup_started(now);
+}
 
 /* Our sounds and timers at their own volume (separate volumes): the Earcon stream plays at MainVolume, the loudest
  * of music, sounds and timers, so the quieter ones are turned down here (mix_apply).  A copy to free, or NULL to play
@@ -1716,20 +2448,53 @@ static short *scaled(const short *pcm, size_t n, int q16)
 
 static int ring_sound;
 static int ring_go(void) { return atomic_load(&dropin_ring) == ring_sound && !atomic_load(&sounds_pending); }
+/* a timer's sound plays on until it is stopped or rings out, and gives way to a pipeline (speech to text must hear the
+ * user, not the ring), our other sounds and a Drop In's ring; then it starts again from the top */
+static int alarm_go(void)
+{
+    return atomic_load(&alarm_on) && mono_ms() <= atomic_load(&alarm_until) && !atomic_load(&busy) && !atomic_load(&sounds_pending)
+           && atomic_load(&dropin_ring) < 0;
+}
+static int preview_go(void)
+{
+    return mono_ms() < atomic_load(&preview_until) && !atomic_load(&alarm_on) && !atomic_load(&busy) && !atomic_load(&sounds_pending)
+           && atomic_load(&dropin_ring) < 0;
+}
+
+/* A chime of one's own may last seconds (sounds.c): past stock's length it gives way as the rings do, to our other
+ * sounds, a Drop In's ring, a timer, and a pipeline that starts under it (the stop or button that cancels it, too;
+ * one playing over a pipeline stays: the wake sound).  Shorter ones finish, as they always did: volume ticks must not
+ * cut each other */
+#define CHIME_FINISHES_MS 2000
+static int chime_busy;
+static int chime_go(void)
+{
+    return !atomic_load(&sounds_pending) && atomic_load(&dropin_ring) < 0 && !atomic_load(&alarm_on) && (chime_busy || !atomic_load(&busy));
+}
+
+/* The ring's blip as loud as Alexa's timer tone: BS.1770 loudness of its cycle (three blips, 0.8 s of silence) at a peak
+ * of 6000 is -20.8 LUFS, the tone's -16.6 (donut; -16.2 on the Shows), so the ring takes 4.3 dB more (issue #63).  The
+ * same blip standing in for the wake and touch sounds keeps 6000 */
+#define BEEP_PEAK 9850
 
 static void *earcon_thread(void *arg)
 {
     enum { RATE = 48000, N = RATE * 12 / 100 };
-    static short tone[N];
+    static short tone[N], beep[N];
     static const char *const snd_names[SND_COUNT] = { "wake", "touch", "mics off", "mics on", "volume", "bluetooth connected",
                                                                 "bluetooth disconnected", "identify", "drop in", "call connected",
-                                                                "call ended", "incoming call", "outgoing call" };
+                                                                "call ended", "incoming call", "outgoing call", "timer", "alarm",
+                                                                "own timer sound" };
     (void)arg;
     for (int i = 0; i < N; i++) {           /* 120 ms rising two-tone blip with 10 ms fades */
         double f = i < N / 2 ? 880.0 : 1320.0, env = fmin(1.0, fmin(i, N - i) / (RATE * 0.01));
         tone[i] = (short)(6000 * env * sin(2 * M_PI * f * i / RATE));
+        beep[i] = (short)(BEEP_PEAK * env * sin(2 * M_PI * f * i / RATE));
     }
     for (;;) {
+        if (mono_ms() > atomic_load(&timers_stale_at)) {               /* a timer Home Assistant forgot; first: a Drop In's ring continues */
+            pthread_mutex_lock(&core_lock); timers_prune(); pthread_mutex_unlock(&core_lock);
+        }
         /* Amazon's own sounds where the image has them; the generated blip stands in for the wake and touch sounds otherwise */
         for (int p = atomic_exchange(&sounds_pending, 0), s = 0; p && s < SND_COUNT; s++) {
             const short *pcm; size_t n; unsigned rate;
@@ -1741,8 +2506,13 @@ static void *earcon_thread(void *arg)
             if (pcm) {
                 short *quiet = scaled(pcm, n, atomic_load(s == SND_VOLUME ? &click_q16 : &sounds_q16));
                 if (quiet) pcm = quiet;
-                earsup_play(pcm, n, rate, cap_clock()); play_earcon(pcm, n, rate);
+                sound_start();
+                earsup_play(pcm, n, rate, cap_clock());
+                if (n > (size_t)rate * CHIME_FINISHES_MS / 1000) { chime_busy = atomic_load(&busy); play_earcon_while(pcm, n, rate, chime_go); }
+                else play_earcon(pcm, n, rate);
+                sound_over();
                 free(quiet);
+                sound_played((enum sound)s);
             }
             atomic_store(&earcon_heard_until, mono_ms() + 250);         /* speaker to mic stream: 85 ms, and the room's tail */
             atomic_store(&earcon_sounding, 0);
@@ -1750,17 +2520,23 @@ static void *earcon_thread(void *arg)
         { int r = atomic_load(&dropin_ring); const short *pcm; size_t n; unsigned rate;     /* a Drop In rings: cut off when answered */
           if (r >= 0 && mono_ms() >= atomic_load(&dropin_ring_at) && sound_get((enum sound)r, &pcm, &n, &rate)) {
               short *quiet = scaled(pcm, n, atomic_load(&sounds_q16));     /* one of our sounds: at their volume */
-              ring_sound = r; play_earcon_while(quiet ? quiet : pcm, n, rate, ring_go); free(quiet); usleep(300000); continue; } }
-        if (atomic_load(&alarm_on)) {                   /* timer finished: triple blip every 1.2 s, until the ring time */
-            if (mono_ms() > atomic_load(&alarm_until)) {
+              ring_sound = r; play_earcon_while(quiet ? quiet : pcm, n, rate, ring_go); free(quiet); sound_played((enum sound)r); usleep(300000); continue; } }
+        int pv = atomic_exchange(&preview, 0) && !atomic_load(&alarm_on);   /* none during a ring, nor after it */
+        if (atomic_load(&alarm_on) || pv) {             /* timer finished: its sound, or a triple blip every 1.2 s, until the ring time */
+            if (!pv && mono_ms() > atomic_load(&alarm_until)) {
                 pthread_mutex_lock(&core_lock);
                 if (mono_ms() > atomic_load(&alarm_until)) core_alarm_stop("rang out");     /* not a timer that just came */
                 pthread_mutex_unlock(&core_lock);
             } else if (!atomic_load(&busy)) {
-                short *quiet = scaled(tone, N, atomic_load(&timers_q16));
-                for (int k = 0; k < 3; k++) play_earcon(quiet ? quiet : tone, N, RATE);
+                int ts = atomic_load(&timer_sound); const short *pcm = beep; size_t n = N; unsigned rate = RATE;
+                if (ts != TIMER_SOUND_BEEP && !sound_get(timer_sounds[ts], &pcm, &n, &rate)) { pcm = beep; n = N; rate = RATE; }  /* gone: the blip */
+                short *quiet = scaled(pcm, n, atomic_load(&timers_q16));
+                if (pv) { atomic_store(&preview_until, mono_ms() + PREVIEW_MS); atomic_store(&earcon_sounding, 1); sound_start(); }
+                if (pcm != beep) play_earcon_while(quiet ? quiet : pcm, n, rate, pv ? preview_go : alarm_go);
+                else for (int k = 0; k < 3; k++) play_earcon(quiet ? quiet : beep, N, RATE);
                 free(quiet);
-                usleep(800000);
+                if (pv) { sound_over(); atomic_store(&earcon_heard_until, mono_ms() + 250); atomic_store(&earcon_sounding, 0); }
+                else if (pcm == beep) usleep(800000);
             }
             /* in the background while a pipeline runs: speech to text must hear the user, not the ring */
         }
@@ -1798,6 +2574,23 @@ static void on_action(void)
     pthread_mutex_unlock(&core_lock);
     if (!busy && (a2dp_button(0) || (core_sendspin_port && sendspin_button()) || a2dp_button(1))) return;
     atomic_store(&trigger_pending, 2);                  /* 2: touch */
+}
+
+/* Action button pressed twice (next) or three times (previous), setting multi_press: skips on what plays (a phone over
+ * Bluetooth first, then Sendspin, as the single press pauses); with nothing to skip, the assistant busy, a Drop In call
+ * or a login waiting for the button, it is a single press, as without the setting.  Home Assistant's "Button" event
+ * hears whatever acts as a single press, never a skip */
+static void on_multi(int n)
+{
+    int dir = n == 2 ? 1 : -1;
+    if (web_approve() || improv_authorize()) return;    /* a login or a phone's setup waited for a press: these were it */
+    pthread_mutex_lock(&core_lock);
+    int busy = state == LISTENING || state == THINKING;
+    pthread_mutex_unlock(&core_lock);
+    /* a Drop In in any state (a call ringing here included) is the single press's to answer or end, never a skip */
+    int call = dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE;
+    if (!busy && !call && (a2dp_skip(dir) || (core_sendspin_port && sendspin_skip(dir)))) return;
+    on_action();
 }
 
 /* Action button held: at 5 s the ring warns, at 10 s everything is forgotten (core_reset).  acebuttond still sees the
@@ -1860,6 +2653,24 @@ static int read_volume(void) { return vol_read(VOL_MAIN, 40); }
  * follow it by default, as they did before they had a volume (the Voip stream follows MainVolume; its curve is taken
  * to be the Music stream's, docs/re-platform.md). */
 static int vol_split;                        /* under lock */
+/* Even volume steps (setting even_volume): off, a volume plays where the Echo's own curve puts it, as stock, which is
+ * anything but even: the Echo Show 5's (Android's media curve, applied digitally in AudioFlinger) has 46 dB in the
+ * bottom half and 20 in the top, and its 31 indices take 3 or 4 of our points each, so a slider moved by a point
+ * often does nothing (45, 46 and 47 all play index 14); the Dot 2's gains 1 dB from 60 to 70 and 10 from 90 to 100
+ * (volcurve.c).  On, each point is the same number of dB (EVEN_FLOOR_DB at 1 up to 0 dB at 100: 5 dB a press of the
+ * keys; 0 silent): the mixer (the Show's index) goes to the lowest point of the measured curve at least that loud
+ * (board_vol_at, so what it plays there is what was measured) and our PCM takes off the rest, at most the gap
+ * between two points (8.8 dB at the Show's bottom, 10 at the Dot's top).  That costs nothing on these Echos: their
+ * outputs are 16-bit (the Show's primary output is AUDIO_FORMAT_PCM_16_BIT at 48 kHz), and turning 16-bit audio down
+ * before the mixer rounds at the same -96 dBFS floor the output's own quantisation has.  So MainVolume is not the
+ * volume here either, as with separate volumes (stream_owns_volume).  A Bluetooth speaker with absolute volume sets
+ * its own loudness from the number, as before.  On by default; off gives stock's curve back. */
+#ifdef CUBE
+static int vol_even; /* Preserve Cube software-volume scale. */
+#else
+static int vol_even = 1;
+#endif                     /* under lock; on by default */
+#define EVEN_FLOOR_DB (-50.0f)
 static struct { int level, linked, offset; } kinds[VOL_KINDS] = { { 40, 0, 0 }, { 40, 0, 0 }, { 40, 0, 0 }, { 40, 1, 0 } };   /* under lock */
 static int tts_media;                        /* under lock: the TTS stream plays Home Assistant's media */
 static int tts_written = -1, main_written = -1;     /* under lock: TTSVolume and MainVolume as we last set them */
@@ -1872,6 +2683,12 @@ static int clamp_offset(int v) { return v < -VOL_OFFSET_MAX ? -VOL_OFFSET_MAX : 
 
 static float vol_db(int v) { return board_vol_db(v); }      /* the Echo's volume curve (volcurve.c) */
 
+/* lock held: what volume v should sound like, dB under full: the Echo's curve, or even steps */
+static float want_db(int v) { return !vol_even ? vol_db(v) : v <= 0 ? -INFINITY : EVEN_FLOOR_DB * (100 - v) / 99; }
+
+/* lock held: MainVolume (the Show's index) is the volume, as stock; else ours is kept in state/volume.music */
+static int stream_owns_volume(void) { return !vol_split && !vol_even; }
+
 /* lock held: what a kind (VOL_*) plays at now, its own volume or the music's moved by its offset */
 static int kind_volume(int k) { return kinds[k].linked ? clamp100(core_volume() + kinds[k].offset) : kinds[k].level; }
 
@@ -1879,20 +2696,33 @@ static int kind_volume(int k) { return kinds[k].linked ? clamp100(core_volume() 
 static int loudest(void)
 {
     int v = core_volume();
-    if (!vol_split) return v;
-    for (int k = 0; k < VOL_KINDS; k++)       /* a call's volume only while one is on: no hidden loud one moves the rest */
-        if ((k != VOL_CALLS || atomic_load(&dropin_live)) && kind_volume(k) > v) v = kind_volume(k);
+    if (vol_split)
+        for (int k = 0; k < VOL_KINDS; k++)   /* a call's volume only while one is on: no hidden loud one moves the rest */
+            if ((k != VOL_CALLS || atomic_load(&dropin_live)) && kind_volume(k) > v) v = kind_volume(k);
     return v;
 }
 
-/* lock held: what MainVolume and TTSVolume both are now: the loudest, or full scale for a speaker that sets the volume */
-static int mix_target(void) { return speaker_mode == SPEAKER_ABSOLUTE ? 100 : loudest(); }
+/* lock held: what MainVolume and TTSVolume both are now: the loudest (with even steps the curve's point at least as
+ * loud as it should sound), or full scale for a speaker that sets the volume */
+static int mix_target(void)
+{
+    if (speaker_mode == SPEAKER_ABSOLUTE) return 100;
+    return vol_even ? board_vol_at(want_db(loudest())) : loudest();
+}
+
+/* lock held: a kind's volume, the volume itself while they are not separate */
+static int kind_now(int k)
+{
+    return vol_split ? kind_volume(k) : core_volume();
+}
 
 /* lock held: what audio for volume v is multiplied by: 1 at the mixer's own, 0 at volume 0 */
 static float mix_gain(int v)
 {
-    if (!vol_split) return 1;
-    return v <= 0 ? 0 : powf(10.0f, (vol_db(v) - vol_db(loudest())) / 20.0f);
+    if (stream_owns_volume()) return 1;
+    if (v <= 0) return 0;
+    if (vol_even && speaker_mode != SPEAKER_ABSOLUTE) return powf(10.0f, (want_db(v) - vol_db(mix_target())) / 20.0f);
+    return powf(10.0f, (vol_db(v) - vol_db(loudest())) / 20.0f);
 }
 
 static void mix_apply(void)                  /* lock held: the mixer's volumes and our gains, as they should be now */
@@ -1906,10 +2736,10 @@ static void mix_apply(void)                  /* lock held: the mixer's volumes a
     spk_was = spk;
     a2dp_speaker_volume(loudest());
     audio_music_gain(mix_gain(core_volume()));
-    audio_tts_gain(mix_gain(tts_media ? core_volume() : kind_volume(VOL_ASSISTANT)));
-    atomic_store(&sounds_q16, (int)lroundf(mix_gain(kind_volume(VOL_SOUNDS)) * 65536));
-    atomic_store(&timers_q16, (int)lroundf(mix_gain(kind_volume(VOL_TIMERS)) * 65536));
-    audio_call_gain(mix_gain(kind_volume(VOL_CALLS)));
+    audio_tts_gain(mix_gain(tts_media ? core_volume() : kind_now(VOL_ASSISTANT)));
+    atomic_store(&sounds_q16, (int)lroundf(mix_gain(kind_now(VOL_SOUNDS)) * 65536));
+    atomic_store(&timers_q16, (int)lroundf(mix_gain(kind_now(VOL_TIMERS)) * 65536));
+    audio_call_gain(mix_gain(kind_now(VOL_CALLS)));
 }
 
 static void tts_kind(int media)              /* the playback thread, at each start of the TTS stream */
@@ -1920,8 +2750,8 @@ static void tts_kind(int media)              /* the playback thread, at each sta
     pthread_mutex_unlock(&core_lock);
 }
 
-/* The music volume while the volumes are separate: MainVolume is then the loudest of three and says nothing about it,
- * so it is kept here (and read at start instead of MainVolume) */
+/* The music volume while the volumes are separate or the steps even: MainVolume is then the loudest of three, or a
+ * point of the curve, and says nothing about it, so it is kept here (and read at start instead of MainVolume) */
 static const char *music_volume_path(void)
 {
     static char p[256]; const char *d = getenv("HASSMIC_STATE");
@@ -1931,8 +2761,8 @@ static const char *music_volume_path(void)
 static int music_dirty;                      /* under lock: volume.music to be written (music_volume_write) */
 static void music_volume_keep(void)          /* lock held */
 {
-    music_dirty = vol_split;
-    if (!vol_split) unlink(music_volume_path());
+    music_dirty = !stream_owns_volume();
+    if (stream_owns_volume()) unlink(music_volume_path());
 }
 
 /* volume_sync's thread, outside the lock: a write with its fsyncs takes tens of ms on the flash, and the volume moves
@@ -1948,7 +2778,7 @@ static void music_volume_write(void)
     snprintf(t, sizeof t, "%d\n", v);
     statefile_write(music_volume_path(), 0644, t, strlen(t));
     pthread_mutex_lock(&core_lock);
-    if (!vol_split) unlink(music_volume_path());        /* switched off meanwhile */
+    if (stream_owns_volume()) unlink(music_volume_path());      /* switched off meanwhile */
     pthread_mutex_unlock(&core_lock);
 }
 
@@ -1963,6 +2793,17 @@ int core_separate_volumes(int set)
         mix_apply();
     }
     return vol_split;
+}
+
+int core_even_volume(int set)
+{
+    if (set >= 0 && (set != 0) != vol_even) {
+        vol_even = set != 0;
+        if (stream_owns_volume() || speaker_mode == SPEAKER_NONE) music_volume_keep();
+        mix_apply();
+        fprintf(stderr, "volume: even steps %s, mixer at %d\n", vol_even ? "on" : "off", mix_target());
+    }
+    return vol_even;
 }
 int core_kind_volume(int k, int set) { if (set >= 0) { kinds[k].level = clamp100(set); mix_apply(); } return kinds[k].level; }
 int core_kind_linked(int k, int set)
@@ -2020,17 +2861,23 @@ static const char *own_volume_path(void)
 int core_volume(void)
 {
     if (volume < 0) {                        /* whatever it was left at: in line now */
-        /* volume.music only while state/config says the volumes are separate (this may run before settings_load): a
-         * hand edit or an older build (a fallback after an update) leaves the file behind with the setting gone, and
-         * the volume moved since is MainVolume's */
-        char sv[8]; int split = !settings_peek("separate_volumes", sv, sizeof sv) && !strcmp(sv, "on");
+        /* volume.music only while state/config says the volumes are separate or the steps even (this may run before
+         * settings_load): a hand edit or an older build (a fallback after an update) leaves the file behind with the
+         * setting gone, and the volume moved since is MainVolume's */
+        char sv[8], ev[8]; int split = (!settings_peek("separate_volumes", sv, sizeof sv) && !strcmp(sv, "on")) ||
+                                       settings_peek("even_volume", ev, sizeof ev) || strcmp(ev, "off");     /* on unless off */
         FILE *f = fopen(own_volume_path(), "r"), *m = split ? fopen(music_volume_path(), "r") : NULL; int v;
-        if (!split && !unlink(music_volume_path())) fprintf(stderr, "volume: state/volume.music left over, the volumes are not separate\n");
+        if (!split && !unlink(music_volume_path())) fprintf(stderr, "volume: state/volume.music left over, the volumes are not separate, the steps not even\n");
         if (f && fscanf(f, "%d", &v) == 1 && v >= 0 && v <= 100) {
             volume = v;
             fprintf(stderr, "volume: %d (the Echo's own, set aside for a Bluetooth speaker)\n", volume);
         } else if (m && fscanf(m, "%d", &v) == 1 && v >= 0 && v <= 100) volume = v;     /* separate volumes */
-        else volume = read_volume();
+        else {
+            volume = read_volume();
+            /* MainVolume is still the volume (the first start with even steps, on by default after an update): kept
+             * at once, before mix_apply below makes it a point of the curve that a restart would take for the volume */
+            if (split) { char t[8]; snprintf(t, sizeof t, "%d\n", volume); statefile_write(music_volume_path(), 0644, t, strlen(t)); }
+        }
         if (f) fclose(f);
         if (m) fclose(m);
         unlink(own_volume_path());
@@ -2048,7 +2895,7 @@ void core_speaker(int mode, int pct)
         echo_own_volume = was;
         FILE *f = fopen(own_volume_path(), "w"); if (f) { fprintf(f, "%d\n", was); fclose(f); }
     }
-    if (mode == SPEAKER_NONE) { volume = echo_own_volume; if (vol_split) music_volume_keep(); }
+    if (mode == SPEAKER_NONE) { volume = echo_own_volume; if (!stream_owns_volume()) music_volume_keep(); }
     else if (mode == SPEAKER_ABSOLUTE) volume = pct < 0 ? 0 : pct > 100 ? 100 : pct;
     speaker_mode = mode;
     mix_apply();
@@ -2080,7 +2927,7 @@ static void volume_led(int v, int assistant)
 void core_set_volume(int v)
 {
     volume = clamp100(v);
-    if (vol_split && speaker_mode == SPEAKER_NONE) music_volume_keep();
+    if (!stream_owns_volume() && speaker_mode == SPEAKER_NONE) music_volume_keep();
     mix_apply();
     volume_led(volume, 0);
     fprintf(stderr, "volume: %d\n", volume);
@@ -2247,14 +3094,14 @@ static void volume_sync(void)
     if (speaker_mode == SPEAKER_ABSOLUTE) {                         /* 100 is ours: only a stray TTSVolume to mend */
         if (main_v == 100 && tts_v != 100) { tts_written = -1; mix_apply(); }
     } else if (volume == cur && mix_target() == want) {           /* nobody set it meanwhile */
-        if (main_v != want && !vol_split) {                         /* MainVolume is the volume: the user's wish */
+        if (main_v != want && stream_owns_volume()) {               /* MainVolume is the volume: the user's wish */
             volume = main_written = main_v;
             fprintf(stderr, "volume: %d (changed outside)\n", volume);
             if (connected && proto->volume_changed) proto->volume_changed(volume);
             if (core_sendspin_port) sendspin_volume_changed(volume);
             a2dp_volume_changed(volume);
         } else if (main_v != want) {                                /* the loudest of three: ours again */
-            fprintf(stderr, "volume: MainVolume %d changed outside, %d again (separate volumes)\n", main_v, want);
+            fprintf(stderr, "volume: MainVolume %d changed outside, %d again (%s)\n", main_v, want, vol_split ? "separate volumes" : "even steps");
             main_written = -1;
         }
         if (tts_v != mix_target()) tts_written = -1;               /* set by someone else: ours again */
@@ -2425,8 +3272,13 @@ static void *capture_thread(void *arg)
           if (t == 1) { pthread_mutex_lock(&core_lock); wake_phrase[0] = 0; heard_ms = mono_ms(); wake_told("detected"); pthread_mutex_unlock(&core_lock); }   /* the first one's */
           if (t == 3) wake_tell("near_miss");                         /* SIGTTOU: Pryon's near miss */
           if (t == 2) trigger(1, 0);
-          else if (t == 1 && ring_n > CAP_RATE) wake_heard(ring_n - CAP_RATE * 6 / 10, ring_n - lag, 1);
-          else if (t == 1) wake_heard(0, ring_n, 1); }
+          else if (t == 1) {
+              uint64_t b = ring_n > CAP_RATE ? ring_n - CAP_RATE * 6 / 10 : 0, e = ring_n > CAP_RATE ? ring_n - lag : ring_n;
+              pthread_mutex_lock(&core_lock); kw_begin = b; kw_end = e; kw_slot = 0;
+              if (getenv("HASSMIC_FAKE_KEYWORD")) keyword_db = 10 * log10f((ring_power(b, e) + 1) / (32768.0f * 32768.0f));   /* as on_wake: the tail is looked for */
+              pthread_mutex_unlock(&core_lock);
+              wake_heard(b, e, 1);
+          } }
         if (atomic_exchange(&stop_pending, 0)) stop_word();        /* SIGHUP: the "stop" keyword, for tests on the PC */
         if (n == 0) continue;
         atomic_fetch_add(&cap_bytes, n);
@@ -2480,23 +3332,41 @@ static void *capture_thread(void *arg)
             else for (size_t k = n / 2; k; ) { size_t m = k < 1024 ? k : 1024; dropin_mic(zeros, m, 0); k -= m; }
         }
         if (atomic_load(&streaming)) {
+            align_ahead();                              /* outside the lock: it takes up to ~0.1 s on an Echo */
             pthread_mutex_lock(&core_lock);
             uint64_t at = cap_clock() - n / 2;
             if (atomic_load(&streaming) && connected) {
-                if (replay_from) stream_ring(word_tail_end(replay_from, at), at);     /* after the wake word, up to this block */
-                send_mic(pcm, n / 2, at);
-            }
-            replay_from = 0;
+                if (!replay_from) send_mic(pcm, n / 2, at);
+                else {                                      /* after the wake word: from its tail's end, this block included */
+                    int64_t from = word_tail_end(replay_from, at + n / 2);
+                    if (from >= 0) {
+                        talker_from = (uint64_t)from;
+                        if (replay_whole) {                 /* or the word itself too, from a little ahead of it */
+                            uint64_t lead = CAP_RATE / 10;
+                            from = (int64_t)(kw_begin > lead ? kw_begin - lead : 0);
+                            /* the command's start can lie before Pryon's end (the aligner's answer, taken from 400 ms
+                             * ahead of it): signed, or a Dot 2's log read "the command from 1152921504606726 ms after it" */
+                            fprintf(stderr, "wake: the wake word sent too, from %llu ms before its end (the command from %+lld ms after it)\n",
+                                    (unsigned long long)((replay_from - (uint64_t)from) * 1000 / CAP_RATE),
+                                    ((long long)talker_from - (long long)replay_from) * 1000 / CAP_RATE);
+                        }
+                        stream_ring((uint64_t)from, at + n / 2); replay_from = 0;
+                    }
+                }
+                if (mic_end.ended && atomic_load(&streaming)) heard_end();
+            } else replay_from = 0;
             pthread_mutex_unlock(&core_lock);
         }
         if (atomic_exchange(&det_pending, 0)) {
             pthread_mutex_lock(&core_lock); uint64_t b = det_begin, e = det_end; pthread_mutex_unlock(&core_lock);
             wake_heard(b, e, 0);
         }
+        if (score_due) score_wait();
+        afe_late_check();
         if (arb_due && (mono_ms() >= arb_due || arb_settled())) { arb_due = 0; if (arb_decide()) answer(arb_from); else { afe_done(); wake_tell("answered_elsewhere"); } }    /* after this block went out live */
 
         pthread_mutex_lock(&core_lock);
-        if (core_local_wake && (state == LISTENING || state == THINKING) && time(NULL) - state_since > PIPELINE_TIMEOUT) {
+        if ((state == LISTENING || state == THINKING) && time(NULL) - state_since > PIPELINE_TIMEOUT) {
             fprintf(stderr, "pipeline timeout\n");
             core_pipeline_finish();
         }
@@ -2549,7 +3419,7 @@ int main(int argc, char **argv)
         case 'i': dropin_port = atoi(optarg); break;
         case 'W': core_web_port = atoi(optarg); break;
         case 'L': use_led = 0; break;
-        case 'E': use_earcon = 0; break;
+        case 'E': no_earcons = 1; break;
         case 'V': use_volume = 0; break;
         case 'S': print_mdns = 1; break;
         case 'B': use_bt = 0; break;
@@ -2575,6 +3445,7 @@ int main(int argc, char **argv)
       if (!settings_peek("light_band", rows, sizeof rows)) ring_band_rows(atoi(rows)); }
     ring_start(led_run, ring_reloaded);
     rd_start();                         /* designs asked for before this start: still installing, or back */
+    screen_start();                                 /* a model with a screen: its UI process (screen.h) */
     audio_earcon_started = earcon_started;
     led("-u", "scone-setup");           /* a restart inside the pairing window: the window is gone, its chaser would loop on */
     led("-u", "factory-reset");         /* a reset asked for before this start is done (main.sh) */
@@ -2615,7 +3486,7 @@ int main(int argc, char **argv)
     pthread_create(&ear_t, NULL, earcon_thread, NULL);
     { pthread_t vol_t; pthread_create(&vol_t, NULL, volume_led_thread, NULL); pthread_detach(vol_t); }
 
-    static const struct button_handler buttons = { on_action, on_mute, on_volume, on_pair, on_hold, button_event };
+    static const struct button_handler buttons = { on_action, on_mute, on_volume, on_pair, on_hold, button_event, on_multi };
     if (buttons_start(input, &buttons) < 0) fprintf(stderr, "buttons: %s not available\n", input);
     /* The latch is no press at start: on the Echo Show 8 it comes up on (the mics are cut, stock's system server plays
      * its privacy sound) and it lets go by itself 20-80 s after power on (nothing in userspace writes it).  hassmic,
@@ -2628,7 +3499,7 @@ int main(int argc, char **argv)
     static const struct improv_hooks improv_hooks = { web_attention, improv_authorized };
     if (use_bt) improv_start(&improv_hooks);                 /* setup over Bluetooth, when there is no network (improv.c) */
     if (ota_port) ota_start(ota_port);
-    pthread_mutex_lock(&core_lock); settings_load(); settings_preset(); pthread_mutex_unlock(&core_lock);    /* whatever the protocol */
+    pthread_mutex_lock(&core_lock); core_timer_sound_default(); settings_load(); settings_preset(); pthread_mutex_unlock(&core_lock);    /* whatever the protocol */
     davs_start();                                             /* Amazon login for artifact downloads (settings page) */
     static const struct web_hooks web_hooks = { web_attention, web_approved };
     if (core_web_port && web_start(core_web_port, &web_hooks)) { fprintf(stderr, "web: not available\n"); core_web_port = 0; }

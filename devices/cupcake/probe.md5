@@ -1,0 +1,8 @@
+1d3315eac37c949f635fcc8f72616ede  lib/libpryon.so
+d482f825dc8e5c59b0a997e45afd0577  lib/libasp.so
+ffe6b367592a773c573eba5f90fab1a9  lib/libaspclient.so
+3962508749d27562e9f5d8f534503f35  lib/libaudioflinger.so
+31ffe322a111458baeadee4d0dfec2f8  vendor/lib/hw/audio.primary.mt8167.so
+0317db72bb498eff2e31ec0476dab095  lib/libwakewordserver_jni.so
+cc95e5fa8e34b996b3b0bcec8236c103  lib/libled_hal.so
+fbce32ba9ec286e1c2e19cd0585ec642  bin/ledcontroller

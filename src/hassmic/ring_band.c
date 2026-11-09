@@ -4,6 +4,9 @@
  * Lottie compositions of 960x200 in assets/landscape/), as a 10 px line along the bottom edge drawn over the app in
  * front.  Here the band is reserved instead, so no app ever has it under it and any app can be the screen's UI:
  *
+ *   renderer the screen UI's process (screen.h, src/ui/android.c), where it runs: one more layer in a process that is
+ *            there anyway (ringbar's VM was 16 MB of PSS of its own, 2026-10-14), drawn natively; this file sends it one
+ *            row per frame (the band is the same in every row).  Else, and for the tests (HASSMIC_FAKE_BAND):
  *   ringbar  scripts/device/ringbar.dex (tools/mkringbar.py), run as app_process by this file: it sets the window
  *            manager's overscan for the band (every app is laid out above it; nothing of theirs draws there), puts a
  *            SurfaceFlinger layer of its own over it, says "ready <width> <rows>" and draws the frames it is sent on
@@ -29,6 +32,7 @@
 #include "board.h"
 #include "core.h"
 #include "ringdesign.h"
+#include "screen.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -55,6 +59,8 @@ enum { E_NONE, E_PULSE, E_SPIN, E_BLINK, E_RAINBOW };
 #define MAX_ROWS     40
 #define TIMEOUT_MS   300000             /* stock's screen_off_timeout_standard (Arcus default) */
 #define QUIET_MS     60000              /* stock's _dnd and _privacy */
+#define HOLD_MS      86400000           /* timers on the screen (screen_keep_on): a timer across the room is what the
+                                           screen is for then */
 #define WAKE_EVERY   2000               /* the power calls at most this often (a process each) */
 
 struct rgb { float r, g, b; };
@@ -454,9 +460,24 @@ static int builder_api(void)
 #endif
 }
 
-/* the renderer for `n` rows: its stdin in *in, the band's width in *w (0: band off).  0, or -1 when it did not come up */
+#define VIA_SCREEN -2                   /* "fd" of the screen UI's band (screen_band) */
+
+/* the renderer for `n` rows: its stdin in *in (VIA_SCREEN: the screen UI), the band's width in *w (0: band off).  0, 1
+ * off with the screen UI's overscan, or -1 when it did not come up, -2 the screen UI not up yet (asked again a second
+ * later: the thread goes on meanwhile) */
 static int ringbar(int n, int *in, int *w)
 {
+    if (!getenv("HASSMIC_FAKE_BAND") && screen_ui()) {       /* the screen UI draws it: its width once it is up */
+        if (!n) { *in = -1; *w = 0; return 1; }               /* (it resets the overscan itself, started anew) */
+        for (int i = 0; i < 10 && !(*w = screen_width()); i++) usleep(100000);
+        if (!*w) return -2;
+        if (*w < 0 || *w > MAX_W) {                           /* the UI's word, as the renderer's below */
+            fprintf(stderr, "band: the screen UI's width is out of range: %d\n", *w); *w = 0; return -1;
+        }
+        *in = VIA_SCREEN;
+        fprintf(stderr, "band: %d x %d at the bottom of the screen, drawn by the screen UI\n", *w, n);
+        return 0;
+    }
     int pin[2], pout[2]; char rs[8]; snprintf(rs, sizeof rs, "%d", n);
     const char *fake = getenv("HASSMIC_FAKE_BAND"), *dex = dex_path();
     int builder = builder_api();        /* before the fork: a property lookup takes bionic's lock, which another thread may hold */
@@ -526,6 +547,7 @@ static int send_frame(int fd, const struct rgb *row, int w, int n, float k)
         p[0] = (uint8_t)lroundf(clamp01(row[x].b * k) * 255); p[1] = (uint8_t)lroundf(clamp01(row[x].g * k) * 255);
         p[2] = (uint8_t)lroundf(clamp01(row[x].r * k) * 255); p[3] = 255;
     }
+    if (fd == VIA_SCREEN) return screen_band(buf, w);          /* one row: the UI repeats it; -1: the UI was given up */
     for (int y = 1; y < n; y++) memcpy(buf + (size_t)y * w * 4, buf, (size_t)w * 4);
     size_t len = (size_t)w * n * 4, off = 0;
     while (off < len) {
@@ -541,17 +563,35 @@ static void *band_thread(void *arg)
 {
     (void)arg;
     static struct rgb row[MAX_W], last[MAX_W];
-    int fd = -1, w = 0, have_rows = -1, sent = 0, timeout = 0, fails = 0;
+    int fd = -1, w = 0, have_rows = -1, sent = 0, timeout = 0, fails = 0, waited = 0, off_ui = 0;
     float last_k = -1;                              /* the brightness of the frame sent last */
     long long last_wake = 0, next_check = 0;
     for (;;) {
         pthread_mutex_lock(&lock);
-        int want = rows;
+        int want = rows, wake = wake_req; wake_req = 0;
         pthread_mutex_unlock(&lock);
+        long long now = now_ms();
+        if (now >= next_check) {                    /* stock's screen timeouts by what the Echo is doing (first: also
+                                                       while a renderer is awaited) */
+            int t = screen_keep_on() ? HOLD_MS : core_muted() || core_dnd(-1) ? QUIET_MS : TIMEOUT_MS;
+            if (t != timeout) { timeout = t; screen_timeout(t); }
+            next_check = now + 1000;
+        }
+        if (wake && now - last_wake >= WAKE_EVERY) { last_wake = now; screen_wake(); }
         if (want != have_rows) {                    /* (re)start the renderer for the rows set */
             if (fd >= 0) close(fd);                 /* it ends at the end of its input; the layer goes with it */
             fd = -1; w = 0; sent = 0;
-            if (ringbar(want, &fd, &w) < 0) {
+            int rc = ringbar(want, &fd, &w);
+            if (rc == -2) {                         /* the screen UI on its way (screen.c gives it 30 s): soon again */
+                if (!waited++) fprintf(stderr, "band: waiting for the screen UI\n");
+                pthread_mutex_lock(&lock);
+                struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 1;
+                if (rows == want) pthread_cond_timedwait(&cv, &lock, &ts);
+                pthread_mutex_unlock(&lock);
+                continue;
+            }
+            waited = 0; off_ui = rc == 1;
+            if (rc < 0) {
                 if (!fails++) fprintf(stderr, "band: no renderer, trying again every 30 s\n");
                 pthread_mutex_lock(&lock);          /* a new height ("Light band") tries again at once */
                 struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 30;
@@ -562,12 +602,6 @@ static void *band_thread(void *arg)
             fails = 0; have_rows = want;
             if (!want) fprintf(stderr, "band: off, the whole screen is the apps'\n");
         }
-        long long now = now_ms();
-        if (now >= next_check) {                    /* stock's screen timeouts by what the Echo is doing */
-            int t = core_muted() || core_dnd(-1) ? QUIET_MS : TIMEOUT_MS;
-            if (t != timeout) { timeout = t; screen_timeout(t); }
-            next_check = now + 1000;
-        }
         struct rgb led[LEDS];
         pthread_mutex_lock(&lock);
         now = now_ms();                             /* under the lock: a ring_set just before would be in its future */
@@ -575,14 +609,22 @@ static void *band_thread(void *arg)
         long long at = p < P_COUNT ? act[p].at : 0;
         struct ring_light l = blink ? flash : light;
         if (!blink) flash_until = 0;
-        int wake = wake_req; wake_req = 0;
+        wake = wake_req; wake_req = 0;
         int s = p < P_COUNT ? slot_of(p) : -1, designed = s >= 0 && des[s].nframes;
         if (designed) design_draw(s, p, led, now - at, arg_);      /* here: ring_reload frees the designs it replaces */
         pthread_mutex_unlock(&lock);
         if (wake && now - last_wake >= WAKE_EVERY) { last_wake = now; screen_wake(); }
-        if (fd < 0) {                               /* band off: nothing to draw, wait for a change */
+        if (fd == VIA_SCREEN && !screen_ui()) {     /* the screen UI given up (screen.c): ringbar.dex draws the band now */
+            fprintf(stderr, "band: the screen UI was given up, the band's own renderer takes over\n");
+            fd = -1; have_rows = -1; continue;
+        }
+        if (fd == -1) {                             /* band off: nothing to draw, wait for a change (a second: the */
+            if (off_ui && !screen_ui()) {           /* timeouts above, and a screen UI given up, whose top rows of */
+                off_ui = 0; have_rows = -1; continue;   /* overscan (its grip) ringbar.dex's "off" gives back) */
+            }
             pthread_mutex_lock(&lock);
-            if (rows == have_rows) pthread_cond_wait(&cv, &lock);
+            struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 1;
+            if (rows == have_rows && !wake_req) pthread_cond_timedwait(&cv, &lock, &ts);
             pthread_mutex_unlock(&lock);
             continue;
         }
@@ -600,7 +642,8 @@ static void *band_thread(void *arg)
         if (!sent || k != last_k || memcmp(row, last, sizeof row[0] * w)) {    /* the level too: a still light dims */
             if (send_frame(fd, row, w, have_rows, k) < 0) {
                 fprintf(stderr, "band: the renderer is gone, starting it again\n");
-                close(fd); fd = -1; have_rows = -1; sleep(1); continue;
+                if (fd >= 0) close(fd);
+                fd = -1; have_rows = -1; sleep(1); continue;
             }
             memcpy(last, row, sizeof row[0] * w); last_k = k; sent = 1;
         }
@@ -644,6 +687,7 @@ int ring_assistant_steps(void) { return 1; }        /* the replies' own volume i
 /* Each LED's own layer of the Dots' ledcontroller (ring.c: the fill, the rotation, LED by LED): not on the band, the
  * rotation stays 0 */
 int ring_per_led(void) { return 0; }
+int ring_effect_listed(int i) { return i >= 0 && i < ring_neffects; }
 int ring_slot_available(int i) { return i >= 0 && i < ring_nslots; }      /* every slot is one of the patterns */
 int ring_slot_live(int i) { if (i < 0 || i >= ring_nslots) return 0; pthread_mutex_lock(&lock); int r = des[i].nframes > 0; pthread_mutex_unlock(&lock); return r; }
 int ring_leds(void) { return LEDS; }

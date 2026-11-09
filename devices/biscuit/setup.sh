@@ -51,7 +51,7 @@ step_tools() {
     [ -n "$WINDOWS" ] && ! rooted_already && unlock="python3 fastboot uvx"   # firebreak, run by uv, takes fastboot
     if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip curl sha256sum || return 1; return 0; fi
     need_tools adb $unlock make cc unzip debugfs curl sha256sum bc xz || return 1
-    [ "$(df -Pk . | awk 'NR == 2 { print $4 }')" -gt 5000000 ] || warn "less than 5 GB free here; the NDK and firmware need about that"
+    space_ahead 1300
 }
 
 step_files() {
@@ -65,6 +65,7 @@ step_files() {
     [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
     if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
         mkdir -p toolchain
+        need_space $NDK_MB "The Android NDK" || return 1
         TASK_NOTE="du -h toolchain/ndk.zip | cut -f1" task "Downloading Android NDK r21e (1 GB)" curl -fsSL -o toolchain/ndk.zip $NDK_URL &&
             task "Unpacking the NDK" unzip -q -o toolchain/ndk.zip -d toolchain && rm -f toolchain/ndk.zip || return 1
     fi
@@ -99,8 +100,16 @@ step_unlock() {
     tell "Put the Echo into fastboot mode" "Hold the action button (•) and plug the power in." \
         "Keep holding until the ring shows a green light (an Echo unlocked before shows a rainbow instead)."
     waitfor "Waiting for fastboot|Fastboot" '[ -n "$(fastboot devices)" ]' "No green light? Unplug the power and try again." || return 1
-    tell "amonet asks you to type YES, and for a key press at the end" "${RED}${B}Do not interrupt it once it runs: that can brick the Echo.$N"
-    live "amonet fastbrick (about a minute)" in_dir "$adir" ./fastbrick.sh || return 1
+    fastbrick "$adir" "about a minute" "the ring turns white"
+    case $? in
+    0) ;;
+    # unlocked before: the rainbow is amonet's own fastboot.  Its LK has no reboot-recovery (strings of lk.img:
+    # reboot and reboot-bootloader only, matched by prefix, so `fastboot reboot recovery` is a plain reboot into Fire
+    # OS); `oem reboot-recovery` is what firebreak sends there, measured on Dots (its docs/rooting.md: off about 5 s,
+    # then TWRP).  The Echo 2's LK has the same commands; not tried on one.
+    2) task "Starting TWRP" fastboot oem reboot-recovery || return 1; wait_adb recovery; return;;
+    *) return 1;;
+    esac
     unlock_wait_twrp       # gives up when the unlock did not take (issue #50)
 }
 

@@ -77,7 +77,21 @@ const hmtar = (() => {
     return out;
   }
 
-  return { write, list, header };
+  // A sound pack file: pack.json first, then <sound id>.wav.  files: [{ id, bytes }] -> the pieces, as write's
+  const PACK = 'pack.json', PACK_ID = /^[a-z_]{1,32}$/;
+  const packWrite = (name, files, mtime) => write([{ path: PACK, parts: [enc.encode(JSON.stringify({ hassmic_sounds: 1, name }))] },
+    ...files.map((f) => ({ path: `${f.id}.wav`, parts: [f.bytes] }))], mtime);
+  // { name, files: [{ id, size, off }] } of a pack file, read as list reads; anything else throws.  The Echo checks each sound
+  async function packRead(read, total) {
+    const all = await list(read, total), m = all.find((x) => x.path === PACK);
+    let head = null;
+    if (m && m.size < 4096) try { head = JSON.parse(dec.decode(await read(m.off, m.size))); } catch (e) { head = null; }
+    if (!head || head.hassmic_sounds !== 1 || typeof head.name !== 'string') throw new Error('not a sound pack');
+    const files = all.filter((x) => x.path.endsWith('.wav')).map((x) => ({ id: x.path.slice(0, -4), size: x.size, off: x.off })).filter((x) => PACK_ID.test(x.id));
+    return { name: head.name, files };
+  }
+
+  return { write, list, header, packWrite, packRead };
 })();
 
 if (typeof module !== 'undefined') module.exports = hmtar;

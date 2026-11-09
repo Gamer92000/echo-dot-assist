@@ -42,11 +42,16 @@ struct proto {
     void (*settings_changed)(void);             /* may be NULL: a setting changed elsewhere (web page): show them all again */
     void (*entities_changed)(void);             /* may be NULL: a feature went on or off: have the client list entities again */
     int  (*arb_scan)(const char *tag_id);       /* may be NULL: report a tag as scanned to Home Assistant (arb.h) */
-    void (*timers_changed)(void);               /* may be NULL: a timer started or stopped ringing (core_timers_ringing) */
+    void (*timers_changed)(void);               /* may be NULL: a timer started or stopped ringing (core_timers_ringing),
+                                                   or the next one to end changed (core_timer_next) */
     void (*dropin_changed)(int state, const char *peer);   /* may be NULL: a Drop In's state (DROPIN_*), each in turn */
     void (*dropin_result)(const char *result);  /* may be NULL: what came of a call this Echo made (dropin_results) */
     void (*button)(const char *event);          /* may be NULL: a button was pressed or held (core_button_events) */
     void (*wake)(const char *event);            /* may be NULL: the wake word heard (core_wake_events) */
+    void (*end)(void);                          /* may be NULL: the Echo heard the request end (micend.h): end of audio,
+                                                 * the server goes on with what it has (stop() aborts the run) */
+    void (*reply_cut)(void);                    /* may be NULL: the reply playing is cut (flush) while the run goes on: stop
+                                                 * fetching it now, not at the server's next chunk */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
@@ -55,6 +60,7 @@ extern const char *core_name;                   /* "Echo Dot 2 5695c4": the mode
 const char *core_node_name(void);               /* "echo-dot-2-5695c4": the ESPHome device (host) name */
 void core_node_of(const char *name, char node[64]);  /* any Echo's node from its name ("Echo Dot 2 5695c4"); a node stays */
 void core_identify(void);                       /* rainbow ring for 10 s and a sound: which Echo is this */
+void core_sound_preview(int s);                 /* sounds.h's sound once (the page's Sounds card), lock or not */
 /* Setup (OOBE): 1 from an install or a reset until Home Assistant took the Echo on (its voice assistant subscribed:
  * state/adopted); the ring shows stock's setup spinner meanwhile.  Any thread */
 int  core_oobe(void);
@@ -69,6 +75,7 @@ extern int core_local_wake, core_port, core_sendspin_port, core_web_port;
 enum state core_state(void);
 void core_set_state(enum state s);
 void core_link(int connected, int ready);       /* client connection / server wants pipelines.  (0,0) ends a running pipeline */
+void core_link_pause(void);                     /* the server asked to pause (Wyoming, HA's mute switch): core_link(1, 0), no error */
 void core_mic_off(void);                        /* server has heard enough */
 int  core_ha_linked(void);                     /* lock held: a client (Home Assistant) is connected */
 void core_settings_changed(void);
@@ -80,7 +87,10 @@ void core_mic_level(int dbfs);                  /* speech level the pipeline get
 int  core_wake_sound_removal(int set);           /* our sounds taken out of what the pipeline gets (earsup.h), -1 reads */
 int  core_mic_denoise(int set);                 /* noise reduction on what the pipeline gets (micdenoise.h): 0 off .. 3 high, -1 reads */
 void core_pipeline_finish(void);
+int  core_follow_up(void);                       /* the pipeline being started answers a question: no wake word stage, even with -w remote */
 void core_restart_after(void);                  /* start another pipeline once the current one has finished */
+int  core_wake_run_ended(int failed);            /* lock held: a run ended during a reply; 1: the one that only listened for the wake word */
+void core_run_over(void);                        /* lock held: the run has ended while its reply is (about to be) spoken; with -w remote the wake word may cut it */
 void core_error(void);
 /* Home Assistant heard no request (stt-no-text-recognized): the turn ends quietly, without core_error's ring */
 void core_no_speech(void);
@@ -89,7 +99,10 @@ void core_no_speech(void);
  * soft mute that can be undone remotely, its state shows latch OR soft mute, and unmuting with the button clears both. */
 int  core_soft_mute(int set);                    /* set: 0/1, or -1 to only read */
 int  core_muted(void);                           /* effective */
-int  core_wake_sound(int set);                   /* same convention */
+int  core_wake_sound(int set);                   /* same convention: the wake sound only, one's own or Alexa's stays chosen */
+int  core_sound_on(int s, int set);              /* sounds.h's sound has its switch on: set 0/1, or -1 to only read */
+int  core_wake_in_request(int set);              /* the request's audio from the wake word on, not after it; -1 reads */
+int  core_end_of_request(int set);               /* the end of a request heard on the Echo (micend.h: MICEND_*), -1 reads */
 int  core_stop_ends_listening(int set);          /* "<wake word>, stop" also ends listening (main.c stop_word), -1 reads */
 int  core_bt_announce(int set);                  /* same: chime and "Connected to <name>" when a phone connects */
 int  core_bluetooth(int set);                   /* same; -B on the command line: leave the radio to the stock stack */
@@ -101,6 +114,7 @@ void core_set_volume(int percent);
 enum { VOL_ASSISTANT, VOL_SOUNDS, VOL_TIMERS, VOL_CALLS, VOL_KINDS };
 #define VOL_OFFSET_MAX 100
 int  core_separate_volumes(int set);
+int  core_even_volume(int set);           /* setting even_volume: the same dB per point (main.c vol_even) */
 int  core_kind_volume(int kind, int set);
 int  core_kind_linked(int kind, int set);
 int  core_kind_offset(int kind);
@@ -157,6 +171,7 @@ extern const int core_wake_nevents;
 void   core_tts_begin(unsigned rate, unsigned channels, int media);
 void   core_tts_data(const void *pcm, size_t len);
 void   core_tts_end(void);                                  /* drains, then played() and core_pipeline_finish() */
+void   core_tts_abandoned(void);                            /* lock held: a reply that began ends without core_tts_end() */
 int    core_tts_flushing(void);                             /* barge-in: drop audio until core_tts_end() */
 void   core_tts_flush(void);
 size_t core_tts_queued(void);                               /* bytes not yet played: for back pressure */
@@ -165,6 +180,18 @@ size_t core_tts_queued(void);                               /* bytes not yet pla
  * wake word alone) or the ring time (core_timer_ring) is up */
 void   core_timer_finished(const char *id, const char *name, unsigned total);
 void   core_timer_cancelled(const char *id);
+/* Running timers (lock held): Home Assistant's started and updated events (a pause, a resume, time added) with the
+ * seconds left, so the Echo can say which ends next; finished and cancelled ones go, and so does one Home Assistant
+ * never finished (it restarted and forgot it) a while after its end.  core_timer_next: 1 and the one that ends first
+ * among those not paused (left_ms: until it ends; total: the length it was set for, without time added; name: "" for
+ * "a timer for 5 minutes"); 0 when none runs */
+void   core_timer_running(const char *id, const char *name, unsigned total, unsigned left, int active);
+int    core_timer_next(char *name, size_t cap, unsigned *total, long long *left_ms);
+/* every running timer (lock held), up to max, for the screen (screen.c): its name, or its length where it has none
+ * ("5 min", as a ringing one is called), its length, paused or not, and its end on the monotonic clock (ms, active)
+ * or what is left (paused).  The count */
+struct core_timer { char name[64]; unsigned total; int active; long long end_ms, left_ms; };
+int    core_timers_running(struct core_timer *t, int max);
 void   core_alarm_stop(const char *why);                    /* every ringing timer; why: for the log */
 int    core_transcript(const char *text);                   /* speech to text's result: 1 if it stopped a ring ("stop",
                                                                or anything with core_timer_stop_any), a Drop In or music
@@ -172,6 +199,13 @@ int    core_transcript(const char *text);                   /* speech to text's 
 int    core_timers_ringing(char *names, size_t cap);        /* count; names: "tea, 5 min", in the order they finished */
 int    core_timer_ring(int set);                            /* seconds a ring lasts, 0 until stopped; -1 reads */
 int    core_timer_stop_any(int set);                        /* 1: any recognised speech stops a ring; -1 reads */
+/* What a ring plays (issue #63): the built-in blip (as loud as stock's timer tone), stock's timer or alarm tone (looped),
+ * or the page's upload (sounds.h SND_CUSTOM).  One this Echo has no file for is refused (it stays); -1 reads.  The
+ * default: stock's timer tone, the blip where the firmware has none (also after the upload chosen is deleted) */
+enum { TIMER_SOUND_TIMER, TIMER_SOUND_ALARM, TIMER_SOUND_BEEP, TIMER_SOUND_CUSTOM };
+int    core_timer_sound(int set);
+void   core_timer_sound_default(void);
+void   core_timer_sound_preview(void);                      /* not the lock: one ring of it, 10 s at most (the page's "Play") */
 enum { MUSIC_SENDSPIN = 1, MUSIC_BLUETOOTH = 2 };
 void   core_music(int source, int on);                      /* a music stream runs: the wake word threshold follows */
 void   core_bt_device(const char *name, int on);            /* a Bluetooth speaker source connected / went (not the lock) */
@@ -186,5 +220,6 @@ void   core_dropin_listen(int on);                          /* the front end's l
 const char *core_dropin_refusal(int incoming);
 void   core_spawn(char *const argv[]);                      /* the same, without waiting for it or its output */
 void   core_run(char *const argv[], char *out, size_t n);   /* runs a stock tool the way the core does, until it closes its
-                                                               stdout, which lands in out (any thread, not the lock) */
+                                                               stdout, which lands in out, or 20 s have passed (then it is
+                                                               killed; any thread, not the lock) */
 #endif

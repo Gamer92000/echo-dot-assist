@@ -13,7 +13,7 @@ files={
     'dist/cube-assist-gazelle.zip':bundle,
 }
 # Include source and embedded third-party licence notices so recipients can rebuild/relink.
-for directory in ['src','web','devices/gazelle','tools']:
+for directory in ['src','web','devices/gazelle','tools','wakealign']:
     for p in (ROOT/directory).rglob('*'):
         if p.is_file() and '__pycache__' not in p.parts:files['source/'+p.relative_to(ROOT).as_posix()]=p
 for name in ['Makefile','LICENSE','scripts/cube/build.py','scripts/cube/service.sh','scripts/cube/setup.py']:

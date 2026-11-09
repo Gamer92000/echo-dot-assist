@@ -1,13 +1,13 @@
 #!/bin/sh
 # Push secrets/wifi.conf (line 1 SSID, line 2 passphrase; git-ignored) and join.  Needs lockdown.sh applied on the device.
-# The Dots: through their stock wpa_supplicant (scripts/device/wifi-join.sh).  checkers: through WifiService, with
+# The Dots: through their stock wpa_supplicant (scripts/device/wifi-join.sh).  Android models (device.conf ANDROID): through WifiService, with
 # scripts/device/wifictl.dex — the framework owns the networks there, and it runs DHCP itself once its connect lands.
 cd "$(dirname "$0")/.."
 . scripts/lib/device.sh; device_load adb
 F=${WIFI_CONF:-secrets/wifi.conf}; [ -f $F ] || { echo "create $F: line 1 SSID, line 2 passphrase"; exit 1; }
 D=/data/local/hassmic
 
-if [ "$INSTALL" = boot ] || [ "$INSTALL" = running ]; then
+if [ -n "$ANDROID" ]; then
     ssid=$(sed -n 1p $F); pass=$(sed -n 2p $F)
     hex() { printf %s "$1" | od -An -tx1 | tr -d " \n"; }       # wifictl takes the SSID as hex and the PSK itself
     # (64 hex digits, PBKDF2 of passphrase and SSID, as wifi.c makes it): nothing of either passes a shell

@@ -30,6 +30,16 @@ class InstallerTests(unittest.TestCase):
     def setUp(self):self.temp=tempfile.TemporaryDirectory();self.path=Path(self.temp.name)/'bundle.zip';bundle(self.path)
     def tearDown(self):self.temp.cleanup()
     def test_valid_bundle(self):self.assertEqual(setup.validate_bundle(self.path)[0]['device'],'gazelle')
+    def test_alignment_resources_hashed_and_allowed(self):
+        def add(files, manifest):
+            for name in ['alexa-en-GB.wa', 'english_mfa.was', 'wakealign-LICENSE.txt']:
+                files[name] = b'resource'
+                manifest['files'][name] = hashlib.sha256(files[name]).hexdigest()
+        bundle(self.path, add)
+        self.assertIn('english_mfa.was', setup.validate_bundle(self.path)[1])
+        with zipfile.ZipFile(self.path, 'a') as z: z.writestr('unexpected.key', b'not permitted')
+        with self.assertRaises(ValueError): setup.validate_bundle(self.path)
+
     def test_tampered_binary_refused_before_device_access(self):
         bundle(self.path,lambda f,m:f.update(hassmic=b'changed'))
         with self.assertRaises(ValueError):setup.install(None,self.path)

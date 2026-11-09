@@ -7,15 +7,14 @@ hassmic shows it as a band along the bottom of the screen (setting "Light band")
 [devices/README.md](../README.md); what checkers' page says about the install holds here too, and is not repeated:
 [devices/checkers/README.md](../checkers/README.md).
 
-Model C76N8S (`ro.product.model` AEOCN), MediaTek MT8163, 5.5" touchscreen (1024 x 600 panel), 2 microphones, camera
+Model C76N8S (`ro.product.model` AEOCN), MediaTek MT8163, 5.5" touchscreen (960 x 480, as checkers'), 2 microphones, camera
 with a shutter, volume keys, mic mute. No action button.
 
 ## Firmware
 
 Pinned: `update-kindle-cronos-NS65741_user_8149_0013222532484.bin`, Fire OS 6574.1 (NS65741/8149), sha256
-`fa6203b55d8764201cd531507750e66e1ab2215969433b52d715a4b6089f1b09`, 1388134745 bytes. Amazon's link, as
-[ftvdb.com](https://ftvdb.com/echo/firmware/com.amazon.cronos.android.os/) lists it:
-<https://d1s31zyz7dcc2d.cloudfront.net/2026/9/28/d8beae39-5193-4cbe-8efd-b1ea742e772e/update-kindle-cronos-NS65741_user_8149_0013222532484.bin>.
+`fa6203b55d8764201cd531507750e66e1ab2215969433b52d715a4b6089f1b09`, 1388134745 bytes. Download it from its
+[FTVDB record](https://ftvdb.com/echo/firmware/com.amazon.cronos.android.os/c204364d8a65c6da5d60024c6334fe1e-13222532484-fire-os-6574-1-ns65741-8149-2026-09-28/).
 This is cronos' own image, not checkers' (same build number, other files). The system partition must be exactly this
 build's: the boot image is made from its `boot.img` and hassmic links against its libraries. Newer builds (8150, 8151)
 are not supported until pinned here.
@@ -27,7 +26,7 @@ are not supported until pinned here.
 | File | Source | sha256 |
 |---|---|---|
 | `amonet-cronos-v2.0.1.zip` | the XDA thread; its `lk.bin` and `tz.img` are 8149's | `07a49c8fb2b244330297810b261333ba23976eca5ab3e0d9032f45f4c9847621` |
-| `update-kindle-cronos-NS65741_user_8149_0013222532484.bin` | Amazon (above) | `fa6203b5…f1b09` |
+| `update-kindle-cronos-NS65741_user_8149_0013222532484.bin` | Amazon, link above | `fa6203b5…f1b09` |
 | `boot-root.zip` | the XDA thread's second post (installed in TWRP there; its `boot.img` is NS6571's); the install takes only `sbin/adbd` out of it (`ADBD` in `device.conf`: checkers' file, `108ba403…`) | `49326e27cc42159b2659604a586855ca0a267f3e064ed42cfa64cd78275e40b3` |
 | `magiskpolicy32` | `patch/magiskpolicy32` of donut's `boot-root.zip` ([its README](../donut/README.md)); the guided setup takes it from there | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
 
@@ -54,7 +53,9 @@ as checkers':
 3. **System partition**: must be 8149's (`ro.build.version.incremental` = `0013222532484` in its `build.prop`). Else write
    `firmware/cronos/images/system.img` (sha256 `78c4c2fa…091669`, 3253731328 bytes) to
    `/dev/block/platform/mtk-msdc.0/11230000.MSDC0/by-name/system` from TWRP and read it back; `setup.sh` does this in
-   64 MB pieces with a check of each.
+   64 MB pieces with a check of each. Wipe cache and data first, from TWRP's main menu (past "Keep System Read only?":
+   answering it restarts USB), with `adb shell 'twrp wipe cache && twrp wipe data'`: the old build's app updates in
+   `/data/app` would run over this older system. `adb shell 'mount /data 2>/dev/null; grep " /data " /proc/mounts && ls /data/app'` must then print the mount and no app.
 4. **Root boot image**: `scripts/install-boot.sh --boot-only` (the firmware's `boot.img`, sha256 `ecdd1452…87db49`, with
    root adb, `verify` out of the fstab, adb over Wi-Fi and the boot chime out of `init.cronos.rc`, the policy patched by
    `sepolicy.rules`; flashed in hacked fastboot, then `fastboot continue`).
@@ -62,7 +63,9 @@ as checkers':
    join before it: Fire OS would reach Amazon), then `DEVICE=cronos scripts/install-system.sh`.
 
 Updating later: `DEVICE=cronos scripts/ota-push.sh <echo-ip>`. `scripts/install-system.sh --uninstall` turns Alexa's
-apps back on and takes hassmic off `/system`; all the way back is the firmware `.bin` as a `.zip` in TWRP after a factory
+apps back on, takes hassmic off `/system` and wipes cache and data in TWRP (tap **Keep Read Only** when it asks):
+Amazon's apps lost their data and permissions when the install took them off, and without the wipe their setup
+wizard crashes in a loop ("OOBE has stopped"). The Echo then starts at Amazon's setup. All the way back is the firmware `.bin` as a `.zip` in TWRP after a factory
 reset there (amonet v2.0.0 and later), as the thread describes.
 
 ## What works and what is open
@@ -76,12 +79,16 @@ The speaker amplifier is one of three by board revision; the first cronos has th
 RT5616/RT5616E as checkers', TAS5805M up to +4 dB, MAX98396 up to +6 dB, the caps until someone has listened at full
 volume (the TAS5805M's steps are assumed, it is in no cronos seen yet).
 
-**Open:** speaker gain by ear, Wi-Fi motion (module built, its hook site as checkers'), the DHA version for "Download
-from Amazon", Bluetooth.
+hassmic's own screen (the face, the drawer, the home app, Music Assistant: [the guide](../../docs/GUIDE.md#the-screen-echo-show))
+is built for it as for checkers; its JNI table resolves against this firmware (`make unit-screen`).
 
-The screen stays black but for the band: the install takes Amazon's apps off the system partition, Settings and System
-UI among them, as on checkers (`STOCK_APPS_OUT`; why: [devices/checkers/README.md](../checkers/README.md)). The Echo's
-settings are on its settings page and in Home Assistant.
+**Open:** speaker gain by ear, Wi-Fi motion (module built, its hook site as checkers'), the DHA version for "Download
+from Amazon", Bluetooth, the screen UI on the Echo.
+
+Amazon's screens are gone: the install takes Amazon's apps off the system partition, Settings and System UI among them,
+as on checkers (`STOCK_APPS_OUT`; why: [devices/checkers/README.md](../checkers/README.md)). hassmic's own screen
+takes their place ([docs/GUIDE.md](../../docs/GUIDE.md#the-screen-echo-show)); on this model only its band has been
+seen so far (open, above). The Echo's settings are on its settings page and in Home Assistant.
 
 ## Files here
 
@@ -109,3 +116,21 @@ debugfs -R "rdump / firmware/cronos/rootfs/system" firmware/cronos/images/system
 python3 scripts/mkbootroot.py --cpio firmware/cronos/images/boot.img firmware/cronos/ramdisk.cpio
 (cd firmware/cronos/rootfs && cpio -id < ../ramdisk.cpio)
 ```
+
+## Kiosk Satellite (optional)
+
+Shows a Home Assistant dashboard on the screen; hassmic stays the voice satellite. The guided setup offers it. On an Echo
+that is already installed:
+
+```sh
+scripts/kiosk-install.sh             # over USB
+scripts/kiosk-install.sh <echo-ip>   # over Wi-Fi
+scripts/kiosk-install.sh --uninstall [<echo-ip>]   # takes it off again
+```
+
+That fetches the newest release and Simple Keyboard, and the Echo opens the app by itself. Do its setup from your PC at
+`http://<echo-ip>:2324`, where you can paste the Home Assistant token: scanning a QR code on the Echo needs "Kiosk Satellite
+camera" on the settings page (System). Set its remote admin password: that page is open to your network. Leave the app's voice assistant off, and do not make it the home app.
+
+By hand: `kiosk-satellite-<version>.armeabi-v7a.apk` from its [releases](https://github.com/jxlarrea/kiosk-satellite/releases),
+`adb install`. What the app is allowed, and what it costs: [docs/GUIDE.md](../../docs/GUIDE.md#kiosk-satellite-on-the-screen).

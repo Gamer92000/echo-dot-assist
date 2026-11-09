@@ -8,6 +8,8 @@ endif
 include devices/$(DEVICE)/device.mk
 # the light ring: the Dots' LEDs through ledcontroller, or a band on the screen (device.mk)
 RING    ?= src/hassmic/ring.c
+# a screen's UI (screen.h): screen.c runs src/ui/ (libhmui.so, loaded by scripts/device/screen.dex) where there is one
+SCREEN  ?= src/hassmic/screen_none.c
 
 NDK     ?= $(CURDIR)/toolchain/android-ndk-r21e
 CC      := $(NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/$(TARGET)-clang
@@ -29,7 +31,14 @@ BUILD_TIME := $(shell LC_ALL=C git log -1 --format=%cd --date=format:'%b %e %Y %
 # Assistant compares it as numbers.  A build CI publishes (RELEASE=1) reports just that; any other reports
 # VERSION+BUILD (git describe), which online updates take for that version.
 VERSION := $(shell TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y.%m.%d.%H%M%S 2>/dev/null || echo 0)
-DEFS    := -DVERSION='"$(VERSION)"' -DBUILD='"$(BUILD)"' -DBUILD_TIME='"$(BUILD_TIME)"' $(if $(RELEASE),-DRELEASE)
+# Where online updates look (UPDATE_REPO): this project's releases, or a fork's own (scripts/fork-release.sh)
+include keys/release.conf
+-include secrets/fork.conf
+UPDATE_REPO := $(strip $(UPDATE_REPO))
+ifneq ($(words $(UPDATE_REPO))$(findstring ",$(UPDATE_REPO))$(findstring ',$(UPDATE_REPO)),1)
+$(error UPDATE_REPO "$(UPDATE_REPO)": owner/name, no quotes or spaces (keys/release.conf, secrets/fork.conf))
+endif
+DEFS    := -DVERSION='"$(VERSION)"' -DBUILD='"$(BUILD)"' -DBUILD_TIME='"$(BUILD_TIME)"' -DREPO='"$(UPDATE_REPO)"' $(if $(RELEASE),-DRELEASE)
 CFLAGS  := -O2 -Wall -Wextra -fPIE -Isrc/include $(DEFS) $(if $(CUBE),-DCUBE=1)
 LDFLAGS := -pie -fuse-ld=lld -Wl,--allow-shlib-undefined -Wl,--unresolved-symbols=ignore-in-shared-libs
 STOCK_LIBS = $(addprefix $(STOCK)/,$(filter $(LIBS),$(1)))
@@ -43,7 +52,7 @@ build/.device: FORCE
 FORCE:
 
 # A model without the Amazon mixer or Pryon has no use for the tools built on them: they drop out with the library.
-BIN := $(OUT)/hassmic $(OUT)/runas $(OUT)/otatool \
+BIN := $(OUT)/hassmic $(OUT)/runas $(OUT)/otatool $(if $(filter %screen.c,$(SCREEN)),$(OUT)/libhmui.so) \
        $(if $(filter libmixerAPI.so,$(LIBS)),$(OUT)/mixcap $(OUT)/mixplay $(OUT)/latency) \
        $(if $(filter -lOpenSLES,$(SYSLIBS)),$(OUT)/slplay) \
        $(if $(filter libpryon.so,$(LIBS)),$(OUT)/pryon_test $(OUT)/aed_test $(OUT)/whisper_test)
@@ -151,6 +160,14 @@ $(OUT)/runas: src/tools/runas.c
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $< -o $@ -pie -fuse-ld=lld
 
+# The screen UI (src/ui/, scene.h): a JNI library for app_process, against the NDK's libandroid (ANativeWindow) and
+# libjnigraphics (AndroidBitmap); nothing of the firmware's.  The scene alone is make unit's ui_test on the PC.
+UI_SCENE := src/ui/scene.c src/ui/widgets.c src/ui/face.c src/ui/drawer.c src/ui/music.c src/ui/words.c src/ui/gfx.c
+UI := src/ui/android.c src/ui/touch.c $(UI_SCENE)
+$(OUT)/libhmui.so: $(UI) src/ui/scene.h src/ui/ui.h src/ui/gfx.h build/.build-id
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -fPIC -shared -Isrc/ui $(UI) -o $@ -fuse-ld=lld -Wl,--no-undefined -Wl,-soname,libhmui.so -landroid -ljnigraphics -lm
+
 # not part of "all": raw HCI probe on the Bluetooth controller (stop btmanagerd first, see the file)
 $(OUT)/hciscan: src/tools/hciscan.c
 	@mkdir -p $(OUT)
@@ -190,14 +207,14 @@ SOUND := $(if $(CUBE),src/hassmic/sound_none.c,$(if $(filter %wake_pryon.c,$(WAK
 WHISPER := $(if $(CUBE),src/hassmic/whisper_none.c,$(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/hassmic/whisper_none.c))
 
 RNNOISE := $(addprefix src/third_party/rnnoise/,denoise.c rnn.c rnn_data.c pitch.c kiss_fft.c celt_lpc.c)
-HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) src/hassmic/ringdesign.c src/hassmic/ledq.c \
-           src/hassmic/sendspin.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/micgain.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/statefile.c src/hassmic/volcurve.c build/web_assets.c \
+HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) $(SCREEN) src/hassmic/ringdesign.c src/hassmic/ledq.c \
+           src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
            src/hassmic/wake.c src/hassmic/wake_mww.c src/hassmic/mww_features.c src/hassmic/mww_model.c src/hassmic/mww_store.c \
            src/third_party/monocypher.c src/third_party/freeaptx.c $(RNNOISE)
 HASSMIC_H := $(wildcard src/hassmic/*.h src/include/*.h) build/.build-id
 
 # The settings page (web.c), gzip'd into the binary
-WEB := web/index.html:/ web/app.js:/app.js web/crypto.js:/crypto.js web/tar.js:/tar.js web/ring.js:/ring.js
+WEB := web/index.html:/ web/app.js:/app.js web/crypto.js:/crypto.js web/tar.js:/tar.js web/loudness.js:/loudness.js web/matrix.js:/matrix.js web/ring.js:/ring.js
 build/web_assets.c: tools/embed.py $(foreach w,$(WEB),$(firstword $(subst :, ,$(w))))
 	@mkdir -p build
 	python3 tools/embed.py $@ $(WEB)
@@ -213,18 +230,24 @@ build/hassmic-host: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c src/hassmic/wak
 	@mkdir -p build
 	cc -O2 -Wall -Wextra $(DEFS) -Isrc/include -Isrc/hassmic $(filter %.c,$^) -o $@ -lpthread -lm -ldl -lopus -lz
 
+# The same with a screen whatever $(DEVICE) has (screen.c, the band): tests/fake_screen.py, with a stand-in UI.
+build/hassmic-host-screen: $(filter-out $(RING) $(SCREEN),$(HASSMIC)) src/hassmic/ring_band.c src/hassmic/screen.c $(BOARD) src/hassmic/audio_file.c src/hassmic/wake_none.c src/hassmic/sound_none.c src/hassmic/whisper_none.c $(HASSMIC_H) build/.device
+	@mkdir -p build
+	cc -O2 -Wall -Wextra $(DEFS) -Isrc/include -Isrc/hassmic $(filter %.c,$^) -o $@ -lpthread -lm -ldl -lopus -lz
+
 # ARM build with file audio but the device's wake word engine, for running under qemu-arm (tools/qrun.sh).
 $(OUT)/hassmic-qemu: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c $(WAKE) $(SOUND) $(WHISPER) $(HASSMIC_H) $(call STOCK_LIBS,libpryon.so libopus.so libz.so)
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -Isrc/hassmic $(filter %.c,$^) -o $@ $(LDFLAGS) -lm -ldl $(call STOCK_LIBS,libpryon.so libopus.so libz.so)
 
-host: build/hassmic-host $(OUT)/hassmic-qemu build/otatool-host
+host: build/hassmic-host build/hassmic-host-screen $(OUT)/hassmic-qemu build/otatool-host
 
 # Building blocks of the Sendspin client, checked against reference implementations (aiohttp, python noiseprotocol).
 UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/third_party/monocypher.c
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
-UNIT_TESTS := hash ws noise ble_crypto micgain wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
-	sbc web_crypto web_tar ring_pack mww blueprint_dropin buttons buttons_privacy afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map cube_audio
+UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
+	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk backlight \
+	screen ui touch json uninstall_boot resample fork_release cube_audio cube_routing
 unit: $(addprefix unit-,$(UNIT_TESTS))
 unit-hash:
 	@mkdir -p build
@@ -243,6 +266,19 @@ unit-ble_crypto:
 unit-micgain:
 	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic tests/unit/micgain_test.c src/hassmic/micgain.c -lm -o build/micgain_test && build/micgain_test
+unit-micend:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/micend_test.c src/hassmic/micend.c -lm -o build/micend_test && build/micend_test
+unit-afemeta:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/afemeta_test.c src/hassmic/afemeta.c -o build/afemeta_test && build/afemeta_test
+unit-wordtail:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/wordtail_test.c src/hassmic/wordtail.c -lm -o build/wordtail_test && build/wordtail_test
+unit-wakealign:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/wakealign_test.c src/hassmic/wakealign.c src/hassmic/statefile.c -lm -o build/wakealign_test
+	.venv/bin/python tests/unit/wakealign_ref.py build/wakealign_test
 unit-wifimotion:
 	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic tests/unit/wifimotion_test.c src/hassmic/wifimotion.c -lpthread -lm -o build/wifimotion_test && build/wifimotion_test
@@ -275,8 +311,30 @@ unit-sbc:
 	if command -v sbcenc >/dev/null; then tests/unit/sbc_ref.sh; else echo "sbc: sbcenc/sbcdec (package sbc) missing, skipped"; fi
 unit-web_crypto:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_crypto_test.py; elif [ -n "$$CI" ]; then echo "web crypto: node missing"; exit 1; else echo "web crypto: node missing, skipped"; fi
+unit-kiosk:
+	.venv/bin/python tests/unit/kiosk_test.py
+unit-backlight:
+	.venv/bin/python tests/unit/backlight_test.py
+unit-web_soundpack:
+	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_soundpack_test.py; else echo "web sound pack: node missing, skipped"; fi
+
 unit-web_tar:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_tar_test.py; else echo "web tar: node missing, skipped"; fi
+unit-web_matrix:
+	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_matrix_test.py; else echo "web matrix: node missing, skipped"; fi
+# the page's timer sound level (web/loudness.js) against BS.1770, and main.c's ring beep at Alexa's level
+unit-web_loudness:
+	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_loudness_test.py; elif [ -n "$$CI" ]; then echo "web loudness: node missing"; exit 1; else echo "web loudness: node missing, skipped"; fi
+unit-setup_wipe:
+	bash tests/unit/setup_wipe_test.sh
+# a fork's own releases (scripts/fork-release.sh, keys/release.conf, secrets/fork.conf), against a stand-in gh
+unit-fork_release:
+	bash tests/unit/fork_release_test.sh
+# which firmware hassmic goes onto (device.sh firmware_ok, device_check_firmware; setup's firmware_accept), PR #98
+unit-firmware:
+	bash tests/unit/firmware_test.sh
+unit-uninstall_boot:
+	bash tests/unit/uninstall_boot_test.sh
 unit-ring_pack:
 	if command -v node >/dev/null; then node tests/unit/ring_pack_test.js; else echo "ring packs: node missing, skipped"; fi
 unit-mww:
@@ -291,6 +349,9 @@ unit-buttons:
 unit-buttons_privacy:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/buttons_privacy_test.c src/hassmic/buttons.c -lpthread -o build/buttons_privacy_test && build/buttons_privacy_test build/buttons_privacy.fifo
+unit-buttons_grab:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/buttons_grab_test.c src/hassmic/buttons.c -Wl,--wrap=ioctl -lpthread -o build/buttons_grab_test && build/buttons_grab_test build/buttons_grab.fifo && build/buttons_grab_test build/buttons_grab.fifo nokey
 unit-afe_parcel:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/afe_parcel_test.c src/hassmic/afe_parcel.c -o build/afe_parcel_test && build/afe_parcel_test
@@ -299,28 +360,53 @@ unit-lux:
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/lux_test.c -lm -o build/lux_test && build/lux_test
 unit-ring_band:
 	@mkdir -p build
-	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ring_band_test.c src/hassmic/ring_band.c src/hassmic/ringdesign.c src/hassmic/statefile.c -lm -lpthread -o build/ring_band_test && build/ring_band_test
-# volcurve.c with each model's board.c: the curve where it was measured, the Dot 2's elsewhere
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ring_band_test.c src/hassmic/ring_band.c src/hassmic/screen_none.c src/hassmic/ringdesign.c src/hassmic/statefile.c -lm -lpthread -o build/ring_band_test && build/ring_band_test
+# volcurve.c with each model's board.c: each names its curve, measured on it or the Dot 2's as a stand-in (a todo line)
 unit-volcurve:
 	@mkdir -p build
 	for d in $(patsubst devices/%/board.c,%,$(wildcard devices/*/board.c)); do \
 	  cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/volcurve_test.c src/hassmic/volcurve.c devices/$$d/board.c -lm -o build/volcurve_$$d && build/volcurve_$$d || exit 1; done
+# Sendspin's rate (resample.c): the resampler against the true sine, chunk sizes, its lag; the servo against a model
+# of the Echo Show 5's queue with its clock off
+unit-resample:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/resample_test.c src/hassmic/resample.c -lm -o build/resample_test && build/resample_test
 # the page's band (web/ring.js) against ring_band.c's, pixel for pixel
 unit-band_map:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/band_map_test.py; elif [ -n "$$CI" ]; then echo "band map: node missing"; exit 1; else echo "band map: node missing, skipped"; fi
 unit-sounds:
 	@mkdir -p build
 	python3 tests/unit/sounds_zip.py build/sounds_dir build/sounds_test.zip
-	cc -O2 -Wall -Wextra -DSYNTH -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c -o build/sounds_test && build/sounds_test synth build/sounds_dir build/sounds_test.zip
-	if [ -d firmware/checkers/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c devices/checkers/board.c -o build/sounds_checkers && HASSMIC_EARCON_ROOT=firmware/checkers/rootfs build/sounds_checkers; else echo "sounds: firmware/checkers not unpacked, its apps' sounds skipped"; fi
-	if [ -d firmware/cronos/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c devices/cronos/board.c -o build/sounds_cronos && HASSMIC_EARCON_ROOT=firmware/cronos/rootfs build/sounds_cronos; else echo "sounds: firmware/cronos not unpacked, its apps' sounds skipped"; fi
-	if [ -d firmware/athena/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c devices/athena/board.c -o build/sounds_athena && HASSMIC_EARCON_ROOT=firmware/athena/rootfs build/sounds_athena; else echo "sounds: firmware/athena not unpacked, its apps' sounds skipped"; fi
+	cc -O2 -Wall -Wextra -DSYNTH -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c -o build/sounds_test && build/sounds_test synth build/sounds_dir build/sounds_test.zip
+	if [ -d firmware/checkers/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c src/hassmic/volcurve.c devices/checkers/board.c -o build/sounds_checkers && HASSMIC_EARCON_ROOT=firmware/checkers/rootfs build/sounds_checkers; else echo "sounds: firmware/checkers not unpacked, its apps' sounds skipped"; fi
+	if [ -d firmware/cronos/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c src/hassmic/volcurve.c devices/cronos/board.c -o build/sounds_cronos && HASSMIC_EARCON_ROOT=firmware/cronos/rootfs build/sounds_cronos; else echo "sounds: firmware/cronos not unpacked, its apps' sounds skipped"; fi
+	if [ -d firmware/athena/rootfs/system/priv-app ]; then cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/sounds_test.c src/hassmic/sounds.c src/hassmic/statefile.c src/hassmic/volcurve.c devices/athena/board.c -o build/sounds_athena && HASSMIC_EARCON_ROOT=firmware/athena/rootfs build/sounds_athena; else echo "sounds: firmware/athena not unpacked, its apps' sounds skipped"; fi
+# the dex programs against each model's own firmware that runs them, where it is unpacked here (CI: the dex only):
+# wifictl.dex where Android's framework runs (device.conf ANDROID), ringbar.dex with the band (SCREEN_BAND)
+frameworks = $(foreach m,$(patsubst devices/%/device.conf,%,$(shell grep -l '^$(1)' devices/*/device.conf)),$(if $(wildcard firmware/$(m)/rootfs/system/framework),--framework=firmware/$(m)/rootfs))
 unit-wifictl:
-	.venv/bin/python tools/mkwifictl.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)
+	.venv/bin/python tools/mkwifictl.py --check $(call frameworks,ANDROID=1)
 	.venv/bin/python tests/unit/wifictl_run.py
 unit-ringbar:
-	.venv/bin/python tools/mkringbar.py --check $(if $(wildcard firmware/checkers/rootfs/system/framework),--framework=firmware/checkers/rootfs)
+	.venv/bin/python tools/mkringbar.py --check $(call frameworks,SCREEN_BAND=1)
 	.venv/bin/python tests/unit/ringbar_run.py
+# every model with the screen UI (device.mk SCREEN), against its own firmware where that is unpacked here (CI: the dex only)
+SCREEN_MODELS := $(patsubst devices/%/device.mk,%,$(shell grep -l '^SCREEN ' devices/*/device.mk))
+unit-screen:
+	.venv/bin/python tools/mkscreen.py --check $(foreach m,$(SCREEN_MODELS),$(if $(wildcard firmware/$(m)/rootfs/system/framework),--framework=firmware/$(m)/rootfs))
+# the screen UI as pictures, on the PC (FreeType, the firmware's Roboto): tools/uishot.c says how
+build/uishot: tools/uishot.c $(UI_SCENE) src/ui/scene.h src/ui/ui.h src/ui/gfx.h
+	@mkdir -p build
+	cc -O2 -Wall -Wextra $$(pkg-config --cflags freetype2) tools/uishot.c $(UI_SCENE) -o $@ $$(pkg-config --libs freetype2) -lz -lm
+unit-json:
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all tests/unit/json_test.c src/hassmic/json.c -o build/json_test && build/json_test
+unit-ui:
+	@mkdir -p build
+	cc -O2 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all tests/unit/ui_test.c $(UI_SCENE) -lm -o build/ui_test && build/ui_test
+unit-touch:
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all tests/unit/touch_test.c src/ui/touch.c -o build/touch_test && build/touch_test
 
 # what the daemon reports, and what bundles are called (ota-push.sh, CI)
 version:
@@ -335,3 +421,12 @@ clean:
 unit-cube_audio:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/cube_audio_test.c src/hassmic/audio_cube.c src/hassmic/statefile.c -lpthread -lm -o build/cube_audio_test && build/cube_audio_test
+
+# Cube-only protocol test executable: never run against a real helper/device.
+build/hassmic-routing-host: $(HASSMIC) devices/gazelle/board.c src/hassmic/audio_cube.c src/hassmic/wake_none.c src/hassmic/sound_none.c src/hassmic/whisper_none.c $(HASSMIC_H)
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -DCUBE=1 $(DEFS) -Isrc/include -Isrc/hassmic $(filter %.c,$^) -o $@ -lpthread -lm -ldl -lopus -lz
+
+unit-cube_routing:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/cube_routing_test.c src/hassmic/audio_cube.c src/hassmic/statefile.c -lpthread -lm -o build/cube_routing_test && build/cube_routing_test

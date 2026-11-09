@@ -13,8 +13,10 @@ shutter, volume keys, mic mute. No action button.
 ## Firmware
 
 Pinned: `update-kindle-crown-NS6570_user_6074_0012383140484.bin`, Fire OS 6.5.7.0 (NS6570), sha256
-`4b6fb088…ce421` (full value in `device.conf`). The system partition must be exactly this build's: the boot image is
-made from its `boot.img` and hassmic links against its libraries. amonet does not depend on the Fire OS version.
+`4b6fb088…ce421` (full value in `device.conf`). Download it from its
+[FTVDB record](https://ftvdb.com/echo/firmware/com.amazon.crown.android.os/90ad1be88b4e7ed9ddb0ef58c8d6200a-12383140484-fire-os-6-5-7-0-ns6570-6074-2025-08-23/).
+The system partition must be exactly this build's: the boot image is made from its `boot.img` and hassmic links
+against its libraries. amonet does not depend on the Fire OS version.
 
 ## Unlock (public: amonet-crown)
 
@@ -23,13 +25,14 @@ made from its `boot.img` and hassmic links against its libraries. amonet does no
 | File | Source | sha256 |
 |---|---|---|
 | `amonet-crown-v2.0.1.zip` | the XDA thread | `5db974c321ae2f4586f7c51c95b7bdffb61ef85bde05ce7e62f78196a984c24f` |
-| `update-kindle-crown-NS6570_user_6074_0012383140484.bin` | Amazon | `4b6fb088…ce421` |
+| `update-kindle-crown-NS6570_user_6074_0012383140484.bin` | Amazon, link above | `4b6fb088…ce421` |
 | `boot-root.zip` | the XDA thread (one `boot-root.img`, NS6571's); the install takes only its `sbin/adbd` (`ADBD` in `device.conf`) | `d18f8256869820a87527ec08e75ec495362103ed4ad669e946d052f0f705012d` |
 | `magiskpolicy32` | `patch/magiskpolicy32` of donut's `boot-root.zip` ([its README](../donut/README.md)); the guided setup takes it from there | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
 
 1. With the Echo on its power supply, hold all three buttons until "=> FASTBOOT mode..." shows, connect micro-USB,
-   `./fastbrick.sh` (from the unzipped `amonet/`), type `YES`. **After the 10 s grace period nothing may interrupt it**
-   (up to 5 min): that bricks it for good. It ends in TWRP.
+   `./fastbrick.sh` (from the unzipped `amonet/`), type `YES`. At "DO NOT INTERRUPT IT" and "Press any key to
+   exit..." the PC's part is over: a key only closes the script. **From `YES` until TWRP shows on the Echo's screen
+   (up to 5 min), do not unplug its power or USB cable**: that bricks it for good.
 2. TWRP asks "Keep System Read only?": tap **Keep Read Only**. Nothing of the install writes `/system` from TWRP.
 3. Root: hacked fastboot (the Mute key while it boots, or from TWRP), `fastboot oem flags 61`, `fastboot flash boot
    boot-root.img`, then `fastboot continue` (not `reboot`: see docs/re-crown.md). adb is root. The guided setup does
@@ -45,14 +48,17 @@ The guided setup does all of it: `scripts/setup.sh crown` (`--dry-run` walks the
 1. **Unpack the firmware** (see below), build: `make DEVICE=crown`.
 2. **System partition**: must be NS6570's (`adb shell getprop ro.build.version.incremental` = `0012383140484`). Else write
    `firmware/crown/images/system.img` (sha256 `0877b48d…bf41db`, 3253731328 bytes) to `/dev/block/platform/mtk-msdc.0/11230000.MSDC0/by-name/system`
-   from TWRP, and read it back; `setup.sh` does this in 64 MB pieces with a check of each.
+   from TWRP, and read it back; `setup.sh` does this in 64 MB pieces with a check of each. Wipe cache and data first,
+   from TWRP's main menu (past "Keep System Read only?": answering it restarts USB), with
+   `adb shell 'twrp wipe cache && twrp wipe data'`: the old build's app updates in `/data/app` would run over this
+   older system. `adb shell 'mount /data 2>/dev/null; grep " /data " /proc/mounts && ls /data/app'` must then print the mount and no app.
 3. **Root boot image**: `scripts/install-boot.sh --boot-only` (the firmware's `boot.img` with root adb, `verify` out of
    the fstab, the policy patched by `sepolicy.rules`; flashed in hacked fastboot).
 4. **Lock down, join Wi-Fi, install**: `scripts/wifi-join.sh` after the lockdown (`scripts/device/lockdown.sh`; do not
    join before it: Fire OS would reach Amazon), then `DEVICE=crown scripts/install-system.sh`.
 
 Updating later: `scripts/ota-push.sh <echo-ip>` (`DEVICE=crown`). `scripts/install-system.sh --uninstall` turns Alexa's apps
-back on and takes hassmic off `/system`; all the way back is the firmware `.bin` as a `.zip` in TWRP, or amonet's
+back on, takes hassmic off `/system` and wipes cache and data in TWRP (as on [cronos](../cronos/README.md)); all the way back is the firmware `.bin` as a `.zip` in TWRP, or amonet's
 `restore-stock-crown`.
 
 ## What works and what is open
@@ -61,7 +67,9 @@ Installed and running on a real Echo Show 8 (2026-10-14): boot into hassmic, Wi-
 buttons, voice questions answered), volume keys, mic mute, the light band (waiting for Alexa, listening, thinking,
 reply). Bluetooth (proxy, A2DP sink, pairing) works once Android's stack is off the partition. The wake sound is the built-in
 blip (stock's is not in this firmware); crown's extra Amazon apps are classified. **Open**: whether the blip is heard
-after the cold-output lead-in (by ear). Details: [docs/re-crown.md](../../docs/re-crown.md).
+after the cold-output lead-in (by ear), hassmic's own screen (the face, the drawer, the home app, Music Assistant:
+[the guide](../../docs/GUIDE.md#the-screen-echo-show)) on the Echo: built and checked against this firmware's
+framework only. Details: [docs/re-crown.md](../../docs/re-crown.md).
 
 ## Files here
 
@@ -86,3 +94,21 @@ debugfs -R "rdump / firmware/crown/rootfs/system" firmware/crown/images/system.i
 python3 scripts/mkbootroot.py --cpio firmware/crown/images/boot.img firmware/crown/ramdisk.cpio
 (cd firmware/crown/rootfs && cpio -id < ../ramdisk.cpio)
 ```
+
+## Kiosk Satellite (optional)
+
+Shows a Home Assistant dashboard on the screen; hassmic stays the voice satellite. The guided setup offers it. On an Echo
+that is already installed:
+
+```sh
+scripts/kiosk-install.sh             # over USB
+scripts/kiosk-install.sh <echo-ip>   # over Wi-Fi
+scripts/kiosk-install.sh --uninstall [<echo-ip>]   # takes it off again
+```
+
+That fetches the newest release and Simple Keyboard, and the Echo opens the app by itself. Do its setup from your PC at
+`http://<echo-ip>:2324`, where you can paste the Home Assistant token: scanning a QR code on the Echo needs "Kiosk Satellite
+camera" on the settings page (System). Set its remote admin password: that page is open to your network. Leave the app's voice assistant off, and do not make it the home app.
+
+By hand: `kiosk-satellite-<version>.armeabi-v7a.apk` from its [releases](https://github.com/jxlarrea/kiosk-satellite/releases),
+`adb install`. What the app is allowed, and what it costs: [docs/GUIDE.md](../../docs/GUIDE.md#kiosk-satellite-on-the-screen).

@@ -9,6 +9,9 @@ WAKE    := src/hassmic/wake_pryon.c
 LIBS    := libpryon.so libopus.so libz.so
 # No LED ring: the ring as a band along the bottom of the screen, drawn by scripts/device/ringbar.dex (ring.h)
 RING    := src/hassmic/ring_band.c
+# A screen: hassmic's fallback UI on it (a face, Music Assistant, a drawer), src/ui/ in a process of its own; NS6570's
+# framework has every member of its JNI table (make unit-screen), so the same library as checkers'
+SCREEN  := src/hassmic/screen.c
 # NDK system libraries the backend needs (not stock: no stubs for them)
 SYSLIBS := -lOpenSLES
 

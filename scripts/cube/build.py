@@ -26,10 +26,12 @@ def build(sdk,java,stock):
     finally:
         if env_java is None: os.environ.pop('JAVA_HOME',None)
         else: os.environ['JAVA_HOME']=env_java
-    run([os.sys.executable,ROOT/'tools/embed.py',ROOT/'build/web_assets.c','web/index.html:/','web/app.js:/app.js','web/crypto.js:/crypto.js','web/tar.js:/tar.js','web/ring.js:/ring.js'])
-    make=(ROOT/'Makefile').read_text();section=make.split('HASSMIC :=',1)[1].split('\nHASSMIC_H',1)[0]
+    make=(ROOT/'Makefile').read_text(encoding='utf8')
+    assets=re.search(r'^WEB := (.+)$',make,re.M).group(1).split()
+    run([os.sys.executable,ROOT/'tools/embed.py',ROOT/'build/web_assets.c',*assets])
+    make=(ROOT/'Makefile').read_text(encoding='utf8');section=make.split('HASSMIC :=',1)[1].split('\nHASSMIC_H',1)[0]
     # The shared Makefile now selects ring.c/ring_band.c through $(RING).
-    sources=re.findall(r'(?:src|build)/[\w/.-]+\.c',section.replace('$(RING)','src/hassmic/ring.c'))
+    sources=re.findall(r'(?:src|build)/[\w/.-]+\.c',section.replace('$(RING)','src/hassmic/ring.c').replace('$(SCREEN)','src/hassmic/screen_none.c'))
     sources += ['src/third_party/rnnoise/'+n+'.c' for n in ['denoise','rnn','rnn_data','pitch','kiss_fft','celt_lpc']]
     sources += ['devices/gazelle/board.c','src/hassmic/audio_cube.c','src/hassmic/wake_pryon.c','src/hassmic/sound_none.c','src/hassmic/whisper_none.c']
     for name in ['libpryon.so','libopus.so']:
@@ -43,7 +45,11 @@ def build(sdk,java,stock):
     run([clang,'@'+str(rsp)])
     manifest={'format':1,'product':'Cube Assist','version':version+'-dev','device':'gazelle','source_commit':git('rev-parse','HEAD'),'source_revision':revision,'files':{}}
     shutil.copyfile(ROOT/'scripts/cube/service.sh',out/'service.sh')
-    for name in ['hassmic','classes.dex','service.sh']:
+    # Keep upstream alignment data beside the binary; do not package the speech corpus.
+    align=sorted((ROOT/'wakealign').glob('*.wa'))+sorted((ROOT/'wakealign').glob('*.was'))
+    for p in align: shutil.copyfile(p,out/p.name)
+    shutil.copyfile(ROOT/'wakealign/README.md',out/'wakealign-LICENSE.txt')
+    for name in ['hassmic','classes.dex','service.sh','wakealign-LICENSE.txt']+[p.name for p in align]:
         manifest['files'][name]=hashlib.sha256((out/name).read_bytes()).hexdigest()
     (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     dist=ROOT/'dist';dist.mkdir(exist_ok=True)

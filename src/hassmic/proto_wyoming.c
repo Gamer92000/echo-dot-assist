@@ -5,6 +5,7 @@
 #include <time.h>
 #include "board.h"
 #include "core.h"
+#include "screen.h"
 #include "wyoming.h"
 
 #define TTS_RATE 22050      /* assumed when audio-start carries no rate */
@@ -59,13 +60,14 @@ static void handle(const struct wy_event *ev)
     if (!strcmp(t, "ping")) send_event("pong", NULL, NULL, 0);
     else if (!strcmp(t, "describe")) send_info();
     else if (!strcmp(t, "run-satellite")) { fprintf(stderr, "satellite: running\n"); core_link(1, 1); }
-    else if (!strcmp(t, "pause-satellite")) core_link(1, 0);
+    else if (!strcmp(t, "pause-satellite")) core_link_pause();
     else if (!strcmp(t, "detection")) core_set_state(LISTENING);
     else if (!strcmp(t, "voice-stopped") || !strcmp(t, "transcript")) {
         if (!strcmp(t, "transcript")) {
             char text[256] = "";
             wy_json_str(strchr(ev->json, '\n') ? strchr(ev->json, '\n') : ev->json, "text", text, sizeof text);
             fprintf(stderr, "transcript: %s\n", text);
+            screen_words(SCREEN_WORDS_HEARD, text);              /* Wyoming tells no reply text, only the words */
             core_mic_off();
         }
         if (core_state() == LISTENING) core_set_state(THINKING);
@@ -109,4 +111,4 @@ static void print_mdns(void)
            "  <service><type>_wyoming._tcp</type><port>%d</port></service>\n</service-group>\n", core_name, core_port);
 }
 
-const struct proto proto_wyoming = { "wyoming", 16700, 0, serve, start, audio, NULL, NULL, played, NULL, NULL, print_mdns, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+const struct proto proto_wyoming = { "wyoming", 16700, 0, serve, start, audio, NULL, NULL, played, NULL, NULL, print_mdns, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };

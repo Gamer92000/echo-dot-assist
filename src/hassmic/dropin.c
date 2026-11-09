@@ -378,6 +378,15 @@ static void answer(void)              /* dl held: the callee takes a ringing cal
     go_live(now_ms());
 }
 
+int dropin_answer(void)
+{
+    pthread_mutex_lock(&dl);
+    int st = c.state;
+    if (st == DROPIN_RINGING) answer();
+    pthread_mutex_unlock(&dl);
+    return st == DROPIN_RINGING;
+}
+
 int dropin_button(void)
 {
     pthread_mutex_lock(&dl);

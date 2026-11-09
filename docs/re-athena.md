@@ -47,9 +47,9 @@ for the uninstall. Init loads the patched file at boot (the plat-and-mapping sha
   `ro.build.version.sdk` is 26 or more; the same dex serves the older models. And the Java `SurfaceControl` has to stay
   reachable: with nothing using it after the setup its finalizer released the layer at a GC, every ~55 s (`nativeLockCanvas`
   threw `IllegalArgumentException`, hassmic restarted the renderer each time); the program now uses it after its loop.
-  `--framework` of `tools/mkringbar.py` cannot read Android 9's boot classes (compact dex inside vdex): `make unit` checks
-  checkers'. Checked once by hand against athena's boot classes (2026-10-20): every class and method both dex programs
-  reflect on is there, the Android 9 ones included.
+  `--framework` of `tools/mkringbar.py` could not read Android 9's boot classes (compact dex inside vdex) and was checked
+  by hand once (2026-10-20); it reads them since 2026-11-03 ("Screen UI" below), and `make unit` checks both dex
+  programs against this firmware too.
   `screen_wake()` (`service call power 9 i64 .. s16 .. s16 ..`) is unchanged on Android 9 (checked: `mWakefulness` Asleep -> Awake).
 - **Push updates** work since the `accept()` fix (the two tried before it stalled or were reset: the listener was dead):
   pushed, self test passed, promoted to the factory copy. ART leaves an `oat/` directory beside a dex it loads
@@ -99,7 +99,7 @@ for the uninstall. Init loads the patched file at boot (the plat-and-mapping sha
 - **The band's renderer** died at a GC (fixed above) and once at start (`lockCanvas` while the home activity came up,
   ~74 s): hassmic restarts it by itself.
 - **Sounds**: the first OpenSL ES player after idle takes about 575 ms before the HAL pulls its first buffer (the TAS5805m
-  unmutes: `tas5805m_mute(): triggered unmute mode` in the kernel log), then `LEAD_MS` of silence (re-crown.md "Sounds").
+  unmutes: `tas5805m_mute(): triggered unmute mode` in the kernel log), then the lead-in's silence (`board.cold_lead_ms`) (re-crown.md "Sounds").
   With the experimental wake sound removal on, Home Assistant often ended the command before it was spoken (2026-10-15):
   leave it off here.
 - **Timing**: hassmic up 22 s after the kernel starts (satellite start 17.9 s, self test 22.7 s). Steady: the audio HAL
@@ -111,8 +111,43 @@ for the uninstall. Init loads the patched file at boot (the plat-and-mapping sha
 - Not confirmed on this Echo: Improv, the factory reset, `--uninstall` and the online update
   check.
 - The speaker's volume curve (TAS5805m digital volume, no dB table: 0.5 dB a step assumed), and with it separate
-  volumes' (`board.volume_curve` unset: the Echo Dot 2's) until `tools/vol-curve.py` has measured it.
+  volumes' (`board.volume_curve = board_vol_dot2`: the Echo Dot 2's as a stand-in) until `tools/vol-curve.py` has measured it.
 - The light ring designs on the band (`ring_band.c`, as on checkers, where they are): not tried here.
+- The screen UI on the Echo (below).
+
+## Screen UI (2026-11-03, on the PC only)
+
+hassmic's own screen (`src/ui/`, `screen.c`; checkers' "Screen UI" in re-checkers.md) is built for athena (`device.mk`
+`SCREEN`; `install-system.sh` now ships `libhmui.so` and `screen.dex` as `bundle.sh` does). What Android 9 changed of
+it, from the firmware:
+
+- **The boot classes** are compact dex (`cdex001`) inside `/system/framework/boot-*.vdex` (vdex 019, dex section 002),
+  not whole dex files in the oat files as on Android 7. `tools/dexasm.py` `boot_classes` reads them now: the ids where
+  the header says, everything they point at (strings, type lists, class data, static values) in the data section the
+  vdex's dex files share, `data_off` from the dex's own start (as ART's `DexFileLoader::OpenCommon` takes it). The
+  access flags of fields and methods carry the hidden API lists (P's `HiddenApiAccessFlags`): public turned into two
+  visibility bits at once (XOR 7) and 0x20 (0x200 on native methods); `unhide` takes them off as `RemoveFromDex` does.
+  26626 boot classes; `ServiceManager.getService` read 0xe before that (public static and flagged).
+- **Two calls of the JNI table differ** (`src/ui/android.c`): the `SurfaceControl(session, name, w, h, format, flags)`
+  constructor is gone, `SurfaceControl.Builder` makes the layers (as `ringbar.dex` does, from SDK 26), and
+  `IActivityManager.getTasks(int, int)` is `getTasks(int)`. Entries of some versions only are `JV`/`CV` (from <= SDK <
+  to), resolved where `ro.build.version.sdk` is one of them; `mkscreen.py --framework` checks each firmware for exactly
+  what its SDK resolves (athena 74 methods, the Android 7 models 69). Everything else of the table is there as on
+  Android 7, `startActivityAsUser`'s eleven arguments included. The Java `SurfaceControl`s stay reachable (global
+  references; the band's renderer lost its layer to the finalizer at a GC when nothing held it).
+- **Hidden API**: hassmic's child is an `app_process` run outside zygote, so ART enforces no hidden API policy (the band's
+  renderer reflects on the same hidden members here); the `su` domain is permissive under the unlock's policy.
+- **The display**: the UI goes by `DisplayInfo` at start (size, rotation) for its layers, the overscan of the band and
+  the grip, touches and the drawer's screenshot. `ro.sf.hwrotation` is 90 in the vendor's `build.prop`, but only
+  `/system/bin/lcdc_screen_cap` (a capture tool) reads it: MediaTek's `hwcomposer.mt8183.so` reads
+  `ro.vendor.sf.hwrotation` (and `.ext`), set in no prop file of this firmware (crown's `hwcomposer.mt8163.so` does
+  read `ro.sf.hwrotation`, re-crown.md). The kernel's LCM rotation (`CONFIG_MTK_LCM_PHYSICAL_ROTATION` 270) is turned
+  below Android, the touch driver's with it (`CONFIG_TOUCHSCREEN_PHYSICAL_ROTATION_WITH_LCM`); the UI logs when the
+  touch ranges do not have the panel's shape or the screen starts portrait. Touch: the kernel has Goodix GT9xx and
+  FocalTech drivers; the UI takes the panel's node (lowest event number, system_server's `amazon_touch` last) and logs it.
+- The layout at 1280 x 774 is crown's (re-crown.md "Screen UI").
+
+Not tried on this Echo: all of it.
 
 ## Wi-Fi (Android 9's WifiService)
 

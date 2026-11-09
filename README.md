@@ -24,18 +24,24 @@ as an ESPHome device, with no YAML and no add-on.
 | ✅ | Echo Dot 3rd gen (2018)      | D9N29T | [`donut`](devices/donut/README.md)       | open the case, wires on test pads                |
 | ✅ | Echo Dot 2nd gen (2016)      | RS03QR | [`biscuit`](devices/biscuit/README.md)   | micro-USB, no soldering                          |
 | ✅ | Echo 2nd gen (2017)          | XC56PY | [`radar`](devices/radar/README.md)       | open the case, solder USB to the amplifier board |
-| ❌ | Echo Dot 3rd gen (2019–2020) | C78MP8 | `crumpet`                                | the Dot 3 unlock does not work on it             |
-| ❌ | Echo Dot 3rd gen with clock  | 36EBT3 | `doebrite`                               | thought to be `crumpet` hardware                 |
 | ✅ | Echo Show 5 1st gen (2019)   | H23K37 | [`checkers`](devices/checkers/README.md) | micro-USB, no soldering; the ring as a band on screen |
 | ✅ | Echo Show 8 1st gen (2019)   | C7H6N3 | [`crown`](devices/crown/README.md)       | micro-USB, no soldering; as checkers |
 | ✅ | Echo Show 5 2nd gen (2021)   | C76N8S | [`cronos`](devices/cronos/README.md)     | micro-USB, no soldering; as checkers |
 | ✅ | Echo Show 8 2nd gen (2021)   | A8H3N2 | [`athena`](devices/athena/README.md)     | micro-USB, no soldering (a serial-port unlock); the ring as a band on screen |
+| ✅ | Echo Input (2018)            | C1125P | [`cupcake`](devices/cupcake/README.md)   | micro-USB, no soldering; no speaker (jack or Bluetooth), one LED |
 
-Each model needs exactly the firmware its page names (`donut`: Fire OS 6574.1 only). Another model? What is known and
-how to add one: [`devices/`](devices/README.md).
-✅ works, tried on one Echo of that model · 🧪 untested: builds and installs on paper, never run on a device · ❌ not
-supported yet
+Each model needs exactly the firmware its page names (`donut`: Fire OS 6574.1 only). A Dot 3 from 2019–2020 (C78MP8) or
+with a clock (36EBT3) is another model, and not supported. Every other Echo, and which are being worked on:
+[all models](devices/MODELS.md); how to add one: [`devices/`](devices/README.md).
+✅ works, tried on one Echo of that model · 🧪 untested: builds and installs on paper, never run on a device
 
+> [!IMPORTANT]
+> **Getting into the Echo is [R0rt1z2](https://github.com/R0rt1z2)'s work, not this project's.** Every model above
+> unlocks with their exploits for MediaTek's chips ([amonet](https://github.com/R0rt1z2/amonet),
+> [kamakiri](https://github.com/R0rt1z2/kamakiri), saiyaku), their bootloader payload
+> [kaeru](https://github.com/R0rt1z2/kaeru) and TWRP as they ported it to each model, and their XDA threads walk
+> through the unlock and root.
+> The setup runs the packages you download from those threads. Without them none of this would run on an Echo.
 
 ## What you get
 
@@ -54,6 +60,7 @@ supported yet
 | Do not disturb, equalizer, ring brightness | Alexa app                   | [entities in Home Assistant](docs/GUIDE.md#in-home-assistant) |
 | Buttons and light ring in automations   | –                              | [an event and a light in Home Assistant](docs/GUIDE.md#buttons-and-light-ring) |
 | Light ring animations of your own       | –                              | [drawn on the settings page](docs/GUIDE.md#buttons-and-light-ring), for each of the Echo's |
+| Echo Show: your words, the reply and timers on screen | Alexa's screens | [large letters over the screen](docs/GUIDE.md#the-screen-echo-show), experimental |
 | Louder speaker (Echo Dot 2, Echo 2, Echo Dot 3) | –                      | [up to +12 dB](docs/GUIDE.md#settings-page) on the settings page (Echo Dot 3: +2 dB) |
 | Sound detection (smoke alarm, glass, …) | Alexa Guard, checked in the cloud | [on the Echo](docs/GUIDE.md#sound-detection), less reliable |
 | Whisper detection                       | answers in a whisper           | [a sensor](docs/GUIDE.md#whisper-detection) for your conversation agent |
@@ -88,14 +95,16 @@ Assistant and without a cloud; nothing to set up ([how](docs/GUIDE.md#several-ec
 </picture>
 
 Everything else is set on the Echo's own **settings page**, `http://<echo-ip>:28931/` ("Visit" on its device page in
-Home Assistant): every setting with what it does, the features to switch on and the entities each adds, other Echos to
-copy settings and wake words to, the log. A press of the action button lets your browser in. [More](docs/GUIDE.md#settings-page).
+Home Assistant): every setting with what it does, the features to switch on and the entities each adds, your Echos side
+by side to copy settings and wake words between them, the log. A press of the action button lets your browser in. [More](docs/GUIDE.md#settings-page).
 
 ## Requirements
 
 - A [supported Echo](#supported-echos), and a USB way into it (its page says what: a cable, or wires).
 - A **Linux PC**, running Linux on the machine itself (not macOS, not a VM or WSL: the unlock needs direct USB; a live
-  USB stick works), with `adb`, `fastboot`, `python3`, `make`, `unzip`, `debugfs` (e2fsprogs), ~5 GB free disk.
+  USB stick works), with `adb`, `fastboot`, `python3`, `make`, `unzip`, `debugfs` (e2fsprogs), and free disk:
+  about 7 GB for an Echo Show (a 16 GB stick), under 1 GB for the others, 5 GB more to build here instead of taking
+  GitHub's build (8 for an Echo Input). On a live USB stick the session's own disk is RAM: keep the repository on a drive.
   The setup offers to install what is missing. An **Echo Dot 2**, or any Echo that is **unlocked already**, can also
   be set up from **Windows**: Git Bash (Git for Windows, with its `unzip` and `curl`), `adb` (platform-tools) and
   `python3`; for the Dot 2's unlock also `fastboot`, [uv](https://docs.astral.sh/uv/) and
@@ -160,7 +169,7 @@ to the last one that worked. What changed: [CHANGELOG.md](CHANGELOG.md). What on
 
 ## When something is wrong
 
-The settings page's **Log** (System section) shows what the Echo did; over adb it is
+The settings page's **Log** (System page) shows what the Echo did; over adb it is
 `adb shell tail -30 /data/local/hassmic/boot.log`. Lines start with UTC once the Echo has the time from Home Assistant
 (the page shows your time zone), `boot+<seconds>` before that: behind the firewall only Home Assistant sets the clock,
 on connecting and every 6 hours.
@@ -198,7 +207,8 @@ Open issues and measurements: [PLAN.md](PLAN.md).
 
 - **For now**: `adb shell rm /data/local/hassmic/hassmic.conf`, reboot. A stock, unregistered Echo, which updates itself
   if it gets internet.
-- **For good**: `scripts/install-system.sh --uninstall`.
+- **For good**: `scripts/install-system.sh --uninstall`. On the Echo Shows this also wipes the Echo's data, which
+  Amazon's apps need to start again: it starts at Amazon's setup.
 - **All of it**: reflash the stock firmware from TWRP, step 1 of the model's page.
 - **Start over** but keep the install: [factory reset](docs/GUIDE.md#factory-reset) (hold the action button 10 s).
 

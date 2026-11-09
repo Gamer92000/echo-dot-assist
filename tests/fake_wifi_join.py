@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""scripts/wifi-join.sh on a model with INSTALL=boot (checkers): the guided setup's Wi-Fi join through WifiService,
+"""scripts/wifi-join.sh on an Android model (ANDROID=1: checkers): the guided setup's Wi-Fi join through WifiService,
 against a fake adb whose "shell" runs here, with the stand-ins of tests/fake_wifi_tools.py (app_process answering as
 wifictl.dex over the fake framework, ifconfig with the address Android's DHCP gives).  A fresh Echo with nothing saved:
 the PSK made on the PC, add retried while the radio comes up, a wrong password, an open network, a passphrase of the
@@ -64,7 +64,7 @@ def run(tmp, conf, world_extra=None, nets=None, runas=False):
     with open(world, "w") as f: json.dump(w, f)
     cf = os.path.join(tmp, "wifi.conf")
     with open(cf, "w") as f: f.write(conf)
-    env = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}", FAKE_WIFI_WORLD=world, INSTALL="boot", WIFI_CONF=cf, FAKE_D=d,
+    env = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}", FAKE_WIFI_WORLD=world, ANDROID="1", WIFI_CONF=cf, FAKE_D=d,
                WIFI_JOIN_SECS="10", WIFI_ADD_SECS="4")
     env.pop("DEVICE", None); env.pop("ANDROID_SERIAL", None)
     p = subprocess.run(["sh", f"{ROOT}/scripts/wifi-join.sh"], env=env, capture_output=True, text=True, timeout=60)

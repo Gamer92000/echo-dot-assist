@@ -4,3 +4,6 @@
 * text=auto eol=lf
 *.raw binary
 *.mp3 binary
+# the speech corpus's clips (tools/speechcorpus, 500 MB) in Git LFS: a clone and CI's checkout (no lfs: true) get
+# pointers only; `git lfs pull --include "testdata/corpus/**"` fetches them
+testdata/corpus/**/*.wav filter=lfs diff=lfs merge=lfs -text

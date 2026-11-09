@@ -1,210 +1,93 @@
 # Echo Show 5 1st gen, 2019 (`checkers`)
 
-**Runs on one Echo Show** (a tester's, from 2026-10-10), installed with the guided setup (`scripts/setup.sh
-checkers`). The unlock is public (below); the install is `scripts/install-system.sh`, which hands over to
-`scripts/install-boot.sh`. No light ring here: hassmic shows the ring as a band along the bottom of the screen
-(setting "Light band"), the rest of the screen stays black for now.
-Findings, and what works and what is open: [docs/re-checkers.md](../../docs/re-checkers.md). Porting guide:
-[devices/README.md](../README.md).
+Turns an Echo Show 5 (1st gen, model H23K37) into a Home Assistant voice satellite.
 
-Model H23K37 (`ro.product.model` AEOCH). MediaTek MT8163, 5.5" touchscreen, 2 microphones, camera with a shutter.
+**Status:** runs on one Echo Show (a tester's, since 2026-10-10), installed with the guided setup: wake word, Home
+Assistant's voice pipeline, Music Assistant, a Bluetooth speaker and the light sensor work. There is no action button:
+both volume keys pressed together stand in for it. There is no light ring on this model, so hassmic draws the ring as
+a band along the bottom of the screen (setting "Light band"). The screen shows hassmic's face, or an app you pick
+(Kiosk Satellite, a dashboard): [docs/GUIDE.md](../../docs/GUIDE.md#the-screen-echo-show). What works and what is
+still open, item by item: [docs/re-checkers.md](../../docs/re-checkers.md#what-a-port-needs).
 
-## What the firmware says (2026-10-07)
+Hardware: MediaTek MT8163, 5.5" touchscreen, 2 microphones, camera with a shutter, volume keys, mic mute.
+`ro.product.model` is AEOCH. Not to be confused with the Echo Show 5 2nd gen ([`cronos`](../cronos/README.md)) or the
+Echo Show 8 ([`crown`](../crown/README.md)): they have unlocks of their own.
 
-Pinned firmware: `update-kindle-checkers-NS65741_user_8149_0013222532484.bin`, Fire OS 6574.1 (NS65741/8149), the same
-release as donut's; sha256 `f96fcfa1240f809711fcf855ce7742762437e4f37546153153635c096773cfa3`. Against `donut`:
+## Read this first
 
-- `lib/libpryon.so`, `libopus.so`, `libz.so`: **byte-identical.** The `en-US/ALEXA` model (a newer layout) detects
-  ALEXA in `pryon_test` under qemu.
-- **No `mixer`, no `libmixerAPI.so`.** Amazon's front end runs inside the audio HAL; hassmic uses Android's audio
-  through OpenSL ES (`src/hassmic/audio_android.c`).
-- A full Android device: Alexa is apps (stopped with `pm disable`), Wi-Fi is Android's, netd owns iptables, Bluetooth
-  is Android's stack. `scripts/system/` and `scripts/device/` do not handle that yet.
-- No action button, no LED ring; a screen.
+The unlock and install write to the Echo's flash. These rules keep it recoverable:
 
-## Unlock (public: amonet-checkers)
+- **Never write lk, preloader, tee1/tee2 (tz) or any other bootloader partition**, not even from USB download mode.
+  Most units have no way back from a broken bootloader: the brick is permanent. Of the partitions, this install writes
+  only `boot` and `system` (step 3 also wipes cache and data). Going all the way back to stock is the one exception:
+  [below](#going-back-to-stock).
+- **Do not interrupt the unlock.** From typing `YES` in `fastbrick.sh` until TWRP shows on the Echo's screen (up to
+  5 minutes), do not unplug the Echo's power or USB cable. An interruption bricks the Echo for good. When the script
+  says "DO NOT INTERRUPT IT" and "Press any key to exit...", its part is over: a key only closes it, and the Echo goes
+  on by itself.
+- **In TWRP, always tap "Keep Read Only"** when it asks "Keep System Read only?". A system TWRP has mounted read-write
+  no longer passes the stock boot image's checks, and the stock image is your way back while `/system` is untouched.
+- **Do not join Wi-Fi before the lockdown step.** Fire OS would reach Amazon and could update itself, which can close
+  the unlock.
+- **Once hassmic is on `/system`, only a boot image without `verify` boots it.** The stock `boot.img` would find the
+  system's hashes wrong. To go back, see [Going back to stock](#going-back-to-stock).
 
-XDA thread with the full instructions (R0rt1z2): [UNLOCK][ROOT][TWRP][UNBRICK] Amazon Echo Show 5 1st gen (2019)
-(checkers) <https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-5-1st-gen-2019-checkers.4762900/#post-90318137>.
-H23K37 only: the Echo Show 8 `crown` and the Echo Show 5 2nd gen [`cronos`](../cronos/README.md) have threads of their own. It ends with an
-unlocked bootloader and TWRP (written to `recovery` and `swdl`). These files go into `firmware/checkers/` (not in git):
+## What you need
 
-| File | Source | sha256 |
+- The Echo Show 5 1st gen, its power supply, and a micro-USB cable.
+- A Linux PC (x86_64 is easiest: the setup downloads the qemu-arm it needs; elsewhere install `qemu-user`).
+- Four files. Save them into `~/Downloads`: the guided setup picks them up from there (or from `firmware/checkers/`,
+  the Echo Dot 3's `boot-root.zip` from `firmware/donut/`) and checks each one's sha256.
+
+| File | Where to get it | sha256 |
 |---|---|---|
-| `amonet-checkers-v2.0.1.zip` | the XDA thread | `770324a8ed5ab922c0383f8ba072d70fc0190cc2c879f12f67b8d6cfa3ad30ee` |
-| `update-kindle-checkers-NS65741_user_8149_0013222532484.bin` | Amazon | `f96fcfa1240f809711fcf855ce7742762437e4f37546153153635c096773cfa3` |
-| `boot-root.zip` | the XDA thread (one `boot-root.img`, see "Root" below); the install takes only its `sbin/adbd` (`ADBD` in `device.conf`, sha256 `108ba403…`) | `b2474113a1f3a4a8de6728ff72774761051945641e1a5ffa78ee25c2b19a809e` |
-| `magiskpolicy32` | `patch/magiskpolicy32` of donut's `boot-root.zip` ([its README](../donut/README.md)); the guided setup takes it from `firmware/donut/boot-root.zip` (where donut's setup keeps it, and where it asks for it) | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
+| `update-kindle-checkers-NS65741_user_8149_0013222532484.bin` | Amazon's firmware, Fire OS 6574.1 (NS65741/8149), 1372825620 bytes: download it from its [FTVDB record](https://ftvdb.com/echo/firmware/com.amazon.checkers.android.os/2a4c5a8f3af7da963955229bd1431411-13222532484-fire-os-6574-1-ns65741-8149-2026-09-28/) (Amazon's own help pages give only version numbers now). Downloaded and checked 2026-11-01 | `f96fcfa1240f809711fcf855ce7742762437e4f37546153153635c096773cfa3` |
+| `amonet-checkers-v2.0.1.zip` | attachment in the [checkers XDA thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-5-1st-gen-2019-checkers.4762900/#post-90318137) (R0rt1z2) | `770324a8ed5ab922c0383f8ba072d70fc0190cc2c879f12f67b8d6cfa3ad30ee` |
+| `boot-root.zip` (checkers') | attachment in the same thread. Only its `sbin/adbd` is used (sha256 `108ba403…`, `ADBD` in `device.conf`) | `b2474113a1f3a4a8de6728ff72774761051945641e1a5ffa78ee25c2b19a809e` |
+| `boot-root.zip` (the Echo Dot 3's) | attachment in the [donut XDA thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/). Only its `patch/magiskpolicy32` is used (sha256 `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a`). The browser saves the second `boot-root.zip` as `boot-root (1).zip`; the setup tells the two apart by sha256 | `de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0` |
 
-The post names no firmware version. The pinned one fits: the `lk.bin` and `tz.img` inside amonet-checkers v2.0.1 are
-byte-identical to those of 8149 (only its `preloader.img` differs).
-
-- **Option 1, a working Echo:** no opening. `./fastbrick.sh` (Linux) or `fastbrick.bat`; with the Echo on its power
-  supply, hold all three buttons until "=> FASTBOOT mode..." shows, then connect micro-USB. Type `YES`, follow the
-  screen. **After the 10 s grace period nothing may interrupt it** (up to 5 min): an interruption bricks it for good.
-- **Option 2, a bricked Echo made in 2019:** open it (power and USB flex stay connected), `sudo ./bootrom-step.sh`, plug
-  in micro-USB while shorting test point TP30 to ground, until the script says otherwise; then `sudo
-  ./fastboot-step.sh`. Newer revisions have the bootrom's USB download disabled, so this most likely fails on them.
-  ModemManager must be stopped.
-
-Afterwards, with the volume keys held while power is connected: Volume down = hacked fastboot, Volume up = TWRP,
-Mute + Volume down (USB connected) = preloader USB download for MTKClient (shows as "MT8163 Preloader", maker
-"PWNED", connecting and disconnecting). `boot-recovery.sh` / `boot-fastboot.sh` from the zip do the same over USB.
-
-At every start TWRP asks "Keep System Read only?" on the screen: tap **Keep Read Only**. Nothing of the install writes
-`/system` from TWRP (the boot image goes in through fastboot, the files from the running Fire OS), and a system that
-TWRP mounted read-write no longer passes the stock boot image's dm-verity, which is the way back while `/system` is
-untouched. adb answers while the screen shows; the answer restarts TWRP's USB, so adb drops for a few seconds.
-
-**Never write lk, preloader, tee1/tee2 (tz) or any other bootloader partition**, not even from the USB download mode:
-most units have no bootrom way back, a brick there is permanent. An install for this model may touch `system` and
-`boot` only. Stock updates only through TWRP: TWRP lists only `.zip`, and the `.bin` is one (`adb push
-firmware/checkers/update-kindle-*.bin /sdcard/update.zip`, check the size, 1372825620 for 8149, then `adb shell twrp
-install /sdcard/update.zip`; or `adb sideload` it, no rename). A copy cut short (seen over MTP) makes TWRP report the
-zip corrupt. Its updater-script also writes lk, tee1/tee2, the preloader and MBR; amonet's TWRP renames `by-name/lk`
-and the others to `*_real` at start, so those writes miss; flashing the amonet zip in TWRP updates
-the unlock.
-
-## Root
-
-The thread's way: in hacked fastboot (Volume down, or Mute, while booting; or from TWRP) `fastboot oem flags 61` (FOS
-flags: adb on, adb authentication off), `fastboot flash boot boot-root.img`, `fastboot reboot`. adb is then a root
-shell, and `adb remount` makes `/system` writable.
-
-**`boot-root.img` is not built from the pinned firmware.** Against the 8149 `boot.img` (the kernel with MediaTek's
-512-byte header in both; 8149's ramdisk a bare gzip stream, the XDA image's with a `ROOTFS` header too):
-
-- its kernel and ramdisk come from **NS6570 / 6086** (`ro.bootimage.build.fingerprint`, `selinux_version`; kernel
-  `4.9.77-g1f91447-dirty`, 2025-09-23, where 8149's is `4.9.77-ga3ad36a2995d-dirty`, 2026-09-28);
-- `default.prop`: `ro.secure=0`, `ro.adb.secure=0`, `ro.debuggable=1`, `persist.sys.usb.config=mtp,adb`;
-- `init.fosflags.sh` cut down to setting adb on, without authentication;
-- `sepolicy`, `file_contexts.bin`, `seapp_contexts`, `service_contexts`, `init` and `sbin/*` differ (6570's or
-  patched: not separated yet); `init.whad_cc.rc` lacks 8149's `net_raw` group; `fstab.mt8163` is the same (`/system`
-  `wait,verify`).
-
-So it runs 6570's kernel and policy under 8149's `/system`. The modules on `/system/lib/modules` say only
-`vermagic=4.9.77` and the kernel has no MODVERSIONS, so they load; whether 8149's Wi-Fi and Bluetooth drivers work
-against 6570's kernel, and whether 6570's policy covers 8149's services, is not known. A bad boot is recoverable:
-hacked fastboot stays, and 8149's `boot.img` flashes back.
-
-The better way: the same changes applied to 8149's own `boot.img`, so kernel, ramdisk and `/system` stay one
-build. **The changes alone are not enough there:** with `ro.secure=0` adbd switches itself to its `--root_seclabel
-u:r:su:s0` (`init.usb.rc`) and, in AOSP 7, stops with a fatal error when that is refused. 8149's policy has `su` as a
-permissive domain but no rule that lets adbd into it; the XDA image gets past that with 6570's policy, which makes adbd
-(and `untrusted_app`: any installed app) permissive. So 8149's image also needs its policy patched
-(`sepolicy.rules`: donut boot-root's rules for adb, our services' rules; not `untrusted_app`).
-
-**Nor is 8149's own `adbd`** (first device, 2026-10-10): it is a user build (no `ro.secure` in it; `adb root` answers
-"restarting adbd as root" and it comes back as shell), so `ro.secure=0`, `service.adb.root=1` and `fastboot oem flags
-61` all leave adb a shell in `u:r:shell:s0`. The XDA image's `sbin/adbd` (CyanogenMod's, static) goes by `ro.secure`;
-with it in 8149's ramdisk adb is root in `u:r:su:s0` (`mkbootroot.py --adbd`).
-
-```sh
-python3 scripts/mkbootroot.py --check firmware/checkers/images/boot.img  # rebuilds it exact but for the header ID
-python3 scripts/mkbootroot.py firmware/checkers/images/boot.img firmware/checkers/boot-root-8149.img
-```
-
-`boot-root-8149.img`: the five properties above and `init.fosflags.sh` (byte for byte the XDA file) replaced inside
-8149's ramdisk, every other ramdisk entry and the kernel untouched, Amazon's kernel-signing certificate (a page
-trailing the stock image) left out: it names the stock image's sha256 (`URI:sha256://…` in its subject alt name), and
-the XDA image has none either. The header ID is AOSP mkbootimg's formula, which lk does not check (the XDA image boots
-with a foreign one too). sha256 `e787a08ed7d39471ae4228659879939cb7e5225e82dbdd5e5d47e4dbf2c6a9a7` (with classic zlib;
-zlib-ng deflates the same ramdisk differently). **Do not flash it:** its stock policy and adbd leave adb dead or a
-shell (above). What the install flashes is the same plus the patched policy, the XDA adbd and `verify` out of the fstab: `scripts/install-boot.sh --boot-only` builds and flashes just that (root adb, for
-trying things with `scripts/deploy.sh` before installing).
+Pin the firmware: the Echo must run exactly build 8149 (`ro.build.version.incremental` 0013222532484). The boot
+image is made from this build's `boot.img`, and hassmic links against its libraries. The XDA post names no version,
+but 8149 fits: the `lk.bin` and `tz.img` inside amonet-checkers v2.0.1 are byte-identical to 8149's.
 
 ## Install
 
-Tried on one Echo Show. The guided setup does it (`scripts/setup.sh checkers`): amonet's `fastbrick.sh` run at its
-unlock step, 8149's system partition where the Echo runs another build, the rooted boot image at the root step (`scripts/install-boot.sh --boot-only`), the build, the egress
-lock and the Wi-Fi join, the install.  Wi-Fi joins through Android's WifiService — `scripts/device/wifictl.dex`
-(`tools/mkwifictl.py`), called as `CLASSPATH=…/wifictl.dex app_process / Wifictl <verb>`: the same
-`android.net.wifi.WifiConfiguration` stock's own setup apps put in, from root, no touchscreen and no Alexa app.  It
-downloads the qemu-arm it needs into `toolchain/` when the PC has none (on an x86_64 PC; elsewhere `qemu-user` from
-the package manager), asks to allow user namespaces where the PC refuses them (Ubuntu 24.04 and later: `tools/qrun.sh`
-needs one), installs the udev rules (`scripts/51-echo-unlock.rules`; over ssh also for a group the user is in), and takes `magiskpolicy32` out of donut's
-`boot-root.zip` (`firmware/donut/`) and `adbd` out of checkers' own `boot-root.zip` on its own (the browser saves the
-second as `boot-root (1).zip`; the setup takes either).  The steps written out follow, for doing them one by one
-(`scripts/install-boot.sh`, from `scripts/install-system.sh`):
+`scripts/setup.sh checkers` does all of it: the top-level [README](../../README.md#install) says how it runs (stopping
+and resuming, `--dry-run`, an Echo rooted already). Below is the same work by hand, for when something needs doing
+differently. The order differs a little: the setup locks the Echo down and joins Wi-Fi before it installs.
+`scripts/install-system.sh` hands over to `scripts/install-boot.sh` for this model; the guided setup calls the same
+scripts.
 
-0. **System partition, in TWRP**, where the Echo runs another build than 8149 (`ro.build.version.incremental` of the
-   system partition: mount it read-only in TWRP and read its `build.prop`; TWRP's own getprop is TWRP's build). A
-   tester's Echo came out of the unlock with 0013054618500. Only `system` is written, from the image on the PC
-   (`tools/sdat2img.py` of the firmware's `system.new.dat`, sha256 `SYSTEM_IMG_SHA256` in `device.conf`, exactly the
-   partition's 3253731328 bytes), and read back; not with `twrp install` of the `.bin`, whose updater-script also
-   writes lk, tee1/tee2, the preloader and an MBR (see the warning above):
-   ```sh
-   adb exec-in 'dd of=/dev/block/platform/mtk-msdc.0/11230000.MSDC0/by-name/system bs=4194304 && sync' < firmware/checkers/images/system.img
-   adb shell sha256sum /dev/block/platform/mtk-msdc.0/11230000.MSDC0/by-name/system   # SYSTEM_IMG_SHA256
-   ```
-   The boot partition still holds the old build's image, which does not boot this system: go on to step 2 without
-   a reboot.
-1. **Boot image, on the PC.** `boot.img` out of the firmware `.bin` (checked against `BOOT_SHA256`), its `sepolicy`
-   patched with `sepolicy.rules` by magiskpolicy under qemu-arm (the Echo has no root yet; `tools/qrun.sh` against
-   `firmware/checkers/rootfs`), and `scripts/mkbootroot.py --sepolicy … --adbd firmware/checkers/adbd --no-verity`:
-   root adb, `verify` out of `fstab.mt8163`, and two lines of stock's `init.checkers.rc` out: `setprop
-   service.adb.tcp.port 5555` (with root adb and no authentication it opened a root shell to the network at every
-   boot) and `start bootsound_anim` (Amazon's boot chime, at the full stream volume a satellite keeps). Reproducible:
-   sha256 `03253eed8df8126c9fbad812664e92c87812db973ca6d05fbb940762d688c19d` with classic zlib (zlib-ng packs the same
-   ramdisk tighter: then its cpio, `mkbootroot.py --cpio`, has sha256 `6467f26c4b25e0e0323fc195968b30af7343bd833126640e5f228e6ef6aa54d8`).
-   The image before that change (`a1772cbe…`) booted with root adb in `su` (first device, 2026-10-10; the tester's
-   2026-10-13). An Echo with the older one gets this one at the install (`install-boot.sh` compares the partition).
-2. **Flash it.** The Echo's system build is checked first (`ro.build.version.incremental` 0013222532484, from TWRP or
-   the booted OS), then `adb reboot bootloader` to amonet's hacked fastboot (or: Volume down while connecting power),
-   `fastboot flash boot`, `fastboot continue`. Only `boot`. Skipped when the partition holds that image already.
-   Not `fastboot reboot`: `adb reboot bootloader` sets the RTC's boot-to-fastboot flag and kaeru 2.0.0 does not clear
-   it (`fastboot getvar boot-reason`: RTC), so every warm reboot lands in fastboot again; `continue` boots `boot`
-   straight from fastboot, and pulling the power clears the flag. `fastboot oem logcat` prints the preloader's and
-   lk's log.
-3. **Files, from the running OS.** Root adb in the `su` domain checked; then as on donut: `/system/hassmic/`,
-   `/system/etc/init/hassmic.rc` (`sysinstall.sh`; `/system` is a plain block device without verify, `otatool
-   remount` clears its read-only flag if the kernel set it), `hassmic.conf`, reboot.
+### 1. Unlock with amonet
 
-At boot, `hassmic.rc` starts the firewall at `on boot` and the satellite at `sys.boot_completed`; `alexa-off.sh` disables
-Alexa's apps with `pm` (`ALEXA_PACKAGES`, `SETUP_PACKAGES`, `UPDATE_PACKAGES`), noting them in
-`/data/local/hassmic/alexa-disabled`. Without `hassmic.conf` `boot.sh` turns exactly those back on.
+Follow the XDA thread's instructions. It ends with an unlocked bootloader and TWRP (written to `recovery` and `swdl`).
+Two ways in:
 
-```sh
-# amonet done, the Echo in TWRP (Volume up while connecting power) on USB
-unzip -j firmware/donut/boot-root.zip patch/magiskpolicy32 -d firmware/checkers/
-unzip -p firmware/checkers/boot-root.zip boot-root.img > firmware/checkers/boot-root.img
-python3 scripts/mkbootroot.py --extract firmware/checkers/boot-root.img sbin/adbd firmware/checkers/adbd
-DEVICE=checkers scripts/install-system.sh   # the Echo names itself (model and MAC address); name it in Home Assistant
-```
+- **A working Echo (no opening):** run `./fastbrick.sh` (Linux) or `fastbrick.bat`. With the Echo on its power
+  supply, hold all three buttons until "=> FASTBOOT mode..." shows, then connect micro-USB. Type `YES`. At "Press any
+  key to exit..." press a key (it only closes the script), then leave the Echo plugged in until TWRP shows on its
+  screen (up to 5 minutes).
+- **A bricked Echo made in 2019:** open it (power and USB flex stay connected), stop ModemManager, run `sudo
+  ./bootrom-step.sh`, and plug in micro-USB while shorting test point TP30 to ground, until the script says
+  otherwise; then `sudo ./fastboot-step.sh`. Newer revisions have the bootrom's USB download disabled, so this most
+  likely fails on them.
 
-`DEVICE=checkers` is needed while it is in TWRP: there the model is not asked from the Echo. Wi-Fi:
-`scripts/wifi-join.sh` joins through WifiService on this model (wifictl.dex above; the SSID goes in as hex and the
-passphrase as its PSK, made on the PC, so nothing of either passes a shell); it worked on the first Echo Show
-(2026-10-13).  There is no screen to fall back on: the install takes Amazon's apps off the system partition, Settings
-among them, and the screen stays black (hassmic's own home, `tools/mkhome.py`).  Do not join before the lockdown:
-Fire OS would reach Amazon.  The settings page's network switch
-(`scripts/device/wifi.sh`) uses the same wifictl calls.
+From then on, hold a key while connecting power:
 
-**Once `/system` is written, only a boot image without `verify` may boot it**: the stock `boot.img` would find its
-hashes wrong. `scripts/install-system.sh --uninstall` turns Alexa's apps back on and takes hassmic off `/system`, but
-keeps the root boot image; all the way back to stock is the firmware `.bin` flashed in TWRP (system and boot together;
-amonet's TWRP leaves lk, preloader and tee alone).
-
-## Files here
-
-| File | State |
+| Hold | Boots into |
 |---|---|
-| `device.mk` | OpenSL ES backend, Pryon, the light band; Wi-Fi motion's module `hassmic_rcpi4m` built for 32-bit ARM (kernel.org 4.9.77, arm-eabi-4.8) |
-| `board.c` | from the firmware, checked on the Echo: input devices by name, privacy latch, light sensor (`als_ps/lux`) |
-| `device.conf` | identity and probe files checked; `INSTALL=boot` (boot and system partition, firmware build, policy tool), Alexa's packages, `FW_KEEP` (DHCP: no stock `firewall.sh`) |
-| `sepolicy.rules`, `hassmic.rc` | the boot image's policy patch; init services (firewall at `on boot`, satellite at `sys.boot_completed`) |
-| `kconfig` | the kernel's IKCONFIG (4.9.77, ARM) |
-| `probe.md5`, `stubs/` | from the pinned firmware |
+| Volume down | amonet's hacked fastboot |
+| Volume up | TWRP |
+| Mute + Volume down (USB connected) | preloader USB download for MTKClient ("MT8163 Preloader", maker "PWNED") |
 
-What is done and what is open, item by item: [docs/re-checkers.md, "What a port needs"](../../docs/re-checkers.md#what-a-port-needs).
+`boot-recovery.sh` and `boot-fastboot.sh` from the zip do the same over USB. In TWRP, adb answers while the screen
+shows; answering "Keep Read Only" restarts TWRP's USB, so adb drops for a few seconds.
 
-## Unpack the firmware
+### 2. Unpack the firmware on the PC
 
 ```sh
+mkdir -p firmware/checkers && mv ~/Downloads/update-kindle-checkers-*.bin ~/Downloads/amonet-checkers-v2.0.1.zip firmware/checkers/
 unzip firmware/checkers/update-kindle-*.bin -d firmware/checkers/
-```
-
-```sh
 mkdir -p firmware/checkers/images firmware/checkers/rootfs/system
 mv firmware/checkers/boot.img firmware/checkers/images/
 python3 tools/sdat2img.py firmware/checkers/system.transfer.list firmware/checkers/system.new.dat firmware/checkers/images/system.img
@@ -213,4 +96,154 @@ python3 scripts/mkbootroot.py --cpio firmware/checkers/images/boot.img firmware/
 (cd firmware/checkers/rootfs && cpio -id < ../ramdisk.cpio)
 ```
 
-More in [docs/re-checkers.md](../../docs/re-checkers.md#unpacking).
+Then the two tools out of the `boot-root.zip` files. Put checkers' (sha256 `b2474113…`) in `firmware/checkers/` and
+the Echo Dot 3's (`de49cc88…`) in `firmware/donut/boot-root.zip`; check with `sha256sum`, since the browser names the
+second one `boot-root (1).zip`:
+
+```sh
+unzip -j firmware/donut/boot-root.zip patch/magiskpolicy32 -d firmware/checkers/
+unzip -p firmware/checkers/boot-root.zip boot-root.img > firmware/checkers/boot-root.img
+python3 scripts/mkbootroot.py --extract firmware/checkers/boot-root.img sbin/adbd firmware/checkers/adbd
+```
+
+More on the firmware's layout: [docs/re-checkers.md](../../docs/re-checkers.md#unpacking).
+
+### 3. Put build 8149 on the system partition (only if needed)
+
+Skip this if the Echo already runs 8149. To find out, boot TWRP, mount the system partition read-only and read its
+`build.prop` (TWRP's own `getprop` reports TWRP's build, not the system's). A tester's Echo came out of the unlock
+with 0013054618500.
+
+Write only `system`, from the image you unpacked, and read it back. Do **not** use `twrp install` with the `.bin`: its
+updater script also writes lk, tee1/tee2, the preloader and an MBR.
+
+```sh
+# in TWRP's main menu, past "Keep System Read only?" (Keep Read Only)
+adb shell 'twrp wipe cache && twrp wipe data'   # the old build's app updates in /data/app would run over this system
+adb shell 'mount /data 2>/dev/null; grep " /data " /proc/mounts && ls /data/app'   # must print the mount and no app
+adb exec-in 'dd of=/dev/block/platform/mtk-msdc.0/11230000.MSDC0/by-name/system bs=4194304 && sync' < firmware/checkers/images/system.img
+adb shell sha256sum /dev/block/platform/mtk-msdc.0/11230000.MSDC0/by-name/system   # must equal SYSTEM_IMG_SHA256 in device.conf
+```
+
+The image is exactly the partition's 3253731328 bytes. The boot partition still holds the old build's image, which
+does not boot this system: go straight on to step 4 without rebooting.
+
+### 4. Root boot image and the install
+
+With the Echo in TWRP on USB:
+
+```sh
+DEVICE=checkers scripts/install-system.sh
+```
+
+`DEVICE=checkers` is needed because in TWRP the model can't be read from the Echo. The script does three things:
+
+1. **Builds the boot image on the PC** from 8149's own `boot.img` (checked against `BOOT_SHA256`): root adb, `verify`
+   taken out of `fstab.mt8163`, the SELinux policy patched with `sepolicy.rules` (by magiskpolicy under qemu-arm, since
+   the Echo has no root yet), and two lines of stock's `init.checkers.rc` taken out: `setprop service.adb.tcp.port
+   5555` (with root adb and no authentication it opened a root shell to the network at every boot) and `start
+   bootsound_anim` (Amazon's boot chime, at full volume). Why it can't just use the XDA thread's `boot-root.img`:
+   [docs/re-checkers.md](../../docs/re-checkers.md#the-xda-boot-rootimg).
+2. **Flashes it.** Checks the system build first, then `adb reboot bootloader` into hacked fastboot, `fastboot flash
+   boot`, `fastboot continue`. Only `boot` is written, and only when it differs.
+3. **Installs the files from the running Fire OS**: checks that adb is root in the `su` domain, then writes
+   `/system/hassmic/`, `/system/etc/init/hassmic.rc` and `hassmic.conf`, and reboots.
+
+To get root adb without installing (for trying things with `scripts/deploy.sh`):
+`scripts/install-boot.sh --boot-only`.
+
+### 5. Wi-Fi
+
+Only after the lockdown (the firewall is part of the install). `scripts/wifi-join.sh` joins through Android's
+WifiService: the SSID goes in as hex and the passphrase as its PSK, computed on the PC, so neither passes through a
+shell. It worked on the first Echo Show (2026-10-13). There is no on-screen fallback: the install takes Amazon's apps
+off the system partition, Settings among them. The settings page's "Switch network…" uses the same calls.
+
+## Kiosk Satellite (optional)
+
+Shows a Home Assistant dashboard on the screen; hassmic stays the voice satellite. The guided setup offers it. On an
+Echo that is already installed:
+
+```sh
+scripts/kiosk-install.sh             # over USB
+scripts/kiosk-install.sh <echo-ip>   # over Wi-Fi
+scripts/kiosk-install.sh --uninstall [<echo-ip>]   # takes it off again
+```
+
+That fetches the newest release and Simple Keyboard, and the Echo opens the app by itself. Do its setup from your PC
+at `http://<echo-ip>:2324`, where you can paste the Home Assistant token: scanning a QR code on the Echo needs "Kiosk
+Satellite camera" on the settings page (System). Set its remote admin password: that page is open to your network.
+Leave the app's voice assistant off, and do not make it the home app.
+
+By hand: `kiosk-satellite-<version>.armeabi-v7a.apk` from its [releases](https://github.com/jxlarrea/kiosk-satellite/releases),
+`adb install`. What the app is allowed, and what it costs: [docs/GUIDE.md](../../docs/GUIDE.md#kiosk-satellite-on-the-screen).
+
+## How it runs
+
+At boot, `hassmic.rc` starts the firewall at `on boot` and the satellite once `sys.boot_completed` is set.
+`alexa-off.sh` disables Alexa's apps with `pm` (`ALEXA_PACKAGES`, `SETUP_PACKAGES`, `UPDATE_PACKAGES` in
+`device.conf`) and notes which in `/data/local/hassmic/alexa-disabled`. Without `hassmic.conf`, `boot.sh` turns exactly
+those back on. The home screen is hassmic's own (`tools/mkhome.py`, an APK without code), and hassmic's screen UI
+draws the face over it and the light band along the bottom; the settings page's Screen page can make another app the
+home app.
+
+Wi-Fi goes through `scripts/device/wifictl.dex` (`tools/mkwifictl.py`), run as `CLASSPATH=…/wifictl.dex app_process /
+Wifictl <verb>`. It puts in the same `android.net.wifi.WifiConfiguration` stock's setup apps do, from root, with no
+touchscreen and no Alexa app.
+
+## Going back to stock
+
+- `scripts/install-system.sh --uninstall` turns Alexa's apps back on, takes hassmic off `/system` and wipes cache and
+  data in TWRP (tap **Keep Read Only** when it asks): Amazon's apps come back without their data and default
+  permissions otherwise, and their setup wizard crashes in a loop ("OOBE has stopped"). It keeps the root boot image.
+- All the way back is the firmware `.bin` flashed in TWRP (system and boot together), and it is the one step here
+  that goes against the first rule above: its updater script also writes lk, tee1/tee2, the preloader and an MBR.
+  amonet's TWRP renames `by-name/lk` and the other bootloader partitions to `*_real` at start, so the writes by name
+  miss; the preloader's (`mmcblk0boot0`, not by name) is not proven harmless
+  ([docs/re-checkers.md](../../docs/re-checkers.md#what-a-port-needs)). TWRP lists only `.zip` files, and the `.bin`
+  is one:
+  ```sh
+  adb push firmware/checkers/update-kindle-*.bin /sdcard/update.zip   # then check the size: 1372825620
+  adb shell twrp install /sdcard/update.zip                           # or: adb sideload the .bin, no rename
+  ```
+  A copy cut short (seen over MTP) makes TWRP report the zip corrupt. Flashing the amonet zip in TWRP afterwards
+  updates the unlock.
+
+## Troubleshooting
+
+- **Every reboot lands in fastboot.** `adb reboot bootloader` sets the RTC's boot-to-fastboot flag and kaeru 2.0.0
+  does not clear it (`fastboot getvar boot-reason` says RTC). Use `fastboot continue` to boot from fastboot, and pull
+  the power once to clear the flag.
+- **A boot fails after flashing.** Hacked fastboot stays: hold Volume down while connecting power, then `fastboot
+  flash boot build/checkers/boot.stock.img` (8149's own) while nothing of hassmic is on `/system` yet, or
+  `build/checkers/boot-hassmic.img` (the install's) once it is: the stock image does not accept that system. Then
+  `fastboot continue`.
+- **Logs from the bootloader:** `fastboot oem logcat` prints the preloader's and lk's log.
+
+## Reference
+
+### The firmware, compared with the Echo Dot 3 (2026-10-07)
+
+8149 is the same Fire OS release as donut's.
+
+- `lib/libpryon.so`, `libopus.so`, `libz.so` are **byte-identical**. The `en-US/ALEXA` model (a newer layout) detects
+  ALEXA in `pryon_test` under qemu.
+- **No `mixer`, no `libmixerAPI.so`.** Amazon's audio front end runs inside the audio HAL; hassmic uses Android's audio
+  through OpenSL ES (`src/hassmic/audio_android.c`).
+- A full Android device: Alexa is apps (stopped with `pm disable`), Wi-Fi is Android's, netd owns iptables, Bluetooth
+  is Android's stack.
+- No action button, no LED ring; a screen.
+
+### Files in this folder
+
+| File | What it holds |
+|---|---|
+| `device.mk` | OpenSL ES backend, Pryon, the light band; Wi-Fi motion's module `hassmic_rcpi4m` built for 32-bit ARM (kernel.org 4.9.77, arm-eabi-4.8) |
+| `board.c` | from the firmware, checked on the Echo: input devices by name, privacy latch, light sensor (`als_ps/lux`) |
+| `device.conf` | identity and probe files; `INSTALL=boot` (boot and system partition, firmware build, policy tool), Alexa's packages, `FW_KEEP` (DHCP: no stock `firewall.sh`) |
+| `sepolicy.rules`, `hassmic.rc` | the boot image's policy patch; init services (firewall at `on boot`, satellite at `sys.boot_completed`) |
+| `kconfig` | the kernel's IKCONFIG (4.9.77, ARM) |
+| `probe.md5`, `stubs/` | from the pinned firmware |
+| `setup.sh` | the guided setup's steps for this model |
+
+Porting another model: [devices/README.md](../README.md).

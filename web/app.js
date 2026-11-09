@@ -11,10 +11,13 @@ const enc = new TextEncoder(), dec = new TextDecoder();
 const fitBytes = (v, max) => { while (enc.encode(v).length > max) v = [...v].slice(0, -1).join(''); return v; };
 const cat = (a, b) => { const o = new Uint8Array(a.length + b.length); o.set(a); o.set(b, a.length); return o; };
 const $ = (id) => document.getElementById(id);
-// The server advertises the platform; absent on older Echo releases means Echo.
 const isCube = () => !!(echo && echo.hello.platform === 'fire_tv');
 
 function store(k, v) { try { if (v === undefined) return JSON.parse(localStorage.getItem(k)); localStorage.setItem(k, JSON.stringify(v)); } catch (e) { return null; } }
+
+// Light or dark: the system's unless picked here (the page's foot); index.html's tokens go by data-theme
+const setTheme = (v) => { if (v === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = v; };
+setTheme(store('hm.theme') || 'auto');
 
 function myKey() {
   let sk = store('hm.sk');
@@ -95,6 +98,7 @@ const ICONS = {
   speaker: '<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/>',
   timer: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/>',
   bell: '<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+  screen: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   sparkle: '<path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8z"/><path d="M19 15l.8 2.2 2.2.8-2.2.8L19 21l-.8-2.2-2.2-.8 2.2-.8z"/>',
   music: '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
@@ -128,6 +132,11 @@ const ICONS = {
   up: '<path d="M12 20V9M7 14l5-5 5 5M5 4h14"/>',
   dot: '<circle cx="12" cy="12" r="2.5"/>',
   eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  home: '<path d="M3 11.5L12 4l9 7.5"/><path d="M5.5 9.5V20h13V9.5"/><path d="M10 20v-6h4v6"/>',
+  table: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 10v10M15 10v10"/>',
+  unlock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.5-2"/>',
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
 };
 const icon = (n) => h('span', { html: `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`, style: 'display:inline-flex' });
 
@@ -137,7 +146,8 @@ function browserLabel() { return (navigator.userAgentData && navigator.userAgent
 // that goes ahead), danger (it deletes or cuts something off), input (a text field: { label, value, max }, max in bytes
 // of UTF-8 as the Echo counts), check (a value from the field: an error text, or null).  Resolves to true (or the
 // field's text) when gone ahead, null otherwise.
-function ask({ title, body = [], ok = 'OK', danger = false, input = null, check = null }) {
+// alt: a second way to go on beside ok, which resolves to 'alt'
+function ask({ title, body = [], ok = 'OK', alt = null, danger = false, input = null, check = null }) {
   return new Promise((done) => {
     let result = null;
     const field = input ? h('input', { type: 'text', id: 'ask-field', value: input.value || '', maxlength: String(input.max || 200), autocomplete: 'off' }) : null;
@@ -145,11 +155,12 @@ function ask({ title, body = [], ok = 'OK', danger = false, input = null, check 
     if (field) field.oninput = () => { msg.textContent = ''; const v = fitBytes(field.value, input.max || 200); if (v !== field.value) field.value = v; };
     const go = h('button', { type: 'submit', class: danger ? 'danger' : 'primary' }, ok);
     const cancel = h('button', { type: 'button', onclick: () => dlg.close() }, 'Cancel');
+    const other = alt ? h('button', { type: 'button', onclick: () => { result = 'alt'; dlg.close(); } }, alt) : null;
     const close = h('button', { type: 'button', class: 'icon-btn', title: 'Close', 'aria-label': 'Close', onclick: () => dlg.close() }, icon('x'));
     const form = h('form', { method: 'dialog', class: 'ask-form' },
       h('div', { class: 'modal-body' }, ...[].concat(body).map((b) => typeof b === 'string' ? h('p', {}, b) : b),
         field ? h('div', { class: 'field ask-field' }, h('label', { for: 'ask-field' }, input.label), field, msg) : null),
-      h('div', { class: 'modal-foot' }, cancel, go));
+      h('div', { class: 'modal-foot' }, cancel, other, go));
     const dlg = h('dialog', { class: 'modal ask', 'aria-labelledby': 'ask-title' }, h('div', { class: 'modal-head' }, h('h2', { id: 'ask-title' }, title), close), form);
     form.onsubmit = (e) => {
       e.preventDefault();
@@ -177,59 +188,101 @@ const errText = (e) => e.message === 'login' ? 'Not logged in any more: reload t
 
 // ---------------------------------------------------------------- what the settings are
 
-// Page sections, in this order.  Settings come from the Echo (settings.c) with their group; the words are here.
-const SECTIONS = [
-  { id: 'Voice', icon: 'mic', intro: 'How the Echo hears you, and how it sounds when it does.' },
-  { id: 'Wake word', icon: 'ear', intro: 'Which engine listens for the wake word. Home Assistant picks the wake word itself, from the engine\'s list (the satellite\'s "Wake word" select), and a second one in "Wake word 2" if you like: each starts its own assistant ("Assistant", "Assistant 2").' },
-  { id: 'Sound', icon: 'speaker', intro: 'How the Echo\'s speaker sounds. The equalizer is Amazon\'s own, applied to everything the Echo plays: replies, timers, music, Bluetooth.' },
-  { id: 'Lights', icon: 'sun', intro: 'The light ring. It shows listening, thinking, speaking, errors and mute whatever you set here.' },
-  { id: 'Features', icon: 'sparkle', intro: 'Optional extras. While a feature is on, its entities are in Home Assistant; switched off, they are removed there. Home Assistant reconnects for a moment when you switch one.' },
-  { id: 'Music', icon: 'music', intro: 'Music Assistant plays on the Echo as a Sendspin player.' },
-  { id: 'Bluetooth', icon: 'bt', intro: 'For phones playing music on the Echo.' },
-  { id: 'Echos', icon: 'net', intro: '' },
-  { id: 'System', icon: 'sliders', intro: 'This Echo\'s name and network, updates, backups and troubleshooting.' },
+// The pages, in this order; nav: the heading they stand under.  Settings come from the Echo (settings.c) with their
+// group, which says their page (groups); the words are here.  Those MOVED live where people look for them, whatever
+// group the Echo has them in, and a parent's children go with it.  always: a page with no settings of its own.
+const PAGES = [
+  { id: 'overview', title: 'Overview', icon: 'home', always: true, intro: 'How this Echo is doing, and what you reach for most.' },
+  { id: 'voice', title: 'Voice', icon: 'mic', nav: 'This Echo', groups: ['Voice'], intro: 'How the Echo hears you, and how it sounds when it does.' },
+  { id: 'wake', title: 'Wake word', icon: 'ear', nav: 'This Echo', groups: ['Wake word'], intro: 'Which engine listens for the wake word. Home Assistant picks the wake word itself, from the engine\'s list (the satellite\'s "Wake word" select), and a second one in "Wake word 2" if you like: each starts its own assistant ("Assistant", "Assistant 2").' },
+  { id: 'sound', title: 'Sound', icon: 'speaker', nav: 'This Echo', groups: ['Sound'], intro: 'How the Echo\'s speaker sounds. The equalizer is Amazon\'s own, applied to everything the Echo plays: replies, timers, music, Bluetooth.' },
+  { id: 'lights', title: 'Lights', icon: 'sun', nav: 'This Echo', groups: ['Lights'], intro: 'The light ring. It shows listening, thinking, speaking, errors and mute whatever you set here.' },
+  { id: 'screen', title: 'Screen', icon: 'screen', nav: 'This Echo', when: () => !!state.screen, intro: 'The Echo Show\'s screen: what it shows when nothing else does, and the band of light along its bottom. Pull down from the top edge of the screen for the drawer: home, the face, music, Do not disturb, screen off and the volume.' },
+  { id: 'media', title: 'Music & Bluetooth', icon: 'music', nav: 'This Echo', groups: ['Music', 'Bluetooth'], intro: 'Music Assistant plays on the Echo as a Sendspin player, phones play on it over Bluetooth, and it can play on a Bluetooth speaker itself.' },
+  { id: 'features', title: 'Features', icon: 'sparkle', nav: 'This Echo', groups: ['Features'], intro: 'Optional extras. While a feature is on, its entities are in Home Assistant; switched off, they are removed there. Home Assistant reconnects for a moment when you switch one.' },
+  { id: 'echos', title: 'Echos', icon: 'net', nav: 'All your Echos', always: true, intro: 'Your Echos find each other on the local network and share a key, so nothing else on the network can join them or silence them. This runs with arbitration off too: it is also how this page finds your other Echos.' },
+  { id: 'compare', title: 'Compare & copy', icon: 'table', nav: 'All your Echos', always: true, intro: 'Your Echos side by side. Click the value you want and it goes to the other Echos in that row, from whichever Echo has it; click another one to turn it around. Nothing changes until you press Apply.' },
+  { id: 'models', title: 'Models', icon: 'box', nav: 'All your Echos', always: true, intro: 'Amazon\'s extra wake words and models, microWakeWord\'s models and your light ring designs: fetched, copied between Echos, kept on file.' },
+  { id: 'system', title: 'System', icon: 'sliders', nav: 'This Echo\'s system', groups: ['System'], always: true, intro: 'This Echo\'s name and network, updates, backups and troubleshooting.' },
 ];
-
-// Keep the existing Echo copy and navigation unchanged. Fire TV owns networking,
-// uses bars instead of a ring, and has no Echo equalizer controls.
-function sectionForDevice(sec) {
-  if (!isCube()) return sec;
+function pageForDevice(pg) {
+  if (!isCube()) return pg;
   const copy = {
-    Voice: { intro: 'How the Cube hears you, and how it sounds when it does.' },
-    Sound: { intro: 'Volumes for the Cube speaker: music, replies, sounds, timers and calls.' },
-    Lights: { intro: 'Matching light bars on the Cube and TV show listening, thinking, speaking, errors and mute.' },
-    Music: { intro: 'Music Assistant plays on the Cube as a Sendspin player.' },
-    Echos: { title: 'Devices and arbitration' },
-    System: { intro: 'Cube Assist settings, backups and troubleshooting. Manage Fire TV networking separately.' },
+    sound: { intro: 'Volumes for music, replies, sounds, timers and calls. Audio routing chooses the Cube speaker or TV.' },
+    lights: { always: true, intro: 'Matching light bars on the Cube and TV show listening, thinking, speaking, errors and mute.' },
+    media: { title: 'Music', intro: 'Music Assistant plays through FireTV Assist as a Sendspin player. Keep a second KS audio player disabled.' },
+    echos: { title: 'Devices and arbitration' },
+    models: { intro: 'The built-in Alexa model is available from Fire TV. Import or export additional models here.' },
+    system: { intro: 'Cube Assist settings, backups and troubleshooting. Manage networking and ADB in Fire TV Settings.' },
   };
-  return { ...sec, ...(copy[sec.id] || {}) };
+  return { ...pg, nav: pg.nav ? (pg.nav === 'All your Echos' ? 'Your devices' : 'This Cube') : pg.nav, ...(copy[pg.id] || {}) };
 }
 
+const BRIGHTNESS = ['screen_brightness_auto', 'screen_brightness', 'screen_brightness_adjust'];      // the Show's backlight
+const WORDS = ['screen_text', 'screen_text_seconds', 'screen_timers'];            // the screen UI's words.c
+const MOVED = { light_band: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen',
+  screen_text: 'screen', screen_text_seconds: 'screen', screen_timers: 'screen', arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
+// The cards of a settings page: [title, settings...].  A setting not named here (a new one, or a model's own) comes
+// last, in a card of its own, so nothing is ever lost from the page
+const LAYOUT = {
+  voice: [['Microphone', 'mic_level', 'noise_reduction'], ['Mute and wake sound removal', 'mute', 'do_not_disturb', 'wake_sound_removal'],
+          ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening'], ['Action button', 'multi_press'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any']],
+  wake: [['Engine', 'wake_engine'], ['How it hears you', 'speech_language', 'wake_word_adaptation']],
+  lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band'], ['Screen', ...BRIGHTNESS]],
+};
 
 // help: what it does, in the user's terms.  ha: also in Home Assistant (true), or for features the entities it adds.
-// icon: features.  parent: shown inside that feature's card while it is on.  tag: an extra badge.  card: a setting
-// that is no feature (no entities) shown as a feature card all the same.
+// icon: features.  parent: shown inside that feature's card while it is on.  tag: an extra badge.
 const HELP = {
-  extra_duck_db: { help: 'Extra reduction of active Fire TV media volume during an Assist request, in addition to Android audio focus. The original level returns afterwards. This does not control other TV inputs.' },
-  mic_level: { get help() { return isCube() ? 'How loud speech reaches Home Assistant after waking. This does not change Amazon wake-word sensitivity. Default −26 dBFS.' : 'How loud your voice reaches speech-to-text. The Echo adjusts its gain to hold speech at this level. Raise it if quiet commands get misheard or cut off; lower it if loud speech comes out distorted. Default −26 dBFS.'; } },
+  extra_duck_db: { help: "Extra reduction of other Fire TV apps during Assist, in addition to audio focus. Restored afterwards; does not control other TV inputs." },
+  audio_output: { help: "Auto follows fresh TV power evidence and falls back to the Cube when unknown. Manual choices override that; unavailable HDMI still falls back to Cube." },
+  cube_output_volume: { help: "Remembered Cube output trim for music and replies." },
+  tv_output_volume: { help: "Remembered TV output trim for music and replies." },
+  music_duck_percent: { help: "Music level while Assist listens and speaks: 17% is about 15.4 dB quieter. 100% disables ducking. Restored after the complete reply." },
+
+  mic_level: { get help() { return isCube() ? "Speech level sent to Home Assistant after waking; this does not change Amazon wake-word sensitivity. Default -26 dBFS." : 'How loud your voice reaches speech-to-text. The Echo adjusts its gain to hold speech at this level. Raise it if quiet commands get misheard or cut off; lower it if loud speech comes out distorted. Default −26 dBFS.'; } },
   noise_reduction: { help: 'Takes steady background noise (fans, traffic, the dishwasher) out of what speech-to-text hears, by up to 6, 9 or 12 dB. The wake word always gets the untouched sound. Try it if commands fail in a noisy room.' },
-  wake_sound: { ha: true, help: 'A tone when the Echo starts listening. Turning it off also silences the Echo\'s other local sounds.' },
-  wake_sound_removal: { card: true, icon: 'mic', tag: 'Experimental', help: 'Takes the wake sound back out of what speech-to-text hears, so you can speak straight on without waiting for the tone. The Echo\'s own echo canceller leaves part of it in, about as loud as a quiet voice. Each time, the Echo finds the tone in the microphone and turns down only its few pitches. Your first second of speech then reaches Home Assistant all at once, a moment later. The log says how much was taken off each time.' },
+  wake_sound: { ha: true, help: 'A tone when the Echo starts listening. Off keeps the sound you chose: on again, yours or Alexa\'s plays as before.' },
+  sound_touch: { help: 'The tone when the action button starts listening. Off keeps the sound you chose.' },
+  sound_mics_off: { help: 'The tone when the microphones go off. The ring still shows it. Off keeps the sound you chose.' },
+  sound_mics_on: { help: 'The tone when the microphones come back on. Off keeps the sound you chose.' },
+  sound_volume: { help: 'The tone at each press of the volume keys. Off keeps the sound you chose.' },
+  sound_bluetooth_on: { help: 'The chime when a phone connects; the spoken announcement is "Bluetooth announcements". A login on this page, a phone\'s setup and pairing Echos borrow this sound and play it either way. Off keeps the sound you chose.' },
+  sound_bluetooth_off: { help: 'The chime when a phone leaves; the spoken announcement is "Bluetooth announcements". A refused login on this page and a failed pairing of Echos borrow this sound and play it either way. Off keeps the sound you chose.' },
+  wake_sound_removal: { tag: 'Experimental', help: 'Takes the wake sound back out of what speech-to-text hears, so you can speak straight on without waiting for the tone. The Echo\'s own echo canceller leaves part of it in, about as loud as a quiet voice. Each time, the Echo finds the tone in the microphone and turns down only its few pitches. Your first second of speech then reaches Home Assistant all at once, a moment later. The log says how much was taken off each time.' },
   mute: { ha: true, help: 'Stops listening for the wake word, as the switch in Home Assistant does. The mic-off button on the Echo is a separate, hardware mute: only the button can lift it.' },
   do_not_disturb: { ha: true, help: 'Drops announcements from Home Assistant while on. The ring pulses purple when you switch it on.' },
   timer_ring: { step: 10, help: 'How long a finished timer rings before it gives up. All the way left: until someone stops it ("<wake word>, stop", the action button, or "Stop ringing" in Home Assistant; the wake word alone only pauses it while you talk). Home Assistant\'s "Timer ringing" stays on just as long, so an automation can tell when nobody heard it. Default 1 min.' },
+  timer_sound: { help: 'What a finished timer plays. Alexa timer and Alexa alarm: Amazon\'s own tones from the Echo\'s firmware, the ones a stock Echo rings with. Beep: a short triple beep, just as loud. Your own: a sound you upload here (MP3, WAV, OGG, or whatever else this browser plays), its first 30 seconds, played over and over; the page measures how loud it is and offers to bring it to Alexa\'s level, so one timer volume suits them all. Each Echo keeps its own, at the timer volume, and every way of stopping a ring stops it. Default Alexa timer (Beep where the firmware has no such tone).',
+    unavailable: (c) => c !== 'beep' && c !== 'custom' && !((state.timer_sound || {}).present || []).includes(c),
+    before: (c) => c !== 'custom' || (state.timer_sound || {}).custom_ms > 0 || (timerSoundBox().file.click(), false),
+    status: () => timerSoundBox().el },
+  wake_word_in_request: { help: 'Sends the wake word to Home Assistant too: speech-to-text hears "Alexa, turn on the light" instead of "turn on the light". Speech-to-text then gets the whole sentence: nothing of your first word can be cut off, and no stray end of the wake word turns up in front of the command. Meant for an AI (LLM) conversation agent, which takes the sentence either way. Home Assistant\'s built-in sentences may not recognise a command with the wake word in front; with "Prefer handling commands locally" such commands then go to the agent. "<wake word>, stop" still stops a ringing timer or music, and the wake word with nothing after it still ends quietly. No effect with Home Assistant\'s wake word engine. Off by default.' },
+  end_of_request: { tag: 'Experimental', help: 'Lets the Echo end a request once the person who said the wake word stops talking, not when the room goes quiet. Home Assistant ends a request on silence, so with others talking in the room it stays open and speech-to-text writes down their words after your command. The Echo knows how loud you said the wake word: quieter voices (from about 17, 14 or 11 dB under yours) no longer keep the request open, and on the Echo Dots Amazon\'s own speech detector keeps the dishes or a kettle from doing so. Relaxed waits 1.25 s after you stop, Normal 0.7 s, Aggressive 0.45 s and lets in the least of the others. It cannot tell a voice as loud as yours, and if you turn away or drop your voice mid-sentence it may end too soon: start with Relaxed. Home Assistant\'s own end still applies, so a request never runs longer than before. ESPHome only. Off by default.' },
+  multi_press: { help: 'Press the action button twice quickly to skip to the next track, three times to go back to the previous one, for Music Assistant and for a phone over Bluetooth. With nothing playing (or the assistant busy) it acts as a single press. The price: a single press waits about half a second to see whether another follows, so the assistant starts, and music pauses, a moment later than without. Home Assistant\'s "Button" event hears whatever acts as a single press, never a skip. Off by default.' },
   stop_ends_listening: { help: 'Makes "<wake word>, stop" mean "be quiet". An Echo that woke up by mistake (the TV, someone talking in the room) listens for up to 15 seconds, and Home Assistant carries out whatever it heard. With this on, "<wake word>, stop" ends that at once: the Echo stops listening and nothing of it reaches Home Assistant, and when it hears both words together it does not start at all. A ringing timer, a reply, a Drop In call and music on this Echo stop as before. The cost: "<wake word>, stop the timer" no longer reaches Home Assistant (say "<wake word>, cancel the timer"), media Home Assistant plays elsewhere is paused with "<wake word>, pause" instead, and now and then the engine hears "stop" in a short command (about 2 in 350): that command is lost, say it again. Off by default.' },
-  timer_stop_any: { help: 'While a timer rings, whatever you say after the wake word stops it, in any language and however you put it ("Alexa, stop the timer", "Alexa, Ruhe"). Without it only "stop" does, and "stop the timer" goes to Home Assistant, which has forgotten the finished timer and says none is running. The cost: a question during a ring ("how long is left on the pasta timer?") is not answered, it only stops the ring. Off by default.' },
+  timer_stop_any: { help: 'While a timer rings, whatever you say after the wake word stops it. That goes for any language and however you put it ("Alexa, stop the timer", "Alexa, Ruhe"). Without it only "stop" does, and "stop the timer" goes to Home Assistant, which has forgotten the finished timer and says none is running. The cost: a question during a ring ("how long is left on the pasta timer?") is not answered, it only stops the ring. Off by default.' },
   equalizer_bass: { ha: true }, equalizer_mid: { ha: true }, equalizer_treble: { ha: true },
-  speaker_gain: { help: 'Makes the Echo\'s own speaker louder at every volume, for an Echo that is too quiet at full volume: it raises the amplifier stage in front of the speaker, which a stock Echo leaves at +0 dB (an Echo Dot 3\'s amplifier has only 2 dB more to give; an Echo Show 5 goes in steps of 1.5 dB, the nearest one to what you pick). Owners of an Echo Dot 2 heard +6 dB loud and clean at full volume; above that, loud music near full volume can distort, and a speaker that plays distorted for long can be damaged. Raise it a step at a time and turn it down at the first crackle. The 3.5 mm jack and Bluetooth speakers are not affected. An Echo Show 8 (1st gen) is loud already at +0 dB and goes down to −6 dB for that; a 2nd gen goes up to +9 dB, below where its amplifier distorts. Default +0 dB.' },
+  music_duck: { help: 'How far the music is turned down from the moment the wake word is heard until the reply has ended, for Music Assistant and for a phone over Bluetooth. Raise it if the Echo has trouble understanding you over loud music or an audiobook (the music is quieter in your voice, so speech-to-text hears you better); 60 is silence. 0 turns ducking off. Default 16 dB.' },
+  speaker_gain: { help: 'Makes the Echo\'s own speaker louder at every volume, for an Echo that is too quiet at full volume. It raises the amplifier stage in front of the speaker, which a stock Echo leaves at +0 dB (an Echo Dot 3\'s amplifier has only 2 dB more to give; an Echo Show 5 goes in steps of 1.5 dB, the nearest one to what you pick). Owners of an Echo Dot 2 heard +6 dB loud and clean at full volume; above that, loud music near full volume can distort, and a speaker that plays distorted for long can be damaged. Raise it a step at a time and turn it down at the first crackle. The 3.5 mm jack and Bluetooth speakers are not affected. An Echo Show 8 (1st gen) is loud already at +0 dB and goes down to −6 dB for that; a 2nd gen goes up to +9 dB, below where its amplifier distorts. Default +0 dB.' },
+  even_volume: { help: 'Makes every step of the volume the same: each point is 0.5 dB, each press of the volume buttons 5 dB, from 1 (quiet, about 50 dB under full) to 100 (as loud as before). Without it the Echo plays a volume as a stock Echo does, where most of the change happens at one end: on an Echo Show the bottom half covers more than twice the range of the top half, and a step of one point often does nothing at all. The Echo keeps its own volume setting at the nearest step above, and turns the sound down the rest of the way itself. 0 is silent either way. A Bluetooth speaker that sets its own volume still does. Exported with the settings. On by default.' },
   led_auto_brightness: { ha: true, help: 'The ring dims and brightens with the room, from the Echo\'s light sensor and Amazon\'s own curve, as on a stock Echo.' },
   led_brightness: { ha: true, help: 'A fixed brightness for the ring. Setting one turns auto brightness off.' },
+  screen_brightness_auto: { ha: true, help: 'The screen dims and brightens with the room, on Amazon\'s own curve from the Echo\'s light sensor, as "Adaptive brightness" on a stock Echo Show does. That curve is dark: under about 5 lux the screen is barely lit, and it is near full brightness only from about 100 lux. If it is too dim for you, raise "Adaptive brightness adjustment", as you would move the slider on a stock Echo Show. Off by default: the screen stays at "Screen brightness".' },
+  screen_brightness: { ha: true, help: 'How bright the screen is with adaptive brightness off. Default 47 %, what the Echo ran at before this setting existed. With Kiosk Satellite installed, the Echo switches off the app\'s own adaptive brightness, so these settings set the screen.' },
+  screen_brightness_adjust: { ha: true, help: 'With adaptive brightness on: Amazon\'s curve brighter (up to +100) or dimmer (down to −100), as the brightness slider moves it on a stock Echo Show in adaptive mode. At +100 a dark room\'s near-black screen is about as bright as 55 % without adaptive. 0 is Amazon\'s curve as it is.' },
   ring_rotation: { ha: true, help: 'Where the light ring\'s fill starts. Home Assistant\'s "Light ring fill" lights that share of the ring in the light\'s colour, for a timer\'s or a washing machine\'s progress or a battery; it fills the way the volume does, from where the volume starts. Turn the start by this many LEDs, so it starts where you want it to for how the Echo stands. Only where the Echo has room for each LED\'s own animations (Home Assistant then lists "Light ring fill"). Default 0.' },
-  light_band: { help: 'The Echo Show has no light ring: it shows the ring\'s lights (listening, thinking, mic off, calls, volume, timers, Home Assistant\'s "Light ring") as a band along the bottom of the screen, as Alexa did. This many pixels at the bottom are kept for it, so an app on the screen never has the band over it. 0 gives the whole screen to the apps and shows no band. Default 10, stock\'s line.' },
+  screen_text: { help: 'What you said and the assistant\'s reply in large letters over the screen, above the band: your words smaller and grey, the reply white beside a cyan bar, both as large as they fit (a very long reply is cut at the end of the screen). They show over the face, the music and any app, Kiosk Satellite too, but not over the menu pulled down from the top. They appear as speech-to-text and the reply come in, stay while the Echo answers and for 8 seconds after, then fade; the next request takes them away at once. The screen behind them is darkened, so they stay readable over whatever it shows. A tap takes them away, over an app too (the app gets none of those touches while they show). With Wyoming only your words are shown (it tells no reply text). Off by default: what people say appears only where someone wants it to.' },
+  screen_text_seconds: { help: 'How long what you said and the reply stay on the screen once the Echo is idle again, in seconds. 0 keeps them until the next request (or a timer that rings). Default 8.' },
+  screen_timers: { help: 'Timers set on this Echo, on the screen: each one\'s name (or its length) over its time left in large digits with its unit (4:59 min, 1:02:05 h, 45 s) and a bar of what is left, the one that ends first on top; a paused one in grey. When one rings it shows in orange and pulses until it is stopped, with a Stop button. A tap on the timers hides them until the next change, over an app too (the app gets none of those touches while they show). The screen stays on while timers show. What you said and the reply (Speech on screen) go before them while they show. Off by default.' },
+  light_band: { help: 'The Echo Show has no light ring: it shows the ring\'s lights as a band along the bottom of the screen, as Alexa did. That is listening, thinking, mic off, calls, volume, timers and Home Assistant\'s "Light ring". This many pixels at the bottom are kept for it, so an app on the screen never has the band over it. 0 gives the whole screen to the apps and shows no band. Default 10, stock\'s line.' },
   bluetooth_announcements: { help: 'Says "Connected to …" and "Disconnected from …" when a phone connects, in your voice assistant\'s voice, after the chime. Home Assistant speaks the words, and only once "Allow the device to perform Home Assistant actions" is ticked in this Echo\'s ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure); without it there is the chime only.' },
   bluetooth_announcement_language: { help: 'The language of those sentences. Home Assistant does not tell the Echo which language your voice assistant speaks, so pick the one that matches its voice.' },
   sendspin_unpaired: { help: 'Lets any Music Assistant server on the network play here without pairing. Off: only a server given this Echo\'s "Sendspin pairing token" (a diagnostic entity in Home Assistant) may play.' },
-  https_verify: { help: 'When Home Assistant serves HTTPS itself, it gives the Echo https:// addresses for its spoken replies and announcements, usually its external URL. On (the default): the Echo plays them only from a server whose certificate a known authority signed for that very name, as a browser would. A self-signed certificate, or one that does not name the address Home Assistant gives out, is refused: replies stay silent and the log says why. Off: any certificate is taken, so someone on your network could pass the Echo audio of their own instead of Home Assistant\'s. Plain http:// addresses are not affected.' },
+  https_verify: { help: 'Whether the Echo checks the certificate of a Home Assistant that serves HTTPS itself. Home Assistant then gives the Echo https:// addresses for its spoken replies and announcements, usually its external URL. On (the default): the Echo plays them only from a server whose certificate a known authority signed for that very name, as a browser would. A self-signed certificate, or one that does not name the address Home Assistant gives out, is refused: replies stay silent and the log says why. Off: any certificate is taken, so someone on your network could pass the Echo audio of their own instead of Home Assistant\'s. Plain http:// addresses are not affected.' },
+  kiosk_internet: { help: 'Kiosk Satellite may reach the internet while this is on: for its own updates and for web pages it shows (iframes, dashboards). Only that app gets out: the Echo\'s own voice satellite stays on your network except for what it needs, and Amazon\'s software stays cut off. Off: it reaches your network only, so it shows Home Assistant but cannot update itself or load outside pages. On by default. Takes effect within seconds.' },
+  kiosk_mic: { help: 'Lets the Kiosk Satellite app use the microphone, for an app plugin that talks, such as a doorbell\'s two-way talk. The Echo\'s own voice satellite keeps listening for the wake word and answers during such a call. In the plugin, pick "Voice communication": that source has its own processing with echo cancellation. "Automatic" picks "Camcorder" first, and that and "Voice recognition" open but give the plugin silence. Off by default. Turning it off closes the app; the Echo opens it again by itself, within half a minute. This switch sets Android\'s permission. It is no wall against the app itself: the update helper gives it the power of an adb shell, so install only an app you trust.' },
+  kiosk_camera: { help: 'Lets the Kiosk Satellite app use the camera: to scan a QR code such as the Home Assistant token in its setup, or for a dashboard that shows the camera. Off by default, and while it is off the app\'s scanner cannot work. The token can also be pasted from a PC at this Echo\'s address on port 2324. Turning it off closes the app; the Echo opens it again by itself, within half a minute. As with the microphone, this sets Android\'s permission and is no wall against the app itself.' },
   online_updates: { help: 'Where new versions come from. Release: tested releases only. Beta: every new build, plus releases. Off: nothing is fetched. The Echo downloads them itself from the project\'s releases on GitHub, not through this browser or Home Assistant, so it needs internet access to github.com: an Echo on a network kept off the internet cannot use this, and switching it on first checks that GitHub answers. The Echo\'s "Firmware" entity in Home Assistant then shows what is new and installs it; every update is signature-checked, and the Echo falls back by itself if a new version does not stay up.',
     status: () => updCheck.busy ? h('div', { class: 'callout info' }, icon('net'), h('p', {}, 'Checking that this Echo can reach GitHub…'))
       : updCheck.why ? h('div', { class: 'callout bad big' }, icon('warn'), h('div', { class: 'grow' },
@@ -246,14 +299,16 @@ const HELP = {
       return h('p', { class: 'f-model' }, a.kiosk_heard_s == null ? 'No claim from another Kiosk Satellite device heard yet.'
         : `Last claim from another Kiosk Satellite device: ${a.kiosk_heard_s < 90 ? a.kiosk_heard_s + ' s' : Math.round(a.kiosk_heard_s / 60) + ' min'} ago.`);
     } },
-  wake_engine: { get help() { return isCube() ? 'Amazon’s Pryon engine uses the Alexa model installed on the Cube. microWakeWord uses additional models you import. Home Assistant mode streams microphone audio to your server for wake-word detection.' : 'Amazon\'s engine is the one the Echo was built around. microWakeWord, the engine of ESPHome\'s voice satellites, takes wake words anyone can train, at the cost of hearing them much less reliably. Home Assistant: the Echo streams its microphone and your Home Assistant listens, with openWakeWord for instance.'; },
+  wake_word_adaptation: { help: 'The Echo learns from your requests how the wake word sounds here, in your voices, your room and through its microphone. It then finds where the word ends a little more often (in tests 163 of 220 instead of 158, from the sixth request on). What it learns stays on the Echo; it forgets the oldest as new requests come. On by default.' },
+  speech_language: { help: 'The language you and the others at home speak. After a wake word the Echo finds where the word ends by its sounds, and it hears those best when it knows how you say them: a German speaker\'s "Alexa" is found far better with German sounds, even with the English wake word. Automatic takes it from your time zone in Home Assistant (Germany, Austria, Switzerland: German; France: French; ...), else from the wake word\'s own language.' },
+  wake_engine: { get help() { return isCube() ? "Amazon Pryon uses the Alexa model installed on the Cube. microWakeWord uses imported models; Home Assistant mode streams audio to your server for wake detection." : 'Amazon\'s engine is the one the Echo was built around. With microWakeWord, the engine of ESPHome\'s voice satellites, you get wake words anyone can train, at the cost of hearing them much less reliably. Home Assistant: the Echo streams its microphone and your Home Assistant listens, with openWakeWord for instance.'; },
     // the warning, a first model, or Home Assistant's side of it, before the switch; from or to Home Assistant the satellite restarts
     before: (c) => c === 'microwakeword' ? mwwSwitchDialog() : c === 'homeassistant' ? haSwitchDialog() : true,
     after: async (c, was) => { if (c === 'homeassistant' || was === 'homeassistant') await restarted(); },
     modes: {
       amazon: { title: 'Amazon\'s engine', tag: 'Default', sub: 'Pryon, with Amazon\'s models: what a stock Echo runs' },
       homeassistant: { title: 'Home Assistant', sub: 'The Echo streams its microphone, your Home Assistant listens (openWakeWord, for instance)' },
-      microwakeword: { title: 'microWakeWord', tag: 'Experimental', sub: 'The open engine of ESPHome\'s voice satellites, with the models you add below' },
+      microwakeword: { title: 'microWakeWord', tag: 'Experimental', sub: 'The open engine of ESPHome\'s voice satellites, with models you add here' },
     },
     // one row per question, one cell per choice: '+' gives, '-' costs, '' neither
     compare: [
@@ -262,7 +317,7 @@ const HELP = {
         microwakeword: ['-', 'Significantly worse: expect more missed wake words, above all from across the room or over music, and more false wakes. Its small models were trained mostly on synthetic speech, never with this Echo\'s microphones and audio front end'],
         homeassistant: ['-', 'Expect it to be less reliable than Amazon\'s engine: openWakeWord\'s models, like microWakeWord\'s, are trained mostly on synthetic speech'] }],
       ['Wake words', {
-        amazon: ['-', 'Amazon\'s only, no new ones: Alexa, and Echo, Computer, Amazon, Ziggy in many languages from Amazon on this page'],
+        amazon: ['-', 'Amazon\'s only, no new ones: Alexa, and Echo, Computer, Amazon, Ziggy in many languages from Amazon (Models page)'],
         microwakeword: ['+', 'Any someone trained a model for: “Okay Nabu”, “Hey Jarvis”, “Hey Mycroft”, or your own from microWakeWord\'s training notebook. The same model files ESPHome devices (Home Assistant Voice PE) use. Amazon\'s, also those downloaded from Amazon, are not offered (its “Alexa” is a model of its own)'],
         homeassistant: ['+', 'Any your Home Assistant knows, openWakeWord models of your own included: the same as your other satellites, set up in one place'] }],
       ['“<wake word>, stop”', {
@@ -318,7 +373,7 @@ const HELP = {
   arbitration_offset: { parent: 'arbitration', when: () => settingValue('arbitration_mode') === 'kiosk',
     help: 'Evens out the Echo\'s loudness against your tablets\' microphones, which hear differently. If a tablet answers when you spoke to the Echo, raise it; if the Echo answers when you faced a tablet, lower it. Only counts against devices in Kiosk Satellite mode with a different offset: set the same on every Echo. Default 0 dB.' },
   arbitration_window_auto: { parent: 'arbitration', when: () => settingValue('arbitration_mode') !== 'kiosk',
-    help: 'Each Echo measures how long the other Echos\' claims take to reach it and waits just long enough for nearly all of them (95 %, plus a little), between 0.15 and 1 s. Wi-Fi repeaters, and routers that hold broadcasts back for devices saving power, make claims late; a wait too short for your network lets the farther Echo answer. Until it has measured ten claims it waits 0.5 s. It answers as soon as every other Echo\'s claim is in, so the wait costs time only when another Echo did not hear you. It also learns which Echos could beat it: it waits for another Echo only if, the last times it heard you about as clearly as now, that Echo heard you better or nearly as well. An Echo in another room that hears you faintly or not at all is not waited for; one close by is. Off: the fixed window below. On by default.',
+    help: 'Each Echo measures how long the other Echos\' claims take to reach it and waits just long enough. That is for nearly all of them (95 %, plus a little), between 0.15 and 1 s. Wi-Fi repeaters, and routers that hold broadcasts back for devices saving power, make claims late; a wait too short for your network lets the farther Echo answer. Until it has measured ten claims it waits 0.5 s. It answers as soon as every other Echo\'s claim is in, so the wait costs time only when another Echo did not hear you. It also learns which Echos could beat it: it waits for another Echo only if, the last times it heard you about as clearly as now, that Echo heard you better or nearly as well. An Echo in another room that hears you faintly or not at all is not waited for; one close by is. Off: the fixed window below. On by default.',
     status: () => {
       const a = state.arbitration, w = a && a.window; if (!w || a.mode === 'kiosk') return null;
       const p = (...t) => h('p', { class: 'f-model' }, ...t);
@@ -338,42 +393,112 @@ const HELP = {
   arbitration_window: { parent: 'arbitration', step: 50,
     when: () => settingValue('arbitration_mode') === 'kiosk' || !settingValue('arbitration_window_auto'),
     help: 'How long the Echo waits for other devices\' claims before it answers. Longer catches devices whose claims come late, at the cost of a slower answer when one did not hear you. Kiosk Satellite mode: use the same as on your tablets; Kiosk Satellite\'s default is 400 ms. Echo network: it still answers as soon as every other Echo\'s claim is in.' },
-  sound_detection: { icon: 'wave', ha: ['Sound (event)'], help: 'Amazon\'s Alexa Guard model listens for smoke and CO alarms, breaking glass, barking, a crying baby, snoring, coughing, running water and beeping appliances, and Home Assistant gets each as a "Sound" event for automations.',
-    note: 'Less reliable than on a stock Echo, which double-checks every hit in Amazon\'s cloud. Treat events as hints, never as a replacement for a smoke detector.',
+  sound_detection: { icon: 'wave', ha: ['Sound (event)'], help: 'Home Assistant gets a "Sound" event for smoke and CO alarms, breaking glass, barking and more. Amazon\'s Alexa Guard model listens for those, and for a crying baby, snoring, coughing, running water and beeping appliances. A stock Echo double-checks every hit in Amazon\'s cloud; this one cannot.',
+    note: 'Less reliable than on a stock Echo: treat events as hints, never as a replacement for a smoke detector.',
     status: () => {
       const s = state.sound; if (!s) return null;
       if (s.failed) return h('p', { class: 'f-bad' }, icon('warn'), h('span', {}, 'Could not start: the model did not load, so it was switched off. The Echo\'s log (boot.log) says why.'));
       return h('p', { class: 'f-model' }, s.model === 'newer' ? 'Model: Amazon\'s newer one, from Amazon.'
-        : 'Model: the one in the Echo\'s firmware. Download from Amazon (Wake word section) gets Amazon\'s newer one (retrained, same sounds).');
+        : 'Model: the one in the Echo\'s firmware. Download from Amazon (Models page) gets Amazon\'s newer one (retrained, same sounds).');
     } },
-  wake_events: { icon: 'ear', ha: ['Wake word (event)'], help: 'Home Assistant gets a "Wake word" event each time this Echo hears its wake word: detected (it took it), near_miss (almost: Amazon\'s engine heard something close but did not wake), answered_elsewhere (another Echo or satellite answered it) and no_speech (it woke, then nothing was said). Count them per room in an automation; a detected followed by no_speech is a false wake.',
-    note: 'Near misses can come often while the TV or music plays, each an entry in Home Assistant\'s history. microWakeWord has no near misses.' },
-  request_text: { icon: 'whisper', ha: ['Last heard', 'Last reply'], help: 'Two text sensors in Home Assistant: what speech-to-text understood of your last request, and what the assistant answered. For a dashboard beside the Echo, or an automation on a word it keeps mishearing. Both are cleared when a new request starts, so saying the same thing twice still counts as a change.',
-    note: 'Home Assistant keeps every request and reply in its history while this is on. It takes at most 255 characters per state: a longer reply ends in "…".' },
+  wake_events: { icon: 'ear', ha: ['Wake word (event)'], help: 'Home Assistant gets a "Wake word" event each time this Echo hears its wake word. Its type says what came of it: detected (it took it), near_miss (almost: Amazon\'s engine heard something close but did not wake), answered_elsewhere (another Echo or satellite answered it) and no_speech (it woke, then nothing was said). Count them per room in an automation; a detected followed by no_speech is a false wake. Near misses can come often while the TV or music plays, each an entry in Home Assistant\'s history. microWakeWord has no near misses.' },
+  request_text: { icon: 'whisper', ha: ['Last heard', 'Last reply'], help: 'Two text sensors in Home Assistant: what speech-to-text understood of your last request, and what the assistant answered. For a dashboard beside the Echo, or an automation on a word it keeps mishearing. Both are cleared when a new request starts, so saying the same thing twice still counts as a change. Home Assistant takes at most 255 characters per state: a longer reply ends in "…".',
+    note: 'Home Assistant keeps every request and reply in its history while this is on.' },
   whisper_detection: { icon: 'whisper', ha: ['Last request whispered'], help: 'Tells whether your last request was whispered, before speech-to-text finishes. Use it in your conversation agent\'s prompt to have it answer quietly.' },
-  wifi_motion: { icon: 'wifi', tag: 'Experimental', ha: ['Wi-Fi motion', 'Wi-Fi motion sensitivity'], help: 'A motion sensor without extra hardware: someone walking between the Echo and your Wi-Fi router changes how the Echo receives the router. It shows motion, not presence, sees best along that path, and other Wi-Fi traffic can set it off.' },
+  wifi_motion: { icon: 'wifi', tag: 'Experimental', ha: ['Wi-Fi motion', 'Wi-Fi motion sensitivity'], help: 'A motion sensor without extra hardware. Someone walking between the Echo and your Wi-Fi router changes how the Echo receives the router. It shows motion, not presence, sees best along that path, and other Wi-Fi traffic can set it off.' },
   wifi_motion_sensitivity: { parent: 'wifi_motion', help: 'How much the signal has to change to count as motion. Higher catches more, with more false alarms.' },
   light_sensor: { icon: 'sun', ha: ['Illuminance'], help: 'The room\'s light in lux from the Echo\'s light sensor, for automations. With this on, "LED brightness" in Home Assistant also follows the ring while auto brightness moves it, which puts an entry in its logbook every few minutes. Off, auto brightness works the same; Home Assistant only sees the levels you set.' },
+  bluetooth_proxy: { icon: 'bt', ha: ['the Bluetooth proxy'], help: 'Home Assistant hears Bluetooth devices near the Echo through it, as through an ESPHome Bluetooth proxy: their advertisements for sensors and trackers, and connections to up to 3 devices at a time. Off, Home Assistant gets no Bluetooth from this Echo and the Echo stops scanning; disabling its Bluetooth entries in Home Assistant does not. Phones, a Bluetooth speaker and the setup from a phone work either way.' },
   bluetooth_audio: { icon: 'phone', ha: ['Bluetooth pairing'], help: 'Phones can pair with the Echo and play music on it (SBC, AAC, aptX). Start pairing with the "Bluetooth pairing" switch in Home Assistant; the ring shows a blue chaser meanwhile. Phones paired before still connect while this is off.' },
   bluetooth_speaker_delay: { parent: 'bluetooth_speaker', step: 10, help: 'How much later the speaker plays than the Echo would, so Music Assistant keeps it in step with your other players. Raise it if this speaker lags behind them, lower it if it runs ahead. Each speaker differs; the Echo keeps one value.' },
-  bluetooth_speaker_keep_awake: { parent: 'bluetooth_speaker', help: 'For speakers that cut off the first word of every reply: many switch their amplifier off while the Echo is silent and need half a second to switch it on again. With this on the Echo plays a 20 Hz tone too low and too quiet to hear under everything, so the speaker never hears silence. Leave it off if your speaker plays replies whole.',
+  bluetooth_speaker_keep_awake: { parent: 'bluetooth_speaker', help: 'For speakers that cut off the first word of every reply. Many switch their amplifier off while the Echo is silent and need half a second to switch it on again. With this on the Echo plays a 20 Hz tone too low and too quiet to hear under everything, so the speaker never hears silence. Leave it off if your speaker plays replies whole.',
     warnings: () => settingValue('bluetooth_speaker_stay_connected') ? STAY_TONE_WARN : [] },
-  bluetooth_speaker_stay_connected: { parent: 'bluetooth_speaker', help: 'Switching "Play on Bluetooth speaker" off then only moves the sound back to the Echo and keeps the speaker connected, so switching it on again takes well under a second instead of a reconnect. Meant for automations that put music on the speaker and leave replies on the Echo. Home Assistant\'s "Bluetooth speaker" shows "Standing by" meanwhile.',
+  bluetooth_speaker_stay_connected: { parent: 'bluetooth_speaker', help: 'Keeps the speaker connected when "Play on Bluetooth speaker" is switched off, so switching it on again is quick. The sound only moves back to the Echo, and coming back takes well under a second instead of a reconnect. Meant for automations that put music on the speaker and leave replies on the Echo. Home Assistant\'s "Bluetooth speaker" shows "Standing by" meanwhile.',
     warnings: () => [...STAY_WARN, ...STAY_TONE_WARN], before: (v) => v === 'on' ? stayDialog() : true },
-  drop_in: { icon: 'talk', ha: ['Drop In', 'Drop In with', 'End Drop In', 'the action drop_in'], help: 'Talk between two Echos, as Alexa\'s Drop In: one Echo calls another of your Echos (the ones listed under Echos below), and both hear each other. Start it from Home Assistant (the action drop_in, or by voice with the "Drop In" blueprint: "drop in kitchen") or with the Drop In button of an Echo below. End it with the action button, "<wake word>, stop" or "hang up", on either Echo. Off: this Echo neither calls nor can be called.',
-    note: 'An Echo that is called opens its microphone at once, unless it is set to answer with the button below. Only your own Echos can call it (the Echo network\'s key), never with do not disturb on or the microphones off. The ring shows green while a call runs.' },
+  drop_in: { icon: 'talk', ha: ['Drop In', 'Drop In with', 'End Drop In', 'the action drop_in'], help: 'Talk between two of your Echos, as Alexa\'s Drop In. One Echo calls another (the ones on the Echos page), and both hear each other. Start it from Home Assistant (the action drop_in, or by voice with the "Drop In" blueprint: "drop in kitchen") or with the Drop In button of an Echo on the Echos page. End it with the action button, "<wake word>, stop" or "hang up", on either Echo. Off: this Echo neither calls nor can be called. Only your own Echos can call it (the Echo network\'s key), never with do not disturb on or the microphones off. The ring shows green while a call runs.',
+    note: 'An Echo that is called opens its microphone at once, unless it is set to answer with the button below.' },
   drop_in_answer: { parent: 'drop_in', help: 'At once: a call connects straight away, with a chime, as Alexa\'s Drop In does. After the action button: the Echo rings for 30 s, and only a press of its action button connects; nobody can listen into a room where nobody is.' },
   bluetooth_speaker: { icon: 'box', ha: ['Bluetooth speaker search', 'Play on Bluetooth speaker', 'Bluetooth speaker', 'Bluetooth speaker delay'], help: 'Plays everything (replies, timers, music) on a Bluetooth speaker instead of the Echo\'s own. Put the speaker in pairing mode near the Echo and switch on "Bluetooth speaker search" in Home Assistant: the Echo pairs with the strongest one it hears.' },
   // volume, separate_volumes and the kinds' volumes, links and offsets: the Volume card has their words (buildVolumes)
   // not a setting: the System card's Restart button (main.c core_reboot)
-  restart: { help: 'Restarts the Echo, the same as pulling the plug and putting it back: for when it is stuck, for instance when Home Assistant cannot reach it any more but this page still can. It is gone for about a minute; nothing is forgotten. Home Assistant has the same as its "Restart" button.' },
+  restart: { help: 'Restarts the Echo, the same as pulling the plug and putting it back. For when it is stuck, for instance when Home Assistant cannot reach it any more but this page still can. It is gone for about a minute; nothing is forgotten. Home Assistant has the same as its "Restart" button.' },
+};
+// The one line under a setting's name, what it is for: enough to find it by.  HELP's words are the ⓘ's.  A page is read
+// by scanning, and rows of two and three lines of explanation can't be scanned
+const SUB = {
+  mic_level: 'How loud your voice reaches speech-to-text',
+  noise_reduction: 'Takes steady background noise out of requests',
+  wake_sound: 'A tone when the Echo starts listening',
+  sound_touch: 'The button starts listening',
+  sound_mics_off: 'The mic button turns the microphones off',
+  sound_mics_on: 'The mic button turns them back on',
+  sound_volume: 'Each press of the volume keys',
+  sound_bluetooth_on: 'A phone connects to play',
+  sound_bluetooth_off: 'The phone leaves',
+  wake_sound_removal: 'Speak straight on, without waiting for the tone',
+  mute: 'Stops listening for the wake word',
+  do_not_disturb: 'Drops announcements from Home Assistant',
+  wake_word_in_request: 'Speech-to-text hears the wake word too',
+  end_of_request: 'A request ends when you stop, not when the room is quiet',
+  stop_ends_listening: '"<wake word>, stop" cancels a false wake',
+  multi_press: 'Press twice for next, three times for previous',
+  timer_ring: 'How long a finished timer rings',
+  timer_sound: 'What a finished timer plays',
+  timer_stop_any: 'Anything said after the wake word stops the ring',
+  speaker_gain: 'For an Echo too quiet at full volume',
+  even_volume: 'Each volume step as big as the next',
+  music_duck: 'How far music drops while the assistant listens or speaks',
+  led_auto_brightness: 'Follows the room\'s light, as on a stock Echo',
+  led_brightness: 'A fixed level; turns auto brightness off',
+  screen_brightness_auto: 'Follows the room\'s light, as on a stock Echo Show',
+  screen_brightness: 'The level with adaptive brightness off',
+  screen_brightness_adjust: 'Brighter or dimmer than Amazon\'s curve, with adaptive on',
+  ring_rotation: 'Where "Light ring fill" starts',
+  light_band: 'Pixels kept for the band along the bottom of the screen',
+  screen_text: 'What you said and the reply, in large letters on the screen',
+  screen_text_seconds: 'How long the words stay after the reply; 0: until the next request',
+  screen_timers: 'Running timers counted down, a ringing one in orange',
+  bluetooth_announcements: 'Says when a phone connects or disconnects',
+  bluetooth_announcement_language: 'The language of those sentences',
+  sendspin_unpaired: 'Any Music Assistant server may play here',
+  https_verify: 'Checks the certificate of an HTTPS Home Assistant',
+  kiosk_internet: 'Kiosk Satellite may reach the internet',
+  kiosk_mic: 'Kiosk Satellite may use the microphone',
+  kiosk_camera: 'Kiosk Satellite may use the camera, also to scan a QR code',
+  online_updates: 'Where new versions come from',
+  arbitration: 'Only the Echo that heard you best answers',
+  wake_word_adaptation: 'Learns how the wake word sounds in your home',
+  speech_language: 'Helps find where the wake word ends',
+  wake_engine: 'What listens for the wake word',
+  arbitration_mode: 'How the Echos agree on who answers',
+  arbitration_offset: 'Evens out the Echo against your tablets',
+  arbitration_window_auto: 'Waits just long enough for the other Echos',
+  arbitration_window: 'How long the Echo waits for other devices',
+  sound_detection: 'Events for smoke alarms, breaking glass, barking and more',
+  wake_events: 'An event each time this Echo hears its wake word',
+  request_text: 'What was heard and answered, as two text sensors',
+  whisper_detection: 'Tells Home Assistant when a request was whispered',
+  wifi_motion: 'A motion sensor from changes in the Wi-Fi signal',
+  wifi_motion_sensitivity: 'Higher catches more, with more false alarms',
+  light_sensor: 'The room\'s light in lux, for automations',
+  bluetooth_proxy: 'Home Assistant hears Bluetooth devices near the Echo',
+  bluetooth_audio: 'Phones can pair and play music on the Echo',
+  bluetooth_speaker: 'Plays everything on a Bluetooth speaker instead',
+  bluetooth_speaker_delay: 'Keeps the speaker in step with your other players',
+  bluetooth_speaker_keep_awake: 'For speakers that cut off the first word',
+  bluetooth_speaker_stay_connected: 'Switching it on again is quick',
+  drop_in: 'Talk between two of your Echos',
+  drop_in_answer: 'How a call connects',
 };
 const CHOICE_NAMES = {
   wake_engine: { amazon: 'Amazon', microwakeword: 'microWakeWord', homeassistant: 'Home Assistant' },
+  speech_language: { auto: 'Automatic', de: 'German', en: 'English', fr: 'French', es: 'Spanish', ja: 'Japanese' },
   arbitration_mode: { hassmic: 'Echo network', kiosk: 'Kiosk Satellite' },
   noise_reduction: { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' },
   online_updates: { off: 'Off', beta: 'Beta', release: 'Release' },
   drop_in_answer: { auto: 'At once', ask: 'After the action button' },
+  timer_sound: { beep: 'Beep', timer: 'Alexa timer', alarm: 'Alexa alarm', custom: 'Your own' },
+  end_of_request: { off: 'Off', relaxed: 'Relaxed', normal: 'Normal', aggressive: 'Aggressive' },
   bluetooth_announcement_language: { en: 'English', de: 'Deutsch', fr: 'Français', es: 'Español', it: 'Italiano', pt: 'Português', nl: 'Nederlands',
     sv: 'Svenska', da: 'Dansk', nb: 'Norsk', fi: 'Suomi', pl: 'Polski' },
 };
@@ -402,7 +527,18 @@ function act(s, d = echo && echo.hello) {
 }
 
 async function start() {
-  const hello = await (await fetch('/api/hello')).json();
+  // as load() below: a reload that catches the satellite restarting gets no answer for some seconds
+  let hello = null;
+  for (let i = 0; !hello; i++) {
+    try {
+      const r = await fetch('/api/hello'), j = r.ok ? await r.json() : null;
+      if (!j || !j.pub) throw new Error(`the Echo answered ${r.status}`);       // a proxy's error page, say
+      hello = j;
+    } catch (e) {
+      if (i >= 15) { toast('Error: ' + e.message); return; }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
   echo = new Echo('', hello);
   renderThrough(hello.members || []);
   showName(hello);
@@ -419,8 +555,8 @@ async function start() {
 }
 
 function showName(d) {
-  $('name').textContent = d.name; $('lname').textContent = d.name;
-  $('ident').textContent = `${d.model} · ${d.node} · ${d.version}`;
+  $('name').textContent = d.name; $('lname').textContent = d.name; $('mname').textContent = d.name;
+  $('ident').textContent = `${d.model} · ${d.node}`;
   document.title = `${d.name} · settings`;
 }
 
@@ -465,7 +601,7 @@ async function answerVouch() {
   let ok = members.some((x) => x.ip === host);
   if (ok) { try { ok = (await (await fetch(q.origin + '/api/hello')).json()).pub === q.target; } catch (e) { ok = false; } }
   const box = h('div', { class: 'callout ' + (ok ? 'info' : 'bad') }, icon(ok ? 'key' : 'warn'));
-  $('attention').prepend(box);
+  $('vouch').append(box);                         // not #attention: that one is redrawn at every refresh, and this waits for an answer
   if (!ok || !window.opener) { box.append(h('p', {}, `A page at ${q.origin} asked to be let in through this Echo, but it is not one of the Echos in this one's network. Nothing was sent.`)); return; }
   const allow = h('button', { class: 'primary small' }, 'Allow'), no = h('button', { class: 'small' }, 'No');
   box.append(h('div', {}, h('p', {}, `Log this browser in on ${q.name || host} (${host}) through ${echo.hello.name}?`),
@@ -499,7 +635,6 @@ $('ask').onclick = async () => {
 async function identify(e, name) {
   try { await e.call('POST', '/api/identify'); toast(`${name}: rainbow on the ring for 10 seconds`); } catch (err) { toast(`${name}: ${errText(err)}`); }
 }
-$('identify').onclick = () => identify(echo, echo.hello.name);
 
 // ---------------------------------------------------------------- state
 
@@ -511,19 +646,18 @@ async function load() {
   if (state.device.name !== echo.hello.name || state.device.node !== echo.hello.node) {      // renamed (hassmic.conf NAME)
     echo.hello.name = state.device.name; echo.hello.node = state.device.node; showName(echo.hello);
   }
+  $('app').classList.remove('hidden');            // before render(): a hidden page has no widths to place cards by, nothing to scroll to
   render();
-  $('app').classList.remove('hidden');
-  markNav();
   if (mwwBox) getMww().catch(() => {});                                  // the engine and its models, as Home Assistant may have picked
   if (load.started && unseen()) refreshDevices().catch(() => {});        // a new Echo in the beacons: show it now, not next round
-  else if (load.started && !devRun) refreshMine().catch(() => {});       // a setting changed here or from HA: copy offers the new value
+  else if (load.started && !devRun && othersShown()) refreshMine().catch(() => {});   // a setting changed here or from HA: copy offers the new value
   if (!load.started) {
     load.started = true;
     answerVouch();
-    refreshDevices().catch(() => {});
+    if (!devRun) refreshDevices().catch(() => {});       // route() may have started it
     getDavs().then(() => { renderDavs(); davsPoll(); }).catch(() => {});
     setInterval(() => { if (!document.hidden) load().catch(() => {}); }, 15000);
-    setInterval(() => { if (!document.hidden) refreshDevices().catch(() => {}); }, 30000);
+    setInterval(() => { if (!document.hidden && othersShown()) refreshDevices().catch(() => {}); }, 30000);
   }
 }
 
@@ -557,14 +691,313 @@ function flash(name) {
   c.saved.classList.add('show'); clearTimeout(c.saved.t); c.saved.t = setTimeout(() => c.saved.classList.remove('show'), 1600);
 }
 
+// ---------------------------------------------------------------- Voice: the timer's own sound (sounds.c, issue #63)
+
+// The Echo takes one format only, 16-bit mono WAV at 48 kHz, the Earcon stream's rate: it has no decoder or resampler
+// for it.  The browser decodes whatever it plays, mixes it down and resamples it (OfflineAudioContext), and keeps the
+// first 30 s.  Its loudness is held to Alexa's timer tone's (web/loudness.js, BS.1770): -16.6 LUFS on the Dots, -16.2
+// on the Shows (the ring's beep is matched to it in main.c); more than 3 LU off, the page offers to bring it there.
+// Built once: the row's status is painted again at every refresh, and a file picker must outlive that.
+// TS_FILE_MAX: 30 s of a studio WAV (96 kHz, 24 bit, stereo: 17 MB) fits; a long song past it would decode whole in
+// the tab, hundreds of MB, to keep 30 s of it
+const TS_RATE = 48000, TS_SECS = 30, TS_LUFS = -16.5, TS_OFF = 3, TS_FILE_MAX = 20 << 20;
+let tsBox = null, tsBusy = '';
+
+// what the Echo takes of any sound the browser plays (bytes: an ArrayBuffer), its first secs
+async function pcmOf(bytes, name, secs) {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC || !window.OfflineAudioContext) throw new Error('this browser cannot convert sounds');
+  const ctx = new AC();
+  let buf;
+  try { buf = await ctx.decodeAudioData(bytes); } catch (e) { throw new Error(`${name} is no sound this browser plays`); } finally { ctx.close(); }
+  const frames = Math.max(1, Math.ceil(Math.min(buf.duration, secs) * TS_RATE));
+  const off = new OfflineAudioContext(1, frames, TS_RATE), src = off.createBufferSource();
+  src.buffer = buf; src.connect(off.destination); src.start();      // one channel: the Web Audio down-mix, (L + R) / 2
+  return { pcm: (await off.startRendering()).getChannelData(0), cut: buf.duration > secs };
+}
+
+async function timerSoundPcm(file, secs = TS_SECS) {
+  if (file.size > TS_FILE_MAX) throw new Error(`${file.name} is ${(file.size / 1048576).toFixed(0)} MB: ${TS_FILE_MAX >> 20} MB at most (cut the part you want, ${secs} s are kept)`);
+  return pcmOf(await file.arrayBuffer(), file.name, secs);
+}
+
+function wavOf(pcm) {
+  const n = pcm.length, v = new DataView(new ArrayBuffer(44 + n * 2));
+  const tag = (o, t) => { for (let i = 0; i < 4; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  tag(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); tag(8, 'WAVE'); tag(12, 'fmt '); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, TS_RATE, true); v.setUint32(28, TS_RATE * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true); tag(36, 'data'); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) v.setInt16(44 + 2 * i, Math.max(-32768, Math.min(32767, Math.round(pcm[i] * 32767))), true);
+  return new Uint8Array(v.buffer);
+}
+
+// far from Alexa's level: what the user wants of it.  The samples to upload, null to upload nothing, and what to say.
+// to: the level it is held to, Alexa's sound there (the timer tone; the sound it stands in for on the Sounds card) and
+// the volume that plays it
+async function timerSoundLevel(pcm, l, to = { lufs: TS_LUFS, ref: 'Alexa\'s timer tone', volume: 'timer volume' }) {
+  const d = l - to.lufs, dB = (x) => `${Math.abs(x).toFixed(Math.abs(x) < 10 ? 1 : 0)} dB`, lv = to.lufs.toFixed(1).replace(/\.0$/, '');
+  if (Math.abs(d) <= TS_OFF) return { pcm, said: `about as loud as ${to.ref}` };
+  const m = hmloud.match(pcm, to.lufs, { loop: true }), quiet = d < 0;
+  const body = [`Measured ${l.toFixed(1)} LUFS, ${to.ref} ${lv} LUFS. ` + (quiet
+    ? `At the same ${to.volume} it would be that much harder to hear from another room.`
+    : `At a ${to.volume} that suits ${to.ref} it would blare, and turned down for it, the other sounds would be too quiet.`)];
+  if (quiet && m.limited) body.push('To get there its loudest moments are held back, so nothing clips.');
+  if (m.short_db >= 0.5) body.push(`It can be turned up by 24 dB at most: it stays ${dB(m.short_db)} under Alexa's.`);
+  body.push(`Or keep it as it is and set the ${to.volume} to suit it.`);
+  const pick = await ask({ title: `Your sound is ${dB(d)} ${quiet ? 'quieter' : 'louder'} than ${to.ref}`, body,
+    ok: 'Match Alexa\'s level', alt: 'Keep it as it is' });
+  if (!pick) return null;
+  if (pick === 'alt') return { pcm, said: `${dB(d)} ${quiet ? 'quieter' : 'louder'} than ${to.ref}, as you kept it` };
+  return { pcm: m.out, said: m.short_db >= 0.5 ? `turned up by 24 dB, ${dB(m.short_db)} under Alexa's level` : 'at Alexa\'s level' };
+}
+
+async function timerSoundDo(what, fn) {
+  tsBusy = what; paintStatus('timer_sound');
+  try { await fn(); } catch (e) { toast(errText(e)); }
+  tsBusy = ''; await load().catch(() => {});
+}
+
+const timerSoundUpload = (file) => timerSoundDo('Converting…', async () => {
+  const { pcm, cut } = await timerSoundPcm(file), l = hmloud.ringLufs(pcm);      // as it rings: over and over
+  if (!isFinite(l)) throw new Error(`${file.name} is silent`);
+  const lv = await timerSoundLevel(pcm, l);
+  if (!lv) return;
+  tsBusy = 'Uploading…'; paintStatus('timer_sound');
+  await echo.call('POST', '/api/timer-sound', wavOf(lv.pcm));
+  await set('timer_sound', 'custom');
+  if (settingValue('timer_sound') !== 'custom') return;               // refused: set() said why
+  toast(`Uploaded${cut ? ` its first ${TS_SECS} seconds` : ''}, ${lv.said}: timers ring with it now`);
+});
+
+const timerSoundDelete = async () => {
+  if (await ask({ title: 'Delete your timer sound?', ok: 'Delete', danger: true, body: 'Timers that ring with it go back to Alexa\'s timer tone (the beep where this Echo\'s firmware has none).' }))
+    timerSoundDo('Deleting…', () => echo.call('POST', '/api/timer-sound', ''));
+};
+
+function timerSoundBox() {
+  if (!tsBox) tsBox = { el: h('div', { class: 'btns ts-box' }),
+    file: h('input', { type: 'file', accept: 'audio/*', class: 'hidden', onchange: () => { const f = tsBox.file.files[0]; tsBox.file.value = ''; if (f) timerSoundUpload(f); } }) };
+  const ms = (state.timer_sound || {}).custom_ms || 0, busy = !!tsBusy;
+  tsBox.el.replaceChildren(...[
+    h('button', { class: 'small', disabled: busy, title: 'Play the chosen sound once here, at the timer volume', onclick: () => echo.call('POST', '/api/timer-sound/play').catch((e) => toast(errText(e))) }, icon('speaker'), 'Play'),
+    h('button', { class: 'small', disabled: busy, onclick: () => tsBox.file.click() }, icon('up'), ms ? 'Replace your sound…' : 'Upload a sound…'),
+    ms ? h('span', { class: 'f-model' }, `Your own: ${(ms / 1000).toFixed(1)} s`) : null,
+    ms ? h('button', { class: 'small danger', disabled: busy, title: 'Delete your sound', onclick: timerSoundDelete }, icon('trash')) : null,
+    busy ? h('span', { class: 'f-model' }, tsBusy) : null, tsBox.file].filter(Boolean));
+  return tsBox;
+}
+
+// ---------------------------------------------------------------- Voice: sounds of one's own in place of Alexa's (sounds.c)
+
+// The Echo's sounds, by sounds.c's id: [name, when it plays].  Uploads are made as the timer sound's (16-bit mono WAV
+// at 48 kHz) and held to the loudness of Alexa's sound they stand in for, measured as rings measure (looped: the
+// volume click is shorter than one 400 ms block).  How long each may be comes with it (`max_s`, sounds.c says
+// why).  Each Echo keeps its own: exports and copies leave them out, a factory reset deletes them
+const SOUNDS = {
+  wake: ['Wake sound', 'The Echo starts listening after the wake word'],
+  touch: ['Action button', 'The button starts listening'],
+  mics_off: ['Microphone off', 'The mic button turns the microphones off'],
+  mics_on: ['Microphone on', 'The mic button turns them back on'],
+  volume: ['Volume keys', 'Each press, at the volume it just set'],
+  bluetooth_on: ['Bluetooth connected', 'A phone connects to play'],
+  bluetooth_off: ['Bluetooth disconnected', 'The phone leaves'],
+  identify: ['Identify', 'Identify asks which Echo this is'],
+  drop_in: ['Drop In', 'Another Echo drops in'],
+  call_on: ['Call connected', 'A Drop In call is answered'],
+  call_off: ['Call ended', 'Either side hangs up'],
+  ring_in: ['Incoming call', 'Rings until answered'],
+  ring_out: ['Outgoing call', 'Rings while the other Echo does'],
+};
+// The sounds with a switch, its setting by sounds.c's id.  Identify and Drop In's have none (main.c sound_request)
+const SOUND_SWITCH = { wake: 'wake_sound', touch: 'sound_touch', mics_off: 'sound_mics_off', mics_on: 'sound_mics_on', volume: 'sound_volume',
+  bluetooth_on: 'sound_bluetooth_on', bluetooth_off: 'sound_bluetooth_off' };
+const soundSwitch = (name) => Object.values(SOUND_SWITCH).includes(name);
+const BLIP = ['wake', 'touch', 'identify'];       // main.c earcon_thread: where none is on the firmware, the short blip plays
+const sndBusy = {};
+let sndCtl = null;
+
+const soundWord = (name) => `${name.toLowerCase().replace(/ sound$/, '')} sound`;
+
+// Alexa's sound's loudness, from the Echo: decoded there, as it plays
+async function stockLufs(id) {
+  const r = await echo.call('GET', `/api/sound/${id}/stock`);
+  const { pcm } = await pcmOf(r.bytes.slice().buffer, 'Alexa\'s sound', TS_SECS);
+  return hmloud.ringLufs(pcm);
+}
+
+async function soundDo(id, what, fn) {
+  sndBusy[id] = what; renderSounds();
+  try { await fn(); } catch (e) { toast(errText(e)); }
+  delete sndBusy[id]; await load().catch(() => {});
+}
+
+const soundUpload = (snd, file) => soundDo(snd.id, 'Converting…', async () => {
+  const [name] = SOUNDS[snd.id] || [snd.id];
+  const { pcm, cut } = await timerSoundPcm(file, snd.max_s), l = hmloud.ringLufs(pcm);
+  if (!isFinite(l)) throw new Error(`${file.name} is silent`);
+  let lv = { pcm, said: 'as it is' };
+  if (snd.stock) {
+    const target = await stockLufs(snd.id).catch(() => NaN);        // the match is an offer: without it, as it is
+    if (isFinite(target)) lv = await timerSoundLevel(pcm, l, { lufs: target, ref: `Alexa's ${soundWord(name)}`, volume: 'sounds volume' });
+  }
+  if (!lv) return;
+  sndBusy[snd.id] = 'Uploading…'; renderSounds();
+  await echo.call('POST', `/api/sound/${snd.id}`, wavOf(lv.pcm));
+  toast(`${name}: yours from now on${cut ? `, its first ${snd.max_s} seconds` : ''}, ${lv.said}`);
+});
+
+const soundDelete = async (snd) => {
+  const [name] = SOUNDS[snd.id] || [snd.id];
+  if (await ask({ title: `Delete your ${soundWord(name)}?`, ok: 'Delete', danger: true,
+    body: snd.stock ? 'Alexa\'s own plays again in its place.' : 'This Echo\'s firmware has none of Alexa\'s for it: ' + (BLIP.includes(snd.id) ? 'a short blip plays instead.' : 'it is silent again.') }))
+    soundDo(snd.id, 'Deleting…', () => echo.call('POST', `/api/sound/${snd.id}`, ''));
+};
+
+// Laid out as the light ring's animations (ring.js): full width, a group per kind, a tile per sound.  The tile's face plays
+// it, as a design's plays; its foot has what changes it.  The file pickers are built once (a refresh must not take one
+// away while it is open), the tiles painted again at every refresh
+const SOUND_GROUPS = [['Voice', 'wake', 'touch'], ['Microphone', 'mics_off', 'mics_on'], ['Volume', 'volume'], ['Bluetooth', 'bluetooth_on', 'bluetooth_off'],
+  ['Identify', 'identify'], ['Drop In', 'drop_in', 'call_on', 'call_off', 'ring_in', 'ring_out']];
+
+function soundTile(snd) {
+  const [name, when] = SOUNDS[snd.id] || [snd.id, ''];
+  const st = state.settings.find((x) => x.name === SOUND_SWITCH[snd.id]), sw = st ? control(st) : null;
+  const info = (st && HELP[st.name]) || {}, saved = h('span', { class: 'saved' }, 'Saved');
+  const help = info.help || when, more = moreOf('snd ' + snd.id, h('p', {}, act(help)));         // no hover on a phone: not a tooltip
+  const file = h('input', { type: 'file', accept: 'audio/*', class: 'hidden', onchange: () => {
+    const f = file.files[0]; file.value = ''; const now = (state.sounds || []).find((x) => x.id === snd.id);
+    if (f && now) soundUpload(now, f); } });
+  const sub = h('span', { class: 'ringd-sub' }), acts = h('span', { class: 'ringd-tile-acts' });
+  const main = h('button', { class: 'ringd-tile-main snd-main', title: 'Play it once here, at the sounds volume',
+    onclick: () => echo.call('POST', `/api/sound/${snd.id}/play`).catch((e) => toast(errText(e))) },
+    h('span', { class: 'ringd-art' }, icon('speaker')), h('span', { class: 'ringd-name' }, name, info.ha === true ? haMark() : null), sub, saved);
+  const tile = h('div', { class: 'ringd-tile snd-tile', id: 'sound-' + snd.id }, main, more.btn,
+    h('div', { class: 'ringd-tile-foot' }, sw ? sw.el : null, acts, file), more.panel);
+  if (sw) controls.set(st.name, { update: sw.update, paint() {}, saved, root: tile });
+  sndCtl.tiles.set(snd.id, { main, sub, acts, file });
+  return tile;
+}
+
+function soundsCard() {
+  sndCtl = { tiles: new Map(), all: h('button', { class: 'small', onclick: () => soundsAll(sndCtl.all.dataset.to) }) };
+  const have = new Map((state.sounds || []).map((s) => [s.id, s]));
+  const groups = SOUND_GROUPS.map(([title, ...ids]) => [title, ids.filter((id) => have.has(id))]).filter(([, ids]) => ids.length);
+  const card = h('div', { class: 'card ringd-designs', id: 'sounds' },
+    cardHead('Sounds', 'Any sound this browser plays (MP3, WAV, OGG, …), held to the loudness of Alexa\'s own. Click one to hear it.', 'speaker', h('div', { class: 'ringd-headbtns' }, sndCtl.all),
+      'A switch silences that sound and keeps your choice; playing it here still works. Identify and Drop In have none: Identify is asked for, and Drop In\'s tell the room a microphone is open. Each Echo keeps its own sound files: exports and copies leave them out, and a factory reset deletes them.'),
+    h('div', { class: 'snd-groups' }, groups.map(([title, ids]) => h('div', { class: 'ringd-group snd-group', style: `--c:${ids.length}` }, h('div', { class: 'ringd-group-head' }, title),
+      h('div', { class: 'ringd-acts' }, ids.map((id) => soundTile(have.get(id))))))));
+  renderSounds();
+  return card;
+}
+
+// ---------------------------------------------------------------- Voice: sound packs (soundpack.c)
+
+// Sets of the sounds kept on the Echo; a pack file is a tar any computer opens: pack.json first, then <sound id>.wav.
+// A pack is the whole set: applied, a sound it has none of goes back to Alexa's
+const PACK_FILE_MAX = 16 << 20;                              // what the longest of every sound comes to, and room
+let packs = null, packCtl = null;
+
+async function loadPacks() {
+  packs = await (await echo.call('GET', '/api/sound-pack')).json();
+  renderPacks();
+}
+const packDo = (what, fn) => { packCtl.busy.textContent = what; return fn().catch((e) => toast(errText(e))).finally(() => { packCtl.busy.textContent = ''; return loadPacks().catch(() => {}); }); };
+
+const packName = (title, value = '') => ask({ title, ok: 'Save', input: { label: 'Name', value, max: 63 } });
+async function packSaveCurrent() {
+  const name = await packName('Save these sounds as a pack');
+  if (name) packDo('Saving…', async () => { await echo.call('POST', '/api/sound-pack/save', name); toast(`Saved "${name}"`); });
+}
+
+async function packApply(p) {
+  if (await ask({ title: `Use "${p.name}"?`, ok: 'Use it', danger: true,
+    body: 'Your sounds on this Echo are replaced: save them as a pack first to keep them. Sounds this pack has none of go back to Alexa\'s.' }))
+    packDo('Applying…', async () => { await echo.call('POST', `/api/sound-pack/${p.id}/apply`); await load(); toast(`"${p.name}" in use`); });
+}
+
+async function packDelete(p) {
+  if (await ask({ title: `Delete "${p.name}"?`, ok: 'Delete', danger: true, body: 'The sounds in use stay as they are.' }))
+    packDo('Deleting…', () => echo.call('POST', `/api/sound-pack/${p.id}/delete`));
+}
+
+const packExport = (p) => packDo('Reading…', async () => {
+  const files = [];
+  for (const id of p.sounds) files.push({ id, bytes: (await echo.call('GET', `/api/sound-pack/${p.id}/file/${id}`)).bytes });
+  const url = URL.createObjectURL(new Blob(hmtar.packWrite(p.name, files), { type: 'application/x-tar' }));
+  const link = h('a', { href: url, download: `${p.name.replace(/[^\w-]+/g, '-') || 'sounds'}.soundpack` });
+  document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
+});
+
+// The Echo checks each sound; here only what makes it a pack.  Half loaded is taken back
+const packImport = (file) => packDo('Loading…', async () => {
+  if (file.size > PACK_FILE_MAX) throw new Error(`${file.name}: too big for a sound pack`);
+  const read = async (off, len) => new Uint8Array(await file.slice(off, off + len).arrayBuffer());
+  const head = await hmtar.packRead(read, file.size).catch((e) => { throw new Error(`${file.name}: ${e.message}`); });
+  const { id } = await (await echo.call('POST', '/api/sound-pack/new', fitBytes(head.name.trim(), 63))).json();
+  try {
+    for (const f of head.files) if ((state.sounds || []).some((s) => s.id === f.id)) await echo.call('POST', `/api/sound-pack/${id}/file/${f.id}`, await read(f.off, f.size));
+  } catch (e) { await echo.call('POST', `/api/sound-pack/${id}/delete`).catch(() => {}); throw e; }
+  toast(`Loaded "${head.name}"`);
+});
+
+function packsCard() {
+  const file = h('input', { type: 'file', accept: '.soundpack,.tar', class: 'hidden', onchange: () => { const f = file.files[0]; file.value = ''; if (f) packImport(f); } });
+  packCtl = { list: h('div'), busy: h('span', { class: 'f-model' }), use: h('span', { class: 'help' }) };
+  const card = h('div', { class: 'card ringd-designs', id: 'sound-packs' },
+    cardHead('Sound packs', 'Sets of sounds kept on this Echo, used at once and shared as one: saved as a file, a pack goes to any other Echo.', 'box',
+      h('div', { class: 'ringd-headbtns' }, packCtl.busy,
+        h('button', { class: 'small', onclick: packSaveCurrent }, icon('plus'), 'Save these sounds'),
+        h('button', { class: 'small', onclick: () => file.click(), title: 'A .soundpack file' }, icon('up'), 'Import'))),
+    file, packCtl.list, h('div', { class: 'card-foot' }, packCtl.use));
+  loadPacks().catch(() => {});
+  return card;
+}
+
+function renderPacks() {
+  if (!packCtl || !packs) return;
+  packCtl.use.textContent = `${mb(packs.bytes)} of ${mb(packs.max)} used, ${packs.packs.length} of ${packs.packs_max} packs`;
+  packCtl.list.replaceChildren(packs.packs.length ? h('div', { class: 'ringd-packs' }, packs.packs.map((p) => h('div', { class: 'ringd-pack' },
+    h('div', { class: 'ringd-pack-text' }, h('span', { class: 'ringd-name' }, p.name), h('span', { class: 'ringd-sub' }, `${plural(p.sounds.length, 'sound')} · ${mb(p.bytes)}`)),
+    h('div', { class: 'ringd-tile-foot' },
+      h('button', { class: 'link', onclick: () => packApply(p) }, 'Use'),
+      h('button', { class: 'link', title: 'Save it as a .soundpack file', onclick: () => packExport(p) }, 'Export'),
+      h('button', { class: 'link', onclick: () => packDelete(p) }, 'Delete'))))) : h('div', { class: 'ringd-sect-title' }, 'None yet'));
+}
+
+// Every switch at once: only the page's convenience, the settings stay one each
+async function soundsAll(to) {
+  try {
+    const r = await (await echo.call('POST', '/api/set', Object.values(SOUND_SWITCH).map((n) => `${n}=${to}\n`).join(''))).json();
+    if (r.errors) toast(r.errors.trim());
+  } catch (e) { toast(errText(e)); }
+  await load();
+}
+
+function renderSounds() {
+  if (!sndCtl) return;
+  const on = Object.values(SOUND_SWITCH).some((n) => settingValue(n));
+  sndCtl.all.dataset.to = on ? 'off' : 'on'; sndCtl.all.textContent = on ? 'All off' : 'All on';
+  for (const snd of state.sounds || []) {
+    const c = sndCtl.tiles.get(snd.id), busy = sndBusy[snd.id];
+    if (!c) continue;
+    c.main.disabled = !!busy || (!snd.own_ms && !snd.stock && !BLIP.includes(snd.id));
+    c.main.classList.toggle('custom', !!snd.own_ms);
+    c.sub.textContent = busy || (snd.own_ms ? `Yours · ${(snd.own_ms / 1000).toFixed(1)} s` : snd.stock ? 'Alexa\'s' : BLIP.includes(snd.id) ? 'A short blip' : 'None on this firmware');
+    c.acts.replaceChildren(...[
+      h('button', { class: 'link', disabled: !!busy, onclick: () => c.file.click() }, snd.own_ms ? 'Replace…' : 'Upload…'),
+      snd.own_ms ? h('button', { class: 'link', disabled: !!busy, title: 'Delete yours: Alexa\'s again', 'aria-label': 'Delete yours', onclick: () => soundDelete(snd) }, icon('trash')) : null].filter(Boolean));
+  }
+}
+
 // ---------------------------------------------------------------- controls (built once, updated in place)
 
 const controls = new Map();             // setting name -> { update(s), saved, root }
 const compareOpen = new Set();          // settings whose pros and cons are open
 let built = '';
 
-function control(s) {
-  const id = 's-' + s.name;
+function control(s, prefix = 's-') {
+  const id = prefix + s.name;
   if (s.type === 'bool') {
     const i = h('input', { type: 'checkbox', id, role: 'switch', onchange: async () => {
       const v = i.checked ? 'on' : 'off', before = (HELP[s.name] || {}).before;      // a dialog of the page's own first
@@ -603,40 +1036,59 @@ function control(s) {
     const cols = s.choices.map((c) => h('th', { scope: 'col' }, modes[c].title));
     const rows = (HELP[s.name].compare || []).map(([q, by]) => h('tr', {}, h('th', { scope: 'row' }, q), s.choices.map((c, i) => {
       const [k, t] = by[c] || ['', '—'], [cls, ic, sr] = mark[k];
-      return h('td', { class: cls, 'data-col': i, 'data-mode': modes[c].title }, h('div', { class: 'cell' }, icon(ic), h('span', {}, h('span', { class: 'sr' }, sr), t)));
+      return h('td', { class: cls, 'data-col': i, 'data-mode': modes[c].title }, h('div', { class: 'cell' }, icon(ic), h('span', {}, h('span', { class: 'sr' }, sr), act(t))));
     })));
     const table = h('table', { class: 'cmp-table' }, h('thead', {}, h('tr', {}, h('td'), cols)), h('tbody', {}, rows));
     const more = h('details', { class: 'more compare', open: compareOpen.has(s.name),
       ontoggle: () => { if (more.open) compareOpen.add(s.name); else compareOpen.delete(s.name); } },
       h('summary', {}, 'Compare: what each one gives and what it costs'), h('div', { class: 'cmp-wrap' }, table));
-    return { el: h('div', { class: 'mode-pick' }, h('div', { class: 'modes' + (cards.length > 2 ? ' modes-3' : ''), role: 'radiogroup', 'aria-label': s.label }, cards), more),
+    return { el: h('div', { class: 'mode-pick' }, h('div', { class: 'modes', role: 'radiogroup', 'aria-label': s.label }, cards), more),
              update: (x) => {
                cards.forEach((b, i) => { const on = i === x.value; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); cols[i].classList.toggle('on', on); });
                table.querySelectorAll('td[data-col]').forEach((td) => td.classList.toggle('on', +td.dataset.col === x.value));
              } };
   }
   if (s.choices.length <= 4) {
-    const btns = s.choices.map((c) => h('button', { type: 'button', onclick: () => set(s.name, c) }, names[c] || c));
+    const { before, unavailable } = HELP[s.name] || {};          // a dialog (or a file to pick) first; one this Echo lacks greyed out
+    const btns = s.choices.map((c) => h('button', { type: 'button', onclick: async () => { if (!before || await before(c)) set(s.name, c); } }, act(names[c] || c)));
     return { el: h('div', { class: 'seg', role: 'group', 'aria-label': s.label }, btns),
-             update: (x) => btns.forEach((b, i) => { b.classList.toggle('on', i === x.value); b.setAttribute('aria-pressed', String(i === x.value)); }) };
+             update: (x) => btns.forEach((b, i) => {
+               b.classList.toggle('on', i === x.value); b.setAttribute('aria-pressed', String(i === x.value));
+               b.disabled = !!(unavailable && unavailable(s.choices[i])); b.title = b.disabled ? 'Not in this Echo\'s firmware' : '';
+             }) };
   }
   const sel = h('select', { id, onchange: () => set(s.name, sel.value) }, s.choices.map((c) => h('option', { value: c }, names[c] || c)));
   return { el: sel, update: (x) => { sel.value = s.choices[x.value]; } };
 }
 
 function haBadge() { return h('span', { class: 'badge ha', title: 'Also in Home Assistant' }, icon('ha'), 'Home Assistant'); }
+const haMark = () => h('span', { class: 'ha-mark', title: 'Also in Home Assistant', role: 'img', 'aria-label': 'Also in Home Assistant' }, icon('ha'));
 
+// A setting's long words, behind the ⓘ beside its name, under the whole row; what is open stays open over rebuilds
+const moreOpen = new Set();
+function moreOf(key, ...kids) {
+  const panel = h('div', { class: 'row-more' + (moreOpen.has(key) ? '' : ' hidden') }, kids);
+  const btn = h('button', { type: 'button', class: 'more-btn', title: 'What this does', 'aria-label': 'What this does', 'aria-expanded': String(moreOpen.has(key)), onclick: () => {
+    const open = panel.classList.toggle('hidden') === false;
+    if (open) moreOpen.add(key); else moreOpen.delete(key);
+    btn.setAttribute('aria-expanded', String(open));
+  } }, icon('info'));
+  return { btn, panel };
+}
+
+// Every row the same: name, one line, control.  A switch stays beside them; a slider or a choice goes under them, or in
+// a column of its own where the card is wide: one way per card, so the eye finds every control where the last one was
 function settingRow(s) {
   const info = HELP[s.name] || {}, c = control(s), saved = h('span', { class: 'saved' }, 'Saved');
-  const wide = s.type === 'int' || !!info.modes, stack = s.type === 'choice';      // stack: control under the text on a phone
   const status = info.status ? h('div', { class: 'row-status' }) : null;      // under the whole row: what the last change found
-  const warns = info.warnings ? h('ul', { class: 'pc row-warn' }) : null;     // what it costs, small, under its help
-  const row = h('div', { class: 'row' + (wide ? ' wide' : '') + (stack ? ' stack' : '') },
-    h('div', {},
-      h('label', { class: 'row-label', for: 's-' + s.name }, label(s), info.ha === true ? haBadge() : null,
-        info.tag ? h('span', { class: 'badge' + (info.tag === 'Experimental' ? ' warn' : '') }, info.tag) : null, saved),
-      info.help ? h('p', { class: 'help' }, act(info.help)) : null, warns),
-    h('div', { class: 'ctl' }, c.el), status);
+  const warns = info.warnings ? h('ul', { class: 'pc row-warn' }) : null;     // what it costs, with the long words
+  const more = (info.help && SUB[s.name]) || warns ? moreOf(s.name, info.help && SUB[s.name] ? h('p', {}, act(info.help)) : null, warns) : null;
+  const row = h('div', { class: 'row' + (info.modes ? ' wide' : s.type === 'bool' ? '' : ' val') },
+    h('div', { class: 'row-t' },
+      h('div', { class: 'row-label' }, h('label', { for: 's-' + s.name }, label(s)), info.ha === true ? haMark() : null,
+        info.tag ? h('span', { class: 'badge' + (info.tag === 'Experimental' ? ' warn' : '') }, info.tag) : null, more ? more.btn : null, saved),
+      SUB[s.name] ? h('p', { class: 'help' }, act(SUB[s.name])) : info.help ? h('p', { class: 'help' }, act(info.help)) : null),
+    h('div', { class: 'ctl' }, c.el), more ? more.panel : null, status);
   const paint = () => {
     if (status) status.replaceChildren(...[info.status()].filter(Boolean));
     if (warns) warns.replaceChildren(...info.warnings().map((t) => h('li', {}, icon('warn'), h('span', {}, t))));
@@ -649,14 +1101,16 @@ function featureCard(s, children) {
   const info = HELP[s.name] || {}, c = control(s), saved = h('span', { class: 'saved' }, 'Saved');
   const kids = children.map((k) => { const r = settingRow(k); r.classList.add('f-child'); return r; });
   const status = h('div');
+  const more = moreOf(s.name, info.help ? h('p', {}, act(info.help)) : null,
+    info.ha ? h('div', { class: 'f-ha' }, icon('ha'), h('span', {}, 'In Home Assistant while on: ', info.ha.map((n, i) => [i ? ', ' : '', h('b', {}, n)]))) : null);
   const card = h('article', { class: 'feature' },
     h('div', { class: 'f-head' }, h('span', { class: 'f-icon' }, icon(info.icon || 'sparkle')),
-      h('label', { class: 'f-title', for: 's-' + s.name }, label(s), info.tag ? h('span', { class: 'badge warn' }, info.tag) : null, saved), c.el),
-    info.help ? h('p', { class: 'f-help' }, act(info.help)) : null,
+      h('div', { class: 'f-text' }, h('div', { class: 'f-title' }, h('label', { for: 's-' + s.name }, label(s)), info.tag ? h('span', { class: 'badge warn' }, info.tag) : null, more.btn, saved),
+        SUB[s.name] ? h('p', { class: 'help' }, act(SUB[s.name])) : null), c.el),
+    more.panel,
     info.note ? h('p', { class: 'f-note' }, info.note) : null,
     status,
-    kids,
-    info.ha ? h('div', { class: 'f-ha' }, icon('ha'), h('span', {}, 'In Home Assistant while on: ', info.ha.map((n, i) => [i ? ', ' : '', h('b', {}, n)]))) : null);
+    kids);
   controls.set(s.name, { saved, root: card, update: (x) => {
     c.update(x); card.classList.toggle('on', !!x.value);
     kids.forEach((k, i) => { const w = (HELP[children[i].name] || {}).when; k.classList.toggle('hidden', !x.value || !!(w && !w())); });
@@ -665,55 +1119,253 @@ function featureCard(s, children) {
   return card;
 }
 
-function sectionShell(sec) {
-  return h('section', { class: 'section', id: 'sec-' + sec.id },
-    h('div', { class: 'sec-head' }, h('span', { class: 'ic' }, icon(sec.icon)), h('h2', {}, sec.title || sec.id)),
-    sec.intro ? h('p', { class: 'intro' }, sec.intro) : null);
+// ---------------------------------------------------------------- pages
+
+let pages = PAGES, curPage = '';
+const pageShell = (pg) => h('section', { class: 'page hidden', 'data-page': pg.id },
+  h('div', { class: 'p-head' }, h('span', { class: 'ic' }, icon(pg.icon)), h('h2', {}, pg.title)),
+  pg.intro ? h('p', { class: 'intro' }, pg.intro) : null);
+const titled = (title, ...rows) => h('div', { class: 'card' }, title ? h('div', { class: 'sub-head' }, title) : null, rows);
+
+// Cards in as many columns as the page has room for (min: a card's least width), each under the shortest column so far,
+// measured at the width it will have: fixed columns left half a page empty beside a short card.  Placed when a page is
+// first shown and when the number of columns changes, never when a card grows ("More", a feature switched on): a
+// card must not jump to another column under the pointer that opened it
+function flow(cards, min = 400) {
+  const el = h('div', { class: 'flow' }, h('div', { class: 'col' }, cards));
+  el.cards = cards.filter(Boolean); el.min = min;
+  return el;
+}
+const CARD_MAX = 860;                          // index.html .flow
+function reflow(el) {
+  const gap = 14, w = el.clientWidth;
+  if (!w) return;                                // a hidden page: no widths to go by
+  const most = Math.max(1, Math.min(el.cards.length, Math.floor((w + gap) / (el.min + gap))));
+  if (most === el.most) return;
+  el.most = most;
+  const focus = document.activeElement, one = h('div', { class: 'col' });
+  el.replaceChildren(one); one.append(...el.cards);
+  // the most that fit, unless fewer leave clearly less empty: four columns of System stranded two short cards each alone
+  let best = null;
+  for (let n = most; n >= Math.ceil(most * 0.6); n--) {
+    one.style.width = `${Math.min((w - (n - 1) * gap) / n, CARD_MAX)}px`;
+    const heights = el.cards.map((c) => c.offsetHeight), used = Array(n).fill(0);
+    const at = heights.map((x) => { const k = used.indexOf(Math.min(...used)); used[k] += x + gap; return k; });
+    const empty = 1 - heights.reduce((a, b) => a + b, 0) / (n * Math.max(...used));
+    if (!best || empty < best.empty - 0.05) best = { n, at, empty };
+  }
+  const cols = Array.from({ length: best.n }, () => h('div', { class: 'col' }));
+  el.style.setProperty('--n', best.n); el.replaceChildren(...cols);
+  el.cards.forEach((c, i) => cols[best.at[i]].append(c));
+  if (focus && focus !== document.activeElement && el.contains(focus)) focus.focus();
+}
+const reflowPage = () => document.querySelectorAll('.page:not(.hidden) .flow').forEach(reflow);
+new ResizeObserver(reflowPage).observe($('pages'));
+
+function pageOf(s) {
+  let moved = MOVED[(HELP[s.name] || {}).parent || s.name];
+  if (moved === 'screen' && !state.screen) moved = null;      // the Shows without hassmic's screen: the band stays on Lights
+  return moved || (pages.find((p) => (p.groups || []).includes(s.group)) || { id: s.group }).id;
 }
 
+// A settings page by LAYOUT: its cards, then whatever is left
+function settingCards(list, id) {
+  const left = new Set(list);
+  const take = (n) => { const s = list.find((x) => x.name === n); if (s) left.delete(s); return s; };
+  const cards = (LAYOUT[id] || []).map(([title, ...names]) => {
+    const rows = names.map(take).filter(Boolean);
+    return rows.length ? titled(title, rows.map(settingRow)) : null;
+  }).filter(Boolean);
+  if (left.size) cards.push(titled(cards.length ? 'More' : null, [...left].map(settingRow)));
+  return cards;
+}
+
+// What only some pages have, beside their settings cards
+const PAGE_BUILD = {
+  overview: (el) => buildOverview(el),
+  voice: (el, list) => { el.append(flow(settingCards(list.filter((s) => !soundSwitch(s.name)), 'voice'))); el.append(h('div', { class: 'ringd' }, soundsCard(), packsCard())); },   // laid out as lights' ring designs
+  wake: (el, list) => { el.append(flow(settingCards(list, 'wake'))); buildWake(el); },
+  sound: (el, list) => {
+    const vol = h('div', {}), cards = [];
+    if (list.some((s) => s.name === 'separate_volumes')) { buildVolumes(vol); cards.push(vol.firstChild); }
+    const eq = list.filter((s) => s.name.startsWith('equalizer_')), rest = list.filter((s) => !eq.includes(s) && !VOLUMES.includes(s.name));
+    if (eq.length) cards.push(h('div', { class: 'card' }, h('div', { class: 'sub-head' }, 'Equalizer'), h('div', { class: 'eq' }, eq.map(settingRow)),
+      h('div', { class: 'card-foot eq-foot' }, h('span', { class: 'help' }, haBadge(), ' also as number entities'),
+        h('button', { class: 'small', onclick: async () => { for (const s of eq) await set(s.name, 0); } }, 'Flat'))));
+    if (rest.length) cards.push(titled('Speaker', rest.map(settingRow)));
+    el.append(flow(cards));
+  },
+  lights: (el, list) => { el.append(flow(settingCards(list, 'lights'))); buildRing(el); },
+  screen: (el, list) => {      // ring.js: the designs and where they show
+    const bright = list.filter((s) => BRIGHTNESS.includes(s.name)), words = list.filter((s) => WORDS.includes(s.name));
+    el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.filter((s) => !bright.includes(s) && !words.includes(s)).map(settingRow)),
+      bright.length ? titled('Brightness', bright.map(settingRow)) : null,
+      words.length ? titled('Words and timers', words.map(settingRow)) : null].filter(Boolean)));
+  },
+  media: (el, list) => {
+    const parent = (k) => (HELP[k.name] || {}).parent, plain = list.filter((x) => !x.feature && !parent(x));
+    const music = plain.filter((x) => x.group === 'Music'), bt = plain.filter((x) => x.group !== 'Music');
+    const api = state.mass ? h('div', { id: 'mass' }, massRow()) : null;     // models with a screen: its music pages
+    el.append(flow([music.length || api ? titled('Music Assistant', api, music.map(settingRow)) : null, bt.length ? titled('Announcements', bt.map(settingRow)) : null,
+      ...list.filter((x) => x.feature).map((s) => featureCard(s, list.filter((k) => parent(k) === s.name)))].filter(Boolean)));
+  },
+  features: (el, list) => {
+    const cards = list.filter((x) => x.feature).map((s) => featureCard(s, list.filter((k) => (HELP[k.name] || {}).parent === s.name)));
+    const loose = list.filter((x) => !x.feature && !(HELP[x.name] || {}).parent);
+    if (loose.length) cards.push(titled(null, loose.map(settingRow)));
+    el.append(flow(cards, 360));
+  },
+  echos: (el, list) => buildEchos(el, list.find((s) => s.name === 'arbitration'), list.filter((s) => s.name !== 'arbitration' && (HELP[s.name] || {}).parent === 'arbitration')),
+  compare: (el) => buildCompare(el),
+  models: (el) => buildModels(el),
+  system: (el, list) => buildSystem(el, list),
+};
+
 function build() {
-  document.title = isCube() ? 'Cube Assist settings' : 'Echo settings';
-  controls.clear();
-  const root = $('sections'), nav = $('nav');
+  controls.clear(); quick.length = 0;
+  const root = $('pages'), nav = $('nav');
   root.innerHTML = ''; nav.innerHTML = '';
+  const known = new Set(PAGES.flatMap((p) => p.groups || []));
+  pages = [...PAGES.slice(0, -1), ...[...new Set(state.settings.map((s) => s.group))].filter((g) => !known.has(g)).map((g) => ({ id: g, title: g, icon: 'sliders', groups: [g], nav: 'This Echo' })), PAGES[PAGES.length - 1]].map(pageForDevice);
   const by = new Map();
-  for (const s of state.settings) { if (!by.has(s.group)) by.set(s.group, []); by.get(s.group).push(s); }
-  const order = [...SECTIONS, ...[...by.keys()].filter((g) => !SECTIONS.some((x) => x.id === g)).map((id) => ({ id, icon: 'sliders' }))];
-  for (const original of order) {
-    const sec = sectionForDevice(original);
-    const list = (by.get(sec.id) || []).filter((s) => s.name !== 'arbitration');
-    if (!list.length && sec.id !== 'Echos' && sec.id !== 'System' && !(isCube() && sec.id === 'Lights')) continue;
-    const el = sectionShell(sec);
-    if (sec.id === 'Features') {
-      const grid = h('div', { class: 'features' });
-      const card = (x) => x.feature || (HELP[x.name] || {}).card;
-      for (const s of list.filter(card)) grid.append(featureCard(s, list.filter((k) => (HELP[k.name] || {}).parent === s.name)));
-      el.append(grid);
-      const loose = list.filter((x) => !card(x) && !(HELP[x.name] || {}).parent);
-      if (loose.length) el.append(h('div', { class: 'card' }, loose.map(settingRow)));
-    } else if (sec.id === 'Sound') {
-      if (list.some((s) => s.name === 'separate_volumes')) buildVolumes(el);
-      const eq = list.filter((s) => s.name.startsWith('equalizer_')), rest = list.filter((s) => !eq.includes(s) && !VOLUMES.includes(s.name));
-      if (eq.length) el.append(h('div', { class: 'card' }, h('div', { class: 'eq' }, eq.map(settingRow)),
-        h('div', { class: 'card-foot eq-foot' }, h('span', { class: 'help' }, haBadge(), ' also as number entities'),
-          h('button', { class: 'small', onclick: async () => { for (const s of eq) await set(s.name, 0); } }, 'Flat'))));
-      if (rest.length) el.append(h('div', { class: 'card' }, rest.map(settingRow)));
-    } else if (sec.id === 'Wake word') {
-      el.append(h('div', { class: 'card' }, list.map(settingRow)));
-      buildWake(el);
-    } else if (sec.id === 'Lights') {
-      if (list.length) el.append(h('div', { class: 'card' }, list.map(settingRow)));
-      buildRing(el);                    // ring.js: the designs and where they show
-    } else if (sec.id === 'Echos') {
-      buildEchos(el, state.settings.find((s) => s.name === 'arbitration'));
-    } else if (sec.id === 'System') {
-      buildSystem(el, list);
-    } else el.append(h('div', { class: 'card' }, list.map(settingRow)));
+  for (const s of state.settings) { const id = pageOf(s); if (!by.has(id)) by.set(id, []); by.get(id).push(s); }
+  let head = null;
+  for (const pg of pages) {
+    const list = by.get(pg.id) || [];
+    if (!list.length && !pg.always && !(pg.when && pg.when())) continue;
+    const el = pageShell(pg);
+    if (PAGE_BUILD[pg.id]) PAGE_BUILD[pg.id](el, list);
+    else el.append(flow(settingCards(list, pg.id)));
     root.append(el);
-    nav.append(h('a', { href: '#sec-' + sec.id, 'data-sec': sec.id }, icon(sec.icon), sec.title || sec.id));
+    if (pg.nav && pg.nav !== head) nav.append(h('div', { class: 'nav-h' }, head = pg.nav));
+    nav.append(h('a', { href: '#/' + pg.id, 'data-page': pg.id }, icon(pg.icon), h('span', { class: 'nav-t' }, pg.title), h('span', { class: 'nav-n hidden' })));
   }
   $('foot').textContent = `hassmic ${state.device.version} · This page is plain HTTP, so it never shows keys or tokens; every change is signed by this browser.`;
-  watchNav();
+  curPage = '';
+}
+
+// Asking the other Echos is six requests each, a whole design library among them: with 15 of them not for nothing, only
+// while a page shows them, and once more on arriving there.  This Echo's own values too: nothing else reads them
+const othersShown = () => ['overview', 'echos', 'compare', 'models'].includes(curPage);
+let lastRound = 0;
+
+const pageBuilt = (id) => [...document.querySelectorAll('.page')].some((el) => el.dataset.page === id);   // pages keeps them all: settings of other models go by it
+
+// #/voice opens a page, #/voice/mic_level a setting on it (or anything with that id): the browser's back button,
+// bookmarks and the search all work by address.  Pages stay built and hidden: what polls keeps them up to date, and a
+// page half way through a copy or a sign-in goes on behind another one
+function route() {
+  const m = /^#\/([^/]+)(?:\/(.+))?$/.exec(location.hash), part = (s) => { try { return decodeURIComponent(s); } catch (e) { return s; } };
+  const here = !!m && pageBuilt(part(m[1])), id = here ? part(m[1]) : 'overview';   // a bookmark or a link from another model may name a page this Echo has not got
+  const pg = pages.find((p) => p.id === id), changed = id !== curPage;
+  curPage = id;
+  document.querySelectorAll('.page').forEach((el) => el.classList.toggle('hidden', el.dataset.page !== id));
+  $('nav').querySelectorAll('a').forEach((a) => { const on = a.dataset.page === id; a.classList.toggle('cur', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+  if (echo) document.title = `${pg.title} · ${echo.hello.name}`;
+  menu(false);
+  reflowPage();
+  if (changed) window.scrollTo(0, 0);
+  if (changed && echo && state && othersShown()) {
+    if (Date.now() - lastRound > 30000) refreshDevices().catch(() => {});
+    else if (!devRun) refreshMine().catch(() => {});       // what was changed on the page just left
+  }
+  if (here && m[2]) reveal(part(m[2]));
+  renderAttention();
+}
+window.addEventListener('hashchange', route);
+
+// To a setting, or to what holds it while it is hidden (a feature's child with the feature off), and mark it a moment
+function reveal(key) {
+  const c = controls.get(key);
+  let el = (c && c.root) || $(key);
+  if (!el) return;
+  const shut = el.closest('.hidden');
+  if (shut) el = shut.parentElement.closest('.feature, .card') || el;
+  el.scrollIntoView({ block: 'center' });
+  el.classList.remove('hit'); void el.offsetWidth; el.classList.add('hit');
+  setTimeout(() => el.classList.remove('hit'), 2000);
+}
+
+// The list on a phone: a drawer
+function menu(open) {
+  $('side').classList.toggle('open', open); $('scrim').classList.toggle('hidden', !open);
+  $('menu').setAttribute('aria-expanded', String(open));
+}
+$('menu').onclick = () => menu(true);
+$('scrim').onclick = () => menu(false);
+$('identify').onclick = () => identify(echo, echo.hello.name);
+
+// The page's foot: Automatic, Light, Dark
+{
+  const now = store('hm.theme') || 'auto';
+  const btns = [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']].map(([v, t]) => h('button', { type: 'button', class: v === now ? 'on' : '', 'aria-pressed': String(v === now),
+    onclick: () => { store('hm.theme', v); setTheme(v); btns.forEach((b) => { const on = b.textContent === t; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }); } }, t));
+  $('theme').append(...btns);
+}
+
+// ---------------------------------------------------------------- search
+
+// Anything on the pages that is no setting: [what it is called, page, id to go to, other words for it, (where it is)]
+const FINDABLE = [
+  ['Compare and copy settings', 'compare', '', 'matrix sync differences other echos same'],
+  ['Your Echos', 'echos', '', 'network arbitration key pairing'],
+  ['Download from Amazon', 'models', 'davs', 'wake words whisper sound detection model'],
+  ['Copy models', 'models', 'model-copy', 'wake word design theme pack'],
+  ['Models on file', 'models', 'model-file', 'backup tar save load'],
+  ['Light ring animations', 'lights', 'ring-acts', 'designs led theme pack'],
+  ['Sounds', 'voice', 'sounds', 'wake sound chime earcon ringtone your own upload replace'],
+  ['Sound packs', 'voice', 'sound-packs', 'sets themes share file soundpack'],
+  ['Wi-Fi', 'system', 'wifi', 'network switch password ssid'],
+  ['Music Assistant on the screen', 'media', 'mass', 'token library browse queue speakers groups api', () => !!state.mass],
+  ['Home app', 'screen', 'home-app', 'kiosk satellite face launcher start screen'],
+  ['Settings file', 'system', 'settings-file', 'export import backup preset'],
+  ['Log', 'system', 'log', 'boot.log troubleshooting bug report'],
+  ['Debug access', 'system', 'debug', 'adb root shell'],
+  ['Restart', 'system', 'restart', 'reboot'],
+  ['Factory reset', 'system', 'factory-reset', 'erase forget'],
+  ['Approved browsers', 'system', 'browsers', 'login revoke log out'],
+];
+
+function searchHits(q) {
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean), all = [];
+  if (!words.length) return [];
+  const titleOf = (id) => (pages.find((p) => p.id === id) || { title: id }).title;
+  for (const s of state.settings) {
+    if (controls.has(s.name)) all.push({ t: label(s), sub: titleOf(pageOf(s)), page: pageOf(s), key: s.name, more: `${SUB[s.name] || ''} ${(HELP[s.name] || {}).help || ''}` });
+  }
+  for (const [t, page, key, more, when] of FINDABLE) if (pageBuilt(page) && (!when || when())) all.push({ t, sub: titleOf(page), page, key, more });
+  const score = (x) => {
+    const a = x.t.toLowerCase(), b = x.more.toLowerCase();
+    if (!words.every((w) => a.includes(w) || b.includes(w))) return 0;
+    return (a.startsWith(words[0]) ? 4 : 0) + words.filter((w) => a.includes(w)).length * 2 + 1;
+  };
+  return all.map((x) => [score(x), x]).filter(([n]) => n).sort((p, r) => r[0] - p[0]).slice(0, 8).map(([, x]) => x);
+}
+
+{
+  const box = $('q'), list = $('qres');
+  let hits = [], at = 0;
+  const paint = () => {
+    list.replaceChildren(...hits.map((x, i) => h('li', { role: 'option', class: i === at ? 'on' : '', 'aria-selected': String(i === at), onmousedown: (e) => { e.preventDefault(); go(x); } },
+      h('span', {}, x.t), h('span', { class: 'qres-p' }, x.sub))));
+    if (box.value.trim() && !hits.length) list.replaceChildren(h('li', { class: 'none' }, 'Nothing by that name'));
+    list.classList.toggle('hidden', !box.value.trim());
+  };
+  const go = (x) => { box.value = ''; hits = []; paint(); box.blur(); const to = '#/' + x.page + (x.key ? '/' + x.key : ''); if (location.hash === to) route(); else location.hash = to; };
+  box.oninput = () => { hits = searchHits(box.value); at = 0; paint(); };
+  box.onblur = () => list.classList.add('hidden');
+  box.onfocus = () => { if (box.value.trim()) paint(); };
+  box.onkeydown = (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); at = (at + (e.key === 'ArrowDown' ? 1 : hits.length - 1)) % (hits.length || 1); paint(); }
+    else if (e.key === 'Enter' && hits[at]) go(hits[at]);
+    else if (e.key === 'Escape') { box.value = ''; hits = []; paint(); box.blur(); }
+  };
+  document.addEventListener('keydown', (e) => {         // "/" from anywhere that is not a field
+    if (e.key !== '/' || e.ctrlKey || e.metaKey || /^(input|textarea|select)$/i.test(e.target.tagName) || document.querySelector('dialog[open]') || $('app').classList.contains('hidden')) return;
+    e.preventDefault();
+    if (matchMedia('(max-width: 960px)').matches) menu(true);     // on a phone the box is in the menu
+    box.focus();
+  });
 }
 
 // ---------------------------------------------------------------- the Volume card (separate volumes, main.c)
@@ -789,60 +1441,121 @@ function buildVolumes(el) {
     for (const x of [...one, ...sep]) x.paint();
     calls.el.classList.toggle('hidden', !settingValue('drop_in'));       // no calls without Drop In
   }
-  for (const n of VOLUMES) controls.set(n, { update: paint, saved, root: null });
-
-  el.append(h('div', { class: 'card vol' },
+  const card = h('div', { class: 'card vol' },
     h('div', { class: 'vol-head' }, h('h3', {}, 'Volume ', saved), h('div', { class: 'seg', role: 'group', 'aria-label': 'Volume' }, btns)),
-    oneBox, sepBox));
+    oneBox, sepBox);
+  for (const n of VOLUMES) controls.set(n, { update: paint, saved, root: card });
+  el.append(card);
   paint();
 }
 
 function render() {
-  const sig = state.settings.map((s) => s.name).join() + '|' + !!state.arbitration;
-  if (sig !== built) { built = sig; build(); }
+  const sig = state.settings.map((s) => s.name).join() + '|' + !!state.arbitration + '|' + !!state.kiosk_app + '|' + !!state.screen, fresh = sig !== built;
+  if (fresh) { built = sig; build(); }
   for (const s of state.settings) { const c = controls.get(s.name); if (c) c.update(s); }
-  renderTop(); renderAttention(); renderNetwork(); renderDevices(); renderSystem(); renderWake();
+  for (const q of quick) { const s = state.settings.find((x) => x.name === q.name); if (s) q.update(s); }
+  renderTop(); renderAttention(); renderNetwork(); renderDevices(); renderSystem(); renderWake(); renderSounds(); if (massCtl) massCtl.paint(); if (homeCtl) homeCtl.paint();
+  if (fresh) route();                   // after the controls: cards are placed by their height, with what is hidden hidden
 }
 
 function renderTop() {
-  const d = state.diag, p = $('pills'); p.innerHTML = '';
-  p.append(h('span', { class: 'pill ' + (state.ha ? 'ok' : 'bad') }, h('span', { class: 'd' }), state.ha ? 'Home Assistant connected' : 'Home Assistant not connected'));
-  if (d.soc_temp !== null) p.append(h('span', { class: 'pill', title: 'Chip temperature' }, `${Math.round(d.soc_temp)} °C`));
-  if (d.cpu !== null) p.append(h('span', { class: 'pill', title: 'CPU usage' }, `CPU ${d.cpu} %`));
+  const p = $('pills');
+  p.replaceChildren(h('span', { class: 'pill ' + (state.ha ? 'ok' : 'bad') }, h('span', { class: 'd' }), state.ha ? 'Home Assistant connected' : 'Home Assistant not connected'));
+  $('mdot').className = 'mdot ' + (state.ha ? 'ok' : 'bad');
+  $('mdot').title = state.ha ? 'Home Assistant connected' : 'Home Assistant not connected';
+  renderOverview();
 }
 
-// "Download from Amazon" in a warning: a link to that card, a long scroll down the Wake word section
-function linkDavs(text) {
-  const [a, b] = text.split('Download from Amazon');
-  return [a, h('a', { href: '#davs', onclick: (e) => { e.preventDefault(); $('davs').scrollIntoView({ behavior: 'smooth' }); } }, 'Download from Amazon'), b];
+// "Download from Amazon" and "Copy models" in a warning: links to those cards
+const MODEL_CARDS = [['Download from Amazon', '#/models/davs'], ['Copy models', '#/models/model-copy']];
+const MODEL_WARN = /Download from Amazon|Copy models/;
+function linkModels(text) {
+  return MODEL_CARDS.reduce((parts, [name, href]) => parts.flatMap((p) => typeof p !== 'string' ? [p]
+    : p.split(name).flatMap((s, i) => i ? [h('a', { href }, name), s] : [s])), [text]);
 }
 
+// What does not work: Home Assistant's link on every page, the rest on Overview (its count on the menu) and, for the
+// models they are about, on Models
 function renderAttention() {
-  const box = $('attention'); box.innerHTML = '';
-  for (const text of state.warnings) {
+  const box = $('attention'), all = (state && state.warnings) || [];
+  if (!box) return;
+  box.innerHTML = '';
+  const says = (text) => {
     const ha = /Home Assistant is not connected/.test(text);
-    box.append(h('div', { class: 'callout' + (ha ? ' bad' : '') }, icon('warn'),
+    return h('div', { class: 'callout' + (ha ? ' bad' : '') }, icon('warn'),
       h('p', {}, ha ? 'Home Assistant is not connected. The Echo cannot answer requests until it is; check that the ESPHome integration has this device and that both are on the same network.'
-        : /Download from Amazon/.test(text) && $('davs') ? linkDavs(text) : text)));
+        : MODEL_WARN.test(text) ? linkModels(text) : text));
+  };
+  for (const text of all) {
+    const ha = /Home Assistant is not connected/.test(text);
+    if (ha || curPage === 'overview' || (curPage === 'models' && MODEL_WARN.test(text))) box.append(says(text));
   }
+  const rest = all.filter((t) => !/Home Assistant is not connected/.test(t)).length, n = $('nav').querySelector('[data-page=overview] .nav-n');
+  if (n) { n.textContent = String(rest); n.classList.toggle('hidden', !rest); n.title = plural(rest, 'thing') + ' to look at'; }
 }
 
-// The section being read: the last one whose top has passed below the header (an observer marked whichever entered
-// last, so a tall section above the one in view, or several at once on load, lit the wrong link); the last one at the
-// very bottom of the page, where a short one never gets that far up.  Not while the page is hidden (first load: every
-// top is 0 and the empty page is "at its end", which lit the last one)
-function markNav() {
-  const secs = [...document.querySelectorAll('.section')], links = [...$('nav').querySelectorAll('a')];
-  if (!secs.length || $('app').classList.contains('hidden')) return;
-  const atEnd = window.scrollY > 0 && window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4;
-  let cur = secs[0];
-  for (const s of secs) if (s.getBoundingClientRect().top <= 120) cur = s;
-  if (atEnd) cur = secs[secs.length - 1];
-  links.forEach((a) => a.classList.toggle('cur', a.dataset.sec === cur.id.slice(4)));
+// ---------------------------------------------------------------- Overview
+
+// The switches people use most, a second control on the same setting; render() keeps them in step
+const quick = [];
+let ovTiles = null, ovEchos = null;
+
+function buildOverview(el) {
+  ovTiles = h('div', { class: 'tiles' });
+  ovEchos = h('div', { class: 'card' });
+  const row = (name, title, sub) => {
+    const s = state.settings.find((x) => x.name === name); if (!s) return null;
+    const c = control(s, 'q-'), line = h('p', { class: 'help' }, typeof sub === 'string' ? sub : '');
+    quick.push({ name, update: (x) => { c.update(x); if (typeof sub !== 'string') line.textContent = sub(); } });
+    return h('div', { class: 'row' + (s.type === 'bool' ? '' : ' val') }, h('div', { class: 'row-t' }, h('div', { class: 'row-label' }, h('label', { for: 'q-' + name }, title)), line), h('div', { class: 'ctl' }, c.el));
+  };
+  el.append(ovTiles, flow([titled('Quick controls',
+    row('volume', 'Volume', () => (settingValue('separate_volumes') ? 'The music volume; the others are on the Sound page' : 'Everything the Echo plays')),
+    row('mute', 'Mute', 'Stops listening for the wake word'),
+    row('do_not_disturb', 'Do not disturb', 'Drops announcements from Home Assistant'),
+    row('wake_sound', 'Wake sound', 'A tone when the Echo starts listening')), ovEchos, featureList()].filter(Boolean)));
 }
-function watchNav() {
-  if (!watchNav.on) { watchNav.on = true; window.addEventListener('scroll', () => requestAnimationFrame(markNav), { passive: true }); window.addEventListener('resize', markNav); }
-  markNav();
+
+// Every feature with its switch: what is on, at a glance
+function featureList() {
+  const list = state.settings.filter((s) => s.feature && (HELP[s.name] || {}).icon);
+  if (!list.length) return null;
+  return h('div', { class: 'card' }, h('div', { class: 'sub-head' }, 'Features'), h('div', { class: 'minis' }, list.map((s) => {
+    const c = control(s, 'q-'); quick.push({ name: s.name, update: c.update });
+    return h('div', { class: 'mini' }, h('span', { class: 'mini-ic' }, icon(HELP[s.name].icon)), h('label', { for: 'q-' + s.name }, label(s)), c.el);
+  })));
+}
+
+function renderOverview() {
+  if (!ovTiles) return;
+  const tile = (ic, name, value, sub, href, cls) => h(href ? 'a' : 'div', { class: 'tile' + (cls ? ' ' + cls : ''), href: href || null, 'data-k': name },
+    h('span', { class: 'tile-l' }, h('span', { class: 'tile-ic' }, icon(ic)), name), h('span', { class: 'tile-v' }, value), sub ? h('span', { class: 'tile-s' }, sub) : null);
+  const d = state.diag, w = state.wifi, engine = settingValue('wake_engine'), up = settingValue('online_updates');
+  keepFocus(ovTiles, () => ovTiles.replaceChildren(...[
+    tile('ha', 'Home Assistant', state.ha ? 'Connected' : 'Not connected', state.ha ? 'Requests go through' : 'The Echo cannot answer requests', null, state.ha ? 'ok' : 'bad'),
+    engine !== undefined ? tile('ear', 'Wake word engine', (CHOICE_NAMES.wake_engine || {})[engine] || engine, null, '#/wake') : null,
+    tile('wifi', 'Wi-Fi', w && w.ssid ? w.ssid : 'Not known yet', (w && w.ip) || location.hostname, '#/system/wifi'),
+    tile('sliders', 'Firmware', state.device.version, up !== undefined ? `Online updates: ${(CHOICE_NAMES.online_updates || {})[up] || up}` : null, '#/system/online_updates'),
+    d.soc_temp !== null || d.cpu !== null ? tile('wave', d.soc_temp !== null ? 'Chip temperature' : 'CPU', d.soc_temp !== null ? `${Math.round(d.soc_temp)} °C` : `${d.cpu} %`,
+      d.soc_temp !== null && d.cpu !== null ? `CPU ${d.cpu} %` : null) : null].filter(Boolean)));
+  keepFocus(ovEchos, drawOvEchos);
+}
+
+// Every Echo, how it stands against this one, and the way to tell them apart
+function drawOvEchos() {
+  const line = (on, name, sub, badge, btn, href) => h('div', { class: 'row ov-echo' }, h('div', { class: 'ov-who' }, h('span', { class: 'mini-puck' + (on ? ' on' : '') }),
+    h('div', {}, h(href ? 'a' : 'div', { class: 'ov-name', href }, name), h('div', { class: 'mx-sub' }, sub))), h('div', { class: 'ctl' }, badge, btn));
+  const list = [...others.values()].sort((a, b) => echoName(a).localeCompare(echoName(b)));
+  ovEchos.replaceChildren(...[h('div', { class: 'sub-head' }, 'Your Echos'),
+    line(true, echo.hello.name, 'This Echo', null, idButton(echo, echo.hello.name)),
+    ...list.map((d) => {
+      const name = echoName(d);
+      return line(false, name, d.echo ? shortAddr(d.echo.base) : d.ip, d.error ? h('span', { class: 'badge bad', title: d.hint }, d.error)
+        : !d.echo ? h('span', { class: 'badge' }, 'Looking…') : !d.logged ? h('a', { class: 'badge', href: '#/echos' }, 'Not logged in')
+          : d.diff.length ? h('a', { class: 'badge warn', href: '#/compare' }, `${d.diff.length} differ${d.diff.length === 1 ? 's' : ''}`) : h('span', { class: 'badge ok' }, icon('check'), 'Same'),
+      d.echo && d.logged && !d.error ? idButton(d.echo, name) : null, d.echo ? d.echo.base + '/' : null);
+    }),
+    list.length ? null : h('p', { class: 'help ov-none' }, `No other Echo yet. ${noOthers('on the Echos page')}`)].filter(Boolean));
 }
 
 // ---------------------------------------------------------------- Wake word: microWakeWord's models (mww_store.c)
@@ -860,9 +1573,18 @@ async function getMww() { mww = (await echo.call('GET', '/api/mww')).json(); ren
 function buildWake(el) {
   mwwWarn = h('div');
   mwwBox = h('div', { class: 'card' });
-  davsBox = h('div', { class: 'card', id: 'davs' });          // more of Amazon's wake words: where one looks for them
+  mwwBox.id = 'mww';
+  el.append(mwwWarn, mwwBox);
+}
+
+// Fetched, copied, kept on file: every model in one place
+function buildModels(el) {
+  davsBox = h('div', { class: 'card', id: 'davs' });
+  modelBox = h('div', { class: 'card', id: 'model-copy' });
   fileBox = h('div', { class: 'card', id: 'model-file' });
-  el.append(mwwWarn, mwwBox, davsBox, fileBox);
+  davsKey = ''; mcopy.sig = '';                  // new, empty cards: what they drew last is not on them
+  // down the side, the table beside them: nothing stands under a short card, whatever each one holds
+  el.append(h('div', { class: 'models' }, h('div', { class: 'models-side' }, davsBox, fileBox), modelBox));
 }
 
 async function mwwAdd(id, model, manifest) {
@@ -1021,13 +1743,13 @@ async function mwwSwitchDialog() {
       if (busy) return;
       if (need) {
         if (!choice) { msg.textContent = 'Pick a wake word first.'; return; }
-        busy = true; go.disabled = cancel.disabled = true; rows.forEach((r) => { r.firstChild.disabled = true; });
+        busy = true; go.disabled = cancel.disabled = close.disabled = true; rows.forEach((r) => { r.firstChild.disabled = true; });
         go.replaceChildren(h('span', { class: 'spin' }), choice.key === 'files' ? 'Adding the model…' : `Fetching ${choice.name}…`);
         try {
           if (choice.key === 'files') { const lone = await mwwUpload(choice.groups); if (lone.length) toast(`${nameList(lone)} came without a manifest: microWakeWord's default threshold, change it under \u201cTune\u201d`); }
           else await mwwFetch(choice.id, choice.name, choice.dir);
         } catch (err) {
-          busy = false; go.disabled = cancel.disabled = false; rows.forEach((r) => { r.firstChild.disabled = false; });
+          busy = false; go.disabled = cancel.disabled = close.disabled = false; rows.forEach((r) => { r.firstChild.disabled = false; });
           go.textContent = 'Switch to microWakeWord'; msg.textContent = errText(err); return;
         }
       }
@@ -1082,7 +1804,7 @@ function renderWake() {
   const head = cardHead('microWakeWord models', ['Wake word models for microWakeWord: a ', h('code', {}, '.tflite'), ' file with its ', h('code', {}, '.json'),
     ' manifest, as ESPHome uses them. Home Assistant\'s wake word select offers them; pick one there or with \u201cUse\u201d. ',
     'A second one picked in Home Assistant\'s \u201cWake word 2\u201d listens beside it and starts \u201cAssistant 2\u201d. ',
-    'The Echos section copies them to your other Echos.'], 'ear');
+    'The Models page copies them to your other Echos.'], 'ear');
   const rows = ms.map((m) => {
     const second = on && mww.second === m.id, active = (on && mww.active === m.id) || second, busy = !!mwwBusy;
     const rename = async () => {
@@ -1129,18 +1851,14 @@ const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 const nameList = (l) => l.length <= 2 ? l.join(' and ') : `${l.slice(0, -1).join(', ')} and ${l[l.length - 1]}`;
 let netHead, netWarn, devBox, syncBox, modelBox;
 
-function cardHead(title, help, ic, extra) {
+function cardHead(title, help, ic, extra, long) {
+  const more = long ? moreOf('card ' + title, h('p', {}, long)) : null;
   return h('div', { class: 'card-head' }, ic ? h('span', { class: 'ic' }, icon(ic)) : null,
-    h('div', { class: 'grow' }, h('h3', {}, title), help ? h('p', { class: 'help' }, help) : null), extra || null);
+    h('div', { class: 'grow' }, h('h3', {}, title, more ? more.btn : null), help ? h('p', { class: 'help' }, help) : null, more ? more.panel : null), extra || null);
 }
 function empty(ic, text, ok) { return h('div', { class: 'empty' + (ok ? ' ok' : '') }, h('span', { class: 'ic' }, icon(ic)), h('div', {}, text)); }
 
-function buildEchos(el, arbSetting) {
-  el.append(h('p', { class: 'intro' }, 'Your Echos find each other on the local network and share a key, so nothing else on the network can join them or silence them. This always runs: it is also how this page finds your other Echos to copy settings and models to.'));
-  if (arbSetting) {
-    const c = featureCard(arbSetting, state.settings.filter((k) => (HELP[k.name] || {}).parent === 'arbitration'));
-    c.classList.add('solo'); el.append(c);
-  }
+function buildEchos(el, arbSetting, arbKids) {
   netHead = h('div', { class: 'net-line' });
   netWarn = h('div', { class: 'net-warn' });
   devBox = h('div', { class: 'echos' });
@@ -1153,20 +1871,17 @@ function buildEchos(el, arbSetting) {
     toast('Looking for it…'); refreshDevices().catch(() => {});
   };
   input.onkeydown = (e) => { if (e.key === 'Enter') add(); };
-  el.append(h('div', { class: 'card' },
+  el.append(flow([h('div', { class: 'card' },
     h('div', { class: 'card-head' }, h('div', { class: 'grow' }, h('h3', {}, 'Your Echos'), netHead), scanMark),
     netWarn, devBox,
     h('div', { class: 'card-foot' }, h('span', { class: 'help grow add-help' }, 'One missing? Echos on another subnet do not show up by themselves.'),
-      input, h('button', { onclick: add }, icon('plus'), 'Add'))));
-  syncBox = h('div', { class: 'card' });
-  modelBox = h('div', { class: 'card' });
-  el.append(syncBox, modelBox);
+      input, h('button', { onclick: add }, icon('plus'), 'Add'))), arbSetting ? featureCard(arbSetting, arbKids) : null].filter(Boolean), 520));
 }
 
 function renderNetwork() {
   if (!netHead) return;
   const a = state.arbitration; netHead.innerHTML = ''; netWarn.innerHTML = '';
-  if (!a) { netHead.append('The Echo network is switched off on this Echo (started with -a 0).'); return; }
+  if (!a) { netHead.append('The Echo network does not run on this Echo: it needs the wake word heard here, and ESPHome. Add other Echos by address below.'); return; }
   const n = a.members.length + 1;
   netHead.append(...[h('span', { class: 'dot' + (a.network && n > 1 ? ' ok' : '') }),
     a.network ? (n > 1 ? `${n} Echos share a network` : 'Only this Echo in its network') : 'Looking for other Echos…',
@@ -1227,9 +1942,12 @@ function refreshDevices() {
 
 // All Echos at once, each shown as soon as it answers: one at a time, a single dead address held the whole list back
 async function scanDevices() {
+  lastRound = Date.now();
   ({ values: mine, ring: myRing } = await valuesOf(echo));
-  try { myArts = (await echo.call('GET', '/api/artifacts')).json(); } catch (e) { myArts = null; }
+  try { myArts = (await echo.call('GET', '/api/artifacts')).json(); } catch (e) { /* the last list stands: one lost answer must not take the models off the page */ }
   const ips = knownIps(), jobs = [];
+  // no network, no beacons to say who is there: the Echos known stay, and go on being read
+  if (!state.arbitration) for (const d of others.values()) ips.add(d.ip);
   for (const [base, d] of others) if (!ips.has(d.ip)) others.delete(base);     // moved, or added by hand and removed
   for (const ip of ips) {
     const base = baseOf(ip);
@@ -1254,6 +1972,8 @@ async function probe(base) {
     const read = async () => {
       ({ values: d.values, ring: d.ring } = await valuesOf(d.echo)); d.logged = true;
       rediff(d);
+      // what its settings are (another model has some this one has not) and how it is doing
+      try { d.state = (await d.echo.call('GET', '/api/state')).json(); } catch (e) { d.state = null; }
       try { d.arts = (await d.echo.call('GET', '/api/artifacts')).json(); } catch (e) { d.arts = null; }
     };
     try { await read(); } catch (e) {
@@ -1269,7 +1989,7 @@ async function probe(base) {
   } catch (e) {
     // a page opened over HTTPS (a proxy) may not call plain HTTP, and the Echos speak nothing else (mixed content)
     d.error = location.protocol === 'https:' ? 'Not reachable over HTTPS' : 'Not reachable';
-    d.hint = location.protocol === 'https:' ? `The browser blocks calls from an HTTPS page to plain HTTP: open this page at http://${(state.wifi && state.wifi.ip) || '<this Echo\'s IP>'}:${echoPort()} for this section` : null;
+    d.hint = location.protocol === 'https:' ? `The browser blocks calls from an HTTPS page to plain HTTP: open this page at http://${(state.wifi && state.wifi.ip) || '<this Echo\'s IP>'}:${echoPort()} for the other Echos` : null;
   }
   finally { d.looking = false; }
 }
@@ -1300,7 +2020,11 @@ function netBadge(r) {
   return h('span', { class: 'badge warn', title: 'This Echo should move into that network' }, 'Older network');
 }
 
-const ready = () => [...others.values()].filter((d) => d.echo && d.logged && !d.error);
+const echoName = (d) => (d.echo ? d.echo.hello.name : d.ip);
+// where is what to add: 'below', 'on the Echos page'
+const noOthers = (where) => (state.arbitration ? `Echos running hassmic on the same network show up by themselves within a minute; one on another subnet you add ${where}.`
+  : `This Echo is not in the Echo network, so other Echos do not show up by themselves: add them by address ${where}.`);
+const ready = () => [...others.values()].filter((d) => d.echo && d.logged && !d.error).sort((a, b) => a.echo.hello.name.localeCompare(b.echo.hello.name));
 const shortAddr = (base) => base.replace('http://', '').replace(`:${echoPort()}`, '');
 
 function renderDevices() { if (devBox) keepFocus(devBox, drawDevices); }
@@ -1309,44 +2033,45 @@ function drawDevices() {
   devBox.innerHTML = '';
   const a = state.arbitration;
   devBox.append(h('div', { class: 'echo me' }, h('span', { class: 'mini-puck on' }),
-    h('div', { class: 'echo-body' }, h('div', { class: 'echo-name' }, echo.hello.name), h('div', { class: 'echo-addr' }, location.host),
+    h('div', { class: 'echo-body' }, h('div', { class: 'echo-id' }, h('div', { class: 'echo-name' }, echo.hello.name), h('div', { class: 'echo-addr' }, location.host)),
       h('div', { class: 'echo-meta' }, h('span', { class: 'badge acc' }, 'This Echo'), a && !a.arbitrates ? h('span', { class: 'badge' }, 'Arbitration off')
         : a && a.mode === 'kiosk' ? h('span', { class: 'badge' }, 'Kiosk Satellite mode') : null,
         state.dropin && state.dropin.state !== 'idle' ? h('span', { class: 'badge ok' }, icon('talk'), `Drop In ${DROPIN_WORDS[state.dropin.state]} ${state.dropin.peer}`) : null),
       h('div', { class: 'echo-acts' }, idButton(echo, echo.hello.name)))));
-  for (const [base, d] of others) {
-    const r = arbOf(d.ip), name = d.echo ? d.echo.hello.name : d.ip;
+  for (const [base, d] of [...others].sort(([, p], [, q]) => echoName(p).localeCompare(echoName(q)))) {
+    const r = arbOf(d.ip), name = echoName(d);
     const meta = [];
     if (!d.echo && d.looking) meta.push(h('span', { class: 'badge' }, h('span', { class: 'spin' }), 'Looking…'));
     else if (d.error) meta.push(h('span', { class: 'badge bad', title: d.hint }, d.error));
     else if (!d.logged) meta.push(h('span', { class: 'badge' }, 'Not logged in'));
-    else if (d.diff.length) meta.push(h('span', { class: 'badge warn' }, `${plural(d.diff.length, 'setting')} differ${d.diff.length === 1 ? 's' : ''}`));
+    else if (d.diff.length) meta.push(h('a', { class: 'badge warn', href: '#/compare' }, `${plural(d.diff.length, 'setting')} differ${d.diff.length === 1 ? 's' : ''}`));
     else meta.push(h('span', { class: 'badge ok' }, icon('check'), 'Same settings'));
+    if (d.state && !d.state.ha) meta.push(h('span', { class: 'badge warn', title: 'It cannot answer requests until it is' }, 'Home Assistant not connected'));
     meta.push(netBadge(r));
     if (r && r.member && r.arbitrates === false) meta.push(h('span', { class: 'badge', title: 'It answers every wake word itself' }, 'Arbitration off'));
     else if (r && r.member && r.mode === 'kiosk') meta.push(h('span', { class: 'badge', title: 'It settles wake words the Kiosk Satellite way' }, 'Kiosk Satellite mode'));
     const login = d.echo && d.logged && !d.error ? h('div', { class: 'echo-acts' }, idButton(d.echo, name))
       : d.echo && !d.logged && !d.error ? h('button', { class: 'small primary', disabled: !!d.asking, onclick: () => loginOther(d) }, icon('key'), d.asking ? 'Press its button…' : 'Log in') : null;
     devBox.append(h('div', { class: 'echo' }, h('span', { class: 'mini-puck' + (r && r.member ? ' on' : '') }),
-      h('div', { class: 'echo-body' }, h('div', { class: 'echo-name' }, name), h('div', { class: 'echo-addr' }, shortAddr(base)),
-        h('div', { class: 'echo-meta' }, meta), login, dropButton(r, name)),
-      h('a', { class: 'echo-go', href: base + '/', title: `${name}: its settings page`, 'aria-label': `Open the settings page of ${name}` }, icon('ext'))));
+      h('div', { class: 'echo-body' }, h('div', { class: 'echo-id' }, h('div', { class: 'echo-name' }, name), h('div', { class: 'echo-addr' }, shortAddr(base))),
+        h('div', { class: 'echo-meta' }, meta), login, dropButton(r, name, d.echo && d.echo.hello)),
+      h('a', { class: 'echo-go', href: base + '/' + (location.hash.startsWith('#/') ? location.hash : ''), title: `${name}: its settings page`, 'aria-label': `Open the settings page of ${name}` }, icon('ext'))));
   }
   if (!others.size) devBox.append(h('div', { class: 'echo ghost' }, h('span', { class: 'mini-puck' }),
     h('div', { class: 'echo-body' }, h('div', { class: 'echo-name' }, 'No other Echo yet'),
-      h('div', { class: 'help' }, 'Echos running hassmic on the same network show up here by themselves within a minute. Then this section copies settings and models to them.'))));
-  syncBox.classList.toggle('hidden', !others.size); modelBox.classList.toggle('hidden', !others.size);
+      h('div', { class: 'help' }, noOthers('below'), state.arbitration ? ' You can then compare them and copy settings and models between them.' : ''))));
   renderSync(); renderDavs(); renderModels(); renderFile();
+  renderOverview();
 }
 
 // Drop In (dropin.c) on a member of the network: from this Echo, which needs no login on the other one
 const DROPIN_WORDS = { calling: 'calling', ringing: 'ringing from', connected: 'with' };
-function dropButton(r, name) {
+function dropButton(r, name, hello) {
   const dr = state.dropin;
   if (!dr || !r || !r.member || !settingValue('drop_in')) return null;
   const mine = dr.state !== 'idle' && dr.peer === r.node, busy = dr.state !== 'idle' && !mine;
   return h('div', { class: 'echo-acts' }, h('button', { class: 'small' + (mine ? '' : ' primary'), 'data-k': 'drop ' + r.node, disabled: busy,
-    title: mine ? `End the Drop In with ${name}` : busy ? 'This Echo is in another Drop In' : `Talk to ${name}: it connects at once, or rings until its action button`,
+    title: mine ? `End the Drop In with ${name}` : busy ? 'This Echo is in another Drop In' : act(`Talk to ${name}: it connects at once, or rings until its action button`, hello),
     onclick: () => dropIn(mine ? 'end' : r.node, name) }, icon('talk'), mine ? (dr.state === 'connected' ? 'End Drop In' : 'Cancel') : 'Drop In'));
 }
 // what came of a call that went out but did not connect (dropin.c dropin_results); refusals here come back as errors
@@ -1390,22 +2115,11 @@ function keepFocus(box, draw) {
   draw();
   if (!k) return;
   const e = [...box.querySelectorAll('[data-k]')].find((x) => x.dataset.k === k);
-  if (e && !e.disabled) e.focus();
+  if (e && !e.disabled) { keepFocus.on = true; e.focus({ preventScroll: true }); keepFocus.on = false; }     // not back to it from where it was scrolled
 }
 
-// Echos to pick as targets, as toggle chips
-function chips(list) {
-  return h('div', { class: 'chips', role: 'group' }, list.map((x) => h('button', { type: 'button', class: 'chip' + (x.on ? ' on' : ''), 'aria-pressed': String(x.on),
-    disabled: x.disabled, 'data-k': x.k, onclick: x.toggle }, h('span', { class: 'tick' }, icon('check')), x.name, x.note ? h('span', { class: 'chip-n ' + (x.cls || '') }, x.note) : null)));
-}
-
-// ---------------------------------------------------------------- copy settings: which ones, to which Echos
-
-// What is ticked: the user's own ticks (name or Echo -> true/false), else the default: every listed setting, Echos where
-// something differs.  Only settings that differ on a picked Echo are listed: copying the rest would change nothing.
-const pick = { rows: new Map(), to: new Map() };
-const ticked = (m, k, dflt) => (m.has(k) ? m.get(k) : dflt);
-let syncing = false;
+// Words of a row: this Echo's table of settings first, another model's for what it has not got
+const metaOf = (n) => state.settings.find((x) => x.name === n) || [...others.values()].map((d) => d.state && d.state.settings.find((x) => x.name === n)).find(Boolean);
 
 // a row of the ring (ring.js): its group, words and values, resolved through every Echo's designs
 const ringMeta = (n) => ringRowMeta(n, [myRing, ...[...others.values()].map((d) => d.ring)]);
@@ -1414,10 +2128,10 @@ function pretty(name, raw) {
   if (raw === undefined) return '—';
   const rm = ringMeta(name);
   if (rm) return rm.pretty(raw);
-  const s = state.settings.find((x) => x.name === name);
+  const s = metaOf(name);
   if (!s) return raw;
   if (s.type === 'bool') return raw === 'on' ? 'On' : 'Off';
-  if (s.type === 'choice') return (CHOICE_NAMES[name] || {})[raw] || raw;
+  if (s.type === 'choice') return act((CHOICE_NAMES[name] || {})[raw] || raw);
   return fmt(s, +raw);
 }
 
@@ -1425,93 +2139,162 @@ function checkbox(on, onchange, labelText, k) {
   const i = h('input', { type: 'checkbox', checked: on, 'aria-label': labelText, 'data-k': k }); i.onchange = () => onchange(i.checked); return i;
 }
 
-function renderSync() { if (syncBox) keepFocus(syncBox, drawSync); }
-function drawSync() {
-  syncBox.innerHTML = '';
-  const targets = ready(), names = [...mine.keys()];
-  syncBox.append(cardHead('Copy settings', `From ${echo.hello.name} to your other Echos. Only what differs is listed; a setting an Echo does not have (no Bluetooth, no Wi-Fi motion) is left out there. The light ring's animations take the design they show along where it is missing, and are applied there; a design alone goes with the models below.`, 'sliders'));
-  if (!targets.length) {
-    syncBox.append(empty('net', others.size ? 'Log in to another Echo above (its own action button, once) to copy settings to it.'
-      : 'No other Echo found yet. Echos running hassmic on the same network show up above by themselves within a minute.'));
-    return;
-  }
-  const differs = (n, d) => valOf(d, n) !== undefined && valOf(d, n) !== mine.get(n);
-  const toOn = (d) => ticked(pick.to, d.echo.base, d.diff.length > 0);
-  const sel = targets.filter(toOn);
-  const waiting = [...others.values()].filter((d) => d.echo && !d.logged && !d.error).length;
-  syncBox.append(h('div', { class: 'pickbar' }, h('span', { class: 'pick-l' }, 'Copy to'),
-    chips(targets.map((d) => ({ name: d.echo.hello.name, on: toOn(d), disabled: syncing, k: 'to ' + d.echo.base,
-      note: d.diff.length ? String(d.diff.length) : 'same', cls: d.diff.length ? 'warn' : 'ok',
-      toggle: () => { pick.to.set(d.echo.base, !toOn(d)); renderSync(); } }))),
-    waiting ? h('span', { class: 'pick-hint' }, `${plural(waiting, 'more Echo')} after logging in`) : null));
-  const listed = names.filter((n) => sel.some((d) => differs(n, d)));
-  if (!sel.length) { syncBox.append(empty('info', 'Pick the Echos to copy to.')); return; }
-  if (!listed.length) {
-    syncBox.append(empty('check', h('span', {}, h('b', {}, nameList(sel.map((d) => d.echo.hello.name))), ` ${sel.length > 1 ? 'have' : 'has'} the same settings as this Echo.`), true));
-    return;
-  }
-  const rowOn = (n) => ticked(pick.rows, n, true);
-  const setting = (n) => state.settings.find((x) => x.name === n);
-  const groups = new Map();
-  for (const n of listed) { const g = (ringMeta(n) || setting(n) || {}).group || 'Other'; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(n); }
-  const order = [...groups.keys()].sort((p, q) => ((SECTIONS.findIndex((x) => x.id === p) + 99) % 99) - ((SECTIONS.findIndex((x) => x.id === q) + 99) % 99));
-  const list = h('div', { class: 'changes' }), rows = [];
-  for (const g of order) {
-    list.append(h('div', { class: 'grp' }, g));
-    for (const n of groups.get(g)) {
-      const s = setting(n), rm = ringMeta(n), to = mine.get(n);
-      const lines = sel.map((d) => {
-        const v = valOf(d, n), who = h('span', { class: 'ch-echo', title: d.echo.hello.name }, d.echo.hello.name);
-        if (v === undefined) return h('div', { class: 'ch-line same' }, who, 'not on that model');
-        if (v === to) return h('div', { class: 'ch-line same' }, who, icon('check'), 'already ', pretty(n, v));
-        return h('div', { class: 'ch-line' }, who, h('span', { class: 'old' }, pretty(n, v)), icon('arrow'), h('span', { class: 'new' }, pretty(n, to)));
-      });
-      const cb = checkbox(rowOn(n), (on) => { pick.rows.set(n, on); row.classList.toggle('on', on); row.classList.toggle('off', !on); foot(); }, rm ? rm.label : s ? s.label : n, 'row ' + n);
-      cb.disabled = syncing;
-      const row = h('label', { class: 'change ' + (rowOn(n) ? 'on' : 'off') }, cb, h('div', { class: 'ch-name' }, rm ? rm.label : s ? label(s) : n), h('div', { class: 'ch-to' }, lines));
-      rows.push(row); list.append(row);
-    }
-  }
-  syncBox.append(list);
-  const same = names.filter((n) => !listed.includes(n)).length;
-  const footBox = h('div', { class: 'card-foot sync-foot' });
-  const foot = () => {
-    const chosen = listed.filter(rowOn), changes = chosen.reduce((k, n) => k + sel.filter((d) => differs(n, d)).length, 0);
-    const go = h('button', { class: 'primary', 'data-k': 'go', disabled: syncing || !chosen.length, onclick: () => copySettings(chosen, sel) },
-      syncing ? [h('span', { class: 'spin' }), 'Copying…'] : `Copy to ${sel.length === 1 ? sel[0].echo.hello.name : plural(sel.length, 'Echo')}`);
-    footBox.replaceChildren(
-      h('div', { class: 'count grow' }, h('b', {}, plural(chosen.length, 'setting')), ` of ${listed.length}`, changes !== chosen.length ? `, ${plural(changes, 'change')}` : '',
-        same ? ` · ${same} already match` : '', ' ',
-        h('button', { class: 'link', disabled: syncing, 'data-k': 'all', onclick: () => { listed.forEach((n) => pick.rows.set(n, true)); renderSync(); } }, 'All'),
-        h('button', { class: 'link', disabled: syncing, 'data-k': 'none', onclick: () => { listed.forEach((n) => pick.rows.set(n, false)); renderSync(); } }, 'None')),
-      go);
-  };
-  foot();
-  syncBox.append(footBox);
+// Focus moved within a matrix: the browser brings a cell into the box, but not clear of the header and names that stay in
+// view (a cell mostly visible it leaves where it is, half under them), and only the page knows how much those cover
+document.addEventListener('focusin', (e) => {
+  const c = e.target, s = c.closest && c.closest('.mx-scroll');
+  if (!s || c === s || keepFocus.on) return;     // keepFocus.on: a redraw handing focus back, not someone moving it
+  requestAnimationFrame(() => {
+    const name = s.querySelector('tbody tr:not(.mx-grp) th'), head = s.querySelector('thead th');   // the cells stick, the thead does not
+    if (!c.isConnected || !name || !head) return;
+    const r = c.getBoundingClientRect(), left = name.getBoundingClientRect().right, top = head.getBoundingClientRect().bottom;
+    if (r.left < left) s.scrollLeft -= left - r.left;
+    if (r.top < top && !c.closest('th')) s.scrollTop -= top - r.top;
+  });
+});
+
+// A list redrawn while it is scrolled: every 30 s, on each Echo that answers.  The matrices scroll inside themselves
+function keepScroll(box, draw) {
+  const a = box.querySelector('.mx-scroll'), top = a ? a.scrollTop : 0, left = a ? a.scrollLeft : 0;
+  draw();
+  const b = box.querySelector('.mx-scroll');
+  if (b) { b.scrollTop = top; b.scrollLeft = left; }
 }
 
-// Settings through /api/set; the ring's rows (ring.js ringCopy) as designs uploaded where missing, the animations
-// assigned and applied there: an animation copied takes its design along when that Echo has not got it
-async function copySettings(names, list) {
-  syncing = true; renderSync();
-  const ringRows = names.filter((n) => ringMeta(n)), plain = names.filter((n) => !ringMeta(n));
-  const text = plain.filter((n) => mine.has(n)).map((n) => `${n}=${mine.get(n)}\n`).join('');
-  const notes = [];
-  for (const d of list) {
+// ---------------------------------------------------------------- Compare & copy: the settings matrix (matrix.js)
+
+// plan, locked: what is picked (matrix.js), for as long as the page lasts.  only: rows with a difference (else all), remembered
+const mx = { plan: new Map(), locked: new Set(), only: store('hm.mx.only') !== false, q: '', busy: false, notes: [], sig: '' };
+let mxBody = null, mxStats = null, mxFoot = null, mxGroup = null;
+// Group identical Echos: as picked; never picked, by how many there are: past six columns the table no longer fits
+const grouping = (n) => { const v = store('hm.mx.group'); return typeof v === 'boolean' ? v : n > 6; };
+const mxVal = (n, c) => c.values.get(n), mxTakes = (n, c) => c.values.has(n);
+const modelOf = (e) => (e.hello.model || '').replace(/ \(.*\)$/, '');           // the Echo Dot 3 of "Echo Dot 3 (donut)"
+const mxCols = () => [{ key: '', name: echo.hello.name, sub: `This Echo · ${modelOf(echo)}`, e: echo, values: mine, ring: myRing },
+  ...ready().map((d) => ({ key: d.echo.base, name: d.echo.hello.name, sub: `${modelOf(d.echo)} · ${shortAddr(d.echo.base)}`, e: d.echo, values: d.values, ring: d.ring }))];
+
+// Every row any Echo has, as the pages have them: a setting of a model this Echo is not is a row like any other
+function mxNames(cols) {
+  const names = [...new Set(cols.flatMap((c) => [...c.values.keys()]))];
+  const pageAt = (n) => { const s = metaOf(n), m = ringMeta(n), id = s ? pageOf(s) : m ? 'lights' : ''; return { id, at: pages.findIndex((p) => p.id === id) }; };
+  const order = new Map(names.map((n, i) => [n, [(pageAt(n).at + 99) % 99, ((state.settings.findIndex((x) => x.name === n) + 999) % 999), i]]));
+  return names.sort((p, q) => { const a = order.get(p), b = order.get(q); return a[0] - b[0] || a[1] - b[1] || a[2] - b[2]; });
+}
+const mxLabel = (n) => { const rm = ringMeta(n), s = metaOf(n); return rm ? rm.label : s ? label(s) : n; };
+
+function buildCompare(el) {
+  const only = checkbox(mx.only, (v) => { mx.only = v; store('hm.mx.only', v); renderSync(); }, 'Only rows with a difference', 'mx only');
+  mxGroup = checkbox(false, (v) => { store('hm.mx.group', v); renderSync(); renderModels(); }, 'Group Echos with the same settings', 'mx group');
+  const filter = h('input', { type: 'search', placeholder: 'Filter settings', value: mx.q, 'aria-label': 'Show only settings with this text', oninput: () => { mx.q = filter.value.trim().toLowerCase(); renderSync(); } });
+  mxStats = h('span', { class: 'mx-stats' });
+  mxBody = h('div', { class: 'mx-body' });
+  mxFoot = h('div', { class: 'card-foot sync-foot mx-foot' });
+  mx.sig = '';
+  syncBox = h('div', { class: 'card mx-card' },
+    h('div', { class: 'mx-tools' }, h('label', { class: 'mx-t' }, only, 'Only differences'), h('label', { class: 'mx-t', title: 'Echos whose settings are the same become one column' }, mxGroup, 'Group identical Echos'),
+      filter, mxStats), mxBody, mxFoot);
+  el.append(syncBox);
+}
+
+function renderSync() { if (syncBox) keepFocus(syncBox, () => keepScroll(syncBox, drawSync)); }
+function drawSync() {
+  const cols = mxCols(), known = [...others.values()], wait = known.filter((d) => d.echo && !d.logged && !d.error), bad = known.filter((d) => d.error);
+  const names = mxNames(cols);
+  const diff = names.filter((n) => hmmatrix.distinct(n, cols, mxVal) > 1);
+  const grouped = grouping(cols.length);
+  const sig = JSON.stringify([cols.map((c) => [c.key, c.name, c.sub, [...c.values]]), mx.only, grouped, mx.q, mx.busy, mx.notes, [...mx.locked], [...mx.plan].map(([n, p]) => [n, p.from, [...p.skip]]),
+    wait.map((d) => [d.echo.base, !!d.asking]), bad.map((d) => [d.ip, d.error]), known.map((d) => !!d.state)]);
+  markCompare(cols.length > 1 ? diff.length : 0);
+  if (sig === mx.sig) return;
+  mx.sig = sig;
+  const missing = [...wait.map((d) => h('div', { class: 'mx-out' }, h('span', { class: 'mini-puck' }), h('span', { class: 'grow' }, h('b', {}, d.echo.hello.name), ' is not logged in here'),
+      h('button', { class: 'small primary', 'data-k': 'log ' + d.echo.base, disabled: !!d.asking, onclick: () => loginOther(d) }, icon('key'), d.asking ? 'Press its button…' : 'Log in'))),
+    ...bad.map((d) => h('div', { class: 'mx-out' }, h('span', { class: 'mini-puck' }), h('span', { class: 'grow' }, h('b', {}, d.ip), ': ', d.error, d.hint ? `. ${d.hint}` : '')))];
+  const notes = mx.notes.length ? [callout('warn', mx.notes.map((t) => h('p', {}, t)), h('button', { class: 'link', onclick: () => { mx.notes = []; renderSync(); } }, 'Dismiss'))] : [];
+  const tools = syncBox.querySelector('.mx-tools');
+  tools.classList.toggle('hidden', cols.length < 2);
+  if (cols.length < 2) {
+    mxBody.replaceChildren(...missing, empty('net', wait.length ? act('Log in to another Echo to compare it with this one (its own action button, once).', wait[0].echo.hello)
+      : bad.length ? 'No other Echo can be reached right now.'
+      : `No other Echo found yet. ${noOthers('on the Echos page')}`));
+    mxFoot.classList.add('hidden'); mxStats.textContent = '';
+    return;
+  }
+  mxFoot.classList.remove('hidden');
+  mxGroup.checked = grouped;
+  const groups = hmmatrix.groups(cols, names, mxVal, grouped);
+  const shown = names.filter((n) => mx.plan.has(n) || ((!mx.only || diff.includes(n)) && (!mx.q || mxLabel(n).toLowerCase().includes(mx.q) || n.includes(mx.q))));   // what is picked stays in view: Apply writes it
+  mxStats.textContent = diff.length ? `${plural(diff.length, 'setting')} of ${names.length} differ${diff.length === 1 ? 's' : ''}` : `All ${names.length} settings the same`;
+  const titleOf = (n) => { const s = metaOf(n), id = s ? pageOf(s) : ringMeta(n) ? 'lights' : ''; return (pages.find((p) => p.id === id) || { title: 'Other' }).title; };
+  const rows = [];
+  for (const n of shown) {
+    const t = titleOf(n), last = rows[rows.length - 1];
+    if (!last || last.page !== t) rows.push({ head: t, page: t });
+    rows.push({ id: n, page: t, label: mxLabel(n), title: (HELP[n] || {}).help ? act(HELP[n].help) : undefined, rank: hmmatrix.rank(n, cols, mxVal) });
+  }
+  if (!shown.length) {
+    mxBody.replaceChildren(...missing, ...notes, empty('check', mx.q ? h('span', {}, 'No setting by that name here.')
+      : h('span', {}, h('b', {}, nameList(cols.map((c) => c.name))), ' have the same settings.'), !mx.q));
+  } else {
+    mxBody.replaceChildren(...missing, ...notes, h('div', { class: 'mx-scroll', tabindex: '0' },
+      matrixTable({ groups, rows, cols, val: mxVal, takes: mxTakes, text: (n, c, v) => pretty(n, v), m: mx, busy: mx.busy, redraw: renderSync })));
+  }
+  const ch = hmmatrix.changes(mx.plan, cols, mxVal, mxTakes, mx.locked), who = new Map();
+  for (const c of ch) who.set(c.to.name, (who.get(c.to.name) || 0) + 1);
+  const rowsCh = new Set(ch.map((c) => c.row)).size;
+  mxFoot.replaceChildren(...[
+    h('div', { class: 'count grow' }, ch.length ? [h('b', {}, plural(rowsCh, 'setting')), who.size > 4 ? ` on ${who.size} Echos` : `: ${[...who].map(([n, k]) => `${n} ${k}`).join(', ')}`]
+      : 'Click a value to copy it along its row, or Use all under an Echo\'s name.'),
+    mx.plan.size ? h('button', { 'data-k': 'clear', disabled: mx.busy, onclick: () => { mx.plan.clear(); renderSync(); } }, 'Clear') : null,
+    h('button', { class: 'primary', 'data-k': 'go', disabled: mx.busy || !ch.length, onclick: applySettings }, mx.busy ? [h('span', { class: 'spin' }), 'Applying…'] : ch.length ? `Apply ${plural(ch.length, 'change')}` : 'Apply')].filter(Boolean));
+}
+
+// The menu's count of settings that differ
+function markCompare(n) {
+  const b = $('nav').querySelector('[data-page=compare] .nav-n');
+  if (b) { b.textContent = String(n); b.classList.toggle('hidden', !n); b.title = `${plural(n, 'setting')} differ${n === 1 ? 's' : ''} between your Echos`; }
+}
+
+// Settings through /api/set, each Echo's in one go; the ring's rows (ring.js ringCopy) as designs uploaded where missing,
+// the animations assigned and applied there: an animation copied takes its design along when that Echo has not got it.
+// To or from Home Assistant's wake word the satellite restarts: waited for, the next Echo's changes do not race it
+async function applySettings() {
+  const cols = mxCols(), ch = hmmatrix.changes(mx.plan, cols, mxVal, mxTakes, mx.locked), by = new Map();
+  mx.busy = true; mx.notes = []; renderSync();
+  for (const c of ch) {
+    if (!by.has(c.to.key)) by.set(c.to.key, { to: c.to, lines: [], ring: new Map(), restart: false });
+    const x = by.get(c.to.key);
+    if (c.row.startsWith('ring:')) { if (!x.ring.has(c.from)) x.ring.set(c.from, []); x.ring.get(c.from).push(c.row); }
+    else {
+      x.lines.push(`${c.row}=${c.value}\n`);
+      if (c.row === 'wake_engine' && (c.value === 'homeassistant' || mxVal(c.row, c.to) === 'homeassistant')) x.restart = true;
+    }
+  }
+  const failed = new Set();
+  for (const { to, lines, ring, restart } of by.values()) {
+    const note = (t) => { mx.notes.push(`${to.name}: ${t}`); failed.add(to.key); };
     try {
-      if (text) {
-        const r = (await d.echo.call('POST', '/api/set', text)).json();
+      const was = restart ? await startOf(to.e) : null;
+      let restarts = restart;
+      if (lines.length) {
+        const r = (await to.e.call('POST', '/api/set', lines.join(''))).json();
         // what that model has not got (Bluetooth, Wi-Fi motion) is no error worth showing
         const errs = r.errors.split('\n').filter((x) => x && !x.includes('no such setting'));
-        if (errs.length) notes.push(`${d.echo.hello.name}: ${errs.join('; ')}`);
+        if (errs.length) note(errs.join('; '));
+        if (errs.some((x) => x.startsWith('wake_engine:'))) restarts = false;      // refused: nothing restarts
       }
-      const mineRows = ringRows.filter((n) => valOf(d, n) !== undefined && valOf(d, n) !== mine.get(n));
-      if (mineRows.length && myRing) for (const x of await ringCopy(d.echo, mineRows, myRing, d.ring)) notes.push(`${d.echo.hello.name}: ${x}`);
-    } catch (e) { notes.push(`${d.echo.hello.name}: ${errText(e)}`); }
+      // first: root restarts it within seconds, and what reaches the process on its way out is lost
+      if (restarts && !await waitBack(to.e, was)) note('its satellite did not restart (the log says why)');
+      for (const x of await ringCopy(to.e, [...ring].filter(([from]) => from.ring).map(([from, rows]) => [from.ring, rows]), to.ring)) note(x);
+    } catch (e) { note(errText(e)); }
   }
-  toast(notes.length ? notes.join(' · ') : `Copied to ${nameList(list.map((d) => d.echo.hello.name))}`);
-  pick.rows.clear(); pick.to.clear(); syncing = false;
+  toast(mx.notes.length ? 'Not everything was copied: the page says what' : `Copied to ${nameList([...by.values()].map((x) => x.to.name))}`);
+  // what did not get there stays picked, to try again: rows that did reach that Echo stop being changes at the refresh
+  for (const n of [...mx.plan.keys()]) if (!ch.some((c) => c.row === n && failed.has(c.to.key))) mx.plan.delete(n);
+  mx.busy = false;
+  if (by.has('')) { await load().catch(() => {}); ringLoad().catch(() => {}); }
   await refreshDevices();
+  renderSync();
 }
 
 // ---------------------------------------------------------------- download Amazon's models on this Echo
@@ -1564,16 +2347,13 @@ function drawDavs(force) {
   if (!force && key === davsKey) return;
   davsKey = key;
   davsBox.innerHTML = '';
-  if (isCube()) {
-    davsBox.append(cardHead('Amazon wake word', 'Uses the Alexa model already installed on your Cube. Downloading additional Amazon models through this page is not available on this firmware.', 'mic'));
-    return;
-  }
-  davsBox.append(cardHead('Download from Amazon', 'More wake words and Amazon\'s newer models, straight from Amazon onto this Echo. Once here, the Echos section copies them to your other Echos.', 'ext'));
+  if (isCube()) { davsBox.append(cardHead('Amazon wake word', 'Uses the Alexa model already installed on your Cube. Additional Amazon downloads are not available on this firmware.', 'mic')); return; }
+  davsBox.append(cardHead('Download from Amazon', 'More wake words and newer models, onto this Echo', 'ext', null, 'Straight from Amazon onto this Echo. Once here, Copy models takes them to your other Echos.'));
   if (!davs) { davsBox.append(empty('warn', 'This Echo did not say where its Amazon sign-in stands: it may be restarting.')); return; }
   const body = h('div', { class: 'card-body' });
   davsBox.append(body);
   if (!davs.dha) {
-    body.append(callout('info', h('p', {}, 'This Echo cannot sign in to Amazon itself: its attestation key would not answer. Download on another Echo and copy the models here (Echos section).')));
+    body.append(callout('info', h('p', {}, 'This Echo cannot sign in to Amazon itself: its attestation key would not answer. Download on another Echo and copy the models here with Copy models.')));
     return;
   }
   if (davs.state === 'none') davsSignIn(body);
@@ -1659,11 +2439,13 @@ function davsPicker(body) {
   davsBox.append(h('div', { class: 'pickbar' }, h('label', { class: 'pick-l', for: 'davs-lang' }, 'Language'), lang,
     h('span', { class: 'pick-hint' }, 'Which wake words exist depends on it')));
 
-  const list = h('div', { class: 'changes' });
+  const list = h('div', { class: 'changes' }), refused = new Set(davs.refused || []);
   let group = '';
   for (const c of davsCatalog()) {
     if (c.group !== group) { group = c.group; list.append(h('div', { class: 'grp' }, group)); }
     const it = job && job.items.find((x) => x.id === c.id), on = !!dv.ticks.get(c.id);
+    // refused before (the Echo Show 5's whisper model, issue #100): said up front, still tickable should Amazon change its mind
+    const no = refused.has(c.id) && !it && !has(c.id) ? h('div', { class: 'ch-sub bad' }, 'Amazon does not hand this out to this model of Echo: copy it from another Echo with Copy models') : null;
     const cb = checkbox(on, (v) => { dv.ticks.set(c.id, v); dv.last = null; renderDavs(); }, c.name, 'art ' + c.id);
     cb.disabled = !!job;
     let st = has(c.id) ? h('span', { class: 'badge ok' }, icon('check'), 'Installed') : null;
@@ -1671,7 +2453,7 @@ function davsPicker(body) {
       : it.status === 'ok' ? h('span', { class: 'badge ok' }, icon('check'), 'Downloaded')
       : it.status === 'bad' ? h('span', { class: 'badge bad' }, 'Failed') : h('span', { class: 'davs-none' }, 'Waiting');
     list.append(h('label', { class: `change davs-row ${on ? 'on' : 'off'}${job ? ' idle' : ''}` }, cb,
-      h('div', { class: 'ch-name' }, c.name, c.note ? h('div', { class: 'ch-sub' }, c.note) : null,
+      h('div', { class: 'ch-name' }, c.name, c.note ? h('div', { class: 'ch-sub' }, c.note) : null, no,
         it && it.why ? h('div', { class: 'ch-sub bad' }, it.why) : null),
       h('div', { class: 'davs-st' }, st)));
   }
@@ -1745,8 +2527,7 @@ function davsPoll() {
 // ---------------------------------------------------------------- copy models (Amazon's artifacts) between Echos
 
 const CHUNK = 192 * 1024;
-const mpick = { rows: new Map(), to: new Map() };    // the user's ticks; default: no model, every Echo ('' = this one)
-const mOn = (id) => ticked(mpick.rows, id, false), xOn = (x) => ticked(mpick.to, x.key, true);
+const mcopy = { plan: new Map(), locked: new Set(), sig: '' };   // as mx: the matrix's picks; the Echo with a model's value is where it comes from
 let copying = null;                             // { text, done, total } while models travel
 
 function artLabel(a) {
@@ -1760,69 +2541,67 @@ function artLabel(a) {
 }
 const mb = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 
-function renderModels() { if (modelBox) keepFocus(modelBox, drawModels); }
+function renderModels() { if (modelBox) keepFocus(modelBox, () => keepScroll(modelBox, drawModels)); }
 function drawModels() {
-  modelBox.innerHTML = '';
-  modelBox.append(cardHead('Copy models', 'Amazon\'s extra models from Download from Amazon (more wake words, whisper detection, the newer sound detection model), microWakeWord\'s models and your light ring designs and theme packs, Echo to Echo instead of adding them on each. A model is tried on the receiving Echo first; each Echo that gets one of Amazon\'s restarts its satellite once, for a few seconds. A design goes into the other Echo\'s designs only: none of its animations shows it until picked there.', 'box'));
-  if (!myArts && !myRing) { modelBox.append(empty('warn', 'This Echo cannot list its models.')); return; }
   // each Echo's models, and its light ring designs as models of their own (ring.js): known by their text, the same
   // everywhere or missing, never "another version"; an Echo without designs (older hassmic) cannot take them
   const withDesigns = (arts, rs) => ({ artifacts: [...(arts ? arts.artifacts : []),
     // designs at the top level; those in a pack travel in it
     ...(rs ? [...rs.byMark].filter(([mark]) => !rs.inPack.has(mark)).map(([mark, x]) => ({ id: 'design:' + mark, kind: 'design', name: x.name, digest: mark, size: x.text.length, text: x.text })) : []),
     ...(rs && rs.packs ? [...rs.packs].map(([mark, x]) => ({ id: 'pack:' + mark, kind: 'pack', name: x.name, digest: mark, size: x.text.length, text: x.text })) : [])] });
-  const echos = [{ name: echo.hello.name, key: '', e: echo, arts: withDesigns(myArts, myRing), ring: !!myRing, packs: !!(myRing && myRing.packs), snap: myRing },
-    ...ready().filter((d) => d.arts || d.ring).map((d) => ({ name: d.echo.hello.name, key: d.echo.base, e: d.echo, arts: withDesigns(d.arts, d.ring), ring: !!d.ring, packs: !!(d.ring && d.ring.packs), snap: d.ring }))];
+  const echos = [{ name: echo.hello.name, sub: 'This Echo', key: '', e: echo, arts: withDesigns(myArts, myRing), ring: !!myRing, packs: !!(myRing && myRing.packs), snap: myRing },
+    ...ready().filter((d) => d.arts || d.ring).map((d) => ({ name: d.echo.hello.name, sub: shortAddr(d.echo.base), key: d.echo.base, e: d.echo, arts: withDesigns(d.arts, d.ring), ring: !!d.ring, packs: !!(d.ring && d.ring.packs), snap: d.ring }))];
   const all = new Map();
   for (const x of echos) for (const a of x.arts.artifacts) if (!all.has(a.id)) all.set(a.id, a);
-  if (!all.size) { modelBox.append(empty('box', 'None of these Echos has any of Amazon\'s extra models or a microWakeWord model yet: download or add them first, then copy from here.')); return; }
-  // where each model comes from: this Echo if it has it, else the first that does
-  const source = (id) => echos.find((x) => x.arts.artifacts.some((a) => a.id === id));
   const theirs = (x, id) => x.arts.artifacts.find((a) => a.id === id);
-  const takes = (x, id) => (id.startsWith('design:') ? x.ring : id.startsWith('pack:') ? x.packs : true);
-  const needs = (x, id) => { const s = source(id), t = theirs(x, id); return x !== s && takes(x, id) && (!t || t.digest !== theirs(s, id).digest); };
-  // a model every Echo listed has already, the same version everywhere, has nothing to copy: left out
-  const ids = [...all.keys()].filter((id) => echos.some((x) => needs(x, id))).sort((p, q) => artLabel(all.get(p)).localeCompare(artLabel(all.get(q))));
-  const everywhere = all.size - ids.length;
+  const canTake = (id, x) => (id.startsWith('design:') ? x.ring : id.startsWith('pack:') ? x.packs : true);
+  const val = (id, x) => (theirs(x, id) || {}).digest;
+  // a model every Echo listed has, the same version everywhere, has nothing to copy: left out
+  const open = (id) => echos.some((x) => canTake(id, x) && val(id, x) !== val(id, echos.find((y) => val(id, y) !== undefined)));
+  const ids = [...all.keys()].filter(open).sort((p, q) => artLabel(all.get(p)).localeCompare(artLabel(all.get(q))));
+  const grouped = grouping(echos.length);
+  const sig = JSON.stringify([grouped, !!myArts, !!myRing, echos.map((x) => [x.key, x.name, x.ring, x.packs, x.arts.artifacts.map((a) => [a.id, a.digest])]), [...mcopy.locked], [...mcopy.plan].map(([n, p]) => [n, p.from, [...p.skip]]), copying]);
+  if (sig === mcopy.sig) return;
+  mcopy.sig = sig;
+  modelBox.innerHTML = '';
+  modelBox.append(cardHead('Copy models', 'Click the Echo a model should come from', 'box', null, 'Between any of your Echos, instead of adding them on each. A click on another one\'s copy turns it around. Models are tried on the receiving Echo first, and each Echo that gets one of Amazon\'s restarts its satellite once, for a few seconds. A light ring design goes into the other Echo\'s designs only: none of its animations shows it until picked there.'));
+  if (!myArts && !myRing) { modelBox.append(empty('warn', 'This Echo cannot list its models.')); return; }
+  if (!all.size) { modelBox.append(empty('box', 'None of these Echos has any of Amazon\'s extra models or a microWakeWord model yet: download or add them first, then copy from here.')); return; }
   if (!ids.length) {
     modelBox.append(empty('check', echos.length > 1 ? `Every Echo here has all ${plural(all.size, 'model')}, the same version: nothing to copy.`
-      : `This Echo's ${plural(all.size, 'model')}: log in to another Echo above to copy them to it.`, echos.length > 1));
+      : `This Echo's ${plural(all.size, 'model')}: log in to another Echo on the Echos page to copy them to it.`, echos.length > 1));
     return;
   }
-  if (echos.length > 1) modelBox.append(h('div', { class: 'pickbar' }, h('span', { class: 'pick-l' }, 'Install on'),
-    chips(echos.map((x) => ({ name: x.name + (x.key ? '' : ' (this one)'), on: xOn(x), disabled: !!copying, k: 'to ' + x.key,
-      toggle: () => { mpick.to.set(x.key, !xOn(x)); renderModels(); } })))));
-  else modelBox.append(h('div', { class: 'pickbar' }, h('span', { class: 'pick-hint' }, 'Log in to another Echo above to copy these to it.')));
-  const list = h('div', { class: 'changes' });
-  for (const id of ids) {
-    const a = all.get(id), src = source(id), wanted = echos.filter((x) => xOn(x) && needs(x, id));
-    const lines = echos.map((x) => {
-      const t = theirs(x, id), who = h('span', { class: 'ch-echo', title: x.name }, x.name);
-      if (x === src) return h('div', { class: 'ch-line same' }, who, icon('check'), 'has it, copied from here');
-      if (t && t.digest === theirs(src, id).digest) return h('div', { class: 'ch-line same' }, who, icon('check'), 'has it');
-      if (!takes(x, id)) return h('div', { class: 'ch-line same' }, who, id.startsWith('pack:') ? 'no packs there (older hassmic)' : 'no designs there (older hassmic)');
-      if (!xOn(x)) return h('div', { class: 'ch-line same' }, who, t ? 'another version, left alone' : 'not there, left alone');
-      return h('div', { class: 'ch-line' + (t ? ' warn' : '') }, who, icon('arrow'), h('span', { class: 'new' }, t ? 'replace its other version' : 'install'));
-    });
-    const idle = !wanted.length;
-    const cb = checkbox(!idle && mOn(id), (on) => { mpick.rows.set(id, on); renderModels(); }, artLabel(a), 'art ' + id);
-    cb.disabled = idle || !!copying;
-    list.append(h('label', { class: 'change ' + (idle ? 'idle off' : mOn(id) ? 'on' : 'off') }, cb,
-      h('div', { class: 'ch-name' }, artLabel(a), h('div', { class: 'ch-sub' }, mb(theirs(src, id).size))), h('div', { class: 'ch-to' }, lines)));
-  }
-  modelBox.append(list);
-  if (everywhere) list.append(h('p', { class: 'help copy-same' }, `${plural(everywhere, 'more model')} ${everywhere === 1 ? 'is' : 'are'} on every Echo here already, the same version.`));
-  const jobs = [];
-  for (const id of ids.filter(mOn)) for (const x of echos) if (xOn(x) && needs(x, id)) jobs.push({ id, to: x, from: source(id), art: theirs(source(id), id) });
+  const rows = ids.map((id) => ({ id, label: artLabel(all.get(id)), sub: mb(all.get(id).size), rank: hmmatrix.rank(id, echos, val) }));
+  const text = (id, x, v) => { const n = hmmatrix.rank(id, echos, val).get(v); return n ? 'Another version' : 'Has it'; };
+  const groups = hmmatrix.groups(echos, ids, (id, x) => val(id, x) || '-', grouped);
+  if (echos.length > 2) modelBox.append(h('div', { class: 'mx-tools' }, h('label', { class: 'mx-t', title: 'Echos with the same models become one column' },
+    checkbox(grouped, (v) => { store('hm.mx.group', v); renderModels(); renderSync(); }, 'Group Echos with the same models', 'mc group'), 'Group identical Echos')));
+  modelBox.append(h('div', { class: 'mx-scroll mx-short', tabindex: '0' }, matrixTable({ groups, rows, cols: echos, val, takes: canTake, text, m: mcopy, busy: !!copying,
+    redraw: renderModels, none: 'That Echo cannot take designs', missing: 'Not there' })));
+  const everywhere = all.size - ids.length;
+  if (everywhere) modelBox.append(h('p', { class: 'help copy-same' }, `${plural(everywhere, 'more model')} ${everywhere === 1 ? 'is' : 'are'} on every Echo here already, the same version.`));
+  const jobs = hmmatrix.changes(mcopy.plan, echos, val, canTake, mcopy.locked).map((c) => ({ id: c.row, to: c.to, from: c.from, art: theirs(c.from, c.row) }));
   const bytes = jobs.reduce((n, j) => n + j.art.size, 0);
-  const go = h('button', { class: 'primary', 'data-k': 'go', disabled: !!copying || !jobs.length, onclick: () => copyModels(jobs) },
-    copying ? [h('span', { class: 'spin' }), 'Copying…'] : jobs.length ? `Copy ${plural(jobs.length, 'model')} (${mb(bytes)})` : 'Copy');
+  // what no Echo here is short of beyond a missing model: a filled-in plan to start from
+  const fill = () => {
+    for (const id of ids) {
+      if (mcopy.plan.has(id)) continue;
+      const src = echos.find((x) => val(id, x) !== undefined);
+      hmmatrix.pick(mcopy.plan, id, src.key);
+      for (const x of echos) if (val(id, x) !== undefined && val(id, x) !== val(id, src)) mcopy.plan.get(id).skip.add(x.key);
+    }
+    renderModels();
+  };
   modelBox.append(h('div', { class: 'card-foot sync-foot' },
     copying ? h('div', { class: 'busy' }, copying.text) : null,
     copying ? h('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(copying.total), 'aria-valuenow': String(copying.done) },
       h('div', { style: `width:${copying.total ? (100 * copying.done) / copying.total : 0}%` })) : null,
-    h('div', { class: 'count grow' }, jobs.length ? h('b', {}, `${plural(jobs.length, 'copy', 'copies')}`) : 'Tick the models to copy', jobs.length ? `, ${mb(bytes)}` : ''),
-    go));
+    h('div', { class: 'count grow' }, jobs.length ? h('b', {}, `${plural(jobs.length, 'copy', 'copies')}`) : 'Click the Echo a model comes from', jobs.length ? `, ${mb(bytes)}` : ''),
+    h('button', { 'data-k': 'fill', disabled: !!copying, onclick: fill }, 'Fill in what is missing'),
+    mcopy.plan.size ? h('button', { 'data-k': 'clear', disabled: !!copying, onclick: () => { mcopy.plan.clear(); renderModels(); } }, 'Clear') : null,
+    h('button', { class: 'primary', 'data-k': 'go', disabled: !!copying || !jobs.length, onclick: () => copyModels(jobs) },
+      copying ? [h('span', { class: 'spin' }), 'Copying…'] : jobs.length ? `Copy ${plural(jobs.length, 'model')} (${mb(bytes)})` : 'Copy')));
 }
 
 async function transfer(job, done0, total) {
@@ -1883,12 +2662,12 @@ async function waitBack(e, was = e.hello.start) {
 }
 
 async function copyModels(jobs) {
-  const total = jobs.reduce((n, j) => n + j.art.size, 0), notes = [], got = new Map();   // got: Echos that install and restart
+  const total = jobs.reduce((n, j) => n + j.art.size, 0), notes = [], got = new Map(), failed = new Set();   // got: Echos that install and restart
   let done = 0, installed = 0;                                                            // microWakeWord's: in place at commit
   copying = { text: 'Starting…', done: 0, total }; renderModels();
   for (const j of jobs) {
     try { await transfer(j, done, total); if (j.art.kind !== 'mww' && j.art.kind !== 'design' && j.art.kind !== 'pack') got.set(j.to.key, j.to); else installed++; }
-    catch (e) { notes.push(`${artLabel(j.art)} → ${j.to.name}: ${errText(e).replace(/^Error: /, '')}`); }
+    catch (e) { failed.add(j.id); notes.push(`${artLabel(j.art)} → ${j.to.name}: ${errText(e).replace(/^Error: /, '')}`); }
     done += j.art.size;
   }
   for (const x of got.values()) {
@@ -1897,7 +2676,8 @@ async function copyModels(jobs) {
     try { await x.e.call('POST', '/api/artifact/install'); if (!await waitBack(x.e, was)) notes.push(`${x.name}: its satellite did not restart (the log says why)`); }
     catch (e) { notes.push(`${x.name}: ${errText(e).replace(/^Error: /, '')}`); }
   }
-  copying = null; mpick.rows.clear();
+  copying = null;
+  for (const id of [...mcopy.plan.keys()]) if (!failed.has(id)) mcopy.plan.delete(id);     // what did not get there stays picked
   toast(notes.length ? notes.join(' · ') : `Copied: ${plural(installed + jobs.filter((j) => j.art.kind !== 'mww' && j.art.kind !== 'design' && j.art.kind !== 'pack').length, 'model')}`);
   if (jobs.some((j) => (j.art.kind === 'design' || j.art.kind === 'pack') && !j.to.key)) ringLoad().catch(() => {});      // designs came here: the cards
   if (got.has('')) { setTimeout(() => location.reload(), 500); return; }       // this Echo restarted: start the page over
@@ -1914,60 +2694,73 @@ async function copyModels(jobs) {
 // would take minutes over a 24 MB set.  A copy of Amazon's models that no longer needs Amazon (forum #172)
 const MODELS_FILE = 'hassmic-models.json';
 const artDir = (id) => id.replace(':', '/');
+const ticked = (m, k, dflt) => (m.has(k) ? m.get(k) : dflt);
 const fpick = new Map();                        // ticks: what to save (default all), or, with a file read in, what to install (default what is new)
 let fileBox, fileJob = null, fileIn = null;     // fileJob: { text, done, total } while models travel; fileIn: the file read in
 
 function renderFile() { if (fileBox) keepFocus(fileBox, drawFile); }
+const byLabel = (p, q) => artLabel(p).localeCompare(artLabel(q));
 function drawFile() {
   fileBox.innerHTML = '';
-  fileBox.append(cardHead(isCube() ? 'Extra models: import and export' : 'Models on file', isCube()
-    ? 'The built-in Alexa model is already available from Fire TV and is not included in these exports. This section saves or loads additional Amazon and microWakeWord models. Load only files you saved yourself or received from someone you trust.'
-    : 'Amazon\'s extra models and your microWakeWord models, saved as one file on your computer, and put back from it on this Echo or another one. A copy that no longer needs Amazon to hand them out. Load only files you saved yourself or got from someone you trust: a model runs inside the Echo.', 'down'));
+  if (isCube()) fileBox.append(cardHead('Built-in Alexa is available', 'These files contain extra models only. The built-in Alexa model is supplied by Fire TV and is not included in exports.', 'mic'));
+  fileBox.append(cardHead('Models on file', 'Keep your models on your computer, put them back later', 'down', null, 'Amazon\'s extra models and your microWakeWord models, saved as one file on your computer, and put back from it on this Echo or another one. A copy that no longer needs Amazon to hand them out. Load only files you saved yourself or got from someone you trust: a model runs inside the Echo.'));
   if (!myArts) { fileBox.append(empty('warn', 'This Echo did not list its models yet.')); return; }
-  const busy = !!fileJob, mineOf = (id) => myArts.artifacts.find((a) => a.id === id);
-  const progress = busy ? [h('div', { class: 'busy' }, fileJob.text),
-    h('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(fileJob.total), 'aria-valuenow': String(fileJob.done) },
-      h('div', { style: `width:${fileJob.total ? (100 * fileJob.done) / fileJob.total : 0}%` }))] : [];
-  const row = (a, on, idle, sub, line, k) => {
-    const cb = checkbox(on, (v) => { fpick.set(a.id, v); renderFile(); }, artLabel(a), k);
-    cb.disabled = idle || busy;
-    return h('label', { class: 'change ' + (idle ? 'idle off' : on ? 'on' : 'off') }, cb,
-      h('div', { class: 'ch-name' }, artLabel(a), h('div', { class: 'ch-sub' }, sub)), h('div', { class: 'ch-to' }, line));
-  };
-
-  if (fileIn) {                                 // a file read in: what of it goes onto this Echo
-    const list = h('div', { class: 'changes' }), picks = [];
-    for (const a of fileIn.arts) {
-      const t = mineOf(a.id), same = t && t.digest === a.digest, idle = same || !a.whole, on = !idle && ticked(fpick, a.id, !t);
-      const line = !a.whole ? h('div', { class: 'ch-line warn' }, icon('warn'), h('span', { class: 'new' }, 'files missing in the file'))
-        : same ? h('div', { class: 'ch-line same' }, icon('check'), 'on this Echo already')
-        : on ? h('div', { class: 'ch-line' + (t ? ' warn' : '') }, icon('arrow'), h('span', { class: 'new' }, t ? 'replace the other version here' : 'install'))
-        : h('div', { class: 'ch-line same' }, t ? 'another version here, left alone' : 'left out');
-      if (on) picks.push(a);
-      list.append(row(a, on, idle, mb(a.size), line, 'load ' + a.id));
-    }
-    fileBox.append(h('div', { class: 'pickbar' }, h('span', { class: 'pick-hint' }, `${fileIn.name}${fileIn.from ? `, saved on ${fileIn.from}` : ''}`)), list);
-    const bytes = picks.reduce((n, a) => n + a.size, 0);
-    fileBox.append(h('div', { class: 'card-foot sync-foot' }, ...progress,
-      busy ? null : h('div', { class: 'count grow' }, picks.length ? h('b', {}, plural(picks.length, 'model')) : 'Tick the models to install', picks.length ? `, ${mb(bytes)}` : ''),
-      h('button', { disabled: busy, onclick: () => { fileIn = null; fpick.clear(); renderFile(); } }, 'Close file'),
-      h('button', { class: 'primary', 'data-k': 'load', disabled: busy || !picks.length, onclick: () => loadModels(picks) },
-        busy ? [h('span', { class: 'spin' }), 'Installing…'] : `Install ${plural(picks.length, 'model')}`)));
-    return;
-  }
-
-  const arts = [...myArts.artifacts].sort((p, q) => artLabel(p).localeCompare(artLabel(q)));
-  const picks = arts.filter((a) => ticked(fpick, a.id, true)), bytes = picks.reduce((n, a) => n + a.size, 0);
-  if (arts.length) fileBox.append(h('div', { class: 'changes' }, arts.map((a) => row(a, ticked(fpick, a.id, true), false, mb(a.size), null, 'save ' + a.id))));
-  else fileBox.append(empty('box', isCube()
-    ? 'No extra models to export. The Cube’s built-in Alexa model is available and does not need to be imported.'
-    : 'No models of Amazon\'s or microWakeWord\'s on this Echo to save yet. A file saved on another Echo can still be put back here.'));
+  const busy = !!fileJob, arts = [...myArts.artifacts].sort(byLabel), bytes = arts.reduce((n, a) => n + a.size, 0);
   const file = h('input', { type: 'file', accept: '.tar,application/x-tar', class: 'hidden', onchange: () => { const f = file.files[0]; file.value = ''; if (f) readModelsFile(f); } });
-  fileBox.append(h('div', { class: 'card-foot sync-foot' }, ...progress,
-    busy ? null : h('div', { class: 'count grow' }, picks.length ? h('b', {}, plural(picks.length, 'model')) : 'Tick the models to save', picks.length ? `, ${mb(bytes)}` : ''),
-    h('button', { disabled: busy, onclick: () => file.click() }, icon('up'), 'Load from file…'), file,
-    h('button', { class: 'primary', 'data-k': 'save', disabled: busy || !picks.length, onclick: () => saveModels(picks) },
-      busy ? [h('span', { class: 'spin' }), 'Saving…'] : [icon('down'), `Save ${plural(picks.length, 'model')}`])));
+  fileBox.append(h('div', { class: 'card-foot sync-foot' },
+    ...(busy ? [h('div', { class: 'busy' }, fileJob.text),
+      h('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(fileJob.total), 'aria-valuenow': String(fileJob.done) },
+        h('div', { style: `width:${fileJob.total ? (100 * fileJob.done) / fileJob.total : 0}%` }))] : []),
+    h('div', { class: 'count grow' }, arts.length ? [h('b', {}, plural(arts.length, 'model')), `, ${mb(bytes)}`] : 'None on this Echo yet'),
+    h('button', { 'data-k': 'load', disabled: busy, onclick: () => file.click() }, icon('up'), 'Load…'), file,
+    arts.length ? h('button', { 'data-k': 'pick', disabled: busy, onclick: () => fileDialog() }, 'Choose…') : null,
+    h('button', { class: 'primary', 'data-k': 'save', disabled: busy || !arts.length, onclick: () => saveModels(arts) },
+      busy ? h('span', { class: 'spin' }) : icon('down'), 'Save all')));
+}
+
+// What to save, or with a file read in (fileIn) what of it to install: a list up to 15 models and more long, for a
+// moment's choosing, on no page: it stood the card a screen tall beside a card a fifth of that
+function fileDialog() {
+  const load = fileIn, have = myArts ? myArts.artifacts : [], mineOf = (id) => have.find((a) => a.id === id);    // as it opened: a round that fails empties myArts
+  const list = load ? load.arts : [...have].sort(byLabel);
+  const idle = (a) => { if (!load) return false; const t = mineOf(a.id); return (t && t.digest === a.digest) || !a.whole; };
+  const on = (a) => !idle(a) && ticked(fpick, a.id, load ? !mineOf(a.id) : true);
+  const line = (a) => {
+    if (!load) return null;
+    const t = mineOf(a.id);
+    return !a.whole ? h('div', { class: 'ch-line warn' }, icon('warn'), h('span', { class: 'new' }, 'files missing in the file'))
+      : t && t.digest === a.digest ? h('div', { class: 'ch-line same' }, icon('check'), 'on this Echo already')
+      : on(a) ? h('div', { class: 'ch-line' + (t ? ' warn' : '') }, icon('arrow'), h('span', { class: 'new' }, t ? 'replace the other version here' : 'install'))
+      : h('div', { class: 'ch-line same' }, t ? 'another version here, left alone' : 'left out');
+  };
+  const m = modal(load ? 'Install from a file' : 'Save models', 'file-pick');
+  const box = h('div', { class: 'changes' }), count = h('div', { class: 'count grow' });
+  const go = h('button', { type: 'button', class: 'primary', onclick: () => {
+    const picks = list.filter(on);
+    m.going = true; m.dlg.close();
+    if (load) loadModels(picks); else saveModels(picks);
+  } });
+  const draw = () => {
+    box.replaceChildren(...list.map((a) => {
+      const cb = checkbox(on(a), (v) => { fpick.set(a.id, v); paint(); }, artLabel(a), 'file ' + a.id);
+      cb.disabled = idle(a);
+      return h('label', { class: 'change ' + (idle(a) ? 'idle off' : on(a) ? 'on' : 'off') }, cb,
+        h('div', { class: 'ch-name' }, artLabel(a), h('div', { class: 'ch-sub' }, mb(a.size))), h('div', { class: 'ch-to' }, line(a)));
+    }));
+    const picks = list.filter(on), bytes = picks.reduce((n, a) => n + a.size, 0);
+    count.replaceChildren(...(picks.length ? [h('b', {}, plural(picks.length, 'model')), `, ${mb(bytes)}`] : ['Tick the models']));
+    go.disabled = !picks.length;
+    go.textContent = `${load ? 'Install' : 'Save'} ${plural(picks.length, 'model')}`;
+  };
+  const paint = () => keepFocus(box, draw);
+  const all = (v) => { for (const a of list) if (!idle(a)) fpick.set(a.id, v); paint(); };
+  m.body.append(h('div', { class: 'file-tools' },
+    load ? h('span', { class: 'pick-hint grow' }, `${load.name}${load.from ? `, saved on ${load.from}` : ''}`) : h('span', { class: 'grow' }),
+    h('button', { type: 'button', class: 'link', onclick: () => all(true) }, 'All'), h('button', { type: 'button', class: 'link', onclick: () => all(false) }, 'None')), box);
+  m.foot.append(count, h('button', { type: 'button', onclick: () => m.dlg.close() }, 'Cancel'), go);
+  m.onclose = () => { if (!m.going) { fileIn = null; fpick.clear(); } };
+  draw();
+  m.show();
 }
 
 async function saveModels(arts) {
@@ -2024,7 +2817,7 @@ async function readModelsFile(file) {
   if (!arts.length) { no('no models in it'); return; }
   fpick.clear();
   fileIn = { name: file.name, from: typeof head.echo === 'string' ? head.echo : '', arts, read };
-  renderFile();
+  fileDialog();
 }
 
 async function loadModels(arts) {
@@ -2068,7 +2861,7 @@ function nameRow() {
   nameCtl = { paint: () => {
     now.replaceChildren(echo.hello.name, ' ', h('code', { title: 'Node name: ESPHome device name, host name' }, echo.hello.node));
   } };
-  return infoRow('Name', 'Made from the model and the end of its MAC address, so no two Echos share it and a reset keeps it. Name it in Home Assistant: on the device\'s page there (the pencil), which is where everything else picks names up from.',
+  return infoRow('Name', 'Made from the model and its MAC address', 'Made from the model and the end of its MAC address, so no two Echos share it and a reset keeps it. Name it in Home Assistant: on the device\'s page there (the pencil), which is where everything else picks names up from.',
     null, null, now);
 }
 
@@ -2086,10 +2879,105 @@ function modal(title, cls) {
 }
 
 // A row of the System cards: what it is (and what it is now), what it does, its buttons; extra (a form, the log) under it all
-function infoRow(title, help, ctl, extra, val) {
-  return h('div', { class: 'row stack' },
-    h('div', {}, h('div', { class: 'row-label' }, title), val || null, help ? h('p', { class: 'help' }, help) : null),
-    h('div', { class: 'ctl btns' }, ctl), extra || null);
+function infoRow(title, sub, help, ctl, extra, val) {
+  const more = help ? moreOf('i ' + title, h('p', {}, help)) : null;
+  return h('div', { class: 'row info' },
+    h('div', { class: 'row-t' }, h('div', { class: 'row-label' }, h('span', {}, title), more ? more.btn : null), val || null, h('p', { class: 'help' }, sub)),
+    h('div', { class: 'ctl btns' }, ctl), more ? more.panel : null, extra || null);
+}
+
+// ---------------------------------------------------------------- Music Assistant's API (mass.c: the screen's music pages)
+
+let massCtl = null, homeCtl = null;
+
+// What the screen shows when nothing else does (screen.c): Kiosk Satellite until another is picked, the face, or any app
+// installed (Android's own are left out: the firmware's Music, Downloads and Settings were never meant for this)
+function homeRow() {
+  const sel = h('select', { id: 'home-sel', onchange: async () => {
+    try { state.screen = (await echo.call('POST', '/api/screen', `home ${sel.value}`.trim())).json(); toast('Saved: the screen shows it now'); }
+    catch (e) { toast(errText(e)); }
+    homeCtl.paint();
+  } });
+  let built = '';
+  homeCtl = { paint: () => {
+    const sc = state.screen; if (!sc) return;
+    const ksLabel = sc.kiosk ? ((sc.apps.find((a) => a.pkg === sc.kiosk) || {}).label || 'Kiosk Satellite') : '';
+    const mine = sc.apps.filter((a) => !a.system && a.pkg !== sc.kiosk);
+    const v = sc.home === null ? '-' : sc.home;
+    const opts = [['-', ksLabel ? `${ksLabel} (default)` : 'The face (default)'], ['', 'The face'],
+      ...(ksLabel ? [[sc.kiosk, ksLabel]] : []), ...mine.map((a) => [a.pkg, a.label])];
+    if (v && v !== '-' && !opts.some(([p]) => p === v)) opts.push([v, `${v} (not installed)`]);
+    const sig = JSON.stringify(opts);
+    if (sig !== built && document.activeElement !== sel) {   // rebuilt only when it changed, never under an open list
+      built = sig; sel.replaceChildren(...opts.map(([p, t]) => h('option', { value: p }, t)));
+    }
+    if (document.activeElement !== sel) sel.value = v;
+  } };
+  homeCtl.paint();
+  return h('div', { class: 'row val' },
+    h('div', { class: 'row-t' }, h('div', { class: 'row-label' }, h('label', { for: 'home-sel' }, 'Home app')),
+      h('p', { class: 'help' }, 'What the screen shows at start and goes back to when an app ends. The face is hassmic\'s own.')),
+    h('div', { class: 'ctl' }, sel));
+}
+
+const MASS_STATE = { off: 'Not connected', connecting: 'Connecting…', up: 'Connected', auth: 'Token refused', error: 'Not reachable' };
+
+function massRow() {
+  const now = h('div', { class: 'row-val' }), btns = h('span', { class: 'btns' });
+  massCtl = { paint: () => {
+    const m = state.mass; if (!m) return;
+    const where = m.url || m.found;
+    const what = m.state === 'off' && !m.token ? 'Not connected' : m.state === 'off' ? 'Waiting for Music Assistant' : MASS_STATE[m.state] || m.state;
+    const sub = m.state === 'up' ? [m.text, !m.self ? 'this Echo is not one of its players yet' : null]
+      : m.state === 'auth' ? ['make a new token in Music Assistant']
+      : m.state === 'error' ? [m.text]
+      : [!m.token ? 'needs a token' : null, where || 'its address comes when it plays here'];
+    now.replaceChildren(what, h('span', { class: 'row-val-sub' }, sub.filter(Boolean).join(' · ')));
+    btns.replaceChildren(...[h('button', { onclick: massDialog }, icon('music'), m.token ? 'Change…' : 'Connect…'),
+      m.token ? h('button', { onclick: () => massSend('-', '-') }, 'Disconnect') : null].filter(Boolean));
+  } };
+  massCtl.paint();
+  return infoRow('Music Assistant on the screen', 'The library, queue, search and speakers',
+    'Playing, and what plays, need nothing more: they come over Sendspin. Browsing the library, searching, the queue and grouping speakers go through Music Assistant\'s own API, which wants a long-lived token: in Music Assistant, open your profile (the person icon), Long-lived tokens, Create, and paste it here. It is sent sealed for this Echo and kept on it; the page never shows it again. Left empty, the address is taken from the Music Assistant that plays here when you save (port 8095), and kept: the token only ever goes there.',
+    btns, null, now);
+}
+
+async function massSend(url, token) {
+  try {
+    const r = (await echo.call('POST', '/api/mass', (ctr) => {
+      const u = url === '-' ? '-' : hex(enc.encode(url));
+      if (token === '-' || token === '=') return `${u} ${token}`;
+      const t = enc.encode(token), b = new Uint8Array(Math.ceil((t.length + 1) / 64) * 64); b.set(t);   // padded: its length stays inside
+      return `${u} ${hex(seal(echo.k, ctr, b))}`;
+    })).json();
+    state.mass = r; if (massCtl) massCtl.paint();
+    toast(token === '-' ? 'Music Assistant disconnected' : 'Saved: the Echo connects now');
+  } catch (e) { toast(errText(e)); }
+}
+
+function massDialog() {
+  const m = modal('Connect Music Assistant', 'mass'), mst = state.mass || {};
+  const url = h('input', { id: 'mass-url', type: 'text', placeholder: mst.found || 'http://music-assistant:8095', value: mst.url || '', autocomplete: 'off', spellcheck: 'false' });
+  const tok = h('textarea', { id: 'mass-tok', rows: 4, placeholder: mst.token ? 'Leave empty to keep the token it has (same address only)' : 'Paste the long-lived token here', spellcheck: 'false', autocomplete: 'off' });
+  const go = h('button', { class: 'primary', onclick: async () => {
+    const t = tok.value.trim();
+    if (!t && !mst.token) { toast('A token is needed: Music Assistant 2.7 and later ask for one'); return; }
+    if (t && !/^[\x21-\x7e]+$/.test(t)) { toast('That is not a token: no spaces or other characters'); return; }
+    if (t.length > 2000) { toast('That token is longer than any Music Assistant makes'); return; }
+    // empty: the address shown, not whichever server plays here by the time it arrives
+    const where = url.value.trim() || (mst.found ? `http://${mst.found}` : '-');
+    // a token only ever goes where it was given: another address takes it again (the Echo refuses it too)
+    if (!t && mst.token && where !== (mst.url || '-')) { toast('A new address takes the token again'); tok.focus(); return; }
+    go.disabled = true; await massSend(where, t || '='); m.dlg.close();
+  } }, 'Save');
+  m.body.append(
+    h('p', { class: 'help' }, 'In Music Assistant: your profile (the person icon), Long-lived tokens, Create. Copy it and paste it below.'),
+    h('div', { class: 'field' }, h('label', { for: 'mass-tok' }, 'Token'), tok),
+    h('div', { class: 'field' }, h('label', { for: 'mass-url' }, 'Address'), url,
+      h('p', { class: 'help' }, mst.found ? `Empty: ${mst.found}, the Music Assistant that plays here, kept` : 'None has played here yet: give its address'),
+      h('p', { class: 'help' }, 'The token goes only there. An IP address is surer than a name: a name (a .local one above all) goes to whoever answers to it on the network.')));
+  m.foot.append(h('button', { onclick: () => m.dlg.close() }, 'Cancel'), go);
+  m.show(); tok.focus();
 }
 
 // ---------------------------------------------------------------- Wi-Fi (wifi.c; root's scripts/device/wifi.sh scans and switches)
@@ -2125,7 +3013,7 @@ function wifiRow() {
     now.replaceChildren(...(w ? [w.ssid, h('span', { class: 'row-val-sub' }, ip)]
       : [h('span', { class: 'row-val-sub' }, `Network not known yet: it shows once the Echo has looked for networks · ${ip}`)]));
   } };
-  return infoRow('Wi-Fi', 'A switch tries the new network first and keeps it only once the Echo is on it; if the Echo does not get on it within about a minute, it goes back to this one by itself.',
+  return infoRow('Wi-Fi', 'A new network is tried before it is kept', 'A switch tries the new network first and keeps it only once the Echo is on it; if the Echo does not get on it within about a minute, it goes back to this one by itself.',
     h('button', { onclick: wifiDialog }, icon('wifi'), 'Switch network…'), null, now);
 }
 
@@ -2151,7 +3039,7 @@ function wifiDialog() {
   const manualGo = h('button', { type: 'button', class: 'primary' }, 'Next');
   const newAddress = (n) => callout('info', h('p', {}, h('b', {}, 'The Echo will most likely get a new IP address'), ` on ${n || 'the other network'}, and this page cannot follow it there. `,
     'Find the new address in Home Assistant afterwards: on the Echo\'s device page, under ', h('b', {}, 'Web UI address'), '. ',
-    'At the new address this browser needs the action button once more.'));
+    act('At the new address this browser needs the action button once more.')));
   let repaint = () => {};
   pass.oninput = () => repaint();
   manual.oninput = () => { manualGo.disabled = !manual.value || enc.encode(manual.value).length > 32; };
@@ -2252,7 +3140,7 @@ function wifiDialog() {
       const moved = r.ip && r.ip !== location.hostname, url = `http://${r.ip}:${echoPort()}/`;
       title.textContent = `On ${r.ssid || net.ssid}`;
       body.replaceChildren(callout('ok', h('p', {}, `The Echo is on ${r.ssid || net.ssid} now, at ${r.ip || 'a new address'}.`),
-        moved ? h('p', {}, h('a', { href: url }, 'Open its settings page there'), ' (the action button approves this browser there once more).') : null,
+        moved ? h('p', {}, h('a', { href: url }, 'Open its settings page there'), act(' (the action button approves this browser there once more).')) : null,
         r.saved ? null : h('p', {}, 'It could not save the network, though: after a restart it goes back to the one before.')),
         h('p', { class: 'help' }, 'Home Assistant finds it again on its own when it can reach that network; otherwise enter the new address in the ESPHome integration.'));
       foot.replaceChildren(done);
@@ -2321,7 +3209,6 @@ function wifiDialog() {
 }
 
 function buildSystem(el, list) {
-  el.append(h('div', { class: 'card' }, nameRow(), !isCube() && state.wifi !== undefined ? wifiRow() : null, list.map(settingRow)));
   const file = h('input', { type: 'file', accept: '.conf,.txt,text/plain', class: 'hidden' });
   importMsg = h('pre', { class: 'help import-msg' });
   file.onchange = async () => {
@@ -2334,24 +3221,30 @@ function buildSystem(el, list) {
     file.value = '';
   };
   adbBox = h('div', { class: 'btns' });
-  el.append(h('div', { class: 'card' },
-    infoRow('Settings file', ['All settings except what belongs to this one Echo (its name, keys, pairings), as a text file. Import it on another Echo, keep it as a backup, or give it to ', h('code', {}, 'scripts/setup.sh --preset'), ' so the next Echo you install starts with these settings.'],
-      [h('button', { onclick: exportFile }, icon('down'), 'Export'), h('button', { onclick: () => file.click() }, icon('up'), 'Import…'), file], h('div', { class: 'row-x' }, importMsg)),
-    logRow(),
-    isCube() ? infoRow('Debug access', 'Use ADB debugging in Fire TV Developer options. Cube Assist does not change ADB access or your Fire TV network settings.', null) :
-      infoRow('Debug access', act('Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.'), adbBox),
-    infoRow('Restart', isCube() ? 'Restart Cube Assist. Fire TV and your apps keep running.' : HELP.restart.help, h('button', { onclick: restartEcho }, 'Restart…')),
-    infoRow(isCube() ? 'Reset Cube Assist' : 'Factory reset', isCube() ? 'Archive Cube Assist settings and start its setup again. Home Assistant keys, approved browsers and music pairings are cleared. Fire TV settings, apps and Wi-Fi stay as they are.' : ('Forgets everything this Echo was told: settings, name, Home Assistant\'s key, approved browsers, Bluetooth pairings, and its Wi-Fi networks. It then waits to be set up again, like after the install: the Home Assistant app finds it over Bluetooth. The same as holding the action button for 10 seconds.'.replace(echo.hello.action === 'volume_keys' ? / The same as holding.*$/ : /^$/, '')),
-      h('button', { class: 'danger', onclick: factoryReset }, isCube() ? 'Reset Assist…' : 'Factory reset…'))));
-
   clientsBox = h('div');
-  el.append(h('div', { class: 'card' },
-    infoRow('Approved browsers', 'Browsers that may change settings on this Echo. Revoke one you no longer use.', null),
-    h('div', { class: 'clients' }, clientsBox)));
+  const named = (id, row) => { row.id = id; return row; };
+  el.append(flow([
+    titled(isCube() ? 'This Cube' : 'This Echo', nameRow(), !isCube() && state.wifi !== undefined ? named('wifi', wifiRow()) : null,
+      list.filter((s) => !s.name.startsWith('kiosk_') || state.kiosk_app).map(settingRow)),
+    titled('When something is wrong', named('log', logRow()),
+      named('debug', isCube() ? infoRow('Debug access', 'Use Fire TV Developer options', 'Manage ADB in Fire TV Settings.', null) : infoRow('Debug access', 'A root shell over Wi-Fi for 30 minutes', act('Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.'), adbBox)),
+      named('restart', infoRow('Restart', isCube() ? 'Restart Cube Assist' : 'Back in about a minute, nothing is forgotten', isCube() ? 'Fire TV and its apps keep running.' : HELP.restart.help, h('button', { onclick: restartEcho }, 'Restart…'))),
+      named('factory-reset', isCube() ? infoRow('Reset Cube Assist', 'Clear Assist settings and pairings', 'Archives Assist settings. Fire TV apps, settings and Wi-Fi are unchanged.', h('button', { class: 'danger', onclick: factoryReset }, 'Reset Assist')) : infoRow('Factory reset', 'Forgets everything this Echo was told', ('Forgets everything this Echo was told: settings, name, Home Assistant\'s key, approved browsers, Bluetooth pairings, and its Wi-Fi networks. It then waits to be set up again, like after the install: the Home Assistant app finds it over Bluetooth. The same as holding the action button for 10 seconds.'.replace(echo.hello.action === 'volume_keys' ? / The same as holding.*$/ : /^$/, '')),
+        h('button', { class: 'danger', onclick: factoryReset }, 'Factory reset…')))),
+    titled('Backup', named('settings-file', infoRow('Settings file', 'All settings as a text file', ['All settings except what belongs to this one Echo (its name, keys, pairings), as a text file. Import it on another Echo, keep it as a backup, or give it to ', h('code', {}, 'scripts/setup.sh --preset'), ' so the next Echo you install starts with these settings.'],
+      [h('button', { onclick: exportFile }, icon('down'), 'Export'), h('button', { onclick: () => file.click() }, icon('up'), 'Import…'), file], h('div', { class: 'row-x' }, importMsg)))),
+    h('div', { class: 'card', id: 'browsers' },
+      infoRow('Approved browsers', 'Browsers that may change settings on this Echo', null, null),
+      h('div', { class: 'clients' }, clientsBox))]));
 }
 
 // Restart (main.c core_reboot): root reboots the Echo, as a power cycle does; this page is back once it is up again
 async function restartEcho() {
+  if (isCube()) {
+    if (!await ask({ title: "Restart Cube Assist?", ok: "Restart", danger: false, body: "Restart Assist; Fire TV and your apps keep running." })) return;
+    try { await echo.call("POST", "/api/reboot", "reboot"); toast("Cube Assist is restarting."); } catch (e) { toast(errText(e)); }
+    return;
+  }
   if (!await ask({ title: 'Restart?', ok: 'Restart', body: [
     `${echo.hello.name} restarts and is gone for about a minute. Nothing is forgotten.`] })) return;
   try { await echo.call('POST', '/api/reboot', 'reboot'); toast(`${echo.hello.name} is restarting: back in about a minute`); }
@@ -2361,9 +3254,8 @@ async function restartEcho() {
 // Factory reset (main.c core_reset): root wipes state/ and the Wi-Fi networks, the Echo leaves the network
 async function factoryReset() {
   if (isCube()) {
-    if (!await ask({ title: 'Reset Cube Assist?', ok: 'Reset Assist', danger: true, body: 'Archive Cube Assist settings and clear its Home Assistant key, approved browsers and music pairings. Fire TV, its apps and Wi-Fi are unchanged. Add the Cube in Home Assistant again afterwards.' })) return;
-    try { await echo.call('POST', '/api/reset', 'reset'); toast('Cube Assist is restarting with new settings. Add it in Home Assistant again.'); }
-    catch (e) { toast(errText(e)); }
+    if (!await ask({ title: "Reset Assist Cube Assist?", ok: "Reset Assist", danger: true, body: "Archive Assist settings and clear its HA key, browsers and music pairings. Fire TV apps, settings and Wi-Fi are unchanged. Add Assist in HA again afterwards." })) return;
+    try { await echo.call("POST", "/api/reset", "reset"); toast("Cube Assist is restarting."); } catch (e) { toast(errText(e)); }
     return;
   }
   if (!await ask({ title: 'Factory reset?', ok: 'Reset', danger: true, body: [
@@ -2387,8 +3279,8 @@ function renderSystem() {
   for (const k of state.clients) {
     const b = h('button', { class: 'small' + (k.me ? '' : ' danger') }, k.me ? 'Log out' : 'Revoke');
     b.onclick = async () => {
-      if (!(await ask(k.me ? { title: 'Log out?', ok: 'Log out', danger: true, body: 'This browser leaves this Echo. Logging in again needs the action button.' }
-        : { title: `Revoke ${k.label}?`, ok: 'Revoke', danger: true, body: 'That browser can no longer change settings here. Logging in again needs the action button.' }))) return;
+      if (!(await ask(k.me ? { title: 'Log out?', ok: 'Log out', danger: true, body: act('This browser leaves this Echo. Logging in again needs the action button.') }
+        : { title: `Revoke ${k.label}?`, ok: 'Revoke', danger: true, body: act('That browser can no longer change settings here. Logging in again needs the action button.') }))) return;
       try { await echo.call('POST', '/api/revoke', k.pub); } catch (e) { toast(errText(e)); return; }
       if (k.me) showLogin(); else load();
     };
@@ -2416,7 +3308,7 @@ function logLine(l) {
 // Loaded on demand only: up to 2 MB, and the Echo reads it from flash.  Part 1 is the rotated older part (main.sh keeps one).
 // Shown in a dialog of its own, as big as the window allows: log lines are long.
 function logRow() {
-  return infoRow('Log', 'What hassmic, the firewall and updates wrote, newest at the bottom: the first place to look when something does not work, and what to attach to a bug report. It travels unencrypted, like everything on this page, so someone watching your network can read it: names, addresses and when the Echo was spoken to.',
+  return infoRow('Log', 'What the Echo did: the first place to look', 'What hassmic, the firewall and updates wrote, newest at the bottom: the first place to look when something does not work, and what to attach to a bug report. It travels unencrypted, like everything on this page, so someone watching your network can read it: names, addresses and when the Echo was spoken to.',
     h('button', { onclick: logDialog }, icon('file'), 'Show log…'));
 }
 
@@ -2495,4 +3387,5 @@ async function exportFile() {
   } catch (e) { toast(errText(e)); }
 }
 
-start();
+// Not before ring.js and matrix.js are in: build() calls them, and on a quick network the first answers came first
+document.addEventListener('DOMContentLoaded', start);

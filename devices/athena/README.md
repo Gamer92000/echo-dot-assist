@@ -15,9 +15,18 @@ as the Dots'). No action button, no LED ring: hassmic draws the light ring as a 
 Pinned: `update-kindle-athena-PS75741_user_7080_0036274153604.bin`, Fire OS 7574.1 (PS75741.7080N, build 7080), from
 [FTVDB](https://ftvdb.com/echo/firmware/com.amazon.athena.android.os/84ffb126664e1a3569404ba61d580e05-36274153604-fire-os-7574-1-ps75741-7080-2026-09-29/),
 sha256 `7a76fe6f…c422a1a` (full value in `device.conf`). `libpryon`, `libasp`, the audio HAL, `libaspclient`,
-`libaudioflinger` and the wake word service are byte-identical in build 7077 (checked), but the build is pinned to the
-one the first Echo ran: `scripts/install-system.sh` stops on any other `ro.build.display.id` than PS75741.7080N. Put the
-`.bin` into `firmware/athena/` (not in git).
+`libaudioflinger` and the wake word service are byte-identical in builds 7077 and 7082 (PS75741.7082N, build
+0036274154116; checked on an Echo running it). Put the `.bin` into `firmware/athena/` (not in git).
+
+Other builds: `scripts/probe.sh` compares those six files (`PROBE_FILES`, `probe.md5`) with 7080's. All the same (7077,
+7082N): installed as 7080, with no question. Any different: the setup and `scripts/install-system.sh` print a large
+warning naming them and ask before they go on (`HASSMIC_FIRMWARE_OK=1` answers yes for `install-system.sh` without a
+terminal), since no step here puts 7080 back. Amazon moved athena to a new Fire OS line with
+`update-kindle-athena-PS75751_user_7806_0036811210372.bin` (PS75751.7806N, build 7806, Android 9 still): two of the
+six differ (`libpryon.so`, `libaudioflinger.so`; different build IDs, but the same exported symbols — the embedded
+`codebuild` source paths say these were rebuilt, not that the API moved), so it asks. Installed and self-tested on an
+Echo on 7806 (2026-11-01): boot, wake word, voice assistant start, and Kiosk Satellite (install, Wi-Fi install, the
+`kiosk_mic` restart-on-revoke behavior, and a full uninstall) all worked.
 
 ## Unlock and root (public: saiyaku-athena)
 
@@ -62,8 +71,11 @@ spoken replies), volume keys and the mute latch, Bluetooth (proxy, phone audio) 
 stopped, the light band (SurfaceControl.Builder), Amazon's UI gone with the apps, hassmic's home screen, Music Assistant
 over Sendspin, Wi-Fi (the setup's join and the settings page's "Switch network"), "Illuminance", "Speaker gain",
 "Download from Amazon" (the attestation through `fireosdhaservice`, version 2 as crown), Wi-Fi motion, push updates.
-**Open**: the lux under a bright lamp held close; not confirmed on this Echo: Improv, the factory reset, `--uninstall`
-and the update check. Details and measurements: [docs/re-athena.md](../../docs/re-athena.md).
+hassmic's own screen (the face, the drawer, the home app, Music Assistant: [the guide](../../docs/GUIDE.md#the-screen-echo-show))
+is built for it, with Android 9's `SurfaceControl.Builder` and `getTasks`, and checked against this firmware's
+framework.
+**Open**: the lux under a bright lamp held close; not confirmed on this Echo: Improv, the factory reset, `--uninstall`,
+the update check and the screen UI. Details and measurements: [docs/re-athena.md](../../docs/re-athena.md).
 
 **Mute button.** Amazon's `gpio-privacy` driver changes its state 1.2-1.3 s after a press that mutes (0.3 s unmuting;
 `enable-gpio-toggle-duration` 1000 ms in the device tree), while the red light under the button follows the press.
@@ -120,3 +132,35 @@ debugfs -R "rdump /system firmware/athena/rootfs" firmware/athena/images/system.
 rm firmware/athena/rootfs/system/vendor; mkdir firmware/athena/rootfs/system/vendor     # a link to /vendor
 debugfs -R "rdump / firmware/athena/rootfs/system/vendor" firmware/athena/images/vendor.img
 ```
+
+## Kiosk Satellite (optional)
+
+Shows a Home Assistant dashboard on the screen; hassmic stays the voice satellite. The guided setup offers it. On an Echo
+that is already installed:
+
+```sh
+scripts/kiosk-install.sh             # over USB
+scripts/kiosk-install.sh <echo-ip>   # over Wi-Fi
+scripts/kiosk-install.sh --uninstall [<echo-ip>]   # takes it off again
+```
+
+That fetches the newest release and Simple Keyboard, and the Echo opens the app by itself. Do its setup from your PC at
+`http://<echo-ip>:2324`, where you can paste the Home Assistant token: scanning a QR code on the Echo needs "Kiosk Satellite
+camera" on the settings page (System). Set its remote admin password: that page is open to your network. Leave the app's voice assistant off, and do not make it the home app.
+
+By hand: `kiosk-satellite-<version>.armeabi-v7a.apk` from its [releases](https://github.com/jxlarrea/kiosk-satellite/releases),
+`adb install`. What the app is allowed, and what it costs: [docs/GUIDE.md](../../docs/GUIDE.md#kiosk-satellite-on-the-screen).
+
+**Tested on a real Echo (2026-11-01, PS75751.7806N):** `kiosk-install.sh` over both USB and Wi-Fi; `kiosk_tick`
+opening the app, granting permissions and starting the update helper on first boot; camera and microphone off by
+default. `kiosk_camera` and `kiosk_mic` only restart the app's process when turned *off* (Android kills an app whose
+already-granted dangerous permission is revoked; granting one does not need a restart — `main.sh` already says so at
+the `kiosk_perm` definition). `kiosk_internet` restarts nothing either way: it is a firewall rule, not a permission.
+Kiosk Satellite wins the screen-timeout race against hassmic's `screen_off_timeout`: it holds its own
+`SCREEN_BRIGHT_WAKE_LOCK` (`FLAG_KEEP_SCREEN_ON`) while its activity is foregrounded, so hassmic's 300 s setting never
+gets a chance to fire.
+
+Uninstalling it is not a plain `adb uninstall`: Kiosk Satellite is an Android device admin, which Android refuses to
+uninstall. `scripts/kiosk-install.sh --uninstall` takes the admin off first;
+[docs/kiosk-satellite.md](../../docs/kiosk-satellite.md#uninstalling) has how, and the way by hand used on this Echo
+before the script existed. Once the app was gone, ports 2324 and 6053 closed within about 3 seconds.

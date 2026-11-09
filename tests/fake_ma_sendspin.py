@@ -81,10 +81,10 @@ async def until(cond, secs=5.0):
         await asyncio.sleep(0.05)
 
 
-def player(state, port, http, env, web=0):
-    """a hassmic-host with Sendspin on port, its log in state/log; no push updates or arbitration, and no settings page
-    unless web: several run at once"""
-    log = open(os.path.join(state, "log"), "w+")
+def player(state, port, http, env, web=0, logname="log"):
+    """a hassmic-host with Sendspin on port, its log in state/log (or logname); no push updates or arbitration, and no
+    settings page unless web: several run at once"""
+    log = open(os.path.join(state, logname), "w+")
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-p", str(http), "-z", str(port), "-L", "-o", "0", "-a", "0", "-W", str(web)],
                             env=env, stderr=log)
     wait_port(port, http, *([web] if web else []))
@@ -92,8 +92,16 @@ def player(state, port, http, env, web=0):
     return proc, text
 
 
+TONE_S = 8
+
+
 async def paired(env, state):
     music = env["HASSMIC_MUSIC"]
+    # the output's clock 500 ppm slow (the Echo Show 5's is ~350): followed by the rate, no frame skipped or repeated,
+    # which the continuity check below sees (6 frames nudged at once measured 0.23 rad)
+    # and AudioTrack's buffer as on the Echo Shows: 137 ms of the queue gone at once as it starts, then hidden (the first
+    # chunk timed before that made the second resync 137 ms early; the output primed with silence first)
+    env = dict(env, HASSMIC_FAKE_MUSIC_PPM="-500", HASSMIC_FAKE_MUSIC_BURST_MS="137")
     open(os.path.join(state, "sendspin.unpaired"), "w").write("1")     # unpaired access switched on for this part
     mreq = os.path.join(state, "mdns")                  # root's cue to restart avahi (main.sh netwatch)
     proc, log = player(state, PORT, 16959, env)
@@ -130,10 +138,11 @@ async def paired(env, state):
         client.group.group_role("controller").set_supported_commands([MediaCommand.PLAY, MediaCommand.PAUSE, MediaCommand.NEXT])
         stream = client.group.start_stream()
         n, phase = 4800, 0
-        # 4 s of 440 Hz, then 0.3 s of silence: the server's FLAC encoder holds back what does not fill a block of 4608
+        # 8 s of 440 Hz (the rate's integral is held for 5 s after the start's snap: time for it to learn after that), then
+        # 0.3 s of silence: the server's FLAC encoder holds back what does not fill a block of 4608
         # samples until the stream ends, which was the tone's last 64 ms (played 3.936 s of 4, never "out")
-        for i in range(43):
-            k = np.arange(phase, phase + n); s = (8000 * np.sin(2 * np.pi * 440 * k / 48000) * (i < 40)).astype("<i2")
+        for i in range(TONE_S * 10 + 3):
+            k = np.arange(phase, phase + n); s = (8000 * np.sin(2 * np.pi * 440 * k / 48000) * (i < TONE_S * 10)).astype("<i2")
             phase += n
             stream.prepare_audio(np.repeat(s, 2).tobytes(), fmt)
             await stream.commit_audio()
@@ -152,6 +161,13 @@ async def paired(env, state):
         await client.group.stop()
         await until(lambda: "sendspin: stream end" in log())
         check(not os.path.exists(mreq), "a server connected all along: no mDNS announcements")
+        # what the rate learnt of the slow clock, kept when the output closes: the Echo's ppm, a Bluetooth speaker's
+        dfile = os.path.join(state, "sendspin.drift")
+        await until(lambda: "sendspin: output closed" in log() and os.path.exists(dfile))
+        drift = open(dfile).read().split() if os.path.exists(dfile) else []
+        # (the integral is slow by design, and held for the first 5 s: slow is what counts here)
+        check(len(drift) == 2 and -2000 <= float(drift[0]) < 0 and float(drift[1]) == 0,
+              f"the drift learnt kept as the output closes: {drift} (ppm: the Echo's speaker, a Bluetooth one)")
         set_delay(player_, 120)                         # after the tone: the new delay resyncs, a jump in it
         saved = lambda: open(os.path.join(state, "sendspin.delay")).read().strip() if os.path.exists(os.path.join(state, "sendspin.delay")) else ""
         await until(lambda: delay_of(player_) == 120 and saved() == "120")
@@ -161,12 +177,15 @@ async def paired(env, state):
         nz = np.flatnonzero(np.abs(pcm) > 100)
         tone = pcm[nz[0]:nz[-1] + 1] if len(nz) else pcm[:0]
         dur = len(tone) / 48000
-        check(3.9 <= dur <= 4.05, f"played {dur:.3f} s of tone (sent 4.000 s) as {env['HASSMIC_SENDSPIN_CODECS']}")
+        check(TONE_S - 0.1 <= dur <= TONE_S + 0.05, f"played {dur:.3f} s of tone (sent {TONE_S:.3f} s) as {env['HASSMIC_SENDSPIN_CODECS']}")
         # continuity: a dropped or repeated frame shows as a phase jump of the 440 Hz sine
         if len(tone) > 48000:
             ph = np.unwrap(np.angle(np.fft.ifft(np.fft.fft(tone) * (np.fft.fftfreq(len(tone)) > 0) * 2)))     # analytic signal
             jumps = np.abs(np.diff(ph) - 2 * np.pi * 440 / 48000)
-            check(jumps[2000:-2000].max() < 0.3, f"tone is continuous (max phase step error {jumps[2000:-2000].max():.3f} rad)")
+            # 0.000 as FLAC, Opus and PCM; 6 frames nudged at once showed as 0.23 (the analytic signal spreads a step)
+            check(jumps[2000:-2000].max() < 0.03, f"tone is continuous (max phase step error {jumps[2000:-2000].max():.3f} rad)")
+        resyncs = [l for l in log().splitlines() if "resynced" in l]
+        check(not resyncs, f"an output clock 500 ppm slow is followed without a resync: {resyncs[:2]}")
         lead = nz[0] / 48000 if len(nz) else -1
         check(0 <= lead < 2.0, f"silence padded before the scheduled start: {lead:.3f} s")
 
@@ -204,6 +223,15 @@ async def paired(env, state):
         check(os.path.getsize(records) == 0, "server/unpair deletes the record on the player")
     finally:
         proc.terminate(); await server.close()
+    # started again on that state, the player begins from what it learnt
+    proc.wait()
+    proc, log = player(state, PORT, 16959, env, logname="log.restart")       # state/log: the first one's, for a failure
+    try:
+        want = f"output clock as learnt before: {float(drift[0]):+.1f} ppm (Echo)" if len(drift) == 2 else "?"
+        await until(lambda: want in log())
+        check(want in log(), f"a restart starts from the drift kept: {want!r}")
+    finally:
+        proc.terminate()
 
 
 async def server_restart(env, state):

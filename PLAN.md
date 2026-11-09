@@ -112,6 +112,7 @@ dozen daemons phone home within seconds.
       (router-side only)
 - [x] **(device)** Persistent: rules in `/system/bin/debug_firewall.sh` (stock `firewall.sh` runs it after its own flush) plus init service for `lockdown.sh watch` — solved differently: init service `hassmic_fw` runs `lockdown.sh watch` from `on boot`
 - [ ] Clock: no NTP once locked down. Nothing in hassmic needs wall-clock time (timers are Home Assistant's, hassmic only rings;
+      "Next timer" takes HA's time, not the Echo's clock;
       the log carries no timestamps). Only if timestamps in `boot.log` are ever wanted: point `sntp` at the router
 
 ## Phase 3 — First contact **(device)**
@@ -176,6 +177,40 @@ Run in this order. Each step says what it proves.
       reply), so neither the mixer nor the AEC is in the way. It was ignored because `barge_in` doubled as "already being cut" and as
       "continue conversation", which HA sets for every reply ending in a question. Fixed (cut is now keyed on `flush_playback`), test
       added that fails on the old core. Installed; user: "perfect now" (log: wake → barge-in → listening during a reply)
+- [x] Barge-in with the wake word at Home Assistant (`-w remote`, PR #134, 2026-11-06): nothing listened during a reply, only the
+      button cut it. Once the reply's run has ended (`RUN_END`; earlier would cancel it: HA's ESPHome satellite cancels the running
+      pipeline on a new start), `wake_listen` opens a run for the wake word stage beside the reply; its `WAKE_WORD_END` cuts the reply
+      and the same run goes on as the request (HA keeps the audio after the word), listening at once: STT_START, VAD end and RUN_END
+      can all come before the cut's Q_STOP, which `wake_cut` then swallows. `reply_cut` shuts the fetch's socket (a streamed reply's
+      next chunk can be 15 s away). A wake-only run that ends is asked for again; one that fails too (its late events dropped as
+      cancelled), 3 failures per reply at most. HA checks duplicate wake-ups before WAKE_WORD_END (`accept_wake_word`), so an Echo
+      that loses that check never cuts its reply. "Last heard"/"Last reply" now clear at WAKE_END with remote wake (the idle run's
+      RUN_START blanked them right after every reply), and a bare "stop" within 10 s of a cut cancels the run (`core_transcript`,
+      no "stop" keyword at HA). Verified by the author on a Dot 2 with HA 2026.11; `tests/fake_ha_remote_bargein.py`
+- [x] Follow-ups with the wake word at Home Assistant (`-w remote`, PR #128, 2026-11-08): the run after a reply with
+      `continue_conversation` (or `start_conversation`, or the button cutting a reply: all through `barge_in`) asked for the wake
+      word stage again (flags 3), so HA waited for a wake word and dropped the answer. `core_pipeline_finish` marks it
+      `follow_up` while `pipeline_start` runs: flags 1, the lead-in, listening mode and LISTENING, as with a local wake word.
+      Such a run has no WAKE_WORD_END, so "Last heard"/"Last reply" clear at its RUN_START (`stt_run` in proto_esphome.c). The
+      30 s pipeline timeout now covers remote runs too (one waiting for the wake word stays IDLE, so it is never timed out).
+      Verified by the author on a Dot 2; `tests/fake_ha_remote_followup.py` (fails on the old core: flags [3, 3, 3]).
+      Seen meanwhile, not fixed: with `-w remote` an ERROR outside a reply (e.g. nothing said) ends the run and asks for the
+      next, then its RUN_END finds that new run and asks again: two starts, HA cancels the first
+- [x] Bluetooth proxy as a feature (issue #152, 2026-11-09): setting `bluetooth_proxy` (Features, on by default, exported).
+      Disabling HA's entities left the scanner: HA subscribes to raw advertisements whenever the device info carries
+      proxy flags. Off: `proto_esphome.c` `bt_proxy()` leaves fields 11, 15 and 18 out of the device info, refuses
+      subscribe, scanner mode, connection slots and GATT requests; switching closes the links (feature), and the last
+      client leaving ends the scan and the connections, now through `ble_disconnect_all` (queued behind the requests:
+      a connect HA asked for that ble.c's thread had not taken yet came up afterwards and stayed, a slot taken for
+      good). ble.c keeps the controller for A2DP, the speaker and Improv. `tests/fake_ha_bt_proxy.py` (fake_improv.py's controller; `HASSMIC_BT_MAC` stands in for idme's
+      `bt_mac_addr` in ble.c). **Open:** not tried on an Echo with a real Home Assistant (whether HA drops the scanner at once).
+- [~] Ducking depth and multi press (2026-11-08): `DUCK` (a sixth, -15.6 dB) was fixed; the setting `music_duck` (0..60 dB, default 16,
+      about the old 15.6) is the target of `music_duck()`'s glide in sendspin.c and a2dp.c, read through `settings_duck_gain()` (any thread).
+      Reason: over a loud audiobook 15.6 dB left too little voice for STT. Setting `multi_press` (off): the action button pressed
+      twice = next, three times = previous (`sendspin_skip` for the Sendspin controller commands, only while the group plays;
+      `a2dp_skip`: AVRCP pass-through 0x4B/0x4C), else a single press; a press waits `MULTI_MS` 450 ms in `buttons.c`; the HA "Button"
+      event hears what acts as a single press, never a skip. `tests/unit/buttons_test.c`. **Open:** ducking depth that is enough not measured; skip not
+      tried against a phone over Bluetooth; a Dot 2 ran the build (settings listed) but presses were not tried yet.
 - [ ] Wake-word accuracy at distance and with music playing: ten tries from across the room, count `wake:` lines in `boot.log`,
       once in silence, once with Music Assistant playing (threshold hints are in place, see "Stop" below)
 - [~] Wake word "Echo": firmware ships only `ALEXA` (+`STOP`) in `words.shrunk.txt`. Stock gets other keywords from DAVS (cloud) into
@@ -265,6 +300,35 @@ Run in this order. Each step says what it proves.
             alexa/echo/computer/amazon it-IT arrived whole (the two-level folder sets on real data) and root
             installed them, ziggy it-IT answered 404 (none for that language), the registration survived the
             restart of the install.
+      - [x] Settings page as pages (2026-10-30): one column 780 px wide and 9900 px long at 1440 x 900 became a menu
+            and eleven pages (`PAGES`, `LAYOUT` in `web/app.js`), all built at once and hidden (the polls keep them
+            current; a copy or a sign-in goes on behind another page), routed by `#/<page>[/<setting or id>]` (`route`,
+            `reveal`); `#vouch=` stays. `flow` places cards in as many columns as fit, each under the shortest, fewer columns
+            if that leaves more than 5 % less empty, never moving a card that grows. A card is one list of rows, every row
+            name, one line (`SUB`), control: a switch beside the words, a slider or choice under them or, from a card of
+            720 px, in a column of 340 px; the long words behind an ⓘ (`moreOf`). Tried and dropped: rows side by side
+            inside wide cards, which raised the share of the page under cards and made it unreadable (the eye zig-zags
+            and every control is somewhere else; seen on the Dot 2 at 1800 px). That share is no measure of a page; the
+            audit in Chromium (each page at 360 to 2560 px, with a Dot 2's settings laid over the PC build's, all
+            open too) now checks what does matter: nothing past its box, one column of rows per card, every switch of
+            a card on one edge. Tried with 15 Echos (15 `build/hassmic-host`, three setups, a few of their own):
+            all columns in 0.9 s, a table drawn in under 10 ms, 89 requests a round; at 168 px a column 2760 px of table
+            in a 1470 px box, so past six columns they narrow (126 px, no addresses: 2070 px) and grouping starts on
+            (5 columns, no sideways scroll). The Echos are asked only while a page shows them (`othersShown`):
+            six requests each every 30 s, a design library of up to 4 MB among them, and this Echo's own every 15 s. `NPEER` holds 16 others.
+            Models: Download and Models on file down the side, the Copy table beside them (a
+            list of 15 models in the card left a hole above Copy; it is in a dialog now, for a moment's choosing). Search
+            over the settings' labels and words (`searchHits`, `FINDABLE`). `start` waits for DOMContentLoaded: ring.js
+            and matrix.js could arrive after the first answers.
+            Compare & copy: `web/matrix.js` (`hmmatrix`, no DOM, `tests/unit/web_matrix_test.py` under node) keeps a plan,
+            row -> { from: an Echo, skip }, never by column, since columns merge and split with the values
+            (`groups`: an Echo joins a group only if it agrees with all of it, an absent row being no difference, so
+            a group never has two values in one cell). `changes()` is all Apply reads, a plan outliving refreshes
+            simply stops being a change. Copy any way round needed each Echo's `/api/state` too (`d.state`: the words
+            of settings this model has not got), and `ringCopy` from any Echo's snapshot. Driven by hand in headless
+            Chromium against four `build/hassmic-host` (no browser in CI): pick, turn around, skip, lock, a whole column,
+            grouped, both ways on real daemons, a design between two others, login from the table, scroll and filter
+            kept over refreshes, 390 px with no sideways scroll on any page, light and dark.
       - [x] Models on file (2026-10-26, forum #172: Echos that downloaded once and later could not sign in any
             more): the page's card "Models on file" (Wake word section, also on an Echo alone) saves the ticked models
             into one tar and puts them back from one, all through the artifacts API as Copy models does (`sendArt`,
@@ -318,11 +382,165 @@ Run in this order. Each step says what it proves.
       live block, fake_ha_arbitration the window's (12096 bytes). On the Dot 2 (biscuit) the same day: user "way better".
 - [ ] The word's tail left out of that replay (forum, 2026-10-19). With the ring, a child's drawn-out "Alexa" plus
       a pause came out of STT as "Ja." and HA's VAD ended the run in the pause; the build before ad224f5 (stream from
-      120-180 ms after the end) did not do it for that user. `word_tail_end`: 10 ms frames from Pryon's end, skipped up
-      to the first 12 dB under `keyword_db`, or the deepest dip before a 3 dB rise, at most 200 ms and never past the
-      live block (so never more cut than before the ring). Logged as "wake: <n> ms of the word's tail left out". Not
-      measured on real speech yet: no recording here has a wake word in it; needs a capture dump (`kill -TTIN`, its
-      start sample in the log) with the `wake: ... samples` lines of the same run.
+      120-180 ms after the end) did not do it for that user. First try (a4fe0bd) `word_tail_end`: 10 ms frames from
+      Pryon's end, skipped up to the first 12 dB under `keyword_db`, or the deepest dip before a 3 dB rise, at most
+      200 ms and never past the live block.
+      Issue #72 (2026-10-27, Dot 2 in a kitchen, Scribe v2; HA debug recordings = what STT got, 50 ms frames): the tail
+      still came through ("The …", "Anna, …", "Faint …"; "next track" no longer matched). 07:28, keyword -40.3 dBFS:
+      the recording opens with -40 -34 -36 -38 then decays to -54 over 150 ms (gain of +14.3 dB taken out), the command
+      at 0.9 s: the last vowel sounds 200 ms past Pryon's end, louder than the keyword's rms, and the 3 dB rise came at
+      once (nothing left out). 07:39: 60 ms left out (12 dB under at a single quiet frame), then 150 ms as loud as the
+      word: the "ks" of "Ale-ks-a", Pryon sure before the last syllable. Room before the word as loud as it at 07:28
+      (-43.1 dBFS, 3 dB under), but -55..-68 after it: the "noise" there was not the room.
+      Also measured (stock Pryon under qemu, `pryon_test`): the result's `endSampleIndex` = metadata
+      `kwSampleDetectionIndex`; `kwSampleEndIndex` is 70 ms earlier; on `testdata/alexa_espeak.raw` the "a" ends 35 ms
+      after the detection and is the word's loudest part (-16 against -22 dBFS rms). No capture in `device-logs/` has a
+      spoken "Alexa" (Pryon over all of them: one accept, on played audio).
+      Now (2026-10-28, `wordtail.c`): the word ends at a pause, frames (30 ms means) 9 dB under the word's loudest so far
+      (keyword rms or the tail's peak) for 100 ms; the replay starts where that pause is 12 dB under, else at its lowest.
+      A consonant inside the word is shorter. No pause within 500 ms says nothing about the word's end: a dip may be
+      inside the command ("turn | on" when the word ended before Pryon was sure), and a command word cut is worse than a
+      syllable of the word left in. So then the least: the first dip's lowest point if it starts within 150 ms, never
+      later than a4fe0bd's rule would have cut (what the releases since 2026-10-19 did; with its live-block bound,
+      120 ms without arbitration, as `first_version` caps it), else nothing (the ring's
+      behaviour from ad224f5 on). A first draft of this (same day) took the first dip wherever it was and a fixed
+      150 ms without one: the latter is the pre-ring loss of a straight-on command's first sound, in a loud room, and
+      the former could cut a command word; both reverted before release. The live stream waits for the decision (up
+      to 500 ms, then caught up from the ring at once). `tests/unit/wordtail_test.c`: both recordings (cut at 250 and
+      310 ms, before the command), espeak's word (50 ms; the same under qemu with stock Pryon, `fake_ha.py --qemu`),
+      a pause then the command (nothing of it cut), straight on with an early dip, straight on with the word already
+      over (its first dip at 160 ms: nothing), never more than a4fe0bd, a room as loud as the word (nothing), a child's
+      450 ms vowel (nothing: the tail stays, as before), a flickering room; fed a frame at a time each as the capture
+      thread does. Only where a pause shows can it leave out more than before; the one way that hurts is a 100 ms gap
+      inside the command within 500 ms while the word ran straight into it. Logged as
+      "wake: <n> ms of the word's tail left out (<why>)", 0 ms too. Open: the reporter's verdict; a capture dump
+      (`kill -TTIN`) with the `wake: ... samples` lines of the same runs would show the frames before the cut.
+- [~] The wake word's end by alignment (2026-10-29, issues #72, #79; PC, `wakealign.c`). #79 (Dot 2, 004a2f6,
+      Parakeet TDT v2; the Echo's capture beside what HA got, 18 requests): `wordtail_cut` reproduces every logged cut;
+      "Alexa lights on" in one breath: a 90 ms gap (one frame short of a pause), "Ligh", the 100 ms closure of "ts" taken
+      for the pause, cuts of 220-310 ms. A first fix (a longer pause once the voice came back) and every later rule on
+      the level or the spectrum were measured and dropped:
+      Data: OmniVoice (k2-fsa, zero-shot clones of two German voices on the owner's server; every clip transcribed back
+      by canary-1b-v2 and kept only when it says what it should), 77 + 37 "Alexa [,] <command>" and 119 for Amazon,
+      Computer, Echo, Ziggy; a synthetic room (RIR 50 ms decay, noise -58 dBFS); Pryon's end from the stock models under
+      qemu (`tools/qrun.sh build/donut/pryon_test -m device-logs/models/<id>/unpacked/pryon.manifest -x 4`). Truth: the
+      Montreal Forced Aligner 3.4.3 (german_mfa acoustic model and dictionary, `alexa` = a l ɛ k s a) on the dry audio
+      with the whole sentence; checked on 96 clips of a separate "Alexa." and command joined: its end -31 ms against the
+      -50 dBFS end of the joined word, p90 61 ms (torchaudio's MMS_FA CTC aligner put it 100-200 ms early: not usable).
+      Pryon's end against MFA's: Alexa median 90 ms before (in the final /s/ or /a/, 30 ms after the /a/ starts), Computer
+      25 before, Amazon at it, Echo 75 and Ziggy 20 after (-250 .. +450 ms over all).  Right (the cut within 40 ms of
+      the end, or in the pause after it), of 220: Pryon's end 80; the release's `wordtail_cut` about as many (for Alexa 20
+      of 77, cutting into the command in 25); the 150 ms change no better; a
+      phonetic rule for Alexa (the /s/ -> /a/ change by 3-7 kHz against 150-900 Hz energy, then the vowel's own
+      spectrum) 47+28 of 114 for Alexa but at or under Pryon's end for the others; templates of learned word endings
+      (DTW on log-mel) 56+24 for Alexa, and the same with the other voice's templates (so: the word's shape, not the
+      speaker's); a learned offset per household: no gain. Combinations of these: none better than the best alone.
+      MFA with only the wake word known (the rest as its "spn"), room audio, no speaker adaptation: 152 of 220.
+      `wakealign.c` is that, cut down: MFA's first pass (final.alimdl, LDA after 7 spliced MFCC frames) over the word's
+      triphones (from MFA's tree; the first after silence or at the start, the last before silence or into spn: with
+      only the spn variant of the last /a/ the decay before a pause went to silence, 59 of 77 equal to MFA, with both
+      71 and none off by more than 40 ms), the dictionary's silence probabilities, acoustic scale 1/12, self loops 0.1;
+      the mean over the window for CMVN (MFA's per speaker or a long-term mean: 157 either way); a window of 1.5 s
+      before to 0.5 s after Pryon's end (+0.3 s: 140; -0.9 s: 151): 158 of 220 (Alexa 88/114, Amazon 14/29, Computer
+      24/32, Echo 24/30, Ziggy 8/15). A phone loop instead of spn after the word: worse (108-139). Amazon's misses: its
+      final /n/ runs on into a command starting with m, l, w. `tools/wakealign/` (extract.py in MFA's env, walign.py the
+      numpy reference and writer, build.sh) makes `build/wakealign/<id>.wa`, 360-490 KB, float32: C and numpy give the
+      same end on all 220 to the sample (tests/unit/wakealign_ref.py holds them together on synthetic models; ASan and
+      UBSan clean, cut or altered files refused). Time for the 2 s: 10 ms on the PC, 0.2 s under qemu-arm, run in the
+      capture thread before it takes core_lock (`align_ahead`). Accepted only 400 ms before to 500 ms after Pryon's
+      end; else, and without a model, `wordtail_cut` as before. Bundles carry the models next to hassmic; the factory
+      copy only where /system has room.
+      Issue #79 again (2026-10-30, Dot 2, en-US Alexa, Parakeet, 055ab9f, six requests in one breath, one clean, five
+      paused controls all clean): two aligner answers rejected, then `wordtail_cut`'s pause at +320 ms, the closure of
+      "lights": "So on.", "And so on."; the reporter's replay of the second with those 320 ms put back: "The lights
+      on.", with zeros instead: unchanged. Rejected can only mean under -400 ms or no alignment (the window ends at
+      +500), and one accepted at exactly -400 ms kept "Alexa": early, as #82's on a Dot 2 may be. "The lights on."
+      from +60 and +100, clean once at +100: the word may end ~130 ms later against Pryon's end than in the corpus, as
+      in the Dot 2 recording of wordtail.h. Now with a model and no answer `wordtail_cut` has no pause (`pause_ok` 0),
+      and `align_thread` logs what the aligner said (`wake: the aligner's end, from Pryon's end: ...`). Tighter bounds
+      than -400 ms measured and dropped: docs/wake-word-end.md. Why it answers early on real audio: open
+      Later the same day: every language MFA has an acoustic model for (`tools/wakealign/build.sh`: Amazon's five words
+      in de-DE, en-US/GB/CA/AU/IN, fr-FR/CA, es-ES/MX, ja-JP (katakana), the firmware's "alexa", microWakeWord's
+      okay_nabu, hey_jarvis, hey_mycroft in English and German); pronunciations: every one in the dictionary (3 at most,
+      a path each), else MFA's G2P (2 best): "alexa" is in no English dictionary; pt-BR left out (portuguese_mfa is MFA
+      2.0's, position-dependent phones and no phone table), Italian (only a Common Voice model, no G2P), Hindi and
+      Arabic (none). Format 2: 16 Gaussians a pdf (the heaviest, renormalised) in float16: 158 of 220 as with all of them
+      in float32 (24: 159, 12: 153, 8: 152), 80-160 KB a file, ~5 MB for all, 4 ms for the window on the PC. English:
+      92 OmniVoice requests in the two German voices (canary in English kept 92 of 96), the firmware's en-US Pryon and
+      computer/echo-en-US (75 accepted; Pryon's end 205 ms after the word for Alexa, 70 for both others), MFA english_mfa
+      with the whole sentence as truth: Pryon's end 20, release's rule 18, english aligners 23 (Computer 2 of 26: its end
+      180 ms early), german aligners 48. So the language spoken decides, not the wake word's: setting
+      `speech_language` (auto/de/en/fr/es/ja), auto by the time zone Home Assistant gave, then the word's locale
+      (main.c `speech_locale`, `align_resolve` at each detection). Phone loop after the word (MFA's phone_lm.fst as
+      bigrams, loop phones in silence's context, the word's last phone in each loop phone's): 136-158 of 220; with the
+      first loop phone in the word's context 159-161 at 7x the size: dropped. Speaker adaptation (fMLLR, Kaldi's
+      fmllr-diag-gmm, stats from the first pass of 5 or 20 other requests of the same voice): 166, 169 of 220 (Amazon
+      16 -> 22, Echo 23 -> 28, Ziggy 7 -> 10, Alexa 88 -> 86). Built then as the Echo would learn it, online: per
+      voice the requests in a fixed random order, each aligned with the transform so far, then added (forgetting 0.98 a
+      request, from 5 requests on; the transform's result only where it lies near Pryon's end, else the plain one):
+      German 158 -> 163 of 220, German-voiced English 48 -> 53 of 75. `wakealign_end_adapt`, `wakealign_estimate`
+      (Kaldi's row update; A^-1 by Sherman-Morrison between a round's rows, G_i's upper halves): C and walign.py Adapt
+      the same ends and the transform to 5e-6 (tests/unit/wakealign_ref.py). Per request under qemu-arm: the alignment
+      0.03 s, with the update 0.22 s (0.47 before those two), all of it in `align_thread`, off the capture thread
+      (issue #77) as the answer is out first; statistics in state/wakealign-<space>.adapt (557 KB), written at most
+      every 10 minutes and at the 5th request. Setting `wake_word_adaptation` (on).
+      Open: the time on a device, real recordings (rmaffeo's, the #72 reporter's), native English and the untried
+      languages. The models are in git (`wakealign/`, CC BY 4.0, credited in its README), every bundle carries them.
+      Format 3 (2026-10-29): the 62 files were 6.58 MB (gzip 6.05, xz 2.09: the same data again and again), 16 of
+      them byte for byte another's (en-CA = en-US, en-AU = en-GB, fr-CA = fr-FR: the same acoustic model and
+      dictionary; alexa = alexa-en-US). Now a .was per acoustic model holds each GMM once (german 557 KB, english 757,
+      french 283, spanish 438, japanese 313), 46 word files name theirs by place and FNV-1a check (1.5-3 KB): 2.45 MB,
+      made from the format 2 files without MFA (the GMMs of a pdf are the same bytes in every word that has it).
+      The ends of all 62 old files against the new ones on 8 windows: 496 of 496 the same. Memory as before (only the
+      word's GMMs are read). align_resolve: the spoken locale, else the word's own (en-US where the id has none), the
+      three aliased; sysinstall.sh removes older names from /system/hassmic.
+      Review (2026-10-29): the replay waits for align_thread's answer until 1 s past its window, then the level
+      (a CPU that busy held the whole request: HA got the lead-in only); a wake word change while a run goes on no
+      longer sleeps the capture thread (up to 2 s, issue #77): the old model is freed by align_resolve after the run;
+      a language picked on the page takes the zone's variety (English in London: en-GB); five adaptation slots, the one
+      used longest ago saved and replaced; build.sh's full rebuild made aside, put in place only when every word was.
+      tests/fake_ha_wakealign.py covers it in the daemon (file per language, too slow, busy, adaptation in use and
+      saved) on a German "Alexa" of an OmniVoice designed voice (testdata/alexa_omnivoice.raw), each wake word timed
+      by the capture's clock: the aligner takes the first "Alexa" in its window.
+      On the speech corpus (2026-10-29, testdata/corpus, tools/wakealign/corpus_eval.py): 6337 clips with a wake word
+      in a room (the issue's: 50 ms reverb, -30/-58 dBFS), stock Pryon under qemu (de-DE models; en-US: firmware Alexa,
+      computer/echo-en-US; fr/es Amazon words through de-DE as a proxy; Amazon/Ziggy in English: no model) or
+      pymicro-wakeword: 4586 detected (Pryon 2899 of 3267). Pryon one clip a run, at -x 2: clips back to back at -x 4
+      with 24 qemu at once had its backlog at 14 s and 5 s of audio skipped (skipped_audio_backlog_since_last_ww_msec),
+      5 of 30 ends where real time has them, and even -x 1 skipped with 40 clips a stream; a run that skipped is made
+      again in real time. Right (40 ms either side of MFA's boundary, anywhere in a pause, after the word alone):
+      Pryon's end 42 %, release 47 %, aligner alone 45 %, adapted 63 % at first. Where it ran into a pause the aligner
+      ended early (median -40 ms joined, -70 the word alone; one breath +20): its last vowel and the reverb taken for
+      silence or spn. Now the replay from a pause's middle, the aligned silence's (5 frames and more) or one at the
+      room's floor (10th percentile of the window's 10 ms levels + 6 dB, 80 ms and more, starting within 200 ms of the
+      aligned end; at the floor, not under the word: a command's "s", "sch" lie 10-20 dB under its vowels, and a
+      threshold relative to the word cut "stopp", 83 -> 58 % in the first run, before the Pryon fix). Then: aligner alone 55 %, adapted / the Echo 74 %
+      (joined 63 -> 90, alone 56 -> 85, one breath 62 -> 64, stop 79 -> 80; de 75, en 73, fr 79, es 79, the fr/es
+      proxies 73/65; words 67-82 %). 300 ms ahead gave 76 % but found the silence after one-word commands ("Alexa,
+      an", "Echo on": the whole command skipped): starts over 300 ms into the command 45 against 23 (150 ms: 22); a
+      guard on a rising level (6, 10 dB) or on the time at speech level before the pause (6-15 frames under the
+      window's 90th percentile - 12 dB) kept 25-30 of them, so 200 ms it is. Left: one breath, +30 ms late in the
+      median (the truth is the dry clip's, the aligner hears the reverb); 2776 one-breath requests 64 %. All of it, how
+      far off each start is too, and how to make it again: docs/wake-word-end.md (tables generated into
+      docs/wake-word-end/, each request in its .jsonl).
+      Issue #80 on the corpus (tools/vad_leadin.py, HA 2026.10.1's VoiceCommandSegmenter on MicroVadSpeexEnhancer as
+      default_pipeline.py makes it; its VAD sees the audio before speex in any case): the 773
+      commands alone, opening the request: heard and ended within 3 s without the silence 87 %, with 800 ms 97 %
+      (under 0.4 s 17 -> 57 %, 0.4-0.8 s 63 -> 93 %). The rest are too short for HA's 0.3 s of speech before a
+      command starts; with the wake word in the request (wake_word_in_request) 334 of 335 commands under 0.6 s.
+- [~] Silence ahead of each request (2026-10-29, issue #80, PR #71; PC).
+      HA's VAD (assist_pipeline MicroVadSpeexEnhancer, pymicro-vad 1.0.1, HA 2026.10.1) is a new one per run:
+      `Process10ms` gives -1 for chunks 0-75 (from zeros: first value at chunk 76), the segmenter takes -1 as 0 and
+      starts after 0.3 s over 0.2 (`VoiceCommandSegmenter`, timeout 15 s). Measured with the real classes on espeak
+      words at -26 dBFS, room -55 dBFS after: "lights off" (0.47 s) started without a lead-in, "on" (0.2 s) only with
+      160 ms or more ahead, "stop" (0.29 s) unreliably at any (under the 0.3 s); content of the lead-in (zeros, -75 or
+      -55 dBFS noise) made no difference. The reporter's Echo: "Alexa lights off" waited for the 15 s timeout before
+      the tail rule existed; home-assistant/core#175735: the same with ESPHome satellites, 800 ms of silence cured it.
+      Parakeet offline on two requests cut 20 and 0 ms: "" as received, "The lights on." with 50-300 ms of silence in
+      front. PR #71 had it as an opt-in setting for local wake words over ESPHome; `lead_in` (main.c) sends 800 ms of
+      zeros at once after `proto->start()` for every run with the wake word on the Echo (wake word, button, follow-ups,
+      both protocols): each starts HA's VAD cold. Not with `-w remote`. Tests: the 25600 zero bytes ahead of the ring's
+      4096 (`fake_ha_esphome.py`). Open: the reporter's verdict on a device.
 
 ## Phase 5 — Make it permanent **(device)**
 
@@ -406,9 +624,13 @@ Run in this order. Each step says what it proves.
 - [~] Sendspin player (`src/hassmic/sendspin.c`, port 28928, mDNS `_sendspin._tcp`, `-z 0` disables): dialect of aiosendspin 9.1.1 = Music
       Assistant 2.10.4, which differs from the published spec in 22 places (`docs/sendspin-digest.md` §0). WebSocket (`ws.c`), Noise
       KKpsk2 responder (`noise.c`, Monocypher), Sentinel PSK + unpaired access (operator approves in MA), player@v1 PCM 48k stereo,
-      Kalman clock filter, scheduler (hard snap, then ≤6 frames/chunk nudging), volume/mute/static delay, ducking under the
+      Kalman clock filter, scheduler (hard snap, then a rate of its own steered by the error, `resample.c`; ≤6 frames/chunk nudging until 2026-11-04), volume/mute/static delay, ducking under the
       voice assistant. `tests/fake_ma_sendspin.py` against the reference server: 9/9 (4.000 s of 4.000 s played, no discontinuity,
-      clock ±0.07 ms). `make unit`: WebSocket vs aiohttp, Noise vs python noiseprotocol, hash vectors.
+      clock ±0.07 ms). `make unit`: WebSocket vs aiohttp, Noise vs python noiseprotocol, hash vectors. WebSocket frames written
+      by hand too (2026-11-07; aiohttp never fragments): fragments with a ping, a pong or a close among them, a message over
+      4 MB in fragments (read to its end, its first 256 bytes kept, return 2; one crossing 4 MB only in a later fragment kept
+      all that came before it, up to 4 MB, until the test showed it), a ping over 125 bytes or a frame over 64 MB ending
+      the connection; the 64 MB limit is a frame's, 68 MB in frames of 4 MB is read through like 4.2 MB.
       **Real Music Assistant 2026-09-21:** MA found the Echo by mDNS, dialled 28928 over its IoT-VLAN interface (no router rule),
       admitted it unpaired without an extra step, music plays; sync err ≈ +0.3 ms vs schedule, clock ±0.27 ms over Wi-Fi, 2 MB buffer
       full, 30 frames nudged in the first minute, hassmic 8 % CPU. Output latency measured with `src/tools/latency.c` (clicks in
@@ -455,8 +677,54 @@ Run in this order. Each step says what it proves.
       against aiosendspin 10.2.1 and 34/34 with `--legacy` against 9.1.1 (`build/aiosendspin-9.1.1`, hash-pinned wheel made by
       `--setup`, which `tests/run.py` runs), both servers strict (`allow_noncompliant_clients=False`), plus a delay command
       now; `CODEC=opus` and `CODEC=pcm` pass too. Not done: time sync in bursts of 8 (spec since 2026-10-21, after 10.2.1).
-      Not exercised: fragments (the library fragments only beyond 65518 bytes), a volume change during a re-handshake.
+      Not exercised: Sendspin's fragments (the library fragments only beyond 65518 bytes; WebSocket continuation frames are,
+      `make unit-ws`), a volume change during a re-handshake.
       Not yet against a real MA 2.10.8
+      **In sync without a cut (2026-11-04, PR #113).** The Echo Show 5's output clock runs ~350 ppm slow against the
+      system clock (its log: "nudged -170 frames" every 10 s, 2026-11-02): the frames skipped to catch up, up to 6 at one
+      point, were a step in the waveform, a tick several times a second in quiet music. The PR resampled the whole 25 ms
+      chunk instead (0.5 %, linear): no step, but the threshold loop stayed, a pitch blip of 8.6 cents for 25 ms every
+      ~0.36 s. Now the rate follows the drift (`resample.c`): a PI servo (error averaged over 2 s, Kp 0.1/s, Ki
+      Kp²/4, critically damped; 0.25 s and 0.2/s until the Show 5's log below; drift held to ±2000 ppm, rate to ±0.5 %) steers a stereo cubic (Catmull-Rom) resampler
+      that carries its position and last frames across chunks; the error counts where the next frame out lies
+      (`rs_lag`). The drift learnt is kept across snaps and streams, one per route (the Echo's speaker, a Bluetooth
+      one: another clock). The Bluetooth sink (a phone playing here) resamples through it too (was linear). A model of the Show 5's queue (20 ms slots,
+      polled every 5 ms, 5 ms of jitter) against the old loop, 180 s: the error's swing 5.3 → 2 ms, 0.5 % rate jumps
+      6/s (even at 0 ppm: the noise crossed the 400 us threshold) → none, the rate's noise ~280 ppm rms below 1 Hz
+      (0.5 cent); the drift is learnt within a minute (20 s the Show 5's way). The cubic: 1 kHz within rounding,
+      8 kHz -32 dB under the sine (linear dips 8 kHz by 1.3 dB at half-frame phases). Log every 10 s: `rate +350 ppm
+      (integral -350)` (the rate's mean over those 10 s; the integral's share, kept), and every snap past 20 ms as
+      `resynced`. The drift learnt survives restarts and updates in `state/sendspin.drift` ("<Echo ppm> <Bluetooth
+      ppm>", saved as the output closes and every 10 min, only once moved by 5 ppm). Ducking glides over 30 ms (Sendspin and the A2DP
+      sink; a step at a block's edge clicked). `make unit-resample` (the resampler, a step changing per call as
+      the sink's, the servo against the queue model at ±350, 0, -1500 ppm), `tests/fake_ma_sendspin.py` with `HASSMIC_FAKE_MUSIC_PPM=-500` (`audio_file.c`'s buffer
+      drains that much slower): the tone's phase step 0.000 rad (the nudging: 0.232; limit 0.03, was 0.3), no resync.
+      **On the Show 5 (2026-11-04, 2026.11.04.201339+7b3751a, real MA):** after 10 s `sync err -0.46 ms, rate +161 ppm
+      (integral -63)`; but every stream's second chunk came 135-139 ms early, `resynced` (the old loop did the same,
+      silently): 137 ms of silence after the stream's first 25 ms of music. AudioTrack takes its buffer's worth of the
+      slots at once as it starts, which `s_queued_us` leaves out as a steady latency, and the first snap waited with
+      nothing written until the chunk was 200 ms from due: the queue ran dry, AudioTrack emptied, and its next burst came
+      after the chunk was timed. Now `music_prime_us()` (150 ms on Android, 0 on the mixer) primes a fresh output with
+      silence and waits for the burst ("output primed with 150 ms of silence, N ms of it taken at once"), and the snap
+      writes silence as it plays, 20 ms at a time (an Android slot each: prime and all, 150 ms fit the 8 without a
+      wait), the error read again before each. And the -4.8 ms the second snap
+      left had taken the integral from -127 to -328 ppm in 4 s: it is held for 5 s after every snap (`SERVO_HOLD_S`).
+      `audio_file.c`'s `HASSMIC_FAKE_MUSIC_BURST_MS=137` (137 ms hidden at once as the output starts) reproduces it:
+      without the prime `+137.0 ms off the schedule, resynced`, with it none; the test's tone is 8 s (learning after
+      the hold: -54 ppm saved).
+      **Then 10.5 min of real MA on the Show 5 (2026.11.04.205835+dd75395):** primed, 89 ms taken at once, no resync at
+      all. Its clock is about right (the 350 ppm were the PR author's Show 5; this one's frame nudging said +16..+54
+      ppm): the -328 saved by the jolt unlearnt in ~2.5 min, then the integral within ±18 ppm of 0, the 10 s mean error
+      within ±0.3 ms. But the 0.25 s average of the error swung ±4..7 ms reading to reading (the queue read in slots
+      that AudioTrack takes back in bursts: ~10 ms of noise a reading, chunks of ~96 ms), and at 0.2/s the rate wobbled
+      ~800 ppm rms at about 1 Hz (1.4 cents; the old nudging ticked on the same swings). A model with that noise
+      (15 min): averaged over 2 s at 0.1/s (Ki Kp²/4) the wobble is ~120 ppm rms, the true error 0.7 ms rms, the
+      integral's spread 17 ppm (51), 350 ppm learnt in ~2 min, 3.4 ms off at worst meanwhile: now the gains. The unit
+      model runs 6 min; the PC test learns -15 ppm in its 8 s. **At these gains, 11 min on the Show 5
+      (2026.11.04.211845+4775064):** the 2 s error's sd 1.3 ms (±3.7 at most), the 10 s rate's sd 62 ppm, the integral
+      within ±115 ppm (slow excursions: ~1.5 ms early for 30-60 s, twice, then back), mean drift ~+10 ppm. One resync,
+      +24.3 ms 0.4 s into a stream that resumed 0.5 s after Music Assistant reconnected, its clock still ±5.33 ms
+      (±0.1 after a minute): older builds snap the same. Still to see: the sink's resampler (no PC test reaches it)
 - [x] mDNS: init's `avahi-daemon` runs in SELinux domain `avahi-daemon`, which is denied read on `/data/misc/avahi/services`
       (so nothing was ever published, also not for Wyoming). `magiskpolicy` cannot parse a rule for a type with a hyphen →
       `boot.sh`/`run.sh` stop the init service and start avahi themselves in the `su` domain. Verified: answers queries from the PC.
@@ -830,6 +1098,19 @@ Run in this order. Each step says what it proves.
       and came down for the command. Now the gain holds (levels and gain frozen, peak limit on) while one of our sounds
       plays and 250 ms after. The sound itself stays in the stream (RNNoise takes another 4..17 dB of it on the captures).
       Not done: a recording from HA with the fix; whether to skip the stream during the sound as the Voice PE does
+      Issue #82 (2026-10-30): the hold went by the time a block is sent, and the ring's replay goes out in one burst
+      during the sound, so audio captured before it was held too: the gain stayed at the wake word's (+17..+31 dB on a
+      Dot 2 whose "Alexa" came at -43..-57 dBFS), and the frames of a louder command were each cut to the peak limit,
+      the gain jumping with every syllable. Now by the capture clock (`sound_in`, `sound_spans`: from where the sound
+      can first be in the stream, 85 ms after the mixer took it, to 250 ms after it ended; a slow aligner's replay can
+      come after the hold with the sound in it),
+      and what the limit takes while held stays off until the hold ends (`limit_stays`, the pipeline only: Drop In
+      holds for whole sentences). Taken into the gain as well (a first version) changed nothing: at the hold's end the
+      level is on a talker 5-40 dB over the wake word within 2 frames, at every phase of a syllable, and a sound's peak
+      would have stayed.
+      PC: 4 Hz syllables at -24 dBFS over the wake sound, frames of the first 300 ms on the limit: 9 of 30 -> 0
+      (`tests/fake_ha_wakesound.py`). A command that starts inside the hold (a pause under 0.9 s) still comes hot, its
+      peaks at the limit; not cut
 - [~] Wake sound removal (2026-10-12, experimental, setting `wake_sound_removal`, off by default; `earsup.c`): since the
       pipeline gets the audio from the wake word's end, people talk over the sound. A residual echo suppressor keyed
       to the sound we play, not a second linear canceller (it would have to adapt during the talker's voice, and what
@@ -865,6 +1146,60 @@ Run in this order. Each step says what it proves.
       `device-logs/denoise/`). CPU: 11 ms per second of audio on the PC, 2755 ms for 15.1 s on the Echo (18 % of one
       A35 core, only while a pipeline runs). Binary +41 kB. `tests/unit/micdenoise_test.c`, switch and stream in
       `fake_ha_esphome.py`. Not done: what STT makes of it (the reason to have it), a listening test
+- [~] Wake word in the request (2026-10-28, setting `wake_word_in_request`, off by default; asked for with #66/#72): the
+      replay from 100 ms ahead of the keyword's begin (`replay_whole`: the pipeline's `from` is the last detection's
+      `kw_end`; `kw_begin` from Pryon's beginSampleIndex, mww's end - 1 s, the PC's SIGUSR1 0.6 s back). Pryon's begin
+      on `testdata/alexa_espeak.raw` is 110 ms ahead of the word's onset; the 100 ms lead is for real speech, not
+      measured. word_tail_end still runs (its decision is where the command starts: `talker_from`, so `micend` does
+      not count the word itself, or the word plus a wait for the tone would end the request before the command).
+      `core_transcript` drops a leading wake phrase (`wake_phrase_bare()`, normalised), so "Alexa, stop." is "stop";
+      the wake word alone ("Alexa.", from a false wake or nothing said) is what HA's "no text recognized" was without
+      the word: the run cancelled quietly, `no_speech` told, no ring stopped by timer_stop_any (found in review).
+      Trade-off: Home Assistant's built-in sentences may not take a command with "Alexa" in front: for LLM agents.
+      Tests: `fake_ha_esphome.py` (24000 bytes ahead of the first live block: 700 ms of ring plus the block in hand;
+      off, 4096: the 128 ms, and the block in hand comes out as one 1600-byte chunk that passes for the first live one),
+      `fake_ha_esphome_timers.py` ("Alexa, stop." stops a ring), `micend_test.c` (the word sent too, a 1 s wait, the
+      command: ends after it; counted, it would end in the wait).
+- [~] End of request heard on the Echo (issue #66, 2026-10-28; experimental, setting `end_of_request`, off by default;
+      `micend.c`). Reporter (Dot 2, busy kitchen, Scribe v2): "Alexa, next" came out as "Next. Eat some food please
+      Now", capture 3.58-5.78 s; four of five runs that evening had others' talk after the command. HA's VAD ends on
+      silence; any voice keeps the run open. And `micgain` learns from any frame 9 dB over the floor: others alone after
+      the command were brought up to speech level at 12 dB/s (`tests/fake_ha_end.py`, off: others 20 dB under in the
+      room, 12 dB under in what HA got).
+      Now, on: the talker = whoever said the wake word, its level the keyword's rms (button/follow-up: the gain's talker
+      level). 10 ms frames within 12/9/6 dB of it (relaxed/normal/aggressive) are the talker; after 300 ms of them, a
+      pause of 1.25/0.7/0.45 s (HA's own "Finished speaking detection" values) ends the run on the Echo. Frames under the
+      margin do not feed the gain either (`micgain` `talker_min_db`). Voiced frames peak ~5 dB over their rms, so others
+      are left out from ~17/14/11 dB under; a command 6 dB quieter than its keyword still counts. Our own sounds stop the
+      clock (`mic_gain.hold`). HA's VAD stays on: only ever sooner.
+      Ending: `VoiceAssistantAudio end=true` only (`proto->end`, `end_audio`): aioesphomeapi maps it to
+      `handle_stop(False)` -> HA `_stop_pipeline` (audio queue closed, STT goes on); `VoiceAssistantRequest start=false`,
+      which `stop()` also sends, is `handle_stop(True)` -> `_abort_pipeline` (task cancelled). Wyoming: none.
+      In a real Home Assistant 2026.10.1 (`tests/ha_real_end.py`, CI's home-assistant job; stand-in STT/TTS as a custom
+      component): its STT stream ended within 0.1 s of the Echo's end (238400 bytes), then stt-end, intent-end ("4:31
+      PM"), tts, run-end; its own VAD had heard speech start and no end (the dishes, the others).
+      Tests: `tests/unit/micend_test.c` (each mode's pause, quieter voices after, one as loud, a quieter command with a
+      pause, 200 ms only, our sound before the command), `tests/fake_ha_end.py` (off: nothing ends; normal: end of audio
+      0.55 s after the talker's last sound, no abort, no audio after, others 19 dB under in what HA got).
+      Amazon's VAD (docs/re-vad.md, same day): the front end's DNN VAD (`vad_lite.tflite`) rides in the lowest bit of
+      every 128 micAsr samples, record version 3.3, 2 bits (`afemeta.c`). Checked here on the captures: every frame
+      passes sync and checksum; record RMS within 0.2 dB of the measured (Dot 2); loud frames at >= 2: normal voice
+      98-100 %, quiet 82 %, whisper 39 %, sounds without words 0-23 %. A speech detector, not a talker detector, and it
+      misses quiet far speech: so a veto in `micend` (a frame is the talker only when loud *and* speech to it), never
+      an end of its own. `ring_speech` reads it from the ring. Tests: `micend_test.c` (dishes as loud: open without it,
+      ended with it; a talker it misses: never ended here), `afemeta_test.c`, `fake_ha_end.py` (records written into the
+      capture, phase moved every loop: ends 0.8 s after the talker, the dishes in between). Logged per request: vetoed
+      frames, or "not heard here first" with the talker's time and quiet when HA's VAD came first.
+      Review (same day): `mic_end` kept the last request's `ended`, and the capture thread's `heard_end()` check runs
+      while a wake word's pipeline still waits for the tail decision (up to 0.5 s, nothing sent yet): a request right
+      after one ended here was ended at once, before any audio (device only: the PC's SIGUSR1 had no level, so no
+      wait). `pipeline_start` now resets it; `HASSMIC_FAKE_KEYWORD` gives SIGUSR1's wake word a level so the PC waits
+      as a device does, and `fake_ha_end.py` runs a second request (failed before: 0 bytes, ended). Also the transcript's
+      wake phrase strip takes `wake_phrase_bare()` ("Echo", not "Echo (de-DE)" on an Echo with two "Echo" sets).
+      Second review: the VAD vetoed every frame under 2, but inside commands it dips under 2 for up to 0.44 s (mostly
+      to 1) and aggressive ends after 0.45 s: now a veto only at 0 (`ring_speech`: VAD >= 1 is speech).
+      Open: the reporter's kitchen; background talkers / TV against the VAD (no capture); whether the Android Echos'
+      HAL keeps the bits (else level only there).
 - [~] Arbitration score from the front end (2026-09-30): stock's numbers instead of our own SNR of the mic stream.
       `wake_pryon.c` inflates the result metadata (stock libz.so) for the keyword's place on the front end's clock,
       `main.c` hands it over and reads voiceEnergy / ambientEnergy (FINDINGS.md "Listening mode"); score =
@@ -996,6 +1331,10 @@ Run in this order. Each step says what it proves.
       against a real HA yet. On the three Echos (2026-10-06 23:11, network key removed on all, restarted together):
       radar started a network after 5 s, all three tags scanned at 23:11:28, both others confirmed and joined by
       23:11:31 (23 s in all), no action, no pairing; so HA 2026.9 names the tag entity `tag.hassmic_<pub hex>` as expected.
+      The 30 s run from the newcomer's first beacon or our link to HA, whichever is later (`ha_since`, 2026-10-29): CI's
+      arb-join failed so (runs 40560756025, 2026-10-27, and 40914090327, PR #78, 2026-10-29), HA linked 1.3 s after both Echos started (at
+      0.1 scale: the action at first + 3 s, the tag, which needs both links and up to two scans, confirmed 0.2 s later).
+      HA connecting 1.0, 1.5, 2.0 s late to both: the old rule handed through the action in 6 of 6, this one in none.
 - [x] Claim copies spread (2026-10-06): after the rejoin, a wake word heard by radar (score 5836) and biscuit (2187)
       was answered by biscuit and HA turned radar away as a duplicate. biscuit's log has no claim from radar in 2 of 3
       rounds (donut got it, 28 ms after biscuit's), only radar's "answers" 188/279 ms later; claims seen elsewhere
@@ -1247,7 +1586,9 @@ Run in this order. Each step says what it proves.
       in a quiet room: -73 dBFS, -45 dBFS in the second of the wake sound (speaker and mics work, the canceller
       leaves that much).
       Not done on the biscuit: the button pressed with this build (latch 1, red ring, HA), a spoken wake word and
-      command, a phone on A2DP
+      command, a phone on A2DP. The last two reported working (issue #106, 2026-11-02, 2026.11.02.000053-beta set up
+      from Windows 11 with firebreak): Alexa, and Echo and Ziggy de-DE from DAVS, through four Assist pipelines;
+      microWakeWord (Hey Jarvis, microwakeword.com models); a phone on A2DP; request and reply text
 - [x] System partition written from the running OS, no TWRP (2026-09-30, from issue #1: toybox `mount -o remount,rw /`
       fails because `/proc/mounts` names `/dev/root`, which does not exist, while `mount(2)` with MS_REMOUNT works).
       On all three models: `dm-0` named `system` spans the whole active slot (donut `system_b` = mmcblk0p14, radar
@@ -1725,6 +2066,89 @@ Run in this order. Each step says what it proves.
       setting `timer_stop_any` (page-only, exported, off by default): any non-empty normalised STT_END text during a
       ring stops it and cancels the run, as EchoMuse does (wilbowes/EchoMuse#759). Cost: a question during a ring is
       not answered. fake_ha_esphome: the button, "Stopp den Timer" with the setting, a request without a ring untouched.
+      Issue #63 (2026-10-28, a Dot 3 user: the ring "strangely quiet" at full timer volume): the ring was the built-in
+      blip (main.c `earcon_thread`: 3 x 120 ms at 6000 = -14.7 dBFS peak, then 0.8 s of silence: -23.3 dBFS RMS over
+      the 1.2 s). Stock's tones, from `libEarconAdapter.so` `EarconsAudioProvider` (each getter binds a file name):
+      timerDefault `system_alerts_melodic_02.mp3`, timerShort `_02_short`, alarmDefault `system_alerts_melodic_01.mp3`,
+      alarmShort `_01_short`, reminderDefault/Short `alerts_notification_03.mp3` (one function), notificationDefault
+      `alerts_notification_01.mp3`. melodic_02: 6.08 s, 48 kHz stereo, -7.2 dBFS peak, -19.0 dB mean (ffmpeg
+      volumedetect), so ~4 dB louder on average and 7.5 dB at the peaks than the blip at the same volume. In
+      `/system/local/share/earcon/base/` on donut, biscuit, radar; on checkers and athena in
+      `priv-app/com.amazon.alarms` (`res/raw/system_alerts_melodic_0[12].mp3` = `default_timer_earcon` /
+      `default_alert_earcon`, same CRC, stored; the app is in STOCK_APPS_OUT, so read from `/system/hassmic-removed`);
+      cronos and crown: the same entries assumed (verify), greyed out on the page where the entry is missing
+      (`sound_present` reads the APK's central directory once, `zip_find`).
+      BS.1770 integrated loudness (the decoded mono, a Python meter that agreed with ffmpeg ebur128 to 0.01 LU):
+      melodic_02 -16.56 LUFS on donut, -16.17 on checkers (another encode); melodic_01 -17.26; the blip's ring cycle
+      at peak 6000 -20.81. So the ring's blip went to peak 9850 (`BEEP_PEAK`, -16.5 LUFS; the wake/touch stand-in
+      stays 6000), and the page's target is -16.5 (`TS_LUFS`).
+      Now setting `timer_sound` (timer / alarm / beep / custom, page-only, exported; default stock's timer tone, the
+      blip where the firmware has none, `core_timer_sound_default`; a sound without its file is refused, also at
+      start, and deleting the chosen upload goes back to the default). The chosen file loops through `play_earcon_while` with `alarm_go`: cut at once
+      by any stop, the ring time, a pipeline (busy), our other sounds and a Drop In's ring, then again from the top;
+      at `timers_q16`. Custom: the page decodes any file the browser plays (decodeAudioData), down-mixes and resamples
+      it to 48 kHz mono (OfflineAudioContext; files over 20 MB refused first: decoded whole in the tab), measures it
+      looped to 3 s as it rings (`web/loudness.js` `ringLufs`: BS.1770-4 K-weighting and gates; a clip under 400 ms
+      has no block of its own); more
+      than 3 LU from -16.5 it asks: match (gain, and where peaks would pass -1 dBFS a limiter with 5 ms look-ahead, a
+      5 ms average and ~80 ms release; the gain searched between the plain difference and +24 dB, secant and halving
+      by turns, since the limiter takes loudness away: 30 s in ~250 ms in node) or keep. It posts the first 30 s as
+      16-bit WAV to `POST /api/timer-sound` (signed); the Echo checks the format only (sounds.c `sound_custom_save`: no decoder or resampler on its side)
+      and keeps `state/timer_sound.wav` (statefile), not in exports or artifacts. `POST /api/timer-sound/play`: one
+      ring, 10 s at most. Tests: fake_ha_timer_sound.py, unit-sounds (format checks, a replaced upload read again,
+      the Show models' tones decode), unit-web_loudness (loudness.js against BS.1770 in Python; `BEEP_PEAK` at
+      `TS_LUFS`; matching quiet, loud and peaky clips, the limiter never over -1 dBFS). Open (device): heard on a Dot 3 and a Show.
+      Running timers (2026-11-04, for a countdown on another device): an Assist timer has no entity in HA, and HA
+      sends its events only to the satellite that started it (ESPHome `VoiceAssistantTimerEventResponse` 115: type
+      0 started / 1 updated / 2 cancelled / 3 finished, id, name, `total_seconds` = the length it was created with,
+      `seconds_left`, `is_active`; HA esphome `assist_satellite.py` `handle_timer_event`), so the Echo republishes them. `main.c` keeps up to 8
+      by id from started/updated (end = `mono_ms` + left; paused: left kept; full: the oldest paused one goes, else
+      the oldest), drops them on cancelled/finished, and `core_timer_next` gives the active one that ends first. A timer HA never finishes (HA restarted: its timers live
+      in memory only) goes `TIMER_STALE_MS` (10 s) after its end, checked by the earcon thread (`timers_stale_at`).
+      ESPHome: "Next timer" (`next_timer`, text sensor, device class timestamp: HA's ESPHome text sensor parses ISO
+      8601; a float sensor would round a 2026 epoch to 128 s), "Next timer name" (text, "" when unnamed), "Next timer
+      length" (sensor, s, duration), all missing_state while none runs, name and length before the end. The end is
+      `now_ms` + HA's time as an offset (`ha_time` in proto_esphome.c: the Echo's own clock is wrong until root has set
+      it, and jumps then), the Echo's clock before any answer. The time is asked on links without a key too: the clock
+      takes keyed answers only, the timer's end goes back to the HA that said it. The offset moves only by 2 s or
+      more (whole seconds read at another moment, on subscribe and every 6 h: a second either way would be a new
+      state and fire automations on "Next timer" again). Wyoming unchanged (no timers there). fake_ha_esphome_timers:
+      two at once, pause, resume, time taken off, cancel, finish (rings, next unknown), one never finished forgotten
+      after 10 s, a ninth timer pushing out a paused one and not the next. Open (device): with real HA and "set a timer".
+- [x] Sounds of one's own in place of stock's (2026-11-01, asked by a Dot 3 user who renamed the assistant): every
+      `enum sound` from SND_WAKE to SND_RING_OUT (13: not the timer and alarm tones, which `timer_sound` picks) by an id
+      of `sounds.c` (`wake`, `ring_in`, ...; stored as file names: keep them). `state/sounds/<id>.wav`, the timer
+      upload's format and checks (`sound_own_save`; `sound_custom_*` are now its SND_CUSTOM case), looked for before
+      stock's in `sound_get`; a generation per sound (was SND_CUSTOM's only) has the earcon thread read it again after
+      an upload or delete. Lengths (`sound_own_secs`): wake, touch and volume 2 s (over the start of the request:
+      the echo canceller leaves ~a quiet voice's worth of it to STT, wake sound removal holds the audio until its echo
+      passed; stock's wake sound is 0.65 s; the volume tone at every key press), drop in and call connected 2 s (the far end hears nothing while the near mic is ducked 40 dB), ringtones 30 s, the other chimes 5 s (our sounds freeze gain and end of request and drop sound detection while they play). Past 2 s a chime goes through `play_earcon_while` (`chime_go`); a sound over 256 kB of PCM is read again per play (`sound_played`). API (signed): `POST
+      /api/sound/<id>` (WAV; empty: delete), `/play` (`core_sound_preview`: queued past `use_earcon`, as Identify),
+      `GET /stock` (stock's decoded, as a WAV at its own rate); `/api/state` `sounds` [{id, own_ms, stock, max_s}].
+      Page: Voice's "Sounds" card, a row per sound; upload as the timer's (`pcmOf`, `timerSoundLevel` with the stock
+      sound's `ringLufs` as the target, measured looped: the volume click is under one 400 ms block). Not exported or
+      copied (per Echo, as the timer's); a factory reset empties state/. Tests: fake_web_sounds.py (list, stock WAV, refusals,
+      Play, the wake word playing one's own, replaced, kept over a restart, deleted, unsigned refused), unit-sounds (own
+      first, stock's again, ids and lengths). Open (device): heard on a Dot 3.
+      Sound packs (`soundpack.c`, `/api/sound-pack`, page's `packsCard`): `state/sound-packs/<id>/` = `name` + `<sound>.wav`;
+      a pack is a whole set (apply: `sound_own_save`, or delete where it has none), every file checked before the first is
+      touched. WAV is 96 kB/s: 9.6 MB a pack at the limits, ~1.7 MB at stock-like length. Cap 30 MB, 16 packs, 32 MB left free
+      on the partition (`/data`'s size not measured on any model: `df /data` still open). Pack file: tar (`pack.json`
+      {hassmic_sounds:1,name}, then WAVs), checked by the Echo per sound. Tests: fake_web_sounds.py, unit-web_soundpack (`hmtar.packWrite`/`packRead`
+      against tarfile). The page itself (cards, dialogs, download) was driven once in headless Chromium, not part of CI.
+      A switch per sound: `wake_sound` (Home Assistant's, unchanged key) is the wake sound's alone, `sound_touch`,
+      `sound_mics_off`/`_on`, `sound_volume`, `sound_bluetooth_on`/`_off` are page settings, exported (main.c `sound_request`
+      asks them; `use_earcon` had covered four sounds since 29c86e0 by way of one code path, nobody chose it). None for
+      Identify and Drop In's (`sound_queue`), nor the login's cue that borrows Bluetooth's. "All off" is one `/api/set`.
+      Laid out as the ring designs (full width under the settings cards, groups of tiles), not as `LAYOUT`'s rows.
+      `settings_load`: a config with `wake_sound=off` and no `sound_touch` gets the four off once. Imports too
+      (2026-11-07): `settings_apply_text` (the page's Import, `setup.sh --preset`), after its loop, turns them off
+      (those it changed counted in `applied`; saved) for a text with the export's first line (`SETTINGS_EXPORT_HEAD`,
+      unchanged since exports came in adaa7d8, after 29c86e0, so every export without the switches meant all four),
+      `wake_sound=off` and none of the four's lines. A `wake_sound` line on its own (the page's switch, Compare & copy:
+      changed rows, no first line; HA's switch is `core_wake_sound`) and a newer export (it lists them) leave them.
+      Tests: fake_web_sounds.py (an export without them imported, again with them off, a newer one, a line alone, the
+      first as a preset).
 - [x] Buttons as Home Assistant events (2026-10-12, issue #26: a Dot 2 user moved from EchoLocal, whose automations
       stopped an HA-run alarm clock with the action button and used volume holds for next track / play-pause). ESPHome
       event entity "Button" (`button`, KEY_BUTTON, device class `button`, always listed), types `action`,
@@ -2176,6 +2600,26 @@ Run in this order. Each step says what it proves.
       namespaces it asks for the sysctl qrun.sh names (`qrun.sh --userns`: AppArmor's, or Debian's
       unprivileged_userns_clone).  qrun.sh no longer runs without the namespace (the PR's low-PID snapshot: Ubuntu's
       pid_max is 4194304) but says why; install-boot.sh shows it.  Not tried: any of it on a device, the setup on a Pi.
+- [~] Echo Show audio from #45 (2026-11-07, GitHub issue #75).  The cold output's lead-in is a board field,
+      `board.cold_lead_ms` (0: 350 ms, not measured; -1: none), in place of `audio_android.c`'s `LEAD_MS`, not the
+      `state/lead_ms` file #34 tried.  `tools/cold-lead.py` measures it: slplay plays silence of the lead-in, a 500 ms
+      1 kHz tone, 300 ms of silence and the same tone after 4-30 s without audio, a PC microphone records it, and the
+      first tone (cold) is held to the second (warm): length within 10 dB of its level in the tone's band (a biquad at
+      1 kHz), 2 ms blocks; a B not ~490 ms long is a noise in the room, not counted.  The rise to -3 dB is shown only:
+      the room's noise moved it 14 -> 26 ms on both tones.
+      The Echo's own microphones cannot (no micRaw on the Shows, the processed stream cancels the playback), and the
+      tone against its own copy needs no shared clock.  A cut of 100 ms put into a recording reads as 92 ms lost.
+      checkers (2026-11-07, a Lewitt mic ~1 m away, 50 dB over the room, AudioFlinger in standby before each play):
+      no lead-in, waits 4, 8, 10, 15, 30, 30 s: A 488 ms like B, -3 dB at 12-14 ms like B, lost 0; 350 ms the same; in
+      the band, a noisier room: 5, 10, 20 s, lost 0, 2, 0 ms
+      -> `cold_lead_ms = -1`: the wake blip 350 ms sooner after a pause.  earsup without the lead-in: the open's time
+      is now in the echo delay it searches (up to `D_MAX` 400 ms); checkers' logcat: createTrack 2979.140, openPcmDriver
+      .145-.191, first write .196: +56 ms, the echo ~140 ms after `audio_earcon_started`.  Open: crown (where the blip was not heard),
+      athena (#34: 200 ms by ear sounded whole; its HAL pulls the first buffer ~575 ms after a cold open), cronos,
+      cupcake (a line out, no amplifier) keep 350 until measured; not tried with hassmic's own player on the device
+      (slplay is the same OpenSL ES music stream).  The wake sound of our own (#33's 0.5 s chime where the firmware
+      has none): dropped.  The Sounds card plays any upload as the wake sound on every model since 2026-11-02 (#87),
+      and a built-in chime would only change the default on the Show 8 1st gen, at 0.4 s more over the request's start.
 - [x] Setup on Windows, what it found (2026-10-19, GitHub issue #49: a Dot 2 through `step_*` one at a time from
       Git Bash).  (1) The first `lockdown.sh` over adb after a boot ended with exit 255 and nothing loaded: stock sets
       `service.adb.tcp.port` 5555 at boot, `adb_gate` closed it and restarted adbd at once, which ended the adb shell
@@ -2215,7 +2659,11 @@ Run in this order. Each step says what it proves.
       122 746 in 8149; 20221007 135 408/135 416 in 8149, 122 746 in 8338; default 246/31 400.  Preloader unchanged
       (issue: `bd7ae89-20221003`).  kaeru boots the active slot (v2.0.0: boot_a): install-system.sh writes the active
       slot from TWRP and the running /system otherwise, so either fits.  Unpacked per version
-      (`firmware/biscuit/amonet-biscuit-v2.0.1/`).  Open: an unlock on 8338's LK on a real Dot; 8146 flashed over 8338.
+      (`firmware/biscuit/amonet-biscuit-v2.0.1/`).  8338's LK unlocked on a real Dot 2026-10-26 (issue #50's reporter,
+      Linux, amonet v2.0.1's `fastbrick-20260617.img`).  Open: 8146 flashed over 8338; an unlock from Windows (issue
+      #74, 2026-10-27: one attempt through a wrapper around platform-tools 37.0.1's fastboot — refused, exit 1, no
+      error line caught, the Echo unharmed; amonet's `fastbrick.bat` flashes with the zip's bundled `bin/fastboot.exe`,
+      platform-tools 36.0.0, before any system fastboot, as v2.0.0's runner does — firebreak 0.8.0 stays the route).
       TWRP before the wipe (`twrp_check`, first in every model's `step_flash`): 3.7 or newer, else stop with nothing
       wiped (the issue: amonet v1's TWRP 3.2.3, on Dots EchoLocal sold unlocked, cannot install 6574.1).  Every unlock
       here brings 3.7.0_9-0: `ro.twrp.version` and the string next to it in the ramdisks of amonet-biscuit v2.0.0,
@@ -2238,6 +2686,26 @@ Run in this order. Each step says what it proves.
       returns;
       biscuit's README names the LK build as a prerequisite.  Open: an amonet release that unlocks LK builds from
       June 2026 on (R0rt1z2's XDA thread).
+- [x] fastbrick's last words (2026-11-09, GitHub issue #154, an Echo Dot 2 from the guided setup).  After the
+      payload fastbrick.sh prints "Please wait until the process finishes and DO NOT INTERRUPT IT." and then "Press
+      any key to exit..."; the tester could not tell whether it was over or whether the key would stop it (the white
+      ring said it had worked).  The script is over by then: the key only ends its last `read`, and what must not be
+      interrupted is the Echo, which writes on by itself until TWRP.  The setup's box before it said "Do not interrupt
+      it once it runs", and fastbrick's `clear` wiped that box off the screen.  Now `fastbrick` (scripts/lib/setup.sh,
+      every amonet model: biscuit, radar, checkers, crown, cronos) says first what happens, how long, and what not to
+      touch until the sign it is over (the white ring, TWRP on the screen), asks YES itself, hands fastbrick "YES" and
+      the key on stdin, shows its output without its prompts and its clear ("Exploit most likely successful!" as
+      "Sent."), and then says hands off until that sign; the wait for TWRP ends with "The unlock worked".  The Shows
+      wait for `fastboot devices` before it now, as the Dots did: the question comes with the Echo in fastboot.  An
+      Echo amonet finds unlocked already (it used to wait for a TWRP that never came): told before any warning
+      or YES (`fastboot getvar unlock_status` first, fastbrick's own check the fallback); the Dots start TWRP with
+      `fastboot oem reboot-recovery` in amonet's fastboot (the rainbow), as firebreak does, measured on Dots there (its
+      LK has no `reboot-recovery`: `fastboot reboot recovery` would match `reboot` and boot Fire OS; the Echo 2's LK has
+      the same commands, not tried on one); the Shows fail the step and say to power up with Volume up held.  Sent is fastbrick's "Exploit most likely successful!"
+      whatever its exit status (`set -e` and its last `read`: no "stopped" while the Echo writes).  The Dots' "unplug
+      the power" hint moved from 90 s to 3 min, three times the minute the Echo writes.  Checked against stand-in
+      fastbrick.sh copies (sent, unlocked already, "yes"); the READMEs' "10 s grace period" is gone: v2.0.1's
+      fastbrick.sh has none.
 - [x] A login left waiting, a page reloaded into a restart (2026-10-25, a tester's Echo 2, radar, v2026.10.21.213542).
       Ring: `web: login waits for the action button (iPhone)` at 00:43:12Z, then neither "approved" nor "ran out"; the
       ring pulsed until the next day.  `login_expire` (web.c) ran only on a login or adb ask and on the button, so a
@@ -2332,6 +2800,28 @@ Run in this order. Each step says what it proves.
       with it in its data would carry it; a template sensor could keep it in attributes).  Tests:
       fake_ha_esphome_buttons.py (off by default, listed when on, cleared per run, a 300-character reply cut on a
       character).
+- [~] Audio lost right after the wake word (2026-10-28, GitHub issue #77; reported as "Echo Dot 3 (checkers)" on
+      2026.10.27.202406, arbitration with 2 peers, Wyoming STT).  `afe_score` ran on the capture thread: two blocking
+      `service call audiosignalprocessor` (114, 23) took 240 and 380 ms there (the comment said 150 ms: the Dots' lipc),
+      `audio_android.c` had `CAP_NBUF` 8 x 20 ms = 160 ms queued, OpenSL dropped the rest.  The reporter's evidence:
+      the capture clock fell 218 and 188 ms behind the wall clock across one wake word each; a splice (sign flip at the
+      same level) 270-420 ms into the stream in 3 of 5 recordings; none in 5 with Kiosk Satellite mode (no
+      `afe_score`).  Arbitration off did not help: `wake_score` ran before `arb_claim` looked at `arbitrate`.
+      Now: `afe_thread` reads it (times from `wake_afe_times` on the capture thread first), the capture goes on into
+      the ring, `score_wait` claims once it is in (claim as late as before, the same windows learn) or after
+      `AFE_WAIT_MS` 500 (the others' window until learned) with the mic stream's score; a reading left behind sets
+      `afe_asked` after the round, so `afe_late_check` runs `afe_done` once it ends unless a round or a command still
+      runs.  One reading at a time (a hung service call costs scores, no longer the capture).  `arb_rounds()`: no
+      reading unless a round of ours runs (on, in a network, a member counted, not kiosk).  `CAP_NBUF` 32 (640 ms,
+      20 KB) for any other stall; `cap_read` logs one ("all 32 blocks full: up to N ms lost", time since the last free
+      block filled, summed, a line a second at most; AudioRecord's own buffer may have kept some: "up to").  PC: `HASSMIC_FAKE_AFE=<ms>:<voice>:<ambient>`
+      (audio_file.c; wake_none.c then gives SIGUSR1's wake word a place).  Test fake_ha_arbitration_afe.py: 250 ms
+      reading, its 2000 beats 900; the winner's ring replay is 15296 bytes ahead (300 ms reading) of the live stream (4096 with the
+      reading inline on the capture thread: the test fails there); 900 ms: claim with 500 after 500 ms, the late
+      reading's `stream stopped` after the lost round; arbitration off: no reading.  Open (device): the log on a Show
+      (no "capture held up" line, the front end's ms); which model the reporter has (the code path cited is the
+      Shows'); the Dots' mixer queue depth behind `MixerGetBufRec` is unknown, their 150 ms read may have lost audio
+      too.
 - [x] Wake word turns that hear nothing (2026-10-19, GitHub issue #48; two Dot 2 on 2026.10.17.151309: 4
       `stt-no-text-recognized` in 5 days, each with `anim_start_error_short`).  That code (HA's STT returned no text)
       now goes to `core_no_speech`: the run ends as after RUN_END, no error ring, whoever started it (wake word,
@@ -2348,6 +2838,41 @@ Run in this order. Each step says what it proves.
       or a follow-up).  Open (device): near misses per day on a Dot with TV and music (how noisy the event is); the
       false-wake count for the microWakeWord comparison above can come from these events.  Not done: the issue's
       "keep wake clips" (audio around each wake for download).
+- [x] Wake word or button without Home Assistant (2026-11-01; during an HA restart or a lost link the Echo cannot be
+      told from a deaf one, and boot.log has nothing to say why).  `trigger` did nothing when
+      `!connected || !satellite_running`: no sound, no ring, no line.  Now, when not muted, set up (`oobe` 0), IDLE, no
+      ringing timer and no Drop In (`error_shows`): the error ring
+      (`anim_start_error_short`, as `core_error`) and `wake word|button: no Home Assistant link, nothing started`
+      (a client linked, no voice assistant running: says so; it need not be HA).  Unlike #48's no-speech case something failed that
+      the ring helps with.  With arbitration an Echo that cannot answer does not claim (`wake_heard`'s `can`) and
+      triggers at once, so the Echo without HA shows the ring while another one answers: wanted, it is the broken
+      one.  Tests: fake_ha_esphome_buttons.py (HA gone: ring + line for wake word and button; HA back: a run, no
+      ring).  PC by hand: hassmic-host without a client, SIGUSR1 + KEY_HELP: two rings, two lines; not set up: none.
+      Wyoming: HA's mute switch sends `pause-satellite` and keeps the link: linked and not running as before
+      `run-satellite`, so `core_link_pause` marks it and no ring shows (`fake_ha.py`).  HA started with the switch on
+      does not connect at all, which here reads as no link: the ring shows.
+      Open: a sound as well; left out until someone asks.
+- [x] Even volume steps (2026-11-02, asked on an Echo Show 5: "why does the volume sound so non linear"; setting
+      `even_volume`, on by default, exported).  The Show's music stream index is Android's DEFAULT_MEDIA_VOLUME_CURVE
+      (dumpsys media.audio_policy: (1,-58 dB) (20,-40) (60,-17) (100,0), applied in AudioFlinger in float) over 31
+      indices: hassmic's (30 v + 50) / 100 put 3-4 points on one index (45, 46, 47 -> 14), and the measured curve
+      (board.c) has 46 dB under 50 and 20 above.  Now want_db(v) = -50 dB * (100 - v) / 99 (0 silent), the
+      stream at board_vol_at(): the lowest point of the measured curve at least that loud (the Show's points are
+      the indices played, so exact), our PCM gain for the rest (mix_gain; <= 8.8 dB on the Show, 10 on the Dot 2's
+      curve at the top).  No cost: the Show's primary output is AUDIO_FORMAT_PCM_16_BIT 48 kHz stereo
+      (audio_policy_configuration.xml mixPort "primary output"; dumpsys media.audio_flinger: HAL format pcm16,
+      processing pcmfloat), so attenuating 16-bit before it rounds at the same floor.  For the same reason 24-bit
+      Sendspin was not taken up: the output is 16-bit, MA's 24 -> 16 would only move to the Echo.  MainVolume is
+      then not the volume (as with separate volumes): state/volume.music keeps it, written at the first start
+      straight from MainVolume (an update keeps the number).  Echo Show 5 (2026-11-02, the update pushed): 45 kept,
+      index 14 -> 11; keys 0..100 gave indices 0, 5, 8, 8, 11, 12, 15, 20, 23, 26, 30 as the curve says.  Not
+      measured by ear or mic (no Dot beside it for tools/vol-curve.py).  The Dot 3's curve is still the Dot 2's.
+- [ ] A volume curve of its own for every model (2026-11-06; even volume steps lean on it as separate volumes do).
+      `board.volume_curve` is required now: each board.c names one, `board_vol_dot2` (volcurve.c, measured on the Dot 2)
+      standing in where none is measured, and `make unit-volcurve` prints a `todo` line per such model;
+      devices/README.md "Volume curve" makes it part of porting.  Measured: biscuit (2026-10-17), checkers (2026-10-27).
+      Still the stand-in: donut, radar (mixer: a tone in micRaw per volume), crown, cronos, athena, cupcake
+      (tools/vol-curve.py; cupcake through a speaker on its line out).
 - [x] Volumes per kind of audio (GitHub issue #32: several Dot 3 and a Dot 2; one volume for media and one for the
       assistant, the wake sound on a slider of its own).  Built 2026-10-17, after two tries the owner rejected.
       First: categories linked to the main volume with offsets (replies in volume points, sounds in dB under it,
@@ -2486,6 +3011,55 @@ Run in this order. Each step says what it proves.
       the page (`ring_stock`), the page's band drawing and designer; `hassmic_assist_NN` in cyan on the band.
       `ring_band_test.c` (with ringdesign.c), the page checked in headless Chromium on the PC build, the build on the
       tester's Show (self test, factory copy).
+      Screen UI (2026-10-14): not one frontend for everyone, a small fallback of our own and any app beside it.
+      `src/ui/` (scene.c: face, music, switcher as a display list diffed per frame into one dirty rectangle; gfx.c:
+      anti-aliased boxes and polygons by distance, fills inside; android.c: JNI) as libhmui.so, loaded by
+      `scripts/device/screen.dex` (tools/mkscreen.py: System.load + Thread.join, 664 bytes) in one app_process that
+      hassmic starts (screen.c: state kept by generation, written by one thread, so no caller ever waits on the UI).
+      Probe on the Echo first: SurfaceControl by JNI 2.5 ms, a 200x200 dirty rectangle 0.48 ms drawn + 0.47 ms posted
+      (ANativeWindow_lock keeps the rest of the buffer), a whole frame 3.8 ms, IActivityManager.getTasks 0.85 ms.
+      Running (hassmic's child, uid system): the talking face 6 % of a core at 30 fps, the idle face 1.3 % (blinks and
+      glances), the muted face 0.1 %; PSS 33 MB.  The band moved into the same process (one row a frame over the pipe,
+      its own layer and the overscan): ringbar.dex's VM was 16 MB PSS more, both now 31.8 MB.  Text and images by Skia
+      through JNI (TextPaint + TextUtils.ellipsize onto ALPHA_8, BitmapFactory for the artwork), apps from
+      IPackageManager with labels and icons from each APK's own Resources (4 in 146 ms on the Echo), launch through
+      IActivityManager.startActivityAsUser as `am start`; all 64 methods and 21 fields checked against 8149's boot
+      class path (mkscreen.py --framework).  Touch read from goodix-ts beside Android (not grabbed) and turned as
+      InputReader does; the layer shows only while hassmic's codeless home activity is in front, so touches land on
+      it.  Seen on the Echo: face states, real Music Assistant metadata and cover, the switcher opened by an edge swipe
+      (sendevent on the evdev node) and the music tile tapped; tz from HA's GetTimeResponse (field 2, POSIX) for the
+      clock.  Sendspin: metadata@v1 (changes only: aiosendspin's diff_update) and artwork@v1 (one channel, album, 400
+      px JPEG; fragments put together); tests/fake_screen.py against aiosendspin, tests/unit/ui_test.c (every
+      incremental frame byte for byte the whole one, gestures, timings).  dexasm fix: an empty id section has offset
+      0 (ART refused screen.dex, no fields).  AmazonWebView kept on the partition (the only provider in
+      config_webview_packages, Chromium 118): installed and selected after a reboot; its RELRO preparation fails as
+      in stock (the manifest names libwebviewchromium.so, the firmware ships libwebviewextchromium.so).  Not yet:
+      a WebView app run; Back injection and the home-app relaunch on the device; a finger instead of sendevent.
+      Screen UI, second round (2026-11-02, on the PC only: the tester's Show runs the Kiosk Satellite branch, not
+      this): the switcher (swipe up from the band) replaced by a drawer pulled from the top edge, as Amazon's own (over
+      an app: SurfaceControl.screenshot(II) of the panel as mounted, turned as touch_map turns touches, under the
+      drawer; hassmic's home activity started at the pull so the next touches are ours; nothing chosen = the app
+      relaunched).  The music view became Music Assistant's: Playing (Sendspin, as before, plus seek, shuffle,
+      repeat), Queue, Library, Search, Speakers through MA's own API (mass.c, ws :8095, schema >= 28 token auth; MA
+      2.10.8's sources read: player_id = Sendspin client id, events only after auth, imageproxy sizes 0/80/160/256/
+      512/1024 and `/imageproxy/<proxy_id>`, set_members since 2.4).  src/ui split into scene/widgets/face/drawer/music
+      (ui.h); the display list got a clip per item, scrollers (flings: e^(-t/325 ms), a third of the finger past the
+      ends), an image cache by key and size, outlines, arcs, gradients, premultiplied icons scaled.  ui_test.c: every
+      incremental frame byte for byte the full one through all views and gestures (it caught two: the picture under the
+      drawer freed after its item was in the list, a scroller of a freed list); ASan/UBSan.  tools/uishot.c draws every
+      view with the firmware's Roboto.  Kiosk Satellite (PR #76) and the UI: the UI's home app defaults to it, and
+      kiosk_tick leaves opening it to the UI while state/screen-ui names a live pid (kiosk_test.py).  Sendspin 1.0
+      metadata is a snapshot (aiosendspin 10 snapshot_update: a field left out is None), so left out = empty there,
+      unchanged only in the 9.1.1 dialect; MA 2.10.8 offers the controller's volume only where the group's players
+      declare it, so the Playing page's volume falls back to the API's group_volume.  On the tester's Show
+      (2026-11-02, flashed): the drawer listed every launcher app (AOSP Music, two Downloads: DocumentsUI and
+      FireOSDownloadProviderUi, Simple Keyboard's settings), so the drawer has no apps now and the home app is the
+      page's (Screen page); a pull from Kiosk Satellite's top also refreshed it (it got the touch), so 16 rows along the
+      top are overscan too (the grip) and only a pull from there opens the drawer over an app; closing it back to the
+      app showed the face for up to a second (the picture freed in the frame that relaunched the app, the layer hidden
+      only at the next getTasks poll), so the last frame now stays until the app is in front.  Not yet on the device:
+      the rest of this round (the drawer over an app, the screenshot's orientation, a fling with a real finger, image decoding
+      off the UI thread, goToSleep/wakeUp, a real MA token).
       Open items, one list: docs/re-checkers.md "What a port needs".
 - [~] Echo Show 8 1st gen (`crown`, 2026-10-13; `docs/re-crown.md`). Same platform as checkers: MT8163, Android 7.1.2,
       kernel 4.9.77, RT5616, gating latch, MT7668; Fire OS 6.5.7.0 NS6570 (6074). `libpryon.so` 2.41 (newer than the
@@ -2511,10 +3085,29 @@ Run in this order. Each step says what it proves.
       by itself 20-80 s later (12 s 0, 16 s 2, 17 s 1, released 36 s in one boot, 50 s and 83 s in two): hassmic up
       at 40-64 s caught it and played "mics off" -> `mute_latch(1, 0)` shows it quietly.  No wake sound was heard: the
       output's open takes ~170 ms plus the amplifier (logcat, AudioALSAPlaybackHandlerNormal), the blip is 120 ms ->
-      `audio_android.c` lead-in of 350 ms after 2.5 s without audio (`COLD_MS`, `LEAD_MS`); the blip after it to be
+      `audio_android.c` lead-in of 350 ms after 2.5 s without audio (`COLD_MS`, now `board.cold_lead_ms`); the blip after it to be
       confirmed by ear (a longer sound of our own was heard after it, 2026-10-15).  2026-10-17: the lead-in
       reached earsup as part of the echo delay (85 ms + 350 > `D_MAX` 400 ms): `audio_earcon_started(lead_ms)` moves its
       start past it.
+      Screen UI (2026-11-03, PC only): `SCREEN` in device.mk; the JNI table found on NS6570's boot class path as is;
+      1280 x 800 at rotation 1 (`user_rotation`; `ro.sf.hwrotation` 90 only MediaTek's hwcomposer and magd read, below
+      Android: the band laid out by DisplayInfo was right), FocalTech touch; the layout
+      drawn at 1280 x 774 by uishot (docs/re-crown.md "Screen UI").  Not yet on the Echo.
+- [~] Echo Show: speech on screen (2026-11-03, PR #104 by taucher4000).  What was said, the reply and the timers, as
+      stock's Alexa screens and Kiosk Satellite show them.  The PR's first form drew with stb_truetype in hassmic and
+      showed it through a second ringbar.dex in a text mode, one layer over the screen UI's (drawer and music under the
+      shade), whole frames through the pipe (1.8 MB on the Show 5, 20 a second while a ringing timer pulsed, about
+      36 MB/s).  Moved into the screen UI (2026-11-08): `src/ui/words.c` on a fourth layer of the UI process
+      (`hassmic-words`, TRANSLUCENT, between the UI's and the band's, hidden while the drawer is out), the platform's
+      text (Skia, the system font, every script it covers), drawn on a change only (a running timer once a second),
+      fades and the pulse by `SurfaceControl.setAlpha` (on every Show's boot class path, `make unit-screen`); hassmic
+      tells it lines (`wo`, `wh`, `wr`, `ws`, `tl`); the timers are the core's own list.  Seen by the PR on the first
+      cronos (2026-11-03): a strip of 55 % at the bottom with the reply at 15 % of it was small and cut short with the
+      screen black above it -> the whole layer, the reply 14 % of its height down to 7.5 %, as many lines as fit, in
+      the middle; "stop" showed after stop_ends_listening had ended the run -> the transcript goes to the screen only
+      after `core_transcript`, and `stop_word` clears what it ended.  Checked on the PC: `ui_test` (fades, hold, the
+      drawer, timers by the second, the pulse by alpha only, a reply too long, broken UTF-8, under ASan/UBSan),
+      `tests/fake_screen_words.py`, `build/uishot`.  Open: the moved form not yet on an Echo.
 - [~] Echo Show 5 2nd gen (`cronos`, 2026-10-26; `docs/re-cronos.md`).  checkers' platform and its pinned build: Fire OS
       6574.1 NS65741/8149 (same `ro.build.version.incremental`, cronos' own image), kernel 4.9.77 (20 config lines from
       checkers', 74 from crown's), `libpryon.so` byte-identical to checkers', stubs identical in symbols and order,
@@ -2532,8 +3125,12 @@ Run in this order. Each step says what it proves.
       root could not update a network the stock update had saved (as system now), the speaker amp is a MAX98396
       (added), the udev rules lacked the Shows' fastboot id.  Found, fixed for every model since (issue #45): Ubuntu 26.04
       refuses `unshare --user` (qrun.sh), qemu-arm on a non-x86_64 PC, the udev rules over ssh.  The lk (`20240709`) is 8149's and does not change with stock updates.
-      Home Assistant adopted it and works (the tester).  Not yet: the speaker gain by ear, Wi-Fi motion, DHA version /
-      Download from Amazon, Bluetooth.
+      Home Assistant adopted it and works (the tester).  Screen UI (2026-11-03): `SCREEN` in device.mk, libhmui.so in its
+      build and bundle; the JNI table found on cronos' own boot class path (`make unit-screen` checks every model with
+      `SCREEN` against its unpacked firmware; framework.jar is checkers' byte for byte), display and touch as checkers'
+      (960 x 480, rotation 1, goodix-ts).  On the Echo (2026-11-04, issue #122 below): the face, the clock and the
+      drawer handle, once its library loaded.  Not yet: the speaker gain by ear, Wi-Fi motion, DHA version / Download
+      from Amazon, Bluetooth, the rest of the screen UI (touches, drawer, music).
 - [~] Echo Show 8 2nd gen (`athena`, 2026-10-14; `docs/re-athena.md`).  A different platform from crown: MT8183, Android 9
       (Treble, enforcing SELinux, policy in `/vendor/etc/selinux/precompiled_sepolicy`), kernel 4.4.146, Fire OS 7574.1
       (PS75741.7080N; build 7077's probe libraries are byte-identical).  Rooted by saiyaku-athena's zip (system and vendor
@@ -2570,7 +3167,7 @@ Run in this order. Each step says what it proves.
       volume: 115, 120 and 122 clean on a radio stream, 130 distorted, a rap track's bass clipped at 122, so
       `speaker_gain_limit` 118 and `speaker_gain_steps` 2 (0.5 dB assumed) = up to +9 dB.  The audio HAL did not rewrite it
       after a voice reply or at a change of the setting.  Sounds: a cold output = ~575 ms until the HAL pulls the first
-      buffer (the amplifier unmuting) + `LEAD_MS` (350, as crown).
+      buffer (the amplifier unmuting) + the lead-in (`board.cold_lead_ms`: 350, as crown).
       Mute button: `gpio-privacy` reports the latch 1.23/1.29 s after a press that mutes, 0.28 s unmuting
       (`enable-gpio-toggle-duration` 1000 ms); `board.privacy_button` (`gpio-privacy-button`, not grabbed) shows the press at
       once, the latch confirms it within `privacy_settle_ms` (2000) or it is taken back (`buttons_privacy_test`).
@@ -2578,5 +3175,264 @@ Run in this order. Each step says what it proves.
       (hook +0x68); no `patch_text` and read-only module text: `set_memory_rw` + `stop_machine`; `devices/athena/Module.symvers`
       for `CONFIG_MODVERSIONS`.  RCPI 120 unicast (0x14009), 129 broadcasts; the sensor switched on as someone walked past.
       **Open:** lux flicker under a close lamp; not confirmed on the Echo: Improv, factory reset, `--uninstall`, the
-      update check, and the build without the `netio.h` system calls (the rule alone);
-      `tools/mkringbar.py --framework` cannot read Android 9's compact dex (checked by hand once, 2026-10-20).
+      update check, the build without the `netio.h` system calls (the rule alone), the screen UI.
+      Screen UI (2026-11-03, PC only): `SCREEN` in device.mk, libhmui.so and screen.dex in `install-system.sh` too.
+      `tools/dexasm.py` reads Android 9's boot classes (compact dex in vdex 019, the shared data section, hidden API bits
+      off the access flags), so `--framework` works on athena: wifictl.dex and ringbar.dex resolve there (was checked by
+      hand once, 2026-10-20), and `make unit` checks every dex against every model's unpacked firmware that runs it.
+      android.c's JNI table differs in two: `SurfaceControl.Builder` for the constructor (SDK 26 on), `getTasks(int)`
+      (28 on), as `JV`/`CV` entries resolved by `ro.build.version.sdk` (mkscreen.py checks each firmware for what its SDK
+      resolves).  Display and touch go by DisplayInfo (`ro.sf.hwrotation` 90 read only by a capture tool; the
+      hwcomposer reads `ro.vendor.sf.hwrotation`, unset).  Not yet on the Echo.
+      Other builds (PR #98, 2026-11-03): PS75741.7082N (build 0036274154116) has 7080's six `PROBE_FILES` byte for
+      byte; PS75751.7806N (a new line, still Android 9) differs in `libpryon.so` and `libaudioflinger.so` by build id
+      only (exported symbols the same, `codebuild` paths of a rebuild); on it boot, wake word, voice assistant start
+      and Kiosk Satellite worked (baudneo, 2026-11-01).  So `firmware_ok` (`scripts/lib/device.sh`) takes the probe's
+      verdict instead of the build id, wherever the install flashes nothing build-bound (`INSTALL` twrp-ab, running;
+      `boot` keeps the pinned build, its boot.img is that build's); athena, with no firmware step, asks where it
+      differs (`device_check_firmware`; the setup asks itself in `firmware_accept`: under `task` a question on
+      `/dev/tty` waited unseen).  `tests/unit/firmware_test.sh` runs the real probe.sh against a stand-in adb.
+- [x] Echo Input (`cupcake`, 2026-10-28; `docs/re-cupcake.md`), worked out from the firmware (NS6575/8338), installed
+      and running on one Echo Input (2026-10-29).  donut's platform
+      (MT8516, arm64 kernel 4.4.22+, A/B, `/sepolicy` on system, kamakiri + TWRP in swdl) with checkers' software
+      (framework, Alexa as apps, WifiService, the front end in the audio HAL: `audio_android.c`; the HAL's source ->
+      pipeline map is checkers', VOICE_RECOGNITION = ASR).  `INSTALL=twrp-ab` with the new `ANDROID=1` (was implied by
+      `INSTALL=boot|running` in wifi.sh, wifi-join.sh, deploy.sh, bundle.sh, install-system.sh; the Shows set it now).
+      Checked on the PC: libpryon (own build, same symbols) detects ALEXA on its en-US model under qemu as checkers'
+      does; wifictl.dex resolves against its framework; IAudioService/IPowerManager codes as checkers'; the Wi-Fi
+      driver's hook (+0x50) and module ABI as donut's (`hassmic_rcpi4m` builds with donut's fragment); donut's
+      boot-root finds what it patches (cmdline `veritykeyid`, adbd's autoroot site at 0x19bf4); stubs byte-identical;
+      `scripts/setup.sh cupcake --dry-run`.  One LP5562 LED for the 12-LED animations: `board.ring_leds` 1 (no turned
+      copies, no LED layers: 622 files), and ring.c puts listening's names into the layer that lists `active-start`
+      (layer 3 here; 4 on the Dots, their set byte-identical).  No speaker: no `speaker_gain`, the Dot 2's volume curve.
+      Tried on the device (2026-10-29), all as expected: unlock, root, install, audio level, buttons, the LED, DHA,
+      Bluetooth, the wake lock.  kamakiri-cupcake v1.0.0 pinned (its lk and tee are 8338's).
+- [~] Kiosk Satellite next to hassmic on the screen models (crown, athena; 2026-10-14, `docs/kiosk-satellite.md`).  The app
+      (me.jxl.kiosk_satellite, the user's choice) shows dashboards; hassmic stays the voice satellite.  `main.sh`:
+      `kiosk_tick` opens the app whenever hassmic's home shows and keeps its update helper running as the shell user (never root),
+      `kiosk_grants` gives it the permissions it would ask a person for (microphone and camera by their settings).  `lockdown.sh`: setting
+      `kiosk_internet` (default on) lets that uid out to the internet with one rule, INPUT TCP 2324 (its web page) and 6053
+      (its ESPHome API) from private addresses only.  `install_screen_apps` in the guided setup offers Simple Keyboard (the
+      image has no input method).  Lux readings agree with the app's within ~1 lx in dim light.
+- [x] Kiosk Satellite microphone for a plugin (2026-10-26, athena, Show 8 2nd gen, Android 9; user's doorbell plugin
+      `reolink-doorbell` 1.1.1 inside KS 2026.10.40, a Reolink doorbell on the LAN, talk over Baichuan/ONVIF, no Home
+      Assistant).  Question: can the app record while hassmic holds the mic?  `dumpsys audio` (recording activity)
+      watched through three calls: hassmic uid 1000, session 41, VOICE_RECOGNITION, started 09:19:47, no stop or restart
+      in the whole run; the app (uid 10183) opened VOICE_COMMUNICATION (32.9 s), VOICE_RECOGNITION (19.1 s) and
+      CAMCORDER (17.7 s) one after the other.  boot.log: no "capture delivers nothing, reopening", the wake word fired
+      during the calls (score 2206 from the front end, level -49 dBFS over noise -73) and answered.  The user: only
+      VOICE_COMMUNICATION reached the doorbell, without echo; the other two gave nothing and echoed; sound at the
+      doorbell poor (cause unmeasured: G.711 talk channel, the doorbell's speaker, or the Voice pipeline's level).
+      The plugin's default "Automatic" tries CAMCORDER first and keeps what opens, so it fails here.  Done: setting
+      `kiosk_mic` (settings.c, off by default, page only, not exported); main.sh `kiosk_perm`/`kiosk_perm_sync`
+      grant or revoke RECORD_AUDIO from state/config (revoking ends the app).  Not done: the mechanism behind the
+      silent sources; the same on crown and checkers (Android 7.1.2, where audio_android.c's header expects a newer
+      recorder to take the input from an older one); the Voice pipeline's level and noise (a recording from
+      VOICE_COMMUNICATION next to hassmic's).
+- [x] Kiosk Satellite review fixes (2026-11-01, PR #76): `app/AmazonWebView` stays on checkers and cronos (the only provider;
+      checkers had none); `kiosk_tick` replaces once-per-boot: install, reinstall and an ended app handled within 10 s
+      (`mResumedActivity` is hassmic-home), one open a minute; `kiosk_camera` (off); `board.kiosk` instead of the band for the
+      settings; the page shows the rows once root's `kiosk-app` exists; `tests/unit/kiosk_test.py`.  `install_screen_apps` in setup and `scripts/kiosk-install.sh`: newest release, sha256 from GitHub, signer pinned on the PC (`apkcert.py`).
+- [~] Kiosk Satellite uninstall (2026-11-03, PR #76): `kiosk_grants` makes it a device admin, so `pm uninstall` fails with
+      `DELETE_FAILED_DEVICE_POLICY_MANAGER`, and `dpm remove-active-admin` (`forceRemoveActiveAdmin`) refuses non-testOnly
+      admins, root included; the way found on athena (2026-11-01) was editing `device_policies.xml` and a reboot.
+      `scripts/kiosk-install.sh --uninstall` (`kiosk_remove`): `pm disable` of each admin receiver dumpsys lists, wait
+      until dumpsys drops it (15 s, else enabled again), `pm uninstall`.  Why that works, from checkers' and crown's
+      `services.jar` (androguard; cronos' dex is checkers'): `DevicePolicyManagerService$4.onReceive` hands
+      `PACKAGE_CHANGED` to `handlePackagesChanged`, which drops an admin whose `getReceiverInfo(.., 0xC0000)` is null
+      (direct boot flags only, so a disabled receiver does not resolve) and saves; `findAdmin` asks with 0xC8080
+      (`MATCH_DISABLED_UNTIL_USED_COMPONENTS`, not disabled), so `set-active-admin` throws "Unknown admin" meanwhile.
+      Amazon added `VendorDevicePolicyManagerCallback.callIsDeactivationBlocked` to `removeActiveAdmin`, not to that path.
+      athena's services are compact dex (`cdex001` in the vdex), not read.  `kiosk_tick` now ends `ks-update-helper-*`
+      when the app goes (`kiosk_helper_end`, by `/proc/*/cmdline`: toybox pkill on Android 7 has no -f).
+      `tests/unit/kiosk_test.py` with a stand-in adb.  Run on the user's Show 5 (checkers, 7.1.2, KS 2026.10.45,
+      2026-11-03, over adb-wifi.sh): admin gone at the first dumpsys after `pm disable`, `pm uninstall` Success, 5.2 s;
+      package, data, doze entry, 2324/6053 and the uid rule gone.  The helper `ks-update-helper-10002` (uid 2000)
+      survived on that Echo's older main.sh; the branch's `kiosk_helper_end`, pushed and run there, ended it.  Its
+      `/data/local/tmp/ks-update-helper-<uid>` folder and log (empty) stayed: removed by `kiosk_helper_end` now.
+      Put back: same APK by `pm install -r`, uid 10154 (was 10002), data restored (tar, chown, chcon to
+      `app_data_file:s0:c512,c768`) with hassmic stopped; dashboard back, logged in, 48 of 49 prefs keys the same
+      (`boot_pending_since` cleared by the app), grants, admin, uid rule and helper back within 42 s.  Open: athena.
+- [~] WPA2/WPA3 mixed Wi-Fi (issue #90, 2026-11-01; reported and tried on an Echo 2 by its reporter; this form on the PC,
+      and on a Dot 2 with its writes stubbed).  wifisvc's `libacehal_network_all.so` (biscuit, radar, donut) rewrites entries to `WPA-PSK
+      WPA-PSK-SHA256` at each start; on an AP with `[WPA2-PSK+SAE+PSK-SHA256-CCMP]` radar's driver refuses that AKM
+      (`err=22`), plain `WPA-PSK` associates at once.  The Dots' drivers unknown.  The issue's patch asked
+      `get_capability key_mgmt` first; useless: wpa_supplicant 2.6 prints only NONE, IEEE8021X, WPA-EAP, WPA-PSK, WPA-NONE
+      there (no ` WPA-PSK-SHA256` string in any of the three binaries), so its "no-op elsewhere" was never one.
+      Dot 2 on adb, 2026-11-01: capability `NONE IEEE8021X WPA-EAP WPA-PSK`, its entry `WPA-PSK WPA-PSK-SHA256`.
+      `psk_only` (main.sh netwatch, every look): 30 s without `wpa_state=COMPLETED` (not the address: `dhcpcd -K` keeps
+      it over a lost link, and a restarted wpa_supplicant reads SHA256 back), wifisvc models, not under wifi.sh's lock,
+      in memory, by the interface's socket or the global one.  Accepted loss: a network Amazon's setup saved on a
+      PSK-SHA256-only AP, if a driver takes that AKM at all, stays off after such a cut until a reboot.  What setup and
+      wifi.sh saved is WPA-PSK, so such an AP never joined those.  An Echo offline by this takes no update: USB.
+      `wifi-join.sh` (Dots, Echo 2) names a WPA3-only network (`[WPA2-SAE-CCMP]`) from the scan flags: it saves
+      `key_mgmt WPA-PSK`, as wifi.sh does, so neither joins one.  Whether a model could: unknown.  ` SAE` is in none of
+      the three binaries, so `get_capability` cannot print it, whatever the driver (the issue's "no SAE" proves nothing);
+      donut's has SAE code (`SAE: own commit-scalar`), no such strings on biscuit or radar.  `tests/fake_web_wifi.py`.
+- [x] amonet-radar v1.0.1 (issue #88, 2026-11-01): zip sha256 `22809bc4...88a9`, 94 789 047 bytes.  Against v1.0.0: LK
+      payloads for `63cb91b-20221007_073612` and `2c3569d-20260617_051433` beside `59779ca-20220524_183401` (`profile.sh`;
+      the pinned 6436's `lk.img` carries `20221007_073612`), the default and 20220524 payloads and `radar-kaeru.bin`
+      rebuilt, a macOS fastboot, `fastbrick.sh` without bash 4 arrays and `timeout`.  `twrp.img`, `lk.bin`, `preloader.img`,
+      `tz.img`, `tee-payload.bin`, `gpt-radar.bin` unchanged, so the flash steps stand.  A folder per version as on
+      biscuit (`firmware/radar/amonet-radar-v1.0.1/`).  Checked: `scripts/setup.sh radar --dry-run`.  Open: an unlock with it.
+- [~] Echo Shows' setup wipes `/data` with the old system (PR #92, TRusselo, 2026-11-01): crown from build 0013222532996
+      kept 16 app updates in `/data/app` over NS6570's `/system`; Spotlight's (system copy off the partition, account
+      libraries gone) crashed every 1-4 min, `ClassNotFoundException: com.amazon.neo.service.api.sdk.PackageManagerUtils`.
+      By hand afterwards (`pm uninstall` of the leftovers, webview kept): no crash in 4 min.  One `pm uninstall` of an
+      updated app whose system copy is in `/system/hassmic-removed` crashed system_server once (NullPointerException in
+      `deleteSystemPackageLIF`), which came back by itself.  `wipe_data` (`scripts/lib/setup.sh`, crown, checkers, cronos)
+      runs before the write, a run cut off after it would find the right system and skip the step.  Differences from the
+      Dots' wipe: Enter on TWRP's main menu first (their TWRP has no screen; answering "Keep System Read only?" restarts
+      USB), and `/data/app` read back with `/data` known mounted, since what `twrp` exits with on a failed wipe was never
+      seen.  The read-back decides, not adb's exit (a USB restart ends the adb shell while TWRP wipes on: 30 s of tries).
+      Once per run (`WIPED`: a retried write), not by the progress file (a later run may find the old system booted
+      since).  "Start from scratch" keeps its word on the right firmware too (`wipe` / `wiped` in the progress file, set
+      after the warning: a non-empty progress file skips it); athena has no firmware step and no wipe, so its menu and
+      `ROOTED_NOTE` say so.  `/data` unencrypted: `ro.crypto.state` on crown, fstab `encryptable=` on checkers.  Checked:
+      `tests/unit/setup_wipe_test.sh` (stand-ins of adb and the UI around the real functions and menu block), `--dry-run`.  Open: a wipe on a real Show, whether
+      `twrp wipe` runs under the "Keep System Read only?" screen, "Download from Amazon" after a wipe (the Dots' DHA
+      certificate is on `/persist`; the Shows' place not confirmed).
+- [~] Echo Show 5: the firewall loaded again every 5 s, the service restarted every 20 s (issue #100, 2026-11-03,
+      d1nd141's Echo; `ip6tables: hassmic_out is not as loaded`).  The tester's Show held its rules for hours
+      (2026-10-13), so the network's: Android 7.1's ConnectivityService writes `net.dnsN` with `getHostAddress`, which
+      names the interface of a link-local IPv6 resolver ("fe80::1%wlan0"; `net.dns` in 8149's services.odex), and a
+      router announcing its own link-local address as DNS (RDNSS) is common.  ip6tables lists no scope (it refuses such
+      a rule, or loads it without), so `wrong()` never matched `rules`.  `resolvers()` drops the scope; the expression
+      checked with checkers', donut's and biscuit's toybox sed under qemu.  Not confirmed on that Echo: the reporter's
+      `getprop | grep dns` and `ip6tables -S hassmic_out` would say.
+      Whisper there: Amazon's 403 "Request not allowlisted for device Type A4ZP7ZC4PI6TO ... whisper-static" (expected,
+      see 2026-10-13 above) was worded as a lost registration ("log in again").  davs.c now says Amazon does not hand it
+      to this model, keeps the refused ids with the tokens (`refused` line in `state/davs`, `"refused"` in
+      `/api/davs`), forgets one that arrives after all; the Models warning and the download row point at Copy models
+      instead.  `tests/fake_web_davs.py`.  Open: whether the Dots' whisper model runs on a Show (same libpryon).
+- [~] Setup on Windows, one whole run from a stock Dot 2 (issue #106, 2026-11-02, hannes813's Echo: Windows 11, Git
+      Bash, firebreak, LK `63cb91b-20221007_072309`, v2026.11.02.000053-beta): unlock, flash, root, lock-down, Wi-Fi
+      and install went through (the "Open: one whole run on Windows" of #49 and #60 above).  Two snags.  (1) The tip of
+      main was a README commit: CI publishes no beta of a commit whose bundles hold nothing new (content-id.sh), and
+      `prebuilt_tag` wanted a tag on HEAD itself, so Windows, which builds nothing, stopped at the tools step.  It now
+      also takes the newest release tag before HEAD (`git describe`, GitHub's tag on the same commit) when every path
+      changed since is `_bundle_free` (docs, tests, `.github`, the PC's scripts; `scripts/device`, `system`,
+      `bundle.sh`, `content-id.sh`, `otatool.py`, `lib/device.sh`, `kernel-tools.sh` and everything unnamed count as
+      the Echo's).  Checked: 71d099b -> v2026.11.02.000053-beta (README after it), f95d9f9 -> its own tag, 8977ebc ->
+      none (d9f8f62's src between).  docs/WINDOWS.md stays on main now (it checked out the newest tag, which left out
+      every later fix to the PC's scripts, #103's among them).  (2) Prompts that read /dev/tty took no keys and
+      ignored Ctrl-C, mintty and Windows Terminal both, until the window was closed: the drivers question and the
+      Wi-Fi name and password, not "Type yes"; a fresh window went on.  Both followed adb shell calls with the terminal as stdin (`fw_rooted`'s
+      ashell, the scan in `wifi_conf`), and the adb server, a native program started by whichever adb call comes
+      first, keeps the handles it was given.  Not reproduced (no Windows here): setup.sh now runs with stdin from
+      /dev/null (every prompt reads /dev/tty, `live` hands it to the tools that ask), and on Windows `live` kills
+      adb's server after its command (firebreak runs adb).  Open: the reporter's next run.
+- [x] Echo Shows' uninstall wipes cache and data (2026-11-03, a cronos uninstalled the day after its install): after
+      `--uninstall` Fire OS came up at Amazon's setup with "OOBE has stopped" and "SpeechUI has stopped" for good.  No
+      package disabled (`pm list packages -d` empty, though `alexa-disabled` still listed all 17: `alexa-on.sh` ran
+      before the apps were back on `/system`).  Crash buffer: `com.amazon.kindle.otter.oobe` 183 times, every 2-3 s,
+      NullPointerException in `ConfigBundleProvider.setUnZippedLocationOfDeviceConfigBundle` (no unzipped device config
+      bundle: its data went with the APK); `amazon.speech.sim` on RECORD_AUDIO (default grants come at the first boot
+      after a wipe only).  `twrp wipe cache && twrp wipe data` (TWRP 3.7.0_9-0, run after "Keep Read Only" was tapped:
+      the USB restart showed as a new adb transport) left `/data` with `media`, `misc`, `lost+found`; first boot then:
+      the wizard (`com.amazon.ds2.oobe.efd`) in front, RECORD_AUDIO `granted=true` (SYSTEM_FIXED GRANTED_BY_DEFAULT),
+      crash buffer empty.  `install-boot.sh --uninstall` now does it (asks, `--yes` without; setup.sh's `wipe_twrp`,
+      now `scripts/lib/twrp.sh` for both; a run on an Echo without hassmic on `/system` only wipes).  In TWRP it reads
+      the partition first (mounted read-only, or where TWRP has it): an Echo still installed would have been wiped with
+      hassmic left on `/system` and Amazon's apps off it, so it is sent back to Fire OS; no answer stops too.  The wipe
+      runs in the background, 5 min at most (status in a file: dash keeps a finished job's zombie until `wait`), since
+      with `--yes` and no terminal nobody confirms TWRP's menu, and whether `twrp` answers under "Keep System Read
+      only?" is still open; not coreutils' `timeout`, which would run adb from PATH past the tests' adb function.
+      Found with it: `t "[ -f … ]"` never failed (the status is `tr`'s), so neither did the install's check of
+      `$STAGE/ok`: `on_echo` reads an answer.  `tests/unit/uninstall_boot_test.sh` (14 cases; the TWRP probe and the
+      5 min bound each fail it when broken).  Open: athena and cupcake (`install-system.sh`, STOCK_APPS_OUT too) only
+      print that a wipe is needed; whether their uninstall shows the same crashes is not seen.
+- [x] Echo Shows' screen UI from the system partition (issue #122, PR #123, 2026-11-04, M0ebiu5's cronos, main at
+      5fb7c70): installed by the guided setup, the UI's app_process died at every start and hassmic started it again;
+      only the band showed.  logcat: `UnsatisfiedLinkError: dlopen failed: library "/system/hassmic/libhmui.so" needed
+      or dlopened by "/system/lib/libnativeloader.so" is not accessible for the namespace "classloader-namespace"`.
+      app_process's system class loader is not one ApplicationLoaders made, so libnativeloader gives it an isolated
+      namespace whose permitted paths are `java.library.path` (ART takes it from `LD_LIBRARY_PATH`) plus `/data` and
+      `/mnt/expand`; screen.dex's `System.load` of `/system/hassmic/libhmui.so` is outside them.  Unseen until now
+      because every copy that runs from `/data` loads it: deploy.sh's `/data/local/hassmic`, and every pushed or
+      online update (`ota/current`, boot.sh); a Show is black from its install until its first update.  `ui_start`
+      now puts libhmui.so's folder on `LD_LIBRARY_PATH` (replacing an inherited one: nothing of ours sets it), as it
+      sets `CLASSPATH` and `HMUI_BAND`; `/system/hassmic` holds no other library, so app_process's own resolve as
+      before.  Checked on the cronos as root with the installed files: `CLASSPATH=/system/hassmic/screen.dex
+      HMUI_BAND=10 app_process / Screen /system/hassmic/libhmui.so` fails so, and loads (exit 0 at EOF) with
+      `LD_LIBRARY_PATH=/system/hassmic`.  The fixed build pushed (`ota-push.sh`, self test passed): face, clock,
+      drawer handle, no linker errors; that copy runs from `ota/current`, so it shows the UI working on cronos, not
+      the fix itself.  Build for cronos clean (`-Wall -Wextra`), `tests/fake_screen.py` 51 ok (the reporter).
+      Not enough on its own (checkers, 2026-11-04, the factory copy of 89a0a21 run with `ota/current` moved aside):
+      the same error, `ld_library_paths=""`, though the UI's `/proc/<pid>/environ` had `LD_LIBRARY_PATH=/system/hassmic`.
+      hassmic runs with real group 3990 and effective system (`runas -r 3990`, main.sh: its own sockets' group for
+      the egress lock), the kernel makes an exec with the two apart AT_SECURE (`cap_bprm_secureexec`: egid != gid;
+      the UI's auxv: AT_SECURE 1), and bionic's linker drops `LD_LIBRARY_PATH` under it.  The hand check on cronos ran
+      as root, ids equal.  main.c's `child_ids` (setregid(egid, egid)) was done for the programs main.c and ledq.c run, not
+      for the UI (nor ringbar.dex, which loads no library of ours); `ui_start`'s child now does it before `execve`.  Then from `/system` (276c0c2 as the factory copy,
+      `ota/current` aside, hassmic restarted): `screen: up`, no linker error in logcat, the UI at gid 1000/1000;
+      `ota/current` put back.  `tests/fake_screen.py` (and `--legacy`) ok.  Open: crown and athena (Android 9: AOSP's
+      libnativeloader does the same for class loaders it did not make; athena's runas the same).
+      Seen there too: Android's auto brightness with `als_ps/lux` at 4-6 held the backlight at 5/255, the screen as
+      good as off until `screen_brightness_mode 0`.  checkers and cronos now set manual 120 in `ANDROID_SETTINGS`, as
+      athena and crown did.  Fire OS maps the setting to the backlight on a curve of its own (checkers, `dumpsys power`
+      mScreenBrightnessSetting = `lcd-backlight/brightness`): 10 -> 5, 30 -> 7, 120 -> 33, 130 -> 39, 144 -> 49,
+      155 -> 59, 240 -> 210, 255 -> 255; Android's default setting is 90.  Kiosk Satellite's adaptive brightness
+      (`flutter.ks.screen.adaptive_brightness`, on by default, WRITE_SETTINGS) writes the setting from the light
+      sensor while the mode is manual (120 to 155 at 20 to 45 lux within seconds), or a level of its own with that
+      off; ours at each satellite start only fought it, so `alexa-off.sh` leaves the level alone while the app's
+      folder is in `/data/app` (the mode stays manual: its adaptive brightness runs under it).  Open: 120 by eye in
+      daylight (33/255; stock ran at 238).  Since issue #126 a setting (below).
+      Boot time (2026-11-02, Show 5, PR #114): `alexa-off.sh` took 16 s of a 41 s boot at a start with nothing left to
+      do, all of it Java: `pm list packages -d` and `pm list packages` ~2 s each, a `settings get` ~2 s per
+      `ANDROID_SETTINGS` entry, `wpa_cli p2p_group_remove` 7 s with no group up.  Now the package manager's and
+      SettingsProvider's own XML first (`packages.xml` trusted only when it ends in `</packages>`: it is written again
+      in place, and "android" is at line 1381 of 3339 with Alexa's `/data/app` updates after it), `wpa_cli` only when
+      `/sys/class/net/p2p-p2p0-0` exists; anything not shown done goes to pm/settings as before.  `pm_done` checked
+      against fake files (whole, cut off, enabled, no restriction entry, component not noted, state 4).
+- [x] Echo Shows: a key held while hassmic starts was repeated by Android for good (issue #140, 2026-11-07, malammar's
+      Echo Show 5: volume down held during boot, the volume went to 0 and every attempt to raise it was undone at once,
+      until hassmic restarted).  `board.grab_keys` took EVIOCGRAB at once: Android had read the key-down, the key-up
+      reached hassmic alone, and InputDispatcher repeats the key it thinks held every 50 ms.  The kernel sends no
+      key-ups to the other readers on a grab, and none can be given to Android afterwards (a uinput key-up would be
+      another device's), so the grab waits for every key to be up (`EVIOCGKEY`), in each reader's thread (startup goes
+      on; keypad and privacy device each), with no time limit: a limit only brings the endless repeat back for a key held
+      longer, and until the grab the keys are Android's as on stock.  Events read before the grab are dropped (Android
+      had them).  Looked at again right after the grab: a key that went down between look and grab reached Android
+      too, so the grab is let go until it is up.  `tests/unit/buttons_grab_test.c` (EVIOCGKEY/EVIOCGRAB faked per
+      FIFO with `--wrap=ioctl`: keypad and privacy device, the race, a device without EVIOCGKEY grabbed at once; on the
+      old code 6 of its 7 checks fail).  The log says how long the grab waited, so a stuck key shows there.  On the
+      Echo Show 5 (checkers, 2026-11-07): holding a key through boot cannot test it, since MediaTek's kernel
+      long-press reset (`long_press_restart`, PMIC LPRST; `reboot: Restarting system with command 'enter_kpoc'`, boot
+      reason `wdt`) restarts the Show at ~17 s of a held key, before hassmic starts (~27 s).  Instead hassmic stopped,
+      volume down held by `sendevent` on gpio-keys (event6; the PMIC never sees it), hassmic started: Android drove the
+      speaker index 12 -> 0, the log said "key 114 is down", the key let go 3.5 s later "grabbed after 3533 ms";
+      the index set back to 12 stayed there (no repeat).  Muted (`amazon-gating/state` 1),
+      hassmic restarted: `gating` grabbed at once, so the gating driver does not hold KEY_POWER down while muted.
+- [~] Echo Shows' screen brightness as stock's (issue #126, 2026-11-07, MWolf1911's cronos: hourly medians of
+      `als_ps/lux` 1-19 lux over a day, median 3, never 30; the face's own dimming, 0.35 at 0 lux to 1 from 30 lux, at
+      48-61 % mornings and evenings, on a backlight at 33/255).  Stock has no brightness code of its own: KnightSettings'
+      "Adaptive brightness" writes `screen_brightness_mode`, its slider `screen_brightness`, or with adaptive on
+      `screen_auto_brightness_adj` (strings in its dex, as SystemUI's BrightnessController); Android's
+      AutomaticBrightnessController does the rest on framework-res's curve (cronos, checkers alike from 25 lux;
+      `config_autoBrightnessLevels` 1..20, 25, 30, 40 .. 650 lux, `config_autoBrightnessLcdBacklightValues` cronos 4 4
+      4 4 4 5 6 7 8 11 13 17 20 24 30 35 42 48 55 63 74 117 155 184 204 216 222 226 230 ... 250, checkers 1 1 1 1 1 2
+      3 ... 63 93 117 ...; `config_autoBrightnessAdjustmentMaxGamma` 7.0, so +1 makes setting 4 = 141 by Android 7's (v/255)^(7^-adj), what
+      manual 55 % gives (computed, not measured); debounce 4 s
+      up, 5 s down).  The reporter's 1-3 lux would get setting 4 on stock too: darker than our 120, hence manual stays
+      the default.  Now: settings `screen_brightness_auto` (off), `screen_brightness` (47 % = 120),
+      `screen_brightness_adjust` (-100..100 = -1..1), `board.backlight` and device.conf `BACKLIGHT` on the four Shows
+      (`backlight_test.py` holds them to each other and to `SCREEN`), HA's "Adaptive brightness", "Screen brightness",
+      "Adaptive brightness adjustment" (config); root's `main.sh backlight` reads `state/config` every 2 s and sets
+      Android's settings (only what differs: SettingsProvider's XML first; stock's values into `alexa-settings` for
+      `alexa-on.sh`; values not a short whole number taken as the default); `ANDROID_SETTINGS` no longer has the
+      brightness.  Kiosk Satellite (checkers, 2026-11-07, this build pushed): its adaptive brightness
+      (`flutter.ks.screen.adaptive_brightness`, true) set `screen_brightness_mode` back to 0 three seconds after root set
+      1 (SettingsProvider's file names the writer: `package="me.jxl.kiosk_satellite"`) and kept writing the level (107 to
+      137 at 43 lux).  So root switches it off: `main.sh kiosk_brightness`, each kiosk tick a grep as the app's user
+      (runas `u0_a154`: the file and its folder are the app's, a link or FIFO there reaches nothing more), when on or
+      missing `am force-stop`, the key written in place (label kept), the app opened again as ever.  By hand first: the
+      app came back with it off and wrote no level in a minute (its `default_brightness` 0.9 never), adaptive then held
+      (mode 1 for 46 s, `dumpsys display` mAmbientLux 44 -> mScreenAutoBrightness 193 = lcd-backlight 193, the spline as
+      framework-res).  With that, no exception for the app in `backlight`; anything else that changes the brightness is
+      set back three times at most until the setting changes (never a fight).  Lights off with adaptive on (checkers, 19:41): lux 44 -> 3,
+      `mScreenAutoBrightness` 4 then 1, lcd-backlight 203 held 5 s (darkening debounce) then down ~10 a second (62 after
+      14 s): Android's own ramp, as stock.  The face's `night()` is gone, and with it the `lux` line to the UI.  Tests: `tests/unit/backlight_test.py`
+      (the block in `sh` with a stand-in `settings`), `fake_ha_esphome_timers.py` (`HASSMIC_FAKE_BACKLIGHT`: entities,
+      commands, page), `fake_ha_esphome.py` (none on a Dot).  **Open:** Android 9's (athena, crown) curve not read, nor
+      tried there; the adjustment's effect on the backlight not measured; Kiosk Satellite's switch on cronos/crown/athena.

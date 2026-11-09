@@ -1,7 +1,7 @@
 # Echo Show 5 1st gen (`checkers`): what the firmware says
 
-Worked out from the firmware only, 2026-10-07; nobody has run hassmic on an Echo Show yet. The unlock is public
-(amonet-checkers, `devices/checkers/README.md`).
+Worked out from the firmware first, 2026-10-07; hassmic runs on an Echo Show since 2026-10-10, and "What a port
+needs" says what was checked on it. The unlock is public (amonet-checkers, `devices/checkers/README.md`).
 Firmware: `update-kindle-checkers-NS65741_user_8149_0013222532484.bin` (sha256 `f96fcfa1…73cfa3`), Fire OS 6574.1
 (NS65741/8149), the same release as donut's. Model H23K37, `ro.product.model=AEOCH`, `ro.product.device=checkers`.
 
@@ -23,6 +23,61 @@ python3 scripts/mkbootroot.py --cpio firmware/checkers/images/boot.img firmware/
 
 The kernel (`boot.img`, 4.9.77, 32-bit ARM) carries its config: `devices/checkers/kconfig`. Five device trees are
 appended (proto, hvt, evt, dvt, pvt boards).
+
+## Root boot image
+
+What the install flashes, and why not the XDA thread's image. The steps:
+[devices/checkers/README.md](../devices/checkers/README.md#4-root-boot-image-and-the-install).
+
+### The XDA boot-root.img
+
+The thread roots with `fastboot oem flags 61` (adb on, no authentication), `fastboot flash boot boot-root.img`,
+`fastboot reboot`. **That image is not built from 8149:** its kernel and ramdisk are NS6570 / 6086's (kernel
+`4.9.77-g1f91447-dirty`, 2025-09-23; 8149's is `4.9.77-ga3ad36a2995d-dirty`, 2026-09-28). Against 8149's `boot.img`
+(both with MediaTek's 512-byte kernel header; 8149's ramdisk a bare gzip stream, the XDA image's with a `ROOTFS`
+header too):
+
+- `default.prop`: `ro.secure=0`, `ro.adb.secure=0`, `ro.debuggable=1`, `persist.sys.usb.config=mtp,adb`;
+- `init.fosflags.sh` cut down to turning adb on without authentication;
+- `sepolicy`, `file_contexts.bin`, `seapp_contexts`, `service_contexts`, `init` and `sbin/*` differ (6570's or
+  patched); `init.whad_cc.rc` lacks 8149's `net_raw` group; `fstab.mt8163` is the same (`/system` `wait,verify`).
+
+So it would run 6570's kernel and policy under 8149's `/system`. The modules load (they say only `vermagic=4.9.77` and
+the kernel has no MODVERSIONS), but whether 8149's Wi-Fi and Bluetooth drivers work against that kernel, and whether
+6570's policy covers 8149's services, is not known.
+
+Applying the same changes to 8149's own image is not enough either:
+
+- With `ro.secure=0`, adbd switches itself to `--root_seclabel u:r:su:s0` (`init.usb.rc`) and, in AOSP 7, stops with a
+  fatal error when that is refused. 8149's policy has `su` as a permissive domain but no rule that lets adbd into it.
+  The XDA image gets past this with 6570's policy, which makes adbd (and `untrusted_app`: any installed app)
+  permissive. So the policy is patched too (`sepolicy.rules`: donut boot-root's rules for adb, and our services'
+  rules; not `untrusted_app`).
+- 8149's own `adbd` is a user build (first device, 2026-10-10): `ro.secure=0`, `service.adb.root=1` and `fastboot oem
+  flags 61` all leave adb a shell in `u:r:shell:s0` (`adb root` says "restarting adbd as root" and it comes back as
+  shell). The XDA image's `sbin/adbd` (CyanogenMod's, static) goes by `ro.secure`; with it in 8149's ramdisk, adb is
+  root in `u:r:su:s0` (`mkbootroot.py --adbd`).
+
+### Building the boot images by hand
+
+```sh
+python3 scripts/mkbootroot.py --check firmware/checkers/images/boot.img  # rebuilds it exact but for the header ID
+python3 scripts/mkbootroot.py firmware/checkers/images/boot.img firmware/checkers/boot-root-8149.img
+```
+
+`boot-root-8149.img` is 8149's ramdisk with the five properties above and `init.fosflags.sh` (byte for byte the XDA
+file) replaced; every other entry and the kernel are untouched. Amazon's kernel-signing certificate (a page after the
+stock image, naming its sha256 as `URI:sha256://…`) is left out; the XDA image has none either. The header ID is AOSP
+mkbootimg's formula, which lk does not check. sha256 `e787a08ed7d39471ae4228659879939cb7e5225e82dbdd5e5d47e4dbf2c6a9a7`
+with classic zlib (zlib-ng deflates the same ramdisk differently). **Do not flash it:** with its stock policy and adbd,
+adb is dead or a shell.
+
+What the install flashes adds the patched policy, the XDA adbd and `--no-verity` (`scripts/mkbootroot.py --sepolicy …
+--adbd firmware/checkers/adbd --no-verity`). It is reproducible: sha256
+`03253eed8df8126c9fbad812664e92c87812db973ca6d05fbb940762d688c19d` with classic zlib (with zlib-ng the cpio from
+`mkbootroot.py --cpio` has sha256 `6467f26c4b25e0e0323fc195968b30af7343bd833126640e5f228e6ef6aa54d8`). The image before
+the `init.checkers.rc` change (`a1772cbe…`) booted with root adb in `su` (first device 2026-10-10, the tester's
+2026-10-13); an Echo with it gets the new one at the next install (`install-boot.sh` compares the partition).
 
 ## Platform: an Android device, not a Dot
 
@@ -261,8 +316,10 @@ setup; what was checked on the PC only says so.
   process left (`amazonfiled`, native), ~550 MB of 1 GB free, no dialogs; `neo-service-coordinator` still panics once
   at boot (binder registration), no dialog. Before the install, after a wipe, Amazon's setup wizard is in front:
   `alexa-off.sh` at the setup's lockdown step disables it and sets `device_provisioned`/`user_setup_complete`.
-  Open: uninstall puts the apps back but `alexa-on.sh` runs before that (packages missing then): disabled ones may
-  stay disabled.
+  Uninstall puts the apps back but `alexa-on.sh` runs before that (packages missing then), and the apps come back
+  without their data and default permissions: on a cronos (2026-11-03) none stayed disabled, but the setup wizard
+  crashed every 2-3 s (no device config bundle) and amazon.speech.sim on RECORD_AUDIO.  `install-boot.sh --uninstall`
+  now ends with TWRP's wipe of cache and data; after it, no crash.
 - [x] Firewall: `lockdown.sh` as on the Dots, plus `FW_KEEP` (DHCP answers; no stock `firewall.sh`); the updater's uid
   from `packages.list` for stock-online.
 - [x] Security: stock's `init.checkers.rc` sets `service.adb.tcp.port 5555` on boot, so with our ramdisk
@@ -347,6 +404,28 @@ setup; what was checked on the PC only says so.
   the band along its bottom, blended as `unroll`) wherever it draws the ring.  The designer is one editor on every
   Echo with a Ring / Band switch on its stage (opening on the Echo's own): the band view paints its cells, has no
   talker's arrow and words the adjustments for a row (Move, Run).  Checked under the PC build in headless Chromium (tiles, Apply, the designer, painting).
+- [~] Screen UI (2026-10-14, second round 2026-11-02): hassmic's own screen (a face, Music Assistant's pages, a
+  drawer from the top edge) in one app_process with the band (`src/ui/`, `screen.c`, `scripts/device/screen.dex`;
+  DEVELOPMENT.md). The layer (SurfaceControl at 1999990000, under the band) shows only while hassmic's home activity is
+  in front; touches come from `goodix-ts` (event2: x 0..480, y 0..960, INPUT_PROP_DIRECT) beside Android, mapped as
+  AOSP 7's TouchInputMapper does for rotation 1 (x = y_raw, y = x_max - x_raw: the natural left edge, the band's, is
+  the bottom). The band's rows belong to no window, so its edge is ours over any app: along it = Back
+  (InputManager.injectInputEvent as system). The top edge has no such rows: a pull there over an app is seen beside
+  Android (the app gets it too, as a drag), hassmic's home activity is started at once so the next touches are ours,
+  and SurfaceControl.screenshot(II) (static, in 8149's framework; the panel as mounted, 480x960) is turned for under
+  the drawer as touches are turned. Screen off: IPowerManager.goToSleep(J,I,I) with the power button's reason 4; a
+  touch while off: wakeUp(J,String,String). screen.dex's `System.load` may open libhmui.so only from `java.library.path`
+  (app_process: `LD_LIBRARY_PATH`), `/data` and `/mnt/expand`: libnativeloader's isolated namespace for a class loader
+  ApplicationLoaders did not make. So `screen.c` puts the library's folder on `LD_LIBRARY_PATH`; without it the copy on
+  `/system/hassmic` fails with "is not accessible for the namespace" (issue #122, cronos). And the child's real group
+  made its effective one first: hassmic's are apart (`runas -r 3990`), which makes the exec AT_SECURE, and bionic's
+  linker then ignores `LD_LIBRARY_PATH` (the error's `ld_library_paths=""`). On the device (first round): drawing, fonts, the switcher with icons, the
+  music view with Music Assistant, the band. Open: everything of the second round, Back and the home-app relaunch.
+- [x] Amazon's WebView stays (`STOCK_APPS_OUT` no longer lists `app/AmazonWebView`): `config_webview_packages` lists
+  `com.amazon.webview.chromium` (available by default) and `com.android.webview` (fallback, not installed). Back on
+  the tester's Echo after a reboot, `webview_provider` = com.amazon.webview.chromium, version 118.0.5993.155. Its
+  RELRO file is not made at boot ("can't read file /system/lib": the manifest's WebViewLibrary is
+  libwebviewchromium.so, the firmware has libwebviewextchromium.so), the same files as stock.
 - [x] Not done, on purpose: turning the listening animation towards the talker. The front end has the beam: libasp's
   BeamReporter sends `what=1` (BEAM_DIRECTION, the vector (sin, 0, cos) of the beam's angle) to every
   `com.amazon.asp.IAudioEventListener` registered with `audiosignalprocessor` (transaction 1, a strong binder; no
@@ -435,3 +514,7 @@ setup; what was checked on the PC only says so.
   the kernel module", Home Assistant's motion sensor went on and off.
 - [x] Found on the way: `alexa-off.sh`'s `wpa_cli … -i p2p0 p2p_group_remove` once never returned (no group up, the
   socket there), and the satellite's start waited with it: no hassmic after an update. `timeout 5` now.
+
+## Kiosk Satellite: what the Echo reads from dumpsys (2026-11-01)
+
+`main.sh` `kiosk_tick` goes by two lines, seen on this model (Android 7.1.2): in `dumpsys window policy` `      mCurrentRotation=1`, a number (`dumpsys window displays` does not have it); in `dumpsys activity activities` `    mResumedActivity: ActivityRecord{23301c3 u0 org.hassmic.home/android.app.Activity t1}`. The panel is 480x960 (`wm size`), so rotation 0 is portrait. Both dumps take 20-60 ms. `setsid` and a group `kill -9 -<pid>` work from mksh here.

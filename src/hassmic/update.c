@@ -5,12 +5,13 @@
  * shows the newest build on that channel against what runs; its install button downloads this model's bundle and hands
  * it to root's installer, like a push from the PC (ota_handoff).
  *
- * Trust: every bundle is signed with the release key, whose secret half only CI has.  keys/release.pub comes with every
- * build and install; root checks the signature against it from the copy that runs or the system partition
- * (scripts/system/main.sh) before anything is installed, and falls back to the factory copy if the new one does not
- * stay up, as for a push.  So the download itself needs no trust: GitHub over HTTPS, through the firmware's own libcurl
- * 7.50.1 (dlopen'ed: OpenSSL and the system CA store, /system/etc/security/cacerts, have GitHub's roots).  Its sockets
- * are opened by us, as the group the egress lock lets out (net_socket); libcurl's own would only reach the LAN.
+ * Trust: every bundle is signed with the release key, whose secret half only CI has.  keys/release.pub
+ * (keys/release.conf names it; a fork's own: secrets/fork.conf) comes with every build and install; root checks the
+ * signature against it from the copy that runs or the system partition (scripts/system/main.sh) before anything is
+ * installed, and falls back to the factory copy if the new one does not stay up, as for a push.  So the download itself
+ * needs no trust: GitHub over HTTPS, through the firmware's own libcurl 7.50.1 (dlopen'ed: OpenSSL and the system CA
+ * store, /system/etc/security/cacerts, have GitHub's roots).  Its sockets are opened by us, as the group the egress
+ * lock lets out (net_socket); libcurl's own would only reach the LAN.
  *
  * Looked at a minute after start, then every 6 hours, on a change of channel and when Home Assistant asks (the
  * entity's "check").  Release: /releases/latest, the newest that is not a prerelease.  Beta: the highest version among
@@ -39,7 +40,11 @@
 #else
 #define CURRENT VERSION "+" BUILD
 #endif
+/* The Makefile passes UPDATE_REPO (keys/release.conf, or a fork's secrets/fork.conf); this, as keys/release.conf, only
+ * for a build outside it (an editor's) */
+#ifndef REPO
 #define REPO "Gamer92000/echo-dot-assist"
+#endif
 #define MAX_BUNDLE (16u << 20)          /* as for a push (ota.c) */
 #define FIRST_LOOK 60                   /* s after start: the network may not be up before */
 #define INTERVAL (6 * 3600)

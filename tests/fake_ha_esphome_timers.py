@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Home Assistant's side of the ESPHome native API against build/hassmic-host (tests/esphome_common.py), part two:
-timers ringing and what stops them, a new run after an error, encryption provisioned by Home Assistant (key, mDNS,
-refusals, clearing), the time and zone over the keyed link, noise reduction, LED brightness and the light sensor."""
+timers ringing and what stops them, a new run after an error, the timer that runs next, encryption provisioned by Home Assistant (key, mDNS,
+refusals, clearing), the time and zone over the keyed link, noise reduction, LED brightness, the light sensor and the
+Echo Show's screen brightness (HASSMIC_FAKE_BACKLIGHT: a model with one)."""
 import asyncio, base64, os, re, signal, time
-from aioesphomeapi import NumberState, SwitchState, TextSensorInfo, TextSensorState, BinarySensorInfo, BinarySensorState, SensorInfo, SensorState
+from datetime import datetime
+from aioesphomeapi import NumberInfo, NumberState, SwitchInfo, SwitchState, TextSensorInfo, TextSensorState, BinarySensorInfo, BinarySensorState, SensorInfo, SensorState
 from aioesphomeapi import APIClient, MediaPlayerCommand, VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm, ZERO_NOISE_PSK
 from aioesphomeapi.core import InvalidEncryptionKeyAPIError, RequiresEncryptionAPIError
 from esphome_common import check, until, sync, peak, speech, home_assistant, run
@@ -74,6 +76,17 @@ async def main(e):
     started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)     # the next run counts again
     cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
     cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+    # the same with the wake word in the transcript ("Wake word in the request"): "Alexa, stop." is "stop"
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t8", "eggs", 60, 0, False)
+    await until(lambda: ringing() == (True, "eggs"))
+    started.clear(); stopped.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "Alexa, stop."})
+    await until(lambda: ringing() == (False, "") and stopped)
+    check(ringing() == (False, "") and stopped == [True], f'transcript "Alexa, stop." stops the ring as "Stop." does: {ringing()}, stops {stopped}')
+    started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
 
     cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t4", "pasta", 600, 0, False)
     await until(lambda: ringing() == (True, "pasta"))
@@ -108,6 +121,23 @@ async def main(e):
     await sync(cli); await asyncio.sleep(0.3)
     check(not stopped, f"with timer_stop_any and no ring, a request goes on as usual: stops {stopped}")
     cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+    # the wake word sent too ("Wake word in the request") and nothing after it: "Alexa." is nothing said, not a request
+    # that stops the ring; the run ends quietly
+    page.set(wake_word_in_request="on")
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t10", "rice", 60, 0, False)
+    await until(lambda: ringing() == (True, "rice"))
+    started.clear(); stopped.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_START, None)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "Alexa."})
+    await until(lambda: stopped)
+    await asyncio.sleep(0.3)
+    check(stopped == [True] and ringing() == (True, "rice"), f'"Alexa." alone with the wake word sent too: run cancelled quietly, the ring goes on: {ringing()}, stops {stopped}')
+    proc.send_signal(signal.SIGUSR2); await until(lambda: ringing() == (False, ""))     # the button stops it
+    started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)     # the next run counts again
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_START, None)
+    cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+    page.set(wake_word_in_request="off")
     page.set(timer_stop_any="off")
 
     page.set(timer_ring=1)
@@ -124,6 +154,60 @@ async def main(e):
     started.clear(); proc.send_signal(signal.SIGUSR1); await asyncio.wait_for(started.wait(), 5)
     check(True, "new pipeline after an error")
     cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await sync(cli)
+
+    # Running timers, for a display elsewhere (an Assist timer is no entity): "Next timer" is when the one that ends
+    # first ends, beside its name and the length it was set for; unknown while none runs, paused ones left out
+    nxt, nname, nlen = by.get("next_timer"), by.get("next_timer_name"), by.get("next_timer_length")
+    check(isinstance(nxt, TextSensorInfo) and nxt.device_class == "timestamp" and isinstance(nname, TextSensorInfo)
+          and isinstance(nlen, SensorInfo) and nlen.device_class == "duration" and nlen.unit_of_measurement == "s"
+          and not int(nxt.entity_category) and not int(nname.entity_category) and not int(nlen.entity_category),
+          "next timer entities listed, on dashboards: a timestamp, a name, a length in seconds")
+    latest = lambda k, t: ([x for x in states if isinstance(x, t) and x.key == k] or [None])[-1]
+    def upcoming():                     # (seconds until it ends, name, length), or None while unknown
+        e, n, l = latest(nxt.key, TextSensorState), latest(nname.key, TextSensorState), latest(nlen.key, SensorState)
+        if e is None or n is None or l is None: return "not sent"
+        if e.missing_state or n.missing_state or l.missing_state: return None if e.missing_state == n.missing_state == l.missing_state else "mixed"
+        return round(datetime.fromisoformat(e.state).timestamp() - time.time()), n.state, l.state
+    near = lambda left, name, total: (lambda u: isinstance(u, tuple) and abs(u[0] - left) <= 2 and u[1:] == (name, total))(upcoming())
+    check(upcoming() is None, f"no timer: the next one unknown: {upcoming()}")
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_STARTED, "t20", "pasta", 600, 600, True)
+    await until(lambda: near(600, "pasta", 600))
+    check(near(600, "pasta", 600), f"a timer started: it ends in 10 min, named, its length: {upcoming()}")
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_STARTED, "t21", "", 120, 120, True)
+    await until(lambda: near(120, "", 120))
+    check(near(120, "", 120), f"a shorter one started beside it is next, without a name: {upcoming()}")
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_UPDATED, "t21", "", 120, 100, False)
+    await until(lambda: near(600, "pasta", 600))
+    check(near(600, "pasta", 600), f"paused, it is left out: the other is next: {upcoming()}")
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_UPDATED, "t21", "", 120, 100, True)
+    await until(lambda: near(100, "", 120))
+    check(near(100, "", 120), f"resumed, it ends with what was left when it paused: {upcoming()}")
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_UPDATED, "t20", "pasta", 600, 60, True)
+    await until(lambda: near(60, "pasta", 600))
+    check(near(60, "pasta", 600), f"time taken off the other makes it next, its length as it was set: {upcoming()}")
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_CANCELLED, "t20", "pasta", 600, 50, True)
+    await until(lambda: near(100, "", 120))
+    check(near(100, "", 120) and ringing() == (False, ""), f"cancelled: the other is next, nothing rings: {upcoming()}, {ringing()}")
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_FINISHED, "t21", "", 120, 0, False)
+    await until(lambda: upcoming() is None and ringing() == (True, "2 min"))
+    check(upcoming() is None and ringing() == (True, "2 min"), f"finished: it rings, none runs: {upcoming()}, {ringing()}")
+    proc.send_signal(signal.SIGUSR2); await until(lambda: ringing() == (False, ""))     # the button stops it
+    # one Home Assistant never finishes (it restarted and forgot it) goes 10 s after its end
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_STARTED, "t22", "lost", 60, 1, True)
+    await until(lambda: near(1, "lost", 60))
+    check(near(1, "lost", 60), f"a timer about to end is next: {upcoming()}")
+    t0 = time.monotonic(); await until(lambda: upcoming() is None, 17)
+    check(upcoming() is None and 9 < time.monotonic() - t0 < 15 and ringing() == (False, ""),
+          f"never finished: forgotten 10 s after its end, without a ring: {upcoming()} after {time.monotonic() - t0:.1f} s")
+    # a full table (8) makes room with a paused one, never with the one that ends first, though it is the oldest
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_STARTED, "t30", "soon", 300, 300, True)
+    for i in range(7): cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_STARTED, f"t3{i + 1}", f"p{i}", 900, 900, False)
+    cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_STARTED, "t38", "later", 600, 600, True)
+    await sync(cli)
+    check(near(300, "soon", 300), f"a ninth timer: a paused one makes room, the next stays: {upcoming()}")
+    for i in range(9): cli.send_voice_assistant_timer_event(Tm.VOICE_ASSISTANT_TIMER_CANCELLED, f"t3{i}", "", 0, 0, False)
+    await until(lambda: upcoming() is None)
+    check(upcoming() is None, f"all cancelled: none runs: {upcoming()}")
 
     # Encryption, in the order Home Assistant runs it: plaintext connection, DeviceInfo says "supported, provisionable",
     # key sent over a zero-PSK Noise connection, then only that key gets in.
@@ -229,4 +313,28 @@ async def main(e):
     sent = [x.state for x in st3 if isinstance(x, SensorState) and x.key == lux.key]
     check(sent == [67, 150], f"illuminance from the sensor file, sent on a real change, not on flicker: {sent}")
 
-run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT))
+    # The Echo Show's backlight (issue #126): stock's "Adaptive brightness", the level without it, the curve's adjustment
+    # with it.  Into state/config, which root's main.sh backlight sets as Android's settings (tests/unit/backlight_test.py)
+    sa, sl, sj = (cby.get(k) for k in ("adaptive_brightness", "screen_brightness", "adaptive_brightness_adjustment"))
+    check(isinstance(sa, SwitchInfo) and isinstance(sl, NumberInfo) and (sl.min_value, sl.max_value) == (1, 100) and sl.unit_of_measurement == "%"
+          and isinstance(sj, NumberInfo) and (sj.min_value, sj.max_value) == (-100, 100), "screen brightness entities listed")
+    await until(lambda: last3(sl.key, NumberState) is not None and last3(sj.key, NumberState) is not None)
+    check((last3(sa.key, SwitchState), last3(sl.key, NumberState), last3(sj.key, NumberState)) == (False, 47, 0),
+          "manual at 47 % by default (setting 120, what the Shows ran at)")
+    c.switch_command(sa.key, True); c.number_command(sj.key, 35); c.number_command(sl.key, 150)
+    await until(lambda: conf().get("screen_brightness_auto") == "on" and conf().get("screen_brightness_adjust") == "35"
+                and conf().get("screen_brightness") == "100")
+    check((conf().get("screen_brightness_auto"), conf().get("screen_brightness_adjust"), conf().get("screen_brightness")) == ("on", "35", "100"),
+          f"Home Assistant's commands in the settings file for root, the level clamped: {conf()}")
+    await until(lambda: last3(sl.key, NumberState) == 100)
+    check((last3(sa.key, SwitchState), last3(sl.key, NumberState), last3(sj.key, NumberState)) == (True, 100, 35), "and shown back")
+    c.number_command(sl.key, 0)
+    await until(lambda: conf().get("screen_brightness") == "1")
+    check(conf().get("screen_brightness") == "1", "a level of 0 from Home Assistant is 1 %: never a black screen")
+    page.set(screen_brightness_auto="off")
+    await until(lambda: last3(sa.key, SwitchState) is False)
+    check(last3(sa.key, SwitchState) is False and conf().get("screen_brightness_auto") == "off", "switched off on the page: Home Assistant follows")
+    ps = {x["name"]: x for x in page.state()["settings"]}
+    check(all(k in ps for k in ("screen_brightness_auto", "screen_brightness", "screen_brightness_adjust")), "on the settings page")
+
+run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT), {"HASSMIC_FAKE_BACKLIGHT": "1"})

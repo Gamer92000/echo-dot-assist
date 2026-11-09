@@ -64,6 +64,9 @@ async def main():
               "a preset (setup.sh --preset): applied once at start, the unknown line reported, the file kept as preset.applied")
         st, h, body = rq("GET", "/")
         check(st == 200 and h.get("Content-Encoding") == "gzip" and b"<title>Echo settings</title>" in gzip.decompress(body), "the page, gzip'd")
+        for src in re.findall(r'<script src="([^"]+)"', gzip.decompress(body).decode()):     # one missing from the Makefile's WEB: a dead page
+            st, h, b = rq("GET", src)
+            check(st == 200 and h.get("Content-Encoding") == "gzip" and len(gzip.decompress(b)) > 1000, f"the page's script {src}")
         st, h, body = rq("GET", "/crypto.js")
         check(st == 200 and b"blake2b" in gzip.decompress(body), "its scripts")
         b = Browser(WEB)

@@ -9,8 +9,8 @@ UNTESTED=1                                  # scripts/setup.sh lists the model a
 
 XDA=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-2nd-gen-2017-radar.4801290/
 FTVDB=https://ftvdb.com/echo/firmware/com.amazon.radar.android.os/17af64ecc5b8f0303daf4e2a37c75b1a-12718777476-fire-os-6-5-7-2-ns6572-6436-2026-03-21/
-AMONET=amonet-radar-v1.0.0.zip
-AMONET_SHA256=ecdb07bc05a508532e5ffed77121592d492b1a91572839e0f17545421f398f1a
+AMONET=amonet-radar-v1.0.1.zip
+AMONET_SHA256=22809bc44b9b7b71750c1955bb94a92c965b557d4f9055bb7bbc098b788188a9
 BOOTROOT=boot-root.zip                      # from this model's XDA thread; byte-identical to donut's
 BOOTROOT_SHA256=de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0
 NDK=toolchain/android-ndk-r21e
@@ -45,7 +45,7 @@ step_tools() {
     { rooted_already || [ -n "$WINDOWS" ]; } && unlock=python3      # no unlock here: python3 only for otatool.py
     if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip curl sha256sum || return 1; return 0; fi
     need_tools adb $unlock make cc unzip debugfs curl sha256sum bc xz || return 1
-    [ "$(df -Pk . | awk 'NR == 2 { print $4 }')" -gt 5000000 ] || warn "less than 5 GB free here; the NDK and firmware need about that"
+    space_ahead 1300
 }
 
 step_files() {
@@ -59,6 +59,7 @@ step_files() {
     [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
     if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
         mkdir -p toolchain
+        need_space $NDK_MB "The Android NDK" || return 1
         TASK_NOTE="du -h toolchain/ndk.zip | cut -f1" task "Downloading Android NDK r21e (1 GB)" curl -fsSL -o toolchain/ndk.zip $NDK_URL &&
             task "Unpacking the NDK" unzip -q -o toolchain/ndk.zip -d toolchain && rm -f toolchain/ndk.zip || return 1
     fi
@@ -95,16 +96,26 @@ step_unlock() {
         wait_adb recovery; return
     fi
     [ -n "$WINDOWS" ] && { unlock_elsewhere; [ -n "$DRY" ]; return; }       # Windows: on adb at the start (setup.sh), not now
-    local adir
-    [ -d $FW/amonet ] || task "Unpacking amonet" unzip -q $FW/$AMONET -d $FW/amonet || return 1
+    local adir udir=$FW/${AMONET%.zip}        # a folder per version: an older one unpacked before is not reused
+    # a run whose files step passed with an older amonet (issue #88: v1.0.0) has not got this one yet
+    [ -f $FW/$AMONET ] || need_files $FW/$AMONET $AMONET_SHA256 "attachment in $XDA" || return 1
+    [ -d $udir ] || task "Unpacking amonet" unzip -q $FW/$AMONET -d $udir || return 1
     # run fastbrick.sh from wherever the zip put it (the release zip keeps it in a folder amonet/ of its own)
-    adir=$(find $FW/amonet -name fastbrick.sh -print -quit 2>/dev/null); adir=${adir%/*}
-    [ -n "$adir" ] || [ -n "$DRY" ] || { fail "no fastbrick.sh in $FW/amonet; delete that folder and try again"; return 1; }
+    adir=$(find $udir -name fastbrick.sh -print -quit 2>/dev/null); adir=${adir%/*}
+    [ -n "$adir" ] || [ -n "$DRY" ] || { fail "no fastbrick.sh in $udir; delete that folder and try again"; return 1; }
     tell "Put the Echo into fastboot mode" "Hold the action button (•) and plug the power adapter in." \
         "Keep holding until the ring shows a green light (an Echo unlocked before shows a rainbow instead)."
     waitfor "Waiting for fastboot|Fastboot" '[ -n "$(fastboot devices)" ]' "No green light? Unplug the power and try again." || return 1
-    tell "amonet asks you to type YES, and for a key press at the end" "${RED}${B}Do not interrupt it once it runs: that can brick the Echo.$N"
-    live "amonet fastbrick (about a minute)" in_dir "$adir" ./fastbrick.sh || return 1
+    fastbrick "$adir" "about a minute" "the ring turns white"
+    case $? in
+    0) ;;
+    # unlocked before: the rainbow is amonet's own fastboot.  Its LK has no reboot-recovery (strings of lk.img:
+    # reboot and reboot-bootloader only, matched by prefix, so `fastboot reboot recovery` is a plain reboot into Fire
+    # OS); `oem reboot-recovery` is what firebreak sends there, measured on Dots (its docs/rooting.md: off about 5 s,
+    # then TWRP).  The Echo 2's LK has the same commands; not tried on one.
+    2) task "Starting TWRP" fastboot oem reboot-recovery || return 1; wait_adb recovery; return;;
+    *) return 1;;
+    esac
     unlock_wait_twrp       # gives up when the unlock did not take (issue #50)
 }
 

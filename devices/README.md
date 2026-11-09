@@ -3,7 +3,7 @@
 The daemon, the protocols, the boot logic and the firewall are the same on every Echo. What differs between models is
 kept here, one directory per model, named after Amazon's codename (the first part of `ro.product.device`). The build and
 every script pick the model's directory by `DEVICE`. The scripts that use adb ask the connected Echo which model it is
-and refuse a mismatch.
+and refuse a mismatch. Every Echo on Fire OS or Vega OS, with or without a directory here: [`MODELS.md`](MODELS.md).
 
 | Model | Codename | `ro.product.device` | Status |
 |---|---|---|---|
@@ -16,14 +16,15 @@ and refuse a mismatch.
 | Echo Show 8 1st gen (2019), C7H6N3 | [`crown`](crown/README.md) | `crown` | builds; the same platform as checkers (MT8163, Fire OS 6.5.7.0 NS6570); unlock public (amonet-crown); installed (`INSTALL=boot`) and running on one Echo Show 8: voice, buttons, mute latch, the band, Bluetooth, Wi-Fi motion; Amazon downloads work (DHA version 2); guided setup tried on one Echo Show 8 |
 | Echo Show 5 2nd gen (2021), C76N8S | [`cronos`](cronos/README.md) | `cronos` | builds; checkers' platform and Fire OS build (6574.1, NS65741/8149), with athena's mute button driver (gpio-privacy) and one of three speaker amplifiers by board revision (`speaker_gain_alt`); unlock public (amonet-cronos); install as checkers (`INSTALL=boot`) and the guided setup run on one Echo: voice, buttons, mute latch, the band, light sensor; the first has a MAX98396 |
 | Echo Show 8 2nd gen (2021), A8H3N2 | [`athena`](athena/README.md) | `athena` | builds; Android 9, MT8183, kernel 4.4.146, Treble; unlock public (saiyaku-athena, serial); root as that zip leaves it (system and vendor patched in place), installed from the running OS (`INSTALL=running`, policy in `/vendor`) and running on one Echo Show 8 2nd gen: voice, buttons, mute latch, the band, Bluetooth, Wi-Fi switch, light sensor, speaker gain, Wi-Fi motion; Amazon downloads work (DHA version 2 through `fireosdhaservice`) |
+| Echo Input (2018), C1125P | [`cupcake`](cupcake/README.md) | `cupcake` | builds; worked out from the firmware (NS6575/8338), installed and running on one Echo Input: donut's platform (MT8516, A/B, kamakiri and TWRP, `INSTALL=twrp-ab`, donut's boot-root) with the Shows' software (`ANDROID=1`: OpenSL ES, WifiService, apps off the partition); one LED (`board.c` `ring_leds`), no speaker; guided setup marked untested |
 
 ## What a model directory holds
 
 | File | Used by | What |
 |---|---|---|
 | `device.mk` | `Makefile` | compiler target (NDK API level), audio and wake word backends, stock libraries to link against; optionally the Wi-Fi motion kernel module (`KMOD`) and its kernel (`KVER`, `KARCH`, `KCROSS`, `KCONFIG`: the kernel's own config (IKCONFIG of `boot.img`) in the model's directory, or `KFRAG`: a fragment where the kernel has none, `KCFLAGS`; and what `make kernel-tools` downloads for it: `KSRC_URL`, `KSRC_SHA256`, `KCC_URL`, `KCC_DIGEST`, unless the Makefile's 3.18 defaults fit) |
-| `board.c` | `hassmic` (linked in) | `struct board` from `src/hassmic/board.h`: identity towards Home Assistant, the codename (names the model's bundle in a release), input devices, mute latch, Bluetooth device node and address, stock wake word and earcon paths, thermal zone, light sensor, LED volume steps, the ALSA control a "Speaker gain" may raise, its stock value and steps per dB (or per `speaker_gain_db` dB where a step is not a whole dB) (`audio_device.xml` or `mixer_paths.xml` of the firmware, or the kernel's control tables where the firmware leaves it alone) |
-| `device.conf` | PC scripts (`scripts/lib/device.sh`) and, shipped next to them, the scripts on the Echo | product and firmware id, firmware file and checksum, files to compare in `probe.sh`, install method, the daemon's user and groups, names of the stock services to stop; `KMOD`/`KMOD_ARGS` for `main.sh` to load the Wi-Fi motion module; Android models: `ALEXA_PACKAGES`/`SETUP_PACKAGES` (`pm disable`, `package/class` for one component) and `STOCK_APPS_OUT` (folders under `/system` that `sysinstall.sh` takes off the partition) |
+| `board.c` | `hassmic` (linked in) | `struct board` from `src/hassmic/board.h`: identity towards Home Assistant, the codename (names the model's bundle in a release), input devices, mute latch, Bluetooth device node and address, stock wake word and earcon paths, thermal zone, light sensor, LED volume steps, the speaker's volume curve (`volume_curve`, required: below), the ALSA control a "Speaker gain" may raise, its stock value and steps per dB (or per `speaker_gain_db` dB where a step is not a whole dB) (`audio_device.xml` or `mixer_paths.xml` of the firmware, or the kernel's control tables where the firmware leaves it alone) |
+| `device.conf` | PC scripts (`scripts/lib/device.sh`) and, shipped next to them, the scripts on the Echo | product and firmware id, firmware file and checksum, files to compare in `probe.sh`, install method, the daemon's user and groups, names of the stock services to stop; `KMOD`/`KMOD_ARGS` for `main.sh` to load the Wi-Fi motion module; Android models (`ANDROID=1`: Android's framework runs, so the scripts ship and use `wifictl.dex`; independent of `INSTALL`; `ringbar.dex` goes with `SCREEN_BAND`): `ALEXA_PACKAGES`/`SETUP_PACKAGES` (`pm disable`, `package/class` for one component) and `STOCK_APPS_OUT` (folders under `/system` that `sysinstall.sh` takes off the partition) |
 | `stubs/*.syms` | `make STUBS=1` (CI) | per stock library in `LIBS`, the symbols our binaries need of it, written by `tools/mkstubs.sh` from the firmware: stand-ins to link against without it |
 | `hassmic.rc` | `install-system.sh` → `/system/etc/init/` | init services, and the trigger that starts the satellite once the audio stack is up |
 | `sepolicy.rules` | `install-system.sh` | allow rules added to the stock policy so init can start the scripts |
@@ -60,6 +61,9 @@ Rough order. Each step is safe to stop at.
 1. **Unlock and root.** This is the hard part, and it is different for almost every model (bootrom exploit, TWRP or
    none, A/B slots or not, how the SELinux policy can be patched). Write down what worked in the new model's
    `README.md`. Pin the firmware version before the Echo ever reaches Amazon: an update can close the hole.
+   Amazon's help pages list only version numbers now; FTVDB has a record page for most builds (not always the
+   newest: radar's), with Amazon's download (`https://ftvdb.com/echo/firmware/com.amazon.<codename>.android.os/`).
+   Link that record page, not the download itself, and put the size and sha256 in the README.
 2. **Firmware on the PC.** Unpack it into `firmware/<codename>/rootfs` (`tools/payload_dump.py` handles A/B
    `payload.bin`). `tools/` has the disassembly helpers; `docs/re-platform.md` and `docs/re-pryon.md` show what to
    look for, as found on `donut`.
@@ -74,6 +78,9 @@ Rough order. Each step is safe to stop at.
      `/sys/class/thermal/thermal_zone*/type` and the Bluetooth device node and its owner. Check the wake word manifest
      and the earcons in the firmware. `light_sensor`: the lux files in `strings` of
      `/system/lib/libacehal_ambientLightSensor.so`, in its order, and `cat` the one that exists on the Echo.
+     `volume_curve`: see [Volume curve](#volume-curve); until it is measured, `board_vol_dot2` with the comment the
+     other models have.  `cold_lead_ms` (Android models): `tools/cold-lead.py` with a microphone on the PC beside the
+     Echo measures what a sound loses when the output was closed; -1 where nothing, unset (350 ms) until measured.
    - `device.mk`: API level from `ro.build.version.sdk`. If the model has Amazon's `mixer` (`libmixerAPI.so`) and
      `libpryon.so`, the existing backends should work once `probe.sh`, `mixcap` and `pryon_test` agree. If not, write a
      new `audio_*.c` or `wake_*.c` behind `audio.h` / `wake.h` and name it here.
@@ -84,6 +91,8 @@ Rough order. Each step is safe to stop at.
      from the running OS by patching system and vendor in place, the policy in `/vendor/etc/selinux`, named by
      `SEPOLICY_FILE`) is install-system.sh's in-OS path alone, no TWRP. A model that installs another way gets its own
      method there, or its own script.
+   - `ANDROID=1` in `device.conf` where Android's framework runs (Alexa as apps, WifiService): the Echo Shows, and
+     cupcake, which installs as donut (`twrp-ab`) all the same.
 4. **Try it without installing**: `scripts/probe.sh`, `scripts/deploy.sh`, `adb shell sh /data/local/hassmic/run.sh`.
    Both pick the model from the Echo on adb.
 5. **Install**, and write the steps down twice: by hand in the model's `README.md` (Install section), and as
@@ -94,7 +103,34 @@ Rough order. Each step is safe to stop at.
    `install` (`install_satellite`); models come later from the settings page. Try it with `scripts/setup.sh <codename> --dry-run`.
 6. `tools/mkstubs.sh <codename>` for the stub lists, and the codename in the build matrix of
    `.github/workflows/build.yml`: CI builds and publishes the model's bundle from then on.
-7. Add the model to the table above, to the root `README.md` and to `CHANGELOG.md`.
+7. **Measure the volume curve** and put it into `board.c` (below). A model is not finished while the Echo Dot 2's
+   stands in for it.
+8. Add the model to the table above, to `MODELS.md`, to the root `README.md` and to `CHANGELOG.md`.
+
+### Volume curve
+
+**Every model must have its own volume curve**, measured on that model: `volume_curve` in `board.c`, dB under volume
+100 at volumes 0..100. Each Echo turns the volume up in its own way (Android's media curve on the Shows, the mixer plus
+libasp's boost above 80 on the Dots), and hassmic depends on knowing how: even volume steps put the Echo's own volume on
+the curve's points and take the rest off in its own audio, and separate volumes turn each kind down by it. A wrong
+curve makes the steps uneven and the kinds disagree with each other.
+
+The field is never NULL. Until the curve is measured, a model points it at `board_vol_dot2` (the Echo Dot 2's, in
+`src/hassmic/volcurve.c`) under the comment `volume curve not measured on this model yet: the Echo Dot 2's stands
+in`. `make unit-volcurve` checks every model's curve and prints a `todo` line for each one where the Dot 2's still
+stands in. The stand-in is there so a model can be merged before anyone has measured it, not to leave it that way:
+a new model comes with its own curve where it can, and otherwise with an entry in `PLAN.md` saying it is missing.
+
+How to measure:
+
+- Android Echos (the Shows; the Echo Input through a speaker on its line out): `tools/vol-curve.py`. It steps the music stream's index under a steady
+  multi-tone and listens with a Dot's micRaw beside it. Checkers' curve in its `board.c` was made this way.
+- Echos with Amazon's mixer (the Dots, the Echo 2): a -30 dBFS tone through `mixplay`, recorded in micRaw with
+  `mixcap` at each volume, hassmic stopped (`docs/re-platform.md`, the Echo Dot 2's). libasp's own volume adds to the
+  top end, so measure through the speaker, not the mixer alone.
+
+Put a point at 0 and at 100, each `at` above the last and never quieter than the one before (the unit test checks
+this). A point every 5 or 10 is enough. Write down in the comment above it when, how and on what it was measured.
 
 Shared code stays free of `#ifdef DEVICE_...`. When a model needs more than a different value, add a field to
 `struct board`, a variable to `device.conf`, or a backend, and give `donut` its current behaviour there.

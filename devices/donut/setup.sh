@@ -4,11 +4,14 @@
 # first whether its result is there already, so a rerun (or work done by hand) passes through quietly.
 
 XDA=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/
+LOCKED_ISSUE=https://github.com/Gamer92000/echo-dot-assist/issues/112
 FTVDB=https://ftvdb.com/echo/firmware/com.amazon.donut.android.os/f7cd5f3b6d6bfa59e5ba6a6779285c34-13222529668-fire-os-6574-1-ns65741-8138-2026-08-31/
 KAMAKIRI=kamakiri-donut-v1.0.0.zip
 KAMAKIRI_SHA256=4d2bb52eaf661f6616aa4268584d44cf9155c1328c34bfcba01a6558f942b738
 BOOTROOT=boot-root.zip
 BOOTROOT_SHA256=de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0
+# a replug alone may start Fire OS, not TWRP (PR #142): Volume up held while the power goes in starts the recovery
+TWRP_HINT="Nothing yet? Unplug the Echo's power, then hold only Volume up (+) while plugging it back in: that starts TWRP."
 NDK=toolchain/android-ndk-r21e
 NDK_URL=https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip
 
@@ -41,7 +44,7 @@ step_tools() {
     { rooted_already || [ -n "$WINDOWS" ]; } && unlock=python3      # no unlock here: python3 only for otatool.py
     if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip curl sha256sum || return 1; return 0; fi
     need_tools adb $unlock make cc unzip debugfs curl sha256sum bc xz || return 1
-    [ "$(df -Pk . | awk 'NR == 2 { print $4 }')" -gt 5000000 ] || warn "less than 5 GB free here; the NDK and firmware need about that"
+    space_ahead 500
 }
 
 step_files() {
@@ -55,6 +58,7 @@ step_files() {
     [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
     if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
         mkdir -p toolchain
+        need_space $NDK_MB "The Android NDK" || return 1
         TASK_NOTE="du -h toolchain/ndk.zip | cut -f1" task "Downloading Android NDK r21e (1 GB)" curl -fsSL -o toolchain/ndk.zip $NDK_URL &&
             task "Unpacking the NDK" unzip -q -o toolchain/ndk.zip -d toolchain && rm -f toolchain/ndk.zip || return 1
     fi
@@ -86,9 +90,25 @@ step_unlock() {
     if [ -z "$DRY" ] && adb_is device; then
         ok "unlocked already"
         task "Restarting into TWRP" adb reboot recovery || return 1
-        wait_adb recovery; return
+        wait_adb recovery "$TWRP_HINT"; return
     fi
     [ -n "$WINDOWS" ] && { unlock_elsewhere; [ -n "$DRY" ]; return; }       # Windows: on adb at the start (setup.sh), not now
+    # issue #112 (2026-11-04/05): on two Echos kamakiri ran through without an error, but kaeru never stayed in expdb
+    # (its write "did not read back", the partition zeros after) and the Echo came back in locked fastboot (green ring,
+    # "restricted on locked hw"), with no way on from there found yet.  One had worked until it was opened, so a dying
+    # eMMC does not explain it alone; Echos Amazon updated recently look at risk, how far it reaches is not known.
+    # Asked once a run, before anything reaches the Echo; a dry run goes on.
+    if [ -z "$UNLOCK_RISK_OK" ]; then
+        warn "${B}Warning: the unlock can leave this Echo unusable (issue #112).$N"
+        warn "${B}Echos that were updated recently may become unusable. The full extent is currently unknown.$N"
+        info "  On two Echos kamakiri ran through without an error, yet the Echo came back locked (a green ring, no"
+        info "  rainbow), and no way to finish the unlock or undo it has been found: neither has worked since."
+        info "  It is not known yet which Echos or firmware versions are affected, nor whether any unlock is safe now."
+        info "  Read $LOCKED_ISSUE first. While it is open, do not unlock an Echo you want to keep."
+        ask "Unlock this Echo anyway?" n || [ -n "$DRY" ] ||
+            { info "Nothing was written to the Echo. Quit (q) and run scripts/setup.sh $DEVICE later: progress is kept."; return 1; }
+        UNLOCK_RISK_OK=1
+    fi
     local kdir
     [ -d $FW/kamakiri ] || task "Unpacking kamakiri" unzip -q $FW/$KAMAKIRI -d $FW/kamakiri || return 1
     # the zip may keep its scripts in a folder of their own: run them from wherever bootrom-step.sh landed
@@ -109,13 +129,18 @@ step_unlock() {
         bash -o pipefail -c "./bootrom-step.sh 2>&1 | tee -a '$LOG'" || return 1
     waitfor "Waiting for hacked fastboot (rainbow ring)|Hacked fastboot" '[ -n "$(fastboot devices)" ]' \
         "No rainbow? Unplug everything and try this step again." || return 1
-    task "Flashing TWRP" in_dir "$kdir" ./fastboot-step.sh || return 1
-    wait_adb recovery
+    # green ring instead of the rainbow: the stock LK answers fastboot too, and refuses the write.  Running the unlock
+    # again did not help in issue #112, so this points there first.
+    task "Flashing TWRP" in_dir "$kdir" ./fastboot-step.sh || {
+        tail -n 20 "$LOG" 2>/dev/null | grep -q 'restricted on locked hw' &&
+            warn "The Echo's fastboot is still locked, as in issue #112. Read $LOCKED_ISSUE before running the unlock again."
+        return 1; }
+    wait_adb recovery "$TWRP_HINT"
 }
 
 step_flash() {
     local s0 s1 s2
-    wait_adb recovery || return 1
+    wait_adb recovery "$TWRP_HINT" || return 1
     twrp_check || return 1
     task "Wiping cache and data" adb shell 'twrp wipe cache && twrp wipe data' || return 1
     task "Copying the firmware to the Echo" adb push $FW/$FIRMWARE_FILE /sdcard/update.zip || return 1
@@ -126,7 +151,7 @@ step_flash() {
     [ -n "$DRY" ] || { s1=$(slot); [ "$s1" != "$s0" ] || { fail "active slot is still $s0 after the install; stop here ($DDIR/README.md, step 1)"; return 1; }; }
     task "Restarting TWRP" adb reboot recovery || return 1
     [ -n "$DRY" ] || sleep 5
-    wait_adb recovery || return 1
+    wait_adb recovery "$TWRP_HINT" || return 1
     task "Flashing the second slot" adb shell twrp install /sdcard/update.zip || return 1
     [ -n "$DRY" ] || { s2=$(slot); [ "$s2" != "$s1" ] || { fail "the second install went into slot $s1 again"; return 1; }; }
     task "Restarting TWRP" adb reboot recovery
@@ -134,7 +159,7 @@ step_flash() {
 
 step_root() {
     [ -z "$DRY" ] && adb_is device && [ "$(ashell id -u)" = 0 ] && { ok "root adb already"; return 0; }
-    wait_adb recovery || return 1
+    wait_adb recovery "$TWRP_HINT" || return 1
     task "Installing boot-root" sh -c "adb push $FW/$BOOTROOT /sdcard/ && adb shell twrp install /sdcard/$BOOTROOT" || return 1
     task "Rebooting into Fire OS" adb reboot || return 1
     [ -n "$DRY" ] || sleep 5

@@ -61,10 +61,12 @@ if [ "$1" != --uninstall ]; then
 fi
 # What goes into /system/hassmic, whichever way it gets there.  The tools and the Wi-Fi motion module are optional (no
 # kernel toolchain, no .ko): `|| true`, since an assignment takes the substitution's status and set -e would end here.
-FILES="$OUT/hassmic $OUT/runas $(ls $OUT/mixcap $OUT/mixplay $OUT/pryon_test $OUT/*.ko 2>/dev/null || true) $OUT/otatool secrets/update.pub keys/release.pub $DDIR/device.conf
+FILES="$OUT/hassmic $OUT/runas $(ls $OUT/mixcap $OUT/mixplay $OUT/pryon_test $OUT/*.ko 2>/dev/null || true) $OUT/otatool secrets/update.pub $RELEASE_PUB $DDIR/device.conf
        scripts/system/boot.sh scripts/system/main.sh scripts/system/sysinstall.sh scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh scripts/device/artifact-install.sh scripts/device/wifi.sh"
 # Android models (the screen shows the light band, Wi-Fi is WifiService's): their dex programs, and the home screen
-[ "$INSTALL" = running ] && FILES="$FILES scripts/device/wifictl.dex scripts/device/ringbar.dex ${HOME_APK:+scripts/device/$HOME_APK}"
+[ -n "$ANDROID" ] && FILES="$FILES scripts/device/wifictl.dex ${SCREEN_BAND:+scripts/device/ringbar.dex} ${HOME_APK:+scripts/device/$HOME_APK}"
+# the screen's UI where the model has one (device.mk SCREEN: the build made libhmui.so), as bundle.sh ships it
+[ ! -f $OUT/libhmui.so ] || FILES="$FILES $OUT/libhmui.so scripts/device/screen.dex"
 
 if [ -z "$TWRP" ]; then
     t "rm -rf $STAGE; mkdir -p $STAGE"
@@ -89,6 +91,10 @@ if [ -z "$TWRP" ]; then
     t "[ -f $STAGE/ok ]" || { t "rm -rf $STAGE"; echo "system partition not written (see above); nothing to undo"; exit 1; }
     t "rm -rf $STAGE; ls -lZ /system/hassmic /system/etc/init/hassmic.rc $SPF 2>/dev/null; true"
     [ "$MODE" = uninstall ] && echo "note: pushed updates in /data/local/hassmic/ota are no longer started; remove them with adb once the OS is up"
+    # Amazon's apps the install took off the partition come back without their data and default permissions: on the
+    # Echo Shows (install-boot.sh, which wipes) the setup wizard crashed in a loop.  Not seen here yet, so only said
+    [ "$MODE" = uninstall ] && [ -n "$(echo $STOCK_APPS_OUT)" ] &&
+        echo "note: if \"... has stopped\" messages keep coming after the reboot, wipe cache and data (TWRP: twrp wipe cache && twrp wipe data)"
     echo "$MODE done on the running $DEVICE; rebooting"
     adb reboot; exit 0
 fi

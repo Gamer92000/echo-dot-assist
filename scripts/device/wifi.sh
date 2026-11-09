@@ -26,13 +26,13 @@ WLAN=${WLAN:-wlan0}
 WPA_SOCKETS=${WPA_SOCKETS:-/data/misc/wifi/sockets}
 ARP=${WIFI_ARP:-/proc/net/arp}
 ROUTE=${WIFI_ROUTE:-/proc/net/route}
-# Two worlds: the Dots' wpa_supplicant (W below) and, on a model with INSTALL=boot (checkers), Android's
+# Two worlds: the Dots' wpa_supplicant (W below) and, on an Android model (device.conf ANDROID: checkers), Android's
 # framework, which owns the networks: no dhcpcd exists (DHCP runs when WifiService provisions a network it
 # knows) and it re-syncs wpa_supplicant from its own WifiConfigStore on every start, so wpa_supplicant cannot
 # be driven directly.  There everything goes through wifictl.dex next to this script (tools/mkwifictl.py):
 # the same WifiService binder calls stock's own setup apps make, from root, with wpa_cli's output shape.  Q is
 # whichever client this model's world has.
-android() { [ "$INSTALL" = boot ] || [ "$INSTALL" = running ]; }
+android() { [ -n "$ANDROID" ]; }
 WIFICTL="${0%/*}/wifictl.dex"
 # WIFICTL_USER (athena, Android 9): the framework shows the SSID and the scan results to system apps only (as uid 0
 # with any package name they came back empty; as uid 1000 with "android", the name the dex passes, complete).

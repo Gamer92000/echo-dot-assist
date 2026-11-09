@@ -11,6 +11,7 @@
 #define KSUI "/system/priv-app/KnightSystemUI/KnightSystemUI.apk"
 #define KSET "/system/priv-app/KnightSettings/KnightSettings.apk"
 #define COMM "/system/priv-app/com.amazon.comms.multimodaltachyonarm/com.amazon.comms.multimodaltachyonarm.apk"
+#define ALRM "/system/priv-app/com.amazon.alarms/com.amazon.alarms.apk"
 static const struct board_sound sounds[] = {
     { "ui_wakesound", SIM, "res/7E.mp3" },
     { "ui_wakesound_touch", SIM, "res/7E.mp3" },
@@ -24,6 +25,9 @@ static const struct board_sound sounds[] = {
     { "comms_call_disconnected", COMM, "res/raw/ful_comms_call_disconnected.mp3" },
     { "comms_call_incoming_ringtone", COMM, "res/raw/ful_comms_call_incoming_ringtone.mp3" },
     { "comms_outbound_ringtone", COMM, "res/raw/ful_comms_outbound_ringtone.mp3" },
+    /* the timer's and the alarm's, as the Dots' (issue #63; the alarms app keeps them, stored) */
+    { "system_alerts_melodic_02", ALRM, "res/raw/system_alerts_melodic_02.mp3" },
+    { "system_alerts_melodic_01", ALRM, "res/raw/system_alerts_melodic_01.mp3" },
     { NULL, NULL, NULL },
 };
 
@@ -31,6 +35,8 @@ const struct board board = {
     .model = "Echo Show 5 (checkers)",
     .project = "hassmic.echo-show-5",
     .product = "Echo Show 5 (hassmic)",
+    .kiosk = 1,
+    .backlight = 1,
     .default_name = "Echo Show 5",                                 /* + MAC: "Echo Show 5 5695c4"; slug = the project's model */
     .codename = "checkers",
 
@@ -72,6 +78,12 @@ const struct board board = {
         { 0, -66 }, { 5, -60.0f }, { 10, -51.2f }, { 15, -43.7f }, { 20, -41.0f }, { 25, -34.9f }, { 30, -31.8f },
         { 35, -26.7f }, { 40, -24.8f }, { 45, -20.8f }, { 50, -19.7f }, { 55, -17.8f }, { 60, -15.8f }, { 65, -13.0f },
         { 70, -12.3f }, { 75, -9.4f }, { 80, -7.6f }, { 85, -4.5f }, { 90, -4.0f }, { 95, -1.2f }, { 100, 0 }, { -1, 0 } },
+    /* Measured (2026-11-07, tools/cold-lead.py: a 1 kHz tone on a closed output, then the same warm, a PC microphone
+     * beside it): after 4, 8, 15 and 30 s of standby the first tone as long as the second (488 ms within 10 dB) and at
+     * its level within 12-14 ms, the same without a lead-in as with: nothing to wait for.  The cold open (logcat:
+     * createTrack 2979.140, openPcmDriver 2979.145-.191, the HAL's first write 2979.196) adds ~56 ms: the wake sound's
+     * echo ~140 ms after the first buffer, inside earsup.c's 400 ms */
+    .cold_lead_ms = -1,
     /* Realtek RT5616: its line out feeds the speaker amplifier.  0..39 = -46.5..+12 dB, 1.5 dB a step (the kernel's
      * tables); the HAL's initial settings in /system/etc/audio_device.xml set 29, -3 dB, nothing writes it later (from
      * the firmware only; verify on a device that this is what the speaker plays at, and that it has no other writer) */

@@ -40,6 +40,13 @@ static double active(const int16_t *s, const int16_t *ref, size_t a, size_t b)  
     return n ? 10 * log10(sum / n / (32768.0 * 32768.0) + 1e-12) : -200;
 }
 
+static double frame_gain(const int16_t *i, const int16_t *o)     /* of a 10 ms frame, by mean magnitudes */
+{
+    double a = 1, b = 0;
+    for (int k = 0; k < 160; k++) { a += abs(i[k]); b += abs(o[k]); }
+    return b / a;
+}
+
 static int16_t in[RATE * 12], out[RATE * 12];
 
 static void run(struct micgain *g, size_t n)     /* in blocks of odd size, as the mixer's are not frame aligned */
@@ -73,6 +80,31 @@ int main(void)
     check(g.gain_db == before, "gain unchanged by a loud sound while held, dB", g.gain_db - before);
     g.hold = 0; micgain_run(&g, in + q0 + RATE, out, RATE);
     check(fabs(active(out, in + q0 + RATE, 0, RATE) - want) < 1.5, "quiet talker right after it, dBFS", active(out, in + q0 + RATE, 0, RATE));
+
+    /* someone talking over the sound (issue #82), 25 dB over the wake word */
+    size_t m0 = t; make(in, m0, 2, -30);
+    micgain_init(&g, MICGAIN_LEVEL); micgain_start(&g, -55);
+    g.limit_stays = 1; g.hold = 1; micgain_run(&g, in + m0, out, RATE / 2);
+    int rose = 0; peak = 0; double low = 1e9;
+    for (size_t i = 0; i + 160 <= RATE / 2; i += 160) {
+        double f = frame_gain(in + m0 + i, out + i);
+        if (f > low * 1.02) rose++;
+        if (f < low) low = f;
+        for (size_t k = i; k < i + 160; k++) if (abs(out[k]) > peak) peak = abs(out[k]);
+    }
+    check(!rose, "held: the limit only ever takes the gain down, frames turned up again", rose);
+    check(peak <= 29000, "held: peak over the sound", peak);
+    g.hold = 0; micgain_run(&g, in + m0 + RATE / 2, out, RATE / 10);  /* the hold ends, the talker goes on */
+    double high = 0;
+    for (size_t i = 0; i + 160 <= RATE / 10; i += 160) { double f = frame_gain(in + m0 + RATE / 2 + i, out + i); if (f > high) high = f; }
+    check(high <= low * 1.15, "the hold over: the level there at once, no jump in mid-syllable, dB", 20 * log10(high / low));
+    micgain_run(&g, in + m0 + RATE * 6 / 10, out, RATE);
+    check(fabs(active(out, in + m0 + RATE * 6 / 10, RATE / 2, RATE) - want) < 1.5, "and the talker's level found, dBFS", active(out, in + m0 + RATE * 6 / 10, RATE / 2, RATE));
+
+    micgain_init(&g, MICGAIN_LEVEL); micgain_start(&g, -55);         /* a sound alone at the limit, a quiet talker after */
+    g.limit_stays = 1; g.hold = 1; micgain_run(&g, in + l0, out, RATE / 2);
+    g.hold = 0; micgain_run(&g, in + q0 + RATE, out, RATE);
+    check(fabs(active(out, in + q0 + RATE, 0, RATE) - want) < 1.5, "a sound's peaks do not stay in the gain, dBFS", active(out, in + q0 + RATE, 0, RATE));
 
     micgain_init(&g, MICGAIN_LEVEL_MIN); micgain_start(&g, -55);     /* another level from the slider */
     run(&g, q1);

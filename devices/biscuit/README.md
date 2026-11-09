@@ -52,9 +52,13 @@ Use exactly this firmware version, also when the Echo already runs a newer one: 
 
 The unlock is **one script**: unzip the package, run `./fastbrick.sh` (Linux), put the Echo into fastboot mode —
 unplug its power, reconnect while holding the **action button** (the one with the circle) until the ring shows a
-**green LED** (an Echo unlocked before shows a rainbow) — and type `YES` when the script asks. It runs the whole exploit (about a minute, the ring shows
-progress) and reboots the Echo into TWRP (white LED). **Do not interrupt it after the 10-second grace period — that
-can brick the device.** `amonet-biscuit` **v2 writes newer bootloaders and boots Fire OS 6** — the stream the
+**green LED** (an Echo unlocked before shows a rainbow) — and type `YES` when the script asks. It sends the exploit
+and ends with "Please wait until the process finishes and DO NOT INTERRUPT IT." and "Press any key to exit...". **At
+that point the PC's part is over: press any key, that only closes the script and stops nothing.** The Echo goes on by
+itself (about a minute, the ring shows progress) and reboots into TWRP: **the ring turns white. From typing `YES`
+until the white ring, do not unplug the Echo's power or USB cable** — that can brick it. Still no white ring after
+3 minutes: the Echo is stuck, and only then unplug its power. (`scripts/setup.sh` asks for `YES` itself and says all
+of this as it happens.) `amonet-biscuit` **v2 writes newer bootloaders and boots Fire OS 6** — the stream the
 pinned firmware belongs to (Fire OS 5 versions do not boot from v2.0.0 on). v2.0.1's kaeru boots the active slot
 (v2.0.0's always `boot_a`). Flash `boot-root.zip` after every stock
 firmware flash: it gives root adb, as on donut.
@@ -64,7 +68,8 @@ firmware flash: it gives root adb, as on donut.
   (Fire OS 6 4405 to 8149) to `fastbrick-20221007.img` and `2c3569d-20260617_045829` (Fire OS 8338, NS6575,
   October 2026) to `fastbrick-20260617.img`; v2.0.0 knew only the first. That second payload's tail is built from
   8338's LK (135,403 of its 135,411 16-byte windows in the last 137,684 bytes are in 8338's `lk.img`, 122,746 in
-  8149's), but no unlock with it is reported yet. An LK newer than both: the guided setup says so when the Echo is
+  8149's), and it unlocked the first Echo tried with it, on Linux (issue #50, 2026-10-26); from Windows nobody has yet
+  (issue #74). An LK newer than both: the guided setup says so when the Echo is
   still in fastboot a minute after the script; power-cycled, the Echo boots the original software again, unharmed.
   Unlock before the Echo can update itself further.
 - From Windows (issue #60; for beginners step by step: [docs/WINDOWS.md](../../docs/WINDOWS.md)):
@@ -74,8 +79,12 @@ firmware flash: it gives root adb, as on donut.
   from an administrator PowerShell as [its README says](https://github.com/bboe/firebreak#windows). firebreak writes
   amonet **v2.0.1**, as the setup does on Linux, with TWRP 3.7.0, downloads what it needs itself
   against pinned hashes, and ends where the flash and root steps end here: Fire OS 6574.1 build 8146 in both slots,
-  `boot-root.zip` installed, root adb. The setup then checks that and goes on with the build. Not run here as a whole
-  yet; firebreak's own README has it measured on Windows 11.
+  `boot-root.zip` installed, root adb. The setup then checks that and goes on with the build. Run as a whole on
+  Windows 11 (issue #106, 2026-11-02: Git Bash, LK 63cb91b-20221007_072309, from stock to installed, build
+  2026.11.02.000053-beta). amonet's zip runs on Windows by itself too
+  (`fastbrick.bat`), which flashes with its bundled `bin\fastboot.exe` (platform-tools 36.0.0) before any system
+  fastboot — but the one attempt reported through another fastboot (platform-tools 37.0.1, in a wrapper) was refused,
+  the Echo unharmed (issue #74) — so the setup stays with firebreak from Windows.
 - No Magisk: this repo's daemon runs as the stock client's user; TWRP plus the system write is the whole root story.
 
 ## First contact (arrival checklist)
@@ -91,10 +100,12 @@ firmware flash: it gives root adb, as on donut.
 
 - Mute latch: the file is there and reads 0 with the mics on (2026-09-30); not yet read with the button lit, nor the
   ring and Home Assistant watched over a press with the build that reads it.
-- A spoken wake word and a spoken command with the current build (a simulated wake word runs the pipeline through Home
-  Assistant; the microphone stream is alive and hears the Echo's own wake sound).
-- A2DP with a phone and BLE pairing not tried on biscuit yet (the controller comes up; see the table). A phone paired
-  and played on the Echo 2 (radar), same MT8163 combo, 2026-10-10.
+- BLE pairing not tried on biscuit yet (the controller comes up; see the table).
+
+Answered (issue #106, 2026-11-02, build 2026.11.02.000053-beta): a spoken wake word and command reach Home Assistant
+with Amazon's engine ("Alexa", and "Echo" and "Ziggy" de-DE from the page's "Download from Amazon", through four
+Assist pipelines) and with microWakeWord ("Hey Jarvis" of ESPHome's collection, community models); a phone paired and
+played over A2DP; "Request and reply text" fills its sensors.
 
 `INSTALL=twrp-ab` and the policy patch (`magiskpolicy32` from donut's boot-root zip) worked unchanged on the first biscuit (2026-09-28):
 `scripts/install-system.sh` wrote `system_a`, the Echo booted into the satellite.

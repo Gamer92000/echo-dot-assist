@@ -30,6 +30,8 @@
  *   Wi-Fi (wifi.c): GET /api/wifi, POST /api/wifi/scan and /api/wifi/join, signed; root scans and switches.  The one
  *   secret that comes from the page, the network's password, travels sealed (unseal below), and only the PSK made from
  *   it goes on to root.
+ *   The timer's own sound (sounds.c): POST /api/timer-sound, a WAV the page made of the file picked, signed; the
+ *   Echo checks the format only, it decodes nothing else.
  *   The log: GET /api/log/0 (boot.log) and /1 (its rotated part), signed, for the page's viewer.  What it says is
  *   plain on the network then, like the rest of the page: names, addresses, when the Echo was spoken to.  Secrets do
  *   not go out: the one hassmic logs, the Sendspin pairing token (scripts/lib/setup.sh reads it there over adb), is
@@ -54,17 +56,22 @@
 #include "ringdesign.h"
 #include "netio.h"
 #include "settings.h"
+#include "sounds.h"
+#include "soundpack.h"
 #include "update.h"
 #include "wifi.h"
 #include "ws.h"
 #include "statefile.h"
 #include "../third_party/monocypher.h"
 #include <ctype.h>
+#include "mass.h"
+#include "screen.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -366,10 +373,11 @@ static int read_request(int fd, struct req *r)
         else if (!strcasecmp(line, "X-HM-Ctr")) snprintf(r->ctr, sizeof r->ctr, "%s", v);
         else if (!strcasecmp(line, "X-HM-Mac")) snprintf(r->mac, sizeof r->mac, "%s", v);
     }
-    /* a piece of an artifact, a microWakeWord model and a light ring design are the big bodies: everything else is a
-     * few lines */
+    /* a piece of an artifact, a microWakeWord model, a light ring design and a sound of one's own are the big bodies:
+     * everything else is a few lines */
     long max = !strncmp(r->path, "/api/artifact/chunk/", 20) ? ART_CHUNK_MAX : !strncmp(r->path, "/api/mww/add/", 13) ? MWW_MODEL_MAX + 16384
-             : !strncmp(r->path, "/api/ring/design/", 17) ? RD_TEXT_MAX : MAX_BODY;
+             : !strncmp(r->path, "/api/ring/design/", 17) ? RD_TEXT_MAX
+             : !strcmp(r->path, "/api/timer-sound") || !strncmp(r->path, "/api/sound/", 11) || !strncmp(r->path, "/api/sound-pack/", 16) ? SOUND_CUSTOM_MAX : MAX_BODY;
     if (cl < 0 || (cl > MAX_BODY && (cl > max || !approved_key(r->pub)))) return -2;
     if (!(r->body = malloc((size_t)cl + 1))) return -1;
     size_t have = n - hl < (size_t)cl ? n - hl : (size_t)cl;
@@ -439,60 +447,95 @@ static size_t hello_json(char *o, size_t cap, int members)
     return n < cap ? n : cap - 1;
 }
 
+/* root's kiosk_tick keeps this file while the Kiosk Satellite app is installed: the daemon's user cannot read packages.list */
+static int kiosk_app(void)
+{
+    const char *e = getenv("HASSMIC_KIOSK_APP");
+    return board.kiosk && !access(e ? e : "/data/local/hassmic/kiosk-app", F_OK);
+}
+
 /* lock order: core_lock first (settings), lk only inside the helpers above */
+/* appended at n of o (cap bytes), never past its end: what does not fit is cut (the page then refuses the answer;
+ * the parts are bounded, the screen's apps by what fits) */
+static size_t app(char *o, size_t n, size_t cap, const char *fmt, ...) __attribute__((format(printf, 4, 5)));
+static size_t app(char *o, size_t n, size_t cap, const char *fmt, ...)
+{
+    if (n + 1 >= cap) return cap ? cap - 1 : 0;
+    va_list ap; va_start(ap, fmt); int k = vsnprintf(o + n, cap - n, fmt, ap); va_end(ap);
+    return k < 0 ? n : n + (size_t)k < cap ? n + (size_t)k : cap - 1;
+}
+
 static void state_json(int fd, const struct req *r, const uint8_t me[32])
 {
-    size_t cap = 32768, n = 0; char *o = malloc(cap), v[300];
+    size_t cap = 65536, n = 0;   /* the settings ~25 KB, the screen's apps up to 10 */ char *o = malloc(cap), v[300];
+    int whisper_refused = davs_refused("whisper");          /* davs.c's lock, never under core_lock */
     if (!o) { respond_json(fd, 503, "{}"); return; }
-    n += (size_t)snprintf(o + n, cap - n, "{\"device\":");
+    n = app(o, n, cap, "{\"device\":");
     n += hello_json(o + n, cap - n, 0);
     pthread_mutex_lock(&core_lock);
     /* volume: the main one, for the page's Volume card to say what each kind of audio plays at now */
-    n += (size_t)snprintf(o + n, cap - n, ",\"ha\":%s,\"volume\":%d,\"settings\":[", core_ha_linked() ? "true" : "false", core_volume());
+    n = app(o, n, cap, ",\"ha\":%s,\"volume\":%d,\"kiosk_app\":%s,\"settings\":[", core_ha_linked() ? "true" : "false", core_volume(), kiosk_app() ? "true" : "false");
     for (int i = 0, k = settings_count(); i < k && n < cap - 600; i++) {
         const struct setting *s = settings_at(i); const char *const *names; int nc = settings_choices(s, &names);
-        n += (size_t)snprintf(o + n, cap - n, "%s{\"name\":\"%s\",\"label\":\"%s\",\"group\":\"%s\",\"type\":\"%s\",\"value\":%d,\"min\":%d,\"max\":%d,\"export\":%s,\"feature\":%s,\"unit\":\"%s\",\"choices\":[",
+        n = app(o, n, cap, "%s{\"name\":\"%s\",\"label\":\"%s\",\"group\":\"%s\",\"type\":\"%s\",\"value\":%d,\"min\":%d,\"max\":%d,\"export\":%s,\"feature\":%s,\"unit\":\"%s\",\"choices\":[",
                               i ? "," : "", s->name, s->label, s->group, s->type == S_BOOL ? "bool" : s->type == S_INT ? "int" : "choice",
                               settings_get(s), settings_min(s), settings_max(s), s->export_ ? "true" : "false", s->feature ? "true" : "false", s->unit ? s->unit : "");
-        for (int c = 0; c < nc && n < cap - 200; c++) { jesc(v, sizeof v, names[c]); n += (size_t)snprintf(o + n, cap - n, "%s\"%s\"", c ? "," : "", v); }
-        n += (size_t)snprintf(o + n, cap - n, "]}");
+        for (int c = 0; c < nc && n < cap - 200; c++) { jesc(v, sizeof v, names[c]); n = app(o, n, cap, "%s\"%s\"", c ? "," : "", v); }
+        n = app(o, n, cap, "]}");
     }
     /* what does not work, and why.  Models point at the page's Download from Amazon: these said scripts/artifacts.sh
      * after the page could do it, and people who had taken the USB wires off asked how (forum, 2026-10-17) */
-    n += (size_t)snprintf(o + n, cap - n, "],\"warnings\":[");
+    n = app(o, n, cap, "],\"warnings\":[");
     int w = 0;
-    if (!core_ha_linked()) n += (size_t)snprintf(o + n, cap - n, "%s\"Home Assistant is not connected\"", w++ ? "," : "");
+    if (!core_ha_linked()) n = app(o, n, cap, "%s\"Home Assistant is not connected\"", w++ ? "," : "");
+    /* Amazon refuses the whisper model to some models (the Echo Show 5: issue #100): then only a copy brings it */
     if (core_local_wake && core_whispered() == -2)
-        n += (size_t)snprintf(o + n, cap - n, "%s\"Whisper detection: no model on this Echo yet. Get it with Download from Amazon (Wake word section), or copy it from another Echo\"", w++ ? "," : "");
+        n = app(o, n, cap, "%s\"%s\"", w++ ? "," : "", whisper_refused
+                   ? "Whisper detection: no model on this Echo. Amazon does not hand it out to this model of Echo: copy it from another Echo that has it with Copy models (Models page)"
+                   : "Whisper detection: no model on this Echo yet. Get it with Download from Amazon (Models page), or copy it from another Echo with Copy models");
     if (core_local_wake && sound_model() == SOUND_NONE)
-        n += (size_t)snprintf(o + n, cap - n, "%s\"Sound detection: no model on this Echo (neither the firmware's nor one from Download from Amazon)\"", w++ ? "," : "");
+        n = app(o, n, cap, "%s\"Sound detection: no model on this Echo (neither the firmware's nor one from Download from Amazon)\"", w++ ? "," : "");
     if (core_sound_failed())
-        n += (size_t)snprintf(o + n, cap - n, "%s\"Sound detection could not start: its model did not load, so it was switched off (boot.log says why)\"", w++ ? "," : "");
+        n = app(o, n, cap, "%s\"Sound detection could not start: its model did not load, so it was switched off (boot.log says why)\"", w++ ? "," : "");
     { const struct core_wake_word *l; if (core_local_wake && core_wake_engine(-1) == WAKE_AMAZON && core_wake_words(&l) <= 1)
-        n += (size_t)snprintf(o + n, cap - n, "%s\"Wake words: only Alexa. Amazon's others (Echo, Computer, ...) come with Download from Amazon (Wake word section), or copy them from another Echo\"", w++ ? "," : ""); }
+        n = app(o, n, cap, "%s\"Wake words: only Alexa. Amazon's others (Echo, Computer, ...) come with Download from Amazon (Models page), or copy them from another Echo\"", w++ ? "," : ""); }
     pthread_mutex_unlock(&core_lock);
     float t = diag_soc_temp(), cpu = diag_cpu();
     pthread_mutex_lock(&lk); int adb_wait = login.state == 1 && login.kind == W_ADB; pthread_mutex_unlock(&lk);
-    n += (size_t)snprintf(o + n, cap - n, "],\"adb\":{\"open\":%s,\"waiting\":%s},\"diag\":{\"soc_temp\":", adbwifi_open() ? "true" : "false", adb_wait ? "true" : "false");
-    n += isnan(t) ? (size_t)snprintf(o + n, cap - n, "null") : (size_t)snprintf(o + n, cap - n, "%.1f", t);
-    n += (size_t)snprintf(o + n, cap - n, ",\"cpu\":");
-    n += isnan(cpu) ? (size_t)snprintf(o + n, cap - n, "null") : (size_t)snprintf(o + n, cap - n, "%.0f", cpu);
+    n = app(o, n, cap, "],\"adb\":{\"open\":%s,\"waiting\":%s},\"diag\":{\"soc_temp\":", adbwifi_open() ? "true" : "false", adb_wait ? "true" : "false");
+    n = isnan(t) ? app(o, n, cap, "null") : app(o, n, cap, "%.1f", t);
+    n = app(o, n, cap, ",\"cpu\":");
+    n = isnan(cpu) ? app(o, n, cap, "null") : app(o, n, cap, "%.0f", cpu);
     { static const char *const models[] = { "none", "firmware", "newer" };
-      n += (size_t)snprintf(o + n, cap - n, "},\"sound\":{\"model\":\"%s\",\"failed\":%s", models[sound_model()], core_sound_failed() ? "true" : "false"); }
-    n += (size_t)snprintf(o + n, cap - n, "},\"arbitration\":");
-    if (arb_running()) n += arb_status_json(o + n, cap - n); else n += (size_t)snprintf(o + n, cap - n, "null");
+      n = app(o, n, cap, "},\"sound\":{\"model\":\"%s\",\"failed\":%s", models[sound_model()], core_sound_failed() ? "true" : "false"); }
+    /* the timer sounds this Echo has (the stock ones where its firmware keeps them), and the length of its own */
+    { static const enum sound snd[] = { SND_TIMER, SND_ALARM, SND_CUSTOM }; static const char *const nm[] = { "timer", "alarm", "custom" };
+      n = app(o, n, cap, "},\"timer_sound\":{\"custom_ms\":%u,\"present\":[\"beep\"", sound_own_ms(SND_CUSTOM));
+      for (int i = 0; i < 3; i++) if (sound_present(snd[i])) n = app(o, n, cap, ",\"%s\"", nm[i]);
+      n = app(o, n, cap, "]"); }
+    /* the sounds one's own can stand in for: its length (0: stock's plays), whether stock's is on this image, the longest */
+    n = app(o, n, cap, "},\"sounds\":[");
+    for (int s = 0, k = 0; s < SND_COUNT; s++) if (sound_id(s))
+        n = app(o, n, cap, "%s{\"id\":\"%s\",\"own_ms\":%u,\"stock\":%s,\"max_s\":%u}", k++ ? "," : "", sound_id(s),
+                              sound_own_ms(s), sound_stock_present(s) ? "true" : "false", sound_own_secs(s));
+    n = app(o, n, cap, "],\"arbitration\":");
+    if (arb_running()) n += arb_status_json(o + n, cap - n); else n = app(o, n, cap, "null");
     if (dropin_running()) { char peer[64]; int st = dropin_status(peer, sizeof peer); unsigned at; int res = dropin_last(&at);
-        n += (size_t)snprintf(o + n, cap - n, ",\"dropin\":{\"state\":\"%s\",\"peer\":\"%s\",\"result\":\"%s\",\"attempt\":%u}",
+        n = app(o, n, cap, ",\"dropin\":{\"state\":\"%s\",\"peer\":\"%s\",\"result\":\"%s\",\"attempt\":%u}",
                               dropin_states[st], peer, res >= 0 ? dropin_results[res] : "", at); }   /* peer: a node, [a-z0-9-] */
-    n += (size_t)snprintf(o + n, cap - n, ",\"wifi\":"); n += wifi_current_json(o + n, cap - n);
-    n += (size_t)snprintf(o + n, cap - n, ",\"clients\":[");
+    n = app(o, n, cap, ",\"wifi\":"); n += wifi_current_json(o + n, cap - n);
+    if (screen_present()) {                                       /* the screen: its home app, its music pages */
+        n = app(o, n, cap, ",\"screen\":"); n += screen_status_json(o + n, cap - n);
+        n = app(o, n, cap, ",\"mass\":"); n += mass_status_json(o + n, cap - n);
+    }
+    n = app(o, n, cap, ",\"clients\":[");
     pthread_mutex_lock(&lk);
     for (int i = 0; i < nclients && n < cap - 300; i++) {
         char h[65]; hex(h, clients[i].pub, 32); jesc(v, sizeof v, clients[i].label);
-        n += (size_t)snprintf(o + n, cap - n, "%s{\"pub\":\"%s\",\"label\":\"%s\",\"me\":%s}", i ? "," : "", h, v, memcmp(clients[i].pub, me, 32) ? "false" : "true");
+        n = app(o, n, cap, "%s{\"pub\":\"%s\",\"label\":\"%s\",\"me\":%s}", i ? "," : "", h, v, memcmp(clients[i].pub, me, 32) ? "false" : "true");
     }
     pthread_mutex_unlock(&lk);
-    n += (size_t)snprintf(o + n, cap - n, "]}");
+    n = app(o, n, cap, "]}");
     respond_s(fd, r, 200, "application/json", NULL, o, n < cap ? n : cap);
     free(o);
 }
@@ -541,6 +584,119 @@ static void artifact_api(int fd, struct req *r)
     else snprintf(err, sizeof err, "not found");
     if (!rc) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
     jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
+    respond_sjson(fd, r, 400, o);
+}
+
+/* /api/timer-sound       POST  a WAV, 16-bit mono at 48 kHz, up to 30 s (sounds.h): this Echo's own timer sound, which
+ *                               the ring then plays; an empty body deletes it (the ring back to the default if it played it)
+ * /api/timer-sound/play  POST  one ring of the chosen sound, 10 s at most, at the timer volume
+ * Signed. */
+static void timer_sound_api(int fd, struct req *r)
+{
+    char err[200] = "", o[300], ej[260]; int rc = -1;
+    if (!signed_ok(r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    if (strcmp(r->method, "POST")) snprintf(err, sizeof err, "not found");
+    else if (!strcmp(r->path, "/api/timer-sound/play")) { core_timer_sound_preview(); rc = 0; }
+    else if (strcmp(r->path, "/api/timer-sound")) snprintf(err, sizeof err, "not found");
+    else if (r->blen) rc = sound_own_save(SND_CUSTOM, r->body, r->blen, err, sizeof err);
+    else {
+        pthread_mutex_lock(&core_lock);
+        int chosen = core_timer_sound(-1) == TIMER_SOUND_CUSTOM;
+        if ((rc = sound_own_delete(SND_CUSTOM))) snprintf(err, sizeof err, "cannot delete it");     /* it stays, and stays chosen */
+        else if (chosen) { core_timer_sound_default(); settings_save(); core_settings_changed(); }
+        pthread_mutex_unlock(&core_lock);
+    }
+    if (!rc) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
+    jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
+    respond_sjson(fd, r, 400, o);
+}
+
+/* /api/sound/<id>        POST  a WAV as the timer's (sounds.h), up to the sound's max_s: played in place of stock's from
+ *                               then on; an empty body deletes it (stock's again)
+ * /api/sound/<id>/play   POST  it once, as it plays now (one's own or stock's), at the sounds volume
+ * /api/sound/<id>/stock  GET   stock's as a WAV (16-bit mono at its own rate), for the page to measure its loudness
+ * <id>: sounds.c's ("wake", "ring_in", ...).  Signed. */
+static void sound_api(int fd, struct req *r)
+{
+    char err[200] = "", o[300], ej[260], id[32]; int rc = -1;
+    if (!signed_ok(r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    const char *p = r->path + 11, *slash = strchr(p, '/');
+    size_t l = slash ? (size_t)(slash - p) : strlen(p);
+    snprintf(id, sizeof id, "%.*s", (int)(l < sizeof id ? l : sizeof id - 1), p);
+    int s = sound_by_id(id); const char *what = slash ? slash + 1 : "";
+    if (s < 0) snprintf(err, sizeof err, "no such sound");
+    else if (!strcmp(r->method, "GET") && !strcmp(what, "stock")) {
+        size_t n; unsigned rate; short *pcm = sound_stock(s, &n, &rate);
+        if (!pcm) { respond_sjson(fd, r, 404, "{\"error\":\"not on this firmware\"}"); return; }
+        unsigned char *w = malloc(44 + n * 2);
+        if (!w) { free(pcm); respond_sjson(fd, r, 500, "{\"error\":\"out of memory\"}"); return; }
+        uint32_t v[] = { 36 + (uint32_t)n * 2, 16, 1 | 1u << 16, rate, rate * 2, 2 | 16u << 16, (uint32_t)n * 2 };
+        memcpy(w, "RIFF", 4); memcpy(w + 4, &v[0], 4); memcpy(w + 8, "WAVEfmt ", 8); memcpy(w + 16, &v[1], 20);
+        memcpy(w + 36, "data", 4); memcpy(w + 40, &v[6], 4); memcpy(w + 44, pcm, n * 2);     /* little-endian on every Echo and PC */
+        respond_s(fd, r, 200, "audio/wav", NULL, w, 44 + n * 2);
+        free(w); free(pcm); return;
+    }
+    else if (strcmp(r->method, "POST")) snprintf(err, sizeof err, "not found");
+    else if (!strcmp(what, "play")) { core_sound_preview(s); rc = 0; }
+    else if (*what) snprintf(err, sizeof err, "not found");
+    else if (r->blen) rc = sound_own_save(s, r->body, r->blen, err, sizeof err);
+    else if ((rc = sound_own_delete(s))) snprintf(err, sizeof err, "cannot delete it");
+    if (!rc) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
+    jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
+    respond_sjson(fd, r, 400, o);
+}
+
+/* /api/sound-pack                 GET   {"packs":[{id,name,bytes,sounds}],"bytes","max","packs_max"}
+ * /api/sound-pack/new             POST  the name: an empty pack, {"id"}
+ * /api/sound-pack/save            POST  the name: one of the sounds of one's own in use now, {"id"}
+ * /api/sound-pack/<id>/file/<sound>  POST  a WAV as /api/sound/<sound> takes it; GET  it, to save
+ * /api/sound-pack/<id>/apply      POST  its sounds in use, Alexa's where it has none
+ * /api/sound-pack/<id>/delete     POST
+ * Signed.  Not in exports, as the sounds. */
+static void sound_pack_api(int fd, struct req *r)
+{
+    char err[200] = "", o[300], ej[260]; int rc = -1, get = !strcmp(r->method, "GET");
+    if (!signed_ok(r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    const char *p = r->path + 15;
+    if (!*p && get) {
+        size_t cap = 16384, n = 0; char *j = malloc(cap); int k = 0;
+        if (!j) { respond_sjson(fd, r, 500, "{\"error\":\"out of memory\"}"); return; }
+        n += (size_t)snprintf(j + n, cap - n, "{\"packs\":[");
+        for (int id = 1; id <= SP_PACKS_MAX; id++) {
+            char name[SP_NAME_MAX + 1], q[400]; size_t b; unsigned s; int c = 0;
+            if (soundpack_info(id, name, &b, &s)) continue;
+            jesc(q, sizeof q, name);
+            n += (size_t)snprintf(j + n, cap - n, "%s{\"id\":%d,\"name\":\"%s\",\"bytes\":%zu,\"sounds\":[", k++ ? "," : "", id, q, b);
+            for (int i = 0; i < SND_COUNT; i++) if (s >> i & 1) n += (size_t)snprintf(j + n, cap - n, "%s\"%s\"", c++ ? "," : "", sound_id(i));
+            n += (size_t)snprintf(j + n, cap - n, "]}");
+        }
+        n += (size_t)snprintf(j + n, cap - n, "],\"bytes\":%zu,\"max\":%zu,\"packs_max\":%d}", soundpack_bytes(), soundpack_max(), SP_PACKS_MAX);
+        respond_s(fd, r, 200, "application/json", NULL, j, n);
+        free(j); return;
+    }
+    if (!strcmp(p, "/new") || !strcmp(p, "/save")) {
+        int id = get ? -1 : soundpack_new(r->body ? r->body : "", r->blen, p[1] == 's', err, sizeof err);
+        if (id > 0) { snprintf(o, sizeof o, "{\"id\":%d}", id); respond_sjson(fd, r, 200, o); return; }
+    } else {
+        char *end; long id = *p == '/' ? strtol(p + 1, &end, 10) : 0;
+        if (id <= 0 || id > SP_PACKS_MAX || *end != '/') snprintf(err, sizeof err, "no such pack");
+        else if (!strncmp(end, "/file/", 6)) {
+            int s = sound_by_id(end + 6);
+            if (get) {
+                size_t n; unsigned char *w = soundpack_get((int)id, s, &n);
+                if (!w) { respond_sjson(fd, r, 404, "{\"error\":\"not in this pack\"}"); return; }
+                respond_s(fd, r, 200, "audio/wav", NULL, w, n);
+                free(w); return;
+            }
+            rc = soundpack_put((int)id, s, r->body, r->blen, err, sizeof err);
+        }
+        else if (get) snprintf(err, sizeof err, "not found");
+        else if (!strcmp(end, "/apply")) rc = soundpack_apply((int)id, err, sizeof err);
+        else if (!strcmp(end, "/delete")) { if ((rc = soundpack_delete((int)id))) snprintf(err, sizeof err, "no such pack"); }
+        else snprintf(err, sizeof err, "not found");
+    }
+    if (!rc) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
+    jesc(ej, sizeof ej, err[0] ? err : "not found"); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
     respond_sjson(fd, r, 400, o);
 }
 
@@ -753,7 +909,7 @@ static void vouch_api(int fd, struct req *r)
 static int unseal(const struct req *r, const uint8_t *in, size_t n, uint8_t *out)
 {
     uint8_t pub[32], k[32], ek[32], ks[64]; crypto_blake2b_ctx ctx; int bad;
-    if (n > 64 * 4 || unhex(pub, r->pub, 32)) return -1;
+    if (n > 64 * 40 || unhex(pub, r->pub, 32)) return -1;   /* callers bound n by their buffers: a Wi-Fi password, a token */
     pthread_mutex_lock(&lk); bad = session_key(k, pub); pthread_mutex_unlock(&lk);
     if (bad) return -1;
     crypto_blake2b_keyed(ek, 32, k, 32, (const uint8_t *)"hassmic seal 1", 14);
@@ -767,6 +923,49 @@ static int unseal(const struct req *r, const uint8_t *in, size_t n, uint8_t *out
     }
     crypto_wipe(k, sizeof k); crypto_wipe(ek, sizeof ek); crypto_wipe(ks, sizeof ks);
     return 0;
+}
+
+/* /api/screen  POST "home <package>" | "home" (the face) | "home -" (none chosen: Kiosk Satellite where installed).  Signed */
+static void screen_api(int fd, struct req *r)
+{
+    if (!signed_ok(r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    if (!screen_present() || strcmp(r->method, "POST")) { respond_sjson(fd, r, 404, "{\"error\":\"not found\"}"); return; }
+    char what[16] = "", v[128] = ""; int k = sscanf(r->body, "%15s %127s", what, v);
+    if (k < 1 || strcmp(what, "home") || screen_set_home(k < 2 ? "" : !strcmp(v, "-") ? NULL : v)) { respond_sjson(fd, r, 400, "{\"error\":\"bad request\"}"); return; }
+    size_t cap = 16384; char *o = malloc(cap);
+    if (!o) { respond_sjson(fd, r, 503, "{\"error\":\"no memory\"}"); return; }
+    size_t n = screen_status_json(o, cap);
+    respond_s(fd, r, 200, "application/json", NULL, o, n); free(o);
+}
+
+/* /api/mass  POST "<url hex | -> <token sealed, hex | - | =>": Music Assistant's API for the screen (mass.c): its
+ * address ("-": none; without a token the Echo looks at the one Sendspin played from) and a long-lived token, sealed
+ * as a Wi-Fi password ("-": forget it, "=": keep it); a token needs an address (409).  Signed.  The token is never
+ * sent back: /api/state says only whether there is one. */
+static void mass_api(int fd, struct req *r)
+{
+    char uh[600] = "", th[5000] = "", url[260] = ""; uint8_t sealed[2400], tok[2401]; int tl = 0, ul = 0;
+    if (!signed_ok(r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    if (!screen_present() || strcmp(r->method, "POST")) { respond_sjson(fd, r, 404, "{\"error\":\"not found\"}"); return; }
+    if (sscanf(r->body, "%599s %4999s", uh, th) != 2 || (strcmp(uh, "-") && (ul = unhex_any((uint8_t *)url, sizeof url - 1, uh)) < 0)
+        || (strcmp(th, "-") && strcmp(th, "=") && ((tl = unhex_any(sealed, sizeof sealed, th)) < 0 || unseal(r, sealed, (size_t)tl, tok)))) {
+        respond_sjson(fd, r, 400, "{\"error\":\"bad request\"}"); return;
+    }
+    if (strcmp(uh, "-")) url[ul] = 0;
+    for (char *c = url; *c; c++) if ((unsigned char)*c < 0x21 || *c == '"' || *c == '\\' || (unsigned char)*c > 0x7e) {
+        crypto_wipe(tok, sizeof tok); crypto_wipe(sealed, sizeof sealed); respond_sjson(fd, r, 400, "{\"error\":\"bad address\"}"); return;
+    }
+    tok[tl] = 0;                                        /* the page pads with zeros: a token has none */
+    for (int i = 0; i < tl && tok[i]; i++) if (tok[i] < 0x21 || tok[i] > 0x7e || tok[i] == '"' || tok[i] == '\\') {
+        crypto_wipe(tok, sizeof tok); crypto_wipe(sealed, sizeof sealed); respond_sjson(fd, r, 400, "{\"error\":\"not a token\"}"); return;
+    }
+    int rc = mass_set(url, !strcmp(th, "-") ? "-" : !strcmp(th, "=") ? "" : (const char *)tok);
+    crypto_wipe(tok, sizeof tok); crypto_wipe(sealed, sizeof sealed);
+    if (rc == -2) { respond_sjson(fd, r, 409, "{\"error\":\"Give Music Assistant's address\"}"); return; }
+    if (rc == -4) { respond_sjson(fd, r, 400, "{\"error\":\"The Echo talks to Music Assistant's API without TLS: give its http address (port 8095)\"}"); return; }
+    if (rc == -3) { respond_sjson(fd, r, 409, "{\"error\":\"A new address takes the token again: it only ever goes where it was given\"}"); return; }
+    char o[4096]; size_t n = mass_status_json(o, sizeof o);
+    respond_s(fd, r, rc ? 500 : 200, "application/json", NULL, o, n);
 }
 
 /* /api/wifi        GET   the network now, the last scan, the last switch (wifi.c)
@@ -891,7 +1090,7 @@ static void handle(int fd)
     else if (!strcmp(r.method, "GET") && !strcmp(r.path, "/api/export")) {
         char t[4096], head[200]; size_t n;
         if (!signed_ok(&r, 0)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
-        n = (size_t)snprintf(t, sizeof t, "# hassmic settings, exported from %s (%s %s)\n# not in it: the Echo's name, keys, pairings\n", core_name, board.model, VERSION);
+        n = (size_t)snprintf(t, sizeof t, SETTINGS_EXPORT_HEAD "%s (%s %s)\n# not in it: the Echo's name, keys, pairings\n", core_name, board.model, VERSION);
         pthread_mutex_lock(&core_lock); n += settings_text(t + n, sizeof t - n, 1); pthread_mutex_unlock(&core_lock);
         snprintf(head, sizeof head, "Content-Disposition: attachment; filename=\"hassmic-settings.conf\"\r\n");
         respond_s(fd, &r, 200, "text/plain; charset=utf-8", head, t, n);
@@ -969,6 +1168,11 @@ static void handle(int fd)
         wifi_api(fd, &r);
 #endif
     }
+    else if (!strcmp(r.path, "/api/mass")) mass_api(fd, &r);
+    else if (!strcmp(r.path, "/api/screen")) screen_api(fd, &r);
+    else if (!strncmp(r.path, "/api/timer-sound", 16)) timer_sound_api(fd, &r);
+    else if (!strncmp(r.path, "/api/sound/", 11)) sound_api(fd, &r);
+    else if (!strncmp(r.path, "/api/sound-pack", 15)) sound_pack_api(fd, &r);
     else if (!strcmp(r.method, "GET") && !strncmp(r.path, "/api/log/", 9)) log_api(fd, &r);
     else respond_json(fd, 404, "{\"error\":\"not found\"}");
     free(r.body);

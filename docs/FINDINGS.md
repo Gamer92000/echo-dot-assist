@@ -67,7 +67,8 @@ within 1 dB of micRaw over 4 s).
   arbitration energies and metrics ("1-mic ESP"); it does not touch the flag. Without valid times the front end logs
   "Falling back to default behavior of using the 1100 ms oldest sample buffer - 500 ms noise 600 ms wakeword".
 - Where the times come from: the front end writes its clock (ms, 16 bit) into the lowest bit of the micAsr samples:
-  in every 128-sample frame the first 23 samples carry a fixed pattern, data follows. Pryon reads it back and reports
+  in every 128-sample frame the first 23 samples carry a fixed pattern, data follows (the whole record, its DNN VAD
+  among it: [re-vad.md](re-vad.md)). Pryon reads it back and reports
   in the result's metadata (24-byte header starting `JSON_GZ_AND_FP`, gzip JSON, fingerprint):
   `"audioMetadataDuringDetection":{.."afe_frame_before_ww_start":50,"afe_frame_before_ww_end":14,
   "playback_volume_before_ww_start":66,"timestamp_before_ww_start":8823,"timestamp_before_ww_end":9559},

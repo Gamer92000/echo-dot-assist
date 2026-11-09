@@ -35,11 +35,11 @@ install|Install
 "
 ROOTED_SKIP="usb unlock root"     # done on an Echo that is rooted already (scripts/setup.sh asks)
 NOTES=(
-    "The screen keeps Amazon's clock face and settings; Alexa's apps stay off while hassmic runs ($DDIR/README.md)."
+    "The screen shows hassmic's face and the light band, or Kiosk Satellite where installed; the settings page's Screen page picks the home app (docs/GUIDE.md). Alexa's apps stay off while hassmic runs ($DDIR/README.md)."
     "adb over Wi-Fi: the settings page's debug access (http://<echo-ip>:28931/), as on the other Echos, opens it for 30 min."
     "Updates: git pull, then scripts/ota-push.sh <echo-ip>."
     "More wake words, whisper or sound detection models: \"Download from Amazon\" on the settings page (scripts/artifacts.sh <echo-ip> is the fallback)."
-    "No Bluetooth and no Music Assistant pairing on this model yet: Android's stack owns the controller ($DDIR/README.md)."
+    "Bluetooth: phones play on the Echo and it plays on a speaker; devices seen by Home Assistant's Bluetooth proxy are untried (docs/re-checkers.md)."
 )
 
 sha() { sha256sum < "$1" | cut -c1-64; }
@@ -66,13 +66,17 @@ adbd() {
 # debugfs exits 0 whatever happens and rdump does not create its target (issue #4): the result is checked by hand.
 rootfs() {
     [ -e $FW/rootfs/system/bin/linker ] && return 0
-    system_img || return 1
+    system_img && need_space 2500 "Unpacking the firmware" || return 1
     task "Unpacking the firmware" sh -c "mkdir -p $FW/rootfs/system &&
         debugfs -R 'rdump / $FW/rootfs/system' $FW/images/system.img && [ -e $FW/rootfs/system/bin/linker ]"
 }
 # The system partition's image, from the firmware's block OTA (system.new.dat), checked against SYSTEM_IMG_SHA256
 system_img() {
-    [ -f $FW/images/system.img ] || task "Unpacking the system image" sh -c "unzip -o -q $FW/$FIRMWARE_FILE system.new.dat system.transfer.list -d $FW &&
+    [ -f $FW/images/system.img ] && return 0
+    # system.new.dat (2.57-2.64 GB in checkers', crown's and cronos' .bin) and the image made from it (2.4 GB of
+    # data) side by side, until the first goes
+    need_space 5500 "Unpacking the system image" || return 1
+    task "Unpacking the system image" sh -c "unzip -o -q $FW/$FIRMWARE_FILE system.new.dat system.transfer.list -d $FW &&
         mkdir -p $FW/images && python3 tools/sdat2img.py $FW/system.transfer.list $FW/system.new.dat $FW/images/system.img &&
         rm -f $FW/system.new.dat $FW/system.transfer.list" || return 1
 }
@@ -80,11 +84,11 @@ system_img() {
 step_tools() {
     command -v curl > /dev/null || need_tools curl || return 1
     build_mode
+    space_ahead 7000 2500                 # the .bin, system.new.dat and the image; then the rootfs
     local unlock="fastboot python3"
     rooted_already && unlock=python3
     if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip debugfs sqlite3 curl sha256sum || return 1; return 0; fi
     need_tools adb $unlock unzip make cc debugfs sqlite3 curl sha256sum bc xz || return 1
-    [ "$(df -Pk . | awk 'NR == 2 { print $4 }')" -gt 5000000 ] || warn "less than 5 GB free here; the NDK and firmware need about that"
 }
 
 step_files() {
@@ -100,6 +104,7 @@ step_files() {
     [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
     if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
         mkdir -p toolchain
+        need_space $NDK_MB "The Android NDK" || return 1
         TASK_NOTE="du -h toolchain/ndk.zip | cut -f1" task "Downloading Android NDK r21e (1 GB)" curl -fsSL -o toolchain/ndk.zip $NDK_URL &&
             task "Unpacking the NDK" unzip -q -o toolchain/ndk.zip -d toolchain && rm -f toolchain/ndk.zip || return 1
     fi
@@ -135,16 +140,17 @@ step_unlock() {
         twrp_screen; wait_adb recovery; return
     fi
     [ -x $FW/amonet/fastbrick.sh ] || task "Unpacking amonet" unzip -q -o $FW/$AMONET -d $FW || return 1
-    tell "On the Echo, hold all three buttons (both volume keys and the camera shutter)" \
+    tell "On the Echo, hold all three buttons: Volume down, Volume up and Mute (the microphone button)" \
         "Keep them held until its screen says \"=> FASTBOOT mode...\", then let go" \
-        "Plug the micro-USB cable into the Echo." \
-        "" \
-        "${RED}${B}The unlock must not be interrupted once it starts (up to 5 min): that bricks it for good.$N"
-    # in the foreground: it asks to type YES, and for a key press at the end
-    live "Unlocking with amonet's fastbrick" in_dir $FW/amonet env PYTHONUNBUFFERED=1 \
-        bash -o pipefail -c "./fastbrick.sh 2>&1 | tee -a '$LOG'" || return 1
+        "Plug the micro-USB cable into the Echo."
+    waitfor "Waiting for fastboot|Fastboot" '[ -n "$(fastboot devices)" ]' \
+        "Nothing? The screen must say \"=> FASTBOOT mode...\", and the cable must carry data, not only charge." || return 1
+    local usb0; usb0=$(amazon_usb)
+    fastbrick $FW/amonet "up to 5 minutes" "TWRP shows on the Echo's screen" \
+        "Unplug the Echo's power and plug it back in with Volume up held: that starts TWRP. Then run this step again." || return 1
     twrp_screen
-    wait_adb recovery || { fail "no TWRP on adb; $DDIR/README.md, step by step, then try again"; return 1; }
+    # gives up when the Echo came back in Fire OS instead (issue #132)
+    show_wait_twrp "$usb0" || { [ -n "$WAIT_ABORT" ] || fail "no TWRP on adb; $DDIR/README.md, step by step, then try again"; return 1; }
     warn "Leave the Echo in TWRP for now: stock Fire OS has no adb."
 }
 
@@ -164,8 +170,8 @@ step_system() {
     local b
     if [ -z "$DRY" ] && adb_is device; then
         b=$(ashell getprop ro.build.version.incremental)
-        [ "$b" = "$FIRMWARE_BUILD" ] && { ok "the system is $FIRMWARE_ID already"; return 0; }
-        info "the Echo runs build ${b:-unknown}, not $FIRMWARE_ID's $FIRMWARE_BUILD"
+        [ "$b" = "$FIRMWARE_BUILD" ] && ! wipe_asked && { ok "the system is $FIRMWARE_ID already"; return 0; }
+        [ "$b" = "$FIRMWARE_BUILD" ] || info "the Echo runs build ${b:-unknown}, not $FIRMWARE_ID's $FIRMWARE_BUILD"
         task "Restarting into TWRP" adb reboot recovery || return 1
         twrp_screen
     fi
@@ -176,7 +182,7 @@ step_system() {
         b=$(twrp_system_build)
         if [ "$b" = "$FIRMWARE_BUILD" ]; then
             task "Checking the system partition (3.2 GB, 2 min)" sh -c "[ \"\$(adb shell sha256sum $SYSTEM_DEV | tr -d '\r' | cut -c1-64)\" = $SYSTEM_IMG_SHA256 ]" &&
-                { ok "the system is $FIRMWARE_ID already"; return 0; }
+                { ok "the system is $FIRMWARE_ID already"; ! wipe_asked || wipe_data; return; }
             info "its build.prop says $FIRMWARE_BUILD, but the partition is not all $FIRMWARE_ID's (a write cut short): it is completed"
         else info "the Echo's system is build ${b:-unknown}, not $FIRMWARE_ID's $FIRMWARE_BUILD: it is replaced"; fi
     fi
@@ -188,6 +194,7 @@ step_system() {
         have=$(ashell blockdev --getsize64 $SYSTEM_DEV) want=$(stat -c %s $FW/images/system.img)
         [ "$have" = "$want" ] || { fail "the system partition holds $have bytes, the image $want: nothing written"; return 1; }
     fi
+    wipe_data || return 1           # before the write: a run cut off after it finds the right system and stops above
     warn "Keep the Echo on power and USB until the boot image is in (next step): until then it would not boot."
     rm -f $OUT/system.progress
     TASK_NOTE="cat $OUT/system.progress" task "Writing the system partition (3.2 GB, a few minutes)" write_system || return 1
@@ -284,6 +291,7 @@ step_network() {
 
 step_install() {
     rootfs && magiskpolicy && adbd || return 1        # again: the steps before may have been skipped
-    install_satellite
+    install_satellite || return 1
+    install_screen_apps
 }
 

@@ -9,7 +9,7 @@ This installer does **not** unlock a Cube, flash firmware, modify boot/recovery/
 - Captures the processed microphone through Amazon's existing audio front end. Keeps the stock audio HAL, AFE and Fire TV services running.
 - Uses the Cube's local Amazon/Pryon Alexa wake-word model. Suppresses stock Alexa while Home Assistant is ready; restores the original setting when the connection or service ends.
 - Ducks TV playback at the start of the accepted Assist request. The settings page adds **Extra TV ducking**, 0–24 dB, on top of Android audio focus. The default is 6 dB. Original player gain is restored at the end, with a bounded safety envelope.
-- Speaks replies and plays Sendspin audio through the **Cube speaker**. HDMI power detection and automatic output selection are deferred.
+- Routes replies and Sendspin together using **Auto / Cube speaker / TV**, with actual-output and TV-state diagnostics in HA. Unknown TV state falls back to the Cube.
 - Shows matching state bars on the Cube and along the bottom of the TV picture. Uses the Cube's stock animation files; the overlay does not take focus or remote input. The Lights page explains the bars instead of showing Echo rings.
 - Includes EDA arbitration (automatic/keyed network and Kiosk compatibility), settings export/import, browser approval, microphone controls, timers, announcements and Drop In code. Multi-device arbitration and Drop In need testing with another satellite; their inclusion is not a claim of completed end-to-end validation.
 - Advertises ESPHome and Sendspin through Android's existing mDNS service.
@@ -110,8 +110,36 @@ make unit-cube_audio
 
 `node tests/cube_web.js` checks both Cube and Echo page builders without a device. Installer tests use a fake device. The Cube audio unit test checks the common volume/AFE interface, listening messages, unchanged capture samples and earcon callback against a local fake helper, without playing or recording audio. The evidence below comes from the original working development build; this upstream preparation branch has not been installed on hardware. Keep device recordings, pairing keys and firmware out of distributions.
 
-Evidence so far: native build; signed browser login and setting round-trip; ESPHome entity/protocol checks; live microphone streaming; listening/thinking/speaking/idle LED transitions; TV overlay creation/removal; user-confirmed TV and Cube bars; paired strict-reference Sendspin streaming; mDNS discovery from another computer; seven installer validation/rollback tests; helper-crash recovery with stock Alexa restored in 5.24 seconds and Amazon’s audio server unchanged. HA has now provisioned encryption on the installed port, and two natural wake-word requests completed listening, thinking, reply playback through the Cube speaker, and volume recovery in the device logs. Music Assistant 2.10.8 completed long-term Sendspin pairing. The user confirmed the installed port answers correctly, ducks and restores TV audio, shows both bars, and plays Music Assistant tracks through the Cube speaker. A subsequent ADB reboot verified automatic microphone startup, encrypted HA voice subscription and paired Music Assistant reconnection, with all 11 checked settings/pairing files byte-for-byte unchanged and arbitration still off. A post-reboot indicator probe observed both the TV window and physical LED pattern, then clean removal at idle. Audible post-reboot voice/music confirmation, a cold power-cycle and multi-device arbitration testing remain outstanding. This is a development release.
+Evidence so far: native build; signed browser login and setting round-trip; ESPHome entity/protocol checks; live microphone streaming; listening/thinking/speaking/idle LED transitions; TV overlay creation/removal; user-confirmed TV and Cube bars; paired strict-reference Sendspin streaming; mDNS discovery from another computer; seven installer validation/rollback tests; helper-crash recovery with stock Alexa restored in 5.24 seconds and Amazon’s audio server unchanged. HA has now provisioned encryption on the installed port, and two natural wake-word requests completed listening, thinking, reply playback through the Cube speaker, and volume recovery in the device logs. Music Assistant 2.10.8 completed long-term Sendspin pairing. The user confirmed the installed port answers correctly, ducks and restores TV audio, shows both bars, and plays Music Assistant tracks through the Cube speaker. A subsequent ADB reboot verified automatic microphone startup, encrypted HA voice subscription and paired Music Assistant reconnection, with all 11 checked settings/pairing files byte-for-byte unchanged and arbitration still off. A post-reboot indicator probe observed both the TV window and physical LED pattern, then clean removal at idle. The subsequent routing build passed user-confirmed TV-to-Cube-to-TV music switching, replies, ducking, bars and post-reboot playback on 29 October. A cold power-cycle and multi-device arbitration testing remain outstanding. This is a development release.
 
 ## Attribution
 
 Forked from Gamer92000 / Julian Imhof's Echo Dot Assist, commit `3062695c586b03371ee63a0c63376f6c214721ef`, MIT licensed. `LICENSE` and all third-party notices remain. `UPSTREAM-README.md` describes the original Echo project; its unlocking, flashing and system-install instructions do not apply to this Cube installer. Legacy Echo source/scripts are retained for reference only. This is an independent development port, not an official EDA or Amazon release.
+
+
+## Audio routing and current EDA integration
+
+Assist owns music and spoken audio together. Auto uses fresh CEC power or a
+receiver-sense profile verified for the connected HDMI sink; Unknown falls back
+to the Cube. Cube speaker and TV overrides are available, with actual output,
+fallback and evidence exposed in Home Assistant. A saved receiver profile is
+specific to the attached display and is not distributed in installer packages.
+
+Cube output volume and TV output volume are independent trims. Music level
+during Assist remains a percentage (17% by default) and covers the completed
+spoken reply. Upstream's additional music-duck stage is disabled on Cube builds
+to avoid double attenuation. Extra TV ducking separately affects other Fire TV
+apps. KS supplies visuals and should keep its own Sendspin audio disabled when
+Assist is supplying that music.
+
+The shared EDA Sendspin resampler is retained. The Android adapter uses a 200 ms
+music buffer with audio thread priority, and logs underrun deltas every 10 seconds.
+Its queued time is read directly from AudioTrack's playback head; it does not use
+the Echo Show OpenSL slot accounting. The volume curve describes the adapter's
+PCM multiplier, not a measured acoustic response. Source 6 microphone/AFE and
+Amazon ASP signaling are retained. Automatic TV routing still needs appropriate
+power evidence; a cable or cached HDCP state alone is not proof that the TV is on.
+
+Wake alignment data is bundled with its CC BY 4.0 attribution from wakealign/.
+The installer retains existing HA/Sendspin credentials, routing settings and the
+receiver profile, and backs up the previous installation before updating.

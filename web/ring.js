@@ -500,7 +500,7 @@ function buildRing(el) {
       ['Error', 'error', 'A short error animation signals that the request could not finish.'],
       ['Setup / approval', 'setup', 'Orange: waiting for Home Assistant setup or a settings approval.'],
     ];
-    el.append(h('div', { class: 'card' }, cardHead('Cube and TV light bars', 'The same Assist state appears on the Cube and along the bottom of the TV picture. Replies play through the Cube speaker.', 'sun'),
+    el.append(h('div', { class: 'card' }, cardHead('Cube and TV light bars', 'The same Assist state appears on the Cube and along the bottom of the TV picture. Replies follow the selected Cube speaker or TV output.', 'sun'),
       h('div', { class: 'cube-bar-states' }, states.map(([name, cls, help]) => h('div', { class: 'cube-bar-state' },
         h('div', { class: `cube-bar-preview ${cls}`, 'aria-hidden': 'true' }), h('b', {}, name), h('p', { class: 'help' }, help)))),
       h('p', { class: 'help card-pad' }, 'These previews explain the states; the device uses its own Fire TV animation frames. The TV bar does not take focus or intercept remote buttons. It disappears when Assist finishes or stops. Custom Echo ring designs are not installed on the Cube.')));
@@ -515,7 +515,7 @@ function buildRing(el) {
 
 const placeOf = (id) => RING_PLACES.find((p) => p.id === id) || { id, group: 'Other', label: id };
 // what a place's help says on this Echo: the band turns nothing towards the talker
-const placeHelp = (p) => (isBand() ? (p.help || '').replace(/ ?Turned towards[^.]*\./, '').replace(/ \(the arrow in the designer\)/, '') : p.help || '');
+const placeHelp = (p) => act(isBand() ? (p.help || '').replace(/ ?Turned towards[^.]*\./, '').replace(/ \(the arrow in the designer\)/, '') : p.help || '');
 const slotsOf = () => (ring.status ? ring.status.slots.filter((s) => s.available) : []);
 const usedFor = (did) => slotsOf().filter((s) => s.design === did).map((s) => placeOf(s.id).label);
 
@@ -564,12 +564,15 @@ function actionsCard(st) {
       h('span', { class: 'ringd-act-pick' }, d ? d.name : 'Amazon\'s'),
       changed ? h('span', { class: 'ringd-dot', title: 'Changed: on the ring once you apply' }) : null);
   };
-  return h('div', { class: 'card ringd-actions' },
-    cardHead('Light ring animations', (isBand() ? 'What the band along the bottom of the screen shows for each of the Echo\'s own states, in place of a ring: designs show there flattened, the ring\'s twelve LEDs in a row with the side facing the talker in the middle, never turned. '
-      : 'What the ring shows for each of the Echo\'s own states. ') + 'Click one to pick Amazon\'s or one of your designs; a design can show for as many as you like.', 'sun',
-      h('button', { class: 'small', title: 'Every animation as it is now, as a theme pack', onclick: saveRingAsPack }, icon('plus'), 'Save as pack')),
-    h('div', { class: 'ringd-groups' }, groups.map((g) => h('div', { class: 'ringd-group' }, h('div', { class: 'ringd-group-head' }, g),
-      h('div', { class: 'ringd-acts' }, slots.filter((s) => placeOf(s.id).group === g).map(tile))))),
+  return h('div', { class: 'card ringd-actions', id: 'ring-acts' },
+    cardHead('Light ring animations', 'Click one to pick Amazon\'s or one of your designs', 'sun',
+      h('button', { class: 'small', title: 'Every animation as it is now, as a theme pack', onclick: saveRingAsPack }, icon('plus'), 'Save as pack'),
+      (isBand() ? 'What the band along the bottom of the screen shows for each of the Echo\'s own states, in place of a ring: designs show there flattened, the ring\'s twelve LEDs in a row with the side facing the talker in the middle, never turned. '
+        : 'What the ring shows for each of the Echo\'s own states. ') + 'A design can show for as many as you like.'),
+    h('div', { class: 'ringd-groups' }, groups.map((g) => {
+      const list = slots.filter((s) => placeOf(s.id).group === g);
+      return h('div', { class: 'ringd-group', style: `--c:${list.length}` }, h('div', { class: 'ringd-group-head' }, g), h('div', { class: 'ringd-acts' }, list.map(tile)));
+    })),
     applyBar(st));
 }
 
@@ -1094,24 +1097,25 @@ function ringRowMeta(n, libs) {
   return null;
 }
 
-// Copies the ticked ring rows of `mine` (this Echo's snapshot) to one Echo: the designs they show that it lacks first
-// (uploaded as new ones), then the animations, then Apply there.  Returns notes for what did not work
-async function ringCopy(e, names, mineSnap, theirs) {
+// Copies ring rows to one Echo, each from the snapshot of the Echo it comes from (jobs: [[snapshot, rows], ...]): the
+// designs they show that it lacks first (uploaded as new ones, once, whichever Echo a row comes from), then the animations,
+// then Apply there.  All in one go: a second Apply while the first installs is refused.  Returns notes for what did not work
+async function ringCopy(e, jobs, theirs) {
   const notes = [], have = new Map(theirs ? [...theirs.byMark].map(([m, x]) => [m, x.id]) : []);
-  const ensure = async (mark) => {
+  const ensure = async (mark, from) => {
     if (have.has(mark)) return have.get(mark);
-    const src = mineSnap.byMark.get(mark);
-    if (!src) throw new Error('design not found here');
+    const src = from.byMark.get(mark);
+    if (!src) throw new Error('design not found');
     const id = (await e.call('POST', '/api/ring/design/0', src.text)).json().id;
     have.set(mark, id);
     return id;
   };
   const lines = [];
-  for (const n of names) {
+  for (const [from, names] of jobs) for (const n of names) {
     try {
       if (n.startsWith('ring:')) {
-        const v = mineSnap.values.get(n);
-        lines.push(`${n.slice(5)} ${v === 'stock' ? 0 : await ensure(v)}`);
+        const v = from.values.get(n);
+        lines.push(`${n.slice(5)} ${v === 'stock' ? 0 : await ensure(v, from)}`);
       }
     } catch (x) { notes.push(errText(x)); }
   }

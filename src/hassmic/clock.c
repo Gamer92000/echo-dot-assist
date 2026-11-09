@@ -3,10 +3,10 @@
  *
  * Clock: nothing sets it any more.  Stock synced with Amazon's time servers, which the egress lock keeps out, and the
  * Echo runs on from its RTC: the Dot 2 was 23 h behind on 2026-10-06.  Home Assistant knows the time and says it when a
- * device asks (ESPHome GetTimeRequest, answered by aioesphomeapi itself), so proto_esphome.c asks on every link with the
- * device key and every 6 h on it.  hassmic may not set the clock (no CAP_SYS_TIME as the daemon's user), so the answer
- * goes to root the way update and adb requests do: state/clock holds "<epoch> <CLOCK_BOOTTIME when it was right>", the
- * latter as /proc/uptime words it (seconds.centiseconds: the same clock, and main.sh's mksh only counts to 2^31, which
+ * device asks (ESPHome GetTimeRequest, answered by aioesphomeapi itself), so proto_esphome.c asks on every link and
+ * every 6 h on it (a link without the device key only for "Next timer"'s end).  hassmic may not set the clock (no
+ * CAP_SYS_TIME as the daemon's user), so the answer goes to root the way update and adb requests do: state/clock holds
+ * "<epoch> <CLOCK_BOOTTIME when it was right>", the latter as /proc/uptime words it (seconds.centiseconds: the same clock, and main.sh's mksh only counts to 2^31, which
  * milliseconds pass after 25 days).  main.sh's netwatch (every 10 s) adds what has passed since, sets the time and the RTC,
  * and sets the property hassmic.clock.synced, which a reboot clears.  Only Home Assistant over the keyed link counts:
  * anyone on the network could otherwise move the clock, and with it the validity of the certificates curl checks.

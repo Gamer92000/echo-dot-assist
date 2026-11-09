@@ -214,11 +214,308 @@ avahi_start() {
     avahi-daemon -f $conf --no-drop-root --no-proc-title > /dev/null 2>&1 &
 }
 
+# >>> kiosk (tests/unit/kiosk_test.py runs this block)
+# Kiosk Satellite (device.conf KIOSK_PACKAGE, docs/kiosk-satellite.md), an app of the user's choice on the screen.  It has
+# no HOME category (hassmic-home is the home screen), so nothing else opens it, and nothing brings it back when it ends.
+# Runtime permissions and app ops it would otherwise ask a person for on a screen with no one at it.  Android's "unknown
+# permission" for those a release lacks is ignored.  Idempotent, a few hundred ms.
+KIOSK_APP=/data/local/hassmic/kiosk-app         # exists while the app is installed: the page's answer, as adb-open
+kiosk_grants() {
+    for p in READ_EXTERNAL_STORAGE WRITE_EXTERNAL_STORAGE ACCESS_COARSE_LOCATION ACCESS_FINE_LOCATION; do
+        pm grant $KIOSK_PACKAGE android.permission.$p > /dev/null 2>&1
+    done
+    for o in SYSTEM_ALERT_WINDOW WRITE_SETTINGS GET_USAGE_STATS REQUEST_INSTALL_PACKAGES; do
+        appops set $KIOSK_PACKAGE $o allow > /dev/null 2>&1
+    done
+    dumpsys deviceidle whitelist +$KIOSK_PACKAGE > /dev/null 2>&1       # no doze: the dashboard and its ESPHome server stay up
+    dpm set-active-admin $KIOSK_PACKAGE/.KioskAdminReceiver > /dev/null 2>&1   # device admin: it turns the screen off (force-lock)
+    kiosk_perm RECORD_AUDIO kiosk_mic
+    kiosk_perm CAMERA kiosk_camera
+}
+# Microphone and camera follow their settings (settings page, default off; state/config has name=on or off).  hassmic
+# is the satellite and keeps its own capture either way; an app plugin that talks (a doorbell's two-way talk) needs a
+# recorder of its own.  Athena, 2026-10-26: the audio HAL lets the app record beside hassmic's VOICE_RECOGNITION, but only
+# a recorder on the VOICE_COMMUNICATION source (its own pipeline, with echo cancellation) gets audio; VOICE_RECOGNITION and
+# CAMCORDER opened and delivered nothing.  Revoking a permission that was granted ends the app's process: kiosk_tick
+# opens it again.
+kiosk_on() { grep -qx "$1=on" /data/local/hassmic/state/config 2>/dev/null; }
+kiosk_perm() {
+    if kiosk_on $2; then
+        pm grant $KIOSK_PACKAGE android.permission.$1 > /dev/null 2>&1
+        appops set $KIOSK_PACKAGE $1 allow > /dev/null 2>&1
+    else
+        pm revoke $KIOSK_PACKAGE android.permission.$1 > /dev/null 2>&1
+        appops set $KIOSK_PACKAGE $1 deny > /dev/null 2>&1
+    fi
+}
+kiosk_perms_now() { for s in kiosk_mic kiosk_camera; do if kiosk_on $s; then echo $s=on; else echo $s=off; fi; done; }
+kiosk_perm_sync() {
+    [ -n "$KIOSK_PACKAGE" ] || return 0
+    last=$(kiosk_perms_now)                 # kiosk_grants applies it when it sees the app
+    while sleep 2; do
+        [ "$(getprop sys.boot_completed)" = 1 ] || continue
+        now=$(kiosk_perms_now)
+        [ "$now" = "$last" ] && continue
+        last=$now
+        [ -f $KIOSK_APP ] || continue
+        kiosk_perm RECORD_AUDIO kiosk_mic
+        kiosk_perm CAMERA kiosk_camera
+        echo "kiosk satellite:" $now
+    done
+}
+# The update helper: the app hands out a script on its content provider that starts a process with its own code and a
+# token, through which it installs its updates without a dialog.  Its own instructions have it piped into sh from adb
+# after every boot.  Here as the shell user (what adb is on a locked device: pm install is allowed to it) with inet, which
+# its listening socket needs, never as root.  That is the shell user's power in the app's hands, whatever the settings
+# above say: docs/SECURITY.md.  Idempotent ("already running"), so it is asked again: an update of the app ends the helper.
+# Not waited for: its pipe ends only when the provider and every child are done with it, and kiosk_tick also keeps the
+# rotation and the app on screen.  A session of its own, so that one left over from the last round goes with all its
+# children (setsid from a background job execs, so $! is the group; checked on a Show 5): kill of a shell alone left them.
+KIOSK_PID=$KIOSK_APP.asking                     # root's, kept over a restart of this loop; a pid is checked before it is killed
+KIOSK_SAID=$KIOSK_APP.said                      # appears when the round is over: renamed, never half written
+kiosk_stale() {
+    p=$(cat $KIOSK_PID 2> /dev/null)
+    [ -n "$p" ] && grep -q update-helper/start /proc/$p/cmdline 2> /dev/null || return 0
+    kill -9 -$p 2> /dev/null; echo "kiosk update helper: no answer, asked again"
+}
+kiosk_ask_helper() {
+    kiosk_stale
+    setsid sh -c "$D/runas shell shell,log,inet sh -c 'content read --uri content://$KIOSK_PACKAGE.update-helper/start | sh' > $KIOSK_SAID.new 2>&1; mv $KIOSK_SAID.new $KIOSK_SAID" < /dev/null > /dev/null 2>&1 &
+    echo $! > $KIOSK_PID        # lost in a crash just here: the next round runs beside it and hears "already running"
+}
+kiosk_helper_said() {
+    [ -f $KIOSK_SAID ] || return 0
+    out=$(cat $KIOSK_SAID); rm -f $KIOSK_SAID
+    case "$out" in
+    "") ;;
+    *"update helper started."*) echo "kiosk update helper: started";;
+    *"already running."*) ;;
+    *) echo "kiosk update helper: $(echo "$out" | tail -1)";;
+    esac
+}
+# The app is gone, so its helper goes too: that is the shell user's power for code that is no longer on the Echo.  Android's
+# uninstall ends only the processes it started for the app's uid, not one of ours as shell: on a Show 5 it was still up
+# after one (2026-11-03).  By its name (`ks-update-helper-<uid>`) in the command line: the Show 5's toybox pkill has no -f.
+# One grep for all of /proc, once per uninstall.  Its folder and log in /data/local/tmp go too: empty there, but named by
+# the uid, which a reinstall changes, so each reinstall left a pair behind.
+kiosk_helper_end() {
+    for f in $(grep -l ks-update-helper- /proc/[0-9]*/cmdline 2> /dev/null); do
+        f=${f#/proc/}; kill -9 ${f%/cmdline} 2> /dev/null
+    done
+    rm -rf /data/local/tmp/ks-update-helper-*
+}
+# One look, every 10 s, without Java (a pm per round would be a whole runtime): the folder of the app's APK says it is
+# there, and is another one after an install or update (the same uid can come back), so grants never wait for a boot.  Where our
+# home screen is what shows, the app has ended (setting switched off, crash, its own update) or never opened: no check for
+# its process, which can be up without a screen.  dumpsys: 20 ms on a Show 5.  Half a minute for it to come up, a minute
+# between tries while it does not stay, so an app that cannot start does not fill the log.
+# The app's own adaptive brightness (on by default) writes screen_brightness from the light sensor every few seconds, and
+# set Android's mode back to manual 3 s after root set it to adaptive (checkers, 2026-11-07): the Echo's brightness
+# settings (backlight below, issue #126) could not hold.  So it goes off, as a person would switch it in the app.  The
+# app reads its preferences only at its start, so it is stopped first, and opened again as ever (kiosk_tick, the screen
+# UI).  Off, it left the brightness alone (watched a minute; its "default brightness" was never written).  The file is
+# the app's, in a folder the app writes: looked at and written as the app's own user (runas), so a link or a FIFO put
+# there reaches only what the app could anyway, and in place (cat >), so it keeps its SELinux label.  A file without the
+# key (a new install, before the app changed it) gets it; one not ending in </map> (being written) waits for the next
+# tick.  Each tick, a fork and a grep: switched on again in the app, it goes off again.
+KIOSK_ADAPTIVE='    <boolean name="flutter.ks.screen.adaptive_brightness" value="false" />'
+# As the app's user: check | write.  The verdict on stdout (done, todo, wait, written), never by exit code: runas's own
+# failures exit 1 too.  Android takes a .bak beside the file as the real one at the app's start (one left by a write
+# the app did not finish), so it goes once the file itself is whole.
+kiosk_prefs() {
+    $D/runas "$1" "$1" sh -c '
+        p=/data/data/$0/shared_prefs/FlutterSharedPreferences.xml
+        [ -f "$p" ] && [ "$(tail -n 1 "$p")" = "</map>" ] || { echo wait; exit 0; }
+        grep -qxF "$1" "$p" && [ ! -e "$p.bak" ] && { echo done; exit 0; }
+        [ "$2" = write ] || { echo todo; exit 0; }
+        { grep -vx "</map>" "$p" | grep -v "name=\"flutter.ks.screen.adaptive_brightness\""; echo "$1"; echo "</map>"; } > "$p.hm" &&
+            cat "$p.hm" > "$p" && rm -f "$p.bak" && echo written; rm -f "$p.hm"' $KIOSK_PACKAGE "$KIOSK_ADAPTIVE" $2 2>/dev/null
+}
+kiosk_brightness() {      # (a write that failed is not tried again for this install: each try stops the app)
+    local u
+    [ "$kiosk_bfail" = "$kiosk_seen" ] && return 0
+    u=$(echo $(stat -c %U /data/data/$KIOSK_PACKAGE 2>/dev/null))       # (toybox pads it: " u0_a154")
+    case "$u" in *[!a-z0-9_]*|'') return 0;; u[0-9]*_a[0-9]*) ;; *) return 0;; esac     # an app's user, nothing else
+    case "$(kiosk_prefs "$u" check)" in
+    todo) ;;
+    "") echo "kiosk satellite: its adaptive brightness could not be looked at (as $u)"; kiosk_bfail=$kiosk_seen; return 0;;
+    *) return 0;;
+    esac
+    am force-stop $KIOSK_PACKAGE > /dev/null 2>&1
+    if [ "$(kiosk_prefs "$u" write)" = written ]; then echo "kiosk satellite: its own adaptive brightness switched off (the Echo's brightness settings set the screen)"
+    else echo "kiosk satellite: its adaptive brightness could not be switched off"; kiosk_bfail=$kiosk_seen; fi
+}
+kiosk_seen= kiosk_bfail= kiosk_wait=0 kiosk_failing= kiosk_ask=0 kiosk_norot= kiosk_pm=0
+kiosk_tick() {
+    [ "$(getprop sys.boot_completed)" = 1 ] || return 0
+    k=$(ls -d /data/app/$KIOSK_PACKAGE-* 2>/dev/null)
+    if [ -z "$k" ]; then
+        kiosk_stale > /dev/null
+        [ -f $KIOSK_APP ] && { kiosk_helper_end; echo "kiosk satellite: uninstalled"; }
+        rm -f $KIOSK_APP $KIOSK_PID $KIOSK_SAID $KIOSK_SAID.new; kiosk_seen=
+        return 0
+    fi
+    [ -f $KIOSK_APP ] || : > $KIOSK_APP
+    if [ "$k" != "$kiosk_seen" ]; then
+        # the folder may come first, and grants before the package manager knows the app would fail and not come back
+        # (a leftover folder never comes right: pm is a whole runtime, so once a minute)
+        if [ $kiosk_pm -gt 0 ]; then kiosk_pm=$((kiosk_pm - 1))
+        elif pm path $KIOSK_PACKAGE > /dev/null 2>&1; then kiosk_seen=$k; kiosk_grants; kiosk_ask=0
+        else kiosk_pm=5; fi
+    fi
+    kiosk_helper_said
+    [ -n "$BACKLIGHT" ] && [ -n "$kiosk_seen" ] && kiosk_brightness
+    # The app writes accelerometer_rotation=1, user_rotation=0 about 5 s after it opens.  With no sensor Android keeps the
+    # rotation it has, until something makes it look again: after a reinstall the Show 5 went to portrait, band across
+    # the middle (2026-11-01).  So on the rotation itself, not the settings the app keeps writing; settings is Java, only then.
+    if [ -n "$KIOSK_ROTATION" ]; then
+        case "$(dumpsys window policy 2>/dev/null | grep mCurrentRotation)" in
+        *"mCurrentRotation=$KIOSK_ROTATION"*) ;;
+        "") [ -n "$kiosk_norot" ] || echo "kiosk satellite: dumpsys names no rotation here, landscape not watched"; kiosk_norot=1;;
+        *)  settings put system accelerometer_rotation 0
+            settings put system user_rotation $KIOSK_ROTATION
+            echo "kiosk satellite: back to landscape";;
+        esac
+    fi
+    # hassmic names an empty file state/screen-ui.<its pid> while its screen UI (screen.c, the Echo Show's own screen)
+    # is meant to run, restarts included, and the UI opens the app itself: it is that UI's home app unless another was
+    # chosen there, and the UI knows when its own screen was asked for (the face, the music, the drawer).  Opened here
+    # as well, the app would cover them within 10 s.  The pid comes from the name (a glob: the folder listed), never from
+    # opening a file the daemon could swap; a name of more than digits is none (statefile.c's temp file beside it)
+    ui=
+    for f in /data/local/hassmic/state/screen-ui.*; do
+        n=${f##*/screen-ui.}; case "$n" in ''|*[!0-9]*) ;; *) ui=$n;; esac
+    done
+    comm=; [ -n "$ui" ] && read -r comm < /proc/$ui/comm 2>/dev/null
+    if [ -n "$ui" ] && [ -d /proc/$ui ] && case "$comm" in hassmic*) true;; *) false;; esac; then   # (a pid of a hassmic
+                                                    # that died, taken by another process since: no UI's)
+        kiosk_failing= kiosk_wait=0
+    elif [ $kiosk_wait -gt 0 ]; then
+        kiosk_wait=$((kiosk_wait - 1))
+    else
+        case "$(dumpsys activity activities 2>/dev/null | grep mResumedActivity)" in
+        *" org.hassmic.home/"*)
+            if $D/runas shell shell sh -c "monkey -p $KIOSK_PACKAGE -c android.intent.category.LAUNCHER 1" > /dev/null 2>&1
+            then [ -n "$kiosk_failing" ] || echo "kiosk satellite: opened"
+            else [ -n "$kiosk_failing" ] || echo "kiosk satellite: could not be opened"; fi
+            if [ -n "$kiosk_failing" ]; then kiosk_wait=5; else kiosk_wait=2; fi       # ticks skipped; its start takes 15-30 s
+            kiosk_failing=1;;
+        *) kiosk_failing=;;
+        esac
+    fi
+    if [ $kiosk_ask -le 0 ]; then kiosk_ask=30; kiosk_ask_helper; else kiosk_ask=$((kiosk_ask - 1)); fi
+}
+kiosk_helper() {
+    [ -n "$KIOSK_PACKAGE" ] || return 0
+    while :; do kiosk_tick; sleep 10; done
+}
+# <<< kiosk
+
+# >>> backlight (tests/unit/backlight_test.py runs this block)
+# The Echo Show's backlight (device.conf BACKLIGHT; settings.c backlight_auto, issue #126) as stock's Display settings
+# set it, which are Android's own (KnightSettings: "Adaptive brightness" = screen_brightness_mode, its slider
+# screen_brightness, or with adaptive on screen_auto_brightness_adj): from state/config, screen_brightness_auto on/off,
+# screen_brightness in percent of 255, screen_brightness_adjust -100..100.  Adaptive runs Amazon's lux curve
+# (framework-res config_autoBrightnessLevels, cronos: setting 4 of 255 under 5 lux, 74 at 20, 155 at 30, 230 from 100),
+# which the adjustment bends as stock's slider does (-1..1, gamma up to 7: +1 makes 4 about 141).  Off by default, at
+# 47 % = 120, what every Show ran at before (device.conf).  A key's value from before it was first set here goes into
+# alexa-settings, as alexa-off.sh does, so alexa-on.sh puts stock's back.  Kiosk Satellite's own adaptive brightness is
+# switched off (kiosk_brightness above).  Changed by anything else (an app, a person with adb), the brightness is set
+# again, but three times at most until the settings change: never a fight with something that keeps writing it.
+# settings is Java (~2 s a call on a Show 5): SettingsProvider's file first, and only it each round.
+bl_get() {      # name default min max: state/config's whole number, within min..max; the default where there is none
+    local v
+    v=$(grep "^$1=" /data/local/hassmic/state/config 2>/dev/null | tail -n 1); v=${v#*=}      # (checkers' toybox: -1 is all)
+    case "$v" in ''|-|*[!0-9-]*|?*-*|?????*) v=$2;; esac      # (the daemon's file: digits only, 4 at most)
+    [ "$v" -lt $3 ] && v=$3; [ "$v" -gt $4 ] && v=$4
+    echo $v
+}
+bl_now() {
+    if grep -qx screen_brightness_auto=on /data/local/hassmic/state/config 2>/dev/null; then echo 1; else echo 0; fi
+    bl_get screen_brightness 47 1 100; bl_get screen_brightness_adjust 0 -100 100
+}
+bl_put() {
+    local was
+    grep -qF "name=\"$1\" value=\"$2\"" /data/system/users/0/settings_system.xml 2>/dev/null && return 0
+    # nothing back is a failed call (Java under load), not "unset": noted as null, alexa-on.sh would delete stock's value
+    was=$(settings get system $1 2>/dev/null | tr -d '\r')
+    [ -n "$was" ] || { [ -n "$bl_failing" ] || echo "backlight: $1 could not be read"; return 1; }
+    [ "$was" = "$2" ] && return 0
+    grep -q "^system $1 " /data/local/hassmic/alexa-settings 2>/dev/null || echo "system $1 $was" >> /data/local/hassmic/alexa-settings
+    settings put system $1 "$2" > /dev/null 2>&1 || { [ -n "$bl_failing" ] || echo "backlight: $1 could not be set"; return 1; }
+}
+bl_adj() { local a=${1#-}; a=$((a / 100)).$((a % 100 / 10))$((a % 10)); [ $1 -lt 0 ] && a=-$a; echo $a; }     # -100..100: -1.00..1.00
+bl_ok() {       # bl_now's three: Android's settings have them already (SettingsProvider's file; none to read: say yes)
+    local x=/data/system/users/0/settings_system.xml
+    [ -r $x ] || return 0
+    if [ $1 = 1 ]; then grep -qF 'name="screen_brightness_mode" value="1"' $x && grep -qF "name=\"screen_auto_brightness_adj\" value=\"$(bl_adj $3)\"" $x
+    else grep -qF 'name="screen_brightness_mode" value="0"' $x && grep -qF "name=\"screen_brightness\" value=\"$((($2 * 255 + 50) / 100))\"" $x; fi
+}
+backlight_set() {       # bl_now's three; fails when a setting did not take (the loop tries again)
+    if [ $1 = 1 ]; then bl_put screen_auto_brightness_adj $(bl_adj $3) && bl_put screen_brightness_mode 1
+    else bl_put screen_brightness_mode 0 && bl_put screen_brightness $((($2 * 255 + 50) / 100)); fi
+}
+backlight() {
+    [ -n "$BACKLIGHT" ] && command -v settings > /dev/null || return 0
+    until [ "$(getprop sys.boot_completed)" = 1 ]; do sleep 2; done
+    # A failure is tried again in 2 s, said once a streak (settings down or refused would fill the log, a Java call a
+    # round), and after 10 in a row every 30 s.  Set again after a change from elsewhere: 3 times, then left alone
+    last= bl_failing= fails=0 drifts=0
+    while :; do
+        now=$(echo $(bl_now))
+        if [ "$now" != "$last" ]; then drifts=0; fi
+        if [ "$now" != "$last" ] || { [ $drifts -lt 3 ] && ! bl_ok $now; }; then
+            if backlight_set $now; then          # (a set that failed is no drift: tried again as any failure)
+                [ "$now" = "$last" ] && drifts=$((drifts + 1))
+                set -- $now
+                if [ "$now" = "$last" ]; then echo "backlight: changed elsewhere, set again$([ $drifts = 3 ] && echo "; left to it from now on, until the setting changes")"
+                elif [ $1 = 1 ]; then echo "backlight: adaptive, adjusted $3"
+                else echo "backlight: $2 %"; fi
+                last=$now bl_failing= fails=0
+            else
+                bl_failing=1 fails=$((fails + 1))
+            fi
+        fi
+        if [ $fails -ge 10 ]; then sleep 30; else sleep 2; fi
+    done
+}
+# <<< backlight
+
+# wpa_supplicant's socket for the interface, else its global one, as wifi.sh's W(): a "reconfigure" takes the interface's
+# socket away until wpa_supplicant restarts (Dot 2, 2026-10-07)
+wpa() { if [ -S $WPA_SOCKETS/$WLAN ]; then wpa_cli -i $WLAN -p $WPA_SOCKETS "$@"; else wpa_cli -g@android:wpa_$WLAN IFNAME=$WLAN "$@"; fi 2>/dev/null; }
+
+# Issue #90 (Echo 2, 2026-11-01): wifisvc rewrites every WPA2 entry to "WPA-PSK WPA-PSK-SHA256" at its start (the string
+# is in libacehal_network_all.so, on the Dots too; seen on a Dot 2).  An AP that offers PSK-SHA256 as well (WPA2/WPA3
+# mixed, PMF optional: scan flags [WPA2-PSK+SAE+PSK-SHA256-CCMP]) gets that AKM and the driver refuses every association
+# ("Association request to the driver failed: err=22"): joined fine at setup, never online again after the first reboot.
+# So after 30 s off the network (the fourth look, netwatch's first counts) such entries are cut back to the WPA-PSK that
+# setup and wifi.sh saved, in memory only (wifisvc would write the file anew anyway), and the supplicant associates
+# again.  `get_capability key_mgmt` cannot tell who needs this: no Dot's wpa_supplicant prints PSK-SHA256 there, though
+# they all know it.  By wpa_state, not the address: dhcpcd -K keeps that over a lost link, and a wpa_supplicant restarted
+# then reads SHA256 back from the file.  The wait spares a healthy link's way up a reassociation at every boot.  Only
+# with wifisvc: Android's WifiService owns its networks.  During a switch the link is wifi.sh's.
+psk_only() {
+    local n fixed=
+    [ -n "$WIFI_SERVICE" ] && [ ! -d $WIFI/lock ] || return 0
+    wpa status | grep -q '^wpa_state=COMPLETED$' && { down=0; return 0; }
+    down=$((down + 1))
+    [ $down -ge 4 ] || return 0
+    for n in $(wpa list_networks | sed -n 's/^\([0-9][0-9]*\)[[:space:]].*/\1/p'); do
+        case " $(wpa get_network $n key_mgmt) " in
+        *" WPA-PSK-SHA256 "*) wpa set_network $n key_mgmt WPA-PSK | grep -q OK && fixed="$fixed $n";;
+        esac
+    done
+    [ -n "$fixed" ] || return 0
+    wpa reassociate > /dev/null
+    echo "netwatch: network$fixed cut back to WPA-PSK, associating again"
+}
+
 # While the settings page switches networks (wifi.sh holds its lock), the link is that script's business: no wifisvc.
 # Whenever the address changes, wifi.sh writes down which network the Echo is on, for the page: wpa_supplicant can also
 # move to another saved network by itself when the one it is on goes away.
 netwatch() {
-    miss=0 addr=
+    miss=0 addr= down=0
     while :; do
         rotate_log
         clock_set
@@ -243,6 +540,7 @@ netwatch() {
             [ $miss -ge 6 ] && [ -n "$WIFI_SERVICE" ] && [ "$(getprop init.svc.$WIFI_SERVICE)" != running ] && [ "$(sh $D/wifi.sh saved 2>/dev/null)" != 0 ] &&
                 { start $WIFI_SERVICE; echo "netwatch: no address for 60 s, $WIFI_SERVICE started"; miss=0; }
         fi
+        psk_only
         sleep 10
     done
 }
@@ -494,6 +792,9 @@ satellite)
     # online updates: hassmic checks downloads against the key root will check them against (ota.c)
     export HASSMIC_RELEASE_PUB=$(release_pub)
     netwatch 2>&1 | stamped >> $LOG &
+    kiosk_helper 2>&1 | stamped >> $LOG &
+    kiosk_perm_sync 2>&1 | stamped >> $LOG &
+    backlight 2>&1 | stamped >> $LOG &
     # mDNS through the stock avahi-daemon: hassmic prints the service file for its protocol, name and MAC address.
     # The MAC in it is how Home Assistant tells devices apart.  On radar wlan0 appears only later in the boot, hassmic
     # printed its placeholder MAC, and Home Assistant offered the adopted Echo as a new device.  So wait for Wi-Fi

@@ -13,6 +13,7 @@
 #define KSUI "/system/priv-app/KnightSystemUI/KnightSystemUI.apk"
 #define KSET "/system/priv-app/KnightSettings/KnightSettings.apk"
 #define COMM "/system/priv-app/com.amazon.comms.multimodaltachyonarm/com.amazon.comms.multimodaltachyonarm.apk"
+#define ALRM "/system/priv-app/com.amazon.alarms/com.amazon.alarms.apk"
 static const struct board_sound sounds[] = {
     { "ui_wakesound", SIM, "res/7E.mp3" },
     { "ui_wakesound_touch", SIM, "res/7E.mp3" },
@@ -26,6 +27,9 @@ static const struct board_sound sounds[] = {
     { "comms_call_disconnected", COMM, "res/raw/ful_comms_call_disconnected.mp3" },
     { "comms_call_incoming_ringtone", COMM, "res/raw/ful_comms_call_incoming_ringtone.mp3" },
     { "comms_outbound_ringtone", COMM, "res/raw/ful_comms_outbound_ringtone.mp3" },
+    /* the timer's and the alarm's, as the Dots' (issue #63; the alarms app keeps them, stored) */
+    { "system_alerts_melodic_02", ALRM, "res/raw/system_alerts_melodic_02.mp3" },
+    { "system_alerts_melodic_01", ALRM, "res/raw/system_alerts_melodic_01.mp3" },
     { NULL, NULL, NULL },
 };
 
@@ -33,6 +37,8 @@ const struct board board = {
     .model = "Echo Show 8 2nd gen (athena)",
     .project = "hassmic.echo-show-8-2nd-gen",
     .product = "Echo Show 8 2nd gen (hassmic)",
+    .kiosk = 1,
+    .backlight = 1,
     .default_name = "Echo Show 8 2nd gen",                          /* + MAC; slug = the project's model */
     .codename = "athena",
 
@@ -68,6 +74,8 @@ const struct board board = {
      * this driver's name is. */
     .light_sensor = { "tcs3400:/sys/devices/virtual/input" },
     .volume_steps = 100,                                            /* the light band (ring_band.c) shows the level in % */
+    /* volume curve not measured on this model yet: the Echo Dot 2's stands in (devices/README.md: how to measure) */
+    .volume_curve = board_vol_dot2,
     /* TI TAS5805m amplifier: its "Master TAS5805m Playback Volume" is a digital volume, 0..158, 100 at boot, no dB table
      * (0.5 dB steps assumed: the chip's own).  Listened to with music at full volume, 2026-10-15: 115 and 120 clean, 122
      * clean, 130 distorted ("gross"); a rap track's bass then clipped at 122, so 118 is the limit: +9 dB on that assumption.  The

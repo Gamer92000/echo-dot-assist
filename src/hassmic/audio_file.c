@@ -2,6 +2,7 @@
  * speed; playback is appended to $HASSMIC_PLAY (default /tmp/hassmic_play.raw).
  * HASSMIC_FAKE_ECHO=<ms>:<dB>: our sounds come back in the capture <ms> after they start, <dB> under their level, with
  * two reflections: what Amazon's echo canceller leaves of them on an Echo (earsup.h). */
+#include "resample.h"
 #include "audio.h"
 #include <math.h>
 #include <pthread.h>
@@ -107,11 +108,16 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
     int peak = 0;
     for (size_t i = 0; i < samples; i++) if (abs(pcm[i]) > peak) peak = abs(pcm[i]);
     fprintf(stderr, "earcon: %zu samples @ %u Hz, until stopped, peak %d\n", samples, rate, peak);
-    for (long ms = 0; ms < (long)(samples * 1000ULL / (rate ? rate : 48000)) && go(); ms += 20) usleep(20000);
+    long ms = 0, len = (long)(samples * 1000ULL / (rate ? rate : 48000));
+    for (; ms < len && go(); ms += 20) usleep(20000);
+    if (ms < len) fprintf(stderr, "earcon: cut at %ld ms\n", ms);       /* for the tests: what stopped it stopped it at once */
 }
 
-/* Music streams on the PC: files, written at real-time speed through a modelled 200 ms device buffer. */
-struct stream { FILE *f; unsigned bps; long long t0, written; };
+/* Music streams on the PC: files, written at real-time speed through a modelled 200 ms device buffer.  The music's
+ * buffer drains HASSMIC_FAKE_MUSIC_PPM faster (or slower: < 0) than real time: an output clock that is off, as the
+ * Echo Show 5's (~350 ppm), for Sendspin's sync; HASSMIC_FAKE_MUSIC_BURST_MS of it vanish from the queue at once as it
+ * starts and stay hidden: AudioTrack's buffer behind audio_android.c's slots (the Show 5's: ~137 ms). */
+struct stream { FILE *f; unsigned bps; long long t0, written; double speed; long long burst_us; float g; };   /* g: the gain now (gliding) */
 static struct stream music, bt, voip;
 static long long raw_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC_RAW, &ts); return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000; }
 
@@ -119,16 +125,16 @@ static int s_open(struct stream *s, const char *env, const char *def, unsigned r
 {
     const char *p = getenv(env);
     s->f = fopen(p ? p : def, "ab");
-    s->bps = rate * channels * 2; s->t0 = 0; s->written = 0;
+    s->bps = rate * channels * 2; s->t0 = 0; s->written = 0; s->g = -1;      /* -1: the gain of the first write */
     return s->f ? 0 : -1;
 }
 
 static long long s_queued_us(struct stream *s)
 {
     if (!s->f || !s->t0) return 0;
-    long long q = s->written * 1000000 / s->bps - (raw_us() - s->t0);
-    if (q < 0) { s->t0 = 0; s->written = 0; q = 0; }
-    return q;
+    long long played = (long long)((double)(raw_us() - s->t0) * (s->speed ? s->speed : 1)), q = s->written * 1000000 / s->bps - played;
+    if (q < 0) { s->t0 = 0; s->written = 0; q = 0; }            /* ran dry */
+    return q > s->burst_us ? q - s->burst_us : 0;              /* what the track holds is not seen */
 }
 
 static int s_write_raw(struct stream *s, const void *data, size_t len);
@@ -149,17 +155,16 @@ void audio_call_gain(float g)
 static int s_write(struct stream *s, const void *data, size_t len)
 {
     if (!s->f) return -1;
-    short buf[4096]; float gain = s == &voip ? call_gain : music_gain;
-    if (gain < 0.9995f) {
-        for (size_t off = 0; off < len; ) {
-            size_t n = len - off < sizeof buf ? len - off : sizeof buf;
-            for (size_t i = 0; i < n / 2; i++) { short v; memcpy(&v, (const char *)data + off + 2 * i, 2); buf[i] = (short)lrintf(v * gain); }
-            if (s_write_raw(s, buf, n)) return -1;
-            off += n;
-        }
-        return 0;
+    char buf[8192]; float gain = s == &voip ? call_gain : music_gain;
+    if (s->g < 0) s->g = gain;
+    if (s->g == 1 && gain == 1) return s_write_raw(s, data, len);
+    for (size_t off = 0; off < len; ) {                          /* as the mixer would get it: gliding (resample.c) */
+        size_t n = len - off < sizeof buf ? len - off : sizeof buf;
+        gain_glide(buf, (const char *)data + off, n, s->bps / 2, &s->g, gain);
+        if (s_write_raw(s, buf, n)) return -1;
+        off += n;
     }
-    return s_write_raw(s, data, len);
+    return 0;
 }
 
 static int s_write_raw(struct stream *s, const void *data, size_t len)
@@ -174,7 +179,15 @@ static int s_write_raw(struct stream *s, const void *data, size_t len)
 
 static void s_close(struct stream *s) { if (s->f) fclose(s->f); s->f = NULL; }
 
-int       music_open(unsigned rate, unsigned channels) { return s_open(&music, "HASSMIC_MUSIC", "/tmp/hassmic_music.raw", rate, channels); }
+int       music_open(unsigned rate, unsigned channels)
+{
+    const char *ppm = getenv("HASSMIC_FAKE_MUSIC_PPM"), *burst = getenv("HASSMIC_FAKE_MUSIC_BURST_MS");
+    int r = s_open(&music, "HASSMIC_MUSIC", "/tmp/hassmic_music.raw", rate, channels);
+    music.speed = ppm ? 1 + atof(ppm) * 1e-6 : 1;
+    music.burst_us = burst ? atoll(burst) * 1000 : 0;
+    return r;
+}
+long long music_prime_us(void) { return music.burst_us ? 150000 : 0; }   /* as audio_android.c's, where there is a burst */
 long long music_queued_us(void) { return s_queued_us(&music); }
 int       music_write(const void *data, size_t len) { return s_write(&music, data, len); }
 void      music_close(void) { s_close(&music); }
@@ -224,9 +237,19 @@ void vol_write(enum vol which, int v)
     vols[which] = v;
 }
 
-/* No front end on the PC */
+/* No front end on the PC.  HASSMIC_FAKE_AFE=<ms>:<voice>:<ambient> plays one that answers the wake word's energies
+ * after <ms> (an Echo Show 5's took 240 and 380 ms, issue #77), for SIGUSR1's wake word too (wake_none.c) */
 void afe_listening(int on) { (void)on; }
-void afe_stream_stopped(void) {}
-int  afe_arbitration(long ts, long te, char *json, size_t n) { (void)ts; (void)te; if (n) json[0] = 0; return 0; }
+void afe_stream_stopped(void) { if (getenv("HASSMIC_FAKE_AFE")) fprintf(stderr, "front end: stream stopped\n"); }
+int  afe_arbitration(long ts, long te, char *json, size_t n)
+{
+    const char *e = getenv("HASSMIC_FAKE_AFE"); int ms; double voice, ambient;
+    (void)ts; (void)te;
+    if (n) json[0] = 0;
+    if (!e || sscanf(e, "%d:%lf:%lf", &ms, &voice, &ambient) != 3) return 0;
+    usleep((useconds_t)ms * 1000);
+    snprintf(json, n, "{\"voiceEnergy\":%.0f,\"ambientEnergy\":%.0f}", voice, ambient);
+    return 1;
+}
 int  afe_eq_get(char *json, size_t n) { if (n) json[0] = 0; return 0; }
 void afe_eq_set(const char *json) { (void)json; }

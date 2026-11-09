@@ -14,9 +14,11 @@
  *    (which records 1999 and 2999 itself) must be disabled first;
  *  - the preset: VOICE_RECOGNITION is the closest OpenSL ES has to stock's HOTWORD source, both pick the ASR pipeline
  *    (getAspPipelineType in the HAL); HOTWORD itself is not reachable from OpenSL ES. */
+#include "resample.h"
 #include "audio.h"
 #include "core.h"
 #include "afe_parcel.h"
+#include "board.h"
 #include "btout.h"
 #include "statefile.h"
 #include <stdatomic.h>
@@ -65,9 +67,12 @@ static void deadline(struct timespec *ts, long ms)
 static long long now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000LL + t.tv_nsec / 1000000; }
 
 /* --- capture: a ring of CAP_NBUF blocks, all queued at start.  The buffer queue fills them in the order they were
- * queued, and each is queued again once cap_read's caller is done with it, so block k is always buf[k % CAP_NBUF]. */
+ * queued, and each is queued again once cap_read's caller is done with it, so block k is always buf[k % CAP_NBUF].
+ * With all of them full the recorder has nowhere to put what comes and it is lost: 8 blocks (160 ms) were too few for
+ * the front end's reading after a wake word, 240-380 ms on the capture thread then (issue #77).  640 ms for any stall
+ * of the caller, logged by cap_read. */
 #define CAP_BLOCK 320                   /* samples: 20 ms */
-#define CAP_NBUF  8
+#define CAP_NBUF  32
 static SLObjectItf rec_obj;
 static SLRecordItf rec;
 static SLAndroidSimpleBufferQueueItf rec_q;
@@ -76,12 +81,14 @@ static pthread_mutex_t cap_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t cap_cond = PTHREAD_COND_INITIALIZER;
 static unsigned cap_filled, cap_taken;
 static int cap_held;
+static long long cap_full_ms;           /* when the last free block was filled (cap_lock): from then on audio is lost */
+static long long cap_lost_ms, cap_lost_said;    /* cap_read: lost since the last line, when that was */
 
 static void cap_cb(SLAndroidSimpleBufferQueueItf q, void *ctx)
 {
     (void)q; (void)ctx;
     pthread_mutex_lock(&cap_lock);
-    cap_filled++;
+    if (++cap_filled - cap_taken == CAP_NBUF) cap_full_ms = now_ms();
     pthread_cond_signal(&cap_cond);
     pthread_mutex_unlock(&cap_lock);
 }
@@ -136,7 +143,15 @@ int cap_read(const void **data)
     pthread_mutex_lock(&cap_lock);
     if (cap_held) {
         /* the block the caller had goes back to the recorder (were all of them full, it dropped audio meanwhile and
-         * goes on with this one) */
+         * goes on with this one).  The recorder wanted a block one block after the last went full; AudioRecord's own
+         * buffer may have kept some of it: "up to".  A line a second at most: a caller slower than the mic all along
+         * would otherwise write one per block */
+        long long now = now_ms(), full = cap_filled - cap_taken == CAP_NBUF ? now - cap_full_ms : 0;
+        if (full >= CAP_BLOCK * 1000 / CAP_RATE) cap_lost_ms += full;
+        if (cap_lost_ms && now - cap_lost_said >= 1000) {
+            fprintf(stderr, "audio: capture held up, all %d blocks full: up to %lld ms of the mic lost\n", CAP_NBUF, cap_lost_ms);
+            cap_lost_ms = 0; cap_lost_said = now;
+        }
         (*rec_q)->Enqueue(rec_q, cap_buf[cap_taken % CAP_NBUF], sizeof cap_buf[0]);
         cap_taken++; cap_held = 0;
     }
@@ -177,19 +192,13 @@ void audio_music_gain(float g) { atomic_store(&music_q16, q16(g)); }
 void audio_tts_gain(float g) { atomic_store(&tts_q16, q16(g)); }
 void audio_call_gain(float g) { atomic_store(&call_q16, q16(g)); }
 
-/* whole samples from every writer (audio_mixer.c's copy_gain says why); a lone odd byte passes unscaled */
-static void copy_gain(char *dst, const char *src, size_t n, int q)
-{
-    if (q >= 65536) { memcpy(dst, src, n); return; }
-    for (size_t i = 0; i + 1 < n; i += 2) {
-        short v; memcpy(&v, src + i, 2); v = (short)((v * q + 32768) >> 16); memcpy(dst + i, &v, 2);   /* rounded */
-    }
-    if (n & 1) dst[n - 1] = src[n - 1];
-}
+/* whole samples from every writer (audio_mixer.c says why), at a gain that glides (resample.c gain_glide) */
+static float gain_of(atomic_int *q) { return q ? (float)atomic_load(q) / 65536 : 1; }
 
 struct pstream {
     SLObjectItf obj; SLPlayItf play; SLAndroidSimpleBufferQueueItf q;
     atomic_int *gain;                           /* audio_*_gain's for this stream; NULL: none (earcons: main.c scales them) */
+    float g;                                    /* the gain now, gliding towards *gain's */
     pthread_mutex_t lock; pthread_cond_t cond;
     unsigned bps, slot, busy, next;             /* bytes per second, slot size, slots with the player, next free slot */
     unsigned head, lens[PLAY_NBUF];             /* the oldest slot with the player, and each slot's bytes */
@@ -471,7 +480,7 @@ static int s_open(struct pstream *s, unsigned rate, unsigned channels, SLint32 s
     s->slot = s->bps / 50 & ~3u;
     s->buf = malloc((size_t)s->slot * PLAY_NBUF);
     if (!s->buf) { (*s->obj)->Destroy(s->obj); s->obj = NULL; return -1; }
-    s->busy = s->next = s->head = 0; s->written = s->consumed = 0; s->last_cb = now_ms();
+    s->busy = s->next = s->head = 0; s->written = s->consumed = 0; s->last_cb = now_ms(); s->g = gain_of(s->gain);
     (*s->play)->SetPlayState(s->play, SL_PLAYSTATE_PLAYING);
     return 0;
 }
@@ -492,7 +501,7 @@ static int s_write(struct pstream *s, const void *data, size_t len)
             }
         }
         char *slot = s->buf + (size_t)s->next * s->slot;
-        copy_gain(slot, p, n, s->gain ? atomic_load(s->gain) : 65536);
+        gain_glide(slot, p, n, s->bps / 2, &s->g, gain_of(s->gain));
         if ((*s->q)->Enqueue(s->q, slot, n) != SL_RESULT_SUCCESS) { pthread_mutex_unlock(&s->lock); return -1; }
         atomic_store(&last_out, now_ms());
         s->lens[s->next] = n; s->busy++; s->next = (s->next + 1) % PLAY_NBUF; s->written += n;
@@ -554,6 +563,11 @@ int       music_open(unsigned rate, unsigned channels) { return s_open(&music, r
 int       music_write(const void *data, size_t len) { return s_write(&music, data, len); }
 long long music_queued_us(void) { return s_queued_us(&music); }
 void      music_close(void) { s_close(&music, 0); }
+/* A fresh player, once it plays, takes AudioTrack's buffer's worth of slots at once (the Echo Show 5: ~137 ms, Sendspin's
+ * second chunk timed 135-139 ms early in every stream, 2026-11-04), which s_queued_us leaves out from then on, as a
+ * steady latency.  Timed before that, a stream's first chunk was off by it.  150 ms: more than that, and within the
+ * slots (PLAY_NBUF x 20 ms), so writing it never waits. */
+long long music_prime_us(void) { return 150000; }
 
 /* The Bluetooth speaker stream: what a phone plays to the Echo (a2dp.c), the mixer's Bluetooth stream on the Dots.
  * Here a player of its own beside music, on the music stream like everything of ours.  Until it was there (-1) the
@@ -580,9 +594,18 @@ void (*audio_earcon_started)(unsigned lead_ms);
 
 /* The output is closed after ~3 s without audio and opening it takes ~170 ms (AudioALSAPlaybackHandlerNormal: open
  * pcm 27.644 -> 27.811) plus the speaker amplifier switching on: the 120 ms wake blip, written to a cold output, was
- * never heard (2026-10-14; the 0.5 s mute sounds were, clipped).  A cold earcon starts after this much silence. */
+ * never heard (2026-10-14; the 0.5 s mute sounds were, clipped).  A cold earcon starts after board.cold_lead_ms of
+ * silence: the Show 5 loses nothing without it (tools/cold-lead.py, 2026-11-07), so it is the model's own.  Without
+ * a lead-in the open's own time lands in earsup.c's echo delay, which it searches up to D_MAX (400 ms): the Show 5's
+ * open adds ~56 ms (createTrack to the HAL's first write), its echo ~140 ms after audio_earcon_started. */
 #define COLD_MS 2500
-#define LEAD_MS 350
+#define LEAD_MAX_MS 500
+
+static unsigned cold_lead_ms(void)
+{
+    int ms = board.cold_lead_ms ? board.cold_lead_ms : 350;
+    return ms < 0 ? 0 : ms > LEAD_MAX_MS ? LEAD_MAX_MS : (unsigned)ms;
+}
 
 void play_earcon(const short *pcm, size_t samples, unsigned rate) { play_earcon_while(pcm, samples, rate, always); }
 void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go)(void))
@@ -595,11 +618,12 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
     const char *p = (const char *)pcm;
     size_t len = samples * 2;
     unsigned lead_ms = 0;
-    if (now_ms() - atomic_load(&last_out) > COLD_MS) {
-        static short lead[48000 * LEAD_MS / 1000];
-        size_t n = (size_t)rate * LEAD_MS / 1000 < sizeof lead / 2 ? (size_t)rate * LEAD_MS / 1000 : sizeof lead / 2;
+    unsigned want = cold_lead_ms();
+    if (want && now_ms() - atomic_load(&last_out) > COLD_MS) {
+        static short lead[48000 * LEAD_MAX_MS / 1000];
+        size_t n = (size_t)rate * want / 1000 < sizeof lead / 2 ? (size_t)rate * want / 1000 : sizeof lead / 2;
         if (s_write(&earcon, lead, n * 2) == 0) lead_ms = (unsigned)(n * 1000 / rate);
-        end += LEAD_MS;
+        end += want;
     }
     while (len && go()) {
         size_t n = len < earcon.slot ? len : earcon.slot;

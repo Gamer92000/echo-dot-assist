@@ -4,6 +4,8 @@ ROOT=${CUBE_ASSIST_HOME:-/data/local/cube-assist}
 case "$ROOT" in /data/local/cube-assist|/data/local/tmp/cube-assist-trial) ;; *) echo 'Unexpected install directory' >&2; exit 1 ;; esac
 export CUBE_ASSIST_HOME="$ROOT" HASSMIC_STATE="$ROOT/state" HASSMIC_MODELS="$ROOT/models" HASSMIC_LOG="$ROOT/boot.log"
 export CUBE_AUDIO_SOCKET=cube-assist-audio
+# Frequent status heartbeats belong on Android tmpfs, not persistent flash.
+export CUBE_ROUTING_STATUS=/dev/cube-assist-routing-status
 export HASSMIC_MDNS_FILE="$ROOT/services.xml"
 export CLASSPATH="/system/framework/aspclient.jar:$ROOT/current/classes.dex"
 kill_owned() {
@@ -52,7 +54,9 @@ supervise)
         fi
         protocol=$(cat "$ROOT/protocol" 2>/dev/null);case "$protocol" in esphome|wyoming) ;; *) protocol=esphome ;; esac
         port=26053;[ "$protocol" = wyoming ] && port=10700
+        [ ! -f "$ROOT/boot.log" ] || mv "$ROOT/boot.log" "$ROOT/boot.previous.log"
         "$ROOT/current/hassmic" -P "$protocol" -p "$port" -z 28928 -S > "$ROOT/services.xml.new" && mv "$ROOT/services.xml.new" "$ROOT/services.xml"
+        [ ! -f "$ROOT/audio.log" ] || mv "$ROOT/audio.log" "$ROOT/audio.previous.log"
         app_process / CubeAudio > "$ROOT/audio.log" 2>&1 &
         audio_pid=$!;echo "$audio_pid" > "$ROOT/audio.pid"
         ready=0
@@ -62,6 +66,7 @@ supervise)
             sleep 1
         done
         [ "$ready" = 1 ] || { echo 'Audio helper failed';exit 1; }
+        [ ! -f "$ROOT/boot.log" ] || mv "$ROOT/boot.log" "$ROOT/boot.previous.log"
         "$ROOT/current/hassmic" -P "$protocol" -p "$port" -z 28928 -a 28930 -i 28932 -W 28931 -o 0 -L -B -V > "$ROOT/boot.log" 2>&1 &
         native_pid=$!;echo "$native_pid" > "$ROOT/native.pid"
         while kill -0 "$native_pid" 2>/dev/null && kill -0 "$audio_pid" 2>/dev/null; do
