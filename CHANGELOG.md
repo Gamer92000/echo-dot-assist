@@ -4,6 +4,15 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-09
 
+- **Debug access: revoking the browser that asked for it withdraws the request.** While Debug access waited for the
+  action button, revoking that browser's login on the settings page left the request waiting: the page still said so,
+  and the next press of the button opened adb over Wi-Fi for 30 minutes. Now the request goes with the login, and
+  that press does what the button does otherwise.
+- **Settings page: "Try again" after a login that was not approved works.** When the action button was not pressed
+  within the minute, or another browser asked at the same time, every new try from the same browser was refused at
+  once, with nothing on the ring for the button to approve, until another browser asked or the Echo restarted. Now
+  the next try waits for the button as the first one did. A browser whose login was revoked is asked for the button
+  again too, instead of showing "Logged in" over a page that loads nothing.
 - **The unlock and boot-root are now done by hand, as the XDA thread says, on every model.** The unlock tools
   (kamakiri, amonet, saiyaku) and boot-root are R0rt1z2's, and with kamakiri-donut v1.1.0 he asks that they are only
   ever run by hand, following his XDA thread, never from an installer or a script. The guided setup respects that: it
@@ -105,15 +114,6 @@ What changed for people using the Echo, newest first. Details and measurements a
   boot, for example) left Android thinking it was still held until hassmic restarted: volume down kept turning the
   volume to 0 and undid every attempt to raise it (issue #140). The Echo now takes over the keys only
   once every key is up.
-- **Debug access: revoking the browser that asked for it withdraws the request.** While Debug access waited for the
-  action button, revoking that browser's login on the settings page left the request waiting: the page still said so,
-  and the next press of the button opened adb over Wi-Fi for 30 minutes. Now the request goes with the login, and
-  that press does what the button does otherwise.
-- **Settings page: "Try again" after a login that was not approved works.** When the action button was not pressed
-  within the minute, or another browser asked at the same time, every new try from the same browser was refused at
-  once, with nothing on the ring for the button to approve, until another browser asked or the Echo restarted. Now
-  the next try waits for the button as the first one did. A browser whose login was revoked is asked for the button
-  again too, instead of showing "Logged in" over a page that loads nothing.
 
 ## 2026-11-06
 
