@@ -3,7 +3,8 @@
 X25519 and BLAKE2b from Python's libraries, not web/crypto.js), plus Home Assistant (aioesphomeapi) watching the same
 Echo.  Login by the action button (SIGUSR2), signed reads and writes, replays and forged signatures, two logins at once,
 export and import, the settings file from before names, the speaker gain, features (entities in Home Assistant only while on), adb with
-a press of its own, revoking; a login left waiting runs out by itself, and a restart clears its ring and names a new start."""
+a press of its own (a request withdrawn by "off" or a revoke), revoking; a login left waiting runs out by itself (asked again,
+a new one waits), and a restart clears its ring and names a new start."""
 import asyncio, gzip, json, os, re, signal, subprocess, sys, tempfile, time
 from aioesphomeapi import APIClient
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -205,6 +206,23 @@ async def main():
         b.call("POST", "/api/adb", b"off"); await asyncio.sleep(0.3)
         check(not os.path.exists(adb_req) or open(adb_req).read().strip() in ("0", "close", ""), "closed again")
         check(x.call("POST", "/api/adb", b"on")[0] == 401, "adb from a browser never approved: refused")
+        # a request that waits goes with "off", and with the login of the browser that asked: the next press opened adb
+        # for 30 minutes all the same, and the page went on saying it waited for the button
+        c = Browser(WEB)
+        check(c.login_with_button(proc), "a second browser logged in")
+        r1, r2 = json.loads(c.call("POST", "/api/adb", b"on")[2]), json.loads(c.call("POST", "/api/adb", b"off")[2])
+        os.remove(adb_req)                                              # "off" asked root to close: taken
+        await until(lambda: "adb request withdrawn" in open(log).read())
+        check(r1["adb"] == "waiting" and r2["adb"] == "closed" and not b.state()["adb"]["waiting"] and "adb request withdrawn" in open(log).read(),
+              "adb asked, then \"off\" before the press: the request withdrawn, the page no longer waits")
+        proc.send_signal(signal.SIGUSR2); await until(lambda: os.path.exists(adb_req), 1)
+        check(not os.path.exists(adb_req), "...and the next press asks root for nothing")
+        r1 = json.loads(c.call("POST", "/api/adb", b"on")[2])
+        r2 = json.loads(b.call("POST", "/api/revoke", c.pub.hex().encode())[2])
+        check(r1["adb"] == "waiting" and r2.get("revoked") is True and not b.state()["adb"]["waiting"],
+              "adb asked, then that browser's login revoked: the request withdrawn as well")
+        proc.send_signal(signal.SIGUSR2); await until(lambda: os.path.exists(adb_req), 1)
+        check(not os.path.exists(adb_req), "...and the next press asks root for nothing")
 
         # export / import
         st, h, text = b.call("GET", "/api/export"); text = text.decode()
@@ -264,6 +282,11 @@ async def main():
         check(y.call("GET", "/api/state")[0] == 401 and z.call("GET", "/api/state")[0] == 401, "and the button approves neither")
 
         # revoke
+        w = Browser(WEB)
+        check(w.login_with_button(proc), "another browser logged in")
+        check(json.loads(b.call("POST", "/api/revoke", w.pub.hex().encode())[2]).get("revoked") is True and w.call("GET", "/api/state")[0] == 401,
+              "revoke another browser: refused from then on")
+        check(w.login() == "waiting", "...and when it asks to log in again, it waits for the button (it was told \"approved\", and kept out)")
         check(json.loads(b.call("POST", "/api/revoke", b.pub.hex().encode())[2]).get("revoked") is True, "revoke this browser")
         check(b.call("GET", "/api/state")[0] == 401, "revoked: refused")
         try: await ha.disconnect()
@@ -298,6 +321,14 @@ async def login_runs_out():
         check("-u authenticated_setup_mode" in lines() and "login ran out without the button" in open(log).read(),
               "the page went away: the login runs out by itself, the ring off, with nothing asking")
         check(b.login() == "refused", "...and the browser is told so when it asks again")
+        check(b.login() == "waiting", "asked once more (the page's Try again): a new login waits (it was refused at once until another key asked)")
+        proc.send_signal(signal.SIGUSR2); await until(lambda: "login approved" in open(log).read())
+        check(b.login() == "approved", "...and the button approves it")
+        c = Browser(WEB2)
+        check(c.login() == "waiting", "another browser asks")
+        await until(lambda: open(log).read().count("login ran out without the button") == 2)
+        await asyncio.sleep(3.5)                        # past web.c's REFUSED_MS (3 s) after it ran out, nobody asking meanwhile
+        check(c.login() == "waiting", "asked again long after it ran out (the page opened again): a new login waits, not \"refused\" at once")
         proc.terminate(); proc.wait(); proc = run(); wait_port(PORT2, WEB2)
         again = Browser(WEB2).hello.get("start")
         check(again and first and again != first, f"restarted: /api/hello names another start ({first} -> {again})")
