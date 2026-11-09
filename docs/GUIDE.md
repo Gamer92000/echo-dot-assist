@@ -354,9 +354,11 @@ one here is clearly louder than the echo of the other: as on a speakerphone, tak
 
 Beyond the README's two figures:
 
-- **Action**, with "Double and triple press of the action button" on (Voice page; off by default): twice skips to the
-  next track, three times back to the previous one, of Music Assistant or a phone over Bluetooth; with nothing playing
-  it is a single press. A single press then waits 450 ms. Home Assistant's "Button" event fires for single presses only.
+- **Action**, with "Double and triple press of the action button" on (Voice page; off by default; the Echo Shows have
+  no action button): twice skips to the next track, three times back to the previous one, of Music Assistant or a phone
+  over Bluetooth. Two or three presses act as one single press when nothing plays, during a Drop In call (ringing
+  included) and while a login waits for the button. A single press then waits 450 ms. Home Assistant's "Button" event
+  fires for whatever acts as a single press, never for a skip.
 - **Action**: cancelling works while Home Assistant still listens or thinks, as on a Voice PE; the wake word then
   cancels too and listens again (ESPHome only).
 - **In Home Assistant**: the event entity "Button" fires for each press of the action and volume buttons (`action`,
@@ -551,8 +553,7 @@ Until then those tabs say how to connect.
 One source at a time, the newest wins: a phone starting over Bluetooth pauses Music Assistant (the whole group), Music
 Assistant starting on the Echo pauses the phone. The voice assistant ducks both, from the wake word until the reply has
 ended, by 16 dB unless "Music ducking" (Sound page, 0 to 60 dB) says otherwise: raise it if commands over loud music or
-an audiobook are not understood. "<wake word>, stop" pauses either,
-and the action button pauses and resumes.
+an audiobook are not understood. "<wake word>, stop" pauses either, and the action button pauses and resumes.
 
 - **Music Assistant** finds the Echo by itself (Sendspin player). Pair it with the Echo's token: shown at the end of
   `scripts/setup.sh`, and as the diagnostic entity "Sendspin pairing token" in Home Assistant (disabled by default).

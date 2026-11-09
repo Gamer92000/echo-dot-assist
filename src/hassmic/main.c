@@ -2557,15 +2557,19 @@ static void on_action(void)
 }
 
 /* Action button pressed twice (next) or three times (previous), setting multi_press: skips on what plays (a phone over
- * Bluetooth first, then Sendspin, as the single press pauses); with nothing to skip, or the assistant busy, it is a
- * single press, as without the setting.  Home Assistant's "Button" event hears the single press only */
+ * Bluetooth first, then Sendspin, as the single press pauses); with nothing to skip, the assistant busy, a Drop In call
+ * or a login waiting for the button, it is a single press, as without the setting.  Home Assistant's "Button" event
+ * hears whatever acts as a single press, never a skip */
 static void on_multi(int n)
 {
     int dir = n == 2 ? 1 : -1;
+    if (web_approve() || improv_authorize()) return;    /* a login or a phone's setup waited for a press: these were it */
     pthread_mutex_lock(&core_lock);
     int busy = state == LISTENING || state == THINKING;
     pthread_mutex_unlock(&core_lock);
-    if (!busy && !(dropin_running() && atomic_load(&dropin_live)) && (a2dp_skip(dir) || (core_sendspin_port && sendspin_skip(dir)))) return;
+    /* a Drop In in any state (a call ringing here included) is the single press's to answer or end, never a skip */
+    int call = dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE;
+    if (!busy && !call && (a2dp_skip(dir) || (core_sendspin_port && sendspin_skip(dir)))) return;
     on_action();
 }
 

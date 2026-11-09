@@ -53,7 +53,7 @@ const int bt_lang_count = (int)(sizeof bt_langs / sizeof bt_langs[0]);
 static const char *bt_lang_codes[sizeof bt_langs / sizeof bt_langs[0]];
 
 static int mic_level = MICGAIN_LEVEL, bt_lang;
-static _Atomic int duck_db = 16;                        /* music_duck: what the music is turned down by while the assistant listens, thinks or speaks (was a fixed 1/6 = 15.6 dB) */
+static _Atomic int duck_db = 16;                        /* music_duck: what the music is turned down by while the assistant listens, thinks or speaks (was a fixed 1/6 = 15.6 dB; 16: about that in whole dB) */
 static int bt_audio = 1, bt_speaker, whisper = 1;      /* features kept here; bt_speaker's default: settings_load */
 static int light_sensor;                                /* off: auto brightness moved the level in HA's history all day (forum, 2026-10-15) */
 static int kiosk_net = 1;                                 /* lockdown.sh reads it from state/config */
@@ -220,6 +220,7 @@ static int present(enum id i)
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
     case SS_UNPAIRED: return core_sendspin_port != 0;
     case SPK_GAIN: return spkgain_present();
+    case MULTI_PRESS: return !board.action_combo;               /* the Shows: no action key, the volume pair stands in */
     case BAND: return ring_band_rows(-1) >= 0;
     case KIOSK_NET: case KIOSK_MIC: case KIOSK_CAM: return board.kiosk;
     case SCR_AUTO: case SCR_LEVEL: case SCR_ADJUST: return board.backlight || getenv("HASSMIC_FAKE_BACKLIGHT");   /* tests */
