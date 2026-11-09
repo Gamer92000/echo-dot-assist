@@ -18,3 +18,9 @@ void screen_line(const char *line) { (void)line; }
 void screen_bin(const char *line, const void *data, size_t n) { (void)line; (void)data; (void)n; }
 size_t screen_status_json(char *o, size_t cap) { (void)o; (void)cap; return 0; }
 int  screen_set_home(const char *pkg) { (void)pkg; return -1; }
+void screen_words(int what, const char *text) { (void)what; (void)text; }
+int  screen_words_on(int set) { (void)set; return -1; }
+int  screen_words_hold(int set) { (void)set; return -1; }
+int  screen_timers_on(int set) { (void)set; return -1; }
+void screen_timers_changed(void) {}
+int  screen_keep_on(void) { return 0; }

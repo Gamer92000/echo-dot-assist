@@ -205,7 +205,9 @@ const PAGES = [
   { id: 'system', title: 'System', icon: 'sliders', nav: 'This Echo\'s system', groups: ['System'], always: true, intro: 'This Echo\'s name and network, updates, backups and troubleshooting.' },
 ];
 const BRIGHTNESS = ['screen_brightness_auto', 'screen_brightness', 'screen_brightness_adjust'];      // the Show's backlight
-const MOVED = { light_band: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen', arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
+const WORDS = ['screen_text', 'screen_text_seconds', 'screen_timers'];            // the screen UI's words.c
+const MOVED = { light_band: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen',
+  screen_text: 'screen', screen_text_seconds: 'screen', screen_timers: 'screen', arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
 // The cards of a settings page: [title, settings...].  A setting not named here (a new one, or a model's own) comes
 // last, in a card of its own, so nothing is ever lost from the page
 const LAYOUT = {
@@ -250,6 +252,9 @@ const HELP = {
   screen_brightness: { ha: true, help: 'How bright the screen is with adaptive brightness off. Default 47 %, what the Echo ran at before this setting existed. With Kiosk Satellite installed, the Echo switches off the app\'s own adaptive brightness, so these settings set the screen.' },
   screen_brightness_adjust: { ha: true, help: 'With adaptive brightness on: Amazon\'s curve brighter (up to +100) or dimmer (down to −100), as the brightness slider moves it on a stock Echo Show in adaptive mode. At +100 a dark room\'s near-black screen is about as bright as 55 % without adaptive. 0 is Amazon\'s curve as it is.' },
   ring_rotation: { ha: true, help: 'Where the light ring\'s fill starts. Home Assistant\'s "Light ring fill" lights that share of the ring in the light\'s colour, for a timer\'s or a washing machine\'s progress or a battery; it fills the way the volume does, from where the volume starts. Turn the start by this many LEDs, so it starts where you want it to for how the Echo stands. Only where the Echo has room for each LED\'s own animations (Home Assistant then lists "Light ring fill"). Default 0.' },
+  screen_text: { help: 'What you said and the assistant\'s reply in large letters over the screen, above the band: your words smaller and grey, the reply white beside a cyan bar, both as large as they fit (a very long reply is cut at the end of the screen). They show over the face, the music and any app, Kiosk Satellite too, but not over the menu pulled down from the top. They appear as speech-to-text and the reply come in, stay while the Echo answers and for 8 seconds after, then fade; the next request takes them away at once. The screen behind them is darkened, so they stay readable over whatever it shows. A tap takes them away, over an app too (the app gets none of those touches while they show). With Wyoming only your words are shown (it tells no reply text). Off by default: what people say appears only where someone wants it to.' },
+  screen_text_seconds: { help: 'How long what you said and the reply stay on the screen once the Echo is idle again, in seconds. 0 keeps them until the next request (or a timer that rings). Default 8.' },
+  screen_timers: { help: 'Timers set on this Echo, on the screen: each one\'s name (or its length) over its time left in large digits with its unit (4:59 min, 1:02:05 h, 45 s) and a bar of what is left, the one that ends first on top; a paused one in grey. When one rings it shows in orange and pulses until it is stopped, with a Stop button. A tap on the timers hides them until the next change, over an app too (the app gets none of those touches while they show). The screen stays on while timers show. What you said and the reply (Speech on screen) go before them while they show. Off by default.' },
   light_band: { help: 'The Echo Show has no light ring: it shows the ring\'s lights as a band along the bottom of the screen, as Alexa did. That is listening, thinking, mic off, calls, volume, timers and Home Assistant\'s "Light ring". This many pixels at the bottom are kept for it, so an app on the screen never has the band over it. 0 gives the whole screen to the apps and shows no band. Default 10, stock\'s line.' },
   bluetooth_announcements: { help: 'Says "Connected to …" and "Disconnected from …" when a phone connects, in your voice assistant\'s voice, after the chime. Home Assistant speaks the words, and only once "Allow the device to perform Home Assistant actions" is ticked in this Echo\'s ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure); without it there is the chime only.' },
   bluetooth_announcement_language: { help: 'The language of those sentences. Home Assistant does not tell the Echo which language your voice assistant speaks, so pick the one that matches its voice.' },
@@ -429,6 +434,9 @@ const SUB = {
   screen_brightness_adjust: 'Brighter or dimmer than Amazon\'s curve, with adaptive on',
   ring_rotation: 'Where "Light ring fill" starts',
   light_band: 'Pixels kept for the band along the bottom of the screen',
+  screen_text: 'What you said and the reply, in large letters on the screen',
+  screen_text_seconds: 'How long the words stay after the reply; 0: until the next request',
+  screen_timers: 'Running timers counted down, a ringing one in orange',
   bluetooth_announcements: 'Says when a phone connects or disconnects',
   bluetooth_announcement_language: 'The language of those sentences',
   sendspin_unpaired: 'Any Music Assistant server may play here',
@@ -1167,9 +1175,10 @@ const PAGE_BUILD = {
   },
   lights: (el, list) => { el.append(flow(settingCards(list, 'lights'))); buildRing(el); },
   screen: (el, list) => {      // ring.js: the designs and where they show
-    const bright = list.filter((s) => BRIGHTNESS.includes(s.name));
-    el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.filter((s) => !bright.includes(s)).map(settingRow)),
-      bright.length ? titled('Brightness', bright.map(settingRow)) : null].filter(Boolean)));
+    const bright = list.filter((s) => BRIGHTNESS.includes(s.name)), words = list.filter((s) => WORDS.includes(s.name));
+    el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.filter((s) => !bright.includes(s) && !words.includes(s)).map(settingRow)),
+      bright.length ? titled('Brightness', bright.map(settingRow)) : null,
+      words.length ? titled('Words and timers', words.map(settingRow)) : null].filter(Boolean)));
   },
   media: (el, list) => {
     const parent = (k) => (HELP[k.name] || {}).parent, plain = list.filter((x) => !x.feature && !parent(x));

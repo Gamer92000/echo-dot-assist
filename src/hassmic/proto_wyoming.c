@@ -5,6 +5,7 @@
 #include <time.h>
 #include "board.h"
 #include "core.h"
+#include "screen.h"
 #include "wyoming.h"
 
 #define TTS_RATE 22050      /* assumed when audio-start carries no rate */
@@ -66,6 +67,7 @@ static void handle(const struct wy_event *ev)
             char text[256] = "";
             wy_json_str(strchr(ev->json, '\n') ? strchr(ev->json, '\n') : ev->json, "text", text, sizeof text);
             fprintf(stderr, "transcript: %s\n", text);
+            screen_words(SCREEN_WORDS_HEARD, text);              /* Wyoming tells no reply text, only the words */
             core_mic_off();
         }
         if (core_state() == LISTENING) core_set_state(THINKING);

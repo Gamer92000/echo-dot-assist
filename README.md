@@ -60,6 +60,7 @@ with a clock (36EBT3) is another model, and not supported. Every other Echo, and
 | Do not disturb, equalizer, ring brightness | Alexa app                   | [entities in Home Assistant](docs/GUIDE.md#in-home-assistant) |
 | Buttons and light ring in automations   | –                              | [an event and a light in Home Assistant](docs/GUIDE.md#buttons-and-light-ring) |
 | Light ring animations of your own       | –                              | [drawn on the settings page](docs/GUIDE.md#buttons-and-light-ring), for each of the Echo's |
+| Echo Show: your words, the reply and timers on screen | Alexa's screens | [large letters over the screen](docs/GUIDE.md#the-screen-echo-show), experimental |
 | Louder speaker (Echo Dot 2, Echo 2, Echo Dot 3) | –                      | [up to +12 dB](docs/GUIDE.md#settings-page) on the settings page (Echo Dot 3: +2 dB) |
 | Sound detection (smoke alarm, glass, …) | Alexa Guard, checked in the cloud | [on the Echo](docs/GUIDE.md#sound-detection), less reliable |
 | Whisper detection                       | answers in a whisper           | [a sensor](docs/GUIDE.md#whisper-detection) for your conversation agent |

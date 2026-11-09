@@ -2672,6 +2672,26 @@ Run in this order. Each step says what it proves.
       returns;
       biscuit's README names the LK build as a prerequisite.  Open: an amonet release that unlocks LK builds from
       June 2026 on (R0rt1z2's XDA thread).
+- [x] fastbrick's last words (2026-11-09, GitHub issue #154, an Echo Dot 2 from the guided setup).  After the
+      payload fastbrick.sh prints "Please wait until the process finishes and DO NOT INTERRUPT IT." and then "Press
+      any key to exit..."; the tester could not tell whether it was over or whether the key would stop it (the white
+      ring said it had worked).  The script is over by then: the key only ends its last `read`, and what must not be
+      interrupted is the Echo, which writes on by itself until TWRP.  The setup's box before it said "Do not interrupt
+      it once it runs", and fastbrick's `clear` wiped that box off the screen.  Now `fastbrick` (scripts/lib/setup.sh,
+      every amonet model: biscuit, radar, checkers, crown, cronos) says first what happens, how long, and what not to
+      touch until the sign it is over (the white ring, TWRP on the screen), asks YES itself, hands fastbrick "YES" and
+      the key on stdin, shows its output without its prompts and its clear ("Exploit most likely successful!" as
+      "Sent."), and then says hands off until that sign; the wait for TWRP ends with "The unlock worked".  The Shows
+      wait for `fastboot devices` before it now, as the Dots did: the question comes with the Echo in fastboot.  An
+      Echo amonet finds unlocked already (it used to wait for a TWRP that never came): told before any warning
+      or YES (`fastboot getvar unlock_status` first, fastbrick's own check the fallback); the Dots start TWRP with
+      `fastboot oem reboot-recovery` in amonet's fastboot (the rainbow), as firebreak does, measured on Dots there (its
+      LK has no `reboot-recovery`: `fastboot reboot recovery` would match `reboot` and boot Fire OS; the Echo 2's LK has
+      the same commands, not tried on one); the Shows fail the step and say to power up with Volume up held.  Sent is fastbrick's "Exploit most likely successful!"
+      whatever its exit status (`set -e` and its last `read`: no "stopped" while the Echo writes).  The Dots' "unplug
+      the power" hint moved from 90 s to 3 min, three times the minute the Echo writes.  Checked against stand-in
+      fastbrick.sh copies (sent, unlocked already, "yes"); the READMEs' "10 s grace period" is gone: v2.0.1's
+      fastbrick.sh has none.
 - [x] A login left waiting, a page reloaded into a restart (2026-10-25, a tester's Echo 2, radar, v2026.10.21.213542).
       Ring: `web: login waits for the action button (iPhone)` at 00:43:12Z, then neither "approved" nor "ran out"; the
       ring pulsed until the next day.  `login_expire` (web.c) ran only on a login or adb ask and on the button, so a
@@ -3059,6 +3079,21 @@ Run in this order. Each step says what it proves.
       1280 x 800 at rotation 1 (`user_rotation`; `ro.sf.hwrotation` 90 only MediaTek's hwcomposer and magd read, below
       Android: the band laid out by DisplayInfo was right), FocalTech touch; the layout
       drawn at 1280 x 774 by uishot (docs/re-crown.md "Screen UI").  Not yet on the Echo.
+- [~] Echo Show: speech on screen (2026-11-03, PR #104 by taucher4000).  What was said, the reply and the timers, as
+      stock's Alexa screens and Kiosk Satellite show them.  The PR's first form drew with stb_truetype in hassmic and
+      showed it through a second ringbar.dex in a text mode, one layer over the screen UI's (drawer and music under the
+      shade), whole frames through the pipe (1.8 MB on the Show 5, 20 a second while a ringing timer pulsed, about
+      36 MB/s).  Moved into the screen UI (2026-11-08): `src/ui/words.c` on a fourth layer of the UI process
+      (`hassmic-words`, TRANSLUCENT, between the UI's and the band's, hidden while the drawer is out), the platform's
+      text (Skia, the system font, every script it covers), drawn on a change only (a running timer once a second),
+      fades and the pulse by `SurfaceControl.setAlpha` (on every Show's boot class path, `make unit-screen`); hassmic
+      tells it lines (`wo`, `wh`, `wr`, `ws`, `tl`); the timers are the core's own list.  Seen by the PR on the first
+      cronos (2026-11-03): a strip of 55 % at the bottom with the reply at 15 % of it was small and cut short with the
+      screen black above it -> the whole layer, the reply 14 % of its height down to 7.5 %, as many lines as fit, in
+      the middle; "stop" showed after stop_ends_listening had ended the run -> the transcript goes to the screen only
+      after `core_transcript`, and `stop_word` clears what it ended.  Checked on the PC: `ui_test` (fades, hold, the
+      drawer, timers by the second, the pulse by alpha only, a reply too long, broken UTF-8, under ASan/UBSan),
+      `tests/fake_screen_words.py`, `build/uishot`.  Open: the moved form not yet on an Echo.
 - [~] Echo Show 5 2nd gen (`cronos`, 2026-10-26; `docs/re-cronos.md`).  checkers' platform and its pinned build: Fire OS
       6574.1 NS65741/8149 (same `ro.build.version.incremental`, cronos' own image), kernel 4.9.77 (20 config lines from
       checkers', 74 from crown's), `libpryon.so` byte-identical to checkers', stubs identical in symbols and order,

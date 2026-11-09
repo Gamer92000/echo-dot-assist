@@ -630,17 +630,99 @@ wait_adb() {
     esac
 }
 
+# fastbrick DIR TIME DONE [TWRP]: amonet's fastbrick.sh from DIR, with the Echo in fastboot already, framed by this
+# setup's own words (issue #154).  fastbrick's words left a tester stuck: after the payload it prints "Please wait until
+# the process finishes and DO NOT INTERRUPT IT." and then "Press any key to exit...", and they could not tell whether it
+# was over or whether a key would stop it.  The PC's part is over by then (the key only ends the script's last `read`);
+# what must not be interrupted is the Echo, which goes on writing by itself until TWRP comes up.  So this asks for YES
+# itself, after saying what is about to happen and what not to touch, hands fastbrick its two answers on stdin and
+# leaves its prompts out of what it shows; its `clear` too, which wiped those words off the screen.  "Exploit most
+# likely successful!" is only fastboot cut off by fastbrick's 8 s timeout, whatever came of it (issue #50): shown as
+# what it is.  TIME: how long the Echo writes ("about a minute"); DONE: what the user sees when it is over ("the ring
+# turns white"); TWRP: how the user starts TWRP on this model once unlocked, for an Echo amonet finds unlocked already
+# (a Show powered up again boots Fire OS without adb, and this step would only ask for fastboot again).  Without it that
+# Echo returns 2, left in fastboot for the caller (the Dots: `fastboot oem reboot-recovery`).  Asked of fastboot first
+# (unlock_status, as fastbrick itself asks), so such an Echo gets no warning and no YES for an unlock that never comes;
+# fastbrick's own "already unlocked!" stays the fallback.  Success is fastbrick's "Exploit most likely successful!",
+# whatever its exit status: once that is out the Echo writes, and a script that then stumbled over its last `read`
+# (set -e) must not make this say "stopped" to someone with a hand on the cable.  Returns 1 when nothing was sent (not
+# YES) or fastbrick failed; on 0 the caller waits for TWRP.
+fastbrick() {
+    local dir=$1 took=$2 sign=$3 twrp=$4 a r seen
+    [ -z "$DRY" ] && a=$(timeout 10 fastboot getvar unlock_status 2>&1 | sed -n 's/^unlock_status: *//p' | head -n1)
+    [ "$a" = true ] && { _fastbrick_unlocked "$twrp"; return; }
+    tell "The unlock comes next. Read all of this before you type anything." \
+        "It takes $took. From the moment you type YES until $sign:" \
+        "  - do not unplug the Echo's power cable or its USB cable," \
+        "  - do not press Ctrl+C and do not close this window," \
+        "  - do not let this PC go to sleep." \
+        "${RED}${B}An interrupted unlock can break the Echo for good.$N" \
+        "After YES you do not have to press anything else: this setup says when it is over."
+    if [ -n "$DRY" ]; then printf '  %s· amonet fastbrick  $ (cd %s; ./fastbrick.sh)%s\n' "$DIM" "${dir:-<amonet>}" "$N"; return 0; fi
+    printf '\n  %s?%s Type %sYES%s (in capital letters) and press Enter to start the unlock: ' "$CYN" "$N" "$B" "$N"
+    read -r a < /dev/tty || exit 1
+    a=${a//[[:space:]]/}               # a space typed along is no reason to stop
+    if [ "$a" != YES ]; then
+        if [ -n "$a" ]; then info "You typed \"$a\", not YES: nothing was sent to the Echo and nothing on it changed."
+        else info "Nothing typed: nothing was sent to the Echo and nothing on it changed."; fi
+        info "Run this step again when you are ready."
+        return 1
+    fi
+    printf '\n=== amonet fastbrick: %s\n' "$dir" >> "$LOG"
+    printf '  %s┌ amonet fastbrick%s\n' "$CYN" "$N"
+    # fastbrick's two reads: YES for its question, a line for "Press any key to exit..."  Answered blind: a newer
+    # fastbrick.sh with a question more would get an empty line or none.  AMONET_SHA256 pins the script; bumping it
+    # means reading its `read`s again.
+    printf 'YES\n\n' | (cd "$dir" && ./fastbrick.sh) 2>&1 | tee -a "$LOG" | _fastbrick_show
+    r=${PIPESTATUS[1]} seen=${PIPESTATUS[3]}
+    [ "$seen" = 2 ] && { _fastbrick_unlocked "$twrp"; return; }
+    if [ "$seen" != 0 ]; then
+        fail "amonet fastbrick stopped before it sent anything (what it said is above; exit status $r)"
+        return 1
+    fi
+    ok "amonet sent the unlock to the Echo"
+    tell "${RED}${B}Hands off the Echo now: it is unlocking itself.$N" \
+        "The PC's part is done. The Echo goes on by itself for $took." \
+        "Keep its power cable and its USB cable plugged in until $sign." \
+        "This setup is watching and says when it is over."
+}
+# _fastbrick_unlocked [TWRP]: an Echo unlocked already, nothing sent: 2 for the caller, or the way to TWRP and 1
+_fastbrick_unlocked() {
+    [ -n "$1" ] || { ok "This Echo is unlocked already: no unlock needed, nothing on it changed"; return 2; }
+    fail "This Echo is unlocked already: no unlock needed, nothing on it changed. TWRP is next."
+    info "$1 Still stuck here: $DDIR/README.md, by hand."
+    return 1
+}
+# _fastbrick_show: fastbrick's output, a line at a time as it comes, without its prompts (answered for it above), its
+# screen clear and its colours.  Its exit status says what fastbrick said: 0 sent, 2 unlocked already, 1 neither
+# (a status, not a file: nothing left behind by a Ctrl+C)
+_fastbrick_show() {
+    local l csi=$'\e\\[[0-9;?]*[A-Za-z]' seen=1
+    while IFS= read -r l || [ -n "$l" ]; do          # a last line without its newline too
+        while [[ $l =~ $csi ]]; do l=${l/"${BASH_REMATCH[0]}"/}; done
+        case $l in
+        *'Type "YES"'*|*'Press any key to exit'*|*'DO NOT INTERRUPT IT'*) continue;;
+        *'Exploit most likely successful!'*) l="Sent."; seen=0;;
+        *'already unlocked!'*) seen=2;;
+        esac
+        printf '  %s│%s %s\n' "$CYN" "$N" "$l"
+    done
+    return $seen
+}
+
 # unlock_wait_twrp: after amonet's fastbrick, until TWRP is up (5 min at most).  fastbrick.sh treats its own timeout
 # as success ("Exploit most likely successful!", issue #50): on an LK it cannot exploit, the Echo just sits in
 # fastboot (solid red LED) and TWRP never comes.  On a good unlock fastbrick returns with the Echo out of fastboot, so
 # one still listed there a minute on is a lock that did not open, not a slow boot.  That is said before the "unplug
-# the power" hint (90 s): a power-cycled Echo boots stock, and fastboot can no longer tell what happened.
+# the power" hint: a power-cycled Echo boots stock, and fastboot can no longer tell what happened.  The hint waits
+# 3 min, three times the minute the Echo takes: pulled while it still writes, the power can brick it (issue #154).
 unlock_wait_twrp() {
     local ut0=$SECONDS
     pick_serial
-    waitfor "Waiting for TWRP (white ring)|TWRP is up" \
+    waitfor "Waiting for the Echo to finish (the ring turns white)|The unlock worked: TWRP is up (white ring)" \
         'adb_is recovery || { [ $((SECONDS - ut0)) -ge 60 ] && [ -n "$(fastboot devices 2>/dev/null)" ] && WAIT_ABORT=1; false; }' \
-        "Nothing yet? Unplug the Echo's power and plug it back in." 90 300 && return 0
+        "Still no white ring after 3 minutes: the Echo is stuck. Only now unplug its power and plug it back in." 180 300 &&
+        return 0
     [ -n "$WAIT_ABORT" ] &&
         fail "the unlock did not take (the Echo is still in fastboot): its LK build is likely newer than $AMONET can unlock. Unplug the power and plug it back in: it boots the original software again"
     return 1
@@ -670,9 +752,9 @@ amazon_usb() {
 show_wait_twrp() {
     local usb0=$1
     pick_serial
-    waitfor "Waiting for TWRP|TWRP is up" \
+    waitfor "Waiting for the Echo to finish (TWRP on its screen)|The unlock worked: TWRP is up" \
         'adb_is recovery || { [ -n "$(amazon_usb | grep -vxF -e "$usb0" -e "")" ] && WAIT_ABORT=1; false; }' \
-        "Nothing after 6 min? Unplug the Echo's power and plug it back in with Volume up held: that starts TWRP." 360 900 &&
+        "Still no TWRP after 6 minutes: the Echo is stuck. Only now unplug its power and plug it back in with Volume up held: that starts TWRP." 360 900 &&
         return 0
     [ -n "$WAIT_ABORT" ] || return 1
     fail "the Echo started its own software (Amazon's setup on its screen), not TWRP: as a rule the unlock did not take"

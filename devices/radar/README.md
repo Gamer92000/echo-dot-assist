@@ -57,8 +57,10 @@ USB-A cable, which needs none.
 ### Unlock and flash
 
 One script, as on `biscuit`: unzip the package, run `./fastbrick.sh`, put the Echo into fastboot mode (power adapter
-out, plug it back in while holding the action button •, until the ring shows a **green** LED; an Echo unlocked before shows a rainbow), type `YES` when asked,
-do not interrupt after the 10-second grace period, and it ends in TWRP (white LED). Then, as the thread says: wipe, flash
+out, plug it back in while holding the action button •, until the ring shows a **green** LED; an Echo unlocked before shows a rainbow), type `YES` when asked.
+When it says "DO NOT INTERRUPT IT" and "Press any key to exit...", the PC's part is over: a key only closes the
+script. The Echo goes on by itself for about a minute and ends in TWRP (white LED): **from `YES` until the white ring,
+do not unplug its power or USB cable**, that can brick it. Then, as the thread says: wipe, flash
 the firmware, `adb reboot recovery` (TWRP makes the slot it flashed active, so the second install lands in the other
 one; do not switch back with `bcbtool`, or it goes into the same slot again), flash again, and
 install `boot-root.zip` for root adb. `scripts/setup.sh radar` does all of that.
