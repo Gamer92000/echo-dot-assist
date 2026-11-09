@@ -4,6 +4,11 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-09
 
+- **A stop from Home Assistant before the sound starts no longer leaves the Echo silent.** When the media player's
+  stop came while the Echo was still waiting for what to play (a `media_stop` right after `tts.speak` or a
+  `play_media`, or during a reply Home Assistant was still preparing), and that then failed to load or was an MP3,
+  the Echo played no reply, announcement or media again until hassmic restarted. Now the stop cancels only what was
+  on its way, at once: what is sent right after it plays.
 - **Debug access: revoking the browser that asked for it withdraws the request.** While Debug access waited for the
   action button, revoking that browser's login on the settings page left the request waiting: the page still said so,
   and the next press of the button opened adb over Wi-Fi for 30 minutes. Now the request goes with the login, and
@@ -114,11 +119,6 @@ What changed for people using the Echo, newest first. Details and measurements a
   boot, for example) left Android thinking it was still held until hassmic restarted: volume down kept turning the
   volume to 0 and undid every attempt to raise it (issue #140). The Echo now takes over the keys only
   once every key is up.
-- **A stop from Home Assistant before the sound starts no longer leaves the Echo silent.** When the media player's
-  stop came while the Echo was still waiting for what to play (a `media_stop` right after `tts.speak` or a
-  `play_media`, or during a reply Home Assistant was still preparing), and that then failed to load or was an MP3,
-  the Echo played no reply, announcement or media again until hassmic restarted. Now the stop only cancels what was
-  on its way.
 
 ## 2026-11-06
 
