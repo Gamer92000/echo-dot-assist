@@ -52,9 +52,13 @@ Use exactly this firmware version, also when the Echo already runs a newer one: 
 
 The unlock is **one script**: unzip the package, run `./fastbrick.sh` (Linux), put the Echo into fastboot mode —
 unplug its power, reconnect while holding the **action button** (the one with the circle) until the ring shows a
-**green LED** (an Echo unlocked before shows a rainbow) — and type `YES` when the script asks. It runs the whole exploit (about a minute, the ring shows
-progress) and reboots the Echo into TWRP (white LED). **Do not interrupt it after the 10-second grace period — that
-can brick the device.** `amonet-biscuit` **v2 writes newer bootloaders and boots Fire OS 6** — the stream the
+**green LED** (an Echo unlocked before shows a rainbow) — and type `YES` when the script asks. It sends the exploit
+and ends with "Please wait until the process finishes and DO NOT INTERRUPT IT." and "Press any key to exit...". **At
+that point the PC's part is over: press any key, that only closes the script and stops nothing.** The Echo goes on by
+itself (about a minute, the ring shows progress) and reboots into TWRP: **the ring turns white. From typing `YES`
+until the white ring, do not unplug the Echo's power or USB cable** — that can brick it. Still no white ring after
+3 minutes: the Echo is stuck, and only then unplug its power. (`scripts/setup.sh` asks for `YES` itself and says all
+of this as it happens.) `amonet-biscuit` **v2 writes newer bootloaders and boots Fire OS 6** — the stream the
 pinned firmware belongs to (Fire OS 5 versions do not boot from v2.0.0 on). v2.0.1's kaeru boots the active slot
 (v2.0.0's always `boot_a`). Flash `boot-root.zip` after every stock
 firmware flash: it gives root adb, as on donut.

@@ -30,8 +30,9 @@ against its libraries. amonet does not depend on the Fire OS version.
 | `magiskpolicy32` | `patch/magiskpolicy32` of donut's `boot-root.zip` ([its README](../donut/README.md)); the guided setup takes it from there | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
 
 1. With the Echo on its power supply, hold all three buttons until "=> FASTBOOT mode..." shows, connect micro-USB,
-   `./fastbrick.sh` (from the unzipped `amonet/`), type `YES`. **After the 10 s grace period nothing may interrupt it**
-   (up to 5 min): that bricks it for good. It ends in TWRP.
+   `./fastbrick.sh` (from the unzipped `amonet/`), type `YES`. At "DO NOT INTERRUPT IT" and "Press any key to
+   exit..." the PC's part is over: a key only closes the script. **From `YES` until TWRP shows on the Echo's screen
+   (up to 5 min), do not unplug its power or USB cable**: that bricks it for good.
 2. TWRP asks "Keep System Read only?": tap **Keep Read Only**. Nothing of the install writes `/system` from TWRP.
 3. Root: hacked fastboot (the Mute key while it boots, or from TWRP), `fastboot oem flags 61`, `fastboot flash boot
    boot-root.img`, then `fastboot continue` (not `reboot`: see docs/re-crown.md). adb is root. The guided setup does

@@ -4,6 +4,12 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-09
 
+- **Clearer unlock (issue #154).** Amazon's lock is opened by a script, amonet's fastbrick, which ended with "DO NOT
+  INTERRUPT IT" and "Press any key to exit...", and nobody could tell whether it was finished or whether a key would
+  stop it. The guided setup now says before the unlock how long it takes and what not to touch (the Echo's power and
+  USB cable, Ctrl+C, the window) until the sign it is over: the white ring on an Echo Dot 2 or Echo 2, TWRP on the
+  screen of an Echo Show. It asks for YES itself, answers the script's questions for it, says "hands off" while the
+  Echo finishes on its own, and says when the unlock worked. The model pages say the same for an unlock by hand.
 - **Echo Show: what you said and the reply on the screen.** "Speech on screen" (settings page, Screen; off by default)
   shows your words and the assistant's answer in large letters over whatever the screen shows: the face, the music, or
   an app such as Kiosk Satellite (not over the pulled-down menu). They fade 8 seconds after the answer ("Speech stays

@@ -106,8 +106,16 @@ step_unlock() {
     tell "Put the Echo into fastboot mode" "Hold the action button (•) and plug the power adapter in." \
         "Keep holding until the ring shows a green light (an Echo unlocked before shows a rainbow instead)."
     waitfor "Waiting for fastboot|Fastboot" '[ -n "$(fastboot devices)" ]' "No green light? Unplug the power and try again." || return 1
-    tell "amonet asks you to type YES, and for a key press at the end" "${RED}${B}Do not interrupt it once it runs: that can brick the Echo.$N"
-    live "amonet fastbrick (about a minute)" in_dir "$adir" ./fastbrick.sh || return 1
+    fastbrick "$adir" "about a minute" "the ring turns white"
+    case $? in
+    0) ;;
+    # unlocked before: the rainbow is amonet's own fastboot.  Its LK has no reboot-recovery (strings of lk.img:
+    # reboot and reboot-bootloader only, matched by prefix, so `fastboot reboot recovery` is a plain reboot into Fire
+    # OS); `oem reboot-recovery` is what firebreak sends there, measured on Dots (its docs/rooting.md: off about 5 s,
+    # then TWRP).  The Echo 2's LK has the same commands; not tried on one.
+    2) task "Starting TWRP" fastboot oem reboot-recovery || return 1; wait_adb recovery; return;;
+    *) return 1;;
+    esac
     unlock_wait_twrp       # gives up when the unlock did not take (issue #50)
 }
 
