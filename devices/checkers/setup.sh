@@ -142,20 +142,12 @@ step_unlock() {
     [ -x $FW/amonet/fastbrick.sh ] || task "Unpacking amonet" unzip -q -o $FW/$AMONET -d $FW || return 1
     tell "On the Echo, hold all three buttons: Volume down, Volume up and Mute (the microphone button)" \
         "Keep them held until its screen says \"=> FASTBOOT mode...\", then let go" \
-        "Plug the micro-USB cable into the Echo." \
-        "" \
-        "${RED}${B}The unlock must not be interrupted once it starts (up to 5 min): that bricks it for good.$N"
-    # in the foreground: it asks to type YES, and for a key press at the end
-    local mark usb0; mark=$(stat -c %s "$LOG" 2>/dev/null || echo 0); usb0=$(amazon_usb)
-    live "Unlocking with amonet's fastbrick" in_dir $FW/amonet env PYTHONUNBUFFERED=1 \
-        bash -o pipefail -c "./fastbrick.sh 2>&1 | tee -a '$LOG'" || return 1
-    # fastbrick.sh exits 0 when its prompt gets anything but YES ("Aborting.", nothing sent), as it does for an Echo
-    # unlocked already: only its output tells them apart.  Read as success, the step waited for a TWRP that never came
-    # (an Echo Show 8, 2026-11-01: "YES\" typed, the Echo back in Fire OS, the step ticked).
-    if [ -z "$DRY" ] && tail -c +$((mark + 1)) "$LOG" | grep -q 'Aborting\.'; then
-        fail "amonet stopped before the unlock: it takes YES, in capitals and nothing else. Nothing on the Echo changed; run this step again."
-        return 1
-    fi
+        "Plug the micro-USB cable into the Echo."
+    waitfor "Waiting for fastboot|Fastboot" '[ -n "$(fastboot devices)" ]' \
+        "Nothing? The screen must say \"=> FASTBOOT mode...\", and the cable must carry data, not only charge." || return 1
+    local usb0; usb0=$(amazon_usb)
+    fastbrick $FW/amonet "up to 5 minutes" "TWRP shows on the Echo's screen" \
+        "Unplug the Echo's power and plug it back in with Volume up held: that starts TWRP. Then run this step again." || return 1
     twrp_screen
     # gives up when the Echo came back in Fire OS instead (issue #132)
     show_wait_twrp "$usb0" || { [ -n "$WAIT_ABORT" ] || fail "no TWRP on adb; $DDIR/README.md, step by step, then try again"; return 1; }

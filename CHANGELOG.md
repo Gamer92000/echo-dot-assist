@@ -2,7 +2,53 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-09
+
+- **Clearer unlock (issue #154).** Amazon's lock is opened by a script, amonet's fastbrick, which ended with "DO NOT
+  INTERRUPT IT" and "Press any key to exit...", and nobody could tell whether it was finished or whether a key would
+  stop it. The guided setup now says before the unlock how long it takes and what not to touch (the Echo's power and
+  USB cable, Ctrl+C, the window) until the sign it is over: the white ring on an Echo Dot 2 or Echo 2, TWRP on the
+  screen of an Echo Show. It asks for YES itself, answers the script's questions for it, says "hands off" while the
+  Echo finishes on its own, and says when the unlock worked. The model pages say the same for an unlock by hand.
+- **Echo Show: what you said and the reply on the screen.** "Speech on screen" (settings page, Screen; off by default)
+  shows your words and the assistant's answer in large letters over whatever the screen shows: the face, the music, or
+  an app such as Kiosk Satellite (not over the pulled-down menu). They fade 8 seconds after the answer ("Speech stays
+  for": any number of seconds, or until the next request). A "stop" the Echo carries out itself (a ringing timer,
+  music, "Stop after the wake word ends listening") is not shown, and takes what was showing away. Experimental.
+  Thanks to taucher4000, who wrote it and tried it on an Echo Show 5 2nd gen.
+- **Echo Show: timers on the screen.** "Timers on screen" (next to it, off by default) counts running timers down in
+  large digits with their unit ("4:59 min", "1:02:05 h", "45 s") and a bar of what is left, and shows a ringing one in
+  orange, pulsing until it is stopped, with a Stop button. The screen stays on while a timer runs.
+- **Echo Show: words and timers by touch.** A tap takes the words away, hides the timers until the next change, and
+  Stop stops a ringing timer, over an app too: while they show, the app gets none of those touches.
+
+## 2026-11-08
+
+- **Wake word in Home Assistant: answering a question now works.** When the assistant asked something back
+  ("which light?"), the Echo opened the microphone but asked Home Assistant to wait for a wake word first, so the
+  answer was ignored. A follow-up question now goes without that wait, as with the Echo's own wake word, and the
+  Echo shows it is listening. The same for the action button while a reply plays: what is said after it is the
+  request.
+
 ## 2026-11-07
+
+- **Echo Shows: screen brightness as on a stock Echo Show (issue #126).** The screen's brightness is now a setting,
+  on the settings page's Screen page and in Home Assistant: **Screen brightness** (one level, 47 % by default, what the
+  Shows ran at before), or **Adaptive brightness**, Amazon's own following of the room's light, with **Adaptive
+  brightness adjustment** to make it brighter or dimmer, as the slider on a stock Echo Show does. The face no longer
+  dims on top of that in a dim room: it was at half brightness most of the day where the light sensor reads low.
+  With Kiosk Satellite installed, the Echo switches off the app's own adaptive brightness, which kept overriding these
+  settings: the app restarts once for it.
+
+- **Setup on an Echo Dot 3: a clearer hint when TWRP does not come up.** If TWRP (the white ring) is not there a
+  minute after the unlock flashed it, or after any later restart into it, the setup now says to unplug the power and
+  hold only Volume up (+) while plugging it back in, which starts TWRP. It used to say only to replug the power, which
+  can start the Echo's own software instead.
+
+- **Echo Show 5 (1st gen): the wake sound right away after a pause.** After a few seconds of quiet, the Echo Shows waited 0.35 s
+  before every sound, because the Echo Show 8's speaker swallowed the start of the first one while it switched on.
+  Measured on an Echo Show 5 1st gen, it loses nothing, so it now plays at once. The other Shows keep the wait until someone
+  measures theirs (issue #75).
 
 - **Setup: fewer dead ends on an Echo Show (issue #132).** When the unlock does not take and the Echo starts its own
   software again, the setup now says so and offers to run the step again, instead of waiting for TWRP forever. It

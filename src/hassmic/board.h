@@ -8,6 +8,8 @@
 
 struct board {
     int kiosk;                      /* device.conf has KIOSK_PACKAGE: the Kiosk Satellite settings exist */
+    int backlight;                  /* a screen whose backlight Android's settings set (screen_brightness*): the Echo Shows;
+                                       root's main.sh backlight applies the screen brightness settings */
     /* identity towards Home Assistant and Music Assistant */
     const char *model;              /* ESPHome device info "model", Wyoming description */
     const char *project;            /* ESPHome "project_name" */
@@ -56,6 +58,11 @@ struct board {
      * it (tools/vol-curve.py measures an Android Echo's with a Dot beside it).  Until someone has, board_vol_dot2 stands
      * in, with a comment saying so; make unit-volcurve lists the models where it still does (devices/README.md) */
     const struct board_vol { int at; float db; } *volume_curve;
+    /* audio_android.c: silence played ahead of a sound on an output that was closed (2.5 s without audio), where the
+     * speaker would swallow its start while it switches on.  Measured per model (tools/cold-lead.py); 0: not measured
+     * yet, 350 ms, what the Echo Show 8 needed for its 120 ms wake blip (2026-10-14); -1: measured, nothing lost, and
+     * the HAL's cold open short enough for earsup.c without it (open + 85 ms under D_MAX, 400 ms; logcat) */
+    int cold_lead_ms;
 
     /* speaker gain (spkgain.c): an ALSA control of card 0 that sets the speaker amplifier's analog gain, which the
      * settings page may raise; NULL: none.  stock: what the speaker plays at on a stock Echo (what the audio HAL's

@@ -85,6 +85,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_screen.py [--legacy]  # the Echo Show's screen UI as hassmic feeds it (stand-in UI): Sendspin
                                              # metadata/artwork (1.0's transfer, scheduled; --legacy: 9.1.1's), the band,
                                              # commands, home app, restarts
+.venv/bin/python tests/fake_screen_words.py  # words and timers on the Show's screen (issue #104), as screen.c tells the
+                                             # UI: settings, transcript and reply, a "stop" never shown, timers
 .venv/bin/python tests/fake_ma_api.py         # Music Assistant's API for the screen (mass.c) against a stand-in server:
                                              # the page's sealed token, auth, players, queue, lists, commands, images
 .venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step
@@ -599,6 +601,21 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   root's `kiosk_tick` leave opening the app to the UI.  PC: `tests/unit/ui_test.c` (every incremental frame == the full one,
   gestures, commands), `tools/uishot.c` (`make build/uishot`: every view as PNG with the firmware's Roboto, FreeType),
   `HASSMIC_SCREEN` (a stand-in UI).
+  Words and timers (`src/ui/words.c`, issue #104; settings `screen_text` "Speech on screen", `screen_text_seconds`
+  (8, 0 until the next request), `screen_timers`, all off, the page's Screen page, card "Words and timers"): what was
+  said, the reply and the timers on a fourth layer of the UI process (`hassmic-words`, TRANSLUCENT, over the UI's and
+  every window, under the band; hidden while the drawer is out), drawn only on a change (a timer: once a second), faded
+  and pulsed by `SurfaceControl.setAlpha`; text by the platform (`p_text`, wrapped by `p_measure`).  hassmic's side in
+  `screen.c` (`screen_words`: `core_set_state` clears on a run from idle and marks idle, proto_esphome's STT end only
+  after `core_transcript` passed it, TTS start; proto_wyoming's transcript; `stop_word` clears what it ended; nothing
+  kept while off), lines `wo`/`wh`/`wr`/`ws`/`tl` (scene.h); the timers are the core's (`core_timers_running`,
+  `screen_timers_changed`), ringing ones the face's `timers`; `screen_keep_on` holds the screen on (ring_band.c's
+  timeout) while timers show.  Touch: over our own screen the scene gives the layer the touches while it shows
+  (`scene_touch` `wtap`, `words_tap`, only once faded in past half: words away + "words clear" to hassmic, timers
+  hidden until the next "tl" + "timers hide", which lets the screen sleep until they change, Stop -> "timer stop");
+  over an app the platform grabs the panel for them (`EVIOCGRAB`, `touch_grab`, `scene_words_wants_grab`; taken and given
+  back with no finger down; the kernel lets go when the UI dies), else (no grab: `wd.grab` -1) a ring there brings our
+  screen up (`ring_from`, `own_asked` kept and given back after, asked again every 10 s) and the app back after.  Tests: `ui_test.c`, `tests/fake_screen_words.py`, `build/uishot` (words*, timer*).
 - **Music Assistant's API** (`mass.c`, `mass.h`, `json.c`): the screen's library, search, queue and speakers over
   MA's own websocket (`/ws`, port 8095; the page's URL, or with none given the Sendspin server's address pinned when the
   token is saved: a token only ever goes to that address, `mass_peer` merely suggests one, from sessions whose player
@@ -647,7 +664,8 @@ DEVELOPMENT.md "Speech corpus"): checked by STT, words timed by MFA; look there 
 aligner, adapted) and `tools/vad_leadin.py` HA's VAD with and without the lead-in (build/ha-venv).
 `tools/` is PC-side reverse-engineering and firmware tooling (`payload_dump.py`, Thumb disassembly helpers,
 `davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator, `vol-curve.py`: an Android Echo's
-volume curve with a Dot's micRaw beside it, for `board.volume_curve`).
+volume curve with a Dot's micRaw beside it, for `board.volume_curve`; `cold-lead.py`: what a sound loses on a closed
+output, a PC microphone beside it, for `board.cold_lead_ms`).
 
 ## Conventions
 

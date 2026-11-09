@@ -18,8 +18,9 @@ has shipped since July 2024. The guided setup reads it (it only reads) and stops
    folder).
 2. With the Echo on its power supply, hold all three buttons until "=> FASTBOOT mode..." shows on the screen.
 3. Connect micro-USB; the script finds the Echo. Type `YES` when asked and follow the screen.
-4. **After its 10 s grace period nothing may interrupt it** (up to 5 min): an interruption bricks the Echo for good.
-   It ends in TWRP.
+4. At "DO NOT INTERRUPT IT" and "Press any key to exit..." the PC's part is over: a key only closes the script. **From
+   `YES` until TWRP shows on the Echo's screen (up to 5 min), do not unplug its power or USB cable**: an interruption
+   bricks the Echo for good.
 
 Afterwards, with the key held while connecting power: Volume down = hacked fastboot, Volume up = TWRP, Mute + Volume
 down (USB connected) = the preloader's USB download for MTKClient. `boot-fastboot.sh` / `boot-recovery.sh` from the zip

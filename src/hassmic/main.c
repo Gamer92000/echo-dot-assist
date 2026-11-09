@@ -411,6 +411,9 @@ void core_set_state(enum state s)
      * "ready-timer-short" once on FOCUS_ENTERED_BACKGROUND, then the pipeline's own patterns cover "ready-timer" */
     if (state == IDLE && atomic_load(&alarm_on)) led("-s", "ready-timer-short");
     led_for(state, s);
+    /* the words on the screen (screen.c): a request from idle takes the last one's away, idle lets them fade */
+    if (state == IDLE) screen_words(SCREEN_WORDS_RUN, NULL);
+    else if (s == IDLE) screen_words(SCREEN_WORDS_IDLE, NULL);
     state = s; state_since = time(NULL);
     atomic_store(&busy, s != IDLE);
 }
@@ -743,6 +746,7 @@ static int wake_wait;                               /* lock held: the run now op
  * Q_STOP ends nothing.  Not cleared by a new run: that Q_STOP may come after the request has ended and the next begun */
 static int wake_cut;
 static int wake_fails;                              /* lock held: wake word runs Home Assistant failed during this reply */
+static int follow_up;                               /* lock held: the pipeline now starting is a follow-up to a question */
 static void pipeline_start(uint64_t from)    /* from: where the wake word that starts it ended, 0: not a wake word */
 {
     run_over = 0; wake_wait = 0;
@@ -757,9 +761,10 @@ static void pipeline_start(uint64_t from)    /* from: where the wake word that s
     run_wake = from != 0;
     proto->start();
     atomic_store(&streaming, 1);
-    if (core_local_wake) lead_in();                 /* ahead of the capture thread's first block: it needs the lock */
-    listening(core_local_wake);
-    if (core_local_wake) core_set_state(LISTENING);
+    int listen_now = core_local_wake || follow_up;      /* remote wake: a follow-up has no wake word to wait for */
+    if (listen_now) lead_in();                 /* ahead of the capture thread's first block: it needs the lock */
+    listening(listen_now);
+    if (listen_now) core_set_state(LISTENING);
 }
 
 /* Home Assistant's "Wake word" event entity (issue #48), listed while the feature is on (proto_esphome.c): every wake
@@ -1117,6 +1122,7 @@ static void heard_end(void)
     if (state == LISTENING) core_set_state(THINKING);
 }
 
+int core_follow_up(void) { return follow_up; }
 void core_restart_after(void) { barge_in = 1; barge_from = 0; }
 
 void core_pipeline_finish(void)
@@ -1134,8 +1140,10 @@ void core_pipeline_finish(void)
     if ((barge_in || !core_local_wake) && satellite_running && connected) {
         if (barge_in) sound_request(SND_WAKE);
         uint64_t from = barge_in ? barge_from : 0;      /* what was said after the wake word while the reply was cut */
+        follow_up = barge_in && !core_local_wake;
         barge_in = 0; barge_from = 0;
         pipeline_start(from);
+        follow_up = 0;
     }
 }
 
@@ -1291,7 +1299,7 @@ static int music_stop(void)
  * ended something (stop_cut, stopped_now), as the drop above would, or with stop_ends_listening. */
 static void stop_word(void)
 {
-    int ended = 0;
+    int ended = 0, paused = 0;
     if (dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE) { dropin_hangup("stop"); ended = 1; }   /* and the pipeline its wake word opened */
     pthread_mutex_lock(&core_lock);
     stop_ms = mono_ms();
@@ -1316,13 +1324,17 @@ static void stop_word(void)
         else { barge_in = 0; core_pipeline_finish(); quiet_abort = 1; }
     } else {
         int quiet = state == LISTENING && stop_ends && stop_heard() && connected && proto->cancel;
-        if (!ended && atomic_load(&music_on) && music_stop()) fprintf(stderr, "stop: music paused%s\n", quiet ? "" : ", the pipeline goes on");
+        if (!ended && atomic_load(&music_on) && music_stop()) { paused = 1; fprintf(stderr, "stop: music paused%s\n", quiet ? "" : ", the pipeline goes on"); }
         if (quiet) {                                            /* as the button: nothing of the run is carried out */
             fprintf(stderr, "stop: listening ended\n");
             atomic_fetch_and(&sounds_pending, ~(1 << SND_WAKE | 1 << SND_TOUCH));
             quiet_cancel();
+            ended = 1;
         }
     }
+    /* the screen's words go with what the "stop" ended: the reply it cut, the run it dropped or ended (stop_ends_listening),
+     * the ring or the music it stopped.  The transcript of that "stop", if one still comes, is not shown (core_transcript) */
+    if (ended || stop_cut || paused) screen_words(SCREEN_WORDS_RUN, NULL);
     pthread_mutex_unlock(&core_lock);
 }
 
@@ -2165,7 +2177,30 @@ void core_timer_running(const char *id, const char *name, unsigned total, unsign
     running[i].total = total; running[i].active = active;
     running[i].left = left * 1000LL; running[i].end = mono_ms() + running[i].left;
     running_stale_at();
+    screen_timers_changed();
     if (connected && proto->timers_changed) proto->timers_changed();
+}
+
+/* "set a timer for 5 minutes" has no name: its length stands in (the ringing sensor, the screen) */
+static void timer_label(char *out, size_t cap, const char *name, unsigned total)
+{
+    unsigned h = total / 3600, m = total % 3600 / 60;
+    if (name[0]) snprintf(out, cap, "%s", name);
+    else if (total % 60 || !total) snprintf(out, cap, "%u s", total);
+    else if (h && m) snprintf(out, cap, "%u h %u min", h, m);
+    else if (h) snprintf(out, cap, "%u h", h);
+    else snprintf(out, cap, "%u min", m);
+}
+
+int core_timers_running(struct core_timer *t, int max)
+{
+    int n = 0;
+    for (int i = 0; i < nrunning && n < max; i++, n++) {
+        timer_label(t[n].name, sizeof t[n].name, running[i].name, running[i].total);
+        t[n].total = running[i].total; t[n].active = running[i].active;
+        t[n].end_ms = running[i].active ? running[i].end : 0; t[n].left_ms = running[i].active ? 0 : running[i].left;
+    }
+    return n;
 }
 
 int core_timer_next(char *name, size_t cap, unsigned *total, long long *left_ms)
@@ -2187,6 +2222,7 @@ static void timers_prune(void)          /* lock held */
         running_drop(i); gone = 1;
     } else i++;
     running_stale_at();
+    if (gone) screen_timers_changed();
     if (gone && connected && proto->timers_changed) proto->timers_changed();
 }
 
@@ -2203,22 +2239,18 @@ static void alarm_set(int on)          /* lock held */
 
 void core_timer_finished(const char *id, const char *name, unsigned total)
 {
-    int i = running_find(id); unsigned h = total / 3600, m = total % 3600 / 60;
+    int i = running_find(id);
     if (i >= 0) { running_drop(i); running_stale_at(); }
     i = 0;
     while (i < nringing && strcmp(ringing[i].id, id)) i++;
     if (i == RINGING_MAX) { memmove(ringing, ringing + 1, sizeof ringing[0] * --i); nringing = i; }    /* the oldest goes */
     if (i == nringing) nringing++;
     snprintf(ringing[i].id, sizeof ringing[i].id, "%s", id);
-    /* "set a timer for 5 minutes" has no name: its length stands in, so the sensor is never blank while it rings */
-    if (name[0]) snprintf(ringing[i].name, sizeof ringing[i].name, "%s", name);
-    else if (total % 60 || !total) snprintf(ringing[i].name, sizeof ringing[i].name, "%u s", total);
-    else if (h && m) snprintf(ringing[i].name, sizeof ringing[i].name, "%u h %u min", h, m);
-    else if (h) snprintf(ringing[i].name, sizeof ringing[i].name, "%u h", h);
-    else snprintf(ringing[i].name, sizeof ringing[i].name, "%u min", m);
+    timer_label(ringing[i].name, sizeof ringing[i].name, name, total);   /* never blank while it rings */
     atomic_store(&alarm_until, timer_ring_s ? mono_ms() + timer_ring_s * 1000LL : LLONG_MAX);
     fprintf(stderr, "alarm: %s rings (%d ringing)\n", ringing[i].name, nringing);
     alarm_set(1);
+    screen_timers_changed();
     if (connected && proto->timers_changed) proto->timers_changed();
 }
 
@@ -2227,11 +2259,13 @@ void core_timer_cancelled(const char *id)
     int r = running_find(id);
     if (r >= 0) {
         running_drop(r); running_stale_at();
+        screen_timers_changed();
         if (connected && proto->timers_changed) proto->timers_changed();
     }
     for (int i = 0; i < nringing; i++) if (!strcmp(ringing[i].id, id)) {
         memmove(ringing + i, ringing + i + 1, sizeof ringing[0] * (size_t)(nringing - i - 1));
         if (!--nringing) alarm_set(0);
+        screen_timers_changed();
         if (connected && proto->timers_changed) proto->timers_changed();
         return;
     }
@@ -2243,6 +2277,7 @@ void core_alarm_stop(const char *why)
     fprintf(stderr, "alarm: off (%s)\n", why);
     nringing = 0;
     alarm_set(0);
+    screen_timers_changed();
     if (connected && proto->timers_changed) proto->timers_changed();
 }
 
@@ -3286,7 +3321,7 @@ static void *capture_thread(void *arg)
         if (arb_due && (mono_ms() >= arb_due || arb_settled())) { arb_due = 0; if (arb_decide()) answer(arb_from); else { afe_done(); wake_tell("answered_elsewhere"); } }    /* after this block went out live */
 
         pthread_mutex_lock(&core_lock);
-        if (core_local_wake && (state == LISTENING || state == THINKING) && time(NULL) - state_since > PIPELINE_TIMEOUT) {
+        if ((state == LISTENING || state == THINKING) && time(NULL) - state_since > PIPELINE_TIMEOUT) {
             fprintf(stderr, "pipeline timeout\n");
             core_pipeline_finish();
         }

@@ -116,7 +116,9 @@ unsigned ui_hash(const char *k) { return hash(k); }
 static struct ui_text_e *text_get(struct scene *s, const char *str, int px, int bold, int maxw)
 {
     char key[sizeof s->text[0].key]; struct ui_text_e *e, *old = &s->text[0];
-    snprintf(key, sizeof key, "%d|%d|%d|%s", px, bold, maxw, str);
+    /* the whole text's length and hash first: a long one is cut at the key's size (a line of Cyrillic or CJK, a long
+     * title), and two that share its start must not share a mask */
+    snprintf(key, sizeof key, "%d|%d|%d|%zu|%08x|%s", px, bold, maxw, strlen(str), hash(str), str);
     unsigned h = hash(key);
     for (int i = 0; i < NTEXT; i++) {
         e = &s->text[i];
@@ -136,6 +138,20 @@ int text_width(struct scene *s, const char *str, float px, int bold, float maxw)
     if (!str || !str[0]) return 0;
     struct ui_text_e *e = text_get(s, str, (int)lroundf(px), bold, (int)maxw);
     return e ? e->t.w : 0;
+}
+
+const struct ui_text *text_mask(struct scene *s, const char *str, float px, int bold, float maxw)
+{
+    if (!str || !str[0] || maxw < 4) return NULL;
+    struct ui_text_e *e = text_get(s, str, (int)lroundf(px), bold, (int)maxw);
+    return e ? &e->t : NULL;
+}
+
+int text_measure(struct scene *s, const char *str, float px, int bold)
+{
+    if (!str || !str[0]) return 0;
+    if (s->p->measure) return s->p->measure(s->ctx, str, (int)lroundf(px), bold);
+    return text_width(s, str, px, bold, 4096);
 }
 
 int text(struct scene *s, int id, const char *str, float px, int bold, float maxw, float x, float y, int align, uint32_t rgb, int alpha)
@@ -383,7 +399,7 @@ int scene_drawer(const struct scene *s) { return drawer_open(s); }
 
 /* an app on its way and not in front yet (one launched while it was still in front, our home not reported there yet,
  * is in front: no scene_top tells it) */
-static int on_its_way(const struct scene *s) { return s->leaving_until > s->now && !eq(s->leaving_pkg, s->top); }
+int on_its_way(const struct scene *s) { return s->leaving_until > s->now && !eq(s->leaving_pkg, s->top); }
 
 int scene_waiting(const struct scene *s) { return on_its_way(s) || s->want_home_until > s->now; }
 
@@ -536,6 +552,7 @@ void scene_touch(struct scene *s, int ev, int x, int y, long long now)
     if (ev == TOUCH_DOWN && !s->screen_on) { s->down = 0; return; }   /* the screen off: no gesture (android.c wakes it) */
     int vis = scene_visible(s) && s->screen_on;
     if (ev == TOUCH_DOWN) {
+        s->wtap = 0;
         s->down = 1; s->x0 = s->x = x; s->y0 = s->y = y; s->t0 = now; s->fired = s->longd = s->dragging = s->slide = 0;
         s->sc = NULL; s->sc_drag = 0; s->pressed = 0;
         /* the grip above the layer (y < 0: rows no app has, android.c) is the drawer's whatever shows; over our own
@@ -543,6 +560,9 @@ void scene_touch(struct scene *s, int ev, int x, int y, long long now)
          * below the grip is the app's (its own pull to refresh), never the drawer's */
         s->edge = y >= s->h ? 2 : ((y < 0 || (vis && y < U(EDGE_TOP))) && !s->dr.t && !s->dr.pulling) ? 1 : 0;   /* (closed, or
                                                                    on its way in: grabbed again where it is) */
+        /* the words and timers (words.c): theirs, nothing under them, over our screen or an app the panel was grabbed
+         * for; the top edge still pulls the drawer, the band is still Back */
+        if (s->edge != 2 && y >= 0 && (vis || s->wd.grab == 1) && words_shown(s)) { s->wtap = 1; return; }
         if (s->edge == 2 || !vis || y < 0) return;
         /* a finger on a list that still moves (a fling, the way back into bounds) stops it, and is only that, as on a
          * phone: no tap on the row that was passing under it, no slider grabbed; a drag after it scrolls on */
@@ -560,6 +580,7 @@ void scene_touch(struct scene *s, int ev, int x, int y, long long now)
     if (!vis && (s->pressed || s->dragging || s->slide)) let_go(s);   /* (an app came up under the finger: none of ours) */
     s->x = x; s->y = y;
     int dx = x - s->x0, dy = y - s->y0, moved = abs(dx) > TAP_PX || abs(dy) > TAP_PX;
+    if (moved) s->wtap = 0;
     if (ev == TOUCH_MOVE) {
         if (s->slide) {
             if (!moved) return;
@@ -604,6 +625,7 @@ void scene_touch(struct scene *s, int ev, int x, int y, long long now)
     s->down = 0;                                                 /* TOUCH_UP */
     if (s->edge == 1 && s->dr.pulling) { drawer_pull(s, y, TOUCH_UP); return; }
     if (s->edge == 2) return;
+    if (s->wtap) { s->wtap = 0; if (words_shown(s)) words_tap(s, x, y); return; }
     if (s->slide) { s->slide = 0; s->pressed = 0; act(s, s->pact, s->parg, EV_DRAG); act(s, s->pact, s->parg, EV_DROP); return; }   /* tapped */
     if (s->dragging) { act(s, s->pact, s->parg, EV_DROP); s->pressed = 0; s->dragging = 0; return; }
     if (s->sc_drag) {
@@ -822,7 +844,6 @@ void scene_msg(struct scene *s, const char *line, long long now)
     else if (eq(cmd, "dnd")) s->dnd = atoi(a);
     else if (eq(cmd, "oobe")) s->oobe = atoi(a);
     else if (eq(cmd, "h12")) s->h12 = atoi(a);
-    else if (eq(cmd, "lux")) s->lux = (float)atoi(a);              /* (whole lux, as hassmic sends them: no nan) */
     else if (eq(cmd, "name")) snprintf(s->name, sizeof s->name, "%s", a);
     else if (eq(cmd, "act")) snprintf(s->act, sizeof s->act, "%s", a);
     else if (eq(cmd, "web")) snprintf(s->web, sizeof s->web, "%s", a);
@@ -868,7 +889,7 @@ void scene_msg(struct scene *s, const char *line, long long now)
         if (!home_known) { home_known = 1; start_home(s); }
         else if (!eq(was, h)) { home_new = 1; home_apply(s); }  /* picked on the page: it applies now */
         else if (s->home_broken) { s->home_broken = 0; s->home_retry_at = 0; s->home_retry_ms = 0; home_new = 1; home_apply(s); }   /* the same again: tried again */
-    } else music_msg(s, cmd, a);
+    } else if (!words_msg(s, cmd, a)) music_msg(s, cmd, a);
 }
 
 void scene_resize(struct scene *s, int w, int h, int band)
@@ -885,11 +906,12 @@ struct scene *scene_new(int w, int h, int band, const struct ui_platform *p, voi
     s->p = p; s->ctx = ctx; kiosk[0] = 0; home_chosen = home_known = home_new = 0;
     scene_resize(s, w, h, band);
     s->rnd = 0x9E3779B9u ^ (unsigned)now; if (!s->rnd) s->rnd = 1;
-    s->lux = -1; s->screen_on = 1; s->pressed = 0; s->view = V_FACE; s->evol = -1;
+    s->screen_on = 1; s->pressed = 0; s->view = V_FACE; s->evol = -1;
     for (int i = 0; i < 3; i++) s->relaunch[i] = -3600000;     /* none yet (the clock may be under a minute) */
     s->now = s->last = 0;
     face_init(s, now);
     music_init(s);
+    s->wd.grab = -1;                                           /* (the platform says when it can take the panel) */
     s->m.req_next = (int)((unsigned long long)now % 1000000) * 100;   /* not 1 again after a restart of the UI */
     return s;
 }

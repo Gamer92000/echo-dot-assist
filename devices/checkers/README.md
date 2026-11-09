@@ -21,8 +21,10 @@ The unlock and install write to the Echo's flash. These rules keep it recoverabl
   Most units have no way back from a broken bootloader: the brick is permanent. Of the partitions, this install writes
   only `boot` and `system` (step 3 also wipes cache and data). Going all the way back to stock is the one exception:
   [below](#going-back-to-stock).
-- **Do not interrupt the unlock.** Once `fastbrick.sh` is past its 10 s grace period, nothing may stop it (it takes
-  up to 5 minutes). An interruption bricks the Echo for good.
+- **Do not interrupt the unlock.** From typing `YES` in `fastbrick.sh` until TWRP shows on the Echo's screen (up to
+  5 minutes), do not unplug the Echo's power or USB cable. An interruption bricks the Echo for good. When the script
+  says "DO NOT INTERRUPT IT" and "Press any key to exit...", its part is over: a key only closes it, and the Echo goes
+  on by itself.
 - **In TWRP, always tap "Keep Read Only"** when it asks "Keep System Read only?". A system TWRP has mounted read-write
   no longer passes the stock boot image's checks, and the stock image is your way back while `/system` is untouched.
 - **Do not join Wi-Fi before the lockdown step.** Fire OS would reach Amazon and could update itself, which can close
@@ -62,8 +64,9 @@ Follow the XDA thread's instructions. It ends with an unlocked bootloader and TW
 Two ways in:
 
 - **A working Echo (no opening):** run `./fastbrick.sh` (Linux) or `fastbrick.bat`. With the Echo on its power
-  supply, hold all three buttons until "=> FASTBOOT mode..." shows, then connect micro-USB. Type `YES` and follow the
-  screen. Do not interrupt it after the 10 s grace period.
+  supply, hold all three buttons until "=> FASTBOOT mode..." shows, then connect micro-USB. Type `YES`. At "Press any
+  key to exit..." press a key (it only closes the script), then leave the Echo plugged in until TWRP shows on its
+  screen (up to 5 minutes).
 - **A bricked Echo made in 2019:** open it (power and USB flex stay connected), stop ModemManager, run `sudo
   ./bootrom-step.sh`, and plug in micro-USB while shorting test point TP30 to ground, until the script says
   otherwise; then `sudo ./fastboot-step.sh`. Newer revisions have the bootrom's USB download disabled, so this most
