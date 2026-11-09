@@ -486,14 +486,17 @@ static int load_old(void)
 
 /* "Wake sound" off used to silence the button, microphone and volume sounds too (never Bluetooth's).  An Echo that had
  * it off stays as quiet: called while its config has none of the sounds' own switches yet, and for an export of then
- * (settings_apply_text).  How many it turned off */
+ * (settings_apply_text).  How many it turned off (those still on) */
 static const enum id wake_sound_covered[] = { SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME };
 static int wake_sound_was_all(void)
 {
-    const int n = (int)(sizeof wake_sound_covered / sizeof *wake_sound_covered);
     if (core_wake_sound(-1)) return 0;
-    for (int i = 0; i < n; i++) core_sound_on(switched_sound(wake_sound_covered[i]), 0);
-    fprintf(stderr, "settings: \"Wake sound\" was off: the button, microphone and volume sounds now off on their own switches\n");
+    int n = 0;
+    for (size_t i = 0; i < sizeof wake_sound_covered / sizeof *wake_sound_covered; i++) {
+        const int snd = switched_sound(wake_sound_covered[i]);
+        if (core_sound_on(snd, -1)) { core_sound_on(snd, 0); n++; }     /* one already off is no change to count */
+    }
+    if (n) fprintf(stderr, "settings: \"Wake sound\" was off: the button, microphone and volume sounds now off on their own switches\n");
     return n;
 }
 

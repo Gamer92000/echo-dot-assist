@@ -289,6 +289,8 @@ async def main():
               f"an export from before the switches imported: the four off with the wake sound ({r['applied']} for {lines} lines)")
         check(setting("sound_bluetooth_on") and setting("sound_bluetooth_off") and "sound_volume=off" in open(os.path.join(old, "state", "config")).read(),
               "Bluetooth's on; saved")
+        r = json.loads(page.call("POST", "/api/set", then.encode())[2])
+        check(r["applied"] == lines and not r["errors"], f"the same again, the four already off: none counted twice ({r['applied']} for {lines} lines)")
         all_on(); page.call("POST", "/api/set", new.encode())
         check(not setting("wake_sound") and all(setting(k) for k in names[1:]), "a newer export, its switches on: they stay on")
         all_on(); page.set(wake_sound="off")
