@@ -4,9 +4,9 @@ Model D9N29T, MediaTek MT8516, `ro.product.device` = `donut_puffin`. Supported w
 `scripts/probe.sh` checks that the Echo runs exactly this firmware.
 
 - **Unlock and root**: `kamakiri-donut` (bootrom exploit through test pads on the board, then TWRP), then `boot-root`
-  for root adb and a permissive `su` SELinux domain. Steps and files are in the root [README](../../README.md#install).
-- **Install**: `INSTALL=twrp-ab`. `scripts/install-system.sh` patches `/sepolicy` with `boot-root`'s magiskpolicy
-  under the running OS, then writes the running system partition (`/` is dm-0 over the active slot, verity off; remounted
+  for root adb and a permissive `su` SELinux domain; both by hand, as their [XDA thread][xda] says.
+- **Install**: `INSTALL=twrp-ab`. `scripts/install-system.sh` patches `/sepolicy` with magiskpolicy (Magisk's own
+  release, [v30.7](https://github.com/topjohnwu/Magisk/releases/tag/v30.7)) under the running OS, then writes the running system partition (`/` is dm-0 over the active slot, verity off; remounted
   writable by `otatool remount`). `--twrp`: the active A/B slot (`bcbtool get_active`) from TWRP, as before.
 - **Audio**: Amazon's `mixer` daemon and `libmixerAPI.so` (`micAsr` 16 kHz post-AEC capture; TTS, Music and Earcon
   streams). Wake word: `libpryon.so` with the stock `en-US/ALEXA` model, plus models fetched from Amazon.
@@ -37,7 +37,7 @@ Plan an evening. Steps 1–2 are the risky ones and are not this project's work:
 > `the command you input is restricted on locked hw`), and no way to finish the unlock or undo it has been found:
 > neither has worked since. It is not known yet which Echos or firmware versions are affected, nor whether any unlock
 > is safe now. While the issue is open, do not unlock an Echo you want to keep. `scripts/setup.sh donut` asks before
-> it unlocks.
+> it sends you to the unlock.
 
 > **Never let the Echo go online with Amazon on the way.** It would update itself, and an update can close the hole the
 > unlock uses. Do not set it up with the Alexa app, except in the guarded way described under
@@ -49,15 +49,17 @@ Besides the general [requirements](../../README.md#requirements):
 
 - An Echo Dot 3 from 2018 (D9N29T), **not** the 2019–2020 refresh (`crumpet`, C78MP8) or the one with the clock (`doebrite`, 36EBT3), and a way to reach its **hidden
   USB port**: see [USB access](#usb-access). This is the hard part.
-- These files, not included (proprietary or third-party). The first three go into `firmware/donut/`, which is
+- These files, not included (proprietary or third-party). The first two go into `firmware/donut/`, which is
   git-ignored, like everything below `firmware/`:
 
 | File | Source | sha256 |
 |---|---|---|
 | `update-kindle-donut_puffin-NS65741_user_8138_0013222529668.bin` | stock Fire OS 6574.1 for `donut_puffin`, from [FTVDB](https://ftvdb.com/echo/firmware/com.amazon.donut.android.os/f7cd5f3b6d6bfa59e5ba6a6779285c34-13222529668-fire-os-6574-1-ns65741-8138-2026-08-31/) | `ac22b78cf94c2ebacfa90447b770b803d9f72f35858d5218975d97fea95a0245` |
-| `kamakiri-donut-v1.0.0.zip` | bootloader unlock + TWRP, [XDA thread][xda] | `4d2bb52eaf661f6616aa4268584d44cf9155c1328c34bfcba01a6558f942b738` |
-| `boot-root.zip` | root adb + permissive `su` SELinux domain, [XDA thread][xda] | `de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0` |
+| `magiskpolicy32` | `lib/armeabi-v7a/libmagiskpolicy.so` of `Magisk-v30.7.apk`, [Magisk v30.7](https://github.com/topjohnwu/Magisk/releases/tag/v30.7) (APK `e0d32d2123532860f97123d927b1bb86c4e08e6fd8a48bfc6b5bee0afae9ebd5`); `scripts/setup.sh` fetches it itself | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
 | `toolchain/android-ndk-r21e/` | unpack <https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip> into `toolchain/` | – |
+
+The unlock's and the root's own files (`boot-root.zip`) are the [XDA thread][xda]'s: it says which, kept current with
+its procedure. Nothing here downloads or reads them.
 
 Use exactly this firmware version, also when the Echo already runs a newer one, and also where a guide or thread says
 to update to the newest first: everything was worked out against its binaries, `scripts/setup.sh` only takes the file
@@ -84,25 +86,25 @@ device: a USB-C port switches the connection on only once the plug's CC wire (of
 5.1 kΩ resistor, which sits in the device a cable normally leads to (forum, 2026-10-22). Add that resistor, or take a
 USB-A cable, which needs none.
 
-Keep the Echo unplugged (no power, no USB) until step 1 asks for it. Then the order is: USB cable into the PC, hold the
-action (dot) button, plug in the power adapter. Without the adapter the Echo has no power and the bootrom never shows up.
-
-Do this from **Linux running on the PC itself**: not macOS, not a VM, not WSL. The bootrom's USB timing is tight: on
-macOS kamakiri stops with `RuntimeError: status is 1d1a`, and USB passed through to a VM drops off or answers too late.
-A Linux live USB stick is enough.
+Keep the Echo unplugged (no power, no USB) until the thread's unlock says otherwise.
 
 ### 1. Unlock, flash stock firmware, root
 
+Once, first: USB access without sudo, and ModemManager kept off the Echo's bootrom.
+
 ```sh
-sudo cp scripts/51-echo-unlock.rules /etc/udev/rules.d/ && sudo udevadm control --reload   # USB without sudo; keeps ModemManager off the bootrom
-unzip firmware/donut/kamakiri-donut-v1.0.0.zip -d firmware/donut/kamakiri
-K=$(dirname "$(find firmware/donut/kamakiri -name bootrom-step.sh)")   # the zip keeps its scripts in a folder of their own
-(cd "$K" && ./bootrom-step.sh)    # start it, then: USB cable into the PC, hold the action (dot) button, plug in the
-                                  # Echo's power adapter, keep holding until it asks for Enter
-(cd "$K" && ./fastboot-step.sh)   # when the ring shows a rotating rainbow; ends in TWRP (white ring)
+sudo cp scripts/51-echo-unlock.rules /etc/udev/rules.d/ && sudo udevadm control --reload
 ```
 
-Flash the firmware into both A/B slots, then root:
+Unlock the Echo **by hand, as the [XDA thread][xda] says**, from its first post: which Echos it is for, its files, how
+to get the Echo ready and every command are there, kept up to date. R0rt1z2 asks (since kamakiri-donut v1.1.0) that the
+unlock is only ever run that way, never from an installer or a script, so this page does not repeat its steps and
+`scripts/setup.sh donut` does not run them either: it names the thread, waits for Enter and then checks for TWRP on adb.
+**Stop once TWRP is running (white ring)**: the firmware below is done differently from the thread, and boot-root comes
+after it. Stuck, or the Echo does something the thread does not say? Ask in the thread, with what the Echo did, in your
+own words, and the tool's output or log as it is.
+
+Flash the firmware into both A/B slots:
 
 ```sh
 F=firmware/donut/update-kindle-donut_puffin-NS65741_user_8138_0013222529668.bin
@@ -112,15 +114,17 @@ adb shell twrp install /sdcard/update.zip      # "Flashing A/B zip to inactive s
 adb reboot recovery        # wait for the white ring; TWRP now runs from the slot just flashed
 adb shell twrp install /sdcard/update.zip      # must name the OTHER slot this time
 adb reboot recovery
-adb push firmware/donut/boot-root.zip /sdcard/ && adb shell twrp install /sdcard/boot-root.zip   # patches both slots
-adb reboot
 ```
+
+Then root, by hand: `boot-root` installed from TWRP as the [XDA thread][xda] says, with the file the thread offers now,
+until Fire OS has started with root adb (`adb shell id -u` says 0). `scripts/setup.sh donut` does not install it
+either: it waits for Enter and checks.
 
 TWRP switches the active slot itself after an install (checked 2026-09-25: `bcbtool get_active` said `b` right after
 flashing B; a user saw the same on his Dots, GitHub issue 18). Do not switch it back by hand, as the XDA thread's
 `bcbtool set_active` line does, or the second install lands in the same slot again and the other one keeps Amazon's
-newer firmware. `scripts/setup.sh donut` never switches; it stops if TWRP did not. `kamakiri`'s `bootrom-step.sh` asks for Enter after the handshake: run it in a terminal, not in
-the background. With a second Echo on adb (Wi-Fi), point every command and script at the new one:
+newer firmware. `scripts/setup.sh donut` never switches; it stops if TWRP did not. With a second Echo on adb (Wi-Fi),
+point every command and script at the new one:
 `export ANDROID_SERIAL=<serial from adb devices>`.
 
 Result: stock Fire OS, unregistered, no Wi-Fi, orange ring, and `adb shell` is root. If adb does not show up after a
@@ -131,14 +135,18 @@ reboot, replug the power. Back to TWRP: `adb reboot recovery`, or hold Volume Up
 The tools link against Amazon's libraries, so the firmware is unpacked on the PC. On a commit GitHub has a build of
 (any pushed commit on `main` or `release`, once CI has published it; [README](../../README.md#install)) none of this
 is needed: `export PREBUILT=1`, and the scripts below and in the next steps use that build, checked against the
-release key. Then only `boot-root` is unpacked, and `scripts/probe.sh` runs as below.
+release key. Then only magiskpolicy is fetched, and `scripts/probe.sh` runs as below.
 
 ```sh
 unzip firmware/donut/update-kindle-*.bin payload.bin -d firmware/donut/
 python3 tools/payload_dump.py firmware/donut/payload.bin firmware/donut/images
 mkdir -p firmware/donut/rootfs        # debugfs does not create it
 debugfs -R "rdump / firmware/donut/rootfs" firmware/donut/images/system.img
-unzip firmware/donut/boot-root.zip -d firmware/donut/boot-root    # the installer uses its patch/magiskpolicy32
+curl -fsSL -o toolchain/Magisk-v30.7.apk https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk-v30.7.apk   # the installer's magiskpolicy
+sha256sum toolchain/Magisk-v30.7.apk   # e0d32d2123532860f97123d927b1bb86c4e08e6fd8a48bfc6b5bee0afae9ebd5
+unzip -p toolchain/Magisk-v30.7.apk lib/armeabi-v7a/libmagiskpolicy.so > firmware/donut/magiskpolicy32
+chmod 755 firmware/donut/magiskpolicy32
+sha256sum firmware/donut/magiskpolicy32   # e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a
 make kernel-tools                         # kernel sources + compiler for Wi-Fi motion's module (115 MB, optional)
 make                                      # ARM binaries into build/donut/
 scripts/probe.sh                          # must not list any DIFFERENT library

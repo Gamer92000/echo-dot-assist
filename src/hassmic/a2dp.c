@@ -41,6 +41,7 @@
 #include "btout.h"
 #include "core.h"
 #include "hci.h"
+#include "settings.h"
 #include "a2dp_codec.h"
 #include "resample.h"
 #include "statefile.h"
@@ -602,7 +603,7 @@ static void *player(void *arg)
             if (bt_open(rr, 2)) { usleep(200000); continue; }
             open = 1; rate = rr; fprintf(stderr, "a2dp: output open, %u Hz\n", rr);
         }
-        music_duck(buf, out, rr, &duck_g, core_state() != IDLE ? DUCK : 1);       /* under the voice assistant */
+        music_duck(buf, out, rr, &duck_g, core_state() != IDLE ? settings_duck_gain() : 1);       /* under the voice assistant */
         while (bt_queued_us() > MIXER_US) usleep(5000);
         for (size_t i = 0; i < 2 * out; i++) { int v = buf[i] < 0 ? -buf[i] : buf[i]; if (v > peak) peak = v; }
         if (out && bt_write(buf, out * 4) < 0) fprintf(stderr, "a2dp: mixer write failed\n");   /* 0: a frame or two held back */
@@ -788,7 +789,7 @@ static void media_rx(const unsigned char *p, size_t n)
 enum { AVC_CONTROL = 0x00, AVC_STATUS = 0x01, AVC_NOTIFY = 0x03, AVC_NOT_IMPLEMENTED = 0x08, AVC_ACCEPTED, AVC_REJECTED, AVC_STABLE = 0x0c,
        AVC_CHANGED, AVC_INTERIM = 0x0f };
 enum { AVC_VENDOR = 0x00, AVC_UNIT_INFO = 0x30, AVC_SUBUNIT_INFO, AVC_PASS_THROUGH = 0x7c };
-enum { PDU_GET_CAPS = 0x10, PDU_REGISTER = 0x31, PDU_SET_VOLUME = 0x50, EVENT_VOLUME = 0x0d, KEY_PLAY = 0x44, KEY_PAUSE = 0x46 };
+enum { PDU_GET_CAPS = 0x10, PDU_REGISTER = 0x31, PDU_SET_VOLUME = 0x50, EVENT_VOLUME = 0x0d, KEY_PLAY = 0x44, KEY_PAUSE = 0x46, KEY_FORWARD = 0x4b, KEY_BACKWARD = 0x4c };
 #define PANEL 0x48                                      /* subunit type panel (9), ID 0 */
 
 static atomic_int echo_volume = -1, vol_dirty, key_req, avrcp_links;
@@ -860,7 +861,7 @@ static void avrcp_rx(struct link *l, const unsigned char *p, size_t n)
     }
     if (p[0] & 2) {                                         /* answers to our pass-through commands */
         if (n >= 7 && p[5] == AVC_PASS_THROUGH && !(p[6] & 0x80))
-            fprintf(stderr, "a2dp: %012llx: %s %s\n", (unsigned long long)l->addr, (p[6] & 0x7f) == KEY_PLAY ? "play" : "pause",
+            fprintf(stderr, "a2dp: %012llx: %s %s\n", (unsigned long long)l->addr, (p[6] & 0x7f) == KEY_PLAY ? "play" : (p[6] & 0x7f) == KEY_FORWARD ? "next" : (p[6] & 0x7f) == KEY_BACKWARD ? "previous" : "pause",
                     p[3] == AVC_ACCEPTED ? "accepted" : p[3] == AVC_NOT_IMPLEMENTED ? "not implemented" : "rejected");
         return;
     }
@@ -951,7 +952,7 @@ static void avrcp_upkeep(void)
             unsigned char a[5] = { AVC_CONTROL, PANEL, AVC_PASS_THROUGH, key | (release ? 0x80 : 0), 0 };
             avctp_send(l, l->av_label++ & 15, 0, a, 5);
         }
-        fprintf(stderr, "a2dp: %012llx: %s\n", (unsigned long long)l->addr, key == KEY_PLAY ? "play" : "pause");
+        fprintf(stderr, "a2dp: %012llx: %s\n", (unsigned long long)l->addr, key == KEY_PLAY ? "play" : key == KEY_FORWARD ? "next" : key == KEY_BACKWARD ? "previous" : "pause");
     }
     if (atomic_exchange(&vol_dirty, 0)) for (int i = 0; i < MAX_LINKS; i++) {
         l = &links[i]; int pct = volume_now();
@@ -1697,6 +1698,14 @@ int a2dp_button(int resume)
     }
     if (!paused) return 0;
     atomic_store(&button_paused_at, 0); atomic_store(&key_req, KEY_PLAY); hci_poke();
+    return 1;
+}
+
+/* the action button pressed twice (+1) or three times (-1): the streaming device skips; 1 = sent */
+int a2dp_skip(int dir)
+{
+    if (!atomic_load(&avrcp_links) || !atomic_load(&streaming) || atomic_load(&yielded)) return 0;
+    atomic_store(&key_req, dir > 0 ? KEY_FORWARD : KEY_BACKWARD); hci_poke();
     return 1;
 }
 

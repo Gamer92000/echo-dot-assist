@@ -35,10 +35,10 @@ double rate_servo(struct rate_servo *s, double err_us, double dt_s);   /* err_us
 double rate_servo_snap(struct rate_servo *s);   /* after a jump in the schedule: the error starts from 0, the drift is
                                                    left alone for SERVO_HOLD_S (what the snap left over is no drift); the step */
 
-/* Stereo s16 turned down to DUCK (a sixth, -15.6 dB) while a request runs, glided into and out of with a time constant
- * of 30 ms, frame by frame: a step from one block to the next clicked as listening started and ended.  *g is the
- * stream's gain now (start at 1); at 1 and target 1 the samples are left as they are. */
-#define DUCK (1.0f / 6)
+/* Stereo s16 turned down to target (settings_duck_gain(): the setting music_duck, 16 dB by default) while a request
+ * runs, glided into and out of with a time constant of 30 ms, frame by frame: a step from one block to the next clicked
+ * as listening started and ended.  *g is the stream's gain now (start at 1); at 1 and target 1 the samples are left as
+ * they are. */
 void   music_duck(int16_t *s, size_t frames, unsigned rate, float *g, float target);
 
 /* s16 bytes copied at a gain glided towards target with the duck's 30 ms time constant, sample by sample (`per_s`:

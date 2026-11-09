@@ -32,8 +32,10 @@ int  settings_peek(const char *name, char *out, size_t cap);
 int  settings_mic_level(void);
 const char *settings_speech_language(void);    /* "de", "en", ...; "" for automatic (main.c speech_locale) */
 int  settings_on(const char *name);     /* a bool setting's value; 0 if this Echo has no such setting */
+int  settings_bt_proxy(void);           /* "bluetooth_proxy", whether or not the controller was there when the list was made */
 const struct bt_lang *settings_bt_lang(void);
 int  settings_bt_lang_index(int set);   /* -1 reads */
+float settings_duck_gain(void);         /* linear gain music gets while the assistant is not idle (setting music_duck); any thread */
 
 /* The table: settings this Echo has (no Wi-Fi motion setting without the module, ...), in display order */
 int  settings_count(void);
@@ -48,7 +50,12 @@ int  settings_choices(const struct setting *s, const char *const **names);   /* 
 int  settings_set(const char *name, const char *value, char *err, size_t errsz);
 /* "name=value" lines: every setting (or only the exportable ones); returns the length written (truncated to cap) */
 size_t settings_text(char *out, size_t cap, int export_only);
+/* an export's first line (web.c /api/export), the Echo's name, model and version after it: settings_apply_text tells an
+ * export by it, unchanged since exports came (adaa7d8) */
+#define SETTINGS_EXPORT_HEAD "# hassmic settings, exported from "
 /* Apply "name=value" lines (an export, a preset); # comments and blank lines skipped.  Errors are listed in err, one
- * per line; returns how many settings were applied */
+ * per line; returns how many settings were applied.  Of a line it reads the first SETTINGS_LINE_MAX - 1 bytes (web.c's
+ * updates_gate reads them as it does) */
+#define SETTINGS_LINE_MAX 200
 int  settings_apply_text(const char *text, char *err, size_t errsz);
 #endif

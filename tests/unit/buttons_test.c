@@ -14,9 +14,10 @@
 #include <unistd.h>
 
 const struct board board = { .action_combo = 1 };
-static atomic_int actions, pairs, ups, downs, events;
+static atomic_int actions, pairs, ups, downs, events, multis, last_multi;
 static void on_action(void) { actions++; }
 static void on_pair(void) { pairs++; }
+static void on_multi(int n) { multis++; last_multi = n; }
 static void on_volume(int d) { if (d > 0) ups++; else downs++; }
 static void on_mute(int m) { (void)m; }
 static void on_event(int button, int hold) { (void)button; (void)hold; events++; }
@@ -30,11 +31,12 @@ static void key(int code, int value)
 }
 static void check(int ok, const char *what) { printf("%s %s\n", ok ? "ok  " : "FAIL", what); if (!ok) fails++; }
 static void settle(void) { usleep(100000); }
+static void tap(void) { key(KEY_HELP, 1); usleep(40000); key(KEY_HELP, 0); }
 
 int main(int argc, char **argv)
 {
     struct button_handler h = { .action = on_action, .pair = on_pair, .volume = on_volume, .mute_changed = on_mute,
-                               .event = on_event };
+                               .event = on_event, .multi = on_multi };
     if (argc != 2) return 2;
     unlink(argv[1]);
     if (mkfifo(argv[1], 0600)) { perror("mkfifo"); return 2; }
@@ -66,6 +68,27 @@ int main(int argc, char **argv)
     key(KEY_VOLUMEUP, 1); key(KEY_VOLUMEDOWN, 1); usleep(1300000);
     key(KEY_VOLUMEUP, 0); key(KEY_VOLUMEDOWN, 0); settle();
     check(actions == 2 && pairs == 1, "held 1.3 s without repeats: neither");
+
+    /* the action button's own key: a press alone is the action at once; with multi press on, 450 ms late, and two or
+     * three presses in a row are the multi handler's instead */
+    int a0 = actions;
+    tap(); settle();
+    check(actions == a0 + 1 && multis == 0, "multi press off: a single press acts at once");
+    buttons_multi_press(1);
+    a0 = actions;
+    tap(); settle();
+    check(actions == a0 && multis == 0, "multi press on: a single press waits");
+    usleep(500000);
+    check(actions == a0 + 1 && multis == 0, "... and acts when no second one came");
+    tap(); usleep(150000); tap(); usleep(700000);
+    check(actions == a0 + 1 && multis == 1 && last_multi == 2, "two presses: multi 2, no action");
+    tap(); usleep(120000); tap(); usleep(120000); tap(); settle();
+    check(actions == a0 + 1 && multis == 2 && last_multi == 3, "three presses: multi 3 at once");
+    tap(); usleep(700000); tap(); usleep(700000);
+    check(actions == a0 + 3 && multis == 2, "two presses 700 ms apart: two single presses");
+    key(KEY_HELP, 1); usleep(1200000); key(KEY_HELP, 0); settle();
+    check(actions == a0 + 3 && multis == 2, "a hold is no press");
+    buttons_multi_press(0);
     unlink(argv[1]);
     return fails ? 1 : 0;
 }

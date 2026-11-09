@@ -30,7 +30,7 @@ TWRP=; [ "$1" = --twrp ] && { TWRP=1; shift; }
 
 if [ "$1" != --uninstall ]; then
     # before anything is touched: without it the policy patch below fails with no word of why (issue #10)
-    [ -f $SEPOLICY_TOOL ] || die "no $SEPOLICY_TOOL: unzip $FW/boot-root.zip -d $FW/boot-root ($DDIR/README.md)"
+    [ -f $SEPOLICY_TOOL ] || die "no $SEPOLICY_TOOL: lib/armeabi-v7a/libmagiskpolicy.so of Magisk v30.7's APK ($DDIR/README.md; scripts/setup.sh fetches it)"
     [ "$(adb get-state 2>/dev/null)" = device ] && device_check_firmware
     build_binaries                      # built here or this commit's release build (PREBUILT, scripts/lib/build.sh)
     # Signing key for push updates.  The public half goes onto the read-only system partition and is what the device trusts.

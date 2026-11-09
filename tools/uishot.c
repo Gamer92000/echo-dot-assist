@@ -164,13 +164,23 @@ static void t_apps(void *ctx)
     (void)apps_;
     scene_apps(sc, a, 6);
 }
+static int t_measure(void *ctx, const char *s, int px, int bold)  /* as android.c's p_measure: the paint's width, uncut */
+{
+    (void)ctx;
+    FT_Face f = face[bold ? 1 : 0];
+    FT_Set_Pixel_Sizes(f, 0, (FT_UInt)(px * 0.8f));
+    unsigned cp[1024]; int n = 0;
+    for (const char *p = s; *p && n < 1024; ) cp[n++] = utf8(&p);
+    return measure(f, cp, n) + 1;
+}
 static void t_launch(void *ctx, const char *pkg, const char *cls) { (void)ctx; (void)pkg; (void)cls; }
 static void t_back(void *ctx) { (void)ctx; }
 static void t_sleep(void *ctx) { (void)ctx; }
-static const struct ui_platform plat = { t_text, t_launch, t_back, t_send, t_apps, t_image, t_shot, t_sleep };
+static const struct ui_platform plat = { t_text, t_launch, t_back, t_send, t_apps, t_image, t_shot, t_sleep, t_measure };
 
 /* ---------------------------------------------------------------- frames and pictures */
 
+static void dashboard(uint32_t *p);
 static void frame(void)
 {
     int next;
@@ -181,14 +191,19 @@ static void frame(void)
         deliver();
         if (want_backdrop) {                                    /* the app under the drawer: a made-up dashboard */
             want_backdrop = 0; uint32_t *p = malloc((size_t)W * H * 4);
-            for (int y = 0; y < H; y++) for (int x = 0; x < W; x++)
-                p[y * W + x] = (y < 56) ? rgb(3, 169, 244) : ((x / 240 + y / 150) % 2) ? rgb(250, 250, 250) : rgb(236, 239, 241);
+            dashboard(p);
             scene_backdrop(sc, p, W, H);
         }
     }
 }
 
 static void run(int ms) { long long end = now + ms; while (now < end) { frame(); now += 16; } frame(); }
+
+static void dashboard(uint32_t *p)                              /* an app: a made-up dashboard */
+{
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++)
+        p[y * W + x] = (y < 56) ? rgb(3, 169, 244) : ((x / 240 + y / 150) % 2) ? rgb(250, 250, 250) : rgb(236, 239, 241);
+}
 
 static void crc_put(FILE *f, const char *type, const unsigned char *d, unsigned n)
 {
@@ -215,6 +230,27 @@ static void png(const char *name)
     crc_put(f, "IHDR", ih, 13); crc_put(f, "IDAT", z, (unsigned)zn); crc_put(f, "IEND", NULL, 0);
     fclose(f); free(raw); free(z);
     printf("%s\n", path);
+}
+
+/* the words' layer (words.c), faded in, over what shows (or an app), as SurfaceFlinger blends it: premultiplied, times
+ * the layer's alpha */
+static void words_png(const char *name, int over_app)
+{
+    static uint32_t *wb; if (!wb) wb = calloc((size_t)W * H, 4);
+    float a = 0; int nx;
+    for (int i = 0; i < 60 && (i < 30 || a < 0.98f); i++) {     /* (a ringing one: at the top of its pulse) */
+        now += 33;
+        if (scene_words(sc, now, &a, &nx) == 2) { struct gfx g = { wb, W, H, W, { 0, 0, W, H } }; scene_words_draw(sc, &g); }
+    }
+    uint32_t *save = malloc((size_t)W * H * 4); memcpy(save, fb, (size_t)W * H * 4);
+    if (over_app) dashboard(fb);
+    for (int i = 0; i < W * H; i++) {
+        uint32_t s = wb[i], d = fb[i], o = 0xFF000000u; float k = 1 - (s >> 24) / 255.0f * a;
+        for (int c = 0; c < 24; c += 8) o |= (uint32_t)fminf(255, (s >> c & 255) * a + (d >> c & 255) * k + 0.5f) << c;
+        fb[i] = o;
+    }
+    png(name);
+    memcpy(fb, save, (size_t)W * H * 4); free(save);
 }
 
 static void tap(int x, int y) { scene_touch(sc, TOUCH_DOWN, x, y, now); now += 50; scene_touch(sc, TOUCH_UP, x, y, now); run(40); }
@@ -257,6 +293,22 @@ int main(int argc, char **argv)
     scene_top(sc, UI_HOME_PKG, now);
     line("name Echo Show 5 fdd111"); line("home -"); line("web http://192.168.1.40:28931"); line("ev 40");
     run(500); png("face");
+    /* what was said, the reply, the timers (words.c): over the face and over an app */
+    line("wo 1 1 8"); line("wh What's the weather like tomorrow?");
+    line("wr Tomorrow will be sunny with highs of 18 degrees and a light breeze from the west."); line("ws -1");
+    words_png("words", 0); words_png("words_over_app", 1);
+    line("wh Was steht heute in meinem Kalender, und muss ich etwas mitbringen?");
+    line("wr Heute stehen drei Termine im Kalender: um neun Uhr das Teamtreffen im Büro, um zwölf das Mittagessen mit Anna "
+         "im Café am Markt und um sechzehn Uhr der Zahnarzt. Für das Teamtreffen bringst du den Laptop mit, für den Zahnarzt "
+         "die Versichertenkarte. Am Abend ist nichts eingetragen, und morgen früh beginnt der Tag erst um zehn Uhr mit einem "
+         "Anruf bei der Bank, der etwa eine halbe Stunde dauern soll."); line("ws -1");
+    words_png("words_long", 0);
+    line("wh "); line("wr "); line("ws -1");
+    line("tl 3\t299000 600 1 Pizza\t3725000 7200 1 2 h\t1200000 2400 0 Kuchen");
+    words_png("timers", 0); words_png("timers_over_app", 1);
+    line("tl 1\t2700000 3600 1 Laundry"); words_png("timer_one", 0);
+    line("timers Pizza"); words_png("timer_ringing", 0);
+    line("timers "); line("tl 0"); line("wo 0 0 8"); words_png("words_gone", 0);
     music_data(); run(400); png("face_music");
     pull(300); png("drawer");
     tap(W / 2, H - 20); run(500);                               /* the shade: closed again */

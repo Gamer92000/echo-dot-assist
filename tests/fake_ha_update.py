@@ -140,6 +140,12 @@ async def main():
         r = page.set(online_updates="beta")
         check(chan() == "off" and r.get("github_unreachable") and "GitHub cannot be reached" in r.get("errors", ""),
               f"GitHub not reachable: stays off, the page is told why: {r}")
+        r = page.set(online_updates="Beta")                 # a hand-edited import: the settings take any case
+        check(chan() == "off" and r.get("github_unreachable"), f"the same in capitals: stays off as well (it went on unchecked): {r}")
+        # settings_apply_text reads a line's first 199 bytes (SETTINGS_LINE_MAX): padded so that "beta" ends there, the
+        # gate read "betaxxxxxxxxxx" and let it through, the settings "beta"
+        r = page.set(**{" " * 180 + "online_updates": "beta" + "x" * 10})
+        check(chan() == "off" and r.get("github_unreachable"), f"a line padded past what the settings read of it: stays off as well: {r}")
         r = page.set(wake_sound="on", online_updates="release")
         check(chan() == "off" and r.get("applied") == 1 and r.get("github_unreachable"), f"import with GitHub out of reach: the rest applied: {r}")
         check("online_updates=off" in open(os.path.join(state, "config")).read() or "online_updates" not in open(os.path.join(state, "config")).read(),

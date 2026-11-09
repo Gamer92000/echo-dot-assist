@@ -72,7 +72,7 @@ static void fake_apps(void *ctx) { (void)ctx; apps_asked++; }
 static void fake_image(void *ctx, const char *key, int px) { (void)ctx; if (nasked < 64) { asked_px[nasked] = px; snprintf(asked[nasked++], sizeof asked[0], "%s", key); } }
 static void fake_shot(void *ctx) { (void)ctx; shots_asked++; }
 static void fake_sleep(void *ctx) { (void)ctx; sleeps++; }
-static const struct ui_platform plat = { fake_text, fake_launch, fake_back, fake_send, fake_apps, fake_image, fake_shot, fake_sleep };
+static const struct ui_platform plat = { fake_text, fake_launch, fake_back, fake_send, fake_apps, fake_image, fake_shot, fake_sleep, NULL };
 
 /* Music Assistant's answers: pages of 60 out of 150 albums, the queue's items (8 unless the test says more), everything
  * else small */
@@ -738,8 +738,6 @@ int main(int argc, char **argv)
     #define FRESH() do { scene_free(S); nsent = nlaunched = 0; queue_total = 8; fail_lists = no_totals = 0; queue_gone = -1; hold_answers = 0; \
                          S = scene_new(W, H, BAND, &plat, NULL, now); scene_top(S, UI_HOME_PKG, now); \
                          msg("name Echo"); msg("home -"); run(300); } while (0)
-    /* a light sensor's word that is no number: no nan in the face's brightness (frames for ever, colours undefined) */
-    FRESH(); msg("lux nan"); run(500); assert(isfinite(S->lux) && isfinite(S->face.br.v));
     /* pulled over an app that keeps the front (our home never comes), the finger held on: one pull, not one every 3 s */
     FRESH(); msg("home org.example.app"); run(100); scene_top(S, "org.example.app", now); run(5000);
     { int sh = shots_asked; scene_touch(S, TOUCH_DOWN, W / 2, -8, now);
@@ -921,6 +919,149 @@ int main(int argc, char **argv)
     msg("ma connecting"); run(600); nsent = 0;
     msg("ma up Music Assistant"); run(1000);
     assert(sent_prefix("ml ") && strstr(sent[nsent - 1], "search 0 re") && !drawn_text("Searching"));
+
+    /* the words and timers (words.c): a layer of their own, drawn on a change, faded by its alpha */
+    {
+        static uint32_t wb[W * H];
+        struct gfx wg = { wb, W, H, W, { 0, 0, W, H } };
+        float a = 0; int nx = 0, k;
+        #define WSTEP(ms) do { long long e_ = now + (ms); while (now < e_) { now += 33; k = scene_words(S, now, &a, &nx); if (k == 2) scene_words_draw(S, &wg); } } while (0)
+        #define CACHED(str) ({ int f_ = 0; for (int i_ = 0; i_ < NTEXT; i_++) if (S->text[i_].used && strstr(S->text[i_].key, str)) f_ = 1; f_; })
+        #define TEXT_IS(str) ({ int f_ = 0; for (int i_ = 0; i_ < NTEXT; i_++) if (S->text[i_].used && eq(strrchr(S->text[i_].key, '|') + 1, str)) f_ = 1; f_; })
+        FRESH();
+        assert(scene_words(S, now, &a, &nx) == 0 && nx == -1);      /* nothing told: hidden, nothing to wait for */
+        msg("wh What is the weather"); msg("wr Sunny"); msg("ws -1");
+        assert(scene_words(S, now, &a, &nx) == 0);                 /* "Speech on screen" off: hidden */
+        msg("wo 1 0 8"); msg("wh Wie wird das Wetter morgen?"); msg("wr Morgen wird es sonnig bei bis zu 18 Grad."); msg("ws -1");
+        k = scene_words(S, now, &a, &nx); assert(k == 2 && a < 0.2f && nx > 0);   /* drawn, fading in */
+        scene_words_draw(S, &wg);
+        int shade = 0, lit = 0, bar = 0;
+        for (int i = 0; i < W * H; i++) { shade += wb[i] == 0xBF000000u; lit += wb[i] >> 24 == 0xFF; bar += wb[i] == gfx_px(CYAN); }
+        assert(shade > W * H / 2 && lit > 1000 && bar > 20);          /* the shade, the words over it, the bar by the reply */
+        if (shots) ppm("words", wb);
+        assert(CACHED("Morgen") && CACHED("Wetter"));
+        assert(scene_words(S, now, &a, &nx) == 1);                 /* the same: not drawn again */
+        WSTEP(300); assert(k == 1 && a == 1 && nx == -1);           /* faded in; still while the Echo answers */
+        msg("ws 0"); WSTEP(7000); assert(k == 1 && a == 1 && nx > 0 && nx <= 1000);   /* idle: 8 s */
+        WSTEP(1000); WSTEP(700); assert(k == 0);                   /* then faded out */
+        /* a new request takes them away at once */
+        msg("wh Und am Montag?"); msg("wr "); msg("ws -1"); WSTEP(300); assert(k == 1 && a == 1);
+        msg("wh "); msg("wr "); msg("ws -1"); assert(scene_words(S, now, &a, &nx) == 0);
+        /* the drawer has the screen: hidden while it is out, back after it */
+        msg("wh Licht an"); msg("ws -1"); WSTEP(300); assert(k == 1);
+        pull_drawer(); assert(drawer_open(S) && scene_words(S, now, &a, &nx) == 0);
+        drawer_close_now(S); run(50); WSTEP(300); assert(k == 1 && a == 1);
+        scene_screen(S, 0, now); assert(scene_words(S, now, &a, &nx) == 0); scene_screen(S, 1, now);
+        /* 0: until the next request */
+        msg("wo 1 0 0"); msg("ws 0"); WSTEP(30000); assert(k == 1 && a == 1 && nx == -1);
+        /* a reply longer than the screen, broken UTF-8 in it: cut, inside the buffer (ASan) */
+        { char longer[1001] = ""; while (strlen(longer) < 900) strcat(longer, "Heute stehen drei Termine im Kalender \xc3\xa4 ");
+          strcat(longer, "\xff\xfe kaputt \xe2\x82"); msg("ws -1"); char l[1100]; snprintf(l, sizeof l, "wr %s", longer); msg(l);
+          WSTEP(100); scene_words_draw(S, &wg); }
+        { char word[600]; memset(word, 'W', sizeof word - 1); word[sizeof word - 1] = 0; char l[700]; snprintf(l, sizeof l, "wr %s", word); msg(l);
+          WSTEP(100); scene_words_draw(S, &wg); }                  /* one word longer than a line: broken */
+        msg("wo 0 0 8"); WSTEP(700); assert(k == 0);               /* off: gone */
+        /* timers: counted down here from what hassmic told, the one that ends first on top, a paused one last */
+        msg("wh "); msg("wr "); msg("ws -1");
+        msg("wo 0 1 8"); msg("tl 2\t30000 600 0 Tea\t65000 300 1 Pizza");
+        assert(S->wd.nt == 2 && !strcmp(S->wd.t[1].name, "Pizza") && S->wd.t[1].active && S->wd.t[1].total == 300);
+        k = scene_words(S, now, &a, &nx); assert(k == 2 && nx > 0); scene_words_draw(S, &wg);
+        if (shots) ppm("timers", wb);
+        assert(TEXT_IS("1:05") && TEXT_IS("30") && TEXT_IS("Pizza") && TEXT_IS("min") && TEXT_IS("s"));   /* (30 s: the seconds alone) */
+        WSTEP(300); assert(k == 1 && nx > 0 && nx <= 1000);         /* faded in: the next second */
+        now += nx; k = scene_words(S, now, &a, &nx); assert(k == 2); scene_words_draw(S, &wg); assert(TEXT_IS("1:04"));
+        now += 100; assert(scene_words(S, now, &a, &nx) == 1);      /* within the second: as drawn */
+        msg("tl 1\t30000 600 0 Tea"); WSTEP(300); assert(k == 1 && nx == -1);   /* paused alone: nothing moves */
+        /* a ringing one: orange, pulsing by the layer's alpha alone */
+        msg("timers Tea, 10 min"); k = scene_words(S, now, &a, &nx); assert(k == 2 && nx == 66); scene_words_draw(S, &wg);
+        { int orange = 0; for (int i = 0; i < W * H; i++) orange += wb[i] == gfx_px(ORANGE); assert(orange > 200); }
+        if (shots) ppm("ringing", wb);
+        { float lo = 1, hi = 0; int drawn = 0; WSTEP(400);
+          for (int i = 0; i < 40; i++) { now += 66; k = scene_words(S, now, &a, &nx); drawn += k == 2; lo = fminf(lo, a); hi = fmaxf(hi, a); }
+          assert(!drawn && lo < 0.5f && hi > 0.95f); }
+        msg("wo 1 1 8"); msg("wh Stopp"); msg("ws -1"); assert(scene_words(S, now, &a, &nx) == 2 && S->wd.pic == 1);   /* words first */
+        msg("wh "); msg("ws -1"); msg("timers "); assert(scene_words(S, now, &a, &nx) == 2 && S->wd.pic == 3);         /* the timers again */
+        /* what hassmic tells is checked: records that do not parse are left out, the rest kept */
+        msg("tl 3\tgarbage\t1000 60 1\t5000 x 1 Bad"); assert(S->wd.nt == 1 && S->wd.t[0].total == 60 && !S->wd.t[0].name[0]);
+        msg("tl 0"); WSTEP(700); assert(S->wd.nt == 0 && k == 0);
+        /* touches over our own screen: the layer's, nothing under it gets them; a tap takes the words away */
+        FRESH(); msg("wo 1 1 8"); msg("wh Licht an"); msg("wr Erledigt"); msg("ws -1"); WSTEP(300); assert(k == 1);
+        { long long poke = S->face.poke_at; nsent = 0; tap(W / 2, H / 2);      /* on the eyes, under the words */
+          assert(S->face.poke_at == poke && sent_has("words clear") && !S->wd.heard[0]);
+          WSTEP(700); assert(k == 0);
+          tap(W / 2, H / 2); assert(S->face.poke_at != poke); }      /* gone: the eyes have it again */
+        /* the running timers: tapped away until their list changes */
+        msg("tl 1\t65000 300 1 Pizza"); WSTEP(300); assert(k == 1 && S->wd.pic == 3);
+        nsent = 0; tap(W / 2, H / 2); WSTEP(700); assert(k == 0 && S->wd.timers_hidden && sent_prefix("timers hide "));
+        msg("tl 2\t65000 300 1 Pizza\t30000 60 1 Tea"); WSTEP(300); assert(k == 1 && !S->wd.timers_hidden);
+        /* a ringing one: Stop on its pill, nothing elsewhere; the drawer still comes from the top */
+        msg("timers Pizza"); k = scene_words(S, now, &a, &nx); assert(k == 2); scene_words_draw(S, &wg);
+        if (shots) ppm("ringing_stop", wb);
+        WSTEP(300);                                                /* (faded in: before that a tap is the face's) */
+        { struct rect r = S->wd.stop; assert(!rect_empty(r) && r.y1 <= H); nsent = 0;
+          tap(W / 2, r.y0 - 80); assert(!sent_has("timer stop"));
+          tap((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2); assert(sent_has("timer stop")); }
+        pull_drawer(); assert(drawer_open(S) && scene_words(S, now, &a, &nx) == 0);
+        drawer_close_now(S); run(50);
+        msg("timers "); msg("tl 0"); WSTEP(700); assert(k == 0);
+        /* over an app: its touches stay its own; a ring brings our screen up for Stop, and the app back after */
+        msg("home org.example.app"); run(100); scene_top(S, "org.example.app", now); run(100);
+        msg("wh Licht aus"); msg("ws -1"); WSTEP(300); nsent = 0;
+        tap(W / 2, H / 2); assert(!sent_has("words clear") && S->wd.heard[0]);
+        msg("wh "); msg("ws -1"); WSTEP(700);
+        nlaunched = 0; msg("timers Pizza"); WSTEP(100);
+        assert(nlaunched == 1 && !strcmp(launched[0], "HOME/") && eq(S->wd.ring_from, "org.example.app"));
+        scene_top(S, UI_HOME_PKG, now); run(100); WSTEP(300);
+        assert(scene_visible(S) && k >= 1 && nlaunched == 1);        /* the home app not brought back over the ring */
+        msg("timers "); WSTEP(100);
+        assert(nlaunched == 2 && !strcmp(launched[1], "org.example.app/") && !S->wd.ring_from[0]);
+        scene_top(S, "org.example.app", now); run(100);
+        /* over another app than the home app: that one back after, and the home app again once it goes */
+        scene_top(S, "org.example.other", now); run(100); nlaunched = 0;
+        msg("timers Pizza"); WSTEP(100); assert(nlaunched == 1 && eq(S->wd.ring_from, "org.example.other"));
+        scene_top(S, UI_HOME_PKG, now); run(100); msg("timers "); WSTEP(100);
+        assert(nlaunched == 2 && !strcmp(launched[1], "org.example.other/"));
+        scene_top(S, "org.example.other", now); run(100); now += 61000; scene_top(S, UI_HOME_PKG, now); run(100);   /* it left */
+        assert(nlaunched == 3 && !strcmp(launched[2], "org.example.app/"));
+        scene_top(S, "org.example.app", now); run(100);
+        /* our screen does not come (the app keeps the front): asked for again every 10 s while it rings */
+        nlaunched = 0; msg("timers Pizza"); WSTEP(100); assert(nlaunched == 1);
+        WSTEP(5000); assert(nlaunched == 1 && !scene_visible(S));
+        WSTEP(5000); assert(nlaunched == 2 && eq(S->wd.ring_from, "org.example.app"));
+        scene_top(S, UI_HOME_PKG, now); run(100); msg("timers "); WSTEP(100); assert(!S->wd.ring_from[0]);
+        scene_top(S, "org.example.app", now); run(100);
+        /* words just coming (alpha under half): a tap is still the face's */
+        msg("home -"); run(100); scene_top(S, UI_HOME_PKG, now); run(100); WSTEP(700); assert(k == 0);
+        { long long poke = S->face.poke_at; msg("wh Neu"); msg("ws -1"); k = scene_words(S, now, &a, &nx);
+          assert(k >= 1 && a < 0.5f); nsent = 0; tap(W / 2, H / 2);
+          assert(S->face.poke_at != poke && !sent_has("words clear")); }
+        msg("wh "); msg("ws -1"); WSTEP(700);
+        /* the panel grabbable (the Echo): over an app the words want it, and while it is theirs a tap is theirs; a ring
+         * there needs no bring-up, its Stop is tapped where it is */
+        scene_words_grab(S, 0);
+        scene_top(S, "org.example.app", now); run(100);
+        assert(!scene_words_wants_grab(S));                          /* nothing shown: Android's */
+        msg("wh Licht aus"); msg("ws -1"); WSTEP(300);
+        assert(scene_words_wants_grab(S)); nsent = 0;
+        tap(W / 2, H / 2); assert(!sent_has("words clear"));          /* (not grabbed yet: the app's) */
+        scene_words_grab(S, 1);
+        tap(W / 2, H / 2); assert(sent_has("words clear") && !S->wd.heard[0]);
+        WSTEP(700); assert(k == 0 && !scene_words_wants_grab(S)); scene_words_grab(S, 0);   /* gone: given back */
+        nlaunched = 0; msg("timers Pizza"); WSTEP(300);
+        assert(nlaunched == 0 && !S->wd.ring_from[0] && scene_words_wants_grab(S));
+        scene_words_grab(S, 1);
+        { struct rect r = S->wd.stop; assert(!rect_empty(r)); nsent = 0;
+          tap((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2); assert(sent_has("timer stop")); }
+        msg("timers "); WSTEP(700); assert(!scene_words_wants_grab(S)); scene_words_grab(S, 0);
+        scene_words_grab(S, -1); scene_top(S, UI_HOME_PKG, now); run(100);
+        /* two long texts that share their start past the cache key's size (a line of Cyrillic): masks of their own */
+        { char a1[400], a2[400]; memset(a1, 'A', 300); a1[300] = 0; strcpy(a2, a1); strcat(a1, "one"); strcat(a2, "two");
+          const struct ui_text *m1 = text_mask(S, a1, 20, 0, 4096), *m2 = text_mask(S, a2, 20, 0, 4096);
+          assert(m1 && m2 && m1 != m2 && text_mask(S, a1, 20, 0, 4096) == m1); }
+        #undef WSTEP
+        #undef CACHED
+        #undef TEXT_IS
+    }
 
     printf("frames %d, dirty %.0f px a frame on average; drawing dirty-only %.3f ms a frame (worst %.3f), whole %.3f ms\n",
            frames, (double)drawn_px / frames, t_inc / frames * 1000, worst * 1000, t_full / frames * 1000);

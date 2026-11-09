@@ -27,7 +27,8 @@
  *   arbitration      "Join arbitration network" switch and "Arbitration peers"; the action "arbitration_key" (Home
  *                    Assistant names it esphome.<node>_arbitration_key) through which other Echos hand over their
  *                    network key, and the HomeassistantActionRequest with which this one hands over its own (arb.c)
- *   bluetooth proxy  LE scanning with raw advertisements, GATT connections to up to 3 devices at a time, pairing (ble.c)
+ *   bluetooth proxy  LE scanning with raw advertisements, GATT connections to up to 3 devices at a time, pairing (ble.c);
+ *                    feature bluetooth_proxy, on by default
  *   bluetooth speaker  a switch opens the pairing window (a2dp.c).  The other way, playing to a Bluetooth speaker: a
  *              switch searches for one and pairs it, another plays on it, a text sensor says how it is, a number holds its
  *              latency for Sendspin (a2dp.c, btout.c).  A phone connecting is announced by asking Home
@@ -132,7 +133,7 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
        KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON, KEY_LIGHT, KEY_ASSIST_VOLUME, KEY_SOUNDS_VOLUME, KEY_TIMER_VOLUME,
        KEY_CALL_VOLUME, KEY_WAKE, KEY_RING_FILL, KEY_RING_ROTATION, KEY_RING_LEDS, KEY_LAST_HEARD, KEY_LAST_REPLY,
-       KEY_NEXT_TIMER, KEY_NEXT_TIMER_NAME, KEY_NEXT_TIMER_LENGTH };
+       KEY_NEXT_TIMER, KEY_NEXT_TIMER_NAME, KEY_NEXT_TIMER_LENGTH, KEY_SCR_AUTO, KEY_SCR_LEVEL, KEY_SCR_ADJUST };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -148,6 +149,8 @@ static __thread int reply_fd = -1;      /* the client whose request this thread 
 static int cancelled;                   /* lock held: the user cancelled the run; its events are dropped.  2: a new run
                                          * was asked for, whose RUN_START ends that (TCP keeps the order) */
 static int tts_expected;                /* lock held: the reply is being fetched or played; RUN_END must not end the pipeline */
+static int stt_run;                     /* lock held: the run asked for starts at STT (local wake word, a follow-up): the
+                                         * request begins at its RUN_START, not at a WAKE_WORD_END it never gets */
 static char tts_url[1024];              /* lock held: reply URL of the running pipeline (known from RUN_START with streaming TTS) */
 static int announcing, media_playing;   /* lock held */
 static void announce_done(void);
@@ -401,6 +404,10 @@ static void send_setting(int key)       /* lock held */
     case KEY_ASSIST_VOLUME: case KEY_SOUNDS_VOLUME: case KEY_TIMER_VOLUME: case KEY_CALL_VOLUME:     /* VOL_* order */
         pb_float(&b, 2, core_kind_volume(key - KEY_ASSIST_VOLUME, -1)); send_state(NUMBER_STATE, &b); break;
     case KEY_LED_BRIGHTNESS: { int v = core_led_brightness(-1); if (v >= 0) { pb_float(&b, 2, v); send_state(NUMBER_STATE, &b); } } break;
+    case KEY_SCR_AUTO: pb_uint(&b, 2, settings_on("screen_brightness_auto")); send_state(SWITCH_STATE, &b); break;
+    case KEY_SCR_LEVEL: case KEY_SCR_ADJUST:
+        pb_float(&b, 2, settings_get(settings_find(key == KEY_SCR_LEVEL ? "screen_brightness" : "screen_brightness_adjust")));
+        send_state(NUMBER_STATE, &b); break;
     case KEY_BT_OUT_SEARCH: if (ble_present()) { pb_uint(&b, 2, a2dp_out_searching()); send_state(SWITCH_STATE, &b); } break;
     case KEY_BT_OUT: if (ble_present()) { pb_uint(&b, 2, a2dp_out_enabled()); send_state(SWITCH_STATE, &b); } break;
     case KEY_BT_OUT_DELAY: if (ble_present()) { pb_float(&b, 2, a2dp_out_delay(-1)); send_state(NUMBER_STATE, &b); } break;
@@ -493,6 +500,7 @@ static void send_light_states(void)     /* lock held */
     sent_level = core_led_brightness(-1); level_at = time(NULL);
     send_setting(KEY_LED_AUTO); send_setting(KEY_LED_BRIGHTNESS); send_setting(KEY_LIGHT);
     send_setting(KEY_RING_FILL); send_setting(KEY_RING_ROTATION);
+    send_setting(KEY_SCR_AUTO); send_setting(KEY_SCR_LEVEL); send_setting(KEY_SCR_ADJUST);
 }
 
 static void send_light_entities(void)
@@ -525,6 +533,18 @@ static void send_light_entities(void)
     { PB(b, 160); pb_str(&b, 1, "led_brightness"); pb_fixed32(&b, 2, KEY_LED_BRIGHTNESS); pb_str(&b, 3, "LED brightness");
       pb_str(&b, 5, "mdi:brightness-6"); pb_float(&b, 6, 0); pb_float(&b, 7, 100); pb_float(&b, 8, 1); pb_uint(&b, 10, 1);
       pb_str(&b, 11, "%"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
+    /* the Echo Show's backlight as stock's Display settings: adaptive (Amazon's lux curve, shifted by the adjustment) or
+     * a level of its own (settings.c backlight_auto; root's main.sh sets Android's settings from state/config) */
+    if (listed(KEY_SCR_AUTO)) {
+        { PB(b, 160); pb_str(&b, 1, "adaptive_brightness"); pb_fixed32(&b, 2, KEY_SCR_AUTO); pb_str(&b, 3, "Adaptive brightness");
+          pb_str(&b, 5, "mdi:brightness-auto"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
+        { PB(b, 160); pb_str(&b, 1, "screen_brightness"); pb_fixed32(&b, 2, KEY_SCR_LEVEL); pb_str(&b, 3, "Screen brightness");
+          pb_str(&b, 5, "mdi:brightness-6"); pb_float(&b, 6, 1); pb_float(&b, 7, 100); pb_float(&b, 8, 1); pb_uint(&b, 10, 1);
+          pb_str(&b, 11, "%"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
+        { PB(b, 160); pb_str(&b, 1, "adaptive_brightness_adjustment"); pb_fixed32(&b, 2, KEY_SCR_ADJUST);
+          pb_str(&b, 3, "Adaptive brightness adjustment"); pb_str(&b, 5, "mdi:brightness-percent"); pb_float(&b, 6, -100);
+          pb_float(&b, 7, 100); pb_float(&b, 8, 1); pb_uint(&b, 10, 1); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
+    }
     /* separate volumes (main.c): the three beside the media player's, which is the music's; no entity category, controls
      * like the media player's volume */
     static const char *const vol_ids[VOL_KINDS] = { "assistant_volume", "sounds_volume", "timer_volume", "call_volume" };
@@ -557,6 +577,7 @@ static int listed(int key)
     case KEY_WHISPERED: return core_whisper_model() && settings_on("whisper_detection");
     case KEY_WIFI_MOTION: case KEY_WIFI_MOTION_SENS: return wifimotion_present() && settings_on("wifi_motion");
     case KEY_LED_AUTO: return have_auto;
+    case KEY_SCR_AUTO: case KEY_SCR_LEVEL: case KEY_SCR_ADJUST: return settings_find("screen_brightness_auto") != NULL;
     case KEY_LUX: return have_light && settings_on("light_sensor");
     case KEY_LIGHT: return ring_custom();
     case KEY_RING_FILL: case KEY_RING_ROTATION: case KEY_RING_LEDS: return ring_per_led();
@@ -751,6 +772,14 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     }
     else if (type == NUMBER_COMMAND && key == KEY_LED_BRIGHTNESS) {                  /* a level of its own: auto off, or it moves */
         core_led_brightness(num < 0 ? 0 : (int)lroundf(num)); settings_save(); send_setting(KEY_LED_AUTO); send_setting(key); return;
+    }
+    else if (type == SWITCH_COMMAND && key == KEY_SCR_AUTO && listed(key)) {                  /* saved, shown: settings.c */
+        char e[80]; settings_set("screen_brightness_auto", on ? "on" : "off", e, sizeof e); return;
+    }
+    else if (type == NUMBER_COMMAND && (key == KEY_SCR_LEVEL || key == KEY_SCR_ADJUST) && listed(key)) {
+        int lo = key == KEY_SCR_LEVEL ? 1 : -100, n = (int)lroundf(num); char v[8], e[80];
+        snprintf(v, sizeof v, "%d", n < lo ? lo : n > 100 ? 100 : n);
+        settings_set(key == KEY_SCR_LEVEL ? "screen_brightness" : "screen_brightness_adjust", v, e, sizeof e); return;
     }
     else if (type == NUMBER_COMMAND && key >= KEY_ASSIST_VOLUME && key <= KEY_CALL_VOLUME && listed(key)) {   /* saved, shown: settings.c */
         static const char *const names[] = { "assistant_volume", "sounds_volume", "timer_volume", "call_volume" };
@@ -1012,6 +1041,11 @@ static void media_start(const char *url0, const char *url1, int announce, int st
 
 static int ble_mode = BLE_ACTIVE;       /* lock held */
 
+/* The proxy only while its feature is on (issue #152).  Off, the device info names none and every request of it is
+ * refused; switching it closes the links (entities_changed), and the last client leaving ends the scan and the
+ * connections below, as Home Assistant leaving does */
+static int bt_proxy(void) { return ble_present() && settings_bt_proxy(); }
+
 static int ble_subscribers(void)        /* lock held */
 {
     int n = 0;
@@ -1241,7 +1275,8 @@ static void start(void)
     PB(b, 96);
     tts_expected = 0; tts_url[0] = 0; if (cancelled) cancelled = 2;
     pb_uint(&b, 1, 1);                                  /* start */
-    pb_uint(&b, 3, core_local_wake ? 1 : 3);            /* flags: USE_VAD, plus USE_WAKE_WORD when detection is remote */
+    stt_run = core_local_wake || core_follow_up();
+    pb_uint(&b, 3, stt_run ? 1 : 3);                    /* flags: USE_VAD, plus USE_WAKE_WORD when detection is remote (not for a follow-up) */
     /* audio settings: neutral.  Home Assistant ignores them today; the gain is applied here (micgain.h), and absent they
      * would read as volume multiplier 0 should it ever start using them */
     { PB(as, 8); pb_float(&as, 3, 1.0f); pb_varint(&b, 4 << 3 | 2); pb_varint(&b, as.n); pb_raw(&b, as.p, as.n); }
@@ -1331,8 +1366,9 @@ static void on_event(const unsigned char *p, const unsigned char *end)
     if (type == EV_RUN_START || type == EV_ERROR) cancelled = 0;
     /* "Last heard" and "Last reply": a new request clears both, so the same request said twice is a change Home Assistant
      * records (it drops a state equal to the last).  With the wake word at Home Assistant a run is open long before anyone
-     * speaks, and one listens beside each reply (main.c wake_listen): there the request starts at the wake word */
-    int fresh = core_local_wake ? type == EV_RUN_START : type == EV_WAKE_END;
+     * speaks, and one listens beside each reply (main.c wake_listen): there the request starts at the wake word.  A
+     * follow-up to a question has no wake word stage, so it starts at RUN_START there too */
+    int fresh = stt_run ? type == EV_RUN_START : type == EV_WAKE_END;
     if (listed(KEY_LAST_HEARD) && (fresh || type == EV_STT_END || type == EV_TTS_START)) {
         if (type != EV_TTS_START) { state_text(last_heard, sizeof last_heard, type == EV_STT_END ? said : ""); send_setting(KEY_LAST_HEARD); }
         if (type != EV_STT_END) { state_text(last_reply, sizeof last_reply, type == EV_TTS_START ? said : ""); send_setting(KEY_LAST_REPLY); }
@@ -1342,10 +1378,12 @@ static void on_event(const unsigned char *p, const unsigned char *end)
     case EV_STT_START:  core_set_state(LISTENING); break;
     case EV_VAD_END:    core_mic_off(); if (core_state() == LISTENING) core_set_state(THINKING); break;
     case EV_STT_END:    fprintf(stderr, "transcript: %s\n", text);
-        if (core_transcript(text)) break;                   /* "stop" to a ring or music: the run is cancelled */
+        /* "stop" to a ring or music: the run is cancelled, and the word is not put on the screen (what showed goes) */
+        if (core_transcript(text)) { screen_words(SCREEN_WORDS_RUN, NULL); break; }
+        screen_words(SCREEN_WORDS_HEARD, said);
         core_mic_off(); if (core_state() == LISTENING) core_set_state(THINKING); break;
     case EV_INTENT_END: if (cont) core_restart_after(); break;
-    case EV_TTS_START:  fprintf(stderr, "reply: %s\n", text); break;
+    case EV_TTS_START:  fprintf(stderr, "reply: %s\n", text); screen_words(SCREEN_WORDS_REPLY, said); break;
     case EV_INTENT_PROGRESS: if (!stream_now) break;    /* streaming TTS: the URL from RUN_START can be fetched already */
         /* fall through */
     case EV_TTS_END:
@@ -1378,6 +1416,7 @@ static void on_event(const unsigned char *p, const unsigned char *end)
 
 static void on_timer(const unsigned char *p, const unsigned char *end)
 {
+    /* VoiceAssistantTimerEventResponse: event_type, timer_id, name, total_seconds, seconds_left, is_active */
     struct pbf f; unsigned type = 0, total = 0, left = 0, active = 0; char tname[64] = "", id[40] = "";
     while (pb_next(&p, end, &f)) {
         if (f.field == 1) type = f.v; else if (f.field == 2 && f.data) pbf_str(&f, id, sizeof id);
@@ -1443,7 +1482,7 @@ static void send_device_info(void)
     pb_str(&b, 6, board.model); pb_str(&b, 8, board.project); pb_str(&b, 9, VERSION);
     pb_str(&b, 12, "Amazon"); pb_str(&b, 13, core_name);
     if (core_web_port) pb_uint(&b, 10, core_web_port); /* webserver_port: HA links the device page to http://<host>:<it> */
-    if (ble_present()) { pb_uint(&b, 11, 5); pb_uint(&b, 15, BLE_FEATURES); pb_str(&b, 18, ble_mac()); }    /* 11: legacy "active connections" */
+    if (bt_proxy()) { pb_uint(&b, 11, 5); pb_uint(&b, 15, BLE_FEATURES); pb_str(&b, 18, ble_mac()); }    /* 11: legacy "active connections" */
     pb_uint(&b, 17, FEAT_VOICE | FEAT_API_AUDIO | FEAT_TIMERS | FEAT_ANNOUNCE | FEAT_START_CONVERSATION);      /* no SPEAKER: see top */
     pb_uint(&b, 19, 1);                                 /* api_encryption_supported */
     pb_uint(&b, 26, !have_key);                         /* api_encryption_provisionable: Home Assistant sets the key */
@@ -1658,19 +1697,20 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case VA_SET_CONFIG:    if (core_local_wake) on_va_set_config(p, end); break;
     case MEDIA_PLAYER_COMMAND: on_mp_command(p, end); break;
     case BLE_SUBSCRIBE: case BLE_UNSUBSCRIBE:
-        if (c < 0 || !ble_present()) break;
+        if (c < 0 || !bt_proxy()) break;
         clients[c].ble = type == BLE_SUBSCRIBE;         /* flags ignored: raw advertisements are all we send */
         ble_update(); if (type == BLE_SUBSCRIBE) send_scanner_state();
         break;
     case BLE_SCANNER_SET_MODE:
+        if (!bt_proxy()) break;
         ble_mode = BLE_PASSIVE;                         /* the zero value: an empty message */
         while (pb_next(&p, end, &f)) if (f.field == 1 && f.v == BLE_ACTIVE) ble_mode = BLE_ACTIVE;
         ble_update(); send_scanner_state();
         break;
-    case BLE_CONN_FREE_REQ: if (c >= 0 && ble_present()) { clients[c].ble_free = 1; send_slots(1); } break;
+    case BLE_CONN_FREE_REQ: if (c >= 0 && bt_proxy()) { clients[c].ble_free = 1; send_slots(1); } break;
     case BLE_DEVICE_REQ: case BLE_SERVICES_REQ: case BLE_READ_REQ: case BLE_READ_DESC_REQ: case BLE_WRITE_REQ:
     case BLE_WRITE_DESC_REQ: case BLE_NOTIFY_REQ:
-        if (ble_present() && c >= 0) { clients[c].ble_user = 1; on_ble_request(type, p, end); }
+        if (bt_proxy() && c >= 0) { clients[c].ble_user = 1; on_ble_request(type, p, end); }
         break;
     case SET_KEY_REQ: {
         /* Without a key: from an encrypted (zero-PSK) connection only, so the key never crosses the network readable.
@@ -1787,9 +1827,10 @@ done:
     clients[slot].fd = -1; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = clients[slot].ha_states = 0; n = 0;
     ble_update();
     if (!ble_subscribers()) {                           /* nobody left to use them */
-        int users = 0; uint64_t a[BLE_MAX_CONN];
+        int users = 0;
         for (int i = 0; i < MAX_CLIENTS; i++) users += clients[i].fd >= 0 && (clients[i].ble_free || clients[i].ble_user);
-        if (!users) for (int i = 0, k = ble_connections(a); i < k; i++) ble_disconnect(a[i]);
+        /* a connect still queued too: ble_connections() lists it only once ble.c's thread took it */
+        if (!users) ble_disconnect_all();
     }
     memset(&clients[slot].tx, 0, sizeof clients[slot].tx); memset(&clients[slot].rx, 0, sizeof clients[slot].rx);
     for (int i = 0; i < MAX_CLIENTS; i++) n += clients[i].fd >= 0;

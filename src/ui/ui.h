@@ -7,6 +7,8 @@
  *   drawer.c   the drawer pulled down from the top edge over anything: home, the face, music, Do not disturb, screen
  *              off, what plays, the volume
  *   music.c    Music Assistant: now playing, the queue, the library, search, the speakers and their groups
+ *   words.c    what was said, the reply and the timers, on a see-through layer of their own over everything but the
+ *              drawer (scene.h scene_words)
  *
  * Sizes are in units of the Echo Show 5's layer (960 x 470 with a 10-row band): U(x) scales them to the screen.
  */
@@ -122,6 +124,27 @@ struct face { struct anim ew, lh, rh, gx, gy, mw, mh, ma, cr, cg, cb, br; long l
 struct drawer { float pos, t, grab, vy; long long ty; int pulling, from_app, go; char from[96], go_pkg[96];
                 long long vol_sent_at; int vol_drag; float vol_frac; };
 
+/* ---------------------------------------------------------------- words.c's model */
+
+#define WTIMERS 8
+/* a running timer: end on our clock (active), left in ms (paused) */
+struct wtimer { char name[64]; int total, active; long long end, left; };
+struct words {
+    int on, timers_on, hold_s;                  /* "wo": the settings */
+    char heard[1024], reply[1024]; int idle; long long idle_at;     /* "wh", "wr", "ws" */
+    struct wtimer t[WTIMERS]; int nt; unsigned tl_seq;   /* "tl" */
+    unsigned ver;                               /* what hassmic told changed */
+    int pic; unsigned pic_ver, pic_secs;        /* what the layer's picture shows: which, of which version, which seconds */
+    float alpha; long long alpha_at;
+    int shown, timers_hidden;                   /* shown: the layer is up (scene_words); timers_hidden: tapped away until
+                                                   the list changes */
+    struct rect stop;                           /* a ringing timer's Stop, where it was drawn (the layer's = ours) */
+    char ring_from[96];                         /* the app a ring brought our screen up over: back to it after */
+    long long ring_at; int own_was, solid;      /* ring_at: when it was asked for (again every 10 s while the app keeps
+                                                   the front); own_was: own_asked before it; solid: faded in past half */
+    int grab;                                   /* the panel (android.c): -1 cannot be taken, 0 Android's, 1 ours */
+};
+
 /* ---------------------------------------------------------------- the scene */
 
 struct scene {
@@ -138,7 +161,7 @@ struct scene {
     struct scroller *prev[NSCROLL]; int nprev;          /* the last frame's: one not drawn again stops (its fling) */
     /* the satellite */
     struct { long long at; int on; } pat[32];
-    int level, mute, dnd, oobe, h12, evol; float lux;
+    int level, mute, dnd, oobe, h12, evol;
     char name[64], timers[256], peer[64], home[96], act[64], web[96];
     /* music as Sendspin tells it (scene.h: mt, mp, mc, art) */
     int music, mstate, mspeed, mvol, mmuted, mrepeat, mshuffle; long long mpos, mdur, mpos_at;
@@ -160,8 +183,9 @@ struct scene {
     struct face face;
     struct drawer dr;
     struct music m;
+    struct words wd;
     /* touch */
-    int down, x0, y0, x, y, edge, fired, longd, dragging, slide; long long t0; struct scroller *sc; int sc_drag, sc_axis;   /* slide: on a slider, not decided yet; longd: 2 held long, 1 and taken (or let go of: no tap) */
+    int down, x0, y0, x, y, edge, fired, longd, dragging, slide, wtap; long long t0; struct scroller *sc; int sc_drag, sc_axis;   /* slide: on a slider, not decided yet; longd: 2 held long, 1 and taken (or let go of: no tap) */
     unsigned rnd;
 };
 
@@ -176,6 +200,9 @@ void grad(struct scene *s, int id, struct rect r, uint32_t top, uint32_t bottom)
 /* text with its top at y; align 0 left of x, 1 centred on it, 2 right of it; its width (0: none) */
 int  text(struct scene *s, int id, const char *str, float px, int bold, float maxw, float x, float y, int align, uint32_t rgb, int alpha);
 int  text_width(struct scene *s, const char *str, float px, int bold, float maxw);
+/* the mask of a text from the cache (NULL: none), for drawing outside the display list (words.c's layer) */
+const struct ui_text *text_mask(struct scene *s, const char *str, float px, int bold, float maxw);
+int  text_measure(struct scene *s, const char *str, float px, int bold);   /* its whole width, uncut */
 /* an image: drawn scaled to w x h with rounded corners (rad); one of the image cache is asked for when missing: 1 drawn */
 int  image(struct scene *s, int id, const struct ui_image *im, float x, float y, float w, float h, float rad);
 const struct ui_image *img_get(struct scene *s, const char *key, int px);
@@ -190,6 +217,7 @@ void clip_push(struct scene *s, struct rect r, struct rect *saved);
 void clip_pop(struct scene *s, struct rect saved);
 void scroll_area(struct scene *s, struct rect r, struct scroller *sc, int axis, float content);
 void scroll_to(struct scroller *sc, float pos);
+int  on_its_way(const struct scene *s);                        /* an app launched, not in front yet */
 int  home_pending(void);                                       /* the page picked another home app, not applied yet */
 void ask_own(struct scene *s);                                 /* the face or the music asked for: the home app not brought
                                                                   over it, nor a choice the page made meanwhile (Home's) */
@@ -242,6 +270,11 @@ void drawer_pull(struct scene *s, int y, int ev);               /* the top edge'
 int  drawer_open(const struct scene *s);
 void drawer_close(struct scene *s, int back_to_app);
 void drawer_close_now(struct scene *s);                        /* gone at once, nothing launched */
+
+/* words.c */
+int  words_msg(struct scene *s, const char *cmd, const char *a);   /* 1: one of its messages (wo wh wr ws tl) */
+int  words_shown(const struct scene *s);                           /* the layer is up over our own screen: its touches */
+void words_tap(struct scene *s, int x, int y);                     /* a tap on it */
 
 /* music.c */
 void music_view(struct scene *s, float dt, int *moving, long long *due);

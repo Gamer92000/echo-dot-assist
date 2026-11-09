@@ -204,14 +204,17 @@ const PAGES = [
   { id: 'models', title: 'Models', icon: 'box', nav: 'All your Echos', always: true, intro: 'Amazon\'s extra wake words and models, microWakeWord\'s models and your light ring designs: fetched, copied between Echos, kept on file.' },
   { id: 'system', title: 'System', icon: 'sliders', nav: 'This Echo\'s system', groups: ['System'], always: true, intro: 'This Echo\'s name and network, updates, backups and troubleshooting.' },
 ];
-const MOVED = { light_band: 'screen', arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
+const BRIGHTNESS = ['screen_brightness_auto', 'screen_brightness', 'screen_brightness_adjust'];      // the Show's backlight
+const WORDS = ['screen_text', 'screen_text_seconds', 'screen_timers'];            // the screen UI's words.c
+const MOVED = { light_band: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen',
+  screen_text: 'screen', screen_text_seconds: 'screen', screen_timers: 'screen', arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
 // The cards of a settings page: [title, settings...].  A setting not named here (a new one, or a model's own) comes
 // last, in a card of its own, so nothing is ever lost from the page
 const LAYOUT = {
   voice: [['Microphone', 'mic_level', 'noise_reduction'], ['Mute and wake sound removal', 'mute', 'do_not_disturb', 'wake_sound_removal'],
-          ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any']],
+          ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening'], ['Action button', 'multi_press'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any']],
   wake: [['Engine', 'wake_engine'], ['How it hears you', 'speech_language', 'wake_word_adaptation']],
-  lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band']],
+  lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band'], ['Screen', ...BRIGHTNESS]],
 };
 
 // help: what it does, in the user's terms.  ha: also in Home Assistant (true), or for features the entities it adds.
@@ -236,14 +239,22 @@ const HELP = {
     status: () => timerSoundBox().el },
   wake_word_in_request: { help: 'Sends the wake word to Home Assistant too: speech-to-text hears "Alexa, turn on the light" instead of "turn on the light". Speech-to-text then gets the whole sentence: nothing of your first word can be cut off, and no stray end of the wake word turns up in front of the command. Meant for an AI (LLM) conversation agent, which takes the sentence either way. Home Assistant\'s built-in sentences may not recognise a command with the wake word in front; with "Prefer handling commands locally" such commands then go to the agent. "<wake word>, stop" still stops a ringing timer or music, and the wake word with nothing after it still ends quietly. No effect with Home Assistant\'s wake word engine. Off by default.' },
   end_of_request: { tag: 'Experimental', help: 'Lets the Echo end a request once the person who said the wake word stops talking, not when the room goes quiet. Home Assistant ends a request on silence, so with others talking in the room it stays open and speech-to-text writes down their words after your command. The Echo knows how loud you said the wake word: quieter voices (from about 17, 14 or 11 dB under yours) no longer keep the request open, and on the Echo Dots Amazon\'s own speech detector keeps the dishes or a kettle from doing so. Relaxed waits 1.25 s after you stop, Normal 0.7 s, Aggressive 0.45 s and lets in the least of the others. It cannot tell a voice as loud as yours, and if you turn away or drop your voice mid-sentence it may end too soon: start with Relaxed. Home Assistant\'s own end still applies, so a request never runs longer than before. ESPHome only. Off by default.' },
+  multi_press: { help: 'Press the action button twice quickly to skip to the next track, three times to go back to the previous one, for Music Assistant and for a phone over Bluetooth. With nothing playing (or the assistant busy) it acts as a single press. The price: a single press waits about half a second to see whether another follows, so the assistant starts, and music pauses, a moment later than without. Home Assistant\'s "Button" event hears whatever acts as a single press, never a skip. Off by default.' },
   stop_ends_listening: { help: 'Makes "<wake word>, stop" mean "be quiet". An Echo that woke up by mistake (the TV, someone talking in the room) listens for up to 15 seconds, and Home Assistant carries out whatever it heard. With this on, "<wake word>, stop" ends that at once: the Echo stops listening and nothing of it reaches Home Assistant, and when it hears both words together it does not start at all. A ringing timer, a reply, a Drop In call and music on this Echo stop as before. The cost: "<wake word>, stop the timer" no longer reaches Home Assistant (say "<wake word>, cancel the timer"), media Home Assistant plays elsewhere is paused with "<wake word>, pause" instead, and now and then the engine hears "stop" in a short command (about 2 in 350): that command is lost, say it again. Off by default.' },
   timer_stop_any: { help: 'While a timer rings, whatever you say after the wake word stops it. That goes for any language and however you put it ("Alexa, stop the timer", "Alexa, Ruhe"). Without it only "stop" does, and "stop the timer" goes to Home Assistant, which has forgotten the finished timer and says none is running. The cost: a question during a ring ("how long is left on the pasta timer?") is not answered, it only stops the ring. Off by default.' },
   equalizer_bass: { ha: true }, equalizer_mid: { ha: true }, equalizer_treble: { ha: true },
+  music_duck: { help: 'How far the music is turned down from the moment the wake word is heard until the reply has ended, for Music Assistant and for a phone over Bluetooth. Raise it if the Echo has trouble understanding you over loud music or an audiobook (the music is quieter in your voice, so speech-to-text hears you better); 60 is silence. 0 turns ducking off. Default 16 dB.' },
   speaker_gain: { help: 'Makes the Echo\'s own speaker louder at every volume, for an Echo that is too quiet at full volume. It raises the amplifier stage in front of the speaker, which a stock Echo leaves at +0 dB (an Echo Dot 3\'s amplifier has only 2 dB more to give; an Echo Show 5 goes in steps of 1.5 dB, the nearest one to what you pick). Owners of an Echo Dot 2 heard +6 dB loud and clean at full volume; above that, loud music near full volume can distort, and a speaker that plays distorted for long can be damaged. Raise it a step at a time and turn it down at the first crackle. The 3.5 mm jack and Bluetooth speakers are not affected. An Echo Show 8 (1st gen) is loud already at +0 dB and goes down to −6 dB for that; a 2nd gen goes up to +9 dB, below where its amplifier distorts. Default +0 dB.' },
   even_volume: { help: 'Makes every step of the volume the same: each point is 0.5 dB, each press of the volume buttons 5 dB, from 1 (quiet, about 50 dB under full) to 100 (as loud as before). Without it the Echo plays a volume as a stock Echo does, where most of the change happens at one end: on an Echo Show the bottom half covers more than twice the range of the top half, and a step of one point often does nothing at all. The Echo keeps its own volume setting at the nearest step above, and turns the sound down the rest of the way itself. 0 is silent either way. A Bluetooth speaker that sets its own volume still does. Exported with the settings. On by default.' },
   led_auto_brightness: { ha: true, help: 'The ring dims and brightens with the room, from the Echo\'s light sensor and Amazon\'s own curve, as on a stock Echo.' },
   led_brightness: { ha: true, help: 'A fixed brightness for the ring. Setting one turns auto brightness off.' },
+  screen_brightness_auto: { ha: true, help: 'The screen dims and brightens with the room, on Amazon\'s own curve from the Echo\'s light sensor, as "Adaptive brightness" on a stock Echo Show does. That curve is dark: under about 5 lux the screen is barely lit, and it is near full brightness only from about 100 lux. If it is too dim for you, raise "Adaptive brightness adjustment", as you would move the slider on a stock Echo Show. Off by default: the screen stays at "Screen brightness".' },
+  screen_brightness: { ha: true, help: 'How bright the screen is with adaptive brightness off. Default 47 %, what the Echo ran at before this setting existed. With Kiosk Satellite installed, the Echo switches off the app\'s own adaptive brightness, so these settings set the screen.' },
+  screen_brightness_adjust: { ha: true, help: 'With adaptive brightness on: Amazon\'s curve brighter (up to +100) or dimmer (down to −100), as the brightness slider moves it on a stock Echo Show in adaptive mode. At +100 a dark room\'s near-black screen is about as bright as 55 % without adaptive. 0 is Amazon\'s curve as it is.' },
   ring_rotation: { ha: true, help: 'Where the light ring\'s fill starts. Home Assistant\'s "Light ring fill" lights that share of the ring in the light\'s colour, for a timer\'s or a washing machine\'s progress or a battery; it fills the way the volume does, from where the volume starts. Turn the start by this many LEDs, so it starts where you want it to for how the Echo stands. Only where the Echo has room for each LED\'s own animations (Home Assistant then lists "Light ring fill"). Default 0.' },
+  screen_text: { help: 'What you said and the assistant\'s reply in large letters over the screen, above the band: your words smaller and grey, the reply white beside a cyan bar, both as large as they fit (a very long reply is cut at the end of the screen). They show over the face, the music and any app, Kiosk Satellite too, but not over the menu pulled down from the top. They appear as speech-to-text and the reply come in, stay while the Echo answers and for 8 seconds after, then fade; the next request takes them away at once. The screen behind them is darkened, so they stay readable over whatever it shows. A tap takes them away, over an app too (the app gets none of those touches while they show). With Wyoming only your words are shown (it tells no reply text). Off by default: what people say appears only where someone wants it to.' },
+  screen_text_seconds: { help: 'How long what you said and the reply stay on the screen once the Echo is idle again, in seconds. 0 keeps them until the next request (or a timer that rings). Default 8.' },
+  screen_timers: { help: 'Timers set on this Echo, on the screen: each one\'s name (or its length) over its time left in large digits with its unit (4:59 min, 1:02:05 h, 45 s) and a bar of what is left, the one that ends first on top; a paused one in grey. When one rings it shows in orange and pulses until it is stopped, with a Stop button. A tap on the timers hides them until the next change, over an app too (the app gets none of those touches while they show). The screen stays on while timers show. What you said and the reply (Speech on screen) go before them while they show. Off by default.' },
   light_band: { help: 'The Echo Show has no light ring: it shows the ring\'s lights as a band along the bottom of the screen, as Alexa did. That is listening, thinking, mic off, calls, volume, timers and Home Assistant\'s "Light ring". This many pixels at the bottom are kept for it, so an app on the screen never has the band over it. 0 gives the whole screen to the apps and shows no band. Default 10, stock\'s line.' },
   bluetooth_announcements: { help: 'Says "Connected to …" and "Disconnected from …" when a phone connects, in your voice assistant\'s voice, after the chime. Home Assistant speaks the words, and only once "Allow the device to perform Home Assistant actions" is ticked in this Echo\'s ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure); without it there is the chime only.' },
   bluetooth_announcement_language: { help: 'The language of those sentences. Home Assistant does not tell the Echo which language your voice assistant speaks, so pick the one that matches its voice.' },
@@ -377,6 +388,7 @@ const HELP = {
   wifi_motion: { icon: 'wifi', tag: 'Experimental', ha: ['Wi-Fi motion', 'Wi-Fi motion sensitivity'], help: 'A motion sensor without extra hardware. Someone walking between the Echo and your Wi-Fi router changes how the Echo receives the router. It shows motion, not presence, sees best along that path, and other Wi-Fi traffic can set it off.' },
   wifi_motion_sensitivity: { parent: 'wifi_motion', help: 'How much the signal has to change to count as motion. Higher catches more, with more false alarms.' },
   light_sensor: { icon: 'sun', ha: ['Illuminance'], help: 'The room\'s light in lux from the Echo\'s light sensor, for automations. With this on, "LED brightness" in Home Assistant also follows the ring while auto brightness moves it, which puts an entry in its logbook every few minutes. Off, auto brightness works the same; Home Assistant only sees the levels you set.' },
+  bluetooth_proxy: { icon: 'bt', ha: ['the Bluetooth proxy'], help: 'Home Assistant hears Bluetooth devices near the Echo through it, as through an ESPHome Bluetooth proxy: their advertisements for sensors and trackers, and connections to up to 3 devices at a time. Off, Home Assistant gets no Bluetooth from this Echo and the Echo stops scanning; disabling its Bluetooth entries in Home Assistant does not. Phones, a Bluetooth speaker and the setup from a phone work either way.' },
   bluetooth_audio: { icon: 'phone', ha: ['Bluetooth pairing'], help: 'Phones can pair with the Echo and play music on it (SBC, AAC, aptX). Start pairing with the "Bluetooth pairing" switch in Home Assistant; the ring shows a blue chaser meanwhile. Phones paired before still connect while this is off.' },
   bluetooth_speaker_delay: { parent: 'bluetooth_speaker', step: 10, help: 'How much later the speaker plays than the Echo would, so Music Assistant keeps it in step with your other players. Raise it if this speaker lags behind them, lower it if it runs ahead. Each speaker differs; the Echo keeps one value.' },
   bluetooth_speaker_keep_awake: { parent: 'bluetooth_speaker', help: 'For speakers that cut off the first word of every reply. Many switch their amplifier off while the Echo is silent and need half a second to switch it on again. With this on the Echo plays a 20 Hz tone too low and too quiet to hear under everything, so the speaker never hears silence. Leave it off if your speaker plays replies whole.',
@@ -409,15 +421,23 @@ const SUB = {
   wake_word_in_request: 'Speech-to-text hears the wake word too',
   end_of_request: 'A request ends when you stop, not when the room is quiet',
   stop_ends_listening: '"<wake word>, stop" cancels a false wake',
+  multi_press: 'Press twice for next, three times for previous',
   timer_ring: 'How long a finished timer rings',
   timer_sound: 'What a finished timer plays',
   timer_stop_any: 'Anything said after the wake word stops the ring',
   speaker_gain: 'For an Echo too quiet at full volume',
   even_volume: 'Each volume step as big as the next',
+  music_duck: 'How far music drops while the assistant listens or speaks',
   led_auto_brightness: 'Follows the room\'s light, as on a stock Echo',
   led_brightness: 'A fixed level; turns auto brightness off',
+  screen_brightness_auto: 'Follows the room\'s light, as on a stock Echo Show',
+  screen_brightness: 'The level with adaptive brightness off',
+  screen_brightness_adjust: 'Brighter or dimmer than Amazon\'s curve, with adaptive on',
   ring_rotation: 'Where "Light ring fill" starts',
   light_band: 'Pixels kept for the band along the bottom of the screen',
+  screen_text: 'What you said and the reply, in large letters on the screen',
+  screen_text_seconds: 'How long the words stay after the reply; 0: until the next request',
+  screen_timers: 'Running timers counted down, a ringing one in orange',
   bluetooth_announcements: 'Says when a phone connects or disconnects',
   bluetooth_announcement_language: 'The language of those sentences',
   sendspin_unpaired: 'Any Music Assistant server may play here',
@@ -441,6 +461,7 @@ const SUB = {
   wifi_motion: 'A motion sensor from changes in the Wi-Fi signal',
   wifi_motion_sensitivity: 'Higher catches more, with more false alarms',
   light_sensor: 'The room\'s light in lux, for automations',
+  bluetooth_proxy: 'Home Assistant hears Bluetooth devices near the Echo',
   bluetooth_audio: 'Phones can pair and play music on the Echo',
   bluetooth_speaker: 'Plays everything on a Bluetooth speaker instead',
   bluetooth_speaker_delay: 'Keeps the speaker in step with your other players',
@@ -1155,7 +1176,12 @@ const PAGE_BUILD = {
     el.append(flow(cards));
   },
   lights: (el, list) => { el.append(flow(settingCards(list, 'lights'))); buildRing(el); },
-  screen: (el, list) => el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.map(settingRow))])),   // ring.js: the designs and where they show
+  screen: (el, list) => {      // ring.js: the designs and where they show
+    const bright = list.filter((s) => BRIGHTNESS.includes(s.name)), words = list.filter((s) => WORDS.includes(s.name));
+    el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.filter((s) => !bright.includes(s) && !words.includes(s)).map(settingRow)),
+      bright.length ? titled('Brightness', bright.map(settingRow)) : null,
+      words.length ? titled('Words and timers', words.map(settingRow)) : null].filter(Boolean)));
+  },
   media: (el, list) => {
     const parent = (k) => (HELP[k.name] || {}).parent, plain = list.filter((x) => !x.feature && !parent(x));
     const music = plain.filter((x) => x.group === 'Music'), bt = plain.filter((x) => x.group !== 'Music');

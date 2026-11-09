@@ -40,8 +40,9 @@ with a clock (36EBT3) is another model, and not supported. Every other Echo, and
 > unlocks with their exploits for MediaTek's chips ([amonet](https://github.com/R0rt1z2/amonet),
 > [kamakiri](https://github.com/R0rt1z2/kamakiri), saiyaku), their bootloader payload
 > [kaeru](https://github.com/R0rt1z2/kaeru) and TWRP as they ported it to each model, and their XDA threads walk
-> through the unlock and root.
-> The setup runs the packages you download from those threads. Without them none of this would run on an Echo.
+> through the unlock and root. Without them none of this would run on an Echo.
+> The unlock and boot-root you do by hand, as the model's thread says: R0rt1z2 asks that they are never run from an
+> installer or a script, so the setup sends you to the thread, waits, and checks the Echo before it goes on.
 
 ## What you get
 
@@ -60,6 +61,7 @@ with a clock (36EBT3) is another model, and not supported. Every other Echo, and
 | Do not disturb, equalizer, ring brightness | Alexa app                   | [entities in Home Assistant](docs/GUIDE.md#in-home-assistant) |
 | Buttons and light ring in automations   | –                              | [an event and a light in Home Assistant](docs/GUIDE.md#buttons-and-light-ring) |
 | Light ring animations of your own       | –                              | [drawn on the settings page](docs/GUIDE.md#buttons-and-light-ring), for each of the Echo's |
+| Echo Show: your words, the reply and timers on screen | Alexa's screens | [large letters over the screen](docs/GUIDE.md#the-screen-echo-show), experimental |
 | Louder speaker (Echo Dot 2, Echo 2, Echo Dot 3) | –                      | [up to +12 dB](docs/GUIDE.md#settings-page) on the settings page (Echo Dot 3: +2 dB) |
 | Sound detection (smoke alarm, glass, …) | Alexa Guard, checked in the cloud | [on the Echo](docs/GUIDE.md#sound-detection), less reliable |
 | Whisper detection                       | answers in a whisper           | [a sensor](docs/GUIDE.md#whisper-detection) for your conversation agent |
@@ -104,10 +106,9 @@ by side to copy settings and wake words between them, the log. A press of the ac
   USB stick works), with `adb`, `fastboot`, `python3`, `make`, `unzip`, `debugfs` (e2fsprogs), and free disk:
   about 7 GB for an Echo Show (a 16 GB stick), under 1 GB for the others, 5 GB more to build here instead of taking
   GitHub's build (8 for an Echo Input). On a live USB stick the session's own disk is RAM: keep the repository on a drive.
-  The setup offers to install what is missing. An **Echo Dot 2**, or any Echo that is **unlocked already**, can also
-  be set up from **Windows**: Git Bash (Git for Windows, with its `unzip` and `curl`), `adb` (platform-tools) and
-  `python3`; for the Dot 2's unlock also `fastboot`, [uv](https://docs.astral.sh/uv/) and
-  [firebreak's two USB drivers](https://github.com/bboe/firebreak#windows).
+  The setup offers to install what is missing. An Echo that is **unlocked already** (by hand, as its XDA thread
+  says) can also be set up from **Windows**: Git Bash (Git for Windows, with its `unzip` and `curl`), `adb`
+  (platform-tools) and `python3`.
 - **Home Assistant** with a working Assist pipeline (speech to text, conversation agent, text to speech). Try it in the
   app first. Optional: Music Assistant (tested with 2.10.4).
 - **Wi-Fi** with a WPA2 password or none (no captive portal, no enterprise login) that reaches Home Assistant.
@@ -123,8 +124,9 @@ scripts/setup.sh
   <img alt="The setup's steps: on your PC (tools, downloads, USB access), into the Echo (USB cable, unlock, stock firmware, root; this wipes it and is skipped on a rooted Echo), build (or GitHub's build), onto your network (lock down and join Wi-Fi, install). Then add it in Home Assistant." src="docs/img/install-light.svg">
 </picture>
 
-One guided run for every supported model. It does everything itself and stops only when you have to act: download a
-file (it picks it up from `~/Downloads`), plug a cable or solder, hold a button, type the Wi-Fi password. It wipes the
+One guided run for every supported model. It does everything itself but the unlock, which you do by hand as the
+model's XDA thread says (it shows you the thread and checks the Echo afterwards), and stops only when you have to act:
+download a file (it picks it up from `~/Downloads`), plug a cable or solder, unlock, type the Wi-Fi password. It wipes the
 Echo, so it asks for a typed `yes` first.
 
 - **Stopped?** Ctrl-C any time; the next run continues where it left off. When a step fails it shows why and offers to
@@ -132,10 +134,9 @@ Echo, so it asks for a typed `yes` first.
 - **Nothing to compile** on a commit GitHub has built (every push to `main` and `release`): the setup takes that build,
   checked against the project's key, and skips the 1 GB Android NDK.
 - **Already rooted** on the right firmware? It offers a shortcut: no unlock, no wipe.
-- **Windows**: run `scripts/setup.sh` in Git Bash, with GitHub's build of a published commit. An Echo Dot 2 it
-  unlocks there too, with [firebreak](https://github.com/bboe/firebreak); other models it takes unlocked already (on
-  adb, in Fire OS or TWRP) and does everything after the unlock. **New to command lines? [Echo Dot 2 from Windows,
-  step by step](docs/WINDOWS.md)**, every command to paste and what each step asks of you.
+- **Windows**: run `scripts/setup.sh` in Git Bash, with GitHub's build of a published commit. It takes an Echo
+  unlocked already (on adb, in Fire OS or TWRP) and does everything after the unlock. **New to command lines? [An Echo
+  from Windows, step by step](docs/WINDOWS.md)**, every command to paste and what each step asks of you.
 - **More Echos**: `--restart` starts over for the next one, `--preset hassmic-settings.conf` gives it the settings
   exported from another.
 - `--dry-run` shows every command without running one; `--from <step>` skips ahead.

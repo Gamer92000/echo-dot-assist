@@ -90,8 +90,8 @@ bursts of 8 with only the best fed to the filter (spec #303, 2026-10-21, after 1
 
 Tested: `tests/fake_ma_sendspin.py` against 10.2.1 and, with `--legacy`, 9.1.1, both strict
 (`allow_noncompliant_clients=False`), so any flag fails the test; `tests/fake_screen.py` (metadata, artwork) against
-10.2.1, strict too. Not run: a real MA 2.10.8; fragments; a volume change
-during a re-handshake.
+10.2.1, strict too. Not run: a real MA 2.10.8; Sendspin's fragments (E9; WebSocket continuation frames are, in
+`tests/unit/ws_ref.py`); a volume change during a re-handshake.
 
 ## 1. Connection establishment
 Transport is always plain `ws://` (spec:165); security is Noise inside the WebSocket.
@@ -153,7 +153,9 @@ with `playback` declared; MUST be persisted). Later `server/activate` updates do
 - Sizes: a Noise message is <= 65535 bytes, so every post-handshake WS message is <= 65535 bytes (use the 16-bit
   extended length; 64-bit lengths only needed defensively). 25 ms PCM 48k/16/2 chunk = 9 + 4800 + 16 = 4825 bytes.
   The LIB reassembles up to 64 MiB of Sendspin fragments (`noise/wire.py:21`), irrelevant for a player.
-- WS-level fragmentation (continuation frames) is legal (spec:334); aiohttp normally sends whole frames (**UNVERIFIED**).
+- WS-level fragmentation (continuation frames) is legal (spec:334); aiohttp never sends it (3.14.3's
+  `_websocket/writer.py` sets FIN on every frame). `ws.c` joins it anyway, answering pings in between
+  (`tests/unit/ws_ref.py`, frames written by hand).
 - JSON produced by the LIB is compact (orjson) and, because of dataclass field order, serialises as
   `{"payload":{...},"type":"..."}` - **`type` comes after `payload`** (derived from `noise/models.py:26-31`; not
   executed). Never depend on key order. Explicit `null` values occur (`"controller":null`, metadata fields).

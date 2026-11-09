@@ -4,7 +4,8 @@ the page is told which sounds there are, which of Alexa's this "firmware" has (s
 long each may be; Alexa's handed out as a WAV for the page's loudness match; uploads only as the page makes them and
 within each sound's length; "Play"; the wake word playing one's own where Alexa's played; a new upload played from the
 next time on; deleting it (Alexa's again); kept over a restart; refused unsigned; a switch per sound, Home Assistant's
-"Wake sound" for the wake sound alone, what an Echo with it off keeps after the update.  The page's loudness check is
+"Wake sound" for the wake sound alone, what an Echo with it off keeps after the update, and an export of then imported
+or given as a preset.  The page's loudness check is
 tests/unit/web_loudness_test.py's."""
 import asyncio, io, json, os, re, signal, struct, subprocess, sys, tempfile, time, urllib.request, wave
 from aioesphomeapi import APIClient, SwitchInfo
@@ -274,6 +275,31 @@ async def main():
         page.set(sound_touch="on"); e.stop()
         e = Echo(old); page = e.page()
         check(setting("sound_touch") and not setting("wake_sound"), "one turned on after that stays on")
+
+        # an export of then (no lines for the switches) imported on the page: the same.  Not a newer export, which lists
+        # them, nor a wake_sound line sent alone (the page's switch)
+        names = ("wake_sound", "sound_touch", "sound_mics_off", "sound_mics_on", "sound_volume", "sound_bluetooth_on", "sound_bluetooth_off")
+        all_on = lambda: page.call("POST", "/api/set", b"".join(f"{k}=on\n".encode() for k in names))
+        all_on()
+        new = page.call("GET", "/api/export")[2].decode().replace("\nwake_sound=on\n", "\nwake_sound=off\n")
+        then = "".join(l for l in new.splitlines(True) if l.split("=")[0] not in names[1:])
+        lines = sum(1 for l in then.splitlines() if "=" in l and not l.startswith("#"))
+        r = json.loads(page.call("POST", "/api/set", then.encode())[2])
+        check(not any(setting(k) for k in names[:5]) and r["applied"] == lines + 4 and not r["errors"],
+              f"an export from before the switches imported: the four off with the wake sound ({r['applied']} for {lines} lines)")
+        check(setting("sound_bluetooth_on") and setting("sound_bluetooth_off") and "sound_volume=off" in open(os.path.join(old, "state", "config")).read(),
+              "Bluetooth's on; saved")
+        r = json.loads(page.call("POST", "/api/set", then.encode())[2])
+        check(r["applied"] == lines and not r["errors"], f"the same again, the four already off: none counted twice ({r['applied']} for {lines} lines)")
+        all_on(); page.call("POST", "/api/set", new.encode())
+        check(not setting("wake_sound") and all(setting(k) for k in names[1:]), "a newer export, its switches on: they stay on")
+        all_on(); page.set(wake_sound="off")
+        check(not setting("wake_sound") and all(setting(k) for k in names[1:]), "wake_sound=off alone: the wake sound alone")
+        # the same file given to scripts/setup.sh --preset (state/preset, applied at start)
+        all_on(); open(os.path.join(old, "state", "preset"), "w").write(then); e.stop()
+        e = Echo(old); page = e.page()
+        check(os.path.exists(os.path.join(old, "state", "preset.applied")) and not any(setting(k) for k in names[:5])
+              and setting("sound_bluetooth_on"), "as a preset: the four off as well")
     finally:
         try: e.stop()
         except Exception: pass

@@ -19,7 +19,8 @@
  *   the target's web key, the browser's key, the nonce and its own name with a key every member derives from K
  *   (arb_web_key); the target checks that with its own copy, uses the nonce up, and approves the browser.  Outside the
  *   network it is the button again.  adb still takes the button of that very Echo.
- *   adb over Wi-Fi (a root shell for the network) takes a press of its own: POST /api/adb "on" waits like a login.
+ *   adb over Wi-Fi (a root shell for the network) takes a press of its own: POST /api/adb "on" waits like a login;
+ *   "off", or the asking browser's login revoked, withdraws it before the press.
  *   Artifacts (artifacts.c): listed, read and written in pieces over signed requests, so a page logged in to two Echos
  *   copies models from one to the other; root installs them.
  *   microWakeWord's models (mww_store.c): listed, added (uploaded whole, checked by loading them), renamed, tuned,
@@ -75,6 +76,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <time.h>
@@ -88,6 +90,7 @@ extern const int web_nassets;
 #define MAX_CLIENTS 32               /* a browser has a key per Echo page it opened, and each Echo may know all of them */
 #define MAX_BODY    16384
 static int LOGIN_MS = 60000;        /* a login waits this long for the button (HASSMIC_LOGIN_MS for the tests) */
+#define REFUSED_MS 3000             /* a refused login is told for this long: the page asks every second while it waits */
 
 static const struct web_hooks *hooks;
 static pthread_mutex_t lk = PTHREAD_MUTEX_INITIALIZER;  /* everything below; never held while taking core_lock */
@@ -100,9 +103,10 @@ static uint8_t sk[32], pk[32];
 #define CTR_WINDOW 64
 static struct client { uint8_t pub[32]; unsigned long long ctr, floor, seen[CTR_WINDOW]; int nseen; char label[64]; } clients[MAX_CLIENTS];
 static int nclients;
-/* what waits for the button: a login, or adb for an approved browser.  state: 0 none, 1 waits, 2 approved, 3 refused */
+/* what waits for the button: a login, or adb for an approved browser.  state: 0 none, 1 waits, 2 approved, 3 refused;
+ * at: when it began, end: when it was refused */
 enum { W_LOGIN = 1, W_ADB };
-static struct { uint8_t pub[32]; char label[64]; long long at; int state, kind; } login;
+static struct { uint8_t pub[32]; char label[64]; long long at, end; int state, kind; } login;
 static atomic_int nconn;
 static char start_id[17];           /* new at every start: the page knows a restart from an answer of the old process */
 #define NONCE_MS 120000
@@ -210,10 +214,18 @@ static int voucher(uint8_t out[16], const uint8_t target[32], const uint8_t brow
 static void login_expire(long long now)     /* lk held */
 {
     if (login.state == 1 && now - login.at > LOGIN_MS) {
-        login.state = 3; fprintf(stderr, "web: %s ran out without the button\n", login.kind == W_ADB ? "adb request" : "login");
+        login.state = 3; login.end = now; fprintf(stderr, "web: %s ran out without the button\n", login.kind == W_ADB ? "adb request" : "login");
         if (hooks->attention) hooks->attention(0);
         if (hooks->approved) hooks->approved(0);
     }
+}
+
+/* An adb request that waits goes once adb is closed or the browser that asked is let go: left waiting, the next press
+ * opened adb for 30 min against the owner's last word, and the page kept saying it waited (lk held) */
+static void adb_withdraw(const char *why)
+{
+    login.state = 3; login.end = now_ms(); fprintf(stderr, "web: adb request withdrawn (%s)\n", why);
+    if (hooks->attention) hooks->attention(0);
 }
 
 int web_approve(void)
@@ -221,7 +233,11 @@ int web_approve(void)
     int r = 0;
     pthread_mutex_lock(&lk);
     login_expire(now_ms());
-    if (login.state == 1 && login.kind == W_ADB) {
+    /* the browser that asked pushed out of clients[] meanwhile: logins through other Echos take no press */
+    if (login.state == 1 && login.kind == W_ADB && !client_of(login.pub)) {
+        adb_withdraw("its browser is no longer let in");
+        if (hooks->approved) hooks->approved(0);        /* the press goes on to the assistant, as after one that ran out */
+    } else if (login.state == 1 && login.kind == W_ADB) {
         login.state = 2; r = 2;
         fprintf(stderr, "web: adb over Wi-Fi approved with the button\n");
         if (hooks->attention) hooks->attention(0);
@@ -242,7 +258,12 @@ int web_approve(void)
 static const char *adb_ask(const uint8_t pub[32], int on)
 {
     const char *r; long long now = now_ms();
-    if (!on) { adbwifi_ask(0); return "closed"; }
+    if (!on) {
+        pthread_mutex_lock(&lk);
+        if (login.state == 1 && login.kind == W_ADB) adb_withdraw("closed");
+        pthread_mutex_unlock(&lk);
+        adbwifi_ask(0); return "closed";
+    }
     pthread_mutex_lock(&lk);
     login_expire(now);
     if (login.state == 1 && login.kind == W_ADB && !memcmp(login.pub, pub, 32)) r = "waiting";
@@ -257,16 +278,23 @@ static const char *adb_ask(const uint8_t pub[32], int on)
     return r;
 }
 
-/* "approved", "waiting", "refused" */
+/* "approved", "waiting", "refused".  Approved is what clients[] says: the old record said it to a key revoked or pushed
+ * out since, and the page showed "Logged in" over 401s.  A login that ran out or collided is told once, then the next
+ * ask from that key starts anew: the record stayed until another key asked, and the page keeps one key, so its "Try
+ * again" was refused at once, with nothing on the ring for the button.  Told only within REFUSED_MS of the refusal: a
+ * page still asking (web/app.js, every second) hears of it, one opened again later would have been told "Not
+ * approved" at its first click */
 static const char *login_ask(const uint8_t pub[32], const char *label)
 {
     const char *r; long long now = now_ms();
     pthread_mutex_lock(&lk);
     login_expire(now);
     if (client_of(pub)) r = "approved";
-    else if (login.state && login.kind == W_LOGIN && !memcmp(login.pub, pub, 32)) r = login.state == 1 ? "waiting" : login.state == 2 ? "approved" : "refused";
-    else if (login.state == 1) {                /* two at once: neither */
-        login.state = 3; r = "refused";
+    else if (login.kind == W_LOGIN && !memcmp(login.pub, pub, 32) && (login.state == 1 || (login.state == 3 && now - login.end <= REFUSED_MS))) {
+        r = login.state == 1 ? "waiting" : "refused";
+        if (login.state == 3) login.state = 0;
+    } else if (login.state == 1) {              /* two at once: neither */
+        login.state = 3; login.end = now; r = "refused";
         fprintf(stderr, "web: two logins at once, both refused\n");
         if (hooks->attention) hooks->attention(0);
         if (hooks->approved) hooks->approved(0);
@@ -1041,15 +1069,21 @@ static void log_api(int fd, struct req *r)
 
 /* Online updates come from GitHub: a line of BODY that switches them on (from off) counts only once this Echo reached
  * it (update_probe), else it is turned into a comment and WHY says what failed.  Imports go the same way.  Before
- * core_lock: the probe takes up to 15 s. */
+ * core_lock: the probe takes up to 15 s.  Lines are read as settings_apply_text reads them (its first
+ * SETTINGS_LINE_MAX - 1 bytes, up to a \r, which ends its line; any white space ahead of the name; the choice in any
+ * case, as settings.c parse() takes it): "Beta" passed this gate untouched and switched updates on without the probe,
+ * and so did a line padded past what settings_apply_text keeps of it, the rest of the value cut off there. */
 static void updates_gate(char *body, char *why, size_t cap)
 {
     why[0] = 0;
     for (char *p = body; *p; ) {
-        size_t l = strcspn(p, "\n"); char *k = p + strspn(p, " \t"), v[16];
-        if (!strncmp(k, "online_updates=", 15)) {
-            snprintf(v, sizeof v, "%.*s", (int)strcspn(k + 15, "\r\n"), k + 15);
-            int on = !strcmp(v, update_channels[UPDATE_BETA]) || !strcmp(v, update_channels[UPDATE_RELEASE]);
+        size_t l = strcspn(p, "\n"), m = strcspn(p, "\r\n"); char *k = p, *e, v[16];
+        if (m > SETTINGS_LINE_MAX - 1) m = SETTINGS_LINE_MAX - 1;
+        e = p + m;
+        while (k < e && isspace((unsigned char)*k)) k++;
+        if (e - k >= 15 && !strncmp(k, "online_updates=", 15)) {
+            snprintf(v, sizeof v, "%.*s", (int)(e - k - 15), k + 15);
+            int on = !strcasecmp(v, update_channels[UPDATE_BETA]) || !strcasecmp(v, update_channels[UPDATE_RELEASE]);
             if (on && update_channel(-1) == UPDATE_OFF && (why[0] || update_probe(why, cap))) *k = '#';
         }
         p += l + (p[l] == '\n');
@@ -1089,7 +1123,7 @@ static void handle(int fd)
     else if (!strcmp(r.method, "GET") && !strcmp(r.path, "/api/export")) {
         char t[4096], head[200]; size_t n;
         if (!signed_ok(&r, 0)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
-        n = (size_t)snprintf(t, sizeof t, "# hassmic settings, exported from %s (%s %s)\n# not in it: the Echo's name, keys, pairings\n", core_name, board.model, VERSION);
+        n = (size_t)snprintf(t, sizeof t, SETTINGS_EXPORT_HEAD "%s (%s %s)\n# not in it: the Echo's name, keys, pairings\n", core_name, board.model, VERSION);
         pthread_mutex_lock(&core_lock); n += settings_text(t + n, sizeof t - n, 1); pthread_mutex_unlock(&core_lock);
         snprintf(head, sizeof head, "Content-Disposition: attachment; filename=\"hassmic-settings.conf\"\r\n");
         respond_s(fd, &r, 200, "text/plain; charset=utf-8", head, t, n);
@@ -1148,6 +1182,7 @@ static void handle(int fd)
             memmove(clients + i, clients + i + 1, sizeof clients[0] * (size_t)(nclients - i - 1)); nclients--; found = 1; break;
         }
         if (found) save_clients();
+        if (login.state == 1 && login.kind == W_ADB && !memcmp(login.pub, who, 32)) adb_withdraw("its browser's login revoked");
         pthread_mutex_unlock(&lk);
         fprintf(stderr, "web: a browser's login %s\n", found ? "revoked" : "to revoke not found");
         respond_sjson(fd, &r, 200, found ? "{\"revoked\":true}" : "{\"revoked\":false}");

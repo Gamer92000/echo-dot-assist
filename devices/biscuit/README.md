@@ -38,49 +38,42 @@ whole OS instead of keeping Amazon's audio front end).
 
 XDA thread with the full instructions: [UNLOCK][ROOT][TWRP][UNBRICK] Amazon Echo Dot 2nd gen (2016, biscuit)
 <https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-2nd-gen-2016-biscuit.4761416/>. These files go into
-`firmware/biscuit/` (not in git):
+`firmware/biscuit/` (not in git); the unlock's and the root's own files (`boot-root.zip`) are the thread's: it says
+which, kept current with its procedure, and nothing here downloads or reads them.
 
 | File | Source | sha256 |
 |---|---|---|
-| `amonet-biscuit-v2.0.1.zip` | the XDA thread | `ea9cada067783a0d83f025bdd669fd5689148f555054475c7c70c634c542f3b5` |
-| `boot-root.zip` | the XDA thread (byte-identical to donut's) | `de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0` |
+| `magiskpolicy32` | `lib/armeabi-v7a/libmagiskpolicy.so` of `Magisk-v30.7.apk`, [Magisk v30.7](https://github.com/topjohnwu/Magisk/releases/tag/v30.7) (APK `e0d32d2123532860f97123d927b1bb86c4e08e6fd8a48bfc6b5bee0afae9ebd5`); `scripts/setup.sh` fetches it itself | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
 | `update-kindle-biscuit_puffin-NS65741_user_8146_0013222531716.bin` | [FTVDB](https://ftvdb.com/echo/firmware/com.amazon.biscuit.android.os/8ca06ee4ef2806c974d2944b7fadd543-13222531716-fire-os-6574-1-ns65741-8146-2026-09-17/) | `90832e86498c5e803974c30359aea71c1129757be0ddc59d831a94b27f81487f` |
 
 Use exactly this firmware version, also when the Echo already runs a newer one: hassmic works against its binaries,
 `scripts/setup.sh` only takes the file with this checksum (another version renamed to its name does not pass, issue
 #62), and `scripts/probe.sh` checks the Echo for it. Flashing it during the unlock replaces whatever the Echo ran before.
 
-The unlock is **one script**: unzip the package, run `./fastbrick.sh` (Linux), put the Echo into fastboot mode —
-unplug its power, reconnect while holding the **action button** (the one with the circle) until the ring shows a
-**green LED** (an Echo unlocked before shows a rainbow) — and type `YES` when the script asks. It runs the whole exploit (about a minute, the ring shows
-progress) and reboots the Echo into TWRP (white LED). **Do not interrupt it after the 10-second grace period — that
-can brick the device.** `amonet-biscuit` **v2 writes newer bootloaders and boots Fire OS 6** — the stream the
-pinned firmware belongs to (Fire OS 5 versions do not boot from v2.0.0 on). v2.0.1's kaeru boots the active slot
-(v2.0.0's always `boot_a`). Flash `boot-root.zip` after every stock
-firmware flash: it gives root adb, as on donut.
-- The exploit needs a payload made for the Echo's LK (bootloader) build: `fastbrick.sh` reads `fastboot getvar
-  lk_build_desc` and picks one by `profile.sh`, else the default `fastbrick.img`, which a newer LK refuses — fastboot
-  answers "the command you input is restricted on locked hw" (issue #50). v2.0.1 maps `63cb91b-20221007_072309`
-  (Fire OS 6 4405 to 8149) to `fastbrick-20221007.img` and `2c3569d-20260617_045829` (Fire OS 8338, NS6575,
-  October 2026) to `fastbrick-20260617.img`; v2.0.0 knew only the first. That second payload's tail is built from
-  8338's LK (135,403 of its 135,411 16-byte windows in the last 137,684 bytes are in 8338's `lk.img`, 122,746 in
-  8149's), and it unlocked the first Echo tried with it, on Linux (issue #50, 2026-10-26); from Windows nobody has yet
-  (issue #74). An LK newer than both: the guided setup says so when the Echo is
-  still in fastboot a minute after the script; power-cycled, the Echo boots the original software again, unharmed.
-  Unlock before the Echo can update itself further.
-- From Windows (issue #60; for beginners step by step: [docs/WINDOWS.md](../../docs/WINDOWS.md)):
-  [firebreak](https://github.com/bboe/firebreak) unlocks it, and `scripts/setup.sh` in Git
-  Bash runs it as its unlock step (pinned `firebreak@0.8.0`, `uvx --managed-python firebreak@0.8.0 unlock fireos6`).
-  It needs `adb` and `fastboot` (platform-tools), [uv](https://docs.astral.sh/uv/) and two USB drivers, installed once
-  from an administrator PowerShell as [its README says](https://github.com/bboe/firebreak#windows). firebreak writes
-  amonet **v2.0.1**, as the setup does on Linux, with TWRP 3.7.0, downloads what it needs itself
-  against pinned hashes, and ends where the flash and root steps end here: Fire OS 6574.1 build 8146 in both slots,
-  `boot-root.zip` installed, root adb. The setup then checks that and goes on with the build. Run as a whole on
-  Windows 11 (issue #106, 2026-11-02: Git Bash, LK 63cb91b-20221007_072309, from stock to installed, build
-  2026.11.02.000053-beta). amonet's zip runs on Windows by itself too
-  (`fastbrick.bat`), which flashes with its bundled `bin\fastboot.exe` (platform-tools 36.0.0) before any system
-  fastboot — but the one attempt reported through another fastboot (platform-tools 37.0.1, in a wrapper) was refused,
-  the Echo unharmed (issue #74) — so the setup stays with firebreak from Windows.
+Once, first: USB access without sudo (`scripts/setup.sh` does the same).
+
+```sh
+sudo cp scripts/51-echo-unlock.rules /etc/udev/rules.d/ && sudo udevadm control --reload
+```
+
+Unlock the Echo **by hand, as the XDA thread says**, from its first post: which Echos it is for, its files, how to get
+the Echo ready and every command are there, kept up to date. R0rt1z2 asks (since kamakiri-donut v1.1.0) that the unlock
+is only ever run that way, never from an installer or a script, so this page does not repeat its steps and
+`scripts/setup.sh biscuit` (Linux) does not run them either: it names the thread, waits for Enter and then checks for
+TWRP on adb. **Stop once TWRP is running (white ring)**: the firmware is this project's step, and boot-root comes after
+it. Stuck, or the Echo does something the thread does not say? Ask in the thread, with what the Echo did, in your own
+words, and the tool's output or log as it is.
+
+Then flash the pinned firmware into both slots, as on donut (`scripts/setup.sh biscuit`, or
+[donut's README](../donut/README.md#1-unlock-flash-stock-firmware-root) by hand), and after it root by hand:
+`boot-root.zip` installed from TWRP as the thread says, after every stock firmware flash, until Fire OS has started with
+root adb (`adb shell id -u` says 0); the setup waits for Enter and checks. Unlock before the Echo can update itself
+further.
+
+- From Windows (issue #60; for beginners step by step: [docs/WINDOWS.md](../../docs/WINDOWS.md)): an Echo unlocked
+  already, with the unlock and boot-root done as the thread says, on adb over USB; `scripts/setup.sh` in Git Bash does
+  the rest, as for every model. The guided setup no longer runs [firebreak](https://github.com/bboe/firebreak)
+  (2026-11-09): it ran amonet from the setup, and the unlocks are done by hand only.
 - No Magisk: this repo's daemon runs as the stock client's user; TWRP plus the system write is the whole root story.
 
 ## First contact (arrival checklist)

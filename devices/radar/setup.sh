@@ -9,10 +9,6 @@ UNTESTED=1                                  # scripts/setup.sh lists the model a
 
 XDA=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-2nd-gen-2017-radar.4801290/
 FTVDB=https://ftvdb.com/echo/firmware/com.amazon.radar.android.os/17af64ecc5b8f0303daf4e2a37c75b1a-12718777476-fire-os-6-5-7-2-ns6572-6436-2026-03-21/
-AMONET=amonet-radar-v1.0.1.zip
-AMONET_SHA256=22809bc44b9b7b71750c1955bb94a92c965b557d4f9055bb7bbc098b788188a9
-BOOTROOT=boot-root.zip                      # from this model's XDA thread; byte-identical to donut's
-BOOTROOT_SHA256=de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0
 NDK=toolchain/android-ndk-r21e
 NDK_URL=https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip
 
@@ -41,21 +37,19 @@ slot() { ashell bcbtool get_active | tr -d " \n"; }
 step_tools() {
     command -v curl > /dev/null || need_tools curl || return 1
     build_mode || return 1
-    local unlock="fastboot python3 pyusb"
-    { rooted_already || [ -n "$WINDOWS" ]; } && unlock=python3      # no unlock here: python3 only for otatool.py
-    if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip curl sha256sum || return 1; return 0; fi
-    need_tools adb $unlock make cc unzip debugfs curl sha256sum bc xz || return 1
+    # python3 for otatool.py; what the unlock needs on this PC is the XDA thread's to say (step_unlock)
+    if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb python3 unzip curl sha256sum || return 1; return 0; fi
+    need_tools adb python3 make cc unzip debugfs curl sha256sum bc xz || return 1
     space_ahead 1300
 }
 
 step_files() {
     local need=()
-    # a rooted Echo needs the firmware only to build against, and the unlock tool not at all (nor does Windows: the
-    # Echo is unlocked already there)
+    # a rooted Echo needs the firmware only to build against.  The unlock's files are not asked for here: the XDA
+    # thread says which (step_unlock)
     rooted_already && { [ "$BUILD_MODE" = prebuilt ] || [ -d $FW/rootfs/system/lib ]; } ||
         need+=($FW/$FIRMWARE_FILE $FIRMWARE_SHA256 "Fire OS $FIRMWARE_ID: $FTVDB")
-    rooted_already || [ -n "$WINDOWS" ] || need+=($FW/$AMONET $AMONET_SHA256 "attachment in $XDA")
-    need_files "${need[@]}" $FW/$BOOTROOT $BOOTROOT_SHA256 "attachment in $XDA" || return 1
+    need_files "${need[@]}" || return 1
     [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
     if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
         mkdir -p toolchain
@@ -88,27 +82,10 @@ step_usb() {
 }
 
 step_unlock() {
-    [ -z "$DRY" ] && adb_is recovery && { ok "TWRP is running already"; return 0; }
-    # Fire OS on adb: unlocked before (stock has no adb), and the unlock left TWRP on the recovery partition
-    if [ -z "$DRY" ] && adb_is device; then
-        ok "unlocked already"
-        task "Restarting into TWRP" adb reboot recovery || return 1
-        wait_adb recovery; return
-    fi
+    twrp_or_unlocked; case $? in 0) return 0;; 2) return 1;; esac
     [ -n "$WINDOWS" ] && { unlock_elsewhere; [ -n "$DRY" ]; return; }       # Windows: on adb at the start (setup.sh), not now
-    local adir udir=$FW/${AMONET%.zip}        # a folder per version: an older one unpacked before is not reused
-    # a run whose files step passed with an older amonet (issue #88: v1.0.0) has not got this one yet
-    [ -f $FW/$AMONET ] || need_files $FW/$AMONET $AMONET_SHA256 "attachment in $XDA" || return 1
-    [ -d $udir ] || task "Unpacking amonet" unzip -q $FW/$AMONET -d $udir || return 1
-    # run fastbrick.sh from wherever the zip put it (the release zip keeps it in a folder amonet/ of its own)
-    adir=$(find $udir -name fastbrick.sh -print -quit 2>/dev/null); adir=${adir%/*}
-    [ -n "$adir" ] || [ -n "$DRY" ] || { fail "no fastbrick.sh in $udir; delete that folder and try again"; return 1; }
-    tell "Put the Echo into fastboot mode" "Hold the action button (•) and plug the power adapter in." \
-        "Keep holding until the ring shows a green light (an Echo unlocked before shows a rainbow instead)."
-    waitfor "Waiting for fastboot|Fastboot" '[ -n "$(fastboot devices)" ]' "No green light? Unplug the power and try again." || return 1
-    tell "amonet asks you to type YES, and for a key press at the end" "${RED}${B}Do not interrupt it once it runs: that can brick the Echo.$N"
-    live "amonet fastbrick (about a minute)" in_dir "$adir" ./fastbrick.sh || return 1
-    unlock_wait_twrp       # gives up when the unlock did not take (issue #50)
+    unlock_thread amonet-radar "TWRP is running on the Echo (white ring)" || return 1
+    [ -n "$DRY" ] || twrp_or_unlocked
 }
 
 step_flash() {
@@ -136,15 +113,7 @@ step_flash() {
 }
 
 step_root() {
-    [ -z "$DRY" ] && adb_is device && [ "$(ashell id -u)" = 0 ] && { ok "root adb already"; return 0; }
-    # patches BOTH slots: boot cmdline, dm-verity off, properties, forced adb, fstab, OTA neutered, permissive su policy
-    wait_adb recovery || return 1
-    task "Installing boot-root" sh -c "adb push $FW/$BOOTROOT /sdcard/ && adb shell twrp install /sdcard/$BOOTROOT" || return 1
-    task "Rebooting into Fire OS" adb reboot || return 1
-    [ -n "$DRY" ] || sleep 8
-    wait_adb device || return 1
-    [ -n "$DRY" ] || [ "$(ashell id -u)" = 0 ] || { fail "adb shell is not root"; return 1; }
-    ok "root adb"
+    root_thread $XDA "" || return 1
     # online with Amazon it would update itself, and an update can close the hole the unlock uses
     warn "Do not set the Echo up with the Alexa app."
 }
@@ -156,7 +125,7 @@ step_build() {
             python3 tools/payload_dump.py $FW/payload.bin $FW/images && mkdir -p $FW/rootfs &&
             debugfs -R 'rdump / $FW/rootfs' $FW/images/system.img && [ -d $FW/rootfs/system/lib ]" || return 1
     fi
-    bootroot_unpack || return 1
+    magiskpolicy_get || return 1
     if [ "$BUILD_MODE" = prebuilt ]; then task "Downloading the release build of this commit" build_binaries || return 1
     else task "Building" build_binaries || return 1; fi
     wait_adb device || return 1
@@ -172,6 +141,6 @@ step_network() {
 }
 
 step_install() {
-    bootroot_unpack || return 1        # again: the build step may have been skipped
+    magiskpolicy_get || return 1        # again: the build step may have been skipped
     install_satellite
 }

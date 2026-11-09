@@ -53,6 +53,7 @@ const struct board board = {
     .project = "hassmic.echo-show-5-2nd-gen",
     .product = "Echo Show 5 2nd gen (hassmic)",
     .kiosk = 1,
+    .backlight = 1,
     .default_name = "Echo Show 5 2nd gen",                         /* + MAC: "Echo Show 5 2nd gen 5695c4"; slug = the project's model */
     .codename = "cronos",
 
