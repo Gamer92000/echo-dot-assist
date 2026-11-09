@@ -4,6 +4,29 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-09
 
+- **The unlock and boot-root are now done by hand, as the XDA thread says, on every model.** The unlock tools
+  (kamakiri, amonet, saiyaku) and boot-root are R0rt1z2's, and with kamakiri-donut v1.1.0 he asks that they are only
+  ever run by hand, following his XDA thread, never from an installer or a script. The guided setup respects that: it
+  no longer asks for, unpacks, runs or installs them, and the model pages no longer copy their steps. At the unlock
+  step it shows the model's XDA thread; follow it in a terminal window of your own until TWRP is running, come back,
+  press Enter, and the setup checks that the Echo is on adb. It then puts the firmware on as before (Echo Dots, Echo 2,
+  Echo Input), and at the root step sends you to the thread again for boot-root: install it from TWRP as the thread
+  says, press Enter once Fire OS has started, and the setup checks for root over adb and goes on with the install.
+  The Echo Shows' root is this project's own boot image, as before. Stuck? Ask in the thread, with what the Echo did
+  and the tool's output or log. This replaces the setup's own words around amonet's unlock from earlier today (issue
+  #154). It also ends issue #156: the setup insisted on `kamakiri-donut-v1.0.0.zip`, which the thread no longer offers,
+  and refused v1.1.0; it now asks for no unlock file at all. kamakiri-donut v1.1.0 writes the same files to the Echo as
+  v1.0.0, so the warning about issue #112 stays as it was.
+- **Nothing of the XDA threads' files is used any more.** The setup took two programs out of `boot-root.zip`; it now
+  fetches them from where they were made: magiskpolicy (which adds this project's rules to the Echo's security policy)
+  from Magisk's own release, v30.7, the very same file; on the Echo Show 5 (both generations) and the Echo Show 8 1st
+  gen also adbd, now Google's own from its Android 7.1.1 emulator image (only 1.3 MB of it is downloaded). You no
+  longer download `boot-root.zip` for the setup: get it from the thread when the root step sends you there. The new
+  adbd on the Echo Shows has not been tried on a device yet.
+- **Windows: the setup no longer runs firebreak.** firebreak unlocked an Echo Dot 2 from Windows by running amonet,
+  so it goes for the same reason. On Windows every model, the Echo Dot 2 included, now needs an Echo that is unlocked
+  already (TWRP or Fire OS on adb); the setup does everything after that, and [the Windows guide](docs/WINDOWS.md) says
+  how.
 - **The Bluetooth proxy can be switched off (issue #152).** "Bluetooth proxy" (settings page, Features; on by default,
   so nothing changes) stops Home Assistant from getting Bluetooth devices through this Echo: the Echo no longer says it
   is a proxy, stops scanning and takes no connections. Disabling its Bluetooth entries in Home Assistant never did

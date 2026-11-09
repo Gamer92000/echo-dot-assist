@@ -323,3 +323,12 @@ expires within minutes. Found by preloading `src/tools/curlspy.c` into the stock
 - Proprietary, derived or secret material stays out of git (git-ignored): `firmware/` (per model: stock
   image, unpacked rootfs, unlock zips, `re/` disassembly), `toolchain/`, `build/`, `device-logs/`, `secrets/` (`wifi.conf`, `update.key`, `release.key`), `*.bin`, `*.zip`.
 - Third-party code in `src/third_party/` keeps its own licence.
+- **The unlock and root stay R0rt1z2's, by hand.** The unlock tools (kamakiri, amonet, saiyaku), boot-root and their XDA
+  threads are R0rt1z2's, and he asks that they are only ever used by hand, as his threads say: not from an installer,
+  a wrapper or a script, not repackaged, not retold (kamakiri-donut v1.1.0's LICENSE and README, 2026-11-06). So the
+  guided setup and the model pages only link the thread, wait, and check the result (`unlock_thread`, `root_thread`
+  in `scripts/lib/setup.sh`), and no file of the threads is downloaded, read or copied: magiskpolicy comes from
+  Magisk's own release, the Echo Shows' adbd from Google's emulator image. Everything that did otherwise (running
+  kamakiri, amonet's fastbrick and saiyaku, firebreak on Windows, installing boot-root, pinning the threads' zips,
+  taking tools out of them, copies of their steps) was removed on 2026-11-09 for this reason. Do not add any of it
+  back; a new model's unlock gets a link to its thread, not steps.

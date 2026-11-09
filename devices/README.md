@@ -29,7 +29,7 @@ and refuse a mismatch. Every Echo on Fire OS or Vega OS, with or without a direc
 | `hassmic.rc` | `install-system.sh` → `/system/etc/init/` | init services, and the trigger that starts the satellite once the audio stack is up |
 | `sepolicy.rules` | `install-system.sh` | allow rules added to the stock policy so init can start the scripts |
 | `README.md` | people | what is known about the model, and its install instructions (requirements, downloads, unlock, root, install) |
-| `setup.sh` | `scripts/setup.sh` | the same install steps for the guided setup: `STEPS` (id and title per line) and one `step_<id>` function each, built from the helpers in `scripts/lib/setup.sh`; `ROOTED_SKIP`: the steps an Echo rooted already has behind it (`rooted_already` in the steps); on Windows (`WINDOWS`, Git Bash) the unlock tool never runs: `step_unlock` calls `unlock_elsewhere` instead, which names the model's `WIN_UNLOCK` (another way to unlock from Windows) if it sets one; a model whose unlock runs on Windows sets `UNLOCK_WINDOWS=1` and handles `WINDOWS` in its steps itself (biscuit: firebreak) |
+| `setup.sh` | `scripts/setup.sh` | the same install steps for the guided setup: `STEPS` (id and title per line) and one `step_<id>` function each, built from the helpers in `scripts/lib/setup.sh`; `ROOTED_SKIP`: the steps an Echo rooted already has behind it (`rooted_already` in the steps); the unlock tool never runs from it, nor is it unpacked or its steps retold (its author, R0rt1z2, asks that it is only run by hand as his XDA thread says): `step_unlock` takes an Echo on adb as unlocked (`twrp_or_unlocked`: TWRP, or Fire OS restarted into TWRP), else names the model's thread with `unlock_thread` (`XDA`), waits for Enter and checks again; boot-root, R0rt1z2's too, the same way: `step_root` waits in TWRP with `root_thread` and checks for root adb; on Windows (`WINDOWS`, Git Bash) `step_unlock` calls `unlock_elsewhere` instead, which names the model's `WIN_UNLOCK` (another way to unlock from Windows) if it sets one; a model that can be brought from stock to adb on Windows sets `UNLOCK_WINDOWS=1` and handles `WINDOWS` in its steps itself (none since firebreak left biscuit's, 2026-11-09) |
 
 A model without `setup.sh` is listed by the guided setup as not supported yet; a model without `device.mk` does not
 build.
@@ -60,7 +60,9 @@ Rough order. Each step is safe to stop at.
 
 1. **Unlock and root.** This is the hard part, and it is different for almost every model (bootrom exploit, TWRP or
    none, A/B slots or not, how the SELinux policy can be patched). Write down what worked in the new model's
-   `README.md`. Pin the firmware version before the Echo ever reaches Amazon: an update can close the hole.
+   `README.md`, except the unlock's own steps: link its XDA thread for those, and have `step_unlock` use
+   `unlock_thread` (the tools are R0rt1z2's, and he asks that they are only run by hand as his thread says). Pin the
+   firmware version before the Echo ever reaches Amazon: an update can close the hole.
    Amazon's help pages list only version numbers now; FTVDB has a record page for most builds (not always the
    newest: radar's), with Amazon's download (`https://ftvdb.com/echo/firmware/com.amazon.<codename>.android.os/`).
    Link that record page, not the download itself, and put the size and sha256 in the README.

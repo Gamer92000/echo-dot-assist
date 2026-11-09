@@ -2667,10 +2667,51 @@ Run in this order. Each step says what it proves.
       TWRP before the wipe (`twrp_check`, first in every model's `step_flash`): 3.7 or newer, else stop with nothing
       wiped (the issue: amonet v1's TWRP 3.2.3, on Dots EchoLocal sold unlocked, cannot install 6574.1).  Every unlock
       here brings 3.7.0_9-0: `ro.twrp.version` and the string next to it in the ramdisks of amonet-biscuit v2.0.0,
-      amonet-radar v1.0.0, amonet-checkers v2.0.1 and kamakiri-donut v1.0.0.  Where the property is not set, the first
-      "Starting TWRP <version>-<commit>" of /tmp/recovery.log (the same format string in all four); neither: asked.
+      amonet-radar v1.0.0, amonet-checkers v2.0.1 and kamakiri-donut v1.0.0 (v1.1.0: the same `twrp-donut.img`).
+      Where the property is not set, the first "Starting TWRP <version>-<commit>" of /tmp/recovery.log (the same
+      format string in all four); neither: asked.
       Version logic checked against stand-in answers (3.7.0_9-0, 3.2.3-0, 3.7.1_12-0, 3.10.0-0, 4.0.0_1-0, log only).
       Open (device): an old TWRP itself (does 3.2.3 set the property; the log's line).
+- [x] The unlocks and boot-root by hand only (2026-11-09, GitHub issue #156: the setup's pin on
+      kamakiri-donut-v1.0.0.zip, gone from the thread, refused v1.1.0).  kamakiri-donut v1.1.0 (files dated 2026-11-06; zip sha256
+      `1d4eab37...056c`, 23 452 489 bytes): against v1.0.0 `bin/` (preloader, LK, TEE, tee payload, kaeru, GPT, TWRP),
+      `brom-payload/` and `requirements.txt` byte for byte the same; every script and module gains a copyright header
+      (+772 bytes each, nothing else changed in `device.py`, `functions.py`, `load_payload.py`, `common.py`,
+      `check_sig.py`); `main.py` and `handshake2.py` print a credits banner, `logger.py` writes it at the top of a new
+      `amonet.log`, `fastboot-step.sh` prints it before its two fastboot commands (unchanged).  Nothing the Echo
+      receives changed, so issue #112 stands as it was.  New: LICENSE (all rights reserved; redistribution, also inside
+      an installer, a GUI, a wrapper or a tool, needs the author's written permission), README.md and AGENTS.md, where
+      R0rt1z2 asks that the unlock is only run by hand as the thread says: which revisions, the timing, the Echo's state
+      before each step and what to do when one stalls are only there, kept current with its files; a wrapper freezes
+      them and cuts the reporting path.  The other models' unlocks are his too (amonet "by k4y0z & r0rt1z2",
+      kamakiri-cupcake, saiyaku-athena, each from his thread), so no setup runs one now: `unlock_thread`
+      (scripts/lib/setup.sh) names the model's thread, says to stop once TWRP is up and to ask there when stuck, waits
+      for Enter, then up to 60 s for the Echo on adb; `twrp_or_unlocked` takes TWRP, or Fire OS on adb (restarted into
+      TWRP), as the result.  Gone with it: the unlock zips' pins and downloads, their unpacking, the bootrom and
+      fastboot gestures, `fastbrick` and its YES and hands-off framing (issue #154), `unlock_wait_twrp` (issue #50's
+      Echo stuck in fastboot), `show_wait_twrp` and `amazon_usb` (issue #132's Fire OS instead of TWRP), cronos'
+      `lk_build_desc` age check, athena's serial port hint, the tools only the unlocks needed (pyusb, pyserial; fastboot
+      on the Dots).  The READMEs and unlock.md files point to the thread instead of their copies of its steps.  Kept:
+      the udev rules (PC side), donut's #112 warning before the thread, USB access, the firmware flash.  boot-root.zip
+      (his too, from the same threads) the same way: `root_thread` (donut, biscuit, radar, cupcake with donut's thread,
+      athena) waits in TWRP while the person installs it as the thread says, then up to 120 s for root adb in Fire OS;
+      the files step still pins and checks the zip, since the setup takes `patch/magiskpolicy32` out of it (and the
+      Shows `sbin/adbd`).  The Shows' root stays ours (install-boot.sh, our own boot image).  firebreak (bboe's, which
+      fetches and runs amonet itself) is gone from biscuit's setup with `UNLOCK_WINDOWS`, `unlock_firebreak` and
+      `fw_rooted`: on Windows every model needs an Echo unlocked already (`unlock_elsewhere`), docs/WINDOWS.md and its
+      figures reworked (the fastboot-gesture figure removed).  The docs' copies of the threads' restore and by-hand root
+      steps (cronos' "Back to Fire OS", crown's `boot-root.img` by fastboot) point to the threads too.  Then no file of
+      the threads either: magiskpolicy from Magisk's release, `Magisk-v30.7.apk` (sha256 `e0d32d21...ebd5`), whose
+      `lib/armeabi-v7a/libmagiskpolicy.so` is byte for byte boot-root's `patch/magiskpolicy32` (`e5fafc1f...0f3a`; v30.6
+      and v31.1 differ), `magiskpolicy_get`, every model at `firmware/<codename>/magiskpolicy32` (athena's own zip not
+      compared: not on this PC).  The Shows' adbd from Google's Android 7.1.1 emulator image
+      (`system-images;android-25;google_apis;armeabi-v7a` r18, userdebug, NYC): static ARM, `ro.secure`/`ro.debuggable`
+      /`root_seclabel`, FunctionFS and `/dev/android_adb` as CyanogenMod's had (which also had `cm.service.adb.root`),
+      sha256 `cc017805...3c18`, 728 964 bytes; of the 953 MB zip only its ramdisk member (1.3 MB) through HTTP ranges
+      (`scripts/zipmember.py`, CRC checked; `adbd_get`).  API 24's default armv7 image (7.0, r07) has one too
+      (`9e35b456...`).  A checkers root image built with it on the PC (`mkbootroot.py`, `--check` still exact).  Open
+      (device): root adb in `su` with Google's adbd on a Show.  `init.fosflags.sh` in our image: our own two lines now,
+      not the XDA image's file byte for byte (the same two properties).  Dry run of every model.
 - [x] Unlock, what an LK too new for it does (2026-10-25, GitHub issue #50: a Dot 2 with LK `2c3569d-20260617`,
       June 2026).  fastbrick sends the brick payload, fastboot answers "the command you input is restricted on
       locked hw", and fastbrick.sh's own timeout is exit 124 to it — "Exploit most likely successful!" — so it
@@ -2685,7 +2726,7 @@ Run in this order. Each step says what it proves.
       (device): that the hung LK still shows in `fastboot devices`, and that a good fastbrick leaves fastboot before it
       returns;
       biscuit's README names the LK build as a prerequisite.  Open: an amonet release that unlocks LK builds from
-      June 2026 on (R0rt1z2's XDA thread).
+      June 2026 on (R0rt1z2's XDA thread).  The repo side is gone since 2026-11-09: the unlocks by hand only (above).
 - [x] fastbrick's last words (2026-11-09, GitHub issue #154, an Echo Dot 2 from the guided setup).  After the
       payload fastbrick.sh prints "Please wait until the process finishes and DO NOT INTERRUPT IT." and then "Press
       any key to exit..."; the tester could not tell whether it was over or whether the key would stop it (the white
@@ -2705,7 +2746,7 @@ Run in this order. Each step says what it proves.
       whatever its exit status (`set -e` and its last `read`: no "stopped" while the Echo writes).  The Dots' "unplug
       the power" hint moved from 90 s to 3 min, three times the minute the Echo writes.  Checked against stand-in
       fastbrick.sh copies (sent, unlocked already, "yes"); the READMEs' "10 s grace period" is gone: v2.0.1's
-      fastbrick.sh has none.
+      fastbrick.sh has none.  Gone again the same day: the setup no longer runs fastbrick (the unlocks by hand only).
 - [x] A login left waiting, a page reloaded into a restart (2026-10-25, a tester's Echo 2, radar, v2026.10.21.213542).
       Ring: `web: login waits for the action button (iPhone)` at 00:43:12Z, then neither "approved" nor "ran out"; the
       ring pulsed until the next day.  `login_expire` (web.c) ran only on a login or adb ask and on the button, so a

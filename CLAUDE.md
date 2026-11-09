@@ -202,7 +202,13 @@ stops and names the sysctl, which the setup's `qemu_arm` asks to set).
 - `stubs/*.syms`: what our binaries need of each stock library (`tools/mkstubs.sh`), for `make STUBS=1` / CI.
 - `README.md` (model facts + install steps by hand) and `setup.sh` (same steps for the guided `scripts/setup.sh`:
   `STEPS` list + `step_<id>` functions using `scripts/lib/setup.sh`; `--dry-run` walks them without running). Keep
-  the two in step.
+  the two in step.  The unlock and boot-root are never run, installed, wrapped or retold by either: they are
+  R0rt1z2's, who asks that they are only run by hand as his XDA thread says (kamakiri-donut v1.1.0's LICENSE);
+  `step_unlock` names the thread (`unlock_thread`), waits for Enter and checks for TWRP on adb (`twrp_or_unlocked`),
+  `step_root` the same for boot-root (`root_thread`, root adb); the README links the thread.  No file of the threads
+  is downloaded, read or copied either: magiskpolicy comes from Magisk v30.7's APK (`magiskpolicy_get`, byte for byte
+  boot-root's old one), the Shows' userdebug adbd from Google's Android 7.1.1 emulator image (`adbd_get`, its ramdisk
+  only, `scripts/zipmember.py`).  Removed 2026-11-09 at his request; do not add any of it back.
 No model `#ifdef`s in shared code: new differences become a board field, a `device.conf` variable or a backend.
 
 ## Architecture
