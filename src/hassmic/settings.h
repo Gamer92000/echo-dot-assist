@@ -54,6 +54,8 @@ size_t settings_text(char *out, size_t cap, int export_only);
  * export by it, unchanged since exports came (adaa7d8) */
 #define SETTINGS_EXPORT_HEAD "# hassmic settings, exported from "
 /* Apply "name=value" lines (an export, a preset); # comments and blank lines skipped.  Errors are listed in err, one
- * per line; returns how many settings were applied */
+ * per line; returns how many settings were applied.  Of a line it reads the first SETTINGS_LINE_MAX - 1 bytes (web.c's
+ * updates_gate reads them as it does) */
+#define SETTINGS_LINE_MAX 200
 int  settings_apply_text(const char *text, char *err, size_t errsz);
 #endif

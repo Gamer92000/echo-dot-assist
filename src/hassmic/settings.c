@@ -690,7 +690,7 @@ int settings_apply_text(const char *text, char *err, size_t errsz)
     int applied = 0; size_t en = 0;
     if (errsz) err[0] = 0;
     for (int pass = 0; pass < 2; pass++) for (const char *p = text; *p; ) {
-        char line[200], *eq, *v; size_t l = strcspn(p, "\n");
+        char line[SETTINGS_LINE_MAX], *eq, *v; size_t l = strcspn(p, "\n");
         snprintf(line, sizeof line, "%.*s", (int)(l < sizeof line - 1 ? l : sizeof line - 1), p);
         p += l + (p[l] == '\n');
         line[strcspn(line, "\r")] = 0;

@@ -1069,17 +1069,20 @@ static void log_api(int fd, struct req *r)
 
 /* Online updates come from GitHub: a line of BODY that switches them on (from off) counts only once this Echo reached
  * it (update_probe), else it is turned into a comment and WHY says what failed.  Imports go the same way.  Before
- * core_lock: the probe takes up to 15 s.  Lines are read as settings_apply_text reads them (any white space ahead of
- * the name, up to a \r, which ends its line; the choice in any case, as settings.c parse() takes it): "Beta" passed
- * this gate untouched and switched updates on without the probe. */
+ * core_lock: the probe takes up to 15 s.  Lines are read as settings_apply_text reads them (its first
+ * SETTINGS_LINE_MAX - 1 bytes, up to a \r, which ends its line; any white space ahead of the name; the choice in any
+ * case, as settings.c parse() takes it): "Beta" passed this gate untouched and switched updates on without the probe,
+ * and so did a line padded past what settings_apply_text keeps of it, the rest of the value cut off there. */
 static void updates_gate(char *body, char *why, size_t cap)
 {
     why[0] = 0;
     for (char *p = body; *p; ) {
-        size_t l = strcspn(p, "\n"); char *k = p, v[16];
-        while (k < p + l && *k != '\r' && isspace((unsigned char)*k)) k++;
-        if (!strncmp(k, "online_updates=", 15)) {
-            snprintf(v, sizeof v, "%.*s", (int)strcspn(k + 15, "\r\n"), k + 15);
+        size_t l = strcspn(p, "\n"), m = strcspn(p, "\r\n"); char *k = p, *e, v[16];
+        if (m > SETTINGS_LINE_MAX - 1) m = SETTINGS_LINE_MAX - 1;
+        e = p + m;
+        while (k < e && isspace((unsigned char)*k)) k++;
+        if (e - k >= 15 && !strncmp(k, "online_updates=", 15)) {
+            snprintf(v, sizeof v, "%.*s", (int)(e - k - 15), k + 15);
             int on = !strcasecmp(v, update_channels[UPDATE_BETA]) || !strcasecmp(v, update_channels[UPDATE_RELEASE]);
             if (on && update_channel(-1) == UPDATE_OFF && (why[0] || update_probe(why, cap))) *k = '#';
         }
