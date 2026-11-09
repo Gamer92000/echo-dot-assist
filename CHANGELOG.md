@@ -4,6 +4,16 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-09
 
+- **Double and triple press of the action button skip tracks.** New setting "Double and triple press of the action button"
+  (Voice page, `multi_press`, off by default; not on the Echo Shows, which have no action button): twice is next, three
+  times previous, for Music Assistant and for a phone over Bluetooth (AVRCP). Two or three presses act as one single press
+  when nothing plays, during a Drop In call (ringing included) and while a login waits for the button. While it is
+  on, a single press waits 450 ms to see whether more follow. Home Assistant's "Button" event fires for whatever acts
+  as a single press, never for a skip.
+- **Music ducking has a depth you can set.** While the assistant listens, thinks or speaks, music from Music Assistant
+  and from a phone over Bluetooth was always turned down by the same 15.6 dB (to a sixth), which over loud music or an
+  audiobook can leave too little of your voice for speech-to-text. The setting "Music ducking" (Sound page, `music_duck`,
+  0 to 60 dB, default 16 dB: about what it was) sets how far; 0 turns ducking off.
 - **Clearer unlock (issue #154).** Amazon's lock is opened by a script, amonet's fastbrick, which ended with "DO NOT
   INTERRUPT IT" and "Press any key to exit...", and nobody could tell whether it was finished or whether a key would
   stop it. The guided setup now says before the unlock how long it takes and what not to touch (the Echo's power and

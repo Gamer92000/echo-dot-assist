@@ -6,6 +6,8 @@ int  sendspin_start(int port);                          /* listener + player thr
 void sendspin_init(void);                               /* keys only: for printing the pairing token */
 void sendspin_pairing_token(char *out, size_t outsz);   /* what the operator pastes into the server to pair */
 int  sendspin_button(void);                             /* action button: 1 = used for play / pause */
+int  sendspin_skip(int dir);                           /* action button pressed twice (+1: next) or three times (-1: previous): 1 = sent, only
+                                                           while the group plays and the server allows it */
 int  sendspin_stop(void);                               /* "<wake word>, stop": pause the group if it plays, the button
                                                            resumes it.  1 = paused */
 void sendspin_pause(void);                              /* another source started: pause the group if it plays */

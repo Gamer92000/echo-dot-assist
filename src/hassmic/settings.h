@@ -34,6 +34,7 @@ const char *settings_speech_language(void);    /* "de", "en", ...; "" for automa
 int  settings_on(const char *name);     /* a bool setting's value; 0 if this Echo has no such setting */
 const struct bt_lang *settings_bt_lang(void);
 int  settings_bt_lang_index(int set);   /* -1 reads */
+float settings_duck_gain(void);         /* linear gain music gets while the assistant is not idle (setting music_duck); any thread */
 
 /* The table: settings this Echo has (no Wi-Fi motion setting without the module, ...), in display order */
 int  settings_count(void);

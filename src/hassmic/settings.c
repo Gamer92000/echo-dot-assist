@@ -18,8 +18,10 @@
 #include "update.h"
 #include "wifimotion.h"
 #include "statefile.h"
+#include "buttons.h"
 #include <ctype.h>
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,6 +53,7 @@ const int bt_lang_count = (int)(sizeof bt_langs / sizeof bt_langs[0]);
 static const char *bt_lang_codes[sizeof bt_langs / sizeof bt_langs[0]];
 
 static int mic_level = MICGAIN_LEVEL, bt_lang;
+static _Atomic int duck_db = 16;                        /* music_duck: what the music is turned down by while the assistant listens, thinks or speaks (was a fixed 1/6 = 15.6 dB; 16: about that in whole dB) */
 static int bt_audio = 1, bt_speaker, whisper = 1;      /* features kept here; bt_speaker's default: settings_load */
 static int light_sensor;                                /* off: auto brightness moved the level in HA's history all day (forum, 2026-10-15) */
 static int kiosk_net = 1;                                 /* lockdown.sh reads it from state/config */
@@ -70,8 +73,8 @@ static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
-          WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, VOLUME, VOL_SPLIT,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
+          WIFI_SENS, LIGHT_SENSOR, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
           VOL_EVEN, NSET };
@@ -108,6 +111,8 @@ static const struct setting table[NSET] = {
      * (state/timer_sound.wav), an export says only "custom" */
     [TIMER_SOUND] = { "timer_sound", "Timer sound", "Voice", NULL, S_CHOICE, 0, 0, 1, 0 },
     [TIMER_STOP_ANY] = { "timer_stop_any", "Any request stops a ringing timer", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* buttons.c keeps it: double press of the action button = next, triple = previous; a single press waits 450 ms */
+    [MULTI_PRESS] = { "multi_press", "Double and triple press of the action button", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     [STOP_ENDS]   = { "stop_ends_listening", "Stop after the wake word ends listening", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     /* main.c: the request's audio from the wake word on (replay_whole); not with Home Assistant's wake word */
     [WAKE_IN_REQ] = { "wake_word_in_request", "Wake word in the request", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
@@ -175,6 +180,8 @@ static const struct setting table[NSET] = {
     [EQ_TREBLE]   = { "equalizer_treble", "Equalizer treble", "Sound", "dB", S_INT, -6, 6, 1, 0 },
     /* over stock (spkgain.c); not exported: speakers of one model differ (one Dot 2 is clean where another is too loud) */
     [SPK_GAIN]    = { "speaker_gain", "Speaker gain", "Sound", "dB", S_INT, 0, SPKGAIN_MAX, 0, 0 },  /* settings_max() */
+    /* sendspin.c and a2dp.c read it through settings_duck_gain(); exported: how much the music gives way is about the household's taste, not the room */
+    [DUCK]        = { "music_duck", "Music ducking", "Sound", "dB", S_INT, 0, 60, 1, 0 },
     /* the page draws these as one card of its own (web/app.js buildVolumes).  The volume itself (music's, with separate
      * volumes) is the mixer's or main.c's, not state/config's, and no export's: a volume is for the room it is in */
     [VOLUME]      = { "volume", "Volume", "Sound", "%", S_INT, 0, 100, 0, 0 },
@@ -213,6 +220,7 @@ static int present(enum id i)
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
     case SS_UNPAIRED: return core_sendspin_port != 0;
     case SPK_GAIN: return spkgain_present();
+    case MULTI_PRESS: return !board.action_combo;               /* the Shows: no action key, the volume pair stands in */
     case BAND: return ring_band_rows(-1) >= 0;
     case KIOSK_NET: case KIOSK_MIC: case KIOSK_CAM: return board.kiosk;
     case SCR_AUTO: case SCR_LEVEL: case SCR_ADJUST: return board.backlight || getenv("HASSMIC_FAKE_BACKLIGHT");   /* tests */
@@ -223,6 +231,8 @@ static int present(enum id i)
     default: return 1;
     }
 }
+
+float settings_duck_gain(void) { return powf(10.0f, -(float)duck_db / 20.0f); }
 
 static int ids[NSET], nids = -1;
 static void index_table(void) { if (nids < 0) { nids = 0; for (int i = 0; i < NSET; i++) if (present(i)) ids[nids++] = i; } }
@@ -290,6 +300,7 @@ int settings_get(const struct setting *s)
     case TIMER_SOUND: return core_timer_sound(-1);
     case TIMER_STOP_ANY: return core_timer_stop_any(-1);
     case STOP_ENDS: return core_stop_ends_listening(-1);
+    case MULTI_PRESS: return buttons_multi_press(-1);
     case WAKE_IN_REQ: return core_wake_in_request(-1);
     case END_REQ: return core_end_of_request(-1);
     case BT_ANNOUNCE: return core_bt_announce(-1);
@@ -324,6 +335,7 @@ int settings_get(const struct setting *s)
     case DROPIN: return dropin_enable(-1);
     case DROPIN_ANSWER: return dropin_ask(-1);
     case SPK_GAIN: return spkgain_get();
+    case DUCK: return duck_db;
     case VOLUME: return core_volume();
     case VOL_SPLIT: return core_separate_volumes(-1);
     case VOL_EVEN: return core_even_volume(-1);
@@ -360,6 +372,7 @@ static void put(enum id i, int v)
     case TIMER_SOUND: core_timer_sound(v); break;              /* refused without its file: settings_set says so */
     case TIMER_STOP_ANY: core_timer_stop_any(v); break;
     case STOP_ENDS: core_stop_ends_listening(v); break;
+    case MULTI_PRESS: buttons_multi_press(v); break;
     case WAKE_IN_REQ: core_wake_in_request(v); break;
     case END_REQ: core_end_of_request(v); break;
     case BT_ANNOUNCE: core_bt_announce(v); break;
@@ -395,6 +408,7 @@ static void put(enum id i, int v)
     case DROPIN: dropin_enable(v); break;
     case DROPIN_ANSWER: dropin_ask(v); break;
     case SPK_GAIN: spkgain_set(v); break;
+    case DUCK: duck_db = v; break;
     case VOLUME: core_set_volume(v); break;
     case VOL_SPLIT: core_separate_volumes(v); break;
     case VOL_EVEN: core_even_volume(v); break;

@@ -15,6 +15,8 @@ void a2dp_speaker_volume(int percent);     /* lock held: what the speaker we pla
                                               volume (main.c: the loudest kind with separate volumes); -1: the volume */
 int  a2dp_button(int resume);              /* action button: 0 = pause the streaming device, 1 = resume it if the button
                                               paused it (within 30 min).  1 = consumed; needs AVRCP */
+int  a2dp_skip(int dir);                   /* action button pressed twice (+1: next) or three times (-1: previous): the streaming device
+                                              skips (AVRCP).  1 = sent */
 void a2dp_pause(void);                     /* another source started: pause the device, or play nothing until it
                                               starts again or a2dp_unyield() when it has no AVRCP */
 int  a2dp_stop(void);                      /* "<wake word>, stop": pause the streaming device (the button resumes it), or

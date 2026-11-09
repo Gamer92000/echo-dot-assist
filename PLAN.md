@@ -196,6 +196,13 @@ Run in this order. Each step says what it proves.
       Verified by the author on a Dot 2; `tests/fake_ha_remote_followup.py` (fails on the old core: flags [3, 3, 3]).
       Seen meanwhile, not fixed: with `-w remote` an ERROR outside a reply (e.g. nothing said) ends the run and asks for the
       next, then its RUN_END finds that new run and asks again: two starts, HA cancels the first
+- [~] Ducking depth and multi press (2026-11-08): `DUCK` (a sixth, -15.6 dB) was fixed; the setting `music_duck` (0..60 dB, default 16,
+      about the old 15.6) is the target of `music_duck()`'s glide in sendspin.c and a2dp.c, read through `settings_duck_gain()` (any thread).
+      Reason: over a loud audiobook 15.6 dB left too little voice for STT. Setting `multi_press` (off): the action button pressed
+      twice = next, three times = previous (`sendspin_skip` for the Sendspin controller commands, only while the group plays;
+      `a2dp_skip`: AVRCP pass-through 0x4B/0x4C), else a single press; a press waits `MULTI_MS` 450 ms in `buttons.c`; the HA "Button"
+      event hears what acts as a single press, never a skip. `tests/unit/buttons_test.c`. **Open:** ducking depth that is enough not measured; skip not
+      tried against a phone over Bluetooth; a Dot 2 ran the build (settings listed) but presses were not tried yet.
 - [ ] Wake-word accuracy at distance and with music playing: ten tries from across the room, count `wake:` lines in `boot.log`,
       once in silence, once with Music Assistant playing (threshold hints are in place, see "Stop" below)
 - [~] Wake word "Echo": firmware ships only `ALEXA` (+`STOP`) in `words.shrunk.txt`. Stock gets other keywords from DAVS (cloud) into
