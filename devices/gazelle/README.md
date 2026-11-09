@@ -20,7 +20,7 @@ TV cancellation has been demonstrated with programmes played **by the Cube**. Ca
 
 On the computer, install Python 3 and Android Platform Tools (`adb`). Enable ADB debugging in Fire TV Developer options and accept this computer's authorization prompt on the TV. The Cube and Home Assistant must be reachable on the same trusted network.
 
-Use the Cube bundle supplied with this project at `dist/cube-assist-gazelle.zip`. It contains our native executable, Android helper and service script, with SHA-256 checksums. It contains no Amazon libraries, firmware or wake-word models. Checksums detect corruption; they are not a publisher signature. Build or obtain the bundle from a source you trust.
+Build the Cube bundle as described below; the output is `dist/cube-assist-gazelle.zip`. No prebuilt Cube release is published by the existing Echo release workflow. It contains our native executable, Android helper and service script, with SHA-256 checksums. It contains no Amazon libraries, firmware or wake-word models. Checksums detect corruption; they are not a publisher signature. Build or obtain the bundle from a source you trust.
 
 Windows:
 
@@ -71,7 +71,7 @@ Use Music Assistant with its Sendspin provider enabled. The reference interopera
 
 Pair with the `SP:…` Sendspin token printed by setup. It is also available through HA's disabled-by-default **Sendspin pairing token** diagnostic entity. Keep it private. If discovery fails, add `CUBE_IP:28928` manually; the websocket path is `/sendspin`. Leave unpaired access disabled.
 
-Run `python scripts/cube/setup.py guide --device CUBE_IP --yes` to repeat the guide and retrieve the token. Start music from Music Assistant, then issue an Assist request during playback to check ducking and recovery. Sendspin protocol/streaming has been tested against the strict reference server on the real Cube; pairing to a particular live MA server still needs its operator's setup.
+Run `python scripts/cube/setup.py guide --device CUBE_IP --yes` to repeat the guide and retrieve the token. Start music from Music Assistant, then issue an Assist request during playback to check ducking and recovery. Sendspin protocol/streaming has been tested against the strict reference server and a paired Music Assistant instance on the real Cube. Pair your own server during setup.
 
 ## Arbitration
 
@@ -108,14 +108,15 @@ node tests/cube_web.js
 make unit-cube_audio
 ```
 
-`node tests/cube_web.js` checks both Cube and Echo page builders without a device. Installer tests use a fake device. The Cube audio unit test checks the common volume/AFE interface, listening messages, unchanged capture samples and earcon callback against a local fake helper, without playing or recording audio. The evidence below comes from the original working development build; this upstream preparation branch has not been installed on hardware. Keep device recordings, pairing keys and firmware out of distributions.
+`node tests/cube_web.js` checks both Cube and Echo page builders without a device. Eight installer tests use a fake device. The Cube audio unit test checks the common volume/AFE interface, listening messages, unchanged capture samples and earcon callback against a local fake helper, without playing or recording audio. Keep device recordings, pairing keys and firmware out of distributions.
 
-Evidence so far: native build; signed browser login and setting round-trip; ESPHome entity/protocol checks; live microphone streaming; listening/thinking/speaking/idle LED transitions; TV overlay creation/removal; user-confirmed TV and Cube bars; paired strict-reference Sendspin streaming; mDNS discovery from another computer; seven installer validation/rollback tests; helper-crash recovery with stock Alexa restored in 5.24 seconds and Amazon’s audio server unchanged. HA has now provisioned encryption on the installed port, and two natural wake-word requests completed listening, thinking, reply playback through the Cube speaker, and volume recovery in the device logs. Music Assistant 2.10.8 completed long-term Sendspin pairing. The user confirmed the installed port answers correctly, ducks and restores TV audio, shows both bars, and plays Music Assistant tracks through the Cube speaker. A subsequent ADB reboot verified automatic microphone startup, encrypted HA voice subscription and paired Music Assistant reconnection, with all 11 checked settings/pairing files byte-for-byte unchanged and arbitration still off. A post-reboot indicator probe observed both the TV window and physical LED pattern, then clean removal at idle. The subsequent routing build passed user-confirmed TV-to-Cube-to-TV music switching, replies, ducking, bars and post-reboot playback on 29 October. A cold power-cycle and multi-device arbitration testing remain outstanding. This is a development release.
+The port is based on upstream main `28ff81c812e3f86911ec5ce30767fb4b4494f4df`. All eight Echo ARM daemon link builds pass with public vendor symbol stubs; these are compile/link checks, not Echo hardware tests. Host Sendspin, wake alignment, volumes, web, remote follow-up and remote barge-in tests pass, along with Cube routing, settings and installer checks.
+
+On a Cube 3 with the supported firmware, the routing build passed TV-to-Cube-to-TV music handoff, Assist replies, ducking, both bars and reboot persistence. The 9 November update incorporating upstream's resampler passed TV radio playback, spoken replies, ducking/recovery and both bars. HA/Sendspin pairings and the checked routing settings survived installation unchanged. The initial 200 ms buffer stalled playback; the corrected 96 ms buffer advanced normally with no additional AudioTrack underruns in a short steady observation. Long-duration glitch testing, a cold power-cycle, multi-device arbitration and quantitative AEC/wake-sensitivity comparisons remain outstanding.
 
 ## Attribution
 
-Forked from Gamer92000 / Julian Imhof's Echo Dot Assist, commit `3062695c586b03371ee63a0c63376f6c214721ef`, MIT licensed. `LICENSE` and all third-party notices remain. `UPSTREAM-README.md` describes the original Echo project; its unlocking, flashing and system-install instructions do not apply to this Cube installer. Legacy Echo source/scripts are retained for reference only. This is an independent development port, not an official EDA or Amazon release.
-
+This experimental device port builds on Gamer92000 / Julian Imhof's MIT-licensed Echo Dot Assist. `LICENSE` and third-party notices remain. The existing Echo targets, setup and release paths are retained; the Cube has a separate installer and does not use Echo unlocking or flashing instructions. This is not an Amazon release.
 
 ## Audio routing and current EDA integration
 
