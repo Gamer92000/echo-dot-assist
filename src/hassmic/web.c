@@ -115,8 +115,12 @@ static char start_id[17];           /* new at every start: the page knows a rest
  * location, readable to anyone on the LAN who asks.  Not in exports: it is this Echo's, as the name.  Own lock: hello
  * runs on every connection thread without lk */
 #define NOTE_MAX 80                 /* bytes; the page cuts at a character's end */
-static pthread_mutex_t note_lk = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t note_lk = PTHREAD_MUTEX_INITIALIZER;     /* note[] only: never held over the flash */
+static pthread_mutex_t note_save_lk = PTHREAD_MUTEX_INITIALIZER; /* one save at a time: file and note[] in one order */
 static char note[NOTE_MAX + 1];
+/* /api/hello: the rest <= ~820 bytes (name, node 160 each, note 168), members <= 16 x ~104 (arb.c NPEER, NLEN); a
+ * hello cut short is no JSON, and the login page cannot start */
+#define HELLO_MAX 4096
 #define NONCE_MS 120000
 static struct { uint8_t pub[32], nonce[16]; long long at; } nonces[8];      /* handed out for a login through another Echo */
 static unsigned nonce_next;
@@ -467,16 +471,19 @@ static int signed_ok(const struct req *r, int persist)
 
 /* ---------------------------------------------------------------- API */
 
-/* The note as it is kept: one line (control characters as spaces), trimmed, at most NOTE_MAX bytes, cut before a
- * character the limit would split (the page cuts too, but anything may post) */
+/* The note as it is kept: one line (control characters as spaces), trimmed, at most NOTE_MAX bytes, without a
+ * character left unfinished at its end, whether the limit split it or the body ended inside it (the page cuts too,
+ * but anything may post) */
 static void note_clean(char *out, const char *s, size_t len)
 {
-    size_t i = 0, n = 0;
+    size_t i = 0, n = 0, k;
     while (i < len && (s[i] == ' ' || (unsigned char)s[i] < 0x20)) i++;
     for (; i < len && n < NOTE_MAX; i++) { unsigned char c = (unsigned char)s[i]; out[n++] = (char)(c < 0x20 || c == 0x7f ? ' ' : c); }
-    if (i < len && ((unsigned char)s[i] & 0xc0) == 0x80) {     /* cut inside a character: its lead byte goes too */
-        while (n && ((unsigned char)out[n - 1] & 0xc0) == 0x80) n--;
-        if (n) n--;
+    for (k = n; k && ((unsigned char)out[k - 1] & 0xc0) == 0x80; k--) ;       /* back to the last character's lead byte */
+    if (k && (unsigned char)out[k - 1] >= 0xc0) {
+        unsigned char lead = (unsigned char)out[k - 1];
+        size_t need = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : 2;
+        if (n - (k - 1) < need) n = k - 1;
     }
     while (n && out[n - 1] == ' ') n--;
     out[n] = 0;
@@ -496,11 +503,11 @@ static int note_save(const char *s, size_t len)
     char p[300], t[NOTE_MAX + 2]; int e;
     note_clean(t, s, len);
     snprintf(p, sizeof p, "%s/note", state_dir());
-    pthread_mutex_lock(&note_lk);
+    pthread_mutex_lock(&note_save_lk);         /* the fsync without note_lk: every hello would wait on the flash */
     if (!t[0]) e = unlink(p) && errno != ENOENT ? -1 : 0;
     else { size_t n = strlen(t); t[n] = '\n'; e = statefile_write(p, 0600, t, n + 1); t[n] = 0; }
-    if (!e) memcpy(note, t, strlen(t) + 1);
-    pthread_mutex_unlock(&note_lk);
+    if (!e) { pthread_mutex_lock(&note_lk); memcpy(note, t, strlen(t) + 1); pthread_mutex_unlock(&note_lk); }
+    pthread_mutex_unlock(&note_save_lk);
     return e;
 }
 
@@ -1152,7 +1159,7 @@ static void handle(int fd)
         }
         if (!found) respond_json(fd, 404, "{\"error\":\"not found\"}");
     }
-    else if (!strcmp(r.path, "/api/hello")) { char o[2600]; hello_json(o, sizeof o, 1); respond_json(fd, 200, o); }
+    else if (!strcmp(r.path, "/api/hello")) { char o[HELLO_MAX]; hello_json(o, sizeof o, 1); respond_json(fd, 200, o); }
     else if (!strncmp(r.path, "/api/vouch/", 11) && !strcmp(r.method, "POST")) vouch_api(fd, &r);
     else if (!strcmp(r.path, "/api/login") && !strcmp(r.method, "POST")) {
         /* body: "<browser key hex> <label>" */

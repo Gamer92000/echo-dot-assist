@@ -314,6 +314,8 @@ async def main():
               and open(sf("note")).read() == want + "\n", f"note set: one line, trimmed, in hello and the state: {body!r}")
         st, _, body = b.call("POST", "/api/note", ("x" + "ä" * 50).encode())
         check(st == 200 and hello()["note"] == "x" + "ä" * 39, "a long note: cut at 80 bytes, before the character the limit splits")
+        b.call("POST", "/api/note", "Küche".encode() + b"\xc3")
+        check(hello()["note"] == "Küche", "a body that ends inside a character: that character left out")
         b.call("POST", "/api/note", "Wohnzimmer, Regal".encode())
         args = proc.args
         proc.terminate(); proc.wait()

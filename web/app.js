@@ -1321,9 +1321,13 @@ function switcher(open) {
   // the list may be a round old (others are read every 30 s only while a page shows them)
   if (echo && state && !devRun && Date.now() - lastRound > 30000) refreshDevices().catch(() => {});
 }
+// redrawn as each Echo answers: keepFocus, or the arrow keys lost their place whenever a slow one came in
 function drawSwitcher() {
   const m = $('emenu');
   if (m.classList.contains('hidden') || !echo || !state) return;
+  keepFocus(m, () => fillSwitcher(m));
+}
+function fillSwitcher(m) {
   const hash = location.hash.startsWith('#/') ? location.hash : '';
   const sub = (...p) => h('span', { class: 'em-s' }, p.filter(Boolean).map((x, i) => [i ? ' · ' : '', x]));
   // those that answered first: an address nothing answers at is the least likely pick
@@ -1331,7 +1335,7 @@ function drawSwitcher() {
   const items = list.map(([base, d]) => {
     const name = echoName(d), note = noteOf(d), r = arbOf(d.ip);
     const how = d.error || (!d.echo ? (d.looking ? 'Looking…' : null) : !d.logged ? 'Not logged in' : null);
-    return h('a', { href: base + '/' + hash, role: 'menuitem', class: d.error ? 'em-x' : null, title: d.hint || null },
+    return h('a', { href: base + '/' + hash, 'data-k': 'em ' + base, class: d.error ? 'em-x' : null, title: d.hint || null },
       h('span', { class: 'mini-puck' + (r && r.member ? ' on' : '') }),
       h('span', { class: 'em-t' }, h('span', { class: 'em-n' }, name), sub(note ? h('b', {}, note) : null, d.echo ? shortAddr(base) : null, how)));
   });
@@ -1341,7 +1345,7 @@ function drawSwitcher() {
       h('span', { class: 'em-t' }, h('span', { class: 'em-n' }, me.name), sub(me.note ? h('b', {}, me.note) : null, 'This Echo')), icon('check')),
     ...items,
     items.length ? null : h('div', { class: 'em-none' }, devRun ? 'Looking for your other Echos…' : 'No other Echo yet.'),
-    h('div', { class: 'em-all' }, h('a', { href: '#/echos', role: 'menuitem' }, icon('net'), 'All your Echos'))].filter(Boolean));
+    h('div', { class: 'em-all' }, h('a', { href: '#/echos', 'data-k': 'em all' }, icon('net'), 'All your Echos'))].filter(Boolean));
 }
 $('switch').onclick = (e) => { e.stopPropagation(); switcher(); };
 $('switch').onkeydown = (e) => {
@@ -2031,6 +2035,11 @@ async function probe(base) {
       const hello = await (await fetch(base + '/api/hello', { signal: within(5000) })).json();
       if (hello.pub === echo.hello.pub) { others.delete(base); selfAt.add(base); return; }
       d.echo = new Echo(base, hello);
+    } else if (!d.logged) {
+      // its note comes only from hello where this browser cannot read its state (issue #153): read it again, or a note
+      // changed there showed here until a reload
+      const hello = await (await fetch(base + '/api/hello', { signal: within(5000) })).json();
+      if (hello.pub === d.echo.hello.pub) d.echo.hello.note = hello.note;
     }
     d.error = null;
     const read = async () => {
