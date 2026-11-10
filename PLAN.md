@@ -486,6 +486,21 @@ Run in this order. Each step says what it proves.
       every 10 minutes and at the 5th request. Setting `wake_word_adaptation` (on).
       Open: the time on a device, real recordings (rmaffeo's, the #72 reporter's), native English and the untried
       languages. The models are in git (`wakealign/`, CC BY 4.0, credited in its README), every bundle carries them.
+      A fresh install did not (#160, derFinlay, 2026-11-09: an Echo Dot 3 and two Echo 2 set up from 28ff81c's beta,
+      German): `install-system.sh` and `install-boot.sh` push file lists of their own, the aligners not on them, so
+      /system/hassmic had none until the first update's promotion and `word_tail_end` went by the level, #72's pause
+      included, on every request (the Dot 3: 36 wake words, 0-360 ms of tail left out, 151 on average for the 31 with a
+      pause; no aligner line). After a push of the same build: `alexa aligned by .../alexa-de-DE.wa (de-DE spoken)`,
+      +40 ms from Pryon's end, aligned in 115 ms.  Both lists name them now.  `sysinstall.sh`'s room check held the
+      aligners alone against what is free: a first install with room for them and not much more took them and then
+      failed on its other files, and a promoted update counted installed aligners again against the room they took, so
+      a nearly full partition lost them and got them back the time after.  It counts what the run writes as `new()`
+      does: every file that differs from its destination (a first install's policy twice, the old one kept; the home screen app twice), and writes new
+      aligners only with a megabyte over it; those already there and the same stay whatever the room, others go
+      after `commit()` (a failed write leaves them) (`tests/unit/sysinstall_aligners_test.sh`, sysinstall.sh on the PC
+      with its paths in a folder).  Room seen: 754 MB free on the Dot 3's /system, 502 MB on an Echo 2's.
+      Open: an install through the changed scripts on a device; whether requests come out better with the aligner
+      (13 on two of the Echos since, a television on, what was said not known).
       Format 3 (2026-10-29): the 62 files were 6.58 MB (gzip 6.05, xz 2.09: the same data again and again), 16 of
       them byte for byte another's (en-CA = en-US, en-AU = en-GB, fr-CA = fr-FR: the same acoustic model and
       dictionary; alexa = alexa-en-US). Now a .was per acoustic model holds each GMM once (german 557 KB, english 757,
