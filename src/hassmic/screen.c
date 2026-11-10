@@ -341,6 +341,16 @@ int screen_set_home(const char *pkg)
     return 0;
 }
 
+static _Atomic int music_page;                                  /* setting music_on_screen (settings.c): told to the UI as "mpage" */
+
+int screen_music_page(int set)
+{
+    if (set < 0) return atomic_load(&music_page);
+    set = set != 0;
+    if (atomic_exchange(&music_page, set) != set) { pthread_mutex_lock(&lock); kick(); pthread_mutex_unlock(&lock); }
+    return set;
+}
+
 static int fifo_put(const void *p, size_t n)                    /* lock held */
 {
     if (fifo.n + n > FIFO_MAX) return -1;
@@ -633,7 +643,7 @@ static void web_url(char *out, size_t n)
 }
 
 #define NTIMERS 8
-static struct { int mute, dnd, oobe, evol, kiosk; char timers[300], peer[64], web[96]; struct core_timer run[NTIMERS]; int nrun; } now_s, sent_s;
+static struct { int mute, dnd, oobe, evol, kiosk, mpage; char timers[300], peer[64], web[96]; struct core_timer run[NTIMERS]; int nrun; } now_s, sent_s;
 static struct core_timer hidden[NTIMERS]; static int nhidden = -1;   /* (the writer's) the list tapped away: -1 none */
 static unsigned tl_seq;                                         /* (the writer's) the last "tl" sent */
 
@@ -646,7 +656,7 @@ static void read_core(int slow)
     if (core_timers_ringing(names, sizeof names) <= 0) names[0] = 0;
     now_s.nrun = core_timers_running(now_s.run, NTIMERS);
     pthread_mutex_unlock(&core_lock);
-    now_s.oobe = core_oobe();
+    now_s.oobe = core_oobe(); now_s.mpage = atomic_load(&music_page);
     clean(now_s.timers, sizeof now_s.timers, names);
     for (int i = 0; i < now_s.nrun; i++) { char c[sizeof now_s.run[0].name]; clean(c, sizeof c, now_s.run[i].name); memcpy(now_s.run[i].name, c, sizeof c); }
     pthread_mutex_lock(&lock);
@@ -794,6 +804,7 @@ static void *writer(void *arg)
         if (now_s.mute != sent_s.mute) put(&o, "mute %d", now_s.mute);
         if (now_s.dnd != sent_s.dnd) put(&o, "dnd %d", now_s.dnd);
         if (now_s.oobe != sent_s.oobe) put(&o, "oobe %d", now_s.oobe);
+        if (now_s.mpage != sent_s.mpage) put(&o, "mpage %d", now_s.mpage);
         if (now_s.evol != sent_s.evol) put(&o, "ev %d", now_s.evol);
         if (strcmp(now_s.timers, sent_s.timers)) put(&o, "timers %s", now_s.timers);
         if (strcmp(now_s.peer, sent_s.peer)) put(&o, "peer %s", now_s.peer);

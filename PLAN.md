@@ -3497,3 +3497,14 @@ Run in this order. Each step says what it proves.
       existing off, on/off, failed writes, late/lost service, readback, restore, and the signed settings API's visibility,
       persistence across restart, and exports. Presets accept the preference before root publishes readback, without
       exposing an unavailable switch on the page. Physical-device validation of this implementation remains open.
+- [~] Music page in place of the face while a track plays (2026-11-10, asked by a cronos owner: "a big cover as default").
+      Setting `music_on_screen` (Screen page, off by default; `settings.c` -> `screen_music_page` -> `mpage` line to the UI).
+      `scene.c` `music_page_tick`: a track playing (Sendspin state 1), the face in front and calm (`face_calm`: idle, mic
+      off, DND), our own home activity on top (an app in front is left alone), no drawer: `music_show(0)`, the Playing tab,
+      `mp_auto`.  A request, call or timer bring the face (`face_pattern`, unchanged) and the page returns when they
+      end.  Left when Sendspin says stopped (state 0) or the music is gone for 5 s (`MP_STOP_MS`: a gap between two tracks
+      reports 0 for a moment); a pause (2) keeps it, so the play button a finger just pressed does not take the page away.
+      The drawer's Face / Home-as-face and the music rail's face button set `mp_off`: the face holds until the track has
+      stopped.  A page opened by hand (`mp_auto` 0) is never left by itself.  `ui_test.c`: every one of these.
+      Open: on a real Show (cronos 192.168.4.246): whether Sendspin's state 0 between tracks is shorter than 5 s there, the
+      page after a wake word on a long track, the screen waking for the first track.

@@ -1063,6 +1063,31 @@ int main(int argc, char **argv)
         #undef TEXT_IS
     }
 
+    /* setting music_on_screen: the Playing tab in place of the face while a track plays, until it stops */
+    FRESH(); msg("mt Song\tArtist\tAlbum"); msg("mp 1 0 200000 1000"); run(1000);
+    assert(S->view == V_FACE);                                    /* (off: the face, as always) */
+    msg("mpage 1"); run(300); assert(S->view == V_MUSIC && S->mp_auto);
+    msg("p+ active-start"); run(300); assert(S->view == V_FACE);  /* a request: the face, as always */
+    run(2000); assert(S->view == V_FACE);                         /* (listening still) */
+    msg("p- active-start"); run(300); assert(S->view == V_MUSIC); /* and the page is back once it is over */
+    msg("mp 0 0 200000 1000"); run(2000); assert(S->view == V_MUSIC);   /* a gap between two tracks: no stop */
+    msg("mp 1 0 200000 1000"); run(5000); assert(S->view == V_MUSIC);
+    msg("mp 2 1000 200000 1000"); run(8000); assert(S->view == V_MUSIC);   /* paused: still the page, its play button at hand */
+    msg("mp 0 0 200000 1000"); run(6000); assert(S->view == V_FACE && !S->mp_auto);   /* stopped: the face */
+    msg("mp 1 0 200000 1000"); run(300); assert(S->view == V_MUSIC);       /* the next track: the page again */
+    tap(46, 60); run(300);                                        /* (the face button above the tabs: by hand) */
+    assert(S->view == V_FACE);                                    /* (the tap found it) */
+    {
+        assert(S->mp_off); msg("mp 1 5000 200000 1000"); run(3000); assert(S->view == V_FACE);   /* left by hand: held off */
+        msg("mx"); run(6000); assert(!S->mp_off);                 /* until the music is gone */
+        msg("mt Song\tArtist\tAlbum"); msg("mp 1 0 200000 1000"); run(300); assert(S->view == V_MUSIC);
+    }
+    FRESH(); msg("mpage 1"); msg("mt Song\tArtist\tAlbum"); msg("mp 1 0 200000 1000"); run(300);
+    scene_top(S, "org.example.app", now); run(300);               /* an app in front: left alone */
+    assert(S->view != V_MUSIC || !scene_visible(S)); assert(nlaunched == 0 || strncmp(launched[nlaunched - 1], "org.example.app", 15));
+    FRESH(); msg("mt Song\tArtist\tAlbum"); msg("mp 1 0 200000 1000"); music_show(S, 0); run(300);   /* opened by hand: left by hand */
+    msg("mpage 1"); msg("mp 0 0 200000 1000"); run(7000); assert(S->view == V_MUSIC && !S->mp_auto);
+
     printf("frames %d, dirty %.0f px a frame on average; drawing dirty-only %.3f ms a frame (worst %.3f), whole %.3f ms\n",
            frames, (double)drawn_px / frames, t_inc / frames * 1000, worst * 1000, t_full / frames * 1000);
     scene_free(S);

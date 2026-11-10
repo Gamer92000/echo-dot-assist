@@ -184,9 +184,9 @@ int drawer_act(struct scene *s, int a, int arg, int ev)
     case A_DR_HOME: {
         const char *pkg; home_label(s, &pkg);
         if (pkg[0]) drawer_go(s, pkg);
-        else { drawer_close(s, 0); go_home(s, V_FACE); }
+        else { drawer_close(s, 0); go_home(s, V_FACE); s->mp_off = 1; }
     } break;
-    case A_DR_FACE: drawer_close(s, 0); go_home(s, V_FACE); ask_own(s); break;
+    case A_DR_FACE: drawer_close(s, 0); go_home(s, V_FACE); ask_own(s); s->mp_off = 1; break;
     case A_DR_MUSIC: case A_DR_NOW: drawer_close(s, 0); music_show(s, a == A_DR_NOW ? 0 : -1); break;
     case A_DR_DND: s->dnd = !s->dnd; send(s, "dnd %d", s->dnd); break;
     case A_DR_SLEEP: drawer_close(s, 1); if (s->p->sleep) s->p->sleep(s->ctx); break;

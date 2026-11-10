@@ -687,6 +687,29 @@ static long long until_minute(void)
 
 static void home_apply(struct scene *s);
 
+#define MP_STOP_MS 5000                                         /* a track gap is no stop: Sendspin says "stopped" between two for a moment */
+
+/* setting music_on_screen: while a track plays, the Playing tab is what shows in place of the face (with the home app
+ * ours: an app in front is left alone), until it stops.  A request, a call or a timer bring the face as always and the
+ * page comes back when they are over; the face or Home chosen by hand holds it off until the track stops.  Opened by
+ * hand it is left by hand: only a page opened here goes by itself. */
+static void music_page_tick(struct scene *s, long long now, long long *wake)
+{
+    int stopped = !s->music || s->mstate == 0;
+    if (!s->mpage) { s->mp_auto = s->mp_off = 0; s->mp_stop_at = 0; return; }
+    if (stopped) {
+        if (!s->mp_stop_at) s->mp_stop_at = now;
+        if (now - s->mp_stop_at < MP_STOP_MS) { long long t = s->mp_stop_at + MP_STOP_MS; if (!*wake || t < *wake) *wake = t; return; }
+        if (s->mp_auto && s->view == V_MUSIC && is_home(s->top)) go_home(s, V_FACE);
+        s->mp_auto = s->mp_off = 0;
+        return;
+    }
+    s->mp_stop_at = 0;
+    if (s->mstate != 1 || s->view != V_FACE || s->mp_off || !is_home(s->top) || drawer_open(s) || s->oobe || !face_calm(s)) return;
+    music_show(s, 0);                                           /* (the Playing tab) */
+    s->mp_auto = 1;
+}
+
 struct rect scene_prepare(struct scene *s, long long now, int *next_ms)
 {
     float dt = s->last ? clampf((float)(now - s->last), 1, 100) : 16;
@@ -731,6 +754,7 @@ struct rect scene_prepare(struct scene *s, long long now, int *next_ms)
         if (go) launch(s, pkg, NULL);
     }
     if (home_new) home_apply(s);
+    music_page_tick(s, now, &wake);
     /* the app's picture: while the drawer is out over it, and while the app launched from it is on its way; never
      * again under a later one */
     if (s->backdrop.px && !(s->dr.from_app && drawer_open(s)) && s->leaving_until <= now) scene_backdrop(s, NULL, 0, 0);
@@ -843,6 +867,7 @@ void scene_msg(struct scene *s, const char *line, long long now)
     else if (eq(cmd, "mute")) s->mute = atoi(a);
     else if (eq(cmd, "dnd")) s->dnd = atoi(a);
     else if (eq(cmd, "oobe")) s->oobe = atoi(a);
+    else if (eq(cmd, "mpage")) s->mpage = atoi(a) != 0;
     else if (eq(cmd, "h12")) s->h12 = atoi(a);
     else if (eq(cmd, "name")) snprintf(s->name, sizeof s->name, "%s", a);
     else if (eq(cmd, "act")) snprintf(s->act, sizeof s->act, "%s", a);

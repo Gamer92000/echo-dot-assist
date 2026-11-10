@@ -177,6 +177,8 @@ struct scene {
      * app is in front, so that neither the face nor hassmic's black home activity shows in between */
     long long leaving_until; int leaving_drawn; char leaving_pkg[96]; int home_broken;   /* home_broken: it did not start */
     long long home_retry_at; int home_retry_ms;     /* and is tried again then (30 s, doubling to 10 min) */
+    int mpage, mp_auto, mp_off; long long mp_stop_at;   /* setting music_on_screen: the music page of our own accord (mp_auto), left by hand until
+                                                       the track stops (mp_off); the stop seen at (a gap between two tracks is none) */
     int own_asked;                                  /* the face or the music asked for: the home app not brought back */
     struct ui_image backdrop;                  /* the app the drawer was pulled over */
     /* parts */
@@ -254,6 +256,7 @@ void sheet(struct scene *s, int id, const char *title, const char *const *rows, 
 void toast(struct scene *s, int id, const char *msg);
 
 /* face.c */
+int  face_calm(struct scene *s);                                /* nothing asks for attention: idle, mic off, do not disturb */
 int  face_view(struct scene *s, float dt);                      /* still moving */
 long long face_due(struct scene *s);
 int  face_act(struct scene *s, int a, int arg, int ev);

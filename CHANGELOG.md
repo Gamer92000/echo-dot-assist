@@ -4,6 +4,13 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-10
 
+- **The Echo Show can show the music page instead of the face while a track plays.** New setting "Music on the screen
+  while it plays" (Screen page, `music_on_screen`, off by default): the Playing tab with the big cover, the seek bar and the
+  buttons takes the face's place as long as music plays, until it stops (not at a pause, nor in the few seconds between two
+  tracks). A request, a call or a ringing timer bring the face as before, and the music page comes back when they are over.
+  The drawer's Face, or the face button on the music page, holds the face until the music has stopped. An app in front
+  (Kiosk Satellite, a dashboard) is left alone.
+
 - **Echo Show 8 2nd gen: Adaptive colour can be switched off or on from the settings page.** Under **Screen**, the
   **Brightness and colour** card has the stock display setting that warms the screen's colours with the room's
   light, often turning a dashboard yellow at night. It is off by default; an explicit choice is kept across restarts.

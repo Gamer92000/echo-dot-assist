@@ -487,6 +487,11 @@ satellite of its own has to run without its microphone (as a display) while hass
   smile. Below them: the clock, in Home Assistant's time zone (12-hour where the Echo's language is US, Canadian or
   Australian English), or what Music Assistant plays, with play/pause; tap it for the music. A request to the
   assistant, a ringing timer or a Drop In bring the face back from the music.
+- **Music on the screen** (Screen page, "Music on the screen while it plays", off by default): while a track plays the
+  Playing tab (the big cover) shows in place of the face, until the music stops. A pause keeps it, and so does the gap
+  between two tracks. A request, a call or a ringing timer bring the face and the page comes back when they are over.
+  Choosing the face yourself (the drawer's **Face**, or the face button on the music page) keeps it until the music has
+  stopped. It replaces the face only: an app in front (Kiosk Satellite, a dashboard) stays.
 - **The drawer**: pull down from the top edge of the screen, whatever shows, as on Amazon's own Echo Show. In it:
   **Home** (the home app), **Face** (where the home app is another), **Music**, **Do not disturb**, **Screen off** (a
   touch wakes it), what plays (tap it for the music) and the Echo's volume. Over an app, start the pull on the thin

@@ -765,7 +765,7 @@ int music_act(struct scene *s, int a, int arg, int ev)
     }
     if (ev != EV_TAP) return 0;
     switch (a) {
-    case A_M_HOME: go_home(s, V_FACE); ask_own(s); break;
+    case A_M_HOME: go_home(s, V_FACE); ask_own(s); s->mp_off = 1; s->mp_auto = 0; break;
     case A_M_TAB:
         if (arg == T_LIBRARY && m->tab == T_LIBRARY && m->depth && (m->depth > 1 || m->stack[0]->arg[0])) lib_top(s);   /* again: its top */
         else tab_open(s, arg);
