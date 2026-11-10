@@ -4,6 +4,18 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-10
 
+- **"Stop" can end a timer ringing on another Echo (issue #161), optional and off by default.** A ringing Echo
+  always wins the wake word round, but only if it heard the wake word itself. From the next room, or over its own
+  ring, it may not: then another Echo got the "stop", paused its own music or handed the word to Home Assistant, and
+  the timer rang on. New setting "A stop another Echo heard ends the ring" (Voice page, Timers card,
+  `timer_stop_from_others`): switched on, that Echo's ring stops on "<wake word>, stop" said to any Echo of its
+  arbitration network, as it does when you say it to the ringing Echo itself. The Echo that heard you then leaves its
+  music alone and starts no request. It reaches the whole house: a "stop" in the bedroom ends the kitchen's timer. A
+  "stop" that has something to end where it was heard (a ring, a reply, a call there) ends only that, and "Any request
+  stops a ringing timer" stays with the Echo that heard you. The Echos tell each other over their own network, without
+  Home Assistant; the Echo that hears you needs this version too. The log of the one that heard says
+  `stop: nothing here, <name> rings: told to stop`, the ringing one's `alarm: off (stop heard by <name>)`. Not in
+  Kiosk Satellite's arbitration mode. Suggested by redeye86.
 - **Music also drops on the other Echos that heard you (issue #165).** With two Echos in one room playing the same
   music, only the one answering turned its music down; the other played on at full volume over your command and the
   reply. Now every Echo that heard the wake word turns its music down by its own "Music ducking" until the answering

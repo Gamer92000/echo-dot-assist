@@ -53,6 +53,7 @@
 #include "davs.h"
 #include "dropin.h"
 #include "duck.h"
+#include "ringstop.h"
 #include "micdenoise.h"
 #include "earsup.h"
 #include "afemeta.h"
@@ -1286,6 +1287,18 @@ static int music_stop(void)
     return paused;
 }
 
+/* Lock held.  Whether a "stop" has something of this Echo's to end, so that it is not one for a ring elsewhere
+ * (ringstop.c, issue #161): a ring here, a reply playing, a run thinking (the wake word's round cancels it: trigger), or
+ * what the last wake word cut (a reply, a ring, a run: trigger sets wake_cut_ms after the detection, heard_ms).  Not
+ * "a cut within 10 s": a ring here that one wake word cut and its "stop" ended kept the next "<wake word>, stop", said
+ * for another Echo's ring seconds later, from going there.  The same rule for Pryon's keyword and for a bare "stop"
+ * transcript, which only differ in one thing: the transcript's own run is THINKING (the STT end followed Home
+ * Assistant's VAD end), not one the "stop" is for (run: 1).  A Drop In each caller ends first */
+static int stop_is_here(int run)
+{
+    return atomic_load(&alarm_on) || state == SPEAKING || (!run && state == THINKING) || (heard_ms && wake_cut_ms >= heard_ms);
+}
+
 /* "Stop", the second keyword of Amazon's wake word models.  The engine reports it only right behind the wake word
  * ("<wake word>, stop"; on its own it is never detected, also not with a changed op.cfg.json: tried).
  * It ends what is making noise and never starts anything:
@@ -1303,21 +1316,29 @@ static int music_stop(void)
  * "<wake word>, stop the timer" no longer reaches Home Assistant, and one Echo's log (7 days) had "stop" in 24 of 700
  * wake words, 2 of them false in 354 requests it answered: such a command is lost and has to be said again.
  * A "stop" during the arbitration round finds no run of its wake word yet: trigger opens none then when the "stop"
- * ended something (stop_cut, stopped_now), as the drop above would, or with stop_ends_listening. */
+ * ended something (stop_cut, stopped_now), as the drop above would, or with stop_ends_listening.
+ * Nothing of this Echo's to end (no ring, call, reply, THINKING run, nor a run its wake word cut) while another Echo
+ * says its timer rings (ringstop.c, issue #161): that ring is told to stop, and the "stop" counts as one that ended
+ * something here: the music plays on and the wake word's run is dropped, as after a ring of our own. */
 static void stop_word(void)
 {
-    int ended = 0, paused = 0;
+    int ended = 0, paused = 0, told = 0;
     if (dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE) { dropin_hangup("stop"); ended = 1; }   /* and the pipeline its wake word opened */
     pthread_mutex_lock(&core_lock);
     stop_ms = mono_ms();
     if (atomic_load(&alarm_on)) { core_alarm_stop("stop"); ended = 1; }     /* and the pipeline its wake word opened, below */
+    else if (!ended && !stop_is_here(0)) {
+        char who[96];
+        /* not by wake_cut_ms: that would take a "stop" transcript within 10 s for one of a cut here (core_transcript) */
+        if ((told = ringstop_forward(who, sizeof who))) { fprintf(stderr, "stop: nothing here, %s rings: told to stop\n", who); ended = 1; }
+    }
     stop_cut = ended || state == SPEAKING || state == THINKING;               /* THINKING: the round's winner cancels it (trigger) */
     if (state == SPEAKING) {
         fprintf(stderr, "stop: reply cut\n");
         barge_in = 0;
         atomic_fetch_and(&sounds_pending, ~(1 << SND_WAKE | 1 << SND_TOUCH));
         atomic_store(&flush_playback, 1);
-    } else if (state == LISTENING && mono_ms() - wake_cut_ms < 4000) {
+    } else if (state == LISTENING && (told || mono_ms() - wake_cut_ms < 4000)) {     /* told: the run this wake word opened */
         fprintf(stderr, "stop: pipeline dropped\n");
         stop_cut = 1;                       /* a wake word whose round still runs (heard while this listened) opens none */
         atomic_fetch_and(&sounds_pending, ~(1 << SND_WAKE | 1 << SND_TOUCH));
@@ -1343,6 +1364,24 @@ static void stop_word(void)
      * the ring or the music it stopped.  The transcript of that "stop", if one still comes, is not shown (core_transcript) */
     if (ended || stop_cut || paused) screen_words(SCREEN_WORDS_RUN, NULL);
     pthread_mutex_unlock(&core_lock);
+}
+
+/* Here the "stop" was heard by another Echo only: this one may have heard the wake word without its "stop" (its own ring
+ * over it).  Its run is that wake word's when the ring cut it (wake_cut_ms, trigger): dropped as stop_word drops it, and
+ * one its round has yet to start starts none (stop_cut, stopped_now).  Without the drop it listened on, and anything but
+ * a bare "stop" went to Home Assistant */
+void core_alarm_stop_elsewhere(const char *why)
+{
+    if (!atomic_load(&alarm_on)) return;
+    core_alarm_stop(why);
+    stop_ms = mono_ms(); stop_cut = 1;
+    if (state == LISTENING && stop_ms - wake_cut_ms < 4000) {
+        fprintf(stderr, "stop: pipeline dropped\n");
+        atomic_fetch_and(&sounds_pending, ~(1 << SND_WAKE | 1 << SND_TOUCH));
+        if (connected && proto->cancel) quiet_cancel();
+        else { barge_in = 0; core_pipeline_finish(); quiet_abort = 1; }
+    }
+    screen_words(SCREEN_WORDS_RUN, NULL);
 }
 
 /* ---------------------------------------------------------------- wake word arbitration (arb.c)
@@ -2016,10 +2055,11 @@ static int arb_scan(const char *tag_id)
     return r;
 }
 
-/* A member's message: to every member, the duck's (duck.c); to us alone, Drop In's (an invite to all would ring every Echo) */
+/* A member's message: to every member, the duck's (duck.c) and the rings' (ringstop.c), each taking only its own kinds;
+ * to us alone, Drop In's (an invite to all would ring every Echo) */
 static void arb_message(const unsigned char from[8], const char *node, unsigned ip, const unsigned char *p, size_t n, int all)
 {
-    if (all) duck_message(from, node, p, n);
+    if (all) { duck_message(from, node, p, n); ringstop_message(from, node, p, n); }
     else dropin_message(from, node, ip, p, n);
 }
 
@@ -2253,6 +2293,7 @@ static void alarm_set(int on)          /* lock held */
      * ("not in map"), and the ring stayed dark */
     led(on ? "-s" : "-u", "ready-timer");
     playback_hint();
+    ringstop_ringing(on);               /* the other Echos may end it (timer_stop_from_others, issue #161) */
 }
 
 void core_timer_finished(const char *id, const char *name, unsigned total)
@@ -2351,9 +2392,13 @@ int core_transcript(const char *text)
         /* 10 s: the keyword's pipeline ends at Home Assistant's end of speech, a few seconds on.  A reply or request the
          * wake word just cut is what the "stop" was for: Home Assistant's wake word has no "stop" keyword (stop_word),
          * and Amazon's can miss it, so "<wake word>, stop" during a reply arrives here as a request */
-        int cut = hit && mono_ms() - wake_cut_ms < 10000;
-        if (!hit || !(cut || music_stop() || (music_stopped_ms && mono_ms() - music_stopped_ms < 10000))) return 0;
-        fprintf(stderr, "said stop: %s, run cancelled\n", cut ? "what the wake word cut stays ended" : "music paused");
+        /* a ring on another Echo before the music here (ringstop.c, issue #161), by stop_word's rule: not after a cut of
+         * this run's own wake word, but after an older one's, which "cut" below still takes as its own */
+        char who[96]; int told = hit && !stop_is_here(1) && ringstop_forward(who, sizeof who);
+        int cut = hit && !told && mono_ms() - wake_cut_ms < 10000;
+        if (told) fprintf(stderr, "said stop: %s rings: told to stop\n", who);
+        if (!hit || !(cut || told || music_stop() || (music_stopped_ms && mono_ms() - music_stopped_ms < 10000))) return 0;
+        fprintf(stderr, "said stop: %s, run cancelled\n", cut ? "what the wake word cut stays ended" : told ? "a ring elsewhere stopped" : "music paused");
     }
     if (connected && proto->cancel) { barge_in = 0; atomic_store(&streaming, 0); proto->cancel(); quiet_abort = 1; }
     core_pipeline_finish();
@@ -3470,6 +3515,7 @@ int main(int argc, char **argv)
     static const struct arb_hooks arb_hooks = { arb_send_key, arb_notify, arb_request, arb_paired, arb_scan, arb_message };
     if (arb_port && core_local_wake && proto->arb_send && arb_start(arb_port, core_node_name(), &arb_hooks)) fprintf(stderr, "arbitration: not available\n");
     if (arb_running() && duck_start()) fprintf(stderr, "duck: no thread, the other Echos' runs do not duck the music here\n");
+    if (arb_running() && ringstop_start()) fprintf(stderr, "ringstop: no thread, a stop here ends no ring elsewhere\n");
     if (dropin_port && arb_running() && dropin_start(dropin_port)) fprintf(stderr, "drop in: not available\n");
 
     pthread_t cap_t, play_t, ear_t;

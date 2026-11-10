@@ -11,6 +11,7 @@
 #include "micend.h"
 #include "micgain.h"
 #include "ring.h"
+#include "ringstop.h"
 #include "screen.h"
 #include "sendspin.h"
 #include "sound.h"
@@ -92,7 +93,7 @@ static int colour_actual(void)
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
@@ -130,6 +131,8 @@ static const struct setting table[NSET] = {
      * (state/timer_sound.wav), an export says only "custom" */
     [TIMER_SOUND] = { "timer_sound", "Timer sound", "Voice", NULL, S_CHOICE, 0, 0, 1, 0 },
     [TIMER_STOP_ANY] = { "timer_stop_any", "Any request stops a ringing timer", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* ringstop.c keeps it (issue #161): this Echo's ring ends on a "stop" another Echo of the network heard */
+    [TIMER_STOP_OTHERS] = { "timer_stop_from_others", "A stop another Echo heard ends the ring", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     /* buttons.c keeps it: double press of the action button = next, triple = previous; a single press waits 450 ms */
     [MULTI_PRESS] = { "multi_press", "Double and triple press of the action button", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     [STOP_ENDS]   = { "stop_ends_listening", "Stop after the wake word ends listening", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
@@ -242,7 +245,7 @@ static int present(enum id i)
     case LIGHT_SENSOR: return core_lux() == core_lux();          /* a light sensor: not NAN */
     case LED_AUTO: return core_led_has_auto();
     case WIFI_MOTION: case WIFI_SENS: return wifimotion_present();
-    case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: case DUCK_OTHERS: return arb_running();
+    case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: case DUCK_OTHERS: case TIMER_STOP_OTHERS: return arb_running();
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
     case SS_UNPAIRED: return core_sendspin_port != 0;
     case SPK_GAIN: return spkgain_present();
@@ -336,6 +339,7 @@ int settings_get(const struct setting *s)
     case TIMER_RING: return core_timer_ring(-1);
     case TIMER_SOUND: return core_timer_sound(-1);
     case TIMER_STOP_ANY: return core_timer_stop_any(-1);
+    case TIMER_STOP_OTHERS: return ringstop_from_others(-1);
     case STOP_ENDS: return core_stop_ends_listening(-1);
     case MULTI_PRESS: return buttons_multi_press(-1);
     case WAKE_IN_REQ: return core_wake_in_request(-1);
@@ -411,6 +415,7 @@ static void put(enum id i, int v)
     case TIMER_RING: core_timer_ring(v); break;
     case TIMER_SOUND: core_timer_sound(v); break;              /* refused without its file: settings_set says so */
     case TIMER_STOP_ANY: core_timer_stop_any(v); break;
+    case TIMER_STOP_OTHERS: ringstop_from_others(v); break;
     case STOP_ENDS: core_stop_ends_listening(v); break;
     case MULTI_PRESS: buttons_multi_press(v); break;
     case WAKE_IN_REQ: core_wake_in_request(v); break;

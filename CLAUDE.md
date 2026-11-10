@@ -355,6 +355,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `hooks->message` `all`: never Drop In's; sent only for runs a won round started, bridged over a follow-up's restart,
   `duck_follow`; HA's media is no run, `speak_media`; taken only from members that claimed in our round,
   `arb_round_claimed`, up to 4, each held 6.5 s past its last "on"); setting `duck_for_others` (on) gates the last two.
+  A ring on another Echo (`ringstop.c`, issue #161, setting `timer_stop_from_others` on the ringing Echo, off): it
+  broadcasts `T_MSG` 0x41 on/off while it rings; a "stop" (keyword or bare transcript) that ends nothing here sends
+  0x42 to all, the ringer stops, and here the music stays and the wake word's run is dropped.
   A "stop" that ended what its wake word cut (ring, Drop In, reply, THINKING run) drops that wake word's run: after the
   round `stop: pipeline dropped` (`wake_cut_ms`), during it `trigger` starts none (`stop_cut`, `stopped_now`).
   Setting `stop_ends_listening` (Voice, page only, off): any "stop" within 4 s of the last detection (`heard_ms`,

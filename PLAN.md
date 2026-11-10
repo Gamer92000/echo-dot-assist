@@ -204,6 +204,37 @@ Run in this order. Each step says what it proves.
       a connect HA asked for that ble.c's thread had not taken yet came up afterwards and stayed, a slot taken for
       good). ble.c keeps the controller for A2DP, the speaker and Improv. `tests/fake_ha_bt_proxy.py` (fake_improv.py's controller; `HASSMIC_BT_MAC` stands in for idme's
       `bt_mac_addr` in ble.c). **Open:** not tried on an Echo with a real Home Assistant (whether HA drops the scanner at once).
+- [~] "Stop" forwarded to a ringing Echo (issue #161, 2026-11-10): `ringstop.c`. A ringing Echo claims with prio 2
+      and every Echo that heard "<wake word>, stop" runs the keyword (`stop_word`, round lost or not), so what failed
+      was only a ringing Echo that never detected the wake word (too far, or its ring over it): no claim, the other
+      Echo won alone and had nothing to stop. Setting `timer_stop_from_others` (Voice, page only, exported, off) on
+      the ringing Echo: while `alarm_on` (`alarm_set` -> `ringstop_ringing`) it broadcasts `T_MSG` `{0x41, 1}` (three
+      copies 0/100/300 ms, then every 2 s) and `{0x41, 0}` when it stops or the setting goes off; every Echo keeps the
+      members that ring, `HOLD_MS` 6.5 s past each "on". `stop_word` with nothing of its own to end (no ring, call,
+      SPEAKING/THINKING run, nor a LISTENING one its wake word cut) and a member ringing: `ringstop_forward` queues
+      `{0x42, id32}` (three copies, one id; receivers take each sender's id once), the "stop" counts as ended (music
+      not paused, the wake word's LISTENING run dropped, `trigger` starts none in the round). Not via `wake_cut_ms`:
+      that made a "stop" transcript within 10 s look like one of a cut here and skip the forward (found by the test).
+      One rule for keyword and transcript (`stop_is_here`): a ring here, SPEAKING, THINKING (keyword only: at the
+      transcript the run itself is THINKING), or a cut by the last wake word (`wake_cut_ms >= heard_ms`). Not "a cut
+      within 10 s": a ring here cut and stopped kept a "stop" for another Echo's ring 7 s later from going out (found
+      by the test's control). `core_transcript` forwards before `music_stop`; `cut` (10 s) only when not forwarded.
+      `ringstop_forward` sends nothing and returns 0 without its thread, outside our mode or without members (arb's
+      lock under `core_lock`, as proto_esphome.c's `arb_peers()`), so the "stop" stays this Echo's.
+      **Open (accepted):** on the ringing Echo, a stop that arrives before its own detection of the same wake word is
+      processed finds `heard_ms` newer than `stop_ms`, and that run starts with "stop" in its audio; the "stop" is said
+      after the word and travels the network, so it would need the capture thread late by that much. `timer_stop_any` is not
+      forwarded. Whole house: the ringing Echo took no part in the round, so nothing tells how near it is (the rivals'
+      table only knows members that claim). The setting is the ringer's so that off (default) changes nothing on any
+      Echo. Kinds 0x41/0x42 beside the duck's 0x40: #165's builds take only 0x40, older ones drop a T_MSG to all.
+      Kiosk mode: no messages; its claims carry no priority either (Kiosk Satellite's protocol, not ours).
+      The receiver carries a stop out on ringstop's thread (`core_alarm_stop_elsewhere`; not on arb's, whose socket
+      would wait for `core_lock`) and drops a run its own wake word opened over the ring (it heard the word, not the
+      "stop"), as `stop_word` does. Taken only in our mode; no forward without the sender's thread. A remote ring wins
+      over local music, one stop ends every ring that allows it, and a false "stop" keyword (2 in 354 requests on one
+      Echo) now ends a ring elsewhere where it only paused music before: accepted for an opt-in setting.
+      `tests/fake_ha_arbitration_ringstop.py`. **Open:** not tried on two Echos; redeye86's case (biscuit + athena)
+      not confirmed to be the "never detected" one (logs of both Echos of one failed stop would say).
 - [~] Ducking on the other Echos that heard it (issue #165, 2026-11-10): `duck.c`. An Echo whose round runs ducks
       from the wake word (`duck_round` in `wake_heard`'s score wait and `claim`, until the decision + `LOST_WAIT_MS`
       1.5 s; `duck_won` clears it on the winner, whose state ducks from there). The winner, for a run a round it won

@@ -119,6 +119,11 @@ System) off takes any certificate, but then anyone on your network could slip th
   "Stop the timer" is not "stop": it goes to Home Assistant, which has forgotten the finished timer and says none is
   running. Switch on "Any request stops a ringing timer" on the settings page and whatever you say after the wake
   word during a ring stops it, in any language; a question asked during a ring then only stops it.
+  With several Echos, a ringing one wins the wake word round, but only if it heard you: from the next room, or over its
+  own ring, it may not, and another Echo gets the "stop". Switch on "A stop another Echo heard ends the ring" (Voice
+  page, Timers card) on the Echos whose rings may be stopped that way, and "<wake word>, stop" said to any Echo of their
+  arbitration network ends them; that Echo then leaves its music alone. It reaches every room, it needs this version on
+  the Echo you speak to as well, and "Any request stops a ringing timer" is not passed on. Off by default.
   Several timers can ring at once: each new one gives the ring its full time again, and one stop ends them all.
   A timer rings with Alexa's own timer tone, from the Echo's firmware. "Timer sound" on the settings page picks
   another: Alexa's alarm tone, a triple beep (as loud as Alexa's tone), or a sound of your own: "Upload a sound…" takes
