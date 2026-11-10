@@ -45,6 +45,7 @@
 #include "board.h"
 #include "btout.h"
 #include "core.h"
+#include "duck.h"
 #include "hash.h"
 #include "settings.h"
 #include "netio.h"
@@ -299,7 +300,7 @@ static void *player_thread(void *arg)
         }
         n = rs_run(&rs, (const int16_t *)pcm, frames, step, out);
         if (atomic_load(&player_muted)) memset(out, 0, n * FRAME);
-        else music_duck(out, n, RATE, &duck_g, core_state() != IDLE ? settings_duck_gain() : 1);          /* under the voice assistant */
+        else music_duck(out, n, RATE, &duck_g, duck_active() ? settings_duck_gain() : 1);          /* under the voice assistant, ours or another Echo's (duck.c) */
         music_write(out, n * FRAME);
         rate_sum += step - 1; rate_n++;
         if (raw_us() - stat_t > 10000000) {

@@ -4,6 +4,16 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-10
 
+- **Music also drops on the other Echos that heard you (issue #165).** With two Echos in one room playing the same
+  music, only the one answering turned its music down; the other played on at full volume over your command and the
+  reply. Now every Echo that heard the wake word turns its music down by its own "Music ducking" until the answering
+  Echo is done. An Echo in another room that did not hear you plays on. The Echos tell each other over their own
+  network, with no Home Assistant automation and no change to the volume itself: Music Assistant and the light ring
+  see nothing of it. New setting "Duck for other Echos" (Sound page, `duck_for_others`, on by default); it needs
+  wake word arbitration on. Both Echos need this version. A follow-up question keeps them down for your answer too;
+  music Home Assistant plays on the answering Echo afterwards (a radio you asked for) does not. If the "done" message
+  is lost, the music comes back after about 7 seconds. The answering Echo's own music now also drops from the wake word on rather than once the Echos have
+  agreed which one answers (up to a second later). Suggested by nima-1102.
 - **A freshly installed Echo went without the wake word aligners until its first update.** The files that find where
   the wake word ends (since 2026-10-29) came with every update, but the installer (`scripts/setup.sh`,
   `scripts/install-system.sh`, `scripts/install-boot.sh`) left them out. Such an Echo found the word's end by the

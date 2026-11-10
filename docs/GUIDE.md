@@ -561,6 +561,16 @@ Assistant starting on the Echo pauses the phone. The voice assistant ducks both,
 ended, by 16 dB unless "Music ducking" (Sound page, 0 to 60 dB) says otherwise: raise it if commands over loud music or
 an audiobook are not understood. "<wake word>, stop" pauses either, and the action button pauses and resumes.
 
+With several Echos (wake word arbitration on), every Echo that heard the wake word turns its music down too, by its
+own "Music ducking", until the Echo that answers is done: two Echos in one room playing the same Music Assistant group
+both go quiet for your command and the reply. An Echo that did not hear you, in another room, plays on. The answering
+Echo tells the others over the Echos' own network that it is busy (every 2 s) and when it is done; without Home
+Assistant, without touching the volume. A follow-up question keeps the others down for your answer too; music Home
+Assistant then plays on the answering Echo (a radio you asked for) does not. If the "done" is lost, the music comes
+back about 7 seconds after the last "busy". "Duck for other Echos" (Sound page, on by default) switches it off for
+one Echo. The log says
+`duck: echo-living-room answers what we heard too, music down until it is done` and `duck: ... is done, music back`.
+
 - **Music Assistant** finds the Echo by itself (Sendspin player). Pair it with the Echo's token: shown at the end of
   `scripts/setup.sh`, and as the diagnostic entity "Sendspin pairing token" in Home Assistant (disabled by default).
   Steps: the model's page, "Optional: Music Assistant". When Music Assistant restarts, the Echo announces itself again

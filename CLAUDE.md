@@ -350,6 +350,10 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   starts, ~137 ms on the Show 5, which the queue leaves out; the A2DP sink resamples through resample.c too). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
   loaded with dlopen, aptX/aptX HD via `freeaptx`) with AVRCP. Only one music source plays at a time (newest wins). "<wake word>, stop" pauses it when nothing else was
   stopped (`stop_word`, a bare "stop" transcript in `core_transcript`; issue #51), the action button resumes.
+  Ducked (`duck.c` `duck_active()`, issue #165): our own run, our own round from the wake word on, or another member
+  answering a wake word we claimed too (its 2-byte `T_MSG` "on" every 2 s / "off" to every member, `arb_tell(NULL)`;
+  held 6.5 s past each "on"; taken from the round's winner only, `arb_round_answered`; again for 5 s after its "off":
+  a follow-up goes idle between runs; HA's media is no run, `tts_media`); setting `duck_for_others` (on) gates the last two.
   A "stop" that ended what its wake word cut (ring, Drop In, reply, THINKING run) drops that wake word's run: after the
   round `stop: pipeline dropped` (`wake_cut_ms`), during it `trigger` starts none (`stop_cut`, `stopped_now`).
   Setting `stop_ends_listening` (Voice, page only, off): any "stop" within 4 s of the last detection (`heard_ms`,

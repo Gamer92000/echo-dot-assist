@@ -53,8 +53,8 @@ int  arb_web_key(unsigned char out[32]);
 size_t arb_members_json(char *out, size_t cap);
 int  arb_pair(void);
 /* Drop In (dropin.c) rides on the network.  A member by its node name: its id and IP (network byte order) from its
- * signed beacons; -1 if none counts.  arb_tell: a message for that member alone (n <= ARB_MSG_MAX), broadcast like
- * everything else here, under K's MAC and our counter; -1 outside a network.  arb_derive: a key every member derives
+ * signed beacons; -1 if none counts.  arb_tell: a message for that member alone (n <= ARB_MSG_MAX; to NULL: for every
+ * member, duck.c), broadcast like everything else here, under K's MAC and our counter; -1 outside a network.  arb_derive: a key every member derives
  * from K for that purpose, nobody else; -1 outside a network.  arb_self: our own id.  Any lock but arb's. */
 #define ARB_MSG_MAX 160
 int  arb_member(const char *node, unsigned char id[8], unsigned *ip);
@@ -71,4 +71,7 @@ int       arb_decide(void);                     /* 1: this Echo answers */
 /* Before then: 1 once deciding now gives what waiting would (every member that takes part claimed, or one beat us);
  * never in ARB_KIOSK, whose devices always wait */
 int       arb_settled(void);
+/* The member whose "answers" came in our last round (ARB_HASSMIC), kept until the next one: 0 and its id; -1 none
+ * heard (it may have been lost: Wi-Fi drops broadcasts).  duck.c takes the duck's "on" from it only.  Any lock but arb's */
+int       arb_round_answered(unsigned char id[8]);
 #endif

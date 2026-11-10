@@ -52,6 +52,7 @@
 #include "screen.h"
 #include "davs.h"
 #include "dropin.h"
+#include "duck.h"
 #include "micdenoise.h"
 #include "earsup.h"
 #include "afemeta.h"
@@ -230,6 +231,7 @@ static int connected, satellite_running;
 static int link_paused;                 /* lock held: Home Assistant told the satellite to pause (core_link_pause) */
 static enum state state;
 static time_t state_since;
+static int tts_media;                               /* lock held: what SPEAKING plays is Home Assistant's media (play_media) */
 static atomic_int streaming, trigger_pending, button_pending, pair_pending, stop_pending, quit;
 static atomic_int flush_playback, alarm_on;   /* barge-in: drop queued TTS; a finished timer rings */
 static atomic_int busy;                             /* state != IDLE, for threads without the lock (the ring pauses) */
@@ -416,6 +418,8 @@ void core_set_state(enum state s)
     else if (s == IDLE) screen_words(SCREEN_WORDS_IDLE, NULL);
     state = s; state_since = time(NULL);
     atomic_store(&busy, s != IDLE);
+    /* the Echos that heard it too duck while we answer (duck.c); HA's media is no answer, a radio would hold them down */
+    duck_busy(s != IDLE && !(s == SPEAKING && tts_media));
 }
 
 static long long mono_ms(void);
@@ -1844,6 +1848,7 @@ static int64_t word_tail_end(uint64_t end, uint64_t to)
 
 static void answer(uint64_t from)                   /* capture thread: act on the wake word that ended at from */
 {
+    duck_won();
     trigger(0, from);
     if (!atomic_load(&streaming)) afe_done();          /* it stopped a ring, or cut a reply: the pipeline's end follows */
 }
@@ -1857,6 +1862,7 @@ static void claim(const char *kw, int score, int prio, uint64_t end)   /* captur
     long long due = arb_claim(kw, score, prio), w = due ? due - mono_ms() : 0;
     ble_quiet(w + 500 > 1000 ? (int)w + 500 : 1000);
     if (!due) { answer(end); return; }
+    duck_round(due);                                /* won or lost, the music goes down from the wake word (duck.c) */
     arb_due = due; arb_from = end;
 }
 
@@ -1882,6 +1888,7 @@ static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* captu
     if (!arb_rounds() || !afe_start(simulated)) { claim(kw, own, prio, end); return; }
     pend.end = end; pend.own = own; pend.prio = prio; snprintf(pend.kw, sizeof pend.kw, "%s", kw);
     score_due = mono_ms() + AFE_WAIT_MS;
+    duck_round(score_due);                          /* until the claim says how long the round runs */
 }
 
 static void score_wait(void)                        /* capture thread, while score_due: the claim once the reading is in */
@@ -2006,6 +2013,12 @@ static int arb_scan(const char *tag_id)
     return r;
 }
 
+/* A member's message: the duck's (duck.c, 2 bytes), else Drop In's */
+static void arb_message(const unsigned char from[8], const char *node, unsigned ip, const unsigned char *p, size_t n)
+{
+    if (!duck_message(from, node, p, n)) dropin_message(from, node, ip, p, n);
+}
+
 /* Arbitration pairing (Volume up + Volume down): a tap when it starts, the Bluetooth sounds for joined or not */
 static void arb_paired(int result) { sound_queue(result == 1 ? SND_TOUCH : result == 2 ? SND_BT_ON : SND_BT_OFF); }
 static void on_pair(void)
@@ -2090,7 +2103,9 @@ static void *playback_thread(void *arg)
 void core_tts_begin(unsigned rate, unsigned channels, int media)
 {
     if (!wake_wait) { atomic_store(&streaming, 0); mic_stopped(); }     /* wake_wait: a chime and then the message */
+    tts_media = media;
     core_set_state(SPEAKING);
+    duck_busy(!media);                              /* media after a reply: SPEAKING already, the state stays */
     q_push(Q_START, media, rate, channels, NULL, 0);
     wake_listen();
 }
@@ -3448,8 +3463,9 @@ int main(int argc, char **argv)
     }
     if (whisper_open(on_whisper) == 0) { atomic_store(&whisper_last, -1); whisper_model = 1; }
     else fprintf(stderr, "whisper: no model, no whisper detection (the settings page's Download from Amazon gets it)\n");
-    static const struct arb_hooks arb_hooks = { arb_send_key, arb_notify, arb_request, arb_paired, arb_scan, dropin_message };
+    static const struct arb_hooks arb_hooks = { arb_send_key, arb_notify, arb_request, arb_paired, arb_scan, arb_message };
     if (arb_port && core_local_wake && proto->arb_send && arb_start(arb_port, core_node_name(), &arb_hooks)) fprintf(stderr, "arbitration: not available\n");
+    if (arb_running() && duck_start()) fprintf(stderr, "duck: no thread, the other Echos' runs do not duck the music here\n");
     if (dropin_port && arb_running() && dropin_start(dropin_port)) fprintf(stderr, "drop in: not available\n");
 
     pthread_t cap_t, play_t, ear_t;
