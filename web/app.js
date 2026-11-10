@@ -543,7 +543,19 @@ async function start() {
 function showName(d) {
   $('name').textContent = d.name; $('lname').textContent = d.name; $('mname').textContent = d.name;
   $('ident').textContent = `${d.model} · ${d.node}`;
-  document.title = `${d.name} · settings`;
+  // the note (web.c, issue #153): what tells Echos of one model apart, so the login page and the tab say it too
+  const n = d.note || '', el = $('whonote');
+  el.replaceChildren(n || 'Add a note', icon('pen')); el.classList.toggle('no-note', !n);
+  el.setAttribute('aria-label', n ? `Note: ${n}. Edit it` : 'Add a note: where this Echo stands, say');
+  $('lnote').textContent = n; $('lnote').classList.toggle('hidden', !n);
+  $('mname').title = n;
+  setTitle(d);
+}
+// the tab: the page, and the note where there is one (the tabs of several Echos of one model say which is which)
+function setTitle(d = echo && echo.hello) {
+  if (!d) return;
+  const pg = curPage && pages.find((p) => p.id === curPage), who = d.note || d.name;
+  document.title = pg ? `${pg.title} · ${who}` : `${who} · settings`;
 }
 
 function showLogin() { $('login').classList.remove('hidden'); $('app').classList.add('hidden'); }
@@ -629,8 +641,10 @@ async function load() {
   // updated meanwhile (online update, push): this page is the old version's, its header the old number
   if (state.device.version !== echo.hello.version) { location.reload(); return; }
   echo.hello.start = state.device.start;          // restarted meanwhile (Home Assistant's button): waitBack's baseline
-  if (state.device.name !== echo.hello.name || state.device.node !== echo.hello.node) {      // renamed (hassmic.conf NAME)
-    echo.hello.name = state.device.name; echo.hello.node = state.device.node; showName(echo.hello);
+  if (state.device.name !== echo.hello.name || state.device.node !== echo.hello.node || (state.device.note || '') !== (echo.hello.note || '')) {
+    // renamed (hassmic.conf NAME), or the note changed in another browser
+    echo.hello.name = state.device.name; echo.hello.node = state.device.node; echo.hello.note = state.device.note || ''; showName(echo.hello);
+    if (load.started) renderDevices();
   }
   $('app').classList.remove('hidden');            // before render(): a hidden page has no widths to place cards by, nothing to scroll to
   render();
@@ -1243,12 +1257,12 @@ const pageBuilt = (id) => [...document.querySelectorAll('.page')].some((el) => e
 function route() {
   const m = /^#\/([^/]+)(?:\/(.+))?$/.exec(location.hash), part = (s) => { try { return decodeURIComponent(s); } catch (e) { return s; } };
   const here = !!m && pageBuilt(part(m[1])), id = here ? part(m[1]) : 'overview';   // a bookmark or a link from another model may name a page this Echo has not got
-  const pg = pages.find((p) => p.id === id), changed = id !== curPage;
+  const changed = id !== curPage;
   curPage = id;
   document.querySelectorAll('.page').forEach((el) => el.classList.toggle('hidden', el.dataset.page !== id));
   $('nav').querySelectorAll('a').forEach((a) => { const on = a.dataset.page === id; a.classList.toggle('cur', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  if (echo) document.title = `${pg.title} · ${echo.hello.name}`;
-  menu(false);
+  setTitle();
+  menu(false); switcher(false);
   reflowPage();
   if (changed) window.scrollTo(0, 0);
   if (changed && echo && state && othersShown()) {
@@ -1278,6 +1292,69 @@ function menu(open) {
   $('menu').setAttribute('aria-expanded', String(open));
 }
 $('menu').onclick = () => menu(true);
+$('whonote').onclick = () => editNote();
+
+// The note (web.c, issue #153): a few words of the owner's under the name.  Not a name: that is Home Assistant's
+async function editNote() {
+  const v = await ask({ title: echo.hello.note ? 'Edit the note' : 'Add a note', ok: 'Save', check: () => null,
+    body: ['A few words to tell this Echo from your others: where it stands, say. They show under its name here, on your other Echos\' pages and on the login page, where anyone on your network can read them.'],
+    input: { label: 'Note (empty removes it)', value: echo.hello.note || '', max: 80 } });
+  if (v === null) return;
+  try {
+    const r = (await echo.call('POST', '/api/note', v)).json();
+    echo.hello.note = r.note; if (state) state.device.note = r.note;
+    showName(echo.hello); renderDevices(); if (noteCtl) noteCtl.paint();
+    toast(r.note ? 'Note saved' : 'Note removed');
+  } catch (e) { toast(errText(e)); }
+}
+
+// The other Echos from the name (issue #153): the same page on another one, without the way round the Echos page.
+// Its list is the Echos page's (others): known from the beacons and the addresses added there, read every round
+const noteOf = (d) => (d.state && d.state.device ? d.state.device.note : d.echo && d.echo.hello.note) || '';
+function switcher(open) {
+  const b = $('switch'), m = $('emenu');
+  if (open === undefined) open = m.classList.contains('hidden');
+  if (open === !m.classList.contains('hidden')) return;
+  m.classList.toggle('hidden', !open); b.setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  drawSwitcher();
+  // the list may be a round old (others are read every 30 s only while a page shows them)
+  if (echo && state && !devRun && Date.now() - lastRound > 30000) refreshDevices().catch(() => {});
+}
+function drawSwitcher() {
+  const m = $('emenu');
+  if (m.classList.contains('hidden') || !echo || !state) return;
+  const hash = location.hash.startsWith('#/') ? location.hash : '';
+  const sub = (...p) => h('span', { class: 'em-s' }, p.filter(Boolean).map((x, i) => [i ? ' · ' : '', x]));
+  // those that answered first: an address nothing answers at is the least likely pick
+  const list = [...others].sort(([, p], [, q]) => !p.echo - !q.echo || echoName(p).localeCompare(echoName(q)));
+  const items = list.map(([base, d]) => {
+    const name = echoName(d), note = noteOf(d), r = arbOf(d.ip);
+    const how = d.error || (!d.echo ? (d.looking ? 'Looking…' : null) : !d.logged ? 'Not logged in' : null);
+    return h('a', { href: base + '/' + hash, role: 'menuitem', class: d.error ? 'em-x' : null, title: d.hint || null },
+      h('span', { class: 'mini-puck' + (r && r.member ? ' on' : '') }),
+      h('span', { class: 'em-t' }, h('span', { class: 'em-n' }, name), sub(note ? h('b', {}, note) : null, d.echo ? shortAddr(base) : null, how)));
+  });
+  const me = echo.hello;
+  m.replaceChildren(...[
+    h('div', { class: 'em-me', 'aria-current': 'true' }, h('span', { class: 'mini-puck on' }),
+      h('span', { class: 'em-t' }, h('span', { class: 'em-n' }, me.name), sub(me.note ? h('b', {}, me.note) : null, 'This Echo')), icon('check')),
+    ...items,
+    items.length ? null : h('div', { class: 'em-none' }, devRun ? 'Looking for your other Echos…' : 'No other Echo yet.'),
+    h('div', { class: 'em-all' }, h('a', { href: '#/echos', role: 'menuitem' }, icon('net'), 'All your Echos'))].filter(Boolean));
+}
+$('switch').onclick = (e) => { e.stopPropagation(); switcher(); };
+$('switch').onkeydown = (e) => {
+  if (e.key !== 'ArrowDown') return;
+  e.preventDefault(); switcher(true); const f = $('emenu').querySelector('a'); if (f) f.focus();
+};
+$('emenu').onkeydown = (e) => {
+  const l = [...$('emenu').querySelectorAll('a')], i = l.indexOf(document.activeElement);
+  if (e.key === 'Escape') { e.preventDefault(); switcher(false); $('switch').focus(); }
+  else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const n = l[(i + (e.key === 'ArrowDown' ? 1 : l.length - 1)) % l.length]; if (n) n.focus(); }
+};
+document.addEventListener('click', (e) => { if (!$('emenu').contains(e.target)) switcher(false); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('emenu').classList.contains('hidden')) { switcher(false); $('switch').focus(); } });
 $('scrim').onclick = () => menu(false);
 $('identify').onclick = () => identify(echo, echo.hello.name);
 
@@ -1307,6 +1384,7 @@ const FINDABLE = [
   ['Settings file', 'system', 'settings-file', 'export import backup preset'],
   ['Log', 'system', 'log', 'boot.log troubleshooting bug report'],
   ['Debug access', 'system', 'debug', 'adb root shell'],
+  ['Note', 'system', 'note', 'description location room label where which echo'],
   ['Restart', 'system', 'restart', 'reboot'],
   ['Factory reset', 'system', 'factory-reset', 'erase forget'],
   ['Approved browsers', 'system', 'browsers', 'login revoke log out'],
@@ -1533,10 +1611,10 @@ function drawOvEchos() {
     h('div', {}, h(href ? 'a' : 'div', { class: 'ov-name', href }, name), h('div', { class: 'mx-sub' }, sub))), h('div', { class: 'ctl' }, badge, btn));
   const list = [...others.values()].sort((a, b) => echoName(a).localeCompare(echoName(b)));
   ovEchos.replaceChildren(...[h('div', { class: 'sub-head' }, 'Your Echos'),
-    line(true, echo.hello.name, 'This Echo', null, idButton(echo, echo.hello.name)),
+    line(true, echo.hello.name, [echo.hello.note, 'This Echo'].filter(Boolean).join(' · '), null, idButton(echo, echo.hello.name)),
     ...list.map((d) => {
       const name = echoName(d);
-      return line(false, name, d.echo ? shortAddr(d.echo.base) : d.ip, d.error ? h('span', { class: 'badge bad', title: d.hint }, d.error)
+      return line(false, name, [noteOf(d), d.echo ? shortAddr(d.echo.base) : d.ip].filter(Boolean).join(' · '), d.error ? h('span', { class: 'badge bad', title: d.hint }, d.error)
         : !d.echo ? h('span', { class: 'badge' }, 'Looking…') : !d.logged ? h('a', { class: 'badge', href: '#/echos' }, 'Not logged in')
           : d.diff.length ? h('a', { class: 'badge warn', href: '#/compare' }, `${d.diff.length} differ${d.diff.length === 1 ? 's' : ''}`) : h('span', { class: 'badge ok' }, icon('check'), 'Same'),
       d.echo && d.logged && !d.error ? idButton(d.echo, name) : null, d.echo ? d.echo.base + '/' : null);
@@ -2013,13 +2091,13 @@ const noOthers = (where) => (state.arbitration ? `Echos running hassmic on the s
 const ready = () => [...others.values()].filter((d) => d.echo && d.logged && !d.error).sort((a, b) => a.echo.hello.name.localeCompare(b.echo.hello.name));
 const shortAddr = (base) => base.replace('http://', '').replace(`:${echoPort()}`, '');
 
-function renderDevices() { if (devBox) keepFocus(devBox, drawDevices); }
+function renderDevices() { drawSwitcher(); if (devBox) keepFocus(devBox, drawDevices); }
 function drawDevices() {
   scanMark.classList.toggle('hidden', !devRun);
   devBox.innerHTML = '';
   const a = state.arbitration;
   devBox.append(h('div', { class: 'echo me' }, h('span', { class: 'mini-puck on' }),
-    h('div', { class: 'echo-body' }, h('div', { class: 'echo-id' }, h('div', { class: 'echo-name' }, echo.hello.name), h('div', { class: 'echo-addr' }, location.host)),
+    h('div', { class: 'echo-body' }, h('div', { class: 'echo-id' }, h('div', { class: 'echo-name' }, echo.hello.name), echo.hello.note ? h('div', { class: 'echo-note' }, echo.hello.note) : null, h('div', { class: 'echo-addr' }, location.host)),
       h('div', { class: 'echo-meta' }, h('span', { class: 'badge acc' }, 'This Echo'), a && !a.arbitrates ? h('span', { class: 'badge' }, 'Arbitration off')
         : a && a.mode === 'kiosk' ? h('span', { class: 'badge' }, 'Kiosk Satellite mode') : null,
         state.dropin && state.dropin.state !== 'idle' ? h('span', { class: 'badge ok' }, icon('talk'), `Drop In ${DROPIN_WORDS[state.dropin.state]} ${state.dropin.peer}`) : null),
@@ -2039,7 +2117,7 @@ function drawDevices() {
     const login = d.echo && d.logged && !d.error ? h('div', { class: 'echo-acts' }, idButton(d.echo, name))
       : d.echo && !d.logged && !d.error ? h('button', { class: 'small primary', disabled: !!d.asking, onclick: () => loginOther(d) }, icon('key'), d.asking ? 'Press its button…' : 'Log in') : null;
     devBox.append(h('div', { class: 'echo' }, h('span', { class: 'mini-puck' + (r && r.member ? ' on' : '') }),
-      h('div', { class: 'echo-body' }, h('div', { class: 'echo-id' }, h('div', { class: 'echo-name' }, name), h('div', { class: 'echo-addr' }, shortAddr(base))),
+      h('div', { class: 'echo-body' }, h('div', { class: 'echo-id' }, h('div', { class: 'echo-name' }, name), noteOf(d) ? h('div', { class: 'echo-note' }, noteOf(d)) : null, h('div', { class: 'echo-addr' }, shortAddr(base))),
         h('div', { class: 'echo-meta' }, meta), login, dropButton(r, name, d.echo && d.echo.hello)),
       h('a', { class: 'echo-go', href: base + '/' + (location.hash.startsWith('#/') ? location.hash : ''), title: `${name}: its settings page`, 'aria-label': `Open the settings page of ${name}` }, icon('ext'))));
   }
@@ -2836,7 +2914,7 @@ async function loadModels(arts) {
 
 // ---------------------------------------------------------------- System: settings file, debug access, browsers
 
-let adbBox, clientsBox, importMsg, nameCtl, wifiCtl;
+let adbBox, clientsBox, importMsg, nameCtl, noteCtl, wifiCtl;
 
 // The name: the model and the end of its MAC address (main.c name_make), never set here.  What people call it is the name
 // given in Home Assistant when the Echo was added.
@@ -2847,6 +2925,14 @@ function nameRow() {
   } };
   return infoRow('Name', 'Made from the model and its MAC address', 'Made from the model and the end of its MAC address, so no two Echos share it and a reset keeps it. Name it in Home Assistant: on the device\'s page there (the pencil), which is where everything else picks names up from.',
     null, null, now);
+}
+
+// The note (web.c, issue #153), as in the menu's head: there for the search, and for whoever looks for it here
+function noteRow() {
+  const now = h('div', { class: 'row-val' });
+  noteCtl = { paint: () => now.replaceChildren(echo.hello.note || h('span', { class: 'help' }, 'None')) };
+  return infoRow('Note', 'A few words of your own to tell it from your other Echos', 'A few words to tell this Echo from your others, where it stands say: they show under its name at the top of the menu, on your other Echos\' pages and on the login page. Also there: click the line under the name. Anyone on your network can read it, as the name. It stays with this Echo: not in the settings file, gone after a factory reset.',
+    h('button', { onclick: editNote }, icon('pen'), 'Edit…'), null, now);
 }
 
 // A dialog of the page's own, as the Wi-Fi one: title, a body that scrolls, a foot for its buttons.  cls names it for
@@ -3208,7 +3294,7 @@ function buildSystem(el, list) {
   clientsBox = h('div');
   const named = (id, row) => { row.id = id; return row; };
   el.append(flow([
-    titled('This Echo', nameRow(), state.wifi !== undefined ? named('wifi', wifiRow()) : null,
+    titled('This Echo', nameRow(), named('note', noteRow()), state.wifi !== undefined ? named('wifi', wifiRow()) : null,
       list.filter((s) => !s.name.startsWith('kiosk_') || state.kiosk_app).map(settingRow)),
     titled('When something is wrong', named('log', logRow()),
       named('debug', infoRow('Debug access', 'A root shell over Wi-Fi for 30 minutes', act('Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.'), adbBox)),
@@ -3242,6 +3328,7 @@ async function factoryReset() {
 function renderSystem() {
   if (!adbBox) return;
   if (nameCtl) nameCtl.paint();
+  if (noteCtl) noteCtl.paint();
   if (wifiCtl) wifiCtl.paint();
   const s = state.adb;
   const status = s.waiting ? h('span', { class: 'badge acc' }, act('Waiting for the action button…'))

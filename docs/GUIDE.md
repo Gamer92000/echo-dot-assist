@@ -911,6 +911,16 @@ turns the action button, microphone and volume sounds off too, as that switch di
 **Identify** (at the foot of the menu, and beside each Echo in the lists; also a button in Home Assistant): a rainbow on the ring
 for 10 s and stock's setup sound, to tell which Echo is which.
 
+**Note**: a few words of your own under the Echo's name at the top of the menu, such as where it stands. Click "Add a
+note" there, or Edit on the Note row of the System page; save it empty to remove it. It shows in the browser tab's
+title, on your other Echos' pages (Overview, Echos, the list below) and on the login page, so you know which Echo's
+button to press. Up to 80 bytes, one line. Anyone on your network can read it, as the name. It stays with that Echo:
+not in the settings file, and a factory reset removes it. The name itself is fixed; name the Echo in Home Assistant.
+
+**Your other Echos from the name**: click the Echo's name at the top of the menu (or press the down arrow key on it) for
+a list of your other Echos with their notes and addresses. Pick one and its settings page opens on the page you are on
+(Voice here, Voice there). It lists the Echos the Echos page knows; one that does not answer comes last.
+
 **Speaker gain** (Sound; Echo Dot 2, Echo 2 and Echo Dot 3, and the Echo Show 5 and both Show 8s): for an Echo that is too
 quiet at full volume. It raises the analog gain in front of the speaker (Echo Dot 2 and Echo 2: the codec's "HP Driver
 Gain", +0 to +12 dB over stock; Echo Dot 3: the amplifier's output level, +0 to +2 dB, all it has above where Amazon

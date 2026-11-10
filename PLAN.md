@@ -252,6 +252,15 @@ Run in this order. Each step says what it proves.
       setup. Setting `duck_for_others` (on) gates the receiving side and the round's own duck. `duck_active()` replaces
       `core_state() != IDLE` in sendspin.c and a2dp.c. `tests/fake_ha_arbitration_duck.py` (each fix checked by
       undoing it). **Open:** not tried on two Echos with real music.
+- [x] A note per Echo and the other Echos from its name (issue #153, 2026-11-11): the name is fixed (model + MAC end), so
+      Echos of one model differ by six hex digits. `web.c`: `state/note` (one line, control characters as spaces,
+      trimmed, 80 bytes cut before a split character; empty removes the file), `note` in `/api/hello` (unsigned like
+      the name: the login page shows it, where it says which Echo's button to press) and so in the state's `device`,
+      signed `POST /api/note`; not exported (it is this Echo's), gone with a reset. HA's own name or area would be
+      better, but ESPHome sends neither to the device and it does not know its entity ids. Page: the line under the
+      name and a "Note" row on System edit it; the tab's title, the Echos page and the overview show it; the name is a
+      menu of the other Echos (the Echos page's `others`, read again on opening when a round is over 30 s old)
+      linking to the same `#/page` on each. `tests/fake_web.py`; the layout in Chromium (desktop, phone, login).
 - [~] Ducking depth and multi press (2026-11-08): `DUCK` (a sixth, -15.6 dB) was fixed; the setting `music_duck` (0..60 dB, default 16,
       about the old 15.6) is the target of `music_duck()`'s glide in sendspin.c and a2dp.c, read through `settings_duck_gain()` (any thread).
       Reason: over a loud audiobook 15.6 dB left too little voice for STT. Setting `multi_press` (off): the action button pressed

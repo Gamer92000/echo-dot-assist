@@ -2,6 +2,17 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-11
+
+- **A note of your own on each Echo, and your other Echos one click away on the settings page (issue #153).** Several
+  Echos of one model differed only by the six characters at the end of their names. Click "Add a note" under the
+  name at the top of the menu (or the Note row on the System page) and write where it stands, say "Kitchen, by the
+  window". The note shows under the name there, in the browser tab's title, on your other Echos' pages and on the
+  login page, so you know which Echo's button to press. Anyone on your network can read it, as the name. It stays
+  with that Echo: not in the settings file, and a factory reset removes it. The name at the top now opens a list of
+  your other Echos with their notes: pick one and its settings page opens on the same page you are on. Suggested by
+  baudneo.
+
 ## 2026-11-10
 
 - **"Stop" can end a timer ringing on another Echo (issue #161), optional and off by default.** A ringing Echo
