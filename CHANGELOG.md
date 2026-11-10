@@ -4,6 +4,15 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-10
 
+- **A freshly installed Echo went without the wake word aligners until its first update.** The files that find where
+  the wake word ends (since 2026-10-29) came with every update, but the installer (`scripts/setup.sh`,
+  `scripts/install-system.sh`, `scripts/install-boot.sh`) left them out. Such an Echo found the word's end by the
+  loudness alone, the rule the aligners replaced: on an Echo Dot 3 it took up to 0.36 s after Amazon's end of the word
+  for the word's tail and left it out of the request. The installer brings them now. An Echo installed since
+  2026-10-29 that has had no update since gets them with its next one, at once with `scripts/ota-push.sh`, or by
+  installing again; its log says `wake: ... aligned by ...` with them, only `wake: ... ms of the word's tail left out`
+  without. Where the system partition is nearly full, an update no longer takes them off one time and puts them back
+  the next: those already there stay. Found by derFinlay, who also wrote the first fix (#160).
 - **Echo Show 8 2nd gen: Adaptive colour can be switched off or on from the settings page.** Under **Screen**, the
   **Brightness and colour** card has the stock display setting that warms the screen's colours with the room's
   light, often turning a dashboard yellow at night. It is off by default; an explicit choice is kept across restarts.
