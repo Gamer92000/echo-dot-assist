@@ -206,19 +206,21 @@ Run in this order. Each step says what it proves.
       `bt_mac_addr` in ble.c). **Open:** not tried on an Echo with a real Home Assistant (whether HA drops the scanner at once).
 - [~] Ducking on the other Echos that heard it (issue #165, 2026-11-10): `duck.c`. An Echo whose round runs ducks
       from the wake word (`duck_round` in `wake_heard`'s score wait and `claim`, until the decision + `LOST_WAIT_MS`
-      1.5 s; `duck_won` clears it on the winner, whose state ducks from there). The one answering broadcasts a 2-byte
-      `T_MSG` (`0x40`, on/off) to every member (`arb_tell(NULL)`: `to` = ff x 8, older builds drop it) on each change
-      of busy (state != IDLE), three copies (0/100/300 ms), "on" again every 2 s; only with members and in our mode. A
-      loser takes "on" within `ACCEPT_MS` 5 s of its round, only from the member whose "answers" claim came in that
-      round (`arb_round_answered`, kept until the next round; any member's while none came), holds `HOLD_MS` 6.5 s past
-      each, ends on that member's "off" (its own round's duck, `round_until`, stays). A follow-up
-      (continue_conversation) goes idle between its two runs (measured in the test: "off", then "on"), so the same
-      member's "on" counts for `ACCEPT_MS` after its "off" unless a round of ours came since. HA's media
-      (`core_tts_begin` media 1, SPEAKING for a whole radio stream) is not busy for this (`tts_media`). The round
-      stands in for "same room": HA has areas, but an automation would act after the window plus its link, move the
-      real volume (MA, ring, a change meanwhile lost) and need per-pair setup. Setting `duck_for_others` (on) gates
-      the receiving side and the round's own duck. `duck_active()` replaces `core_state() != IDLE` in sendspin.c and
-      a2dp.c. `tests/fake_ha_arbitration_duck.py`. **Open:** not tried on two Echos with real music.
+      1.5 s; `duck_won` clears it on the winner, whose state ducks from there). The winner, for a run a round it won
+      started (`WON_MS` 3 s; a button run or an announcement tells nobody), broadcasts a 2-byte `T_MSG` (`0x40`,
+      on/off) to every member (`arb_tell(NULL)`: `to` = ff x 8; older builds drop it; `hooks->message`'s `all` keeps
+      it from Drop In, whose invite to all would ring every Echo) on each change, three copies (0/100/300 ms), "on"
+      again every 2 s; only with members and in our mode. A follow-up or barge-in restarts from the IDLE that ends the
+      run (`core_pipeline_finish`; the next run is LISTENING in the same call, but the sender's thread woke between
+      the two and said "off", "on"): `duck_follow` bridges 5 s at most. HA's media is no run (`speak_media`: at the
+      request when nothing plays, else at the stream's start in `tts_kind`). A loser takes "on" within `ACCEPT_MS` 5 s
+      of its round from members that claimed in it (`arb_round_claimed`: `round_.cl`, kept until the next round),
+      up to 4 at once (two may both answer), each held `HOLD_MS` 6.5 s past its last "on", ended by its "off" (the own
+      round's duck, `round_until`, stays). The round stands in for "same room": HA has areas, but an automation would
+      act after the window plus its link, move the real volume (MA, ring, a change meanwhile lost) and need per-pair
+      setup. Setting `duck_for_others` (on) gates the receiving side and the round's own duck. `duck_active()` replaces
+      `core_state() != IDLE` in sendspin.c and a2dp.c. `tests/fake_ha_arbitration_duck.py` (each fix checked by
+      undoing it). **Open:** not tried on two Echos with real music.
 - [~] Ducking depth and multi press (2026-11-08): `DUCK` (a sixth, -15.6 dB) was fixed; the setting `music_duck` (0..60 dB, default 16,
       about the old 15.6) is the target of `music_duck()`'s glide in sendspin.c and a2dp.c, read through `settings_duck_gain()` (any thread).
       Reason: over a loud audiobook 15.6 dB left too little voice for STT. Setting `multi_press` (off): the action button pressed

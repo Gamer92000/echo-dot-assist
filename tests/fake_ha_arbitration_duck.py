@@ -2,9 +2,10 @@
 """Music ducked on the other Echos that heard the wake word (issue #165, duck.c; tests/arbecho.py): three Echos in one
 network, two of them hear it.  The one that answers tells the network "on" (three copies, then every 2 s) and "off"
 when it is done, to every member at once; the one that lost the round ducks for it until then, the one that never heard
-it plays on.  A follow-up question (continue_conversation), Home Assistant's media after the reply (no duck for it),
-the setting off, an "off" lost (the duck runs out), an Echo answering alone, and another Echo's "on" while the round's
-winner is known (a member played here with the network's key): only the winner's counts."""
+it plays on.  A follow-up question (continue_conversation: one "on" across both runs), Home Assistant's media after
+the reply (no duck for it), the setting off, an "off" lost (the duck runs out), an Echo answering alone, and with two
+members played here with the network's key: an "on" from an Echo that did not claim in the round (not taken), two
+that both answer (down until both are done), and a Drop In invite sent to every member (Drop In never sees it)."""
 import asyncio, base64, hashlib, os, re, signal, socket, struct, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from aioesphomeapi import MediaPlayerInfo, VoiceAssistantEventType as Ev
@@ -77,11 +78,9 @@ async def main():
     ev(Ev.VOICE_ASSISTANT_INTENT_END, {"conversation_id": "x", "continue_conversation": "1"})
     ev(Ev.VOICE_ASSISTANT_TTS_END, {"url": f"http://127.0.0.1:{HTTP}/s1.5.wav"})
     ev(Ev.VOICE_ASSISTANT_RUN_END, None)
-    ok = await until(lambda: len(b.starts) > n + 1, 6); await listen(1)
-    seq = ducks(a)[na:]
-    check(ok and seq[0] == "echo-living-room answers what we heard too, music down until it is done"
-          and (len(seq) == 1 or seq[1:] == ["echo-living-room is done, music back", "echo-living-room answers again (a follow-up), music down"]),
-          f"its follow-up: the kitchen Echo down for it too: {seq}")
+    msgs.clear(); ok = await until(lambda: len(b.starts) > n + 1, 6); await listen(1)
+    check(ok and ducks(a)[na:] == ["echo-living-room answers what we heard too, music down until it is done"]
+          and not [x for _, x in msgs if x == 0], f"its follow-up: no \"off\" between the two runs, the kitchen Echo down throughout: {ducks(a)[na:]}")
     msgs.clear(); b.end_pipeline(); await listen(1)
     check(ducks(a)[-1] == "echo-living-room is done, music back", "the conversation over: music back")
     await asyncio.sleep(1)
@@ -128,29 +127,60 @@ async def main():
     check(len(b.starts) == nb + 1 and len(ducks(a)) == na and len(ducks(c)) == nc, "only the living room Echo heard it: the others play on")
     b.end_pipeline(); await asyncio.sleep(0.5)
 
-    # a member that answers (played here with the network's key), and the bedroom Echo answering a wake word of its own
-    # meanwhile: the kitchen Echo knows who won its round and takes only that one's "on"
+    # the action button starts a run: no round, nobody heard anything, nothing told
+    await listen(0.5); msgs.clear(); nb = len(b.starts)      # the last run's "off" copies read first
+    b.proc.send_signal(signal.SIGUSR2); ok = await until(lambda: len(b.starts) > nb, 3); await listen(2.5)
+    check(ok and not msgs, f"a run from the action button: no \"on\" at all: {msgs}")
+    b.end_pipeline(); await listen(1)
+    check(not msgs, "nor an \"off\"")
+
+    # two members played here with the network's key; the bedroom Echo answering a wake word of its own meanwhile:
+    # the kitchen Echo takes "on" only from Echos that claimed in its round
     nid, k64 = a.net().split(); nk = base64.b64decode(k64); nb8 = struct.pack("<Q", int(nid, 16))
     mac = hashlib.blake2b(b"hassmic arbitration mac", key=nk, digest_size=32).digest()
-    fid = os.urandom(32); ctr = [1 << 40]
+    ctr = [1 << 40]
     def signed(p): return p + hashlib.blake2b(p, key=mac, digest_size=16).digest()
     def fctr(): ctr[0] += 1; return struct.pack("<Q", ctr[0])
     tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); tx.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     send = lambda p: tx.sendto(p, (BCAST, ARB))
     kw = hashlib.blake2b(b"alexa", digest_size=8).digest()          # the wake word heard (fake_ha_arbitration_window.py)
-    send(signed(b"HMA1\x01" + fid + nb8 + bytes([12]) + b"echo-hallway" + fctr())); await asyncio.sleep(0.5)
-    def fduck(on): send(signed(b"HMA1\x07" + nb8 + fid[:8] + b"\xff" * 8 + fctr() + bytes([2, 0x40, on])))
+    h1, h2 = os.urandom(32), os.urandom(32)
+    for k, name in ((h1, b"echo-hallway"), (h2, b"echo-office")): send(signed(b"HMA1\x01" + k + nb8 + bytes([len(name)]) + name + fctr()))
+    await asyncio.sleep(0.5)
+    def msg(k, payload, to=b"\xff" * 8): send(signed(b"HMA1\x07" + nb8 + k[:8] + to + fctr() + bytes([len(payload)]) + payload))
+    def fduck(k, on): msg(k, bytes([0x40, on]))
+    def answers(k): send(signed(b"HMA1\x04" + nb8 + k[:8] + fctr() + kw + struct.pack("<iBB", 99999, 0, 1)))
     na, nc = len(ducks(a)), len(c.starts)
-    a.wake(); await asyncio.sleep(0.05)
-    send(signed(b"HMA1\x04" + nb8 + fid[:8] + fctr() + kw + struct.pack("<iBB", 99999, 0, 1)))     # "answers"
-    await asyncio.sleep(1.3); c.wake()             # past the 1 s in which its claim would count in the kitchen's round
+    a.wake(); await asyncio.sleep(0.05); answers(h1)
+    await asyncio.sleep(1.6); c.wake()             # past the 1.5 s in which a claim counts in the kitchen's round
     ok = await until(lambda: len(c.starts) > nc, 3); await asyncio.sleep(1)
-    check(ok and not a.starts and ducks(a)[na:] == [], f"the bedroom Echo answers its own: its \"on\" not taken, the hallway won here: {ducks(a)[na:]}")
-    fduck(1); await asyncio.sleep(0.3)
+    check(ok and not a.starts and ducks(a)[na:] == [], f"the bedroom Echo answers its own: its \"on\" not taken: {ducks(a)[na:]}")
+    fduck(h2, 1); await asyncio.sleep(0.3)
+    check(ducks(a)[na:] == [], "nor one from an Echo that never claimed in the round")
+    fduck(h1, 1); await asyncio.sleep(0.3)
     check(ducks(a)[na:] == ["echo-hallway answers what we heard too, music down until it is done"], f"the winner's \"on\" taken: {ducks(a)[na:]}")
-    fduck(0); await asyncio.sleep(0.3)
+    fduck(h1, 0); await asyncio.sleep(0.3)
     check(ducks(a)[-1] == "echo-hallway is done, music back", "and its \"off\"")
-    c.end_pipeline(); await asyncio.sleep(0.5)
+    c.end_pipeline(); await asyncio.sleep(2)
+
+    # both members heard it and both answer: down until both are done
+    na = len(ducks(a))
+    a.wake(); await asyncio.sleep(0.05); answers(h1); answers(h2); await asyncio.sleep(1)
+    fduck(h1, 1); fduck(h2, 1); await asyncio.sleep(0.3); fduck(h1, 0); await asyncio.sleep(0.3)
+    check(ducks(a)[na:] == ["echo-hallway answers what we heard too, music down until it is done",
+                            "echo-office answers what we heard too, music down until it is done",
+                            "echo-hallway is done, music stays down for echo-office"], f"two answer: one done, still down for the other: {ducks(a)[na:]}")
+    fduck(h2, 0); await asyncio.sleep(0.3)
+    check(ducks(a)[-1] == "echo-office is done, music back", "both done: music back")
+
+    # a Drop In invite (44 bytes and more) sent to every member rather than to one: Drop In never sees it
+    nd = a.text().count("drop in")
+    msg(h1, bytes([1]) + os.urandom(8) + struct.pack("<H", 28932) + os.urandom(32) + bytes([0]))
+    await asyncio.sleep(0.5)
+    check(a.text().count("drop in") == nd and b.text().count("drop in: call") == 0, "an invite to all: no Echo rings or refuses it")
+    msg(h1, bytes([1]) + os.urandom(8) + struct.pack("<H", 28932) + os.urandom(32) + bytes([0]), to=a.pub()[:8])
+    ok = await until(lambda: a.text().count("drop in") > nd, 2)
+    check(ok, "the same invite to the kitchen Echo alone: Drop In takes it (rings or refuses)")
     sn.close(); httpd.shutdown()
 
 run(main, (a, b, c))

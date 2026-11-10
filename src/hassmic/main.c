@@ -231,7 +231,9 @@ static int connected, satellite_running;
 static int link_paused;                 /* lock held: Home Assistant told the satellite to pause (core_link_pause) */
 static enum state state;
 static time_t state_since;
-static int tts_media;                               /* lock held: what SPEAKING plays is Home Assistant's media (play_media) */
+/* lock held: what SPEAKING plays is Home Assistant's media (play_media), for duck.c: no run of ours.  Set as it is
+ * asked for when nothing plays yet, else as its stream starts (tts_kind): a reply still playing is still a reply */
+static int speak_media;
 static atomic_int streaming, trigger_pending, button_pending, pair_pending, stop_pending, quit;
 static atomic_int flush_playback, alarm_on;   /* barge-in: drop queued TTS; a finished timer rings */
 static atomic_int busy;                             /* state != IDLE, for threads without the lock (the ring pauses) */
@@ -419,7 +421,7 @@ void core_set_state(enum state s)
     state = s; state_since = time(NULL);
     atomic_store(&busy, s != IDLE);
     /* the Echos that heard it too duck while we answer (duck.c); HA's media is no answer, a radio would hold them down */
-    duck_busy(s != IDLE && !(s == SPEAKING && tts_media));
+    duck_busy(s != IDLE && !(s == SPEAKING && speak_media));
 }
 
 static long long mono_ms(void);
@@ -1138,6 +1140,7 @@ void core_pipeline_finish(void)
         else if (proto->stop) proto->stop();
     }
     mic_stopped();
+    if (barge_in && connected && satellite_running) duck_follow();    /* the next run starts below: no "off" between */
     core_set_state(IDLE);
     if (mono_ms() - last_wake_ms > 3000) wake_reset();      /* a reset puts the engine back to sleep: "<wake word>, stop" would lose its "stop" */
     if (!connected) barge_in = 0;
@@ -1846,9 +1849,9 @@ static int64_t word_tail_end(uint64_t end, uint64_t to)
     return (int64_t)(end + (uint64_t)cut * WORDTAIL_FRAME);
 }
 
-static void answer(uint64_t from)                   /* capture thread: act on the wake word that ended at from */
+static void answer(uint64_t from, int round)        /* capture thread: act on the wake word that ended at from */
 {
-    duck_won();
+    duck_won(round);                                /* round: we won one, its losers wait for our "on" (duck.c) */
     trigger(0, from);
     if (!atomic_load(&streaming)) afe_done();          /* it stopped a ring, or cut a reply: the pipeline's end follows */
 }
@@ -1861,7 +1864,7 @@ static void claim(const char *kw, int score, int prio, uint64_t end)   /* captur
      * claim: its first copy is out before the scan stops anyway, the other two 30 and 80 ms on */
     long long due = arb_claim(kw, score, prio), w = due ? due - mono_ms() : 0;
     ble_quiet(w + 500 > 1000 ? (int)w + 500 : 1000);
-    if (!due) { answer(end); return; }
+    if (!due) { answer(end, 0); return; }
     duck_round(due);                                /* won or lost, the music goes down from the wake word (duck.c) */
     arb_due = due; arb_from = end;
 }
@@ -2013,10 +2016,11 @@ static int arb_scan(const char *tag_id)
     return r;
 }
 
-/* A member's message: the duck's (duck.c, 2 bytes), else Drop In's */
-static void arb_message(const unsigned char from[8], const char *node, unsigned ip, const unsigned char *p, size_t n)
+/* A member's message: to every member, the duck's (duck.c); to us alone, Drop In's (an invite to all would ring every Echo) */
+static void arb_message(const unsigned char from[8], const char *node, unsigned ip, const unsigned char *p, size_t n, int all)
 {
-    if (!duck_message(from, node, p, n)) dropin_message(from, node, ip, p, n);
+    if (all) duck_message(from, node, p, n);
+    else dropin_message(from, node, ip, p, n);
 }
 
 /* Arbitration pairing (Volume up + Volume down): a tap when it starts, the Bluetooth sounds for joined or not */
@@ -2103,9 +2107,8 @@ static void *playback_thread(void *arg)
 void core_tts_begin(unsigned rate, unsigned channels, int media)
 {
     if (!wake_wait) { atomic_store(&streaming, 0); mic_stopped(); }     /* wake_wait: a chime and then the message */
-    tts_media = media;
+    if (state != SPEAKING) speak_media = media;
     core_set_state(SPEAKING);
-    duck_busy(!media);                              /* media after a reply: SPEAKING already, the state stays */
     q_push(Q_START, media, rate, channels, NULL, 0);
     wake_listen();
 }
@@ -2737,6 +2740,7 @@ static void tts_kind(int media)              /* the playback thread, at each sta
 {
     pthread_mutex_lock(&core_lock);
     tts_media = media;
+    speak_media = media; duck_busy(state != IDLE && !(state == SPEAKING && media));    /* duck.c: media is no run */
     mix_apply();
     pthread_mutex_unlock(&core_lock);
 }
@@ -3350,7 +3354,7 @@ static void *capture_thread(void *arg)
         }
         if (score_due) score_wait();
         afe_late_check();
-        if (arb_due && (mono_ms() >= arb_due || arb_settled())) { arb_due = 0; if (arb_decide()) answer(arb_from); else { afe_done(); wake_tell("answered_elsewhere"); } }    /* after this block went out live */
+        if (arb_due && (mono_ms() >= arb_due || arb_settled())) { arb_due = 0; if (arb_decide()) answer(arb_from, 1); else { afe_done(); wake_tell("answered_elsewhere"); } }    /* after this block went out live */
 
         pthread_mutex_lock(&core_lock);
         if ((state == LISTENING || state == THINKING) && time(NULL) - state_since > PIPELINE_TIMEOUT) {

@@ -17,8 +17,9 @@ struct arb_hooks {
      * link to Home Assistant.  Called from arb's thread, never with its lock held. */
     int  (*scan)(const char *tag_id);
     /* A member's message for us (arb_tell), checked: K's MAC, a fresh counter.  from: its id (the first 8 bytes of its
-     * public key), node and IP as its beacons say.  May be NULL.  Called from arb's thread, never with its lock held. */
-    void (*message)(const unsigned char from[8], const char *node, unsigned ip, const unsigned char *p, size_t n);
+     * public key), node and IP as its beacons say; all: addressed to every member (arb_tell(NULL)), not to us alone.
+     * May be NULL.  Called from arb's thread, never with its lock held. */
+    void (*message)(const unsigned char from[8], const char *node, unsigned ip, const unsigned char *p, size_t n, int all);
 };
 
 int  arb_start(int port, const char *node, const struct arb_hooks *h);           /* node: our ESPHome node name; 0 = running */
@@ -71,7 +72,7 @@ int       arb_decide(void);                     /* 1: this Echo answers */
 /* Before then: 1 once deciding now gives what waiting would (every member that takes part claimed, or one beat us);
  * never in ARB_KIOSK, whose devices always wait */
 int       arb_settled(void);
-/* The member whose "answers" came in our last round (ARB_HASSMIC), kept until the next one: 0 and its id; -1 none
- * heard (it may have been lost: Wi-Fi drops broadcasts).  duck.c takes the duck's "on" from it only.  Any lock but arb's */
-int       arb_round_answered(unsigned char id[8]);
+/* 1: that member claimed in our last round (ARB_HASSMIC; "heard it" or "answers"), kept until the next one: it heard
+ * the talker too.  duck.c takes the duck's "on" from those only.  Any lock but arb's */
+int       arb_round_claimed(const unsigned char id[8]);
 #endif
