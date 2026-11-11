@@ -251,10 +251,15 @@ async def main(e):
     # the time: asked of Home Assistant over the keyed link only (aioesphomeapi answers it), handed to root
     clock = os.path.join(state, "clock")
     check(not os.path.exists(clock), "no time taken from the plaintext connection before the key")
-    enc.subscribe_states(lambda s: None)
+    est = []
+    enc.subscribe_states(est.append)
     for _ in range(30):
         if os.path.exists(clock): break
         await asyncio.sleep(0.1)
+    tok = next(x for x in ent3 if x.object_id == "sendspin_pairing_token")
+    await sync(enc)
+    got = [x.state for x in est if isinstance(x, TextSensorState) and x.key == tok.key]
+    check(got == [want], f"encrypted: the \"Sendspin pairing token\" sensor's state is the token, to this subscriber ({len(got)} states)")
     try: t, at = open(clock).read().split(); t = int(t)
     except (OSError, ValueError): t, at = 0, ""
     boot = time.clock_gettime(time.CLOCK_BOOTTIME)

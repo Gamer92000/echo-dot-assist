@@ -81,9 +81,8 @@ async def main(e):
     check(pv("mic_level") == -20 and any(isinstance(x, SwitchState) and x.key == by["wake_sound"].key and x.state is False for x in states),
           "setting commands reflected in state (page and Home Assistant)")
     cli.switch_command(by["wake_sound"].key, True); await until(lambda: last(by["wake_sound"].key, SwitchState) is True)
-    want = subprocess.run([f"{ROOT}/build/hassmic-host", "-T"], env=env, capture_output=True, text=True).stdout.strip()
     got = [x.state for x in states if isinstance(x, TextSensorState) and x.key == tok.key]
-    check(got == [want] and want.startswith("SP:0") and len(want) > 100, f"token state equals `hassmic -T`: {want[:16]}…")
+    check(got == [], f"no token state over plaintext (fake_ha_esphome_timers.py: over the keyed link): {len(got)} states")
     wu = by.get("web_ui_address")
     check("ip_address" not in by and isinstance(wu, TextSensorInfo) and not wu.disabled_by_default and int(wu.entity_category) == 2
           and [x.state for x in states if isinstance(x, TextSensorState) and x.key == wu.key] == [f"http://127.0.0.1:{WEB}"],

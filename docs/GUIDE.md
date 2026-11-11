@@ -709,7 +709,7 @@ Bluetooth audio from phones, the Bluetooth speaker and the setup from a phone (I
 | Firmware | update entity, see [Updating](../README.md#updating) |
 | Identify, Restart, Factory reset | buttons; Restart reboots the Echo |
 | Web UI address | diagnostic: the settings page's address |
-| Sendspin pairing token | diagnostic, disabled by default: Music Assistant gets the token from Home Assistant by itself (2026.11 and later) |
+| Sendspin pairing token | diagnostic, disabled by default, no state until Home Assistant has set the Echo's key: Music Assistant gets the token from Home Assistant by itself (2026.11 and later) |
 
 Time and time zone: the Echo takes both from Home Assistant, over the encrypted connection only (no time before
 Home Assistant has given it its key), when it connects and every 6 hours. Change Home Assistant's time zone and the Echo

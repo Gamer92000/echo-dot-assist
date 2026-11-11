@@ -730,7 +730,10 @@ Run in this order. Each step says what it proves.
       `hass_auto_pair.py` pairs any unpaired encrypted client both announced and connected. Until then the list stayed empty for
       Echos (seen on five Echos, each paired by hand). `proto_esphome.c` now answers DeviceCapabilitiesRequest (149/150: the proxy's
       and voice assistant's flags as in DeviceInfo, Sendspin with the client id) and the token request (OK only on the keyed link,
-      else ENCRYPTION_REQUIRED, as ESPHome's `api_connection.cpp`; DISABLED with `-z 0`; NOT_READY before Sendspin started). HA
+      else ENCRYPTION_REQUIRED, as ESPHome's `api_connection.cpp`; DISABLED with `-z 0`, before the key check; NOT_READY without
+      a client id, a guard only: sendspin_start sets it before the API serves). The text sensor's state likewise goes only to
+      a keyed subscriber (`send_token_state(c)`): before, every plaintext client read it until HA set the key, even with the
+      entity disabled in HA (setting a key first instead takes the Echo from HA, which shows). HA
       asks for capabilities only from API 1.15 on (`device_capabilities_compat`), so the API version went 1.10 -> 1.15: 1.11 makes
       the media player's feature flags its own (now sent: the set 1.10 implied, 1184268), 1.13 climate's, 1.14 object_id optional
       (always sent); 1.16 (proxy acks) not taken. aioesphomeapi 46.4.1 -> 46.25.0 (HA 2026.11's) for the tests.

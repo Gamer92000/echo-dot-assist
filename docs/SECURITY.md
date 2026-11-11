@@ -67,13 +67,13 @@ wait for a press on the Echo called; "Drop In" off stops calls both ways.
 ## Music Assistant (Sendspin)
 
 Only a Sendspin server paired with the Echo's token plays on it (unless "Music Assistant without pairing" is on): an
-unpaired connection is encrypted under a key everyone knows. Whoever has the token can pair a server. The pairing-token
-request (what Home Assistant asks for and hands to Music Assistant, which then pairs by itself) answers only over the
-API connection with the key: never over plaintext, nor before Home Assistant has set its key. The older "Sendspin
-pairing token" text sensor is not as strict: its state goes to every client that subscribes, so until Home Assistant has
-set its key (it does so when you adopt the Echo) a plaintext connection receives the token too, whether or not the
-entity is enabled in Home Assistant (disabled, Home Assistant only leaves it out of its records). Once a key is set,
-only connections with that key get in at all. The settings page never shows the token.
+unpaired connection is encrypted under a key everyone knows. Whoever has the token can pair a server. Over the ESPHome
+API the Echo gives the token only over the connection with the key, never over plaintext nor before Home Assistant has
+set its key (it does so when you adopt the Echo): both the pairing-token request (what Home Assistant asks for and
+hands to Music Assistant, which then pairs by itself) and the older "Sendspin pairing token" text sensor, which has no
+state until then. Before adoption someone on the network could set a key first and then ask, but that takes the Echo
+from Home Assistant, which you would notice. The token is also in the Echo's log, read over adb, and at the end of
+`scripts/setup.sh`. The settings page never shows it, and its log viewer blanks it.
 
 ## Arbitration between Echos
 

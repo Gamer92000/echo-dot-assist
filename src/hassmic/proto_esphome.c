@@ -442,16 +442,20 @@ static void send_setting(int key)       /* lock held */
     }
 }
 
-/* The Sendspin pairing token, so that it can be copied from Home Assistant into Music Assistant.  It is a secret of
- * sorts (whoever has it can pair a server with this player), so the entity is diagnostic and disabled by default:
- * Home Assistant only records it once the user enables it. */
-static void send_token_state(void)      /* lock held */
+/* The Sendspin pairing token, so that it can be copied from Home Assistant into Music Assistant (older ones: from
+ * Home Assistant 2026.11 and Music Assistant 2.10.9 on, send_sendspin_token pairs without it).  It is a secret of
+ * sorts (whoever has it can pair a server with this player), so the entity is diagnostic and disabled by default, and
+ * its state goes only to the subscriber that asked, over the keyed connection, as the token request does: disabled
+ * in Home Assistant, the state is still sent, and before a key is set every plaintext client would read it.  A client
+ * on the LAN could set a key itself then, but that takes the Echo from Home Assistant, which notices; reading the
+ * token did not.  Without a key the entity has no state: Home Assistant sets one when it adopts the Echo. */
+static void send_token_state(int c)     /* lock held */
 {
     PB(b, 256); char tok[160];
-    if (!core_sendspin_port) return;
+    if (!core_sendspin_port || c < 0 || !clients[c].keyed) return;
     sendspin_pairing_token(tok, sizeof tok);
     pb_fixed32(&b, 1, KEY_SENDSPIN_TOKEN); pb_str(&b, 2, tok);
-    send_state(TEXT_SENSOR_STATE, &b);
+    send_msg(TEXT_SENSOR_STATE, &b);
 }
 
 /* The settings page as this client reached us (http://<address>:28931): diagnostic, enabled, so the address is on the
@@ -1557,13 +1561,15 @@ static void send_device_caps(void)
 }
 
 /* SendspinPairingTokenResponse: the token only over the connection with the device key, as ESPHome hands it out only
- * once a key is in use: whoever has it can pair a server with this player.  No key yet, or a connection without it:
- * ENCRYPTION_REQUIRED, Home Assistant asks again once it has set one. */
+ * once a key is in use: whoever has it can pair a server with this player.  No key yet: ENCRYPTION_REQUIRED, Home
+ * Assistant asks again once it has set one (with a key, connections without it are closed before they get here).
+ * Sendspin off (-z 0): DISABLED first, which gives nothing away.  NOT_READY only guards: sendspin_start sets the
+ * client id before the API serves. */
 static void send_sendspin_token(int c)  /* lock held */
 {
     PB(b, 192); char tok[160];
-    if (c < 0 || !clients[c].keyed) pb_uint(&b, 1, SS_TOKEN_ENCRYPTION_REQUIRED);
-    else if (!core_sendspin_port) pb_uint(&b, 1, SS_TOKEN_DISABLED);
+    if (!core_sendspin_port) pb_uint(&b, 1, SS_TOKEN_DISABLED);
+    else if (c < 0 || !clients[c].keyed) pb_uint(&b, 1, SS_TOKEN_ENCRYPTION_REQUIRED);
     else if (!sendspin_client_id()[0]) pb_uint(&b, 1, SS_TOKEN_NOT_READY);
     else { sendspin_pairing_token(tok, sizeof tok); pb_uint(&b, 1, SS_TOKEN_OK); pb_str(&b, 2, tok); }
     send_msg(SENDSPIN_TOKEN_RESP, &b);
@@ -1691,7 +1697,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case LIST_ENTITIES_REQ: send_entities(); break;
     case SUBSCRIBE_STATES:
         for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd == reply_fd) clients[i].states = 1;
-        send_mp_state(); send_all_settings(); send_token_state(); send_web_state();
+        send_mp_state(); send_all_settings(); send_token_state(c); send_web_state();
         ask_time(c, 1); break;
     case GET_TIME_RESP: {
         uint32_t epoch = 0; char tz[128] = "";
