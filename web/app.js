@@ -206,7 +206,7 @@ const PAGES = [
 ];
 const BRIGHTNESS = ['screen_brightness_auto', 'screen_brightness', 'screen_brightness_adjust', 'screen_adaptive_colour'];      // the Show's backlight, and its colour where Fire OS has that
 const WORDS = ['screen_text', 'screen_text_seconds', 'screen_timers'];            // the screen UI's words.c
-const MOVED = { light_band: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen', screen_adaptive_colour: 'screen',
+const MOVED = { light_band: 'screen', music_on_screen: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen', screen_adaptive_colour: 'screen',
   screen_text: 'screen', screen_text_seconds: 'screen', screen_timers: 'screen', arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
 // The cards of a settings page: [title, settings...].  A setting not named here (a new one, or a model's own) comes
 // last, in a card of its own, so nothing is ever lost from the page
@@ -258,6 +258,7 @@ const HELP = {
   screen_text: { help: 'What you said and the assistant\'s reply in large letters over the screen, above the band: your words smaller and grey, the reply white beside a cyan bar, both as large as they fit (a very long reply is cut at the end of the screen). They show over the face, the music and any app, Kiosk Satellite too, but not over the menu pulled down from the top. They appear as speech-to-text and the reply come in, stay while the Echo answers and for 8 seconds after, then fade; the next request takes them away at once. The screen behind them is darkened, so they stay readable over whatever it shows. A tap takes them away, over an app too (the app gets none of those touches while they show). With Wyoming only your words are shown (it tells no reply text). Off by default: what people say appears only where someone wants it to.' },
   screen_text_seconds: { help: 'How long what you said and the reply stay on the screen once the Echo is idle again, in seconds. 0 keeps them until the next request (or a timer that rings). Default 8.' },
   screen_timers: { help: 'Timers set on this Echo, on the screen: each one\'s name (or its length) over its time left in large digits with its unit (4:59 min, 1:02:05 h, 45 s) and a bar of what is left, the one that ends first on top; a paused one in grey. When one rings it shows in orange and pulses until it is stopped, with a Stop button. A tap on the timers hides them until the next change, over an app too (the app gets none of those touches while they show). The screen stays on while timers show. What you said and the reply (Speech on screen) go before them while they show. Off by default.' },
+  music_on_screen: { help: 'While a track from Music Assistant plays on this Echo, the screen shows the music page (the big cover, title, seek bar and buttons). In place of the face: only where the face is what the screen shows by itself; an app in front (Kiosk Satellite, a dashboard) is left alone. In place of the home app too: also over the app chosen as Home above (or Kiosk Satellite), which comes back when the music stops; other apps are left alone. A request, a call or a ringing timer bring the face as always, and the music page comes back when they are over. It stays until the music stops: a pause keeps it, and so does the gap between two tracks. It goes by itself only if it still shows the Playing tab: browse the library or search on it and it stays, as if opened by hand (Home in the drawer brings the home app back). Pull down the drawer and choose Face or Home, or tap the face button on the music page, and the music page stays away until the music has stopped; a face chosen that way stays as it always has, until Home in the drawer brings the home app back. Off by default.' },
   light_band: { help: 'The Echo Show has no light ring: it shows the ring\'s lights as a band along the bottom of the screen, as Alexa did. That is listening, thinking, mic off, calls, volume, timers and Home Assistant\'s "Light ring". This many pixels at the bottom are kept for it, so an app on the screen never has the band over it. 0 gives the whole screen to the apps and shows no band. Default 10, stock\'s line.' },
   bluetooth_announcements: { help: 'Says "Connected to …" and "Disconnected from …" when a phone connects, in your voice assistant\'s voice, after the chime. Home Assistant speaks the words, and only once "Allow the device to perform Home Assistant actions" is ticked in this Echo\'s ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure); without it there is the chime only.' },
   bluetooth_announcement_language: { help: 'The language of those sentences. Home Assistant does not tell the Echo which language your voice assistant speaks, so pick the one that matches its voice.' },
@@ -440,6 +441,7 @@ const SUB = {
   screen_brightness_adjust: 'Brighter or dimmer than Amazon\'s curve, with adaptive on',
   screen_adaptive_colour: 'Colours warmer in warm light, yellow at night',
   ring_rotation: 'Where "Light ring fill" starts',
+  music_on_screen: 'The big cover while music plays, in place of the face or the home app',
   light_band: 'Pixels kept for the band along the bottom of the screen',
   screen_text: 'What you said and the reply, in large letters on the screen',
   screen_text_seconds: 'How long the words stay after the reply; 0: until the next request',
@@ -483,6 +485,7 @@ const CHOICE_NAMES = {
   noise_reduction: { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' },
   online_updates: { off: 'Off', beta: 'Beta', release: 'Release' },
   drop_in_answer: { auto: 'At once', ask: 'After the action button' },
+  music_on_screen: { off: 'Off', face: 'In place of the face', home: 'In place of the home app too' },
   timer_sound: { beep: 'Beep', timer: 'Alexa timer', alarm: 'Alexa alarm', custom: 'Your own' },
   end_of_request: { off: 'Off', relaxed: 'Relaxed', normal: 'Normal', aggressive: 'Aggressive' },
   bluetooth_announcement_language: { en: 'English', de: 'Deutsch', fr: 'Français', es: 'Español', it: 'Italiano', pt: 'Português', nl: 'Nederlands',

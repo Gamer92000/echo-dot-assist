@@ -34,6 +34,7 @@ static const char *const arb_modes[2] = { "hassmic", "kiosk" };            /* AR
 static const char *const wake_engines[3] = { "amazon", "microwakeword", "homeassistant" };  /* WAKE_AMAZON, WAKE_MWW, WAKE_HA */
 static const char *const dropin_answers[2] = { "auto", "ask" };          /* dropin_ask() 0, 1 */
 static const char *const timer_sounds[4] = { "timer", "alarm", "beep", "custom" };    /* TIMER_SOUND_* */
+static const char *const music_pages[3] = { "off", "face", "home" };    /* screen_music_page(): src/ui MP_OFF, MP_FACE, MP_HOME */
 static const char *const speech_langs[6] = { "auto", "de", "en", "fr", "es", "ja" };
 static int speech_lang, wake_adapt = 1;
 
@@ -93,7 +94,7 @@ static int colour_actual(void)
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
@@ -146,6 +147,9 @@ static const struct setting table[NSET] = {
     [LED_LEVEL]   = { "led_brightness", "LED brightness", "Lights", "%", S_INT, 0, 100, 1, 0 },
     /* ring.c keeps it: where the light's fill starts.  Not exported: it is for how this Echo stands */
     [RING_ROT]    = { "ring_rotation", "Light ring rotation", "Lights", "LEDs", S_INT, 0, 23, 0, 0 },   /* settings_max() */
+    /* screen.c tells the UI (src/ui/scene.c music_page_tick): the Playing tab in place of the face, or of the home app
+     * too, while a track plays; only where the model has the UI */
+    [MUSIC_PAGE]  = { "music_on_screen", "Music on the screen while it plays", "Lights", NULL, S_CHOICE, 0, 0, 1, 0 },
     /* ring_band.c: the screen's rows kept for the light band (stock's attention line is 10) */
     [BAND]        = { "light_band", "Light band", "Lights", "px", S_INT, 0, 40, 1, 0 },
     /* the backlight (backlight_auto above): the level with adaptive off, the shift of Amazon's lux curve with it on
@@ -251,6 +255,7 @@ static int present(enum id i)
     case SPK_GAIN: return spkgain_present();
     case MULTI_PRESS: return !board.action_combo;               /* the Shows: no action key, the volume pair stands in */
     case BAND: return ring_band_rows(-1) >= 0;
+    case MUSIC_PAGE: return screen_ui();
     case KIOSK_NET: case KIOSK_MIC: case KIOSK_CAM: return board.kiosk;
     case SCR_AUTO: case SCR_LEVEL: case SCR_ADJUST: return board.backlight || getenv("HASSMIC_FAKE_BACKLIGHT");   /* tests */
     case SCR_COLOUR: return colour_actual() >= 0;
@@ -304,6 +309,7 @@ int settings_choices(const struct setting *s, const char *const **names)
     case WAKE_ENGINE: *names = wake_engines; return 3;
     case SPEECH_LANG: *names = speech_langs; return 6;
     case DROPIN_ANSWER: *names = dropin_answers; return 2;
+    case MUSIC_PAGE: *names = music_pages; return 3;
     case TIMER_SOUND: *names = timer_sounds; return 4;
     case END_REQ: *names = micend_names; return MICEND_MODES;
     default: *names = NULL; return 0;
@@ -386,6 +392,7 @@ int settings_get(const struct setting *s)
     case ASSIST_LEVEL: case SOUNDS_LEVEL: case TIMER_LEVEL: case CALL_LEVEL: return core_kind_volume((int)(s - table - ASSIST_LINK) / 3, -1);
     case ASSIST_OFFSET: case SOUNDS_OFFSET: case TIMER_OFFSET: case CALL_OFFSET: return core_kind_offset((int)(s - table - ASSIST_LINK) / 3);
     case BAND: return ring_band_rows(-1);
+    case MUSIC_PAGE: return screen_music_page(-1);
     case SCR_AUTO: return backlight_auto;
     case SCR_LEVEL: return backlight_level;
     case SCR_ADJUST: return backlight_adjust;
@@ -463,6 +470,7 @@ static void put(enum id i, int v)
     case ASSIST_LEVEL: case SOUNDS_LEVEL: case TIMER_LEVEL: case CALL_LEVEL: core_kind_volume((i - ASSIST_LINK) / 3, v); break;
     case ASSIST_OFFSET: case SOUNDS_OFFSET: case TIMER_OFFSET: case CALL_OFFSET: core_set_kind_offset((i - ASSIST_LINK) / 3, v); break;
     case BAND: ring_band_rows(v); break;
+    case MUSIC_PAGE: screen_music_page(v); break;
     case SCR_AUTO: backlight_auto = v; break;                   /* root's main.sh sees state/config change */
     case SCR_LEVEL: backlight_level = v; break;
     case SCR_ADJUST: backlight_adjust = v; break;

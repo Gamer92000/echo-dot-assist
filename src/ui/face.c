@@ -74,6 +74,13 @@ int face_mode(struct scene *s)
     return M_IDLE;
 }
 
+/* the face has nothing to tell (no request, call, timer, error, setup): the music page may take its place */
+int face_calm(struct scene *s)
+{
+    int m = face_mode(s);
+    return m == M_IDLE || m == M_MUTE || m == M_DND;
+}
+
 static void soon(long long *due, long long t, long long now) { if (t > now && (!*due || t < *due)) *due = t; }
 
 /* the soonest something changes by itself: a timed pattern's end, a blink, a glance */
