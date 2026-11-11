@@ -554,7 +554,7 @@ void scene_touch(struct scene *s, int ev, int x, int y, long long now)
     if (ev == TOUCH_DOWN && !s->screen_on) { s->down = 0; return; }   /* the screen off: no gesture (android.c wakes it) */
     int vis = scene_visible(s) && s->screen_on;
     if (ev == TOUCH_DOWN) {
-        if (!s->saver_on) scene_active(s);
+        if (!s->saver_on) scene_active(s, "a touch");
         s->wtap = 0;
         s->down = 1; s->x0 = s->x = x; s->y0 = s->y = y; s->t0 = now; s->fired = s->longd = s->dragging = s->slide = 0;
         s->sc = NULL; s->sc_drag = 0; s->pressed = 0;
@@ -817,8 +817,10 @@ struct rect scene_prepare(struct scene *s, long long now, int *next_ms)
     s->cur = !s->cur; s->n[s->cur] = 0; s->nhits = 0; s->nscrolls = 0;
     s->clip = (struct rect){ 0, 0, s->w, s->h };
     int drawer_only = s->backdrop.px && ((s->dr.from_app && drawer_open(s)) || s->leaving_until > now);
-    if (drawer_only || s->view != V_FACE || drawer_open(s) || !is_home(s->top)) scene_active(s);
-    s->saver_on = 0;                                            /* (face.c sets it while the clock shows) */
+    if (drawer_only || drawer_open(s)) scene_active(s, "the drawer");
+    else if (s->view != V_FACE) scene_active(s, "the music");
+    else if (!is_home(s->top)) scene_active(s, "%s in front", s->top);
+    s->saver_was = s->saver_on; s->saver_on = 0;                /* (face.c sets it while the clock shows) */
     if (drawer_only) {                                          /* pulled over an app: its picture under the drawer */
         fill(s, 0, (struct rect){ 0, 0, s->w, s->h }, BG);
         if (s->backdrop.px) image(s, 1, &s->backdrop, 0, 0, (float)s->backdrop.w, (float)s->backdrop.h, 0);
@@ -892,7 +894,14 @@ static void start_home(struct scene *s)
     }
 }
 
-void scene_active(struct scene *s) { s->active_at = s->now; }
+void scene_active(struct scene *s, const char *why, ...)
+{
+    s->active_at = s->now;
+    if (!s->saver_on && !s->saver_was) return;                 /* the clock did not show: nothing to say */
+    char b[160]; va_list ap; va_start(ap, why); vsnprintf(b, sizeof b, why, ap); va_end(ap);
+    send(s, "log screen saver: the face again: %s", b);       /* (once: what ended it, not what keeps it away) */
+    s->saver_on = s->saver_was = 0;
+}
 
 void scene_msg(struct scene *s, const char *line, long long now)
 {
@@ -908,16 +917,16 @@ void scene_msg(struct scene *s, const char *line, long long now)
         if (p < 0) return;
         face_pattern(s, p, cmd[1] == '+', ago < 0 ? 0 : ago);
     }
-    else if (eq(cmd, "ev")) { if (s->evol >= 0 && atoi(a) != s->evol) scene_active(s); s->evol = atoi(a); }
+    else if (eq(cmd, "ev")) { if (s->evol >= 0 && atoi(a) != s->evol) scene_active(s, "the volume, %d -> %d", s->evol, atoi(a)); s->evol = atoi(a); }
     else if (eq(cmd, "lv")) s->level = atoi(a) < 0 ? 0 : atoi(a) > 100 ? 100 : atoi(a);
-    else if (eq(cmd, "mute")) { if (atoi(a) != s->mute) scene_active(s); s->mute = atoi(a); }
-    else if (eq(cmd, "dnd")) { if (atoi(a) != s->dnd) scene_active(s); s->dnd = atoi(a); }
+    else if (eq(cmd, "mute")) { if (atoi(a) != s->mute) scene_active(s, "mic %s", atoi(a) ? "off" : "on"); s->mute = atoi(a); }
+    else if (eq(cmd, "dnd")) { if (atoi(a) != s->dnd) scene_active(s, "Do not disturb %s", atoi(a) ? "on" : "off"); s->dnd = atoi(a); }
     else if (eq(cmd, "oobe")) s->oobe = atoi(a);
     else if (eq(cmd, "mpage")) { int v = atoi(a); s->mpage = v == MP_FACE || v == MP_HOME ? v : MP_OFF; }
     else if (eq(cmd, "h12")) s->h12 = atoi(a);
     else if (eq(cmd, "ck")) {                                   /* the screen saver: on, the timeout (min, 0 never) */
         int on = 0, min = 5; sscanf(a, "%d %d", &on, &min);
-        s->clock_big = on == 1; s->saver_min = min < 0 ? 0 : min; scene_active(s);
+        s->clock_big = on == 1; s->saver_min = min < 0 ? 0 : min; scene_active(s, "the settings");
     }
     else if (eq(cmd, "name")) snprintf(s->name, sizeof s->name, "%s", a);
     else if (eq(cmd, "act")) snprintf(s->act, sizeof s->act, "%s", a);
@@ -938,7 +947,7 @@ void scene_msg(struct scene *s, const char *line, long long now)
     } else if (eq(cmd, "mp")) {
         long long pos = 0, dur = 0; int st = 0, sp = 1000;
         if (sscanf(a, "%d %lld %lld %d", &st, &pos, &dur, &sp) >= 1) {
-            if (st != s->srv_state) scene_active(s);       /* music started, paused, stopped: the screen saver waits */
+            if (st != s->srv_state) scene_active(s, "music %s", st == 1 ? "playing" : st == 2 ? "paused" : "stopped");   /* the saver waits */
             s->srv_state = st; s->srv_pos = pos; s->srv_dur = dur; s->srv_speed = sp; s->srv_at = now; s->music = 1;
             if (s->pend_until && st != s->pend_state) s->mdur = dur;     /* older than the tap: the state stays as tapped */
             else { s->mstate = st; s->mpos = pos; s->mdur = dur; s->mspeed = sp; s->mpos_at = now; }   /* (the tap still

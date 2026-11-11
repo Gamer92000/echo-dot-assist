@@ -43,7 +43,7 @@ static int pat_on(struct scene *s, int p)
  * face back from the music, and closes the drawer that was pulled over our own screen */
 void face_pattern(struct scene *s, int p, int on, long long ago)
 {
-    if (on) { s->pat[p].at = s->now - ago; s->pat[p].on = 1; if (p == P_LISTEN) s->level = 0; if (ago < 1000) scene_active(s); }
+    if (on) { s->pat[p].at = s->now - ago; s->pat[p].on = 1; if (p == P_LISTEN) s->level = 0; if (ago < 1000) scene_active(s, "the pattern %s", pats[p].name); }
     else s->pat[p].on = 0;
     if (on && ago < 1000 && (p == P_LISTEN || p == P_CALL_IN || p == P_TIMER)) {
         if (s->view == V_MUSIC) s->view = V_FACE;
@@ -283,6 +283,7 @@ static void big_clock(struct scene *s, int m)
     if (m == M_MUTE) text(s, ID_FACE + 10, "Microphone off", U(30), 0, 0.8f * w, w / 2, 0.87f * h - U(15), 1, RED, 255);
     else if (m == M_DND) text(s, ID_FACE + 10, "Do not disturb", U(30), 0, 0.8f * w, w / 2, 0.87f * h - U(15), 1, gfx_scale(VIOLET, 0.8f), 255);
     else if (player) miniplayer(s);
+    if (!s->saver_was) send(s, "log screen saver: the clock, nothing for %d min", (int)(saver_ms(s, m) / 60000));
     s->saver_on = 1;
     hit(s, 0, 0, w, h, A_WAKE, 0);                              /* a touch wakes the face, and does nothing else */
 }
@@ -294,7 +295,7 @@ int face_view(struct scene *s, float dt)
     int m = face_mode(s), used = 0, moving;
     char clk[16];
     fill(s, ID_FACE, (struct rect){ 0, 0, s->w, s->h }, BG);
-    if (!waits(m)) scene_active(s);                             /* listening, a reply, a timer ringing, a call... */
+    if (!waits(m)) scene_active(s, "the face's mode %d", m);   /* listening, a reply, a timer ringing, a call... */
     if (clock_mode(s, m)) { big_clock(s, m); return 0; }      /* nothing moves: redrawn at the minute (scene.c) */
     moving = eyes(s, m, dt);
     caption(s, m, &used);
@@ -309,7 +310,7 @@ int face_view(struct scene *s, float dt)
 int face_act(struct scene *s, int a, int arg, int ev)
 {
     (void)arg;
-    if (a == A_WAKE) { if (ev == EV_TAP || ev == EV_LONG) scene_active(s); return 1; }
+    if (a == A_WAKE) { if (ev == EV_TAP || ev == EV_LONG) scene_active(s, "the clock touched"); return 1; }
     if (ev != EV_TAP) return 0;
     switch (a) {
     case A_POKE: s->face.poke_at = s->now; s->face.pokex = clampf((s->x - s->w / 2.0f) / s->w * 0.2f, -0.08f, 0.08f); break;

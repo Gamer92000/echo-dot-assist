@@ -272,9 +272,11 @@ int main(int argc, char **argv)
     printf("clock: %d frames in 20 s\n", frames - f0);
     assert(frames - f0 <= 2);                                   /* a minute's turn at most, not a blink every few s */
     nsent = 0; tap(W / 2, (int)(0.5f * H)); run(300);
-    assert(!S->saver_on && nsent == 0);                         /* the face back, and the touch did nothing else */
-    run(61000); assert(S->saver_on);
-    msg("p+ active-start"); run(400); assert(!S->saver_on); ppm("clock_listening", inc);
+    assert(!S->saver_on && nsent == 1 && sent_has("log screen saver: the face again: the clock touched"));   /* the face
+                                                                   back, said why, and the touch did nothing else */
+    nsent = 0; run(61000); assert(S->saver_on && sent_has("log screen saver: the clock, nothing for 1 min"));
+    nsent = 0; msg("p+ active-start"); run(400); assert(!S->saver_on); ppm("clock_listening", inc);
+    assert(nsent == 1 && sent_has("log screen saver: the face again: the pattern active-start"));   /* once, not each frame */
     msg("p- active-start"); msg("p+ active-end"); run(1000); assert(!S->saver_on);
     run(61000); assert(S->saver_on);
     msg("mute 1"); msg("p+ mics-off_on"); run(500); assert(!S->saver_on);
