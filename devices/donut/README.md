@@ -75,6 +75,9 @@ a USB cable soldered to those pads. How to open the case: the guides linked unde
 >
 > - Pogo pins: [Echo Dot 3 (donut) Pogo Pin Holder for TM3 / TM4 / TM5](https://www.printables.com/model/1904685-echo-dot-3-donut-pogo-pin-holder-for-tm3-tm4-tm5-s) (Printables), by [dosdroid](https://github.com/dosdroid)
 > - Wires only: [Echo Dot 3 USB jig](https://makerworld.com/cs/models/3551062-echo-dot-3-usb-jig) (MakerWorld), by [gabrielebu](https://github.com/gabrielebu)
+>
+> Be careful with these: pressed-on contacts (the bare wires most of all) can lose contact and break off the unlock
+> midway. The bootrom still answers afterwards, so reseat the contacts and run the unlock again.
 
 | USB cable wire | Pad on the Echo's board |
 |---|---|
