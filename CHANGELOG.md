@@ -2,15 +2,50 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-11
+
+- **A note of your own on each Echo, and your other Echos one click away on the settings page (issue #153).** Several
+  Echos of one model differed only by the six characters at the end of their names. Click "Add a note" under the
+  name at the top of the menu (or the Note row on the System page) and write where it stands, say "Kitchen, by the
+  window". The note shows under the name there, in the browser tab's title, on your other Echos' pages and on the
+  login page, so you know which Echo's button to press. Anyone on your network can read it, as the name. It stays
+  with that Echo: not in the settings file, and a factory reset removes it. The name at the top now opens a list of
+  your other Echos with their notes: pick one and its settings page opens on the same page you are on. Suggested by
+  baudneo.
+
 ## 2026-11-10
 
-- **The Echo Show can show the music page instead of the face while a track plays.** New setting "Music on the screen
-  while it plays" (Screen page, `music_on_screen`, off by default): the Playing tab with the big cover, the seek bar and the
-  buttons takes the face's place as long as music plays, until it stops (not at a pause, nor in the few seconds between two
-  tracks). A request, a call or a ringing timer bring the face as before, and the music page comes back when they are over.
-  The drawer's Face, or the face button on the music page, holds the face until the music has stopped. An app in front
-  (Kiosk Satellite, a dashboard) is left alone.
-
+- **"Stop" can end a timer ringing on another Echo (issue #161), optional and off by default.** A ringing Echo
+  always wins the wake word round, but only if it heard the wake word itself. From the next room, or over its own
+  ring, it may not: then another Echo got the "stop", paused its own music or handed the word to Home Assistant, and
+  the timer rang on. New setting "A stop another Echo heard ends the ring" (Voice page, Timers card,
+  `timer_stop_from_others`): switched on, that Echo's ring stops on "<wake word>, stop" said to any Echo of its
+  arbitration network, as it does when you say it to the ringing Echo itself. The Echo that heard you then leaves its
+  music alone and starts no request. It reaches the whole house: a "stop" in the bedroom ends the kitchen's timer. A
+  "stop" that has something to end where it was heard (a ring, a reply, a call there) ends only that, and "Any request
+  stops a ringing timer" stays with the Echo that heard you. The Echos tell each other over their own network, without
+  Home Assistant; the Echo that hears you needs this version too. The log of the one that heard says
+  `stop: nothing here, <name> rings: told to stop`, the ringing one's `alarm: off (stop heard by <name>)`. Not in
+  Kiosk Satellite's arbitration mode. Suggested by redeye86.
+- **Music also drops on the other Echos that heard you (issue #165).** With two Echos in one room playing the same
+  music, only the one answering turned its music down; the other played on at full volume over your command and the
+  reply. Now every Echo that heard the wake word turns its music down by its own "Music ducking" until the answering
+  Echo is done. An Echo in another room that did not hear you plays on. The Echos tell each other over their own
+  network, with no Home Assistant automation and no change to the volume itself: Music Assistant and the light ring
+  see nothing of it. New setting "Duck for other Echos" (Sound page, `duck_for_others`, on by default); it needs
+  wake word arbitration on. Both Echos need this version. A follow-up question keeps them down for your answer too;
+  music Home Assistant plays on the answering Echo afterwards (a radio you asked for) does not. If the "done" message
+  is lost, the music comes back after about 7 seconds. The answering Echo's own music now also drops from the wake word on rather than once the Echos have
+  agreed which one answers (up to a second later). Suggested by nima-1102.
+- **A freshly installed Echo went without the wake word aligners until its first update.** The files that find where
+  the wake word ends (since 2026-10-29) came with every update, but the installer (`scripts/setup.sh`,
+  `scripts/install-system.sh`, `scripts/install-boot.sh`) left them out. Such an Echo found the word's end by the
+  loudness alone, the rule the aligners replaced: on an Echo Dot 3 it took up to 0.36 s after Amazon's end of the word
+  for the word's tail and left it out of the request. The installer brings them now. An Echo installed since
+  2026-10-29 that has had no update since gets them with its next one, at once with `scripts/ota-push.sh`, or by
+  installing again; its log says `wake: ... aligned by ...` with them, only `wake: ... ms of the word's tail left out`
+  without. Where the system partition is nearly full, an update no longer takes them off one time and puts them back
+  the next: those already there stay. Found by derFinlay, who also wrote the first fix (#160).
 - **Echo Show 8 2nd gen: Adaptive colour can be switched off or on from the settings page.** Under **Screen**, the
   **Brightness and colour** card has the stock display setting that warms the screen's colours with the room's
   light, often turning a dashboard yellow at night. It is off by default; an explicit choice is kept across restarts.

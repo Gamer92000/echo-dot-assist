@@ -204,6 +204,63 @@ Run in this order. Each step says what it proves.
       a connect HA asked for that ble.c's thread had not taken yet came up afterwards and stayed, a slot taken for
       good). ble.c keeps the controller for A2DP, the speaker and Improv. `tests/fake_ha_bt_proxy.py` (fake_improv.py's controller; `HASSMIC_BT_MAC` stands in for idme's
       `bt_mac_addr` in ble.c). **Open:** not tried on an Echo with a real Home Assistant (whether HA drops the scanner at once).
+- [~] "Stop" forwarded to a ringing Echo (issue #161, 2026-11-10): `ringstop.c`. A ringing Echo claims with prio 2
+      and every Echo that heard "<wake word>, stop" runs the keyword (`stop_word`, round lost or not), so what failed
+      was only a ringing Echo that never detected the wake word (too far, or its ring over it): no claim, the other
+      Echo won alone and had nothing to stop. Setting `timer_stop_from_others` (Voice, page only, exported, off) on
+      the ringing Echo: while `alarm_on` (`alarm_set` -> `ringstop_ringing`) it broadcasts `T_MSG` `{0x41, 1}` (three
+      copies 0/100/300 ms, then every 2 s) and `{0x41, 0}` when it stops or the setting goes off; every Echo keeps the
+      members that ring, `HOLD_MS` 6.5 s past each "on". `stop_word` with nothing of its own to end (no ring, call,
+      SPEAKING/THINKING run, nor a LISTENING one its wake word cut) and a member ringing: `ringstop_forward` queues
+      `{0x42, id32}` (three copies, one id; receivers take each sender's id once), the "stop" counts as ended (music
+      not paused, the wake word's LISTENING run dropped, `trigger` starts none in the round). Not via `wake_cut_ms`:
+      that made a "stop" transcript within 10 s look like one of a cut here and skip the forward (found by the test).
+      One rule for keyword and transcript (`stop_is_here`): a ring here, SPEAKING, THINKING (keyword only: at the
+      transcript the run itself is THINKING), or a cut by the last wake word (`wake_cut_ms >= heard_ms`). Not "a cut
+      within 10 s": a ring here cut and stopped kept a "stop" for another Echo's ring 7 s later from going out (found
+      by the test's control). `core_transcript` forwards before `music_stop`; `cut` (10 s) only when not forwarded.
+      `ringstop_forward` sends nothing and returns 0 without its thread, outside our mode or without members (arb's
+      lock under `core_lock`, as proto_esphome.c's `arb_peers()`), so the "stop" stays this Echo's.
+      **Open (accepted):** on the ringing Echo, a stop that arrives before its own detection of the same wake word is
+      processed finds `heard_ms` newer than `stop_ms`, and that run starts with "stop" in its audio; the "stop" is said
+      after the word and travels the network, so it would need the capture thread late by that much. `timer_stop_any` is not
+      forwarded. Whole house: the ringing Echo took no part in the round, so nothing tells how near it is (the rivals'
+      table only knows members that claim). The setting is the ringer's so that off (default) changes nothing on any
+      Echo. Kinds 0x41/0x42 beside the duck's 0x40: #165's builds take only 0x40, older ones drop a T_MSG to all.
+      Kiosk mode: no messages; its claims carry no priority either (Kiosk Satellite's protocol, not ours).
+      The receiver carries a stop out on ringstop's thread (`core_alarm_stop_elsewhere`; not on arb's, whose socket
+      would wait for `core_lock`) and drops a run its own wake word opened over the ring (it heard the word, not the
+      "stop"), as `stop_word` does. Taken only in our mode; no forward without the sender's thread. A remote ring wins
+      over local music, one stop ends every ring that allows it, and a false "stop" keyword (2 in 354 requests on one
+      Echo) now ends a ring elsewhere where it only paused music before: accepted for an opt-in setting.
+      `tests/fake_ha_arbitration_ringstop.py`. **Open:** not tried on two Echos; redeye86's case (biscuit + athena)
+      not confirmed to be the "never detected" one (logs of both Echos of one failed stop would say).
+- [~] Ducking on the other Echos that heard it (issue #165, 2026-11-10): `duck.c`. An Echo whose round runs ducks
+      from the wake word (`duck_round` in `wake_heard`'s score wait and `claim`, until the decision + `LOST_WAIT_MS`
+      1.5 s; `duck_won` clears it on the winner, whose state ducks from there). The winner, for a run a round it won
+      started (`WON_MS` 3 s; a button run or an announcement tells nobody), broadcasts a 2-byte `T_MSG` (`0x40`,
+      on/off) to every member (`arb_tell(NULL)`: `to` = ff x 8; older builds drop it; `hooks->message`'s `all` keeps
+      it from Drop In, whose invite to all would ring every Echo) on each change, three copies (0/100/300 ms), "on"
+      again every 2 s; only with members and in our mode. A follow-up or barge-in restarts from the IDLE that ends the
+      run (`core_pipeline_finish`; the next run is LISTENING in the same call, but the sender's thread woke between
+      the two and said "off", "on"): `duck_follow` bridges 5 s at most. HA's media is no run (`speak_media`: at the
+      request when nothing plays, else at the stream's start in `tts_kind`). A loser takes "on" within `ACCEPT_MS` 5 s
+      of its round from members that claimed in it (`arb_round_claimed`: `round_.cl`, kept until the next round),
+      up to 4 at once (two may both answer), each held `HOLD_MS` 6.5 s past its last "on", ended by its "off" (the own
+      round's duck, `round_until`, stays). The round stands in for "same room": HA has areas, but an automation would
+      act after the window plus its link, move the real volume (MA, ring, a change meanwhile lost) and need per-pair
+      setup. Setting `duck_for_others` (on) gates the receiving side and the round's own duck. `duck_active()` replaces
+      `core_state() != IDLE` in sendspin.c and a2dp.c. `tests/fake_ha_arbitration_duck.py` (each fix checked by
+      undoing it). **Open:** not tried on two Echos with real music.
+- [x] A note per Echo and the other Echos from its name (issue #153, 2026-11-11): the name is fixed (model + MAC end), so
+      Echos of one model differ by six hex digits. `web.c`: `state/note` (one line, control characters as spaces,
+      trimmed, 80 bytes cut before a split character; empty removes the file), `note` in `/api/hello` (unsigned like
+      the name: the login page shows it, where it says which Echo's button to press) and so in the state's `device`,
+      signed `POST /api/note`; not exported (it is this Echo's), gone with a reset. HA's own name or area would be
+      better, but ESPHome sends neither to the device and it does not know its entity ids. Page: the line under the
+      name and a "Note" row on System edit it; the tab's title, the Echos page and the overview show it; the name is a
+      menu of the other Echos (the Echos page's `others`, read again on opening when a round is over 30 s old)
+      linking to the same `#/page` on each. `tests/fake_web.py`; the layout in Chromium (desktop, phone, login).
 - [~] Ducking depth and multi press (2026-11-08): `DUCK` (a sixth, -15.6 dB) was fixed; the setting `music_duck` (0..60 dB, default 16,
       about the old 15.6) is the target of `music_duck()`'s glide in sendspin.c and a2dp.c, read through `settings_duck_gain()` (any thread).
       Reason: over a loud audiobook 15.6 dB left too little voice for STT. Setting `multi_press` (off): the action button pressed
@@ -486,6 +543,21 @@ Run in this order. Each step says what it proves.
       every 10 minutes and at the 5th request. Setting `wake_word_adaptation` (on).
       Open: the time on a device, real recordings (rmaffeo's, the #72 reporter's), native English and the untried
       languages. The models are in git (`wakealign/`, CC BY 4.0, credited in its README), every bundle carries them.
+      A fresh install did not (#160, derFinlay, 2026-11-09: an Echo Dot 3 and two Echo 2 set up from 28ff81c's beta,
+      German): `install-system.sh` and `install-boot.sh` push file lists of their own, the aligners not on them, so
+      /system/hassmic had none until the first update's promotion and `word_tail_end` went by the level, #72's pause
+      included, on every request (the Dot 3: 36 wake words, 0-360 ms of tail left out, 151 on average for the 31 with a
+      pause; no aligner line). After a push of the same build: `alexa aligned by .../alexa-de-DE.wa (de-DE spoken)`,
+      +40 ms from Pryon's end, aligned in 115 ms.  Both lists name them now.  `sysinstall.sh`'s room check held the
+      aligners alone against what is free: a first install with room for them and not much more took them and then
+      failed on its other files, and a promoted update counted installed aligners again against the room they took, so
+      a nearly full partition lost them and got them back the time after.  It counts what the run writes as `new()`
+      does: every file that differs from its destination (a first install's policy twice, the old one kept; the home screen app twice), and writes new
+      aligners only with a megabyte over it; those already there and the same stay whatever the room, others go
+      after `commit()` (a failed write leaves them) (`tests/unit/sysinstall_aligners_test.sh`, sysinstall.sh on the PC
+      with its paths in a folder).  Room seen: 754 MB free on the Dot 3's /system, 502 MB on an Echo 2's.
+      Open: an install through the changed scripts on a device; whether requests come out better with the aligner
+      (13 on two of the Echos since, a television on, what was said not known).
       Format 3 (2026-10-29): the 62 files were 6.58 MB (gzip 6.05, xz 2.09: the same data again and again), 16 of
       them byte for byte another's (en-CA = en-US, en-AU = en-GB, fr-CA = fr-FR: the same acoustic model and
       dictionary; alexa = alexa-en-US). Now a .was per acoustic model holds each GMM once (german 557 KB, english 757,

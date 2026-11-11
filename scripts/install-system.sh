@@ -67,6 +67,9 @@ FILES="$OUT/hassmic $OUT/runas $(ls $OUT/mixcap $OUT/mixplay $OUT/pryon_test $OU
 [ -n "$ANDROID" ] && FILES="$FILES scripts/device/wifictl.dex ${SCREEN_BAND:+scripts/device/ringbar.dex} ${HOME_APK:+scripts/device/$HOME_APK}"
 # the screen's UI where the model has one (device.mk SCREEN: the build made libhmui.so), as bundle.sh ships it
 [ ! -f $OUT/libhmui.so ] || FILES="$FILES $OUT/libhmui.so scripts/device/screen.dex"
+# the wake word aligners, as bundle.sh ships them: hassmic reads them next to itself (sysinstall.sh leaves them out
+# where the partition has no room for them; TWRP's way has no such check)
+FILES="$FILES $(echo wakealign/*.wa wakealign/*.was)"
 
 if [ -z "$TWRP" ]; then
     t "rm -rf $STAGE; mkdir -p $STAGE"
@@ -133,7 +136,7 @@ echo "sepolicy patched"
 t "rm -rf $MNT/system/hassmic; mkdir -p $MNT/system/hassmic"
 adb push $FILES $MNT/system/hassmic/ >/dev/null
 adb push $DDIR/hassmic.rc $MNT/system/etc/init/hassmic.rc >/dev/null
-t "chown -R 0:2000 $MNT/system/hassmic; chmod 755 $MNT/system/hassmic $MNT/system/hassmic/*; chmod 644 $MNT/system/hassmic/update.pub $MNT/system/hassmic/release.pub $MNT/system/hassmic/device.conf
+t "chown -R 0:2000 $MNT/system/hassmic; chmod 755 $MNT/system/hassmic $MNT/system/hassmic/*; chmod 644 $MNT/system/hassmic/update.pub $MNT/system/hassmic/release.pub $MNT/system/hassmic/device.conf $MNT/system/hassmic/*.wa $MNT/system/hassmic/*.was
    chown 0:0 $MNT/system/etc/init/hassmic.rc; chmod 644 $MNT/system/etc/init/hassmic.rc
    chcon -R u:object_r:system_file:s0 $MNT/system/hassmic $MNT/system/etc/init/hassmic.rc $MNT/sepolicy.pre-hassmic
    ls -lZ $MNT/system/hassmic $MNT/system/etc/init/hassmic.rc $MNT/sepolicy $MNT/system/etc/init/fosflags.rc

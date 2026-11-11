@@ -4,12 +4,14 @@
 #include "a2dp.h"
 #include "arb.h"
 #include "dropin.h"
+#include "duck.h"
 #include "https.h"
 #include "ble.h"
 #include "btout.h"
 #include "micend.h"
 #include "micgain.h"
 #include "ring.h"
+#include "ringstop.h"
 #include "screen.h"
 #include "sendspin.h"
 #include "sound.h"
@@ -91,8 +93,8 @@ static int colour_actual(void)
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
-          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, VOLUME, VOL_SPLIT,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
+          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
           VOL_EVEN, NSET };
@@ -129,6 +131,8 @@ static const struct setting table[NSET] = {
      * (state/timer_sound.wav), an export says only "custom" */
     [TIMER_SOUND] = { "timer_sound", "Timer sound", "Voice", NULL, S_CHOICE, 0, 0, 1, 0 },
     [TIMER_STOP_ANY] = { "timer_stop_any", "Any request stops a ringing timer", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* ringstop.c keeps it (issue #161): this Echo's ring ends on a "stop" another Echo of the network heard */
+    [TIMER_STOP_OTHERS] = { "timer_stop_from_others", "A stop another Echo heard ends the ring", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     /* buttons.c keeps it: double press of the action button = next, triple = previous; a single press waits 450 ms */
     [MULTI_PRESS] = { "multi_press", "Double and triple press of the action button", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     [STOP_ENDS]   = { "stop_ends_listening", "Stop after the wake word ends listening", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
@@ -207,6 +211,8 @@ static const struct setting table[NSET] = {
     [SPK_GAIN]    = { "speaker_gain", "Speaker gain", "Sound", "dB", S_INT, 0, SPKGAIN_MAX, 0, 0 },  /* settings_max() */
     /* sendspin.c and a2dp.c read it through settings_duck_gain(); exported: how much the music gives way is about the household's taste, not the room */
     [DUCK]        = { "music_duck", "Music ducking", "Sound", "dB", S_INT, 0, 60, 1, 0 },
+    /* duck.c keeps it: the music also goes down while another Echo answers a wake word this one heard (issue #165) */
+    [DUCK_OTHERS] = { "duck_for_others", "Duck for other Echos", "Sound", NULL, S_BOOL, 0, 1, 1, 0 },
     /* the page draws these as one card of its own (web/app.js buildVolumes).  The volume itself (music's, with separate
      * volumes) is the mixer's or main.c's, not state/config's, and no export's: a volume is for the room it is in */
     [VOLUME]      = { "volume", "Volume", "Sound", "%", S_INT, 0, 100, 0, 0 },
@@ -241,7 +247,7 @@ static int present(enum id i)
     case LIGHT_SENSOR: return core_lux() == core_lux();          /* a light sensor: not NAN */
     case LED_AUTO: return core_led_has_auto();
     case WIFI_MOTION: case WIFI_SENS: return wifimotion_present();
-    case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: return arb_running();
+    case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: case DUCK_OTHERS: case TIMER_STOP_OTHERS: return arb_running();
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
     case SS_UNPAIRED: return core_sendspin_port != 0;
     case SPK_GAIN: return spkgain_present();
@@ -336,6 +342,7 @@ int settings_get(const struct setting *s)
     case TIMER_RING: return core_timer_ring(-1);
     case TIMER_SOUND: return core_timer_sound(-1);
     case TIMER_STOP_ANY: return core_timer_stop_any(-1);
+    case TIMER_STOP_OTHERS: return ringstop_from_others(-1);
     case STOP_ENDS: return core_stop_ends_listening(-1);
     case MULTI_PRESS: return buttons_multi_press(-1);
     case WAKE_IN_REQ: return core_wake_in_request(-1);
@@ -374,6 +381,7 @@ int settings_get(const struct setting *s)
     case DROPIN_ANSWER: return dropin_ask(-1);
     case SPK_GAIN: return spkgain_get();
     case DUCK: return duck_db;
+    case DUCK_OTHERS: return duck_for_others(-1);
     case VOLUME: return core_volume();
     case VOL_SPLIT: return core_separate_volumes(-1);
     case VOL_EVEN: return core_even_volume(-1);
@@ -411,6 +419,7 @@ static void put(enum id i, int v)
     case TIMER_RING: core_timer_ring(v); break;
     case TIMER_SOUND: core_timer_sound(v); break;              /* refused without its file: settings_set says so */
     case TIMER_STOP_ANY: core_timer_stop_any(v); break;
+    case TIMER_STOP_OTHERS: ringstop_from_others(v); break;
     case STOP_ENDS: core_stop_ends_listening(v); break;
     case MULTI_PRESS: buttons_multi_press(v); break;
     case WAKE_IN_REQ: core_wake_in_request(v); break;
@@ -450,6 +459,7 @@ static void put(enum id i, int v)
     case DROPIN_ANSWER: dropin_ask(v); break;
     case SPK_GAIN: spkgain_set(v); break;
     case DUCK: duck_db = v; break;
+    case DUCK_OTHERS: duck_for_others(v); break;
     case VOLUME: core_set_volume(v); break;
     case VOL_SPLIT: core_separate_volumes(v); break;
     case VOL_EVEN: core_even_volume(v); break;

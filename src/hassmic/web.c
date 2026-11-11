@@ -109,6 +109,18 @@ enum { W_LOGIN = 1, W_ADB };
 static struct { uint8_t pub[32]; char label[64]; long long at, end; int state, kind; } login;
 static atomic_int nconn;
 static char start_id[17];           /* new at every start: the page knows a restart from an answer of the old process */
+/* A note of the owner's ("Kitchen, by the window"), shown under the name (issue #153): the name is the model and the
+ * MAC's end, and several Echos of one model told apart only by six hex digits.  In state/note, one line; in the
+ * unsigned hello, as the name is, since the login page is where it helps most (which Echo's button to press): a
+ * location, readable to anyone on the LAN who asks.  Not in exports: it is this Echo's, as the name.  Own lock: hello
+ * runs on every connection thread without lk */
+#define NOTE_MAX 80                 /* bytes; the page cuts at a character's end */
+static pthread_mutex_t note_lk = PTHREAD_MUTEX_INITIALIZER;     /* note[] only: never held over the flash */
+static pthread_mutex_t note_save_lk = PTHREAD_MUTEX_INITIALIZER; /* one save at a time: file and note[] in one order */
+static char note[NOTE_MAX + 1];
+/* /api/hello: the rest <= ~820 bytes (name, node 160 each, note 168), members <= 16 x ~104 (arb.c NPEER, NLEN); a
+ * hello cut short is no JSON, and the login page cannot start */
+#define HELLO_MAX 4096
 #define NONCE_MS 120000
 static struct { uint8_t pub[32], nonce[16]; long long at; } nonces[8];      /* handed out for a login through another Echo */
 static unsigned nonce_next;
@@ -459,14 +471,55 @@ static int signed_ok(const struct req *r, int persist)
 
 /* ---------------------------------------------------------------- API */
 
+/* The note as it is kept: one line (control characters as spaces), trimmed, at most NOTE_MAX bytes, without a
+ * character left unfinished at its end, whether the limit split it or the body ended inside it (the page cuts too,
+ * but anything may post) */
+static void note_clean(char *out, const char *s, size_t len)
+{
+    size_t i = 0, n = 0, k;
+    while (i < len && (s[i] == ' ' || (unsigned char)s[i] < 0x20)) i++;
+    for (; i < len && n < NOTE_MAX; i++) { unsigned char c = (unsigned char)s[i]; out[n++] = (char)(c < 0x20 || c == 0x7f ? ' ' : c); }
+    for (k = n; k && ((unsigned char)out[k - 1] & 0xc0) == 0x80; k--) ;       /* back to the last character's lead byte */
+    if (k && (unsigned char)out[k - 1] >= 0xc0) {
+        unsigned char lead = (unsigned char)out[k - 1];
+        size_t need = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : 2;
+        if (n - (k - 1) < need) n = k - 1;
+    }
+    while (n && out[n - 1] == ' ') n--;
+    out[n] = 0;
+}
+
+static void note_load(void)
+{
+    char p[300], t[NOTE_MAX * 2 + 2] = ""; FILE *f;
+    snprintf(p, sizeof p, "%s/note", state_dir());
+    if ((f = fopen(p, "r"))) { if (!fgets(t, sizeof t, f)) t[0] = 0; fclose(f); }
+    pthread_mutex_lock(&note_lk); note_clean(note, t, strlen(t)); pthread_mutex_unlock(&note_lk);
+}
+
+/* 0, or -1 when it could not be written (the note in memory stays the old one) */
+static int note_save(const char *s, size_t len)
+{
+    char p[300], t[NOTE_MAX + 2]; int e;
+    note_clean(t, s, len);
+    snprintf(p, sizeof p, "%s/note", state_dir());
+    pthread_mutex_lock(&note_save_lk);         /* the fsync without note_lk: every hello would wait on the flash */
+    if (!t[0]) e = unlink(p) && errno != ENOENT ? -1 : 0;
+    else { size_t n = strlen(t); t[n] = '\n'; e = statefile_write(p, 0600, t, n + 1); t[n] = 0; }
+    if (!e) { pthread_mutex_lock(&note_lk); memcpy(note, t, strlen(t) + 1); pthread_mutex_unlock(&note_lk); }
+    pthread_mutex_unlock(&note_save_lk);
+    return e;
+}
+
 /* members: the Echos of our network (for the login page's "through another Echo"; what beacons say anyway).
  * port: the page's own, which it calls the other Echos on; the URL it was opened at may be a reverse proxy's (80, 443) */
 static size_t hello_json(char *o, size_t cap, int members)
 {
-    char p[65], name[160], node[160]; size_t n;
+    char p[65], name[160], node[160], nt[NOTE_MAX * 2 + 8]; size_t n;    /* no control characters in it: 2 bytes a byte at most */
     hex(p, pk, 32); jesc(name, sizeof name, core_name); jesc(node, sizeof node, core_node_name());
-    n = (size_t)snprintf(o, cap, "{\"name\":\"%s\",\"node\":\"%s\",\"model\":\"%s\",\"codename\":\"%s\",\"version\":\"%s\",\"pub\":\"%s\",\"start\":\"%s\",\"port\":%d",
-                         name, node, board.model, board.codename, VERSION, p, start_id, core_web_port);
+    pthread_mutex_lock(&note_lk); jesc(nt, sizeof nt, note); pthread_mutex_unlock(&note_lk);
+    n = (size_t)snprintf(o, cap, "{\"name\":\"%s\",\"node\":\"%s\",\"note\":\"%s\",\"model\":\"%s\",\"codename\":\"%s\",\"version\":\"%s\",\"pub\":\"%s\",\"start\":\"%s\",\"port\":%d",
+                         name, node, nt, board.model, board.codename, VERSION, p, start_id, core_web_port);
     /* no action button (board.action_combo): the page names what stands in for it */
     if (board.action_combo && n < cap) n += (size_t)snprintf(o + n, cap - n, ",\"action\":\"volume_keys\"");
     if (members && n < cap) { n += (size_t)snprintf(o + n, cap - n, ",\"members\":"); if (n < cap) n += arb_members_json(o + n, cap - n); }
@@ -1106,7 +1159,7 @@ static void handle(int fd)
         }
         if (!found) respond_json(fd, 404, "{\"error\":\"not found\"}");
     }
-    else if (!strcmp(r.path, "/api/hello")) { char o[2400]; hello_json(o, sizeof o, 1); respond_json(fd, 200, o); }
+    else if (!strcmp(r.path, "/api/hello")) { char o[HELLO_MAX]; hello_json(o, sizeof o, 1); respond_json(fd, 200, o); }
     else if (!strncmp(r.path, "/api/vouch/", 11) && !strcmp(r.method, "POST")) vouch_api(fd, &r);
     else if (!strcmp(r.path, "/api/login") && !strcmp(r.method, "POST")) {
         /* body: "<browser key hex> <label>" */
@@ -1145,6 +1198,15 @@ static void handle(int fd)
         if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
         core_identify();
         respond_sjson(fd, &r, 200, "{\"identify\":true}");
+    }
+    else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/note")) {         /* body: the note, empty clears it */
+        char o[NOTE_MAX * 2 + 24], nt[NOTE_MAX * 2 + 8];
+        if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
+        if (note_save(r.body ? r.body : "", r.body ? r.blen : 0)) { fprintf(stderr, "web: cannot write the note\n"); respond_sjson(fd, &r, 500, "{\"error\":\"cannot write it\"}"); }
+        else {
+            pthread_mutex_lock(&note_lk); jesc(nt, sizeof nt, note); fprintf(stderr, "web: note %s\n", note[0] ? "set" : "cleared"); pthread_mutex_unlock(&note_lk);
+            snprintf(o, sizeof o, "{\"note\":\"%s\"}", nt); respond_sjson(fd, &r, 200, o);
+        }
     }
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/dropin")) {       /* body: the node to drop in on, or "end" */
         char e[120], t[64], o[200], ej[160];
@@ -1251,6 +1313,7 @@ int web_start(int p, const struct web_hooks *h)
     int r = load_key();
     if (!r) load_clients();
     pthread_mutex_unlock(&lk);
+    note_load();
     if (r) return -1;
     if (!pthread_create(&t, NULL, expiry, NULL)) pthread_detach(t);
     return pthread_create(&t, NULL, listener, NULL) ? -1 : (pthread_detach(t), 0);

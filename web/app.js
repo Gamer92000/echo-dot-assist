@@ -212,7 +212,7 @@ const MOVED = { light_band: 'screen', music_on_screen: 'screen', screen_brightne
 // last, in a card of its own, so nothing is ever lost from the page
 const LAYOUT = {
   voice: [['Microphone', 'mic_level', 'noise_reduction'], ['Mute and wake sound removal', 'mute', 'do_not_disturb', 'wake_sound_removal'],
-          ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening'], ['Action button', 'multi_press'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any']],
+          ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening'], ['Action button', 'multi_press'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any', 'timer_stop_from_others']],
   wake: [['Engine', 'wake_engine'], ['How it hears you', 'speech_language', 'wake_word_adaptation']],
   lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band'], ['Screen', ...BRIGHTNESS]],
 };
@@ -244,6 +244,8 @@ const HELP = {
   timer_stop_any: { help: 'While a timer rings, whatever you say after the wake word stops it. That goes for any language and however you put it ("Alexa, stop the timer", "Alexa, Ruhe"). Without it only "stop" does, and "stop the timer" goes to Home Assistant, which has forgotten the finished timer and says none is running. The cost: a question during a ring ("how long is left on the pasta timer?") is not answered, it only stops the ring. Off by default.' },
   equalizer_bass: { ha: true }, equalizer_mid: { ha: true }, equalizer_treble: { ha: true },
   music_duck: { help: 'How far the music is turned down from the moment the wake word is heard until the reply has ended, for Music Assistant and for a phone over Bluetooth. Raise it if the Echo has trouble understanding you over loud music or an audiobook (the music is quieter in your voice, so speech-to-text hears you better); 60 is silence. 0 turns ducking off. Default 16 dB.' },
+  timer_stop_from_others: { help: 'While a timer rings on this Echo, "<wake word>, stop" said to any other Echo of the network stops it too. Without it, the ring stops only when this Echo heard you itself: from the next room, or over its own ring, it may not, and another Echo takes the "stop" instead (and pauses its music). The Echos tell each other over the arbitration network, without Home Assistant, so the Echos must be in one arbitration network (Echos page), and the other Echos need this version; set it on the Echos whose rings may be ended that way. It reaches every Echo of the network: a "stop" in the bedroom ends a timer ringing in the kitchen. A "stop" that has something to end where it was heard (a ring, a reply, a call there) ends only that. "Any request stops a ringing timer" stays with the Echo that heard you. Off by default.' },
+  duck_for_others: { help: 'Turns this Echo\'s music down by its own "Music ducking" while another Echo answers a wake word this one heard too, and back up when that Echo is done. Echos that hear you are near you, so their music drowns out the reply and reaches the answering Echo\'s microphones; an Echo in another room never heard the wake word and plays on. The Echos tell each other over the arbitration network, without Home Assistant, so this needs arbitration on (Echos page), on both. Each Echo that heard the wake word also turns its music down from that moment, before they have agreed which one answers. Music Home Assistant plays on the answering Echo (a radio it was asked for) does not hold the others down. If the "done" goes missing, the music comes back after about 7 seconds. Off, the music here drops only once this Echo answers itself, as before. On by default.' },
   speaker_gain: { help: 'Makes the Echo\'s own speaker louder at every volume, for an Echo that is too quiet at full volume. It raises the amplifier stage in front of the speaker, which a stock Echo leaves at +0 dB (an Echo Dot 3\'s amplifier has only 2 dB more to give; an Echo Show 5 goes in steps of 1.5 dB, the nearest one to what you pick). Owners of an Echo Dot 2 heard +6 dB loud and clean at full volume; above that, loud music near full volume can distort, and a speaker that plays distorted for long can be damaged. Raise it a step at a time and turn it down at the first crackle. The 3.5 mm jack and Bluetooth speakers are not affected. An Echo Show 8 (1st gen) is loud already at +0 dB and goes down to −6 dB for that; a 2nd gen goes up to +9 dB, below where its amplifier distorts. Default +0 dB.' },
   even_volume: { help: 'Makes every step of the volume the same: each point is 0.5 dB, each press of the volume buttons 5 dB, from 1 (quiet, about 50 dB under full) to 100 (as loud as before). Without it the Echo plays a volume as a stock Echo does, where most of the change happens at one end: on an Echo Show the bottom half covers more than twice the range of the top half, and a step of one point often does nothing at all. The Echo keeps its own volume setting at the nearest step above, and turns the sound down the rest of the way itself. 0 is silent either way. A Bluetooth speaker that sets its own volume still does. Exported with the settings. On by default.' },
   led_auto_brightness: { ha: true, help: 'The ring dims and brightens with the room, from the Echo\'s light sensor and Amazon\'s own curve, as on a stock Echo.' },
@@ -430,6 +432,8 @@ const SUB = {
   speaker_gain: 'For an Echo too quiet at full volume',
   even_volume: 'Each volume step as big as the next',
   music_duck: 'How far music drops while the assistant listens or speaks',
+  timer_stop_from_others: '"Stop" said to another Echo stops a ring here too',
+  duck_for_others: 'Music drops here too while another Echo that heard you answers',
   led_auto_brightness: 'Follows the room\'s light, as on a stock Echo',
   led_brightness: 'A fixed level; turns auto brightness off',
   screen_brightness_auto: 'Follows the room\'s light, as on a stock Echo Show',
@@ -541,7 +545,19 @@ async function start() {
 function showName(d) {
   $('name').textContent = d.name; $('lname').textContent = d.name; $('mname').textContent = d.name;
   $('ident').textContent = `${d.model} · ${d.node}`;
-  document.title = `${d.name} · settings`;
+  // the note (web.c, issue #153): what tells Echos of one model apart, so the login page and the tab say it too
+  const n = d.note || '', el = $('whonote');
+  el.replaceChildren(n || 'Add a note', icon('pen')); el.classList.toggle('no-note', !n);
+  el.setAttribute('aria-label', n ? `Note: ${n}. Edit it` : 'Add a note: where this Echo stands, say');
+  $('lnote').textContent = n; $('lnote').classList.toggle('hidden', !n);
+  $('mname').title = n;
+  setTitle(d);
+}
+// the tab: the page, and the note where there is one (the tabs of several Echos of one model say which is which)
+function setTitle(d = echo && echo.hello) {
+  if (!d) return;
+  const pg = curPage && pages.find((p) => p.id === curPage), who = d.note || d.name;
+  document.title = pg ? `${pg.title} · ${who}` : `${who} · settings`;
 }
 
 function showLogin() { $('login').classList.remove('hidden'); $('app').classList.add('hidden'); }
@@ -627,8 +643,10 @@ async function load() {
   // updated meanwhile (online update, push): this page is the old version's, its header the old number
   if (state.device.version !== echo.hello.version) { location.reload(); return; }
   echo.hello.start = state.device.start;          // restarted meanwhile (Home Assistant's button): waitBack's baseline
-  if (state.device.name !== echo.hello.name || state.device.node !== echo.hello.node) {      // renamed (hassmic.conf NAME)
-    echo.hello.name = state.device.name; echo.hello.node = state.device.node; showName(echo.hello);
+  if (state.device.name !== echo.hello.name || state.device.node !== echo.hello.node || (state.device.note || '') !== (echo.hello.note || '')) {
+    // renamed (hassmic.conf NAME), or the note changed in another browser
+    echo.hello.name = state.device.name; echo.hello.node = state.device.node; echo.hello.note = state.device.note || ''; showName(echo.hello);
+    if (load.started) renderDevices();
   }
   $('app').classList.remove('hidden');            // before render(): a hidden page has no widths to place cards by, nothing to scroll to
   render();
@@ -1241,12 +1259,12 @@ const pageBuilt = (id) => [...document.querySelectorAll('.page')].some((el) => e
 function route() {
   const m = /^#\/([^/]+)(?:\/(.+))?$/.exec(location.hash), part = (s) => { try { return decodeURIComponent(s); } catch (e) { return s; } };
   const here = !!m && pageBuilt(part(m[1])), id = here ? part(m[1]) : 'overview';   // a bookmark or a link from another model may name a page this Echo has not got
-  const pg = pages.find((p) => p.id === id), changed = id !== curPage;
+  const changed = id !== curPage;
   curPage = id;
   document.querySelectorAll('.page').forEach((el) => el.classList.toggle('hidden', el.dataset.page !== id));
   $('nav').querySelectorAll('a').forEach((a) => { const on = a.dataset.page === id; a.classList.toggle('cur', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  if (echo) document.title = `${pg.title} · ${echo.hello.name}`;
-  menu(false);
+  setTitle();
+  menu(false); switcher(false);
   reflowPage();
   if (changed) window.scrollTo(0, 0);
   if (changed && echo && state && othersShown()) {
@@ -1276,6 +1294,73 @@ function menu(open) {
   $('menu').setAttribute('aria-expanded', String(open));
 }
 $('menu').onclick = () => menu(true);
+$('whonote').onclick = () => editNote();
+
+// The note (web.c, issue #153): a few words of the owner's under the name.  Not a name: that is Home Assistant's
+async function editNote() {
+  const v = await ask({ title: echo.hello.note ? 'Edit the note' : 'Add a note', ok: 'Save', check: () => null,
+    body: ['A few words to tell this Echo from your others: where it stands, say. They show under its name here, on your other Echos\' pages and on the login page, where anyone on your network can read them.'],
+    input: { label: 'Note (empty removes it)', value: echo.hello.note || '', max: 80 } });
+  if (v === null) return;
+  try {
+    const r = (await echo.call('POST', '/api/note', v)).json();
+    echo.hello.note = r.note; if (state) state.device.note = r.note;
+    showName(echo.hello); renderDevices(); if (noteCtl) noteCtl.paint();
+    toast(r.note ? 'Note saved' : 'Note removed');
+  } catch (e) { toast(errText(e)); }
+}
+
+// The other Echos from the name (issue #153): the same page on another one, without the way round the Echos page.
+// Its list is the Echos page's (others): known from the beacons and the addresses added there, read every round
+const noteOf = (d) => (d.state && d.state.device ? d.state.device.note : d.echo && d.echo.hello.note) || '';
+function switcher(open) {
+  const b = $('switch'), m = $('emenu');
+  if (open === undefined) open = m.classList.contains('hidden');
+  if (open === !m.classList.contains('hidden')) return;
+  m.classList.toggle('hidden', !open); b.setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  drawSwitcher();
+  // the list may be a round old (others are read every 30 s only while a page shows them)
+  if (echo && state && !devRun && Date.now() - lastRound > 30000) refreshDevices().catch(() => {});
+}
+// redrawn as each Echo answers: keepFocus, or the arrow keys lost their place whenever a slow one came in
+function drawSwitcher() {
+  const m = $('emenu');
+  if (m.classList.contains('hidden') || !echo || !state) return;
+  keepFocus(m, () => fillSwitcher(m));
+}
+function fillSwitcher(m) {
+  const hash = location.hash.startsWith('#/') ? location.hash : '';
+  const sub = (...p) => h('span', { class: 'em-s' }, p.filter(Boolean).map((x, i) => [i ? ' · ' : '', x]));
+  // those that answered first: an address nothing answers at is the least likely pick
+  const list = [...others].sort(([, p], [, q]) => !p.echo - !q.echo || echoName(p).localeCompare(echoName(q)));
+  const items = list.map(([base, d]) => {
+    const name = echoName(d), note = noteOf(d), r = arbOf(d.ip);
+    const how = d.error || (!d.echo ? (d.looking ? 'Looking…' : null) : !d.logged ? 'Not logged in' : null);
+    return h('a', { href: base + '/' + hash, 'data-k': 'em ' + base, class: d.error ? 'em-x' : null, title: d.hint || null },
+      h('span', { class: 'mini-puck' + (r && r.member ? ' on' : '') }),
+      h('span', { class: 'em-t' }, h('span', { class: 'em-n' }, name), sub(note ? h('b', {}, note) : null, d.echo ? shortAddr(base) : null, how)));
+  });
+  const me = echo.hello;
+  m.replaceChildren(...[
+    h('div', { class: 'em-me', 'aria-current': 'true' }, h('span', { class: 'mini-puck on' }),
+      h('span', { class: 'em-t' }, h('span', { class: 'em-n' }, me.name), sub(me.note ? h('b', {}, me.note) : null, 'This Echo')), icon('check')),
+    ...items,
+    items.length ? null : h('div', { class: 'em-none' }, devRun ? 'Looking for your other Echos…' : 'No other Echo yet.'),
+    h('div', { class: 'em-all' }, h('a', { href: '#/echos', 'data-k': 'em all' }, icon('net'), 'All your Echos'))].filter(Boolean));
+}
+$('switch').onclick = (e) => { e.stopPropagation(); switcher(); };
+$('switch').onkeydown = (e) => {
+  if (e.key !== 'ArrowDown') return;
+  e.preventDefault(); switcher(true); const f = $('emenu').querySelector('a'); if (f) f.focus();
+};
+$('emenu').onkeydown = (e) => {
+  const l = [...$('emenu').querySelectorAll('a')], i = l.indexOf(document.activeElement);
+  if (e.key === 'Escape') { e.preventDefault(); switcher(false); $('switch').focus(); }
+  else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const n = l[(i + (e.key === 'ArrowDown' ? 1 : l.length - 1)) % l.length]; if (n) n.focus(); }
+};
+document.addEventListener('click', (e) => { if (!$('emenu').contains(e.target)) switcher(false); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('emenu').classList.contains('hidden')) { switcher(false); $('switch').focus(); } });
 $('scrim').onclick = () => menu(false);
 $('identify').onclick = () => identify(echo, echo.hello.name);
 
@@ -1305,6 +1390,7 @@ const FINDABLE = [
   ['Settings file', 'system', 'settings-file', 'export import backup preset'],
   ['Log', 'system', 'log', 'boot.log troubleshooting bug report'],
   ['Debug access', 'system', 'debug', 'adb root shell'],
+  ['Note', 'system', 'note', 'description location room label where which echo'],
   ['Restart', 'system', 'restart', 'reboot'],
   ['Factory reset', 'system', 'factory-reset', 'erase forget'],
   ['Approved browsers', 'system', 'browsers', 'login revoke log out'],
@@ -1531,10 +1617,10 @@ function drawOvEchos() {
     h('div', {}, h(href ? 'a' : 'div', { class: 'ov-name', href }, name), h('div', { class: 'mx-sub' }, sub))), h('div', { class: 'ctl' }, badge, btn));
   const list = [...others.values()].sort((a, b) => echoName(a).localeCompare(echoName(b)));
   ovEchos.replaceChildren(...[h('div', { class: 'sub-head' }, 'Your Echos'),
-    line(true, echo.hello.name, 'This Echo', null, idButton(echo, echo.hello.name)),
+    line(true, echo.hello.name, [echo.hello.note, 'This Echo'].filter(Boolean).join(' · '), null, idButton(echo, echo.hello.name)),
     ...list.map((d) => {
       const name = echoName(d);
-      return line(false, name, d.echo ? shortAddr(d.echo.base) : d.ip, d.error ? h('span', { class: 'badge bad', title: d.hint }, d.error)
+      return line(false, name, [noteOf(d), d.echo ? shortAddr(d.echo.base) : d.ip].filter(Boolean).join(' · '), d.error ? h('span', { class: 'badge bad', title: d.hint }, d.error)
         : !d.echo ? h('span', { class: 'badge' }, 'Looking…') : !d.logged ? h('a', { class: 'badge', href: '#/echos' }, 'Not logged in')
           : d.diff.length ? h('a', { class: 'badge warn', href: '#/compare' }, `${d.diff.length} differ${d.diff.length === 1 ? 's' : ''}`) : h('span', { class: 'badge ok' }, icon('check'), 'Same'),
       d.echo && d.logged && !d.error ? idButton(d.echo, name) : null, d.echo ? d.echo.base + '/' : null);
@@ -1951,6 +2037,11 @@ async function probe(base) {
       const hello = await (await fetch(base + '/api/hello', { signal: within(5000) })).json();
       if (hello.pub === echo.hello.pub) { others.delete(base); selfAt.add(base); return; }
       d.echo = new Echo(base, hello);
+    } else if (!d.logged) {
+      // its note comes only from hello where this browser cannot read its state (issue #153): read it again, or a note
+      // changed there showed here until a reload
+      const hello = await (await fetch(base + '/api/hello', { signal: within(5000) })).json();
+      if (hello.pub === d.echo.hello.pub) d.echo.hello.note = hello.note;
     }
     d.error = null;
     const read = async () => {
@@ -2011,13 +2102,13 @@ const noOthers = (where) => (state.arbitration ? `Echos running hassmic on the s
 const ready = () => [...others.values()].filter((d) => d.echo && d.logged && !d.error).sort((a, b) => a.echo.hello.name.localeCompare(b.echo.hello.name));
 const shortAddr = (base) => base.replace('http://', '').replace(`:${echoPort()}`, '');
 
-function renderDevices() { if (devBox) keepFocus(devBox, drawDevices); }
+function renderDevices() { drawSwitcher(); if (devBox) keepFocus(devBox, drawDevices); }
 function drawDevices() {
   scanMark.classList.toggle('hidden', !devRun);
   devBox.innerHTML = '';
   const a = state.arbitration;
   devBox.append(h('div', { class: 'echo me' }, h('span', { class: 'mini-puck on' }),
-    h('div', { class: 'echo-body' }, h('div', { class: 'echo-id' }, h('div', { class: 'echo-name' }, echo.hello.name), h('div', { class: 'echo-addr' }, location.host)),
+    h('div', { class: 'echo-body' }, h('div', { class: 'echo-id' }, h('div', { class: 'echo-name' }, echo.hello.name), echo.hello.note ? h('div', { class: 'echo-note' }, echo.hello.note) : null, h('div', { class: 'echo-addr' }, location.host)),
       h('div', { class: 'echo-meta' }, h('span', { class: 'badge acc' }, 'This Echo'), a && !a.arbitrates ? h('span', { class: 'badge' }, 'Arbitration off')
         : a && a.mode === 'kiosk' ? h('span', { class: 'badge' }, 'Kiosk Satellite mode') : null,
         state.dropin && state.dropin.state !== 'idle' ? h('span', { class: 'badge ok' }, icon('talk'), `Drop In ${DROPIN_WORDS[state.dropin.state]} ${state.dropin.peer}`) : null),
@@ -2037,7 +2128,7 @@ function drawDevices() {
     const login = d.echo && d.logged && !d.error ? h('div', { class: 'echo-acts' }, idButton(d.echo, name))
       : d.echo && !d.logged && !d.error ? h('button', { class: 'small primary', disabled: !!d.asking, onclick: () => loginOther(d) }, icon('key'), d.asking ? 'Press its button…' : 'Log in') : null;
     devBox.append(h('div', { class: 'echo' }, h('span', { class: 'mini-puck' + (r && r.member ? ' on' : '') }),
-      h('div', { class: 'echo-body' }, h('div', { class: 'echo-id' }, h('div', { class: 'echo-name' }, name), h('div', { class: 'echo-addr' }, shortAddr(base))),
+      h('div', { class: 'echo-body' }, h('div', { class: 'echo-id' }, h('div', { class: 'echo-name' }, name), noteOf(d) ? h('div', { class: 'echo-note' }, noteOf(d)) : null, h('div', { class: 'echo-addr' }, shortAddr(base))),
         h('div', { class: 'echo-meta' }, meta), login, dropButton(r, name, d.echo && d.echo.hello)),
       h('a', { class: 'echo-go', href: base + '/' + (location.hash.startsWith('#/') ? location.hash : ''), title: `${name}: its settings page`, 'aria-label': `Open the settings page of ${name}` }, icon('ext'))));
   }
@@ -2834,7 +2925,7 @@ async function loadModels(arts) {
 
 // ---------------------------------------------------------------- System: settings file, debug access, browsers
 
-let adbBox, clientsBox, importMsg, nameCtl, wifiCtl;
+let adbBox, clientsBox, importMsg, nameCtl, noteCtl, wifiCtl;
 
 // The name: the model and the end of its MAC address (main.c name_make), never set here.  What people call it is the name
 // given in Home Assistant when the Echo was added.
@@ -2845,6 +2936,14 @@ function nameRow() {
   } };
   return infoRow('Name', 'Made from the model and its MAC address', 'Made from the model and the end of its MAC address, so no two Echos share it and a reset keeps it. Name it in Home Assistant: on the device\'s page there (the pencil), which is where everything else picks names up from.',
     null, null, now);
+}
+
+// The note (web.c, issue #153), as in the menu's head: there for the search, and for whoever looks for it here
+function noteRow() {
+  const now = h('div', { class: 'row-val' });
+  noteCtl = { paint: () => now.replaceChildren(echo.hello.note || h('span', { class: 'help' }, 'None')) };
+  return infoRow('Note', 'A few words of your own to tell it from your other Echos', 'A few words to tell this Echo from your others, where it stands say: they show under its name at the top of the menu, on your other Echos\' pages and on the login page. Also there: click the line under the name. Anyone on your network can read it, as the name. It stays with this Echo: not in the settings file, gone after a factory reset.',
+    h('button', { onclick: editNote }, icon('pen'), 'Edit…'), null, now);
 }
 
 // A dialog of the page's own, as the Wi-Fi one: title, a body that scrolls, a foot for its buttons.  cls names it for
@@ -3206,7 +3305,7 @@ function buildSystem(el, list) {
   clientsBox = h('div');
   const named = (id, row) => { row.id = id; return row; };
   el.append(flow([
-    titled('This Echo', nameRow(), state.wifi !== undefined ? named('wifi', wifiRow()) : null,
+    titled('This Echo', nameRow(), named('note', noteRow()), state.wifi !== undefined ? named('wifi', wifiRow()) : null,
       list.filter((s) => !s.name.startsWith('kiosk_') || state.kiosk_app).map(settingRow)),
     titled('When something is wrong', named('log', logRow()),
       named('debug', infoRow('Debug access', 'A root shell over Wi-Fi for 30 minutes', act('Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.'), adbBox)),
@@ -3240,6 +3339,7 @@ async function factoryReset() {
 function renderSystem() {
   if (!adbBox) return;
   if (nameCtl) nameCtl.paint();
+  if (noteCtl) noteCtl.paint();
   if (wifiCtl) wifiCtl.paint();
   const s = state.adb;
   const status = s.waiting ? h('span', { class: 'badge acc' }, act('Waiting for the action button…'))

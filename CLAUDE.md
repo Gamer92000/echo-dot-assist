@@ -350,6 +350,14 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   starts, ~137 ms on the Show 5, which the queue leaves out; the A2DP sink resamples through resample.c too). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
   loaded with dlopen, aptX/aptX HD via `freeaptx`) with AVRCP. Only one music source plays at a time (newest wins). "<wake word>, stop" pauses it when nothing else was
   stopped (`stop_word`, a bare "stop" transcript in `core_transcript`; issue #51), the action button resumes.
+  Ducked (`duck.c` `duck_active()`, issue #165): our own run, our own round from the wake word on, or another member
+  answering a wake word we claimed too (its 2-byte `T_MSG` "on" every 2 s / "off" to every member, `arb_tell(NULL)`,
+  `hooks->message` `all`: never Drop In's; sent only for runs a won round started, bridged over a follow-up's restart,
+  `duck_follow`; HA's media is no run, `speak_media`; taken only from members that claimed in our round,
+  `arb_round_claimed`, up to 4, each held 6.5 s past its last "on"); setting `duck_for_others` (on) gates the last two.
+  A ring on another Echo (`ringstop.c`, issue #161, setting `timer_stop_from_others` on the ringing Echo, off): it
+  broadcasts `T_MSG` 0x41 on/off while it rings; a "stop" (keyword or bare transcript) that ends nothing here sends
+  0x42 to all, the ringer stops, and here the music stays and the wake word's run is dropped.
   A "stop" that ended what its wake word cut (ring, Drop In, reply, THINKING run) drops that wake word's run: after the
   round `stop: pipeline dropped` (`wake_cut_ms`), during it `trigger` starts none (`stop_cut`, `stopped_now`).
   Setting `stop_ends_listening` (Voice, page only, off): any "stop" within 4 s of the last detection (`heard_ms`,
@@ -424,7 +432,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   the signature counts), each approved once with its own button; "make like this Echo" posts this one's export.
   Name: one, made at start and stored nowhere (`main.c` `name_make`): `board.default_name` (the model: "Echo Dot 3")
   plus the Wi-Fi MAC's last 3 bytes ("Echo Dot 3 5695c4", node `echo-dot-3-5695c4`), as ESPHome's name_add_mac_suffix;
-  people name the Echo in Home Assistant.  No rename anywhere (page "Name" row only shows it); `-n` only for the PC
+  people name the Echo in Home Assistant.  No rename anywhere (page "Name" row only shows it; the owner's note beside
+  it, `state/note`, issue #153: web.c, in the unsigned hello, not exported); `-n` only for the PC
   (no MAC).  Old `state/name`/`state/node` are deleted at start, hassmic.conf `NAME` is ignored.  `state/restart`
   (its text says why: wake word engine), which root's `ota_watch` turns into `stop hassmic; start hassmic`.
   Identify (`POST /api/identify`, HA button `identify`, device class identify): `core_identify` sets `zzz_rainbow`

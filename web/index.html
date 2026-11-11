@@ -49,6 +49,36 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
         box-shadow: inset 0 0 0 3px var(--ring), 0 0 14px color-mix(in srgb, var(--ring) 40%, transparent); }
 h1 { font-size: 16px; line-height: 1.25; margin: 0; font-weight: 650; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .ident { color: var(--muted); font-size: 12px; margin-top: 2px; line-height: 1.35; overflow-wrap: anywhere; }
+.who { position: relative; }
+.who-t { min-width: 0; flex: 1; }
+/* the name opens the list of the other Echos (issue #153): one click from any page to the same page on another */
+.who-name { all: unset; display: inline-flex; align-items: center; gap: 4px; max-width: 100%; cursor: pointer; border-radius: 6px; }
+.who-name span { min-width: 0; overflow-wrap: anywhere; }
+.who-name svg.i { width: 16px; height: 16px; color: var(--faint); transition: transform .15s; }
+.who-name:hover svg.i { color: var(--fg); }
+.who-name[aria-expanded="true"] svg.i { transform: rotate(180deg); }
+.who-name:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.who-note { all: unset; display: block; cursor: pointer; margin-top: 3px; font-size: 12.5px; line-height: 1.35; color: var(--fg); overflow-wrap: anywhere; border-radius: 4px; }
+.who-note.no-note { color: var(--faint); }
+.who-note:hover { color: var(--accent); }
+.who-note:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.who-note svg.i { width: 12px; height: 12px; margin-left: 4px; vertical-align: -1px; color: var(--faint); }
+.emenu { position: absolute; z-index: 21; left: 0; right: 0; top: calc(100% + 6px); padding: 4px; background: var(--surface); border: 1px solid var(--line-2);
+         border-radius: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, .18); max-height: min(70vh, 480px); overflow-y: auto; }
+.emenu a, .emenu .em-me { display: flex; align-items: flex-start; gap: 10px; padding: 7px 8px; border-radius: 8px; color: var(--fg); }
+.emenu a:hover, .emenu a:focus-visible { text-decoration: none; background: var(--accent-soft); outline: none; }
+.emenu .mini-puck { width: 20px; height: 20px; margin-top: 1px; }
+.em-t { min-width: 0; flex: 1; display: grid; }
+.em-n { font-size: 13.5px; font-weight: 580; line-height: 1.3; overflow-wrap: anywhere; }
+.em-s { font-size: 12px; color: var(--faint); line-height: 1.3; overflow-wrap: anywhere; }
+.em-s b { color: var(--muted); font-weight: 500; }
+.em-me svg.i { width: 16px; height: 16px; color: var(--accent); margin-top: 2px; }
+.emenu .em-x { opacity: .6; }
+.emenu .em-all { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
+.emenu .em-all a { color: var(--accent); font-size: 13px; font-weight: 550; align-items: center; }
+.emenu .em-none { padding: 7px 8px; color: var(--muted); font-size: 13px; }
+.echo-note { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.lnote { color: var(--muted); margin: -4px 0 12px; }
 .pills { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 6px; }
 .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 550; padding: 4px 10px; border-radius: 999px;
         background: var(--surface-2); border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
@@ -1055,6 +1085,7 @@ footer { color: var(--faint); font-size: 12.5px; padding-top: 8px; border-top: 1
   <div class="login-card">
     <div class="echo-art" id="art"><span class="btn-dot"></span></div>
     <h1>Log in to <span id="lname">this Echo</span></h1>
+    <p class="lnote hidden" id="lnote"></p>
     <p class="lead">No password: someone at the Echo approves this browser with a button press.</p>
     <ol class="steps">
       <li><span>Press <b>Ask the Echo</b> below.</span></li>
@@ -1075,7 +1106,13 @@ footer { color: var(--faint); font-size: 12.5px; padding-top: 8px; border-top: 1
   <div class="scrim hidden" id="scrim"></div>
   <div class="shell">
     <aside class="side" id="side">
-      <div class="who"><div class="puck" aria-hidden="true"></div><div><h1 id="name">Echo</h1><div class="ident" id="ident"></div></div></div>
+      <div class="who"><div class="puck" aria-hidden="true"></div><div class="who-t">
+        <h1><button type="button" class="who-name" id="switch" aria-expanded="false" aria-controls="emenu" title="Your other Echos"><span id="name">Echo</span><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg></button></h1>
+        <div class="ident" id="ident"></div>
+        <button type="button" class="who-note" id="whonote" title="A note of your own: where it stands, say"></button>
+      </div>
+        <nav class="emenu hidden" id="emenu" aria-label="Your Echos"></nav>
+      </div>
       <div class="pills" id="pills"></div>
       <div class="search" role="search">
         <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>

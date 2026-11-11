@@ -119,6 +119,11 @@ System) off takes any certificate, but then anyone on your network could slip th
   "Stop the timer" is not "stop": it goes to Home Assistant, which has forgotten the finished timer and says none is
   running. Switch on "Any request stops a ringing timer" on the settings page and whatever you say after the wake
   word during a ring stops it, in any language; a question asked during a ring then only stops it.
+  With several Echos, a ringing one wins the wake word round, but only if it heard you: from the next room, or over its
+  own ring, it may not, and another Echo gets the "stop". Switch on "A stop another Echo heard ends the ring" (Voice
+  page, Timers card) on the Echos whose rings may be stopped that way, and "<wake word>, stop" said to any Echo of their
+  arbitration network ends them; that Echo then leaves its music alone. It reaches every room, it needs this version on
+  the Echo you speak to as well, and "Any request stops a ringing timer" is not passed on. Off by default.
   Several timers can ring at once: each new one gives the ring its full time again, and one stop ends them all.
   A timer rings with Alexa's own timer tone, from the Echo's firmware. "Timer sound" on the settings page picks
   another: Alexa's alarm tone, a triple beep (as loud as Alexa's tone), or a sound of your own: "Upload a sound…" takes
@@ -566,6 +571,16 @@ Assistant starting on the Echo pauses the phone. The voice assistant ducks both,
 ended, by 16 dB unless "Music ducking" (Sound page, 0 to 60 dB) says otherwise: raise it if commands over loud music or
 an audiobook are not understood. "<wake word>, stop" pauses either, and the action button pauses and resumes.
 
+With several Echos (wake word arbitration on), every Echo that heard the wake word turns its music down too, by its
+own "Music ducking", until the Echo that answers is done: two Echos in one room playing the same Music Assistant group
+both go quiet for your command and the reply. An Echo that did not hear you, in another room, plays on. The answering
+Echo tells the others over the Echos' own network that it is busy (every 2 s) and when it is done; without Home
+Assistant, without touching the volume. A follow-up question keeps the others down for your answer too; music Home
+Assistant then plays on the answering Echo (a radio you asked for) does not. If the "done" is lost, the music comes
+back about 7 seconds after the last "busy". "Duck for other Echos" (Sound page, on by default) switches it off for
+one Echo. The log says
+`duck: echo-living-room answers what we heard too, music down until it is done` and `duck: ... is done, music back`.
+
 - **Music Assistant** finds the Echo by itself (Sendspin player). Pair it with the Echo's token: shown at the end of
   `scripts/setup.sh`, and as the diagnostic entity "Sendspin pairing token" in Home Assistant (disabled by default).
   Steps: the model's page, "Optional: Music Assistant". When Music Assistant restarts, the Echo announces itself again
@@ -900,6 +915,16 @@ turns the action button, microphone and volume sounds off too, as that switch di
 
 **Identify** (at the foot of the menu, and beside each Echo in the lists; also a button in Home Assistant): a rainbow on the ring
 for 10 s and stock's setup sound, to tell which Echo is which.
+
+**Note**: a few words of your own under the Echo's name at the top of the menu, such as where it stands. Click "Add a
+note" there, or Edit on the Note row of the System page; save it empty to remove it. It shows in the browser tab's
+title, on your other Echos' pages (Overview, Echos, the list below) and on the login page, so you know which Echo's
+button to press. Up to 80 bytes, one line. Anyone on your network can read it, as the name. It stays with that Echo:
+not in the settings file, and a factory reset removes it. The name itself is fixed; name the Echo in Home Assistant.
+
+**Your other Echos from the name**: click the Echo's name at the top of the menu (or press the down arrow key on it) for
+a list of your other Echos with their notes and addresses. Pick one and its settings page opens on the page you are on
+(Voice here, Voice there). It lists the Echos the Echos page knows; one that does not answer comes last.
 
 **Speaker gain** (Sound; Echo Dot 2, Echo 2 and Echo Dot 3, and the Echo Show 5 and both Show 8s): for an Echo that is too
 quiet at full volume. It raises the analog gain in front of the speaker (Echo Dot 2 and Echo 2: the codec's "HP Driver

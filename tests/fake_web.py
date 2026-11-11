@@ -304,6 +304,28 @@ async def main():
               and re.search(r"<name>echo-dot-3(-[0-9a-f]{6})?</name>", m), "without -n: the model's name (and the MAC's end), not the old one")
         os.remove(sf("name")); os.remove(sf("node"))
 
+        # the note (issue #153): one line under the name, in the unsigned hello (the login page shows it), set signed
+        hello = lambda: json.loads(rq("GET", "/api/hello")[2])
+        check(hello().get("note") == "" and not os.path.exists(sf("note")), "no note at first: an empty one in hello")
+        check(rq("POST", "/api/note", b"Kitchen")[0] == 401 and hello()["note"] == "", "note: unsigned refused")
+        st, _, body = b.call("POST", "/api/note", '  Kitchen,\n by the "window"\t '.encode())
+        want = 'Kitchen,  by the "window"'
+        check(st == 200 and json.loads(body).get("note") == want and hello()["note"] == want and (b.state() or {}).get("device", {}).get("note") == want
+              and open(sf("note")).read() == want + "\n", f"note set: one line, trimmed, in hello and the state: {body!r}")
+        st, _, body = b.call("POST", "/api/note", ("x" + "ä" * 50).encode())
+        check(st == 200 and hello()["note"] == "x" + "ä" * 39, "a long note: cut at 80 bytes, before the character the limit splits")
+        b.call("POST", "/api/note", "Küche".encode() + b"\xc3")
+        check(hello()["note"] == "Küche", "a body that ends inside a character: that character left out")
+        b.call("POST", "/api/note", "Wohnzimmer, Regal".encode())
+        args = proc.args
+        proc.terminate(); proc.wait()
+        proc = subprocess.Popen(args, env=env, stderr=open(log, "a")); wait_port(PORT, WEB)
+        b = Browser(WEB)
+        check(hello()["note"] == "Wohnzimmer, Regal" and b.login_with_button(proc), "the note after a restart")
+        check(b"Wohnzimmer" not in b.call("GET", "/api/export")[2], "not in the settings file: it is this Echo's")
+        st, _, body = b.call("POST", "/api/note", b"  ")
+        check(st == 200 and json.loads(body).get("note") == "" and hello()["note"] == "" and not os.path.exists(sf("note")), "an empty note clears it")
+
         # identify (main.c core_identify): from the page, and Home Assistant's button
         check(rq("POST", "/api/identify")[0] == 401, "identify: unsigned refused")
         st, _, body = b.call("POST", "/api/identify")

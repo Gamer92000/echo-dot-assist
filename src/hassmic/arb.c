@@ -272,9 +272,9 @@ static uint8_t give_pkt[5 + 32 + 8 + BLOB];
 /* open: claims are sampled for the window (until MEASURE_MS); got: members sampled in it, slot: where in delays[], when:
  * when their claim came; dirty: samples to save; want: the members counted when it opened, waits: whether it waits for
  * each; heard/hat/hs/hp/hw: who claimed in it ("answers" too), when, the best score and priority, whether it answered;
- * won: we answered */
+ * won: we answered; cl/ncl: who claimed in it, kept until the next round (heard[] goes when sampling ends; duck.c) */
 static struct {
-    uint8_t kw[8]; int score, prio, kiosk, open, decided, won, dirty, ngot, nwant, nheard; long long at, due;
+    uint8_t kw[8], cl[NPEER][8]; int score, prio, kiosk, open, decided, won, dirty, ngot, nwant, nheard, ncl; long long at, due;
     uint8_t got[NPEER][8]; unsigned slot[NPEER]; long long when[NPEER];
     uint8_t want[NPEER][8], heard[NPEER][8]; int waits[NPEER], hs[NPEER], hp[NPEER], hw[NPEER]; long long hat[NPEER];
 } round_;
@@ -301,7 +301,8 @@ static long long klogged;                               /* claims are logged onc
 static int kunlogged;                                   /* anyone on the LAN can send them, and boot.log is on flash */
 static struct { char p[KIOSK_PHRASE]; int e; } kround;
 static struct { uint8_t p[256]; size_t n; long long at; int left; } copies[2];    /* claims and "answers": copies still due */
-static struct msg { uint8_t from[8], p[ARB_MSG_MAX]; size_t n; char node[NLEN]; uint32_t ip; } msgs[8];   /* for hooks->message, */
+static const uint8_t to_all[8] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };    /* a T_MSG for every member */
+static struct msg { uint8_t from[8], p[ARB_MSG_MAX]; size_t n; char node[NLEN]; uint32_t ip; int all; } msgs[8];   /* for hooks->message, */
 static int nmsg;                                        /* handed over outside the lock */
 static int wake_fd[2] = { -1, -1 };                     /* a byte wakes the loop: copies are due before its next poll ends */
 static char kpkt[300];
@@ -564,6 +565,8 @@ static int close_calls(const struct rival *v)
 
 static void heard(const uint8_t id[8], long long at, int score, int prio, int won)
 {
+    { int k = 0; while (k < round_.ncl && memcmp(round_.cl[k], id, 8)) k++;
+      if (k == round_.ncl && k < NPEER) memcpy(round_.cl[round_.ncl++], id, 8); }
     for (int i = 0; i < round_.nheard; i++) if (!memcmp(round_.heard[i], id, 8)) {
         if (score > round_.hs[i]) round_.hs[i] = score;
         if (prio > round_.hp[i]) round_.hp[i] = prio;
@@ -823,10 +826,10 @@ static void on_packet(const uint8_t *p, size_t n, long long now, uint32_t ip)
     case T_MSG: {
         uint64_t net = get64(&r); const uint8_t *from = take(&r, 8), *to = take(&r, 8); uint64_t c = get64(&r);
         const uint8_t *l = take(&r, 1), *q = l ? take(&r, *l) : NULL;
-        if (r.bad || r.end - r.p != 16 || !in_net || net != net_id || memcmp(to, pk, 8) || !memcmp(from, pk, 8) || *l > ARB_MSG_MAX
+        if (r.bad || r.end - r.p != 16 || !in_net || net != net_id || (memcmp(to, pk, 8) && memcmp(to, to_all, 8)) || !memcmp(from, pk, 8) || *l > ARB_MSG_MAX
             || !tag_ok(p, n) || !fresh(from, c, now) || nmsg == (int)(sizeof msgs / sizeof msgs[0])) return;
         struct msg *m = &msgs[nmsg++]; struct peer *pp = peer(from);
-        memcpy(m->from, from, 8); memcpy(m->p, q, *l); m->n = *l;
+        memcpy(m->from, from, 8); memcpy(m->p, q, *l); m->n = *l; m->all = !memcmp(to, to_all, 8);
         snprintf(m->node, NLEN, "%s", pp->node); m->ip = ip;       /* where it came from: its beacons may still be on the way */
     } break;
     case T_CLAIM: {
@@ -1171,7 +1174,7 @@ static void *loop(void *arg)
         if (sd && hooks->scan) hooks->scan(self_tag);
         int pe = atomic_exchange(&pair_event, 0);
         if (pe && hooks->paired) hooks->paired(pe);
-        for (int i = 0; i < nm; i++) if (hooks->message) hooks->message(mq[i].from, mq[i].node, mq[i].ip, mq[i].p, mq[i].n);
+        for (int i = 0; i < nm; i++) if (hooks->message) hooks->message(mq[i].from, mq[i].node, mq[i].ip, mq[i].p, mq[i].n, mq[i].all);
         crypto_wipe(mq, sizeof mq);
         if (atomic_exchange(&notify, 0) && hooks->changed) hooks->changed();
     }
@@ -1246,7 +1249,7 @@ long long arb_claim(const char *keyword, int score, int prio)
         }
     if (round_.open) rivals_take((round_.at + now) / 2);
     crypto_blake2b(round_.kw, 8, low, n);
-    round_.kiosk = mode == ARB_KIOSK; round_.at = now; round_.open = round_.decided = round_.won = round_.ngot = 0;
+    round_.kiosk = mode == ARB_KIOSK; round_.at = now; round_.open = round_.decided = round_.won = round_.ngot = round_.ncl = 0;
     if (round_.kiosk) {
         due = kiosk_claim(keyword, score, now);
         snprintf(why, sizeof why, "%s", due ? " (Kiosk Satellite mode)" : !arbitrate ? ", arbitration off" : ", kiosk port not open");
@@ -1457,11 +1460,13 @@ int arb_member(const char *nd, unsigned char id[8], unsigned *ip)
 }
 
 /* Broadcast like the rest: the member's address may have changed since its last beacon, and a copy to everyone costs
- * nothing on a LAN.  The caller repeats what must arrive (Wi-Fi drops broadcasts) */
+ * nothing on a LAN.  The caller repeats what must arrive (Wi-Fi drops broadcasts).  to NULL: every member (to_all;
+ * older builds drop it, it is not their id) */
 int arb_tell(const unsigned char to[8], const void *p, size_t n)
 {
     struct pkt b; uint8_t l = (uint8_t)n;
     if (n > ARB_MSG_MAX) return -1;
+    if (!to) to = to_all;
     pthread_mutex_lock(&lk);
     if (!running || !in_net) { pthread_mutex_unlock(&lk); return -1; }
     head(&b, T_MSG); put64(&b, net_id); put(&b, pk, 8); put(&b, to, 8); put64(&b, next_ctr()); put(&b, &l, 1); put(&b, p, n); tag(&b);
@@ -1469,6 +1474,15 @@ int arb_tell(const unsigned char to[8], const void *p, size_t n)
     pthread_mutex_unlock(&lk);
     crypto_wipe(&b, sizeof b);
     return 0;
+}
+
+int arb_round_claimed(const unsigned char id[8])
+{
+    int r = 0;
+    pthread_mutex_lock(&lk);
+    for (int i = 0; !round_.kiosk && i < round_.ncl; i++) if (!memcmp(round_.cl[i], id, 8)) r = 1;
+    pthread_mutex_unlock(&lk);
+    return r;
 }
 
 int arb_derive(const char *label, unsigned char out[32])
