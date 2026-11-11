@@ -346,7 +346,7 @@ static _Atomic int music_page;                                  /* setting music
 int screen_music_page(int set)
 {
     if (set < 0) return atomic_load(&music_page);
-    set = set != 0;
+    if (set > 2) set = 0;                                       /* (0 off, 1 in place of the face, 2 over the home app too: src/ui MP_*) */
     if (atomic_exchange(&music_page, set) != set) { pthread_mutex_lock(&lock); kick(); pthread_mutex_unlock(&lock); }
     return set;
 }

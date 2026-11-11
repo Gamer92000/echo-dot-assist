@@ -3569,14 +3569,23 @@ Run in this order. Each step says what it proves.
       existing off, on/off, failed writes, late/lost service, readback, restore, and the signed settings API's visibility,
       persistence across restart, and exports. Presets accept the preference before root publishes readback, without
       exposing an unavailable switch on the page. Physical-device validation of this implementation remains open.
-- [~] Music page in place of the face while a track plays (2026-11-10, asked by a cronos owner: "a big cover as default").
-      Setting `music_on_screen` (Screen page, off by default; `settings.c` -> `screen_music_page` -> `mpage` line to the UI).
-      `scene.c` `music_page_tick`: a track playing (Sendspin state 1), the face in front and calm (`face_calm`: idle, mic
-      off, DND), our own home activity on top (an app in front is left alone), no drawer: `music_show(0)`, the Playing tab,
-      `mp_auto`.  A request, call or timer bring the face (`face_pattern`, unchanged) and the page returns when they
-      end.  Left when Sendspin says stopped (state 0) or the music is gone for 5 s (`MP_STOP_MS`: a gap between two tracks
-      reports 0 for a moment); a pause (2) keeps it, so the play button a finger just pressed does not take the page away.
-      The drawer's Face / Home-as-face and the music rail's face button set `mp_off`: the face holds until the track has
-      stopped.  A page opened by hand (`mp_auto` 0) is never left by itself.  `ui_test.c`: every one of these.
+- [~] Music page in place of the face, or of the home app, while a track plays (2026-11-10, PR #163, asked by a cronos
+      owner: "a big cover as default"; reworked in review 2026-11-11).  Setting `music_on_screen` off / face / home
+      (Screen page, off by default; `settings.c` -> `screen_music_page` -> `mpage 0|1|2` to the UI, `MP_*` in `ui.h`).
+      `scene.c` `music_page_tick`: a track playing (Sendspin state 1), the face calm (`face_calm`: idle, mic off, DND), no
+      drawer, nothing on its way (`scene_waiting`).  `face`: only with the face as home and our screen in front; with an
+      app as home our screen in front means that app is away (crashed, retried, not up yet at start) and is left to come
+      back: the first version took `own_asked` there (`music_show`) and the app's retries stopped for good.  `home`:
+      also over the home app in front (only that app: another one is left alone), as words.c brings our screen up for a
+      ring: `own_asked` set and the old value kept (`mp_own_was`), `mp_app`; at the stop that app is launched again with
+      the page's frame held, the face under it once it is in front (`mp_gave`).  An app that takes the screen back
+      (Back, Home in the drawer, the app by itself, our home never coming) holds the page off until the stop
+      (`music_page_hold`): no tug of war.  A request, call or timer bring the face (`face_pattern`, unchanged) and the
+      page returns when they end.  Left when Sendspin says stopped (state 0) or the music is gone for 5 s
+      (`MP_STOP_MS`: a gap between two tracks reports 0 for a moment); a pause (2) keeps it.  Left by itself only as it
+      came, the Playing tab with no sheet (`music_page_as_opened`): the queue ending while someone searches the library
+      leaves them there.  Switched off (or from home to face while over the app): what came by itself goes at once.
+      The drawer's Face / Home and the music rail's face button hold it off until the stop; a page opened by hand
+      (`music_show`) is never left by itself.  `ui_test.c`: every one of these, the app as home in both modes.
       Open: on a real Show (cronos 192.168.4.246): whether Sendspin's state 0 between tracks is shorter than 5 s there, the
-      page after a wake word on a long track, the screen waking for the first track.
+      page after a wake word on a long track, the screen waking for the first track, Kiosk Satellite given back.

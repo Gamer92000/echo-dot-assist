@@ -34,6 +34,7 @@ static const char *const arb_modes[2] = { "hassmic", "kiosk" };            /* AR
 static const char *const wake_engines[3] = { "amazon", "microwakeword", "homeassistant" };  /* WAKE_AMAZON, WAKE_MWW, WAKE_HA */
 static const char *const dropin_answers[2] = { "auto", "ask" };          /* dropin_ask() 0, 1 */
 static const char *const timer_sounds[4] = { "timer", "alarm", "beep", "custom" };    /* TIMER_SOUND_* */
+static const char *const music_pages[3] = { "off", "face", "home" };    /* screen_music_page(): src/ui MP_OFF, MP_FACE, MP_HOME */
 static const char *const speech_langs[6] = { "auto", "de", "en", "fr", "es", "ja" };
 static int speech_lang, wake_adapt = 1;
 
@@ -146,9 +147,10 @@ static const struct setting table[NSET] = {
     [LED_LEVEL]   = { "led_brightness", "LED brightness", "Lights", "%", S_INT, 0, 100, 1, 0 },
     /* ring.c keeps it: where the light's fill starts.  Not exported: it is for how this Echo stands */
     [RING_ROT]    = { "ring_rotation", "Light ring rotation", "Lights", "LEDs", S_INT, 0, 23, 0, 0 },   /* settings_max() */
+    /* screen.c tells the UI (src/ui/scene.c music_page_tick): the Playing tab in place of the face, or of the home app
+     * too, while a track plays; only where the model has the UI */
+    [MUSIC_PAGE]  = { "music_on_screen", "Music on the screen while it plays", "Lights", NULL, S_CHOICE, 0, 0, 1, 0 },
     /* ring_band.c: the screen's rows kept for the light band (stock's attention line is 10) */
-    /* screen.c tells the UI (src/ui/scene.c music_page_tick): the Playing tab replaces the face while a track plays; only where the model has the UI */
-    [MUSIC_PAGE]  = { "music_on_screen", "Music on the screen while it plays", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
     [BAND]        = { "light_band", "Light band", "Lights", "px", S_INT, 0, 40, 1, 0 },
     /* the backlight (backlight_auto above): the level with adaptive off, the shift of Amazon's lux curve with it on
      * (-100..100 = screen_auto_brightness_adj -1..1) */
@@ -307,6 +309,7 @@ int settings_choices(const struct setting *s, const char *const **names)
     case WAKE_ENGINE: *names = wake_engines; return 3;
     case SPEECH_LANG: *names = speech_langs; return 6;
     case DROPIN_ANSWER: *names = dropin_answers; return 2;
+    case MUSIC_PAGE: *names = music_pages; return 3;
     case TIMER_SOUND: *names = timer_sounds; return 4;
     case END_REQ: *names = micend_names; return MICEND_MODES;
     default: *names = NULL; return 0;

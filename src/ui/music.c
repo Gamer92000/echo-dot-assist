@@ -179,7 +179,18 @@ void music_show(struct scene *s, int tab)
     if (tab < 0) tab = s->music && (s->title[0] || s->mstate) ? T_NOW : up(s) ? T_LIBRARY : T_NOW;
     go_home(s, V_MUSIC); ask_own(s);                            /* (asked for: the home app does not come over it) */
     tab_open(s, tab);
+    s->mp_auto = 0; s->mp_app[0] = 0;                           /* (opened by hand: left by hand, no app given back) */
 }
+
+/* the Playing tab, not asked for: own_asked and the page's pending Home left as they are (the caller decides) */
+void music_page(struct scene *s)
+{
+    go_home(s, V_MUSIC);
+    tab_open(s, T_NOW);
+}
+
+/* as music_page left it: the Playing tab, no sheet over it (another tab: someone is looking for something) */
+int music_page_as_opened(const struct scene *s) { return s->m.tab == T_NOW && !s->m.sheet; }
 
 /* ---------------------------------------------------------------- drawing helpers */
 
@@ -765,7 +776,7 @@ int music_act(struct scene *s, int a, int arg, int ev)
     }
     if (ev != EV_TAP) return 0;
     switch (a) {
-    case A_M_HOME: go_home(s, V_FACE); ask_own(s); s->mp_off = 1; s->mp_auto = 0; break;
+    case A_M_HOME: go_home(s, V_FACE); ask_own(s); music_page_hold(s); break;
     case A_M_TAB:
         if (arg == T_LIBRARY && m->tab == T_LIBRARY && m->depth && (m->depth > 1 || m->stack[0]->arg[0])) lib_top(s);   /* again: its top */
         else tab_open(s, arg);

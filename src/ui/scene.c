@@ -455,6 +455,7 @@ void scene_top(struct scene *s, const char *pkg, long long now)
     snprintf(s->top, sizeof s->top, "%s", pkg);
     if (!is_home(pkg)) {                                        /* the app is in front: what held its place goes */
         s->leaving_until = 0;
+        if (s->mp_gave) { s->mp_gave = 0; s->view = V_FACE; }   /* (the music page given back: the face under the app) */
         if (eq(pkg, home_app(s))) s->own_asked = 0;             /* (the home app back: it comes back again after this) */
         if (eq(pkg, home_app(s))) { s->home_broken = 0; s->home_retry_at = 0; s->home_retry_ms = 0; }           /* (it starts after all: an update had it away) */
         /* a drawer still out when an app takes the screen, not one pulled over it that waits for our home: it goes */
@@ -689,24 +690,62 @@ static void home_apply(struct scene *s);
 
 #define MP_STOP_MS 5000                                         /* a track gap is no stop: Sendspin says "stopped" between two for a moment */
 
-/* setting music_on_screen: while a track plays, the Playing tab is what shows in place of the face (with the home app
- * ours: an app in front is left alone), until it stops.  A request, a call or a timer bring the face as always and the
- * page comes back when they are over; the face or Home chosen by hand holds it off until the track stops.  Opened by
- * hand it is left by hand: only a page opened here goes by itself. */
+/* setting music_on_screen: while a track plays the Playing tab shows in place of the face (MP_FACE: only where the face
+ * is the home, an app in front left alone), or in place of the home app too (MP_HOME: our screen brought up over the
+ * app chosen on the page or Kiosk Satellite, that app given back when the music stops, as words.c does for a ring).
+ * A request, a call or a timer bring the face as always and the page comes back when they are over.  The face or Home
+ * chosen by hand, or an app that takes the screen back by itself, hold it off until the track stops: never a tug of war
+ * with an app.  Left by itself only as it came (the Playing tab, nothing opened on it): a page opened by hand, or one
+ * someone went on to browse (the queue ending while they search), is left by hand.  It never takes own_asked for the
+ * face's case: with an app as home, the retries that bring it back (home_retry_at, scene_top) go on. */
+void music_page_hold(struct scene *s) { s->mp_off = 1; s->mp_auto = 0; s->mp_app[0] = 0; }
+
+/* the page that came by itself goes: the face, or the app it came over.  0: not now (the drawer out, our own on its
+ * way, the face busy with a request): again on a later frame */
+static int mp_leave(struct scene *s)
+{
+    if (!s->mp_auto) return 1;
+    if (drawer_open(s) || scene_waiting(s) || (s->view == V_FACE && !face_calm(s))) return 0;
+    if (is_home(s->top) && (s->view == V_FACE || music_page_as_opened(s))) {
+        if (s->mp_app[0] && eq(s->mp_app, home_app(s))) {     /* (this frame held until it is in front: no face between) */
+            s->own_asked = s->mp_own_was; s->mp_gave = 1; launch(s, s->mp_app, NULL);
+        } else if (s->view == V_MUSIC) go_home(s, V_FACE);     /* (the home app another since: home_apply took it) */
+    }                                                           /* browsed: our screen the person's, own_asked kept as
+                                                                   music_show's by hand (no home retry over them) */
+    s->mp_auto = 0; s->mp_app[0] = 0;
+    return 1;
+}
+
 static void music_page_tick(struct scene *s, long long now, long long *wake)
 {
-    int stopped = !s->music || s->mstate == 0;
-    if (!s->mpage) { s->mp_auto = s->mp_off = 0; s->mp_stop_at = 0; return; }
-    if (stopped) {
+    if (s->mp_gave && !on_its_way(s) && is_home(s->top)) { s->mp_gave = 0; s->view = V_FACE; }   /* the app given back
+                                                                   did not come (failed, 4 s): the face, not a stopped page */
+    if (s->mp_auto && !scene_visible(s)) {                      /* an app took the screen (Home in the drawer, the app by */
+        if (s->mp_app[0]) s->own_asked = s->mp_own_was;         /* itself, ours never came): its, the rest of the track; */
+        if (s->view == V_MUSIC && music_page_as_opened(s)) s->view = V_FACE;   /* the face under it (no stopped page later) */
+        music_page_hold(s);
+    }
+    if (s->mpage == MP_OFF || (s->mpage != MP_HOME && s->mp_app[0])) {   /* switched off, or no more over apps: what came */
+        if (!mp_leave(s)) return;                               /* by itself goes */
+        if (s->mpage == MP_OFF) { s->mp_off = 0; s->mp_stop_at = 0; return; }
+    }
+    if (!s->music || s->mstate == 0) {
         if (!s->mp_stop_at) s->mp_stop_at = now;
         if (now - s->mp_stop_at < MP_STOP_MS) { long long t = s->mp_stop_at + MP_STOP_MS; if (!*wake || t < *wake) *wake = t; return; }
-        if (s->mp_auto && s->view == V_MUSIC && is_home(s->top)) go_home(s, V_FACE);
-        s->mp_auto = s->mp_off = 0;
+        if (mp_leave(s)) s->mp_off = 0;
         return;
     }
     s->mp_stop_at = 0;
-    if (s->mstate != 1 || s->view != V_FACE || s->mp_off || !is_home(s->top) || drawer_open(s) || s->oobe || !face_calm(s)) return;
-    music_show(s, 0);                                           /* (the Playing tab) */
+    if (s->mstate != 1 || s->mp_off || drawer_open(s) || scene_waiting(s) || s->oobe || !face_calm(s)) return;
+    const char *h = home_app(s);
+    if (is_home(s->top)) {                                      /* our screen in front, the face on it */
+        if (s->view == V_MUSIC || (h[0] && s->mpage != MP_HOME)) return;   /* (an app is home: on its way back, or broken) */
+    } else {                                                    /* an app in front: only the home app, only with MP_HOME */
+        if (s->mpage != MP_HOME || !h[0] || !eq(s->top, h) || !s->screen_on) return;
+        s->mp_own_was = s->own_asked; s->own_asked = 1;         /* (as ask_own: that app not brought back over the page) */
+        snprintf(s->mp_app, sizeof s->mp_app, "%s", h);
+    }
+    music_page(s);                                              /* (over the app: our home asked for, go_home) */
     s->mp_auto = 1;
 }
 
@@ -836,6 +875,7 @@ static void home_apply(struct scene *s)
     if (drawer_open(s)) return;
     const char *h = home_app(s);
     home_new = 0; s->own_asked = 0;                             /* (a new choice: its app, and back when it leaves) */
+    s->mp_app[0] = 0;                                           /* (the music page over the old one: no giving that back) */
     if (h[0] && !eq(s->top, h)) launch(s, h, NULL);
     else if (!h[0] && !is_home(s->top)) go_home(s, V_FACE);
 }
@@ -867,7 +907,7 @@ void scene_msg(struct scene *s, const char *line, long long now)
     else if (eq(cmd, "mute")) s->mute = atoi(a);
     else if (eq(cmd, "dnd")) s->dnd = atoi(a);
     else if (eq(cmd, "oobe")) s->oobe = atoi(a);
-    else if (eq(cmd, "mpage")) s->mpage = atoi(a) != 0;
+    else if (eq(cmd, "mpage")) { int v = atoi(a); s->mpage = v == MP_FACE || v == MP_HOME ? v : MP_OFF; }
     else if (eq(cmd, "h12")) s->h12 = atoi(a);
     else if (eq(cmd, "name")) snprintf(s->name, sizeof s->name, "%s", a);
     else if (eq(cmd, "act")) snprintf(s->act, sizeof s->act, "%s", a);

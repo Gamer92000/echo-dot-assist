@@ -492,11 +492,15 @@ satellite of its own has to run without its microphone (as a display) while hass
   smile. Below them: the clock, in Home Assistant's time zone (12-hour where the Echo's language is US, Canadian or
   Australian English), or what Music Assistant plays, with play/pause; tap it for the music. A request to the
   assistant, a ringing timer or a Drop In bring the face back from the music.
-- **Music on the screen** (Screen page, "Music on the screen while it plays", off by default): while a track plays the
-  Playing tab (the big cover) shows in place of the face, until the music stops. A pause keeps it, and so does the gap
-  between two tracks. A request, a call or a ringing timer bring the face and the page comes back when they are over.
-  Choosing the face yourself (the drawer's **Face**, or the face button on the music page) keeps it until the music has
-  stopped. It replaces the face only: an app in front (Kiosk Satellite, a dashboard) stays.
+- **Music on the screen** (Screen page, "Music on the screen while it plays", off by default): while a track from Music
+  Assistant plays, the Playing tab (the big cover) shows instead, until the music stops. **In place of the face** replaces
+  only the face: an app in front (Kiosk Satellite, a dashboard) stays. **In place of the home app too** also comes over the
+  app chosen as Home (or Kiosk Satellite), and that app comes back when the music stops; other apps are left alone. A
+  pause keeps the page, and so does the gap between two tracks. A request, a call or a ringing timer bring the face and
+  the page comes back when they are over. It goes by itself only while it still shows the Playing tab: browse the
+  library or search on it and it stays, as if you had opened it yourself (the drawer's **Home** brings the home app back). Choosing the face or Home yourself (the drawer's **Face** or
+  **Home**, the face button on the music page), or going back to the app, keeps the music page away until the music has
+  stopped; a face chosen that way stays, as it always has, until the drawer's **Home** brings the home app back.
 - **The drawer**: pull down from the top edge of the screen, whatever shows, as on Amazon's own Echo Show. In it:
   **Home** (the home app), **Face** (where the home app is another), **Music**, **Do not disturb**, **Screen off** (a
   touch wakes it), what plays (tap it for the music) and the Echo's volume. Over an app, start the pull on the thin

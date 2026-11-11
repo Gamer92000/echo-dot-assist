@@ -56,6 +56,7 @@ static void drawer_go(struct scene *s, const char *pkg)
     d->go = 1; snprintf(d->go_pkg, sizeof d->go_pkg, "%s", pkg);
     s->view = V_FACE;                                           /* what shows when that app is gone again */
     s->own_asked = 0;                                           /* (the home app asked for: back when it leaves, tried again) */
+    music_page_hold(s);                                         /* (and kept: not the music page over it again this track) */
     scene_backdrop(s, NULL, 0, 0);                              /* not the other app's picture while this one comes: ours */
 }
 
@@ -184,9 +185,9 @@ int drawer_act(struct scene *s, int a, int arg, int ev)
     case A_DR_HOME: {
         const char *pkg; home_label(s, &pkg);
         if (pkg[0]) drawer_go(s, pkg);
-        else { drawer_close(s, 0); go_home(s, V_FACE); s->mp_off = 1; }
+        else { drawer_close(s, 0); go_home(s, V_FACE); music_page_hold(s); }
     } break;
-    case A_DR_FACE: drawer_close(s, 0); go_home(s, V_FACE); ask_own(s); s->mp_off = 1; break;
+    case A_DR_FACE: drawer_close(s, 0); go_home(s, V_FACE); ask_own(s); music_page_hold(s); break;
     case A_DR_MUSIC: case A_DR_NOW: drawer_close(s, 0); music_show(s, a == A_DR_NOW ? 0 : -1); break;
     case A_DR_DND: s->dnd = !s->dnd; send(s, "dnd %d", s->dnd); break;
     case A_DR_SLEEP: drawer_close(s, 1); if (s->p->sleep) s->p->sleep(s->ctx); break;

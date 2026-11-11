@@ -4,6 +4,16 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-11
 
+- **The Echo Show can show the music page while a track plays, in place of the face or of the home app.** New setting
+  "Music on the screen while it plays" (Screen page, `music_on_screen`, off by default): the Playing tab with the big
+  cover, the seek bar and the buttons shows as long as music from Music Assistant plays, until it stops (not at a pause,
+  nor in the few seconds between two tracks). "In place of the face" leaves an app in front (Kiosk Satellite, a
+  dashboard) alone; "In place of the home app too" also comes over the app chosen as Home, which comes back when the
+  music stops. A request, a call or a ringing timer bring the face as before, and the music page comes back when they
+  are over. It goes by itself only while it still shows the Playing tab, so browsing the library when the queue ends
+  keeps you there. The drawer's Face or Home, the face button on the music page, or going back to the app, hold that
+  until the music has stopped. Contributed by M0ebiu5 (#163).
+
 - **A note of your own on each Echo, and your other Echos one click away on the settings page (issue #153).** Several
   Echos of one model differed only by the six characters at the end of their names. Click "Add a note" under the
   name at the top of the menu (or the Note row on the System page) and write where it stands, say "Kitchen, by the
