@@ -35,7 +35,11 @@ static const char *const wake_engines[3] = { "amazon", "microwakeword", "homeass
 static const char *const dropin_answers[2] = { "auto", "ask" };          /* dropin_ask() 0, 1 */
 static const char *const timer_sounds[4] = { "timer", "alarm", "beep", "custom" };    /* TIMER_SOUND_* */
 static const char *const music_pages[3] = { "off", "face", "home" };    /* screen_music_page(): src/ui MP_OFF, MP_FACE, MP_HOME */
-static const char *const speech_langs[6] = { "auto", "de", "en", "fr", "es", "ja" };
+/* the aligner's languages first (tools/wakealign/build.sh; main.c speech_locale), then those it has no model for yet,
+ * which it takes the wake word's own for, as before: the screen's date speaks them all (src/ui/lang.c).  Stored by
+ * name, so the list may grow */
+static const char *const speech_langs[] = { "auto", "de", "en", "fr", "es", "ja", "it", "pt", "nl", "sv", "da", "nb", "fi", "pl", "ro" };
+#define SPEECH_LANGS ((int)(sizeof speech_langs / sizeof *speech_langs))
 static int speech_lang, wake_adapt = 1;
 
 const struct bt_lang bt_langs[] = {
@@ -51,6 +55,7 @@ const struct bt_lang bt_langs[] = {
     { "nb", "Norsk", "Koblet til %s", "Koblet fra %s", "Koblet til en Bluetooth-enhet", "Koblet fra en Bluetooth-enhet" },
     { "fi", "Suomi", "Yhdistetty laitteeseen %s", "Yhteys laitteeseen %s katkaistu", "Yhdistetty Bluetooth-laitteeseen", "Yhteys Bluetooth-laitteeseen katkaistu" },
     { "pl", "Polski", "Połączono z %s", "Rozłączono z %s", "Połączono z urządzeniem Bluetooth", "Rozłączono z urządzeniem Bluetooth" },
+    { "ro", "Română", "Conectat la %s", "Deconectat de la %s", "Conectat la un dispozitiv Bluetooth", "Deconectat de la un dispozitiv Bluetooth" },
 };
 const int bt_lang_count = (int)(sizeof bt_langs / sizeof bt_langs[0]);
 static const char *bt_lang_codes[sizeof bt_langs / sizeof bt_langs[0]];
@@ -318,7 +323,7 @@ int settings_choices(const struct setting *s, const char *const **names)
     case UPDATES: *names = update_channels; return 3;
     case ARB_MODE: *names = arb_modes; return 2;
     case WAKE_ENGINE: *names = wake_engines; return 3;
-    case SPEECH_LANG: *names = speech_langs; return 6;
+    case SPEECH_LANG: *names = speech_langs; return SPEECH_LANGS;
     case DROPIN_ANSWER: *names = dropin_answers; return 2;
     case MUSIC_PAGE: *names = music_pages; return 3;
     case TIMER_SOUND: *names = timer_sounds; return 4;
@@ -423,7 +428,7 @@ static void put(enum id i, int v)
 {
     switch (i) {
     case WAKE_ENGINE: core_wake_engine(v); break;
-    case SPEECH_LANG: speech_lang = v; break;
+    case SPEECH_LANG: speech_lang = v; screen_language_changed(); break;
     case WAKE_ADAPT: wake_adapt = v; break;
     case MIC_LEVEL: mic_level = v; core_mic_level(v); break;
     case DENOISE: core_mic_denoise(v); break;
@@ -690,7 +695,7 @@ int settings_peek(const char *name, char *out, size_t cap)
 }
 
 int settings_mic_level(void) { return mic_level; }
-const char *settings_speech_language(void) { return speech_lang > 0 && speech_lang < 6 ? speech_langs[speech_lang] : ""; }
+const char *settings_speech_language(void) { return speech_lang > 0 && speech_lang < SPEECH_LANGS ? speech_langs[speech_lang] : ""; }
 int settings_bt_proxy(void) { return bt_proxy; }
 int settings_on(const char *name) { const struct setting *s = settings_find(name); return s && s->type == S_BOOL && settings_get(s); }
 const struct bt_lang *settings_bt_lang(void) { return &bt_langs[bt_lang]; }

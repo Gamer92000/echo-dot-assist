@@ -298,6 +298,7 @@ int main(int argc, char **argv)
     line("ck 1 1"); run(61000); png("clock");
     line("mute 1"); run(61000); png("clock_mute"); line("mute 0");
     line("h12 1"); run(61000); png("clock_12h"); line("h12 0");
+    line("lg ro"); run(61000); png("clock_ro"); line("lg -");        /* the date in the language spoken (lang.c) */
     line("p+ active-start 0"); run(400); png("clock_listening"); line("p- active-start");
     line("ck 0 5"); run(500);
     /* what was said, the reply, the timers (words.c): over the face and over an app */

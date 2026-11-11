@@ -294,6 +294,27 @@ int main(int argc, char **argv)
     f0 = frames; run(10000); assert(frames - f0 > 2);          /* the eyes blink again */
     msg("oobe 1"); run(2000); msg("oobe 0");
 
+    /* the date in the language spoken at home (lang.c, "lg"): each of settings.c's speech_langs but Japanese (no kanji
+     * in the firmware's font) has its own words; none, "-" or one not known: English */
+    {
+        struct tm tm; memset(&tm, 0, sizeof tm); tm.tm_wday = 3; tm.tm_mday = 11; tm.tm_mon = 10; char d[64], en[64];
+        ui_date(en, sizeof en, &tm, NULL); assert(!strcmp(en, "Wednesday, 11 November"));
+        ui_date(d, sizeof d, &tm, "ro"); assert(!strcmp(d, "Miercuri, 11 noiembrie"));
+        ui_date(d, sizeof d, &tm, "de"); assert(!strcmp(d, "Mittwoch, 11. November"));
+        ui_date(d, sizeof d, &tm, "pl"); assert(!strcmp(d, "Środa, 11 listopada"));
+        tm.tm_wday = 0; tm.tm_mday = 1; tm.tm_mon = 0;
+        ui_date(d, sizeof d, &tm, "es"); assert(!strcmp(d, "Domingo, 1 de enero"));
+        ui_date(en, sizeof en, &tm, "en");
+        static const char *const codes[] = { "de", "fr", "es", "it", "pt", "nl", "sv", "da", "nb", "fi", "pl", "ro" };
+        for (size_t i = 0; i < sizeof codes / sizeof *codes; i++) { ui_date(d, sizeof d, &tm, codes[i]); assert(strcmp(d, en)); }
+        ui_date(d, sizeof d, &tm, "xx"); assert(!strcmp(d, en));
+        ui_date(d, 8, &tm, "ro"); assert(strlen(d) == 7);      /* cut, never past the end */
+        msg("lg ro"); assert(!strcmp(S->lang, "ro"));
+        msg("ck 1 1"); run(61500); assert(S->saver_on); ppm("clock_ro", inc);
+        msg("lg -"); assert(!S->lang[0]);
+        msg("ck 0 5"); run(500);
+    }
+
     /* Sendspin's music: the face's bottom line, then the music's own page */
     msg("mc 35 0 play,pause,next,previous,volume,mute,seek,shuffle,unshuffle,repeat_off,repeat_one,repeat_all off 0");
     msg("mt Bohemian Rhapsody\tQueen\tA Night at the Opera");

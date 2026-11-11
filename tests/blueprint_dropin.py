@@ -532,6 +532,8 @@ def main():
     check(r == "Ich verbinde mit Küche", f"de-CH: {r!r}")
     ha = house(); r, _ = ask(ha, "salle", "dev_office", lang="fr")
     check(r == "Je ne trouve pas d'Echo pour salle", f"fr, nobody there: {r!r}")
+    ha = house(); r, _ = ask(ha, "küche", "dev_office", lang="ro-RO")
+    check(r == "Mă conectez cu Küche", f"ro-RO: {r!r}")
     ha = house(); r, _ = ask(ha, "küche", "dev_office", lang="pt-BR")
     check(r == "Calling Küche", f"a language with no replies: {r!r}")
     two = {"de": ["Ich verbinde mit {room}", "Kein Echo für {room}"], "en": ["Calling {room}", "No Echo in {room}"]}

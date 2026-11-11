@@ -3320,6 +3320,17 @@ Run in this order. Each step says what it proves.
       clock after it, no frames between minutes, a touch wakes and sends nothing, a request, mic off, a ringing timer
       with its Stop, 0 minutes, off again), `fake_screen_words.py` (`ck`, held on only with `front 1`, an app: as
       before, 0: never), `fake_screen.py`, `fake_web.py`, `build/uishot`.  Open: seen on an Echo.
+- [~] The Echo's own words in more languages, Romanian first (2026-11-11).  `speech_language` lists every language of
+      `bt_langs` (it, pt, nl, sv, da, nb, fi, pl) and ro, stored by name; `speech_locale` maps them and their zones
+      (Brazil's before "America/"), and the aligner finds no `.wa` for them, so it takes the word's own as with no
+      language (no MFA model for them in build.sh).  `core_speech_language` -> screen.c `lg` -> `src/ui/lang.c`
+      `ui_date`: day and month names per language (bionic's strftime is C locale only), English for none or one not
+      known, Japanese left out (no kanji in Roboto).  `bt_langs` has ro.  `core_transcript` compares folded (`fold`:
+      U+00C0..U+017F and ș ț without marks, lower case, no hyphens): "Închide" was never lower-cased, and the old
+      byte-wise strip of ¡ ¿ cut á (C3 A1) in two; stops + "oprește", hang-ups + "închide (apelul|Drop In)", "termină
+      apelul", "încheie apelul".  Blueprint: ro sentences and replies.  Checked on the PC: `ui_test` (each language's
+      date, cut at the end, `lg`), `fake_screen_words.py` (`lg`), `fake_ha_dropin.py` ("Închide apelul!"),
+      `blueprint_dropin.py` (ro-RO).  Open: seen on an Echo; the page and the screen's other words stay English.
 - [~] Echo Show 5 2nd gen (`cronos`, 2026-10-26; `docs/re-cronos.md`).  checkers' platform and its pinned build: Fire OS
       6574.1 NS65741/8149 (same `ro.build.version.incremental`, cronos' own image), kernel 4.9.77 (20 config lines from
       checkers', 74 from crown's), `libpryon.so` byte-identical to checkers', stubs identical in symbols and order,

@@ -156,7 +156,7 @@ $(OUT)/runas: src/tools/runas.c
 
 # The screen UI (src/ui/, scene.h): a JNI library for app_process, against the NDK's libandroid (ANativeWindow) and
 # libjnigraphics (AndroidBitmap); nothing of the firmware's.  The scene alone is make unit's ui_test on the PC.
-UI_SCENE := src/ui/scene.c src/ui/widgets.c src/ui/face.c src/ui/drawer.c src/ui/music.c src/ui/words.c src/ui/gfx.c
+UI_SCENE := src/ui/scene.c src/ui/widgets.c src/ui/face.c src/ui/drawer.c src/ui/music.c src/ui/words.c src/ui/lang.c src/ui/gfx.c
 UI := src/ui/android.c src/ui/touch.c $(UI_SCENE)
 $(OUT)/libhmui.so: $(UI) src/ui/scene.h src/ui/ui.h src/ui/gfx.h build/.build-id
 	@mkdir -p $(OUT)
