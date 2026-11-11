@@ -51,8 +51,8 @@ What changed for people using the Echo, newest first. Details and measurements a
 - **Echo Show 5: Wi-Fi no longer drops every few minutes.** Amazon's Wi-Fi diagnostics, still running inside Android,
   test the connection against Amazon's servers; the satellite's firewall blocks them, so the test always failed and
   the diagnostics then disconnected and reconnected the Wi-Fi (a few seconds each time, every link to Home Assistant
-  and Music Assistant dropped, music stopped and restarted). The satellite now switches those diagnostics off after
-  every start of Android.
+  and Music Assistant dropped, music stopped and restarted), and their watchdog turned the Wi-Fi off and on when the
+  test never passed. The satellite now switches both off.
 
 ## 2026-11-10
 

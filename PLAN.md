@@ -3664,6 +3664,12 @@ Run in this order. Each step says what it proves.
       kept in memory only.  device.conf `ANDROID_BROADCASTS`, main.sh `android_tell` in netwatch: sent once per
       system_server pid after boot.  TRIGGERNETRECOVERY in the same receiver calls System.exit: never sent.  cronos
       given the same (checkers' build); crown, athena, cupcake not looked at.
+      Then (13:33 UTC, 12 min on) `NetWatchDog` (same class family): its timer is reset only by a passing test of
+      Amazon's, so it fired (`network-watchdog`), `setWifiEnabled(false)` then `true`, wpa_supplicant restarted, ~8 s
+      off.  It skips while Wi-Fi is off, setup is not complete, a MIRRORING_ON / OOBE_STARTED broadcast came, or
+      `Settings.System smartconn_status` contains "enabled"; `WifiDiagsHandler.shouldResetConnection` skips the bounce
+      for that too, and nothing else reads it.  So `system/smartconn_status=enabled` in ANDROID_SETTINGS (persistent,
+      alexa-on.sh deletes it again), the broadcasts kept beside it.
 - [x] Echo Show 8 2nd gen adaptive colour (2026-11-10, issue #162): `screen_adaptive_colour` on the settings page's
       Screen page, off by default. `board.adaptive_colour` and device.conf `ADAPTIVE_COLOUR` enable it on athena.
       Of the four supported Shows' extracted firmware images checked here, only athena declares
