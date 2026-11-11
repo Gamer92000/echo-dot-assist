@@ -3654,6 +3654,16 @@ Run in this order. Each step says what it proves.
       (the block in `sh` with a stand-in `settings`), `fake_ha_esphome_timers.py` (`HASSMIC_FAKE_BACKLIGHT`: entities,
       commands, page), `fake_ha_esphome.py` (none on a Dot).  **Open:** Android 9's (athena, crown) curve not read, nor
       tried there; the adjustment's effect on the backlight not measured; Kiosk Satellite's switch on cronos/crown/athena.
+- [x] Echo Show 5: Amazon's network bounce (2026-11-11).  The links to HA, Sendspin and the arbitration network all
+      dropped for ~5 s every few minutes (14:37, 15:11, 15:14), signal -36 dBm.  logcat: `WifiDiagsUtil` (fosservices,
+      in system_server) pings the gateway and DNS and fetches `generate_204` from mmechocaptiveportal.com and
+      fireoscaptiveportal.com; behind the egress lock the fetch times out -> `BAD_CONNECTION` -> `wifidiags-bounce` ->
+      wpa_supplicant `CTRL-EVENT-DISCONNECTED reason=3 locally_generated=1`, joined again 4.1 s later
+      (`wifi-disconnect-duration`).  Its `WifiDiagsConfigReceiver` (registered without a permission) takes a boolean
+      `val` for SET_ENABLENETBOUNCE and SET_ENABLEWIFIDIAGS (`receivedIntentSetEnableNetBounce, val=false` logged);
+      kept in memory only.  device.conf `ANDROID_BROADCASTS`, main.sh `android_tell` in netwatch: sent once per
+      system_server pid after boot.  TRIGGERNETRECOVERY in the same receiver calls System.exit: never sent.  cronos
+      given the same (checkers' build); crown, athena, cupcake not looked at.
 - [x] Echo Show 8 2nd gen adaptive colour (2026-11-10, issue #162): `screen_adaptive_colour` on the settings page's
       Screen page, off by default. `board.adaptive_colour` and device.conf `ADAPTIVE_COLOUR` enable it on athena.
       Of the four supported Shows' extracted firmware images checked here, only athena declares

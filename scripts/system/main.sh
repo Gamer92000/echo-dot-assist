@@ -575,6 +575,27 @@ psk_only() {
     echo "netwatch: network$fixed cut back to WPA-PSK, associating again"
 }
 
+# Android's framework, told things by broadcast (device.conf ANDROID_BROADCASTS, "action/extra=true|false" each, sent as
+# booleans): what they set lives in system_server's memory only, so they go again whenever it is a new one (its pid,
+# once boot completed; the receivers are registered by then).  Checkers: Amazon's WifiDiagsUtil (fosservices) tests the
+# link against Amazon's captive portal hosts every few minutes; behind the egress lock that always fails, and it "bounces"
+# the network: wpa_supplicant deauthenticates (reason 3, locally generated, the signal at -36 dBm) and joins again ~4 s
+# later, every link to Home Assistant, Sendspin and the arbitration network dropped with it (2026-11-11: 14:37, 15:11,
+# 15:14).  Its config receiver (registered with no permission) takes "val" for SET_ENABLENETBOUNCE and
+# SET_ENABLEWIFIDIAGS.  Never TRIGGERNETRECOVERY: that one ends system_server (System.exit)
+android_told=
+android_tell() {
+    local ss t act kv ok=1
+    [ -n "$ANDROID_BROADCASTS" ] && command -v am > /dev/null || return 0
+    [ "$(getprop sys.boot_completed)" = 1 ] || return 0
+    ss=$(pidof system_server) && [ -n "$ss" ] && [ "$ss" != "$android_told" ] || return 0
+    for t in $ANDROID_BROADCASTS; do
+        act=${t%%/*} kv=${t#*/}
+        am broadcast -a "$act" --ez "${kv%%=*}" "${kv#*=}" 2>&1 | grep -q 'Broadcast completed' || { ok=; echo "netwatch: $act not sent"; }
+    done
+    [ -n "$ok" ] && { android_told=$ss; echo "netwatch: Android told: $(echo $ANDROID_BROADCASTS | sed 's/com\.amazon\.android\.service\.//g')"; }
+}
+
 # While the settings page switches networks (wifi.sh holds its lock), the link is that script's business: no wifisvc.
 # Whenever the address changes, wifi.sh writes down which network the Echo is on, for the page: wpa_supplicant can also
 # move to another saved network by itself when the one it is on goes away.
@@ -604,6 +625,7 @@ netwatch() {
                 { start $WIFI_SERVICE; echo "netwatch: no address for 60 s, $WIFI_SERVICE started"; miss=0; }
         fi
         psk_only
+        android_tell
         sleep 10
     done
 }
