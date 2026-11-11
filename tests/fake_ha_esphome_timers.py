@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Home Assistant's side of the ESPHome native API against build/hassmic-host (tests/esphome_common.py), part two:
 timers ringing and what stops them, a new run after an error, the timer that runs next, encryption provisioned by Home Assistant (key, mDNS,
-refusals, clearing), the time and zone over the keyed link, noise reduction, LED brightness, the light sensor and the
+refusals, clearing), the Sendspin pairing token over the keyed link only, the time and zone over the keyed link, noise reduction, LED brightness, the light sensor and the
 Echo Show's screen brightness (HASSMIC_FAKE_BACKLIGHT: a model with one)."""
-import asyncio, base64, os, re, signal, time
+import asyncio, base64, os, re, signal, subprocess, time
 from datetime import datetime
 from aioesphomeapi import NumberInfo, NumberState, SwitchInfo, SwitchState, TextSensorInfo, TextSensorState, BinarySensorInfo, BinarySensorState, SensorInfo, SensorState
 from aioesphomeapi import APIClient, MediaPlayerCommand, VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm, ZERO_NOISE_PSK
 from aioesphomeapi.core import InvalidEncryptionKeyAPIError, RequiresEncryptionAPIError
-from esphome_common import check, until, sync, peak, speech, home_assistant, run
+from aioesphomeapi.model import SendspinPairingTokenStatus
+from esphome_common import ROOT, check, until, sync, peak, speech, home_assistant, run
 
 PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT = 17101, 17102, 17103, 17104, 17105
 
@@ -222,6 +223,8 @@ async def main(e):
     check(ok, "a random key before provisioning: invalid key, server hello names the device")
     prov = APIClient("127.0.0.1", PORT, None, noise_psk=ZERO_NOISE_PSK)
     await asyncio.wait_for(prov.connect(), 5)
+    st = await asyncio.wait_for(prov.sendspin_pairing_token(), 5)
+    check(st.status == SendspinPairingTokenStatus.ENCRYPTION_REQUIRED and st.token == "", f"Sendspin token over the zero PSK, before a key: {st.status!r}")
     check(await asyncio.wait_for(prov.noise_encryption_set_key(key), 5) is True, "key accepted over the zero-PSK connection")
     await prov.disconnect()
     check(open(os.path.join(state, "api_key")).read().strip() == key.decode() and oct(os.stat(os.path.join(state, "api_key")).st_mode & 0o777) == "0o600",
@@ -241,13 +244,22 @@ async def main(e):
     check(info.name == "echo-dot" and info.api_encryption_supported and not info.api_encryption_provisionable, "encrypted: device info, no longer provisionable")
     ent3, _ = await enc.list_entities_services()
     check(len(ent3) == len(entities), "encrypted: entities listed")
+    # the Sendspin token, which Home Assistant hands Music Assistant to pair with: over the keyed link only
+    st = await asyncio.wait_for(enc.sendspin_pairing_token(), 5)
+    want = subprocess.run([f"{ROOT}/build/hassmic-host", "-T"], env=env, capture_output=True, text=True).stdout.strip()
+    check(st.status == SendspinPairingTokenStatus.OK and st.token == want and want.startswith("SP:0"), "encrypted: Sendspin token handed out, the one of `hassmic -T`")
     # the time: asked of Home Assistant over the keyed link only (aioesphomeapi answers it), handed to root
     clock = os.path.join(state, "clock")
     check(not os.path.exists(clock), "no time taken from the plaintext connection before the key")
-    enc.subscribe_states(lambda s: None)
+    est = []
+    enc.subscribe_states(est.append)
     for _ in range(30):
         if os.path.exists(clock): break
         await asyncio.sleep(0.1)
+    tok = next(x for x in ent3 if x.object_id == "sendspin_pairing_token")
+    await sync(enc)
+    got = [x.state for x in est if isinstance(x, TextSensorState) and x.key == tok.key]
+    check(got == [want], f"encrypted: the \"Sendspin pairing token\" sensor's state is the token, to this subscriber ({len(got)} states)")
     try: t, at = open(clock).read().split(); t = int(t)
     except (OSError, ValueError): t, at = 0, ""
     boot = time.clock_gettime(time.CLOCK_BOOTTIME)

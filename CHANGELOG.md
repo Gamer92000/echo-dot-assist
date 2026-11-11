@@ -4,6 +4,14 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-11
 
+- **Music Assistant pairs with the Echo by itself.** With Home Assistant 2026.11 and Music Assistant 2.10.9 or later
+  there is no token to copy any more: once the Echo is adopted in Home Assistant, Music Assistant pairs with it within
+  a minute and it is ready to play. The Echo tells Home Assistant its Sendspin id, and hands Home Assistant its pairing
+  token when asked, over the encrypted connection only (as ESPHome devices do). The "Sendspin pairing token" entity
+  stays, for older versions, and now shows the token only over that encrypted connection too: before Home Assistant
+  has set the Echo's key it has no state (it used to go to any client on the network then). For this the Echo speaks
+  version 1.15 of the ESPHome API (1.10 before); nothing else changes in Home Assistant.
+
 - **Kiosk Satellite's DLNA renderer can be reached from your network (issue #109), optional and off by default.**
   The app can play media sent from phones and media servers, but the Echo's firewall kept them from finding or
   controlling it. New setting "Kiosk Satellite DLNA renderer" (settings page, System, shown once the app is installed):

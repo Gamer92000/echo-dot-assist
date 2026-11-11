@@ -270,7 +270,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   PC or where a HAL drops the bits (then level only). `core_lock` guards state and client socket writes; `core.h`
   documents per function whether the lock is held.
 - **Protocols (`struct proto` in `core.h`)**: `proto_esphome.c` (ESPHome native API incl. Noise encryption provisioned
-  by HA, voice assistant, media player, timers, settings entities, Bluetooth proxy messages; its protobuf in `pb.h`,
+  by HA, voice assistant, media player, timers, settings entities, Bluetooth proxy messages, API 1.15's device
+  capabilities with Sendspin's client id and the pairing token (request and text sensor: keyed link only), so Music
+  Assistant pairs through HA; its protobuf in `pb.h`,
   header-only for `tests/unit/pb_test.c` under UBSan) and `proto_wyoming.c` + `wyoming.c`. Selected with `-P`. The
   core calls `start/audio/stop/played/...` on the active proto with lock held.
 - **Audio backend (`audio.h`)**: `audio_mixer.c` on device (mixer C API: capture, voice/TTS, music, Bluetooth and

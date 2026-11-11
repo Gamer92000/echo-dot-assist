@@ -585,9 +585,11 @@ back about 7 seconds after the last "busy". "Duck for other Echos" (Sound page, 
 one Echo. The log says
 `duck: echo-living-room answers what we heard too, music down until it is done` and `duck: ... is done, music back`.
 
-- **Music Assistant** finds the Echo by itself (Sendspin player). Pair it with the Echo's token: shown at the end of
-  `scripts/setup.sh`, and as the diagnostic entity "Sendspin pairing token" in Home Assistant (disabled by default).
-  Steps: the model's page, "Optional: Music Assistant". When Music Assistant restarts, the Echo announces itself again
+- **Music Assistant** finds the Echo by itself (Sendspin player) and, with Home Assistant 2026.11 and Music Assistant
+  2.10.9 or later, pairs with it by itself too: the Echo tells Home Assistant its Sendspin id, and Home Assistant hands
+  Music Assistant the Echo's pairing token, over the encrypted connection only. With older versions pair it by hand
+  with the token: shown at the end of `scripts/setup.sh`, and as the diagnostic entity "Sendspin pairing token" in
+  Home Assistant (disabled by default). Steps: the model's page, "Optional: Music Assistant". When Music Assistant restarts, the Echo announces itself again
   until it is back (after 30 s, then less and less often, at most every 30 min). Where Music Assistant cannot see the
   Echo's announcements (another subnet or VLAN), add `<echo-ip>:28928` under its Sendspin provider's "Manual IP
   addresses for discovery": with the port, since a bare address means Sendspin's default 8928, which is not the Echo's.
@@ -707,7 +709,7 @@ Bluetooth audio from phones, the Bluetooth speaker and the setup from a phone (I
 | Firmware | update entity, see [Updating](../README.md#updating) |
 | Identify, Restart, Factory reset | buttons; Restart reboots the Echo |
 | Web UI address | diagnostic: the settings page's address |
-| Sendspin pairing token | diagnostic, disabled by default |
+| Sendspin pairing token | diagnostic, disabled by default, no state until Home Assistant has set the Echo's key: Music Assistant gets the token from Home Assistant by itself (2026.11 and later) |
 
 Time and time zone: the Echo takes both from Home Assistant, over the encrypted connection only (no time before
 Home Assistant has given it its key), when it connects and every 6 hours. Change Home Assistant's time zone and the Echo

@@ -48,6 +48,9 @@
  *                    of the network (dropin.c); "Drop In" says idle / calling / ringing / connected, "Drop In with"
  *                    whom, the button "End Drop In" hangs up, the event entity "Drop In result" says what came of each
  *                    call this Echo made (dropin_results).  Listed while the feature is on
+ *   music assistant  DeviceCapabilitiesResponse names our Sendspin client id with PAIRING_TOKEN, and the token goes
+ *                    to Home Assistant on request over the keyed connection: Music Assistant pairs with it by itself
+ *                    (send_device_caps, send_sendspin_token).  The diagnostic text sensor stays for older ones
  *   volumes          the media player's volume is the music's (Home Assistant's media too); with separate volumes the
  *                    numbers "Assistant volume", "Sounds volume", "Timer volume" and "Call volume" (with Drop In) hold
  *                    the others (main.c), each only while that kind has a volume of its own rather than following the
@@ -111,7 +114,22 @@ enum {
     BLE_RAW_ADV = 93, BLE_SCANNER_STATE = 126, BLE_SCANNER_SET_MODE = 127, LIST_EVENT = 107, EVENT = 108,
     LIST_UPDATE = 116, UPDATE_STATE, UPDATE_COMMAND, LIST_BUTTON = 61, BUTTON_COMMAND = 62,
     LIST_LIGHT = 15, LIGHT_STATE = 24, LIGHT_COMMAND = 32,
+    DEVICE_CAPS_REQ = 149, DEVICE_CAPS_RESP, SENDSPIN_TOKEN_REQ = 159, SENDSPIN_TOKEN_RESP,
 };
+/* The API version we speak: 1.15 is the first with DeviceCapabilitiesRequest, which Home Assistant asks on every
+ * connect from then on (aioesphomeapi device_capabilities_compat; below it the capabilities are made up from
+ * DeviceInfoResponse, with no Sendspin in them).  What else changes from 1.10: 1.11 takes the media player's feature
+ * flags from its ListEntities (MP_FEATURES, the set aioesphomeapi assumed before), 1.13 climate's, 1.14 lets object_id
+ * be left out (we always send it).  1.16 would want acks for proxy subscriptions: stay below it. */
+enum { API_MINOR = 15 };
+/* Media player features, given since 1.11: the ones aioesphomeapi's feature_flags_compat assumed for 1.10, unchanged:
+ * play media, browse, stop, volume set, mute, announce.  No pause: MediaPlayerCommand only stops here. */
+enum { MP_FEATURES = 512 | 131072 | 4096 | 4 | 8 | 1048576 };
+/* Sendspin (DeviceCapabilitiesResponse.sendspin, SendspinPairingTokenResponse): Home Assistant tells Music Assistant the
+ * client ids of devices with PAIRING_TOKEN and hands it the token, which MA pairs with by itself (2.10.9's
+ * hass_auto_pair.py, HA 2026.11).  Statuses as ESPHome's api.proto */
+enum { SS_FEAT_PAIRING_TOKEN = 1 };
+enum { SS_TOKEN_NOT_READY = 0, SS_TOKEN_OK, SS_TOKEN_ENCRYPTION_REQUIRED, SS_TOKEN_DISABLED };
 enum { COLOR_MODE_RGB = 35 };           /* on/off, brightness and RGB: the light ring's one mode */
 enum { UPDATE_CMD_INSTALL = 1, UPDATE_CMD_CHECK = 2 };
 /* Proxy features: passive scan, active connections, remote caching (Home Assistant keeps the GATT database and writes the
@@ -123,6 +141,7 @@ enum { BLE_REQ_CONNECT = 0, BLE_REQ_DISCONNECT, BLE_REQ_PAIR, BLE_REQ_UNPAIR, BL
 enum { EV_ERROR = 0, EV_RUN_START, EV_RUN_END, EV_STT_START, EV_STT_END, EV_INTENT_START, EV_INTENT_END, EV_TTS_START,
        EV_TTS_END, EV_WAKE_START, EV_WAKE_END, EV_VAD_START, EV_VAD_END, EV_TTS_STREAM_START = 98, EV_TTS_STREAM_END = 99, EV_INTENT_PROGRESS = 100 };
 enum { FEAT_VOICE = 1, FEAT_SPEAKER = 2, FEAT_API_AUDIO = 4, FEAT_TIMERS = 8, FEAT_ANNOUNCE = 16, FEAT_START_CONVERSATION = 32 };
+enum { VA_FEATURES = FEAT_VOICE | FEAT_API_AUDIO | FEAT_TIMERS | FEAT_ANNOUNCE | FEAT_START_CONVERSATION };     /* no SPEAKER: see top */
 /* KEY_NOISE, KEY_MULT, KEY_UPDATE_CHANNEL and KEY_ARB_HANDOFF: retired entities (noise suppression, mic volume
  * multiplier, online updates channel (the settings page's now), arbitration handoff), kept so the others keep their keys */
 enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SENDSPIN_TOKEN, KEY_SOC_TEMP, KEY_CPU_USAGE, KEY_BT_PAIRING,
@@ -423,16 +442,20 @@ static void send_setting(int key)       /* lock held */
     }
 }
 
-/* The Sendspin pairing token, so that it can be copied from Home Assistant into Music Assistant.  It is a secret of
- * sorts (whoever has it can pair a server with this player), so the entity is diagnostic and disabled by default:
- * Home Assistant only records it once the user enables it. */
-static void send_token_state(void)      /* lock held */
+/* The Sendspin pairing token, so that it can be copied from Home Assistant into Music Assistant (older ones: from
+ * Home Assistant 2026.11 and Music Assistant 2.10.9 on, send_sendspin_token pairs without it).  It is a secret of
+ * sorts (whoever has it can pair a server with this player), so the entity is diagnostic and disabled by default, and
+ * its state goes only to the subscriber that asked, over the keyed connection, as the token request does: disabled
+ * in Home Assistant, the state is still sent, and before a key is set every plaintext client would read it.  A client
+ * on the LAN could set a key itself then, but that takes the Echo from Home Assistant, which notices; reading the
+ * token did not.  Without a key the entity has no state: Home Assistant sets one when it adopts the Echo. */
+static void send_token_state(int c)     /* lock held */
 {
     PB(b, 256); char tok[160];
-    if (!core_sendspin_port) return;
+    if (!core_sendspin_port || c < 0 || !clients[c].keyed) return;
     sendspin_pairing_token(tok, sizeof tok);
     pb_fixed32(&b, 1, KEY_SENDSPIN_TOKEN); pb_str(&b, 2, tok);
-    send_state(TEXT_SENSOR_STATE, &b);
+    send_msg(TEXT_SENSOR_STATE, &b);
 }
 
 /* The settings page as this client reached us (http://<address>:28931): diagnostic, enabled, so the address is on the
@@ -1516,10 +1539,40 @@ static void send_device_info(void)
     pb_str(&b, 12, "Amazon"); pb_str(&b, 13, core_name);
     if (core_web_port) pb_uint(&b, 10, core_web_port); /* webserver_port: HA links the device page to http://<host>:<it> */
     if (bt_proxy()) { pb_uint(&b, 11, 5); pb_uint(&b, 15, BLE_FEATURES); pb_str(&b, 18, ble_mac()); }    /* 11: legacy "active connections" */
-    pb_uint(&b, 17, FEAT_VOICE | FEAT_API_AUDIO | FEAT_TIMERS | FEAT_ANNOUNCE | FEAT_START_CONVERSATION);      /* no SPEAKER: see top */
+    pb_uint(&b, 17, VA_FEATURES);
     pb_uint(&b, 19, 1);                                 /* api_encryption_supported */
     pb_uint(&b, 26, !have_key);                         /* api_encryption_provisionable: Home Assistant sets the key */
     send_msg(DEVICE_INFO_RESP, &b);
+}
+
+/* DeviceCapabilitiesResponse: the proxy's and the voice assistant's flags again, as in send_device_info (Home Assistant
+ * 2026.11 still reads those from there; ESPHome sends both too), and Sendspin's.  The client id is the player id Music
+ * Assistant knows us by; public (every Sendspin hello carries it).  Sendspin off (-z 0): no flags, so Home Assistant
+ * never asks for a token. */
+static void send_device_caps(void)
+{
+    PB(b, 160); PB(s, 80);
+    if (bt_proxy()) { pb_uint(&s, 1, BLE_FEATURES); pb_str(&s, 2, ble_mac()); pb_bytes(&b, 1, s.p, s.n); }
+    s.n = 0; pb_uint(&s, 1, VA_FEATURES); pb_bytes(&b, 2, s.p, s.n);
+    if (core_sendspin_port) {
+        s.n = 0; pb_uint(&s, 1, SS_FEAT_PAIRING_TOKEN); pb_str(&s, 2, sendspin_client_id()); pb_bytes(&b, 6, s.p, s.n);
+    }
+    send_msg(DEVICE_CAPS_RESP, &b);
+}
+
+/* SendspinPairingTokenResponse: the token only over the connection with the device key, as ESPHome hands it out only
+ * once a key is in use: whoever has it can pair a server with this player.  No key yet: ENCRYPTION_REQUIRED, Home
+ * Assistant asks again once it has set one (with a key, connections without it are closed before they get here).
+ * Sendspin off (-z 0): DISABLED first, which gives nothing away.  NOT_READY only guards: sendspin_start sets the
+ * client id before the API serves. */
+static void send_sendspin_token(int c)  /* lock held */
+{
+    PB(b, 192); char tok[160];
+    if (!core_sendspin_port) pb_uint(&b, 1, SS_TOKEN_DISABLED);
+    else if (c < 0 || !clients[c].keyed) pb_uint(&b, 1, SS_TOKEN_ENCRYPTION_REQUIRED);
+    else if (!sendspin_client_id()[0]) pb_uint(&b, 1, SS_TOKEN_NOT_READY);
+    else { sendspin_pairing_token(tok, sizeof tok); pb_uint(&b, 1, SS_TOKEN_OK); pb_str(&b, 2, tok); }
+    send_msg(SENDSPIN_TOKEN_RESP, &b);
 }
 
 static void send_entities(void)
@@ -1531,6 +1584,7 @@ static void send_entities(void)
         pb_str(&fmt, 1, "wav"); pb_uint(&fmt, 2, MEDIA_RATE); pb_uint(&fmt, 3, 1); pb_uint(&fmt, 4, purpose); pb_uint(&fmt, 5, 2);
         pb_varint(&b, 9 << 3 | 2); pb_varint(&b, fmt.n); pb_raw(&b, fmt.p, fmt.n);      /* purpose 0 encodes as absent: fine */
     }
+    pb_uint(&b, 11, MP_FEATURES);
     send_msg(LIST_MEDIA_PLAYER, &b);
     send_setting_entities();
     send_msg(LIST_ENTITIES_DONE, NULL);
@@ -1633,15 +1687,17 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         return 0;
     }
     switch (type) {
-    case HELLO_REQ: { PB(b, 128); pb_uint(&b, 1, 1); pb_uint(&b, 2, 10); pb_str(&b, 3, "hassmic " VERSION); pb_str(&b, 4, node_name()); send_msg(HELLO_RESP, &b); } break;
+    case HELLO_REQ: { PB(b, 128); pb_uint(&b, 1, 1); pb_uint(&b, 2, API_MINOR); pb_str(&b, 3, "hassmic " VERSION); pb_str(&b, 4, node_name()); send_msg(HELLO_RESP, &b); } break;
     case CONNECT_REQ:      send_msg(CONNECT_RESP, NULL); break;                 /* no password */
     case DISCONNECT_REQ:   send_msg(DISCONNECT_RESP, NULL); keep = 0; break;
     case PING_REQ:         send_msg(PING_RESP, NULL); ask_time(c, 0); break;
     case DEVICE_INFO_REQ:  send_device_info(); break;
+    case DEVICE_CAPS_REQ:  send_device_caps(); break;
+    case SENDSPIN_TOKEN_REQ: send_sendspin_token(c); break;
     case LIST_ENTITIES_REQ: send_entities(); break;
     case SUBSCRIBE_STATES:
         for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd == reply_fd) clients[i].states = 1;
-        send_mp_state(); send_all_settings(); send_token_state(); send_web_state();
+        send_mp_state(); send_all_settings(); send_token_state(c); send_web_state();
         ask_time(c, 1); break;
     case GET_TIME_RESP: {
         uint32_t epoch = 0; char tz[128] = "";
