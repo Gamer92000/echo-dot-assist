@@ -3305,6 +3305,21 @@ Run in this order. Each step says what it proves.
       after `core_transcript`, and `stop_word` clears what it ended.  Checked on the PC: `ui_test` (fades, hold, the
       drawer, timers by the second, the pulse by alpha only, a reply too long, broken UTF-8, under ASan/UBSan),
       `tests/fake_screen_words.py`, `build/uishot`.  Open: the moved form not yet on an Echo.
+- [~] Echo Show: clock when idle, and the screen's timeout (2026-11-11).  Asked for: the time across the whole screen
+      where it went dark, the face as before until then.  A first form (the clock in place of the idle face at once)
+      was not that.  Setting `screen_sleep_minutes` ("Screen sleeps after", 5, 0 never): the timeout in place of
+      `TIMEOUT_MS`, mic off and Do not disturb at most stock's minute.  Setting `screen_clock` ("Clock when idle",
+      off): with it on and our own screen in front (the UI's `front 1`, from `scene_top`), `ring_band.c` holds the
+      screen on (`INT_MAX`, AOSP Settings' never) and the UI counts the same timeout itself (`scene_active`: a touch,
+      a pattern coming on, the volume, mute, Do not disturb, music's state, the music view, the drawer, an app in front;
+      the face while it is not waiting), then `face.c` `big_clock`: the digits at 0.56 of the height (0.48 with the
+      music's bar), sized on "88:88", the date under them, mic off and Do not disturb on a line, one hit over all of
+      it (`A_WAKE`: the waking touch does nothing else).  An app in front: dark after the timeout as before (the clock
+      is our screen's).  Told as `ck <on> <min>` beside `wo`.  Cost: `ui_test` counts 0 frames in 20 s on the clock
+      against 117 for the idle face.  Checked on the PC: `ui_test` under ASan/UBSan (the face at half the timeout, the
+      clock after it, no frames between minutes, a touch wakes and sends nothing, a request, mic off, a ringing timer
+      with its Stop, 0 minutes, off again), `fake_screen_words.py` (`ck`, held on only with `front 1`, an app: as
+      before, 0: never), `fake_screen.py`, `fake_web.py`, `build/uishot`.  Open: seen on an Echo.
 - [~] Echo Show 5 2nd gen (`cronos`, 2026-10-26; `docs/re-cronos.md`).  checkers' platform and its pinned build: Fire OS
       6574.1 NS65741/8149 (same `ro.build.version.incremental`, cronos' own image), kernel 4.9.77 (20 config lines from
       checkers', 74 from crown's), `libpryon.so` byte-identical to checkers', stubs identical in symbols and order,

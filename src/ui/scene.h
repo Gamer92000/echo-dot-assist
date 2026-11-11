@@ -59,6 +59,7 @@
  *   img <key> <bytes> <size>       (the platform's: an image asked for, JPEG or PNG, at that size; 0 bytes: none)
  *   ping <n>                       answered "pong <n>" (every 3 s; none within 10 s: the UI is taken for hung, restarted)
  *   wo <words 0|1> <timers 0|1> <hold s>     the settings "Speech on screen", "Timers on screen", "Speech stays for"
+ *   ck <0|1>                       the setting "Big clock": the idle face is the time and date across the screen (face.c)
  *   wh <text>, wr <text>, ws <ms|-1>   what was said, the reply, and how long ago the satellite was idle again (-1: not
  *                                  yet); sent together, in that order, whenever one changes
  *   tl <n> <seq>\t<left ms> <total s> <active 0|1> <name>...   the running timers (the name: its length where it has none)

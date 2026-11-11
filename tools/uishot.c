@@ -293,6 +293,13 @@ int main(int argc, char **argv)
     scene_top(sc, UI_HOME_PKG, now);
     line("name Echo Show 5 fdd111"); line("home -"); line("web http://192.168.1.40:28931"); line("ev 40");
     run(500); png("face");
+    /* the screen saver (ck): the clock once a minute (here) passed with nothing happening; mic off (a minute again:
+     * the change counts); 12-hour; a request brings the face */
+    line("ck 1 1"); run(61000); png("clock");
+    line("mute 1"); run(61000); png("clock_mute"); line("mute 0");
+    line("h12 1"); run(61000); png("clock_12h"); line("h12 0");
+    line("p+ active-start 0"); run(400); png("clock_listening"); line("p- active-start");
+    line("ck 0 5"); run(500);
     /* what was said, the reply, the timers (words.c): over the face and over an app */
     line("wo 1 1 8"); line("wh What's the weather like tomorrow?");
     line("wr Tomorrow will be sunny with highs of 18 degrees and a light breeze from the west."); line("ws -1");
@@ -310,6 +317,7 @@ int main(int argc, char **argv)
     line("timers Pizza"); words_png("timer_ringing", 0);
     line("timers "); line("tl 0"); line("wo 0 0 8"); words_png("words_gone", 0);
     music_data(); run(400); png("face_music");
+    line("ck 1 1"); run(61000); png("clock_music"); line("ck 0 5"); run(300);
     pull(300); png("drawer");
     tap(W / 2, H - 20); run(500);                               /* the shade: closed again */
     line("ma off"); tap(W / 2, (int)(0.87f * H)); run(500);     /* the music, from the face's bottom line */

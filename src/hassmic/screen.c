@@ -107,6 +107,10 @@ static struct app apps[64], apps_new[64]; static int napps, napps_new;
 /* Words and timers over the screen (screen_words, the UI's words.c): the settings (wo), what was said and the reply with
  * whether the satellite is idle again and since when (wh, wr, ws); the timers are the core's, read with its state */
 static int words_on, words_hold = 8, timers_show;               /* (lock) */
+/* The idle screen (screen.h): the screen saver and its timeout, told to the UI with the words' settings (ck, at
+ * wo_gen); the timeout read by ring_band.c too.  5 min: stock's screen_off_timeout_standard, what the Echo did before */
+static int clock_big, sleep_min = 5;                            /* (lock) */
+static atomic_int ui_front;                                     /* the UI's "front": our own screen in front, not an app */
 static char heard[1000], reply[1000]; static int w_idle; static long long w_idle_at;   /* (lock; a line holds 1023) */
 static unsigned words_gen, words_sent, wo_gen, wo_sent;
 static atomic_int timers_now, keep_on;                          /* a change to read now; timers shown: the screen stays on */
@@ -267,7 +271,8 @@ void screen_words(int what, const char *text)
     pthread_mutex_unlock(&lock);
 }
 
-/* the three settings: kept here (settings.c's table reads and sets them), told to the UI as one line */
+/* the screen's settings: kept here (settings.c's table reads and sets them), the words' told to the UI as one line and
+ * the screen saver ("Clock when idle" and "Screen sleeps after", the clock's timeout) as one beside it */
 static int setting(int *v, int set, int lo, int hi)
 {
     pthread_mutex_lock(&lock);
@@ -286,6 +291,8 @@ static int setting(int *v, int set, int lo, int hi)
 int screen_words_on(int set) { return setting(&words_on, set, 0, 1); }
 int screen_words_hold(int set) { return setting(&words_hold, set, 0, 120); }
 int screen_timers_on(int set) { return setting(&timers_show, set, 0, 1); }
+int screen_clock(int set) { return setting(&clock_big, set, 0, 1); }
+int screen_sleep_min(int set) { return setting(&sleep_min, set, 0, 120); }
 
 void screen_timers_changed(void)
 {
@@ -364,6 +371,13 @@ static int fifo_put(const void *p, size_t n)                    /* lock held */
 }
 
 static int ui_up;                                              /* a UI to read the FIFO (lock held): none, nothing queued */
+
+/* the screen saver's: on, and a UI that says our own screen is in front (ring_band.c holds the screen on then) */
+int screen_saver(void)
+{
+    pthread_mutex_lock(&lock); int on = clock_big && sleep_min > 0 && ui_up; pthread_mutex_unlock(&lock);
+    return on && atomic_load(&ui_front) && !atomic_load(&gave_up);
+}
 
 void screen_line(const char *line)
 {
@@ -528,6 +542,8 @@ static void on_line(char *l)
             a->sys = atoi(t2 + 1);
             if (pkg_ok(a->pkg) && a->pkg[0]) napps_new++;
         }
+    } else if (!strncmp(l, "front ", 6)) {                     /* our own screen in front, or an app: the */
+        atomic_store(&ui_front, atoi(l + 6) == 1);              /* screen saver only over our own (ring_band.c) */
     } else if (!strcmp(l, "apps.")) {
         pthread_mutex_lock(&lock); memcpy(apps, apps_new, sizeof apps); napps = napps_new; pthread_mutex_unlock(&lock);
         napps_new = 0;
@@ -686,7 +702,7 @@ static void ui_gone(int *in, pid_t pid)
     *in = -1;
     pthread_mutex_lock(&lock);
     atomic_fetch_add(&ui_gen, 1); atomic_store(&ui_width, 0);    /* its reader's lines no more: a "ready" from a UI */
-    ui_up = 0; fifo.n = 0;                                       /* stopped as it came up would be the next one's; */
+    ui_up = 0; fifo.n = 0; atomic_store(&ui_front, 0);           /* stopped as it came up would be the next one's; */
     cq[1].n = 0;                                                 /* nor its requests (its lists' numbers: the next one's) */
     pthread_mutex_unlock(&lock);
     for (int i = 0; i < 20 && pid > 0 && !kill(pid, 0); i++) usleep(100000);   /* (SIGCHLD ignored: gone is gone) */
@@ -744,7 +760,8 @@ static void *writer(void *arg)
             atomic_store(&hide_req, 0); nhidden = -1;             /* (a new UI shows them) */
             if (!music) meta_sent = meta_gen, prog_sent = prog_gen, ctl_sent = ctl_gen;
             if (!music && !artn) art_sent = art_gen;              /* (a cover before any metadata: told too) */
-            fifo.n = 0; ui_up = 1;                                /* answers to the last UI's requests: not this one's */
+            fifo.n = 0; ui_up = 1; atomic_store(&ui_front, 0);    /* answers to the last UI's requests: not this one's;
+                                                                   in front: once it says so (scene_top) */
             pthread_mutex_unlock(&lock);
             memset(&sent_s, 0xFF, sizeof sent_s); sent_s.timers[0] = sent_s.peer[0] = sent_s.web[0] = 1;
             lv_sent = -1; next_slow = 0;
@@ -792,7 +809,7 @@ static void *writer(void *arg)
             if (artn && (img = malloc(artn))) { memcpy(img, art, artn); imgn = artn; }
             send_img = 1; art_sent = art_gen;
         }
-        if (wo_sent != wo_gen) { put(&o, "wo %d %d %d", words_on, timers_show, words_hold); wo_sent = wo_gen; }
+        if (wo_sent != wo_gen) { put(&o, "wo %d %d %d", words_on, timers_show, words_hold); put(&o, "ck %d %d", clock_big, sleep_min); wo_sent = wo_gen; }
         if (words_sent != words_gen) {                          /* (in this order: the UI takes ws as the end of a change) */
             put(&o, "wh %s", heard); put(&o, "wr %s", reply); put(&o, "ws %lld", w_idle ? now - w_idle_at : -1LL);
             words_sent = words_gen;

@@ -43,7 +43,7 @@ static int pat_on(struct scene *s, int p)
  * face back from the music, and closes the drawer that was pulled over our own screen */
 void face_pattern(struct scene *s, int p, int on, long long ago)
 {
-    if (on) { s->pat[p].at = s->now - ago; s->pat[p].on = 1; if (p == P_LISTEN) s->level = 0; }
+    if (on) { s->pat[p].at = s->now - ago; s->pat[p].on = 1; if (p == P_LISTEN) s->level = 0; if (ago < 1000) scene_active(s); }
     else s->pat[p].on = 0;
     if (on && ago < 1000 && (p == P_LISTEN || p == P_CALL_IN || p == P_TIMER)) {
         if (s->view == V_MUSIC) s->view = V_FACE;
@@ -74,11 +74,23 @@ int face_mode(struct scene *s)
     return M_IDLE;
 }
 
+/* the modes where the face says the Echo waits; the rest have something to say or buttons (Stop, Answer) */
+static int waits(int m) { return m == M_IDLE || m == M_MUTE || m == M_DND; }
+
 /* the face has nothing to tell (no request, call, timer, error, setup): the music page may take its place */
-int face_calm(struct scene *s)
+int face_calm(struct scene *s) { return waits(face_mode(s)); }
+
+/* The screen saver (ck): where the screen went dark once nothing happened for its timeout, the clock.  The timeout as
+ * ring_band.c's was: "Screen sleeps after" (0 never), mic off and Do not disturb at most stock's minute.  Only the
+ * modes where the face waits */
+static long long saver_ms(struct scene *s, int m)
 {
-    int m = face_mode(s);
-    return m == M_IDLE || m == M_MUTE || m == M_DND;
+    long long t = s->saver_min * 60000LL;
+    return (m == M_MUTE || m == M_DND) && t > 60000 ? 60000 : t;
+}
+static int clock_mode(struct scene *s, int m)
+{
+    return s->clock_big && s->saver_min > 0 && waits(m) && s->now - s->active_at >= saver_ms(s, m);
 }
 
 static void soon(long long *due, long long t, long long now) { if (t > now && (!*due || t < *due)) *due = t; }
@@ -88,7 +100,9 @@ long long face_due(struct scene *s)
 {
     long long due = 0;
     for (int i = 0; i < P_COUNT; i++) if (s->pat[i].on && pats[i].ms >= 0) soon(&due, s->pat[i].at + pats[i].ms, s->now);
-    if (s->view == V_FACE) {
+    if (s->view == V_FACE && s->clock_big && s->saver_min > 0 && waits(face_mode(s)) && !clock_mode(s, face_mode(s)))
+        soon(&due, s->active_at + saver_ms(s, face_mode(s)), s->now);   /* the screen saver's turn */
+    if (s->view == V_FACE && !clock_mode(s, face_mode(s))) {    /* (the clock has no eyes: no frames for blinks) */
         int m = face_mode(s);
         if (m != M_MUTE && m != M_DND) soon(&due, s->face.blink_at, s->now);
         if (m == M_IDLE || m == M_SETUP) soon(&due, s->face.sacc_at, s->now);
@@ -249,6 +263,30 @@ static void miniplayer(struct scene *s)
     }
 }
 
+/* the time as large as the screen takes it, the date under it, and at the bottom what plays or why it is quiet */
+static void big_clock(struct scene *s, int m)
+{
+    float w = s->w, h = s->h; char clk[16], day[64];
+    time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm);
+    clock_text(s, clk, sizeof clk);
+    strftime(day, sizeof day, "%A %d %B", &tm);
+    /* 0.56 of the height fits the Shows' 960 x 454; a narrower screen takes it smaller.  Measured on "88:88" so the
+     * digits keep one size all day (a tabular look without a tabular font).  With the music's bar at the bottom
+     * (0.79 of the height down) the clock is a little smaller and higher, or the date touched it */
+    int player = m == M_IDLE && s->music && (s->title[0] || s->mstate);
+    float px = (player ? 0.48f : 0.56f) * h, fit = (float)text_measure(s, "88:88", px, 0);
+    if (fit > 0.92f * w) px *= 0.92f * w / fit;
+    const struct ui_text *mask = text_mask(s, clk, px, 0, w);
+    float th = mask ? (float)mask->h : px, cy = (player ? 0.34f : 0.40f) * h;
+    text(s, ID_FACE + 40, clk, px, 0, w, w / 2, cy - th / 2, 1, FG, 255);
+    text(s, ID_FACE + 41, day, 0.085f * h, 0, 0.9f * w, w / 2, cy + th / 2 + 0.03f * h, 1, DIM, 255);
+    if (m == M_MUTE) text(s, ID_FACE + 10, "Microphone off", U(30), 0, 0.8f * w, w / 2, 0.87f * h - U(15), 1, RED, 255);
+    else if (m == M_DND) text(s, ID_FACE + 10, "Do not disturb", U(30), 0, 0.8f * w, w / 2, 0.87f * h - U(15), 1, gfx_scale(VIOLET, 0.8f), 255);
+    else if (player) miniplayer(s);
+    s->saver_on = 1;
+    hit(s, 0, 0, w, h, A_WAKE, 0);                              /* a touch wakes the face, and does nothing else */
+}
+
 int face_view(struct scene *s, float dt)
 {
     /* Full brightness whatever the room: the backlight dims as stock's does (screen_brightness_auto, main.sh
@@ -256,6 +294,8 @@ int face_view(struct scene *s, float dt)
     int m = face_mode(s), used = 0, moving;
     char clk[16];
     fill(s, ID_FACE, (struct rect){ 0, 0, s->w, s->h }, BG);
+    if (!waits(m)) scene_active(s);                             /* listening, a reply, a timer ringing, a call... */
+    if (clock_mode(s, m)) { big_clock(s, m); return 0; }      /* nothing moves: redrawn at the minute (scene.c) */
     moving = eyes(s, m, dt);
     caption(s, m, &used);
     clock_text(s, clk, sizeof clk);
@@ -269,6 +309,7 @@ int face_view(struct scene *s, float dt)
 int face_act(struct scene *s, int a, int arg, int ev)
 {
     (void)arg;
+    if (a == A_WAKE) { if (ev == EV_TAP || ev == EV_LONG) scene_active(s); return 1; }
     if (ev != EV_TAP) return 0;
     switch (a) {
     case A_POKE: s->face.poke_at = s->now; s->face.pokex = clampf((s->x - s->w / 2.0f) / s->w * 0.2f, -0.08f, 0.08f); break;

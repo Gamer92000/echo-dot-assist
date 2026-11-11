@@ -260,6 +260,32 @@ int main(int argc, char **argv)
     msg("p- call_incoming"); msg("p+ call_connected"); run(300);
     tap((int)(0.75f * W), (int)(0.8f * H)); assert(sent_has("dropin hangup"));
     msg("p- call_connected"); msg("p+ call_connected_end"); run(1600);
+
+    /* the screen saver (ck): the face until the screen's timeout (a minute here), then the clock in place of dark, with
+     * no frames for blinks or glances while it shows; a touch only wakes the face (nothing sent) and the timeout starts
+     * again; a request brings the face at once; mic off counts as something that happened, then its own minute; a
+     * ringing timer has the face and its Stop button; 0 minutes: the face stays; off: the eyes blink again */
+    msg("ck 1 1"); run(500); assert(!S->saver_on);
+    run(30000); assert(!S->saver_on);                           /* half the timeout: still the face */
+    run(31000); assert(S->saver_on); ppm("clock", inc);
+    f0 = frames; run(20000);
+    printf("clock: %d frames in 20 s\n", frames - f0);
+    assert(frames - f0 <= 2);                                   /* a minute's turn at most, not a blink every few s */
+    nsent = 0; tap(W / 2, (int)(0.5f * H)); run(300);
+    assert(!S->saver_on && nsent == 0);                         /* the face back, and the touch did nothing else */
+    run(61000); assert(S->saver_on);
+    msg("p+ active-start"); run(400); assert(!S->saver_on); ppm("clock_listening", inc);
+    msg("p- active-start"); msg("p+ active-end"); run(1000); assert(!S->saver_on);
+    run(61000); assert(S->saver_on);
+    msg("mute 1"); msg("p+ mics-off_on"); run(500); assert(!S->saver_on);
+    run(61000); assert(S->saver_on); ppm("clock_muted", inc);
+    msg("mute 0"); msg("p- mics-off_on"); run(300); assert(!S->saver_on);
+    msg("timers tea, 5 min"); msg("p+ ready-timer"); run(600); assert(!S->saver_on);
+    nsent = 0; tap((int)(0.72f * W), (int)(0.8f * H)); assert(sent_has("timer stop"));
+    msg("timers "); msg("p- ready-timer"); run(300);
+    msg("ck 1 0"); run(70000); assert(!S->saver_on);           /* never sleeps: the face stays */
+    msg("ck 0 5"); run(500);
+    f0 = frames; run(10000); assert(frames - f0 > 2);          /* the eyes blink again */
     msg("oobe 1"); run(2000); msg("oobe 0");
 
     /* Sendspin's music: the face's bottom line, then the music's own page */

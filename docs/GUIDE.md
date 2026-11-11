@@ -449,7 +449,8 @@ Beyond the README's two figures:
   the designer's Ring / Band switch shows a design either way on any Echo.
   Your words, the reply and timers can show on the screen too: [The screen](#the-screen-echo-show), "Words and timers".
   The volume of voice replies shows in cyan, as on the Dots. The screen wakes for the band and sleeps 5 minutes after the last light (1 minute with
-  the microphones off or in Do not disturb).
+  the microphones off or in Do not disturb); the Screen page's **Screen sleeps after** changes the 5 minutes (0 keeps
+  the screen on), and **Clock when idle** shows the time in place of going dark.
 - **Microphone off** plays Alexa's own sounds. A switch that is already off when hassmic starts is shown, not announced.
 - **Wake sound**: Alexa's own where the firmware has it; the Echo Show 8 1st gen has none and plays hassmic's short blip
   (or one of your own: "Your own sounds", below). On the Echo Show 8 (1st and 2nd gen), the Show 5 2nd gen and the Echo Input a sound
@@ -501,6 +502,13 @@ satellite of its own has to run without its microphone (as a display) while hass
   library or search on it and it stays, as if you had opened it yourself (the drawer's **Home** brings the home app back). Choosing the face or Home yourself (the drawer's **Face** or
   **Home**, the face button on the music page), or going back to the app, keeps the music page away until the music has
   stopped; a face chosen that way stays, as it always has, until the drawer's **Home** brings the home app back.
+- **Clock when idle** (Screen page, card **When idle**, off by default): where the screen would go dark, it shows the
+  time across the whole screen instead, with the date under it, a clock for the nightstand. The wait is the screen's
+  own: **Screen sleeps after** (5 minutes), 1 minute with the mic off or in Do not disturb (the clock then says so on a
+  line under it). Until then the face shows as always; a touch on the clock brings it back (that touch does nothing
+  else), and so does anything the Echo does: a request, a ringing timer (with its **Stop**), a Drop In, the volume,
+  music starting. Music playing shows its bar under the clock. With an app in front the screen goes dark as before.
+  Brightness follows the Brightness card: **Adaptive brightness** dims the clock at night.
 - **The drawer**: pull down from the top edge of the screen, whatever shows, as on Amazon's own Echo Show. In it:
   **Home** (the home app), **Face** (where the home app is another), **Music**, **Do not disturb**, **Screen off** (a
   touch wakes it), what plays (tap it for the music) and the Echo's volume. Over an app, start the pull on the thin

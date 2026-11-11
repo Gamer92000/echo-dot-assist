@@ -57,8 +57,10 @@ enum { E_NONE, E_PULSE, E_SPIN, E_BLINK, E_RAINBOW };
 #define FRAME_MS     33                 /* 30 frames a second while something moves */
 #define MAX_W        2048
 #define MAX_ROWS     40
-#define TIMEOUT_MS   300000             /* stock's screen_off_timeout_standard (Arcus default) */
+#define TIMEOUT_MS   300000             /* stock's screen_off_timeout_standard (Arcus default): without a screen UI */
 #define QUIET_MS     60000              /* stock's _dnd and _privacy */
+#define NEVER_MS     INT_MAX            /* "Screen sleeps after" 0: AOSP Settings' own "never" (Integer.MAX_VALUE);
+                                           PowerManagerService adds it to a long, ~25 days of no touch at all */
 #define HOLD_MS      86400000           /* timers on the screen (screen_keep_on): a timer across the room is what the
                                            screen is for then */
 #define WAKE_EVERY   2000               /* the power calls at most this often (a process each) */
@@ -572,8 +574,13 @@ static void *band_thread(void *arg)
         pthread_mutex_unlock(&lock);
         long long now = now_ms();
         if (now >= next_check) {                    /* stock's screen timeouts by what the Echo is doing (first: also
-                                                       while a renderer is awaited) */
-            int t = screen_keep_on() ? HOLD_MS : core_muted() || core_dnd(-1) ? QUIET_MS : TIMEOUT_MS;
+                                                       while a renderer is awaited); "Screen sleeps after" in place of
+                                                       the standard one, mic off and Do not disturb at most stock's
+                                                       minute; never with 0, and while the screen saver is on over
+                                                       our own screen: the UI shows the clock when this would end */
+            int sm = screen_sleep_min(-1);
+            int std = sm < 0 ? TIMEOUT_MS : sm ? sm * 60000 : NEVER_MS;
+            int t = !sm || screen_saver() ? NEVER_MS : screen_keep_on() ? HOLD_MS : core_muted() || core_dnd(-1) ? (std < QUIET_MS ? std : QUIET_MS) : std;
             if (t != timeout) { timeout = t; screen_timeout(t); }
             next_check = now + 1000;
         }
