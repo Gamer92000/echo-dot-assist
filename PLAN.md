@@ -3338,7 +3338,7 @@ Run in this order. Each step says what it proves.
       `kiosk_tick` opens the app whenever hassmic's home shows and keeps its update helper running as the shell user (never root),
       `kiosk_grants` gives it the permissions it would ask a person for (microphone and camera by their settings).  `lockdown.sh`: setting
       `kiosk_internet` (default on) lets that uid out to the internet with one rule, INPUT TCP 2324 (its web page) and 6053
-      (its ESPHome API) from private addresses only.  `install_screen_apps` in the guided setup offers Simple Keyboard (the
+      (its ESPHome API) from private addresses only; `kiosk_dlna` (off) its DLNA renderer (issue #109, below).  `install_screen_apps` in the guided setup offers Simple Keyboard (the
       image has no input method).  Lux readings agree with the app's within ~1 lx in dim light.
 - [x] Kiosk Satellite microphone for a plugin (2026-10-26, athena, Show 8 2nd gen, Android 9; user's doorbell plugin
       `reolink-doorbell` 1.1.1 inside KS 2026.10.40, a Reolink doorbell on the LAN, talk over Baichuan/ONVIF, no Home
@@ -3379,6 +3379,27 @@ Run in this order. Each step says what it proves.
       Put back: same APK by `pm install -r`, uid 10154 (was 10002), data restored (tar, chown, chcon to
       `app_data_file:s0:c512,c768`) with hassmic stopped; dashboard back, logged in, 48 of 49 prefs keys the same
       (`boot_pending_since` cleared by the app), grants, admin, uid rule and helper back within 42 s.  Open: athena.
+- [~] Kiosk Satellite's DLNA renderer through the firewall (issue #109, 2026-11-11).  rmaffeo (athena, KS 2026.10.45):
+      the renderer on TCP 2326, discovery SSDP on UDP 1900; with INPUT rules for both by hand, `/device.xml`, SOAP,
+      multicast discovery and playback worked.  The app's source (jxlarrea/kiosk-satellite, 2026-11): renderer on
+      0.0.0.0 at its "Server port" setting (2325 empty) + up to 3, the port it got written back to
+      `flutter.ks.dlna.port`; the secure-context proxy on 127.0.0.1:2325; SSDP 0.0.0.0:1900 reuseAddress/reusePort; the
+      voice chime on 0.0.0.0:2329 and the intercom on an ephemeral port, so a range of the app's listeners would have
+      opened those (the first version did, 2325-2339).  Done: setting `kiosk_dlna` (settings.c, off, page only, not
+      exported); `lockdown.sh` `kiosk_dlna`: the setting's port, read through `runas u0_a<n>` (a link not followed),
+      while the app's uid listens there beyond loopback (`/proc/net/tcp*`); unreadable: its listeners in 2325-2328;
+      UDP 1900 to 239.255.255.250/32 only while the app's uid alone holds it; both from `LOCAL4`'s private and
+      link-local ranges.  `kiosk_stale` (no fork per rule) takes out any rule of that shape not wanted now (screen models: no
+      stock firewall.sh, `FW_KEEP` DHCP's only), `wrong()` names the ports.  Under athena's mksh (qemu): `local`,
+      `$((0x..))`, the loopback patterns, stale selection.  `tests/unit/kiosk_test.py`: the setting's port and not 2329,
+      an owner's port, links, junk, a shared 1900, moves, setting off, uninstall, through load_once and load_each.  Not
+      measured on a Show: what else listens on 1900, the four /proc reads and a runas every 5 s (only with it on).
+      On a Show 5 (checkers, 2026-11-11; docs/kiosk-satellite.md): 2326 then a set 2340 then 2325 (the renderer
+      once ahead of the proxy) followed, `/device.xml`, SOAP control, an image played, GENA events, all from another
+      subnet; stale rules out on each move and with the renderer off; check 0.33 s (release 0.32), 0.5 s with it up.
+      Multicast discovery not tried there (no controller on that subnet).  Independent review (2026-11-11) fixed: a prefs port the app does not listen on falls back to 2325-2328, at most
+      5 digits read, fork-free `kiosk_stale`, locals; documented: the 5 s window for 1900, no login, the app's choice of
+      port.
 - [~] WPA2/WPA3 mixed Wi-Fi (issue #90, 2026-11-01; reported and tried on an Echo 2 by its reporter; this form on the PC,
       and on a Dot 2 with its writes stubbed).  wifisvc's `libacehal_network_all.so` (biscuit, radar, donut) rewrites entries to `WPA-PSK
       WPA-PSK-SHA256` at each start; on an AP with `[WPA2-PSK+SAE+PSK-SHA256-CCMP]` radar's driver refuses that AKM

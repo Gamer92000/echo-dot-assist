@@ -772,12 +772,17 @@ network. Then:
   Its updates install by themselves.
 - Its own adaptive brightness is switched off: the Echo's brightness settings set the screen
   ([The screen](#the-screen-echo-show)).
-- Three rows appear on the settings page under System, once the app is installed:
+- Four rows appear on the settings page under System, once the app is installed:
   - **Internet access** (on): only that app gets out, for its updates and outside pages. Off: your network only.
   - **Microphone** (off): for a plugin that talks, such as a doorbell. In the plugin pick "Voice communication": "Automatic"
     and the other sources give silence. The wake word keeps working during such a call.
   - **Camera** (off): needed to scan a QR code on the Echo. The Home Assistant token can also be pasted from a PC at
     `http://<echo-ip>:2324`.
+  - **DLNA renderer** (off): phones and media servers on your network find the app's DLNA renderer and play on the
+    Echo. Switch the renderer on in the app too (off there by default). The firewall then admits the port the app
+    names under Settings > DLNA Renderer > Server port, from private addresses only and only while the app listens
+    there, and closes it when the renderer stops. A port you type in the app works too. DLNA has no password: anyone on
+    your network can play on the Echo while this is on.
   Turning microphone or camera off closes the app for a moment.
 
 To remove it, `scripts/kiosk-install.sh --uninstall [echo-ip]`. A plain `adb uninstall` fails, because the Echo made the
