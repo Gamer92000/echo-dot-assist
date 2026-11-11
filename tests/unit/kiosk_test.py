@@ -32,15 +32,17 @@ def moved(text, tmp):
 def lockdown(tmp, conf, config, pkglist):
     """the rules for this state: every line of hassmic_out and of keep"""
     os.makedirs(tmp + "/hassmic/state", exist_ok=True); os.makedirs(tmp + "/system", exist_ok=True)
-    with open(tmp + "/hassmic/state/config", "w") as f: f.write(config)
+    with open(tmp + "/hassmic/state/config", "w") as f: f.write(config or "")
     with open(tmp + "/system/packages.list", "w") as f: f.write(pkglist)
     with open(tmp + "/device.conf", "w") as f: f.write(conf)
     t = open(ROOT + "/scripts/device/lockdown.sh").read()
     t = t[:t.index('OTA_ONLY=; [ "$1" = ota-only ]')]
-    t = moved(t, tmp).replace('CONF="${0%/*}/device.conf"', f'CONF="{tmp}/device.conf"')
-    t += "\nkiosk_state; DNS=; rules iptables; keep iptables\n"
+    t = moved(t, tmp).replace('CONF="$HERE/device.conf"', f'CONF="{tmp}/device.conf"').replace("/proc/net/", tmp + "/net/")
+    t += "\nkiosk_state; DNS=; rules iptables; keep iptables; echo \"by:$KSSDP_BY\"\n"
     with open(tmp + "/l.sh", "w") as f: f.write(t)
-    return subprocess.run(["sh", tmp + "/l.sh"], capture_output=True, text=True).stdout
+    if config is None: os.unlink(tmp + "/hassmic/state/config")
+    r = subprocess.run(["sh", tmp + "/l.sh"], capture_output=True, text=True)
+    return r.stdout + ("STDERR:" + r.stderr if r.stderr else "")
 
 
 UID_RULE = "-A hassmic_out -m owner --uid-owner 10042 -j RETURN"
@@ -56,6 +58,10 @@ with tempfile.TemporaryDirectory() as tmp:
           and "-A INPUT -s 10.0.0.0/8 -i wlan0 -p tcp -m tcp --dport 6053 -j ACCEPT" in o, o)
     check("not from multicast", "224.0.0.0/4 -i wlan0 -p tcp" not in o, o)
     check("off takes the rule out", "--uid-owner 10042" not in lockdown(tmp, CONF, "kiosk_internet=off\n", LIST))
+    check("off on a last line without its newline", "--uid-owner 10042" not in lockdown(tmp, CONF, "mute=off\nkiosk_internet=off", LIST))
+    o = lockdown(tmp, CONF, None, LIST)
+    check("no state/config: nothing said, internet on", "STDERR" not in o and UID_RULE in o, o)
+    check("not a whole line: not off", UID_RULE in lockdown(tmp, CONF, "kiosk_internet=offx\n kiosk_internet=off\n", LIST))
     o = lockdown(tmp, CONF, "", "com.other 10001 0 /x default 3003\n")
     check("not installed: no uid rule and no ports", "--uid-owner 10042" not in o and "2324" not in o and "6053" not in o, o)
     o = lockdown(tmp, CONF, "kiosk_internet=off\n", LIST)
@@ -110,7 +116,7 @@ def firewall(tmp, steps):
         os.chmod(f"{b}/{n}", 0o755)
     t = open(ROOT + "/scripts/device/lockdown.sh").read()
     t = t[:t.index('OTA_ONLY=; [ "$1" = ota-only ]')]
-    t = moved(t, tmp).replace('CONF="${0%/*}/device.conf"', f'CONF="{tmp}/device.conf"')
+    t = moved(t, tmp).replace('CONF="$HERE/device.conf"', f'CONF="{tmp}/device.conf"').replace("/proc/net/", tmp + "/net/")
     with open(tmp + "/f.sh", "w") as f: f.write(t + "\nHAVE6=1; DNS=; ADB=1\n" + steps + "\n")
     return subprocess.run(["sh", tmp + "/f.sh"], capture_output=True, text=True,
                           env={**os.environ, "PATH": b + ":" + os.environ["PATH"], "IPT_DIR": tmp}).stdout
@@ -148,6 +154,166 @@ with tempfile.TemporaryDirectory() as tmp:
         state(False, "kiosk_internet=off\n")
         o = firewall(tmp, "wrong || echo NOTICED")
         check(f"{name}: uninstalled with internet off: its ports alone noticed", "NOTICED" in o and "ports admitted" in o, o)
+
+# ------------------------------------------------------------------ the DLNA renderer (issue #109)
+# /proc/net/{tcp,tcp6,udp,udp6} as the kernel prints them: a header, then sl, local, remote, state, queues, timer,
+# retransmits, uid, ...  A Java server socket is an IPv6 one (":::2326").
+HDR = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+ANY6 = "0" * 32
+
+
+def sock(addr, port, st, uid, n=[0]):
+    n[0] += 1
+    return f"{n[0]:4}: {addr}:{port:04X} {'0' * len(addr)}:0000 {st} 00000000:00000000 00:00000000 00000000 {uid:5}        0 {1000 + n[0]} 1 0000000000000000 100 0 0 10 0\n"
+
+
+def proc(tmp, tcp=(), udp=()):
+    """tcp: (addr, port, uid) listening; udp: (addr, port, uid) bound"""
+    os.makedirs(tmp + "/net", exist_ok=True)
+    for name, socks, st in (("tcp", tcp, "0A"), ("udp", udp, "07")):
+        for v6 in (False, True):
+            with open(f"{tmp}/net/{name}{'6' if v6 else ''}", "w") as f:
+                f.write(HDR + "".join(sock(a, p, st, u) for a, p, u in socks if (len(a) == 32) == v6))
+
+
+def dlna_rules(o):
+    return sorted(r for r in o.splitlines() if "--dport 23" in r and "--dport 2324 " not in r or "--dport 1900" in r)
+
+
+SSDP = "-A INPUT -s 192.168.0.0/16 -d 239.255.255.250/32 -i wlan0 -p udp -m udp --dport 1900 -j ACCEPT"
+with tempfile.TemporaryDirectory() as tmp:
+    proc(tmp, tcp=[(ANY6, 2326, 10042), ("0100007F", 2325, 10042), (ANY6, 2327, 10001), (ANY6, 8080, 10042),
+                   ("00000000", 2324, 10042), ("0000000000000000FFFF00000100007F", 2328, 10042)],
+         udp=[(ANY6, 1900, 10042), ("00000000", 5353, 10001)])
+    o = lockdown(tmp, CONF, "kiosk_dlna=on\n", LIST)
+    d = dlna_rules(o)
+    check("on: the renderer's port from private addresses", "-A INPUT -s 192.168.0.0/16 -i wlan0 -p tcp -m tcp --dport 2326 -j ACCEPT" in d
+          and len([r for r in d if "--dport 2326" in r]) == 4, o)
+    check("on: loopback, another uid, out of range: none of them", not any(f"--dport {p}" in r for r in d for p in (2325, 2327, 2328, 8080)), o)
+    check("on: SSDP to the multicast group only, from private addresses", SSDP in d and len([r for r in d if "1900" in r]) == 4
+          and not any("1900" in r and "-d 239.255.255.250/32" not in r for r in d) and "224.0.0.0/4 -d" not in o, o)
+    check("on: its fixed ports as before", o.count("--dport 2324 ") == 4 and o.count("--dport 6053 ") == 4, o)
+    check("off by default: nothing of the renderer", dlna_rules(lockdown(tmp, CONF, "", LIST)) == [])
+    check("off: nothing of the renderer", dlna_rules(lockdown(tmp, CONF, "kiosk_dlna=off\n", LIST)) == [])
+    o = lockdown(tmp, CONF, "kiosk_dlna=on\n", "com.other 10001 0 /x default 3003\n")
+    check("not installed: nothing, whatever listens", dlna_rules(o) == [] and "2324" not in o, o)
+    proc(tmp, tcp=[(ANY6, 2326, 10042)], udp=[(ANY6, 1900, 10042), ("00000000", 1900, 1000)])
+    o = lockdown(tmp, CONF, "kiosk_dlna=on\n", LIST)
+    check("1900 held by another uid too: not admitted, the port still", "1900" not in o.replace("by: 1000", "") and "--dport 2326" in o and "by: 1000" in o, o)
+    proc(tmp, tcp=[(ANY6, 2326, 10042)], udp=[("00000000", 1900, 1000)])
+    o = lockdown(tmp, CONF, "kiosk_dlna=on\n", LIST)
+    check("1900 only another's: not admitted, nothing said", "--dport 1900" not in o and "by:\n" in o, o)
+    proc(tmp, tcp=[(ANY6, 2326, 10042)], udp=[("0100007F", 1900, 1000), (ANY6, 1900, 10042)])
+    check("another's on loopback does not count", SSDP in lockdown(tmp, CONF, "kiosk_dlna=on\n", LIST))
+    os.unlink(tmp + "/net/udp6"); os.unlink(tmp + "/net/tcp")
+    o = lockdown(tmp, CONF, "kiosk_dlna=on\n", LIST)
+    check("a /proc file missing: the others still read", "--dport 2326" in o and "No such file" not in o, o)
+
+    # the port from the app's preferences, read as its user through runas next to the script
+    tool(tmp, "runas", f'echo "$1 $2" >> {tmp}/runas.log; shift 2; exec "$@"')
+    def prefs(port=None, link=False):
+        d = tmp + "/appdata/" + PKG + "/shared_prefs"; os.makedirs(d, exist_ok=True); f = d + "/FlutterSharedPreferences.xml"
+        if os.path.lexists(f): os.unlink(f)
+        body = "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n<map>\n    <boolean name=\"flutter.ks.dlna.enabled\" value=\"true\" />\n"
+        if port is not None: body += f'    <string name="flutter.ks.dlna.port">{port}</string>\n'
+        body += "</map>\n"
+        if link:
+            open(tmp + "/elsewhere.xml", "w").write(body); os.symlink(tmp + "/elsewhere.xml", f)
+        else: open(f, "w").write(body)
+    proc(tmp, tcp=[(ANY6, 2324, 10042), ("00000000", 2326, 10042), ("00000000", 2329, 10042), ("00000000", 40123, 10042)],
+         udp=[("00000000", 1900, 10042)])
+    prefs(2326)
+    o = lockdown(tmp, CONF, "kiosk_dlna=on\n", LIST)
+    check("prefs: the renderer's port alone, not the voice chime's 2329 nor the intercom's", [r for r in dlna_rules(o) if "tcp" in r]
+          == sorted(f"-A INPUT -s {d} -i wlan0 -p tcp -m tcp --dport 2326 -j ACCEPT" for d in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"))
+          and "--dport 40123" not in o, o)
+    check("prefs: read as the app's own user", open(tmp + "/runas.log").read().split("\n")[0] == "u0_a42 10042", open(tmp + "/runas.log").read())
+    proc(tmp, tcp=[("00000000", 8200, 10042), ("00000000", 2329, 10042)]); prefs(8200)
+    check("prefs: a port of the owner's choice", "--dport 8200 -j ACCEPT" in lockdown(tmp, CONF, "kiosk_dlna=on\n", LIST))
+    proc(tmp, tcp=[("00000000", 2329, 10042)]); prefs(2326)
+    check("prefs: its port, but nothing of the app's listens there: none", dlna_rules(lockdown(tmp, CONF, "kiosk_dlna=on\n", LIST)) == [])
+    proc(tmp, tcp=[("00000000", 2327, 10042), ("00000000", 2329, 10042)]); prefs(2326)
+    o = lockdown(tmp, CONF, "kiosk_dlna=on\n", LIST)
+    check("prefs: a port it does not listen on (moved, not written yet): the default range", "--dport 2327 -j ACCEPT" in o and "--dport 2329" not in o, o)
+    proc(tmp, tcp=[("00000000", 2326, 10042)]); prefs("1" * 4000 + "2326")
+    o = lockdown(tmp, CONF, "kiosk_dlna=on\n", LIST)
+    check("prefs: a port of six digits or more is none", "--dport 2326 -j ACCEPT" in o and "1111" not in o, o)
+    proc(tmp, tcp=[("00000000", 2326, 10001), ("00000000", 2329, 10042)]); prefs(2326)
+    check("prefs: its port held by another uid: none", dlna_rules(lockdown(tmp, CONF, "kiosk_dlna=on\n", LIST)) == [])
+    for what, port in (("junk", "23x6"), ("below 1024", 80), ("too big", 70000)):
+        proc(tmp, tcp=[("00000000", 2326, 10042)]); prefs(port)
+        check(f"prefs: {what} is no port: the default range", "--dport 2326 -j ACCEPT" in lockdown(tmp, CONF, "kiosk_dlna=on\n", LIST))
+    proc(tmp, tcp=[("00000000", 2326, 10042), ("00000000", 2329, 10042)]); prefs(8200, link=True)
+    o = lockdown(tmp, CONF, "kiosk_dlna=on\n", LIST)
+    check("prefs a link: not read, the default range (never 2329)", "--dport 2326 -j ACCEPT" in o and "--dport 8200" not in o and "--dport 2329" not in o, o)
+    open(tmp + "/runas.log", "w").close()
+    proc(tmp, tcp=[(ANY6, 2324, 10042), (ANY6, 6053, 10042)]); prefs(2326)
+    lockdown(tmp, CONF, "kiosk_dlna=on\n", LIST)
+    check("only its fixed ports listen: no runas", open(tmp + "/runas.log").read() == "")
+    os.unlink(tmp + "/runas"); prefs()
+
+    # through load, check and apply: the port moved, the renderer stops, the setting goes off
+    with open(tmp + "/device.conf", "w") as f: f.write(CONF)
+    with open(tmp + "/system/packages.list", "w") as f: f.write(LIST)
+    def cfg(c):
+        with open(tmp + "/hassmic/state/config", "w") as f: f.write(c)
+    def ours(): return dlna_rules("\n".join(json.load(open(tmp + "/iptables.json"))["rules"]))
+    def ours_all(): return json.load(open(tmp + "/iptables.json"))["rules"]
+    for name, load in (("load_once", 'kiosk_state; load_once iptables; load_once ip6tables'), ("load_each", 'kiosk_state; load_each iptables; load_each ip6tables')):
+        for j in ("iptables.json", "ip6tables.json"):
+            if os.path.exists(f"{tmp}/{j}"): os.unlink(f"{tmp}/{j}")
+        cfg("kiosk_dlna=on\n"); proc(tmp, tcp=[(ANY6, 2326, 10042)], udp=[(ANY6, 1900, 10042)])
+        o = firewall(tmp, f"{load}; wrong && echo RIGHT")
+        check(f"{name}: renderer in, and the check agrees", "RIGHT" in o and len(ours()) == 8, o + str(ours()))
+        check(f"{name}: nothing of it in IPv6", "1900" not in open(tmp + "/ip6tables.json").read())
+        proc(tmp, tcp=[(ANY6, 2327, 10042)], udp=[(ANY6, 1900, 10042)])
+        o = firewall(tmp, "wrong || echo NOTICED")
+        check(f"{name}: the port moved: noticed", "NOTICED" in o, o)
+        o = firewall(tmp, f"{load}; wrong && echo RIGHT")
+        check(f"{name}: the new port in, the old one out", "RIGHT" in o and any("--dport 2327" in r for r in ours()) and not any("--dport 2326" in r for r in ours()), o + str(ours()))
+        proc(tmp, udp=[(ANY6, 1900, 10042), ("00000000", 1900, 1000)])
+        o = firewall(tmp, f"wrong || echo NOTICED; apply; wrong && echo RIGHT")
+        check(f"{name}: stopped, 1900 shared: all of it out, said why", "not wanted now: 1900 2327\nNOTICED" in o and "RIGHT" in o and ours() == []
+              and "uid 1000 listens there too" in o, o + str(ours()))
+        tool(tmp, "runas", 'shift 2; exec "$@"'); prefs(8200)
+        proc(tmp, tcp=[("00000000", 8200, 10042)], udp=[(ANY6, 1900, 10042)])
+        o = firewall(tmp, f"{load}; wrong && echo RIGHT")
+        check(f"{name}: a port of the owner's choice in", "RIGHT" in o and any("--dport 8200" in r for r in ours_all()), o)
+        prefs(2326); proc(tmp, tcp=[("00000000", 2326, 10042)], udp=[(ANY6, 1900, 10042)])
+        o = firewall(tmp, f"wrong || echo NOTICED; {load}; wrong && echo RIGHT")
+        check(f"{name}: moved back: the old one out", "NOTICED" in o and "RIGHT" in o and not any("--dport 8200" in r for r in ours_all())
+              and any("--dport 2326" in r for r in ours()), o)
+        os.unlink(tmp + "/runas"); prefs()
+        proc(tmp, tcp=[(ANY6, 2326, 10042)], udp=[(ANY6, 1900, 10042)])
+        firewall(tmp, load)
+        cfg("")
+        o = firewall(tmp, f"wrong || echo NOTICED; {load}; wrong && echo RIGHT")
+        check(f"{name}: setting off: out, its fixed ports kept", "NOTICED" in o and "RIGHT" in o and ours() == []
+              and len([r for r in json.load(open(tmp + "/iptables.json"))["rules"] if "--dport 2324 " in r]) == 4, o)
+        cfg("kiosk_dlna=on\n"); firewall(tmp, load)
+        with open(tmp + "/system/packages.list", "w") as f: f.write("")
+        o = firewall(tmp, f"wrong || echo NOTICED; {load}; wrong && echo RIGHT")
+        check(f"{name}: uninstalled: every port of it out", "NOTICED" in o and "RIGHT" in o and ours() == []
+              and not any("--dport 2324 " in r or "--dport 6053 " in r for r in json.load(open(tmp + "/iptables.json"))["rules"]), o)
+        with open(tmp + "/system/packages.list", "w") as f: f.write(LIST)
+
+# kiosk_stale takes out only rules of the app's shape: never a port below 1024, another source, another shape
+with tempfile.TemporaryDirectory() as tmp:
+    os.makedirs(tmp + "/hassmic/state"); os.makedirs(tmp + "/system")
+    with open(tmp + "/device.conf", "w") as f: f.write(CONF)
+    with open(tmp + "/hassmic/state/config", "w") as f: f.write("")
+    with open(tmp + "/system/packages.list", "w") as f: f.write(LIST)
+    keep_ = ["-A INPUT -s 10.0.0.0/8 -i wlan0 -p tcp -m tcp --dport 80 -j ACCEPT", "-A INPUT -s 224.0.0.0/4 -i wlan0 -p tcp -m tcp --dport 2326 -j ACCEPT",
+             "-A INPUT -s 10.0.0.0/8 -i wlan0 -p tcp -m tcp --dport 123456 -j ACCEPT", "-A INPUT -s 10.0.0.0/8 -i wlan0 -p udp -m udp --dport 2326 -j ACCEPT",
+             "-A INPUT -s 10.0.0.0/8 -i wlan0 -p tcp -m tcp --dport 2326 -m limit --limit 10/s -j ACCEPT", "-A INPUT -i wlan0 -p tcp -m tcp --dport 2326 -j ACCEPT",
+             "-A INPUT -s 10.0.0.0/8 -i wlan0 -p tcp -m tcp --dport 2324 -j ACCEPT"]
+    gone = ["-A INPUT -s 10.0.0.0/8 -i wlan0 -p tcp -m tcp --dport 2326 -j ACCEPT", "-A INPUT -s 169.254.0.0/16 -i wlan0 -p tcp -m tcp --dport 8200 -j ACCEPT",
+            "-A INPUT -s 172.16.0.0/12 -d 239.255.255.250/32 -i wlan0 -p udp -m udp --dport 1900 -j ACCEPT"]
+    listing = "\n".join(["-P INPUT DROP"] + keep_ + gone)
+    o = firewall(tmp, f"kiosk_state; kiosk_stale '{listing}'").split("\n")
+    check("stale: the app's shape alone, its fixed ports kept", sorted(x for x in o if x) == sorted(g[3:] for g in gone), str(o))
+    o = firewall(tmp, f"kiosk_state; x=$(kiosk_stale '{listing}'); kiosk_stale '{listing}' > /dev/null; echo {tmp}/dev*.conf; echo \"[$IFS]\"")
+    check("stale: globbing and IFS as they were after it", f"{tmp}/device.conf" in o and "[ \t\n]" in o, o)
 
 # ------------------------------------------------------------------ main.sh's block
 

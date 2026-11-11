@@ -4,6 +4,14 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-11
 
+- **Kiosk Satellite's DLNA renderer can be reached from your network (issue #109), optional and off by default.**
+  The app can play media sent from phones and media servers, but the Echo's firewall kept them from finding or
+  controlling it. New setting "Kiosk Satellite DLNA renderer" (settings page, System, shown once the app is installed):
+  switch it on here and the renderer on in the app. The firewall then admits, from private addresses only, the port the
+  app's "Server port" names, wherever the renderer moved to or you set it, while the app listens there, and the
+  network's searches for renderers on port 1900 while only the app listens there. Everything closes again when the
+  renderer stops, the setting goes off or the app is removed. Thanks to rmaffeo, who measured what the renderer needs.
+
 - **The Echo Show can show the music page while a track plays, in place of the face or of the home app.** New setting
   "Music on the screen while it plays" (Screen page, `music_on_screen`, off by default): the Playing tab with the big
   cover, the seek bar and the buttons shows as long as music from Music Assistant plays, until it stops (not at a pause,

@@ -32,10 +32,12 @@
 # well if "never" has to be strict.
 LOCAL4="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 224.0.0.0/4 255.255.255.255/32"
 LOCAL6="fe80::/10 fc00::/7 ff02::/16"
+KSRC=; for d in $LOCAL4; do case $d in 224.*|255.*) ;; *) KSRC="$KSRC $d";; esac; done   # unicast: Kiosk Satellite's sources
 NET_GID=3990
 # Service names and the updaters' user: device.conf of this model, next to this script.  Without it the egress lock
 # still goes up (it needs none of that); only stopping services and the stock-online guard have nothing to work with.
-CONF="${0%/*}/device.conf"
+case $0 in */*) HERE=${0%/*};; *) HERE=.;; esac          # run by a bare name: this folder
+CONF="$HERE/device.conf"
 if [ -f "$CONF" ]; then . "$CONF"; else echo "!! $CONF missing: services not stopped, stock-online guard unavailable"; fi
 WLAN=${WLAN:-wlan0}
 NL='
@@ -50,24 +52,121 @@ KIOSK_IN="INPUT -i $WLAN -p udp -m udp --dport 2330 -j ACCEPT"
 # by it (Amazon's daemons have other users and stay local).  Default on: hassmic writes the setting to state/config only
 # once somebody saved it, so "not there" has to mean on (looking for "=on" kept a fresh install's Kiosk Satellite offline).
 # KSUID is empty when the setting is off or it is not installed; KSAPP says it is installed, which is what admits its ports.
+# KSTCP, KSSDP: what of its DLNA renderer is admitted (kiosk_dlna below).
 kiosk_state() {
-    KIOSK=; KSUID=; KSAPP=
+    local l net=on dlna=
+    KIOSK=; KSUID=; KSAPP=; KSTCP=; KSSDP=; KSSDP_BY=
     [ -z "$OTA_ONLY" ] || return 0
-    grep -qx 'arbitration_mode=kiosk' /data/local/hassmic/state/config 2>/dev/null && KIOSK=1
+    # whole lines, as grep -x would (a last one without its newline too); read by the shell: no fork every 5 s.  The
+    # error's redirection first: one for a missing file every 5 s would fill the log
+    while IFS= read -r l || [ -n "$l" ]; do
+        case $l in arbitration_mode=kiosk) KIOSK=1;; kiosk_internet=off) net=off;; kiosk_dlna=on) dlna=1;; esac
+    done 2>/dev/null < /data/local/hassmic/state/config
     [ -n "$KIOSK_PACKAGE" ] || return 0
     u=$(while read -r p i _; do [ "$p" = "$KIOSK_PACKAGE" ] && { echo "$i"; break; }; done < /data/system/packages.list) 2>/dev/null
     case "$u" in *[!0-9]*) u=;; esac
     [ -n "$u" ] || return 0
     KSAPP=1
-    grep -qx 'kiosk_internet=off' /data/local/hassmic/state/config 2>/dev/null || KSUID=$u
+    [ $net = off ] || KSUID=$u
+    [ -z "$dlna" ] || kiosk_dlna $u
+    return 0
 }
-# Its remote administration (its web page and API, TCP 2324) and its ESPHome API (TCP 6053: Home Assistant's ESPHome
-# integration connects to it; hassmic's own is 26053), both outside 16384-32767, from private addresses only, and only
-# with the app installed: what might listen there otherwise is not for the network.
-kiosk_ports() {
-    for d in $LOCAL4; do case $d in 224.*|255.*) continue;; esac
-        for p in 2324 6053; do echo "INPUT -s $d -i $WLAN -p tcp -m tcp --dport $p -j ACCEPT"; done
+# The app's DLNA renderer (issue #109), off in the app by default; no login (DLNA has none: anyone on a private address
+# can play on it and control it); admitted only while the setting "kiosk_dlna" is on
+# (off by default, so "=on" it has to be).  athena, 2026-10 (rmaffeo): device description, SOAP control and event
+# subscriptions on TCP 2326; discovery is SSDP, a controller's M-SEARCH to 239.255.255.250:1900.  From the app's source
+# (jxlarrea/kiosk-satellite, dlna_manager.dart, 2026-11): the renderer binds 0.0.0.0 at its port setting (2325 when
+# empty) or up to 3 above it, whichever is free first (its secure-context proxy holds 2325 on 127.0.0.1, hence 2326),
+# and writes the port it got back into that setting, flutter.ks.dlna.port in FlutterSharedPreferences.xml.  A range of
+# what the app listens on will not do: it also serves its voice chime on 0.0.0.0:2329 (sound_manager.dart) and an
+# intercom on a port of the kernel's.  So the port is the setting's, read as the app's own user (runas: a link or a
+# FIFO put there reaches only what the app could anyway, as main.sh's kiosk_prefs), and admitted only while the app's
+# uid listens on it beyond loopback (/proc/net/tcp*, state 0A): the rule goes when the renderer stops, and nothing else
+# that may listen there later is reached through it.  The preferences unreadable (no runas next to this script, another
+# format): the app's listeners in 2325-2328, the renderer's own range at the default.  INPUT cannot ask whose socket a
+# packet is for (-m owner is OUTPUT's), so 1900 is admitted only while the app holds a socket there and no other uid
+# does: nothing else on the Echo gets the network's searches through this rule.  The renderer's answers, announcements
+# and events leave as any local traffic does.  All of it is looked at every 5 s (wrong): another uid that binds 1900 in
+# between gets the searches until then.  Each look: four /proc reads, one runas while the app listens on anything but
+# 2324 and 6053, and the forks of kiosk_ports and its pipe.
+RUNAS=$HERE/runas
+kiosk_dlna() {
+    local f la st uid p own tcp want
+    own=; tcp=
+    for f in /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6; do
+        while read -r _ la _ st _ _ _ uid _; do
+            case ${la%:*} in ??????7F|0000000000000000FFFF0000??????7F|00000000000000000000000001000000) continue;; esac  # 127/8, ::1
+            case $f in
+            */tcp*) [ "$st" = 0A ] && [ "$uid" = "$1" ] || continue
+                    p=$((0x${la##*:}))
+                    case " 2324 6053 $tcp " in *" $p "*) ;; *) tcp="$tcp $p";; esac;;
+            *)      [ "${la##*:}" = 076C ] || continue                                  # 1900
+                    if [ "$uid" = "$1" ]; then own=1; else case "$KSSDP_BY " in *" $uid "*) ;; *) KSSDP_BY="$KSSDP_BY $uid";; esac; fi;;
+            esac
+        done < $f
+    done 2>/dev/null
+    if [ -n "$tcp" ]; then
+        want=$(kiosk_dlna_port "$1")
+        case " $tcp " in *" $want "*) [ -n "$want" ] && KSTCP=$want;; esac
+        # no setting, or one the app does not listen on (moved, its write not there yet): the default's range
+        if [ -z "$KSTCP" ]; then
+            for p in $tcp; do [ $p -ge 2325 ] && [ $p -le 2328 ] && KSTCP="$KSTCP $p"; done
+            KSTCP=${KSTCP# }
+        fi
+    fi
+    [ -n "$own" ] || KSSDP_BY=
+    [ -n "$own" ] && [ -z "$KSSDP_BY" ] && KSSDP=1
+    return 0
+}
+# The renderer's port from the app's preferences, as its user (u0_a<n> for uid 10000 + n), or nothing
+kiosk_dlna_port() {
+    [ -x "$RUNAS" ] && [ "$1" -ge 10000 ] && [ "$1" -le 19999 ] || return 0
+    "$RUNAS" u0_a$(($1 - 10000)) $1 sh -c 'p=/data/data/$0/shared_prefs/FlutterSharedPreferences.xml
+        [ -f "$p" ] && [ ! -L "$p" ] || exit 0
+        sed -n "s|^ *<string name=\"flutter.ks.dlna.port\">\([0-9]\{1,5\}\)</string> *$|\1|p" "$p"' "$KIOSK_PACKAGE" 2>/dev/null |
+        while read -r p; do [ "$p" -ge 1024 ] && [ "$p" -le 65535 ] && echo $p; break; done 2>/dev/null
+}
+# INPUT rules for the app: TCP to the ports $2..., and with $1 = 1 SSDP's multicast to 1900; from private addresses only.
+kiosk_rules() {
+    local s d p
+    s=$1; shift
+    for d in $KSRC; do
+        for p in "$@"; do echo "INPUT -s $d -i $WLAN -p tcp -m tcp --dport $p -j ACCEPT"; done
+        [ "$s" != 1 ] || echo "INPUT -s $d -d 239.255.255.250/32 -i $WLAN -p udp -m udp --dport 1900 -j ACCEPT"
     done
+}
+# Those wanted now.  Its remote administration (its web page and API, TCP 2324) and its ESPHome API (TCP 6053: Home
+# Assistant's ESPHome integration connects to it; hassmic's own is 26053), both outside 16384-32767, from private
+# addresses only, and only with the app installed: what might listen there otherwise is not for the network.  Its DLNA
+# renderer's as kiosk_dlna found them.
+kiosk_ports() { [ -z "$KSAPP" ] || kiosk_rules "$KSSDP" 2324 6053 $KSTCP; }
+# Those rules of the listing $1 ("iptables -S") that kiosk_rules could have made (from a source of KSRC, TCP to a port of
+# 1024-65535: the renderer's setting may name any; or SSDP's) and that are not wanted now: to take out.  Every 5 s
+# (wrong), so no fork per rule: the shape is read with the shell's own patterns.  On the screen models no rule of
+# anyone else's has that shape (no stock firewall.sh, FW_KEEP is DHCP's).
+kiosk_stale() {
+    local w r s p g=$-
+    [ -n "$KIOSK_PACKAGE" ] || return 0                    # a model without the app never loads any
+    case "$1" in *"-A INPUT -s "*) ;; *) return 0;; esac    # ip6tables: none of them has a source
+    w=$NL$(kiosk_ports)$NL
+    # lines by IFS and no glob, so no pipe and its subshell (40 ms a table on checkers, 2026-11-11)
+    local IFS=$NL; set -f
+    for r in $1; do
+        case "$r" in "-A INPUT -s "*" -i $WLAN -p "*" -j ACCEPT") ;; *) continue;; esac
+        s=${r#"-A INPUT -s "}; s=${s%% *}
+        case " $KSRC " in *" $s "*) ;; *) continue;; esac
+        case "$r" in
+        "-A INPUT -s $s -i $WLAN -p tcp -m tcp --dport "*" -j ACCEPT")
+            p=${r#"-A INPUT -s $s -i $WLAN -p tcp -m tcp --dport "}; p=${p%" -j ACCEPT"}
+            case "$p" in ''|*[!0-9]*|??????*) continue;; esac
+            [ "$p" -ge 1024 ] && [ "$p" -le 65535 ] || continue;;
+        "-A INPUT -s $s -d 239.255.255.250/32 -i $WLAN -p udp -m udp --dport 1900 -j ACCEPT") ;;
+        *) continue;;
+        esac
+        r=${r#-A }
+        case "$w" in *"$NL$r$NL"*) ;; *) echo "$r";; esac
+    done
+    case $g in *f*) ;; *) set +f;; esac
 }
 
 HAVE6=; command -v ip6tables > /dev/null && HAVE6=1
@@ -127,7 +226,7 @@ keep() {
             case $d in 224.*|255.*) continue;; esac
             echo "-A INPUT -s $d -i $WLAN -p icmp -m icmp --icmp-type 8 -j ACCEPT"
         done
-        [ -z "$KSAPP" ] || kiosk_ports | while read -r r; do echo "-A $r"; done
+        kiosk_ports | while read -r r; do echo "-A $r"; done                # with the app installed (kiosk_state)
         if [ -n "$ADB" ]; then echo "-A $ADB_IN"; fi                       # only while adb over Wi-Fi is open (adb_gate)
         # what this model's stock lacks (device.conf FW_KEEP, rules separated by ";"): checkers has no firewall.sh, and
         # nothing else admits the DHCP server's answers once INPUT drops (they come to a broadcast, not as a reply)
@@ -220,7 +319,7 @@ load_once() {
         missing $1 "$all"
         [ -n "$ADB" ] || echo "$all" | while read -r r; do [ "$r" = "-A $ADB_IN" ] && echo "-D $ADB_IN"; done
         [ -n "$KIOSK" ] || echo "$all" | while read -r r; do [ "$r" = "-A $KIOSK_IN" ] && echo "-D $KIOSK_IN"; done
-        [ -n "$KSAPP" ] || kiosk_ports | while read -r r; do case "$NL$all$NL" in *"$NL-A $r$NL"*) echo "-D $r";; esac; done
+        kiosk_stale "$all" | while read -r r; do echo "-D $r"; done
         echo COMMIT
     )
     echo "$in" | $1-restore -w --noflush
@@ -243,12 +342,13 @@ load_each() {
     missing $1 "$($1 -w -S)" | while read -r r; do $1 -w $r || echo "!! rule not loaded ($1): $r"; done
     [ -n "$ADB" ] || while $1 -w -D $ADB_IN 2>/dev/null; do :; done
     [ -n "$KIOSK" ] || while $1 -w -D $KIOSK_IN 2>/dev/null; do :; done
-    [ -n "$KSAPP" ] || kiosk_ports | while read -r r; do while $1 -w -D $r 2>/dev/null; do :; done; done
+    kiosk_stale "$($1 -w -S)" | while read -r r; do while $1 -w -D $r 2>/dev/null; do :; done; done
     $1 -w -P INPUT DROP
 }
 load() { load_once $1 2>/dev/null || load_once $1 || { echo "!! $1-restore failed twice: loading rule by rule"; load_each $1; }; }
 apply() {
     DNS=$(resolvers); kiosk_state
+    [ -z "$KSSDP_BY" ] || echo "Kiosk Satellite's DLNA renderer: UDP 1900 not admitted, uid$KSSDP_BY listens there too"
     load iptables
     if [ -n "$HAVE6" ]; then load ip6tables; else v6off; fi
     # adbd last, and a second later in the background: its restart ends every adb shell, the one running this script
@@ -262,7 +362,7 @@ apply() {
 # What is wrong with the rules, in words, and false; nothing and true when all is as it has to be.  Three listings per
 # table and hardly another process (this runs every 5 s): every rule of the chain and their order, the jump to it
 # first in OUTPUT, INPUT policy DROP, each of stock's rules we need, the adb port not admitted unless it is open, nor
-# Kiosk Satellite's unless in that mode; without ip6tables, IPv6 off on every interface.
+# 2330 unless in Kiosk Satellite mode, nor a port of the app's that is not wanted now; without ip6tables, IPv6 off on every interface.
 wrong() {
     kiosk_state
     for t in iptables ${HAVE6:+ip6tables}; do
@@ -274,7 +374,7 @@ wrong() {
         m=$(missing $t "$all"); [ -z "$m" ] || { echo "$t: missing:" $m; return 1; }
         [ -n "$ADB" ] || case "$NL$all$NL" in *"$NL-A $ADB_IN$NL"*) echo "$t: port 5555 (adb) admitted"; return 1;; esac
         [ -n "$KIOSK" ] || case "$NL$all$NL" in *"$NL-A $KIOSK_IN$NL"*) echo "$t: port 2330 (Kiosk Satellite) admitted"; return 1;; esac
-        [ -n "$KSAPP" ] || case "$all" in *"--dport 2324 -j ACCEPT"*|*"--dport 6053 -j ACCEPT"*) echo "$t: Kiosk Satellite's ports admitted, no app"; return 1;; esac
+        s=$(kiosk_stale "$all"); [ -z "$s" ] || { echo "$t: Kiosk Satellite's ports admitted, not wanted now:" $(echo "$s" | sed 's/.*--dport \([0-9]*\).*/\1/' | sort -u); return 1; }
     done
     [ -n "$HAVE6" ] || for f in /proc/sys/net/ipv6/conf/*/disable_ipv6; do
         v=; { read v < $f; } 2>/dev/null; [ "$v" = 1 ] || { echo "IPv6 is on (${f%/*})"; return 1; }

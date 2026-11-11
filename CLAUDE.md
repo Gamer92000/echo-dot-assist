@@ -673,7 +673,7 @@ Firewall invariant: Amazon's daemons may only reach local addresses; hassmic its
 TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get out. Inbound TCP and UDP are only admitted on
 16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 OTA, 28931 settings page, UDP 28930 arbitration)
 must stay in that range (UDP 28932 Drop In too). Exceptions: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
-`state/config` says `arbitration_mode=kiosk` (`kiosk_state`), and, where device.conf has `KIOSK_PACKAGE` (and the board `kiosk`, for the settings), the app's own TCP 2324 and 6053 from private addresses while it is installed; its uid may also reach the internet unless `kiosk_internet` is off (`KSUID`). Ping (ICMP echo request) is admitted from the private
+`state/config` says `arbitration_mode=kiosk` (`kiosk_state`), and, where device.conf has `KIOSK_PACKAGE` (and the board `kiosk`, for the settings), the app's own TCP 2324 and 6053 from private addresses while it is installed, and with `kiosk_dlna` on its DLNA renderer (`kiosk_dlna` in `lockdown.sh`: the TCP port of the app's own setting `flutter.ks.dlna.port`, read through `runas` as its user, while its uid listens there per `/proc/net/tcp*`; UDP 1900 to 239.255.255.250 only while its uid alone holds 1900; issue #109); its uid may also reach the internet unless `kiosk_internet` is off (`KSUID`). Ping (ICMP echo request) is admitted from the private
 and link-local ranges of `LOCAL4` only. A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`
 prints it.
 
