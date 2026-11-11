@@ -947,7 +947,9 @@ void scene_msg(struct scene *s, const char *line, long long now)
     } else if (eq(cmd, "mp")) {
         long long pos = 0, dur = 0; int st = 0, sp = 1000;
         if (sscanf(a, "%d %lld %lld %d", &st, &pos, &dur, &sp) >= 1) {
-            if (st != s->srv_state) scene_active(s, "music %s", st == 1 ? "playing" : st == 2 ? "paused" : "stopped");   /* the saver waits */
+            /* music starting brings the face back (the saver waits); a stop or pause does not: after a lost link
+             * Sendspin's new session says "stopped" again with nothing having played, and woke the face (2026-11-11) */
+            if (st == 1 && s->srv_state != 1) scene_active(s, "music playing");
             s->srv_state = st; s->srv_pos = pos; s->srv_dur = dur; s->srv_speed = sp; s->srv_at = now; s->music = 1;
             if (s->pend_until && st != s->pend_state) s->mdur = dur;     /* older than the tap: the state stays as tapped */
             else { s->mstate = st; s->mpos = pos; s->mdur = dur; s->mspeed = sp; s->mpos_at = now; }   /* (the tap still

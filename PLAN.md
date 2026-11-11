@@ -3311,7 +3311,7 @@ Run in this order. Each step says what it proves.
       `TIMEOUT_MS`, mic off and Do not disturb at most stock's minute.  Setting `screen_clock` ("Clock when idle",
       off): with it on and our own screen in front (the UI's `front 1`, from `scene_top`), `ring_band.c` holds the
       screen on (`INT_MAX`, AOSP Settings' never) and the UI counts the same timeout itself (`scene_active`: a touch,
-      a pattern coming on, the volume, mute, Do not disturb, music's state, the music view, the drawer, an app in front;
+      a pattern coming on, the volume, mute, Do not disturb, music starting (not its stop: a new Sendspin session says "stopped" again), the music view, the drawer, an app in front;
       the face while it is not waiting), then `face.c` `big_clock`: the digits at 0.56 of the height (0.48 with the
       music's bar), sized on "88:88", the date under them, mic off and Do not disturb on a line, one hit over all of
       it (`A_WAKE`: the waking touch does nothing else).  An app in front: dark after the timeout as before (the clock

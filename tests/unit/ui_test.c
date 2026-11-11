@@ -285,6 +285,10 @@ int main(int argc, char **argv)
     msg("timers tea, 5 min"); msg("p+ ready-timer"); run(600); assert(!S->saver_on);
     nsent = 0; tap((int)(0.72f * W), (int)(0.8f * H)); assert(sent_has("timer stop"));
     msg("timers "); msg("p- ready-timer"); run(300);
+    run(61000); assert(S->saver_on);                            /* music's state told again (a new Sendspin session):  */
+    msg("mp 0 0 0 1000"); msg("mp 2 0 0 1000"); run(300); assert(S->saver_on);   /* stopped, paused: the clock stays */
+    msg("mp 1 0 0 1000"); run(300); assert(!S->saver_on);       /* playing: the face */
+    msg("mp 0 0 0 1000"); run(300);
     msg("ck 1 0"); run(70000); assert(!S->saver_on);           /* never sleeps: the face stays */
     msg("ck 0 5"); run(500);
     f0 = frames; run(10000); assert(frames - f0 > 2);          /* the eyes blink again */
