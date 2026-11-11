@@ -64,6 +64,14 @@ closed even to someone who gets the network key later. The audio goes straight b
 Do not disturb and the microphone switches refuse calls; "Drop In answers: after the action button" makes every call
 wait for a press on the Echo called; "Drop In" off stops calls both ways.
 
+## Music Assistant (Sendspin)
+
+Only a Sendspin server paired with the Echo's token plays on it (unless "Music Assistant without pairing" is on): an
+unpaired connection is encrypted under a key everyone knows. Whoever has the token can pair a server. Home Assistant
+gets it on request over its encrypted API link only, never over plaintext or before it has set its key, and hands it
+to Music Assistant, which pairs by itself. The settings page never shows it; the "Sendspin pairing token" entity in Home
+Assistant is disabled until you enable it.
+
 ## Arbitration between Echos
 
 An Echo takes the network key only from an Echo Home Assistant vouches for, from Home Assistant over its encrypted API

@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Plays Home Assistant's side of the ESPHome native API against build/hassmic-host (tests/esphome_common.py): device
-info, entities and settings, the voice assistant (mic stream, wake words, replies, a second client, barge-in, "stop",
+info, the capabilities (API 1.15: Sendspin's client id for Music Assistant's pairing), entities and settings, the voice assistant (mic stream, wake words, replies, a second client, barge-in, "stop",
 streaming TTS), announcements over HTTP and HTTPS, do not disturb, volume, a media stop before the audio, mute.  The
 rest of the API in fake_ha_esphome_{timers,features,buttons,address}.py."""
 import asyncio, os, signal, subprocess
 from aioesphomeapi import SwitchInfo, NumberInfo, NumberState, SwitchState, TextSensorInfo, TextSensorState, SensorInfo
 from aioesphomeapi import APIClient, MediaPlayerInfo, MediaPlayerEntityState, MediaPlayerCommand, VoiceAssistantEventType as Ev, BinarySensorInfo, BinarySensorState
+from aioesphomeapi import APIVersion
+from aioesphomeapi.model import SendspinFeature, SendspinPairingTokenStatus
+from aiosendspin.noise.pairing_token import decode_psk_token
 from esphome_common import ROOT, LEAD_IN, check, until, sync, peak, speech, settled, run
 
 PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT = 16953, 16954, 16955, 16966, 16967
@@ -23,6 +26,21 @@ async def main(e):
     mp = [e for e in entities if isinstance(e, MediaPlayerInfo)]
     check(len(mp) == 1 and len(mp[0].supported_formats) == 2 and mp[0].supported_formats[1].sample_rate == 48000,
           f"media player entity with formats: {[(f.format, f.sample_rate, int(f.purpose)) for f in mp[0].supported_formats] if mp else None}")
+    # API 1.15: the media player's features are its own from 1.11 on, the ones 1.10 implied; the capabilities from 1.15
+    check(cli.api_version == APIVersion(1, 15), f"API version {cli.api_version}")
+    old = MediaPlayerInfo().feature_flags_compat(APIVersion(1, 10))
+    check(mp[0].feature_flags_compat(cli.api_version) == old, f"media player features as before 1.11: {mp[0].feature_flags_compat(cli.api_version)} = {old}")
+    caps = await cli.device_capabilities_compat(info)
+    tokval = subprocess.run([f"{ROOT}/build/hassmic-host", "-T"], env=env, capture_output=True, text=True).stdout.strip()
+    cid = decode_psk_token(tokval).client_id
+    check(caps.voice_assistant.feature_flags == info.voice_assistant_feature_flags
+          and caps.bluetooth_proxy.feature_flags == info.bluetooth_proxy_feature_flags,
+          f"capabilities: the voice assistant's and the proxy's flags as in device info ({caps.voice_assistant.feature_flags}, {caps.bluetooth_proxy.feature_flags})")
+    check(caps.sendspin.feature_flags == SendspinFeature.PAIRING_TOKEN and caps.sendspin.client_id == cid and len(cid) == 43,
+          f"capabilities: Sendspin with PAIRING_TOKEN and the client id of the token: {caps.sendspin.client_id[:8]}…")
+    st = await asyncio.wait_for(cli.sendspin_pairing_token(), 5)
+    check(st.status == SendspinPairingTokenStatus.ENCRYPTION_REQUIRED and st.token == "",
+          f"Sendspin token over plaintext: {st.status!r}, no token (fake_ha_esphome_timers.py: over the keyed link)")
     states = []
     cli.subscribe_states(states.append)
     by = {e.object_id: e for e in entities}

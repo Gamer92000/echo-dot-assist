@@ -283,9 +283,11 @@ without Home Assistant (`scripts/adb-wifi.sh <echo-ip>`: 30 minutes; adb over Wi
 
 ### 6. Optional: Music Assistant
 
-Music Assistant finds the Echo by itself (Sendspin player, TCP 28928); to play on it, pair it with the Echo's token.
-The token is shown at the end of `scripts/setup.sh`, in the diagnostic entity "Sendspin pairing token" in Home
-Assistant (disabled by default), and in `/data/local/hassmic/boot.log`. Pairing authenticates the connection: unpaired,
+Music Assistant finds the Echo by itself (Sendspin player, TCP 28928). With Home Assistant 2026.11 and Music Assistant
+2.10.9 or later it also pairs with it by itself, through Home Assistant, as soon as the Echo is adopted there: nothing
+to do. With older versions, pair it by hand with the Echo's token, shown at the end of `scripts/setup.sh`, in the
+diagnostic entity "Sendspin pairing token" in Home Assistant (disabled by default), and in
+`/data/local/hassmic/boot.log`. Pairing authenticates the connection: unpaired,
 it is encrypted under a key everyone knows, so any machine on the LAN could play or sit in between. To allow unpaired
 servers anyway, switch on "Music Assistant without pairing" on the Echo's settings page (`http://<echo-ip>:28931/`).
 If Music Assistant does not find the Echo (another subnet or VLAN), add `<echo-ip>:28928` under its Sendspin provider's

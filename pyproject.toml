@@ -7,7 +7,7 @@ version = "0"
 requires-python = ">=3.13"
 dependencies = [
     # Reference implementations the protocol tests run against
-    "aioesphomeapi==46.4.1",
+    "aioesphomeapi==46.25.0",
     "aiohttp==3.14.3",
     "aiosendspin[server]==10.2.1",    # the server side: tests/fake_ma_sendspin.py plays Music Assistant (PyAV, numpy, Pillow)
     "noiseprotocol==0.3.1",

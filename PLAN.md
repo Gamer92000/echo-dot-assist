@@ -724,6 +724,16 @@ Run in this order. Each step says what it proves.
       `tests/fake_ma_sendspin.py`: approved unpaired → no player role; paired with the token → plays (19/19)
       The pairing token is also an ESPHome text sensor ("Sendspin pairing token", diagnostic, disabled by default) so it can be copied
       from Home Assistant.
+      **Paired through Home Assistant (2026-11-11).** HA 2026.11's ESPHome integration tells Music Assistant the Sendspin client
+      ids of devices whose DeviceCapabilitiesResponse has `sendspin.feature_flags & PAIRING_TOKEN` (`sendspin/subscribe_clients`),
+      and fetches the token with SendspinPairingTokenRequest (159/160, `sendspin/get_pairing_token`); MA 2.10.9's
+      `hass_auto_pair.py` pairs any unpaired encrypted client both announced and connected. Until then the list stayed empty for
+      Echos (seen on five Echos, each paired by hand). `proto_esphome.c` now answers DeviceCapabilitiesRequest (149/150: the proxy's
+      and voice assistant's flags as in DeviceInfo, Sendspin with the client id) and the token request (OK only on the keyed link,
+      else ENCRYPTION_REQUIRED, as ESPHome's `api_connection.cpp`; DISABLED with `-z 0`; NOT_READY before Sendspin started). HA
+      asks for capabilities only from API 1.15 on (`device_capabilities_compat`), so the API version went 1.10 -> 1.15: 1.11 makes
+      the media player's feature flags its own (now sent: the set 1.10 implied, 1184268), 1.13 climate's, 1.14 object_id optional
+      (always sent); 1.16 (proxy acks) not taken. aioesphomeapi 46.4.1 -> 46.25.0 (HA 2026.11's) for the tests.
       Not implemented: PIN pairing (CPace: SHA-512 + Elligator2) → refused with `pair/abort method_not_supported`;
       metadata/artwork roles (no display). Installed and in daily use. Missing: listening test against another synced player in the
       same room (trim with MA's static delay)

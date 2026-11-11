@@ -4,6 +4,13 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-11
 
+- **Music Assistant pairs with the Echo by itself.** With Home Assistant 2026.11 and Music Assistant 2.10.9 or later
+  there is no token to copy any more: once the Echo is adopted in Home Assistant, Music Assistant pairs with it within
+  seconds and it is ready to play. The Echo tells Home Assistant its Sendspin id, and hands Home Assistant its pairing
+  token when asked, over the encrypted connection only (as ESPHome devices do). The "Sendspin pairing token" entity
+  stays, for older versions. For this the Echo speaks version 1.15 of the ESPHome API (1.10 before); nothing else
+  changes in Home Assistant.
+
 - **The Echo Show can show the music page while a track plays, in place of the face or of the home app.** New setting
   "Music on the screen while it plays" (Screen page, `music_on_screen`, off by default): the Playing tab with the big
   cover, the seek bar and the buttons shows as long as music from Music Assistant plays, until it stops (not at a pause,

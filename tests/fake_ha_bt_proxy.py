@@ -73,6 +73,9 @@ async def main(e):
     info = await cli.device_info()
     check(info.bluetooth_proxy_feature_flags == FLAGS and info.legacy_bluetooth_proxy_version == 5 and info.bluetooth_mac_address.upper() == ECHO,
           f"device info: the proxy's features ({info.bluetooth_proxy_feature_flags}) and the Bluetooth address ({info.bluetooth_mac_address})")
+    caps = await cli.device_capabilities()
+    check(caps.bluetooth_proxy.feature_flags == FLAGS and caps.bluetooth_proxy.mac_address.upper() == ECHO,
+          f"capabilities (API 1.15): the same features and address ({caps.bluetooth_proxy.feature_flags}, {caps.bluetooth_proxy.mac_address})")
     await proxy_works(cli, "on")
     up = []
     try: await cli.bluetooth_device_connect(TAG, lambda c, m, err: up.append((c, m, err)), timeout=5, feature_flags=FLAGS, address_type=0)
@@ -91,6 +94,8 @@ async def main(e):
     info = await cli.device_info()
     check(info.bluetooth_proxy_feature_flags == 0 and info.legacy_bluetooth_proxy_version == 0 and not info.bluetooth_mac_address,
           f"device info: no proxy, no Bluetooth address ({info.bluetooth_proxy_feature_flags}, {info.bluetooth_mac_address!r})")
+    caps = await cli.device_capabilities()
+    check(caps.bluetooth_proxy.feature_flags == 0 and not caps.bluetooth_proxy.mac_address, "capabilities: no proxy either")
     es, _ = await cli.list_entities_services()
     check(any(x.name == "Bluetooth pairing" for x in es), "Bluetooth audio from phones stays: its \"Bluetooth pairing\" switch is listed")
     check(await until(lambda: ctl.adv["on"], 8), "the setup from a phone stays: Improv advertises (not set up, offline)")
