@@ -68,7 +68,7 @@ if [ "$1" != --uninstall ]; then
 fi
 # What goes into /system/hassmic, whichever way it gets there.  The tools and the Wi-Fi motion module are optional (no
 # kernel toolchain, no .ko): `|| true`, since an assignment takes the substitution's status and set -e would end here.
-FILES="$OUT/hassmic $OUT/runas $(ls $OUT/mixcap $OUT/mixplay $OUT/pryon_test $OUT/*.ko 2>/dev/null || true) $OUT/otatool secrets/update.pub $RELEASE_PUB $DDIR/device.conf
+FILES="$OUT/hassmic $OUT/runas $(ls $OUT/mixcap $OUT/mixplay $OUT/pryon_test $OUT/pryon_extract $OUT/pryon_train $OUT/*.ko 2>/dev/null || true) $OUT/otatool secrets/update.pub $RELEASE_PUB $DDIR/device.conf
        scripts/system/boot.sh scripts/system/main.sh scripts/system/sysinstall.sh scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh scripts/device/artifact-install.sh scripts/device/wifi.sh"
 # Android models (the screen shows the light band, Wi-Fi is WifiService's): their dex programs, and the home screen
 [ -n "$ANDROID" ] && FILES="$FILES scripts/device/wifictl.dex ${SCREEN_BAND:+scripts/device/ringbar.dex} ${HOME_APK:+scripts/device/$HOME_APK}"

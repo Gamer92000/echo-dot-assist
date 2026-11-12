@@ -664,6 +664,14 @@ ota_watch() {
             else say "== artifacts not installed: $(echo $out)"
             fi
         fi
+        # a wake word trained here that the page removed (artifact-install.sh delete): only ones with the trainer's mark
+        if [ -f /data/local/hassmic/state/artifacts/delete ]; then
+            if out=$(DAEMON_USER=$DAEMON_USER READ_AS="$D/runas $DAEMON_USER $DAEMON_GROUPS" sh $D/artifact-install.sh delete /data/local/hassmic/state /data/local/hassmic 2>&1); then
+                say "== wake word removed, restarting hassmic: $(echo $out)"
+                svc_restart hassmic
+            else say "== wake word not removed: $(echo $out)"
+            fi
+        fi
         # Designs for the light ring applied on the settings page (src/hassmic/ringdesign.c): the set made and installed
         # again.  ledcontroller then starts with nothing on: hassmic sets what showed again once it reads the answer,
         # given after ledcontroller loaded the set (~1.3 s on a Dot 2)

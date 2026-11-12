@@ -27,4 +27,6 @@ int  art_room(long long need, char *err, size_t errsz);
 int art_commit(const char *id, char *err, size_t errsz);
 /* hand what is staged to root: it installs, then restarts hassmic */
 int art_install(char *err, size_t errsz);
+/* Retract one wake request/stage only while root is idle; installed models and selection are preserved. */
+int art_discard_install(const char *id, char *err, size_t errsz);
 #endif

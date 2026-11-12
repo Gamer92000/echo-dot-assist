@@ -183,6 +183,41 @@ settings page, or "Copy models" from another Echo. `scripts/artifacts.sh` from t
 shows with its language and region ("Computer (de-DE)", "Computer (en-US)"). Only the word picked wakes the Echo:
 Amazon's English (US) "Computer", "Amazon" and "Ziggy" are one model that also knows the others and "Hey Disney".
 
+### A wake word of your own
+
+*Experimental, Amazon's engine only (the Echo Dot 3 so far).*  "Wake word" on the settings page has a card, "Train your
+own wake word": type a word or phrase (letters and digits, 3 to 32; "Hey Computer" is fine), press **Train**, and the
+Echo asks for it eight times, then for eight other things (parts of your phrase and everyday sentences), a countdown
+before each, three seconds apiece.  The Echo records them with its own microphones, the audio its wake word hears, so
+the word is learnt the way it will be heard: at your distance, in your room, through the front end.  Say the word a
+little differently each time (closer, farther, louder, softer); a recording that is silent or too loud is asked for
+again.  While the prompts run the Echo does not listen for its wake word, so what you say cannot wake it.
+
+Then it works for about ten minutes, shown as a bar with the minutes left: the stock engine reads each recording (about
+ten seconds each), a new wake word head is trained for your word (about four minutes), and the Echo checks it on the two
+recordings of each kind it kept back and never trained on.  **Only if every held-back recording of your word is heard and
+none of the others is, the word is installed**, next to the others, with the old ones untouched; if not, nothing changes
+and the page says how it did.  "Use it as the wake word when it is ready" (off by default) makes it the pick as soon as it is
+installed; the Echo restarts its wake word engine for a moment, as for any model set.  Training runs at the lowest
+priority, so the wake word you have keeps working while it does.  Cancel stops it at any point.
+
+Your word then shows in Home Assistant's wake word select like Amazon's other words, and in "Models" for copying to
+your other Echos.  Everything stays on the Echo: the recordings and what is made from them are deleted when it is done,
+whatever came of it.  It is Amazon's own model with a new head for your word (and "Alexa, stop" left out), so it
+needs the stock "Alexa" set on the Echo to start from, and uses the same engine, threshold and arbitration as any
+wake word of Amazon's.
+
+What to expect.  Six recordings of each kind and a check on two are a small sample, the speech of one person: your word
+will work for your voice in your room, and **will likely be less reliable than Amazon's own words** (more missed
+words, more false wakes, above all from another speaker or over music).  If it misses, train it again with more varied
+recordings (the same name replaces a word you trained before; an Amazon word's name is refused).  Not available for
+it: "<wake word>, stop" and the extra sensitivity while the Echo plays.  The Wake word page's **"Your wake words"** card lists every word on the Echo: **Use** picks the one it listens for (what
+Home Assistant's select does; with no Home Assistant it is the only way), and **Remove** deletes a word trained here (it
+has a "Trained here" mark). Amazon's words and the one in use cannot be removed; root checks that again itself. To put a
+word on your other Echos without training each, use Models, "Copy models" (or "Models on file").
+A generated set still contains Amazon model data from this Echo, with one classifier layer replaced. Do not include generated
+sets in published source or pull requests; this project has not established permission to redistribute those assets.
+
 ### microWakeWord
 
 [microWakeWord](https://github.com/kahrendt/microWakeWord) is the engine of ESPHome's own satellites (Home Assistant

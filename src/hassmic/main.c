@@ -51,6 +51,7 @@
 #include "ledq.h"
 #include "screen.h"
 #include "davs.h"
+#include "enroll.h"
 #include "dropin.h"
 #include "duck.h"
 #include "ringstop.h"
@@ -3334,7 +3335,8 @@ static void *capture_thread(void *arg)
         if (dump) fwrite(pcm, 1, n, dump);
 
         if (core_local_wake && atomic_exchange(&wake_switch, 0)) wake_load();     /* another wake word, engine or model */
-        if (core_local_wake) { ring_put(pcm, n / 2); wake_feed(pcm, n / 2); }
+        enroll_feed(pcm, n / 2);                                   /* "Train your own": the recordings, as the wake word hears them */
+        if (core_local_wake) { ring_put(pcm, n / 2); if (!enroll_recording()) wake_feed(pcm, n / 2); }   /* (the word being trained must not wake the Echo) */
         if (atomic_load(&sound_want) != sound_running) {           /* Home Assistant switched sound detection */
             if (!sound_running) {
                 const char *types[SOUND_MAP]; for (int i = 0; i < SOUND_MAP; i++) types[i] = sound_map[i].amazon;
@@ -3490,6 +3492,7 @@ int main(int argc, char **argv)
     if (atomic_load(&oobe)) { led("-s", "setup-mode"); fprintf(stderr, "setup: not set up yet (no Home Assistant), the ring shows the setup spinner until it is\n"); }
     else led("-u", "setup-mode");
 
+    enroll_init();                         /* reconcile root install confirmation before loading the selected word */
     if (cap_open() < 0) { fprintf(stderr, "cannot open capture (is PuffinApp still running?)\n"); return 1; }
     pthread_mutex_lock(&core_lock); listening(0); pthread_mutex_unlock(&core_lock);
     if (core_local_wake) {

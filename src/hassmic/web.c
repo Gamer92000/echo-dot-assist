@@ -51,6 +51,7 @@
 #include "board.h"
 #include "davs.h"
 #include "diag.h"
+#include "enroll.h"
 #include "sound.h"
 #include "hash.h"
 #include "mww.h"
@@ -854,6 +855,95 @@ static void mww_api(int fd, struct req *r)
     respond_sjson(fd, r, 400, o);
 }
 
+/* /api/wakewords                        GET   {"engine","words":[{"id","name","lang","active","second","ours"}]}: this Echo's wake words
+ * /api/wakeword/use/<id>                POST  the wake word in use (Amazon's engine; Home Assistant's select does the same)
+ * /api/wakeword/delete/<id>             POST  a wake word trained on this Echo (enroll.c) goes: root removes it, hassmic restarts.
+ *                                             Never Amazon's, never the one in use.
+ * All signed. */
+static void wakewords_api(int fd, struct req *r)
+{
+    char err[300] = "", ej[620], o[700], id[80] = ""; int rc = -1, write = !strcmp(r->method, "POST");
+    if (!signed_ok(r, write)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    if (!write && !strcmp(r->path, "/api/wakewords")) {
+        size_t cap = 6144, n = 0; char *t = malloc(cap);
+        if (!t) { respond_sjson(fd, r, 503, "{\"error\":\"no memory\"}"); return; }
+        pthread_mutex_lock(&core_lock);
+        int eng = core_wake_engine(-1), act[CORE_WAKE_ACTIVE_MAX], na = core_wake_active(act);
+        const struct core_wake_word *w; int k = core_wake_words(&w);
+        n += (size_t)snprintf(t, cap, "{\"engine\":\"%s\",\"words\":[", eng == WAKE_AMAZON ? "amazon" : eng == WAKE_MWW ? "microwakeword" : "homeassistant");
+        for (int i = 0; eng == WAKE_AMAZON && i < k && n + 300 < cap; i++) {
+            char a[160], b[100], c[40]; jesc(a, sizeof a, w[i].id); jesc(b, sizeof b, w[i].name); jesc(c, sizeof c, w[i].lang);
+            n += (size_t)snprintf(t + n, cap - n, "%s{\"id\":\"%s\",\"name\":\"%s\",\"lang\":\"%s\",\"active\":%s,\"second\":%s,\"ours\":%s}", i ? "," : "", a, b, c,
+                                  na > 0 && act[0] == i ? "true" : "false", na > 1 && act[1] == i ? "true" : "false", enroll_ours(w[i].id) ? "true" : "false");
+        }
+        pthread_mutex_unlock(&core_lock);
+        n += (size_t)snprintf(t + n, cap - n, "]}");
+        respond_s(fd, r, 200, "application/json", NULL, t, n); free(t); return;
+    }
+    if (write && sscanf(r->path, "/api/wakeword/use/%79s", id) == 1) {
+        pthread_mutex_lock(&core_lock);
+        const struct core_wake_word *w; int k = core_wake_words(&w), i;
+        for (i = 0; i < k && strcmp(w[i].id, id); i++) ;
+        if (core_wake_engine(-1) != WAKE_AMAZON) snprintf(err, sizeof err, "this is for Amazon's engine");
+        else if (i == k) snprintf(err, sizeof err, "no such wake word");
+        else { core_wake_word(i); core_entities_changed(); rc = 0; }
+        pthread_mutex_unlock(&core_lock);
+    }
+    else if (write && sscanf(r->path, "/api/wakeword/delete/%79s", id) == 1) {
+        pthread_mutex_lock(&core_lock);
+        const struct core_wake_word *w; int k = core_wake_words(&w), act[CORE_WAKE_ACTIVE_MAX], na = core_wake_active(act), busy = 0;
+        for (int i = 0; i < na; i++) if (act[i] < k && !strcmp(w[act[i]].id, id)) busy = 1;
+        pthread_mutex_unlock(&core_lock);
+        if (busy) snprintf(err, sizeof err, "that is the wake word in use: pick another one first");
+        else rc = enroll_delete(id, err, sizeof err);
+    }
+    else snprintf(err, sizeof err, "not found");
+    if (!rc) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
+    jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
+    respond_sjson(fd, r, 400, o);
+}
+
+/* /api/enroll                  GET   the session: {"available","engine_ok","state","prompt":{..},"progress","eta",..} (enroll.c)
+ * /api/enroll/start            POST  "phrase=Hey Computer", "seconds=3", "use=1" lines: records, trains, installs
+ * /api/enroll/cancel           POST  stops it; nothing is installed
+ * /api/enroll/dismiss          POST  clears a finished session's result from the page
+ * All signed.  Only with Amazon's engine: the word becomes a model set of Amazon's format. */
+static void enroll_api(int fd, struct req *r)
+{
+    char err[300] = "", ej[620], o[700], phrase[100] = "", *save = NULL, *line, *body;
+    int rc = -1, write = !strcmp(r->method, "POST"), secs = 3, use = 1;
+    if (!signed_ok(r, write)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    if (!write && !strcmp(r->path, "/api/enroll")) {
+        size_t cap = 8192, n = 0; char *t = malloc(cap);
+        if (!t) { respond_sjson(fd, r, 503, "{\"error\":\"no memory\"}"); return; }
+        int ok = enroll_available(board.wake_manifest);
+        pthread_mutex_lock(&core_lock); int engine = core_wake_engine(-1); pthread_mutex_unlock(&core_lock);
+        n += (size_t)snprintf(t, cap, "{\"available\":%s,\"engine_ok\":%s,\"session\":", ok ? "true" : "false", engine == WAKE_AMAZON ? "true" : "false");
+        n += enroll_json(t + n, cap - n - 2);
+        n += (size_t)snprintf(t + n, cap - n, "}");
+        respond_s(fd, r, 200, "application/json", NULL, t, n); free(t); return;
+    }
+    if (write && !strcmp(r->path, "/api/enroll/start")) {
+        body = strndup(r->body, r->blen);
+        if (!body) { respond_sjson(fd, r, 503, "{\"error\":\"no memory\"}"); return; }
+        for (line = strtok_r(body, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+            if (!strncmp(line, "phrase=", 7)) snprintf(phrase, sizeof phrase, "%s", line + 7);
+            else if (!strncmp(line, "seconds=", 8)) secs = atoi(line + 8);
+            else if (!strncmp(line, "use=", 4)) use = atoi(line + 4) != 0;
+        }
+        free(body);
+        pthread_mutex_lock(&core_lock); int engine = core_wake_engine(-1); pthread_mutex_unlock(&core_lock);
+        if (engine != WAKE_AMAZON) snprintf(err, sizeof err, "switch the wake word engine to Amazon's first");
+        else rc = enroll_start(phrase, secs, use, board.wake_manifest, err, sizeof err);
+    }
+    else if (write && !strcmp(r->path, "/api/enroll/cancel")) { enroll_cancel(); rc = 0; }
+    else if (write && !strcmp(r->path, "/api/enroll/dismiss")) { rc = enroll_dismiss(err, sizeof err); }
+    else snprintf(err, sizeof err, "not found");
+    if (!rc) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
+    jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
+    respond_sjson(fd, r, 400, o);
+}
+
 /* /api/ring              GET   the slots, what each has (drafted and on the ring), the library's names (ringdesign.c)
  * /api/ring/designs      GET   every design as text, "design <id>" before each
  * /api/ring/stock/<slot> GET   stock's animation for a slot, as its file has it (the designer starts from it; volume:
@@ -1252,6 +1342,8 @@ static void handle(int fd)
     else if (!strncmp(r.path, "/api/artifact", 13)) artifact_api(fd, &r);
     else if (!strncmp(r.path, "/api/davs", 9)) davs_api(fd, &r);
     else if (!strncmp(r.path, "/api/mww", 8)) mww_api(fd, &r);
+    else if (!strncmp(r.path, "/api/wakeword", 13)) wakewords_api(fd, &r);
+    else if (!strncmp(r.path, "/api/enroll", 11)) enroll_api(fd, &r);
     else if (!strncmp(r.path, "/api/ring", 9)) ring_api(fd, &r);
     else if (!strncmp(r.path, "/api/wifi", 9)) wifi_api(fd, &r);
     else if (!strcmp(r.path, "/api/mass")) mass_api(fd, &r);

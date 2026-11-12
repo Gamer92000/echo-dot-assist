@@ -3694,3 +3694,29 @@ Run in this order. Each step says what it proves.
       (`music_show`) is never left by itself.  `ui_test.c`: every one of these, the app as home in both modes.
       Open: on a real Show (cronos 192.168.4.246): whether Sendspin's state 0 between tracks is shorter than 5 s there, the
       page after a wake word on a long track, the screen waking for the first track, Kiosk Satellite given back.
+- [ ] A wake word of your own, trained on the Echo (2026-11-12, `enroll.c`, `enroll_pkg.c`, `src/tools/pryon_extract.c`,
+      `pryon_train.c`, `pryon_qat.c`; the settings page's Wake word card "Train your own wake word"): the Echo records
+      the word 8 times and 8 other things through its own capture thread (the wake word is not fed meanwhile), reads each
+      recording with the stock engine, trains a new head, installs the set if every held-back recording is right, else
+      nothing.  Amazon's model with the classifier row of class 1 replaced and the keyword and operating rules renamed;
+      "STOP" and its rules removed (the network keeps its three outputs).  Measured on the Echo Dot 3 with hassmic
+      running: reading a recording ~10 s (the engine takes audio at its own pace), training 255-271 s at nice 19 (load ~7),
+      free RAM down from ~97 MB to ~33 MB, `pryon_train` 42 MB resident on a PC.  The extractor's activations on the Echo
+      equal qemu's exactly (max difference 0 over 19 recordings).  Training is bit-reproducible: glibc's exp/log/log1p
+      differ from bionic's in the last bit (7.5 % of exp results, 1 ulp) and the BFGS and Adam steps and the int8 rounding
+      amplified it into different models; `pryon_qat.c` carries the Echo's own (FreeBSD msun: the disassembly of the
+      firmware's `exp` is that code), bit-identical on 240,006 inputs measured on the Echo and from the firmware's
+      `libm.so` under qemu, pinned by `tests/unit/pryon_qat_test.c`; the trainer then gives the same model on a PC, under
+      qemu and on the Echo (sha256 0dc0df23...).  The decision rule the check and the pick follow (a moving average over
+      the three adjacent ages of the 25 lanes, the 8 youngest dropped, 0.923) is the engine's own, in `docs/re-pryon-training.md`.  Tests: `tests/unit/enroll_pkg_test.c` (names, the STOP cut, the set; the set made from the real stock files
+      loads in the real engine under qemu), `tests/fake_web_enroll.py` (stand-in tools: refusals, a whole session, the
+      verdict gate, cancel).  **Tried on an Echo Dot 3 through the page (2026-11-12):** the daemon started both tools (as the daemon's user, domain `su`, at
+      nice 19; the extractor 23 MB, the trainer 36 MB), a word of a few syllables passed its held-back check (2 of 2 heard,
+      2 of 2 rejected) and was installed by root; the wake word that was in use kept hearing during the extraction and training
+      (the log shows its detections) and none during the prompts; `MemAvailable` stayed near 300 MB (`free`'s "free" column
+      fell to 4 MB: page cache); said three times afterwards it was heard three times, and a different wake word said between
+      them did not wake it.  A removal asked for on the page deletes only sets with the mark file (`artifact-install.sh delete`).
+      **Open:** more than one speaker and one word (a proper false-wake and miss count); the page's looks on other screens;
+      other models than the Echo Dot 3 and other languages than en-US (the base is the stock "Alexa" set); the interplay
+      with "Wake word 2" and with arbitration (names must match across Echos); copying a trained word to another Echo through
+      "Copy models" (the sets are ordinary `wake:<id>` artifacts, but it was not run between two Echos).

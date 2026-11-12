@@ -11,6 +11,15 @@ What changed for people using the Echo, newest first. Details and measurements a
   property. That domain comes with `scripts/install-system.sh` run once more; an update alone keeps the old way.
   Opening adb over Wi-Fi through the ESPHome connection is refused too: only the settings page opens it, with the
   action button. Thanks to kevinsaucier for the report.
+- **Train a wake word of your own on the Echo (experimental).** The settings page's Wake word page has a new card,
+  "Train your own wake word": type a word, and the Echo asks for it eight times and for eight other things, records
+  them itself, trains a wake word for it (about ten minutes in all, a bar shows how far it is) and installs it next to
+  Amazon's, if it passes a check on recordings it kept back; if not, nothing changes. It is Amazon's own wake word
+  model with a new head, run by the same engine, so it appears in Home Assistant's wake word select like any other
+  word, and everything stays on the Echo. Expect it to be less reliable than Amazon's own words: see "A wake word of
+  your own" in the guide. Amazon's engine only, the Echo Dot 3 so far. The Wake word page also has "Your wake words":
+  the words on the Echo, a **Use** button for each (the pick, without Home Assistant too) and **Remove** for the ones
+  trained here, never Amazon's. A trained word can be copied to your other Echos with Models, "Copy models".
 
 ## 2026-11-11
 

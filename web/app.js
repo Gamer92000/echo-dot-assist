@@ -653,7 +653,9 @@ async function load() {
   }
   $('app').classList.remove('hidden');            // before render(): a hidden page has no widths to place cards by, nothing to scroll to
   render();
-  if (mwwBox) getMww().catch(() => {});                                  // the engine and its models, as Home Assistant may have picked
+  if (mwwBox) getMww().catch(() => {});
+  if (enrollBox) getEnroll().catch(() => {});
+  if (wordsBox) getWords().catch(() => {});                                  // the engine and its models, as Home Assistant may have picked
   if (load.started && unseen()) refreshDevices().catch(() => {});        // a new Echo in the beacons: show it now, not next round
   else if (load.started && !devRun && othersShown()) refreshMine().catch(() => {});   // a setting changed here or from HA: copy offers the new value
   if (!load.started) {
@@ -1527,7 +1529,7 @@ function render() {
   if (fresh) { built = sig; build(); }
   for (const s of state.settings) { const c = controls.get(s.name); if (c) c.update(s); }
   for (const q of quick) { const s = state.settings.find((x) => x.name === q.name); if (s) q.update(s); }
-  renderTop(); renderAttention(); renderNetwork(); renderDevices(); renderSystem(); renderWake(); renderSounds(); if (massCtl) massCtl.paint(); if (homeCtl) homeCtl.paint();
+  renderTop(); renderAttention(); renderNetwork(); renderDevices(); renderSystem(); renderWake(); renderWords(); renderEnroll(); renderSounds(); if (massCtl) massCtl.paint(); if (homeCtl) homeCtl.paint();
   if (fresh) route();                   // after the controls: cards are placed by their height, with what is hidden hidden
 }
 
@@ -1647,7 +1649,9 @@ function buildWake(el) {
   mwwWarn = h('div');
   mwwBox = h('div', { class: 'card' });
   mwwBox.id = 'mww';
-  el.append(mwwWarn, mwwBox);
+  wordsBox = h('div', { class: 'card hidden', id: 'wake-words' });
+  enrollBox = h('div', { class: 'card hidden', id: 'enroll' });
+  el.append(mwwWarn, mwwBox, wordsBox, enrollBox);
 }
 
 // Fetched, copied, kept on file: every model in one place
@@ -1910,6 +1914,107 @@ function renderWake() {
     h('div', { class: 'card-body mww-add' }, h('p', { class: 'help' }, 'Add from ESPHome\'s collection on GitHub (your browser downloads them for the Echo):'), official),
     h('div', { class: 'card-foot' }, mwwBusy ? h('div', { class: 'busy grow' }, h('span', { class: 'spin' }), mwwBusy) : h('span', { class: 'help grow' }, `${ms.length} of 16 models`),
       h('button', { disabled: !!mwwBusy || ms.length >= 16, onclick: () => file.click() }, icon('up'), 'Add from files…'), file));
+}
+
+// ---------------------------------------------------------------- This Echo's wake words (Amazon's engine): the pick, and removing the ones trained here
+let wordsBox, words = null, wordsBusy = '';
+async function getWords() { try { words = (await echo.call('GET', '/api/wakewords')).json(); } catch (e) { words = null; } renderWords(); }
+async function wordsDo(what, fn) {
+  wordsBusy = what; renderWords();
+  try { await fn(); } catch (e) { toast(errText(e)); }
+  wordsBusy = ''; await getWords(); await load().catch(() => {});
+}
+function renderWords() {
+  if (!wordsBox) return;
+  const ws = (words && words.words) || [];
+  wordsBox.classList.toggle('hidden', !words || words.engine !== 'amazon' || ws.length < 2);
+  if (wordsBox.classList.contains('hidden')) return;
+  const head = cardHead('Your wake words', 'The words this Echo knows. Pick the one it listens for; Home Assistant\u2019s wake word select does the same. A word trained here can be removed; Amazon\u2019s stay.', 'ear');
+  const rows = ws.map((w) => h('div', { class: 'row mww-row' },
+    h('div', {}, h('div', { class: 'row-label' }, h('span', {}, w.name), w.active ? h('span', { class: 'badge ok' }, icon('check'), 'Listening for it') : w.second ? h('span', { class: 'badge ok' }, icon('check'), 'Listening for it (wake word 2)') : null,
+      w.ours ? h('span', { class: 'badge acc' }, 'Trained here') : null, h('code', { class: 'mww-id' }, w.id))),
+    h('div', { class: 'ctl btns' },
+      !w.active && !w.second ? h('button', { class: 'small', disabled: !!wordsBusy, onclick: () => wordsDo('Switching\u2026', () => echo.call('POST', `/api/wakeword/use/${w.id}`)) }, 'Use') : null,
+      w.ours && !w.active && !w.second ? h('button', { class: 'small danger', disabled: !!wordsBusy, title: 'Remove this word from the Echo', onclick: async () => {
+        if (await ask({ title: `Remove ${w.name}?`, ok: 'Remove', danger: true, body: 'The word goes from this Echo, which restarts its wake word engine for a moment. Other Echos keep their copy; Amazon\u2019s words are not touched.' }))
+          wordsDo('Removing\u2026', () => echo.call('POST', `/api/wakeword/delete/${w.id}`)); } }, icon('trash')) : null)));
+  wordsBox.replaceChildren(...[head, h('div', { class: 'clients' }, rows),
+    wordsBusy ? h('div', { class: 'card-foot' }, h('div', { class: 'busy grow' }, h('span', { class: 'spin' }), wordsBusy)) : null].filter(Boolean));   // (replaceChildren makes a null the text "null")
+}
+
+// ---------------------------------------------------------------- Train your own wake word (enroll.c)
+// The Echo asks for the word 8 times and for 8 other things, records them itself, trains a head for the word and installs it;
+// this card only shows where it is (polled while it runs) and asks for it.  Nothing is recorded by the browser.
+let enrollBox, enroll = null, enrollTimer = 0, enrollBusy = false, enrollWas = '', enrollPhrase = '', enrollUse = false, enrollSecs = 3;
+const ENROLL_ACTIVE = ['recording', 'extracting', 'training', 'packaging', 'installing'];
+
+async function getEnroll() {
+  clearTimeout(enrollTimer);
+  try { enroll = (await echo.call('GET', '/api/enroll')).json(); } catch (e) { enroll = enrollWas === 'installing' ? { restarting: true } : null; }
+  const st = enroll && enroll.session && enroll.session.state;
+  if (st) { if (st !== enrollWas && st === 'done') getWords().catch(() => {}); enrollWas = st; }
+  renderEnroll();
+  if ((st && ENROLL_ACTIVE.includes(st)) || (enroll && enroll.restarting)) enrollTimer = setTimeout(() => getEnroll().catch(() => {}), st === 'recording' ? 400 : 1500);
+}
+
+async function enrollCall(path, body) {
+  enrollBusy = true; renderEnroll();
+  try { await echo.call('POST', path, body || ''); await getEnroll(); } catch (e) { toast(errText(e)); }
+  enrollBusy = false; renderEnroll();
+}
+
+const enrollEta = (s) => s == null || s < 0 ? '' : s < 90 ? 'less than a minute left' : `about ${Math.round(s / 60)} minutes left`;
+
+function renderEnroll() {
+  if (!enrollBox) return;
+  const e = enroll;
+  enrollBox.classList.toggle('hidden', !e || (!e.available && !e.restarting));
+  if (!e || (!e.available && !e.restarting)) return;
+  const head = cardHead('Train your own wake word', 'Say a word of your own a few times and this Echo learns it: recorded by the Echo itself, trained on the Echo, kept on the Echo. Takes about 10 minutes.', 'ear');
+  if (e.restarting) { enrollBox.replaceChildren(head, h('div', { class: 'card-body' }, h('div', { class: 'busy' }, h('span', { class: 'spin' }), 'The Echo is restarting its wake word engine…'))); return; }
+  const s = e.session || {}, st = s.state || 'idle', body = [];
+  if (st === 'recording' && s.prompt) {
+    const p = s.prompt, speak = p.phase === 'speak';
+    body.push(h('div', { class: 'card-body enroll-say' },
+      h('div', { class: 'help' }, `Recording ${p.index} of ${p.total}`, p.held_out ? ' · kept back to check the result' : ''),
+      h('div', { class: 'enroll-kind' }, p.kind === 'word' ? 'Say your wake word' : 'Say this, in your normal voice'),
+      h('div', { class: 'enroll-text' }, `“${p.text}”`),
+      h('div', { class: 'enroll-count' + (speak ? ' go' : '') }, p.phase === 'check' ? icon('check') : (speak ? 'Now' : Math.max(1, Math.ceil(p.left))) + '', speak && p.left > 0 ? h('span', { class: 'help' }, ` ${Math.ceil(p.left)} s`) : null),
+      h('div', { class: 'help' }, s.message || '')));
+  } else if (ENROLL_ACTIVE.includes(st)) {
+    const pct = Math.round((s.progress || 0) * 100), names = { extracting: 'Reading your recordings', training: 'Training', packaging: 'Making the wake word', installing: 'Installing' };
+    body.push(h('div', { class: 'card-body' },
+      h('div', { class: 'row-label' }, `“${s.phrase}”`, h('span', { class: 'badge acc' }, names[st])),
+      h('div', { class: 'enroll-bar', role: 'progressbar', 'aria-valuenow': pct, 'aria-valuemin': 0, 'aria-valuemax': 100 }, h('i', { style: `width:${pct}%` })),
+      h('p', { class: 'help' }, `${pct}% · ${enrollEta(s.eta)}`.replace(/ · $/, ''), s.message ? ` · ${s.message}` : ''),
+      st === 'training' ? h('p', { class: 'help' }, 'The Echo keeps listening for its current wake word meanwhile; training runs at the lowest priority.') : null));
+  } else if (st === 'done') {
+    body.push(h('div', { class: 'card-body' }, callout('ok', h('p', {}, h('b', {}, `“${s.phrase}” is ready. `), s.message || '')),
+      s.result ? h('p', { class: 'help' }, `Checked on recordings it never saw: ${s.result.test[0]} of ${s.result.test[0] + s.result.test[1]} of your word heard, ${s.result.test[2]} of ${s.result.test[2] + s.result.test[3]} others wrongly heard.`) : null));
+  } else if (st === 'failed' || st === 'unresolved') {
+    body.push(h('div', { class: 'card-body' }, callout('warn', h('p', {}, s.error || 'The session failed.')),
+      st === 'unresolved' ? h('p', { class: 'help' }, 'Clearing retracts queued work once the installer is idle. Installed models and the current wake-word selection are kept.') : null,
+      s.result ? h('p', { class: 'help' }, `Held-back check: ${s.result.test[0]} of ${s.result.test[0] + s.result.test[1]} of your word heard, ${s.result.test[2]} of ${s.result.test[2] + s.result.test[3]} others wrongly heard.`) : null));
+  } else if (st === 'cancelled') {
+    body.push(h('div', { class: 'card-body' }, callout('info', h('p', {}, s.message || 'Cancelled.'))));
+  } else {
+    const input = h('input', { type: 'text', placeholder: 'Your wake word, e.g. Computer', maxlength: 40, value: enrollPhrase, 'aria-label': 'Your wake word',
+      oninput: () => { enrollPhrase = input.value; }, onkeydown: (ev) => { if (ev.key === 'Enter' && enrollPhrase.trim()) enrollCall('/api/enroll/start', `phrase=${enrollPhrase.trim()}\nseconds=${enrollSecs}\nuse=${enrollUse ? 1 : 0}\n`); } });
+    const use = h('input', { type: 'checkbox', checked: enrollUse, onchange: () => { enrollUse = use.checked; } });
+    const secs = h('select', { 'aria-label': 'Seconds per recording', onchange: () => { enrollSecs = +secs.value; } }, [2, 3, 4, 5, 6].map((n) => h('option', { value: n, selected: n === enrollSecs }, `${n} s per recording`)));
+    body.push(h('div', { class: 'card-body' },
+      !e.engine_ok ? callout('warn', h('p', {}, 'Switch the engine to Amazon’s above first: a word of your own is a wake word set of Amazon’s engine.')) : null,
+      h('p', { class: 'help' }, 'Find a quiet moment and stand where you usually talk to the Echo. It asks for your word eight times and then eight other things, a countdown before each. Letters and digits, 3 to 32.'),
+      h('div', { class: 'enroll-form' }, input, secs, h('label', { class: 'enroll-use' }, use, ' Use it as the wake word when it is ready')),
+      s.last ? h('p', { class: 'help' }, `Last trained here: \u201c${s.last.phrase}\u201d.`) : null));
+  }
+  const foot = [];
+  if (st === 'idle') foot.push(h('span', { class: 'help grow' }, 'Nothing leaves the Echo. Its recordings are deleted when it is done.'),
+    h('button', { disabled: enrollBusy || !e.engine_ok || !enrollPhrase.trim(), onclick: () => enrollCall('/api/enroll/start', `phrase=${enrollPhrase.trim()}\nseconds=${enrollSecs}\nuse=${enrollUse ? 1 : 0}\n`) }, icon('ear'), 'Train'));
+  else if (ENROLL_ACTIVE.includes(st)) foot.push(h('span', { class: 'help grow' }, st === 'installing' ? 'Installing: the Echo restarts its wake word engine.' : 'You can leave this page; it carries on.'),
+    ['packaging', 'installing'].includes(st) ? null : h('button', { class: 'danger', disabled: enrollBusy, onclick: () => enrollCall('/api/enroll/cancel') }, 'Cancel'));
+  else foot.push(h('span', { class: 'help grow' }), h('button', { disabled: enrollBusy, onclick: () => enrollCall('/api/enroll/dismiss') }, st === 'unresolved' ? 'Clear pending request' : st === 'failed' ? 'Try again' : 'Close'));
+  enrollBox.replaceChildren(head, ...body, h('div', { class: 'card-foot' }, ...foot));
 }
 
 // ---------------------------------------------------------------- Echos: the network, arbitration, settings sync
@@ -2759,6 +2864,8 @@ async function copyModels(jobs) {
   if (jobs.some((j) => (j.art.kind === 'design' || j.art.kind === 'pack') && !j.to.key)) ringLoad().catch(() => {});      // designs came here: the cards
   if (got.has('')) { setTimeout(() => location.reload(), 500); return; }       // this Echo restarted: start the page over
   if (mwwBox) getMww().catch(() => {});
+  if (enrollBox) getEnroll().catch(() => {});
+  if (wordsBox) getWords().catch(() => {});
   await refreshDevices();
 }
 
@@ -2923,6 +3030,8 @@ async function loadModels(arts) {
   toast(notes.length ? notes.join(' · ') : `Installed: ${plural(sent, 'model')}`);
   if (restart) { setTimeout(() => location.reload(), 500); return; }   // the satellite restarted: start the page over
   if (mwwBox) getMww().catch(() => {});
+  if (enrollBox) getEnroll().catch(() => {});
+  if (wordsBox) getWords().catch(() => {});
   await refreshDevices();
 }
 
