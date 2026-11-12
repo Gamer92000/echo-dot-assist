@@ -54,6 +54,10 @@ struct board {
      * first of each frame (the Echo Input's LP5562): nothing turned towards the talker, no LED's own layer (ring.c).
      * 0: a ring of them all */
     int ring_leds;
+    /* The LED driver's frame file, where hassmic may write the ring itself (ringlive.c: the light ring live; root's main.sh
+     * gives the daemon that one file, device.conf LED_FRAME).  Only on models measured (scripts/led-probe.sh): its text
+     * 12 x RRGGBB, ledcontroller writing it only on a change.  NULL: no live ring */
+    const char *ring_frame;
     /* The speaker's volume curve: dB under volume 100 at volumes 0..100, each `at` above the last (tests/unit/volcurve_test.c
      * checks it: the same one twice divides by 0), {-1} after the last (volcurve.c: separate volumes turn each kind down
      * by it, even volume steps put the mixer on its points).  Required, never NULL: every model has its own, measured on

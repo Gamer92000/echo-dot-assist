@@ -61,6 +61,7 @@ TESTS = [
     ("ota-push", ["sh", "tests/ota_push_test.sh"]),
     ("ring", [PY, "tests/fake_ha_ring.py"]),
     ("ring-designs", [PY, "tests/fake_web_ring.py"]),
+    ("ring-live", [PY, "tests/fake_ha_ring_live.py"]),
     ("artifacts", [PY, "tests/fake_web_artifacts.py"]),
     ("wyoming", [PY, "tests/fake_ha.py"]),
     ("screen", [PY, "tests/fake_screen.py"]),

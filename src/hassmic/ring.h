@@ -59,6 +59,8 @@ int  ring_designs_live(void);
  * patterns, frame by frame); malloc'd.  NULL: stock's files are the animations (ringdesign.c rd_stock reads them) */
 char *ring_stock(int i, size_t *n);
 void ring_unset(const char *pattern);
+/* One of the Echo's own patterns shows now (ring_set and not unset or played out): the live ring (ringlive.h) waits */
+int  ring_busy(void);
 void ring_tick(void);                       /* every 200 ms: the beam while listening, the light back after the Echo's */
 void ring_light_get(struct ring_light *l);
 void ring_light_set(const struct ring_light *l, unsigned flash_ms);  /* flash_ms > 0: blinks that long, then as before */

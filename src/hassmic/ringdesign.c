@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -35,6 +36,7 @@
 #define WAIT_MAX_S   900                    /* root took it: an install takes seconds, this is root gone for good */
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static int generation;                      /* designs saved or deleted (rd_generation) */
 
 static const char *state_dir(void) { const char *e = getenv("HASSMIC_STATE"); return e ? e : "/data/local/hassmic/state"; }
 static void spath(char *out, size_t n, const char *rel) { snprintf(out, n, "%s/%s", state_dir(), rel); }
@@ -440,12 +442,57 @@ int rd_save(int id, const char *text, size_t n, int *saved, char *err, size_t ca
         spath(p, sizeof p, "ring"); mkdir(p, 0700);
         design_path(p, sizeof p, id);
         if (statefile_write(p, 0600, f, strlen(f))) snprintf(err, cap, "cannot write the design: %s", strerror(errno));
-        else { rc = 0; *saved = id; }
+        else { rc = 0; *saved = id; generation++; }
     }
     pthread_mutex_unlock(&lock);
     free(f);
     return rc;
 }
+
+/* The library as Home Assistant plays it live (ringlive.c): names in id order, a design by its name */
+static int name_of(const char *t, char out[RD_NAME])
+{
+    for (const char *l = t; l && *l; l = strchr(l, '\n') ? strchr(l, '\n') + 1 : NULL)
+        if (!strncmp(l, "name ", 5)) {
+            size_t k = strcspn(l + 5, "\r\n");
+            if (k >= RD_NAME) k = RD_NAME - 1;
+            memcpy(out, l + 5, k); out[k] = 0;
+            return k > 0;
+        }
+    return 0;
+}
+
+int rd_names(char (*names)[RD_NAME], int max)
+{
+    int n = 0;
+    pthread_mutex_lock(&lock);
+    for (int id = 1; id <= RD_MAX && n < max; id++) {
+        char *t = design_text(id, NULL);
+        if (t && name_of(t, names[n])) {
+            int dup = 0;                    /* two of one name: the first is the one played */
+            for (int k = 0; k < n; k++) if (!strcasecmp(names[k], names[n])) dup = 1;
+            n += !dup;
+        }
+        free(t);
+    }
+    pthread_mutex_unlock(&lock);
+    return n;
+}
+
+int rd_find(const char *name, struct rd_design *d)
+{
+    int rc = -1; char nm[RD_NAME], err[80];
+    pthread_mutex_lock(&lock);
+    for (int id = 1; id <= RD_MAX && rc; id++) {
+        size_t n; char *t = design_text(id, &n);
+        if (t && name_of(t, nm) && !strcasecmp(nm, name) && !rd_parse(t, n, d, err, sizeof err)) rc = 0;
+        free(t);
+    }
+    pthread_mutex_unlock(&lock);
+    return rc;
+}
+
+int rd_generation(void) { pthread_mutex_lock(&lock); int g = generation; pthread_mutex_unlock(&lock); return g; }
 
 int rd_delete(int id, char *err, size_t cap)
 {
@@ -457,7 +504,7 @@ int rd_delete(int id, char *err, size_t cap)
     int rc = unlink(p) && errno != ENOENT ? -1 : 0, changed = 0;
     if (rc) snprintf(err, cap, "cannot delete it: %s", strerror(errno));
     for (int i = 0; i < ring_nslots && !rc; i++) if (assign[i] == id) { assign[i] = 0; changed = 1; }
-    if (!rc) packs_forget(id);
+    if (!rc) { packs_forget(id); generation++; }
     if (changed && save_assign(assign)) { rc = -1; snprintf(err, cap, "cannot write the assignments"); }
     pthread_mutex_unlock(&lock);
     return rc;

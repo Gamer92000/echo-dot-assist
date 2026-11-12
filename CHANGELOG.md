@@ -4,6 +4,14 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-12
 
+- **The light ring live from Home Assistant (Echo Dot 3).** New feature "Light ring live" (settings page, Features,
+  off by default): twelve lights, one per LED, in any colour; actions for a whole picture of the ring, for an
+  animation of your own frames the Echo plays smoothly by itself, and for a design of your library by its name; and a
+  select "Light ring design" that plays any of your designs at once, without Apply. The Echo writes its LEDs itself
+  for this, up to 30 pictures a second. Its own lights (listening, replies, timers, mute) always come first, and the
+  ring never gets brighter than Amazon's own lights at the brightness it runs at. The Echo Dot 2 and Echo 2 follow
+  once measured.
+
 - **A tighter wall between hassmic and root (issue #130).** If something ever took hassmic over, it could have had
   root overwrite one of root's own files, set system properties (open adb, start any service) or connect to an open
   adb itself, and from there run as root. Root now treats everything hassmic leaves for it as hostile, the firewall

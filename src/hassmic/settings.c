@@ -11,6 +11,7 @@
 #include "micend.h"
 #include "micgain.h"
 #include "ring.h"
+#include "ringlive.h"
 #include "ringstop.h"
 #include "screen.h"
 #include "sendspin.h"
@@ -67,6 +68,7 @@ static int kiosk_dlna;                                    /* off: lockdown.sh ad
 static int bt_stay;                                     /* a2dp.c gets it only while the feature is on: off drops the link */
 static int wake_events;                                 /* off: an event per near miss is HA history most homes never read */
 static int request_text;                                /* off: what people say kept in HA's history is theirs to choose */
+static int ring_live;                                   /* off: thirteen more entities only for those who want them */
 /* The Echo Show's backlight, as stock's Display settings have it (KnightSettings: "Adaptive brightness" is Android's
  * screen_brightness_mode, its slider screen_brightness or, adaptive, screen_auto_brightness_adj).  Kept here, applied
  * by root's main.sh backlight from state/config.  Off and 47 % (setting 120 of 255) by default: what every Show ran at
@@ -95,7 +97,7 @@ static int colour_actual(void)
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
@@ -178,6 +180,8 @@ static const struct setting table[NSET] = {
     [WAKE_EVENTS] = { "wake_events", "Wake word events", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* proto_esphome.c's "Last heard" and "Last reply" text sensors (issue #53) */
     [REQUEST_TEXT] = { "request_text", "Request and reply text", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
+    /* ringlive.c: the ring's LEDs from Home Assistant, written by hassmic itself (12 lights, frames, animations, designs) */
+    [RING_LIVE]   = { "ring_live", "Light ring live", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [WIFI_MOTION] = { "wifi_motion", "Wi-Fi motion (experimental)", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [WIFI_SENS]   = { "wifi_motion_sensitivity", "Wi-Fi motion sensitivity", "Features", NULL, S_INT, WIFIMOTION_SENS_MIN, WIFIMOTION_SENS_MAX, 1, 0 },
     [LIGHT_SENSOR] = { "light_sensor", "Light sensor", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
@@ -253,6 +257,7 @@ static int present(enum id i)
     case LIGHT_SENSOR: return core_lux() == core_lux();          /* a light sensor: not NAN */
     case LED_AUTO: return core_led_has_auto();
     case WIFI_MOTION: case WIFI_SENS: return wifimotion_present();
+    case RING_LIVE: return ringlive_available();
     case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: case DUCK_OTHERS: case TIMER_STOP_OTHERS: return arb_running();
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
     case SS_UNPAIRED: return core_sendspin_port != 0;
@@ -385,6 +390,7 @@ int settings_get(const struct setting *s)
     case LIGHT_SENSOR: return light_sensor;
     case WAKE_EVENTS: return wake_events;
     case REQUEST_TEXT: return request_text;
+    case RING_LIVE: return ring_live;
     case DROPIN: return dropin_enable(-1);
     case DROPIN_ANSWER: return dropin_ask(-1);
     case SPK_GAIN: return spkgain_get();
@@ -461,6 +467,7 @@ static void put(enum id i, int v)
     case LIGHT_SENSOR: light_sensor = v; break;
     case WAKE_EVENTS: wake_events = v; break;
     case REQUEST_TEXT: request_text = v; break;
+    case RING_LIVE: ring_live = v; if (!v) ringlive_clear(); break;      /* off: the ring back to ledcontroller */
     case BT_OUT_DELAY: a2dp_out_delay(v); break;                    /* a2dp.c saves it */
     case BT_OUT_AWAKE: btout_keep_awake(v); break;
     case BT_OUT_STAY: bt_stay = v; a2dp_out_stay(v && bt_speaker); break;

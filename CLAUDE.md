@@ -112,6 +112,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # as a WAV, uploads within each sound's length, Play, the wake word, restart
 .venv/bin/python tests/fake_ha_ring.py        # light ring: the animation set from stand-in stock files, HA's light,
                                              # the Echo's own patterns first, the listening ring turned by the beam
+.venv/bin/python tests/fake_ha_ring_live.py   # the light ring live: LEDs, frames, animations, designs into a stand-in
+                                             # frame file (HASSMIC_FAKE_FRAME), the Echo's own first, "Light ring" vs live
 .venv/bin/python tests/fake_ha_bt_proxy.py     # the Bluetooth proxy switched off and on (issue #152): device info, scan,
                                              # subscriptions, slots and connections refused (fake_improv.py's controller)
 .venv/bin/python tests/fake_improv.py         # setup from a phone: Improv over BLE against a fake controller on a pty
@@ -594,6 +596,21 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   sets and unsets queued one behind the other go in one ledctrl (`LEDQ_BATCH`: it takes repeated -s/-u).  The
   beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N` when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
   `HASSMIC_FAKE_BEAM`.
+- **Light ring live** (`ringlive.c`, `ringlive.h`, feature `ring_live`, off): hassmic writes the LED driver's frame
+  itself (`board.ring_frame`, donut's IS31FL3236 `0-003f/frame`: 12 x `RRGGBB` text, LED 0 first, scaled by the
+  unit's calibration in the driver; ledcontroller writes it only when its picture changes; PLAN.md "Light ring live",
+  `scripts/led-probe.sh`).  Root's `main.sh` `led_frame` gives that one file to group `LED_GID` 3991 (device.conf
+  `LED_FRAME`, the same path; `tests/unit/ringlive_conf.py`), which runas adds to hassmic's groups; led_current, the
+  calibration, boot_animation and pwm1 stay ledcontroller's/root's.  Colours as seen -> gamma 2.2 (as ring.c's
+  designs) -> x the brightness table's pwm for the ring's level (`led_mute_ring_config.json` rgbTable by idme
+  `capcolor`, as the HAL's scaleDutyCycle), so never above what ledcontroller writes at that level (FD at 100).  One
+  writer thread, latest wins, `RINGLIVE_FPS` 30; waits while `ring_busy()` (the Echo's own patterns) or muted, back
+  150 ms after; reads back every 200 ms and puts ours back, backs off 5 s if something else keeps writing; nothing
+  left: the dark frame once, `state/ring-live` marks ours for the next start.  HA (`proto_esphome.c`): lights "Light
+  ring LED 1..12" (from the fill's start + rotation), actions `light_ring_frame|animation|design|stop`, select "Light
+  ring design" (`rd_names`, re-listed when the names change: `rd_generation`, main.c `live_names_check`); "Light
+  ring" and live take the ring from each other (`live_took`, `light_took`).  PC: `HASSMIC_FAKE_FRAME`,
+  `HASSMIC_FAKE_ALSPARAMS`; `tests/unit/ringlive_test.c`, `tests/fake_ha_ring_live.py`.
 - **Screen UI** (`src/ui/`, `screen.c`, `screen.h`; device.mk `SCREEN`, else `screen_none.c`; every Show): the
   Echo Show's own screen, small beside any app (Kiosk Satellite, View Assist...).  `src/ui/ui.h` lists the parts:
   `scene.c` (display list with a clip per item, diffed by id into one dirty rectangle; text cache by hash; image cache

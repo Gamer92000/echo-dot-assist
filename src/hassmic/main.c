@@ -47,6 +47,7 @@
 #include "improv.h"
 #include "buttons.h"
 #include "ring.h"
+#include "ringlive.h"
 #include "ringdesign.h"
 #include "ledq.h"
 #include "screen.h"
@@ -3011,6 +3012,28 @@ void core_set_eq(int band, int db)
 static atomic_int led_auto = 1, led_level = 80;     /* 80: ledcontroller's first-boot level; read without core_lock
                                                      * (core_led_brightness(-1): the band's thread, the protocols) */
 
+/* The light ring live (ringlive.h).  It steps back while one of the Echo's own patterns shows and while the microphones
+ * are off (the mute's red ring is always the Echo's), at the ring's brightness (auto included); what changes by itself
+ * there (a timeout, an animation's end) goes to Home Assistant */
+static int live_hold(void) { return ring_busy() || core_muted(); }
+static int live_level(void) { return core_led_brightness(-1); }
+static void live_changed(void) { pthread_mutex_lock(&core_lock); core_settings_changed(); pthread_mutex_unlock(&core_lock); }
+
+/* The design select lists the library's names as they were when Home Assistant listed it: a design saved or deleted on
+ * the settings page has it list them again, but only when the names changed (each save would close the links) */
+static void live_names_check(void)
+{
+    static int gen = -1; static unsigned long long had;
+    int g = rd_generation();
+    if (g == gen) return;
+    static char names[RD_MAX][RD_NAME]; int n = rd_names(names, RD_MAX); unsigned long long h = 1469598103934665603ULL;
+    for (int i = 0; i < n; i++) for (const char *c = names[i]; ; c++) { h = (h ^ (unsigned char)*c) * 1099511628211ULL; if (!*c) break; }
+    if (gen >= 0 && h != had && ringlive_available() && settings_on("ring_live")) {
+        pthread_mutex_lock(&core_lock); core_entities_changed(); pthread_mutex_unlock(&core_lock);
+    }
+    gen = g; had = h;
+}
+
 /* Root installed the ring's set again (designs applied on the settings page) and restarted ledcontroller, which starts
  * with auto brightness on: a fixed level once more, and Home Assistant's light listed anew if it came or went */
 static void ring_reloaded(int custom_changed)
@@ -3209,6 +3232,7 @@ static void *volume_led_thread(void *arg)
         if (at && mono_ms() >= at && atomic_compare_exchange_strong(&identify_until, &at, 0)) led("-u", "zzz_rainbow");
         ring_tick();
         if (tick % 5 == 0) rd_tick();               /* root's answer to designs applied on the settings page */
+        if (tick % 5 == 2) live_names_check();
         usleep(200000);
     }
     return NULL;
@@ -3480,6 +3504,7 @@ int main(int argc, char **argv)
                                                      * laid out twice */
       if (!settings_peek("light_band", rows, sizeof rows)) ring_band_rows(atoi(rows)); }
     ring_start(led_run, ring_reloaded);
+    ringlive_start(live_hold, live_level, live_changed);     /* where root gave hassmic the ring's frame (main.sh) */
     rd_start();                         /* designs asked for before this start: still installing, or back */
     screen_start();                                 /* a model with a screen: its UI process (screen.h) */
     audio_earcon_started = earcon_started;

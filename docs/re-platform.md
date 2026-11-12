@@ -19,6 +19,14 @@ service list          # Binder services (expect "LedController")
 - `ledcontroller` (`system/etc/init/start_animation_noart.rc:11`, user `ledcontroller`, started at `post-fs-data`)
   owns the LED driver at `/sys/bus/i2c/devices/0-003f/{frame,led_current,boot_animation}` and the mute-ring PWM
   (`/sys/class/pwm/pwmchip0/pwm1`). It runs independently of PuffinApp.
+- The driver (donut, measured 2026-11-12 with `scripts/led-probe.sh`; PLAN.md "Light ring live") is ISSI's
+  IS31FL3236 (`issi,is31fl3236`, DT `channel-offset` 3). `frame` is text: 12 x `RRGGBB` and a newline, LED 0 first in
+  the animation files' order; `libacehal_led.so` writes it `%02X%02X%02X` per LED, the file's colour x the brightness
+  table's `pwm` (`led_mute_ring_config.json` `rgbTable`, index = level 0..100, by idme alsparams `capcolor`). The
+  driver scales each channel by the unit's calibration as it takes a frame (`ledcalibenable` 1, `ledpwmscaling`
+  `586a55` = R/G/B of 127, `ledpwmmaxlimit` `dbffd6`, idme `ledparams`), and `frame` reads back the scaled values.
+  `led_current` 0/1/3 (Imax, /2, /4) follows the table too. ledcontroller writes `frame` only when its picture
+  changes (never while idle or static), so a frame written by someone else stays until its next change.
 - It exposes three front doors:
   1. **Binder** service `LedController` (`amazon::ILedController`, `libled_controller.so`). Client: `system/bin/ledctrl`.
   2. **AIPC** service (`LedCtrl/AipcService`). Client: `system/bin/ledctrl_aipc`, which connects as `com.util.ledctrl`.

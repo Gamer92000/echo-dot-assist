@@ -2402,6 +2402,53 @@ Run in this order. Each step says what it proves.
       white) LEDs 11 40, 0 dark, 1 green, 2 dark, 3 blue, 4 404040; HA's green then one colour at 75 %.  Identify
       over a 50 % fill: the rainbow 0.12 s after the press, the fill back at 10.3 s.  No ledctrl errors.
       Open: the Dot 3 (its system partition's room; no system image of it here) and the Echo 2.
+- [~] Light ring live (feature/led-live): any colour on any LED from Home Assistant, frame by frame, without a
+      ledcontroller restart.  Measured on a Dot 3 (donut NS65741, "Büro", 2026-11-12, `scripts/led-probe.sh`
+      read/stock/write; logs in device-logs/):
+      - The driver is ISSI's IS31FL3236 (36 channels, I2C 0-003f, DT `issi,is31fl3236`, `channel-offset` 3).  `frame`
+        is text: 12 LEDs x `RRGGBB` in hex, LED 0 first, in the order of the animation files (active-thinking's lines
+        match LED for LED, no turn), a newline after it; the HAL writes `%02X%02X%02X` per LED (libacehal_led.so
+        `setLedFrame`, path `k_framePath`).  ledcontroller keeps it open read-write (fd 15).
+      - The driver scales every channel as it takes a frame and `frame` reads back what it got after that:
+        `ledcalibenable` 1, `ledpwmscaling` 586a55 (R 88, G 106, B 85 of 127: out = in x s / 127, truncated),
+        `ledpwmmaxlimit` dbffd6; all three root's 0644, from the unit's calibration (idme `ledparams`), never touched.
+        Checked: 0000FD written reads 0000A9, 0000A9 reads 000071; solid_red F00 at brightness 100 reads AF0000,
+        green 0F1 00D30A, white AFD3A9, orange F30 AF2900, cyan 0EF 00C4A9.  So the frame ledcontroller writes is the
+        file's colour x the brightness table's `pwm` (led_mute_ring_config.json `rgbTable`, per cap colour (idme
+        alsparams `capcolor`, 0 = black), 102 levels: pwm 0.122 .. 0.993 on black), and FD is the most it ever writes.
+      - Brightness: the frame's values and `led_current` (the chip's current setting: 0 = Imax, 1 = /2, 3 = /4 in the
+        table) both follow it.  solid_blue: level 100 -> A9 with led_current 0, 50 -> 76 / 3, 25 -> 31 / 3, 10 -> 1D / 3,
+        1 -> 15 / 3.  The mute button's PWM (pwm1, period 40000) follows the level too (duty 39739 at 100, 1268 at 1:
+        `muteTable`), lit while not muted.
+      - ledcontroller writes only when its picture changes: idle, and with a static pattern (solid_blue) on, 0 writes
+        in 10 s, 0 CPU.  A frame written by someone else stays: solid_blue's own value on an idle ring for 5 s, the dark
+        frame over a showing solid_blue for 4 s.  Over a moving pattern (active-thinking, 100 ms frames) the next frame
+        of ledcontroller's replaced ours after 40 ms.  It writes its frame again on every set and unset (unset of the
+        last one: dark).
+      - Speed: one write takes ~15 ms however it is made (cat or the shell's own print: 70 and 68 a second, 100 in
+        1.50 s), nearly all of it waiting for the I2C bus: 1.3 ms of system CPU a frame (0.13 s for 100).  The Echo was
+        at 54 % of its 3 CPUs before, 55 % while writing flat out, 64 % at 15 a second with a fork a frame.  Reads: 50 in
+        20 ms.
+      - Who may write: `/init.ledcontroller.rc` chowns frame, led_current, boot_animation and pwm1's period, duty_cycle
+        and enable to ledcontroller at boot (0644, label sysfs_ledcontroller).  hassmic (uid 5100, effective gid aipc,
+        real gid 3990) may read them, write none.  SELinux is no wall here (su permissive; hassmic's domain may do what
+        su may), the file mode is.
+      Now (`ringlive.c`, feature "Light ring live", off by default; CLAUDE.md has the parts): root's main.sh gives
+      that one file to group 3991 (LED_GID, only hassmic's) at each satellite start, g+w; hassmic writes colours as
+      seen through gamma 2.2 and the table's pwm for the ring's level (capcolor 0 = black), so at most what
+      ledcontroller writes there (FD at 100); 30 frames a second at most, latest wins; never while one of the Echo's
+      own patterns shows (ring.c `ring_busy`) or the microphones are off, ours again 150 ms after; read back every
+      200 ms and put back, 5 s of rest after 3 overwrites in 3 s (something hassmic did not set animates); nothing
+      left: the dark frame once.  Home Assistant: 12 lights, `light_ring_frame|animation|design|stop`, the select
+      "Light ring design" of the library; "Light ring" and live take the ring from each other.  Tests:
+      tests/unit/ringlive_test.c (stock's solid_blue at the five levels as the driver was written, the cap, the
+      table, the writer against a file), tests/fake_ha_ring_live.py (aioesphomeapi: entities, LED/frame/animation/
+      design/select, the wake word's ring and mute first, written over, "Light ring" against live, timeout, stop).
+      Open: on the Dot 3 itself (the update that brings main.sh's grant, then each of the above with the frame read
+      back); biscuit and radar (`scripts/led-probe.sh read` finds the driver by itself; same 0-003f by PLAN's earlier
+      reads, calibration per unit; then `ring_frame`/`LED_FRAME` for them); the band of the Shows and the Echo
+      Input's one LED are not part of it; a theme pack applied from Home Assistant (root's install, as Apply) asked
+      about, not built.
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.

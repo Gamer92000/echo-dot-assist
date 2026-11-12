@@ -1095,6 +1095,8 @@ void ring_reload(void)
     if (reloaded_fn) reloaded_fn(custom != was || have_leds != was_leds);      /* the fill's entities come and go with them */
 }
 
+int ring_busy(void) { pthread_mutex_lock(&lock); int b = busy(now_ms()); pthread_mutex_unlock(&lock); return b; }
+
 void ring_light_get(struct ring_light *l) { pthread_mutex_lock(&lock); *l = light; pthread_mutex_unlock(&lock); }
 
 void ring_level(int dbfs10) { (void)dbfs10; }       /* the LEDs' listening ring does not follow the voice */

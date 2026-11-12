@@ -767,6 +767,15 @@ void ring_unset(const char *pattern)
 
 void ring_tick(void) {}
 
+int ring_busy(void)                     /* the band has no live ring (ringlive.h); for main.c's sake */
+{
+    pthread_mutex_lock(&lock);
+    long long now = now_ms(); int b = 0;
+    for (int i = 0; i < P_COUNT; i++) if (act[i].on && (act[i].ms < 0 || now < act[i].at + act[i].ms)) b = 1;
+    pthread_mutex_unlock(&lock);
+    return b;
+}
+
 void ring_light_get(struct ring_light *l) { pthread_mutex_lock(&lock); *l = light; pthread_mutex_unlock(&lock); }
 
 void ring_light_set(const struct ring_light *l, unsigned flash_ms)
