@@ -178,6 +178,12 @@ async def main(e):
     e.page.set(screen_sleep_minutes=5)
     check(await until(lambda: sleeps(e) == 300, 5), f"5 min again: {sleeps(e)} s")
 
+    # the date's language: "Language you speak", told as "lg"; Automatic: the zone's, else none ("-": English)
+    e.page.set(speech_language="ro")
+    check(await until(lambda: last("lg ") == "lg ro", 5), f"Romanian: told {last('lg ')}")
+    e.page.set(speech_language="auto")
+    check(await until(lambda: last("lg ") != "lg ro", 5), f"automatic again: told {last('lg ')}")
+
 
 run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT),
     {"HASSMIC_SCREEN": runner, "FAKE_UI_LOG": UI_LOG, "FAKE_UI_FIFO": fifo, "HASSMIC_SCREEN_READY_MS": "5000"},

@@ -80,6 +80,7 @@ static struct { char name[48]; int on, told, came; unsigned gen, sent; long long
 static int npats;
 static atomic_int level_db = -1000;
 static char tz[160]; static unsigned tz_gen, tz_sent;
+static unsigned lang_gen = 1, lang_sent;   /* the language for the date ("lg"): the setting, or the zone's (core_speech_language) */
 static char title[256], artist[256], album[256]; static unsigned meta_gen, meta_sent;
 static int mstate, mspeed = 1000; static long long mpos, mpos_at, mdur; static unsigned prog_gen, prog_sent;
 static int cvol, cmuted, cshuffle = -1; static char cmds[256], crepeat[8]; static unsigned ctl_gen, ctl_sent;
@@ -188,13 +189,15 @@ void screen_led(const char *op, const char *pattern)
     pthread_mutex_unlock(&lock);
 }
 
+void screen_language_changed(void) { pthread_mutex_lock(&lock); lang_gen++; kick(); pthread_mutex_unlock(&lock); }
+
 void screen_level(int dbfs10) { atomic_store(&level_db, dbfs10); }
 
 void screen_tz(const char *posix_tz)
 {
     char t[sizeof tz]; clean(t, sizeof t, posix_tz);
     pthread_mutex_lock(&lock);
-    if (t[0] && strcmp(t, tz)) { snprintf(tz, sizeof tz, "%s", t); tz_gen++; save("tz", tz); kick(); }
+    if (t[0] && strcmp(t, tz)) { snprintf(tz, sizeof tz, "%s", t); tz_gen++; lang_gen++; save("tz", tz); kick(); }
     pthread_mutex_unlock(&lock);
 }
 
@@ -755,7 +758,7 @@ static void *writer(void *arg)
             band = want; up_at = mono_ms(); fails++; again++;
             pthread_mutex_lock(&lock);                          /* all of it again */
             for (int i = 0; i < npats; i++) { pats[i].told = pats[i].came = 0; pats[i].sent = pats[i].on ? pats[i].gen - 1 : pats[i].gen; }
-            tz_sent = meta_sent = prog_sent = ctl_sent = art_sent = gone_sent = band_sent = 0; home_told = 0;
+            tz_sent = lang_sent = meta_sent = prog_sent = ctl_sent = art_sent = gone_sent = band_sent = 0; home_told = 0;
             words_sent = words_gen - 1; wo_sent = wo_gen - 1;
             atomic_store(&hide_req, 0); nhidden = -1;             /* (a new UI shows them) */
             if (!music) meta_sent = meta_gen, prog_sent = prog_gen, ctl_sent = ctl_gen;
@@ -787,6 +790,7 @@ static void *writer(void *arg)
         dirty = 0;                                               /* (what changes from here on: looked at again at once) */
         if (home_sent != home_gen || !home_told) { put(&o, "home %s", home_set ? home : "-"); home_sent = home_gen; home_told = 1; }
         if (tz_sent != tz_gen) { if (tz[0]) put(&o, "tz %s", tz); tz_sent = tz_gen; }
+        if (lang_sent != lang_gen) { char l[16]; core_speech_language(l, sizeof l); put(&o, "lg %s", l[0] ? l : "-"); lang_sent = lang_gen; }
         /* with how long ago it came on: a new UI ends the timed ones (an error's flash, which nothing unsets) by
          * themselves; one that came and went since the last write: on, then off */
         for (int i = 0; i < npats; i++) {

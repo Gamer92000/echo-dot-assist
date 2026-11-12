@@ -54,6 +54,15 @@ What changed for people using the Echo, newest first. Details and measurements a
   with that Echo: not in the settings file, and a factory reset removes it. The name at the top now opens a list of
   your other Echos with their notes: pick one and its settings page opens on the same page you are on. Suggested by
   baudneo.
+- **More languages for the Echo's own words, Romanian among them.** "Language you speak" (settings page, Wake word)
+  now also lists Italian, Portuguese, Dutch, Swedish, Danish, Norwegian, Finnish, Polish and Romanian; automatic picks
+  them from your time zone too (Romania and Moldova: Romanian). The Echo Show writes the date on its screen (the clock,
+  the drawer) in that language: "Miercuri, 11 noiembrie". Finding where the wake word ends works as before for these
+  (there are no sound models for them yet: the wake word's own). Bluetooth announcements can be in Romanian ("Conectat
+  la …"). "Oprește" stops like "stop", and "închide" / "închide apelul" ends a Drop In like "hang up"; these words are
+  now recognised with or without their accents and capitals in every language ("Închide", "inchide", "Arrête"). The
+  Drop In blueprint has Romanian sentences ("conectează-mă cu bucătăria") and replies: re-import it to get them. In
+  English the clock's date now reads like the drawer's: "Wednesday, 1 November" (was "Wednesday 01 November").
 - **Echo Show 5: Wi-Fi no longer drops every few minutes.** Amazon's Wi-Fi diagnostics, still running inside Android,
   test the connection against Amazon's servers; the satellite's firewall blocks them, so the test always failed and
   the diagnostics then disconnected and reconnected the Wi-Fi (a few seconds each time, every link to Home Assistant

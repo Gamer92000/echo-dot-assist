@@ -41,7 +41,9 @@ System) off takes any certificate, but then anyone on your network could slip th
   which need not be the wake word's: German voices saying the English "Alexa" were found in 48 of 75 tests with
   German sounds, in 23 with English ones. So "Language you speak" (settings page, Wake word) picks it; automatic goes
   by your time zone in Home Assistant (Germany, Austria, Switzerland: German; France: French; Spain, Mexico: Spanish;
-  Japan; else English), then by the wake word's own language. It also learns from your requests how the word sounds
+  Japan; else English), then by the wake word's own language. The list also has Italian, Portuguese, Dutch, Swedish,
+  Danish, Norwegian, Finnish, Polish and Romanian, which automatic picks by the time zone too: there are no sounds for
+  them yet, so the wake word's own are used, as before; the Echo Show writes its date in the language picked. It also learns from your requests how the word sounds
   in your home (your voices, your room, its microphone: speaker adaptation, as the aligner's models were trained for)
   and finds the end more often from the sixth request on (in tests 74 % right instead of 55 % without it); it forgets
   the oldest as new ones come, and what it learns stays on the Echo ("Learn how the wake word is said here" on the
@@ -342,7 +344,7 @@ pages list them under Echos) and have "Drop In" on (Features, on by default).
 The Echo called plays Alexa's Drop In chime and connects at once. With "Drop In answers: after the action button" it
 rings for 30 s instead and only its action button connects. The ring shows Alexa's call animations meanwhile. To end a
 call: the action button, "<wake word>, stop", "<wake word>, hang up" (or "auflegen", "raccroche", "cuelga",
-"riattacca", "ophangen") on either Echo, or "End Drop In".
+"riattacca", "ophangen", "închide") on either Echo, or "End Drop In".
 Music on the Echo pauses when a call connects (it does not resume by itself). The volume buttons work during a call; the wake word too, but not while the other side talks (its "Alexa" for its own
 Echo would wake this one).
 
@@ -503,7 +505,8 @@ satellite of its own has to run without its microphone (as a display) while hass
   **Home**, the face button on the music page), or going back to the app, keeps the music page away until the music has
   stopped; a face chosen that way stays, as it always has, until the drawer's **Home** brings the home app back.
 - **Clock when idle** (Screen page, card **When idle**, off by default): where the screen would go dark, it shows the
-  time across the whole screen instead, with the date under it, a clock for the nightstand. The wait is the screen's
+  time across the whole screen instead, with the date under it (in the language of "Language you speak"), a clock for
+  the nightstand. The wait is the screen's
   own: **Screen sleeps after** (5 minutes), 1 minute with the mic off or in Do not disturb (the clock then says so on a
   line under it). Until then the face shows as always; a touch on the clock brings it back (that touch does nothing
   else), and so does anything the Echo does: a request, a ringing timer (with its **Stop**), a Drop In, the volume,

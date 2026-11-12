@@ -166,6 +166,7 @@ struct scene {
      * screen's timeout ("Screen sleeps after", minutes, 0 never); the last thing that happened, and whether the
      * clock shows (a touch on it only wakes the face) */
     int clock_big, saver_min, saver_on, saver_was, front_sent; long long active_at;
+    char lang[8];                       /* "lg": the language spoken at home, for the date (lang.c); "" English */
     char name[64], timers[256], peer[64], home[96], act[64], web[96];
     /* music as Sendspin tells it (scene.h: mt, mp, mc, art) */
     int music, mstate, mspeed, mvol, mmuted, mrepeat, mshuffle; long long mpos, mdur, mpos_at;
@@ -268,6 +269,8 @@ int  face_view(struct scene *s, float dt);                      /* still moving 
 long long face_due(struct scene *s);
 int  face_act(struct scene *s, int a, int arg, int ev);
 int  face_mode(struct scene *s);
+struct tm;
+void ui_date(char *out, size_t cap, const struct tm *tm, const char *lang);    /* lang.c: "Miercuri, 11 noiembrie" */
 /* something happened: the screen saver's timeout from now; what it was goes to hassmic's log when it ends the clock */
 void scene_active(struct scene *s, const char *why, ...) __attribute__((format(printf, 2, 3)));
 void face_init(struct scene *s, long long now);

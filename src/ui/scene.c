@@ -957,6 +957,7 @@ void scene_msg(struct scene *s, const char *line, long long now)
     }
     else if (eq(cmd, "timers")) snprintf(s->timers, sizeof s->timers, "%s", a);
     else if (eq(cmd, "peer")) snprintf(s->peer, sizeof s->peer, "%s", a);
+    else if (eq(cmd, "lg")) snprintf(s->lang, sizeof s->lang, "%s", eq(a, "-") ? "" : a);
     else if (eq(cmd, "tz")) { if (a[0]) setenv("TZ", a, 1); else unsetenv("TZ"); tzset(); }
     else if (eq(cmd, "ping")) send(s, "pong %.20s", a);             /* hassmic: this UI's main loop goes on */
     else if (eq(cmd, "mt")) {

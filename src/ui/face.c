@@ -270,7 +270,7 @@ static void big_clock(struct scene *s, int m)
     float w = s->w, h = s->h; char clk[16], day[64];
     time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm);
     clock_text(s, clk, sizeof clk);
-    strftime(day, sizeof day, "%A %d %B", &tm);
+    ui_date(day, sizeof day, &tm, s->lang);
     /* 0.56 of the height fits the Shows' 960 x 454; a narrower screen takes it smaller.  Measured on "88:88" so the
      * digits keep one size all day (a tabular look without a tabular font).  With the music's bar at the bottom
      * (0.79 of the height down) the clock is a little smaller and higher, or the date touched it */

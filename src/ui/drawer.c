@@ -155,7 +155,7 @@ void drawer_draw(struct scene *s)
         time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm); char clk[16], date[64];
         if (s->h12) snprintf(clk, sizeof clk, "%d:%02d", tm.tm_hour % 12 ? tm.tm_hour % 12 : 12, tm.tm_min);
         else snprintf(clk, sizeof clk, "%02d:%02d", tm.tm_hour, tm.tm_min);
-        strftime(date, sizeof date, "%A, %e %B", &tm);
+        ui_date(date, sizeof date, &tm, s->lang);
         text(s, ID_DRAWER + 65, clk, U(44), 0, cx1 - cx0, cx1, qy - U(4), 2, FG, 255);
         text(s, ID_DRAWER + 66, date, U(18), 0, cx1 - cx0, cx1, qy + U(52), 2, DIM, 255);
     }

@@ -9,6 +9,7 @@ int  screen_present(void);                               /* this model has one: 
 void screen_start(void);
 void screen_led(const char *op, const char *pattern);    /* main.c led(): the core's patterns, "-s" on, "-u" off */
 void screen_level(int dbfs10);                           /* the talker (listening) or the reply (speaking), dBFS x 10 */
+void screen_language_changed(void);                     /* the setting speech_language: the date's language again */
 void screen_tz(const char *posix_tz);                    /* Home Assistant's time zone (GetTimeResponse) */
 /* Sendspin (Music Assistant): what the group plays, and what its controller allows.  state: 0 stopped, 1 playing,
  * 2 paused; pos_ms where it is now; speed x1000 */

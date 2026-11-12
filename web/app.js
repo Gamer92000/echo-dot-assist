@@ -289,7 +289,7 @@ const HELP = {
         : `Last claim from another Kiosk Satellite device: ${a.kiosk_heard_s < 90 ? a.kiosk_heard_s + ' s' : Math.round(a.kiosk_heard_s / 60) + ' min'} ago.`);
     } },
   wake_word_adaptation: { help: 'The Echo learns from your requests how the wake word sounds here, in your voices, your room and through its microphone. It then finds where the word ends a little more often (in tests 163 of 220 instead of 158, from the sixth request on). What it learns stays on the Echo; it forgets the oldest as new requests come. On by default.' },
-  speech_language: { help: 'The language you and the others at home speak. After a wake word the Echo finds where the word ends by its sounds, and it hears those best when it knows how you say them: a German speaker\'s "Alexa" is found far better with German sounds, even with the English wake word. Automatic takes it from your time zone in Home Assistant (Germany, Austria, Switzerland: German; France: French; ...), else from the wake word\'s own language.' },
+  speech_language: { help: 'The language you and the others at home speak. After a wake word the Echo finds where the word ends by its sounds, and it hears those best when it knows how you say them: a German speaker\'s "Alexa" is found far better with German sounds, even with the English wake word. Those sounds come for German, English, French, Spanish and Japanese so far; for the other languages the Echo uses the wake word\'s own (English for "Alexa"), as it did before they were listed. The Echo Show also writes the date on its screen in this language. Automatic takes it from your time zone in Home Assistant (Germany, Austria, Switzerland: German; France: French; Romania, Moldova: Romanian; ...), else from the wake word\'s own language.' },
   wake_engine: { help: 'Amazon\'s engine is the one the Echo was built around. With microWakeWord, the engine of ESPHome\'s voice satellites, you get wake words anyone can train, at the cost of hearing them much less reliably. Home Assistant: the Echo streams its microphone and your Home Assistant listens, with openWakeWord for instance.',
     // the warning, a first model, or Home Assistant's side of it, before the switch; from or to Home Assistant the satellite restarts
     before: (c) => c === 'microwakeword' ? mwwSwitchDialog() : c === 'homeassistant' ? haSwitchDialog() : true,
@@ -464,7 +464,7 @@ const SUB = {
   online_updates: 'Where new versions come from',
   arbitration: 'Only the Echo that heard you best answers',
   wake_word_adaptation: 'Learns how the wake word sounds in your home',
-  speech_language: 'Helps find where the wake word ends',
+  speech_language: 'Helps find where the wake word ends; the date on the screen',
   wake_engine: 'What listens for the wake word',
   arbitration_mode: 'How the Echos agree on who answers',
   arbitration_offset: 'Evens out the Echo against your tablets',
@@ -488,7 +488,8 @@ const SUB = {
 };
 const CHOICE_NAMES = {
   wake_engine: { amazon: 'Amazon', microwakeword: 'microWakeWord', homeassistant: 'Home Assistant' },
-  speech_language: { auto: 'Automatic', de: 'German', en: 'English', fr: 'French', es: 'Spanish', ja: 'Japanese' },
+  speech_language: { auto: 'Automatic', de: 'German', en: 'English', fr: 'French', es: 'Spanish', ja: 'Japanese', it: 'Italian',
+    pt: 'Portuguese', nl: 'Dutch', sv: 'Swedish', da: 'Danish', nb: 'Norwegian', fi: 'Finnish', pl: 'Polish', ro: 'Romanian' },
   arbitration_mode: { hassmic: 'Echo network', kiosk: 'Kiosk Satellite' },
   noise_reduction: { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' },
   online_updates: { off: 'Off', beta: 'Beta', release: 'Release' },
@@ -497,7 +498,7 @@ const CHOICE_NAMES = {
   timer_sound: { beep: 'Beep', timer: 'Alexa timer', alarm: 'Alexa alarm', custom: 'Your own' },
   end_of_request: { off: 'Off', relaxed: 'Relaxed', normal: 'Normal', aggressive: 'Aggressive' },
   bluetooth_announcement_language: { en: 'English', de: 'Deutsch', fr: 'Français', es: 'Español', it: 'Italiano', pt: 'Português', nl: 'Nederlands',
-    sv: 'Svenska', da: 'Dansk', nb: 'Norsk', fi: 'Suomi', pl: 'Polski' },
+    sv: 'Svenska', da: 'Dansk', nb: 'Norsk', fi: 'Suomi', pl: 'Polski', ro: 'Română' },
 };
 const settingValueIndex = (name) => { const s = state.settings.find((x) => x.name === name); return s ? s.value : -1; };
 const settingValue = (name) => { const s = state.settings.find((x) => x.name === name); return s ? (s.type === 'choice' ? s.choices[s.value] : s.value) : undefined; };
