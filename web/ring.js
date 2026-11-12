@@ -69,9 +69,17 @@ async function liveStop() {
   try { await rcall('POST', '/api/ring/live', ''); } catch (e) { toast(errText(e)); return; }
   ringStatus().catch(() => {});
 }
-const liveButton = (d, cls = 'link') => !liveOn() ? null : livePlaying() && livePlaying() === d.name
-  ? h('button', { type: 'button', class: cls, title: 'Stop it on the ring', onclick: liveStop }, 'Stop')
-  : h('button', { type: 'button', class: cls, title: 'Show it on the ring now, as drawn (Light ring live): nothing is saved or applied', onclick: () => liveShow(d) }, 'Show on the Echo');
+// On a design's tile: a pill over its picture, "Show" (play it on the ring) or, while it plays there, "Stop"
+const PLAY_G = '<path d="M8.5 5.8v12.4L18.6 12z" fill="currentColor" stroke="none"/>';
+const STOP_G = '<rect x="7" y="7" width="10" height="10" rx="1.6" fill="currentColor" stroke="none"/>';
+function liveButton(d) {
+  if (!liveOn()) return null;
+  const on = livePlaying() === d.name;
+  return h('button', { type: 'button', class: 'ringd-live' + (on ? ' on' : ''),
+    title: on ? 'Stop it on the ring' : 'Show it on the ring now, as drawn: nothing is saved or applied (Light ring live)',
+    'aria-label': on ? `Stop "${d.name}" on the ring` : `Show "${d.name}" on the Echo`,
+    onclick: (e) => { e.stopPropagation(); if (on) liveStop(); else liveShow(d); } }, glyph(on ? STOP_G : PLAY_G), on ? 'Stop' : 'Show');
+}
 
 // ---------------------------------------------------------------- designs as text (ringdesign.h) and as objects
 
@@ -1024,7 +1032,7 @@ function designer(id, start, opts = {}) {
         spinB,
         adj('Fade', '6 frames blending it into the next', fade),
         adj('Breathe', '11 frames dimming and coming back', breathe))));
-  const tryIt = liveOn() ? h('button', { type: 'button', title: 'Show the design as it is now on the ring (Light ring live), saved or not', onclick: () => liveShow(ed.d) }, 'Show on the Echo') : null;
+  const tryIt = liveOn() ? h('button', { type: 'button', title: 'Show the design as it is now on the ring (Light ring live), saved or not', onclick: () => liveShow(ed.d) }, glyph(PLAY_G), 'Show on the Echo') : null;
   m.foot.append(...[delBtn, download, tryIt, uses, useRow, h('span', { class: 'grow' })].filter(Boolean),
     h('button', { type: 'button', onclick: () => save(true), title: 'A design of its own; the one saved before stays as it is' }, 'Save as new'),
     h('button', { type: 'button', class: 'primary', onclick: async () => { if (await save(false)) m.dlg.close(); } }, 'Save'));
@@ -1651,16 +1659,17 @@ function designTile(id, d, inPack) {
   const cv = sizedCanvas(88), uses = usedFor(id);
   const forPack = inPack ? inPack.uses.filter(([, x]) => x === id).map(([sl]) => placeOf(sl).label) : [];
   play(cv, () => { const x = ring.designs.get(id); return x && { d: x }; });
+  const playing = liveOn() && livePlaying() === d.name;
   return h('div', { class: 'ringd-tile' },
+    liveButton(d),
     h('button', { class: 'ringd-tile-main', title: 'Edit "' + d.name + '"', onclick: () => designer(id, d) },
       h('span', { class: 'ringd-tile-art' }, cv, h('span', { class: 'ringd-tile-edit' }, icon('pen'))),
       h('span', { class: 'ringd-name' }, d.name),
       h('span', { class: 'ringd-sub' }, `${d.frames.length} frame${d.frames.length === 1 ? '' : 's'} · ${seconds(totalMs(d))}`)),
     h('div', { class: 'ringd-tile-foot' },
-      h('span', { class: 'ringd-uses' + (uses.length || forPack.length ? '' : ' none'), title: [...forPack, ...uses].join(', ') },
-        forPack.length ? 'In the pack: ' + forPack.join(', ') : uses.length ? 'On the ring: ' + uses.join(', ') : 'Not on the ring'),
+      h('span', { class: 'ringd-uses' + (uses.length || forPack.length || playing ? '' : ' none'), title: [...forPack, ...uses].join(', ') },
+        playing ? 'Playing on the Echo now' : forPack.length ? 'In the pack: ' + forPack.join(', ') : uses.length ? 'On the ring: ' + uses.join(', ') : 'Not on the ring'),
       h('span', { class: 'ringd-tile-acts' },
-        liveButton(d),
         h('button', { class: 'link', onclick: () => useFor(id, d) }, 'Use for…'),
         h('button', { class: 'link', onclick: () => moveDialog(id, d) }, 'Move…'))));
 }
