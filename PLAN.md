@@ -3677,6 +3677,32 @@ Run in this order. Each step says what it proves.
       (the block in `sh` with a stand-in `settings`), `fake_ha_esphome_timers.py` (`HASSMIC_FAKE_BACKLIGHT`: entities,
       commands, page), `fake_ha_esphome.py` (none on a Dot).  **Open:** Android 9's (athena, crown) curve not read, nor
       tried there; the adjustment's effect on the backlight not measured; Kiosk Satellite's switch on cronos/crown/athena.
+- [x] Echo Show 5: Amazon's network bounce (2026-11-11).  The links to HA, Sendspin and the arbitration network all
+      dropped for ~5 s every few minutes (14:37, 15:11, 15:14), signal -36 dBm.  logcat: `WifiDiagsUtil` (fosservices,
+      in system_server) pings the gateway and DNS and fetches `generate_204` from mmechocaptiveportal.com and
+      fireoscaptiveportal.com; behind the egress lock the fetch times out -> `BAD_CONNECTION` -> `wifidiags-bounce` ->
+      wpa_supplicant `CTRL-EVENT-DISCONNECTED reason=3 locally_generated=1`, joined again 4.1 s later
+      (`wifi-disconnect-duration`).  Its `WifiDiagsConfigReceiver` (registered without a permission) takes a boolean
+      `val` for SET_ENABLENETBOUNCE and SET_ENABLEWIFIDIAGS (`receivedIntentSetEnableNetBounce, val=false` logged);
+      kept in memory only.  device.conf `ANDROID_BROADCASTS`, main.sh `android_tell` in netwatch: sent once per
+      system_server pid after boot, 3 netwatch rounds (>= 30 s) after a new pid is first seen: sys.boot_completed
+      stays 1 over a framework restart and am reports "Broadcast completed" with no receiver registered yet; am under
+      `timeout 10`, the first failure ends the attempt (netwatch held 10 s at worst), retried 6 rounds later and logged
+      once per pid; the 30 s are a margin, not timed.  alexa-on.sh sends each back as true (stock's).  TRIGGERNETRECOVERY in the same receiver calls System.exit: never sent.
+      Then (13:33 UTC, 12 min on) `NetWatchDog` (same class family): its timer is reset only by a passing test of
+      Amazon's, so it fired (`network-watchdog`), `setWifiEnabled(false)` then `true`, wpa_supplicant restarted, ~8 s
+      off.  It skips while Wi-Fi is off, setup is not complete, a MIRRORING_ON / OOBE_STARTED broadcast came, or
+      `Settings.System smartconn_status` contains "enabled"; `WifiDiagsHandler.shouldResetConnection` skips the bounce
+      for that too, and nothing else reads it.  So `system/smartconn_status=enabled` in ANDROID_SETTINGS (persistent,
+      alexa-on.sh deletes it again), the broadcasts kept beside it: SET_ENABLEWIFIDIAGS false stops the tests
+      themselves (`WifiDiagsHandler.handleMessage`: RUN_TEST_CONTINUOUSLY "doNothing, reason=wifidiagsDisabled", the
+      next one not scheduled).  The other Android models from their firmware's code (2026-11-12, the dex in
+      fosservices.odex, athena's compact dex in fosservices.vdex, disassembled): `onNetworkRestartTimeout` and
+      `shouldResetConnection` are instruction for instruction checkers' on cronos, crown and cupcake, athena's the same
+      checks in the same order; the only readers of smartconn_status, and nothing writes it (every APK's and jar's
+      dex looked through too).  cronos, crown, cupcake: setting and both broadcasts; athena's receiver has no
+      SET_ENABLENETBOUNCE (mEnableNetBounce only from its config): setting and SET_ENABLEWIFIDIAGS.  **Open:** a day's
+      run on each of them.
 - [x] Echo Show 8 2nd gen adaptive colour (2026-11-10, issue #162): `screen_adaptive_colour` on the settings page's
       Screen page, off by default. `board.adaptive_colour` and device.conf `ADAPTIVE_COLOUR` enable it on athena.
       Of the four supported Shows' extracted firmware images checked here, only athena declares
