@@ -278,8 +278,10 @@ async def main():
         for _ in range(int(2.4 / 0.02)):
             await asyncio.sleep(0.02); vals.append(bright5())
         lo, hi = min(vals), max(vals)
+        # 0x90, not more: sampled every 20 ms (later under load) the bloom's top is often missed by a step or two
+        # (9F of the B9 it reaches, tests/run.py -j 6)
         flashes = 1 + sum(1 for a, b in zip(vals, vals[1:]) if b >= 0x80 and a < 0x80)
-        check(hi >= 0xA0 and lo <= 0x40 and 4 <= flashes <= 6, f"  the kick plays: it pumps with it (between {lo:02X} and {hi:02X}, {flashes} kicks in 2.4 s at 120 bpm)")
+        check(hi >= 0x90 and lo <= 0x40 and 4 <= flashes <= 6, f"  the kick plays: it pumps with it (between {lo:02X} and {hi:02X}, {flashes} kicks in 2.4 s at 120 bpm)")
         httpd.shutdown()
         await asyncio.sleep(2.5)
         c.light_command(ring.key, effect="None", rgb=(1.0, 0.5, 0.0), transition_length=0.0)

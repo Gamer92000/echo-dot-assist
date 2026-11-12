@@ -84,11 +84,14 @@ async def until(cond, secs=5.0):
 def player(state, port, http, env, web=0, logname="log"):
     """a hassmic-host with Sendspin on port, its log in state/log (or logname); no push updates or arbitration, and no
     settings page unless web: several run at once"""
-    log = open(os.path.join(state, logname), "w+")
+    # the log appending (O_APPEND), read through another open file: with one for both, a read's seek(0) moved
+    # hassmic's next line to the file's start, over what was there (tests/fake_ha_volumes.py found it)
+    path = os.path.join(state, logname); open(path, "w").close(); log = open(path, "a")
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-p", str(http), "-z", str(port), "-L", "-o", "0", "-a", "0", "-W", str(web)],
                             env=env, stderr=log)
     wait_port(port, http, *([web] if web else []))
-    def text(): log.seek(0); return log.read()
+    def text():
+        with open(path) as f: return f.read()
     return proc, text
 
 
