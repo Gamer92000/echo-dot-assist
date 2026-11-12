@@ -876,7 +876,9 @@ change counts. Tried in one flat for a few minutes and one night, where it mostl
   relying on it. On the Echo Dot 2 and Echo 2 also when the router changes speed (the Echo Dot 3 and Echo Show 5 allow
   for that).
 - **Through a kernel module of ours**: the Wi-Fi drivers do not report what this needs. Loaded only once you switch it
-  on (within 10 s), then until the Echo restarts.
+  on (within 10 s), then until the Echo restarts. When Wi-Fi goes off and on (the Echo's Wi-Fi switch, a network
+  change) the driver is reloaded and the module hooks it again by itself; should no frame reach it for a minute, the
+  sensor shows unknown and the log says so.
 - ESPHome only. It does not use the microphones; muting does not stop it.
 
 ## Settings page

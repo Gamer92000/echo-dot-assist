@@ -40,6 +40,7 @@
 
 #define IFACE "wlan0"
 #define HOLD_MS 30000                   /* motion stays on this long after the last movement, as a PIR's */
+#define FROZEN_MS 60000                 /* the module's frame counter unchanged this long: no frames reach the hook */
 #define POLL_MS 100
 #define BUF 4096                        /* the command's answer: iwpriv's buffer size; the driver declares 2000 */
 
@@ -156,9 +157,10 @@ int wifimotion_present(void)
 static void *poll_thread(void *arg)
 {
     (void)arg;
-    char *buf = malloc(BUF); struct wm_det d; struct wm_kinds kinds; int fails = 0; long frames = -1; float v;
-    /* the PC test cannot wait 30 s for motion to clear */
-    int hold = fake ? 3000 : HOLD_MS;
+    char *buf = malloc(BUF); struct wm_det d; struct wm_kinds kinds; int fails = 0, frozen = 0; long frames = -1; float v;
+    long long same_ms = 0;
+    /* the PC test cannot wait 30 s for motion to clear, nor a minute for a frozen counter */
+    int hold = fake ? 3000 : HOLD_MS, frozen_ms = fake ? 3000 : FROZEN_MS;
     if (!buf) return NULL;
     wm_reset(&d); memset(&kinds, 0, sizeof kinds);
     for (;;) {
@@ -171,7 +173,27 @@ static void *poll_thread(void *arg)
         long long t = mono_ms();
         int r = rx_stat(buf) == 0 ? wm_parse_rcpi(buf) : -1;
         const char *fr = r >= 0 ? strstr(buf, "FRAMES =") : NULL;     /* the module's counter: no new frame, no reading */
-        if (fr) { long n = strtol(fr + 8, NULL, 10); if (n == frames) r = -2; frames = n; }
+        if (fr) {
+            long n = strtol(fr + 8, NULL, 10);
+            /* The counter stuck for a minute: nothing reaches the hook.  Android unloads the Wi-Fi driver whenever Wi-Fi
+             * goes off and on, and the hook goes with it (an Echo Show 5, 2026-11-13: 37 h without a frame, the sensor
+             * never anything but unknown); the module hooks the driver again once it is back, and the readings resume
+             * on a fresh baseline (the levels may have moved with the new link).  Said once, and unknown meanwhile:
+             * "still" from before the freeze would be a lie */
+            if (n == frames) {
+                r = -2;
+                if (!same_ms) same_ms = t;
+                else if (!frozen && t - same_ms >= frozen_ms) {
+                    frozen = 1;
+                    fprintf(stderr, "wifi motion: no frame from the access point for %d s (Wi-Fi driver reloaded? the module hooks it again once it is back)\n", frozen_ms / 1000);
+                    if (atomic_exchange(&motion, -1) != -1 && changed_cb) changed_cb();
+                }
+            } else {
+                if (frozen) { fprintf(stderr, "wifi motion: frames again\n"); wm_reset(&d); memset(&kinds, 0, sizeof kinds); }
+                frozen = 0; same_ms = 0;
+            }
+            frames = n;
+        }
         /* the module's kind of that frame; RX_STAT has none: one level for all */
         const char *kd = r >= 0 ? strstr(buf, "KIND =") : NULL;
         if (r >= 0 && !wm_kind_norm(&kinds, r, kd ? (unsigned)strtoul(kd + 6, NULL, 16) : 0, t, &v)) r = -2;
