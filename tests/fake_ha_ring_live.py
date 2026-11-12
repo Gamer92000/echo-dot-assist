@@ -223,6 +223,14 @@ async def main():
         check(not [l for l in open(leds).read().split() if l.startswith("hassmic_solid") or l.startswith("hassmic_pulse")], "  no palette pattern to ledctrl")
         await until(lambda: last(lights[0].key, LightState).state and last(ring.key, LightState).state)
         check(last(lights[0].key, LightState).state and last(ring.key, LightState).state, "  both on in Home Assistant")
+        # every effect, its state back in Home Assistant whole (the longest names once cut the state message, and
+        # Home Assistant dropped the link and came back, again and again)
+        bad = []
+        for eff in ring.effects:
+            c.light_command(ring.key, effect=eff)
+            if not await until(lambda: last(ring.key, LightState).effect == eff, 3): bad.append(eff)
+        check(not bad and c._connection is not None and c._connection.is_connected,
+              f"  each of the {len(ring.effects)} effects comes back as Home Assistant's state, the link up ({bad or 'all'})")
         c.light_command(ring.key, effect="Fire")
         await asyncio.sleep(0.5); a = read(); await asyncio.sleep(0.3)
         check(a != read() and pixels(a)[5][4:] == "00", f"  Fire: it flickers by itself, warm ({pixels(a)[5]})")

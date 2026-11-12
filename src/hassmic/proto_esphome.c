@@ -198,8 +198,9 @@ static int write_frame(int fd, const void *data, size_t len)
 /* lock held */
 static void send_to(int fd, unsigned type, const struct pb *b)
 {
-    unsigned char h[12]; struct pb hb = { h, 0, sizeof h }; size_t n = b ? b->n : 0; int c = client_of(fd), rc;
+    unsigned char h[12]; struct pb hb = { h, 0, sizeof h, 0 }; size_t n = b ? b->n : 0; int c = client_of(fd), rc;
     if (fd < 0) return;
+    if (b && b->over) { fprintf(stderr, "esphome: message %u did not fit its buffer (%zu bytes), not sent\n", type, b->cap); return; }
     if (c >= 0 && clients[c].enc) {                     /* inside: big-endian type and length, then the message */
         static unsigned char pt[4 + 8192], ct[sizeof pt + NOISE_TAG];
         if (4 + n > sizeof pt) { fprintf(stderr, "esphome: message %u too long (%zu)\n", type, n); return; }
@@ -220,7 +221,7 @@ static void send_state(unsigned type, const struct pb *b)                       
     for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].states) send_to(clients[i].fd, type, b);
 }
 
-#define PB(name, size) unsigned char name##_buf[size]; struct pb name = { name##_buf, 0, size }
+#define PB(name, size) unsigned char name##_buf[size]; struct pb name = { name##_buf, 0, size, 0 }
 
 /* ---------------------------------------------------------------- identity */
 
@@ -415,11 +416,12 @@ static void send_setting(int key)       /* lock held */
         pb_fixed32(&t, 1, key); pb_str(&t, 2, key == KEY_DROPIN_STATE ? dropin_states[st] : peer); send_state(TEXT_SENSOR_STATE, &t); } break;
     case KEY_LAST_HEARD: case KEY_LAST_REPLY: { PB(t, sizeof last_heard + 16);
         pb_fixed32(&t, 1, key); pb_str(&t, 2, key == KEY_LAST_HEARD ? last_heard : last_reply); send_state(TEXT_SENSOR_STATE, &t); } break;
-    case KEY_LIGHT: {
-        struct ring_light l; ring_light_get(&l);
-        pb_uint(&b, 2, l.on); pb_float(&b, 3, l.brightness); pb_uint(&b, 11, COLOR_MODE_RGB); pb_float(&b, 10, l.color_brightness);
-        pb_float(&b, 4, l.r); pb_float(&b, 5, l.g); pb_float(&b, 6, l.b); pb_str(&b, 9, ring_effects[l.effect]);
-        send_state(LIGHT_STATE, &b);
+    case KEY_LIGHT: {                   /* its own buffer: the longer effect names ("Music beat spin") do not fit 48 */
+        struct ring_light l; ring_light_get(&l); PB(t, 128);
+        pb_fixed32(&t, 1, key);
+        pb_uint(&t, 2, l.on); pb_float(&t, 3, l.brightness); pb_uint(&t, 11, COLOR_MODE_RGB); pb_float(&t, 10, l.color_brightness);
+        pb_float(&t, 4, l.r); pb_float(&t, 5, l.g); pb_float(&t, 6, l.b); pb_str(&t, 9, ring_effects[l.effect]);
+        send_state(LIGHT_STATE, &t);
     } break;
     case KEY_RING_FILL: { struct ring_light l; ring_light_get(&l); pb_float(&b, 2, l.fill); send_state(NUMBER_STATE, &b); } break;
     case KEY_LIVE_DESIGN: {             /* what of the library plays live; "None" otherwise (Home Assistant's own frames too) */
@@ -548,7 +550,7 @@ static void send_light_entities(void)
     /* Home Assistant's light on the ring (ring.h): a palette made beforehand, so the colour shows as the nearest of
      * it; the state says what was asked for.  With "Light ring live" on the Echo draws it itself (ringlive.h): the
      * exact colour, more effects, a fade, under the LEDs' own lights */
-    if (listed(KEY_LIGHT)) { PB(b, 256); pb_str(&b, 1, "light_ring"); pb_fixed32(&b, 2, KEY_LIGHT); pb_str(&b, 3, "Light ring");
+    if (listed(KEY_LIGHT)) { PB(b, 640); pb_str(&b, 1, "light_ring");     /* 17 effects with the live ring's */ pb_fixed32(&b, 2, KEY_LIGHT); pb_str(&b, 3, "Light ring");
       pb_uint(&b, 12, COLOR_MODE_RGB); pb_uint(&b, 5, 1); pb_uint(&b, 6, 1);
       for (int i = 0; i < ring_neffects; i++) if (ring_effect_listed(i)) pb_str(&b, 11, ring_effects[i]);
       pb_str(&b, 14, "mdi:circle-slice-8"); send_msg(LIST_LIGHT, &b); }
@@ -1229,13 +1231,13 @@ static void ble_db(uint64_t addr, const struct ble_db *db)
     static unsigned char buf[8000], sb[7900], cb[1200], db_[64];
     pthread_mutex_lock(&core_lock);
     for (int s = 0; s < db->nsvc; s++) {
-        const struct ble_svc *sv = &db->svc[s]; struct pb m = { buf, 0, sizeof buf }, sm = { sb, 0, sizeof sb };
+        const struct ble_svc *sv = &db->svc[s]; struct pb m = { buf, 0, sizeof buf, 0 }, sm = { sb, 0, sizeof sb, 0 };
         pb_uuid(&sm, 1, sv->uuid); pb_uint(&sm, 2, sv->start);
         for (int c = sv->first; c < sv->first + sv->n; c++) {
-            const struct ble_chr *ch = &db->chr[c]; struct pb cm = { cb, 0, sizeof cb };
+            const struct ble_chr *ch = &db->chr[c]; struct pb cm = { cb, 0, sizeof cb, 0 };
             pb_uuid(&cm, 1, ch->uuid); pb_uint(&cm, 2, ch->handle); pb_uint(&cm, 3, ch->props);
             for (int d = ch->first; d < ch->first + ch->n; d++) {
-                struct pb dm = { db_, 0, sizeof db_ };
+                struct pb dm = { db_, 0, sizeof db_, 0 };
                 pb_uuid(&dm, 1, db->dsc[d].uuid); pb_uint(&dm, 2, db->dsc[d].handle);
                 pb_bytes(&cm, 4, dm.p, dm.n);
             }
@@ -1416,7 +1418,7 @@ static void audio(const void *pcm, size_t len)
 {
     static unsigned char buf[4096 + 16];
     for (size_t off = 0; off < len; off += 4096) {
-        struct pb b = { buf, 0, sizeof buf };
+        struct pb b = { buf, 0, sizeof buf, 0 };
         pb_bytes(&b, 1, (const char *)pcm + off, len - off < 4096 ? len - off : 4096);
         send_va(VA_AUDIO, &b);
     }

@@ -7,9 +7,11 @@
 #include <stdint.h>
 #include <string.h>
 
-struct pb { unsigned char *p; size_t n, cap; };
+/* over: something did not fit, and the message is not whole (proto_esphome.c sends none such: a cut message made Home
+ * Assistant drop the link and connect again, over and over, 2026-11-12) */
+struct pb { unsigned char *p; size_t n, cap; int over; };
 
-static inline void pb_raw(struct pb *b, const void *d, size_t n) { if (b->n + n <= b->cap) { memcpy(b->p + b->n, d, n); b->n += n; } }
+static inline void pb_raw(struct pb *b, const void *d, size_t n) { if (b->n + n <= b->cap) { memcpy(b->p + b->n, d, n); b->n += n; } else b->over = 1; }
 static inline void pb_varint(struct pb *b, uint64_t v) { unsigned char c; do { c = v & 0x7f; v >>= 7; if (v) c |= 0x80; pb_raw(b, &c, 1); } while (v); }
 static inline void pb_uint(struct pb *b, int f, uint64_t v) { if (v) { pb_varint(b, f << 3); pb_varint(b, v); } }
 static inline void pb_bytes(struct pb *b, int f, const void *d, size_t n) { if (n) { pb_varint(b, f << 3 | 2); pb_varint(b, n); pb_raw(b, d, n); } }

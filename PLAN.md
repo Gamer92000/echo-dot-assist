@@ -2463,6 +2463,20 @@ Run in this order. Each step says what it proves.
       120 bpm 8 beats in 4 s, its band 0.99 on the kick and 0.06 between, heard 210 ms after it was fed with 200 ms
       queued; through Home Assistant's play_media on the PC "Music pulse" went FD on each kick and 00 between, 5 in
       2.4 s.  Open: on the Dot 3 with Music Assistant and a phone (the mixer's queue as the delay).
+      Found on the Dot 3 (2026-11-12, "Music spectrum" set through the API): "Light ring"'s state message was cut (48
+      bytes, the longest effect names need 51), aioesphomeapi refused it ("Wire format was corrupt") and Home
+      Assistant dropped the link and connected again, ~400 times in a minute, until the effect was set back.  pb.h
+      dropped what did not fit and the message went out cut; now `struct pb` says `over`, send_to sends none such and
+      logs it, the light's state has a buffer of its own, and tests/fake_ha_ring_live.py sets all 17 effects and wants
+      each back whole (it failed on the build before with the same corrupt message).
+- [ ] Idea (the user, 2026-11-12): the Echo's own patterns overridden from Home Assistant, e.g. "Thinking" red when
+      the speaker is recognised as one person, green as another.  The live ring would draw the slot itself (a design
+      of the library, or stock's look in another colour), at once, mid-request.  An action `light_ring_override` (slot,
+      design or colour, for this request only by default / for minutes, capped / until cleared), over the keyed link
+      only, never kept over a restart, under the live ring's brightness cap.  Never for what tells about the
+      microphones or privacy: listening, microphones off and on, Drop In's calling, ringing and call, page login,
+      factory reset, not set up; only the cosmetic ones (thinking, speaking, not understood, timers, volume, do not
+      disturb, identify).  Who spoke has to come from Home Assistant.  Not built yet.
       Open: the update path on the Dot 3 (main.sh's grant and runas' group); biscuit and radar (`scripts/led-probe.sh read` finds the driver by itself; same 0-003f by PLAN's earlier
       reads, calibration per unit; then `ring_frame`/`LED_FRAME` for them); the band of the Shows and the Echo
       Input's one LED are not part of it; a theme pack applied from Home Assistant (root's install, as Apply) asked

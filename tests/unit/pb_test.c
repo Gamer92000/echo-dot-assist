@@ -61,6 +61,12 @@ int main(void)
     check(!first(field_wrap, sizeof field_wrap, &f), "field 2^32 + 1 (would wrap onto 1): malformed");
     check(!first(field0, sizeof field0, &f), "field 0: malformed");
     free(held);
+    /* a message bigger than its buffer: marked, so it is never sent cut (proto_esphome.c send_to) */
+    unsigned char small[8]; struct pb sb = { small, 0, sizeof small, 0 };
+    pb_str(&sb, 9, "Music beat spin");
+    check(sb.over && sb.n <= sizeof small, "a string past the buffer: the message marked as not whole");
+    sb = (struct pb){ small, 0, sizeof small, 0 }; pb_str(&sb, 9, "Fire");
+    check(!sb.over && sb.n == 6, "one that fits: whole");
     printf("%s\n", fails ? "pb: FAILED" : "pb: ok");
     return fails != 0;
 }
