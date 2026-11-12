@@ -612,7 +612,10 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   "Light ring" (ring.c keeps its state; `ring_light_live` makes ring.c play no palette pattern, `ring_light_now`;
   `ringlive_effect`: the palette's five and `RING_LIVE_EFFECTS`), the LED lights over it, an animation over all; HA's
   transition (LightCommand 14/15, else `LIVE_FADE_MS`) as a fade in seen space (`ringlive_fade`).  SIGTERM and
-  `ringlive_shutdown`: the dark frame.  Page: `POST /api/ring/live` (a design's text, as drawn; empty: stop), `live` in
+  `ringlive_shutdown`: the dark frame, never while the Echo's own pattern shows; init's stop kills outright, then the
+  next start's unsets have ledcontroller redraw, and `state/ring-live` (boot id + the frame as read back, written when
+  ours first shows, when it settles, at most every 5 s while it moves) darkens ours only in the same boot and only if
+  the ring still shows it.  Page: `POST /api/ring/live` (a design's text, as drawn; empty: stop), `live` in
   GET /api/ring, ring.js `liveShow`.  PC: `HASSMIC_FAKE_FRAME`, `HASSMIC_FAKE_ALSPARAMS`; `tests/unit/ringlive_test.c`,
   `tests/fake_ha_ring_live.py`.
 - **Screen UI** (`src/ui/`, `screen.c`, `screen.h`; device.mk `SCREEN`, else `screen_none.c`; every Show): the

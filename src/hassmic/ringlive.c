@@ -148,13 +148,25 @@ static int frame_read(char *out, size_t cap)
     return 0;
 }
 
-/* What this run left on the ring, as the frame reads back: the next start makes it dark only if the ring still shows
- * exactly that (not the mute's red ring ledcontroller wrote since: dark over it would hide it until its next change) */
+/* What this run left on the ring, as the frame reads back, and the boot it was in: the next start makes it dark only
+ * in the same boot and if the ring still shows exactly that (not the mute's red ring ledcontroller wrote since: dark
+ * over it would hide it until its next change).  After a reboot or a power cut the chip lost it anyway and
+ * ledcontroller drew the ring anew: the marker is only deleted */
+static void boot_id(char out[48])
+{
+    const char *f = getenv("HASSMIC_BOOT_ID"); FILE *b = fopen(f ? f : "/proc/sys/kernel/random/boot_id", "r");
+    out[0] = 0;
+    if (b) { if (!fgets(out, 48, b)) out[0] = 0; fclose(b); }
+    out[strcspn(out, "\r\n")] = 0;
+}
 static void marker(const char *left)
 {
-    char p[300]; const char *d = getenv("HASSMIC_STATE");
+    char p[300], t[TEXT_MAX + 64], id[48]; const char *d = getenv("HASSMIC_STATE");
     snprintf(p, sizeof p, "%s/ring-live", d ? d : "/data/local/hassmic/state");
-    if (left) statefile_write(p, 0600, left, strlen(left)); else unlink(p);
+    if (!left) { unlink(p); return; }
+    boot_id(id);
+    int n = snprintf(t, sizeof t, "%s\n%s", id, left);
+    statefile_write(p, 0600, t, (size_t)n);
 }
 
 /* ---------------------------------------------------------------- effects */
@@ -362,6 +374,10 @@ static void *writer(void *arg)
                 }
                 if (need && !quitting && now - last_write < 1000 / RINGLIVE_FPS) { next = (int)(1000 / RINGLIVE_FPS - (now - last_write)); need = 0; }
                 if (need && hold_fn && hold_fn()) need = 0;     /* the Echo's own came meanwhile: its frame wins */
+                /* settled (nothing new for 300 ms after a fade or a change): what the marker holds is what shows */
+                if (!need && owned && content && seen_back[0] && strcmp(seen_back, marked) && now - last_write >= 300) {
+                    marker(seen_back); snprintf(marked, sizeof marked, "%s", seen_back); marked_at = now;
+                }
                 if (need) {
                     last_write = last_check = now;
                     if (frame_write(want)) {
@@ -414,8 +430,10 @@ static char *slurp(const char *file, size_t max, size_t *n)
     return t;
 }
 
-/* init's "stop hassmic" (a restart, an update): the dark frame if ours is on the ring, then as before (the default
- * ends the process).  open, write and close are async-signal-safe; the marker makes the next start do it anyway */
+/* A SIGTERM (kill, a test): the dark frame if ours is on the ring, then as before (the default ends the process).  open,
+ * write and close are async-signal-safe.  init's "stop hassmic" kills outright (measured on the Dot 3: the LED stayed
+ * lit); then the next start's unsets have ledcontroller write its own frame, and the marker darkens ours if it is still
+ * there */
 static void on_term(int sig)
 {
     if (owned_now) { int fd = open(frame_path, O_WRONLY | O_TRUNC | O_CLOEXEC); if (fd >= 0) { if (write(fd, dark_text, strlen(dark_text)) < 0) {} close(fd); } }
@@ -454,17 +472,21 @@ int ringlive_start(int (*hold)(void), int (*level)(void), void (*changed)(void))
     {   /* a frame the last run left (it ended while live showed): dark, ledcontroller's idle picture */
         char m[300]; const char *d = getenv("HASSMIC_STATE");
         snprintf(m, sizeof m, "%s/ring-live", d ? d : "/data/local/hassmic/state");
-        char left[TEXT_MAX + 8] = ""; FILE *f = fopen(m, "r");
+        char left[TEXT_MAX + 64] = "", id[48]; FILE *f = fopen(m, "r");
         if (f) {
             size_t k = fread(left, 1, sizeof left - 1, f); left[k] = 0; fclose(f);
+            char *nl = strchr(left, '\n'), now_t[TEXT_MAX + 8];
             unsigned char z[MAX_LEDS][3]; memset(z, 0, sizeof z); ringlive_text((const unsigned char (*)[3])z, leds, t);
-            char now_t[TEXT_MAX + 8];
-            if (!frame_read(now_t, sizeof now_t) && !strcmp(now_t, left) && !frame_write(t))
+            boot_id(id);
+            if (!nl || !id[0] || strncmp(left, id, (size_t)(nl - left)) || strlen(id) != (size_t)(nl - left))
+                fprintf(stderr, "light ring live: the last run's picture was of an earlier boot: the ring left as it is\n");
+            else if (!frame_read(now_t, sizeof now_t) && !strcmp(now_t, nl + 1) && !frame_write(t))
                 fprintf(stderr, "light ring live: what the last run left on the ring is dark again\n");
             unlink(m);
         }
     }
     { unsigned char z[MAX_LEDS][3]; memset(z, 0, sizeof z); ringlive_text((const unsigned char (*)[3])z, leds, dark_text); }
+    if (avail) return 0;                    /* once: one writer, whatever calls this again */
     signal(SIGTERM, on_term);
     pthread_t th;
     if (pthread_create(&th, NULL, writer, NULL)) { fprintf(stderr, "light ring live: no thread\n"); return -1; }

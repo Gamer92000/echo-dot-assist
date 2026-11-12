@@ -2449,7 +2449,13 @@ Run in this order. Each step says what it proves.
       grant comes with the update), read back from the driver: LED 1 red AF0000, white AFD3A9, blue 0000A9, green
       00D300, each the very value stock's solid_* gives at level 100; muted: stock's 680000 ring, not one write of
       ours, ours back after; an animation of 12 frames at 50 ms played twice by the Echo; stop: dark; led_current 0 and
-      pwm1 39739 as before.
+      pwm1 39739 as before.  Second build (ae31dd4 and after): "Light ring" magenta drawn live AF00A9 (stock's
+      scaling of FD00FD), LED 1 green 00D300 over it; Comet, Fire and Rainbow move by themselves with LED 1 staying;
+      off over 2 s: 220021 half way, then dark; muted (stock's 680000 ring), then `stop hassmic` and `start hassmic`:
+      the red ring untouched throughout.  init's stop kills outright (no SIGTERM: an LED left blue stayed blue); the
+      next start's own unsets had ledcontroller draw its frame, dark.  So the marker (`state/ring-live`) carries the
+      boot id: after a reboot or a power cut the chip was redrawn by ledcontroller and the marker is only deleted.
+      Live states are not kept over a restart: everything starts off, and Home Assistant is told so.
       Open: the update path on the Dot 3 (main.sh's grant and runas' group); biscuit and radar (`scripts/led-probe.sh read` finds the driver by itself; same 0-003f by PLAN's earlier
       reads, calibration per unit; then `ring_frame`/`LED_FRAME` for them); the band of the Shows and the Echo
       Input's one LED are not part of it; a theme pack applied from Home Assistant (root's install, as Apply) asked

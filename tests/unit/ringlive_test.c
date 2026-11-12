@@ -143,9 +143,15 @@ int main(void)
     check(ringlive_start(hold_fn, level_fn, changed_fn) == -1, "a frame not 12 x RRGGBB: no live ring");
     const char *left = "00000000000000000000000000000000000000000000000000000000000000000000A900\n";
     put(frame, left);
-    char marker[300]; snprintf(marker, sizeof marker, "%s/state/ring-live", dir); put(marker, left);    /* ours, still there */
-    check(ringlive_start(hold_fn, level_fn, changed_fn) == 0 && ringlive_available(), "started");
-    char t[200]; get(t, sizeof t);
+    char t[200]; char marker[300], m[200]; snprintf(marker, sizeof marker, "%s/state/ring-live", dir);
+    snprintf(p, sizeof p, "%s/boot_id", dir); put(p, "boot-2\n"); setenv("HASSMIC_BOOT_ID", p, 1);
+    snprintf(m, sizeof m, "boot-1\n%s", left); put(marker, m);              /* ours, of an earlier boot (a power cut) */
+    check(ringlive_start(hold_fn, level_fn, changed_fn) == 0, "started after a reboot");
+    get(t, sizeof t);
+    check(!strcmp(t, left) && access(marker, F_OK), "  the last boot's picture: the ring left as it is (the chip was redrawn), the marker gone");
+    snprintf(m, sizeof m, "boot-2\n%s", left); put(marker, m);              /* ours, this boot, still there */
+    check(ringlive_start(hold_fn, level_fn, changed_fn) == 0 && ringlive_available(), "started again in the same boot");
+    get(t, sizeof t);
     check(!strcmp(t, dark) && access(marker, F_OK), "what a crash left on the ring is dark again, the marker gone");
 
     char c[12][16] = { "#0000ff", "", "ff0000" }, e[120];
