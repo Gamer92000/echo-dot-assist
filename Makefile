@@ -240,7 +240,7 @@ host: build/hassmic-host build/hassmic-host-screen $(OUT)/hassmic-qemu build/ota
 UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/third_party/monocypher.c
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
-	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band ringlive sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk backlight \
+	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band ringlive ringviz sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk backlight \
 	screen ui touch json pb uninstall_boot sysinstall_aligners resample fork_release
 unit: $(addprefix unit-,$(UNIT_TESTS))
 unit-hash:
@@ -355,6 +355,15 @@ unit-afe_parcel:
 unit-lux:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/lux_test.c -lm -o build/lux_test && build/lux_test
+# What the live ring's music effects make of a track, without an Echo (tools/ringviz.py, tools/ringmusic.py)
+build/ringviz: tools/ringviz.c src/hassmic/ringlive.c src/hassmic/musiclight.c src/hassmic/ringdesign.c src/hassmic/json.c src/hassmic/statefile.c $(HASSMIC_H)
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tools/ringviz.c src/hassmic/ringlive.c src/hassmic/musiclight.c src/hassmic/ringdesign.c src/hassmic/json.c src/hassmic/statefile.c -lm -lpthread -o $@
+unit-ringviz: build/ringviz
+	@mkdir -p build/viz
+	.venv/bin/python tools/ringmusic.py build/viz/track.raw build/viz/truth.json
+	build/ringviz build/viz/track.raw build/viz
+	.venv/bin/python tools/ringviz.py build/viz build/viz/truth.json --check
 unit-ringlive:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ringlive_test.c src/hassmic/ringlive.c src/hassmic/musiclight.c src/hassmic/ringdesign.c src/hassmic/json.c src/hassmic/statefile.c -lm -lpthread -o build/ringlive_test && build/ringlive_test

@@ -72,80 +72,101 @@ static void table(const char *file, int entries)
     fclose(f);
 }
 
-static long long mono(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
 
-/* musiclight.c on made-up music, fed in 20 ms pieces as an output takes them, 200 ms of it still in front of the
- * speaker: a kick drum (60 Hz, 80 ms) at 120 bpm under a hi-hat, then a 6 kHz tone, then silence */
+/* musiclight.c on made-up music on a clock of its own (as an output plays it, 200 ms of it in front of the speaker): a
+ * kick drum (an 808's pitch drop, 80 ms) at 120 bpm under a quiet hi-hat, then a 6 kHz tone, then silence.  Its finer
+ * measure is make unit-ringviz (a whole track with its drums written down) */
+static long long sim;
+static long long sim_now(void) { return sim; }
 static void music(void)
 {
     enum { RATE = 48000, CHUNK = 960 };
     static int16_t pcm[CHUNK * 2]; struct music_feat f;
-    musiclight_reset();
-    musiclight_feed(pcm, CHUNK, 2, RATE, 0); musiclight_now(mono() + 50, &f);
+    musiclight_clock(sim_now); musiclight_reset();
+    sim = 1000000;
+    musiclight_feed(pcm, CHUNK, 2, RATE, 0); musiclight_now(sim + 50, &f);
     check(!f.active, "music: nothing analysed until an effect wants it");
     musiclight_want(1);
-    long long t0 = mono(); int beats = 0; long long first = 0, seen = 0; float kick_bass = 0, hat_bass = 1;
-    unsigned seed = 1;
-    for (int k = 0; k < 200; k++) {                     /* 4 s */
+    long long t0 = sim; int kicks = 0, beats = 0, on_kick = 0; long long seen_k = 0, seen_b = 0; float bpm = 0;
+    unsigned seed = 1; double ph = 0;
+    for (int k = 0; k < 500; k++) {                     /* 10 s */
         for (int i = 0; i < CHUNK; i++) {
             double ts = (k * CHUNK + i) / (double)RATE, in = fmod(ts, 0.5), v = 0;
-            if (in < 0.08) v += 0.6 * sin(2 * M_PI * 60 * ts) * (1 - in / 0.08);
-            seed = seed * 1103515245u + 12345u; v += 0.03 * (((seed >> 16) & 0x7fff) / 16384.0 - 1);
+            if (in < 0.3) { ph += (45 + 110 * exp(-in / 0.03)) / RATE; v += 0.8 * sin(2 * M_PI * ph) * fmin(1, in / 0.002) * exp(-in / 0.12); }
+            seed = seed * 1103515245u + 12345u; v += 0.02 * (((seed >> 16) & 0x7fff) / 16384.0 - 1);
             pcm[2 * i] = pcm[2 * i + 1] = (int16_t)(v * 32767);
         }
-        /* fed faster than it plays, as a player fills an output: what is in front of it grows by what was written */
-        musiclight_feed(pcm, CHUNK, 2, RATE, 200000 + (long long)k * 20000 - (mono() - t0) * 1000);
-        musiclight_now(t0 + (long long)k * 20 + 200 + 20, &f);      /* when this piece's end is heard */
-        if (f.beat_ms[0] && f.beat_ms[0] != seen) { seen = f.beat_ms[0]; beats++; if (!first) first = f.beat_ms[0]; }
-        double in = fmod(k * 0.02, 0.5);
-        if (k > 50 && in > 0.02 && in < 0.06) kick_bass = fmaxf(kick_bass, f.band[0]);
-        if (k > 50 && in > 0.3 && in < 0.45) hat_bass = fminf(hat_bass, f.band[0]);
+        musiclight_feed(pcm, CHUNK, 2, RATE, 200000);
+        sim += 20;
+        musiclight_now(sim + 200, &f);                  /* what is heard now: what was fed 200 ms ago */
+        if (f.kick.at[0] && f.kick.at[0] != seen_k) { seen_k = f.kick.at[0]; kicks++; }
+        if (k > 400 && f.beat_at && f.beat_at != seen_b) {
+            seen_b = f.beat_at; beats++;
+            double off = fmod((f.beat_at - t0 - 200) / 1000.0 + 0.25, 0.5) - 0.25;      /* to the nearest kick, s */
+            if (fabs(off) < 0.06) on_kick++;
+        }
+        bpm = f.bpm;
     }
-    char w[120];
-    snprintf(w, sizeof w, "music: beats of a kick at 120 bpm: %d in 4 s (7 to 9)", beats); check(beats >= 7 && beats <= 9, w);
-    snprintf(w, sizeof w, "music: the first heard %lld ms after it was fed (the output's 200 ms, give or take a block)", first - t0);
-    check(first - t0 >= 190 && first - t0 <= 290, w);
-    snprintf(w, sizeof w, "music: the bass band on the kick %.2f, between kicks %.2f", kick_bass, hat_bass); check(kick_bass > 0.8f && hat_bass < 0.45f, w);
-    check(f.active && f.level > 0, "music: active while it plays");
+    char w[128];
+    snprintf(w, sizeof w, "music: kicks at 120 bpm: %d in 10 s (19 to 21)", kicks); check(kicks >= 19 && kicks <= 21, w);
+    snprintf(w, sizeof w, "music: the tempo found: %.1f bpm, confidence %.2f", bpm, f.confidence); check(fabsf(bpm - 120) < 2 && f.confidence > 0.2f, w);
+    snprintf(w, sizeof w, "music: the last 2 s: %d of %d beats on a kick, heard 200 ms after it was fed", on_kick, beats); check(beats >= 3 && on_kick == beats, w);
+    check(f.active, "music: active while it plays");
     for (int k = 0; k < 100; k++) {                     /* 2 s of 6 kHz */
         for (int i = 0; i < CHUNK; i++) pcm[2 * i] = pcm[2 * i + 1] = (int16_t)(0.3 * 32767 * sin(2 * M_PI * 6000 * (k * CHUNK + i) / (double)RATE));
-        musiclight_feed(pcm, CHUNK, 2, RATE, 0);
+        musiclight_feed(pcm, CHUNK, 2, RATE, 0); sim += 20;
     }
-    musiclight_now(mono() + 50, &f);
-    snprintf(w, sizeof w, "music: a 6 kHz tone lights the top band (%.2f) over the bass (%.2f)", f.band[5], f.band[0]); check(f.band[5] > 0.9f && f.band[0] < 0.4f, w);
+    musiclight_now(sim, &f);
+    snprintf(w, sizeof w, "music: a 6 kHz tone lights the bands next to it (%.2f %.2f) over the bass (%.2f)", f.band[9], f.band[10], f.band[0]);
+    check(f.band[9] + f.band[10] > 1.2f && f.band[0] < 0.4f, w);
+    for (int k = 0; k < 100; k++) {                     /* 2 s, the tone on the left only */
+        for (int i = 0; i < CHUNK; i++) { pcm[2 * i] = (int16_t)(0.3 * 32767 * sin(2 * M_PI * 440 * (k * CHUNK + i) / (double)RATE)); pcm[2 * i + 1] = 0; }
+        musiclight_feed(pcm, CHUNK, 2, RATE, 0); sim += 20;
+    }
+    musiclight_now(sim, &f);
+    snprintf(w, sizeof w, "music: left only: left %.2f over right %.2f", f.left, f.right); check(f.left > f.right + 0.3f, w);
     memset(pcm, 0, sizeof pcm);
-    for (int k = 0; k < 60; k++) musiclight_feed(pcm, CHUNK, 2, RATE, 0);      /* 1.2 s of silence */
-    musiclight_now(mono() + 50, &f); check(!f.active, "music: silence, not active");
-    musiclight_now(mono() + 2000, &f); check(!f.active, "music: nothing fed for a while: stopped");
-    musiclight_want(0);
+    for (int k = 0; k < 60; k++) { musiclight_feed(pcm, CHUNK, 2, RATE, 0); sim += 20; }      /* 1.2 s of silence */
+    musiclight_now(sim, &f); check(!f.active, "music: silence, not active");
+    musiclight_now(sim + 2000, &f); check(!f.active, "music: nothing fed for a while: stopped");
+    musiclight_want(0); musiclight_clock(NULL);
 
     /* the effects on readings made up here */
     float rgb[3] = { 0, 0.4f, 1 }, out[12][3]; struct music_feat m; memset(&m, 0, sizeof m);
     int over = 0;
-    for (int e = RING_E_MUSIC_PULSE; e <= RING_E_MUSIC_RAINBOW; e++) {
+    for (int e = RING_E_MUSIC_BEAT; e <= RING_E_MUSIC_AURORA; e++) {
         for (int k = 0; k < 400; k++) {
-            m.active = 1; m.level = (k % 37) / 36.0f; for (int b = 0; b < MUSIC_BANDS; b++) m.band[b] = ((k + b * 7) % 23) / 22.0f;
-            m.beat_ms[0] = 1000000 + (k / 15) * 500; m.beat_strength[0] = 1;
+            m.active = 1; m.level = (k % 37) / 36.0f; m.left = m.level; m.right = 1 - m.level; m.energy = (k % 11) / 10.0f; m.bright = 0.5f;
+            for (int b = 0; b < MUSIC_BANDS; b++) m.band[b] = ((k + b * 7) % 23) / 22.0f;
+            m.beat_at = 1000000 + (k / 15) * 500; m.beat_no = k / 15; m.beat_ms = 500; m.confidence = k > 200;
+            m.kick.at[0] = m.beat_at; m.kick.strength[0] = 1; m.snare.at[0] = m.beat_at + 250; m.snare.strength[0] = 0.8f;
+            m.hat.at[0] = 1000000 + (k / 4) * 125; m.hat.strength[0] = 0.6f;
             ringlive_music_effect(e, rgb, 0.7f, 12, 1000000 + k * 33, &m, out);
             for (int j = 0; j < 12; j++) for (int c = 0; c < 3; c++) if (out[j][c] < 0 || out[j][c] > 0.7f + 1e-5f) over++;
         }
     }
     check(!over, "music effects: always within the light's level");
-    ringlive_music_effect(RING_E_MUSIC_PULSE, rgb, 1, 12, 2000000, NULL, out);
+    ringlive_music_effect(RING_E_MUSIC_BEAT, rgb, 1, 12, 2000000, NULL, out);
+    ringlive_music_effect(RING_E_MUSIC_BEAT, rgb, 1, 12, 2003000, NULL, out);
     check(out[0][2] > 0 && out[0][2] <= 0.1f, "music effects: nothing playing, a quiet breath");
-    memset(&m, 0, sizeof m); m.active = 1;
-    m.level = 1; ringlive_music_effect(RING_E_MUSIC_VU, rgb, 1, 12, 3000000, &m, out);
+    memset(&m, 0, sizeof m); m.active = 1; m.left = m.right = 1;
+    for (int k = 0; k < 3; k++) ringlive_music_effect(RING_E_MUSIC_VU, rgb, 1, 12, 3000000 + k * 33, &m, out);
     int lit = 0; for (int j = 0; j < 12; j++) lit += out[j][0] + out[j][1] > 0.5f;
     check(lit == 12 && out[0][1] > 0.9f && out[6][0] > 0.9f && out[6][1] < 0.1f, "VU meter: full, green at LED 1 to red opposite");
-    m.level = 0.3f; ringlive_music_effect(RING_E_MUSIC_VU, rgb, 1, 12, 3000033, &m, out);
-    check(out[0][1] > 0.9f && out[3][1] + out[3][0] < 0.6f, "VU meter: a third, LED 1's side lit, the peak still high");
-    memset(m.band, 0, sizeof m.band); m.band[5] = 1;
-    ringlive_music_effect(RING_E_MUSIC_SPECTRUM, rgb, 1, 12, 3000066, &m, out);
-    check(out[0][0] + out[0][1] + out[0][2] < 0.01f && out[6][0] + out[6][1] + out[6][2] > 0.5f, "spectrum: only the highs, lit opposite LED 1");
-    memset(&m, 0, sizeof m); m.active = 1; m.beat_ms[0] = 4000000; m.beat_strength[0] = 1;
-    ringlive_music_effect(RING_E_MUSIC_RIPPLE, rgb, 1, 12, 4000000, &m, out); float a0 = out[0][2], a6 = out[6][2];
-    ringlive_music_effect(RING_E_MUSIC_RIPPLE, rgb, 1, 12, 4000600, &m, out);
-    check(a0 > 0.8f && a6 < 0.2f && out[6][2] > out[0][2], "ripple: a beat starts at LED 1, 0.6 s later it is opposite");
+    m.right = 0; for (int k = 0; k < 20; k++) ringlive_music_effect(RING_E_MUSIC_VU, rgb, 1, 12, 3000100 + k * 33, &m, out);
+    check(out[3][0] + out[3][1] < 0.2f && out[9][0] + out[9][1] > 0.8f, "VU meter: the left alone, only LED 1's left side lit");
+    memset(m.band, 0, sizeof m.band); m.band[MUSIC_BANDS - 1] = 1;
+    for (int k = 0; k < 20; k++) ringlive_music_effect(RING_E_MUSIC_SPECTRUM, rgb, 1, 12, 4000000 + k * 33, &m, out);
+    check(out[0][0] + out[0][1] + out[0][2] < 0.15f && out[11][0] + out[11][1] + out[11][2] > 0.8f, "spectrum: only the highs, LED 12 lit, LED 1 dark");
+    memset(&m, 0, sizeof m); m.active = 1; m.kick.at[0] = 5000000; m.kick.strength[0] = 1;
+    ringlive_music_effect(RING_E_MUSIC_DRUMS, rgb, 1, 12, 5000000, &m, out); float a0 = out[0][2], a6 = out[6][2];
+    for (int k = 1; k <= 9; k++) ringlive_music_effect(RING_E_MUSIC_DRUMS, rgb, 1, 12, 5000000 + k * 31, &m, out);
+    check(a0 > 0.8f && a6 < 0.3f && out[6][2] > 0.4f, "drums: a kick starts at LED 1, 0.28 s later it is opposite");
+    memset(&m, 0, sizeof m); m.active = 1; m.beat_at = 6000000; m.beat_ms = 500; m.level = 0.3f;
+    ringlive_music_effect(RING_E_MUSIC_BEAT, rgb, 1, 12, 6000000, &m, out); float on = out[0][2];
+    for (int k = 1; k <= 12; k++) ringlive_music_effect(RING_E_MUSIC_BEAT, rgb, 1, 12, 6000000 + k * 33, &m, out);
+    snprintf(w, sizeof w, "beat: blooms on the beat (%.2f), settles to a glow, never dark (%.2f)", on, out[0][2]);
+    check(on > 0.8f && out[0][2] < 0.5f && out[0][2] > 0.15f, w);
 }
 
 static void pure(void)
@@ -177,7 +198,7 @@ static void pure(void)
 
     /* the effects: each in 0..level, the ones that move moving, Rainbow and Color loop not the light's colour */
     float rgbw[3] = { 1, 0.5f, 0 }, a[12][3], b[12][3];
-    for (int e = 0; e < RING_E_MUSIC_PULSE; e++) {            /* the music's: music() */
+    for (int e = 0; e < RING_E_MUSIC_BEAT; e++) {            /* the music's: music() */
         int in = 1, moved = 0;
         for (long long t = 0; t < 12000; t += 37) {
             ringlive_effect(e, rgbw, 0.8f, 12, t, a); ringlive_effect(e, rgbw, 0.8f, 12, t + 120, b);

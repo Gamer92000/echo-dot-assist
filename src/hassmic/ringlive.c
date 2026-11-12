@@ -244,73 +244,141 @@ static float rgb_hue(const float c[3])          /* the hue of a colour in turns;
 }
 static float from_front(int j, int n) { return (float)(j <= n / 2 ? j : n - j); }     /* LEDs from LED 1, either way round */
 
-static struct { long long t, beat; float spin, hue, rain, peak; } mus;   /* what music effects carry from frame to frame */
+static void hsv_rgb(float h, float sat, float v, float out[3])
+{
+    hue_rgb(h, out);
+    for (int i = 0; i < 3; i++) out[i] = v * (1 - sat + sat * out[i]);
+}
+static float since(long long t, long long at) { return at && t >= at ? (float)(t - at) : 1e9f; }
+
+/* What the music effects carry from frame to frame: each LED as last shown (they fall back smoothly), the meter's
+ * peaks, the orbit's turn while there is no tempo, the effect they were for */
+static struct { long long t; int effect; float led[RING_LEDS_MAX][3], peak[2], peak_at[2], turn; } mus;
 
 void ringlive_music_effect(int effect, const float rgb[3], float level, int n, long long t, const struct music_feat *m, float out[][3])
 {
     const float tau = 2 * (float)M_PI;
-    float dt = mus.t && t > mus.t ? fminf(0.2f, (t - mus.t) / 1000.0f) : 0, c[3] = { rgb[0], rgb[1], rgb[2] };
+    float dt = mus.t && t > mus.t ? fminf(0.2f, (t - mus.t) / 1000.0f) : 0, c[3] = { clamp01(rgb[0]), clamp01(rgb[1]), clamp01(rgb[2]) };
+    if (mus.effect != effect) { memset(mus.led, 0, sizeof mus.led); mus.peak[0] = mus.peak[1] = 0; mus.effect = effect; }
     mus.t = t;
-    if (!m || !m->active) {                     /* nothing playing: a quiet breath, so the mode shows it is on */
-        float k = 0.03f + 0.07f * (0.5f - 0.5f * cosf(tau * (t % 5000) / 5000.0f));
+    /* the light's colour as hue and saturation; white (or near it) takes the effect's own colours */
+    float mx = fmaxf(c[0], fmaxf(c[1], c[2])), mn = fminf(c[0], fminf(c[1], c[2])), sat = mx > 0 ? (mx - mn) / mx : 0, h0 = rgb_hue(c);
+    int white = sat < 0.25f;
+    float release = effect == RING_E_MUSIC_AURORA ? 0.35f : effect == RING_E_MUSIC_ORBIT ? 0.06f : effect == RING_E_MUSIC_DRUMS ? 0.12f : 0.09f;     /* s, as seen */
+    float tgt[RING_LEDS_MAX][3]; memset(tgt, 0, sizeof tgt);
+    if (!m || !m->active) {                     /* nothing playing: a quiet breath (the aurora drifts), so it shows it is on */
+        float k = 0.03f + 0.06f * (0.5f - 0.5f * cosf(tau * (t % 6000) / 6000.0f));
         for (int j = 0; j < n; j++) {
-            float col[3] = { c[0], c[1], c[2] };
-            if (effect == RING_E_MUSIC_SPECTRUM || effect == RING_E_MUSIC_RAINBOW) hue_rgb((float)j / n + (t % 30000) / 30000.0f, col);
-            for (int i = 0; i < 3; i++) out[j][i] = clamp01(col[i] * k * level);
+            float col[3];
+            if (effect == RING_E_MUSIC_AURORA) hsv_rgb((white ? 0.45f : h0) + 0.06f * sinf(tau * ((float)j / n + (t % 20000) / 20000.0f)), white ? 0.8f : sat, 1, col);
+            else if (effect == RING_E_MUSIC_SPECTRUM && white) hsv_rgb((float)j / n * 0.8f, 1, 1, col);
+            else memcpy(col, c, sizeof col);
+            for (int i = 0; i < 3; i++) tgt[j][i] = col[i] * k;
         }
-        mus.peak = 0;
-        return;
+        mus.peak[0] = mus.peak[1] = 0;
+        release = 0.5f;
     }
-    float lv = m->level, flash = 0;
-    if (m->beat_ms[0] && t >= m->beat_ms[0]) flash = expf(-(t - m->beat_ms[0]) / 160.0f) * m->beat_strength[0];
-    int beat = m->beat_ms[0] && m->beat_ms[0] != mus.beat;
-    if (beat) mus.beat = m->beat_ms[0];
-    float half = n / 2.0f;
-    for (int j = 0; j < n; j++) {
-        float col[3] = { c[0], c[1], c[2] }, k = 0, p = from_front(j, n);
-        switch (effect) {
-        case RING_E_MUSIC_PULSE: {              /* the ring breathes with the level, a white-hot flash on the beat */
-            k = fmaxf(0.06f + 0.94f * powf(lv, 1.4f), flash);
-            for (int i = 0; i < 3; i++) col[i] += (1 - col[i]) * 0.45f * flash;
-            } break;
-        case RING_E_MUSIC_SPECTRUM: {           /* bass at LED 1, the highs opposite, mirrored; red up to violet */
-            int b = (int)(p * MUSIC_BANDS / (half + 1)); if (b >= MUSIC_BANDS) b = MUSIC_BANDS - 1;
-            hue_rgb(b * 0.15f, col);
-            k = powf(m->band[b], 1.3f);
-            if (b < 2) k = fmaxf(k, 0.8f * flash);
-            } break;
-        case RING_E_MUSIC_VU: {                 /* a meter from LED 1 both ways: green, yellow, red; its peak falls */
-            float fill = clamp01(lv * (half + 1) - p), g = p / half;
-            col[0] = g < 0.6f ? g / 0.6f : 1; col[1] = g < 0.6f ? 1 : 1 - (g - 0.6f) / 0.4f; col[2] = 0;
-            k = fill;
-            if (j == 0) { float top = lv * (half + 1); mus.peak = top > mus.peak ? top : fmaxf(0, mus.peak - 3 * dt); }   /* 3 LEDs a second */
-            if (k < 0.5f && fabsf(p - floorf(mus.peak)) < 0.5f && mus.peak > 1) { col[0] = col[1] = col[2] = 1; k = 0.55f; }
-            } break;
-        case RING_E_MUSIC_SPIN: {               /* a comet that speeds up with the music and leaps on the beat, its hue moving */
-            if (j == 0) { mus.spin += (0.25f + 1.5f * lv) * dt * n; if (beat) { mus.spin += 1.5f; mus.hue += 0.11f; } }
-            hue_rgb(rgb_hue(c) + mus.hue, col);
-            float d = around((float)j, fmodf(mus.spin, (float)n), n);
-            k = expf(-d / 2.0f) * (0.35f + 0.65f * lv) + 0.25f * flash;
-            } break;
-        case RING_E_MUSIC_RIPPLE: {             /* every beat a wave from LED 1 to the far side; the level glows under them */
-            float sum = 0;
-            for (int i = 0; i < MUSIC_BEATS && m->beat_ms[i]; i++) {
-                float age = (t - m->beat_ms[i]) / 1000.0f;
-                if (age < 0 || age > 0.9f) continue;
-                float front = age / 0.6f * half, x = (p - front) / 0.9f;
-                sum += expf(-x * x) * m->beat_strength[i] * (1 - age / 0.9f);
+    else {
+        float half = n / 2.0f, lv = m->level;
+        float age = since(t, m->beat_at), beat = m->beat_ms > 0 ? m->beat_ms : 500;
+        int place = ((m->beat_no % 4) + 4) % 4, down = place == 0;
+        /* the colours: the light's own, or for white a palette of the effect's (sky blue, with its accents) */
+        float hb = white ? 0.58f : h0, sb = white ? 0.75f : fmaxf(0.55f, sat);
+        float kick_near = m->kick.at[0] && fabsf((float)(m->kick.at[0] - m->beat_at)) < 70 ? m->kick.strength[0] : 0.6f;
+        for (int j = 0; j < n; j++) {
+            float p = from_front(j, n), col[3], k = 0;
+            hsv_rgb(hb, sb, 1, col);
+            switch (effect) {
+            case RING_E_MUSIC_BEAT: {           /* each beat blooms from LED 1 round to the back and settles to a glow: the
+                                                   ring breathes in time; each beat of the bar a shade apart, the 1 whiter */
+                float a = age - p * 22, bloom = a >= 0 ? expf(-a / (0.32f * beat)) : 0;
+                float glow = 0.16f + 0.24f * lv;
+                k = glow + (1 - glow) * bloom * (0.55f + 0.45f * kick_near);
+                hsv_rgb(hb + 0.035f * (place - 1.5f), sb, 1, col);
+                float w = (down ? 0.45f : 0.15f) * bloom;
+                for (int i = 0; i < 3; i++) col[i] += (1 - col[i]) * w;
+                } break;
+            case RING_E_MUSIC_SPECTRUM: {       /* LED by LED the twelve bands, bass at LED 1 round to the highs at LED 12 */
+                float v = m->band[j * MUSIC_BANDS / n];
+                k = 0.07f + 0.93f * powf(v, 1.25f);
+                hsv_rgb(white ? (float)j / (n - 1) * 0.75f : h0 - 0.12f + (float)j / (n - 1) * 0.3f, 1, 1, col);
+                if (v > 0.9f) for (int i = 0; i < 3; i++) col[i] += (1 - col[i]) * 0.35f * (v - 0.9f) * 10;
+                } break;
+            case RING_E_MUSIC_VU: {             /* stereo: right from LED 1 the clock's way, left the other; peaks hold, then fall */
+                int side = j == 0 ? -1 : j <= n / 2 ? 1 : 0;   /* 1 right, 0 left, -1 LED 1: both */
+                float fill_r = clamp01(m->right * (half + 1) - p), fill_l = clamp01(m->left * (half + 1) - p);
+                float fill = side == 1 ? fill_r : side == 0 ? fill_l : fmaxf(fill_l, fill_r);
+                if (p == half) fill = fmaxf(fill_l, fill_r);
+                float g = p / half;             /* green, yellow, red */
+                col[0] = g < 0.55f ? g / 0.55f : 1; col[1] = g < 0.55f ? 1 : 1 - (g - 0.55f) / 0.45f; col[2] = 0.1f * (1 - g);
+                k = 0.05f + 0.95f * fill;
+                for (int s = 0; s < 2; s++) if ((s == side || side < 0) && mus.peak[s] > 1 && mus.peak[s] < half && fabsf(p - floorf(mus.peak[s] - 0.01f)) < 0.5f && fill < 0.3f) {
+                    col[0] = col[1] = col[2] = 1; k = 0.65f;
+                }
+                } break;
+            case RING_E_MUSIC_ORBIT: {          /* two comets, one round a bar, the other the other way; they flare on the kick */
+                float turn = mus.turn;
+                if (m->confidence > 0.2f) turn = (place + fminf(1, age / beat)) / 4;
+                float ha = turn * n, hb_ = (0.5f - turn) * n, len = 1.4f + 3 * m->energy;
+                float da = around((float)j, ha, n), db = around(hb_, (float)j, n);
+                float flare = 0.5f * expf(-since(t, m->kick.at[0]) / 140) * m->kick.strength[0];
+                float ka = expf(-da / len), kb = expf(-db / len), head = 0.55f + 0.45f * lv + flare;
+                float ca[3], cb[3];
+                hsv_rgb(white ? 0.07f : h0, white ? 0.7f : sb, 1, ca); hsv_rgb(white ? 0.58f : h0 + 0.5f, sb, 1, cb);
+                for (int i = 0; i < 3; i++) col[i] = (ca[i] * ka + cb[i] * kb + 0.3f * (ca[i] + cb[i]) * 0.05f) / fmaxf(1e-3f, fmaxf(ka, kb) + 0.03f);
+                k = 0.07f + fmaxf(ka, kb) * head;
+                } break;
+            case RING_E_MUSIC_DRUMS: {          /* the kick a wave from LED 1, the snare one from the back, hi-hats sparks */
+                float acc[3], cs[3], ch[3], glow = 0.10f + 0.12f * lv;
+                hsv_rgb(hb + 0.03f * sinf(tau * (t % 16000) / 16000.0f), sb, 1, col);
+                hsv_rgb(hb + 0.5f, white ? 0.6f : sb * 0.8f, 1, cs);
+                for (int i = 0; i < 3; i++) { cs[i] += (1 - cs[i]) * 0.3f; ch[i] = 0.75f + 0.25f * col[i]; acc[i] = col[i] * glow; }
+                for (int h = 0; h < MUSIC_HITS; h++) {
+                    float ak = since(t, m->kick.at[h]), as = since(t, m->snare.at[h]), ah = since(t, m->hat.at[h]);
+                    if (ak < 500) {
+                        float x = (p - ak / 280 * half) / 1.6f, w = 1.1f * expf(-x * x) * m->kick.strength[h] * (1 - ak / 500);
+                        if (p < 1.5f) w += m->kick.strength[h] * expf(-ak / 150);
+                        for (int i = 0; i < 3; i++) acc[i] += col[i] * w;
+                    }
+                    if (as < 450) { float x = ((half - p) - as / 240 * half) / 1.4f, w = expf(-x * x) * m->snare.strength[h] * (1 - as / 450); for (int i = 0; i < 3; i++) acc[i] += cs[i] * w; }
+                    if (ah < 220) {
+                        unsigned spot = (unsigned)(m->hat.at[h] / 7) % (unsigned)n;
+                        if ((unsigned)j == spot || (unsigned)j == (spot + 5) % (unsigned)n) { float w = 0.9f * m->hat.strength[h] * expf(-ah / 90); for (int i = 0; i < 3; i++) acc[i] += ch[i] * w; }
+                    }
+                }
+                float mxa = fmaxf(acc[0], fmaxf(acc[1], acc[2]));
+                k = fminf(1, mxa);
+                for (int i = 0; i < 3; i++) col[i] = mxa > 0 ? acc[i] / mxa : 0;
+                } break;
+            case RING_E_MUSIC_AURORA: {         /* light flowing round, one drift in two bars; louder brighter, the beat a swell
+                                                   running round; brighter music turns it a little cooler */
+                float cycle = m->confidence > 0.2f ? 8 * beat : 6000, x = (float)j / n, T = (float)(t % 3600000) / cycle;
+                float f = 0.5f + 0.25f * sinf(tau * (x + 0.6f * T)) + 0.15f * sinf(tau * (2 * x - T) + 1) + 0.10f * sinf(tau * (3 * x + 0.4f * T) + 2);
+                float g = 0.5f + 0.5f * sinf(tau * (x - 1.3f * T) + 0.7f);
+                float base_h = white ? 0.42f : h0;
+                hsv_rgb(base_h + 0.16f * (f - 0.5f) + 0.15f * (m->bright - 0.4f) + 0.05f * sinf(tau * 0.13f * T), white ? 0.8f : sb, 1, col);
+                if (f > 0.7f) { float ac[3]; hsv_rgb(base_h + 0.3f, white ? 0.7f : sb, 1, ac); for (int i = 0; i < 3; i++) col[i] += (ac[i] - col[i]) * (f - 0.7f) / 0.3f * 0.6f; }
+                float swell = expf(-age / 520) * (0.4f + 0.6f * m->energy);
+                k = 0.18f + 0.5f * f * (0.45f + 0.55f * lv) + 0.32f * swell * g;
+                } break;
             }
-            k = fminf(1, 0.05f + 0.25f * lv + sum);
-            for (int i = 0; i < 3; i++) col[i] += (1 - col[i]) * 0.3f * fminf(1, sum);
-            } break;
-        case RING_E_MUSIC_RAINBOW:              /* the colour wheel turning faster the more there is, flashing on the beat */
-            if (j == 0) mus.rain += (0.08f + 0.7f * lv) * dt;
-            hue_rgb((float)j / n + mus.rain, col);
-            k = fmaxf(0.12f + 0.88f * powf(lv, 1.2f), flash);
-            break;
+            k = clamp01(k);                     /* never past the light's own level */
+            for (int i = 0; i < 3; i++) tgt[j][i] = clamp01(col[i]) * k;
         }
-        k = clamp01(k);                         /* never past the light's own level */
-        for (int i = 0; i < 3; i++) out[j][i] = clamp01(clamp01(col[i]) * k * level);
+        if (effect == RING_E_MUSIC_VU)          /* the peaks: held 0.4 s, then falling 6 LEDs a second */
+            for (int s = 0; s < 2; s++) {
+                float top = (s ? m->right : m->left) * (half + 1);
+                if (top >= mus.peak[s]) { mus.peak[s] = top; mus.peak_at[s] = 0; }
+                else if ((mus.peak_at[s] += dt) > 0.4f) mus.peak[s] = fmaxf(0, mus.peak[s] - 6 * dt);
+            }
+        if (effect == RING_E_MUSIC_ORBIT && m->confidence <= 0.2f) mus.turn = fmodf(mus.turn + dt * (0.25f + 0.5f * lv), 1);
+    }
+    /* as seen: up at once, back down smoothly */
+    float fall = dt > 0 ? 1 - expf(-dt / release) : 1;
+    for (int j = 0; j < n; j++) for (int i = 0; i < 3; i++) {
+        float v = tgt[j][i], *s_ = &mus.led[j][i];
+        *s_ = v >= *s_ ? v : *s_ + (v - *s_) * fall;
+        out[j][i] = clamp01(*s_ * level);
     }
 }
 

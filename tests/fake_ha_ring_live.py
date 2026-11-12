@@ -44,7 +44,7 @@ def table(path):
 
 
 def kick_wav(secs=4, rate=48000):
-    """a kick drum (60 Hz, 80 ms) at 120 bpm: what "Music pulse" should pump to"""
+    """a kick drum (60 Hz, 80 ms) at 120 bpm: what "Music beat" should pump to"""
     b = io.BytesIO(); w = wave.open(b, "wb"); w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
     fr = bytearray()
     for i in range(secs * rate):
@@ -234,7 +234,7 @@ async def main():
         c.light_command(ring.key, effect="Fire")
         await asyncio.sleep(0.5); a = read(); await asyncio.sleep(0.3)
         check(a != read() and pixels(a)[5][4:] == "00", f"  Fire: it flickers by itself, warm ({pixels(a)[5]})")
-        # "Music pulse" on Home Assistant's media (play_media): quiet before, pumping with the kick while it plays
+        # "Music beat" on Home Assistant's media (play_media): quiet before, pumping with the kick while it plays
         wav = kick_wav()
         class H(BaseHTTPRequestHandler):
             def do_GET(self):
@@ -243,19 +243,21 @@ async def main():
             def log_message(self, *a): pass
         httpd = ThreadingHTTPServer(("127.0.0.1", 16987), H); threading.Thread(target=httpd.serve_forever, daemon=True).start()
         c.light_command(lights[0].key, state=False); c.light_command(lights[2].key, state=False)
-        c.light_command(ring.key, effect="Music pulse", rgb=(1.0, 1.0, 1.0), brightness=1.0)
+        c.light_command(ring.key, effect="Music beat", rgb=(1.0, 1.0, 1.0), brightness=1.0)
+        def bright5():                                 # LED 6's brightest channel (white takes the effect's own colours)
+            px = pixels(read())[5]; return max(int(px[i:i + 2], 16) for i in (0, 2, 4))
         await asyncio.sleep(0.8)
-        quiet = max(int(pixels(read())[5][:2], 16) for _ in range(3))
-        check(quiet <= 0x10, f"Music pulse, nothing playing: a quiet breath ({quiet:02X})")
+        quiet = max(bright5() for _ in range(3))
+        check(quiet <= 0x10, f"Music beat, nothing playing: a quiet breath ({quiet:02X})")
         mp = next(e for e in ents if isinstance(e, MediaPlayerInfo))
         c.media_player_command(mp.key, media_url="http://127.0.0.1:16987/kick.wav")
-        await until(lambda: int(pixels(read())[5][:2], 16) >= 0x80, 6)       # HA's media: fetched and decoded first
+        await until(lambda: bright5() >= 0x80, 6)       # HA's media: fetched and decoded first
         vals = []
         for _ in range(int(2.4 / 0.02)):
-            await asyncio.sleep(0.02); vals.append(int(pixels(read())[5][:2], 16))
+            await asyncio.sleep(0.02); vals.append(bright5())
         lo, hi = min(vals), max(vals)
-        flashes = 1 + sum(1 for a, b in zip(vals, vals[1:]) if b >= 0xC0 and a < 0xC0)
-        check(hi >= 0xF0 and lo <= 0x40 and 4 <= flashes <= 6, f"  the kick plays: it pumps with it (between {lo:02X} and {hi:02X}, {flashes} kicks in 2.4 s at 120 bpm)")
+        flashes = 1 + sum(1 for a, b in zip(vals, vals[1:]) if b >= 0x80 and a < 0x80)
+        check(hi >= 0xA0 and lo <= 0x40 and 4 <= flashes <= 6, f"  the kick plays: it pumps with it (between {lo:02X} and {hi:02X}, {flashes} kicks in 2.4 s at 120 bpm)")
         httpd.shutdown()
         await asyncio.sleep(2.5)
         c.light_command(ring.key, effect="None", rgb=(1.0, 0.5, 0.0), transition_length=0.0)

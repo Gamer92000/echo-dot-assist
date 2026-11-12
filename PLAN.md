@@ -2462,7 +2462,17 @@ Run in this order. Each step says what it proves.
       output's queue (music_queued_us, bt_queued_us), so they show when heard.  On made-up music (unit test): a kick at
       120 bpm 8 beats in 4 s, its band 0.99 on the kick and 0.06 between, heard 210 ms after it was fed with 200 ms
       queued; through Home Assistant's play_media on the PC "Music pulse" went FD on each kick and 00 between, 5 in
-      2.4 s.  Open: on the Dot 3 with Music Assistant and a phone (the mixer's queue as the delay).
+      2.4 s.  Asked again (2026-11-12: "boring, they look odd; what does Music rainbow even do"), seen as pictures
+      first this time (tools/ringviz: a row a frame, the ring cut open): the VU meter was full all the time (levels
+      against their range sit at the top in music mastered loud), beats came only from jumps in the bass (rare where the
+      bass never stops), no sense of the bar.  Second version: 12 bands, the level as punch against 1.5 s, drums from
+      log-amplitude flux with level gates (on tools/ringmusic.py's track, 124 bpm, written down: kick F 0.46 -> 0.89,
+      snare 0.28 -> 0.60, hi-hat 0.87 -> 0.91; the dB flux counted bass notes and chords out of silence as drums), tempo
+      124.3 (autocorrelation), the grid on 73 of 73 beats where the kick plays (a circular mean of the kicks sets its
+      phase: before, it kept the phase it started with, 150 ms off, and the 20 % window never pulled it in), the accent
+      every 4 beats on bar or half bar (1 against 3 is not told apart: four on the floor has a kick on both, and the
+      track's pads come in too softly to hear the chord change); effects Music beat, spectrum, VU meter (stereo), orbit,
+      drums, aurora.  make unit-ringviz keeps those numbers.  Open: on the Dot 3 with real music.
       Found on the Dot 3 (2026-11-12, "Music spectrum" set through the API): "Light ring"'s state message was cut (48
       bytes, the longest effect names need 51), aioesphomeapi refused it ("Wire format was corrupt") and Home
       Assistant dropped the link and connected again, ~400 times in a minute, until the effect was set back.  pb.h
