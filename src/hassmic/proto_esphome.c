@@ -546,7 +546,8 @@ static void send_light_states(void)     /* lock held */
 static void send_light_entities(void)
 {
     /* Home Assistant's light on the ring (ring.h): a palette made beforehand, so the colour shows as the nearest of
-     * it; the state says what was asked for */
+     * it; the state says what was asked for.  With "Light ring live" on the Echo draws it itself (ringlive.h): the
+     * exact colour, more effects, a fade, under the LEDs' own lights */
     if (listed(KEY_LIGHT)) { PB(b, 256); pb_str(&b, 1, "light_ring"); pb_fixed32(&b, 2, KEY_LIGHT); pb_str(&b, 3, "Light ring");
       pb_uint(&b, 12, COLOR_MODE_RGB); pb_uint(&b, 5, 1); pb_uint(&b, 6, 1);
       for (int i = 0; i < ring_neffects; i++) if (ring_effect_listed(i)) pb_str(&b, 11, ring_effects[i]);
@@ -581,7 +582,7 @@ static void send_light_entities(void)
               "Frames \"<ms>:RRGGBB,RRGGBB,...\" played on the Echo, repeat times (0: until stopped), brightness 0..255" },
             { "light_ring_design", KEY_LIVE_DESIGN_SVC, { "name", "repeat", "brightness" }, { 3, 1, 1 },
               "A design of the settings page's library by its name, repeat times (0: as drawn), brightness 0..255" },
-            { "light_ring_stop", KEY_LIVE_STOP, { NULL }, { 0 }, "The live ring off: animation and LEDs" },
+            { "light_ring_stop", KEY_LIVE_STOP, { NULL }, { 0 }, "The animation stopped and the 12 LED lights off (\"Light ring\" stays as it is)" },
         };
         for (size_t k = 0; k < sizeof svc / sizeof svc[0]; k++) {
             PB(b, 512); pb_str(&b, 1, svc[k].id); pb_fixed32(&b, 2, svc[k].key);
@@ -652,10 +653,10 @@ static int listed(int key)
     case KEY_LED_AUTO: return have_auto;
     case KEY_SCR_AUTO: case KEY_SCR_LEVEL: case KEY_SCR_ADJUST: return settings_find("screen_brightness_auto") != NULL;
     case KEY_LUX: return have_light && settings_on("light_sensor");
-    case KEY_LIGHT: return ring_custom();
-    case KEY_RING_FILL: case KEY_RING_ROTATION: case KEY_RING_LEDS: return ring_per_led();
+    case KEY_LIGHT: return ring_custom() || ringlive_enabled();             /* the palette's, or drawn live */
+    case KEY_RING_FILL: case KEY_RING_ROTATION: case KEY_RING_LEDS: return ring_per_led() || ringlive_enabled();
     case KEY_LIVE_FRAME: case KEY_LIVE_ANIM: case KEY_LIVE_DESIGN_SVC: case KEY_LIVE_STOP: case KEY_LIVE_DESIGN:
-        return ringlive_available() && settings_on("ring_live");
+        return ringlive_enabled();
     case KEY_CALL_VOLUME: if (!(dropin_running() && settings_on("drop_in"))) return 0;    /* calls only with Drop In */
         /* fall through */
     case KEY_ASSIST_VOLUME: case KEY_SOUNDS_VOLUME: case KEY_TIMER_VOLUME:       /* one that follows the music has none */
@@ -664,7 +665,7 @@ static int listed(int key)
         return dropin_running() && settings_on("drop_in");
     default:
         if (key >= KEY_LIVE_LED && key < KEY_LIVE_LED + RING_LEDS_MAX)
-            return ringlive_available() && settings_on("ring_live") && key - KEY_LIVE_LED < ringlive_leds();
+            return ringlive_enabled() && key - KEY_LIVE_LED < ringlive_leds();
         return 1;
     }
 }
@@ -805,28 +806,12 @@ static void send_setting_entities(void)
     send_light_entities();
 }
 
-/* The ring has one owner from Home Assistant at a time: the light "Light ring" (ledcontroller's patterns, ring.c) or the
- * live ring (ringlive.c, the frame hassmic writes itself; ledcontroller's pattern would be written over or write over
- * it).  Whichever was asked for last; the other goes off and says so.  Lock held */
+/* lock held: the live ring's lights and design select, after something changed them */
+#define LIVE_FADE_MS 250                /* a light's change without a transition from Home Assistant: a short fade, as ESPHome's */
 static void send_live_states(void)
 {
     for (int i = 0; i < RING_LEDS_MAX; i++) send_setting(KEY_LIVE_LED + i);
     send_setting(KEY_LIVE_DESIGN);
-}
-static void live_took(void)
-{
-    struct ring_light l;
-    if (!ringlive_active()) return;
-    ring_light_get(&l);
-    if (!l.on) return;
-    l.on = 0; ring_light_set(&l, 0); send_setting(KEY_LIGHT);
-    fprintf(stderr, "light ring: Home Assistant's light off, the live ring has the ring\n");
-}
-static void light_took(void)
-{
-    if (!ringlive_available() || !ringlive_active()) return;
-    ringlive_clear(); send_live_states();
-    fprintf(stderr, "light ring live: off, Home Assistant's light has the ring\n");
 }
 
 static void on_setting(unsigned type, const unsigned char *p, const unsigned char *end)
@@ -843,7 +828,7 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
         char e[120];
         if (!strcmp(opt, "None")) ringlive_stop();
         else if (ringlive_design(opt, 0, 1, e, sizeof e)) fprintf(stderr, "light ring live: %s\n", e);
-        else { fprintf(stderr, "light ring live: design \"%s\"\n", opt); live_took(); }
+        else fprintf(stderr, "light ring live: design \"%s\"\n", opt);
         send_setting(key); return;
     }
     if (type == SELECT_COMMAND && key == KEY_DENOISE) { for (int i = 0; i < 4; i++) if (!strcmp(opt, denoise_names[i])) core_mic_denoise(i); }
@@ -928,7 +913,6 @@ static void ring_leds_from(char colors[][16], int n)        /* lock held */
         else if (*c && strcasecmp(c, "off") && strcasecmp(c, "black")) fprintf(stderr, "light ring: \"%s\" is no colour (#rrggbb), dark\n", colors[i]);
     }
     l.nleds = n; l.on = 1;
-    light_took();
     ring_light_set(&l, 0);
     send_setting(KEY_LIGHT);
 }
@@ -937,7 +921,7 @@ static void ring_leds_from(char colors[][16], int n)        /* lock held */
  * blinking for its length and leaves the light as it was */
 static void on_light(const unsigned char *p, const unsigned char *end)      /* lock held */
 {
-    struct pbf f; struct ring_light l; unsigned key = 0, flash = 0; int has[32] = { 0 }; float v[32] = { 0 }; char eff[32] = "";
+    struct pbf f; struct ring_light l; unsigned key = 0, flash = 0, trans = 0; int has[32] = { 0 }; float v[32] = { 0 }; char eff[32] = "";
     ring_light_get(&l);
     while (pb_next(&p, end, &f)) {
         if (f.field >= 32) continue;
@@ -945,6 +929,7 @@ static void on_light(const unsigned char *p, const unsigned char *end)      /* l
         else if (f.wire == 5) { uint32_t u = (uint32_t)f.v; memcpy(&v[f.field], &u, 4); }
         else if (f.field == 19 && f.data) pbf_str(&f, eff, sizeof eff);
         else if (f.field == 17) flash = (unsigned)f.v;
+        else if (f.field == 15) trans = (unsigned)f.v;          /* transition_length, ms (has_: 14) */
         else if (f.field == 3) v[3] = f.v != 0;
         else has[f.field] = f.v != 0;
     }
@@ -957,8 +942,8 @@ static void on_light(const unsigned char *p, const unsigned char *end)      /* l
         if (ll.on && ll.r <= 0 && ll.g <= 0 && ll.b <= 0) ll.r = ll.g = ll.b = 1;
         char nm[RD_NAME]; ringlive_playing(nm, sizeof nm);
         if (nm[0]) ringlive_stop();                                         /* an LED set by hand shows: no animation over it */
+        ringlive_fade(has[14] ? (int)trans : LIVE_FADE_MS);
         ringlive_led_set((int)(key - KEY_LIVE_LED), &ll);
-        live_took();
         send_setting(key); if (nm[0]) send_setting(KEY_LIVE_DESIGN);
         return;
     }
@@ -972,7 +957,7 @@ static void on_light(const unsigned char *p, const unsigned char *end)      /* l
         if (!strcasecmp(eff, "off")) l.effect = 0;        /* Home Assistant's own name for none */
         for (int i = 0; i < ring_neffects; i++) if (ring_effect_listed(i) && !strcasecmp(eff, ring_effects[i])) l.effect = i;
     }
-    if (l.on || (has[16] && flash)) light_took();
+    if (ringlive_enabled() && !(has[16] && flash)) ringlive_fade(has[14] ? (int)trans : LIVE_FADE_MS);   /* drawn live: it fades */
     ring_light_set(&l, has[16] ? flash : 0);
     send_setting(KEY_LIGHT);
 }
@@ -1873,7 +1858,6 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
             else if (key == KEY_LIVE_DESIGN_SVC) rc = ringlive_design(args[0], ints[1], bri, e, sizeof e);
             else ringlive_clear();
             if (rc) fprintf(stderr, "light ring live: %s\n", e);
-            else if (key != KEY_LIVE_STOP) live_took();
             send_live_states();
             free(lines);
             break;

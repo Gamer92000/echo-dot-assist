@@ -608,9 +608,13 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   150 ms after; reads back every 200 ms and puts ours back, backs off 5 s if something else keeps writing; nothing
   left: the dark frame once, `state/ring-live` marks ours for the next start.  HA (`proto_esphome.c`): lights "Light
   ring LED 1..12" (from the fill's start + rotation), actions `light_ring_frame|animation|design|stop`, select "Light
-  ring design" (`rd_names`, re-listed when the names change: `rd_generation`, main.c `live_names_check`); "Light
-  ring" and live take the ring from each other (`live_took`, `light_took`).  PC: `HASSMIC_FAKE_FRAME`,
-  `HASSMIC_FAKE_ALSPARAMS`; `tests/unit/ringlive_test.c`, `tests/fake_ha_ring_live.py`.
+  ring design" (`rd_names`, re-listed when the names change: `rd_generation`, main.c `live_names_check`).  Layers:
+  "Light ring" (ring.c keeps its state; `ring_light_live` makes ring.c play no palette pattern, `ring_light_now`;
+  `ringlive_effect`: the palette's five and `RING_LIVE_EFFECTS`), the LED lights over it, an animation over all; HA's
+  transition (LightCommand 14/15, else `LIVE_FADE_MS`) as a fade in seen space (`ringlive_fade`).  SIGTERM and
+  `ringlive_shutdown`: the dark frame.  Page: `POST /api/ring/live` (a design's text, as drawn; empty: stop), `live` in
+  GET /api/ring, ring.js `liveShow`.  PC: `HASSMIC_FAKE_FRAME`, `HASSMIC_FAKE_ALSPARAMS`; `tests/unit/ringlive_test.c`,
+  `tests/fake_ha_ring_live.py`.
 - **Screen UI** (`src/ui/`, `screen.c`, `screen.h`; device.mk `SCREEN`, else `screen_none.c`; every Show): the
   Echo Show's own screen, small beside any app (Kiosk Satellite, View Assist...).  `src/ui/ui.h` lists the parts:
   `scene.c` (display list with a clip per item, diffed by id into one dirty rectangle; text cache by hash; image cache

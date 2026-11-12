@@ -5,17 +5,19 @@ from tests/fake_ha_ring.py).  Off: none of its entities.  On: a light per LED, t
 an LED and a whole frame on the driver at stock's own most (FD at level 100, never more), from where the fill starts;
 the Echo's own patterns first (the wake word's ring, mute): not one write meanwhile, ours back after; a frame
 ledcontroller wrote over put back; an animation and a design of the library played by the Echo, the select's state;
-Home Assistant's "Light ring" and the live ring taking the ring from each other; stop: the dark frame."""
+Home Assistant's "Light ring" drawn live under the LEDs (its exact colour, the live effects, a transition); stop: the
+dark frame; the settings page's "Show on the Echo" (POST /api/ring/live)."""
 import asyncio, json, os, shutil, signal, subprocess, sys, tempfile
 from aioesphomeapi import (APIClient, LightInfo, LightState, NumberInfo, SelectInfo, SelectState, SwitchInfo,
                            VoiceAssistantEventType as Ev)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fake_ha_ring import stock                  # stock's stand-in animations and layer config
+from webclient import Browser, wait_port
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOST = f"{ROOT}/build/hassmic-host"
-PORT = 16983
+PORT, WEB = 16985, 16986
 DARK = "0" * 72 + "\n"
 
 
@@ -73,7 +75,7 @@ async def main():
 
     def start():
         open(leds, "w").close()
-        return subprocess.Popen([HOST, "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-W", "0", "-a", "0", "-z", "0", "-o", "0"],
+        return subprocess.Popen([HOST, "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-W", str(WEB), "-a", "0", "-z", "0", "-o", "0"],
                                 env=env, stderr=open(os.path.join(tmp, "log"), "a"))
 
     async def connect():
@@ -120,13 +122,13 @@ async def main():
 
         # one LED: LED 1 is where the fill starts (the driver's 11)
         c.light_command(lights[0].key, state=True, rgb=(1.0, 0.0, 0.0), brightness=1.0)
-        await until(lambda: pixels(read())[11] != "000000")
+        await until(lambda: pixels(read())[11] == "FD0000")      # after the light's short fade
         px = pixels(read())
         check(px[11] == "FD0000" and px[:11] == ["000000"] * 11, f"LED 1 red: the driver's LED 11 at FD, stock's most at level 100 ({px})")
         await until(lambda: last(lights[0].key, LightState).state)
         check(last(lights[0].key, LightState).state and last(lights[0].key, LightState).red == 1.0, "  its state on, red")
         c.light_command(lights[0].key, brightness=0.5)
-        await until(lambda: pixels(read())[11] != "FD0000")
+        await until(lambda: pixels(read())[11] == "360000")
         check(pixels(read())[11] == "360000", f"  at half: 0.5^2.2 x 255 x 0.993 = 36 ({pixels(read())[11]})")
 
         # a whole frame from the action
@@ -192,13 +194,30 @@ async def main():
         await until(lambda: read() == ours, 2)
         check(read() == ours, "  once through, then the LEDs' own again")
 
-        # Home Assistant's "Light ring" takes the ring: the live ring off, dark; then an LED takes it back
-        c.light_command(ring.key, state=True, rgb=(0.0, 1.0, 0.0), brightness=1.0)
-        await until(lambda: read() == DARK and not last(lights[0].key, LightState).state)
-        check(read() == DARK and not last(lights[0].key, LightState).state, "\"Light ring\" on: the live ring dark, its lights off")
+        # Home Assistant's "Light ring" drawn live, under the LEDs' own lights: its exact colour, no palette pattern
+        check(list(ring.effects)[:5] == ["None", "Pulse", "Spin", "Blink", "Rainbow"] and "Fire" in ring.effects and "Comet" in ring.effects,
+              f"\"Light ring\" offers the live ring's effects too ({list(ring.effects)})")
+        open(leds, "w").close()
+        c.light_command(ring.key, state=True, rgb=(1.0, 0.5, 0.0), brightness=1.0)
+        await until(lambda: pixels(read())[5] == "FD3600")
+        px = pixels(read())
+        check(px[5] == "FD3600" and px[11] == "0000FD" and px[1] == "00FD00", f"\"Light ring\" orange: exact (0.5 green: FD3600, not the palette's), the LEDs' own over it ({px})")
+        check(not [l for l in open(leds).read().split() if l.startswith("hassmic_solid") or l.startswith("hassmic_pulse")], "  no palette pattern to ledctrl")
+        await until(lambda: last(lights[0].key, LightState).state and last(ring.key, LightState).state)
+        check(last(lights[0].key, LightState).state and last(ring.key, LightState).state, "  both on in Home Assistant")
+        c.light_command(ring.key, effect="Fire")
+        await asyncio.sleep(0.5); a = read(); await asyncio.sleep(0.3)
+        check(a != read() and pixels(a)[5][4:] == "00", f"  Fire: it flickers by itself, warm ({pixels(a)[5]})")
+        c.light_command(ring.key, effect="None", transition_length=1.0)
+        await asyncio.sleep(0.1)
+        c.light_command(ring.key, state=False, transition_length=1.0)
+        await asyncio.sleep(0.5); mid = pixels(read())[5]
+        await until(lambda: pixels(read())[5] == "000000", 3)
+        check(mid not in ("000000", "FD3600") and pixels(read())[5] == "000000", f"  off with a transition of 1 s: fades ({mid} half way), then dark")
+        c.light_command(lights[0].key, state=False); c.light_command(lights[2].key, state=False)
         c.light_command(lights[4].key, state=True, rgb=(0.0, 0.0, 1.0), brightness=1.0)
-        await until(lambda: not last(ring.key, LightState).state and pixels(read())[3] == "0000FD")
-        check(not last(ring.key, LightState).state and pixels(read())[3] == "0000FD", "an LED on: \"Light ring\" off, the LED there (LED 5 = the driver's 3)")
+        await until(lambda: pixels(read())[3] == "0000FD" and pixels(read())[11] == "000000")
+        check(pixels(read())[3] == "0000FD", "LED 5 = the driver's 3")
 
         # a frame with a timeout, then stop
         await c.execute_service(svc["light_ring_frame"], {"colors": ["ffffff"], "brightness": 128, "timeout": 1})
@@ -214,6 +233,61 @@ async def main():
         await c.execute_service(svc["light_ring_frame"], {"colors": ["nonsense"], "brightness": 255, "timeout": 0})
         await asyncio.sleep(0.4)
         check(read() == DARK, "  a colour that is none: refused, nothing written")
+
+        # the settings page: a draft shown on the ring at once (no save, no Apply), its name in Home Assistant's select
+        # where it is the library's, stopped again
+        wait_port(WEB)
+        b = Browser(WEB)
+        check(b.login_with_button(proc), "the settings page logged in")
+        st, _, body = b.call("GET", "/api/ring")
+        check(st == 200 and json.loads(body).get("live") == {"on": True, "playing": ""}, f"GET /api/ring says the live ring is on ({json.loads(body).get('live')})")
+        draft = "name Sunrise\nleds 12\nloop 0\n500:00FF00," + ",".join(["000000"] * 11) + "\n"
+        st, _, body = b.call("POST", "/api/ring/live", draft.encode())
+        await until(lambda: pixels(read())[0] == "00FD00")
+        check(st == 200 and pixels(read())[0] == "00FD00", f"POST /api/ring/live: the draft on the ring, as drawn ({pixels(read())[:2]})")
+        await until(lambda: last(sel.key, SelectState).state == "Sunrise")
+        check(json.loads(b.call("GET", "/api/ring")[2])["live"]["playing"] == "Sunrise" and last(sel.key, SelectState).state == "Sunrise",
+              "  the page and Home Assistant's select say what plays")
+        st, _, body = b.call("POST", "/api/ring/live", b"leds 12\n1:FF\n")
+        check(st == 400 and "frame" in json.loads(body)["error"], f"  not a design: refused ({body})")
+        st, _, _ = b.call("POST", "/api/ring/live", b"")
+        await until(lambda: read() == DARK)
+        check(st == 200 and read() == DARK, "  an empty body stops it")
+        # hassmic stopped (init's SIGTERM: a restart, an update) while an LED shows: the dark frame before it ends
+        c.light_command(lights[0].key, state=True, rgb=(0.0, 1.0, 0.0), brightness=1.0)
+        await until(lambda: pixels(read())[11] == "00FD00")
+        await c.disconnect()
+        proc.send_signal(signal.SIGTERM); proc.wait()
+        check(read() == DARK, "SIGTERM with an LED on: dark before it ended")
+    finally:
+        proc.terminate(); proc.wait()
+
+    # ... and while muted: the red ring is the Echo's, left alone; the next start leaves it too (the marker holds what
+    # was ours, and the ring shows something else now)
+    mute_ring = "680000" * 12 + "\n"
+    proc = start()
+    try:
+        c = await connect()
+        ents, _ = await c.list_entities_services()
+        lights = sorted([e for e in ents if isinstance(e, LightInfo) and e.object_id.startswith("light_ring_led_")], key=lambda e: int(e.object_id.split("_")[-1]))
+        mute = next(e for e in ents if isinstance(e, SwitchInfo) and e.object_id == "mute")
+        c.light_command(lights[0].key, state=True, rgb=(0.0, 1.0, 0.0), brightness=1.0)
+        await until(lambda: pixels(read())[11] == "00FD00")
+        await asyncio.sleep(0.3)
+        c.switch_command(mute.key, True); await asyncio.sleep(0.5)
+        with open(frame, "w") as f: f.write(mute_ring)         # ledcontroller's mics-off ring
+        await c.disconnect()
+        proc.send_signal(signal.SIGTERM); proc.wait()
+        check(read() == mute_ring, "SIGTERM while muted: the mute's red ring left alone")
+    finally:
+        proc.terminate(); proc.wait()
+    proc = start()
+    try:
+        c = await connect(); await asyncio.sleep(0.5)
+        check(read() == mute_ring, "the next start: not ours on the ring any more, left alone")
+        ents, _ = await c.list_entities_services()
+        mute = next(e for e in ents if isinstance(e, SwitchInfo) and e.object_id == "mute")
+        c.switch_command(mute.key, False); await asyncio.sleep(0.3)
         await c.disconnect()
     finally:
         proc.terminate(); proc.wait()

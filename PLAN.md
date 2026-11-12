@@ -2440,12 +2440,17 @@ Run in this order. Each step says what it proves.
       own patterns shows (ring.c `ring_busy`) or the microphones are off, ours again 150 ms after; read back every
       200 ms and put back, 5 s of rest after 3 overwrites in 3 s (something hassmic did not set animates); nothing
       left: the dark frame once.  Home Assistant: 12 lights, `light_ring_frame|animation|design|stop`, the select
-      "Light ring design" of the library; "Light ring" and live take the ring from each other.  Tests:
+      "Light ring design" of the library; "Light ring" drawn live as the bottom layer (exact colour, 11 effects, fades),
+      the LED lights over it, an animation over all; the page's "Show on the Echo".  Tests:
       tests/unit/ringlive_test.c (stock's solid_blue at the five levels as the driver was written, the cap, the
       table, the writer against a file), tests/fake_ha_ring_live.py (aioesphomeapi: entities, LED/frame/animation/
       design/select, the wake word's ring and mute first, written over, "Light ring" against live, timeout, stop).
-      Open: on the Dot 3 itself (the update that brings main.sh's grant, then each of the above with the frame read
-      back); biscuit and radar (`scripts/led-probe.sh read` finds the driver by itself; same 0-003f by PLAN's earlier
+      On the Dot 3 ("Büro", 2026-11-12, a trial build in /data with the frame given to keystore by hand: main.sh's
+      grant comes with the update), read back from the driver: LED 1 red AF0000, white AFD3A9, blue 0000A9, green
+      00D300, each the very value stock's solid_* gives at level 100; muted: stock's 680000 ring, not one write of
+      ours, ours back after; an animation of 12 frames at 50 ms played twice by the Echo; stop: dark; led_current 0 and
+      pwm1 39739 as before.
+      Open: the update path on the Dot 3 (main.sh's grant and runas' group); biscuit and radar (`scripts/led-probe.sh read` finds the driver by itself; same 0-003f by PLAN's earlier
       reads, calibration per unit; then `ring_frame`/`LED_FRAME` for them); the band of the Shows and the Echo
       Input's one LED are not part of it; a theme pack applied from Home Assistant (root's install, as Apply) asked
       about, not built.

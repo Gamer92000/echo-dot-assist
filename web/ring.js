@@ -56,6 +56,23 @@ function rcall(method, path, body) {
   return r;
 }
 
+// The live ring ("Light ring live", ringlive.h): a design or a draft shown on the Echo at once, without Apply, and
+// what plays there now
+const liveOn = () => !!(ring.status && ring.status.live && ring.status.live.on);
+const livePlaying = () => (liveOn() && ring.status.live.playing) || '';
+async function liveShow(d) {
+  try { await rcall('POST', '/api/ring/live', designText(d)); toast(`"${d.name || 'Draft'}" on the ring now`); }
+  catch (e) { toast(errText(e)); return; }
+  ringStatus().catch(() => {});
+}
+async function liveStop() {
+  try { await rcall('POST', '/api/ring/live', ''); } catch (e) { toast(errText(e)); return; }
+  ringStatus().catch(() => {});
+}
+const liveButton = (d, cls = 'link') => !liveOn() ? null : livePlaying() && livePlaying() === d.name
+  ? h('button', { type: 'button', class: cls, title: 'Stop it on the ring', onclick: liveStop }, 'Stop')
+  : h('button', { type: 'button', class: cls, title: 'Show it on the ring now, as drawn (Light ring live): nothing is saved or applied', onclick: () => liveShow(d) }, 'Show on the Echo');
+
 // ---------------------------------------------------------------- designs as text (ringdesign.h) and as objects
 
 const hexRgb = (s) => (s.length === 3 ? [...s].map((c) => parseInt(c + c, 16)) : [0, 2, 4].map((i) => parseInt(s.slice(i, i + 2), 16)));
@@ -1007,7 +1024,8 @@ function designer(id, start, opts = {}) {
         spinB,
         adj('Fade', '6 frames blending it into the next', fade),
         adj('Breathe', '11 frames dimming and coming back', breathe))));
-  m.foot.append(...[delBtn, download, uses, useRow, h('span', { class: 'grow' })].filter(Boolean),
+  const tryIt = liveOn() ? h('button', { type: 'button', title: 'Show the design as it is now on the ring (Light ring live), saved or not', onclick: () => liveShow(ed.d) }, 'Show on the Echo') : null;
+  m.foot.append(...[delBtn, download, tryIt, uses, useRow, h('span', { class: 'grow' })].filter(Boolean),
     h('button', { type: 'button', onclick: () => save(true), title: 'A design of its own; the one saved before stays as it is' }, 'Save as new'),
     h('button', { type: 'button', class: 'primary', onclick: async () => { if (await save(false)) m.dlg.close(); } }, 'Save'));
 
@@ -1642,6 +1660,7 @@ function designTile(id, d, inPack) {
       h('span', { class: 'ringd-uses' + (uses.length || forPack.length ? '' : ' none'), title: [...forPack, ...uses].join(', ') },
         forPack.length ? 'In the pack: ' + forPack.join(', ') : uses.length ? 'On the ring: ' + uses.join(', ') : 'Not on the ring'),
       h('span', { class: 'ringd-tile-acts' },
+        liveButton(d),
         h('button', { class: 'link', onclick: () => useFor(id, d) }, 'Use for…'),
         h('button', { class: 'link', onclick: () => moveDialog(id, d) }, 'Move…'))));
 }

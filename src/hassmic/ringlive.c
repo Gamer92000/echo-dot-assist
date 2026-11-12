@@ -23,6 +23,7 @@
 #include "json.h"
 #include "statefile.h"
 #include <ctype.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -46,8 +47,11 @@
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
-static int avail, leds = 12, dirty;
-static _Atomic int writes;
+static int avail, leds = 12, dirty, enabled, quitting;
+static _Atomic int writes, owned_now;   /* owned_now: ours is on the ring (SIGTERM's handler writes the dark frame) */
+static char dark_text[TEXT_MAX];
+static float shown[MAX_LEDS][3], fade_from[MAX_LEDS][3];   /* the last picture as seen, and a fade's start */
+static long long fade_t0; static int fade_ms;
 static char frame_path[256];
 static float pwm[101];
 static int (*hold_fn)(void), (*level_fn)(void);
@@ -144,20 +148,108 @@ static int frame_read(char *out, size_t cap)
     return 0;
 }
 
-static void marker(int on)              /* what this run left on the ring: dark again at the next start */
+/* What this run left on the ring, as the frame reads back: the next start makes it dark only if the ring still shows
+ * exactly that (not the mute's red ring ledcontroller wrote since: dark over it would hide it until its next change) */
+static void marker(const char *left)
 {
     char p[300]; const char *d = getenv("HASSMIC_STATE");
     snprintf(p, sizeof p, "%s/ring-live", d ? d : "/data/local/hassmic/state");
-    if (on) statefile_write(p, 0600, "1\n", 2); else unlink(p);
+    if (left) statefile_write(p, 0600, left, strlen(left)); else unlink(p);
+}
+
+/* ---------------------------------------------------------------- effects */
+
+static unsigned hash2(unsigned a, unsigned b)
+{
+    unsigned h = a * 0x9E3779B1u ^ (b + 0x7F4A7C15u) * 0x85EBCA77u;
+    h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12; h *= 0x297A2D39u; h ^= h >> 15;
+    return h;
+}
+static float noise(unsigned j, float x)         /* smooth value noise in 0..1 */
+{
+    unsigned i = (unsigned)floorf(x); float f = x - floorf(x), u = f * f * (3 - 2 * f);
+    float a = (hash2(j, i) & 0xFFFF) / 65535.0f, b = (hash2(j, i + 1) & 0xFFFF) / 65535.0f;
+    return a + (b - a) * u;
+}
+static void hue_rgb(float h, float out[3])      /* a fully saturated hue, h in turns */
+{
+    h = (h - floorf(h)) * 6; float f = h - floorf(h);
+    switch ((int)h % 6) {
+    case 0: out[0] = 1; out[1] = f; out[2] = 0; break;
+    case 1: out[0] = 1 - f; out[1] = 1; out[2] = 0; break;
+    case 2: out[0] = 0; out[1] = 1; out[2] = f; break;
+    case 3: out[0] = 0; out[1] = 1 - f; out[2] = 1; break;
+    case 4: out[0] = f; out[1] = 0; out[2] = 1; break;
+    default: out[0] = 1; out[1] = 0; out[2] = 1 - f; break;
+    }
+}
+static float around(float a, float b, int n)    /* how far a is behind b round a ring of n */
+{
+    float d = fmodf(b - a, (float)n);
+    return d < 0 ? d + n : d;
+}
+
+void ringlive_effect(int effect, const float rgb[3], float level, int n, long long t, float out[][3])
+{
+    const float tau = 2 * (float)M_PI;
+    for (int j = 0; j < n; j++) {
+        float k = 1, c[3] = { rgb[0], rgb[1], rgb[2] };
+        switch (effect) {
+        case RING_E_PULSE: k = 0.35f + 0.65f * (0.5f - 0.5f * cosf(tau * (t % 2400) / 2400.0f)); break;     /* as the palette's */
+        case RING_E_SPIN: {                         /* two comets round the ring once a second over the colour at 25 % */
+            float head = (t % 1000) / 1000.0f * n, d = fminf(around(j, head, n), around(j, head + n / 2.0f, n));
+            k = fmaxf(0.25f, 1 - 0.35f * d); } break;
+        case RING_E_BLINK: k = (t / 500) % 2 ? 0 : 1; break;
+        case RING_E_RAINBOW: hue_rgb((float)j / n - (t % 2000) / 2000.0f, c); break;                         /* turning once in 2 s */
+        case RING_E_BREATHE: k = 0.5f - 0.5f * cosf(tau * (t % 4000) / 4000.0f); break;                      /* down to dark, 4 s */
+        case RING_E_COLORLOOP: hue_rgb((t % 12000) / 12000.0f, c); break;                                    /* the whole ring, 12 s */
+        case RING_E_COMET: {                        /* one head, a long tail, round in 1.5 s */
+            float head = (t % 1500) / 1500.0f * n, d = around(j, head, n);
+            k = expf(-d / 2.2f); } break;
+        case RING_E_WAVE: k = 0.15f + 0.85f * (0.5f + 0.5f * sinf(tau * ((float)j / n - (t % 2500) / 2500.0f))); break;
+        case RING_E_SPARKLE: {                      /* the colour at 30 %, an LED now and then flaring white-hot */
+            long long slot = t / 150; float f = (t % 150) / 150.0f;
+            k = 0.3f;
+            if (hash2((unsigned)j, (unsigned)slot) % 9 == 0) { k = 1 - 0.7f * f; for (int i = 0; i < 3; i++) c[i] = c[i] + (1 - c[i]) * 0.5f * (1 - f); }
+            } break;
+        case RING_E_FIRE: {                         /* embers: orange to yellow, flickering, the colour ignored */
+            float v = noise((unsigned)j, t / 90.0f) * 0.6f + noise((unsigned)j + 97, t / 31.0f) * 0.4f;
+            k = 0.25f + 0.75f * v; c[0] = 1; c[1] = 0.18f + 0.32f * v; c[2] = 0.02f * v; } break;
+        default: break;
+        }
+        for (int i = 0; i < 3; i++) out[j][i] = clamp01(c[i] * k * level);
+    }
 }
 
 /* ---------------------------------------------------------------- the picture */
 
-static int hw_of(int j, int rot) { return (leds - 1 + rot + j) % leds; }      /* ring.c's fill: volume_step-01's LED first */
+static int hw_of(int j, int rot) { return ((leds - 1 + rot + j) % leds + leds) % leds; }     /* ring.c's fill: volume_step-01's LED first */
 
-/* lock held: what the ring shows now, as seen, per LED of the driver; *next: ms until it changes by itself.  1 if the
- * LEDs' states or what plays changed by itself (a timeout, an animation's end) */
-static int picture(long long now, int rot, float seen[][3], int *next)
+/* Home Assistant's "Light ring" as the bottom layer (ring.c keeps its state): its colour or effect on its fill, LED by
+ * LED from light_ring_leds, a flash blinking it whole */
+static void base(const struct ring_light *l, int flashing, long long now, int rot, float seen[][3], int *next)
+{
+    float lv = clamp01(l->brightness) * clamp01(l->color_brightness), rgb[3] = { clamp01(l->r), clamp01(l->g), clamp01(l->b) };
+    if (flashing) {
+        if ((now / 500) % 2 == 0) for (int h = 0; h < leds; h++) for (int c = 0; c < 3; c++) seen[h][c] = rgb[c] * lv;
+        int left = 500 - (int)(now % 500); if (left < *next) *next = left;
+        return;
+    }
+    if (!l->on) return;
+    if (l->nleds > 0) {
+        for (int j = 0; j < l->nleds && j < leds; j++) for (int c = 0; c < 3; c++) seen[hw_of(j, rot)][c] = l->led_rgb[j][c] / 255.0f * lv;
+        return;
+    }
+    float out[MAX_LEDS][3]; int lit = (l->fill * leds + 99) / 100;
+    ringlive_effect(l->effect, rgb, lv, leds, now, out);
+    for (int j = 0; j < lit && j < leds; j++) memcpy(seen[hw_of(j, rot)], out[j], sizeof out[j]);
+    if (l->effect != RING_E_NONE && *next > 1000 / RINGLIVE_FPS) *next = 1000 / RINGLIVE_FPS;
+}
+
+/* lock held: what the ring shows now, as seen, per LED of the driver: the light, the LEDs over it, an animation over
+ * all, a fade between the last picture and this one; *next: ms until it changes by itself.  1 if the LEDs' states or
+ * what plays changed by itself (a timeout, an animation's end) */
+static int picture(long long now, int rot, const struct ring_light *rl, int flashing, float seen[][3], int *next)
 {
     int ch = 0;
     *next = CHECK_MS;
@@ -165,6 +257,7 @@ static int picture(long long now, int rot, float seen[][3], int *next)
     for (int j = 0; j < leds; j++)
         if (off_at[j] && now >= off_at[j]) { off_at[j] = 0; led[j].on = 0; ch = 1; }
         else if (off_at[j] && off_at[j] - now < *next) *next = (int)(off_at[j] - now);
+    int drawn = 0;
     if (anim.on) {
         const struct rd_design *d = &anim.d; long long total = 0, loop_at = 0, e = now - anim.t0;
         for (int i = 0; i < d->nframes; i++) { if (anim.drawn && i == d->loop) loop_at = total; total += d->f[i].ms; }
@@ -184,19 +277,34 @@ static int picture(long long now, int rot, float seen[][3], int *next)
                 int h = anim.drawn ? k : hw_of(k, rot);
                 for (int c = 0; c < 3; c++) seen[h][c] = d->f[i].px[k][c] / 255.0f * anim.bri;
             }
-            return ch;
+            drawn = 1;
         }
     }
-    for (int j = 0; j < leds; j++) if (led[j].on) {
-        int h = hw_of(j, rot);
-        seen[h][0] = led[j].r * led[j].brightness; seen[h][1] = led[j].g * led[j].brightness; seen[h][2] = led[j].b * led[j].brightness;
+    if (!drawn) {
+        if (enabled) base(rl, flashing, now, rot, seen, next);
+        for (int j = 0; j < leds; j++) if (led[j].on) {
+            int h = hw_of(j, rot);
+            seen[h][0] = led[j].r * led[j].brightness; seen[h][1] = led[j].g * led[j].brightness; seen[h][2] = led[j].b * led[j].brightness;
+        }
     }
+    if (fade_ms > 0) {                          /* a light's transition: from what showed to this, as seen */
+        float k = (float)(now - fade_t0) / fade_ms;
+        if (k >= 1) fade_ms = 0;
+        else {
+            k = k < 0 ? 0 : k;
+            for (int h = 0; h < leds; h++) for (int c = 0; c < 3; c++) seen[h][c] = fade_from[h][c] + (seen[h][c] - fade_from[h][c]) * k;
+            if (*next > 1000 / RINGLIVE_FPS) *next = 1000 / RINGLIVE_FPS;
+        }
+    }
+    memcpy(shown, seen, sizeof(float) * 3 * MAX_LEDS);
     return ch;
 }
 
+/* lock held: anything of ours to show (the picture just made has light in it, or a fade still goes to dark) */
 static int active_locked(void)
 {
-    if (anim.on) return 1;
+    if (anim.on || fade_ms > 0) return 1;
+    for (int h = 0; h < leds; h++) if (shown[h][0] > 0 || shown[h][1] > 0 || shown[h][2] > 0) return 1;
     for (int j = 0; j < leds; j++) if (led[j].on && (led[j].r > 0 || led[j].g > 0 || led[j].b > 0) && led[j].brightness > 0) return 1;
     return 0;
 }
@@ -207,29 +315,33 @@ static void *writer(void *arg)
 {
     (void)arg;
     char text[TEXT_MAX] = "", seen_back[TEXT_MAX] = "", now_back[TEXT_MAX];
-    long long last_write = 0, last_check = 0, resume_at = 0, backoff_until = 0, fight_t0 = 0;
+    long long last_write = 0, last_check = 0, resume_at = 0, backoff_until = 0, fight_t0 = 0, marked_at = 0;
+    char marked[TEXT_MAX] = "";
     int owned = 0, held = 0, fights = 0, failed = 0;
     for (;;) {
-        int rot = ring_rotation(-1), lvl = level_fn ? level_fn() : 100, next;
-        float seen[MAX_LEDS][3];
+        int rot = ring_rotation(-1), lvl = level_fn ? level_fn() : 100, next, flashing = 0;
+        float seen[MAX_LEDS][3]; struct ring_light rl; memset(&rl, 0, sizeof rl);
         if (lvl < 0) lvl = 0;
         if (lvl > 100) lvl = 100;
+        if (enabled) flashing = ring_light_now(&rl);        /* outside our lock: ring.c's own */
         pthread_mutex_lock(&lock);
         long long now = now_ms();
-        int ch = picture(now, rot, seen, &next), content = active_locked();
+        int ch = picture(now, rot, &rl, flashing, seen, &next), content = active_locked() && !quitting;
         pthread_mutex_unlock(&lock);
         if (ch && changed_fn) changed_fn();
 
         if (content || owned) {
-            if (hold_fn && hold_fn()) {         /* the Echo's own pattern, or muted: hands off, ledcontroller writes */
+            if (quitting && held) owned = 0;    /* ending while the Echo's own shows: never written over */
+            else if (hold_fn && hold_fn() && !quitting) {    /* the Echo's own pattern, or muted: hands off, ledcontroller writes */
                 if (!held) fprintf(stderr, "light ring live: the Echo's own pattern shows, live waits\n");
                 held = 1; next = next < CHECK_MS ? next : CHECK_MS;
+                owned_now = 0;                  /* the ring is ledcontroller's meanwhile: SIGTERM leaves it alone */
             }
             else if (held) {                    /* ledcontroller wrote last: ours again, not counted as a fight */
                 held = 0; resume_at = now + RESUME_MS; next = RESUME_MS; text[0] = 0; fights = 0;
             }
-            else if (now < resume_at) next = (int)(resume_at - now);
-            else if (now < backoff_until) next = (int)(backoff_until - now);
+            else if (now < resume_at && !quitting) next = (int)(resume_at - now);
+            else if (now < backoff_until && !quitting) next = (int)(backoff_until - now);
             else {
                 unsigned char px[MAX_LEDS][3]; char want[TEXT_MAX];
                 for (int h = 0; h < leds; h++) {
@@ -248,7 +360,8 @@ static void *writer(void *arg)
                         }
                     }
                 }
-                if (need && now - last_write < 1000 / RINGLIVE_FPS) { next = (int)(1000 / RINGLIVE_FPS - (now - last_write)); need = 0; }
+                if (need && !quitting && now - last_write < 1000 / RINGLIVE_FPS) { next = (int)(1000 / RINGLIVE_FPS - (now - last_write)); need = 0; }
+                if (need && hold_fn && hold_fn()) need = 0;     /* the Echo's own came meanwhile: its frame wins */
                 if (need) {
                     last_write = last_check = now;
                     if (frame_write(want)) {
@@ -260,13 +373,18 @@ static void *writer(void *arg)
                         failed = 0;
                         snprintf(text, sizeof text, "%s", want);
                         if (frame_read(seen_back, sizeof seen_back)) seen_back[0] = 0;
-                        if (content && !owned) { fprintf(stderr, "light ring live: on the ring (level %d)\n", lvl); marker(1); }
-                        if (!content) { fprintf(stderr, "light ring live: dark, the ring is ledcontroller's again\n"); marker(0); text[0] = 0; }
-                        owned = content;
+                        if (content && !owned) fprintf(stderr, "light ring live: on the ring (level %d)\n", lvl);
+                        /* at most every 5 s (it is fsync'd): an older one only means a crash leaves the ring lit */
+                        if (content && (!owned || (strcmp(seen_back, marked) && now - marked_at >= 5000))) {
+                            marker(seen_back); snprintf(marked, sizeof marked, "%s", seen_back); marked_at = now;
+                        }
+                        if (!content) { fprintf(stderr, "light ring live: dark, the ring is ledcontroller's again\n"); marker(NULL); text[0] = 0; }
+                        owned = content; owned_now = owned;
                     }
                 }
             }
         }
+        if (quitting && !owned) { pthread_mutex_lock(&lock); quitting = 2; pthread_cond_broadcast(&cv); pthread_mutex_unlock(&lock); return NULL; }
         if (next < 5) next = 5;
         if (next > CHECK_MS) next = CHECK_MS;
         if (!content && !owned) next = 1000;    /* nothing of ours: a change pokes the thread awake anyway */
@@ -294,6 +412,15 @@ static char *slurp(const char *file, size_t max, size_t *n)
     k = fread(t, 1, max, f); fclose(f);
     t[k] = 0; if (n) *n = k;
     return t;
+}
+
+/* init's "stop hassmic" (a restart, an update): the dark frame if ours is on the ring, then as before (the default
+ * ends the process).  open, write and close are async-signal-safe; the marker makes the next start do it anyway */
+static void on_term(int sig)
+{
+    if (owned_now) { int fd = open(frame_path, O_WRONLY | O_TRUNC | O_CLOEXEC); if (fd >= 0) { if (write(fd, dark_text, strlen(dark_text)) < 0) {} close(fd); } }
+    signal(sig, SIG_DFL);
+    raise(sig);
 }
 
 static int capcolor(void)               /* idme alsparams "... capcolor=0": the table's colour; -1 unknown */
@@ -327,12 +454,18 @@ int ringlive_start(int (*hold)(void), int (*level)(void), void (*changed)(void))
     {   /* a frame the last run left (it ended while live showed): dark, ledcontroller's idle picture */
         char m[300]; const char *d = getenv("HASSMIC_STATE");
         snprintf(m, sizeof m, "%s/ring-live", d ? d : "/data/local/hassmic/state");
-        if (!access(m, F_OK)) {
+        char left[TEXT_MAX + 8] = ""; FILE *f = fopen(m, "r");
+        if (f) {
+            size_t k = fread(left, 1, sizeof left - 1, f); left[k] = 0; fclose(f);
             unsigned char z[MAX_LEDS][3]; memset(z, 0, sizeof z); ringlive_text((const unsigned char (*)[3])z, leds, t);
-            if (!frame_write(t)) fprintf(stderr, "light ring live: what the last run left on the ring is dark again\n");
+            char now_t[TEXT_MAX + 8];
+            if (!frame_read(now_t, sizeof now_t) && !strcmp(now_t, left) && !frame_write(t))
+                fprintf(stderr, "light ring live: what the last run left on the ring is dark again\n");
             unlink(m);
         }
     }
+    { unsigned char z[MAX_LEDS][3]; memset(z, 0, sizeof z); ringlive_text((const unsigned char (*)[3])z, leds, dark_text); }
+    signal(SIGTERM, on_term);
     pthread_t th;
     if (pthread_create(&th, NULL, writer, NULL)) { fprintf(stderr, "light ring live: no thread\n"); return -1; }
     pthread_detach(th);
@@ -341,6 +474,37 @@ int ringlive_start(int (*hold)(void), int (*level)(void), void (*changed)(void))
 }
 
 int ringlive_available(void) { return avail; }
+
+void ringlive_enable(int on)
+{
+    pthread_mutex_lock(&lock);
+    int was = enabled;
+    enabled = on && avail;
+    if (!enabled) { rd_free(&anim.d); memset(&anim, 0, sizeof anim); for (int i = 0; i < leds; i++) { led[i].on = 0; off_at[i] = 0; } }
+    poke();
+    pthread_mutex_unlock(&lock);
+    if (was != enabled || !on) ring_light_live(enabled);    /* ring.c's palette steps aside for us, or comes back */
+}
+
+int ringlive_enabled(void) { pthread_mutex_lock(&lock); int e = enabled; pthread_mutex_unlock(&lock); return e; }
+
+void ringlive_fade(int ms)
+{
+    pthread_mutex_lock(&lock);
+    if (ms > 0) { memcpy(fade_from, shown, sizeof shown); fade_t0 = now_ms(); fade_ms = ms > 10000 ? 10000 : ms; }
+    poke();
+    pthread_mutex_unlock(&lock);
+}
+
+void ringlive_shutdown(void)
+{
+    if (!avail) return;
+    pthread_mutex_lock(&lock);
+    quitting = 1; poke();
+    struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 1;
+    while (quitting != 2 && !pthread_cond_timedwait(&cv, &lock, &ts)) {}
+    pthread_mutex_unlock(&lock);
+}
 int ringlive_writes(void) { return writes; }
 int ringlive_leds(void) { return leds; }
 
@@ -426,6 +590,14 @@ int ringlive_animate(const char *lines, size_t n, int repeat, float brightness, 
     free(t);
     if (rc) return -1;
     return play(&d, 0, repeat, brightness, "animation", err, cap);
+}
+
+int ringlive_play_text(const char *text, size_t n, char *err, size_t cap)
+{
+    struct rd_design d;
+    if (rd_parse(text, n, &d, err, cap)) return -1;
+    char nm[RD_NAME]; snprintf(nm, sizeof nm, "%s", d.name[0] ? d.name : "draft");
+    return play(&d, 1, 0, 1, nm, err, cap);
 }
 
 int ringlive_design(const char *name, int repeat, float brightness, char *err, size_t cap)

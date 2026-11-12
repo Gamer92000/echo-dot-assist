@@ -13,6 +13,7 @@
 #ifndef RINGLIVE_H
 #define RINGLIVE_H
 #include "ringdesign.h"
+#include "ring.h"
 
 #define RINGLIVE_FPS    30              /* the driver takes ~65 a second (15 ms a write, mostly the I2C bus) */
 #define RINGLIVE_ANIM_FRAMES RD_FRAMES
@@ -25,6 +26,14 @@ struct live_led { int on; float brightness, r, g, b; };     /* as Home Assistant
  * to write), -1: not on this Echo (the reason logged) */
 int  ringlive_start(int (*hold)(void), int (*level)(void), void (*changed)(void));
 int  ringlive_available(void);
+/* "Light ring live" on or off: on, the live ring also draws Home Assistant's "Light ring" (ring.c's state, its exact
+ * colour, the live effects, its fill) under the LEDs' own lights; off, all of it off and the palette back */
+void ringlive_enable(int on);
+int  ringlive_enabled(void);
+void ringlive_fade(int ms);             /* the next change fades in over ms (a light's transition) */
+void ringlive_shutdown(void);           /* the dark frame if ours shows, the writer ended (at most 1 s) */
+/* A design's text (ringdesign.h), as drawn: the settings page's "Show on the Echo".  0, or -1 with why */
+int  ringlive_play_text(const char *text, size_t n, char *err, size_t cap);
 int  ringlive_leds(void);
 
 void ringlive_led_get(int i, struct live_led *l);
@@ -53,4 +62,6 @@ void ringlive_duty(const float seen[3], float pwm, unsigned char out[3]);
 int  ringlive_table(const char *json, size_t n, int capcolor, float pwm[101]);
 /* The frame file's text: 12 x "RRGGBB" and a newline, out at least leds * 6 + 2 */
 void ringlive_text(const unsigned char (*px)[3], int leds, char *out);
+/* An effect of ring.h's list over n LEDs in the fill's order at time t (ms): as seen, colour rgb (largest 1) at level */
+void ringlive_effect(int effect, const float rgb[3], float level, int n, long long t, float out[][3]);
 #endif

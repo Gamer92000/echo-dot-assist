@@ -3593,5 +3593,6 @@ int main(int argc, char **argv)
     }
     cap_close();
     if (core_local_wake) wake_close(-1);
+    ringlive_shutdown();                /* the live ring's frame dark, if it showed */
     return 1;
 }

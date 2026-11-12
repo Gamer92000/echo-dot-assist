@@ -467,7 +467,7 @@ static void put(enum id i, int v)
     case LIGHT_SENSOR: light_sensor = v; break;
     case WAKE_EVENTS: wake_events = v; break;
     case REQUEST_TEXT: request_text = v; break;
-    case RING_LIVE: ring_live = v; if (!v) ringlive_clear(); break;      /* off: the ring back to ledcontroller */
+    case RING_LIVE: ring_live = v; ringlive_enable(v); break;    /* off: the ring back to ledcontroller, the palette's light */
     case BT_OUT_DELAY: a2dp_out_delay(v); break;                    /* a2dp.c saves it */
     case BT_OUT_AWAKE: btout_keep_awake(v); break;
     case BT_OUT_STAY: bt_stay = v; a2dp_out_stay(v && bt_speaker); break;

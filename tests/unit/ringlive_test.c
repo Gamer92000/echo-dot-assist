@@ -19,6 +19,8 @@
 const struct board board = { .volume_steps = 30 };
 /* ring.c's side, as ringdesign.c and ringlive.c need it */
 const struct ring_slot ring_slots[] = { { "listen", "active-start", RING_LISTEN } };
+const char *const ring_effects[] = { "None", "Pulse", "Spin", "Blink", "Rainbow", RING_LIVE_EFFECTS };
+const int ring_neffects = 5 + RING_LIVE_NEFFECTS;
 const int ring_nslots = 1;
 int ring_leds(void) { return 12; }
 static int rotation;
@@ -30,6 +32,11 @@ int ring_designs_live(void) { return 0; }
 char *ring_stock(int i, size_t *n) { (void)i; (void)n; return NULL; }
 void ring_reload(void) {}
 int ring_band_rows(int set) { (void)set; return -1; }
+/* ring.c's light, as Home Assistant set it: the bottom layer while the live ring draws it */
+static struct ring_light light = { .brightness = 1, .color_brightness = 1, .r = 1, .g = 1, .b = 1, .fill = 100 };
+static int flashing, light_live;
+int ring_light_now(struct ring_light *l) { *l = light; return flashing; }
+void ring_light_live(int on) { light_live = on; }
 int ring_custom(void) { return 1; }
 
 static int fails;
@@ -91,6 +98,20 @@ static void pure(void)
     char t[80]; ringlive_text((const unsigned char (*)[3])px, 12, t);
     check(!strcmp(t, "0000FD0000000000000000000000000000000000000000000000000000000000000A0000\n"), "the frame's text: 12 x RRGGBB, LED 0 first, a newline");
 
+    /* the effects: each in 0..level, the ones that move moving, Rainbow and Color loop not the light's colour */
+    float rgbw[3] = { 1, 0.5f, 0 }, a[12][3], b[12][3];
+    for (int e = 0; e < RING_LIVE_NEFFECTS + 5; e++) {
+        int in = 1, moved = 0;
+        for (long long t = 0; t < 12000; t += 37) {
+            ringlive_effect(e, rgbw, 0.8f, 12, t, a); ringlive_effect(e, rgbw, 0.8f, 12, t + 120, b);
+            for (int j = 0; j < 12; j++) for (int c = 0; c < 3; c++) { if (a[j][c] < 0 || a[j][c] > 0.8f + 1e-5f) in = 0; if (fabsf(a[j][c] - b[j][c]) > 1e-3f) moved = 1; }
+        }
+        char w[96]; snprintf(w, sizeof w, "effect %s: within the level, %s", ring_effects[e], e ? "moves" : "still");
+        check(in && moved == (e != RING_E_NONE), w);
+    }
+    ringlive_effect(RING_E_NONE, rgbw, 0.5f, 12, 0, a);
+    check(fabsf(a[3][0] - 0.5f) < 1e-6f && fabsf(a[3][1] - 0.25f) < 1e-6f && a[3][2] == 0, "None: the colour at the level");
+
     char file[300]; snprintf(file, sizeof file, "%s/t.json", dir); table(file, 102);
     FILE *f = fopen(file, "r"); char *js = calloc(1, 1 << 16); size_t n = fread(js, 1, (1 << 16) - 1, f); fclose(f);
     float pw[101];
@@ -120,8 +141,9 @@ int main(void)
     snprintf(p, sizeof p, "%s/alsparams", dir); put(p, "alsgain=03 alstime=690 capcolor=0\n"); setenv("HASSMIC_FAKE_ALSPARAMS", p, 1);
     put(frame, "0000FF\n");
     check(ringlive_start(hold_fn, level_fn, changed_fn) == -1, "a frame not 12 x RRGGBB: no live ring");
-    put(frame, "00000000000000000000000000000000000000000000000000000000000000000000A900\n");
-    char marker[300]; snprintf(marker, sizeof marker, "%s/state/ring-live", dir); put(marker, "1\n");
+    const char *left = "00000000000000000000000000000000000000000000000000000000000000000000A900\n";
+    put(frame, left);
+    char marker[300]; snprintf(marker, sizeof marker, "%s/state/ring-live", dir); put(marker, left);    /* ours, still there */
     check(ringlive_start(hold_fn, level_fn, changed_fn) == 0 && ringlive_available(), "started");
     char t[200]; get(t, sizeof t);
     check(!strcmp(t, dark) && access(marker, F_OK), "what a crash left on the ring is dark again, the marker gone");
@@ -194,6 +216,39 @@ int main(void)
     check(!strcmp(t, dark) && access(marker, F_OK), "nothing left: the dark frame, the ring ledcontroller's again (no marker)");
     w0 = ringlive_writes(); put(frame, "00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF\n");
     msleep(600); check(ringlive_writes() == w0, "handed back: ledcontroller's frames left alone");
+
+    /* "Light ring live" on: Home Assistant's light drawn as the bottom layer, the LEDs over it */
+    check(!ringlive_enabled(), "the light not drawn until \"Light ring live\" is on");
+    ringlive_enable(1); check(ringlive_enabled() && light_live, "on: ring.c told to leave the light to us");
+    light.on = 1; light.r = 0; light.g = 1; light.b = 0; light.fill = 50;
+    msleep(250); get(t, sizeof t);
+    /* fill 50 %: 6 LEDs from the fill's start (driver's 11, 0, 1 .. 4) green at FD */
+    check(!strncmp(t + 66, "00FD00", 6) && !strncmp(t, "00FD00", 6) && !strncmp(t + 24, "00FD00", 6) && !strncmp(t + 30, "000000", 6),
+          "the light at 50 %: green on the fill's 6 LEDs, the rest dark");
+    struct live_led one = { 1, 1, 1, 0, 0 }; ringlive_led_set(1, &one);       /* LED 2 = the driver's 0 */
+    msleep(150); get(t, sizeof t);
+    check(!strncmp(t, "FD0000", 6) && !strncmp(t + 66, "00FD00", 6), "an LED light over it: red on its LED, the light around");
+    one.on = 0; ringlive_led_set(1, &one);
+    /* a fade: the light off over 400 ms, half way about half (as seen), then dark and handed back */
+    ringlive_fade(400); light.on = 0;
+    msleep(200); get(t, sizeof t);
+    unsigned g = 0; sscanf(t + 68, "%2x", &g);
+    char fw[96]; snprintf(fw, sizeof fw, "a fade to dark: half way at %02X (between 10 and F0)", g); check(g > 0x10 && g < 0xF0, fw);
+    msleep(500); get(t, sizeof t);
+    check(!strcmp(t, dark), "  then dark");
+    light.on = 1; light.effect = RING_E_RAINBOW; light.fill = 100;
+    msleep(200); w0 = ringlive_writes(); msleep(1000); rate = ringlive_writes() - w0;
+    snprintf(w, sizeof w, "an effect moves on its own: %d frames in 1 s (at most %d)", rate, RINGLIVE_FPS); check(rate >= RINGLIVE_FPS / 2 && rate <= RINGLIVE_FPS + 1, w);
+    flashing = 1; light.r = 1; light.g = 0; light.b = 0; msleep(1100);
+    flashing = 0; light.effect = RING_E_NONE;
+    /* off: everything off, ring.c's palette back */
+    ringlive_enable(0); msleep(300); get(t, sizeof t);
+    check(!ringlive_enabled() && !light_live && !strcmp(t, dark), "\"Light ring live\" off: dark, the palette's light back");
+    /* the end: ours on the ring, then hassmic stops: the dark frame */
+    ringlive_enable(1); light.on = 1; light.r = light.g = light.b = 1; msleep(250); get(t, sizeof t);
+    check(!strncmp(t, "FDFDFD", 6), "white on");
+    ringlive_shutdown(); get(t, sizeof t);
+    check(!strcmp(t, dark), "shut down: the dark frame before it ends");
 
     char cmd[320]; snprintf(cmd, sizeof cmd, "rm -rf %s", dir); if (system(cmd)) {}
     printf("%s\n", fails ? "ringlive: FAILED" : "ringlive: all ok");
