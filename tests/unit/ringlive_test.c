@@ -3,7 +3,8 @@
  * solid_blue (00F) at levels 100/50/25/10/1 is what the driver was written, never above 255 x pwm, the frame's text, the
  * table by cap colour.  Then the writer: a frame, waiting for the Echo's own pattern and taking the ring back after it,
  * a frame ledcontroller wrote over put back, the rate under an animation of 1 ms frames, a timeout, a design of the
- * library, the dark frame and the marker at the end, the marker a crash left. */
+ * library, the dark frame at the end, the marker a crash left: what it lit made dark once the Echo's own state is known
+ * and none of it shows, the marker written once a run (it is flash), gone after a clean end. */
 #define _GNU_SOURCE
 #include "ringlive.h"
 #include "musiclight.h"
@@ -249,10 +250,15 @@ int main(void)
     check(ringlive_start(hold_fn, level_fn, changed_fn) == 0, "started after a reboot");
     get(t, sizeof t);
     check(!strcmp(t, left) && access(marker, F_OK), "  the last boot's picture: the ring left as it is (the chip was redrawn), the marker gone");
-    snprintf(m, sizeof m, "boot-2\n%s", left); put(marker, m);              /* ours, this boot, still there */
+    put(marker, "boot-2\n");                                               /* this boot: init's stop killed it */
     check(ringlive_start(hold_fn, level_fn, changed_fn) == 0 && ringlive_available(), "started again in the same boot");
-    get(t, sizeof t);
-    check(!strcmp(t, dark) && access(marker, F_OK), "what a crash left on the ring is dark again, the marker gone");
+    msleep(150); get(t, sizeof t);
+    check(!strcmp(t, left), "  the ring left until the Echo's own state is known");
+    hold = 1; ringlive_begin(); msleep(150); get(t, sizeof t);
+    check(!strcmp(t, left) && access(marker, F_OK), "  muted or the Echo's own showing then: left to it, the marker gone");
+    hold = 0; put(marker, "boot-2\n");
+    ringlive_start(hold_fn, level_fn, changed_fn); ringlive_begin(); msleep(150); get(t, sizeof t);
+    check(!strcmp(t, dark) && access(marker, F_OK), "  else what a crash left on the ring (a frozen effect too) is dark again, the marker gone");
 
     char c[12][16] = { "#0000ff", "", "ff0000" }, e[120];
     check(ringlive_frame(c, 3, 1, 0, e, sizeof e) == 0 && ringlive_active(), "a frame from Home Assistant");
@@ -260,7 +266,7 @@ int main(void)
     /* LED 1 = the fill's start, LED 11 of the driver; LED 3 = driver's 1 */
     check(strlen(t) == 73 && !strcmp(t + 66, "0000FD\n") && !strncmp(t + 6, "FD0000", 6),
           "written: LED 1 (blue) on the driver's 11, LED 3 (red) on its 1, at level 100's most");
-    check(!access(marker, F_OK), "  the marker says ours is on the ring");
+    struct stat ms0; check(!stat(marker, &ms0), "  the marker says this run lit the ring");
 
     level = 50; msleep(300); get(t, sizeof t);
     check(!strcmp(t + 66, "0000B1\n"), "level 50: B1, stock's solid_blue there");
@@ -319,7 +325,11 @@ int main(void)
     msleep(1400); struct live_led l; ringlive_led_get(0, &l);
     check(!l.on && changes > 0 && !ringlive_active(), "a frame's timeout: dark after it, said");
     msleep(300); get(t, sizeof t);
-    check(!strcmp(t, dark) && access(marker, F_OK), "nothing left: the dark frame, the ring ledcontroller's again (no marker)");
+    check(!strcmp(t, dark), "nothing left: the dark frame, the ring ledcontroller's again");
+    char b0[12][16] = { "ff0000", "00ff00" };
+    check(ringlive_frame(b0, 2, 0, 0, e, sizeof e) == 0, "a frame at brightness 0");
+    msleep(200); get(t, sizeof t); ringlive_led_get(0, &l);
+    check(!strcmp(t, dark) && !l.on && !ringlive_active(), "  dark, its LEDs off (not at their colour's own level)");
     w0 = ringlive_writes(); put(frame, "00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF\n");
     msleep(600); check(ringlive_writes() == w0, "handed back: ledcontroller's frames left alone");
 
@@ -353,8 +363,10 @@ int main(void)
     /* the end: ours on the ring, then hassmic stops: the dark frame */
     ringlive_enable(1); light.on = 1; light.r = light.g = light.b = 1; msleep(250); get(t, sizeof t);
     check(!strncmp(t, "FDFDFD", 6), "white on");
+    struct stat ms1; check(!stat(marker, &ms1) && ms1.st_ino == ms0.st_ino && ms1.st_mtime == ms0.st_mtime,
+                           "the marker written once in all of it (frames, effects, fades, levels): /data is flash");
     ringlive_shutdown(); get(t, sizeof t);
-    check(!strcmp(t, dark), "shut down: the dark frame before it ends");
+    check(!strcmp(t, dark) && access(marker, F_OK), "shut down: the dark frame before it ends, the marker gone");
 
     char cmd[320]; snprintf(cmd, sizeof cmd, "rm -rf %s", dir); if (system(cmd)) {}
     printf("%s\n", fails ? "ringlive: FAILED" : "ringlive: all ok");

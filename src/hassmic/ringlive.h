@@ -27,6 +27,12 @@ struct live_led { int on; float brightness, r, g, b; };     /* as Home Assistant
  * to write), -1: not on this Echo (the reason logged) */
 int  ringlive_start(int (*hold)(void), int (*level)(void), void (*changed)(void));
 int  ringlive_available(void);
+/* The Echo's own state is set up (main.c, after settings_load: the mute latch, the mics-off ring, the setup spinner): what
+ * the last run of this boot left lit is made dark now, unless one of those shows (the marker, ringlive.c) */
+void ringlive_begin(void);
+/* One of the Echo's own patterns was just set (main.c led(), the mute): SIGTERM's handler leaves the ring alone until
+ * the writer looked again, and the writer looks at once */
+void ringlive_yield(void);
 /* "Light ring live" on or off: on, the live ring also draws Home Assistant's "Light ring" (ring.c's state, its exact
  * colour, the live effects, its fill) under the LEDs' own lights; off, all of it off and the palette back */
 void ringlive_enable(int on);

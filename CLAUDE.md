@@ -606,7 +606,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `capcolor`, as the HAL's scaleDutyCycle), so never above what ledcontroller writes at that level (FD at 100).  One
   writer thread, latest wins, `RINGLIVE_FPS` 30; waits while `ring_busy()` (the Echo's own patterns) or muted, back
   150 ms after; reads back every 200 ms and puts ours back, backs off 5 s if something else keeps writing; nothing
-  left: the dark frame once, `state/ring-live` marks ours for the next start.  HA (`proto_esphome.c`): lights "Light
+  left: the dark frame once.  HA (`proto_esphome.c`): lights "Light
   ring LED 1..12" (from the fill's start + rotation), actions `light_ring_frame|animation|design|stop`, select "Light
   ring design" (`rd_names`, re-listed when the names change: `rd_generation`, main.c `live_names_check`).  Layers:
   "Light ring" (ring.c keeps its state; `ring_light_live` makes ring.c play no palette pattern, `ring_light_now`;
@@ -618,10 +618,11 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   by `make unit-ringviz`: tools/ringmusic.py's track with its drums written down, build/ringviz, tools/ringviz.py
   (scores, and effects.png to look at)), the LED lights over it, an animation over all; HA's
   transition (LightCommand 14/15, else `LIVE_FADE_MS`) as a fade in seen space (`ringlive_fade`).  SIGTERM and
-  `ringlive_shutdown`: the dark frame, never while the Echo's own pattern shows; init's stop kills outright, then the
-  next start's unsets have ledcontroller redraw, and `state/ring-live` (boot id + the frame as read back, written when
-  ours first shows, when it settles, at most every 5 s while it moves) darkens ours only in the same boot and only if
-  the ring still shows it.  Page: `POST /api/ring/live` (a design's text, as drawn; empty: stop), `live` in
+  `ringlive_shutdown`: the dark frame, never while the Echo's own pattern shows (main.c `led()` and the mute call
+  `ringlive_yield` first: the handler leaves the ring alone until the writer looked); init's stop kills outright (a
+  moving effect stays frozen), so `state/ring-live` (the boot id; written once a run when ours first shows, never per
+  frame: /data is flash; deleted at a clean end) has the next start in the same boot make the ring dark at
+  `ringlive_begin` (main.c after settings_load: the mute and the Echo's own known), unless `live_hold` then.  Page: `POST /api/ring/live` (a design's text, as drawn; empty: stop), `live` in
   GET /api/ring, ring.js `liveShow`.  PC: `HASSMIC_FAKE_FRAME`, `HASSMIC_FAKE_ALSPARAMS`; `tests/unit/ringlive_test.c`,
   `tests/fake_ha_ring_live.py`.
 - **Screen UI** (`src/ui/`, `screen.c`, `screen.h`; device.mk `SCREEN`, else `screen_none.c`; every Show): the

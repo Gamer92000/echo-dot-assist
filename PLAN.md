@@ -2455,6 +2455,18 @@ Run in this order. Each step says what it proves.
       the red ring untouched throughout.  init's stop kills outright (no SIGTERM: an LED left blue stayed blue); the
       next start's own unsets had ledcontroller draw its frame, dark.  So the marker (`state/ring-live`) carries the
       boot id: after a reboot or a power cut the chip was redrawn by ledcontroller and the marker is only deleted.
+      Review before the PR (2026-11-12): the marker held the frame as read back and was written (fsync'd) on every
+      change Home Assistant made and every 5 s while an effect moved (tests: 17 writes in 8 s at a change every 0.4 s,
+      ~17000 a day with an effect on: flash wear for nothing, since a moving frame never matched after a kill), and a
+      kill while an effect or a fade ran left that frame frozen (no match, and with live on ring.c has no palette
+      pattern to unset at the start).  Now the marker is the boot id only, written once a run, deleted at a clean end;
+      the next start in the same boot darkens the ring once the mute and the Echo's own patterns are known
+      (`ringlive_begin` after settings_load), unless one of them shows.  Also found and fixed: `light_ring_frame` with
+      brightness 0 lit each LED at its colour's own level; "Light ring live" off left "Light ring" on an effect not in
+      its list any more; a SIGTERM within the writer's 200 ms after the Echo's own pattern was set wrote the dark frame
+      over it (now `ringlive_yield` from main.c `led()` and the mute).  ASan/UBSan and TSan over fake_ha_ring_live.py
+      and a stress run (400 random actions with absurd values, reconnects, the setting toggled, designs saved): clean;
+      no top-level ESPHome message can exceed its buffer (pb `over` drops nothing that went out before).
       Live states are not kept over a restart: everything starts off, and Home Assistant is told so (asked: always off).
       Music effects (`musiclight.c`, asked for with variants): the PCM Sendspin, the A2DP sink and Home Assistant's
       media write, each 10 ms: six RBJ band-passes (60 Hz .. 6 kHz) and the level against running peaks (24 / 30 dB

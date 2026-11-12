@@ -6,7 +6,9 @@ an LED and a whole frame on the driver at stock's own most (FD at level 100, nev
 the Echo's own patterns first (the wake word's ring, mute): not one write meanwhile, ours back after; a frame
 ledcontroller wrote over put back; an animation and a design of the library played by the Echo, the select's state;
 Home Assistant's "Light ring" drawn live under the LEDs (its exact colour, the live effects, a transition); stop: the
-dark frame; the settings page's "Show on the Echo" (POST /api/ring/live)."""
+dark frame; the settings page's "Show on the Echo" (POST /api/ring/live); "Light ring live" off with an effect only it
+draws: "Light ring"'s state names one of its list again.  Ends: SIGTERM (the dark frame, not over the Echo's own pattern
+set a moment before), init's kill while an effect moves (the next start makes it dark), muted (left alone)."""
 import asyncio, io, json, math, os, shutil, signal, struct, subprocess, sys, tempfile, threading, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from aioesphomeapi import (APIClient, LightInfo, LightState, MediaPlayerInfo, NumberInfo, SelectInfo, SelectState, SwitchInfo,
@@ -302,10 +304,13 @@ async def main():
         await until(lambda: read() != DARK)
         await c.execute_service(svc["light_ring_stop"], {})
         await until(lambda: read() == DARK)
-        check(read() == DARK and not os.path.exists(os.path.join(state, "ring-live")), "light_ring_stop: dark, nothing of ours left")
+        check(read() == DARK, "light_ring_stop: dark, nothing of ours left")
         await c.execute_service(svc["light_ring_frame"], {"colors": ["nonsense"], "brightness": 255, "timeout": 0})
         await asyncio.sleep(0.4)
         check(read() == DARK, "  a colour that is none: refused, nothing written")
+        await c.execute_service(svc["light_ring_frame"], {"colors": ["ff0000", "00ff00"], "brightness": 0, "timeout": 0})
+        await asyncio.sleep(0.4)
+        check(read() == DARK, f"  brightness 0: dark (the first version lit each at its colour's own level: {pixels(read())[11]})")
 
         # the settings page: a draft shown on the ring at once (no save, no Apply), its name in Home Assistant's select
         # where it is the library's, stopped again
@@ -326,12 +331,79 @@ async def main():
         st, _, _ = b.call("POST", "/api/ring/live", b"")
         await until(lambda: read() == DARK)
         check(st == 200 and read() == DARK, "  an empty body stops it")
+        # "Light ring live" off while "Light ring" runs an effect only the live ring draws: its state names one of the
+        # five the light offers then (Home Assistant got "Music aurora" with a list without it)
+        c.light_command(ring.key, state=True, effect="Music aurora", rgb=(0.0, 0.0, 1.0), brightness=1.0)
+        await until(lambda: last(ring.key, LightState).effect == "Music aurora")
+        b.set(ring_live="off"); await asyncio.sleep(0.5)
+        try: await c.disconnect()
+        except Exception: pass
+        c = await connect(); ents2, _ = await c.list_entities_services()
+        r2 = next(e for e in ents2 if isinstance(e, LightInfo) and e.object_id == "light_ring")
+        states = []; c.subscribe_states(states.append)
+        await until(lambda: last(r2.key, LightState) is not None)
+        check(list(r2.effects) == ["None", "Pulse", "Spin", "Blink", "Rainbow"] and last(r2.key, LightState).effect in r2.effects,
+              f"live off: \"Light ring\"'s effect one of its five ({last(r2.key, LightState).effect})")
+        c.light_command(r2.key, state=False)
+        b.set(ring_live="on"); await asyncio.sleep(0.5)
+        try: await c.disconnect()
+        except Exception: pass
+        c = await connect(); ents, _ = await c.list_entities_services()
+        lights = sorted([e for e in ents if isinstance(e, LightInfo) and e.object_id.startswith("light_ring_led_")], key=lambda e: int(e.object_id.split("_")[-1]))
         # hassmic stopped (init's SIGTERM: a restart, an update) while an LED shows: the dark frame before it ends
         c.light_command(lights[0].key, state=True, rgb=(0.0, 1.0, 0.0), brightness=1.0)
         await until(lambda: pixels(read())[11] == "00FD00")
         await c.disconnect()
         proc.send_signal(signal.SIGTERM); proc.wait()
         check(read() == DARK, "SIGTERM with an LED on: dark before it ended")
+    finally:
+        proc.terminate(); proc.wait()
+
+    # SIGTERM a moment after the Echo's own pattern was set (the wake word's ring), before the writer looked again: its
+    # ring left alone (the first version wrote the dark frame over it)
+    proc = start()
+    try:
+        c = await connect()
+        ents, _ = await c.list_entities_services()
+        lights = sorted([e for e in ents if isinstance(e, LightInfo) and e.object_id.startswith("light_ring_led_")], key=lambda e: int(e.object_id.split("_")[-1]))
+        async def nothing(*a): pass
+        async def handle_start(*a): return 0
+        c.subscribe_voice_assistant(handle_start=handle_start, handle_stop=nothing, handle_audio=nothing)
+        c.light_command(lights[0].key, state=True, rgb=(0.0, 1.0, 0.0), brightness=1.0, transition_length=0.0)
+        await until(lambda: pixels(read())[11] == "00FD00"); await asyncio.sleep(0.5)
+        listening = "0000FF" * 12 + "\n"
+        proc.send_signal(signal.SIGUSR1); await asyncio.sleep(0.04)
+        with open(frame, "w") as f: f.write(listening)        # ledcontroller's listening ring
+        await asyncio.sleep(0.01)
+        proc.send_signal(signal.SIGTERM); proc.wait()
+        check(read() == listening, "SIGTERM just after the wake word's ring was set: that ring left alone")
+    finally:
+        proc.terminate(); proc.wait()
+    with open(frame, "w") as f: f.write(DARK)
+
+    # init's "stop hassmic" (an update) kills outright while an effect moves: the frame stays as it was, frozen; the next
+    # start makes it dark, the marker written once in all of it (/data is flash)
+    proc = start()
+    try:
+        c = await connect()
+        ents, _ = await c.list_entities_services()
+        ring = next(e for e in ents if isinstance(e, LightInfo) and e.object_id == "light_ring")
+        c.light_command(ring.key, state=True, effect="Rainbow", rgb=(1.0, 1.0, 1.0), brightness=1.0)
+        await until(lambda: read() != DARK)
+        await asyncio.sleep(0.5); ino = os.stat(os.path.join(state, "ring-live")).st_ino
+        await asyncio.sleep(5.5)
+        check(os.stat(os.path.join(state, "ring-live")).st_ino == ino, "an effect for 6 s: the marker written once (not every 5 s)")
+        proc.kill(); proc.wait()
+    finally:
+        proc.terminate(); proc.wait()
+    frozen = read()
+    proc = start()
+    try:
+        c = await connect()
+        await until(lambda: read() == DARK, 3)
+        check(frozen != DARK and read() == DARK and not os.path.exists(os.path.join(state, "ring-live")),
+              f"killed while Rainbow moved: the next start makes it dark ({pixels(frozen)[:2]} before)")
+        await c.disconnect()
     finally:
         proc.terminate(); proc.wait()
 
@@ -357,7 +429,7 @@ async def main():
     proc = start()
     try:
         c = await connect(); await asyncio.sleep(0.5)
-        check(read() == mute_ring, "the next start: not ours on the ring any more, left alone")
+        check(read() == mute_ring, "the next start, still muted: the red ring left alone")
         ents, _ = await c.list_entities_services()
         mute = next(e for e in ents if isinstance(e, SwitchInfo) and e.object_id == "mute")
         c.switch_command(mute.key, False); await asyncio.sleep(0.3)

@@ -1109,6 +1109,8 @@ void ring_light_live(int on)
     pthread_mutex_lock(&lock);
     if (live_light != !!on) fprintf(stderr, "light ring: Home Assistant's light %s\n", on ? "drawn by the live ring, in its own colours" : "from the palette again");
     live_light = !!on;
+    /* an effect only the live ring draws is gone with it: Home Assistant's state must name one of the list it gets */
+    if (!live_light && (light.effect < 0 || light.effect >= E_COUNT)) light.effect = E_NONE;
     light_apply(now_ms());
     pthread_mutex_unlock(&lock);
 }
