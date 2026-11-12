@@ -268,9 +268,9 @@ int  face_view(struct scene *s, float dt);                      /* still moving 
 long long face_due(struct scene *s);
 int  face_act(struct scene *s, int a, int arg, int ev);
 int  face_mode(struct scene *s);
-/* something happened: the screen saver's timeout from now; what it was goes to hassmic's log when it ends the clock */
 struct tm;
 void ui_date(char *out, size_t cap, const struct tm *tm, const char *lang);    /* lang.c: "Miercuri, 11 noiembrie" */
+/* something happened: the screen saver's timeout from now; what it was goes to hassmic's log when it ends the clock */
 void scene_active(struct scene *s, const char *why, ...) __attribute__((format(printf, 2, 3)));
 void face_init(struct scene *s, long long now);
 void face_pattern(struct scene *s, int p, int on, long long ago);

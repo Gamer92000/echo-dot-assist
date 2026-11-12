@@ -1,8 +1,9 @@
 /* The date on the screen in the language spoken at home (hassmic's setting speech_language, "lg"): bionic has no locale
  * but C's, so strftime's %A %B were English whatever the language.  One table per language, the day first and
  * capitalised (it starts the line), the month as the language writes it after a day's number (Finnish and Polish:
- * their genitive/partitive, "11. marraskuuta", "11 listopada").  A language not here, or none told: English, as
- * before.  Japanese is left out: the firmware's Roboto has no kanji.  tests/unit/ui_test.c checks each one */
+ * their genitive/partitive, "11. marraskuuta", "11 listopada").  A language not here, or none told: English, the
+ * drawer's "Wednesday, 1 November" as before (strftime's %e padded it to " 1"), which the clock now writes too (it
+ * had "Wednesday 01 November").  Japanese is left out: the firmware's Roboto has no kanji.  tests/unit/ui_test.c checks each one */
 #include "ui.h"
 
 #include <stdio.h>

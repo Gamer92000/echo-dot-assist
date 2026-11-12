@@ -40,7 +40,8 @@ static const char *const music_pages[3] = { "off", "face", "home" };    /* scree
  * name, so the list may grow */
 static const char *const speech_langs[] = { "auto", "de", "en", "fr", "es", "ja", "it", "pt", "nl", "sv", "da", "nb", "fi", "pl", "ro" };
 #define SPEECH_LANGS ((int)(sizeof speech_langs / sizeof *speech_langs))
-static int speech_lang, wake_adapt = 1;
+static _Atomic int speech_lang;                         /* read without the lock: the aligner's and the screen's threads */
+static int wake_adapt = 1;
 
 const struct bt_lang bt_langs[] = {
     { "en", "English", "Connected to %s", "Disconnected from %s", "Connected to a Bluetooth device", "Disconnected from a Bluetooth device" },
@@ -695,7 +696,7 @@ int settings_peek(const char *name, char *out, size_t cap)
 }
 
 int settings_mic_level(void) { return mic_level; }
-const char *settings_speech_language(void) { return speech_lang > 0 && speech_lang < SPEECH_LANGS ? speech_langs[speech_lang] : ""; }
+const char *settings_speech_language(void) { int l = speech_lang; return l > 0 && l < SPEECH_LANGS ? speech_langs[l] : ""; }
 int settings_bt_proxy(void) { return bt_proxy; }
 int settings_on(const char *name) { const struct setting *s = settings_find(name); return s && s->type == S_BOOL && settings_get(s); }
 const struct bt_lang *settings_bt_lang(void) { return &bt_langs[bt_lang]; }

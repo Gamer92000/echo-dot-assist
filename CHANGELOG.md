@@ -55,7 +55,8 @@ What changed for people using the Echo, newest first. Details and measurements a
   (there are no sound models for them yet: the wake word's own). Bluetooth announcements can be in Romanian ("Conectat
   la …"). "Oprește" stops like "stop", and "închide" / "închide apelul" ends a Drop In like "hang up"; these words are
   now recognised with or without their accents and capitals in every language ("Închide", "inchide", "Arrête"). The
-  Drop In blueprint has Romanian sentences ("conectează-mă cu bucătăria") and replies: re-import it to get them.
+  Drop In blueprint has Romanian sentences ("conectează-mă cu bucătăria") and replies: re-import it to get them. In
+  English the clock's date now reads like the drawer's: "Wednesday, 1 November" (was "Wednesday 01 November").
 - **Echo Shows: a clock where the screen used to go dark.** On the settings page's **Screen** page, the new **When
   idle** card has **Clock when idle**: when the screen would turn off (5 minutes after the last thing happened, 1 minute
   with the mic off or in Do not disturb), it shows the time across the whole screen with the date under it instead.

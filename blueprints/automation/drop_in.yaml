@@ -199,6 +199,14 @@ variables:
   pick: >-
     {% set rk = [room | slugify, room | lower | replace('ä', 'ae') | replace('ö', 'oe') | replace('ü', 'ue') | replace('ß', 'ss') | slugify]
                 | reject('in', ['', 'unknown']) | unique | list %}
+    {# Romanian's article is the noun's ending: "bucătăria" for the area "Bucătărie", "dormitorul", "biroul", "baia";
+       the first word also without it (-ul; -l after -ou -eu -iu, "biroul"; -le; -ia for -ie), beside it as said ("camera" is both) #}
+    {% if lang == 'ro' %}
+      {% set rk = (rk + rk | map('regex_replace', '^([a-z0-9]{2,})ul(?=_|$)', '\\1') | list
+                      + rk | map('regex_replace', '^([a-z0-9]{1,}[eio]u)l(?=_|$)', '\\1') | list
+                      + rk | map('regex_replace', '^([a-z0-9]{2,})le(?=_|$)', '\\1') | list
+                      + rk | map('regex_replace', '^([a-z0-9]{1,}i)a(?=_|$)', '\\1e') | list) | unique | list %}
+    {% endif %}
     {% set ra = area_id(room) if room else none %}
     {% set rf = floor_id(room) if room and not ra else none %}
     {% set hit = namespace(tier=0, list=[]) %}

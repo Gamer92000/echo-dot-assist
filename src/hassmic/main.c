@@ -2363,14 +2363,6 @@ void core_alarm_stop(const char *why)
     if (connected && proto->timers_changed) proto->timers_changed();
 }
 
-/* "<wake word>, stop" with an engine that has no "stop" keyword (microWakeWord, Home Assistant's): the transcript is the
- * word alone.  Home Assistant has nothing to stop a ringing satellite timer with (it forgot the timer when it
- * finished), so the run is cancelled here, as the button does, before Home Assistant answers it.  Music plays on
- * without a ring: paused here as stop_word does (issue #51); after the keyword paused it, the transcript is that same
- * "stop" again, and Home Assistant would answer it (nothing plays any more, or it pauses another player).  "Stopp den Timer"
- * went to Home Assistant, which answered "no timer is running" while it rang on (issue #21): with timer_stop_any any
- * recognised speech stops the ring, as EchoMuse does, whatever the language and however the ring garbled it; then a
- * question during a ring is not answered */
 /* What core_transcript compares: lower case, without spaces, punctuation and hyphens ("drop-in"), and the letters of
  * U+00C0..U+017F and Romanian's ș ț without their marks.  Speech to text writes a word with its marks or without them
  * ("închide", "inchide"), and capitalises the first one ("Închide": tolower() leaves UTF-8 alone), so every list
@@ -2384,7 +2376,13 @@ static size_t fold(const char *in, char *out, size_t cap)
     size_t n = 0;
     for (const unsigned char *p = (const unsigned char *)in; *p; ) {
         unsigned cp = *p; int len = 1;
-        if ((p[0] & 0xE0) == 0xC0 && (p[1] & 0xC0) == 0x80) { cp = (p[0] & 0x1Fu) << 6 | (p[1] & 0x3Fu); len = 2; }
+        if (cp >= 0x80) {                   /* a lead byte, the length its high bits say, cut short where one is missing */
+            len = cp >= 0xF0 ? 4 : cp >= 0xE0 ? 3 : 2;
+            for (int i = 1; i < len; i++) if ((p[i] & 0xC0) != 0x80) { len = i; break; }
+            /* two bytes: the code point, which the tables below know.  Longer ones (’ … 日), a stray byte: kept as
+             * they are, whole, so "don’t" is never torn into "dona" and two bytes of nothing */
+            cp = len == 2 && p[0] >= 0xC2 && p[0] <= 0xDF ? (p[0] & 0x1Fu) << 6 | (p[1] & 0x3Fu) : 0x110000;
+        }
         char c = 0;
         if (cp < 0x80) c = strchr(" \t.,!?\"'-", (int)cp) ? 0 : (char)tolower((int)cp);
         else if (cp == 0xA1 || cp == 0xBF) c = 0;                                       /* ¡ ¿ */
@@ -2408,6 +2406,14 @@ static int said(const char *w, const char *const *list, size_t count)
     return 0;
 }
 
+/* "<wake word>, stop" with an engine that has no "stop" keyword (microWakeWord, Home Assistant's): the transcript is the
+ * word alone.  Home Assistant has nothing to stop a ringing satellite timer with (it forgot the timer when it
+ * finished), so the run is cancelled here, as the button does, before Home Assistant answers it.  Music plays on
+ * without a ring: paused here as stop_word does (issue #51); after the keyword paused it, the transcript is that same
+ * "stop" again, and Home Assistant would answer it (nothing plays any more, or it pauses another player).  "Stopp den Timer"
+ * went to Home Assistant, which answered "no timer is running" while it rang on (issue #21): with timer_stop_any any
+ * recognised speech stops the ring, as EchoMuse does, whatever the language and however the ring garbled it; then a
+ * question during a ring is not answered */
 int core_transcript(const char *text)
 {
     /* as they are spelled: compared folded.  "stop" is Romanian's too; "oprește" what else it says */

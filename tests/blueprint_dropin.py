@@ -534,6 +534,14 @@ def main():
     check(r == "Je ne trouve pas d'Echo pour salle", f"fr, nobody there: {r!r}")
     ha = house(); r, _ = ask(ha, "küche", "dev_office", lang="ro-RO")
     check(r == "Mă conectez cu Küche", f"ro-RO: {r!r}")
+    ha = house(); ha.areas["kitchen"]["name"] = "Bucătărie"
+    r, _ = ask(ha, "bucătăria", "dev_office", lang="ro-RO")
+    check(r == "Mă conectez cu Bucătărie", f"ro-RO, the article on the noun ('bucătăria' for 'Bucătărie'): {r!r}")
+    ha = house(); ha.areas["kitchen"]["name"] = "Bucătărie"; r, _ = ask(ha, "bucătăria", "dev_office", lang="en")
+    check(r == "There is no Echo in bucătăria", f"  but only in Romanian: {r!r}")
+    ha = house(); ha.areas["bedroom"]["name"] = "Dormitor"; ha.entities["assist_satellite.echo_2_000001_assist_satellite"]["area_id"] = "bedroom"
+    r, _ = ask(ha, "dormitorul", "dev_office", lang="ro")
+    check(r == "Mă conectez cu Dormitor", f"ro, 'dormitorul' for 'Dormitor': {r!r}")
     ha = house(); r, _ = ask(ha, "küche", "dev_office", lang="pt-BR")
     check(r == "Calling Küche", f"a language with no replies: {r!r}")
     two = {"de": ["Ich verbinde mit {room}", "Kein Echo für {room}"], "en": ["Calling {room}", "No Echo in {room}"]}
