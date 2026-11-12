@@ -868,12 +868,13 @@ leds() {
 # ledcontroller's and root's.  init chowns it to ledcontroller at every boot (/init.ledcontroller.rc, 0644); its group
 # becomes LED_GID, which no stock process has and hassmic gets beside its others (runas below), and that group may write.
 # ledcontroller still owns it and keeps writing through the descriptor it holds.  sysfs: the next boot has init's again.
-# Only where device.conf names it (a model measured with scripts/led-probe.sh), and only a file in sysfs.
+# Only where device.conf names it (a model measured with scripts/led-probe.sh), and only a file in sysfs.  By otatool:
+# toybox's chgrp takes names only, and no stock group is this one (the Dot 3: "chgrp: group '3991': No such file").
 LED_GID=3991
 led_frame() {
     [ -n "$LED_FRAME" ] && [ -f "$LED_FRAME" ] || return 0
     case $(readlink -f "$LED_FRAME") in /sys/*) ;; *) echo "light ring live: $LED_FRAME is not in sysfs, left alone"; return 0;; esac
-    if chgrp $LED_GID "$LED_FRAME" && chmod 0664 "$LED_FRAME"; then echo "light ring live: hassmic may write $LED_FRAME"
+    if $D/otatool chgrp $LED_GID "$LED_FRAME" && chmod 0664 "$LED_FRAME"; then echo "light ring live: hassmic may write $LED_FRAME"
     else echo "light ring live: $LED_FRAME could not be given to hassmic"; fi
 }
 

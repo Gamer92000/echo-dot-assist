@@ -2487,7 +2487,12 @@ Run in this order. Each step says what it proves.
       microphones or privacy: listening, microphones off and on, Drop In's calling, ringing and call, page login,
       factory reset, not set up; only the cosmetic ones (thinking, speaking, not understood, timers, volume, do not
       disturb, identify).  Who spoke has to come from Home Assistant.  Not built yet.
-      Open: the update path on the Dot 3 (main.sh's grant and runas' group); biscuit and radar (`scripts/led-probe.sh read` finds the driver by itself; same 0-003f by PLAN's earlier
+      The update path on the Dot 3 (2026-11-12, ota-push.sh with the owner's key): the bundle installed, passed its
+      self test and became the factory copy, hassmic ran with group 3991 (runas takes numbers) and the Wi-Fi module
+      came along; but main.sh's grant failed: "chgrp: group '3991': No such file or directory" (toybox's chgrp takes
+      names only), and live was off ("not here"), safely.  Now `otatool chgrp GID PATH` (a number only, never 0, a
+      file only; tests/otatool_test.sh) does it.
+      Open: biscuit and radar (`scripts/led-probe.sh read` finds the driver by itself; same 0-003f by PLAN's earlier
       reads, calibration per unit; then `ring_frame`/`LED_FRAME` for them); the band of the Shows and the Echo
       Input's one LED are not part of it; a theme pack applied from Home Assistant (root's install, as Apply) asked
       about, not built.
