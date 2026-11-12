@@ -2610,6 +2610,77 @@ Run in this order. Each step says what it proves.
       Open: `noauto_da_alloc` on `/data` not checked on any model yet (`adb shell grep /data /proc/mounts`; the fix
       holds either way); the fsync's time on the Echos not measured: `settings_save` pays it under `core_lock`, once
       per setting changed from HA or the page.
+- [x] Root wrote through names in the daemon's folders (2026-11-12, GitHub issue #130, reported with Codex/ChatGPT's
+      review of f8b875c): `main.sh` ota_watch `state/ota/result.tmp` (echo, then `chown $DAEMON_USER`: both follow a
+      link; any request answers, a junk one too), `artifact-install.sh` `state/artifacts/result.tmp` the same, its
+      `request` read by root and each word echoed back in "FAILED <id>: not an artifact" (a link to a root file showed
+      it to the daemon), `migrate`'s `echo > state/wake_word`, and `/data/misc/avahi/services/hassmic.service`
+      (folder the daemon's, written and chowned by root at every satellite start). With a link to `hassmic.conf`
+      (main.sh chowns it back to root but sources what is in it) or `ota/current/main.sh` (boot.sh does not verify
+      again) that was root for code running as the daemon; SELinux no wall (`su`, permissive). Now:
+      - results made and chowned in root's `ota/` / DATA, renamed into state (a rename replaces a link);
+      - every request root acts on is taken first (`main.sh` `take`: renamed into `/data/local/hassmic/taken.<name>`,
+        then a plain file, not a link, link count 1: no model's init.rc sets `protected_hardlinks`, so a hard link to
+        a file of root's on /data is possible): clock, timezone, mdns, reset (renamed back while hassmic will not
+        stop), reboot, restart, leds-request; `wifi.sh take` the same into `wifi/request`, `lockdown.sh adb_gate` into
+        `adb-request.taken` (the request now goes a few ms before the answer: hassmic looks every 2 s);
+      - `state/ota` and `state/artifacts` themselves: `cd -P` into them, `pwd -P` must be the folder itself (state/'s
+        parent is root's, so state/ cannot be swapped), names relative from then on; a link there removed (`rm -f`
+        never follows one); the bundle and its signature renamed into `ota/in/` before `otatool` reads them (a FIFO
+        held ota_watch, and with it reset and reboot);
+      - the artifact request read through `READ_AS`; the service file and `wake_word` written through `runas` as the
+        daemon (the service file keeps the label avahi reads);
+      - `state/config` (and the old `state/settings`) read in place only when a plain file, else `/dev/null` (`cfg`;
+        a swap to a FIFO in between can still hold a loop: denial of service only, values are on/off and numbers).
+      Tests: fake_web_artifacts (request a link / a hard link to a root file, result.tmp and result links, the folder
+      a link to a root folder), fake_ha_esphome_timers (adb refused on the keyed link, closing taken); `take` and the
+      folder check tried under bash. ota_watch, adb_gate, wifi.sh take and the avahi file not run on a device yet
+      (mksh, toybox `ls -ld`). Also: the ESPHome `KEY_ADB_WIFI` command, unlisted since debug access went to the
+      page, still opened adb on the key alone; now close-only.
+      adb itself: loopback is open (`-i lo`/`-o lo` ACCEPT) and adbd has no key check, so a daemon taken over could ask
+      for adb (it is the one that does, for the page and the push port), connect to 127.0.0.1:5555 or its own address
+      and be root. `lockdown.sh` `rules`: first in `hassmic_out`, `-p tcp --dport 5555 -m owner ! --uid-owner 0
+      -j DROP` (iptables and ip6tables; every user but root, not only hassmic's: another user's service it can make
+      connect counts too; the owner match on the user, not NET_GID, which hassmic sets itself); kiosk_test checks it.
+      Dot 2 with adb open: puffin and shell refused, root in. Left: a daemon taken over can still
+      open adb for someone else on the LAN; and not checked on a device: whether the daemon (uid puffin/system, domain
+      `su`, permissive after the unlock) can `setprop service.adb.tcp.port`/`ctl.*` itself (property_service's checks
+      are SELinux only from Android 7 on): then it would not need root's gate at all, and `ctl.start` would start any
+      root service. The DROP holds for adb either way.
+      Checked on a Dot 2 (biscuit, Fire OS 7.1.2, 2026-11-12): it could. As uid 5100 in `su`, `setprop
+      service.adb.tcp.port` went through (init: `avc: denied { set } ... uid=5100 ... permissive=1`). So hassmic got a
+      domain of its own: `scripts/system/sepolicy-hassmic.rules` (`type hassmic domain`, `allow hassmic * * *`, then
+      `deny` of `property_service`, `process { transition dyntransition setcurrent setexec ptrace }`, SELinux's own
+      switches) and `sepolicy-mirror.sh` (from the policy patched so far: su's attributes, every `allow X su` as
+      `allow X hassmic`, su's exec transitions where the target is enforcing: amzn_dha on the Dots, crash_dump and
+      netutils_wrapper on athena; magiskpolicy reads no "-" in a name, so neo-service-coordinator's read of /proc is
+      left out), applied after the model's rules by install-system.sh and install-boot.sh. `runas -Z` enters it by
+      writing its own context just before the exec: an exec into it from /data (updates) is refused, /data is nosuid
+      and su does not bound hassmic (`op=security_bounded_transition seresult=denied`). A policy without the domain
+      leaves hassmic in su ("runas: no SELinux domain", seen after a reboot). On the Dot 2: setprop (any, ctl.*,
+      hassmic.adb.until), setcurrent, setexec and ptrace of a puffin process in su refused (`permissive=0`); hassmic
+      runs in it from boot after install-system.sh, self test, HA, Sendspin, no denials; adb opened by root: hassmic
+      refused on 127.0.0.1 and its own address, root and the PC in; a second push through the new ota_watch (cd -P,
+      ota/in) and state/ota swapped for a link (refused, link removed, the root folder untouched). Offline (magiskpolicy
+      under qemu) the rules load on biscuit, radar, donut, cupcake, checkers and athena's policies; crown and cronos
+      have no firmware here. Not tried on a device but the Dot 2: the Shows (binder callbacks into hassmic come
+      through the mirrored `allow domain su binder`), and a voice request, the light ring and Amazon downloads (DHA:
+      amzn_dha) in the domain.
+      Review (2026-11-12) added: no relabelling (`relabelfrom`/`relabelto` on file classes: Dot 2, chcon refused; denying
+      `setfscreate` too broke btout.c, which labels its AIPC socket as btmanagerd's: "avc: denied { setfscreate }
+      comm=hassmic" at start; labels it creates stay allowed, every mount it may write is nosuid), no `service_manager add` (Android 7's
+      servicemanager replaces a name already registered), no `binder set_context_mgr`; `rm -rf` before results are
+      renamed into state/ (a folder by that name); adb_gate's request with one name only; artifact-install.sh needs
+      READ_AS set (empty only in the PC tests); install-boot.sh checks hassmic is not permissive. Left as they are:
+      the reset request renamed back into state/ while hassmic does not stop (it is the daemon's own file, checked
+      plain with one name); state/config read in place (a FIFO swapped in between the look and the read holds a
+      loop: no more than that); `hassmic -G` parsing state/ring-applied as root (O_NOFOLLOW, plain file, 8 MB at
+      most; a parser bug there would be root's, a copy would not change that: running -G as the daemon would).
+      Echos that only take updates keep the old policy: hassmic stays in su there and can set properties until
+      install-system.sh / install-boot.sh runs again. Tried and dropped (2026-11-12): `runas -N`, a mount namespace with
+      /dev/socket/property_service bound to /dev/null for every process of the daemon's user. It worked on the Dot 2,
+      but not on the Android models (the daemon's user is system there, as are dumpable processes outside it, whose
+      /proc/<pid>/root shows the real socket), and one way for the Dots and another for the rest was not worth it.
 - [~] From #33 (Echo Show 8), for every model (2026-10-17, GitHub issue #45):
       Restart lost: `stop hassmic; start hassmic` in main.sh's ota_watch. Both services are `disabled oneshot`; toolbox
       `stop`/`start` only set `ctl.stop`/`ctl.start` and return, and init (7.1) `Service::Start` returns early while

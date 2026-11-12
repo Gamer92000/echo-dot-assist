@@ -52,8 +52,33 @@ its network listener and the firewall drops port 5555. The [ways to open it](GUI
 approved browser plus a press of the action button for that one request, a fresh challenge signed with your update key
 (a recorded exchange does not work twice), or `ADB_WIFI=1` in root's `hassmic.conf`.
 
-While it is open, anyone on the network has root. USB always works: physical access is root access anyway. Without
-`hassmic.conf` (stock behaviour, or before the install) it is open, as stock leaves it.
+While it is open, anyone on the network has root; nothing on the Echo but root does: the firewall drops every other
+user's connections to adb's port, so a hassmic taken over cannot open adb and use it. USB always works: physical
+access is root access anyway. Without `hassmic.conf` (stock behaviour, or before the install) it is open, as stock
+leaves it.
+
+## hassmic and root
+
+hassmic runs as a user of its own, not as root, so that a flaw in it does not hand over the whole Echo. Root acts on its
+requests (updates, models, Wi-Fi, the light ring, adb, restarts, the clock) only through files in hassmic's folder and
+treats them as hostile. It moves each request into a folder of its own before it looks at it, and takes it only as a
+plain file with no other name (no link, no FIFO, no hard link to a file of root's); models are read as hassmic's user.
+The update and model folders are checked to be hassmic's own, not a link to elsewhere. Root writes its answers in its
+own folder and then moves them over, or writes them as hassmic's user, never through a name hassmic could have made a
+link. The settings file it reads in place only switches things on or off and sets numbers. Until 2026-11-12 several
+of these went through such names (issue #130): code running as hassmic could have had root write a file of root's and
+give it to hassmic, its start-up configuration included.
+
+hassmic also runs in an SELinux domain of its own (`u:r:hassmic:s0`), not in root's `su`, which the unlock leaves
+permissive: there any process may set any property, adb's port and the start of any service included, and hassmic
+could (checked on a Dot 2). Its domain may do what su may, but set no property, enter no domain but the few su
+enters on exec (Amazon's own, enforcing), ptrace no process, relabel no file, and register no binder service. An Echo installed before 2026-11-12 gets it only by running `scripts/install-system.sh` again (updates do
+not change the policy); until then hassmic's log says "runas: no SELinux domain" and it runs in `su` as before, able
+to set properties. The firewall lets no process on the Echo but root's connect to adb's port, so no process acting
+for hassmic can use an open adb.
+
+What stays: hassmic is what sees the action button and checks the signed challenge, so code that took hassmic over
+can open adb over Wi-Fi for someone else on the network, though not use it itself.
 
 ## Drop In
 

@@ -54,14 +54,15 @@ KIOSK_IN="INPUT -i $WLAN -p udp -m udp --dport 2330 -j ACCEPT"
 # KSUID is empty when the setting is off or it is not installed; KSAPP says it is installed, which is what admits its ports.
 # KSTCP, KSSDP: what of its DLNA renderer is admitted (kiosk_dlna below).
 kiosk_state() {
-    local l net=on dlna=
+    local l net=on dlna= cf=/data/local/hassmic/state/config
     KIOSK=; KSUID=; KSAPP=; KSTCP=; KSSDP=; KSSDP_BY=
     [ -z "$OTA_ONLY" ] || return 0
     # whole lines, as grep -x would (a last one without its newline too); read by the shell: no fork every 5 s.  The
     # error's redirection first: one for a missing file every 5 s would fill the log
+    [ -f $cf ] && [ ! -L $cf ] || cf=/dev/null         # not through a link, nor a FIFO (it would hold this loop)
     while IFS= read -r l || [ -n "$l" ]; do
         case $l in arbitration_mode=kiosk) KIOSK=1;; kiosk_internet=off) net=off;; kiosk_dlna=on) dlna=1;; esac
-    done 2>/dev/null < /data/local/hassmic/state/config
+    done 2>/dev/null < $cf
     [ -n "$KIOSK_PACKAGE" ] || return 0
     u=$(while read -r p i _; do [ "$p" = "$KIOSK_PACKAGE" ] && { echo "$i"; break; }; done < /data/system/packages.list) 2>/dev/null
     case "$u" in *[!0-9]*) u=;; esac
@@ -191,6 +192,12 @@ update_uid() {
 # text.  The chain is loaded from this list and checked against it.
 rules() {
     if [ $1 = iptables ]; then loc=$LOCAL4; else loc=$LOCAL6; fi
+    # adbd asks for no key and its shell is root, and loopback is open: while adb over Wi-Fi is open, hassmic could
+    # connect to it itself (127.0.0.1:5555, or its own address, which goes over lo too) and be root.  hassmic is the
+    # one that asks for adb to be opened, so one taken over would only have had to ask (issue #130).  No process on
+    # the Echo but root's reaches the port, however it opens the socket (another user's service included): the owner
+    # match on the user, first, before lo is let through.  The network's own connections are not this chain's.
+    echo "-A hassmic_out -p tcp -m tcp --dport 5555 -m owner ! --uid-owner 0 -j DROP"
     echo "-A hassmic_out -o lo -j RETURN"
     if [ -n "$OTA_ONLY" ]; then u=$(update_uid); [ -n "$u" ] && echo "-A hassmic_out -m owner --uid-owner $u -j DROP"; return; fi
     for d in $loc; do echo "-A hassmic_out -d $d -j RETURN"; done
@@ -258,6 +265,7 @@ missing() { keep $1 | while read -r r; do case "$NL$2$NL" in *"$NL$r$NL"*) ;; *)
 HCONF=/data/local/hassmic/hassmic.conf
 ADB_REQ=/data/local/hassmic/state/adb-request
 ADB_OPEN=/data/local/hassmic/adb-open
+ADB_REQ_TAKEN=/data/local/hassmic/adb-request.taken
 ADB_SECS=1800
 ADB_IN="INPUT -p tcp -m tcp --dport 5555 -j ACCEPT"          # stock's rule, as "iptables -S" prints it
 up() { read -r upt _ < /proc/uptime; echo ${upt%.*}; }
@@ -273,8 +281,12 @@ adb_listening() { grep -qE '^ *[0-9]+: [0-9A-F]+:15B3 [0-9A-F]+:0000 0A ' /proc/
 # Take a request, then make adbd what it has to be.  True if that changed (the rules then have to follow).
 adb_gate() {
     req=; got=
-    if [ -f $ADB_REQ ] && [ ! -L $ADB_REQ ]; then
-        got=1; read -r req < $ADB_REQ
+    # taken into root's folder before it is read (a rename moves a link as a link: no FIFO that holds this loop), and
+    # only a plain file with one name, as main.sh's take()
+    rm -rf $ADB_REQ_TAKEN 2>/dev/null
+    if { [ -e $ADB_REQ ] || [ -L $ADB_REQ ]; } && mv -f $ADB_REQ $ADB_REQ_TAKEN 2>/dev/null &&
+            [ -f $ADB_REQ_TAKEN ] && [ ! -L $ADB_REQ_TAKEN ] && set -- $(ls -ld $ADB_REQ_TAKEN 2>/dev/null) && [ "$2" = 1 ]; then
+        got=1; read -r req < $ADB_REQ_TAKEN
         if [ "$req" = 1 ]; then setprop hassmic.adb.until $(($(up) + ADB_SECS)); else setprop hassmic.adb.until 0; fi
     fi
     adb_state
@@ -294,9 +306,9 @@ adb_gate() {
         ADB_RESTART=1; changed=0
         echo "adbd still listened on 5555 with adb over Wi-Fi closed: restarted"
     fi
-    # the answer hassmic reads, then the request: gone means answered
+    # the answer hassmic reads; the request is gone already (taken above, a few ms before: hassmic looks every 2 s)
     if [ -n "$ADB" ]; then [ -f $ADB_OPEN ] || : > $ADB_OPEN; else rm -f $ADB_OPEN; fi
-    [ -z "$got" ] || rm -f $ADB_REQ
+    [ -z "$got" ] || rm -f $ADB_REQ_TAKEN
     return $changed
 }
 

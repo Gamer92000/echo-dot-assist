@@ -46,13 +46,22 @@ boot_image() {
     python3 scripts/mkbootroot.py --extract $OUT/boot.stock.img sepolicy $OUT/sepolicy.stock
     rm -f $OUT/sepolicy.hassmic
     chmod 755 $SEPOLICY_TOOL
+    # the model's rules, then hassmic's own domain with what other domains may do to su copied over to it, from the
+    # policy as it is by then (scripts/system/sepolicy-hassmic.rules, sepolicy-mirror.sh)
+    rm -f $OUT/sepolicy.mid
     DEVICE=$DEVICE tools/qrun.sh -t 120 $SEPOLICY_TOOL --load $OUT/sepolicy.stock --apply $DDIR/sepolicy.rules \
-        --save $OUT/sepolicy.hassmic > $OUT/qrun.log 2>&1 || true
+        --save $OUT/sepolicy.mid > $OUT/qrun.log 2>&1 || true
+    [ -s $OUT/sepolicy.mid ] && DEVICE=$DEVICE tools/qrun.sh -t 120 $SEPOLICY_TOOL --load $OUT/sepolicy.mid --print-rules \
+        > $OUT/sepolicy.mid.txt 2>/dev/null && sh scripts/system/sepolicy-mirror.sh $OUT/sepolicy.mid.txt > $OUT/sepolicy-mirror.rules &&
+        DEVICE=$DEVICE tools/qrun.sh -t 120 $SEPOLICY_TOOL --load $OUT/sepolicy.mid --apply scripts/system/sepolicy-hassmic.rules \
+            --apply $OUT/sepolicy-mirror.rules --save $OUT/sepolicy.hassmic >> $OUT/qrun.log 2>&1 || true
     # qrun.sh says there why it did not run qemu (no user namespace: Ubuntu 24.04 and later)
     [ -s $OUT/sepolicy.hassmic ] ||
         die "the policy patch failed (tools/qrun.sh $SEPOLICY_TOOL): $(grep '^qrun.sh' $OUT/qrun.log || tail -n 3 $OUT/qrun.log)"
     DEVICE=$DEVICE tools/qrun.sh -t 120 $SEPOLICY_TOOL --load $OUT/sepolicy.hassmic --print-rules > $OUT/sepolicy.rules.txt 2>/dev/null || true
-    grep -qx 'permissive adbd' $OUT/sepolicy.rules.txt && grep -q '^allow init su process' $OUT/sepolicy.rules.txt ||
+    grep -qx 'permissive adbd' $OUT/sepolicy.rules.txt && grep -q '^allow init su process' $OUT/sepolicy.rules.txt &&
+        grep -q '^type hassmic ' $OUT/sepolicy.rules.txt && ! grep -q '^allow hassmic [^ ]* property_service' $OUT/sepolicy.rules.txt &&
+        ! grep -qx 'permissive hassmic' $OUT/sepolicy.rules.txt ||
         die "the patched policy lacks its rules ($OUT/sepolicy.rules.txt)"
     python3 scripts/mkbootroot.py $OUT/boot.stock.img $IMG --sepolicy $OUT/sepolicy.hassmic --adbd $ADBD --no-verity > /dev/null
     echo "boot image: $IMG ($(sha $IMG | cut -c1-16)...)"

@@ -198,7 +198,11 @@ stops and names the sysctl, which the setup's `qemu_arm` asks to set).
 - `device.conf`: shell vars (product/firmware id, probe files, `INSTALL` method, daemon user/groups, stock service
   names). Sourced by PC scripts and shipped to the Echo next to `main.sh`/`lockdown.sh`/`alexa-off.sh`; push bundles
   carry it, and `main.sh` refuses a bundle whose `PRODUCT` is not the Echo's.
-- `hassmic.rc`, `sepolicy.rules`: installed by `install-system.sh`.
+- `hassmic.rc`, `sepolicy.rules`: installed by `install-system.sh`.  After the model's rules every install adds
+  hassmic's own SELinux domain (`scripts/system/sepolicy-hassmic.rules`: enforcing, `allow hassmic * * *` less property
+  writes, domain changes, ptrace; `sepolicy-mirror.sh` copies to it what other domains may do to su, from the policy
+  being patched); `runas -Z u:r:hassmic:s0` (main.sh) enters it by its own context, not the exec's (/data is nosuid).
+  The services stay in su, which the unlock makes permissive: there any process may set any property (issue #130).
 - `stubs/*.syms`: what our binaries need of each stock library (`tools/mkstubs.sh`), for `make STUBS=1` / CI.
 - `README.md` (model facts + install steps by hand) and `setup.sh` (same steps for the guided `scripts/setup.sh`:
   `STEPS` list + `step_<id>` functions using `scripts/lib/setup.sh`; `--dry-run` walks them without running). Keep

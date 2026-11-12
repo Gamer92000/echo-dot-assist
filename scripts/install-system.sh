@@ -46,11 +46,18 @@ if [ "$1" != --uninstall ]; then
         t "mkdir -p /data/local/hassmic"; adb push $OUT/hassmic.conf /data/local/hassmic/hassmic.conf >/dev/null
         t "rm -rf /data/local/hassmic/ota; rm -f /data/local/hassmic/hassmic"      # boot.sh prefers a binary here (scripts/deploy.sh test builds); the fresh install wins
         # Patch the policy here, not in TWRP: magiskpolicy is dynamically linked and aborts in the recovery environment.
-        adb push $SEPOLICY_TOOL /data/local/tmp/mp >/dev/null && adb push $DDIR/sepolicy.rules /data/local/tmp/ >/dev/null ||
-            die "could not copy $SEPOLICY_TOOL and $DDIR/sepolicy.rules to the Echo, nothing changed"
-        t "cd /data/local/tmp; chmod 755 mp; rm -f sepolicy.new
-           ./mp --load $BASEF --apply sepolicy.rules --save sepolicy.new >/dev/null 2>&1
-           [ -s sepolicy.new ] && ./mp --load sepolicy.new --print-rules 2>/dev/null | grep -q '^allow init su process'" ||
+        # The model's rules, then hassmic's own domain (scripts/system/sepolicy-hassmic.rules) with what other domains
+        # may do to su copied over to it, from the policy as it is by then (sepolicy-mirror.sh)
+        adb push $SEPOLICY_TOOL /data/local/tmp/mp >/dev/null && adb push $DDIR/sepolicy.rules scripts/system/sepolicy-hassmic.rules \
+            scripts/system/sepolicy-mirror.sh /data/local/tmp/ >/dev/null ||
+            die "could not copy $SEPOLICY_TOOL and the policy rules to the Echo, nothing changed"
+        t "cd /data/local/tmp; chmod 755 mp; rm -f sepolicy.mid sepolicy.new
+           ./mp --load $BASEF --apply sepolicy.rules --save sepolicy.mid >/dev/null 2>&1 &&
+           ./mp --load sepolicy.mid --print-rules > sepolicy.mid.txt 2>/dev/null && sh sepolicy-mirror.sh sepolicy.mid.txt > sepolicy-mirror.rules &&
+           ./mp --load sepolicy.mid --apply sepolicy-hassmic.rules --apply sepolicy-mirror.rules --save sepolicy.new >/dev/null 2>&1
+           [ -s sepolicy.new ] && ./mp --load sepolicy.new --print-rules > sepolicy.new.txt 2>/dev/null &&
+           grep -q '^allow init su process' sepolicy.new.txt && grep -q '^type hassmic ' sepolicy.new.txt &&
+           ! grep -q '^allow hassmic [^ ]* property_service' sepolicy.new.txt && ! grep -qx 'permissive hassmic' sepolicy.new.txt" ||
             { echo "sepolicy patch failed, nothing changed"; exit 1; }
         adb pull /data/local/tmp/sepolicy.new $OUT/sepolicy.hassmic >/dev/null
         md5sum device-logs/backup/sepolicy.boot-root > $OUT/sepolicy.hassmic.base

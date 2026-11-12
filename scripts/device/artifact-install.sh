@@ -9,6 +9,10 @@
 # never a file of root's.  Root only looks at names and types, then copies into a fresh folder of its own and swaps it in.
 # Writes STATE/artifacts/result ("OK <id>" / "FAILED <id>: why" per line, owned by DAEMON_USER) and prints it; exit 0 if
 # at least one went in (main.sh then restarts hassmic: the wake word list and the whisper model are read at start).
+# Root writes nothing through a name in the daemon's folder: the request is renamed into DATA (root's) and read there
+# as the daemon's user, the result made and chowned in DATA and renamed into STATE/artifacts.  A link the daemon left
+# at either name (request -> a root file, result.tmp -> hassmic.conf) had root show it that file's words, or write the
+# file and chown it to the daemon, which could then put commands in it for root's next start.
 #   artifact-install.sh migrate STATE DATA
 # Wake word sets installed by hand under the short name (models/echo-de) get the one scripts/artifacts.sh gives them
 # (echo-de-DE), so that the same set has one name on every Echo (the settings page copies by name).  main.sh runs it at
@@ -17,6 +21,9 @@
 # files do not say which, so those stay as they are.  A long name already there: the short one goes if it holds the
 # same files, else both stay.
 umask 022
+# READ_AS: how root reads what the daemon left (main.sh: runas as its user).  Empty only on the PC (tests: the test's
+# own user); not set at all would have root read the daemon's files itself
+[ -n "${READ_AS+set}" ] || { echo "FAILED: READ_AS not set (main.sh gives it)"; exit 1; }
 # folders $1 and $2 hold the same files, folders down included (toybox here has no diff -r)
 same_tree() {
     for f in $1/* $2/*; do
@@ -40,18 +47,34 @@ if [ "$1" = migrate ]; then
         elif mv "$d" "$M/$new"; then echo "models: $old renamed $new"
         else continue
         fi
-        # echo into the file it is: it stays the daemon's
-        [ "$(cat $W 2>/dev/null)" = "$old" ] && echo "$new" > $W && echo "models: the active wake word follows ($new)"
+        # written as the daemon's user, as the file it is: it stays the daemon's, and a link only reaches what it may
+        # write anyway
+        [ "$($READ_AS cat $W 2>/dev/null)" = "$old" ] && echo "$new" | $READ_AS sh -c 'cat > "$1"' sh $W &&
+            echo "models: the active wake word follows ($new)"
     done
     exit 0
 fi
-STATE=$1 DATA=$2
+STATE=$1 DATA=$(cd -P "$2" && pwd -P) || exit 1
 A=$STATE/artifacts
+REQ=$DATA/.artifact-request RES=$DATA/.artifact-result
 [ -f $A/request ] || exit 1
+# The folder itself is the daemon's to replace (STATE is its own): a link there had root remove, read and leave files in
+# a folder of root's.  So into it (cd -P), the folder it is in checked to be STATE/artifacts itself (pwd -P: the folder,
+# whatever names point at it now), and only names relative to it from here on.  STATE's own parent is root's.
+real=$(cd -P "$STATE" && pwd -P)/artifacts
+if ! cd -P $A 2>/dev/null || [ "$(pwd -P)" != "$real" ]; then
+    cd /; rm -f $A 2>/dev/null                      # a link goes (rm without -r never follows one); a folder stays
+    echo "FAILED: $A is not hassmic's own folder (a link?)"; exit 1
+fi
+A=.
+rm -rf $REQ $RES
+# a rename moves a link as a link; one name only (/data has no protected_hardlinks: a hard link to a file of root's)
+mv $A/request $REQ && [ -f $REQ ] && [ ! -L $REQ ] && set -- $(ls -ld $REQ 2>/dev/null) && [ "$2" = 1 ] ||
+    { rm -rf $REQ; exit 1; }
 ok=0
-: > $A/result.tmp
+: > $RES
 
-say() { echo "$1" >> $A/result.tmp; }
+say() { echo "$1" >> $RES; }
 good() { case $1 in ""|[!A-Za-z0-9]*|*[!A-Za-z0-9._-]*) return 1;; esac; [ ${#1} -le 63 ]; }
 
 # the staged folder $1 into root's $2: plain files, and folders of them $3 levels down, as artifacts.c stages them
@@ -97,9 +120,9 @@ install_one() {
     say "OK $id"; ok=1
 }
 
-ids=$(cat $A/request); rm -f $A/request
+ids=$($READ_AS dd if=$REQ bs=4096 count=1 2>/dev/null); rm -f $REQ     # as the daemon: a hard link reads only what it may
 for id in $ids; do install_one "$id"; done
-[ -n "$DAEMON_USER" ] && chown $DAEMON_USER $A/result.tmp
-mv $A/result.tmp $A/result
-cat $A/result
+cat $RES
+[ -n "$DAEMON_USER" ] && chown $DAEMON_USER $RES
+chmod 644 $RES; rm -rf $A/result; mv -f $RES $A/result      # a folder by that name too (rm never follows a link)
 [ $ok = 1 ]

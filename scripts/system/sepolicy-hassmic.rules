@@ -1,0 +1,27 @@
+# hassmic's own SELinux domain (u:r:hassmic:s0), applied with magiskpolicy after the model's sepolicy.rules
+# (install-system.sh, install-boot.sh), with sepolicy-mirror.sh's rules after it.  runas -Z puts hassmic in it
+# (main.sh).  Until then hassmic ran in su, like every service of ours: the unlock makes su permissive, and in a
+# permissive domain the only checks left are the file modes.  init asks SELinux alone whether a property may be set
+# (Android 7 and later), and the property socket is 0666: hassmic, as puffin, set service.adb.tcp.port on a Dot 2
+# (2026-11-12, init: "avc: denied { set } ... uid=5100 ... permissive=1"), so it could have opened adb, started or
+# stopped any service of init's (ctl.*) and set what root's scripts read (hassmic.adb.until) (issue #130).
+# This domain is enforcing and may do everything su may, except:
+type hassmic domain
+allow hassmic * * *
+#   set any property (ctl.start and the rest are properties too); it reads them through files, not this
+deny hassmic * property_service *
+#   leave it: no other domain on exec or by writing its own context (su is permissive), no ptrace of another process,
+#   which would do that through a process of root's that runs as the same user (runas in main.sh, READ_AS)
+deny hassmic * process { transition dyntransition setcurrent setexec ptrace }
+#   relabel a file (one of its own as another domain's entry point).  It may still label what it creates (btout.c
+#   labels its AIPC socket as btmanagerd's, or the mixer may not connect): an exec into another domain from a file it
+#   wrote is refused anyway, every mount it may write is nosuid (Dot 2: an exec transition from /data,
+#   "security_bounded_transition denied")
+deny hassmic * { file dir lnk_file sock_file fifo_file chr_file blk_file } { relabelfrom relabelto }
+#   stand in for another service: register one with servicemanager (which replaces a name already there) or become it
+deny hassmic * service_manager { add }
+deny hassmic * binder { set_context_mgr }
+#   SELinux's own switches (their files are root's anyway)
+deny hassmic * security { setenforce load_policy setbool setsecparam setcheckreqprot read_policy }
+# root's services start it (runas -Z: its own context, just before the exec; /data is nosuid)
+allow su hassmic process { dyntransition transition siginh rlimitinh noatsecure }

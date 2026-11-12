@@ -287,6 +287,14 @@ async def main(e):
     before = os.path.getsize(play)
     res = await enc.send_voice_assistant_announcement_await_response(f"http://127.0.0.1:{HTTP_PORT}/a.wav", 15, "x")
     check(res.success and os.path.getsize(play) - before == 48000, "encrypted: announcement played")
+    # adb over Wi-Fi (issue #130): no entity, and Home Assistant's key alone does not open it: the settings page does,
+    # with a press of the action button (fake_web.py).  Closing is taken from anyone with the key.
+    adb_req = os.path.join(state, "adb-request")
+    enc.switch_command(22, True); await sync(enc); await asyncio.sleep(0.3)         # KEY_ADB_WIFI, as proto_esphome.c
+    check(not os.path.exists(adb_req), "keyed link: opening adb over Wi-Fi refused, nothing asked of root")
+    enc.switch_command(22, False); await sync(enc)
+    check(open(adb_req).read() == "0\n" if os.path.exists(adb_req) else False, "keyed link: closing adb over Wi-Fi asked of root")
+    os.unlink(adb_req)
 
     check(await asyncio.wait_for(enc.noise_encryption_set_key(b""), 5) is True and not os.path.exists(os.path.join(state, "api_key")),
           "empty key from the keyed connection clears it (Home Assistant deleting the device)")

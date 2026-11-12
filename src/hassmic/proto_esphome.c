@@ -35,7 +35,7 @@
  *                    Assistant to run assist_satellite.announce on us (HomeassistantActionRequest, what an ESPHome YAML
  *                    `homeassistant.action` sends).  Home Assistant only runs it with "Allow the device to perform Home
  *                    Assistant actions" ticked in the device's options; otherwise it raises a repair saying so.
- *   debug access     a switch opens adb over Wi-Fi for 30 min (adbwifi.c); only taken over the connection with the key
+ *   debug access     not an entity (the settings page, with the action button); a command may only close it
  *   wifi motion      experimental, off by default: a switch, a motion binary sensor, its sensitivity (wifimotion.c);
  *                    listed only where the Wi-Fi driver can do it
  *   online updates   an update entity with the newest build on the channel picked on the settings page, and an
@@ -776,11 +776,11 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     else if (type == SWITCH_COMMAND && key == KEY_ARB_JOIN && arb_running()) { arb_arbitrate(on); send_setting(key); return; }   /* arb.c keeps it */
     else if (type == SWITCH_COMMAND && key == KEY_SS_UNPAIRED && core_sendspin_port) { sendspin_unpaired(on); send_setting(key); return; }  /* sendspin.c keeps it */
     else if (type == SWITCH_COMMAND && key == KEY_ADB_WIFI) {
-        /* Before Home Assistant has set the key anyone on the network gets a connection: that must not be a way to
-         * a root shell.  Closing it is always fine. */
-        int c = client_of(reply_fd);
-        if (!on || (c >= 0 && clients[c].keyed)) adbwifi_ask(on);
-        else fprintf(stderr, "adb over Wi-Fi: refused, the request did not come over the keyed connection\n");
+        /* Not listed since debug access moved to the settings page, where opening takes a press of the action button
+         * (web.c).  Opening from here took the key alone, and the key is in Home Assistant's files and backups: so
+         * only closing, which is always fine (issue #130). */
+        if (!on) adbwifi_ask(0);
+        else fprintf(stderr, "adb over Wi-Fi: refused over ESPHome, open it on the settings page\n");
         send_setting(key); return;
     }
     else if (type == SWITCH_COMMAND && key == KEY_SOUND_DETECTION) { core_sound(on); settings_save(); send_setting(key); return; }

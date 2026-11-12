@@ -58,6 +58,10 @@ with tempfile.TemporaryDirectory() as tmp:
           and "-A INPUT -s 10.0.0.0/8 -i wlan0 -p tcp -m tcp --dport 6053 -j ACCEPT" in o, o)
     check("not from multicast", "224.0.0.0/4 -i wlan0 -p tcp" not in o, o)
     check("off takes the rule out", "--uid-owner 10042" not in lockdown(tmp, CONF, "kiosk_internet=off\n", LIST))
+    # adb (issue #130): no process but root's reaches adbd's port, first in the chain, before lo is let through
+    rules = lockdown(tmp, CONF, "", LIST).splitlines()
+    adb = "-A hassmic_out -p tcp -m tcp --dport 5555 -m owner ! --uid-owner 0 -j DROP"
+    check("adb port: dropped for every user but root, first", rules[:2] == [adb, "-A hassmic_out -o lo -j RETURN"], rules[:3])
     check("off on a last line without its newline", "--uid-owner 10042" not in lockdown(tmp, CONF, "mute=off\nkiosk_internet=off", LIST))
     o = lockdown(tmp, CONF, None, LIST)
     check("no state/config: nothing said, internet on", "STDERR" not in o and UID_RULE in o, o)
@@ -340,6 +344,7 @@ window) [ "$2" = policy ] && cat {tmp}/rotation;;
         tool(tmp, "runas", 'shift 2; exec "$@"')
         t = open(ROOT + "/scripts/system/main.sh").read()
         block = t[t.index("# >>> kiosk"):t.index("# <<< kiosk")]
+        block = next(l for l in t.splitlines() if l.startswith("cfg() {")) + "\n" + block    # state/config's reader
         self.block = f"D={tmp}\nKIOSK_PACKAGE={PKG}\nKIOSK_ROTATION=1\nBACKLIGHT=1\n" + moved(block, tmp)
 
     def top(self, what):

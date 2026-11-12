@@ -177,18 +177,54 @@ def main():
             check(r.returncode != 0 and f"FAILED wake:{name}:" in r.stdout and not os.path.exists(os.path.join(b.data, "models", name)),
                   f"{'a link in a folder' if name == 'evil2' else 'three folders down'}: refused by root: {r.stdout.strip()!r}")
 
+        # links the daemon could leave root (issue #130): nothing read or written through them, the folder not followed
+        art, res = os.path.join(b.state, "artifacts"), os.path.join(b.state, "artifacts", "result")
+        secret, victim = os.path.join(b.data, "root-secret"), os.path.join(b.data, "root-conf")
+        with open(secret, "w") as f: f.write("psk=SECRET123\n")
+        with open(victim, "w") as f: f.write("ROOTCONF\n")
+        def clear():
+            for n in ("request", "result.tmp", "result"):
+                if os.path.lexists(os.path.join(art, n)): os.unlink(os.path.join(art, n))
+        def said(r): return r.stdout + (open(res).read() if os.path.isfile(res) else "")
+        clear(); os.symlink(victim, os.path.join(art, "result.tmp")); os.symlink(secret, os.path.join(art, "request"))
+        r = root_install(b)
+        check(r.returncode != 0 and "SECRET" not in said(r) and open(victim).read() == "ROOTCONF\n"
+              and not os.path.lexists(os.path.join(art, "request")) and open(secret).read() == "psk=SECRET123\n",
+              f"request a link to a file of root's: taken, never read; result.tmp a link: its file untouched {said(r)!r}")
+        clear(); os.link(secret, os.path.join(art, "request"))
+        r = root_install(b)
+        check(r.returncode != 0 and "SECRET" not in said(r) and open(secret).read() == "psk=SECRET123\n",
+              f"request a hard link to a file of root's: taken, never read {said(r)!r}")
+        clear(); os.symlink(victim, os.path.join(art, "result.tmp")); os.symlink(victim, res)
+        with open(os.path.join(art, "request"), "w") as f: f.write("bogus\n")
+        r = root_install(b)
+        check(r.returncode != 0 and not os.path.islink(res) and open(res).read() == "FAILED bogus: not an artifact\n"
+              and open(victim).read() == "ROOTCONF\n", f"a plain request answered beside the links, their file untouched {said(r)!r}")
+        clear()
+        os.rename(art, art + ".real"); rootdir = os.path.join(b.data, "rootdir"); os.makedirs(rootdir)
+        for n in ("request", "result", "wake.x", "wake.x.ready"):
+            with open(os.path.join(rootdir, n), "w") as f: f.write("wake:x\n")
+        os.symlink(rootdir, art)
+        r = root_install(b)
+        check(r.returncode != 0 and not os.path.lexists(art) and sorted(os.listdir(rootdir)) == ["request", "result", "wake.x", "wake.x.ready"]
+              and open(os.path.join(rootdir, "result")).read() == "wake:x\n",
+              f"the folder a link to one of root's: refused, the link removed, nothing in it touched {r.stdout.strip()!r}")
+        os.rename(art + ".real", art); shutil.rmtree(rootdir); os.unlink(secret); os.unlink(victim)
+
         # wake word sets installed by hand under the short name get the long one at the next start (main.sh, as root)
         b.model("models/echo-de", wake)                     # the same set as echo-de-DE: goes
         b.model("models/alexa-de", {"pryon.manifest": b"a\n"})   # alone: renamed, and the active one: the choice follows
         b.model("models/echo-en", {"pryon.manifest": b"e\n"})    # en comes in several regions: left alone
         b.model("models/computer-it", {"pryon.manifest": b"c\n"}); b.model("models/computer-it-IT", {"pryon.manifest": b"other\n"})
         with open(os.path.join(b.state, "wake_word"), "w") as f: f.write("alexa-de\n")
-        r = subprocess.run(["sh", f"{ROOT}/scripts/device/artifact-install.sh", "migrate", b.state, b.data], capture_output=True, text=True)
+        r = subprocess.run(["sh", f"{ROOT}/scripts/device/artifact-install.sh", "migrate", b.state, b.data], capture_output=True, text=True,
+                           env=dict(os.environ, READ_AS=""))
         names = sorted(os.listdir(os.path.join(b.data, "models")))
         check(r.returncode == 0 and names == ["alexa-de-DE", "computer-it", "computer-it-IT", "echo-de-DE", "echo-en"]
               and open(os.path.join(b.state, "wake_word")).read().strip() == "alexa-de-DE",
               f"short names migrated (same set: dropped; different: both kept; en: left), active wake word followed: {names} {r.stdout.strip()!r}")
-        r = subprocess.run(["sh", f"{ROOT}/scripts/device/artifact-install.sh", "migrate", b.state, b.data], capture_output=True, text=True)
+        r = subprocess.run(["sh", f"{ROOT}/scripts/device/artifact-install.sh", "migrate", b.state, b.data], capture_output=True, text=True,
+                           env=dict(os.environ, READ_AS=""))
         check(r.stdout.strip() == "models: computer-it and computer-it-IT differ, both kept" and sorted(os.listdir(os.path.join(b.data, "models"))) == names,
               "a second start changes nothing")
 

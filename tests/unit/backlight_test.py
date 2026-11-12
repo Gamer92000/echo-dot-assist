@@ -46,6 +46,7 @@ esac
 
 text = open(ROOT + "/scripts/system/main.sh").read()
 block = text[text.index("# >>> backlight"):text.index("# <<< backlight")]
+block = next(l for l in text.splitlines() if l.startswith("cfg() {")) + "\n" + block      # state/config's reader
 
 
 def run(tmp, config, call, stock=None, xml="", fail=None, ambient="1", missing=False):

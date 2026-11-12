@@ -280,10 +280,17 @@ forget)
     rm -f $O/scan $O/result
     status;;
 take)
-    R=$S/wifi-request
+    R=$S/wifi-request T=$O/request
     [ -f $R ] && [ ! -L $R ] || exit 0
     lock || exit 0                                      # another run has it: the request waits for the next look
-    read -r what id ssid psk < $R; rm -f $R
+    # taken into root's folder before it is read (a rename moves a link as a link: nothing swapped in between, no FIFO
+    # that holds the run), and only a plain file with one name (/data has no protected_hardlinks: a hard link to a
+    # file of root's would be a plain file too); what it says goes into the log and to wpa_supplicant
+    rm -rf $T; mv -f $R $T 2>/dev/null || exit 0
+    if ! { [ -f $T ] && [ ! -L $T ] && set -- $(ls -ld $T 2>/dev/null) && [ "$2" = 1 ]; }; then
+        rm -rf $T; say "request not a plain file, dropped"; exit 0
+    fi
+    read -r what id ssid psk < $T; rm -f $T
     case $id in ''|*[!0-9]*) say "request not understood, dropped"; exit 0;; esac
     case $what in
     scan) scan;;
