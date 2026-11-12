@@ -445,6 +445,21 @@ int scene_visible(const struct scene *s)
     return is_home(s->top) || s->now < s->want_home_until;
 }
 
+/* "front" to hassmic: whether the screen's timeout is the UI's now (the screen saver: ring_band.c holds the screen on and
+ * face.c shows the clock when it is up).  Our own face, with no drawer over it and not the setup screen: the clock takes
+ * nothing else's place, and those held on would never go dark (a music page left paused, the drawer left out, an Echo
+ * not set up).  A request, a call or a ringing timer keep it: they end by themselves, the face counts them as something
+ * happening, and each flip is a "settings put" (a VM) in ring_band.c.  The rest keeps the screen's own timeout, as
+ * before the clock.  The UI's count starts as it takes over: an app in front long draws no frames that would have
+ * counted it (scene_prepare), and it closing by itself is no reason for the clock at once */
+static void front_tell(struct scene *s)
+{
+    int f = is_home(s->top) && s->view == V_FACE && !drawer_open(s) && !face_setup(s);
+    if (f == s->front_sent) return;
+    if (f) s->active_at = s->now;
+    s->front_sent = f; send(s, "front %d", f);
+}
+
 /* The activity in front.  An app gone while one is the home app (it ended, crashed, or Back left it): it comes back,
  * three times a minute at most, unless our own screen was asked for. */
 void scene_top(struct scene *s, const char *pkg, long long now)
@@ -453,7 +468,9 @@ void scene_top(struct scene *s, const char *pkg, long long now)
     int was_home = is_home(s->top);
     if (eq(pkg, s->top)) return;
     snprintf(s->top, sizeof s->top, "%s", pkg);
-    if (is_home(pkg) != s->front_sent) { s->front_sent = is_home(pkg); send(s, "front %d", s->front_sent); }
+    if (!is_home(pkg)) scene_active(s, "%s in front", pkg);     /* (here: scene_prepare draws nothing behind an app, and
+                                                                   the log would not say what ended the clock) */
+    front_tell(s);
     if (!is_home(pkg)) {                                        /* the app is in front: what held its place goes */
         s->leaving_until = 0;
         if (s->mp_gave) { s->mp_gave = 0; s->view = V_FACE; }   /* (the music page given back: the face under the app) */
@@ -820,6 +837,7 @@ struct rect scene_prepare(struct scene *s, long long now, int *next_ms)
     if (drawer_only || drawer_open(s)) scene_active(s, "the drawer");
     else if (s->view != V_FACE) scene_active(s, "the music");
     else if (!is_home(s->top)) scene_active(s, "%s in front", s->top);
+    front_tell(s);                                              /* (a view, the drawer, the face's mode: frames follow) */
     s->saver_was = s->saver_on; s->saver_on = 0;                /* (face.c sets it while the clock shows) */
     if (drawer_only) {                                          /* pulled over an app: its picture under the drawer */
         fill(s, 0, (struct rect){ 0, 0, s->w, s->h }, BG);

@@ -111,7 +111,7 @@ static int words_on, words_hold = 8, timers_show;               /* (lock) */
 /* The idle screen (screen.h): the screen saver and its timeout, told to the UI with the words' settings (ck, at
  * wo_gen); the timeout read by ring_band.c too.  5 min: stock's screen_off_timeout_standard, what the Echo did before */
 static int clock_big, sleep_min = 5;                            /* (lock) */
-static atomic_int ui_front;                                     /* the UI's "front": our own screen in front, not an app */
+static atomic_int ui_front;                                     /* the UI's "front": its face in front, the timeout the UI's */
 static char heard[1000], reply[1000]; static int w_idle; static long long w_idle_at;   /* (lock; a line holds 1023) */
 static unsigned words_gen, words_sent, wo_gen, wo_sent;
 static atomic_int timers_now, keep_on;                          /* a change to read now; timers shown: the screen stays on */
@@ -375,7 +375,7 @@ static int fifo_put(const void *p, size_t n)                    /* lock held */
 
 static int ui_up;                                              /* a UI to read the FIFO (lock held): none, nothing queued */
 
-/* the screen saver's: on, and a UI that says our own screen is in front (ring_band.c holds the screen on then) */
+/* the screen saver's: on, and a UI that says its face is in front (ring_band.c holds the screen on then) */
 int screen_saver(void)
 {
     pthread_mutex_lock(&lock); int on = clock_big && sleep_min > 0 && ui_up; pthread_mutex_unlock(&lock);
@@ -545,8 +545,8 @@ static void on_line(char *l)
             a->sys = atoi(t2 + 1);
             if (pkg_ok(a->pkg) && a->pkg[0]) napps_new++;
         }
-    } else if (!strncmp(l, "front ", 6)) {                     /* our own screen in front, or an app: the */
-        atomic_store(&ui_front, atoi(l + 6) == 1);              /* screen saver only over our own (ring_band.c) */
+    } else if (!strncmp(l, "front ", 6)) {                     /* the UI's face in front (no app, music page, */
+        atomic_store(&ui_front, atoi(l + 6) == 1);              /* drawer, setup): the screen saver's (ring_band.c) */
     } else if (!strcmp(l, "apps.")) {
         pthread_mutex_lock(&lock); memcpy(apps, apps_new, sizeof apps); napps = napps_new; pthread_mutex_unlock(&lock);
         napps_new = 0;
@@ -764,7 +764,7 @@ static void *writer(void *arg)
             if (!music) meta_sent = meta_gen, prog_sent = prog_gen, ctl_sent = ctl_gen;
             if (!music && !artn) art_sent = art_gen;              /* (a cover before any metadata: told too) */
             fifo.n = 0; ui_up = 1; atomic_store(&ui_front, 0);    /* answers to the last UI's requests: not this one's;
-                                                                   in front: once it says so (scene_top) */
+                                                                   in front: once it says so (front_tell) */
             pthread_mutex_unlock(&lock);
             memset(&sent_s, 0xFF, sizeof sent_s); sent_s.timers[0] = sent_s.peer[0] = sent_s.web[0] = 1;
             lv_sent = -1; next_slow = 0;

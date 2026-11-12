@@ -4,6 +4,12 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-12
 
+- **Echo Shows: a clock where the screen used to go dark.** On the settings page's **Screen** page, the new **When
+  idle** card has **Clock when idle**: when the screen would turn off (5 minutes after the last thing happened, 1 minute
+  with the mic off or in Do not disturb), it shows the time across the whole screen with the date under it instead.
+  Until then the face shows as always. A touch on the clock, a request, a timer, the volume or music starting bring
+  the face back, and the wait starts again. **Screen sleeps after** sets that wait in minutes (0: never, the face
+  stays). With an app or the music page in front the screen goes dark as before. Off and 5 minutes by default.
 - **A tighter wall between hassmic and root (issue #130).** If something ever took hassmic over, it could have had
   root overwrite one of root's own files, set system properties (open adb, start any service) or connect to an open
   adb itself, and from there run as root. Root now treats everything hassmic leaves for it as hostile, the firewall
@@ -57,12 +63,12 @@ What changed for people using the Echo, newest first. Details and measurements a
   now recognised with or without their accents and capitals in every language ("Închide", "inchide", "Arrête"). The
   Drop In blueprint has Romanian sentences ("conectează-mă cu bucătăria") and replies: re-import it to get them. In
   English the clock's date now reads like the drawer's: "Wednesday, 1 November" (was "Wednesday 01 November").
-- **Echo Shows: a clock where the screen used to go dark.** On the settings page's **Screen** page, the new **When
-  idle** card has **Clock when idle**: when the screen would turn off (5 minutes after the last thing happened, 1 minute
-  with the mic off or in Do not disturb), it shows the time across the whole screen with the date under it instead.
-  Until then the face shows as always. A touch on the clock, a request, a timer, the volume or music starting bring
-  the face back, and the wait starts again. **Screen sleeps after** sets that wait in minutes (0: never, the face
-  stays). With an app in front the screen goes dark as before. Off and 5 minutes by default.
+- **Echo Show 5: Wi-Fi no longer drops every few minutes.** Amazon's Wi-Fi diagnostics, still running inside Android,
+  test the connection against Amazon's servers; the satellite's firewall blocks them, so the test always failed and
+  the diagnostics then disconnected and reconnected the Wi-Fi (a few seconds each time, every link to Home Assistant
+  and Music Assistant dropped, music stopped and restarted), and their watchdog turned the Wi-Fi off and on when the
+  test never passed. The satellite now switches both off. The other Echo Shows and the Echo Input have the same
+  diagnostics and get the same change, not tried on them yet.
 
 ## 2026-11-10
 

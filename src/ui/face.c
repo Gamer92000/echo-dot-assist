@@ -79,6 +79,7 @@ static int waits(int m) { return m == M_IDLE || m == M_MUTE || m == M_DND; }
 
 /* the face has nothing to tell (no request, call, timer, error, setup): the music page may take its place */
 int face_calm(struct scene *s) { return waits(face_mode(s)); }
+int face_setup(struct scene *s) { return face_mode(s) == M_SETUP; }
 
 /* The screen saver (ck): where the screen went dark once nothing happened for its timeout, the clock.  The timeout as
  * ring_band.c's was: "Screen sleeps after" (0 never), mic off and Do not disturb at most stock's minute.  Only the

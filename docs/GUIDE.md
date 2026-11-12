@@ -510,7 +510,8 @@ satellite of its own has to run without its microphone (as a display) while hass
   own: **Screen sleeps after** (5 minutes), 1 minute with the mic off or in Do not disturb (the clock then says so on a
   line under it). Until then the face shows as always; a touch on the clock brings it back (that touch does nothing
   else), and so does anything the Echo does: a request, a ringing timer (with its **Stop**), a Drop In, the volume,
-  music starting. Music playing shows its bar under the clock. With an app in front the screen goes dark as before.
+  music starting. Music playing shows its bar under the clock. With an app or the music page in front the screen goes dark
+  as before.
   Brightness follows the Brightness card: **Adaptive brightness** dims the clock at night.
 - **The drawer**: pull down from the top edge of the screen, whatever shows, as on Amazon's own Echo Show. In it:
   **Home** (the home app), **Face** (where the home app is another), **Music**, **Do not disturb**, **Screen off** (a

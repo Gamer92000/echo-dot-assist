@@ -3309,17 +3309,25 @@ Run in this order. Each step says what it proves.
       where it went dark, the face as before until then.  A first form (the clock in place of the idle face at once)
       was not that.  Setting `screen_sleep_minutes` ("Screen sleeps after", 5, 0 never): the timeout in place of
       `TIMEOUT_MS`, mic off and Do not disturb at most stock's minute.  Setting `screen_clock` ("Clock when idle",
-      off): with it on and our own screen in front (the UI's `front 1`, from `scene_top`), `ring_band.c` holds the
-      screen on (`INT_MAX`, AOSP Settings' never) and the UI counts the same timeout itself (`scene_active`: a touch,
+      off): with it on and our own face in front (the UI's `front 1`, `scene.c` `front_tell`: no music page, drawer
+      or setup screen, each of which would otherwise never go dark; a request, a call, a ringing timer keep it, or
+      each would flip the timeout, a `settings put` VM each way), `ring_band.c` holds the screen on (`INT_MAX`, AOSP
+      Settings' never; when it lets go, a userActivity if `isInteractive`: PowerManager counted from the last one,
+      maybe an hour back; the UI's count restarts as it takes over: no frames behind an app counted it) and the UI counts the same timeout itself (`scene_active`: a touch,
       a pattern coming on, the volume, mute, Do not disturb, music starting (not its stop: a new Sendspin session says "stopped" again), the music view, the drawer, an app in front;
       the face while it is not waiting), then `face.c` `big_clock`: the digits at 0.56 of the height (0.48 with the
       music's bar), sized on "88:88", the date under them, mic off and Do not disturb on a line, one hit over all of
-      it (`A_WAKE`: the waking touch does nothing else).  An app in front: dark after the timeout as before (the clock
-      is our screen's).  Told as `ck <on> <min>` beside `wo`.  Cost: `ui_test` counts 0 frames in 20 s on the clock
+      it (`A_WAKE`: the waking touch does nothing else).  An app or the music page in front: dark after the timeout as
+      before (the clock is the face's).  Told as `ck <on> <min>` beside `wo`.  Cost: `ui_test` counts 0 frames in 20 s on the clock
       against 117 for the idle face.  Checked on the PC: `ui_test` under ASan/UBSan (the face at half the timeout, the
       clock after it, no frames between minutes, a touch wakes and sends nothing, a request, mic off, a ringing timer
       with its Stop, 0 minutes, off again), `fake_screen_words.py` (`ck`, held on only with `front 1`, an app: as
-      before, 0: never), `fake_screen.py`, `fake_web.py`, `build/uishot`.  Open: seen on an Echo.
+      before, 0: never), `fake_screen.py`, `fake_web.py`, `build/uishot`.  Seen on an Echo Show 5 (checkers, 2026-11-12, 1 min, mic
+      off): held on with the face, the clock a minute later (time, date, "Microphone off"), a touch on it the face; Kiosk
+      Satellite over it: said in the log, 60 s, userActivity then (`mLastUserActivityTime` 5 s ago); back on the face
+      the clock 59.3 s later, not at once; the drawer 60 s while out, held again closed; a paused music page dark 60 s
+      after the last touch.  `service call power 12` answers `00000000 00000001` / `00000000` there, and a
+      userActivity leaves a dark screen asleep.
 - [~] The Echo's own words in more languages, Romanian first (2026-11-11).  `speech_language` lists every language of
       `bt_langs` (it, pt, nl, sv, da, nb, fi, pl) and ro, stored by name; `speech_locale` maps them and their zones
       (Brazil's before "America/"), and the aligner finds no `.wa` for them, so it takes the word's own as with no
@@ -3680,6 +3688,32 @@ Run in this order. Each step says what it proves.
       (the block in `sh` with a stand-in `settings`), `fake_ha_esphome_timers.py` (`HASSMIC_FAKE_BACKLIGHT`: entities,
       commands, page), `fake_ha_esphome.py` (none on a Dot).  **Open:** Android 9's (athena, crown) curve not read, nor
       tried there; the adjustment's effect on the backlight not measured; Kiosk Satellite's switch on cronos/crown/athena.
+- [x] Echo Show 5: Amazon's network bounce (2026-11-11).  The links to HA, Sendspin and the arbitration network all
+      dropped for ~5 s every few minutes (14:37, 15:11, 15:14), signal -36 dBm.  logcat: `WifiDiagsUtil` (fosservices,
+      in system_server) pings the gateway and DNS and fetches `generate_204` from mmechocaptiveportal.com and
+      fireoscaptiveportal.com; behind the egress lock the fetch times out -> `BAD_CONNECTION` -> `wifidiags-bounce` ->
+      wpa_supplicant `CTRL-EVENT-DISCONNECTED reason=3 locally_generated=1`, joined again 4.1 s later
+      (`wifi-disconnect-duration`).  Its `WifiDiagsConfigReceiver` (registered without a permission) takes a boolean
+      `val` for SET_ENABLENETBOUNCE and SET_ENABLEWIFIDIAGS (`receivedIntentSetEnableNetBounce, val=false` logged);
+      kept in memory only.  device.conf `ANDROID_BROADCASTS`, main.sh `android_tell` in netwatch: sent once per
+      system_server pid after boot, 3 netwatch rounds (>= 30 s) after a new pid is first seen: sys.boot_completed
+      stays 1 over a framework restart and am reports "Broadcast completed" with no receiver registered yet; am under
+      `timeout 10`, the first failure ends the attempt (netwatch held 10 s at worst), retried 6 rounds later and logged
+      once per pid; the 30 s are a margin, not timed.  alexa-on.sh sends each back as true (stock's).  TRIGGERNETRECOVERY in the same receiver calls System.exit: never sent.
+      Then (13:33 UTC, 12 min on) `NetWatchDog` (same class family): its timer is reset only by a passing test of
+      Amazon's, so it fired (`network-watchdog`), `setWifiEnabled(false)` then `true`, wpa_supplicant restarted, ~8 s
+      off.  It skips while Wi-Fi is off, setup is not complete, a MIRRORING_ON / OOBE_STARTED broadcast came, or
+      `Settings.System smartconn_status` contains "enabled"; `WifiDiagsHandler.shouldResetConnection` skips the bounce
+      for that too, and nothing else reads it.  So `system/smartconn_status=enabled` in ANDROID_SETTINGS (persistent,
+      alexa-on.sh deletes it again), the broadcasts kept beside it: SET_ENABLEWIFIDIAGS false stops the tests
+      themselves (`WifiDiagsHandler.handleMessage`: RUN_TEST_CONTINUOUSLY "doNothing, reason=wifidiagsDisabled", the
+      next one not scheduled).  The other Android models from their firmware's code (2026-11-12, the dex in
+      fosservices.odex, athena's compact dex in fosservices.vdex, disassembled): `onNetworkRestartTimeout` and
+      `shouldResetConnection` are instruction for instruction checkers' on cronos, crown and cupcake, athena's the same
+      checks in the same order; the only readers of smartconn_status, and nothing writes it (every APK's and jar's
+      dex looked through too).  cronos, crown, cupcake: setting and both broadcasts; athena's receiver has no
+      SET_ENABLENETBOUNCE (mEnableNetBounce only from its config): setting and SET_ENABLEWIFIDIAGS.  **Open:** a day's
+      run on each of them.
 - [x] Echo Show 8 2nd gen adaptive colour (2026-11-10, issue #162): `screen_adaptive_colour` on the settings page's
       Screen page, off by default. `board.adaptive_colour` and device.conf `ADAPTIVE_COLOUR` enable it on athena.
       Of the four supported Shows' extracted firmware images checked here, only athena declares

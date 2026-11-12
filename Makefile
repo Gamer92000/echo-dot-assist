@@ -357,7 +357,7 @@ unit-lux:
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/lux_test.c -lm -o build/lux_test && build/lux_test
 unit-ring_band:
 	@mkdir -p build
-	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ring_band_test.c src/hassmic/ring_band.c src/hassmic/screen_none.c src/hassmic/ringdesign.c src/hassmic/statefile.c -lm -lpthread -o build/ring_band_test && build/ring_band_test
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ring_band_test.c src/hassmic/ring_band.c src/hassmic/afe_parcel.c src/hassmic/screen_none.c src/hassmic/ringdesign.c src/hassmic/statefile.c -lm -lpthread -o build/ring_band_test && build/ring_band_test
 # volcurve.c with each model's board.c: each names its curve, measured on it or the Dot 2's as a stand-in (a todo line)
 unit-volcurve:
 	@mkdir -p build
