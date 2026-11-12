@@ -14,6 +14,7 @@
 #define RINGLIVE_H
 #include "ringdesign.h"
 #include "ring.h"
+#include "musiclight.h"
 
 #define RINGLIVE_FPS    30              /* the driver takes ~65 a second (15 ms a write, mostly the I2C bus) */
 #define RINGLIVE_ANIM_FRAMES RD_FRAMES
@@ -64,4 +65,7 @@ int  ringlive_table(const char *json, size_t n, int capcolor, float pwm[101]);
 void ringlive_text(const unsigned char (*px)[3], int leds, char *out);
 /* An effect of ring.h's list over n LEDs in the fill's order at time t (ms): as seen, colour rgb (largest 1) at level */
 void ringlive_effect(int effect, const float rgb[3], float level, int n, long long t, float out[][3]);
+/* A music effect (RING_E_IS_MUSIC) the same way, from what is heard now (m; NULL or not active: a quiet breath).  Keeps
+ * what moves from frame to frame (the spin, the meter's peak): one ring, the writer's thread */
+void ringlive_music_effect(int effect, const float rgb[3], float level, int n, long long t, const struct music_feat *m, float out[][3]);
 #endif

@@ -442,7 +442,14 @@ Beyond the README's two figures:
   designs at once, without Apply. In layers, the lowest first:
   - "Light ring" (the light above) in its exact colour instead of the nearest of the set, fading when it changes
     (Home Assistant's transition, else a quarter of a second), with more effects: Breathe, Color loop, Comet, Wave,
-    Sparkle and Fire beside Pulse, Spin, Blink and Rainbow. Fill, rotation and `light_ring_leds` work as before;
+    Sparkle and Fire beside Pulse, Spin, Blink and Rainbow, and six that follow the music the Echo plays (Music
+    Assistant, a phone over Bluetooth, Home Assistant's media): **Music pulse** (the ring pumps with the level, a white
+    flash on each beat), **Music spectrum** (bass at LED 1 up to the highs opposite, both ways round, red to violet),
+    **Music VU meter** (a meter from LED 1 both ways, green to red, its peak falling slowly), **Music beat spin** (a
+    comet that speeds up with the music, leaps on the beat and changes colour), **Music ripple** (each beat a wave from
+    LED 1 to the far side) and **Music rainbow** (the colour wheel turning faster the louder it gets). They follow what
+    comes out of the speaker, not what is still in its buffer, and the music's own loudness, not the volume; with nothing
+    playing they breathe quietly. Fill, rotation and `light_ring_leds` work as before;
   - twelve lights "Light ring LED 1" to "12" over it (colour and brightness each; LED 1 is where the volume starts,
     turned by "Light ring rotation"), for scenes and automations; an LED that is off lets "Light ring" through;
   - an animation over everything: your own frames from `light_ring_animation`, or a design of your library from the
@@ -475,6 +482,9 @@ Beyond the README's two figures:
   - action: select.select_option
     target: { entity_id: select.echo_dot_3_5695c4_light_ring_design }
     data: { option: Sunrise }
+  - action: light.turn_on
+    target: { entity_id: light.echo_dot_3_5695c4_light_ring }
+    data: { effect: Music spectrum, brightness: 200 }
   ```
   An Echo installed before this needs the update once: root then lets hassmic write the ring's LEDs (that one file of
   the LED driver, given again at each start); until then the setting is not shown.

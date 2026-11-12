@@ -6,6 +6,7 @@
  * library, the dark frame and the marker at the end, the marker a crash left. */
 #define _GNU_SOURCE
 #include "ringlive.h"
+#include "musiclight.h"
 #include "ring.h"
 #include "board.h"
 #include <math.h>
@@ -71,6 +72,82 @@ static void table(const char *file, int entries)
     fclose(f);
 }
 
+static long long mono(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
+
+/* musiclight.c on made-up music, fed in 20 ms pieces as an output takes them, 200 ms of it still in front of the
+ * speaker: a kick drum (60 Hz, 80 ms) at 120 bpm under a hi-hat, then a 6 kHz tone, then silence */
+static void music(void)
+{
+    enum { RATE = 48000, CHUNK = 960 };
+    static int16_t pcm[CHUNK * 2]; struct music_feat f;
+    musiclight_reset();
+    musiclight_feed(pcm, CHUNK, 2, RATE, 0); musiclight_now(mono() + 50, &f);
+    check(!f.active, "music: nothing analysed until an effect wants it");
+    musiclight_want(1);
+    long long t0 = mono(); int beats = 0; long long first = 0, seen = 0; float kick_bass = 0, hat_bass = 1;
+    unsigned seed = 1;
+    for (int k = 0; k < 200; k++) {                     /* 4 s */
+        for (int i = 0; i < CHUNK; i++) {
+            double ts = (k * CHUNK + i) / (double)RATE, in = fmod(ts, 0.5), v = 0;
+            if (in < 0.08) v += 0.6 * sin(2 * M_PI * 60 * ts) * (1 - in / 0.08);
+            seed = seed * 1103515245u + 12345u; v += 0.03 * (((seed >> 16) & 0x7fff) / 16384.0 - 1);
+            pcm[2 * i] = pcm[2 * i + 1] = (int16_t)(v * 32767);
+        }
+        /* fed faster than it plays, as a player fills an output: what is in front of it grows by what was written */
+        musiclight_feed(pcm, CHUNK, 2, RATE, 200000 + (long long)k * 20000 - (mono() - t0) * 1000);
+        musiclight_now(t0 + (long long)k * 20 + 200 + 20, &f);      /* when this piece's end is heard */
+        if (f.beat_ms[0] && f.beat_ms[0] != seen) { seen = f.beat_ms[0]; beats++; if (!first) first = f.beat_ms[0]; }
+        double in = fmod(k * 0.02, 0.5);
+        if (k > 50 && in > 0.02 && in < 0.06) kick_bass = fmaxf(kick_bass, f.band[0]);
+        if (k > 50 && in > 0.3 && in < 0.45) hat_bass = fminf(hat_bass, f.band[0]);
+    }
+    char w[120];
+    snprintf(w, sizeof w, "music: beats of a kick at 120 bpm: %d in 4 s (7 to 9)", beats); check(beats >= 7 && beats <= 9, w);
+    snprintf(w, sizeof w, "music: the first heard %lld ms after it was fed (the output's 200 ms, give or take a block)", first - t0);
+    check(first - t0 >= 190 && first - t0 <= 290, w);
+    snprintf(w, sizeof w, "music: the bass band on the kick %.2f, between kicks %.2f", kick_bass, hat_bass); check(kick_bass > 0.8f && hat_bass < 0.45f, w);
+    check(f.active && f.level > 0, "music: active while it plays");
+    for (int k = 0; k < 100; k++) {                     /* 2 s of 6 kHz */
+        for (int i = 0; i < CHUNK; i++) pcm[2 * i] = pcm[2 * i + 1] = (int16_t)(0.3 * 32767 * sin(2 * M_PI * 6000 * (k * CHUNK + i) / (double)RATE));
+        musiclight_feed(pcm, CHUNK, 2, RATE, 0);
+    }
+    musiclight_now(mono() + 50, &f);
+    snprintf(w, sizeof w, "music: a 6 kHz tone lights the top band (%.2f) over the bass (%.2f)", f.band[5], f.band[0]); check(f.band[5] > 0.9f && f.band[0] < 0.4f, w);
+    memset(pcm, 0, sizeof pcm);
+    for (int k = 0; k < 60; k++) musiclight_feed(pcm, CHUNK, 2, RATE, 0);      /* 1.2 s of silence */
+    musiclight_now(mono() + 50, &f); check(!f.active, "music: silence, not active");
+    musiclight_now(mono() + 2000, &f); check(!f.active, "music: nothing fed for a while: stopped");
+    musiclight_want(0);
+
+    /* the effects on readings made up here */
+    float rgb[3] = { 0, 0.4f, 1 }, out[12][3]; struct music_feat m; memset(&m, 0, sizeof m);
+    int over = 0;
+    for (int e = RING_E_MUSIC_PULSE; e <= RING_E_MUSIC_RAINBOW; e++) {
+        for (int k = 0; k < 400; k++) {
+            m.active = 1; m.level = (k % 37) / 36.0f; for (int b = 0; b < MUSIC_BANDS; b++) m.band[b] = ((k + b * 7) % 23) / 22.0f;
+            m.beat_ms[0] = 1000000 + (k / 15) * 500; m.beat_strength[0] = 1;
+            ringlive_music_effect(e, rgb, 0.7f, 12, 1000000 + k * 33, &m, out);
+            for (int j = 0; j < 12; j++) for (int c = 0; c < 3; c++) if (out[j][c] < 0 || out[j][c] > 0.7f + 1e-5f) over++;
+        }
+    }
+    check(!over, "music effects: always within the light's level");
+    ringlive_music_effect(RING_E_MUSIC_PULSE, rgb, 1, 12, 2000000, NULL, out);
+    check(out[0][2] > 0 && out[0][2] <= 0.1f, "music effects: nothing playing, a quiet breath");
+    memset(&m, 0, sizeof m); m.active = 1;
+    m.level = 1; ringlive_music_effect(RING_E_MUSIC_VU, rgb, 1, 12, 3000000, &m, out);
+    int lit = 0; for (int j = 0; j < 12; j++) lit += out[j][0] + out[j][1] > 0.5f;
+    check(lit == 12 && out[0][1] > 0.9f && out[6][0] > 0.9f && out[6][1] < 0.1f, "VU meter: full, green at LED 1 to red opposite");
+    m.level = 0.3f; ringlive_music_effect(RING_E_MUSIC_VU, rgb, 1, 12, 3000033, &m, out);
+    check(out[0][1] > 0.9f && out[3][1] + out[3][0] < 0.6f, "VU meter: a third, LED 1's side lit, the peak still high");
+    memset(m.band, 0, sizeof m.band); m.band[5] = 1;
+    ringlive_music_effect(RING_E_MUSIC_SPECTRUM, rgb, 1, 12, 3000066, &m, out);
+    check(out[0][0] + out[0][1] + out[0][2] < 0.01f && out[6][0] + out[6][1] + out[6][2] > 0.5f, "spectrum: only the highs, lit opposite LED 1");
+    memset(&m, 0, sizeof m); m.active = 1; m.beat_ms[0] = 4000000; m.beat_strength[0] = 1;
+    ringlive_music_effect(RING_E_MUSIC_RIPPLE, rgb, 1, 12, 4000000, &m, out); float a0 = out[0][2], a6 = out[6][2];
+    ringlive_music_effect(RING_E_MUSIC_RIPPLE, rgb, 1, 12, 4000600, &m, out);
+    check(a0 > 0.8f && a6 < 0.2f && out[6][2] > out[0][2], "ripple: a beat starts at LED 1, 0.6 s later it is opposite");
+}
+
 static void pure(void)
 {
     float blue[3] = { 0, 0, 1 }, white[3] = { 1, 1, 1 }, black[3] = { 0, 0, 0 }; unsigned char o[3];
@@ -100,7 +177,7 @@ static void pure(void)
 
     /* the effects: each in 0..level, the ones that move moving, Rainbow and Color loop not the light's colour */
     float rgbw[3] = { 1, 0.5f, 0 }, a[12][3], b[12][3];
-    for (int e = 0; e < RING_LIVE_NEFFECTS + 5; e++) {
+    for (int e = 0; e < RING_E_MUSIC_PULSE; e++) {            /* the music's: music() */
         int in = 1, moved = 0;
         for (long long t = 0; t < 12000; t += 37) {
             ringlive_effect(e, rgbw, 0.8f, 12, t, a); ringlive_effect(e, rgbw, 0.8f, 12, t + 120, b);
@@ -111,6 +188,8 @@ static void pure(void)
     }
     ringlive_effect(RING_E_NONE, rgbw, 0.5f, 12, 0, a);
     check(fabsf(a[3][0] - 0.5f) < 1e-6f && fabsf(a[3][1] - 0.25f) < 1e-6f && a[3][2] == 0, "None: the colour at the level");
+
+    music();
 
     char file[300]; snprintf(file, sizeof file, "%s/t.json", dir); table(file, 102);
     FILE *f = fopen(file, "r"); char *js = calloc(1, 1 << 16); size_t n = fread(js, 1, (1 << 16) - 1, f); fclose(f);

@@ -6,7 +6,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 - **The light ring live from Home Assistant (Echo Dot 3).** New setting "Live from Home Assistant" (settings page,
   Lights, off by default): the Echo draws its ring itself. "Light ring" then shows exactly the colour you pick, fades
-  between colours and has six more effects (Breathe, Color loop, Comet, Wave, Sparkle, Fire); twelve new lights, one per
+  between colours and has twelve more effects: Breathe, Color loop, Comet, Wave, Sparkle, Fire, and six that move with
+  the music the Echo plays (Music pulse, spectrum, VU meter, beat spin, ripple, rainbow), in time with what you hear.
+  Twelve new lights, one per
   LED, lie over it; actions play a whole picture or an animation of your own frames, which the Echo runs smoothly by
   itself; and your designs play at once, without Apply, from the new select "Light ring design" in Home Assistant or
   "Show on the Echo" on the Lights page (the designer shows a draft that way too). The Echo's own lights (listening,

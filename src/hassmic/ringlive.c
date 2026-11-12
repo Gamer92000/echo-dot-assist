@@ -233,13 +233,94 @@ void ringlive_effect(int effect, const float rgb[3], float level, int n, long lo
     }
 }
 
+/* ---------------------------------------------------------------- music */
+
+static float rgb_hue(const float c[3])          /* the hue of a colour in turns; 0 for a grey */
+{
+    float mx = fmaxf(c[0], fmaxf(c[1], c[2])), mn = fminf(c[0], fminf(c[1], c[2])), d = mx - mn, h;
+    if (d < 1e-4f) return 0;
+    if (mx == c[0]) h = fmodf((c[1] - c[2]) / d + 6, 6); else if (mx == c[1]) h = (c[2] - c[0]) / d + 2; else h = (c[0] - c[1]) / d + 4;
+    return h / 6;
+}
+static float from_front(int j, int n) { return (float)(j <= n / 2 ? j : n - j); }     /* LEDs from LED 1, either way round */
+
+static struct { long long t, beat; float spin, hue, rain, peak; } mus;   /* what music effects carry from frame to frame */
+
+void ringlive_music_effect(int effect, const float rgb[3], float level, int n, long long t, const struct music_feat *m, float out[][3])
+{
+    const float tau = 2 * (float)M_PI;
+    float dt = mus.t && t > mus.t ? fminf(0.2f, (t - mus.t) / 1000.0f) : 0, c[3] = { rgb[0], rgb[1], rgb[2] };
+    mus.t = t;
+    if (!m || !m->active) {                     /* nothing playing: a quiet breath, so the mode shows it is on */
+        float k = 0.03f + 0.07f * (0.5f - 0.5f * cosf(tau * (t % 5000) / 5000.0f));
+        for (int j = 0; j < n; j++) {
+            float col[3] = { c[0], c[1], c[2] };
+            if (effect == RING_E_MUSIC_SPECTRUM || effect == RING_E_MUSIC_RAINBOW) hue_rgb((float)j / n + (t % 30000) / 30000.0f, col);
+            for (int i = 0; i < 3; i++) out[j][i] = clamp01(col[i] * k * level);
+        }
+        mus.peak = 0;
+        return;
+    }
+    float lv = m->level, flash = 0;
+    if (m->beat_ms[0] && t >= m->beat_ms[0]) flash = expf(-(t - m->beat_ms[0]) / 160.0f) * m->beat_strength[0];
+    int beat = m->beat_ms[0] && m->beat_ms[0] != mus.beat;
+    if (beat) mus.beat = m->beat_ms[0];
+    float half = n / 2.0f;
+    for (int j = 0; j < n; j++) {
+        float col[3] = { c[0], c[1], c[2] }, k = 0, p = from_front(j, n);
+        switch (effect) {
+        case RING_E_MUSIC_PULSE: {              /* the ring breathes with the level, a white-hot flash on the beat */
+            k = fmaxf(0.06f + 0.94f * powf(lv, 1.4f), flash);
+            for (int i = 0; i < 3; i++) col[i] += (1 - col[i]) * 0.45f * flash;
+            } break;
+        case RING_E_MUSIC_SPECTRUM: {           /* bass at LED 1, the highs opposite, mirrored; red up to violet */
+            int b = (int)(p * MUSIC_BANDS / (half + 1)); if (b >= MUSIC_BANDS) b = MUSIC_BANDS - 1;
+            hue_rgb(b * 0.15f, col);
+            k = powf(m->band[b], 1.3f);
+            if (b < 2) k = fmaxf(k, 0.8f * flash);
+            } break;
+        case RING_E_MUSIC_VU: {                 /* a meter from LED 1 both ways: green, yellow, red; its peak falls */
+            float fill = clamp01(lv * (half + 1) - p), g = p / half;
+            col[0] = g < 0.6f ? g / 0.6f : 1; col[1] = g < 0.6f ? 1 : 1 - (g - 0.6f) / 0.4f; col[2] = 0;
+            k = fill;
+            if (j == 0) { float top = lv * (half + 1); mus.peak = top > mus.peak ? top : fmaxf(0, mus.peak - 3 * dt); }   /* 3 LEDs a second */
+            if (k < 0.5f && fabsf(p - floorf(mus.peak)) < 0.5f && mus.peak > 1) { col[0] = col[1] = col[2] = 1; k = 0.55f; }
+            } break;
+        case RING_E_MUSIC_SPIN: {               /* a comet that speeds up with the music and leaps on the beat, its hue moving */
+            if (j == 0) { mus.spin += (0.25f + 1.5f * lv) * dt * n; if (beat) { mus.spin += 1.5f; mus.hue += 0.11f; } }
+            hue_rgb(rgb_hue(c) + mus.hue, col);
+            float d = around((float)j, fmodf(mus.spin, (float)n), n);
+            k = expf(-d / 2.0f) * (0.35f + 0.65f * lv) + 0.25f * flash;
+            } break;
+        case RING_E_MUSIC_RIPPLE: {             /* every beat a wave from LED 1 to the far side; the level glows under them */
+            float sum = 0;
+            for (int i = 0; i < MUSIC_BEATS && m->beat_ms[i]; i++) {
+                float age = (t - m->beat_ms[i]) / 1000.0f;
+                if (age < 0 || age > 0.9f) continue;
+                float front = age / 0.6f * half, x = (p - front) / 0.9f;
+                sum += expf(-x * x) * m->beat_strength[i] * (1 - age / 0.9f);
+            }
+            k = fminf(1, 0.05f + 0.25f * lv + sum);
+            for (int i = 0; i < 3; i++) col[i] += (1 - col[i]) * 0.3f * fminf(1, sum);
+            } break;
+        case RING_E_MUSIC_RAINBOW:              /* the colour wheel turning faster the more there is, flashing on the beat */
+            if (j == 0) mus.rain += (0.08f + 0.7f * lv) * dt;
+            hue_rgb((float)j / n + mus.rain, col);
+            k = fmaxf(0.12f + 0.88f * powf(lv, 1.2f), flash);
+            break;
+        }
+        k = clamp01(k);                         /* never past the light's own level */
+        for (int i = 0; i < 3; i++) out[j][i] = clamp01(clamp01(col[i]) * k * level);
+    }
+}
+
 /* ---------------------------------------------------------------- the picture */
 
 static int hw_of(int j, int rot) { return ((leds - 1 + rot + j) % leds + leds) % leds; }     /* ring.c's fill: volume_step-01's LED first */
 
 /* Home Assistant's "Light ring" as the bottom layer (ring.c keeps its state): its colour or effect on its fill, LED by
  * LED from light_ring_leds, a flash blinking it whole */
-static void base(const struct ring_light *l, int flashing, long long now, int rot, float seen[][3], int *next)
+static void base(const struct ring_light *l, int flashing, long long now, int rot, const struct music_feat *m, float seen[][3], int *next)
 {
     float lv = clamp01(l->brightness) * clamp01(l->color_brightness), rgb[3] = { clamp01(l->r), clamp01(l->g), clamp01(l->b) };
     if (flashing) {
@@ -253,7 +334,8 @@ static void base(const struct ring_light *l, int flashing, long long now, int ro
         return;
     }
     float out[MAX_LEDS][3]; int lit = (l->fill * leds + 99) / 100;
-    ringlive_effect(l->effect, rgb, lv, leds, now, out);
+    if (RING_E_IS_MUSIC(l->effect)) ringlive_music_effect(l->effect, rgb, lv, leds, now, m, out);
+    else ringlive_effect(l->effect, rgb, lv, leds, now, out);
     for (int j = 0; j < lit && j < leds; j++) memcpy(seen[hw_of(j, rot)], out[j], sizeof out[j]);
     if (l->effect != RING_E_NONE && *next > 1000 / RINGLIVE_FPS) *next = 1000 / RINGLIVE_FPS;
 }
@@ -261,7 +343,7 @@ static void base(const struct ring_light *l, int flashing, long long now, int ro
 /* lock held: what the ring shows now, as seen, per LED of the driver: the light, the LEDs over it, an animation over
  * all, a fade between the last picture and this one; *next: ms until it changes by itself.  1 if the LEDs' states or
  * what plays changed by itself (a timeout, an animation's end) */
-static int picture(long long now, int rot, const struct ring_light *rl, int flashing, float seen[][3], int *next)
+static int picture(long long now, int rot, const struct ring_light *rl, int flashing, const struct music_feat *m, float seen[][3], int *next)
 {
     int ch = 0;
     *next = CHECK_MS;
@@ -293,7 +375,7 @@ static int picture(long long now, int rot, const struct ring_light *rl, int flas
         }
     }
     if (!drawn) {
-        if (enabled) base(rl, flashing, now, rot, seen, next);
+        if (enabled) base(rl, flashing, now, rot, m, seen, next);
         for (int j = 0; j < leds; j++) if (led[j].on) {
             int h = hw_of(j, rot);
             seen[h][0] = led[j].r * led[j].brightness; seen[h][1] = led[j].g * led[j].brightness; seen[h][2] = led[j].b * led[j].brightness;
@@ -336,9 +418,14 @@ static void *writer(void *arg)
         if (lvl < 0) lvl = 0;
         if (lvl > 100) lvl = 100;
         if (enabled) flashing = ring_light_now(&rl);        /* outside our lock: ring.c's own */
+        /* the music: analysed only while a music effect shows it */
+        int music = enabled && rl.on && !flashing && rl.nleds <= 0 && RING_E_IS_MUSIC(rl.effect);
+        struct music_feat mf; memset(&mf, 0, sizeof mf);
+        musiclight_want(music);
+        if (music) musiclight_now(now_ms(), &mf);
         pthread_mutex_lock(&lock);
         long long now = now_ms();
-        int ch = picture(now, rot, &rl, flashing, seen, &next), content = active_locked() && !quitting;
+        int ch = picture(now, rot, &rl, flashing, &mf, seen, &next), content = active_locked() && !quitting;
         pthread_mutex_unlock(&lock);
         if (ch && changed_fn) changed_fn();
 

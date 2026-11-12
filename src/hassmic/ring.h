@@ -18,10 +18,13 @@ struct ring_light {
     unsigned char led_rgb[RING_LEDS_MAX][3];        /* as seen, 0..255; black: that LED off */
 };
 /* The effects only the live ring draws (ringlive.c), after the palette's five in ring.c's list */
-#define RING_LIVE_EFFECTS "Breathe", "Color loop", "Comet", "Wave", "Sparkle", "Fire"
-#define RING_LIVE_NEFFECTS 6
+#define RING_LIVE_EFFECTS "Breathe", "Color loop", "Comet", "Wave", "Sparkle", "Fire", \
+        "Music pulse", "Music spectrum", "Music VU meter", "Music beat spin", "Music ripple", "Music rainbow"
+#define RING_LIVE_NEFFECTS 12
 enum { RING_E_NONE, RING_E_PULSE, RING_E_SPIN, RING_E_BLINK, RING_E_RAINBOW,
-       RING_E_BREATHE, RING_E_COLORLOOP, RING_E_COMET, RING_E_WAVE, RING_E_SPARKLE, RING_E_FIRE };
+       RING_E_BREATHE, RING_E_COLORLOOP, RING_E_COMET, RING_E_WAVE, RING_E_SPARKLE, RING_E_FIRE,
+       RING_E_MUSIC_PULSE, RING_E_MUSIC_SPECTRUM, RING_E_MUSIC_VU, RING_E_MUSIC_SPIN, RING_E_MUSIC_RIPPLE, RING_E_MUSIC_RAINBOW };
+#define RING_E_IS_MUSIC(e) ((e) >= RING_E_MUSIC_PULSE && (e) <= RING_E_MUSIC_RAINBOW)
 extern const char *const ring_effects[];    /* "None" first, as ESPHome's own lights */
 extern const int ring_neffects;
 int  ring_effect_listed(int i);            /* offered to Home Assistant: not "Spin" on one LED (board.ring_leds) */

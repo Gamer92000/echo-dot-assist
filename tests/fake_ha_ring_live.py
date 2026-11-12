@@ -7,8 +7,9 @@ the Echo's own patterns first (the wake word's ring, mute): not one write meanwh
 ledcontroller wrote over put back; an animation and a design of the library played by the Echo, the select's state;
 Home Assistant's "Light ring" drawn live under the LEDs (its exact colour, the live effects, a transition); stop: the
 dark frame; the settings page's "Show on the Echo" (POST /api/ring/live)."""
-import asyncio, json, os, shutil, signal, subprocess, sys, tempfile
-from aioesphomeapi import (APIClient, LightInfo, LightState, NumberInfo, SelectInfo, SelectState, SwitchInfo,
+import asyncio, io, json, math, os, shutil, signal, struct, subprocess, sys, tempfile, threading, wave
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from aioesphomeapi import (APIClient, LightInfo, LightState, MediaPlayerInfo, NumberInfo, SelectInfo, SelectState, SwitchInfo,
                            VoiceAssistantEventType as Ev)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -40,6 +41,18 @@ def table(path):
     with open(path, "w") as f:
         json.dump({"cap_color": [{"color": "black", "cap_color_number": 0}, {"color": "white", "cap_color_number": 1}],
                    "rgbTable": {"black": rows(0.993), "white": rows(0.5)}}, f)
+
+
+def kick_wav(secs=4, rate=48000):
+    """a kick drum (60 Hz, 80 ms) at 120 bpm: what "Music pulse" should pump to"""
+    b = io.BytesIO(); w = wave.open(b, "wb"); w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
+    fr = bytearray()
+    for i in range(secs * rate):
+        t = i / rate; ph = t % 0.5
+        v = 0.7 * math.sin(2 * math.pi * 60 * t) * (1 - ph / 0.08) if ph < 0.08 else 0.0
+        fr += struct.pack("<h", int(v * 32767))
+    w.writeframes(bytes(fr)); w.close()
+    return b.getvalue()
 
 
 def pixels(text):
@@ -85,7 +98,12 @@ async def main():
             except Exception: await asyncio.sleep(0.1)
         raise RuntimeError("no connection")
 
-    def read(): return open(frame).read()
+    def read():
+        """the stand-in frame; a read that met hassmic's write half way (truncated, not yet written) again"""
+        for _ in range(50):
+            t = open(frame).read()
+            if len(t) == 73: return t
+        return t
 
     # Off (the default): nothing of it in Home Assistant, the frame untouched
     proc = start()
@@ -208,7 +226,32 @@ async def main():
         c.light_command(ring.key, effect="Fire")
         await asyncio.sleep(0.5); a = read(); await asyncio.sleep(0.3)
         check(a != read() and pixels(a)[5][4:] == "00", f"  Fire: it flickers by itself, warm ({pixels(a)[5]})")
-        c.light_command(ring.key, effect="None", transition_length=1.0)
+        # "Music pulse" on Home Assistant's media (play_media): quiet before, pumping with the kick while it plays
+        wav = kick_wav()
+        class H(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200); self.send_header("Content-Type", "audio/wav"); self.send_header("Content-Length", str(len(wav))); self.end_headers()
+                self.wfile.write(wav)
+            def log_message(self, *a): pass
+        httpd = ThreadingHTTPServer(("127.0.0.1", 16987), H); threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        c.light_command(lights[0].key, state=False); c.light_command(lights[2].key, state=False)
+        c.light_command(ring.key, effect="Music pulse", rgb=(1.0, 1.0, 1.0), brightness=1.0)
+        await asyncio.sleep(0.8)
+        quiet = max(int(pixels(read())[5][:2], 16) for _ in range(3))
+        check(quiet <= 0x10, f"Music pulse, nothing playing: a quiet breath ({quiet:02X})")
+        mp = next(e for e in ents if isinstance(e, MediaPlayerInfo))
+        c.media_player_command(mp.key, media_url="http://127.0.0.1:16987/kick.wav")
+        await until(lambda: int(pixels(read())[5][:2], 16) >= 0x80, 6)       # HA's media: fetched and decoded first
+        vals = []
+        for _ in range(int(2.4 / 0.02)):
+            await asyncio.sleep(0.02); vals.append(int(pixels(read())[5][:2], 16))
+        lo, hi = min(vals), max(vals)
+        flashes = 1 + sum(1 for a, b in zip(vals, vals[1:]) if b >= 0xC0 and a < 0xC0)
+        check(hi >= 0xF0 and lo <= 0x40 and 4 <= flashes <= 6, f"  the kick plays: it pumps with it (between {lo:02X} and {hi:02X}, {flashes} kicks in 2.4 s at 120 bpm)")
+        httpd.shutdown()
+        await asyncio.sleep(2.5)
+        c.light_command(ring.key, effect="None", rgb=(1.0, 0.5, 0.0), transition_length=0.0)
+        await until(lambda: pixels(read())[5] == "FD3600")
         await asyncio.sleep(0.1)
         c.light_command(ring.key, state=False, transition_length=1.0)
         await asyncio.sleep(0.5); mid = pixels(read())[5]

@@ -610,7 +610,10 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   ring LED 1..12" (from the fill's start + rotation), actions `light_ring_frame|animation|design|stop`, select "Light
   ring design" (`rd_names`, re-listed when the names change: `rd_generation`, main.c `live_names_check`).  Layers:
   "Light ring" (ring.c keeps its state; `ring_light_live` makes ring.c play no palette pattern, `ring_light_now`;
-  `ringlive_effect`: the palette's five and `RING_LIVE_EFFECTS`), the LED lights over it, an animation over all; HA's
+  `ringlive_effect`: the palette's five and `RING_LIVE_EFFECTS`; the six music ones `ringlive_music_effect` from
+  `musiclight.c`: the PCM fed by sendspin.c, a2dp.c and main.c's play_media path with its output's queue, 6 biquad
+  bands + level against running peaks, beats from the bass, each reading stamped when heard; only while a music effect
+  shows, `musiclight_want`), the LED lights over it, an animation over all; HA's
   transition (LightCommand 14/15, else `LIVE_FADE_MS`) as a fade in seen space (`ringlive_fade`).  SIGTERM and
   `ringlive_shutdown`: the dark frame, never while the Echo's own pattern shows; init's stop kills outright, then the
   next start's unsets have ledcontroller redraw, and `state/ring-live` (boot id + the frame as read back, written when

@@ -2455,7 +2455,14 @@ Run in this order. Each step says what it proves.
       the red ring untouched throughout.  init's stop kills outright (no SIGTERM: an LED left blue stayed blue); the
       next start's own unsets had ledcontroller draw its frame, dark.  So the marker (`state/ring-live`) carries the
       boot id: after a reboot or a power cut the chip was redrawn by ledcontroller and the marker is only deleted.
-      Live states are not kept over a restart: everything starts off, and Home Assistant is told so.
+      Live states are not kept over a restart: everything starts off, and Home Assistant is told so (asked: always off).
+      Music effects (`musiclight.c`, asked for with variants): the PCM Sendspin, the A2DP sink and Home Assistant's
+      media write, each 10 ms: six RBJ band-passes (60 Hz .. 6 kHz) and the level against running peaks (24 / 30 dB
+      under, falling 2 dB/s), beats when the bass is 1.6x its 0.7 s average and rising, 250 ms apart; stamped with the
+      output's queue (music_queued_us, bt_queued_us), so they show when heard.  On made-up music (unit test): a kick at
+      120 bpm 8 beats in 4 s, its band 0.99 on the kick and 0.06 between, heard 210 ms after it was fed with 200 ms
+      queued; through Home Assistant's play_media on the PC "Music pulse" went FD on each kick and 00 between, 5 in
+      2.4 s.  Open: on the Dot 3 with Music Assistant and a phone (the mixer's queue as the delay).
       Open: the update path on the Dot 3 (main.sh's grant and runas' group); biscuit and radar (`scripts/led-probe.sh read` finds the driver by itself; same 0-003f by PLAN's earlier
       reads, calibration per unit; then `ring_frame`/`LED_FRAME` for them); the band of the Shows and the Echo
       Input's one LED are not part of it; a theme pack applied from Home Assistant (root's install, as Apply) asked

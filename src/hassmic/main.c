@@ -48,6 +48,7 @@
 #include "buttons.h"
 #include "ring.h"
 #include "ringlive.h"
+#include "musiclight.h"
 #include "ringdesign.h"
 #include "ledq.h"
 #include "screen.h"
@@ -2098,7 +2099,7 @@ static void q_push(int kind, int media, unsigned rate, unsigned ch, const void *
 
 static void *playback_thread(void *arg)
 {
-    int open = 0;
+    int open = 0, play_media = 0, play_ch = 1; unsigned play_rate = 0;
     (void)arg;
     for (;;) {
         pthread_mutex_lock(&q_lock);
@@ -2117,6 +2118,7 @@ static void *playback_thread(void *arg)
         case Q_START:
             if (open) play_close(1);        /* e.g. announcement chime followed by the message */
             tts_kind(it->media);            /* the TTS stream's volume for what comes now */
+            play_media = it->media; play_rate = it->rate; play_ch = it->ch;
             open = play_open(it->rate, it->ch) == 0;
             if (open) { atomic_store(&tts_on, 1); playback_hint(); }
             if (!open) fprintf(stderr, "play: open %u Hz x%u failed\n", it->rate, it->ch);
@@ -2127,6 +2129,8 @@ static void *playback_thread(void *arg)
                 for (size_t i = 0; i < ns; i += 4) e += (double)pcm[i] * pcm[i];
                 screen_level(ns >= 4 && e > 0 ? (int)lround(100 * log10(e / (ns / 4) / (32768.0 * 32768.0))) : -1000);
             }
+            /* Home Assistant's media (play_media) for the ring's music effects; not replies or announcements */
+            if (open && play_media) musiclight_feed((const int16_t *)it->data, it->len / 2 / (play_ch ? play_ch : 1), play_ch, play_rate, 0);
             if (open && play_write(it->data, it->len) < 0) { play_close(0); open = 0; }
             break;
         case Q_STOP:
