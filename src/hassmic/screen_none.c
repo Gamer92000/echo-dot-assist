@@ -25,3 +25,6 @@ int  screen_words_hold(int set) { (void)set; return -1; }
 int  screen_timers_on(int set) { (void)set; return -1; }
 void screen_timers_changed(void) {}
 int  screen_keep_on(void) { return 0; }
+int  screen_clock(int set) { (void)set; return -1; }
+int  screen_sleep_min(int set) { (void)set; return -1; }
+int  screen_saver(void) { return 0; }

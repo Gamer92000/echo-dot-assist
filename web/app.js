@@ -206,8 +206,10 @@ const PAGES = [
 ];
 const BRIGHTNESS = ['screen_brightness_auto', 'screen_brightness', 'screen_brightness_adjust', 'screen_adaptive_colour'];      // the Show's backlight, and its colour where Fire OS has that
 const WORDS = ['screen_text', 'screen_text_seconds', 'screen_timers'];            // the screen UI's words.c
+const IDLE = ['screen_sleep_minutes', 'screen_clock'];                             // the screen's timeout, the clock in place of dark
 const MOVED = { light_band: 'screen', music_on_screen: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen', screen_adaptive_colour: 'screen',
-  screen_text: 'screen', screen_text_seconds: 'screen', screen_timers: 'screen', arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
+  screen_text: 'screen', screen_text_seconds: 'screen', screen_timers: 'screen', screen_clock: 'screen', screen_sleep_minutes: 'screen',
+  arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
 // The cards of a settings page: [title, settings...].  A setting not named here (a new one, or a model's own) comes
 // last, in a card of its own, so nothing is ever lost from the page
 const LAYOUT = {
@@ -257,6 +259,8 @@ const HELP = {
   ring_rotation: { ha: true, help: 'Where the light ring\'s fill starts. Home Assistant\'s "Light ring fill" lights that share of the ring in the light\'s colour, for a timer\'s or a washing machine\'s progress or a battery; it fills the way the volume does, from where the volume starts. Turn the start by this many LEDs, so it starts where you want it to for how the Echo stands. Only where the Echo has room for each LED\'s own animations (Home Assistant then lists "Light ring fill"). Default 0.' },
   screen_text: { help: 'What you said and the assistant\'s reply in large letters over the screen, above the band: your words smaller and grey, the reply white beside a cyan bar, both as large as they fit (a very long reply is cut at the end of the screen). They show over the face, the music and any app, Kiosk Satellite too, but not over the menu pulled down from the top. They appear as speech-to-text and the reply come in, stay while the Echo answers and for 8 seconds after, then fade; the next request takes them away at once. The screen behind them is darkened, so they stay readable over whatever it shows. A tap takes them away, over an app too (the app gets none of those touches while they show). With Wyoming only your words are shown (it tells no reply text). Off by default: what people say appears only where someone wants it to.' },
   screen_text_seconds: { help: 'How long what you said and the reply stay on the screen once the Echo is idle again, in seconds. 0 keeps them until the next request (or a timer that rings). Default 8.' },
+  screen_clock: { help: 'A screen saver: where the screen would go dark (after Screen sleeps after, or 1 minute with the mic off or in Do not disturb), it shows the time across the whole screen instead, with the date under it. Until then the face shows as always. Mic off and Do not disturb get a line under the clock saying so; music playing shows its bar. A touch on the clock brings the face back (that touch does nothing else), and the timeout starts again; so does anything the Echo does: a request, a timer, a Drop In, the volume, music starting. Uses Home Assistant\'s time zone, 12-hour where the face\'s clock is. Only in place of the face: with an app or the music page in front, the screen goes dark as before. Off by default. Brightness follows the Brightness card: Adaptive brightness dims it at night.' },
+  screen_sleep_minutes: { help: 'How long the screen stays on after the last thing happened (a request, a touch, the volume, a timer), in minutes; then it goes dark, or shows the clock with Clock when idle on. 0: it never does either, the face stays. With the mic off or in Do not disturb it is 1 minute at most, as on a stock Echo Show; 0 keeps the screen on then too. Running timers on the screen keep it on whatever this says. Default 5, as stock.' },
   screen_timers: { help: 'Timers set on this Echo, on the screen: each one\'s name (or its length) over its time left in large digits with its unit (4:59 min, 1:02:05 h, 45 s) and a bar of what is left, the one that ends first on top; a paused one in grey. When one rings it shows in orange and pulses until it is stopped, with a Stop button. A tap on the timers hides them until the next change, over an app too (the app gets none of those touches while they show). The screen stays on while timers show. What you said and the reply (Speech on screen) go before them while they show. Off by default.' },
   music_on_screen: { help: 'While a track from Music Assistant plays on this Echo, the screen shows the music page (the big cover, title, seek bar and buttons). In place of the face: only where the face is what the screen shows by itself; an app in front (Kiosk Satellite, a dashboard) is left alone. In place of the home app too: also over the app chosen as Home above (or Kiosk Satellite), which comes back when the music stops; other apps are left alone. A request, a call or a ringing timer bring the face as always, and the music page comes back when they are over. It stays until the music stops: a pause keeps it, and so does the gap between two tracks. It goes by itself only if it still shows the Playing tab: browse the library or search on it and it stays, as if opened by hand (Home in the drawer brings the home app back). Pull down the drawer and choose Face or Home, or tap the face button on the music page, and the music page stays away until the music has stopped; a face chosen that way stays as it always has, until Home in the drawer brings the home app back. Off by default.' },
   light_band: { help: 'The Echo Show has no light ring: it shows the ring\'s lights as a band along the bottom of the screen, as Alexa did. That is listening, thinking, mic off, calls, volume, timers and Home Assistant\'s "Light ring". This many pixels at the bottom are kept for it, so an app on the screen never has the band over it. 0 gives the whole screen to the apps and shows no band. Default 10, stock\'s line.' },
@@ -447,6 +451,8 @@ const SUB = {
   screen_text: 'What you said and the reply, in large letters on the screen',
   screen_text_seconds: 'How long the words stay after the reply; 0: until the next request',
   screen_timers: 'Running timers counted down, a ringing one in orange',
+  screen_clock: 'The time and date in place of a dark screen',
+  screen_sleep_minutes: 'Minutes until it goes dark or shows the clock; 0: never',
   bluetooth_announcements: 'Says when a phone connects or disconnects',
   bluetooth_announcement_language: 'The language of those sentences',
   sendspin_unpaired: 'Any Music Assistant server may play here',
@@ -1202,8 +1208,9 @@ const PAGE_BUILD = {
   },
   lights: (el, list) => { el.append(flow(settingCards(list, 'lights'))); buildRing(el); },
   screen: (el, list) => {      // ring.js: the designs and where they show
-    const bright = list.filter((s) => BRIGHTNESS.includes(s.name)), words = list.filter((s) => WORDS.includes(s.name));
-    el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.filter((s) => !bright.includes(s) && !words.includes(s)).map(settingRow)),
+    const bright = list.filter((s) => BRIGHTNESS.includes(s.name)), words = list.filter((s) => WORDS.includes(s.name)), idle = list.filter((s) => IDLE.includes(s.name));
+    el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.filter((s) => !bright.includes(s) && !words.includes(s) && !idle.includes(s)).map(settingRow)),
+      idle.length ? titled('When idle', idle.map(settingRow)) : null,
       bright.length ? titled(bright.some((s) => s.name === 'screen_adaptive_colour') ? 'Brightness and colour' : 'Brightness', bright.map(settingRow)) : null,
       words.length ? titled('Words and timers', words.map(settingRow)) : null].filter(Boolean)));
   },

@@ -56,7 +56,7 @@
 /* actions (hits): who handles one goes by its range */
 enum {
     A_NONE,
-    A_POKE = 1, A_PLAYPAUSE, A_TOMUSIC, A_ANSWER, A_HANGUP, A_TIMERSTOP,               /* face.c */
+    A_POKE = 1, A_PLAYPAUSE, A_TOMUSIC, A_ANSWER, A_HANGUP, A_TIMERSTOP, A_WAKE,               /* face.c */
     A_DR_SHADE = 100, A_DR_HOME, A_DR_MUSIC, A_DR_DND, A_DR_SLEEP, A_DR_VOL, A_DR_PLAY, A_DR_NOW, A_DR_FACE,  /* drawer.c */
     A_M_TAB = 200, A_M_HOME, A_M_PLAY, A_M_PREV, A_M_NEXT, A_M_SHUFFLE, A_M_REPEAT, A_M_SEEK, A_M_VOL,  /* music.c */
     A_M_CAT, A_M_ITEM, A_M_BACK, A_M_DPLAY, A_M_DSHUF, A_M_DADD, A_M_DRADIO, A_M_QITEM, A_M_QDEL, A_M_QCLEAR,
@@ -162,6 +162,10 @@ struct scene {
     /* the satellite */
     struct { long long at; int on; } pat[32];
     int level, mute, dnd, oobe, h12, evol;
+    /* "ck": the screen saver (face.c): the clock in place of the screen going dark once nothing happened for the
+     * screen's timeout ("Screen sleeps after", minutes, 0 never); the last thing that happened, and whether the
+     * clock shows (a touch on it only wakes the face) */
+    int clock_big, saver_min, saver_on, saver_was, front_sent; long long active_at;
     char name[64], timers[256], peer[64], home[96], act[64], web[96];
     /* music as Sendspin tells it (scene.h: mt, mp, mc, art) */
     int music, mstate, mspeed, mvol, mmuted, mrepeat, mshuffle; long long mpos, mdur, mpos_at;
@@ -259,10 +263,13 @@ void toast(struct scene *s, int id, const char *msg);
 
 /* face.c */
 int  face_calm(struct scene *s);                                /* nothing asks for attention: idle, mic off, do not disturb */
+int  face_setup(struct scene *s);                               /* the setup screen (not set up, or stock's setup pattern) */
 int  face_view(struct scene *s, float dt);                      /* still moving */
 long long face_due(struct scene *s);
 int  face_act(struct scene *s, int a, int arg, int ev);
 int  face_mode(struct scene *s);
+/* something happened: the screen saver's timeout from now; what it was goes to hassmic's log when it ends the clock */
+void scene_active(struct scene *s, const char *why, ...) __attribute__((format(printf, 2, 3)));
 void face_init(struct scene *s, long long now);
 void face_pattern(struct scene *s, int p, int on, long long ago);
 int  pat_find(const char *name);

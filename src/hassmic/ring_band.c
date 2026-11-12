@@ -21,9 +21,11 @@
  *            opposite where stock's listening ring points at turn 0, so the side facing the talker is in the middle, as
  *            in the patterns.  The page gets the patterns as files (ring_stock) to start designs from.
  *   screen  stock's power policy (EnvironmentContextService, ECStateMachine): the screen sleeps 5 min after the last
- *            activity, 1 min with the mic off or in Do not disturb; a pattern wakes it (IPowerManager.wakeUp, through the
- *            service tool: transaction 9, isInteractive 12 on 8149, checked on the first Echo Show).  An app in front
- *            keeps its own wake locks.
+ *            activity ("Screen sleeps after", screen_sleep_min; 0 never), 1 min at most with the mic off or in Do not
+ *            disturb; a pattern wakes it (IPowerManager.wakeUp, through the service tool: transaction 9, isInteractive
+ *            12 on 8149, checked on the first Echo Show).  With "Clock when idle" and the UI's face waiting
+ *            (screen_saver) the screen is held on and the UI counts the timeout itself.  An app in front keeps its own
+ *            wake locks.
  */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE                     /* pipe2 on glibc */
@@ -33,6 +35,7 @@
 #include "core.h"
 #include "ringdesign.h"
 #include "screen.h"
+#include "afe_parcel.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -57,8 +60,10 @@ enum { E_NONE, E_PULSE, E_SPIN, E_BLINK, E_RAINBOW };
 #define FRAME_MS     33                 /* 30 frames a second while something moves */
 #define MAX_W        2048
 #define MAX_ROWS     40
-#define TIMEOUT_MS   300000             /* stock's screen_off_timeout_standard (Arcus default) */
+#define TIMEOUT_MS   300000             /* stock's screen_off_timeout_standard (Arcus default): without a screen UI */
 #define QUIET_MS     60000              /* stock's _dnd and _privacy */
+#define NEVER_MS     INT_MAX            /* "Screen sleeps after" 0: AOSP Settings' own "never" (Integer.MAX_VALUE);
+                                           PowerManagerService adds it to a long, ~25 days of no touch at all */
 #define HOLD_MS      86400000           /* timers on the screen (screen_keep_on): a timer across the room is what the
                                            screen is for then */
 #define WAKE_EVERY   2000               /* the power calls at most this often (a process each) */
@@ -420,12 +425,27 @@ static void light_draw(const struct ring_light *l, int blink, struct rgb *led, l
 
 static void run_quiet(char *const argv[]) { core_spawn(argv); }
 
-static void screen_wake(void)
+static void screen_activity(void)
 {
     char ms[24]; snprintf(ms, sizeof ms, "%lld", now_ms());           /* uptimeMillis is CLOCK_MONOTONIC */
-    char *wake[] = { "/system/bin/service", "call", "power", "9", "i64", ms, "s16", "hassmic", "s16", "android", NULL };
     char *act_[] = { "/system/bin/service", "call", "power", "8", "i64", ms, "i32", "0", "i32", "0", NULL };   /* userActivity */
-    run_quiet(wake); run_quiet(act_);
+    run_quiet(act_);
+}
+
+/* IPowerManager.isInteractive (12 on 8149): 1 the screen on, 0 off, -1 not known (no tool: the PC) */
+static int screen_interactive(void)
+{
+    char *argv[] = { "/system/bin/service", "call", "power", "12", NULL };
+    char out[256] = ""; uint32_t w[2];
+    core_run(argv, out, sizeof out);
+    return svc_reply_words(out, w, 2) == 2 && !w[0] ? w[1] != 0 : -1;   /* (the exception, then the boolean) */
+}
+
+static void screen_wake(void)
+{
+    char ms[24]; snprintf(ms, sizeof ms, "%lld", now_ms());
+    char *wake[] = { "/system/bin/service", "call", "power", "9", "i64", ms, "s16", "hassmic", "s16", "android", NULL };
+    run_quiet(wake); screen_activity();
 }
 
 static void screen_timeout(int ms)
@@ -572,8 +592,17 @@ static void *band_thread(void *arg)
         pthread_mutex_unlock(&lock);
         long long now = now_ms();
         if (now >= next_check) {                    /* stock's screen timeouts by what the Echo is doing (first: also
-                                                       while a renderer is awaited) */
-            int t = screen_keep_on() ? HOLD_MS : core_muted() || core_dnd(-1) ? QUIET_MS : TIMEOUT_MS;
+                                                       while a renderer is awaited); "Screen sleeps after" in place of
+                                                       the standard one, mic off and Do not disturb at most stock's
+                                                       minute; never with 0, and while the screen saver is on over
+                                                       our own screen: the UI shows the clock when this would end */
+            int sm = screen_sleep_min(-1);
+            int std = sm < 0 ? TIMEOUT_MS : sm ? sm * 60000 : NEVER_MS;
+            int t = !sm || screen_saver() ? NEVER_MS : screen_keep_on() ? HOLD_MS : core_muted() || core_dnd(-1) ? (std < QUIET_MS ? std : QUIET_MS) : std;
+            /* held on no more (the music page, the drawer, an app, setup): PowerManager counts from the last activity,
+               maybe an hour ago under the clock, and would put the screen out at once: from now.  Only while it is on
+               (asked first): a screen put out from the drawer stays out, whatever userActivity does to a dark one */
+            if (t != timeout && timeout == NEVER_MS && screen_interactive() == 1) screen_activity();
             if (t != timeout) { timeout = t; screen_timeout(t); }
             next_check = now + 1000;
         }
