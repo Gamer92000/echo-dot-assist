@@ -1014,6 +1014,7 @@ ARGS=""                     # extra options, below
 | `-m <pryon.manifest>` | wake word model to start with, until one is picked in Home Assistant |
 | `-w remote` | wake word in Home Assistant; the page then cannot change it |
 | `-E` | no sound on wake |
+| `-D` | the microphone keeps streaming while a reply plays (Wyoming, for a realtime agent such as hermes-talk's Echo surface; the echo canceller keeps the reply out) |
 | `-L` | leave the LED ring alone |
 | `-V` | leave the volume buttons alone |
 | `-z 0` | no Sendspin player |

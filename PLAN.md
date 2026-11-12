@@ -3694,3 +3694,14 @@ Run in this order. Each step says what it proves.
       (`music_show`) is never left by itself.  `ui_test.c`: every one of these, the app as home in both modes.
       Open: on a real Show (cronos 192.168.4.246): whether Sendspin's state 0 between tracks is shorter than 5 s there, the
       page after a wake word on a long track, the screen waking for the first track, Kiosk Satellite given back.
+- [x] Duplex over Wyoming for a realtime client (`-D`, 2026-11-12): hermes-talk's Echo surface (`hermes talk echo`) talks
+      to a realtime voice model and cuts replies itself on barge-in, so it needs the microphone through a reply. Without
+      `-D` `core_tts_begin` stops the stream (unchanged); with it the stream stays open, a wake word during SPEAKING is
+      left to the client (no second run), and `mic_gain.hold` also holds while `tts_on`. Why the hold: on radar the
+      first live run looped, the model answering its own reply ("I'll stay quiet" three times in a row, no one
+      speaking): the gain control raised the echo canceller's leftover between words until it read as speech. With the
+      hold and the client's own gate (it zeroes chunks under 0.02 RMS while the Echo plays), radar
+      2026.11.12.014742+8dd9dfe over three sessions: microphone RMS while the Echo spoke median 0.004-0.005, p95
+      0.011-0.032, peaks 0.07-0.33 (barge-in), 94-99 % of chunks gated; no loop since, and barge-in by voice still cuts
+      the reply.  Tests: `tests/fake_talk_duplex.py` (host build, both modes: the stream during a reply, the mid-reply
+      wake word, the run ending at audio-stop).  Open: the action button during a reply, ESPHome (`-D` is Wyoming only).

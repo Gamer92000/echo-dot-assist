@@ -12,6 +12,13 @@ What changed for people using the Echo, newest first. Details and measurements a
   Opening adb over Wi-Fi through the ESPHome connection is refused too: only the settings page opens it, with the
   action button. Thanks to kevinsaucier for the report.
 
+- **Duplex for a realtime agent (`-D`, Wyoming).** With `-D` in `ARGS` the microphone keeps streaming while a reply
+  plays, and a wake word during the reply is left to the client: for a client that cuts replies itself, such as
+  hermes-talk's Echo surface (`hermes talk echo`), which talks with a realtime voice model straight from the Echo.
+  Amazon's echo canceller keeps the reply out of the microphone, and the microphone gain holds while the reply plays
+  so it does not turn the canceller's leftover up into something the client hears as speech. Without `-D` nothing
+  changes.
+
 ## 2026-11-11
 
 - **Music Assistant pairs with the Echo by itself.** With Home Assistant 2026.11 and Music Assistant 2.10.9 or later
