@@ -66,6 +66,7 @@ TESTS = [
     ("screen", [PY, "tests/fake_screen.py"]),
     ("screen-9", [PY, "tests/fake_screen.py", "--legacy"]),
     ("screen-words", [PY, "tests/fake_screen_words.py"]),
+    ("cards", [PY, "tests/fake_ha_esphome_cards.py"]),
     ("ma-api", [PY, "tests/fake_ma_api.py"]),
     ("otatool", ["sh", "tests/otatool_test.sh"]),
 ]

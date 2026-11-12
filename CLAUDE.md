@@ -641,6 +641,21 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   over an app the platform grabs the panel for them (`EVIOCGRAB`, `touch_grab`, `scene_words_wants_grab`; taken and given
   back with no finger down; the kernel lets go when the UI dies), else (no grab: `wd.grab` -1) a ring there brings our
   screen up (`ring_from`, `own_asked` kept and given back after, asked again every 10 s) and the app back after.  Tests: `ui_test.c`, `tests/fake_screen_words.py`, `build/uishot` (words*, timer*).
+- **Cards on the screen** (`cards.c`, `cards.h`; UI `src/ui/card.c`; Home Assistant's side `ha/custom_components/hassmic_cards`;
+  format and options `docs/cards.md`): ESPHome actions `show_card` (a JSON card, version 2: entities, weather, message,
+  list; buttons) and `clear_card` (by id). Every word is Home Assistant's; it sends a card again (`update`, its id) when
+  something on it changes, so the Echo asks for no states and composes no text. Notices (up to 4, the newest shown) step
+  aside for a voice request and its card (`scope: request`, `cards_run`, `cards_conversation`: only while or just after
+  a request of this Echo's); a ringing timer comes first. A row's control only where the card asks and the domain fits,
+  never a lock's or an alarm panel's; taps run Home Assistant actions (`esphome_action`); a button press is the event
+  `esphome.hassmic_card_action` (`esphome_event`); a message's picture is fetched by hassmic (`esphome_fetch`) when the UI
+  asks. Lines to the UI `cb cr cw cf cm cl cu ci ce cx` (scene.h), sent by screen.c (`screen_card`) and to a new UI.
+  The Echo tells Home Assistant what it shows and what it refused (events `esphome.hassmic_card_state` / `_refused`, the
+  former from the card thread, never under `lk`). hassmic_cards (a config entry; entities "Card button", "Card on
+  screen", "Voice cards", a "Screen" notify entity and a device trigger per Show; a card library on a dashboard; blueprints in `ha/blueprints/`) turns dashboard
+  cards into these, keeps them live, routes button events, reads voice requests from the conversation's chat log and
+  finds the asking Echo by the assist satellite holding the conversation id.
+  Tests: `tests/fake_ha_esphome_cards.py`, `tests/ha_real_cards.py`, `make unit-cards`, `ui_test.c`.
 - **Music Assistant's API** (`mass.c`, `mass.h`, `json.c`): the screen's library, search, queue and speakers over
   MA's own websocket (`/ws`, port 8095; the page's URL, or with none given the Sendspin server's address pinned when the
   token is saved: a token only ever goes to that address, `mass_peer` merely suggests one, from sessions whose player

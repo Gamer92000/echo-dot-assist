@@ -594,30 +594,35 @@ static void p_image(void *ctx, const char *key, int px)
 }
 
 /* decoding, on a thread of its own: jobs in, pictures out (both under img_lock), the UI woken through the pipe */
-struct img_job { char key[40]; int px[8], n; uint8_t *data; size_t len; uint32_t *out[8]; struct img_job *next; };
+struct img_job { char key[40]; int px[8], n; uint8_t *data; size_t len; uint32_t *out[8]; int ow[8], oh[8]; struct img_job *next; };
 static struct img_job *jobs_in, *jobs_out;
 static pthread_mutex_t img_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t img_cv = PTHREAD_COND_INITIALIZER;
 
-/* a decoded bitmap cut square from its middle and scaled to px: opaque pixels in the buffer's layout, or NULL */
-static uint32_t *square(JNIEnv *env, jobject bmp, int px)
+/* a decoded bitmap cut square from its middle and scaled to px (a list's image), or kept in shape with px its longer side
+ * at most (keep: a card's picture, a camera's 4:3 or a doorbell's 3:4): opaque pixels in the buffer's layout, or NULL */
+static uint32_t *square(JNIEnv *env, jobject bmp, int px, int keep, int *ow, int *oh)
 {
     uint32_t *out = NULL;
     if ((*env)->PushLocalFrame(env, 8)) return NULL;
     int w = (*env)->CallIntMethod(env, bmp, m_bmp_w), h = (*env)->CallIntMethod(env, bmp, m_bmp_h), m = w < h ? w : h;
     if (m <= 0 || px <= 0 || px > 1024) goto out;
-    jobject sq = w != h ? (*env)->CallStaticObjectMethod(env, c_bitmap, m_bmp_crop, bmp, (w - m) / 2, (h - m) / 2, m, m) : bmp;
-    jobject sc = sq && m != px ? (*env)->CallStaticObjectMethod(env, c_bitmap, m_bmp_scale, sq, px, px, JNI_TRUE) : sq;
+    int tw = px, th = px;
+    if (keep) { int l = w > h ? w : h; if (l < px) px = l; tw = w >= h ? px : (int)((long)w * px / h); th = w >= h ? (int)((long)h * px / w) : px;
+                if (tw < 1) tw = 1; if (th < 1) th = 1; }
+    jobject sq = !keep && w != h ? (*env)->CallStaticObjectMethod(env, c_bitmap, m_bmp_crop, bmp, (w - m) / 2, (h - m) / 2, m, m) : bmp;
+    jobject sc = sq && (keep ? tw != w || th != h : m != px) ? (*env)->CallStaticObjectMethod(env, c_bitmap, m_bmp_scale, sq, tw, th, JNI_TRUE) : sq;
     if (failed(env, "scale") || !sc) goto out;
     AndroidBitmapInfo bi; void *p;
-    if (!AndroidBitmap_getInfo(env, sc, &bi) && bi.format == ANDROID_BITMAP_FORMAT_RGBA_8888 && (int)bi.width == px && (int)bi.height == px &&
+    if (!AndroidBitmap_getInfo(env, sc, &bi) && bi.format == ANDROID_BITMAP_FORMAT_RGBA_8888 && (int)bi.width == tw && (int)bi.height == th &&
         !AndroidBitmap_lockPixels(env, sc, &p)) {
-        if ((out = malloc((size_t)px * px * 4)))
-            for (int y = 0; y < px; y++) {
-                uint32_t *d = out + (size_t)y * px; const uint32_t *r = (const uint32_t *)((uint8_t *)p + (size_t)y * bi.stride);
-                for (int x = 0; x < px; x++) d[x] = r[x] | 0xFF000000u;
+        if ((out = malloc((size_t)tw * th * 4)))
+            for (int y = 0; y < th; y++) {
+                uint32_t *d = out + (size_t)y * tw; const uint32_t *r = (const uint32_t *)((uint8_t *)p + (size_t)y * bi.stride);
+                for (int x = 0; x < tw; x++) d[x] = r[x] | 0xFF000000u;
             }
         AndroidBitmap_unlockPixels(env, sc);
+        if (out) { *ow = tw; *oh = th; }
     }
 out:
     (*env)->ExceptionClear(env);
@@ -639,7 +644,7 @@ static void *decode_thread(void *arg)
             if (arr) {
                 (*env)->SetByteArrayRegion(env, arr, 0, (jsize)j->len, (const jbyte *)j->data);
                 jobject bmp = (*env)->CallStaticObjectMethod(env, c_bfactory, m_decode, arr, 0, (jint)j->len);
-                if (!failed(env, "decode") && bmp) for (int i = 0; i < j->n; i++) j->out[i] = square(env, bmp, j->px[i]);
+                if (!failed(env, "decode") && bmp) for (int i = 0; i < j->n; i++) j->out[i] = square(env, bmp, j->px[i], !strncmp(j->key, "card", 4), &j->ow[i], &j->oh[i]);
             }
             (*env)->ExceptionClear(env);
             (*env)->PopLocalFrame(env, NULL);
@@ -673,7 +678,7 @@ static void images_done(struct scene *s)                        /* UI thread: wh
     pthread_mutex_unlock(&img_lock);
     while (j) {
         struct img_job *nx = j->next;
-        for (int i = 0; i < j->n; i++) scene_image(s, j->key, j->px[i], j->out[i], j->out[i] ? j->px[i] : 0, j->out[i] ? j->px[i] : 0);
+        for (int i = 0; i < j->n; i++) scene_image(s, j->key, j->px[i], j->out[i], j->out[i] ? j->ow[i] : 0, j->out[i] ? j->oh[i] : 0);
         free(j); j = nx;
     }
 }

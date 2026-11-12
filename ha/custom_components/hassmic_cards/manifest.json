@@ -1,0 +1,27 @@
+{
+  "domain": "hassmic_cards",
+  "name": "hassmic cards",
+  "codeowners": [],
+  "dependencies": [
+    "esphome",
+    "http"
+  ],
+  "documentation": "https://github.com/Gamer92000/echo-dot-assist/blob/main/docs/GUIDE.md#cards-on-the-screen",
+  "iot_class": "local_push",
+  "requirements": [],
+  "version": "0.6.0",
+  "after_dependencies": [
+    "assist_satellite",
+    "calendar",
+    "camera",
+    "conversation",
+    "logbook",
+    "lovelace",
+    "notify",
+    "todo",
+    "weather"
+  ],
+  "config_flow": true,
+  "integration_type": "service",
+  "single_config_entry": true
+}

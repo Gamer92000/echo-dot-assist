@@ -50,6 +50,7 @@
 #include "ringdesign.h"
 #include "ledq.h"
 #include "screen.h"
+#include "cards.h"
 #include "davs.h"
 #include "dropin.h"
 #include "duck.h"
@@ -419,6 +420,11 @@ void core_set_state(enum state s)
     /* the words on the screen (screen.c): a request from idle takes the last one's away, idle lets them fade */
     if (state == IDLE) screen_words(SCREEN_WORDS_RUN, NULL);
     else if (s == IDLE) screen_words(SCREEN_WORDS_IDLE, NULL);
+    /* a card (cards.c): a request takes the last one away; idle again, this request's card stays its timeout.  Speaking
+     * straight from idle is no request: an announcement or Home Assistant's media, which a notification's card goes with
+     * (the doorbell's card and its chime are sent together); the conversation an announcement may start is one */
+    if ((state == IDLE && s != SPEAKING) || (state == SPEAKING && s == LISTENING)) cards_run(1);
+    else if (s == IDLE) cards_run(0);
     state = s; state_since = time(NULL);
     atomic_store(&busy, s != IDLE);
     /* the Echos that heard it too duck while we answer (duck.c); HA's media is no answer, a radio would hold them down */
@@ -3543,6 +3549,7 @@ int main(int argc, char **argv)
     ring_start(led_run, ring_reloaded);
     rd_start();                         /* designs asked for before this start: still installing, or back */
     screen_start();                                 /* a model with a screen: its UI process (screen.h) */
+    cards_start();                                  /* and the cards Home Assistant pushes to it (cards.h) */
     audio_earcon_started = earcon_started;
     led("-u", "scone-setup");           /* a restart inside the pairing window: the window is gone, its chaser would loop on */
     led("-u", "factory-reset");         /* a reset asked for before this start is done (main.sh) */

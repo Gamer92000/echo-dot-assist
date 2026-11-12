@@ -551,6 +551,71 @@ satellite of its own has to run without its microphone (as a display) while hass
   one; nothing under them reacts, and the app has its touches back once they are gone. The menu still pulls down from
   the top.
 
+### Cards on the screen
+
+What a voice request was about, on the Echo that was asked: "turn on the kitchen light" shows the kitchen's light,
+switched on, with its brightness, and the kitchen's other devices, each with its control; "what's the weather" shows the
+weather now and the next days. Automations put cards on the screens too, written as Home Assistant's own dashboard
+cards (entities, tile, glance, weather-forecast, markdown, picture-entity, todo-list, calendar...): the doorbell's
+camera, "the washer is done" with a "Remind me" button, the shopping list. **Cards on screen** (the settings page's
+Screen page, on by default) lets them show; nothing shows unless Home Assistant sends one. [docs/cards.md](cards.md) has
+every option and the format the Echo takes.
+
+- **Setting it up:** copy `ha/custom_components/hassmic_cards` into Home Assistant's `custom_components` folder, restart
+  Home Assistant, and add **Echo Show cards** in Settings → Devices & services (its options: voice cards on or off,
+  their timeout and rows, the card library). Switch on "Allow the device to perform Home Assistant actions" in each Show's ESPHome
+  options, so the rows' switches work (buttons work without it).
+- **Making cards:** build them on a dashboard of their own (the card library: a view per card, its URL the card's name)
+  with Home Assistant's card editor, and show one by name from an automation (`card: laundry`, with `variables` for its
+  templates); or write the card's YAML in the automation. Three blueprints cover the common ones: the doorbell's camera,
+  an appliance done (with "Remind me"), a question answered with a card.
+- **In automations:** each Show has a **Card button** event entity (a button pressed on one of its cards: which action,
+  which card) and a device trigger for it, a **Card on screen** sensor (the card it shows, and the last card it
+  refused and why; refusals are in the logbook too), a **Voice cards** switch (no cards for voice requests on that
+  Show) and a **Screen** notify entity; **All Echo Show screens** notifies every Show. **Show a message**
+  (`hassmic_cards.show_message`) makes a card from plain fields in the automation editor: a title and words, a
+  camera's picture, buttons. Both actions answer with the card's id and the Shows it went to.
+- **A new notice wakes the screen;** the screen stays on while a card shows, 10 minutes at most, then sleeps (the card
+  is there when it wakes).
+- **What a card holds:** rows (a light's switch and brightness, a switch, a blind's open/stop/close, a thermostat's
+  setpoint, a player's play/pause, Run; sensors only show; a lock and an alarm never take a tap on a screen anyone walks
+  past, a garage door only when the card says so), the weather, a message with a picture (a camera's snapshot, new every
+  few seconds while it shows), or a list (a calendar's events, a to-do list), and up to three buttons. Every word on it
+  is Home Assistant's, in its language, and it follows the house: a light switched off elsewhere shows off.
+- **How long:** a request's card stays while the Echo answers and a while after (15 seconds for what Home Assistant's
+  own voice handling shows; your automation's `timeout` for its own); using it keeps it. An automation's
+  card stays its `timeout` (0: until tapped away or cleared), stays through an announcement (the doorbell's chime and
+  card come together), and steps aside while you ask something, back after. A ringing timer comes before any card.
+- **Buttons:** like a phone notification's actions. A press fires `hassmic_cards_action` (the button's `action`, the
+  card, the Echo) for your automations, and runs the button's own action if it has one; then the card goes from every
+  Echo it was on, unless the button says `keep`. A button with `snooze: 15` takes the card away and brings it back 15
+  minutes later.
+
+```yaml
+action: hassmic_cards.show
+data:
+  id: doorbell
+  title: Front door
+  message: Someone is at the front door
+  timeout: 60
+  card: {type: picture-entity, entity: camera.front_door, camera_view: live}
+```
+
+```yaml
+action: hassmic_cards.show
+data:
+  id: laundry
+  timeout: 0
+  card: {type: markdown, title: Washer is done, content: Time to move the laundry to the dryer.}
+  actions:
+    - {action: LAUNDRY_SNOOZE, title: Remind me in 15 min, snooze: 15}
+    - {action: LAUNDRY_DONE, title: Done}
+```
+
+Requests your own sentence-triggered automations answer get a card the same way, with `target: {device_id: "{{
+trigger.device_id }}"}` and `scope: request`. `notify.send_message` on a Show's Screen entity (or All Echo Show
+screens) puts a message on it from anything that sends notifications.
+
 ### Music Assistant on the screen
 
 The music page has five tabs down its left side, and the face's button above them goes back to the face.
@@ -722,6 +787,7 @@ Bluetooth audio from phones, the Bluetooth speaker and the setup from a phone (I
 | Identify, Restart, Factory reset | buttons; Restart reboots the Echo |
 | Web UI address | diagnostic: the settings page's address |
 | Sendspin pairing token | diagnostic, disabled by default, no state until Home Assistant has set the Echo's key: Music Assistant gets the token from Home Assistant by itself (2026.11 and later) |
+| Actions `show_card`, `clear_card` | Echo Show: a card on the screen, see [Cards on the screen](#cards-on-the-screen) |
 
 Time and time zone: the Echo takes both from Home Assistant, over the encrypted connection only (no time before
 Home Assistant has given it its key), when it connects and every 6 hours. Change Home Assistant's time zone and the Echo

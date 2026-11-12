@@ -100,6 +100,25 @@ state until then. Before adoption someone on the network could set a key first a
 from Home Assistant, which you would notice. The token is also in the Echo's log, read over adb, and at the end of
 `scripts/setup.sh`. The settings page never shows it, and its log viewer blanks it.
 
+## Cards on the screen
+
+A card comes over the ESPHome API (`show_card`): from Home Assistant over the encrypted link once it has set the Echo's
+key (at adoption), as every action does; before that, from any client on the network (who could then show a card a
+person may tap). A row's control runs only where the card asked for one and the domain fits: a switch only on lights,
+switches, fans and the like (never a cover's or a valve's toggle: those open things), never anything on a lock or an
+alarm panel; which covers get open/close at all is Home Assistant's side to decide (hassmic_cards gives a garage, gate
+or door cover none unless the card says so). A button runs nothing on the Echo: its press is an event with the card's
+and the button's ids; hassmic_cards takes it only as from an Echo Show (for a card it knows, one it was sent to) and decides what it does;
+Home Assistant lets an adopted ESPHome device name another device in its events, so another adopted device could press a
+button it knows the ids of. The Echo
+also tells Home Assistant (events) the id and title of the card it shows and why it refused one. The Echo
+fetches a card's picture from the URL in it (http or https). A camera's picture comes from hassmic_cards at
+`/api/hassmic_cards/camera/<token>`, without a login (the Echo has none): a random token per card, valid only while the
+card may show, over plain HTTP on a Home Assistant without TLS (so anyone on the network who sees it can fetch that
+camera's snapshot until it ends); the Echo's log leaves the token out, and a picture URL's query (where Home
+Assistant puts its other tokens). Cards are off with the setting "Cards on
+screen".
+
 ## Arbitration between Echos
 
 An Echo takes the network key only from an Echo Home Assistant vouches for, from Home Assistant over its encrypted API

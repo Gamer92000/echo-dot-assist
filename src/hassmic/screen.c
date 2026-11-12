@@ -36,6 +36,7 @@
 #endif
 #include "screen.h"
 #include "board.h"
+#include "cards.h"
 #include "core.h"
 #include "dropin.h"
 #include "json.h"
@@ -116,6 +117,9 @@ static char heard[1000], reply[1000]; static int w_idle; static long long w_idle
 static unsigned words_gen, words_sent, wo_gen, wo_sent;
 static atomic_int timers_now, keep_on;                          /* a change to read now; timers shown: the screen stays on */
 static atomic_uint hide_req;                                    /* the UI's "timers hide <seq>" + 1: the list of that "tl" */
+/* the card (cards.c): its lines as cards.c made them, sent when they change and to a new UI */
+static char card_lines[8200] = "cx\n"; static unsigned card_gen, card_sent;   /* (lock) */
+static atomic_int card_up;                                      /* a card holds the screen on (cards.c says) */
 
 static long long mono_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000LL + t.tv_nsec / 1000000; }
 
@@ -291,6 +295,17 @@ static int setting(int *v, int set, int lo, int hi)
     pthread_mutex_unlock(&lock);
     return r;
 }
+void screen_card(const char *lines)
+{
+    pthread_mutex_lock(&lock);
+    snprintf(card_lines, sizeof card_lines, "%s", lines);
+    card_gen++; kick();
+    pthread_mutex_unlock(&lock);
+}
+
+void screen_card_hold(int on) { atomic_store(&card_up, on != 0); }
+
+
 int screen_words_on(int set) { return setting(&words_on, set, 0, 1); }
 int screen_words_hold(int set) { return setting(&words_hold, set, 0, 120); }
 int screen_timers_on(int set) { return setting(&timers_show, set, 0, 1); }
@@ -303,7 +318,7 @@ void screen_timers_changed(void)
     pthread_mutex_lock(&lock); kick(); pthread_mutex_unlock(&lock);
 }
 
-int screen_keep_on(void) { return atomic_load(&keep_on) && !atomic_load(&gave_up); }
+int screen_keep_on(void) { return (atomic_load(&keep_on) || atomic_load(&card_up)) && !atomic_load(&gave_up); }
 
 static int kiosk_installed(void)
 {
@@ -515,6 +530,8 @@ static void command(char *l)
     else if (!strcmp(l, "timer stop")) { pthread_mutex_lock(&core_lock); core_alarm_stop("the screen"); pthread_mutex_unlock(&core_lock); }
     else if (!strcmp(l, "words clear")) screen_words(SCREEN_WORDS_RUN, NULL);   /* tapped away on the screen */
     else if (!strncmp(l, "timers hide ", 12)) { atomic_store(&hide_req, (unsigned)strtoul(l + 12, NULL, 10) + 1); screen_timers_changed(); }
+    else if (!strncmp(l, "card ", 5)) cards_ui(l);
+    else if (!strncmp(l, "img card", 8)) { int size = 0; char key[40]; if (sscanf(l + 4, "%39s %d", key, &size) >= 1) cards_image(key, size); }   /* a card's picture */
     else if (!strncmp(l, "ml ", 3) || !strncmp(l, "mplay ", 6) || !strncmp(l, "mq ", 3) || !strncmp(l, "mg ", 3) || !strncmp(l, "mv ", 3) ||
              !strncmp(l, "mgv ", 4) || !strncmp(l, "mhere ", 6) || !strncmp(l, "img ", 4)) mass_ui(l);
 }
@@ -759,7 +776,7 @@ static void *writer(void *arg)
             pthread_mutex_lock(&lock);                          /* all of it again */
             for (int i = 0; i < npats; i++) { pats[i].told = pats[i].came = 0; pats[i].sent = pats[i].on ? pats[i].gen - 1 : pats[i].gen; }
             tz_sent = lang_sent = meta_sent = prog_sent = ctl_sent = art_sent = gone_sent = band_sent = 0; home_told = 0;
-            words_sent = words_gen - 1; wo_sent = wo_gen - 1;
+            words_sent = words_gen - 1; wo_sent = wo_gen - 1; card_sent = card_gen - 1;
             atomic_store(&hide_req, 0); nhidden = -1;             /* (a new UI shows them) */
             if (!music) meta_sent = meta_gen, prog_sent = prog_gen, ctl_sent = ctl_gen;
             if (!music && !artn) art_sent = art_gen;              /* (a cover before any metadata: told too) */
@@ -817,6 +834,13 @@ static void *writer(void *arg)
         if (words_sent != words_gen) {                          /* (in this order: the UI takes ws as the end of a change) */
             put(&o, "wh %s", heard); put(&o, "wr %s", reply); put(&o, "ws %lld", w_idle ? now - w_idle_at : -1LL);
             words_sent = words_gen;
+        }
+        if (card_sent != card_gen) {                            /* (a line each: the UI draws at "ce" or "cx") */
+            for (char *l = card_lines, *nl; *l; l = nl + 1) {
+                if (!(nl = strchr(l, '\n'))) break;
+                put(&o, "%.*s", (int)(nl - l), l);
+            }
+            card_sent = card_gen;
         }
         if (band_sent != band_gen && band_w) {
             size_t mk = o.n; if (put(&o, "band %d", band_w) || put_bin(&o, band_row, (size_t)band_w * 4)) o.n = mk; else band_sent = band_gen;

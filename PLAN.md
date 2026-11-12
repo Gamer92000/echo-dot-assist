@@ -3339,6 +3339,53 @@ Run in this order. Each step says what it proves.
       apelul", "încheie apelul".  Blueprint: ro sentences and replies.  Checked on the PC: `ui_test` (each language's
       date, cut at the end, `lg`), `fake_screen_words.py` (`lg`), `fake_ha_dropin.py` ("Închide apelul!"),
       `blueprint_dropin.py` (ro-RO).  Open: seen on an Echo; the page and the screen's other words stay English.
+- [~] Echo Show: cards on the screen (2026-11-12; docs/cards.md).  Home Assistant pushes a card (ESPHome action
+      `show_card`, JSON format v2; `clear_card` by id), drawn on the words layer (`src/ui/card.c`): entities rows with
+      controls, the weather, a message with a picture (a camera's snapshot, fetched by hassmic, `esphome_fetch`, decoded
+      at its own shape), a list; up to 3 buttons, whose press is the event `esphome.hassmic_card_action` (no
+      permission, nothing the Echo runs).  Every word is Home Assistant's; it sends the card again (`update`, same id)
+      when an entity on it changes, so the Echo asks for no states.  Notices (up to 4, the newest shown, a new one wakes
+      the screen) step aside for a voice request and its card (`scope: request`, only while or 10 s after a request of
+      this Echo's) and come back; a ringing timer comes first; a card until tapped away holds the screen on 10 min (its
+      picture refreshes as long, and stop after 3 failed fetches).  Controls only where the card asks and the domain
+      fits (a toggle never on a cover or a valve), never a lock's or an alarm panel's.
+      What a voice request did is read in Home Assistant: its ESPHome integration tells a satellite only
+      `conversation_id`, `continue_conversation` and the speech at intent end.  `conversation.async_subscribe_chat_logs`
+      sees every tool result; Home Assistant's own intents log theirs as tool calls with an IntentResponseDict
+      (`default_agent.py`), as the LLM's Assist tools return (prefix `intent__`): `data.success[].id` are the entities.
+      Measured on a real house (2026.11.0, local intents + a local LLM agent): local `HassGetState`/`HassTurnOff` and the
+      LLM's `intent__HassTurnOff` carry the ids; the LLM's questions go through `GetLiveContext` (a YAML-ish overview:
+      names matched back to exposed entities); sentence-triggered automations log only `trigger_sentence` (they send
+      their own cards, `trigger.device_id`).  The Echo that asked: the assist satellite stores the run's conversation id
+      (`AssistSatelliteEntity._conversation_id`) before the run (an HA internal, checked at setup; a repair and no voice
+      cards without it).  The card goes with the turn's answer (the assistant's content without tool calls): a local
+      LLM's rounds came 0.3 s to several seconds apart, so a card sent some time after the last tool result could go
+      before the next round.  Home Assistant's conversation id lasts minutes across requests: a new request in the same
+      conversation drops a turn left without its answer.
+      Home Assistant's side, `ha/custom_components/hassmic_cards` (a config entry, set up and its options in the UI; a
+      YAML block imported once): dashboard cards (entities, glance, tile, weather-forecast, markdown, picture-entity,
+      picture-glance, picture, todo-list, calendar) into the Echo's format with Home Assistant's translations, or a card
+      of the library (a dashboard, a view per card, its URL the name; `variables` for its templates), live updates,
+      buttons as a phone notification's actions (`hassmic_cards_action`, only from an Echo the card is on), camera
+      pictures at a per-card token, kept across a restart.  Per Show (a device of its own: Home Assistant keeps a device
+      to one integration, so not the ESPHome device; matched to it by MAC; unavailable while the Echo is): "Card button"
+      (event entity), "Card on screen" (sensor: what shows, the last refusal, from the Echo's events
+      `esphome.hassmic_card_state` / `_refused`, sent from the card thread outside `lk`), "Voice cards" (switch), "Screen"
+      (notify entity; and "All Echo Show screens"), a device trigger; refusals in the logbook; diagnostics.  Actions
+      answer with the card's id and where it went (`SupportsResponse.OPTIONAL`), refuse in the user's language
+      (`ServiceValidationError` translation keys); `show_message` for the editor; buttons may snooze a card (kept in the
+      store, back after a restart).  Weekdays from a 13-language table, 12/24 h by the country.  Blueprints
+      (`ha/blueprints/automation/hassmic_cards`): doorbell camera, appliance done, a question answered with a card.
+      Seen on two Shows (crown, checkers): voice cards from the default agent and an LLM agent, the weather (a
+      twice-daily forecast merged into days), room cards, a camera's live snapshot, buttons pressed by hand (a notice's
+      "Done": it went, the one under it came back and went the same way).  Checked on the PC: `make unit-cards` (fuzzed, ASan/UBSan), `ui_test`, `tests/fake_ha_esphome_cards.py`,
+      `tests/ha_real_cards.py` (a real Home Assistant: a spoken request's card, a tap, a change followed, a sentence
+      trigger's card, the camera, buttons and a press from another device, clear by id, targets, words never templates,
+      notify entities, show_message and its response, the voice switch, diagnostics, the options flow's checks, a snooze;
+      in CI's home-assistant job).
+      Open: dates in languages beyond the table are English; no automated test of a slow multi-step LLM turn; the
+      "Card on screen" sensor misses a report sent before the entry was set up (it waits for the next card);
+      a picture is decoded at full size before it is scaled (a huge one could run the Show 5's UI out of memory).
 - [~] Echo Show 5 2nd gen (`cronos`, 2026-10-26; `docs/re-cronos.md`).  checkers' platform and its pinned build: Fire OS
       6574.1 NS65741/8149 (same `ro.build.version.incremental`, cronos' own image), kernel 4.9.77 (20 config lines from
       checkers', 74 from crown's), `libpryon.so` byte-identical to checkers', stubs identical in symbols and order,

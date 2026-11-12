@@ -64,6 +64,20 @@
  *   wh <text>, wr <text>, ws <ms|-1>   what was said, the reply, and how long ago the satellite was idle again (-1: not
  *                                  yet); sent together, in that order, whenever one changes
  *   tl <n> <seq>\t<left ms> <total s> <active 0|1> <name>...   the running timers (the name: its length where it has none)
+ *   cb <seq> <kind e|w|m|l> <n> <voice 0|1>\t<title>\t<subtitle>   a card (card.c; hassmic's cards.c) begins: entities,
+ *                                  the weather, a message or a list; n rows, days or items; voice: a request's (its reply the subtitle where
+ *                                  none came); drawn once its "ce" came
+ *   cr <i> <ctl> <on -1|0|1> <level -1|0..100> <focus 0|1>\t<name>\t<value>   an entities card's row; ctl: r only its
+ *                                  state, t a switch, s a switch and a brightness bar, c open/stop/close, h setpoint
+ *                                  down/up, p play/pause, b Run
+ *   cw <icon|->\t<temperature>\t<detail>, cf <i> <icon|->\t<label>\t<temps>\t<precip>   a weather card: now, a day
+ *                                  (icon: Home Assistant's condition names)
+ *   cm <text>                      a message card's text;  ce: the card is all there;  cx: none
+ *   cl <i>\t<text>\t<detail>         a list card's row (kind l: a calendar's events, a shopping list)
+ *   cu <i>\t<label>                 a button along the card's bottom (any kind's): a tap is "card tap <seq> <i> press"
+ *   ci <key>                       a message card's picture (a doorbell's snapshot): asked for as an image of key
+ *                                  ("card<seq>.<n>"), decoded at its own shape (not cut square); a new n: the same
+ *                                  picture fetched again, the last one kept up until it decoded
  * To hassmic, on stdout (screen.c acts on them):
  *   cmd <play|pause|next|previous|volume N|mute 0/1|repeat_off|repeat_one|repeat_all|shuffle|unshuffle|seek MS>
  *   dropin answer, dropin hangup, timer stop, vol <0..100>, dnd <0|1>, log <text>, pong <n>
@@ -72,6 +86,8 @@
  *                                  they change
  *   front <0|1>                    1: our own face in front and waiting (no music page, drawer, request, setup): the
  *                                  screen saver's timeout is the UI's, ring_band.c holds the screen on; 0: the screen's own
+ *   card tap <seq> <row> <toggle|level N|open|stop|close|down|up|play|run>   a card's control (hassmic runs the Home
+ *                                  Assistant action); card clear <seq>: tapped outside its controls, the card goes
  *   app <package>\t<label>\t<system 0|1> ... apps.    every launchable app, as listed at start (the page's home app choice)
  *   ml <req> <what> <offset> [<arg>]   a list: artists albums playlists tracks radios podcasts audiobooks recent queue,
  *                                  album_tracks artist_albums artist_tracks playlist_tracks podcast_episodes <uri>,
@@ -100,7 +116,8 @@ struct ui_platform {
     void (*back)(void *ctx);                                       /* Back to the app in front */
     void (*send)(void *ctx, const char *line);                     /* a line to hassmic */
     void (*apps)(void *ctx);                                       /* list the apps again: scene_apps follows */
-    /* an image of a list (scene.h "img") at px x px, cut square from its middle: scene_image follows, maybe much later */
+    /* an image of a list (scene.h "img") at px x px, cut square from its middle: scene_image follows, maybe much later.
+     * A card's picture (key "card..."): at most px on its longer side, its shape kept */
     void (*image)(void *ctx, const char *key, int px);
     void (*screenshot)(void *ctx);                                 /* what shows now: scene_backdrop follows, or not */
     void (*sleep)(void *ctx);                                      /* the screen off */

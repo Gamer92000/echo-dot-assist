@@ -131,7 +131,7 @@ static void *run(void *arg)
     int rc = curl.perform(x->h);
     pthread_mutex_lock(&x->m); int began = x->state == 1; pthread_mutex_unlock(&x->m);
     if (rc && !(rc == CURLE_WRITE_ERROR && began))     /* a write error once the body came: the reader stopped it */
-        fprintf(stderr, "media: %s: %s%s\n", x->url, curl.strerror(rc),
+        fprintf(stderr, "media: %.*s%s: %s%s\n", url_shown(x->url), x->url, x->url[url_shown(x->url)] ? "..." : "", curl.strerror(rc),
                 rc == CURLE_PEER_FAILED_VERIFICATION || rc == CURLE_SSL_CACERT
                     ? " (the settings page's \"Check HTTPS certificates\" off accepts it)" : "");
     set_state(x, -1);
@@ -164,7 +164,7 @@ int https_open(const char *url)
 {
     static pthread_once_t once = PTHREAD_ONCE_INIT;
     pthread_once(&once, curl_load);
-    if (!curl_ok) { fprintf(stderr, "media: https is not available: %s\n", url); return -1; }
+    if (!curl_ok) { fprintf(stderr, "media: https is not available: %.*s%s\n", url_shown(url), url, url[url_shown(url)] ? "..." : ""); return -1; }
     int sv[2]; struct xfer *x = calloc(1, sizeof *x); pthread_t t; pthread_attr_t at;
     if (!x) return -1;
     if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv)) { free(x); return -1; }
