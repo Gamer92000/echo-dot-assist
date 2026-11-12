@@ -39,18 +39,21 @@
 #define PULSE_MS     1200               /* a ringing timer: bright and dim by turns, a whole cycle */
 #define PULSE_LOW    0.45f
 #define SHADE        0xBF000000u        /* 75 % black, premultiplied (the layer is RGBA_8888) */
+#define CARD_SHADE   0xFF000000u        /* a card's: opaque, its panels and icons and nothing of what is behind (a card is
+                                           brief, and the one thing that matters then) */
 #define MAX_LINES    16
 #define HEARD_LINES  3
 #define SHOWN_TIMERS 3                  /* more is not read off a screen */
 #define TEXT_MAX     1024
 
-enum { W_NONE, W_WORDS, W_RING, W_TIMERS };
+enum { W_NONE, W_WORDS, W_RING, W_TIMERS, W_CARD };
 
 /* ---------------------------------------------------------------- messages (scene.h) */
 
 int words_msg(struct scene *s, const char *cmd, const char *a)
 {
     struct words *w = &s->wd;
+    if (cmd[0] == 'c' && card_msg(s, cmd, a)) { w->ver++; return 1; }   /* a card: on this layer too */
     if (eq(cmd, "wo")) {
         int on = 0, t = 0, hold = 8;
         if (sscanf(a, "%d %d %d", &on, &t, &hold) >= 2) { w->on = on; w->timers_on = t; w->hold_s = hold < 0 ? 0 : hold; }
@@ -89,8 +92,12 @@ static long long left_ms(const struct scene *s, const struct wtimer *t)
 static int what(const struct scene *s)
 {
     const struct words *w = &s->wd;
+    int ring = w->timers_on && s->timers[0];
+    if (s->cd.ready && !s->timers[0]) return W_CARD;            /* a card: where the request's words would be; a ringing
+                                                                   timer's Stop comes first (the card is back after it):
+                                                                   ours below with "Timers on screen", else the face's */
     if (w->on && (w->heard[0] || w->reply[0]) && (!w->idle || !w->hold_s || s->now - w->idle_at < w->hold_s * 1000LL)) return W_WORDS;
-    if (w->timers_on && s->timers[0]) return W_RING;
+    if (ring) return W_RING;
     if (w->timers_on && w->nt && !w->timers_hidden) return W_TIMERS;
     return W_NONE;
 }
@@ -189,13 +196,14 @@ void words_tap(struct scene *s, int x, int y)
         w->heard[0] = w->reply[0] = 0; w->ver++;
         send(s, "words clear");
     } else if (w->pic == W_TIMERS) { w->timers_hidden = 1; send(s, "timers hide %u", w->tl_seq); }   /* (hassmic: the screen not held on) */
+    else if (w->pic == W_CARD) card_tap(s, x, y);
     else if (w->pic == W_RING && x >= w->stop.x0 && x < w->stop.x1 && y >= w->stop.y0 && y < w->stop.y1) send(s, "timer stop");
 }
 
 /* ---------------------------------------------------------------- drawing */
 
 /* the width of n bytes of str as the platform draws them */
-static float width(struct scene *s, const char *str, size_t n, float px, int bold)
+float words_width(struct scene *s, const char *str, size_t n, float px, int bold)
 {
     char b[TEXT_MAX];
     if (n >= sizeof b) n = sizeof b - 1;
@@ -203,11 +211,9 @@ static float width(struct scene *s, const char *str, size_t n, float px, int bol
     return (float)text_measure(s, b, px, bold);
 }
 
-struct wline { const char *a; int n; };
-
 /* text wrapped to maxw at spaces (a word longer than a line: broken between code points); lines stored up to max,
  * all of them counted */
-static int wrap(struct scene *s, const char *t, float px, int bold, float maxw, struct wline *out, int max)
+int words_wrap(struct scene *s, const char *t, float px, int bold, float maxw, struct wline *out, int max)
 {
     int n = 0; const char *p = t;
     while (*p) {
@@ -217,7 +223,7 @@ static int wrap(struct scene *s, const char *t, float px, int bold, float maxw, 
         while (*q) {
             const char *we = q;
             while (*we && *we != ' ') we++;
-            if (width(s, start, (size_t)(we - start), px, bold) > maxw) break;
+            if (words_width(s, start, (size_t)(we - start), px, bold) > maxw) break;
             end = we; q = we;
             while (*q == ' ') q++;
         }
@@ -226,7 +232,7 @@ static int wrap(struct scene *s, const char *t, float px, int bold, float maxw, 
             while (*c && *c != ' ') {
                 const char *nx = c + 1;
                 while ((*nx & 0xC0) == 0x80) nx++;
-                if (end > start && width(s, start, (size_t)(nx - start), px, bold) > maxw) break;
+                if (end > start && words_width(s, start, (size_t)(nx - start), px, bold) > maxw) break;
                 end = c = nx;
             }
         }
@@ -236,7 +242,7 @@ static int wrap(struct scene *s, const char *t, float px, int bold, float maxw, 
     return n;
 }
 
-static void put_text(struct scene *s, struct gfx *g, const char *str, size_t n, float px, int bold, float maxw, float x, float y, uint32_t rgb)
+void words_put(struct scene *s, struct gfx *g, const char *str, size_t n, float px, int bold, float maxw, float x, float y, uint32_t rgb)
 {
     char b[TEXT_MAX];
     if (n >= sizeof b) n = sizeof b - 1;
@@ -259,8 +265,8 @@ static void words_draw(struct scene *s, struct gfx *g)
         int last = L <= H * 0.075f;
         if (last) L = H * 0.075f;
         Lh = fmaxf(L * 0.62f, H * 0.065f);
-        nh = heard[0] ? wrap(s, heard, Lh, 0, maxw, hl, MAX_LINES) : 0;
-        nr = reply[0] ? wrap(s, reply, L, 0, maxw, rl, MAX_LINES) : 0;
+        nh = heard[0] ? words_wrap(s, heard, Lh, 0, maxw, hl, MAX_LINES) : 0;
+        nr = reply[0] ? words_wrap(s, reply, L, 0, maxw, rl, MAX_LINES) : 0;
         hshown = nh < HEARD_LINES ? nh : HEARD_LINES;
         hblock = hshown ? hshown * Lh * 1.05f + (nr ? Lh * 0.5f : 0) : 0;
         rshown = (int)((H - 2 * margin - hblock) / (L * 1.05f));
@@ -273,7 +279,7 @@ static void words_draw(struct scene *s, struct gfx *g)
     for (int i = 0; i < hshown; i++) {                          /* the last one shown, cut: the rest after it, ellipsised */
         size_t n = i == hshown - 1 && nh > hshown ? strlen(hl[i].a) : (size_t)hl[i].n;
         if (n > (size_t)hl[i].n + 64) n = (size_t)hl[i].n + 64;
-        put_text(s, g, hl[i].a, n, Lh, 0, maxw, x, y, DIM);
+        words_put(s, g, hl[i].a, n, Lh, 0, maxw, x, y, DIM);
         y += Lh * 1.05f;
     }
     if (hshown && nr) y += Lh * 0.5f;
@@ -281,7 +287,7 @@ static void words_draw(struct scene *s, struct gfx *g)
     for (int i = 0; i < rshown; i++) {
         size_t n = i == rshown - 1 && nr > rshown ? strlen(rl[i].a) : (size_t)rl[i].n;
         if (n > (size_t)rl[i].n + 64) n = (size_t)rl[i].n + 64;
-        put_text(s, g, rl[i].a, n, L, 0, maxw, x, y, FG);
+        words_put(s, g, rl[i].a, n, L, 0, maxw, x, y, FG);
         y += L * 1.05f;
     }
     if (rshown) gfx_rrect(g, side, r0 + L * 0.15f, side + bar, y - L * 0.2f, bar / 2, CYAN, 255);   /* the band's listening colour */
@@ -317,18 +323,18 @@ static void timers_draw(struct scene *s, struct gfx *g, int ringing)
         uint32_t col = ringing ? ORANGE : t[i].active ? FG : FAINT;
         const char *name = ringing ? s->timers : t[i].name;     /* (ringing: every one that rings, "tea, 5 min") */
         if (name[0]) {
-            float nw = width(s, name, strlen(name), ns, 0);
-            put_text(s, g, name, strlen(name), ns, 0, W * 0.9f, (W - fminf(nw, W * 0.9f)) / 2, y, DIM);
+            float nw = words_width(s, name, strlen(name), ns, 0);
+            words_put(s, g, name, strlen(name), ns, 0, W * 0.9f, (W - fminf(nw, W * 0.9f)) / 2, y, DIM);
         }
         y += ns * 1.1f;
         /* placed by the width of the same text with every digit a 0, so a running clock keeps still */
         size_t k = 0; for (const char *c = clk; *c && k + 1 < sizeof zero; c++) zero[k++] = *c >= '0' && *c <= '9' ? '0' : *c;
         zero[k] = 0;
-        float tw = width(s, zero, k, ts, 1), uw = unit[0] ? width(s, unit, strlen(unit), us, 0) : 0, sp = unit[0] ? ts * 0.12f : 0;
+        float tw = words_width(s, zero, k, ts, 1), uw = unit[0] ? words_width(s, unit, strlen(unit), us, 0) : 0, sp = unit[0] ? ts * 0.12f : 0;
         float x = (W - tw - sp - uw) / 2;
-        put_text(s, g, clk, strlen(clk), ts, 1, W, x, y, col);
+        words_put(s, g, clk, strlen(clk), ts, 1, W, x, y, col);
         /* the unit on the same baseline: each line's text is 0.8 of its height, centred in it */
-        if (unit[0]) put_text(s, g, unit, strlen(unit), us, 0, W, x + tw + sp, y + 0.78f * ts - 0.78f * us, t[i].active || ringing ? DIM : FAINT);
+        if (unit[0]) words_put(s, g, unit, strlen(unit), us, 0, W, x + tw + sp, y + 0.78f * ts - 0.78f * us, t[i].active || ringing ? DIM : FAINT);
         y += ts + bh;
         float f = ringing || t[i].total <= 0 ? 1 : clampf((float)l / (t[i].total * 1000.0f), 0, 1);
         float bx = (W - bw) / 2;
@@ -337,8 +343,8 @@ static void timers_draw(struct scene *s, struct gfx *g, int ringing)
         if (ringing) {                                          /* Stop, as the face's, large: tapped across the room's */
             float pw = fmaxf(W * 0.3f, ph * 3), px0 = (W - pw) / 2, py0 = y + bh + pgap;    /* reach */
             gfx_rrect(g, px0, py0, px0 + pw, py0 + ph, ph / 2, ORANGE, 255);
-            float lw = width(s, "Stop", 4, ph * 0.6f, 1);
-            put_text(s, g, "Stop", 4, ph * 0.6f, 1, pw, (W - lw) / 2, py0 + ph * 0.2f, 0x1A1D22);
+            float lw = words_width(s, "Stop", 4, ph * 0.6f, 1);
+            words_put(s, g, "Stop", 4, ph * 0.6f, 1, pw, (W - lw) / 2, py0 + ph * 0.2f, 0x1A1D22);
             /* (a finger's margin around it: a tap that lands a little off still stops it) */
             s->wd.stop = (struct rect){ (int)(px0 - H * 0.04f), (int)(py0 - H * 0.04f), (int)(px0 + pw + H * 0.04f), (int)(py0 + ph + H * 0.04f) };
         }
@@ -347,15 +353,17 @@ static void timers_draw(struct scene *s, struct gfx *g, int ringing)
 
 void scene_words_draw(struct scene *s, struct gfx *g)
 {
+    uint32_t shade = s->wd.pic == W_CARD ? CARD_SHADE : SHADE;
     for (int y = 0; y < g->h; y++) {                            /* the shade: the layer's own alpha, not a blend */
         uint32_t *row = g->px + (size_t)y * g->stride;
-        for (int x = 0; x < g->w; x++) row[x] = SHADE;
+        for (int x = 0; x < g->w; x++) row[x] = shade;
     }
     struct rect clip = g->clip;
     g->clip = (struct rect){ 0, 0, g->w, g->h };
     if (s->wd.pic == W_WORDS) words_draw(s, g);
     else if (s->wd.pic == W_RING) timers_draw(s, g, 1);
     else if (s->wd.pic == W_TIMERS) timers_draw(s, g, 0);
+    else if (s->wd.pic == W_CARD) card_draw(s, g);
     g->clip = clip;
 }
 

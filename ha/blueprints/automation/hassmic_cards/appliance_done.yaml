@@ -1,0 +1,160 @@
+blueprint:
+  name: Echo Show cards — appliance done
+  description: >-
+    When an appliance's power stays low for a while (the washer, the dryer, the dishwasher), a card on the Echo Shows
+    with "Remind me" and "Done" buttons, and optionally a few words on voice satellites outside quiet hours. "Remind
+    me" takes the card away and brings it back after a while; "Done" takes it off every Show. It counts as done only
+    when the power was up while it ran (above "Running above" just before it went low), not after a restart or an
+    unavailable sensor.
+  domain: automation
+  source_url: https://github.com/Gamer92000/echo-dot-assist/blob/main/ha/blueprints/automation/hassmic_cards/appliance_done.yaml
+  input:
+    power:
+      name: Power sensor
+      selector:
+        entity:
+          domain: [sensor, input_number]
+    done_below:
+      name: Done below (W)
+      default: 10
+      selector:
+        number: {min: 0, max: 1000, unit_of_measurement: W, mode: box}
+    running_above:
+      name: Running above (W)
+      description: "The reading just before the power went under Done below must have been at least this (an appliance that ramps down in steps: keep it near Done below; equal to it takes any reading, only an unavailable sensor or a restart is refused)"
+      default: 10
+      selector:
+        number: {min: 0, max: 5000, unit_of_measurement: W, mode: box}
+    done_for:
+      name: Low for (minutes)
+      default: 2
+      selector:
+        number: {min: 0, max: 60, unit_of_measurement: min}
+    name:
+      name: Appliance
+      default: Washer
+      selector:
+        text:
+    message:
+      name: Words on the card
+      default: Time to move the laundry.
+      selector:
+        text:
+    done_words:
+      name: Title after the appliance's name
+      default: is done
+      selector:
+        text:
+    remind_label:
+      name: Remind me button
+      default: Remind me
+      selector:
+        text:
+    done_label:
+      name: Done button
+      default: Done
+      selector:
+        text:
+    finished_label:
+      name: Subtitle before the time
+      default: Finished
+      selector:
+        text:
+    time_format:
+      name: Time format
+      description: "The subtitle's time (strftime: %H:%M is 24-hour)"
+      default: "%-I:%M %p"
+      selector:
+        text:
+    card_id:
+      name: Card id (the buttons' actions start with it)
+      default: washer
+      selector:
+        text:
+    snooze:
+      name: Remind me after (minutes)
+      default: 15
+      selector:
+        number: {min: 0, max: 240, unit_of_measurement: min}
+    shows:
+      name: Echo Shows
+      description: "Which Echo Shows (none chosen: every one)"
+      default: {}
+      selector:
+        target:
+          device:
+            integration: hassmic_cards
+    satellites:
+      name: Say it on (optional)
+      default: []
+      selector:
+        entity:
+          domain: assist_satellite
+          multiple: true
+    quiet_from:
+      name: No words from
+      description: "Quiet hours: from this time (overnight when it is after the end)"
+      default: "20:00:00"
+      selector:
+        time:
+    quiet_until:
+      name: No words until
+      default: "08:00:00"
+      selector:
+        time:
+
+mode: parallel
+max: 5
+
+triggers:
+  - trigger: numeric_state
+    entity_id: !input power
+    below: !input done_below
+    for:
+      minutes: !input done_for
+
+variables:
+  card_id: !input card_id
+  appliance: !input name
+  message: !input message
+  satellites: !input satellites
+  snooze_min: !input snooze
+  running_above: !input running_above
+  done_words: !input done_words
+  remind_label: !input remind_label
+  done_label: !input done_label
+  finished_label: !input finished_label
+  time_format: !input time_format
+  quiet_from: !input quiet_from
+  quiet_until: !input quiet_until
+  quiet: >-
+    {% set t = now().strftime('%H:%M:%S') %}
+    {{ (t >= quiet_from or t < quiet_until) if quiet_from > quiet_until else (quiet_from <= t < quiet_until) }}
+
+conditions:
+  # it ran: a number at least running_above just before it went low (not a restart's or an unavailable sensor's)
+  - "{{ trigger.from_state is not none and trigger.from_state.state | is_number and trigger.from_state.state | float >= running_above | float }}"
+
+actions:
+  - action: hassmic_cards.show_message          # (its words as written: never a template, no markdown)
+    continue_on_error: true
+    target: !input shows
+    data:
+      id: "{{ card_id }}"
+      title: "{{ appliance ~ ' ' ~ done_words }}"
+      message: "{{ message }}"
+      subtitle: "{{ finished_label ~ ' · ' ~ now().strftime(time_format) }}"
+      timeout: 0
+      button_1: "{{ remind_label ~ ' (' ~ (snooze_min | int) ~ ' min)' if snooze_min | float > 0 else '' }}"
+      button_1_action: "{{ card_id ~ '_SNOOZE' }}"
+      button_1_snooze: "{{ snooze_min }}"
+      button_2: "{{ done_label }}"
+      button_2_action: "{{ card_id ~ '_DONE' }}"
+  - if: "{{ satellites | count > 0 and not quiet }}"
+    then:
+      - action: assist_satellite.announce
+        continue_on_error: true
+        target:
+          entity_id: "{{ satellites }}"
+        data:
+          message: "{{ appliance ~ ' ' ~ done_words ~ '. ' ~ message }}"

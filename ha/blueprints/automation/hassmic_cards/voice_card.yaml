@@ -1,0 +1,48 @@
+blueprint:
+  name: Echo Show cards — answer a question with a card
+  description: >-
+    A sentence spoken to an Echo Show answers with a few words and a card on the Echo that heard it: a dashboard card
+    (entities, a to-do list, a calendar, a camera...) or one of the card library's by name.
+  domain: automation
+  source_url: https://github.com/Gamer92000/echo-dot-assist/blob/main/ha/blueprints/automation/hassmic_cards/voice_card.yaml
+  input:
+    sentences:
+      name: Sentences
+      description: What to say ([optional] words and (one|other) choices as in sentence triggers)
+      selector:
+        text:
+          multiple: true
+    answer:
+      name: Spoken answer
+      default: Here it is.
+      selector:
+        text:
+    card:
+      name: Card
+      description: A dashboard card's YAML, or a card library name
+      selector:
+        object:
+    timeout:
+      name: Seconds on screen after the answer
+      default: 30
+      selector:
+        number: {min: 5, max: 600, unit_of_measurement: s}
+
+mode: parallel
+
+triggers:
+  - trigger: conversation
+    command: !input sentences
+
+actions:
+  - set_conversation_response: !input answer
+  - if: "{{ trigger.device_id | default('', true) | length > 0 }}"
+    then:
+      - action: hassmic_cards.show
+        continue_on_error: true
+        target:
+          device_id: "{{ trigger.device_id }}"
+        data:
+          scope: request
+          timeout: !input timeout
+          card: !input card

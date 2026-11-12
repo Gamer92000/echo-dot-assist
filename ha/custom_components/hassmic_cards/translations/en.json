@@ -1,0 +1,321 @@
+{
+  "issues": {
+    "voice_cards": {
+      "title": "hassmic cards: no cards for voice requests",
+      "description": "This Home Assistant has no chat log subscription or no conversation id on its assist satellites, which hassmic cards needs to know what a voice request did and which Echo asked. Voice cards are off; hassmic_cards.show still works. An update of hassmic cards may be needed for this Home Assistant version."
+    },
+    "yaml": {
+      "title": "hassmic cards: YAML configuration imported",
+      "description": "The `hassmic_cards:` settings in configuration.yaml were imported into the integration (Settings → Devices & services → Echo Show cards, its options). Remove them from configuration.yaml and restart Home Assistant."
+    }
+  },
+  "services": {
+    "show": {
+      "name": "Show a card",
+      "description": "A dashboard card (entities, glance, tile, weather-forecast, markdown, picture-entity, picture-glance, picture, todo-list, calendar), or one of the card library's by name, on Echo Shows' screens. No target: every Echo Show. Answers with the card's id and the Shows it went to.",
+      "fields": {
+        "card": {
+          "name": "Card",
+          "description": "The card as a dashboard takes it (type and its options), or the name of one of the card library's"
+        },
+        "id": {
+          "name": "Id",
+          "description": "The same id again updates the card in place; hassmic_cards.clear takes it away by its id"
+        },
+        "title": {
+          "name": "Title",
+          "description": "In place of the card's own"
+        },
+        "subtitle": {
+          "name": "Subtitle",
+          "description": "Under the title"
+        },
+        "message": {
+          "name": "Message",
+          "description": "Text beside a picture card's picture"
+        },
+        "timeout": {
+          "name": "Timeout",
+          "description": "How long it shows; 0 until tapped away or cleared"
+        },
+        "scope": {
+          "name": "Scope",
+          "description": "notice (an automation's card) or request (a voice request's: shows while the request is this Echo's, then timeout seconds)"
+        },
+        "conversation_id": {
+          "name": "Conversation",
+          "description": "A request's card only for this conversation"
+        },
+        "actions": {
+          "name": "Buttons",
+          "description": "Up to 3 buttons, as a phone notification's actions: action (an id), title, and optionally perform_action with data, keep (stays after a press), snooze (minutes: the card goes and comes back). A press fires hassmic_cards_action and the Show's Card button entity"
+        },
+        "variables": {
+          "name": "Variables",
+          "description": "For a card's templates: {{ name }} in its strings"
+        }
+      },
+      "sections": {
+        "advanced": {
+          "name": "Advanced"
+        }
+      }
+    },
+    "clear": {
+      "name": "Clear a card",
+      "description": "Takes a card off Echo Shows' screens: by its id (wherever it shows; a target narrows it), or with no id whatever the target's Shows show.",
+      "fields": {
+        "id": {
+          "name": "Id",
+          "description": "The card's id (as given to show, or answered by it)"
+        }
+      }
+    },
+    "show_message": {
+      "name": "Show a message",
+      "description": "A message card from plain fields: a title and words, a camera's picture (moving while it shows) or an image, up to 3 buttons. No target: every Echo Show. Answers with the card's id and the Shows it went to.",
+      "fields": {
+        "title": {
+          "name": "Title",
+          "description": "At the top of the card"
+        },
+        "message": {
+          "name": "Message",
+          "description": "The words (beside the picture, if there is one)"
+        },
+        "subtitle": {
+          "name": "Subtitle",
+          "description": "Under the title"
+        },
+        "camera": {
+          "name": "Camera",
+          "description": "Its picture on the card"
+        },
+        "live": {
+          "name": "Moving picture",
+          "description": "The camera's picture refreshed while the card shows (off: the one picture)"
+        },
+        "image": {
+          "name": "Image",
+          "description": "A picture's URL (/local/... or http(s)://...), in place of a camera's"
+        },
+        "id": {
+          "name": "Id",
+          "description": "The same id again updates the card in place; hassmic_cards.clear takes it away by its id"
+        },
+        "timeout": {
+          "name": "Timeout",
+          "description": "How long it shows; 0 until tapped away or cleared"
+        },
+        "button_1": {
+          "name": "Button 1",
+          "description": "Its label"
+        },
+        "button_2": {
+          "name": "Button 2",
+          "description": "Its label"
+        },
+        "button_3": {
+          "name": "Button 3",
+          "description": "Its label"
+        },
+        "button_1_action": {
+          "name": "Button 1 action",
+          "description": "The id a press fires hassmic_cards_action with (empty: made from the card's id)"
+        },
+        "button_2_action": {
+          "name": "Button 2 action",
+          "description": "The id a press fires hassmic_cards_action with (empty: made from the card's id)"
+        },
+        "button_3_action": {
+          "name": "Button 3 action",
+          "description": "The id a press fires hassmic_cards_action with (empty: made from the card's id)"
+        },
+        "button_1_snooze": {
+          "name": "Button 1 snooze",
+          "description": "Minutes: a press takes the card away and brings it back after them"
+        },
+        "button_2_snooze": {
+          "name": "Button 2 snooze",
+          "description": "Minutes: a press takes the card away and brings it back after them"
+        },
+        "button_3_snooze": {
+          "name": "Button 3 snooze",
+          "description": "Minutes: a press takes the card away and brings it back after them"
+        }
+      },
+      "sections": {
+        "buttons": {
+          "name": "Buttons"
+        }
+      }
+    }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "Echo Show cards",
+        "description": "Cards on the screens of Echo Shows running hassmic: for voice requests, and from automations (hassmic_cards.show).",
+        "data": {
+          "voice_cards": "Cards for voice requests",
+          "timeout": "Voice card timeout",
+          "room_entities": "Rows on a voice card",
+          "library": "Card library dashboard"
+        },
+        "data_description": {
+          "voice_cards": "A card on the Show that was asked: what a request did, the weather, what was asked about. Each Show also has its own Voice cards switch",
+          "timeout": "How long a voice request's card stays once the Show is idle again",
+          "room_entities": "A voice request's card: what it did, then the rest of its room, up to this many rows",
+          "library": "The dashboard whose views are named cards (a view's URL is its card's name; its first card is the card). Create it in Settings → Dashboards"
+        },
+        "sections": {
+          "advanced": {
+            "name": "Advanced",
+            "data": {
+              "weather_tools": "LLM weather tools (a pattern)"
+            },
+            "data_description": {
+              "weather_tools": "A regular expression: an LLM tool whose name matches it answers about the weather (its card: the forecast)"
+            }
+          }
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Echo Show cards is already set up."
+    },
+    "error": {
+      "invalid_pattern": "Not a valid regular expression",
+      "no_dashboard": "There is no such dashboard (a storage-mode one, in Settings → Dashboards)"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Echo Show cards",
+        "data": {
+          "voice_cards": "Cards for voice requests",
+          "timeout": "Voice card timeout",
+          "room_entities": "Rows on a voice card",
+          "library": "Card library dashboard"
+        },
+        "data_description": {
+          "voice_cards": "A card on the Show that was asked: what a request did, the weather, what was asked about. Each Show also has its own Voice cards switch",
+          "timeout": "How long a voice request's card stays once the Show is idle again",
+          "room_entities": "A voice request's card: what it did, then the rest of its room, up to this many rows",
+          "library": "The dashboard whose views are named cards (a view's URL is its card's name; its first card is the card). Create it in Settings → Dashboards"
+        },
+        "sections": {
+          "advanced": {
+            "name": "Advanced",
+            "data": {
+              "weather_tools": "LLM weather tools (a pattern)"
+            },
+            "data_description": {
+              "weather_tools": "A regular expression: an LLM tool whose name matches it answers about the weather (its card: the forecast)"
+            }
+          }
+        }
+      }
+    },
+    "error": {
+      "invalid_pattern": "Not a valid regular expression",
+      "no_dashboard": "There is no such dashboard (a storage-mode one, in Settings → Dashboards)"
+    }
+  },
+  "entity": {
+    "event": {
+      "card_button": {
+        "name": "Card button",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "pressed": "Pressed"
+            }
+          },
+          "action": {
+            "name": "Action"
+          },
+          "card": {
+            "name": "Card"
+          }
+        }
+      }
+    },
+    "sensor": {
+      "card_on_screen": {
+        "name": "Card on screen",
+        "state_attributes": {
+          "card": {
+            "name": "Card"
+          },
+          "title": {
+            "name": "Title"
+          },
+          "since": {
+            "name": "Since"
+          },
+          "refused": {
+            "name": "Last refused"
+          },
+          "refused_at": {
+            "name": "Refused at"
+          },
+          "scope": {
+            "name": "Scope",
+            "state": {
+              "notice": "Notice",
+              "request": "Request"
+            }
+          }
+        },
+        "state": {
+          "none": "None"
+        }
+      }
+    },
+    "switch": {
+      "voice_cards": {
+        "name": "Voice cards"
+      }
+    },
+    "notify": {
+      "screen": {
+        "name": "Screen"
+      },
+      "all_screens": {
+        "name": "All Echo Show screens"
+      }
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "card_button": "A button on a card pressed"
+    },
+    "extra_fields": {
+      "action": "Button (its action, empty: any)"
+    }
+  },
+  "selector": {
+    "scope": {
+      "options": {
+        "notice": "Notice (an automation's card)",
+        "request": "Request (a voice request's card: shows while the request is the Show's, then for the timeout)"
+      }
+    }
+  },
+  "exceptions": {
+    "no_show": {
+      "message": "The target names no Echo Show running hassmic."
+    },
+    "card": {
+      "message": "The card can't be shown: {error}"
+    },
+    "empty_message": {
+      "message": "A message needs a title, words, a camera or an image."
+    },
+    "not_set_up": {
+      "message": "Echo Show cards is not set up (Settings → Devices & services)."
+    }
+  }
+}
