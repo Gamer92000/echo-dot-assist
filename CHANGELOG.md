@@ -52,7 +52,8 @@ What changed for people using the Echo, newest first. Details and measurements a
   test the connection against Amazon's servers; the satellite's firewall blocks them, so the test always failed and
   the diagnostics then disconnected and reconnected the Wi-Fi (a few seconds each time, every link to Home Assistant
   and Music Assistant dropped, music stopped and restarted), and their watchdog turned the Wi-Fi off and on when the
-  test never passed. The satellite now switches both off.
+  test never passed. The satellite now switches both off. The other Echo Shows and the Echo Input have the same
+  diagnostics and get the same change, not tried on them yet.
 
 ## 2026-11-10
 

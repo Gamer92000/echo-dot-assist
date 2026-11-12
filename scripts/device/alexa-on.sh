@@ -27,5 +27,19 @@ if [ -f $SETTINGS ]; then
     done < $SETTINGS
     rm -f $SETTINGS
 fi
+# The broadcasts main.sh's android_tell sent (device.conf ANDROID_BROADCASTS, booleans in system_server's memory only):
+# stock's are on (the diagnostics ran and bounced the link, checkers 2026-11-11), so each goes again as true.  Only
+# once boot completed: a framework still starting has stock's anyway, and am would wait on it.  Nothing kept to retry:
+# one that does not arrive leaves the diagnostics off only until system_server's next start, which has stock's again.
+if [ -n "$ANDROID_BROADCASTS" ] && command -v am > /dev/null; then
+    if [ "$(getprop sys.boot_completed)" = 1 ]; then
+        to=; command -v timeout > /dev/null && to="timeout 10"
+        for t in $ANDROID_BROADCASTS; do
+            act=${t%%/*} kv=${t#*/}
+            $to am broadcast -a "$act" --ez "${kv%%=*}" true < /dev/null 2>&1 | grep -q 'Broadcast completed' ||
+                { echo "alexa-on: $act not sent"; break; }
+        done
+    else echo "alexa-on: Android still starting, broadcasts left out (a new system_server has stock's)"; fi
+fi
 # the rows hassmic's light band kept for itself (ring_band.c): the whole screen the apps' again
 [ -n "$SCREEN_BAND" ] && wm overscan reset < /dev/null > /dev/null 2>&1

@@ -577,23 +577,46 @@ psk_only() {
 
 # Android's framework, told things by broadcast (device.conf ANDROID_BROADCASTS, "action/extra=true|false" each, sent as
 # booleans): what they set lives in system_server's memory only, so they go again whenever it is a new one (its pid,
-# once boot completed; the receivers are registered by then).  Checkers: Amazon's WifiDiagsUtil (fosservices) tests the
-# link against Amazon's captive portal hosts every few minutes; behind the egress lock that always fails, and it "bounces"
-# the network: wpa_supplicant deauthenticates (reason 3, locally generated, the signal at -36 dBm) and joins again ~4 s
-# later, every link to Home Assistant, Sendspin and the arbitration network dropped with it (2026-11-11: 14:37, 15:11,
-# 15:14).  Its config receiver (registered with no permission) takes "val" for SET_ENABLENETBOUNCE and
-# SET_ENABLEWIFIDIAGS.  Never TRIGGERNETRECOVERY: that one ends system_server (System.exit)
-android_told=
+# once boot completed).  Checkers: Amazon's WifiDiagsUtil (fosservices) tests the link against Amazon's captive portal
+# hosts every few minutes; behind the egress lock that always fails, and it "bounces" the network: wpa_supplicant
+# deauthenticates (reason 3, locally generated, the signal at -36 dBm) and joins again ~4 s later, every link to Home
+# Assistant, Sendspin and the arbitration network dropped with it (2026-11-11: 14:37, 15:11, 15:14).  Its config
+# receiver (registered with no permission) takes "val" for SET_ENABLENETBOUNCE and SET_ENABLEWIFIDIAGS; which a model
+# sends is its device.conf's (athena's receiver has no SET_ENABLENETBOUNCE, so only the other).  What keeps
+# both its bounce and NetWatchDog's Wi-Fi restart away is the persistent setting smartconn_status (ANDROID_SETTINGS);
+# these stop the tests themselves besides: with mEnableWifiDiags false the handler's RUN_TEST_CONTINUOUSLY logs
+# "doNothing" and does not schedule the next one (fosservices of checkers, cronos, crown, cupcake, athena).  Never
+# TRIGGERNETRECOVERY: that one ends system_server (System.exit).
+# A new system_server registers its receivers some seconds after it starts, and sys.boot_completed stays 1 when only
+# the framework restarted: am says "Broadcast completed" with no receiver too, so a broadcast sent at once could be
+# lost and the pid still counted as told.  Hence 3 rounds of netwatch (>= 30 s) after a pid is first seen: a margin
+# picked, not measured (the receivers' registration after a framework restart has not been timed on any model); a
+# broadcast lost anyway costs only the stop of the tests, the setting keeps the resets away.  am is a Java program
+# (~2 s each, checkers) and could hang on a framework half up: 10 s at most, and the first failure ends the attempt, so
+# netwatch waits 10 s at worst; the next attempt 6 rounds later, logged once per system_server (one that never takes
+# them would otherwise write a line a minute for good).  alexa-on.sh sends them back on.
+android_told= android_seen= android_wait=0 android_failed=
 android_tell() {
-    local ss t act kv ok=1
+    local ss t to act kv out rc ok=1
     [ -n "$ANDROID_BROADCASTS" ] && command -v am > /dev/null || return 0
     [ "$(getprop sys.boot_completed)" = 1 ] || return 0
     ss=$(pidof system_server) && [ -n "$ss" ] && [ "$ss" != "$android_told" ] || return 0
+    [ "$ss" = "$android_seen" ] || { android_seen=$ss android_wait=3; }
+    [ $android_wait -gt 0 ] && { android_wait=$((android_wait - 1)); return 0; }
+    to=; command -v timeout > /dev/null && to="timeout 10"
     for t in $ANDROID_BROADCASTS; do
         act=${t%%/*} kv=${t#*/}
-        am broadcast -a "$act" --ez "${kv%%=*}" "${kv#*=}" 2>&1 | grep -q 'Broadcast completed' || { ok=; echo "netwatch: $act not sent"; }
+        out=$($to am broadcast -a "$act" --ez "${kv%%=*}" "${kv#*=}" < /dev/null 2>&1); rc=$?
+        case "$out" in *'Broadcast completed'*) continue;; esac
+        ok=
+        [ "$android_failed" = "$ss" ] && break
+        if [ $rc = 124 ]; then echo "netwatch: $act not sent: am timed out"
+        else echo "netwatch: $act not sent: $(echo "$out" | tail -n 1 | tr -d '\r' | cut -c1-120)"; fi
+        break
     done
-    [ -n "$ok" ] && { android_told=$ss; echo "netwatch: Android told: $(echo $ANDROID_BROADCASTS | sed 's/com\.amazon\.android\.service\.//g')"; }
+    if [ -n "$ok" ]; then
+        android_told=$ss; echo "netwatch: Android told: $(echo $ANDROID_BROADCASTS | sed 's/com\.amazon\.android\.service\.//g')"
+    else android_wait=6 android_failed=$ss; fi
 }
 
 # While the settings page switches networks (wifi.sh holds its lock), the link is that script's business: no wifisvc.
