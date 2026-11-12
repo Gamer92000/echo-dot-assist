@@ -263,6 +263,7 @@ void toast(struct scene *s, int id, const char *msg);
 
 /* face.c */
 int  face_calm(struct scene *s);                                /* nothing asks for attention: idle, mic off, do not disturb */
+int  face_setup(struct scene *s);                               /* the setup screen (not set up, or stock's setup pattern) */
 int  face_view(struct scene *s, float dt);                      /* still moving */
 long long face_due(struct scene *s);
 int  face_act(struct scene *s, int a, int arg, int ev);

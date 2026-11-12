@@ -59,7 +59,8 @@
  *   img <key> <bytes> <size>       (the platform's: an image asked for, JPEG or PNG, at that size; 0 bytes: none)
  *   ping <n>                       answered "pong <n>" (every 3 s; none within 10 s: the UI is taken for hung, restarted)
  *   wo <words 0|1> <timers 0|1> <hold s>     the settings "Speech on screen", "Timers on screen", "Speech stays for"
- *   ck <0|1>                       the setting "Big clock": the idle face is the time and date across the screen (face.c)
+ *   ck <on 0|1> <minutes>          the settings "Clock when idle" and "Screen sleeps after" (0 never): the clock across
+ *                                  the screen in place of dark, once nothing happened that long (face.c)
  *   wh <text>, wr <text>, ws <ms|-1>   what was said, the reply, and how long ago the satellite was idle again (-1: not
  *                                  yet); sent together, in that order, whenever one changes
  *   tl <n> <seq>\t<left ms> <total s> <active 0|1> <name>...   the running timers (the name: its length where it has none)
@@ -69,6 +70,8 @@
  *   words clear                    the words tapped away (words.c): gone in hassmic too, a new UI gets none
  *   timers hide <seq>              the running timers of that "tl" tapped away: the screen not held on for them until
  *                                  they change
+ *   front <0|1>                    1: our own face in front and waiting (no music page, drawer, request, setup): the
+ *                                  screen saver's timeout is the UI's, ring_band.c holds the screen on; 0: the screen's own
  *   app <package>\t<label>\t<system 0|1> ... apps.    every launchable app, as listed at start (the page's home app choice)
  *   ml <req> <what> <offset> [<arg>]   a list: artists albums playlists tracks radios podcasts audiobooks recent queue,
  *                                  album_tracks artist_albums artist_tracks playlist_tracks podcast_episodes <uri>,

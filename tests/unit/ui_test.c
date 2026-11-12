@@ -100,6 +100,8 @@ static void answer(const char *l)
 
 static int sent_has(const char *l) { for (int i = 0; i < nsent; i++) if (!strcmp(sent[i], l)) return 1; return 0; }
 static int sent_prefix(const char *l) { for (int i = 0; i < nsent; i++) if (!strncmp(sent[i], l, strlen(l))) return 1; return 0; }
+/* the last "front" the UI said since nsent = 0: 1, 0, or -1 none */
+static int front_last(void) { int f = -1; for (int i = 0; i < nsent; i++) if (!strncmp(sent[i], "front ", 6)) f = atoi(sent[i] + 6); return f; }
 
 static double secs(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 static int frames, drawn_px; static double t_inc, t_full, worst;
@@ -276,8 +278,9 @@ int main(int argc, char **argv)
                                                                    back, said why, and the touch did nothing else */
     nsent = 0; run(61000); assert(S->saver_on && sent_has("log screen saver: the clock, nothing for 1 min"));
     nsent = 0; msg("p+ active-start"); run(400); assert(!S->saver_on); ppm("clock_listening", inc);
-    assert(nsent == 1 && sent_has("log screen saver: the face again: the pattern active-start"));   /* once, not each frame */
-    msg("p- active-start"); msg("p+ active-end"); run(1000); assert(!S->saver_on);
+    assert(nsent == 1 && sent_has("log screen saver: the face again: the pattern active-start"));   /* once, not each frame;
+                                                                   no "front": a request keeps the UI's count */
+    nsent = 0; msg("p- active-start"); msg("p+ active-end"); run(1000); assert(!S->saver_on && front_last() == -1);
     run(61000); assert(S->saver_on);
     msg("mute 1"); msg("p+ mics-off_on"); run(500); assert(!S->saver_on);
     run(61000); assert(S->saver_on); ppm("clock_muted", inc);
@@ -289,6 +292,19 @@ int main(int argc, char **argv)
     msg("mp 0 0 0 1000"); msg("mp 2 0 0 1000"); run(300); assert(S->saver_on);   /* stopped, paused: the clock stays */
     msg("mp 1 0 0 1000"); run(300); assert(!S->saver_on);       /* playing: the face */
     msg("mp 0 0 0 1000"); run(300);
+    /* the clock only takes the face's place: the music page (left paused, or opened by hand) and the setup screen keep
+     * the screen's own timeout ("front 0"), or they would never go dark; the face again: the UI's, counted from then */
+    nsent = 0; music_show(S, 0); run(300); assert(S->view == V_MUSIC && front_last() == 0);
+    run(70000); assert(!S->saver_on);
+    nsent = 0; go_home(S, V_FACE); run(300); assert(S->view == V_FACE && front_last() == 1);
+    run(59000); assert(!S->saver_on);                           /* (the count from the face's return, not from before) */
+    run(2000); assert(S->saver_on);
+    nsent = 0; scene_top(S, "org.example.app03", now); run(300);  /* an app over the clock: said, the timeout Android's */
+    assert(front_last() == 0 && sent_has("log screen saver: the face again: org.example.app03 in front"));
+    nsent = 0; scene_top(S, UI_HOME_PKG, now); run(300); assert(front_last() == 1 && !S->saver_on);
+    nsent = 0; msg("oobe 1"); run(300); assert(front_last() == 0);
+    run(70000); assert(!S->saver_on);                           /* (the setup screen: never the clock either) */
+    nsent = 0; msg("oobe 0"); run(300); assert(front_last() == 1);
     msg("ck 1 0"); run(70000); assert(!S->saver_on);           /* never sleeps: the face stays */
     msg("ck 0 5"); run(500);
     f0 = frames; run(10000); assert(frames - f0 > 2);          /* the eyes blink again */

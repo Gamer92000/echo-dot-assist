@@ -53,8 +53,8 @@ int  screen_keep_on(void);
 /* The idle screen: screen_sleep_min, "Screen sleeps after" (minutes, 0 never; stock's 5 by default, ring_band.c's
  * timeout), and screen_clock, "Clock when idle": once that timeout is up, the time and date across the screen in place
  * of the screen going dark (the UI's face.c keeps the time; a touch wakes the face).  -1 where there is no screen;
- * set < 0 reads.  screen_saver: the clock is on and our own screen is in front (not an app), so the screen itself
- * stays on and the UI does the timeout. */
+ * set < 0 reads.  screen_saver: the clock is on and the UI says its face is in front (no app, music page, drawer or
+ * setup screen: "front 1"), so the screen itself stays on and the UI does the timeout. */
 int  screen_clock(int set);
 int  screen_sleep_min(int set);
 int  screen_saver(void);

@@ -14,8 +14,8 @@ ESPHome API:
   - the UI's "words clear" (tapped away) clears them in hassmic; its "timer stop" stops a ring; its "timers hide" lets
     the screen sleep until the timers change
   - the screen saver: "Screen sleeps after" and "Clock when idle" told as "ck"; with the clock on and the UI's
-    "front 1" the screen is held on (the UI shows the clock when the timeout is up), with an app in front it sleeps
-    as before, 0 minutes never
+    "front 1" (its face in front) the screen is held on (the UI shows the clock when the timeout is up), with an app
+    in front it sleeps as before, 0 minutes never
 """
 import asyncio, os, re, sys, tempfile
 from aioesphomeapi import VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm
