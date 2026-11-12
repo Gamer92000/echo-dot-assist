@@ -105,6 +105,26 @@ async def main():
             if len(t) == 73: return t
         return t
 
+    # An Echo where hassmic may not write the ring (every other model: no ring_frame; a Dot 3 before root's main.sh
+    # gave the file): "Light ring live" set on in its config all the same, and nothing of it anywhere
+    env_off = dict(env); env_off.pop("HASSMIC_FAKE_FRAME")
+    with open(os.path.join(state, "config"), "w") as f: f.write("ring_live=on\n")
+    p0 = subprocess.Popen([HOST, "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-W", "0", "-a", "0", "-z", "0", "-o", "0"],
+                          env=env_off, stderr=open(os.path.join(tmp, "log-off"), "w"))
+    try:
+        c = await connect()
+        ents, services = await c.list_entities_services()
+        ring0 = next((e for e in ents if isinstance(e, LightInfo) and e.object_id == "light_ring"), None)
+        check(not [e for e in ents if e.object_id.startswith("light_ring_led_") or e.object_id == "light_ring_design"]
+              and not [s for s in services if s.name in ("light_ring_frame", "light_ring_animation", "light_ring_design", "light_ring_stop")]
+              and ring0 is not None and list(ring0.effects) == ["None", "Pulse", "Spin", "Blink", "Rainbow"],
+              f"not writable here: no live entity or action, \"Light ring\" as before ({ring0 and list(ring0.effects)})")
+        await c.disconnect()
+    finally:
+        p0.terminate(); p0.wait()
+    check(read() == DARK and "drawn by the live ring" not in open(os.path.join(tmp, "log-off")).read(), "  the ring's frame untouched, the palette's light as before")
+    os.unlink(os.path.join(state, "config"))
+
     # Off (the default): nothing of it in Home Assistant, the frame untouched
     proc = start()
     try:
