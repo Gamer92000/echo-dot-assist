@@ -48,6 +48,12 @@ What changed for people using the Echo, newest first. Details and measurements a
   with that Echo: not in the settings file, and a factory reset removes it. The name at the top now opens a list of
   your other Echos with their notes: pick one and its settings page opens on the same page you are on. Suggested by
   baudneo.
+- **Echo Show 5: Wi-Fi no longer drops every few minutes.** Amazon's Wi-Fi diagnostics, still running inside Android,
+  test the connection against Amazon's servers; the satellite's firewall blocks them, so the test always failed and
+  the diagnostics then disconnected and reconnected the Wi-Fi (a few seconds each time, every link to Home Assistant
+  and Music Assistant dropped, music stopped and restarted), and their watchdog turned the Wi-Fi off and on when the
+  test never passed. The satellite now switches both off. The other Echo Shows and the Echo Input have the same
+  diagnostics and get the same change, not tried on them yet.
 
 ## 2026-11-10
 
