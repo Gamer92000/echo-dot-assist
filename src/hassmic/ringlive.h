@@ -30,9 +30,14 @@ int  ringlive_available(void);
 /* The Echo's own state is set up (main.c, after settings_load: the mute latch, the mics-off ring, the setup spinner): what
  * the last run of this boot left lit is made dark now, unless one of those shows (the marker, ringlive.c) */
 void ringlive_begin(void);
-/* One of the Echo's own patterns was just set (main.c led(), the mute): SIGTERM's handler leaves the ring alone until
- * the writer looked again, and the writer looks at once */
+/* One of the Echo's own patterns is about to be set (main.c led(), the mute): no frame of ours is written from here
+ * until ringlive_yield_end, and one being written is waited for (one sysfs write, ~15 ms measured: the I2C bus), so
+ * ledcontroller's frame for the pattern always lands after ours (a static one, listening, it never writes again).
+ * SIGTERM's handler leaves the ring alone until the writer looked again, and the writer looks at once.  Nests; any
+ * thread, any lock held but ringlive's (core_lock is: led() runs under it; the writer takes no lock inside its write,
+ * so keep it so).  Only patterns ring.c tracks hold the writer off after (ring_busy: SHOWN_MAX of them, 24) */
 void ringlive_yield(void);
+void ringlive_yield_end(void);          /* after ring_set: ring_busy() now holds the writer off */
 /* "Light ring live" on or off: on, the live ring also draws Home Assistant's "Light ring" (ring.c's state, its exact
  * colour, the live effects, its fill) under the LEDs' own lights; off, all of it off and the palette back */
 void ringlive_enable(int on);

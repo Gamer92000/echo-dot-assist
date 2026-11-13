@@ -612,15 +612,18 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   ring design" (`rd_names`, re-listed when the names change: `rd_generation`, main.c `live_names_check`).  Layers:
   "Light ring" (ring.c keeps its state; `ring_light_live` makes ring.c play no palette pattern, `ring_light_now`;
   `ringlive_effect`: the palette's five and `RING_LIVE_EFFECTS`; the six music ones `ringlive_music_effect` from
-  `musiclight.c`: the PCM fed by sendspin.c, a2dp.c and main.c's play_media path with its output's queue; 12 biquad
+  `musiclight.c`: the PCM fed by sendspin.c, a2dp.c and main.c's play_media path with its output's queue (the TTS
+  stream's modelled in `playback_thread`: written minus real time, as `s_queued_us`); 12 biquad
   bands against running ranges, the level and L/R as punch against 1.5 s, kick/snare/hi-hat from log-amplitude flux
   with level gates, tempo by autocorrelation, a beat grid locked to the kicks (phase by circular mean, then a PLL), the
   accent every 4 beats; each reading stamped when heard; only while a music effect shows, `musiclight_want`.  Measured
   by `make unit-ringviz`: tools/ringmusic.py's track with its drums written down, build/ringviz, tools/ringviz.py
   (scores, and effects.png to look at)), the LED lights over it, an animation over all; HA's
   transition (LightCommand 14/15, else `LIVE_FADE_MS`) as a fade in seen space (`ringlive_fade`).  SIGTERM and
-  `ringlive_shutdown`: the dark frame, never while the Echo's own pattern shows (main.c `led()` and the mute call
-  `ringlive_yield` first: the handler leaves the ring alone until the writer looked); init's stop kills outright (a
+  `ringlive_shutdown`: the dark frame, never while the Echo's own pattern shows (main.c `led()` and the mute bracket
+  `ring_set` with `ringlive_yield`/`_yield_end`: no frame of ours starts in between and one in flight is waited for
+  (`write_lock`), so ledcontroller's frame for a static pattern lands after ours; the handler leaves the ring alone
+  until the writer looked; only in hassmic's own pid, not a child forked without exec); init's stop kills outright (a
   moving effect stays frozen), so `state/ring-live` (the boot id; written once a run when ours first shows, never per
   frame: /data is flash; deleted at a clean end) has the next start in the same boot make the ring dark at
   `ringlive_begin` (main.c after settings_load: the mute and the Echo's own known), unless `live_hold` then.  Page: `POST /api/ring/live` (a design's text, as drawn; empty: stop), `live` in

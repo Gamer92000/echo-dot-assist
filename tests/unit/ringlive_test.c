@@ -281,6 +281,24 @@ int main(void)
     msleep(400); get(t, sizeof t);
     check(!strcmp(t + 66, "0000FD\n"), "after it: ours back");
 
+    /* main.c led(): yield before ring_set, its end after.  In between, with hold not yet set (ring_set's busy comes
+     * later), not one frame of ours: else one in flight could land after ledcontroller's static pattern and stay */
+    ringlive_yield(); w0 = ringlive_writes();
+    put(frame, dark); char cy[12][16] = { "#00ff00" }; ringlive_frame(cy, 1, 1, 0, e, sizeof e);
+    msleep(400);
+    check(ringlive_writes() == w0, "between ringlive_yield and its end: not one write");
+    hold = 1; ringlive_yield_end(); msleep(300);
+    check(ringlive_writes() == w0, "  its end with the pattern shown: still none");
+    hold = 0; msleep(400); get(t, sizeof t);
+    check(ringlive_writes() > w0 && !strcmp(t + 66, "00FD00\n"), "  the pattern gone: ours back");
+    /* nested (the mute's yield around led()'s own): only the outer end lets ours back, and the count comes back to 0 */
+    ringlive_yield(); ringlive_yield(); w0 = ringlive_writes();
+    put(frame, dark); ringlive_frame(c, 3, 1, 0, e, sizeof e); ringlive_yield_end(); msleep(400);
+    check(ringlive_writes() == w0, "nested yields: the inner end lets nothing through");
+    ringlive_yield_end(); msleep(400); get(t, sizeof t);
+    check(ringlive_writes() > w0 && !strcmp(t + 66, "0000FD\n"), "  the outer end: ours back");
+    ringlive_frame(c, 3, 1, 0, e, sizeof e); msleep(300);
+
     /* ledcontroller writes over ours without hassmic knowing: put back within a check */
     put(frame, dark); msleep(350); get(t, sizeof t);
     check(!strcmp(t + 66, "0000FD\n"), "written over: put back");

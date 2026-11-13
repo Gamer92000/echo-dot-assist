@@ -387,7 +387,7 @@ static void led_run(const char *op, const char *pattern) { ledq_run(op, pattern)
 static void led(const char *op, const char *pattern)
 {
     if (!pattern) return;
-    if (!strcmp(op, "-s")) { ringlive_yield(); ring_set(pattern); } else ring_unset(pattern);
+    if (!strcmp(op, "-s")) { ringlive_yield(); ring_set(pattern); ringlive_yield_end(); } else ring_unset(pattern);
     screen_led(op, pattern);                        /* the face on a screen says the same (screen.h) */
 }
 
@@ -2123,6 +2123,8 @@ static void q_push(int kind, int media, unsigned rate, unsigned ch, const void *
 static void *playback_thread(void *arg)
 {
     int open = 0, play_media = 0, play_ch = 1; unsigned play_rate = 0;
+    long long play_t0 = 0, play_frames = 0;     /* the TTS stream's queue as the mixer's music queue is modelled
+                                                 * (audio_mixer.c s_queued_us): written minus what real time played */
     (void)arg;
     for (;;) {
         pthread_mutex_lock(&q_lock);
@@ -2141,7 +2143,7 @@ static void *playback_thread(void *arg)
         case Q_START:
             if (open) play_close(1);        /* e.g. announcement chime followed by the message */
             tts_kind(it->media);            /* the TTS stream's volume for what comes now */
-            play_media = it->media; play_rate = it->rate; play_ch = it->ch;
+            play_media = it->media; play_rate = it->rate; play_ch = it->ch; play_t0 = 0; play_frames = 0;
             open = play_open(it->rate, it->ch) == 0;
             if (open) { atomic_store(&tts_on, 1); playback_hint(); }
             if (!open) fprintf(stderr, "play: open %u Hz x%u failed\n", it->rate, it->ch);
@@ -2152,8 +2154,17 @@ static void *playback_thread(void *arg)
                 for (size_t i = 0; i < ns; i += 4) e += (double)pcm[i] * pcm[i];
                 screen_level(ns >= 4 && e > 0 ? (int)lround(100 * log10(e / (ns / 4) / (32768.0 * 32768.0))) : -1000);
             }
-            /* Home Assistant's media (play_media) for the ring's music effects; not replies or announcements */
-            if (open && play_media) musiclight_feed((const int16_t *)it->data, it->len / 2 / (play_ch ? play_ch : 1), play_ch, play_rate, 0);
+            /* Home Assistant's media (play_media) for the ring's music effects, stamped with what the stream still
+             * holds in front of it (play_write has no queue of its own to ask); not replies or announcements */
+            if (open && play_media && play_rate) {
+                size_t frames = it->len / 2 / (play_ch ? play_ch : 1);
+                long long now = mono_ms(), q;
+                if (!play_t0) play_t0 = now;
+                q = play_frames * 1000 / play_rate - (now - play_t0);
+                if (q < 0) { play_t0 = now; play_frames = 0; q = 0; }      /* it ran dry: the queue starts again */
+                musiclight_feed((const int16_t *)it->data, frames, play_ch, play_rate, q * 1000);
+                play_frames += (long long)frames;
+            }
             if (open && play_write(it->data, it->len) < 0) { play_close(0); open = 0; }
             break;
         case Q_STOP:
@@ -2722,6 +2733,7 @@ static void mute_latch(int muted, int sound)
     if (!muted && soft_mute) { soft_mute = 0; fprintf(stderr, "soft mute: 0 (released with the button)\n"); }
     mute_update(was, sound);
     pthread_mutex_unlock(&core_lock);
+    ringlive_yield_end();               /* core_muted() holds the writer off now */
 }
 
 static void on_mute(int muted) { mute_latch(muted, 1); }       /* hardware latch changed (button) */

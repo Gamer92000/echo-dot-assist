@@ -45,6 +45,7 @@
 #include <math.h>
 #include <pthread.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -748,7 +749,8 @@ static struct ring_light flash; static long long flash_until;
 static char light_shown[48];                /* what of ours is on the ring for the light, "" none */
 static char led_shown[MAX_LEDS][32];        /* and on each LED's own layer (a fill), "" none */
 static int rotation;                        /* the fill's start, in LEDs from stock's */
-static int live_light;                      /* the live ring draws the light (ringlive.h): no palette pattern for it */
+static atomic_int live_light;               /* the live ring draws the light (ringlive.h): no palette pattern for it;
+                                             * written under lock, read without it by ring_effect_listed (protocols) */
 
 static long long now_ms(void)
 {

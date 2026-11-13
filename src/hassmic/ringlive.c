@@ -47,9 +47,16 @@
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
-static int avail, leds = 12, dirty, enabled, quitting;
+static atomic_int avail;                /* set once by ringlive_start; read from the protocols' threads */
+static int leds = 12, dirty, enabled, quitting;      /* enabled, quitting: under lock */
+static pid_t our_pid;                   /* SIGTERM's handler acts only in hassmic itself, not in a child between fork and
+                                         * exec (ledq.c's ledctrl) */
 static _Atomic int writes, owned_now;   /* owned_now: ours is on the ring (SIGTERM's handler writes the dark frame) */
 static atomic_int yield_gen;            /* the Echo's own pattern was set (ringlive_yield): owned_now waits for the writer */
+static atomic_int yielding;             /* ringlive_yield .. _end: no frame of ours written meanwhile */
+static atomic_int owned_gen;            /* yield_gen our last frame was written under: after any yield since, the ring is
+                                         * not ours until we write again (SIGTERM's handler checks it) */
+static pthread_mutex_t write_lock = PTHREAD_MUTEX_INITIALIZER;     /* a frame write in flight (writer only) */
 static atomic_int leftover;             /* the marker: 1 the last run of this boot left the ring lit, 2 ringlive_begin came */
 static char marker_path[300];
 static char dark_text[TEXT_MAX];
@@ -132,11 +139,23 @@ static int frame_write(const char *t)
     int fd = open(frame_path, O_WRONLY | O_TRUNC | O_CLOEXEC);
     if (fd < 0) return -1;
     size_t n = strlen(t);
-    int rc = write(fd, t, n) == (ssize_t)n ? 0 : -1;    /* sysfs takes a frame in one write */
+    ssize_t k = write(fd, t, n);
+    int rc = k == (ssize_t)n ? 0 : -1;                  /* sysfs takes a frame in one write */
     writes++;
-    int e = errno;
+    int e = k >= 0 && rc ? EIO : errno;                 /* a short write sets no errno of its own */
     close(fd);
     errno = e;
+    return rc;
+}
+
+/* A frame write that never lands after ledcontroller's for a pattern being set (ringlive_yield): read yield_gen,
+ * look at hold_fn, then this.  -2: a yield came or the Echo's own shows, nothing written */
+static int frame_write_guarded(const char *t, int gen, int *err)
+{
+    int rc = -2;
+    pthread_mutex_lock(&write_lock);
+    if (!atomic_load(&yielding) && atomic_load(&yield_gen) == gen) { rc = frame_write(t); *err = errno; }
+    pthread_mutex_unlock(&write_lock);
     return rc;
 }
 
@@ -486,33 +505,36 @@ static void *writer(void *arg)
     long long last_write = 0, last_check = 0, resume_at = 0, backoff_until = 0, fight_t0 = 0;
     int owned = 0, held = 0, fights = 0, failed = 0, marked = 0;
     for (;;) {
-        int yg = atomic_load(&yield_gen);
         if (atomic_load(&leftover) == 2) {      /* what the last run of this boot left lit (the marker) */
             atomic_store(&leftover, 0);
+            int g = atomic_load(&yield_gen), e = 0, rc = -2;
+            if (!owned && !(hold_fn && hold_fn())) rc = frame_write_guarded(dark_text, g, &e);
             if (owned) {}
-            else if (hold_fn && hold_fn()) fprintf(stderr, "light ring live: the last run left the ring lit, but the Echo's own shows now: left to it\n");
-            else if (!frame_write(dark_text)) fprintf(stderr, "light ring live: what the last run left on the ring is dark again\n");
-            if (!marked) unlink(marker_path);
+            else if (rc == -2) fprintf(stderr, "light ring live: the last run left the ring lit, but the Echo's own shows (or comes) now: left to it\n");
+            else if (!rc) fprintf(stderr, "light ring live: what the last run left on the ring is dark again\n");
+            else fprintf(stderr, "light ring live: cannot darken what the last run left (%s)\n", strerror(e));
+            if (!marked && rc != -1) unlink(marker_path);     /* a failed write: the next start tries again */
         }
         int rot = ring_rotation(-1), lvl = level_fn ? level_fn() : 100, next, flashing = 0;
         float seen[MAX_LEDS][3]; struct ring_light rl; memset(&rl, 0, sizeof rl);
         if (lvl < 0) lvl = 0;
         if (lvl > 100) lvl = 100;
-        if (enabled) flashing = ring_light_now(&rl);        /* outside our lock: ring.c's own */
+        pthread_mutex_lock(&lock); int en = enabled; pthread_mutex_unlock(&lock);
+        if (en) flashing = ring_light_now(&rl);             /* outside our lock: ring.c's own */
         /* the music: analysed only while a music effect shows it */
-        int music = enabled && rl.on && !flashing && rl.nleds <= 0 && RING_E_IS_MUSIC(rl.effect);
+        int music = en && rl.on && !flashing && rl.nleds <= 0 && RING_E_IS_MUSIC(rl.effect);
         struct music_feat mf; memset(&mf, 0, sizeof mf);
         musiclight_want(music);
         if (music) musiclight_now(now_ms(), &mf);
         pthread_mutex_lock(&lock);
         long long now = now_ms();
-        int ch = picture(now, rot, &rl, flashing, &mf, seen, &next), content = active_locked() && !quitting;
+        int ch = picture(now, rot, &rl, flashing, &mf, seen, &next), quit = quitting, content = active_locked() && !quit;
         pthread_mutex_unlock(&lock);
         if (ch && changed_fn) changed_fn();
 
         if (content || owned) {
-            if (quitting && held) owned = 0;    /* ending while the Echo's own shows: never written over */
-            else if (hold_fn && hold_fn() && !quitting) {    /* the Echo's own pattern, or muted: hands off, ledcontroller writes */
+            if (quit && held) owned = 0;    /* ending while the Echo's own shows: never written over */
+            else if (hold_fn && hold_fn() && !quit) {    /* the Echo's own pattern, or muted: hands off, ledcontroller writes */
                 if (!held) fprintf(stderr, "light ring live: the Echo's own pattern shows, live waits\n");
                 held = 1; next = next < CHECK_MS ? next : CHECK_MS;
                 owned_now = 0;                  /* the ring is ledcontroller's meanwhile: SIGTERM leaves it alone */
@@ -520,8 +542,8 @@ static void *writer(void *arg)
             else if (held) {                    /* ledcontroller wrote last: ours again, not counted as a fight */
                 held = 0; resume_at = now + RESUME_MS; next = RESUME_MS; text[0] = 0; fights = 0;
             }
-            else if (now < resume_at && !quitting) next = (int)(resume_at - now);
-            else if (now < backoff_until && !quitting) next = (int)(backoff_until - now);
+            else if (now < resume_at && !quit) next = (int)(resume_at - now);
+            else if (now < backoff_until && !quit) next = (int)(backoff_until - now);
             else {
                 unsigned char px[MAX_LEDS][3]; char want[TEXT_MAX];
                 for (int h = 0; h < leds; h++) {
@@ -540,12 +562,19 @@ static void *writer(void *arg)
                         }
                     }
                 }
-                if (need && !quitting && now - last_write < 1000 / RINGLIVE_FPS) { next = (int)(1000 / RINGLIVE_FPS - (now - last_write)); need = 0; }
+                if (need && !quit && now - last_write < 1000 / RINGLIVE_FPS) { next = (int)(1000 / RINGLIVE_FPS - (now - last_write)); need = 0; }
+                /* The last look, then the write under write_lock, which ringlive_yield waits for: a yield begun after
+                 * yg2 was read changed yield_gen (or still counts in yielding), one ended before it left ring_set's
+                 * ring_busy() for hold_fn to see.  So ledcontroller's frame for that pattern always lands after ours.
+                 * Only the write itself is under the lock (no other lock taken there): yield waits ~15 ms at most */
+                int yg2 = atomic_load(&yield_gen), wrc = 0, werr = 0;
                 if (need && hold_fn && hold_fn()) need = 0;     /* the Echo's own came meanwhile: its frame wins */
+                if (need && (wrc = frame_write_guarded(want, yg2, &werr)) == -2) { need = 0; next = 5; }
+                if (need && !wrc) atomic_store(&owned_gen, yg2);
                 if (need) {
                     last_write = last_check = now;
-                    if (frame_write(want)) {
-                        if (!failed) fprintf(stderr, "light ring live: cannot write %s (%s), tries again in 10 s\n", frame_path, strerror(errno));
+                    if (wrc) {
+                        if (!failed) fprintf(stderr, "light ring live: cannot write %s (%s), tries again in 10 s\n", frame_path, strerror(werr));
                         failed = 1; backoff_until = now + 10000;
                     }
                     else {
@@ -557,17 +586,21 @@ static void *writer(void *arg)
                         if (content && !marked) { marker_write(); marked = 1; }     /* once a run (see marker_write) */
                         if (!content) {
                             fprintf(stderr, "light ring live: dark, the ring is ledcontroller's again\n"); text[0] = 0;
-                            if (quitting) { unlink(marker_path); marked = 0; }      /* a clean end: nothing left */
+                            if (quit) { unlink(marker_path); marked = 0; }      /* a clean end: nothing left */
                         }
                         owned = content;
                     }
                 }
             }
         }
-        /* SIGTERM's handler darkens the ring only while ours shows; not if the Echo's own pattern was set since this
-         * round looked (ringlive_yield): the listening ring or the mute's red one would go dark */
-        owned_now = atomic_load(&yield_gen) == yg && owned && !held;
-        if (quitting && !owned) {
+        /* SIGTERM's handler darkens the ring only while ours shows: not during a yield (yielding), nor after one since
+         * our last write (yield_gen moved past owned_gen) until we write again; else the listening ring or the mute's
+         * red one would go dark.  Store, then look again: a yield between the two has its owned_now = 0 win */
+        int og = atomic_load(&owned_gen);
+        owned_now = !atomic_load(&yielding) && atomic_load(&yield_gen) == og && owned && !held
+                    && now_ms() >= backoff_until;   /* backing off: what shows is someone else's */
+        if (atomic_load(&yielding) || atomic_load(&yield_gen) != og) owned_now = 0;    /* one between the look and the store */
+        if (quit && !owned) {
             if (marked && !held) unlink(marker_path);   /* a clean end with the ring dark: nothing for the next start */
             pthread_mutex_lock(&lock); quitting = 2; pthread_cond_broadcast(&cv); pthread_mutex_unlock(&lock); return NULL; }
         if (next < 5) next = 5;
@@ -605,7 +638,9 @@ static char *slurp(const char *file, size_t max, size_t *n)
  * there */
 static void on_term(int sig)
 {
-    if (owned_now) {
+    /* Not under write_lock (an async handler may not wait): a writer's write already past its guard can still land
+     * after this one, and leave ours lit with the marker gone; one write's window, ~15 ms */
+    if (owned_now && !atomic_load(&yielding) && atomic_load(&yield_gen) == atomic_load(&owned_gen) && getpid() == our_pid) {
         int fd = open(frame_path, O_WRONLY | O_TRUNC | O_CLOEXEC);
         if (fd >= 0) { if (write(fd, dark_text, strlen(dark_text)) == (ssize_t)strlen(dark_text)) unlink(marker_path); close(fd); }
     }
@@ -654,6 +689,7 @@ int ringlive_start(int (*hold)(void), int (*level)(void), void (*changed)(void))
     }
     { unsigned char z[MAX_LEDS][3]; memset(z, 0, sizeof z); ringlive_text((const unsigned char (*)[3])z, leds, dark_text); }
     if (avail) return 0;                    /* once: one writer, whatever calls this again */
+    our_pid = getpid();
     signal(SIGTERM, on_term);
     pthread_t th;
     if (pthread_create(&th, NULL, writer, NULL)) { fprintf(stderr, "light ring live: no thread\n"); return -1; }
@@ -671,10 +707,20 @@ void ringlive_begin(void)
     if (atomic_compare_exchange_strong(&leftover, &one, 2)) { pthread_mutex_lock(&lock); poke(); pthread_mutex_unlock(&lock); }
 }
 
-void ringlive_yield(void)
+void ringlive_yield(void)              /* counted whether or not the ring is live: a pair that straddles the start stays a pair */
 {
-    if (!avail) return;
+    atomic_fetch_add(&yielding, 1);
     atomic_fetch_add(&yield_gen, 1); owned_now = 0;
+    if (!avail) return;
+    pthread_mutex_lock(&write_lock); pthread_mutex_unlock(&write_lock);     /* a write in flight is done */
+    pthread_mutex_lock(&lock); poke(); pthread_mutex_unlock(&lock);
+}
+
+void ringlive_yield_end(void)
+{
+    atomic_fetch_add(&yield_gen, 1);        /* a writer that looked at hold_fn before ring_set: its write is off */
+    atomic_fetch_sub(&yielding, 1);
+    if (!avail) return;
     pthread_mutex_lock(&lock); poke(); pthread_mutex_unlock(&lock);
 }
 
@@ -683,10 +729,11 @@ void ringlive_enable(int on)
     pthread_mutex_lock(&lock);
     int was = enabled;
     enabled = on && avail;
+    int now_on = enabled;
     if (!enabled) { rd_free(&anim.d); memset(&anim, 0, sizeof anim); for (int i = 0; i < leds; i++) { led[i].on = 0; off_at[i] = 0; } }
     poke();
     pthread_mutex_unlock(&lock);
-    if (was != enabled || !on) ring_light_live(enabled);    /* ring.c's palette steps aside for us, or comes back */
+    if (was != now_on || !on) ring_light_live(now_on);    /* ring.c's palette steps aside for us, or comes back */
 }
 
 int ringlive_enabled(void) { pthread_mutex_lock(&lock); int e = enabled; pthread_mutex_unlock(&lock); return e; }
