@@ -27,6 +27,13 @@ service list          # Binder services (expect "LedController")
   `586a55` = R/G/B of 127, `ledpwmmaxlimit` `dbffd6`, idme `ledparams`), and `frame` reads back the scaled values.
   `led_current` 0/1/3 (Imax, /2, /4) follows the table too. ledcontroller writes `frame` only when its picture
   changes (never while idle or static), so a frame written by someone else stays until its next change.
+- The Dot 2 (biscuit, measured 2026-11-13) has the same driver and `frame` text, chowned by the same
+  `init.ledcontroller.rc`, but no mute PWM (its mute is the red ring in `frame`) and one table (`default`, pwm 0.137 at
+  level 1 .. 0.875 at 100). `frame` reads back exactly what was written (no calibration seen): solid_blue at
+  100/50/25/10/1 reads `DF`/`C0`/`68`/`3C`/`22`, the table's pwm x 255 truncated. Idle, a frame written by someone else
+  stays; over a static pattern ledcontroller writes its own frame again within 0.4 s (the Dot 3 never did). The Echo
+  2's firmware matches the Dot 2's in all of it (kernel driver, device tree, the HAL's frame and scaling code,
+  libled_controller.so, the table: PLAN.md "Light ring live").
 - It exposes three front doors:
   1. **Binder** service `LedController` (`amazon::ILedController`, `libled_controller.so`). Client: `system/bin/ledctrl`.
   2. **AIPC** service (`LedCtrl/AipcService`). Client: `system/bin/ledctrl_aipc`, which connects as `com.util.ledctrl`.

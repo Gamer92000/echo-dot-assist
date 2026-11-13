@@ -666,6 +666,9 @@ int ringlive_start(int (*hold)(void), int (*level)(void), void (*changed)(void))
     hold_fn = hold; level_fn = level; changed_fn = changed;
     leds = ring_leds();
     snprintf(table, sizeof table, "%s/led_mute_ring_config.json", getenv("HASSMIC_LED_ROOT") ? getenv("HASSMIC_LED_ROOT") : "/system/etc");
+    /* The Dot 2's is ledcontroller's 0760 (the Dot 3's 0644): root's main.sh led_frame copies it into its own folder,
+     * which hassmic may read but not write (2026-11-13) */
+    const char *copy = getenv("HASSMIC_LED_TABLE") ? getenv("HASSMIC_LED_TABLE") : "/data/local/hassmic/led-table.json";
     char *js = NULL;
     if (!p || !*p) return -1;                                       /* not on this model (yet): nothing to say */
     snprintf(frame_path, sizeof frame_path, "%s", p);
@@ -673,7 +676,8 @@ int ringlive_start(int (*hold)(void), int (*level)(void), void (*changed)(void))
     else if (access(frame_path, W_OK)) why = "hassmic may not write the ring's frame (root's main.sh gives it at the satellite's start; an older one does not)";
     else if (frame_read(t, sizeof t) || strlen(t) != (size_t)leds * 6 + 1 || strspn(t, "0123456789abcdefABCDEF") != (size_t)leds * 6)
         why = "the ring's frame is not 12 x RRGGBB as measured";
-    else if (!(js = slurp(table, 1 << 16, &n)) || ringlive_table(js, n, capcolor(), pwm)) why = "no brightness table (led_mute_ring_config.json)";
+    else if (!((js = slurp(table, 1 << 16, &n)) || (js = slurp(copy, 1 << 16, &n))) || ringlive_table(js, n, capcolor(), pwm))
+        why = "no brightness table (led_mute_ring_config.json, or root's copy of it)";
     free(js);
     if (why) { fprintf(stderr, "light ring live: not here: %s\n", why); return -1; }
     int cc = capcolor();

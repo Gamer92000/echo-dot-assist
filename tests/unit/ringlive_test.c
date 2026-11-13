@@ -247,7 +247,14 @@ int main(void)
     char t[200]; char marker[300], m[200]; snprintf(marker, sizeof marker, "%s/state/ring-live", dir);
     snprintf(p, sizeof p, "%s/boot_id", dir); put(p, "boot-2\n"); setenv("HASSMIC_BOOT_ID", p, 1);
     snprintf(m, sizeof m, "boot-1\n%s", left); put(marker, m);              /* ours, of an earlier boot (a power cut) */
-    check(ringlive_start(hold_fn, level_fn, changed_fn) == 0, "started after a reboot");
+    /* the Dot 2: /system/etc's table is ledcontroller's 0760, hassmic reads root's copy (main.sh led_frame) */
+    char empty[300], tab[300]; snprintf(empty, sizeof empty, "%s/etc-unreadable", dir); mkdir(empty, 0700);
+    snprintf(tab, sizeof tab, "%s/led_mute_ring_config.json", dir);
+    setenv("HASSMIC_LED_ROOT", empty, 1); setenv("HASSMIC_LED_TABLE", "/nonexistent/led-table.json", 1);
+    check(ringlive_start(hold_fn, level_fn, changed_fn) == -1, "no table, not even root's copy: no live ring");
+    setenv("HASSMIC_LED_TABLE", tab, 1);
+    check(ringlive_start(hold_fn, level_fn, changed_fn) == 0, "started after a reboot (the table from root's copy)");
+    setenv("HASSMIC_LED_ROOT", dir, 1);
     get(t, sizeof t);
     check(!strcmp(t, left) && access(marker, F_OK), "  the last boot's picture: the ring left as it is (the chip was redrawn), the marker gone");
     put(marker, "boot-2\n");                                               /* this boot: init's stop killed it */

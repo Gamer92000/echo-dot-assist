@@ -2528,6 +2528,40 @@ Run in this order. Each step says what it proves.
       dropped what did not fit and the message went out cut; now `struct pb` says `over`, send_to sends none such and
       logs it, the light's state has a buffer of its own, and tests/fake_ha_ring_live.py sets all 17 effects and wants
       each back whole (it failed on the build before with the same corrupt message).
+      Review on the PR (2026-11-13): an inner message (an action's argument, a Bluetooth characteristic) cut short
+      went out inside an outer one that looked whole: `pb_msg` carries `over` out, ble_db leaves out what does not fit
+      whole (tests/run.py with send_to aborting on `over`: none).  A frame of ours could land after ledcontroller's for
+      a pattern just set (ringlive_yield only poked the writer): led() and the mute now bracket ring_set with
+      ringlive_yield/_yield_end, the writer's write is under write_lock and checked against yielding and yield_gen;
+      SIGTERM's handler only where ours shows since our last write, in hassmic's own pid.  HA's media to the music
+      analysis with the TTS stream's queue (modelled) instead of 0.
+      The Dot 2 (biscuit, on USB, 2026-11-13, `scripts/led-probe.sh` read/stock/write; the write
+      stage now has a measured case per model and sets brightness 100 itself): the same IS31FL3236 at 0-003f, the same
+      `frame` text, the same `init.ledcontroller.rc` (its header says Donut_puffin); no mute PWM (the mute is the red ring
+      in `frame`, 1C0000 at level 5).  One table, `default` (cap colour 0 only; radar's file is byte for byte the same):
+      pwm 0.129 at 0 .. 0.875 at 100.  `frame` reads back what was written, no calibration: solid_blue at 100/50/25/10/1
+      reads DF/C0/68/3C/22 = the table's pwm x 255, truncated; led_current 0 at 100, 2 at 50, 3 below.  Idle, a frame
+      written by someone else stays (5 s); over a moving pattern (active-thinking) overwritten at once; over a static one
+      (solid_blue) ledcontroller writes its own back after 410 ms (the Dot 3 never did: the safe way).  77 writes a
+      second (13 ms each, cat or print alike).  /proc/<pid>/io is missing on its kernel (the probe's write counts read
+      0).  So `ring_frame` and `LED_FRAME` for biscuit.
+      Its table is ledcontroller's 0760 (in system.img too; the Dot 3's 0644): hassmic could not read it, "not here: no
+      brightness table".  Root's main.sh `led_frame` copies it to /data/local/hassmic/led-table.json (root's folder,
+      0644), ringlive_start reads that when /system/etc's is not readable.  Tried on the Dot 2 (signed push, ESPHome
+      API from the PC with its key): LED 1 red on the driver's LED 11 at 2E0000 (level 5: pwm 0.184 x 255), "Light
+      ring" blue under it, Comet moving, Identify taking the ring and giving it back, SIGTERM dark at once, SIGKILL
+      left Fire frozen and the next start darkened it ("what the last run left"), mute pressed over Comet: stock's
+      380000 ring 5.5 s, not one frame of ours in between, Comet back 0.9 s after the unmute's own animation.
+      Found there: after a fade to dark whose last frames already read 00, the writer kept the ring as its own (the dark
+      frame was what it wrote last, so no write and no hand-back) and would put dark back over any frame that came, until
+      the mute's hold and resume.  Now nothing left of ours always hands it back (ringlive_test fails before).
+      The Echo 2 (radar) from its firmware, against the Dot 2's: the same kernel (3.18.19 at ecb8cb4) with the same
+      leds_is31fl3236 driver (its strings identical; no calibration attributes, which only the Dot 3's 4.4 has), the same
+      device tree node (is31fl3236@3F, channel-offset 3), libacehal_led.so's scaleDutyCycle, setLedFrame, set/getBrightness
+      the same instruction for instruction (another build, the same 50 symbols and sizes), libled_controller.so and
+      libled_resources.so byte for byte, the table byte for byte and 0760, init.ledcontroller.rc and the patterns'
+      names and LED order the same; ledcontroller itself differs by AIPC service names only.  So radar gets them too,
+      matched by firmware, not probed on one.
 - [ ] Idea (the user, 2026-11-12): the Echo's own patterns overridden from Home Assistant, e.g. "Thinking" red when
       the speaker is recognised as one person, green as another.  The live ring would draw the slot itself (a design
       of the library, or stock's look in another colour), at once, mid-request.  An action `light_ring_override` (slot,

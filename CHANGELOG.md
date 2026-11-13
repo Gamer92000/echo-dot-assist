@@ -23,7 +23,7 @@ What changed for people using the Echo, newest first. Details and measurements a
   the face back, and the wait starts again. **Screen sleeps after** sets that wait in minutes (0: never, the face
   stays). With an app or the music page in front the screen goes dark as before. Off and 5 minutes by default.
 
-- **The light ring live from Home Assistant (Echo Dot 3).** New setting "Live from Home Assistant" (settings page,
+- **The light ring live from Home Assistant (Echo Dot 3, Echo Dot 2 and Echo 2).** New setting "Live from Home Assistant" (settings page,
   Lights, off by default): the Echo draws its ring itself. "Light ring" then shows exactly the colour you pick, fades
   between colours and has twelve more effects: Breathe, Color loop, Comet, Wave, Sparkle, Fire, and six that move with
   the music the Echo plays (Music beat, spectrum, VU meter, orbit, drums, aurora): the Echo hears the beat, the kick,
@@ -33,7 +33,7 @@ What changed for people using the Echo, newest first. Details and measurements a
   itself; and your designs play at once, without Apply, from the new select "Light ring design" in Home Assistant or
   "Show on the Echo" on the Lights page (the designer shows a draft that way too). The Echo's own lights (listening,
   replies, timers, mute) always come first, and the ring never gets brighter than Amazon's own lights at the
-  brightness it runs at. The Echo Dot 2 and Echo 2 follow once measured.
+  brightness it runs at.
 
 - **A tighter wall between hassmic and root (issue #130).** If something ever took hassmic over, it could have had
   root overwrite one of root's own files, set system properties (open adb, start any service) or connect to an open

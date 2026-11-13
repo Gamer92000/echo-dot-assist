@@ -439,7 +439,7 @@ Beyond the README's two figures:
   name, author and a line about it. **Use** sets its animations, only those or all of them (the rest back to
   Amazon's), and applies. A pack travels with its designs: as a `.ringpack` file (Export, Import) or with "Copy
   models". Up to 50 packs; their designs count towards the 100.
-- **Light ring live** (Echo Dot 3 for now; settings page, Lights, "Live from Home Assistant", off by default): the
+- **Light ring live** (Echo Dot 3, Echo Dot 2 and Echo 2; settings page, Lights, "Live from Home Assistant", off by default): the
   Echo draws its ring itself, from Home Assistant, in any colour on any LED, up to 30 pictures a second, and plays your
   designs at once, without Apply. In layers, the lowest first:
   - "Light ring" (the light above) in its exact colour instead of the nearest of the set, fading when it changes

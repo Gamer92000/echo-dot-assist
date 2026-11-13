@@ -598,8 +598,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N` when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
   `HASSMIC_FAKE_BEAM`.
 - **Light ring live** (`ringlive.c`, `ringlive.h`, feature `ring_live`, off): hassmic writes the LED driver's frame
-  itself (`board.ring_frame`, donut's IS31FL3236 `0-003f/frame`: 12 x `RRGGBB` text, LED 0 first, scaled by the
-  unit's calibration in the driver; ledcontroller writes it only when its picture changes; PLAN.md "Light ring live",
+  itself (`board.ring_frame`, donut's, biscuit's and radar's IS31FL3236 `0-003f/frame`: 12 x `RRGGBB` text, LED 0
+  first, on donut scaled by the unit's calibration in the driver; ledcontroller writes it only when its picture
+  changes; radar matched to biscuit by firmware, not probed; PLAN.md "Light ring live",
   `scripts/led-probe.sh`).  Root's `main.sh` `led_frame` gives that one file to group `LED_GID` 3991 (device.conf
   `LED_FRAME`, the same path; `tests/unit/ringlive_conf.py`), which runas adds to hassmic's groups; led_current, the
   calibration, boot_animation and pwm1 stay ledcontroller's/root's.  Colours as seen -> gamma 2.2 (as ring.c's

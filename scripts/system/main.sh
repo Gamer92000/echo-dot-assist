@@ -871,9 +871,18 @@ leds() {
 # Only where device.conf names it (a model measured with scripts/led-probe.sh), and only a file in sysfs.  By otatool:
 # toybox's chgrp takes names only, and no stock group is this one (the Dot 3: "chgrp: group '3991': No such file").
 LED_GID=3991
+LED_TABLE=/system/etc/led_mute_ring_config.json; LED_TABLE_COPY=/data/local/hassmic/led-table.json
 led_frame() {
     [ -n "$LED_FRAME" ] && [ -f "$LED_FRAME" ] || return 0
     case $(readlink -f "$LED_FRAME") in /sys/*) ;; *) echo "light ring live: $LED_FRAME is not in sysfs, left alone"; return 0;; esac
+    # The brightness table hassmic caps its colours by: ledcontroller's 0760 on the Dot 2 (0644 on the Dot 3), so a
+    # copy, 0644, in root's own folder (hassmic may not write there: no link of its can point this elsewhere)
+    if [ -f $LED_TABLE ] && ! cmp -s $LED_TABLE $LED_TABLE_COPY 2>/dev/null; then
+        rm -f $LED_TABLE_COPY.new
+        if cp $LED_TABLE $LED_TABLE_COPY.new && chmod 0644 $LED_TABLE_COPY.new && mv -f $LED_TABLE_COPY.new $LED_TABLE_COPY
+        then echo "light ring live: the brightness table copied for hassmic"
+        else rm -f $LED_TABLE_COPY.new; echo "light ring live: the brightness table could not be copied"; fi
+    fi
     if $D/otatool chgrp $LED_GID "$LED_FRAME" && chmod 0664 "$LED_FRAME"; then echo "light ring live: hassmic may write $LED_FRAME"
     else echo "light ring live: $LED_FRAME could not be given to hassmic"; fi
 }
