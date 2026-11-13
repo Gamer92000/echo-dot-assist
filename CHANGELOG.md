@@ -4,6 +4,13 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-13
 
+- **Whisper detection works again with several Echos.** Since the Echo waits for the other Echos before it answers a
+  wake word (October), the whisper detector began listening up to 1.7 seconds after the wake word and missed most of
+  the request: on an Echo Dot 3 among five Echos, one whispered request in seven was taken for whispered. It now hears
+  what Home Assistant hears, from the wake word's end on, and counts above 500 of 1000 as whispered (Amazon's own
+  cut-off; the model names 922): the same seven recordings all came out whispered, eight spoken ones not. "Last
+  request whispered" also goes unknown when a request starts, so a request that is not scored (the wake word alone)
+  no longer shows the one before's answer, and the answer no longer comes late, after the reply, now and then.
 - **Bluetooth proxy: each request to a connected device took about 25 ms instead of 100 in a test on an Echo Dot 2
   (issue #167).** Devices that Home Assistant drives through the Echo, such as IKEA's Idasen desk, ask for something
   and wait for the answer several times a second. Once a device is connected, the Echo now asks for the short link

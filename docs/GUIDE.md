@@ -839,7 +839,9 @@ Amazon hands out: "Download from Amazon" on the settings page, or `scripts/artif
 Amazon does not hand this model to the Echo Show 5 (it refuses that device type); "Copy models" from a Dot that has it
 is the way there, not yet tried on a Show.
 
-The sensor is set when you stop speaking, before speech to text has finished, so the agent's prompt can read it. For
+The sensor is set when you stop speaking, before speech to text has finished, so the agent's prompt can read it. Each
+request starts it as unknown: a request that is not scored (the wake word alone, a cancelled one) never leaves the one
+before's answer standing. For
 example, in the LLM conversation agent's instructions. The template finds the sensor of whichever Echo you spoke to,
 so one prompt serves every Echo, whatever you named them:
 
@@ -858,7 +860,9 @@ Replace `[whisper]` with the markup your text to speech understands; Piper has n
 > may be read out aloud. Expect a whispered answer most of the time, not every time.
 
 - In tests (Echo Dot 2, German, 1–2 m) whispered commands scored 984–999 of 1000, spoken ones 0–18, quiet ones too.
-  Saying the wake word normally and whispering the rest is fine.
+  On an Echo Dot 3 among five Echos, "Alexa" whispered too: 890–993 whispered, 0–1 spoken. Above 500 counts as
+  whispered. Saying the wake word normally and whispering the rest is fine: the detector hears what Home Assistant
+  hears, from the wake word's end on.
 - Sounds without words (breathing, rustling) can score high, but only what the pipeline took for a command is scored.
 - On the Echo, during your request only. ESPHome only. Background: [re-whisper.md](re-whisper.md).
 

@@ -293,8 +293,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `<sound>.wav`), `/api/sound-pack`, page `packsCard`, a `.soundpack` file = a tar of `pack.json` + WAVs (`web/tar.js`).
   A pack is a whole set; 16 packs, 30 MB, 32 MB left on the partition (`HASSMIC_SOUNDPACK_MAX`, `_FREE_MIN` for tests).
 - **Whisper detection (`whisper.h`)**: `whisper_pryon.c` (libpryon `WhisperApi_*`, one detector per request fed from the
-  start of streaming, end of utterance on HA's VAD end (`core_mic_off`), result into the ESPHome binary sensor "Last
-  request whispered" before STT ends, for the agent's prompt template; `docs/re-whisper.md`) or `whisper_none.c` (host
+  ring at the request's start as HA gets it (`main.c` `whisper_from`: the wake word's tail end; live with `-w remote`),
+  end of utterance on HA's VAD end (`core_mic_off`), finished in a thread at once, cut-off 500, result into the ESPHome
+  binary sensor "Last request whispered" (unknown from each run's start) before STT ends, for the agent's prompt template; `docs/re-whisper.md`) or `whisper_none.c` (host
   build, `HASSMIC_FAKE_WHISPER`). Model from DAVS only, installed by `scripts/artifacts.sh` into
   `/data/local/hassmic/whisper` (not `models/`: it carries a stray `pryon.manifest`); without it, no sensor.
 - **Wake word (`wake.h`)**: `wake_pryon.c` (stock `libpryon.so`, headers in `src/include/pryon_api.h`) or `wake_none.c`
