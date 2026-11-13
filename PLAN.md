@@ -1267,7 +1267,18 @@ Run in this order. Each step says what it proves.
       the same level. With the gain behind it: pauses -33 -> -50 dBFS, speech -27.7 -> -30.1 dBFS (both files in
       `device-logs/denoise/`). CPU: 11 ms per second of audio on the PC, 2755 ms for 15.1 s on the Echo (18 % of one
       A35 core, only while a pipeline runs). Binary +41 kB. `tests/unit/micdenoise_test.c`, switch and stream in
-      `fake_ha_esphome.py`. Not done: what STT makes of it (the reason to have it), a listening test
+      `fake_ha_esphome.py`. What STT makes of it (issue #131, 2026-11-05; schattie93, Echo Dot 2 in a kitchen, German,
+      wake word in the request, exact sentence match with the wake word stripped): worse. 40 sentences (2 speakers) at
+      Medium against the same spoken into a laptop microphone in a quiet room: their Whisper fine-tune, trained on Dot
+      audio, 13 vs 37 of 40, faster-whisper large-v3 8 vs 33. One speaker's 20 again three hours later at Off, nothing
+      else changed: every recogniser gained (the fine-tune's versions 4 -> 9, 8 -> 11, 8 -> 13; primeline
+      whisper-large-v3-turbo-german 3 -> 5; HA Cloud 8 -> 11). Signal at Off: speech above 3.5 kHz +8 dB, level with the
+      laptop; floor -48 dBFS (the -59 at Medium was the reduction); speech -25 dBFS either way. At Medium consonant
+      bursts above 5.5 kHz in 2 of 40 files, the laptop's had 76. Nt-f checked `micdenoise.c` on the PC: steady noise
+      comes out 8-9 dB down at Medium, flat from 0.3 to 7.5 kHz, clean speech untouched at every strength, so the cap
+      works; on real room audio RNNoise takes the 3-8 kHz consonant hiss for noise and cuts it by up to the cap (the
+      +8 dB). It stays off by default; the setting's help and `docs/GUIDE.md` say what was measured. Not done: a
+      listening test
 - [~] Wake word in the request (2026-10-28, setting `wake_word_in_request`, off by default; asked for with #66/#72): the
       replay from 100 ms ahead of the keyword's begin (`replay_whole`: the pipeline's `from` is the last detection's
       `kw_end`; `kw_begin` from Pryon's beginSampleIndex, mww's end - 1 s, the PC's SIGUSR1 0.6 s back). Pryon's begin
@@ -1573,7 +1584,9 @@ Run in this order. Each step says what it proves.
       from the switch reads as Low). Tried for a measure of the artefacts: log-spectral distance to clean espeak speech
       over the Echo's room noise gets better with every dB of reduction (SNR 6 dB: 10.9 dB at cap 6, 9.9 at 18, input
       12.3), so it does not show them; and the +24 dB around RNNoise made no difference (0 / 12 / 24 / 36 dB within
-      0.2 dB): removed. Not done: a case where STT fails without noise reduction and succeeds with it
+      0.2 dB): removed. Not done: a case where STT fails without noise reduction and succeeds with it; the one STT
+      measurement so far (issue #131, see "Noise reduction") went the other way: in a kitchen's ordinary noise every
+      recogniser did better at Off than at Medium
 - [x] `scripts/mic-compare.sh` + `tools/mic-compare.py` (2026-09-30): the two scratch scripts of the listening mode
       hunt as a tool. Records micRaw (mixcap) beside hassmic's micAsr dump, `-l` with listening mode, finds the sentence
       in micRaw and prints both streams' signal to noise for its first 1.5 s, the rest and the last 1.5 s. On the two

@@ -758,7 +758,10 @@ Echo announces itself again after 100 s without Home Assistant, then less and le
 
 - "Mic level": how loud speech reaches the voice assistant, −35 to −15 dBFS (default −26); the Echo adjusts its gain.
 - "Noise reduction": off by default; low, medium, high take the background down by up to 6, 9 or 12 dB (RNNoise, on
-  what the voice assistant gets).
+  what the voice assistant gets). RNNoise also takes the hiss of consonants (3 to 8 kHz) for noise and turns it down
+  as far, so in an ordinary room speech-to-text does worse with it: in a kitchen (Echo Dot 2, German), every
+  speech-to-text tried got more of the same 20 sentences right with it off than on medium, Home Assistant Cloud 11
+  instead of 8. Leave it off unless a loud, steady noise drowns your commands.
 - "Wake sound removal" (experimental, under Voice): off by default; takes the wake sound out of what the voice
   assistant gets (see [Voice](#voice)).
 - "Wake word in the request": off by default; Home Assistant gets the wake word too (see [Voice](#voice)).

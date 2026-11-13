@@ -223,7 +223,7 @@ const LAYOUT = {
 // icon: features.  parent: shown inside that feature's card while it is on.  tag: an extra badge.
 const HELP = {
   mic_level: { help: 'How loud your voice reaches speech-to-text. The Echo adjusts its gain to hold speech at this level. Raise it if quiet commands get misheard or cut off; lower it if loud speech comes out distorted. Default −26 dBFS.' },
-  noise_reduction: { help: 'Takes steady background noise (fans, traffic, the dishwasher) out of what speech-to-text hears, by up to 6, 9 or 12 dB. The wake word always gets the untouched sound. Try it if commands fail in a noisy room.' },
+  noise_reduction: { help: 'Takes steady background noise (fans, traffic, the dishwasher) out of what speech-to-text hears, by up to 6, 9 or 12 dB. The wake word always gets the untouched sound. It also takes the hiss of consonants (s, f, t, between 3 and 8 kHz) for noise and turns that down as far, so in an ordinary room it costs speech-to-text more than it gains: measured in a kitchen, every speech-to-text tried got more sentences right with it off than on Medium (Home Assistant Cloud 11 of 20 instead of 8). Leave it off unless a loud, steady noise drowns your commands. Off by default.' },
   wake_sound: { ha: true, help: 'A tone when the Echo starts listening. Off keeps the sound you chose: on again, yours or Alexa\'s plays as before.' },
   sound_touch: { help: 'The tone when the action button starts listening. Off keeps the sound you chose.' },
   sound_mics_off: { help: 'The tone when the microphones go off. The ring still shows it. Off keeps the sound you chose.' },
@@ -416,7 +416,7 @@ const HELP = {
 // by scanning, and rows of two and three lines of explanation can't be scanned
 const SUB = {
   mic_level: 'How loud your voice reaches speech-to-text',
-  noise_reduction: 'Takes steady background noise out of requests',
+  noise_reduction: 'For loud, steady noise; it dulls consonants too',
   wake_sound: 'A tone when the Echo starts listening',
   sound_touch: 'The button starts listening',
   sound_mics_off: 'The mic button turns the microphones off',
