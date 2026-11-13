@@ -68,6 +68,9 @@ async def main(e):
     lines, secs = await request(e, ha, r"the word ends|by the level")
     check(re.search(r"the word ends [-+]\d+ ms from Pryon's end \(aligned in \d+ ms\)", lines) and secs is not None,
           f"the request from the word's end as aligned, after the silence: {re.findall(r'wake: (?:the word|the aligner).*', lines)}")
+    # whisper detection hears that request from the same start, not the live audio of later (main.c whisper_from)
+    ws = [int(x) for x in re.findall(r"whisper: scored from capture sample \d+ \((-?\d+) ms after the wake word's end\)", lines)]
+    check(len(ws) == 1 and -400 <= ws[0] <= 500, f"whisper detection from the word's end too, as sent: {ws} ms after it")
     # too slow: the level after 1 s past the window (0.5 s after the end), the request still comes
     open(SLOW, "w").write("3000\n")
     lines, secs = await request(e, ha, r"by the level instead")

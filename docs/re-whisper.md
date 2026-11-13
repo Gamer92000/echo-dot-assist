@@ -230,15 +230,21 @@ request whispered":
 - **Model:** DAVS only (`scripts/artifacts.sh`, ~0.5 MB), so every user fetches it with their own Amazon
   registration, as for extra wake words. It goes into `/data/local/hassmic/whisper`, not `models/`: its stray
   `pryon.manifest` would be taken for a wake word. Without it there is no sensor.
-- **Span:** a fresh detector per request, fed the raw mic audio from 0.5 s after the start of streaming to Home
-  Assistant's VAD end (`core_mic_off`). A run that ends any other way (cancel, timeout) is not scored.
-- **Why 0.5 s:** streaming starts when the wake word is recognised, before its last sound has died away. Said in a
-  normal voice, that tail took whispered requests down to 895–979 (live, below). The start given with
-  `pushEndOfUtterance` changes nothing: the detector scores all audio it was fed. So the tail is not fed at all.
-- **Cut-off:** the threshold the result names (922: no locale is set). The scores are far apart (section 5), so the
-  per-locale ones would not change an answer.
+- **Span:** a fresh detector per request, fed the raw mic audio (before noise reduction and gain) from the ring, from
+  where the request starts as Home Assistant gets it (after a wake word: its tail's end, `main.c` `whisper_from`) to
+  Home Assistant's VAD end (`core_mic_off`). A run that ends any other way (cancel, timeout) is not scored, and says so
+  in the log.
+- **The wake word's tail:** said in a normal voice, it took whispered requests down to 895–979 (live, below). The
+  start given with `pushEndOfUtterance` changes nothing: the detector scores all audio it was fed. So the tail is not
+  fed at all. Until 2026-11-13 that was done by skipping 0.5 s of the live audio from the start of streaming; since
+  the stream waits for the arbitration round and replays the ring (2026-10-12), that start lay 0.8–1.7 s past the
+  word's end, and the detector missed most of the request (section 5, Echo Dot 3).
+- **Cut-off:** 500 (AHE's own), not the threshold the result names (922: no locale is set). The Echo Dot 3 scored one
+  whispered request 890 from the word's end.
 - **Timing:** the result comes within milliseconds of the end of utterance, while speech to text still runs, so the
-  state is in Home Assistant before the conversation agent renders its prompt.
+  state is in Home Assistant before the conversation agent renders its prompt. Not always with the end of utterance
+  alone: on the Dot 3 it came now and then only with the next request's session end. The detector is finished in a
+  thread of its own right after it (backlogWait, session end, delete). The sensor goes unknown at each run's start.
 - **Use:** Home Assistant's pipeline has no whisper flag, and Piper cannot whisper. The sensor is for the prompt
   template: the agent marks its answer for a TTS engine that can whisper.
 
@@ -323,4 +329,22 @@ whispered; `whisper:` lines of `boot.log`, the capture dump replayed with `whisp
 - **Not the cause:** real-time pacing (998/995 at `-x 1`), and up to 3 s of silence after the speech (≥ 987; 5 s:
   905–972).
 - **Harmless warning:** libpryon logs "Backwards timestamps of duration … detected" now and then.
+
+**Echo Dot 3 among five Echos** (2026-11-13, German, "Alexa" whispered too or spoken normally, the commands alike;
+build of 2026-11-13 with the 0.5 s skip of the live audio; the capture dump cut per request and replayed with
+`whisper_test` on the Echo; "as fed" = the span the build fed, "word's end" / "word's begin" = from Pryon's end / begin
+of the wake word to the same end):
+
+| request | as fed | from the word's end | from the word's begin |
+|---|---|---|---|
+| whispered (7) | 763, 186, 57, 203, 68, 997, 40 | 943, 989, 890, 993, 992, 975, 978 | 988, 996, 998, 994, 994, 962, 992 |
+| normal (8) | 191, 74, 225, 0, 0, 72, 0, 1 | 0–1 | 0–1 |
+
+- **The start was the cause:** the build fed the live audio from 0.5 s after the start of streaming, and streaming
+  started 0.8–1.7 s after Pryon's word end (the arbitration round, up to 720 ms with four other Echos, then the wait
+  for the word's tail); the detector got the last ~1 s before the VAD end. The live results matched the replays
+  (764/763, 192/186, 215/203).
+- **Not the gain:** the detector gets the mic audio before `micgain.c` (+11 to +35 dB here).
+- **Late results:** with the end of utterance pushed, the result came now and then only when the next request's
+  detector retired the last one (backlogWait, session end), seconds later.
 
